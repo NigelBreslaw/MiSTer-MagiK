@@ -50,11 +50,11 @@ Do not introduce the retired `magic` spelling or mixed-case path variants.
 
 ## Repository Routing
 
-- `magik-gui/` — device frontend; read `magik-gui/AGENTS.md`
-- `magik-gui/src/ui_runner/` — launcher runtime; read its local `AGENTS.md`
-- `tools/mister/` — host device tool; read its local `AGENTS.md`
-- `tools/magik-agent/` — device agent; read its local `AGENTS.md`
-- `desktop/` — macOS companion; read `desktop/AGENTS.md`
+- `apps/mister/` — device frontend; read `apps/mister/AGENTS.md`
+- `apps/mister/src/ui_runner/` — launcher runtime; read its local `AGENTS.md`
+- `mister/tools/host/` — host device tool; read its local `AGENTS.md`
+- `mister/tools/agent/` — device agent; read its local `AGENTS.md`
+- `apps/desktop/` — macOS companion; read `apps/desktop/AGENTS.md`
 - `scripts/` — validation/deploy/benchmark tooling; read `scripts/AGENTS.md`
 - `private/magik-cloud/` — private submodule; read its local `AGENTS.md`
 - `docs/` — current engineering policy
@@ -97,7 +97,7 @@ scripts/validate working-tree
 scripts/validate full-host
 scripts/dev-rust test
 scripts/dev-rust check
-magik-gui/build-arm.sh --device
+apps/mister/build-arm.sh --device
 scripts/deploy-rust.sh
 scripts/mister status
 ```
@@ -132,7 +132,7 @@ Use `scripts/validate paths PATH...` for explicit files or directories.
 - Device/recovery policy: `docs/device.md`
 - Benchmark method: `docs/benchmarking.md`
 - Main fork: `docs/main-mister-fork.md`
-- ARM/build policy: `magik-gui/BUILD.md`
+- ARM/build policy: `apps/mister/BUILD.md`
 
 Agent-critical universal rules belong here. Subsystem rules belong in the
 nearest `AGENTS.md`; current design belongs in `docs/`; dated evidence belongs

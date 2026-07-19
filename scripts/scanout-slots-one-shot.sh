@@ -20,7 +20,7 @@ trap cleanup EXIT
 mkdir -p "$ROOT/build/scanout-slots"
 
 "$ROOT/scripts/build-scanout-slots-module.sh"
-"$ROOT/magik-gui/build-arm.sh" --diagnostics --bench-tools
+"$ROOT/apps/mister/build-arm.sh" --diagnostics --bench-tools
 
 test -f "$LOCAL_KO"
 if ! grep -q 'vermagic:.*5\.15\.1-MiSTer' "$ROOT/build/scanout-slots/modinfo.txt"; then
@@ -38,7 +38,7 @@ cleanup
 echo "==> Uploading diagnostics binary and scanout-slots module"
 "$MISTER" run "mkdir -p '$REMOTE_DIR'"
 "$MISTER" agent deploy-magik-bin \
-  "$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb" \
+  "$ROOT/apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb" \
   "$REMOTE_BIN"
 "$MISTER" put "$LOCAL_KO" "$REMOTE_KO"
 "$MISTER" run "chmod 600 '$REMOTE_KO'; sync"

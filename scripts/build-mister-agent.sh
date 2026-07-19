@@ -6,10 +6,10 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-. "$HERE/magik-gui/scripts/apple-container-resources.sh"
-MANIFEST="$HERE/tools/magik-agent/Cargo.toml"
+. "$HERE/apps/mister/scripts/apple-container-resources.sh"
+MANIFEST="$HERE/mister/tools/agent/Cargo.toml"
 TARGET=armv7-unknown-linux-gnueabihf
-BIN="$HERE/tools/magik-agent/target/$TARGET/release/mister-magik-agent"
+BIN="$HERE/mister/tools/agent/target/$TARGET/release/mister-magik-agent"
 
 BACKEND="${MISTER_ARM_BUILD_BACKEND:-auto}"
 case "$BACKEND" in
@@ -25,10 +25,10 @@ build_with_apple_container() {
   local container_cpus container_memory
   image="${MISTER_APPLE_CONTAINER_IMAGE:-mister-magik-cross-armv7:ubuntu20-arm64}"
   target_dir="${MISTER_APPLE_CONTAINER_AGENT_TARGET_DIR:-/private/tmp/mister-magik-agent-apple-container-target}"
-  mirror_target_dir="$HERE/tools/magik-agent/target"
+  mirror_target_dir="$HERE/mister/tools/agent/target"
   cargo_cache="${MISTER_APPLE_CONTAINER_CARGO_HOME:-$HOME/.cargo}"
   rust_toolchain="${MISTER_ARM64_RUST_TOOLCHAIN:-$HOME/.rustup/toolchains/stable-aarch64-unknown-linux-gnu}"
-  dockerfile="$HERE/magik-gui/Dockerfile.cross-armv7"
+  dockerfile="$HERE/apps/mister/Dockerfile.cross-armv7"
   image_stamp="${MISTER_APPLE_CONTAINER_IMAGE_STAMP:-/private/tmp/mister-magik-apple-container-target.image.sha256}"
   container_cpus="$(apple_container_cpus)"
   container_memory="$(apple_container_memory)"
@@ -64,7 +64,7 @@ build_with_apple_container() {
   if [ "$existing_stamp" != "$expected_stamp" ] ||
     ! container run --arch arm64 --rm "$image" true >/dev/null 2>&1; then
     echo "==> building linux/arm64 cross image with Apple container: $image" >&2
-    container build --arch arm64 --file "$dockerfile" --tag "$image" "$HERE/magik-gui" >&2
+    container build --arch arm64 --file "$dockerfile" --tag "$image" "$HERE/apps/mister" >&2
     printf '%s\n' "$expected_stamp" >"$image_stamp"
   else
     echo "==> linux/arm64 cross image is current: $image" >&2
@@ -86,7 +86,7 @@ build_with_apple_container() {
     --volume "$rust_toolchain:/rust:ro" \
     --volume "$HERE:/project" \
     --volume "$target_dir:/target" \
-    --workdir /project/tools/magik-agent \
+    --workdir /project/mister/tools/agent \
     "$image" \
     sh -lc 'PATH=/rust/bin:$PATH cargo build --target armv7-unknown-linux-gnueabihf --release --locked' >&2
 

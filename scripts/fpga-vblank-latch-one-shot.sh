@@ -11,14 +11,14 @@ LOCAL_REPORT="$ROOT/build/fpga-vblank-latch/fpga-latch-report.log"
 
 mkdir -p "$ROOT/build/fpga-vblank-latch"
 
-"$ROOT/magik-gui/build-arm.sh" --diagnostics
+"$ROOT/apps/mister/build-arm.sh" --diagnostics
 
 echo "==> Verifying MiSTer is reachable and launcher boot is supervised"
 "$MISTER" status
 
 echo "==> Uploading diagnostics binary"
 "$MISTER" agent deploy-magik-bin \
-  "$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb" \
+  "$ROOT/apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb" \
   "$REMOTE_BIN"
 
 echo "==> Running FPGA vblank latch capability report"

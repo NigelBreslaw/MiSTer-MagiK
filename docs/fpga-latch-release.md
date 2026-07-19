@@ -1,7 +1,7 @@
 # FPGA vblank latch release requirements
 
 The latch is a production subsystem. Its source lives under
-`fpga/menu-vblank-latch/`, and its installed RBF lives under
+`mister/platform/fpga/menu-vblank-latch/`, and its installed RBF lives under
 `/media/fat/mister-magik/fpga/`. Root `/media/fat/menu.rbf` is stock firmware
 owned by `update_all`. Every new RBF hash, including the Menu `20260603` port,
 must complete this qualification before platform-manifest activation.

@@ -182,11 +182,11 @@ off only when a new shared RBF artifact is actually needed. The manual form has
 no custom inputs: select the MiSTer MagiK branch, normally `main`, and run it.
 The workflow restores the installed Quartus runtime from the private
 `mister-magik-ci-cache` R2 bucket and installs from the official Intel payloads
-only on a content-addressed miss. See `magik-gui/BUILD.md` for the required
+only on a content-addressed miss. See `apps/mister/BUILD.md` for the required
 bucket-scoped Actions credentials.
 That branch supplies the latch patch and scripts; the workflow builds the exact
 qualified `Menu_MiSTer` revision in
-`fpga/menu-vblank-latch/Menu_MiSTer.commit`. It does not build the separate
+`mister/platform/fpga/menu-vblank-latch/Menu_MiSTer.commit`. It does not build the separate
 `Main_MiSTer` MagiK fork. From a checked-out repo with GitHub CLI auth:
 
 ```bash
@@ -224,7 +224,7 @@ The known-good activation sequence is:
    development `mister-magik-fb`: after the byte swap they rebind and verify the
    matching manifest, activate the manifest-owned latch RBF when necessary, and
    require passive latch acknowledgements before returning success. Using the
-   underlying `tools/mister` binary directly is an internal transport operation
+   underlying `mister/tools/host` binary directly is an internal transport operation
    and does not provide this platform transaction.
 
    Current release packages additionally retain `platform-bundle-v0.2.json`:

@@ -172,7 +172,7 @@ jobs:
           scripts/check-magik-patch-surface.sh
 
       - name: Install Rust toolchain
-        working-directory: magik-gui
+        working-directory: apps/mister
         run: rustup show
 
       - name: Cache cargo registry
@@ -200,17 +200,17 @@ jobs:
       - name: Cache minimal FFmpeg
         uses: actions/cache@v6
         with:
-          path: magik-gui/target/ffmpeg-minimal/armv7
+          path: apps/mister/target/ffmpeg-minimal/armv7
           key: ffmpeg-minimal-v2-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-8.1.2-${{ steps.cache-id.outputs.cross_abi }}-${{ steps.cache-id.outputs.ffmpeg }}
 
       - name: Restore ARM frontend build outputs
         uses: actions/cache/restore@v6
         with:
           path: |
-            magik-gui/target/release-device
-            !magik-gui/target/release-device/incremental
-            magik-gui/target/armv7-unknown-linux-gnueabihf/release-device
-            !magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/incremental
+            apps/mister/target/release-device
+            !apps/mister/target/release-device/incremental
+            apps/mister/target/armv7-unknown-linux-gnueabihf/release-device
+            !apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/incremental
           key: target-arm-v2-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-release-device-${{ steps.cache-id.outputs.cross_abi }}-${{ steps.cache-id.outputs.arm_target }}
           restore-keys: |
             target-arm-v2-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-release-device-${{ steps.cache-id.outputs.cross_abi }}-
@@ -219,10 +219,10 @@ jobs:
         env:
           MISTER_MAGIK_BUILD_NUMBER: ${{ needs.release-metadata.outputs.build-number }}
           MISTER_MAGIK_VERSION: ${{ needs.release-metadata.outputs.version }}
-        run: magik-gui/build-arm.sh --device
+        run: apps/mister/build-arm.sh --device
 
       - name: Check ARM shared libraries
-        run: magik-gui/scripts/check-arm-shared-libs.sh magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb
+        run: apps/mister/scripts/check-arm-shared-libs.sh apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb
 
       - name: Generate matching third-party notices
         run: python3 scripts/release/packaging/generate-third-party-licenses.py
@@ -283,7 +283,7 @@ jobs:
           scripts/release/platform/platform-manifest.py generate \
             --output build/platform-v2.manifest \
             --main "$main_bin" \
-            --gui magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb \
+            --gui apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb \
             --scanout-module "$module" \
             --scanout-metadata "$module_meta" \
             --latch-rbf "$rbf" \

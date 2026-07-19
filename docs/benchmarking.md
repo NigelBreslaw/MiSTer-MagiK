@@ -862,9 +862,9 @@ Current rollout evidence and blockers are recorded in
 interval p95, while half resolution sustained 59.90fps with a 24.4ms interval
 p95. These are capability measurements, not permission to enable production.
 
-Build profiles and toolchain details live in `magik-gui/BUILD.md`.
+Build profiles and toolchain details live in `apps/mister/BUILD.md`.
 
-Bench scene documentation lives in `magik-gui/ui/bench/README.md`.
+Bench scene documentation lives in `apps/mister/ui/bench/README.md`.
 
 ## Catalog Benchmarks
 

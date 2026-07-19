@@ -6,8 +6,8 @@ name: Scanout contract
 on:
   pull_request:
     paths:
-      - "magik-gui/src/framebuffer/scanout_slots.rs"
-      - "tools/magik-agent/src/scanout_slots_contract.rs"
+      - "mister/platform/runtime/src/framebuffer/scanout_slots.rs"
+      - "mister/tools/agent/src/scanout_slots_contract.rs"
       - "scripts/deploy-platform.sh"
       - "scripts/install-slint-boot.sh"
       - "documentation/src/content/docs/architecture/kernel-scanout-plugin.mdx"
@@ -15,8 +15,8 @@ on:
   push:
     branches: [main]
     paths:
-      - "magik-gui/src/framebuffer/scanout_slots.rs"
-      - "tools/magik-agent/src/scanout_slots_contract.rs"
+      - "mister/platform/runtime/src/framebuffer/scanout_slots.rs"
+      - "mister/tools/agent/src/scanout_slots_contract.rs"
       - "scripts/deploy-platform.sh"
       - "scripts/install-slint-boot.sh"
       - "documentation/src/content/docs/architecture/kernel-scanout-plugin.mdx"

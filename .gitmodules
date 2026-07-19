@@ -7,10 +7,10 @@
 	update = none
 	ignore = all
 [submodule "desktop/vendor/material-icon-theme"]
-	path = desktop/vendor/material-icon-theme
+	path = apps/desktop/vendor/material-icon-theme
 	url = https://github.com/material-extensions/vscode-material-icon-theme.git
 	ignore = all
 [submodule "desktop/vendor/github-app"]
-	path = desktop/vendor/github-app
+	path = apps/desktop/vendor/github-app
 	url = https://github.com/NigelBreslaw/slint-ui-for-github-cli.git
 	ignore = all

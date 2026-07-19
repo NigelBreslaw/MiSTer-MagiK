@@ -12,7 +12,7 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 HERE="$(experiment_repo_root)"
 source "$HERE/scripts/lib/mister-supervision-lib.sh"
-RUST_DIR="$HERE/magik-gui"
+RUST_DIR="$HERE/apps/mister"
 REMOTE="/media/fat/mister-magik-dev/mister-magik-fb"
 BENCH_DIR="$HERE/history/toolchain-bench"
 TSV="$BENCH_DIR/results-effects.tsv"

@@ -62,8 +62,8 @@ All relevant source tests passed before hardware profiling:
 | Command | Result |
 |---|---:|
 | `scripts/dev-rust test` | 231 passed |
-| `cargo test --manifest-path magik-gui/catalog/Cargo.toml` | 303 passed |
-| `cargo test --manifest-path magik-gui/Cargo.toml --features ui --no-default-features` | 498 passed |
+| `cargo test --manifest-path crates/catalog/Cargo.toml` | 303 passed |
+| `cargo test --manifest-path apps/mister/Cargo.toml --features ui --no-default-features` | 498 passed |
 
 ### Device contract
 
@@ -256,7 +256,7 @@ binary.
 
 ### P0 — Give affinity states explicit semantics
 
-Code: `magik-gui/catalog/src/runtime_thread.rs:164`.
+Code: `crates/catalog/src/runtime_thread.rs:164`.
 
 `ThreadAffinity::Any` currently means “make no system call.” Those are not the
 same semantics when the caller inherits CPU0 or CPU1. Replace the two-state API
@@ -280,9 +280,9 @@ Arcade latch regression.
 
 Code:
 
-- `magik-gui/catalog/src/launch_profiles.rs:328`
-- `magik-gui/catalog/src/launch_profiles.rs:468`
-- `magik-gui/catalog/src/library_indexer.rs:132`
+- `crates/catalog/src/launch_profiles.rs:328`
+- `crates/catalog/src/launch_profiles.rs:468`
+- `crates/catalog/src/library_indexer.rs:132`
 
 `active_profiles_for_roots` discovers installed cores, enumerates unclaimed
 top-level game directories, and performs shallow payload checks. The real
@@ -306,8 +306,8 @@ approximately 46 seconds.
 
 ### P0 — Stop deriving the catalog repeatedly during SQLite publication
 
-Code: `magik-gui/catalog/src/sqlite_catalog.rs:2620-2727` and
-`magik-gui/catalog/src/catalog_projection.rs:275`.
+Code: `crates/catalog/src/sqlite_catalog.rs:2620-2727` and
+`crates/catalog/src/catalog_projection.rs:275`.
 
 The scanner already has discoveries and builds a RAM catalog, then SQLite
 re-derives UI rows and launch plans with expensive SQL materialization. Build
@@ -331,8 +331,8 @@ requires removing most of the measured 79-second derivation stage.
 
 ### P0 — Honor the intended scan-overlay redraw budget
 
-Code: `magik-gui/src/ui_runner/launcher_loop.rs:2602-2640` and
-`magik-gui/src/ui_runner/launcher_loop.rs:2833-2868`.
+Code: `apps/mister/src/ui_runner/launcher_loop.rs:2602-2640` and
+`apps/mister/src/ui_runner/launcher_loop.rs:2833-2868`.
 
 `catalog_scan_redraw` computes a reduced cadence, but
 `CATALOG_SCAN_VISIBLE` is itself an unconditional wake reason. The loop
@@ -363,7 +363,7 @@ or explicit rebuild.
 
 ### P1 — Make every selected-preview miss asynchronous
 
-Code: `magik-gui/src/preview_state.rs:1218-1405`.
+Code: `apps/mister/src/preview_state.rs:1218-1405`.
 
 Turbo misses use the selected loader; ordinary misses call
 `load_asset_pixels_timed` synchronously on the UI thread. The first preview is
@@ -386,7 +386,7 @@ queue-age p99 below one navigation interval.
 
 ### P1 — Avoid rebuilding the unchanged preview window every frame
 
-Code: `magik-gui/src/preview_state.rs:689-746`,
+Code: `apps/mister/src/preview_state.rs:689-746`,
 `preview_state.rs:1015-1024`, and `launcher_loop.rs:2693-2717`.
 
 The launcher calls preview scheduling on every eligible Arcade loop. Even when
@@ -398,7 +398,7 @@ of those changes.
 
 ### P1 — Skip archive TOC work when a profile treats the archive as the game
 
-Code: `magik-gui/catalog/src/library_indexer.rs:212-230`.
+Code: `crates/catalog/src/library_indexer.rs:212-230`.
 
 Every recognized archive extension can trigger central-directory parsing even
 for profiles whose launch semantics are file-as-game and have no archive-entry
@@ -409,9 +409,9 @@ This is especially relevant to large raw MAME/Neo Geo collections.
 
 Code:
 
-- `magik-gui/src/video_i420.rs:25-59`
-- `magik-gui/src/video_player.rs:827-860`
-- `magik-gui/build-arm.sh:155`
+- `apps/mister/src/video_i420.rs:25-59`
+- `apps/mister/src/video_player.rs:827-860`
+- `apps/mister/build-arm.sh:155`
 
 Each decoded frame allocates a new `Vec<u16>` for the full RGB565 output. Pool
 two or three conversion buffers with the queue slots. Add a compile/runtime

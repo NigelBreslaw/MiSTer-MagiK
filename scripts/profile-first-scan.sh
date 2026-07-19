@@ -510,9 +510,9 @@ case "$DEPLOY" in
 esac
 
 if [[ "$CPU_PROFILE" -eq 1 ]]; then
-  profile_bin="$HERE/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device-profile/mister-magik-fb"
+  profile_bin="$HERE/apps/mister/target/armv7-unknown-linux-gnueabihf/release-device-profile/mister-magik-fb"
   echo "==> Building pprof-enabled first-scan launcher"
-  "$HERE/magik-gui/build-arm.sh" --profile --ui-scope launcher --bench-tools
+  "$HERE/apps/mister/build-arm.sh" --profile --ui-scope launcher --bench-tools
   echo "==> Deploying pprof-enabled first-scan launcher"
   "$MISTER" agent deploy-magik-bin "$profile_bin" "$REMOTE_BIN" >/dev/null
 fi
@@ -556,7 +556,7 @@ launcher_suspended=0
 binary_profile="release-device"
 binary_features="ui"
 binary_runtime="production"
-binary_path="$HERE/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
+binary_path="$HERE/apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
 if [[ "$CPU_PROFILE" -eq 1 ]]; then
   binary_profile="release-device-profile"
   binary_features="ui,profile,bench-tools"

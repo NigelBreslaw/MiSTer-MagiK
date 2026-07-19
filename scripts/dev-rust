@@ -6,7 +6,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RUST_DIR="$ROOT/magik-gui"
+RUST_DIR="$ROOT/apps/mister"
 export RUSTC_WRAPPER=""
 
 usage() {
@@ -29,7 +29,7 @@ Commands:
   build-arm-debug       Cross-build launcher/controller ARM debug binary
   build-arm-arcade-debug Cross-build launcher-backed arcade ARM debug binary
   build-arm-debug-full  Cross-build all-scene ARM debug binary
-  build-ui  Build the optimized ARM Slint binary via magik-gui/build-arm.sh
+  build-ui  Build the optimized ARM Slint binary via apps/mister/build-arm.sh
 EOF
 }
 
@@ -38,7 +38,7 @@ need_component_hint() {
   toolchain="$(
     sed -n 's/^channel = "\([^"]*\)"$/\1/p' "$RUST_DIR/rust-toolchain.toml"
   )"
-  echo "Hint: this repo declares Rust components in magik-gui/rust-toolchain.toml." >&2
+  echo "Hint: this repo declares Rust components in apps/mister/rust-toolchain.toml." >&2
   echo "      If rustup did not install $component automatically, run:" >&2
   echo "      rustup component add $component --toolchain ${toolchain:-<pinned-channel>}" >&2
 }
@@ -48,7 +48,7 @@ cross_env() {
     [ "$(uname -s)" = Darwin ] &&
     [ "$(uname -m)" = arm64 ]; then
     echo "ERROR: local Apple-Silicon ARM builds use Apple's container runtime, not cross/Docker." >&2
-    echo "       Use magik-gui/build-arm.sh for device builds, or set MISTER_ARM_BUILD_BACKEND=cross explicitly for a comparison." >&2
+    echo "       Use apps/mister/build-arm.sh for device builds, or set MISTER_ARM_BUILD_BACKEND=cross explicitly for a comparison." >&2
     exit 1
   fi
   export DOCKER_DEFAULT_PLATFORM=linux/amd64
@@ -57,7 +57,7 @@ cross_env() {
 
 cross_ui_env() {
   cross_env
-  "$RUST_DIR/scripts/build-minimal-ffmpeg.sh"
+  bash "$RUST_DIR/scripts/build-minimal-ffmpeg.sh"
   export FFMPEG_DIR=/target/ffmpeg-minimal/armv7/dist
   export PKG_CONFIG_PATH=/target/ffmpeg-minimal/armv7/dist/lib/pkgconfig
   export PKG_CONFIG_ALLOW_CROSS=1
@@ -91,10 +91,10 @@ case "$cmd" in
     cargo check --lib --no-default-features
     ;;
   host-tools)
-    "$ROOT/scripts/test-host-tools.sh" --full
+    bash "$ROOT/scripts/test-host-tools.sh" --full
     ;;
   host-tools-fast)
-    "$ROOT/scripts/test-host-tools.sh" --fast
+    bash "$ROOT/scripts/test-host-tools.sh" --fast
     ;;
   check-arm-lib)
     "$RUST_DIR/build-arm.sh" --check --lib-only

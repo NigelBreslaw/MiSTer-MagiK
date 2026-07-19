@@ -6,10 +6,10 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="${1:-$ROOT/build/alpha-release}"
-BIN="$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
+BIN="$ROOT/apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
 
 if [[ "${2:-}" != "--skip-build" ]]; then
-  "$ROOT/magik-gui/build-arm.sh" --device
+  "$ROOT/apps/mister/build-arm.sh" --device
 fi
 
 python3 "$ROOT/scripts/release/packaging/generate-third-party-licenses.py"
@@ -22,9 +22,9 @@ fi
 mkdir -p "$OUT/licenses"
 cp "$BIN" "$OUT/mister-magik-fb"
 cp "$ROOT/LICENSE" "$OUT/LICENSE"
-cp "$ROOT/magik-gui/licenses/FFMPEG.txt" "$OUT/licenses/"
-cp "$ROOT/magik-gui/licenses/PRESS-START-2P.txt" "$OUT/licenses/"
-cp "$ROOT/magik-gui/licenses/RUST-LIBRARIES.txt" "$OUT/licenses/"
+cp "$ROOT/apps/mister/licenses/FFMPEG.txt" "$OUT/licenses/"
+cp "$ROOT/apps/mister/licenses/PRESS-START-2P.txt" "$OUT/licenses/"
+cp "$ROOT/apps/mister/licenses/RUST-LIBRARIES.txt" "$OUT/licenses/"
 cat > "$OUT/THIRD-PARTY-NOTICES.txt" <<'EOF'
 MiSTer MagiK alpha distribution notices
 ========================================
@@ -47,7 +47,7 @@ MiSTer MagiK source (including build and installation scripts):
 FFmpeg 8.1.2 source, used by this UI build:
   https://github.com/FFmpeg/FFmpeg/tree/n8.1.2
 The exact configure flags and cross-build procedure are in
-magik-gui/scripts/build-minimal-ffmpeg.sh at the source revision above. The
+apps/mister/scripts/build-minimal-ffmpeg.sh at the source revision above. The
 MiSTer MagiK source, Cargo.lock, and build scripts are the complete source
 needed to rebuild the application and relink it with a modified FFmpeg build.
 EOF

@@ -14,14 +14,14 @@ export MISTER_PASS="${MISTER_PASS:-1}"
 export RUSTC_WRAPPER=""
 
 cd "$HERE"
-BIN="$HERE/tools/mister/target/debug/mister"
-MANIFEST="$HERE/tools/mister/Cargo.toml"
-LOCK="$HERE/tools/mister/Cargo.lock"
+BIN="$HERE/mister/tools/host/target/debug/mister"
+MANIFEST="$HERE/mister/tools/host/Cargo.toml"
+LOCK="$HERE/mister/tools/host/Cargo.lock"
 
 if [ ! -x "$BIN" ] ||
   [ "$MANIFEST" -nt "$BIN" ] ||
   [ "$LOCK" -nt "$BIN" ] ||
-  find "$HERE/tools/mister/src" -type f -newer "$BIN" -print -quit | grep -q .; then
+  find "$HERE/mister/tools/host/src" -type f -newer "$BIN" -print -quit | grep -q .; then
   if ! cargo build --quiet --manifest-path "$MANIFEST"; then
     if [ -x "$BIN" ]; then
       echo "warning: cargo build failed; using existing $BIN" >&2

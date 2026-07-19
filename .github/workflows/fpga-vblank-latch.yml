@@ -56,7 +56,7 @@ jobs:
         id: menu-source
         run: |
           set -euo pipefail
-          mapfile -t menu_refs < fpga/menu-vblank-latch/Menu_MiSTer.commit
+          mapfile -t menu_refs < mister/platform/fpga/menu-vblank-latch/Menu_MiSTer.commit
           if [[ ${#menu_refs[@]} -ne 1 ]]; then
             echo "qualified Menu source revision must be exactly one line" >&2
             exit 2

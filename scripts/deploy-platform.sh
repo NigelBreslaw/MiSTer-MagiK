@@ -9,7 +9,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT/scripts/lib/magik-layout.sh"
 source "$ROOT/scripts/lib/platform-manifest-lib.sh"
 magik_layout_select dev
-GUI_DIR="$ROOT/magik-gui"
+GUI_DIR="$ROOT/apps/mister"
 MAIN_DIR="${MISTER_MAIN_DIR:-$ROOT/../Main_MiSTer}"
 CLEAN_MAIN=0
 
@@ -69,7 +69,7 @@ HBMAME_DATABASE="$DATABASE_STAGE/hbmame.sqlite3"
 DATABASE_MANIFEST="$DATABASE_STAGE/game-databases-manifest.json"
 DATABASE_CHECKSUMS="$DATABASE_STAGE/SHA256SUMS"
 
-echo "==> Building magik-gui development binary"
+echo "==> Building apps/mister development binary"
 "$GUI_DIR/build-arm.sh" --device
 echo "==> Building Main fork"
 if [[ "$CLEAN_MAIN" == 1 ]]; then "$MAIN_DIR/build-container.sh" clean; fi

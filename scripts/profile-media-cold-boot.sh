@@ -236,7 +236,7 @@ emit_run_context_row() {
   commit="$(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo unknown)"
   command_text="scripts/profile-media-cold-boot.sh ${ORIGINAL_ARGS[*]}"
   started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  binary_path="$HERE/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
+  binary_path="$HERE/apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
   deployment_state="verified"
   features="ui"
   runtime_type="production"
@@ -983,7 +983,7 @@ case "$deploy" in
   *) echo "internal deploy mode error: $deploy" >&2; exit 2 ;;
 esac
 
-binary_path="$HERE/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
+binary_path="$HERE/apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
 deployed_sha256="$(bench_context_remote_sha256 "$MISTER" "$REMOTE_BIN" || true)"
 deployed_sha256="${deployed_sha256:-missing}"
 expected_features="ui"

@@ -145,7 +145,7 @@ All validation was run before hardware profiling at the initial source point.
 | Command | Result |
 |---|---:|
 | `scripts/dev-rust test` | 256 passed |
-| `cargo test --manifest-path magik-gui/catalog/Cargo.toml` | 350 passed |
+| `cargo test --manifest-path crates/catalog/Cargo.toml` | 350 passed |
 | UI-enabled MagiK tests | 532 passed |
 | `scripts/dev-rust host-tools` | 79 host-tool tests passed |
 | `scripts/dev-rust check` | passed |
@@ -186,10 +186,10 @@ background work on CPU0:
 | framebuffer stream worker | CPU0, nice 10 | retain after snapshot is moved off UI |
 | launch handoff | inherits CPU1 and UI priority | give an explicit CPU0/normal policy |
 
-`magik-gui/catalog/src/runtime_thread.rs:45-60` defines these policies.
+`crates/catalog/src/runtime_thread.rs:45-60` defines these policies.
 `MediaDownload` and `PreviewSelected` both use `ThreadAffinity::Inherit`.
 The media worker is already CPU0 at
-`magik-gui/src/ui_runner/media_worker.rs:91-97`, and it spawns the download at
+`apps/mister/src/ui_runner/media_worker.rs:91-97`, and it spawns the download at
 `media_worker.rs:454-474`; the real trace consequently reported
 `allowed_cpus=0`.
 
@@ -245,7 +245,7 @@ costs are structural:
   the database is being built in tmpfs.
 
 The scan already retains `installed_cores` and `game_dir_facts` at
-`magik-gui/catalog/src/library_db.rs:131-149`, and deferred coverage audit
+`crates/catalog/src/library_db.rs:131-149`, and deferred coverage audit
 correctly consumes those facts at `library_db.rs:295-313`. Persistence still
 calls the filesystem form of checkpoint computation at
 `sqlite_catalog.rs:2965-2983`. The measured checkpoint computation itself was
@@ -271,7 +271,7 @@ The best cold-scan experiments are therefore:
 The production builder currently calls
 `save_sqlite_scan_with_progress_and_stamp_and_catalog_projection` with
 `materialize_runtime_catalog=false` at
-`magik-gui/catalog/src/sqlite_catalog.rs:1353-1393`. The comment explicitly
+`crates/catalog/src/sqlite_catalog.rs:1353-1393`. The comment explicitly
 states that SQLite retains source facts and the builder publishes the finalized
 runtime catalog as the durable navigation projection.
 
@@ -309,7 +309,7 @@ a stale benchmark fixture would leave release, parity, and recovery holes.
 
 ### 3. Search indexing performs two throttled full passes
 
-`magik-gui/catalog/src/arcade_catalog.rs:818-866`:
+`crates/catalog/src/arcade_catalog.rs:818-866`:
 
 - constructs every `ArcadeSearchKey`;
 - sleeps 1 ms every 16 games;
@@ -328,7 +328,7 @@ Build search keys and autocomplete in one pass and yield by elapsed work budget
 matters, publish the active system first and build other systems later.
 
 There is also an ordering defect at
-`magik-gui/src/ui_runner/catalog_worker.rs:12-42`: `send_ready_catalog()` waits
+`apps/mister/src/ui_runner/catalog_worker.rs:12-42`: `send_ready_catalog()` waits
 for UI publication, changes the same thread to the CPU0 search role, and builds
 the indexes synchronously. On a fresh build this is the child-stdout reader, so
 it stops draining builder events for 35.109 seconds while the child persists
@@ -337,13 +337,13 @@ until `Persisted`; in either design, keep reading builder events continuously.
 
 ### 4. Preview planning is string-heavy and memory-unbounded by bytes
 
-The UI cache at `magik-gui/src/preview_state.rs:120-199` is a linear
+The UI cache at `apps/mister/src/preview_state.rs:120-199` is a linear
 `VecDeque<(String, Arc<PreviewImage>)>`. Turbo retention can grow to 512 entries
 (`preview_state.rs:24`). The code repeatedly creates string keys, preview-window
 vectors, and `HashSet<String>` membership state.
 
 The worker has a second linear decoded cache at
-`magik-gui/catalog/src/preview_worker.rs:600-649`. It holds up to 96 decoded
+`crates/catalog/src/preview_worker.rs:600-649`. It holds up to 96 decoded
 entries, removes from the middle/front of a `Vec`, and clones pixel payload
 metadata on hits. Archive resolution occurs before lookup at
 `preview_worker.rs:746-770`, so media-state/path work can precede a decoded hit.
@@ -364,7 +364,7 @@ and LZ4 decode are already fast enough.
 
 ### 5. Home scroll damages almost the whole rail
 
-`magik-gui/ui/views/home.slint:59-87` moves the parent rail rectangle containing
+`apps/mister/ui/views/home.slint:59-87` moves the parent rail rectangle containing
 six delegates. A normal pan therefore invalidates a 924×448 region: 827,904
 RGB565 bytes. The hidden-slot presenter loops over rectangles at
 `launcher_present/latch.rs:247-257`, and `scanout_slots.rs:364-376` copies each
@@ -402,7 +402,7 @@ work from queueing behind CPU0 background jobs.
 
 ### 7. Stream snapshot work remains on the UI thread
 
-`magik-gui/src/framebuffer/stream.rs:349-400` copies or downsamples the source
+`mister/platform/runtime/src/framebuffer/stream.rs:349-400` copies or downsamples the source
 pixels before queueing the worker. The source is a memory-mapped hidden scanout
 slot (`scanout_slots.rs:148-179`), which is write-combined device memory.
 
@@ -422,7 +422,7 @@ readback alone.
 
 ### 8. Launch handoff inherits the UI policy
 
-`magik-gui/src/ui_runner/launch_handoff_session.rs:422-462` creates the worker
+`apps/mister/src/ui_runner/launch_handoff_session.rs:422-462` creates the worker
 without applying a runtime role. It inherits CPU1 and the UI’s high priority,
 then performs filesystem metadata work, preparation, FIFO/status polling, and
 potential descriptor creation.

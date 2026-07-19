@@ -284,7 +284,7 @@ emit_run_context_row() {
     runtime_type="profile"
     deployment_state="verified"
   fi
-  binary_path="$HERE/magik-gui/target/armv7-unknown-linux-gnueabihf/$profile/mister-magik-fb"
+  binary_path="$HERE/apps/mister/target/armv7-unknown-linux-gnueabihf/$profile/mister-magik-fb"
   deployed_sha="$(bench_context_remote_sha256 "$MISTER" "$MISTER_MAGIK_BIN" || true)"
   deployed_sha="${deployed_sha:-missing}"
   if ! bench_context_require_binary_contract "$binary_path" "$deployed_sha" "$features" "$profile" launcher; then
@@ -339,9 +339,9 @@ case "$deploy" in
 esac
 
 if [[ "$cpu_profile" == "1" && "$self_test" != "1" ]]; then
-  profile_bin="$HERE/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device-profile/mister-magik-fb"
+  profile_bin="$HERE/apps/mister/target/armv7-unknown-linux-gnueabihf/release-device-profile/mister-magik-fb"
   echo "==> Build profiling binary for supervised Arcade CPU profile"
-  "$HERE/magik-gui/build-arm.sh" --profile --ui-scope launcher --bench-tools
+  "$HERE/apps/mister/build-arm.sh" --profile --ui-scope launcher --bench-tools
   echo "==> Deploy profiling binary for supervised Arcade CPU profile"
   if ! "$MISTER" agent deploy-magik-bin "$profile_bin" "$MISTER_MAGIK_BIN" >/dev/null; then
     echo "agent deploy failed for profiling binary; falling back to device deploy transaction" >&2

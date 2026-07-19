@@ -37,7 +37,7 @@ jobs:
           IMAGE: ${{ steps.cache-id.outputs.cross_image }}
         run: |
           set -euo pipefail
-          dockerfile_hash="$(sha256sum magik-gui/Dockerfile.cross-armv7 | awk '{print substr($1, 1, 12)}')"
+          dockerfile_hash="$(sha256sum apps/mister/Dockerfile.cross-armv7 | awk '{print substr($1, 1, 12)}')"
           expected_image="ghcr.io/nigelbreslaw/mister-magik-cross-armv7:ubuntu20-$dockerfile_hash"
           if [ "$IMAGE" != "$expected_image" ]; then
             echo "Cross.toml image must be $expected_image; got $IMAGE" >&2
@@ -65,7 +65,7 @@ jobs:
           set -euo pipefail
           mkdir -p build/ci
           build_started="$(date +%s)"
-          docker build --platform linux/amd64 --tag "$IMAGE" --file magik-gui/Dockerfile.cross-armv7 magik-gui
+          docker build --platform linux/amd64 --tag "$IMAGE" --file apps/mister/Dockerfile.cross-armv7 apps/mister
           build_finished="$(date +%s)"
           push_started="$(date +%s)"
           docker push "$IMAGE"

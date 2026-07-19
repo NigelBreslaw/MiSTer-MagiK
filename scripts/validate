@@ -9,10 +9,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 RUST_TOOLCHAIN="$(
-  sed -n 's/^channel = "\([^"]*\)"$/\1/p' magik-gui/rust-toolchain.toml
+  sed -n 's/^channel = "\([^"]*\)"$/\1/p' apps/mister/rust-toolchain.toml
 )"
 [ -n "$RUST_TOOLCHAIN" ] || {
-  echo "could not read the pinned Rust toolchain from magik-gui/rust-toolchain.toml" >&2
+  echo "could not read the pinned Rust toolchain from apps/mister/rust-toolchain.toml" >&2
   exit 2
 }
 export RUSTUP_TOOLCHAIN="$RUST_TOOLCHAIN"
@@ -139,8 +139,13 @@ run_group() {
   case "$group" in
     core)
       CARGO_BUILD_JOBS=2 run_check_recorded format || return 1
+      MISTER_VALIDATE_ROUTING_CHILD=1 run_check_recorded validation-routing || return 1
+      CARGO_BUILD_JOBS=2 run_check_recorded magik-core-tests || return 1
+      CARGO_BUILD_JOBS=2 run_check_recorded magik-core-clippy || return 1
+      CARGO_BUILD_JOBS=2 run_check_recorded mister-runtime-tests || return 1
+      CARGO_BUILD_JOBS=2 run_check_recorded mister-runtime-clippy || return 1
       CARGO_BUILD_JOBS=2 run_check_recorded host-tests || return 1
-      CARGO_BUILD_JOBS=2 run_check_recorded magik-gui-clippy || return 1
+      CARGO_BUILD_JOBS=2 run_check_recorded mister-app-clippy || return 1
       CARGO_BUILD_JOBS=2 run_check_recorded production-ui-check || return 1
       ;;
     catalog)
@@ -204,8 +209,12 @@ run_selected_group() {
   shift
   case "$group" in
     core)
+      if contains_check magik-core-tests "$@"; then CARGO_BUILD_JOBS=2 run_check_recorded magik-core-tests || return 1; fi
+      if contains_check magik-core-clippy "$@"; then CARGO_BUILD_JOBS=2 run_check_recorded magik-core-clippy || return 1; fi
+      if contains_check mister-runtime-tests "$@"; then CARGO_BUILD_JOBS=2 run_check_recorded mister-runtime-tests || return 1; fi
+      if contains_check mister-runtime-clippy "$@"; then CARGO_BUILD_JOBS=2 run_check_recorded mister-runtime-clippy || return 1; fi
       if contains_check host-tests "$@"; then CARGO_BUILD_JOBS=2 run_check_recorded host-tests || return 1; fi
-      if contains_check magik-gui-clippy "$@"; then CARGO_BUILD_JOBS=2 run_check_recorded magik-gui-clippy || return 1; fi
+      if contains_check mister-app-clippy "$@"; then CARGO_BUILD_JOBS=2 run_check_recorded mister-app-clippy || return 1; fi
       if contains_check production-ui-check "$@"; then CARGO_BUILD_JOBS=2 run_check_recorded production-ui-check || return 1; fi
       ;;
     catalog)
@@ -258,9 +267,16 @@ run_affected_parallel_groups() {
 run_affected_plan() {
   local groups=() status=0
   run_check_recorded format || status=1
+  if contains_check validation-routing "${plan[@]}"; then
+    MISTER_VALIDATE_ROUTING_CHILD=1 run_check_recorded validation-routing || status=1
+  fi
   run_check_recorded host-tools-fast || status=1
-  if contains_check host-tests "${plan[@]}" ||
-    contains_check magik-gui-clippy "${plan[@]}" ||
+  if contains_check magik-core-tests "${plan[@]}" ||
+    contains_check magik-core-clippy "${plan[@]}" ||
+    contains_check mister-runtime-tests "${plan[@]}" ||
+    contains_check mister-runtime-clippy "${plan[@]}" ||
+    contains_check host-tests "${plan[@]}" ||
+    contains_check mister-app-clippy "${plan[@]}" ||
     contains_check production-ui-check "${plan[@]}"; then
     groups+=(core)
   fi
@@ -292,23 +308,25 @@ run_affected_plan() {
 run_public_rust_format() {
   local manifest
   for manifest in \
-    magik-gui/Cargo.toml \
-    magik-gui/catalog/Cargo.toml \
-    magik-gui/ui-generated/Cargo.toml \
-    framebuffer-stream/Cargo.toml \
-    tools/mister/Cargo.toml \
-    tools/magik-agent/Cargo.toml \
-    desktop/Cargo.toml; do
+    apps/mister/Cargo.toml \
+    crates/magik-core/Cargo.toml \
+    crates/catalog/Cargo.toml \
+    apps/mister/ui-generated/Cargo.toml \
+    crates/framebuffer-stream/Cargo.toml \
+    mister/tools/host/Cargo.toml \
+    mister/tools/agent/Cargo.toml \
+    mister/platform/runtime/Cargo.toml \
+    apps/desktop/Cargo.toml; do
     cargo fmt --manifest-path "$manifest" --check
   done
 }
 
 require_desktop_submodules() {
   local path
-  for path in desktop/vendor/github-app desktop/vendor/material-icon-theme; do
+  for path in apps/desktop/vendor/github-app apps/desktop/vendor/material-icon-theme; do
     [ -e "$path/.git" ] || {
       echo "missing desktop submodule: $path" >&2
-      echo "run: git submodule update --init desktop/vendor/github-app desktop/vendor/material-icon-theme" >&2
+      echo "run: git submodule update --init apps/desktop/vendor/github-app apps/desktop/vendor/material-icon-theme" >&2
       return 1
     }
   done
@@ -368,28 +386,33 @@ run_check() {
   fi
   case "$check" in
     format) step "Format all public Rust crates"; run_public_rust_format ;;
-    host-tools-fast) step "Fast host tools"; scripts/dev-rust host-tools-fast ;;
-    host-tests) step "Host logic tests"; scripts/dev-rust test ;;
-    magik-gui-clippy) step "Clippy magik-gui host logic"; (cd magik-gui && cargo clippy --lib --no-default-features -- -D warnings) ;;
+    validation-routing) step "Test validation path routing"; bash scripts/tests/test-validate.sh ;;
+    magik-core-tests) step "Test portable MagiK domain"; cargo test --manifest-path crates/magik-core/Cargo.toml ;;
+    magik-core-clippy) step "Clippy portable MagiK domain"; cargo clippy --manifest-path crates/magik-core/Cargo.toml --all-targets -- -D warnings ;;
+    mister-runtime-tests) step "Test MiSTer runtime adapter"; cargo test --manifest-path mister/platform/runtime/Cargo.toml ;;
+    mister-runtime-clippy) step "Clippy MiSTer runtime adapter"; cargo clippy --manifest-path mister/platform/runtime/Cargo.toml --all-targets -- -D warnings ;;
+    host-tools-fast) step "Fast host tools"; bash scripts/dev-rust host-tools-fast ;;
+    host-tests) step "Host logic tests"; bash scripts/dev-rust test ;;
+    mister-app-clippy) step "Clippy apps/mister host logic"; (cd apps/mister && cargo clippy --lib --no-default-features -- -D warnings) ;;
     catalog-tests)
       step "Catalog crate tests (all features)"
-      cargo test --manifest-path magik-gui/catalog/Cargo.toml --all-features
-      cargo check --manifest-path magik-gui/catalog/Cargo.toml --no-default-features --features reader
+      cargo test --manifest-path crates/catalog/Cargo.toml --all-features
+      cargo check --manifest-path crates/catalog/Cargo.toml --no-default-features --features reader
       ;;
-    catalog-clippy) step "Clippy catalog crate"; cargo clippy --manifest-path magik-gui/catalog/Cargo.toml --all-features --all-targets -- -D warnings ;;
-    production-ui-check) step "Check production magik-gui binary"; cargo check --manifest-path magik-gui/Cargo.toml --bin mister-magik-fb --no-default-features --features ui ;;
-    host-tools) step "Full host tools"; scripts/dev-rust host-tools ;;
-    mister-tests) step "Test host tools"; cargo test --manifest-path tools/mister/Cargo.toml ;;
-    mister-clippy) step "Clippy host tools"; cargo clippy --manifest-path tools/mister/Cargo.toml --all-targets -- -D warnings ;;
-    agent-tests) step "Test MagiK agent"; cargo test --manifest-path tools/magik-agent/Cargo.toml ;;
-    agent-clippy) step "Clippy MagiK agent"; cargo clippy --manifest-path tools/magik-agent/Cargo.toml --all-targets -- -D warnings ;;
-    framebuffer-stream-tests) step "Test framebuffer stream"; cargo test --manifest-path framebuffer-stream/Cargo.toml ;;
-    framebuffer-stream-clippy) step "Clippy framebuffer stream"; cargo clippy --manifest-path framebuffer-stream/Cargo.toml --all-targets -- -D warnings ;;
-    desktop-tests) step "Test desktop"; require_desktop_submodules; cargo test --manifest-path desktop/Cargo.toml ;;
+    catalog-clippy) step "Clippy catalog crate"; cargo clippy --manifest-path crates/catalog/Cargo.toml --all-features --all-targets -- -D warnings ;;
+    production-ui-check) step "Check production apps/mister binary"; cargo check --manifest-path apps/mister/Cargo.toml --bin mister-magik-fb --no-default-features --features ui ;;
+    host-tools) step "Full host tools"; bash scripts/dev-rust host-tools ;;
+    mister-tests) step "Test host tools"; cargo test --manifest-path mister/tools/host/Cargo.toml ;;
+    mister-clippy) step "Clippy host tools"; cargo clippy --manifest-path mister/tools/host/Cargo.toml --all-targets -- -D warnings ;;
+    agent-tests) step "Test MagiK agent"; cargo test --manifest-path mister/tools/agent/Cargo.toml ;;
+    agent-clippy) step "Clippy MagiK agent"; cargo clippy --manifest-path mister/tools/agent/Cargo.toml --all-targets -- -D warnings ;;
+    framebuffer-stream-tests) step "Test framebuffer stream"; cargo test --manifest-path crates/framebuffer-stream/Cargo.toml ;;
+    framebuffer-stream-clippy) step "Clippy framebuffer stream"; cargo clippy --manifest-path crates/framebuffer-stream/Cargo.toml --all-targets -- -D warnings ;;
+    desktop-tests) step "Test desktop"; require_desktop_submodules; cargo test --manifest-path apps/desktop/Cargo.toml ;;
     desktop-compiled-check)
       step "Check compiled desktop UI"
       require_desktop_submodules
-      cargo check --manifest-path desktop/Cargo.toml --no-default-features --features compiled-ui
+      cargo check --manifest-path apps/desktop/Cargo.toml --no-default-features --features compiled-ui
       ;;
     documentation-build)
       step "Build documentation"
@@ -449,7 +472,8 @@ if [ "$mode" = full-host ]; then
     exit 2
   }
   report_order=(
-    format host-tests magik-gui-clippy production-ui-check
+    format validation-routing magik-core-tests magik-core-clippy mister-runtime-tests mister-runtime-clippy
+    host-tests mister-app-clippy production-ui-check
     catalog-tests catalog-clippy host-tools mister-clippy agent-tests agent-clippy
     framebuffer-stream-tests framebuffer-stream-clippy
     desktop-tests desktop-compiled-check documentation-build
@@ -558,26 +582,28 @@ need_docs=0
 
 for path in "${paths[@]}"; do
   case "$path" in
-    magik-gui/catalog/*)
+    crates/catalog/*)
       need_catalog=1; need_host=1; need_ui=1; need_mister=1 ;;
-    magik-gui/src/*)
+    crates/magik-core/*|mister/platform/runtime/*)
       need_host=1; need_ui=1 ;;
-    magik-gui/ui/*|magik-gui/ui-generated/*)
+    apps/mister/src/*)
+      need_host=1; need_ui=1 ;;
+    apps/mister/ui/*|apps/mister/ui-generated/*)
       need_ui=1 ;;
-    magik-gui/Cargo.toml|magik-gui/Cargo.lock|magik-gui/build.rs|magik-gui/.cargo/*)
+    apps/mister/Cargo.toml|apps/mister/Cargo.lock|apps/mister/build.rs|apps/mister/.cargo/*)
       need_catalog=1; need_host=1; need_ui=1 ;;
-    magik-gui/rust-toolchain.toml)
+    apps/mister/rust-toolchain.toml)
       need_catalog=1; need_host=1; need_ui=1; need_mister=1; need_agent=1
       need_stream=1; need_desktop=1 ;;
-    magik-gui/build-arm*.sh|magik-gui/Dockerfile*|magik-gui/Cross.toml|magik-gui/scripts/*)
+    apps/mister/build-arm*.sh|apps/mister/Dockerfile*|apps/mister/Cross.toml|apps/mister/scripts/*)
       need_catalog=1; need_host=1; need_ui=1 ;;
-    tools/mister/*)
+    mister/tools/host/*)
       need_mister=1 ;;
-    tools/magik-agent/*)
+    mister/tools/agent/*)
       need_agent=1 ;;
-    framebuffer-stream/*)
+    crates/framebuffer-stream/*)
       need_host=1; need_ui=1; need_agent=1; need_stream=1; need_desktop=1 ;;
-    desktop/*)
+    apps/desktop/*)
       need_desktop=1 ;;
     documentation/*)
       need_docs=1 ;;
@@ -587,8 +613,11 @@ for path in "${paths[@]}"; do
   esac
 done
 
-plan=(format host-tools-fast)
-[ "$need_host" -eq 1 ] && plan+=(host-tests magik-gui-clippy)
+plan=(format)
+[ "${MISTER_VALIDATE_ROUTING_CHILD:-0}" = 1 ] || plan+=(validation-routing)
+plan+=(host-tools-fast)
+[ "$need_host" -eq 1 ] && plan+=(magik-core-tests magik-core-clippy mister-runtime-tests mister-runtime-clippy)
+[ "$need_host" -eq 1 ] && plan+=(host-tests mister-app-clippy)
 [ "$need_catalog" -eq 1 ] && plan+=(catalog-tests catalog-clippy)
 [ "$need_ui" -eq 1 ] && plan+=(production-ui-check)
 [ "$need_stream" -eq 1 ] && plan+=(framebuffer-stream-tests framebuffer-stream-clippy)

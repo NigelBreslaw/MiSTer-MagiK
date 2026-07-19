@@ -18,10 +18,10 @@ def main() -> int:
         ROOT / "docs/agents/README.md",
         ROOT / "docs/agents/task-map.md",
         ROOT / "docs/agents/file-authority.md",
-        ROOT / "magik-gui/AGENTS.md",
-        ROOT / "magik-gui/src/ui_runner/AGENTS.md",
-        ROOT / "tools/mister/AGENTS.md",
-        ROOT / "tools/magik-agent/AGENTS.md",
+        ROOT / "apps/mister/AGENTS.md",
+        ROOT / "apps/mister/src/ui_runner/AGENTS.md",
+        ROOT / "mister/tools/host/AGENTS.md",
+        ROOT / "mister/tools/agent/AGENTS.md",
         ROOT / "scripts/AGENTS.md",
     )
     missing = [str(path.relative_to(ROOT)) for path in required if not path.is_file()]

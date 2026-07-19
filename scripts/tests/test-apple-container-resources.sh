@@ -4,7 +4,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-. "$ROOT/magik-gui/scripts/apple-container-resources.sh"
+. "$ROOT/apps/mister/scripts/apple-container-resources.sh"
 
 status() {
   printf 'ID IMAGE STATE IP CPUS MEMORY\n'

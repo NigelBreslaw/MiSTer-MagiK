@@ -846,7 +846,7 @@ start_stream_consumer() {
   echo "==> Start framebuffer stream consumer mode=$stream_consumer seconds=$stream_seconds scale=$stream_scale"
   (
     cd "$HERE"
-    MISTER_IP="${MISTER_IP:-192.168.1.117}" MISTER_FRAMEBUFFER_CADENCE_OUT="$local_cadence_tsv" cargo run --manifest-path desktop/Cargo.toml --locked "${stream_features[@]}" -- "$stream_arg" "$stream_seconds"
+    MISTER_IP="${MISTER_IP:-192.168.1.117}" MISTER_FRAMEBUFFER_CADENCE_OUT="$local_cadence_tsv" cargo run --manifest-path apps/desktop/Cargo.toml --locked "${stream_features[@]}" -- "$stream_arg" "$stream_seconds"
   ) >"$local_stream_tsv" 2>"$local_stream_log" &
   stream_pid="$!"
 }
@@ -901,9 +901,9 @@ case "$deploy" in
 esac
 
 if [[ "$cpu_profile" == "1" && "$self_test" != "1" ]]; then
-  profile_bin="$HERE/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device-profile/mister-magik-fb"
+  profile_bin="$HERE/apps/mister/target/armv7-unknown-linux-gnueabihf/release-device-profile/mister-magik-fb"
   echo "==> Build profiling binary for boot-entry Arcade CPU profile"
-  "$HERE/magik-gui/build-arm.sh" --profile --ui-scope launcher --bench-tools
+  "$HERE/apps/mister/build-arm.sh" --profile --ui-scope launcher --bench-tools
   echo "==> Deploy profiling binary for boot-entry Arcade CPU profile"
   if ! "$MISTER" agent deploy-magik-bin "$profile_bin" "$REMOTE_BIN" >/dev/null; then
     echo "agent deploy failed for profiling binary; falling back to device deploy transaction" >&2
@@ -921,7 +921,7 @@ if [[ "$cpu_profile" == "1" ]]; then
   runtime_type="profile"
   deployment_state="verified"
 fi
-binary_path="$HERE/magik-gui/target/armv7-unknown-linux-gnueabihf/$profile/mister-magik-fb"
+binary_path="$HERE/apps/mister/target/armv7-unknown-linux-gnueabihf/$profile/mister-magik-fb"
 deployed_sha256="$(bench_context_remote_sha256 "$MISTER" "$REMOTE_BIN" || true)"
 deployed_sha256="${deployed_sha256:-missing}"
 local_sha256="$(bench_context_sha256_file "$binary_path")"

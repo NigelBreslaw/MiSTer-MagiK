@@ -16,22 +16,22 @@ ROOT = Path(__file__).resolve().parents[2]
 PROJECT_LICENSE = "GPL-3.0-or-later"
 
 CARGO_MANIFESTS = (
-    "desktop/Cargo.toml",
-    "framebuffer-stream/Cargo.toml",
-    "magik-gui/Cargo.toml",
-    "magik-gui/catalog/Cargo.toml",
-    "magik-gui/ui-generated/Cargo.toml",
-    "tools/magik-agent/Cargo.toml",
-    "tools/mister/Cargo.toml",
+    "apps/desktop/Cargo.toml",
+    "crates/framebuffer-stream/Cargo.toml",
+    "apps/mister/Cargo.toml",
+    "crates/catalog/Cargo.toml",
+    "apps/mister/ui-generated/Cargo.toml",
+    "mister/tools/agent/Cargo.toml",
+    "mister/tools/host/Cargo.toml",
 )
 
 EXCLUDED_PREFIXES = (
-    "desktop/vendor/",
+    "apps/desktop/vendor/",
     "documentation/public/screenshots/",
     "history/",
-    "magik-gui/licenses/",
-    "magik-gui/ui/art/",
-    "magik-gui/ui/fonts/",
+    "apps/mister/licenses/",
+    "apps/mister/ui/art/",
+    "apps/mister/ui/fonts/",
     "private/",
 )
 
@@ -134,7 +134,7 @@ def expected_lines(relative: Path) -> list[str]:
     license_line = (
         f"{prefix}SPDX-License-Identifier: {license_expression(relative)}{suffix}\n"
     )
-    if relative.as_posix().startswith("kernel/scanout-slots/"):
+    if relative.as_posix().startswith("mister/platform/kernel/scanout-slots/"):
         return [license_line, copyright_line]
     return [copyright_line, license_line]
 

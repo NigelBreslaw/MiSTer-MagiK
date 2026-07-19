@@ -57,12 +57,12 @@ def main() -> int:
     for forbidden in (
         "target-host-",
         "Cache host build outputs",
-        "magik-gui/target/debug",
-        "magik-gui/catalog/target/debug",
-        "tools/magik-agent/target/debug",
-        "tools/mister/target/debug",
+        "apps/mister/target/debug",
+        "crates/catalog/target/debug",
+        "mister/tools/agent/target/debug",
+        "mister/tools/host/target/debug",
         "desktop-docs",
-        "desktop/target/debug",
+        "apps/desktop/target/debug",
         "libfontconfig1-dev",
         "scripts/validate paths desktop",
     ):
@@ -80,17 +80,17 @@ def main() -> int:
         "packages: read",
         "GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
         'docker pull "${{ steps.cache-id.outputs.cross_image }}"',
-        "magik-gui/target/ffmpeg-minimal/armv7",
+        "apps/mister/target/ffmpeg-minimal/armv7",
         "ffmpeg-minimal-v2-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-8.1.2-${{ steps.cache-id.outputs.cross_abi }}-${{ steps.cache-id.outputs.ffmpeg }}",
     ):
         if fragment not in distribution:
             fail(f"distribution is missing canonical cross-image setup: {fragment}")
     if distribution.index('docker pull "${{ steps.cache-id.outputs.cross_image }}"') > distribution.index(
-        "magik-gui/build-arm.sh --device"
+        "apps/mister/build-arm.sh --device"
     ):
         fail("distribution pulls the cross image after the ARM build starts")
 
-    cross_toml = (ROOT / "magik-gui/Cross.toml").read_text(encoding="utf-8")
+    cross_toml = (ROOT / "apps/mister/Cross.toml").read_text(encoding="utf-8")
     image_match = re.search(r'^image\s*=\s*"([^"]+)"', cross_toml, re.MULTILINE)
     if not image_match or not image_match.group(1).startswith("ghcr.io/"):
         fail("Cross.toml must contain the canonical GHCR image")
@@ -103,7 +103,7 @@ def main() -> int:
         "if: github.ref != 'refs/heads/main'",
         "group: mister-magik-cross-image",
         "cancel-in-progress: false",
-        "sha256sum magik-gui/Dockerfile.cross-armv7",
+        "sha256sum apps/mister/Dockerfile.cross-armv7",
         "ghcr.io/nigelbreslaw/mister-magik-cross-armv7:ubuntu20-$dockerfile_hash",
         'docker manifest inspect "$IMAGE"',
         "content-versioned images are immutable",
@@ -111,10 +111,10 @@ def main() -> int:
         if fragment not in cross_image:
             fail(f"cross-image workflow is missing write-once protection: {fragment}")
 
-    ffmpeg_helper = (ROOT / "magik-gui/scripts/build-minimal-ffmpeg.sh").read_text(
+    ffmpeg_helper = (ROOT / "apps/mister/scripts/build-minimal-ffmpeg.sh").read_text(
         encoding="utf-8"
     )
-    if '"$HERE/../scripts/checks/ci-cache-identity.py"' not in ffmpeg_helper:
+    if '"$HERE/../../scripts/checks/ci-cache-identity.py"' not in ffmpeg_helper:
         fail("minimal FFmpeg helper does not resolve the canonical cache identity from repo root")
 
     fpga = texts["fpga-vblank-latch.yml"]

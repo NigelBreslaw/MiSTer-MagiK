@@ -19,8 +19,8 @@ transition, and the minimal runtime command surface. Experiment builds add:
   `scripts/experiments/preview/profile-preview-transition-mega.sh`
 
 The source layout mirrors that boundary. Standalone effect renderers live under
-`magik-gui/src/experiments/effects/`, and the matching UI runner loops live
-under `magik-gui/src/ui_runner/experiments/effects/`. The root library exports
+`apps/mister/src/experiments/effects/`, and the matching UI runner loops live
+under `apps/mister/src/ui_runner/experiments/effects/`. The root library exports
 only `experiments::effects` behind `#[cfg(mister_experiments)]`; do not add
 root `pub mod` exports or production imports for unfinished effect work.
 

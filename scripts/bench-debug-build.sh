@@ -9,7 +9,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RUST_DIR="$ROOT/magik-gui"
+RUST_DIR="$ROOT/apps/mister"
 OUT_DIR="$ROOT/build"
 LOG_DIR="$OUT_DIR/debug-build-logs"
 TSV="$OUT_DIR/debug-build-bench.tsv"
@@ -126,8 +126,8 @@ command_spec() {
     arm-build-launcher) echo "scripts/dev-rust build-arm-debug" ;;
     arm-build-arcade) echo "scripts/dev-rust build-arm-arcade-debug" ;;
     arm-build-full) echo "scripts/dev-rust build-arm-debug-full" ;;
-    build-ui-device) echo "magik-gui/build-arm.sh --device" ;;
-    build-ui-fast) echo "magik-gui/build-arm.sh --fast" ;;
+    build-ui-device) echo "apps/mister/build-arm.sh --device" ;;
+    build-ui-fast) echo "apps/mister/build-arm.sh --fast" ;;
     *) return 1 ;;
   esac
 }

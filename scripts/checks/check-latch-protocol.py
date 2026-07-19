@@ -7,9 +7,9 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-spec = json.loads((ROOT / "fpga/menu-vblank-latch/latch-protocol.json").read_text())
-rust = (ROOT / "latch-contract/src/lib.rs").read_text()
-sv = (ROOT / "fpga/menu-vblank-latch/mister_magik_latch_protocol.svh").read_text()
+spec = json.loads((ROOT / "mister/platform/fpga/menu-vblank-latch/latch-protocol.json").read_text())
+rust = (ROOT / "mister/platform/contracts/latch/src/lib.rs").read_text()
+sv = (ROOT / "mister/platform/fpga/menu-vblank-latch/mister_magik_latch_protocol.svh").read_text()
 
 checks = [
     (rust, rf"SET_FBUF_LATCH: u16 = 0x{spec['set_command']:02x}"),

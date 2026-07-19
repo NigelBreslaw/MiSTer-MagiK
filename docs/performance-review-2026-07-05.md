@@ -31,9 +31,9 @@ The largest code-level opportunities are now more specific:
 
 Files:
 
-- `magik-gui/src/ui_runner/launcher_loop.rs`
-- `magik-gui/src/ui_runner/launcher_compositor.rs`
-- `magik-gui/src/ui_runner/ui_frame_target.rs`
+- `apps/mister/src/ui_runner/launcher_loop.rs`
+- `apps/mister/src/ui_runner/launcher_compositor.rs`
+- `apps/mister/src/ui_runner/ui_frame_target.rs`
 
 The launcher has a strong direct-layer design: Arcade list and raw previews can
 be rendered outside Slint and copied as direct RGB565 overlays. Even so, the
@@ -60,8 +60,8 @@ modal state, startup overlays, or bridge-driven UI.
 
 Files:
 
-- `magik-gui/src/framebuffer/target.rs`
-- `magik-gui/src/ui_runner/launcher_loop.rs`
+- `mister/platform/runtime/src/framebuffer/target.rs`
+- `apps/mister/src/ui_runner/launcher_loop.rs`
 
 `copy_cached_rect_565` promotes any rect that is full width or at least 85% of
 the framebuffer width into a full-row copy. This is often good for contiguous
@@ -83,10 +83,10 @@ writes despite extra bytes, so this must be measured on `/dev/fb0`.
 
 Files:
 
-- `magik-gui/catalog/src/runtime_thread.rs`
-- `magik-gui/src/framebuffer/vsync.rs`
-- `magik-gui/catalog/src/preview_worker.rs`
-- `magik-gui/src/ui_runner/media_worker.rs`
+- `crates/catalog/src/runtime_thread.rs`
+- `mister/platform/runtime/src/framebuffer/vsync.rs`
+- `crates/catalog/src/preview_worker.rs`
+- `apps/mister/src/ui_runner/media_worker.rs`
 
 Background catalog/media/prefetch work is pinned or niced, and foreground first
 scan intentionally owns both cores. The UI frame loop and vsync worker,
@@ -110,9 +110,9 @@ not a static assumption.
 
 Files:
 
-- `magik-gui/src/ui_runner/launcher_loop.rs`
-- `magik-gui/src/ui_runner/launch_handoff_session.rs`
-- `magik-gui/src/launcher.rs`
+- `apps/mister/src/ui_runner/launcher_loop.rs`
+- `apps/mister/src/ui_runner/launch_handoff_session.rs`
+- `apps/mister/src/launcher.rs`
 
 After handoff, the launcher can call a core-running probe that shells out to
 `pidof` and reads `/proc/.../cmdline`. During a sensitive transition, repeated
@@ -132,10 +132,10 @@ existing behavior as fallback until the Main-side signal is trusted.
 
 Files:
 
-- `magik-gui/src/ui_runner/launcher_loop.rs`
-- `magik-gui/catalog/src/sqlite_catalog.rs`
-- `magik-gui/catalog/src/catalog_summary.rs`
-- `magik-gui/catalog/src/catalog_navigation.rs`
+- `apps/mister/src/ui_runner/launcher_loop.rs`
+- `crates/catalog/src/sqlite_catalog.rs`
+- `crates/catalog/src/catalog_summary.rs`
+- `crates/catalog/src/catalog_navigation.rs`
 
 Warm boot is optimized around `library.summary.json` and `library.nav.lz4b`.
 If those are missing or stale, the UI path can fall back to full SQLite catalog
@@ -156,9 +156,9 @@ their reveal rules must remain explicit and bounded.
 
 Files:
 
-- `magik-gui/src/ui_runner/launcher_scheduler.rs`
-- `magik-gui/src/ui_runner/launcher_loop.rs`
-- `magik-gui/src/preview_state.rs`
+- `apps/mister/src/ui_runner/launcher_scheduler.rs`
+- `apps/mister/src/ui_runner/launcher_loop.rs`
+- `apps/mister/src/preview_state.rs`
 
 Catalog, media, and preview channels are drained eagerly. The off-thread design
 is good, but result bursts can still collapse into one expensive UI frame,
@@ -178,10 +178,10 @@ budgeting must prioritize visible correctness events over diagnostics.
 
 Files:
 
-- `magik-gui/catalog/src/sqlite_catalog.rs`
-- `magik-gui/catalog/src/core_audit.rs`
-- `magik-gui/catalog/src/catalog_checkpoint.rs`
-- `magik-gui/catalog/src/catalog_discovery.rs`
+- `crates/catalog/src/sqlite_catalog.rs`
+- `crates/catalog/src/core_audit.rs`
+- `crates/catalog/src/catalog_checkpoint.rs`
+- `crates/catalog/src/catalog_discovery.rs`
 
 Warm stamp validation computes audit rows, stamp, and discovery checkpoint from
 overlapping directory and metadata facts. On exFAT/FUSE, duplicated `read_dir`,
@@ -203,9 +203,9 @@ the exact same unchanged/changed outcomes before and after.
 
 Files:
 
-- `magik-gui/catalog/src/catalog_scan.rs`
-- `magik-gui/catalog/src/library_indexer.rs`
-- `magik-gui/catalog/src/media_metadata.rs`
+- `crates/catalog/src/catalog_scan.rs`
+- `crates/catalog/src/library_indexer.rs`
+- `crates/catalog/src/media_metadata.rs`
 
 Cold scan uses a walker thread feeding a classifier over a bounded channel. That
 is good. However, expensive work such as ZIP central-directory parsing, MRA/MGL
@@ -227,9 +227,9 @@ regression coverage.
 
 Files:
 
-- `magik-gui/catalog/src/preview_worker.rs`
-- `magik-gui/catalog/src/sqlite_catalog.rs`
-- `magik-gui/src/ui_runner/media_worker.rs`
+- `crates/catalog/src/preview_worker.rs`
+- `crates/catalog/src/sqlite_catalog.rs`
+- `apps/mister/src/ui_runner/media_worker.rs`
 
 Preview requests and SQLite hydration resolve active screenshot pack paths from
 media state and filesystem checks. This is not huge, but it happens on paths
@@ -248,7 +248,7 @@ Risk: low. The main risk is stale pack selection after a media update.
 
 Files:
 
-- `magik-gui/catalog/src/preview_worker.rs`
+- `crates/catalog/src/preview_worker.rs`
 - `docs/benchmarking.md`
 
 The `.mmlz4b.idx` sidecar `pread` path is the right cold first-preview design.
@@ -272,9 +272,9 @@ readiness if the user immediately scrolls far.
 
 Files:
 
-- `magik-gui/catalog/src/preview_worker.rs`
-- `magik-gui/src/raw565.rs`
-- `magik-gui/src/ui_runner/raw565_preview_renderer.rs`
+- `crates/catalog/src/preview_worker.rs`
+- `apps/mister/src/raw565.rs`
+- `apps/mister/src/ui_runner/raw565_preview_renderer.rs`
 
 Raw565 preview payloads are parsed into `Vec<u16>`. For a 320x320 preview, that
 is roughly 200 KB of memory traffic per decode after the read/decompress step.
@@ -293,7 +293,7 @@ visual captures.
 
 Files:
 
-- `magik-gui/src/arcade_list_renderer.rs`
+- `apps/mister/src/arcade_list_renderer.rs`
 
 Game rows are cached, but filter rows are rendered as `Vec<Pixel>` and then
 converted to RGB565. Filter/search navigation can allocate and touch more memory
@@ -311,7 +311,7 @@ Risk: low to medium. Needs visual parity checks.
 
 Files:
 
-- `magik-gui/src/arcade_list_renderer.rs`
+- `apps/mister/src/arcade_list_renderer.rs`
 
 The selected aperture is copied through an inversion scratch buffer before
 presentation. This avoids mutating the cached layer, but costs an extra pass.
@@ -328,9 +328,9 @@ Risk: medium. The selected-row visual is subtle; benchmark with visual captures.
 
 Files:
 
-- `magik-gui/catalog/src/sqlite_catalog.rs`
-- `magik-gui/catalog/src/catalog_summary.rs`
-- `magik-gui/catalog/src/catalog_navigation.rs`
+- `crates/catalog/src/sqlite_catalog.rs`
+- `crates/catalog/src/catalog_summary.rs`
+- `crates/catalog/src/catalog_navigation.rs`
 
 The database itself is built off `/media/fat` and published safely, which is
 good. The DB, summary, and nav projection still create multiple sync/rename/
@@ -403,7 +403,7 @@ deployed `release-device` launcher-scope bench-tools binary:
 - git commit: `8ec3a83f` with local benchmark/report artifacts dirty.
 - binary: `/media/fat/mister-magik/mister-magik-fb`.
 - local build artifact:
-  `magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb`.
+  `apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb`.
 - binary size: `6,692,796` bytes.
 - display path: RGB565 `960x540`, FPGA-scaled to HDMI.
 - no experimental effect-scene benchmarks were run.

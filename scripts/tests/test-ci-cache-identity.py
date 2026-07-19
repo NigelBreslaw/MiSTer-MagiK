@@ -42,17 +42,17 @@ def main() -> int:
         (fixture / "irrelevant.txt").write_text("ignored\n", encoding="utf-8")
         assert MODULE.identities(fixture) == initial
 
-        ignored_ui = fixture / "magik-gui/ui/.DS_Store"
+        ignored_ui = fixture / "apps/mister/ui/.DS_Store"
         ignored_ui.write_bytes(b"ignored")
         assert MODULE.identities(fixture) == initial
 
-        ui = next(iter(MODULE.files_for(fixture, ("magik-gui/ui/**/*.slint",))))
+        ui = next(iter(MODULE.files_for(fixture, ("apps/mister/ui/**/*.slint",))))
         ui.write_text(ui.read_text(encoding="utf-8") + "\n// cache identity test\n", encoding="utf-8")
         changed_ui = MODULE.identities(fixture)
         assert changed_ui["host_target"] != initial["host_target"]
         assert changed_ui["arm_target"] != initial["arm_target"]
 
-        cross = fixture / "magik-gui/Cross.toml"
+        cross = fixture / "apps/mister/Cross.toml"
         cross.write_text(cross.read_text(encoding="utf-8").replace("d047ace4d737", "changedimage1"), encoding="utf-8")
         changed_cross = MODULE.identities(fixture)
         assert changed_cross["cross_abi"] != changed_ui["cross_abi"]
@@ -60,13 +60,13 @@ def main() -> int:
         assert changed_cross["agent_target"] != changed_ui["agent_target"]
         assert changed_cross["ffmpeg"] != changed_ui["ffmpeg"]
 
-        lock = fixture / "magik-gui/catalog/Cargo.lock"
+        lock = fixture / "crates/catalog/Cargo.lock"
         lock.write_text(lock.read_text(encoding="utf-8") + "\n# cache identity test\n", encoding="utf-8")
         changed_lock = MODULE.identities(fixture)
         assert changed_lock["cargo_host"] != changed_cross["cargo_host"]
         assert changed_lock["host_target"] != changed_cross["host_target"]
 
-        toolchain = fixture / "magik-gui/rust-toolchain.toml"
+        toolchain = fixture / "apps/mister/rust-toolchain.toml"
         toolchain.write_text(
             toolchain.read_text(encoding="utf-8") + "\n# cache identity test\n",
             encoding="utf-8",
@@ -77,13 +77,13 @@ def main() -> int:
         assert changed_toolchain["arm_target"] != changed_lock["arm_target"]
         assert changed_toolchain["agent_target"] != changed_lock["agent_target"]
 
-        manifest = fixture / "magik-gui/Cargo.toml"
+        manifest = fixture / "apps/mister/Cargo.toml"
         manifest.write_text(manifest.read_text(encoding="utf-8") + "\n# cache identity test\n", encoding="utf-8")
         changed_manifest = MODULE.identities(fixture)
         assert changed_manifest["host_target"] != changed_toolchain["host_target"]
         assert changed_manifest["arm_target"] != changed_toolchain["arm_target"]
 
-        desktop_lock = fixture / "desktop/Cargo.lock"
+        desktop_lock = fixture / "apps/desktop/Cargo.lock"
         desktop_lock.write_text(
             desktop_lock.read_text(encoding="utf-8") + "\n# cache identity test\n",
             encoding="utf-8",
@@ -93,7 +93,7 @@ def main() -> int:
         assert changed_desktop_lock["host_target"] != changed_manifest["host_target"]
 
         desktop_source = next(
-            iter(MODULE.files_for(fixture, ("desktop/src/**/*.rs",)))
+            iter(MODULE.files_for(fixture, ("apps/desktop/src/**/*.rs",)))
         )
         desktop_source.write_text(
             desktop_source.read_text(encoding="utf-8") + "\n// cache identity test\n",
@@ -106,7 +106,7 @@ def main() -> int:
         )
 
         stream_source = next(
-            iter(MODULE.files_for(fixture, ("framebuffer-stream/src/**/*.rs",)))
+            iter(MODULE.files_for(fixture, ("crates/framebuffer-stream/src/**/*.rs",)))
         )
         stream_source.write_text(
             stream_source.read_text(encoding="utf-8") + "\n// cache identity test\n",
@@ -123,10 +123,12 @@ def main() -> int:
         )
 
         source_expectations = (
-            ("magik-gui/src/**/*.rs", ("host_target", "arm_target")),
-            ("magik-gui/catalog/src/**/*.rs", ("host_target", "arm_target")),
-            ("tools/mister/src/**/*.rs", ("host_target",)),
-            ("tools/magik-agent/src/**/*.rs", ("host_target", "agent_target")),
+            ("apps/mister/src/**/*.rs", ("host_target", "arm_target")),
+            ("crates/magik-core/src/**/*.rs", ("host_target", "arm_target")),
+            ("crates/catalog/src/**/*.rs", ("host_target", "arm_target")),
+            ("mister/platform/runtime/src/**/*.rs", ("host_target", "arm_target")),
+            ("mister/tools/host/src/**/*.rs", ("host_target",)),
+            ("mister/tools/agent/src/**/*.rs", ("host_target", "agent_target")),
         )
         previous = changed_stream_source
         for pattern, changed_groups in source_expectations:
@@ -141,10 +143,10 @@ def main() -> int:
             previous = current
 
         compiled_input_expectations = (
-            ("magik-gui/catalog/data/**/*.json", ("host_target", "arm_target")),
-            ("magik-gui/catalog/tests/**/*.rs", ("host_target",)),
-            ("magik-gui/ui/fonts/*.ttf", ("host_target", "arm_target")),
-            ("magik-gui/ui/icons/*.svg", ("host_target", "arm_target")),
+            ("crates/catalog/data/**/*.json", ("host_target", "arm_target")),
+            ("crates/catalog/tests/**/*.rs", ("host_target",)),
+            ("apps/mister/ui/fonts/*.ttf", ("host_target", "arm_target")),
+            ("apps/mister/ui/icons/*.svg", ("host_target", "arm_target")),
         )
         for pattern, changed_groups in compiled_input_expectations:
             source = next(iter(MODULE.files_for(fixture, (pattern,))))

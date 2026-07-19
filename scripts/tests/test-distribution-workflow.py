@@ -8,7 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 text = (ROOT / ".github/workflows/distribution.yml").read_text()
-cross = (ROOT / "magik-gui/Cross.toml").read_text()
+cross = (ROOT / "apps/mister/Cross.toml").read_text()
 packager = (ROOT / "scripts/package-distribution.sh").read_text()
 
 for variable in (
@@ -30,7 +30,7 @@ required = (
     "- release",
     "fetch-depth: 0",
     "github.ref != 'refs/heads/main'",
-    "magik-gui/build-arm.sh --device",
+    "apps/mister/build-arm.sh --device",
     "environment:\n      name: publish-${{ github.event.inputs.release_channel }}",
     "contents: write",
     "gh release create",

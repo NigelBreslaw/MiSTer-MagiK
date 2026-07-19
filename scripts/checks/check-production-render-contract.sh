@@ -23,7 +23,7 @@ check_absent() {
 }
 
 scope=(
-  "magik-gui/src"
+  "apps/mister/src"
   "scripts"
   "docs"
   "AGENTS.md"
@@ -34,7 +34,7 @@ check_absent "retired framebuffer color format API" \
   "${scope[@]}"
 check_absent "retired generic framebuffer open/mode APIs" \
   "open_with_format|write_mister_mode_format|fb_enable_format|buffer_mut\\(|buffer_u32_mut\\(" \
-  "magik-gui/src"
+  "apps/mister/src"
 check_absent "retired generic route abstraction" \
   "FpgaFramebufferRoute|for_ui_rgb565|for_plan_rgb565|fb-format-smoke" \
   "${scope[@]}"

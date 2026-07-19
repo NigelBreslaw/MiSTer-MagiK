@@ -36,7 +36,7 @@ jobs:
         run: python3 scripts/checks/ci-cache-identity.py --github-output "$GITHUB_OUTPUT"
 
       - name: Install Rust toolchain
-        working-directory: magik-gui
+        working-directory: apps/mister
         run: rustup show
 
       - name: Cache cargo registry
@@ -66,7 +66,7 @@ jobs:
         run: python3 scripts/checks/ci-cache-identity.py --github-output "$GITHUB_OUTPUT"
 
       - name: Install Rust toolchain
-        working-directory: magik-gui
+        working-directory: apps/mister
         run: rustup show
 
       - name: Cache cargo registry
@@ -105,17 +105,17 @@ jobs:
       - name: Cache minimal FFmpeg
         uses: actions/cache@v6
         with:
-          path: magik-gui/target/ffmpeg-minimal/armv7
+          path: apps/mister/target/ffmpeg-minimal/armv7
           key: ffmpeg-minimal-v2-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-8.1.2-${{ steps.cache-id.outputs.cross_abi }}-${{ steps.cache-id.outputs.ffmpeg }}
 
       - name: Cache ARM build outputs
         uses: actions/cache@v6
         with:
           path: |
-            magik-gui/target/release-device
-            !magik-gui/target/release-device/incremental
-            magik-gui/target/armv7-unknown-linux-gnueabihf/release-device
-            !magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/incremental
+            apps/mister/target/release-device
+            !apps/mister/target/release-device/incremental
+            apps/mister/target/armv7-unknown-linux-gnueabihf/release-device
+            !apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/incremental
           key: target-arm-v2-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-release-device-${{ steps.cache-id.outputs.cross_abi }}-${{ steps.cache-id.outputs.arm_target }}
           restore-keys: |
             target-arm-v2-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-release-device-${{ steps.cache-id.outputs.cross_abi }}-
@@ -123,14 +123,14 @@ jobs:
       - name: Build ARM binary
         env:
           MISTER_CARGO_TIMINGS: "1"
-        run: magik-gui/build-arm.sh --device
+        run: apps/mister/build-arm.sh --device
 
       - name: Upload Cargo timings
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: cargo-timings-release
-          path: magik-gui/target/cargo-timings/*.html
+          path: apps/mister/target/cargo-timings/*.html
           if-no-files-found: warn
           retention-days: 14
 
@@ -138,13 +138,13 @@ jobs:
         run: scripts/regression-arm-noop.sh --skip-warmup
 
       - name: Check ARM shared libraries
-        run: magik-gui/scripts/check-arm-shared-libs.sh magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb
+        run: apps/mister/scripts/check-arm-shared-libs.sh apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb
 
       - name: Upload ARM binary
         uses: actions/upload-artifact@v7
         with:
           name: mister-magik-fb-release
-          path: magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb
+          path: apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb
           if-no-files-found: error
 
       - name: Upload size history
@@ -167,7 +167,7 @@ jobs:
         run: python3 scripts/checks/ci-cache-identity.py --github-output "$GITHUB_OUTPUT"
 
       - name: Install Rust toolchain
-        working-directory: magik-gui
+        working-directory: apps/mister
         run: rustup show
 
       - name: Cache cargo registry
@@ -207,8 +207,8 @@ jobs:
         uses: actions/cache@v6
         with:
           path: |
-            tools/magik-agent/target/armv7-unknown-linux-gnueabihf/release
-            !tools/magik-agent/target/armv7-unknown-linux-gnueabihf/release/incremental
+            mister/tools/agent/target/armv7-unknown-linux-gnueabihf/release
+            !mister/tools/agent/target/armv7-unknown-linux-gnueabihf/release/incremental
           key: target-agent-arm-v2-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-release-${{ steps.cache-id.outputs.cross_abi }}-${{ steps.cache-id.outputs.agent_target }}
           restore-keys: |
             target-agent-arm-v2-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-release-${{ steps.cache-id.outputs.cross_abi }}-
@@ -220,5 +220,5 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: mister-magik-agent
-          path: tools/magik-agent/target/armv7-unknown-linux-gnueabihf/release/mister-magik-agent
+          path: mister/tools/agent/target/armv7-unknown-linux-gnueabihf/release/mister-magik-agent
           if-no-files-found: error

@@ -283,7 +283,7 @@ profile_library_io_cleanup() {
 }
 benchmark_cleanup_install profile_library_io_cleanup
 
-binary_path="$HERE/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
+binary_path="$HERE/apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
 deployed_sha256="$(bench_context_remote_sha256 "$MISTER" "$REMOTE" || true)"
 deployed_sha256="${deployed_sha256:-missing}"
 if ! bench_context_require_binary_contract "$binary_path" "$deployed_sha256" ui release-device launcher; then

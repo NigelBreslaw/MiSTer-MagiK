@@ -109,9 +109,9 @@ run_profile() {
 }
 
 echo "==> Build release null-drain benchmark"
-cargo build --manifest-path "$ROOT/desktop/Cargo.toml" --locked --release
+cargo build --manifest-path "$ROOT/apps/desktop/Cargo.toml" --locked --release
 echo "==> Build production Skia desktop benchmark"
-cargo build --manifest-path "$ROOT/desktop/Cargo.toml" --locked --release \
+cargo build --manifest-path "$ROOT/apps/desktop/Cargo.toml" --locked --release \
   --no-default-features --features compiled-ui,skia-renderer
 
 run_profile "${label}-NOSUB" none off turbo-hold "$deploy"

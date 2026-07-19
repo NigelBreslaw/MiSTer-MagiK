@@ -74,7 +74,7 @@ fail() {
 remote() { "$MISTER" run "$1"; }
 last_number() { awk 'NF { value=$NF } END { gsub(/[^0-9]/, "", value); print value }'; }
 
-binary_path="$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
+binary_path="$ROOT/apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
 deployed_sha256="$(bench_context_remote_sha256 "$MISTER" "$MISTER_MAGIK_BIN" || true)"
 deployed_sha256="${deployed_sha256:-missing}"
 if ! bench_context_require_binary_contract "$binary_path" "$deployed_sha256" ui release-device launcher; then

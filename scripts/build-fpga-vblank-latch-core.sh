@@ -5,9 +5,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PATCH="$ROOT/fpga/menu-vblank-latch/Menu_MiSTer-vblank-latched-fbuf.patch"
-LATCH_RTL="$ROOT/fpga/menu-vblank-latch/mister_magik_vblank_latch.sv"
-LATCH_PROTOCOL="$ROOT/fpga/menu-vblank-latch/mister_magik_latch_protocol.svh"
+PATCH="$ROOT/mister/platform/fpga/menu-vblank-latch/Menu_MiSTer-vblank-latched-fbuf.patch"
+LATCH_RTL="$ROOT/mister/platform/fpga/menu-vblank-latch/mister_magik_vblank_latch.sv"
+LATCH_PROTOCOL="$ROOT/mister/platform/fpga/menu-vblank-latch/mister_magik_latch_protocol.svh"
 OUT_DIR="${MISTER_FPGA_OUT_DIR:-$ROOT/build/fpga-vblank-latch}"
 WORK_DIR="${MISTER_MENU_BUILD_DIR:-$OUT_DIR/Menu_MiSTer-vblank-latch-work}"
 if [[ -n "${MISTER_MENU_DIR:-}" ]]; then
@@ -30,7 +30,7 @@ BUILD_DATE="${MISTER_FPGA_BUILD_DATE:-$(git -C "$ROOT" show -s --format=%cd --da
 QUALIFIED_MAGIK_REVISION="${MISTER_FPGA_QUALIFIED_MAGIK_REVISION:-$(git -C "$ROOT" rev-parse HEAD)}"
 COMPONENT_INPUT_SHA256="${MISTER_FPGA_COMPONENT_INPUT_SHA256:-}"
 COMPONENT_REVISION="${MISTER_FPGA_COMPONENT_REVISION:-}"
-PLATFORM_CONTRACT="$ROOT/kernel/scanout-slots/mister_magik_scanout_platform.h"
+PLATFORM_CONTRACT="$ROOT/mister/platform/kernel/scanout-slots/mister_magik_scanout_platform.h"
 
 usage() {
   cat <<'EOF'

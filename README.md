@@ -1,23 +1,21 @@
 # MiSTer MagiK
 
-MiSTer MagiK is a frontend for the MiSTer FPGA focused on making it easy to
-manage your game collection, get set up, and start playing with ease.
+MiSTer MagiK is a frontend for the MiSTer FPGA.
 
 It is built to feel polished, playful, and commercial-quality, with a whimsical
-interface that makes browsing retro games part of the fun.
+interface that makes browsing retro games part of the fun. MagiK is built to
+have insane levels of performance. It is built to be fast, smooth, and responsive.
+
+It aims to help you find and enjoy retro games with ease and find surprises in
+your game collection.
 
 To make MiSTer usable, MiSTer MagiK is **highly opinionated**.
 
-If playing with `.ini` files, getting lost in display modes, tuning scaler
-settings, and never quite having a working joystick is your idea of fun, you
-probably will not like this frontend.
-
-But if you love 90s arcade effects, smooth 60fps transitions, fast game
-discovery, and the feeling of stumbling into the next brilliant retro game to
-play, you might just love it.
-
 MiSTer MagiK wants MiSTer to feel less like a configuration project and more
-like a magic cabinet.
+like a magic cabinet. If low level configuration is your jam, MagiK might not be
+for you. However if it is for you and you still like tweaking the hell out of
+ini files the settings menu has an 'Exit to MiSTer' option to put you instantly
+back into the original OSD menu system.
 
 ## Important Disclaimer
 

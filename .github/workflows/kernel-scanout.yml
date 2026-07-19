@@ -6,7 +6,7 @@ name: Kernel scanout slots
 on:
   pull_request:
     paths:
-      - "kernel/scanout-slots/**"
+      - "mister/platform/kernel/scanout-slots/**"
       - "scripts/build-scanout-slots-module.sh"
       - "scripts/checks/check-scanout-slots-contract.sh"
       - "scripts/tests/test-scanout-platform-contract.py"
@@ -16,7 +16,7 @@ on:
   push:
     branches: [main]
     paths:
-      - "kernel/scanout-slots/**"
+      - "mister/platform/kernel/scanout-slots/**"
       - "scripts/build-scanout-slots-module.sh"
       - "scripts/checks/check-scanout-slots-contract.sh"
       - "scripts/tests/test-scanout-platform-contract.py"
@@ -102,14 +102,14 @@ jobs:
 
       - name: Warning-clean rebuild
         run: >-
-          make -C kernel/scanout-slots
+          make -C mister/platform/kernel/scanout-slots
           KERNEL_SRC="$PWD/build/Linux-Kernel_MiSTer"
           KERNEL_BUILD="$PWD/build/scanout-slots-kernel"
           ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- W=1 all
 
       - name: Sparse type check
         run: >-
-          make -C kernel/scanout-slots
+          make -C mister/platform/kernel/scanout-slots
           KERNEL_SRC="$PWD/build/Linux-Kernel_MiSTer"
           KERNEL_BUILD="$PWD/build/scanout-slots-kernel"
           ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf-
@@ -123,10 +123,10 @@ jobs:
           # verifies every other kernel style rule here.
           "$PWD/build/Linux-Kernel_MiSTer/scripts/checkpatch.pl" --no-tree --strict --file \
             --ignore SPDX_LICENSE_TAG \
-            kernel/scanout-slots/mister_magik_scanout_slots.c \
-            kernel/scanout-slots/mister_magik_scanout_slots_uapi.h \
-            kernel/scanout-slots/mister_magik_scanout_platform.h \
-            kernel/scanout-slots/mister_magik_scanout_policy.h
+            mister/platform/kernel/scanout-slots/mister_magik_scanout_slots.c \
+            mister/platform/kernel/scanout-slots/mister_magik_scanout_slots_uapi.h \
+            mister/platform/kernel/scanout-slots/mister_magik_scanout_platform.h \
+            mister/platform/kernel/scanout-slots/mister_magik_scanout_policy.h
 
       - name: Audit module imports and metadata
         run: |
@@ -184,7 +184,7 @@ jobs:
 
       - name: Build module with Clang warnings denied
         run: >-
-          make -C kernel/scanout-slots
+          make -C mister/platform/kernel/scanout-slots
           KERNEL_SRC="$GITHUB_WORKSPACE/build/Linux-Kernel_MiSTer"
           KERNEL_BUILD="$GITHUB_WORKSPACE/build/scanout-slots-clang"
           ARCH=arm LLVM=1 WERROR=1 W=1 all
@@ -208,5 +208,5 @@ jobs:
       - name: Run Coccinelle reports
         run: >-
           make -C build/Linux-Kernel_MiSTer
-          M="$GITHUB_WORKSPACE/kernel/scanout-slots"
+          M="$GITHUB_WORKSPACE/mister/platform/kernel/scanout-slots"
           coccicheck MODE=report

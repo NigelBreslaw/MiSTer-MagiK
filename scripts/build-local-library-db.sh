@@ -68,4 +68,4 @@ export MISTER_LIBRARY_BENCH_SQLITE="$out"
 export MISTER_LIBRARY_SCAN_BENCH_FORCE=1
 export MISTER_LIBRARY_SCAN_BENCH_ITERATIONS="${MISTER_LIBRARY_SCAN_BENCH_ITERATIONS:-1}"
 
-cargo run --manifest-path magik-gui/catalog/Cargo.toml --bin library-scan-bench
+cargo run --manifest-path crates/catalog/Cargo.toml --bin library-scan-bench

@@ -76,7 +76,7 @@ if [ "$PROFILE" = release ] && [ "$UI_SCOPE_EXPLICIT" -eq 0 ]; then
   UI_SCOPE=launcher
 fi
 
-BIN="$HERE/magik-gui/target/armv7-unknown-linux-gnueabihf/$PROFILE/mister-magik-fb"
+BIN="$HERE/apps/mister/target/armv7-unknown-linux-gnueabihf/$PROFILE/mister-magik-fb"
 
 bytes() {
   stat -f%z "$1" 2>/dev/null || stat -c%s "$1"
@@ -102,7 +102,7 @@ verify_dev_platform_manifest() {
 }
 
 echo "==> Cross-building (armv7 profile=$PROFILE)"
-"$HERE/magik-gui/build-arm.sh" "${BUILD_FLAG[@]}"
+"$HERE/apps/mister/build-arm.sh" "${BUILD_FLAG[@]}"
 
 LOCAL_BYTES="$(bytes "$BIN")"
 LOCAL_SHA256="$(bench_context_sha256_file "$BIN")"

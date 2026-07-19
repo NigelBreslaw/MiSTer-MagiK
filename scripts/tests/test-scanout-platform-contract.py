@@ -9,7 +9,7 @@ import re
 from typing import List, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parents[2]
-HEADER = ROOT / "kernel/scanout-slots/mister_magik_scanout_platform.h"
+HEADER = ROOT / "mister/platform/kernel/scanout-slots/mister_magik_scanout_platform.h"
 
 
 def number(name: str) -> int:

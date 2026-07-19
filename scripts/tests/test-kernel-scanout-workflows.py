@@ -14,7 +14,7 @@ HEAVY = (ROOT / ".github/workflows/kernel-scanout.yml").read_text()
 LIGHT = (ROOT / ".github/workflows/scanout-contract.yml").read_text()
 
 HEAVY_PATHS = {
-    "kernel/scanout-slots/**",
+    "mister/platform/kernel/scanout-slots/**",
     "scripts/build-scanout-slots-module.sh",
     "scripts/checks/check-scanout-slots-contract.sh",
     "scripts/tests/test-scanout-platform-contract.py",
@@ -23,8 +23,8 @@ HEAVY_PATHS = {
     ".github/workflows/kernel-scanout.yml",
 }
 LIGHT_PATHS = {
-    "magik-gui/src/framebuffer/scanout_slots.rs",
-    "tools/magik-agent/src/scanout_slots_contract.rs",
+    "mister/platform/runtime/src/framebuffer/scanout_slots.rs",
+    "mister/tools/agent/src/scanout_slots_contract.rs",
     "scripts/deploy-platform.sh",
     "scripts/install-slint-boot.sh",
     "documentation/src/content/docs/architecture/kernel-scanout-plugin.mdx",
@@ -85,8 +85,8 @@ for forbidden in (
     assert forbidden not in LIGHT, f"lightweight workflow contains heavyweight behavior: {forbidden}"
 
 for unrelated in (
-    "tools/magik-agent/src/main.rs",
-    "tools/magik-agent/src/sd_browse.rs",
+    "mister/tools/agent/src/main.rs",
+    "mister/tools/agent/src/sd_browse.rs",
     "docs/benchmarking.md",
     "docs/kernel-scanout-plugin-assurance.md",
     "scripts/scanout-slots-one-shot.sh",
@@ -95,15 +95,15 @@ for unrelated in (
     assert not triggered(LIGHT_PATHS, unrelated)
 
 for userspace_contract in (
-    "magik-gui/src/framebuffer/scanout_slots.rs",
-    "tools/magik-agent/src/scanout_slots_contract.rs",
+    "mister/platform/runtime/src/framebuffer/scanout_slots.rs",
+    "mister/tools/agent/src/scanout_slots_contract.rs",
     "scripts/deploy-platform.sh",
     "scripts/install-slint-boot.sh",
 ):
     assert triggered(LIGHT_PATHS, userspace_contract)
     assert not triggered(HEAVY_PATHS, userspace_contract)
 
-assert triggered(HEAVY_PATHS, "kernel/scanout-slots/mister_magik_scanout_slots.c")
-assert not triggered(LIGHT_PATHS, "kernel/scanout-slots/mister_magik_scanout_slots.c")
+assert triggered(HEAVY_PATHS, "mister/platform/kernel/scanout-slots/mister_magik_scanout_slots.c")
+assert not triggered(LIGHT_PATHS, "mister/platform/kernel/scanout-slots/mister_magik_scanout_slots.c")
 
 print("kernel scanout workflow contracts ok")

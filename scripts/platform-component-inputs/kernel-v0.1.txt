@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 # MiSTer MagiK kernel component identity inputs, format v0.1.
-kernel/scanout-slots
+mister/platform/kernel/scanout-slots
 scripts/build-scanout-slots-module.sh
 scripts/checks/check-scanout-slots-contract.sh
 scripts/tests/test-scanout-platform-contract.py

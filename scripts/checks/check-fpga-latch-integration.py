@@ -26,7 +26,7 @@ def fail(message: str) -> None:
 
 
 def qualified_menu_commit(root: Path) -> str:
-    pin = root / "fpga/menu-vblank-latch/Menu_MiSTer.commit"
+    pin = root / "mister/platform/fpga/menu-vblank-latch/Menu_MiSTer.commit"
     try:
         contents = pin.read_text()
     except OSError as error:
@@ -71,9 +71,9 @@ def main() -> None:
     if conflicts:
         fail("upstream opcode conflict: " + "; ".join(conflicts))
 
-    patch = root / "fpga/menu-vblank-latch/Menu_MiSTer-vblank-latched-fbuf.patch"
-    rtl = root / "fpga/menu-vblank-latch/mister_magik_vblank_latch.sv"
-    protocol = root / "fpga/menu-vblank-latch/mister_magik_latch_protocol.svh"
+    patch = root / "mister/platform/fpga/menu-vblank-latch/Menu_MiSTer-vblank-latched-fbuf.patch"
+    rtl = root / "mister/platform/fpga/menu-vblank-latch/mister_magik_vblank_latch.sv"
+    protocol = root / "mister/platform/fpga/menu-vblank-latch/mister_magik_latch_protocol.svh"
     with tempfile.TemporaryDirectory(prefix="mister-magik-fpga-integration-") as temporary:
         work = Path(temporary) / "Menu_MiSTer"
         shutil.copytree(menu, work, ignore=shutil.ignore_patterns(".git", "db", "output_files"))

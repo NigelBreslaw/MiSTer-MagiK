@@ -5,7 +5,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-rtl_dir="$repo_root/fpga/menu-vblank-latch"
+rtl_dir="$repo_root/mister/platform/fpga/menu-vblank-latch"
 build_dir="$(mktemp -d "${TMPDIR:-/tmp}/mister-magik-vblank-latch.XXXXXX")"
 
 cleanup() {

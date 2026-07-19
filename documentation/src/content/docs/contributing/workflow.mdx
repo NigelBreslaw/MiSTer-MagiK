@@ -13,9 +13,9 @@ Useful host validation commands:
 scripts/dev-rust test
 scripts/dev-rust check
 scripts/dev-rust host-tools
-cargo test --manifest-path magik-gui/Cargo.toml --features ui --no-default-features
-cargo clippy --manifest-path magik-gui/Cargo.toml --lib --no-default-features -- -D warnings
-cargo clippy --manifest-path tools/mister/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path apps/mister/Cargo.toml --features ui --no-default-features
+cargo clippy --manifest-path apps/mister/Cargo.toml --lib --no-default-features -- -D warnings
+cargo clippy --manifest-path mister/tools/host/Cargo.toml --all-targets -- -D warnings
 ```
 
 For documentation work in this site:

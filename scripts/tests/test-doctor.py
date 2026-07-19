@@ -23,12 +23,12 @@ def write_command(bin_dir: Path, name: str, body: str = "exit 0") -> None:
 
 
 def fixture(root: Path, bin_dir: Path) -> None:
-    (root / "magik-gui").mkdir(parents=True)
-    (root / "magik-gui/rust-toolchain.toml").write_text(
+    (root / "apps/mister").mkdir(parents=True)
+    (root / "apps/mister/rust-toolchain.toml").write_text(
         '[toolchain]\nchannel = "1.97.0"\n', encoding="utf-8"
     )
     for submodule in ("github-app", "material-icon-theme"):
-        path = root / "desktop/vendor" / submodule
+        path = root / "apps/desktop/vendor" / submodule
         path.mkdir(parents=True)
         (path / ".git").write_text("gitdir: fixture\n", encoding="utf-8")
     modules = root / "documentation/node_modules"

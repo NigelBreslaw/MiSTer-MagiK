@@ -135,9 +135,9 @@ if [[ "$self_test" == "1" ]]; then
 fi
 
 if [[ "$smoke" == "1" ]]; then
-  desktop_bin="$ROOT/desktop/target/release/mister-magik-desktop"
+  desktop_bin="$ROOT/apps/desktop/target/release/mister-magik-desktop"
   if [[ ! -x "$desktop_bin" ]]; then
-    cargo build --manifest-path "$ROOT/desktop/Cargo.toml" --locked --release
+    cargo build --manifest-path "$ROOT/apps/desktop/Cargo.toml" --locked --release
   fi
   echo "==> Smoke producer stream from running launcher"
   MISTER_IP="${MISTER_IP:-192.168.1.117}" \
@@ -156,7 +156,7 @@ run_profile() {
 }
 
 echo "==> Build production Skia desktop benchmark"
-cargo build --manifest-path "$ROOT/desktop/Cargo.toml" --locked --release --no-default-features \
+cargo build --manifest-path "$ROOT/apps/desktop/Cargo.toml" --locked --release --no-default-features \
   --features compiled-ui,skia-renderer
 
 nosub_label="${label}-NOSUB"

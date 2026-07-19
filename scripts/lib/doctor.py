@@ -93,7 +93,7 @@ def require_command(report: Report, name: str, remediation: str) -> bool:
 
 
 def check_rust_toolchain(root: Path, report: Report, *, require_arm: bool) -> None:
-    toolchain_path = root / "magik-gui/rust-toolchain.toml"
+    toolchain_path = root / "apps/mister/rust-toolchain.toml"
     text = toolchain_path.read_text(encoding="utf-8") if toolchain_path.is_file() else ""
     match = re.search(r'^channel = "([^"]+)"$', text, re.MULTILINE)
     channel = match.group(1) if match else None
@@ -102,7 +102,7 @@ def check_rust_toolchain(root: Path, report: Report, *, require_arm: bool) -> No
             "rust-toolchain",
             False,
             "pinned Rust channel is unreadable",
-            "restore magik-gui/rust-toolchain.toml",
+            "restore apps/mister/rust-toolchain.toml",
         )
         return
     installed = command_output(["rustup", "toolchain", "list"]) or ""
@@ -144,12 +144,12 @@ def check_rust_toolchain(root: Path, report: Report, *, require_arm: bool) -> No
 
 def check_desktop(root: Path, report: Report) -> None:
     for name in ("github-app", "material-icon-theme"):
-        path = root / "desktop/vendor" / name
+        path = root / "apps/desktop/vendor" / name
         report.add(
             f"desktop-submodule-{name}",
             (path / ".git").exists(),
             str(path),
-            "run: git submodule update --init desktop/vendor/github-app desktop/vendor/material-icon-theme",
+            "run: git submodule update --init apps/desktop/vendor/github-app apps/desktop/vendor/material-icon-theme",
         )
 
 

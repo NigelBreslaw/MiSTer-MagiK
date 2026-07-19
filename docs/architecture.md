@@ -15,6 +15,14 @@ The app repo contains the Rust/Slint frontend and deploy tooling. The
 Main_MiSTer fork is maintained separately as `../Main_MiSTer` by default; see
 `docs/main-mister-fork.md`.
 
+Repository source is organized by role: applications live under `apps/`,
+portable domain and wire crates under `crates/`, and MiSTer-only kernel, FPGA,
+hardware contracts, runtime adapters, and operational tools under `mister/`.
+`crates/magik-core` defines domain-level platform capabilities without Slint,
+filesystem, process, or hardware types. The MiSTer runtime implements those
+capabilities while keeping framebuffer ioctls, FPGA commands, and Main handoff
+details on the platform side of the seam.
+
 ## Boot And Process Model
 
 Production boot stays compatible with stock MiSTer:
@@ -284,7 +292,7 @@ stateDiagram-v2
     Recovered --> Idle
 ```
 
-`magik-gui/src/ui_runner/launcher_lifecycle.rs` owns lifecycle policy,
+`apps/mister/src/ui_runner/launcher_lifecycle.rs` owns lifecycle policy,
 catalog-readiness state, launch staging, recovery transitions, and the small
 effect stream that records bridge/render intent. `launcher_scheduler.rs` is the
 central adapter for starting and polling catalog, media, launch, and background
@@ -576,11 +584,11 @@ Relevant docs:
 
 ## Build And Module Boundaries
 
-`magik-gui/src/lib.rs` holds host-testable logic without the Slint/UI feature.
-The binary target in `magik-gui/src/main.rs` owns device-only work: FPGA,
+`apps/mister/src/lib.rs` holds host-testable logic without the Slint/UI feature.
+The binary target in `apps/mister/src/main.rs` owns device-only work: FPGA,
 framebuffer, VT, input, audio, and the Slint runtime.
 
-Use `magik-gui/BUILD.md` for build profiles, cross-compilation, FFmpeg, size
+Use `apps/mister/BUILD.md` for build profiles, cross-compilation, FFmpeg, size
 tracking, and CI details. Do not duplicate those details here.
 
 ## Open Areas

@@ -25,10 +25,10 @@ def forbid(text: str, needle: str, context: str) -> None:
 
 
 def main() -> None:
-    cargo = read("magik-gui/Cargo.toml")
+    cargo = read("apps/mister/Cargo.toml")
     require(cargo, 'features = ["builder"]', "frontend catalog dependency")
 
-    worker = read("magik-gui/src/ui_runner/catalog_worker.rs")
+    worker = read("apps/mister/src/ui_runner/catalog_worker.rs")
     require(worker, "builder_service::run", "catalog worker")
     for needle in (
         "run_catalog_builder_subprocess",
@@ -37,7 +37,7 @@ def main() -> None:
     ):
         forbid(worker, needle, "catalog worker")
 
-    main_rs = read("magik-gui/src/main.rs")
+    main_rs = read("apps/mister/src/main.rs")
     require(main_rs, "builder_service::run", "library-refresh")
     forbid(main_rs, "MISTER_CATALOG_BUILDER_BIN", "library-refresh")
 

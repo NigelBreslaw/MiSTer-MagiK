@@ -19,8 +19,8 @@ if rg -n \
   -e 'REMOTE_SCENE="arcade"' \
   "$ROOT/scripts" \
   "$ROOT/docs" \
-  "$ROOT/magik-gui/src" \
-  "$ROOT/magik-gui/ui" \
+  "$ROOT/apps/mister/src" \
+  "$ROOT/apps/mister/ui" \
   --glob '!check-no-direct-arcade-scene.sh' \
   --glob '!main.rs'; then
   cat >&2 <<'EOF'

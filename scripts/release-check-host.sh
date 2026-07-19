@@ -6,7 +6,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN="$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
+BIN="$ROOT/apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
 WORK="$ROOT/build/release-check-host"
 MAIN_BIN="${MISTER_MAIN_BIN:-$ROOT/../Main_MiSTer/bin/MiSTer}"
 
@@ -51,31 +51,31 @@ step "Host logic tests"
 "$ROOT/scripts/dev-rust" test
 
 step "Catalog crate tests"
-cargo test --manifest-path "$ROOT/magik-gui/catalog/Cargo.toml"
+cargo test --manifest-path "$ROOT/crates/catalog/Cargo.toml"
 
 step "Host tool tests"
 "$ROOT/scripts/dev-rust" host-tools
 
-step "Clippy magik-gui host logic"
+step "Clippy apps/mister host logic"
 (
-  cd "$ROOT/magik-gui"
+  cd "$ROOT/apps/mister"
   cargo clippy --lib --no-default-features -- -D warnings
 )
 
 step "Clippy catalog crate"
-cargo clippy --manifest-path "$ROOT/magik-gui/catalog/Cargo.toml" --all-targets -- -D warnings
+cargo clippy --manifest-path "$ROOT/crates/catalog/Cargo.toml" --all-targets -- -D warnings
 
 step "Clippy host tools"
-cargo clippy --manifest-path "$ROOT/tools/mister/Cargo.toml" --all-targets -- -D warnings
+cargo clippy --manifest-path "$ROOT/mister/tools/host/Cargo.toml" --all-targets -- -D warnings
 
 step "Clippy MagiK agent"
-cargo clippy --manifest-path "$ROOT/tools/magik-agent/Cargo.toml" --all-targets -- -D warnings
+cargo clippy --manifest-path "$ROOT/mister/tools/agent/Cargo.toml" --all-targets -- -D warnings
 
 step "ARM release-device UI build"
-"$ROOT/magik-gui/build-arm.sh" --device
+"$ROOT/apps/mister/build-arm.sh" --device
 
 step "ARM shared-library check"
-"$ROOT/magik-gui/scripts/check-arm-shared-libs.sh" "$BIN"
+"$ROOT/apps/mister/scripts/check-arm-shared-libs.sh" "$BIN"
 
 step "Distribution package dry-run"
 rm -rf "$WORK"
@@ -242,7 +242,7 @@ if "mister_magik_scanout_slots kernel module is also\nGPL-3.0-or-later" not in n
     sys.exit(1)
 module_source = (
     "https://github.com/NigelBreslaw/MiSTer-MagiK/tree/"
-    f"{os.environ['MAGIK_REVISION']}/kernel/scanout-slots"
+    f"{os.environ['MAGIK_REVISION']}/mister/platform/kernel/scanout-slots"
 )
 if module_source not in source_offer:
     print("package validation failed: missing exact kernel-module source", file=sys.stderr)

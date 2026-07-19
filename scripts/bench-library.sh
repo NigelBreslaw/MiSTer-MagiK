@@ -13,7 +13,7 @@ echo "ERROR: bench-library targeted the retired V2 monolith; use bench-catalog-r
 exit 2
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RUST_DIR="$HERE/magik-gui"
+RUST_DIR="$HERE/apps/mister"
 BUILD_PROFILE=release-device
 BUILD_FLAG=(--device)
 REMOTE="/media/fat/mister-magik-dev/mister-magik-fb"

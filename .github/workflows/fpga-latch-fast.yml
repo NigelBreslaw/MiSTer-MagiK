@@ -6,13 +6,13 @@ name: FPGA latch fast gates
 on:
   pull_request:
     paths:
-      - "fpga/menu-vblank-latch/**"
+      - "mister/platform/fpga/menu-vblank-latch/**"
       - "scripts/*fpga*latch*"
       - "scripts/build-fpga-vblank-latch-core.sh"
       - ".github/workflows/fpga-latch-fast.yml"
   push:
     paths:
-      - "fpga/menu-vblank-latch/**"
+      - "mister/platform/fpga/menu-vblank-latch/**"
       - "scripts/*fpga*latch*"
       - "scripts/build-fpga-vblank-latch-core.sh"
       - ".github/workflows/fpga-latch-fast.yml"
@@ -30,7 +30,7 @@ jobs:
         id: menu-source
         run: |
           set -euo pipefail
-          mapfile -t menu_refs < fpga/menu-vblank-latch/Menu_MiSTer.commit
+          mapfile -t menu_refs < mister/platform/fpga/menu-vblank-latch/Menu_MiSTer.commit
           if [[ ${#menu_refs[@]} -ne 1 ]]; then
             echo "qualified Menu source revision must be exactly one line" >&2
             exit 2
@@ -54,8 +54,8 @@ jobs:
       - name: Lint custom RTL
         run: >-
           verilator --lint-only --Wall --Wno-fatal
-          -Ifpga/menu-vblank-latch
-          fpga/menu-vblank-latch/mister_magik_vblank_latch.sv
+          -Imister/platform/fpga/menu-vblank-latch
+          mister/platform/fpga/menu-vblank-latch/mister_magik_vblank_latch.sv
       - name: Verify pinned patch integration and opcode ownership
         run: scripts/checks/check-fpga-latch-integration.py build/Menu_MiSTer
       - name: Measure reachable custom RTL coverage
@@ -66,10 +66,10 @@ jobs:
           verilator --cc --exe --build --timing --coverage-line \
             --top-module tb_mister_magik_vblank_latch \
             --Mdir "$build_dir/obj" \
-            -Ifpga/menu-vblank-latch \
-            fpga/menu-vblank-latch/mister_magik_vblank_latch.sv \
-            fpga/menu-vblank-latch/tb_mister_magik_vblank_latch.sv \
-            "$GITHUB_WORKSPACE/fpga/menu-vblank-latch/verilator_coverage_main.cpp"
+            -Imister/platform/fpga/menu-vblank-latch \
+            mister/platform/fpga/menu-vblank-latch/mister_magik_vblank_latch.sv \
+            mister/platform/fpga/menu-vblank-latch/tb_mister_magik_vblank_latch.sv \
+            "$GITHUB_WORKSPACE/mister/platform/fpga/menu-vblank-latch/verilator_coverage_main.cpp"
           (cd "$build_dir" && "$build_dir/obj/Vtb_mister_magik_vblank_latch")
           verilator_coverage --annotate-min 1 --annotate-all --annotate "$build_dir/annotated" "$build_dir/coverage.dat"
           scripts/checks/check-fpga-latch-coverage.py "$build_dir/annotated"

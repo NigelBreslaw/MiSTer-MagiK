@@ -9,12 +9,12 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-MANIFEST = ROOT / "magik-gui/Cargo.toml"
-OUTPUT = ROOT / "magik-gui/licenses/RUST-LIBRARIES.txt"
-FFMPEG_OUTPUT = ROOT / "magik-gui/licenses/FFMPEG.txt"
-FONT_OUTPUT = ROOT / "magik-gui/licenses/PRESS-START-2P.txt"
-FFMPEG_BUILD_SCRIPT = ROOT / "magik-gui/scripts/build-minimal-ffmpeg.sh"
-FONT_LICENSE = ROOT / "magik-gui/ui/fonts/PressStart2P-Regular.ttf.license"
+MANIFEST = ROOT / "apps/mister/Cargo.toml"
+OUTPUT = ROOT / "apps/mister/licenses/RUST-LIBRARIES.txt"
+FFMPEG_OUTPUT = ROOT / "apps/mister/licenses/FFMPEG.txt"
+FONT_OUTPUT = ROOT / "apps/mister/licenses/PRESS-START-2P.txt"
+FFMPEG_BUILD_SCRIPT = ROOT / "apps/mister/scripts/build-minimal-ffmpeg.sh"
+FONT_LICENSE = ROOT / "apps/mister/ui/fonts/PressStart2P-Regular.ttf.license"
 
 
 def metadata():

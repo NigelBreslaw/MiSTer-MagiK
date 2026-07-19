@@ -92,7 +92,7 @@ class ComponentIdentityTests(unittest.TestCase):
     def test_kernel_input_change_only_invalidates_kernel_identity(self) -> None:
         fpga_before, _ = component_id.component_id(self.root, "fpga")
         kernel_before, _ = component_id.component_id(self.root, "kernel")
-        path = self.root / "kernel/scanout-slots/input.txt"
+        path = self.root / "mister/platform/kernel/scanout-slots/input.txt"
         path.write_text("changed\n")
         self.commit("kernel")
         fpga_after, _ = component_id.component_id(self.root, "fpga")
@@ -104,8 +104,11 @@ class ComponentIdentityTests(unittest.TestCase):
         fpga_before, _ = component_id.component_id(self.root, "fpga")
         kernel_before, _ = component_id.component_id(self.root, "kernel")
         manifest = self.root / component_id.COMPONENT_INPUT_MANIFESTS["fpga"]
-        manifest.write_text(manifest.read_text() + "fpga/extra-identity-input.txt\n")
-        extra = self.root / "fpga/extra-identity-input.txt"
+        manifest.write_text(
+            manifest.read_text()
+            + "mister/platform/fpga/extra-identity-input.txt\n"
+        )
+        extra = self.root / "mister/platform/fpga/extra-identity-input.txt"
         extra.write_text("extra FPGA input\n")
         self.commit("extend FPGA identity manifest")
         fpga_after, _ = component_id.component_id(self.root, "fpga")
@@ -117,8 +120,11 @@ class ComponentIdentityTests(unittest.TestCase):
         fpga_before, _ = component_id.component_id(self.root, "fpga")
         kernel_before, _ = component_id.component_id(self.root, "kernel")
         manifest = self.root / component_id.COMPONENT_INPUT_MANIFESTS["kernel"]
-        manifest.write_text(manifest.read_text() + "kernel/extra-identity-input.txt\n")
-        extra = self.root / "kernel/extra-identity-input.txt"
+        manifest.write_text(
+            manifest.read_text()
+            + "mister/platform/kernel/extra-identity-input.txt\n"
+        )
+        extra = self.root / "mister/platform/kernel/extra-identity-input.txt"
         extra.write_text("extra kernel input\n")
         self.commit("extend kernel identity manifest")
         fpga_after, _ = component_id.component_id(self.root, "fpga")
@@ -140,7 +146,7 @@ class ComponentIdentityTests(unittest.TestCase):
     def test_generated_untracked_file_does_not_change_identity(self) -> None:
         fpga_before, _ = component_id.component_id(self.root, "fpga")
         kernel_before, _ = component_id.component_id(self.root, "kernel")
-        (self.root / "kernel/scanout-slots/mister_magik_scanout_slots.ko").write_bytes(b"generated")
+        (self.root / "mister/platform/kernel/scanout-slots/mister_magik_scanout_slots.ko").write_bytes(b"generated")
         fpga_after, _ = component_id.component_id(self.root, "fpga")
         kernel_after, _ = component_id.component_id(self.root, "kernel")
         self.assertEqual(fpga_before, fpga_after)

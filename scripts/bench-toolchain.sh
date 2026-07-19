@@ -11,7 +11,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RUST_DIR="$HERE/magik-gui"
+RUST_DIR="$HERE/apps/mister"
 source "$HERE/scripts/lib/magik-layout.sh"
 magik_layout_select dev
 source "$HERE/scripts/lib/mister-supervision-lib.sh"

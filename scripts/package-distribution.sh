@@ -6,7 +6,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DEFAULT_BIN="$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
+DEFAULT_BIN="$ROOT/apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
 DEFAULT_INSTALLER="$ROOT/scripts/MiSTer-MagiK.sh"
 
 BIN="$DEFAULT_BIN"
@@ -355,9 +355,9 @@ fi
 # Keep every binary distribution self-describing. These are copied rather than
 # merely linked so an extracted SD-card package retains the notices.
 cp "$ROOT/LICENSE" "$STAGE/mister-magik/licenses/MiSTer-MagiK-GPL-3.0-or-later.txt"
-cp "$ROOT/magik-gui/licenses/RUST-LIBRARIES.txt" "$STAGE/mister-magik/licenses/RUST-LIBRARIES.txt"
-cp "$ROOT/magik-gui/licenses/FFMPEG.txt" "$STAGE/mister-magik/licenses/FFMPEG-LGPL-2.1-or-later.txt"
-cp "$ROOT/magik-gui/licenses/PRESS-START-2P.txt" "$STAGE/mister-magik/licenses/PRESS-START-2P-OFL-1.1.txt"
+cp "$ROOT/apps/mister/licenses/RUST-LIBRARIES.txt" "$STAGE/mister-magik/licenses/RUST-LIBRARIES.txt"
+cp "$ROOT/apps/mister/licenses/FFMPEG.txt" "$STAGE/mister-magik/licenses/FFMPEG-LGPL-2.1-or-later.txt"
+cp "$ROOT/apps/mister/licenses/PRESS-START-2P.txt" "$STAGE/mister-magik/licenses/PRESS-START-2P-OFL-1.1.txt"
 cat > "$STAGE/mister-magik/THIRD-PARTY-NOTICES.txt" <<EOF
 MiSTer MagiK distribution notices
 ==================================
@@ -406,17 +406,17 @@ MiSTer MagiK source (including build and installation scripts):
   https://github.com/NigelBreslaw/MiSTer-MagiK/tree/$(git -C "$ROOT" rev-parse HEAD)
 
 MiSTer MagiK scanout kernel-module source matching the shipped module:
-  https://github.com/NigelBreslaw/MiSTer-MagiK/tree/$SCANOUT_SOURCE_REVISION/kernel/scanout-slots
+  https://github.com/NigelBreslaw/MiSTer-MagiK/tree/$SCANOUT_SOURCE_REVISION/mister/platform/kernel/scanout-slots
 
 Menu_MiSTer source matching the shipped FPGA latch RBF:
   https://github.com/MiSTer-devel/Menu_MiSTer/tree/$LATCH_SOURCE_REVISION
 The MiSTer MagiK patch applied to that source is:
-  https://github.com/NigelBreslaw/MiSTer-MagiK/tree/$(git -C "$ROOT" rev-parse HEAD)/fpga/menu-vblank-latch
+  https://github.com/NigelBreslaw/MiSTer-MagiK/tree/$(git -C "$ROOT" rev-parse HEAD)/mister/platform/fpga/menu-vblank-latch
 
 FFmpeg 8.1.2 source, used by the production UI build:
   https://github.com/FFmpeg/FFmpeg/tree/n8.1.2
 The exact configure flags and cross-build procedure are in:
-  magik-gui/scripts/build-minimal-ffmpeg.sh
+  apps/mister/scripts/build-minimal-ffmpeg.sh
 at the MiSTer MagiK source revision above.
 The MiSTer MagiK source, Cargo.lock, and build scripts are the complete source
 needed to rebuild the application and relink it with a modified FFmpeg build.

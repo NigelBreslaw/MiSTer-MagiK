@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 # MiSTer MagiK FPGA component identity inputs, format v0.1.
-fpga/menu-vblank-latch
-kernel/scanout-slots/mister_magik_scanout_platform.h
+mister/platform/fpga/menu-vblank-latch
+mister/platform/kernel/scanout-slots/mister_magik_scanout_platform.h
 scripts/build-fpga-vblank-latch-core.sh
 scripts/install-quartus-lite-docker.sh
 scripts/checks/check-fpga-quartus-delta.py

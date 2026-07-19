@@ -8,14 +8,14 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
 source "$HERE/scripts/lib/mister-supervision-lib.sh"
-RUST_DIR="$HERE/magik-gui"
+RUST_DIR="$HERE/apps/mister"
 OUT_DIR="$HERE/build/cpu-flamegraphs"
 
 usage() {
   cat <<'EOF'
 Usage: scripts/cpu-flamegraph-scene.sh SCENE [SECS] [LABEL]
 
-Builds a `magik-gui/build-arm.sh --profile` binary, deploys it, runs
+Builds a `apps/mister/build-arm.sh --profile` binary, deploys it, runs
 an in-process CPU sampling smoke test, then runs the scene with
 `MISTER_PPROF=1` and pulls the SVG flamegraph.
 

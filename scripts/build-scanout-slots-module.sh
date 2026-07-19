@@ -7,7 +7,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 KERNEL_SRC="${KERNEL_SRC:-/private/tmp/Linux-Kernel_MiSTer}"
 KERNEL_BUILD="${KERNEL_BUILD:-$ROOT/build/scanout-slots-kernel}"
-MODULE_DIR="$ROOT/kernel/scanout-slots"
+MODULE_DIR="$ROOT/mister/platform/kernel/scanout-slots"
 OUT_DIR="$ROOT/build/scanout-slots"
 CROSS_COMPILE="${CROSS_COMPILE:-arm-linux-gnueabihf-}"
 LOCALVERSION="${LOCALVERSION:--MiSTer}"
@@ -160,7 +160,7 @@ container run --arch arm64 --rm --cpus 8 --memory 8g \
     fi
     export KERNEL_SRC='$KERNEL_SRC'
     export KERNEL_BUILD='/project/build/scanout-slots-kernel'
-    export MODULE_DIR='/project/kernel/scanout-slots'
+    export MODULE_DIR='/project/mister/platform/kernel/scanout-slots'
     export OUT_DIR='/project/build/scanout-slots'
     export CROSS_COMPILE='$CROSS_COMPILE'
     export LOCALVERSION='$LOCALVERSION'

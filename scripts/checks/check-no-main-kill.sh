@@ -9,9 +9,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 if rg -n 'kill -9 .*pidof (MiSTer|MiSTer_MagiK)|kill -9 .*\$\(pidof (MiSTer|MiSTer_MagiK)\)' \
   "$ROOT/scripts" \
-  "$ROOT/magik-gui/src" \
-  "$ROOT/magik-gui/ui/bench/README.md" \
-  "$ROOT/tools/mister/src/main.rs"; then
+  "$ROOT/apps/mister/src" \
+  "$ROOT/apps/mister/ui/bench/README.md" \
+  "$ROOT/mister/tools/host/src/main.rs"; then
   cat >&2 <<'EOF'
 ERROR: scripts/docs must not kill MiSTer or MiSTer_MagiK.
 

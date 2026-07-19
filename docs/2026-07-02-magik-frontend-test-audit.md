@@ -2,7 +2,7 @@
 
 Date: 2026-07-02
 
-Scope: `magik-gui/` frontend and catalog tests, with emphasis on end-user
+Scope: `apps/mister/` frontend and catalog tests, with emphasis on end-user
 outcomes: fast boot, correct HDMI/framebuffer ownership, smooth controller
 navigation, reliable catalog discovery, quick previews, and safe game launch.
 
@@ -18,18 +18,18 @@ I also did a local synthesis pass over the reported hotspots.
 ## Commands Run
 
 ```bash
-cargo test --manifest-path magik-gui/Cargo.toml --features ui --no-default-features -- --list
-cargo test --manifest-path magik-gui/catalog/Cargo.toml -- --list
-cargo test --manifest-path magik-gui/catalog/Cargo.toml
-cargo test --manifest-path magik-gui/Cargo.toml --lib --no-default-features
-cargo test --manifest-path magik-gui/Cargo.toml --features ui --no-default-features
+cargo test --manifest-path apps/mister/Cargo.toml --features ui --no-default-features -- --list
+cargo test --manifest-path crates/catalog/Cargo.toml -- --list
+cargo test --manifest-path crates/catalog/Cargo.toml
+cargo test --manifest-path apps/mister/Cargo.toml --lib --no-default-features
+cargo test --manifest-path apps/mister/Cargo.toml --features ui --no-default-features
 ```
 
 Reported by subagents:
 
-- `magik-gui/catalog`: 246 passed.
-- `magik-gui` lib no default features: 244 passed.
-- `magik-gui` with `ui`: 354 passed.
+- `crates/catalog`: 246 passed.
+- `apps/mister` lib no default features: 244 passed.
+- `apps/mister` with `ui`: 354 passed.
 
 The `--list` pass showed 271 lib-target tests and 354 binary-target tests for
 `mister-magik-fb`, plus 246 catalog tests. Some tests are compiled through both
@@ -55,26 +55,26 @@ Highest-priority risks:
 1. `LauncherLifecycle` accepts stale launch worker events from non-launch
    states. A late `LaunchFailed`, `LaunchSucceeded`, or `LaunchTimedOut` can
    transition the lifecycle even if the launcher is no longer launching
-   (`magik-gui/src/ui_runner/launcher_lifecycle.rs:602`). Add guard tests and
+   (`apps/mister/src/ui_runner/launcher_lifecycle.rs:602`). Add guard tests and
    likely fix the state machine.
 2. Preview/media publishing invalidates archive metadata, but the higher-level
    failed-preview cache can keep a missing preview blank for up to five minutes
-   after a pack becomes available (`magik-gui/src/preview_state.rs:141`,
-   `magik-gui/src/ui_runner/media_worker.rs:1099`).
+   after a pack becomes available (`apps/mister/src/preview_state.rs:141`,
+   `apps/mister/src/ui_runner/media_worker.rs:1099`).
 3. `ui_boot` has only a route-plan style test. The critical startup sequence
    that prevents black HDMI or wrong framebuffer ownership is not covered as a
-   mockable integration flow (`magik-gui/src/ui_runner/ui_boot.rs:15`).
+   mockable integration flow (`apps/mister/src/ui_runner/ui_boot.rs:15`).
 4. Catalog tests are strong in pieces, but there is no single production-shaped
    first-scan fixture that combines real launchables, installed cores, helper
    media clutter, archives, MGLs, and save/load.
 5. `launcher_scheduler` has very thin tests for a module that owns catalog,
-   media, and launch interleaving (`magik-gui/src/ui_runner/launcher_scheduler.rs:248`).
+   media, and launch interleaving (`apps/mister/src/ui_runner/launcher_scheduler.rs:248`).
 
 ## What Is Already Strong
 
 ### Launcher Navigation And Return State
 
-`magik-gui/src/launcher.rs` is a bright spot. It tests the way a controller user
+`apps/mister/src/launcher.rs` is a bright spot. It tests the way a controller user
 actually moves through the product:
 
 - alphabet and filter flows around `launcher.rs:3068`,
@@ -88,7 +88,7 @@ only asserting helper outputs.
 
 ### Startup Lifecycle
 
-`magik-gui/src/ui_runner/launcher_lifecycle.rs:791` covers important startup
+`apps/mister/src/ui_runner/launcher_lifecycle.rs:791` covers important startup
 states:
 
 - cold boot splash timing,
@@ -105,15 +105,15 @@ should continue to add.
 
 The catalog suite is broad and product-aware:
 
-- media and helper pruning around `magik-gui/catalog/src/catalog_scan.rs:934`,
+- media and helper pruning around `crates/catalog/src/catalog_scan.rs:934`,
 - NeoGeo zip virtual launches around `catalog_scan.rs:806`,
 - ColecoVision loose/zip persistence around `catalog_scan.rs:1110`,
 - installed generic core gating around
-  `magik-gui/catalog/src/launch_profiles.rs:889`,
+  `crates/catalog/src/launch_profiles.rs:889`,
 - AO486 attached-media behavior around `launch_profiles.rs:952`,
-- mixed RAM/SQLite parity around `magik-gui/catalog/src/library_db.rs:1419`,
+- mixed RAM/SQLite parity around `crates/catalog/src/library_db.rs:1419`,
 - MAME/HBMAME and console identity coverage in
-  `magik-gui/catalog/src/software_identity.rs`.
+  `crates/catalog/src/software_identity.rs`.
 
 These tests directly protect "my games show up, helper files do not."
 
@@ -122,7 +122,7 @@ These tests directly protect "my games show up, helper files do not."
 Preview/media tests already cover several painful embedded-device failures:
 
 - indexed `pread` before full archive memory load
-  (`magik-gui/catalog/src/preview_worker.rs:3148`),
+  (`crates/catalog/src/preview_worker.rs:3148`),
 - invalid sidecars falling back to archive memory
   (`preview_worker.rs:3183`),
 - oversized metadata rejected before allocation
@@ -130,24 +130,24 @@ Preview/media tests already cover several painful embedded-device failures:
 - missing archive assets not falling back to original screenshot decode
   (`preview_worker.rs:3611`),
 - staged pack publish validates before replacing the current pack
-  (`magik-gui/src/ui_runner/media_worker.rs:2077`),
+  (`apps/mister/src/ui_runner/media_worker.rs:2077`),
 - index-only repairs do not show noisy UI progress
   (`media_worker.rs:2129`),
 - media work defers behind the interaction gate
-  (`magik-gui/src/ui_runner/screenshot_media_update_session.rs:356`).
+  (`apps/mister/src/ui_runner/screenshot_media_update_session.rs:356`).
 
 ### Framebuffer And Pacing Contracts
 
 Low-level RGB565/framebuffer tests are valuable:
 
 - display geometry and runtime-vs-INI fallback in
-  `magik-gui/src/ui_display.rs:414`,
+  `apps/mister/src/ui_display.rs:414`,
 - padded RGB565 stride and clipped presents in
-  `magik-gui/src/framebuffer/mapped.rs:1148`,
+  `mister/platform/runtime/src/framebuffer/mapped.rs:1148`,
 - 50/60 Hz pacing and fallback behavior in
-  `magik-gui/src/framebuffer/vsync.rs:375`,
+  `mister/platform/runtime/src/framebuffer/vsync.rs:375`,
 - direct-layer composition invariants in
-  `magik-gui/src/ui_runner/launcher_composition.rs:241`.
+  `apps/mister/src/ui_runner/launcher_composition.rs:241`.
 
 These are correctly aimed at the MiSTer-specific failure modes, not desktop GUI
 assumptions.
@@ -156,12 +156,12 @@ assumptions.
 
 ### Implementation-Detail Assertions
 
-`magik-gui/src/ui_runner/launcher_lifecycle.rs:966` asserts
+`apps/mister/src/ui_runner/launcher_lifecycle.rs:966` asserts
 `effects.capacity() == 8`. That locks an internal vector capacity rather than a
 product outcome. Replace it with assertions on lifecycle state and emitted
 effect names.
 
-`magik-gui/src/ui_runner/launcher_catalog_session.rs:637` and
+`apps/mister/src/ui_runner/launcher_catalog_session.rs:637` and
 `launcher_catalog_session.rs:660` collapse effect streams into ordered string
 vectors. That is useful in moderation, but brittle when harmless internal
 ordering changes. Prefer assertions over final user-visible worker intent,
@@ -169,22 +169,22 @@ dialog state, and readiness state.
 
 ### Giant Encoded Command Assertions
 
-`magik-gui/src/launcher.rs:4593` asserts one large encoded launch command
+`apps/mister/src/launcher.rs:4593` asserts one large encoded launch command
 string. The scenario is important, but a parser/assertion helper would better
 separate protocol regressions from formatting churn.
 
 ### Smoke Tests That Do Not Assert Quality
 
-Effect tests such as `magik-gui/src/transition_effects.rs:1854`,
-`magik-gui/src/text_effects.rs:3190`, and
-`magik-gui/src/sprite_effects.rs:1991` mostly prove "deterministic and moving."
+Effect tests such as `apps/mister/src/transition_effects.rs:1854`,
+`apps/mister/src/text_effects.rs:3190`, and
+`apps/mister/src/sprite_effects.rs:1991` mostly prove "deterministic and moving."
 That catches blank frames, but it would still pass ugly, over-budget, or
 visually stale effects. Keep these smoke tests, but add small pixel/quality and
 budget checks for production paths.
 
 ### Optional Fixture Tests That Often Do Nothing
 
-`magik-gui/catalog/src/arcade_catalog.rs:1692` silently returns if a private TSV
+`crates/catalog/src/arcade_catalog.rs:1692` silently returns if a private TSV
 fixture is absent. That is fine as optional validation, but it should not count
 as CI confidence. Consider marking it ignored or logging a clear skipped-fixture
 message.
@@ -195,7 +195,7 @@ message.
 
 Problem: `LauncherLifecycleInput::LaunchFailed`, `LaunchSucceeded`, and
 `LaunchTimedOut` transition regardless of current lifecycle state
-(`magik-gui/src/ui_runner/launcher_lifecycle.rs:602`). A late worker message
+(`apps/mister/src/ui_runner/launcher_lifecycle.rs:602`). A late worker message
 could show recovery UI over an idle launcher or move to handoff after recovery.
 
 Add tests:
@@ -214,7 +214,7 @@ states and emit no effects otherwise.
 Current tests cover launch pieces, but not the full loop behavior. Add a
 test harness around the logic near:
 
-- `magik-gui/src/ui_runner/launcher_loop.rs:1175`,
+- `apps/mister/src/ui_runner/launcher_loop.rs:1175`,
 - `launcher_loop.rs:1603`,
 - `launcher_loop.rs:1950`.
 
@@ -232,7 +232,7 @@ launcher came back cleanly."
 
 ### P0: Boot/Framebuffer Startup Integration Harness
 
-`magik-gui/src/ui_runner/ui_boot.rs:252` only checks route dimensions by
+`apps/mister/src/ui_runner/ui_boot.rs:252` only checks route dimensions by
 reconstructing a route. It does not exercise the startup sequence that protects
 HDMI:
 
@@ -249,8 +249,8 @@ add order/failure tests. This should not require `/dev/fb0` or `/dev/mem`.
 ### P1: Preview Becomes Available After Media Download
 
 Problem: `PreviewImageCache` stores failed paths for five minutes
-(`magik-gui/src/preview_state.rs:141`). Media pack publish invalidates archive
-metadata (`magik-gui/src/ui_runner/media_worker.rs:1099`), but does not
+(`apps/mister/src/preview_state.rs:141`). Media pack publish invalidates archive
+metadata (`apps/mister/src/ui_runner/media_worker.rs:1099`), but does not
 obviously clear the higher-level failed-preview cache. A user may download a
 pack and still see blank previews in the same session.
 
@@ -298,12 +298,12 @@ of them. Add mixed-case fixtures for:
 
 Also add `core_audit` parity for singular `screenshot`,
 `screenshot-magik`, and `boxart` around
-`magik-gui/catalog/src/core_audit.rs:313`, so media-only folders do not become
+`crates/catalog/src/core_audit.rs:313`, so media-only folders do not become
 noisy uncataloged audit rows.
 
 ### P1: Scheduler Interleaving
 
-`magik-gui/src/ui_runner/launcher_scheduler.rs:248` only tests construction-ish
+`apps/mister/src/ui_runner/launcher_scheduler.rs:248` only tests construction-ish
 behavior, but the scheduler owns catalog, media, and launch handoff workers.
 
 Add tests around `launcher_scheduler.rs:73` through `launcher_scheduler.rs:154`
@@ -317,7 +317,7 @@ that prove:
 
 ### P1: Input Hotplug And Event Boundaries
 
-`magik-gui/src/input.rs:174` and `input.rs:228` are hard to test because they
+`apps/mister/src/input.rs:174` and `input.rs:228` are hard to test because they
 own concrete `File` reads and `/dev/input` discovery.
 
 Add a synthetic js-event reader boundary and tests for:
@@ -331,11 +331,11 @@ Add a synthetic js-event reader boundary and tests for:
 - active-pad raw/debug propagation.
 
 Add controller setup tests for target pad unplug/disappearance so setup does
-not silently stall (`magik-gui/src/ui_runner/controller_setup_input_session.rs:21`).
+not silently stall (`apps/mister/src/ui_runner/controller_setup_input_session.rs:21`).
 
 ### P2: Route And Direct-Video Plan Tests
 
-`magik-gui/src/fpga.rs:363` has little pure coverage for route math. Extract a
+`mister/platform/runtime/src/fpga.rs:363` has little pure coverage for route math. Extract a
 pure `FramebufferRoutePlan` or similar and test:
 
 - scan dimensions,
@@ -346,7 +346,7 @@ pure `FramebufferRoutePlan` or similar and test:
 
 ### P2: Preview Pack/Index Failure Coherence
 
-`magik-gui/src/ui_runner/media_worker.rs:685` installs the pack, then
+`apps/mister/src/ui_runner/media_worker.rs:685` installs the pack, then
 `media_worker.rs:697` installs the index, then `media_worker.rs:708` writes
 state. Add a test for "pack succeeds, index install fails" that verifies:
 
@@ -377,9 +377,9 @@ Add small RGB565 signature tests for:
 
 Useful anchors:
 
-- `magik-gui/src/arcade_list_renderer.rs:257`,
-- `magik-gui/src/ui_runner/ui_frame_target.rs:128`,
-- `magik-gui/src/screenshot_transitions.rs:350`.
+- `apps/mister/src/arcade_list_renderer.rs:257`,
+- `apps/mister/src/ui_runner/ui_frame_target.rs:128`,
+- `apps/mister/src/screenshot_transitions.rs:350`.
 
 ### P2: Frame-Budget Unit Checks
 
@@ -392,11 +392,11 @@ on common frames:
 - full-frame after modal,
 - direct preview repaint after Slint dirty.
 
-Anchor: `magik-gui/src/ui_runner/launcher_loop.rs:2093`.
+Anchor: `apps/mister/src/ui_runner/launcher_loop.rs:2093`.
 
 ### P3: Video Player Unit Coverage
 
-`magik-gui/src/video_player.rs` has no local unit tests. Add tests around:
+`apps/mister/src/video_player.rs` has no local unit tests. Add tests around:
 
 - RGB565 frame extraction,
 - EOF and rewind behavior,

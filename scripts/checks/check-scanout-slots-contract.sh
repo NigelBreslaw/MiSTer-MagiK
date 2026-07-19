@@ -5,13 +5,13 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SOURCE="$ROOT/kernel/scanout-slots/mister_magik_scanout_slots.c"
-UAPI="$ROOT/kernel/scanout-slots/mister_magik_scanout_slots_uapi.h"
-PLATFORM="$ROOT/kernel/scanout-slots/mister_magik_scanout_platform.h"
-POLICY="$ROOT/kernel/scanout-slots/mister_magik_scanout_policy.h"
-RUST="$ROOT/magik-gui/src/framebuffer/scanout_slots.rs"
-AGENT="$ROOT/tools/magik-agent/src/scanout_slots_contract.rs"
-RUST_CONTRACT="$ROOT/scanout-contract/src/lib.rs"
+SOURCE="$ROOT/mister/platform/kernel/scanout-slots/mister_magik_scanout_slots.c"
+UAPI="$ROOT/mister/platform/kernel/scanout-slots/mister_magik_scanout_slots_uapi.h"
+PLATFORM="$ROOT/mister/platform/kernel/scanout-slots/mister_magik_scanout_platform.h"
+POLICY="$ROOT/mister/platform/kernel/scanout-slots/mister_magik_scanout_policy.h"
+RUST="$ROOT/mister/platform/runtime/src/framebuffer/scanout_slots.rs"
+AGENT="$ROOT/mister/tools/agent/src/scanout_slots_contract.rs"
+RUST_CONTRACT="$ROOT/mister/platform/contracts/scanout/src/lib.rs"
 DOC="$ROOT/documentation/src/content/docs/architecture/kernel-scanout-plugin.mdx"
 KO="$ROOT/build/scanout-slots/mister_magik_scanout_slots.ko"
 DEPLOY="$ROOT/scripts/deploy-platform.sh"
@@ -55,12 +55,12 @@ if ! grep -Fq "UAPI_SHA256: &str = \"$uapi_sha256\"" "$RUST_CONTRACT"; then
 fi
 require_text "$RUST" mister_magik_scanout_contract
 require_text "$AGENT" mister_magik_scanout_contract
-source_sha256="$(cd "$ROOT/kernel/scanout-slots" && sha256sum mister_magik_scanout_slots.c mister_magik_scanout_slots_uapi.h mister_magik_scanout_platform.h mister_magik_scanout_policy.h Makefile | sha256sum | awk '{print $1}')"
+source_sha256="$(cd "$ROOT/mister/platform/kernel/scanout-slots" && sha256sum mister_magik_scanout_slots.c mister_magik_scanout_slots_uapi.h mister_magik_scanout_platform.h mister_magik_scanout_policy.h Makefile | sha256sum | awk '{print $1}')"
 [[ "$source_sha256" =~ ^[0-9a-f]{64}$ ]]
 policy_test="$(mktemp "${TMPDIR:-/tmp}/mister-magik-scanout-policy.XXXXXX")"
 trap 'rm -f "$policy_test"' EXIT
 ${CC:-cc} -std=c11 -Wall -Wextra -Werror \
-  "$ROOT/kernel/scanout-slots/mister_magik_scanout_policy_test.c" -o "$policy_test"
+  "$ROOT/mister/platform/kernel/scanout-slots/mister_magik_scanout_policy_test.c" -o "$policy_test"
 "$policy_test"
 for text in platform-v2.manifest platform_contract_sha256 scanout_module_sha256 latch_rbf_sha256; do
   require_text "$PLATFORM_VERIFY" "$text"
@@ -81,7 +81,7 @@ if rg -n 'of_address_to_resource|of_find_compatible_node|of_node_put|region_inte
   exit 1
 fi
 if rg -n 'HiddenRgb565Framebuffer|MISTER_PLUGIN_MAP_BANDWIDTH|hidden-dev-mem|framebuffer::hidden' \
-    "$ROOT/magik-gui/src"; then
+    "$ROOT/apps/mister/src"; then
   echo "retired direct hidden-framebuffer path found" >&2
   exit 1
 fi

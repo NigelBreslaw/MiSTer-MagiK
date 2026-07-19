@@ -218,7 +218,7 @@ HDMI black indefinitely.
 ## Classification And Contents
 
 Discovery associates each playable item with a stable system ID. The checked-in
-`magik-gui/catalog/data/system_taxonomy.json` then supplies the product platform
+`crates/catalog/data/system_taxonomy.json` then supplies the product platform
 kind, launcher section/family, title, aliases, and order. Core location is not
 classification authority: a console launcher stored under `_Arcade` remains a
 console.
@@ -237,12 +237,12 @@ hard validation error.
 
 ## Standalone Testing And Inspection
 
-The builder and projection machinery live in `magik-gui/catalog` and run
+The builder and projection machinery live in `crates/catalog` and run
 without the UI:
 
 ```bash
-cargo test --manifest-path magik-gui/catalog/Cargo.toml --features builder
-cargo run --release --manifest-path magik-gui/catalog/Cargo.toml \
+cargo test --manifest-path crates/catalog/Cargo.toml --features builder
+cargo run --release --manifest-path crates/catalog/Cargo.toml \
   --features builder --bin catalog-lab -- rebuild-bench STORAGE SYSTEMS GAMES
 scripts/bench-catalog-rebuild.sh LABEL
 scripts/profile-first-scan.sh LABEL --drop-arcade-bootstrap-index
@@ -289,6 +289,6 @@ zero vsync misses, and zero present failures.
 - `builder_service.rs`: standalone builder lifecycle and first-visible boundary.
 - `cooperative_work.rs`: UI-independent background checkpoints.
 - `catalog_acceptance.rs`: full read-only V3 integrity report.
-- `magik-gui/src/ui_runner/catalog_worker.rs`: launcher worker adapter.
-- `magik-gui/src/ui_runner/launcher_scheduler.rs`: UI-side job scheduling.
-- `magik-gui/src/return_catalog_capsule.rs`: bounded launch-return persistence.
+- `apps/mister/src/ui_runner/catalog_worker.rs`: launcher worker adapter.
+- `apps/mister/src/ui_runner/launcher_scheduler.rs`: UI-side job scheduling.
+- `apps/mister/src/return_catalog_capsule.rs`: bounded launch-return persistence.

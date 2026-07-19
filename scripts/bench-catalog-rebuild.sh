@@ -14,7 +14,7 @@ REPORT="$(mktemp "${TMPDIR:-/tmp}/mister-magik-rebuild-report.XXXXXX")"
 trap 'rm -rf "$STORAGE"; rm -f "$REPORT"' EXIT
 
 cargo run --release \
-  --manifest-path "$ROOT/magik-gui/catalog/Cargo.toml" \
+  --manifest-path "$ROOT/crates/catalog/Cargo.toml" \
   --features builder \
   --bin catalog-lab -- \
   rebuild-bench "$STORAGE" "$SYSTEMS" "$GAMES" | tee "$REPORT"

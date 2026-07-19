@@ -25,6 +25,7 @@ esac
 
 python3 "$ROOT/scripts/checks/check-license-headers.py"
 python3 "$ROOT/scripts/checks/check-agent-guidance.py"
+python3 "$ROOT/scripts/checks/check-repository-layout.py"
 python3 "$ROOT/scripts/checks/check-catalog-contention.py" --self-test
 python3 "$ROOT/scripts/checks/check-catalog-rebuild.py" --self-test
 python3 "$ROOT/scripts/tests/test-doctor.py"
@@ -46,7 +47,7 @@ video_mode=4
 fb_terminal=1
 EOF
 
-cargo run --manifest-path "$ROOT/tools/mister/Cargo.toml" --quiet -- \
+cargo run --manifest-path "$ROOT/mister/tools/host/Cargo.toml" --quiet -- \
   ini-edit-local magik-boot "$TMP/MiSTer.ini" "$TMP/repaired.ini"
 grep -q '^direct_video=0$' "$TMP/repaired.ini"
 grep -q '^main=MiSTer_MagiK$' "$TMP/repaired.ini"
@@ -101,8 +102,8 @@ for script in \
   "$ROOT/scripts/switch-ui.sh" \
   "$ROOT/scripts/tests/test-magik-mode.sh" \
   "$ROOT/scripts/validate" \
-  "$ROOT/magik-gui/build-arm.sh" \
-  "$ROOT/magik-gui/build-arm64-apple-container.sh"; do
+  "$ROOT/apps/mister/build-arm.sh" \
+  "$ROOT/apps/mister/build-arm64-apple-container.sh"; do
   bash -n "$script"
 done
 
@@ -124,7 +125,6 @@ if [ "$MODE" = fast ]; then
   python3 "$ROOT/scripts/tests/test-ci-cache-contract.py"
   "$ROOT/scripts/tests/test-quartus-r2-cache.sh"
   "$ROOT/scripts/tests/test-apple-container-resources.sh"
-  "$ROOT/scripts/tests/test-validate.sh"
   echo "fast host tool checks ok"
   exit 0
 fi
@@ -133,7 +133,6 @@ python3 "$ROOT/scripts/tests/test-ci-cache-identity.py"
 python3 "$ROOT/scripts/tests/test-ci-cache-contract.py"
 "$ROOT/scripts/tests/test-quartus-r2-cache.sh"
 "$ROOT/scripts/tests/test-apple-container-resources.sh"
-"$ROOT/scripts/tests/test-validate.sh"
 
 switch_log="$TMP/switch-ui-calls.log"
 cat >"$TMP/fake-mister" <<'EOF'
@@ -310,7 +309,7 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
         raise SystemExit("distribution notices omit the kernel-module license")
     module_source = (
         "https://github.com/NigelBreslaw/MiSTer-MagiK/tree/"
-        f"{sys.argv[2]}/kernel/scanout-slots"
+        f"{sys.argv[2]}/mister/platform/kernel/scanout-slots"
     )
     if module_source not in source_offer:
         raise SystemExit("distribution source offer omits exact kernel-module source")
@@ -326,7 +325,7 @@ PY
 fi
 
 if grep -R -E 'scripts/(bench-effects|profile-camera-effects|profile-sprite-effects|profile-text-effects|profile-raster-effects|profile-transition-effects)\.sh|scripts/experiments/(profile-preview-transition-mega|bench-effects|profile-camera-effects|profile-sprite-effects|profile-text-effects|profile-raster-effects|profile-transition-effects)\.sh' \
-  "$ROOT/AGENTS.md" "$ROOT/docs/benchmarking.md" "$ROOT/magik-gui/BUILD.md" "$ROOT/magik-gui/ui/bench/README.md" >/dev/null; then
+  "$ROOT/AGENTS.md" "$ROOT/docs/benchmarking.md" "$ROOT/apps/mister/BUILD.md" "$ROOT/apps/mister/ui/bench/README.md" >/dev/null; then
   echo "old effect experiment script path found in current benchmark docs" >&2
   exit 1
 fi
@@ -406,7 +405,7 @@ PY
 "$ROOT/scripts/checks/check-scanout-slots-contract.sh"
 python3 "$ROOT/scripts/checks/check-latch-protocol.py"
 python3 "$ROOT/scripts/tests/test-scanout-platform-contract.py"
-if rg -n '(^|[^[:alnum:]_])(println!|eprintln!|print!|eprint!)' "$ROOT/magik-gui/src" "$ROOT/magik-gui/catalog/src" \
+if rg -n '(^|[^[:alnum:]_])(println!|eprintln!|print!|eprint!)' "$ROOT/apps/mister/src" "$ROOT/crates/catalog/src" \
   -g '*.rs' \
   -g '!**/bin/**' \
   -g '!fallible_log.rs' >/dev/null; then
@@ -494,6 +493,6 @@ bash "$ROOT/scripts/lib/catalog-device-test-lib.sh" --self-test
 python3 -m py_compile "$ROOT/scripts/device/diagnostics/reboot-shutdown-summary.py"
 python3 "$ROOT/scripts/tests/test-generate-downloader-db.py"
 python3 "$ROOT/scripts/tests/test-distribution-workflow.py"
-env RUSTC_WRAPPER= cargo test --manifest-path "$ROOT/tools/mister/Cargo.toml" --quiet
+env RUSTC_WRAPPER= cargo test --manifest-path "$ROOT/mister/tools/host/Cargo.toml" --quiet
 
 echo "host tool checks ok"

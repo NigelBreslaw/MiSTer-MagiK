@@ -176,7 +176,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--manifest",
         type=Path,
-        default=root / "magik-gui/catalog/data/core_launch_manifest.json",
+        default=root / "crates/catalog/data/core_launch_manifest.json",
         help="existing curated manifest to annotate",
     )
     parser.add_argument(

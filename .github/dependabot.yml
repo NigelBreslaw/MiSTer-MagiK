@@ -7,11 +7,11 @@ updates:
     directories:
       - "/desktop"
       - "/framebuffer-stream"
-      - "/magik-gui"
-      - "/magik-gui/catalog"
-      - "/magik-gui/ui-generated"
-      - "/tools/magik-agent"
-      - "/tools/mister"
+      - "/apps/mister"
+      - "/crates/catalog"
+      - "/apps/mister/ui-generated"
+      - "/mister/tools/agent"
+      - "/mister/tools/host"
     schedule:
       interval: "weekly"
       day: "friday"
@@ -35,7 +35,7 @@ updates:
           - "*"
 
   - package-ecosystem: "rust-toolchain"
-    directory: "/magik-gui"
+    directory: "/apps/mister"
     schedule:
       interval: "weekly"
       day: "friday"

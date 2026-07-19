@@ -5,7 +5,7 @@
 # searchable explicitly with `rg --no-ignore`.
 /history/
 /reference/
-/desktop/vendor/
+/apps/desktop/vendor/
 /documentation/node_modules/
 /documentation/dist/
 /build/

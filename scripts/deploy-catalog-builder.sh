@@ -24,7 +24,7 @@ done
 if [[ "$SKIP_BUILD" -eq 0 ]]; then
   "$ROOT/scripts/build-catalog-builder.sh" --device
 fi
-LOCAL="$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/$PROFILE/mister-magik-catalog-builder"
+LOCAL="$ROOT/apps/mister/target/armv7-unknown-linux-gnueabihf/$PROFILE/mister-magik-catalog-builder"
 REMOTE_DIR="$MISTER_MAGIK_APP_DIR"
 REMOTE="$REMOTE_DIR/mister-magik-catalog-builder"
 TEMP="$REMOTE.new"
