@@ -860,14 +860,14 @@ mod linux {
     };
     use mister_magik_framebuffer_stream::SCHEMA as FRAMEBUFFER_STREAM_SCHEMA;
     use serde_json::{json, Value};
-    use std::collections::VecDeque;
+    use std::collections::{HashMap, VecDeque};
     use std::ffi::CString;
     use std::fs::{self, File, OpenOptions};
     use std::io::{self, BufRead, BufReader, Read, Write};
     use std::mem;
     use std::net::{Ipv4Addr, Shutdown, TcpListener, TcpStream};
     use std::os::fd::{AsRawFd, RawFd};
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex, OnceLock};
@@ -898,6 +898,7 @@ mod linux {
     const PLOG: &str = "/media/fat/mister-magik-dev/bootlogs/agent.log";
     const FRAME_ANALYTICS_LEASE_PATH: &str = "/tmp/mister-magik/realtime-frame-analytics";
     static FRAMEBUFFER_STREAM_ACTIVE: AtomicBool = AtomicBool::new(false);
+    static MAGIK_OPERATION_RESULTS: OnceLock<Mutex<HashMap<String, Value>>> = OnceLock::new();
     const BOOTLOG_DIR: &str = "/media/fat/mister-magik-dev/bootlogs";
     const SEQ: &str = "/media/fat/mister-magik-dev/bootlogs/agent.seq";
     const CRASH_DIR: &str = "/media/fat/mister-magik-dev/crashes";
@@ -2254,7 +2255,9 @@ mod linux {
             .unwrap_or("status");
         match action {
             "status" => Ok(magik_status_json(action, None, None)),
-            "suspend" | "resume" | "restart-launcher" => magik_fifo_action(action),
+            "suspend" | "resume" | "restart-launcher" | "return-to-launcher" => {
+                magik_acknowledged_action(action, &args)
+            }
             _ => Err(format!("unsupported magik action: {action}")),
         }
     }
@@ -3224,6 +3227,90 @@ mod linux {
             .map_err(|err| err.to_string())?;
         fs::rename(&upload, remote).map_err(|err| err.to_string())?;
         Ok(())
+    }
+
+    fn main_generation(status: &Value) -> Option<u64> {
+        status.get("main_generation").and_then(Value::as_u64)
+    }
+
+    fn wait_for_main_ready(minimum_generation: Option<u64>, timeout: Duration) -> Result<Value, String> {
+        let started = Instant::now();
+        loop {
+            let status = read_json_value("/tmp/mister-magik/main-status.json");
+            let ready = status.get("command_channel").and_then(Value::as_str) == Some("ready");
+            let current_pid = status.get("pid").and_then(Value::as_u64).is_some_and(|pid| {
+                read_pid_list("MiSTer_MagiKDev").as_array().is_some_and(|pids| pids.iter().any(|p| p.as_u64() == Some(pid)))
+                    || read_pid_list("MiSTer_MagiK").as_array().is_some_and(|pids| pids.iter().any(|p| p.as_u64() == Some(pid)))
+            });
+            let generation_ok = minimum_generation.is_none_or(|minimum| main_generation(&status).is_some_and(|value| value > minimum));
+            if ready && current_pid && generation_ok {
+                return Ok(status);
+            }
+            if started.elapsed() >= timeout {
+                return Err(format!("command_channel_unavailable timeout_ms={} minimum_generation={:?}", timeout.as_millis(), minimum_generation));
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    fn write_main_command_nonblocking(command: &str) -> Result<(), String> {
+        let mut fifo = OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
+            .open("/dev/MiSTer_cmd")
+            .map_err(|err| format!("command_channel_unavailable: {err}"))?;
+        fifo.write_all(format!("{command}\n").as_bytes())
+            .map_err(|err| format!("command_write_failed: {err}"))
+    }
+
+    fn magik_acknowledged_action(action: &str, args: &Value) -> Result<Value, String> {
+        let operation_id = args.get("operation_id").and_then(Value::as_str)
+            .ok_or_else(|| "missing operation_id".to_string())?;
+        let cache = MAGIK_OPERATION_RESULTS.get_or_init(|| Mutex::new(HashMap::new()));
+        if let Some(result) = cache.lock().map_err(|_| "operation cache poisoned")?.get(operation_id).cloned() {
+            return Ok(result);
+        }
+        let started = Instant::now();
+        let ready = wait_for_main_ready(None, Duration::from_secs(15))?;
+        let before_generation = main_generation(&ready).unwrap_or(0);
+        let command = match action {
+            "suspend" => "mister_magik_suspend",
+            "resume" => "mister_magik_resume",
+            "restart-launcher" => "mister_magik_restart_launcher",
+            "return-to-launcher" => "load_core menu.rbf",
+            _ => return Err(format!("unsupported magik action: {action}")),
+        };
+        write_main_command_nonblocking(command)?;
+        let expected_state = match action {
+            "suspend" => "LauncherSuspended",
+            "resume" | "restart-launcher" | "return-to-launcher" => "LauncherActive",
+            _ => unreachable!(),
+        };
+        let deadline = Duration::from_secs(30);
+        let final_status = loop {
+            let status = read_json_value("/tmp/mister-magik/main-status.json");
+            let generation_ok = action != "return-to-launcher" || main_generation(&status).is_some_and(|g| g > before_generation);
+            if generation_ok && status.get("command_channel").and_then(Value::as_str) == Some("ready")
+                && status.get("launcher_state").and_then(Value::as_str) == Some(expected_state) {
+                break status;
+            }
+            if started.elapsed() >= deadline {
+                return Err(format!("operation_timeout action={action} expected_state={expected_state}"));
+            }
+            thread::sleep(Duration::from_millis(50));
+        };
+        let result = json!({
+            "operation_id": operation_id,
+            "action": action,
+            "command": command,
+            "before_generation": before_generation,
+            "after_generation": main_generation(&final_status),
+            "elapsed_ms": started.elapsed().as_millis() as u64,
+            "terminal_reason": "acknowledged",
+            "main_status": final_status,
+        });
+        cache.lock().map_err(|_| "operation cache poisoned")?.insert(operation_id.to_string(), result.clone());
+        Ok(result)
     }
 
     fn magik_fifo_action(action: &str) -> Result<Value, String> {
