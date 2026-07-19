@@ -14,9 +14,7 @@ assert "workflow_dispatch:" in trigger
 assert "publish:" in trigger
 assert "default: false" in trigger
 for value in (
-    "git ls-remote https://github.com/NigelBreslaw/Main_MiSTer.git refs/heads/mister-magik",
     "uses: ./.github/workflows/main-mister.yml",
-    "main_revision: ${{ needs.resolve-main.outputs.revision }}",
     "github.ref != 'refs/heads/main'",
     "git branch --show-current)\" = main",
     "platform-component-id.py component fpga",
@@ -42,6 +40,7 @@ for value in (
     "gh release edit",
 ):
     assert value in text, f"platform bundle workflow is missing: {value}"
+assert "resolve-main" not in text
 
 publish = text.split("  publish:\n", 1)[1]
 assert "- uses: actions/checkout@v7" in publish

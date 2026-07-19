@@ -45,6 +45,12 @@ jobs:
       artifact_name: ${{ steps.identity.outputs.artifact_name }}
       run_id: ${{ steps.artifact.outputs.run_id }}
     steps:
+      - name: Refuse non-main invocation
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "Main component creation is restricted to main; got $GITHUB_REF" >&2
+          exit 1
+
       - name: Checkout MagiK release tooling
         uses: actions/checkout@v7
         with:
@@ -77,11 +83,17 @@ jobs:
           ARTIFACT_NAME: ${{ steps.identity.outputs.artifact_name }}
         run: |
           set -euo pipefail
-          run_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$ARTIFACT_NAME&per_page=100" \
-            --jq '[.artifacts[] | select(.expired == false) | .workflow_run.id] | first // empty')"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$ARTIFACT_NAME&per_page=100" > build-main-artifacts.json
+          run_id=""
+          while IFS= read -r candidate; do
+            gh run view "$candidate" --json status,conclusion,workflowName,headBranch > build-main-run.json
+            if python3 scripts/release/platform/main-artifact-selection.py eligible --run build-main-run.json; then
+              run_id="$candidate"
+              break
+            fi
+          done < <(python3 scripts/release/platform/main-artifact-selection.py candidates \
+            --artifacts build-main-artifacts.json --name "$ARTIFACT_NAME")
           if [ -n "$run_id" ]; then
-            details="$(gh run view "$run_id" --json status,conclusion,workflowName,headBranch)"
-            jq -e '.status == "completed" and .conclusion == "success" and .workflowName == "Main_MiSTer component" and .headBranch == "main"' <<<"$details" >/dev/null
             echo "hit=true" >> "$GITHUB_OUTPUT"
             echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
           else
@@ -119,16 +131,8 @@ jobs:
           scripts/check-magik-patch-surface.sh
           python3 tests/test_main_component.py
 
-      - name: Cache Main build outputs
-        if: steps.existing.outputs.hit != 'true'
-        id: main-build-cache
-        uses: actions/cache@v6
-        with:
-          path: Main_MiSTer/bin
-          key: main-mister-component-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.MAIN_TOOLCHAIN_VERSION }}-${{ steps.identity.outputs.main_revision }}
-
       - name: Cache Main toolchain
-        if: steps.existing.outputs.hit != 'true' && steps.main-build-cache.outputs.cache-hit != 'true'
+        if: steps.existing.outputs.hit != 'true'
         id: main-toolchain-cache
         uses: actions/cache@v6
         with:
@@ -136,14 +140,14 @@ jobs:
           key: main-toolchain-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.MAIN_TOOLCHAIN_VERSION }}
 
       - name: Install Main toolchain
-        if: steps.existing.outputs.hit != 'true' && steps.main-build-cache.outputs.cache-hit != 'true' && steps.main-toolchain-cache.outputs.cache-hit != 'true'
+        if: steps.existing.outputs.hit != 'true' && steps.main-toolchain-cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p ~/.cache/mister-magik
           wget -qO- "https://developer.arm.com/-/media/Files/downloads/gnu-a/10.2-2020.11/binrel/${MAIN_TOOLCHAIN_VERSION}.tar.xz" \
             | tar -xJ -C ~/.cache/mister-magik
 
       - name: Build exact Main component
-        if: steps.existing.outputs.hit != 'true' && steps.main-build-cache.outputs.cache-hit != 'true'
+        if: steps.existing.outputs.hit != 'true'
         working-directory: Main_MiSTer
         run: |
           export PATH="$HOME/.cache/mister-magik/$MAIN_TOOLCHAIN_VERSION/bin:$PATH"

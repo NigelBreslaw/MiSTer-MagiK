@@ -283,7 +283,13 @@ def verify(
         expected = legacy_bundle_id(fpga_id, kernel_id) if bundle_format == FORMAT_V1 else bundle_id(main_id, fpga_id, kernel_id)
         if payload.get("bundle_id") != expected:
             raise BundleError("bundle identity does not match components")
-        for component in (("fpga", "kernel") if bundle_format == FORMAT_V1 else ("main", "fpga", "kernel")):
+        components = (("fpga", "kernel") if bundle_format == FORMAT_V1 else ("main", "fpga", "kernel"))
+        workflows = {
+            "main": "main-mister.yml",
+            "fpga": "fpga-vblank-latch.yml",
+            "kernel": "kernel-scanout.yml",
+        }
+        for component in components:
             origin = payload.get("components", {}).get(component, {})
             if origin.get("head_sha") is None:
                 raise BundleError(f"missing {component} origin")
@@ -291,6 +297,11 @@ def verify(
             expected_branch = "mister-magik" if component == "main" else "main"
             if origin.get("head_branch") != expected_branch:
                 raise BundleError(f"{component} origin is not {expected_branch}")
+            if origin.get("workflow") != workflows[component]:
+                raise BundleError(f"invalid {component} origin workflow")
+            run_id = origin.get("run_id")
+            if not isinstance(run_id, str) or not run_id.isdigit() or int(run_id) < 1:
+                raise BundleError(f"invalid {component} origin run ID")
         expected_files = {entry["path"]: entry for entry in payload.get("files", [])}
         actual_files = tree_entries(root)
         actual_files = [entry for entry in actual_files if entry["path"] not in {manifest_name, "SHA256SUMS"}]

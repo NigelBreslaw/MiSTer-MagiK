@@ -216,6 +216,34 @@ class PlatformBundleTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "manifest|checksum|Main"):
             bundle.verify(altered)
 
+    def test_invalid_component_origin_is_rejected(self) -> None:
+        archive = self.create()
+        altered = self.root / "altered-origin.zip"
+        with zipfile.ZipFile(archive) as source, zipfile.ZipFile(altered, "w") as target:
+            manifest = json.loads(source.read(bundle.MANIFEST_NAME))
+            manifest["components"]["main"]["workflow"] = "untrusted.yml"
+            for info in source.infolist():
+                payload = source.read(info.filename)
+                if info.filename == bundle.MANIFEST_NAME:
+                    payload = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode()
+                target.writestr(info, payload)
+        with self.assertRaisesRegex(ValueError, "origin workflow"):
+            bundle.verify(altered)
+
+    def test_non_numeric_component_run_is_rejected(self) -> None:
+        archive = self.create()
+        altered = self.root / "altered-run.zip"
+        with zipfile.ZipFile(archive) as source, zipfile.ZipFile(altered, "w") as target:
+            manifest = json.loads(source.read(bundle.MANIFEST_NAME))
+            manifest["components"]["kernel"]["run_id"] = "not-a-run"
+            for info in source.infolist():
+                payload = source.read(info.filename)
+                if info.filename == bundle.MANIFEST_NAME:
+                    payload = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode()
+                target.writestr(info, payload)
+        with self.assertRaisesRegex(ValueError, "origin run ID"):
+            bundle.verify(altered)
+
     def test_mixed_contract_is_rejected(self) -> None:
         metadata = self.fpga / "patched/menu-magik-vblank-latch.metadata.txt"
         metadata.write_text(metadata.read_text().replace(self.contract, "d" * 64))

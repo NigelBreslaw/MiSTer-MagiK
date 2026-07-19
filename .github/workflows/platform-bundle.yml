@@ -21,30 +21,13 @@ permissions:
   contents: read
 
 jobs:
-  resolve-main:
-    name: Resolve authoritative Main fork head
-    runs-on: ubuntu-24.04
-    outputs:
-      revision: ${{ steps.main.outputs.revision }}
-    steps:
-      - name: Resolve exact authoritative Main revision
-        id: main
-        run: |
-          set -euo pipefail
-          revision="$(git ls-remote https://github.com/NigelBreslaw/Main_MiSTer.git refs/heads/mister-magik | awk '{print $1}')"
-          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
-          echo "revision=$revision" >> "$GITHUB_OUTPUT"
-
   main-component:
     name: Reuse or build exact Main component
-    needs: resolve-main
     uses: ./.github/workflows/main-mister.yml
-    with:
-      main_revision: ${{ needs.resolve-main.outputs.revision }}
 
   assemble:
     name: Assemble main-qualified platform bundle
-    needs: [resolve-main, main-component]
+    needs: main-component
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     outputs:

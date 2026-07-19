@@ -227,10 +227,11 @@ The known-good activation sequence is:
    underlying `tools/mister` binary directly is an internal transport operation
    and does not provide this platform transaction.
 
-   Release packages additionally retain `platform-bundle-v0.1.json`: it
-   identifies the immutable main-qualified FPGA/kernel promotion that supplied
-   the platform files. It is release provenance; `platform-v2.manifest` remains
-   the device activation integrity contract.
+   Current release packages additionally retain `platform-bundle-v0.2.json`:
+   it identifies the immutable qualified Main/FPGA/kernel promotion that
+   supplied the platform files. Legacy v0.1 packages retain
+   `platform-bundle-v0.1.json` during migration. This is release provenance;
+   `platform-v2.manifest` remains the device activation integrity contract.
 
 For one-shot diagnosis only, load that RBF through Main's MagiK launch command
 path, not with an external loader and not with `load_core` while the launcher is
