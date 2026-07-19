@@ -1,45 +1,52 @@
 # Copyright (C) 2026 Nigel Breslaw
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-name: Promote MiSTer MagiK Platform Bundle
+name: Build MiSTer MagiK Platform
 
 on:
   workflow_dispatch:
     inputs:
       publish:
-        description: Publish after candidate verification (requires protected environment approval)
+        description: Promote the verified candidate as the next platform release
         required: false
         default: false
         type: boolean
 
 concurrency:
-  group: promote-mister-magik-platform
+  group: build-mister-magik-platform
   cancel-in-progress: false
 
 permissions:
   actions: read
   contents: read
 
-jobs:
-  main-component:
-    name: Reuse or build exact Main component
-    uses: ./.github/workflows/main-mister.yml
+env:
+  MAIN_REPOSITORY: NigelBreslaw/Main_MiSTer
+  MAIN_BRANCH: mister-magik
+  MAIN_TOOLCHAIN_VERSION: gcc-arm-10.2-2020.11-x86_64-arm-none-linux-gnueabihf
 
-  assemble:
-    name: Assemble main-qualified platform bundle
-    needs: main-component
+jobs:
+  plan:
+    name: Plan component reuse and builds
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     outputs:
       current-version: ${{ steps.plan.outputs.current_version }}
       next-version: ${{ steps.plan.outputs.next_version }}
+      release-tag: ${{ steps.plan.outputs.release_tag }}
       update-needed: ${{ steps.plan.outputs.update_needed }}
-      tag: ${{ steps.plan.outputs.release_tag }}
+      main-changed: ${{ steps.plan.outputs.main_changed }}
+      fpga-changed: ${{ steps.plan.outputs.fpga_changed }}
+      kernel-changed: ${{ steps.plan.outputs.kernel_changed }}
+      main-id: ${{ steps.identity.outputs.main_id }}
+      fpga-id: ${{ steps.identity.outputs.fpga_id }}
+      kernel-id: ${{ steps.identity.outputs.kernel_id }}
+      main-revision: ${{ steps.identity.outputs.main_revision }}
     steps:
       - name: Refuse non-main dispatch
         if: github.ref != 'refs/heads/main'
         run: |
-          echo "Platform bundle promotion is restricted to main; got $GITHUB_REF" >&2
+          echo "Platform builds are restricted to main; got $GITHUB_REF" >&2
           exit 1
 
       - uses: actions/checkout@v7
@@ -49,190 +56,430 @@ jobs:
       - name: Verify checked-out main
         run: |
           set -euo pipefail
-          test "$GITHUB_REF" = refs/heads/main
           test "$(git branch --show-current)" = main
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
-      - name: Resolve current component identities
+      - name: Capture desired component identities
         id: identity
         run: |
           set -euo pipefail
+          main_revision="$(git ls-remote "https://github.com/$MAIN_REPOSITORY.git" "refs/heads/$MAIN_BRANCH" | awk '{print $1}')"
+          [[ "$main_revision" =~ ^[0-9a-f]{40}$ ]]
+          main_id="$(python3 scripts/release/platform/main-component.py identity --revision "$main_revision")"
           fpga_id="$(python3 scripts/release/platform/platform-component-id.py component fpga)"
           kernel_id="$(python3 scripts/release/platform/platform-component-id.py component kernel)"
-          printf 'fpga_id=%s\n' "$fpga_id" >> "$GITHUB_OUTPUT"
-          printf 'kernel_id=%s\n' "$kernel_id" >> "$GITHUB_OUTPUT"
+          printf 'main_revision=%s\nmain_id=%s\nfpga_id=%s\nkernel_id=%s\n' \
+            "$main_revision" "$main_id" "$fpga_id" "$kernel_id" >> "$GITHUB_OUTPUT"
 
-      - name: Download and verify current numbered release
+      - name: Download and verify latest platform release
         id: current
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mkdir -p build/platform-current
+          mkdir -p build/platform-current/release
           gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" > build/platform-current/releases.json
-          if tag="$(python3 scripts/release/databases/select-published-release.py platform --releases build/platform-current/releases.json 2>/dev/null)"; then
-            version="$(python3 scripts/release/databases/select-published-release.py platform --field version --releases build/platform-current/releases.json)"
-            gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir build/platform-current/release \
-              --pattern 'mister-magik-platform-v0.*.zip' --pattern 'platform-bundle-v0.*.json'
-            archive="$(find build/platform-current/release -name 'mister-magik-platform-v0.*.zip' -print -quit)"
-            manifest="$(find build/platform-current/release -name 'platform-bundle-v0.*.json' -print -quit)"
-            test -n "$archive"
-            test -n "$manifest"
-            python3 scripts/release/platform/platform-bundle.py verify "$archive" \
-              --manifest "$manifest" \
-              --release-version "$version" >/dev/null
-            echo "version=$version" >> "$GITHUB_OUTPUT"
-            echo "manifest=$manifest" >> "$GITHUB_OUTPUT"
-          else
-            echo "No existing numbered platform release; v0.1 will be created."
-            echo "version=0" >> "$GITHUB_OUTPUT"
-            echo "manifest=" >> "$GITHUB_OUTPUT"
-          fi
+          tag="$(python3 scripts/release/databases/select-published-release.py platform --releases build/platform-current/releases.json)"
+          version="$(python3 scripts/release/databases/select-published-release.py platform --field version --releases build/platform-current/releases.json)"
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir build/platform-current/release \
+            --pattern 'mister-magik-platform-v0.*.zip' --pattern 'platform-bundle-v0.2.json'
+          archive="$(find build/platform-current/release -name 'mister-magik-platform-v0.*.zip' -print -quit)"
+          manifest="build/platform-current/release/platform-bundle-v0.2.json"
+          test -n "$archive" && test -f "$manifest"
+          python3 scripts/release/platform/platform-bundle.py verify "$archive" \
+            --manifest "$manifest" --release-version "$version" >/dev/null
+          test "$(jq -r .format "$manifest")" = mister-magik-platform-bundle-v0.2
+          printf 'version=%s\narchive=%s\nmanifest=%s\n' "$version" "$archive" "$manifest" >> "$GITHUB_OUTPUT"
 
       - name: Plan platform update
         id: plan
-        env:
-          CURRENT_MANIFEST: ${{ steps.current.outputs.manifest }}
-          CURRENT_VERSION: ${{ steps.current.outputs.version }}
-          MAIN_ID: ${{ needs.main-component.outputs.component_id }}
-          FPGA_ID: ${{ steps.identity.outputs.fpga_id }}
-          KERNEL_ID: ${{ steps.identity.outputs.kernel_id }}
         run: |
-          set -euo pipefail
-          args=()
-          if [ -n "$CURRENT_MANIFEST" ]; then
-            args+=(--manifest "$CURRENT_MANIFEST")
-          fi
-          python3 scripts/release/platform/platform-bundle.py plan-update "${args[@]}" \
-            --current-version "$CURRENT_VERSION" --main-id "$MAIN_ID" \
-            --fpga-id "$FPGA_ID" --kernel-id "$KERNEL_ID" \
+          python3 scripts/release/platform/platform-bundle.py plan-update \
+            --manifest '${{ steps.current.outputs.manifest }}' \
+            --current-version '${{ steps.current.outputs.version }}' \
+            --main-id '${{ steps.identity.outputs.main_id }}' \
+            --fpga-id '${{ steps.identity.outputs.fpga_id }}' \
+            --kernel-id '${{ steps.identity.outputs.kernel_id }}' \
             --github-output "$GITHUB_OUTPUT"
 
-      - name: Report update decision
-        env:
-          UPDATE_NEEDED: ${{ steps.plan.outputs.update_needed }}
-          CURRENT_VERSION: ${{ steps.plan.outputs.current_version }}
-          NEXT_VERSION: ${{ steps.plan.outputs.next_version }}
+      - name: Report component decisions
         run: |
+          status() { if [ "$1" = true ]; then echo 'build required'; else echo 'reuse latest release'; fi; }
           {
-            echo "## Platform bundle promotion"
+            echo "## Platform component plan"
             echo
-            if [ "$UPDATE_NEEDED" = true ]; then
-              echo "Preparing v0.$NEXT_VERSION (current v0.$CURRENT_VERSION)."
+            echo "| Component | Decision | Identity |"
+            echo "|---|---|---|"
+            echo "| Main | $(status '${{ steps.plan.outputs.main_changed }}') | \`${{ steps.identity.outputs.main_id }}\` |"
+            echo "| FPGA | $(status '${{ steps.plan.outputs.fpga_changed }}') | \`${{ steps.identity.outputs.fpga_id }}\` |"
+            echo "| Kernel | $(status '${{ steps.plan.outputs.kernel_changed }}') | \`${{ steps.identity.outputs.kernel_id }}\` |"
+            if [ '${{ steps.plan.outputs.update_needed }}' = true ]; then
+              echo
+              echo "Candidate platform-v0.${{ steps.plan.outputs.next_version }} will be assembled."
             else
-              echo "Platform bundle v0.$CURRENT_VERSION already contains the current Main, FPGA, and kernel components."
+              echo
+              echo "Platform-v0.${{ steps.plan.outputs.current_version }} is current; no builds, candidate, or publication are needed."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Download selected Main component
-        if: steps.plan.outputs.update_needed == 'true'
-        uses: actions/download-artifact@v8
-        with:
-          name: ${{ needs.main-component.outputs.artifact_name }}
-          path: build/platform-input/main
-
-      - name: Recover FPGA from immutable platform releases
-        id: durable-fpga
-        if: steps.plan.outputs.update_needed == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          FPGA_ID: ${{ steps.identity.outputs.fpga_id }}
-        run: |
-          scripts/release/platform/recover-platform-component.sh \
-            --component fpga --component-id "$FPGA_ID" \
-            --output build/platform-input/fpga --github-output "$GITHUB_OUTPUT"
-
-      - name: Recover kernel from immutable platform releases
-        id: durable-kernel
-        if: steps.plan.outputs.update_needed == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          KERNEL_ID: ${{ steps.identity.outputs.kernel_id }}
-        run: |
-          scripts/release/platform/recover-platform-component.sh \
-            --component kernel --component-id "$KERNEL_ID" \
-            --output build/platform-input/scanout --github-output "$GITHUB_OUTPUT"
-
-      - name: Download missing exact FPGA and kernel component artifacts
-        if: steps.plan.outputs.update_needed == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          FPGA_ID: ${{ steps.identity.outputs.fpga_id }}
-          KERNEL_ID: ${{ steps.identity.outputs.kernel_id }}
-          MAIN_ID: ${{ needs.main-component.outputs.component_id }}
-          MAIN_REVISION: ${{ needs.main-component.outputs.main_revision }}
-          MAIN_RUN_ID: ${{ needs.main-component.outputs.run_id }}
-          DURABLE_FPGA_HIT: ${{ steps.durable-fpga.outputs.hit }}
-          DURABLE_FPGA_RUN_ID: ${{ steps.durable-fpga.outputs.run_id }}
-          DURABLE_FPGA_HEAD_SHA: ${{ steps.durable-fpga.outputs.head_sha }}
-          DURABLE_KERNEL_HIT: ${{ steps.durable-kernel.outputs.hit }}
-          DURABLE_KERNEL_RUN_ID: ${{ steps.durable-kernel.outputs.run_id }}
-          DURABLE_KERNEL_HEAD_SHA: ${{ steps.durable-kernel.outputs.head_sha }}
-        run: |
-          set -euo pipefail
-          find_run() {
-            local artifact_name="$1" workflow_name="$2" allowed_events="$3" run_id details
-            while IFS= read -r run_id; do
-              [ -n "$run_id" ] || continue
-              details="$(gh run view "$run_id" --json conclusion,headBranch,workflowName,event,headSha)"
-              if jq -e --arg workflow "$workflow_name" --arg events "$allowed_events" '
-                .conclusion == "success" and .headBranch == "main" and .workflowName == $workflow and
-                (.event as $event | ($events | split(",") | index($event)))
-              ' <<<"$details" >/dev/null; then
-                printf '%s\n' "$run_id"
-                return 0
-              fi
-            done < <(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$artifact_name&per_page=100" \
-              --jq '.artifacts | sort_by(.created_at) | reverse[] | select(.expired == false) | .workflow_run.id')
-            echo "No successful main artifact named $artifact_name was found. Run the matching main component workflow first." >&2
-            return 1
-          }
-          fpga_name="fpga-vblank-latch-signoff-v0.1-$FPGA_ID"
-          kernel_name="mister-magik-scanout-slots-v0.1-$KERNEL_ID"
-          if [ "$DURABLE_FPGA_HIT" = true ]; then
-            fpga_run="$DURABLE_FPGA_RUN_ID"
-            fpga_sha="$DURABLE_FPGA_HEAD_SHA"
-          else
-            fpga_run="$(find_run "$fpga_name" "FPGA Vblank Latch RBF" "workflow_dispatch")"
-            mkdir -p build/platform-input/fpga
-            gh run download "$fpga_run" --name "$fpga_name" --dir build/platform-input/fpga
-            fpga_sha="$(gh run view "$fpga_run" --json headSha --jq .headSha)"
-          fi
-          if [ "$DURABLE_KERNEL_HIT" = true ]; then
-            kernel_run="$DURABLE_KERNEL_RUN_ID"
-            kernel_sha="$DURABLE_KERNEL_HEAD_SHA"
-          else
-            kernel_run="$(find_run "$kernel_name" "Kernel scanout slots" "push,workflow_dispatch")"
-            mkdir -p build/platform-input/scanout
-            gh run download "$kernel_run" --name "$kernel_name" --dir build/platform-input/scanout
-            kernel_sha="$(gh run view "$kernel_run" --json headSha --jq .headSha)"
-          fi
-          python3 scripts/release/platform/platform-bundle.py create \
-            --main-dir build/platform-input/main \
-            --fpga-dir build/platform-input/fpga \
-            --scanout-dir build/platform-input/scanout \
-            --main-id "$MAIN_ID" --fpga-id "$FPGA_ID" --kernel-id "$KERNEL_ID" \
-            --main-run-id "$MAIN_RUN_ID" \
-            --fpga-run-id "$fpga_run" --kernel-run-id "$kernel_run" \
-            --main-head-sha "$MAIN_REVISION" \
-            --fpga-head-sha "$fpga_sha" --kernel-head-sha "$kernel_sha" \
-            --release-version '${{ steps.plan.outputs.next_version }}' \
-            --output build/platform-bundle
-
-      - name: Upload reviewed platform bundle candidate
+      - name: Retain verified baseline for assembly
         if: steps.plan.outputs.update_needed == 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: platform-bundle-v0.${{ steps.plan.outputs.next_version }}-candidate
+          name: platform-latest-verified
+          path: build/platform-current/release
+          if-no-files-found: error
+          retention-days: 1
+
+  build-main:
+    name: Build changed Main component
+    needs: plan
+    if: needs.plan.outputs.main-changed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/checkout@v7
+        with:
+          repository: NigelBreslaw/Main_MiSTer
+          ref: ${{ needs.plan.outputs.main-revision }}
+          path: Main_MiSTer
+          fetch-depth: 0
+
+      - name: Test exact Main fork
+        working-directory: Main_MiSTer
+        run: |
+          scripts/test-magik-state.sh
+          scripts/check-magik-patch-surface.sh
+          python3 tests/test_main_component.py
+
+      - name: Cache Main toolchain
+        id: toolchain-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/mister-magik/${{ env.MAIN_TOOLCHAIN_VERSION }}
+          key: main-toolchain-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.MAIN_TOOLCHAIN_VERSION }}
+
+      - name: Install Main toolchain
+        if: steps.toolchain-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/.cache/mister-magik
+          wget -qO- "https://developer.arm.com/-/media/Files/downloads/gnu-a/10.2-2020.11/binrel/${MAIN_TOOLCHAIN_VERSION}.tar.xz" \
+            | tar -xJ -C ~/.cache/mister-magik
+
+      - name: Build and attest Main
+        env:
+          MAIN_REVISION: ${{ needs.plan.outputs.main-revision }}
+        run: |
+          export PATH="$HOME/.cache/mister-magik/$MAIN_TOOLCHAIN_VERSION/bin:$PATH"
+          make -C Main_MiSTer
+          python3 Main_MiSTer/support/mister_magik/main_component.py create \
+            --binary Main_MiSTer/bin/MiSTer --output build/main-component \
+            --revision "$MAIN_REVISION" --toolchain "$MAIN_TOOLCHAIN_VERSION" >/dev/null
+          python3 scripts/release/platform/main-component.py verify \
+            --artifact build/main-component --revision "$MAIN_REVISION" >/dev/null
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: platform-main-component
+          path: build/main-component
+          if-no-files-found: error
+          retention-days: 7
+
+  build-kernel:
+    name: Build changed kernel component
+    needs: plan
+    if: needs.plan.outputs.kernel-changed == 'true'
+    runs-on: ubuntu-24.04
+    container: ubuntu:20.04
+    timeout-minutes: 20
+    steps:
+      - name: Install checkout and kernel tools
+        run: >-
+          apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y
+          git ca-certificates make gcc-arm-linux-gnueabihf flex bison bc libssl-dev
+          libelf-dev kmod sparse python3
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Trust checkout and fetch pinned kernel
+        run: |
+          set -eu
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git init build/Linux-Kernel_MiSTer
+          git -C build/Linux-Kernel_MiSTer remote add origin https://github.com/MiSTer-devel/Linux-Kernel_MiSTer.git
+          git -C build/Linux-Kernel_MiSTer fetch --depth=1 origin f0fb626acadd07f0718934826b143b6e4c9ce81c
+          git -C build/Linux-Kernel_MiSTer checkout --detach FETCH_HEAD
+
+      - name: Build and attest module
+        env:
+          SOURCE_REVISION: ${{ github.sha }}
+          SOURCE_DIRTY: "0"
+        run: |
+          scripts/checks/check-scanout-slots-contract.sh
+          python3 scripts/tests/test-scanout-platform-contract.py
+          KERNEL_SRC="$PWD/build/Linux-Kernel_MiSTer" KERNEL_BUILD="$PWD/build/scanout-slots-kernel" \
+            scripts/build-scanout-slots-module.sh
+          {
+            echo "component_input_sha256=${{ needs.plan.outputs.kernel-id }}"
+            echo "component_revision=$(git log -1 --format=%H -- $(sed '/^#/d;/^$/d' scripts/platform-component-inputs/kernel-v0.1.txt))"
+            echo "builder_revision=$GITHUB_SHA"
+          } >> build/scanout-slots/provenance.txt
+          (cd build/scanout-slots && sha256sum mister_magik_scanout_slots.ko modinfo.txt provenance.txt imports.txt > SHA256SUMS)
+
+      - name: Release-grade kernel checks
+        run: |
+          make -C mister/platform/kernel/scanout-slots KERNEL_SRC="$PWD/build/Linux-Kernel_MiSTer" \
+            KERNEL_BUILD="$PWD/build/scanout-slots-kernel" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- W=1 all
+          make -C mister/platform/kernel/scanout-slots KERNEL_SRC="$PWD/build/Linux-Kernel_MiSTer" \
+            KERNEL_BUILD="$PWD/build/scanout-slots-kernel" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- C=2 CHECK=sparse all
+          "$PWD/build/Linux-Kernel_MiSTer/scripts/checkpatch.pl" --no-tree --strict --file --ignore SPDX_LICENSE_TAG \
+            mister/platform/kernel/scanout-slots/mister_magik_scanout_slots.c \
+            mister/platform/kernel/scanout-slots/mister_magik_scanout_slots_uapi.h \
+            mister/platform/kernel/scanout-slots/mister_magik_scanout_platform.h \
+            mister/platform/kernel/scanout-slots/mister_magik_scanout_policy.h
+          grep -q '^vermagic:[[:space:]]*5\.15\.1-MiSTer ' build/scanout-slots/modinfo.txt
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: platform-kernel-component
+          path: build/scanout-slots
+          if-no-files-found: error
+          retention-days: 7
+
+  build-fpga:
+    name: Build changed FPGA component
+    needs: plan
+    if: needs.plan.outputs.fpga-changed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      QUARTUS_ACCEPT_EULA: "1"
+      QUARTUS_CACHE_DIR: ${{ github.workspace }}/build/quartus-lite-17.0
+      QUARTUS_DOCKER_BASE_IMAGE: ubuntu:18.04
+      QUARTUS_DOCKER_IMAGE: mister-magik-quartus-runtime:ubuntu18-amd64
+      QUARTUS_DOCKER_CPUS: "4"
+      QUARTUS_DOCKER_MEMORY: "0"
+      QUARTUS_R2_ACCOUNT_ID: ${{ vars.QUARTUS_R2_ACCOUNT_ID }}
+      QUARTUS_R2_BUCKET: ${{ vars.QUARTUS_R2_BUCKET || 'mister-magik-ci-cache' }}
+    steps:
+      - uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 8192
+          swap-size-mb: 1024
+          remove-dotnet: false
+          remove-android: false
+          remove-haskell: false
+          remove-codeql: false
+          remove-docker-images: true
+          build-mount-path: ${{ github.workspace }}
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Resolve Menu and component metadata
+        id: metadata
+        run: |
+          set -euo pipefail
+          menu_ref="$(cat mister/platform/fpga/menu-vblank-latch/Menu_MiSTer.commit)"
+          [[ "$menu_ref" =~ ^[0-9a-f]{40}$ ]]
+          component_revision="$(git log -1 --format=%H -- $(sed '/^#/d;/^$/d' scripts/platform-component-inputs/fpga-v0.1.txt))"
+          build_date="$(git show -s --format=%cd --date=format:%y%m%d "$component_revision")"
+          printf 'menu_ref=%s\ncomponent_revision=%s\nbuild_date=%s\n' "$menu_ref" "$component_revision" "$build_date" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare Quartus runtime disk
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/.runner-temp"
+          sudo mount --bind "$GITHUB_WORKSPACE/.runner-temp" "$RUNNER_TEMP"
+          sudo systemctl stop docker
+          mkdir -p "$GITHUB_WORKSPACE/.docker-data"
+          printf '{"data-root":"%s/.docker-data"}\n' "$GITHUB_WORKSPACE" | sudo tee /etc/docker/daemon.json
+          sudo systemctl start docker
+          docker pull "$QUARTUS_DOCKER_BASE_IMAGE"
+          echo "QUARTUS_DOCKER_BASE_IMAGE_DIGEST=$(docker image inspect "$QUARTUS_DOCKER_BASE_IMAGE" --format '{{index .RepoDigests 0}}')" >> "$GITHUB_ENV"
+
+      - name: Restore private Quartus runtime
+        id: quartus-cache
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.QUARTUS_R2_READ_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.QUARTUS_R2_READ_SECRET_ACCESS_KEY }}
+        run: |
+          set +e
+          scripts/quartus-r2-cache.sh restore
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then echo 'hit=true' >> "$GITHUB_OUTPUT"; elif [ "$status" -eq 10 ]; then echo 'hit=false' >> "$GITHUB_OUTPUT"; else exit "$status"; fi
+
+      - name: Install Quartus on cache miss
+        if: steps.quartus-cache.outputs.hit != 'true'
+        env:
+          QUARTUS_RUN_URL_SECRET: ${{ secrets.QUARTUS_17_0_RUN_URL }}
+          CYCLONEV_QDZ_URL_SECRET: ${{ secrets.QUARTUS_17_0_CYCLONEV_QDZ_URL }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$QUARTUS_CACHE_DIR"
+          curl --fail --location --retry 5 --output "$QUARTUS_CACHE_DIR/QuartusLiteSetup-17.0.0.595-linux.run" \
+            "${QUARTUS_RUN_URL_SECRET:-https://downloads.intel.com/akdlm/software/acdsinst/17.0std/595/ib_installers/QuartusLiteSetup-17.0.0.595-linux.run}"
+          curl --fail --location --retry 5 --output "$QUARTUS_CACHE_DIR/cyclonev-17.0.0.595.qdz" \
+            "${CYCLONEV_QDZ_URL_SECRET:-https://downloads.intel.com/akdlm/software/acdsinst/17.0std/595/ib_installers/cyclonev-17.0.0.595.qdz}"
+          scripts/install-quartus-lite-docker.sh
+
+      - name: Save private Quartus runtime
+        if: steps.quartus-cache.outputs.hit != 'true'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.QUARTUS_R2_WRITE_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.QUARTUS_R2_WRITE_SECRET_ACCESS_KEY }}
+        run: scripts/quartus-r2-cache.sh save
+
+      - uses: actions/checkout@v7
+        with:
+          repository: MiSTer-devel/Menu_MiSTer
+          ref: ${{ steps.metadata.outputs.menu_ref }}
+          path: build/Menu_MiSTer
+
+      - name: Build matched stock and patched RBFs
+        env:
+          MISTER_MENU_DIR: ${{ github.workspace }}/build/Menu_MiSTer
+          MISTER_FPGA_QUALIFIED_MAGIK_REVISION: ${{ github.sha }}
+          MISTER_FPGA_COMPONENT_INPUT_SHA256: ${{ needs.plan.outputs.fpga-id }}
+          MISTER_FPGA_COMPONENT_REVISION: ${{ steps.metadata.outputs.component_revision }}
+          MISTER_FPGA_BUILD_DATE: ${{ steps.metadata.outputs.build_date }}
+          QUARTUS_DOCKER_EMPTY_SYS: "1"
+          QUARTUS_STRACE: "0"
+        run: |
+          set -euo pipefail
+          MISTER_FPGA_APPLY_PATCH=0 MISTER_FPGA_OUT_DIR="$GITHUB_WORKSPACE/build/fpga-signoff/stock" \
+            MISTER_MENU_BUILD_DIR="$GITHUB_WORKSPACE/build/fpga-signoff/stock/Menu-work" scripts/build-fpga-vblank-latch-core.sh
+          MISTER_FPGA_APPLY_PATCH=1 MISTER_FPGA_OUT_DIR="$GITHUB_WORKSPACE/build/fpga-signoff/patched" \
+            MISTER_MENU_BUILD_DIR="$GITHUB_WORKSPACE/build/fpga-signoff/patched/Menu-work" scripts/build-fpga-vblank-latch-core.sh
+
+      - name: Verify Quartus delta
+        run: |
+          set -euo pipefail
+          args=()
+          while IFS= read -r -d '' report; do args+=(--stock "$report"); done < <(find build/fpga-signoff/stock -type f \( -name '*.log' -o -name '*.rpt' -o -name '*.summary' \) -print0)
+          while IFS= read -r -d '' report; do args+=(--patched "$report"); done < <(find build/fpga-signoff/patched -type f \( -name '*.log' -o -name '*.rpt' -o -name '*.summary' \) -print0)
+          scripts/checks/check-fpga-quartus-delta.py "${args[@]}" | tee build/fpga-signoff/quartus-delta-signoff.tsv
+          cp build/fpga-signoff/quartus-delta-signoff.tsv build/fpga-signoff/patched/reports/quartus-delta-signoff.tsv
+          delta_sha="$(shasum -a 256 build/fpga-signoff/patched/reports/quartus-delta-signoff.tsv | awk '{print $1}')"
+          printf 'report_sha256.reports/quartus-delta-signoff.tsv=%s\nsignoff_valid=1\n' "$delta_sha" >> build/fpga-signoff/patched/menu-magik-vblank-latch.metadata.txt
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: platform-fpga-component
+          path: build/fpga-signoff
+          if-no-files-found: error
+          retention-days: 7
+
+  assemble:
+    name: Assemble verified platform candidate
+    needs: [plan, build-main, build-fpga, build-kernel]
+    if: >-
+      always() && needs.plan.outputs.update-needed == 'true' &&
+      (needs.build-main.result == 'success' || needs.build-main.result == 'skipped') &&
+      (needs.build-fpga.result == 'success' || needs.build-fpga.result == 'skipped') &&
+      (needs.build-kernel.result == 'success' || needs.build-kernel.result == 'skipped')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      next-version: ${{ needs.plan.outputs.next-version }}
+      release-tag: ${{ needs.plan.outputs.release-tag }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: platform-latest-verified
+          path: build/platform-current
+
+      - if: needs.plan.outputs.main-changed == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: platform-main-component
+          path: build/platform-input/main
+
+      - if: needs.plan.outputs.fpga-changed == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: platform-fpga-component
+          path: build/platform-input/fpga
+
+      - if: needs.plan.outputs.kernel-changed == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: platform-kernel-component
+          path: build/platform-input/scanout
+
+      - name: Reuse unchanged components from latest release
+        env:
+          MAIN_CHANGED: ${{ needs.plan.outputs.main-changed }}
+          FPGA_CHANGED: ${{ needs.plan.outputs.fpga-changed }}
+          KERNEL_CHANGED: ${{ needs.plan.outputs.kernel-changed }}
+          MAIN_ID: ${{ needs.plan.outputs.main-id }}
+          FPGA_ID: ${{ needs.plan.outputs.fpga-id }}
+          KERNEL_ID: ${{ needs.plan.outputs.kernel-id }}
+        run: |
+          set -euo pipefail
+          archive="$(find build/platform-current -name 'mister-magik-platform-v0.*.zip' -print -quit)"
+          manifest="build/platform-current/platform-bundle-v0.2.json"
+          test -n "$archive" && test -f "$manifest"
+          [ "$MAIN_CHANGED" = true ] || python3 scripts/release/platform/platform-bundle.py extract-component "$archive" --manifest "$manifest" --component main --component-id "$MAIN_ID" --output build/platform-input/main
+          [ "$FPGA_CHANGED" = true ] || python3 scripts/release/platform/platform-bundle.py extract-component "$archive" --manifest "$manifest" --component fpga --component-id "$FPGA_ID" --output build/platform-input/fpga
+          [ "$KERNEL_CHANGED" = true ] || python3 scripts/release/platform/platform-bundle.py extract-component "$archive" --manifest "$manifest" --component kernel --component-id "$KERNEL_ID" --output build/platform-input/scanout
+
+      - name: Assemble and verify candidate
+        env:
+          CURRENT_MANIFEST: build/platform-current/platform-bundle-v0.2.json
+          MAIN_CHANGED: ${{ needs.plan.outputs.main-changed }}
+          FPGA_CHANGED: ${{ needs.plan.outputs.fpga-changed }}
+          KERNEL_CHANGED: ${{ needs.plan.outputs.kernel-changed }}
+          MAIN_ID: ${{ needs.plan.outputs.main-id }}
+          FPGA_ID: ${{ needs.plan.outputs.fpga-id }}
+          KERNEL_ID: ${{ needs.plan.outputs.kernel-id }}
+          MAIN_REVISION: ${{ needs.plan.outputs.main-revision }}
+          NEXT_VERSION: ${{ needs.plan.outputs.next-version }}
+        run: |
+          set -euo pipefail
+          origin() { if [ "$1" = true ]; then printf '%s' "$2"; else jq -r ".components.$3.$4" "$CURRENT_MANIFEST"; fi; }
+          main_run="$(origin "$MAIN_CHANGED" "$GITHUB_RUN_ID" main run_id)"
+          fpga_run="$(origin "$FPGA_CHANGED" "$GITHUB_RUN_ID" fpga run_id)"
+          kernel_run="$(origin "$KERNEL_CHANGED" "$GITHUB_RUN_ID" kernel run_id)"
+          main_sha="$(origin "$MAIN_CHANGED" "$MAIN_REVISION" main head_sha)"
+          fpga_sha="$(origin "$FPGA_CHANGED" "$GITHUB_SHA" fpga head_sha)"
+          kernel_sha="$(origin "$KERNEL_CHANGED" "$GITHUB_SHA" kernel head_sha)"
+          main_workflow="$(origin "$MAIN_CHANGED" platform-bundle.yml main workflow)"
+          fpga_workflow="$(origin "$FPGA_CHANGED" platform-bundle.yml fpga workflow)"
+          kernel_workflow="$(origin "$KERNEL_CHANGED" platform-bundle.yml kernel workflow)"
+          source() { if [ "$1" = true ]; then echo built-in-current-run; else echo reused-from-latest-release; fi; }
+          python3 scripts/release/platform/platform-bundle.py create \
+            --main-dir build/platform-input/main --fpga-dir build/platform-input/fpga --scanout-dir build/platform-input/scanout \
+            --main-id "$MAIN_ID" --fpga-id "$FPGA_ID" --kernel-id "$KERNEL_ID" \
+            --main-run-id "$main_run" --fpga-run-id "$fpga_run" --kernel-run-id "$kernel_run" \
+            --main-head-sha "$main_sha" --fpga-head-sha "$fpga_sha" --kernel-head-sha "$kernel_sha" \
+            --main-workflow "$main_workflow" --fpga-workflow "$fpga_workflow" --kernel-workflow "$kernel_workflow" \
+            --main-source "$(source "$MAIN_CHANGED")" --fpga-source "$(source "$FPGA_CHANGED")" --kernel-source "$(source "$KERNEL_CHANGED")" \
+            --release-version "$NEXT_VERSION" --output build/platform-bundle
+          python3 scripts/release/platform/platform-bundle.py verify \
+            "build/platform-bundle/mister-magik-platform-v0.$NEXT_VERSION.zip" \
+            --manifest build/platform-bundle/platform-bundle-v0.2.json --release-version "$NEXT_VERSION" >/dev/null
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: platform-bundle-v0.${{ needs.plan.outputs.next-version }}-candidate
           path: build/platform-bundle
           if-no-files-found: error
           retention-days: 7
 
   publish:
     name: Publish immutable platform bundle
+    needs: [plan, assemble]
+    if: needs.plan.outputs.update-needed == 'true' && inputs.publish == true
     runs-on: ubuntu-24.04
-    needs: assemble
-    if: needs.assemble.outputs.update-needed == 'true' && inputs.publish == true
     timeout-minutes: 15
     environment:
       name: publish-platform
@@ -240,35 +487,28 @@ jobs:
       actions: read
       contents: write
     steps:
-      - name: Refuse non-main dispatch
-        if: github.ref != 'refs/heads/main'
-        run: exit 1
-
       - uses: actions/checkout@v7
 
       - uses: actions/download-artifact@v8
         with:
-          name: platform-bundle-v0.${{ needs.assemble.outputs.next-version }}-candidate
+          name: platform-bundle-v0.${{ needs.plan.outputs.next-version }}-candidate
           path: candidate
 
       - name: Publish or verify immutable platform bundle
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          TAG: ${{ needs.assemble.outputs.tag }}
-          VERSION: ${{ needs.assemble.outputs.next-version }}
+          TAG: ${{ needs.plan.outputs.release-tag }}
+          VERSION: ${{ needs.plan.outputs.next-version }}
         run: |
           set -euo pipefail
           archive="candidate/mister-magik-platform-v0.$VERSION.zip"
           manifest="candidate/platform-bundle-v0.2.json"
-          test -f "$archive" && test -f "$manifest"
-          python3 scripts/release/platform/platform-bundle.py verify "$archive" --manifest "$manifest" \
-            --release-version "$VERSION" >/dev/null
-          if gh release view "$TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
+          python3 scripts/release/platform/platform-bundle.py verify "$archive" --manifest "$manifest" --release-version "$VERSION" >/dev/null
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Tag $TAG already exists; numbered platform releases are immutable." >&2
             exit 1
           fi
           gh release create "$TAG" "$archive" "$manifest" candidate/SHA256SUMS \
-            --repo "$GH_REPO" --target "$GITHUB_SHA" --title "MiSTer MagiK Platform Bundle v0.$VERSION" \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "MiSTer MagiK Platform Bundle v0.$VERSION" \
             --draft --prerelease
-          gh release edit "$TAG" --repo "$GH_REPO" --draft=false
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false

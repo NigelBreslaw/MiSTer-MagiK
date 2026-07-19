@@ -117,7 +117,8 @@ def main() -> int:
     if '"$HERE/../../scripts/checks/ci-cache-identity.py"' not in ffmpeg_helper:
         fail("minimal FFmpeg helper does not resolve the canonical cache identity from repo root")
 
-    fpga = texts["fpga-vblank-latch.yml"]
+    platform = texts["platform-bundle.yml"]
+    fpga = platform.split("  build-fpga:\n", 1)[1].split("\n  assemble:\n", 1)[0]
     if "actions/cache" in fpga or "prepare-quartus" in fpga:
         fail("Quartus still uses GitHub cache or a duplicate preparation job")
     if fpga.count("scripts/quartus-r2-cache.sh") != 2:

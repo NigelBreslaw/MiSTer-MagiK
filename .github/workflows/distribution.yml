@@ -108,7 +108,7 @@ jobs:
           gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" > build/published/releases.json
 
           if ! platform_tag="$(python3 scripts/release/databases/select-published-release.py platform --releases build/published/releases.json)"; then
-            echo "::error::No published numbered platform release exists. Run Promote MiSTer MagiK Platform Bundle."
+            echo "::error::No published numbered platform release exists. Run Build MiSTer MagiK Platform."
             exit 1
           fi
           platform_version="$(python3 scripts/release/databases/select-published-release.py platform --field version --releases build/published/releases.json)"

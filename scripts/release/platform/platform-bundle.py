@@ -105,6 +105,9 @@ def update_plan(
             "current_bundle_id": "",
             "bundle_id": identity,
             "update_needed": True,
+            "main_changed": True,
+            "fpga_changed": True,
+            "kernel_changed": True,
         }
         result["release_tag"] = "platform-v0.1"
         return result
@@ -118,10 +121,10 @@ def update_plan(
         raise BundleError("platform release tag and manifest version differ")
     current_fpga = str(current.get("fpga_input_sha256", ""))
     current_kernel = str(current.get("kernel_input_sha256", ""))
+    current_main = str(current.get("main_input_sha256", ""))
     if current_format == FORMAT_V1:
         current_identity = legacy_bundle_id(current_fpga, current_kernel)
     else:
-        current_main = str(current.get("main_input_sha256", ""))
         current_identity = bundle_id(current_main, current_fpga, current_kernel)
     if current.get("bundle_id") != current_identity:
         raise BundleError("current bundle identity does not match components")
@@ -131,6 +134,9 @@ def update_plan(
         "current_bundle_id": current_identity,
         "bundle_id": identity,
         "update_needed": current_format == FORMAT_V1 or current_identity != identity,
+        "main_changed": current_format == FORMAT_V1 or current_main != main_id,
+        "fpga_changed": current_fpga != fpga_id,
+        "kernel_changed": current_kernel != kernel_id,
     }
     result["release_tag"] = f"platform-v0.{result['next_version']}"
     return result
@@ -208,6 +214,14 @@ def create(args: argparse.Namespace) -> Path:
         raise BundleError("Main component identity does not match artifact")
     contract, _, _ = verify_component_inputs(args.fpga_dir, args.scanout_dir, fpga_id, kernel_id)
     identity = bundle_id(main_id, fpga_id, kernel_id)
+    component_workflows = {
+        component: getattr(args, f"{component}_workflow", "platform-bundle.yml")
+        for component in ("main", "fpga", "kernel")
+    }
+    component_sources = {
+        component: getattr(args, f"{component}_source", "built-in-current-run")
+        for component in ("main", "fpga", "kernel")
+    }
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     archive = output / f"mister-magik-platform-v0.{release_version}.zip"
@@ -226,9 +240,9 @@ def create(args: argparse.Namespace) -> Path:
             "kernel_input_sha256": kernel_id,
             "platform_contract_sha256": contract,
             "components": {
-                "main": {"workflow": "main-mister.yml", "run_id": args.main_run_id, "head_sha": args.main_head_sha, "head_branch": "mister-magik"},
-                "fpga": {"workflow": "fpga-vblank-latch.yml", "run_id": args.fpga_run_id, "head_sha": args.fpga_head_sha, "head_branch": "main"},
-                "kernel": {"workflow": "kernel-scanout.yml", "run_id": args.kernel_run_id, "head_sha": args.kernel_head_sha, "head_branch": "main"},
+                "main": {"workflow": component_workflows["main"], "run_id": args.main_run_id, "head_sha": args.main_head_sha, "head_branch": "mister-magik", "source": component_sources["main"]},
+                "fpga": {"workflow": component_workflows["fpga"], "run_id": args.fpga_run_id, "head_sha": args.fpga_head_sha, "head_branch": "main", "source": component_sources["fpga"]},
+                "kernel": {"workflow": component_workflows["kernel"], "run_id": args.kernel_run_id, "head_sha": args.kernel_head_sha, "head_branch": "main", "source": component_sources["kernel"]},
             },
             "files": tree_entries(stage),
         }
@@ -285,9 +299,9 @@ def verify(
             raise BundleError("bundle identity does not match components")
         components = (("fpga", "kernel") if bundle_format == FORMAT_V1 else ("main", "fpga", "kernel"))
         workflows = {
-            "main": "main-mister.yml",
-            "fpga": "fpga-vblank-latch.yml",
-            "kernel": "kernel-scanout.yml",
+            "main": {"main-mister.yml", "platform-bundle.yml"},
+            "fpga": {"fpga-vblank-latch.yml", "platform-bundle.yml"},
+            "kernel": {"kernel-scanout.yml", "platform-bundle.yml"},
         }
         for component in components:
             origin = payload.get("components", {}).get(component, {})
@@ -297,8 +311,11 @@ def verify(
             expected_branch = "mister-magik" if component == "main" else "main"
             if origin.get("head_branch") != expected_branch:
                 raise BundleError(f"{component} origin is not {expected_branch}")
-            if origin.get("workflow") != workflows[component]:
+            if origin.get("workflow") not in workflows[component]:
                 raise BundleError(f"invalid {component} origin workflow")
+            source = origin.get("source")
+            if source is not None and source not in {"built-in-current-run", "reused-from-latest-release"}:
+                raise BundleError(f"invalid {component} source")
             run_id = origin.get("run_id")
             if not isinstance(run_id, str) or not run_id.isdigit() or int(run_id) < 1:
                 raise BundleError(f"invalid {component} origin run ID")
@@ -381,6 +398,13 @@ def main() -> int:
     create_parser.add_argument("--main-head-sha", required=True)
     create_parser.add_argument("--fpga-head-sha", required=True)
     create_parser.add_argument("--kernel-head-sha", required=True)
+    for component in ("main", "fpga", "kernel"):
+        create_parser.add_argument(f"--{component}-workflow", default="platform-bundle.yml")
+        create_parser.add_argument(
+            f"--{component}-source",
+            choices=("built-in-current-run", "reused-from-latest-release"),
+            default="built-in-current-run",
+        )
     create_parser.add_argument("--release-version", required=True, type=int)
     create_parser.add_argument("--output", required=True, type=Path)
     check = commands.add_parser("verify")
