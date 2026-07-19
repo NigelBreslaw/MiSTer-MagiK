@@ -21,6 +21,8 @@ fn send_ready_catalog(
     durable_save_pending: bool,
     generation_fingerprint: Option<String>,
 ) {
+    let publication_started = Instant::now();
+    let publication_source = format!("{source:?}");
     let (publication_tx, publication_rx) = mpsc::channel();
     let _ = tx.send(CatalogWorkerMessage::Ready {
         catalog,
@@ -35,6 +37,12 @@ fn send_ready_catalog(
     // schedules indexing only after the durable Persisted event; the worker
     // must therefore return immediately to its SQLite/sidecar save path.
     let _ = publication_rx.recv();
+    crate::ui_logln!(
+        "catalog_publication_ack_tsv\tsource={}\telapsed_us={}\tdurable_save_pending={}",
+        publication_source,
+        publication_started.elapsed().as_micros(),
+        durable_save_pending as u8,
+    );
 }
 
 pub(super) fn catalog_builder_lock_available() -> bool {

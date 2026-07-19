@@ -613,6 +613,17 @@ fn execute_fresh_pipeline(
                 }
             };
             build_time += staged.build_elapsed;
+            let staged_system_id = staged
+                .metadata
+                .as_ref()
+                .map(|metadata| metadata.system_id.as_str().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            crate::catalog_logln!(
+                "catalog_v3_shard_phase_tsv\tsystem={}\tphase=build\telapsed_us={}\tgames={}",
+                staged_system_id,
+                staged.build_elapsed.as_micros(),
+                staged.game_count,
+            );
 
             let staged_on_media = storage_root.starts_with(Path::new("/media/fat"))
                 && !staged
@@ -640,7 +651,13 @@ fn execute_fresh_pipeline(
                 });
                 break;
             }
-            queue_wait += wait_started.elapsed();
+            let shard_queue_wait = wait_started.elapsed();
+            queue_wait += shard_queue_wait;
+            crate::catalog_logln!(
+                "catalog_v3_shard_phase_tsv\tsystem={}\tphase=queue-wait\telapsed_us={}",
+                staged_system_id,
+                shard_queue_wait.as_micros(),
+            );
             in_flight += 1;
             peak_in_flight = peak_in_flight.max(in_flight);
             while let Ok(result) = completed_rx.try_recv() {
@@ -888,6 +905,14 @@ fn publish_staged_shard(
     let artifact_bytes = publication.copied_bytes;
     let copy_hash_time = publication.copy_hash_time;
     let active = publication.generation;
+    crate::catalog_logln!(
+        "catalog_v3_shard_phase_tsv\tsystem={}\tphase=publish\telapsed_us={}\tbytes={}\tcopy_hash_us={}\tcompleted_us={}",
+        system_id.as_str(),
+        publish_time.as_micros(),
+        artifact_bytes,
+        copy_hash_time.as_micros(),
+        staged.build_elapsed.saturating_add(publish_time).as_micros(),
+    );
     Ok(CompletedShard {
         system: ManifestSystem {
             system_id: metadata.system_id,

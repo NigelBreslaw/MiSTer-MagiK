@@ -734,6 +734,22 @@ awk -v label="$LABEL" -v commit="$commit" -F '\t' '
   $1 == "catalog_memory_tsv" {
     print label, commit, "memory_" $2, 0, $3 " " $4
   }
+  $1 == "catalog_v3_shard_phase_tsv" {
+    system = $2
+    phase = $3
+    elapsed = $4
+    sub(/^system=/, "", system)
+    sub(/^phase=/, "", phase)
+    sub(/^elapsed_us=/, "", elapsed)
+    print label, commit, "shard_" phase "_" system, int((elapsed + 500) / 1000), $5 " " $6 " " $7
+  }
+  $1 == "catalog_publication_ack_tsv" {
+    source = $2
+    elapsed = $3
+    sub(/^source=/, "", source)
+    sub(/^elapsed_us=/, "", elapsed)
+    print label, commit, "catalog_publication_ack_" source, int((elapsed + 500) / 1000), $4
+  }
   END {
     if (bootstrap_sustained_ms != "" && full_scan_climb_ms != "") {
       plateau_ms = full_scan_climb_ms - bootstrap_sustained_ms
