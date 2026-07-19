@@ -893,8 +893,7 @@ mod linux {
     const FPGA_IO_EN: u32 = 1 << 20;
     const FPGA_BIT31: u32 = 0x8000_0000;
     const FPGA_SPIN_LIMIT: u32 = 2_000_000;
-    // Temporary while the host/device file-transfer auth flow is being reworked.
-    const CONTROL_AUTH_DISABLED: bool = true;
+    const CONTROL_AUTH_DISABLED: bool = false;
     const LOG: &str = "/tmp/mister-magik-agent.log";
     const PLOG: &str = "/media/fat/mister-magik-dev/bootlogs/agent.log";
     const FRAME_ANALYTICS_LEASE_PATH: &str = "/tmp/mister-magik/realtime-frame-analytics";
