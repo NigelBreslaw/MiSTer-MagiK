@@ -50,7 +50,7 @@ if [[ ! "$visual_captures" =~ ^[0-9]+$ ]]; then echo "--visual-captures must be 
 
 if [[ -z "$secs" ]]; then
   if [[ "$mode" == "mega" || "$mode" == "all" || "$mode" == "demo" ]]; then
-    secs=$((segment_secs * 18))
+    secs=$((segment_secs * 19))
   else
     IFS=',' read -r -a modes <<<"$mode"
     secs=$((segment_secs * ${#modes[@]}))

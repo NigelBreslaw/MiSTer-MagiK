@@ -25,11 +25,12 @@ pub(super) enum ScreensaverMode {
     CabinetMarquee,
     RandomAccessLoader,
     ColorClashGallery,
+    RadialStarfield,
     IdleMegademo,
 }
 
 impl ScreensaverMode {
-    const ALL: [Self; 18] = [
+    const ALL: [Self; 19] = [
         Self::AttractWall,
         Self::MvsCarousel,
         Self::SuperScalerFlyby,
@@ -47,6 +48,7 @@ impl ScreensaverMode {
         Self::CabinetMarquee,
         Self::RandomAccessLoader,
         Self::ColorClashGallery,
+        Self::RadialStarfield,
         Self::IdleMegademo,
     ];
 
@@ -69,6 +71,7 @@ impl ScreensaverMode {
             Self::CabinetMarquee => "cabinet-marquee",
             Self::RandomAccessLoader => "random-access-loader",
             Self::ColorClashGallery => "color-clash-gallery",
+            Self::RadialStarfield => "radial-starfield",
             Self::IdleMegademo => "idle-megademo",
         }
     }
@@ -430,6 +433,7 @@ fn render_screensaver_frame(
             render_random_loader(dst, state, w, h, images, frame)
         }
         ScreensaverMode::ColorClashGallery => render_color_clash(dst, state, w, h, images, frame),
+        ScreensaverMode::RadialStarfield => render_starfield(dst, w, h, frame),
         ScreensaverMode::IdleMegademo => {
             let sub =
                 ScreensaverMode::ALL[((frame / 240) as usize) % (ScreensaverMode::ALL.len() - 1)];
@@ -796,6 +800,30 @@ fn render_starfield(dst: &mut [Rgb565Pixel], w: usize, h: usize, frame: u64) {
             dst[y as usize * w + x as usize] = color565(80, 220, 255);
         }
     }
+}
+
+fn render_horizontal_starfield(dst: &mut [Rgb565Pixel], w: usize, h: usize, frame: u64) {
+    clear(dst, color565(0, 0, 10));
+    for i in 0..420usize {
+        let layer = i & 3;
+        let x = horizontal_star_x(i, w, frame);
+        let y = (i.wrapping_mul(83).wrapping_add(i.wrapping_mul(i) * 7)) % h;
+        let brightness = [70, 110, 170, 235][layer];
+        let color = color565(brightness / 2, brightness, 255);
+        dst[y * w + x] = color;
+        if layer == 3 && x + 1 < w {
+            dst[y * w + x + 1] = color;
+        }
+    }
+}
+
+fn horizontal_star_x(star: usize, width: usize, frame: u64) -> usize {
+    let speed = (star & 3) + 1;
+    let start_x = (star
+        .wrapping_mul(197)
+        .wrapping_add(star.wrapping_mul(star) * 13))
+        % width;
+    (start_x + frame as usize * speed) % width
 }
 
 fn render_starfield_cabinets(
@@ -1365,7 +1393,7 @@ fn render_parade(
     images: &[SaverImage],
     frame: u64,
 ) {
-    render_starfield(dst, w, h, frame / 2);
+    render_horizontal_starfield(dst, w, h, frame);
     state.ensure_initialized(images.len(), w, h);
     state.advance(w);
     for tile in &state.tiles {
@@ -1637,5 +1665,23 @@ mod tests {
         state.advance(960);
         assert_eq!(state.tiles[0].x, -(PARADE_TILE_W as isize));
         assert_ne!(state.tiles[0].image_idx, original);
+    }
+
+    #[test]
+    fn parade_starfield_moves_horizontally_in_depth_bands() {
+        let width = 960;
+        for star in 0..4 {
+            let x0 = horizontal_star_x(star, width, 20);
+            let x1 = horizontal_star_x(star, width, 21);
+            assert_eq!((x1 + width - x0) % width, star + 1);
+        }
+    }
+
+    #[test]
+    fn radial_starfield_is_available_as_a_standalone_mode() {
+        assert_eq!(
+            ScreensaverMode::parse("radial-starfield"),
+            Some(ScreensaverMode::RadialStarfield)
+        );
     }
 }
