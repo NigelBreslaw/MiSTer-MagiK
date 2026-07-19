@@ -328,6 +328,7 @@ fn local_token_path() -> PathBuf {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     manifest_dir
         .parent()
+        .and_then(Path::parent)
         .unwrap_or_else(|| Path::new("."))
         .join("build/mister-agent.token")
 }
@@ -2415,6 +2416,22 @@ tiny"#
         assert_eq!(
             TokenSource::Missing(PathBuf::from("/tmp/token")).label(),
             "missing (/tmp/token)"
+        );
+    }
+
+    #[test]
+    fn local_token_path_defaults_to_worktree_build_directory() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        env::remove_var("MISTER_AGENT_TOKEN_FILE");
+
+        let worktree_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .expect("desktop crate should be nested under the worktree root");
+
+        assert_eq!(
+            local_token_path(),
+            worktree_root.join("build/mister-agent.token")
         );
     }
 
