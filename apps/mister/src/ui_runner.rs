@@ -297,7 +297,7 @@ pub fn run_ui(f: &mut Fpga) {
     }
     #[cfg(mister_experiments)]
     if scene == "screensaver" {
-        run_screensaver_loop(secs, &ui, &mut disp);
+        run_screensaver_loop(secs, &ui, f, &mut display_session);
         return;
     }
 

@@ -215,12 +215,11 @@ impl ScreensaverRenderState {
 pub(in crate::ui_runner) fn run_screensaver_loop(
     secs: u64,
     ui: &UiDisplay,
-    disp: &mut MappedRgb565Framebuffer,
+    hardware: &mut Fpga,
+    display_session: &mut LauncherDisplaySession,
 ) {
     let mut cfg = ScreensaverConfig::from_env();
-    let arcade_root = std::env::var("MISTER_ARCADE_ROOT")
-        .unwrap_or_else(|_| arcade_catalog::DEFAULT_ARCADE_ROOT.to_string());
-    let images = load_screensaver_images(&arcade_root, cfg.cache_cap);
+    let images = load_screensaver_images(cfg.cache_cap);
     crate::ui_logln!(
         "screensaver modes={} segment_secs={} cache_cap={} images={}",
         cfg.modes
@@ -235,6 +234,25 @@ pub(in crate::ui_runner) fn run_screensaver_loop(
 
     let mut backbuffer = vec![Rgb565Pixel(0); ui.render_w() * ui.render_h()];
     let mut render_state = ScreensaverRenderState::new(ui.render_w(), ui.render_h());
+    let mut presenter = match FpgaVblankLatchHiddenPresenter::open(ui) {
+        Ok(presenter) => presenter,
+        Err(failure) => {
+            crate::ui_errln!(
+                "screensaver_latch_failure state={} stage={} reason={} detail={}",
+                failure.state.code(),
+                failure.stage.code(),
+                failure.reason_code(),
+                failure.detail.replace(['\t', '\n', '\r'], " ")
+            );
+            return;
+        }
+    };
+    let full_damage = DirtyRectList::from_one(DirtyRect {
+        x0: 0,
+        y0: 0,
+        x1: ui.render_w(),
+        y1: ui.render_h(),
+    });
     let mut pacer = VsyncPacer::from_env();
     let start = Instant::now();
     let mut frame = 0_u64;
@@ -256,12 +274,37 @@ pub(in crate::ui_runner) fn run_screensaver_loop(
             frame,
         );
         let draw_us = draw_start.elapsed().as_micros() as u64;
-        let vsync = pacer.wait();
         let present_start = Instant::now();
-        if let Err(e) = disp.present_rows_565(&backbuffer, 0, ui.render_h()) {
-            crate::ui_errln!("framebuffer present screensaver rows failed: {e}");
+        let frame_plan = LauncherFramePlan::new(full_damage, None, None, None, None);
+        let stats = match presenter.present_cached_full_frame(
+            CachedFrameView::new(&backbuffer, ui.render_w(), ui.render_h()),
+            frame_plan,
+            hardware,
+            display_session,
+            |_hidden, _plan| Ok(()),
+        ) {
+            Ok(stats) => stats,
+            Err(failure) => {
+                crate::ui_errln!(
+                    "screensaver_latch_failure state={} stage={} reason={} detail={}",
+                    failure.state.code(),
+                    failure.stage.code(),
+                    failure.reason_code(),
+                    failure.detail.replace(['\t', '\n', '\r'], " ")
+                );
+                break;
+            }
+        };
+        if let Some(scale) =
+            mister_magik_fb::framebuffer::stream::configured_latch_scale(true)
+        {
+            let committed = presenter.committed_frame_view(stats.buffer_index);
+            let _ = mister_magik_fb::framebuffer::stream::publish_latch_snapshot(committed, scale);
         }
         let present_us = present_start.elapsed().as_micros() as u64;
+        // The frame is posted before waiting: the FPGA consumes it on the next
+        // vblank while the CPU prepares no writes to the committed slot.
+        let vsync = pacer.wait();
         let wall_us = frame_start.elapsed().as_micros() as u64;
         if let Some(trace) = cfg.trace.as_mut() {
             let _ = writeln!(
@@ -284,34 +327,38 @@ pub(in crate::ui_runner) fn run_screensaver_loop(
     }
 }
 
-fn load_screensaver_images(root: &str, cap: usize) -> Vec<SaverImage> {
-    let mut assets = Vec::new();
-    if let Ok(loaded) = library_db::load_arcade_catalog_from_sqlite(root) {
-        assets.extend(
-            loaded
-                .catalog
-                .games
-                .iter()
-                .filter(|game| {
-                    game.has_preview
-                        && !game.preview_archive_path.is_empty()
-                        && !game.preview_asset_key.is_empty()
-                })
-                .map(|game| {
-                    (
-                        game.preview_archive_path.to_string(),
-                        game.preview_asset_key.to_string(),
-                    )
-                })
-                .take(cap * 4),
-        );
-    }
+fn load_screensaver_images(cap: usize) -> Vec<SaverImage> {
+    let arcade_screenshot_pack = std::path::Path::new(
+        mister_magik_catalog::catalog_config::DEFAULT_SQLITE_PATH,
+    )
+    .parent()
+    .expect("default catalog has an application directory")
+    .join("assets/arcade-screenshots-320x320.mmlz4b");
+    let asset_keys = match preview_worker::preview_archive_sidecar_entry_stems(
+        &arcade_screenshot_pack,
+    ) {
+        Ok(Some(sidecar)) => sidecar.entries,
+        Ok(None) => match preview_worker::preview_archive_index(&arcade_screenshot_pack) {
+            Ok(index) => index.entries,
+            Err(error) => {
+                crate::ui_errln!("screensaver: arcade screenshot pack index failed: {error}");
+                Vec::new()
+            }
+        },
+        Err(error) => {
+            crate::ui_errln!("screensaver: arcade screenshot sidecar failed: {error}");
+            Vec::new()
+        }
+    };
     let mut images = Vec::new();
-    for (archive_path, asset_key) in assets {
+    for asset_key in asset_keys {
         if images.len() >= cap {
             break;
         }
-        if let Ok(image) = preview_worker::load_preview_asset_pixels(&archive_path, &asset_key) {
+        if let Ok(image) = preview_worker::load_preview_asset_pixels(
+            &arcade_screenshot_pack.display().to_string(),
+            &asset_key,
+        ) {
             let image = preview_pixels_to_saver_image(image);
             images.push(image);
         }
