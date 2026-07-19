@@ -20,12 +20,12 @@ mod media;
 mod remote;
 
 use agent_client::{
-    agent_binary_request_bounded, agent_request, agent_stream_request_reader, agent_token,
-    verify_agent_deploy_result, AGENT_PORT,
+    agent_binary_request_bounded, agent_request, agent_request_with_liveness,
+    agent_stream_request_reader, agent_token, verify_agent_deploy_result, AGENT_PORT,
 };
 use remote::{
-    connect, connect_timed, create_dir_command, exec, exec_failure_message, get, host,
-    host_wait_diagnostics, launcher_restart_command, port_open, put, put_bytes, put_dir,
+    acknowledged_main_command, connect, connect_timed, create_dir_command, exec,
+    exec_failure_message, get, host, host_wait_diagnostics, launcher_restart_command, port_open, put, put_bytes, put_dir,
     remote_subcommand, remove_files_command, sftp_write_profile, shell_quote as sh, stream_command,
     tcp_probe_label, tcp_probe_label_port, ExecOutput,
 };
@@ -39,9 +39,8 @@ const DEFAULT_FB_BPP: usize = 32;
 const MAX_FRAMEBUFFER_CAPTURE_RAW_BYTES: usize = 16 * 1024 * 1024;
 const MAX_FRAMEBUFFER_CAPTURE_PAYLOAD_BYTES: u64 = 17 * 1024 * 1024;
 const RAW_REBOOT_REMOTE_CMD: &str = "nohup /sbin/reboot >/dev/null 2>&1 & echo raw";
-const SUPERVISED_REBOOT_REMOTE_CMD: &str = "if [ -p /dev/MiSTer_cmd ] && { pidof MiSTer_MagiKDev >/dev/null 2>&1 || pidof MiSTer_MagiK >/dev/null 2>&1; }; then printf 'mister_magik_reboot\\n' > /dev/MiSTer_cmd; echo supervised; else echo 'supervised reboot unavailable: MagiK Main or /dev/MiSTer_cmd missing' >&2; exit 12; fi";
-const DIRECT_RESET_REMOTE_CMD: &str = "if [ -p /dev/MiSTer_cmd ] && { pidof MiSTer_MagiKDev >/dev/null 2>&1 || pidof MiSTer_MagiK >/dev/null 2>&1; }; then printf 'mister_magik_direct_reset\\n' > /dev/MiSTer_cmd; echo direct-reset; else echo 'direct reset unavailable: MagiK Main or /dev/MiSTer_cmd missing' >&2; exit 12; fi";
-const DIRECT_RESET_NO_SYNC_REMOTE_CMD: &str = "if [ -p /dev/MiSTer_cmd ] && { pidof MiSTer_MagiKDev >/dev/null 2>&1 || pidof MiSTer_MagiK >/dev/null 2>&1; }; then printf 'mister_magik_direct_reset_no_sync\\n' > /dev/MiSTer_cmd; echo direct-reset-no-sync; else echo 'direct reset unavailable: MagiK Main or /dev/MiSTer_cmd missing' >&2; exit 12; fi";
+const DIRECT_RESET_REMOTE_CMD: &str = "if [ -p /dev/MiSTer_cmd ] && { pidof MiSTer_MagiKDev >/dev/null 2>&1 || pidof MiSTer_MagiK >/dev/null 2>&1; }; then exec 8>/tmp/mister-magik/command-operation.lock; flock 8; printf 'mister_magik_direct_reset\\n' > /dev/MiSTer_cmd; echo direct-reset; else echo 'direct reset unavailable: MagiK Main or /dev/MiSTer_cmd missing' >&2; exit 12; fi";
+const DIRECT_RESET_NO_SYNC_REMOTE_CMD: &str = "if [ -p /dev/MiSTer_cmd ] && { pidof MiSTer_MagiKDev >/dev/null 2>&1 || pidof MiSTer_MagiK >/dev/null 2>&1; }; then exec 8>/tmp/mister-magik/command-operation.lock; flock 8; printf 'mister_magik_direct_reset_no_sync\\n' > /dev/MiSTer_cmd; echo direct-reset-no-sync; else echo 'direct reset unavailable: MagiK Main or /dev/MiSTer_cmd missing' >&2; exit 12; fi";
 #[cfg(test)]
 const DEFAULT_REMOTE_LIBRARY_DB: &str = "/media/fat/mister-magik/library.sqlite3";
 const DEFAULT_LAUNCHER_ENV_REMOTE: &str = "/media/fat/mister-magik/launcher.env";
@@ -434,12 +433,12 @@ fn reboot_mode_from_flags(flags: &[&str]) -> Result<RebootMode> {
     })
 }
 
-fn reboot_remote_command(mode: RebootMode) -> &'static str {
+fn reboot_remote_command(mode: RebootMode) -> String {
     match mode {
-        RebootMode::Supervised => SUPERVISED_REBOOT_REMOTE_CMD,
-        RebootMode::Raw => RAW_REBOOT_REMOTE_CMD,
-        RebootMode::DirectReset => DIRECT_RESET_REMOTE_CMD,
-        RebootMode::DirectResetNoSync => DIRECT_RESET_NO_SYNC_REMOTE_CMD,
+        RebootMode::Supervised => acknowledged_main_command("mister_magik_reboot"),
+        RebootMode::Raw => RAW_REBOOT_REMOTE_CMD.to_string(),
+        RebootMode::DirectReset => DIRECT_RESET_REMOTE_CMD.to_string(),
+        RebootMode::DirectResetNoSync => DIRECT_RESET_NO_SYNC_REMOTE_CMD.to_string(),
     }
 }
 
@@ -450,7 +449,8 @@ fn issue_reboot(sess: &Session, mode: RebootMode) -> Result<String> {
             mode.label()
         );
     }
-    let out = exec(sess, reboot_remote_command(mode), true)?;
+    let command = reboot_remote_command(mode);
+    let out = exec(sess, &command, true)?;
     let mode = out.stdout.trim();
     if mode.is_empty() {
         Ok("unknown".to_string())
@@ -1343,10 +1343,7 @@ impl DeployRemote for SshDeployRemote<'_> {
 }
 
 fn deploy_fifo_command<R: DeployRemote>(remote: &R, command: &str) -> Result<()> {
-    let out = remote.exec(&format!(
-        "if [ -p /dev/MiSTer_cmd ] && {{ pidof MiSTer_MagiKDev >/dev/null 2>&1 || pidof MiSTer_MagiK >/dev/null 2>&1; }}; then printf '{}\\n' > /dev/MiSTer_cmd; fi",
-        command
-    ))?;
+    let out = remote.exec(&acknowledged_main_command(command))?;
     if out.rc == 0 {
         Ok(())
     } else {
@@ -2094,11 +2091,6 @@ fn agent_magik(args: &[String]) -> Result<()> {
             .duration_since(std::time::UNIX_EPOCH)?
             .as_millis()
     );
-    let timeout = if action == "status" {
-        Duration::from_secs(5)
-    } else {
-        Duration::from_secs(40)
-    };
     let expected_generation = if action == "status" {
         None
     } else {
@@ -2111,11 +2103,12 @@ fn agent_magik(args: &[String]) -> Result<()> {
                 .ok_or("agent Main status missing generation")?,
         )
     };
-    let reply = agent_request(
-        "magik",
-        json!({"action": action, "operation_id": operation_id, "expected_generation": expected_generation, "target": args.get(1)}),
-        timeout,
-    )?;
+    let request = json!({"action": action, "operation_id": operation_id, "expected_generation": expected_generation, "target": args.get(1)});
+    let reply = if action == "status" {
+        agent_request("magik", request, Duration::from_secs(5))?
+    } else {
+        agent_request_with_liveness("magik", request, Duration::from_secs(5))?
+    };
     let result = reply.response.get("result").unwrap_or(&Value::Null);
     if action == "status" {
         println!("{}", serde_json::to_string_pretty(result)?);

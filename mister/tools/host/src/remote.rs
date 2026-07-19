@@ -78,10 +78,18 @@ pub(crate) fn create_dir_command(path: &str) -> String {
     format!("mkdir -p {}", shell_quote(path))
 }
 
+pub(crate) fn acknowledged_main_command(command: &str) -> String {
+    format!(
+        "if [ -p /dev/MiSTer_cmd ] && [ -p /dev/MiSTer_cmd_reply ] && {{ pidof MiSTer_MagiKDev >/dev/null 2>&1 || pidof MiSTer_MagiK >/dev/null 2>&1; }}; then exec 8>/tmp/mister-magik/command-operation.lock; flock 8; exec 9<>/dev/MiSTer_cmd_reply; while IFS= read -r -t 0.01 stale <&9; do :; done; heartbeat=$(sed -n 's/.*\"ts_boot_ms\":\\([0-9][0-9]*\\).*/\\1/p' /tmp/mister-magik/main-status.json); missed=0; printf '%s\\n' {} > /dev/MiSTer_cmd; while ! IFS= read -r -t 5 reply <&9; do if ! pidof MiSTer_MagiKDev >/dev/null 2>&1 && ! pidof MiSTer_MagiK >/dev/null 2>&1; then echo 'Main command channel closed' >&2; exit 15; fi; next=$(sed -n 's/.*\"ts_boot_ms\":\\([0-9][0-9]*\\).*/\\1/p' /tmp/mister-magik/main-status.json); if [ -z \"$next\" ] || [ \"$next\" = \"$heartbeat\" ]; then missed=$((missed + 1)); else heartbeat=$next; missed=0; fi; if [ \"$missed\" -ge 2 ]; then echo 'Main heartbeat stopped' >&2; exit 14; fi; done; case \"$reply\" in ok|ok\\ *) printf '%s\\n' \"$reply\" ;; *) printf '%s\\n' \"$reply\" >&2; exit 13 ;; esac; else echo 'MiSTer command channel unavailable' >&2; exit 12; fi",
+        shell_quote(command)
+    )
+}
+
 pub(crate) fn launcher_restart_command(main_status: &str, slint_status: &str) -> String {
     format!(
-        "{}; if [ -p /dev/MiSTer_cmd ] && {{ pidof MiSTer_MagiKDev >/dev/null 2>&1 || pidof MiSTer_MagiK >/dev/null 2>&1; }}; then printf 'mister_magik_restart_launcher\\n' > /dev/MiSTer_cmd; echo restarted; else echo 'launcher restart unavailable: MagiK Main or /dev/MiSTer_cmd missing' >&2; exit 12; fi",
-        remove_files_command(&[main_status, slint_status])
+        "{}; {}",
+        remove_files_command(&[main_status, slint_status]),
+        acknowledged_main_command("mister_magik_restart_launcher")
     )
 }
 
@@ -417,7 +425,11 @@ mod tests {
         assert!(command.starts_with("rm -f '/tmp/main status' '/tmp/slint'\"'\"'s status';"));
         assert!(command.contains("[ -p /dev/MiSTer_cmd ]"));
         assert!(command.contains("pidof MiSTer_MagiK"));
-        assert!(command.contains("mister_magik_restart_launcher\\n"));
+        assert!(command.contains("'mister_magik_restart_launcher'"));
+        assert!(command.contains("command-operation.lock"));
+        assert!(command.contains("MiSTer_cmd_reply"));
+        assert!(command.contains("exec 9<>/dev/MiSTer_cmd_reply"));
+        assert!(command.contains("read -r -t 0.01 stale"));
         assert!(command.contains("exit 12"));
     }
 

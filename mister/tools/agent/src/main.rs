@@ -105,6 +105,15 @@ fn parse_control_request(
 }
 
 #[cfg(any(target_os = "linux", test))]
+fn require_ok_main_reply(reply: &str) -> Result<(), String> {
+    if reply == "ok" || reply.starts_with("ok ") {
+        Ok(())
+    } else {
+        Err(reply.to_string())
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
 #[cfg_attr(all(test, not(target_os = "linux")), allow(dead_code))]
 mod sd_browse {
     use quick_xml::events::{BytesStart, Event};
@@ -850,7 +859,7 @@ mod linux {
         ScanoutSlotsLayout, DEVICE as SCANOUT_SLOTS_DEVICE, EXPECTED_LAYOUT,
         GET_LAYOUT as SCANOUT_SLOTS_GET_LAYOUT,
     };
-    use super::{parse_control_request, ControlRequest};
+    use super::{parse_control_request, require_ok_main_reply, ControlRequest};
     use flate2::{write::ZlibEncoder, Compression};
     use libc::{
         c_char, c_int, c_short, c_ulong, close, if_nametoindex, ifreq, in_addr, ioctl, rtentry,
@@ -3213,39 +3222,33 @@ mod linux {
         status.get("main_generation").and_then(Value::as_u64)
     }
 
-    fn wait_for_main_ready(
-        minimum_generation: Option<u64>,
-        timeout: Duration,
-    ) -> Result<Value, String> {
-        let started = Instant::now();
-        loop {
-            let status = read_json_value("/tmp/mister-magik/main-status.json");
-            let ready = status.get("command_channel").and_then(Value::as_str) == Some("ready");
-            let current_pid = status
-                .get("pid")
-                .and_then(Value::as_u64)
-                .is_some_and(|pid| {
-                    read_pid_list("MiSTer_MagiKDev")
+    fn main_process_running() -> bool {
+        read_pid_list("MiSTer_MagiKDev")
+            .as_array()
+            .is_some_and(|pids| !pids.is_empty())
+            || read_pid_list("MiSTer_MagiK")
+                .as_array()
+                .is_some_and(|pids| !pids.is_empty())
+    }
+
+    fn current_main_ready() -> Result<Value, String> {
+        let status = read_json_value("/tmp/mister-magik/main-status.json");
+        let ready = status.get("command_channel").and_then(Value::as_str) == Some("ready");
+        let current_pid = status
+            .get("pid")
+            .and_then(Value::as_u64)
+            .is_some_and(|pid| {
+                read_pid_list("MiSTer_MagiKDev")
+                    .as_array()
+                    .is_some_and(|pids| pids.iter().any(|p| p.as_u64() == Some(pid)))
+                    || read_pid_list("MiSTer_MagiK")
                         .as_array()
                         .is_some_and(|pids| pids.iter().any(|p| p.as_u64() == Some(pid)))
-                        || read_pid_list("MiSTer_MagiK")
-                            .as_array()
-                            .is_some_and(|pids| pids.iter().any(|p| p.as_u64() == Some(pid)))
-                });
-            let generation_ok = minimum_generation.is_none_or(|minimum| {
-                main_generation(&status).is_some_and(|value| value > minimum)
             });
-            if ready && current_pid && generation_ok {
-                return Ok(status);
-            }
-            if started.elapsed() >= timeout {
-                return Err(format!(
-                    "command_channel_unavailable timeout_ms={} minimum_generation={:?}",
-                    timeout.as_millis(),
-                    minimum_generation
-                ));
-            }
-            thread::sleep(Duration::from_millis(50));
+        if ready && current_pid {
+            Ok(status)
+        } else {
+            Err("command_channel_unavailable".to_string())
         }
     }
 
@@ -3257,6 +3260,71 @@ mod linux {
             .map_err(|err| format!("command_channel_unavailable: {err}"))?;
         fifo.write_all(format!("{command}\n").as_bytes())
             .map_err(|err| format!("command_write_failed: {err}"))
+    }
+
+    fn send_main_command_acknowledged(command: &str, generation: u64) -> Result<String, String> {
+        let command_lock = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open("/tmp/mister-magik/command-operation.lock")
+            .map_err(|err| format!("command_lock_unavailable: {err}"))?;
+        if unsafe { libc::flock(command_lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
+            return Err(format!(
+                "command_lock_failed: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        let mut reply = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
+            .open("/dev/MiSTer_cmd_reply")
+            .map_err(|err| format!("reply_channel_unavailable: {err}"))?;
+        let mut discard = [0u8; 256];
+        while reply.read(&mut discard).is_ok_and(|count| count > 0) {}
+        let mut bytes = Vec::with_capacity(128);
+        let mut heartbeat = current_main_ready()?
+            .get("ts_boot_ms")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let mut heartbeat_seen = Instant::now();
+        write_main_command_nonblocking(command)?;
+        loop {
+            let mut chunk = [0u8; 128];
+            match reply.read(&mut chunk) {
+                Ok(0) => return Err("command_channel_closed".to_string()),
+                Ok(count) => {
+                    bytes.extend_from_slice(&chunk[..count]);
+                    if let Some(end) = bytes.iter().position(|byte| *byte == b'\n') {
+                        return String::from_utf8(bytes[..end].to_vec())
+                            .map_err(|_| "invalid reply encoding".to_string());
+                    }
+                    if bytes.len() > 512 {
+                        return Err("reply too long".to_string());
+                    }
+                }
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                Err(err) => return Err(format!("reply_read_failed: {err}")),
+            }
+            let status = read_json_value("/tmp/mister-magik/main-status.json");
+            if main_generation(&status).is_some_and(|current| current != generation) {
+                return Err("command_channel_restarted".to_string());
+            }
+            if !main_process_running() {
+                return Err("command_channel_closed".to_string());
+            }
+            let current_heartbeat = status
+                .get("ts_boot_ms")
+                .and_then(Value::as_u64)
+                .unwrap_or(heartbeat);
+            if current_heartbeat != heartbeat {
+                heartbeat = current_heartbeat;
+                heartbeat_seen = Instant::now();
+            } else if heartbeat_seen.elapsed() >= Duration::from_secs(10) {
+                return Err("main_heartbeat_stopped".to_string());
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 
     fn magik_acknowledged_action(action: &str, args: &Value) -> Result<Value, String> {
@@ -3289,7 +3357,7 @@ mod linux {
             return Ok(result);
         }
         let started = Instant::now();
-        let ready = wait_for_main_ready(None, Duration::from_secs(15))?;
+        let ready = current_main_ready()?;
         let before_generation = main_generation(&ready).unwrap_or(0);
         if let Some(expected) = args.get("expected_generation").and_then(Value::as_u64) {
             if expected != before_generation {
@@ -3298,11 +3366,30 @@ mod linux {
                 ));
             }
         }
+        if action == "suspend"
+            && ready.get("launcher_state").and_then(Value::as_str)
+                == Some("LauncherSuspended")
+        {
+            let result = json!({
+                "operation_id": operation_id,
+                "action": action,
+                "before_generation": before_generation,
+                "after_generation": before_generation,
+                "elapsed_ms": started.elapsed().as_millis() as u64,
+                "terminal_reason": "already-satisfied",
+                "main_status": ready,
+            });
+            cache
+                .lock()
+                .map_err(|_| "operation cache poisoned")?
+                .insert(operation_id.to_string(), result.clone());
+            return Ok(result);
+        }
         let command = match action {
             "suspend" => "mister_magik_suspend",
             "resume" => "mister_magik_resume",
             "restart-launcher" => "mister_magik_restart_launcher",
-            "return-to-launcher" => "load_core menu.rbf",
+            "return-to-launcher" => "mister_magik_return_to_launcher",
             "exit-to-menu" => "mister_magik_exit_to_menu",
             "launch" => {
                 let target = args
@@ -3322,35 +3409,18 @@ mod linux {
             }
             _ => return Err(format!("unsupported magik action: {action}")),
         };
-        if let Err(error) = write_main_command_nonblocking(command) {
-            cache_operation_failure(cache, operation_id, action, &error, started.elapsed());
-            return Err(error);
-        }
-        let expected_state = match action {
-            "suspend" => "LauncherSuspended",
-            "resume" | "restart-launcher" | "return-to-launcher" => "LauncherActive",
-            "exit-to-menu" => "Unconfigured",
-            _ => unreachable!(),
-        };
-        let deadline = Duration::from_secs(30);
-        let final_status = loop {
-            let status = read_json_value("/tmp/mister-magik/main-status.json");
-            let generation_ok = action != "return-to-launcher"
-                || main_generation(&status).is_some_and(|g| g > before_generation);
-            if generation_ok
-                && status.get("command_channel").and_then(Value::as_str) == Some("ready")
-                && status.get("launcher_state").and_then(Value::as_str) == Some(expected_state)
-            {
-                break status;
-            }
-            if started.elapsed() >= deadline {
-                let error =
-                    format!("operation_timeout action={action} expected_state={expected_state}");
+        let reply = match send_main_command_acknowledged(command, before_generation) {
+            Ok(reply) => reply,
+            Err(error) => {
                 cache_operation_failure(cache, operation_id, action, &error, started.elapsed());
                 return Err(error);
             }
-            thread::sleep(Duration::from_millis(50));
         };
+        if let Err(error) = require_ok_main_reply(&reply) {
+            cache_operation_failure(cache, operation_id, action, &error, started.elapsed());
+            return Err(error);
+        }
+        let final_status = read_json_value("/tmp/mister-magik/main-status.json");
         let result = json!({
             "operation_id": operation_id,
             "action": action,
@@ -3392,24 +3462,18 @@ mod linux {
         cache: &Mutex<HashMap<String, Value>>,
     ) -> Result<Value, String> {
         let command = format!("mister_magik_launch {target}");
-        if let Err(error) = write_main_command_nonblocking(&command) {
+        let reply = match send_main_command_acknowledged(&command, before_generation) {
+            Ok(reply) => reply,
+            Err(error) => {
+                cache_operation_failure(cache, operation_id, "launch", &error, started.elapsed());
+                return Err(error);
+            }
+        };
+        if let Err(error) = require_ok_main_reply(&reply) {
             cache_operation_failure(cache, operation_id, "launch", &error, started.elapsed());
             return Err(error);
         }
-        let final_status =
-            match wait_for_main_ready(Some(before_generation), Duration::from_secs(30)) {
-                Ok(status) => status,
-                Err(error) => {
-                    cache_operation_failure(
-                        cache,
-                        operation_id,
-                        "launch",
-                        &error,
-                        started.elapsed(),
-                    );
-                    return Err(error);
-                }
-            };
+        let final_status = read_json_value("/tmp/mister-magik/main-status.json");
         let result = json!({"operation_id":operation_id,"action":"launch","command":command,"before_generation":before_generation,"after_generation":main_generation(&final_status),"elapsed_ms":started.elapsed().as_millis() as u64,"terminal_reason":"acknowledged","main_status":final_status});
         let mut results = cache.lock().map_err(|_| "operation cache poisoned")?;
         if results.len() >= 128 {
@@ -3566,7 +3630,15 @@ mod linux {
         thread::spawn(move || {
             thread::sleep(Duration::from_millis(200));
             let result = if thread_mode == "supervised" {
-                write_main_command_nonblocking("mister_magik_reboot")
+                current_main_ready()
+                    .and_then(|status| {
+                        main_generation(&status)
+                            .ok_or_else(|| "main_generation_unavailable".to_string())
+                    })
+                    .and_then(|generation| {
+                        send_main_command_acknowledged("mister_magik_reboot", generation)
+                    })
+                    .and_then(|reply| require_ok_main_reply(&reply))
             } else {
                 std::process::Command::new("/bin/sh")
                     .arg("-c")
@@ -4017,6 +4089,19 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn direct_main_replies_accept_ok_and_preserve_failures() {
+        assert_eq!(require_ok_main_reply("ok LauncherSuspended"), Ok(()));
+        assert_eq!(
+            require_ok_main_reply("rejected LauncherCrashed"),
+            Err("rejected LauncherCrashed".to_string())
+        );
+        assert_eq!(
+            require_ok_main_reply("error parse-failed"),
+            Err("error parse-failed".to_string())
+        );
+    }
 
     #[test]
     fn bounded_lz4_block_decode_rejects_output_larger_than_metadata() {

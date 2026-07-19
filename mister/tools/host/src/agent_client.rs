@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use mister_magik_agent_protocol::{self as agent_protocol, ResponseEnvelope};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::env;
 use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Write};
@@ -62,6 +62,44 @@ pub(crate) fn agent_request(cmd: &str, args: Value, timeout: Duration) -> Result
     let mut line = String::new();
     BufReader::new(stream).read_line(&mut line)?;
     parse_agent_response_line(line, start)
+}
+
+pub(crate) fn agent_request_with_liveness(
+    cmd: &str,
+    args: Value,
+    connect_timeout: Duration,
+) -> Result<AgentResponse> {
+    let token = agent_token()?;
+    let addr = format!("{}:{AGENT_PORT}", host())
+        .to_socket_addrs()?
+        .next()
+        .ok_or("could not resolve MiSTer agent host")?;
+    let request = agent_protocol::request(&token, 1, cmd, args);
+    let start = Instant::now();
+    let mut stream = TcpStream::connect_timeout(&addr, connect_timeout)?;
+    stream.set_write_timeout(Some(connect_timeout))?;
+    writeln!(stream, "{request}")?;
+    stream.flush()?;
+    stream.set_read_timeout(Some(Duration::from_secs(6)))?;
+    let mut line = String::new();
+    let mut reader = BufReader::new(stream);
+    loop {
+        match reader.read_line(&mut line) {
+            Ok(0) => return Err("MiSTer agent connection closed".into()),
+            Ok(_) => return parse_agent_response_line(line, start),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                // Renew the bounded transport wait only when a separate agent
+                // request proves that the remote service is still responsive.
+                agent_request("ping", json!({}), connect_timeout)?;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
 }
 
 pub(crate) fn agent_binary_request_bounded(
