@@ -2003,6 +2003,16 @@ fn hex_value(byte: u8) -> Result<u8> {
     }
 }
 
+fn encode_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
+}
+
 fn format_bytes_nearest_kb(bytes: u64) -> String {
     if bytes >= 1024 * 1024 {
         format!("{:.1} MB", bytes as f64 / 1024.0 / 1024.0)
@@ -2033,7 +2043,7 @@ fn agent_deploy_magik_bin(args: &[String]) -> Result<()> {
         }
         hasher.update(&hash_buffer[..count]);
     }
-    let checksum = format!("{:x}", hasher.finalize());
+    let checksum = encode_hex(&hasher.finalize());
     source = fs::File::open(local)?;
     let read_ms = read_t.elapsed().as_millis();
     let encoding = "raw";

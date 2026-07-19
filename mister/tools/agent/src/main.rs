@@ -3065,7 +3065,7 @@ mod linux {
             hasher.update(&buffer[..count]);
             remaining -= count as u64;
         }
-        let checksum = format!("{:x}", hasher.finalize());
+        let checksum = encode_hex(&hasher.finalize());
         if checksum != expectations.checksum {
             let _ = fs::remove_file(&upload);
             return Err(format!(
@@ -3115,7 +3115,7 @@ mod linux {
                     }
                     published_hasher.update(&hash_buffer[..count]);
                 }
-                let published_checksum = format!("{:x}", published_hasher.finalize());
+                let published_checksum = encode_hex(&published_hasher.finalize());
                 if published_checksum != expectations.checksum {
                     let failed = parent.join(".mister-magik-fb.failed");
                     let _ = fs::remove_file(&failed);
