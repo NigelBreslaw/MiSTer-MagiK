@@ -25,7 +25,7 @@ mode="mega"
 segment_secs="20"
 secs=""
 visual_captures="0"
-parade_motion="integer"
+parade_motion="subpixel"
 positionals=()
 
 while [[ $# -gt 0 ]]; do
