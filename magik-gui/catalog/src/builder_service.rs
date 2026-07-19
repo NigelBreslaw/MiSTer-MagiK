@@ -237,9 +237,9 @@ fn run_with_backend<B: BuilderBackend>(
     }
     snapshot_cleanup.arm();
 
-    // A first build owns the full-screen progress UI only until the first
-    // visible system is ready. The publication acknowledgement guarantees the
-    // launcher consumed this snapshot before the remaining scan is demoted.
+    // A first build owns the machine through durable persistence. Publishing
+    // the first-visible snapshot changes what the UI can show, not the build's
+    // foreground scheduling policy.
     let build_role = initial_build_role(operation);
     apply_runtime_thread_policy(build_role);
     let bootstrap = {
@@ -260,7 +260,7 @@ fn run_with_backend<B: BuilderBackend>(
     }
     .map_err(|error| fail(protocol, "bootstrap", error, emit))?;
     let first_visible_published = bootstrap.is_some();
-    let background_build = operation == BuilderOperation::Rebuild || bootstrap.is_some();
+    let background_build = full_build_runs_in_background(operation);
     if let Some(bootstrap) = bootstrap {
         emit_timings(protocol, bootstrap.timings, emit);
         let games = backend.games(&bootstrap.value);
@@ -304,7 +304,7 @@ fn run_with_backend<B: BuilderBackend>(
                 detail: format!("status=error error={}", error.replace('\t', " ")),
             }),
         }
-        apply_runtime_thread_policy(RuntimeThreadRole::CatalogWorker);
+        apply_runtime_thread_policy(build_role);
     }
     // First-visible serialization and publication are part of foreground
     // bootstrap. Entering the cooperative scope before CatalogReady creates a
@@ -460,6 +460,10 @@ fn initial_build_role(operation: BuilderOperation) -> RuntimeThreadRole {
     } else {
         RuntimeThreadRole::CatalogForeground
     }
+}
+
+fn full_build_runs_in_background(operation: BuilderOperation) -> bool {
+    operation == BuilderOperation::Rebuild
 }
 
 fn emit_timings(
@@ -1298,6 +1302,9 @@ mod tests {
             initial_build_role(BuilderOperation::FreshBuild),
             RuntimeThreadRole::CatalogForeground
         );
+        assert!(full_build_runs_in_background(BuilderOperation::Rebuild));
+        assert!(!full_build_runs_in_background(BuilderOperation::Build));
+        assert!(!full_build_runs_in_background(BuilderOperation::FreshBuild));
     }
 
     #[derive(Default)]
