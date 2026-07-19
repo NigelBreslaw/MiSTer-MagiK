@@ -21,6 +21,8 @@ pub enum RuntimeThreadRole {
     FramebufferStream,
     VideoDecode,
     VideoAudio,
+    ScreensaverLoader,
+    ScreensaverScaler,
 }
 
 impl RuntimeThreadRole {
@@ -40,6 +42,8 @@ impl RuntimeThreadRole {
             Self::FramebufferStream => "framebuffer-stream",
             Self::VideoDecode => "video-decode",
             Self::VideoAudio => "video-audio",
+            Self::ScreensaverLoader => "screensaver-loader",
+            Self::ScreensaverScaler => "screensaver-scaler",
         }
     }
 
@@ -67,6 +71,9 @@ impl RuntimeThreadRole {
             Self::MediaDownload => RuntimeThreadPolicy::new(0, ThreadAffinity::AllOnline),
             Self::VideoDecode | Self::VideoAudio => {
                 RuntimeThreadPolicy::new(5, ThreadAffinity::Inherit)
+            }
+            Self::ScreensaverLoader | Self::ScreensaverScaler => {
+                RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0)
             }
         }
     }
@@ -371,6 +378,8 @@ mod tests {
             RuntimeThreadRole::MediaWorker,
             RuntimeThreadRole::MediaIndex,
             RuntimeThreadRole::FramebufferStream,
+            RuntimeThreadRole::ScreensaverLoader,
+            RuntimeThreadRole::ScreensaverScaler,
         ] {
             assert_eq!(role.default_policy().affinity, ThreadAffinity::Cpu0);
             assert!(role.default_policy().nice >= 5);
@@ -434,6 +443,16 @@ mod tests {
             ),
             (RuntimeThreadRole::VideoDecode, 5, ThreadAffinity::Inherit),
             (RuntimeThreadRole::VideoAudio, 5, ThreadAffinity::Inherit),
+            (
+                RuntimeThreadRole::ScreensaverLoader,
+                10,
+                ThreadAffinity::Cpu0,
+            ),
+            (
+                RuntimeThreadRole::ScreensaverScaler,
+                10,
+                ThreadAffinity::Cpu0,
+            ),
         ];
         for (role, nice, affinity) in expected {
             assert_eq!(

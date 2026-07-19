@@ -8,7 +8,7 @@ use std::ffi::OsStr;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -283,6 +283,9 @@ impl LauncherScreensaverLoader {
         std::thread::Builder::new()
             .name("screensaver-load".into())
             .spawn(move || {
+                mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
+                    mister_magik_catalog::runtime_thread::RuntimeThreadRole::ScreensaverLoader,
+                );
                 if let Some(saver) = LauncherScreensaver::load(w, h, &worker_cancelled) {
                     let _ = ready_tx.send(saver);
                 }
@@ -1844,7 +1847,7 @@ struct ParadeState {
     scale_count: u64,
     scale_total_us: u128,
     scale_max_us: u128,
-    scale_tx: SyncSender<ParadeScaleJob>,
+    scale_tx: Sender<ParadeScaleJob>,
     scale_rx: Receiver<ParadeScaleResult>,
     scale_worker_connected: bool,
     scale_queue_depth: usize,
@@ -1859,11 +1862,17 @@ impl ParadeState {
     }
 
     fn new_with_motion(seed: u64, motion: ParadeMotion) -> Self {
-        let (scale_tx, job_rx) = mpsc::sync_channel::<ParadeScaleJob>(PARADE_TILE_COUNT);
+        // A tile can own at most one pending successor, so the producer is
+        // already logically bounded by PARADE_TILE_COUNT. Keep submission
+        // non-blocking: Lanczos work must never stall the launcher frame.
+        let (scale_tx, job_rx) = mpsc::channel::<ParadeScaleJob>();
         let (result_tx, scale_rx) = mpsc::channel::<ParadeScaleResult>();
         std::thread::Builder::new()
             .name("screensaver-lanczos".into())
             .spawn(move || {
+                mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
+                    mister_magik_catalog::runtime_thread::RuntimeThreadRole::ScreensaverScaler,
+                );
                 while let Ok(job) = job_rx.recv() {
                     let (w, h, tint) = parade_scaled_style(&job.source, job.speed);
                     let started = Instant::now();
@@ -2224,12 +2233,13 @@ impl ParadeState {
     fn log_scaler_stats(&self) {
         let average_us = self.scale_total_us / self.scale_count.max(1) as u128;
         crate::ui_logln!(
-            "screensaver_lanczos scales={} total_us={} average_us={} max_us={} queue_max={} worker_connected={}",
+            "screensaver_lanczos scales={} total_us={} average_us={} max_us={} queue_max={} queue_bound={} worker_connected={}",
             self.scale_count,
             self.scale_total_us,
             average_us,
             self.scale_max_us,
             self.scale_queue_max,
+            PARADE_TILE_COUNT,
             self.scale_worker_connected
         );
         for (layer_idx, layer) in self.layers.iter().enumerate() {
@@ -2583,6 +2593,32 @@ mod tests {
             std::thread::sleep(Duration::from_millis(1));
         }
         panic!("screensaver scale worker did not prepare initial successors");
+    }
+
+    #[test]
+    fn parade_background_queue_is_bounded_by_one_successor_per_tile() {
+        let images = test_images(64);
+        let mut state = ParadeState::new(0xfeed_beef);
+        state.ensure_initialized(&images, 960, 540);
+
+        assert!(state.scale_queue_depth <= PARADE_TILE_COUNT);
+        assert!(state.scale_queue_max <= PARADE_TILE_COUNT);
+        assert!(
+            state
+                .tiles
+                .iter()
+                .filter(|tile| tile.pending_image_idx.is_some())
+                .count()
+                <= PARADE_TILE_COUNT
+        );
+
+        collect_initial_successors(&mut state, &images, PARADE_TILE_COUNT);
+        assert_eq!(
+            state.tiles.iter().filter(|tile| tile.next.is_some()).count(),
+            PARADE_TILE_COUNT
+        );
+        assert_eq!(state.scale_queue_depth, 0);
+        assert!(state.scale_queue_max <= PARADE_TILE_COUNT);
     }
 
     #[test]
