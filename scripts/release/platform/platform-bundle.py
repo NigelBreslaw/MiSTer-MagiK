@@ -21,6 +21,8 @@ FORMAT_V1 = "mister-magik-platform-bundle-v0.1"
 FORMAT = "mister-magik-platform-bundle-v0.2"
 MANIFEST_V1 = "platform-bundle-v0.1.json"
 MANIFEST_NAME = "platform-bundle-v0.2.json"
+COMPONENT_ORIGIN = "platform-component-origin-v1.json"
+COMPONENT_CHECKSUMS = "platform-component-SHA256SUMS"
 HEX40 = 40
 HEX64 = 64
 
@@ -152,7 +154,8 @@ def tree_entries(root: Path) -> list[dict[str, object]]:
     return entries
 
 
-def verify_component_inputs(fpga_root: Path, scanout_root: Path, fpga_id: str, kernel_id: str) -> tuple[str, Path, Path]:
+def verify_fpga_component(fpga_root: Path, fpga_id: str) -> str:
+    require_hex("fpga_input_sha256", fpga_id, HEX64)
     patched = fpga_root / "patched"
     stock = fpga_root / "stock"
     for root in (patched, stock):
@@ -170,6 +173,104 @@ def verify_component_inputs(fpga_root: Path, scanout_root: Path, fpga_id: str, k
         verifier.verify(patched / "menu-magik-vblank-latch.metadata.txt")
     except ValueError as error:
         raise BundleError(f"invalid patched FPGA metadata: {error}") from error
+    return fields(patched / "menu-magik-vblank-latch.metadata.txt")["platform_contract_sha256"]
+
+
+def verify_checksums(root: Path, required: set[str]) -> None:
+    checksum_path = root / "SHA256SUMS"
+    if not checksum_path.is_file():
+        raise BundleError(f"missing checksums: {checksum_path}")
+    observed: set[str] = set()
+    for number, line in enumerate(checksum_path.read_text().splitlines(), 1):
+        if "  " not in line:
+            raise BundleError(f"malformed checksum line {number}")
+        expected, relative = line.split("  ", 1)
+        require_hex("component checksum", expected, HEX64)
+        path = root / relative
+        if relative in observed or not path.is_file() or digest(path) != expected:
+            raise BundleError(f"component checksum mismatch: {relative}")
+        observed.add(relative)
+    if not required.issubset(observed):
+        raise BundleError("component checksums are incomplete")
+
+
+def component_origin(component: str, artifact: Path, component_id: str) -> dict[str, object]:
+    path = artifact / COMPONENT_ORIGIN
+    if not path.is_file():
+        raise BundleError("component artifact is missing immutable origin")
+    payload = json.loads(path.read_text())
+    expected_branch = "mister-magik" if component == "main" else "main"
+    if (
+        not isinstance(payload, dict)
+        or payload.get("format") != "mister-magik-platform-component-origin-v1"
+        or payload.get("component") != component
+        or payload.get("component_id") != component_id
+        or payload.get("workflow") != "platform-bundle.yml"
+        or payload.get("head_branch") != expected_branch
+    ):
+        raise BundleError("invalid component artifact origin")
+    run_id = payload.get("run_id")
+    head_sha = payload.get("head_sha")
+    if not isinstance(run_id, str) or not run_id.isdigit() or int(run_id) < 1:
+        raise BundleError("invalid component artifact origin run ID")
+    if not isinstance(head_sha, str):
+        raise BundleError("invalid component artifact origin head SHA")
+    require_hex("component artifact origin head SHA", head_sha, HEX40)
+    return payload
+
+
+def component_cache_paths(artifact: Path) -> list[Path]:
+    excluded = {COMPONENT_CHECKSUMS}
+    return sorted(
+        path for path in artifact.rglob("*")
+        if path.is_file() and path.relative_to(artifact).as_posix() not in excluded
+    )
+
+
+def write_component_cache(component: str, artifact: Path, component_id: str, run_id: str, head_sha: str) -> None:
+    require_hex(f"{component}_input_sha256", component_id, HEX64)
+    if not run_id.isdigit() or int(run_id) < 1:
+        raise BundleError("invalid component artifact origin run ID")
+    require_hex("component artifact origin head SHA", head_sha, HEX40)
+    expected_branch = "mister-magik" if component == "main" else "main"
+    origin = {
+        "format": "mister-magik-platform-component-origin-v1",
+        "component": component,
+        "component_id": component_id,
+        "workflow": "platform-bundle.yml",
+        "run_id": run_id,
+        "head_sha": head_sha,
+        "head_branch": expected_branch,
+    }
+    (artifact / COMPONENT_ORIGIN).write_text(json.dumps(origin, indent=2, sort_keys=True) + "\n")
+    paths = component_cache_paths(artifact)
+    (artifact / COMPONENT_CHECKSUMS).write_text(
+        "".join(f"{digest(path)}  {path.relative_to(artifact).as_posix()}\n" for path in paths)
+    )
+
+
+def verify_component_cache(component: str, artifact: Path, component_id: str) -> dict[str, object]:
+    origin = component_origin(component, artifact, component_id)
+    checksum_path = artifact / COMPONENT_CHECKSUMS
+    if not checksum_path.is_file():
+        raise BundleError("component artifact is missing cache checksums")
+    expected: dict[str, str] = {}
+    for number, line in enumerate(checksum_path.read_text().splitlines(), 1):
+        if "  " not in line:
+            raise BundleError(f"malformed component cache checksum line {number}")
+        value, relative = line.split("  ", 1)
+        require_hex("component cache checksum", value, HEX64)
+        if relative in expected:
+            raise BundleError("duplicate component cache checksum path")
+        expected[relative] = value
+    actual = {path.relative_to(artifact).as_posix(): digest(path) for path in component_cache_paths(artifact)}
+    if actual != expected:
+        raise BundleError("component cache checksum manifest does not match artifact")
+    return origin
+
+
+def verify_kernel_component(scanout_root: Path, kernel_id: str) -> str:
+    require_hex("kernel_input_sha256", kernel_id, HEX64)
     module = scanout_root / "mister_magik_scanout_slots.ko"
     provenance = scanout_root / "provenance.txt"
     if not module.is_file() or not provenance.is_file():
@@ -181,9 +282,40 @@ def verify_component_inputs(fpga_root: Path, scanout_root: Path, fpga_id: str, k
         raise BundleError("scanout provenance does not match module")
     contract = scanout_fields.get("platform_contract_sha256", "")
     require_hex("platform_contract_sha256", contract, HEX64)
-    if fields(patched / "menu-magik-vblank-latch.metadata.txt").get("platform_contract_sha256") != contract:
+    verify_checksums(scanout_root, {"mister_magik_scanout_slots.ko", "modinfo.txt", "provenance.txt", "imports.txt"})
+    return contract
+
+
+def verify_component_inputs(fpga_root: Path, scanout_root: Path, fpga_id: str, kernel_id: str) -> tuple[str, Path, Path]:
+    contract = verify_fpga_component(fpga_root, fpga_id)
+    kernel_contract = verify_kernel_component(scanout_root, kernel_id)
+    if kernel_contract != contract:
         raise BundleError("mixed FPGA and scanout platform-contract hashes")
-    return contract, patched, module
+    return contract, fpga_root / "patched", scanout_root / "mister_magik_scanout_slots.ko"
+
+
+def verify_component(component: str, artifact: Path, component_id: str, revision: str | None = None) -> dict[str, object]:
+    require_hex(f"{component}_input_sha256", component_id, HEX64)
+    if component == "main":
+        main = load_module("main_component_artifact", ROOT / "scripts/release/platform/main-component.py")
+        try:
+            receipt = main.verify(artifact, revision)
+        except (ValueError, OSError, json.JSONDecodeError) as error:
+            raise BundleError(f"invalid Main component: {error}") from error
+        if receipt.get("component_id") != component_id:
+            raise BundleError("Main component identity does not match artifact")
+        contract = None
+        result = {"component": component, "component_id": component_id, "head_sha": receipt["source_revision"]}
+    elif component == "fpga":
+        contract = verify_fpga_component(artifact, component_id)
+        result = {"component": component, "component_id": component_id, "platform_contract_sha256": contract}
+    elif component == "kernel":
+        contract = verify_kernel_component(artifact, component_id)
+        result = {"component": component, "component_id": component_id, "platform_contract_sha256": contract}
+    else:
+        raise BundleError(f"unsupported component: {component}")
+    result["origin"] = verify_component_cache(component, artifact, component_id)
+    return result
 
 
 def write_checksums(root: Path, paths: list[Path]) -> None:
@@ -314,7 +446,7 @@ def verify(
             if origin.get("workflow") not in workflows[component]:
                 raise BundleError(f"invalid {component} origin workflow")
             source = origin.get("source")
-            if source is not None and source not in {"built-in-current-run", "reused-from-latest-release"}:
+            if source is not None and source not in {"built-in-current-run", "reused-from-latest-release", "reused-from-actions-cache"}:
                 raise BundleError(f"invalid {component} source")
             run_id = origin.get("run_id")
             if not isinstance(run_id, str) or not run_id.isdigit() or int(run_id) < 1:
@@ -402,7 +534,7 @@ def main() -> int:
         create_parser.add_argument(f"--{component}-workflow", default="platform-bundle.yml")
         create_parser.add_argument(
             f"--{component}-source",
-            choices=("built-in-current-run", "reused-from-latest-release"),
+            choices=("built-in-current-run", "reused-from-latest-release", "reused-from-actions-cache"),
             default="built-in-current-run",
         )
     create_parser.add_argument("--release-version", required=True, type=int)
@@ -417,6 +549,17 @@ def main() -> int:
     extract.add_argument("--component", required=True, choices=("main", "fpga", "kernel"))
     extract.add_argument("--component-id", required=True)
     extract.add_argument("--output", required=True, type=Path)
+    verify_component_parser = commands.add_parser("verify-component")
+    verify_component_parser.add_argument("--component", required=True, choices=("main", "fpga", "kernel"))
+    verify_component_parser.add_argument("--artifact", required=True, type=Path)
+    verify_component_parser.add_argument("--component-id", required=True)
+    verify_component_parser.add_argument("--revision")
+    write_cache = commands.add_parser("write-component-cache")
+    write_cache.add_argument("--component", required=True, choices=("main", "fpga", "kernel"))
+    write_cache.add_argument("--artifact", required=True, type=Path)
+    write_cache.add_argument("--component-id", required=True)
+    write_cache.add_argument("--run-id", required=True)
+    write_cache.add_argument("--head-sha", required=True)
     plan = commands.add_parser("plan-update")
     plan.add_argument("--manifest", type=Path)
     plan.add_argument("--current-version", required=True, type=int)
@@ -432,6 +575,10 @@ def main() -> int:
             print(json.dumps(verify(args.archive, args.manifest, args.release_version), sort_keys=True))
         elif args.command == "extract-component":
             print(json.dumps(extract_component(args.archive, args.manifest, args.component, args.component_id, args.output), sort_keys=True))
+        elif args.command == "verify-component":
+            print(json.dumps(verify_component(args.component, args.artifact, args.component_id, args.revision), sort_keys=True))
+        elif args.command == "write-component-cache":
+            write_component_cache(args.component, args.artifact, args.component_id, args.run_id, args.head_sha)
         else:
             current = json.loads(args.manifest.read_text()) if args.manifest else None
             result = update_plan(current, args.current_version, args.main_id, args.fpga_id, args.kernel_id)

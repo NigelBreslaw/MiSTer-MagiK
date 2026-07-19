@@ -101,9 +101,10 @@ Before dispatch:
    are built. Pull-request workflows are validation-only and never create
    promotable artifacts.
 3. Leave `publish=false` to upload a candidate for inspection. Run again with
-   `publish=true` and approve `publish-platform` to create the next immutable
-   numbered release. A no-change dispatch performs no heavyweight builds and
-   creates neither a candidate nor a release.
+   `publish=true`; the workflow verifies and reuses that exact candidate without
+   rebuilding its components, then waits for `publish-platform` approval. A
+   no-change dispatch performs no heavyweight builds and creates neither a
+   candidate nor a release.
 4. Configure protected GitHub environments named `publish-platform`,
    `publish-game-databases`, `publish-beta`, and `publish-release`, with required
    reviewers. Keep repository-wide GitHub Release immutability disabled while
@@ -168,6 +169,17 @@ releases use immutable `v0.2.<build>` tags and are never overwritten.
   artifacts and does not rebuild a supposedly unchanged component.
 - Changed components are built in the current workflow run. Unchanged components
   retain their exact binary content and are marked `reused-from-latest-release`.
+- Exact changed-component artifacts and complete unpublished candidates from
+  earlier unified platform runs on `main` are reusable for 30 days. Every cache
+  hit is downloaded and independently identity-, provenance-, and checksum-
+  verified before it can suppress a build. This permits retries after partial
+  failure and makes the candidate-to-publish run fast.
+- Component artifacts carry an immutable origin receipt and a checksum manifest
+  for their complete cached file set. Re-uploading an artifact during a retry
+  preserves the run ID and source revision of the run that actually built it.
+- Actions artifacts are disposable caches, not alternate platform baselines.
+  Components unchanged from the latest release still come only from that
+  release; expired or invalid cached artifacts are ignored and rebuilt.
 - A Main receipt with the wrong fork revision, authority, toolchain, binary
   hash, or unsuccessful origin run is rejected rather than reused.
 - A mismatched platform contract is a failed qualification and must be fixed
@@ -197,6 +209,14 @@ authoritative branch head captured once at workflow start, not whichever commit
 is newest when a later job happens to run. Candidate manifests record all three
 source revisions, component IDs, hashes, workflow run IDs, reuse/build status,
 and toolchain-bound Main identity.
+
+The normal review flow is two dispatches. First use `publish=false`, download
+and inspect `platform-bundle-v0.N-candidate`, then dispatch with `publish=true`.
+The second run selects the newest exact candidate matching the desired bundle
+identity and next release number, verifies it again, skips all component builds
+and assembly, and proceeds to the protected publication approval. If no valid
+candidate remains, the same run reuses any exact verified component artifacts
+and builds only what is still missing.
 
 ## Numbered game-database releases
 

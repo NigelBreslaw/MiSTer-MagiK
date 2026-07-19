@@ -35,9 +35,20 @@ for required in (
     "extract-component",
     "reused-from-latest-release",
     "built-in-current-run",
-    "platform-main-component",
-    "platform-fpga-component",
-    "platform-kernel-component",
+    "platform-main-v0.1-${{ needs.plan.outputs.main-id }}",
+    "platform-fpga-v0.1-${{ needs.plan.outputs.fpga-id }}",
+    "platform-kernel-v0.1-${{ needs.plan.outputs.kernel-id }}",
+    "platform-artifact-selection.py candidates",
+    "platform-artifact-selection.py eligible-run",
+    "verify-component",
+    "write-component-cache",
+    ".origin.run_id",
+    ".origin.head_sha",
+    "candidate-hit:",
+    "main-cache-hit:",
+    "fpga-cache-hit:",
+    "kernel-cache-hit:",
+    "reused-from-actions-cache",
     "repository: NigelBreslaw/Main_MiSTer",
     "ref: ${{ needs.plan.outputs.main-revision }}",
     "scripts/test-magik-state.sh",
@@ -54,9 +65,20 @@ for required in (
     assert required in text, required
 
 assert "recover-platform-component.sh" not in text
-assert "gh run download" not in text
-assert "actions/artifacts?name=" not in text
+assert "gh run download" in text
+assert "actions/artifacts?per_page=100" in text
 assert text.count("  workflow_dispatch:") == 1
+assert text.count("retention-days: 30") == 8
+
+for component in ("main", "fpga", "kernel"):
+    job = text.split(f"  build-{component}:\n", 1)[1].split("\n  build-", 1)[0] if component != "kernel" else text.split("  build-kernel:\n", 1)[1].split("\n  build-fpga:\n", 1)[0]
+    assert f"needs.plan.outputs.{component}-cache-hit != 'true'" in job
+    assert "needs.plan.outputs.candidate-hit != 'true'" in job
+
+assemble = text.split("  assemble:\n", 1)[1].split("\n  publish:\n", 1)[0]
+assert "needs.plan.outputs.candidate-hit != 'true'" in assemble
+publish = text.split("  publish:\n", 1)[1]
+assert "needs.plan.outputs.candidate-hit == 'true'" in publish
 
 bind_step = text.split("      - name: Bind runner temp to build volume\n", 1)[1].split("\n      - name:", 1)[0]
 docker_step = text.split("      - name: Prepare Quartus Docker runtime\n", 1)[1].split("\n      - name:", 1)[0]

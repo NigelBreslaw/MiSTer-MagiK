@@ -42,6 +42,17 @@ jobs:
       fpga-id: ${{ steps.identity.outputs.fpga_id }}
       kernel-id: ${{ steps.identity.outputs.kernel_id }}
       main-revision: ${{ steps.identity.outputs.main_revision }}
+      bundle-id: ${{ steps.plan.outputs.bundle_id }}
+      candidate-hit: ${{ steps.reuse.outputs.candidate_hit }}
+      main-cache-hit: ${{ steps.reuse.outputs.main_hit }}
+      fpga-cache-hit: ${{ steps.reuse.outputs.fpga_hit }}
+      kernel-cache-hit: ${{ steps.reuse.outputs.kernel_hit }}
+      main-cache-run-id: ${{ steps.reuse.outputs.main_run_id }}
+      fpga-cache-run-id: ${{ steps.reuse.outputs.fpga_run_id }}
+      kernel-cache-run-id: ${{ steps.reuse.outputs.kernel_run_id }}
+      main-cache-head-sha: ${{ steps.reuse.outputs.main_head_sha }}
+      fpga-cache-head-sha: ${{ steps.reuse.outputs.fpga_head_sha }}
+      kernel-cache-head-sha: ${{ steps.reuse.outputs.kernel_head_sha }}
     steps:
       - name: Refuse non-main dispatch
         if: github.ref != 'refs/heads/main'
@@ -102,18 +113,132 @@ jobs:
             --kernel-id '${{ steps.identity.outputs.kernel_id }}' \
             --github-output "$GITHUB_OUTPUT"
 
+      - name: Resolve exact reusable candidate and components
+        id: reuse
+        if: steps.plan.outputs.update_needed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUNDLE_ID: ${{ steps.plan.outputs.bundle_id }}
+          NEXT_VERSION: ${{ steps.plan.outputs.next_version }}
+          MAIN_CHANGED: ${{ steps.plan.outputs.main_changed }}
+          FPGA_CHANGED: ${{ steps.plan.outputs.fpga_changed }}
+          KERNEL_CHANGED: ${{ steps.plan.outputs.kernel_changed }}
+          MAIN_ID: ${{ steps.identity.outputs.main_id }}
+          FPGA_ID: ${{ steps.identity.outputs.fpga_id }}
+          KERNEL_ID: ${{ steps.identity.outputs.kernel_id }}
+          MAIN_REVISION: ${{ steps.identity.outputs.main_revision }}
+        run: |
+          set -euo pipefail
+          mkdir -p build/platform-reuse
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/artifacts?per_page=100" > build/platform-reuse/artifacts.json
+          resolve() {
+            local kind="$1" name="$2" identity="$3" artifact_id run_id head_sha attempt details canonical archive manifest verification
+            while IFS=$'\t' read -r artifact_id run_id head_sha; do
+              [ -n "$artifact_id" ] || continue
+              details="build/platform-reuse/run-$run_id.json"
+              gh run view "$run_id" --repo "$GITHUB_REPOSITORY" \
+                --json status,conclusion,workflowName,headBranch,event,headSha > "$details" || continue
+              python3 scripts/release/platform/platform-artifact-selection.py eligible-run \
+                --run "$details" --head-sha "$head_sha" || continue
+              attempt="build/platform-reuse/attempt-$kind-$artifact_id"
+              mkdir -p "$attempt"
+              gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name "$name" --dir "$attempt" || continue
+              if [ "$kind" = candidate ]; then
+                archive="$attempt/mister-magik-platform-v0.$NEXT_VERSION.zip"
+                manifest="$attempt/platform-bundle-v0.2.json"
+                python3 scripts/release/platform/platform-bundle.py verify "$archive" \
+                  --manifest "$manifest" --release-version "$NEXT_VERSION" >/dev/null || continue
+                [ "$(jq -r .bundle_id "$manifest")" = "$BUNDLE_ID" ] || continue
+              else
+                args=(--component "$kind" --artifact "$attempt" --component-id "$identity")
+                [ "$kind" != main ] || args+=(--revision "$MAIN_REVISION")
+                verification="build/platform-reuse/verification-$kind-$artifact_id.json"
+                python3 scripts/release/platform/platform-bundle.py verify-component "${args[@]}" > "$verification" || continue
+                run_id="$(jq -r .origin.run_id "$verification")"
+                head_sha="$(jq -r .origin.head_sha "$verification")"
+              fi
+              canonical="build/platform-reuse/$kind"
+              mkdir -p "$canonical"
+              cp -R "$attempt"/. "$canonical"/
+              printf '%s_hit=true\n%s_run_id=%s\n' "$kind" "$kind" "$run_id" >> "$GITHUB_OUTPUT"
+              printf '%s_head_sha=%s\n' "$kind" "$head_sha" >> "$GITHUB_OUTPUT"
+              return 0
+            done < <(python3 scripts/release/platform/platform-artifact-selection.py candidates \
+              --artifacts build/platform-reuse/artifacts.json --name "$name")
+            echo "${kind}_hit=false" >> "$GITHUB_OUTPUT"
+            return 1
+          }
+          candidate_name="platform-bundle-v0.$NEXT_VERSION-candidate"
+          if resolve candidate "$candidate_name" "$BUNDLE_ID"; then
+            echo 'main_hit=false' >> "$GITHUB_OUTPUT"
+            echo 'fpga_hit=false' >> "$GITHUB_OUTPUT"
+            echo 'kernel_hit=false' >> "$GITHUB_OUTPUT"
+          else
+            [ "$MAIN_CHANGED" = true ] && resolve main "platform-main-v0.1-$MAIN_ID" "$MAIN_ID" || [ "$MAIN_CHANGED" != true ] || true
+            [ "$FPGA_CHANGED" = true ] && resolve fpga "platform-fpga-v0.1-$FPGA_ID" "$FPGA_ID" || [ "$FPGA_CHANGED" != true ] || true
+            [ "$KERNEL_CHANGED" = true ] && resolve kernel "platform-kernel-v0.1-$KERNEL_ID" "$KERNEL_ID" || [ "$KERNEL_CHANGED" != true ] || true
+            [ "$MAIN_CHANGED" = true ] || echo 'main_hit=false' >> "$GITHUB_OUTPUT"
+            [ "$FPGA_CHANGED" = true ] || echo 'fpga_hit=false' >> "$GITHUB_OUTPUT"
+            [ "$KERNEL_CHANGED" = true ] || echo 'kernel_hit=false' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Carry exact candidate into current run
+        if: steps.reuse.outputs.candidate_hit == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: platform-bundle-v0.${{ steps.plan.outputs.next_version }}-candidate
+          path: build/platform-reuse/candidate
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Carry exact Main component into current run
+        if: steps.reuse.outputs.main_hit == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: platform-main-v0.1-${{ steps.identity.outputs.main_id }}
+          path: build/platform-reuse/main
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Carry exact FPGA component into current run
+        if: steps.reuse.outputs.fpga_hit == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: platform-fpga-v0.1-${{ steps.identity.outputs.fpga_id }}
+          path: build/platform-reuse/fpga
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Carry exact kernel component into current run
+        if: steps.reuse.outputs.kernel_hit == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: platform-kernel-v0.1-${{ steps.identity.outputs.kernel_id }}
+          path: build/platform-reuse/kernel
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Report component decisions
         run: |
-          status() { if [ "$1" = true ]; then echo 'build required'; else echo 'reuse latest release'; fi; }
+          status() {
+            if [ '${{ steps.reuse.outputs.candidate_hit }}' = true ]; then echo 'reuse exact candidate'
+            elif [ "$1" != true ]; then echo 'reuse latest release'
+            elif [ "$2" = true ]; then echo 'reuse verified component artifact'
+            else echo 'build required'
+            fi
+          }
           {
             echo "## Platform component plan"
             echo
             echo "| Component | Decision | Identity |"
             echo "|---|---|---|"
-            echo "| Main | $(status '${{ steps.plan.outputs.main_changed }}') | \`${{ steps.identity.outputs.main_id }}\` |"
-            echo "| FPGA | $(status '${{ steps.plan.outputs.fpga_changed }}') | \`${{ steps.identity.outputs.fpga_id }}\` |"
-            echo "| Kernel | $(status '${{ steps.plan.outputs.kernel_changed }}') | \`${{ steps.identity.outputs.kernel_id }}\` |"
-            if [ '${{ steps.plan.outputs.update_needed }}' = true ]; then
+            echo "| Main | $(status '${{ steps.plan.outputs.main_changed }}' '${{ steps.reuse.outputs.main_hit }}') | \`${{ steps.identity.outputs.main_id }}\` |"
+            echo "| FPGA | $(status '${{ steps.plan.outputs.fpga_changed }}' '${{ steps.reuse.outputs.fpga_hit }}') | \`${{ steps.identity.outputs.fpga_id }}\` |"
+            echo "| Kernel | $(status '${{ steps.plan.outputs.kernel_changed }}' '${{ steps.reuse.outputs.kernel_hit }}') | \`${{ steps.identity.outputs.kernel_id }}\` |"
+            if [ '${{ steps.reuse.outputs.candidate_hit }}' = true ]; then
+              echo
+              echo "Exact verified candidate recovered; component builds and assembly will be skipped."
+            elif [ '${{ steps.plan.outputs.update_needed }}' = true ]; then
               echo
               echo "Candidate platform-v0.${{ steps.plan.outputs.next_version }} will be assembled."
             else
@@ -123,7 +248,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Retain verified baseline for assembly
-        if: steps.plan.outputs.update_needed == 'true'
+        if: steps.plan.outputs.update_needed == 'true' && steps.reuse.outputs.candidate_hit != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: platform-latest-verified
@@ -134,7 +259,7 @@ jobs:
   build-main:
     name: Build changed Main component
     needs: plan
-    if: needs.plan.outputs.main-changed == 'true'
+    if: needs.plan.outputs.main-changed == 'true' && needs.plan.outputs.candidate-hit != 'true' && needs.plan.outputs.main-cache-hit != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -179,18 +304,22 @@ jobs:
             --revision "$MAIN_REVISION" --toolchain "$MAIN_TOOLCHAIN_VERSION" >/dev/null
           python3 scripts/release/platform/main-component.py verify \
             --artifact build/main-component --revision "$MAIN_REVISION" >/dev/null
+          python3 scripts/release/platform/platform-bundle.py write-component-cache \
+            --component main --artifact build/main-component \
+            --component-id '${{ needs.plan.outputs.main-id }}' \
+            --run-id "$GITHUB_RUN_ID" --head-sha "$MAIN_REVISION"
 
       - uses: actions/upload-artifact@v7
         with:
-          name: platform-main-component
+          name: platform-main-v0.1-${{ needs.plan.outputs.main-id }}
           path: build/main-component
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
 
   build-kernel:
     name: Build changed kernel component
     needs: plan
-    if: needs.plan.outputs.kernel-changed == 'true'
+    if: needs.plan.outputs.kernel-changed == 'true' && needs.plan.outputs.candidate-hit != 'true' && needs.plan.outputs.kernel-cache-hit != 'true'
     runs-on: ubuntu-24.04
     container: ubuntu:20.04
     timeout-minutes: 20
@@ -229,6 +358,10 @@ jobs:
             echo "builder_revision=$GITHUB_SHA"
           } >> build/scanout-slots/provenance.txt
           (cd build/scanout-slots && sha256sum mister_magik_scanout_slots.ko modinfo.txt provenance.txt imports.txt > SHA256SUMS)
+          python3 scripts/release/platform/platform-bundle.py write-component-cache \
+            --component kernel --artifact build/scanout-slots \
+            --component-id '${{ needs.plan.outputs.kernel-id }}' \
+            --run-id "$GITHUB_RUN_ID" --head-sha "$GITHUB_SHA"
 
       - name: Release-grade kernel checks
         run: |
@@ -245,15 +378,15 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: platform-kernel-component
+          name: platform-kernel-v0.1-${{ needs.plan.outputs.kernel-id }}
           path: build/scanout-slots
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
 
   build-fpga:
     name: Build changed FPGA component
     needs: plan
-    if: needs.plan.outputs.fpga-changed == 'true'
+    if: needs.plan.outputs.fpga-changed == 'true' && needs.plan.outputs.candidate-hit != 'true' && needs.plan.outputs.fpga-cache-hit != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
@@ -372,19 +505,24 @@ jobs:
           cp build/fpga-signoff/quartus-delta-signoff.tsv build/fpga-signoff/patched/reports/quartus-delta-signoff.tsv
           delta_sha="$(shasum -a 256 build/fpga-signoff/patched/reports/quartus-delta-signoff.tsv | awk '{print $1}')"
           printf 'report_sha256.reports/quartus-delta-signoff.tsv=%s\nsignoff_valid=1\n' "$delta_sha" >> build/fpga-signoff/patched/menu-magik-vblank-latch.metadata.txt
+          python3 scripts/release/platform/platform-bundle.py write-component-cache \
+            --component fpga --artifact build/fpga-signoff \
+            --component-id '${{ needs.plan.outputs.fpga-id }}' \
+            --run-id "$GITHUB_RUN_ID" --head-sha "$GITHUB_SHA"
 
       - uses: actions/upload-artifact@v7
         with:
-          name: platform-fpga-component
+          name: platform-fpga-v0.1-${{ needs.plan.outputs.fpga-id }}
           path: build/fpga-signoff
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
 
   assemble:
     name: Assemble verified platform candidate
     needs: [plan, build-main, build-fpga, build-kernel]
     if: >-
       always() && needs.plan.outputs.update-needed == 'true' &&
+      needs.plan.outputs.candidate-hit != 'true' &&
       (needs.build-main.result == 'success' || needs.build-main.result == 'skipped') &&
       (needs.build-fpga.result == 'success' || needs.build-fpga.result == 'skipped') &&
       (needs.build-kernel.result == 'success' || needs.build-kernel.result == 'skipped')
@@ -404,19 +542,19 @@ jobs:
       - if: needs.plan.outputs.main-changed == 'true'
         uses: actions/download-artifact@v8
         with:
-          name: platform-main-component
+          name: platform-main-v0.1-${{ needs.plan.outputs.main-id }}
           path: build/platform-input/main
 
       - if: needs.plan.outputs.fpga-changed == 'true'
         uses: actions/download-artifact@v8
         with:
-          name: platform-fpga-component
+          name: platform-fpga-v0.1-${{ needs.plan.outputs.fpga-id }}
           path: build/platform-input/fpga
 
       - if: needs.plan.outputs.kernel-changed == 'true'
         uses: actions/download-artifact@v8
         with:
-          name: platform-kernel-component
+          name: platform-kernel-v0.1-${{ needs.plan.outputs.kernel-id }}
           path: build/platform-input/scanout
 
       - name: Reuse unchanged components from latest release
@@ -447,26 +585,36 @@ jobs:
           KERNEL_ID: ${{ needs.plan.outputs.kernel-id }}
           MAIN_REVISION: ${{ needs.plan.outputs.main-revision }}
           NEXT_VERSION: ${{ needs.plan.outputs.next-version }}
+          MAIN_CACHE_HIT: ${{ needs.plan.outputs.main-cache-hit }}
+          FPGA_CACHE_HIT: ${{ needs.plan.outputs.fpga-cache-hit }}
+          KERNEL_CACHE_HIT: ${{ needs.plan.outputs.kernel-cache-hit }}
+          MAIN_CACHE_RUN_ID: ${{ needs.plan.outputs.main-cache-run-id }}
+          FPGA_CACHE_RUN_ID: ${{ needs.plan.outputs.fpga-cache-run-id }}
+          KERNEL_CACHE_RUN_ID: ${{ needs.plan.outputs.kernel-cache-run-id }}
+          MAIN_CACHE_HEAD_SHA: ${{ needs.plan.outputs.main-cache-head-sha }}
+          FPGA_CACHE_HEAD_SHA: ${{ needs.plan.outputs.fpga-cache-head-sha }}
+          KERNEL_CACHE_HEAD_SHA: ${{ needs.plan.outputs.kernel-cache-head-sha }}
         run: |
           set -euo pipefail
           origin() { if [ "$1" = true ]; then printf '%s' "$2"; else jq -r ".components.$3.$4" "$CURRENT_MANIFEST"; fi; }
-          main_run="$(origin "$MAIN_CHANGED" "$GITHUB_RUN_ID" main run_id)"
-          fpga_run="$(origin "$FPGA_CHANGED" "$GITHUB_RUN_ID" fpga run_id)"
-          kernel_run="$(origin "$KERNEL_CHANGED" "$GITHUB_RUN_ID" kernel run_id)"
-          main_sha="$(origin "$MAIN_CHANGED" "$MAIN_REVISION" main head_sha)"
-          fpga_sha="$(origin "$FPGA_CHANGED" "$GITHUB_SHA" fpga head_sha)"
-          kernel_sha="$(origin "$KERNEL_CHANGED" "$GITHUB_SHA" kernel head_sha)"
+          cached() { if [ "$2" = true ]; then printf '%s' "$3"; else origin "$1" "$4" "$5" "$6"; fi; }
+          main_run="$(cached "$MAIN_CHANGED" "$MAIN_CACHE_HIT" "$MAIN_CACHE_RUN_ID" "$GITHUB_RUN_ID" main run_id)"
+          fpga_run="$(cached "$FPGA_CHANGED" "$FPGA_CACHE_HIT" "$FPGA_CACHE_RUN_ID" "$GITHUB_RUN_ID" fpga run_id)"
+          kernel_run="$(cached "$KERNEL_CHANGED" "$KERNEL_CACHE_HIT" "$KERNEL_CACHE_RUN_ID" "$GITHUB_RUN_ID" kernel run_id)"
+          main_sha="$(cached "$MAIN_CHANGED" "$MAIN_CACHE_HIT" "$MAIN_CACHE_HEAD_SHA" "$MAIN_REVISION" main head_sha)"
+          fpga_sha="$(cached "$FPGA_CHANGED" "$FPGA_CACHE_HIT" "$FPGA_CACHE_HEAD_SHA" "$GITHUB_SHA" fpga head_sha)"
+          kernel_sha="$(cached "$KERNEL_CHANGED" "$KERNEL_CACHE_HIT" "$KERNEL_CACHE_HEAD_SHA" "$GITHUB_SHA" kernel head_sha)"
           main_workflow="$(origin "$MAIN_CHANGED" platform-bundle.yml main workflow)"
           fpga_workflow="$(origin "$FPGA_CHANGED" platform-bundle.yml fpga workflow)"
           kernel_workflow="$(origin "$KERNEL_CHANGED" platform-bundle.yml kernel workflow)"
-          source() { if [ "$1" = true ]; then echo built-in-current-run; else echo reused-from-latest-release; fi; }
+          source() { if [ "$1" != true ]; then echo reused-from-latest-release; elif [ "$2" = true ]; then echo reused-from-actions-cache; else echo built-in-current-run; fi; }
           python3 scripts/release/platform/platform-bundle.py create \
             --main-dir build/platform-input/main --fpga-dir build/platform-input/fpga --scanout-dir build/platform-input/scanout \
             --main-id "$MAIN_ID" --fpga-id "$FPGA_ID" --kernel-id "$KERNEL_ID" \
             --main-run-id "$main_run" --fpga-run-id "$fpga_run" --kernel-run-id "$kernel_run" \
             --main-head-sha "$main_sha" --fpga-head-sha "$fpga_sha" --kernel-head-sha "$kernel_sha" \
             --main-workflow "$main_workflow" --fpga-workflow "$fpga_workflow" --kernel-workflow "$kernel_workflow" \
-            --main-source "$(source "$MAIN_CHANGED")" --fpga-source "$(source "$FPGA_CHANGED")" --kernel-source "$(source "$KERNEL_CHANGED")" \
+            --main-source "$(source "$MAIN_CHANGED" "$MAIN_CACHE_HIT")" --fpga-source "$(source "$FPGA_CHANGED" "$FPGA_CACHE_HIT")" --kernel-source "$(source "$KERNEL_CHANGED" "$KERNEL_CACHE_HIT")" \
             --release-version "$NEXT_VERSION" --output build/platform-bundle
           python3 scripts/release/platform/platform-bundle.py verify \
             "build/platform-bundle/mister-magik-platform-v0.$NEXT_VERSION.zip" \
@@ -477,12 +625,14 @@ jobs:
           name: platform-bundle-v0.${{ needs.plan.outputs.next-version }}-candidate
           path: build/platform-bundle
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
 
   publish:
     name: Publish immutable platform bundle
     needs: [plan, assemble]
-    if: needs.plan.outputs.update-needed == 'true' && inputs.publish == true
+    if: >-
+      always() && needs.plan.outputs.update-needed == 'true' && inputs.publish == true &&
+      (needs.assemble.result == 'success' || needs.plan.outputs.candidate-hit == 'true')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment:

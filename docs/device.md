@@ -179,6 +179,8 @@ The production vblank-latched Menu RBF is built only by manually starting the
 `Build MiSTer MagiK Platform` GitHub Actions workflow. Quartus runs only when
 the FPGA component identity differs from the latest verified platform release.
 Select the MiSTer MagiK `main` branch and leave `publish` clear for a candidate.
+Candidate and exact component artifacts are retained for 30 days, so retry and
+the later `publish=true` dispatch reuse verified outputs instead of recompiling.
 The workflow restores the installed Quartus runtime from the private
 `mister-magik-ci-cache` R2 bucket and installs from the official Intel payloads
 only on a content-addressed miss. See `apps/mister/BUILD.md` for the required

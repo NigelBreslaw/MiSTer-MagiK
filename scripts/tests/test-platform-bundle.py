@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import shutil
 import tempfile
 import unittest
 import zipfile
@@ -96,7 +97,18 @@ class PlatformBundleTests(unittest.TestCase):
         )
         (self.scanout / "modinfo.txt").write_text("vermagic: 5.15.1-MiSTer\n")
         (self.scanout / "imports.txt").write_text("")
-        (self.scanout / "SHA256SUMS").write_text("")
+        checked = (
+            self.scanout / "mister_magik_scanout_slots.ko",
+            self.scanout / "modinfo.txt",
+            self.scanout / "provenance.txt",
+            self.scanout / "imports.txt",
+        )
+        (self.scanout / "SHA256SUMS").write_text(
+            "".join(f"{sha(path)}  {path.name}\n" for path in checked)
+        )
+        bundle.write_component_cache("main", self.main, self.main_id, "100", self.main_revision)
+        bundle.write_component_cache("fpga", self.fpga, self.fpga_id, "123", "8" * 40)
+        bundle.write_component_cache("kernel", self.scanout, self.kernel_id, "456", "9" * 40)
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -228,6 +240,35 @@ class PlatformBundleTests(unittest.TestCase):
             self.assertEqual(result["component_id"], identity)
             self.assertTrue(str(result["run_id"]).isdigit())
 
+    def test_verifies_each_standalone_component(self) -> None:
+        self.assertEqual(bundle.verify_component("main", self.main, self.main_id, self.main_revision)["component_id"], self.main_id)
+        self.assertEqual(bundle.verify_component("fpga", self.fpga, self.fpga_id)["component_id"], self.fpga_id)
+        self.assertEqual(bundle.verify_component("kernel", self.scanout, self.kernel_id)["component_id"], self.kernel_id)
+
+    def test_standalone_component_checksum_tampering_is_rejected(self) -> None:
+        (self.scanout / "modinfo.txt").write_text("tampered\n")
+        with self.assertRaisesRegex(ValueError, "checksum"):
+            bundle.verify_component("kernel", self.scanout, self.kernel_id)
+
+    def test_cache_of_cache_preserves_original_build_origin(self) -> None:
+        carried_once = self.root / "carried-once"
+        carried_twice = self.root / "carried-twice"
+        shutil.copytree(self.fpga, carried_once)
+        first = bundle.verify_component("fpga", carried_once, self.fpga_id)
+        shutil.copytree(carried_once, carried_twice)
+        second = bundle.verify_component("fpga", carried_twice, self.fpga_id)
+        self.assertEqual(first["origin"], second["origin"])
+        self.assertEqual(second["origin"]["run_id"], "123")
+        self.assertEqual(second["origin"]["head_sha"], "8" * 40)
+
+    def test_tampered_cache_origin_is_rejected(self) -> None:
+        origin = self.fpga / bundle.COMPONENT_ORIGIN
+        payload = json.loads(origin.read_text())
+        payload["run_id"] = "999"
+        origin.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        with self.assertRaisesRegex(ValueError, "cache checksum"):
+            bundle.verify_component("fpga", self.fpga, self.fpga_id)
+
     def test_extract_rejects_mismatched_identity(self) -> None:
         with self.assertRaisesRegex(ValueError, "identity"):
             bundle.extract_component(
@@ -308,12 +349,13 @@ class PlatformBundleTests(unittest.TestCase):
             "main_run_id": "100", "fpga_run_id": "100", "kernel_run_id": "100",
             "main_head_sha": self.main_revision, "fpga_head_sha": "8" * 40, "kernel_head_sha": "9" * 40,
             "main_workflow": "platform-bundle.yml", "fpga_workflow": "platform-bundle.yml", "kernel_workflow": "platform-bundle.yml",
-            "main_source": "built-in-current-run", "fpga_source": "reused-from-latest-release", "kernel_source": "reused-from-latest-release",
+            "main_source": "built-in-current-run", "fpga_source": "reused-from-latest-release", "kernel_source": "reused-from-actions-cache",
             "release_version": 3, "output": self.root / "unified-output",
         })()
         payload = bundle.verify(bundle.create(args))
         self.assertEqual(payload["components"]["main"]["source"], "built-in-current-run")
         self.assertEqual(payload["components"]["fpga"]["source"], "reused-from-latest-release")
+        self.assertEqual(payload["components"]["kernel"]["source"], "reused-from-actions-cache")
 
     def test_non_numeric_component_run_is_rejected(self) -> None:
         archive = self.create()
