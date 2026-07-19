@@ -28,6 +28,7 @@ CATALOG_FIXTURE_CONTRACT="$HERE/scripts/lib/catalog-fixture-contract.json"
 CATALOG_FIXTURE_TOOL="$HERE/scripts/lib/catalog-fixture-contract.py"
 ENFORCE_PERFORMANCE_BUDGETS=0
 DROP_ARCADE_BOOTSTRAP_INDEX=0
+CPU_PROFILE=0
 MAX_VMHWM_KB="${MISTER_FIRST_SCAN_MAX_VMHWM_KB:-}"
 MAX_SAVED_MS="${MISTER_FIRST_SCAN_MAX_SAVED_MS:-}"
 source "$HERE/scripts/lib/thread-sampler-lib.sh"
@@ -37,7 +38,7 @@ source "$HERE/scripts/lib/benchmark-cleanup-lib.sh"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-first-scan.sh LABEL [--deploy-device|--skip-build] [--replace-label] [--timeout SECS] [--namespace-backend auto|walkdir|fd-relative] [--thread-sample] [--drop-arcade-bootstrap-index] [--enforce-performance-budgets]
+Usage: scripts/profile-first-scan.sh LABEL [--deploy-device|--skip-build] [--replace-label] [--timeout SECS] [--namespace-backend auto|walkdir|fd-relative] [--thread-sample] [--cpu-profile] [--drop-arcade-bootstrap-index] [--enforce-performance-budgets]
        scripts/profile-first-scan.sh --self-test
 
 Deletes the Catalog V3 generation, reboots the
@@ -46,6 +47,8 @@ rows to history/toolchain-bench/results-first-scan.tsv. Set
 MISTER_FIRST_SCAN_RESULTS_TSV to keep qualification output under build/.
 --thread-sample records /proc per-thread CPU/core/scheduler samples once per
 second after reboot while the first scan completes.
+--cpu-profile builds and deploys the pprof-enabled launcher, profiles the real
+first-ever path, and retains SVG plus folded-stack artifacts under build/.
 By default the durable Arcade bootstrap index is preserved, measuring the
 production recovery path after Catalog V3 loss. --drop-arcade-bootstrap-index
 also removes that index, measuring a genuine first-ever fallback scan.
@@ -439,6 +442,7 @@ while [[ $# -gt 0 ]]; do
     --timeout) TIMEOUT_SECS="${2:?}"; shift 2 ;;
     --namespace-backend) NAMESPACE_BACKEND="${2:?}"; shift 2 ;;
     --thread-sample) thread_sample_enabled="1"; shift ;;
+    --cpu-profile) CPU_PROFILE=1; shift ;;
     --drop-arcade-bootstrap-index) DROP_ARCADE_BOOTSTRAP_INDEX=1; shift ;;
     --enforce-performance-budgets) ENFORCE_PERFORMANCE_BUDGETS=1; shift ;;
     --sqlite-publish-mode) echo "--sqlite-publish-mode was removed; library DB publishing has one supported path" >&2; exit 2 ;;
@@ -505,6 +509,14 @@ case "$DEPLOY" in
   skip) : ;;
 esac
 
+if [[ "$CPU_PROFILE" -eq 1 ]]; then
+  profile_bin="$HERE/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device-profile/mister-magik-fb"
+  echo "==> Building pprof-enabled first-scan launcher"
+  "$HERE/magik-gui/build-arm.sh" --profile --ui-scope launcher --bench-tools
+  echo "==> Deploying pprof-enabled first-scan launcher"
+  "$MISTER" agent deploy-magik-bin "$profile_bin" "$REMOTE_BIN" >/dev/null
+fi
+
 ensure_launcher_recovered() {
   local phase="$1"
   local status
@@ -541,16 +553,25 @@ raw_events="$OUT_DIR/${LABEL}-events.jsonl"
 artifact_report="$OUT_DIR/${LABEL}-artifacts.tsv"
 cleanup_report="$OUT_DIR/${LABEL}-cleanup.txt"
 launcher_suspended=0
+binary_profile="release-device"
+binary_features="ui"
+binary_runtime="production"
 binary_path="$HERE/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
+if [[ "$CPU_PROFILE" -eq 1 ]]; then
+  binary_profile="release-device-profile"
+  binary_features="ui,profile,bench-tools"
+  binary_runtime="cpu-profile"
+  binary_path="$profile_bin"
+fi
 deployment_state="verified"
 deployed_sha256="$(bench_context_remote_sha256 "$MISTER" "$REMOTE_BIN" || true)"
 deployed_sha256="${deployed_sha256:-missing}"
 local_sha256="$(bench_context_sha256_file "$binary_path")"
-if ! bench_context_require_binary_contract "$binary_path" "$deployed_sha256" ui release-device launcher; then
-  echo "first-scan launcher identity verification failed local=$local_sha256 deployed=$deployed_sha256 features=$(bench_context_binary_features "$binary_path") expected_features=ui" >&2
+if ! bench_context_require_binary_contract "$binary_path" "$deployed_sha256" "$binary_features" "$binary_profile" launcher; then
+  echo "first-scan launcher identity verification failed local=$local_sha256 deployed=$deployed_sha256 features=$(bench_context_binary_features "$binary_path") expected_features=$binary_features" >&2
   exit 1
 fi
-binary_fields="$(bench_context_binary_fields release-device launcher ui "$binary_path" production "$deployment_state" "$deployed_sha256")"
+binary_fields="$(bench_context_binary_fields "$binary_profile" launcher "$binary_features" "$binary_path" "$binary_runtime" "$deployment_state" "$deployed_sha256")"
 source_fields="$(bench_context_source_fields "$HERE")"
 emit_thread_sample_artifact_report() {
   local raw_log_bytes=0
@@ -590,6 +611,18 @@ if [[ -n "$NAMESPACE_BACKEND" ]]; then
 fi
 printf 'export MISTER_LIBRARY_BENCH_LABEL=%q\n' "$LABEL" >>"$env_file"
 printf 'export MISTER_LIBRARY_BENCH_ACTIVE_ITERATION=1\n' >>"$env_file"
+cpu_profile_remote_svg="/tmp/${LABEL}-first-scan-cpu.svg"
+cpu_profile_remote_folded="/tmp/${LABEL}-first-scan-cpu.folded"
+cpu_profile_local_svg="$OUT_DIR/${LABEL}-first-scan-cpu.svg"
+cpu_profile_local_folded="$OUT_DIR/${LABEL}-first-scan-cpu.folded"
+if [[ "$CPU_PROFILE" -eq 1 ]]; then
+  printf 'export MISTER_PPROF=1\n' >>"$env_file"
+  printf 'export MISTER_PPROF_OUT=%q\n' "$cpu_profile_remote_svg" >>"$env_file"
+  printf 'export MISTER_PPROF_FOLDED_OUT=%q\n' "$cpu_profile_remote_folded" >>"$env_file"
+  printf 'export MISTER_PREVIEW_SCROLL_EXIT_AFTER_TRACE=1\n' >>"$env_file"
+  printf 'export MISTER_PREVIEW_SCROLL_TRACE_SECS=%q\n' "$TIMEOUT_SECS" >>"$env_file"
+  "$MISTER" run "rm -f '$cpu_profile_remote_svg' '$cpu_profile_remote_folded'" >/dev/null
+fi
 "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
 echo "==> Quiescing launcher and standalone catalog builder before artifact reset"
 mister_suspend_launcher 1 >/dev/null
@@ -677,6 +710,21 @@ cp "$local_log" "$raw_log"
 cp "$local_events" "$raw_events"
 thread_sample_stop
 thread_sample_collect
+if [[ "$CPU_PROFILE" -eq 1 ]]; then
+  profile_deadline=$((SECONDS + 90))
+  while (( SECONDS < profile_deadline )); do
+    if "$MISTER" run "test -s '$cpu_profile_remote_svg' -a -s '$cpu_profile_remote_folded'" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 2
+  done
+  "$MISTER" get "$cpu_profile_remote_svg" "$cpu_profile_local_svg" >/dev/null
+  "$MISTER" get "$cpu_profile_remote_folded" "$cpu_profile_local_folded" >/dev/null
+  printf 'artifact_tsv\tlabel=%s\tkind=cpu_profile_svg\tlocal_path=%s\tremote_path=%s\texists=true\tbytes=%s\n' \
+    "$LABEL" "$cpu_profile_local_svg" "$cpu_profile_remote_svg" "$(wc -c <"$cpu_profile_local_svg" | tr -d ' ')" >>"$artifact_report"
+  printf 'artifact_tsv\tlabel=%s\tkind=cpu_profile_folded\tlocal_path=%s\tremote_path=%s\texists=true\tbytes=%s\n' \
+    "$LABEL" "$cpu_profile_local_folded" "$cpu_profile_remote_folded" "$(wc -c <"$cpu_profile_local_folded" | tr -d ' ')" >>"$artifact_report"
+fi
 if [[ "$thread_sample_enabled" == "1" ]] &&
    { ! first_scan_thread_sample_has_builder_evidence "$thread_sample_local_tsv" ||
      ! first_scan_has_catalog_audit_policy_evidence "$local_log"; }; then
@@ -735,13 +783,13 @@ awk -v label="$LABEL" -v commit="$commit" -F '\t' '
     print label, commit, "memory_" $2, 0, $3 " " $4
   }
   $1 == "catalog_v3_shard_phase_tsv" {
-    system = $2
+    system_id = $2
     phase = $3
     elapsed = $4
-    sub(/^system=/, "", system)
+    sub(/^system=/, "", system_id)
     sub(/^phase=/, "", phase)
     sub(/^elapsed_us=/, "", elapsed)
-    print label, commit, "shard_" phase "_" system, int((elapsed + 500) / 1000), $5 " " $6 " " $7
+    print label, commit, "shard_" phase "_" system_id, int((elapsed + 500) / 1000), $5 " " $6 " " $7
   }
   $1 == "catalog_publication_ack_tsv" {
     source = $2
