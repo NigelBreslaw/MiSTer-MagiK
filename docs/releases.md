@@ -101,13 +101,12 @@ Before dispatch:
    deploy, installer, and checked-documentation changes require the lightweight
    Scanout contract check, not new platform artifacts. Pull-request builds are
    validation-only and do not create promotable artifacts.
-3. Dispatch **Promote MiSTer MagiK Platform Bundle** from `main`. It finds the
-   newest successful main artifacts matching the current component identities,
-   compares their bundle ID with the highest published `platform-v0.N` release,
-   and publishes the next immutable number only when the platform changed. The
-   legacy `platform-v0.1-<bundle-id>` tags count as release 1, so the first
-   changed platform promoted under this scheme is `platform-v0.2`. A no-change
-   dispatch exits successfully without publishing another release.
+3. Dispatch **Promote MiSTer MagiK Platform Bundle** from `main`. It captures
+   the exact current `NigelBreslaw/Main_MiSTer:mister-magik` head, reuses or
+   builds its content-addressed Main artifact, and reuses the exact current FPGA
+   and kernel artifacts. The default dispatch uploads a candidate only. Inspect
+   it, then repeat with `publish=true` and approve `publish-platform` to create
+   the next immutable numbered release. A no-change dispatch publishes nothing.
 4. Configure protected GitHub environments named `publish-platform`,
    `publish-game-databases`, `publish-beta`, and `publish-release`, with required
    reviewers. Keep repository-wide GitHub Release immutability disabled while
@@ -121,8 +120,11 @@ In GitHub Actions, choose **Publish MiSTer MagiK**, click **Run workflow**, make
 sure the branch is `main`, and select `beta`. This is the only release input.
 The workflow consumes the highest numbered published `platform-v0.N` bundle
 (with legacy `platform-v0.1-<bundle-id>` compatibility) and the highest
-numbered published `game-databases-vN` bundle, plus the latest
-`Main_MiSTer/mister-magik`. It does not rebuild support databases or require the
+numbered published `game-databases-vN` bundle. A v0.2 platform bundle already
+contains the exact qualified Main binary, so normal publication does not check
+out, install a toolchain for, or build Main,
+the kernel, or the RBF. The v0.1 Main build remains only as a migration fallback.
+It does not rebuild support databases or require the
 platform bundle to match the current application source identity. If either
 support release is absent, run its manual promotion workflow before retrying
 publication. The application version is computed from the dispatched commit:
@@ -161,27 +163,41 @@ releases use immutable `v0.2.<build>` tags and are never overwritten.
 
 ## Platform bundle recovery
 
-- A non-main FPGA, scanout, or promotion dispatch is intentionally rejected.
+- A non-main FPGA, scanout, Main, or promotion dispatch is intentionally rejected.
 - A missing published platform release requires a successful main promotion; do
   not use an Actions artifact from a PR or another branch.
-- An expired staging artifact requires a fresh component workflow on `main`.
+- An expired FPGA or kernel artifact requires its component workflow on `main`.
+  An absent or expired exact Main artifact is rebuilt automatically by
+  `main-mister.yml`; successful Main artifacts are retained for 90 days.
+- A Main receipt with the wrong fork revision, authority, toolchain, binary
+  hash, or unsuccessful origin run is rejected rather than reused.
 - A mismatched platform contract is a failed qualification and must be fixed
   before promotion; a platform release is never patched in place.
 
 ## Numbered platform releases
 
 Run **Promote MiSTer MagiK Platform Bundle** manually from `main`. The workflow
-computes the current FPGA/kernel bundle ID and compares it with the manifest in
+captures the authoritative Main fork head, computes the current
+Main/FPGA/kernel bundle ID, and compares it with the manifest in
 the highest published `platform-v0.N` release. When the identity changed it
 publishes `platform-v0.(N+1)`; otherwise it reports that the current release is
 up to date and publishes nothing. Numeric selection makes `v0.10` newer than
 `v0.9` regardless of publication timestamps.
 
-The human release number is separate from the durable manifest format
-`mister-magik-platform-bundle-v0.1` and from the SHA-256 bundle ID. The format
-changes only for an incompatible manifest schema; the release number changes
-for each qualified FPGA/kernel combination; the bundle ID proves the exact
-contents.
+The v0.2 durable format contains `MiSTer_MagiK`, the latch RBF, the scanout
+module, all three component receipts/origins, and checksums. Its identity is the
+hash of the Main, FPGA, and kernel component IDs. Existing v0.1 two-component
+bundles remain verifiable and publishable during migration, but count as
+missing Main when promotion plans the next release. This deliberately forces
+one v0.2 promotion even when FPGA and kernel have not changed.
+
+Each component is independently content addressed. Promotion never rebuilds a
+kernel or RBF merely because Main changed. “Latest Main” means the exact
+authoritative branch head captured once at workflow start, not whichever commit
+is newest when a later job happens to run. Candidate manifests record all three
+source revisions, component IDs, hashes, workflow run IDs, and toolchain-bound
+Main identity. A missing or expired artifact is recovery input, never permission
+to substitute a nearby revision.
 
 ## Numbered game-database releases
 

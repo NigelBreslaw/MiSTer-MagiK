@@ -15,6 +15,12 @@ slint/
 The fork is not a submodule. It has its own history, CI, build wrapper, and
 patch ledger.
 
+Production Main is also an independently built platform component. The fork
+creates `MiSTer_MagiK`, `main-component-v0.1.json`, and `SHA256SUMS`; the receipt
+binds the authoritative repository and branch, exact 40-character revision,
+pinned toolchain, binary size/hash, and deterministic component ID. MagiK CI
+verifies that contract independently.
+
 ## Fork Source Of Truth
 
 The maintained fork repo is `NigelBreslaw/Main_MiSTer`, a real GitHub fork of
@@ -164,11 +170,18 @@ The manifest is activated last. The deploy script never writes root
 Do not stack branches.
 
 1. Merge each fork repo PR to `Main_MiSTer/mister-magik`.
-2. Run the fork host tests, patch-surface check, and Docker build.
+2. Run the fork host tests and patch-surface check. MagiK's `main-mister.yml`
+   reuses a non-expired artifact for that exact component identity or builds it
+   with the pinned toolchain on a miss.
 3. Merge app repo deploy/docs changes to `mister-slint/main`.
-4. Deploy from `mister-slint` with the fork checkout available at
+4. Promote a candidate platform bundle. It captures the fork head once and
+   combines that exact Main artifact with independently selected FPGA and kernel
+   artifacts. Approve immutable publication only after candidate verification.
+5. Application publication consumes Main from the highest v0.2 platform bundle;
+   only a legacy v0.1 bundle invokes the temporary source-build fallback.
+6. Deploy from `mister-slint` with the fork checkout available at
    `../Main_MiSTer` or `MISTER_MAIN_DIR`.
-5. Record device smoke results in the fork `MAGIK_PATCHSET.md`.
+7. Record device smoke results in the fork `MAGIK_PATCHSET.md`.
 
 ## Historical Notes
 
