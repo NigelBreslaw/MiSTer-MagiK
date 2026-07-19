@@ -5,6 +5,7 @@ use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use ssh2::Session;
 use std::env;
 use std::fs::{self, OpenOptions};
@@ -1416,15 +1417,6 @@ fn bytes_for_profile(size: usize) -> Vec<u8> {
     bytes
 }
 
-fn fnv64_hex(bytes: &[u8]) -> String {
-    let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    format!("{hash:016x}")
-}
-
 fn parse_profile_count(args: &[String], default: usize) -> usize {
     let mut skip_value = false;
     for arg in args {
@@ -2036,9 +2028,9 @@ fn agent_deploy_magik_bin(args: &[String]) -> Result<()> {
     let read_t = Instant::now();
     let bytes = fs::read(local)?;
     let read_ms = read_t.elapsed().as_millis();
-    let checksum = fnv64_hex(&bytes);
+    let checksum = format!("{:x}", Sha256::digest(&bytes));
     let requested_encoding =
-        env::var("MISTER_AGENT_DEPLOY_ENCODING").unwrap_or_else(|_| "auto".to_string());
+        env::var("MISTER_AGENT_DEPLOY_ENCODING").unwrap_or_else(|_| "raw".to_string());
     let min_compress_bytes = env::var("MISTER_AGENT_DEPLOY_COMPRESS_MIN_BYTES")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
