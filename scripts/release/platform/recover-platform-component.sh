@@ -29,6 +29,7 @@ if [[ -e "$OUTPUT" ]]; then
   echo "ERROR: output already exists: $OUTPUT" >&2
   exit 2
 fi
+mkdir -p "$(dirname "$OUTPUT")"
 
 TEMP="$(mktemp -d "${TMPDIR:-/tmp}/mister-magik-component-recovery.XXXXXX")"
 trap 'rm -rf "$TEMP"' EXIT

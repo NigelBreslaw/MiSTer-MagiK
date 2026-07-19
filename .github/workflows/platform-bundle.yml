@@ -131,7 +131,29 @@ jobs:
           name: ${{ needs.main-component.outputs.artifact_name }}
           path: build/platform-input/main
 
-      - name: Download exact FPGA and kernel component artifacts
+      - name: Recover FPGA from immutable platform releases
+        id: durable-fpga
+        if: steps.plan.outputs.update_needed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FPGA_ID: ${{ steps.identity.outputs.fpga_id }}
+        run: |
+          scripts/release/platform/recover-platform-component.sh \
+            --component fpga --component-id "$FPGA_ID" \
+            --output build/platform-input/fpga --github-output "$GITHUB_OUTPUT"
+
+      - name: Recover kernel from immutable platform releases
+        id: durable-kernel
+        if: steps.plan.outputs.update_needed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KERNEL_ID: ${{ steps.identity.outputs.kernel_id }}
+        run: |
+          scripts/release/platform/recover-platform-component.sh \
+            --component kernel --component-id "$KERNEL_ID" \
+            --output build/platform-input/scanout --github-output "$GITHUB_OUTPUT"
+
+      - name: Download missing exact FPGA and kernel component artifacts
         if: steps.plan.outputs.update_needed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -140,6 +162,12 @@ jobs:
           MAIN_ID: ${{ needs.main-component.outputs.component_id }}
           MAIN_REVISION: ${{ needs.main-component.outputs.main_revision }}
           MAIN_RUN_ID: ${{ needs.main-component.outputs.run_id }}
+          DURABLE_FPGA_HIT: ${{ steps.durable-fpga.outputs.hit }}
+          DURABLE_FPGA_RUN_ID: ${{ steps.durable-fpga.outputs.run_id }}
+          DURABLE_FPGA_HEAD_SHA: ${{ steps.durable-fpga.outputs.head_sha }}
+          DURABLE_KERNEL_HIT: ${{ steps.durable-kernel.outputs.hit }}
+          DURABLE_KERNEL_RUN_ID: ${{ steps.durable-kernel.outputs.run_id }}
+          DURABLE_KERNEL_HEAD_SHA: ${{ steps.durable-kernel.outputs.head_sha }}
         run: |
           set -euo pipefail
           find_run() {
@@ -161,13 +189,24 @@ jobs:
           }
           fpga_name="fpga-vblank-latch-signoff-v0.1-$FPGA_ID"
           kernel_name="mister-magik-scanout-slots-v0.1-$KERNEL_ID"
-          fpga_run="$(find_run "$fpga_name" "FPGA Vblank Latch RBF" "workflow_dispatch")"
-          kernel_run="$(find_run "$kernel_name" "Kernel scanout slots" "push,workflow_dispatch")"
-          mkdir -p build/platform-input/fpga build/platform-input/scanout
-          gh run download "$fpga_run" --name "$fpga_name" --dir build/platform-input/fpga
-          gh run download "$kernel_run" --name "$kernel_name" --dir build/platform-input/scanout
-          fpga_sha="$(gh run view "$fpga_run" --json headSha --jq .headSha)"
-          kernel_sha="$(gh run view "$kernel_run" --json headSha --jq .headSha)"
+          if [ "$DURABLE_FPGA_HIT" = true ]; then
+            fpga_run="$DURABLE_FPGA_RUN_ID"
+            fpga_sha="$DURABLE_FPGA_HEAD_SHA"
+          else
+            fpga_run="$(find_run "$fpga_name" "FPGA Vblank Latch RBF" "workflow_dispatch")"
+            mkdir -p build/platform-input/fpga
+            gh run download "$fpga_run" --name "$fpga_name" --dir build/platform-input/fpga
+            fpga_sha="$(gh run view "$fpga_run" --json headSha --jq .headSha)"
+          fi
+          if [ "$DURABLE_KERNEL_HIT" = true ]; then
+            kernel_run="$DURABLE_KERNEL_RUN_ID"
+            kernel_sha="$DURABLE_KERNEL_HEAD_SHA"
+          else
+            kernel_run="$(find_run "$kernel_name" "Kernel scanout slots" "push,workflow_dispatch")"
+            mkdir -p build/platform-input/scanout
+            gh run download "$kernel_run" --name "$kernel_name" --dir build/platform-input/scanout
+            kernel_sha="$(gh run view "$kernel_run" --json headSha --jq .headSha)"
+          fi
           python3 scripts/release/platform/platform-bundle.py create \
             --main-dir build/platform-input/main \
             --fpga-dir build/platform-input/fpga \

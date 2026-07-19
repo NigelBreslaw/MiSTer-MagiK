@@ -26,6 +26,13 @@ for value in (
     "platform-bundle.py plan-update",
     "--main-id \"$MAIN_ID\"",
     "actions/download-artifact@v8",
+    "Recover FPGA from immutable platform releases",
+    "Recover kernel from immutable platform releases",
+    "recover-platform-component.sh",
+    "--component fpga",
+    "--component kernel",
+    "DURABLE_FPGA_HIT",
+    "DURABLE_KERNEL_HIT",
     "--main-dir build/platform-input/main",
     "--main-run-id \"$MAIN_RUN_ID\"",
     "--main-head-sha \"$MAIN_REVISION\"",
@@ -41,6 +48,8 @@ for value in (
 ):
     assert value in text, f"platform bundle workflow is missing: {value}"
 assert "resolve-main" not in text
+assert text.index("Recover FPGA from immutable platform releases") < text.index("Download missing exact FPGA and kernel component artifacts")
+assert text.index("Recover kernel from immutable platform releases") < text.index("Download missing exact FPGA and kernel component artifacts")
 
 publish = text.split("  publish:\n", 1)[1]
 assert "- uses: actions/checkout@v7" in publish
