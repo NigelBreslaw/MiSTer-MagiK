@@ -100,7 +100,11 @@ cp /media/fat/MiSTer.ini "$SNAP/MiSTer.ini" 2>/dev/null || true
 cp /media/fat/mister-magik-dev/platform-v2.manifest "$SNAP/platform-v2.manifest" 2>/dev/null || true
 echo "snapshot: $SNAP"
 '
-"$ROOT/scripts/mister" agent magik suspend
+if "$ROOT/scripts/mister" run "pidof MiSTer >/dev/null 2>&1"; then
+  echo "==> Stock Main is active; no MagiK launcher needs suspension"
+else
+  "$ROOT/scripts/mister" agent magik suspend
+fi
 
 declare -a LOCAL=(
   "$GUI_BIN" "$MAIN_BIN" "$MODULE" "$MODULE_META" "$RBF" "$RBF_META"
