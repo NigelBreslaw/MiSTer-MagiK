@@ -1,0 +1,183 @@
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+name: Main_MiSTer component
+
+on:
+  workflow_call:
+    inputs:
+      main_revision:
+        description: Exact Main_MiSTer mister-magik revision; empty resolves branch head
+        required: false
+        type: string
+    outputs:
+      main_revision:
+        value: ${{ jobs.component.outputs.main_revision }}
+      component_id:
+        value: ${{ jobs.component.outputs.component_id }}
+      artifact_name:
+        value: ${{ jobs.component.outputs.artifact_name }}
+      run_id:
+        value: ${{ jobs.component.outputs.run_id }}
+  workflow_dispatch:
+    inputs:
+      main_revision:
+        description: Optional exact Main_MiSTer mister-magik revision
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  MAIN_REPOSITORY: NigelBreslaw/Main_MiSTer
+  MAIN_BRANCH: mister-magik
+  MAIN_TOOLCHAIN_VERSION: gcc-arm-10.2-2020.11-x86_64-arm-none-linux-gnueabihf
+
+jobs:
+  component:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    outputs:
+      main_revision: ${{ steps.identity.outputs.main_revision }}
+      component_id: ${{ steps.identity.outputs.component_id }}
+      artifact_name: ${{ steps.identity.outputs.artifact_name }}
+      run_id: ${{ steps.artifact.outputs.run_id }}
+    steps:
+      - name: Checkout MagiK release tooling
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Resolve exact authoritative Main revision
+        id: identity
+        env:
+          REQUESTED_REVISION: ${{ inputs.main_revision }}
+        run: |
+          set -euo pipefail
+          head_revision="$(git ls-remote "https://github.com/$MAIN_REPOSITORY.git" "refs/heads/$MAIN_BRANCH" | awk '{print $1}')"
+          test "$head_revision" != ""
+          revision="${REQUESTED_REVISION:-$head_revision}"
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          if [ "$revision" != "$head_revision" ]; then
+            echo "Requested Main revision is not the current authoritative branch head." >&2
+            exit 1
+          fi
+          component_id="$(python3 scripts/release/platform/main-component.py identity --revision "$revision")"
+          artifact_name="mister-magik-main-v0.1-$component_id"
+          echo "main_revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "component_id=$component_id" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
+
+      - name: Find an existing exact component artifact
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_NAME: ${{ steps.identity.outputs.artifact_name }}
+        run: |
+          set -euo pipefail
+          run_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$ARTIFACT_NAME&per_page=100" \
+            --jq '[.artifacts[] | select(.expired == false) | .workflow_run.id] | first // empty')"
+          if [ -n "$run_id" ]; then
+            details="$(gh run view "$run_id" --json status,conclusion,workflowName,headBranch)"
+            jq -e '.status == "completed" and .conclusion == "success" and .workflowName == "Main_MiSTer component" and .headBranch == "main"' <<<"$details" >/dev/null
+            echo "hit=true" >> "$GITHUB_OUTPUT"
+            echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          else
+            echo "hit=false" >> "$GITHUB_OUTPUT"
+            echo "run_id=$GITHUB_RUN_ID" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download and verify cached component
+        if: steps.existing.outputs.hit == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.existing.outputs.run_id }}
+          ARTIFACT_NAME: ${{ steps.identity.outputs.artifact_name }}
+          MAIN_REVISION: ${{ steps.identity.outputs.main_revision }}
+        run: |
+          set -euo pipefail
+          gh run download "$RUN_ID" --name "$ARTIFACT_NAME" --dir build/main-component
+          python3 scripts/release/platform/main-component.py verify \
+            --artifact build/main-component --revision "$MAIN_REVISION" >/dev/null
+
+      - name: Checkout exact Main_MiSTer revision
+        if: steps.existing.outputs.hit != 'true'
+        uses: actions/checkout@v7
+        with:
+          repository: NigelBreslaw/Main_MiSTer
+          ref: ${{ steps.identity.outputs.main_revision }}
+          path: Main_MiSTer
+          fetch-depth: 0
+
+      - name: Test Main fork and component contract
+        if: steps.existing.outputs.hit != 'true'
+        working-directory: Main_MiSTer
+        run: |
+          scripts/test-magik-state.sh
+          scripts/check-magik-patch-surface.sh
+          python3 tests/test_main_component.py
+
+      - name: Cache Main build outputs
+        if: steps.existing.outputs.hit != 'true'
+        id: main-build-cache
+        uses: actions/cache@v6
+        with:
+          path: Main_MiSTer/bin
+          key: main-mister-component-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.MAIN_TOOLCHAIN_VERSION }}-${{ steps.identity.outputs.main_revision }}
+
+      - name: Cache Main toolchain
+        if: steps.existing.outputs.hit != 'true' && steps.main-build-cache.outputs.cache-hit != 'true'
+        id: main-toolchain-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/mister-magik/${{ env.MAIN_TOOLCHAIN_VERSION }}
+          key: main-toolchain-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.MAIN_TOOLCHAIN_VERSION }}
+
+      - name: Install Main toolchain
+        if: steps.existing.outputs.hit != 'true' && steps.main-build-cache.outputs.cache-hit != 'true' && steps.main-toolchain-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/.cache/mister-magik
+          wget -qO- "https://developer.arm.com/-/media/Files/downloads/gnu-a/10.2-2020.11/binrel/${MAIN_TOOLCHAIN_VERSION}.tar.xz" \
+            | tar -xJ -C ~/.cache/mister-magik
+
+      - name: Build exact Main component
+        if: steps.existing.outputs.hit != 'true' && steps.main-build-cache.outputs.cache-hit != 'true'
+        working-directory: Main_MiSTer
+        run: |
+          export PATH="$HOME/.cache/mister-magik/$MAIN_TOOLCHAIN_VERSION/bin:$PATH"
+          make
+
+      - name: Package and independently verify Main component
+        if: steps.existing.outputs.hit != 'true'
+        env:
+          MAIN_REVISION: ${{ steps.identity.outputs.main_revision }}
+        run: |
+          set -euo pipefail
+          python3 Main_MiSTer/support/mister_magik/main_component.py create \
+            --binary Main_MiSTer/bin/MiSTer --output build/main-component \
+            --revision "$MAIN_REVISION" --toolchain "$MAIN_TOOLCHAIN_VERSION" >/dev/null
+          python3 scripts/release/platform/main-component.py verify \
+            --artifact build/main-component --revision "$MAIN_REVISION" >/dev/null
+
+      - name: Upload exact Main component
+        if: steps.existing.outputs.hit != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.identity.outputs.artifact_name }}
+          path: build/main-component
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Report selected artifact run
+        id: artifact
+        env:
+          HIT: ${{ steps.existing.outputs.hit }}
+          EXISTING_RUN_ID: ${{ steps.existing.outputs.run_id }}
+        run: |
+          if [ "$HIT" = true ]; then
+            echo "run_id=$EXISTING_RUN_ID" >> "$GITHUB_OUTPUT"
+          else
+            echo "run_id=$GITHUB_RUN_ID" >> "$GITHUB_OUTPUT"
+          fi
