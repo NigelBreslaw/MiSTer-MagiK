@@ -69,6 +69,7 @@ scripts/mister agent framebuffer-capture build/fb0.png --json build/fb0.json
 scripts/mister agent deploy-magik-bin magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb
 scripts/mister agent magik status
 scripts/mister agent magik restart-launcher
+scripts/mister agent magik return-to-launcher
 scripts/mister agent reboot-wait --timeout 40
 scripts/mister agent reboot-wait --direct-reset --timeout 40
 scripts/mister agent boot-profile 4 --timeout 40
@@ -200,28 +201,19 @@ scripts/mister agent magik resume
 scripts/mister agent magik restart-launcher
 ```
 
-The control actions write `mister_magik_suspend`, `mister_magik_resume`, or
-`mister_magik_restart_launcher` to `/dev/MiSTer_cmd` only when `MiSTer_MagiKDev` is
-running. The agent does not directly kill or spawn the launcher. It logs the
-command, before/after MagiK pids, pid changes, and errors into the RAM ring.
-Responses return parsed Main and Slint status files plus current pids. The
-`slint_status_current` flag is `false` when the status file belongs to an exited
-launcher process, which is expected immediately after `suspend`.
+Control actions carry an operation ID and are idempotent for the agent lifetime.
+The agent waits for a current Main generation whose command channel reports
+ready, opens the FIFO nonblocking, and acknowledges only the requested terminal
+launcher state. A FIFO pathname without a reader is reported as
+`command_channel_unavailable`; it cannot block a host command.
 
-`deploy-magik-bin` uploads a local `mister-magik-fb` binary over the agent TCP
-port using a JSON header followed by payload bytes. The agent accepts raw bytes
-or LZ4 block payloads. The host defaults to raw for small binaries and only
-tries LZ4 automatically above `MISTER_AGENT_DEPLOY_COMPRESS_MIN_BYTES`
-(default 8 MiB); set `MISTER_AGENT_DEPLOY_ENCODING=lz4-block` to force a
-compressed test. The header includes original byte count, transmitted byte
-count, encoding, and original FNV64 checksum. The agent receives the payload
-into RAM, decompresses if needed, verifies the original bytes, asks Main to
-suspend the launcher, writes a same-directory `.upload` file under
-`/media/fat/mister-magik-dev/`, renames it over the final binary, marks it
-executable, then resumes the launcher. Existing `scripts/mister deploy-magik-bin`
-remains the explicit SSH/SFTP fallback. `scripts/deploy-rust.sh` uses the agent
-transport by default; set `MISTER_DEPLOY_TRANSPORT=ssh` only when intentionally
-testing or recovering through the old path.
+`deploy-magik-bin` streams raw bytes into a same-directory staging file while
+computing SHA-256. It syncs and verifies the staged executable, suspends through
+the acknowledged control path, retains the previous executable for rollback,
+publishes by rename, syncs the directory, and resumes the launcher. Success
+means the new executable is healthy; a failed health acknowledgement restores
+the previous executable. Truncated, oversized, or hash-mismatched uploads never
+become authoritative.
 
 `boot-profile` reboots the device, waits for ports to drop, then compares first
 agent response against first SSH command readiness. It defaults to the

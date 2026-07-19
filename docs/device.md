@@ -125,16 +125,17 @@ To isolate user shutdown hooks, use the separate reversible
 `bypass-s99user-remove` experiment. Summarize collected rows and pulled logs
 with `scripts/device/diagnostics/reboot-shutdown-summary.py`.
 
-To return from an active game core without a Linux reboot, send Main's generic
-core command instead of the MagiK supervisor restart command:
+To return from an active game core without a Linux reboot, use the agent's
+acknowledged operation:
 
 ```bash
-scripts/mister run "printf 'load_core menu.rbf\n' > /dev/MiSTer_cmd"
+scripts/mister agent magik return-to-launcher
 ```
 
-`mister_magik_restart_launcher` is for the menu/supervised-launcher state. Once
-Main has handed off to a game, `load_core menu.rbf` exits the active core; the
-MagiK menu path then starts `mister-magik-fb` again.
+The FIFO node may exist while Main is replacing itself and has no reader, so
+its existence is never a readiness signal. The resident agent waits for a
+current Main generation with a ready command channel, writes nonblocking, and
+returns success only after the requested launcher state is observable.
 
 The standalone `mister-magik-agent` may be installed as
 `/etc/init.d/S00magik-agent`. It provides the early Ethernet setup path and a

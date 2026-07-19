@@ -354,6 +354,13 @@ that state even if a caller bypasses the normal input loop. Startup timing
 events must report `launcher_revealed` and `launcher_input_enabled`.
 
 Screenshot pack download popups are also state-owned. The popup is driven only
+Host-side lifecycle control is owned by the authenticated resident agent. Main
+publishes its process generation, executable identity, and command-channel
+readiness; the agent waits through Main replacement and acknowledges the final
+state. `/dev/MiSTer_cmd` is an internal transport, not a host API or readiness
+signal.
+
+Screenshot pack download popups are also state-owned. The popup is driven only
 by real pack download progress, not by local pack checks, current-pack skips,
 index sidecar work, save/sync phases, or worker completion:
 
