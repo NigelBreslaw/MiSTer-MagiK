@@ -10,7 +10,7 @@ effect_profile_setup "screensaver-profiles" "results-screensaver.tsv"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/experiments/effects/profile-screensaver.sh [LABEL] [--skip-build|--deploy-device] [--mode mega|MODE] [--segment-secs N] [--secs N] [--visual-captures N]
+Usage: scripts/experiments/effects/profile-screensaver.sh [LABEL] [--skip-build|--deploy-device] [--mode mega|MODE] [--parade-motion integer|subpixel] [--segment-secs N] [--secs N] [--visual-captures N]
 
 Runs:
   mister-magik-fb ui screensaver
@@ -25,6 +25,7 @@ mode="mega"
 segment_secs="20"
 secs=""
 visual_captures="0"
+parade_motion="integer"
 positionals=()
 
 while [[ $# -gt 0 ]]; do
@@ -32,6 +33,7 @@ while [[ $# -gt 0 ]]; do
     --skip-build) deploy="skip"; shift ;;
     --deploy-device) deploy="device"; shift ;;
     --mode) mode="${2:-}"; shift 2 ;;
+    --parade-motion) parade_motion="${2:-}"; shift 2 ;;
     --segment-secs) segment_secs="${2:-}"; shift 2 ;;
     --secs) secs="${2:-}"; shift 2 ;;
     --visual-captures) visual_captures="${2:-}"; shift 2 ;;
@@ -45,6 +47,7 @@ if [[ "${#positionals[@]}" -ge 1 ]]; then label="${positionals[0]}"; fi
 if [[ "${#positionals[@]}" -gt 1 ]]; then usage >&2; exit 2; fi
 if [[ ! "$label" =~ ^[A-Za-z0-9_.-]+$ ]]; then echo "label must contain only letters, numbers, _, ., or -" >&2; exit 2; fi
 if [[ ! "$mode" =~ ^[A-Za-z0-9_,.-]+$ ]]; then echo "--mode must be a comma-separated screensaver label list or mega" >&2; exit 2; fi
+if [[ "$parade_motion" != "integer" && "$parade_motion" != "subpixel" ]]; then echo "--parade-motion must be integer or subpixel" >&2; exit 2; fi
 if [[ ! "$segment_secs" =~ ^[0-9]+$ || "$segment_secs" -lt 1 ]]; then echo "--segment-secs must be a positive integer" >&2; exit 2; fi
 if [[ ! "$visual_captures" =~ ^[0-9]+$ ]]; then echo "--visual-captures must be an integer" >&2; exit 2; fi
 
@@ -70,7 +73,7 @@ remote_log="/tmp/${label}-screensaver.log"
 local_tsv="$OUT_DIR/${label}-screensaver.tsv"
 local_log="$OUT_DIR/${label}-screensaver.log"
 
-echo "==> screensaver experiment label=$label mode=$mode secs=$secs segment_secs=$segment_secs"
+echo "==> screensaver experiment label=$label mode=$mode parade_motion=$parade_motion secs=$secs segment_secs=$segment_secs"
 effect_suspend_launcher
 trap effect_cleanup_temp_files EXIT
 "$MISTER" run "
@@ -78,7 +81,7 @@ set -e
 kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
 rm -f '$remote_tsv' '$remote_log'
 sleep 5
-MISTER_SCREENSAVER='$mode' MISTER_SCREENSAVER_SEGMENT_SECS='$segment_secs' MISTER_SCREENSAVER_TRACE='$remote_tsv' '$REMOTE' ui screensaver '$secs' >'$remote_log' 2>&1 &
+MISTER_SCREENSAVER='$mode' MISTER_PARADE_MOTION='$parade_motion' MISTER_SCREENSAVER_SEGMENT_SECS='$segment_secs' MISTER_SCREENSAVER_TRACE='$remote_tsv' '$REMOTE' ui screensaver '$secs' >'$remote_log' 2>&1 &
 UI_PID=\$!
 RSS_MAX=0
 # MiSTer's Linux userspace exposes process accounting at 100 ticks/second but
@@ -129,7 +132,7 @@ if [[ "$visual_captures" != "0" ]]; then
 set -e
 kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
 sleep 5
-MISTER_SCREENSAVER='$mode' MISTER_SCREENSAVER_SEGMENT_SECS='$segment_secs' '$REMOTE' ui screensaver 30 >/tmp/${label}-visual-${i}.log 2>&1 &
+MISTER_SCREENSAVER='$mode' MISTER_PARADE_MOTION='$parade_motion' MISTER_SCREENSAVER_SEGMENT_SECS='$segment_secs' '$REMOTE' ui screensaver 30 >/tmp/${label}-visual-${i}.log 2>&1 &
 echo \$! >/tmp/${label}-visual-${i}.pid
 " >/dev/null
     sleep $((8 + i * segment_secs))
