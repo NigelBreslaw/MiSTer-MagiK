@@ -44,6 +44,9 @@ for required in (
 
 before_publish, publish = text.split("\n  publish:\n", 1)
 assert "contents: write" not in before_publish
+assert "always()" in publish
+assert "needs.inspect.result == 'success'" in publish
+assert "needs.assemble.result == 'success'" in publish
 assert "permissions:\n      actions: read\n      contents: write" in publish
 assert "push:" not in trigger and "schedule:" not in trigger
 

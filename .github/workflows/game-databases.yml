@@ -337,6 +337,10 @@ jobs:
     name: Publish numbered game-database release
     runs-on: ubuntu-24.04
     needs: [inspect, assemble]
+    if: |
+      always() &&
+      needs.inspect.result == 'success' &&
+      needs.assemble.result == 'success'
     timeout-minutes: 15
     environment:
       name: publish-game-databases
