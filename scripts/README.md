@@ -11,7 +11,7 @@ Stable human, automation, and device entrypoints remain directly under
 - `media/` — media conversion and manifest harvesting
 - `release/databases/` — game-database release tooling
 - `release/packaging/` — distribution metadata and legal inventory generation
-- `release/platform/` — FPGA/kernel platform identity, bundle, and manifest tools
+- `release/platform/` — Main/FPGA/kernel identity, durable recovery, bundle, and manifest tools
 - `tests/` — host-local tests for scripts and workflow contracts
 - `experiments/` — non-production effect and preview experiments
 
