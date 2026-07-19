@@ -81,12 +81,19 @@ sleep 5
 MISTER_SCREENSAVER='$mode' MISTER_SCREENSAVER_SEGMENT_SECS='$segment_secs' MISTER_SCREENSAVER_TRACE='$remote_tsv' '$REMOTE' ui screensaver '$secs' >'$remote_log' 2>&1 &
 UI_PID=\$!
 RSS_MAX=0
+# MiSTer's Linux userspace exposes process accounting at 100 ticks/second but
+# its minimal BusyBox image does not include getconf.
+CLK_TCK=100
+START_CPU_TICKS=\$(awk '{print \$14 + \$15}' /proc/\$UI_PID/stat)
+LAST_CPU_TICKS=\$START_CPU_TICKS
+START_UPTIME=\$(awk '{print \$1}' /proc/uptime)
 TICKS=0
 MAX_TICKS=$((secs + 15))
 while kill -0 \$UI_PID 2>/dev/null; do
   RSS=\$(awk '/^VmHWM:/{print \$2}' /proc/\$UI_PID/status 2>/dev/null || echo 0)
   case \"\$RSS\" in ''|*[!0-9]*) RSS=0 ;; esac
   [ \"\$RSS\" -gt \"\$RSS_MAX\" ] && RSS_MAX=\$RSS
+  LAST_CPU_TICKS=\$(awk '{print \$14 + \$15}' /proc/\$UI_PID/stat 2>/dev/null || echo \$LAST_CPU_TICKS)
   sleep 1
   TICKS=\$((TICKS + 1))
   if [ \"\$TICKS\" -ge \"\$MAX_TICKS\" ]; then
@@ -96,7 +103,10 @@ while kill -0 \$UI_PID 2>/dev/null; do
   fi
 done
 wait \$UI_PID 2>/dev/null || true
+END_UPTIME=\$(awk '{print \$1}' /proc/uptime)
 echo rss_hwm_kb=\$RSS_MAX >>'$remote_log'
+CPU_PERCENT=\$(awk -v used=\"\$((LAST_CPU_TICKS - START_CPU_TICKS))\" -v hz=\"\$CLK_TCK\" -v start=\"\$START_UPTIME\" -v end=\"\$END_UPTIME\" 'BEGIN { printf \"%.2f\", used * 100 / (hz * (end - start)) }')
+echo cpu_percent=\$CPU_PERCENT >>'$remote_log'
 test -s '$remote_tsv'
 " || {
   "$MISTER" get "$remote_log" "$local_log" || true
@@ -182,10 +192,11 @@ summarize_by_mode() {
 }
 
 echo
-echo $'case\tframes\tavg_wall_us\tp95_wall_us\tp99_wall_us\tslow_gt_16_7ms\tslow_gt_20ms\trss_hwm_kb'
+echo $'case\tframes\tavg_wall_us\tp95_wall_us\tp99_wall_us\tslow_gt_16_7ms\tslow_gt_20ms\tcpu_percent\trss_hwm_kb'
 read -r frames avg p95 p99 slow16 slow20 < <(summarize "$local_tsv")
 rss="$(sed -n 's/^rss_hwm_kb=//p' "$local_log" | tail -1)"
-printf "screensaver\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" "$frames" "$avg" "$p95" "$p99" "$slow16" "$slow20" "${rss:-0}"
+cpu="$(sed -n 's/^cpu_percent=//p' "$local_log" | tail -1)"
+printf "screensaver\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" "$frames" "$avg" "$p95" "$p99" "$slow16" "$slow20" "${cpu:-0}" "${rss:-0}"
 
 echo
 echo $'mode\tframes\tavg_wall_us\tp95_wall_us\tp99_wall_us\tslow_gt_16_7ms\tslow_gt_20ms'
