@@ -57,4 +57,10 @@ assert "recover-platform-component.sh" not in text
 assert "gh run download" not in text
 assert "actions/artifacts?name=" not in text
 assert text.count("  workflow_dispatch:") == 1
+
+bind_step = text.split("      - name: Bind runner temp to build volume\n", 1)[1].split("\n      - name:", 1)[0]
+docker_step = text.split("      - name: Prepare Quartus Docker runtime\n", 1)[1].split("\n      - name:", 1)[0]
+assert 'sudo mount --bind "$GITHUB_WORKSPACE/.runner-temp" "$RUNNER_TEMP"' in bind_step
+assert "GITHUB_ENV" not in bind_step
+assert "GITHUB_ENV" in docker_step
 print("unified platform workflow contract ok")

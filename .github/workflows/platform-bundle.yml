@@ -291,11 +291,15 @@ jobs:
           build_date="$(git show -s --format=%cd --date=format:%y%m%d "$component_revision")"
           printf 'menu_ref=%s\ncomponent_revision=%s\nbuild_date=%s\n' "$menu_ref" "$component_revision" "$build_date" >> "$GITHUB_OUTPUT"
 
-      - name: Prepare Quartus runtime disk
+      - name: Bind runner temp to build volume
         run: |
           set -euo pipefail
           mkdir -p "$GITHUB_WORKSPACE/.runner-temp"
           sudo mount --bind "$GITHUB_WORKSPACE/.runner-temp" "$RUNNER_TEMP"
+
+      - name: Prepare Quartus Docker runtime
+        run: |
+          set -euo pipefail
           sudo systemctl stop docker
           mkdir -p "$GITHUB_WORKSPACE/.docker-data"
           printf '{"data-root":"%s/.docker-data"}\n' "$GITHUB_WORKSPACE" | sudo tee /etc/docker/daemon.json
