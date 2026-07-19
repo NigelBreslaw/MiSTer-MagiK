@@ -915,7 +915,7 @@ mod linux {
     const ETH_P_ARP: u16 = 0x0806;
     const LOG_RING_CAPACITY: usize = 512;
     const TIMELINE_CAPACITY: usize = 128;
-    const MAX_DEPLOY_BYTES: u64 = 64 * 1024 * 1024;
+    const MAX_DEPLOY_BYTES: u64 = 1024 * 1024 * 1024;
 
     type SharedLogRing = Arc<Mutex<LogRing>>;
     type SharedTimeline = Arc<Mutex<Timeline>>;

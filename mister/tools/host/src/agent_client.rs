@@ -168,8 +168,13 @@ pub(crate) fn agent_stream_request_reader(
     stream.set_read_timeout(Some(timeout))?;
     stream.set_write_timeout(Some(timeout))?;
     writeln!(stream, "{request}")?;
-    io::copy(payload, &mut stream)?;
-    stream.flush()?;
+    if let Err(write_error) = io::copy(payload, &mut stream).and_then(|_| stream.flush()) {
+        let mut line = String::new();
+        match BufReader::new(stream).read_line(&mut line) {
+            Ok(0) | Err(_) => return Err(write_error.into()),
+            Ok(_) => return parse_agent_response_line(line, start),
+        }
+    }
     let mut line = String::new();
     BufReader::new(stream).read_line(&mut line)?;
     parse_agent_response_line(line, start)
