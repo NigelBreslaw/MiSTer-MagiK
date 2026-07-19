@@ -14,6 +14,9 @@ required = (
     "Main_MiSTer component",
     "refs/heads/$MAIN_BRANCH",
     "mister-magik-main-v0.1-$component_id",
+    "recover-platform-component.sh",
+    "--component main",
+    "steps.durable.outputs.hit != 'true'",
     "main-artifact-selection.py candidates",
     "main-artifact-selection.py eligible",
     "steps.existing.outputs.hit != 'true'",
@@ -29,5 +32,6 @@ assert "ref: ${{ steps.identity.outputs.main_revision }}" in text
 assert "captured_authoritative_head" not in text
 assert "path: Main_MiSTer/bin" not in text
 assert "main-build-cache" not in text
-assert "if: steps.existing.outputs.hit != 'true'\n        working-directory: Main_MiSTer" in text
+assert text.index("Recover Main from immutable platform releases") < text.index("Find an existing exact component artifact")
+assert "if: steps.durable.outputs.hit != 'true' && steps.existing.outputs.hit != 'true'\n        working-directory: Main_MiSTer" in text
 print("main-mister workflow contract ok")

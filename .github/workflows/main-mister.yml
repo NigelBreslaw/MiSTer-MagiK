@@ -76,8 +76,24 @@ jobs:
           echo "component_id=$component_id" >> "$GITHUB_OUTPUT"
           echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
 
+      - name: Recover Main from immutable platform releases
+        id: durable
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MAIN_ID: ${{ steps.identity.outputs.component_id }}
+        run: |
+          scripts/release/platform/recover-platform-component.sh \
+            --component main --component-id "$MAIN_ID" \
+            --output build/main-component --github-output "$GITHUB_OUTPUT"
+          if [ -d build/main-component ]; then
+            python3 scripts/release/platform/main-component.py verify \
+              --artifact build/main-component \
+              --revision '${{ steps.identity.outputs.main_revision }}' >/dev/null
+          fi
+
       - name: Find an existing exact component artifact
         id: existing
+        if: steps.durable.outputs.hit != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           ARTIFACT_NAME: ${{ steps.identity.outputs.artifact_name }}
@@ -102,7 +118,7 @@ jobs:
           fi
 
       - name: Download and verify cached component
-        if: steps.existing.outputs.hit == 'true'
+        if: steps.durable.outputs.hit != 'true' && steps.existing.outputs.hit == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ steps.existing.outputs.run_id }}
@@ -115,7 +131,7 @@ jobs:
             --artifact build/main-component --revision "$MAIN_REVISION" >/dev/null
 
       - name: Checkout exact Main_MiSTer revision
-        if: steps.existing.outputs.hit != 'true'
+        if: steps.durable.outputs.hit != 'true' && steps.existing.outputs.hit != 'true'
         uses: actions/checkout@v7
         with:
           repository: NigelBreslaw/Main_MiSTer
@@ -124,7 +140,7 @@ jobs:
           fetch-depth: 0
 
       - name: Test Main fork and component contract
-        if: steps.existing.outputs.hit != 'true'
+        if: steps.durable.outputs.hit != 'true' && steps.existing.outputs.hit != 'true'
         working-directory: Main_MiSTer
         run: |
           scripts/test-magik-state.sh
@@ -132,7 +148,7 @@ jobs:
           python3 tests/test_main_component.py
 
       - name: Cache Main toolchain
-        if: steps.existing.outputs.hit != 'true'
+        if: steps.durable.outputs.hit != 'true' && steps.existing.outputs.hit != 'true'
         id: main-toolchain-cache
         uses: actions/cache@v6
         with:
@@ -140,21 +156,21 @@ jobs:
           key: main-toolchain-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.MAIN_TOOLCHAIN_VERSION }}
 
       - name: Install Main toolchain
-        if: steps.existing.outputs.hit != 'true' && steps.main-toolchain-cache.outputs.cache-hit != 'true'
+        if: steps.durable.outputs.hit != 'true' && steps.existing.outputs.hit != 'true' && steps.main-toolchain-cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p ~/.cache/mister-magik
           wget -qO- "https://developer.arm.com/-/media/Files/downloads/gnu-a/10.2-2020.11/binrel/${MAIN_TOOLCHAIN_VERSION}.tar.xz" \
             | tar -xJ -C ~/.cache/mister-magik
 
       - name: Build exact Main component
-        if: steps.existing.outputs.hit != 'true'
+        if: steps.durable.outputs.hit != 'true' && steps.existing.outputs.hit != 'true'
         working-directory: Main_MiSTer
         run: |
           export PATH="$HOME/.cache/mister-magik/$MAIN_TOOLCHAIN_VERSION/bin:$PATH"
           make
 
       - name: Package and independently verify Main component
-        if: steps.existing.outputs.hit != 'true'
+        if: steps.durable.outputs.hit != 'true' && steps.existing.outputs.hit != 'true'
         env:
           MAIN_REVISION: ${{ steps.identity.outputs.main_revision }}
         run: |
@@ -178,8 +194,12 @@ jobs:
         env:
           HIT: ${{ steps.existing.outputs.hit }}
           EXISTING_RUN_ID: ${{ steps.existing.outputs.run_id }}
+          DURABLE_HIT: ${{ steps.durable.outputs.hit }}
+          DURABLE_RUN_ID: ${{ steps.durable.outputs.run_id }}
         run: |
-          if [ "$HIT" = true ]; then
+          if [ "$DURABLE_HIT" = true ]; then
+            echo "run_id=$DURABLE_RUN_ID" >> "$GITHUB_OUTPUT"
+          elif [ "$HIT" = true ]; then
             echo "run_id=$EXISTING_RUN_ID" >> "$GITHUB_OUTPUT"
           else
             echo "run_id=$GITHUB_RUN_ID" >> "$GITHUB_OUTPUT"
