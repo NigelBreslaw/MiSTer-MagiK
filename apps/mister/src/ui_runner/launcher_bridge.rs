@@ -985,6 +985,9 @@ pub(super) struct LauncherBridgeKey {
     home_scroll_held: bool,
     settings_focused: bool,
     settings_selected: usize,
+    screensaver_selected: usize,
+    screensaver_enabled: bool,
+    screensaver_delay_minutes: u8,
     simple_joystick_handling: bool,
     licenses_selected: usize,
     licenses_expanded: bool,
@@ -1015,6 +1018,9 @@ impl LauncherBridgeKey {
             home_scroll_held: nav.home_horizontal_held(),
             settings_focused: nav.settings_focused,
             settings_selected: nav.settings_selected,
+            screensaver_selected: nav.screensaver_selected,
+            screensaver_enabled: nav.settings.screensaver_enabled,
+            screensaver_delay_minutes: nav.settings.screensaver_delay_minutes,
             simple_joystick_handling: nav.settings.simple_joystick_handling,
             licenses_selected: nav.licenses_selected,
             licenses_expanded: nav.licenses_expanded,
@@ -1194,6 +1200,25 @@ mod tests {
         let after = LauncherBridgeKey::from_nav(&nav);
 
         assert!(before != after);
+    }
+
+    #[test]
+    fn launcher_bridge_key_tracks_screensaver_settings() {
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Screensaver;
+
+        let before = LauncherBridgeKey::from_nav(&nav);
+        nav.screensaver_selected = 1;
+        let selected = LauncherBridgeKey::from_nav(&nav);
+        assert!(before != selected);
+
+        nav.settings.screensaver_enabled = !nav.settings.screensaver_enabled;
+        let enabled = LauncherBridgeKey::from_nav(&nav);
+        assert!(selected != enabled);
+
+        nav.settings.screensaver_delay_minutes += 1;
+        let delay = LauncherBridgeKey::from_nav(&nav);
+        assert!(enabled != delay);
     }
 
     #[test]
