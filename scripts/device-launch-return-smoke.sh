@@ -8,9 +8,7 @@
 #   1. start Arcade at two forced selected rows
 #   2. use a gated launcher env hook to launch that selected game
 #   3. remove launcher.env
-#   4. return from the running core with Main's active-core command when the
-#      FIFO has a reader, or the release-acceptance raw reboot recovery path
-#      when the active core has replaced Main without a FIFO reader
+#   4. return through the agent's acknowledged Main operation
 #   5. assert MagiK consumes /tmp return state and restores Arcade at that row
 #   6. report total return, black hold, and input-ready timing for both games
 set -euo pipefail
@@ -18,7 +16,6 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
 source "$HERE/scripts/lib/magik-layout.sh"
-source "$HERE/scripts/lib/mister-fifo-lib.sh"
 source "$HERE/scripts/lib/latch-readiness-lib.sh"
 magik_layout_select dev
 REMOTE_ENV="/media/fat/mister-magik-dev/launcher.env"
@@ -142,20 +139,17 @@ remote() {
 
 send_main_command() {
   local command="$1"
-  local timeout="${2:-5}"
-  remote "$(mister_fifo_remote_command "$command" "$timeout")"
+  case "$command" in
+    "load_core menu.rbf") "$MISTER" agent magik return-to-launcher ;;
+    "mister_magik_restart_launcher") "$MISTER" agent magik restart-launcher ;;
+    *) echo "unsupported acknowledged Main command: $command" >&2; return 2 ;;
+  esac
 }
 
 send_timed_main_command() {
   local command="$1"
-  local timeout="${2:-5}"
-  local bounded_command
-  bounded_command="$(mister_fifo_remote_command "$command" "$timeout")"
-  remote "awk '{printf \"%.0f\\n\", \$1 * 1000}' /proc/uptime > '$RETURN_START_MS'; $bounded_command"
-}
-
-fifo_has_reader() {
-  remote "for p in /proc/[0-9]*; do ls -l \"\$p/fd\" 2>/dev/null | grep -q /dev/MiSTer_cmd && exit 0; done; exit 1" >/dev/null 2>&1
+  remote "awk '{printf \"%.0f\\n\", \$1 * 1000}' /proc/uptime > '$RETURN_START_MS'"
+  send_main_command "$command"
 }
 
 launcher_is_active() {
@@ -224,12 +218,8 @@ trap cleanup EXIT
 
 echo "==> Resetting launcher state"
 remote "rm -f '$REMOTE_ENV' '$RETURN_STATE' '$STALE_RETURN_STATE' '$REMOTE_LOG' '$REMOTE_EVENTS'"
-if ! launcher_is_active && ! fifo_has_reader; then
-  echo "WARN: no active launcher or /dev/MiSTer_cmd reader; recovering with raw reboot"
-  "$MISTER" reboot-wait --raw
-elif ! send_main_command "mister_magik_restart_launcher"; then
-  echo "WARN: launcher restart command could not write to /dev/MiSTer_cmd; recovering with raw reboot"
-  "$MISTER" reboot-wait --raw
+if ! launcher_is_active; then
+  send_main_command "mister_magik_restart_launcher"
 fi
 wait_remote "launcher active before smoke" 60 "grep -q '\"launcher_state\":\"LauncherActive\"' '$MAIN_STATUS' 2>/dev/null && grep -q '\"scene\":\"launcher\"' '$STATUS' 2>/dev/null"
 
@@ -258,15 +248,9 @@ EOF
 
   echo "==> [$iteration/2] Returning from $game_title via load_core menu.rbf"
   remote "rm -f '$REMOTE_ENV' '$REMOTE_LOG' '$REMOTE_EVENTS'"
-  if ! fifo_has_reader; then
-    echo "FAIL: active core has no /dev/MiSTer_cmd reader; cannot exercise Menu-to-latch return" >&2
+  if ! send_timed_main_command "load_core menu.rbf"; then
+    echo "FAIL: acknowledged return-to-launcher failed" >&2
     remote "rm -f '$REMOTE_ENV' '$RETURN_STATE'"
-    "$MISTER" reboot-wait --raw
-    exit 1
-  elif ! send_timed_main_command "load_core menu.rbf"; then
-    echo "FAIL: load_core menu.rbf failed; cannot exercise Menu-to-latch return" >&2
-    remote "rm -f '$REMOTE_ENV' '$RETURN_STATE'"
-    "$MISTER" reboot-wait --raw
     exit 1
   fi
 

@@ -8,7 +8,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="${MISTER:-$ROOT/scripts/mister}"
 source "$ROOT/scripts/lib/magik-layout.sh"
-source "$ROOT/scripts/lib/mister-fifo-lib.sh"
 source "$ROOT/scripts/lib/catalog-device-test-lib.sh"
 
 DEPLOY=skip
@@ -68,7 +67,6 @@ if [ "$SELF_TEST" -eq 1 ]; then
   expected=$'fingerprint=deadbeef\nsystem=arcade games=5\nsystem=snes games=4\nsystems=2\ntotal_games=9'
   [ "$(printf '%s\n' "$inspect" | normalise_inspector)" = "$expected" ]
   catalog_device_test_self_test >/dev/null
-  mister_fifo_self_test
   echo "device-catalog-resume-acceptance self-test ok"
   exit 0
 fi
@@ -131,7 +129,11 @@ wait_remote() {
 }
 
 main_command() {
-  remote "$(mister_fifo_remote_command "$1" 8)"
+  case "$1" in
+    "load_core menu.rbf") "$MISTER" agent magik return-to-launcher ;;
+    "mister_magik_restart_launcher") "$MISTER" agent magik restart-launcher ;;
+    *) fail "unsupported acknowledged Main command: $1" ;;
+  esac
 }
 
 write_test_env() {
@@ -159,9 +161,7 @@ cleanup() {
   rm -f "$ENV_LOCAL"
   if [ "$CLEANUP_ACTIVE" -eq 1 ]; then
     remote "rm -f /tmp/catalog-resume-watcher-cleanup-failed; if [ -s '$REMOTE_WATCHER' ]; then watcher=\$(cat '$REMOTE_WATCHER'); case \"\$watcher\" in *[!0-9]*|'') ;; *) kill \"\$watcher\" 2>/dev/null || true; wait \"\$watcher\" 2>/dev/null || true; if kill -0 \"\$watcher\" 2>/dev/null; then : > /tmp/catalog-resume-watcher-cleanup-failed; fi ;; esac; fi; rm -f '$REMOTE_GATE' '$REMOTE_WATCHER' /tmp/catalog-resume-watcher.log '$REMOTE_ENV'" >/dev/null 2>&1 || true
-    if ! remote "test -p /dev/MiSTer_cmd" >/dev/null 2>&1 || ! main_command "load_core menu.rbf" >/dev/null 2>&1; then
-      "$MISTER" reboot-wait --raw >/dev/null 2>&1 || true
-    fi
+    main_command "load_core menu.rbf" >/dev/null 2>&1 || true
     remote "killall mister-magik-fb 2>/dev/null || true; rm -rf '$REMOTE_CATALOG'; if [ -d '$REMOTE_BACKUP/catalog-v3' ]; then mv '$REMOTE_BACKUP/catalog-v3' '$REMOTE_CATALOG'; fi; rm -f '$REMOTE_BOOTSTRAP'; if [ -f '$REMOTE_BACKUP/arcade-bootstrap.nav.lz4b' ]; then mv '$REMOTE_BACKUP/arcade-bootstrap.nav.lz4b' '$REMOTE_BOOTSTRAP'; fi; if [ -f '$REMOTE_BACKUP/launcher.env' ]; then mv '$REMOTE_BACKUP/launcher.env' '$REMOTE_ENV'; fi; rmdir '$REMOTE_BACKUP' 2>/dev/null || true; rm -f '$REMOTE_GATE' '$REMOTE_WATCHER' /tmp/catalog-resume-watcher.log" >/dev/null 2>&1 || true
     main_command "mister_magik_restart_launcher" >/dev/null 2>&1 || true
     if ! remote "test ! -e '$REMOTE_GATE'; test ! -e '$REMOTE_WATCHER'; test ! -e /tmp/catalog-resume-watcher-cleanup-failed; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot; ! grep -q 'MISTER_LAUNCHER_AUTO_LAUNCH_SELECTED=1' '$REMOTE_ENV' 2>/dev/null"; then
@@ -179,8 +179,8 @@ remote "test -x '$REMOTE_BIN'; test -d '$REMOTE_CATALOG'; '$REMOTE_BIN' catalog-
 grep -q $'catalog_v3_summary_tsv\tvalid=1' "$BASELINE" || fail "baseline catalog is not valid"
 normalise_inspector <"$BASELINE" >"$BASELINE_NORMAL"
 
-echo "==> Backing up catalog, bootstrap index, and launcher environment"
-remote "rm -rf '$REMOTE_BACKUP'; mkdir -p '$REMOTE_BACKUP'; cp -a '$REMOTE_CATALOG' '$REMOTE_BACKUP/catalog-v3'; if [ -f '$REMOTE_BOOTSTRAP' ]; then cp -p '$REMOTE_BOOTSTRAP' '$REMOTE_BACKUP/arcade-bootstrap.nav.lz4b'; fi; if [ -f '$REMOTE_ENV' ]; then cp -p '$REMOTE_ENV' '$REMOTE_BACKUP/launcher.env'; fi"
+echo "==> Parking catalog, bootstrap index, and launcher environment atomically"
+remote "rm -rf '$REMOTE_BACKUP'; mkdir -p '$REMOTE_BACKUP'; mv '$REMOTE_CATALOG' '$REMOTE_BACKUP/catalog-v3'; if [ -f '$REMOTE_BOOTSTRAP' ]; then mv '$REMOTE_BOOTSTRAP' '$REMOTE_BACKUP/arcade-bootstrap.nav.lz4b'; fi; if [ -f '$REMOTE_ENV' ]; then mv '$REMOTE_ENV' '$REMOTE_BACKUP/launcher.env'; fi; sync"
 
 echo "==> Creating genuine cold first build"
 remote "rm -rf '$REMOTE_CATALOG'; rm -f '$REMOTE_BOOTSTRAP' '$REMOTE_GATE' '$REMOTE_LOG' '$REMOTE_EVENTS'"
