@@ -70,6 +70,35 @@ case "$warmups" in ''|*[!0-9]*) echo "ERROR: --warmups must be an integer" >&2; 
 
 mkdir -p "$OUT_DIR" "$LOG_DIR"
 
+state_path() {
+  case "$state" in
+    touch-rust-bin) echo "$RUST_DIR/src/ui_runner.rs" ;;
+    touch-rust-lib) echo "$RUST_DIR/src/launcher.rs" ;;
+    touch-rust-catalog) echo "$ROOT/crates/catalog/src/arcade_catalog.rs" ;;
+    touch-rust-core) echo "$ROOT/crates/magik-core/src/input_state.rs" ;;
+    touch-rust-platform) echo "$ROOT/mister/platform/runtime/src/framebuffer/mod.rs" ;;
+    touch-slint-launcher) echo "$RUST_DIR/ui/launcher.slint" ;;
+    touch-slint-shared) echo "$RUST_DIR/ui/mister_window.slint" ;;
+    touch-build-rs) echo "$RUST_DIR/build.rs" ;;
+  esac
+}
+
+restore_path="$(state_path)"
+restore_stamp=""
+if [ -n "$restore_path" ]; then
+  restore_stamp="$(mktemp "${TMPDIR:-/tmp}/mister-magik-build-bench-stamp.XXXXXX")"
+  touch -r "$restore_path" "$restore_stamp"
+fi
+cleanup() {
+  if [ -n "$restore_stamp" ] && [ -e "$restore_stamp" ]; then
+    touch -r "$restore_stamp" "$restore_path"
+    rm -f "$restore_stamp"
+  fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 ensure_tsv_header() {
   local expected
   expected="$(tsv_header)"
@@ -372,8 +401,8 @@ run_one() {
     /(^|[[:space:]])Compiling / { compiling++ }
     /(^|[[:space:]])Checking / { checking++ }
     /(^|[ \/])cargo (build|check|test|clippy|fmt)|container build profile=/ { cargo_runs++ }
-    /container run|image arch probe/ { container_runs++ }
-    /minimal FFmpeg|build-minimal-ffmpeg/ { ffmpeg_runs++ }
+    /^WORKFLOW_COUNT kind=container / { container_runs++ }
+    /^WORKFLOW_COUNT kind=ffmpeg-cache-check / { ffmpeg_runs++ }
     END {
       printf "BUILD_BENCH_COUNTS compiled=%d checked=%d cargo_runs=%d container_runs=%d ffmpeg_runs=%d\n",
         compiling + 0, checking + 0, cargo_runs + 0, container_runs + 0, ffmpeg_runs + 0

@@ -209,7 +209,8 @@ image_stamp() {
 }
 
 image_exists() {
-  container run --arch arm64 --rm "$IMAGE" true >/dev/null 2>&1
+  echo 'WORKFLOW_COUNT kind=container phase=image-lookup'
+  [ "$(container run --arch arm64 --rm "$IMAGE" uname -m 2>/dev/null || true)" = aarch64 ]
 }
 
 ensure_image() {
@@ -271,6 +272,7 @@ fi
 EXTRA_ENVS=()
 if [ "$LIB_ONLY" -eq 0 ] && [ "$BIN_NAME" = "mister-magik-fb" ]; then
   phase_start ffmpeg-cache-check
+  echo 'WORKFLOW_COUNT kind=ffmpeg-cache-check phase=ffmpeg-cache-check'
   bash "$PWD/scripts/build-minimal-ffmpeg.sh"
   phase_end ffmpeg-cache-check
   EXTRA_ENVS+=(
@@ -290,10 +292,6 @@ if [ "$PROFILE" = release-device-profile ]; then
   CONTAINER_RUSTFLAGS="$CONTAINER_RUSTFLAGS -C force-frame-pointers=yes"
 fi
 
-echo "==> image arch probe"
-phase_start image-arch-probe
-container run --arch arm64 --rm "$IMAGE" uname -m
-phase_end image-arch-probe
 echo "==> container build profile=$PROFILE ui_scope=$UI_SCOPE features=$FEATURE_LIST"
 echo "==> target dir: $TARGET_DIR"
 BUILD_METADATA_ENVS=(
@@ -302,6 +300,7 @@ BUILD_METADATA_ENVS=(
   --env MISTER_MAGIK_BUILD_TIME="$MISTER_MAGIK_BUILD_TIME"
 )
 phase_start cargo-container
+echo 'WORKFLOW_COUNT kind=container phase=cargo-container'
 container run --arch arm64 --rm \
   --cpus "$CONTAINER_CPUS" \
   --memory "$CONTAINER_MEMORY" \

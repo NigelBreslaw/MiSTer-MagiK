@@ -7,6 +7,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+export GIT_OPTIONAL_LOCKS=0
 
 tier=quick
 group=all
@@ -277,8 +278,8 @@ record_command() {
   compiled="$(awk '/(^|[[:space:]])Compiling / { n++ } END { print n + 0 }' "$log" "$timing")"
   checked="$(awk '/(^|[[:space:]])Checking / { n++ } END { print n + 0 }' "$log" "$timing")"
   cargo_runs="$(awk '/(^|[ \/])cargo (build|check|test|clippy|fmt)|container build profile=/ { n++ } END { print n + 0 }' "$log" "$timing")"
-  container_runs="$(awk '/container run|image arch probe/ { n++ } END { print n + 0 }' "$log" "$timing")"
-  ffmpeg_runs="$(awk '/minimal FFmpeg|build-minimal-ffmpeg/ { n++ } END { print n + 0 }' "$log" "$timing")"
+  container_runs="$(awk '/^WORKFLOW_COUNT kind=container / { n++ } END { print n + 0 }' "$log" "$timing")"
+  ffmpeg_runs="$(awk '/^WORKFLOW_COUNT kind=ffmpeg-cache-check / { n++ } END { print n + 0 }' "$log" "$timing")"
   checks="$(awk '/VALIDATION start check=/ { n++ } END { print n + 0 }' "$log" "$timing")"
   if grep -q '^BUILD_BENCH_COUNTS ' "$log"; then
     compiled="$(awk -F'[ =]' '/^BUILD_BENCH_COUNTS / { for (i=1;i<=NF;i++) if ($i=="compiled") n+=$(i+1) } END { print n+0 }' "$log")"
@@ -439,16 +440,21 @@ run_deploy_group() {
     repeat_command deploy fake-fast 'local fake deploy --fast' none bash -c '
       set -euo pipefail
       bin="$1"; dest="$2"
-      echo phase=receipt-hash
+      now() { perl -MTime::HiRes=time -e '\''printf "%.0f", time * 1000'\''; }
+      start() { echo "WORKFLOW_PHASE start group=deploy phase=$1 time_ms=$(now)"; }
+      end() { echo "WORKFLOW_PHASE end group=deploy phase=$1 time_ms=$(now)"; }
+      start build; echo "WORKFLOW_COUNT kind=build phase=build"; end build
+      start local-identity; echo "WORKFLOW_COUNT kind=hash phase=local-identity"
       before="$(shasum -a 256 "$bin" | awk "{print \$1}")"
-      echo phase=manifest-preflight simulated=1
-      echo phase=transfer simulated=1
+      end local-identity
+      start manifest-preflight; echo "WORKFLOW_COUNT kind=remote-round-trip phase=manifest-preflight"; end manifest-preflight
+      start transfer-rebind; echo "WORKFLOW_COUNT kind=remote-round-trip phase=transfer-rebind"
       cp "$bin" "$dest"
-      echo phase=remote-hash simulated=1
+      echo "WORKFLOW_COUNT kind=hash phase=transfer-rebind"
       after="$(shasum -a 256 "$dest" | awk "{print \$1}")"
       [ "$before" = "$after" ]
-      echo phase=manifest-rebind simulated=1
-      echo phase=final-verification simulated=1
+      end transfer-rebind
+      start final-manifest-verification; echo "WORKFLOW_COUNT kind=remote-round-trip phase=final-manifest-verification"; end final-manifest-verification
     ' _ "$fast_bin" "$out/fake-fast.bin"
   else
     echo "SKIP deploy fake-fast: build $fast_bin first" | tee "$logs/deploy-fake-fast-skip.log"
@@ -457,16 +463,21 @@ run_deploy_group() {
     repeat_command deploy fake-device 'local fake deploy --device' none bash -c '
       set -euo pipefail
       bin="$1"; dest="$2"
-      echo phase=receipt-hash
+      now() { perl -MTime::HiRes=time -e '\''printf "%.0f", time * 1000'\''; }
+      start() { echo "WORKFLOW_PHASE start group=deploy phase=$1 time_ms=$(now)"; }
+      end() { echo "WORKFLOW_PHASE end group=deploy phase=$1 time_ms=$(now)"; }
+      start build; echo "WORKFLOW_COUNT kind=build phase=build"; end build
+      start local-identity; echo "WORKFLOW_COUNT kind=hash phase=local-identity"
       before="$(shasum -a 256 "$bin" | awk "{print \$1}")"
-      echo phase=manifest-preflight simulated=1
-      echo phase=transfer simulated=1
+      end local-identity
+      start manifest-preflight; echo "WORKFLOW_COUNT kind=remote-round-trip phase=manifest-preflight"; end manifest-preflight
+      start transfer-rebind; echo "WORKFLOW_COUNT kind=remote-round-trip phase=transfer-rebind"
       cp "$bin" "$dest"
-      echo phase=remote-hash simulated=1
+      echo "WORKFLOW_COUNT kind=hash phase=transfer-rebind"
       after="$(shasum -a 256 "$dest" | awk "{print \$1}")"
       [ "$before" = "$after" ]
-      echo phase=manifest-rebind simulated=1
-      echo phase=final-verification simulated=1
+      end transfer-rebind
+      start final-manifest-verification; echo "WORKFLOW_COUNT kind=remote-round-trip phase=final-manifest-verification"; end final-manifest-verification
     ' _ "$device_bin" "$out/fake-device.bin"
   else
     echo "SKIP deploy fake-device: build $device_bin first" | tee "$logs/deploy-fake-device-skip.log"

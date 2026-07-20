@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 apple = (ROOT / "apps/mister/build-arm64-apple-container.sh").read_text()
 cross = (ROOT / "apps/mister/build-arm.sh").read_text()
 licenses = (ROOT / "apps/mister/src/licenses.rs").read_text()
+ffmpeg = (ROOT / "apps/mister/scripts/build-minimal-ffmpeg.sh").read_text()
 
 for name, text in (("Apple", apple), ("cross", cross)):
     assert "--check" in text, f"{name} wrapper has no check mode"
@@ -36,6 +37,13 @@ bench = (ROOT / "scripts/bench-debug-build.sh").read_text()
 assert '--fast) PROFILE=release; BUILD_FLAG=(--fast)' in deploy
 assert 'build-ui-fast) echo "apps/mister/build-arm.sh --fast"' in bench
 assert 'build-ui-fast) profile="release"' in bench
+assert 'restore_stamp="$(mktemp ' in bench
+assert 'touch -r "$restore_stamp" "$restore_path"' in bench
+assert "image arch probe" not in apple
+assert 'container run --arch arm64 --rm "$IMAGE" uname -m' in apple
+assert "VERIFIED_STAMP=" in ffmpeg and "verified_cache_is_current" in ffmpeg
+assert 'agent deploy-magik-bin "$BIN" "$REMOTE" --json' in deploy
+assert "Reusing agent-verified transfer hash" in deploy
 
 arcade_profile = (ROOT / "scripts/profile-arcade-scroll.sh").read_text()
 assert '--fast) build_profile="release"' in arcade_profile

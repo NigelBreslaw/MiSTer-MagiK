@@ -12,6 +12,7 @@ SRC="$WORK/ffmpeg-$VERSION"
 DIST="$WORK/dist"
 FFMPEG_MODE="video-fast-noswscale"
 STAMP="$DIST/.mister-minimal-ffmpeg-$VERSION-h264-aac-s16le-swresample-$FFMPEG_MODE-cortex-a9-o3"
+VERIFIED_STAMP="$DIST/.mister-minimal-ffmpeg-verified"
 DOCKER_IMAGE="${MISTER_CROSS_IMAGE:-$(python3 "$HERE/../../scripts/checks/ci-cache-identity.py" --value cross_image)}"
 APPLE_IMAGE="${MISTER_APPLE_CONTAINER_IMAGE:-mister-magik-cross-armv7:ubuntu20-arm64}"
 BACKEND="${MISTER_FFMPEG_BUILD_BACKEND:-auto}"
@@ -40,6 +41,29 @@ dist_is_complete() {
   done
 }
 
+cache_identity() {
+  local file
+  {
+    printf 'version=%s\nmode=%s\n' "$VERSION" "$FFMPEG_MODE"
+    shasum -a 256 "$0" | awk '{print $1}'
+    for file in "${REQUIRED_DIST_FILES[@]}" "$SRC/config.h"; do
+      stat -f '%N:%z:%m' "$file" 2>/dev/null || stat -c '%n:%s:%Y' "$file"
+    done
+  } | shasum -a 256 | awk '{print $1}'
+}
+
+verified_cache_is_current() {
+  [ -f "$VERIFIED_STAMP" ] && [ "$(cat "$VERIFIED_STAMP")" = "$(cache_identity)" ]
+}
+
+record_verified_cache() {
+  local identity tmp
+  identity="$(cache_identity)"
+  tmp="${VERIFIED_STAMP}.tmp.$$"
+  printf '%s\n' "$identity" >"$tmp"
+  mv "$tmp" "$VERIFIED_STAMP"
+}
+
 verify_cortex_a9_neon_ffmpeg() {
   grep -q "^#define ARCH_ARM 1$" "$SRC/config.h"
   grep -q "^#define HAVE_NEON 1$" "$SRC/config.h"
@@ -62,7 +86,10 @@ esac
 
 if dist_is_complete; then
   echo "==> minimal FFmpeg already built: $DIST"
-  verify_cortex_a9_neon_ffmpeg
+  if ! verified_cache_is_current; then
+    verify_cortex_a9_neon_ffmpeg
+    record_verified_cache
+  fi
   exit 0
 fi
 if [ -e "$DIST" ]; then
@@ -169,5 +196,6 @@ make -j"$(nproc)" install
 verify_cortex_a9_neon_ffmpeg
 
 touch "$STAMP"
+record_verified_cache
 echo "==> minimal FFmpeg built: $DIST"
 find "$DIST/lib" -name "*.a" -exec ls -lh {} +
