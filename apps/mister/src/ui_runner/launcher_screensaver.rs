@@ -769,13 +769,14 @@ fn blit_scaled_subpixel_x(
     screen_h: usize,
     image: &SaverImage,
     half_shifted: &SaverImage,
+    corner_insets: &[u8],
     x_fp: i64,
     y: isize,
 ) {
     let x = x_fp.div_euclid(PARADE_SUBPIXEL_ONE) as isize;
     let fraction = x_fp.rem_euclid(PARADE_SUBPIXEL_ONE) as u8;
     if fraction == 0 {
-        blit_scaled(dst, screen_w, screen_h, image, x, y, image.w, image.h, 255);
+        blit_rounded_card(dst, screen_w, screen_h, image, corner_insets, x, y);
         return;
     }
     if fraction == 128 {
@@ -787,13 +788,18 @@ fn blit_scaled_subpixel_x(
             let dst_row = dst_y as usize * screen_w;
             let src_row = src_y * image.stride;
             let shifted_row = src_y * half_shifted.stride;
-            let left = x;
+            let inset = corner_insets.get(src_y).copied().unwrap_or(0) as usize;
+            let source_end = image.w.saturating_sub(inset);
+            if inset >= source_end {
+                continue;
+            }
+            let left = x + inset as isize;
             if left >= 0 && left < screen_w as isize {
                 dst[dst_row + left as usize] =
-                    blend_565(dst[dst_row + left as usize], image.pixels[src_row], 127);
+                    blend_565(dst[dst_row + left as usize], image.pixels[src_row + inset], 127);
             }
-            let copy_x0 = (x + 1).max(0) as usize;
-            let copy_x1 = (x + image.w as isize).clamp(0, screen_w as isize) as usize;
+            let copy_x0 = (left + 1).max(0) as usize;
+            let copy_x1 = (x + source_end as isize).clamp(0, screen_w as isize) as usize;
             if copy_x1 > copy_x0 {
                 let source_x0 = (copy_x0 as isize - x) as usize;
                 dst[dst_row + copy_x0..dst_row + copy_x1].copy_from_slice(
@@ -801,11 +807,11 @@ fn blit_scaled_subpixel_x(
                         [shifted_row + source_x0..shifted_row + source_x0 + copy_x1 - copy_x0],
                 );
             }
-            let right = x + image.w as isize;
+            let right = x + source_end as isize;
             if right >= 0 && right < screen_w as isize {
                 dst[dst_row + right as usize] = blend_565(
                     dst[dst_row + right as usize],
-                    image.pixels[src_row + image.w - 1],
+                    image.pixels[src_row + source_end - 1],
                     128,
                 );
             }
@@ -816,9 +822,48 @@ fn blit_scaled_subpixel_x(
     // phases. Snap an unsupported future phase instead of silently falling
     // back to the ARM-hostile per-pixel fractional compositor.
     let snapped_x = if fraction < 128 { x } else { x + 1 };
-    blit_scaled(
-        dst, screen_w, screen_h, image, snapped_x, y, image.w, image.h, 255,
+    blit_rounded_card(
+        dst,
+        screen_w,
+        screen_h,
+        image,
+        corner_insets,
+        snapped_x,
+        y,
     );
+}
+
+fn blit_rounded_card(
+    dst: &mut [Rgb565Pixel],
+    screen_w: usize,
+    screen_h: usize,
+    image: &SaverImage,
+    corner_insets: &[u8],
+    x: isize,
+    y: isize,
+) {
+    for src_y in 0..image.h {
+        let dst_y = y + src_y as isize;
+        if dst_y < 0 || dst_y >= screen_h as isize {
+            continue;
+        }
+        let inset = corner_insets.get(src_y).copied().unwrap_or(0) as usize;
+        let source_end = image.w.saturating_sub(inset);
+        if inset >= source_end {
+            continue;
+        }
+        let dst_x0 = (x + inset as isize).max(0) as usize;
+        let dst_x1 = (x + source_end as isize).clamp(0, screen_w as isize) as usize;
+        if dst_x1 <= dst_x0 {
+            continue;
+        }
+        let source_x0 = (dst_x0 as isize - x) as usize;
+        let source_row = src_y * image.stride + source_x0;
+        let target_row = dst_y as usize * screen_w + dst_x0;
+        let copy_len = dst_x1 - dst_x0;
+        dst[target_row..target_row + copy_len]
+            .copy_from_slice(&image.pixels[source_row..source_row + copy_len]);
+    }
 }
 
 fn prepare_half_shifted(image: &SaverImage) -> SaverImage {
@@ -1663,12 +1708,12 @@ fn parade_depth_style(speed: usize) -> (usize, usize, u8) {
         .saturating_sub(PARADE_MIN_TILE_SPEED)
         .min(PARADE_SPEED_COUNT - 1);
     let speed = depth + PARADE_MIN_TILE_SPEED;
-    // Each layer occupies another fifth of the screenshot pack's 320x320
-    // maximum. The actual card is fitted inside this box without distortion.
+    // Each layer occupies another fifth of the half-size 160x160 maximum.
+    // The actual card is fitted inside this box without distortion.
     (
         160 * speed / PARADE_SPEED_COUNT,
         160 * speed / PARADE_SPEED_COUNT,
-        [72, 92, 113, 133, 255][depth],
+        [145, 170, 198, 226, 255][depth],
     )
 }
 
@@ -1809,6 +1854,70 @@ fn scale_lanczos3_rgb565_tinted(
     }
 }
 
+fn apply_parade_depth_cues(image: &mut SaverImage, speed: usize) {
+    let depth = speed
+        .saturating_sub(PARADE_MIN_TILE_SPEED)
+        .min(PARADE_SPEED_COUNT - 1);
+    let atmosphere = [20_u32, 14, 8, 3, 0][depth];
+    let desaturation = [25_u32, 16, 8, 3, 0][depth];
+    for pixel in &mut image.pixels {
+        let packed = pixel.0;
+        let mut r = u32::from((packed >> 11) & 0x1f) * 255 / 31;
+        let mut g = u32::from((packed >> 5) & 0x3f) * 255 / 63;
+        let mut b = u32::from(packed & 0x1f) * 255 / 31;
+        let luminance = (77 * r + 150 * g + 29 * b + 128) >> 8;
+        r = (r * (100 - desaturation) + luminance * desaturation + 50) / 100;
+        g = (g * (100 - desaturation) + luminance * desaturation + 50) / 100;
+        b = (b * (100 - desaturation) + luminance * desaturation + 50) / 100;
+        r = (r * (100 - atmosphere) + 50) / 100;
+        g = (g * (100 - atmosphere) + 50) / 100;
+        b = (b * (100 - atmosphere) + 10 * atmosphere + 50) / 100;
+        *pixel = color565(r as u8, g as u8, b as u8);
+    }
+    if depth >= 3 {
+        rim_parade_card(image);
+    }
+}
+
+fn rim_parade_card(image: &mut SaverImage) {
+    if image.w == 0 || image.h == 0 {
+        return;
+    }
+    let highlight = color565(210, 225, 255);
+    let shadow = color565(0, 0, 8);
+    for x in 0..image.w {
+        image.pixels[x] = blend_565(image.pixels[x], highlight, 20);
+        let bottom = (image.h - 1) * image.stride + x;
+        image.pixels[bottom] = blend_565(image.pixels[bottom], shadow, 36);
+    }
+    for y in 0..image.h {
+        let row = y * image.stride;
+        image.pixels[row] = blend_565(image.pixels[row], highlight, 20);
+        let right = row + image.w - 1;
+        image.pixels[right] = blend_565(image.pixels[right], shadow, 36);
+    }
+}
+
+fn prepare_parade_scaled(image: &SaverImage, speed: usize) -> SaverImage {
+    let (w, h, tint) = parade_scaled_style(image, speed);
+    let mut scaled = scale_lanczos3_rgb565_tinted(image, w, h, tint);
+    apply_parade_depth_cues(&mut scaled, speed);
+    scaled
+}
+
+fn prepare_parade_corner_insets(width: usize, height: usize) -> Vec<u8> {
+    let radius = (width.min(height) / 10).clamp(2, 10);
+    let mut insets = vec![0_u8; height];
+    for y in 0..radius.min(height / 2) {
+        let dy = radius.saturating_sub(y + 1) as f64;
+        let inside = ((radius * radius) as f64 - dy * dy).max(0.0).sqrt() as usize;
+        let inset = radius.saturating_sub(inside).min(u8::MAX as usize) as u8;
+        insets[y] = inset;
+        insets[height - 1 - y] = inset;
+    }
+    insets
+}
+
 struct ParadeTile {
     x_fp: i64,
     y: isize,
@@ -1818,6 +1927,7 @@ struct ParadeTile {
     image_idx: usize,
     scaled: SaverImage,
     half_shifted: SaverImage,
+    corner_insets: Vec<u8>,
     active: bool,
     next: Option<PreparedParadeCard>,
     pending_image_idx: Option<usize>,
@@ -1843,6 +1953,7 @@ struct PreparedParadeCard {
     speed: usize,
     scaled: SaverImage,
     half_shifted: SaverImage,
+    corner_insets: Vec<u8>,
     scale_us: u128,
 }
 
@@ -1883,6 +1994,7 @@ struct ParadeState {
     decode_successes: u64,
     decode_failures: u64,
     unique_decoded: HashSet<usize>,
+    failed_images: HashSet<usize>,
     layers: [ParadeLayerSchedule; PARADE_SPEED_COUNT],
     motion: ParadeMotion,
 }
@@ -1931,14 +2043,15 @@ impl ParadeState {
                             .map(preview_pixels_to_saver_image),
                     };
                     let card = source.map(|source| {
-                        let (w, h, tint) = parade_scaled_style(&source, job.speed);
-                        let scaled = scale_lanczos3_rgb565_tinted(&source, w, h, tint);
+                        let scaled = prepare_parade_scaled(&source, job.speed);
                         let half_shifted = prepare_half_shifted(&scaled);
+                        let corner_insets = prepare_parade_corner_insets(scaled.w, scaled.h);
                         PreparedParadeCard {
                             image_idx: job.image_idx,
                             speed: job.speed,
                             scaled,
                             half_shifted,
+                            corner_insets,
                             scale_us: started.elapsed().as_micros(),
                         }
                     });
@@ -1974,6 +2087,7 @@ impl ParadeState {
             decode_successes: 0,
             decode_failures: 0,
             unique_decoded: HashSet::new(),
+            failed_images: HashSet::new(),
             layers: [ParadeLayerSchedule {
                 next_spawn_frame: 0,
                 interval_frames: 1,
@@ -1998,6 +2112,7 @@ impl ParadeState {
         shuffle(&mut self.deck, &mut self.rng);
         self.cursor = 0;
         self.image_count = self.asset_keys.len();
+        self.failed_images.clear();
         if self.image_count == 0 {
             return false;
         }
@@ -2049,6 +2164,7 @@ impl ParadeState {
                     image_idx: card.image_idx,
                     scaled: card.scaled,
                     half_shifted: card.half_shifted,
+                    corner_insets: card.corner_insets,
                     active,
                     next: None,
                     pending_image_idx: None,
@@ -2099,6 +2215,7 @@ impl ParadeState {
                 }
                 Err(error) => {
                     self.decode_failures += 1;
+                    self.failed_images.insert(result.image_idx);
                     crate::ui_errln!(
                         "screensaver_decode_failed key={} error={}",
                         self.asset_keys[result.image_idx],
@@ -2156,6 +2273,7 @@ impl ParadeState {
                 };
                 let scaled = self.scale_image(&images[image_idx], speed);
                 let half_shifted = prepare_half_shifted(&scaled);
+                let corner_insets = prepare_parade_corner_insets(scaled.w, scaled.h);
                 let frames_until_exit = phase + rank as u64 * interval_frames;
                 let x_fp = w as i64 * PARADE_SUBPIXEL_ONE - frames_until_exit as i64 * velocity_fp;
                 let x = x_fp.div_euclid(PARADE_SUBPIXEL_ONE) as isize;
@@ -2172,6 +2290,7 @@ impl ParadeState {
                     image_idx,
                     scaled,
                     half_shifted,
+                    corner_insets,
                     active,
                     next: None,
                     pending_image_idx: None,
@@ -2197,6 +2316,9 @@ impl ParadeState {
             }
             let candidate = self.deck[self.cursor];
             self.cursor += 1;
+            if self.failed_images.contains(&candidate) {
+                continue;
+            }
             let already_visible = self.tiles.iter().enumerate().any(|(idx, tile)| {
                 (idx != replacing_tile && tile.active && tile.image_idx == candidate)
                     || tile
@@ -2255,6 +2377,7 @@ impl ParadeState {
             tile.image_idx = next.image_idx;
             tile.scaled = next.scaled;
             tile.half_shifted = next.half_shifted;
+            tile.corner_insets = next.corner_insets;
             tile.active = true;
             self.queue_successor(tile_idx, images);
             let interval = self.jittered_interval(self.layers[layer_idx].interval_frames);
@@ -2289,11 +2412,13 @@ impl ParadeState {
             if let Some(images) = images {
                 let scaled = self.scale_image(&images[image_idx], speed);
                 let half_shifted = prepare_half_shifted(&scaled);
+                let corner_insets = prepare_parade_corner_insets(scaled.w, scaled.h);
                 let card = PreparedParadeCard {
                     image_idx,
                     speed,
                     scaled,
                     half_shifted,
+                    corner_insets,
                     scale_us: 0,
                 };
                 self.tiles[tile_idx].next = Some(card);
@@ -2346,6 +2471,7 @@ impl ParadeState {
                         }
                         Err(error) => {
                             self.decode_failures += 1;
+                            self.failed_images.insert(result.image_idx);
                             if let Some(tile) = self.tiles.get_mut(result.tile_idx) {
                                 tile.pending_image_idx = None;
                             }
@@ -2384,12 +2510,14 @@ impl ParadeState {
                 };
                 let scaled = self.scale_image(&images[image_idx], speed);
                 let half_shifted = prepare_half_shifted(&scaled);
+                let corner_insets = prepare_parade_corner_insets(scaled.w, scaled.h);
                 self.tiles[tile_idx].pending_image_idx = None;
                 let card = PreparedParadeCard {
                     image_idx,
                     speed,
                     scaled,
                     half_shifted,
+                    corner_insets,
                     scale_us: 0,
                 };
                 self.tiles[tile_idx].next = Some(card);
@@ -2416,9 +2544,8 @@ impl ParadeState {
     }
 
     fn scale_image(&mut self, image: &SaverImage, speed: usize) -> SaverImage {
-        let (w, h, tint) = parade_scaled_style(image, speed);
         let started = Instant::now();
-        let scaled = scale_lanczos3_rgb565_tinted(image, w, h, tint);
+        let scaled = prepare_parade_scaled(image, speed);
         let elapsed_us = started.elapsed().as_micros();
         self.scale_count += 1;
         self.scale_total_us += elapsed_us;
@@ -2576,6 +2703,7 @@ fn render_parade(
             h,
             &tile.scaled,
             &tile.half_shifted,
+            &tile.corner_insets,
             tile.x_fp,
             tile.y,
         );
@@ -2600,6 +2728,7 @@ fn render_archive_parade(
             h,
             &tile.scaled,
             &tile.half_shifted,
+            &tile.corner_insets,
             tile.x_fp,
             tile.y,
         );
@@ -2876,7 +3005,7 @@ mod tests {
 
     #[test]
     fn parade_background_queue_is_bounded_by_one_successor_per_tile() {
-        let images = test_images(64);
+        let images = test_images(PARADE_TILE_COUNT * 2);
         let mut state = ParadeState::new(0xfeed_beef);
         state.ensure_initialized(&images, 960, 540);
 
@@ -2902,7 +3031,7 @@ mod tests {
 
     #[test]
     fn parade_keeps_visible_games_unique_and_exhausts_the_pool_before_recycling() {
-        let image_count = 64;
+        let image_count = PARADE_TILE_COUNT * 2 + 64;
         let images = test_images(image_count);
         let mut state = ParadeState::new(0x1234_5678_9abc_def0);
         state.ensure_initialized(&images, 960, 540);
@@ -3017,7 +3146,7 @@ mod tests {
     #[test]
     fn parade_initializes_all_five_layers_at_their_target_populations() {
         let mut state = ParadeState::new(0xfeed_face_cafe_beef);
-        let images = test_images(64);
+        let images = test_images(PARADE_TILE_COUNT);
         state.ensure_initialized(&images, 960, 540);
         let mut counts = [0usize; PARADE_SPEED_COUNT];
         for tile in &state.tiles {
@@ -3093,8 +3222,8 @@ mod tests {
             h: 320,
             stride: 240,
         };
-        assert_eq!(parade_scaled_style(&landscape, 5), (320, 240, 255));
-        assert_eq!(parade_scaled_style(&portrait, 5), (240, 320, 255));
+        assert_eq!(parade_scaled_style(&landscape, 5), (160, 120, 255));
+        assert_eq!(parade_scaled_style(&portrait, 5), (120, 160, 255));
     }
 
     #[test]
@@ -3107,6 +3236,7 @@ mod tests {
             stride: 4,
         };
         let half_shifted = prepare_half_shifted(&scaled);
+        let corner_insets = prepare_parade_corner_insets(scaled.w, scaled.h);
         state.tiles.push(ParadeTile {
             x_fp: -20 * PARADE_SUBPIXEL_ONE,
             y: 100,
@@ -3116,6 +3246,7 @@ mod tests {
             image_idx: 0,
             scaled,
             half_shifted,
+            corner_insets,
             active: true,
             next: None,
             pending_image_idx: None,
@@ -3167,8 +3298,10 @@ mod tests {
         state.deck = vec![0, 1];
         let slow_scaled = scale_lanczos3_rgb565_tinted(&images[0], 77, 58, 154);
         let slow_half_shifted = prepare_half_shifted(&slow_scaled);
+        let slow_corner_insets = prepare_parade_corner_insets(slow_scaled.w, slow_scaled.h);
         let fast_scaled = scale_lanczos3_rgb565_tinted(&images[1], 192, 144, 255);
         let fast_half_shifted = prepare_half_shifted(&fast_scaled);
+        let fast_corner_insets = prepare_parade_corner_insets(fast_scaled.w, fast_scaled.h);
         state.tiles = vec![
             ParadeTile {
                 x_fp: 20 * PARADE_SUBPIXEL_ONE,
@@ -3179,6 +3312,7 @@ mod tests {
                 image_idx: 0,
                 scaled: slow_scaled,
                 half_shifted: slow_half_shifted,
+                corner_insets: slow_corner_insets,
                 active: true,
                 next: None,
                 pending_image_idx: None,
@@ -3192,6 +3326,7 @@ mod tests {
                 image_idx: 1,
                 scaled: fast_scaled,
                 half_shifted: fast_half_shifted,
+                corner_insets: fast_corner_insets,
                 active: true,
                 next: None,
                 pending_image_idx: None,
@@ -3207,11 +3342,11 @@ mod tests {
     #[test]
     fn parade_card_size_and_brightness_increase_with_speed() {
         let styles = (1..=5).map(parade_depth_style).collect::<Vec<_>>();
-        assert_eq!(styles[0], (64, 64, 120));
-        assert_eq!(styles[1], (128, 128, 154));
-        assert_eq!(styles[2], (192, 192, 188));
-        assert_eq!(styles[3], (256, 256, 221));
-        assert_eq!(styles[4], (320, 320, 255));
+        assert_eq!(styles[0], (32, 32, 145));
+        assert_eq!(styles[1], (64, 64, 170));
+        assert_eq!(styles[2], (96, 96, 198));
+        assert_eq!(styles[3], (128, 128, 226));
+        assert_eq!(styles[4], (160, 160, 255));
         assert!(styles.windows(2).all(|pair| {
             pair[0].0 < pair[1].0 && pair[0].1 < pair[1].1 && pair[0].2 < pair[1].2
         }));
