@@ -4,12 +4,12 @@ Consult this table before editing or staging an unfamiliar file.
 
 | Path pattern | Classification | Authoritative input | Regeneration command | Staging policy | Validation |
 |---|---|---|---|---|---|
-| `apps/**/src/**/*.rs`, `crates/**/src/**/*.rs`, `mister/{platform/runtime,tools}/**/*.rs` | Hand-edited Rust | The file itself | None | Stage intentional source edits | `scripts/validate paths PATH...` |
+| `apps/**/src/**/*.rs`, `crates/**/src/**/*.rs`, `mister/{platform/runtime,tools}/**/*.rs` | Hand-edited Rust | The file itself | None | Stage intentional source edits | `scripts/agent verify --paths PATH...` |
 | `crates/catalog/src/**/*.rs` | Hand-edited catalog Rust | The file itself | None | Stage intentional source edits | Catalog tests plus consumer checks selected by validation |
 | `apps/mister/ui/**/*.slint`, `apps/desktop/ui/**/*.slint` | Hand-edited Slint | The `.slint` source | Cargo/Slint build | Stage source, never generated Rust | Production UI or desktop compiled check |
 | `apps/mister/ui-generated/{Cargo.toml,build.rs,src/lib.rs}` | Hand-edited generation glue | These tracked files and `apps/mister/ui/` | Cargo build | Stage only intentional glue changes | All-public format and UI check |
-| Cargo `OUT_DIR/*.rs` for Slint | Build-generated | `.slint` files and `ui-generated/build.rs` | `scripts/dev-rust check-ui` | Never stage | Rebuild from authoritative inputs |
-| `scripts/**/*.sh`, `scripts/**/*.py`, and extensionless executable entrypoints such as `scripts/validate`, `scripts/doctor`, `scripts/dev-rust`, and `scripts/mister` | Hand-edited tooling | The file itself | None | Stage focused script changes | `scripts/test-host-tools.sh --fast` or `--full` |
+| Cargo `OUT_DIR/*.rs` for Slint | Build-generated | `.slint` files and `ui-generated/build.rs` | `scripts/agent arm check-launcher` | Never stage | Rebuild from authoritative inputs |
+| `scripts/**/*.sh`, `scripts/**/*.py`, and extensionless executable entrypoints such as `scripts/agent` and `scripts/mister` | Hand-edited tooling | The file itself | None | Stage focused script changes | `scripts/agent verify --paths PATH...` |
 | `documentation/src/**`, `docs/**` | Hand-edited documentation | The Markdown/MDX/config source | `corepack pnpm --dir documentation run build` | Stage source; not `documentation/dist/` | Documentation build |
 | `mister/platform/kernel/scanout-slots/**`, `mister/platform/fpga/**` | Hand-edited platform source | C/headers/RTL/project inputs | Approved kernel/FPGA build scripts | Never stage generated modules/RBFs outside release evidence | Contract checks plus platform qualification |
 | `crates/catalog/data/core_launch_manifest.json` | Checked-in generated manifest | Installed-core evidence and harvest policy | `python3 scripts/media/harvest-core-launch-manifest.py --help` | Stage generator and regenerated manifest together | Catalog tests/full host |

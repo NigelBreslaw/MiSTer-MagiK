@@ -40,7 +40,7 @@ File authority is documented in `docs/agents/file-authority.md`.
   if the port is unavailable, report that result instead of retrying with a
   different command shape.
 - For compiled UI validation use:
-  `cargo check --manifest-path apps/desktop/Cargo.toml --no-default-features --features compiled-ui`
+  `scripts/agent verify --paths apps/desktop`
 - Desktop tests and coverage intentionally use Slint's software renderer by
   default so they do not trigger `skia-bindings` network fetches in cold or
   sandboxed environments. Use `apps/desktop/scripts/dev-live.sh` for the live Skia
@@ -76,9 +76,9 @@ File authority is documented in `docs/agents/file-authority.md`.
 Run the focused checks before committing desktop UI work:
 
 ```bash
-cargo test --manifest-path apps/desktop/Cargo.toml
-cargo check --manifest-path apps/desktop/Cargo.toml --no-default-features --features compiled-ui
-cargo check --manifest-path apps/desktop/Cargo.toml --features slint/mcp,live-ui,skia-renderer
+scripts/agent plan --paths apps/desktop
+scripts/agent check --paths apps/desktop
+scripts/agent verify --paths apps/desktop
 ```
 
 If you change the vendored Primer package, also run the relevant check there,

@@ -22,9 +22,9 @@ the scanout contract is in `scanout_slots_contract.rs`.
 ## Checks
 
 ```bash
-cargo test --manifest-path mister/tools/agent/Cargo.toml
-cargo clippy --manifest-path mister/tools/agent/Cargo.toml --all-targets -- -D warnings
-scripts/validate paths mister/tools/agent
+scripts/agent check --paths mister/tools/agent
+scripts/agent verify --paths mister/tools/agent
+scripts/agent verify --paths mister/tools/agent
 ```
 
 Building/deploying the ARM agent and all device communication require

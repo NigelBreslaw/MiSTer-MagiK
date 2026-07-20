@@ -18,18 +18,15 @@ Slint `std` only for macOS so Slint's AppKit system tray support compiles, while
 ARM/MiSTer targets keep the embedded no-std Slint configuration.
 
 ```bash
-scripts/dev-rust fmt       # cargo fmt --check
-scripts/dev-rust fmt-fix   # cargo fmt
-scripts/dev-rust test      # cargo test --lib --no-default-features
-scripts/dev-rust check     # cargo check --lib --no-default-features
-cargo test --manifest-path apps/mister/Cargo.toml --features ui --no-default-features
-scripts/dev-rust check-arm-lib       # ARM --lib check, no Slint/UI
-scripts/dev-rust check-arm-ui        # ARM launcher/controller UI check
-scripts/dev-rust check-ui            # alias: ARM launcher/controller UI check
-scripts/dev-rust check-arm-ui-full   # ARM all-scenes UI check
-scripts/dev-rust check-ui-full       # alias: ARM all-scenes UI check
-scripts/dev-rust build-arm-debug     # ARM launcher/controller debug binary
-scripts/dev-rust build-ui  # apps/mister/build-arm.sh
+scripts/agent plan --paths apps/mister
+scripts/agent check --paths apps/mister
+scripts/agent verify --paths apps/mister
+scripts/agent check --paths apps/mister/src/ui_runner
+scripts/agent arm check-lib
+scripts/agent arm check-launcher
+scripts/agent arm check-arcade
+scripts/agent arm check-all
+scripts/agent arm build-device
 ```
 
 ## Local commit hook
@@ -41,17 +38,17 @@ configuration is clone-local. Enable it on a Mac checkout with:
 git config core.hooksPath .githooks
 ```
 
-The hook runs `scripts/validate affected`. It always checks formatting and cheap
+The hook runs `scripts/agent verify --staged`. It checks formatting and cheap
 repository contracts, then selects Rust tests, Clippy, and the production UI
 check from the staged paths. Catalog checks run only for catalog or shared-build
-inputs. Use `scripts/validate affected --paths-file FILE` to reproduce routing
-without changing the index, and `scripts/validate full-host` for the complete CI
+inputs. Use `scripts/agent plan --paths PATH...` to inspect routing without
+running checks, and `scripts/agent verify full-host` for the complete CI
 assurance gate. There is deliberately no pre-push hook.
 
 The host-testable library contains pure catalog/controller/repeat logic. The
 framebuffer, FPGA, Linux input loop, and Slint renderer stay in the binary target
-behind Cargo feature `ui`; use the explicit `cargo test --features ui
---no-default-features` smoke when you want host coverage for the UI binary target
+behind Cargo feature `ui`; use `scripts/agent check --paths
+apps/mister/src/ui_runner` when you want host coverage for the UI binary target
 without producing a deployable macOS app.
 
 Catalog and library-scan code lives in the path dependency
@@ -73,16 +70,16 @@ Recommended local loop:
 
 ```bash
 # Pure Rust/catalog/controller edits.
-scripts/dev-rust check
+scripts/agent check --paths apps/mister
 
 # ARM-only pure library confidence.
-scripts/dev-rust check-arm-lib
+scripts/agent arm check-lib
 
 # Slint launcher/controller edits without producing a deploy binary.
-scripts/dev-rust check-ui
+scripts/agent arm check-launcher
 
 # Before changing benchmark scenes, video, or generated all-scene UI wiring.
-scripts/dev-rust check-ui-full
+scripts/agent arm check-all
 
 # Only when a device binary is needed.
 apps/mister/build-arm.sh            # release-device

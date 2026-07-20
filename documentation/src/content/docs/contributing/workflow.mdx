@@ -10,12 +10,12 @@ Work in small, focused changes and preserve unrelated user work. The repository 
 Useful host validation commands:
 
 ```bash
-scripts/dev-rust test
-scripts/dev-rust check
-scripts/dev-rust host-tools
-cargo test --manifest-path apps/mister/Cargo.toml --features ui --no-default-features
-cargo clippy --manifest-path apps/mister/Cargo.toml --lib --no-default-features -- -D warnings
-cargo clippy --manifest-path mister/tools/host/Cargo.toml --all-targets -- -D warnings
+scripts/agent plan --working-tree
+scripts/agent check --working-tree
+scripts/agent verify --working-tree
+scripts/agent check --paths apps/mister
+scripts/agent verify --paths apps/mister
+scripts/agent verify --paths mister/tools/host
 ```
 
 For documentation work in this site:

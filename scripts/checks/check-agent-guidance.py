@@ -23,6 +23,9 @@ def main() -> int:
         ROOT / "mister/tools/host/AGENTS.md",
         ROOT / "mister/tools/agent/AGENTS.md",
         ROOT / "scripts/AGENTS.md",
+        ROOT / "apps/desktop/AGENTS.md",
+        ROOT / "apps/mister/BUILD.md",
+        ROOT / "documentation/src/content/docs/contributing/workflow.mdx",
     )
     missing = [str(path.relative_to(ROOT)) for path in required if not path.is_file()]
     if missing:
@@ -51,6 +54,33 @@ def main() -> int:
         )
         if result.returncode != 0:
             raise SystemExit(f"sensitive/generated path is not ignored: {path}")
+
+    current_guidance = (ROOT / "AGENTS.md", *required, ROOT / "docs/agents/task-map.md")
+    forbidden = (
+        "scripts/validate",
+        "scripts/dev-rust",
+        "scripts/doctor",
+        "scripts/test-host-tools.sh",
+        "scripts/release-check-host.sh",
+        "cargo test",
+        "cargo check",
+        "cargo clippy",
+        "cargo fmt",
+        "apps/mister/build-arm.sh --check",
+    )
+    for document in dict.fromkeys(current_guidance):
+        text = document.read_text(encoding="utf-8")
+        for command in forbidden:
+            if command in text:
+                raise SystemExit(
+                    f"agent guidance bypasses scripts/agent: "
+                    f"{document.relative_to(ROOT)} contains {command!r}"
+                )
+
+    root_guidance = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    for command in ("scripts/agent plan", "scripts/agent check", "scripts/agent verify"):
+        if command not in root_guidance:
+            raise SystemExit(f"root agent workflow missing: {command}")
 
     print("agent guidance checks ok")
     return 0

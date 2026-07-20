@@ -125,6 +125,12 @@ fn add_path_operations(path: &Path, depth: Depth, out: &mut BTreeMap<String, Ope
     let mut add = |operation: Operation| {
         out.entry(operation.id.clone()).or_insert(operation);
     };
+    if path.file_name().and_then(|name| name.to_str()) == Some("AGENTS.md") {
+        for operation in host_tool_operations(false) {
+            add(operation);
+        }
+        return;
+    }
     if path.starts_with("agent-cli") {
         add(cargo(
             "agent-cli.format",
@@ -216,7 +222,19 @@ fn add_path_operations(path: &Path, depth: Depth, out: &mut BTreeMap<String, Ope
             ));
         }
     }
-    if path.starts_with("apps/mister") {
+    if path.file_name().and_then(|name| name.to_str()) != Some("AGENTS.md")
+        && (path.starts_with("apps/mister/src")
+            || path.starts_with("apps/mister/ui")
+            || matches!(
+                path.to_str(),
+                Some(
+                    "apps/mister/Cargo.toml"
+                        | "apps/mister/Cargo.lock"
+                        | "apps/mister/build.rs"
+                        | "apps/mister/rust-toolchain.toml"
+                )
+            ))
+    {
         add(cargo(
             "app.format",
             "Check MiSTer app formatting",

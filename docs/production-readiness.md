@@ -6,7 +6,7 @@ manual pre-release gate rather than GitHub-hosted CI.
 
 ## Release Criteria
 
-- Host checks pass with `scripts/release-check-host.sh`.
+- Host checks pass with `scripts/agent release host`.
 - The external Main_MiSTer fork passes its own gate from `../Main_MiSTer`:
   `scripts/test-magik-state.sh`, `scripts/check-magik-patch-surface.sh`, and
   `./build-container.sh`.
@@ -39,7 +39,7 @@ manual pre-release gate rather than GitHub-hosted CI.
 Run:
 
 ```bash
-scripts/release-check-host.sh
+scripts/agent release host
 ```
 
 This runs formatting, host logic tests, catalog crate tests, host-tool tests,

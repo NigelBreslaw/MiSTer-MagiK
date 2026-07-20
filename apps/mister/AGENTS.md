@@ -26,12 +26,11 @@ production UI. Read `BUILD.md`, `docs/architecture.md`, and `docs/catalog.md`.
 ## Checks
 
 ```bash
-scripts/dev-rust check
-scripts/dev-rust test
-scripts/validate paths apps/mister
+scripts/agent plan --paths apps/mister
+scripts/agent check --paths apps/mister
+scripts/agent verify --paths apps/mister
 ```
 
-Use the production UI check selected by `scripts/validate` for a host-local
-Slint compile. ARM checks use the direct escalated command
-`apps/mister/build-arm.sh --check --ui-scope launcher`; use `--ui-scope all
---experiments` only for all-scene/experiment changes.
+Use the production UI check selected by `scripts/agent verify` for a host-local
+Slint compile. Use `scripts/agent arm check-launcher` for normal ARM confidence
+and `scripts/agent arm check-all` only for all-scene/experiment changes.

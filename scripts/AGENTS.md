@@ -14,7 +14,7 @@ Stable public commands remain directly under `scripts/`. Shared implementation,
 checks, tests, analysis, media, and release helpers are organized according to
 `scripts/README.md`.
 
-Run `agent-cli doctor` to inspect local prerequisites without contacting the
+Run `scripts/agent doctor` to inspect local prerequisites without contacting the
 MiSTer.
 
 ## Rules
@@ -32,10 +32,9 @@ MiSTer.
 
 ```bash
 bash -n scripts/NAME.sh
-cargo run --quiet --manifest-path agent-cli/Cargo.toml -- host-tools
-cargo run --quiet --manifest-path agent-cli/Cargo.toml -- lint --paths scripts/NAME
+scripts/agent check --paths scripts/NAME
+scripts/agent verify --paths scripts/NAME
 ```
 
-Use `agent-cli host-tools --full` for packaging, release, installer, or
-cross-script contract changes. Existing scripts are compatibility
-implementations until their behavior has a deeper Rust replacement.
+Use `scripts/agent verify --paths PATH...` for packaging, release, installer,
+or cross-script contract changes.

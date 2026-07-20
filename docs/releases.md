@@ -110,7 +110,7 @@ The workflow is `.github/workflows/distribution.yml` and has only the
 
 Before dispatch:
 
-1. Merge all release changes to `main` and run `scripts/release-check-host.sh`.
+1. Merge all release changes to `main` and run `scripts/agent release host`.
 2. Dispatch **Build MiSTer MagiK Platform** from `main`. It captures the exact
    current `NigelBreslaw/Main_MiSTer:mister-magik` head and computes the current
    Main, FPGA, and kernel identities. Unchanged components are verified and

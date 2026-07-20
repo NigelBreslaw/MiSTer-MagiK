@@ -9,11 +9,11 @@ boundary.
 Run from the repository root:
 
 ```bash
-cargo run --quiet --manifest-path agent-cli/Cargo.toml -- lint --working-tree
-cargo run --quiet --manifest-path agent-cli/Cargo.toml -- plan lint --paths agent-cli
-cargo run --quiet --manifest-path agent-cli/Cargo.toml -- --output ndjson lint --staged
-cargo run --quiet --manifest-path agent-cli/Cargo.toml -- arm check-launcher
-cargo run --quiet --manifest-path agent-cli/Cargo.toml -- scripts review
+scripts/agent plan --working-tree
+scripts/agent check --paths agent-cli
+scripts/agent --output ndjson verify --staged
+scripts/agent arm check-launcher
+scripts/agent scripts review
 ```
 
 With no arguments in a terminal, the program opens its Ratatui operator view.
@@ -38,7 +38,7 @@ instead of appending terminal output.
 
 ## Audit evidence
 
-The database is `<git-common-dir>/agent-cli/agent.sqlite3`, shared by every
+The database is `<primary-worktree>/.agent-cli/agent.sqlite3`, shared by every
 linked worktree. WAL permits independent agents to record requests safely.
 Requests are inserted before argument parsing, so malformed and policy-rejected
 commands remain visible. Recognized credentials are redacted, and environment
@@ -64,11 +64,8 @@ SSH or SFTP as an AI operation.
 ## Compatibility implementations
 
 Repository validation, Rust development checks, doctor, host-tool checks, and
-the host release gate currently execute their established script
-implementations behind typed operations. They should be deleted only after a
-deeper Rust implementation passes compatibility tests; their shell branches
-must not be transliterated into Rust merely to reduce the script count.
+the host release gate are typed operations. Focused deep check scripts remain;
+the retired orchestration entrypoints are not compatibility interfaces.
 
 The deletion evidence and undecided human-workflow candidates are recorded in
 [`docs/agents/script-deletion-ledger.md`](../docs/agents/script-deletion-ledger.md).
-

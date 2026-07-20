@@ -24,10 +24,10 @@ ordering source of truth.
 ## Checks
 
 ```bash
-scripts/dev-rust test
-scripts/dev-rust check
-scripts/dev-rust check-ui
-scripts/validate paths apps/mister/src/ui_runner
+scripts/agent plan --paths apps/mister/src/ui_runner
+scripts/agent check --paths apps/mister/src/ui_runner
+scripts/agent verify --paths apps/mister/src/ui_runner
+scripts/agent arm check-launcher
 ```
 
 Device validation is required only when behavior depends on scan-out, timing,

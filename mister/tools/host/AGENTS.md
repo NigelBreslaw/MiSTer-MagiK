@@ -21,9 +21,9 @@ transport lives in `remote.rs` and `agent_client.rs`.
 ## Checks
 
 ```bash
-cargo test --manifest-path mister/tools/host/Cargo.toml
-cargo clippy --manifest-path mister/tools/host/Cargo.toml --all-targets -- -D warnings
-scripts/validate paths mister/tools/host
+scripts/agent check --paths mister/tools/host
+scripts/agent verify --paths mister/tools/host
+scripts/agent verify --paths mister/tools/host
 ```
 
 These checks are host-only. Running the tool against the MiSTer requires

@@ -91,20 +91,23 @@ those trees are part of the task.
 ## Top-Level Commands
 
 ```bash
-cargo run --quiet --manifest-path agent-cli/Cargo.toml -- doctor
-cargo run --quiet --manifest-path agent-cli/Cargo.toml -- plan lint --working-tree
-cargo run --quiet --manifest-path agent-cli/Cargo.toml -- lint --working-tree
-cargo run --quiet --manifest-path agent-cli/Cargo.toml -- verify full-host
-cargo run --quiet --manifest-path agent-cli/Cargo.toml -- rust test
-cargo run --quiet --manifest-path agent-cli/Cargo.toml -- rust check
+scripts/agent doctor
+scripts/agent plan --working-tree
+scripts/agent check --working-tree
+scripts/agent verify --working-tree
+scripts/agent verify full-host
+scripts/agent arm check-launcher
 apps/mister/build-arm.sh --device
 scripts/deploy-rust.sh
 scripts/mister status
 ```
 
-`agent-cli lint --staged` is the staged-index pre-commit interface. Use
-`agent-cli lint --paths PATH...` for explicit files or directories. The
-existing scripts remain compatibility implementations during typed migration.
+`scripts/agent verify --staged` is the staged-index pre-commit interface. Use
+`scripts/agent plan --paths PATH...` before work, `scripts/agent check --paths
+PATH...` while iterating, and `scripts/agent verify --paths PATH...` before
+completion. Agents must not construct Cargo, test, lint, host-validation, or
+Apple-container commands directly; use the harness so commands are selected,
+timed, deduplicated, and recorded.
 
 ## Universal Hard Rules
 
