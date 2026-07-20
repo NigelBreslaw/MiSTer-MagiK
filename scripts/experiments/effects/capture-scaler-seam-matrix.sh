@@ -94,7 +94,7 @@ echo \$!
       "$MISTER" agent framebuffer-capture "$case_dir/framebuffer.png" \
         --json "$case_dir/framebuffer.json" >/dev/null
       "$MISTER" run "'$REMOTE' fpga-latch-report" >"$case_dir/latch-report.txt"
-      "$MISTER" agent magik status >"$case_dir/magik-status.json"
+      "$MISTER" agent magik status --json >"$case_dir/magik-status.json"
       "$MISTER" get /tmp/scaler-seam.log "$case_dir/scene.log" >/dev/null
 
       "$HERE/scripts/host-camera-native" video --device-name "$camera_name" \

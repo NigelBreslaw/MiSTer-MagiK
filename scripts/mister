@@ -35,7 +35,11 @@ ARGS=("$@")
 if [[ "${ARGS[0]:-}" == "agent" && "${ARGS[1]:-}" == "deploy-magik-bin" ]]; then
   "$BIN" "$@"
   local_bin="${ARGS[2]:?agent deploy-magik-bin needs LOCAL [REMOTE]}"
-  remote_bin="${ARGS[3]:-${MISTER_MAGIK_BIN}}"
+  if [[ -n "${ARGS[3]:-}" && "${ARGS[3]}" != "--json" ]]; then
+    remote_bin="${ARGS[3]}"
+  else
+    remote_bin="$MISTER_MAGIK_BIN"
+  fi
 elif [[ "${ARGS[0]:-}" == "deploy-magik-bin" ]]; then
   "$BIN" "$@"
   local_bin="${ARGS[1]:?deploy-magik-bin needs LOCAL [REMOTE]}"

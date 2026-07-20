@@ -2022,12 +2022,20 @@ fn format_bytes_nearest_kb(bytes: u64) -> String {
 }
 
 fn agent_deploy_magik_bin(args: &[String]) -> Result<()> {
-    let local = args
+    let json_output = args.iter().any(|arg| arg == "--json");
+    let positional = args
+        .iter()
+        .filter(|arg| arg.as_str() != "--json")
+        .collect::<Vec<_>>();
+    let local = positional
         .first()
         .ok_or("agent deploy-magik-bin needs LOCAL [REMOTE]")?;
-    let remote = args
+    if positional.len() > 2 {
+        return Err("usage: scripts/mister agent deploy-magik-bin LOCAL [REMOTE] [--json]".into());
+    }
+    let remote = positional
         .get(1)
-        .cloned()
+        .map(|value| (*value).clone())
         .or_else(|| std::env::var("MISTER_MAGIK_BIN").ok())
         .unwrap_or_else(|| "/media/fat/mister-magik/mister-magik-fb".to_string());
     let total_t = Instant::now();
@@ -2064,32 +2072,45 @@ fn agent_deploy_magik_bin(args: &[String]) -> Result<()> {
     )?;
     let result = reply.response.get("result").unwrap_or(&Value::Null);
     let remote_bytes = verify_agent_deploy_result(result, byte_count, &remote, &checksum)?;
-    println!(
-        "agent_deploy_magik_bin local={} remote={} encoding={} compression_decision={} bytes={} remote_bytes={} payload_bytes={} checksum={} total_ms={} read_ms={} compress_ms={} request_ms={} result={}",
-        local,
-        remote,
-        encoding,
-        compression_decision,
-        byte_count,
-        remote_bytes,
-        byte_count,
-        checksum,
-        total_t.elapsed().as_millis(),
-        read_ms,
-        compress_ms,
-        reply.elapsed_ms,
-        serde_json::to_string(result)?
-    );
+    let output = json!({
+        "action": "deploy-magik-bin",
+        "local": local,
+        "remote": remote,
+        "encoding": encoding,
+        "compression_decision": compression_decision,
+        "bytes": byte_count,
+        "remote_bytes": remote_bytes,
+        "payload_bytes": byte_count,
+        "checksum": checksum,
+        "total_ms": total_t.elapsed().as_millis() as u64,
+        "read_ms": read_ms as u64,
+        "compress_ms": compress_ms,
+        "request_ms": reply.elapsed_ms,
+        "result": result,
+    });
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        println!("{}", format_agent_deploy_summary(&output));
+    }
     Ok(())
 }
 
 fn agent_magik(args: &[String]) -> Result<()> {
-    let action = args.first().map(String::as_str).unwrap_or("status");
+    let json_output = args.iter().any(|arg| arg == "--json");
+    let positional = args
+        .iter()
+        .filter(|arg| arg.as_str() != "--json")
+        .collect::<Vec<_>>();
+    let action = positional
+        .first()
+        .map(|value| value.as_str())
+        .unwrap_or("status");
     match action {
         "status" | "suspend" | "resume" | "restart-launcher" | "return-to-launcher"
         | "exit-to-menu" | "launch" => {}
         "-h" | "--help" => {
-            println!("usage: scripts/mister agent magik <status|suspend|resume|restart-launcher|return-to-launcher|exit-to-menu|launch TARGET>");
+            println!("usage: scripts/mister agent magik <status|suspend|resume|restart-launcher|return-to-launcher|exit-to-menu|launch TARGET> [--json]");
             return Ok(());
         }
         other => return Err(format!("unknown agent magik action: {other}").into()),
@@ -2113,23 +2134,72 @@ fn agent_magik(args: &[String]) -> Result<()> {
                 .ok_or("agent Main status missing generation")?,
         )
     };
-    let request = json!({"action": action, "operation_id": operation_id, "expected_generation": expected_generation, "target": args.get(1)});
+    let target = positional.get(1).map(|value| value.as_str());
+    if (action == "launch") != target.is_some() || positional.len() > 2 {
+        return Err("usage: scripts/mister agent magik <status|suspend|resume|restart-launcher|return-to-launcher|exit-to-menu|launch TARGET> [--json]".into());
+    }
+    let request = json!({"action": action, "operation_id": operation_id, "expected_generation": expected_generation, "target": target});
     let reply = if action == "status" {
         agent_request("magik", request, Duration::from_secs(5))?
     } else {
         agent_request_with_liveness("magik", request, Duration::from_secs(5))?
     };
     let result = reply.response.get("result").unwrap_or(&Value::Null);
-    if action == "status" {
+    if json_output {
         println!("{}", serde_json::to_string_pretty(result)?);
     } else {
         println!(
-            "agent magik {action} ok after {}ms: {}",
-            reply.elapsed_ms,
-            serde_json::to_string(result)?
+            "{}",
+            format_agent_magik_summary(action, reply.elapsed_ms, result)
         );
     }
     Ok(())
+}
+
+fn format_agent_magik_summary(action: &str, request_ms: u128, result: &Value) -> String {
+    let status = if action == "status" {
+        result.pointer("/files/main_status").unwrap_or(&Value::Null)
+    } else {
+        result.get("main_status").unwrap_or(&Value::Null)
+    };
+    let state = status
+        .get("launcher_state")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let pid = status
+        .get("launcher_pid")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let generation = status
+        .get("main_generation")
+        .and_then(Value::as_u64)
+        .or_else(|| result.get("after_generation").and_then(Value::as_u64))
+        .unwrap_or(0);
+    let outcome = result
+        .get("terminal_reason")
+        .and_then(Value::as_str)
+        .unwrap_or(if action == "status" {
+            "ok"
+        } else {
+            "acknowledged"
+        });
+    format!(
+        "agent magik action={action} outcome={outcome} elapsed_ms={request_ms} state={state} pid={pid} generation={generation}"
+    )
+}
+
+fn format_agent_deploy_summary(output: &Value) -> String {
+    let remote = output.get("remote").and_then(Value::as_str).unwrap_or("?");
+    let bytes = output.get("bytes").and_then(Value::as_u64).unwrap_or(0);
+    let total_ms = output.get("total_ms").and_then(Value::as_u64).unwrap_or(0);
+    let checksum = output
+        .get("checksum")
+        .and_then(Value::as_str)
+        .unwrap_or("?");
+    let checksum = checksum.get(..12).unwrap_or(checksum);
+    format!(
+        "agent deploy-magik-bin ok remote={remote} bytes={bytes} elapsed_ms={total_ms} sha256={checksum}"
+    )
 }
 
 fn agent_reboot_wait(args: &[String]) -> Result<()> {
@@ -4855,6 +4925,51 @@ mod tests {
             "v3".to_string(),
         ])
         .is_err());
+    }
+
+    #[test]
+    fn formats_compact_agent_magik_action_and_status_summaries() {
+        let action = json!({
+            "terminal_reason": "acknowledged",
+            "after_generation": 8311,
+            "main_status": {
+                "launcher_state": "LauncherActive",
+                "launcher_pid": 12711,
+                "main_generation": 8311,
+                "last_crash_reason": "large historical detail that must not leak",
+            }
+        });
+        assert_eq!(
+            format_agent_magik_summary("restart-launcher", 254, &action),
+            "agent magik action=restart-launcher outcome=acknowledged elapsed_ms=254 state=LauncherActive pid=12711 generation=8311"
+        );
+        assert!(
+            !format_agent_magik_summary("restart-launcher", 254, &action)
+                .contains("historical detail")
+        );
+
+        let status = json!({
+            "files": {"main_status": {"launcher_state": "LauncherSuspended"}}
+        });
+        assert_eq!(
+            format_agent_magik_summary("status", 12, &status),
+            "agent magik action=status outcome=ok elapsed_ms=12 state=LauncherSuspended pid=0 generation=0"
+        );
+    }
+
+    #[test]
+    fn formats_compact_agent_deploy_summary() {
+        let output = json!({
+            "remote": "/media/fat/mister-magik-dev/mister-magik-fb",
+            "bytes": 123456,
+            "total_ms": 987,
+            "checksum": "0123456789abcdef",
+            "result": {"verbose": "omitted"},
+        });
+        assert_eq!(
+            format_agent_deploy_summary(&output),
+            "agent deploy-magik-bin ok remote=/media/fat/mister-magik-dev/mister-magik-fb bytes=123456 elapsed_ms=987 sha256=0123456789ab"
+        );
     }
 
     #[test]
