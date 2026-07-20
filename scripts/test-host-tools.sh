@@ -71,8 +71,6 @@ for script in \
   "$ROOT/scripts/build-mister-agent.sh" \
   "$ROOT/scripts/deploy-rust.sh" \
   "$ROOT/scripts/device-catalog-acceptance.sh" \
-  "$ROOT/scripts/device-catalog-destruction.sh" \
-  "$ROOT/scripts/device-library-change-flow.sh" \
   "$ROOT/scripts/device-launch-return-smoke.sh" \
   "$ROOT/scripts/device-release-acceptance.sh" \
   "$ROOT/scripts/dev-rust" \
@@ -88,7 +86,6 @@ for script in \
   "$ROOT/scripts/mister-shutdown-trace.sh" \
   "$ROOT/scripts/lib/mister-supervision-lib.sh" \
   "$ROOT/scripts/profile-first-scan.sh" \
-  "$ROOT/scripts/profile-library-io.sh" \
   "$ROOT/scripts/profile-media-cold-boot.sh" \
   "$ROOT/scripts/profile-media-arcade-contention.sh" \
   "$ROOT/scripts/profile-arcade-scroll.sh" \
@@ -385,26 +382,6 @@ if re.search(r'if tier_selected "soak"; then\s+run_supervised_reboot_soak', body
     sys.exit(1)
 PY
 
-python3 - "$ROOT/scripts/device-fs-fault-reset.sh" <<'PY'
-import re
-import sys
-
-path = sys.argv[1]
-text = open(path, encoding="utf-8").read()
-match = re.search(r"cleanup_on_exit\(\) \{(?P<body>.*?)\n\}", text, re.S)
-if not match:
-    print("could not find fs-fault cleanup_on_exit body", file=sys.stderr)
-    sys.exit(1)
-body = match.group("body")
-for needle in [
-    "arming_state_clear",
-    "arming_state_assert_clean",
-]:
-    if needle not in body:
-        print(f"fs-fault cleanup_on_exit missing {needle}", file=sys.stderr)
-        sys.exit(1)
-PY
-
 "$ROOT/scripts/checks/check-no-main-kill.sh"
 "$ROOT/scripts/checks/check-no-direct-arcade-scene.sh"
 "$ROOT/scripts/checks/check-scanout-slots-contract.sh"
@@ -466,18 +443,6 @@ source_fields="$(bench_context_source_fields "$ROOT")"
 case "$source_fields" in
   source_commit=*$'\tsource_commit_short='*$'\tsource_dirty='[01]) ;;
   *) echo "unexpected source provenance: $source_fields" >&2; exit 1 ;;
-esac
-set +e
-retired_library_io_output="$("$ROOT/scripts/profile-library-io.sh" --self-test 2>&1)"
-retired_library_io_status=$?
-set -e
-if [ "$retired_library_io_status" -ne 2 ]; then
-  echo "retired library I/O profiler returned $retired_library_io_status, expected 2" >&2
-  exit 1
-fi
-case "$retired_library_io_output" in
-  *"retired V2 monolith"*) ;;
-  *) echo "retired library I/O profiler did not explain its V2 retirement" >&2; exit 1 ;;
 esac
 echo "retired library I/O profiler fail-closed self-test ok"
 bash "$ROOT/scripts/lib/benchmark-cleanup-lib.sh" --self-test

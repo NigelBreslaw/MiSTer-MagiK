@@ -6,7 +6,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 matches="$(rg -n 'printf .*MiSTer_cmd|> /dev/MiSTer_cmd' "$ROOT/scripts" \
   --glob '!check-no-direct-main-fifo.sh' \
-  --glob '!device-fs-fault-reset.sh' \
   --glob '!fs-fault-reset-testing.sh' || true)"
 if [ -n "$matches" ]; then
   echo "maintained scripts must use scripts/mister agent magik, not /dev/MiSTer_cmd" >&2
