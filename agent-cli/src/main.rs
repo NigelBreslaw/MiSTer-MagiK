@@ -15,6 +15,10 @@ use std::io::IsTerminal;
 
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
+    if is_discovery_request(&args) {
+        let _ = Cli::parse_from(args);
+        return;
+    }
     let raw = RawRequest::capture(args.clone());
     let repository = std::env::current_dir().unwrap_or_else(|error| fatal(&error.to_string()));
     let evidence = Evidence::open_for_repository(&repository).unwrap_or_else(|error| fatal(&error));
@@ -80,6 +84,10 @@ fn main() {
     evidence
         .finish(&raw.id, outcome)
         .unwrap_or_else(|error| fatal(&error));
+}
+
+fn is_discovery_request(args: &[std::ffi::OsString]) -> bool {
+    args.len() == 2 && matches!(args[1].to_str(), Some("-h" | "--help" | "-V" | "--version"))
 }
 
 fn dispatch(

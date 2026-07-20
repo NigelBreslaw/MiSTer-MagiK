@@ -19,6 +19,7 @@ ENV/
 # uv — uv.lock is committed for reproducible installs
 
 # Test / lint / type-check caches
+.agent-cli/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
