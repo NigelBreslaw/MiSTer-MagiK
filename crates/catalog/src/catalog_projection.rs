@@ -889,6 +889,37 @@ mod tests {
         row
     }
 
+    fn acid_drop_row(path: &str, source_kind: &str) -> CatalogProjectionRow {
+        let mut row = catalog_entry_row("Acid Drop (Europe)", path);
+        row.game.system_id = "atari2600".into();
+        row.source_kind = source_kind.to_string();
+        row
+    }
+
+    #[test]
+    fn acid_drop_fixture_captures_loose_and_archive_sources() {
+        let rows = vec![
+            acid_drop_row(
+                "magik-plan:archive:/media/fat/games/Atari2600/Acid Drop (Europe).zip/Acid Drop (Europe).bin",
+                "virtual-mgl",
+            ),
+            acid_drop_row(
+                "magik-plan:payload:/media/fat/games/Atari2600/Acid Drop (Europe).a26",
+                "virtual-mgl",
+            ),
+        ];
+
+        let games = collapse_catalog_variants(rows);
+
+        assert_eq!(
+            games.len(),
+            2,
+            "fixture must reproduce the duplicate before canonical-family collapse"
+        );
+        assert!(games.iter().any(|game| game.mra_path.contains(".zip/")));
+        assert!(games.iter().any(|game| game.mra_path.ends_with(".a26")));
+    }
+
     #[test]
     fn lynx_variants_collapse_by_base_title_and_choose_best_final_build() {
         let rows = vec![
