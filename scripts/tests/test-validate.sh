@@ -43,15 +43,15 @@ assert_plan slint 'apps/mister/ui/launcher.slint' "${base}production-ui-check "
 assert_plan ui-generated 'apps/mister/ui-generated/build.rs' "format-ui-generated ${base}production-ui-check "
 assert_plan mister 'mister/tools/host/src/main.rs' "format-mister-host ${base}mister-tests mister-clippy "
 assert_plan agent 'mister/tools/agent/src/main.rs' "format-mister-agent ${base}agent-tests agent-clippy "
-assert_plan stream 'crates/framebuffer-stream/src/lib.rs' "format-framebuffer-stream ${base}${runtime}${app}production-ui-check framebuffer-stream-tests framebuffer-stream-clippy agent-tests agent-clippy desktop-tests desktop-compiled-check "
+assert_plan stream 'crates/framebuffer-stream/src/lib.rs' "format-framebuffer-stream ${base}${runtime}${app}production-ui-check framebuffer-stream-tests framebuffer-stream-clippy agent-tests agent-clippy "
 assert_plan desktop 'apps/desktop/src/main.rs' "format-desktop ${base}desktop-tests desktop-compiled-check "
 assert_plan documentation 'documentation/src/content/docs/index.mdx' "${base}documentation-build "
-assert_plan global 'Cargo.lock' "${base}host-tools-fast ${domain}host-tests mister-app-clippy catalog-tests catalog-clippy production-ui-check framebuffer-stream-tests framebuffer-stream-clippy mister-tests mister-clippy agent-tests agent-clippy desktop-tests desktop-compiled-check documentation-build "
+assert_plan global 'Cargo.lock' "${base}host-tools-fast ${domain}host-tests mister-app-clippy catalog-tests catalog-clippy production-ui-check framebuffer-stream-tests framebuffer-stream-clippy mister-tests mister-clippy agent-tests agent-clippy documentation-build "
 assert_plan mixed $'crates/catalog/src/library_db.rs\napps/mister/ui/launcher.slint\nscripts/deploy-rust.sh' "format-catalog ${base}host-tools-fast ${runtime}${app}catalog-tests catalog-clippy production-ui-check mister-tests mister-clippy "
 assert_plan deletion 'apps/mister/src/removed.rs' "format-app-mister ${base}${app}production-ui-check "
 assert_plan rename $'apps/mister/ui/old-name.slint\napps/mister/ui/new-name.slint' "${base}production-ui-check "
 assert_plan build-script 'apps/mister/build-arm.sh' "${base}host-tools-fast ${app}production-ui-check "
-assert_plan rust-toolchain 'apps/mister/rust-toolchain.toml' "format ${base}host-tools-fast ${domain}host-tests mister-app-clippy catalog-tests catalog-clippy production-ui-check framebuffer-stream-tests framebuffer-stream-clippy mister-tests mister-clippy agent-tests agent-clippy desktop-tests desktop-compiled-check "
+assert_plan rust-toolchain 'apps/mister/rust-toolchain.toml' "format ${base}host-tools-fast ${domain}host-tests mister-app-clippy catalog-tests catalog-clippy production-ui-check framebuffer-stream-tests framebuffer-stream-clippy mister-tests mister-clippy agent-tests agent-clippy "
 assert_plan workflow '.github/workflows/rust-arm.yml' "${base}host-tools-fast "
 assert_plan validator $'scripts/validate\nscripts/tests/test-validate.sh' "${base}host-tools-fast "
 printf '%s\n' 'scripts/validate' >"$TMP/validator-live.paths"
@@ -68,7 +68,7 @@ assert_plan agent-protocol 'crates/agent-protocol/src/lib.rs' 'format-agent-prot
 assert_plan media-contract 'crates/media-contract/src/lib.rs' 'format-media-contract '
 assert_plan latch-contract 'mister/platform/contracts/latch/src/lib.rs' 'format-latch-contract '
 assert_plan scanout-contract 'mister/platform/contracts/scanout/src/lib.rs' 'format-scanout-contract '
-assert_plan shared 'crates/framebuffer-stream/src/lib.rs' "format-framebuffer-stream ${base}${runtime}${app}production-ui-check framebuffer-stream-tests framebuffer-stream-clippy agent-tests agent-clippy desktop-tests desktop-compiled-check "
+assert_plan shared 'crates/framebuffer-stream/src/lib.rs' "format-framebuffer-stream ${base}${runtime}${app}production-ui-check framebuffer-stream-tests framebuffer-stream-clippy agent-tests agent-clippy "
 
 repo="$TMP/rename-repo"
 mkdir -p "$repo/apps/mister/src" "$repo/docs"

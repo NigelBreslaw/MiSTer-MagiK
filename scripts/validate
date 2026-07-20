@@ -747,7 +747,7 @@ for path in "${paths[@]}"; do
       need_app=1; need_ui=1 ;;
     apps/mister/rust-toolchain.toml)
       need_catalog=1; need_core=1; need_runtime=1; need_app=1; need_ui=1; need_mister=1; need_agent=1
-      need_stream=1; need_desktop=1 ;;
+      need_stream=1 ;;
     apps/mister/build-arm*.sh|apps/mister/Dockerfile*|apps/mister/Cross.toml|apps/mister/scripts/*)
       need_app=1; need_ui=1 ;;
     mister/tools/host/*)
@@ -755,14 +755,14 @@ for path in "${paths[@]}"; do
     mister/tools/agent/*)
       need_agent=1 ;;
     crates/framebuffer-stream/*)
-      need_runtime=1; need_app=1; need_ui=1; need_agent=1; need_stream=1; need_desktop=1 ;;
+      need_runtime=1; need_app=1; need_ui=1; need_agent=1; need_stream=1 ;;
     apps/desktop/*)
       need_desktop=1 ;;
     documentation/*)
       need_docs=1 ;;
     Cargo.toml|Cargo.lock|rust-toolchain.toml|.cargo/*)
       need_catalog=1; need_core=1; need_runtime=1; need_app=1; need_ui=1; need_mister=1; need_agent=1
-      need_stream=1; need_desktop=1; need_docs=1 ;;
+      need_stream=1; need_docs=1 ;;
   esac
 done
 
