@@ -122,7 +122,7 @@ PY
     if [ "$verbose" -eq 1 ] && [ -f "$log" ]; then
       cat "$log"
     elif [ "$status" = fail ]; then
-      tail -40 "$log" >&2
+      tail -20 "$log" >&2
       echo "LOG  $log" >&2
     fi
     [ "$status" != fail ] || overall=fail
