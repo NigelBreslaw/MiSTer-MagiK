@@ -67,18 +67,16 @@ impl<'a> LayerTarget<'a> {
         slint_dirty
     }
 
-    pub(super) fn render_screensaver(&mut self, saver: &mut LauncherScreensaver) -> DirtyRect {
+    pub(super) fn render_screensaver(
+        &mut self,
+        saver: &mut LauncherScreensaver,
+    ) -> DirtyRectList {
         saver.render(
             self.target.cached_565_mut(),
             self.ui.render_w(),
             self.ui.render_h(),
         );
-        DirtyRect {
-            x0: 0,
-            y0: 0,
-            x1: self.ui.render_w(),
-            y1: self.ui.render_h(),
-        }
+        saver.frame_damage()
     }
 
     pub(super) fn render_screensaver_fade(
@@ -109,6 +107,7 @@ impl<'a> LayerTarget<'a> {
         launcher_frame: &[Rgb565Pixel],
         alpha: u8,
     ) -> DirtyRect {
+        saver.invalidate_cached_frame();
         saver.render(
             self.target.cached_565_mut(),
             self.ui.render_w(),
@@ -120,6 +119,7 @@ impl<'a> LayerTarget<'a> {
                 *pixel = blend_565(*source, *pixel, alpha);
             }
         }
+        saver.invalidate_cached_frame();
         DirtyRect {
             x0: 0,
             y0: 0,

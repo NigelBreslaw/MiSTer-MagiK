@@ -205,9 +205,11 @@ impl TwoBufferLatchState {
         selected.arcade_present = plan.arcade_after;
         selected.hardware = LatchSlotHardwareState::Unknown;
 
-        self.slot_mut(other_index)
-            .base_invalid
-            .extend_from(&plan.cached_damage);
+        let full_rect = self.full_rect;
+        let other = self.slot_mut(other_index);
+        if !other.base_invalid.try_extend_from(&plan.cached_damage) {
+            other.base_invalid = DirtyRectList::from_one(full_rect);
+        }
         self.next_slot_index = other_index;
     }
 
@@ -247,20 +249,27 @@ impl TwoBufferLatchState {
     fn plan_for_slot(&self, slot_index: u8, input: LauncherFramePlan) -> LatchPresentPlan {
         let slot = self.slot(slot_index);
         let mut restore_rects = DirtyRectList::new();
-        extend_without_covered_rects(&mut restore_rects, &slot.base_invalid);
-        extend_without_covered_rects(&mut restore_rects, &input.cached_damage);
+        if !extend_without_covered_rects(&mut restore_rects, &slot.base_invalid)
+            || !extend_without_covered_rects(&mut restore_rects, &input.cached_damage)
+        {
+            restore_rects = DirtyRectList::from_one(self.full_rect);
+        }
 
         let restore_preview =
             direct_layer_needs_restore(slot.preview_present, input.preview_desired);
         let restore_arcade = direct_layer_needs_restore(slot.arcade_present, input.arcade_desired);
         if restore_preview {
             if let Some(preview) = slot.preview_present {
-                push_without_covered_rect(&mut restore_rects, preview.rect);
+                if !push_without_covered_rect(&mut restore_rects, preview.rect) {
+                    restore_rects = DirtyRectList::from_one(self.full_rect);
+                }
             }
         }
         if restore_arcade {
             if let Some(arcade) = slot.arcade_present {
-                push_without_covered_rect(&mut restore_rects, arcade.rect);
+                if !push_without_covered_rect(&mut restore_rects, arcade.rect) {
+                    restore_rects = DirtyRectList::from_one(self.full_rect);
+                }
             }
         }
 
@@ -385,15 +394,20 @@ fn other_slot(slot_index: u8) -> u8 {
     }
 }
 
-fn extend_without_covered_rects(target: &mut DirtyRectList, source: &DirtyRectList) {
+fn extend_without_covered_rects(target: &mut DirtyRectList, source: &DirtyRectList) -> bool {
     for rect in source.iter() {
-        push_without_covered_rect(target, rect);
+        if !push_without_covered_rect(target, rect) {
+            return false;
+        }
     }
+    true
 }
 
-fn push_without_covered_rect(target: &mut DirtyRectList, rect: DirtyRect) {
+fn push_without_covered_rect(target: &mut DirtyRectList, rect: DirtyRect) -> bool {
     if !target.iter().any(|existing| existing.contains(rect)) {
-        target.push(rect);
+        target.try_push(rect)
+    } else {
+        true
     }
 }
 

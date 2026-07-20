@@ -128,12 +128,21 @@ impl DirtyRectList {
         }
     }
 
-    fn try_push(&mut self, rect: DirtyRect) -> bool {
+    pub fn try_push(&mut self, rect: DirtyRect) -> bool {
         if self.len == DIRTY_RECT_LIST_CAP {
             return false;
         }
         self.rects[self.len] = rect;
         self.len += 1;
+        true
+    }
+
+    pub fn try_extend_from(&mut self, other: &Self) -> bool {
+        for rect in other.iter() {
+            if !self.try_push(rect) {
+                return false;
+            }
+        }
         true
     }
 

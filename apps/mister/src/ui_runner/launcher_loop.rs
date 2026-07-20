@@ -3461,7 +3461,6 @@ pub(super) fn run_launcher_loop(
             preview_frame_status,
         });
         if screensaver.active {
-            full_frame_present = true;
             request_launcher_redraw!();
         } else if screensaver.start_when_ready {
             request_launcher_redraw!();
@@ -3756,6 +3755,7 @@ pub(super) fn run_launcher_loop(
         {
             screensaver_launcher_frame = Some(layer_target.snapshot_cached());
         }
+        let mut screensaver_damage = DirtyRectList::new();
         let this_rect =
             if screensaver.active && screensaver_fade_alpha.is_some_and(|alpha| alpha < 255) {
                 let alpha = screensaver_fade_alpha.expect("checked above");
@@ -3783,10 +3783,11 @@ pub(super) fn run_launcher_loop(
                 if screensaver_launcher_frame.is_none() {
                     screensaver_launcher_frame = Some(layer_target.snapshot_cached());
                 }
-                Some(
-                    layer_target
-                        .render_screensaver(screensaver_renderer.as_mut().expect("checked above")),
-                )
+                screensaver_damage = layer_target
+                    .render_screensaver(screensaver_renderer.as_mut().expect("checked above"));
+                screensaver_damage
+                    .iter()
+                    .reduce(|bounds, rect| bounds.union(rect))
             } else if screensaver.active && screensaver_fade_alpha.is_some() {
                 Some(
                     layer_target.render_screensaver_fade(
@@ -3890,6 +3891,8 @@ pub(super) fn run_launcher_loop(
         };
         let base_damage = if full_frame_present {
             Some(full_rect)
+        } else if !screensaver_damage.is_empty() {
+            None
         } else {
             this_rect
         };
@@ -3926,6 +3929,9 @@ pub(super) fn run_launcher_loop(
         };
         let mut cached_damage = DirtyRectList::new();
         cached_damage.push_if_some(base_damage);
+        if !full_frame_present {
+            cached_damage.extend_from(&screensaver_damage);
+        }
         cached_damage.push_if_some(raw_preview_cached_rect);
         let frame_plan = LauncherFramePlan::new(
             cached_damage,
@@ -3935,7 +3941,9 @@ pub(super) fn run_launcher_loop(
             arcade_list_rect,
         );
         let startup_can_present = lifecycle.startup_can_present_frame();
-        let stream_motion_active = stream_motion_before_render || preview_transition_trace.active;
+        let stream_motion_active = stream_motion_before_render
+            || preview_transition_trace.active
+            || screensaver.active;
         let present_cycle = launcher_presenter.present(
             LauncherPresentFrame {
                 plan: frame_plan,

@@ -359,6 +359,9 @@ struct ScreensaverFrameSample {
     cards_us: u128,
     total_us: u128,
     active_layers: [u16; PARADE_SPEED_COUNT],
+    damage_rects: u16,
+    damage_bytes: usize,
+    full_damage: bool,
 }
 
 #[cfg(not(any(feature = "bench-tools", feature = "diagnostics")))]
@@ -379,6 +382,9 @@ struct ScreensaverFrameProfile {
     last_logged_cards_us: u128,
     last_logged_total_us: u128,
     active_layers: [u16; PARADE_SPEED_COUNT],
+    damage_rects: u64,
+    damage_bytes: u128,
+    full_damage_frames: u64,
 }
 
 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
@@ -391,12 +397,15 @@ impl ScreensaverFrameProfile {
         self.total_us += sample.total_us;
         self.max_total_us = self.max_total_us.max(sample.total_us);
         self.active_layers = sample.active_layers;
+        self.damage_rects += u64::from(sample.damage_rects);
+        self.damage_bytes += sample.damage_bytes as u128;
+        self.full_damage_frames += u64::from(sample.full_damage);
     }
 
     fn log(&mut self, frame: u64) {
         let frames = frame.saturating_sub(self.last_logged_frame).max(1) as u128;
         crate::ui_logln!(
-            "screensaver_frame_profile frame={} frames={} background_avg_us={} advance_avg_us={} cards_avg_us={} total_avg_us={} total_max_us={} active_layers={},{},{},{},{} active_total={}",
+            "screensaver_frame_profile frame={} frames={} background_avg_us={} advance_avg_us={} cards_avg_us={} total_avg_us={} total_max_us={} damage_rects_avg={} damage_bytes_avg={} full_damage_frames={} active_layers={},{},{},{},{} active_total={}",
             frame,
             frames,
             (self.background_us - self.last_logged_background_us) / frames,
@@ -404,6 +413,9 @@ impl ScreensaverFrameProfile {
             (self.cards_us - self.last_logged_cards_us) / frames,
             (self.total_us - self.last_logged_total_us) / frames,
             self.max_total_us,
+            self.damage_rects as u128 / self.frames.max(1) as u128,
+            self.damage_bytes / self.frames.max(1) as u128,
+            self.full_damage_frames,
             self.active_layers[0],
             self.active_layers[1],
             self.active_layers[2],
@@ -3369,6 +3381,9 @@ fn render_archive_parade(
             cards_us: phase_started.elapsed().as_micros(),
             total_us: total_started.elapsed().as_micros(),
             active_layers,
+            damage_rects: 1,
+            damage_bytes: w.saturating_mul(h).saturating_mul(2),
+            full_damage: true,
         }
     }
     #[cfg(not(any(feature = "bench-tools", feature = "diagnostics")))]
@@ -3484,6 +3499,13 @@ fn render_archive_parade_incremental(
             cards_us: phase_started.elapsed().as_micros(),
             total_us: total_started.elapsed().as_micros(),
             active_layers,
+            damage_rects: damage.len().min(u16::MAX as usize) as u16,
+            damage_bytes: damage.total_rgb565_bytes(),
+            full_damage: damage.len() == 1
+                && damage
+                    .iter()
+                    .next()
+                    .is_some_and(|rect| rect.x0 == 0 && rect.y0 == 0 && rect.x1 == w && rect.y1 == h),
         }
     }
     #[cfg(not(any(feature = "bench-tools", feature = "diagnostics")))]
