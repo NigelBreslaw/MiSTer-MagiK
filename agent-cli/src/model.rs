@@ -38,6 +38,7 @@ pub enum Intent {
     PruneLogs,
     Interactive,
     Doctor,
+    Deploy { task_id: String },
 }
 
 impl Intent {

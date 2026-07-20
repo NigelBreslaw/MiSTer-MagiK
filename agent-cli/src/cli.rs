@@ -51,6 +51,7 @@ pub enum Command {
     },
     Verify(ScopeArgs),
     Doctor,
+    Deploy,
 }
 
 #[derive(Debug, Subcommand)]
@@ -157,6 +158,7 @@ impl Cli {
                 scope: scope.into_scope(Some(&task_id)),
             },
             Some(Command::Doctor) => Intent::Doctor,
+            Some(Command::Deploy) => Intent::Deploy { task_id },
         }
     }
 }
@@ -216,5 +218,18 @@ mod tests {
             }
         );
         assert!(Cli::try_parse_from(["agent-cli", "commit"]).is_err());
+    }
+
+    #[test]
+    fn deploy_is_flag_free_and_task_scoped() {
+        let cli = Cli::try_parse_from(["agent-cli", "--task-id", "task-1", "deploy"]).unwrap();
+        assert_eq!(
+            cli.into_intent(),
+            Intent::Deploy {
+                task_id: "task-1".into(),
+            }
+        );
+        assert!(Cli::try_parse_from(["agent-cli", "deploy", "--fast"]).is_err());
+        assert!(Cli::try_parse_from(["agent-cli", "deploy", "--ui-scope", "launcher"]).is_err());
     }
 }

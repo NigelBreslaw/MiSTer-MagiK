@@ -125,6 +125,9 @@ fn resolve_task_intent(
             },
             message,
         },
+        Intent::Deploy { task_id } => Intent::Deploy {
+            task_id: resolve(task_id)?,
+        },
         Intent::Plan {
             scope: agent_cli::model::Scope::Task(task_id),
             verbose,
@@ -188,6 +191,32 @@ fn dispatch(
                 );
             }
             return Ok(outcome);
+        }
+        Intent::Deploy { task_id } => {
+            let paths = agent_cli::task::changes(evidence, repository, task_id)?;
+            let deployment = agent_cli::deploy::plan(repository, paths)?;
+            let plan = deployment.as_evidence_plan(intent.clone());
+            evidence.record_plan(request_id, &plan)?;
+            reporter.emit(
+                EventKind::Progress,
+                "deploy-plan",
+                &format!(
+                    "{} deployment planned (release-device, {} UI)",
+                    deployment.kind.label(),
+                    deployment.ui_scope.label()
+                ),
+                Some(100),
+            )?;
+            if output == OutputFormat::Human {
+                println!("{}", serde_json::to_string_pretty(&deployment).unwrap());
+            }
+            reporter.emit(
+                EventKind::Warning,
+                "deploy",
+                "execution not yet enabled; deployment planning was recorded",
+                None,
+            )?;
+            return Ok(Outcome::ExternalRequired);
         }
         Intent::Plan {
             scope: selected, ..
