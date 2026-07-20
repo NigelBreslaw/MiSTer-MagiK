@@ -17,6 +17,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
 source "$HERE/scripts/lib/magik-layout.sh"
 source "$HERE/scripts/lib/latch-readiness-lib.sh"
+source "$HERE/scripts/lib/diagnostic-output-lib.sh"
 magik_layout_select dev
 REMOTE_ENV="/media/fat/mister-magik-dev/launcher.env"
 RETURN_STATE="/tmp/mister-magik/launcher-return-state.json"
@@ -157,7 +158,16 @@ launcher_is_active() {
 }
 
 dump_failure_artifacts() {
-  remote "echo MAIN; cat '$MAIN_STATUS' 2>/dev/null || true; echo STATUS; cat '$STATUS' 2>/dev/null || true; echo STATE; cat '$RETURN_STATE' 2>/dev/null || true; echo FBMODE; cat /sys/module/MiSTer_fb/parameters/mode 2>/dev/null || true; echo PROCS; ps w | grep -E 'MiSTer|MiSTer_MagiKDev|mister-magik-fb' | grep -v grep || true; echo LOG; tail -120 '$REMOTE_LOG' 2>/dev/null || true; echo EVENTS; tail -80 '$REMOTE_EVENTS' 2>/dev/null || true" >&2 || true
+  local prefix="$ARTIFACTS_DIR/failure"
+  capture_remote_file "$MAIN_STATUS" "$prefix-main-status.json"
+  capture_remote_file "$STATUS" "$prefix-status.json"
+  capture_remote_file "$RETURN_STATE" "$prefix-return-state.json"
+  capture_remote_file "$REMOTE_LOG" "$prefix-launcher.log"
+  capture_remote_file "$REMOTE_EVENTS" "$prefix-events.jsonl"
+  remote "cat /sys/module/MiSTer_fb/parameters/mode 2>/dev/null || true" >"$prefix-fb-mode.txt" || true
+  remote "ps w | grep -E 'MiSTer|MiSTer_MagiKDev|mister-magik-fb' | grep -v grep || true" >"$prefix-processes.txt" || true
+  diagnostic_failure_summary "launch-return smoke" "$ARTIFACTS_DIR" \
+    "$prefix-main-status.json" "$prefix-launcher.log"
 }
 
 capture_remote_file() {

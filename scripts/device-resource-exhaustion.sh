@@ -12,6 +12,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$ROOT/scripts/mister"
 RUN_RUST="$ROOT/scripts/run-rust.sh"
+source "$ROOT/scripts/lib/diagnostic-output-lib.sh"
 
 SCENARIO="tmp-enospc"
 EXPECT="survive"
@@ -128,6 +129,20 @@ cleanup_remote() {
 dump_artifacts() {
   echo "==> Capturing repro artifacts in $OUT"
   remote "echo MAIN_STATUS; cat '$REMOTE_MAIN_STATUS' 2>/dev/null || true; echo STATUS; cat '$REMOTE_STATUS' 2>/dev/null || true; echo PROCS; pidof mister-magik-fb 2>/dev/null || true; pidof MiSTer_MagiKDev 2>/dev/null || true; ps w | grep -E 'MiSTer|mister-magik-fb|resource-exhaustion' | grep -v grep || true; echo TMP; df -h /tmp; echo MEMINFO; sed -n '1,12p' /proc/meminfo; echo DD_LOG; cat '$REMOTE_DD_LOG' 2>/dev/null || true; echo MEMORY_LOG; cat '$REMOTE_MEM_LOG' 2>/dev/null || true; echo SLINT_LOG_TAIL; tail -160 '$REMOTE_LOG' 2>/dev/null || true; echo EVENTS_TAIL; tail -120 '$REMOTE_EVENTS' 2>/dev/null || true; echo CRASHES; ls -lt '$REMOTE_CRASH_DIR' 2>/dev/null | sed -n '1,16p' || true" >"$OUT/remote-dump.txt" || true
+  "$MISTER" get "$REMOTE_MAIN_STATUS" "$OUT/main-status.json" >/dev/null 2>&1 || true
+  "$MISTER" get "$REMOTE_LOG" "$OUT/launcher.log" >/dev/null 2>&1 || true
+  "$MISTER" get "$REMOTE_EVENTS" "$OUT/events.jsonl" >/dev/null 2>&1 || true
+}
+
+cleanup_on_exit() {
+  local status=$?
+  dump_artifacts
+  if [ "$status" -ne 0 ]; then
+    diagnostic_failure_summary "resource exhaustion $SCENARIO/$EXPECT" "$OUT" \
+      "$OUT/main-status.json" "$OUT/launcher.log"
+  fi
+  cleanup_remote
+  return "$status"
 }
 
 wait_for_launcher() {
@@ -244,7 +259,7 @@ poll_launcher() {
   return "$crashed"
 }
 
-trap 'dump_artifacts; cleanup_remote' EXIT
+trap cleanup_on_exit EXIT
 
 start_clean_launcher
 case "$SCENARIO" in
@@ -277,5 +292,6 @@ if [ "$EXPECT" = "survive" ] && [ "$crashed" -eq 0 ]; then
   exit 0
 fi
 
-echo "FAIL: scenario=$SCENARIO expected=$EXPECT crashed=$crashed" >&2
+diagnostic_failure_summary "scenario=$SCENARIO expected=$EXPECT crashed=$crashed" "$OUT" \
+  "$OUT/main-status.json" "$OUT/launcher.log"
 exit 1

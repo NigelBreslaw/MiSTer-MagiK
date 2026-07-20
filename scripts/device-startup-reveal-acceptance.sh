@@ -7,6 +7,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$ROOT/scripts/mister"
+source "$ROOT/scripts/lib/diagnostic-output-lib.sh"
 LABEL="${1:-startup-reveal-$(date -u +%Y%m%dT%H%M%SZ)}"
 MODE="${MISTER_STARTUP_REVEAL_MODE:-all}"
 REMOTE_CATALOG="/media/fat/mister-magik-dev/catalog-v3"
@@ -49,7 +50,11 @@ record() {
 }
 
 fail() {
-  echo "FAIL: $*" >&2
+  local label="$*"
+  "$MISTER" status --json >"$OUT/failure-status.json" 2>"$OUT/failure-status.err" || true
+  "$MISTER" get "$REMOTE_LOG" "$OUT/failure-launcher.log" >/dev/null 2>&1 || true
+  "$MISTER" get /tmp/mister-magik/events.jsonl "$OUT/failure-events.jsonl" >/dev/null 2>&1 || true
+  diagnostic_failure_summary "$label" "$OUT" "$OUT/failure-status.json" "$OUT/failure-launcher.log"
   exit 1
 }
 

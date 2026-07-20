@@ -8,6 +8,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export MISTER_MAGIK_LAYOUT=public
 source "$ROOT/scripts/lib/magik-layout.sh"
+source "$ROOT/scripts/lib/diagnostic-output-lib.sh"
 MISTER="$ROOT/scripts/mister"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 OUT="$ROOT/build/device-release/$STAMP"
@@ -202,9 +203,10 @@ record_ok() {
 }
 
 record_fail() {
-  echo "FAIL: $*" >&2
+  local label="$*"
+  diagnostic_failure_notice "$label" "$OUT" "$OUT/$label.err"
   FAILURES=$((FAILURES + 1))
-  record_result "FAIL" "$*"
+  record_result "FAIL" "$label"
 }
 
 record_skip() {
