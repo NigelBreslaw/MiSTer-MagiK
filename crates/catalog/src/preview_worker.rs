@@ -3,6 +3,7 @@
 
 //! Background arcade preview image loader.
 
+use memmap2::Mmap;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Read;
@@ -297,6 +298,59 @@ pub struct LoadedPreviewAsset {
     pub load_source: PreviewLoadSource,
     pub storage_format: PreviewStorageFormat,
     pub resize_filter: PreviewResizeFilter,
+}
+
+/// A compressed preview pack kept resident for repeated, on-demand decoding.
+///
+/// The reusable decode buffer stays owned by this handle so callers retain
+/// only the decoded images they explicitly keep.
+pub struct ResidentPreviewArchive {
+    archive: PreviewArchive,
+    scratch: PreviewArchiveScratch,
+    asset_keys: Vec<String>,
+}
+
+impl ResidentPreviewArchive {
+    pub fn open(path: &Path) -> Result<Self, String> {
+        let archive = PreviewArchive::open(path)?;
+        let mut asset_keys = archive
+            .entries
+            .keys()
+            .filter_map(|name| name.strip_suffix(".rgb565"))
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        asset_keys.sort_unstable();
+        Ok(Self {
+            archive,
+            scratch: PreviewArchiveScratch::default(),
+            asset_keys,
+        })
+    }
+
+    pub fn asset_keys(&self) -> &[String] {
+        &self.asset_keys
+    }
+
+    pub fn compressed_bytes(&self) -> usize {
+        self.archive.bytes.len()
+    }
+
+    pub fn load_pixels(&mut self, asset_key: &str) -> Result<PreviewPixels, String> {
+        let entry_name = format!("{}.rgb565", asset_key.trim());
+        self.archive
+            .load_timed(&entry_name, &mut self.scratch)?
+            .map(|loaded| loaded.image)
+            .ok_or_else(|| format!("preview archive entry missing {entry_name}"))
+    }
+
+    pub fn load_pixels_at(&mut self, index: usize) -> Result<PreviewPixels, String> {
+        let asset_key = self
+            .asset_keys
+            .get(index)
+            .ok_or_else(|| format!("preview archive index out of range {index}"))?
+            .clone();
+        self.load_pixels(&asset_key)
+    }
 }
 
 impl PreviewPixels {
@@ -1041,7 +1095,7 @@ struct PreviewArchiveSidecarLookup {
 }
 
 struct PreviewArchive {
-    bytes: Arc<[u8]>,
+    bytes: Mmap,
     entries: HashMap<String, PreviewArchiveEntry>,
 }
 
@@ -2233,7 +2287,11 @@ impl PreviewArchive {
         }
         let count = read_u32(&mut file)? as usize;
         let entries = read_v2_pixel_entries(&mut file, count, archive_bytes)?;
-        let bytes = Arc::from(read_archive_bytes(path)?.into_boxed_slice());
+        // SAFETY: the immutable mapping owns its file-backed pages and this
+        // process never writes or truncates preview packs while a reader is
+        // alive. Deployment publishes packs atomically under a new inode.
+        let bytes = unsafe { Mmap::map(&file) }
+            .map_err(|e| format!("map preview archive {}: {e}", path.display()))?;
         Ok(Self { bytes, entries })
     }
 
@@ -2305,15 +2363,6 @@ fn read_v2_pixel_entries(
         }
     }
     Ok(entries)
-}
-
-fn read_archive_bytes(path: &Path) -> Result<Vec<u8>, String> {
-    let mut file =
-        File::open(path).map_err(|e| format!("preload preview archive {}: {e}", path.display()))?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)
-        .map_err(|e| format!("read preview archive {}: {e}", path.display()))?;
-    Ok(bytes)
 }
 
 #[cfg(target_os = "linux")]

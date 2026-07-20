@@ -2587,6 +2587,7 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "lz4_flex",
+ "memmap2",
  "quick-xml 0.41.0",
  "rusqlite",
  "serde",
