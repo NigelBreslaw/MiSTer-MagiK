@@ -6,11 +6,12 @@
 use crate::arcade_catalog::LaunchTarget;
 #[cfg(feature = "bench-tools")]
 use crate::library_db;
+use flate2::read::DeflateDecoder;
 use std::cell::Cell;
+use std::fmt;
 use std::fs::{self, File};
-#[cfg(any(feature = "bench-tools", all(test, not(target_os = "linux"))))]
-use std::io::Read;
-use std::io::Write;
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 #[cfg(feature = "bench-tools")]
 use std::time::Instant;
@@ -20,6 +21,40 @@ const AMIGAVISION_GAME_LAUNCH_PREFIX: &str = "magik-amigavision:";
 const AMIGAVISION_LAUNCHER_REF: &str = "magik-amigavision-launcher";
 const AMIGAVISION_HDF_NAMES: &[&str] = &["AmigaVision.hdf", "MegaAGS.hdf"];
 const AMIGAVISION_MGL_NAMES: &[&str] = &["Amiga.mgl", "Amiga 500.mgl", "MegaAGS.mgl"];
+const ARCHIVE_STAGE_DIR: &str = "/tmp/mister-magik/launch-payloads";
+const MAX_ARCHIVE_MEMBER_BYTES: u64 = 64 * 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LaunchPreparationFailureKind {
+    MissingPayload,
+    UnreadablePayload,
+    DamagedArchive,
+    UnsupportedArchive,
+    OversizedArchiveMember,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LaunchPreparationError {
+    pub kind: LaunchPreparationFailureKind,
+    pub detail: String,
+}
+
+impl LaunchPreparationError {
+    fn new(kind: LaunchPreparationFailureKind, detail: impl Into<String>) -> Self {
+        Self {
+            kind,
+            detail: detail.into(),
+        }
+    }
+}
+
+impl fmt::Display for LaunchPreparationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.detail.fmt(f)
+    }
+}
+
+impl std::error::Error for LaunchPreparationError {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct AmigaVisionInstall {
@@ -50,7 +85,9 @@ pub fn prepare_launch_ref(launch_ref: &str) -> Result<String, String> {
     prepare_launch_ref_with_roots(launch_ref, &roots)
 }
 
-pub fn prepare_launch_target(launch_target: &LaunchTarget) -> Result<LaunchTarget, String> {
+pub fn prepare_launch_target(
+    launch_target: &LaunchTarget,
+) -> Result<LaunchTarget, LaunchPreparationError> {
     let _lease = mister_magik_catalog::work_coordinator::foreground("launch-preparation");
     let roots = mister_magik_catalog::catalog_config::library_roots_from_env();
     prepare_launch_target_with_roots(launch_target, &roots)
@@ -59,25 +96,255 @@ pub fn prepare_launch_target(launch_target: &LaunchTarget) -> Result<LaunchTarge
 fn prepare_launch_target_with_roots(
     launch_target: &LaunchTarget,
     roots: &[String],
-) -> Result<LaunchTarget, String> {
+) -> Result<LaunchTarget, LaunchPreparationError> {
     match launch_target {
         LaunchTarget::Prepared(selection) => Ok(LaunchTarget::Path(
-            prepare_launch_ref_with_roots(&selection.launch_ref, roots)?.into(),
+            prepare_launch_ref_with_roots(&selection.launch_ref, roots)
+                .map_err(unreadable_payload_error)?
+                .into(),
         )),
         LaunchTarget::Path(path) => {
             mister_magik_catalog::prepared_collections::validate_prepared_launch_path(Path::new(
                 path.as_ref(),
-            ))?;
+            ))
+            .map_err(unreadable_payload_error)?;
             Ok(launch_target.clone())
         }
         LaunchTarget::Structured(plan) => {
+            if let Some(member) = mister_magik_catalog::archive_member::decode_archive_member_ref(
+                plan.payload_path.as_ref(),
+            )
+            .map_err(|detail| {
+                LaunchPreparationError::new(LaunchPreparationFailureKind::DamagedArchive, detail)
+            })? {
+                let payload_path = extract_archive_member(&member, Path::new(ARCHIVE_STAGE_DIR))?;
+                let mut prepared = plan.clone();
+                prepared.payload_path = payload_path.to_string_lossy().into_owned().into();
+                return Ok(LaunchTarget::Structured(prepared));
+            }
             mister_magik_catalog::prepared_collections::validate_prepared_launch_path(Path::new(
                 plan.payload_path.as_ref(),
-            ))?;
+            ))
+            .map_err(unreadable_payload_error)?;
             Ok(launch_target.clone())
         }
         other => Ok(other.clone()),
     }
+}
+
+fn unreadable_payload_error(detail: String) -> LaunchPreparationError {
+    let kind = if detail.to_ascii_lowercase().contains("missing")
+        || detail.to_ascii_lowercase().contains("not found")
+    {
+        LaunchPreparationFailureKind::MissingPayload
+    } else {
+        LaunchPreparationFailureKind::UnreadablePayload
+    };
+    LaunchPreparationError::new(kind, detail)
+}
+
+pub fn cleanup_archive_launch_staging() {
+    cleanup_archive_launch_staging_at(Path::new(ARCHIVE_STAGE_DIR));
+}
+
+fn cleanup_archive_launch_staging_at(stage_dir: &Path) {
+    match fs::remove_dir_all(stage_dir) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => crate::ui_errln!(
+            "warning: failed to clean archive launch staging {}: {error}",
+            stage_dir.display()
+        ),
+    }
+}
+
+fn extract_archive_member(
+    member: &mister_magik_catalog::archive_member::ArchiveMemberRef,
+    stage_dir: &Path,
+) -> Result<PathBuf, LaunchPreparationError> {
+    if member.uncompressed_size > MAX_ARCHIVE_MEMBER_BYTES
+        || member.compressed_size > MAX_ARCHIVE_MEMBER_BYTES
+    {
+        return Err(LaunchPreparationError::new(
+            LaunchPreparationFailureKind::OversizedArchiveMember,
+            format!(
+                "archive member exceeds {} bytes: {}::{}",
+                MAX_ARCHIVE_MEMBER_BYTES, member.archive_path, member.member_path
+            ),
+        ));
+    }
+    if !matches!(member.compression_method, 0 | 8) {
+        return Err(LaunchPreparationError::new(
+            LaunchPreparationFailureKind::UnsupportedArchive,
+            format!(
+                "unsupported ZIP compression method {}: {}::{}",
+                member.compression_method, member.archive_path, member.member_path
+            ),
+        ));
+    }
+    let member_path = Path::new(&member.member_path);
+    if member_path.is_absolute()
+        || member_path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(LaunchPreparationError::new(
+            LaunchPreparationFailureKind::DamagedArchive,
+            format!("unsafe ZIP member path: {}", member.member_path),
+        ));
+    }
+    let file_name = member_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            LaunchPreparationError::new(
+                LaunchPreparationFailureKind::UnsupportedArchive,
+                format!(
+                    "archive member has no usable file name: {}",
+                    member.member_path
+                ),
+            )
+        })?;
+
+    let mut archive = File::open(&member.archive_path).map_err(|error| {
+        let kind = if error.kind() == std::io::ErrorKind::NotFound {
+            LaunchPreparationFailureKind::MissingPayload
+        } else {
+            LaunchPreparationFailureKind::UnreadablePayload
+        };
+        LaunchPreparationError::new(kind, format!("open {}: {error}", member.archive_path))
+    })?;
+    archive
+        .seek(SeekFrom::Start(member.local_header_offset))
+        .map_err(|error| damaged_archive(member, "seek local header", error))?;
+    let mut header = [0u8; 30];
+    archive
+        .read_exact(&mut header)
+        .map_err(|error| damaged_archive(member, "read local header", error))?;
+    if u32::from_le_bytes(header[0..4].try_into().expect("ZIP signature bytes")) != 0x0403_4b50 {
+        return Err(LaunchPreparationError::new(
+            LaunchPreparationFailureKind::DamagedArchive,
+            format!(
+                "invalid ZIP local header: {}::{}",
+                member.archive_path, member.member_path
+            ),
+        ));
+    }
+    let name_len = u16::from_le_bytes(header[26..28].try_into().expect("ZIP name length")) as u64;
+    let extra_len = u16::from_le_bytes(header[28..30].try_into().expect("ZIP extra length")) as u64;
+    archive
+        .seek(SeekFrom::Current((name_len + extra_len) as i64))
+        .map_err(|error| damaged_archive(member, "seek member payload", error))?;
+
+    fs::create_dir_all(stage_dir).map_err(|error| {
+        LaunchPreparationError::new(
+            LaunchPreparationFailureKind::UnreadablePayload,
+            format!("create archive staging {}: {error}", stage_dir.display()),
+        )
+    })?;
+    let mut hasher = DefaultHasher::new();
+    member.hash(&mut hasher);
+    let output = stage_dir.join(format!("{:016x}-{file_name}", hasher.finish()));
+    let partial = output.with_extension(format!(
+        "{}.part",
+        output
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("payload")
+    ));
+    let result = write_extracted_member(member, &mut archive, &partial);
+    if let Err(error) = result {
+        let _ = fs::remove_file(&partial);
+        cleanup_archive_launch_staging_at(stage_dir);
+        return Err(error);
+    }
+    fs::rename(&partial, &output).map_err(|error| {
+        let _ = fs::remove_file(&partial);
+        LaunchPreparationError::new(
+            LaunchPreparationFailureKind::UnreadablePayload,
+            format!(
+                "publish staged archive member {}: {error}",
+                output.display()
+            ),
+        )
+    })?;
+    Ok(output)
+}
+
+fn write_extracted_member(
+    member: &mister_magik_catalog::archive_member::ArchiveMemberRef,
+    archive: &mut File,
+    output: &Path,
+) -> Result<(), LaunchPreparationError> {
+    let compressed = archive.take(member.compressed_size);
+    let mut input: Box<dyn Read + '_> = match member.compression_method {
+        0 => Box::new(compressed),
+        8 => Box::new(DeflateDecoder::new(compressed)),
+        _ => unreachable!("compression method validated"),
+    };
+    let mut output_file = File::create(output).map_err(|error| {
+        LaunchPreparationError::new(
+            LaunchPreparationFailureKind::UnreadablePayload,
+            format!("create staged payload {}: {error}", output.display()),
+        )
+    })?;
+    let mut crc = crc32fast::Hasher::new();
+    let mut total = 0u64;
+    let mut buffer = [0u8; 32 * 1024];
+    loop {
+        let read = input
+            .read(&mut buffer)
+            .map_err(|error| damaged_archive(member, "decompress member", error))?;
+        if read == 0 {
+            break;
+        }
+        total = total.saturating_add(read as u64);
+        if total > member.uncompressed_size || total > MAX_ARCHIVE_MEMBER_BYTES {
+            return Err(LaunchPreparationError::new(
+                LaunchPreparationFailureKind::OversizedArchiveMember,
+                format!(
+                    "archive member expanded beyond declared bounds: {}",
+                    member.member_path
+                ),
+            ));
+        }
+        crc.update(&buffer[..read]);
+        output_file.write_all(&buffer[..read]).map_err(|error| {
+            LaunchPreparationError::new(
+                LaunchPreparationFailureKind::UnreadablePayload,
+                format!("write staged payload {}: {error}", output.display()),
+            )
+        })?;
+    }
+    if total != member.uncompressed_size || crc.finalize() != member.crc32 {
+        return Err(LaunchPreparationError::new(
+            LaunchPreparationFailureKind::DamagedArchive,
+            format!(
+                "ZIP member size or checksum mismatch: {}::{}",
+                member.archive_path, member.member_path
+            ),
+        ));
+    }
+    output_file.sync_all().map_err(|error| {
+        LaunchPreparationError::new(
+            LaunchPreparationFailureKind::UnreadablePayload,
+            format!("sync staged payload {}: {error}", output.display()),
+        )
+    })
+}
+
+fn damaged_archive(
+    member: &mister_magik_catalog::archive_member::ArchiveMemberRef,
+    operation: &str,
+    error: std::io::Error,
+) -> LaunchPreparationError {
+    LaunchPreparationError::new(
+        LaunchPreparationFailureKind::DamagedArchive,
+        format!(
+            "{operation} {}::{}: {error}",
+            member.archive_path, member.member_path
+        ),
+    )
 }
 
 fn prepare_launch_ref_with_roots(launch_ref: &str, roots: &[String]) -> Result<String, String> {
@@ -704,6 +971,93 @@ mod tests {
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("create temp dir");
         path
+    }
+
+    fn stored_zip_member(root: &Path, name: &str, payload: &[u8]) -> (PathBuf, u32) {
+        let path = root.join("fixture.zip");
+        let crc = crc32fast::hash(payload);
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
+        bytes.extend_from_slice(&20u16.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.extend_from_slice(&crc.to_le_bytes());
+        bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.extend_from_slice(name.as_bytes());
+        bytes.extend_from_slice(payload);
+        std::fs::write(&path, bytes).expect("write ZIP fixture");
+        (path, crc)
+    }
+
+    #[test]
+    fn archive_member_is_extracted_to_bounded_temporary_staging() {
+        let root = unique_temp_dir("archive-member");
+        let stage = root.join("stage");
+        let payload = b"acid-drop-rom";
+        let (archive, crc32) = stored_zip_member(&root, "Acid Drop (Europe).bin", payload);
+        let member = mister_magik_catalog::archive_member::ArchiveMemberRef {
+            archive_path: archive.display().to_string(),
+            member_path: "Acid Drop (Europe).bin".to_string(),
+            local_header_offset: 0,
+            compression_method: 0,
+            compressed_size: payload.len() as u64,
+            uncompressed_size: payload.len() as u64,
+            crc32,
+        };
+
+        let extracted = extract_archive_member(&member, &stage).expect("extract archive member");
+        assert!(extracted.starts_with(&stage));
+        assert_eq!(
+            std::fs::read(&extracted).expect("read extracted payload"),
+            payload
+        );
+        cleanup_archive_launch_staging_at(&stage);
+        assert!(!stage.exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn archive_member_rejects_corrupt_unsupported_and_oversized_entries() {
+        let root = unique_temp_dir("archive-member-errors");
+        let stage = root.join("stage");
+        let (archive, crc32) = stored_zip_member(&root, "Game.bin", b"rom");
+        let mut member = mister_magik_catalog::archive_member::ArchiveMemberRef {
+            archive_path: archive.display().to_string(),
+            member_path: "Game.bin".to_string(),
+            local_header_offset: 0,
+            compression_method: 99,
+            compressed_size: 3,
+            uncompressed_size: 3,
+            crc32,
+        };
+        assert_eq!(
+            extract_archive_member(&member, &stage)
+                .expect_err("unsupported method")
+                .kind,
+            LaunchPreparationFailureKind::UnsupportedArchive
+        );
+        member.compression_method = 0;
+        member.uncompressed_size = MAX_ARCHIVE_MEMBER_BYTES + 1;
+        assert_eq!(
+            extract_archive_member(&member, &stage)
+                .expect_err("oversized member")
+                .kind,
+            LaunchPreparationFailureKind::OversizedArchiveMember
+        );
+        member.uncompressed_size = 3;
+        member.crc32 ^= 1;
+        assert_eq!(
+            extract_archive_member(&member, &stage)
+                .expect_err("checksum mismatch")
+                .kind,
+            LaunchPreparationFailureKind::DamagedArchive
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

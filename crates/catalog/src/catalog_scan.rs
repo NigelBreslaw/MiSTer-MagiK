@@ -1258,12 +1258,14 @@ fn scan_zip_central_directory_entries(
             return Err(format!("bad central directory signature at {entry_offset}"));
         }
         scanned += 1;
+        let compression_method = library_db::le_u16(&header[10..12]);
         let crc32 = library_db::le_u32(&header[16..20]);
         let compressed = library_db::le_u32(&header[20..24]) as u64;
         let uncompressed = library_db::le_u32(&header[24..28]) as u64;
         let name_len = library_db::le_u16(&header[28..30]) as u64;
         let extra_len = library_db::le_u16(&header[30..32]) as u64;
         let comment_len = library_db::le_u16(&header[32..34]) as u64;
+        let local_header_offset = library_db::le_u32(&header[42..46]) as u64;
         let trailing_len = extra_len + comment_len;
         if name_len + trailing_len > remaining {
             return Err("zip entry name outside central directory".to_string());
@@ -1281,6 +1283,17 @@ fn scan_zip_central_directory_entries(
         let name = String::from_utf8_lossy(&name_buf).into_owned();
         if !name.ends_with('/') && !should_ignore_path(Path::new(&name)) {
             if let Some(rule) = profile.classify_archive_entry(Path::new(&name)) {
+                let launch_ref = crate::archive_member::encode_archive_member_ref(
+                    &crate::archive_member::ArchiveMemberRef {
+                        archive_path: file_path.to_string(),
+                        member_path: name.clone(),
+                        local_header_offset,
+                        compression_method,
+                        compressed_size: compressed,
+                        uncompressed_size: uncompressed,
+                        crc32,
+                    },
+                )?;
                 entries.push(LibraryContainerEntry {
                     file_path: file_path.to_string(),
                     entry_path: name.clone(),
@@ -1291,7 +1304,7 @@ fn scan_zip_central_directory_entries(
                     uncompressed_size: Some(uncompressed),
                     crc32: Some(crc32),
                     launchable: true,
-                    launch_ref: format!("{file_path}/{name}"),
+                    launch_ref,
                 });
             }
         }
@@ -1802,9 +1815,14 @@ mod tests {
             .find(|d| d.source_kind == DiscoverySourceKind::ArchiveEntry)
             .expect("archive entry discovery");
         assert_eq!(discovery.platform_id, "neogeo");
-        assert!(discovery.launch_ref.ends_with(
-            "Neo Geo Mister FGPA Ultra Pack.zip/Neo Geo Mister FGPA Ultra Pack/ World A-Z/Neo Bomberman (neobombe).neo"
-        ));
+        let member = crate::archive_member::decode_archive_member_ref(&discovery.launch_ref)
+            .expect("decode archive launch ref")
+            .expect("explicit archive member");
+        assert_eq!(member.archive_path, zip_path.display().to_string());
+        assert_eq!(
+            member.member_path,
+            "Neo Geo Mister FGPA Ultra Pack/ World A-Z/Neo Bomberman (neobombe).neo"
+        );
 
         save_sqlite_scan(&db, &scan).expect("save sqlite");
         let loaded =

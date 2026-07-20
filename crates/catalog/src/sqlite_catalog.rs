@@ -4085,9 +4085,18 @@ fn launch_target_mount_for_discovery(
                 })
             })
             .and_then(|profile| match discovery.source_kind {
-                DiscoverySourceKind::ArchiveEntry => profile
-                    .classify_archive_entry(Path::new(discovery.launch_ref.as_str()))
-                    .map(|rule| rule.mount),
+                DiscoverySourceKind::ArchiveEntry => {
+                    let member_path = crate::archive_member::decode_archive_member_ref(
+                        discovery.launch_ref.as_str(),
+                    )
+                    .ok()
+                    .flatten()
+                    .map(|member| member.member_path)
+                    .unwrap_or_else(|| discovery.launch_ref.clone());
+                    profile
+                        .classify_archive_entry(Path::new(&member_path))
+                        .map(|rule| rule.mount)
+                }
                 DiscoverySourceKind::PayloadFile => {
                     match profile.classify_path(Path::new(discovery.launch_ref.as_str())) {
                         launch_profiles::ProfilePathClass::Payload { rule } => Some(rule.mount),

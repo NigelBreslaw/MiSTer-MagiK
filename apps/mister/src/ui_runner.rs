@@ -272,6 +272,7 @@ macro_rules! with_scene_app {
 }
 
 pub fn run_ui(f: &mut Fpga) {
+    crate::launch_preparation::cleanup_archive_launch_staging();
     let (scene, secs) = parse_ui_args();
     boot_analytics::event("run_ui_start", format!("scene={scene} secs={secs}"));
     crate::ui_logln!("ui scene={scene} secs={secs}");

@@ -482,7 +482,7 @@ fn spawn_launch_worker(request: LaunchWorkerRequest) -> mpsc::Receiver<LaunchWor
                     bench: None,
                 },
                 Err(error) => {
-                    let result = Err(launcher::LaunchError::preparation(error));
+                    let result = Err(launcher::LaunchError::preparation(error.to_string()));
                     let bench =
                         request
                             .bench_iteration
@@ -494,6 +494,9 @@ fn spawn_launch_worker(request: LaunchWorkerRequest) -> mpsc::Receiver<LaunchWor
                     LaunchWorkerResult { result, bench }
                 }
             };
+            if result.result.is_err() {
+                crate::launch_preparation::cleanup_archive_launch_staging();
+            }
             let _ = tx.send(result);
         })
         .expect("spawn launch-handoff");

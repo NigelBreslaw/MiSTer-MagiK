@@ -26,6 +26,8 @@ required-features = ["ui"]
 
 [dependencies]
 bytemuck = "1"
+crc32fast = "1"
+flate2 = "1"
 libc = "0.2"
 lz4_flex = "0.14.0"
 mister-magik-core = { path = "../../crates/magik-core" }
