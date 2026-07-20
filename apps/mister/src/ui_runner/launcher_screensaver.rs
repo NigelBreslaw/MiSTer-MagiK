@@ -884,219 +884,6 @@ fn blit_scaled_subpixel_x(
     blit_rounded_card(dst, screen_w, screen_h, image, corner_insets, snapped_x, y);
 }
 
-fn blit_parade_card_3d(
-    dst: &mut [Rgb565Pixel],
-    screen_w: usize,
-    screen_h: usize,
-    tile: &ParadeTile,
-) {
-    let depth = tile.layer.saturating_sub(PARADE_MIN_TILE_SPEED);
-    let x = tile.x_fp.div_euclid(PARADE_SUBPIXEL_ONE) as isize;
-    let fraction = tile.x_fp.rem_euclid(PARADE_SUBPIXEL_ONE) as u8;
-    let snapped_x = if fraction < 128 { x } else { x + 1 };
-    let lane_phase = ((snapped_x.div_euclid(4)
-        + tile.image_idx.wrapping_mul(29) as isize
-        + tile.layer.wrapping_mul(17) as isize)
-        & 127) as isize;
-    let lane_triangle = if lane_phase < 64 {
-        lane_phase - 32
-    } else {
-        96 - lane_phase
-    };
-    let drift = lane_triangle * [1, 2, 3, 4, 5][depth] / 32;
-    let y = tile.y + drift;
-    let extrusion = [1, 2, 3, 4, 5][depth] as isize;
-    let yaw = [0, 1, 1, 2, 3][depth]
-        * if tile.image_idx & 1 == 0 { 1 } else { -1 };
-
-    draw_card_extrusion(
-        dst,
-        screen_w,
-        screen_h,
-        &tile.scaled,
-        &tile.corner_insets,
-        snapped_x,
-        y,
-        extrusion,
-        depth,
-    );
-    blit_rounded_shadow(
-        dst,
-        screen_w,
-        screen_h,
-        &tile.scaled,
-        &tile.corner_insets,
-        snapped_x,
-        y,
-    );
-    if fraction == 128 {
-        blit_half_shifted_card_yaw(
-            dst,
-            screen_w,
-            screen_h,
-            &tile.scaled,
-            &tile.half_shifted,
-            &tile.corner_insets,
-            x,
-            y,
-            yaw,
-        );
-    } else {
-        blit_rounded_card_yaw(
-            dst,
-            screen_w,
-            screen_h,
-            &tile.scaled,
-            &tile.corner_insets,
-            snapped_x,
-            y,
-            yaw,
-        );
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn draw_card_extrusion(
-    dst: &mut [Rgb565Pixel],
-    screen_w: usize,
-    screen_h: usize,
-    image: &SaverImage,
-    corner_insets: &[u8],
-    x: isize,
-    y: isize,
-    depth: isize,
-    layer: usize,
-) {
-    let color = [
-        color565(2, 5, 12),
-        color565(3, 8, 18),
-        color565(4, 11, 25),
-        color565(5, 14, 33),
-        color565(7, 18, 42),
-    ][layer];
-    for row in 0..image.h {
-        let dst_y = y + row as isize + depth;
-        if dst_y < 0 || dst_y >= screen_h as isize {
-            continue;
-        }
-        let inset = corner_insets.get(row).copied().unwrap_or(0) as isize;
-        let right = x + image.w as isize - inset;
-        let x0 = right.clamp(0, screen_w as isize) as usize;
-        let x1 = (right + depth).clamp(0, screen_w as isize) as usize;
-        if x1 > x0 {
-            dst[dst_y as usize * screen_w + x0..dst_y as usize * screen_w + x1].fill(color);
-        }
-    }
-    for offset in 0..depth {
-        let dst_y = y + image.h as isize + offset;
-        if dst_y < 0 || dst_y >= screen_h as isize {
-            continue;
-        }
-        let x0 = (x + depth).clamp(0, screen_w as isize) as usize;
-        let x1 = (x + image.w as isize + depth).clamp(0, screen_w as isize) as usize;
-        if x1 > x0 {
-            dst[dst_y as usize * screen_w + x0..dst_y as usize * screen_w + x1].fill(color);
-        }
-    }
-}
-
-fn yaw_row_offset(row: usize, height: usize, yaw: isize) -> isize {
-    if yaw == 0 || height <= 1 {
-        return 0;
-    }
-    (row as isize * 2 - (height - 1) as isize) * yaw / (height - 1) as isize
-}
-
-#[allow(clippy::too_many_arguments)]
-fn blit_rounded_card_yaw(
-    dst: &mut [Rgb565Pixel],
-    screen_w: usize,
-    screen_h: usize,
-    image: &SaverImage,
-    corner_insets: &[u8],
-    x: isize,
-    y: isize,
-    yaw: isize,
-) {
-    for src_y in 0..image.h {
-        let dst_y = y + src_y as isize;
-        if dst_y < 0 || dst_y >= screen_h as isize {
-            continue;
-        }
-        let row_x = x + yaw_row_offset(src_y, image.h, yaw);
-        let inset = corner_insets.get(src_y).copied().unwrap_or(0) as usize;
-        let source_end = image.w.saturating_sub(inset);
-        if inset >= source_end {
-            continue;
-        }
-        let dst_x0 = (row_x + inset as isize).max(0) as usize;
-        let dst_x1 = (row_x + source_end as isize).clamp(0, screen_w as isize) as usize;
-        if dst_x1 <= dst_x0 {
-            continue;
-        }
-        let source_x0 = (dst_x0 as isize - row_x) as usize;
-        let source_row = src_y * image.stride + source_x0;
-        let target_row = dst_y as usize * screen_w + dst_x0;
-        let copy_len = dst_x1 - dst_x0;
-        dst[target_row..target_row + copy_len]
-            .copy_from_slice(&image.pixels[source_row..source_row + copy_len]);
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn blit_half_shifted_card_yaw(
-    dst: &mut [Rgb565Pixel],
-    screen_w: usize,
-    screen_h: usize,
-    image: &SaverImage,
-    half_shifted: &SaverImage,
-    corner_insets: &[u8],
-    x: isize,
-    y: isize,
-    yaw: isize,
-) {
-    for src_y in 0..image.h {
-        let dst_y = y + src_y as isize;
-        if dst_y < 0 || dst_y >= screen_h as isize {
-            continue;
-        }
-        let row_x = x + yaw_row_offset(src_y, image.h, yaw);
-        let dst_row = dst_y as usize * screen_w;
-        let src_row = src_y * image.stride;
-        let shifted_row = src_y * half_shifted.stride;
-        let inset = corner_insets.get(src_y).copied().unwrap_or(0) as usize;
-        let source_end = image.w.saturating_sub(inset);
-        if inset >= source_end {
-            continue;
-        }
-        let left = row_x + inset as isize;
-        if left >= 0 && left < screen_w as isize {
-            dst[dst_row + left as usize] = blend_565(
-                dst[dst_row + left as usize],
-                image.pixels[src_row + inset],
-                127,
-            );
-        }
-        let copy_x0 = (left + 1).max(0) as usize;
-        let copy_x1 = (row_x + source_end as isize).clamp(0, screen_w as isize) as usize;
-        if copy_x1 > copy_x0 {
-            let source_x0 = (copy_x0 as isize - row_x) as usize;
-            dst[dst_row + copy_x0..dst_row + copy_x1].copy_from_slice(
-                &half_shifted.pixels
-                    [shifted_row + source_x0..shifted_row + source_x0 + copy_x1 - copy_x0],
-            );
-        }
-        let right = row_x + source_end as isize;
-        if right >= 0 && right < screen_w as isize {
-            dst[dst_row + right as usize] = blend_565(
-                dst[dst_row + right as usize],
-                image.pixels[src_row + source_end - 1],
-                128,
-            );
-        }
-    }
-}
-
 fn blit_rounded_shadow(
     dst: &mut [Rgb565Pixel],
     screen_w: usize,
@@ -3145,7 +2932,16 @@ fn render_parade(
     let (draw_order, draw_count) = parade_draw_order(state);
     for tile_idx in draw_order.into_iter().take(draw_count) {
         let tile = &state.tiles[tile_idx];
-        blit_parade_card_3d(dst, w, h, tile);
+        blit_scaled_subpixel_x(
+            dst,
+            w,
+            h,
+            &tile.scaled,
+            &tile.half_shifted,
+            &tile.corner_insets,
+            tile.x_fp,
+            tile.y,
+        );
     }
 }
 
@@ -3161,7 +2957,16 @@ fn render_archive_parade(
     let (draw_order, draw_count) = parade_draw_order(state);
     for tile_idx in draw_order.into_iter().take(draw_count) {
         let tile = &state.tiles[tile_idx];
-        blit_parade_card_3d(dst, w, h, tile);
+        blit_scaled_subpixel_x(
+            dst,
+            w,
+            h,
+            &tile.scaled,
+            &tile.half_shifted,
+            &tile.corner_insets,
+            tile.x_fp,
+            tile.y,
+        );
     }
 }
 
