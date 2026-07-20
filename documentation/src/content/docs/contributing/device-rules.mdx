@@ -14,10 +14,10 @@ cd documentation
 corepack pnpm capture:screenshots
 ```
 
-The capture script calls:
+For a one-shot still capture, use:
 
 ```bash
-scripts/mister agent framebuffer-capture OUT.png --json OUT.json
+scripts/mister --capture-buffer
 ```
 
 Do not add raw `/dev/fb0` dumps or host-side raw-to-PNG paths. Agent captures are useful while the UI is running, but they are not proof of HDMI visibility because the FPGA may scan a different buffer.

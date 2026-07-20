@@ -364,7 +364,9 @@ Debugging tip: use the desktop Analytics live stream for continuous launcher
 inspection. It consumes the producer-side `framebuffer_stream_v1` path from the
 running `mister-magik-fb`, so the agent does not repeatedly read `/dev/fb0`.
 For one-shot evidence, capture framebuffer PNGs through the MagiK agent with
-`scripts/mister agent framebuffer-capture OUT.png --json OUT.json`. Captures are
+`scripts/mister --capture-buffer`. In a human terminal it writes a timestamped
+PNG to the Desktop without overwriting earlier captures; programmatic callers
+receive an MCP-style encoded PNG image. Captures are
 useful only while the UI is running; after exit, fbcon can redraw the login
 console into `/dev/fb0`.
 
@@ -373,7 +375,7 @@ agent framebuffer capture, preserve the state and collect both sides before
 restarting anything:
 
 ```bash
-scripts/mister agent framebuffer-capture OUT.png --json OUT.json
+scripts/mister --capture-buffer
 scripts/mister display-read --unsafe-spi
 ```
 

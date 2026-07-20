@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use base64::Engine;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 use rusqlite::{params, Connection};
@@ -9,7 +10,7 @@ use sha2::{Digest, Sha256};
 use ssh2::Session;
 use std::env;
 use std::fs::{self, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
@@ -127,6 +128,9 @@ fn run_cli() -> Result<()> {
         return Ok(());
     }
     let action = args.remove(0);
+    if action == "--capture-buffer" {
+        validate_capture_buffer_args(&args)?;
+    }
     if action_uses_device(&action) {
         let device = discovery::resolve()?;
         std::env::set_var("MISTER_IP", device.address.to_string());
@@ -136,6 +140,7 @@ fn run_cli() -> Result<()> {
         }
     }
     match action.as_str() {
+        "--capture-buffer" => capture_buffer(&args)?,
         "connected" => println!("connected"),
         "run" => {
             let stream = args.first().map(|s| s.as_str()) == Some("--stream");
@@ -395,7 +400,7 @@ fn run_cli() -> Result<()> {
 
 fn usage() {
     println!(
-        "usage: scripts/mister <connected|run|put|deploy-magik-bin|get|db|library-db|wait|connection-profile|media-check|media-download|media-bench-download|media-cloudflare-check|launcher-restart|boot-net-profile|boot-tcp-profile|agent|watch-reboot|reboot|reboot-wait|status|doctor|boot-capture|display-read|ini-repair-boot|ini-select-main|inittab-ensure-stock|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|mame-metadata-build|recover> ...\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>]\n       launcher-restart [--env KEY=VALUE]... [--clear-env] [--timeout SECS]; agent <ping|status|logs|timeline|diagnostics|framebuffer-capture|deploy-magik-bin|magik|reboot-wait|boot-profile>; reboot/reboot-wait default to supervised MagiK visual-lockdown reboot; pass --raw for detached Linux reboot recovery; pass --direct-reset for fast quiescent dev reboots; --direct-reset-no-sync is experimental"
+        "usage: scripts/mister --capture-buffer\n       scripts/mister <connected|run|put|deploy-magik-bin|get|db|library-db|wait|connection-profile|media-check|media-download|media-bench-download|media-cloudflare-check|launcher-restart|boot-net-profile|boot-tcp-profile|agent|watch-reboot|reboot|reboot-wait|status|doctor|boot-capture|display-read|ini-repair-boot|ini-select-main|inittab-ensure-stock|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|mame-metadata-build|recover> ...\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>]\n       launcher-restart [--env KEY=VALUE]... [--clear-env] [--timeout SECS]; agent <ping|status|logs|timeline|diagnostics|deploy-magik-bin|magik|reboot-wait|boot-profile>; reboot/reboot-wait default to supervised MagiK visual-lockdown reboot; pass --raw for detached Linux reboot recovery; pass --direct-reset for fast quiescent dev reboots; --direct-reset-no-sync is experimental"
     );
 }
 
@@ -1628,7 +1633,7 @@ fn agent_cli(args: &[String]) -> Result<()> {
 
 fn agent_usage() {
     println!(
-        "usage: scripts/mister agent <ping|status|logs|timeline|sd-list|diagnostics|framebuffer-capture|framebuffer-capture-raw|framebuffer-capture-lz4|deploy-magik-bin|magik|reboot-wait|boot-profile>\n       logs [--json]\n       timeline [--json]\n       sd-list PATH [--protocol auto|v1|v2] [--show-hidden] [--repeat N] [--json]\n       diagnostics [--out DIR]\n       framebuffer-capture OUT.png [--json OUT.json]\n       framebuffer-capture-raw OUT.raw [--json OUT.json]\n       framebuffer-capture-lz4 OUT.raw [--json OUT.json]\n       deploy-magik-bin LOCAL [REMOTE]\n       magik <status|suspend|resume|restart-launcher>\n       reboot-wait [--timeout SECS] [--raw|--direct-reset|--direct-reset-no-sync]\n       boot-profile [samples] [--timeout SECS] [--probe-timeout-ms MS] [--sleep-ms MS] [--raw|--direct-reset|--direct-reset-no-sync] [--fail-on-timeout]"
+        "usage: scripts/mister agent <ping|status|logs|timeline|sd-list|diagnostics|deploy-magik-bin|magik|reboot-wait|boot-profile>\n       logs [--json]\n       timeline [--json]\n       sd-list PATH [--protocol auto|v1|v2] [--show-hidden] [--repeat N] [--json]\n       diagnostics [--out DIR]\n       deploy-magik-bin LOCAL [REMOTE]\n       magik <status|suspend|resume|restart-launcher>\n       reboot-wait [--timeout SECS] [--raw|--direct-reset|--direct-reset-no-sync]\n       boot-profile [samples] [--timeout SECS] [--probe-timeout-ms MS] [--sleep-ms MS] [--raw|--direct-reset|--direct-reset-no-sync] [--fail-on-timeout]"
     );
 }
 
@@ -1750,6 +1755,106 @@ fn agent_sd_list(args: &[String]) -> Result<()> {
     Ok(())
 }
 
+struct PngCapture {
+    result: Value,
+    png: Vec<u8>,
+    elapsed_ms: u128,
+}
+
+fn capture_buffer(args: &[String]) -> Result<()> {
+    validate_capture_buffer_args(args)?;
+    let capture = request_framebuffer_png()?;
+    if io::stdout().is_terminal() {
+        println!("{}", write_desktop_capture(&capture.png)?.display());
+    } else {
+        println!("{}", image_content_json(&capture.png));
+    }
+    Ok(())
+}
+
+fn image_content_json(png: &[u8]) -> String {
+    let data = base64::engine::general_purpose::STANDARD.encode(png);
+    json!({"type": "image", "data": data, "mimeType": "image/png"}).to_string()
+}
+
+fn validate_capture_buffer_args(args: &[String]) -> Result<()> {
+    if args.is_empty() {
+        Ok(())
+    } else {
+        Err("usage: scripts/mister --capture-buffer".into())
+    }
+}
+
+fn request_framebuffer_png() -> Result<PngCapture> {
+    let reply = agent_request("framebuffer_capture", json!({}), Duration::from_secs(10))?;
+    let result = reply
+        .response
+        .get("result")
+        .ok_or("agent framebuffer capture response missing result")?;
+    if result.get("schema").and_then(Value::as_str) != Some("mister-magik-framebuffer-capture-v1") {
+        return Err("agent framebuffer capture returned an unsupported schema".into());
+    }
+    let png_hex = result
+        .get("png_hex")
+        .and_then(Value::as_str)
+        .ok_or("agent framebuffer capture response missing image data")?;
+    let png = decode_hex(png_hex)?;
+    validate_png(&png)?;
+    Ok(PngCapture {
+        result: result.clone(),
+        png,
+        elapsed_ms: reply.elapsed_ms,
+    })
+}
+
+fn validate_png(png: &[u8]) -> Result<()> {
+    if !png.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err("agent framebuffer capture returned invalid PNG data".into());
+    }
+    Ok(())
+}
+
+fn write_desktop_capture(png: &[u8]) -> Result<PathBuf> {
+    let desktop = PathBuf::from(env::var("HOME")?).join("Desktop");
+    if !desktop.is_dir() {
+        return Err(format!("Desktop directory does not exist: {}", desktop.display()).into());
+    }
+    let output = Command::new("date").arg("+%Y-%m-%d at %H.%M.%S").output()?;
+    if !output.status.success() {
+        return Err("could not determine local capture time".into());
+    }
+    let timestamp = String::from_utf8(output.stdout)?.trim().to_string();
+    write_desktop_capture_at(&desktop, &timestamp, png)
+}
+
+fn write_desktop_capture_at(desktop: &Path, timestamp: &str, png: &[u8]) -> Result<PathBuf> {
+    if !desktop.is_dir() {
+        return Err(format!("Desktop directory does not exist: {}", desktop.display()).into());
+    }
+    for suffix in 1_u64.. {
+        let path = desktop_capture_path(desktop, timestamp, suffix);
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut file) => {
+                file.write_all(png)?;
+                file.sync_all()?;
+                return Ok(path);
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    unreachable!("capture suffix space exhausted")
+}
+
+fn desktop_capture_path(desktop: &Path, timestamp: &str, suffix: u64) -> PathBuf {
+    let suffix = if suffix == 1 {
+        String::new()
+    } else {
+        format!(" {suffix}")
+    };
+    desktop.join(format!("MiSTer Framebuffer {timestamp}{suffix}.png"))
+}
+
 fn agent_framebuffer_capture(args: &[String]) -> Result<()> {
     let mut output = None;
     let mut json_output = None;
@@ -1789,19 +1894,11 @@ fn agent_framebuffer_capture(args: &[String]) -> Result<()> {
         fs::create_dir_all(parent)?;
     }
 
-    let reply = agent_request("framebuffer_capture", json!({}), Duration::from_secs(10))?;
-    let result = reply
-        .response
-        .get("result")
-        .ok_or("agent framebuffer_capture response missing result")?;
-    let png_hex = result
-        .get("png_hex")
-        .and_then(Value::as_str)
-        .ok_or("agent framebuffer_capture response missing png_hex")?;
-    let png = decode_hex(png_hex)?;
-    fs::write(&output, &png)?;
+    let capture = request_framebuffer_png()?;
+    let result = &capture.result;
+    fs::write(&output, &capture.png)?;
 
-    let metadata = framebuffer_capture_metadata(result, reply.elapsed_ms, &output);
+    let metadata = framebuffer_capture_metadata(result, capture.elapsed_ms, &output);
     if let Some(path) = json_output {
         if let Some(parent) = path
             .parent()
@@ -1817,14 +1914,14 @@ fn agent_framebuffer_capture(args: &[String]) -> Result<()> {
     let png_bytes = result
         .get("png_bytes")
         .and_then(Value::as_u64)
-        .unwrap_or(png.len() as u64);
+        .unwrap_or(capture.png.len() as u64);
     println!(
         "framebuffer_capture: {} ({}x{}, {}, {}ms)",
         output.display(),
         width,
         height,
         format_bytes_nearest_kb(png_bytes),
-        reply.elapsed_ms
+        capture.elapsed_ms
     );
     Ok(())
 }
@@ -4070,7 +4167,7 @@ fn collect_status(sess: &Session) -> Result<Value> {
         .and_then(Value::as_str);
     let visual = json!({
         "class": "not_sampled",
-        "note": "Use scripts/mister agent framebuffer-capture OUT.png for agent-backed PNG capture."
+        "note": "Use scripts/mister --capture-buffer for an agent-backed PNG capture."
     });
     let fb0_visible_candidate = owner == Some("fb0");
     Ok(json!({
@@ -6137,6 +6234,95 @@ H: Handlers=event3 js0"#
         assert!(text.contains("p50=    20"));
         assert!(text.contains("render_us"));
         assert!(text.contains("copy_us"));
+    }
+
+    #[test]
+    fn capture_buffer_paths_follow_screenshot_naming() {
+        let desktop = Path::new("/Users/example/Desktop");
+        assert_eq!(
+            desktop_capture_path(desktop, "2026-07-20 at 14.32.08", 1),
+            desktop.join("MiSTer Framebuffer 2026-07-20 at 14.32.08.png")
+        );
+        assert_eq!(
+            desktop_capture_path(desktop, "2026-07-20 at 14.32.08", 2),
+            desktop.join("MiSTer Framebuffer 2026-07-20 at 14.32.08 2.png")
+        );
+    }
+
+    #[test]
+    fn capture_buffer_rejects_arguments_before_device_work() {
+        assert!(validate_capture_buffer_args(&[]).is_ok());
+        assert_eq!(
+            validate_capture_buffer_args(&["extra".to_string()])
+                .unwrap_err()
+                .to_string(),
+            "usage: scripts/mister --capture-buffer"
+        );
+    }
+
+    #[test]
+    fn capture_buffer_requires_png_signature() {
+        assert!(validate_png(b"\x89PNG\r\n\x1a\nfixture").is_ok());
+        assert!(validate_png(b"not png").is_err());
+        assert!(validate_png(&[]).is_err());
+    }
+
+    #[test]
+    fn capture_buffer_image_content_round_trips_png() {
+        use base64::engine::general_purpose::STANDARD;
+
+        let png = b"\x89PNG\r\n\x1a\nfixture";
+        let output = image_content_json(png);
+        assert_eq!(
+            output,
+            format!(
+                "{{\"data\":\"{}\",\"mimeType\":\"image/png\",\"type\":\"image\"}}",
+                STANDARD.encode(png)
+            )
+        );
+        assert!(!output.contains('\n'));
+        let value: Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(value.get("type").and_then(Value::as_str), Some("image"));
+        assert_eq!(
+            value.get("mimeType").and_then(Value::as_str),
+            Some("image/png")
+        );
+        assert_eq!(
+            STANDARD
+                .decode(value.get("data").and_then(Value::as_str).unwrap())
+                .unwrap(),
+            png
+        );
+    }
+
+    #[test]
+    fn capture_buffer_writes_real_collision_safe_desktop_files() {
+        let root = temp_path("capture-desktop");
+        let desktop = root.join("Desktop");
+        fs::create_dir_all(&desktop).unwrap();
+        let png = b"\x89PNG\r\n\x1a\nfixture";
+        let first = write_desktop_capture_at(&desktop, "2026-07-20 at 14.32.08", png).unwrap();
+        let second = write_desktop_capture_at(&desktop, "2026-07-20 at 14.32.08", png).unwrap();
+        assert_eq!(
+            first.file_name().unwrap(),
+            "MiSTer Framebuffer 2026-07-20 at 14.32.08.png"
+        );
+        assert_eq!(
+            second.file_name().unwrap(),
+            "MiSTer Framebuffer 2026-07-20 at 14.32.08 2.png"
+        );
+        assert_eq!(fs::read(first).unwrap(), png);
+        assert_eq!(fs::read(second).unwrap(), png);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn capture_buffer_rejects_missing_desktop() {
+        let desktop = temp_path("missing-desktop").join("Desktop");
+        let error = write_desktop_capture_at(&desktop, "2026-07-20 at 14.32.08", b"png")
+            .unwrap_err()
+            .to_string();
+        assert!(error.starts_with("Desktop directory does not exist:"));
     }
 
     const MAME_1942_FIXTURE: &str = r#"<?xml version="1.0"?>

@@ -780,8 +780,8 @@ mister-magik-fb ui <scene> <secs>
 `history/toolchain-bench/results.tsv`. The TSV keeps the legacy `visual_ok`
 column as a combined pass bit and also records `timing_ok` and `capture_ok` so
 render/timing failures are distinguishable from agent framebuffer capture
-failures. Use `scripts/mister agent framebuffer-capture OUT.png --json
-OUT.json` for ad hoc framebuffer PNGs; do not add raw `/dev/fb0` dump or
+failures. Use `scripts/mister --capture-buffer` for ad hoc framebuffer PNGs;
+do not add raw `/dev/fb0` dump or
 host-side raw-to-PNG capture paths. For live desktop inspection and FPS
 experiments, use the producer-side framebuffer stream (`framebuffer_stream_v1`)
 instead of repeated PNG or raw-frame polling; keep PNG capture for still

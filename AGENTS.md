@@ -117,7 +117,7 @@ timed, deduplicated, and recorded.
 - Never launch cores with external `rbf_load`; use Main's command/FIFO handoff.
 - Never SIGSTOP MiSTer for the launcher.
 - Use Analytics live streaming for continuous framebuffer inspection and
-  `scripts/mister agent framebuffer-capture` for stills. Do not add raw
+  `scripts/mister --capture-buffer` for stills. Do not add raw
   `/dev/fb0` capture paths.
 - `/dev/fb0` contents alone do not prove HDMI visibility.
 - Production rendering is RGB565-only. Do not restore wider-color routes.

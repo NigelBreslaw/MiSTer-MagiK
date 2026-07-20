@@ -61,13 +61,13 @@ Use the normal wrapper:
 
 ```bash
 scripts/mister connected
+scripts/mister --capture-buffer
 scripts/mister agent ping
 scripts/mister agent status
 scripts/mister agent logs
 scripts/mister agent timeline
 scripts/mister agent sd-list /_Arcade --protocol auto --repeat 5
 scripts/mister agent diagnostics --out build/agent-diagnostics/sample
-scripts/mister agent framebuffer-capture build/fb0.png --json build/fb0.json
 scripts/mister agent deploy-magik-bin apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb
 scripts/mister agent magik status
 scripts/mister agent magik restart-launcher
@@ -138,13 +138,14 @@ not as stream failure. Current fields include:
 The desktop starts this stream only while the Debug page's `Real Time` tab is
 active, and stops it when the user switches tabs or leaves the Debug page.
 
-`framebuffer-capture` is the one-shot still-image path. It asks the MiSTer-side
-agent to read the current framebuffer, convert the raw pixels to PNG on the ARM
-device, and return the PNG plus metadata over the authenticated TCP protocol.
-The host wrapper writes the PNG to `OUT.png`; `--json OUT.json` records
-dimensions, stride, bpp, raw bytes, PNG bytes, request timing, and per-stage
-capture/encode timings. Use it for evidence snapshots and benchmark artifacts,
-not for desktop live streaming.
+`scripts/mister --capture-buffer` is the one-shot still-image path. It asks the
+MiSTer-side agent to read the current framebuffer and encode it as PNG. In a
+human terminal the CLI writes a screenshot-style timestamped file to the Mac
+Desktop and prints its absolute path. When stdout is captured or piped, it
+returns one MCP image content object containing base64 PNG data and the
+`image/png` MIME type. The public command has no paths, formats, metadata, or
+device-address options. Use it for still inspection, not desktop live
+streaming.
 
 `timeline` returns structured boot events. The expected event names are:
 

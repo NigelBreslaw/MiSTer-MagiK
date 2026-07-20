@@ -23,4 +23,7 @@ sequenceDiagram
   UI-->>Host: keyframes, deltas, heartbeats
 ```
 
-Still captures use `scripts/mister agent framebuffer-capture OUT.png --json OUT.json`. The live stream is different: it proxies frames produced by the running UI and must not poll `/dev/fb0`.
+Still captures use `scripts/mister --capture-buffer`. A human terminal receives
+a timestamped PNG on the Mac Desktop; a programmatic caller receives an
+MCP-style base64 PNG image object. The live stream is different: it proxies
+frames produced by the running UI and must not poll `/dev/fb0`.

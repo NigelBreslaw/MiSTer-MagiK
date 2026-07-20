@@ -115,9 +115,9 @@ the combined pass bit and adds `timing_ok` plus `capture_ok` so good frame
 timing is not hidden by an agent framebuffer capture-route failure. Display
 metadata is appended to the `notes` field per row: `physical_mode`, `fb_size`,
 `render_size`, `fb_scale`, `pixel_repetition`, `uio_fb`, and `ini_mode`. PNG
-captures come from `scripts/mister agent framebuffer-capture OUT.png --json
-OUT.json`; the agent response records dimensions, stride, bpp, raw bytes, PNG
-bytes, and stage timings.
+captures come from the same authenticated agent route exposed publicly as
+`scripts/mister --capture-buffer`; the benchmark harness additionally retains
+dimensions, byte counts, and stage timings for its evidence rows.
 
 Sync the local Neo Geo MP4 snaps and run only the video scene:
 
