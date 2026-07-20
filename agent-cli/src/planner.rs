@@ -36,7 +36,7 @@ pub fn lint_plan(intent: Intent, paths: Vec<PathBuf>) -> Plan {
 
 #[must_use]
 pub fn workflow_plan(intent: Intent) -> Plan {
-    use crate::model::RustTask;
+    use crate::model::{ArmTask, RustTask};
     let operation = match &intent {
         Intent::VerifyFullHost => operation(
             "verify.full-host",
@@ -75,6 +75,24 @@ pub fn workflow_plan(intent: Intent) -> Plan {
             "scripts/release-check-host.sh",
             &[],
         ),
+        Intent::Arm { task } => {
+            let mut operation = match task {
+                ArmTask::CheckLauncher => operation(
+                    "arm.check-launcher",
+                    "Check launcher in Apple container",
+                    "apps/mister/build-arm.sh",
+                    &["--check", "--ui-scope", "launcher"],
+                ),
+                ArmTask::BuildDevice => operation(
+                    "arm.build-device",
+                    "Build device binary in Apple container",
+                    "apps/mister/build-arm.sh",
+                    &["--device"],
+                ),
+            };
+            operation.risk = Risk::LocalWrite;
+            operation
+        }
         _ => {
             return Plan {
                 intent,
@@ -190,5 +208,18 @@ mod tests {
         assert!(lint_plan(intent, vec!["README.md".into()])
             .operations
             .is_empty());
+    }
+
+    #[test]
+    fn apple_container_launcher_check_uses_the_canonical_command() {
+        let plan = workflow_plan(Intent::Arm {
+            task: crate::model::ArmTask::CheckLauncher,
+        });
+        assert_eq!(plan.operations[0].program, "apps/mister/build-arm.sh");
+        assert_eq!(
+            plan.operations[0].args,
+            ["--check", "--ui-scope", "launcher"]
+        );
+        assert_eq!(plan.operations[0].risk, Risk::LocalWrite);
     }
 }

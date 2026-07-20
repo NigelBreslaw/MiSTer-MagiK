@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::model::{Intent, RustTask, Scope};
+use crate::model::{ArmTask, Intent, RustTask, Scope};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
@@ -62,6 +62,10 @@ pub enum Command {
         #[command(subcommand)]
         command: ReleaseCommand,
     },
+    Arm {
+        #[command(subcommand)]
+        task: ArmCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -79,6 +83,12 @@ pub enum RustCommand {
 #[derive(Debug, Subcommand)]
 pub enum ReleaseCommand {
     Host,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ArmCommand {
+    CheckLauncher,
+    BuildDevice,
 }
 
 #[derive(Debug, Subcommand)]
@@ -166,6 +176,12 @@ impl Cli {
             Some(Command::Release {
                 command: ReleaseCommand::Host,
             }) => Intent::ReleaseHost,
+            Some(Command::Arm { task }) => Intent::Arm {
+                task: match task {
+                    ArmCommand::CheckLauncher => ArmTask::CheckLauncher,
+                    ArmCommand::BuildDevice => ArmTask::BuildDevice,
+                },
+            },
         }
     }
 }

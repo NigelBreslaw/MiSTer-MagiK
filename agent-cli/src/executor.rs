@@ -24,7 +24,12 @@ pub fn execute(
     }
     for (index, operation) in plan.operations.iter().enumerate() {
         let percent = u8::try_from(index.saturating_mul(100) / plan.operations.len()).unwrap_or(0);
-        reporter.emit(EventKind::Progress, "lint", &operation.title, Some(percent))?;
+        reporter.emit(
+            EventKind::Progress,
+            operation_phase(operation),
+            &operation.title,
+            Some(percent),
+        )?;
         run_operation(evidence, request_id, repository, operation, reporter)?;
     }
     Ok(Outcome::Passed)
@@ -61,7 +66,12 @@ fn run_operation(
             break status;
         }
         thread::sleep(Duration::from_millis(100));
-        reporter.emit(EventKind::Progress, "lint", &operation.title, None)?;
+        reporter.emit(
+            EventKind::Progress,
+            operation_phase(operation),
+            &operation.title,
+            None,
+        )?;
     };
     let code = status.code().unwrap_or(1);
     evidence.finish_command(command_id, started, code)?;
@@ -74,6 +84,16 @@ fn run_operation(
         log_path.display(),
         log_tail(&log_path)?
     ))
+}
+
+fn operation_phase(operation: &Operation) -> &'static str {
+    if operation.id.starts_with("arm.") {
+        "arm-build"
+    } else if operation.id.starts_with("release.") {
+        "release"
+    } else {
+        "lint"
+    }
 }
 
 fn log_tail(path: &Path) -> Result<String, String> {

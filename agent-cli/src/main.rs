@@ -135,6 +135,17 @@ fn dispatch(
             )?;
             return executor::execute(evidence, request_id, repository, &plan, reporter);
         }
+        Intent::Arm { .. } => {
+            let plan = planner::workflow_plan(intent.clone());
+            evidence.record_plan(request_id, &plan)?;
+            reporter.emit(
+                EventKind::Progress,
+                "plan",
+                "Selected Apple container operation",
+                Some(0),
+            )?;
+            return executor::execute(evidence, request_id, repository, &plan, reporter);
+        }
         Intent::DatabaseStatus => {
             let status = evidence.status()?;
             if output == OutputFormat::Human {

@@ -37,6 +37,7 @@ pub enum Intent {
     Rust { task: RustTask },
     HostTools { full: bool },
     ReleaseHost,
+    Arm { task: ArmTask },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -45,6 +46,13 @@ pub enum RustTask {
     Format,
     Test,
     Check,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArmTask {
+    CheckLauncher,
+    BuildDevice,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
