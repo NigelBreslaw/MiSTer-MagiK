@@ -2573,11 +2573,10 @@ impl ParadeState {
                 continue;
             };
             let next = self.tiles[tile_idx].next.take().expect("checked above");
-            let x = if self.layers[layer_idx].spawn_count == 0 {
-                -(next.scaled.w as isize / 2)
-            } else {
-                -(next.scaled.w as isize)
-            };
+            // Decodes arrive asynchronously during startup. Always stage the
+            // card completely offscreen so readiness can never look like a
+            // half-card pop as each layer receives its first result.
+            let x = -(next.scaled.w as isize);
             let Some(y) =
                 self.random_tile_y(screen_h, x, next.scaled.w, next.scaled.h, speed, tile_idx)
             else {
@@ -3264,7 +3263,7 @@ mod tests {
     }
 
     #[test]
-    fn first_streamed_card_enters_half_visible_from_the_left() {
+    fn first_streamed_card_starts_fully_offscreen() {
         let mut state = ParadeState::new(0x1234);
         state.archive_backed = true;
         state.image_count = 1;
@@ -3292,7 +3291,7 @@ mod tests {
         state.advance(960, 540, None, 0);
 
         assert!(state.tiles[tile_idx].active);
-        assert_eq!(state.tiles[tile_idx].x(), -2);
+        assert_eq!(state.tiles[tile_idx].x(), -4);
     }
 
     #[test]
