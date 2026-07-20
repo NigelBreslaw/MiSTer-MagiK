@@ -374,9 +374,9 @@ run_validation_groups() {
     GIT_INDEX_FILE="$idx" git read-tree HEAD
     [ -z "$path" ] || synthetic_index "$path" "$idx"
     plan_file="$out/plan-$name.txt"
-    GIT_INDEX_FILE="$idx" scripts/validate affected --print-plan >"$plan_file"
+    GIT_INDEX_FILE="$idx" scripts/agent plan --staged >"$plan_file"
     if [ "$group" = validate ]; then
-      repeat_command validate "$name" 'scripts/validate affected' none env GIT_INDEX_FILE="$idx" scripts/validate affected --json
+      repeat_command validate "$name" 'scripts/agent verify --staged' none env GIT_INDEX_FILE="$idx" scripts/agent --output ndjson verify --staged
     fi
     if [ "$group" = precommit ] || [ "$group" = all ]; then
       repeat_command precommit "$name" '.githooks/pre-commit' none env GIT_INDEX_FILE="$idx" .githooks/pre-commit

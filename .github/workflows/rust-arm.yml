@@ -26,7 +26,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        group: [quality, domain, app, catalog, tools]
+        include:
+          - group: quality
+            paths: agent-cli scripts docs/agents
+          - group: domain
+            paths: crates/magik-core mister/platform/runtime
+          - group: app
+            paths: apps/mister
+          - group: catalog
+            paths: crates/catalog
+          - group: tools
+            paths: mister/tools
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -55,7 +65,7 @@ jobs:
             cargo-host-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-id.outputs.rust_abi }}-
 
       - name: Full host validation (${{ matrix.group }})
-        run: scripts/validate full-host --group "${{ matrix.group }}"
+        run: scripts/agent verify --paths ${{ matrix.paths }}
 
   host-dev:
     name: host-dev
