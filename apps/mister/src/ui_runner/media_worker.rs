@@ -150,6 +150,7 @@ fn run_screenshot_media_worker(
     let mut counts = MediaCheckCounts::default();
     let mut queue = MediaRequestQueue::default();
     let mut active = Vec::<ActiveDownload>::new();
+    let mut pending_reconciliation = BTreeMap::<String, (MediaPack, PathBuf)>::new();
     let mut finish_requested = false;
     let mut interaction_active = false;
     let mut interaction_reason = "idle".to_string();
@@ -177,11 +178,12 @@ fn run_screenshot_media_worker(
                 state.as_ref(),
                 &mut queue,
                 &mut active,
+                &mut pending_reconciliation,
                 &mut counts,
                 &tx,
             );
         }
-        poll_active_downloads(&mut active, &mut counts, &tx);
+        poll_active_downloads(&mut active, &mut pending_reconciliation, &mut counts, &tx);
         if config.benchmark_auto_finish
             && queue.requested_count > 0
             && active.is_empty()
@@ -203,6 +205,9 @@ fn run_screenshot_media_worker(
             benchmark_quiescent_since = None;
         }
         if finish_requested && active.is_empty() && queue.pending.is_empty() {
+            for (_system, (pack, local_path)) in std::mem::take(&mut pending_reconciliation) {
+                reconcile_pack_preview_availability(&pack, &local_path, &tx);
+            }
             break;
         }
         match command_rx.recv_timeout(Duration::from_millis(100)) {
@@ -355,6 +360,7 @@ fn start_ready_downloads(
     state: Option<&Value>,
     queue: &mut MediaRequestQueue,
     active: &mut Vec<ActiveDownload>,
+    pending_reconciliation: &mut BTreeMap<String, (MediaPack, PathBuf)>,
     counts: &mut MediaCheckCounts,
     tx: &mpsc::Sender<MediaWorkerMessage>,
 ) {
@@ -459,7 +465,7 @@ fn start_ready_downloads(
             detail,
         });
         if matches!(status, LocalPackStatus::Current) {
-            reconcile_pack_preview_availability(&pack, &local_path, tx);
+            pending_reconciliation.insert(pack.id.clone(), (pack.clone(), local_path.clone()));
             send_progress(
                 tx,
                 MediaProgressEvent::for_pack(
@@ -532,6 +538,7 @@ fn media_status_shows_download_progress(status: &LocalPackStatus) -> bool {
 
 fn poll_active_downloads(
     active: &mut Vec<ActiveDownload>,
+    pending_reconciliation: &mut BTreeMap<String, (MediaPack, PathBuf)>,
     counts: &mut MediaCheckCounts,
     tx: &mpsc::Sender<MediaWorkerMessage>,
 ) {
@@ -541,7 +548,10 @@ fn poll_active_downloads(
             Ok(Ok(())) => {
                 let done = active.remove(idx);
                 counts.downloaded += 1;
-                reconcile_pack_preview_availability(&done.pack, &done.local_path, tx);
+                pending_reconciliation.insert(
+                    done.pack.id.clone(),
+                    (done.pack.clone(), done.local_path.clone()),
+                );
                 if done.show_completion_progress {
                     send_progress(
                         tx,
