@@ -18,6 +18,7 @@ env:
   CROSS_VERSION: 0.2.5
   DOCKER_DEFAULT_PLATFORM: linux/amd64
   MISTER_CARGO_TIMINGS: "0"
+  MISTER_CI_ARM_PROFILE: ${{ github.event_name == 'pull_request' && 'release' || 'release-device' }}
 
 jobs:
   host-dev-group:
@@ -127,18 +128,23 @@ jobs:
         uses: actions/cache@v6
         with:
           path: |
-            apps/mister/target/release-device
-            !apps/mister/target/release-device/incremental
-            apps/mister/target/armv7-unknown-linux-gnueabihf/release-device
-            !apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/incremental
-          key: target-arm-v2-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-release-device-${{ steps.cache-id.outputs.cross_abi }}-${{ steps.cache-id.outputs.arm_target }}
+            apps/mister/target/${{ env.MISTER_CI_ARM_PROFILE }}
+            !apps/mister/target/${{ env.MISTER_CI_ARM_PROFILE }}/incremental
+            apps/mister/target/armv7-unknown-linux-gnueabihf/${{ env.MISTER_CI_ARM_PROFILE }}
+            !apps/mister/target/armv7-unknown-linux-gnueabihf/${{ env.MISTER_CI_ARM_PROFILE }}/incremental
+          key: target-arm-v2-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-${{ env.MISTER_CI_ARM_PROFILE }}-${{ steps.cache-id.outputs.cross_abi }}-${{ steps.cache-id.outputs.arm_target }}
           restore-keys: |
-            target-arm-v2-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-release-device-${{ steps.cache-id.outputs.cross_abi }}-
+            target-arm-v2-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-${{ env.MISTER_CI_ARM_PROFILE }}-${{ steps.cache-id.outputs.cross_abi }}-
 
       - name: Build ARM binary
         env:
           MISTER_CARGO_TIMINGS: "1"
-        run: apps/mister/build-arm.sh --device
+        run: |
+          if [[ "$MISTER_CI_ARM_PROFILE" == release ]]; then
+            apps/mister/build-arm.sh --fast --ui-scope all
+          else
+            apps/mister/build-arm.sh --device
+          fi
 
       - name: Upload Cargo timings
         if: always()
@@ -150,16 +156,21 @@ jobs:
           retention-days: 14
 
       - name: Prove unchanged ARM builds are no-ops
-        run: scripts/regression-arm-noop.sh --skip-warmup
+        run: |
+          if [[ "$MISTER_CI_ARM_PROFILE" == release ]]; then
+            scripts/regression-arm-noop.sh --skip-warmup --fast
+          else
+            scripts/regression-arm-noop.sh --skip-warmup
+          fi
 
       - name: Check ARM shared libraries
-        run: apps/mister/scripts/check-arm-shared-libs.sh apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb
+        run: apps/mister/scripts/check-arm-shared-libs.sh "apps/mister/target/armv7-unknown-linux-gnueabihf/$MISTER_CI_ARM_PROFILE/mister-magik-fb"
 
       - name: Upload ARM binary
         uses: actions/upload-artifact@v7
         with:
           name: mister-magik-fb-release
-          path: apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb
+          path: apps/mister/target/armv7-unknown-linux-gnueabihf/${{ env.MISTER_CI_ARM_PROFILE }}/mister-magik-fb
           if-no-files-found: error
 
       - name: Upload size history

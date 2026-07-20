@@ -2,17 +2,19 @@
 # Copyright (C) 2026 Nigel Breslaw
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-# Prove two unchanged production builds remain no-ops after one warm-up build.
+# Prove two unchanged optimized ARM builds remain no-ops after one warm-up build.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SKIP_WARMUP=0
 VERIFY_METADATA=0
+BUILD_ARGS=(--device)
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --skip-warmup) SKIP_WARMUP=1 ;;
     --verify-metadata) VERIFY_METADATA=1 ;;
-    *) echo "usage: scripts/regression-arm-noop.sh [--skip-warmup] [--verify-metadata]" >&2; exit 2 ;;
+    --fast) BUILD_ARGS=(--fast --ui-scope all) ;;
+    *) echo "usage: scripts/regression-arm-noop.sh [--skip-warmup] [--verify-metadata] [--fast]" >&2; exit 2 ;;
   esac
   shift
 done
@@ -22,7 +24,7 @@ trap 'rm -rf "$TMP"' EXIT
 
 run_build() {
   local label="$1"
-  "$ROOT/apps/mister/build-arm.sh" --device 2>&1 | tee "$TMP/$label.log"
+  "$ROOT/apps/mister/build-arm.sh" "${BUILD_ARGS[@]}" 2>&1 | tee "$TMP/$label.log"
 }
 
 if [ "$SKIP_WARMUP" -eq 0 ]; then
@@ -40,6 +42,10 @@ done
 echo "ARM production no-op regression check ok"
 
 if [ "$VERIFY_METADATA" -eq 1 ]; then
+  if [ "${BUILD_ARGS[0]}" != --device ]; then
+    echo "ERROR: --verify-metadata requires the production --device profile" >&2
+    exit 2
+  fi
   expected="$(git -C "$ROOT" show -s --format='%cd' --date='format:%-d.%-m.%Y %H:%M' HEAD)"
   binary="$ROOT/apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
   strings "$binary" >"$TMP/binary.strings"

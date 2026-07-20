@@ -282,9 +282,13 @@ any C++-probing native crates see the same compiler family locally and in CI.
 
 ## CI
 
-GitHub Actions builds the ARM frontend in `.github/workflows/rust-arm.yml`.
+GitHub Actions builds the full ARM frontend in `.github/workflows/rust-arm.yml`.
+Pull requests use the thin-LTO `release` profile for faster feedback; pushes to
+`main` retain the fat-LTO `release-device` profile used for shipping artifacts.
 
-CI builds the single production frontend with `apps/mister/build-arm.sh --device`.
+Both lanes build the same full UI and feature surface. The profile is the only
+intentional difference: PRs run `build-arm.sh --fast --ui-scope all`, while
+`main` runs `build-arm.sh --device`.
 
 CI runs on Linux, so `build-arm.sh` uses pinned `cross` 0.2.5 there. Each job
 pulls the content-versioned GHCR image selected by `apps/mister/Cross.toml`; the
