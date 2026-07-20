@@ -264,18 +264,43 @@ The two first-scan invocations distinguish a genuine first-ever fallback from
 the production retained-index recovery path; the latter removes `catalog-v3`
 but deliberately preserves `arcade-bootstrap.nav.lz4b`.
 
-Atari Lynx projection groups release variants by the normalized base title
-before parenthetical or bracketed annotations. The visible representative
-prefers final, MAME-identified, screenshot-bearing retail releases, then the
-highest stable version and the existing deterministic region/path ordering.
-All source games and launch plans remain in canonical catalog state; only the
-system shard and navigation list are collapsed. Variants remain hidden until a
-dedicated console variants UI is added.
+Console, handheld, and computer projection groups discoveries by system and
+canonical software-family identity. When no metadata identity exists, the
+normalized base title before parenthetical or bracketed release annotations is
+the family key. Multi-disc releases remain one family and retain their existing
+launch contract. The representative is selected deterministically by supported
+source, final/retail status, identity match, loose payload before archive
+member, preview availability, stable version, and path. All discoveries and
+launch plans remain in canonical catalog state; only the visible system shard
+and navigation list are collapsed. Variants remain hidden until a dedicated
+variant-selection UI is added.
+
+Generic manifest profiles are authoritative for canonical system/core pairs.
+An installed MGL descriptor may provide a documented shared-core alias, but it
+cannot advertise a known system through a different system's core. If the
+canonical core is unavailable, that system is omitted as unlaunchable instead
+of receiving a guessed core path.
+
+ZIP members are stored as explicit archive-member launch references, never as
+synthetic filesystem paths. Launch preparation validates the member path,
+compression method, declared and expanded size, and checksum, then writes the
+selected member to bounded `/tmp/mister-magik/launch-payloads` staging. Failed
+preparation removes staging; the next launcher start removes payloads retained
+for a successful Main handoff. Catalog storage is never used for extracted
+launch material.
+
+A launch failure restores framebuffer ownership and displays a persistent,
+Back-only confirmation overlay containing the game title, concise failure copy,
+and recovery guidance. A, B, or Home acknowledges it. Until then, the lifecycle
+remains in launch-failure recovery and captures dialog input; the original
+system, filter, scroll position, and selected row remain unchanged. Detailed
+paths and error codes are logged but are not shown in the primary UI.
 
 On a device, `mister-magik-fb catalog-v3-inspect` (or `scripts/mister catalog`)
 eagerly verifies both manifest slots, artifact sizes and hashes, state binding,
-scanner cache, every system shard, summed counts, and each system's keyed and
-available screenshot coverage. Per-system rows also report `source_games`,
+scanner cache, every system shard, summed counts, duplicate visible family
+keys, structured-plan payload readability, canonical system/core agreement,
+and each system's keyed and available screenshot coverage. Per-system rows also report `source_games`,
 `visible_families`, and `collapsed_variants`; shards written before these
 optional metadata keys report their visible game count as the source/family
 count and zero collapsed variants. This expensive command is acceptance

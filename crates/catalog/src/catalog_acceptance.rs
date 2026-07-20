@@ -6,6 +6,7 @@
 use crate::catalog_classify::{platform_kind_for_system, PlatformKind};
 use crate::catalog_config;
 use crate::sharded_catalog::CatalogReader;
+use std::collections::HashSet;
 
 pub fn inspect_production_catalog() -> Result<String, String> {
     inspect_catalog(&catalog_config::default_sharded_catalog_path())
@@ -62,6 +63,7 @@ pub fn inspect_catalog(storage: &std::path::Path) -> Result<String, String> {
                 collapsed_variants: 0,
             },
         );
+        validate_visible_system_rows(&summary.system_id, &full_shard.games)?;
         let preview_keys = system
             .games()
             .iter()
@@ -132,6 +134,47 @@ pub fn inspect_catalog(storage: &std::path::Path) -> Result<String, String> {
     Ok(output)
 }
 
+fn validate_visible_system_rows(
+    system_id: &crate::catalog_classify::SystemId,
+    games: &[crate::system_shard::SystemGame],
+) -> Result<(), String> {
+    let mut family_keys = HashSet::new();
+    for game in games {
+        let family = crate::catalog_projection::canonical_variant_title(&game.title);
+        if !family.is_empty() && !family_keys.insert(family.clone()) {
+            return Err(format!(
+                "V3 system {system_id} contains duplicate visible family key {family}"
+            ));
+        }
+        let Some(plan) = game.launch_plan.as_ref() else {
+            continue;
+        };
+        if plan.system_id != system_id.as_str() {
+            return Err(format!(
+                "V3 system {system_id} launch plan has system {}",
+                plan.system_id
+            ));
+        }
+        crate::launch_profiles::validate_canonical_core_profile(&plan.system_id, &plan.core_path)
+            .map_err(|error| format!("V3 launch plan {}: {error}", plan.launch_ref))?;
+        if let Some(member) = crate::archive_member::decode_archive_member_ref(&plan.payload_path)?
+        {
+            if !std::path::Path::new(&member.archive_path).is_file() {
+                return Err(format!(
+                    "V3 launch plan {} archive is unreadable: {}",
+                    plan.launch_ref, member.archive_path
+                ));
+            }
+        } else if !std::path::Path::new(&plan.payload_path).is_file() {
+            return Err(format!(
+                "V3 launch plan {} payload is unreadable: {}",
+                plan.launch_ref, plan.payload_path
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,6 +187,42 @@ mod tests {
     use crate::scanner_cache::ScannerCacheState;
     use std::collections::HashMap;
     use std::path::PathBuf;
+
+    #[test]
+    fn visible_row_validation_rejects_duplicates_core_mismatches_and_unreadable_payloads() {
+        let system_id = crate::catalog_classify::SystemId::parse("atari2600").expect("system");
+        let game = crate::system_shard::SystemGame {
+            stable_key: "acid-drop".to_string(),
+            title: "Acid Drop (Europe)".to_string(),
+            launch_ref: "acid-drop".to_string(),
+            launch_plan: Some(crate::system_shard::SystemLaunchPlan {
+                launch_ref: "acid-drop".to_string(),
+                title: "Acid Drop".to_string(),
+                system_id: "atari2600".to_string(),
+                core_path: "_Console/Atari7800".to_string(),
+                payload_path: "/missing/acid-drop.a26".to_string(),
+                mount_kind: "load-file".to_string(),
+                mount_index: 1,
+                delay_secs: 1,
+            }),
+            ..Default::default()
+        };
+        let error = validate_visible_system_rows(&system_id, std::slice::from_ref(&game))
+            .expect_err("cross-system core mismatch");
+        assert!(error.contains("requires canonical core Atari2600"));
+
+        let mut unreadable = game.clone();
+        unreadable.launch_plan.as_mut().expect("plan").core_path = "_Console/Atari2600".to_string();
+        let error = validate_visible_system_rows(&system_id, &[unreadable.clone()])
+            .expect_err("unreadable payload");
+        assert!(error.contains("payload is unreadable"));
+
+        let mut duplicate = unreadable;
+        duplicate.launch_plan = None;
+        let error = validate_visible_system_rows(&system_id, &[duplicate.clone(), duplicate])
+            .expect_err("duplicate visible family");
+        assert!(error.contains("duplicate visible family key acid-drop"));
+    }
 
     #[test]
     fn inspector_reports_lynx_keyed_available_and_unmatched_coverage() {

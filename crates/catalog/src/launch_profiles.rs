@@ -1144,6 +1144,23 @@ fn core_path_is_compatible_with_canonical_system(system: &str, path: &Path) -> b
     )
 }
 
+pub fn validate_canonical_core_profile(system_id: &str, core_path: &str) -> Result<(), String> {
+    let Some(profile) = generic_manifest_profiles_cached()
+        .iter()
+        .find(|profile| profile.system_id.eq_ignore_ascii_case(system_id))
+    else {
+        return Ok(());
+    };
+    if core_path_is_compatible_with_canonical_system(&profile.core_name, Path::new(core_path)) {
+        Ok(())
+    } else {
+        Err(format!(
+            "system {system_id} requires canonical core {} but launch plan uses {core_path}",
+            profile.core_name
+        ))
+    }
+}
+
 fn unique_extension_core_candidates<'a>(
     game_dir: &catalog_discovery::GameDirFact,
     cores: &'a [catalog_discovery::InstalledCore],
