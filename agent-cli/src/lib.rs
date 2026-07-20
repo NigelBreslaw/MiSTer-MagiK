@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 pub mod cli;
+pub mod commit;
 pub mod evidence;
 pub mod executor;
 pub mod model;

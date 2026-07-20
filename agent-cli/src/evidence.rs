@@ -50,7 +50,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     task_id TEXT PRIMARY KEY,
     worktree TEXT NOT NULL,
     created_ms INTEGER NOT NULL,
-    baseline_json TEXT NOT NULL
+    baseline_json TEXT NOT NULL,
+    closed_ms INTEGER,
+    commit_sha TEXT
 );
 CREATE TABLE IF NOT EXISTS operation_cache (
     task_id TEXT NOT NULL,
@@ -59,7 +61,24 @@ CREATE TABLE IF NOT EXISTS operation_cache (
     completed_ms INTEGER NOT NULL,
     PRIMARY KEY (task_id, operation_id, fingerprint)
 );
-PRAGMA user_version = 2;
+CREATE TABLE IF NOT EXISTS task_claims (
+    task_id TEXT NOT NULL REFERENCES tasks(task_id),
+    path TEXT NOT NULL,
+    claimed_ms INTEGER NOT NULL,
+    PRIMARY KEY (task_id, path)
+);
+CREATE TABLE IF NOT EXISTS commit_attempts (
+    request_id TEXT PRIMARY KEY REFERENCES requests(id),
+    task_id TEXT NOT NULL,
+    message TEXT NOT NULL,
+    paths_json TEXT NOT NULL,
+    status TEXT NOT NULL,
+    commit_sha TEXT,
+    subject TEXT,
+    rolled_back INTEGER NOT NULL DEFAULT 0,
+    detail TEXT
+);
+PRAGMA user_version = 5;
 "#;
 
 #[derive(Debug)]
@@ -95,6 +114,7 @@ pub struct RunDetail {
     pub outcome: Option<String>,
     pub commands: Vec<CommandDetail>,
     pub events: Vec<EventDetail>,
+    pub commit_attempt: Option<CommitAttemptDetail>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -116,6 +136,18 @@ pub struct EventDetail {
     pub phase: String,
     pub message: String,
     pub percent: Option<i64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct CommitAttemptDetail {
+    pub task_id: String,
+    pub message: String,
+    pub paths: serde_json::Value,
+    pub status: String,
+    pub commit_sha: Option<String>,
+    pub subject: Option<String>,
+    pub rolled_back: bool,
+    pub detail: Option<String>,
 }
 
 impl Evidence {
@@ -142,6 +174,15 @@ impl Evidence {
             .and_then(|()| connection.pragma_update(None, "foreign_keys", true))
             .and_then(|()| connection.execute_batch(SCHEMA))
             .map_err(|error| format!("cannot migrate audit database: {error}"))?;
+        ensure_column(&connection, "tasks", "closed_ms", "INTEGER")?;
+        ensure_column(&connection, "tasks", "commit_sha", "TEXT")?;
+        ensure_column(&connection, "commit_attempts", "subject", "TEXT")?;
+        ensure_column(
+            &connection,
+            "commit_attempts",
+            "rolled_back",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
         Ok(Self {
             connection,
             root: root.to_path_buf(),
@@ -242,8 +283,16 @@ impl Evidence {
         replace: bool,
     ) -> Result<(), String> {
         let baseline = serde_json::to_string(baseline).map_err(|error| error.to_string())?;
+        if task_id.starts_with("task-") {
+            self.connection
+                .execute(
+                    "UPDATE tasks SET closed_ms=?2 WHERE worktree=?1 AND task_id LIKE 'task-%' AND closed_ms IS NULL",
+                    params![worktree.display().to_string(), now_ms()],
+                )
+                .map_err(|error| error.to_string())?;
+        }
         let sql = if replace {
-            "INSERT INTO tasks (task_id, worktree, created_ms, baseline_json) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(task_id) DO UPDATE SET worktree=excluded.worktree, created_ms=excluded.created_ms, baseline_json=excluded.baseline_json"
+            "INSERT INTO tasks (task_id, worktree, created_ms, baseline_json, closed_ms, commit_sha) VALUES (?1, ?2, ?3, ?4, NULL, NULL) ON CONFLICT(task_id) DO UPDATE SET worktree=excluded.worktree, created_ms=excluded.created_ms, baseline_json=excluded.baseline_json, closed_ms=NULL, commit_sha=NULL"
         } else {
             "INSERT INTO tasks (task_id, worktree, created_ms, baseline_json) VALUES (?1, ?2, ?3, ?4)"
         };
@@ -281,6 +330,139 @@ impl Evidence {
                     .map_err(|error| format!("cannot decode task baseline: {error}"))
             })
             .transpose()
+    }
+
+    pub fn active_task_ids(&self, worktree: &Path, except: &str) -> Result<Vec<String>, String> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT task_id FROM tasks WHERE worktree=?1 AND closed_ms IS NULL AND task_id<>?2 ORDER BY created_ms",
+            )
+            .map_err(|error| error.to_string())?;
+        let task_ids = statement
+            .query_map(params![worktree.display().to_string(), except], |row| {
+                row.get(0)
+            })
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        Ok(task_ids)
+    }
+
+    pub fn active_manual_task_id(&self, worktree: &Path) -> Result<Option<String>, String> {
+        self.connection
+            .query_row(
+                "SELECT task_id FROM tasks WHERE worktree=?1 AND task_id LIKE 'task-%' AND closed_ms IS NULL ORDER BY created_ms DESC LIMIT 1",
+                [worktree.display().to_string()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn close_task(&self, task_id: &str, commit_sha: &str) -> Result<(), String> {
+        let changed = self
+            .connection
+            .execute(
+                "UPDATE tasks SET closed_ms=?2, commit_sha=?3 WHERE task_id=?1 AND closed_ms IS NULL",
+                params![task_id, now_ms(), commit_sha],
+            )
+            .map_err(|error| error.to_string())?;
+        if changed == 1 {
+            Ok(())
+        } else {
+            Err(format!(
+                "task_baseline_missing: no active task baseline exists for {task_id}"
+            ))
+        }
+    }
+
+    pub fn claim_task_paths(&self, task_id: &str, paths: &[PathBuf]) -> Result<(), String> {
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|error| error.to_string())?;
+        for path in paths {
+            let path = path.display().to_string();
+            let conflict: Option<String> = transaction
+                .query_row(
+                    "SELECT c.task_id FROM task_claims c JOIN tasks t ON t.task_id=c.task_id WHERE c.path=?1 AND c.task_id<>?2 AND t.closed_ms IS NULL LIMIT 1",
+                    params![path, task_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|error| error.to_string())?;
+            if let Some(other) = conflict {
+                return Err(format!(
+                    "commit_scope_ambiguous: path {path} is already claimed by active task {other}"
+                ));
+            }
+            transaction
+                .execute(
+                    "INSERT OR REPLACE INTO task_claims (task_id, path, claimed_ms) VALUES (?1, ?2, ?3)",
+                    params![task_id, path, now_ms()],
+                )
+                .map_err(|error| error.to_string())?;
+        }
+        transaction.commit().map_err(|error| error.to_string())
+    }
+
+    pub fn task_claims(&self, task_id: &str) -> Result<Vec<PathBuf>, String> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT path FROM task_claims WHERE task_id=?1 ORDER BY path")
+            .map_err(|error| error.to_string())?;
+        let paths = statement
+            .query_map([task_id], |row| row.get::<_, String>(0))
+            .map_err(|error| error.to_string())?
+            .map(|value| value.map(PathBuf::from))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        Ok(paths)
+    }
+
+    pub fn begin_commit_attempt(
+        &self,
+        request_id: &str,
+        task_id: &str,
+        message: &str,
+    ) -> Result<(), String> {
+        self.connection
+            .execute(
+                "INSERT INTO commit_attempts (request_id, task_id, message, paths_json, status) VALUES (?1, ?2, ?3, '[]', 'started')",
+                params![request_id, task_id, message],
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    pub fn update_commit_attempt(
+        &self,
+        request_id: &str,
+        paths: &[PathBuf],
+        status: &str,
+        commit_sha: Option<&str>,
+        subject: Option<&str>,
+        detail: Option<&str>,
+    ) -> Result<(), String> {
+        let paths = serde_json::to_string(paths).map_err(|error| error.to_string())?;
+        self.connection
+            .execute(
+                "UPDATE commit_attempts SET paths_json=?2, status=?3, commit_sha=?4, subject=?5, detail=?6 WHERE request_id=?1",
+                params![request_id, paths, status, commit_sha, subject, detail],
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    pub fn record_commit_rollback(&self, request_id: &str, detail: &str) -> Result<(), String> {
+        self.connection
+            .execute(
+                "UPDATE commit_attempts SET status='rolled_back', rolled_back=1, detail=?2 WHERE request_id=?1",
+                params![request_id, detail],
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(())
     }
 
     pub fn has_cached_operation(
@@ -424,6 +606,7 @@ impl Evidence {
                         outcome: row.get(5)?,
                         commands: Vec::new(),
                         events: Vec::new(),
+                        commit_attempt: None,
                     })
                 },
             )
@@ -468,6 +651,27 @@ impl Evidence {
                 .map_err(|error| error.to_string())?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|error| error.to_string())?;
+            value.commit_attempt = self
+                .connection
+                .query_row(
+                    "SELECT task_id, message, paths_json, status, commit_sha, subject, rolled_back, detail FROM commit_attempts WHERE request_id=?1",
+                    [id],
+                    |row| {
+                        let paths: String = row.get(2)?;
+                        Ok(CommitAttemptDetail {
+                            task_id: row.get(0)?,
+                            message: row.get(1)?,
+                            paths: serde_json::from_str(&paths).unwrap_or_default(),
+                            status: row.get(3)?,
+                            commit_sha: row.get(4)?,
+                            subject: row.get(5)?,
+                            rolled_back: row.get::<_, i64>(6)? != 0,
+                            detail: row.get(7)?,
+                        })
+                    },
+                )
+                .optional()
+                .map_err(|error| error.to_string())?;
         }
         Ok(detail)
     }
@@ -511,6 +715,31 @@ fn primary_worktree(repository: &Path) -> Result<PathBuf, String> {
         .find_map(|line| line.strip_prefix("worktree "))
         .map(PathBuf::from)
         .ok_or_else(|| "Git did not report a primary worktree".into())
+}
+
+fn ensure_column(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> Result<(), String> {
+    let mut statement = connection
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(|error| error.to_string())?;
+    let names = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    if !names.iter().any(|name| name == column) {
+        connection
+            .execute(
+                &format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"),
+                [],
+            )
+            .map_err(|error| format!("cannot migrate {table}.{column}: {error}"))?;
+    }
+    Ok(())
 }
 
 fn migrate_common_dir_database(repository: &Path, root: &Path) -> Result<(), String> {
@@ -561,6 +790,33 @@ mod tests {
         assert_eq!(evidence.prune_logs().unwrap(), 1);
         let detail = evidence.run_detail(&request.id).unwrap().unwrap();
         assert_eq!(detail.outcome.as_deref(), Some("rejected"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn migrates_task_completion_columns_and_tracks_manual_session() {
+        let root = temporary_root("task-migration");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let connection = Connection::open(root.join("agent.sqlite3")).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE tasks (task_id TEXT PRIMARY KEY, worktree TEXT NOT NULL, created_ms INTEGER NOT NULL, baseline_json TEXT NOT NULL);",
+            )
+            .unwrap();
+        drop(connection);
+
+        let evidence = Evidence::open_at(&root).unwrap();
+        let worktree = Path::new("/tmp/manual-worktree");
+        evidence
+            .save_task_baseline("task-one", worktree, &serde_json::json!({}), false)
+            .unwrap();
+        assert_eq!(
+            evidence.active_manual_task_id(worktree).unwrap(),
+            Some("task-one".into())
+        );
+        evidence.close_task("task-one", "abc123").unwrap();
+        assert_eq!(evidence.active_manual_task_id(worktree).unwrap(), None);
         fs::remove_dir_all(root).unwrap();
     }
 

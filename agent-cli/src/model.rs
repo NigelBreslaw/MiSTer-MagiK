@@ -27,6 +27,7 @@ pub enum Scope {
 pub enum Intent {
     TaskBegin { task_id: String, replace: bool },
     TaskStatus { task_id: String },
+    Commit { task_id: String, message: String },
     Plan { scope: Scope, verbose: bool },
     Check { scope: Scope },
     Verify { scope: Scope },
@@ -37,6 +38,16 @@ pub enum Intent {
     PruneLogs,
     Interactive,
     Doctor,
+}
+
+impl Intent {
+    #[must_use]
+    pub const fn risk(&self) -> Risk {
+        match self {
+            Self::Commit { .. } => Risk::LocalWrite,
+            _ => Risk::ReadOnly,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

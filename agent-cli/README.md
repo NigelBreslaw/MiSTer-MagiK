@@ -13,6 +13,7 @@ scripts/agent task begin
 scripts/agent plan
 scripts/agent check
 scripts/agent verify
+scripts/agent commit -m "Describe the completed change"
 scripts/agent --output ndjson verify --staged
 scripts/agent scripts review
 ```
@@ -21,6 +22,13 @@ scripts/agent scripts review
 `--task-id`). Normal planning and validation then use only files changed since
 that baseline, including later edits to files that were already dirty. Explicit
 `--paths` remains available for CI and diagnostics.
+
+`commit -m MESSAGE` derives its file set from the active task baseline, refuses
+ambiguous or pre-staged work, validates the staged result, and creates one
+commit without pushing or bypassing hooks. It is an inherently Git-writing
+operation and must receive `.git` write permission on its first invocation.
+Validation can inspect later edits to baseline-dirty files, but commit refuses
+those overlaps because it cannot safely separate task and pre-existing content.
 
 With no arguments in a terminal, the program opens its Ratatui operator view.
 With no terminal, it retains concise human output. Automation should explicitly

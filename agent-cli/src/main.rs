@@ -36,7 +36,8 @@ fn main() {
         }
     };
     let output = cli.output;
-    let intent = cli.into_intent();
+    let intent = resolve_task_intent(&evidence, &repository, cli.into_intent())
+        .unwrap_or_else(|error| fatal(&error));
     evidence
         .record_intent(&raw.id, &intent)
         .unwrap_or_else(|error| fatal(&error));
@@ -97,6 +98,54 @@ fn is_discovery_request(args: &[std::ffi::OsString]) -> bool {
     ) || (args.len() == 2 && matches!(args[1].to_str(), Some("-V" | "--version")))
 }
 
+fn resolve_task_intent(
+    evidence: &Evidence,
+    repository: &std::path::Path,
+    intent: Intent,
+) -> Result<Intent, String> {
+    let resolve = |task_id: String| -> Result<String, String> {
+        if !task_id.is_empty() {
+            return Ok(task_id);
+        }
+        evidence.active_manual_task_id(repository)?.ok_or_else(|| {
+            "No task baseline exists. Run `scripts/agent task begin` before editing.".into()
+        })
+    };
+    Ok(match intent {
+        Intent::TaskStatus { task_id } => Intent::TaskStatus {
+            task_id: resolve(task_id)?,
+        },
+        Intent::Commit { task_id, message } => Intent::Commit {
+            task_id: if task_id.is_empty() {
+                evidence
+                    .active_manual_task_id(repository)?
+                    .unwrap_or_default()
+            } else {
+                task_id
+            },
+            message,
+        },
+        Intent::Plan {
+            scope: agent_cli::model::Scope::Task(task_id),
+            verbose,
+        } => Intent::Plan {
+            scope: agent_cli::model::Scope::Task(resolve(task_id)?),
+            verbose,
+        },
+        Intent::Check {
+            scope: agent_cli::model::Scope::Task(task_id),
+        } => Intent::Check {
+            scope: agent_cli::model::Scope::Task(resolve(task_id)?),
+        },
+        Intent::Verify {
+            scope: agent_cli::model::Scope::Task(task_id),
+        } => Intent::Verify {
+            scope: agent_cli::model::Scope::Task(resolve(task_id)?),
+        },
+        other => other,
+    })
+}
+
 fn dispatch(
     evidence: &Evidence,
     request_id: &str,
@@ -122,12 +171,31 @@ fn dispatch(
                 );
             }
         }
+        Intent::Commit { task_id, message } => {
+            let (outcome, sha, subject, paths) = agent_cli::commit::run(
+                evidence, request_id, repository, task_id, message, reporter,
+            )?;
+            if output == OutputFormat::Human {
+                println!(
+                    "commit: {} — {}\npaths: {}",
+                    sha,
+                    subject,
+                    paths
+                        .iter()
+                        .map(|path| path.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+            return Ok(outcome);
+        }
         Intent::Plan {
             scope: selected, ..
         }
         | Intent::Check { scope: selected }
         | Intent::Verify { scope: selected } => {
             let paths = scope::collect(evidence, request_id, repository, selected)?;
+            let claimed_paths = paths.clone();
             let plan = planner::affected_plan(intent.clone(), paths)?;
             evidence.record_plan(request_id, &plan)?;
             let summary = if plan.operations.is_empty() {
@@ -180,6 +248,9 @@ fn dispatch(
                     reporter.emit(EventKind::Warning, "external", &requirement.message, None)?;
                 }
                 return Ok(Outcome::ExternalRequired);
+            }
+            if let agent_cli::model::Scope::Task(task_id) = selected {
+                evidence.claim_task_paths(task_id, &claimed_paths)?;
             }
             return Ok(outcome);
         }
@@ -235,4 +306,45 @@ fn dispatch(
 fn fatal(message: &str) -> ! {
     eprintln!("agent-cli: {message}");
     std::process::exit(70);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::Path;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn manual_task_is_reused_by_bare_commands() {
+        let root = std::env::temp_dir().join(format!(
+            "agent-cli-main-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let evidence = Evidence::open_at(&root).unwrap();
+        evidence
+            .save_task_baseline("task-manual", Path::new("/tmp/worktree"), &(), false)
+            .unwrap();
+        assert_eq!(
+            resolve_task_intent(
+                &evidence,
+                Path::new("/tmp/worktree"),
+                Intent::Commit {
+                    task_id: String::new(),
+                    message: "message".into(),
+                }
+            )
+            .unwrap(),
+            Intent::Commit {
+                task_id: "task-manual".into(),
+                message: "message".into(),
+            }
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
 }

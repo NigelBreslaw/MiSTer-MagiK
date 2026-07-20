@@ -28,6 +28,7 @@ pub enum Command {
         #[command(subcommand)]
         command: TaskCommand,
     },
+    Commit(CommitArgs),
     Plan(ScopeArgs),
     Check(ScopeArgs),
     Runs {
@@ -59,6 +60,12 @@ pub enum TaskCommand {
         replace: bool,
     },
     Status,
+}
+
+#[derive(Clone, Debug, Args)]
+pub struct CommitArgs {
+    #[arg(short = 'm', long, required = true)]
+    pub message: String,
 }
 
 #[derive(Debug, Subcommand)]
@@ -122,6 +129,10 @@ impl Cli {
             Some(Command::Task {
                 command: TaskCommand::Status,
             }) => Intent::TaskStatus { task_id },
+            Some(Command::Commit(args)) => Intent::Commit {
+                task_id,
+                message: args.message,
+            },
             Some(Command::Plan(scope)) => Intent::Plan {
                 verbose: scope.verbose,
                 scope: scope.into_scope(Some(&task_id)),
@@ -184,5 +195,26 @@ mod tests {
                 verbose: false,
             }
         );
+    }
+
+    #[test]
+    fn commit_requires_and_preserves_message() {
+        let cli = Cli::try_parse_from([
+            "agent-cli",
+            "--task-id",
+            "task-1",
+            "commit",
+            "-m",
+            "Update workflow",
+        ])
+        .unwrap();
+        assert_eq!(
+            cli.into_intent(),
+            Intent::Commit {
+                task_id: "task-1".into(),
+                message: "Update workflow".into(),
+            }
+        );
+        assert!(Cli::try_parse_from(["agent-cli", "commit"]).is_err());
     }
 }
