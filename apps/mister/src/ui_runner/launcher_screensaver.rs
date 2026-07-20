@@ -273,13 +273,25 @@ impl LauncherScreensaver {
         self.poll_archive(w);
         #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
         {
-            let sample = render_archive_parade(dst, &mut self.parade, w, h, self.frame);
+            let sample = render_archive_parade_incremental(
+                dst,
+                &mut self.parade,
+                &mut self.damage_tracker,
+                w,
+                h,
+                self.frame,
+            );
             self.frame_profile.record(sample);
         }
         #[cfg(not(any(feature = "bench-tools", feature = "diagnostics")))]
-        render_archive_parade(dst, &mut self.parade, w, h, self.frame);
-        self.damage_tracker
-            .finish_frame(&self.parade, w, h, self.frame);
+        render_archive_parade_incremental(
+            dst,
+            &mut self.parade,
+            &mut self.damage_tracker,
+            w,
+            h,
+            self.frame,
+        );
         if self.frame > 0 && self.frame % 600 == 0 {
             self.parade.log_scaler_stats();
             #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
@@ -443,6 +455,7 @@ struct ScreensaverDamageTracker {
     valid: bool,
     w: usize,
     h: usize,
+    background: Vec<Rgb565Pixel>,
     previous_cards: Vec<Option<CardFootprint>>,
     previous_stars: Vec<DirtyRect>,
     damage: DirtyRectList,
@@ -453,7 +466,18 @@ impl ScreensaverDamageTracker {
         self.valid = false;
     }
 
-    fn finish_frame(&mut self, parade: &ParadeState, w: usize, h: usize, frame: u64) {
+    fn prepare_frame(
+        &mut self,
+        parade: &ParadeState,
+        w: usize,
+        h: usize,
+        frame: u64,
+    ) -> DirtyRectList {
+        let frame_len = w.saturating_mul(h);
+        if self.background.len() != frame_len {
+            self.background.resize(frame_len, Rgb565Pixel(0));
+            self.valid = false;
+        }
         let current_cards = parade
             .tiles
             .iter()
@@ -498,6 +522,7 @@ impl ScreensaverDamageTracker {
         self.w = w;
         self.h = h;
         self.valid = true;
+        self.damage
     }
 }
 
@@ -1116,18 +1141,57 @@ fn blit_scaled_subpixel_x(
     x_fp: i64,
     y: isize,
 ) {
+    blit_scaled_subpixel_x_clipped(
+        dst,
+        screen_w,
+        screen_h,
+        image,
+        half_shifted,
+        corner_insets,
+        x_fp,
+        y,
+        DirtyRect {
+            x0: 0,
+            y0: 0,
+            x1: screen_w,
+            y1: screen_h,
+        },
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn blit_scaled_subpixel_x_clipped(
+    dst: &mut [Rgb565Pixel],
+    screen_w: usize,
+    screen_h: usize,
+    image: &SaverImage,
+    half_shifted: &SaverImage,
+    corner_insets: &[u8],
+    x_fp: i64,
+    y: isize,
+    clip: DirtyRect,
+) {
     let x = x_fp.div_euclid(PARADE_SUBPIXEL_ONE) as isize;
     let fraction = x_fp.rem_euclid(PARADE_SUBPIXEL_ONE) as u8;
     let shadow_x = if fraction < 128 { x } else { x + 1 };
-    blit_rounded_shadow(dst, screen_w, screen_h, image, corner_insets, shadow_x, y);
+    blit_rounded_shadow(
+        dst,
+        screen_w,
+        screen_h,
+        image,
+        corner_insets,
+        shadow_x,
+        y,
+        clip,
+    );
     if fraction == 0 {
-        blit_rounded_card(dst, screen_w, screen_h, image, corner_insets, x, y);
+        blit_rounded_card(dst, screen_w, screen_h, image, corner_insets, x, y, clip);
         return;
     }
     if fraction == 128 {
         for src_y in 0..image.h {
             let dst_y = y + src_y as isize;
-            if dst_y < 0 || dst_y >= screen_h as isize {
+            if dst_y < clip.y0 as isize || dst_y >= clip.y1.min(screen_h) as isize {
                 continue;
             }
             let dst_row = dst_y as usize * screen_w;
@@ -1139,15 +1203,17 @@ fn blit_scaled_subpixel_x(
                 continue;
             }
             let left = x + inset as isize;
-            if left >= 0 && left < screen_w as isize {
+            if left >= clip.x0 as isize && left < clip.x1.min(screen_w) as isize {
                 dst[dst_row + left as usize] = blend_565(
                     dst[dst_row + left as usize],
                     image.pixels[src_row + inset],
                     127,
                 );
             }
-            let copy_x0 = (left + 1).max(0) as usize;
-            let copy_x1 = (x + source_end as isize).clamp(0, screen_w as isize) as usize;
+            let copy_x0 = (left + 1).max(clip.x0 as isize) as usize;
+            let copy_x1 = (x + source_end as isize)
+                .clamp(clip.x0 as isize, clip.x1.min(screen_w) as isize)
+                as usize;
             if copy_x1 > copy_x0 {
                 let source_x0 = (copy_x0 as isize - x) as usize;
                 dst[dst_row + copy_x0..dst_row + copy_x1].copy_from_slice(
@@ -1156,7 +1222,7 @@ fn blit_scaled_subpixel_x(
                 );
             }
             let right = x + source_end as isize;
-            if right >= 0 && right < screen_w as isize {
+            if right >= clip.x0 as isize && right < clip.x1.min(screen_w) as isize {
                 dst[dst_row + right as usize] = blend_565(
                     dst[dst_row + right as usize],
                     image.pixels[src_row + source_end - 1],
@@ -1170,7 +1236,16 @@ fn blit_scaled_subpixel_x(
     // phases. Snap an unsupported future phase instead of silently falling
     // back to the ARM-hostile per-pixel fractional compositor.
     let snapped_x = if fraction < 128 { x } else { x + 1 };
-    blit_rounded_card(dst, screen_w, screen_h, image, corner_insets, snapped_x, y);
+    blit_rounded_card(
+        dst,
+        screen_w,
+        screen_h,
+        image,
+        corner_insets,
+        snapped_x,
+        y,
+        clip,
+    );
 }
 
 fn blit_rounded_shadow(
@@ -1181,12 +1256,13 @@ fn blit_rounded_shadow(
     corner_insets: &[u8],
     x: isize,
     y: isize,
+    clip: DirtyRect,
 ) {
     const OFFSET: isize = 2;
     let shadow = color565(0, 0, 4);
     for shadow_y in 0..image.h {
         let dst_y = y + shadow_y as isize + OFFSET;
-        if dst_y < 0 || dst_y >= screen_h as isize {
+        if dst_y < clip.y0 as isize || dst_y >= clip.y1.min(screen_h) as isize {
             continue;
         }
         let shadow_inset = corner_insets.get(shadow_y).copied().unwrap_or(0) as isize;
@@ -1194,7 +1270,9 @@ fn blit_rounded_shadow(
         let shadow_x1 = x + OFFSET + image.w as isize - shadow_inset;
         let card_y = shadow_y as isize + OFFSET;
         if card_y >= image.h as isize {
-            blend_shadow_span(dst, screen_w, dst_y, shadow_x0, shadow_x1, shadow, 112);
+            blend_shadow_span(
+                dst, screen_w, dst_y, shadow_x0, shadow_x1, shadow, 112, clip,
+            );
             continue;
         }
         let card_inset = corner_insets.get(card_y as usize).copied().unwrap_or(0) as isize;
@@ -1208,6 +1286,7 @@ fn blit_rounded_shadow(
             shadow_x1.min(card_x0),
             shadow,
             112,
+            clip,
         );
         blend_shadow_span(
             dst,
@@ -1217,6 +1296,7 @@ fn blit_rounded_shadow(
             shadow_x1,
             shadow,
             112,
+            clip,
         );
     }
 }
@@ -1229,9 +1309,10 @@ fn blend_shadow_span(
     x1: isize,
     color: Rgb565Pixel,
     alpha: u8,
+    clip: DirtyRect,
 ) {
-    let x0 = x0.clamp(0, screen_w as isize) as usize;
-    let x1 = x1.clamp(0, screen_w as isize) as usize;
+    let x0 = x0.clamp(clip.x0 as isize, clip.x1.min(screen_w) as isize) as usize;
+    let x1 = x1.clamp(clip.x0 as isize, clip.x1.min(screen_w) as isize) as usize;
     if x1 <= x0 {
         return;
     }
@@ -1249,10 +1330,11 @@ fn blit_rounded_card(
     corner_insets: &[u8],
     x: isize,
     y: isize,
+    clip: DirtyRect,
 ) {
     for src_y in 0..image.h {
         let dst_y = y + src_y as isize;
-        if dst_y < 0 || dst_y >= screen_h as isize {
+        if dst_y < clip.y0 as isize || dst_y >= clip.y1.min(screen_h) as isize {
             continue;
         }
         let inset = corner_insets.get(src_y).copied().unwrap_or(0) as usize;
@@ -1260,8 +1342,10 @@ fn blit_rounded_card(
         if inset >= source_end {
             continue;
         }
-        let dst_x0 = (x + inset as isize).max(0) as usize;
-        let dst_x1 = (x + source_end as isize).clamp(0, screen_w as isize) as usize;
+        let dst_x0 = (x + inset as isize).max(clip.x0 as isize) as usize;
+        let dst_x1 = (x + source_end as isize)
+            .clamp(clip.x0 as isize, clip.x1.min(screen_w) as isize)
+            as usize;
         if dst_x1 <= dst_x0 {
             continue;
         }
@@ -3234,6 +3318,7 @@ fn render_parade(
     }
 }
 
+#[cfg(test)]
 fn render_archive_parade(
     dst: &mut [Rgb565Pixel],
     state: &mut ParadeState,
@@ -3269,6 +3354,121 @@ fn render_archive_parade(
             tile.y,
         );
     }
+    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+    {
+        let mut active_layers = [0_u16; PARADE_SPEED_COUNT];
+        for tile in state.tiles.iter().filter(|tile| tile.active) {
+            let layer_idx = tile.layer.saturating_sub(PARADE_MIN_TILE_SPEED);
+            if let Some(count) = active_layers.get_mut(layer_idx) {
+                *count = count.saturating_add(1);
+            }
+        }
+        ScreensaverFrameSample {
+            background_us,
+            advance_us,
+            cards_us: phase_started.elapsed().as_micros(),
+            total_us: total_started.elapsed().as_micros(),
+            active_layers,
+        }
+    }
+    #[cfg(not(any(feature = "bench-tools", feature = "diagnostics")))]
+    {}
+}
+
+fn render_archive_parade_incremental(
+    dst: &mut [Rgb565Pixel],
+    state: &mut ParadeState,
+    tracker: &mut ScreensaverDamageTracker,
+    w: usize,
+    h: usize,
+    frame: u64,
+) -> ScreensaverFrameSample {
+    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+    let total_started = Instant::now();
+    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+    let phase_started = Instant::now();
+    state.advance(w, h, None, frame);
+    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+    let advance_us = phase_started.elapsed().as_micros();
+
+    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+    let phase_started = Instant::now();
+    let damage = tracker.prepare_frame(state, w, h, frame);
+    let base = color565(0, 0, 10);
+    for rect in damage.iter() {
+        for y in rect.y0..rect.y1 {
+            tracker.background[y * w + rect.x0..y * w + rect.x1].fill(base);
+        }
+    }
+    for star in 0..210usize {
+        let layer = star & 3;
+        let (x, fraction) = horizontal_star_position(star, w, frame);
+        let y = (star
+            .wrapping_mul(83)
+            .wrapping_add(star.wrapping_mul(star) * 7))
+            % h;
+        let brightness = [70, 110, 170, 235][layer];
+        let color = color565(brightness / 2, brightness, 255);
+        for rect in damage.iter() {
+            if x >= rect.x0 && x < rect.x1 && y >= rect.y0 && y < rect.y1 {
+                let pixel = &mut tracker.background[y * w + x];
+                *pixel = blend_565(*pixel, color, 255 - fraction);
+            }
+            if fraction > 0 {
+                let next_x = (x + 1) % w;
+                if next_x >= rect.x0
+                    && next_x < rect.x1
+                    && y >= rect.y0
+                    && y < rect.y1
+                {
+                    let pixel = &mut tracker.background[y * w + next_x];
+                    *pixel = blend_565(*pixel, color, fraction);
+                }
+            }
+        }
+    }
+    for rect in damage.iter() {
+        for y in rect.y0..rect.y1 {
+            let row = y * w;
+            dst[row + rect.x0..row + rect.x1]
+                .copy_from_slice(&tracker.background[row + rect.x0..row + rect.x1]);
+        }
+    }
+    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+    let background_us = phase_started.elapsed().as_micros();
+
+    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+    let phase_started = Instant::now();
+    let (draw_order, draw_count) = parade_draw_order(state);
+    for rect in damage.iter() {
+        for tile_idx in draw_order.into_iter().take(draw_count) {
+            let tile = &state.tiles[tile_idx];
+            let footprint = CardFootprint {
+                x_fp: tile.x_fp,
+                y: tile.y,
+                w: tile.scaled.w,
+                h: tile.scaled.h,
+            };
+            if !footprint
+                .rect(w, h)
+                .is_some_and(|bounds| bounds.intersection(rect).is_some())
+            {
+                continue;
+            }
+            blit_scaled_subpixel_x_clipped(
+                dst,
+                w,
+                h,
+                &tile.scaled,
+                &tile.half_shifted,
+                &tile.corner_insets,
+                tile.x_fp,
+                tile.y,
+                rect,
+            );
+        }
+    }
+
     #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
     {
         let mut active_layers = [0_u16; PARADE_SPEED_COUNT];
