@@ -67,7 +67,6 @@ use std::io::{Read, Write};
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 
-mod arcade_button_overrides;
 mod arcade_list_renderer;
 mod artifact_publish;
 mod bitmap_text;
@@ -81,10 +80,6 @@ use mister_magik_mister_runtime::fpga;
 #[cfg(feature = "ui")]
 mod frame_profile;
 mod input;
-mod launch_preparation;
-mod launcher;
-mod launcher_taxonomy;
-mod licenses;
 #[cfg(feature = "bench-tools")]
 mod media_bench_download;
 #[cfg(feature = "bench-tools")]
@@ -95,11 +90,9 @@ mod mr_audio;
 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
 mod preview_pack_bench;
 mod preview_state;
-mod return_catalog_capsule;
 use mister_magik_mister_runtime::runtime_status;
 mod screenshot_transitions;
 use mister_magik_mister_runtime::settings;
-mod spring_animation;
 #[cfg(test)]
 mod test_support;
 mod ui_display;
@@ -112,8 +105,9 @@ mod video_player;
 use mister_magik_mister_runtime::vt;
 
 pub use mister_magik_fb::{
-    arcade_catalog, command_args, controller_db, input_repeat, input_state, library_db,
-    media_update, preview_worker, setup_nav,
+    arcade_button_overrides, arcade_catalog, command_args, controller_db, input_repeat,
+    input_state, launch_preparation, launcher, launcher_taxonomy, library_db, licenses,
+    media_update, preview_worker, return_catalog_capsule, setup_nav, spring_animation,
 };
 
 #[cfg(all(feature = "diagnostics", feature = "ui"))]
