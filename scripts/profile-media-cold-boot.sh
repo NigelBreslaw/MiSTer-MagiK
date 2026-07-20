@@ -441,6 +441,9 @@ terminal_phase = {}
 worker_done = []
 worker_failed = 0
 pack_failed = 0
+catalog_updated = collections.Counter()
+catalog_live_applied = collections.Counter()
+catalog_update_failed = 0
 
 def detail_fields(fields):
     result = {}
@@ -468,6 +471,12 @@ with open(log_path, encoding="utf-8", errors="replace") as source:
                 terminal_phase[key] = phase
         elif event == "screenshot_media_pack_status" and detail.get("status") == "failed":
             pack_failed += 1
+        elif event == "screenshot_media_catalog_updated":
+            catalog_updated[system] += 1
+        elif event == "screenshot_media_catalog_live_applied":
+            catalog_live_applied[system] += 1
+        elif event == "screenshot_media_catalog_update_failed":
+            catalog_update_failed += 1
         elif event == "screenshot_media_update_failed":
             worker_failed += 1
         elif event == "screenshot_media_update_done":
@@ -492,12 +501,15 @@ valid = (
     and len(worker_done) == 1
     and worker_failed == 0
     and pack_failed == 0
+    and catalog_update_failed == 0
     and terminal_set == queued_set
     and all(count == 1 for count in queued.values())
     and all(terminals[key] == 1 for key in queued_set)
     and all(terminal_phase.get(key) in successful for key in queued_set)
     and done_packs == requested_packs
     and done_failed == 0
+    and all(catalog_updated[system] == 1 for system in required_systems)
+    and all(catalog_live_applied[system] == 1 for system in required_systems)
 )
 reasons = []
 if not queued_set: reasons.append("no-queued-packs")
@@ -505,6 +517,9 @@ if not required_systems.issubset(queued_systems): reasons.append("required-syste
 if len(worker_done) != 1: reasons.append("worker-done-count")
 if worker_failed: reasons.append("worker-failed")
 if pack_failed: reasons.append("pack-failed")
+if catalog_update_failed: reasons.append("catalog-update-failed")
+if any(catalog_updated[system] != 1 for system in required_systems): reasons.append("catalog-updated-count")
+if any(catalog_live_applied[system] != 1 for system in required_systems): reasons.append("catalog-live-applied-count")
 if terminal_set != queued_set: reasons.append("terminal-set")
 if any(count != 1 for count in queued.values()): reasons.append("queued-count")
 if any(terminals[key] != 1 for key in queued_set): reasons.append("terminal-count")
@@ -522,6 +537,9 @@ print(
     f"\tterminal_packs={sum(terminals.values())}\tworker_done_count={len(worker_done)}"
     f"\tdone_packs={done_packs}\tdone_failed={done_failed}"
     f"\tworker_failed_count={worker_failed}\tpack_failed_count={pack_failed}"
+    f"\tcatalog_update_failed={catalog_update_failed}"
+    f"\tcatalog_updated={sum(catalog_updated.values())}"
+    f"\tcatalog_live_applied={sum(catalog_live_applied.values())}"
     f"\tterminals={phase_detail}"
 )
 raise SystemExit(0 if valid else 9)
@@ -832,6 +850,8 @@ startup_timing	preview_selected_applied	11ms	system=arcade selected_index=4 titl
 startup_timing	screenshot_media_progress	12ms	system=arcade image_size=320x320 variant=identity phase=download_done bytes_done=100 bytes_total=100 percent=100 pack_index=1 pack_count=3 download_mbps= detail=
 startup_timing	screenshot_media_progress	14ms	system=arcade image_size=320x320 variant=identity phase=save bytes_done=100 bytes_total=100 percent=100 pack_index=1 pack_count=3 download_mbps= detail=
 startup_timing	screenshot_media_progress	18ms	system=arcade image_size=320x320 variant=identity phase=done bytes_done=100 bytes_total=100 percent=100 pack_index=1 pack_count=3 download_mbps= detail=
+startup_timing	screenshot_media_catalog_updated	19ms	system=arcade previous_generation=1 generation=2 candidates=1 available=1 changed=1
+startup_timing	screenshot_media_catalog_live_applied	20ms	system=arcade games=1
 startup_timing	catalog_system_discovered	8ms	system=neogeo
 startup_timing	screenshot_media_catalog_system_present	9ms	system=neogeo source=catalog-seed
 startup_timing	screenshot_media_catalog_ensure	10ms	system=neogeo
@@ -840,6 +860,8 @@ startup_timing	screenshot_media_system_start	12ms	system=neogeo pack_index=2 pac
 startup_timing	screenshot_media_progress	13ms	system=neogeo image_size=320x320 variant=identity phase=download_start bytes_done=0 bytes_total=100 percent=0 pack_index=2 pack_count=3 download_mbps= detail=
 startup_timing	screenshot_media_ui_visibility	14ms	system=neogeo row_seen=0 row_index=-1 rendered=0 catalog_scan_visible=1 active_rows=4 visible_count=3 visible_systems=arcade,megadrive,n64 phase=download percent=0 summary_active=2 summary_done=1 summary_failed=0 summary_total=3
 startup_timing	screenshot_media_progress	15ms	system=neogeo image_size=320x320 variant=identity phase=done bytes_done=100 bytes_total=100 percent=100 pack_index=2 pack_count=3 download_mbps= detail=
+startup_timing	screenshot_media_catalog_updated	16ms	system=neogeo previous_generation=2 generation=3 candidates=1 available=1 changed=1
+startup_timing	screenshot_media_catalog_live_applied	17ms	system=neogeo games=1
 startup_timing	catalog_system_discovered	15ms	system=saturn
 startup_timing	screenshot_media_catalog_system_present	16ms	system=saturn source=catalog-seed
 startup_timing	screenshot_media_catalog_ensure	17ms	system=saturn
@@ -848,10 +870,17 @@ startup_timing	screenshot_media_system_start	19ms	system=saturn pack_index=3 pac
 startup_timing	screenshot_media_progress	20ms	system=saturn image_size=320x320 variant=identity phase=download_start bytes_done=0 bytes_total=100 percent=0 pack_index=3 pack_count=3 download_mbps= detail=
 startup_timing	screenshot_media_ui_visibility	21ms	system=saturn row_seen=1 row_index=2 rendered=0 catalog_scan_visible=0 active_rows=3 visible_count=3 visible_systems=arcade,neogeo,saturn phase=download percent=0 summary_active=1 summary_done=2 summary_failed=0 summary_total=3
 startup_timing	screenshot_media_progress	22ms	system=saturn image_size=320x320 variant=identity phase=done bytes_done=100 bytes_total=100 percent=100 pack_index=3 pack_count=3 download_mbps= detail=
+startup_timing	screenshot_media_catalog_updated	23ms	system=saturn previous_generation=3 generation=4 candidates=1 available=1 changed=1
+startup_timing	screenshot_media_catalog_live_applied	24ms	system=saturn games=1
 startup_timing	screenshot_media_update_done	23ms	packs=3 current=0 missing=3 stale=0 downloaded=3 failed=0
 EOF
   media_completion_report "$log" selftest >"$tmp/completion.tsv"
   grep -q $'media_completion_tsv\tlabel=selftest\tvalid=1' "$tmp/completion.tsv"
+  sed '/screenshot_media_catalog_live_applied.*system=arcade/d' "$log" >"$tmp/missing-live-apply.log"
+  if media_completion_report "$tmp/missing-live-apply.log" selftest >/dev/null 2>&1; then
+    echo "media completion self-test accepted missing live catalog application" >&2
+    return 1
+  fi
   sed '/screenshot_media_update_done/d' "$log" >"$tmp/missing-done.log"
   if media_completion_report "$tmp/missing-done.log" selftest >/dev/null 2>&1; then
     echo "media completion self-test accepted missing worker Done" >&2
