@@ -80,12 +80,33 @@ pub fn workflow_plan(intent: Intent) -> Plan {
         Intent::HostTools { full } => host_tool_operations(*full),
         Intent::ReleaseHost => release_operations(),
         Intent::Arm { task } => vec![match task {
+            ArmTask::CheckLib => local_write(op(
+                "arm.check-lib",
+                "Check library in Apple container",
+                "apps/mister/build-arm.sh",
+                &["--check", "--lib-only"],
+                "ARM library confidence required",
+            )),
             ArmTask::CheckLauncher => local_write(op(
                 "arm.check-launcher",
                 "Check launcher in Apple container",
                 "apps/mister/build-arm.sh",
                 &["--check", "--ui-scope", "launcher"],
                 "ARM launcher confidence required",
+            )),
+            ArmTask::CheckArcade => local_write(op(
+                "arm.check-arcade",
+                "Check arcade UI in Apple container",
+                "apps/mister/build-arm.sh",
+                &["--check", "--ui-scope", "arcade"],
+                "ARM arcade confidence required",
+            )),
+            ArmTask::CheckAll => local_write(op(
+                "arm.check-all",
+                "Check all UI in Apple container",
+                "apps/mister/build-arm.sh",
+                &["--check", "--ui-scope", "all", "--experiments"],
+                "complete ARM UI confidence required",
             )),
             ArmTask::BuildDevice => local_write(op(
                 "arm.build-device",
@@ -403,6 +424,13 @@ fn full_host_operations() -> Vec<Operation> {
 fn host_tool_operations(full: bool) -> Vec<Operation> {
     let mut operations = vec![
         op(
+            "host.licenses",
+            "Check license headers",
+            "python3",
+            &["scripts/checks/check-license-headers.py"],
+            "tooling change → license contract",
+        ),
+        op(
             "host.guidance",
             "Check agent guidance",
             "python3",
@@ -429,15 +457,191 @@ fn host_tool_operations(full: bool) -> Vec<Operation> {
             ],
             "tooling change → routing tests",
         ),
-    ];
-    if full {
-        operations.push(op(
-            "host.all-script-tests",
-            "Run full script contract tests",
+        op(
+            "host.catalog-contention",
+            "Test catalog contention gate",
+            "python3",
+            &["scripts/checks/check-catalog-contention.py", "--self-test"],
+            "tooling change → benchmark gate",
+        ),
+        op(
+            "host.catalog-rebuild",
+            "Test catalog rebuild gate",
+            "python3",
+            &["scripts/checks/check-catalog-rebuild.py", "--self-test"],
+            "tooling change → benchmark gate",
+        ),
+        op(
+            "host.doctor-tests",
+            "Test host doctor",
+            "python3",
+            &["scripts/tests/test-doctor.py"],
+            "tooling change → doctor contract",
+        ),
+        op(
+            "host.no-main-kill",
+            "Check Main process safety",
+            "scripts/checks/check-no-main-kill.sh",
+            &[],
+            "tooling change → process safety",
+        ),
+        op(
+            "host.no-direct-arcade",
+            "Check arcade launch safety",
+            "scripts/checks/check-no-direct-arcade-scene.sh",
+            &[],
+            "tooling change → launch safety",
+        ),
+        op(
+            "host.diagnostics",
+            "Check compact diagnostics",
+            "scripts/checks/check-compact-diagnostic-output.sh",
+            &[],
+            "tooling change → diagnostic contract",
+        ),
+        op(
+            "host.scanout",
+            "Check scanout contract",
+            "scripts/checks/check-scanout-slots-contract.sh",
+            &[],
+            "tooling change → scanout contract",
+        ),
+        op(
+            "host.kernel-workflow",
+            "Test kernel scanout workflow",
             "python3",
             &["scripts/tests/test-kernel-scanout-workflows.py"],
-            "full host verification requested",
-        ));
+            "tooling change → CI contract",
+        ),
+        op(
+            "host.platform-workflow",
+            "Test platform workflow",
+            "python3",
+            &["scripts/tests/test-platform-bundle-workflow.py"],
+            "tooling change → platform contract",
+        ),
+        op(
+            "host.platform-selection",
+            "Test platform artifact selection",
+            "python3",
+            &["scripts/tests/test-platform-artifact-selection.py"],
+            "tooling change → artifact contract",
+        ),
+        op(
+            "host.release-selection",
+            "Test published release selection",
+            "python3",
+            &["scripts/tests/test-select-published-release.py"],
+            "tooling change → release contract",
+        ),
+        op(
+            "host.database-workflow",
+            "Test game database workflow",
+            "python3",
+            &["scripts/tests/test-game-databases-workflow.py"],
+            "tooling change → database contract",
+        ),
+        op(
+            "host.distribution",
+            "Test distribution workflow",
+            "python3",
+            &["scripts/tests/test-distribution-workflow.py"],
+            "tooling change → distribution contract",
+        ),
+        op(
+            "host.arm-contract",
+            "Test ARM build contract",
+            "python3",
+            &["scripts/tests/test-arm-build-contract.py"],
+            "tooling change → ARM contract",
+        ),
+        op(
+            "host.cache-identity",
+            "Test cache identity",
+            "python3",
+            &["scripts/tests/test-ci-cache-identity.py"],
+            "tooling change → cache contract",
+        ),
+        op(
+            "host.cache-contract",
+            "Test CI cache contract",
+            "python3",
+            &["scripts/tests/test-ci-cache-contract.py"],
+            "tooling change → CI cache contract",
+        ),
+        op(
+            "host.quartus-cache",
+            "Test Quartus cache",
+            "scripts/tests/test-quartus-r2-cache.sh",
+            &[],
+            "tooling change → Quartus cache",
+        ),
+        op(
+            "host.apple-resources",
+            "Test Apple container resources",
+            "scripts/tests/test-apple-container-resources.sh",
+            &[],
+            "tooling change → Apple container contract",
+        ),
+    ];
+    if full {
+        operations.extend([
+            op(
+                "host.magik-mode",
+                "Test MagiK mode switching",
+                "scripts/tests/test-magik-mode.sh",
+                &[],
+                "full host verification → mode contract",
+            ),
+            op(
+                "host.installer",
+                "Test MiSTer MagiK installer",
+                "scripts/tests/test-mister-magik-installer.sh",
+                &[],
+                "full host verification → installer contract",
+            ),
+            op(
+                "host.platform-id",
+                "Test platform component identity",
+                "python3",
+                &["scripts/tests/test-platform-component-id.py"],
+                "full host verification → component identity",
+            ),
+            op(
+                "host.platform-bundle",
+                "Test platform bundle",
+                "python3",
+                &["scripts/tests/test-platform-bundle.py"],
+                "full host verification → platform bundle",
+            ),
+            op(
+                "host.embedded-catalog",
+                "Test embedded catalog release",
+                "python3",
+                &["scripts/tests/test-embedded-catalog-release.py"],
+                "full host verification → catalog release",
+            ),
+            op(
+                "host.database-bundle",
+                "Test game database bundle",
+                "python3",
+                &["scripts/tests/test-game-databases-bundle.py"],
+                "full host verification → database bundle",
+            ),
+            op(
+                "host.downloader-db",
+                "Test downloader database generation",
+                "python3",
+                &["scripts/tests/test-generate-downloader-db.py"],
+                "full host verification → downloader database",
+            ),
+            cargo(
+                "host.mister-tests",
+                "Test MiSTer host tool",
+                &["test", "--manifest-path", "mister/tools/host/Cargo.toml"],
+                "full host verification → host tool tests",
+            ),
+        ]);
     }
     operations
 }

@@ -36,10 +36,8 @@ def fixture(root: Path, bin_dir: Path) -> None:
     (modules / ".bin").mkdir()
     write_command(modules / ".bin", "astro")
     (root / "scripts").mkdir()
-    write_command(root / "scripts", "validate")
-    write_command(root / "scripts", "dev-rust")
+    write_command(root / "scripts", "agent")
     write_command(root / "scripts", "mister")
-    write_command(root / "scripts", "test-host-tools.sh")
     (root / ".gitignore").write_text(
         "/build/\n/dist/\n/outputs/\n/target/\n/documentation/dist/\n",
         encoding="utf-8",

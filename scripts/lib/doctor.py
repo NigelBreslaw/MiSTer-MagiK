@@ -246,9 +246,7 @@ def build_report(root: Path, scope: str) -> Report:
             required=False,
             warning=True,
         )
-    entrypoints = ["scripts/validate", "scripts/dev-rust"]
-    if scope == "full-host":
-        entrypoints.append("scripts/test-host-tools.sh")
+    entrypoints = ["scripts/agent"]
     for entrypoint in entrypoints:
         path = root / entrypoint
         report.add(

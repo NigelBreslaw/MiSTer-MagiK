@@ -52,7 +52,10 @@ pub enum RustTask {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ArmTask {
+    CheckLib,
     CheckLauncher,
+    CheckArcade,
+    CheckAll,
     BuildDevice,
 }
 

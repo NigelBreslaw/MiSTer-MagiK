@@ -64,7 +64,7 @@ def main() -> int:
         "desktop-docs",
         "apps/desktop/target/debug",
         "libfontconfig1-dev",
-        "scripts/validate paths desktop",
+        "scripts/agent verify --paths desktop",
     ):
         if forbidden in rust:
             fail(f"rust-arm workflow still validates the desktop app: {forbidden}")

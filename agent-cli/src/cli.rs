@@ -86,7 +86,10 @@ pub enum ReleaseCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum ArmCommand {
+    CheckLib,
     CheckLauncher,
+    CheckArcade,
+    CheckAll,
     BuildDevice,
 }
 
@@ -177,7 +180,10 @@ impl Cli {
             }) => Intent::ReleaseHost,
             Some(Command::Arm { task }) => Intent::Arm {
                 task: match task {
+                    ArmCommand::CheckLib => ArmTask::CheckLib,
                     ArmCommand::CheckLauncher => ArmTask::CheckLauncher,
+                    ArmCommand::CheckArcade => ArmTask::CheckArcade,
+                    ArmCommand::CheckAll => ArmTask::CheckAll,
                     ArmCommand::BuildDevice => ArmTask::BuildDevice,
                 },
             },

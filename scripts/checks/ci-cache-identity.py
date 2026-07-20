@@ -86,9 +86,9 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "apps/mister/ui-generated/Cargo.toml",
         "apps/mister/ui-generated/build.rs",
         "apps/mister/ui-generated/src/**/*.rs",
-        "scripts/validate",
-        "scripts/dev-rust",
-        "scripts/test-host-tools.sh",
+        "scripts/agent",
+        "agent-cli/Cargo.toml",
+        "agent-cli/src/**/*.rs",
     ),
     "arm_target": (
         "apps/mister/rust-toolchain.toml",
