@@ -103,6 +103,31 @@ impl<'a> LayerTarget<'a> {
         }
     }
 
+    pub(super) fn render_screensaver_crossfade(
+        &mut self,
+        saver: &mut LauncherScreensaver,
+        launcher_frame: &[Rgb565Pixel],
+        alpha: u8,
+    ) -> DirtyRect {
+        saver.render(
+            self.target.cached_565_mut(),
+            self.ui.render_w(),
+            self.ui.render_h(),
+        );
+        let cached = self.target.cached_565_mut();
+        if cached.len() == launcher_frame.len() {
+            for (pixel, source) in cached.iter_mut().zip(launcher_frame) {
+                *pixel = blend_565(*source, *pixel, alpha);
+            }
+        }
+        DirtyRect {
+            x0: 0,
+            y0: 0,
+            x1: self.ui.render_w(),
+            y1: self.ui.render_h(),
+        }
+    }
+
     pub(super) fn snapshot_cached(&self) -> Vec<Rgb565Pixel> {
         snapshot_cached_565(self.target)
     }

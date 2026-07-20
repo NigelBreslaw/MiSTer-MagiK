@@ -1411,6 +1411,8 @@ fn sqlite_file_has_valid_header(path: &Path) -> bool {
 struct ScreensaverControl {
     last_activity: Instant,
     active: bool,
+    start_when_ready: bool,
+    preview_active: bool,
     waiting_for_input_release: bool,
     restore_full_frame: bool,
     preview_fade_started: Option<Instant>,
@@ -1420,7 +1422,9 @@ impl ScreensaverControl {
     fn new(now: Instant, active: bool) -> Self {
         Self {
             last_activity: now,
-            active,
+            active: false,
+            start_when_ready: active,
+            preview_active: false,
             waiting_for_input_release: false,
             restore_full_frame: false,
             preview_fade_started: None,
@@ -1428,7 +1432,16 @@ impl ScreensaverControl {
     }
 
     fn update(&mut self, now: Instant, enabled: bool, delay: Duration, catalog_busy: bool) {
-        if catalog_busy {
+        if self.start_when_ready {
+            if catalog_busy {
+                self.last_activity = now;
+                self.active = false;
+            } else {
+                self.active = true;
+                self.start_when_ready = false;
+                self.waiting_for_input_release = false;
+            }
+        } else if catalog_busy && !self.preview_active {
             self.restore_full_frame |= self.active;
             self.last_activity = now;
             self.active = false;
@@ -1441,6 +1454,7 @@ impl ScreensaverControl {
 
     fn preview(&mut self, now: Instant) {
         self.active = true;
+        self.preview_active = true;
         self.waiting_for_input_release = true;
         self.last_activity = now;
         self.preview_fade_started = Some(now);
@@ -1456,6 +1470,7 @@ impl ScreensaverControl {
         }
         if self.active && user_activity {
             self.active = false;
+            self.preview_active = false;
             self.restore_full_frame = true;
             self.last_activity = now;
             self.preview_fade_started = None;
@@ -1516,6 +1531,10 @@ pub(super) fn run_launcher_loop(
     let mut screensaver_renderer: Option<LauncherScreensaver> = None;
     let mut screensaver_loader: Option<LauncherScreensaverLoader> = None;
     let mut screensaver_launcher_frame: Option<Vec<Rgb565Pixel>> = None;
+    let mut screensaver_show_started: Option<Instant> = None;
+    let mut screensaver_first_render_logged = false;
+    let mut screensaver_first_present_logged = false;
+    let mut screensaver_first_card_present_logged = false;
     let mut launcher_presenter = LauncherPresenter::new(ui);
     let launcher_bench_scenario = LauncherBenchScenario::from_env();
     let launcher_bench_after_input_script =
@@ -3012,7 +3031,17 @@ pub(super) fn run_launcher_loop(
                                 continue;
                             }
                             LauncherAction::PreviewScreensaver => {
-                                screensaver.preview(frame_now);
+                                if !screensaver.preview_active {
+                                    screensaver.preview(frame_now);
+                                    screensaver_show_started = Some(frame_now);
+                                    screensaver_first_render_logged = false;
+                                    screensaver_first_present_logged = false;
+                                    screensaver_first_card_present_logged = false;
+                                    crate::ui_logln!(
+                                        "screensaver_startup_timing milestone=show_pressed elapsed_us=0"
+                                    );
+                                }
+                                request_launcher_redraw!();
                                 continue;
                             }
                             LauncherAction::LaunchGame => {}
@@ -3434,6 +3463,8 @@ pub(super) fn run_launcher_loop(
         if screensaver.active {
             full_frame_present = true;
             request_launcher_redraw!();
+        } else if screensaver.start_when_ready {
+            request_launcher_redraw!();
         }
         for event in composition_decision.events.iter() {
             runtime_status::event(event.name, event.detail.as_str());
@@ -3683,16 +3714,39 @@ pub(super) fn run_launcher_loop(
             full_frame_present = true;
         }
         if screensaver.active && screensaver_renderer.is_none() {
-            let loader = screensaver_loader.get_or_insert_with(|| {
-                LauncherScreensaverLoader::start(ui.render_w(), ui.render_h())
-            });
+            if screensaver_loader.is_none() {
+                if let Some(started) = screensaver_show_started {
+                    crate::ui_logln!(
+                        "screensaver_startup_timing milestone=loader_started elapsed_us={}",
+                        started.elapsed().as_micros()
+                    );
+                }
+                screensaver_loader = Some(LauncherScreensaverLoader::start(
+                    ui.render_w(),
+                    ui.render_h(),
+                    screensaver_show_started,
+                ));
+            }
+            let loader = screensaver_loader.as_ref().expect("created above");
             if let Some(ready) = loader.try_ready() {
+                if let Some(started) = screensaver_show_started {
+                    crate::ui_logln!(
+                        "screensaver_startup_timing milestone=renderer_ready elapsed_us={}",
+                        started.elapsed().as_micros()
+                    );
+                }
                 screensaver_renderer = Some(ready);
                 screensaver_loader = None;
             }
         }
         if !screensaver.active {
             screensaver_loader = None;
+            if screensaver_renderer
+                .as_ref()
+                .is_some_and(LauncherScreensaver::is_loading_archive)
+            {
+                screensaver_renderer = None;
+            }
             screensaver_launcher_frame = None;
         }
         let screensaver_fade_alpha = screensaver.preview_fade_alpha(Instant::now());
@@ -3702,33 +3756,63 @@ pub(super) fn run_launcher_loop(
         {
             screensaver_launcher_frame = Some(layer_target.snapshot_cached());
         }
-        let this_rect = if screensaver.active
-            && screensaver_fade_alpha.is_some_and(|alpha| alpha < 255)
+        let this_rect =
+            if screensaver.active && screensaver_fade_alpha.is_some_and(|alpha| alpha < 255) {
+                let alpha = screensaver_fade_alpha.expect("checked above");
+                if let Some(renderer) = screensaver_renderer.as_mut() {
+                    Some(
+                        layer_target.render_screensaver_crossfade(
+                            renderer,
+                            screensaver_launcher_frame
+                                .as_deref()
+                                .expect("captured above"),
+                            alpha,
+                        ),
+                    )
+                } else {
+                    Some(
+                        layer_target.render_screensaver_fade(
+                            screensaver_launcher_frame
+                                .as_deref()
+                                .expect("captured above"),
+                            alpha,
+                        ),
+                    )
+                }
+            } else if screensaver.active && screensaver_renderer.is_some() {
+                if screensaver_launcher_frame.is_none() {
+                    screensaver_launcher_frame = Some(layer_target.snapshot_cached());
+                }
+                Some(
+                    layer_target
+                        .render_screensaver(screensaver_renderer.as_mut().expect("checked above")),
+                )
+            } else if screensaver.active && screensaver_fade_alpha.is_some() {
+                Some(
+                    layer_target.render_screensaver_fade(
+                        screensaver_launcher_frame
+                            .as_deref()
+                            .expect("captured above"),
+                        255,
+                    ),
+                )
+            } else {
+                expand_home_pan_dirty_rect(
+                    layer_target.render_slint_base(&window),
+                    ui,
+                    home_pan_present_active,
+                )
+            };
+        if screensaver.active && screensaver_renderer.is_some() && !screensaver_first_render_logged
         {
-            Some(layer_target.render_screensaver_fade(
-                screensaver_launcher_frame.as_deref().expect("captured above"),
-                screensaver_fade_alpha.expect("checked above"),
-            ))
-        } else if screensaver.active && screensaver_renderer.is_some() {
-            if screensaver_launcher_frame.is_none() {
-                screensaver_launcher_frame = Some(layer_target.snapshot_cached());
+            screensaver_first_render_logged = true;
+            if let Some(started) = screensaver_show_started {
+                crate::ui_logln!(
+                    "screensaver_startup_timing milestone=first_saver_render elapsed_us={}",
+                    started.elapsed().as_micros()
+                );
             }
-            Some(
-                layer_target
-                    .render_screensaver(screensaver_renderer.as_mut().expect("checked above")),
-            )
-        } else if screensaver.active && screensaver_fade_alpha.is_some() {
-            Some(layer_target.render_screensaver_fade(
-                screensaver_launcher_frame.as_deref().expect("captured above"),
-                255,
-            ))
-        } else {
-            expand_home_pan_dirty_rect(
-                layer_target.render_slint_base(&window),
-                ui,
-                home_pan_present_active,
-            )
-        };
+        }
         launcher_redraw_pending = false;
         let cpu_t2 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let frame_t2 = Instant::now();
@@ -3906,6 +3990,32 @@ pub(super) fn run_launcher_loop(
             boot_analytics::event("first_vsync", format!("frame={frames}"));
         }
         if presentation.copied_rows > 0 {
+            if screensaver.active
+                && screensaver_first_render_logged
+                && !screensaver_first_present_logged
+            {
+                screensaver_first_present_logged = true;
+                if let Some(started) = screensaver_show_started {
+                    crate::ui_logln!(
+                        "screensaver_startup_timing milestone=first_saver_present elapsed_us={}",
+                        started.elapsed().as_micros()
+                    );
+                }
+            }
+            if screensaver.active
+                && !screensaver_first_card_present_logged
+                && screensaver_renderer
+                    .as_ref()
+                    .is_some_and(LauncherScreensaver::has_rendered_card)
+            {
+                screensaver_first_card_present_logged = true;
+                if let Some(started) = screensaver_show_started {
+                    crate::ui_logln!(
+                        "screensaver_startup_timing milestone=first_card_visible elapsed_us={}",
+                        started.elapsed().as_micros()
+                    );
+                }
+            }
             if !first_launcher_frame_logged
                 && lifecycle.startup_status().state == StartupRevealState::RevealLauncher
             {
@@ -6855,11 +6965,29 @@ mod tests {
     }
 
     #[test]
+    fn screensaver_start_active_keeps_waiting_for_startup_catalog_work() {
+        let start = Instant::now();
+        let mut saver = ScreensaverControl::new(start, true);
+        let delay = Duration::from_secs(300);
+
+        saver.update(start, true, delay, true);
+        assert!(!saver.active);
+        assert!(saver.start_when_ready);
+        saver.update(start + Duration::from_secs(1), true, delay, true);
+        assert!(!saver.active);
+        saver.update(start + Duration::from_secs(2), true, delay, false);
+        assert!(saver.active);
+        assert!(!saver.start_when_ready);
+    }
+
+    #[test]
     fn screensaver_preview_ignores_launch_release_then_consumes_next_input() {
         let start = Instant::now();
         let mut saver = ScreensaverControl::new(start, false);
 
         saver.preview(start);
+        saver.update(start, true, Duration::from_secs(300), true);
+        assert!(saver.active);
         assert_eq!(saver.preview_fade_alpha(start), Some(0));
         assert_eq!(
             saver.preview_fade_alpha(start + Duration::from_millis(100)),
