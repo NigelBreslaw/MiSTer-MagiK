@@ -141,12 +141,7 @@ fn add_path_operations(path: &Path, depth: Depth, out: &mut BTreeMap<String, Ope
         add(cargo(
             "agent-cli.tests",
             "Test agent-cli",
-            &[
-                "test",
-                "--manifest-path",
-                "agent-cli/Cargo.toml",
-                "--offline",
-            ],
+            &["test", "--manifest-path", "agent-cli/Cargo.toml"],
             "agent-cli source → unit tests",
         ));
         if depth == Depth::Verify {
@@ -158,7 +153,6 @@ fn add_path_operations(path: &Path, depth: Depth, out: &mut BTreeMap<String, Ope
                     "--manifest-path",
                     "agent-cli/Cargo.toml",
                     "--all-targets",
-                    "--offline",
                     "--",
                     "-D",
                     "warnings",
@@ -473,7 +467,6 @@ fn host_tool_operations(full: bool) -> Vec<Operation> {
                 "test",
                 "--manifest-path",
                 "agent-cli/Cargo.toml",
-                "--offline",
                 "planner::tests",
             ],
             "tooling change → routing tests",
@@ -777,6 +770,26 @@ mod tests {
             paths,
         );
         assert!(check.operations.len() < verify.operations.len());
+    }
+
+    #[test]
+    fn cargo_dependency_policy_is_not_embedded_in_plans() {
+        let plan = affected_plan(
+            Intent::Check {
+                scope: Scope::Paths(vec![]),
+            },
+            vec!["agent-cli/src/executor.rs".into()],
+        );
+        for operation in &plan.operations {
+            assert!(!operation.args.contains(&"--offline".into()));
+            assert!(!operation.args.contains(&"--locked".into()));
+        }
+        let format = plan
+            .operations
+            .iter()
+            .find(|operation| operation.id == "agent-cli.format")
+            .unwrap();
+        assert_eq!(format.args.first().map(String::as_str), Some("fmt"));
     }
 
     #[test]

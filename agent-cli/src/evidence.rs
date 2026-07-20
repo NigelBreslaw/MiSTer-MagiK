@@ -221,6 +221,18 @@ impl Evidence {
         Ok(())
     }
 
+    pub fn request_args(&self, request_id: &str) -> Result<Vec<String>, String> {
+        let args: String = self
+            .connection
+            .query_row(
+                "SELECT args_json FROM requests WHERE id = ?1",
+                [request_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        serde_json::from_str(&args).map_err(|error| error.to_string())
+    }
+
     pub fn begin_command(
         &self,
         request_id: &str,

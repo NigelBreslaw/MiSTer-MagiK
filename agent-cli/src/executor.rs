@@ -4,8 +4,9 @@
 use crate::evidence::{now_ms, Evidence};
 use crate::model::{Operation, Outcome, Plan};
 use crate::progress::{EventKind, Reporter};
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::ffi::OsStr;
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::thread;
@@ -50,18 +51,108 @@ fn run_operation(
     reporter: &mut Reporter<'_>,
 ) -> Result<(), String> {
     let log_path = evidence.log_path(request_id, &operation.id);
-    let log = File::create(&log_path).map_err(|error| error.to_string())?;
+    File::create(&log_path).map_err(|error| error.to_string())?;
+    let cargo_dependency = is_cargo_dependency_operation(operation);
+    let first_args = if cargo_dependency {
+        cargo_args(&operation.args, true)
+    } else {
+        operation.args.clone()
+    };
+    let first_status = run_attempt(
+        evidence,
+        request_id,
+        repository,
+        operation,
+        reporter,
+        &log_path,
+        &first_args,
+        if cargo_dependency {
+            "offline"
+        } else {
+            "primary"
+        },
+    )?;
+    if first_status.success() {
+        return Ok(());
+    }
+    let first_output = read_log(&log_path)?;
+    if cargo_dependency && is_offline_cache_miss(&first_output) {
+        reporter.emit(
+            EventKind::Warning,
+            operation_phase(operation),
+            &format!(
+                "dependency_cache_missing: {} — retrying locked dependencies with network",
+                operation.title
+            ),
+            None,
+        )?;
+        let online_args = cargo_args(&operation.args, false);
+        let online_start = std::fs::metadata(&log_path)
+            .map_err(|error| error.to_string())?
+            .len();
+        let online_status = run_attempt(
+            evidence,
+            request_id,
+            repository,
+            operation,
+            reporter,
+            &log_path,
+            &online_args,
+            "network-fallback",
+        )?;
+        if online_status.success() {
+            return Ok(());
+        }
+        let online_output = read_log_from(&log_path, online_start)?;
+        return Err(failure_message(
+            evidence,
+            operation,
+            request_id,
+            &log_path,
+            online_status.code().unwrap_or(1),
+            &online_output,
+        )?);
+    }
+    Err(failure_message(
+        evidence,
+        operation,
+        request_id,
+        &log_path,
+        first_status.code().unwrap_or(1),
+        &first_output,
+    )?)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_attempt(
+    evidence: &Evidence,
+    request_id: &str,
+    repository: &Path,
+    operation: &Operation,
+    reporter: &mut Reporter<'_>,
+    log_path: &Path,
+    args: &[String],
+    attempt: &str,
+) -> Result<std::process::ExitStatus, String> {
+    let mut log = OpenOptions::new()
+        .append(true)
+        .open(log_path)
+        .map_err(|error| error.to_string())?;
+    writeln!(log, "=== agent-cli attempt: {attempt} ===").map_err(|error| error.to_string())?;
     let started = now_ms();
     let command_id = evidence.begin_command(
         request_id,
         &operation.id,
         &operation.program,
-        &operation.args,
-        Some(&log_path),
+        args,
+        Some(log_path),
     )?;
-    let mut child = Command::new(&operation.program)
-        .args(&operation.args)
-        .current_dir(repository)
+    let mut command = Command::new(&operation.program);
+    command.args(args).current_dir(repository);
+    if attempt == "network-fallback" {
+        command.env("CARGO_NET_RETRY", "0");
+    }
+    let mut child = command
         .stdout(Stdio::from(
             log.try_clone().map_err(|error| error.to_string())?,
         ))
@@ -82,22 +173,148 @@ fn run_operation(
     };
     let code = status.code().unwrap_or(1);
     evidence.finish_command(command_id, started, code)?;
-    if status.success() {
-        return Ok(());
+    Ok(status)
+}
+
+fn is_cargo_dependency_operation(operation: &Operation) -> bool {
+    Path::new(&operation.program).file_name() == Some(OsStr::new("cargo"))
+        && operation.args.first().is_some_and(|arg| arg != "fmt")
+}
+
+fn cargo_args(args: &[String], offline: bool) -> Vec<String> {
+    let mut result: Vec<_> = args
+        .iter()
+        .filter(|arg| arg.as_str() != "--locked" && arg.as_str() != "--offline")
+        .cloned()
+        .collect();
+    let separator = result
+        .iter()
+        .position(|arg| arg == "--")
+        .unwrap_or(result.len());
+    result.insert(separator, "--locked".into());
+    if offline {
+        result.insert(separator + 1, "--offline".into());
     }
-    let classification = if code == 101 {
-        "test_failure"
-    } else if code == 127 {
+    result
+}
+
+fn is_offline_cache_miss(output: &str) -> bool {
+    let lower = output.to_ascii_lowercase();
+    lower.contains("--offline was specified")
+        || lower.contains("no matching package named") && lower.contains("offline mode")
+        || lower.contains("failed to download") && lower.contains("offline")
+}
+
+fn failure_classification(operation: &Operation, code: i32, output: &str) -> &'static str {
+    let lower = output.to_ascii_lowercase();
+    if code == 127 {
         "command_missing"
+    } else if is_dependency_fetch_failure(&lower) && is_network_unavailable(&lower) {
+        "network_required"
+    } else if is_dependency_fetch_failure(&lower) {
+        "dependency_fetch_failed"
+    } else if operation.args.first().is_some_and(|arg| arg == "test")
+        && (lower.contains("test result: failed")
+            || lower.contains("test failed")
+            || lower.contains("failures:"))
+    {
+        "test_failure"
     } else {
         "command_failed"
+    }
+}
+
+fn is_network_unavailable(lower: &str) -> bool {
+    [
+        "couldn't resolve host",
+        "could not resolve host",
+        "failed to resolve host",
+        "could not resolve proxy",
+        "temporary failure in name resolution",
+        "name or service not known",
+        "network is unreachable",
+        "connection refused",
+        "connection reset by peer",
+        "could not connect to server",
+        "failed to connect",
+        "operation timed out",
+        "proxy connect aborted",
+        "operation not permitted",
+        "network permission denied",
+        "socket access is forbidden",
+    ]
+    .iter()
+    .any(|pattern| lower.contains(pattern))
+}
+
+fn is_dependency_fetch_failure(lower: &str) -> bool {
+    lower.contains("unable to update registry")
+        || lower.contains("failed to download")
+        || lower.contains("download of config.json failed")
+        || lower.contains("failed to get") && lower.contains("as a dependency")
+        || lower.contains("failed to authenticate")
+        || lower.contains("authentication required")
+        || lower.contains("credential-provider")
+        || lower.contains("http 401")
+        || lower.contains("http 403")
+}
+
+fn failure_message(
+    evidence: &Evidence,
+    operation: &Operation,
+    request_id: &str,
+    log_path: &Path,
+    code: i32,
+    output: &str,
+) -> Result<String, String> {
+    let classification = failure_classification(operation, code, output);
+    let next = if classification == "network_required" {
+        format!(
+            "rerun with network access: {}",
+            retry_command(&evidence.request_args(request_id)?)
+        )
+    } else {
+        format!("scripts/agent run show {request_id}")
     };
-    Err(format!(
-        "{classification}: {} (exit {code}); log={}; tail={}; next=scripts/agent run show {request_id}",
+    Ok(format!(
+        "{classification}: {} (exit {code}); log={}; tail={}; next={next}",
         operation.title,
         log_path.display(),
-        log_tail(&log_path)?
+        log_tail(log_path)?
     ))
+}
+
+fn retry_command(args: &[String]) -> String {
+    std::iter::once("scripts/agent".to_owned())
+        .chain(args.iter().skip(1).map(|arg| shell_quote(arg)))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn shell_quote(arg: &str) -> String {
+    if !arg.is_empty()
+        && arg
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-_./".contains(&byte))
+    {
+        arg.to_owned()
+    } else {
+        format!("'{}'", arg.replace('\'', "'\\''"))
+    }
+}
+
+fn read_log(path: &Path) -> Result<String, String> {
+    read_log_from(path, 0)
+}
+
+fn read_log_from(path: &Path, start: u64) -> Result<String, String> {
+    let mut file = File::open(path).map_err(|error| error.to_string())?;
+    file.seek(SeekFrom::Start(start))
+        .map_err(|error| error.to_string())?;
+    let mut text = String::new();
+    file.read_to_string(&mut text)
+        .map_err(|error| error.to_string())?;
+    Ok(text)
 }
 
 fn operation_phase(operation: &Operation) -> &'static str {
@@ -133,7 +350,205 @@ fn log_tail(path: &Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::OutputFormat;
+    use crate::model::{Intent, Risk, Scope};
+    use crate::request::RawRequest;
     use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static TEST_NONCE: AtomicU64 = AtomicU64::new(0);
+
+    fn test_operation(program: &Path) -> Operation {
+        Operation {
+            id: "test.cargo".into(),
+            title: "Test fake crate".into(),
+            risk: Risk::ReadOnly,
+            program: program.display().to_string(),
+            args: vec!["test".into(), "--".into(), "--nocapture".into()],
+            reason: "executor test".into(),
+            failure_hint: "inspect run".into(),
+        }
+    }
+
+    fn fake_cargo(script: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let sequence = TEST_NONCE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "agent-cli-cargo-{}-{nonce}-{sequence}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let cargo = root.join("cargo");
+        fs::write(&cargo, script).unwrap();
+        let mut permissions = fs::metadata(&cargo).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&cargo, permissions).unwrap();
+        (root, cargo)
+    }
+
+    fn execute_fake_cargo(
+        script: &str,
+    ) -> (Result<Outcome, String>, crate::evidence::RunDetail, String) {
+        let (root, cargo) = fake_cargo(script);
+        let state = root.join("state");
+        let evidence = Evidence::open_at(&state).unwrap();
+        let request = RawRequest {
+            id: "test-run".into(),
+            args: vec!["agent-cli".into(), "check".into()],
+        };
+        evidence.begin_request(&request).unwrap();
+        evidence
+            .record_intent(
+                &request.id,
+                &Intent::Check {
+                    scope: Scope::WorkingTree,
+                },
+            )
+            .unwrap();
+        let plan = Plan {
+            intent: Intent::Check {
+                scope: Scope::WorkingTree,
+            },
+            operations: vec![test_operation(&cargo)],
+        };
+        let mut reporter = Reporter::new(&evidence, OutputFormat::Human, &request.id);
+        let result = execute(&evidence, &request.id, &root, &plan, &mut reporter);
+        let detail = evidence.run_detail(&request.id).unwrap().unwrap();
+        let log = fs::read_to_string(detail.commands[0].log_path.as_ref().unwrap()).unwrap();
+        fs::remove_dir_all(root).unwrap();
+        (result, detail, log)
+    }
+
+    #[test]
+    fn cargo_flags_are_locked_offline_and_precede_separator() {
+        let args = vec!["test".into(), "--".into(), "--nocapture".into()];
+        assert_eq!(
+            cargo_args(&args, true),
+            ["test", "--locked", "--offline", "--", "--nocapture"]
+        );
+        assert_eq!(
+            cargo_args(&args, false),
+            ["test", "--locked", "--", "--nocapture"]
+        );
+    }
+
+    #[test]
+    fn cargo_format_is_excluded_from_dependency_policy() {
+        let mut operation = test_operation(Path::new("cargo"));
+        operation.args = vec!["fmt".into(), "--check".into()];
+        assert!(!is_cargo_dependency_operation(&operation));
+        assert_eq!(operation.args, ["fmt", "--check"]);
+    }
+
+    #[test]
+    fn cached_cargo_success_records_one_offline_attempt() {
+        let (result, detail, log) = execute_fake_cargo("#!/bin/sh\nexit 0\n");
+        assert_eq!(result.unwrap(), Outcome::Passed);
+        assert_eq!(detail.commands.len(), 1);
+        assert!(log.contains("=== agent-cli attempt: offline ==="));
+        assert!(detail.commands[0]
+            .args
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|arg| arg == "--offline"));
+    }
+
+    #[test]
+    fn offline_cache_miss_retries_online_and_records_both_attempts() {
+        let script = "#!/bin/sh\ncase \" $* \" in\n  *\" --offline \"*) echo 'error: failed to download crate: attempting to make an HTTP request, but --offline was specified' >&2; exit 101;;\n  *) exit 0;;\nesac\n";
+        let (result, detail, log) = execute_fake_cargo(script);
+        assert_eq!(result.unwrap(), Outcome::Passed);
+        assert_eq!(detail.commands.len(), 2);
+        assert!(detail.commands[0].args.to_string().contains("--offline"));
+        assert!(!detail.commands[1].args.to_string().contains("--offline"));
+        assert!(detail.commands[1].args.to_string().contains("--locked"));
+        assert!(log.contains("=== agent-cli attempt: offline ==="));
+        assert!(log.contains("=== agent-cli attempt: network-fallback ==="));
+    }
+
+    #[test]
+    fn network_failure_after_cache_miss_is_not_a_test_failure() {
+        let script = "#!/bin/sh\ncase \" $* \" in\n  *\" --offline \"*) echo 'attempting to make an HTTP request, but --offline was specified' >&2;;\n  *) echo \"unable to update registry crates-io: Couldn't resolve host: index.crates.io\" >&2;;\nesac\nexit 101\n";
+        let (result, detail, _) = execute_fake_cargo(script);
+        let error = result.unwrap_err();
+        assert!(error.starts_with("network_required:"));
+        assert!(error.contains("rerun with network access: scripts/agent check"));
+        assert_eq!(detail.commands.len(), 2);
+    }
+
+    #[test]
+    fn genuine_test_failure_does_not_retry() {
+        let (result, detail, _) = execute_fake_cargo(
+            "#!/bin/sh\necho 'test result: FAILED. 0 passed; 1 failed' >&2\nexit 101\n",
+        );
+        assert!(result.unwrap_err().starts_with("test_failure:"));
+        assert_eq!(detail.commands.len(), 1);
+    }
+
+    #[test]
+    fn compiler_and_stale_lock_failures_do_not_retry() {
+        let operation = test_operation(Path::new("cargo"));
+        assert_eq!(
+            failure_classification(&operation, 101, "error[E0308]: mismatched types"),
+            "command_failed"
+        );
+        assert!(!is_offline_cache_miss(
+            "the lock file needs to be updated but --locked was passed"
+        ));
+    }
+
+    #[test]
+    fn network_text_from_an_executed_test_remains_a_test_failure() {
+        let operation = test_operation(Path::new("cargo"));
+        assert_eq!(
+            failure_classification(
+                &operation,
+                101,
+                "test service_connect ... FAILED\nconnection refused\ntest result: FAILED"
+            ),
+            "test_failure"
+        );
+    }
+
+    #[test]
+    fn registry_authentication_failure_is_a_dependency_fetch_failure() {
+        let operation = test_operation(Path::new("cargo"));
+        assert_eq!(
+            failure_classification(
+                &operation,
+                101,
+                "failed to get package as a dependency: failed to authenticate; credential-provider missing"
+            ),
+            "dependency_fetch_failed"
+        );
+    }
+
+    #[test]
+    fn common_network_and_sandbox_denials_require_network_access() {
+        let operation = test_operation(Path::new("cargo"));
+        for message in [
+            "Could not resolve proxy",
+            "Temporary failure in name resolution",
+            "Name or service not known",
+            "Connection reset by peer",
+            "Operation not permitted",
+            "network permission denied",
+            "socket access is forbidden",
+        ] {
+            let output = format!("unable to update registry crates-io: {message}");
+            assert_eq!(
+                failure_classification(&operation, 101, &output),
+                "network_required",
+                "message: {message}"
+            );
+        }
+    }
     #[test]
     fn log_tail_is_bounded_to_eight_lines() {
         let path = std::env::temp_dir().join(format!("agent-cli-tail-{}", std::process::id()));

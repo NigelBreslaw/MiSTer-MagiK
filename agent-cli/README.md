@@ -36,6 +36,15 @@ message, and an optional integer percentage.
 The Ratatui view consumes the same event model and redraws existing widgets
 instead of appending terminal output.
 
+## Cargo dependency policy
+
+Dependency-consuming Cargo checks use the committed lockfile and local cache
+first. If the cache is incomplete, the CLI retries the same locked operation
+online once. A sandbox or unavailable network is reported as
+`network_required` with the command to rerun with network access;
+registry/download failures are `dependency_fetch_failed`, and only an executed
+failing test is `test_failure`. Cargo formatting does not use this policy.
+
 ## Audit evidence
 
 The database is `<primary-worktree>/.agent-cli/agent.sqlite3`, shared by every
