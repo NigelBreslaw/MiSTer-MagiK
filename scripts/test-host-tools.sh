@@ -60,6 +60,7 @@ fi
 for script in \
   "$ROOT/scripts/checks/check-no-main-kill.sh" \
   "$ROOT/scripts/checks/check-no-direct-arcade-scene.sh" \
+  "$ROOT/scripts/checks/check-compact-diagnostic-output.sh" \
   "$ROOT/scripts/checks/check-scanout-slots-contract.sh" \
   "$ROOT/scripts/lib/bench-context-lib.sh" \
   "$ROOT/scripts/lib/arming-state-lib.sh" \
@@ -115,6 +116,7 @@ done < <(find "$ROOT/scripts/experiments" -type f -name '*.sh' | sort)
 if [ "$MODE" = fast ]; then
   "$ROOT/scripts/checks/check-no-main-kill.sh"
   "$ROOT/scripts/checks/check-no-direct-arcade-scene.sh"
+  "$ROOT/scripts/checks/check-compact-diagnostic-output.sh"
   "$ROOT/scripts/checks/check-scanout-slots-contract.sh"
   python3 "$ROOT/scripts/tests/test-kernel-scanout-workflows.py"
   python3 "$ROOT/scripts/tests/test-platform-bundle-workflow.py"

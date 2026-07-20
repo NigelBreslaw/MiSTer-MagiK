@@ -23,7 +23,7 @@ usage:
   scripts/validate affected [--paths-file FILE] [--print-plan] [--verbose|--json]
   scripts/validate working-tree [--print-plan] [--verbose|--json]
   scripts/validate paths PATH... [--print-plan] [--verbose|--json]
-  scripts/validate full-host [--verbose|--json]
+  scripts/validate full-host [--group quality|domain|app|catalog|tools] [--verbose|--json]
 
 Without --paths-file, affected mode reads added, copied, modified, renamed,
 and deleted paths from the staged Git index. --print-plan performs no checks.
@@ -132,6 +132,47 @@ PY
 
 run_full_host() {
   run_parallel_groups core catalog tools
+}
+
+run_full_host_group() {
+  local group="$1"
+  case "$group" in
+    quality)
+      CARGO_BUILD_JOBS=2 run_check_recorded format || return 1
+      MISTER_VALIDATE_ROUTING_CHILD=1 run_check_recorded validation-routing || return 1
+      ;;
+    domain)
+      CARGO_BUILD_JOBS=2 run_check_recorded magik-core-tests || return 1
+      CARGO_BUILD_JOBS=2 run_check_recorded magik-core-clippy || return 1
+      CARGO_BUILD_JOBS=2 run_check_recorded mister-runtime-tests || return 1
+      CARGO_BUILD_JOBS=2 run_check_recorded mister-runtime-clippy || return 1
+      ;;
+    app)
+      CARGO_BUILD_JOBS=2 run_check_recorded host-tests || return 1
+      CARGO_BUILD_JOBS=2 run_check_recorded mister-app-clippy || return 1
+      CARGO_BUILD_JOBS=2 run_check_recorded production-ui-check || return 1
+      ;;
+    catalog)
+      run_group catalog
+      ;;
+    tools)
+      run_group tools
+      ;;
+    *)
+      echo "unknown full-host group: $group" >&2
+      return 2
+      ;;
+  esac
+}
+
+full_host_group_report_order() {
+  case "$1" in
+    quality) printf '%s\n' format validation-routing ;;
+    domain) printf '%s\n' magik-core-tests magik-core-clippy mister-runtime-tests mister-runtime-clippy ;;
+    app) printf '%s\n' host-tests mister-app-clippy production-ui-check ;;
+    catalog) printf '%s\n' catalog-tests catalog-clippy ;;
+    tools) printf '%s\n' host-tools mister-clippy agent-tests agent-clippy ;;
+  esac
 }
 
 run_group() {
@@ -467,8 +508,17 @@ print_plan=0
 verbose=0
 json_output=0
 explicit_paths=()
+full_host_group=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --group)
+      [ "$mode" = full-host ] || {
+        echo "--group is only supported by full-host mode" >&2
+        exit 2
+      }
+      full_host_group="${2:?--group requires a group name}"
+      shift 2
+      ;;
     --paths-file)
       [ "$mode" = affected ] || {
         echo "--paths-file is only supported by affected mode" >&2
@@ -499,16 +549,31 @@ if [ "$mode" = full-host ]; then
     usage >&2
     exit 2
   }
-  report_order=(
-    format validation-routing magik-core-tests magik-core-clippy mister-runtime-tests mister-runtime-clippy
-    host-tests mister-app-clippy production-ui-check
-    catalog-tests catalog-clippy host-tools mister-clippy agent-tests agent-clippy
-    framebuffer-stream-tests framebuffer-stream-clippy
-    desktop-tests desktop-compiled-check documentation-build
-  )
+  if [ -n "$full_host_group" ]; then
+    case "$full_host_group" in quality|domain|app|catalog|tools) ;; *)
+      echo "unknown full-host group: $full_host_group" >&2
+      exit 2
+    esac
+    report_order=()
+    while IFS= read -r check; do
+      report_order+=("$check")
+    done < <(full_host_group_report_order "$full_host_group")
+  else
+    report_order=(
+      format validation-routing magik-core-tests magik-core-clippy mister-runtime-tests mister-runtime-clippy
+      host-tests mister-app-clippy production-ui-check
+      catalog-tests catalog-clippy host-tools mister-clippy agent-tests agent-clippy
+      framebuffer-stream-tests framebuffer-stream-clippy
+      desktop-tests desktop-compiled-check documentation-build
+    )
+  fi
   init_reporting
   status=0
-  run_full_host || status=$?
+  if [ -n "$full_host_group" ]; then
+    run_full_host_group "$full_host_group" || status=$?
+  else
+    run_full_host || status=$?
+  fi
   emit_results "$mode" "${report_order[@]}"
   exit "$status"
 fi
@@ -599,7 +664,9 @@ case "$mode" in
     ;;
 esac
 
-need_host=0
+need_core=0
+need_runtime=0
+need_app=0
 need_catalog=0
 need_ui=0
 need_mister=0
@@ -667,32 +734,34 @@ for path in "${paths[@]}"; do
   esac
   case "$path" in
     crates/catalog/*)
-      need_catalog=1; need_host=1; need_ui=1; need_mister=1 ;;
-    crates/magik-core/*|mister/platform/runtime/*)
-      need_host=1; need_ui=1 ;;
+      need_catalog=1; need_runtime=1; need_app=1; need_ui=1; need_mister=1 ;;
+    crates/magik-core/*)
+      need_core=1; need_runtime=1; need_app=1; need_ui=1 ;;
+    mister/platform/runtime/*)
+      need_runtime=1; need_app=1; need_ui=1 ;;
     apps/mister/src/*)
-      need_host=1; need_ui=1 ;;
+      need_app=1; need_ui=1 ;;
     apps/mister/ui/*|apps/mister/ui-generated/*)
       need_ui=1 ;;
     apps/mister/Cargo.toml|apps/mister/Cargo.lock|apps/mister/build.rs|apps/mister/.cargo/*)
-      need_catalog=1; need_host=1; need_ui=1 ;;
+      need_app=1; need_ui=1 ;;
     apps/mister/rust-toolchain.toml)
-      need_catalog=1; need_host=1; need_ui=1; need_mister=1; need_agent=1
+      need_catalog=1; need_core=1; need_runtime=1; need_app=1; need_ui=1; need_mister=1; need_agent=1
       need_stream=1; need_desktop=1 ;;
     apps/mister/build-arm*.sh|apps/mister/Dockerfile*|apps/mister/Cross.toml|apps/mister/scripts/*)
-      need_catalog=1; need_host=1; need_ui=1 ;;
+      need_app=1; need_ui=1 ;;
     mister/tools/host/*)
       need_mister=1 ;;
     mister/tools/agent/*)
       need_agent=1 ;;
     crates/framebuffer-stream/*)
-      need_host=1; need_ui=1; need_agent=1; need_stream=1; need_desktop=1 ;;
+      need_runtime=1; need_app=1; need_ui=1; need_agent=1; need_stream=1; need_desktop=1 ;;
     apps/desktop/*)
       need_desktop=1 ;;
     documentation/*)
       need_docs=1 ;;
     Cargo.toml|Cargo.lock|rust-toolchain.toml|.cargo/*)
-      need_catalog=1; need_host=1; need_ui=1; need_mister=1; need_agent=1
+      need_catalog=1; need_core=1; need_runtime=1; need_app=1; need_ui=1; need_mister=1; need_agent=1
       need_stream=1; need_desktop=1; need_docs=1 ;;
   esac
 done
@@ -719,8 +788,9 @@ if [ "$need_validation_routing" -eq 1 ] && [ "${MISTER_VALIDATE_ROUTING_CHILD:-0
   plan+=(validation-routing)
 fi
 [ "$need_host_tools_fast" -eq 1 ] && plan+=(host-tools-fast)
-[ "$need_host" -eq 1 ] && plan+=(magik-core-tests magik-core-clippy mister-runtime-tests mister-runtime-clippy)
-[ "$need_host" -eq 1 ] && plan+=(host-tests mister-app-clippy)
+[ "$need_core" -eq 1 ] && plan+=(magik-core-tests magik-core-clippy)
+[ "$need_runtime" -eq 1 ] && plan+=(mister-runtime-tests mister-runtime-clippy)
+[ "$need_app" -eq 1 ] && plan+=(host-tests mister-app-clippy)
 [ "$need_catalog" -eq 1 ] && plan+=(catalog-tests catalog-clippy)
 [ "$need_ui" -eq 1 ] && plan+=(production-ui-check)
 [ "$need_stream" -eq 1 ] && plan+=(framebuffer-stream-tests framebuffer-stream-clippy)

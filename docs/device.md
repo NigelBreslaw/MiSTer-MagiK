@@ -282,6 +282,9 @@ Then load the stock-kernel scanout-slots module so MagiK has hidden RGB565 slots
    `fpga-latch-report`. Readiness must emit `latch_readiness_tsv valid=1
    state=ready`. Commands `0x57` and `0x58` should report supported
    status/magic, while `0x59` must report protocol-v2 production capabilities.
+   Pass `--json` to `latch-readiness-report` only when the complete structured
+   contract is required; the same report is always written atomically to its
+   runtime status file. Normal probes emit only the concise TSV contract.
    `fpga-latch-post-report` is an active
    smoke test that posts a latch request; do not use it as a passive before/after
    counter sample.

@@ -20,8 +20,12 @@ env:
   MISTER_CARGO_TIMINGS: "0"
 
 jobs:
-  host-dev:
-    name: host-dev
+  host-dev-group:
+    name: host-dev (${{ matrix.group }})
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [quality, domain, app, catalog, tools]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -49,8 +53,19 @@ jobs:
           restore-keys: |
             cargo-host-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-id.outputs.rust_abi }}-
 
-      - name: Full host validation
-        run: scripts/validate full-host
+      - name: Full host validation (${{ matrix.group }})
+        run: scripts/validate full-host --group "${{ matrix.group }}"
+
+  host-dev:
+    name: host-dev
+    runs-on: ubuntu-24.04
+    needs: host-dev-group
+    if: always()
+    steps:
+      - name: Require every host validation group
+        env:
+          GROUP_RESULT: ${{ needs.host-dev-group.result }}
+        run: test "$GROUP_RESULT" = success
 
   arm-build:
     name: release

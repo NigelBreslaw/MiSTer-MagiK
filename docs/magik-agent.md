@@ -201,6 +201,16 @@ scripts/mister agent magik resume
 scripts/mister agent magik restart-launcher
 ```
 
+These commands use compact one-line human output by default. Add `--json` when
+the result will be parsed, redirected to a `.json` artifact, or needs the full
+Main status. The same convention applies to `agent deploy-magik-bin`: its
+default success line contains only the remote path, byte count, elapsed time,
+and abbreviated checksum; `--json` retains the complete transfer result.
+
+Failure-oriented commands print a short diagnosis and an artifact directory.
+Treat that directory as the source of complete status, event, process, and log
+evidence rather than copying large log tails into an agent conversation.
+
 Control actions carry an operation ID and are idempotent for the agent lifetime.
 The agent waits for a current Main generation whose command channel reports
 ready, opens the FIFO nonblocking, and acknowledges only the requested terminal

@@ -3,6 +3,15 @@
 This document defines current benchmark policy. Dated measurement logs live in
 `history/`; use them as evidence, not as the command surface.
 
+## Console and artifact output
+
+Routine success output is intentionally compact: target at most 200 characters
+per operation. Use `--json` for structured consumers and `--verbose` when a
+command supports live detail. Automatic failures should print no more than 25
+relevant lines per log source and must identify the artifact directory holding
+the complete evidence. Benchmark TSV and trace artifacts remain unrestricted;
+summaries should reference them instead of replaying them into agent context.
+
 ## General Rules
 
 - Use RGB565 for production launcher and arcade conclusions. The UI/app
