@@ -207,9 +207,11 @@ Historical evidence:
 
 ## Launcher Composition
 
-Normal launcher rendering is governed by a small composition controller. Slint
-owns the cached full frame in every state; Rust direct-blitted layers are legal
-only while the controller is in `MixedArcade`. `ModalOverArcade` clears direct
+Normal launcher rendering is governed by a small composition controller. The
+cached RGB565 frame is the complete base in every state; Rust direct-blitted
+layers are legal only while the controller is in `MixedArcade`. `Screensaver`
+owns the complete cached frame and clears all direct layers on entry regardless
+of the underlying navigation screen. `ModalOverArcade` clears direct
 layer assumptions and forces a full Slint present before showing the dialog.
 Full-screen Slint overlays such as catalog scan/rebuild progress are modeled as
 `ModalFullSlint`, even when the underlying navigation screen is Arcade, so they
@@ -227,6 +229,17 @@ stateDiagram-v2
 
     FullSlint --> MixedArcade: enter Arcade
     MixedArcade --> FullSlint: leave Arcade
+
+    FullSlint --> Screensaver: idle timeout or preview
+    MixedArcade --> Screensaver: idle timeout or preview\nclear direct layers
+    ModalFullSlint --> Screensaver: idle timeout or preview
+    ModalOverArcade --> Screensaver: idle timeout or preview\nclear direct layers
+    Recovering --> Screensaver: route valid\nscreensaver still active
+    Screensaver --> FullSlint: input\nnon-Arcade screen active
+    Screensaver --> MixedArcade: input\nArcade active
+    Screensaver --> ModalFullSlint: screensaver stops\nfull-screen overlay or non-Arcade dialog active
+    Screensaver --> ModalOverArcade: screensaver stops\nArcade dialog active
+    Screensaver --> Recovering: route/display invariant failed
 
     MixedArcade --> ModalOverArcade: open Arcade dialog
     ModalOverArcade --> MixedArcade: close dialog

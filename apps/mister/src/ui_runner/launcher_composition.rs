@@ -7,6 +7,7 @@ use super::*;
 pub(super) enum UiCompositionState {
     FullSlint,
     MixedArcade,
+    Screensaver,
     ModalFullSlint,
     ModalOverArcade,
     Recovering,
@@ -17,6 +18,7 @@ impl UiCompositionState {
         match self {
             Self::FullSlint => "full-slint",
             Self::MixedArcade => "mixed-arcade",
+            Self::Screensaver => "screensaver",
             Self::ModalFullSlint => "modal-full-slint",
             Self::ModalOverArcade => "modal-over-arcade",
             Self::Recovering => "recovering",
@@ -50,6 +52,7 @@ impl Default for UiCompositionStatus {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct UiCompositionInput {
     pub(super) screen: Screen,
+    pub(super) screensaver_active: bool,
     pub(super) confirm_visible: bool,
     pub(super) fullscreen_overlay_visible: bool,
     pub(super) arcade_ready: bool,
@@ -142,9 +145,12 @@ impl UiCompositionController {
                 }
                 let full_frame = previous != requested_state
                     || requested_state == UiCompositionState::ModalOverArcade;
-                let clear_layers = previous.allows_direct_layers()
-                    && (!requested_state.allows_direct_layers()
-                        || requested_state == UiCompositionState::ModalOverArcade);
+                let entering_screensaver = previous != UiCompositionState::Screensaver
+                    && requested_state == UiCompositionState::Screensaver;
+                let clear_layers = entering_screensaver
+                    || (previous.allows_direct_layers()
+                        && (!requested_state.allows_direct_layers()
+                            || requested_state == UiCompositionState::ModalOverArcade));
                 (self.state, full_frame, clear_layers)
             };
 
@@ -176,7 +182,9 @@ struct CompositionInvariant {
 }
 
 fn requested_state(input: UiCompositionInput) -> UiCompositionState {
-    if input.fullscreen_overlay_visible {
+    if input.screensaver_active {
+        UiCompositionState::Screensaver
+    } else if input.fullscreen_overlay_visible {
         UiCompositionState::ModalFullSlint
     } else if input.confirm_visible {
         if input.screen == Screen::Arcade && input.arcade_ready {
@@ -202,8 +210,9 @@ fn composition_invariant(
         });
     }
 
-    let direct_requested =
-        !input.fullscreen_overlay_visible && (input.wants_arcade_list || input.wants_preview);
+    let direct_requested = !input.screensaver_active
+        && !input.fullscreen_overlay_visible
+        && (input.wants_arcade_list || input.wants_preview);
     if direct_requested && !requested_state.allows_direct_layers() {
         return Some(CompositionInvariant {
             kind: "direct-layer-outside-arcade",
@@ -233,6 +242,7 @@ mod tests {
     fn input(screen: Screen) -> UiCompositionInput {
         UiCompositionInput {
             screen,
+            screensaver_active: false,
             confirm_visible: false,
             fullscreen_overlay_visible: false,
             arcade_ready: screen == Screen::Arcade,
@@ -278,6 +288,57 @@ mod tests {
         let decision = controller.tick(input(Screen::Home));
 
         assert_eq!(decision.state, UiCompositionState::FullSlint);
+        assert!(decision.force_full_slint_present);
+        assert!(decision.clear_direct_layers);
+    }
+
+    #[test]
+    fn screensaver_takes_exclusive_composition_from_arcade() {
+        let mut controller = UiCompositionController::new();
+        let _ = controller.tick(UiCompositionInput {
+            wants_arcade_list: true,
+            wants_preview: true,
+            preview_cache_state: "exact",
+            preview_frame_status: PreviewRawFrameStatus::Ready,
+            ..input(Screen::Arcade)
+        });
+
+        let decision = controller.tick(UiCompositionInput {
+            screensaver_active: true,
+            wants_arcade_list: true,
+            wants_preview: true,
+            ..input(Screen::Arcade)
+        });
+
+        assert_eq!(decision.state, UiCompositionState::Screensaver);
+        assert!(!decision.allow_arcade_list_blit);
+        assert!(!decision.allow_preview_blit);
+        assert!(decision.force_full_slint_present);
+        assert!(decision.clear_direct_layers);
+
+        let steady = controller.tick(UiCompositionInput {
+            screensaver_active: true,
+            wants_arcade_list: true,
+            wants_preview: true,
+            ..input(Screen::Arcade)
+        });
+        assert_eq!(steady.state, UiCompositionState::Screensaver);
+        assert!(!steady.allow_arcade_list_blit);
+        assert!(!steady.allow_preview_blit);
+        assert!(!steady.force_full_slint_present);
+        assert!(!steady.clear_direct_layers);
+    }
+
+    #[test]
+    fn screensaver_entry_clears_layers_from_full_slint_defensively() {
+        let mut controller = UiCompositionController::new();
+
+        let decision = controller.tick(UiCompositionInput {
+            screensaver_active: true,
+            ..input(Screen::Home)
+        });
+
+        assert_eq!(decision.state, UiCompositionState::Screensaver);
         assert!(decision.force_full_slint_present);
         assert!(decision.clear_direct_layers);
     }

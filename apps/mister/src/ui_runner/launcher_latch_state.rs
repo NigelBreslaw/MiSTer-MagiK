@@ -647,6 +647,62 @@ mod tests {
     }
 
     #[test]
+    fn screensaver_full_frame_replaces_direct_layers_in_both_slots() {
+        let preview = rect(1, 0, 4, 2);
+        let arcade = rect(2, 1, 4, 3);
+        let preview_layer = layer(preview, 1);
+        let arcade_layer = layer(arcade, 1);
+        let launcher = vec![BASE; WIDTH * HEIGHT];
+        let screensaver = vec![Rgb565Pixel(0x001f); WIDTH * HEIGHT];
+        let mut slot1 = vec![Rgb565Pixel(0xffff); WIDTH * HEIGHT];
+        let mut slot2 = vec![Rgb565Pixel(0xffff); WIDTH * HEIGHT];
+        let mut state = TwoBufferLatchState::new(WIDTH, HEIGHT);
+
+        all_writable(&mut state);
+        let launcher_plan = state
+            .plan_next(input(
+                Some(full()),
+                Some(preview_layer),
+                Some(preview),
+                Some(arcade_layer),
+                Some(ArcadeListUpdate::Full(arcade)),
+            ))
+            .expect("launcher plan");
+        apply_plan(&mut slot1, &launcher, launcher_plan);
+        state.mark_post_success(launcher_plan);
+
+        all_writable(&mut state);
+        let second_launcher_plan = state
+            .plan_next(input(
+                Some(full()),
+                Some(preview_layer),
+                Some(preview),
+                Some(arcade_layer),
+                Some(ArcadeListUpdate::Full(arcade)),
+            ))
+            .expect("second launcher plan");
+        apply_plan(&mut slot2, &launcher, second_launcher_plan);
+        state.mark_post_success(second_launcher_plan);
+
+        all_writable(&mut state);
+        let first_screensaver_plan = state
+            .plan_next(input(Some(full()), None, None, None, None))
+            .expect("first screensaver plan");
+        copy_restore(&mut slot1, &screensaver, first_screensaver_plan);
+        state.mark_post_success(first_screensaver_plan);
+
+        all_writable(&mut state);
+        let second_screensaver_plan = state
+            .plan_next(input(Some(full()), None, None, None, None))
+            .expect("second screensaver plan");
+        copy_restore(&mut slot2, &screensaver, second_screensaver_plan);
+        state.mark_post_success(second_screensaver_plan);
+
+        assert_eq!(slot1, screensaver);
+        assert_eq!(slot2, screensaver);
+    }
+
+    #[test]
     fn same_rect_new_content_version_forces_redraw() {
         let preview = rect(1, 0, 4, 2);
         let mut state = TwoBufferLatchState::new(WIDTH, HEIGHT);

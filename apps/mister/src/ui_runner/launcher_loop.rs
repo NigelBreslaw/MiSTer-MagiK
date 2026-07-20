@@ -3761,6 +3761,7 @@ pub(super) fn run_launcher_loop(
         let preview_cache_state_before_composition = preview.trace_cache_state();
         let composition_decision = composition.tick(UiCompositionInput {
             screen: nav.screen,
+            screensaver_active: screensaver.active,
             confirm_visible,
             fullscreen_overlay_visible: catalog_scan_visible,
             arcade_ready: active_arcade_games_available,
@@ -4215,7 +4216,9 @@ pub(super) fn run_launcher_loop(
             launcher_arcade_scroll_offset =
                 launcher_arcade_scroll_offset.saturating_add(delta_y as i64);
         }
-        let preview_desired = if composition_decision.allow_preview_blit
+        let preview_layer_desired =
+            should_desire_direct_layer(wants_preview, composition_decision.allow_preview_blit);
+        let preview_desired = if preview_layer_desired
             && preview_direct_present_enabled()
             && preview_frame_status == PreviewRawFrameStatus::Ready
         {
@@ -4226,7 +4229,10 @@ pub(super) fn run_launcher_loop(
         } else {
             None
         };
-        let arcade_desired = if composition_decision.allow_arcade_list_blit {
+        let arcade_desired = if should_desire_direct_layer(
+            wants_arcade_list,
+            composition_decision.allow_arcade_list_blit,
+        ) {
             Some(
                 DirectLayerState::new(arcade_list_renderer.dirty_rect(), launcher_arcade_version)
                     .with_content_offset_y(launcher_arcade_scroll_offset),
@@ -4566,6 +4572,10 @@ pub(super) fn run_launcher_loop(
     if let Err(e) = cpu_profile::finish(cpu) {
         crate::ui_errln!("{e}");
     }
+}
+
+fn should_desire_direct_layer(wants_layer: bool, composition_allows_layer: bool) -> bool {
+    wants_layer && composition_allows_layer
 }
 
 #[cfg(not(any(feature = "bench-tools", feature = "diagnostics")))]
@@ -7393,6 +7403,14 @@ mod tests {
         assert!(!saver.active);
         saver.update(start + Duration::from_secs(852), true, delay, false);
         assert!(saver.active);
+    }
+
+    #[test]
+    fn direct_layers_are_never_desired_without_both_intent_and_permission() {
+        assert!(should_desire_direct_layer(true, true));
+        assert!(!should_desire_direct_layer(false, true));
+        assert!(!should_desire_direct_layer(true, false));
+        assert!(!should_desire_direct_layer(false, false));
     }
 
     #[test]
