@@ -3367,8 +3367,7 @@ mod linux {
             }
         }
         if action == "suspend"
-            && ready.get("launcher_state").and_then(Value::as_str)
-                == Some("LauncherSuspended")
+            && ready.get("launcher_state").and_then(Value::as_str) == Some("LauncherSuspended")
         {
             let result = json!({
                 "operation_id": operation_id,
