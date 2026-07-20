@@ -245,6 +245,8 @@ pub(in crate::ui_runner) struct LauncherScreensaver {
     archive_rx: Option<Receiver<ArchiveLoadResult>>,
     archive_cancelled: Arc<AtomicBool>,
     startup_started_at: Option<Instant>,
+    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+    frame_profile: ScreensaverFrameProfile,
     frame: u64,
 }
 
@@ -259,15 +261,25 @@ impl LauncherScreensaver {
             archive_rx: Some(archive_rx),
             archive_cancelled,
             startup_started_at,
+            #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+            frame_profile: ScreensaverFrameProfile::default(),
             frame: 0,
         }
     }
 
     pub(in crate::ui_runner) fn render(&mut self, dst: &mut [Rgb565Pixel], w: usize, h: usize) {
         self.poll_archive(w);
+        #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+        {
+            let sample = render_archive_parade(dst, &mut self.parade, w, h, self.frame);
+            self.frame_profile.record(sample);
+        }
+        #[cfg(not(any(feature = "bench-tools", feature = "diagnostics")))]
         render_archive_parade(dst, &mut self.parade, w, h, self.frame);
         if self.frame > 0 && self.frame % 600 == 0 {
             self.parade.log_scaler_stats();
+            #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+            self.frame_profile.log(self.frame);
         }
         self.frame = self.frame.wrapping_add(1);
     }
@@ -311,6 +323,75 @@ impl LauncherScreensaver {
 
     pub(in crate::ui_runner) fn is_loading_archive(&self) -> bool {
         self.archive_rx.is_some()
+    }
+}
+
+#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+#[derive(Clone, Copy, Default)]
+struct ScreensaverFrameSample {
+    background_us: u128,
+    advance_us: u128,
+    cards_us: u128,
+    total_us: u128,
+    active_layers: [u16; PARADE_SPEED_COUNT],
+}
+
+#[cfg(not(any(feature = "bench-tools", feature = "diagnostics")))]
+type ScreensaverFrameSample = ();
+
+#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+#[derive(Default)]
+struct ScreensaverFrameProfile {
+    frames: u64,
+    background_us: u128,
+    advance_us: u128,
+    cards_us: u128,
+    total_us: u128,
+    max_total_us: u128,
+    last_logged_frame: u64,
+    last_logged_background_us: u128,
+    last_logged_advance_us: u128,
+    last_logged_cards_us: u128,
+    last_logged_total_us: u128,
+    active_layers: [u16; PARADE_SPEED_COUNT],
+}
+
+#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+impl ScreensaverFrameProfile {
+    fn record(&mut self, sample: ScreensaverFrameSample) {
+        self.frames += 1;
+        self.background_us += sample.background_us;
+        self.advance_us += sample.advance_us;
+        self.cards_us += sample.cards_us;
+        self.total_us += sample.total_us;
+        self.max_total_us = self.max_total_us.max(sample.total_us);
+        self.active_layers = sample.active_layers;
+    }
+
+    fn log(&mut self, frame: u64) {
+        let frames = frame.saturating_sub(self.last_logged_frame).max(1) as u128;
+        crate::ui_logln!(
+            "screensaver_frame_profile frame={} frames={} background_avg_us={} advance_avg_us={} cards_avg_us={} total_avg_us={} total_max_us={} active_layers={},{},{},{},{} active_total={}",
+            frame,
+            frames,
+            (self.background_us - self.last_logged_background_us) / frames,
+            (self.advance_us - self.last_logged_advance_us) / frames,
+            (self.cards_us - self.last_logged_cards_us) / frames,
+            (self.total_us - self.last_logged_total_us) / frames,
+            self.max_total_us,
+            self.active_layers[0],
+            self.active_layers[1],
+            self.active_layers[2],
+            self.active_layers[3],
+            self.active_layers[4],
+            self.active_layers.iter().copied().map(u32::from).sum::<u32>()
+        );
+        self.last_logged_frame = frame;
+        self.last_logged_background_us = self.background_us;
+        self.last_logged_advance_us = self.advance_us;
+        self.last_logged_cards_us = self.cards_us;
+        self.last_logged_total_us = self.total_us;
+        self.max_total_us = 0;
     }
 }
 
@@ -2951,9 +3032,21 @@ fn render_archive_parade(
     w: usize,
     h: usize,
     frame: u64,
-) {
+) -> ScreensaverFrameSample {
+    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+    let total_started = Instant::now();
+    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+    let phase_started = Instant::now();
     render_horizontal_starfield(dst, w, h, frame, state.motion);
+    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+    let background_us = phase_started.elapsed().as_micros();
+    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+    let phase_started = Instant::now();
     state.advance(w, h, None, frame);
+    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+    let advance_us = phase_started.elapsed().as_micros();
+    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+    let phase_started = Instant::now();
     let (draw_order, draw_count) = parade_draw_order(state);
     for tile_idx in draw_order.into_iter().take(draw_count) {
         let tile = &state.tiles[tile_idx];
@@ -2968,6 +3061,25 @@ fn render_archive_parade(
             tile.y,
         );
     }
+    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+    {
+        let mut active_layers = [0_u16; PARADE_SPEED_COUNT];
+        for tile in state.tiles.iter().filter(|tile| tile.active) {
+            let layer_idx = tile.layer.saturating_sub(PARADE_MIN_TILE_SPEED);
+            if let Some(count) = active_layers.get_mut(layer_idx) {
+                *count = count.saturating_add(1);
+            }
+        }
+        ScreensaverFrameSample {
+            background_us,
+            advance_us,
+            cards_us: phase_started.elapsed().as_micros(),
+            total_us: total_started.elapsed().as_micros(),
+            active_layers,
+        }
+    }
+    #[cfg(not(any(feature = "bench-tools", feature = "diagnostics")))]
+    {}
 }
 
 fn render_marquee(dst: &mut [Rgb565Pixel], w: usize, h: usize, images: &[SaverImage], frame: u64) {
