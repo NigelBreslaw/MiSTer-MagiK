@@ -19,3 +19,13 @@ Keep a command at the root when it is a documented public interface, a stable
 sandbox approval shape, or an attended device workflow. Prefer adding reusable
 implementation to the appropriate folder instead of adding another root-level
 helper.
+
+## Local workflow benchmarking
+
+Use `scripts/bench-local-workflow.sh --tier quick --group all` to measure Git,
+affected validation, ARM build, and simulated deploy iteration costs without
+changing the real index or contacting a MiSTer. Use `--tier full` for five
+measured Git/hook samples and two measured build/deploy samples, `--cold` for a
+benchmark-owned cold ARM target, and `--device` only for an attended hardware
+deploy sample. `--samples` and `--warmups` provide explicit bounded overrides.
+Results are retained under the ignored `build/local-workflow-bench/` directory.

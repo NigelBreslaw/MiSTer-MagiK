@@ -168,13 +168,13 @@ apply_state() {
       touch "$RUST_DIR/src/launcher.rs"
       ;;
     touch-rust-catalog)
-      touch "$RUST_DIR/catalog/src/arcade_catalog.rs"
+      touch "$ROOT/crates/catalog/src/arcade_catalog.rs"
       ;;
     touch-rust-core)
-      touch "$RUST_DIR/src/input_state.rs"
+      touch "$ROOT/crates/magik-core/src/input_state.rs"
       ;;
     touch-rust-platform)
-      touch "$RUST_DIR/src/fb.rs"
+      touch "$ROOT/mister/platform/runtime/src/framebuffer/mod.rs"
       ;;
     touch-slint-launcher)
       touch "$RUST_DIR/ui/launcher.slint"
@@ -367,6 +367,18 @@ run_one() {
       "$cmd_name" "$sample" "$is_warmup" "$status" "$wall" "$total" "$app_unit" \
       "$top_units" "$timing" "$bytes" "$log" >>"$TSV"
   fi
+
+  awk '
+    /(^|[[:space:]])Compiling / { compiling++ }
+    /(^|[[:space:]])Checking / { checking++ }
+    /(^|[ \/])cargo (build|check|test|clippy|fmt)|container build profile=/ { cargo_runs++ }
+    /container run|image arch probe/ { container_runs++ }
+    /minimal FFmpeg|build-minimal-ffmpeg/ { ffmpeg_runs++ }
+    END {
+      printf "BUILD_BENCH_COUNTS compiled=%d checked=%d cargo_runs=%d container_runs=%d ffmpeg_runs=%d\n",
+        compiling + 0, checking + 0, cargo_runs + 0, container_runs + 0, ffmpeg_runs + 0
+    }
+  ' "$log"
 
   if [ "$status" -ne 0 ]; then
     echo "ERROR: command failed: $cmd" >&2

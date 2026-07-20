@@ -29,28 +29,44 @@ assert_command_plan() {
   fi
 }
 
-base="format host-tools-fast "
+base=""
 domain="magik-core-tests magik-core-clippy mister-runtime-tests mister-runtime-clippy "
 assert_plan docs 'docs/catalog.md' "$base"
-assert_plan rust 'apps/mister/src/launcher.rs' "${base}${domain}host-tests mister-app-clippy production-ui-check "
-assert_plan core 'crates/magik-core/src/platform.rs' "${base}${domain}host-tests mister-app-clippy production-ui-check "
-assert_plan runtime 'mister/platform/runtime/src/fpga.rs' "${base}${domain}host-tests mister-app-clippy production-ui-check "
-assert_plan catalog 'crates/catalog/src/library_db.rs' "${base}${domain}host-tests mister-app-clippy catalog-tests catalog-clippy production-ui-check mister-tests mister-clippy "
+assert_plan empty '' ''
+assert_plan rust 'apps/mister/src/launcher.rs' "format-app-mister ${base}${domain}host-tests mister-app-clippy production-ui-check "
+assert_plan core 'crates/magik-core/src/platform.rs' "format-magik-core ${base}${domain}host-tests mister-app-clippy production-ui-check "
+assert_plan runtime 'mister/platform/runtime/src/fpga.rs' "format-mister-runtime ${base}${domain}host-tests mister-app-clippy production-ui-check "
+assert_plan catalog 'crates/catalog/src/library_db.rs' "format-catalog ${base}${domain}host-tests mister-app-clippy catalog-tests catalog-clippy production-ui-check mister-tests mister-clippy "
 assert_plan slint 'apps/mister/ui/launcher.slint' "${base}production-ui-check "
-assert_plan ui-generated 'apps/mister/ui-generated/build.rs' "${base}production-ui-check "
-assert_plan mister 'mister/tools/host/src/main.rs' "${base}mister-tests mister-clippy "
-assert_plan agent 'mister/tools/agent/src/main.rs' "${base}agent-tests agent-clippy "
-assert_plan stream 'crates/framebuffer-stream/src/lib.rs' "${base}${domain}host-tests mister-app-clippy production-ui-check framebuffer-stream-tests framebuffer-stream-clippy agent-tests agent-clippy desktop-tests desktop-compiled-check "
-assert_plan desktop 'apps/desktop/src/main.rs' "${base}desktop-tests desktop-compiled-check "
+assert_plan ui-generated 'apps/mister/ui-generated/build.rs' "format-ui-generated ${base}production-ui-check "
+assert_plan mister 'mister/tools/host/src/main.rs' "format-mister-host ${base}mister-tests mister-clippy "
+assert_plan agent 'mister/tools/agent/src/main.rs' "format-mister-agent ${base}agent-tests agent-clippy "
+assert_plan stream 'crates/framebuffer-stream/src/lib.rs' "format-framebuffer-stream ${base}${domain}host-tests mister-app-clippy production-ui-check framebuffer-stream-tests framebuffer-stream-clippy agent-tests agent-clippy desktop-tests desktop-compiled-check "
+assert_plan desktop 'apps/desktop/src/main.rs' "format-desktop ${base}desktop-tests desktop-compiled-check "
 assert_plan documentation 'documentation/src/content/docs/index.mdx' "${base}documentation-build "
-assert_plan global 'Cargo.lock' "${base}${domain}host-tests mister-app-clippy catalog-tests catalog-clippy production-ui-check framebuffer-stream-tests framebuffer-stream-clippy mister-tests mister-clippy agent-tests agent-clippy desktop-tests desktop-compiled-check documentation-build "
-assert_plan mixed $'crates/catalog/src/library_db.rs\napps/mister/ui/launcher.slint\nscripts/deploy-rust.sh' "${base}${domain}host-tests mister-app-clippy catalog-tests catalog-clippy production-ui-check mister-tests mister-clippy "
-assert_plan deletion 'apps/mister/src/removed.rs' "${base}${domain}host-tests mister-app-clippy production-ui-check "
+assert_plan global 'Cargo.lock' "${base}host-tools-fast ${domain}host-tests mister-app-clippy catalog-tests catalog-clippy production-ui-check framebuffer-stream-tests framebuffer-stream-clippy mister-tests mister-clippy agent-tests agent-clippy desktop-tests desktop-compiled-check documentation-build "
+assert_plan mixed $'crates/catalog/src/library_db.rs\napps/mister/ui/launcher.slint\nscripts/deploy-rust.sh' "format-catalog ${base}host-tools-fast ${domain}host-tests mister-app-clippy catalog-tests catalog-clippy production-ui-check mister-tests mister-clippy "
+assert_plan deletion 'apps/mister/src/removed.rs' "format-app-mister ${base}${domain}host-tests mister-app-clippy production-ui-check "
 assert_plan rename $'apps/mister/ui/old-name.slint\napps/mister/ui/new-name.slint' "${base}production-ui-check "
-assert_plan build-script 'apps/mister/build-arm.sh' "${base}${domain}host-tests mister-app-clippy catalog-tests catalog-clippy production-ui-check "
-assert_plan rust-toolchain 'apps/mister/rust-toolchain.toml' "${base}${domain}host-tests mister-app-clippy catalog-tests catalog-clippy production-ui-check framebuffer-stream-tests framebuffer-stream-clippy mister-tests mister-clippy agent-tests agent-clippy desktop-tests desktop-compiled-check "
-assert_plan workflow '.github/workflows/rust-arm.yml' "$base"
-assert_plan shared 'crates/framebuffer-stream/src/lib.rs' "${base}${domain}host-tests mister-app-clippy production-ui-check framebuffer-stream-tests framebuffer-stream-clippy agent-tests agent-clippy desktop-tests desktop-compiled-check "
+assert_plan build-script 'apps/mister/build-arm.sh' "${base}host-tools-fast ${domain}host-tests mister-app-clippy catalog-tests catalog-clippy production-ui-check "
+assert_plan rust-toolchain 'apps/mister/rust-toolchain.toml' "format ${base}host-tools-fast ${domain}host-tests mister-app-clippy catalog-tests catalog-clippy production-ui-check framebuffer-stream-tests framebuffer-stream-clippy mister-tests mister-clippy agent-tests agent-clippy desktop-tests desktop-compiled-check "
+assert_plan workflow '.github/workflows/rust-arm.yml' "${base}host-tools-fast "
+assert_plan validator $'scripts/validate\nscripts/tests/test-validate.sh' "${base}host-tools-fast "
+printf '%s\n' 'scripts/validate' >"$TMP/validator-live.paths"
+actual="$({
+  unset MISTER_VALIDATE_ROUTING_CHILD
+  "$ROOT/scripts/validate" affected --paths-file "$TMP/validator-live.paths" --print-plan
+} | tr '\n' ' ')"
+[ "$actual" = "validation-routing host-tools-fast " ] || {
+  echo "validator live plan mismatch: $actual" >&2
+  exit 1
+}
+assert_plan format-dedup $'apps/mister/src/launcher.rs\napps/mister/src/input.rs' "format-app-mister ${base}${domain}host-tests mister-app-clippy production-ui-check "
+assert_plan agent-protocol 'crates/agent-protocol/src/lib.rs' 'format-agent-protocol '
+assert_plan media-contract 'crates/media-contract/src/lib.rs' 'format-media-contract '
+assert_plan latch-contract 'mister/platform/contracts/latch/src/lib.rs' 'format-latch-contract '
+assert_plan scanout-contract 'mister/platform/contracts/scanout/src/lib.rs' 'format-scanout-contract '
+assert_plan shared 'crates/framebuffer-stream/src/lib.rs' "format-framebuffer-stream ${base}${domain}host-tests mister-app-clippy production-ui-check framebuffer-stream-tests framebuffer-stream-clippy agent-tests agent-clippy desktop-tests desktop-compiled-check "
 
 repo="$TMP/rename-repo"
 mkdir -p "$repo/apps/mister/src" "$repo/docs"
@@ -66,7 +82,7 @@ actual="$({
   GIT_DIR="$repo/.git" GIT_WORK_TREE="$repo" \
     "$ROOT/scripts/validate" affected --print-plan
 } | tr '\n' ' ')"
-expected="${base}${domain}host-tests mister-app-clippy production-ui-check "
+expected="format-app-mister ${base}${domain}host-tests mister-app-clippy production-ui-check "
 if [ "$actual" != "$expected" ]; then
   echo "real staged rename plan mismatch: $actual" >&2
   exit 1
@@ -101,7 +117,7 @@ actual="$({
   GIT_DIR="$worktree_repo/.git" GIT_WORK_TREE="$worktree_repo" \
     "$ROOT/scripts/validate" working-tree --print-plan
 } | tr '\n' ' ')"
-expected="${base}${domain}host-tests mister-app-clippy production-ui-check mister-tests mister-clippy agent-tests agent-clippy "
+expected="format-app-mister format-mister-host format-mister-agent ${base}${domain}host-tests mister-app-clippy production-ui-check mister-tests mister-clippy agent-tests agent-clippy "
 if [ "$actual" != "$expected" ]; then
   echo "working-tree plan mismatch: $actual" >&2
   exit 1
@@ -126,21 +142,21 @@ actual="$({
   GIT_DIR="$untracked_repo/.git" GIT_WORK_TREE="$untracked_repo" \
     "$ROOT/scripts/validate" working-tree --print-plan
 } | tr '\n' ' ')"
-expected="${base}agent-tests agent-clippy "
+expected="format-mister-agent ${base}agent-tests agent-clippy "
 if [ "$actual" != "$expected" ]; then
   echo "untracked/ignored plan mismatch: $actual" >&2
   exit 1
 fi
 
 assert_command_plan explicit-space \
-  "${base}${domain}host-tests mister-app-clippy production-ui-check " \
+  "format-app-mister ${base}${domain}host-tests mister-app-clippy production-ui-check " \
   "$ROOT/scripts/validate" paths "apps/mister/src/space name.rs" --print-plan
 
 assert_command_plan absolute-file \
-  "${base}mister-tests mister-clippy " \
+  "format-mister-host ${base}mister-tests mister-clippy " \
   "$ROOT/scripts/validate" paths "$ROOT/mister/tools/host/src/main.rs" --print-plan
 
-whole_repo="${base}${domain}host-tests mister-app-clippy catalog-tests catalog-clippy production-ui-check framebuffer-stream-tests framebuffer-stream-clippy mister-tests mister-clippy agent-tests agent-clippy desktop-tests desktop-compiled-check documentation-build "
+whole_repo="format ${base}host-tools-fast ${domain}host-tests mister-app-clippy catalog-tests catalog-clippy production-ui-check framebuffer-stream-tests framebuffer-stream-clippy mister-tests mister-clippy agent-tests agent-clippy desktop-tests desktop-compiled-check documentation-build "
 assert_command_plan relative-root "$whole_repo" \
   "$ROOT/scripts/validate" paths . --print-plan
 assert_command_plan absolute-root "$whole_repo" \
@@ -153,7 +169,7 @@ actual="$({
   GIT_DIR="$worktree_repo/.git" GIT_WORK_TREE="$worktree_repo" \
     "$ROOT/scripts/validate" paths apps/mister mister/tools/host --print-plan
 } | tr '\n' ' ')"
-expected="${base}${domain}host-tests mister-app-clippy production-ui-check mister-tests mister-clippy "
+expected="format-app-mister format-mister-host ${base}${domain}host-tests mister-app-clippy production-ui-check mister-tests mister-clippy "
 if [ "$actual" != "$expected" ]; then
   echo "explicit directory plan mismatch: $actual" >&2
   exit 1
@@ -164,7 +180,7 @@ actual="$({
   GIT_DIR="$worktree_repo/.git" GIT_WORK_TREE="$worktree_repo" \
     "$ROOT/scripts/validate" paths "$ROOT/apps/mister" --print-plan
 } | tr '\n' ' ')"
-expected="${base}${domain}host-tests mister-app-clippy production-ui-check "
+expected="format-app-mister ${base}${domain}host-tests mister-app-clippy production-ui-check "
 if [ "$actual" != "$expected" ]; then
   echo "absolute directory plan mismatch: $actual" >&2
   exit 1
@@ -267,7 +283,7 @@ fi
 
 fake_checks="$TMP/fake-checks"
 mkdir -p "$fake_checks"
-cat >"$fake_checks/format" <<'EOF'
+cat >"$fake_checks/format-app-mister" <<'EOF'
 #!/usr/bin/env bash
 echo format-marker
 EOF
@@ -275,31 +291,42 @@ cat >"$fake_checks/host-tools-fast" <<'EOF'
 #!/usr/bin/env bash
 echo host-marker
 EOF
-chmod +x "$fake_checks/format" "$fake_checks/host-tools-fast"
+chmod +x "$fake_checks/format-app-mister" "$fake_checks/host-tools-fast"
 
-output="$(MISTER_VALIDATE_FAKE_CHECK_DIR="$fake_checks" "$ROOT/scripts/validate" paths docs/catalog.md 2>&1)"
-grep -q '^VALIDATION start check=format$' <<<"$output"
-grep -q '^VALIDATION pass check=format duration_ms=' <<<"$output"
-grep -q '^VALIDATION start check=host-tools-fast$' <<<"$output"
-grep -q '^VALIDATION pass check=host-tools-fast duration_ms=' <<<"$output"
-grep -q '^PASS format' <<<"$output"
-grep -q '^PASS host-tools-fast' <<<"$output"
+empty_json="$(MISTER_VALIDATE_FAKE_CHECK_DIR="$fake_checks" "$ROOT/scripts/validate" paths docs/catalog.md --json)"
+python3 - "$empty_json" <<'PY'
+import json
+import sys
+value = json.loads(sys.argv[1])
+assert value["status"] == "pass"
+assert value["checks"] == []
+PY
+
+output="$(MISTER_VALIDATE_FAKE_CHECK_DIR="$fake_checks" "$ROOT/scripts/validate" paths apps/mister/src/launcher.rs 2>&1)"
+grep -q '^VALIDATION start check=format-app-mister$' <<<"$output"
+grep -q '^VALIDATION pass check=format-app-mister duration_ms=' <<<"$output"
+grep -q '^PASS format-app-mister' <<<"$output"
 if grep -q 'format-marker' <<<"$output"; then
   echo "default validation output leaked full logs" >&2
   exit 1
 fi
 
-verbose_output="$(MISTER_VALIDATE_FAKE_CHECK_DIR="$fake_checks" "$ROOT/scripts/validate" paths docs/catalog.md --verbose)"
+output="$(MISTER_VALIDATE_FAKE_CHECK_DIR="$fake_checks" "$ROOT/scripts/validate" paths scripts/README.md 2>&1)"
+grep -q '^VALIDATION start check=host-tools-fast$' <<<"$output"
+grep -q '^VALIDATION pass check=host-tools-fast duration_ms=' <<<"$output"
+grep -q '^PASS host-tools-fast' <<<"$output"
+
+verbose_output="$(MISTER_VALIDATE_FAKE_CHECK_DIR="$fake_checks" "$ROOT/scripts/validate" paths apps/mister/src/launcher.rs --verbose)"
 grep -q 'format-marker' <<<"$verbose_output"
 
-json_output="$(MISTER_VALIDATE_FAKE_CHECK_DIR="$fake_checks" "$ROOT/scripts/validate" paths docs/catalog.md --json)"
+json_output="$(MISTER_VALIDATE_FAKE_CHECK_DIR="$fake_checks" "$ROOT/scripts/validate" paths scripts/README.md --json)"
 python3 - "$json_output" <<'PY'
 import json
 import sys
 value = json.loads(sys.argv[1])
 assert value["schema"] == "mister-magik-validation-v1"
 assert value["status"] == "pass"
-assert [check["name"] for check in value["checks"]] == ["format", "host-tools-fast"]
+assert [check["name"] for check in value["checks"]] == ["host-tools-fast"]
 assert all(check["status"] == "pass" for check in value["checks"])
 PY
 
@@ -313,7 +340,7 @@ mv "$fake_checks/host-tools-fast.next" "$fake_checks/host-tools-fast"
 set +e
 failure_output="$(
   MISTER_VALIDATE_FAKE_CHECK_DIR="$fake_checks" \
-    "$ROOT/scripts/validate" paths docs/catalog.md 2>&1
+    "$ROOT/scripts/validate" paths scripts/README.md 2>&1
 )"
 failure_status=$?
 set -e

@@ -25,9 +25,9 @@ use agent_client::{
 };
 use remote::{
     acknowledged_main_command, connect, connect_timed, create_dir_command, exec,
-    exec_failure_message, get, host, host_wait_diagnostics, launcher_restart_command, port_open, put, put_bytes, put_dir,
-    remote_subcommand, remove_files_command, sftp_write_profile, shell_quote as sh, stream_command,
-    tcp_probe_label, tcp_probe_label_port, ExecOutput,
+    exec_failure_message, get, host, host_wait_diagnostics, launcher_restart_command, port_open,
+    put, put_bytes, put_dir, remote_subcommand, remove_files_command, sftp_write_profile,
+    shell_quote as sh, stream_command, tcp_probe_label, tcp_probe_label_port, ExecOutput,
 };
 
 #[cfg(test)]

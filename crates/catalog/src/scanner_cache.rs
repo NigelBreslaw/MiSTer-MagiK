@@ -140,9 +140,9 @@ fn validate_staged(path: &Path, expected: &ScannerCacheState) -> Result<(), Stri
         .map_err(|error| format!("count staged discovery history: {error}"))?;
     let expected_history_rows = i64::try_from(
         expected
-        .discovery_history
-        .as_ref()
-        .map_or(0, |history| history.by_game_id.len()),
+            .discovery_history
+            .as_ref()
+            .map_or(0, |history| history.by_game_id.len()),
     )
     .map_err(|_| "discovery history row count exceeds SQLite integer".to_string())?;
     if history_rows != expected_history_rows {
@@ -203,10 +203,7 @@ pub(crate) fn stage(path: &Path, state: &ScannerCacheState) -> Result<StagedScan
         std::fs::create_dir_all(parent)
             .map_err(|error| format!("create scanner cache dir {}: {error}", parent.display()))?;
     }
-    let temp = path.with_file_name(format!(
-        ".{FILE_NAME}.stage.{}",
-        std::process::id()
-    ));
+    let temp = path.with_file_name(format!(".{FILE_NAME}.stage.{}", std::process::id()));
     let result = (|| {
         let _ = std::fs::remove_file(&temp);
         let mut conn = Connection::open(&temp)
