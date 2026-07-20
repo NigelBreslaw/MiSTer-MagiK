@@ -26,11 +26,11 @@ SD card and read the full [MiSTer MagiK disclaimer](disclaimer.md) before use.
 ## Beta installation and updates
 
 MiSTer MagiK Beta is installed through the MiSTer Downloader used by
-`update_all`. Download the Beta installer ZIP, extract it to the SD-card root,
-run `update_all`, then run `Scripts` -> `mister-magik` once and reboot normally.
-Later updates require only `update_all` and a normal reboot. See
-[Releases and update_all installation](docs/releases.md) for the download
-channel, verification, switching, disable, and rollback details.
+`update_all`. [Download the Beta installer ZIP](https://github.com/NigelBreslaw/MiSTer-MagiK/releases/download/beta/mister-magik-beta-installer.zip),
+extract it to the SD-card root, run `update_all`, then run `Scripts` ->
+`mister-magik` once and reboot normally.
+Later updates require only `update_all` and a normal reboot. If you run the
+script again it will offer the option to uninstall MiSTer MagiK.
 
 ## Built With Slint
 
