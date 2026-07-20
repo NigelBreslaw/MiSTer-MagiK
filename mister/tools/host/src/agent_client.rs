@@ -7,13 +7,20 @@ use std::env;
 use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::discovery::{secure_write, token_path};
 use crate::remote::host;
+use crate::remote::{connect, exec, put, put_bytes};
 use crate::Result;
 
 pub(crate) const AGENT_PORT: u16 = agent_protocol::PORT;
-const AGENT_TOKEN_LOCAL: &str = "build/mister-agent.token";
+const REMOTE_AGENT: &str = "/media/fat/mister-magik-dev/mister-magik-agent";
+const REMOTE_INIT: &str = "/etc/init.d/S00magik-agent";
+const REMOTE_TOKEN: &str = "/media/fat/mister-magik-dev/agent.token";
 
 #[derive(Debug)]
 pub(crate) struct AgentResponse {
@@ -28,6 +35,13 @@ pub(crate) struct AgentBinaryResponse {
     pub(crate) elapsed_ms: u128,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum VersionAction {
+    Current,
+    Upgrade,
+    RejectNewer,
+}
+
 pub(crate) fn agent_token() -> Result<String> {
     if let Ok(token) = env::var("MISTER_AGENT_TOKEN") {
         let token = token.trim().to_string();
@@ -35,15 +49,216 @@ pub(crate) fn agent_token() -> Result<String> {
             return Ok(token);
         }
     }
-    match fs::read_to_string(AGENT_TOKEN_LOCAL) {
-        Ok(token) => Ok(token.trim().to_string()),
-        Err(err) => {
-            eprintln!(
-                "warning: agent token unavailable ({AGENT_TOKEN_LOCAL}: {err}); using unauthenticated agent request"
-            );
-            Ok(String::new())
+    let device_id = env::var("MISTER_DEVICE_ID")?;
+    Ok(fs::read_to_string(token_path(&device_id)?)?
+        .trim()
+        .to_string())
+}
+
+pub(crate) fn bootstrap_agent() -> Result<()> {
+    let explicit_token = env::var("MISTER_AGENT_TOKEN")
+        .ok()
+        .filter(|token| !token.trim().is_empty());
+    let device_id = env::var("MISTER_DEVICE_ID")?;
+    let token_file = token_path(&device_id)?;
+    let local_token = explicit_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            fs::read_to_string(&token_file)
+                .ok()
+                .map(|token| token.trim().to_string())
+                .filter(|token| valid_token(token))
+        });
+    if let Some(token) = local_token.as_ref() {
+        env::set_var("MISTER_AGENT_TOKEN", token);
+        if apply_installed_version_policy()? {
+            return Ok(());
         }
     }
+
+    let session = connect(3)?;
+    let token = if explicit_token.is_some() {
+        local_token.ok_or("MISTER_AGENT_TOKEN is empty")?
+    } else {
+        let remote = exec(
+            &session,
+            "cat /media/fat/mister-magik-dev/agent.token 2>/dev/null || true",
+            true,
+        )?
+        .stdout
+        .trim()
+        .to_string();
+        let token = if valid_token(&remote) {
+            remote
+        } else {
+            local_token.unwrap_or(generate_token()?)
+        };
+        secure_write(&token_file, format!("{token}\n").as_bytes())?;
+        token
+    };
+    env::set_var("MISTER_AGENT_TOKEN", &token);
+    if apply_installed_version_policy()? {
+        return Ok(());
+    }
+
+    install_agent(&session, &token)?;
+    for _ in 0..20 {
+        if installed_version()
+            == Ok((
+                agent_protocol::AGENT_VERSION,
+                agent_protocol::PROTOCOL_VERSION,
+            ))
+        {
+            cleanup_agent_backup(&session)?;
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    rollback_agent(&session)?;
+    Err("MiSTer agent installation did not pass authenticated version verification".into())
+}
+
+fn apply_installed_version_policy() -> Result<bool> {
+    let Ok((agent, protocol)) = installed_version() else {
+        return Ok(false);
+    };
+    match version_action(agent, protocol) {
+        VersionAction::Current => Ok(true),
+        VersionAction::Upgrade => Ok(false),
+        VersionAction::RejectNewer => Err(format!(
+            "connected MiSTer agent is newer than this CLI (agent={agent}, protocol={protocol})"
+        )
+        .into()),
+    }
+}
+
+fn version_action(agent: u64, protocol: u64) -> VersionAction {
+    if agent == agent_protocol::AGENT_VERSION && protocol == agent_protocol::PROTOCOL_VERSION {
+        VersionAction::Current
+    } else if agent > agent_protocol::AGENT_VERSION || protocol > agent_protocol::PROTOCOL_VERSION {
+        VersionAction::RejectNewer
+    } else {
+        VersionAction::Upgrade
+    }
+}
+
+fn installed_version() -> std::result::Result<(u64, u64), String> {
+    let reply = agent_request("ping", json!({}), Duration::from_millis(500))
+        .map_err(|error| error.to_string())?;
+    let result = reply.response.get("result").unwrap_or(&Value::Null);
+    Ok((
+        result
+            .get("agent_version")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| "missing agent version".to_string())?,
+        result
+            .get("protocol_version")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| "missing protocol version".to_string())?,
+    ))
+}
+
+fn valid_token(token: &str) -> bool {
+    token.len() == 64 && token.chars().all(|ch| ch.is_ascii_hexdigit())
+}
+
+fn generate_token() -> Result<String> {
+    let mut bytes = [0_u8; 32];
+    fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+fn build_agent() -> Result<PathBuf> {
+    let output = Command::new("scripts/build-mister-agent.sh").output()?;
+    if !output.status.success() {
+        return Err(format!(
+            "could not build current MiSTer agent: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+        .into());
+    }
+    let path = String::from_utf8(output.stdout)?
+        .lines()
+        .last()
+        .ok_or("agent build did not report its artifact")?
+        .to_string();
+    let path = PathBuf::from(path);
+    if !path.is_file() {
+        return Err("agent build artifact is missing".into());
+    }
+    Ok(path)
+}
+
+fn install_agent(session: &ssh2::Session, token: &str) -> Result<()> {
+    let binary = build_agent()?;
+    let init = br#"#!/bin/sh
+stop_agent() {
+  pids="$(pidof mister-magik-agent 2>/dev/null || true)"
+  [ -z "$pids" ] && return 0
+  kill $pids 2>/dev/null || true
+  i=0
+  while [ "$i" -lt 20 ]; do
+    pidof mister-magik-agent >/dev/null 2>&1 || return 0
+    sleep 0.1
+    i=$((i + 1))
+  done
+  kill -9 $(pidof mister-magik-agent 2>/dev/null || true) 2>/dev/null || true
+}
+case "$1" in
+  start) /media/fat/mister-magik-dev/mister-magik-agent net-boot >/tmp/mister-magik-agent.boot.out 2>&1 & ;;
+  stop) stop_agent ;;
+  restart) stop_agent; /media/fat/mister-magik-dev/mister-magik-agent net-boot >/tmp/mister-magik-agent.boot.out 2>&1 & ;;
+  *) exit 2 ;;
+esac
+"#;
+    exec(session, "mkdir -p /media/fat/mister-magik-dev", true)?;
+    put(session, Path::new(&binary), &format!("{REMOTE_AGENT}.new"))?;
+    let staged_init = "/media/fat/mister-magik-dev/S00magik-agent.new";
+    put_bytes(session, staged_init, init)?;
+    put_bytes(
+        session,
+        &format!("{REMOTE_TOKEN}.new"),
+        format!("{token}\n").as_bytes(),
+    )?;
+    cleanup_agent_backup(session)?;
+    let command = format!(
+        "set -eu; mount -o remount,rw /; {init} stop 2>/dev/null || true; if [ -f {agent} ]; then cp -p {agent} {agent}.prev; else : > {agent}.prev-missing; fi; if [ -f {init} ]; then cp -p {init} {init}.prev; else : > {init}.prev-missing; fi; if [ -f {token} ]; then cp -p {token} {token}.prev; else : > {token}.prev-missing; fi; mv {agent}.new {agent}; mv {staged_init} {init}; mv {token}.new {token}; chmod 755 {agent} {init}; chmod 600 {token}; {init} start; sync; mount -o remount,ro / || true",
+        agent = REMOTE_AGENT,
+        init = REMOTE_INIT,
+        token = REMOTE_TOKEN,
+        staged_init = staged_init,
+    );
+    let output = exec(session, &command, true)?;
+    if output.rc != 0 {
+        rollback_agent(session)?;
+        return Err("MiSTer agent activation failed".into());
+    }
+    Ok(())
+}
+
+fn rollback_agent(session: &ssh2::Session) -> Result<()> {
+    let command = format!(
+        "mount -o remount,rw /; {init} stop 2>/dev/null || true; if [ -f {agent}.prev ]; then mv {agent}.prev {agent}; elif [ -f {agent}.prev-missing ]; then rm -f {agent}; fi; if [ -f {init}.prev ]; then mv {init}.prev {init}; elif [ -f {init}.prev-missing ]; then rm -f {init}; fi; if [ -f {token}.prev ]; then mv {token}.prev {token}; elif [ -f {token}.prev-missing ]; then rm -f {token}; fi; rm -f {agent}.prev-missing {init}.prev-missing {token}.prev-missing; {init} start 2>/dev/null || true; sync; mount -o remount,ro / || true",
+        agent = REMOTE_AGENT,
+        init = REMOTE_INIT,
+        token = REMOTE_TOKEN,
+    );
+    exec(session, &command, true)?;
+    Ok(())
+}
+
+fn cleanup_agent_backup(session: &ssh2::Session) -> Result<()> {
+    let command = format!(
+        "mount -o remount,rw /; rm -f {agent}.prev {init}.prev {token}.prev {agent}.prev-missing {init}.prev-missing {token}.prev-missing; sync; mount -o remount,ro / || true",
+        agent = REMOTE_AGENT,
+        init = REMOTE_INIT,
+        token = REMOTE_TOKEN,
+    );
+    exec(session, &command, true)?;
+    Ok(())
 }
 
 pub(crate) fn agent_request(cmd: &str, args: Value, timeout: Duration) -> Result<AgentResponse> {
@@ -403,5 +618,32 @@ mod tests {
             .to_string();
 
         assert_eq!(error, "deploy remote must be under /media/fat/mister-magik");
+    }
+
+    #[test]
+    fn version_policy_accepts_exact_upgrades_old_and_rejects_newer() {
+        assert_eq!(
+            version_action(
+                agent_protocol::AGENT_VERSION,
+                agent_protocol::PROTOCOL_VERSION
+            ),
+            VersionAction::Current
+        );
+        assert_eq!(version_action(0, 0), VersionAction::Upgrade);
+        assert_eq!(
+            version_action(agent_protocol::AGENT_VERSION + 1, 0),
+            VersionAction::RejectNewer
+        );
+        assert_eq!(
+            version_action(0, agent_protocol::PROTOCOL_VERSION + 1),
+            VersionAction::RejectNewer
+        );
+    }
+
+    #[test]
+    fn managed_tokens_require_256_bits_of_hex() {
+        assert!(valid_token(&"ab".repeat(32)));
+        assert!(!valid_token("short"));
+        assert!(!valid_token(&"zz".repeat(32)));
     }
 }

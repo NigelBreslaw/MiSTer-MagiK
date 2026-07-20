@@ -9,7 +9,6 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$HERE/scripts/lib/magik-layout.sh"
 source "$HERE/scripts/lib/platform-manifest-lib.sh"
 source "$HERE/scripts/lib/latch-readiness-lib.sh"
-export MISTER_IP="${MISTER_IP:-192.168.1.117}"
 export MISTER_PASS="${MISTER_PASS:-1}"
 export RUSTC_WRAPPER=""
 

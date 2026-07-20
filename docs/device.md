@@ -5,7 +5,8 @@ Use `AGENTS.md` for the short checklist.
 
 ## Device Facts
 
-- Host: `192.168.1.117`
+- Host: discovered by `scripts/mister`; the last verified address and MAC are
+  cached outside the worktree
 - SSH: `root` / `1`
 - CPU/OS: ARM Cortex-A9 `armv7l`, minimal Linux, glibc 2.31
 - Hardware: DE10-Nano, 1 GiB DDR3
@@ -137,14 +138,12 @@ its existence is never a readiness signal. The resident agent waits for a
 current Main generation with a ready command channel, writes nonblocking, and
 returns success only after the requested launcher state is observable.
 
-The standalone `mister-magik-agent` may be installed as
-`/etc/init.d/S00magik-agent`. It provides the early Ethernet setup path and a
-token-protected TCP control port on `7498`; see `docs/magik-agent.md`. TCP
-`7497` is reserved for Zaparoo Core. If the agent strands boot networking,
-remove `/etc/init.d/S00magik-agent` from the SD card. If needed, restore the
-parked legacy FastNet script by renaming
-`/etc/init.d/disabled-S00fastnet.magik-agent` back to
-`/etc/init.d/S00fastnet`.
+The standalone `mister-magik-agent` is installed as
+`/etc/init.d/S00magik-agent`. It observes the existing network configuration
+and provides a token-protected TCP control port on `7498`; see
+`docs/magik-agent.md`. It never replaces FastNet or changes Ethernet, Wi-Fi,
+DHCP, or routes. TCP `7497` is reserved for Zaparoo Core. For SD-card recovery,
+remove `/etc/init.d/S00magik-agent`.
 
 Use `scripts/magik-mode.sh dev` to activate the development installation and
 `scripts/magik-mode.sh stock` to restore stock boot. These modes do not

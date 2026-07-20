@@ -16,12 +16,14 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 mod agent_client;
+mod discovery;
 mod media;
 mod remote;
 
 use agent_client::{
     agent_binary_request_bounded, agent_request, agent_request_with_liveness,
-    agent_stream_request_reader, agent_token, verify_agent_deploy_result, AGENT_PORT,
+    agent_stream_request_reader, agent_token, bootstrap_agent, verify_agent_deploy_result,
+    AGENT_PORT,
 };
 use remote::{
     acknowledged_main_command, connect, connect_timed, create_dir_command, exec,
@@ -125,7 +127,16 @@ fn run_cli() -> Result<()> {
         return Ok(());
     }
     let action = args.remove(0);
+    if action_uses_device(&action) {
+        let device = discovery::resolve()?;
+        std::env::set_var("MISTER_IP", device.address.to_string());
+        std::env::set_var("MISTER_DEVICE_ID", &device.id);
+        if std::env::var_os("MISTER_SKIP_AGENT_BOOTSTRAP").is_none() {
+            bootstrap_agent()?;
+        }
+    }
     match action.as_str() {
+        "connected" => println!("connected"),
         "run" => {
             let stream = args.first().map(|s| s.as_str()) == Some("--stream");
             if stream {
@@ -384,8 +395,15 @@ fn run_cli() -> Result<()> {
 
 fn usage() {
     println!(
-        "usage: scripts/mister <run|put|deploy-magik-bin|get|db|library-db|wait|connection-profile|media-check|media-download|media-bench-download|media-cloudflare-check|launcher-restart|boot-net-profile|boot-tcp-profile|agent|watch-reboot|reboot|reboot-wait|status|doctor|boot-capture|display-read|ini-repair-boot|ini-select-main|inittab-ensure-stock|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|mame-metadata-build|recover> ...\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>]\n       launcher-restart [--env KEY=VALUE]... [--clear-env] [--timeout SECS]; agent <ping|status|logs|timeline|diagnostics|framebuffer-capture|deploy-magik-bin|magik|reboot-wait|boot-profile>; reboot/reboot-wait default to supervised MagiK visual-lockdown reboot; pass --raw for detached Linux reboot recovery; pass --direct-reset for fast quiescent dev reboots; --direct-reset-no-sync is experimental"
+        "usage: scripts/mister <connected|run|put|deploy-magik-bin|get|db|library-db|wait|connection-profile|media-check|media-download|media-bench-download|media-cloudflare-check|launcher-restart|boot-net-profile|boot-tcp-profile|agent|watch-reboot|reboot|reboot-wait|status|doctor|boot-capture|display-read|ini-repair-boot|ini-select-main|inittab-ensure-stock|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|mame-metadata-build|recover> ...\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>]\n       launcher-restart [--env KEY=VALUE]... [--clear-env] [--timeout SECS]; agent <ping|status|logs|timeline|diagnostics|framebuffer-capture|deploy-magik-bin|magik|reboot-wait|boot-profile>; reboot/reboot-wait default to supervised MagiK visual-lockdown reboot; pass --raw for detached Linux reboot recovery; pass --direct-reset for fast quiescent dev reboots; --direct-reset-no-sync is experimental"
     );
+}
+
+fn action_uses_device(action: &str) -> bool {
+    !matches!(
+        action,
+        "mame-metadata-build" | "profile-summary" | "-h" | "--help"
+    )
 }
 
 fn take_reboot_mode_flag(args: &mut Vec<String>) -> Result<RebootMode> {

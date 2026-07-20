@@ -13,6 +13,10 @@ transport lives in `remote.rs` and `agent_client.rs`.
 ## Rules
 
 - Keep destructive operations explicit and bounded.
+- The implicit connection bootstrap may transactionally install or upgrade only
+  `mister-magik-agent`, its init hook, and its token. It must verify the new
+  authenticated version and roll back on failure before the requested command
+  runs; no other implicit device mutation is permitted.
 - Device communication must remain behind `scripts/mister`.
 - Preserve direct database-query support; do not assume device `sqlite3`.
 - Never weaken reboot-loop cleanup or timeout policy.

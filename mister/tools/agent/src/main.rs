@@ -9,10 +9,10 @@ use serde_json::{json, Value};
 #[cfg(target_os = "linux")]
 mod scanout_slots_contract;
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(test)]
 use std::io;
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(test)]
 fn parse_mac_text(text: &str) -> io::Result<[u8; 6]> {
     let mut mac = [0u8; 6];
     let mut parts = text.trim().split(':');
@@ -861,12 +861,6 @@ mod linux {
     };
     use super::{parse_control_request, require_ok_main_reply, ControlRequest};
     use flate2::{write::ZlibEncoder, Compression};
-    use libc::{
-        c_char, c_int, c_short, c_ulong, close, if_nametoindex, ifreq, in_addr, ioctl, rtentry,
-        sendto, sockaddr, sockaddr_in, sockaddr_ll, socket, AF_INET, AF_PACKET, IFF_UP, IFNAMSIZ,
-        RTF_GATEWAY, RTF_UP, SIOCADDRT, SIOCGIFFLAGS, SIOCSIFADDR, SIOCSIFFLAGS, SIOCSIFNETMASK,
-        SOCK_DGRAM, SOCK_RAW,
-    };
     use mister_magik_framebuffer_stream::SCHEMA as FRAMEBUFFER_STREAM_SCHEMA;
     use serde_json::{json, Value};
     use sha2::{Digest, Sha256};
@@ -875,8 +869,8 @@ mod linux {
     use std::fs::{self, File, OpenOptions};
     use std::io::{self, BufRead, BufReader, Read, Write};
     use std::mem;
-    use std::net::{Ipv4Addr, Shutdown, TcpListener, TcpStream};
-    use std::os::fd::{AsRawFd, RawFd};
+    use std::net::{Shutdown, TcpListener, TcpStream, UdpSocket};
+    use std::os::fd::AsRawFd;
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -885,9 +879,6 @@ mod linux {
     use std::time::{Duration, Instant};
 
     const IFACE: &str = "eth0";
-    const IP: Ipv4Addr = Ipv4Addr::new(192, 168, 1, 117);
-    const NETMASK: Ipv4Addr = Ipv4Addr::new(255, 255, 255, 0);
-    const GATEWAY: Ipv4Addr = Ipv4Addr::new(192, 168, 1, 1);
     const AGENT_PORT: u16 = mister_magik_agent_protocol::PORT;
     const FRAMEBUFFER_PRODUCER_PORT: u16 = 7499;
     const TOKEN_PATH: &str = "/media/fat/mister-magik-dev/agent.token";
@@ -912,7 +903,6 @@ mod linux {
     const SEQ: &str = "/media/fat/mister-magik-dev/bootlogs/agent.seq";
     const CRASH_DIR: &str = "/media/fat/mister-magik-dev/crashes";
     const LATEST_CRASH_REPORT: &str = "/media/fat/mister-magik-dev/crashes/latest.json";
-    const ETH_P_ARP: u16 = 0x0806;
     const LOG_RING_CAPACITY: usize = 512;
     const TIMELINE_CAPACITY: usize = 128;
     const MAX_DEPLOY_BYTES: u64 = 1024 * 1024 * 1024;
@@ -927,9 +917,7 @@ mod linux {
         match args.first().map(String::as_str).unwrap_or("net-boot") {
             "net-boot" => net_boot(),
             "arp" => {
-                let mut log = Logger::append(LOG, fresh_log_ring())?;
-                send_gratuitous_arp(IFACE, IP, &mut log)?;
-                Ok(())
+                Err("ARP injection was retired; the agent no longer configures networking".into())
             }
             "-h" | "--help" => {
                 eprintln!("usage: mister-magik-agent [net-boot|arp]");
@@ -957,21 +945,13 @@ mod linux {
         start_control_server(boot_id);
 
         for _ in 0..80 {
-            configure_network(IFACE, IP, NETMASK, GATEWAY, &mut log);
-            let _ = send_gratuitous_arp(IFACE, IP, &mut log);
             let carrier = read_trimmed("/sys/class/net/eth0/carrier").unwrap_or_else(|| "?".into());
             let operstate =
                 read_trimmed("/sys/class/net/eth0/operstate").unwrap_or_else(|| "?".into());
-            log.line(format!(
-                "configured carrier={carrier} operstate={operstate}"
-            ));
+            log.line(format!("observed carrier={carrier} operstate={operstate}"));
             if carrier == "1" {
                 timeline_record_once("carrier_up", format!("operstate={operstate}"));
                 log.line(format!("carrier_ready boot={boot_id}"));
-                configure_network(IFACE, IP, NETMASK, GATEWAY, &mut log);
-                for _ in 0..3 {
-                    let _ = send_gratuitous_arp(IFACE, IP, &mut log);
-                }
                 for _ in 0..40 {
                     snapshot(boot_id, &mut log);
                     thread::sleep(Duration::from_secs(1));
@@ -1006,6 +986,7 @@ mod linux {
             })
         }
 
+        #[allow(dead_code)]
         fn append(path: &str, ring: SharedLogRing) -> io::Result<Self> {
             Ok(Self {
                 file: OpenOptions::new().create(true).append(true).open(path)?,
@@ -2123,7 +2104,16 @@ mod linux {
         timeline_record_once("first_command", format!("cmd={cmd}"));
 
         match cmd.as_str() {
-            "ping" => response(id, true, Some(json!({"pong": true})), None),
+            "ping" => response(
+                id,
+                true,
+                Some(json!({
+                    "pong": true,
+                    "agent_version": mister_magik_agent_protocol::AGENT_VERSION,
+                    "protocol_version": mister_magik_agent_protocol::PROTOCOL_VERSION,
+                })),
+                None,
+            ),
             "status" => response(id, true, Some(status_json(boot_id, started)), None),
             "logs" => response(id, true, Some(log_ring_json()), None),
             "timeline" => response(id, true, Some(timeline_json(boot_id, started)), None),
@@ -2184,17 +2174,25 @@ mod linux {
         value.to_string()
     }
 
+    fn local_ipv4() -> Option<String> {
+        let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+        socket.connect("192.0.2.1:9").ok()?;
+        Some(socket.local_addr().ok()?.ip().to_string())
+    }
+
     fn status_json(boot_id: u64, started: Instant) -> Value {
         json!({
             "agent": {
                 "version": env!("CARGO_PKG_VERSION"),
+                "agent_version": mister_magik_agent_protocol::AGENT_VERSION,
+                "protocol_version": mister_magik_agent_protocol::PROTOCOL_VERSION,
                 "boot_id": boot_id,
                 "uptime_ms": started.elapsed().as_millis() as u64,
                 "port": AGENT_PORT,
             },
             "network": {
                 "interface": IFACE,
-                "ip": IP.to_string(),
+                "ip": local_ipv4(),
                 "carrier": read_trimmed("/sys/class/net/eth0/carrier"),
                 "operstate": read_trimmed("/sys/class/net/eth0/operstate"),
                 "mac": read_trimmed("/sys/class/net/eth0/address"),
@@ -3748,160 +3746,6 @@ mod linux {
         }
     }
 
-    fn configure_network(
-        iface: &str,
-        ip: Ipv4Addr,
-        netmask: Ipv4Addr,
-        gateway: Ipv4Addr,
-        log: &mut Logger,
-    ) {
-        match configure_interface(iface, ip, netmask) {
-            Ok(()) => {
-                timeline_record_once("ip_configured", format!("iface={iface} ip={ip}"));
-                log.line(format!("ifconfig_direct ok iface={iface} ip={ip}"));
-            }
-            Err(err) => log.line(format!("ifconfig_direct err={err}")),
-        }
-        match add_default_route(iface, gateway) {
-            Ok(RouteStatus::Added) => log.line(format!("route_direct added gw={gateway}")),
-            Ok(RouteStatus::Exists) => log.line(format!("route_direct exists gw={gateway}")),
-            Err(err) => log.line(format!("route_direct err={err}")),
-        }
-    }
-
-    fn configure_interface(iface: &str, ip: Ipv4Addr, netmask: Ipv4Addr) -> io::Result<()> {
-        let fd = unsafe { socket(AF_INET, SOCK_DGRAM, 0) };
-        if fd < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        let result = (|| {
-            set_ifaddr(fd, iface, SIOCSIFADDR, ip)?;
-            set_ifaddr(fd, iface, SIOCSIFNETMASK, netmask)?;
-            let mut flags_req = new_ifreq(iface)?;
-            cvt_ioctl(unsafe { ioctl(fd, SIOCGIFFLAGS as c_ulong, &mut flags_req) })?;
-            let flags = unsafe { flags_req.ifr_ifru.ifru_flags };
-            flags_req.ifr_ifru.ifru_flags = flags | IFF_UP as c_short;
-            cvt_ioctl(unsafe { ioctl(fd, SIOCSIFFLAGS as c_ulong, &flags_req) })?;
-            Ok(())
-        })();
-        unsafe {
-            close(fd);
-        }
-        result
-    }
-
-    fn set_ifaddr(fd: RawFd, iface: &str, request: c_ulong, addr: Ipv4Addr) -> io::Result<()> {
-        let mut req = new_ifreq(iface)?;
-        req.ifr_ifru.ifru_addr = sockaddr_from_ipv4(addr);
-        cvt_ioctl(unsafe { ioctl(fd, request, &req) })
-    }
-
-    enum RouteStatus {
-        Added,
-        Exists,
-    }
-
-    fn add_default_route(iface: &str, gateway: Ipv4Addr) -> io::Result<RouteStatus> {
-        let fd = unsafe { socket(AF_INET, SOCK_DGRAM, 0) };
-        if fd < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        let dev = CString::new(iface).map_err(|_| {
-            io::Error::new(io::ErrorKind::InvalidInput, "interface contains NUL byte")
-        })?;
-        let mut route: rtentry = unsafe { mem::zeroed() };
-        route.rt_gateway = sockaddr_from_ipv4(gateway);
-        route.rt_dst = sockaddr_from_ipv4(Ipv4Addr::new(0, 0, 0, 0));
-        route.rt_genmask = sockaddr_from_ipv4(Ipv4Addr::new(0, 0, 0, 0));
-        route.rt_flags = RTF_UP | RTF_GATEWAY;
-        route.rt_dev = dev.as_ptr() as *mut c_char;
-
-        let rc = unsafe { ioctl(fd, SIOCADDRT as c_ulong, &route) };
-        let status = if rc == 0 {
-            Ok(RouteStatus::Added)
-        } else {
-            let err = io::Error::last_os_error();
-            if err.raw_os_error() == Some(libc::EEXIST) {
-                Ok(RouteStatus::Exists)
-            } else {
-                Err(err)
-            }
-        };
-        unsafe {
-            close(fd);
-        }
-        status
-    }
-
-    fn send_gratuitous_arp(iface: &str, ip: Ipv4Addr, log: &mut Logger) -> io::Result<()> {
-        let mac = read_mac("/sys/class/net/eth0/address")?;
-        let ifname = CString::new(iface)
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "bad interface name"))?;
-        let ifindex = unsafe { if_nametoindex(ifname.as_ptr()) };
-        if ifindex == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        let fd = unsafe { socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ARP) as c_int) };
-        if fd < 0 {
-            return Err(io::Error::last_os_error());
-        }
-
-        let mut sent = 0;
-        let result = (|| {
-            for opcode in [1u16, 2u16] {
-                let frame = arp_frame(mac, ip, opcode);
-                let mut addr: sockaddr_ll = unsafe { mem::zeroed() };
-                addr.sll_family = AF_PACKET as libc::sa_family_t;
-                addr.sll_protocol = htons(ETH_P_ARP);
-                addr.sll_ifindex = ifindex as c_int;
-                addr.sll_halen = 6;
-                addr.sll_addr[..6].copy_from_slice(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
-                let rc = unsafe {
-                    sendto(
-                        fd,
-                        frame.as_ptr().cast(),
-                        frame.len(),
-                        0,
-                        (&addr as *const sockaddr_ll).cast::<sockaddr>(),
-                        mem::size_of::<sockaddr_ll>() as u32,
-                    )
-                };
-                if rc < 0 {
-                    return Err(io::Error::last_os_error());
-                }
-                sent += 1;
-            }
-            Ok(())
-        })();
-        unsafe {
-            close(fd);
-        }
-        if result.is_ok() {
-            timeline_record_once("raw_arp_sent", format!("iface={iface} ip={ip} sent={sent}"));
-            log.line(format!("gratuitous_arp sent={sent}"));
-        }
-        result
-    }
-
-    fn arp_frame(mac: [u8; 6], ip: Ipv4Addr, opcode: u16) -> [u8; 42] {
-        let mut frame = [0u8; 42];
-        frame[0..6].copy_from_slice(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
-        frame[6..12].copy_from_slice(&mac);
-        frame[12..14].copy_from_slice(&ETH_P_ARP.to_be_bytes());
-        frame[14..16].copy_from_slice(&1u16.to_be_bytes());
-        frame[16..18].copy_from_slice(&0x0800u16.to_be_bytes());
-        frame[18] = 6;
-        frame[19] = 4;
-        frame[20..22].copy_from_slice(&opcode.to_be_bytes());
-        frame[22..28].copy_from_slice(&mac);
-        frame[28..32].copy_from_slice(&ip.octets());
-        if opcode == 2 {
-            frame[32..38].copy_from_slice(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
-        }
-        frame[38..42].copy_from_slice(&ip.octets());
-        frame
-    }
-
     fn snapshot(boot_id: u64, log: &mut Logger) {
         let carrier = read_trimmed("/sys/class/net/eth0/carrier").unwrap_or_else(|| "?".into());
         let operstate = read_trimmed("/sys/class/net/eth0/operstate").unwrap_or_else(|| "?".into());
@@ -4011,47 +3855,6 @@ mod linux {
 
     fn read_trimmed(path: &str) -> Option<String> {
         fs::read_to_string(path).ok().map(|s| s.trim().to_string())
-    }
-
-    fn read_mac(path: &str) -> io::Result<[u8; 6]> {
-        let text = fs::read_to_string(Path::new(path))?;
-        super::parse_mac_text(&text)
-    }
-
-    fn new_ifreq(iface: &str) -> io::Result<ifreq> {
-        let mut req: ifreq = unsafe { mem::zeroed() };
-        let bytes = iface.as_bytes();
-        if bytes.len() >= IFNAMSIZ {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "interface name too long",
-            ));
-        }
-        for (dst, src) in req.ifr_name.iter_mut().zip(bytes.iter()) {
-            *dst = *src as c_char;
-        }
-        Ok(req)
-    }
-
-    fn sockaddr_from_ipv4(ip: Ipv4Addr) -> sockaddr {
-        let mut sin: sockaddr_in = unsafe { mem::zeroed() };
-        sin.sin_family = AF_INET as libc::sa_family_t;
-        sin.sin_addr = in_addr {
-            s_addr: u32::from(ip).to_be(),
-        };
-        unsafe { mem::transmute::<sockaddr_in, sockaddr>(sin) }
-    }
-
-    fn cvt_ioctl(rc: c_int) -> io::Result<()> {
-        if rc == 0 {
-            Ok(())
-        } else {
-            Err(io::Error::last_os_error())
-        }
-    }
-
-    fn htons(value: u16) -> u16 {
-        value.to_be()
     }
 
     fn stamp() -> String {

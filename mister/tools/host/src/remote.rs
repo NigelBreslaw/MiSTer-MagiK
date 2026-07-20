@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use crate::Result;
 
 pub(crate) fn host() -> String {
-    env::var("MISTER_IP").unwrap_or_else(|_| "192.168.1.117".to_string())
+    env::var("MISTER_IP").unwrap_or_else(|_| "MiSTer address was not resolved".to_string())
 }
 
 fn user() -> String {

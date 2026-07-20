@@ -8,9 +8,10 @@ separate from the Slint/MagiK UI binary and is installed as an early init script
 /media/fat/mister-magik-dev/mister-magik-agent
 ```
 
-The agent currently configures the static Ethernet path at boot and exposes a
-token-protected line-delimited JSON control port on TCP `7498`. Zaparoo Core
-uses TCP `7497`, so the MagiK agent must not bind that port.
+The agent observes the MiSTer's existing network configuration and exposes a
+token-protected line-delimited JSON control port on TCP `7498`. It does not
+change DHCP, Wi-Fi, Ethernet, routes, or FastNet. Zaparoo Core uses TCP `7497`,
+so the MagiK agent must not bind that port.
 
 ## Protocol
 
@@ -45,10 +46,10 @@ The token lives on the MiSTer at:
 /media/fat/mister-magik-dev/agent.token
 ```
 
-The install script keeps a local copy for host tooling at:
+Host tooling keeps a per-device copy outside the worktree at:
 
 ```text
-build/mister-agent.token
+~/.config/mister-magik/tokens/<device-id>.token
 ```
 
 Do not commit the token. Host tools also accept `MISTER_AGENT_TOKEN` for
@@ -59,6 +60,7 @@ one-off overrides.
 Use the normal wrapper:
 
 ```bash
+scripts/mister connected
 scripts/mister agent ping
 scripts/mister agent status
 scripts/mister agent logs
@@ -75,6 +77,17 @@ scripts/mister agent reboot-wait --direct-reset --timeout 40
 scripts/mister agent boot-profile 4 --timeout 40
 scripts/mister agent boot-profile 4 --timeout 60 --fail-on-timeout
 ```
+
+The wrapper first probes the last verified address and MAC identity stored in
+`~/.config/mister-magik/device.json`. If that fast path fails it discovers the
+MiSTer on eligible local IPv4 networks. Discovery, addresses, agent upgrades,
+and token reconciliation remain internal to the CLI; `MISTER_IP` is available
+as an explicit human or CI override.
+
+Every device command verifies the authenticated numeric agent and protocol
+versions. A missing or older agent is installed transactionally over SSH and
+verified before the original command continues. A newer incompatible agent is
+not downgraded automatically.
 
 `ping` confirms the authenticated TCP path. `status` returns:
 
@@ -271,10 +284,7 @@ Remove:
 scripts/mister-magik-agent.sh remove
 ```
 
-SD-card recovery if SSH is lost: delete `/etc/init.d/S00magik-agent`. If the
-legacy shell FastNet service is needed, rename
-`/etc/init.d/disabled-S00fastnet.magik-agent` back to
-`/etc/init.d/S00fastnet`.
+SD-card recovery if SSH is lost: delete `/etc/init.d/S00magik-agent`.
 
 ## Timing Interpretation
 
