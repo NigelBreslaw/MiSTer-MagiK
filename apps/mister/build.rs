@@ -7,8 +7,6 @@ fn main() {
     println!("cargo:rerun-if-env-changed=MISTER_MAGIK_VERSION");
     println!("cargo:rerun-if-env-changed=MISTER_MAGIK_BUILD_TIME");
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=src");
-    println!("cargo:rerun-if-changed=ui");
     println!("cargo:rerun-if-changed=Cargo.toml");
     println!("cargo:rerun-if-changed=../../.git/HEAD");
     println!("cargo:rerun-if-changed=../../.git/refs/heads");
