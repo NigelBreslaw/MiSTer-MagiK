@@ -19,6 +19,9 @@
 # Default installs the release-device (A3) binary.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+phase_now_ms() { perl -MTime::HiRes=time -e 'printf "%.0f", time * 1000'; }
+phase_start() { printf 'WORKFLOW_PHASE start group=deploy phase=%s time_ms=%s\n' "$1" "$(phase_now_ms)"; }
+phase_end() { printf 'WORKFLOW_PHASE end group=deploy phase=%s time_ms=%s\n' "$1" "$(phase_now_ms)"; }
 source "$HERE/scripts/lib/bench-context-lib.sh"
 source "$HERE/scripts/lib/magik-layout.sh"
 source "$HERE/scripts/lib/platform-manifest-lib.sh"
@@ -102,32 +105,42 @@ verify_dev_platform_manifest() {
 }
 
 echo "==> Cross-building (armv7 profile=$PROFILE)"
+phase_start build
 "$HERE/apps/mister/build-arm.sh" "${BUILD_FLAG[@]}"
+phase_end build
 
+phase_start local-identity
 LOCAL_BYTES="$(bytes "$BIN")"
 LOCAL_SHA256="$(bench_context_sha256_file "$BIN")"
+phase_end local-identity
 echo "==> Local binary size: $LOCAL_BYTES bytes ($(human_bytes "$LOCAL_BYTES"))"
 
 echo "==> Preflighting development platform manifest"
+phase_start manifest-preflight
 verify_dev_platform_manifest verify-platform
+phase_end manifest-preflight
 
 echo "==> Deploying $BIN -> $REMOTE via $DEPLOY_TRANSPORT"
 DEPLOY_OUTPUT=""
 case "$DEPLOY_TRANSPORT" in
   agent)
+    phase_start transfer-rebind
     DEPLOY_OUTPUT="$(
       MISTER_IP="${MISTER_IP:-192.168.1.117}" \
       MISTER_PASS="${MISTER_PASS:-1}" \
         "$HERE/scripts/mister" agent deploy-magik-bin "$BIN" "$REMOTE"
     )"
+    phase_end transfer-rebind
     ;;
   ssh)
     echo "==> Using explicit SSH/SFTP deploy fallback" >&2
+    phase_start transfer-rebind
     DEPLOY_OUTPUT="$(
       MISTER_IP="${MISTER_IP:-192.168.1.117}" \
       MISTER_PASS="${MISTER_PASS:-1}" \
         "$HERE/scripts/mister" deploy-magik-bin "$BIN" "$REMOTE"
     )"
+    phase_end transfer-rebind
     ;;
   *)
     echo "ERROR: unsupported MISTER_DEPLOY_TRANSPORT=$DEPLOY_TRANSPORT (expected agent or ssh)" >&2
@@ -143,7 +156,9 @@ REMOTE_BYTES="$(
 if [ -n "$REMOTE_BYTES" ]; then
   echo "==> Deployed binary size: $REMOTE_BYTES bytes ($(human_bytes "$REMOTE_BYTES"))"
 fi
+phase_start remote-hash
 REMOTE_SHA256="$(bench_context_remote_sha256 "$HERE/scripts/mister" "$REMOTE" || true)"
+phase_end remote-hash
 REMOTE_SHA256="${REMOTE_SHA256:-missing}"
 BUILT_FEATURES="$(bench_context_binary_features "$BIN")"
 if ! bench_context_require_binary_contract "$BIN" "$REMOTE_SHA256" "$BUILT_FEATURES" "$PROFILE" "$UI_SCOPE" || [[ "$BUILT_FEATURES" == "missing" ]]; then
@@ -157,7 +172,9 @@ fi
 # activation one fail-closed operation. Verify again here because this is the
 # public high-level deploy contract.
 echo "==> Verifying rebound development platform manifest and active latch path"
+phase_start final-manifest-verification
 verify_dev_platform_manifest verify
+phase_end final-manifest-verification
 SOURCE_FIELDS="$(bench_context_source_fields "$HERE")"
 printf 'deploy_identity_tsv\tprofile=%s\tfeatures=%s\tlocal_path=%s\tremote_path=%s\tlocal_sha256=%s\tdeployed_sha256=%s\tvalid=1\t%s\n' \
   "$PROFILE" "$BUILT_FEATURES" "$BIN" "$REMOTE" "$LOCAL_SHA256" "$REMOTE_SHA256" "$SOURCE_FIELDS"

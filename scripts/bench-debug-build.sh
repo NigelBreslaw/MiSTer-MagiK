@@ -379,6 +379,7 @@ run_one() {
         compiling + 0, checking + 0, cargo_runs + 0, container_runs + 0, ffmpeg_runs + 0
     }
   ' "$log"
+  grep '^WORKFLOW_PHASE ' "$log" || true
 
   if [ "$status" -ne 0 ]; then
     echo "ERROR: command failed: $cmd" >&2

@@ -334,8 +334,9 @@ synthetic_index() {
 }
 
 run_git_group() {
-  local idx="$out/git-index"
+  local idx="$out/git-index" copied_idx="$out/git-index-copy"
   synthetic_index scripts/README.md "$idx"
+  cp "$(git rev-parse --git-path index)" "$copied_idx"
   repeat_command git status-current 'git status --short' git git status --short
   repeat_command git diff-working 'git diff' git git diff --no-ext-diff
   repeat_command git diff-cached-real 'git diff --cached' git git diff --cached --no-ext-diff
@@ -343,6 +344,11 @@ run_git_group() {
   repeat_command git diff-cached-synthetic 'GIT_INDEX_FILE git diff --cached' git env GIT_INDEX_FILE="$idx" git diff --cached --no-ext-diff
   repeat_command git discovery-staged 'validate staged-path discovery' git env GIT_INDEX_FILE="$idx" git diff --cached --name-status -z --diff-filter=ACMRD
   repeat_command git discovery-untracked 'validate untracked discovery' git git ls-files --others --exclude-standard -z
+  repeat_command git status-login-shell 'zsh -lic git status --short' git zsh -lic 'git status --short'
+  repeat_command git diff-login-shell 'zsh -lic git diff' git zsh -lic 'git diff --no-ext-diff'
+  repeat_command git status-copied-index 'copied real index git status --short' git env GIT_INDEX_FILE="$copied_idx" git status --short
+  repeat_command git status-no-untracked 'git status --short --untracked-files=no' git git status --short --untracked-files=no
+  repeat_command git status-ignore-submodules 'git status --short --ignore-submodules=all' git git status --short --ignore-submodules=all
 }
 
 scenario_paths() {
@@ -515,6 +521,21 @@ from pathlib import Path
 
 results, out = Path(sys.argv[1]), Path(sys.argv[2])
 rows = list(csv.DictReader(results.open(), delimiter="\t"))
+phase_rows = []
+for row in rows:
+    starts = {}
+    log = Path(row["log_path"])
+    if not log.is_file(): continue
+    for line in log.read_text(errors="replace").splitlines():
+        if not line.startswith("WORKFLOW_PHASE "): continue
+        fields = dict(part.split("=", 1) for part in line.split()[2:] if "=" in part)
+        marker = line.split()[1]
+        key = (fields.get("group", row["group"]), fields.get("phase", "unknown"))
+        if marker == "start": starts[key] = int(fields["time_ms"])
+        elif marker == "end" and key in starts:
+            phase_rows.append({"group": key[0], "scenario": row["scenario"], "sample": row["sample"],
+                               "warmup": row["warmup"], "phase": key[1],
+                               "duration_ms": int(fields["time_ms"]) - starts.pop(key)})
 measured = [r for r in rows if r["warmup"] == "0"]
 groups = defaultdict(list)
 for row in measured:
@@ -577,6 +598,10 @@ analysis = {
     "build_ratios": ratios,
 }
 (out / "summary.json").write_text(json.dumps(analysis, indent=2) + "\n")
+with (out / "phases.tsv").open("w", newline="") as f:
+    fields = ["group", "scenario", "sample", "warmup", "phase", "duration_ms"]
+    writer = csv.DictWriter(f, fields, delimiter="\t")
+    writer.writeheader(); writer.writerows(phase_rows)
 with (out / "summary.tsv").open("w", newline="") as f:
     fields = list(summary[0]) if summary else ["group","scenario"]
     writer = csv.DictWriter(f, fields, delimiter="\t")

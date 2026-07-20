@@ -10,6 +10,10 @@ set -euo pipefail
 cd "$(dirname "$0")"
 . "$PWD/scripts/apple-container-resources.sh"
 
+phase_now_ms() { perl -MTime::HiRes=time -e 'printf "%.0f", time * 1000'; }
+phase_start() { printf 'WORKFLOW_PHASE start group=build phase=%s time_ms=%s\n' "$1" "$(phase_now_ms)"; }
+phase_end() { printf 'WORKFLOW_PHASE end group=build phase=%s time_ms=%s\n' "$1" "$(phase_now_ms)"; }
+
 REPO_ROOT="$(cd "$PWD/../.." && pwd)"
 IMAGE="${MISTER_APPLE_CONTAINER_IMAGE:-mister-magik-cross-armv7:ubuntu20-arm64}"
 TARGET_DIR="${MISTER_APPLE_CONTAINER_TARGET_DIR:-/private/tmp/mister-magik-apple-container-target}"
@@ -236,7 +240,9 @@ echo "==> target triple: $TARGET"
 echo "==> build backend: apple-container"
 echo "==> build CPUs: $CONTAINER_CPUS"
 echo "==> build memory: $CONTAINER_MEMORY"
+phase_start image-lookup
 ensure_image
+phase_end image-lookup
 
 FEATURE_LIST="$(IFS=,; echo "${FEATURES[*]}")"
 BUILD_ARGS=("$COMMAND" --target "$TARGET")
@@ -264,7 +270,9 @@ fi
 
 EXTRA_ENVS=()
 if [ "$LIB_ONLY" -eq 0 ] && [ "$BIN_NAME" = "mister-magik-fb" ]; then
+  phase_start ffmpeg-cache-check
   bash "$PWD/scripts/build-minimal-ffmpeg.sh"
+  phase_end ffmpeg-cache-check
   EXTRA_ENVS+=(
     --env FFMPEG_DIR=/project/apps/mister/target/ffmpeg-minimal/armv7/dist
     --env PKG_CONFIG_PATH=/project/apps/mister/target/ffmpeg-minimal/armv7/dist/lib/pkgconfig
@@ -283,7 +291,9 @@ if [ "$PROFILE" = release-device-profile ]; then
 fi
 
 echo "==> image arch probe"
+phase_start image-arch-probe
 container run --arch arm64 --rm "$IMAGE" uname -m
+phase_end image-arch-probe
 echo "==> container build profile=$PROFILE ui_scope=$UI_SCOPE features=$FEATURE_LIST"
 echo "==> target dir: $TARGET_DIR"
 BUILD_METADATA_ENVS=(
@@ -291,6 +301,7 @@ BUILD_METADATA_ENVS=(
   --env MISTER_MAGIK_VERSION="$MISTER_MAGIK_VERSION"
   --env MISTER_MAGIK_BUILD_TIME="$MISTER_MAGIK_BUILD_TIME"
 )
+phase_start cargo-container
 container run --arch arm64 --rm \
   --cpus "$CONTAINER_CPUS" \
   --memory "$CONTAINER_MEMORY" \
@@ -312,6 +323,7 @@ container run --arch arm64 --rm \
   --workdir /project/apps/mister \
   "$IMAGE" \
   sh -lc 'PATH=/rust/bin:$PATH cargo "$@"' sh "${BUILD_ARGS[@]}"
+phase_end cargo-container
 
 if [ "$COMMAND" = check ]; then
   echo "==> check OK (no binary produced)"
@@ -325,14 +337,20 @@ if [ ! -f "$BIN" ]; then
 fi
 
 MIRROR_BIN="$MIRROR_TARGET_DIR/$TARGET/$PROFILE/$BIN_NAME"
+phase_start artifact-mirror
 mkdir -p "$(dirname "$MIRROR_BIN")"
 cp "$BIN" "$MIRROR_BIN"
 printf '%s\n' "$FEATURE_LIST" >"$MIRROR_BIN.features"
+phase_end artifact-mirror
 source "$PWD/../../scripts/lib/bench-context-lib.sh"
+phase_start build-receipt
 bench_context_write_build_receipt "$MIRROR_BIN" "$REPO_ROOT" "$PROFILE" "$FEATURE_LIST" "$UI_SCOPE"
+phase_end build-receipt
 
 BYTES="$(stat -f%z "$BIN" 2>/dev/null || stat -c%s "$BIN")"
 echo "==> build OK: $BIN"
 echo "==> mirrored binary: $MIRROR_BIN"
 echo "==> binary size: $BYTES bytes"
+phase_start size-record
 "$PWD/scripts/record-binary-size.sh" "$PROFILE" "${FEATURE_LIST:-none}" "$MIRROR_BIN"
+phase_end size-record
