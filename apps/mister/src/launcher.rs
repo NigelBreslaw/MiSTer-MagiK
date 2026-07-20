@@ -150,6 +150,8 @@ pub const ARCADE_SEARCH_KEYS: [ArcadeSearchKey; 43] = [
 
 const LAUNCH_IDLE: u8 = 0;
 const LAUNCH_SENT: u8 = 1;
+const HOME_PREFETCH_MAX_COLLECTIONS: usize = 4;
+const HOME_PREFETCH_MAX_NEIGHBOR_GAMES: usize = 4_000;
 
 static LAUNCH_STATE: AtomicU8 = AtomicU8::new(LAUNCH_IDLE);
 
@@ -254,6 +256,7 @@ pub enum ConfirmAction {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LauncherAction {
+    OpenCollection,
     LaunchGame,
     ExitToMister,
     ResetDatabase,
@@ -731,11 +734,13 @@ pub struct LauncherNav {
     catalog_build_systems: HashSet<String>,
     catalog_build_ready: HashSet<String>,
     catalog_build_failures: HashSet<String>,
+    catalog_hydration_active: HashSet<String>,
     taxonomy: LauncherTaxonomy,
     taxonomy_token: LauncherTaxonomyToken,
     menu_path: Vec<String>,
     menu_memory: HashMap<String, MenuViewportMemory>,
     active_collection_id: Option<String>,
+    active_collection_source: Option<HomeViewState>,
     arcade_exit_locked: bool,
     repeat: RepeatNav,
     home_scroll: HomeScrollState,
@@ -763,6 +768,13 @@ struct GameListMemory {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct MenuViewportMemory {
     selected_item_id: Option<String>,
+    selected: usize,
+    scroll_x: i32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HomeViewState {
+    menu_path: Vec<String>,
     selected: usize,
     scroll_x: i32,
 }
@@ -978,11 +990,13 @@ impl LauncherNav {
             catalog_build_systems: HashSet::new(),
             catalog_build_ready: HashSet::new(),
             catalog_build_failures: HashSet::new(),
+            catalog_hydration_active: HashSet::new(),
             taxonomy: LauncherTaxonomy::default(),
             taxonomy_token: LauncherTaxonomyToken::default(),
             menu_path: vec![ROOT_MENU_ID.to_string()],
             menu_memory: HashMap::new(),
             active_collection_id: None,
+            active_collection_source: None,
             arcade_exit_locked: false,
             repeat: RepeatNav::default(),
             home_scroll: HomeScrollState::default(),
@@ -1121,6 +1135,51 @@ impl LauncherNav {
         self.current_menu_items().len()
     }
 
+    pub fn collection_prefetch_order(&self) -> Vec<String> {
+        if self.screen != Screen::Home || self.settings_focused {
+            return Vec::new();
+        }
+        let items = self.current_menu_items();
+        let Some(selected) = items.get(self.selected) else {
+            return Vec::new();
+        };
+        let mut ordered = match selected.kind {
+            LauncherMenuItemKind::Collection => vec![selected.id.clone()],
+            LauncherMenuItemKind::Menu => self
+                .taxonomy
+                .first_collection_id_below_menu(&selected.id)
+                .into_iter()
+                .collect(),
+        };
+        for distance in 1..items.len() {
+            if ordered.len() >= HOME_PREFETCH_MAX_COLLECTIONS {
+                break;
+            }
+            for index in [
+                self.selected.checked_sub(distance),
+                self.selected.checked_add(distance),
+            ] {
+                let Some(item) = index.and_then(|index| items.get(index)) else {
+                    continue;
+                };
+                match item.kind {
+                    LauncherMenuItemKind::Collection
+                        if item.count <= HOME_PREFETCH_MAX_NEIGHBOR_GAMES =>
+                    {
+                        ordered.push(item.id.clone());
+                    }
+                    LauncherMenuItemKind::Menu => {}
+                    LauncherMenuItemKind::Collection => {}
+                }
+                if ordered.len() >= HOME_PREFETCH_MAX_COLLECTIONS {
+                    break;
+                }
+            }
+        }
+        ordered.dedup();
+        ordered
+    }
+
     #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
     pub fn current_menu_selected_item_id(&self) -> &str {
         self.current_menu_items()
@@ -1167,6 +1226,27 @@ impl LauncherNav {
         self.catalog_build_failures.insert(system_id.to_string());
     }
 
+    pub fn catalog_system_hydration_started(&mut self, system_id: &str) {
+        self.catalog_hydration_active.insert(system_id.to_string());
+    }
+
+    pub fn catalog_system_retry_started(&mut self, system_id: &str) {
+        self.catalog_build_failures.remove(system_id);
+        self.catalog_hydration_active.insert(system_id.to_string());
+    }
+
+    pub fn catalog_system_hydration_finished(&mut self, system_id: &str) {
+        self.catalog_hydration_active.remove(system_id);
+    }
+
+    pub fn catalog_hydration_reset(&mut self) {
+        self.catalog_hydration_active.clear();
+    }
+
+    pub fn catalog_system_has_failed(&self, system_id: &str) -> bool {
+        self.catalog_build_failures.contains(system_id)
+    }
+
     pub fn catalog_build_finished(&mut self, catalog: &ArcadeCatalog) {
         self.catalog_build_active = false;
         self.catalog_build_systems.retain(|system_id| {
@@ -1192,10 +1272,11 @@ impl LauncherNav {
             }
             LauncherMenuItemKind::Collection => {
                 let failed = self.catalog_build_failures.contains(&item.id);
-                let scanning = self.catalog_build_active
+                let scanning = (self.catalog_build_active
                     && self.catalog_build_systems.contains(&item.id)
                     && !self.catalog_build_ready.contains(&item.id)
-                    && !failed;
+                    && !failed)
+                    || self.catalog_hydration_active.contains(&item.id);
                 let available =
                     self.catalog_build_ready.contains(&item.id) || (item.count > 0 && !failed);
                 (scanning, failed, available)
@@ -1354,11 +1435,12 @@ impl LauncherNav {
         self.activate_collection(catalog, collection_id)
     }
 
-    fn activate_collection(&mut self, catalog: &ArcadeCatalog, collection_id: &str) -> bool {
+    pub fn activate_collection(&mut self, catalog: &ArcadeCatalog, collection_id: &str) -> bool {
         let Some(collection) = self.taxonomy.collection(collection_id).cloned() else {
             return false;
         };
         if self.screen == Screen::Home {
+            self.active_collection_source = Some(self.home_view_state());
             self.remember_current_menu_view();
         }
         self.active_collection_id = Some(collection.id.clone());
@@ -1425,6 +1507,30 @@ impl LauncherNav {
         );
     }
 
+    pub fn home_view_state(&self) -> HomeViewState {
+        HomeViewState {
+            menu_path: self.menu_path.clone(),
+            selected: self.selected,
+            scroll_x: self.scroll_x,
+        }
+    }
+
+    fn restore_home_view_state(&mut self, source: HomeViewState) {
+        self.menu_path = self.valid_menu_path_prefix(&source.menu_path);
+        self.selected = source.selected;
+        self.scroll_x = source.scroll_x;
+        self.remember_current_menu_view();
+        self.restore_current_menu_view();
+    }
+
+    pub fn restore_pending_home_view(&mut self, source: HomeViewState) {
+        self.active_collection_id = None;
+        self.active_collection_source = None;
+        self.screen = Screen::Home;
+        self.settings_focused = false;
+        self.restore_home_view_state(source);
+    }
+
     fn restore_current_menu_view(&mut self) {
         let menu_id = self.current_menu_id().to_string();
         let count = self.current_menu_count();
@@ -1485,6 +1591,17 @@ impl LauncherNav {
         }
     }
 
+    pub fn recover_empty_collection_to_home(&mut self) {
+        self.active_collection_id = None;
+        self.screen = Screen::Home;
+        self.settings_focused = false;
+        if let Some(source) = self.active_collection_source.take() {
+            self.restore_home_view_state(source);
+        } else {
+            self.restore_current_menu_view();
+        }
+    }
+
     pub fn set_arcade_exit_locked(&mut self, locked: bool) {
         self.arcade_exit_locked = locked;
     }
@@ -1496,12 +1613,31 @@ impl LauncherNav {
         frame_now: Instant,
         catalog: &ArcadeCatalog,
     ) -> Option<LauncherEvent> {
+        self.handle_input_internal(now, frame_now, catalog, false)
+    }
+
+    pub fn handle_input_with_collection_intents(
+        &mut self,
+        now: &PadState,
+        frame_now: Instant,
+        catalog: &ArcadeCatalog,
+    ) -> Option<LauncherEvent> {
+        self.handle_input_internal(now, frame_now, catalog, true)
+    }
+
+    fn handle_input_internal(
+        &mut self,
+        now: &PadState,
+        frame_now: Instant,
+        catalog: &ArcadeCatalog,
+        emit_collection_intents: bool,
+    ) -> Option<LauncherEvent> {
         self.sync_launcher_taxonomy(catalog);
         let result = if self.confirm_action.is_some() {
             self.handle_confirm(now, frame_now)
         } else {
             match self.screen {
-                Screen::Home => self.handle_home(now, frame_now, catalog),
+                Screen::Home => self.handle_home(now, frame_now, catalog, emit_collection_intents),
                 Screen::Controller => {
                     if rising(now.btn_home, self.prev.btn_home) {
                         self.go_root();
@@ -1530,6 +1666,7 @@ impl LauncherNav {
         now: &PadState,
         frame_now: Instant,
         catalog: &ArcadeCatalog,
+        emit_collection_intents: bool,
     ) -> Option<LauncherEvent> {
         if rising(now.btn_home, self.prev.btn_home) {
             self.go_root();
@@ -1582,7 +1719,15 @@ impl LauncherNav {
                     }
                     LauncherMenuItemKind::Collection => {
                         let (_, _, available) = self.menu_item_catalog_presentation(&item);
-                        if available {
+                        if available
+                            || (emit_collection_intents && self.catalog_system_has_failed(&item.id))
+                        {
+                            if emit_collection_intents {
+                                return Some(LauncherEvent {
+                                    action: LauncherAction::OpenCollection,
+                                    path: Some(item.id),
+                                });
+                            }
                             self.activate_collection(catalog, &item.id);
                         }
                     }
@@ -5687,6 +5832,33 @@ mod tests {
             &catalog,
         );
         assert_eq!(nav.current_menu_id(), ROOT_MENU_ID);
+    }
+
+    #[test]
+    fn collection_intent_keeps_home_unchanged_until_runtime_commits() {
+        let catalog = hierarchy_catalog();
+        let mut nav = LauncherNav::new();
+        nav.sync_launcher_taxonomy(&catalog);
+        assert!(nav.open_menu("menu:consoles"));
+        assert!(nav.open_menu("menu:consoles:nintendo"));
+        nav.selected = nav
+            .current_menu_items()
+            .iter()
+            .position(|item| item.id == "n64")
+            .expect("N64 item");
+
+        let event = nav
+            .handle_input_with_collection_intents(
+                &pad_with(|pad| pad.btn_a = true),
+                Instant::now(),
+                &catalog,
+            )
+            .expect("open collection intent");
+
+        assert_eq!(event.action, LauncherAction::OpenCollection);
+        assert_eq!(event.path.as_deref(), Some("n64"));
+        assert_eq!(nav.screen, Screen::Home);
+        assert_eq!(nav.current_menu_id(), "menu:consoles:nintendo");
     }
 
     #[test]

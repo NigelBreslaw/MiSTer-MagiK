@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::*;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc,
@@ -95,8 +95,23 @@ enum SystemShardJobState {
     Idle,
     Running {
         system_id: String,
+        generation: Option<String>,
         receiver: mpsc::Receiver<CatalogWorkerMessage>,
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum SystemShardPriority {
+    Prefetch,
+    Selected,
+    Urgent,
+}
+
+struct SystemShardRequest {
+    system_id: String,
+    priority: SystemShardPriority,
+    reason: &'static str,
+    requested_at: Instant,
 }
 
 enum MediaJobState {
@@ -112,6 +127,8 @@ pub(super) struct LauncherScheduler {
     search_index_allowed: Arc<AtomicBool>,
     system_shard: SystemShardJobState,
     system_shard_attempted: BTreeSet<String>,
+    system_shard_queue: VecDeque<SystemShardRequest>,
+    system_shard_generation: Option<String>,
     media: MediaJobState,
     launch_handoff: LaunchHandoffSession,
 }
@@ -125,6 +142,8 @@ impl LauncherScheduler {
             search_index_allowed: Arc::new(AtomicBool::new(false)),
             system_shard: SystemShardJobState::Idle,
             system_shard_attempted: BTreeSet::new(),
+            system_shard_queue: VecDeque::new(),
+            system_shard_generation: None,
             media: MediaJobState::Idle,
             launch_handoff: LaunchHandoffSession::from_env(launch_handoff_bench_enabled),
         }
@@ -158,23 +177,108 @@ impl LauncherScheduler {
         self.system_shard_attempted.contains(system_id)
     }
 
+    pub(super) fn request_system_shard(
+        &mut self,
+        system_id: String,
+        priority: SystemShardPriority,
+        reason: &'static str,
+        now: Instant,
+    ) -> bool {
+        if self.system_shard_attempted.contains(&system_id) {
+            if let Some(queued) = self
+                .system_shard_queue
+                .iter_mut()
+                .find(|request| request.system_id == system_id)
+            {
+                if priority > queued.priority {
+                    queued.priority = priority;
+                    queued.reason = reason;
+                    queued.requested_at = now;
+                }
+            }
+            return false;
+        }
+        self.system_shard_attempted.insert(system_id.clone());
+        self.system_shard_queue.push_back(SystemShardRequest {
+            system_id,
+            priority,
+            reason,
+            requested_at: now,
+        });
+        self.start_next_system_shard_load();
+        true
+    }
+
+    pub(super) fn set_system_shard_generation(&mut self, generation: Option<&str>) -> bool {
+        if self.system_shard_generation.as_deref() == generation {
+            return false;
+        }
+        self.system_shard_generation = generation.map(str::to_string);
+        self.system_shard_attempted.clear();
+        self.system_shard_queue.clear();
+        true
+    }
+
+    pub(super) fn retry_system_shard(
+        &mut self,
+        system_id: String,
+        reason: &'static str,
+        now: Instant,
+    ) -> bool {
+        if self.system_shard_loading(&system_id) {
+            return false;
+        }
+        self.system_shard_attempted.remove(&system_id);
+        self.system_shard_queue
+            .retain(|request| request.system_id != system_id);
+        self.request_system_shard(system_id, SystemShardPriority::Urgent, reason, now)
+    }
+
     pub(super) fn start_system_shard_load(&mut self, system_id: String) {
+        let _ = self.request_system_shard(
+            system_id,
+            SystemShardPriority::Urgent,
+            "selected-system",
+            Instant::now(),
+        );
+    }
+
+    fn start_next_system_shard_load(&mut self) {
         if matches!(self.system_shard, SystemShardJobState::Running { .. }) {
             return;
         }
-        if !self.system_shard_attempted.insert(system_id.clone()) {
+        let Some((index, _)) = self
+            .system_shard_queue
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, request)| request.priority)
+        else {
             return;
-        }
+        };
+        let request = self
+            .system_shard_queue
+            .remove(index)
+            .expect("queued shard request");
+        let system_id = request.system_id;
+        crate::ui_logln!(
+            "catalog_system_prefetch_start system={} priority={:?} reason={} queue_wait_us={}",
+            system_id,
+            request.priority,
+            request.reason,
+            request.requested_at.elapsed().as_micros()
+        );
         let worker_system_id = system_id.clone();
         let (tx, rx) = mpsc::channel();
         self.system_shard = SystemShardJobState::Running {
             system_id,
+            generation: self.system_shard_generation.clone(),
             receiver: rx,
         };
         if std::thread::Builder::new()
             .name("catalog-shard-load".to_string())
             .spawn(move || {
                 use mister_magik_catalog::sharded_catalog::CatalogReader;
+                let load_started = Instant::now();
                 mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
                     mister_magik_catalog::runtime_thread::RuntimeThreadRole::CatalogWorker,
                 );
@@ -196,21 +300,38 @@ impl LauncherScheduler {
                     })?;
                     reader.open_system(&parsed)
                 });
+                let navigation_decode_us = load_started.elapsed().as_micros();
                 let message = match result {
                     Ok(system) => CatalogWorkerMessage::SystemShardReady {
-                        system_id: worker_system_id,
+                        system_id: worker_system_id.clone(),
                         games: system.games().to_vec(),
                     },
                     Err(error) => CatalogWorkerMessage::SystemShardFailed {
-                        system_id: worker_system_id,
+                        system_id: worker_system_id.clone(),
                         error: error.to_string(),
                     },
                 };
+                crate::ui_logln!(
+                    "catalog_system_prefetch_finish system={} status={} load_us={}",
+                    worker_system_id,
+                    if matches!(&message, CatalogWorkerMessage::SystemShardReady { .. }) {
+                        "ready"
+                    } else {
+                        "failed"
+                    },
+                    load_started.elapsed().as_micros()
+                );
+                crate::ui_logln!(
+                    "catalog_navigation_decode system={} decode_us={}",
+                    worker_system_id,
+                    navigation_decode_us
+                );
                 let _ = tx.send(message);
             })
             .is_err()
         {
             self.system_shard = SystemShardJobState::Idle;
+            self.start_next_system_shard_load();
         }
     }
 
@@ -325,21 +446,40 @@ impl LauncherScheduler {
         if search_disconnected {
             self.search_index = SearchIndexJobState::Idle;
         }
-        let mut shard_disconnected = false;
-        if let SystemShardJobState::Running { receiver, .. } = &self.system_shard {
+        let mut shard_terminal = false;
+        if let SystemShardJobState::Running {
+            generation,
+            receiver,
+            ..
+        } = &self.system_shard
+        {
+            let generation_is_current = generation == &self.system_shard_generation;
             while out.events.len() < CATALOG_MESSAGES_PER_FRAME {
                 match receiver.try_recv() {
-                    Ok(message) => out.push(message),
+                    Ok(message) => {
+                        shard_terminal = matches!(
+                            message,
+                            CatalogWorkerMessage::SystemShardReady { .. }
+                                | CatalogWorkerMessage::SystemShardFailed { .. }
+                        );
+                        if generation_is_current {
+                            out.push(message);
+                        }
+                        if shard_terminal {
+                            break;
+                        }
+                    }
                     Err(mpsc::TryRecvError::Empty) => break,
                     Err(mpsc::TryRecvError::Disconnected) => {
-                        shard_disconnected = true;
+                        shard_terminal = true;
                         break;
                     }
                 }
             }
         }
-        if shard_disconnected {
+        if shard_terminal {
             self.system_shard = SystemShardJobState::Idle;
+            self.start_next_system_shard_load();
         }
         disconnected
     }
@@ -506,6 +646,159 @@ mod tests {
         assert!(!scheduler.media_worker_running());
         assert!(!scheduler.media_worker_unavailable());
         assert!(!scheduler.launch_benchmark_enabled());
+    }
+
+    #[test]
+    fn system_shard_requests_deduplicate_and_upgrade_priority() {
+        let (_tx, rx) = mpsc::channel();
+        let mut scheduler = LauncherScheduler::new(false);
+        scheduler.system_shard = SystemShardJobState::Running {
+            system_id: "active".to_string(),
+            generation: None,
+            receiver: rx,
+        };
+        let now = Instant::now();
+
+        assert!(scheduler.request_system_shard(
+            "c64".to_string(),
+            SystemShardPriority::Prefetch,
+            "menu",
+            now
+        ));
+        assert!(!scheduler.request_system_shard(
+            "c64".to_string(),
+            SystemShardPriority::Urgent,
+            "open",
+            now
+        ));
+
+        assert_eq!(scheduler.system_shard_queue.len(), 1);
+        assert_eq!(scheduler.system_shard_queue[0].system_id, "c64");
+        assert_eq!(
+            scheduler.system_shard_queue[0].priority,
+            SystemShardPriority::Urgent
+        );
+        assert_eq!(scheduler.system_shard_queue[0].reason, "open");
+    }
+
+    #[test]
+    fn urgent_system_shard_request_ranks_ahead_of_prefetch() {
+        let (_tx, rx) = mpsc::channel();
+        let mut scheduler = LauncherScheduler::new(false);
+        scheduler.system_shard = SystemShardJobState::Running {
+            system_id: "active".to_string(),
+            generation: None,
+            receiver: rx,
+        };
+        let now = Instant::now();
+        assert!(scheduler.request_system_shard(
+            "acornatom".to_string(),
+            SystemShardPriority::Prefetch,
+            "menu",
+            now
+        ));
+        assert!(scheduler.request_system_shard(
+            "c64".to_string(),
+            SystemShardPriority::Urgent,
+            "open",
+            now
+        ));
+
+        let next = scheduler
+            .system_shard_queue
+            .iter()
+            .max_by_key(|request| request.priority)
+            .expect("queued request");
+        assert_eq!(next.system_id, "c64");
+    }
+
+    #[test]
+    fn system_shard_generation_change_clears_attempts_and_speculative_queue() {
+        let (_tx, rx) = mpsc::channel();
+        let mut scheduler = LauncherScheduler::new(false);
+        scheduler.system_shard = SystemShardJobState::Running {
+            system_id: "active".to_string(),
+            generation: None,
+            receiver: rx,
+        };
+        let _ = scheduler.set_system_shard_generation(Some("generation-a"));
+        assert!(scheduler.request_system_shard(
+            "c64".to_string(),
+            SystemShardPriority::Prefetch,
+            "menu",
+            Instant::now()
+        ));
+
+        let _ = scheduler.set_system_shard_generation(Some("generation-b"));
+
+        assert!(scheduler.system_shard_queue.is_empty());
+        assert!(!scheduler.system_shard_attempted("c64"));
+    }
+
+    #[test]
+    fn explicit_retry_requeues_a_failed_attempt_as_urgent() {
+        let (_tx, rx) = mpsc::channel();
+        let mut scheduler = LauncherScheduler::new(false);
+        scheduler.system_shard = SystemShardJobState::Running {
+            system_id: "active".to_string(),
+            generation: None,
+            receiver: rx,
+        };
+        scheduler.system_shard_attempted.insert("c64".to_string());
+
+        assert!(scheduler.retry_system_shard("c64".to_string(), "explicit-retry", Instant::now()));
+        assert_eq!(scheduler.system_shard_queue.len(), 1);
+        assert_eq!(
+            scheduler.system_shard_queue[0].priority,
+            SystemShardPriority::Urgent
+        );
+    }
+
+    #[test]
+    fn stale_generation_shard_completion_is_discarded() {
+        let (tx, rx) = mpsc::channel();
+        let mut scheduler = LauncherScheduler::new(false);
+        scheduler.system_shard_generation = Some("generation-a".to_string());
+        scheduler.system_shard = SystemShardJobState::Running {
+            system_id: "c64".to_string(),
+            generation: Some("generation-a".to_string()),
+            receiver: rx,
+        };
+        let _ = scheduler.set_system_shard_generation(Some("generation-b"));
+        tx.send(CatalogWorkerMessage::SystemShardFailed {
+            system_id: "c64".to_string(),
+            error: "stale".to_string(),
+        })
+        .unwrap();
+        let mut events = CatalogJobEventBuf::new();
+
+        scheduler.poll_catalog(&mut events);
+
+        assert!(events.events.is_empty());
+        assert!(!scheduler.system_shard_loading("c64"));
+    }
+
+    #[test]
+    fn terminal_failure_becomes_idle_before_same_frame_retry() {
+        let (tx, rx) = mpsc::channel();
+        let mut scheduler = LauncherScheduler::new(false);
+        scheduler.system_shard_attempted.insert("c64".to_string());
+        scheduler.system_shard = SystemShardJobState::Running {
+            system_id: "c64".to_string(),
+            generation: None,
+            receiver: rx,
+        };
+        tx.send(CatalogWorkerMessage::SystemShardFailed {
+            system_id: "c64".to_string(),
+            error: "temporary".to_string(),
+        })
+        .unwrap();
+        let mut events = CatalogJobEventBuf::new();
+
+        scheduler.poll_catalog(&mut events);
+
+        assert!(!scheduler.system_shard_loading("c64"));
+        assert!(scheduler.retry_system_shard("c64".to_string(), "explicit-retry", Instant::now()));
     }
 
     #[test]

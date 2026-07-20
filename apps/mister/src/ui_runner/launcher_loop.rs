@@ -218,6 +218,75 @@ struct ArcadeEntryLatencyTracker {
     first_nav_presented: bool,
 }
 
+struct PendingCollectionEntry {
+    collection_id: String,
+    requested_at: Instant,
+    source: launcher::HomeViewState,
+}
+
+fn collection_has_resident_rows(catalog: &ArcadeCatalog, collection_id: &str) -> bool {
+    catalog.system_game_count(collection_id) > 0
+}
+
+fn empty_collection_invariant_violated(catalog: &ArcadeCatalog, nav: &LauncherNav) -> bool {
+    nav.screen == Screen::Arcade
+        && active_system(catalog, nav).is_some_and(|system| {
+            system.count > 0 && !collection_has_resident_rows(catalog, &system.id)
+        })
+}
+
+fn commit_pending_collection_entry(
+    pending: &mut Option<PendingCollectionEntry>,
+    nav: &mut LauncherNav,
+    catalog: &ArcadeCatalog,
+    start: Instant,
+) -> bool {
+    let Some(entry) = pending.as_ref() else {
+        return false;
+    };
+    if !collection_has_resident_rows(catalog, &entry.collection_id) {
+        return false;
+    }
+    let entry = pending.take().expect("pending collection entry");
+    nav.catalog_system_hydration_finished(&entry.collection_id);
+    if !nav.activate_collection(catalog, &entry.collection_id) {
+        return false;
+    }
+    print_startup_event(
+        start,
+        "catalog_system_entry_committed",
+        format!(
+            "system={} resident_rows={} pending_us={}",
+            entry.collection_id,
+            catalog.system_game_count(&entry.collection_id),
+            entry.requested_at.elapsed().as_micros()
+        ),
+    );
+    true
+}
+
+fn cancel_pending_collection_entry_for_input(
+    pending: &mut Option<PendingCollectionEntry>,
+    nav: &mut LauncherNav,
+    now: &PadState,
+    previous: &PadState,
+    start: Instant,
+) -> bool {
+    if !((now.btn_b && !previous.btn_b) || (now.btn_home && !previous.btn_home)) {
+        return false;
+    }
+    let Some(entry) = pending.take() else {
+        return false;
+    };
+    nav.catalog_system_hydration_finished(&entry.collection_id);
+    print_startup_event(
+        start,
+        "catalog_system_entry_cancelled",
+        format!("system={} reason=back-or-home", entry.collection_id),
+    );
+    true
+}
+
 impl ArcadeEntryLatencyTracker {
     fn from_env() -> Self {
         Self {
@@ -233,6 +302,15 @@ impl ArcadeEntryLatencyTracker {
 
     fn input_enabled_ms(lifecycle: &LauncherLifecycle) -> u64 {
         lifecycle.startup_status().input_enabled_ms
+    }
+
+    fn cancel_enter(&mut self) {
+        self.enter_input_at = None;
+        self.enter_presented = false;
+        self.rows_ready = false;
+        self.preview_exact = false;
+        self.first_nav_input_at = None;
+        self.first_nav_presented = false;
     }
 
     fn active_system_id(catalog: &ArcadeCatalog, nav: &LauncherNav) -> String {
@@ -276,6 +354,34 @@ impl ArcadeEntryLatencyTracker {
             "",
             &asset_key,
             "source=launcher_input",
+        );
+    }
+
+    fn record_collection_enter_input(
+        &mut self,
+        start: Instant,
+        at: Instant,
+        lifecycle: &LauncherLifecycle,
+        collection_id: &str,
+    ) {
+        if self.enter_input_at.is_some() {
+            return;
+        }
+        self.enter_input_at = Some(at);
+        self.trace.record(
+            start,
+            "arcade_enter_input",
+            at,
+            None,
+            Self::input_enabled_ms(lifecycle),
+            true,
+            collection_id,
+            0,
+            None,
+            None,
+            "",
+            "",
+            "source=open_collection_intent",
         );
     }
 
@@ -1545,6 +1651,7 @@ pub(super) fn run_launcher_loop(
     let mut catalog_events = CatalogJobEventBuf::new();
     let mut deferred_catalog_events: VecDeque<CatalogWorkerMessage> = VecDeque::new();
     let mut pending_catalog_ready: Option<CatalogWorkerMessage> = None;
+    let mut pending_collection_entry: Option<PendingCollectionEntry> = None;
     let mut catalog_ready_deferred_since: Option<Instant> = None;
     let mut catalog_ready_stationary_edge_since: Option<Instant> = None;
     let mut catalog_background_idle_gate =
@@ -2214,21 +2321,28 @@ pub(super) fn run_launcher_loop(
             catalog_background_allowed,
         );
         scheduler.set_search_index_allowed(catalog_background_allowed);
-        if catalog_ready && nav.screen == Screen::Arcade {
-            if let Some(system_id) = active_system(&catalog, &nav)
-                .map(|system| system.id.clone())
-                .filter(|system_id| {
-                    catalog.system_game_count(system_id) == 0
-                        && catalog
-                            .systems
-                            .iter()
-                            .any(|system| &system.id == system_id && system.count > 0)
-                })
-            {
-                if !scheduler.system_shard_loading(&system_id)
-                    && !scheduler.system_shard_attempted(&system_id)
-                {
-                    scheduler.start_system_shard_load(system_id);
+        if catalog_ready && nav.screen == Screen::Home {
+            for (index, system_id) in nav.collection_prefetch_order().into_iter().enumerate() {
+                if collection_has_resident_rows(&catalog, &system_id) {
+                    continue;
+                }
+                let priority = if index == 0 {
+                    SystemShardPriority::Selected
+                } else {
+                    SystemShardPriority::Prefetch
+                };
+                if scheduler.request_system_shard(
+                    system_id.clone(),
+                    priority,
+                    if index == 0 {
+                        "home-highlight"
+                    } else {
+                        "home-neighbor"
+                    },
+                    loop_start,
+                ) {
+                    nav.catalog_system_hydration_started(&system_id);
+                    full_bridge_dirty = true;
                 }
             }
         }
@@ -2553,6 +2667,28 @@ pub(super) fn run_launcher_loop(
             }
         }
 
+        if commit_pending_collection_entry(&mut pending_collection_entry, &mut nav, &catalog, start)
+        {
+            arcade_entry_latency.record_rows_ready(start, loop_start, &lifecycle, &catalog, &nav);
+            full_bridge_dirty = true;
+            request_launcher_redraw!();
+        } else if pending_collection_entry
+            .as_ref()
+            .is_some_and(|entry| nav.catalog_system_has_failed(&entry.collection_id))
+        {
+            if let Some(entry) = pending_collection_entry.take() {
+                nav.catalog_system_hydration_finished(&entry.collection_id);
+                nav.restore_pending_home_view(entry.source);
+                arcade_entry_latency.cancel_enter();
+                print_startup_event(
+                    start,
+                    "catalog_system_entry_failed",
+                    format!("system={}", entry.collection_id),
+                );
+                full_bridge_dirty = true;
+            }
+        }
+
         if let Some(menu_id) = pending_start_menu.take() {
             if catalog_ready {
                 let before = LauncherBridgeKey::from_nav(&nav);
@@ -2819,6 +2955,15 @@ pub(super) fn run_launcher_loop(
                         lifecycle_view.catalog_recovery_dialog().is_some();
                     let recovery_prev =
                         std::mem::replace(&mut catalog_recovery_prev, nav_state.clone());
+                    if cancel_pending_collection_entry_for_input(
+                        &mut pending_collection_entry,
+                        &mut nav,
+                        &nav_state,
+                        &recovery_prev,
+                        start,
+                    ) {
+                        arcade_entry_latency.cancel_enter();
+                    }
                     let event = if launch_failure_visible {
                         if (nav_state.btn_a && !recovery_prev.btn_a)
                             || (nav_state.btn_b && !recovery_prev.btn_b)
@@ -2880,10 +3025,65 @@ pub(super) fn run_launcher_loop(
                     } else if scheduler.launch_benchmark_enabled() {
                         None
                     } else {
-                        nav.handle_input(&nav_state, frame_now, &catalog)
+                        nav.handle_input_with_collection_intents(&nav_state, frame_now, &catalog)
                     };
                     if let Some(event) = event {
                         match event.action {
+                            LauncherAction::OpenCollection => {
+                                let Some(collection_id) = event.path.as_deref() else {
+                                    continue;
+                                };
+                                if collection_has_resident_rows(&catalog, &collection_id) {
+                                    if nav.activate_collection(&catalog, &collection_id) {
+                                        print_startup_event(
+                                            start,
+                                            "catalog_system_entry_immediate",
+                                            format!(
+                                                "system={collection_id} resident_rows={}",
+                                                catalog.system_game_count(&collection_id)
+                                            ),
+                                        );
+                                        full_bridge_dirty = true;
+                                        request_launcher_redraw!();
+                                    }
+                                } else {
+                                    let requested_at = Instant::now();
+                                    arcade_entry_latency.record_collection_enter_input(
+                                        start,
+                                        requested_at,
+                                        &lifecycle,
+                                        collection_id,
+                                    );
+                                    pending_collection_entry = Some(PendingCollectionEntry {
+                                        collection_id: collection_id.to_string(),
+                                        requested_at,
+                                        source: nav.home_view_state(),
+                                    });
+                                    if nav.catalog_system_has_failed(&collection_id) {
+                                        nav.catalog_system_retry_started(&collection_id);
+                                        let _ = scheduler.retry_system_shard(
+                                            collection_id.to_string(),
+                                            "explicit-retry",
+                                            requested_at,
+                                        );
+                                    } else {
+                                        nav.catalog_system_hydration_started(&collection_id);
+                                        let _ = scheduler.request_system_shard(
+                                            collection_id.to_string(),
+                                            SystemShardPriority::Urgent,
+                                            "open-collection",
+                                            requested_at,
+                                        );
+                                    }
+                                    print_startup_event(
+                                        start,
+                                        "catalog_system_entry_pending",
+                                        format!("system={collection_id}"),
+                                    );
+                                    full_bridge_dirty = true;
+                                    request_launcher_redraw!();
+                                }
+                            }
                             LauncherAction::ExitToMister => {
                                 loading_title = "Exit to MiSTer".to_string();
                                 sync_bridge_launcher(
@@ -3073,77 +3273,100 @@ pub(super) fn run_launcher_loop(
                             }
                             LauncherAction::LaunchGame => {}
                         }
-                        let Some(mra) = event.path else {
-                            continue;
-                        };
-                        if scheduler.launch_is_active() {
-                            continue;
-                        }
-                        let lifecycle_step = lifecycle.handle(
-                            LauncherLifecycleInput::LaunchRequested {
-                                launch_ref: mra.clone(),
-                            },
-                            &mut lifecycle_effects,
-                        );
-                        if !matches!(
-                            lifecycle_step.state,
-                            LauncherLifecycleState::Launching {
-                                phase: LaunchingPhase::LoadingFramePending { ref launch_ref },
-                            } if launch_ref == &mra
-                        ) {
-                            apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
-                            continue;
-                        }
-                        if !scheduler.begin_launch(
-                            &nav,
-                            &catalog,
-                            catalog_generation.durable.as_deref(),
-                            &mra,
-                            Instant::now(),
-                        ) {
-                            lifecycle.handle(
-                                LauncherLifecycleInput::LaunchFailed {
-                                    title: launcher::game_title(&catalog, &mra),
-                                    kind: launcher::LaunchFailureKind::Internal,
-                                    detail: "launch scheduler rejected request".to_string(),
+                        if event.action == LauncherAction::LaunchGame {
+                            let Some(mra) = event.path else {
+                                continue;
+                            };
+                            if scheduler.launch_is_active() {
+                                continue;
+                            }
+                            let lifecycle_step = lifecycle.handle(
+                                LauncherLifecycleInput::LaunchRequested {
+                                    launch_ref: mra.clone(),
                                 },
                                 &mut lifecycle_effects,
                             );
+                            if !matches!(
+                                lifecycle_step.state,
+                                LauncherLifecycleState::Launching {
+                                    phase: LaunchingPhase::LoadingFramePending { ref launch_ref },
+                                } if launch_ref == &mra
+                            ) {
+                                apply_lifecycle_effects(
+                                    &mut lifecycle_effects,
+                                    &mut scheduler,
+                                    start,
+                                );
+                                continue;
+                            }
+                            if !scheduler.begin_launch(
+                                &nav,
+                                &catalog,
+                                catalog_generation.durable.as_deref(),
+                                &mra,
+                                Instant::now(),
+                            ) {
+                                lifecycle.handle(
+                                    LauncherLifecycleInput::LaunchFailed {
+                                        title: launcher::game_title(&catalog, &mra),
+                                        kind: launcher::LaunchFailureKind::Internal,
+                                        detail: "launch scheduler rejected request".to_string(),
+                                    },
+                                    &mut lifecycle_effects,
+                                );
+                                apply_lifecycle_effects(
+                                    &mut lifecycle_effects,
+                                    &mut scheduler,
+                                    start,
+                                );
+                                continue;
+                            }
                             apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
-                            continue;
+                            sync_bridge_launcher(
+                                &app,
+                                &pad,
+                                &nav,
+                                &lifecycle,
+                                &setup,
+                                scheduler.launch_loading_title(),
+                                "",
+                                Some(&catalog),
+                                &mut preview,
+                                &mut bridge_models,
+                                catalog_version,
+                                false,
+                                ui.render_w(),
+                            );
+                            window.request_redraw();
+                            update_slint_animations(animation_clock);
+                            window.draw_if_needed(|renderer| {
+                                let region = target.render(renderer, frame_target_geometry(ui));
+                                let _ = region;
+                            });
+                            let _pace = pacer.wait();
+                            copy_cached_rows_565(
+                                disp,
+                                target.cached_frame_view(),
+                                0,
+                                ui.render_h(),
+                            );
+                            let loading_presented = Instant::now();
+                            lifecycle
+                                .loading_frame_presented(loading_presented, &mut lifecycle_effects);
+                            apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
+                            request_launcher_redraw!();
                         }
-                        apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
-                        sync_bridge_launcher(
-                            &app,
-                            &pad,
-                            &nav,
-                            &lifecycle,
-                            &setup,
-                            scheduler.launch_loading_title(),
-                            "",
-                            Some(&catalog),
-                            &mut preview,
-                            &mut bridge_models,
-                            catalog_version,
-                            false,
-                            ui.render_w(),
-                        );
-                        window.request_redraw();
-                        update_slint_animations(animation_clock);
-                        window.draw_if_needed(|renderer| {
-                            let region = target.render(renderer, frame_target_geometry(ui));
-                            let _ = region;
-                        });
-                        let _pace = pacer.wait();
-                        copy_cached_rows_565(disp, target.cached_frame_view(), 0, ui.render_h());
-                        let loading_presented = Instant::now();
-                        lifecycle
-                            .loading_frame_presented(loading_presented, &mut lifecycle_effects);
-                        apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
-                        request_launcher_redraw!();
                     }
                     let nav_after = LauncherBridgeKey::from_nav(&nav);
                     if nav_before != nav_after {
+                        if let Some(entry) = pending_collection_entry.take() {
+                            nav.catalog_system_hydration_finished(&entry.collection_id);
+                            print_startup_event(
+                                start,
+                                "catalog_system_entry_cancelled",
+                                format!("system={} reason=navigation-changed", entry.collection_id),
+                            );
+                        }
                         media_session.note_nav_change(&nav_before, &nav_after, Instant::now());
                     }
                     if pad_changed && nav.screen == Screen::Controller {
@@ -3214,6 +3437,23 @@ pub(super) fn run_launcher_loop(
                     }
                 }
             }
+        }
+
+        if empty_collection_invariant_violated(&catalog, &nav) {
+            if let Some(system) = active_system(&catalog, &nav) {
+                crate::ui_errln!(
+                    "catalog presentation invariant recovered: system={} registered_rows={} resident_rows=0",
+                    system.id,
+                    system.count
+                );
+                runtime_status::event(
+                    "catalog_empty_list_invariant",
+                    format!("system={} registered_rows={}", system.id, system.count),
+                );
+            }
+            nav.recover_empty_collection_to_home();
+            full_bridge_dirty = true;
+            request_launcher_redraw!();
         }
 
         match launcher_bridge_sync_plan(
@@ -4706,6 +4946,9 @@ fn apply_catalog_session_effects(
                 *return_capsule_active = false;
                 nav.set_arcade_exit_locked(false);
                 catalog_generation.publish(generation_fingerprint, durable);
+                if scheduler.set_system_shard_generation(catalog_generation.current.as_deref()) {
+                    nav.catalog_hydration_reset();
+                }
                 if let Some(publication_ack) = publication_ack {
                     let _ = publication_ack.send(());
                 }
@@ -4753,6 +4996,8 @@ fn apply_catalog_session_effects(
                 *catalog_ready = false;
                 *return_capsule_active = false;
                 *catalog_generation = CatalogGenerationState::default();
+                let _ = scheduler.set_system_shard_generation(None);
+                nav.catalog_hydration_reset();
                 nav.set_arcade_exit_locked(false);
                 nav.sync_launcher_taxonomy(catalog);
                 let bridge = app.global::<slint_ui::launcher::MisterBridge>();
@@ -4831,11 +5076,13 @@ fn apply_catalog_session_effects(
                 *full_bridge_dirty = true;
             }
             CatalogSessionEffect::CatalogSystemReady { system_id } => {
+                nav.catalog_system_hydration_finished(&system_id);
                 nav.catalog_system_ready(&system_id);
                 *catalog_version = (*catalog_version).wrapping_add(1);
                 *full_bridge_dirty = true;
             }
             CatalogSessionEffect::CatalogSystemFailed { system_id } => {
+                nav.catalog_system_hydration_finished(&system_id);
                 nav.catalog_system_failed(&system_id);
                 *catalog = catalog.with_system_placeholder(&system_id);
                 *catalog_version = (*catalog_version).wrapping_add(1);
@@ -5597,6 +5844,103 @@ mod tests {
 
         assert_eq!(nav.screen, Screen::Home);
         assert_eq!(nav.selected, 0);
+    }
+
+    #[test]
+    fn cold_collection_sequence_keeps_home_bridge_until_populated_commit() {
+        let empty = ArcadeCatalog::new(
+            std::path::PathBuf::from(crate::arcade_catalog::DEFAULT_ARCADE_ROOT),
+            Vec::new(),
+            vec![crate::test_support::arcade_system("c64", 1)],
+        );
+        let hydrated = crate::test_support::arcade_catalog(
+            vec![crate::test_support::arcade_game("C64 Game")
+                .system_id("c64")
+                .build()],
+            vec![crate::test_support::arcade_system("c64", 1)],
+        );
+        let mut nav = LauncherNav::new();
+        nav.sync_launcher_taxonomy(&empty);
+        let mut pending = Some(PendingCollectionEntry {
+            collection_id: "c64".to_string(),
+            requested_at: Instant::now(),
+            source: nav.home_view_state(),
+        });
+        let source_bridge = LauncherBridgeKey::from_nav(&nav);
+
+        assert!(!commit_pending_collection_entry(
+            &mut pending,
+            &mut nav,
+            &empty,
+            Instant::now()
+        ));
+        assert_eq!(nav.screen, Screen::Home);
+        assert!(pending.is_some());
+        assert_eq!(LauncherBridgeKey::from_nav(&nav).screen, Screen::Home);
+        assert_eq!(
+            LauncherBridgeKey::from_nav(&nav).menu_id,
+            source_bridge.menu_id
+        );
+
+        assert!(commit_pending_collection_entry(
+            &mut pending,
+            &mut nav,
+            &hydrated,
+            Instant::now()
+        ));
+        assert_eq!(nav.screen, Screen::Arcade);
+        assert!(pending.is_none());
+        assert_eq!(active_system_game_view(&hydrated, &nav).len(), 1);
+        assert!(!empty_collection_invariant_violated(&hydrated, &nav));
+        assert_eq!(LauncherBridgeKey::from_nav(&nav).screen, Screen::Arcade);
+    }
+
+    #[test]
+    fn back_at_home_root_cancels_pending_entry_even_without_navigation_change() {
+        let catalog = ArcadeCatalog::new(
+            std::path::PathBuf::from(crate::arcade_catalog::DEFAULT_ARCADE_ROOT),
+            Vec::new(),
+            vec![crate::test_support::arcade_system("c64", 1)],
+        );
+        let mut nav = LauncherNav::new();
+        nav.sync_launcher_taxonomy(&catalog);
+        nav.catalog_system_hydration_started("c64");
+        let mut pending = Some(PendingCollectionEntry {
+            collection_id: "c64".to_string(),
+            requested_at: Instant::now(),
+            source: nav.home_view_state(),
+        });
+        let mut now = PadState::default();
+        now.btn_b = true;
+
+        assert!(cancel_pending_collection_entry_for_input(
+            &mut pending,
+            &mut nav,
+            &now,
+            &PadState::default(),
+            Instant::now()
+        ));
+        assert!(pending.is_none());
+        assert_eq!(nav.screen, Screen::Home);
+        assert_eq!(
+            nav.current_menu_id(),
+            crate::launcher_taxonomy::ROOT_MENU_ID
+        );
+    }
+
+    #[test]
+    fn populated_collection_with_no_resident_rows_violates_presentation_invariant() {
+        let catalog = ArcadeCatalog::new(
+            std::path::PathBuf::from(crate::arcade_catalog::DEFAULT_ARCADE_ROOT),
+            Vec::new(),
+            vec![crate::test_support::arcade_system("c64", 18_851)],
+        );
+        let mut nav = LauncherNav::new();
+        assert!(nav.open_system(&catalog, "c64"));
+
+        assert!(empty_collection_invariant_violated(&catalog, &nav));
+        nav.recover_empty_collection_to_home();
+        assert!(!empty_collection_invariant_violated(&catalog, &nav));
     }
 
     fn ready_catalog_message() -> CatalogWorkerMessage {

@@ -754,7 +754,7 @@ pub(super) fn slint_menu_items(nav: &LauncherNav) -> Rc<VecModel<slint_ui::launc
                 } else if partial {
                     "Some items failed".into()
                 } else if failed {
-                    "Scan failed".into()
+                    "Load failed — A to retry".into()
                 } else {
                     format!("{} games", item.count).into()
                 },

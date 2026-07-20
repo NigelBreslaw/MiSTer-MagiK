@@ -96,12 +96,18 @@ current build recreates them.
 Warm startup reads the registry first. This supplies system titles, placement,
 ordering, counts, and immutable artifact references without opening every
 system database. Arcade's mini-nav is opened eagerly because it is the first
-visible game collection. Other system shards stay closed until selected.
+visible game collection. Other system shards stay closed until predictive Home
+hydration requests them.
 
-Selecting an unloaded system schedules one bounded background mini-nav load.
-The loaded rows and structured launch plans are merged into the live catalog;
-already loaded systems remain resident. A failed shard load is surfaced once
-and does not retry every frame.
+Home navigation predictively schedules bounded background mini-nav loads for
+the highlighted destination (or the default leaf below a highlighted submenu)
+and a small number of nearby, bounded-size siblings. The sibling count and game
+count limits protect Home frame time and memory on the MiSTer. Loaded rows and
+structured launch plans are merged into the live catalog and remain resident. Activating a collection is atomic: the
+launcher stays on the populated source view until the destination has resident
+rows, then changes screen and publishes those rows in one frame. A failed shard
+load is surfaced once on the destination tile and does not retry every frame;
+pressing A on that tile explicitly retries within the current catalog generation.
 
 The following numbers are deliberately distinct:
 
