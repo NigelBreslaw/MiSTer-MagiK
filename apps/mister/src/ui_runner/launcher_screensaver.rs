@@ -249,6 +249,7 @@ pub(in crate::ui_runner) struct LauncherScreensaver {
 
 impl LauncherScreensaver {
     fn load(w: usize, h: usize, cancelled: &AtomicBool) -> Option<Self> {
+        let load_started = Instant::now();
         let archive_path = screensaver_archive_path(
             std::env::var_os("MISTER_MEDIA_ASSET_DIR").as_deref(),
             DeviceLayout::current(),
@@ -265,6 +266,7 @@ impl LauncherScreensaver {
             }
         };
         let asset_keys = archive.asset_keys().to_vec();
+        let archive_open_us = load_started.elapsed().as_micros();
         crate::ui_logln!(
             "screensaver_loader path={} pack_bytes={} entries={}",
             archive_path.display(),
@@ -275,9 +277,17 @@ impl LauncherScreensaver {
             return None;
         }
         let mut parade = ParadeState::new_with_archive(random_seed(), archive);
+        let cards_started = Instant::now();
         if !parade.ensure_archive_initialized_cancellable(asset_keys, w, h, cancelled) {
             return None;
         }
+        crate::ui_logln!(
+            "screensaver_loader_timing archive_open_us={} initial_cards_us={} total_us={} cards={}",
+            archive_open_us,
+            cards_started.elapsed().as_micros(),
+            load_started.elapsed().as_micros(),
+            parade.tiles.len()
+        );
         Some(Self { parade, frame: 0 })
     }
 
@@ -775,6 +785,16 @@ fn blit_scaled_subpixel_x(
 ) {
     let x = x_fp.div_euclid(PARADE_SUBPIXEL_ONE) as isize;
     let fraction = x_fp.rem_euclid(PARADE_SUBPIXEL_ONE) as u8;
+    let shadow_x = if fraction < 128 { x } else { x + 1 };
+    blit_rounded_shadow(
+        dst,
+        screen_w,
+        screen_h,
+        image,
+        corner_insets,
+        shadow_x,
+        y,
+    );
     if fraction == 0 {
         blit_rounded_card(dst, screen_w, screen_h, image, corner_insets, x, y);
         return;
@@ -831,6 +851,76 @@ fn blit_scaled_subpixel_x(
         snapped_x,
         y,
     );
+}
+
+fn blit_rounded_shadow(
+    dst: &mut [Rgb565Pixel],
+    screen_w: usize,
+    screen_h: usize,
+    image: &SaverImage,
+    corner_insets: &[u8],
+    x: isize,
+    y: isize,
+) {
+    const OFFSET: isize = 2;
+    let shadow = color565(0, 0, 4);
+    for shadow_y in 0..image.h {
+        let dst_y = y + shadow_y as isize + OFFSET;
+        if dst_y < 0 || dst_y >= screen_h as isize {
+            continue;
+        }
+        let shadow_inset = corner_insets.get(shadow_y).copied().unwrap_or(0) as isize;
+        let shadow_x0 = x + OFFSET + shadow_inset;
+        let shadow_x1 = x + OFFSET + image.w as isize - shadow_inset;
+        let card_y = shadow_y as isize + OFFSET;
+        if card_y >= image.h as isize {
+            blend_shadow_span(
+                dst, screen_w, dst_y, shadow_x0, shadow_x1, shadow, 112,
+            );
+            continue;
+        }
+        let card_inset = corner_insets.get(card_y as usize).copied().unwrap_or(0) as isize;
+        let card_x0 = x + card_inset;
+        let card_x1 = x + image.w as isize - card_inset;
+        blend_shadow_span(
+            dst,
+            screen_w,
+            dst_y,
+            shadow_x0,
+            shadow_x1.min(card_x0),
+            shadow,
+            112,
+        );
+        blend_shadow_span(
+            dst,
+            screen_w,
+            dst_y,
+            shadow_x0.max(card_x1),
+            shadow_x1,
+            shadow,
+            112,
+        );
+    }
+}
+
+fn blend_shadow_span(
+    dst: &mut [Rgb565Pixel],
+    screen_w: usize,
+    y: isize,
+    x0: isize,
+    x1: isize,
+    color: Rgb565Pixel,
+    alpha: u8,
+) {
+    let x0 = x0.clamp(0, screen_w as isize) as usize;
+    let x1 = x1.clamp(0, screen_w as isize) as usize;
+    if x1 <= x0 {
+        return;
+    }
+    let row = y as usize * screen_w;
+    for pixel in &mut dst[row + x0..row + x1] {
+        *pixel = blend_565(*pixel, color, alpha);
+    }
 }
 
 fn blit_rounded_card(
@@ -1874,35 +1964,59 @@ fn apply_parade_depth_cues(image: &mut SaverImage, speed: usize) {
         b = (b * (100 - atmosphere) + 10 * atmosphere + 50) / 100;
         *pixel = color565(r as u8, g as u8, b as u8);
     }
-    if depth >= 3 {
-        rim_parade_card(image);
-    }
 }
 
-fn rim_parade_card(image: &mut SaverImage) {
+fn rim_parade_card(image: &mut SaverImage, corner_insets: &[u8]) {
     if image.w == 0 || image.h == 0 {
         return;
     }
     let highlight = color565(210, 225, 255);
     let shadow = color565(0, 0, 8);
-    for x in 0..image.w {
-        image.pixels[x] = blend_565(image.pixels[x], highlight, 20);
-        let bottom = (image.h - 1) * image.stride + x;
-        image.pixels[bottom] = blend_565(image.pixels[bottom], shadow, 36);
-    }
     for y in 0..image.h {
+        let inset = corner_insets.get(y).copied().unwrap_or(0) as usize;
+        let end = image.w.saturating_sub(inset);
+        if inset >= end {
+            continue;
+        }
         let row = y * image.stride;
-        image.pixels[row] = blend_565(image.pixels[row], highlight, 20);
-        let right = row + image.w - 1;
-        image.pixels[right] = blend_565(image.pixels[right], shadow, 36);
+        for (offset, alpha) in [48_u8, 24].into_iter().enumerate() {
+            if inset + offset < end {
+                let left = row + inset + offset;
+                image.pixels[left] = blend_565(image.pixels[left], highlight, alpha);
+            }
+            if end > inset + offset {
+                let right = row + end - 1 - offset;
+                image.pixels[right] = blend_565(image.pixels[right], shadow, alpha + 8);
+            }
+        }
+        let horizontal_cue = if y < 2 {
+            Some((highlight, [40_u8, 20][y]))
+        } else if image.h - 1 - y < 2 {
+            let edge = image.h - 1 - y;
+            Some((shadow, [56_u8, 28][edge]))
+        } else {
+            None
+        };
+        if let Some((color, alpha)) = horizontal_cue {
+            for pixel in &mut image.pixels[row + inset..row + end] {
+                *pixel = blend_565(*pixel, color, alpha);
+            }
+        }
     }
 }
 
-fn prepare_parade_scaled(image: &SaverImage, speed: usize) -> SaverImage {
+fn prepare_parade_scaled(image: &SaverImage, speed: usize) -> (SaverImage, Vec<u8>) {
     let (w, h, tint) = parade_scaled_style(image, speed);
     let mut scaled = scale_lanczos3_rgb565_tinted(image, w, h, tint);
     apply_parade_depth_cues(&mut scaled, speed);
-    scaled
+    let corner_insets = prepare_parade_corner_insets(scaled.w, scaled.h);
+    let depth = speed
+        .saturating_sub(PARADE_MIN_TILE_SPEED)
+        .min(PARADE_SPEED_COUNT - 1);
+    if depth >= 3 {
+        rim_parade_card(&mut scaled, &corner_insets);
+    }
+    (scaled, corner_insets)
 }
 
 fn prepare_parade_corner_insets(width: usize, height: usize) -> Vec<u8> {
@@ -2043,9 +2157,8 @@ impl ParadeState {
                             .map(preview_pixels_to_saver_image),
                     };
                     let card = source.map(|source| {
-                        let scaled = prepare_parade_scaled(&source, job.speed);
+                        let (scaled, corner_insets) = prepare_parade_scaled(&source, job.speed);
                         let half_shifted = prepare_half_shifted(&scaled);
-                        let corner_insets = prepare_parade_corner_insets(scaled.w, scaled.h);
                         PreparedParadeCard {
                             image_idx: job.image_idx,
                             speed: job.speed,
@@ -2271,9 +2384,8 @@ impl ParadeState {
                 let Some(image_idx) = self.next_image_for(tile_idx) else {
                     break;
                 };
-                let scaled = self.scale_image(&images[image_idx], speed);
+                let (scaled, corner_insets) = self.scale_image(&images[image_idx], speed);
                 let half_shifted = prepare_half_shifted(&scaled);
-                let corner_insets = prepare_parade_corner_insets(scaled.w, scaled.h);
                 let frames_until_exit = phase + rank as u64 * interval_frames;
                 let x_fp = w as i64 * PARADE_SUBPIXEL_ONE - frames_until_exit as i64 * velocity_fp;
                 let x = x_fp.div_euclid(PARADE_SUBPIXEL_ONE) as isize;
@@ -2410,9 +2522,8 @@ impl ParadeState {
         let speed = self.tiles[tile_idx].speed;
         if !self.scale_worker_connected {
             if let Some(images) = images {
-                let scaled = self.scale_image(&images[image_idx], speed);
+                let (scaled, corner_insets) = self.scale_image(&images[image_idx], speed);
                 let half_shifted = prepare_half_shifted(&scaled);
-                let corner_insets = prepare_parade_corner_insets(scaled.w, scaled.h);
                 let card = PreparedParadeCard {
                     image_idx,
                     speed,
@@ -2508,9 +2619,8 @@ impl ParadeState {
                 let Some(images) = images else {
                     continue;
                 };
-                let scaled = self.scale_image(&images[image_idx], speed);
+                let (scaled, corner_insets) = self.scale_image(&images[image_idx], speed);
                 let half_shifted = prepare_half_shifted(&scaled);
-                let corner_insets = prepare_parade_corner_insets(scaled.w, scaled.h);
                 self.tiles[tile_idx].pending_image_idx = None;
                 let card = PreparedParadeCard {
                     image_idx,
@@ -2543,14 +2653,14 @@ impl ParadeState {
         }
     }
 
-    fn scale_image(&mut self, image: &SaverImage, speed: usize) -> SaverImage {
+    fn scale_image(&mut self, image: &SaverImage, speed: usize) -> (SaverImage, Vec<u8>) {
         let started = Instant::now();
-        let scaled = prepare_parade_scaled(image, speed);
+        let prepared = prepare_parade_scaled(image, speed);
         let elapsed_us = started.elapsed().as_micros();
         self.scale_count += 1;
         self.scale_total_us += elapsed_us;
         self.scale_max_us = self.scale_max_us.max(elapsed_us);
-        scaled
+        prepared
     }
 
     fn jittered_interval(&mut self, base: u64) -> u64 {

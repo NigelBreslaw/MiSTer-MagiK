@@ -1413,6 +1413,7 @@ struct ScreensaverControl {
     active: bool,
     waiting_for_input_release: bool,
     restore_full_frame: bool,
+    preview_fade_started: Option<Instant>,
 }
 
 impl ScreensaverControl {
@@ -1422,6 +1423,7 @@ impl ScreensaverControl {
             active,
             waiting_for_input_release: false,
             restore_full_frame: false,
+            preview_fade_started: None,
         }
     }
 
@@ -1430,6 +1432,7 @@ impl ScreensaverControl {
             self.restore_full_frame |= self.active;
             self.last_activity = now;
             self.active = false;
+            self.preview_fade_started = None;
         } else if enabled && now.saturating_duration_since(self.last_activity) >= delay {
             self.active = true;
             self.waiting_for_input_release = false;
@@ -1440,6 +1443,7 @@ impl ScreensaverControl {
         self.active = true;
         self.waiting_for_input_release = true;
         self.last_activity = now;
+        self.preview_fade_started = Some(now);
     }
 
     /// Returns true when this input frame is consumed by screensaver control.
@@ -1454,6 +1458,7 @@ impl ScreensaverControl {
             self.active = false;
             self.restore_full_frame = true;
             self.last_activity = now;
+            self.preview_fade_started = None;
             return true;
         }
         if user_activity {
@@ -1464,6 +1469,16 @@ impl ScreensaverControl {
 
     fn take_restore_full_frame(&mut self) -> bool {
         std::mem::take(&mut self.restore_full_frame)
+    }
+
+    fn preview_fade_alpha(&self, now: Instant) -> Option<u8> {
+        const PREVIEW_FADE_DURATION: Duration = Duration::from_millis(200);
+        let started = self.preview_fade_started?;
+        let elapsed = now.saturating_duration_since(started);
+        Some(
+            (elapsed.as_micros().min(PREVIEW_FADE_DURATION.as_micros()) * 255
+                / PREVIEW_FADE_DURATION.as_micros()) as u8,
+        )
     }
 }
 
@@ -3680,7 +3695,21 @@ pub(super) fn run_launcher_loop(
             screensaver_loader = None;
             screensaver_launcher_frame = None;
         }
-        let this_rect = if screensaver.active && screensaver_renderer.is_some() {
+        let screensaver_fade_alpha = screensaver.preview_fade_alpha(Instant::now());
+        if screensaver.active
+            && (screensaver_renderer.is_some() || screensaver_fade_alpha.is_some())
+            && screensaver_launcher_frame.is_none()
+        {
+            screensaver_launcher_frame = Some(layer_target.snapshot_cached());
+        }
+        let this_rect = if screensaver.active
+            && screensaver_fade_alpha.is_some_and(|alpha| alpha < 255)
+        {
+            Some(layer_target.render_screensaver_fade(
+                screensaver_launcher_frame.as_deref().expect("captured above"),
+                screensaver_fade_alpha.expect("checked above"),
+            ))
+        } else if screensaver.active && screensaver_renderer.is_some() {
             if screensaver_launcher_frame.is_none() {
                 screensaver_launcher_frame = Some(layer_target.snapshot_cached());
             }
@@ -3688,6 +3717,11 @@ pub(super) fn run_launcher_loop(
                 layer_target
                     .render_screensaver(screensaver_renderer.as_mut().expect("checked above")),
             )
+        } else if screensaver.active && screensaver_fade_alpha.is_some() {
+            Some(layer_target.render_screensaver_fade(
+                screensaver_launcher_frame.as_deref().expect("captured above"),
+                255,
+            ))
         } else {
             expand_home_pan_dirty_rect(
                 layer_target.render_slint_base(&window),
@@ -6826,6 +6860,15 @@ mod tests {
         let mut saver = ScreensaverControl::new(start, false);
 
         saver.preview(start);
+        assert_eq!(saver.preview_fade_alpha(start), Some(0));
+        assert_eq!(
+            saver.preview_fade_alpha(start + Duration::from_millis(100)),
+            Some(127)
+        );
+        assert_eq!(
+            saver.preview_fade_alpha(start + Duration::from_millis(200)),
+            Some(255)
+        );
         assert!(saver.handle_input(start, true, true));
         assert!(saver.active);
         assert!(saver.handle_input(start + Duration::from_millis(16), false, true));
