@@ -177,6 +177,50 @@ impl Evidence {
         Ok(())
     }
 
+    pub fn record_plan<T: Serialize>(&self, request_id: &str, plan: &T) -> Result<(), String> {
+        let plan = serde_json::to_string(plan).map_err(|error| error.to_string())?;
+        self.connection
+            .execute(
+                "UPDATE requests SET plan_json = ?2 WHERE id = ?1",
+                params![request_id, plan],
+            )
+            .map_err(|error| format!("cannot record plan: {error}"))?;
+        Ok(())
+    }
+
+    pub fn begin_command(
+        &self,
+        request_id: &str,
+        operation_id: &str,
+        program: &str,
+        args: &[String],
+        log_path: Option<&Path>,
+    ) -> Result<i64, String> {
+        let args = serde_json::to_string(args).map_err(|error| error.to_string())?;
+        self.connection.execute("INSERT INTO commands (request_id, operation_id, program, args_json, started_ms, status, log_path) VALUES (?1, ?2, ?3, ?4, ?5, 'running', ?6)", params![request_id, operation_id, program, args, now_ms(), log_path.map(|path| path.display().to_string())]).map_err(|error| format!("cannot record command: {error}"))?;
+        Ok(self.connection.last_insert_rowid())
+    }
+
+    pub fn finish_command(
+        &self,
+        command_id: i64,
+        started_ms: i64,
+        exit_code: i32,
+    ) -> Result<(), String> {
+        let completed = now_ms();
+        let status = if exit_code == 0 { "passed" } else { "failed" };
+        self.connection.execute("UPDATE commands SET completed_ms = ?2, duration_ms = ?3, exit_code = ?4, status = ?5 WHERE id = ?1", params![command_id, completed, completed.saturating_sub(started_ms), exit_code, status]).map_err(|error| format!("cannot record command outcome: {error}"))?;
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn log_path(&self, request_id: &str, operation_id: &str) -> PathBuf {
+        let safe = operation_id.replace(['/', '.'], "-");
+        self.root
+            .join("logs")
+            .join(format!("{request_id}-{safe}.log"))
+    }
+
     pub fn status(&self) -> Result<DatabaseStatus, String> {
         Ok(DatabaseStatus {
             path: self.root.join("agent.sqlite3"),
@@ -257,7 +301,7 @@ impl Evidence {
     }
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()

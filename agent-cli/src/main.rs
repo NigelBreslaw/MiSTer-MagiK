@@ -3,9 +3,12 @@
 
 use agent_cli::cli::{Cli, OutputFormat};
 use agent_cli::evidence::Evidence;
+use agent_cli::executor;
 use agent_cli::model::{Intent, Outcome};
+use agent_cli::planner;
 use agent_cli::progress::{EventKind, Reporter};
 use agent_cli::request::RawRequest;
+use agent_cli::scope;
 use clap::Parser;
 
 fn main() {
@@ -35,12 +38,28 @@ fn main() {
     reporter
         .emit(EventKind::Started, "request", "Accepted request", None)
         .unwrap_or_else(|error| fatal(&error));
-    let outcome = dispatch(&evidence, &intent, output).unwrap_or_else(|error| {
-        reporter
-            .emit(EventKind::Failed, "request", &error, None)
-            .unwrap_or_else(|audit_error| fatal(&audit_error));
-        fatal(&error)
-    });
+    let outcome = match dispatch(
+        &evidence,
+        &raw.id,
+        &repository,
+        &intent,
+        output,
+        &mut reporter,
+    ) {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            reporter
+                .emit(EventKind::Failed, "request", &error, None)
+                .unwrap_or_else(|audit_error| fatal(&audit_error));
+            evidence
+                .finish(&raw.id, Outcome::Failed)
+                .unwrap_or_else(|audit_error| fatal(&audit_error));
+            if output == OutputFormat::Human {
+                eprintln!("agent-cli: {error}");
+            }
+            std::process::exit(1);
+        }
+    };
     reporter
         .emit(
             EventKind::Completed,
@@ -54,8 +73,44 @@ fn main() {
         .unwrap_or_else(|error| fatal(&error));
 }
 
-fn dispatch(evidence: &Evidence, intent: &Intent, output: OutputFormat) -> Result<Outcome, String> {
+fn dispatch(
+    evidence: &Evidence,
+    request_id: &str,
+    repository: &std::path::Path,
+    intent: &Intent,
+    output: OutputFormat,
+    reporter: &mut Reporter<'_>,
+) -> Result<Outcome, String> {
     match intent {
+        Intent::Lint { scope: selected } | Intent::PlanLint { scope: selected } => {
+            let paths = scope::collect(evidence, request_id, repository, selected)?;
+            let plan = planner::lint_plan(intent.clone(), paths);
+            evidence.record_plan(request_id, &plan)?;
+            let summary = if plan.operations.is_empty() {
+                "No lint operations selected".to_owned()
+            } else {
+                format!("Selected {} lint operations", plan.operations.len())
+            };
+            reporter.emit(EventKind::Progress, "plan", &summary, Some(0))?;
+            if matches!(intent, Intent::PlanLint { .. }) {
+                if output == OutputFormat::Human {
+                    for operation in &plan.operations {
+                        println!(
+                            "{}\t{} {}",
+                            operation.id,
+                            operation.program,
+                            operation.args.join(" ")
+                        );
+                    }
+                }
+                return Ok(if plan.operations.is_empty() {
+                    Outcome::NoOp
+                } else {
+                    Outcome::Passed
+                });
+            }
+            return executor::execute(evidence, request_id, repository, &plan, reporter);
+        }
         Intent::DatabaseStatus => {
             let status = evidence.status()?;
             if output == OutputFormat::Human {
