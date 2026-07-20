@@ -60,11 +60,10 @@ impl DirtyRect {
     }
 }
 
-// Current launcher composition is one Slint base layer, up to two cached custom
-// overlays, and one direct arcade-list overlay. Subtracting those rectangles can
-// produce more than 16 fragments in adversarial layouts, so keep enough stack
-// space for the known worst case without heap allocation.
-const DIRTY_RECT_LIST_CAP: usize = 32;
+// The production screensaver can emit up to 240 narrow row bands. Alternating
+// latch buffers may need the previous and current frame together, with room for
+// direct-layer repair fragments. Keep this fixed-size and allocation-free.
+const DIRTY_RECT_LIST_CAP: usize = 512;
 const EMPTY_DIRTY_RECT: DirtyRect = DirtyRect {
     x0: 0,
     y0: 0,
@@ -110,6 +109,10 @@ impl DirtyRectList {
 
     pub fn len(&self) -> usize {
         self.len
+    }
+
+    pub const fn capacity() -> usize {
+        DIRTY_RECT_LIST_CAP
     }
 
     pub fn clear(&mut self) {

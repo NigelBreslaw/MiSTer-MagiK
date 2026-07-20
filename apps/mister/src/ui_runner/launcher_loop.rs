@@ -3941,9 +3941,8 @@ pub(super) fn run_launcher_loop(
             arcade_list_rect,
         );
         let startup_can_present = lifecycle.startup_can_present_frame();
-        let stream_motion_active = stream_motion_before_render
-            || preview_transition_trace.active
-            || screensaver.active;
+        let stream_motion_active =
+            stream_motion_before_render || preview_transition_trace.active || screensaver.active;
         let present_cycle = launcher_presenter.present(
             LauncherPresentFrame {
                 plan: frame_plan,

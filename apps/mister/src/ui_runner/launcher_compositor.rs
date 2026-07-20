@@ -67,10 +67,7 @@ impl<'a> LayerTarget<'a> {
         slint_dirty
     }
 
-    pub(super) fn render_screensaver(
-        &mut self,
-        saver: &mut LauncherScreensaver,
-    ) -> DirtyRectList {
+    pub(super) fn render_screensaver(&mut self, saver: &mut LauncherScreensaver) -> DirtyRectList {
         saver.render(
             self.target.cached_565_mut(),
             self.ui.render_w(),

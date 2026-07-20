@@ -994,6 +994,64 @@ mod tests {
     }
 
     #[test]
+    fn alternating_slots_accumulate_intervening_multi_rect_damage() {
+        let mut state = TwoBufferLatchState::new(WIDTH, HEIGHT);
+        all_writable(&mut state);
+        state.slots[0].base_invalid.clear();
+        state.slots[1].base_invalid.clear();
+        let mut first_damage = DirtyRectList::new();
+        first_damage.push(rect(0, 0, 1, 1));
+        first_damage.push(rect(3, 2, 4, 3));
+        let first = state
+            .plan_next(LauncherFramePlan::new(first_damage, None, None, None, None))
+            .expect("first");
+        state.mark_post_success(first);
+
+        all_writable(&mut state);
+        let second_damage = DirtyRectList::from_one(rect(1, 1, 2, 2));
+        let second = state
+            .plan_next(LauncherFramePlan::new(
+                second_damage,
+                None,
+                None,
+                None,
+                None,
+            ))
+            .expect("second");
+
+        for expected in first_damage.iter().chain(second_damage.iter()) {
+            assert!(second
+                .restore_rects
+                .iter()
+                .any(|actual| actual.contains(expected)));
+        }
+    }
+
+    #[test]
+    fn cached_damage_capacity_overflow_collapses_to_full_restore() {
+        let width = DirtyRectList::capacity() * 2 + 2;
+        let height = 2;
+        let mut state = TwoBufferLatchState::new(width, height);
+        all_writable(&mut state);
+        let slot_index = state.next_slot_index;
+        let mut invalid = DirtyRectList::new();
+        for idx in 0..DirtyRectList::capacity() {
+            assert!(invalid.try_push(rect(idx * 2, 0, idx * 2 + 1, 1)));
+        }
+        state.slot_mut(slot_index).base_invalid = invalid;
+        let input_damage = DirtyRectList::from_one(rect(width - 1, 1, width, 2));
+
+        let plan = state
+            .plan_next(LauncherFramePlan::new(input_damage, None, None, None, None))
+            .expect("overflow recovery plan");
+
+        assert_eq!(
+            plan.restore_rects,
+            DirtyRectList::from_one(rect(0, 0, width, height))
+        );
+    }
+
+    #[test]
     fn fb0_recovery_forces_full_cached_restore_and_both_direct_layers() {
         let preview = rect(1, 0, 3, 2);
         let arcade = rect(0, 1, 2, 3);
