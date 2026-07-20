@@ -1596,11 +1596,11 @@ fn render_scanner(
     }
 }
 
-const PARADE_LAYER_TARGETS: [usize; 5] = [8, 6, 5, 4, 3];
+const PARADE_LAYER_TARGETS: [usize; 5] = [64, 24, 20, 16, 12];
 // Whole-pixel comparison mode needs every depth layer to move each 60 Hz frame
 // and leaves one slower whole-pixel speed for the star field.
 const PARADE_LAYER_SPEEDS: [usize; 5] = [2, 3, 4, 5, 6];
-const PARADE_TILE_COUNT: usize = 26;
+const PARADE_TILE_COUNT: usize = 136;
 const PARADE_MIN_TILE_SPEED: usize = 1;
 const PARADE_SPEED_COUNT: usize = 5;
 const PARADE_PLACEMENT_GAP: isize = 18;
@@ -1646,9 +1646,9 @@ fn parade_depth_style(speed: usize) -> (usize, usize, u8) {
     // Each layer occupies another fifth of the screenshot pack's 320x320
     // maximum. The actual card is fitted inside this box without distortion.
     (
-        320 * speed / PARADE_SPEED_COUNT,
-        320 * speed / PARADE_SPEED_COUNT,
-        [120, 154, 188, 221, 255][depth],
+        160 * speed / PARADE_SPEED_COUNT,
+        160 * speed / PARADE_SPEED_COUNT,
+        [72, 92, 113, 133, 255][depth],
     )
 }
 
