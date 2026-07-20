@@ -75,11 +75,12 @@ strip = true
 panic = "abort"
 
 [profile.release-device]
-# Full MiSTer release: fat LTO + single CGU (A3 bench winner on size; ~5 min clean).
+# Full MiSTer release: fat LTO + two CGUs, preserving global optimization while
+# allowing enough parallel codegen to shorten the final release-build tail.
 # Cortex-A9 tuning is applied by build-arm.sh for every optimized ARM build.
 inherits = "release"
 lto = "fat"
-codegen-units = 1
+codegen-units = 2
 
 [profile.release-device-profile]
 # Profiling build: symbols + frame pointers for pprof flamegraphs on device.

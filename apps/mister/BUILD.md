@@ -4,7 +4,7 @@
 
 | Profile | Command | LTO | CGUs | ARM flags | Clean build (~) | Binary (~) | Use |
 |---------|---------|-----|------|-----------|-----------------|------------|-----|
-| **`release-device`** | `build-arm.sh` or `--device` | fat | 1 | cortex-a9 + neon | ~4 min | ~9.5 MiB current UI | SD card / bench / production |
+| **`release-device`** | `build-arm.sh` or `--device` | fat | 2 | cortex-a9 + neon | ~4 min clean; ~73s measured catalog edit | ~10.5 MiB current UI | SD card / bench / production |
 | **`release`** | `build-arm.sh --fast` | thin | 16 (Cargo default) | cortex-a9 + neon | ~2 min | ~11.3 MB current UI | Optimized daily deploy |
 | **`release-device-profile`** | `build-arm.sh --profile` | fat + debug | 1 | cortex-a9 + neon + frame pointers | ~5 min | ~4 MB | Profiling only (`MISTER_PROFILE`, `MISTER_PPROF`) |
 
