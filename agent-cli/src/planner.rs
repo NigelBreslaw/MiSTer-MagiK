@@ -254,11 +254,14 @@ fn add_path_operations(path: &Path, depth: Depth, out: &mut BTreeMap<String, Ope
                     "test",
                     "--manifest-path",
                     "apps/mister/Cargo.toml",
+                    "--bin",
+                    "mister-magik-fb",
                     "--no-default-features",
                     "--features",
                     "ui",
+                    "launcher_catalog_session::tests",
                 ],
-                "launcher session source → UI binary tests",
+                "launcher session source → focused UI binary tests",
             ));
         } else {
             add(cargo(
@@ -748,7 +751,14 @@ mod tests {
             .find(|operation| operation.id == "app.ui-tests")
             .unwrap();
         assert!(!tests.args.contains(&"--lib".into()));
+        assert!(tests
+            .args
+            .windows(2)
+            .any(|args| args == ["--bin", "mister-magik-fb"]));
         assert!(tests.args.contains(&"ui".into()));
+        assert!(tests
+            .args
+            .contains(&"launcher_catalog_session::tests".into()));
     }
 
     #[test]

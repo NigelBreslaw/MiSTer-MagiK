@@ -87,7 +87,10 @@ fn main() {
 }
 
 fn is_discovery_request(args: &[std::ffi::OsString]) -> bool {
-    args.len() == 2 && matches!(args[1].to_str(), Some("-h" | "--help" | "-V" | "--version"))
+    matches!(
+        args.last().and_then(|arg| arg.to_str()),
+        Some("-h" | "--help")
+    ) || (args.len() == 2 && matches!(args[1].to_str(), Some("-V" | "--version")))
 }
 
 fn dispatch(
