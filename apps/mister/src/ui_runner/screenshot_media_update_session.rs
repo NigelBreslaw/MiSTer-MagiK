@@ -21,14 +21,25 @@ pub(super) struct ScreenshotMediaUpdateEvent {
 pub(super) enum ScreenshotMediaUpdateEffect {
     StartupEvent(ScreenshotMediaUpdateEvent),
     Ui(LauncherWorkerUiIntent),
-    EnsureWorker { mode: &'static str },
-    EnsureSystem { system_id: String },
+    EnsureWorker {
+        mode: &'static str,
+    },
+    EnsureSystem {
+        system_id: String,
+    },
     EnsureCatalogSystems,
     FinishWorker,
     DropWorker,
     MarkWorkerUnavailable,
     ClearPreviewFailures,
-    SetInteractionActive { active: bool, reason: &'static str },
+    ApplyPreviewAvailability {
+        system_id: String,
+        games: Vec<mister_magik_catalog::system_shard::SystemGame>,
+    },
+    SetInteractionActive {
+        active: bool,
+        reason: &'static str,
+    },
 }
 
 #[derive(Default)]
@@ -330,6 +341,10 @@ impl ScreenshotMediaUpdateSession {
                         outcome.changed_rows
                     ),
                 );
+                effects.push(ScreenshotMediaUpdateEffect::ApplyPreviewAvailability {
+                    system_id: outcome.system_id.as_str().to_string(),
+                    games: outcome.games,
+                });
             }
             MediaWorkerMessage::PreviewAvailabilityFailed { system, detail } => {
                 effects.event(
@@ -384,6 +399,9 @@ mod tests {
                 ScreenshotMediaUpdateEffect::DropWorker => "drop-worker",
                 ScreenshotMediaUpdateEffect::MarkWorkerUnavailable => "mark-unavailable",
                 ScreenshotMediaUpdateEffect::ClearPreviewFailures => "clear-preview-failures",
+                ScreenshotMediaUpdateEffect::ApplyPreviewAvailability { .. } => {
+                    "apply-preview-availability"
+                }
                 ScreenshotMediaUpdateEffect::SetInteractionActive { .. } => "set-interaction",
             })
             .collect()
@@ -520,7 +538,10 @@ mod tests {
             false,
             Instant::now(),
         );
-        assert_eq!(effect_names(updated), vec!["event"]);
+        assert_eq!(
+            effect_names(updated),
+            vec!["event", "apply-preview-availability"]
+        );
 
         let failed = session.handle_worker_message(
             MediaWorkerMessage::PreviewAvailabilityFailed {

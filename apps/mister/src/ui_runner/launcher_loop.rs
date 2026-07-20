@@ -1346,6 +1346,47 @@ fn arcade_rows_from_shard(
     (games, launch_plans)
 }
 
+fn arcade_rows_from_persisted_shard(
+    system_id: &str,
+    games: &[mister_magik_catalog::system_shard::SystemGame],
+) -> (
+    Vec<arcade_catalog::ArcadeGameEntry>,
+    Vec<arcade_catalog::StructuredLaunchPlan>,
+) {
+    let mut launch_plans = Vec::new();
+    let games = games
+        .iter()
+        .map(|game| {
+            if let Some(plan) = &game.launch_plan {
+                launch_plans.push(arcade_catalog::StructuredLaunchPlan {
+                    launch_ref: plan.launch_ref.as_str().into(),
+                    title: plan.title.as_str().into(),
+                    system_id: plan.system_id.as_str().into(),
+                    core_path: plan.core_path.as_str().into(),
+                    payload_path: plan.payload_path.as_str().into(),
+                    mount_kind: plan.mount_kind.as_str().into(),
+                    mount_index: plan.mount_index,
+                    delay_secs: plan.delay_secs,
+                });
+            }
+            arcade_catalog::ArcadeGameEntry {
+                title: game.title.as_str().into(),
+                mra_path: game.launch_ref.as_str().into(),
+                preview_archive_path: game.preview_archive_path.as_str().into(),
+                preview_asset_key: game.preview_asset_key.as_str().into(),
+                has_preview: game.has_preview,
+                system_id: system_id.into(),
+                year: game.year,
+                manufacturer: game.manufacturer.as_str().into(),
+                players: game.players,
+                control: game.control.as_str().into(),
+                is_new: game.is_new,
+            }
+        })
+        .collect();
+    (games, launch_plans)
+}
+
 #[cfg(test)]
 fn legacy_summary_seed_needed(capsule_ready: bool, sharded_ready: bool) -> bool {
     !capsule_ready && !sharded_ready
@@ -2238,7 +2279,7 @@ pub(super) fn run_launcher_loop(
                     apply_screenshot_media_update_effects(
                         media_session.pause_for_low_memory(media_benchmark_contention),
                         &app,
-                        &catalog,
+                        &mut catalog,
                         &mut scheduler,
                         Some(&mut preview),
                         &mut full_bridge_dirty,
@@ -2251,7 +2292,7 @@ pub(super) fn run_launcher_loop(
         apply_screenshot_media_update_effects(
             media_session.clear_progress_if_due(loop_start),
             &app,
-            &catalog,
+            &mut catalog,
             &mut scheduler,
             Some(&mut preview),
             &mut full_bridge_dirty,
@@ -2574,7 +2615,7 @@ pub(super) fn run_launcher_loop(
             apply_screenshot_media_update_effects(
                 effects,
                 &app,
-                &catalog,
+                &mut catalog,
                 &mut scheduler,
                 Some(&mut preview),
                 &mut full_bridge_dirty,
@@ -3127,7 +3168,7 @@ pub(super) fn run_launcher_loop(
                                 apply_screenshot_media_update_effects(
                                     media_session.shutdown_for_reset(),
                                     &app,
-                                    &catalog,
+                                    &mut catalog,
                                     &mut scheduler,
                                     Some(&mut preview),
                                     &mut full_bridge_dirty,
@@ -3530,7 +3571,7 @@ pub(super) fn run_launcher_loop(
             apply_screenshot_media_update_effects(
                 media_session.sync_gate(media_gate),
                 &app,
-                &catalog,
+                &mut catalog,
                 &mut scheduler,
                 Some(&mut preview),
                 &mut full_bridge_dirty,
@@ -3539,7 +3580,7 @@ pub(super) fn run_launcher_loop(
             apply_screenshot_media_update_effects(
                 media_session.apply_gate(media_gate),
                 &app,
-                &catalog,
+                &mut catalog,
                 &mut scheduler,
                 Some(&mut preview),
                 &mut full_bridge_dirty,
@@ -3548,7 +3589,7 @@ pub(super) fn run_launcher_loop(
             apply_screenshot_media_update_effects(
                 media_session.sync_gate(media_gate),
                 &app,
-                &catalog,
+                &mut catalog,
                 &mut scheduler,
                 Some(&mut preview),
                 &mut full_bridge_dirty,
@@ -5209,7 +5250,7 @@ fn apply_catalog_session_effects(
 fn apply_screenshot_media_update_effects(
     effects: ScreenshotMediaUpdateEffects,
     app: &slint_ui::launcher::Launcher,
-    catalog: &ArcadeCatalog,
+    catalog: &mut ArcadeCatalog,
     scheduler: &mut LauncherScheduler,
     mut preview: Option<&mut PreviewState>,
     full_bridge_dirty: &mut bool,
@@ -5245,6 +5286,20 @@ fn apply_screenshot_media_update_effects(
                 if let Some(preview) = preview.as_deref_mut() {
                     preview.clear_failed_preview_cache();
                 }
+            }
+            ScreenshotMediaUpdateEffect::ApplyPreviewAvailability { system_id, games } => {
+                let (replacement, launch_plans) =
+                    arcade_rows_from_persisted_shard(&system_id, &games);
+                *catalog = catalog.replacing_system_games(&system_id, replacement, launch_plans);
+                if let Some(preview) = preview.as_deref_mut() {
+                    preview.clear_failed_preview_cache();
+                }
+                *full_bridge_dirty = true;
+                print_startup_event(
+                    start,
+                    "screenshot_media_catalog_live_applied",
+                    format!("system={system_id} games={}", games.len()),
+                );
             }
             ScreenshotMediaUpdateEffect::SetInteractionActive { active, reason } => {
                 scheduler.set_media_interaction_active(active, reason);
