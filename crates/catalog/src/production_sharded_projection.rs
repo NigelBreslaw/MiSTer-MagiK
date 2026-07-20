@@ -11,13 +11,14 @@ use crate::reconciliation_executor::{
     ReconciliationOutcome,
 };
 use crate::shard_registry::{
-    manifest_slots_present, read_latest_manifest_lazy, ManifestSystem, RegistryLimits,
+    manifest_slots_present, read_latest_manifest, read_latest_manifest_lazy, ManifestSystem,
+    RegistryLimits,
 };
 use crate::sharded_catalog::{PlannedSystem, PlannedSystemAction, ReconcilePlan, ReconcileReason};
 use crate::system_shard::{
     open_system_shard, SystemGame, SystemLaunchPlan, SystemShardProjectionStats,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -43,6 +44,147 @@ pub struct ProductionProjectionOutcome {
     pub games: usize,
     pub rebuilt_systems: usize,
     pub removed_systems: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreviewAvailabilityReconciliationOutcome {
+    pub system_id: SystemId,
+    pub previous_generation: u64,
+    pub generation: u64,
+    pub candidate_rows: usize,
+    pub available_rows: usize,
+    pub changed_rows: usize,
+    pub games: Vec<SystemGame>,
+}
+
+pub fn reconcile_production_preview_availability(
+    storage_root: &Path,
+    system_id: &SystemId,
+    pack_path: &Path,
+    limits: RegistryLimits,
+) -> Result<PreviewAvailabilityReconciliationOutcome, ReconciliationError> {
+    let manifest = read_latest_manifest(storage_root, limits)
+        .map_err(|error| ReconciliationError::new("preview-availability", error.to_string()))?;
+    let fingerprint = validate_production_binding(storage_root, manifest.generation)?;
+    let published = manifest
+        .systems
+        .iter()
+        .find(|system| &system.system_id == system_id)
+        .ok_or_else(|| ReconciliationError::new("preview-availability", "system is absent"))?;
+    let loaded = open_system_shard(
+        &storage_root.join(&published.active.sqlite_path),
+        &storage_root.join(&published.active.navigation_path),
+        system_id,
+        published.active.generation,
+        limits.shard,
+    )
+    .map_err(|error| ReconciliationError::new("preview-availability", error.to_string()))?;
+    let stems = crate::preview_worker::preview_archive_sidecar_entry_stems(pack_path)
+        .map_err(|error| ReconciliationError::new("preview-availability", error))?
+        .ok_or_else(|| ReconciliationError::new("preview-availability", "pack index is missing"))?;
+    let entries = stems.entries.into_iter().collect::<HashSet<_>>();
+    let stable_archive_path =
+        crate::preview_worker::preview_archive_path_for_system(system_id.as_str());
+    let mut games = loaded.games;
+    let mut candidate_rows = 0;
+    let mut available_rows = 0;
+    let mut changed_rows = 0;
+    for game in &mut games {
+        if game.preview_asset_key.is_empty() {
+            continue;
+        }
+        candidate_rows += 1;
+        let available = entries.contains(&game.preview_asset_key.to_ascii_lowercase());
+        available_rows += usize::from(available);
+        let archive_path = if available {
+            stable_archive_path.as_str()
+        } else {
+            ""
+        };
+        if game.has_preview != available || game.preview_archive_path != archive_path {
+            game.has_preview = available;
+            game.preview_archive_path = archive_path.to_string();
+            changed_rows += 1;
+        }
+    }
+    if changed_rows == 0 {
+        return Ok(PreviewAvailabilityReconciliationOutcome {
+            system_id: system_id.clone(),
+            previous_generation: manifest.generation,
+            generation: manifest.generation,
+            candidate_rows,
+            available_rows,
+            changed_rows,
+            games,
+        });
+    }
+    let materialized = MaterializedSystem {
+        system_id: system_id.clone(),
+        display_title: published.display_title.clone(),
+        section: published.section.clone(),
+        family: published.family.clone(),
+        order: published.order,
+        producers: published.producers.clone(),
+        projection_stats: loaded.projection_stats,
+        games: games.clone(),
+    };
+    let next_generation = manifest
+        .generation
+        .checked_add(1)
+        .ok_or_else(|| ReconciliationError::new("preview-availability", "generation overflow"))?;
+    let plan = ReconcilePlan {
+        current_generation: Some(manifest.generation),
+        intended_generation: next_generation,
+        scan_units: Vec::new(),
+        systems: vec![PlannedSystem {
+            system_id: system_id.clone(),
+            action: PlannedSystemAction::Rebuild,
+            reasons: vec![ReconcileReason::MetadataChanged],
+        }],
+        global_rebuild: false,
+        manifest_only: false,
+    };
+    let mut materializer = PreviewAvailabilityMaterializer(Some(materialized));
+    execute_reconciliation(storage_root, &plan, limits, &mut materializer)?;
+    write_binding(
+        storage_root,
+        &CatalogBinding {
+            schema_version: BINDING_SCHEMA_VERSION,
+            projection_contract: PROJECTION_CONTRACT.to_string(),
+            manifest_generation: next_generation,
+            catalog_fingerprint: fingerprint,
+        },
+    )?;
+    Ok(PreviewAvailabilityReconciliationOutcome {
+        system_id: system_id.clone(),
+        previous_generation: manifest.generation,
+        generation: next_generation,
+        candidate_rows,
+        available_rows,
+        changed_rows,
+        games,
+    })
+}
+
+struct PreviewAvailabilityMaterializer(Option<MaterializedSystem>);
+
+impl ReconciliationMaterializer for PreviewAvailabilityMaterializer {
+    fn materialize(
+        &mut self,
+        system_id: &SystemId,
+        _generation: u64,
+    ) -> Result<MaterializedSystem, ReconciliationError> {
+        self.0
+            .take()
+            .filter(|system| &system.system_id == system_id)
+            .ok_or_else(|| {
+                ReconciliationError::new("preview-availability", "materializer mismatch")
+            })
+    }
+
+    fn commit_facts(&mut self) -> Result<(), ReconciliationError> {
+        Ok(())
+    }
 }
 
 pub fn production_registry_limits() -> RegistryLimits {
@@ -630,6 +772,138 @@ mod tests {
         assert!(validate_production_binding(&storage, outcome.generation).is_err());
         assert!(!root.join("library.sqlite3").exists());
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn preview_availability_reconciliation_publishes_once_and_repairs_bound_shard() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-preview-availability-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let state = fixture_state();
+        let fingerprint = state.stamp.fingerprint_hex();
+        let mut present = game("Present", "/arcade/present.mra", "arcade");
+        present.preview_asset_key = "present".into();
+        let mut absent = game("Absent", "/arcade/absent.mra", "arcade");
+        absent.preview_asset_key = "absent".into();
+        let catalog = ArcadeCatalog::new(
+            PathBuf::from("/fixture"),
+            vec![present, absent],
+            vec![GameSystemEntry {
+                id: "arcade".to_string(),
+                title: "Arcade".to_string(),
+                count: 2,
+            }],
+        );
+        publish_bound_production_projection(&root, &catalog, &fingerprint, limits()).unwrap();
+        crate::catalog_state::write(&crate::catalog_state::path_for_root(&root), &state).unwrap();
+        let pack = root.join("arcade-pack.mmlz4b");
+        write_preview_sidecar_index(&pack, &["present.rgb565"]);
+
+        let repaired = reconcile_production_preview_availability(
+            &root,
+            &SystemId::parse("arcade").unwrap(),
+            &pack,
+            limits(),
+        )
+        .unwrap();
+
+        assert_eq!(repaired.previous_generation, 1);
+        assert_eq!(repaired.generation, 2);
+        assert_eq!(repaired.candidate_rows, 2);
+        assert_eq!(repaired.available_rows, 1);
+        assert_eq!(repaired.changed_rows, 1);
+        validate_production_binding(&root, 2).unwrap();
+        let reader = LazyShardedCatalogReader::open(&root, limits()).unwrap();
+        let system = reader
+            .open_system(&SystemId::parse("arcade").unwrap())
+            .unwrap();
+        assert!(system.games()[0].has_preview);
+        assert!(system.games()[0]
+            .preview_archive_path
+            .ends_with("/arcade-screenshots.mmlz4b"));
+        assert!(!system.games()[1].has_preview);
+
+        let unchanged = reconcile_production_preview_availability(
+            &root,
+            &SystemId::parse("arcade").unwrap(),
+            &pack,
+            limits(),
+        )
+        .unwrap();
+        assert_eq!(unchanged.generation, 2);
+        assert_eq!(unchanged.changed_rows, 0);
+        assert_eq!(read_latest_manifest(&root, limits()).unwrap().generation, 2);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn preview_availability_reconciliation_rejects_missing_index_without_publication() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-preview-availability-missing-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let state = fixture_state();
+        let fingerprint = state.stamp.fingerprint_hex();
+        let catalog = two_system_catalog("Super Game");
+        publish_bound_production_projection(&root, &catalog, &fingerprint, limits()).unwrap();
+        crate::catalog_state::write(&crate::catalog_state::path_for_root(&root), &state).unwrap();
+        let pack = root.join("missing-index.mmlz4b");
+        fs::write(&pack, b"pack").unwrap();
+
+        assert!(reconcile_production_preview_availability(
+            &root,
+            &SystemId::parse("snes").unwrap(),
+            &pack,
+            limits(),
+        )
+        .is_err());
+        assert_eq!(read_latest_manifest(&root, limits()).unwrap().generation, 1);
+        validate_production_binding(&root, 1).unwrap();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn fixture_state() -> crate::catalog_state::CatalogState {
+        crate::catalog_state::CatalogState {
+            stamp: crate::catalog_stamp::CatalogStamp::from_lines(vec!["fixture".to_string()]),
+            checkpoint: crate::catalog_checkpoint::CatalogDiscoveryCheckpoint::from_lines(vec![
+                "fixture".to_string(),
+            ]),
+            stats: crate::catalog_state::CatalogStateStats {
+                discoveries: 1,
+                ..crate::catalog_state::CatalogStateStats::default()
+            },
+        }
+    }
+
+    fn write_preview_sidecar_index(pack: &Path, names: &[&str]) {
+        fs::write(pack, b"pack").unwrap();
+        let mut index = Vec::new();
+        index.extend_from_slice(b"MMIDX02\0");
+        index.extend_from_slice(&4u64.to_le_bytes());
+        index
+            .extend_from_slice(b"0000000000000000000000000000000000000000000000000000000000000000");
+        index.extend_from_slice(&(names.len() as u32).to_le_bytes());
+        for name in names {
+            index.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            index.extend_from_slice(&1u32.to_le_bytes());
+            index.extend_from_slice(&1u32.to_le_bytes());
+            index.extend_from_slice(&2u32.to_le_bytes());
+            index.extend_from_slice(&2u32.to_le_bytes());
+            index.push(1);
+            index.extend_from_slice(&2u32.to_le_bytes());
+            index.extend_from_slice(&0u64.to_le_bytes());
+            index.extend_from_slice(name.as_bytes());
+        }
+        fs::write(
+            crate::preview_worker::preview_archive_sidecar_path_for_archive(pack),
+            index,
+        )
+        .unwrap();
     }
 
     fn game(title: &str, path: &str, system_id: &str) -> ArcadeGameEntry {
