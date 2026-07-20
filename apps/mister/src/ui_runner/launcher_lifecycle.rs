@@ -115,7 +115,11 @@ pub(super) enum LaunchingPhase {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum RecoveryReason {
-    LaunchFailed(String),
+    LaunchFailed {
+        title: String,
+        kind: launcher::LaunchFailureKind,
+        detail: String,
+    },
     LaunchTimedOut,
 }
 
@@ -312,8 +316,11 @@ pub(super) enum LauncherLifecycleInput {
         launch_ref: String,
     },
     LaunchFailed {
-        message: String,
+        title: String,
+        kind: launcher::LaunchFailureKind,
+        detail: String,
     },
+    LaunchFailureAcknowledge,
     LaunchSucceeded {
         spawned_mister: bool,
     },
@@ -338,6 +345,12 @@ pub(super) struct CatalogRecoveryDialog {
     pub(super) selected: CatalogRecoveryChoice,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct LaunchFailureDialog {
+    pub(super) title: String,
+    pub(super) message: &'static str,
+}
+
 impl LauncherView {
     pub(super) fn catalog_recovery_dialog(&self) -> Option<CatalogRecoveryDialog> {
         match &self.state {
@@ -349,6 +362,39 @@ impl LauncherView {
             }),
             _ => None,
         }
+    }
+
+    pub(super) fn launch_failure_dialog(&self) -> Option<LaunchFailureDialog> {
+        let (title, kind) = match &self.state {
+            LauncherLifecycleState::Recovered {
+                reason: RecoveryReason::LaunchFailed { title, kind, .. },
+            } => (title.as_str(), *kind),
+            LauncherLifecycleState::Recovered {
+                reason: RecoveryReason::LaunchTimedOut,
+            } => ("This game", launcher::LaunchFailureKind::HandoffRejected),
+            _ => return None,
+        };
+        let message = match kind {
+            launcher::LaunchFailureKind::UnreadablePayload => {
+                "The game file could not be read. Check that the storage is connected and the file still exists."
+            }
+            launcher::LaunchFailureKind::DamagedArchive => {
+                "The archive is damaged or unsupported. Replace it with a valid ZIP file and try again."
+            }
+            launcher::LaunchFailureKind::MissingCore => {
+                "The required core is not installed. Update or reinstall the system core, then try again."
+            }
+            launcher::LaunchFailureKind::HandoffRejected => {
+                "MiSTer did not accept the launch request. Return to the list and try again."
+            }
+            launcher::LaunchFailureKind::Internal => {
+                "The launch could not be prepared. Return to the list and choose the game again."
+            }
+        };
+        Some(LaunchFailureDialog {
+            title: format!("Couldn't launch {title}"),
+            message,
+        })
     }
 }
 
@@ -870,15 +916,33 @@ impl LauncherLifecycle {
                     );
                 }
             }
-            LauncherLifecycleInput::LaunchFailed { message } => {
+            LauncherLifecycleInput::LaunchFailed {
+                title,
+                kind,
+                detail,
+            } => {
                 if matches!(self.state, LauncherLifecycleState::Launching { .. }) {
                     out.push(LauncherEffect::PresentRecoveryFrame);
                     self.transition(
                         LauncherLifecycleState::Recovered {
-                            reason: RecoveryReason::LaunchFailed(message),
+                            reason: RecoveryReason::LaunchFailed {
+                                title,
+                                kind,
+                                detail,
+                            },
                         },
                         out,
                         "launch_failed",
+                    );
+                }
+            }
+            LauncherLifecycleInput::LaunchFailureAcknowledge => {
+                if matches!(self.state, LauncherLifecycleState::Recovered { .. }) {
+                    out.push(LauncherEffect::ReturnToIdle);
+                    self.transition(
+                        LauncherLifecycleState::Idle,
+                        out,
+                        "launch_failure_acknowledged",
                     );
                 }
             }
@@ -945,16 +1009,7 @@ impl LauncherLifecycle {
         );
     }
 
-    pub(super) fn recovery_frame_presented(&mut self, _at: Instant, out: &mut LifecycleEffects) {
-        if matches!(self.state, LauncherLifecycleState::Recovered { .. }) {
-            out.push(LauncherEffect::ReturnToIdle);
-            self.transition(
-                LauncherLifecycleState::Idle,
-                out,
-                "recovery_frame_presented",
-            );
-        }
-    }
+    pub(super) fn recovery_frame_presented(&mut self, _at: Instant, _out: &mut LifecycleEffects) {}
 
     pub(super) fn state(&self) -> &LauncherLifecycleState {
         &self.state
@@ -1598,7 +1653,9 @@ mod tests {
             &mut lifecycle,
             &mut effects,
             LauncherLifecycleInput::LaunchFailed {
-                message: "late failure".to_string(),
+                title: "Test".to_string(),
+                kind: launcher::LaunchFailureKind::Internal,
+                detail: "late failure".to_string(),
             },
         );
         assert_input_ignored(
@@ -1637,7 +1694,9 @@ mod tests {
             &mut lifecycle,
             &mut effects,
             LauncherLifecycleInput::LaunchFailed {
-                message: "late failure".to_string(),
+                title: "Test".to_string(),
+                kind: launcher::LaunchFailureKind::Internal,
+                detail: "late failure".to_string(),
             },
         );
         assert_input_ignored(
@@ -1666,7 +1725,9 @@ mod tests {
         lifecycle.loading_frame_presented(Instant::now(), &mut effects);
         lifecycle.handle(
             LauncherLifecycleInput::LaunchFailed {
-                message: "missing file".to_string(),
+                title: "Test".to_string(),
+                kind: launcher::LaunchFailureKind::UnreadablePayload,
+                detail: "missing file".to_string(),
             },
             &mut effects,
         );
@@ -1732,7 +1793,7 @@ mod tests {
     }
 
     #[test]
-    fn launch_failure_recovers_only_after_recovery_frame_presented() {
+    fn launch_failure_remains_visible_until_acknowledged() {
         let (mut lifecycle, mut effects) = idle_lifecycle();
         lifecycle.handle(
             LauncherLifecycleInput::LaunchRequested {
@@ -1745,7 +1806,9 @@ mod tests {
 
         lifecycle.handle(
             LauncherLifecycleInput::LaunchFailed {
-                message: "missing file".to_string(),
+                title: "Test".to_string(),
+                kind: launcher::LaunchFailureKind::UnreadablePayload,
+                detail: "missing file".to_string(),
             },
             &mut effects,
         );
@@ -1753,7 +1816,7 @@ mod tests {
         assert!(matches!(
             lifecycle.state(),
             LauncherLifecycleState::Recovered {
-                reason: RecoveryReason::LaunchFailed(_)
+                reason: RecoveryReason::LaunchFailed { .. }
             }
         ));
         assert!(matches!(
@@ -1764,11 +1827,62 @@ mod tests {
         effects.clear();
         lifecycle.recovery_frame_presented(Instant::now(), &mut effects);
 
+        assert!(matches!(
+            lifecycle.state(),
+            LauncherLifecycleState::Recovered { .. }
+        ));
+        assert!(effects.as_slice().is_empty());
+        let dialog = lifecycle
+            .view()
+            .launch_failure_dialog()
+            .expect("failure dialog");
+        assert_eq!(dialog.title, "Couldn't launch Test");
+        assert!(dialog.message.contains("game file could not be read"));
+
+        lifecycle.handle(
+            LauncherLifecycleInput::LaunchFailureAcknowledge,
+            &mut effects,
+        );
         assert_eq!(lifecycle.state(), &LauncherLifecycleState::Idle);
         assert!(matches!(
             effects.as_slice().first(),
             Some(LauncherEffect::ReturnToIdle)
         ));
+    }
+
+    #[test]
+    fn launch_failure_kinds_map_to_helpful_non_technical_copy() {
+        for (kind, expected) in [
+            (
+                launcher::LaunchFailureKind::UnreadablePayload,
+                "game file could not be read",
+            ),
+            (
+                launcher::LaunchFailureKind::DamagedArchive,
+                "archive is damaged or unsupported",
+            ),
+            (
+                launcher::LaunchFailureKind::MissingCore,
+                "required core is not installed",
+            ),
+            (
+                launcher::LaunchFailureKind::HandoffRejected,
+                "MiSTer did not accept",
+            ),
+        ] {
+            let view = LauncherView {
+                state: LauncherLifecycleState::Recovered {
+                    reason: RecoveryReason::LaunchFailed {
+                        title: "Game".to_string(),
+                        kind,
+                        detail: "/technical/path".to_string(),
+                    },
+                },
+            };
+            let dialog = view.launch_failure_dialog().expect("failure dialog");
+            assert!(dialog.message.contains(expected));
+            assert!(!dialog.message.contains("/technical/path"));
+        }
     }
 
     #[test]

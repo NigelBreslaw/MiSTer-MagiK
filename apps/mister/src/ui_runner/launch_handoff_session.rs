@@ -16,6 +16,7 @@ struct LaunchWorkerResult {
 
 #[derive(Debug)]
 struct PendingLaunch {
+    title: String,
     rx: mpsc::Receiver<LaunchWorkerResult>,
     action_start: Instant,
     loading_presented: Instant,
@@ -43,6 +44,7 @@ impl PendingLaunch {
 
 #[derive(Debug)]
 struct StagedLaunch {
+    title: String,
     launch_ref: String,
     launch_target: LaunchTarget,
     action_start: Instant,
@@ -59,8 +61,13 @@ pub(super) enum LaunchHandoffRuntimeAction {
 
 #[derive(Debug)]
 pub(super) enum LaunchHandoffCompletion {
-    Success { benchmark_terminal: bool },
-    Failure { error: launcher::LaunchError },
+    Success {
+        benchmark_terminal: bool,
+    },
+    Failure {
+        title: String,
+        error: launcher::LaunchError,
+    },
 }
 
 #[derive(Debug)]
@@ -266,7 +273,8 @@ impl LaunchHandoffSession {
         }
 
         let launch_target = catalog.launch_target_for_ref(launch_ref);
-        self.loading_title = format!("Loading {}…", launcher::game_title(catalog, launch_ref));
+        let title = launcher::game_title(catalog, launch_ref);
+        self.loading_title = format!("Loading {title}…");
         let bench_iteration = self.bench.begin_launch();
         let return_state = if bench_iteration.is_some() {
             None
@@ -290,6 +298,7 @@ impl LaunchHandoffSession {
             }
         });
         self.staged = Some(StagedLaunch {
+            title,
             launch_ref: launch_ref.to_string(),
             launch_target,
             action_start: now,
@@ -331,6 +340,7 @@ impl LaunchHandoffSession {
             bench_mode: self.bench.mode,
         });
         self.pending = Some(PendingLaunch {
+            title: staged.title,
             rx,
             action_start: staged.action_start,
             loading_presented,
@@ -399,7 +409,10 @@ impl LaunchHandoffSession {
                         handoff_wait_us: bench.handoff_us,
                     });
                 }
-                Some(LaunchHandoffCompletion::Failure { error })
+                Some(LaunchHandoffCompletion::Failure {
+                    title: pending.title,
+                    error,
+                })
             }
         }
     }
@@ -482,7 +495,7 @@ fn spawn_launch_worker(request: LaunchWorkerRequest) -> mpsc::Receiver<LaunchWor
                     bench: None,
                 },
                 Err(error) => {
-                    let result = Err(launcher::LaunchError::preparation(error.to_string()));
+                    let result = Err(launcher::LaunchError::preparation(error));
                     let bench =
                         request
                             .bench_iteration

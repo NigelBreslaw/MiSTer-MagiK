@@ -166,21 +166,56 @@ fn arcade_scroll_speed_div() -> i32 {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchError {
+    kind: LaunchFailureKind,
     message: String,
     spawned_mister: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaunchFailureKind {
+    UnreadablePayload,
+    DamagedArchive,
+    MissingCore,
+    HandoffRejected,
+    Internal,
 }
 
 impl LaunchError {
     fn new(message: impl Into<String>, spawned_mister: bool) -> Self {
         Self {
+            kind: LaunchFailureKind::HandoffRejected,
             message: message.into(),
             spawned_mister,
         }
     }
 
     #[cfg(feature = "ui")]
-    pub fn preparation(message: impl Into<String>) -> Self {
-        Self::new(message, false)
+    pub fn preparation(error: crate::launch_preparation::LaunchPreparationError) -> Self {
+        let kind = match error.kind {
+            crate::launch_preparation::LaunchPreparationFailureKind::MissingPayload
+            | crate::launch_preparation::LaunchPreparationFailureKind::UnreadablePayload => {
+                LaunchFailureKind::UnreadablePayload
+            }
+            crate::launch_preparation::LaunchPreparationFailureKind::DamagedArchive
+            | crate::launch_preparation::LaunchPreparationFailureKind::UnsupportedArchive
+            | crate::launch_preparation::LaunchPreparationFailureKind::OversizedArchiveMember => {
+                LaunchFailureKind::DamagedArchive
+            }
+        };
+        Self {
+            kind,
+            message: error.detail,
+            spawned_mister: false,
+        }
+    }
+
+    pub fn kind(&self) -> LaunchFailureKind {
+        self.kind
+    }
+
+    fn with_kind(mut self, kind: LaunchFailureKind) -> Self {
+        self.kind = kind;
+        self
     }
 
     pub fn spawned_mister(&self) -> bool {
@@ -3819,10 +3854,10 @@ fn execute_game_launch_with(
     }
     if let LaunchTarget::Path(path) = launch_target {
         if !io.target_exists(path) {
-            return Err(LaunchError::new(
-                format!("launch target not found: {path}"),
-                false,
-            ));
+            return Err(
+                LaunchError::new(format!("launch target not found: {path}"), false)
+                    .with_kind(LaunchFailureKind::UnreadablePayload),
+            );
         }
     }
 

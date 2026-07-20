@@ -316,6 +316,30 @@ fn sync_launcher_confirm_bridge(
     nav: &LauncherNav,
     lifecycle: &LauncherLifecycle,
 ) {
+    if let Some(dialog) = lifecycle.view().launch_failure_dialog() {
+        set_bridge_if_changed!(bridge, get_confirm_visible, set_confirm_visible, true);
+        set_bridge_if_changed!(bridge, get_confirm_selected, set_confirm_selected, 0);
+        set_bridge_string_if_changed!(
+            bridge,
+            get_confirm_title,
+            set_confirm_title,
+            dialog.title.as_str()
+        );
+        set_bridge_string_if_changed!(
+            bridge,
+            get_confirm_message,
+            set_confirm_message,
+            dialog.message
+        );
+        set_bridge_string_if_changed!(
+            bridge,
+            get_confirm_left_label,
+            set_confirm_left_label,
+            "Back"
+        );
+        set_bridge_string_if_changed!(bridge, get_confirm_right_label, set_confirm_right_label, "");
+        return;
+    }
     if let Some(dialog) = lifecycle.view().catalog_recovery_dialog() {
         set_bridge_if_changed!(bridge, get_confirm_visible, set_confirm_visible, true);
         set_bridge_if_changed!(

@@ -2485,17 +2485,16 @@ pub(super) fn run_launcher_loop(
                     lifecycle.handle(input, &mut lifecycle_effects);
                     apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
                 }
-                LaunchHandoffCompletion::Failure { error } => {
+                LaunchHandoffCompletion::Failure { title, error } => {
                     lifecycle.handle(
                         LauncherLifecycleInput::LaunchFailed {
-                            message: error.to_string(),
+                            title,
+                            kind: error.kind(),
+                            detail: error.to_string(),
                         },
                         &mut lifecycle_effects,
                     );
                     apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
-                    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                    LauncherStatusPresenter::new(&bridge)
-                        .sync_loading("Launch failed", "Returning to launcher...");
                     if scheduler.stop_spawned_mister_for_recovery() {
                         if let Err(e) = display_session.recover_after_launch_failure(frames, f) {
                             crate::ui_errln!(
@@ -2503,6 +2502,21 @@ pub(super) fn run_launcher_loop(
                             );
                         }
                     }
+                    sync_bridge_launcher(
+                        &app,
+                        &pad,
+                        &nav,
+                        &lifecycle,
+                        &setup,
+                        "",
+                        "",
+                        Some(&catalog),
+                        &mut preview,
+                        &mut bridge_models,
+                        catalog_version,
+                        false,
+                        ui.render_w(),
+                    );
                     update_slint_animations(animation_clock);
                     let mut recovery_rect = None;
                     window.draw_if_needed(|renderer| {
@@ -2519,8 +2533,6 @@ pub(super) fn run_launcher_loop(
                     scheduler.finish_launch_failure_recovery(recovery_presented);
                     lifecycle.recovery_frame_presented(recovery_presented, &mut lifecycle_effects);
                     apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
-                    LauncherStatusPresenter::new(&bridge)
-                        .sync_loading(scheduler.launch_loading_title(), "");
                     crate::ui_errln!("game launch failed: {error}");
                 }
             }
@@ -2801,11 +2813,26 @@ pub(super) fn run_launcher_loop(
                     if let Some(script_state) = launcher_input_script.input_for() {
                         nav_state = script_state;
                     }
+                    let lifecycle_view = lifecycle.view();
+                    let launch_failure_visible = lifecycle_view.launch_failure_dialog().is_some();
                     let recovery_dialog_visible =
-                        lifecycle.view().catalog_recovery_dialog().is_some();
+                        lifecycle_view.catalog_recovery_dialog().is_some();
                     let recovery_prev =
                         std::mem::replace(&mut catalog_recovery_prev, nav_state.clone());
-                    let event = if recovery_dialog_visible {
+                    let event = if launch_failure_visible {
+                        if (nav_state.btn_a && !recovery_prev.btn_a)
+                            || (nav_state.btn_b && !recovery_prev.btn_b)
+                            || (nav_state.btn_home && !recovery_prev.btn_home)
+                        {
+                            lifecycle.handle(
+                                LauncherLifecycleInput::LaunchFailureAcknowledge,
+                                &mut lifecycle_effects,
+                            );
+                            apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
+                            full_bridge_dirty = true;
+                        }
+                        None
+                    } else if recovery_dialog_visible {
                         let recovery_input = if nav_state.dpad_left && !recovery_prev.dpad_left {
                             Some(LauncherLifecycleInput::CatalogRecoveryLeft)
                         } else if nav_state.dpad_right && !recovery_prev.dpad_right {
@@ -3076,7 +3103,9 @@ pub(super) fn run_launcher_loop(
                         ) {
                             lifecycle.handle(
                                 LauncherLifecycleInput::LaunchFailed {
-                                    message: "launch scheduler rejected request".to_string(),
+                                    title: launcher::game_title(&catalog, &mra),
+                                    kind: launcher::LaunchFailureKind::Internal,
+                                    detail: "launch scheduler rejected request".to_string(),
                                 },
                                 &mut lifecycle_effects,
                             );
