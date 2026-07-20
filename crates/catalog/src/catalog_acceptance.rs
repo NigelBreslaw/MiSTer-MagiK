@@ -6,7 +6,6 @@
 use crate::catalog_classify::{platform_kind_for_system, PlatformKind};
 use crate::catalog_config;
 use crate::sharded_catalog::CatalogReader;
-use std::collections::HashSet;
 
 pub fn inspect_production_catalog() -> Result<String, String> {
     inspect_catalog(&catalog_config::default_sharded_catalog_path())
@@ -138,14 +137,7 @@ fn validate_visible_system_rows(
     system_id: &crate::catalog_classify::SystemId,
     games: &[crate::system_shard::SystemGame],
 ) -> Result<(), String> {
-    let mut family_keys = HashSet::new();
     for game in games {
-        let family = crate::catalog_projection::canonical_variant_title(&game.title);
-        if !family.is_empty() && !family_keys.insert(family.clone()) {
-            return Err(format!(
-                "V3 system {system_id} contains duplicate visible family key {family}"
-            ));
-        }
         let Some(plan) = game.launch_plan.as_ref() else {
             continue;
         };
@@ -189,7 +181,7 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn visible_row_validation_rejects_duplicates_core_mismatches_and_unreadable_payloads() {
+    fn visible_row_validation_rejects_core_mismatches_and_unreadable_payloads() {
         let system_id = crate::catalog_classify::SystemId::parse("atari2600").expect("system");
         let game = crate::system_shard::SystemGame {
             stable_key: "acid-drop".to_string(),
@@ -216,12 +208,27 @@ mod tests {
         let error = validate_visible_system_rows(&system_id, &[unreadable.clone()])
             .expect_err("unreadable payload");
         assert!(error.contains("payload is unreadable"));
+    }
 
-        let mut duplicate = unreadable;
-        duplicate.launch_plan = None;
-        let error = validate_visible_system_rows(&system_id, &[duplicate.clone(), duplicate])
-            .expect_err("duplicate visible family");
-        assert!(error.contains("duplicate visible family key acid-drop"));
+    #[test]
+    fn visible_row_validation_allows_same_title_for_distinct_arcade_families() {
+        let system_id = crate::catalog_classify::SystemId::parse("arcade").expect("system");
+        let deco = crate::system_shard::SystemGame {
+            stable_key: "arcade-deco-burger-time".to_string(),
+            title: "Burger Time".to_string(),
+            launch_ref: "/media/fat/_Arcade/Burger Time (DECO).mra".to_string(),
+            preview_asset_key: "cbtime".to_string(),
+            ..Default::default()
+        };
+        let data_east = crate::system_shard::SystemGame {
+            stable_key: "arcade-data-east-burger-time".to_string(),
+            title: "Burger Time".to_string(),
+            launch_ref: "/media/fat/_Arcade/Burger Time (Set 1).mra".to_string(),
+            preview_asset_key: "btime".to_string(),
+            ..Default::default()
+        };
+
+        validate_visible_system_rows(&system_id, &[deco, data_east]).unwrap();
     }
 
     #[test]
