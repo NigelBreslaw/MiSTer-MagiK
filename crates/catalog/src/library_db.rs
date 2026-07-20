@@ -1976,10 +1976,12 @@ fn catalog_from_sqlite_launcher_projection_order_with_platform_kinds_and_progres
     platform_kinds: HashMap<String, PlatformKind>,
     index_progress: Option<&mut dyn FnMut(usize, usize)>,
 ) -> ArcadeCatalog {
-    let lynx_source_games = launcher_rows
-        .iter()
-        .filter(|row| row.game.system_id.as_ref() == "atarilynx")
-        .count();
+    let mut source_games_by_system = HashMap::<String, usize>::new();
+    for row in arcade_rows.iter().chain(launcher_rows.iter()) {
+        *source_games_by_system
+            .entry(row.game.system_id.to_string())
+            .or_default() += 1;
+    }
     arcade_rows.sort_by_cached_key(|row| row.game.title.to_ascii_lowercase());
     launcher_rows.sort_by_cached_key(|row| row.game.title.to_ascii_lowercase());
     let mut arcade_rows = catalog_projection::collapse_catalog_variant_rows(arcade_rows);
@@ -2002,18 +2004,24 @@ fn catalog_from_sqlite_launcher_projection_order_with_platform_kinds_and_progres
         platform_kinds,
         index_progress,
     );
-    if lynx_source_games == 0 {
+    if source_games_by_system.is_empty() {
         catalog
     } else {
-        let visible_families = catalog.system_game_count("atarilynx");
-        catalog.with_projection_stats(HashMap::from([(
-            "atarilynx".to_string(),
-            SystemProjectionStats {
-                source_games: lynx_source_games,
-                visible_families,
-                collapsed_variants: lynx_source_games.saturating_sub(visible_families),
-            },
-        )]))
+        let projection_stats = source_games_by_system
+            .into_iter()
+            .map(|(system_id, source_games)| {
+                let visible_families = catalog.system_game_count(&system_id);
+                (
+                    system_id,
+                    SystemProjectionStats {
+                        source_games,
+                        visible_families,
+                        collapsed_variants: source_games.saturating_sub(visible_families),
+                    },
+                )
+            })
+            .collect();
+        catalog.with_projection_stats(projection_stats)
     }
 }
 

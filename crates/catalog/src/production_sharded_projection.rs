@@ -377,9 +377,8 @@ fn materialize_catalog_system(
             ScanUnitId::parse(&format!("{}-catalog", system_id.as_str()))
                 .map_err(|error| ReconciliationError::new("projection", error.to_string()))?,
         ],
-        projection_stats: (system_id.as_str() == "atarilynx")
-            .then(|| catalog.system_projection_stats(system_id.as_str()))
-            .flatten()
+        projection_stats: catalog
+            .system_projection_stats(system_id.as_str())
             .map(|stats| SystemShardProjectionStats {
                 source_games: stats.source_games,
                 visible_families: stats.visible_families,

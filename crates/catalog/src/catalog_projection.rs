@@ -266,14 +266,12 @@ pub(crate) fn sort_catalog_projection_rows(rows: &mut [CatalogProjectionRow]) {
 }
 
 fn catalog_variant_group_key(row: &CatalogProjectionRow) -> String {
-    if row.game.system_id.as_ref() == "atarilynx" {
-        let base_title = variant_title_without_annotations(&row.game.title);
-        if !base_title.is_empty() {
-            return format!("lynx:title:{}", library_db::normalize_id(&base_title));
-        }
-    }
+    let system_id = row.game.system_id.as_ref();
     if let Some(family_key) = row.family_key.as_deref() {
-        return format!("family:{}", library_db::normalize_id(family_key));
+        return format!(
+            "{system_id}:family:{}",
+            library_db::normalize_id(family_key)
+        );
     }
     if row.source_kind == "mra" {
         if !row.setname.trim().is_empty() {
@@ -283,55 +281,63 @@ fn catalog_variant_group_key(row: &CatalogProjectionRow) -> String {
             } else {
                 parent
             };
-            return format!("mra:set:{}", library_db::normalize_id(group));
+            return format!("{system_id}:mra:set:{}", library_db::normalize_id(group));
         }
-        return format!("mra:title:{}", canonical_variant_title(&row.game.title));
-    }
-    if row.source_kind == "catalog-entry" {
         return format!(
-            "catalog-entry:{}:{}",
-            row.game.mra_path,
-            library_db::normalize_id(&row.game.title)
+            "{system_id}:mra:title:{}",
+            canonical_variant_title(&row.game.title)
         );
     }
-    format!("{}:{}", row.source_kind, row.game.mra_path)
+    let base_title = canonical_variant_title(&row.game.title);
+    if !base_title.is_empty() {
+        return format!("{system_id}:title:{base_title}");
+    }
+    format!("{system_id}:{}:{}", row.source_kind, row.game.mra_path)
 }
 
 fn prefer_catalog_variant(a: &CatalogProjectionRow, b: &CatalogProjectionRow) -> bool {
-    if a.game.system_id.as_ref() == "atarilynx" && b.game.system_id.as_ref() == "atarilynx" {
-        return prefer_lynx_variant(a, b);
+    if a.source_kind == "mra" && b.source_kind == "mra" {
+        let a_score = catalog_variant_score(a);
+        let b_score = catalog_variant_score(b);
+        return a_score > b_score || (a_score == b_score && a.game.mra_path < b.game.mra_path);
     }
-    let a_score = catalog_variant_score(a);
-    let b_score = catalog_variant_score(b);
-    if a_score != b_score {
-        return a_score > b_score;
-    }
-    if a.game.has_preview != b.game.has_preview {
-        return a.game.has_preview;
-    }
-    a.game.mra_path < b.game.mra_path
-}
-
-fn prefer_lynx_variant(a: &CatalogProjectionRow, b: &CatalogProjectionRow) -> bool {
     let a_title = a.game.title.to_ascii_lowercase();
     let b_title = b.game.title.to_ascii_lowercase();
     let a_rank = (
+        source_is_supported(a),
         !is_development_variant(&a_title),
-        a.identity_matched,
-        a.game.has_preview,
         !is_non_retail_variant(&a_title),
-        lynx_version(&a_title),
+        a.identity_matched,
+        source_is_loose_payload(a),
+        a.game.has_preview,
+        variant_version(&a_title),
         variant_score_from_haystack(&a_title),
+        catalog_variant_score(a),
     );
     let b_rank = (
+        source_is_supported(b),
         !is_development_variant(&b_title),
-        b.identity_matched,
-        b.game.has_preview,
         !is_non_retail_variant(&b_title),
-        lynx_version(&b_title),
+        b.identity_matched,
+        source_is_loose_payload(b),
+        b.game.has_preview,
+        variant_version(&b_title),
         variant_score_from_haystack(&b_title),
+        catalog_variant_score(b),
     );
     a_rank > b_rank || (a_rank == b_rank && a.game.mra_path < b.game.mra_path)
+}
+
+fn source_is_supported(row: &CatalogProjectionRow) -> bool {
+    !row.game.mra_path.trim().is_empty()
+}
+
+fn source_is_loose_payload(row: &CatalogProjectionRow) -> bool {
+    !row.game.mra_path.starts_with("magik-plan:archive:")
+        && !row
+            .game
+            .mra_path
+            .contains(crate::archive_member::ARCHIVE_MEMBER_PREFIX)
 }
 
 fn is_development_variant(title: &str) -> bool {
@@ -358,7 +364,7 @@ fn variant_annotations(title: &str) -> impl Iterator<Item = &str> {
         .map(str::trim)
 }
 
-fn lynx_version(title: &str) -> Vec<u32> {
+fn variant_version(title: &str) -> Vec<u32> {
     let Some(start) = title.find("(v") else {
         return Vec::new();
     };
@@ -389,7 +395,12 @@ fn catalog_variant_score(row: &CatalogProjectionRow) -> i32 {
 }
 
 pub(crate) fn canonical_variant_title(title: &str) -> String {
-    library_db::normalize_id(&variant_title_without_annotations(title))
+    let base_title = variant_title_without_annotations(title);
+    if base_title.is_empty() {
+        String::new()
+    } else {
+        library_db::normalize_id(&base_title)
+    }
 }
 
 fn variant_title_without_annotations(title: &str) -> String {
@@ -897,7 +908,7 @@ mod tests {
     }
 
     #[test]
-    fn acid_drop_fixture_captures_loose_and_archive_sources() {
+    fn acid_drop_fixture_collapses_to_readable_atari_2600_loose_source() {
         let rows = vec![
             acid_drop_row(
                 "magik-plan:archive:/media/fat/games/Atari2600/Acid Drop (Europe).zip/Acid Drop (Europe).bin",
@@ -911,13 +922,9 @@ mod tests {
 
         let games = collapse_catalog_variants(rows);
 
-        assert_eq!(
-            games.len(),
-            2,
-            "fixture must reproduce the duplicate before canonical-family collapse"
-        );
-        assert!(games.iter().any(|game| game.mra_path.contains(".zip/")));
-        assert!(games.iter().any(|game| game.mra_path.ends_with(".a26")));
+        assert_eq!(games.len(), 1);
+        assert_eq!(games[0].system_id.as_ref(), "atari2600");
+        assert!(games[0].mra_path.ends_with(".a26"));
     }
 
     #[test]
@@ -942,14 +949,11 @@ mod tests {
         let games = collapse_catalog_variants(rows);
 
         assert_eq!(games.len(), 1);
-        assert_eq!(
-            games[0].title.as_ref(),
-            "Alien (USA) (v1.07) (Aftermarket) (Unl)"
-        );
+        assert_eq!(games[0].title.as_ref(), "Alien (World) (v1.06)");
     }
 
     #[test]
-    fn lynx_preference_orders_identity_then_screenshot_before_retail_and_version() {
+    fn canonical_preference_orders_retail_identity_loose_preview_then_version() {
         let identity = lynx_row(
             "Game (World) (v1.0) (Aftermarket) (Unl)",
             "/identity.lnx",
@@ -958,7 +962,7 @@ mod tests {
         );
         let screenshot = lynx_row("Game (World) (v2.0)", "/screenshot.lnx", false, true);
         let games = collapse_catalog_variants(vec![screenshot, identity]);
-        assert_eq!(games[0].mra_path.as_ref(), "/identity.lnx");
+        assert_eq!(games[0].mra_path.as_ref(), "/screenshot.lnx");
 
         let screenshot = lynx_row(
             "Other (World) (v1.0) (Aftermarket) (Unl)",
@@ -968,7 +972,7 @@ mod tests {
         );
         let retail = lynx_row("Other (World) (v2.0)", "/retail.lnx", true, false);
         let games = collapse_catalog_variants(vec![retail, screenshot]);
-        assert_eq!(games[0].mra_path.as_ref(), "/shot.lnx");
+        assert_eq!(games[0].mra_path.as_ref(), "/retail.lnx");
 
         let retail = lynx_row("Third (World) (v1.0)", "/retail-v1.lnx", true, true);
         let aftermarket = lynx_row(
@@ -1023,11 +1027,40 @@ mod tests {
     }
 
     #[test]
-    fn title_family_inference_is_lynx_only() {
-        let first = catalog_entry_row("Game (USA)", "/game-us.bin");
-        let second = catalog_entry_row("Game (Europe)", "/game-eu.bin");
+    fn title_family_inference_applies_to_console_handheld_and_computer_sources() {
+        for system_id in ["snes", "atarilynx", "amiga"] {
+            let mut first = catalog_entry_row("Game (USA)", "/game-us.bin");
+            first.game.system_id = system_id.into();
+            first.source_kind = "virtual-mgl".to_string();
+            let mut second = catalog_entry_row("Game (Europe)", "/game-eu.bin");
+            second.game.system_id = system_id.into();
+            second.source_kind = "virtual-mgl".to_string();
 
-        assert_eq!(collapse_catalog_variants(vec![first, second]).len(), 2);
+            assert_eq!(collapse_catalog_variants(vec![first, second]).len(), 1);
+        }
+    }
+
+    #[test]
+    fn canonical_family_key_is_scoped_to_system_and_multidisc_prefers_disc_one() {
+        let mut snes = catalog_entry_row("Game (USA)", "/snes/game.sfc");
+        snes.game.system_id = "snes".into();
+        snes.source_kind = "virtual-mgl".to_string();
+        let mut genesis = catalog_entry_row("Game (USA)", "/genesis/game.bin");
+        genesis.game.system_id = "genesis".into();
+        genesis.source_kind = "virtual-mgl".to_string();
+        let mut disc_two = catalog_entry_row("Adventure (Disc 2)", "/psx/disc2.chd");
+        disc_two.game.system_id = "psx".into();
+        disc_two.source_kind = "virtual-mgl".to_string();
+        let mut disc_one = catalog_entry_row("Adventure (Disc 1)", "/psx/disc1.chd");
+        disc_one.game.system_id = "psx".into();
+        disc_one.source_kind = "virtual-mgl".to_string();
+
+        let games = collapse_catalog_variants(vec![snes, genesis, disc_two, disc_one]);
+
+        assert_eq!(games.len(), 3);
+        assert!(games
+            .iter()
+            .any(|game| game.mra_path.as_ref() == "/psx/disc1.chd"));
     }
 
     #[test]
