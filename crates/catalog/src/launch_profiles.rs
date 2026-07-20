@@ -10,7 +10,7 @@
 
 use crate::catalog_discovery;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::OnceLock;
 use std::time::Instant;
@@ -548,16 +548,17 @@ fn base_profiles_for_installed_cores(
         .iter()
         .map(|core| core.core_id.to_ascii_lowercase())
         .collect::<BTreeSet<_>>();
+    let canonical_physical_cores = installed_cores
+        .iter()
+        .filter(|core| installed_core_is_canonical_physical(core))
+        .map(|core| (catalog_discovery::compact_system_name(&core.core_id), core))
+        .collect::<BTreeMap<_, _>>();
     let descriptor_dirs = installed_cores
         .iter()
+        .filter(|core| !installed_core_is_canonical_physical(core))
         .filter(|core| {
-            core.path
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .is_some_and(|stem| {
-                    catalog_discovery::compact_system_name(&canonical_core_id(stem))
-                        != catalog_discovery::compact_system_name(&core.core_id)
-                })
+            !canonical_physical_cores
+                .contains_key(&catalog_discovery::compact_system_name(&core.core_id))
         })
         .map(|core| catalog_discovery::compact_system_name(&core.core_id))
         .collect::<BTreeSet<_>>();
@@ -566,14 +567,19 @@ fn base_profiles_for_installed_cores(
         generic_manifest_profiles()
             .into_iter()
             .filter_map(|mut profile| {
-                if !installed.contains(&canonical_core_id(&profile.core_name).to_ascii_lowercase())
+                let profile_key = catalog_discovery::compact_system_name(&profile.core_name);
+                let canonical_core = canonical_physical_cores.get(&profile_key).copied();
+                if canonical_core.is_none()
+                    && !installed
+                        .contains(&canonical_core_id(&profile.core_name).to_ascii_lowercase())
                 {
                     return None;
                 }
-                if descriptor_dirs
-                    .contains(&catalog_discovery::compact_system_name(&profile.core_name))
-                {
+                if canonical_core.is_none() && descriptor_dirs.contains(&profile_key) {
                     return None;
+                }
+                if let Some(core) = canonical_core {
+                    profile.core_path = relative_core_path_for_installed_core(&core.path);
                 }
                 profile.game_dirs.retain(|dir| {
                     !descriptor_dirs.contains(&catalog_discovery::compact_system_name(dir))
@@ -582,6 +588,16 @@ fn base_profiles_for_installed_cores(
             }),
     );
     profiles
+}
+
+fn installed_core_is_canonical_physical(core: &catalog_discovery::InstalledCore) -> bool {
+    core.path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .is_some_and(|stem| {
+            catalog_discovery::compact_system_name(&canonical_core_id(stem))
+                == catalog_discovery::compact_system_name(&core.core_id)
+        })
 }
 
 fn finalize_profiles_from_facts(
@@ -974,7 +990,7 @@ fn runtime_core_candidates<'a>(
     cores: &'a [catalog_discovery::InstalledCore],
 ) -> Vec<RuntimeCoreCandidate<'a>> {
     let exact = runtime_core_candidates_by_dir_name(&game_dir.name, cores);
-    if !exact.is_empty() {
+    if !exact.is_empty() || generic_manifest_profile_for_game_dir(&game_dir.name).is_some() {
         return exact;
     }
     unique_extension_core_candidates(game_dir, cores)
@@ -985,7 +1001,7 @@ fn runtime_core_candidates_by_dir_name<'a>(
     cores: &'a [catalog_discovery::InstalledCore],
 ) -> Vec<RuntimeCoreCandidate<'a>> {
     let exact = core_candidates_by_name(game_dir_name, cores);
-    if !exact.is_empty() {
+    if !exact.is_empty() || generic_manifest_profile_for_game_dir(game_dir_name).is_some() {
         return exact;
     }
     let aliases = core_candidates_by_game_dir_alias(game_dir_name, cores);
@@ -1094,6 +1110,9 @@ fn core_candidates_by_name<'a>(
         {
             continue;
         }
+        if !core_path_is_compatible_with_canonical_system(name, &core.path) {
+            continue;
+        }
         let key = core.core_id.to_ascii_lowercase();
         if seen.insert(key) {
             out.push(RuntimeCoreCandidate {
@@ -1103,6 +1122,26 @@ fn core_candidates_by_name<'a>(
         }
     }
     out
+}
+
+fn core_path_is_compatible_with_canonical_system(system: &str, path: &Path) -> bool {
+    let Some(profile) = generic_manifest_profile_for_core(system) else {
+        return true;
+    };
+    let expected = catalog_discovery::compact_system_name(&profile.core_name);
+    let actual = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(canonical_core_id)
+        .map(|stem| catalog_discovery::compact_system_name(&stem));
+    if actual.as_deref() == Some(expected.as_str()) {
+        return true;
+    }
+
+    matches!(
+        (expected.as_str(), actual.as_deref()),
+        ("gbc", Some("gameboy"))
+    )
 }
 
 fn unique_extension_core_candidates<'a>(
@@ -2614,7 +2653,7 @@ mod tests {
     }
 
     #[test]
-    fn stray_extension_cannot_override_mgl_system_evidence() {
+    fn descriptor_cannot_advertise_canonical_system_through_wrong_core() {
         let root = unique_temp_dir("runtime-mgl-stray-extension");
         std::fs::create_dir_all(root.join("_Console")).expect("create console");
         std::fs::create_dir_all(root.join("games/Atari2600")).expect("create games");
@@ -2628,10 +2667,37 @@ mod tests {
         std::fs::write(root.join("games/Atari2600/Stray.a78"), b"rom").expect("write stray");
 
         let profiles = active_profiles_for_roots(&[root.display().to_string()]);
+        assert!(
+            profile_for_game_dir(&profiles, "Atari2600").is_none(),
+            "profiles: {profiles:#?}"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn canonical_core_overrides_descriptor_pointing_at_another_system() {
+        let root = unique_temp_dir("runtime-mgl-canonical-core");
+        std::fs::create_dir_all(root.join("_Console")).expect("create console");
+        std::fs::create_dir_all(root.join("games/Atari2600")).expect("create games");
+        std::fs::write(root.join("_Console/Atari2600_20260630.rbf"), b"rbf")
+            .expect("write Atari 2600 core");
+        std::fs::write(root.join("_Console/Atari7800_20260630.rbf"), b"rbf")
+            .expect("write Atari 7800 core");
+        std::fs::write(
+            root.join("_Console/Atari 2600.mgl"),
+            r#"<mistergamedescription><rbf>_Console/Atari7800</rbf><setname>Atari2600</setname></mistergamedescription>"#,
+        )
+        .expect("write descriptor");
+
+        let profiles = active_profiles_for_roots(&[root.display().to_string()]);
         let profile = profile_for_game_dir(&profiles, "Atari2600").expect("Atari 2600 profile");
 
         assert_eq!(profile.system_id, "atari2600");
         assert!(profile
+            .core_path
+            .as_deref()
+            .is_some_and(|path| path.contains("Atari2600")));
+        assert!(!profile
             .core_path
             .as_deref()
             .is_some_and(|path| path.contains("Atari7800")));
