@@ -242,12 +242,9 @@ struct ScreensaverRenderState {
 
 pub(in crate::ui_runner) struct LauncherScreensaver {
     parade: ParadeState,
-    damage_tracker: ScreensaverDamageTracker,
     archive_rx: Option<Receiver<ArchiveLoadResult>>,
     archive_cancelled: Arc<AtomicBool>,
     startup_started_at: Option<Instant>,
-    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-    frame_profile: ScreensaverFrameProfile,
     frame: u64,
 }
 
@@ -259,40 +256,17 @@ impl LauncherScreensaver {
     ) -> Self {
         Self {
             parade: ParadeState::new(random_seed()),
-            damage_tracker: ScreensaverDamageTracker::default(),
             archive_rx: Some(archive_rx),
             archive_cancelled,
             startup_started_at,
-            #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-            frame_profile: ScreensaverFrameProfile::default(),
             frame: 0,
         }
     }
 
     pub(in crate::ui_runner) fn render(&mut self, dst: &mut [Rgb565Pixel], w: usize, h: usize) {
         self.poll_archive(w);
-        #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-        {
-            let sample = render_archive_parade_incremental(
-                dst,
-                &mut self.parade,
-                &mut self.damage_tracker,
-                w,
-                h,
-                self.frame,
-            );
-            self.frame_profile.record(sample);
-        }
-        #[cfg(not(any(feature = "bench-tools", feature = "diagnostics")))]
-        render_archive_parade_incremental(
-            dst,
-            &mut self.parade,
-            &mut self.damage_tracker,
-            w,
-            h,
-            self.frame,
-        );
-        if self.frame > 0 && self.frame.is_multiple_of(600) {
+        render_archive_parade(dst, &mut self.parade, w, h, self.frame);
+        if self.frame > 0 && self.frame % 600 == 0 {
             self.parade.log_scaler_stats();
         }
         self.frame = self.frame.wrapping_add(1);
@@ -318,7 +292,6 @@ impl LauncherScreensaver {
                 let mut parade = ParadeState::new_with_archive(random_seed(), loaded.archive);
                 parade.begin_archive_streaming(loaded.asset_keys, w, self.startup_started_at);
                 self.parade = parade;
-                self.damage_tracker.invalidate();
                 self.archive_rx = None;
             }
             Ok(Err(error)) => {
@@ -339,296 +312,12 @@ impl LauncherScreensaver {
     pub(in crate::ui_runner) fn is_loading_archive(&self) -> bool {
         self.archive_rx.is_some()
     }
-
-    pub(in crate::ui_runner) fn frame_damage(&self) -> DirtyRectList {
-        self.damage_tracker.damage
-    }
-
-    pub(in crate::ui_runner) fn invalidate_cached_frame(&mut self) {
-        self.damage_tracker.invalidate();
-    }
-}
-
-#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-#[derive(Clone, Copy, Default)]
-struct ScreensaverFrameSample {
-    background_us: u128,
-    advance_us: u128,
-    cards_us: u128,
-    total_us: u128,
-    active_layers: [u16; PARADE_SPEED_COUNT],
-    damage_rects: u16,
-    damage_bytes: usize,
-    full_damage: bool,
-}
-
-#[cfg(not(any(feature = "bench-tools", feature = "diagnostics")))]
-type ScreensaverFrameSample = ();
-
-#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-#[derive(Default)]
-struct ScreensaverFrameProfile {
-    samples: Vec<ScreensaverFrameSample>,
-    active_layers: [u16; PARADE_SPEED_COUNT],
-}
-
-#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-impl ScreensaverFrameProfile {
-    fn record(&mut self, sample: ScreensaverFrameSample) {
-        self.active_layers = sample.active_layers;
-        // Covers the 65-second acceptance run without allowing diagnostics
-        // sessions left open indefinitely to grow resident memory forever.
-        if self.samples.len() < 4_200 {
-            self.samples.push(sample);
-        }
-    }
-
-    fn log_final(&self) {
-        if self.samples.is_empty() {
-            return;
-        }
-        let frames = self.samples.len() as u128;
-        let sum = |value: fn(&ScreensaverFrameSample) -> u128| {
-            self.samples.iter().map(value).sum::<u128>()
-        };
-        let percentile = |value: fn(&ScreensaverFrameSample) -> u128, percentile: usize| {
-            let mut values = self.samples.iter().map(value).collect::<Vec<_>>();
-            values.sort_unstable();
-            values[(values.len() - 1) * percentile / 100]
-        };
-        let damage_rects = self
-            .samples
-            .iter()
-            .map(|sample| u128::from(sample.damage_rects))
-            .sum::<u128>();
-        let damage_bytes = self
-            .samples
-            .iter()
-            .map(|sample| sample.damage_bytes as u128)
-            .sum::<u128>();
-        let full_damage_frames = self
-            .samples
-            .iter()
-            .filter(|sample| sample.full_damage)
-            .count();
-        crate::ui_logln!(
-            "screensaver_frame_profile frames={} background_avg_us={} advance_avg_us={} cards_avg_us={} total_avg_us={} total_p95_us={} total_p99_us={} total_max_us={} damage_rects_avg={} damage_bytes_avg={} full_damage_frames={} active_layers={},{},{},{},{} active_total={}",
-            frames,
-            sum(|sample| sample.background_us) / frames,
-            sum(|sample| sample.advance_us) / frames,
-            sum(|sample| sample.cards_us) / frames,
-            sum(|sample| sample.total_us) / frames,
-            percentile(|sample| sample.total_us, 95),
-            percentile(|sample| sample.total_us, 99),
-            self.samples.iter().map(|sample| sample.total_us).max().unwrap_or(0),
-            damage_rects / frames,
-            damage_bytes / frames,
-            full_damage_frames,
-            self.active_layers[0],
-            self.active_layers[1],
-            self.active_layers[2],
-            self.active_layers[3],
-            self.active_layers[4],
-            self.active_layers.iter().copied().map(u32::from).sum::<u32>()
-        );
-    }
 }
 
 impl Drop for LauncherScreensaver {
     fn drop(&mut self) {
-        #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-        self.frame_profile.log_final();
         self.archive_cancelled.store(true, Ordering::Relaxed);
     }
-}
-
-const SCREENSAVER_DAMAGE_RECT_LIMIT: usize = 240;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct CardFootprint {
-    x_fp: i64,
-    y: isize,
-    w: usize,
-    h: usize,
-}
-
-impl CardFootprint {
-    fn rect(self, screen_w: usize, screen_h: usize) -> Option<DirtyRect> {
-        let x = self.x_fp.div_euclid(PARADE_SUBPIXEL_ONE) as isize;
-        clipped_signed_rect(
-            x,
-            self.y,
-            x.saturating_add(self.w as isize).saturating_add(3),
-            self.y.saturating_add(self.h as isize).saturating_add(2),
-            screen_w,
-            screen_h,
-        )
-    }
-}
-
-#[derive(Default)]
-struct ScreensaverDamageTracker {
-    valid: bool,
-    w: usize,
-    h: usize,
-    background: Vec<Rgb565Pixel>,
-    previous_cards: Vec<Option<CardFootprint>>,
-    current_cards: Vec<Option<CardFootprint>>,
-    previous_stars: Vec<DirtyRect>,
-    current_stars: Vec<DirtyRect>,
-    candidates: Vec<DirtyRect>,
-    damage: DirtyRectList,
-}
-
-impl ScreensaverDamageTracker {
-    fn invalidate(&mut self) {
-        self.valid = false;
-    }
-
-    fn prepare_frame(
-        &mut self,
-        parade: &ParadeState,
-        w: usize,
-        h: usize,
-        frame: u64,
-    ) -> DirtyRectList {
-        let frame_len = w.saturating_mul(h);
-        if self.background.len() != frame_len {
-            self.background.resize(frame_len, Rgb565Pixel(0));
-            self.valid = false;
-        }
-        self.current_cards.clear();
-        self.current_cards.extend(parade.tiles.iter().map(|tile| {
-            tile.active.then_some(CardFootprint {
-                x_fp: tile.x_fp,
-                y: tile.y,
-                w: tile.scaled.w,
-                h: tile.scaled.h,
-            })
-        }));
-        write_horizontal_star_footprints(&mut self.current_stars, w, h, frame);
-        let full = DirtyRect {
-            x0: 0,
-            y0: 0,
-            x1: w,
-            y1: h,
-        };
-        if !self.valid || self.w != w || self.h != h {
-            self.damage = DirtyRectList::from_one(full);
-        } else {
-            self.candidates.clear();
-            self.candidates.reserve(
-                self.previous_cards.len()
-                    + self.current_cards.len()
-                    + self.previous_stars.len()
-                    + self.current_stars.len(),
-            );
-            for footprint in self
-                .previous_cards
-                .iter()
-                .chain(self.current_cards.iter())
-                .flatten()
-            {
-                if let Some(rect) = footprint.rect(w, h) {
-                    self.candidates.push(rect);
-                }
-            }
-            self.candidates.extend(self.previous_stars.iter().copied());
-            self.candidates.extend(self.current_stars.iter().copied());
-            self.damage = canonical_screensaver_damage(&self.candidates, full);
-        }
-        std::mem::swap(&mut self.previous_cards, &mut self.current_cards);
-        std::mem::swap(&mut self.previous_stars, &mut self.current_stars);
-        self.w = w;
-        self.h = h;
-        self.valid = true;
-        self.damage
-    }
-}
-
-fn write_horizontal_star_footprints(rects: &mut Vec<DirtyRect>, w: usize, h: usize, frame: u64) {
-    rects.clear();
-    rects.reserve(420);
-    for star in 0..210usize {
-        let (x, fraction) = horizontal_star_position(star, w, frame);
-        let y = (star
-            .wrapping_mul(83)
-            .wrapping_add(star.wrapping_mul(star) * 7))
-            % h;
-        rects.push(DirtyRect {
-            x0: x,
-            y0: y,
-            x1: x + 1,
-            y1: y + 1,
-        });
-        if fraction > 0 {
-            let next_x = (x + 1) % w;
-            rects.push(DirtyRect {
-                x0: next_x,
-                y0: y,
-                x1: next_x + 1,
-                y1: y + 1,
-            });
-        }
-    }
-}
-
-fn clipped_signed_rect(
-    x0: isize,
-    y0: isize,
-    x1: isize,
-    y1: isize,
-    w: usize,
-    h: usize,
-) -> Option<DirtyRect> {
-    let x0 = x0.clamp(0, w as isize) as usize;
-    let y0 = y0.clamp(0, h as isize) as usize;
-    let x1 = x1.clamp(0, w as isize) as usize;
-    let y1 = y1.clamp(0, h as isize) as usize;
-    (x1 > x0 && y1 > y0).then_some(DirtyRect { x0, y0, x1, y1 })
-}
-
-fn canonical_screensaver_damage(rects: &[DirtyRect], full: DirtyRect) -> DirtyRectList {
-    if rects.is_empty() {
-        return DirtyRectList::new();
-    }
-    let rows = full.rows() as usize;
-    let band_height = rows.div_ceil(SCREENSAVER_DAMAGE_RECT_LIMIT).max(1);
-    let mut bands = [None; SCREENSAVER_DAMAGE_RECT_LIMIT];
-    for &rect in rects {
-        if rect.x0 < full.x0
-            || rect.y0 < full.y0
-            || rect.x1 > full.x1
-            || rect.y1 > full.y1
-            || rect.x1 <= rect.x0
-            || rect.y1 <= rect.y0
-        {
-            return DirtyRectList::from_one(full);
-        }
-        let first_band = (rect.y0 - full.y0) / band_height;
-        let last_band = (rect.y1 - 1 - full.y0) / band_height;
-        for (band_idx, band) in bands
-            .iter_mut()
-            .enumerate()
-            .take(last_band.min(SCREENSAVER_DAMAGE_RECT_LIMIT - 1) + 1)
-            .skip(first_band)
-        {
-            let band_y0 = full.y0 + band_idx * band_height;
-            let band_y1 = (band_y0 + band_height).min(full.y1);
-            let clipped = DirtyRect {
-                x0: rect.x0,
-                y0: rect.y0.max(band_y0),
-                x1: rect.x1,
-                y1: rect.y1.min(band_y1),
-            };
-            *band = Some(band.map_or(clipped, |existing: DirtyRect| existing.union(clipped)));
-        }
-    }
-    let mut damage = DirtyRectList::new();
-    for rect in bands.into_iter().flatten() {
-        damage.push(rect);
-    }
-    damage
 }
 
 struct LoadedScreensaverArchive {
@@ -1138,57 +827,18 @@ fn blit_scaled_subpixel_x(
     x_fp: i64,
     y: isize,
 ) {
-    blit_scaled_subpixel_x_clipped(
-        dst,
-        screen_w,
-        screen_h,
-        image,
-        half_shifted,
-        corner_insets,
-        x_fp,
-        y,
-        DirtyRect {
-            x0: 0,
-            y0: 0,
-            x1: screen_w,
-            y1: screen_h,
-        },
-    );
-}
-
-#[allow(clippy::too_many_arguments)]
-fn blit_scaled_subpixel_x_clipped(
-    dst: &mut [Rgb565Pixel],
-    screen_w: usize,
-    screen_h: usize,
-    image: &SaverImage,
-    half_shifted: &SaverImage,
-    corner_insets: &[u8],
-    x_fp: i64,
-    y: isize,
-    clip: DirtyRect,
-) {
     let x = x_fp.div_euclid(PARADE_SUBPIXEL_ONE) as isize;
     let fraction = x_fp.rem_euclid(PARADE_SUBPIXEL_ONE) as u8;
     let shadow_x = if fraction < 128 { x } else { x + 1 };
-    blit_rounded_shadow(
-        dst,
-        screen_w,
-        screen_h,
-        image,
-        corner_insets,
-        shadow_x,
-        y,
-        clip,
-    );
+    blit_rounded_shadow(dst, screen_w, screen_h, image, corner_insets, shadow_x, y);
     if fraction == 0 {
-        blit_rounded_card(dst, screen_w, screen_h, image, corner_insets, x, y, clip);
+        blit_rounded_card(dst, screen_w, screen_h, image, corner_insets, x, y);
         return;
     }
     if fraction == 128 {
         for src_y in 0..image.h {
             let dst_y = y + src_y as isize;
-            if dst_y < clip.y0 as isize || dst_y >= clip.y1.min(screen_h) as isize {
+            if dst_y < 0 || dst_y >= screen_h as isize {
                 continue;
             }
             let dst_row = dst_y as usize * screen_w;
@@ -1200,17 +850,15 @@ fn blit_scaled_subpixel_x_clipped(
                 continue;
             }
             let left = x + inset as isize;
-            if left >= clip.x0 as isize && left < clip.x1.min(screen_w) as isize {
+            if left >= 0 && left < screen_w as isize {
                 dst[dst_row + left as usize] = blend_565(
                     dst[dst_row + left as usize],
                     image.pixels[src_row + inset],
                     127,
                 );
             }
-            let copy_x0 = (left + 1).max(clip.x0 as isize) as usize;
-            let copy_x1 = (x + source_end as isize)
-                .clamp(clip.x0 as isize, clip.x1.min(screen_w) as isize)
-                as usize;
+            let copy_x0 = (left + 1).max(0) as usize;
+            let copy_x1 = (x + source_end as isize).clamp(0, screen_w as isize) as usize;
             if copy_x1 > copy_x0 {
                 let source_x0 = (copy_x0 as isize - x) as usize;
                 dst[dst_row + copy_x0..dst_row + copy_x1].copy_from_slice(
@@ -1219,7 +867,7 @@ fn blit_scaled_subpixel_x_clipped(
                 );
             }
             let right = x + source_end as isize;
-            if right >= clip.x0 as isize && right < clip.x1.min(screen_w) as isize {
+            if right >= 0 && right < screen_w as isize {
                 dst[dst_row + right as usize] = blend_565(
                     dst[dst_row + right as usize],
                     image.pixels[src_row + source_end - 1],
@@ -1233,16 +881,7 @@ fn blit_scaled_subpixel_x_clipped(
     // phases. Snap an unsupported future phase instead of silently falling
     // back to the ARM-hostile per-pixel fractional compositor.
     let snapped_x = if fraction < 128 { x } else { x + 1 };
-    blit_rounded_card(
-        dst,
-        screen_w,
-        screen_h,
-        image,
-        corner_insets,
-        snapped_x,
-        y,
-        clip,
-    );
+    blit_rounded_card(dst, screen_w, screen_h, image, corner_insets, snapped_x, y);
 }
 
 fn blit_rounded_shadow(
@@ -1253,13 +892,12 @@ fn blit_rounded_shadow(
     corner_insets: &[u8],
     x: isize,
     y: isize,
-    clip: DirtyRect,
 ) {
     const OFFSET: isize = 2;
     let shadow = color565(0, 0, 4);
     for shadow_y in 0..image.h {
         let dst_y = y + shadow_y as isize + OFFSET;
-        if dst_y < clip.y0 as isize || dst_y >= clip.y1.min(screen_h) as isize {
+        if dst_y < 0 || dst_y >= screen_h as isize {
             continue;
         }
         let shadow_inset = corner_insets.get(shadow_y).copied().unwrap_or(0) as isize;
@@ -1267,9 +905,7 @@ fn blit_rounded_shadow(
         let shadow_x1 = x + OFFSET + image.w as isize - shadow_inset;
         let card_y = shadow_y as isize + OFFSET;
         if card_y >= image.h as isize {
-            blend_shadow_span(
-                dst, screen_w, dst_y, shadow_x0, shadow_x1, shadow, 112, clip,
-            );
+            blend_shadow_span(dst, screen_w, dst_y, shadow_x0, shadow_x1, shadow, 112);
             continue;
         }
         let card_inset = corner_insets.get(card_y as usize).copied().unwrap_or(0) as isize;
@@ -1283,7 +919,6 @@ fn blit_rounded_shadow(
             shadow_x1.min(card_x0),
             shadow,
             112,
-            clip,
         );
         blend_shadow_span(
             dst,
@@ -1293,7 +928,6 @@ fn blit_rounded_shadow(
             shadow_x1,
             shadow,
             112,
-            clip,
         );
     }
 }
@@ -1306,10 +940,9 @@ fn blend_shadow_span(
     x1: isize,
     color: Rgb565Pixel,
     alpha: u8,
-    clip: DirtyRect,
 ) {
-    let x0 = x0.clamp(clip.x0 as isize, clip.x1.min(screen_w) as isize) as usize;
-    let x1 = x1.clamp(clip.x0 as isize, clip.x1.min(screen_w) as isize) as usize;
+    let x0 = x0.clamp(0, screen_w as isize) as usize;
+    let x1 = x1.clamp(0, screen_w as isize) as usize;
     if x1 <= x0 {
         return;
     }
@@ -1327,11 +960,10 @@ fn blit_rounded_card(
     corner_insets: &[u8],
     x: isize,
     y: isize,
-    clip: DirtyRect,
 ) {
     for src_y in 0..image.h {
         let dst_y = y + src_y as isize;
-        if dst_y < clip.y0 as isize || dst_y >= clip.y1.min(screen_h) as isize {
+        if dst_y < 0 || dst_y >= screen_h as isize {
             continue;
         }
         let inset = corner_insets.get(src_y).copied().unwrap_or(0) as usize;
@@ -1339,9 +971,8 @@ fn blit_rounded_card(
         if inset >= source_end {
             continue;
         }
-        let dst_x0 = (x + inset as isize).max(clip.x0 as isize) as usize;
-        let dst_x1 = (x + source_end as isize)
-            .clamp(clip.x0 as isize, clip.x1.min(screen_w) as isize) as usize;
+        let dst_x0 = (x + inset as isize).max(0) as usize;
+        let dst_x1 = (x + source_end as isize).clamp(0, screen_w as isize) as usize;
         if dst_x1 <= dst_x0 {
             continue;
         }
@@ -2942,7 +2573,7 @@ impl ParadeState {
                 continue;
             };
             let next = self.tiles[tile_idx].next.take().expect("checked above");
-            let x = if self.archive_backed && self.layers[layer_idx].spawn_count == 0 {
+            let x = if self.layers[layer_idx].spawn_count == 0 {
                 -(next.scaled.w as isize / 2)
             } else {
                 -(next.scaled.w as isize)
@@ -3314,15 +2945,15 @@ fn render_parade(
     }
 }
 
-#[cfg(test)]
-fn compose_archive_parade_full(
+fn render_archive_parade(
     dst: &mut [Rgb565Pixel],
-    state: &ParadeState,
+    state: &mut ParadeState,
     w: usize,
     h: usize,
     frame: u64,
 ) {
     render_horizontal_starfield(dst, w, h, frame, state.motion);
+    state.advance(w, h, None, frame);
     let (draw_order, draw_count) = parade_draw_order(state);
     for tile_idx in draw_order.into_iter().take(draw_count) {
         let tile = &state.tiles[tile_idx];
@@ -3337,123 +2968,6 @@ fn compose_archive_parade_full(
             tile.y,
         );
     }
-}
-
-fn render_archive_parade_incremental(
-    dst: &mut [Rgb565Pixel],
-    state: &mut ParadeState,
-    tracker: &mut ScreensaverDamageTracker,
-    w: usize,
-    h: usize,
-    frame: u64,
-) -> ScreensaverFrameSample {
-    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-    let total_started = Instant::now();
-    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-    let phase_started = Instant::now();
-    state.advance(w, h, None, frame);
-    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-    let advance_us = phase_started.elapsed().as_micros();
-
-    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-    let phase_started = Instant::now();
-    let damage = tracker.prepare_frame(state, w, h, frame);
-    let base = color565(0, 0, 10);
-    for rect in damage.iter() {
-        for y in rect.y0..rect.y1 {
-            tracker.background[y * w + rect.x0..y * w + rect.x1].fill(base);
-        }
-    }
-    for star in 0..210usize {
-        let layer = star & 3;
-        let (x, fraction) = horizontal_star_position(star, w, frame);
-        let y = (star
-            .wrapping_mul(83)
-            .wrapping_add(star.wrapping_mul(star) * 7))
-            % h;
-        let brightness = [70, 110, 170, 235][layer];
-        let color = color565(brightness / 2, brightness, 255);
-        for rect in damage.iter() {
-            if x >= rect.x0 && x < rect.x1 && y >= rect.y0 && y < rect.y1 {
-                let pixel = &mut tracker.background[y * w + x];
-                *pixel = blend_565(*pixel, color, 255 - fraction);
-            }
-            if fraction > 0 {
-                let next_x = (x + 1) % w;
-                if next_x >= rect.x0 && next_x < rect.x1 && y >= rect.y0 && y < rect.y1 {
-                    let pixel = &mut tracker.background[y * w + next_x];
-                    *pixel = blend_565(*pixel, color, fraction);
-                }
-            }
-        }
-    }
-    for rect in damage.iter() {
-        for y in rect.y0..rect.y1 {
-            let row = y * w;
-            dst[row + rect.x0..row + rect.x1]
-                .copy_from_slice(&tracker.background[row + rect.x0..row + rect.x1]);
-        }
-    }
-    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-    let background_us = phase_started.elapsed().as_micros();
-
-    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-    let phase_started = Instant::now();
-    let (draw_order, draw_count) = parade_draw_order(state);
-    for rect in damage.iter() {
-        for tile_idx in draw_order.into_iter().take(draw_count) {
-            let tile = &state.tiles[tile_idx];
-            let footprint = CardFootprint {
-                x_fp: tile.x_fp,
-                y: tile.y,
-                w: tile.scaled.w,
-                h: tile.scaled.h,
-            };
-            if !footprint
-                .rect(w, h)
-                .is_some_and(|bounds| bounds.intersection(rect).is_some())
-            {
-                continue;
-            }
-            blit_scaled_subpixel_x_clipped(
-                dst,
-                w,
-                h,
-                &tile.scaled,
-                &tile.half_shifted,
-                &tile.corner_insets,
-                tile.x_fp,
-                tile.y,
-                rect,
-            );
-        }
-    }
-
-    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-    {
-        let mut active_layers = [0_u16; PARADE_SPEED_COUNT];
-        for tile in state.tiles.iter().filter(|tile| tile.active) {
-            let layer_idx = tile.layer.saturating_sub(PARADE_MIN_TILE_SPEED);
-            if let Some(count) = active_layers.get_mut(layer_idx) {
-                *count = count.saturating_add(1);
-            }
-        }
-        ScreensaverFrameSample {
-            background_us,
-            advance_us,
-            cards_us: phase_started.elapsed().as_micros(),
-            total_us: total_started.elapsed().as_micros(),
-            active_layers,
-            damage_rects: damage.len().min(u16::MAX as usize) as u16,
-            damage_bytes: damage.total_rgb565_bytes(),
-            full_damage: damage.len() == 1
-                && damage.iter().next().is_some_and(|rect| {
-                    rect.x0 == 0 && rect.y0 == 0 && rect.x1 == w && rect.y1 == h
-                }),
-        }
-    }
-    #[cfg(not(any(feature = "bench-tools", feature = "diagnostics")))]
-    {}
 }
 
 fn render_marquee(dst: &mut [Rgb565Pixel], w: usize, h: usize, images: &[SaverImage], frame: u64) {
@@ -3781,127 +3295,6 @@ mod tests {
         assert_eq!(state.tiles[tile_idx].x(), -2);
     }
 
-    fn deterministic_incremental_state() -> ParadeState {
-        let mut state = ParadeState::new(0xface_cafe);
-        state.scale_worker_connected = false;
-        state.tiles.clear();
-        for layer_idx in 0..PARADE_SPEED_COUNT {
-            let speed = PARADE_MIN_TILE_SPEED + layer_idx;
-            let w = 12 + layer_idx * 2;
-            let h = 10 + layer_idx * 2;
-            let mut pixels = Vec::with_capacity(w * h);
-            for y in 0..h {
-                for x in 0..w {
-                    pixels.push(Rgb565Pixel(
-                        ((speed as u16) << 12) ^ ((x as u16) << 5) ^ y as u16,
-                    ));
-                }
-            }
-            let scaled = SaverImage {
-                pixels,
-                w,
-                h,
-                stride: w,
-            };
-            state.tiles.push(ParadeTile {
-                x_fp: ((8 + layer_idx * 5) as i64 * PARADE_SUBPIXEL_ONE)
-                    + if layer_idx & 1 == 0 { 0 } else { 128 },
-                y: 8 + layer_idx as isize * 4,
-                layer: speed,
-                speed,
-                velocity_fp: (layer_idx as i64 + 1) * PARADE_SUBPIXEL_ONE / 2,
-                image_idx: layer_idx,
-                half_shifted: prepare_half_shifted(&scaled),
-                corner_insets: prepare_parade_corner_insets(w, h),
-                scaled,
-                active: true,
-                next: None,
-                pending_image_idx: None,
-            });
-        }
-        state
-    }
-
-    #[test]
-    fn incremental_archive_composition_is_pixel_exact_across_motion_and_exit() {
-        const W: usize = 96;
-        const H: usize = 64;
-        let mut state = deterministic_incremental_state();
-        let mut tracker = ScreensaverDamageTracker::default();
-        let mut incremental = vec![Rgb565Pixel(0); W * H];
-        let mut reference = vec![Rgb565Pixel(0); W * H];
-
-        for frame in 0..220 {
-            render_archive_parade_incremental(
-                &mut incremental,
-                &mut state,
-                &mut tracker,
-                W,
-                H,
-                frame,
-            );
-            compose_archive_parade_full(&mut reference, &state, W, H, frame);
-            assert_eq!(incremental, reference, "pixel mismatch at frame {frame}");
-            assert!(tracker.damage.len() <= SCREENSAVER_DAMAGE_RECT_LIMIT);
-            let rects = tracker.damage.iter().collect::<Vec<_>>();
-            for left in 0..rects.len() {
-                for right in (left + 1)..rects.len() {
-                    assert!(rects[left].intersection(rects[right]).is_none());
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn damage_canonicalization_bounds_all_sources_without_exceeding_latch_budget() {
-        let full = DirtyRect {
-            x0: 0,
-            y0: 0,
-            x1: 960,
-            y1: 540,
-        };
-        let sources = (0..136)
-            .map(|idx| DirtyRect {
-                x0: (idx * 67) % 930,
-                y0: (idx * 43) % 510,
-                x1: (idx * 67) % 930 + 24,
-                y1: (idx * 43) % 510 + 20,
-            })
-            .collect::<Vec<_>>();
-        let damage = canonical_screensaver_damage(&sources, full);
-
-        assert!(damage.len() <= SCREENSAVER_DAMAGE_RECT_LIMIT);
-        for source in sources {
-            for y in source.y0..source.y1 {
-                assert!(damage.iter().any(|rect| {
-                    y >= rect.y0 && y < rect.y1 && rect.x0 <= source.x0 && rect.x1 >= source.x1
-                }));
-            }
-        }
-    }
-
-    #[test]
-    fn invalidated_incremental_frame_forces_full_damage() {
-        const W: usize = 96;
-        const H: usize = 64;
-        let mut state = deterministic_incremental_state();
-        let mut tracker = ScreensaverDamageTracker::default();
-        let mut frame = vec![Rgb565Pixel(0); W * H];
-        render_archive_parade_incremental(&mut frame, &mut state, &mut tracker, W, H, 0);
-        tracker.invalidate();
-        render_archive_parade_incremental(&mut frame, &mut state, &mut tracker, W, H, 1);
-
-        assert_eq!(
-            tracker.damage,
-            DirtyRectList::from_one(DirtyRect {
-                x0: 0,
-                y0: 0,
-                x1: W,
-                y1: H,
-            })
-        );
-    }
-
     #[test]
     fn parade_background_queue_is_bounded_by_one_successor_per_tile() {
         let images = test_images(PARADE_TILE_COUNT * 2);
@@ -3969,7 +3362,7 @@ mod tests {
     #[test]
     fn parade_tile_identity_changes_only_after_it_leaves_the_screen() {
         let mut state = ParadeState::new(7);
-        let images = test_images(PARADE_TILE_COUNT * 3);
+        let images = test_images(32);
         state.ensure_initialized(&images, 960, 540);
         collect_initial_successors(&mut state, &images, 1);
         let original = state.tiles[0].image_idx;
@@ -3985,13 +3378,7 @@ mod tests {
         let layer_idx = speed - PARADE_MIN_TILE_SPEED;
         state.layers[layer_idx].next_spawn_frame = 0;
         state.advance(960, 540, Some(&images), 1);
-        for frame in 2..5_000 {
-            if state.tiles[0].active && state.tiles[0].image_idx != original {
-                break;
-            }
-            state.advance(960, 540, Some(&images), frame);
-        }
-        assert!(state.tiles[0].active);
+        assert_eq!(state.tiles[0].x(), -(state.tiles[0].scaled.w as isize));
         assert_ne!(state.tiles[0].image_idx, original);
         assert_ne!(state.tiles[0].scaled.w, 0);
         assert_ne!(width, 0);
@@ -4110,7 +3497,11 @@ mod tests {
             .collect::<Vec<_>>();
         let populations = PARADE_LAYER_TARGETS;
         assert!(populations.windows(2).all(|pair| pair[0] > pair[1]));
-        assert!(intervals.iter().all(|interval| *interval > 0));
+        for speed in 1..=5 {
+            let (w, _, _) = parade_depth_style(speed);
+            let minimum_left_edge_gap = intervals[speed - 1] as usize * speed / 2;
+            assert!(minimum_left_edge_gap > w + PARADE_PLACEMENT_GAP as usize);
+        }
     }
 
     #[test]
