@@ -24,10 +24,17 @@ pub fn execute(
     }
     for (index, operation) in plan.operations.iter().enumerate() {
         let percent = u8::try_from(index.saturating_mul(100) / plan.operations.len()).unwrap_or(0);
+        let message = format!(
+            "{}/{} {} — {}",
+            index + 1,
+            plan.operations.len(),
+            operation.title,
+            operation.reason
+        );
         reporter.emit(
             EventKind::Progress,
             operation_phase(operation),
-            &operation.title,
+            &message,
             Some(percent),
         )?;
         run_operation(evidence, request_id, repository, operation, reporter)?;
@@ -69,7 +76,7 @@ fn run_operation(
         reporter.emit(
             EventKind::Progress,
             operation_phase(operation),
-            &operation.title,
+            &format!("{} — {}", operation.title, operation.reason),
             None,
         )?;
     };
@@ -78,12 +85,18 @@ fn run_operation(
     if status.success() {
         return Ok(());
     }
+    let classification = if code == 101 {
+        "test_failure"
+    } else if code == 127 {
+        "command_missing"
+    } else {
+        "command_failed"
+    };
     Err(format!(
-        "{} failed (exit {code}); log={} tail={}; next={}",
+        "{classification}: {} (exit {code}); log={}; tail={}; next=scripts/agent run show {request_id}",
         operation.title,
         log_path.display(),
-        log_tail(&log_path)?,
-        operation.failure_hint
+        log_tail(&log_path)?
     ))
 }
 
@@ -93,7 +106,7 @@ fn operation_phase(operation: &Operation) -> &'static str {
     } else if operation.id.starts_with("release.") {
         "release"
     } else {
-        "lint"
+        "check"
     }
 }
 
@@ -108,6 +121,7 @@ fn log_tail(path: &Path) -> Result<String, String> {
     Ok(text
         .lines()
         .rev()
+        .filter(|line| !line.contains("to rerun pass") && !line.contains("cargo test"))
         .take(8)
         .collect::<Vec<_>>()
         .into_iter()
@@ -131,6 +145,19 @@ mod tests {
         )
         .unwrap();
         assert_eq!(log_tail(&path).unwrap().split(" | ").count(), 8);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn log_tail_suppresses_raw_cargo_retry_advice() {
+        let path = std::env::temp_dir().join(format!("agent-cli-retry-{}", std::process::id()));
+        fs::write(
+            &path,
+            "test failed\nerror: test failed, to rerun pass `cargo test --lib`\nuse the harness\n",
+        )
+        .unwrap();
+        let tail = log_tail(&path).unwrap();
+        assert_eq!(tail, "test failed | use the harness");
         fs::remove_file(path).unwrap();
     }
 }

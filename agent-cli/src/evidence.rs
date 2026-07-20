@@ -80,6 +80,29 @@ pub struct RunDetail {
     pub intent: Option<serde_json::Value>,
     pub rejection_reason: Option<String>,
     pub outcome: Option<String>,
+    pub commands: Vec<CommandDetail>,
+    pub events: Vec<EventDetail>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct CommandDetail {
+    pub operation_id: String,
+    pub program: String,
+    pub args: serde_json::Value,
+    pub duration_ms: Option<i64>,
+    pub exit_code: Option<i32>,
+    pub status: String,
+    pub log_path: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct EventDetail {
+    pub sequence: i64,
+    pub elapsed_ms: i64,
+    pub kind: String,
+    pub phase: String,
+    pub message: String,
+    pub percent: Option<i64>,
 }
 
 impl Evidence {
@@ -265,7 +288,8 @@ impl Evidence {
     }
 
     pub fn run_detail(&self, id: &str) -> Result<Option<RunDetail>, String> {
-        self.connection
+        let mut detail = self
+            .connection
             .query_row(
                 "SELECT id, args_json, parse_status, intent_json, rejection_reason, outcome FROM requests WHERE id = ?1",
                 [id],
@@ -279,11 +303,54 @@ impl Evidence {
                         intent: intent.and_then(|value| serde_json::from_str(&value).ok()),
                         rejection_reason: row.get(4)?,
                         outcome: row.get(5)?,
+                        commands: Vec::new(),
+                        events: Vec::new(),
                     })
                 },
             )
             .optional()
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        if let Some(value) = detail.as_mut() {
+            let mut commands = self
+                .connection
+                .prepare("SELECT operation_id, program, args_json, duration_ms, exit_code, status, log_path FROM commands WHERE request_id = ?1 ORDER BY id")
+                .map_err(|error| error.to_string())?;
+            value.commands = commands
+                .query_map([id], |row| {
+                    let args: String = row.get(2)?;
+                    Ok(CommandDetail {
+                        operation_id: row.get(0)?,
+                        program: row.get(1)?,
+                        args: serde_json::from_str(&args).unwrap_or_default(),
+                        duration_ms: row.get(3)?,
+                        exit_code: row.get(4)?,
+                        status: row.get(5)?,
+                        log_path: row.get(6)?,
+                    })
+                })
+                .map_err(|error| error.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| error.to_string())?;
+            let mut events = self
+                .connection
+                .prepare("SELECT sequence, elapsed_ms, kind, phase, message, percent FROM events WHERE request_id = ?1 ORDER BY sequence")
+                .map_err(|error| error.to_string())?;
+            value.events = events
+                .query_map([id], |row| {
+                    Ok(EventDetail {
+                        sequence: row.get(0)?,
+                        elapsed_ms: row.get(1)?,
+                        kind: row.get(2)?,
+                        phase: row.get(3)?,
+                        message: row.get(4)?,
+                        percent: row.get(5)?,
+                    })
+                })
+                .map_err(|error| error.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(detail)
     }
 
     pub fn prune_logs(&self) -> Result<usize, String> {
@@ -354,6 +421,7 @@ pub(crate) fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::progress::{EventKind, ProgressEvent};
     use std::ffi::OsString;
     use std::thread;
 
@@ -399,6 +467,37 @@ mod tests {
             Evidence::open_at(&root).unwrap().status().unwrap().requests,
             4
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn run_detail_contains_child_commands_and_progress_events() {
+        let root = temporary_root("detail");
+        let evidence = Evidence::open_at(&root).unwrap();
+        let request = RawRequest::capture([OsString::from("agent-cli")]);
+        evidence.begin_request(&request).unwrap();
+        let command = evidence
+            .begin_command(&request.id, "check.one", "true", &[], None)
+            .unwrap();
+        evidence.finish_command(command, now_ms(), 0).unwrap();
+        evidence
+            .record_event(&ProgressEvent {
+                v: 1,
+                kind: EventKind::Completed,
+                run: request.id.clone(),
+                seq: 0,
+                elapsed_ms: 7,
+                phase: "done".into(),
+                message: "Passed".into(),
+                percent: Some(100),
+            })
+            .unwrap();
+
+        let detail = evidence.run_detail(&request.id).unwrap().unwrap();
+        assert_eq!(detail.commands.len(), 1);
+        assert_eq!(detail.commands[0].duration_ms, Some(0));
+        assert_eq!(detail.events.len(), 1);
+        assert_eq!(detail.events[0].message, "Passed");
         fs::remove_dir_all(root).unwrap();
     }
 }
