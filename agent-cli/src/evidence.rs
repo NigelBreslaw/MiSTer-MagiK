@@ -84,21 +84,13 @@ pub struct RunDetail {
 
 impl Evidence {
     pub fn open_for_repository(repository: &Path) -> Result<Self, String> {
-        let output = Command::new("git")
-            .args(["rev-parse", "--git-common-dir"])
-            .current_dir(repository)
-            .output()
-            .map_err(|error| format!("cannot locate Git common directory: {error}"))?;
-        if !output.status.success() {
-            return Err("agent-cli must run inside a Git repository".into());
+        if let Some(root) = std::env::var_os("MISTER_AGENT_CLI_STATE_DIR") {
+            return Self::open_at(Path::new(&root));
         }
-        let common = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
-        let common = if common.is_absolute() {
-            common
-        } else {
-            repository.join(common)
-        };
-        Self::open_at(&common.join("agent-cli"))
+        let primary = primary_worktree(repository)?;
+        let root = primary.join(".agent-cli");
+        migrate_common_dir_database(repository, &root)?;
+        Self::open_at(&root)
     }
 
     pub fn open_at(root: &Path) -> Result<Self, String> {
@@ -118,6 +110,24 @@ impl Evidence {
             connection,
             root: root.to_path_buf(),
         })
+    }
+
+    fn legacy_common_dir(repository: &Path) -> Result<PathBuf, String> {
+        let output = Command::new("git")
+            .args(["rev-parse", "--git-common-dir"])
+            .current_dir(repository)
+            .output()
+            .map_err(|error| format!("cannot locate Git common directory: {error}"))?;
+        if !output.status.success() {
+            return Err("agent-cli must run inside a Git repository".into());
+        }
+        let common = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
+        let common = if common.is_absolute() {
+            common
+        } else {
+            repository.join(common)
+        };
+        Ok(common.join("agent-cli"))
     }
 
     pub fn begin_request(&self, request: &RawRequest) -> Result<(), String> {
@@ -299,6 +309,37 @@ impl Evidence {
             })
             .map_err(|error| error.to_string())
     }
+}
+
+fn primary_worktree(repository: &Path) -> Result<PathBuf, String> {
+    let output = Command::new("git")
+        .args(["worktree", "list", "--porcelain"])
+        .current_dir(repository)
+        .output()
+        .map_err(|error| format!("cannot list Git worktrees: {error}"))?;
+    if !output.status.success() {
+        return Err("agent-cli must run inside a Git repository".into());
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.strip_prefix("worktree "))
+        .map(PathBuf::from)
+        .ok_or_else(|| "Git did not report a primary worktree".into())
+}
+
+fn migrate_common_dir_database(repository: &Path, root: &Path) -> Result<(), String> {
+    let destination = root.join("agent.sqlite3");
+    if destination.exists() {
+        return Ok(());
+    }
+    let legacy = Evidence::legacy_common_dir(repository)?.join("agent.sqlite3");
+    if !legacy.is_file() {
+        return Ok(());
+    }
+    fs::create_dir_all(root).map_err(|error| error.to_string())?;
+    fs::copy(&legacy, &destination)
+        .map_err(|error| format!("cannot migrate legacy audit database: {error}"))?;
+    Ok(())
 }
 
 pub(crate) fn now_ms() -> i64 {
