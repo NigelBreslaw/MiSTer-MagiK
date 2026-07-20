@@ -5,6 +5,7 @@ pub mod cli;
 pub mod evidence;
 pub mod model;
 pub mod policy;
+pub mod progress;
 pub mod redact;
 pub mod registry;
 pub mod request;

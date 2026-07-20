@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::model::{Intent, Outcome};
+use crate::progress::ProgressEvent;
 use crate::request::RawRequest;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
@@ -163,6 +164,16 @@ impl Evidence {
                 params![request_id, now_ms(), outcome],
             )
             .map_err(|error| format!("cannot record request outcome: {error}"))?;
+        Ok(())
+    }
+
+    pub fn record_event(&self, event: &ProgressEvent) -> Result<(), String> {
+        self.connection
+            .execute(
+                "INSERT INTO events (request_id, sequence, elapsed_ms, kind, phase, message, percent) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![event.run, i64::from(event.seq), i64::try_from(event.elapsed_ms).unwrap_or(i64::MAX), event.kind.as_str(), event.phase, event.message, event.percent.map(i64::from)],
+            )
+            .map_err(|error| format!("cannot record progress event: {error}"))?;
         Ok(())
     }
 
