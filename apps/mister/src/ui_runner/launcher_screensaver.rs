@@ -4,6 +4,7 @@
 use super::*;
 use crate::preview_worker;
 use mister_magik_catalog::device_layout::DeviceLayout;
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::Write;
@@ -242,30 +243,49 @@ struct ScreensaverRenderState {
 }
 
 pub(in crate::ui_runner) struct LauncherScreensaver {
-    images: Vec<SaverImage>,
     parade: ParadeState,
     frame: u64,
 }
 
 impl LauncherScreensaver {
     fn load(w: usize, h: usize, cancelled: &AtomicBool) -> Option<Self> {
-        let images = load_screensaver_images_cancellable(256, Some(cancelled));
+        let archive_path = screensaver_archive_path(
+            std::env::var_os("MISTER_MEDIA_ASSET_DIR").as_deref(),
+            DeviceLayout::current(),
+        );
+        let archive = match preview_worker::ResidentPreviewArchive::open(&archive_path) {
+            Ok(archive) => archive,
+            Err(error) => {
+                crate::ui_errln!(
+                    "screensaver_loader path={} error={}",
+                    archive_path.display(),
+                    error
+                );
+                return None;
+            }
+        };
+        let asset_keys = archive.asset_keys().to_vec();
+        crate::ui_logln!(
+            "screensaver_loader path={} pack_bytes={} entries={}",
+            archive_path.display(),
+            archive.compressed_bytes(),
+            asset_keys.len()
+        );
         if cancelled.load(Ordering::Relaxed) {
             return None;
         }
-        let mut parade = ParadeState::new(random_seed());
-        if !parade.ensure_initialized_cancellable(&images, w, h, Some(cancelled)) {
+        let mut parade = ParadeState::new_with_archive(random_seed(), archive);
+        if !parade.ensure_archive_initialized_cancellable(asset_keys, w, h, cancelled) {
             return None;
         }
-        Some(Self {
-            images,
-            parade,
-            frame: 0,
-        })
+        Some(Self { parade, frame: 0 })
     }
 
     pub(in crate::ui_runner) fn render(&mut self, dst: &mut [Rgb565Pixel], w: usize, h: usize) {
-        render_parade(dst, &mut self.parade, w, h, &self.images, self.frame);
+        render_archive_parade(dst, &mut self.parade, w, h, self.frame);
+        if self.frame > 0 && self.frame % 600 == 0 {
+            self.parade.log_scaler_stats();
+        }
         self.frame = self.frame.wrapping_add(1);
     }
 }
@@ -474,7 +494,7 @@ pub(in crate::ui_runner) fn run_screensaver_loop(
         }
         frame = frame.wrapping_add(1);
     }
-    render_state.parade.collect_scaled_cards(&images);
+    render_state.parade.collect_scaled_cards(Some(&images));
     render_state.parade.log_scaler_stats();
 }
 
@@ -1830,12 +1850,18 @@ struct ParadeScaleJob {
     tile_idx: usize,
     image_idx: usize,
     speed: usize,
-    source: SaverImage,
+    source: ParadeScaleSource,
+}
+
+enum ParadeScaleSource {
+    Decoded(SaverImage),
+    ArchiveIndex(usize),
 }
 
 struct ParadeScaleResult {
     tile_idx: usize,
-    card: PreparedParadeCard,
+    image_idx: usize,
+    card: Result<PreparedParadeCard, String>,
 }
 
 struct ParadeState {
@@ -1852,6 +1878,11 @@ struct ParadeState {
     scale_worker_connected: bool,
     scale_queue_depth: usize,
     scale_queue_max: usize,
+    archive_backed: bool,
+    asset_keys: Vec<String>,
+    decode_successes: u64,
+    decode_failures: u64,
+    unique_decoded: HashSet<usize>,
     layers: [ParadeLayerSchedule; PARADE_SPEED_COUNT],
     motion: ParadeMotion,
 }
@@ -1862,6 +1893,22 @@ impl ParadeState {
     }
 
     fn new_with_motion(seed: u64, motion: ParadeMotion) -> Self {
+        Self::new_with_source(seed, motion, None)
+    }
+
+    fn new_with_archive(
+        seed: u64,
+        archive: preview_worker::ResidentPreviewArchive,
+    ) -> Self {
+        Self::new_with_source(seed, ParadeMotion::from_env(), Some(archive))
+    }
+
+    fn new_with_source(
+        seed: u64,
+        motion: ParadeMotion,
+        mut archive: Option<preview_worker::ResidentPreviewArchive>,
+    ) -> Self {
+        let archive_backed = archive.is_some();
         // A tile can own at most one pending successor, so the producer is
         // already logically bounded by PARADE_TILE_COUNT. Keep submission
         // non-blocking: Lanczos work must never stall the launcher frame.
@@ -1874,20 +1921,31 @@ impl ParadeState {
                     mister_magik_catalog::runtime_thread::RuntimeThreadRole::ScreensaverScaler,
                 );
                 while let Ok(job) = job_rx.recv() {
-                    let (w, h, tint) = parade_scaled_style(&job.source, job.speed);
                     let started = Instant::now();
-                    let scaled = scale_lanczos3_rgb565_tinted(&job.source, w, h, tint);
-                    let half_shifted = prepare_half_shifted(&scaled);
-                    let card = PreparedParadeCard {
-                        image_idx: job.image_idx,
-                        speed: job.speed,
-                        scaled,
-                        half_shifted,
-                        scale_us: started.elapsed().as_micros(),
+                    let source = match job.source {
+                        ParadeScaleSource::Decoded(source) => Ok(source),
+                        ParadeScaleSource::ArchiveIndex(index) => archive
+                            .as_mut()
+                            .ok_or_else(|| "screensaver archive reader unavailable".to_string())
+                            .and_then(|archive| archive.load_pixels_at(index))
+                            .map(preview_pixels_to_saver_image),
                     };
+                    let card = source.map(|source| {
+                        let (w, h, tint) = parade_scaled_style(&source, job.speed);
+                        let scaled = scale_lanczos3_rgb565_tinted(&source, w, h, tint);
+                        let half_shifted = prepare_half_shifted(&scaled);
+                        PreparedParadeCard {
+                            image_idx: job.image_idx,
+                            speed: job.speed,
+                            scaled,
+                            half_shifted,
+                            scale_us: started.elapsed().as_micros(),
+                        }
+                    });
                     if result_tx
                         .send(ParadeScaleResult {
                             tile_idx: job.tile_idx,
+                            image_idx: job.image_idx,
                             card,
                         })
                         .is_err()
@@ -1911,6 +1969,11 @@ impl ParadeState {
             scale_worker_connected: true,
             scale_queue_depth: 0,
             scale_queue_max: 0,
+            archive_backed,
+            asset_keys: Vec::new(),
+            decode_successes: 0,
+            decode_failures: 0,
+            unique_decoded: HashSet::new(),
             layers: [ParadeLayerSchedule {
                 next_spawn_frame: 0,
                 interval_frames: 1,
@@ -1920,6 +1983,131 @@ impl ParadeState {
             }; PARADE_SPEED_COUNT],
             motion,
         }
+    }
+
+    fn ensure_archive_initialized_cancellable(
+        &mut self,
+        asset_keys: Vec<String>,
+        w: usize,
+        h: usize,
+        cancelled: &AtomicBool,
+    ) -> bool {
+        self.tiles.clear();
+        self.asset_keys = asset_keys;
+        self.deck = (0..self.asset_keys.len()).collect();
+        shuffle(&mut self.deck, &mut self.rng);
+        self.cursor = 0;
+        self.image_count = self.asset_keys.len();
+        if self.image_count == 0 {
+            return false;
+        }
+        for (layer_idx, target) in PARADE_LAYER_TARGETS.iter().copied().enumerate() {
+            let speed = PARADE_MIN_TILE_SPEED + layer_idx;
+            let velocity_fp = self.motion.card_velocity_fp(layer_idx);
+            let (tile_w, _, _) = parade_depth_style(speed);
+            let interval_frames = parade_layer_interval_frames(w, tile_w, velocity_fp, target);
+            let phase = self.random_below(interval_frames as usize) as u64;
+            self.layers[layer_idx] = ParadeLayerSchedule {
+                next_spawn_frame: phase,
+                interval_frames,
+                spawn_count: 0,
+                active_sum: 0,
+                sample_count: 0,
+            };
+            for rank in 0..target {
+                if cancelled.load(Ordering::Relaxed) {
+                    return false;
+                }
+                let tile_idx = self.tiles.len();
+                let Some(card) = self.prepare_archive_card(tile_idx, speed, cancelled) else {
+                    if cancelled.load(Ordering::Relaxed) {
+                        return false;
+                    }
+                    break;
+                };
+                let frames_until_exit = phase + rank as u64 * interval_frames;
+                let x_fp = w as i64 * PARADE_SUBPIXEL_ONE
+                    - frames_until_exit as i64 * velocity_fp;
+                let x = x_fp.div_euclid(PARADE_SUBPIXEL_ONE) as isize;
+                let y = self
+                    .random_tile_y(h, x, card.scaled.w, card.scaled.h, speed, tile_idx)
+                    .unwrap_or(-(card.scaled.h as isize * 2 / 3));
+                let active = self.placement_is_clear(
+                    x,
+                    y,
+                    card.scaled.w,
+                    card.scaled.h,
+                    speed,
+                    tile_idx,
+                );
+                self.tiles.push(ParadeTile {
+                    x_fp,
+                    y,
+                    layer: speed,
+                    speed,
+                    velocity_fp,
+                    image_idx: card.image_idx,
+                    scaled: card.scaled,
+                    half_shifted: card.half_shifted,
+                    active,
+                    next: None,
+                    pending_image_idx: None,
+                });
+            }
+        }
+        if self.tiles.is_empty() {
+            return false;
+        }
+        for tile_idx in 0..self.tiles.len() {
+            self.queue_successor(tile_idx, None);
+        }
+        true
+    }
+
+    fn prepare_archive_card(
+        &mut self,
+        tile_idx: usize,
+        speed: usize,
+        cancelled: &AtomicBool,
+    ) -> Option<PreparedParadeCard> {
+        for _ in 0..self.image_count {
+            if cancelled.load(Ordering::Relaxed) {
+                return None;
+            }
+            let image_idx = self.next_image_for(tile_idx)?;
+            if self
+                .scale_tx
+                .send(ParadeScaleJob {
+                    tile_idx,
+                    image_idx,
+                    speed,
+                    source: ParadeScaleSource::ArchiveIndex(image_idx),
+                })
+                .is_err()
+            {
+                self.scale_worker_connected = false;
+                return None;
+            }
+            self.scale_queue_depth += 1;
+            self.scale_queue_max = self.scale_queue_max.max(self.scale_queue_depth);
+            let result = self.scale_rx.recv().ok()?;
+            self.scale_queue_depth = self.scale_queue_depth.saturating_sub(1);
+            match result.card {
+                Ok(card) => {
+                    self.record_prepared_card(&card);
+                    return Some(card);
+                }
+                Err(error) => {
+                    self.decode_failures += 1;
+                    crate::ui_errln!(
+                        "screensaver_decode_failed key={} error={}",
+                        self.asset_keys[result.image_idx],
+                        error
+                    );
+                }
+            }
+        }
+        None
     }
 
     fn ensure_initialized(&mut self, images: &[SaverImage], w: usize, h: usize) {
@@ -1993,7 +2181,7 @@ impl ParadeState {
         // Initial cards are ready before the first frame. Successors are then
         // prepared off-thread instead of doubling synchronous startup work.
         for tile_idx in 0..self.tiles.len() {
-            self.queue_successor(tile_idx, images);
+            self.queue_successor(tile_idx, Some(images));
         }
         true
     }
@@ -2024,7 +2212,13 @@ impl ParadeState {
         None
     }
 
-    fn advance(&mut self, screen_w: usize, screen_h: usize, images: &[SaverImage], frame: u64) {
+    fn advance(
+        &mut self,
+        screen_w: usize,
+        screen_h: usize,
+        images: Option<&[SaverImage]>,
+        frame: u64,
+    ) {
         self.collect_scaled_cards(images);
         for tile_idx in 0..self.tiles.len() {
             if self.tiles[tile_idx].active {
@@ -2079,7 +2273,7 @@ impl ParadeState {
         }
     }
 
-    fn queue_successor(&mut self, tile_idx: usize, images: &[SaverImage]) {
+    fn queue_successor(&mut self, tile_idx: usize, images: Option<&[SaverImage]>) {
         if self.tiles[tile_idx].next.is_some() || self.tiles[tile_idx].pending_image_idx.is_some() {
             return;
         }
@@ -2089,21 +2283,31 @@ impl ParadeState {
         self.queue_scale(tile_idx, image_idx, images);
     }
 
-    fn queue_scale(&mut self, tile_idx: usize, image_idx: usize, images: &[SaverImage]) {
+    fn queue_scale(&mut self, tile_idx: usize, image_idx: usize, images: Option<&[SaverImage]>) {
         let speed = self.tiles[tile_idx].speed;
         if !self.scale_worker_connected {
-            let scaled = self.scale_image(&images[image_idx], speed);
-            let half_shifted = prepare_half_shifted(&scaled);
-            let card = PreparedParadeCard {
-                image_idx,
-                speed,
-                scaled,
-                half_shifted,
-                scale_us: 0,
-            };
-            self.tiles[tile_idx].next = Some(card);
+            if let Some(images) = images {
+                let scaled = self.scale_image(&images[image_idx], speed);
+                let half_shifted = prepare_half_shifted(&scaled);
+                let card = PreparedParadeCard {
+                    image_idx,
+                    speed,
+                    scaled,
+                    half_shifted,
+                    scale_us: 0,
+                };
+                self.tiles[tile_idx].next = Some(card);
+            }
             return;
         }
+        let source = if let Some(images) = images {
+            ParadeScaleSource::Decoded(images[image_idx].clone())
+        } else {
+            if image_idx >= self.asset_keys.len() {
+                return;
+            }
+            ParadeScaleSource::ArchiveIndex(image_idx)
+        };
         self.tiles[tile_idx].pending_image_idx = Some(image_idx);
         if self
             .scale_tx
@@ -2111,30 +2315,49 @@ impl ParadeState {
                 tile_idx,
                 image_idx,
                 speed,
-                source: images[image_idx].clone(),
+                source,
             })
             .is_err()
         {
             self.scale_worker_connected = false;
             self.tiles[tile_idx].pending_image_idx = None;
-            self.queue_successor(tile_idx, images);
+            if images.is_some() {
+                self.queue_successor(tile_idx, images);
+            }
         } else {
             self.scale_queue_depth += 1;
             self.scale_queue_max = self.scale_queue_max.max(self.scale_queue_depth);
         }
     }
 
-    fn collect_scaled_cards(&mut self, images: &[SaverImage]) {
+    fn collect_scaled_cards(&mut self, images: Option<&[SaverImage]>) {
+        let mut failed_tiles = Vec::new();
         loop {
             match self.scale_rx.try_recv() {
                 Ok(result) => {
                     self.scale_queue_depth = self.scale_queue_depth.saturating_sub(1);
-                    self.scale_count += 1;
-                    self.scale_total_us += result.card.scale_us;
-                    self.scale_max_us = self.scale_max_us.max(result.card.scale_us);
-                    if let Some(tile) = self.tiles.get_mut(result.tile_idx) {
-                        tile.pending_image_idx = None;
-                        tile.next = Some(result.card);
+                    match result.card {
+                        Ok(card) => {
+                            self.record_prepared_card(&card);
+                            if let Some(tile) = self.tiles.get_mut(result.tile_idx) {
+                                tile.pending_image_idx = None;
+                                tile.next = Some(card);
+                            }
+                        }
+                        Err(error) => {
+                            self.decode_failures += 1;
+                            if let Some(tile) = self.tiles.get_mut(result.tile_idx) {
+                                tile.pending_image_idx = None;
+                            }
+                            if let Some(key) = self.asset_keys.get(result.image_idx) {
+                                crate::ui_errln!(
+                                    "screensaver_decode_failed key={} error={}",
+                                    key,
+                                    error
+                                );
+                            }
+                            failed_tiles.push(result.tile_idx);
+                        }
                     }
                 }
                 Err(TryRecvError::Empty) => break,
@@ -2144,7 +2367,7 @@ impl ParadeState {
                 }
             }
         }
-        if !self.scale_worker_connected {
+        if !self.scale_worker_connected && !self.archive_backed {
             let stranded = self
                 .tiles
                 .iter()
@@ -2156,6 +2379,9 @@ impl ParadeState {
                 .collect::<Vec<_>>();
             self.scale_queue_depth = 0;
             for (tile_idx, image_idx, speed) in stranded {
+                let Some(images) = images else {
+                    continue;
+                };
                 let scaled = self.scale_image(&images[image_idx], speed);
                 let half_shifted = prepare_half_shifted(&scaled);
                 self.tiles[tile_idx].pending_image_idx = None;
@@ -2168,6 +2394,24 @@ impl ParadeState {
                 };
                 self.tiles[tile_idx].next = Some(card);
             }
+        } else if !self.scale_worker_connected {
+            self.scale_queue_depth = 0;
+            for tile in &mut self.tiles {
+                tile.pending_image_idx = None;
+            }
+        }
+        for tile_idx in failed_tiles {
+            self.queue_successor(tile_idx, images);
+        }
+    }
+
+    fn record_prepared_card(&mut self, card: &PreparedParadeCard) {
+        self.scale_count += 1;
+        self.scale_total_us += card.scale_us;
+        self.scale_max_us = self.scale_max_us.max(card.scale_us);
+        if self.archive_backed {
+            self.decode_successes += 1;
+            self.unique_decoded.insert(card.image_idx);
         }
     }
 
@@ -2242,6 +2486,17 @@ impl ParadeState {
             PARADE_TILE_COUNT,
             self.scale_worker_connected
         );
+        if self.archive_backed {
+            crate::ui_logln!(
+                "screensaver_archive_runtime entries={} decodes={} failures={} unique_keys={} queue_depth={} queue_max={}",
+                self.asset_keys.len(),
+                self.decode_successes,
+                self.decode_failures,
+                self.unique_decoded.len(),
+                self.scale_queue_depth,
+                self.scale_queue_max
+            );
+        }
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             let speed = PARADE_MIN_TILE_SPEED + layer_idx;
             let (w, h, _) = parade_depth_style(speed);
@@ -2311,7 +2566,31 @@ fn render_parade(
 ) {
     render_horizontal_starfield(dst, w, h, frame, state.motion);
     state.ensure_initialized(images, w, h);
-    state.advance(w, h, images, frame);
+    state.advance(w, h, Some(images), frame);
+    let (draw_order, draw_count) = parade_draw_order(state);
+    for tile_idx in draw_order.into_iter().take(draw_count) {
+        let tile = &state.tiles[tile_idx];
+        blit_scaled_subpixel_x(
+            dst,
+            w,
+            h,
+            &tile.scaled,
+            &tile.half_shifted,
+            tile.x_fp,
+            tile.y,
+        );
+    }
+}
+
+fn render_archive_parade(
+    dst: &mut [Rgb565Pixel],
+    state: &mut ParadeState,
+    w: usize,
+    h: usize,
+    frame: u64,
+) {
+    render_horizontal_starfield(dst, w, h, frame, state.motion);
+    state.advance(w, h, None, frame);
     let (draw_order, draw_count) = parade_draw_order(state);
     for tile_idx in draw_order.into_iter().take(draw_count) {
         let tile = &state.tiles[tile_idx];
