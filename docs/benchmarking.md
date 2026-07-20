@@ -384,7 +384,7 @@ Use these entrypoints:
 scripts/profile-arcade-scroll.sh LABEL --secs 30 --scenario turbo-hold
 scripts/profile-preview-scroll.sh LABEL --secs 30 --scenario turbo-hold
 scripts/profile-first-preview.sh LABEL --skip-build
-scripts/gate-cold-preview-systems.sh LABEL
+scripts/profile-cold-preview-systems.sh LABEL --require-pass
 ```
 
 The cold-preview systems gate reports target-list readiness, candidate
@@ -524,7 +524,7 @@ built with `--bench-tools`; production `ui` builds intentionally ignore
 Cold direct-to-system turbo preview readiness is measured with:
 
 ```bash
-scripts/gate-cold-turbo-preview.sh LABEL --systems arcade,neogeo,saturn --secs 10
+scripts/profile-cold-turbo-preview.sh LABEL --systems arcade,neogeo,saturn --secs 10 --require-pass
 ```
 
 This gate reboots per system, starts the launcher directly with

@@ -707,8 +707,8 @@ run_install_restore_roundtrip() {
     record_skip "install/restore round trip"
     return
   fi
-  run_capture "restore-stock-boot" "$ROOT/scripts/restore-stock-boot.sh"
-  run_capture "install-slint-boot" "$ROOT/scripts/install-slint-boot.sh"
+  run_capture "restore-stock-boot" "$ROOT/scripts/magik-mode.sh" stock
+  run_capture "install-slint-boot" "$ROOT/scripts/magik-mode.sh" dev
   wait_for_launcher_active "wait-launcher-after-install-roundtrip" 120 || return
   run_update_all_safe_boot || true
 }

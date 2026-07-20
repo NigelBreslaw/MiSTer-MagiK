@@ -26,6 +26,15 @@ Together these files contained 3,292 lines, almost all unreachable retired V2
 implementation. Current V3 catalog acceptance and profiling interfaces remain
 under `scripts/`.
 
+## Pass-through adapters
+
+Deleted on 2026-07-20 after updating callers to use their canonical interfaces:
+
+- `install-slint-boot.sh` → `magik-mode.sh dev`
+- `restore-stock-boot.sh` → `magik-mode.sh stock`
+- `gate-cold-preview-systems.sh` → `profile-cold-preview-systems.sh --require-pass`
+- `gate-cold-turbo-preview.sh` → `profile-cold-turbo-preview.sh --require-pass`
+
 ## Awaiting capability review
 
 These active scripts have no current repository callers. Absence of a caller

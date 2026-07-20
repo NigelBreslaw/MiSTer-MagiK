@@ -28,7 +28,7 @@ manual pre-release gate rather than GitHub-hosted CI.
   `game-databases-vN` release, with archive, manifest, and `SHA256SUMS` verified
   together. Application publication never rebuilds them or accepts raw database
   paths. Synthetic bundles are test fixtures only.
-- Rollback is verified with `scripts/restore-stock-boot.sh` before publishing a
+- Rollback is verified with `scripts/magik-mode.sh stock` before publishing a
   beta build from a new release flow.
 - The exact workflow candidate passes the full device gate before a reviewer
   approves the protected `publish-alpha`, `publish-beta`, or `publish-release`

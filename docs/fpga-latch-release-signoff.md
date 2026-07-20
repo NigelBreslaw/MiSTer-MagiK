@@ -93,7 +93,7 @@ the exact hash, and only then activates the pair. Boot installation refuses a
 missing or mismatched pair. After activation, `fpga-latch-report` must show
 `0x57`/`0x58` support and advancing counters for the expected RBF command line.
 
-Rollback with `scripts/restore-stock-boot.sh`. For a one-shot candidate rollback
+Rollback with `scripts/magik-mode.sh stock`. For a one-shot candidate rollback
 without changing boot policy, launch the retained stock Menu RBF through Main's
 normal command path; do not use an external `rbf_load` while the launcher is
 active.

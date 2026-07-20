@@ -75,7 +75,6 @@ for script in \
   "$ROOT/scripts/device-release-acceptance.sh" \
   "$ROOT/scripts/dev-rust" \
   "$ROOT/scripts/doctor" \
-  "$ROOT/scripts/install-slint-boot.sh" \
   "$ROOT/scripts/lib/magik-layout.sh" \
   "$ROOT/scripts/lib/platform-manifest-lib.sh" \
   "$ROOT/scripts/magik-mode.sh" \
@@ -97,7 +96,6 @@ for script in \
   "$ROOT/scripts/regression-arm-noop.sh" \
   "$ROOT/scripts/release/check-alpha-promotion.sh" \
   "$ROOT/scripts/lib/reboot-wait-lib.sh" \
-  "$ROOT/scripts/restore-stock-boot.sh" \
   "$ROOT/scripts/switch-ui.sh" \
   "$ROOT/scripts/tests/test-magik-mode.sh" \
   "$ROOT/scripts/validate" \

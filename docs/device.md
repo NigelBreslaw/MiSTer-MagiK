@@ -146,9 +146,9 @@ parked legacy FastNet script by renaming
 `/etc/init.d/disabled-S00fastnet.magik-agent` back to
 `/etc/init.d/S00fastnet`.
 
-The compatibility helpers `scripts/install-slint-boot.sh` and
-`scripts/restore-stock-boot.sh` now delegate to `magik-mode.sh dev` and
-`magik-mode.sh stock`; they no longer maintain separate INI copies. The
+Use `scripts/magik-mode.sh dev` to activate the development installation and
+`scripts/magik-mode.sh stock` to restore stock boot. These modes do not
+maintain separate INI copies. The
 Downloader-installed `mister-magik` menu script preserves its original
 public-install configuration as
 `/media/fat/MiSTer.ini.bak.before-magik`; reinstalls never replace it. The
@@ -213,7 +213,7 @@ The known-good activation sequence is:
    newest verified published `game-databases-vN` release. It activates the game
    database manifest and `platform-v2.manifest` last. The deploy fails before
    device writes if GitHub has no valid numbered database release.
-   `scripts/install-slint-boot.sh` refuses to arm MagiK boot unless the complete
+   `scripts/magik-mode.sh dev` refuses to arm MagiK boot unless the complete
    installed bundle verifies.
 
    A runtime-only `scripts/deploy-rust.sh` update first verifies the installed

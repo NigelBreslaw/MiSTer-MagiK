@@ -130,7 +130,7 @@ Before dispatch:
    by refusing existing tags.
 5. Dispatch **Promote MiSTer MagiK Game Databases** from `main`. The first run
    publishes `game-databases-v1`; later no-change runs exit without publishing.
-6. Confirm rollback with `scripts/restore-stock-boot.sh` on the test MiSTer.
+6. Confirm rollback with `scripts/magik-mode.sh stock` on the test MiSTer.
 
 In GitHub Actions, choose **Publish MiSTer MagiK**, click **Run workflow**, make
 sure the branch is `main`, and select `alpha`, `beta`, or `release`. This is the
