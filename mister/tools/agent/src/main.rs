@@ -861,6 +861,7 @@ mod linux {
     };
     use super::{parse_control_request, require_ok_main_reply, ControlRequest};
     use flate2::{write::ZlibEncoder, Compression};
+    use libc::{c_ulong, ioctl};
     use mister_magik_framebuffer_stream::SCHEMA as FRAMEBUFFER_STREAM_SCHEMA;
     use serde_json::{json, Value};
     use sha2::{Digest, Sha256};
