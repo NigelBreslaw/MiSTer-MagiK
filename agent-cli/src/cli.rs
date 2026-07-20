@@ -22,11 +22,8 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    Lint(ScopeArgs),
-    Plan {
-        #[command(subcommand)]
-        command: PlanCommand,
-    },
+    Plan(ScopeArgs),
+    Check(ScopeArgs),
     Runs {
         #[arg(long)]
         failed: bool,
@@ -47,7 +44,9 @@ pub enum Command {
     },
     Verify {
         #[command(subcommand)]
-        command: VerifyCommand,
+        command: Option<VerifyCommand>,
+        #[command(flatten)]
+        scope: ScopeArgs,
     },
     Doctor,
     Rust {
@@ -89,11 +88,6 @@ pub enum ReleaseCommand {
 pub enum ArmCommand {
     CheckLauncher,
     BuildDevice,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum PlanCommand {
-    Lint(ScopeArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -140,12 +134,10 @@ impl Cli {
     pub fn into_intent(self) -> Intent {
         match self.command {
             None => Intent::Interactive,
-            Some(Command::Lint(scope)) => Intent::Lint {
+            Some(Command::Plan(scope)) => Intent::Plan {
                 scope: scope.into_scope(),
             },
-            Some(Command::Plan {
-                command: PlanCommand::Lint(scope),
-            }) => Intent::PlanLint {
+            Some(Command::Check(scope)) => Intent::Check {
                 scope: scope.into_scope(),
             },
             Some(Command::Runs { failed, recent }) => Intent::ListRuns { failed, recent },
@@ -162,8 +154,15 @@ impl Cli {
                 command: DbCommand::PruneLogs,
             }) => Intent::PruneLogs,
             Some(Command::Verify {
-                command: VerifyCommand::FullHost,
+                command: Some(VerifyCommand::FullHost),
+                ..
             }) => Intent::VerifyFullHost,
+            Some(Command::Verify {
+                command: None,
+                scope,
+            }) => Intent::Verify {
+                scope: scope.into_scope(),
+            },
             Some(Command::Doctor) => Intent::Doctor,
             Some(Command::Rust { task }) => Intent::Rust {
                 task: match task {
@@ -192,11 +191,11 @@ mod tests {
     use clap::Parser;
 
     #[test]
-    fn lint_defaults_to_working_tree() {
-        let cli = Cli::try_parse_from(["agent-cli", "lint"]).unwrap();
+    fn check_defaults_to_working_tree() {
+        let cli = Cli::try_parse_from(["agent-cli", "check"]).unwrap();
         assert_eq!(
             cli.into_intent(),
-            Intent::Lint {
+            Intent::Check {
                 scope: Scope::WorkingTree
             }
         );
@@ -204,10 +203,10 @@ mod tests {
 
     #[test]
     fn explicit_paths_are_preserved() {
-        let cli = Cli::try_parse_from(["agent-cli", "plan", "lint", "--paths", "a", "b"]).unwrap();
+        let cli = Cli::try_parse_from(["agent-cli", "plan", "--paths", "a", "b"]).unwrap();
         assert_eq!(
             cli.into_intent(),
-            Intent::PlanLint {
+            Intent::Plan {
                 scope: Scope::Paths(vec![PathBuf::from("a"), PathBuf::from("b")])
             }
         );

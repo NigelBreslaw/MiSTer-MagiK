@@ -19,7 +19,7 @@ pub fn execute(
     reporter: &mut Reporter<'_>,
 ) -> Result<Outcome, String> {
     if plan.operations.is_empty() {
-        reporter.emit(EventKind::Progress, "plan", "Nothing to lint", Some(100))?;
+        reporter.emit(EventKind::Progress, "plan", "Nothing to check", Some(100))?;
         return Ok(Outcome::NoOp);
     }
     for (index, operation) in plan.operations.iter().enumerate() {
@@ -79,10 +79,11 @@ fn run_operation(
         return Ok(());
     }
     Err(format!(
-        "{} failed (exit {code}); log={} tail={}",
+        "{} failed (exit {code}); log={} tail={}; next={}",
         operation.title,
         log_path.display(),
-        log_tail(&log_path)?
+        log_tail(&log_path)?,
+        operation.failure_hint
     ))
 }
 

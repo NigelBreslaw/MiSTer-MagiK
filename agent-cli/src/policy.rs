@@ -32,6 +32,8 @@ mod tests {
             risk: Risk::DeviceWrite,
             program: "scripts/deploy-rust.sh".into(),
             args: vec![],
+            reason: "deployment requested".into(),
+            failure_hint: "inspect the recorded run".into(),
         };
         assert!(authorize(&operation, Risk::LocalWrite).is_err());
     }

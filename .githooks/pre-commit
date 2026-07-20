@@ -18,4 +18,4 @@ if [ "$actual_name" != "$expected_name" ] || [ "$actual_email" != "$expected_ema
   exit 1
 fi
 
-exec cargo run --quiet --manifest-path "$ROOT/agent-cli/Cargo.toml" -- lint --staged
+exec "$ROOT/scripts/agent" verify --staged

@@ -99,17 +99,19 @@ fn dispatch(
     reporter: &mut Reporter<'_>,
 ) -> Result<Outcome, String> {
     match intent {
-        Intent::Lint { scope: selected } | Intent::PlanLint { scope: selected } => {
+        Intent::Plan { scope: selected }
+        | Intent::Check { scope: selected }
+        | Intent::Verify { scope: selected } => {
             let paths = scope::collect(evidence, request_id, repository, selected)?;
-            let plan = planner::lint_plan(intent.clone(), paths);
+            let plan = planner::affected_plan(intent.clone(), paths);
             evidence.record_plan(request_id, &plan)?;
             let summary = if plan.operations.is_empty() {
                 "No lint operations selected".to_owned()
             } else {
-                format!("Selected {} lint operations", plan.operations.len())
+                format!("Selected {} operations", plan.operations.len())
             };
             reporter.emit(EventKind::Progress, "plan", &summary, Some(0))?;
-            if matches!(intent, Intent::PlanLint { .. }) {
+            if matches!(intent, Intent::Plan { .. }) {
                 if output == OutputFormat::Human {
                     for operation in &plan.operations {
                         println!(
@@ -118,6 +120,7 @@ fn dispatch(
                             operation.program,
                             operation.args.join(" ")
                         );
+                        println!("  reason: {}", operation.reason);
                     }
                 }
                 return Ok(if plan.operations.is_empty() {

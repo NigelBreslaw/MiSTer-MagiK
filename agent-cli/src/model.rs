@@ -24,8 +24,9 @@ pub enum Scope {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Intent {
-    Lint { scope: Scope },
-    PlanLint { scope: Scope },
+    Plan { scope: Scope },
+    Check { scope: Scope },
+    Verify { scope: Scope },
     ListRuns { failed: bool, recent: usize },
     ShowRun { run_id: String },
     ReviewScripts,
@@ -62,6 +63,8 @@ pub struct Operation {
     pub risk: Risk,
     pub program: String,
     pub args: Vec<String>,
+    pub reason: String,
+    pub failure_hint: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

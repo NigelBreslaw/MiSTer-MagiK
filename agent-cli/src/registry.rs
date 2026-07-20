@@ -53,6 +53,8 @@ pub fn operation(id: &str) -> Option<Operation> {
             risk: Risk::ReadOnly,
             program: "git".into(),
             args: vec!["diff".into(), "--check".into()],
+            reason: "all patches require whitespace validation".into(),
+            failure_hint: "run scripts/agent run show RUN_ID".into(),
         }),
         _ => None,
     }
