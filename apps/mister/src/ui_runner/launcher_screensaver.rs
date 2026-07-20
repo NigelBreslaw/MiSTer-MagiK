@@ -242,6 +242,7 @@ struct ScreensaverRenderState {
 
 pub(in crate::ui_runner) struct LauncherScreensaver {
     parade: ParadeState,
+    damage_tracker: ScreensaverDamageTracker,
     archive_rx: Option<Receiver<ArchiveLoadResult>>,
     archive_cancelled: Arc<AtomicBool>,
     startup_started_at: Option<Instant>,
@@ -258,6 +259,7 @@ impl LauncherScreensaver {
     ) -> Self {
         Self {
             parade: ParadeState::new(random_seed()),
+            damage_tracker: ScreensaverDamageTracker::default(),
             archive_rx: Some(archive_rx),
             archive_cancelled,
             startup_started_at,
@@ -276,6 +278,8 @@ impl LauncherScreensaver {
         }
         #[cfg(not(any(feature = "bench-tools", feature = "diagnostics")))]
         render_archive_parade(dst, &mut self.parade, w, h, self.frame);
+        self.damage_tracker
+            .finish_frame(&self.parade, w, h, self.frame);
         if self.frame > 0 && self.frame % 600 == 0 {
             self.parade.log_scaler_stats();
             #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
@@ -304,6 +308,7 @@ impl LauncherScreensaver {
                 let mut parade = ParadeState::new_with_archive(random_seed(), loaded.archive);
                 parade.begin_archive_streaming(loaded.asset_keys, w, self.startup_started_at);
                 self.parade = parade;
+                self.damage_tracker.invalidate();
                 self.archive_rx = None;
             }
             Ok(Err(error)) => {
@@ -323,6 +328,14 @@ impl LauncherScreensaver {
 
     pub(in crate::ui_runner) fn is_loading_archive(&self) -> bool {
         self.archive_rx.is_some()
+    }
+
+    pub(in crate::ui_runner) fn frame_damage(&self) -> DirtyRectList {
+        self.damage_tracker.damage
+    }
+
+    pub(in crate::ui_runner) fn invalidate_cached_frame(&mut self) {
+        self.damage_tracker.invalidate();
     }
 }
 
@@ -399,6 +412,201 @@ impl Drop for LauncherScreensaver {
     fn drop(&mut self) {
         self.archive_cancelled.store(true, Ordering::Relaxed);
     }
+}
+
+const SCREENSAVER_DAMAGE_RECT_LIMIT: usize = 16;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CardFootprint {
+    x_fp: i64,
+    y: isize,
+    w: usize,
+    h: usize,
+}
+
+impl CardFootprint {
+    fn rect(self, screen_w: usize, screen_h: usize) -> Option<DirtyRect> {
+        let x = self.x_fp.div_euclid(PARADE_SUBPIXEL_ONE) as isize;
+        clipped_signed_rect(
+            x,
+            self.y,
+            x.saturating_add(self.w as isize).saturating_add(3),
+            self.y.saturating_add(self.h as isize).saturating_add(2),
+            screen_w,
+            screen_h,
+        )
+    }
+}
+
+#[derive(Default)]
+struct ScreensaverDamageTracker {
+    valid: bool,
+    w: usize,
+    h: usize,
+    previous_cards: Vec<Option<CardFootprint>>,
+    previous_stars: Vec<DirtyRect>,
+    damage: DirtyRectList,
+}
+
+impl ScreensaverDamageTracker {
+    fn invalidate(&mut self) {
+        self.valid = false;
+    }
+
+    fn finish_frame(&mut self, parade: &ParadeState, w: usize, h: usize, frame: u64) {
+        let current_cards = parade
+            .tiles
+            .iter()
+            .map(|tile| {
+                tile.active.then_some(CardFootprint {
+                    x_fp: tile.x_fp,
+                    y: tile.y,
+                    w: tile.scaled.w,
+                    h: tile.scaled.h,
+                })
+            })
+            .collect::<Vec<_>>();
+        let current_stars = horizontal_star_footprints(w, h, frame);
+        let full = DirtyRect {
+            x0: 0,
+            y0: 0,
+            x1: w,
+            y1: h,
+        };
+        if !self.valid || self.w != w || self.h != h {
+            self.damage = DirtyRectList::from_one(full);
+        } else {
+            let mut candidates = Vec::with_capacity(
+                self.previous_cards.len() + current_cards.len() + self.previous_stars.len() + current_stars.len(),
+            );
+            for footprint in self
+                .previous_cards
+                .iter()
+                .chain(current_cards.iter())
+                .flatten()
+            {
+                if let Some(rect) = footprint.rect(w, h) {
+                    candidates.push(rect);
+                }
+            }
+            candidates.extend(self.previous_stars.iter().copied());
+            candidates.extend(current_stars.iter().copied());
+            self.damage = canonical_screensaver_damage(candidates, full);
+        }
+        self.previous_cards = current_cards;
+        self.previous_stars = current_stars;
+        self.w = w;
+        self.h = h;
+        self.valid = true;
+    }
+}
+
+fn horizontal_star_footprints(w: usize, h: usize, frame: u64) -> Vec<DirtyRect> {
+    let mut rects = Vec::with_capacity(420);
+    for star in 0..210usize {
+        let (x, fraction) = horizontal_star_position(star, w, frame);
+        let y = (star
+            .wrapping_mul(83)
+            .wrapping_add(star.wrapping_mul(star) * 7))
+            % h;
+        rects.push(DirtyRect {
+            x0: x,
+            y0: y,
+            x1: x + 1,
+            y1: y + 1,
+        });
+        if fraction > 0 {
+            let next_x = (x + 1) % w;
+            rects.push(DirtyRect {
+                x0: next_x,
+                y0: y,
+                x1: next_x + 1,
+                y1: y + 1,
+            });
+        }
+    }
+    rects
+}
+
+fn clipped_signed_rect(
+    x0: isize,
+    y0: isize,
+    x1: isize,
+    y1: isize,
+    w: usize,
+    h: usize,
+) -> Option<DirtyRect> {
+    let x0 = x0.clamp(0, w as isize) as usize;
+    let y0 = y0.clamp(0, h as isize) as usize;
+    let x1 = x1.clamp(0, w as isize) as usize;
+    let y1 = y1.clamp(0, h as isize) as usize;
+    (x1 > x0 && y1 > y0).then_some(DirtyRect { x0, y0, x1, y1 })
+}
+
+fn damage_rects_touch(a: DirtyRect, b: DirtyRect) -> bool {
+    a.x0 <= b.x1 && b.x0 <= a.x1 && a.y0 <= b.y1 && b.y0 <= a.y1
+}
+
+fn merge_touching_damage(rects: &mut Vec<DirtyRect>) {
+    let mut index = 0;
+    while index < rects.len() {
+        let mut other = index + 1;
+        while other < rects.len() {
+            if damage_rects_touch(rects[index], rects[other]) {
+                rects[index] = rects[index].union(rects.swap_remove(other));
+                index = 0;
+                other = 1;
+            } else {
+                other += 1;
+            }
+        }
+        index += 1;
+    }
+}
+
+fn canonical_screensaver_damage(
+    mut rects: Vec<DirtyRect>,
+    full: DirtyRect,
+) -> DirtyRectList {
+    if rects.is_empty() {
+        return DirtyRectList::new();
+    }
+    merge_touching_damage(&mut rects);
+    while rects.len() > SCREENSAVER_DAMAGE_RECT_LIMIT {
+        let mut best = None;
+        for left in 0..rects.len() {
+            for right in (left + 1)..rects.len() {
+                let union = rects[left].union(rects[right]);
+                let inflation = union
+                    .width()
+                    .saturating_mul(union.rows() as usize)
+                    .saturating_sub(
+                        rects[left]
+                            .width()
+                            .saturating_mul(rects[left].rows() as usize)
+                            .saturating_add(
+                                rects[right]
+                                    .width()
+                                    .saturating_mul(rects[right].rows() as usize),
+                            ),
+                    );
+                if best.is_none_or(|(_, _, best_inflation)| inflation < best_inflation) {
+                    best = Some((left, right, inflation));
+                }
+            }
+        }
+        let Some((left, right, _)) = best else {
+            return DirtyRectList::from_one(full);
+        };
+        let right_rect = rects.swap_remove(right);
+        rects[left] = rects[left].union(right_rect);
+        merge_touching_damage(&mut rects);
+    }
+    let mut damage = DirtyRectList::new();
+    for rect in rects {
+        damage.push(rect);
+    }
+    damage
 }
 
 struct LoadedScreensaverArchive {
