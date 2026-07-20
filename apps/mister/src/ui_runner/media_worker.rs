@@ -7,6 +7,10 @@ use crate::artifact_publish::{
 };
 use mister_magik_catalog::media_identity::preferred_screenshot_image_size;
 use mister_magik_catalog::preview_worker::invalidate_preview_archive_metadata_cache;
+use mister_magik_catalog::production_sharded_projection::{
+    production_registry_limits, reconcile_production_preview_availability,
+    PreviewAvailabilityReconciliationOutcome,
+};
 use mister_magik_catalog::runtime_thread::{apply_runtime_thread_policy, RuntimeThreadRole};
 use mister_magik_fb::media_update::{
     index_path_for_pack_path, pack_status_from_state, parse_manifest_json,
@@ -455,6 +459,7 @@ fn start_ready_downloads(
             detail,
         });
         if matches!(status, LocalPackStatus::Current) {
+            reconcile_pack_preview_availability(&pack, &local_path, tx);
             send_progress(
                 tx,
                 MediaProgressEvent::for_pack(
@@ -536,6 +541,7 @@ fn poll_active_downloads(
             Ok(Ok(())) => {
                 let done = active.remove(idx);
                 counts.downloaded += 1;
+                reconcile_pack_preview_availability(&done.pack, &done.local_path, tx);
                 if done.show_completion_progress {
                     send_progress(
                         tx,
@@ -1638,12 +1644,52 @@ pub(super) enum MediaWorkerMessage {
         status: String,
         detail: String,
     },
+    PreviewAvailabilityUpdated {
+        outcome: PreviewAvailabilityReconciliationOutcome,
+    },
+    PreviewAvailabilityFailed {
+        system: String,
+        detail: String,
+    },
     Failed {
         detail: String,
     },
     Done {
         detail: String,
     },
+}
+
+fn reconcile_pack_preview_availability(
+    pack: &MediaPack,
+    local_path: &Path,
+    tx: &mpsc::Sender<MediaWorkerMessage>,
+) {
+    let system_id = match mister_magik_catalog::catalog_classify::SystemId::parse(&pack.id) {
+        Ok(system_id) => system_id,
+        Err(error) => {
+            let _ = tx.send(MediaWorkerMessage::PreviewAvailabilityFailed {
+                system: pack.id.clone(),
+                detail: error.to_string(),
+            });
+            return;
+        }
+    };
+    match reconcile_production_preview_availability(
+        &mister_magik_catalog::catalog_config::default_sharded_catalog_path(),
+        &system_id,
+        local_path,
+        production_registry_limits(),
+    ) {
+        Ok(outcome) => {
+            let _ = tx.send(MediaWorkerMessage::PreviewAvailabilityUpdated { outcome });
+        }
+        Err(error) => {
+            let _ = tx.send(MediaWorkerMessage::PreviewAvailabilityFailed {
+                system: pack.id.clone(),
+                detail: error.to_string(),
+            });
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

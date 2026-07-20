@@ -317,6 +317,26 @@ impl ScreenshotMediaUpdateSession {
                     effects.push(ScreenshotMediaUpdateEffect::ClearPreviewFailures);
                 }
             }
+            MediaWorkerMessage::PreviewAvailabilityUpdated { outcome } => {
+                effects.event(
+                    "screenshot_media_catalog_updated",
+                    format!(
+                        "system={} previous_generation={} generation={} candidates={} available={} changed={}",
+                        outcome.system_id,
+                        outcome.previous_generation,
+                        outcome.generation,
+                        outcome.candidate_rows,
+                        outcome.available_rows,
+                        outcome.changed_rows
+                    ),
+                );
+            }
+            MediaWorkerMessage::PreviewAvailabilityFailed { system, detail } => {
+                effects.event(
+                    "screenshot_media_catalog_update_failed",
+                    format!("system={system} error={detail}"),
+                );
+            }
             MediaWorkerMessage::Failed { detail } => {
                 effects.event("screenshot_media_update_failed", detail);
                 self.progress_clear_at = None;
@@ -479,6 +499,38 @@ mod tests {
             effect_names(downloaded),
             vec!["event", "clear-preview-failures"]
         );
+    }
+
+    #[test]
+    fn catalog_reconciliation_messages_are_logged_without_changing_worker_health() {
+        let mut session = ScreenshotMediaUpdateSession::default();
+        let updated = session.handle_worker_message(
+            MediaWorkerMessage::PreviewAvailabilityUpdated {
+                outcome: mister_magik_catalog::production_sharded_projection::PreviewAvailabilityReconciliationOutcome {
+                    system_id: mister_magik_catalog::catalog_classify::SystemId::parse("arcade")
+                        .unwrap(),
+                    previous_generation: 1,
+                    generation: 2,
+                    candidate_rows: 2,
+                    available_rows: 1,
+                    changed_rows: 1,
+                    games: Vec::new(),
+                },
+            },
+            false,
+            Instant::now(),
+        );
+        assert_eq!(effect_names(updated), vec!["event"]);
+
+        let failed = session.handle_worker_message(
+            MediaWorkerMessage::PreviewAvailabilityFailed {
+                system: "arcade".to_string(),
+                detail: "publish failed".to_string(),
+            },
+            false,
+            Instant::now(),
+        );
+        assert_eq!(effect_names(failed), vec!["event"]);
     }
 
     #[test]
