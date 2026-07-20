@@ -9,7 +9,9 @@ use agent_cli::planner;
 use agent_cli::progress::{EventKind, Reporter};
 use agent_cli::request::RawRequest;
 use agent_cli::scope;
+use agent_cli::tui;
 use clap::Parser;
+use std::io::IsTerminal;
 
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
@@ -34,6 +36,13 @@ fn main() {
     evidence
         .record_intent(&raw.id, &intent)
         .unwrap_or_else(|error| fatal(&error));
+    if intent == Intent::Interactive && std::io::stdout().is_terminal() {
+        tui::run(&evidence, &raw.id).unwrap_or_else(|error| fatal(&error));
+        evidence
+            .finish(&raw.id, Outcome::Passed)
+            .unwrap_or_else(|error| fatal(&error));
+        return;
+    }
     let mut reporter = Reporter::new(&evidence, output, &raw.id);
     reporter
         .emit(EventKind::Started, "request", "Accepted request", None)

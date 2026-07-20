@@ -12,3 +12,4 @@ pub mod redact;
 pub mod registry;
 pub mod request;
 pub mod scope;
+pub mod tui;
