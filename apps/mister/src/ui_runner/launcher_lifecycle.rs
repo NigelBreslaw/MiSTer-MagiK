@@ -367,6 +367,7 @@ pub(super) struct LauncherLifecycle {
 impl LauncherLifecycle {
     pub(super) const COLD_SPLASH_DURATION: Duration = Duration::from_secs(2);
     pub(super) const RETURN_PREVIEW_HOLD_TIMEOUT: Duration = Duration::from_millis(250);
+    pub(super) const RETURN_BLACK_SCREEN_TIMEOUT: Duration = Duration::from_secs(5);
 
     pub(super) fn new(config: LauncherLifecycleConfig, now: Instant) -> Self {
         Self {
@@ -425,19 +426,25 @@ impl LauncherLifecycle {
         if self.startup_input_enabled_at.is_some() {
             return;
         }
+        let startup_elapsed = now.saturating_duration_since(self.startup_started_at);
+        if self.startup_mode == StartupMode::ReturnFromGame
+            && !self.startup_can_present_frame()
+            && startup_elapsed >= Self::RETURN_BLACK_SCREEN_TIMEOUT
+        {
+            let state = self.startup_reveal_state.label();
+            out.startup_event(
+                "return_black_screen_timeout",
+                format!("elapsed_ms={} state={state}", startup_elapsed.as_millis()),
+            );
+            self.mark_reveal_ready("preview_state=return_black_screen_timeout", out);
+            return;
+        }
         match self.startup_reveal_state {
-            StartupRevealState::SplashVisible
-                if now.saturating_duration_since(self.startup_started_at)
-                    >= Self::COLD_SPLASH_DURATION =>
-            {
+            StartupRevealState::SplashVisible if startup_elapsed >= Self::COLD_SPLASH_DURATION => {
                 self.startup_reveal_state = StartupRevealState::CatalogProgressVisible;
                 out.startup_event(
                     "startup_splash_done",
-                    format!(
-                        "elapsed_ms={}",
-                        now.saturating_duration_since(self.startup_started_at)
-                            .as_millis()
-                    ),
+                    format!("elapsed_ms={}", startup_elapsed.as_millis()),
                 );
                 out.startup_event("catalog_progress_revealed", "mode=cold_no_catalog");
             }
@@ -448,8 +455,7 @@ impl LauncherLifecycle {
                 self.mark_reveal_ready("preview_state=not_required", out);
             }
             StartupRevealState::WaitRelevantPreview
-                if now.saturating_duration_since(self.startup_started_at)
-                    >= Self::RETURN_PREVIEW_HOLD_TIMEOUT =>
+                if startup_elapsed >= Self::RETURN_PREVIEW_HOLD_TIMEOUT =>
             {
                 self.mark_reveal_ready("preview_state=timeout", out);
             }
@@ -1284,6 +1290,95 @@ mod tests {
         );
         assert!(lifecycle.startup_can_present_frame());
         assert!(effect_names(&effects).contains(&"launcher_reveal_ready"));
+    }
+
+    #[test]
+    fn return_start_reveals_after_black_screen_timeout_without_return_state() {
+        let now = Instant::now();
+        let mut lifecycle = lifecycle();
+        let mut effects = LifecycleEffects::new();
+
+        lifecycle.begin_startup_reveal(StartupMode::ReturnFromGame, now, &mut effects);
+        effects.clear();
+
+        lifecycle.tick_startup_reveal(
+            now + LauncherLifecycle::RETURN_BLACK_SCREEN_TIMEOUT - Duration::from_millis(1),
+            false,
+            &mut effects,
+        );
+        assert_eq!(
+            lifecycle.startup_status().state,
+            StartupRevealState::HoldBlackReturn
+        );
+        assert!(!lifecycle.startup_can_present_frame());
+        assert!(effects.as_slice().is_empty());
+
+        lifecycle.tick_startup_reveal(
+            now + LauncherLifecycle::RETURN_BLACK_SCREEN_TIMEOUT,
+            false,
+            &mut effects,
+        );
+        assert_eq!(
+            lifecycle.startup_status().state,
+            StartupRevealState::RevealLauncher
+        );
+        assert!(lifecycle.startup_can_present_frame());
+        assert_eq!(
+            effect_detail(&effects, "return_black_screen_timeout"),
+            Some("elapsed_ms=5000 state=hold_black_return")
+        );
+        assert!(effect_names(&effects).contains(&"launcher_reveal_ready"));
+    }
+
+    #[test]
+    fn return_catalog_hydration_cannot_hold_black_past_timeout() {
+        let now = Instant::now();
+        let mut lifecycle = lifecycle();
+        let mut effects = LifecycleEffects::new();
+
+        lifecycle.begin_startup_reveal(StartupMode::ReturnFromGame, now, &mut effects);
+        lifecycle.handle(
+            LauncherLifecycleInput::StartupReturnCatalogHydrationNeeded,
+            &mut effects,
+        );
+        effects.clear();
+
+        lifecycle.tick_startup_reveal(
+            now + LauncherLifecycle::RETURN_BLACK_SCREEN_TIMEOUT,
+            false,
+            &mut effects,
+        );
+
+        assert_eq!(
+            lifecycle.startup_status().state,
+            StartupRevealState::RevealLauncher
+        );
+        assert!(lifecycle.startup_can_present_frame());
+        assert_eq!(
+            effect_detail(&effects, "return_black_screen_timeout"),
+            Some("elapsed_ms=5000 state=hydrate_return_catalog")
+        );
+    }
+
+    #[test]
+    fn return_black_screen_timeout_does_not_apply_to_warm_start() {
+        let now = Instant::now();
+        let mut lifecycle = lifecycle();
+        let mut effects = LifecycleEffects::new();
+
+        lifecycle.begin_startup_reveal(StartupMode::WarmCatalog, now, &mut effects);
+        effects.clear();
+        lifecycle.tick_startup_reveal(
+            now + LauncherLifecycle::RETURN_BLACK_SCREEN_TIMEOUT,
+            false,
+            &mut effects,
+        );
+
+        assert_eq!(
+            lifecycle.startup_status().state,
+            StartupRevealState::HoldBlack
+        );
+        assert!(effects.as_slice().is_empty());
     }
 
     #[test]

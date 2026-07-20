@@ -4582,6 +4582,9 @@ fn apply_lifecycle_effects(
     for effect in effects.drain() {
         match effect {
             LauncherEffect::StartupEvent { name, detail } => {
+                if name == "return_black_screen_timeout" {
+                    crate::ui_errln!("return black-screen watchdog expired: {detail}");
+                }
                 print_startup_event(start, name, detail);
             }
             LauncherEffect::BeginLoadingFrame { launch_ref } => {

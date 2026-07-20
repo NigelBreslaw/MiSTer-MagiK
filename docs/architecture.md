@@ -328,8 +328,11 @@ stateDiagram-v2
     ReturnFromGame --> HoldBlackReturn: keep framebuffer black
     HoldBlackReturn --> RestoreContext: valid return capsule
     HoldBlackReturn --> HydrateReturnSystem: capsule unavailable or stale
+    HoldBlackReturn --> RevealLauncher: 5s black-screen timeout
     HydrateReturnSystem --> RestoreContext: registry + selected mini-nav loaded
+    HydrateReturnSystem --> RevealLauncher: 5s black-screen timeout
     RestoreContext --> WaitRelevantPreview: restored selection known
+    RestoreContext --> RevealLauncher: 5s black-screen timeout
     WaitRelevantPreview --> RevealLauncher: selected preview exact, no preview exists, or 250ms wait expires
 
     HydrateReturnSystem --> SearchIndexBuilding: background, after selected mini-nav
@@ -350,7 +353,11 @@ may wait at most 250ms for the selected
 preview so the restored Arcade frame is complete, but preview readiness is not a
 hard visibility dependency: if the relevant preview never becomes exact, the
 launcher must reveal after the bounded preview hold rather than leaving HDMI
-black. Return-from-game is authorized by Main's
+black. The complete return startup also has a five-second black-screen deadline:
+if return-state restoration or catalog hydration stalls, the lifecycle abandons
+the black hold and forces a full-frame present. Expiry is recorded as both a
+structured startup event and an error.
+Return-from-game is authorized by Main's
 volatile `MISTER_MAGIK_RETURN_TO_LAUNCHER=1` launcher environment; the
 `/tmp/mister-magik/launcher-return-state.json` file is only the restore payload
 for screen, system, selection, and filters. A stale return-state file without
