@@ -156,7 +156,9 @@ fn main() {
 
     let cmd = command_args::resolve_command(&args);
 
-    if cmd != "catalog-v3-inspect" {
+    let latch_readiness_json =
+        cmd == "latch-readiness-report" && args.iter().any(|arg| arg == "--json");
+    if cmd != "catalog-v3-inspect" && !latch_readiness_json {
         crate::ui_logln!("mister-magik-fb [{cmd}] (arch={})", std::env::consts::ARCH);
     }
 
@@ -215,7 +217,7 @@ fn main() {
         }
     };
 
-    dispatch_fpga(&cmd, &mut f);
+    dispatch_fpga(&cmd, &args, &mut f);
 }
 
 enum ProcessLockState {
@@ -374,7 +376,7 @@ fn run_catalog_v3_inspect() {
     }
 }
 
-fn dispatch_fpga(cmd: &str, f: &mut Fpga) {
+fn dispatch_fpga(cmd: &str, args: &[String], f: &mut Fpga) {
     match cmd {
         "read" => read_mode(f),
         "early-black" => early_black_route(f),
@@ -388,7 +390,9 @@ fn dispatch_fpga(cmd: &str, f: &mut Fpga) {
         #[cfg(feature = "diagnostics")]
         "input" => run_input(),
         "fpga-latch-report" => run_fpga_latch_report(),
-        "latch-readiness-report" => run_latch_readiness_report(f),
+        "latch-readiness-report" => {
+            run_latch_readiness_report(f, args.iter().any(|arg| arg == "--json"))
+        }
         #[cfg(all(feature = "diagnostics", feature = "ui"))]
         "fpga-latch-post-report" => run_fpga_latch_post_report(f),
         #[cfg(all(feature = "diagnostics", feature = "ui"))]
@@ -1204,25 +1208,24 @@ fn run_scanout_slots_map_report() {
     }
 }
 
-fn publish_latch_readiness_report(report: &mister_magik_fb::latch_readiness::LatchReadinessReport) {
-    crate::ui_logln!(
-        "latch_readiness_tsv\tvalid={}\tstate={}\tstage={}\treason={}\tdetail={}",
-        u8::from(report.state == mister_magik_fb::latch_readiness::LatchReadinessState::Ready),
-        report.state.code(),
-        report.stage.map_or("none", |stage| stage.code()),
-        report.reason_code.as_deref().unwrap_or("none"),
-        report.detail.replace(['\t', '\n', '\r'], " ")
-    );
+fn publish_latch_readiness_report(
+    report: &mister_magik_fb::latch_readiness::LatchReadinessReport,
+    json_output: bool,
+) {
     if let Err(error) = report.write_atomic(mister_magik_fb::latch_readiness::REPORT_PATH) {
         crate::ui_errln!("latch_readiness_report_write_failed\terror={error}");
         std::process::exit(50);
     }
-    match serde_json::to_string(report) {
-        Ok(json) => crate::ui_logln!("latch_readiness_json\t{json}"),
-        Err(error) => {
-            crate::ui_errln!("latch_readiness_report_serialize_failed\terror={error}");
-            std::process::exit(50);
+    if json_output {
+        match serde_json::to_string(report) {
+            Ok(json) => crate::ui_logln!("{json}"),
+            Err(error) => {
+                crate::ui_errln!("latch_readiness_report_serialize_failed\terror={error}");
+                std::process::exit(50);
+            }
         }
+    } else {
+        crate::ui_logln!("{}", format_latch_readiness_tsv(report));
     }
     if report.state != mister_magik_fb::latch_readiness::LatchReadinessState::Ready {
         std::process::exit(match report.state {
@@ -1234,7 +1237,20 @@ fn publish_latch_readiness_report(report: &mister_magik_fb::latch_readiness::Lat
     }
 }
 
-fn run_latch_readiness_report(fpga: &mut Fpga) {
+fn format_latch_readiness_tsv(
+    report: &mister_magik_fb::latch_readiness::LatchReadinessReport,
+) -> String {
+    format!(
+        "latch_readiness_tsv\tvalid={}\tstate={}\tstage={}\treason={}\tdetail={}",
+        u8::from(report.state == mister_magik_fb::latch_readiness::LatchReadinessState::Ready),
+        report.state.code(),
+        report.stage.map_or("none", |stage| stage.code()),
+        report.reason_code.as_deref().unwrap_or("none"),
+        report.detail.replace(['\t', '\n', '\r'], " ")
+    )
+}
+
+fn run_latch_readiness_report(fpga: &mut Fpga, json_output: bool) {
     use mister_magik_fb::latch_readiness::{
         LatchFailure, LatchFailureReason, LatchFailureStage, LatchReadinessReport,
     };
@@ -1253,7 +1269,10 @@ fn run_latch_readiness_report(fpga: &mut Fpga) {
                 mister_magik_scanout_contract::QUALIFIED_KERNEL_RELEASE
             ),
         );
-        publish_latch_readiness_report(&LatchReadinessReport::failed(kernel_release, &failure));
+        publish_latch_readiness_report(
+            &LatchReadinessReport::failed(kernel_release, &failure),
+            json_output,
+        );
         return;
     }
 
@@ -1269,7 +1288,10 @@ fn run_latch_readiness_report(fpga: &mut Fpga) {
                 LatchFailureReason::ScanoutDeviceMissing,
                 error.to_string(),
             );
-            publish_latch_readiness_report(&LatchReadinessReport::failed(kernel_release, &failure));
+            publish_latch_readiness_report(
+                &LatchReadinessReport::failed(kernel_release, &failure),
+                json_output,
+            );
             return;
         }
     };
@@ -1282,10 +1304,10 @@ fn run_latch_readiness_report(fpga: &mut Fpga) {
                     LatchFailureReason::ScanoutAbiMismatch,
                     error.to_string(),
                 );
-                publish_latch_readiness_report(&LatchReadinessReport::failed(
-                    kernel_release,
-                    &failure,
-                ));
+                publish_latch_readiness_report(
+                    &LatchReadinessReport::failed(kernel_release, &failure),
+                    json_output,
+                );
                 return;
             }
         };
@@ -1298,7 +1320,10 @@ fn run_latch_readiness_report(fpga: &mut Fpga) {
                 LatchFailureReason::FpgaTransportFailed,
                 error.to_string(),
             );
-            publish_latch_readiness_report(&LatchReadinessReport::failed(kernel_release, &failure));
+            publish_latch_readiness_report(
+                &LatchReadinessReport::failed(kernel_release, &failure),
+                json_output,
+            );
             return;
         }
     };
@@ -1321,7 +1346,10 @@ fn run_latch_readiness_report(fpga: &mut Fpga) {
                 caps.max_stride_bytes
             ),
         );
-        publish_latch_readiness_report(&LatchReadinessReport::failed(kernel_release, &failure));
+        publish_latch_readiness_report(
+            &LatchReadinessReport::failed(kernel_release, &failure),
+            json_output,
+        );
         return;
     }
 
@@ -1333,7 +1361,10 @@ fn run_latch_readiness_report(fpga: &mut Fpga) {
                 LatchFailureReason::FpgaStatusUnsupported,
                 format!("magic=0x{:04x}/0x{:04x}", status.magic_hi, status.magic_lo),
             );
-            publish_latch_readiness_report(&LatchReadinessReport::failed(kernel_release, &failure));
+            publish_latch_readiness_report(
+                &LatchReadinessReport::failed(kernel_release, &failure),
+                json_output,
+            );
             return;
         }
         Err(error) => {
@@ -1342,7 +1373,10 @@ fn run_latch_readiness_report(fpga: &mut Fpga) {
                 LatchFailureReason::FpgaTransportFailed,
                 error.to_string(),
             );
-            publish_latch_readiness_report(&LatchReadinessReport::failed(kernel_release, &failure));
+            publish_latch_readiness_report(
+                &LatchReadinessReport::failed(kernel_release, &failure),
+                json_output,
+            );
             return;
         }
     };
@@ -1359,7 +1393,7 @@ fn run_latch_readiness_report(fpga: &mut Fpga) {
         "live platform ready flip_count={} post_count={} drop_count={}",
         status.flip_count, status.post_count, status.drop_count
     );
-    publish_latch_readiness_report(&report);
+    publish_latch_readiness_report(&report, json_output);
 }
 
 fn run_fpga_latch_report() {
@@ -2637,5 +2671,17 @@ mod tests {
 
         assert_eq!(read_lock_pid(&lock_path), Some(7777));
         let _ = fs::remove_dir_all(lock_path.parent().unwrap());
+    }
+
+    #[test]
+    fn latch_readiness_tsv_is_compact_and_sanitized() {
+        let mut report = mister_magik_fb::latch_readiness::LatchReadinessReport::ready(
+            "5.15.1-MiSTer".to_string(),
+        );
+        report.detail = "live platform ready\tflip_count=4\npost_count=5 drop_count=0".to_string();
+        assert_eq!(
+            format_latch_readiness_tsv(&report),
+            "latch_readiness_tsv\tvalid=1\tstate=ready\tstage=none\treason=none\tdetail=live platform ready flip_count=4 post_count=5 drop_count=0"
+        );
     }
 }

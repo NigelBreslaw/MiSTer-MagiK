@@ -31,6 +31,17 @@ latch_readiness_is_contract_failure() {
   esac
 }
 
+latch_readiness_summary() {
+  local report="$1" line detail
+  line="$(printf '%s\n' "$report" | grep 'latch_readiness_tsv' | tail -1)"
+  detail="${line#*detail=}"
+  if [[ "$line" == *$'valid=1\tstate=ready'* ]]; then
+    printf 'latch ready %s\n' "${detail#live platform ready }"
+  else
+    printf '%s\n' "$line"
+  fi
+}
+
 latch_readiness_activate() {
   local mister="$1"
   local app="${MISTER_MAGIK_APP_DIR:?select a MagiK layout first}"
@@ -42,7 +53,7 @@ latch_readiness_activate() {
   probe_status="$?"
   set -e
   if [[ "$probe_status" -eq 0 ]]; then
-    printf '%s\n' "$probe_output"
+    latch_readiness_summary "$probe_output"
     return 0
   fi
   if ! latch_readiness_is_contract_failure "$probe_output"; then
@@ -82,6 +93,8 @@ latch_readiness_self_test() {
     echo 'transport failure was misclassified as a latch contract failure' >&2
     return 1
   fi
+  [[ "$(latch_readiness_summary $'header\nlatch_readiness_tsv\tvalid=1\tstate=ready\tstage=none\treason=none\tdetail=live platform ready flip_count=4 post_count=5 drop_count=0')" == \
+    "latch ready flip_count=4 post_count=5 drop_count=0" ]]
   rm -rf "$tmp"
   echo "latch readiness library self-test ok"
 }
