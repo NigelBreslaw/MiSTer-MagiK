@@ -36,7 +36,7 @@ jobs:
           - group: catalog
             paths: crates/catalog
           - group: tools
-            paths: mister/tools
+            paths: mister/tools/host mister/tools/agent
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
