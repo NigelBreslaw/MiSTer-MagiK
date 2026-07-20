@@ -3,6 +3,47 @@
 
 use crate::model::{Operation, Risk};
 
+pub const SCRIPT_REVIEW: &[(&str, &str)] = &[
+    (
+        "fpga-vblank-latch-one-shot.sh",
+        "unreferenced FPGA diagnostic",
+    ),
+    ("profile-scene-report.sh", "unreferenced scene report"),
+    (
+        "device-arcade-filter-navigation.sh",
+        "unreferenced device acceptance flow",
+    ),
+    (
+        "mister-early-dhcpcd-service.sh",
+        "unreferenced boot service installer",
+    ),
+    (
+        "profile-screensaver-preview.sh",
+        "unreferenced preview profiler",
+    ),
+    ("audit-idle-cpu.sh", "unreferenced device audit"),
+    (
+        "qualify-fpga-latch-release.sh",
+        "unreferenced FPGA qualification flow",
+    ),
+    (
+        "capture-launcher-home-pan-video.sh",
+        "unreferenced capture workflow",
+    ),
+    (
+        "profile-analytics-overhead.sh",
+        "unreferenced analytics profiler",
+    ),
+    (
+        "device-catalog-resume-acceptance.sh",
+        "unreferenced catalog acceptance flow",
+    ),
+    (
+        "device-resource-exhaustion.sh",
+        "unreferenced destructive device test",
+    ),
+];
+
 #[must_use]
 pub fn operation(id: &str) -> Option<Operation> {
     match id {

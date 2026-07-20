@@ -170,6 +170,14 @@ fn dispatch(
                 println!("removed {removed} captured logs");
             }
         }
+        Intent::ReviewScripts => {
+            if output == OutputFormat::Human {
+                println!("decision\tscript\tevidence");
+                for (script, evidence) in agent_cli::registry::SCRIPT_REVIEW {
+                    println!("review\tscripts/{script}\t{evidence}");
+                }
+            }
+        }
         other if output == OutputFormat::Human => println!("request accepted: {other:?}"),
         _ => {}
     }

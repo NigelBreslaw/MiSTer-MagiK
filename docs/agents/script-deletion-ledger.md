@@ -52,3 +52,16 @@ explicit keep-or-delete decision before migration:
 - `profile-analytics-overhead.sh`
 - `device-catalog-resume-acceptance.sh`
 - `device-resource-exhaustion.sh`
+
+Run `cargo run --quiet --manifest-path agent-cli/Cargo.toml -- scripts review`
+for the concise decision list. The default for every candidate is deletion;
+none is migrated until a current capability owner justifies it.
+
+## Compatibility implementations
+
+`agent-cli` now owns the public typed intents for affected lint, complete host
+verification, Rust checks, doctor, host-tool checks, host release checks, and
+Apple-container ARM compilation. The established validation scripts remain as
+compatibility implementations because moving their branches into Rust would
+produce a shallow module. Remove each only when a deeper implementation passes
+its existing contract tests.
