@@ -106,7 +106,7 @@ while [ \$i -lt $SECS ] && kill -0 \$PID 2>/dev/null; do
   [ \$RSS -gt \$RSS_MAX ] && RSS_MAX=\$RSS
   i=\$((i + 1))
 done
-[ \$CPU_N -eq $SECS ] || { echo "screensaver benchmark ended early samples=\$CPU_N expected=$SECS"; exit 71; }
+[ \$CPU_N -eq $SECS ] || { echo \"screensaver benchmark ended early samples=\$CPU_N expected=$SECS\"; exit 71; }
 END=\$(awk '{print \$14+\$15}' /proc/\$PID/stat 2>/dev/null || echo \$START)
 CPU_AVG=0; [ \$CPU_N -gt 0 ] && CPU_AVG=\$((CPU_SUM/CPU_N))
 echo screensaver_bench_result samples=\$CPU_N cpu_avg_pct=\$CPU_AVG cpu_max_pct=\$CPU_MAX rss_max_kib=\$RSS_MAX cpu_ticks=\$((END-START))
