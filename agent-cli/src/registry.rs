@@ -55,6 +55,7 @@ pub fn operation(id: &str) -> Option<Operation> {
             args: vec!["diff".into(), "--check".into()],
             reason: "all patches require whitespace validation".into(),
             failure_hint: "run scripts/agent run show RUN_ID".into(),
+            inputs: Vec::new(),
         }),
         _ => None,
     }

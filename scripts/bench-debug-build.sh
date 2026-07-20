@@ -148,11 +148,11 @@ safe_label_part() {
 
 command_spec() {
   case "$1" in
-    arm-check-lib) echo "scripts/agent arm check-lib" ;;
-    arm-check-launcher) echo "scripts/agent arm check-launcher" ;;
-    arm-check-arcade) echo "scripts/agent arm check-arcade" ;;
-    arm-check-full) echo "scripts/agent arm check-all" ;;
-    arm-build-launcher|arm-build-arcade|arm-build-full) echo "scripts/agent arm build-device" ;;
+    arm-check-lib) echo "apps/mister/build-arm.sh --check --lib-only" ;;
+    arm-check-launcher) echo "apps/mister/build-arm.sh --check --ui-scope launcher" ;;
+    arm-check-arcade) echo "apps/mister/build-arm.sh --check --ui-scope arcade" ;;
+    arm-check-full) echo "apps/mister/build-arm.sh --check --ui-scope all --experiments" ;;
+    arm-build-launcher|arm-build-arcade|arm-build-full) echo "apps/mister/build-arm.sh --device" ;;
     build-ui-device) echo "apps/mister/build-arm.sh --device" ;;
     build-ui-fast) echo "apps/mister/build-arm.sh --fast" ;;
     *) return 1 ;;

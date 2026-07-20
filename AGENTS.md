@@ -92,22 +92,22 @@ those trees are part of the task.
 
 ```bash
 scripts/agent doctor
-scripts/agent plan --working-tree
-scripts/agent check --working-tree
-scripts/agent verify --working-tree
-scripts/agent verify full-host
-scripts/agent arm check-launcher
+scripts/agent task begin
+scripts/agent plan
+scripts/agent check
+scripts/agent verify
 apps/mister/build-arm.sh --device
 scripts/deploy-rust.sh
 scripts/mister status
 ```
 
-`scripts/agent verify --staged` is the staged-index pre-commit interface. Use
-`scripts/agent plan --paths PATH...` before work, `scripts/agent check --paths
-PATH...` while iterating, and `scripts/agent verify --paths PATH...` before
-completion. Agents must not construct Cargo, test, lint, host-validation, or
-Apple-container commands directly; use the harness so commands are selected,
-timed, deduplicated, and recorded.
+`scripts/agent verify --staged` is the staged-index pre-commit interface and
+`--paths` is reserved for CI or diagnostics. Agents must record a task baseline
+before editing, use `check` while iterating, and use `verify` before completion.
+Do not narrate successful operation counts or names: report only that validation
+is running, passed, or failed with the actionable summary. Agents must not
+construct Cargo, test, lint, host-validation, or Apple-container commands
+directly; the harness selects, times, deduplicates, and records them.
 
 ## Universal Hard Rules
 

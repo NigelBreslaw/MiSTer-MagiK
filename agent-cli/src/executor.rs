@@ -6,6 +6,7 @@ use crate::model::{Operation, Outcome, Plan};
 use crate::progress::{EventKind, Reporter};
 use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
+use std::hash::{Hash, Hasher};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -23,31 +24,125 @@ pub fn execute(
         reporter.emit(EventKind::Progress, "plan", "Nothing to check", Some(100))?;
         return Ok(Outcome::NoOp);
     }
+    let phase = match plan.intent {
+        crate::model::Intent::Verify { .. } => "verify",
+        _ => "check",
+    };
     for (index, operation) in plan.operations.iter().enumerate() {
         let percent = u8::try_from(index.saturating_mul(100) / plan.operations.len()).unwrap_or(0);
-        let message = format!(
-            "{}/{} {} — {}",
-            index + 1,
-            plan.operations.len(),
-            operation.title,
-            operation.reason
-        );
-        reporter.emit(
-            EventKind::Progress,
-            operation_phase(operation),
+        let message = format!("running {}/{}", index + 1, plan.operations.len());
+        reporter.emit(EventKind::Progress, phase, &message, Some(percent))?;
+        let cache = operation_cache_key(evidence, repository, plan, operation)?;
+        if let Some((task_id, fingerprint)) = cache.as_ref() {
+            if evidence.has_cached_operation(task_id, &operation.id, fingerprint)? {
+                evidence.record_reused_command(
+                    request_id,
+                    &operation.id,
+                    &operation.program,
+                    &operation.args,
+                )?;
+                continue;
+            }
+        }
+        run_operation(
+            evidence,
+            request_id,
+            repository,
+            operation,
+            phase,
             &message,
-            Some(percent),
+            &format!("{phase}: failed at {}/{}", index + 1, plan.operations.len()),
+            reporter,
         )?;
-        run_operation(evidence, request_id, repository, operation, reporter)?;
+        if operation.risk == crate::model::Risk::ReadOnly {
+            if let Some((task_id, fingerprint)) = cache {
+                evidence.cache_operation(&task_id, &operation.id, &fingerprint)?;
+            }
+        }
     }
+    reporter.emit(
+        EventKind::Completed,
+        phase,
+        &format!("passed — {} checks", plan.operations.len()),
+        Some(100),
+    )?;
     Ok(Outcome::Passed)
 }
 
+fn operation_cache_key(
+    evidence: &Evidence,
+    repository: &Path,
+    plan: &Plan,
+    operation: &Operation,
+) -> Result<Option<(String, String)>, String> {
+    let task_id = match &plan.intent {
+        crate::model::Intent::Check {
+            scope: crate::model::Scope::Task(task_id),
+        }
+        | crate::model::Intent::Verify {
+            scope: crate::model::Scope::Task(task_id),
+        } => task_id,
+        _ => return Ok(None),
+    };
+    if !is_cacheable(operation) || operation.inputs.is_empty() {
+        return Ok(None);
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    "planner-schema-2".hash(&mut hasher);
+    operation.id.hash(&mut hasher);
+    operation.program.hash(&mut hasher);
+    operation.args.hash(&mut hasher);
+    operation.inputs.hash(&mut hasher);
+    let toolchain = Command::new("rustc")
+        .arg("--version")
+        .output()
+        .ok()
+        .map(|output| output.stdout)
+        .unwrap_or_default();
+    toolchain.hash(&mut hasher);
+    for name in [
+        "RUSTFLAGS",
+        "CARGO_BUILD_TARGET",
+        "CC",
+        "CXX",
+        "PKG_CONFIG_PATH",
+        "MISTER_ARM_BUILD_BACKEND",
+    ] {
+        name.hash(&mut hasher);
+        std::env::var_os(name)
+            .map(|value| value.as_encoded_bytes().to_vec())
+            .unwrap_or_default()
+            .hash(&mut hasher);
+    }
+    for path in crate::task::changes(evidence, repository, task_id)? {
+        if !operation.inputs.iter().any(|input| path.starts_with(input)) {
+            continue;
+        }
+        path.hash(&mut hasher);
+        match std::fs::read(repository.join(&path)) {
+            Ok(bytes) => bytes.hash(&mut hasher),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                "deleted".hash(&mut hasher)
+            }
+            Err(error) => return Err(format!("cannot fingerprint {}: {error}", path.display())),
+        }
+    }
+    Ok(Some((task_id.clone(), format!("{:016x}", hasher.finish()))))
+}
+
+fn is_cacheable(operation: &Operation) -> bool {
+    operation.risk == crate::model::Risk::ReadOnly
+}
+
+#[allow(clippy::too_many_arguments)]
 fn run_operation(
     evidence: &Evidence,
     request_id: &str,
     repository: &Path,
     operation: &Operation,
+    phase: &str,
+    heartbeat: &str,
+    failure_position: &str,
     reporter: &mut Reporter<'_>,
 ) -> Result<(), String> {
     let log_path = evidence.log_path(request_id, &operation.id);
@@ -63,6 +158,8 @@ fn run_operation(
         request_id,
         repository,
         operation,
+        phase,
+        heartbeat,
         reporter,
         &log_path,
         &first_args,
@@ -95,6 +192,8 @@ fn run_operation(
             request_id,
             repository,
             operation,
+            phase,
+            heartbeat,
             reporter,
             &log_path,
             &online_args,
@@ -111,6 +210,7 @@ fn run_operation(
             &log_path,
             online_status.code().unwrap_or(1),
             &online_output,
+            failure_position,
         )?);
     }
     Err(failure_message(
@@ -120,6 +220,7 @@ fn run_operation(
         &log_path,
         first_status.code().unwrap_or(1),
         &first_output,
+        failure_position,
     )?)
 }
 
@@ -129,6 +230,8 @@ fn run_attempt(
     request_id: &str,
     repository: &Path,
     operation: &Operation,
+    phase: &str,
+    heartbeat: &str,
     reporter: &mut Reporter<'_>,
     log_path: &Path,
     args: &[String],
@@ -164,12 +267,7 @@ fn run_attempt(
             break status;
         }
         thread::sleep(Duration::from_millis(100));
-        reporter.emit(
-            EventKind::Progress,
-            operation_phase(operation),
-            &format!("{} — {}", operation.title, operation.reason),
-            None,
-        )?;
+        reporter.emit(EventKind::Progress, phase, heartbeat, None)?;
     };
     let code = status.code().unwrap_or(1);
     evidence.finish_command(command_id, started, code)?;
@@ -266,6 +364,7 @@ fn failure_message(
     log_path: &Path,
     code: i32,
     output: &str,
+    failure_position: &str,
 ) -> Result<String, String> {
     let classification = failure_classification(operation, code, output);
     let next = if classification == "network_required" {
@@ -277,10 +376,10 @@ fn failure_message(
         format!("scripts/agent run show {request_id}")
     };
     Ok(format!(
-        "{classification}: {} (exit {code}); log={}; tail={}; next={next}",
+        "{failure_position} — {}\nerror: {classification} (exit {code})\nsummary: {}\nlog: {}\nnext: {next}",
         operation.title,
-        log_path.display(),
-        log_tail(log_path)?
+        log_tail(log_path)?,
+        log_path.display()
     ))
 }
 
@@ -369,6 +468,7 @@ mod tests {
             args: vec!["test".into(), "--".into(), "--nocapture".into()],
             reason: "executor test".into(),
             failure_hint: "inspect run".into(),
+            inputs: vec!["fixture".into()],
         }
     }
 
@@ -415,6 +515,7 @@ mod tests {
                 scope: Scope::WorkingTree,
             },
             operations: vec![test_operation(&cargo)],
+            external_requirements: Vec::new(),
         };
         let mut reporter = Reporter::new(&evidence, OutputFormat::Human, &request.id);
         let result = execute(&evidence, &request.id, &root, &plan, &mut reporter);
@@ -477,7 +578,7 @@ mod tests {
         let script = "#!/bin/sh\ncase \" $* \" in\n  *\" --offline \"*) echo 'attempting to make an HTTP request, but --offline was specified' >&2;;\n  *) echo \"unable to update registry crates-io: Couldn't resolve host: index.crates.io\" >&2;;\nesac\nexit 101\n";
         let (result, detail, _) = execute_fake_cargo(script);
         let error = result.unwrap_err();
-        assert!(error.starts_with("network_required:"));
+        assert!(error.contains("error: network_required"));
         assert!(error.contains("rerun with network access: scripts/agent check"));
         assert_eq!(detail.commands.len(), 2);
     }
@@ -487,7 +588,7 @@ mod tests {
         let (result, detail, _) = execute_fake_cargo(
             "#!/bin/sh\necho 'test result: FAILED. 0 passed; 1 failed' >&2\nexit 101\n",
         );
-        assert!(result.unwrap_err().starts_with("test_failure:"));
+        assert!(result.unwrap_err().contains("error: test_failure"));
         assert_eq!(detail.commands.len(), 1);
     }
 
@@ -501,6 +602,16 @@ mod tests {
         assert!(!is_offline_cache_miss(
             "the lock file needs to be updated but --locked was passed"
         ));
+    }
+
+    #[test]
+    fn only_read_only_operations_are_cacheable() {
+        let mut operation = test_operation(Path::new("cargo"));
+        assert!(is_cacheable(&operation));
+        operation.risk = Risk::LocalWrite;
+        assert!(!is_cacheable(&operation));
+        operation.risk = Risk::DeviceWrite;
+        assert!(!is_cacheable(&operation));
     }
 
     #[test]

@@ -7,7 +7,6 @@ use serde::Serialize;
 use std::time::Instant;
 
 pub const HEARTBEAT_MS: u64 = 10_000;
-pub const PERCENT_STEP: u8 = 10;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -49,7 +48,6 @@ pub struct ProgressEvent {
 pub struct ProgressGate {
     last_emit_ms: Option<u64>,
     last_phase: Option<String>,
-    last_percent_bucket: Option<u8>,
 }
 
 impl ProgressGate {
@@ -58,21 +56,15 @@ impl ProgressGate {
         now_ms: u64,
         kind: EventKind,
         phase: &str,
-        percent: Option<u8>,
+        _percent: Option<u8>,
     ) -> bool {
-        let bucket = percent.map(|value| value.min(100) / PERCENT_STEP);
-        let immediate = kind != EventKind::Progress
-            || self.last_phase.as_deref() != Some(phase)
-            || bucket > self.last_percent_bucket;
+        let immediate = kind != EventKind::Progress || self.last_phase.as_deref() != Some(phase);
         let heartbeat = self
             .last_emit_ms
             .is_none_or(|last| now_ms.saturating_sub(last) >= HEARTBEAT_MS);
         if immediate || heartbeat {
             self.last_emit_ms = Some(now_ms);
             self.last_phase = Some(phase.to_owned());
-            if bucket.is_some() {
-                self.last_percent_bucket = bucket;
-            }
             true
         } else {
             false
@@ -132,7 +124,14 @@ impl<'a> Reporter<'a> {
         self.evidence.record_event(&event)?;
         match self.output {
             OutputFormat::Ndjson => println!("{}", serde_json::to_string(&event).unwrap()),
-            OutputFormat::Human => println!("{}", render_human(&event)),
+            OutputFormat::Human
+                if event.kind != EventKind::Started
+                    && !(event.kind == EventKind::Completed
+                        && event.message == "Request complete") =>
+            {
+                println!("{}", render_human(&event));
+            }
+            OutputFormat::Human => {}
         }
         Ok(())
     }
@@ -140,10 +139,20 @@ impl<'a> Reporter<'a> {
 
 #[must_use]
 pub fn render_human(event: &ProgressEvent) -> String {
-    event.percent.map_or_else(
+    let rendered = event.percent.map_or_else(
         || format!("{}: {}", event.phase, event.message),
         |percent| format!("{}: {} ({percent}%)", event.phase, event.message),
-    )
+    );
+    if event.message.starts_with("running") || event.message.starts_with("passed") {
+        format!("{rendered} — {} elapsed", elapsed(event.elapsed_ms))
+    } else {
+        rendered
+    }
+}
+
+fn elapsed(elapsed_ms: u64) -> String {
+    let seconds = elapsed_ms / 1_000;
+    format!("{:02}:{:02}", seconds / 60, seconds % 60)
 }
 
 #[cfg(test)]
@@ -151,14 +160,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn progress_is_coalesced_until_heartbeat_or_ten_percent_boundary() {
+    fn progress_is_coalesced_until_heartbeat_or_phase_change() {
         let mut gate = ProgressGate::default();
         assert!(gate.should_emit(0, EventKind::Started, "transfer", Some(0)));
         assert!(!gate.should_emit(1_000, EventKind::Progress, "transfer", Some(9)));
-        assert!(gate.should_emit(2_000, EventKind::Progress, "transfer", Some(10)));
+        assert!(!gate.should_emit(2_000, EventKind::Progress, "transfer", Some(10)));
+        assert!(gate.should_emit(10_000, EventKind::Progress, "transfer", Some(19)));
         assert!(!gate.should_emit(11_999, EventKind::Progress, "transfer", Some(19)));
-        assert!(gate.should_emit(12_000, EventKind::Progress, "transfer", Some(19)));
-        assert!(gate.should_emit(12_001, EventKind::Progress, "verify", None));
+        assert!(gate.should_emit(12_000, EventKind::Progress, "verify", None));
     }
 
     #[test]

@@ -61,15 +61,16 @@ fn main() {
     ) {
         Ok(outcome) => outcome,
         Err(error) => {
+            let (phase, message) = error
+                .split_once(": ")
+                .filter(|(phase, _)| matches!(*phase, "check" | "verify"))
+                .unwrap_or(("request", error.as_str()));
             reporter
-                .emit(EventKind::Failed, "request", &error, None)
+                .emit(EventKind::Failed, phase, message, None)
                 .unwrap_or_else(|audit_error| fatal(&audit_error));
             evidence
                 .finish(&raw.id, Outcome::Failed)
                 .unwrap_or_else(|audit_error| fatal(&audit_error));
-            if output == OutputFormat::Human {
-                eprintln!("agent-cli: {error}");
-            }
             std::process::exit(1);
         }
     };
@@ -84,6 +85,9 @@ fn main() {
     evidence
         .finish(&raw.id, outcome)
         .unwrap_or_else(|error| fatal(&error));
+    if outcome == Outcome::ExternalRequired {
+        std::process::exit(3);
+    }
 }
 
 fn is_discovery_request(args: &[std::ffi::OsString]) -> bool {
@@ -102,20 +106,47 @@ fn dispatch(
     reporter: &mut Reporter<'_>,
 ) -> Result<Outcome, String> {
     match intent {
-        Intent::Plan { scope: selected }
+        Intent::TaskBegin { task_id, replace } => {
+            agent_cli::task::begin(evidence, repository, task_id, *replace)?;
+            if output == OutputFormat::Human {
+                println!("task: baseline recorded ({task_id})");
+            }
+        }
+        Intent::TaskStatus { task_id } => {
+            let paths = agent_cli::task::status(evidence, repository, task_id)?;
+            if output == OutputFormat::Human {
+                println!(
+                    "task: {} changed path{}",
+                    paths.len(),
+                    if paths.len() == 1 { "" } else { "s" }
+                );
+            }
+        }
+        Intent::Plan {
+            scope: selected, ..
+        }
         | Intent::Check { scope: selected }
         | Intent::Verify { scope: selected } => {
             let paths = scope::collect(evidence, request_id, repository, selected)?;
-            let plan = planner::affected_plan(intent.clone(), paths);
+            let plan = planner::affected_plan(intent.clone(), paths)?;
             evidence.record_plan(request_id, &plan)?;
             let summary = if plan.operations.is_empty() {
                 "No lint operations selected".to_owned()
             } else {
-                format!("Selected {} operations", plan.operations.len())
+                format!("{} checks planned", plan.operations.len())
             };
-            reporter.emit(EventKind::Progress, "plan", &summary, Some(0))?;
+            let phase = if matches!(intent, Intent::Verify { .. }) {
+                "verify"
+            } else if matches!(intent, Intent::Check { .. }) {
+                "check"
+            } else {
+                "plan"
+            };
+            reporter.emit(EventKind::Progress, phase, &summary, Some(0))?;
             if matches!(intent, Intent::Plan { .. }) {
-                if output == OutputFormat::Human {
+                if output == OutputFormat::Human
+                    && matches!(intent, Intent::Plan { verbose: true, .. })
+                {
                     for operation in &plan.operations {
                         println!(
                             "{}\t{} {}",
@@ -126,36 +157,39 @@ fn dispatch(
                         println!("  reason: {}", operation.reason);
                     }
                 }
+                if !plan.external_requirements.is_empty() {
+                    for requirement in &plan.external_requirements {
+                        reporter.emit(
+                            EventKind::Warning,
+                            "external",
+                            &requirement.message,
+                            None,
+                        )?;
+                    }
+                    return Ok(Outcome::ExternalRequired);
+                }
                 return Ok(if plan.operations.is_empty() {
                     Outcome::NoOp
                 } else {
                     Outcome::Passed
                 });
             }
-            return executor::execute(evidence, request_id, repository, &plan, reporter);
+            let outcome = executor::execute(evidence, request_id, repository, &plan, reporter)?;
+            if !plan.external_requirements.is_empty() {
+                for requirement in &plan.external_requirements {
+                    reporter.emit(EventKind::Warning, "external", &requirement.message, None)?;
+                }
+                return Ok(Outcome::ExternalRequired);
+            }
+            return Ok(outcome);
         }
-        Intent::VerifyFullHost
-        | Intent::Doctor
-        | Intent::Rust { .. }
-        | Intent::HostTools { .. }
-        | Intent::ReleaseHost => {
+        Intent::Doctor => {
             let plan = planner::workflow_plan(intent.clone());
             evidence.record_plan(request_id, &plan)?;
             reporter.emit(
                 EventKind::Progress,
                 "plan",
                 &format!("Selected {} operation", plan.operations.len()),
-                Some(0),
-            )?;
-            return executor::execute(evidence, request_id, repository, &plan, reporter);
-        }
-        Intent::Arm { .. } => {
-            let plan = planner::workflow_plan(intent.clone());
-            evidence.record_plan(request_id, &plan)?;
-            reporter.emit(
-                EventKind::Progress,
-                "plan",
-                "Selected Apple container operation",
                 Some(0),
             )?;
             return executor::execute(evidence, request_id, repository, &plan, reporter);

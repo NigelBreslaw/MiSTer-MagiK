@@ -9,12 +9,18 @@ boundary.
 Run from the repository root:
 
 ```bash
-scripts/agent plan --working-tree
-scripts/agent check --paths agent-cli
+scripts/agent task begin
+scripts/agent plan
+scripts/agent check
+scripts/agent verify
 scripts/agent --output ndjson verify --staged
-scripts/agent arm check-launcher
 scripts/agent scripts review
 ```
+
+`task begin` snapshots the worktree under `CODEX_THREAD_ID` (or an explicit
+`--task-id`). Normal planning and validation then use only files changed since
+that baseline, including later edits to files that were already dirty. Explicit
+`--paths` remains available for CI and diagnostics.
 
 With no arguments in a terminal, the program opens its Ratatui operator view.
 With no terminal, it retains concise human output. Automation should explicitly
@@ -27,7 +33,8 @@ NDJSON is versioned and contains one complete event per line. Events are
 contains a run ID, sequence number, elapsed milliseconds, short phase and
 message, and an optional integer percentage.
 
-- Start, phase changes, warnings, failure, and completion emit immediately.
+- Successful operation names are retained as evidence but not printed.
+- Warnings, external requirements, failure, and completion emit immediately.
 - Active work emits one coalesced heartbeat after ten seconds of silence.
 - Measurable work may emit at each new ten-percent boundary.
 - Child stdout and stderr are never copied into NDJSON.
@@ -61,8 +68,9 @@ durably recorded.
 ## Risk and device policy
 
 Operations are classified as read-only, local-write, device-write, or
-destructive. Apple-container builds are local-write operations and use the
-canonical `apps/mister/build-arm.sh` implementation without automatic retry.
+destructive. Required Apple-container checks may be planned automatically.
+Quartus and RBF builds are prohibited locally on macOS; FPGA changes produce an
+explicit GitHub Actions requirement instead.
 
 `scripts/mister` remains the sole device adapter. Deployment, reboot, fault
 injection, mode switching, and release acceptance remain outside typed device
@@ -70,11 +78,11 @@ execution until their cleanup and recovery behavior is modeled as state
 machines and tested with a fake transport. The CLI must never expose arbitrary
 SSH or SFTP as an AI operation.
 
-## Compatibility implementations
+## Validation ownership
 
-Repository validation, Rust development checks, doctor, host-tool checks, and
-the host release gate are typed operations. Focused deep check scripts remain;
-the retired orchestration entrypoints are not compatibility interfaces.
+The typed impact graph maps task paths to owned components, consumers, and the
+minimum `check` or `verify` operations. Unclassified paths fail closed. Focused
+deep-check scripts remain implementations, not AI-facing command choices.
 
 The deletion evidence and undecided human-workflow candidates are recorded in
 [`docs/agents/script-deletion-ledger.md`](../docs/agents/script-deletion-ledger.md).

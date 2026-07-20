@@ -32,9 +32,9 @@ MiSTer.
 
 ```bash
 bash -n scripts/NAME.sh
-scripts/agent check --paths scripts/NAME
-scripts/agent verify --paths scripts/NAME
+scripts/agent check
+scripts/agent verify
 ```
 
-Use `scripts/agent verify --paths PATH...` for packaging, release, installer,
-or cross-script contract changes.
+The task baseline supplies the affected paths. `--paths` is reserved for CI and
+diagnostics.

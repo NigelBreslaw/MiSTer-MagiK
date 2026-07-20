@@ -46,7 +46,20 @@ CREATE TABLE IF NOT EXISTS events (
     percent INTEGER,
     PRIMARY KEY (request_id, sequence)
 );
-PRAGMA user_version = 1;
+CREATE TABLE IF NOT EXISTS tasks (
+    task_id TEXT PRIMARY KEY,
+    worktree TEXT NOT NULL,
+    created_ms INTEGER NOT NULL,
+    baseline_json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS operation_cache (
+    task_id TEXT NOT NULL,
+    operation_id TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    completed_ms INTEGER NOT NULL,
+    PRIMARY KEY (task_id, operation_id, fingerprint)
+);
+PRAGMA user_version = 2;
 "#;
 
 #[derive(Debug)]
@@ -221,6 +234,85 @@ impl Evidence {
         Ok(())
     }
 
+    pub fn save_task_baseline<T: Serialize>(
+        &self,
+        task_id: &str,
+        worktree: &Path,
+        baseline: &T,
+        replace: bool,
+    ) -> Result<(), String> {
+        let baseline = serde_json::to_string(baseline).map_err(|error| error.to_string())?;
+        let sql = if replace {
+            "INSERT INTO tasks (task_id, worktree, created_ms, baseline_json) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(task_id) DO UPDATE SET worktree=excluded.worktree, created_ms=excluded.created_ms, baseline_json=excluded.baseline_json"
+        } else {
+            "INSERT INTO tasks (task_id, worktree, created_ms, baseline_json) VALUES (?1, ?2, ?3, ?4)"
+        };
+        self.connection
+            .execute(sql, params![task_id, worktree.display().to_string(), now_ms(), baseline])
+            .map_err(|error| {
+                if error.to_string().contains("UNIQUE constraint failed") {
+                    format!("task baseline already exists for {task_id}; use task begin --replace only for recovery")
+                } else {
+                    format!("cannot save task baseline: {error}")
+                }
+            })?;
+        Ok(())
+    }
+
+    pub fn load_task_baseline<T: serde::de::DeserializeOwned>(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<(PathBuf, T)>, String> {
+        self.connection
+            .query_row(
+                "SELECT worktree, baseline_json FROM tasks WHERE task_id = ?1",
+                [task_id],
+                |row| {
+                    let worktree: String = row.get(0)?;
+                    let baseline: String = row.get(1)?;
+                    Ok((PathBuf::from(worktree), baseline))
+                },
+            )
+            .optional()
+            .map_err(|error| error.to_string())?
+            .map(|(worktree, baseline)| {
+                serde_json::from_str(&baseline)
+                    .map(|value| (worktree, value))
+                    .map_err(|error| format!("cannot decode task baseline: {error}"))
+            })
+            .transpose()
+    }
+
+    pub fn has_cached_operation(
+        &self,
+        task_id: &str,
+        operation_id: &str,
+        fingerprint: &str,
+    ) -> Result<bool, String> {
+        self.connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM operation_cache WHERE task_id=?1 AND operation_id=?2 AND fingerprint=?3)",
+                params![task_id, operation_id, fingerprint],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn cache_operation(
+        &self,
+        task_id: &str,
+        operation_id: &str,
+        fingerprint: &str,
+    ) -> Result<(), String> {
+        self.connection
+            .execute(
+                "INSERT OR REPLACE INTO operation_cache (task_id, operation_id, fingerprint, completed_ms) VALUES (?1, ?2, ?3, ?4)",
+                params![task_id, operation_id, fingerprint, now_ms()],
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
     pub fn request_args(&self, request_id: &str) -> Result<Vec<String>, String> {
         let args: String = self
             .connection
@@ -255,6 +347,21 @@ impl Evidence {
         let completed = now_ms();
         let status = if exit_code == 0 { "passed" } else { "failed" };
         self.connection.execute("UPDATE commands SET completed_ms = ?2, duration_ms = ?3, exit_code = ?4, status = ?5 WHERE id = ?1", params![command_id, completed, completed.saturating_sub(started_ms), exit_code, status]).map_err(|error| format!("cannot record command outcome: {error}"))?;
+        Ok(())
+    }
+
+    pub fn record_reused_command(
+        &self,
+        request_id: &str,
+        operation_id: &str,
+        program: &str,
+        args: &[String],
+    ) -> Result<(), String> {
+        let args = serde_json::to_string(args).map_err(|error| error.to_string())?;
+        self.connection.execute(
+            "INSERT INTO commands (request_id, operation_id, program, args_json, started_ms, completed_ms, duration_ms, exit_code, status) VALUES (?1, ?2, ?3, ?4, ?5, ?5, 0, 0, 'reused')",
+            params![request_id, operation_id, program, args, now_ms()],
+        ).map_err(|error| error.to_string())?;
         Ok(())
     }
 
@@ -510,6 +617,28 @@ mod tests {
         assert_eq!(detail.commands[0].duration_ms, Some(0));
         assert_eq!(detail.events.len(), 1);
         assert_eq!(detail.events[0].message, "Passed");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_cache_requires_exact_task_operation_and_fingerprint() {
+        let root = temporary_root("operation-cache");
+        let evidence = Evidence::open_at(&root).unwrap();
+        assert!(!evidence
+            .has_cached_operation("task-a", "check.one", "fingerprint-a")
+            .unwrap());
+        evidence
+            .cache_operation("task-a", "check.one", "fingerprint-a")
+            .unwrap();
+        assert!(evidence
+            .has_cached_operation("task-a", "check.one", "fingerprint-a")
+            .unwrap());
+        assert!(!evidence
+            .has_cached_operation("task-a", "check.one", "fingerprint-b")
+            .unwrap());
+        assert!(!evidence
+            .has_cached_operation("task-b", "check.one", "fingerprint-a")
+            .unwrap());
         fs::remove_dir_all(root).unwrap();
     }
 }
