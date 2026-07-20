@@ -120,6 +120,21 @@ fn dispatch(
             }
             return executor::execute(evidence, request_id, repository, &plan, reporter);
         }
+        Intent::VerifyFullHost
+        | Intent::Doctor
+        | Intent::Rust { .. }
+        | Intent::HostTools { .. }
+        | Intent::ReleaseHost => {
+            let plan = planner::workflow_plan(intent.clone());
+            evidence.record_plan(request_id, &plan)?;
+            reporter.emit(
+                EventKind::Progress,
+                "plan",
+                &format!("Selected {} operation", plan.operations.len()),
+                Some(0),
+            )?;
+            return executor::execute(evidence, request_id, repository, &plan, reporter);
+        }
         Intent::DatabaseStatus => {
             let status = evidence.status()?;
             if output == OutputFormat::Human {

@@ -91,19 +91,20 @@ those trees are part of the task.
 ## Top-Level Commands
 
 ```bash
-scripts/doctor
-scripts/validate working-tree --print-plan
-scripts/validate working-tree
-scripts/validate full-host
-scripts/dev-rust test
-scripts/dev-rust check
+cargo run --quiet --manifest-path agent-cli/Cargo.toml -- doctor
+cargo run --quiet --manifest-path agent-cli/Cargo.toml -- plan lint --working-tree
+cargo run --quiet --manifest-path agent-cli/Cargo.toml -- lint --working-tree
+cargo run --quiet --manifest-path agent-cli/Cargo.toml -- verify full-host
+cargo run --quiet --manifest-path agent-cli/Cargo.toml -- rust test
+cargo run --quiet --manifest-path agent-cli/Cargo.toml -- rust check
 apps/mister/build-arm.sh --device
 scripts/deploy-rust.sh
 scripts/mister status
 ```
 
-`scripts/validate affected` remains the staged-index pre-commit interface.
-Use `scripts/validate paths PATH...` for explicit files or directories.
+`agent-cli lint --staged` is the staged-index pre-commit interface. Use
+`agent-cli lint --paths PATH...` for explicit files or directories. The
+existing scripts remain compatibility implementations during typed migration.
 
 ## Universal Hard Rules
 

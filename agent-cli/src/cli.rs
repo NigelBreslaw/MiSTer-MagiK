@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::model::{Intent, Scope};
+use crate::model::{Intent, RustTask, Scope};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
@@ -45,6 +45,40 @@ pub enum Command {
         #[command(subcommand)]
         command: DbCommand,
     },
+    Verify {
+        #[command(subcommand)]
+        command: VerifyCommand,
+    },
+    Doctor,
+    Rust {
+        #[command(subcommand)]
+        task: RustCommand,
+    },
+    HostTools {
+        #[arg(long)]
+        full: bool,
+    },
+    Release {
+        #[command(subcommand)]
+        command: ReleaseCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum VerifyCommand {
+    FullHost,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum RustCommand {
+    Fmt,
+    Test,
+    Check,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ReleaseCommand {
+    Host,
 }
 
 #[derive(Debug, Subcommand)]
@@ -117,6 +151,21 @@ impl Cli {
             Some(Command::Db {
                 command: DbCommand::PruneLogs,
             }) => Intent::PruneLogs,
+            Some(Command::Verify {
+                command: VerifyCommand::FullHost,
+            }) => Intent::VerifyFullHost,
+            Some(Command::Doctor) => Intent::Doctor,
+            Some(Command::Rust { task }) => Intent::Rust {
+                task: match task {
+                    RustCommand::Fmt => RustTask::Format,
+                    RustCommand::Test => RustTask::Test,
+                    RustCommand::Check => RustTask::Check,
+                },
+            },
+            Some(Command::HostTools { full }) => Intent::HostTools { full },
+            Some(Command::Release {
+                command: ReleaseCommand::Host,
+            }) => Intent::ReleaseHost,
         }
     }
 }

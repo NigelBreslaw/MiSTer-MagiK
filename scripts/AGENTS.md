@@ -14,8 +14,8 @@ Stable public commands remain directly under `scripts/`. Shared implementation,
 checks, tests, analysis, media, and release helpers are organized according to
 `scripts/README.md`.
 
-Run `scripts/doctor --scope full-host` to inspect local prerequisites without
-contacting the MiSTer.
+Run `agent-cli doctor` to inspect local prerequisites without contacting the
+MiSTer.
 
 ## Rules
 
@@ -32,9 +32,10 @@ contacting the MiSTer.
 
 ```bash
 bash -n scripts/NAME.sh
-scripts/test-host-tools.sh --fast
-scripts/validate paths scripts/NAME
+cargo run --quiet --manifest-path agent-cli/Cargo.toml -- host-tools
+cargo run --quiet --manifest-path agent-cli/Cargo.toml -- lint --paths scripts/NAME
 ```
 
-Use `scripts/test-host-tools.sh --full` for packaging, release, installer, or
-cross-script contract changes.
+Use `agent-cli host-tools --full` for packaging, release, installer, or
+cross-script contract changes. Existing scripts are compatibility
+implementations until their behavior has a deeper Rust replacement.

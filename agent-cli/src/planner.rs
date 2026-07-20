@@ -34,6 +34,70 @@ pub fn lint_plan(intent: Intent, paths: Vec<PathBuf>) -> Plan {
     Plan { intent, operations }
 }
 
+#[must_use]
+pub fn workflow_plan(intent: Intent) -> Plan {
+    use crate::model::RustTask;
+    let operation = match &intent {
+        Intent::VerifyFullHost => operation(
+            "verify.full-host",
+            "Run complete host verification",
+            "scripts/validate",
+            &["full-host"],
+        ),
+        Intent::Doctor => operation(
+            "doctor.full-host",
+            "Inspect host prerequisites",
+            "scripts/doctor",
+            &["--scope", "full-host"],
+        ),
+        Intent::Rust { task } => {
+            let argument = match task {
+                RustTask::Format => "fmt",
+                RustTask::Test => "test",
+                RustTask::Check => "check",
+            };
+            operation(
+                "rust.workflow",
+                "Run Rust workflow",
+                "scripts/dev-rust",
+                &[argument],
+            )
+        }
+        Intent::HostTools { full } => operation(
+            "host-tools",
+            "Run host tool checks",
+            "scripts/test-host-tools.sh",
+            &[if *full { "--full" } else { "--fast" }],
+        ),
+        Intent::ReleaseHost => operation(
+            "release.host",
+            "Run host release gate",
+            "scripts/release-check-host.sh",
+            &[],
+        ),
+        _ => {
+            return Plan {
+                intent,
+                operations: Vec::new(),
+            }
+        }
+    };
+    Plan {
+        intent,
+        operations: vec![operation],
+    }
+}
+
+fn operation(id: &str, title: &str, program: &str, args: &[&str]) -> Operation {
+    Operation {
+        id: id.into(),
+        title: title.into(),
+        risk: Risk::ReadOnly,
+        program: program.into(),
+        args: args.iter().map(|arg| (*arg).into()).collect(),
+    }
+}
+
 fn agent_cli_operations() -> Vec<Operation> {
     [
         (

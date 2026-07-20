@@ -32,6 +32,19 @@ pub enum Intent {
     DatabaseStatus,
     PruneLogs,
     Interactive,
+    VerifyFullHost,
+    Doctor,
+    Rust { task: RustTask },
+    HostTools { full: bool },
+    ReleaseHost,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RustTask {
+    Format,
+    Test,
+    Check,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
