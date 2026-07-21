@@ -45,6 +45,11 @@ pub fn affected_plan(intent: Intent, paths: Vec<PathBuf>) -> Result<Plan, String
             operation.inputs = inferred_inputs(operation);
         }
     }
+    operations.sort_by(|left, right| {
+        left.workflow_phase()
+            .cmp(&right.workflow_phase())
+            .then_with(|| left.id.cmp(&right.id))
+    });
     Ok(Plan {
         intent,
         operations,

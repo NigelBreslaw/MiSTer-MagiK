@@ -35,6 +35,16 @@ pub enum ActionKind {
     DeviceTransaction,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowPhase {
+    Cheap,
+    Host,
+    Expensive,
+    External,
+    Device,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Scope {
@@ -68,7 +78,7 @@ impl Intent {
     #[must_use]
     pub const fn risk(&self) -> Risk {
         match self {
-            Self::Commit { .. } => Risk::LocalWrite,
+            Self::Commit { .. } | Self::Verify { .. } => Risk::LocalWrite,
             Self::Deploy { .. } | Self::DeployRecipe { .. } => Risk::DeviceWrite,
             _ => Risk::ReadOnly,
         }
@@ -115,6 +125,26 @@ impl Operation {
             ActionKind::PlatformCi => ResourceClass::Network,
             ActionKind::DeviceTransaction => ResourceClass::Device,
             ActionKind::Script => ResourceClass::Cpu,
+        }
+    }
+
+    #[must_use]
+    pub fn workflow_phase(&self) -> WorkflowPhase {
+        match self.resource_class() {
+            ResourceClass::Device => WorkflowPhase::Device,
+            ResourceClass::Network => WorkflowPhase::External,
+            ResourceClass::AppleContainer => WorkflowPhase::Expensive,
+            ResourceClass::Cargo => WorkflowPhase::Host,
+            ResourceClass::Cpu | ResourceClass::GitIndex => {
+                if self.id.contains("format")
+                    || self.id.contains("syntax")
+                    || self.id == "repo.diff-check"
+                {
+                    WorkflowPhase::Cheap
+                } else {
+                    WorkflowPhase::Host
+                }
+            }
         }
     }
 }

@@ -50,6 +50,12 @@ pub fn execute_with_changes(
         _ => "check",
     };
     for (index, operation) in plan.operations.iter().enumerate() {
+        crate::policy::authorize(operation, plan.intent.risk()).map_err(|rejection| {
+            format!(
+                "policy_rejected: {}: {}",
+                rejection.operation_id, rejection.reason
+            )
+        })?;
         let percent = u8::try_from(index.saturating_mul(100) / plan.operations.len()).unwrap_or(0);
         let message = format!("running {}/{}", index + 1, plan.operations.len());
         reporter.emit(EventKind::Progress, phase, &message, Some(percent))?;
@@ -633,6 +639,36 @@ mod tests {
         assert!(!is_cacheable(&operation));
         operation.risk = Risk::DeviceWrite;
         assert!(!is_cacheable(&operation));
+    }
+
+    #[test]
+    fn execution_rejects_actions_above_intent_risk() {
+        let (root, cargo) = fake_cargo("#!/bin/sh\nexit 0\n");
+        let evidence = Evidence::open_at(&root.join("evidence")).unwrap();
+        let request = RawRequest {
+            id: "risk-run".into(),
+            args: vec!["agent-cli".into(), "check".into()],
+        };
+        evidence.begin_request(&request).unwrap();
+        let mut operation = test_operation(&cargo);
+        operation.risk = Risk::DeviceWrite;
+        let plan = Plan {
+            intent: Intent::Check {
+                scope: Scope::Paths(vec!["fixture".into()]),
+            },
+            operations: vec![operation],
+            external_requirements: Vec::new(),
+        };
+        let mut reporter = Reporter::new(&evidence, OutputFormat::Human, &request.id);
+        let error = execute(&evidence, &request.id, &root, &plan, &mut reporter).unwrap_err();
+        assert!(error.contains("policy_rejected"));
+        assert!(evidence
+            .run_detail(&request.id)
+            .unwrap()
+            .unwrap()
+            .commands
+            .is_empty());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
