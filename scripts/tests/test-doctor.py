@@ -49,7 +49,7 @@ def fixture(root: Path, bin_dir: Path) -> None:
         "rustup",
         """case "$1 $2" in
 "toolchain list") printf '1.97.0-aarch64-apple-darwin\\n' ;;
-"component list") printf 'clippy-aarch64-apple-darwin (installed)\\nrustfmt-aarch64-apple-darwin (installed)\\n' ;;
+"component list") printf 'clippy-aarch64-apple-darwin (installed)\\nrust-analyzer-aarch64-apple-darwin (installed)\\nrustfmt-aarch64-apple-darwin (installed)\\n' ;;
 "target list") printf 'armv7-unknown-linux-gnueabihf (installed)\\n' ;;
 *) exit 2 ;;
 esac""",
@@ -61,6 +61,15 @@ esac""",
 exit 0""",
     )
     write_command(bin_dir, "node", "printf 'v24.0.0\\n'")
+    write_command(
+        bin_dir,
+        "lspi",
+        """case "$1" in
+"--version") printf 'lspi 0.2.0\\n' ;;
+"doctor") printf '{"failures":[]}\\n' ;;
+*) exit 2 ;;
+esac""",
+    )
     write_command(
         bin_dir,
         "corepack",
@@ -96,6 +105,107 @@ def main() -> int:
         assert value["schema"] == "mister-magik-doctor-v1"
         assert value["ok"] is True
         assert value["device_probe"] == "not_attempted"
+        assert next(
+            check
+            for check in value["checks"]
+            if check["id"] == "rust-component-rust-analyzer"
+        )["status"] == "pass"
+        assert next(
+            check for check in value["checks"] if check["id"] == "lspi-version"
+        )["status"] == "pass"
+        assert next(
+            check for check in value["checks"] if check["id"] == "lspi-doctor"
+        )["status"] == "pass"
+
+        write_command(
+            bin_dir,
+            "lspi",
+            """case "$1" in
+"--version") printf 'lspi 0.2.0\\n' ;;
+"doctor") printf '{"failures":[{"message":"invalid config"}]}\\n' ;;
+*) exit 2 ;;
+esac""",
+        )
+        result = run(root, bin_dir, "full-host")
+        value = json.loads(result.stdout)
+        assert result.returncode == 1
+        assert next(
+            check for check in value["checks"] if check["id"] == "lspi-doctor"
+        )["status"] == "fail"
+
+        write_command(
+            bin_dir,
+            "lspi",
+            """case "$1" in
+"--version") printf 'lspi 0.2.0\\n' ;;
+"doctor") printf '{"failures":[]}\\n' ;;
+*) exit 2 ;;
+esac""",
+        )
+
+        write_command(
+            bin_dir,
+            "rustup",
+            """case "$1 $2" in
+"toolchain list") printf '1.97.0-aarch64-apple-darwin\\n' ;;
+"component list") printf 'clippy-aarch64-apple-darwin (installed)\\nrustfmt-aarch64-apple-darwin (installed)\\n' ;;
+"target list") printf 'armv7-unknown-linux-gnueabihf (installed)\\n' ;;
+*) exit 2 ;;
+esac""",
+        )
+        result = run(root, bin_dir, "full-host")
+        value = json.loads(result.stdout)
+        assert result.returncode == 1
+        missing_analyzer = next(
+            check
+            for check in value["checks"]
+            if check["id"] == "rust-component-rust-analyzer"
+        )
+        assert missing_analyzer["status"] == "fail"
+        assert "rustup component add rust-analyzer" in missing_analyzer["remediation"]
+
+        write_command(
+            bin_dir,
+            "rustup",
+            """case "$1 $2" in
+"toolchain list") printf '1.97.0-aarch64-apple-darwin\\n' ;;
+"component list") printf 'clippy-aarch64-apple-darwin (installed)\\nrust-analyzer-aarch64-apple-darwin (installed)\\nrustfmt-aarch64-apple-darwin (installed)\\n' ;;
+"target list") printf 'armv7-unknown-linux-gnueabihf (installed)\\n' ;;
+*) exit 2 ;;
+esac""",
+        )
+        write_command(bin_dir, "lspi", "printf 'lspi 0.1.0\\n'")
+        result = run(root, bin_dir, "full-host")
+        value = json.loads(result.stdout)
+        assert result.returncode == 1
+        wrong_version = next(
+            check for check in value["checks"] if check["id"] == "lspi-version"
+        )
+        assert wrong_version["status"] == "fail"
+        assert "cargo install lspi --version 0.2.0 --locked" in wrong_version["remediation"]
+
+        (bin_dir / "lspi").unlink()
+        result = run(root, bin_dir, "full-host")
+        value = json.loads(result.stdout)
+        assert result.returncode == 1
+        assert next(
+            check for check in value["checks"] if check["id"] == "command-lspi"
+        )["status"] == "fail"
+
+        result = run(root, bin_dir, "docs")
+        value = json.loads(result.stdout)
+        assert all(check["id"] != "command-lspi" for check in value["checks"])
+        assert all(not check["id"].startswith("lspi") for check in value["checks"])
+
+        write_command(
+            bin_dir,
+            "lspi",
+            """case "$1" in
+"--version") printf 'lspi 0.2.0\\n' ;;
+"doctor") printf '{"failures":[]}\\n' ;;
+*) exit 2 ;;
+esac""",
+        )
 
         (bin_dir / "cargo").unlink()
         result = run(root, bin_dir, "full-host")
@@ -120,6 +230,20 @@ def main() -> int:
             check["id"].startswith("output-ignored-") and check["status"] == "fail"
             for check in value["checks"]
         )
+
+    with tempfile.TemporaryDirectory() as raw:
+        bin_dir = Path(raw)
+        write_command(bin_dir, "rust-analyzer", "exit 99")
+        write_command(bin_dir, "rustup", "printf '%s\\n' \"$*\"")
+        result = subprocess.run(
+            [str(ROOT / "scripts/rust-analyzer"), "--version"],
+            check=False,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PATH": f"{bin_dir}:/usr/bin:/bin"},
+        )
+        assert result.returncode == 0
+        assert result.stdout.strip() == "run 1.97.1 rust-analyzer --version"
 
     print("doctor tests ok")
     return 0

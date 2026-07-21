@@ -53,6 +53,8 @@ pub fn classify(path: &Path) -> Option<Component> {
         .is_some_and(|parent| parent.as_os_str().is_empty())
         || path.file_name().and_then(|name| name.to_str()) == Some("AGENTS.md")
         || path.starts_with("LICENSES")
+        || path.starts_with(".codex")
+        || path.starts_with(".lspi")
     {
         Some(Component::Repository)
     } else if path.starts_with("agent-cli") {

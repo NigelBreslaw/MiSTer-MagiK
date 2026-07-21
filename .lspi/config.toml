@@ -1,0 +1,272 @@
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+workspace_root = "."
+
+[mcp]
+context = "codex"
+read_only = true
+
+[mcp.output]
+max_total_chars_default = 60000
+max_total_chars_hard = 200000
+
+[mcp.tools]
+allow = [
+  "get_current_config",
+  "list_servers",
+  "get_server_status",
+  "hover_at",
+  "get_document_symbols",
+  "search_workspace_symbols",
+  "find_definition",
+  "find_definition_at",
+  "find_references",
+  "find_references_at",
+  "find_implementation_at",
+  "find_type_definition_at",
+  "find_incoming_calls",
+  "find_incoming_calls_at",
+  "find_outgoing_calls",
+  "find_outgoing_calls_at",
+  "get_diagnostics",
+]
+
+# This repository intentionally has independent Cargo projects. Keep one lazy
+# analyzer per project so a semantic query does not index every project first.
+[[servers]]
+id = "agent-cli"
+kind = "rust_analyzer"
+extensions = ["rs"]
+root_dir = "agent-cli"
+cwd = "."
+command = "scripts/rust-analyzer"
+initialize_timeout_ms = 30000
+request_timeout_ms = 120000
+warmup_timeout_ms = 30000
+
+[servers.initialize_options]
+checkOnSave = false
+
+[servers.initialize_options.files]
+excludeDirs = ["target"]
+[[servers]]
+id = "desktop"
+kind = "rust_analyzer"
+extensions = ["rs"]
+root_dir = "apps/desktop"
+cwd = "."
+command = "scripts/rust-analyzer"
+initialize_timeout_ms = 30000
+request_timeout_ms = 120000
+warmup_timeout_ms = 30000
+
+[servers.initialize_options]
+checkOnSave = false
+
+[servers.initialize_options.files]
+excludeDirs = ["target"]
+
+[[servers]]
+id = "mister-app"
+kind = "rust_analyzer"
+extensions = ["rs"]
+root_dir = "apps/mister"
+cwd = "."
+command = "scripts/rust-analyzer"
+initialize_timeout_ms = 30000
+request_timeout_ms = 120000
+warmup_timeout_ms = 30000
+
+[servers.initialize_options]
+checkOnSave = false
+
+[servers.initialize_options.files]
+excludeDirs = ["target"]
+
+[[servers]]
+id = "ui-generated"
+kind = "rust_analyzer"
+extensions = ["rs"]
+root_dir = "apps/mister/ui-generated"
+cwd = "."
+command = "scripts/rust-analyzer"
+initialize_timeout_ms = 30000
+request_timeout_ms = 120000
+warmup_timeout_ms = 30000
+
+[servers.initialize_options]
+checkOnSave = false
+
+[servers.initialize_options.files]
+excludeDirs = ["target"]
+
+[[servers]]
+id = "agent-protocol"
+kind = "rust_analyzer"
+extensions = ["rs"]
+root_dir = "crates/agent-protocol"
+cwd = "."
+command = "scripts/rust-analyzer"
+initialize_timeout_ms = 30000
+request_timeout_ms = 120000
+warmup_timeout_ms = 30000
+
+[servers.initialize_options]
+checkOnSave = false
+
+[servers.initialize_options.files]
+excludeDirs = ["target"]
+
+[[servers]]
+id = "catalog"
+kind = "rust_analyzer"
+extensions = ["rs"]
+root_dir = "crates/catalog"
+cwd = "."
+command = "scripts/rust-analyzer"
+initialize_timeout_ms = 30000
+request_timeout_ms = 120000
+warmup_timeout_ms = 30000
+
+[servers.initialize_options]
+checkOnSave = false
+
+[servers.initialize_options.files]
+excludeDirs = ["target"]
+
+[[servers]]
+id = "framebuffer-stream"
+kind = "rust_analyzer"
+extensions = ["rs"]
+root_dir = "crates/framebuffer-stream"
+cwd = "."
+command = "scripts/rust-analyzer"
+initialize_timeout_ms = 30000
+request_timeout_ms = 120000
+warmup_timeout_ms = 30000
+
+[servers.initialize_options]
+checkOnSave = false
+
+[servers.initialize_options.files]
+excludeDirs = ["target"]
+
+[[servers]]
+id = "magik-core"
+kind = "rust_analyzer"
+extensions = ["rs"]
+root_dir = "crates/magik-core"
+cwd = "."
+command = "scripts/rust-analyzer"
+initialize_timeout_ms = 30000
+request_timeout_ms = 120000
+warmup_timeout_ms = 30000
+
+[servers.initialize_options]
+checkOnSave = false
+
+[servers.initialize_options.files]
+excludeDirs = ["target"]
+
+[[servers]]
+id = "media-contract"
+kind = "rust_analyzer"
+extensions = ["rs"]
+root_dir = "crates/media-contract"
+cwd = "."
+command = "scripts/rust-analyzer"
+initialize_timeout_ms = 30000
+request_timeout_ms = 120000
+warmup_timeout_ms = 30000
+
+[servers.initialize_options]
+checkOnSave = false
+
+[servers.initialize_options.files]
+excludeDirs = ["target"]
+
+[[servers]]
+id = "latch-contract"
+kind = "rust_analyzer"
+extensions = ["rs"]
+root_dir = "mister/platform/contracts/latch"
+cwd = "."
+command = "scripts/rust-analyzer"
+initialize_timeout_ms = 30000
+request_timeout_ms = 120000
+warmup_timeout_ms = 30000
+
+[servers.initialize_options]
+checkOnSave = false
+
+[servers.initialize_options.files]
+excludeDirs = ["target"]
+
+[[servers]]
+id = "scanout-contract"
+kind = "rust_analyzer"
+extensions = ["rs"]
+root_dir = "mister/platform/contracts/scanout"
+cwd = "."
+command = "scripts/rust-analyzer"
+initialize_timeout_ms = 30000
+request_timeout_ms = 120000
+warmup_timeout_ms = 30000
+
+[servers.initialize_options]
+checkOnSave = false
+
+[servers.initialize_options.files]
+excludeDirs = ["target"]
+
+[[servers]]
+id = "runtime"
+kind = "rust_analyzer"
+extensions = ["rs"]
+root_dir = "mister/platform/runtime"
+cwd = "."
+command = "scripts/rust-analyzer"
+initialize_timeout_ms = 30000
+request_timeout_ms = 120000
+warmup_timeout_ms = 30000
+
+[servers.initialize_options]
+checkOnSave = false
+
+[servers.initialize_options.files]
+excludeDirs = ["target"]
+
+[[servers]]
+id = "device-agent"
+kind = "rust_analyzer"
+extensions = ["rs"]
+root_dir = "mister/tools/agent"
+cwd = "."
+command = "scripts/rust-analyzer"
+initialize_timeout_ms = 30000
+request_timeout_ms = 120000
+warmup_timeout_ms = 30000
+
+[servers.initialize_options]
+checkOnSave = false
+
+[servers.initialize_options.files]
+excludeDirs = ["target"]
+
+[[servers]]
+id = "host-tool"
+kind = "rust_analyzer"
+extensions = ["rs"]
+root_dir = "mister/tools/host"
+cwd = "."
+command = "scripts/rust-analyzer"
+initialize_timeout_ms = 30000
+request_timeout_ms = 120000
+warmup_timeout_ms = 30000
+
+[servers.initialize_options]
+checkOnSave = false
+
+[servers.initialize_options.files]
+excludeDirs = ["target"]

@@ -123,6 +123,19 @@ interfaces.
 invoke it with first-attempt escalation because it writes `.git`. Do not stage
 or commit with raw Git when the task baseline workflow is available.
 
+## Rust Semantic Tooling
+
+Rust AI tasks require the read-only `lspi` MCP integration backed by the pinned
+rust-analyzer toolchain. Use it for symbols, definitions, implementations,
+references, types, call hierarchy, hover information, and diagnostics. Run
+`scripts/agent doctor` and resolve its remediation before Rust work if the MCP
+tools are unavailable.
+
+The LSP integration is navigation-only. Never use LSP formatting, code actions,
+renames, or other write operations. Make edits through the normal repository
+tools, use `scripts/agent check` while iterating, and use `scripts/agent deliver`
+to validate and complete work.
+
 ## Universal Hard Rules
 
 - Never leave the MiSTer in a persistent boot loop.

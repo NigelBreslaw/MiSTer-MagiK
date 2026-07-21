@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TOOLCHAIN_FILE="$ROOT/apps/mister/rust-toolchain.toml"
+TOOLCHAIN="$(sed -n 's/^channel = "\([^"]*\)"$/\1/p' "$TOOLCHAIN_FILE")"
+
+if [ -z "$TOOLCHAIN" ]; then
+  echo "ERROR: unable to read the pinned Rust channel from $TOOLCHAIN_FILE" >&2
+  exit 1
+fi
+
+exec rustup run "$TOOLCHAIN" rust-analyzer "$@"

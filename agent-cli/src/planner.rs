@@ -128,6 +128,19 @@ fn add_path_operations(path: &Path, depth: Depth, out: &mut BTreeMap<String, Ope
             "agent guidance changed",
         ));
     }
+    if path.starts_with(".codex")
+        || path.starts_with(".lspi")
+        || path == Path::new("scripts/rust-analyzer")
+        || path == Path::new("apps/mister/rust-toolchain.toml")
+    {
+        add(op(
+            "host.doctor-tests",
+            "Test host doctor",
+            "python3",
+            &["scripts/tests/test-doctor.py"],
+            "semantic tooling changed → doctor contract",
+        ));
+    }
     if is_root_file(path)
         || path.starts_with("LICENSES")
         || path.starts_with("history")
@@ -526,7 +539,10 @@ fn add_script_operations(path: &Path, _depth: Depth, add: &mut impl FnMut(Operat
     );
     if !deleted_deployment_script
         && (path.extension().and_then(|extension| extension.to_str()) == Some("sh")
-            || path.file_name().and_then(|name| name.to_str()) == Some("mister"))
+            || matches!(
+                path.file_name().and_then(|name| name.to_str()),
+                Some("mister" | "rust-analyzer")
+            ))
     {
         let id = format!("script.syntax.{}", text.replace(['/', '.'], "-"));
         add(op_owned(
@@ -1059,6 +1075,45 @@ mod tests {
             .operations
             .iter()
             .all(|operation| !operation.id.contains("quartus")));
+    }
+
+    #[test]
+    fn semantic_tooling_changes_select_doctor_contract() {
+        for path in [
+            ".codex/config.toml",
+            ".lspi/config.toml",
+            "scripts/rust-analyzer",
+            "apps/mister/rust-toolchain.toml",
+        ] {
+            let plan = affected_plan(
+                Intent::Check {
+                    scope: Scope::Paths(vec![]),
+                },
+                vec![path.into()],
+            )
+            .unwrap();
+            assert!(
+                plan.operations
+                    .iter()
+                    .any(|operation| operation.id == "host.doctor-tests"),
+                "missing doctor contract for {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn rust_analyzer_wrapper_selects_shell_syntax_check() {
+        let plan = affected_plan(
+            Intent::Check {
+                scope: Scope::Paths(vec![]),
+            },
+            vec!["scripts/rust-analyzer".into()],
+        )
+        .unwrap();
+        assert!(plan
+            .operations
+            .iter()
+            .any(|operation| { operation.id == "script.syntax.scripts-rust-analyzer" }));
     }
 
     #[test]

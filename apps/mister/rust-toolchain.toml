@@ -3,5 +3,5 @@
 
 [toolchain]
 channel = "1.97.1"
-components = ["rustfmt", "clippy"]
+components = ["rustfmt", "clippy", "rust-analyzer"]
 targets = ["armv7-unknown-linux-gnueabihf"]

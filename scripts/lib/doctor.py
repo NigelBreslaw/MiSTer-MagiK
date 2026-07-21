@@ -20,9 +20,12 @@ from typing import Any
 
 SCHEMA = "mister-magik-doctor-v1"
 SCOPES = ("full-host", "desktop", "arm", "docs", "device")
+LSPI_VERSION = "0.2.0"
 
 
-def command_output(command: list[str]) -> str | None:
+def command_output(
+    command: list[str], *, cwd: Path | None = None, timeout: int = 5
+) -> str | None:
     try:
         result = subprocess.run(
             command,
@@ -30,7 +33,8 @@ def command_output(command: list[str]) -> str | None:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
-            timeout=5,
+            timeout=timeout,
+            cwd=cwd,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -115,7 +119,7 @@ def check_rust_toolchain(root: Path, report: Report, *, require_arm: bool) -> No
     components = command_output(
         ["rustup", "component", "list", "--toolchain", channel]
     ) or ""
-    for component in ("rustfmt", "clippy"):
+    for component in ("rustfmt", "clippy", "rust-analyzer"):
         installed_component = any(
             line.startswith(f"{component}-") and line.endswith("(installed)")
             for line in components.splitlines()
@@ -140,6 +144,62 @@ def check_rust_toolchain(root: Path, report: Report, *, require_arm: bool) -> No
             f"{arm_target} for {channel}",
             f"run: rustup target add {arm_target} --toolchain {channel}",
         )
+
+
+def check_rust_semantic_tools(root: Path, report: Report) -> None:
+    remediation = f"run: cargo install lspi --version {LSPI_VERSION} --locked"
+    path = shutil.which("lspi")
+    report.add(
+        "command-lspi",
+        path is not None,
+        path or "lspi not found",
+        remediation,
+    )
+    if path is None:
+        return
+
+    output = command_output([path, "--version"])
+    version_match = re.search(r"(?:^|\s)(\d+\.\d+\.\d+)(?:\s|$)", output or "")
+    version = version_match.group(1) if version_match else None
+    report.add(
+        "lspi-version",
+        version == LSPI_VERSION,
+        f"lspi {version or 'version unreadable'}; required {LSPI_VERSION}",
+        remediation,
+    )
+    if version != LSPI_VERSION:
+        return
+
+    doctor = command_output(
+        [
+            path,
+            "doctor",
+            "--workspace-root",
+            ".",
+            "--config",
+            ".lspi/config.toml",
+            "--json",
+        ],
+        cwd=root,
+        timeout=30,
+    )
+    valid_report = False
+    if doctor is not None:
+        try:
+            value = json.loads(doctor)
+            valid_report = (
+                isinstance(value, dict)
+                and isinstance(value.get("failures"), list)
+                and not value["failures"]
+            )
+        except json.JSONDecodeError:
+            pass
+    report.add(
+        "lspi-doctor",
+        valid_report,
+        "repository lspi configuration",
+        "run: lspi doctor --workspace-root . --config .lspi/config.toml --json",
+    )
 
 
 def check_desktop(root: Path, report: Report) -> None:
@@ -219,6 +279,7 @@ def build_report(root: Path, scope: str) -> Report:
         require_command(report, "cargo", "install Rust through rustup")
         require_command(report, "rustup", "install rustup")
         check_rust_toolchain(root, report, require_arm=scope == "arm")
+        check_rust_semantic_tools(root, report)
     if scope in {"full-host", "desktop"}:
         check_desktop(root, report)
     if scope in {"full-host", "docs"}:
