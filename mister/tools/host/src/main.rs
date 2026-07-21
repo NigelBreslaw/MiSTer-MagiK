@@ -21,6 +21,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 mod agent_client;
+mod crt_qualification;
 mod discovery;
 mod media;
 mod remote;
@@ -545,6 +546,7 @@ pub fn run_cli() -> Result<()> {
         "core-list" => core_list()?,
         "mode" => mode_cli(&args)?,
         "scene" => scene_cli(&args)?,
+        "crt" => crt_qualification::run(&args)?,
         "connected" => println!("connected"),
         "run" => {
             let stream = args.first().map(|s| s.as_str()) == Some("--stream");
@@ -828,7 +830,7 @@ pub fn run_cli() -> Result<()> {
 
 fn usage() {
     println!(
-        "usage: mister --capture-buffer\n       mister <status|arming-status|mode|scene|core-list|catalog|media-check|media-download|agent|reboot-wait|doctor|mame-metadata-build> ...\n       mode <status|dev|public|stock>\n       scene <launcher|controller_test|tear_pattern|video_playback|crt_trial> [seconds]\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>]\n       operator commands are typed and bounded; direct-reset-no-sync remains experimental and requires a volatile session token"
+        "usage: mister --capture-buffer\n       mister <status|arming-status|mode|scene|crt|core-list|catalog|media-check|media-download|agent|reboot-wait|doctor|mame-metadata-build> ...\n       mode <status|dev|public|stock>\n       scene <launcher|controller_test|tear_pattern|video_playback|crt_trial> [seconds]\n       crt qualify --attended [--out DIRECTORY]\n       crt qualify --restore\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>]\n       operator commands are typed and bounded; direct-reset-no-sync remains experimental and requires a volatile session token"
     );
 }
 
