@@ -15,6 +15,25 @@ use std::time::{Duration, Instant};
 const TARGET: &str = "armv7-unknown-linux-gnueabihf";
 const IMAGE: &str = "mister-magik-cross-armv7:ubuntu20-arm64";
 const BUILD_DEADLINE: Duration = Duration::from_secs(30 * 60);
+const FFMPEG_CROSS_ENV: [(&str, &str); 5] = [
+    (
+        "FFMPEG_DIR",
+        "/project/apps/mister/target/ffmpeg-minimal/armv7/dist",
+    ),
+    (
+        "PKG_CONFIG_PATH",
+        "/project/apps/mister/target/ffmpeg-minimal/armv7/dist/lib/pkgconfig",
+    ),
+    ("PKG_CONFIG_ALLOW_CROSS", "1"),
+    (
+        "CFLAGS",
+        "-I/project/apps/mister/target/ffmpeg-minimal/armv7/dist/include",
+    ),
+    (
+        "HOST_CFLAGS",
+        "-I/project/apps/mister/target/ffmpeg-minimal/armv7/dist/include",
+    ),
+];
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
@@ -477,14 +496,8 @@ impl<'a> ProcessBuildActions<'a> {
             command.arg("--env").arg(value);
         }
         if self.spec.target == BuildTarget::Runtime && self.spec.mode != BuildMode::CheckLibrary {
-            for value in [
-                "FFMPEG_DIR=/project/apps/mister/target/ffmpeg-minimal/armv7/dist",
-                "PKG_CONFIG_PATH=/project/apps/mister/target/ffmpeg-minimal/armv7/dist/lib/pkgconfig",
-                "PKG_CONFIG_ALLOW_CROSS=1",
-                "CFLAGS=-I/project/apps/mister/target/ffmpeg-minimal/armv7/dist/include",
-                "HOST_CFLAGS=-I/project/apps/mister/target/ffmpeg-minimal/armv7/dist/include",
-            ] {
-                command.arg("--env").arg(value);
+            for (name, value) in FFMPEG_CROSS_ENV {
+                command.arg("--env").arg(format!("{name}={value}"));
             }
         }
         command
@@ -526,6 +539,9 @@ impl<'a> ProcessBuildActions<'a> {
             .env("MISTER_MAGIK_VERSION", version)
             .env("MISTER_MAGIK_BUILD_TIME", build_time)
             .args(cargo_args(self.spec));
+        if self.spec.target == BuildTarget::Runtime && self.spec.mode != BuildMode::CheckLibrary {
+            command.envs(FFMPEG_CROSS_ENV);
+        }
         run_bounded(&mut command, BUILD_DEADLINE)
     }
 
@@ -872,6 +888,15 @@ mod tests {
             device.cache_identity,
             BuildSpec::canonical(UiScope::Launcher).cache_identity
         );
+    }
+
+    #[test]
+    fn cross_runtime_receives_minimal_ffmpeg_environment() {
+        assert!(FFMPEG_CROSS_ENV.contains(&(
+            "PKG_CONFIG_PATH",
+            "/project/apps/mister/target/ffmpeg-minimal/armv7/dist/lib/pkgconfig"
+        )));
+        assert!(FFMPEG_CROSS_ENV.contains(&("PKG_CONFIG_ALLOW_CROSS", "1")));
     }
 
     #[test]

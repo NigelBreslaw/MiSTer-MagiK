@@ -245,6 +245,21 @@ class PlatformBundleTests(unittest.TestCase):
         self.assertEqual(bundle.verify_component("fpga", self.fpga, self.fpga_id)["component_id"], self.fpga_id)
         self.assertEqual(bundle.verify_component("kernel", self.scanout, self.kernel_id)["component_id"], self.kernel_id)
 
+    def test_component_cache_matches_upload_artifact_hidden_file_policy(self) -> None:
+        hidden = self.fpga / "patched" / "Menu-work" / ".git" / "config"
+        hidden.parent.mkdir(parents=True)
+        hidden.write_text("not uploaded\n")
+        bundle.write_component_cache("fpga", self.fpga, self.fpga_id, "123", "8" * 40)
+        checksums = (self.fpga / bundle.COMPONENT_CHECKSUMS).read_text()
+        self.assertNotIn(".git/config", checksums)
+        hidden.unlink()
+        self.assertEqual(bundle.verify_component("fpga", self.fpga, self.fpga_id)["component_id"], self.fpga_id)
+
+    def test_component_cache_accepts_legacy_checksums_for_omitted_hidden_files(self) -> None:
+        checksums = self.fpga / bundle.COMPONENT_CHECKSUMS
+        checksums.write_text(checksums.read_text() + f"{'0' * 64}  patched/Menu-work/.git/config\n")
+        self.assertEqual(bundle.verify_component("fpga", self.fpga, self.fpga_id)["component_id"], self.fpga_id)
+
     def test_standalone_component_checksum_tampering_is_rejected(self) -> None:
         (self.scanout / "modinfo.txt").write_text("tampered\n")
         with self.assertRaisesRegex(ValueError, "checksum"):

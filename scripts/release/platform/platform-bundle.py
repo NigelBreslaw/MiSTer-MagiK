@@ -223,7 +223,9 @@ def component_cache_paths(artifact: Path) -> list[Path]:
     excluded = {COMPONENT_CHECKSUMS}
     return sorted(
         path for path in artifact.rglob("*")
-        if path.is_file() and path.relative_to(artifact).as_posix() not in excluded
+        if path.is_file()
+        and path.relative_to(artifact).as_posix() not in excluded
+        and not any(part.startswith(".") for part in path.relative_to(artifact).parts)
     )
 
 
@@ -262,7 +264,8 @@ def verify_component_cache(component: str, artifact: Path, component_id: str) ->
         require_hex("component cache checksum", value, HEX64)
         if relative in expected:
             raise BundleError("duplicate component cache checksum path")
-        expected[relative] = value
+        if not any(part.startswith(".") for part in Path(relative).parts):
+            expected[relative] = value
     actual = {path.relative_to(artifact).as_posix(): digest(path) for path in component_cache_paths(artifact)}
     if actual != expected:
         raise BundleError("component cache checksum manifest does not match artifact")

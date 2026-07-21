@@ -16,7 +16,7 @@ pub const SLOT_CAPACITY_BYTES: usize = MAX_STRIDE_BYTES * MAX_HEIGHT;
 pub const MAP_BYTES: usize = SLOT_CAPACITY_BYTES;
 pub const LAYOUT_WRITE_COMBINE: u32 = 1;
 pub const GET_LAYOUT: usize = 0x8040_4d01;
-pub const UAPI_SHA256: &str = "ee9c6ef38adc995dc5b182371a13e2db59c1edb5b118a68ac8bdbc555c0e0e11";
+pub const UAPI_SHA256: &str = "477f1554510d3430fce10a6423ed92d77d090e40d8ffaa09f97619eede38f7f4";
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
