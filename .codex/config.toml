@@ -9,8 +9,9 @@ args = [
   ".",
   "--config",
   ".lspi/config.toml",
+  "--warmup",
   "--read-only",
 ]
 required = false
-startup_timeout_sec = 45
+startup_timeout_sec = 120
 env = { RUST_LOG = "error" }

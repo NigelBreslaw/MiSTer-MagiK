@@ -32,8 +32,9 @@ allow = [
   "get_diagnostics",
 ]
 
-# This repository intentionally has independent Cargo projects. Keep one lazy
-# analyzer per project so a semantic query does not index every project first.
+# This repository intentionally has independent Cargo projects. Keep one
+# analyzer per project; Codex warms them at startup so checks always find an
+# active server without assigning a query to the wrong Cargo project.
 [[servers]]
 id = "agent-cli"
 kind = "rust_analyzer"
