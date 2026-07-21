@@ -130,7 +130,7 @@ impl CatalogReader for LazyShardedCatalogReader {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "builder"))]
 mod tests {
     use super::*;
     use crate::catalog_domain::ScanUnitId;

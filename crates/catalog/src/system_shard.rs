@@ -754,6 +754,7 @@ impl Error for SystemShardError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "builder")]
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -894,6 +895,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "builder")]
     fn fixture_data() -> SystemShardData {
         SystemShardData {
             system_id: SystemId::parse("snes").unwrap(),
@@ -942,6 +944,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "builder")]
     fn temporary_root(label: &str) -> std::path::PathBuf {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)

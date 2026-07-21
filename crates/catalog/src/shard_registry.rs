@@ -991,6 +991,7 @@ impl Error for RegistryError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "builder")]
     use crate::system_shard::{write_system_shard, SystemGame, SystemShardData};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1205,6 +1206,7 @@ mod tests {
         .unwrap()
     }
 
+    #[cfg(feature = "builder")]
     fn manifest(
         generation: u64,
         active: PublishedGeneration,
