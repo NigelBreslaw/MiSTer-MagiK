@@ -413,6 +413,7 @@ fn deliver(
             paths
         };
         let mut deployment = agent_cli::deploy::plan(repository, paths)?;
+        deployment.kind = recorded_delivery_kind(deployment.kind, &pending.impact);
         let candidate = agent_cli::platform_ci::resolve_repository(repository, |progress| {
             reporter.emit(EventKind::Progress, "platform-ci", progress, None)
         })?;
@@ -522,6 +523,17 @@ fn delivery_state_can_resume(state: &str) -> bool {
     matches!(state, "external_pending" | "recovery_required")
 }
 
+fn recorded_delivery_kind(
+    inferred: agent_cli::deploy::DeploymentKind,
+    recorded_impact: &str,
+) -> agent_cli::deploy::DeploymentKind {
+    match recorded_impact {
+        "platform" => agent_cli::deploy::DeploymentKind::Platform,
+        "runtime" => agent_cli::deploy::DeploymentKind::Runtime,
+        _ => inferred,
+    }
+}
+
 fn git_value(repository: &std::path::Path, args: &[&str]) -> Result<String, String> {
     let output = std::process::Command::new("git")
         .args(args)
@@ -623,6 +635,24 @@ mod tests {
         assert!(delivery_state_can_resume("recovery_required"));
         assert!(!delivery_state_can_resume("failed"));
         assert!(!delivery_state_can_resume("complete"));
+    }
+
+    #[test]
+    fn resumed_delivery_preserves_its_recorded_impact() {
+        use agent_cli::deploy::DeploymentKind;
+
+        assert_eq!(
+            recorded_delivery_kind(DeploymentKind::Runtime, "platform"),
+            DeploymentKind::Platform
+        );
+        assert_eq!(
+            recorded_delivery_kind(DeploymentKind::Platform, "runtime"),
+            DeploymentKind::Runtime
+        );
+        assert_eq!(
+            recorded_delivery_kind(DeploymentKind::Platform, "none"),
+            DeploymentKind::Platform
+        );
     }
 
     #[test]
