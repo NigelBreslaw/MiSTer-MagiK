@@ -259,7 +259,7 @@ impl DeviceOperations for NativeDevice {
                 value.into()
             }
             DeviceRequest::SetMenuVideoMode { video_mode } => {
-                if !matches!(video_mode.as_str(), "13" | "14") {
+                if !matches!(video_mode.as_str(), "6" | "13" | "14") {
                     return Err(DeviceFailure::InvalidRequest(format!(
                         "unsupported focused video mode: {video_mode}"
                     )));

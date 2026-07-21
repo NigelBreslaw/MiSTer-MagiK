@@ -55,7 +55,7 @@ pub enum Command {
     Diagnose,
     #[command(hide = true)]
     DisplayMode {
-        #[arg(value_parser = ["13", "14"])]
+        #[arg(value_parser = ["6", "13", "14"])]
         video_mode: String,
         #[arg(long, value_parser = ["stock", "dev"])]
         main: Option<String>,
@@ -305,11 +305,11 @@ mod tests {
     #[test]
     fn focused_display_mode_accepts_only_stress_presets() {
         assert_eq!(
-            Cli::try_parse_from(["agent-cli", "display-mode", "13"])
+            Cli::try_parse_from(["agent-cli", "display-mode", "6"])
                 .unwrap()
                 .into_intent(),
             Intent::DisplayMode {
-                video_mode: "13".into(),
+                video_mode: "6".into(),
                 main: None,
             }
         );
