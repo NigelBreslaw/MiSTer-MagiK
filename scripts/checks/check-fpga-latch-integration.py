@@ -113,6 +113,9 @@ def main() -> None:
             "if(magik_lfb_apply_hdmi)",
             "if(magik_lfb_apply_crt)",
             "if(magik_response_valid) io_dout_sys <= magik_response_data;",
+            ".inclk({magik_crt_clk, clk_vid, hdmi_clk_out, 1'b0})",
+            "if(magik_active_route == 2'd1)",
+            "d  <= {magik_crt_r, magik_crt_g, magik_crt_b};",
         )
         missing = [fragment for fragment in required if fragment not in patched]
         if missing:
@@ -131,12 +134,15 @@ def main() -> None:
         menu_required = (
             "mister_magik_crt_timing crt_timing",
             "mister_magik_crt_reader crt_reader",
-            "cyclonev_clkselect magik_video_clk_sw",
-            "assign VGA_DE  = MAGIK_CRT_ACTIVE",
+            "assign CLK_VIDEO = clk_hdmi;",
+            "assign MAGIK_CRT_CLK = clk_crt;",
+            "assign MAGIK_CRT_DE = crt_de && crt_display_valid;",
         )
         menu_missing = [fragment for fragment in menu_required if fragment not in menu_text]
         if menu_missing:
             fail("patched Menu route is missing: " + ", ".join(menu_missing))
+        if "cyclonev_clkselect magik_video_clk_sw" in menu_text:
+            fail("CRT clock selector must live at the HDMI destination boundary")
         if "ddram ddr" in menu_text:
             fail("legacy DDR-clearing client remains in the patched Menu core")
 
