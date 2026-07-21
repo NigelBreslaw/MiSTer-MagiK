@@ -15,9 +15,8 @@ The implementation is derived only from GPL-licensed MiSTer project sources:
   bounded DDR bursts, line-buffer ownership, safe reset draining, and display
   promotion at vertical blank.
 
-No Zaparoo source, timing table, protocol, or memory layout is an input to this
-design. Adapted RTL must retain an attribution comment identifying the official
-MiSTer source that informed it.
+Adapted RTL must retain an attribution comment identifying the official MiSTer
+source that informed it.
 
 ## Version 1 timing
 
