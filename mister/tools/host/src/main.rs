@@ -397,6 +397,57 @@ impl DeviceOperations for NativeDevice {
                 .map_err(device_failure)?;
                 "restored".into()
             }
+            DeviceRequest::BeginReleaseQualification => {
+                let session = connect(10).map_err(device_failure)?;
+                exec_checked(
+                    &session,
+                    "release recovery preflight",
+                    &release_begin_command(),
+                )
+                .map_err(device_failure)?;
+                "volatile-token=armed recovery=confirmed".into()
+            }
+            DeviceRequest::QualifyReleaseRuntime => {
+                let session = connect(10).map_err(device_failure)?;
+                let command = delivery_health_command("public").map_err(device_failure)?;
+                exec_checked(&session, "release runtime", &command).map_err(device_failure)?;
+                "runtime=healthy".into()
+            }
+            DeviceRequest::QualifyReleaseCatalog => {
+                let session = connect(10).map_err(device_failure)?;
+                exec_checked(&session, "release catalog", &release_catalog_command())
+                    .map_err(device_failure)?;
+                "catalog=valid".into()
+            }
+            DeviceRequest::QualifyReleaseInputAndHandoff => {
+                let session = connect(10).map_err(device_failure)?;
+                exec_checked(
+                    &session,
+                    "release input and handoff",
+                    &release_handoff_command(),
+                )
+                .map_err(device_failure)?;
+                "input=ready handoff=ready return=ready".into()
+            }
+            DeviceRequest::QualifyReleaseDisplay => {
+                let session = connect(10).map_err(device_failure)?;
+                exec_checked(&session, "release display", &release_display_command())
+                    .map_err(device_failure)?;
+                capture_buffer(&[]).map_err(device_failure)?;
+                "display=qualified capture=recorded".into()
+            }
+            DeviceRequest::QualifyReleaseRecovery => {
+                let session = connect(10).map_err(device_failure)?;
+                exec_checked(&session, "release recovery", &release_recovery_command())
+                    .map_err(device_failure)?;
+                "recovery=qualified token=volatile".into()
+            }
+            DeviceRequest::RestoreReleaseQualification => {
+                let session = connect(10).map_err(device_failure)?;
+                exec_checked(&session, "release restore", &release_restore_command())
+                    .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?;
+                "restored arming=clear".into()
+            }
             DeviceRequest::CaptureFramebuffer => {
                 capture_buffer(&[]).map_err(device_failure)?;
                 "captured".into()
@@ -837,6 +888,55 @@ fn cold_benchmark_restore_command(scenario: ColdBenchmarkScenario) -> String {
     format!(
         "set -eu; root=/media/fat/mister-magik-dev; snap=/tmp/mister-magik/agent-benchmark-data; test -d \"$snap\"; rm -rf \"$root/catalog-v3\"; rm -f \"$root/library.sqlite3\" \"$root/arcade-bootstrap.nav.lz4b\"; for name in catalog-v3 library.sqlite3 arcade-bootstrap.nav.lz4b; do if test -e \"$snap/$name.present\"; then mv \"$snap/$name\" \"$root/$name\"; fi; done; rm -rf \"$snap\"; rm -f {} /tmp/mister-magik/agent-cold-benchmark.out; {}",
         cold_benchmark_events_path(scenario),
+        platform_safety_script()
+    )
+}
+
+const RELEASE_TOKEN: &str = "/tmp/mister-magik/release-qualification-session";
+const RELEASE_SNAPSHOT: &str = "/tmp/mister-magik/release-qualification-snapshot";
+
+fn release_arming_cleanup_command() -> &'static str {
+    "rm -f /media/fat/mister-magik/launcher.env /media/fat/mister-magik-dev/launcher.env /tmp/mister-magik/fs-fault-launcher.env /tmp/mister-magik/fs-fault-session /tmp/mister-magik/fs-fault.json /media/fat/mister-magik/rebuild-on-next-boot /media/fat/mister-magik-dev/rebuild-on-next-boot"
+}
+
+fn release_begin_command() -> String {
+    format!(
+        "set -eu; {}; {}; snap={RELEASE_SNAPSHOT}; rm -rf \"$snap\"; mkdir -p \"$snap\"; if test -e /media/fat/MiSTer.ini; then cp -a /media/fat/MiSTer.ini \"$snap/MiSTer.ini\"; fi; printf '%s\\n' attended-non-network-recovery-confirmed >{RELEASE_TOKEN}; test -s {RELEASE_TOKEN}",
+        release_arming_cleanup_command(),
+        platform_safety_script()
+    )
+}
+
+fn release_catalog_command() -> String {
+    format!(
+        "set -eu; test -s {RELEASE_TOKEN}; report=$(/media/fat/mister-magik/mister-magik-fb catalog-v3-inspect); printf '%s\\n' \"$report\" | grep -Eq 'catalog_v3_summary_tsv[[:space:]]+valid=1'"
+    )
+}
+
+fn release_handoff_command() -> String {
+    format!(
+        "set -eu; test -s {RELEASE_TOKEN}; grep -Eq '\"input_enabled\"[[:space:]]*:[[:space:]]*true' /tmp/mister-magik/status.json; test -p /dev/MiSTer_cmd; test ! -e /tmp/mister-magik/stale-launcher-return-state.json"
+    )
+}
+
+fn release_display_command() -> String {
+    format!(
+        "set -eu; test -s {RELEASE_TOKEN}; test \"$(cat /sys/class/graphics/fb0/bits_per_pixel)\" = 16; test -s /media/fat/MiSTer.ini; grep -Eq '^(video_mode|direct_video|forced_scandoubler)=' /media/fat/MiSTer.ini || true"
+    )
+}
+
+fn release_recovery_command() -> String {
+    format!(
+        "set -eu; test \"$(cat {RELEASE_TOKEN})\" = attended-non-network-recovery-confirmed; test -p /dev/MiSTer_cmd; {}; {}",
+        release_arming_cleanup_command(),
+        platform_safety_script()
+    )
+}
+
+fn release_restore_command() -> String {
+    format!(
+        "set -eu; snap={RELEASE_SNAPSHOT}; {}; if test -s \"$snap/MiSTer.ini\"; then cp -a \"$snap/MiSTer.ini\" /media/fat/MiSTer.ini; fi; rm -f {RELEASE_TOKEN}; rm -rf \"$snap\"; {}; test ! -e {RELEASE_TOKEN}",
+        release_arming_cleanup_command(),
         platform_safety_script()
     )
 }
@@ -7116,6 +7216,28 @@ H: Handlers=event3 js0"#
             );
         }
         assert!(validate_delivery_remote("/tmp/not-owned").is_err());
+    }
+
+    #[test]
+    fn release_recovery_requires_volatile_token_and_clears_every_arming_path() {
+        let recovery = release_recovery_command();
+        assert!(recovery.contains(RELEASE_TOKEN));
+        assert!(recovery.contains("attended-non-network-recovery-confirmed"));
+        let restore = release_restore_command();
+        for path in [
+            "/media/fat/mister-magik/launcher.env",
+            "/media/fat/mister-magik-dev/launcher.env",
+            "/tmp/mister-magik/fs-fault-launcher.env",
+            "/tmp/mister-magik/fs-fault-session",
+            "/tmp/mister-magik/fs-fault.json",
+            "/media/fat/mister-magik/rebuild-on-next-boot",
+            "/media/fat/mister-magik-dev/rebuild-on-next-boot",
+            RELEASE_TOKEN,
+        ] {
+            assert!(restore.contains(path), "missing release cleanup: {path}");
+        }
+        assert!(release_handoff_command().contains("/dev/MiSTer_cmd"));
+        assert!(release_display_command().contains("bits_per_pixel"));
     }
 
     const MAME_1942_FIXTURE: &str = r#"<?xml version="1.0"?>

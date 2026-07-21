@@ -223,6 +223,9 @@ fn dispatch(
             let paths = agent_cli::task::changes(evidence, repository, task_id)?;
             return agent_cli::benchmark::execute(repository, &paths, &sha, reporter);
         }
+        Intent::ReleaseQualify => {
+            return agent_cli::release::execute(reporter);
+        }
         Intent::Build { intent } => {
             let spec = agent_cli::build::BuildSpec::infer(*intent)?;
             agent_cli::build::execute(repository, &spec, reporter)?;

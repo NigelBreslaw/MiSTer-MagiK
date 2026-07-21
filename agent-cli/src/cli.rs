@@ -50,6 +50,10 @@ pub enum Command {
     Doctor,
     Deliver,
     Benchmark,
+    Release {
+        #[command(subcommand)]
+        command: ReleaseCommand,
+    },
     #[command(hide = true)]
     Build {
         #[arg(value_enum)]
@@ -74,6 +78,11 @@ pub enum TaskCommand {
         replace: bool,
     },
     Status,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ReleaseCommand {
+    Qualify,
 }
 
 #[derive(Clone, Debug, Args)]
@@ -165,6 +174,9 @@ impl Cli {
             Some(Command::Doctor) => Intent::Doctor,
             Some(Command::Deliver) => Intent::Deliver { task_id },
             Some(Command::Benchmark) => Intent::Benchmark { task_id },
+            Some(Command::Release {
+                command: ReleaseCommand::Qualify,
+            }) => Intent::ReleaseQualify,
             Some(Command::Build { intent }) => Intent::Build { intent },
             Some(Command::DeployRecipe { recipe }) => Intent::DeployRecipe { recipe },
         }
@@ -252,5 +264,14 @@ mod tests {
             }
         );
         assert!(Cli::try_parse_from(["agent-cli", "benchmark", "--duration", "10"]).is_err());
+    }
+
+    #[test]
+    fn release_qualify_is_flag_free() {
+        let cli = Cli::try_parse_from(["agent-cli", "release", "qualify"]).unwrap();
+        assert_eq!(cli.into_intent(), Intent::ReleaseQualify);
+        assert!(
+            Cli::try_parse_from(["agent-cli", "release", "qualify", "--skip-display"]).is_err()
+        );
     }
 }

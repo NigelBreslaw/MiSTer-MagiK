@@ -71,6 +71,7 @@ pub enum Intent {
     Doctor,
     Deliver { task_id: String },
     Benchmark { task_id: String },
+    ReleaseQualify,
     Build { intent: crate::build::BuildIntent },
     DeployRecipe { recipe: String },
 }
@@ -80,6 +81,7 @@ impl Intent {
     pub const fn risk(&self) -> Risk {
         match self {
             Self::Commit { .. } | Self::Verify { .. } => Risk::LocalWrite,
+            Self::ReleaseQualify => Risk::Destructive,
             Self::Deliver { .. } | Self::Benchmark { .. } | Self::DeployRecipe { .. } => {
                 Risk::DeviceWrite
             }

@@ -115,3 +115,17 @@ explicitly snapshotted and restored; failures after the first mutation always
 run compensation and restoration failure is reported as `recovery_required`.
 The orchestration scripts, builder wrappers, flag matrices, AWK/Python gate
 parsers, and their shell fixture libraries were deleted in the same change.
+
+## Attended release qualification takeover
+
+Reviewed on 2026-07-21. Release acceptance, startup reveal, launch/return smoke,
+and video-mode scripts combined tier selection, mutable display/catalog state,
+reboots, handoff checks, and duplicated cleanup traps. The flag-free attended
+`scripts/agent release qualify` command now owns the fixed
+ConfirmAttendance → RecoveryPreflight → Runtime → Catalog → InputAndHandoff →
+Display → Recovery → Restore state chart. It refuses non-terminal or
+unconfirmed runs, creates only a volatile `/tmp` session token after explicit
+confirmation of a non-network recovery path, snapshots mutable configuration,
+and clears every reset-fault arming path on restoration. The tier/skip/mode
+matrices and all four shell workflows were deleted without compatibility
+aliases.

@@ -69,6 +69,13 @@ pub enum DeviceRequest {
     ExecuteColdBenchmark(ColdBenchmarkScenario),
     CollectBenchmarkEvents(ColdBenchmarkScenario),
     RestoreBenchmarkData(ColdBenchmarkScenario),
+    BeginReleaseQualification,
+    QualifyReleaseRuntime,
+    QualifyReleaseCatalog,
+    QualifyReleaseInputAndHandoff,
+    QualifyReleaseDisplay,
+    QualifyReleaseRecovery,
+    RestoreReleaseQualification,
     CaptureFramebuffer,
 }
 
@@ -99,6 +106,13 @@ impl DeviceRequest {
             Self::ExecuteColdBenchmark(_) => "execute-cold-benchmark",
             Self::CollectBenchmarkEvents(_) => "collect-benchmark-events",
             Self::RestoreBenchmarkData(_) => "restore-benchmark-data",
+            Self::BeginReleaseQualification => "begin-release-qualification",
+            Self::QualifyReleaseRuntime => "qualify-release-runtime",
+            Self::QualifyReleaseCatalog => "qualify-release-catalog",
+            Self::QualifyReleaseInputAndHandoff => "qualify-release-input-and-handoff",
+            Self::QualifyReleaseDisplay => "qualify-release-display",
+            Self::QualifyReleaseRecovery => "qualify-release-recovery",
+            Self::RestoreReleaseQualification => "restore-release-qualification",
             Self::CaptureFramebuffer => "capture-framebuffer",
         }
     }
