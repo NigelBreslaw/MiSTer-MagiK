@@ -166,7 +166,7 @@ for mode_values in \
   set -- $mode_values
   rm -f "$APP/installer-output-mode-v1"
   MISTER_MAGIK_TEST_OUTPUT_MODE="$1" run_installer install >/dev/null
-  grep -q '^direct_video=2$' "$FAT/MiSTer.ini"
+  grep -q '^direct_video=1$' "$FAT/MiSTer.ini"
   grep -q "^menu_pal=$2$" "$FAT/MiSTer.ini"
   grep -q "^forced_scandoubler=$3$" "$FAT/MiSTer.ini"
   grep -qx "$1" "$APP/installer-output-mode-v1"

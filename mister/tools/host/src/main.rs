@@ -5140,13 +5140,14 @@ fn edit_mister_ini(input: &str, edit: IniEdit) -> String {
         .collect();
 
     match edit {
-        IniEdit::MagikBoot | IniEdit::MagikBootCrt240p60 => {
+        IniEdit::MagikBoot => {
             set_magik_boot_mode(&mut lines, "2", "0", "0");
         }
+        IniEdit::MagikBootCrt240p60 => set_magik_boot_mode(&mut lines, "1", "0", "0"),
         IniEdit::MagikBootHdmi => set_magik_boot_mode(&mut lines, "0", "0", "0"),
-        IniEdit::MagikBootCrt288p50 => set_magik_boot_mode(&mut lines, "2", "1", "0"),
-        IniEdit::MagikBootCrt480p60 => set_magik_boot_mode(&mut lines, "2", "0", "1"),
-        IniEdit::MagikBootCrt576p50 => set_magik_boot_mode(&mut lines, "2", "1", "1"),
+        IniEdit::MagikBootCrt288p50 => set_magik_boot_mode(&mut lines, "1", "1", "0"),
+        IniEdit::MagikBootCrt480p60 => set_magik_boot_mode(&mut lines, "1", "0", "1"),
+        IniEdit::MagikBootCrt576p50 => set_magik_boot_mode(&mut lines, "1", "1", "1"),
         IniEdit::SelectMain(value) => {
             set_ini_key(&mut lines, "MiSTer", "main", &value);
             deduplicate_ini_key(&mut lines, "MiSTer", "main");
@@ -6530,10 +6531,10 @@ video_mode=14
     fn magik_boot_explicit_crt_modes_map_to_standard_main_settings() {
         let ini = "[MiSTer]\ndirect_video=0\nmenu_pal=0\nforced_scandoubler=0\n";
         for (edit, direct_video, menu_pal, forced_scandoubler) in [
-            (IniEdit::MagikBootCrt240p60, "2", "0", "0"),
-            (IniEdit::MagikBootCrt288p50, "2", "1", "0"),
-            (IniEdit::MagikBootCrt480p60, "2", "0", "1"),
-            (IniEdit::MagikBootCrt576p50, "2", "1", "1"),
+            (IniEdit::MagikBootCrt240p60, "1", "0", "0"),
+            (IniEdit::MagikBootCrt288p50, "1", "1", "0"),
+            (IniEdit::MagikBootCrt480p60, "1", "0", "1"),
+            (IniEdit::MagikBootCrt576p50, "1", "1", "1"),
         ] {
             let edited = edit_mister_ini(ini, edit);
             assert!(edited.contains(&format!("direct_video={direct_video}")));

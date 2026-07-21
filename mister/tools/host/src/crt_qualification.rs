@@ -36,6 +36,7 @@ extern "C" fn note_interruption(_signal: i32) {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct CrtMode {
     output: &'static str,
+    direct_video: &'static str,
     menu_pal: &'static str,
     forced_scandoubler: &'static str,
     expected_rate: &'static str,
@@ -44,24 +45,28 @@ struct CrtMode {
 const CRT_MODES: [CrtMode; 4] = [
     CrtMode {
         output: "crt-240p60",
+        direct_video: "1",
         menu_pal: "0",
         forced_scandoubler: "0",
         expected_rate: "15.734 kHz / 60.052 Hz",
     },
     CrtMode {
         output: "crt-288p50",
+        direct_video: "1",
         menu_pal: "1",
         forced_scandoubler: "0",
         expected_rate: "15.734 kHz / 50.429 Hz",
     },
     CrtMode {
         output: "crt-480p60",
+        direct_video: "1",
         menu_pal: "0",
         forced_scandoubler: "1",
         expected_rate: "31.469 kHz / 59.940 Hz",
     },
     CrtMode {
         output: "crt-576p50",
+        direct_video: "1",
         menu_pal: "1",
         forced_scandoubler: "1",
         expected_rate: "31.469 kHz / 50.431 Hz",
@@ -287,7 +292,7 @@ fn run_mode_matrix(output: &Path, interrupted: &AtomicBool) -> Result<bool> {
             mode_directory.join("expected.json"),
             serde_json::to_vec_pretty(&json!({
                 "output": mode.output,
-                "direct_video": 2,
+                "direct_video": mode.direct_video,
                 "menu_pal": mode.menu_pal,
                 "forced_scandoubler": mode.forced_scandoubler,
                 "expected_rate": mode.expected_rate,
@@ -313,7 +318,7 @@ fn apply_mode(mode: CrtMode) -> Result<OriginalState> {
     edit_remote_ini(
         &session,
         IniEdit::Crt {
-            direct_video: "2".to_string(),
+            direct_video: mode.direct_video.to_string(),
             menu_pal: mode.menu_pal.to_string(),
             forced_scandoubler: mode.forced_scandoubler.to_string(),
         },
@@ -712,13 +717,18 @@ mod tests {
         assert_eq!(
             CRT_MODES
                 .iter()
-                .map(|mode| (mode.output, mode.menu_pal, mode.forced_scandoubler))
+                .map(|mode| (
+                    mode.output,
+                    mode.direct_video,
+                    mode.menu_pal,
+                    mode.forced_scandoubler,
+                ))
                 .collect::<Vec<_>>(),
             vec![
-                ("crt-240p60", "0", "0"),
-                ("crt-288p50", "1", "0"),
-                ("crt-480p60", "0", "1"),
-                ("crt-576p50", "1", "1"),
+                ("crt-240p60", "1", "0", "0"),
+                ("crt-288p50", "1", "1", "0"),
+                ("crt-480p60", "1", "0", "1"),
+                ("crt-576p50", "1", "1", "1"),
             ]
         );
     }

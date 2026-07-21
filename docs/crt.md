@@ -9,10 +9,11 @@ output-clock mux.
 
 ## Launcher modes
 
-The maintained Main fork resolves `direct_video=2` using MiSTer's known-DAC
-detection. If detection does not activate Direct Video, Main reports `hdmi`.
-Otherwise it reports one of the four built-in progressive Menu modes selected
-by `menu_pal` and `forced_scandoubler`:
+The maintained Main fork supports two ways to activate the shared CRT path.
+`direct_video=2` uses MiSTer's known HDMI-DAC detection and falls back to
+`hdmi` when no supported DAC is found. Explicit native Analog IO VGA modes use
+`direct_video=1`; `menu_pal` and `forced_scandoubler` then select one of the
+four built-in progressive Menu modes:
 
 | Resolved mode | Pixel clock | Horizontal timing (active/front/sync/back) | Vertical timing (active/front/sync/back) | Nominal rates |
 | --- | ---: | --- | --- | --- |
@@ -25,9 +26,10 @@ Both sync polarities are negative. These values come from Main's standard
 Menu Direct Video table; MagiK consumes the resolved name only to choose its
 framebuffer and scan geometry. It does not synthesize or alter those timings.
 
-Fresh CRT configuration defaults to automatic DAC detection with 240p60.
-The installer also offers 288p50, 480p60, 576p50, and HDMI-only choices. It
-maps them onto the existing `direct_video`, `menu_pal`, and
+Fresh CRT configuration defaults to native Analog IO VGA at 240p60. The
+installer separately offers automatic HDMI-DAC detection, native VGA at
+288p50, 480p60 or 576p50, and HDMI-only output. It maps them onto the existing
+`direct_video`, `menu_pal`, and
 `forced_scandoubler` keys, preserves saved upgrade choices, and restores only
 installer-owned keys from the pre-MagiK snapshot.
 

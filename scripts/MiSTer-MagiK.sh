@@ -222,16 +222,17 @@ choose_output_mode() {
   OUTPUT_MODE=crt-240p60
   while :; do
     echo
-    echo "Choose launcher output. CRT modes activate only when automatic DAC detection succeeds."
+    echo "Choose launcher output. Native VGA modes use the Analog IO output; Auto detects an HDMI DAC."
     echo "Use UP/DOWN to choose, A/Enter to continue, or B/Escape to cancel."
-    for mode in crt-240p60 crt-288p50 crt-480p60 crt-576p50 hdmi; do
+    for mode in crt-240p60 crt-288p50 crt-480p60 crt-576p50 auto hdmi; do
       marker=" "
       [ "$OUTPUT_MODE" = "$mode" ] && marker=">"
       case "$mode" in
-        crt-240p60) label="Auto DAC — CRT 240p60 (default)" ;;
-        crt-288p50) label="Auto DAC — CRT 288p50" ;;
-        crt-480p60) label="Auto DAC — CRT 480p60" ;;
-        crt-576p50) label="Auto DAC — CRT 576p50" ;;
+        crt-240p60) label="Analog IO VGA — CRT 240p60 (default)" ;;
+        crt-288p50) label="Analog IO VGA — CRT 288p50" ;;
+        crt-480p60) label="Analog IO VGA — CRT 480p60" ;;
+        crt-576p50) label="Analog IO VGA — CRT 576p50" ;;
+        auto) label="Automatic HDMI DAC detection" ;;
         hdmi) label="HDMI only" ;;
       esac
       echo "$marker $label"
@@ -246,7 +247,8 @@ choose_output_mode() {
           crt-240p60) OUTPUT_MODE=crt-288p50 ;;
           crt-288p50) OUTPUT_MODE=crt-480p60 ;;
           crt-480p60) OUTPUT_MODE=crt-576p50 ;;
-          crt-576p50) OUTPUT_MODE=hdmi ;;
+          crt-576p50) OUTPUT_MODE=auto ;;
+          auto) OUTPUT_MODE=hdmi ;;
           hdmi) OUTPUT_MODE=crt-240p60 ;;
         esac
         ;;
@@ -256,7 +258,8 @@ choose_output_mode() {
           crt-288p50) OUTPUT_MODE=crt-240p60 ;;
           crt-480p60) OUTPUT_MODE=crt-288p50 ;;
           crt-576p50) OUTPUT_MODE=crt-480p60 ;;
-          hdmi) OUTPUT_MODE=crt-576p50 ;;
+          auto) OUTPUT_MODE=crt-576p50 ;;
+          hdmi) OUTPUT_MODE=auto ;;
         esac
         ;;
       enter) return 0 ;;
@@ -579,23 +582,28 @@ write_ini_with_main() {
   write_ini_with_selected_value MiSTer main MiSTer_MagiK
   write_ini_with_selected_value Menu video_mode 8
   case "$output_mode" in
-    auto|crt-240p60)
+    auto)
       write_ini_with_selected_value MiSTer direct_video 2
+      write_ini_with_selected_value MiSTer menu_pal 0
+      write_ini_with_selected_value MiSTer forced_scandoubler 0
+      ;;
+    crt-240p60)
+      write_ini_with_selected_value MiSTer direct_video 1
       write_ini_with_selected_value MiSTer menu_pal 0
       write_ini_with_selected_value MiSTer forced_scandoubler 0
       ;;
     crt-288p50)
-      write_ini_with_selected_value MiSTer direct_video 2
+      write_ini_with_selected_value MiSTer direct_video 1
       write_ini_with_selected_value MiSTer menu_pal 1
       write_ini_with_selected_value MiSTer forced_scandoubler 0
       ;;
     crt-480p60)
-      write_ini_with_selected_value MiSTer direct_video 2
+      write_ini_with_selected_value MiSTer direct_video 1
       write_ini_with_selected_value MiSTer menu_pal 0
       write_ini_with_selected_value MiSTer forced_scandoubler 1
       ;;
     crt-576p50)
-      write_ini_with_selected_value MiSTer direct_video 2
+      write_ini_with_selected_value MiSTer direct_video 1
       write_ini_with_selected_value MiSTer menu_pal 1
       write_ini_with_selected_value MiSTer forced_scandoubler 1
       ;;
