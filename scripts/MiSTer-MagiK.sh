@@ -208,35 +208,57 @@ confirm_install() {
 choose_output_mode() {
   if [ -r "$OUTPUT_MODE_FILE" ]; then
     OUTPUT_MODE="$(sed -n '1p' "$OUTPUT_MODE_FILE")"
-    case "$OUTPUT_MODE" in auto|hdmi) return 0 ;; esac
+    case "$OUTPUT_MODE" in auto|hdmi|crt-240p60|crt-288p50|crt-480p60|crt-576p50) return 0 ;; esac
     say "ERROR: invalid saved output choice."
     return 1
   fi
   if [ "${MISTER_MAGIK_TEST_MODE:-0}" = 1 ]; then
     OUTPUT_MODE="${MISTER_MAGIK_TEST_OUTPUT_MODE:-auto}"
-    case "$OUTPUT_MODE" in auto|hdmi) return 0 ;; esac
-    say "ERROR: test output mode must be auto or hdmi."
+    case "$OUTPUT_MODE" in auto|hdmi|crt-240p60|crt-288p50|crt-480p60|crt-576p50) return 0 ;; esac
+    say "ERROR: test output mode must be auto, hdmi, or a supported crt mode."
     return 1
   fi
 
-  OUTPUT_MODE=auto
+  OUTPUT_MODE=crt-240p60
   while :; do
     echo
-    echo "Choose launcher output. Known HDMI-to-analog DACs can select native 240p."
+    echo "Choose launcher output. CRT modes activate only when automatic DAC detection succeeds."
     echo "Use UP/DOWN to choose, A/Enter to continue, or B/Escape to cancel."
-    if [ "$OUTPUT_MODE" = auto ]; then
-      echo "> Auto CRT/HDMI"
-      echo "  HDMI only"
-    else
-      echo "  Auto CRT/HDMI"
-      echo "> HDMI only"
-    fi
+    for mode in crt-240p60 crt-288p50 crt-480p60 crt-576p50 hdmi; do
+      marker=" "
+      [ "$OUTPUT_MODE" = "$mode" ] && marker=">"
+      case "$mode" in
+        crt-240p60) label="Auto DAC — CRT 240p60 (default)" ;;
+        crt-288p50) label="Auto DAC — CRT 288p50" ;;
+        crt-480p60) label="Auto DAC — CRT 480p60" ;;
+        crt-576p50) label="Auto DAC — CRT 576p50" ;;
+        hdmi) label="HDMI only" ;;
+      esac
+      echo "$marker $label"
+    done
     if ! read_menu_key; then
       say "interactive input is unavailable; installation refused."
       return 1
     fi
     case "$MENU_KEY" in
-      up|down) if [ "$OUTPUT_MODE" = auto ]; then OUTPUT_MODE=hdmi; else OUTPUT_MODE=auto; fi ;;
+      down)
+        case "$OUTPUT_MODE" in
+          crt-240p60) OUTPUT_MODE=crt-288p50 ;;
+          crt-288p50) OUTPUT_MODE=crt-480p60 ;;
+          crt-480p60) OUTPUT_MODE=crt-576p50 ;;
+          crt-576p50) OUTPUT_MODE=hdmi ;;
+          hdmi) OUTPUT_MODE=crt-240p60 ;;
+        esac
+        ;;
+      up)
+        case "$OUTPUT_MODE" in
+          crt-240p60) OUTPUT_MODE=hdmi ;;
+          crt-288p50) OUTPUT_MODE=crt-240p60 ;;
+          crt-480p60) OUTPUT_MODE=crt-288p50 ;;
+          crt-576p50) OUTPUT_MODE=crt-480p60 ;;
+          hdmi) OUTPUT_MODE=crt-576p50 ;;
+        esac
+        ;;
       enter) return 0 ;;
       cancel) say "cancelled; no changes made."; return 1 ;;
     esac
@@ -556,11 +578,32 @@ write_ini_with_main() {
   backup_ini_before_magik
   write_ini_with_selected_value MiSTer main MiSTer_MagiK
   write_ini_with_selected_value Menu video_mode 8
-  write_ini_with_selected_value MiSTer menu_pal 0
-  write_ini_with_selected_value MiSTer forced_scandoubler 0
   case "$output_mode" in
-    auto) write_ini_with_selected_value MiSTer direct_video 2 ;;
-    hdmi) write_ini_with_selected_value MiSTer direct_video 0 ;;
+    auto|crt-240p60)
+      write_ini_with_selected_value MiSTer direct_video 2
+      write_ini_with_selected_value MiSTer menu_pal 0
+      write_ini_with_selected_value MiSTer forced_scandoubler 0
+      ;;
+    crt-288p50)
+      write_ini_with_selected_value MiSTer direct_video 2
+      write_ini_with_selected_value MiSTer menu_pal 1
+      write_ini_with_selected_value MiSTer forced_scandoubler 0
+      ;;
+    crt-480p60)
+      write_ini_with_selected_value MiSTer direct_video 2
+      write_ini_with_selected_value MiSTer menu_pal 0
+      write_ini_with_selected_value MiSTer forced_scandoubler 1
+      ;;
+    crt-576p50)
+      write_ini_with_selected_value MiSTer direct_video 2
+      write_ini_with_selected_value MiSTer menu_pal 1
+      write_ini_with_selected_value MiSTer forced_scandoubler 1
+      ;;
+    hdmi)
+      write_ini_with_selected_value MiSTer direct_video 0
+      write_ini_with_selected_value MiSTer menu_pal 0
+      write_ini_with_selected_value MiSTer forced_scandoubler 0
+      ;;
     *) say "ERROR: unsupported output mode $output_mode"; return 1 ;;
   esac
 }

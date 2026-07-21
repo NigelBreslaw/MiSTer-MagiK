@@ -142,7 +142,7 @@ if MISTER_MAGIK_TEST_OUTPUT_MODE=invalid run_installer install >"$TMP/output-cho
   echo "invalid output choice unexpectedly installed" >&2
   exit 1
 fi
-grep -q 'test output mode must be auto or hdmi' "$TMP/output-choice-invalid.log"
+grep -q 'test output mode must be auto, hdmi, or a supported crt mode' "$TMP/output-choice-invalid.log"
 test "$(sha256sum "$FAT/MiSTer.ini")" = "$ini_before_confirmation"
 
 run_installer install >/dev/null
@@ -157,6 +157,22 @@ test ! -e "$FAT/MiSTer.ini.bak"
 grep -qx '::sysinit:/media/fat/MiSTer &' "$TMP/inittab"
 test -x "$FAT/MiSTer_MagiK"
 test -x "$APP/mister-magik-fb"
+
+for mode_values in \
+  'crt-240p60 0 0' \
+  'crt-288p50 1 0' \
+  'crt-480p60 0 1' \
+  'crt-576p50 1 1'; do
+  set -- $mode_values
+  rm -f "$APP/installer-output-mode-v1"
+  MISTER_MAGIK_TEST_OUTPUT_MODE="$1" run_installer install >/dev/null
+  grep -q '^direct_video=2$' "$FAT/MiSTer.ini"
+  grep -q "^menu_pal=$2$" "$FAT/MiSTer.ini"
+  grep -q "^forced_scandoubler=$3$" "$FAT/MiSTer.ini"
+  grep -qx "$1" "$APP/installer-output-mode-v1"
+done
+rm -f "$APP/installer-output-mode-v1"
+MISTER_MAGIK_TEST_OUTPUT_MODE=auto run_installer install >/dev/null
 printf 'user_after_install=keep\n' >>"$FAT/MiSTer.ini"
 
 # The installed-state menu is testable without optional host PTY tooling.

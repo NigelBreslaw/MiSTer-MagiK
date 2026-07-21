@@ -4877,6 +4877,10 @@ fn remote_trim(sess: &Session, path: &str) -> Option<String> {
 enum IniEdit {
     MagikBoot,
     MagikBootHdmi,
+    MagikBootCrt240p60,
+    MagikBootCrt288p50,
+    MagikBootCrt480p60,
+    MagikBootCrt576p50,
     SelectMain(String),
     ZaparooBoot,
     ArcadeVideo,
@@ -4895,6 +4899,10 @@ fn parse_ini_edit_args(args: &[String]) -> Result<IniEdit> {
     match args.first().map(String::as_str) {
         Some("magik-boot") => Ok(IniEdit::MagikBoot),
         Some("magik-boot-hdmi") => Ok(IniEdit::MagikBootHdmi),
+        Some("magik-boot-crt-240p60") => Ok(IniEdit::MagikBootCrt240p60),
+        Some("magik-boot-crt-288p50") => Ok(IniEdit::MagikBootCrt288p50),
+        Some("magik-boot-crt-480p60") => Ok(IniEdit::MagikBootCrt480p60),
+        Some("magik-boot-crt-576p50") => Ok(IniEdit::MagikBootCrt576p50),
         Some("zaparoo-boot") => Ok(IniEdit::ZaparooBoot),
         Some("arcade-video") => Ok(IniEdit::ArcadeVideo),
         Some("menu-mode") => {
@@ -4922,8 +4930,17 @@ fn parse_ini_edit_args(args: &[String]) -> Result<IniEdit> {
 fn validate_ini_edit_local_args(args: &[String]) -> Result<()> {
     let expected = match args.first().map(String::as_str) {
         Some(
-            "magik-boot" | "magik-boot-hdmi" | "zaparoo-boot" | "arcade-video" | "menu-auto"
-            | "comment-main" | "stock-boot",
+            "magik-boot"
+            | "magik-boot-hdmi"
+            | "magik-boot-crt-240p60"
+            | "magik-boot-crt-288p50"
+            | "magik-boot-crt-480p60"
+            | "magik-boot-crt-576p50"
+            | "zaparoo-boot"
+            | "arcade-video"
+            | "menu-auto"
+            | "comment-main"
+            | "stock-boot",
         ) => 3,
         Some("menu-mode") => 4,
         Some("crt") => 6,
@@ -4932,7 +4949,7 @@ fn validate_ini_edit_local_args(args: &[String]) -> Result<()> {
     };
     if args.len() != expected {
         return Err(
-            "ini-edit-local needs <magik-boot|magik-boot-hdmi|zaparoo-boot|arcade-video|menu-mode|menu-auto|crt|comment-main|stock-boot> ... <input> <output>"
+            "ini-edit-local needs <magik-boot|magik-boot-hdmi|magik-boot-crt-240p60|magik-boot-crt-288p50|magik-boot-crt-480p60|magik-boot-crt-576p50|zaparoo-boot|arcade-video|menu-mode|menu-auto|crt|comment-main|stock-boot> ... <input> <output>"
                 .into(),
         );
     }
@@ -5011,6 +5028,19 @@ fn ensure_stock_inittab_text(input: &str) -> String {
     edited
 }
 
+fn set_magik_boot_mode(
+    lines: &mut Vec<String>,
+    direct_video: &str,
+    menu_pal: &str,
+    forced_scandoubler: &str,
+) {
+    set_ini_key(lines, "MiSTer", "forced_scandoubler", forced_scandoubler);
+    set_ini_key(lines, "MiSTer", "menu_pal", menu_pal);
+    set_ini_key(lines, "MiSTer", "direct_video", direct_video);
+    set_ini_key(lines, "MiSTer", "main", "MiSTer_MagiK");
+    set_ini_key(lines, "Menu", "video_mode", "8");
+}
+
 fn edit_mister_ini(input: &str, edit: IniEdit) -> String {
     let newline = if input.contains("\r\n") { "\r\n" } else { "\n" };
     let mut lines: Vec<String> = input
@@ -5019,20 +5049,13 @@ fn edit_mister_ini(input: &str, edit: IniEdit) -> String {
         .collect();
 
     match edit {
-        IniEdit::MagikBoot => {
-            set_ini_key(&mut lines, "MiSTer", "forced_scandoubler", "0");
-            set_ini_key(&mut lines, "MiSTer", "menu_pal", "0");
-            set_ini_key(&mut lines, "MiSTer", "direct_video", "2");
-            set_ini_key(&mut lines, "MiSTer", "main", "MiSTer_MagiK");
-            set_ini_key(&mut lines, "Menu", "video_mode", "8");
+        IniEdit::MagikBoot | IniEdit::MagikBootCrt240p60 => {
+            set_magik_boot_mode(&mut lines, "2", "0", "0");
         }
-        IniEdit::MagikBootHdmi => {
-            set_ini_key(&mut lines, "MiSTer", "forced_scandoubler", "0");
-            set_ini_key(&mut lines, "MiSTer", "menu_pal", "0");
-            set_ini_key(&mut lines, "MiSTer", "direct_video", "0");
-            set_ini_key(&mut lines, "MiSTer", "main", "MiSTer_MagiK");
-            set_ini_key(&mut lines, "Menu", "video_mode", "8");
-        }
+        IniEdit::MagikBootHdmi => set_magik_boot_mode(&mut lines, "0", "0", "0"),
+        IniEdit::MagikBootCrt288p50 => set_magik_boot_mode(&mut lines, "2", "1", "0"),
+        IniEdit::MagikBootCrt480p60 => set_magik_boot_mode(&mut lines, "2", "0", "1"),
+        IniEdit::MagikBootCrt576p50 => set_magik_boot_mode(&mut lines, "2", "1", "1"),
         IniEdit::SelectMain(value) => {
             set_ini_key(&mut lines, "MiSTer", "main", &value);
             deduplicate_ini_key(&mut lines, "MiSTer", "main");
@@ -6410,6 +6433,24 @@ video_mode=14
         assert!(edited.contains("forced_scandoubler=0"));
         assert!(edited.contains("main=MiSTer_MagiK"));
         assert!(edited.contains("[Menu]\nvideo_mode=8"));
+    }
+
+    #[test]
+    fn magik_boot_explicit_crt_modes_map_to_standard_main_settings() {
+        let ini = "[MiSTer]\ndirect_video=0\nmenu_pal=0\nforced_scandoubler=0\n";
+        for (edit, direct_video, menu_pal, forced_scandoubler) in [
+            (IniEdit::MagikBootCrt240p60, "2", "0", "0"),
+            (IniEdit::MagikBootCrt288p50, "2", "1", "0"),
+            (IniEdit::MagikBootCrt480p60, "2", "0", "1"),
+            (IniEdit::MagikBootCrt576p50, "2", "1", "1"),
+        ] {
+            let edited = edit_mister_ini(ini, edit);
+            assert!(edited.contains(&format!("direct_video={direct_video}")));
+            assert!(edited.contains(&format!("menu_pal={menu_pal}")));
+            assert!(edited.contains(&format!("forced_scandoubler={forced_scandoubler}")));
+            assert!(edited.contains("main=MiSTer_MagiK"));
+            assert!(edited.contains("[Menu]\nvideo_mode=8"));
+        }
     }
 
     #[test]
