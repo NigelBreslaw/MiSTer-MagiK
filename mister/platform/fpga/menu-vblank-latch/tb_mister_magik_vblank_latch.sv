@@ -180,6 +180,7 @@ module tb_mister_magik_vblank_latch;
 			cmd_start = 1'b1;
 			#1;
 			if(response_valid !== 1'b0) fail("unrelated command acknowledged");
+			expect16(response_data, 16'd0, "unrelated command response data");
 			@(negedge clk_sys);
 			cmd_start = 1'b0;
 		end

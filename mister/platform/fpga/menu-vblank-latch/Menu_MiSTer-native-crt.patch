@@ -1,5 +1,5 @@
 diff --git a/menu.sv b/menu.sv
-index 7c2a7c8..44bf0ff 100644
+index 7c2a7c8..8df9a51 100644
 --- a/menu.sv
 +++ b/menu.sv
 @@ -29,8 +29,7 @@ assign ADC_BUS  = 'Z;
@@ -47,7 +47,7 @@ index 7c2a7c8..44bf0ff 100644
  
  
  /////////////////////   SDRAM   ///////////////////
-@@ -192,28 +201,50 @@ always @(posedge clk_sys) begin
+@@ -192,28 +201,62 @@ always @(posedge clk_sys) begin
  	end
  end
  
@@ -86,6 +86,18 @@ index 7c2a7c8..44bf0ff 100644
 +wire        crt_video_bank;
 +wire  [9:0] crt_x;
 +
++// Retain the SDRAM clear sweep; only the legacy DDR client is replaced.
++reg        we;
++reg [28:0] addr = 0;
++always @(posedge clk_sys) begin
++	reg [4:0] cnt = 9;
++	if(~RESET & cfg[15]) begin
++		cnt <= cnt + 1'b1;
++		we <= &cnt;
++		if(cnt == 8) addr <= addr + 1'd1;
++	end
++end
++
 +mister_magik_crt_reader crt_reader
 +(
 +	.clk_sys(clk_sys),
@@ -120,7 +132,7 @@ index 7c2a7c8..44bf0ff 100644
  
  ////////////////////////////  MT32pi  ////////////////////////////////// 
  
-@@ -320,7 +351,139 @@ always @(posedge CLK_AUDIO) begin : i2s_proc
+@@ -320,7 +363,139 @@ always @(posedge CLK_AUDIO) begin : i2s_proc
  	end
  end
  
@@ -261,7 +273,7 @@ index 7c2a7c8..44bf0ff 100644
  
  localparam lfsr_n = 63;
  
-@@ -339,26 +502,34 @@ wire  [5:0] rnd_c = {rnd_reg[0],rnd_reg[1],rnd_reg[2],rnd_reg[2],rnd_reg[2],rnd_
+@@ -339,26 +514,34 @@ wire  [5:0] rnd_c = {rnd_reg[0],rnd_reg[1],rnd_reg[2],rnd_reg[2],rnd_reg[2],rnd_
  
  lfsr #(lfsr_n) random(rnd);
  
@@ -316,7 +328,7 @@ index 7c2a7c8..44bf0ff 100644
  
  reg HBlank;
  reg HSync;
-@@ -366,31 +537,38 @@ reg VBlank;
+@@ -366,31 +549,38 @@ reg VBlank;
  reg VSync;
  
  reg ce_pix;
@@ -380,7 +392,7 @@ index 7c2a7c8..44bf0ff 100644
  
  reg  [7:0] cos_out;
  wire [5:0] cos_g = cos_out[7:3]+6'd32;
-@@ -398,11 +576,11 @@ cos cos(vvc + {vc>>forced_scandoubler, 2'b00}, cos_out);
+@@ -398,11 +588,11 @@ cos cos(vvc + {vc>>forced_scandoubler, 2'b00}, cos_out);
  
  wire [7:0] comp_v = (cos_g >= rnd_c) ? {cos_g - rnd_c, 2'b00} : 8'd0;
  
