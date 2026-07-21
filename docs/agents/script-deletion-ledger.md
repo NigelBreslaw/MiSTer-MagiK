@@ -100,3 +100,18 @@ device preparation, structured evidence, and unconditional restoration now
 live in `agent-cli/src/benchmark.rs` and fixed typed device requests. Pure trace
 analysis remains an internal Rust adapter. The scripts, aliases, and shell
 libraries were deleted rather than retained as compatibility interfaces.
+
+## Typed cold-start and catalog workflow takeover
+
+Reviewed on 2026-07-21. The first-scan, cold-media, preview-index, pack-decode,
+catalog contention/builder/acceptance, launch-preparation, and library-save
+scripts created mutable fixtures, suspended the launcher, scraped logs, and
+attempted restoration through shell traps. `scripts/agent benchmark` now
+selects a fixed catalog-lifecycle, preview-cold-start, or library-persistence
+scenario from changed components and executes the typed
+Inspect → SnapshotData → EstablishFixture → Execute → CollectEvents → Evaluate
+→ Restore state chart. Production catalog, library, and bootstrap data are
+explicitly snapshotted and restored; failures after the first mutation always
+run compensation and restoration failure is reported as `recovery_required`.
+The orchestration scripts, builder wrappers, flag matrices, AWK/Python gate
+parsers, and their shell fixture libraries were deleted in the same change.

@@ -23,6 +23,13 @@ pub enum BenchmarkScenario {
     FramebufferVelocity,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ColdBenchmarkScenario {
+    CatalogLifecycle,
+    PreviewColdStart,
+    LibraryPersistence,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DeviceRequest {
     Discover,
@@ -57,6 +64,11 @@ pub enum DeviceRequest {
     WarmupBenchmark(BenchmarkScenario),
     CaptureBenchmark(BenchmarkScenario),
     RestoreBenchmark,
+    SnapshotBenchmarkData(ColdBenchmarkScenario),
+    EstablishBenchmarkFixture(ColdBenchmarkScenario),
+    ExecuteColdBenchmark(ColdBenchmarkScenario),
+    CollectBenchmarkEvents(ColdBenchmarkScenario),
+    RestoreBenchmarkData(ColdBenchmarkScenario),
     CaptureFramebuffer,
 }
 
@@ -82,6 +94,11 @@ impl DeviceRequest {
             Self::WarmupBenchmark(_) => "warmup-benchmark",
             Self::CaptureBenchmark(_) => "capture-benchmark",
             Self::RestoreBenchmark => "restore-benchmark",
+            Self::SnapshotBenchmarkData(_) => "snapshot-benchmark-data",
+            Self::EstablishBenchmarkFixture(_) => "establish-benchmark-fixture",
+            Self::ExecuteColdBenchmark(_) => "execute-cold-benchmark",
+            Self::CollectBenchmarkEvents(_) => "collect-benchmark-events",
+            Self::RestoreBenchmarkData(_) => "restore-benchmark-data",
             Self::CaptureFramebuffer => "capture-framebuffer",
         }
     }

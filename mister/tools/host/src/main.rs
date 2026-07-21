@@ -3,8 +3,8 @@
 
 use base64::Engine;
 use mister_tool::transport::{
-    BenchmarkScenario, DeviceFailure, DeviceOperations, DeviceRequest, DeviceResponse, Layout,
-    MainSelection,
+    BenchmarkScenario, ColdBenchmarkScenario, DeviceFailure, DeviceOperations, DeviceRequest,
+    DeviceResponse, Layout, MainSelection,
 };
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
@@ -337,6 +337,64 @@ impl DeviceOperations for NativeDevice {
                 .map_err(device_failure)?;
                 exec_checked(&session, "benchmark restore", &benchmark_restore_command())
                     .map_err(device_failure)?;
+                "restored".into()
+            }
+            DeviceRequest::SnapshotBenchmarkData(scenario) => {
+                let session = connect(10).map_err(device_failure)?;
+                exec_checked(
+                    &session,
+                    "cold benchmark suspend",
+                    &acknowledged_main_command("mister_magik_suspend"),
+                )
+                .map_err(device_failure)?;
+                exec_checked(
+                    &session,
+                    "cold benchmark snapshot",
+                    &cold_benchmark_snapshot_command(*scenario),
+                )
+                .map_err(device_failure)?;
+                cold_benchmark_scenario_label(*scenario).into()
+            }
+            DeviceRequest::EstablishBenchmarkFixture(scenario) => {
+                let session = connect(10).map_err(device_failure)?;
+                exec_checked(
+                    &session,
+                    "cold benchmark fixture",
+                    &cold_benchmark_fixture_command(*scenario),
+                )
+                .map_err(device_failure)?;
+                "fixture-ready".into()
+            }
+            DeviceRequest::ExecuteColdBenchmark(scenario) => {
+                let session = connect(10).map_err(device_failure)?;
+                exec_checked(
+                    &session,
+                    "cold benchmark execute",
+                    &cold_benchmark_execute_command(*scenario),
+                )
+                .map_err(device_failure)?;
+                "executed".into()
+            }
+            DeviceRequest::CollectBenchmarkEvents(scenario) => {
+                let session = connect(10).map_err(device_failure)?;
+                remote_read(&session, cold_benchmark_events_path(*scenario)).ok_or_else(|| {
+                    DeviceFailure::OperationFailed("cold benchmark events are missing".into())
+                })?
+            }
+            DeviceRequest::RestoreBenchmarkData(scenario) => {
+                let session = connect(10).map_err(device_failure)?;
+                exec_checked(
+                    &session,
+                    "cold benchmark restore",
+                    &cold_benchmark_restore_command(*scenario),
+                )
+                .map_err(device_failure)?;
+                exec_checked(
+                    &session,
+                    "cold benchmark resume",
+                    &acknowledged_main_command("mister_magik_resume"),
+                )
+                .map_err(device_failure)?;
                 "restored".into()
             }
             DeviceRequest::CaptureFramebuffer => {
@@ -708,6 +766,79 @@ fn benchmark_scenario_label(scenario: BenchmarkScenario) -> &'static str {
         BenchmarkScenario::LauncherVelocity => "launcher-velocity",
         BenchmarkScenario::FramebufferVelocity => "framebuffer-velocity",
     }
+}
+
+fn cold_benchmark_scenario_label(scenario: ColdBenchmarkScenario) -> &'static str {
+    match scenario {
+        ColdBenchmarkScenario::CatalogLifecycle => "catalog-lifecycle",
+        ColdBenchmarkScenario::PreviewColdStart => "preview-cold-start",
+        ColdBenchmarkScenario::LibraryPersistence => "library-persistence",
+    }
+}
+
+fn cold_benchmark_events_path(scenario: ColdBenchmarkScenario) -> &'static str {
+    match scenario {
+        ColdBenchmarkScenario::CatalogLifecycle => {
+            "/tmp/mister-magik/agent-catalog-lifecycle.jsonl"
+        }
+        ColdBenchmarkScenario::PreviewColdStart => {
+            "/tmp/mister-magik/agent-preview-cold-start.jsonl"
+        }
+        ColdBenchmarkScenario::LibraryPersistence => {
+            "/tmp/mister-magik/agent-library-persistence.jsonl"
+        }
+    }
+}
+
+fn cold_benchmark_snapshot_command(_scenario: ColdBenchmarkScenario) -> String {
+    format!(
+        "set -eu; {}; root=/media/fat/mister-magik-dev; snap=/tmp/mister-magik/agent-benchmark-data; rm -rf \"$snap\"; mkdir -p \"$snap\"; for name in catalog-v3 library.sqlite3 arcade-bootstrap.nav.lz4b; do if test -e \"$root/$name\"; then cp -a \"$root/$name\" \"$snap/$name\"; touch \"$snap/$name.present\"; fi; done",
+        platform_safety_script()
+    )
+}
+
+fn cold_benchmark_fixture_command(scenario: ColdBenchmarkScenario) -> String {
+    let mutation = match scenario {
+        ColdBenchmarkScenario::CatalogLifecycle => "rm -rf \"$root/catalog-v3\"",
+        ColdBenchmarkScenario::PreviewColdStart => {
+            "rm -f /tmp/mister-magik/preview-* /tmp/mister-magik-slint.log"
+        }
+        ColdBenchmarkScenario::LibraryPersistence => "rm -f \"$root/library.sqlite3\"",
+    };
+    format!(
+        "set -eu; {}; root=/media/fat/mister-magik-dev; test -d /tmp/mister-magik/agent-benchmark-data; {mutation}; rm -f {}",
+        platform_safety_script(),
+        cold_benchmark_events_path(scenario)
+    )
+}
+
+fn cold_benchmark_execute_command(scenario: ColdBenchmarkScenario) -> String {
+    let (command, event) = match scenario {
+        ColdBenchmarkScenario::CatalogLifecycle => (
+            "/media/fat/mister-magik-dev/mister-magik-fb library-refresh",
+            "catalog_lifecycle_complete",
+        ),
+        ColdBenchmarkScenario::PreviewColdStart => (
+            "/media/fat/mister-magik-dev/mister-magik-fb preview-index-refresh-bench agent-cold",
+            "preview_cold_start_complete",
+        ),
+        ColdBenchmarkScenario::LibraryPersistence => (
+            "/media/fat/mister-magik-dev/mister-magik-fb library-refresh",
+            "library_persistence_complete",
+        ),
+    };
+    format!(
+        "set -eu; start=$(date +%s); {command} >/tmp/mister-magik/agent-cold-benchmark.out 2>&1; end=$(date +%s); elapsed_ms=$(((end-start)*1000)); printf '{{\"event\":\"{event}\",\"elapsed_ms\":%s,\"status\":\"ok\"}}\\n' \"$elapsed_ms\" >{}",
+        cold_benchmark_events_path(scenario)
+    )
+}
+
+fn cold_benchmark_restore_command(scenario: ColdBenchmarkScenario) -> String {
+    format!(
+        "set -eu; root=/media/fat/mister-magik-dev; snap=/tmp/mister-magik/agent-benchmark-data; test -d \"$snap\"; rm -rf \"$root/catalog-v3\"; rm -f \"$root/library.sqlite3\" \"$root/arcade-bootstrap.nav.lz4b\"; for name in catalog-v3 library.sqlite3 arcade-bootstrap.nav.lz4b; do if test -e \"$snap/$name.present\"; then mv \"$snap/$name\" \"$root/$name\"; fi; done; rm -rf \"$snap\"; rm -f {} /tmp/mister-magik/agent-cold-benchmark.out; {}",
+        cold_benchmark_events_path(scenario),
+        platform_safety_script()
+    )
 }
 
 fn benchmark_trace_path(warmup: bool) -> &'static str {

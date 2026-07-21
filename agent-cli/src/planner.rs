@@ -615,15 +615,6 @@ fn add_script_operations(
             "packaging tooling changed",
         ));
     }
-    if text.contains("bench") || text.contains("profile-catalog") {
-        add(op(
-            "scripts.catalog-gates",
-            "Test catalog benchmark gates",
-            "python3",
-            &["scripts/checks/check-catalog-contention.py", "--self-test"],
-            "benchmark tooling changed",
-        ));
-    }
 }
 
 fn add_crate(
@@ -734,20 +725,6 @@ fn host_tool_operations(full: bool) -> Vec<Operation> {
                 "planner::tests",
             ],
             "tooling change → routing tests",
-        ),
-        op(
-            "host.catalog-contention",
-            "Test catalog contention gate",
-            "python3",
-            &["scripts/checks/check-catalog-contention.py", "--self-test"],
-            "tooling change → benchmark gate",
-        ),
-        op(
-            "host.catalog-rebuild",
-            "Test catalog rebuild gate",
-            "python3",
-            &["scripts/checks/check-catalog-rebuild.py", "--self-test"],
-            "tooling change → benchmark gate",
         ),
         op(
             "host.doctor-tests",
