@@ -1296,8 +1296,16 @@ fn crt_trial_run_command(runtime_settings: &str) -> String {
 }
 
 fn parse_crt_trial_status(output: &str) -> Result<&str> {
-    let status = output.trim();
-    if !status.starts_with("crt_trial_status_v2 schema=2 ") {
+    let marker = "crt_trial_status_v2 schema=2 ";
+    let status = output
+        .rfind(marker)
+        .map(|offset| &output[offset..])
+        .unwrap_or(output)
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .trim();
+    if !status.starts_with(marker) {
         return Err(format!(
             "CRT trial did not return a typed status response: {}",
             status.replace(['\t', '\n', '\r'], " ")
@@ -6675,6 +6683,8 @@ video_mode=14
         .unwrap_err()
         .to_string();
         assert!(failure.contains("reason=no-latch-flips"));
+        let appended = format!("runtime log without trailing newline {valid}");
+        assert_eq!(parse_crt_trial_status(&appended).unwrap(), valid.trim());
         assert!(parse_crt_trial_status("untyped success").is_err());
     }
 
