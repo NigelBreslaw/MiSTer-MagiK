@@ -935,7 +935,7 @@ fn release_arming_cleanup_command() -> &'static str {
 
 fn release_begin_command() -> String {
     format!(
-        "set -eu; {}; {}; snap={RELEASE_SNAPSHOT}; rm -rf \"$snap\"; mkdir -p \"$snap\"; if test -e /media/fat/MiSTer.ini; then cp -a /media/fat/MiSTer.ini \"$snap/MiSTer.ini\"; fi; printf '%s\\n' attended-non-network-recovery-confirmed >{RELEASE_TOKEN}; test -s {RELEASE_TOKEN}",
+        "set -eu; {}; {} snap={RELEASE_SNAPSHOT}; rm -rf \"$snap\"; mkdir -p \"$snap\"; if test -e /media/fat/MiSTer.ini; then cp -a /media/fat/MiSTer.ini \"$snap/MiSTer.ini\"; fi; printf '%s\\n' attended-non-network-recovery-confirmed >{RELEASE_TOKEN}; test -s {RELEASE_TOKEN}",
         release_arming_cleanup_command(),
         platform_safety_script()
     )
@@ -1063,7 +1063,7 @@ fn release_recovery_command() -> String {
 
 fn release_restore_command() -> String {
     format!(
-        "set -eu; snap={RELEASE_SNAPSHOT}; {}; if test -s \"$snap/MiSTer.ini\"; then cp -a \"$snap/MiSTer.ini\" /media/fat/MiSTer.ini; fi; rm -f {RELEASE_TOKEN}; rm -rf \"$snap\"; {}; test ! -e {RELEASE_TOKEN}",
+        "set -eu; snap={RELEASE_SNAPSHOT}; {}; if test -s \"$snap/MiSTer.ini\"; then cp -a \"$snap/MiSTer.ini\" /media/fat/MiSTer.ini; fi; rm -f {RELEASE_TOKEN}; rm -rf \"$snap\"; {} test ! -e {RELEASE_TOKEN}",
         release_arming_cleanup_command(),
         platform_safety_script()
     )
@@ -7521,10 +7521,12 @@ H: Handlers=event3 js0"#
 
     #[test]
     fn release_recovery_requires_volatile_token_and_clears_every_arming_path() {
+        assert!(!release_begin_command().contains(";;"));
         let recovery = release_recovery_command();
         assert!(recovery.contains(RELEASE_TOKEN));
         assert!(recovery.contains("attended-non-network-recovery-confirmed"));
         let restore = release_restore_command();
+        assert!(!restore.contains(";;"));
         for path in [
             "/media/fat/mister-magik/launcher.env",
             "/media/fat/mister-magik-dev/launcher.env",
