@@ -173,8 +173,8 @@ def verify_fpga_component(fpga_root: Path, fpga_id: str, *, require_protocol: bo
         protocol_version = fpga_fields.get("latch_protocol_version")
         if require_protocol:
             require_hex("latch_protocol_sha256", str(protocol_sha or ""), HEX64)
-            if protocol_version != "3":
-                raise BundleError("FPGA metadata does not bind latch protocol version 3")
+            if protocol_version != "2":
+                raise BundleError("FPGA metadata does not bind latch protocol version 2")
             protocol_identities.add((protocol_sha, protocol_version))
     if protocol_identities and len(protocol_identities) != 1:
         raise BundleError("stock and patched FPGA artifacts bind different latch protocols")
@@ -510,8 +510,8 @@ def verify(
             fpga_release = fields(root / "fpga/patched/menu-magik-vblank-latch.metadata.txt")
             if payload.get("latch_protocol_sha256") != fpga_release.get("latch_protocol_sha256"):
                 raise BundleError("bundle latch protocol identity does not match FPGA metadata")
-            if payload.get("latch_protocol_version") != 3:
-                raise BundleError("bundle does not require latch protocol version 3")
+            if payload.get("latch_protocol_version") != 2:
+                raise BundleError("bundle does not require latch protocol version 2")
             if payload.get("latch_rbf_sha256") != fpga_release.get("rbf_sha256"):
                 raise BundleError("bundle RBF identity does not match FPGA metadata")
         if bundle_format == FORMAT:

@@ -77,7 +77,7 @@ class PlatformBundleTests(unittest.TestCase):
                     "patch_sha256=" + "4" * 64,
                     "latch_rtl_sha256=" + "5" * 64,
                     f"latch_protocol_sha256={self.protocol}",
-                    "latch_protocol_version=3",
+                    "latch_protocol_version=2",
                     f"component_input_sha256={self.fpga_id}",
                     "component_revision=" + "6" * 40,
                     "quartus_seed=1",
@@ -169,7 +169,7 @@ class PlatformBundleTests(unittest.TestCase):
         self.assertEqual(payload["fpga_input_sha256"], self.fpga_id)
         self.assertEqual(payload["kernel_input_sha256"], self.kernel_id)
         self.assertEqual(payload["latch_protocol_sha256"], self.protocol)
-        self.assertEqual(payload["latch_protocol_version"], 3)
+        self.assertEqual(payload["latch_protocol_version"], 2)
         self.assertEqual(payload["latch_rbf_sha256"], sha(self.fpga / "patched/menu-magik-vblank-latch.rbf"))
         self.assertEqual(payload["release_version"], 2)
         self.assertEqual(archive.name, "mister-magik-platform-v0.2.zip")
@@ -178,7 +178,7 @@ class PlatformBundleTests(unittest.TestCase):
         archive = self.create()
         manifest = self.root / "output/platform-bundle-v0.2.json"
         payload = json.loads(manifest.read_text())
-        payload["latch_protocol_version"] = 2
+        payload["latch_protocol_version"] = 3
         manifest.write_text(json.dumps(payload))
         with self.assertRaisesRegex(ValueError, "release manifest differs|protocol version"):
             bundle.verify(archive, manifest)
@@ -186,7 +186,7 @@ class PlatformBundleTests(unittest.TestCase):
     def test_legacy_fpga_metadata_may_have_protocol_hash_without_version(self) -> None:
         for flavour in ("stock", "patched"):
             metadata = self.fpga / flavour / "menu-magik-vblank-latch.metadata.txt"
-            metadata.write_text(metadata.read_text().replace("latch_protocol_version=3\n", ""))
+            metadata.write_text(metadata.read_text().replace("latch_protocol_version=2\n", ""))
 
         self.assertEqual(
             bundle.verify_fpga_component(self.fpga, self.fpga_id, require_protocol=False),
@@ -206,7 +206,7 @@ class PlatformBundleTests(unittest.TestCase):
                 "rbf_sha256": "2" * 64,
                 "platform_contract_sha256": self.contract,
                 "latch_protocol_sha256": self.protocol,
-                "latch_protocol_version": 3,
+                "latch_protocol_version": 2,
                 "platform_manifest_sha256": "3" * 64,
             },
             "trial": {

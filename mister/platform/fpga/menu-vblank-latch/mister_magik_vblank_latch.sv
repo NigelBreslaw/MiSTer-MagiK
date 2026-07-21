@@ -7,7 +7,6 @@
 module mister_magik_vblank_latch (
 	input  wire        clk_sys,
 	input  wire        hdmi_vbl,
-	input  wire        crt_vblank,
 	input  wire        cmd_start,
 	input  wire        cmd_data,
 	input  wire [7:0]  cmd_id,
@@ -19,15 +18,10 @@ module mister_magik_vblank_latch (
 	input  wire [11:0] active_lfb_width,
 	input  wire [11:0] active_lfb_height,
 	input  wire [13:0] active_lfb_stride,
-	input  wire [15:0] reader_flags,
-	input  wire [15:0] reader_underrun_count,
-	input  wire [15:0] reader_timeout_count,
 
 	output wire        response_valid,
 	output reg  [15:0] response_data,
 	output wire        apply,
-	output wire        apply_hdmi,
-	output wire        apply_crt,
 
 	output reg         route_en = 1'b0,
 	output reg         route_flt = 1'b0,
@@ -46,9 +40,7 @@ module mister_magik_vblank_latch (
 	output reg  [15:0] active_seq = 16'd0,
 	output reg  [15:0] post_count = 16'd0,
 	output reg  [15:0] flip_count = 16'd0,
-	output reg  [15:0] drop_count = 16'd0,
-	output reg  [1:0]  requested_route = 2'd0,
-	output reg  [1:0]  active_route = 2'd0
+	output reg  [15:0] drop_count = 16'd0
 );
 
 	`include "mister_magik_latch_protocol.svh"
@@ -58,18 +50,8 @@ module mister_magik_vblank_latch (
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
 	reg vbl_sys = 1'b0;
 	reg vbl_old = 1'b0;
-	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
-	reg crt_vbl_meta = 1'b0;
-	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
-	reg crt_vbl_sys = 1'b0;
-	reg crt_vbl_old = 1'b0;
-	reg [1:0] staged_route = MAGIK_ROUTE_HDMI;
-
 	wire vbl_rise = ~vbl_old & vbl_sys;
-	wire crt_vbl_rise = ~crt_vbl_old & crt_vbl_sys;
-	assign apply_hdmi = pending && (requested_route == MAGIK_ROUTE_HDMI) && vbl_rise;
-	assign apply_crt = pending && (requested_route == MAGIK_ROUTE_CRT_240P60) && crt_vbl_rise;
-	assign apply = apply_hdmi | apply_crt;
+	assign apply = pending && vbl_rise;
 	assign response_valid =
 		(cmd_start && ((cmd_id == MAGIK_UIO_SET_FBUF_LATCH) ||
 		               (cmd_id == MAGIK_UIO_GET_FBUF_LATCH) ||
@@ -100,11 +82,7 @@ module mister_magik_vblank_latch (
 				4'd8:  response_data = {4'd0, active_lfb_width};
 				4'd9:  response_data = {4'd0, active_lfb_height};
 				4'd10: response_data = {2'd0, active_lfb_stride};
-				4'd11: response_data = {14'd0, requested_route};
-				4'd12: response_data = {14'd0, active_route};
-				4'd13: response_data = reader_flags;
-				4'd14: response_data = reader_underrun_count;
-				4'd15: response_data = reader_timeout_count;
+				default: response_data = 16'd0;
 			endcase
 		end
 		else if(cmd_data && (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_CAPS)) begin
@@ -114,8 +92,6 @@ module mister_magik_vblank_latch (
 				4'd2: response_data = MAGIK_FBUF_MAX_WIDTH;
 				4'd3: response_data = MAGIK_FBUF_MAX_HEIGHT;
 				4'd4: response_data = MAGIK_FBUF_MAX_STRIDE;
-				4'd5: response_data = MAGIK_FBUF_ROUTES;
-				4'd6: response_data = MAGIK_FBUF_TIMING_VERSION;
 				default: response_data = 16'd0;
 			endcase
 		end
@@ -125,25 +101,16 @@ module mister_magik_vblank_latch (
 		vbl_meta <= hdmi_vbl;
 		vbl_sys <= vbl_meta;
 		vbl_old <= vbl_sys;
-		crt_vbl_meta <= crt_vblank;
-		crt_vbl_sys <= crt_vbl_meta;
-		crt_vbl_old <= crt_vbl_sys;
-
 		if(apply) begin
 			active_seq <= pending_seq;
-			active_route <= requested_route;
 			flip_count <= flip_count + 1'd1;
 			pending <= 1'b0;
 		end
 
 		if(cmd_data && (cmd_id == MAGIK_UIO_SET_FBUF_LATCH)) begin
 			case(word_index)
-				4'd0: begin
-					{route_en, route_flt, route_fmt} <=
-						{data_in[15], data_in[14], data_in[5:0]};
-					staged_route <= (data_in[7:6] == MAGIK_ROUTE_CRT_240P60) ?
-						MAGIK_ROUTE_CRT_240P60 : MAGIK_ROUTE_HDMI;
-				end
+				4'd0:  {route_en, route_flt, route_fmt} <=
+					{data_in[15], data_in[14], data_in[5:0]};
 				4'd1:  route_base[15:0] <= data_in;
 				4'd2:  route_base[31:16] <= data_in;
 				4'd3:  route_width <= data_in[11:0];
@@ -155,7 +122,6 @@ module mister_magik_vblank_latch (
 				4'd9:  route_stride <= data_in[13:0];
 				4'd10: begin
 					pending_seq <= data_in;
-					requested_route <= staged_route;
 					pending <= 1'b1;
 					post_count <= post_count + 1'd1;
 					if(pending) drop_count <= drop_count + 1'd1;

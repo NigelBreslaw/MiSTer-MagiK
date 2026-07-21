@@ -45,26 +45,15 @@ pub(crate) struct LauncherDisplaySession {
 
 impl LauncherDisplaySession {
     pub(crate) fn new(ui: &UiDisplay) -> Self {
-        // Native CRT scanout is selected by protocol v3 inside Menu. Main's
-        // legacy VGA framebuffer mux must remain off for both resolved routes.
-        Self::with_route_guard(ui, FramebufferRouteGuard::from_env(), false)
+        Self::with_guard(ui, FramebufferRouteGuard::from_env())
     }
 
-    #[cfg(test)]
     pub(in crate::ui_runner) fn with_guard(
         ui: &UiDisplay,
         route_guard: FramebufferRouteGuard,
     ) -> Self {
-        Self::with_route_guard(ui, route_guard, ui.direct_video())
-    }
-
-    fn with_route_guard(
-        ui: &UiDisplay,
-        route_guard: FramebufferRouteGuard,
-        set_vga_fb: bool,
-    ) -> Self {
         Self {
-            route: LauncherFramebufferRoute::for_scan(ui.scan_w(), ui.scan_h(), set_vga_fb),
+            route: LauncherFramebufferRoute::for_scan(ui.scan_w(), ui.scan_h(), ui.direct_video()),
             fb_width: ui.fb_w(),
             fb_height: ui.fb_h(),
             route_guard,

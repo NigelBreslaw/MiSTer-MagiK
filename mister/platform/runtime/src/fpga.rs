@@ -59,21 +59,6 @@ pub const FB_EN: u16 = 0x8000;
 pub const FB_DV_LBRD: i32 = 3;
 pub const FB_DV_UBRD: i32 = 2;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum LatchedOutputRoute {
-    Hdmi,
-    Crt240p60,
-}
-
-impl LatchedOutputRoute {
-    const fn protocol_bits(self) -> u16 {
-        match self {
-            Self::Hdmi => mister_magik_latch_contract::ROUTE_HDMI,
-            Self::Crt240p60 => mister_magik_latch_contract::ROUTE_CRT_240P60,
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 pub struct LatchedFbufGeometry {
     pub xoff: u16,
@@ -431,11 +416,6 @@ impl Fpga {
                 active_width: decoded.width,
                 active_height: decoded.height,
                 active_stride: decoded.stride,
-                requested_route: decoded.requested_route,
-                active_route: decoded.active_route,
-                reader_flags: decoded.reader_flags,
-                underrun_count: decoded.underrun_count,
-                timeout_count: decoded.timeout_count,
             })
         })();
         self.disable_io();
@@ -472,12 +452,11 @@ impl Fpga {
         fb_width: u16,
         fb_height: u16,
         geometry: LatchedFbufGeometry,
-        output_route: LatchedOutputRoute,
     ) -> io::Result<(u16, u16)> {
         self.disable_io();
         let support = self.cmd_capture(MAGIK_UIO_SET_FBUF_LATCH)?;
         let stream_res: io::Result<()> = (|| {
-            let fpga_format = FB_EN | FB_FMT_565 | FB_FMT_RXB | (output_route.protocol_bits() << 6);
+            let fpga_format = FB_EN | FB_FMT_565 | FB_FMT_RXB;
             self.spi_w(fpga_format)?;
             self.spi_w(base_addr as u16)?;
             self.spi_w((base_addr >> 16) as u16)?;
@@ -591,11 +570,6 @@ pub struct LatchedFbufStatus {
     pub active_width: u16,
     pub active_height: u16,
     pub active_stride: u16,
-    pub requested_route: u16,
-    pub active_route: u16,
-    pub reader_flags: u16,
-    pub underrun_count: u16,
-    pub timeout_count: u16,
 }
 
 impl LatchedFbufStatus {
@@ -612,16 +586,7 @@ impl LatchedFbufStatus {
     }
 
     pub fn active_enabled(self) -> bool {
-        self.active_route == mister_magik_latch_contract::ROUTE_CRT_240P60
-            || (self.flags & 0x0001) != 0
-    }
-
-    pub fn active_output_route(self) -> LatchedOutputRoute {
-        if self.active_route == mister_magik_latch_contract::ROUTE_CRT_240P60 {
-            LatchedOutputRoute::Crt240p60
-        } else {
-            LatchedOutputRoute::Hdmi
-        }
+        (self.flags & 0x0001) != 0
     }
 }
 
@@ -647,37 +612,5 @@ mod tests {
         assert_eq!(mode.vact, 540);
         assert_eq!(mode.hbp as i32 - FB_DV_LBRD, 0);
         assert_eq!(mode.vbp as i32 - FB_DV_UBRD, 0);
-    }
-
-    #[test]
-    fn latch_output_routes_use_protocol_v3_word_zero_bits() {
-        assert_eq!(LatchedOutputRoute::Hdmi.protocol_bits() << 6, 0);
-        assert_eq!(LatchedOutputRoute::Crt240p60.protocol_bits() << 6, 0x0040);
-    }
-
-    #[test]
-    fn crt_status_is_active_without_the_legacy_lfb_enable_bit() {
-        let status = LatchedFbufStatus {
-            magic_hi: MAGIK_FBUF_STATUS_MAGIC,
-            magic_lo: 0,
-            active_sequence: 1,
-            pending_sequence: 0,
-            flags: 0,
-            flip_count: 1,
-            post_count: 1,
-            drop_count: 0,
-            active_base: 0x227e_9000,
-            active_width: 640,
-            active_height: 240,
-            active_stride: 1280,
-            requested_route: mister_magik_latch_contract::ROUTE_CRT_240P60,
-            active_route: mister_magik_latch_contract::ROUTE_CRT_240P60,
-            reader_flags: 1,
-            underrun_count: 0,
-            timeout_count: 0,
-        };
-
-        assert!(status.active_enabled());
-        assert_eq!(status.active_output_route(), LatchedOutputRoute::Crt240p60);
     }
 }

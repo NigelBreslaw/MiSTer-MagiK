@@ -36,7 +36,7 @@ class ManifestTest(unittest.TestCase):
                 "patch_sha256=" + "3" * 64,
                 "latch_rtl_sha256=" + "4" * 64,
                 "latch_protocol_sha256=" + "7" * 64,
-                "latch_protocol_version=3",
+                "latch_protocol_version=2",
                 "quartus_seed=1",
                 "quartus_version=17.0.0 Build 595",
                 "workflow_url=https://github.example/actions/runs/1",
@@ -89,9 +89,9 @@ class ManifestTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             metadata = self.fixture(Path(directory))
             valid = metadata.read_text()
-            metadata.write_text(valid.replace("latch_protocol_version=3\n", ""))
+            metadata.write_text(valid.replace("latch_protocol_version=2\n", ""))
             self.assertNotEqual(self.run_verify(metadata).returncode, 0)
-            metadata.write_text(valid.replace("latch_protocol_version=3", "latch_protocol_version=2"))
+            metadata.write_text(valid.replace("latch_protocol_version=2", "latch_protocol_version=3"))
             self.assertNotEqual(self.run_verify(metadata).returncode, 0)
 
 

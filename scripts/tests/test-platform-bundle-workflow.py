@@ -71,12 +71,7 @@ assert "gh run download" in text
 assert "actions/artifacts?per_page=100" in text
 assert text.count("  workflow_dispatch:") == 1
 assert text.count("retention-days: 30") == 8
-for simulation in (
-    "tb_mister_magik_vblank_latch",
-    "tb_mister_magik_crt_timing",
-    "tb_mister_magik_crt_reader",
-):
-    assert simulation in rtl_test, simulation
+assert "tb_mister_magik_vblank_latch" in rtl_test
 assert "scripts/tests/test-fpga-vblank-latch.sh" in fast_text
 assert "check-fpga-latch-coverage.py" in fast_text
 assert "check-fpga-quartus-delta.py" in text

@@ -71,8 +71,8 @@ def verify(metadata_path: Path, *, require_protocol: bool = True) -> dict[str, s
         raise ValueError("release source tree was dirty")
     if fields["quartus_seed"] != "1":
         raise ValueError("release seed must be 1")
-    if "latch_protocol_version" in fields and fields["latch_protocol_version"] != "3":
-        raise ValueError("release must bind latch protocol version 3")
+    if "latch_protocol_version" in fields and fields["latch_protocol_version"] != "2":
+        raise ValueError("release must bind latch protocol version 2")
     if not fields["quartus_version"].startswith("17.0"):
         raise ValueError("release must use Quartus 17.0")
     if not fields["workflow_url"].startswith("https://"):

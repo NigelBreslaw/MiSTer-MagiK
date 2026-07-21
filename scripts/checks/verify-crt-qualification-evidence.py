@@ -46,8 +46,8 @@ def verify(path: Path) -> dict[str, object]:
     ):
         if not HEX64.fullmatch(str(identity.get(name, ""))):
             raise ValueError(f"invalid {name}")
-    if identity.get("latch_protocol_version") != 3:
-        raise ValueError("qualification must use latch protocol version 3")
+    if identity.get("latch_protocol_version") != 2:
+        raise ValueError("qualification must use latch protocol version 2")
 
     trial = payload.get("trial")
     if not isinstance(trial, dict):
@@ -94,4 +94,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

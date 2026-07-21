@@ -1529,7 +1529,6 @@ fn run_fpga_latch_post_report(fpga: &mut Fpga) {
         width as u16,
         height as u16,
         latch_geometry,
-        crate::fpga::LatchedOutputRoute::Hdmi,
     );
     let post_us = post_start.elapsed().as_micros() as u64;
     let (ack_high, ack_low) = match post {
@@ -1675,7 +1674,6 @@ fn run_fpga_latch_pattern(fpga: &mut Fpga) {
             width as u16,
             height as u16,
             latch_geometry,
-            crate::fpga::LatchedOutputRoute::Hdmi,
         );
         let post_us = post_start.elapsed().as_micros() as u64;
         let set_supported = match post {
