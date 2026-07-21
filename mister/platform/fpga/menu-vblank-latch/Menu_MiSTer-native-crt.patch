@@ -12,7 +12,7 @@ index 7c2a7c8..8df9a51 100644
  
  assign VGA_SL = 0;
  assign VGA_F1 = 0;
-@@ -75,15 +74,25 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
+@@ -75,15 +74,20 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
  );
  
  ////////////////////   CLOCKS   ///////////////////
@@ -387,7 +387,7 @@ index 7c2a7c8..8df9a51 100644
  
  reg  [7:0] cos_out;
  wire [5:0] cos_g = cos_out[7:3]+6'd32;
-@@ -398,11 +588,11 @@ cos cos(vvc + {vc>>forced_scandoubler, 2'b00}, cos_out);
+@@ -398,11 +588,19 @@ cos cos(vvc + {vc>>forced_scandoubler, 2'b00}, cos_out);
  
  wire [7:0] comp_v = (cos_g >= rnd_c) ? {cos_g - rnd_c, 2'b00} : 8'd0;
  
@@ -491,7 +491,7 @@ diff --git a/sys/emu_ports.vh b/sys/emu_ports.vh
 index ad59e00..6247173 100644
 --- a/sys/emu_ports.vh
 +++ b/sys/emu_ports.vh
-@@ -148,6 +148,17 @@ input         UART_DSR,
+@@ -148,6 +148,24 @@ input         UART_DSR,
  // 2..6 - USR2..USR6
  // Set USER_OUT to 1 to read from USER_IN.
  input   [6:0] USER_IN,
@@ -532,7 +532,7 @@ index 7d2ac3f..25b1378 100644
  wire        magik_lfb_en;
  wire        magik_lfb_flt;
  wire  [5:0] magik_lfb_fmt;
-@@ -375,24 +377,45 @@ wire [15:0] magik_lfb_active_seq;
+@@ -375,24 +377,52 @@ wire [15:0] magik_lfb_active_seq;
  wire [15:0] magik_lfb_post_count;
  wire [15:0] magik_lfb_flip_count;
  wire [15:0] magik_lfb_drop_count;
@@ -622,7 +622,7 @@ index 7d2ac3f..25b1378 100644
  	coef_wr <= 0;
  	sl_r <= FB_EN ? 2'b00 : scanlines;
  
-@@ -1333,13 +1364,15 @@ wire hdmi_tx_clk;
+@@ -1333,12 +1371,13 @@ wire hdmi_tx_clk;
  `ifndef MISTER_DEBUG_NOHDMI
  	cyclonev_clkselect hdmi_clk_sw
  	( 
@@ -639,7 +639,7 @@ index 7d2ac3f..25b1378 100644
  `endif
  
  altddio_out
-@@ -1387,10 +1420,18 @@ always @(posedge hdmi_tx_clk) begin
+@@ -1387,15 +1426,22 @@ always @(posedge hdmi_tx_clk) begin
  	hdmi_dv_de   <= dv_de;
  	
  `ifndef MISTER_DEBUG_NOHDMI
@@ -670,7 +670,7 @@ index 7d2ac3f..25b1378 100644
  `endif
  
  	hdmi_out_hs <= hs;
-@@ -1945,7 +1986,24 @@ emu emu
+@@ -1945,7 +2001,24 @@ emu emu
  	.UART_DSR(uart_dtr),
  
  	.USER_OUT(user_out),
