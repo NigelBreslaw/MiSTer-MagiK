@@ -210,7 +210,8 @@ fn dispatch(
             let deployment = agent_cli::deploy::recipe_plan(recipe)?;
             let plan = deployment.as_evidence_plan(intent.clone());
             evidence.record_plan(request_id, &plan)?;
-            return agent_cli::runtime_deploy::execute(repository, &deployment, reporter);
+            let head = agent_cli::task::current_head(repository)?;
+            return agent_cli::delivery::execute(repository, &deployment, &head, reporter);
         }
         Intent::Plan {
             scope: selected, ..
@@ -381,7 +382,17 @@ fn deliver(
         pending.state = "external_verified".into();
         evidence.save_delivery(&pending)?;
         deployment.platform_candidate = Some(candidate);
-        agent_cli::platform_deploy::execute(repository, &deployment, reporter)?;
+        if let Err(error) = agent_cli::delivery::execute(repository, &deployment, &sha, reporter) {
+            pending.state = if error.starts_with("recovery_required:") {
+                "recovery_required"
+            } else {
+                "failed"
+            }
+            .into();
+            pending.detail = Some(error.clone());
+            evidence.save_delivery(&pending)?;
+            return Err(error);
+        }
         pending.state = "complete".into();
         evidence.save_delivery(&pending)?;
         return Ok(Outcome::Passed);
@@ -442,7 +453,17 @@ fn deliver(
     }
     if impact == DeploymentImpact::Runtime {
         let deployment = agent_cli::deploy::plan(repository, paths)?;
-        agent_cli::runtime_deploy::execute(repository, &deployment, reporter)?;
+        if let Err(error) = agent_cli::delivery::execute(repository, &deployment, &sha, reporter) {
+            delivery.state = if error.starts_with("recovery_required:") {
+                "recovery_required"
+            } else {
+                "failed"
+            }
+            .into();
+            delivery.detail = Some(error.clone());
+            evidence.save_delivery(&delivery)?;
+            return Err(error);
+        }
     }
     delivery.state = "complete".into();
     evidence.save_delivery(&delivery)?;

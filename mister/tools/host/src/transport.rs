@@ -21,13 +21,32 @@ pub enum MainSelection {
 pub enum DeviceRequest {
     Discover,
     Status,
-    DeployRuntime { local: PathBuf, remote: String },
-    DeployPlatform { stage: PathBuf },
+    SnapshotRuntime {
+        remote: String,
+    },
+    DeployRuntime {
+        local: PathBuf,
+        remote: String,
+    },
+    RollbackRuntime {
+        remote: String,
+    },
+    CommitRuntime {
+        remote: String,
+    },
+    DeployPlatform {
+        stage: PathBuf,
+    },
+    SnapshotPlatform,
     RollbackPlatform,
     CommitPlatform,
     SelectMain(MainSelection),
     RebootWait,
     VerifyHealth(Layout),
+    SmokeDelivery {
+        layout: Layout,
+        expected_sha256: String,
+    },
     CaptureFramebuffer,
 }
 
@@ -37,13 +56,18 @@ impl DeviceRequest {
         match self {
             Self::Discover => "discover",
             Self::Status => "status",
+            Self::SnapshotRuntime { .. } => "snapshot-runtime",
             Self::DeployRuntime { .. } => "deploy-runtime",
+            Self::RollbackRuntime { .. } => "rollback-runtime",
+            Self::CommitRuntime { .. } => "commit-runtime",
             Self::DeployPlatform { .. } => "deploy-platform",
+            Self::SnapshotPlatform => "snapshot-platform",
             Self::RollbackPlatform => "rollback-platform",
             Self::CommitPlatform => "commit-platform",
             Self::SelectMain(_) => "select-main",
             Self::RebootWait => "reboot-wait",
             Self::VerifyHealth(_) => "verify-health",
+            Self::SmokeDelivery { .. } => "smoke-delivery",
             Self::CaptureFramebuffer => "capture-framebuffer",
         }
     }

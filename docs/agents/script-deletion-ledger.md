@@ -71,3 +71,21 @@ deleted after their retained capabilities moved into the typed registry.
 
 - `scripts/deploy-rust.sh` — removed; runtime deployment is owned by `scripts/agent deliver` and internal typed recipes.
 - `scripts/deploy-platform.sh` — removed; qualified platform installation is owned by `scripts/agent deliver`.
+
+## Typed ARM build takeover
+
+Reviewed on 2026-07-21. `apps/mister/build-arm.sh`,
+`apps/mister/build-arm64-apple-container.sh`, and
+`scripts/build-mister-agent.sh` selected profiles/backends, assembled commands,
+and copied artifacts. That orchestration and its safety invariants are now
+owned by `agent-cli/src/build.rs`; callers use fixed typed intents. The wrappers,
+their resource library, no-op regression wrapper, and wrapper-specific tests
+were deleted rather than retained as compatibility paths.
+
+## Transactional delivery takeover
+
+Reviewed on 2026-07-21. `scripts/scanout-slots-one-shot.sh` built and installed a
+temporary module and diagnostics binary, mutated the live device, then attempted
+ad-hoc restoration. Its owned readiness checks now run in the typed delivery
+smoke phase; the standalone mutation workflow was deleted. Source builders and
+pure contract checks remain because CI still owns them.

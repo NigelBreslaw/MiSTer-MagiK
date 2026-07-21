@@ -159,10 +159,67 @@ impl DeviceOperations for NativeDevice {
                 serde_json::to_string(&collect_status(&session).map_err(device_failure)?)
                     .map_err(device_failure)?
             }
+            DeviceRequest::SnapshotRuntime { remote } => {
+                validate_delivery_remote(remote).map_err(device_failure)?;
+                let session = connect(10).map_err(device_failure)?;
+                exec_checked(
+                    &session,
+                    "runtime snapshot",
+                    &format!(
+                        "set -eu; rm -f {0}.delivery-rollback.tmp; cp -p {0} {0}.delivery-rollback.tmp; mv -f {0}.delivery-rollback.tmp {0}.delivery-rollback; sync",
+                        sh(remote)
+                    ),
+                )
+                .map_err(device_failure)?;
+                "snapshotted".into()
+            }
             DeviceRequest::DeployRuntime { local, remote } => {
                 let session = connect(10).map_err(device_failure)?;
                 deploy_magik_bin(&session, local, remote).map_err(device_failure)?;
                 "deployed".into()
+            }
+            DeviceRequest::RollbackRuntime { remote } => {
+                validate_delivery_remote(remote).map_err(device_failure)?;
+                let session = connect(10).map_err(device_failure)?;
+                exec_checked(
+                    &session,
+                    "runtime suspend for rollback",
+                    &acknowledged_main_command("mister_magik_suspend"),
+                )
+                .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?;
+                if let Err(error) = exec_checked(
+                    &session,
+                    "runtime rollback",
+                    &format!(
+                        "set -eu; test -f {0}.delivery-rollback; mv -f {0}.delivery-rollback {0}; chmod 755 {0}; sync",
+                        sh(remote)
+                    ),
+                ) {
+                    let _ = exec_checked(
+                        &session,
+                        "runtime resume after failed rollback",
+                        &acknowledged_main_command("mister_magik_resume"),
+                    );
+                    return Err(DeviceFailure::RecoveryRequired(error.to_string()));
+                }
+                exec_checked(
+                    &session,
+                    "runtime resume after rollback",
+                    &acknowledged_main_command("mister_magik_resume"),
+                )
+                .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?;
+                "rolled-back".into()
+            }
+            DeviceRequest::CommitRuntime { remote } => {
+                validate_delivery_remote(remote).map_err(device_failure)?;
+                let session = connect(10).map_err(device_failure)?;
+                exec_checked(
+                    &session,
+                    "runtime commit",
+                    &format!("rm -f {}.delivery-rollback; sync", sh(remote)),
+                )
+                .map_err(device_failure)?;
+                "committed".into()
             }
             DeviceRequest::DeployPlatform { stage } => {
                 let transaction =
@@ -170,6 +227,12 @@ impl DeviceOperations for NativeDevice {
                 let session = connect(10).map_err(device_failure)?;
                 transaction.run(&session).map_err(device_failure)?;
                 "staged".into()
+            }
+            DeviceRequest::SnapshotPlatform => {
+                let session = connect(10).map_err(device_failure)?;
+                exec_checked(&session, "platform snapshot", &platform_snapshot_script())
+                    .map_err(device_failure)?;
+                "snapshotted".into()
             }
             DeviceRequest::RollbackPlatform => {
                 let session = connect(10).map_err(device_failure)?;
@@ -215,6 +278,29 @@ impl DeviceOperations for NativeDevice {
                 exec_checked(&session, "delivery health", &command)
                     .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
                 "healthy".into()
+            }
+            DeviceRequest::SmokeDelivery {
+                layout,
+                expected_sha256,
+            } => {
+                if expected_sha256.len() != 64
+                    || !expected_sha256.chars().all(|ch| ch.is_ascii_hexdigit())
+                {
+                    return Err(DeviceFailure::InvalidRequest(
+                        "expected SHA-256 is invalid".into(),
+                    ));
+                }
+                let label = match layout {
+                    Layout::Development => "dev",
+                    Layout::Public => "public",
+                };
+                let command =
+                    delivery_smoke_command(label, expected_sha256).map_err(device_failure)?;
+                let session = connect(10).map_err(device_failure)?;
+                exec_checked(&session, "delivery smoke", &command)
+                    .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
+                capture_buffer(&[]).map_err(device_failure)?;
+                "artifact=verified process=healthy module=ready latch=ready screen=recognized input=ready scanout=rgb565 capture=recorded arming=clear".into()
             }
             DeviceRequest::CaptureFramebuffer => {
                 capture_buffer(&[]).map_err(device_failure)?;
@@ -555,6 +641,28 @@ fn delivery_health_command(layout: &str) -> Result<String> {
     };
     Ok(format!(
         "set -eu; pidof {main} >/dev/null; pidof mister-magik-fb >/dev/null; grep -q '^mister_magik_scanout_slots ' /proc/modules; test -c /dev/mister-magik-scanout-slots; report=$({directory}/mister-magik-fb latch-readiness-report); printf '%s\\n' \"$report\" | grep -Eq 'latch_readiness_tsv[[:space:]]+valid=1[[:space:]]+state=ready'; test ! -e {directory}/launcher.env; test ! -e {directory}/rebuild-on-next-boot; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json"
+    ))
+}
+
+fn validate_delivery_remote(remote: &str) -> Result<()> {
+    if matches!(
+        remote,
+        "/media/fat/mister-magik/mister-magik-fb" | "/media/fat/mister-magik-dev/mister-magik-fb"
+    ) {
+        Ok(())
+    } else {
+        Err(format!("unsupported delivery remote: {remote}").into())
+    }
+}
+
+fn delivery_smoke_command(layout: &str, expected_sha256: &str) -> Result<String> {
+    let (main, directory) = match layout {
+        "dev" => ("MiSTer_MagiKDev", "/media/fat/mister-magik-dev"),
+        "public" => ("MiSTer_MagiK", "/media/fat/mister-magik"),
+        _ => return Err(format!("unsupported delivery layout: {layout}").into()),
+    };
+    Ok(format!(
+        "set -eu; test \"$(sha256sum {directory}/mister-magik-fb | awk '{{print $1}}')\" = '{expected_sha256}'; pidof {main} >/dev/null; pidof mister-magik-fb >/dev/null; grep -q '^mister_magik_scanout_slots ' /proc/modules; test -c /dev/mister-magik-scanout-slots; report=$({directory}/mister-magik-fb latch-readiness-report); printf '%s\\n' \"$report\" | grep -Eq 'latch_readiness_tsv[[:space:]]+valid=1[[:space:]]+state=ready'; grep -Eq '\"scene\"[[:space:]]*:[[:space:]]*\"launcher\"' /tmp/mister-magik/status.json; grep -Eq '\"screen\"[[:space:]]*:[[:space:]]*\"(home|arcade|settings|systems)\"' /tmp/mister-magik/status.json; grep -Eq '\"input_enabled\"[[:space:]]*:[[:space:]]*true' /tmp/mister-magik/status.json; test \"$(cat /sys/class/graphics/fb0/bits_per_pixel)\" = 16; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json"
     ))
 }
 
@@ -1462,6 +1570,27 @@ fn platform_rollback_script() -> String {
     rollback.push_str("mv -f /media/fat/MiSTer.ini.platform-rollback /media/fat/MiSTer.ini 2>/dev/null || true; sync; ");
     rollback.push_str(&platform_safety_script());
     rollback
+}
+
+fn platform_snapshot_script() -> String {
+    let mut cleanup = String::from("rm -f /media/fat/MiSTer.ini.platform-rollback; ");
+    let mut snapshot = String::new();
+    for (_, remote) in PLATFORM_DEPLOY_FILES {
+        cleanup.push_str(&format!(
+            "rm -f {backup} {missing}; ",
+            backup = sh(&format!("{remote}.rollback")),
+            missing = sh(&format!("{remote}.rollback-missing"))
+        ));
+        snapshot.push_str(&format!(
+            "if [ -e {path} ]; then cp -p {path} {backup}; else : > {missing}; fi; ",
+            path = sh(remote),
+            backup = sh(&format!("{remote}.rollback")),
+            missing = sh(&format!("{remote}.rollback-missing"))
+        ));
+    }
+    format!(
+        "set -eu; cleanup() {{ {cleanup} }}; cleanup; trap cleanup EXIT INT TERM; cp -p /media/fat/MiSTer.ini /media/fat/MiSTer.ini.platform-rollback; {snapshot} sync; trap - EXIT INT TERM"
+    )
 }
 
 fn platform_cleanup_script() -> String {
@@ -6707,6 +6836,9 @@ H: Handlers=event3 js0"#
                 < cleanup.find("MiSTer_MagiKDev.rollback").unwrap()
         );
         assert!(platform_rollback_script().contains("MiSTer.ini.platform-rollback"));
+        let snapshot = platform_snapshot_script();
+        assert!(snapshot.contains("trap cleanup EXIT INT TERM"));
+        assert!(snapshot.contains("MiSTer_MagiKDev.rollback"));
         fs::remove_dir_all(stage).unwrap();
     }
 
@@ -6719,6 +6851,31 @@ H: Handlers=event3 js0"#
             .to_string();
         assert!(error.contains("platform stage is missing mister-magik-fb"));
         fs::remove_dir_all(stage).unwrap();
+    }
+
+    #[test]
+    fn delivery_smoke_owns_every_fixed_safety_check() {
+        let command = delivery_smoke_command("dev", &"a".repeat(64)).unwrap();
+        for required in [
+            "sha256sum",
+            "pidof MiSTer_MagiKDev",
+            "pidof mister-magik-fb",
+            "mister_magik_scanout_slots",
+            "latch-readiness-report",
+            "\"scene\"",
+            "\"screen\"",
+            "\"input_enabled\"",
+            "bits_per_pixel",
+            "/media/fat/mister-magik/launcher.env",
+            "/media/fat/mister-magik-dev/launcher.env",
+            "/tmp/mister-magik/fs-fault-session",
+        ] {
+            assert!(
+                command.contains(required),
+                "missing smoke check: {required}"
+            );
+        }
+        assert!(validate_delivery_remote("/tmp/not-owned").is_err());
     }
 
     const MAME_1942_FIXTURE: &str = r#"<?xml version="1.0"?>

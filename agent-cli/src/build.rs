@@ -226,7 +226,7 @@ impl BuildSpec {
             ui_scope: scope,
             artifact,
             receipt,
-            strict_receipt: false,
+            strict_receipt: true,
         }
     }
 

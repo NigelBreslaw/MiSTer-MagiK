@@ -26,7 +26,7 @@ HEAVY_PATHS = {
 LIGHT_PATHS = {
     "mister/platform/runtime/src/framebuffer/scanout_slots.rs",
     "mister/tools/agent/src/scanout_slots_contract.rs",
-    "agent-cli/src/platform_deploy.rs",
+    "agent-cli/src/delivery.rs",
     "scripts/magik-mode.sh",
     "documentation/src/content/docs/architecture/kernel-scanout-plugin.mdx",
     ".github/workflows/scanout-contract.yml",
@@ -86,7 +86,7 @@ for unrelated in (
     "mister/tools/agent/src/sd_browse.rs",
     "docs/benchmarking.md",
     "docs/kernel-scanout-plugin-assurance.md",
-    "scripts/scanout-slots-one-shot.sh",
+    "agent-cli/src/build.rs",
 ):
     assert not triggered(HEAVY_PATHS, unrelated)
     assert not triggered(LIGHT_PATHS, unrelated)
@@ -94,7 +94,7 @@ for unrelated in (
 for userspace_contract in (
     "mister/platform/runtime/src/framebuffer/scanout_slots.rs",
     "mister/tools/agent/src/scanout_slots_contract.rs",
-    "agent-cli/src/platform_deploy.rs",
+    "agent-cli/src/delivery.rs",
     "scripts/magik-mode.sh",
 ):
     assert triggered(LIGHT_PATHS, userspace_contract)
