@@ -89,3 +89,14 @@ temporary module and diagnostics binary, mutated the live device, then attempted
 ad-hoc restoration. Its owned readiness checks now run in the typed delivery
 smoke phase; the standalone mutation workflow was deleted. Source builders and
 pure contract checks remain because CI still owns them.
+
+## Typed performance workflow takeover
+
+Reviewed on 2026-07-21. The scroll, framebuffer-stream, capture, gate,
+toolchain, effects, screenshot, and scene-profiling scripts selected scenarios,
+mutated the device, parsed traces with shell/AWK, appended history, and exposed
+large flag matrices. Their owned benchmark orchestration, thresholds, bounded
+device preparation, structured evidence, and unconditional restoration now
+live in `agent-cli/src/benchmark.rs` and fixed typed device requests. Pure trace
+analysis remains an internal Rust adapter. The scripts, aliases, and shell
+libraries were deleted rather than retained as compatibility interfaces.

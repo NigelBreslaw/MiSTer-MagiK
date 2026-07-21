@@ -3,7 +3,8 @@
 
 use base64::Engine;
 use mister_tool::transport::{
-    DeviceFailure, DeviceOperations, DeviceRequest, DeviceResponse, Layout, MainSelection,
+    BenchmarkScenario, DeviceFailure, DeviceOperations, DeviceRequest, DeviceResponse, Layout,
+    MainSelection,
 };
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
@@ -301,6 +302,42 @@ impl DeviceOperations for NativeDevice {
                     .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
                 capture_buffer(&[]).map_err(device_failure)?;
                 "artifact=verified process=healthy module=ready latch=ready screen=recognized input=ready scanout=rgb565 capture=recorded arming=clear".into()
+            }
+            DeviceRequest::PrepareBenchmark(scenario) => {
+                let session = connect(10).map_err(device_failure)?;
+                exec_checked(
+                    &session,
+                    "benchmark prepare",
+                    &benchmark_prepare_command(*scenario),
+                )
+                .map_err(device_failure)?;
+                benchmark_scenario_label(*scenario).into()
+            }
+            DeviceRequest::WarmupBenchmark(scenario) => {
+                let session = connect(10).map_err(device_failure)?;
+                run_launcher_benchmark(&session, *scenario, true).map_err(device_failure)?;
+                "warmed".into()
+            }
+            DeviceRequest::CaptureBenchmark(scenario) => {
+                let session = connect(10).map_err(device_failure)?;
+                run_launcher_benchmark(&session, *scenario, false).map_err(device_failure)?;
+                remote_read(&session, benchmark_trace_path(false)).ok_or_else(|| {
+                    DeviceFailure::OperationFailed("benchmark trace is missing".into())
+                })?
+            }
+            DeviceRequest::RestoreBenchmark => {
+                let session = connect(10).map_err(device_failure)?;
+                launcher_restart(
+                    &session,
+                    &LauncherRestartOptions {
+                        clear_env: true,
+                        ..LauncherRestartOptions::default()
+                    },
+                )
+                .map_err(device_failure)?;
+                exec_checked(&session, "benchmark restore", &benchmark_restore_command())
+                    .map_err(device_failure)?;
+                "restored".into()
             }
             DeviceRequest::CaptureFramebuffer => {
                 capture_buffer(&[]).map_err(device_failure)?;
@@ -664,6 +701,78 @@ fn delivery_smoke_command(layout: &str, expected_sha256: &str) -> Result<String>
     Ok(format!(
         "set -eu; test \"$(sha256sum {directory}/mister-magik-fb | awk '{{print $1}}')\" = '{expected_sha256}'; pidof {main} >/dev/null; pidof mister-magik-fb >/dev/null; grep -q '^mister_magik_scanout_slots ' /proc/modules; test -c /dev/mister-magik-scanout-slots; report=$({directory}/mister-magik-fb latch-readiness-report); printf '%s\\n' \"$report\" | grep -Eq 'latch_readiness_tsv[[:space:]]+valid=1[[:space:]]+state=ready'; grep -Eq '\"scene\"[[:space:]]*:[[:space:]]*\"launcher\"' /tmp/mister-magik/status.json; grep -Eq '\"screen\"[[:space:]]*:[[:space:]]*\"(home|arcade|settings|systems)\"' /tmp/mister-magik/status.json; grep -Eq '\"input_enabled\"[[:space:]]*:[[:space:]]*true' /tmp/mister-magik/status.json; test \"$(cat /sys/class/graphics/fb0/bits_per_pixel)\" = 16; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json"
     ))
+}
+
+fn benchmark_scenario_label(scenario: BenchmarkScenario) -> &'static str {
+    match scenario {
+        BenchmarkScenario::LauncherVelocity => "launcher-velocity",
+        BenchmarkScenario::FramebufferVelocity => "framebuffer-velocity",
+    }
+}
+
+fn benchmark_trace_path(warmup: bool) -> &'static str {
+    if warmup {
+        "/tmp/mister-magik/agent-benchmark-warmup.tsv"
+    } else {
+        "/tmp/mister-magik/agent-benchmark.tsv"
+    }
+}
+
+fn benchmark_prepare_command(_scenario: BenchmarkScenario) -> String {
+    format!(
+        "set -eu; {}; rm -f {} {}; mkdir -p /tmp/mister-magik",
+        platform_safety_script(),
+        benchmark_trace_path(true),
+        benchmark_trace_path(false)
+    )
+}
+
+fn benchmark_restore_command() -> String {
+    format!(
+        "set -eu; rm -f {} {}; {}",
+        benchmark_trace_path(true),
+        benchmark_trace_path(false),
+        platform_safety_script()
+    )
+}
+
+fn run_launcher_benchmark(
+    session: &Session,
+    scenario: BenchmarkScenario,
+    warmup: bool,
+) -> Result<()> {
+    let trace = benchmark_trace_path(warmup);
+    let seconds = if warmup { "2" } else { "8" };
+    let scenario_value = match scenario {
+        BenchmarkScenario::LauncherVelocity => "velocity-scroll",
+        BenchmarkScenario::FramebufferVelocity => "dirty-band",
+    };
+    launcher_restart(
+        session,
+        &LauncherRestartOptions {
+            env_vars: vec![
+                ("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()),
+                ("MISTER_LAUNCHER_START_SYSTEM".into(), "arcade".into()),
+                (
+                    "MISTER_LAUNCHER_BENCH_SCENARIO".into(),
+                    scenario_value.into(),
+                ),
+                ("MISTER_PREVIEW_SCROLL_TRACE_SECS".into(), seconds.into()),
+                ("MISTER_PREVIEW_SCROLL_TRACE".into(), trace.into()),
+                ("MISTER_PREVIEW_SCROLL_EXIT_AFTER_TRACE".into(), "1".into()),
+            ],
+            timeout_secs: 30,
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    exec_checked(
+        session,
+        "benchmark trace wait",
+        &format!(
+            "set -eu; elapsed=0; while [ $elapsed -lt 20 ]; do test -s {trace} && exit 0; sleep 1; elapsed=$((elapsed + 1)); done; exit 1"
+        ),
+    )?;
+    Ok(())
 }
 
 fn action_uses_device(action: &str) -> bool {

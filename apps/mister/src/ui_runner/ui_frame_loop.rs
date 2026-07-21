@@ -121,7 +121,7 @@ pub(super) fn run_frame_loop(
     let cpu = cpu_profile::start();
     let profile_on = profiler.enabled();
 
-    // Legacy 1 Hz line (no anim column) when frame profiler is off — keeps bench-toolchain.sh parsing stable.
+    // Legacy 1 Hz line (no anim column) when frame profiling is disabled.
     let mut fps_window_start = Instant::now();
     let mut fps_frames = 0u64;
     let mut render_us = 0u128;

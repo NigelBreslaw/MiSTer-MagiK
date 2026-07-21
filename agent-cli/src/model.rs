@@ -70,6 +70,7 @@ pub enum Intent {
     Interactive,
     Doctor,
     Deliver { task_id: String },
+    Benchmark { task_id: String },
     Build { intent: crate::build::BuildIntent },
     DeployRecipe { recipe: String },
 }
@@ -79,7 +80,9 @@ impl Intent {
     pub const fn risk(&self) -> Risk {
         match self {
             Self::Commit { .. } | Self::Verify { .. } => Risk::LocalWrite,
-            Self::Deliver { .. } | Self::DeployRecipe { .. } => Risk::DeviceWrite,
+            Self::Deliver { .. } | Self::Benchmark { .. } | Self::DeployRecipe { .. } => {
+                Risk::DeviceWrite
+            }
             Self::Build { .. } => Risk::LocalWrite,
             _ => Risk::ReadOnly,
         }

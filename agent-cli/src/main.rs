@@ -135,6 +135,16 @@ fn resolve_task_intent(
                 task_id
             },
         },
+        Intent::Benchmark { task_id } => Intent::Benchmark {
+            task_id: if task_id.is_empty() {
+                evidence
+                    .latest_committed_task(repository)?
+                    .map(|(task_id, _)| task_id)
+                    .ok_or("nothing_to_benchmark: commit the verified task first")?
+            } else {
+                task_id
+            },
+        },
         Intent::Plan {
             scope: agent_cli::model::Scope::Task(task_id),
             verbose,
@@ -201,6 +211,17 @@ fn dispatch(
         }
         Intent::Deliver { task_id } => {
             return deliver(evidence, repository, task_id, reporter);
+        }
+        Intent::Benchmark { task_id } => {
+            let (recorded_task, sha) = evidence
+                .latest_committed_task(repository)?
+                .filter(|(recorded, _)| recorded == task_id)
+                .ok_or(
+                    "unverified_commit: use `scripts/agent commit -m MESSAGE` before benchmarking",
+                )?;
+            debug_assert_eq!(recorded_task, *task_id);
+            let paths = agent_cli::task::changes(evidence, repository, task_id)?;
+            return agent_cli::benchmark::execute(repository, &paths, &sha, reporter);
         }
         Intent::Build { intent } => {
             let spec = agent_cli::build::BuildSpec::infer(*intent)?;

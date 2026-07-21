@@ -49,6 +49,7 @@ pub enum Command {
     Verify(ScopeArgs),
     Doctor,
     Deliver,
+    Benchmark,
     #[command(hide = true)]
     Build {
         #[arg(value_enum)]
@@ -163,6 +164,7 @@ impl Cli {
             },
             Some(Command::Doctor) => Intent::Doctor,
             Some(Command::Deliver) => Intent::Deliver { task_id },
+            Some(Command::Benchmark) => Intent::Benchmark { task_id },
             Some(Command::Build { intent }) => Intent::Build { intent },
             Some(Command::DeployRecipe { recipe }) => Intent::DeployRecipe { recipe },
         }
@@ -238,5 +240,17 @@ mod tests {
         assert!(Cli::try_parse_from(["agent-cli", "deliver", "--fast"]).is_err());
         assert!(Cli::try_parse_from(["agent-cli", "deliver", "-m", "message"]).is_err());
         assert!(Cli::try_parse_from(["agent-cli", "deploy"]).is_err());
+    }
+
+    #[test]
+    fn benchmark_is_flag_free_and_task_scoped() {
+        let cli = Cli::try_parse_from(["agent-cli", "--task-id", "task-1", "benchmark"]).unwrap();
+        assert_eq!(
+            cli.into_intent(),
+            Intent::Benchmark {
+                task_id: "task-1".into()
+            }
+        );
+        assert!(Cli::try_parse_from(["agent-cli", "benchmark", "--duration", "10"]).is_err());
     }
 }

@@ -17,6 +17,12 @@ pub enum MainSelection {
     Public,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BenchmarkScenario {
+    LauncherVelocity,
+    FramebufferVelocity,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DeviceRequest {
     Discover,
@@ -47,6 +53,10 @@ pub enum DeviceRequest {
         layout: Layout,
         expected_sha256: String,
     },
+    PrepareBenchmark(BenchmarkScenario),
+    WarmupBenchmark(BenchmarkScenario),
+    CaptureBenchmark(BenchmarkScenario),
+    RestoreBenchmark,
     CaptureFramebuffer,
 }
 
@@ -68,6 +78,10 @@ impl DeviceRequest {
             Self::RebootWait => "reboot-wait",
             Self::VerifyHealth(_) => "verify-health",
             Self::SmokeDelivery { .. } => "smoke-delivery",
+            Self::PrepareBenchmark(_) => "prepare-benchmark",
+            Self::WarmupBenchmark(_) => "warmup-benchmark",
+            Self::CaptureBenchmark(_) => "capture-benchmark",
+            Self::RestoreBenchmark => "restore-benchmark",
             Self::CaptureFramebuffer => "capture-framebuffer",
         }
     }
