@@ -34,22 +34,6 @@ const FFMPEG_APPLE_CONTAINER_ENV: [(&str, &str); 5] = [
         "-I/project/apps/mister/target/ffmpeg-minimal/armv7/dist/include",
     ),
 ];
-const FFMPEG_CROSS_ENV: [(&str, &str); 5] = [
-    ("FFMPEG_DIR", "/project/target/ffmpeg-minimal/armv7/dist"),
-    (
-        "PKG_CONFIG_PATH",
-        "/project/target/ffmpeg-minimal/armv7/dist/lib/pkgconfig",
-    ),
-    ("PKG_CONFIG_ALLOW_CROSS", "1"),
-    (
-        "CFLAGS",
-        "-I/project/target/ffmpeg-minimal/armv7/dist/include",
-    ),
-    (
-        "HOST_CFLAGS",
-        "-I/project/target/ffmpeg-minimal/armv7/dist/include",
-    ),
-];
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
@@ -556,7 +540,7 @@ impl<'a> ProcessBuildActions<'a> {
             .env("MISTER_MAGIK_BUILD_TIME", build_time)
             .args(cargo_args(self.spec));
         if self.spec.target == BuildTarget::Runtime && self.spec.mode != BuildMode::CheckLibrary {
-            command.envs(FFMPEG_CROSS_ENV);
+            command.envs(ffmpeg_cross_env(self.repository));
         }
         run_bounded(&mut command, BUILD_DEADLINE)
     }
@@ -807,6 +791,24 @@ fn git_output(repository: &Path, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
+fn ffmpeg_cross_env(repository: &Path) -> Vec<(&'static str, OsString)> {
+    let dist = repository.join("apps/mister/target/ffmpeg-minimal/armv7/dist");
+    let include = dist.join("include");
+    vec![
+        ("FFMPEG_DIR", dist.as_os_str().to_owned()),
+        (
+            "PKG_CONFIG_PATH",
+            dist.join("lib/pkgconfig").into_os_string(),
+        ),
+        ("PKG_CONFIG_ALLOW_CROSS", OsString::from("1")),
+        ("CFLAGS", OsString::from(format!("-I{}", include.display()))),
+        (
+            "HOST_CFLAGS",
+            OsString::from(format!("-I{}", include.display())),
+        ),
+    ]
+}
+
 fn build_metadata(repository: &Path) -> Result<(String, String, String), String> {
     let build_number = std::env::var("MISTER_MAGIK_BUILD_NUMBER")
         .unwrap_or(git_output(repository, &["rev-list", "--count", "HEAD"])?);
@@ -908,11 +910,12 @@ mod tests {
 
     #[test]
     fn cross_runtime_receives_minimal_ffmpeg_environment() {
-        assert!(FFMPEG_CROSS_ENV.contains(&(
+        let environment = ffmpeg_cross_env(Path::new("/checkout"));
+        assert!(environment.contains(&(
             "PKG_CONFIG_PATH",
-            "/project/target/ffmpeg-minimal/armv7/dist/lib/pkgconfig"
+            OsString::from("/checkout/apps/mister/target/ffmpeg-minimal/armv7/dist/lib/pkgconfig")
         )));
-        assert!(FFMPEG_CROSS_ENV.contains(&("PKG_CONFIG_ALLOW_CROSS", "1")));
+        assert!(environment.contains(&("PKG_CONFIG_ALLOW_CROSS", OsString::from("1"))));
     }
 
     #[test]
