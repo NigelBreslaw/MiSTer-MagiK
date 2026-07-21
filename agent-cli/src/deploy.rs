@@ -495,6 +495,46 @@ mod tests {
     }
 
     #[test]
+    fn evidence_plan_preserves_deployment_risk_and_identity() {
+        let deployment = plan(
+            Path::new("."),
+            vec![PathBuf::from("apps/mister/src/launcher.rs")],
+        )
+        .unwrap();
+        let plan = deployment.as_evidence_plan(Intent::Deploy {
+            task_id: "task-1".into(),
+        });
+        assert_eq!(plan.operations.len(), 1);
+        assert_eq!(plan.operations[0].risk, Risk::DeviceWrite);
+        assert!(plan.operations[0]
+            .inputs
+            .iter()
+            .any(|input| input == "kind=runtime"));
+        assert!(plan.operations[0]
+            .inputs
+            .iter()
+            .any(|input| input == "changed=apps/mister/src/launcher.rs"));
+    }
+
+    #[test]
+    fn platform_plan_refuses_unpublished_source() {
+        let root =
+            std::env::temp_dir().join(format!("agent-cli-platform-plan-{}", std::process::id()));
+        let repository = root.join("repo");
+        std::fs::create_dir_all(&repository).unwrap();
+        std::fs::create_dir_all(root.join("Main_MiSTer")).unwrap();
+        let error = plan(
+            &repository,
+            vec![PathBuf::from(
+                "mister/platform/fpga/menu-vblank-latch/menu.sv",
+            )],
+        )
+        .unwrap_err();
+        assert!(error.contains("platform changes must be committed"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn build_receipt_requires_canonical_identity_and_provenance() {
         let receipt = BuildReceipt::parse(
             "build_receipt_tsv\tbinary_sha256=abc\tprofile=release-device\tfeatures=ui\tui_scope=all\tsource_commit=deadbeef\tsource_dirty=1\n",

@@ -1081,6 +1081,23 @@ mod tests {
     }
 
     #[test]
+    fn fpga_verification_requires_external_build_and_local_checks() {
+        let plan = affected_plan(
+            Intent::Verify {
+                scope: crate::model::Scope::Paths(Vec::new()),
+            },
+            vec!["mister/platform/fpga/menu-vblank-latch/menu.sv".into()],
+        )
+        .unwrap();
+        assert_eq!(plan.external_requirements.len(), 1);
+        assert!(!plan.operations.is_empty());
+        assert!(plan
+            .operations
+            .iter()
+            .all(|operation| !operation.program.to_ascii_lowercase().contains("quartus")));
+    }
+
+    #[test]
     fn fpga_change_requires_external_rbf_build() {
         let plan = affected_plan(
             Intent::Verify {
