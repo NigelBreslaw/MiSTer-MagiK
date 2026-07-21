@@ -474,7 +474,7 @@ index 7320a57..41f1007 100644
  		.phase_shift1("0 ps"),
  		.duty_cycle1(50),
 -		.output_clock_frequency2("0 MHz"),
-+		.output_clock_frequency2("25.175000 MHz"),
++		.output_clock_frequency2("25.200000 MHz"),
  		.phase_shift2("0 ps"),
  		.duty_cycle2(50),
  		.output_clock_frequency3("0 MHz"),

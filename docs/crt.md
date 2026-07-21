@@ -20,8 +20,9 @@ source that informed it.
 
 ## Version 1 timing
 
-The native route uses a 25.175 MHz video clock and advances the raster on every
-second clock edge. Its effective pixel rate is 12.5875 MHz.
+The native route uses a 25.200 MHz video clock and advances the raster on every
+second clock edge. Its effective pixel rate is 12.600 MHz. This clock is an
+exact legal integer-PLL output from Menu's 50 MHz reference under Quartus 17.
 
 | Region | Horizontal | Vertical |
 | --- | ---: | ---: |
@@ -31,7 +32,7 @@ second clock edge. Its effective pixel rate is 12.5875 MHz.
 | Back porch | 48 | 16 |
 | Total | 800 | 262 |
 
-The resulting nominal rates are 15.734375 kHz and 60.054866 Hz. RGB is black
+The resulting nominal rates are 15.750000 kHz and 60.114504 Hz. RGB is black
 outside the active rectangle. PAL, interlace, centering controls, and
 alternative active widths are not part of version 1.
 

@@ -4,8 +4,8 @@
 `timescale 1ns/1ps
 `default_nettype none
 
-// 640x240p60 native raster. CLK_VIDEO is 25.175 MHz; CE_PIXEL advances the
-// raster every second clock for an effective 12.5875 MHz pixel rate.
+// 640x240p60 native raster. CLK_VIDEO is 25.200 MHz; CE_PIXEL advances the
+// raster every second clock for an effective 12.600 MHz pixel rate.
 module mister_magik_crt_timing (
 	input wire clk_video, input wire reset, input wire test_pattern_enable,
 	output reg ce_pixel = 1'b0, output reg [9:0] x = 10'd0,
