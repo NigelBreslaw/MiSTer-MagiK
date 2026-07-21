@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 const TARGET: &str = "armv7-unknown-linux-gnueabihf";
 const IMAGE: &str = "mister-magik-cross-armv7:ubuntu20-arm64";
 const BUILD_DEADLINE: Duration = Duration::from_secs(30 * 60);
-const FFMPEG_CROSS_ENV: [(&str, &str); 5] = [
+const FFMPEG_APPLE_CONTAINER_ENV: [(&str, &str); 5] = [
     (
         "FFMPEG_DIR",
         "/project/apps/mister/target/ffmpeg-minimal/armv7/dist",
@@ -32,6 +32,22 @@ const FFMPEG_CROSS_ENV: [(&str, &str); 5] = [
     (
         "HOST_CFLAGS",
         "-I/project/apps/mister/target/ffmpeg-minimal/armv7/dist/include",
+    ),
+];
+const FFMPEG_CROSS_ENV: [(&str, &str); 5] = [
+    ("FFMPEG_DIR", "/project/target/ffmpeg-minimal/armv7/dist"),
+    (
+        "PKG_CONFIG_PATH",
+        "/project/target/ffmpeg-minimal/armv7/dist/lib/pkgconfig",
+    ),
+    ("PKG_CONFIG_ALLOW_CROSS", "1"),
+    (
+        "CFLAGS",
+        "-I/project/target/ffmpeg-minimal/armv7/dist/include",
+    ),
+    (
+        "HOST_CFLAGS",
+        "-I/project/target/ffmpeg-minimal/armv7/dist/include",
     ),
 ];
 
@@ -496,7 +512,7 @@ impl<'a> ProcessBuildActions<'a> {
             command.arg("--env").arg(value);
         }
         if self.spec.target == BuildTarget::Runtime && self.spec.mode != BuildMode::CheckLibrary {
-            for (name, value) in FFMPEG_CROSS_ENV {
+            for (name, value) in FFMPEG_APPLE_CONTAINER_ENV {
                 command.arg("--env").arg(format!("{name}={value}"));
             }
         }
@@ -894,7 +910,7 @@ mod tests {
     fn cross_runtime_receives_minimal_ffmpeg_environment() {
         assert!(FFMPEG_CROSS_ENV.contains(&(
             "PKG_CONFIG_PATH",
-            "/project/apps/mister/target/ffmpeg-minimal/armv7/dist/lib/pkgconfig"
+            "/project/target/ffmpeg-minimal/armv7/dist/lib/pkgconfig"
         )));
         assert!(FFMPEG_CROSS_ENV.contains(&("PKG_CONFIG_ALLOW_CROSS", "1")));
     }

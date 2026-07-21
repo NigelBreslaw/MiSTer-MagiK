@@ -132,11 +132,13 @@ fn download_and_verify(
         .arg("--manifest")
         .arg(&manifest)
         .current_dir(repository);
-    if !bounded_output(verify, "platform candidate verification", COMMAND_DEADLINE)?
-        .status
-        .success()
-    {
-        return Err("downloaded platform candidate failed verification".into());
+    let verification = bounded_output(verify, "platform candidate verification", COMMAND_DEADLINE)?;
+    if !verification.status.success() {
+        let detail = String::from_utf8_lossy(&verification.stderr);
+        return Err(format!(
+            "downloaded platform candidate failed verification: {}",
+            detail.trim()
+        ));
     }
     let payload: Value = serde_json::from_slice(
         &std::fs::read(&manifest)
