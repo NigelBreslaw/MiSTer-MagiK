@@ -20,3 +20,11 @@ iverilog -g2012 -Wall -Wimplicit -I "$rtl_dir" \
 	"$rtl_dir/tb_mister_magik_vblank_latch.sv"
 
 vvp "$build_dir/tb_mister_magik_vblank_latch.vvp"
+
+iverilog -g2012 -Wall -Wimplicit -I "$rtl_dir" \
+	-s tb_mister_magik_crt_timing \
+	-o "$build_dir/tb_mister_magik_crt_timing.vvp" \
+	"$rtl_dir/mister_magik_crt_timing.sv" \
+	"$rtl_dir/tb_mister_magik_crt_timing.sv"
+
+vvp "$build_dir/tb_mister_magik_crt_timing.vvp"
