@@ -54,6 +54,12 @@ pub enum Command {
     Deploy,
     #[command(hide = true)]
     DeployRecipe {
+        #[arg(value_parser = [
+            "launcher-device", "launcher-fast", "launcher-bench-device",
+            "launcher-bench-fast", "launcher-diagnostics-device",
+            "all-diagnostics-device", "launcher-profile", "all-scenes-profile",
+            "all-experiments-device", "all-experiments-bench-device"
+        ])]
         recipe: String,
     },
 }

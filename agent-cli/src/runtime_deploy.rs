@@ -137,12 +137,16 @@ impl RuntimeActions for ProcessActions<'_> {
                 // so failure injection and evidence preserve the transaction boundary.
                 Ok(())
             }
-            Phase::VerifyHealth => run_bounded(
-                self.repository,
-                "scripts/mister",
-                &["status".into(), "--json".into()],
-                DEVICE_DEADLINE,
-            ),
+            Phase::VerifyHealth => {
+                run_bounded(
+                    self.repository,
+                    "scripts/mister",
+                    &["status".into(), "--json".into()],
+                    DEVICE_DEADLINE,
+                )?;
+                run_bounded(self.repository, "scripts/mister", &["run".into(),
+                    "set -eu; pidof MiSTer_MagiKDev >/dev/null; pidof mister-magik-fb >/dev/null; grep -q '^mister_magik_scanout_slots ' /proc/modules; test -c /dev/mister-magik-scanout-slots; report=$(/media/fat/mister-magik-dev/mister-magik-fb latch-readiness-report); printf '%s\\n' \"$report\" | grep -Eq 'latch_readiness_tsv[[:space:]]+valid=1[[:space:]]+state=ready'".into()], DEVICE_DEADLINE)
+            }
         }
     }
 }

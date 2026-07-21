@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use std::collections::{BTreeMap, VecDeque};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -104,26 +105,55 @@ impl DeviceTransport for HostCliTransport {
                 code: None,
                 detail: error.to_string(),
             })?;
+        let mut stdout = child.stdout.take().ok_or_else(|| Failure::CommandFailed {
+            code: None,
+            detail: "cannot capture host stdout".into(),
+        })?;
+        let mut stderr = child.stderr.take().ok_or_else(|| Failure::CommandFailed {
+            code: None,
+            detail: "cannot capture host stderr".into(),
+        })?;
+        let stdout_reader = thread::spawn(move || {
+            let mut bytes = Vec::new();
+            stdout.read_to_end(&mut bytes).map(|_| bytes)
+        });
+        let stderr_reader = thread::spawn(move || {
+            let mut bytes = Vec::new();
+            stderr.read_to_end(&mut bytes).map(|_| bytes)
+        });
         loop {
             match child.try_wait() {
-                Ok(Some(_)) => {
-                    let output =
-                        child
-                            .wait_with_output()
-                            .map_err(|error| Failure::CommandFailed {
-                                code: None,
-                                detail: error.to_string(),
-                            })?;
-                    if !output.status.success() {
+                Ok(Some(status)) => {
+                    let stdout = stdout_reader
+                        .join()
+                        .map_err(|_| Failure::CommandFailed {
+                            code: status.code(),
+                            detail: "host stdout reader failed".into(),
+                        })?
+                        .map_err(|error| Failure::CommandFailed {
+                            code: status.code(),
+                            detail: error.to_string(),
+                        })?;
+                    let stderr = stderr_reader
+                        .join()
+                        .map_err(|_| Failure::CommandFailed {
+                            code: status.code(),
+                            detail: "host stderr reader failed".into(),
+                        })?
+                        .map_err(|error| Failure::CommandFailed {
+                            code: status.code(),
+                            detail: error.to_string(),
+                        })?;
+                    if !status.success() {
                         return Err(Failure::CommandFailed {
-                            code: output.status.code(),
-                            detail: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+                            code: status.code(),
+                            detail: String::from_utf8_lossy(&stderr).trim().to_owned(),
                         });
                     }
                     return Ok(Response {
                         operation: request.operation,
-                        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-                        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                        stdout: String::from_utf8_lossy(&stdout).into_owned(),
+                        stderr: String::from_utf8_lossy(&stderr).into_owned(),
                         elapsed_ms: started.elapsed().as_millis(),
                     });
                 }

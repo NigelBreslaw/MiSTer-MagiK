@@ -97,15 +97,30 @@ pub fn execute(
         repository,
         deployment,
         stage,
+        mutated: false,
     };
-    run_transaction(&mut actions, &mut |phase, percent| {
+    let result = run_transaction(&mut actions, &mut |phase, percent| {
         reporter.emit(
             EventKind::Progress,
             phase.label(),
             &format!("platform deployment {}", phase.label()),
             Some(percent),
         )
-    })?;
+    });
+    if let Err(error) = result {
+        if actions.mutated {
+            reporter.emit(
+                EventKind::Warning,
+                "rollback",
+                "restoring previous verified platform",
+                None,
+            )?;
+            actions.rollback().map_err(|rollback| {
+                format!("{error}; attended_recovery_required: platform rollback failed: {rollback}")
+            })?;
+        }
+        return Err(error);
+    }
     Ok(Outcome::Passed)
 }
 
@@ -113,6 +128,24 @@ struct ProcessActions<'a> {
     repository: &'a Path,
     deployment: &'a DeploymentPlan,
     stage: PathBuf,
+    mutated: bool,
+}
+
+impl ProcessActions<'_> {
+    fn rollback(&self) -> Result<(), String> {
+        run_bounded(
+            self.repository,
+            "scripts/mister",
+            &["platform-rollback".into()],
+            DEVICE_DEADLINE,
+        )?;
+        run_bounded(
+            self.repository,
+            "scripts/mister",
+            &["reboot-wait".into()],
+            REBOOT_DEADLINE,
+        )
+    }
 }
 
 impl PlatformActions for ProcessActions<'_> {
@@ -120,11 +153,17 @@ impl PlatformActions for ProcessActions<'_> {
         let candidate = self.deployment.platform_candidate.as_ref().unwrap();
         match phase {
             Phase::Resolve => {
-                if self.stage.exists() { fs::remove_dir_all(&self.stage).map_err(|e| e.to_string())?; }
+                if self.stage.exists() {
+                    fs::remove_dir_all(&self.stage).map_err(|e| e.to_string())?;
+                }
                 fs::create_dir_all(self.stage.join("fpga")).map_err(|e| e.to_string())
             }
-            Phase::Build => run_bounded(self.repository, self.deployment.build.program,
-                &self.deployment.build.args, BUILD_DEADLINE),
+            Phase::Build => run_bounded(
+                self.repository,
+                self.deployment.build.program,
+                &self.deployment.build.args,
+                BUILD_DEADLINE,
+            ),
             Phase::VerifyLocal => {
                 self.deployment.build.verify(self.repository)?;
                 prepare_stage(
@@ -134,23 +173,64 @@ impl PlatformActions for ProcessActions<'_> {
                     &self.deployment.build.artifact,
                 )
             }
-            Phase::Snapshot => run_bounded(self.repository, "scripts/mister",
-                &["status".into(), "--json".into()], DEVICE_DEADLINE),
-            Phase::Stage => run_bounded(self.repository, "scripts/mister",
-                &["platform-deploy".into(), self.stage.display().to_string()], DEVICE_DEADLINE),
+            Phase::Snapshot => run_bounded(
+                self.repository,
+                "scripts/mister",
+                &["status".into(), "--json".into()],
+                DEVICE_DEADLINE,
+            ),
+            Phase::Stage => {
+                self.mutated = true;
+                run_bounded(
+                    self.repository,
+                    "scripts/mister",
+                    &["platform-deploy".into(), self.stage.display().to_string()],
+                    DEVICE_DEADLINE,
+                )?;
+                Ok(())
+            }
             Phase::Suspend | Phase::Activate => Ok(()),
             Phase::Reboot => {
-                run_bounded(self.repository, "scripts/mister",
-                    &["ini-select-main".into(), "MiSTer_MagiKDev".into()], DEVICE_DEADLINE)?;
-                run_bounded(self.repository, "scripts/mister", &["reboot-wait".into()], REBOOT_DEADLINE)
+                run_bounded(
+                    self.repository,
+                    "scripts/mister",
+                    &["ini-select-main".into(), "MiSTer_MagiKDev".into()],
+                    DEVICE_DEADLINE,
+                )?;
+                run_bounded(
+                    self.repository,
+                    "scripts/mister",
+                    &["reboot-wait".into()],
+                    REBOOT_DEADLINE,
+                )
             }
-            Phase::VerifyHealth => run_bounded(self.repository, "scripts/mister",
-                &["status".into(), "--json".into()], DEVICE_DEADLINE),
-            Phase::Cleanup => run_bounded(self.repository, "scripts/mister", &["run".into(),
-                "test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot".into()], DEVICE_DEADLINE),
+            Phase::VerifyHealth => {
+                run_bounded(
+                    self.repository,
+                    "scripts/mister",
+                    &["status".into(), "--json".into()],
+                    DEVICE_DEADLINE,
+                )?;
+                run_bounded(
+                    self.repository,
+                    "scripts/mister",
+                    &["run".into(), platform_health_command().into()],
+                    DEVICE_DEADLINE,
+                )
+            }
+            Phase::Cleanup => run_bounded(
+                self.repository,
+                "scripts/mister",
+                &["platform-commit".into()],
+                DEVICE_DEADLINE,
+            ),
             Phase::Complete => Ok(()),
         }
     }
+}
+
+fn platform_health_command() -> &'static str {
+    "set -eu; manifest=/media/fat/mister-magik-dev/platform-v2.manifest; field() { awk -F= -v key=\"$1\" '$1 == key { print $2 }' \"$manifest\"; }; check() { expected=$(field \"$1\"); actual=$(sha256sum \"$2\" | awk '{print $1}'); test \"$actual\" = \"$expected\"; }; pid=$(pidof MiSTer_MagiKDev); test -n \"$pid\"; gui=$(pidof mister-magik-fb); test -n \"$gui\"; check main_sha256 /media/fat/MiSTer_MagiKDev; check gui_sha256 /media/fat/mister-magik-dev/mister-magik-fb; check scanout_module_sha256 /media/fat/mister-magik-dev/mister_magik_scanout_slots.ko; check latch_rbf_sha256 /media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.rbf; grep -q '^mister_magik_scanout_slots ' /proc/modules; test -c /dev/mister-magik-scanout-slots; tr '\\000' ' ' < /proc/$pid/cmdline | grep -Fq /media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.rbf; report=$(/media/fat/mister-magik-dev/mister-magik-fb latch-readiness-report); printf '%s\\n' \"$report\" | grep -Eq 'latch_readiness_tsv[[:space:]]+valid=1[[:space:]]+state=ready'"
 }
 
 fn prepare_stage(

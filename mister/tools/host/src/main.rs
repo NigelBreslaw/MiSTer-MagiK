@@ -195,6 +195,14 @@ fn run_cli() -> Result<()> {
             let sess = connect(10)?;
             transaction.run(&sess)?;
         }
+        "platform-rollback" => {
+            let sess = connect(10)?;
+            exec_checked(&sess, "platform rollback", &platform_rollback_script())?;
+        }
+        "platform-commit" => {
+            let sess = connect(10)?;
+            exec_checked(&sess, "platform commit", &platform_cleanup_script())?;
+        }
         "get" => {
             if args.len() < 2 {
                 return Err("get needs <remote> <local>".into());
@@ -1254,7 +1262,6 @@ impl PlatformDeployTransaction {
         let mut backup = String::new();
         let mut activate = String::new();
         let mut rollback = String::new();
-        let mut cleanup = String::new();
         for (_, remote, checksum) in &self.files {
             verify.push_str(&format!(
                 "test \"$(sha256sum {} | awk '{{print $1}}')\" = {}; ",
@@ -1272,11 +1279,6 @@ impl PlatformDeployTransaction {
                 path = sh(remote),
                 backup = sh(&format!("{remote}.rollback")),
                 missing = sh(&format!("{remote}.rollback-missing"))
-            ));
-            cleanup.push_str(&format!(
-                "rm -f {} {}; ",
-                sh(&format!("{remote}.rollback")),
-                sh(&format!("{remote}.rollback-missing"))
             ));
         }
         for (_, remote, _) in self
@@ -1302,8 +1304,49 @@ impl PlatformDeployTransaction {
             sh(manifest)
         ));
         format!(
-            "set -eu; {verify} {backup} rollback() {{ {rollback} sync; }}; trap rollback EXIT INT TERM; {activate} chmod 755 /media/fat/MiSTer_MagiKDev /media/fat/mister-magik-dev/mister-magik-fb; sync; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot; trap - EXIT INT TERM; {cleanup} sync"
+            "set -eu; rm -f /media/fat/MiSTer.ini.platform-rollback; cp -p /media/fat/MiSTer.ini /media/fat/MiSTer.ini.platform-rollback; {verify} {backup} rollback() {{ {rollback} mv -f /media/fat/MiSTer.ini.platform-rollback /media/fat/MiSTer.ini 2>/dev/null || true; sync; }}; trap rollback EXIT INT TERM; {activate} chmod 755 /media/fat/MiSTer_MagiKDev /media/fat/mister-magik-dev/mister-magik-fb; sync; {safety} trap - EXIT INT TERM; sync",
+            safety = platform_safety_script(),
         )
+    }
+}
+
+fn platform_rollback_script() -> String {
+    let mut rollback = String::from("set -eu; ");
+    for (_, remote) in PLATFORM_DEPLOY_FILES {
+        rollback.push_str(&format!(
+            "if [ -e {backup} ]; then mv -f {backup} {path}; elif [ -e {missing} ]; then rm -f {path} {missing}; fi; ",
+            path = sh(remote), backup = sh(&format!("{remote}.rollback")),
+            missing = sh(&format!("{remote}.rollback-missing"))
+        ));
+    }
+    rollback.push_str("mv -f /media/fat/MiSTer.ini.platform-rollback /media/fat/MiSTer.ini 2>/dev/null || true; sync; ");
+    rollback.push_str(&platform_safety_script());
+    rollback
+}
+
+fn platform_cleanup_script() -> String {
+    let mut cleanup = format!("set -eu; {} ", platform_safety_script());
+    for (_, remote) in PLATFORM_DEPLOY_FILES {
+        cleanup.push_str(&format!(
+            "rm -f {} {}; ",
+            sh(&format!("{remote}.rollback")),
+            sh(&format!("{remote}.rollback-missing"))
+        ));
+    }
+    cleanup.push_str("rm -f /media/fat/MiSTer.ini.platform-rollback; sync; ");
+    cleanup
+}
+
+fn platform_safety_script() -> String {
+    "test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot;".into()
+}
+
+fn exec_checked(sess: &Session, label: &str, command: &str) -> Result<()> {
+    let output = exec(sess, command, true)?;
+    if let Some(message) = exec_failure_message(label, &output) {
+        Err(message.into())
+    } else {
+        Ok(())
     }
 }
 
@@ -6515,6 +6558,15 @@ H: Handlers=event3 js0"#
         assert!(manifest > gui);
         assert!(script.contains("trap rollback EXIT INT TERM"));
         assert!(script.contains("test ! -e /tmp/mister-magik/fs-fault-session"));
+        assert!(script.contains("test ! -e /tmp/mister-magik/fs-fault-launcher.env"));
+        assert!(script.contains("test ! -e /tmp/mister-magik/fs-fault.json"));
+        assert!(!script.contains("rm -f '/media/fat/MiSTer_MagiKDev.rollback'"));
+        let cleanup = platform_cleanup_script();
+        assert!(
+            cleanup.find("fs-fault.json").unwrap()
+                < cleanup.find("MiSTer_MagiKDev.rollback").unwrap()
+        );
+        assert!(platform_rollback_script().contains("MiSTer.ini.platform-rollback"));
         fs::remove_dir_all(stage).unwrap();
     }
 

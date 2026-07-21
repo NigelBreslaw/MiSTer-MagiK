@@ -3,14 +3,16 @@
 
 use serde::Serialize;
 use serde_json::Value;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
 const WORKFLOW: &str = "platform-bundle.yml";
 const WAIT_DEADLINE: Duration = Duration::from_secs(45 * 60);
 const POLL_INTERVAL: Duration = Duration::from_secs(15);
+const COMMAND_DEADLINE: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct Candidate {
@@ -19,6 +21,11 @@ pub struct Candidate {
     pub archive: PathBuf,
     pub manifest: PathBuf,
     pub reused: bool,
+    pub head_branch: String,
+    pub bundle_id: String,
+    pub main_identity: String,
+    pub fpga_identity: String,
+    pub kernel_identity: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -28,6 +35,7 @@ pub struct Run {
     pub status: String,
     pub conclusion: String,
     pub workflow: String,
+    pub head_branch: String,
 }
 
 pub trait PlatformCi {
@@ -44,18 +52,34 @@ pub fn resolve(
     destination: &Path,
     mut progress: impl FnMut(&str) -> Result<(), String>,
 ) -> Result<Candidate, String> {
-    if let Some(run) = exact_success(ci.runs(head_sha)?, head_sha)? {
+    if let Some(run) = exact_success(ci.runs(head_sha)?, branch, head_sha)? {
         progress("reusing exact verified platform candidate")?;
-        return download_and_verify(ci, repository, run.id, head_sha, destination, true);
+        return download_and_verify(
+            ci,
+            repository,
+            run.id,
+            head_sha,
+            &run.head_branch,
+            destination,
+            true,
+        );
     }
     progress("dispatching platform candidate workflow")?;
     ci.dispatch(branch)?;
     let started = Instant::now();
     while started.elapsed() < WAIT_DEADLINE {
         let runs = ci.runs(head_sha)?;
-        if let Some(run) = exact_success(runs.clone(), head_sha)? {
+        if let Some(run) = exact_success(runs.clone(), branch, head_sha)? {
             progress("platform candidate workflow completed")?;
-            return download_and_verify(ci, repository, run.id, head_sha, destination, false);
+            return download_and_verify(
+                ci,
+                repository,
+                run.id,
+                head_sha,
+                &run.head_branch,
+                destination,
+                false,
+            );
         }
         if runs.iter().any(|run| {
             run.head_sha == head_sha && run.status == "completed" && run.conclusion != "success"
@@ -68,11 +92,12 @@ pub fn resolve(
     Err("platform CI workflow exceeded its 2700s deadline".into())
 }
 
-fn exact_success(runs: Vec<Run>, head_sha: &str) -> Result<Option<Run>, String> {
+fn exact_success(runs: Vec<Run>, branch: &str, head_sha: &str) -> Result<Option<Run>, String> {
     let mut matching: Vec<_> = runs
         .into_iter()
         .filter(|run| {
             run.head_sha == head_sha
+                && run.head_branch == branch
                 && run.workflow == WORKFLOW
                 && run.status == "completed"
                 && run.conclusion == "success"
@@ -87,6 +112,7 @@ fn download_and_verify(
     repository: &Path,
     run_id: u64,
     head_sha: &str,
+    head_branch: &str,
     destination: &Path,
     reused: bool,
 ) -> Result<Candidate, String> {
@@ -95,16 +121,18 @@ fn download_and_verify(
     ci.download(run_id, destination)?;
     let archive = find_named(destination, "mister-magik-platform-", ".zip")?;
     let manifest = find_exact(destination, "platform-bundle-v0.2.json")?;
-    let status = Command::new("python3")
+    let mut verify = Command::new("python3");
+    verify
         .arg(repository.join("scripts/release/platform/platform-bundle.py"))
         .arg("verify")
         .arg(&archive)
         .arg("--manifest")
         .arg(&manifest)
-        .current_dir(repository)
-        .status()
-        .map_err(|error| format!("cannot verify platform candidate: {error}"))?;
-    if !status.success() {
+        .current_dir(repository);
+    if !bounded_output(verify, "platform candidate verification", COMMAND_DEADLINE)?
+        .status
+        .success()
+    {
         return Err("downloaded platform candidate failed verification".into());
     }
     let payload: Value = serde_json::from_slice(
@@ -120,12 +148,25 @@ fn download_and_verify(
     if origin_sha.is_some_and(|sha| sha != head_sha) {
         return Err("platform candidate manifest does not match the requested commit".into());
     }
+    let required = |name: &str| {
+        payload
+            .get(name)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| format!("platform candidate manifest is missing {name}"))
+    };
     Ok(Candidate {
         run_id,
         head_sha: head_sha.into(),
         archive,
         manifest,
         reused,
+        head_branch: head_branch.into(),
+        bundle_id: required("bundle_id")?,
+        main_identity: required("main_input_sha256")?,
+        fpga_identity: required("fpga_input_sha256")?,
+        kernel_identity: required("kernel_input_sha256")?,
     })
 }
 
@@ -213,11 +254,9 @@ pub fn resolve_repository(
 }
 
 fn command_text(repository: &Path, program: &str, args: &[&str]) -> Result<String, String> {
-    let output = Command::new(program)
-        .args(args)
-        .current_dir(repository)
-        .output()
-        .map_err(|error| format!("cannot run {program}: {error}"))?;
+    let mut command = Command::new(program);
+    command.args(args).current_dir(repository);
+    let output = bounded_output(command, program, COMMAND_DEADLINE)?;
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
     }
@@ -226,23 +265,22 @@ fn command_text(repository: &Path, program: &str, args: &[&str]) -> Result<Strin
 
 impl PlatformCi for GhPlatformCi {
     fn runs(&mut self, head_sha: &str) -> Result<Vec<Run>, String> {
-        let output = Command::new("gh")
-            .args([
-                "run",
-                "list",
-                "--repo",
-                &self.repository_name,
-                "--workflow",
-                WORKFLOW,
-                "--commit",
-                head_sha,
-                "--limit",
-                "20",
-                "--json",
-                "databaseId,headSha,status,conclusion,workflowName",
-            ])
-            .output()
-            .map_err(|error| format!("cannot list platform CI runs: {error}"))?;
+        let mut command = Command::new("gh");
+        command.args([
+            "run",
+            "list",
+            "--repo",
+            &self.repository_name,
+            "--workflow",
+            WORKFLOW,
+            "--commit",
+            head_sha,
+            "--limit",
+            "20",
+            "--json",
+            "databaseId,headSha,headBranch,status,conclusion,workflowName",
+        ]);
+        let output = bounded_output(command, "platform CI run listing", COMMAND_DEADLINE)?;
         if !output.status.success() {
             return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
         }
@@ -258,27 +296,29 @@ impl PlatformCi for GhPlatformCi {
                     status: row["status"].as_str().unwrap_or_default().into(),
                     conclusion: row["conclusion"].as_str().unwrap_or_default().into(),
                     workflow: WORKFLOW.into(),
+                    head_branch: row["headBranch"].as_str().unwrap_or_default().into(),
                 })
             })
             .collect()
     }
 
     fn dispatch(&mut self, branch: &str) -> Result<(), String> {
-        let status = Command::new("gh")
-            .args([
-                "workflow",
-                "run",
-                WORKFLOW,
-                "--repo",
-                &self.repository_name,
-                "--ref",
-                branch,
-                "-f",
-                "publish=false",
-            ])
-            .status()
-            .map_err(|error| format!("cannot dispatch platform CI workflow: {error}"))?;
-        if status.success() {
+        let mut command = Command::new("gh");
+        command.args([
+            "workflow",
+            "run",
+            WORKFLOW,
+            "--repo",
+            &self.repository_name,
+            "--ref",
+            branch,
+            "-f",
+            "publish=false",
+        ]);
+        if bounded_output(command, "platform CI dispatch", COMMAND_DEADLINE)?
+            .status
+            .success()
+        {
             Ok(())
         } else {
             Err("platform CI workflow dispatch failed".into())
@@ -286,7 +326,8 @@ impl PlatformCi for GhPlatformCi {
     }
 
     fn download(&mut self, run_id: u64, destination: &Path) -> Result<(), String> {
-        let status = Command::new("gh")
+        let mut command = Command::new("gh");
+        command
             .args([
                 "run",
                 "download",
@@ -297,15 +338,72 @@ impl PlatformCi for GhPlatformCi {
                 "platform-bundle-*-candidate",
                 "--dir",
             ])
-            .arg(destination)
-            .status()
-            .map_err(|error| format!("cannot download platform candidate: {error}"))?;
-        if status.success() {
+            .arg(destination);
+        if bounded_output(command, "platform candidate download", COMMAND_DEADLINE)?
+            .status
+            .success()
+        {
             Ok(())
         } else {
             Err("platform candidate download failed".into())
         }
     }
+}
+
+fn bounded_output(mut command: Command, label: &str, deadline: Duration) -> Result<Output, String> {
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("cannot start {label}: {error}"))?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| format!("cannot capture {label} stdout"))?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| format!("cannot capture {label} stderr"))?;
+    let stdout_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout.read_to_end(&mut bytes).map(|_| bytes)
+    });
+    let stderr_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stderr.read_to_end(&mut bytes).map(|_| bytes)
+    });
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if started.elapsed() < deadline => thread::sleep(Duration::from_millis(100)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "{label} exceeded its {}s deadline",
+                    deadline.as_secs()
+                ));
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("cannot wait for {label}: {error}"));
+            }
+        }
+    };
+    let stdout = stdout_reader
+        .join()
+        .map_err(|_| format!("{label} stdout reader failed"))?
+        .map_err(|error| format!("cannot read {label} stdout: {error}"))?;
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| format!("{label} stderr reader failed"))?
+        .map_err(|error| format!("cannot read {label} stderr: {error}"))?;
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
 }
 
 #[cfg(test)]
@@ -341,6 +439,7 @@ mod tests {
             status: "completed".into(),
             conclusion: conclusion.into(),
             workflow: WORKFLOW.into(),
+            head_branch: "main".into(),
         }
     }
 
@@ -348,6 +447,7 @@ mod tests {
     fn exact_success_prefers_newest_matching_run() {
         let selected = exact_success(
             vec![run(1, "wanted", "success"), run(2, "wanted", "success")],
+            "main",
             "wanted",
         )
         .unwrap()
@@ -359,10 +459,20 @@ mod tests {
     fn stale_wrong_commit_and_failed_runs_are_not_reused() {
         assert!(exact_success(
             vec![run(1, "stale", "success"), run(2, "wanted", "failure")],
+            "main",
             "wanted"
         )
         .unwrap()
         .is_none());
+    }
+
+    #[test]
+    fn successful_run_from_wrong_branch_is_not_reused() {
+        let mut candidate = run(1, "wanted", "success");
+        candidate.head_branch = "other".into();
+        assert!(exact_success(vec![candidate], "main", "wanted")
+            .unwrap()
+            .is_none());
     }
 
     #[test]

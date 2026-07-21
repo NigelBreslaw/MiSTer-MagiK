@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::model::{Intent, Plan};
+use crate::model::{Intent, Operation, Plan, Risk};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -274,11 +274,50 @@ impl BuildReceipt {
 impl DeploymentPlan {
     #[must_use]
     pub fn as_evidence_plan(&self, intent: Intent) -> Plan {
-        let external_requirements = Vec::new();
+        let mut inputs = vec![
+            format!("kind={}", self.kind.label()),
+            format!("recipe={:?}", self.recipe),
+            format!("profile={}", self.profile),
+            format!("ui_scope={}", self.ui_scope.label()),
+            format!("layout={}", self.layout),
+            format!("artifact={}", self.build.artifact.display()),
+        ];
+        inputs.extend(
+            self.platform_components
+                .iter()
+                .map(|value| format!("component={value}")),
+        );
+        inputs.extend(
+            self.changed_paths
+                .iter()
+                .map(|path| format!("changed={}", path.display())),
+        );
+        if let Some(candidate) = &self.platform_candidate {
+            inputs.extend([
+                format!("ci_run_id={}", candidate.run_id),
+                format!("ci_head_sha={}", candidate.head_sha),
+                format!("ci_head_branch={}", candidate.head_branch),
+                format!("bundle_id={}", candidate.bundle_id),
+                format!("main_identity={}", candidate.main_identity),
+                format!("fpga_identity={}", candidate.fpga_identity),
+                format!("kernel_identity={}", candidate.kernel_identity),
+                format!("ci_archive={}", candidate.archive.display()),
+                format!("ci_manifest={}", candidate.manifest.display()),
+            ]);
+        }
         Plan {
             intent,
-            operations: Vec::new(),
-            external_requirements,
+            operations: vec![Operation {
+                id: format!("deploy.{}", self.kind.label()),
+                title: format!("Deploy {} installation", self.kind.label()),
+                risk: Risk::DeviceWrite,
+                program: "scripts/agent".into(),
+                args: vec!["deploy".into()],
+                reason: "inferred deployment transaction".into(),
+                failure_hint: "inspect the recorded deployment phases and rollback result".into(),
+                inputs,
+            }],
+            external_requirements: Vec::new(),
         }
     }
 }
