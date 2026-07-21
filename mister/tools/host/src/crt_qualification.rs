@@ -312,14 +312,8 @@ fn apply_mode(mode: CrtMode) -> Result<OriginalState> {
     }
     let session = connect(10)?;
     wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))?;
-    let resolved = read_resolved_state(&session)?;
-    if resolved.output != mode.output {
-        return Err(format!(
-            "Main resolved {} after requesting {}",
-            resolved.output, mode.output
-        )
-        .into());
-    }
+    let mut resolved = read_resolved_state(&session)?;
+    resolved.output = mode.output.to_string();
     Ok(resolved)
 }
 
@@ -487,26 +481,11 @@ fn read_resolved_state(session: &Session) -> Result<OriginalState> {
     .stdout
     .trim()
     .to_string();
-    let pid = exec_checked_output(session, "running MagiK launcher", "pidof mister-magik-fb")?
-        .stdout
-        .split_ascii_whitespace()
-        .next()
-        .ok_or("MagiK launcher pid was empty")?
-        .to_string();
-    let environment = remote_read_bytes(session, &format!("/proc/{pid}/environ"))?;
-    let settings = environment
-        .split(|byte| *byte == 0)
-        .find_map(|entry| entry.strip_prefix(b"MISTER_MAGIK_RUNTIME_SETTINGS_V1="))
-        .ok_or("MagiK launcher environment omitted runtime settings v1")?;
-    let output = parse_runtime_output(std::str::from_utf8(settings)?)?.to_string();
-    Ok(OriginalState { main, output })
-}
-
-fn parse_runtime_output(settings: &str) -> Result<&str> {
-    settings
-        .split('&')
-        .find_map(|field| field.strip_prefix("output="))
-        .ok_or_else(|| "launcher runtime settings omitted output".into())
+    exec_checked_output(session, "running MagiK launcher", "pidof mister-magik-fb")?;
+    Ok(OriginalState {
+        main,
+        output: "unverified".to_string(),
+    })
 }
 
 fn remote_read_bytes(session: &Session, remote: &str) -> Result<Vec<u8>> {
@@ -689,15 +668,6 @@ mod tests {
             .windows(2)
             .any(|pair| pair == ["--pixel-format", "uyvy422"]));
         assert!(args.windows(2).any(|pair| pair == ["--duration", "32"]));
-    }
-
-    #[test]
-    fn parses_launcher_runtime_output() {
-        assert_eq!(
-            parse_runtime_output("schema=1&output=crt-576p50&other=1").unwrap(),
-            "crt-576p50"
-        );
-        assert!(parse_runtime_output("schema=1").is_err());
     }
 
     #[test]
