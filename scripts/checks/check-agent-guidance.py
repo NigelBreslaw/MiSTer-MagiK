@@ -77,8 +77,30 @@ def main() -> int:
                     f"{document.relative_to(ROOT)} contains {command!r}"
                 )
 
+    deployment_forbidden = (
+        "scripts/deploy-rust.sh",
+        "scripts/deploy-platform.sh",
+        "apps/mister/build-arm.sh --device",
+        "scripts/mister agent deploy-magik-bin",
+    )
+    agent_facing_guidance = (
+        ROOT / "AGENTS.md",
+        ROOT / "docs/agents/README.md",
+        ROOT / "docs/agents/task-map.md",
+        ROOT / "apps/mister/AGENTS.md",
+        ROOT / "scripts/AGENTS.md",
+    )
+    for document in agent_facing_guidance:
+        text = document.read_text(encoding="utf-8")
+        for command in deployment_forbidden:
+            if command in text:
+                raise SystemExit(
+                    f"agent deployment guidance bypasses scripts/agent deploy: "
+                    f"{document.relative_to(ROOT)} contains {command!r}"
+                )
+
     root_guidance = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
-    for command in ("scripts/agent plan", "scripts/agent check", "scripts/agent verify"):
+    for command in ("scripts/agent plan", "scripts/agent check", "scripts/agent verify", "scripts/agent deploy"):
         if command not in root_guidance:
             raise SystemExit(f"root agent workflow missing: {command}")
 

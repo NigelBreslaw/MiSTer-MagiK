@@ -97,8 +97,7 @@ scripts/agent plan
 scripts/agent check
 scripts/agent verify
 scripts/agent commit -m "Describe the completed change"
-apps/mister/build-arm.sh --device
-scripts/deploy-rust.sh
+scripts/agent deploy
 scripts/mister status
 ```
 
@@ -109,6 +108,10 @@ Do not narrate successful operation counts or names: report only that validation
 is running, passed, or failed with the actionable summary. Agents must not
 construct Cargo, test, lint, host-validation, or Apple-container commands
 directly; the harness selects, times, deduplicates, and records them.
+“Build and deploy” always means `scripts/agent deploy`. The CLI owns build
+profile, scope, artifacts, CI qualification, transport, activation, rollback,
+and verification; agents must not invoke deployment/build implementation
+scripts or supply deployment feature flags.
 `scripts/agent commit` is the only agent-facing staging and commit interface;
 invoke it with first-attempt escalation because it writes `.git`. Do not stage
 or commit with raw Git when the task baseline workflow is available.

@@ -2,6 +2,7 @@
 # Copyright (C) 2026 Nigel Breslaw
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+# INTERNAL compatibility implementation. AI agents must use `scripts/agent deploy`.
 # Cross-build the Rust frontend and deploy the binary to the MiSTer.
 #
 # This is a development-layout file deploy: when Main_MiSTer supervises the

@@ -2,6 +2,7 @@
 # Copyright (C) 2026 Nigel Breslaw
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+# INTERNAL compatibility implementation. AI agents must use `scripts/agent deploy`.
 # Build and atomically deploy the complete MiSTer MagiK development platform.
 set -euo pipefail
 

@@ -13,6 +13,14 @@ pub enum DeploymentKind {
     Platform,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DeploymentRecipe {
+    Canonical,
+    Profiling,
+    Acceptance,
+}
+
 impl DeploymentKind {
     #[must_use]
     pub fn label(self) -> &'static str {
@@ -44,6 +52,7 @@ impl UiScope {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct DeploymentPlan {
+    pub recipe: DeploymentRecipe,
     pub kind: DeploymentKind,
     pub profile: &'static str,
     pub ui_scope: UiScope,
@@ -183,6 +192,7 @@ pub fn plan(repository: &Path, mut paths: Vec<PathBuf>) -> Result<DeploymentPlan
     }
     let ui_scope = ui_scope(&paths);
     Ok(DeploymentPlan {
+        recipe: DeploymentRecipe::Canonical,
         kind: if components.is_empty() {
             DeploymentKind::Runtime
         } else {
