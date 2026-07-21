@@ -15,7 +15,7 @@ usage() {
   cat <<'EOF'
 Usage: scripts/cpu-flamegraph-scene.sh SCENE [SECS] [LABEL]
 
-Builds a `apps/mister/build-arm.sh --profile` binary, deploys it, runs
+Builds a `scripts/agent build runtime-profile` binary, deploys it, runs
 an in-process CPU sampling smoke test, then runs the scene with
 `MISTER_PPROF=1` and pulls the SVG flamegraph.
 

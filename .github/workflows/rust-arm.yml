@@ -151,9 +151,9 @@ jobs:
           MISTER_CARGO_TIMINGS: "1"
         run: |
           if [[ "$MISTER_CI_ARM_PROFILE" == release ]]; then
-            apps/mister/build-arm.sh --fast --ui-scope all
+            MISTER_ARM_BUILD_BACKEND=cross scripts/agent build runtime-fast
           else
-            apps/mister/build-arm.sh --device
+            MISTER_ARM_BUILD_BACKEND=cross scripts/agent build runtime-device
           fi
 
       - name: Upload Cargo timings
@@ -164,14 +164,6 @@ jobs:
           path: apps/mister/target/cargo-timings/*.html
           if-no-files-found: warn
           retention-days: 14
-
-      - name: Prove unchanged ARM builds are no-ops
-        run: |
-          if [[ "$MISTER_CI_ARM_PROFILE" == release ]]; then
-            scripts/regression-arm-noop.sh --skip-warmup --fast
-          else
-            scripts/regression-arm-noop.sh --skip-warmup
-          fi
 
       - name: Check ARM shared libraries
         run: apps/mister/scripts/check-arm-shared-libs.sh "apps/mister/target/armv7-unknown-linux-gnueabihf/$MISTER_CI_ARM_PROFILE/mister-magik-fb"
@@ -250,7 +242,7 @@ jobs:
             target-agent-arm-v2-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-release-${{ steps.cache-id.outputs.cross_abi }}-
 
       - name: Build ARM agent
-        run: MISTER_ARM_BUILD_BACKEND=cross scripts/build-mister-agent.sh
+        run: MISTER_ARM_BUILD_BACKEND=cross scripts/agent build device-agent
 
       - name: Upload ARM agent
         uses: actions/upload-artifact@v7

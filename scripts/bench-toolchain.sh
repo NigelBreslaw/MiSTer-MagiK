@@ -860,7 +860,10 @@ if [[ "$SKIP_BUILD" -eq 0 ]]; then
   fi
   echo "==> Cross-build (timed)"
   build_log="$(mktemp)"
-  HOST_COMPILE_SEC="$( ( time -p env MISTER_UI_BUILD_SCOPE="$UI_SCOPE" "$RUST_DIR/build-arm.sh" "${BUILD_FLAG[@]}" ) 2>&1 | tee "$build_log" | awk '/^real /{print $2}')"
+  build_intent=runtime-device
+  [[ " ${BUILD_FLAG[*]} " == *" --bench-tools "* ]] && build_intent=runtime-benchmark
+  [[ " ${BUILD_FLAG[*]} " == *" --all-scenes "* ]] && build_intent=runtime-experiments
+  HOST_COMPILE_SEC="$( ( time -p "$ROOT/scripts/agent" build "$build_intent" ) 2>&1 | tee "$build_log" | awk '/^real /{print $2}')"
   HOST_NOTES="profile=$BUILD_PROFILE; ui_scope=$UI_SCOPE; prep=suspend-main-ui; design=runtime; render=runtime; font=PressStart2P; fpga-scale-ui=960x540-to-1920x1080"
   rm -f "$build_log"
   [[ -f "$BIN" ]] || { echo "Build failed: missing $BIN" >&2; exit 1; }

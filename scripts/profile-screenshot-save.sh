@@ -22,7 +22,7 @@ usage() {
 Usage: scripts/profile-screenshot-save.sh LABEL --system ID [--iterations N] [--size-bytes BYTES] [--replace-label]
 
 Benchmarks screenshot pack save/publish paths inside a deployed bench-tools
-MagiK binary on the MiSTer. Build with `apps/mister/build-arm.sh --bench-tools`
+MagiK binary on the MiSTer. Build with `scripts/agent build runtime-benchmark`
 before deploying this benchmark binary. This excludes network download,
 decompression, and checksum work so the progress-capable save path can be
 measured directly.

@@ -86,7 +86,7 @@ def main() -> int:
         if fragment not in distribution:
             fail(f"distribution is missing canonical cross-image setup: {fragment}")
     if distribution.index('docker pull "${{ steps.cache-id.outputs.cross_image }}"') > distribution.index(
-        "apps/mister/build-arm.sh --device"
+        "scripts/agent build runtime-device"
     ):
         fail("distribution pulls the cross image after the ARM build starts")
 

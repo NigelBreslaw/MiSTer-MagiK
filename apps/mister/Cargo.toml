@@ -77,7 +77,7 @@ panic = "abort"
 [profile.release-device]
 # Full MiSTer release: fat LTO + two CGUs, preserving global optimization while
 # allowing enough parallel codegen to shorten the final release-build tail.
-# Cortex-A9 tuning is applied by build-arm.sh for every optimized ARM build.
+# Cortex-A9 tuning is applied by the typed agent-cli ARM build state machine.
 inherits = "release"
 lto = "fat"
 codegen-units = 2

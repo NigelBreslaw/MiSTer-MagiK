@@ -70,6 +70,7 @@ pub enum Intent {
     Interactive,
     Doctor,
     Deliver { task_id: String },
+    Build { intent: crate::build::BuildIntent },
     DeployRecipe { recipe: String },
 }
 
@@ -79,6 +80,7 @@ impl Intent {
         match self {
             Self::Commit { .. } | Self::Verify { .. } => Risk::LocalWrite,
             Self::Deliver { .. } | Self::DeployRecipe { .. } => Risk::DeviceWrite,
+            Self::Build { .. } => Risk::LocalWrite,
             _ => Risk::ReadOnly,
         }
     }
@@ -106,7 +108,8 @@ impl Operation {
             ActionKind::Cargo
         } else if self.program == "git" {
             ActionKind::Git
-        } else if self.program.ends_with("build-arm.sh") {
+        } else if self.id.starts_with("arm.") || self.args.first().is_some_and(|arg| arg == "build")
+        {
             ActionKind::AppleContainer
         } else if self.program == "gh" {
             ActionKind::PlatformCi

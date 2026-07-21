@@ -8,7 +8,7 @@ use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -172,24 +172,109 @@ fn generate_token() -> Result<String> {
 }
 
 fn build_agent() -> Result<PathBuf> {
-    let output = Command::new("scripts/build-mister-agent.sh").output()?;
-    if !output.status.success() {
-        return Err(format!(
-            "could not build current MiSTer agent: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )
-        .into());
+    const TARGET: &str = "armv7-unknown-linux-gnueabihf";
+    let repository = env::current_dir()?;
+    let path = repository
+        .join("mister/tools/agent/target")
+        .join(TARGET)
+        .join("release/mister-magik-agent");
+    let explicit_cross = env::var("MISTER_ARM_BUILD_BACKEND").as_deref() == Ok("cross")
+        || env::var("GITHUB_ACTIONS").as_deref() == Ok("true");
+    if explicit_cross {
+        let mut command = Command::new("cross");
+        command
+            .current_dir(repository.join("mister/tools/agent"))
+            .env("RUSTC_WRAPPER", "")
+            .env("RUSTFLAGS", "-D warnings -C target-cpu=cortex-a9")
+            .args(["build", "--target", TARGET, "--release", "--locked"]);
+        run_agent_build_bounded(&mut command)?;
+    } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        let home = env::var_os("HOME")
+            .map(PathBuf::from)
+            .ok_or("HOME is unavailable")?;
+        let target_dir = PathBuf::from("/private/tmp/mister-magik-agent-apple-container-target");
+        fs::create_dir_all(&target_dir)?;
+        let cpus = thread::available_parallelism()?.get().to_string();
+        let image = "mister-magik-cross-armv7:ubuntu20-arm64";
+        let mut probe = Command::new("container");
+        probe.args(["run", "--arch", "arm64", "--rm", image, "true"]);
+        if !probe.status().is_ok_and(|status| status.success()) {
+            let mut build = Command::new("container");
+            build.current_dir(repository.join("apps/mister")).args([
+                "build",
+                "--arch",
+                "arm64",
+                "--file",
+                "Dockerfile.cross-armv7",
+                "--tag",
+                image,
+                ".",
+            ]);
+            run_agent_build_bounded(&mut build)?;
+        }
+        let mut command = Command::new("container");
+        command
+            .args(["run", "--arch", "arm64", "--rm", "--cpus"])
+            .arg(&cpus)
+            .args(["--memory", "8g", "--env", "CARGO_HOME=/cargo", "--env", "CARGO_TARGET_DIR=/target"])
+            .arg("--env")
+            .arg(format!("CARGO_BUILD_JOBS={cpus}"))
+            .args(["--env", "RUSTC_WRAPPER=", "--env", "RUSTFLAGS=-D warnings -C target-cpu=cortex-a9"])
+            .arg("--volume")
+            .arg(format!("{}:/cargo", home.join(".cargo").display()))
+            .arg("--volume")
+            .arg(format!(
+                "{}:/rust:ro",
+                home.join(".rustup/toolchains/stable-aarch64-unknown-linux-gnu")
+                    .display()
+            ))
+            .arg("--volume")
+            .arg(format!("{}:/project", repository.display()))
+            .arg("--volume")
+            .arg(format!("{}:/target", target_dir.display()))
+            .args([
+                "--workdir",
+                "/project/mister/tools/agent",
+                image,
+                "sh",
+                "-lc",
+                "PATH=/rust/bin:$PATH cargo build --target armv7-unknown-linux-gnueabihf --release --locked",
+            ]);
+        run_agent_build_bounded(&mut command)?;
+        let built = target_dir.join(TARGET).join("release/mister-magik-agent");
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::copy(built, &path)?;
+    } else {
+        return Err("agent build requires Apple container locally; cross is reserved for explicit CI/operator comparison".into());
     }
-    let path = String::from_utf8(output.stdout)?
-        .lines()
-        .last()
-        .ok_or("agent build did not report its artifact")?
-        .to_string();
-    let path = PathBuf::from(path);
     if !path.is_file() {
         return Err("agent build artifact is missing".into());
     }
     Ok(path)
+}
+
+fn run_agent_build_bounded(command: &mut Command) -> Result<()> {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+    let started = Instant::now();
+    let deadline = Duration::from_secs(30 * 60);
+    loop {
+        match child.try_wait()? {
+            Some(status) if status.success() => return Ok(()),
+            Some(status) => return Err(format!("agent build failed with {status}").into()),
+            None if started.elapsed() < deadline => thread::sleep(Duration::from_millis(100)),
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("agent build exceeded its 1800s deadline".into());
+            }
+        }
+    }
 }
 
 fn install_agent(session: &ssh2::Session, token: &str) -> Result<()> {

@@ -4,7 +4,7 @@
 //! Optional CPU sampling profiler (`--features profile`, env `MISTER_PPROF=1`).
 //!
 //! Uses `SIGPROF`/`ITIMER_PROF` sampling from the `pprof` crate — no `perf` CLI required.
-//! Build with `build-arm.sh --profile`, run with `MISTER_PPROF=1`, pull the SVG
+//! Build with `scripts/agent build runtime-profile`, run with `MISTER_PPROF=1`, pull the SVG
 //! and/or folded stack output.
 
 #[derive(Debug, Clone)]
@@ -156,7 +156,7 @@ mod stub {
         if std::env::var("MISTER_PPROF").ok().as_deref() == Some("1") {
             crate::ui_errln!(
                 "cpu_profile: MISTER_PPROF=1 ignored — rebuild with \
-                 `build-arm.sh --profile` (Cargo feature `profile`)"
+                 `scripts/agent build runtime-profile` (Cargo feature `profile`)"
             );
         }
         None

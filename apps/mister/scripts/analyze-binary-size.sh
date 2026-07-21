@@ -5,7 +5,8 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-. "$HERE/scripts/apple-container-resources.sh"
+apple_container_cpus() { getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.logicalcpu; }
+apple_container_memory() { printf '8g\n'; }
 ROOT="$(cd "$HERE/.." && pwd)"
 BIN="${1:-$HERE/target/armv7-unknown-linux-gnueabihf/release-device-profile/mister-magik-fb}"
 OUT_DIR="${2:-$ROOT/build/binary-size-analysis}"
@@ -14,7 +15,7 @@ APPLE_IMAGE="${MISTER_APPLE_CONTAINER_IMAGE:-mister-magik-cross-armv7:ubuntu20-a
 
 if [ ! -f "$BIN" ]; then
   echo "ERROR: binary missing: $BIN" >&2
-  echo "Hint: build an unstripped diagnostic binary first: apps/mister/build-arm.sh --profile" >&2
+  echo "Hint: build an unstripped diagnostic binary first: scripts/agent build runtime-profile" >&2
   exit 1
 fi
 

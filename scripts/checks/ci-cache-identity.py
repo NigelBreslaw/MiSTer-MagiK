@@ -114,7 +114,7 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "apps/mister/ui-generated/Cargo.toml",
         "apps/mister/ui-generated/build.rs",
         "apps/mister/ui-generated/src/**/*.rs",
-        "apps/mister/build-arm.sh",
+        "agent-cli/src/build.rs",
         "apps/mister/Cross.toml",
         "apps/mister/Dockerfile.cross-armv7",
         "apps/mister/scripts/build-minimal-ffmpeg.sh",
@@ -129,7 +129,7 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "crates/framebuffer-stream/Cargo.lock",
         "crates/framebuffer-stream/Cargo.toml",
         "crates/framebuffer-stream/src/**/*.rs",
-        "scripts/build-mister-agent.sh",
+        "agent-cli/src/build.rs",
     ),
     "ffmpeg": (
         "apps/mister/Cross.toml",

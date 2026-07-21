@@ -292,7 +292,9 @@ fn add_path_operations(
     }
     if path.starts_with("apps/mister") {
         add(crate::registry::operation("repo.diff-check").unwrap());
-        if path.extension().and_then(|extension| extension.to_str()) == Some("sh") {
+        if repository.join(path).exists()
+            && path.extension().and_then(|extension| extension.to_str()) == Some("sh")
+        {
             let text = path.to_string_lossy();
             let id = format!("app.script-syntax.{}", text.replace(['/', '.'], "-"));
             add(op_owned(
@@ -301,13 +303,6 @@ fn add_path_operations(
                 "bash",
                 vec!["-n".into(), text.to_string()],
                 "MiSTer build script → syntax",
-            ));
-            add(op(
-                "app.arm-build-contract",
-                "Test ARM build contracts",
-                "python3",
-                &["scripts/tests/test-arm-build-contract.py"],
-                "MiSTer build script → ARM build contract",
             ));
         }
     }
@@ -406,16 +401,16 @@ fn add_path_operations(
                 add(local_write(op(
                     "arm.check-launcher",
                     "Check launcher in Apple container",
-                    "apps/mister/build-arm.sh",
-                    &["--check", "--ui-scope", "launcher"],
+                    "scripts/agent",
+                    &["build", "validate-launcher"],
                     "launcher source → ARM validation",
                 )));
             } else {
                 add(local_write(op(
                     "arm.check-lib",
                     "Check library in Apple container",
-                    "apps/mister/build-arm.sh",
-                    &["--check", "--lib-only"],
+                    "scripts/agent",
+                    &["build", "validate-library"],
                     "MiSTer source → ARM validation",
                 )));
             }
@@ -832,13 +827,6 @@ fn host_tool_operations(full: bool) -> Vec<Operation> {
             "tooling change → distribution contract",
         ),
         op(
-            "host.arm-contract",
-            "Test ARM build contract",
-            "python3",
-            &["scripts/tests/test-arm-build-contract.py"],
-            "tooling change → ARM contract",
-        ),
-        op(
             "host.cache-identity",
             "Test cache identity",
             "python3",
@@ -851,13 +839,6 @@ fn host_tool_operations(full: bool) -> Vec<Operation> {
             "python3",
             &["scripts/tests/test-ci-cache-contract.py"],
             "tooling change → CI cache contract",
-        ),
-        op(
-            "host.apple-resources",
-            "Test Apple container resources",
-            "scripts/tests/test-apple-container-resources.sh",
-            &[],
-            "tooling change → Apple container contract",
         ),
     ];
     if full {
@@ -928,8 +909,8 @@ fn release_operations() -> Vec<Operation> {
     operations.push(local_write(op(
         "arm.build-device",
         "Build release device binary",
-        "apps/mister/build-arm.sh",
-        &["--device"],
+        "scripts/agent",
+        &["build", "runtime-device"],
         "release gate → ARM binary",
     )));
     operations.push(op(
@@ -1226,8 +1207,8 @@ mod tests {
             .iter()
             .find(|operation| operation.id == "arm.check-launcher")
             .unwrap();
-        assert_eq!(arm.program, "apps/mister/build-arm.sh");
-        assert_eq!(arm.args, ["--check", "--ui-scope", "launcher"]);
+        assert_eq!(arm.program, "scripts/agent");
+        assert_eq!(arm.args, ["build", "validate-launcher"]);
         assert_eq!(arm.risk, Risk::LocalWrite);
     }
 

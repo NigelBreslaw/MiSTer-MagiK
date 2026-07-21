@@ -28,7 +28,7 @@ scripts/agent verify --paths \
   mister/tools/agent/src/main.rs \
   apps/mister/src/lib.rs
 
-apps/mister/build-arm.sh --device
+scripts/agent build runtime-device
 apps/mister/scripts/check-arm-shared-libs.sh \
   "$BIN"
 

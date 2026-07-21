@@ -428,8 +428,8 @@ run_build_case() {
 run_build_group() {
   local state
   for state in noop-warm touch-rust-bin touch-rust-core touch-slint-launcher touch-slint-shared touch-build-rs; do
-    run_build_case build-ui-fast "$state" 'apps/mister/build-arm.sh --fast'
-    run_build_case build-ui-device "$state" 'apps/mister/build-arm.sh --device'
+    run_build_case build-ui-fast "$state" 'scripts/agent build runtime-fast'
+    run_build_case build-ui-device "$state" 'scripts/agent build runtime-device'
   done
 }
 

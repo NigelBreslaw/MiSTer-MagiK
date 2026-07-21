@@ -10,8 +10,6 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
-
-const BUILD_DEADLINE: Duration = Duration::from_secs(30 * 60);
 const REMOTE_RUNTIME: &str = "/media/fat/mister-magik-dev/mister-magik-fb";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -108,12 +106,7 @@ impl RuntimeActions for ProcessActions<'_> {
     fn run(&mut self, phase: Phase) -> Result<(), String> {
         match phase {
             Phase::Resolve | Phase::Complete => Ok(()),
-            Phase::Build => run_bounded(
-                self.repository,
-                self.deployment.build.program,
-                &self.deployment.build.args,
-                BUILD_DEADLINE,
-            ),
+            Phase::Build => crate::build::execute_quiet(self.repository, &self.deployment.build),
             Phase::VerifyLocal => self.deployment.build.verify(self.repository).map(|_| ()),
             Phase::Snapshot => self.device.execute(DeviceRequest::Status).map(|_| ()),
             Phase::Stage => self
@@ -143,7 +136,7 @@ pub(crate) fn run_bounded(
     args: &[String],
     deadline: Duration,
 ) -> Result<(), String> {
-    let mut child = Command::new(repository.join(program))
+    let mut child = Command::new(program)
         .args(args)
         .current_dir(repository)
         .stdin(Stdio::null())
@@ -155,15 +148,8 @@ pub(crate) fn run_bounded(
     loop {
         match child.try_wait() {
             Ok(Some(status)) if status.success() => return Ok(()),
-            Ok(Some(status)) => {
-                return Err(format!(
-                    "{program} exited with {}",
-                    status.code().unwrap_or(1)
-                ))
-            }
-            Ok(None) if started.elapsed() < deadline => {
-                thread::sleep(Duration::from_millis(100));
-            }
+            Ok(Some(status)) => return Err(format!("{program} exited with {status}")),
+            Ok(None) if started.elapsed() < deadline => thread::sleep(Duration::from_millis(100)),
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();

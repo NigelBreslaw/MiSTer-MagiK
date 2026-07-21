@@ -33,7 +33,7 @@ required = (
     "- release",
     "fetch-depth: 0",
     "github.ref != 'refs/heads/main'",
-    "apps/mister/build-arm.sh --device",
+    "scripts/agent build runtime-device",
     "environment:\n      name: publish-${{ github.event.inputs.release_channel }}",
     "contents: write",
     "gh release create",

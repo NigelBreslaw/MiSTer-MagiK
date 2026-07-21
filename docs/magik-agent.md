@@ -264,7 +264,7 @@ rows, and agent network health.
 Build and install:
 
 ```bash
-scripts/build-mister-agent.sh
+scripts/agent build device-agent
 scripts/mister-magik-agent.sh install
 ```
 

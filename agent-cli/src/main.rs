@@ -202,6 +202,10 @@ fn dispatch(
         Intent::Deliver { task_id } => {
             return deliver(evidence, repository, task_id, reporter);
         }
+        Intent::Build { intent } => {
+            let spec = agent_cli::build::BuildSpec::infer(*intent)?;
+            agent_cli::build::execute(repository, &spec, reporter)?;
+        }
         Intent::DeployRecipe { recipe } => {
             let deployment = agent_cli::deploy::recipe_plan(recipe)?;
             let plan = deployment.as_evidence_plan(intent.clone());

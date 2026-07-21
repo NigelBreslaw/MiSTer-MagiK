@@ -27,7 +27,7 @@ EOF
 }
 
 build_agent() {
-  "$HERE/scripts/build-mister-agent.sh"
+  "$HERE/scripts/agent" build device-agent
 }
 
 install_agent() {

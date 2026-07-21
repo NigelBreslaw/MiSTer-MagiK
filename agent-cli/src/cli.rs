@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use crate::build::BuildIntent;
 use crate::model::{Intent, Scope};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
@@ -48,6 +49,11 @@ pub enum Command {
     Verify(ScopeArgs),
     Doctor,
     Deliver,
+    #[command(hide = true)]
+    Build {
+        #[arg(value_enum)]
+        intent: BuildIntent,
+    },
     #[command(hide = true)]
     DeployRecipe {
         #[arg(value_parser = [
@@ -157,6 +163,7 @@ impl Cli {
             },
             Some(Command::Doctor) => Intent::Doctor,
             Some(Command::Deliver) => Intent::Deliver { task_id },
+            Some(Command::Build { intent }) => Intent::Build { intent },
             Some(Command::DeployRecipe { recipe }) => Intent::DeployRecipe { recipe },
         }
     }

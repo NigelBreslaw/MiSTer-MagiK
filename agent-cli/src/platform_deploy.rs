@@ -12,7 +12,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-const BUILD_DEADLINE: Duration = Duration::from_secs(30 * 60);
 const PREPARE_DEADLINE: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -151,12 +150,7 @@ impl PlatformActions for ProcessActions<'_> {
                 }
                 fs::create_dir_all(self.stage.join("fpga")).map_err(|e| e.to_string())
             }
-            Phase::Build => run_bounded(
-                self.repository,
-                self.deployment.build.program,
-                &self.deployment.build.args,
-                BUILD_DEADLINE,
-            ),
+            Phase::Build => crate::build::execute_quiet(self.repository, &self.deployment.build),
             Phase::VerifyLocal => {
                 self.deployment.build.verify(self.repository)?;
                 prepare_stage(

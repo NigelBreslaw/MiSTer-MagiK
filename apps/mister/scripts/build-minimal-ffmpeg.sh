@@ -5,7 +5,8 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-. "$HERE/scripts/apple-container-resources.sh"
+apple_container_cpus() { getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.logicalcpu; }
+apple_container_memory() { printf '8g\n'; }
 VERSION="${MISTER_FFMPEG_VERSION:-8.1.2}"
 WORK="$HERE/target/ffmpeg-minimal/armv7"
 SRC="$WORK/ffmpeg-$VERSION"

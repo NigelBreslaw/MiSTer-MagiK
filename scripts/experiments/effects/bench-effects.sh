@@ -240,7 +240,7 @@ BIN="$RUST_DIR/target/armv7-unknown-linux-gnueabihf/$BUILD_PROFILE/mister-magik-
 if [[ "$SKIP_BUILD" -eq 0 ]]; then
   echo "==> Cross-build (timed)"
   build_log="$(mktemp)"
-  HOST_COMPILE_SEC="$( ( time -p "$RUST_DIR/build-arm.sh" "${BUILD_FLAG[@]}" ) 2>&1 | tee "$build_log" | awk '/^real /{print $2}')"
+  HOST_COMPILE_SEC="$( ( time -p "$ROOT/scripts/agent" build runtime-experiments ) 2>&1 | tee "$build_log" | awk '/^real /{print $2}')"
   rm -f "$build_log"
 fi
 

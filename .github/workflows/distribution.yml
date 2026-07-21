@@ -228,7 +228,7 @@ jobs:
         env:
           MISTER_MAGIK_BUILD_NUMBER: ${{ needs.release-metadata.outputs.build-number }}
           MISTER_MAGIK_VERSION: ${{ needs.release-metadata.outputs.version }}
-        run: apps/mister/build-arm.sh --device
+        run: MISTER_ARM_BUILD_BACKEND=cross scripts/agent build runtime-device
 
       - name: Check ARM shared libraries
         run: apps/mister/scripts/check-arm-shared-libs.sh apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb
