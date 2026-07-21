@@ -48,7 +48,6 @@ pub struct ProgressEvent {
 pub struct ProgressGate {
     last_emit_ms: Option<u64>,
     last_phase: Option<String>,
-    last_percent_bucket: Option<u8>,
 }
 
 impl ProgressGate {
@@ -57,21 +56,15 @@ impl ProgressGate {
         now_ms: u64,
         kind: EventKind,
         phase: &str,
-        percent: Option<u8>,
+        _percent: Option<u8>,
     ) -> bool {
         let immediate = kind != EventKind::Progress || self.last_phase.as_deref() != Some(phase);
-        let bucket = percent.map(|value| value.min(100) / 10);
-        let advanced = bucket.is_some_and(|bucket| {
-            self.last_percent_bucket
-                .is_none_or(|previous| bucket > previous)
-        });
         let heartbeat = self
             .last_emit_ms
             .is_none_or(|last| now_ms.saturating_sub(last) >= HEARTBEAT_MS);
-        if immediate || advanced || heartbeat {
+        if immediate || heartbeat {
             self.last_emit_ms = Some(now_ms);
             self.last_phase = Some(phase.to_owned());
-            self.last_percent_bucket = bucket;
             true
         } else {
             false
@@ -171,10 +164,10 @@ mod tests {
         let mut gate = ProgressGate::default();
         assert!(gate.should_emit(0, EventKind::Started, "transfer", Some(0)));
         assert!(!gate.should_emit(1_000, EventKind::Progress, "transfer", Some(9)));
-        assert!(gate.should_emit(2_000, EventKind::Progress, "transfer", Some(10)));
+        assert!(!gate.should_emit(2_000, EventKind::Progress, "transfer", Some(10)));
         assert!(!gate.should_emit(2_100, EventKind::Progress, "transfer", Some(19)));
-        assert!(gate.should_emit(2_200, EventKind::Progress, "transfer", Some(20)));
-        assert!(gate.should_emit(12_200, EventKind::Progress, "transfer", Some(19)));
+        assert!(!gate.should_emit(2_200, EventKind::Progress, "transfer", Some(20)));
+        assert!(gate.should_emit(10_000, EventKind::Progress, "transfer", Some(20)));
         assert!(!gate.should_emit(13_000, EventKind::Progress, "transfer", Some(19)));
         assert!(gate.should_emit(13_001, EventKind::Progress, "verify", None));
     }

@@ -4,6 +4,7 @@
 use crate::evidence::{now_ms, Evidence};
 use crate::model::{Operation, Outcome, Plan};
 use crate::progress::{EventKind, Reporter};
+use crate::workflow::{Event, Machine, State};
 use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
 use std::hash::{Hash, Hasher};
@@ -45,20 +46,24 @@ pub fn execute_with_changes(
         reporter.emit(EventKind::Progress, "plan", "Nothing to check", Some(100))?;
         return Ok(Outcome::NoOp);
     }
-    let phase = match plan.intent {
+    let command = match plan.intent {
         crate::model::Intent::Verify { .. } => "verify",
         _ => "check",
     };
-    for (index, operation) in plan.operations.iter().enumerate() {
+    let mut machine = Machine::default();
+    for operation in &plan.operations {
         crate::policy::authorize(operation, plan.intent.risk()).map_err(|rejection| {
             format!(
                 "policy_rejected: {}: {}",
                 rejection.operation_id, rejection.reason
             )
         })?;
-        let percent = u8::try_from(index.saturating_mul(100) / plan.operations.len()).unwrap_or(0);
-        let message = format!("running {}/{}", index + 1, plan.operations.len());
-        reporter.emit(EventKind::Progress, phase, &message, Some(percent))?;
+        let state = State::from(operation.workflow_phase());
+        if machine.state() != state {
+            machine.apply(Event::Advance(state))?;
+            reporter.emit(EventKind::Progress, command, state.label(), None)?;
+        }
+        let heartbeat = state.label();
         let cache = operation_cache_key(repository, plan, operation, changes)?;
         if let Some((task_id, fingerprint)) = cache.as_ref() {
             if evidence.has_cached_operation(task_id, &operation.id, fingerprint)? {
@@ -76,9 +81,9 @@ pub fn execute_with_changes(
             request_id,
             repository,
             operation,
-            phase,
-            &message,
-            &format!("{phase}: failed at {}/{}", index + 1, plan.operations.len()),
+            command,
+            heartbeat,
+            &format!("{command}: failed"),
             reporter,
         )?;
         if operation.risk == crate::model::Risk::ReadOnly {
@@ -87,12 +92,8 @@ pub fn execute_with_changes(
             }
         }
     }
-    reporter.emit(
-        EventKind::Completed,
-        phase,
-        &format!("passed — {} checks", plan.operations.len()),
-        Some(100),
-    )?;
+    machine.apply(Event::Finish)?;
+    reporter.emit(EventKind::Completed, command, "passed", Some(100))?;
     Ok(Outcome::Passed)
 }
 
@@ -201,15 +202,6 @@ fn run_operation(
     }
     let first_output = read_log(&log_path)?;
     if cargo_dependency && is_offline_cache_miss(&first_output) {
-        reporter.emit(
-            EventKind::Warning,
-            operation_phase(operation),
-            &format!(
-                "dependency_cache_missing: {} — retrying locked dependencies with network",
-                operation.title
-            ),
-            None,
-        )?;
         let online_args = cargo_args(&operation.args, false);
         let online_start = std::fs::metadata(&log_path)
             .map_err(|error| error.to_string())?
@@ -441,16 +433,6 @@ fn read_log_from(path: &Path, start: u64) -> Result<String, String> {
     file.read_to_string(&mut text)
         .map_err(|error| error.to_string())?;
     Ok(text)
-}
-
-fn operation_phase(operation: &Operation) -> &'static str {
-    if operation.id.starts_with("arm.") {
-        "arm-build"
-    } else if operation.id.starts_with("release.") {
-        "release"
-    } else {
-        "check"
-    }
 }
 
 fn log_tail(path: &Path) -> Result<String, String> {

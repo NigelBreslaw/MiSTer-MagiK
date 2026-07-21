@@ -58,7 +58,7 @@ message, and an optional integer percentage.
 - Successful operation names are retained as evidence but not printed.
 - Warnings, external requirements, failure, and completion emit immediately.
 - Active work emits one coalesced heartbeat after ten seconds of silence.
-- Measurable work may emit at each new ten-percent boundary.
+- Unchanged work emits one short heartbeat every ten seconds.
 - Child stdout and stderr are never copied into NDJSON.
 - A failed operation includes a short tail and the retained log path.
 
