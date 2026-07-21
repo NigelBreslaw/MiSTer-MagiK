@@ -210,10 +210,13 @@ fn dispatch(
             if output == OutputFormat::Human {
                 println!("{}", serde_json::to_string_pretty(&deployment).unwrap());
             }
+            if deployment.kind == agent_cli::deploy::DeploymentKind::Runtime {
+                return agent_cli::runtime_deploy::execute(repository, &deployment, reporter);
+            }
             reporter.emit(
                 EventKind::Warning,
                 "deploy",
-                "execution not yet enabled; deployment planning was recorded",
+                "platform execution not yet enabled; deployment planning was recorded",
                 None,
             )?;
             return Ok(Outcome::ExternalRequired);

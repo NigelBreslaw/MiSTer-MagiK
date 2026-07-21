@@ -164,16 +164,18 @@ impl BuildReceipt {
 impl DeploymentPlan {
     #[must_use]
     pub fn as_evidence_plan(&self, intent: Intent) -> Plan {
+        let external_requirements = if self.kind == DeploymentKind::Platform {
+            vec![ExternalRequirement {
+                id: "deploy.platform-execution-pending".into(),
+                message: "platform deployment execution is not enabled yet".into(),
+            }]
+        } else {
+            Vec::new()
+        };
         Plan {
             intent,
             operations: Vec::new(),
-            external_requirements: vec![ExternalRequirement {
-                id: "deploy.execution-pending".into(),
-                message: format!(
-                    "{} deployment execution is not enabled yet",
-                    self.kind.label()
-                ),
-            }],
+            external_requirements,
         }
     }
 }
