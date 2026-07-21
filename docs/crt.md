@@ -1,120 +1,61 @@
-# Native CRT output
+# CRT and Direct Video output
 
-MiSTer MagiK's first native CRT mode is a conservative progressive
-640x240 RGB565 route. The existing HDMI/scaler route remains the default and
-the stock root `menu.rbf` remains untouched.
+MiSTer MagiK does not implement a CRT raster. The launcher publishes RGB565
+frames through the same `UIO_SET_FBUF`/`LFB` machinery used by Menu on HDMI.
+Main and Menu's `sys_top` exclusively own the output clock, raster, sync, and
+Direct Video mux. The MagiK RBF delta remains the protocol-v2 vblank latch; it
+contains no CRT PLL, DDR scanout reader, line buffers, raster generator, or
+output-clock mux.
 
-## Source and license provenance
+## Launcher modes
 
-The implementation is derived only from GPL-licensed MiSTer project sources:
+The maintained Main fork resolves `direct_video=2` using MiSTer's known-DAC
+detection. If detection does not activate Direct Video, Main reports `hdmi`.
+Otherwise it reports one of the four built-in progressive Menu modes selected
+by `menu_pal` and `forced_scandoubler`:
 
-- `MiSTer-devel/Template_MiSTer` defines the core video and DDR interfaces.
-- `MiSTer-devel/Menu_MiSTer` defines the Menu integration, video routing, and
-  framework behavior.
-- `MiSTer-devel/Arcade-BlackWidow_MiSTer` supplies reviewed design patterns for
-  bounded DDR bursts, line-buffer ownership, safe reset draining, and display
-  promotion at vertical blank.
+| Resolved mode | Pixel clock | Horizontal timing (active/front/sync/back) | Vertical timing (active/front/sync/back) | Nominal rates |
+| --- | ---: | --- | --- | --- |
+| `crt-240p60` | 12.587 MHz | 640/30/60/70 | 240/4/4/14 | 15.7338 kHz / 60.052 Hz |
+| `crt-288p50` | 12.587 MHz | 640/30/60/70 | 288/6/4/14 | 15.7338 kHz / 50.429 Hz |
+| `crt-480p60` | 25.175 MHz | 640/16/96/48 | 480/8/4/33 | 31.4688 kHz / 59.940 Hz |
+| `crt-576p50` | 25.175 MHz | 640/16/96/48 | 576/2/4/42 | 31.4688 kHz / 50.431 Hz |
 
-Adapted RTL must retain an attribution comment identifying the official MiSTer
-source that informed it.
+Both sync polarities are negative. These values come from Main's standard
+Menu Direct Video table; MagiK consumes the resolved name only to choose its
+framebuffer and scan geometry. It does not synthesize or alter those timings.
 
-## Version 1 timing
+Fresh CRT configuration defaults to automatic DAC detection with 240p60.
+The installer also offers 288p50, 480p60, 576p50, and HDMI-only choices. It
+maps them onto the existing `direct_video`, `menu_pal`, and
+`forced_scandoubler` keys, preserves saved upgrade choices, and restores only
+installer-owned keys from the pre-MagiK snapshot.
 
-The native route uses a 25.200 MHz video clock and advances the raster on every
-second clock edge. Its effective pixel rate is 12.600 MHz. This clock is an
-exact legal integer-PLL output from Menu's 50 MHz reference under Quartus 17.
+## Core handoff and interlace
 
-| Region | Horizontal | Vertical |
-| --- | ---: | ---: |
-| Active | 640 | 240 |
-| Front porch | 16 | 3 |
-| Negative sync | 96 | 3 |
-| Back porch | 48 | 16 |
-| Total | 800 | 262 |
+The four names above describe the launcher only. Launching a game hands control
+back to Main and loads the selected core RBF. The loaded core then owns its
+native video timing independently of the launcher, including interlaced modes.
+For example, the PlayStation core may output 480i without MagiK adding a 480i
+launcher mode or converting the frame. MagiK must never retain a Menu timing or
+framebuffer route override across that handoff.
 
-The resulting nominal rates are 15.750000 kHz and 60.114504 Hz. RGB is black
-outside the active rectangle. PAL, interlace, centering controls, and
-alternative active widths are not part of version 1.
+## Qualification
 
-## Memory and reader contract
+The bounded `crt_trial` scene exercises RGB565 publication through the shared
+protocol-v2 latch for exactly 30 seconds. It requires Main to report one of the
+four standard CRT modes, advancing flip counters, and no presentation failure.
+It never switches an FPGA output route.
 
-The CRT reader consumes the existing kernel scanout ABI v3 without changing
-its allocation:
+Morph 4K's analog bridge is useful for checking the emitted clock, totals,
+porches, sync widths, polarities, and horizontal/vertical rates without owning
+a CRT. The version-2 qualification evidence records those external analyzer
+measurements and binds them to exact app, Main, RBF, protocol, and platform
+hashes. CI can validate the evidence shape and the RBF timing/CDC/stock-delta
+reports, but neither CI nor Morph analysis proves compatibility with every
+physical CRT.
 
-- format: RGB565;
-- geometry: exactly 640x240;
-- stride: exactly 1,280 bytes;
-- valid bases: `0x227e9000` and `0x22fd2000` only; and
-- promotion: a posted slot becomes visible only at CRT vertical blank.
-
-Each line is 160 64-bit DDR beats and is requested as bursts of 128 and 32.
-Two line buffers cross from the 100 MHz DDR/system clock to the video clock.
-Malformed control data, a DDR timeout, or a line underrun produces black rather
-than stale or uninitialized memory. Status retains evidence counters for
-underruns and timeouts.
-
-The stock Menu DDR-clearing client must not share the interface in the MagiK
-RBF. The CRT reader is the sole Menu-core DDR client after integration.
-
-## Latch protocol v3
-
-Commands `0x57`, `0x58`, and `0x59` retain their discovery magic. Version 3
-keeps the version-2 words in their existing positions and appends route data.
-
-### Set command `0x57`
-
-Words 0-9 retain the framebuffer route fields and word 10 still commits the
-sequence. The requested output route is staged in word 0 bits 7-6:
-
-- `0`: HDMI;
-- `1`: CRT 640x240p60.
-
-Unknown routes are rejected to HDMI. A pending HDMI request applies on the next
-synchronized `hdmi_vbl`; a pending CRT request applies on the next CRT vertical
-blank. The route and every framebuffer field change atomically at that
-destination boundary.
-
-### Status command `0x58`
-
-Words 0-10 retain the version-2 layout. Appended words are:
-
-| Word | Meaning |
-| ---: | --- |
-| 11 | most recently requested route |
-| 12 | active route |
-| 13 | reader flags: valid, fallback, underrun, timeout |
-| 14 | underrun count |
-| 15 | DDR-timeout count |
-
-### Capabilities command `0x59`
-
-Words 0-4 retain maximum framebuffer geometry. Appended words are:
-
-| Word | Meaning |
-| ---: | --- |
-| 5 | supported-route bitmap (`bit 0` HDMI, `bit 1` CRT 240p60) |
-| 6 | native timing-table version (`1`) |
-
-Version-2 clients read their original five words and continue to use HDMI.
-Version-3 clients accept either protocol version, but may request CRT only
-when protocol 3 and the CRT capability bit are both present. Missing or
-malformed capability data always selects HDMI.
-
-## Runtime ownership and safety
-
-`direct_video=2` is resolved by the maintained Main fork using its known-DAC
-EDID table. Main reports the resolved state (`hdmi` or `crt-240p60`) to the
-launcher through the versioned runtime-settings boundary. Rust must not infer
-the resolved route from the literal INI value.
-
-The FPGA powers up on HDMI and remains there until a valid protocol-v3 request.
-Main owns crash and lifecycle fallback. A frontend failure must leave a black
-or HDMI-recoverable display and must never trigger a reboot. The attended CRT
-trial is volatile, bounded to 30 seconds, and restores HDMI on
-normal completion, error, or interruption.
-
-Fresh installation defaults to **Auto CRT/HDMI**, which writes
-`direct_video=2`, `menu_pal=0`, and `forced_scandoubler=0`; **HDMI only** writes
-`direct_video=0`. Both choices retain `[Menu] video_mode=8` as the HDMI
-fallback. The installer records the explicit choice for upgrades and restores
-only its owned INI keys from the pre-MagiK snapshot during restore or uninstall.
+CRT support remains unqualified until a later attended real-CRT gate verifies
+the exact candidate on representative displays, alongside HDMI regression,
+core launch/return (including native interlace), cleanup, recovery, and stock
+rollback. No current document should be read as claiming that gate has passed.
