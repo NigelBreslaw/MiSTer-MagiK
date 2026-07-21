@@ -943,7 +943,7 @@ fn release_begin_command() -> String {
 
 fn release_catalog_command() -> String {
     format!(
-        "set -eu; test -s {RELEASE_TOKEN}; report=$(/media/fat/mister-magik/mister-magik-fb catalog-v3-inspect); printf '%s\\n' \"$report\" | grep -Eq 'catalog_v3_summary_tsv[[:space:]]+valid=1'"
+        "set -eu; test -s {RELEASE_TOKEN}; if pidof MiSTer_MagiKDev >/dev/null 2>&1; then root=/media/fat/mister-magik-dev; else root=/media/fat/mister-magik; fi; report=$(\"$root/mister-magik-fb\" catalog-v3-inspect); printf '%s\\n' \"$report\" | grep -Eq 'catalog_v3_summary_tsv[[:space:]]+valid=1'"
     )
 }
 
@@ -7522,6 +7522,9 @@ H: Handlers=event3 js0"#
     #[test]
     fn release_recovery_requires_volatile_token_and_clears_every_arming_path() {
         assert!(!release_begin_command().contains(";;"));
+        let catalog = release_catalog_command();
+        assert!(catalog.contains("pidof MiSTer_MagiKDev"));
+        assert!(catalog.contains("root=/media/fat/mister-magik-dev"));
         let recovery = release_recovery_command();
         assert!(recovery.contains(RELEASE_TOKEN));
         assert!(recovery.contains("attended-non-network-recovery-confirmed"));
