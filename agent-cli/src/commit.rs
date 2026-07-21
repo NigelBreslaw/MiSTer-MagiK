@@ -18,8 +18,44 @@ pub fn run(
     message: &str,
     reporter: &mut Reporter<'_>,
 ) -> Result<(Outcome, String, String, Vec<PathBuf>), String> {
+    run_with_external_policy(
+        evidence, request_id, repository, task_id, message, reporter, false,
+    )
+}
+
+pub fn run_allowing_external(
+    evidence: &Evidence,
+    request_id: &str,
+    repository: &Path,
+    task_id: &str,
+    message: &str,
+    reporter: &mut Reporter<'_>,
+) -> Result<(Outcome, String, String, Vec<PathBuf>), String> {
+    run_with_external_policy(
+        evidence, request_id, repository, task_id, message, reporter, true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_with_external_policy(
+    evidence: &Evidence,
+    request_id: &str,
+    repository: &Path,
+    task_id: &str,
+    message: &str,
+    reporter: &mut Reporter<'_>,
+    allow_external: bool,
+) -> Result<(Outcome, String, String, Vec<PathBuf>), String> {
     evidence.begin_commit_attempt(request_id, task_id, message)?;
-    let result = run_inner(evidence, request_id, repository, task_id, message, reporter);
+    let result = run_inner(
+        evidence,
+        request_id,
+        repository,
+        task_id,
+        message,
+        reporter,
+        allow_external,
+    );
     match &result {
         Ok((_, sha, subject, paths)) => {
             evidence.update_commit_attempt(
@@ -53,6 +89,7 @@ fn run_inner(
     task_id: &str,
     message: &str,
     reporter: &mut Reporter<'_>,
+    allow_external: bool,
 ) -> Result<(Outcome, String, String, Vec<PathBuf>), String> {
     if task_id.is_empty() {
         return Err("task_baseline_missing: run `scripts/agent task begin` before editing".into());
@@ -140,7 +177,7 @@ fn run_inner(
         "validating staged changes",
         Some(25),
     )?;
-    let verify_result = verify_staged(evidence, request_id, repository, reporter);
+    let verify_result = verify_staged(evidence, request_id, repository, reporter, allow_external);
     if let Err(error) = verify_result {
         restore_index(
             repository,
@@ -194,6 +231,7 @@ fn verify_staged(
     request_id: &str,
     repository: &Path,
     reporter: &mut Reporter<'_>,
+    allow_external: bool,
 ) -> Result<(), String> {
     let intent = Intent::Verify {
         scope: Scope::Staged,
@@ -202,7 +240,7 @@ fn verify_staged(
     let plan = crate::planner::affected_plan(intent, paths)?;
     evidence.record_plan(request_id, &plan)?;
     crate::executor::execute(evidence, request_id, repository, &plan, reporter)?;
-    if plan.external_requirements.is_empty() {
+    if plan.external_requirements.is_empty() || allow_external {
         Ok(())
     } else {
         Err(plan

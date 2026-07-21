@@ -144,7 +144,7 @@ pub(crate) fn load(
     Ok(baseline)
 }
 
-pub(crate) fn current_head(repository: &Path) -> Result<String, String> {
+pub fn current_head(repository: &Path) -> Result<String, String> {
     git(repository, &["rev-parse", "HEAD"])
 }
 

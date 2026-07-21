@@ -125,6 +125,16 @@ fn resolve_task_intent(
             },
             message,
         },
+        Intent::Deliver { task_id, message } => Intent::Deliver {
+            task_id: if task_id.is_empty() {
+                evidence
+                    .active_manual_task_id(repository)?
+                    .unwrap_or_default()
+            } else {
+                task_id
+            },
+            message,
+        },
         Intent::Deploy { task_id } => Intent::Deploy {
             task_id: resolve(task_id)?,
         },
@@ -191,6 +201,11 @@ fn dispatch(
                 );
             }
             return Ok(outcome);
+        }
+        Intent::Deliver { task_id, message } => {
+            return deliver(
+                evidence, request_id, repository, task_id, message, output, reporter,
+            );
         }
         Intent::Deploy { task_id } => {
             let task_paths = agent_cli::task::changes(evidence, repository, task_id)?;
@@ -348,6 +363,150 @@ fn dispatch(
         _ => {}
     }
     Ok(Outcome::NoOp)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn deliver(
+    evidence: &Evidence,
+    request_id: &str,
+    repository: &std::path::Path,
+    task_id: &str,
+    message: &str,
+    output: OutputFormat,
+    reporter: &mut Reporter<'_>,
+) -> Result<Outcome, String> {
+    use agent_cli::components::{self, DeploymentImpact};
+    use agent_cli::evidence::DeliveryRecord;
+
+    if let Some(mut pending) = evidence.delivery(task_id)? {
+        if pending.state == "complete" {
+            return Ok(Outcome::NoOp);
+        }
+        if pending.state != "external_pending" {
+            return Err(format!(
+                "delivery_state_invalid: cannot resume delivery in {}",
+                pending.state
+            ));
+        }
+        let sha = pending
+            .commit_sha
+            .clone()
+            .ok_or("delivery_state_invalid: pending delivery has no commit")?;
+        if agent_cli::task::current_head(repository)? != sha {
+            return Err("external_pending: publish the recorded commit to main, check it out, and rerun `scripts/agent deliver -m ...`".into());
+        }
+        let branch = git_value(repository, &["branch", "--show-current"])?;
+        if branch != "main" {
+            reporter.emit(
+                EventKind::Warning,
+                "external",
+                "publish or merge this exact commit to main, then rerun deliver",
+                None,
+            )?;
+            return Ok(Outcome::ExternalRequired);
+        }
+        let paths = agent_cli::task::changes(evidence, repository, task_id)?;
+        let mut deployment = agent_cli::deploy::plan(repository, paths)?;
+        let candidate = agent_cli::platform_ci::resolve_repository(repository, |progress| {
+            reporter.emit(EventKind::Progress, "platform-ci", progress, None)
+        })?;
+        evidence.attest_delivery(
+            task_id,
+            pending
+                .requirement_id
+                .as_deref()
+                .unwrap_or("github-actions.rbf-build"),
+            "platform-bundle.yml",
+            "main",
+            &sha,
+            &serde_json::to_string(&candidate).map_err(|error| error.to_string())?,
+        )?;
+        pending.state = "external_verified".into();
+        evidence.save_delivery(&pending)?;
+        deployment.platform_candidate = Some(candidate);
+        agent_cli::platform_deploy::execute(repository, &deployment, reporter)?;
+        pending.state = "complete".into();
+        evidence.save_delivery(&pending)?;
+        return Ok(Outcome::Passed);
+    }
+
+    let paths = agent_cli::task::changes(evidence, repository, task_id)?;
+    if paths.is_empty() {
+        return Err("nothing_to_deliver: no task-owned changes were found".into());
+    }
+    let impact = paths
+        .iter()
+        .filter_map(|path| components::classify(path))
+        .map(components::Component::deployment_impact)
+        .max()
+        .unwrap_or(DeploymentImpact::None);
+    let verify_intent = Intent::Verify {
+        scope: agent_cli::model::Scope::Task(task_id.into()),
+    };
+    let plan = planner::affected_plan(verify_intent, paths.clone())?;
+    evidence.record_plan(request_id, &plan)?;
+    executor::execute_with_changes(evidence, request_id, repository, &plan, &paths, reporter)?;
+    evidence.claim_task_paths(task_id, &paths)?;
+    let external = impact == DeploymentImpact::Platform;
+    let (_, sha, subject, committed_paths) = if external {
+        agent_cli::commit::run_allowing_external(
+            evidence, request_id, repository, task_id, message, reporter,
+        )?
+    } else {
+        agent_cli::commit::run(evidence, request_id, repository, task_id, message, reporter)?
+    };
+    let mut delivery = DeliveryRecord {
+        task_id: task_id.into(),
+        worktree: repository.to_path_buf(),
+        source_tree: sha.clone(),
+        commit_sha: Some(sha.clone()),
+        impact: match impact {
+            DeploymentImpact::None => "none",
+            DeploymentImpact::Runtime => "runtime",
+            DeploymentImpact::Platform => "platform",
+        }
+        .into(),
+        state: if external {
+            "external_pending"
+        } else {
+            "committed"
+        }
+        .into(),
+        requirement_id: external.then(|| "github-actions.rbf-build".into()),
+        detail: None,
+    };
+    evidence.save_delivery(&delivery)?;
+    if external {
+        reporter.emit(
+            EventKind::Warning,
+            "external",
+            "publish or merge this exact commit to main, then rerun deliver",
+            None,
+        )?;
+        return Ok(Outcome::ExternalRequired);
+    }
+    if impact == DeploymentImpact::Runtime {
+        let deployment = agent_cli::deploy::plan(repository, committed_paths)?;
+        agent_cli::runtime_deploy::execute(repository, &deployment, reporter)?;
+    }
+    delivery.state = "complete".into();
+    evidence.save_delivery(&delivery)?;
+    if output == OutputFormat::Human {
+        println!("delivery: {sha} — {subject}");
+    }
+    Ok(Outcome::Passed)
+}
+
+fn git_value(repository: &std::path::Path, args: &[&str]) -> Result<String, String> {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(repository)
+        .output()
+        .map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().into());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().into())
 }
 
 fn fatal(message: &str) -> ! {
