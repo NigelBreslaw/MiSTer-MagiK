@@ -2459,13 +2459,13 @@ impl MagikDeployTransaction {
             let swap_ms = self.swap_upload(remote)?;
             let (chmod_size_ms, remote_bytes) = self.chmod_and_verify_size(remote)?;
 
+            let cleanup_ms = self.cleanup(remote)?;
+            cleaned = true;
+
             let resume_t = Instant::now();
             deploy_fifo_command(remote, "mister_magik_resume")?;
             let resume_ms = resume_t.elapsed().as_millis();
             suspended = false;
-
-            let cleanup_ms = self.cleanup(remote)?;
-            cleaned = true;
 
             Ok(MagikDeployReport {
                 local: self.local.clone(),
@@ -7255,8 +7255,8 @@ H: Handlers=event3 js0"#
         assert!(events[2].starts_with("put "));
         assert!(events[3].starts_with("mv "));
         assert!(events[4].contains("wc -c"));
-        assert!(events[5].contains("mister_magik_resume"));
-        assert!(events[6].starts_with("rm -f "));
+        assert!(events[5].starts_with("rm -f "));
+        assert!(events[6].contains("mister_magik_resume"));
         let _ = fs::remove_file(local);
     }
 
