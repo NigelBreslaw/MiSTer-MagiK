@@ -231,6 +231,8 @@ impl LatchReadinessReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn reason_codes_are_stable_and_machine_readable() {
@@ -244,5 +246,166 @@ mod tests {
             serde_json::to_value(&failure).unwrap()["state"],
             "platform-incompatible"
         );
+    }
+
+    #[test]
+    fn every_state_stage_and_reason_has_a_stable_code() {
+        let states = [
+            (LatchReadinessState::Ready, "ready"),
+            (LatchReadinessState::InstallationFault, "installation-fault"),
+            (
+                LatchReadinessState::PlatformIncompatible,
+                "platform-incompatible",
+            ),
+            (LatchReadinessState::RuntimeFault, "runtime-fault"),
+        ];
+        for (state, expected) in states {
+            assert_eq!(state.code(), expected);
+        }
+
+        let stages = [
+            (LatchFailureStage::FrontendIntegrity, "frontend-integrity"),
+            (LatchFailureStage::Manifest, "manifest"),
+            (LatchFailureStage::Kernel, "kernel"),
+            (LatchFailureStage::ModuleOpen, "module-open"),
+            (LatchFailureStage::ModuleLayout, "module-layout"),
+            (LatchFailureStage::BufferMap, "buffer-map"),
+            (LatchFailureStage::FpgaStatus, "fpga-status"),
+            (LatchFailureStage::FpgaCapabilities, "fpga-capabilities"),
+            (LatchFailureStage::FrameCopy, "frame-copy"),
+            (LatchFailureStage::OverlayCompose, "overlay-compose"),
+            (LatchFailureStage::LatchPost, "latch-post"),
+            (LatchFailureStage::RouteArm, "route-arm"),
+            (LatchFailureStage::PostVerification, "post-verification"),
+        ];
+        for (stage, expected) in stages {
+            assert_eq!(stage.code(), expected);
+        }
+
+        let reasons = [
+            (
+                LatchFailureReason::FrontendHashMismatch,
+                "frontend-hash-mismatch",
+            ),
+            (LatchFailureReason::ManifestInvalid, "manifest-invalid"),
+            (
+                LatchFailureReason::KernelReleaseUnsupported,
+                "kernel-release-unsupported",
+            ),
+            (
+                LatchFailureReason::ScanoutDeviceMissing,
+                "scanout-device-missing",
+            ),
+            (
+                LatchFailureReason::ScanoutAbiMismatch,
+                "scanout-abi-mismatch",
+            ),
+            (
+                LatchFailureReason::ScanoutLayoutMismatch,
+                "scanout-layout-mismatch",
+            ),
+            (
+                LatchFailureReason::ScanoutGeometryUnsupported,
+                "scanout-geometry-unsupported",
+            ),
+            (LatchFailureReason::ScanoutMapFailed, "scanout-map-failed"),
+            (
+                LatchFailureReason::FpgaStatusUnsupported,
+                "fpga-status-unsupported",
+            ),
+            (
+                LatchFailureReason::FpgaProtocolUnsupported,
+                "fpga-protocol-unsupported",
+            ),
+            (
+                LatchFailureReason::FpgaCapabilitiesInsufficient,
+                "fpga-capabilities-insufficient",
+            ),
+            (
+                LatchFailureReason::FpgaTransportFailed,
+                "fpga-transport-failed",
+            ),
+            (
+                LatchFailureReason::NoWritableHiddenBuffer,
+                "no-writable-hidden-buffer",
+            ),
+            (LatchFailureReason::FrameCopyFailed, "frame-copy-failed"),
+            (
+                LatchFailureReason::OverlayComposeFailed,
+                "overlay-compose-failed",
+            ),
+            (LatchFailureReason::LatchPostFailed, "latch-post-failed"),
+            (LatchFailureReason::RouteArmFailed, "route-arm-failed"),
+            (
+                LatchFailureReason::ActiveGeometryMismatch,
+                "active-geometry-mismatch",
+            ),
+            (
+                LatchFailureReason::PostedSequenceUnverified,
+                "posted-sequence-unverified",
+            ),
+        ];
+        for (reason, expected) in reasons {
+            let failure = LatchFailure::runtime(LatchFailureStage::LatchPost, reason, "detail");
+            assert_eq!(failure.reason_code(), expected);
+            assert_eq!(failure.to_string(), format!("{expected}: detail"));
+        }
+    }
+
+    #[test]
+    fn ready_and_failed_reports_preserve_their_contracts() {
+        let ready = LatchReadinessReport::ready("kernel".to_string());
+        assert_eq!(ready.state, LatchReadinessState::Ready);
+        assert_eq!(ready.stage, None);
+        assert_eq!(ready.reason_code, None);
+        assert_eq!(ready.detail, "live platform ready");
+
+        let failure = LatchFailure::incompatible(
+            LatchFailureStage::ModuleLayout,
+            LatchFailureReason::ScanoutLayoutMismatch,
+            "unexpected slot layout",
+        );
+        let failed = LatchReadinessReport::failed("kernel".to_string(), &failure);
+        assert_eq!(failed.state, LatchReadinessState::PlatformIncompatible);
+        assert_eq!(failed.stage, Some(LatchFailureStage::ModuleLayout));
+        assert_eq!(
+            failed.reason_code.as_deref(),
+            Some("scanout-layout-mismatch")
+        );
+        assert_eq!(failed.detail, "unexpected slot layout");
+    }
+
+    #[test]
+    fn failed_report_publishes_and_removes_the_temporary_file() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-latch-readiness-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = root.join("nested/readiness.json");
+        let failure = LatchFailure::incompatible(
+            LatchFailureStage::ModuleLayout,
+            LatchFailureReason::ScanoutLayoutMismatch,
+            "unexpected slot layout",
+        );
+        let report = LatchReadinessReport::failed("kernel".to_string(), &failure);
+
+        report.write_atomic(&path).unwrap();
+
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(persisted["schema"], "mister-magik-latch-readiness-v1");
+        assert_eq!(persisted["state"], "platform-incompatible");
+        assert_eq!(persisted["kernel_release"], "kernel");
+        assert_eq!(
+            persisted["expected_kernel_release"],
+            mister_magik_scanout_contract::QUALIFIED_KERNEL_RELEASE
+        );
+        assert!(!root
+            .join(format!("nested/readiness.json.tmp.{}", std::process::id()))
+            .exists());
+        fs::remove_dir_all(root).unwrap();
     }
 }
