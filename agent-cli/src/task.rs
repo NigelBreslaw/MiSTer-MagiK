@@ -69,27 +69,50 @@ pub fn changes(
             repository.display()
         ));
     }
-    let current = capture(repository)?;
-    let paths: BTreeSet<_> = baseline
-        .files
-        .keys()
-        .chain(current.files.keys())
-        .cloned()
-        .collect();
-    Ok(paths
-        .into_iter()
-        .filter(|path| {
-            if baseline.planner_schema < 3
-                && !baseline.files.contains_key(path)
-                && current
-                    .files
-                    .get(path)
-                    .is_some_and(|fingerprint| fingerprint.kind == "gitlink")
-            {
-                return false;
-            }
-            baseline.files.get(path) != current.files.get(path)
-        })
+    let mut paths = changed_paths(repository, false)?;
+    paths.extend(baseline.dirty_paths.iter().cloned());
+    if baseline.head != current_head(repository)? {
+        paths.extend(diff_paths(repository, &baseline.head)?);
+    }
+    let mut changes = Vec::new();
+    for path in paths {
+        let current = fingerprint(&repository.join(&path))?;
+        if baseline.planner_schema < 3
+            && !baseline.files.contains_key(&path)
+            && current
+                .as_ref()
+                .is_some_and(|fingerprint| fingerprint.kind == "gitlink")
+        {
+            continue;
+        }
+        if baseline.files.get(&path) != current.as_ref() {
+            changes.push(path);
+        }
+    }
+    Ok(changes)
+}
+
+fn diff_paths(repository: &Path, baseline_head: &str) -> Result<BTreeSet<PathBuf>, String> {
+    let output = Command::new("git")
+        .args([
+            "diff",
+            "--name-only",
+            "-z",
+            "--diff-filter=ACMRD",
+            baseline_head,
+            "HEAD",
+        ])
+        .current_dir(repository)
+        .output()
+        .map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
+    }
+    Ok(output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|part| !part.is_empty())
+        .map(|part| PathBuf::from(String::from_utf8_lossy(part).into_owned()))
         .collect())
 }
 

@@ -282,7 +282,14 @@ fn dispatch(
                     Outcome::Passed
                 });
             }
-            let outcome = executor::execute(evidence, request_id, repository, &plan, reporter)?;
+            let outcome = executor::execute_with_changes(
+                evidence,
+                request_id,
+                repository,
+                &plan,
+                &claimed_paths,
+                reporter,
+            )?;
             if !plan.external_requirements.is_empty() {
                 for requirement in &plan.external_requirements {
                     reporter.emit(EventKind::Warning, "external", &requirement.message, None)?;

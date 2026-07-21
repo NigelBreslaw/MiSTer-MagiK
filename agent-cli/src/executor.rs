@@ -9,6 +9,7 @@ use std::fs::{File, OpenOptions};
 use std::hash::{Hash, Hasher};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
@@ -18,6 +19,26 @@ pub fn execute(
     request_id: &str,
     repository: &Path,
     plan: &Plan,
+    reporter: &mut Reporter<'_>,
+) -> Result<Outcome, String> {
+    let changes = match &plan.intent {
+        crate::model::Intent::Check {
+            scope: crate::model::Scope::Task(task_id),
+        }
+        | crate::model::Intent::Verify {
+            scope: crate::model::Scope::Task(task_id),
+        } => crate::task::changes(evidence, repository, task_id)?,
+        _ => Vec::new(),
+    };
+    execute_with_changes(evidence, request_id, repository, plan, &changes, reporter)
+}
+
+pub fn execute_with_changes(
+    evidence: &Evidence,
+    request_id: &str,
+    repository: &Path,
+    plan: &Plan,
+    changes: &[PathBuf],
     reporter: &mut Reporter<'_>,
 ) -> Result<Outcome, String> {
     if plan.operations.is_empty() {
@@ -32,7 +53,7 @@ pub fn execute(
         let percent = u8::try_from(index.saturating_mul(100) / plan.operations.len()).unwrap_or(0);
         let message = format!("running {}/{}", index + 1, plan.operations.len());
         reporter.emit(EventKind::Progress, phase, &message, Some(percent))?;
-        let cache = operation_cache_key(evidence, repository, plan, operation)?;
+        let cache = operation_cache_key(repository, plan, operation, changes)?;
         if let Some((task_id, fingerprint)) = cache.as_ref() {
             if evidence.has_cached_operation(task_id, &operation.id, fingerprint)? {
                 evidence.record_reused_command(
@@ -70,10 +91,10 @@ pub fn execute(
 }
 
 fn operation_cache_key(
-    evidence: &Evidence,
     repository: &Path,
     plan: &Plan,
     operation: &Operation,
+    changes: &[PathBuf],
 ) -> Result<Option<(String, String)>, String> {
     let task_id = match &plan.intent {
         crate::model::Intent::Check {
@@ -114,12 +135,12 @@ fn operation_cache_key(
             .unwrap_or_default()
             .hash(&mut hasher);
     }
-    for path in crate::task::changes(evidence, repository, task_id)? {
+    for path in changes {
         if !operation.inputs.iter().any(|input| path.starts_with(input)) {
             continue;
         }
         path.hash(&mut hasher);
-        match std::fs::read(repository.join(&path)) {
+        match std::fs::read(repository.join(path)) {
             Ok(bytes) => bytes.hash(&mut hasher),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 "deleted".hash(&mut hasher)
