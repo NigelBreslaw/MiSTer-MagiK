@@ -226,6 +226,9 @@ fn dispatch(
         Intent::ReleaseQualify => {
             return agent_cli::release::execute(reporter);
         }
+        Intent::Diagnose => {
+            return agent_cli::diagnose::execute(repository, reporter);
+        }
         Intent::Build { intent } => {
             let spec = agent_cli::build::BuildSpec::infer(*intent)?;
             agent_cli::build::execute(repository, &spec, reporter)?;

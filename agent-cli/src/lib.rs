@@ -9,6 +9,7 @@ pub mod components;
 pub mod delivery;
 pub mod deploy;
 pub mod device;
+pub mod diagnose;
 pub mod evidence;
 pub mod executor;
 pub mod model;

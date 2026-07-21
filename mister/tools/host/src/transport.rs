@@ -76,6 +76,8 @@ pub enum DeviceRequest {
     QualifyReleaseDisplay,
     QualifyReleaseRecovery,
     RestoreReleaseQualification,
+    CollectDiagnosticFacts,
+    RepairSafeDeviceState,
     CaptureFramebuffer,
 }
 
@@ -113,6 +115,8 @@ impl DeviceRequest {
             Self::QualifyReleaseDisplay => "qualify-release-display",
             Self::QualifyReleaseRecovery => "qualify-release-recovery",
             Self::RestoreReleaseQualification => "restore-release-qualification",
+            Self::CollectDiagnosticFacts => "collect-diagnostic-facts",
+            Self::RepairSafeDeviceState => "repair-safe-device-state",
             Self::CaptureFramebuffer => "capture-framebuffer",
         }
     }

@@ -48,6 +48,7 @@ pub enum Command {
     },
     Verify(ScopeArgs),
     Doctor,
+    Diagnose,
     Deliver,
     Benchmark,
     Release {
@@ -172,6 +173,7 @@ impl Cli {
                 scope: scope.into_scope(Some(&task_id)),
             },
             Some(Command::Doctor) => Intent::Doctor,
+            Some(Command::Diagnose) => Intent::Diagnose,
             Some(Command::Deliver) => Intent::Deliver { task_id },
             Some(Command::Benchmark) => Intent::Benchmark { task_id },
             Some(Command::Release {
@@ -273,5 +275,16 @@ mod tests {
         assert!(
             Cli::try_parse_from(["agent-cli", "release", "qualify", "--skip-display"]).is_err()
         );
+    }
+
+    #[test]
+    fn diagnose_is_flag_free() {
+        assert_eq!(
+            Cli::try_parse_from(["agent-cli", "diagnose"])
+                .unwrap()
+                .into_intent(),
+            Intent::Diagnose
+        );
+        assert!(Cli::try_parse_from(["agent-cli", "diagnose", "--repair-all"]).is_err());
     }
 }

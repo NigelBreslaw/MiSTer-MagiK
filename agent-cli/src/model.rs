@@ -69,6 +69,7 @@ pub enum Intent {
     PruneLogs,
     Interactive,
     Doctor,
+    Diagnose,
     Deliver { task_id: String },
     Benchmark { task_id: String },
     ReleaseQualify,
@@ -82,9 +83,10 @@ impl Intent {
         match self {
             Self::Commit { .. } | Self::Verify { .. } => Risk::LocalWrite,
             Self::ReleaseQualify => Risk::Destructive,
-            Self::Deliver { .. } | Self::Benchmark { .. } | Self::DeployRecipe { .. } => {
-                Risk::DeviceWrite
-            }
+            Self::Deliver { .. }
+            | Self::Benchmark { .. }
+            | Self::Diagnose
+            | Self::DeployRecipe { .. } => Risk::DeviceWrite,
             Self::Build { .. } => Risk::LocalWrite,
             _ => Risk::ReadOnly,
         }

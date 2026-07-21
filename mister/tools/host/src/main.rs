@@ -448,6 +448,21 @@ impl DeviceOperations for NativeDevice {
                     .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?;
                 "restored arming=clear".into()
             }
+            DeviceRequest::CollectDiagnosticFacts => {
+                let session = connect(10).map_err(device_failure)?;
+                let output =
+                    exec(&session, &diagnostic_facts_command(), false).map_err(device_failure)?;
+                if let Some(message) = exec_failure_message("diagnostic facts", &output) {
+                    return Err(device_failure(message));
+                }
+                output.stdout.trim().into()
+            }
+            DeviceRequest::RepairSafeDeviceState => {
+                let session = connect(10).map_err(device_failure)?;
+                exec_checked(&session, "safe diagnostic repair", &safe_repair_command())
+                    .map_err(device_failure)?;
+                "temporary-state=clear".into()
+            }
             DeviceRequest::CaptureFramebuffer => {
                 capture_buffer(&[]).map_err(device_failure)?;
                 "captured".into()
@@ -937,6 +952,17 @@ fn release_restore_command() -> String {
     format!(
         "set -eu; snap={RELEASE_SNAPSHOT}; {}; if test -s \"$snap/MiSTer.ini\"; then cp -a \"$snap/MiSTer.ini\" /media/fat/MiSTer.ini; fi; rm -f {RELEASE_TOKEN}; rm -rf \"$snap\"; {}; test ! -e {RELEASE_TOKEN}",
         release_arming_cleanup_command(),
+        platform_safety_script()
+    )
+}
+
+fn diagnostic_facts_command() -> String {
+    "set -eu; main=false; launcher=false; agent=false; credentials=false; firmware=false; unstable=false; temporary=false; { pidof MiSTer_MagiKDev >/dev/null 2>&1 || pidof MiSTer_MagiK >/dev/null 2>&1; } && main=true; pidof mister-magik-fb >/dev/null 2>&1 && launcher=true; pidof mister-magik-agent >/dev/null 2>&1 && agent=true; test -s /media/fat/mister-magik-dev/agent.token && credentials=true; { grep -q '^mister_magik_scanout_slots ' /proc/modules 2>/dev/null && test -c /dev/mister-magik-scanout-slots; } && firmware=true; test -e /tmp/mister-magik/reboot-unstable && unstable=true; arming=0; for path in /media/fat/mister-magik/launcher.env /media/fat/mister-magik-dev/launcher.env /tmp/mister-magik/fs-fault-launcher.env /tmp/mister-magik/fs-fault-session /tmp/mister-magik/fs-fault.json /media/fat/mister-magik/rebuild-on-next-boot /media/fat/mister-magik-dev/rebuild-on-next-boot; do test ! -e \"$path\" || arming=$((arming + 1)); done; for path in /tmp/mister-magik/agent-benchmark.tsv /tmp/mister-magik/agent-benchmark-warmup.tsv /tmp/mister-magik/agent-cold-benchmark.out /tmp/mister-magik/stale-launcher-return-state.json; do test ! -e \"$path\" || temporary=true; done; printf '{\"main_running\":%s,\"launcher_running\":%s,\"agent_running\":%s,\"credentials_ready\":%s,\"firmware_compatible\":%s,\"reboot_unstable\":%s,\"arming_files\":%s,\"temporary_state\":%s}\\n' \"$main\" \"$launcher\" \"$agent\" \"$credentials\" \"$firmware\" \"$unstable\" \"$arming\" \"$temporary\"".into()
+}
+
+fn safe_repair_command() -> String {
+    format!(
+        "set -eu; rm -f /tmp/mister-magik/agent-benchmark.tsv /tmp/mister-magik/agent-benchmark-warmup.tsv /tmp/mister-magik/agent-cold-benchmark.out /tmp/mister-magik/stale-launcher-return-state.json; {}",
         platform_safety_script()
     )
 }
@@ -7238,6 +7264,20 @@ H: Handlers=event3 js0"#
         }
         assert!(release_handoff_command().contains("/dev/MiSTer_cmd"));
         assert!(release_display_command().contains("bits_per_pixel"));
+    }
+
+    #[test]
+    fn diagnosis_repairs_only_owned_temporary_state() {
+        let facts = diagnostic_facts_command();
+        assert!(facts.contains("credentials_ready"));
+        assert!(facts.contains("firmware_compatible"));
+        assert!(facts.contains("reboot_unstable"));
+        assert!(facts.contains("arming_files"));
+        let repair = safe_repair_command();
+        assert!(repair.contains("agent-benchmark.tsv"));
+        assert!(!repair.contains("rm -f /media/fat/mister-magik/launcher.env"));
+        assert!(!repair.contains("rm -f /media/fat/mister-magik-dev/launcher.env"));
+        assert!(!repair.contains("rebuild-on-next-boot; rm"));
     }
 
     const MAME_1942_FIXTURE: &str = r#"<?xml version="1.0"?>

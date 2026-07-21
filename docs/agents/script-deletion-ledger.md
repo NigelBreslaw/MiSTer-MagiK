@@ -129,3 +129,17 @@ confirmation of a non-network recovery path, snapshots mutable configuration,
 and clears every reset-fault arming path on restoration. The tier/skip/mode
 matrices and all four shell workflows were deleted without compatibility
 aliases.
+
+## Typed diagnosis and safe-repair takeover
+
+Reviewed on 2026-07-21. The device audit, persistent shutdown instrumentation,
+standalone agent installer, launch-handoff profiler, shutdown parser, and
+unreferenced diagnostic/profiling shell libraries mixed fact collection with
+mutation and exposed unsafe or ownerless experiments. The flag-free
+`scripts/agent diagnose` command now owns the fixed Discover → HostFacts →
+DeviceFacts → Correlate → SafeRepair → Recheck → Report state chart using
+structured typed device facts. It repairs only named temporary benchmark state;
+credentials, reboot instability, firmware incompatibility, arming files,
+physical recovery, and missing services produce exactly one user action and no
+implicit destructive repair. The reviewed scripts and orphaned libraries were
+deleted without replacement wrappers.
