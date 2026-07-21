@@ -1038,6 +1038,7 @@ fn qualify_release_display_matrix() -> Result<String> {
             return Err(format!("{} did not complete its reboot transition", mode.label).into());
         }
         let session = connect(10)?;
+        wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))?;
         exec_checked(
             &session,
             &format!("release display {}", mode.label),
