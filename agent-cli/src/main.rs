@@ -229,6 +229,13 @@ fn dispatch(
         Intent::Diagnose => {
             return agent_cli::diagnose::execute(repository, reporter);
         }
+        Intent::DisplayMode { video_mode } => {
+            let mut device = agent_cli::device::DeviceClient::default();
+            device.execute(mister_tool::transport::DeviceRequest::SetMenuVideoMode {
+                video_mode: video_mode.clone(),
+            })?;
+            return Ok(Outcome::Passed);
+        }
         Intent::Build { intent } => {
             let spec = agent_cli::build::BuildSpec::infer(*intent)?;
             agent_cli::build::execute(repository, &spec, reporter)?;

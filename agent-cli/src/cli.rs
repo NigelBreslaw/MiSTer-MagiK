@@ -53,6 +53,11 @@ pub enum Command {
     #[command(hide = true)]
     Doctor,
     Diagnose,
+    #[command(hide = true)]
+    DisplayMode {
+        #[arg(value_parser = ["13", "14"])]
+        video_mode: String,
+    },
     Deliver,
     Benchmark,
     Release {
@@ -178,6 +183,7 @@ impl Cli {
             },
             Some(Command::Doctor) => Intent::Doctor,
             Some(Command::Diagnose) => Intent::Diagnose,
+            Some(Command::DisplayMode { video_mode }) => Intent::DisplayMode { video_mode },
             Some(Command::Deliver) => Intent::Deliver { task_id },
             Some(Command::Benchmark) => Intent::Benchmark { task_id },
             Some(Command::Release {
@@ -290,5 +296,18 @@ mod tests {
             Intent::Diagnose
         );
         assert!(Cli::try_parse_from(["agent-cli", "diagnose", "--repair-all"]).is_err());
+    }
+
+    #[test]
+    fn focused_display_mode_accepts_only_stress_presets() {
+        assert_eq!(
+            Cli::try_parse_from(["agent-cli", "display-mode", "13"])
+                .unwrap()
+                .into_intent(),
+            Intent::DisplayMode {
+                video_mode: "13".into()
+            }
+        );
+        assert!(Cli::try_parse_from(["agent-cli", "display-mode", "10"]).is_err());
     }
 }

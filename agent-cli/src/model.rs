@@ -70,6 +70,7 @@ pub enum Intent {
     Interactive,
     Doctor,
     Diagnose,
+    DisplayMode { video_mode: String },
     Deliver { task_id: String },
     Benchmark { task_id: String },
     ReleaseQualify,
@@ -86,6 +87,7 @@ impl Intent {
             Self::Deliver { .. }
             | Self::Benchmark { .. }
             | Self::Diagnose
+            | Self::DisplayMode { .. }
             | Self::DeployRecipe { .. } => Risk::DeviceWrite,
             Self::Build { .. } => Risk::LocalWrite,
             _ => Risk::ReadOnly,

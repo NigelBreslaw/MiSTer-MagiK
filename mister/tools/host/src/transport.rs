@@ -54,6 +54,9 @@ pub enum DeviceRequest {
     RollbackPlatform,
     CommitPlatform,
     SelectMain(MainSelection),
+    SetMenuVideoMode {
+        video_mode: String,
+    },
     RebootWait,
     VerifyHealth(Layout),
     SmokeDelivery {
@@ -96,6 +99,7 @@ impl DeviceRequest {
             Self::RollbackPlatform => "rollback-platform",
             Self::CommitPlatform => "commit-platform",
             Self::SelectMain(_) => "select-main",
+            Self::SetMenuVideoMode { .. } => "set-menu-video-mode",
             Self::RebootWait => "reboot-wait",
             Self::VerifyHealth(_) => "verify-health",
             Self::SmokeDelivery { .. } => "smoke-delivery",
