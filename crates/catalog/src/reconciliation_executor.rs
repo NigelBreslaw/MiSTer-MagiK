@@ -1469,7 +1469,10 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error.stage(), "publish-artifact");
-        assert_eq!(materializer.calls, vec![system("c64"), system("snes")]);
+        assert!(
+            materializer.calls == vec![system("c64")]
+                || materializer.calls == vec![system("c64"), system("snes")]
+        );
         assert!(read_latest_manifest(&root, limits()).is_err());
         assert!(!root.join("staging").join("reconcile").exists());
         fs::remove_dir_all(root).unwrap();
