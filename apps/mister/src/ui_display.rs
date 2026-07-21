@@ -385,7 +385,7 @@ impl UiDisplayPlan {
 
     pub fn log_line(self) -> String {
         format!(
-            "display-plan: source={} route={} output={}x{} scan={}x{} fb={}x{} fb_policy={} direct_video={} fallback={}",
+            "display-plan: source={} route={} output={}x{} scan={}x{} fb={}x{} scan_scaled={} fb_policy={} direct_video={} fallback={}",
             self.source,
             self.output_route.label(),
             self.output_w,
@@ -394,6 +394,7 @@ impl UiDisplayPlan {
             self.scan_h,
             self.fb_w,
             self.fb_h,
+            self.fb_w != usize::from(self.scan_w) || self.fb_h != usize::from(self.scan_h),
             self.fb_policy.label(),
             self.direct_video,
             self.fallback
@@ -1055,6 +1056,7 @@ mod tests {
             assert_eq!((plan.fb_w, plan.fb_h), (640, 480));
             assert_eq!((plan.scan_w, plan.scan_h), (640, 576));
             assert_eq!(plan.fb_policy, UiFramebufferSizePolicy::Auto);
+            assert!(plan.log_line().contains("scan_scaled=true"));
         }
     }
 
