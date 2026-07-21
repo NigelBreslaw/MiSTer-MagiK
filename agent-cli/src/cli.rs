@@ -32,21 +32,25 @@ pub enum Command {
     Commit(CommitArgs),
     Plan(ScopeArgs),
     Check(ScopeArgs),
+    #[command(hide = true)]
     Runs {
         #[arg(long)]
         failed: bool,
         #[arg(long, default_value_t = 20)]
         recent: usize,
     },
+    #[command(hide = true)]
     Run {
         #[command(subcommand)]
         command: RunCommand,
     },
+    #[command(hide = true)]
     Db {
         #[command(subcommand)]
         command: DbCommand,
     },
     Verify(ScopeArgs),
+    #[command(hide = true)]
     Doctor,
     Diagnose,
     Deliver,

@@ -1,31 +1,19 @@
 # Script layout
 
-Stable human, automation, and device entrypoints remain directly under
-`scripts/`. Internal implementation is grouped by responsibility:
+The `scripts/` tree is limited to the `scripts/agent` lifecycle entrypoint and
+genuinely host-only packaging, conversion, CI, release-data, and pure-analysis
+tools.
 
-- `bench/analyze/` — trace and benchmark analysis
-- `bench/reports/` — frame-profile report generation
-- `checks/` — static architecture, release, and workflow checks
-- `device/diagnostics/` — device evidence summarizers
-- `lib/` — shared shell/Python implementation and fixtures
-- `media/` — media conversion and manifest harvesting
-- `release/databases/` — game-database release tooling
-- `release/packaging/` — distribution metadata and legal inventory generation
-- `release/platform/` — Main/FPGA/kernel identity, durable recovery, bundle, and manifest tools
-- `tests/` — host-local tests for scripts and workflow contracts
-- `experiments/` — non-production effect and preview experiments
+- `bench/analyze/` and `bench/reports/` — offline evidence analysis
+- `checks/` — static architecture and workflow checks
+- `media/` — host conversion and manifest generation
+- `release/` — host release-data and packaging tools
+- `tests/` — host-local contract tests
 
-Keep a command at the root when it is a documented public interface, a stable
-sandbox approval shape, or an attended device workflow. Prefer adding reusable
-implementation to the appropriate folder instead of adding another root-level
-helper.
+Device, ARM-build, deployment, profiling, acceptance, recovery, and scene
+orchestration belongs in Rust. New shell interfaces in those categories are
+rejected by `scripts/checks/check-no-operational-shell-orchestrators.py`.
 
-## Local workflow benchmarking
-
-Use `scripts/bench-local-workflow.sh --tier quick --group all` to measure Git,
-affected validation, ARM build, and simulated deploy iteration costs without
-changing the real index or contacting a MiSTer. Use `--tier full` for five
-measured Git/hook samples and two measured build/deploy samples, `--cold` for a
-benchmark-owned cold ARM target, and `--device` only for an attended hardware
-deploy sample. `--samples` and `--warmups` provide explicit bounded overrides.
-Results are retained under the ignored `build/local-workflow-bench/` directory.
+Normal repository work uses `scripts/agent task begin`, `check`, `verify`, and
+`commit`; committed runtime/platform work then uses `deliver`. Performance and
+diagnosis use the flag-free `benchmark` and `diagnose` commands.

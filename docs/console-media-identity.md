@@ -5,7 +5,7 @@ console media where practical. Runtime must not depend on scraper screenshot
 filenames, `gamelist.xml`, or scanning screenshot folders.
 
 The XML boundary is intentionally narrow: MAME `-listxml` and MAME `hash/*.xml`
-software lists are offline inputs to `scripts/mister mame-metadata-build`. The
+software lists are offline inputs to `mister mame-metadata-build`. The
 scanner and launcher read the generated SQLite metadata, not those XML files.
 
 ## Target Systems
@@ -28,7 +28,7 @@ Library identities use:
 
 ## Metadata Build
 
-`scripts/mister mame-metadata-build` writes arcade machine metadata and console
+`mister mame-metadata-build` writes arcade machine metadata and console
 software-list metadata into the same `mame.sqlite3`. The command can read MAME
 machine XML from `mame -listxml` or `--listxml`; it reads console software-list
 XML only from explicit `--software-list` paths or the target files inside a
@@ -44,7 +44,7 @@ Important tables:
 Build with a local MAME hash directory:
 
 ```bash
-scripts/mister mame-metadata-build \
+mister mame-metadata-build \
   --mame mame \
   --software-dir /path/to/mame/hash \
   --out build/mame.sqlite3
@@ -53,7 +53,7 @@ scripts/mister mame-metadata-build \
 When reusing an existing machine-only DB and adding software lists:
 
 ```bash
-scripts/mister mame-metadata-build \
+mister mame-metadata-build \
   --machine-sqlite build/mame.sqlite3 \
   --software-dir build/mame-hash \
   --out build/mame.sqlite3
@@ -166,7 +166,7 @@ if the entry is missing, the preview worker records the failed lookup and the UI
 shows the blank preview state. Preview pack changes are not catalog stamp inputs
 and do not trigger database rebuilds.
 
-For device acceptance, `scripts/mister catalog` reports `preview_keys` and
+For device acceptance, `mister catalog` reports `preview_keys` and
 `available_previews` on every `catalog_v3_system_tsv` row. Atari Lynx must have
 nonzero values for both after rebuilding with current MAME metadata and the
 installed screenshot-pack index.
@@ -182,8 +182,8 @@ does not build or copy screenshot packs or MAME/HBMAME metadata databases; treat
 those as fixed release artifacts produced by the host-side catalog/media tools.
 
 Screenshot-pack updates from Cloudflare R2 are handled by the MagiK runtime,
-`scripts/mister media-check`, `scripts/mister media-download`, and
-`scripts/profile-screenshot-download.sh`. Runtime v1 uses raw manifest
+`mister media-check`, `mister media-download`, and the component-selected
+`scripts/agent benchmark` media scenario. Runtime v1 uses raw manifest
 `compression: "none"` with `Accept-Encoding: identity`. The launcher runtime
 queues downloads only for systems discovered by the active catalog scan and
 runs one active pack download at a time; the active pack may fetch its small
@@ -193,6 +193,6 @@ negotiated responses and recorded header/cache evidence for the canonical
 improves after including download, decompression, saving,
 verification, and cache behavior.
 
-Use `scripts/profile-screenshot-save.sh` when changing the save/publish path.
-It reports copy, file sync, rename, parent sync, total time, and progress event
-count for the supported progress-capable save path.
+Changes to the save/publish path use `scripts/agent benchmark`; structured
+events report copy, file sync, rename, parent sync, total time, and progress
+event count for the supported progress-capable save path.

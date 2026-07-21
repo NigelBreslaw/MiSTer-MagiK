@@ -1,76 +1,14 @@
-# Effect Experiments
+# UI effect experiments
 
-Effect scenes are experimental visual probes. They are useful for exploring
-future MiSTer MagiK transitions, camera/background effects, sprite effects, text
-effects, and raster/palette ideas, but they are not part of the production
-launcher UI and their results are not release benchmark evidence.
+Effect sources remain non-production UI fixtures. Their former device,
+profiling, capture, and benchmark shell matrices are retired.
 
-Production builds expose the real launcher, the fixed 200ms fade preview
-transition, and the minimal runtime command surface. Experiment builds add:
+Changes to effects use the normal task baseline and repository validation. If a
+changed component owns a canonical device performance scenario, run the
+flag-free `scripts/agent benchmark` after committing. Humans may inspect one of
+the fixed supported scenes with `mister scene` and capture a still with
+`mister --capture-buffer`; those operations do not build or deploy artifacts.
 
-- `ui camera-effects`
-- `ui sprite-effects`
-- `ui text-effects`
-- `ui raster-effects`
-- `ui transition-effects`
-- `ui screensaver`
-- `effect-bench`
-- expanded preview transition variants under
-  `scripts/experiments/preview/profile-preview-transition-mega.sh`
-
-The source layout mirrors that boundary. Standalone effect renderers live under
-`apps/mister/src/experiments/effects/`, and the matching UI runner loops live
-under `apps/mister/src/ui_runner/experiments/effects/`. The root library exports
-only `experiments::effects` behind `#[cfg(mister_experiments)]`; do not add
-root `pub mod` exports or production imports for unfinished effect work.
-
-Production preview transitions should stay fade-only. Non-fade preview
-transition metadata and renderer helpers belong behind the experiment gate, even
-when they sit near production preview code for access to internal raw565
-helpers.
-
-`effect-bench` supports `native`, `2x`, `half`, and `full` fill modes. All
-modes now prepare RGB565 scratch pixels and present through the checked
-framebuffer APIs; there is no direct raw/scaled framebuffer copy path or FPGA
-scaler fill mode to preserve.
-
-Effect source images are generated in code. Do not add runtime PNG/JPG fixture
-decoders for effect scenes; production screenshot media is prepared offline as
-raw565-oriented preview packs.
-
-Build and deploy an experiment-enabled binary before running these tools:
-
-```bash
-scripts/agent deliver
-```
-
-The experiment scripts also accept `--deploy-device`; that path deploys an
-experiment-enabled binary first. With `--skip-build`, each script preflights the
-deployed binary and fails before appending TSV rows if experiments are missing.
-
-## Scripts
-
-```bash
-scripts/experiments/preview/profile-preview-transition-mega.sh LABEL --deploy-device --segment-secs 5 --transition-ms 320
-scripts/experiments/effects/profile-camera-effects.sh LABEL --mode mega --segment-secs N
-scripts/experiments/effects/profile-sprite-effects.sh LABEL --mode mega --segment-secs N
-scripts/experiments/effects/profile-text-effects.sh LABEL --mode mega --segment-secs N
-scripts/experiments/effects/profile-raster-effects.sh LABEL --mode mega --segment-secs N
-scripts/experiments/effects/profile-transition-effects.sh LABEL --mode mega --segment-secs N
-scripts/experiments/effects/profile-screensaver.sh LABEL --mode mega --segment-secs N
-scripts/experiments/effects/bench-effects.sh LABEL --device --replace-label
-```
-
-Use these outputs to compare experiment variants with each other. Do not cite
-them as production launcher, Arcade preview, or release-readiness evidence.
-
-## Catalog History
-
-The dated catalogs remain useful background, but they are history rather than
-current benchmark policy:
-
-- `history/2026-6-13/camera-effects-catalog.md`
-- `history/2026-6-13/sprite-effects-catalog.md`
-- `history/2026-6-13/text-effects-catalog.md`
-- `history/2026-6-13/raster-effects-catalog.md`
-- `history/2026-6-13/transition-effects-catalog.md`
+Do not infer production performance from direct effect scenes. Production
+conclusions require the supervised launcher velocity scenario and RGB565
+presentation evidence.

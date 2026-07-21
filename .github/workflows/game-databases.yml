@@ -184,7 +184,7 @@ jobs:
           sparse-checkout: hash
 
       - name: Build MAME database
-        run: scripts/mister mame-metadata-build --listxml build/mame-listxml.xml --software-dir "$GITHUB_WORKSPACE/mame-source/hash" --out build/mame.sqlite3
+        run: cargo run --locked --manifest-path mister/tools/host/Cargo.toml --bin mister -- mame-metadata-build --listxml build/mame-listxml.xml --software-dir "$GITHUB_WORKSPACE/mame-source/hash" --out build/mame.sqlite3
 
       - name: Verify Atari Lynx software list
         run: |
@@ -293,7 +293,7 @@ jobs:
 
       - name: Build HBMAME database
         if: needs.inspect.outputs.hbmame-changed == 'true'
-        run: scripts/mister mame-metadata-build --listxml build/hbmame-listxml.xml --out build/hbmame.sqlite3
+        run: cargo run --locked --manifest-path mister/tools/host/Cargo.toml --bin mister -- mame-metadata-build --listxml build/hbmame-listxml.xml --out build/hbmame.sqlite3
 
       - name: Reuse unchanged HBMAME database
         if: needs.inspect.outputs.hbmame-changed != 'true'

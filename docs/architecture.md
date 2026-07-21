@@ -561,8 +561,8 @@ Current rules:
 - Production `mister-magik-fb` exposes the minimal command surface, including
   `ui`, `early-black`, `library-refresh`, and read-only `catalog-v3-inspect`.
   Low-level probes are diagnostic/experiment builds, not release commands.
-- Build/update the catalog outside the UI hot path with
-  `mister-magik-fb library-refresh` or `scripts/mister` helpers.
+- Build/update the catalog outside the UI hot path through the typed benchmark
+  or delivery workflows; humans may inspect it with `mister catalog`.
 - Launcher boot seeds Home/system counts from the V3 registry and eagerly
   hydrates only Arcade. Other systems load lazily. If source state is stale,
   the launcher shows a `Library changed` dialog; `Rebuild` uses the same

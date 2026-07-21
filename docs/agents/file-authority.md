@@ -9,12 +9,12 @@ Consult this table before editing or staging an unfamiliar file.
 | `apps/mister/ui/**/*.slint`, `apps/desktop/ui/**/*.slint` | Hand-edited Slint | The `.slint` source | Cargo/Slint build | Stage source, never generated Rust | Production UI or desktop compiled check |
 | `apps/mister/ui-generated/{Cargo.toml,build.rs,src/lib.rs}` | Hand-edited generation glue | These tracked files and `apps/mister/ui/` | Cargo build | Stage only intentional glue changes | All-public format and UI check |
 | Cargo `OUT_DIR/*.rs` for Slint | Build-generated | `.slint` files and `ui-generated/build.rs` | Selected automatically by `scripts/agent verify` | Never stage | Rebuild from authoritative inputs |
-| `scripts/**/*.sh`, `scripts/**/*.py`, and extensionless executable entrypoints such as `scripts/agent` and `scripts/mister` | Hand-edited tooling | The file itself | None | Stage focused script changes | `scripts/agent verify` from the task baseline |
+| `scripts/**/*.sh`, `scripts/**/*.py`, and `scripts/agent` | Host-only tooling | The file itself | None | No device/build/deploy/profile/acceptance shell orchestration | `scripts/agent verify` from the task baseline |
 | `documentation/src/**`, `docs/**` | Hand-edited documentation | The Markdown/MDX/config source | `corepack pnpm --dir documentation run build` | Stage source; not `documentation/dist/` | Documentation build |
 | `mister/platform/kernel/scanout-slots/**`, `mister/platform/fpga/**` | Hand-edited platform source | C/headers/RTL/project inputs | Approved kernel/FPGA build scripts | Never stage generated modules/RBFs outside release evidence | Contract checks plus platform qualification |
 | `crates/catalog/data/core_launch_manifest.json` | Checked-in generated manifest | Installed-core evidence and harvest policy | `python3 scripts/media/harvest-core-launch-manifest.py --help` | Stage generator and regenerated manifest together | Catalog tests/full host |
 | `apps/mister/licenses/RUST-LIBRARIES.txt` | Checked-in generated legal inventory | Cargo locks and release features | `python3 scripts/release/packaging/generate-third-party-licenses.py` | Stage when dependency/release inventory changes | Release/host checks |
-| `documentation/public/screenshots/**` | Checked-in generated documentation media | Running UI and capture scenario | `documentation/scripts/capture-guide-screenshots.sh` | Stage only intentional reviewed captures and metadata | Documentation build plus visual review |
+| `documentation/public/screenshots/**` | Checked-in generated documentation media | Running UI and an attended typed `mister --capture-buffer` operation | Manual capture and review | Stage only intentional reviewed captures and metadata | Documentation build plus visual review |
 | `**/Cargo.lock` | Checked-in dependency resolution | Corresponding `Cargo.toml` and Cargo resolver | `cargo generate-lockfile --manifest-path PATH/Cargo.toml` | Stage only with dependency/feature changes | Matching crate tests and Clippy |
 | `build/`, `dist/`, `outputs/`, `**/target/`, `documentation/dist/` | Ignored generated output | Source and build commands | Re-run producing command | Never stage | Disposable |
 | `history/**` | Checked-in curated evidence | Completed experiment and its provenance | Experiment-specific | Stage only deliberate dated evidence; excluded from default search | Evidence-specific checks |
@@ -22,7 +22,7 @@ Consult this table before editing or staging an unfamiliar file.
 | `private/magik-cloud/**` | Private submodule | Private repository | `scripts/magik-cloud run -- ...` | Commit/push private repo first; parent stages only gitlink | Private submodule checks |
 | `private/test-fixtures/**` | Ignored local fixtures | Local device/library data | Manual/local | Never stage | Optional local validation only |
 | `.env*`, `.wrangler/**`, credentials, tokens | Ignored secrets | Local secret manager/environment | Never regenerate into repo | Never stage or print | `git check-ignore` |
-| Device paths under `/media/fat` and `/tmp/mister-magik` | Device-owned runtime state | Installed bundle/runtime | Approved `scripts/mister` or deploy command | Never copy into Git as source | Attended device checks only |
+| Device paths under `/media/fat` and `/tmp/mister-magik` | Device-owned runtime state | Installed bundle/runtime | Typed `DeviceRequest`, `scripts/agent deliver`, or attended Rust `mister` command | Never copy into Git as source | Attended device checks only |
 
 When a generated file is not listed, find its producer before editing. If no
 producer can be found, stop and update this guide as part of the change rather

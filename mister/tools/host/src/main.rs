@@ -510,6 +510,10 @@ pub fn run_cli() -> Result<()> {
     }
     match action.as_str() {
         "--capture-buffer" => capture_buffer(&args)?,
+        "arming-status" => arming_status()?,
+        "core-list" => core_list()?,
+        "mode" => mode_cli(&args)?,
+        "scene" => scene_cli(&args)?,
         "connected" => println!("connected"),
         "run" => {
             let stream = args.first().map(|s| s.as_str()) == Some("--stream");
@@ -581,7 +585,10 @@ pub fn run_cli() -> Result<()> {
             println!("get {} -> {}", args[0], args[1]);
         }
         "db" | "library-db" => {
-            return Err("scripts/mister db was retired with Catalog V2; use scripts/mister catalog to validate Catalog V3".into());
+            return Err(
+                "mister db was retired with Catalog V2; use mister catalog to validate Catalog V3"
+                    .into(),
+            );
         }
         "catalog" => {
             let sess = connect(10)?;
@@ -790,7 +797,7 @@ pub fn run_cli() -> Result<()> {
 
 fn usage() {
     println!(
-        "usage: scripts/mister --capture-buffer\n       scripts/mister <connected|run|put|deploy-magik-bin|get|db|library-db|wait|connection-profile|media-check|media-download|media-bench-download|media-cloudflare-check|launcher-restart|boot-net-profile|boot-tcp-profile|agent|watch-reboot|reboot|reboot-wait|status|doctor|boot-capture|display-read|ini-repair-boot|ini-select-main|inittab-ensure-stock|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|mame-metadata-build|recover> ...\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>]\n       launcher-restart [--env KEY=VALUE]... [--clear-env] [--timeout SECS]; agent <ping|status|logs|timeline|diagnostics|deploy-magik-bin|magik|reboot-wait|boot-profile>; reboot/reboot-wait default to supervised MagiK visual-lockdown reboot; pass --raw for detached Linux reboot recovery; pass --direct-reset for fast quiescent dev reboots; --direct-reset-no-sync is experimental"
+        "usage: mister --capture-buffer\n       mister <status|arming-status|mode|scene|core-list|catalog|media-check|media-download|agent|reboot-wait|doctor|mame-metadata-build> ...\n       mode <status|dev|public|stock>\n       scene <launcher|controller_test|tear_pattern|video_playback> [seconds]\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>]\n       operator commands are typed and bounded; direct-reset-no-sync remains experimental and requires a volatile session token"
     );
 }
 
@@ -965,6 +972,138 @@ fn safe_repair_command() -> String {
         "set -eu; rm -f /tmp/mister-magik/agent-benchmark.tsv /tmp/mister-magik/agent-benchmark-warmup.tsv /tmp/mister-magik/agent-cold-benchmark.out /tmp/mister-magik/stale-launcher-return-state.json; {}",
         platform_safety_script()
     )
+}
+
+fn arming_status() -> Result<()> {
+    let session = connect(10)?;
+    let command = "set -eu; found=0; for path in /media/fat/mister-magik/launcher.env /media/fat/mister-magik-dev/launcher.env /tmp/mister-magik/fs-fault-launcher.env /tmp/mister-magik/fs-fault-session /tmp/mister-magik/fs-fault.json /media/fat/mister-magik/rebuild-on-next-boot /media/fat/mister-magik-dev/rebuild-on-next-boot; do if test -e \"$path\"; then printf 'armed=%s\\n' \"$path\"; found=1; fi; done; test \"$found\" = 1 || echo arming=clear";
+    let output = exec(&session, command, false)?;
+    if let Some(message) = exec_failure_message("arming status", &output) {
+        return Err(message.into());
+    }
+    print!("{}", output.stdout);
+    Ok(())
+}
+
+fn core_list() -> Result<()> {
+    let session = connect(10)?;
+    let command = "set -eu; for directory in _Console _Computer _Arcade/cores _LLAPI; do find \"/media/fat/$directory\" -maxdepth 3 -type f -name '*.rbf' -printf '%s\\t%T@\\t%p\\n' 2>/dev/null || true; done";
+    let output = exec(&session, command, false)?;
+    if let Some(message) = exec_failure_message("core list", &output) {
+        return Err(message.into());
+    }
+    print!("{}", output.stdout);
+    Ok(())
+}
+
+fn mode_cli(args: &[String]) -> Result<()> {
+    let mode = args.first().map(String::as_str).unwrap_or("status");
+    if args.len() > 1 || !matches!(mode, "status" | "dev" | "public" | "stock") {
+        return Err("usage: mister mode <status|dev|public|stock>".into());
+    }
+    let session = connect(10)?;
+    if mode == "status" {
+        let status = collect_status(&session)?;
+        print_status_summary(&status);
+        arming_status()?;
+        return Ok(());
+    }
+    let selection = match mode {
+        "dev" => {
+            exec_checked(
+                &session,
+                "development platform verify",
+                &installed_platform_verify_command(Layout::Development),
+            )?;
+            "MiSTer_MagiKDev"
+        }
+        "public" => {
+            exec_checked(
+                &session,
+                "public platform verify",
+                &installed_platform_verify_command(Layout::Public),
+            )?;
+            "MiSTer_MagiK"
+        }
+        "stock" => "MiSTer",
+        _ => unreachable!(),
+    };
+    ensure_stock_inittab(&session, false)?;
+    edit_remote_ini(&session, IniEdit::SelectMain(selection.into()), false)?;
+    exec_checked(
+        &session,
+        "mode arming cleanup",
+        &format!(
+            "set -eu; {}; {}",
+            release_arming_cleanup_command(),
+            platform_safety_script()
+        ),
+    )?;
+    issue_reboot(&session, RebootMode::Supervised)?;
+    drop(session);
+    if !wait_down(40.0) || wait_up(120.0)? != 0 {
+        return Err("mode switch did not complete its bounded reboot transition".into());
+    }
+    Ok(())
+}
+
+fn installed_platform_verify_command(layout: Layout) -> String {
+    let (root, main) = match layout {
+        Layout::Development => ("/media/fat/mister-magik-dev", "/media/fat/MiSTer_MagiKDev"),
+        Layout::Public => ("/media/fat/mister-magik", "/media/fat/MiSTer_MagiK"),
+    };
+    format!(
+        "set -eu; root={root}; manifest=$root/platform-v2.manifest; test -s \"$manifest\"; test -x {main}; test -x \"$root/mister-magik-fb\"; test -r \"$root/mister_magik_scanout_slots.ko\"; test -r \"$root/fpga/menu-magik-vblank-latch.rbf\"; grep -qx 'format=mister-magik-platform-v2' \"$manifest\"; get() {{ sed -n \"s/^$1=//p\" \"$manifest\"; }}; test \"$(sha256sum {main} | awk '{{print $1}}')\" = \"$(get main_sha256)\"; test \"$(sha256sum \"$root/mister-magik-fb\" | awk '{{print $1}}')\" = \"$(get gui_sha256)\"; test \"$(sha256sum \"$root/mister_magik_scanout_slots.ko\" | awk '{{print $1}}')\" = \"$(get scanout_module_sha256)\"; test \"$(sha256sum \"$root/fpga/menu-magik-vblank-latch.rbf\" | awk '{{print $1}}')\" = \"$(get latch_rbf_sha256)\""
+    )
+}
+
+fn scene_cli(args: &[String]) -> Result<()> {
+    let scene = args.first().map(String::as_str).unwrap_or("launcher");
+    if !matches!(
+        scene,
+        "launcher" | "controller_test" | "tear_pattern" | "video_playback"
+    ) {
+        return Err(
+            "usage: mister scene <launcher|controller_test|tear_pattern|video_playback> [seconds]"
+                .into(),
+        );
+    }
+    let seconds = args
+        .get(1)
+        .map(|value| value.parse::<u64>())
+        .transpose()?
+        .unwrap_or(if scene == "launcher" { 0 } else { 10 });
+    if args.len() > 2 || seconds > 3_600 || (scene != "launcher" && seconds == 0) {
+        return Err("scene duration must be 1..=3600 seconds".into());
+    }
+    let session = connect(10)?;
+    if scene == "launcher" {
+        return launcher_restart(
+            &session,
+            &LauncherRestartOptions {
+                clear_env: true,
+                ..LauncherRestartOptions::default()
+            },
+        );
+    }
+    exec_checked(
+        &session,
+        "scene suspend",
+        &acknowledged_main_command("mister_magik_suspend"),
+    )?;
+    let run = exec_checked(
+        &session,
+        "operator scene",
+        &format!(
+            "set -eu; test -x /media/fat/mister-magik-dev/mister-magik-fb; /media/fat/mister-magik-dev/mister-magik-fb ui {scene} {seconds} >/tmp/mister-magik-{scene}.log 2>&1"
+        ),
+    );
+    let resume = exec_checked(
+        &session,
+        "scene resume",
+        &acknowledged_main_command("mister_magik_resume"),
+    );
+    run.and(resume)
 }
 
 fn benchmark_trace_path(warmup: bool) -> &'static str {
@@ -2482,7 +2621,7 @@ fn agent_cli(args: &[String]) -> Result<()> {
 
 fn agent_usage() {
     println!(
-        "usage: scripts/mister agent <ping|status|logs|timeline|sd-list|diagnostics|deploy-magik-bin|magik|reboot-wait|boot-profile>\n       logs [--json]\n       timeline [--json]\n       sd-list PATH [--protocol auto|v1|v2] [--show-hidden] [--repeat N] [--json]\n       diagnostics [--out DIR]\n       deploy-magik-bin LOCAL [REMOTE]\n       magik <status|suspend|resume|restart-launcher>\n       reboot-wait [--timeout SECS] [--raw|--direct-reset|--direct-reset-no-sync]\n       boot-profile [samples] [--timeout SECS] [--probe-timeout-ms MS] [--sleep-ms MS] [--raw|--direct-reset|--direct-reset-no-sync] [--fail-on-timeout]"
+        "usage: mister agent <ping|status|logs|timeline|sd-list|diagnostics|deploy-magik-bin|magik|reboot-wait|boot-profile>\n       logs [--json]\n       timeline [--json]\n       sd-list PATH [--protocol auto|v1|v2] [--show-hidden] [--repeat N] [--json]\n       diagnostics [--out DIR]\n       deploy-magik-bin LOCAL [REMOTE]\n       magik <status|suspend|resume|restart-launcher>\n       reboot-wait [--timeout SECS] [--raw|--direct-reset|--direct-reset-no-sync]\n       boot-profile [samples] [--timeout SECS] [--probe-timeout-ms MS] [--sleep-ms MS] [--raw|--direct-reset|--direct-reset-no-sync] [--fail-on-timeout]"
     );
 }
 
@@ -2630,7 +2769,7 @@ fn validate_capture_buffer_args(args: &[String]) -> Result<()> {
     if args.is_empty() {
         Ok(())
     } else {
-        Err("usage: scripts/mister --capture-buffer".into())
+        Err("usage: mister --capture-buffer".into())
     }
 }
 
@@ -2718,9 +2857,7 @@ fn agent_framebuffer_capture(args: &[String]) -> Result<()> {
                 json_output = Some(PathBuf::from(path));
             }
             "-h" | "--help" => {
-                println!(
-                    "usage: scripts/mister agent framebuffer-capture OUT.png [--json OUT.json]"
-                );
+                println!("usage: mister agent framebuffer-capture OUT.png [--json OUT.json]");
                 return Ok(());
             }
             other if other.starts_with('-') => {
@@ -2802,7 +2939,7 @@ fn agent_framebuffer_capture_binary(args: &[String], encoding: &str) -> Result<(
                 json_output = Some(PathBuf::from(path));
             }
             "-h" | "--help" => {
-                println!("usage: scripts/mister agent {command_name} OUT.raw [--json OUT.json]");
+                println!("usage: mister agent {command_name} OUT.raw [--json OUT.json]");
                 return Ok(());
             }
             other if other.starts_with('-') => {
@@ -2995,7 +3132,7 @@ fn agent_deploy_magik_bin(args: &[String]) -> Result<()> {
         .first()
         .ok_or("agent deploy-magik-bin needs LOCAL [REMOTE]")?;
     if positional.len() > 2 {
-        return Err("usage: scripts/mister agent deploy-magik-bin LOCAL [REMOTE] [--json]".into());
+        return Err("usage: mister agent deploy-magik-bin LOCAL [REMOTE] [--json]".into());
     }
     let remote = positional
         .get(1)
@@ -3074,7 +3211,7 @@ fn agent_magik(args: &[String]) -> Result<()> {
         "status" | "suspend" | "resume" | "restart-launcher" | "return-to-launcher"
         | "exit-to-menu" | "launch" => {}
         "-h" | "--help" => {
-            println!("usage: scripts/mister agent magik <status|suspend|resume|restart-launcher|return-to-launcher|exit-to-menu|launch TARGET> [--json]");
+            println!("usage: mister agent magik <status|suspend|resume|restart-launcher|return-to-launcher|exit-to-menu|launch TARGET> [--json]");
             return Ok(());
         }
         other => return Err(format!("unknown agent magik action: {other}").into()),
@@ -3100,7 +3237,7 @@ fn agent_magik(args: &[String]) -> Result<()> {
     };
     let target = positional.get(1).map(|value| value.as_str());
     if (action == "launch") != target.is_some() || positional.len() > 2 {
-        return Err("usage: scripts/mister agent magik <status|suspend|resume|restart-launcher|return-to-launcher|exit-to-menu|launch TARGET> [--json]".into());
+        return Err("usage: mister agent magik <status|suspend|resume|restart-launcher|return-to-launcher|exit-to-menu|launch TARGET> [--json]".into());
     }
     let request = json!({"action": action, "operation_id": operation_id, "expected_generation": expected_generation, "target": target});
     let reply = if action == "status" {
@@ -3335,7 +3472,7 @@ fn launcher_restart_help_requested(args: &[String]) -> bool {
 
 fn launcher_restart_usage() {
     println!(
-        "usage: scripts/mister launcher-restart [--env KEY=VALUE]... [--clear-env] [--timeout SECS] [--remote-env PATH]"
+        "usage: mister launcher-restart [--env KEY=VALUE]... [--clear-env] [--timeout SECS] [--remote-env PATH]"
     );
 }
 
@@ -4452,7 +4589,10 @@ fn agent_net_snapshot(value: &Value) -> Option<AgentNetSnapshot> {
 
 fn run_catalog_inspect(sess: &Session, args: &[String]) -> Result<()> {
     if !args.is_empty() {
-        return Err("usage: scripts/mister catalog (Catalog V3 validates the registry and every system shard)".into());
+        return Err(
+            "usage: mister catalog (Catalog V3 validates the registry and every system shard)"
+                .into(),
+        );
     }
     let binary = configured_remote_path(
         "MISTER_MAGIK_BIN",
@@ -4506,9 +4646,7 @@ fn parse_library_db_queries(args: &[String]) -> Result<(String, Vec<String>)> {
         queries.push(query_parts.join(" "));
     }
     if queries.is_empty() {
-        return Err(
-            "usage: scripts/mister db [--path PATH] SQL | --query SQL [--query SQL ...]".into(),
-        );
+        return Err("usage: mister db [--path PATH] SQL | --query SQL [--query SQL ...]".into());
     }
     Ok((remote_path, queries))
 }
@@ -5016,7 +5154,7 @@ fn collect_status(sess: &Session) -> Result<Value> {
         .and_then(Value::as_str);
     let visual = json!({
         "class": "not_sampled",
-        "note": "Use scripts/mister --capture-buffer for an agent-backed PNG capture."
+        "note": "Use mister --capture-buffer for an agent-backed PNG capture."
     });
     let fb0_visible_candidate = owner == Some("fb0");
     Ok(json!({
@@ -5594,7 +5732,7 @@ fn magik_fb0_owner_pids(status: &Value) -> Vec<u64> {
 
 fn boot_capture(deploy: bool, keep_enabled: bool, settle_secs: u64) -> Result<()> {
     if deploy {
-        return Err("boot-capture --deploy is intentionally not wired into the Rust tool yet; run deploy-platform.sh first".into());
+        return Err("boot-capture --deploy is retired; commit the platform change and run scripts/agent deliver first".into());
     }
     {
         let sess = connect(10)?;
@@ -7105,7 +7243,7 @@ H: Handlers=event3 js0"#
             validate_capture_buffer_args(&["extra".to_string()])
                 .unwrap_err()
                 .to_string(),
-            "usage: scripts/mister --capture-buffer"
+            "usage: mister --capture-buffer"
         );
     }
 
@@ -7278,6 +7416,19 @@ H: Handlers=event3 js0"#
         assert!(!repair.contains("rm -f /media/fat/mister-magik/launcher.env"));
         assert!(!repair.contains("rm -f /media/fat/mister-magik-dev/launcher.env"));
         assert!(!repair.contains("rebuild-on-next-boot; rm"));
+    }
+
+    #[test]
+    fn typed_operator_commands_own_platform_and_scene_safety() {
+        for layout in [Layout::Development, Layout::Public] {
+            let verify = installed_platform_verify_command(layout);
+            assert!(verify.contains("platform-v2.manifest"));
+            assert!(verify.contains("sha256sum"));
+            assert!(verify.contains("scanout_module_sha256"));
+            assert!(verify.contains("latch_rbf_sha256"));
+        }
+        assert!(release_arming_cleanup_command().contains("rebuild-on-next-boot"));
+        assert!(!DeviceRequest::CaptureFramebuffer.label().contains("run"));
     }
 
     const MAME_1942_FIXTURE: &str = r#"<?xml version="1.0"?>

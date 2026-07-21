@@ -1,7 +1,7 @@
 # AGENTS.md - desktop app
 
 Desktop-specific notes for agents working in this folder. The root
-`AGENTS.md` still applies, especially device safety and `scripts/mister` rules.
+`AGENTS.md` still applies, especially device safety and typed host-tool rules.
 File authority is documented in `docs/agents/file-authority.md`.
 
 ## Current Shape

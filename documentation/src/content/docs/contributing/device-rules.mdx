@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-Use `scripts/mister` for all device communication. Do not use raw SSH or raw SCP unless explicitly doing recovery work.
+Use `mister` for all device communication. Do not use raw SSH or raw SCP unless explicitly doing recovery work.
 
 For one-shot documentation screenshots:
 
@@ -17,7 +17,7 @@ corepack pnpm capture:screenshots
 For a one-shot still capture, use:
 
 ```bash
-scripts/mister --capture-buffer
+mister --capture-buffer
 ```
 
 Do not add raw `/dev/fb0` dumps or host-side raw-to-PNG paths. Agent captures are useful while the UI is running, but they are not proof of HDMI visibility because the FPGA may scan a different buffer.

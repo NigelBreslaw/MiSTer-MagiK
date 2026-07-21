@@ -50,9 +50,9 @@ milestone.
 
 The GUI uses the same token-protected line-delimited JSON protocol documented in
 `docs/magik-agent.md`, but connects directly instead of shelling out through
-`scripts/mister`. That keeps the desktop app cross-platform and avoids routing a
+`mister`. That keeps the desktop app cross-platform and avoids routing a
 long-running UI through a Unix shell wrapper. Device scripts and recovery work
-should still use `scripts/mister`.
+should still use `mister`.
 
 ## Analytics
 

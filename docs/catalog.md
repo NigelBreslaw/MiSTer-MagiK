@@ -246,13 +246,10 @@ hard validation error.
 The builder and projection machinery live in `crates/catalog` and run
 without the UI:
 
-```bash
-cargo test --manifest-path crates/catalog/Cargo.toml --features builder
-cargo run --release --manifest-path crates/catalog/Cargo.toml \
-  --features builder --bin catalog-lab -- rebuild-bench STORAGE SYSTEMS GAMES
-scripts/bench-catalog-rebuild.sh LABEL
-scripts/profile-first-scan.sh LABEL --drop-arcade-bootstrap-index
-scripts/profile-first-scan.sh LABEL
+```text
+scripts/agent check
+scripts/agent verify
+scripts/agent benchmark
 ```
 
 The standalone suite covers registry atomicity, shard integrity, lazy reads,
@@ -302,7 +299,7 @@ remains in launch-failure recovery and captures dialog input; the original
 system, filter, scroll position, and selected row remain unchanged. Detailed
 paths and error codes are logged but are not shown in the primary UI.
 
-On a device, `mister-magik-fb catalog-v3-inspect` (or `scripts/mister catalog`)
+On a device, `mister-magik-fb catalog-v3-inspect` (or `mister catalog`)
 eagerly verifies both manifest slots, artifact sizes and hashes, state binding,
 scanner cache, every system shard, summed counts, duplicate visible family
 keys, structured-plan payload readability, canonical system/core agreement,
@@ -312,12 +309,10 @@ optional metadata keys report their visible game count as the source/family
 count and zero collapsed variants. This expensive command is acceptance
 tooling, not a launcher startup path.
 
-`scripts/device-catalog-acceptance.sh` adds process/layout checks and ensures
-legacy catalog artifacts are absent. `scripts/profile-catalog-contention.sh`
-runs the 120-second `human-turbo-hold` overlap gate. A valid contention result
-requires at least 600 frames overlapping catalog CPU work, at least 10 active
-catalog intervals, zero work-budget violations, zero two-frame wall stalls,
-zero vsync misses, and zero present failures.
+`scripts/agent benchmark` owns process/layout checks, deterministic cold data,
+structured event evaluation, catalog contention, and unconditional restoration.
+The scenario is selected from changed components and has no duration, label,
+skip-build, or fixture flags.
 
 ## Ownership
 

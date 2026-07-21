@@ -293,12 +293,12 @@ def build_report(root: Path, scope: str) -> Report:
             require_command(report, "cross", "install cross 0.2.5")
             require_command(report, "docker", "install and start Docker")
     if scope == "device":
-        mister = root / "scripts/mister"
+        mister = root / "mister/tools/host/target/debug/mister"
         report.add(
-            "device-wrapper",
+            "device-tool",
             os.access(mister, os.X_OK),
             str(mister),
-            "restore the executable scripts/mister wrapper",
+            "run scripts/agent check --paths mister/tools/host",
         )
         report.add(
             "device-network",

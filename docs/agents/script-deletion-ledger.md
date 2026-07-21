@@ -143,3 +143,21 @@ credentials, reboot instability, firmware incompatibility, arming files,
 physical recovery, and missing services produce exactly one user action and no
 implicit destructive repair. The reviewed scripts and orphaned libraries were
 deleted without replacement wrappers.
+
+## Device wrapper removal and shell boundary
+
+Reviewed on 2026-07-21. `scripts/mister` compiled and forwarded to the Rust host
+tool while also performing hidden manifest rebinding and latch activation;
+`magik-mode.sh` and `run-rust.sh` layered mode switching, reboot fallback,
+environment files, process supervision, and scene matrices on top. Those jobs
+now belong to fixed typed `mister` operator subcommands (`mode`, `scene`,
+`arming-status`, `core-list`, capture, status, and existing agent operations) or
+to the agent-cli delivery/benchmark/release state machines. The wrappers,
+supervision/reboot/layout/arming/manifest shell libraries, wrapper-specific
+tests, and documentation capture orchestrator were deleted.
+
+The scripts tree is now restricted to host-only packaging, conversion, CI,
+release-data, and pure analysis. The operational-shell ownership check rejects
+new device/build/deploy/profile/acceptance shell entrypoints and references to
+retired interfaces. Private pack tooling was migrated to invoke the typed host
+binary and committed in its own repository before this parent gitlink update.

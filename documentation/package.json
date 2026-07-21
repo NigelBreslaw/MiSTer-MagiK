@@ -8,8 +8,7 @@
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",
-    "preview": "astro preview",
-    "capture:screenshots": "./scripts/capture-guide-screenshots.sh"
+    "preview": "astro preview"
   },
   "dependencies": {
     "@astrojs/mdx": "^4.3.1",

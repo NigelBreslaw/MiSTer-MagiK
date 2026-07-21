@@ -159,8 +159,8 @@ The development script deploys:
 - the qualified Menu latch RBF and metadata to `/media/fat/mister-magik-dev/fpga/`
 - the complete platform contract to `/media/fat/mister-magik-dev/platform-v2.manifest`
 
-It does not change the selected Main. Activate it with
-`scripts/magik-mode.sh dev` after the complete manifest verifies.
+It does not change the selected Main. Activate it with `mister mode dev` after
+the complete manifest verifies.
 
 The manifest is activated last. The deploy script never writes root
 `/media/fat/menu.rbf`, which remains owned by `update_all`.

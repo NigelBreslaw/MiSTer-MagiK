@@ -9,7 +9,7 @@ on:
       - "mister/platform/runtime/src/framebuffer/scanout_slots.rs"
       - "mister/tools/agent/src/scanout_slots_contract.rs"
       - "agent-cli/src/delivery.rs"
-      - "scripts/magik-mode.sh"
+      - "mister/tools/host/src/main.rs"
       - "documentation/src/content/docs/architecture/kernel-scanout-plugin.mdx"
       - ".github/workflows/scanout-contract.yml"
   push:
@@ -18,7 +18,7 @@ on:
       - "mister/platform/runtime/src/framebuffer/scanout_slots.rs"
       - "mister/tools/agent/src/scanout_slots_contract.rs"
       - "agent-cli/src/delivery.rs"
-      - "scripts/magik-mode.sh"
+      - "mister/tools/host/src/main.rs"
       - "documentation/src/content/docs/architecture/kernel-scanout-plugin.mdx"
       - ".github/workflows/scanout-contract.yml"
 

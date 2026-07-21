@@ -26,7 +26,7 @@ test, confirm a non-network recovery path and interruption-safe cleanup. After
 direct-reset-no-sync experiments, verify no live arming file remains:
 
 ```bash
-scripts/mister run "ls -l /media/fat/mister-magik*/launcher.env /tmp/mister-magik/fs-fault* /media/fat/mister-magik*/rebuild-on-next-boot 2>/dev/null || true"
+mister arming-status
 ```
 
 If the MiSTer repeatedly reboots, stop normal deploy attempts. Remove stale
@@ -71,12 +71,13 @@ those trees are part of the task.
   work.
 - Never use the Codex GitHub plugin for repository, issue, PR, or Actions work.
   Use `gh`.
-- Use `scripts/mister` for all device communication; never raw SSH/SCP.
+- Use typed commands in the Rust `mister` host binary for device communication;
+  never raw SSH/SCP or its generic `run` command in maintained automation.
 - Device, Apple container, virtualization, and MiSTer commands require
   first-attempt escalation using their direct repository command.
 - On device timeout, refusal, route, or authentication failure, stop after the
   first wrapper attempt and report the device unavailable.
-- Edit `MiSTer.ini` only through `scripts/mister` mutators or approved
+- Edit `MiSTer.ini` only through typed `mister` mutators or approved
   install/restore scripts.
 - Apple Silicon ARM builds use Apple `container` by default. Do not switch to
   Docker/OrbStack unless explicitly comparing `MISTER_ARM_BUILD_BACKEND=cross`.
@@ -91,14 +92,16 @@ those trees are part of the task.
 ## Top-Level Commands
 
 ```bash
-scripts/agent doctor
 scripts/agent task begin
 scripts/agent check
 scripts/agent deliver
 scripts/agent plan
 scripts/agent verify
 scripts/agent commit -m "Describe the completed change"
-scripts/mister status
+scripts/agent benchmark
+scripts/agent diagnose
+mister status
+mister mode status
 ```
 
 `scripts/agent verify --staged` is the staged-index pre-commit interface and
@@ -127,9 +130,9 @@ or commit with raw Git when the task baseline workflow is available.
 
 Rust AI tasks require the read-only `lspi` MCP integration backed by the pinned
 rust-analyzer toolchain. Use it for symbols, definitions, implementations,
-references, types, call hierarchy, hover information, and diagnostics. Run
-`scripts/agent doctor` and resolve its remediation before Rust work if the MCP
-tools are unavailable.
+references, types, call hierarchy, hover information, and diagnostics. Resolve
+the reported semantic-tooling prerequisites before Rust work if MCP is
+unavailable.
 
 The LSP integration is navigation-only. Never use LSP formatting, code actions,
 renames, or other write operations. Make edits through the normal repository
@@ -144,7 +147,7 @@ then `scripts/agent commit` to validate and complete work.
 - Never launch cores with external `rbf_load`; use Main's command/FIFO handoff.
 - Never SIGSTOP MiSTer for the launcher.
 - Use Analytics live streaming for continuous framebuffer inspection and
-  `scripts/mister --capture-buffer` for stills. Do not add raw
+  `mister --capture-buffer` for stills. Do not add raw
   `/dev/fb0` capture paths.
 - `/dev/fb0` contents alone do not prove HDMI visibility.
 - Production rendering is RGB565-only. Do not restore wider-color routes.

@@ -23,9 +23,6 @@ from pathlib import Path
 from typing import Any
 
 
-CORE_DIRS = ("_Console", "_Computer", "_Arcade/cores", "_LLAPI")
-
-
 @dataclass(frozen=True)
 class ObservedCore:
     core_id: str
@@ -102,15 +99,8 @@ def observed_cores_from_fixture(path: Path) -> list[ObservedCore]:
 
 
 def observed_cores_from_device(mister: Path) -> list[ObservedCore]:
-    find_parts = []
-    for directory in CORE_DIRS:
-        find_parts.append(
-            f"find /media/fat/{directory} -maxdepth 3 -type f -name '*.rbf' "
-            "-printf '%s\\t%T@\\t%p\\n' 2>/dev/null"
-        )
-    command = " ; ".join(find_parts)
     result = subprocess.run(
-        [str(mister), "run", command],
+        [str(mister), "core-list"],
         check=True,
         text=True,
         stdout=subprocess.PIPE,
@@ -186,10 +176,11 @@ def parse_args() -> argparse.Namespace:
         help="Main_MiSTer checkout used for source evidence",
     )
     parser.add_argument(
-        "--mister",
+        "--mister-tool",
         type=Path,
-        default=root / "scripts/mister",
-        help="scripts/mister wrapper used for device core listing",
+        default=Path(os.environ.get("MISTER_TOOL", "mister")),
+        dest="mister",
+        help="typed Rust mister host binary used for device core listing",
     )
     parser.add_argument("--device-core-list", type=Path, help="fixture TSV: size, mtime, path")
     parser.add_argument("--skip-device", action="store_true", help="do not query the MiSTer")

@@ -6,22 +6,24 @@ File authority and regeneration commands are indexed in
 
 ## Ownership
 
-Scripts provide the approved validation, build, deploy, device, packaging,
-profiling, and release interfaces. Prefer extending an existing entrypoint over
-creating a near-duplicate command.
+Scripts provide host validation, packaging, conversion, CI, release-data, and
+pure-analysis interfaces. Device, build, deployment, profiling, acceptance,
+and recovery orchestration belongs in typed Rust.
 
 Stable public commands remain directly under `scripts/`. Shared implementation,
 checks, tests, analysis, media, and release helpers are organized according to
 `scripts/README.md`.
 
-Run `scripts/agent doctor` to inspect local prerequisites without contacting the
-MiSTer.
+Run `scripts/agent check` to inspect task-scoped local prerequisites without
+contacting the MiSTer.
 
 ## Rules
 
 - Use Bash with `set -euo pipefail`; keep macOS Bash compatibility.
 - Preserve stable direct command shapes used by sandbox approvals.
-- Use `scripts/mister`, never raw SSH/SCP.
+- Do not add device/build/deploy/profile/acceptance shell orchestrators.
+- Human device operations use the typed Rust `mister` host binary; agents use
+  `scripts/agent deliver`, `benchmark`, or `diagnose`.
 - Device/network commands must fail after one bounded wrapper attempt.
 - Destructive runners require interruption-safe cleanup and volatile arming.
 - Self-tests must use temporary/local fixtures and never contact the MiSTer.

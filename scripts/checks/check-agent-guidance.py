@@ -35,7 +35,6 @@ def main() -> int:
     for command in (
         "scripts/media/harvest-core-launch-manifest.py",
         "scripts/release/packaging/generate-third-party-licenses.py",
-        "documentation/scripts/capture-guide-screenshots.sh",
     ):
         if command not in authority or not (ROOT / command).is_file():
             raise SystemExit(f"file authority regeneration command missing: {command}")
@@ -81,7 +80,7 @@ def main() -> int:
         "scripts/deploy-rust.sh",
         "scripts/deploy-platform.sh",
         "apps/mister/build-arm.sh --device",
-        "scripts/mister agent deploy-magik-bin",
+        "mister agent deploy-magik-bin",
     )
     agent_facing_guidance = (
         ROOT / "AGENTS.md",

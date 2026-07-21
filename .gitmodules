@@ -5,7 +5,6 @@
 	path = private/magik-cloud
 	url = git@github.com:NigelBreslaw/magik-cloud.git
 	update = none
-	ignore = all
 [submodule "desktop/vendor/material-icon-theme"]
 	path = apps/desktop/vendor/material-icon-theme
 	url = https://github.com/material-extensions/vscode-material-icon-theme.git

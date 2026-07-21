@@ -565,22 +565,13 @@ fn add_script_operations(
             "changed shell script → syntax",
         ));
     }
-    if path == Path::new("scripts/mister") || text.contains("mister-magik-agent") {
-        add(op(
-            "scripts.mister-safety",
-            "Check MiSTer wrapper safety",
-            "scripts/checks/check-no-main-kill.sh",
-            &[],
-            "MiSTer wrapper changed",
-        ));
-        add(op(
-            "scripts.mister-guidance",
-            "Check MiSTer wrapper guidance",
-            "python3",
-            &["scripts/checks/check-agent-guidance.py"],
-            "MiSTer wrapper changed",
-        ));
-    }
+    add(op(
+        "scripts.no-orchestrator-regrowth",
+        "Check operational shell boundaries",
+        "python3",
+        &["scripts/checks/check-no-operational-shell-orchestrators.py"],
+        "script source → orchestration ownership contract",
+    ));
     if text.contains("quartus-r2-cache") || text.contains("install-quartus-lite") {
         add(op(
             "scripts.quartus-cache",
@@ -821,11 +812,11 @@ fn host_tool_operations(full: bool) -> Vec<Operation> {
     if full {
         operations.extend([
             op(
-                "host.magik-mode",
-                "Test MagiK mode switching",
-                "scripts/tests/test-magik-mode.sh",
-                &[],
-                "full host verification → mode contract",
+                "host.no-orchestrator-regrowth",
+                "Check operational shell boundaries",
+                "python3",
+                &["scripts/checks/check-no-operational-shell-orchestrators.py"],
+                "full host verification → orchestration ownership contract",
             ),
             op(
                 "host.installer",
@@ -1035,21 +1026,6 @@ mod tests {
             .find(|operation| operation.id == "agent-cli.format")
             .unwrap();
         assert_eq!(format.args.first().map(String::as_str), Some("fmt"));
-    }
-
-    #[test]
-    fn mister_wrapper_does_not_select_quartus() {
-        let plan = affected_plan(
-            Intent::Check {
-                scope: Scope::Paths(vec![]),
-            },
-            vec!["scripts/mister".into()],
-        )
-        .unwrap();
-        assert!(plan
-            .operations
-            .iter()
-            .all(|operation| !operation.id.contains("quartus")));
     }
 
     #[test]
