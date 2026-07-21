@@ -296,6 +296,8 @@ impl DeviceOperations for NativeDevice {
                 };
                 let command = delivery_health_command(label).map_err(device_failure)?;
                 let session = connect(10).map_err(device_failure)?;
+                wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))
+                    .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
                 exec_checked(&session, "delivery health", &command)
                     .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
                 "healthy".into()
@@ -318,6 +320,8 @@ impl DeviceOperations for NativeDevice {
                 let command =
                     delivery_smoke_command(label, expected_sha256).map_err(device_failure)?;
                 let session = connect(10).map_err(device_failure)?;
+                wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))
+                    .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
                 exec_checked(&session, "delivery smoke", &command)
                     .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
                 capture_buffer(&[]).map_err(device_failure)?;
@@ -3882,6 +3886,11 @@ fn launcher_ready_status(
     if slint.get("scene").and_then(Value::as_str) != Some("launcher") {
         return None;
     }
+    let launcher_pid = main.get("launcher_pid").and_then(Value::as_i64)?;
+    let slint_pid = slint.get("pid").and_then(Value::as_i64)?;
+    if launcher_pid <= 0 || launcher_pid != slint_pid {
+        return None;
+    }
     let frames = slint.get("frames").and_then(Value::as_u64).unwrap_or(0);
     if frames == 0 {
         return None;
@@ -3889,11 +3898,8 @@ fn launcher_ready_status(
     Some(LauncherReadyStatus {
         main_ms: elapsed_ms,
         slint_ms: elapsed_ms,
-        launcher_pid: main
-            .get("launcher_pid")
-            .and_then(Value::as_i64)
-            .unwrap_or_default(),
-        slint_pid: slint.get("pid").and_then(Value::as_i64).unwrap_or_default(),
+        launcher_pid,
+        slint_pid,
         frames,
         screen: slint
             .get("screen")
@@ -6799,10 +6805,18 @@ video_mode=14
             "screen": "arcade"
         });
 
+        assert!(launcher_ready_status(125, Some(&main), Some(&slint)).is_none());
+
+        let slint = json!({
+            "scene": "launcher",
+            "pid": 42,
+            "frames": 2,
+            "screen": "arcade"
+        });
         let ready = launcher_ready_status(125, Some(&main), Some(&slint)).unwrap();
 
         assert_eq!(ready.launcher_pid, 42);
-        assert_eq!(ready.slint_pid, 43);
+        assert_eq!(ready.slint_pid, 42);
         assert_eq!(ready.frames, 2);
         assert_eq!(ready.screen, "arcade");
         assert!(launcher_ready_status(125, Some(&main), None).is_none());
