@@ -5,14 +5,14 @@
 
 pub const DEVICE: &str = "/dev/mister-magik-scanout-slots";
 pub const QUALIFIED_KERNEL_RELEASE: &str = "5.15.1-MiSTer";
-pub const PLATFORM_CONTRACT_ID: &str = "mister-5.15.1-scanout-v2";
-pub const ABI_VERSION: u32 = 2;
+pub const PLATFORM_CONTRACT_ID: &str = "mister-5.15.1-scanout-v3";
+pub const ABI_VERSION: u32 = 3;
 pub const SLOT_COUNT: usize = 2;
 pub const REGION_OFFSET_BYTES: usize = 8_294_400;
-pub const MAX_WIDTH: usize = 1280;
-pub const MAX_HEIGHT: usize = 720;
-pub const MAX_STRIDE_BYTES: usize = MAX_WIDTH * 2;
-pub const SLOT_CAPACITY_BYTES: usize = 1_843_200;
+pub const MAX_WIDTH: usize = 1366;
+pub const MAX_HEIGHT: usize = 768;
+pub const MAX_STRIDE_BYTES: usize = 2736;
+pub const SLOT_CAPACITY_BYTES: usize = MAX_STRIDE_BYTES * MAX_HEIGHT;
 pub const MAP_BYTES: usize = SLOT_CAPACITY_BYTES;
 pub const LAYOUT_WRITE_COMBINE: u32 = 1;
 pub const GET_LAYOUT: usize = 0x8040_4d01;
@@ -73,7 +73,11 @@ mod tests {
         assert_eq!(std::mem::size_of::<ScanoutSlotsLayout>(), 64);
         assert_eq!(GET_LAYOUT, 0x8040_4d01);
         assert_eq!(EXPECTED_LAYOUT.slots[1].physical_address, 0x22fd_2000);
-        assert_eq!(EXPECTED_LAYOUT.slot_capacity_bytes, 1280 * 720 * 2);
+        assert_eq!(EXPECTED_LAYOUT.max_width, 1366);
+        assert_eq!(EXPECTED_LAYOUT.max_height, 768);
+        assert_eq!(EXPECTED_LAYOUT.max_stride_bytes, 2736);
+        assert_eq!(EXPECTED_LAYOUT.slot_capacity_bytes, 2_101_248);
+        assert_eq!(EXPECTED_LAYOUT.slot_capacity_bytes % 4096, 0);
         assert_eq!(EXPECTED_LAYOUT.slots[1].mmap_offset_bytes, 1920 * 1080 * 4);
     }
 }

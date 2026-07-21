@@ -409,7 +409,11 @@ impl DeviceOperations for NativeDevice {
             }
             DeviceRequest::QualifyReleaseRuntime => {
                 let session = connect(10).map_err(device_failure)?;
-                let command = delivery_health_command("public").map_err(device_failure)?;
+                let command = format!(
+                    "if pidof MiSTer_MagiKDev >/dev/null 2>&1; then {}; else {}; fi",
+                    delivery_health_command("dev").map_err(device_failure)?,
+                    delivery_health_command("public").map_err(device_failure)?
+                );
                 exec_checked(&session, "release runtime", &command).map_err(device_failure)?;
                 "runtime=healthy".into()
             }
@@ -430,11 +434,7 @@ impl DeviceOperations for NativeDevice {
                 "input=ready handoff=ready return=ready".into()
             }
             DeviceRequest::QualifyReleaseDisplay => {
-                let session = connect(10).map_err(device_failure)?;
-                exec_checked(&session, "release display", &release_display_command())
-                    .map_err(device_failure)?;
-                capture_buffer(&[]).map_err(device_failure)?;
-                "display=qualified capture=recorded".into()
+                qualify_release_display_matrix().map_err(device_failure)?
             }
             DeviceRequest::QualifyReleaseRecovery => {
                 let session = connect(10).map_err(device_failure)?;
@@ -446,6 +446,18 @@ impl DeviceOperations for NativeDevice {
                 let session = connect(10).map_err(device_failure)?;
                 exec_checked(&session, "release restore", &release_restore_command())
                     .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?;
+                issue_reboot(&session, RebootMode::Supervised)
+                    .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?;
+                drop(session);
+                if !wait_down(40.0)
+                    || wait_up(120.0)
+                        .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?
+                        != 0
+                {
+                    return Err(DeviceFailure::RecoveryRequired(
+                        "device did not reboot after restoring release configuration".into(),
+                    ));
+                }
                 "restored arming=clear".into()
             }
             DeviceRequest::CollectDiagnosticFacts => {
@@ -941,10 +953,104 @@ fn release_handoff_command() -> String {
     )
 }
 
-fn release_display_command() -> String {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ReleaseDisplayMode {
+    label: &'static str,
+    video_mode: &'static str,
+    output: &'static str,
+    framebuffer: &'static str,
+    stride_bytes: usize,
+}
+
+const RELEASE_DISPLAY_MODES: [ReleaseDisplayMode; 6] = [
+    ReleaseDisplayMode {
+        label: "wide-768",
+        video_mode: "10",
+        output: "1366x768",
+        framebuffer: "1366x768",
+        stride_bytes: 2736,
+    },
+    ReleaseDisplayMode {
+        label: "tall-1536",
+        video_mode: "13",
+        output: "2048x1536",
+        framebuffer: "1024x768",
+        stride_bytes: 2048,
+    },
+    ReleaseDisplayMode {
+        label: "pixel-repeat-1440",
+        video_mode: "14",
+        output: "2560x1440",
+        framebuffer: "1280x720",
+        stride_bytes: 2560,
+    },
+    ReleaseDisplayMode {
+        label: "hd-1080",
+        video_mode: "8",
+        output: "1920x1080",
+        framebuffer: "960x540",
+        stride_bytes: 1920,
+    },
+    ReleaseDisplayMode {
+        label: "hd-720",
+        video_mode: "0",
+        output: "1280x720",
+        framebuffer: "1280x720",
+        stride_bytes: 2560,
+    },
+    ReleaseDisplayMode {
+        label: "custom-1200",
+        video_mode: "1920,1200,60",
+        output: "1920x1200",
+        framebuffer: "960x600",
+        stride_bytes: 1920,
+    },
+];
+
+fn release_display_mode_command(mode: ReleaseDisplayMode) -> String {
     format!(
-        "set -eu; test -s {RELEASE_TOKEN}; test \"$(cat /sys/class/graphics/fb0/bits_per_pixel)\" = 16; test -s /media/fat/MiSTer.ini; grep -Eq '^(video_mode|direct_video|forced_scandoubler)=' /media/fat/MiSTer.ini || true"
+        "set -eu; test -s {RELEASE_TOKEN}; if pidof MiSTer_MagiKDev >/dev/null 2>&1; then root=/media/fat/mister-magik-dev; else root=/media/fat/mister-magik; fi; bin=\"$root/mister-magik-fb\"; test -x \"$bin\"; report=$(\"$bin\" latch-readiness-report --json); printf '%s\\n' \"$report\" | grep -Eq '\"state\":\"ready\"'; printf '%s\\n' \"$report\" | grep -Eq '\"scanout_abi_version\":3'; printf '%s\\n' \"$report\" | grep -Eq '\"scanout_slot_capacity_bytes\":2101248'; printf '%s\\n' \"$report\" | grep -Eq '\"latch_max_width\":1366'; printf '%s\\n' \"$report\" | grep -Eq '\"latch_max_height\":768'; printf '%s\\n' \"$report\" | grep -Eq '\"latch_max_stride_bytes\":2736'; grep -Eq '^display-plan: .*output={output} .*fb={framebuffer} ' /tmp/mister-magik-slint.log; latch=$(\"$bin\" fpga-latch-report); printf '%s\\n' \"$latch\" | grep -q 'supported=1'; printf '%s\\n' \"$latch\" | grep -q 'drop_count=0'; test \"$(cat /sys/class/graphics/fb0/bits_per_pixel)\" = 16; printf 'display_qualification_tsv\\tlabel={label}\\tvideo_mode={video_mode}\\toutput={output}\\tfb={framebuffer}\\tstride={stride}\\n'",
+        label = mode.label,
+        video_mode = mode.video_mode,
+        output = mode.output,
+        framebuffer = mode.framebuffer,
+        stride = mode.stride_bytes,
     )
+}
+
+fn qualify_release_display_matrix() -> Result<String> {
+    for mode in RELEASE_DISPLAY_MODES {
+        let session = connect(10)?;
+        exec_checked(
+            &session,
+            "release display token",
+            &format!("test -s {RELEASE_TOKEN}"),
+        )?;
+        edit_remote_ini(
+            &session,
+            IniEdit::MenuMode(mode.video_mode.to_string()),
+            false,
+        )?;
+        exec_checked(&session, "release display sync", "sync")?;
+        issue_reboot(&session, RebootMode::Supervised)?;
+        drop(session);
+        if !wait_down(40.0) || wait_up(120.0)? != 0 {
+            return Err(format!("{} did not complete its reboot transition", mode.label).into());
+        }
+        let session = connect(10)?;
+        exec_checked(
+            &session,
+            &format!("release display {}", mode.label),
+            &release_display_mode_command(mode),
+        )?;
+        drop(session);
+        capture_buffer(&[])?;
+    }
+    Ok(format!(
+        "display=qualified modes={} captures={}",
+        RELEASE_DISPLAY_MODES.len(),
+        RELEASE_DISPLAY_MODES.len()
+    ))
 }
 
 fn release_recovery_command() -> String {
@@ -7401,7 +7507,32 @@ H: Handlers=event3 js0"#
             assert!(restore.contains(path), "missing release cleanup: {path}");
         }
         assert!(release_handoff_command().contains("/dev/MiSTer_cmd"));
-        assert!(release_display_command().contains("bits_per_pixel"));
+        assert_eq!(
+            RELEASE_DISPLAY_MODES
+                .iter()
+                .map(|mode| (
+                    mode.label,
+                    mode.video_mode,
+                    mode.framebuffer,
+                    mode.stride_bytes
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("wide-768", "10", "1366x768", 2736),
+                ("tall-1536", "13", "1024x768", 2048),
+                ("pixel-repeat-1440", "14", "1280x720", 2560),
+                ("hd-1080", "8", "960x540", 1920),
+                ("hd-720", "0", "1280x720", 2560),
+                ("custom-1200", "1920,1200,60", "960x600", 1920),
+            ]
+        );
+        for mode in RELEASE_DISPLAY_MODES {
+            let command = release_display_mode_command(mode);
+            assert!(command.contains("bits_per_pixel"));
+            assert!(command.contains("\"scanout_abi_version\":3"));
+            assert!(command.contains(mode.output));
+            assert!(command.contains(mode.framebuffer));
+        }
     }
 
     #[test]

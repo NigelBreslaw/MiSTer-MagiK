@@ -123,20 +123,7 @@ impl ScanoutSlotsRgb565Framebuffer {
         device: File,
         layout: &ScanoutSlotsLayout,
     ) -> Result<Self, ScanoutSlotsError> {
-        let frame_len = validate_scanout_slots_geometry(width, height, stride_bytes)?;
-        if width > layout.max_width as usize
-            || height > layout.max_height as usize
-            || stride_bytes > layout.max_stride_bytes as usize
-            || frame_len > layout.slot_capacity_bytes as usize
-        {
-            return Err(ScanoutSlotsError::InvalidGeometry(format!(
-                "requested frame {width}x{height} stride={stride_bytes} bytes={frame_len} exceeds ABI maximum {}x{} stride={} capacity={}",
-                layout.max_width,
-                layout.max_height,
-                layout.max_stride_bytes,
-                layout.slot_capacity_bytes
-            )));
-        }
+        validate_scanout_slots_geometry_for_layout(layout, width, height, stride_bytes)?;
         let slot = layout.slots[index.get() as usize - 1];
         let map_len = layout.map_bytes as usize;
         let mem = unsafe {
@@ -427,6 +414,29 @@ fn validate_scanout_slots_geometry(
         .ok_or_else(|| ScanoutSlotsError::InvalidGeometry("frame size overflow".to_string()))
 }
 
+fn validate_scanout_slots_geometry_for_layout(
+    layout: &ScanoutSlotsLayout,
+    width: usize,
+    height: usize,
+    stride_bytes: usize,
+) -> Result<usize, ScanoutSlotsError> {
+    let frame_len = validate_scanout_slots_geometry(width, height, stride_bytes)?;
+    if width > layout.max_width as usize
+        || height > layout.max_height as usize
+        || stride_bytes > layout.max_stride_bytes as usize
+        || frame_len > layout.slot_capacity_bytes as usize
+    {
+        return Err(ScanoutSlotsError::InvalidGeometry(format!(
+            "requested frame {width}x{height} stride={stride_bytes} bytes={frame_len} exceeds ABI maximum {}x{} stride={} capacity={}",
+            layout.max_width,
+            layout.max_height,
+            layout.max_stride_bytes,
+            layout.slot_capacity_bytes
+        )));
+    }
+    Ok(frame_len)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::framebuffer::target::DirtyRect;
@@ -437,11 +447,11 @@ mod tests {
         ScanoutSlotsLayout {
             abi_version: SCANOUT_SLOTS_ABI_VERSION,
             slot_count: 2,
-            max_width: 1280,
-            max_height: 720,
-            max_stride_bytes: 2560,
-            slot_capacity_bytes: 1_843_200,
-            map_bytes: 1_843_200,
+            max_width: 1366,
+            max_height: 768,
+            max_stride_bytes: 2736,
+            slot_capacity_bytes: 2_101_248,
+            map_bytes: 2_101_248,
             flags: SCANOUT_SLOTS_LAYOUT_WRITE_COMBINE,
             slots: [
                 ScanoutSlotLayout {
@@ -499,7 +509,7 @@ mod tests {
     }
 
     #[test]
-    fn capacity_accepts_qualified_540p_and_native_720p_geometry() {
+    fn capacity_accepts_qualified_540p_720p_and_max_geometry() {
         assert_eq!(
             validate_scanout_slots_geometry(960, 540, 1920),
             Ok(1_036_800)
@@ -508,6 +518,26 @@ mod tests {
             validate_scanout_slots_geometry(1280, 720, 2560),
             Ok(1_843_200)
         );
+        assert_eq!(
+            validate_scanout_slots_geometry_for_layout(&layout(), 1366, 768, 2736),
+            Ok(2_101_248)
+        );
+    }
+
+    #[test]
+    fn layout_capacity_rejects_old_abi_and_every_oversized_dimension() {
+        let mut old = layout();
+        old.abi_version = 2;
+        assert!(matches!(
+            validate_scanout_slots_layout(&old),
+            Err(ScanoutSlotsError::InvalidLayout(_))
+        ));
+        for (width, height, stride) in [(1367, 768, 2752), (1366, 769, 2736), (1366, 768, 2752)] {
+            assert!(matches!(
+                validate_scanout_slots_geometry_for_layout(&layout(), width, height, stride),
+                Err(ScanoutSlotsError::InvalidGeometry(_))
+            ));
+        }
     }
 
     #[test]

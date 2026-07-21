@@ -28,9 +28,9 @@ impl LatchCapabilities {
     pub fn production_ready(self) -> bool {
         self.protocol_version == PROTOCOL_VERSION
             && self.flags & REQUIRED_CAPS == REQUIRED_CAPS
-            && self.max_width >= 1280
-            && self.max_height >= 720
-            && self.max_stride_bytes >= 2560
+            && self.max_width >= 1366
+            && self.max_height >= 768
+            && self.max_stride_bytes >= 2736
     }
 }
 
@@ -116,10 +116,13 @@ mod tests {
     }
 
     #[test]
-    fn production_capabilities_require_protocol_v2_and_native_720p() {
-        let caps = decode_capabilities(&[2, REQUIRED_CAPS, 1280, 720, 2560]).unwrap();
+    fn production_capabilities_require_protocol_v2_and_qualified_maximum() {
+        let caps = decode_capabilities(&[2, REQUIRED_CAPS, 1366, 768, 2736]).unwrap();
         assert!(caps.production_ready());
-        assert!(!decode_capabilities(&[1, REQUIRED_CAPS, 1280, 720, 2560])
+        assert!(!decode_capabilities(&[1, REQUIRED_CAPS, 1366, 768, 2736])
+            .unwrap()
+            .production_ready());
+        assert!(!decode_capabilities(&[2, REQUIRED_CAPS, 1280, 720, 2560])
             .unwrap()
             .production_ready());
         assert!(decode_capabilities(&[]).is_err());

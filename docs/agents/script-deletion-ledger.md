@@ -130,6 +130,10 @@ and clears every reset-fault arming path on restoration. The tier/skip/mode
 matrices and all four shell workflows were deleted without compatibility
 aliases.
 
+The typed display phase now owns the fixed platform boundary matrix (1366x768,
+2048x1536, pixel-repeated 2560x1440, 1080p, 720p, and custom 1920x1200), exact
+framebuffer/latch assertions, per-mode capture, and rebooted INI restoration.
+
 ## Typed diagnosis and safe-repair takeover
 
 Reviewed on 2026-07-21. The device audit, persistent shutdown instrumentation,

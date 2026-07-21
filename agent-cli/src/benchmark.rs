@@ -183,6 +183,9 @@ fn restore_after_error(actions: &mut dyn BenchmarkActions, error: String) -> Res
 pub fn infer_scenario(paths: &[PathBuf]) -> Result<BenchmarkScenario, String> {
     if paths.iter().any(|path| {
         path.starts_with("mister/platform/runtime/src/framebuffer")
+            || path.starts_with("mister/platform/contracts")
+            || path.starts_with("mister/platform/kernel")
+            || path.starts_with("mister/platform/fpga")
             || path.starts_with("apps/mister/src/ui_runner/launcher_present")
     }) {
         return Ok(BenchmarkScenario::FramebufferVelocity);
@@ -750,6 +753,13 @@ mod tests {
         assert_eq!(
             infer_scenario(&[PathBuf::from(
                 "mister/platform/runtime/src/framebuffer/copy.rs"
+            )])
+            .unwrap(),
+            BenchmarkScenario::FramebufferVelocity
+        );
+        assert_eq!(
+            infer_scenario(&[PathBuf::from(
+                "mister/platform/contracts/scanout/src/lib.rs"
             )])
             .unwrap(),
             BenchmarkScenario::FramebufferVelocity

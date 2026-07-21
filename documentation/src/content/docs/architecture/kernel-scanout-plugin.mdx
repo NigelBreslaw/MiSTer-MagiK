@@ -7,7 +7,8 @@ sidebar:
 
 MiSTer MagiK uses a small kernel plugin for one reason: `/dev/fb0` exposes the
 live framebuffer, but not the two hidden framebuffer slots used to prepare the
-next 960x540 RGB565 frame before a vblank switch.
+next variable-size RGB565 frame before a vblank switch. Each qualified slot can
+hold up to a 1366x768 frame with a 2736-byte aligned stride.
 
 The FPGA latch can select a completed hidden slot at vblank. It cannot give the
 Rust process a safe CPU mapping of that memory. Giving the launcher general

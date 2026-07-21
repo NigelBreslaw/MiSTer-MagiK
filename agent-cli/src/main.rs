@@ -301,14 +301,14 @@ fn dispatch(
                 &claimed_paths,
                 reporter,
             )?;
+            if let agent_cli::model::Scope::Task(task_id) = selected {
+                evidence.claim_task_paths(task_id, &claimed_paths)?;
+            }
             if !plan.external_requirements.is_empty() {
                 for requirement in &plan.external_requirements {
                     reporter.emit(EventKind::Warning, "external", &requirement.message, None)?;
                 }
                 return Ok(Outcome::ExternalRequired);
-            }
-            if let agent_cli::model::Scope::Task(task_id) = selected {
-                evidence.claim_task_paths(task_id, &claimed_paths)?;
             }
             return Ok(outcome);
         }

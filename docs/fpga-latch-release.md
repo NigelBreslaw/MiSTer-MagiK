@@ -8,14 +8,16 @@ must complete this qualification before platform-manifest activation.
 
 This document defines the commercial-release contract for the small Menu FPGA
 delta used by MiSTer MagiK. Its scope is only the `0x57` set command, the `0x58`
-status command, and the vblank-latched framebuffer route. The retired scanout
-mailbox, commands `0x59`/`0x5a`, AXI/ACP access, DMA ownership, and completion
+status command, the `0x59` capability command, and the vblank-latched
+framebuffer route. The retired scanout mailbox, command `0x5a`, AXI/ACP access,
+DMA ownership, and completion
 fences are not part of this design or its qualification.
 
 ## Behavioral requirements
 
-- **LATCH-001 — command discovery.** Starting command `0x57` returns `0x4d47`;
-  starting command `0x58` returns `0x4d48`. Other commands are unaffected.
+- **LATCH-001 — command discovery.** Starting commands `0x57`, `0x58`, and
+  `0x59` return `0x4d47`, `0x4d48`, and `0x4d49` respectively. Other commands
+  are unaffected.
 - **LATCH-002 — route staging.** `0x57` words 0–9 stage enable/filter/format,
   base, width, height, horizontal and vertical bounds, and stride. Staging these
   words must not change the active framebuffer route or create a pending post.
@@ -43,6 +45,9 @@ fences are not part of this design or its qualification.
 - **LATCH-009 — compatibility.** Stock `UIO_SET_FBUF` behavior and all unrelated
   Menu commands remain unchanged. The latch remains compatible with the
   hidden-slot renderer and its `/dev/fb0` fallback.
+- **LATCH-010 — qualified capabilities.** `0x59` reports protocol version 2,
+  RGB565/double-buffer/variable-geometry flags, and maximum geometry 1366x768
+  with a 2736-byte stride.
 
 ## Requirement-to-test matrix
 
@@ -51,7 +56,7 @@ the retained result must identify the exact source and RBF hashes under test.
 
 | Requirement | RTL simulation / assertion | Integration or hardware evidence |
 | --- | --- | --- |
-| LATCH-001 | Both magic values; unrelated opcode has no latch response | Passive `fpga-latch-report` reports both commands supported |
+| LATCH-001 | All three magic values; unrelated opcode has no latch response | Passive `fpga-latch-report` reports all three commands supported |
 | LATCH-002 | Exercise every word and prove no early pending/apply | Posted geometry and active route match |
 | LATCH-003 | Sequence commit, pending, and post-count checks | Post counter advances during launcher motion |
 | LATCH-004 | Rising/falling/no-edge cases; atomic-route assertion | Flip counter advances with zero visual/alternation misses |
@@ -60,6 +65,7 @@ the retained result must identify the exact source and RBF hashes under test.
 | LATCH-007 | Power-up state and bounded startup checks | Cold boot and RBF reload start safely |
 | LATCH-008 | Sequence and all counter wrap cases | Long soak shows continued counter progress |
 | LATCH-009 | Patch integration, opcode collision check, stock comparison | Lifecycle tests and clean `/dev/fb0` fallback |
+| LATCH-010 | Exact five-word capability response | Passive report matches the kernel ABI v3 maximum |
 
 ## Custom-delta release signoff
 

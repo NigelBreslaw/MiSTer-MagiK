@@ -53,9 +53,21 @@ Device mutation is serialized, bounded, snapshotted, and compensated. A device
 timeout, refusal, route, or authentication failure ends after the first typed
 attempt and is reported as unavailable. Host-only work never contacts MiSTer.
 
+The attended release gate qualifies whichever MagiK layout is currently active.
+Its display phase reboots through the fixed boundary matrix: presets 10, 13,
+14, 8, and 0, followed by custom `1920,1200,60`. Every case requires the ABI
+v3 1366x768 latch contract, its expected launcher framebuffer, zero FPGA drops,
+and a captured framebuffer. The final restoration puts back the original INI
+and performs a supervised reboot even when a qualification step fails.
+
 ## Display evidence
 
 Production rendering is RGB565. `/dev/fb0` contents alone do not prove HDMI
 visibility. Use Analytics streaming for continuous inspection and
 `mister --capture-buffer` for a still, then pair it with attended HDMI evidence
 when making scan-out claims.
+
+The launcher keeps output geometry one-to-one through 1280x720 and uses half
+width and height when the output is at least 1600 pixels wide or 900 pixels
+high. Custom modes use the same rule. The qualified ABI v3 hidden slots support
+up to 1366x768 with a 2736-byte RGB565 stride and 2,101,248 bytes per slot.

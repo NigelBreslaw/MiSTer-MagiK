@@ -18,4 +18,15 @@ if [ "$actual_name" != "$expected_name" ] || [ "$actual_email" != "$expected_ema
   exit 1
 fi
 
-exec "$ROOT/scripts/agent" verify --staged
+set +e
+"$ROOT/scripts/agent" verify --staged
+status=$?
+set -e
+
+# Exit 3 means every available local check passed but a CI-only assurance
+# requirement remains (for example, building the RBF). That requirement must
+# not make an otherwise verified platform commit impossible to create.
+if [ "$status" -eq 3 ]; then
+  exit 0
+fi
+exit "$status"

@@ -289,9 +289,9 @@ module tb_mister_magik_vblank_latch;
 		check_ack(GET_CAPS, 16'h4D49);
 		expect_caps(4'd0, 16'd2);
 		expect_caps(4'd1, 16'h0007);
-		expect_caps(4'd2, 16'd1280);
-		expect_caps(4'd3, 16'd720);
-		expect_caps(4'd4, 16'd2560);
+		expect_caps(4'd2, 16'd1366);
+		expect_caps(4'd3, 16'd768);
+		expect_caps(4'd4, 16'd2736);
 		expect_caps(4'd15, 16'd0);
 		requirement_coverage[0] = 1'b1; // LATCH-001
 		check_unrelated_ack();
