@@ -78,7 +78,28 @@ CREATE TABLE IF NOT EXISTS commit_attempts (
     rolled_back INTEGER NOT NULL DEFAULT 0,
     detail TEXT
 );
-PRAGMA user_version = 5;
+CREATE TABLE IF NOT EXISTS deliveries (
+    task_id TEXT PRIMARY KEY REFERENCES tasks(task_id),
+    worktree TEXT NOT NULL,
+    source_tree TEXT NOT NULL,
+    commit_sha TEXT,
+    impact TEXT NOT NULL,
+    state TEXT NOT NULL,
+    requirement_id TEXT,
+    detail TEXT,
+    updated_ms INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS delivery_attestations (
+    task_id TEXT NOT NULL REFERENCES deliveries(task_id),
+    requirement_id TEXT NOT NULL,
+    workflow TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    commit_sha TEXT NOT NULL,
+    evidence_json TEXT NOT NULL,
+    created_ms INTEGER NOT NULL,
+    PRIMARY KEY (task_id, requirement_id)
+);
+PRAGMA user_version = 6;
 "#;
 
 #[derive(Debug)]
@@ -136,6 +157,18 @@ pub struct EventDetail {
     pub phase: String,
     pub message: String,
     pub percent: Option<i64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DeliveryRecord {
+    pub task_id: String,
+    pub worktree: PathBuf,
+    pub source_tree: String,
+    pub commit_sha: Option<String>,
+    pub impact: String,
+    pub state: String,
+    pub requirement_id: Option<String>,
+    pub detail: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -419,6 +452,65 @@ impl Evidence {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| error.to_string())?;
         Ok(paths)
+    }
+
+    pub fn save_delivery(&self, delivery: &DeliveryRecord) -> Result<(), String> {
+        self.connection
+            .execute(
+                "INSERT INTO deliveries (task_id, worktree, source_tree, commit_sha, impact, state, requirement_id, detail, updated_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) ON CONFLICT(task_id) DO UPDATE SET source_tree=excluded.source_tree, commit_sha=excluded.commit_sha, impact=excluded.impact, state=excluded.state, requirement_id=excluded.requirement_id, detail=excluded.detail, updated_ms=excluded.updated_ms",
+                params![delivery.task_id, delivery.worktree.display().to_string(), delivery.source_tree, delivery.commit_sha, delivery.impact, delivery.state, delivery.requirement_id, delivery.detail, now_ms()],
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    pub fn delivery(&self, task_id: &str) -> Result<Option<DeliveryRecord>, String> {
+        self.connection
+            .query_row(
+                "SELECT task_id, worktree, source_tree, commit_sha, impact, state, requirement_id, detail FROM deliveries WHERE task_id=?1",
+                [task_id],
+                |row| {
+                    Ok(DeliveryRecord {
+                        task_id: row.get(0)?,
+                        worktree: PathBuf::from(row.get::<_, String>(1)?),
+                        source_tree: row.get(2)?,
+                        commit_sha: row.get(3)?,
+                        impact: row.get(4)?,
+                        state: row.get(5)?,
+                        requirement_id: row.get(6)?,
+                        detail: row.get(7)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn attest_delivery(
+        &self,
+        task_id: &str,
+        requirement_id: &str,
+        workflow: &str,
+        branch: &str,
+        commit_sha: &str,
+        evidence_json: &str,
+    ) -> Result<(), String> {
+        if workflow != "platform-bundle.yml" || branch != "main" {
+            return Err("external_attestation_rejected: workflow and branch must be platform-bundle.yml on main".into());
+        }
+        let delivery = self
+            .delivery(task_id)?
+            .ok_or("external_attestation_rejected: delivery does not exist")?;
+        if delivery.commit_sha.as_deref() != Some(commit_sha) {
+            return Err("external_attestation_rejected: commit SHA does not match delivery".into());
+        }
+        self.connection
+            .execute(
+                "INSERT OR REPLACE INTO delivery_attestations (task_id, requirement_id, workflow, branch, commit_sha, evidence_json, created_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![task_id, requirement_id, workflow, branch, commit_sha, evidence_json, now_ms()],
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(())
     }
 
     pub fn begin_commit_attempt(
@@ -817,6 +909,59 @@ mod tests {
         );
         evidence.close_task("task-one", "abc123").unwrap();
         assert_eq!(evidence.active_manual_task_id(worktree).unwrap(), None);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn delivery_state_is_resumable_and_attestation_is_exact() {
+        let root = temporary_root("delivery");
+        let _ = fs::remove_dir_all(&root);
+        let evidence = Evidence::open_at(&root).unwrap();
+        evidence
+            .save_task_baseline("task-delivery", Path::new("/tmp/worktree"), &(), false)
+            .unwrap();
+        let delivery = DeliveryRecord {
+            task_id: "task-delivery".into(),
+            worktree: PathBuf::from("/tmp/worktree"),
+            source_tree: "tree-1".into(),
+            commit_sha: Some("commit-1".into()),
+            impact: "platform".into(),
+            state: "external_pending".into(),
+            requirement_id: Some("github-actions.rbf-build".into()),
+            detail: None,
+        };
+        evidence.save_delivery(&delivery).unwrap();
+        assert_eq!(evidence.delivery("task-delivery").unwrap(), Some(delivery));
+        assert!(evidence
+            .attest_delivery(
+                "task-delivery",
+                "github-actions.rbf-build",
+                "platform-bundle.yml",
+                "wrong-branch",
+                "commit-1",
+                "{}",
+            )
+            .is_err());
+        assert!(evidence
+            .attest_delivery(
+                "task-delivery",
+                "github-actions.rbf-build",
+                "platform-bundle.yml",
+                "main",
+                "wrong-commit",
+                "{}",
+            )
+            .is_err());
+        evidence
+            .attest_delivery(
+                "task-delivery",
+                "github-actions.rbf-build",
+                "platform-bundle.yml",
+                "main",
+                "commit-1",
+                "{}",
+            )
+            .unwrap();
         fs::remove_dir_all(root).unwrap();
     }
 
