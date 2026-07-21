@@ -1298,7 +1298,11 @@ fn crt_trial_run_command(runtime_settings: &str) -> String {
 fn parse_crt_trial_status(output: &str) -> Result<&str> {
     let status = output.trim();
     if !status.starts_with("crt_trial_status_v2 schema=2 ") {
-        return Err("CRT trial did not return a typed status response".into());
+        return Err(format!(
+            "CRT trial did not return a typed status response: {}",
+            status.replace(['\t', '\n', '\r'], " ")
+        )
+        .into());
     }
     for required in [
         "ok=1",

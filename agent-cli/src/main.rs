@@ -452,6 +452,15 @@ fn deliver(
             evidence.save_delivery(&pending)?;
             deployment.platform_candidate = Some(candidate);
         }
+        if deployment.kind == agent_cli::deploy::DeploymentKind::Platform
+            && deployment.platform_candidate.is_none()
+        {
+            deployment.platform_candidate = Some(
+                agent_cli::platform_ci::resolve_published_repository(repository, |progress| {
+                    reporter.emit(EventKind::Progress, "platform", progress, None)
+                })?,
+            );
+        }
         if let Err(error) = agent_cli::delivery::execute(repository, &deployment, &sha, reporter) {
             pending.state = if error.starts_with("recovery_required:") {
                 "recovery_required"
@@ -522,7 +531,14 @@ fn deliver(
         return Ok(Outcome::ExternalRequired);
     }
     if impact == DeploymentImpact::Runtime {
-        let deployment = agent_cli::deploy::plan(repository, paths)?;
+        let mut deployment = agent_cli::deploy::plan(repository, paths)?;
+        if deployment.kind == agent_cli::deploy::DeploymentKind::Platform {
+            deployment.platform_candidate = Some(
+                agent_cli::platform_ci::resolve_published_repository(repository, |progress| {
+                    reporter.emit(EventKind::Progress, "platform", progress, None)
+                })?,
+            );
+        }
         if let Err(error) = agent_cli::delivery::execute(repository, &deployment, &sha, reporter) {
             delivery.state = if error.starts_with("recovery_required:") {
                 "recovery_required"
@@ -554,7 +570,7 @@ fn recorded_delivery_kind(
 ) -> agent_cli::deploy::DeploymentKind {
     match recorded_impact {
         "platform" => agent_cli::deploy::DeploymentKind::Platform,
-        "runtime" => agent_cli::deploy::DeploymentKind::Runtime,
+        "runtime" => inferred,
         _ => inferred,
     }
 }
@@ -663,7 +679,7 @@ mod tests {
     }
 
     #[test]
-    fn resumed_delivery_preserves_its_recorded_impact() {
+    fn resumed_delivery_preserves_platform_impact_and_inferred_runtime_shape() {
         use agent_cli::deploy::DeploymentKind;
 
         assert_eq!(
@@ -672,7 +688,7 @@ mod tests {
         );
         assert_eq!(
             recorded_delivery_kind(DeploymentKind::Platform, "runtime"),
-            DeploymentKind::Runtime
+            DeploymentKind::Platform
         );
         assert_eq!(
             recorded_delivery_kind(DeploymentKind::Platform, "none"),

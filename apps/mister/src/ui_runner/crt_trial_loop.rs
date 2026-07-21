@@ -44,10 +44,12 @@ pub(super) fn run_crt_trial_loop(
 
     let before = match hardware.read_magik_latched_fbuf_status() {
         Ok(status) if status.supported() => CrtTrialCounters::from_status(status),
-        Ok(_) => {
+        Ok(status) => {
             crate::ui_errln!(
-                "crt_trial_status_v2 schema=2 ok=0 mode={} reason=latch-status-unsupported",
-                mode.label()
+                "crt_trial_status_v2 schema=2 ok=0 mode={} reason=latch-status-unsupported ack_high=0x{:04x} ack_low=0x{:04x}",
+                mode.label(),
+                status.magic_hi,
+                status.magic_lo
             );
             return;
         }

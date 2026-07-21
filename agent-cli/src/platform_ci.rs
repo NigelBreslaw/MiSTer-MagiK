@@ -258,6 +258,128 @@ pub fn resolve_repository(
     )
 }
 
+pub fn resolve_published_repository(
+    repository: &Path,
+    mut progress: impl FnMut(&str) -> Result<(), String>,
+) -> Result<Candidate, String> {
+    let owner = command_text(
+        repository,
+        "gh",
+        &[
+            "repo",
+            "view",
+            "--json",
+            "nameWithOwner",
+            "--jq",
+            ".nameWithOwner",
+        ],
+    )?;
+    let branch = command_text(repository, "git", &["branch", "--show-current"])?;
+    let head_sha = command_text(repository, "git", &["rev-parse", "HEAD"])?;
+    let releases = command_text(
+        repository,
+        "gh",
+        &[
+            "release",
+            "list",
+            "--repo",
+            &owner,
+            "--limit",
+            "100",
+            "--json",
+            "tagName,isDraft,isPrerelease",
+        ],
+    )?;
+    let rows: Vec<Value> = serde_json::from_str(&releases)
+        .map_err(|error| format!("invalid GitHub release response: {error}"))?;
+    let tag = latest_platform_release(&rows)
+        .ok_or("no published numbered platform release is available")?;
+    let destination = repository
+        .join("build/agent-deploy/platform-published")
+        .join(&head_sha);
+    if destination.exists() {
+        std::fs::remove_dir_all(&destination)
+            .map_err(|error| format!("cannot clear published platform cache: {error}"))?;
+    }
+    std::fs::create_dir_all(&destination)
+        .map_err(|error| format!("cannot create published platform cache: {error}"))?;
+    progress("downloading latest qualified platform components")?;
+    let mut download = Command::new("gh");
+    download
+        .args(["release", "download", &tag, "--repo", &owner, "--dir"])
+        .arg(&destination)
+        .args([
+            "--pattern",
+            "mister-magik-platform-v0.*.zip",
+            "--pattern",
+            "platform-bundle-v0.2.json",
+        ])
+        .current_dir(repository);
+    let output = bounded_output(download, "published platform download", COMMAND_DEADLINE)?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
+    }
+    let archive = find_named(&destination, "mister-magik-platform-", ".zip")?;
+    let manifest = find_exact(&destination, "platform-bundle-v0.2.json")?;
+    let mut verify = Command::new("python3");
+    verify
+        .arg(repository.join("scripts/release/platform/platform-bundle.py"))
+        .arg("verify")
+        .arg(&archive)
+        .arg("--manifest")
+        .arg(&manifest)
+        .current_dir(repository);
+    let verification = bounded_output(verify, "published platform verification", COMMAND_DEADLINE)?;
+    if !verification.status.success() {
+        return Err(format!(
+            "published platform failed verification: {}",
+            String::from_utf8_lossy(&verification.stderr).trim()
+        ));
+    }
+    let payload: Value = serde_json::from_slice(
+        &std::fs::read(&manifest)
+            .map_err(|error| format!("cannot read published platform manifest: {error}"))?,
+    )
+    .map_err(|error| format!("invalid published platform manifest: {error}"))?;
+    let required = |name: &str| {
+        payload
+            .get(name)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| format!("published platform manifest is missing {name}"))
+    };
+    let run_id = payload
+        .pointer("/components/main/run_id")
+        .and_then(Value::as_u64)
+        .ok_or("published platform manifest is missing Main run_id")?;
+    progress("qualified platform components ready for exact runtime manifest")?;
+    Ok(Candidate {
+        run_id,
+        head_sha,
+        archive,
+        manifest,
+        reused: true,
+        head_branch: branch,
+        bundle_id: required("bundle_id")?,
+        main_identity: required("main_input_sha256")?,
+        fpga_identity: required("fpga_input_sha256")?,
+        kernel_identity: required("kernel_input_sha256")?,
+    })
+}
+
+fn latest_platform_release(rows: &[Value]) -> Option<String> {
+    rows.iter()
+        .filter(|row| !row["isDraft"].as_bool().unwrap_or(true))
+        .filter_map(|row| {
+            let tag = row["tagName"].as_str()?;
+            let version = tag.strip_prefix("platform-v0.")?.parse::<u64>().ok()?;
+            (version > 0).then(|| (version, tag.to_owned()))
+        })
+        .max_by_key(|(version, _)| *version)
+        .map(|(_, tag)| tag)
+}
+
 fn command_text(repository: &Path, program: &str, args: &[&str]) -> Result<String, String> {
     let mut command = Command::new(program);
     command.args(args).current_dir(repository);
@@ -500,6 +622,20 @@ mod tests {
         );
         assert!(result.is_err());
         assert_eq!(ci.dispatches, 1);
+    }
+
+    #[test]
+    fn latest_published_platform_accepts_prereleases_and_ignores_drafts() {
+        let rows = vec![
+            serde_json::json!({"tagName":"platform-v0.7","isDraft":false,"isPrerelease":false}),
+            serde_json::json!({"tagName":"platform-v0.9","isDraft":true,"isPrerelease":false}),
+            serde_json::json!({"tagName":"platform-v0.1-deadbeef","isDraft":false,"isPrerelease":false}),
+            serde_json::json!({"tagName":"platform-v0.8","isDraft":false,"isPrerelease":true}),
+        ];
+        assert_eq!(
+            latest_platform_release(&rows).as_deref(),
+            Some("platform-v0.8")
+        );
     }
 
     #[test]
