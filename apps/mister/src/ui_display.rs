@@ -521,6 +521,215 @@ impl<'a> ParsedIni<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::framebuffer::format::rgb565_stride_bytes;
+
+    #[derive(Clone, Copy)]
+    struct ExpectedDisplayPlan {
+        mode: usize,
+        output: (u16, u16),
+        scan: (u16, u16),
+        framebuffer: (usize, usize),
+        stride_bytes: usize,
+        rendered_pixels: usize,
+    }
+
+    #[test]
+    fn predefined_modes_follow_the_launcher_resolution_contract() {
+        let cases = [
+            ExpectedDisplayPlan {
+                mode: 0,
+                output: (1280, 720),
+                scan: (1280, 720),
+                framebuffer: (1280, 720),
+                stride_bytes: 2560,
+                rendered_pixels: 921_600,
+            },
+            ExpectedDisplayPlan {
+                mode: 1,
+                output: (1024, 768),
+                scan: (1024, 768),
+                framebuffer: (1024, 768),
+                stride_bytes: 2048,
+                rendered_pixels: 786_432,
+            },
+            ExpectedDisplayPlan {
+                mode: 2,
+                output: (720, 480),
+                scan: (720, 480),
+                framebuffer: (720, 480),
+                stride_bytes: 1440,
+                rendered_pixels: 345_600,
+            },
+            ExpectedDisplayPlan {
+                mode: 3,
+                output: (720, 576),
+                scan: (720, 576),
+                framebuffer: (720, 576),
+                stride_bytes: 1440,
+                rendered_pixels: 414_720,
+            },
+            ExpectedDisplayPlan {
+                mode: 4,
+                output: (1280, 1024),
+                scan: (1280, 1024),
+                framebuffer: (640, 512),
+                stride_bytes: 1280,
+                rendered_pixels: 327_680,
+            },
+            ExpectedDisplayPlan {
+                mode: 5,
+                output: (800, 600),
+                scan: (800, 600),
+                framebuffer: (800, 600),
+                stride_bytes: 1600,
+                rendered_pixels: 480_000,
+            },
+            ExpectedDisplayPlan {
+                mode: 6,
+                output: (640, 480),
+                scan: (640, 480),
+                framebuffer: (640, 480),
+                stride_bytes: 1280,
+                rendered_pixels: 307_200,
+            },
+            ExpectedDisplayPlan {
+                mode: 7,
+                output: (1280, 720),
+                scan: (1280, 720),
+                framebuffer: (1280, 720),
+                stride_bytes: 2560,
+                rendered_pixels: 921_600,
+            },
+            ExpectedDisplayPlan {
+                mode: 8,
+                output: (1920, 1080),
+                scan: (1920, 1080),
+                framebuffer: (960, 540),
+                stride_bytes: 1920,
+                rendered_pixels: 518_400,
+            },
+            ExpectedDisplayPlan {
+                mode: 9,
+                output: (1920, 1080),
+                scan: (1920, 1080),
+                framebuffer: (960, 540),
+                stride_bytes: 1920,
+                rendered_pixels: 518_400,
+            },
+            ExpectedDisplayPlan {
+                mode: 10,
+                output: (1366, 768),
+                scan: (1366, 768),
+                framebuffer: (1366, 768),
+                stride_bytes: 2736,
+                rendered_pixels: 1_049_088,
+            },
+            ExpectedDisplayPlan {
+                mode: 11,
+                output: (1024, 600),
+                scan: (1024, 600),
+                framebuffer: (1024, 600),
+                stride_bytes: 2048,
+                rendered_pixels: 614_400,
+            },
+            ExpectedDisplayPlan {
+                mode: 12,
+                output: (1920, 1440),
+                scan: (1920, 1440),
+                framebuffer: (960, 720),
+                stride_bytes: 1920,
+                rendered_pixels: 691_200,
+            },
+            ExpectedDisplayPlan {
+                mode: 13,
+                output: (2048, 1536),
+                scan: (2048, 1536),
+                framebuffer: (1024, 768),
+                stride_bytes: 2048,
+                rendered_pixels: 786_432,
+            },
+            ExpectedDisplayPlan {
+                mode: 14,
+                output: (2560, 1440),
+                scan: (1280, 1440),
+                framebuffer: (1280, 720),
+                stride_bytes: 2560,
+                rendered_pixels: 921_600,
+            },
+        ];
+
+        for expected in cases {
+            let ini = format!(
+                "[MiSTer]\ndirect_video=0\n[Menu]\nvideo_mode={}\n",
+                expected.mode
+            );
+            let plan = UiDisplayPlan::from_mister_ini_text(&ini).expect("predefined mode");
+            assert_eq!(
+                (plan.output_w, plan.output_h),
+                expected.output,
+                "mode {} output",
+                expected.mode
+            );
+            assert_eq!(
+                (plan.scan_w, plan.scan_h),
+                expected.scan,
+                "mode {} scan",
+                expected.mode
+            );
+            assert_eq!(
+                (plan.fb_w, plan.fb_h),
+                expected.framebuffer,
+                "mode {} framebuffer",
+                expected.mode
+            );
+            assert_eq!(
+                rgb565_stride_bytes(plan.fb_w),
+                expected.stride_bytes,
+                "mode {} stride",
+                expected.mode
+            );
+            assert_eq!(
+                plan.fb_w * plan.fb_h,
+                expected.rendered_pixels,
+                "mode {} pixels",
+                expected.mode
+            );
+        }
+    }
+
+    #[test]
+    fn direct_video_and_custom_modes_follow_the_same_contract() {
+        let direct_video_cases = [
+            (0, 0, (640, 240), 1280, 153_600),
+            (0, 1, (640, 480), 1280, 307_200),
+            (1, 0, (640, 288), 1280, 184_320),
+            (1, 1, (640, 576), 1280, 368_640),
+        ];
+        for (pal, scandoubler, framebuffer, stride, pixels) in direct_video_cases {
+            let ini = format!(
+                "[MiSTer]\ndirect_video=1\nmenu_pal={pal}\nforced_scandoubler={scandoubler}\n"
+            );
+            let plan = UiDisplayPlan::from_mister_ini_text(&ini).expect("direct-video mode");
+            assert_eq!((plan.output_w, plan.output_h), framebuffer);
+            assert_eq!((plan.scan_w, plan.scan_h), framebuffer);
+            assert_eq!(
+                (plan.fb_w, plan.fb_h),
+                (usize::from(framebuffer.0), usize::from(framebuffer.1))
+            );
+            assert_eq!(rgb565_stride_bytes(plan.fb_w), stride);
+            assert_eq!(plan.fb_w * plan.fb_h, pixels);
+        }
+
+        let custom = UiDisplayPlan::from_mister_ini_text(
+            "[MiSTer]\ndirect_video=0\n[Menu]\nvideo_mode=1920,1200,60\n",
+        )
+        .expect("custom 1920x1200 mode");
+        assert_eq!((custom.output_w, custom.output_h), (1920, 1200));
+        assert_eq!((custom.scan_w, custom.scan_h), (1920, 1200));
+        assert_eq!((custom.fb_w, custom.fb_h), (960, 600));
+        assert_eq!(rgb565_stride_bytes(custom.fb_w), 1920);
+        assert_eq!(custom.fb_w * custom.fb_h, 576_000);
+    }
 
     #[test]
     fn display_plan_halves_hd_modes() {
