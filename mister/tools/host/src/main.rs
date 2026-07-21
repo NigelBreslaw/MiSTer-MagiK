@@ -1009,7 +1009,7 @@ const RELEASE_DISPLAY_MODES: [ReleaseDisplayMode; 6] = [
 
 fn release_display_mode_command(mode: ReleaseDisplayMode) -> String {
     format!(
-        "set -eu; test -s {RELEASE_TOKEN}; if pidof MiSTer_MagiKDev >/dev/null 2>&1; then root=/media/fat/mister-magik-dev; else root=/media/fat/mister-magik; fi; bin=\"$root/mister-magik-fb\"; test -x \"$bin\"; report=$(\"$bin\" latch-readiness-report --json); printf '%s\\n' \"$report\" | grep -Eq '\"state\":\"ready\"'; printf '%s\\n' \"$report\" | grep -Eq '\"scanout_abi_version\":3'; printf '%s\\n' \"$report\" | grep -Eq '\"scanout_slot_capacity_bytes\":2101248'; printf '%s\\n' \"$report\" | grep -Eq '\"latch_max_width\":1366'; printf '%s\\n' \"$report\" | grep -Eq '\"latch_max_height\":768'; printf '%s\\n' \"$report\" | grep -Eq '\"latch_max_stride_bytes\":2736'; grep -Eq '^display-plan: .*output={output} .*fb={framebuffer} ' /tmp/mister-magik-slint.log; latch=$(\"$bin\" fpga-latch-report); printf '%s\\n' \"$latch\" | grep -q 'supported=1'; printf '%s\\n' \"$latch\" | grep -q 'drop_count=0'; test \"$(cat /sys/class/graphics/fb0/bits_per_pixel)\" = 16; printf 'display_qualification_tsv\\tlabel={label}\\tvideo_mode={video_mode}\\toutput={output}\\tfb={framebuffer}\\tstride={stride}\\n'",
+        "set -eu; test -s {RELEASE_TOKEN}; if pidof MiSTer_MagiKDev >/dev/null 2>&1; then root=/media/fat/mister-magik-dev; else root=/media/fat/mister-magik; fi; bin=\"$root/mister-magik-fb\"; test -x \"$bin\"; report=$(\"$bin\" latch-readiness-report --json); plan=$(grep '^display-plan:' /tmp/mister-magik-slint.log | tail -n 1 || true); latch=$(\"$bin\" fpga-latch-report); bpp=$(cat /sys/class/graphics/fb0/bits_per_pixel); printf 'release_display_readiness_json\\t%s\\n' \"$report\"; printf 'release_display_plan\\t%s\\n' \"$plan\"; printf 'release_display_latch\\t%s\\n' \"$latch\"; printf 'release_display_bpp\\t%s\\n' \"$bpp\"; printf '%s\\n' \"$report\" | grep -Eq '\"state\":\"ready\"'; printf '%s\\n' \"$report\" | grep -Eq '\"scanout_abi_version\":3'; printf '%s\\n' \"$report\" | grep -Eq '\"scanout_slot_capacity_bytes\":2101248'; printf '%s\\n' \"$report\" | grep -Eq '\"latch_max_width\":1366'; printf '%s\\n' \"$report\" | grep -Eq '\"latch_max_height\":768'; printf '%s\\n' \"$report\" | grep -Eq '\"latch_max_stride_bytes\":2736'; printf '%s\\n' \"$plan\" | grep -Eq '^display-plan: .*output={output} .*fb={framebuffer} '; printf '%s\\n' \"$latch\" | grep -q 'supported=1'; printf '%s\\n' \"$latch\" | grep -q 'drop_count=0'; test \"$bpp\" = 16; printf 'display_qualification_tsv\\tlabel={label}\\tvideo_mode={video_mode}\\toutput={output}\\tfb={framebuffer}\\tstride={stride}\\n'",
         label = mode.label,
         video_mode = mode.video_mode,
         output = mode.output,
@@ -7566,6 +7566,10 @@ H: Handlers=event3 js0"#
         for mode in RELEASE_DISPLAY_MODES {
             let command = release_display_mode_command(mode);
             assert!(command.contains("bits_per_pixel"));
+            assert!(command.contains("release_display_readiness_json"));
+            assert!(command.contains("release_display_plan"));
+            assert!(command.contains("release_display_latch"));
+            assert!(command.contains("release_display_bpp"));
             assert!(command.contains("\"scanout_abi_version\":3"));
             assert!(command.contains(mode.output));
             assert!(command.contains(mode.framebuffer));
