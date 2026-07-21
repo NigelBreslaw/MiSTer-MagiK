@@ -98,4 +98,9 @@ docker_step = text.split("      - name: Prepare Quartus Docker runtime\n", 1)[1]
 assert 'sudo mount --bind "$GITHUB_WORKSPACE/.runner-temp" "$RUNNER_TEMP"' in bind_step
 assert "GITHUB_ENV" not in bind_step
 assert "GITHUB_ENV" in docker_step
+restore_step = text.split("      - name: Restore private Quartus runtime\n", 1)[1].split("\n      - name:", 1)[0]
+save_step = text.split("      - name: Save private Quartus runtime\n", 1)[1].split("\n      - uses:", 1)[0]
+assert "hit=degraded" in restore_step
+assert "installing the pinned runtime without updating the cache" in restore_step
+assert "steps.quartus-cache.outputs.hit == 'false'" in save_step
 print("unified platform workflow contract ok")

@@ -450,7 +450,14 @@ jobs:
           scripts/quartus-r2-cache.sh restore
           status=$?
           set -e
-          if [ "$status" -eq 0 ]; then echo 'hit=true' >> "$GITHUB_OUTPUT"; elif [ "$status" -eq 10 ]; then echo 'hit=false' >> "$GITHUB_OUTPUT"; else exit "$status"; fi
+          if [ "$status" -eq 0 ]; then
+            echo 'hit=true' >> "$GITHUB_OUTPUT"
+          elif [ "$status" -eq 10 ]; then
+            echo 'hit=false' >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Quartus cache restore failed with status $status; installing the pinned runtime without updating the cache"
+            echo 'hit=degraded' >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Install Quartus on cache miss
         if: steps.quartus-cache.outputs.hit != 'true'
@@ -467,7 +474,7 @@ jobs:
           scripts/install-quartus-lite-docker.sh
 
       - name: Save private Quartus runtime
-        if: steps.quartus-cache.outputs.hit != 'true'
+        if: steps.quartus-cache.outputs.hit == 'false'
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.QUARTUS_R2_WRITE_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.QUARTUS_R2_WRITE_SECRET_ACCESS_KEY }}
