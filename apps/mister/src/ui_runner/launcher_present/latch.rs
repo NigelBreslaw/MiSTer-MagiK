@@ -20,6 +20,7 @@ pub(in crate::ui_runner) trait LatchHardware: LauncherDisplayHardware {
         fb_width: u16,
         fb_height: u16,
         geometry: crate::fpga::LatchedFbufGeometry,
+        output_route: crate::fpga::LatchedOutputRoute,
     ) -> io::Result<(u16, u16)>;
 }
 
@@ -41,8 +42,16 @@ impl LatchHardware for Fpga {
         fb_width: u16,
         fb_height: u16,
         geometry: crate::fpga::LatchedFbufGeometry,
+        output_route: crate::fpga::LatchedOutputRoute,
     ) -> io::Result<(u16, u16)> {
-        self.post_magik_latched_fbuf_rgb565(sequence, base_addr, fb_width, fb_height, geometry)
+        self.post_magik_latched_fbuf_rgb565(
+            sequence,
+            base_addr,
+            fb_width,
+            fb_height,
+            geometry,
+            output_route,
+        )
     }
 }
 
@@ -194,6 +203,7 @@ pub(in crate::ui_runner) struct FpgaVblankLatchHiddenPresenter<B = PluginLatchFr
     width: usize,
     height: usize,
     latch_geometry: crate::fpga::LatchedFbufGeometry,
+    output_route: crate::fpga::LatchedOutputRoute,
     hidden_active_verified: bool,
     capabilities_verified: bool,
     last_committed_buffer: Option<u8>,
@@ -224,6 +234,11 @@ impl FpgaVblankLatchHiddenPresenter<PluginLatchFrameBuffers> {
         let height = ui.render_h();
         let buffers = PluginLatchFrameBuffers::open(width, height)?;
         let route = LauncherFramebufferRoute::for_scan(ui.scan_w(), ui.scan_h(), ui.direct_video());
+        let output_route = if ui.output_route().is_crt() {
+            crate::fpga::LatchedOutputRoute::Crt240p60
+        } else {
+            crate::fpga::LatchedOutputRoute::Hdmi
+        };
         Ok(Self::new(
             buffers,
             width,
@@ -233,6 +248,7 @@ impl FpgaVblankLatchHiddenPresenter<PluginLatchFrameBuffers> {
                 route.mode(),
                 configured_fpga_latch_right_guard_cols(),
             ),
+            output_route,
         ))
     }
 }
@@ -243,6 +259,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         width: usize,
         height: usize,
         latch_geometry: crate::fpga::LatchedFbufGeometry,
+        output_route: crate::fpga::LatchedOutputRoute,
     ) -> Self {
         Self {
             buffers,
@@ -251,6 +268,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             width,
             height,
             latch_geometry,
+            output_route,
             hidden_active_verified: false,
             capabilities_verified: false,
             last_committed_buffer: None,
@@ -289,7 +307,11 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                 })?;
             let supported = magic_hi == crate::fpga::MAGIK_FBUF_CAPS_MAGIC
                 || magic_lo == crate::fpga::MAGIK_FBUF_CAPS_MAGIC;
-            if !supported || !capabilities.production_ready() {
+            let capabilities_ready = match self.output_route {
+                crate::fpga::LatchedOutputRoute::Hdmi => capabilities.production_ready(),
+                crate::fpga::LatchedOutputRoute::Crt240p60 => capabilities.crt_240p60_ready(),
+            };
+            if !supported || !capabilities_ready {
                 self.disabled = true;
                 return Err(LatchFailure::incompatible(
                     LatchFailureStage::FpgaCapabilities,
@@ -371,6 +393,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             self.width as u16,
             self.height as u16,
             self.latch_geometry,
+            self.output_route,
         ) {
             Ok(ack) => ack,
             Err(e) => {
@@ -510,6 +533,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             self.width,
             self.height,
             self.hidden_active_verified,
+            self.output_route,
         ) {
             Ok(sync) => sync,
             Err(LatchStatusSyncError::Unsupported { magic_hi, magic_lo }) => {
@@ -591,6 +615,7 @@ fn classify_latch_status(
     width: usize,
     height: usize,
     hidden_active_verified: bool,
+    expected_output_route: crate::fpga::LatchedOutputRoute,
 ) -> Result<LatchStatusSync, LatchStatusSyncError> {
     if !status.supported() {
         return Err(LatchStatusSyncError::Unsupported {
@@ -600,6 +625,16 @@ fn classify_latch_status(
     }
     let pending = status.pending();
     let pending_sequence = status.pending_sequence;
+    if status.active_output_route() != expected_output_route {
+        return Ok(LatchStatusSync {
+            active_slot: None,
+            active_sequence: status.active_sequence,
+            pending,
+            pending_sequence,
+            hidden_active_verified: false,
+            recovered_non_hidden_active: hidden_active_verified,
+        });
+    }
     if !status.active_enabled() {
         return Ok(LatchStatusSync {
             active_slot: None,
@@ -825,6 +860,7 @@ mod tests {
             _fb_width: u16,
             _fb_height: u16,
             _geometry: crate::fpga::LatchedFbufGeometry,
+            _output_route: crate::fpga::LatchedOutputRoute,
         ) -> io::Result<(u16, u16)> {
             if let Some(events) = &self.events {
                 events.borrow_mut().push(TestEvent::Post);
@@ -856,6 +892,11 @@ mod tests {
             active_width: WIDTH as u16,
             active_height: HEIGHT as u16,
             active_stride: rgb565_stride_bytes(WIDTH) as u16,
+            requested_route: 0,
+            active_route: 0,
+            reader_flags: 0,
+            underrun_count: 0,
+            timeout_count: 0,
         }
     }
 
@@ -869,6 +910,7 @@ mod tests {
             WIDTH,
             HEIGHT,
             crate::fpga::LatchedFbufGeometry::new(WIDTH as u16, route.mode(), 1),
+            crate::fpga::LatchedOutputRoute::Hdmi,
         )
     }
 

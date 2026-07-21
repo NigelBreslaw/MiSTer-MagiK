@@ -20,6 +20,47 @@ pub const UI_FB_720P_H: usize = 720;
 const MIN_RUNTIME_SCAN_W: u16 = 320;
 const MIN_RUNTIME_SCAN_H: u16 = 200;
 const UI_FB_SIZE_ENV: &str = "MISTER_UI_FB_SIZE";
+const RUNTIME_SETTINGS_ENV: &str = "MISTER_MAGIK_RUNTIME_SETTINGS_V1";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResolvedOutputRoute {
+    Hdmi,
+    Crt240p60,
+}
+
+impl ResolvedOutputRoute {
+    fn from_runtime_settings_v1(value: &str) -> Option<Self> {
+        let mut schema = None;
+        let mut output = None;
+        for field in value.split('&') {
+            let (key, value) = field.split_once('=')?;
+            match key {
+                "schema" if schema.replace(value).is_none() => {}
+                "output" if output.replace(value).is_none() => {}
+                _ => return None,
+            }
+        }
+        if schema != Some("1") {
+            return None;
+        }
+        match output? {
+            "hdmi" => Some(Self::Hdmi),
+            "crt-240p60" => Some(Self::Crt240p60),
+            _ => None,
+        }
+    }
+
+    pub const fn is_crt(self) -> bool {
+        matches!(self, Self::Crt240p60)
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Hdmi => "hdmi",
+            Self::Crt240p60 => "crt-240p60",
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UiFramebufferSizePolicy {
@@ -76,6 +117,7 @@ pub struct UiDisplayPlan {
     pub scan_w: u16,
     pub scan_h: u16,
     pub direct_video: bool,
+    pub output_route: ResolvedOutputRoute,
     pub fb_policy: UiFramebufferSizePolicy,
     pub source: &'static str,
     pub fallback: bool,
@@ -85,15 +127,24 @@ impl UiDisplayPlan {
     pub fn from_runtime_or_mister_ini_file(runtime: Option<RuntimeDisplayGeometry>) -> Self {
         let ini = std::fs::read_to_string(MISTER_INI_PATH).ok();
         let fb_policy = UiFramebufferSizePolicy::from_env();
-        if let Some(runtime) = runtime {
-            return Self::from_runtime_geometry_with_policy(
-                runtime,
-                ini.as_deref()
-                    .is_some_and(Self::direct_video_policy_from_mister_ini_text),
-                fb_policy,
+        let resolved_route = std::env::var(RUNTIME_SETTINGS_ENV)
+            .ok()
+            .as_deref()
+            .and_then(ResolvedOutputRoute::from_runtime_settings_v1)
+            .unwrap_or(ResolvedOutputRoute::Hdmi);
+        if resolved_route == ResolvedOutputRoute::Crt240p60 {
+            return Self::from_output_with_policy(
+                640,
+                240,
+                true,
+                "main-runtime-settings-crt-240p60",
+                UiFramebufferSizePolicy::Auto,
             );
         }
-        ini.and_then(|ini| Self::from_mister_ini_text_with_policy(&ini, fb_policy))
+        if let Some(runtime) = runtime {
+            return Self::from_runtime_geometry_with_policy(runtime, false, fb_policy);
+        }
+        ini.and_then(|ini| Self::from_mister_ini_hdmi_text_with_policy(&ini, fb_policy))
             .unwrap_or_else(|| Self::fallback_1080p_with_policy(fb_policy))
     }
 
@@ -113,15 +164,23 @@ impl UiDisplayPlan {
     pub fn from_runtime_or_mister_ini_text(
         runtime: Option<RuntimeDisplayGeometry>,
         ini: &str,
+        runtime_settings: Option<&str>,
     ) -> Option<Self> {
-        if let Some(runtime) = runtime {
-            return Some(Self::from_runtime_geometry_with_policy(
-                runtime,
-                Self::direct_video_policy_from_mister_ini_text(ini),
-                UiFramebufferSizePolicy::Auto,
+        let resolved_route = runtime_settings
+            .and_then(ResolvedOutputRoute::from_runtime_settings_v1)
+            .unwrap_or(ResolvedOutputRoute::Hdmi);
+        if resolved_route == ResolvedOutputRoute::Crt240p60 {
+            return Some(Self::from_output(
+                640,
+                240,
+                true,
+                "test-runtime-settings-crt",
             ));
         }
-        Self::from_mister_ini_text(ini)
+        if let Some(runtime) = runtime {
+            return Some(Self::from_runtime_geometry(runtime, false));
+        }
+        Self::from_mister_ini_hdmi_text_with_policy(ini, UiFramebufferSizePolicy::Auto)
     }
 
     pub fn direct_video_policy_from_mister_ini_text(ini: &str) -> bool {
@@ -166,6 +225,23 @@ impl UiDisplayPlan {
             geometry,
             false,
             "mister-ini-video-mode",
+            fb_policy,
+        ))
+    }
+
+    fn from_mister_ini_hdmi_text_with_policy(
+        ini: &str,
+        fb_policy: UiFramebufferSizePolicy,
+    ) -> Option<Self> {
+        let parsed = ParsedIni::parse(ini);
+        let video_mode = parsed
+            .value("Menu", "video_mode")
+            .or_else(|| parsed.value("MiSTer", "video_mode"))
+            .or_else(|| parsed.value("global", "video_mode"))?;
+        Some(Self::from_geometry(
+            video_mode_geometry(video_mode)?,
+            false,
+            "mister-ini-hdmi-fallback",
             fb_policy,
         ))
     }
@@ -254,6 +330,11 @@ impl UiDisplayPlan {
             scan_w: geometry.scan_w,
             scan_h: geometry.scan_h,
             direct_video,
+            output_route: if direct_video {
+                ResolvedOutputRoute::Crt240p60
+            } else {
+                ResolvedOutputRoute::Hdmi
+            },
             fb_policy,
             source,
             fallback: false,
@@ -262,8 +343,9 @@ impl UiDisplayPlan {
 
     pub fn log_line(self) -> String {
         format!(
-            "display-plan: source={} output={}x{} scan={}x{} fb={}x{} fb_policy={} direct_video={} fallback={}",
+            "display-plan: source={} route={} output={}x{} scan={}x{} fb={}x{} fb_policy={} direct_video={} fallback={}",
             self.source,
+            self.output_route.label(),
             self.output_w,
             self.output_h,
             self.scan_w,
@@ -317,6 +399,7 @@ pub struct UiDisplay {
     scan_w: u16,
     scan_h: u16,
     direct_video: bool,
+    output_route: ResolvedOutputRoute,
 }
 
 impl UiDisplay {
@@ -332,6 +415,7 @@ impl UiDisplay {
             scan_w: fb_w.min(u16::MAX as usize) as u16,
             scan_h: fb_h.min(u16::MAX as usize) as u16,
             direct_video: false,
+            output_route: ResolvedOutputRoute::Hdmi,
         }
     }
 
@@ -346,6 +430,7 @@ impl UiDisplay {
             scan_w: plan.scan_w,
             scan_h: plan.scan_h,
             direct_video: plan.direct_video,
+            output_route: plan.output_route,
         }
     }
 
@@ -383,6 +468,10 @@ impl UiDisplay {
 
     pub fn direct_video(&self) -> bool {
         self.direct_video
+    }
+
+    pub fn output_route(&self) -> ResolvedOutputRoute {
+        self.output_route
     }
 
     pub fn log_line(&self) -> String {
@@ -521,7 +610,7 @@ impl<'a> ParsedIni<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::framebuffer::format::rgb565_stride_bytes;
+    use mister_magik_fb::framebuffer::format::rgb565_stride_bytes;
 
     #[derive(Clone, Copy)]
     struct ExpectedDisplayPlan {
@@ -857,7 +946,12 @@ mod tests {
     fn detected_geometry_wins_over_ini_geometry() {
         let runtime = RuntimeDisplayGeometry::from_video_words(1280, 720, 1280, 720);
         let ini = "[MiSTer]\ndirect_video=0\n[Menu]\nvideo_mode=8\n";
-        let plan = UiDisplayPlan::from_runtime_or_mister_ini_text(runtime, ini).expect("plan");
+        let plan = UiDisplayPlan::from_runtime_or_mister_ini_text(
+            runtime,
+            ini,
+            Some("schema=1&output=hdmi"),
+        )
+        .expect("plan");
 
         assert_eq!(plan.source, "runtime-video-info");
         assert_eq!((plan.output_w, plan.output_h), (1280, 720));
@@ -866,23 +960,32 @@ mod tests {
     }
 
     #[test]
-    fn detected_geometry_preserves_ini_direct_video_policy() {
+    fn resolved_crt_route_overrides_detected_hdmi_geometry() {
         let runtime = RuntimeDisplayGeometry::from_video_words(640, 480, 640, 480);
         let ini =
             "[MiSTer]\ndirect_video=1\nmenu_pal=1\nforced_scandoubler=1\n[Menu]\nvideo_mode=8\n";
-        let plan = UiDisplayPlan::from_runtime_or_mister_ini_text(runtime, ini).expect("plan");
+        let plan = UiDisplayPlan::from_runtime_or_mister_ini_text(
+            runtime,
+            ini,
+            Some("schema=1&output=crt-240p60"),
+        )
+        .expect("plan");
 
-        assert_eq!(plan.source, "runtime-video-info");
-        assert_eq!((plan.output_w, plan.output_h), (640, 480));
+        assert_eq!(plan.source, "test-runtime-settings-crt");
+        assert_eq!((plan.output_w, plan.output_h), (640, 240));
+        assert_eq!((plan.fb_w, plan.fb_h), (640, 240));
         assert!(plan.direct_video);
+        assert_eq!(plan.output_route, ResolvedOutputRoute::Crt240p60);
     }
 
     #[test]
     fn ini_geometry_is_fallback_when_detection_fails() {
         let ini = "[MiSTer]\ndirect_video=0\n[Menu]\nvideo_mode=8\n";
-        let plan = UiDisplayPlan::from_runtime_or_mister_ini_text(None, ini).expect("plan");
+        let plan =
+            UiDisplayPlan::from_runtime_or_mister_ini_text(None, ini, Some("schema=1&output=hdmi"))
+                .expect("plan");
 
-        assert_eq!(plan.source, "mister-ini-video-mode");
+        assert_eq!(plan.source, "mister-ini-hdmi-fallback");
         assert_eq!((plan.output_w, plan.output_h), (1920, 1080));
         assert_eq!((plan.fb_w, plan.fb_h), (960, 540));
     }
@@ -890,11 +993,29 @@ mod tests {
     #[test]
     fn custom_ini_geometry_stays_compatible_as_fallback() {
         let ini = "[MiSTer]\ndirect_video=0\n[Menu]\nvideo_mode=1280,110,40,220,720,5,5,20,74250\n";
-        let plan = UiDisplayPlan::from_runtime_or_mister_ini_text(None, ini).expect("plan");
+        let plan = UiDisplayPlan::from_runtime_or_mister_ini_text(None, ini, None).expect("plan");
 
-        assert_eq!(plan.source, "mister-ini-video-mode");
+        assert_eq!(plan.source, "mister-ini-hdmi-fallback");
         assert_eq!((plan.output_w, plan.output_h), (1280, 720));
         assert_eq!((plan.fb_w, plan.fb_h), (1280, 720));
+    }
+
+    #[test]
+    fn malformed_or_unsupported_runtime_settings_stay_hdmi() {
+        let runtime = RuntimeDisplayGeometry::from_video_words(1920, 1080, 1920, 1080);
+        let ini = "[MiSTer]\ndirect_video=2\n[Menu]\nvideo_mode=8\n";
+        for settings in [
+            None,
+            Some("schema=2&output=crt-240p60"),
+            Some("schema=1&output=crt-480i"),
+            Some("schema=1&output=crt-240p60&extra=1"),
+        ] {
+            let plan = UiDisplayPlan::from_runtime_or_mister_ini_text(runtime, ini, settings)
+                .expect("safe HDMI plan");
+            assert_eq!(plan.output_route, ResolvedOutputRoute::Hdmi);
+            assert!(!plan.direct_video);
+            assert_eq!((plan.output_w, plan.output_h), (1920, 1080));
+        }
     }
 
     #[test]
