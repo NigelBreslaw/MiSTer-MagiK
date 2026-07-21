@@ -793,16 +793,15 @@ pub fn run_cli() -> Result<()> {
             let sess = connect(10)?;
             edit_remote_ini(&sess, IniEdit::ZaparooBoot, dry_run)?;
         }
-        "ini-edit-local" => {
-            validate_ini_edit_local_args(&args)?;
+        "ini-edit" => {
+            let dry_run = args.last().map(String::as_str) == Some("--dry-run");
+            if dry_run {
+                args.pop();
+            }
+            validate_ini_edit_args(&args)?;
             let edit = parse_ini_edit_args(&args)?;
-            let input = args
-                .get(args.len() - 2)
-                .ok_or("ini-edit-local needs <input> <output>")?;
-            let output = args.last().ok_or("ini-edit-local needs <input> <output>")?;
-            let text = fs::read_to_string(input)?;
-            let edited = edit_mister_ini(&text, edit);
-            fs::write(output, edited)?;
+            let sess = connect(10)?;
+            edit_remote_ini(&sess, edit, dry_run)?;
         }
         "profile-summary" => {
             let path = args
@@ -834,7 +833,7 @@ pub fn run_cli() -> Result<()> {
 
 fn usage() {
     println!(
-        "usage: mister --capture-buffer\n       mister <status|arming-status|mode|scene|crt|core-list|catalog|media-check|media-download|agent|reboot-wait|doctor|mame-metadata-build> ...\n       mode <status|dev|public|stock>\n       scene <launcher|controller_test|tear_pattern|video_playback|crt_trial> [seconds]\n       crt qualify --attended [--out DIRECTORY]\n       crt qualify --restore\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>]\n       operator commands are typed and bounded; direct-reset-no-sync remains experimental and requires a volatile session token"
+        "usage: mister --capture-buffer\n       mister <status|arming-status|mode|scene|crt|ini-edit|core-list|catalog|media-check|media-download|agent|reboot-wait|doctor|mame-metadata-build> ...\n       mode <status|dev|public|stock>\n       scene <launcher|controller_test|tear_pattern|video_playback|crt_trial> [seconds]\n       crt qualify --attended [--out DIRECTORY]\n       crt qualify --restore\n       ini-edit <magik-boot|magik-boot-hdmi|magik-boot-crt-240p60|magik-boot-crt-288p50|magik-boot-crt-480p60|magik-boot-crt-576p50> [--dry-run]\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>]\n       operator commands are typed and bounded; direct-reset-no-sync remains experimental and requires a volatile session token"
     );
 }
 
@@ -5039,7 +5038,7 @@ fn parse_ini_edit_args(args: &[String]) -> Result<IniEdit> {
     }
 }
 
-fn validate_ini_edit_local_args(args: &[String]) -> Result<()> {
+fn validate_ini_edit_args(args: &[String]) -> Result<()> {
     let expected = match args.first().map(String::as_str) {
         Some(
             "magik-boot"
@@ -5053,17 +5052,14 @@ fn validate_ini_edit_local_args(args: &[String]) -> Result<()> {
             | "menu-auto"
             | "comment-main"
             | "stock-boot",
-        ) => 3,
-        Some("menu-mode") => 4,
-        Some("crt") => 6,
+        ) => 1,
+        Some("menu-mode") => 2,
+        Some("crt") => 4,
         Some(other) => return Err(format!("unknown ini edit: {other}").into()),
         None => return Err("ini edit mode is required".into()),
     };
     if args.len() != expected {
-        return Err(
-            "ini-edit-local needs <magik-boot|magik-boot-hdmi|magik-boot-crt-240p60|magik-boot-crt-288p50|magik-boot-crt-480p60|magik-boot-crt-576p50|zaparoo-boot|arcade-video|menu-mode|menu-auto|crt|comment-main|stock-boot> ... <input> <output>"
-                .into(),
-        );
+        return Err("ini-edit received the wrong number of arguments".into());
     }
     Ok(())
 }
@@ -7006,21 +7002,15 @@ video_mode=14
     }
 
     #[test]
-    fn validates_local_ini_edit_argument_counts() {
-        let args = vec!["menu-mode".into(), "8".into(), "in".into(), "out".into()];
-        assert!(validate_ini_edit_local_args(&args).is_ok());
+    fn validates_remote_ini_edit_argument_counts() {
+        let args = vec!["menu-mode".into(), "8".into()];
+        assert!(validate_ini_edit_args(&args).is_ok());
 
-        let missing_mode = vec!["menu-mode".into(), "in".into(), "out".into()];
-        assert!(validate_ini_edit_local_args(&missing_mode).is_err());
+        let missing_mode = vec!["menu-mode".into()];
+        assert!(validate_ini_edit_args(&missing_mode).is_err());
 
-        let missing_crt_value = vec![
-            "crt".into(),
-            "1".into(),
-            "0".into(),
-            "in".into(),
-            "out".into(),
-        ];
-        assert!(validate_ini_edit_local_args(&missing_crt_value).is_err());
+        let missing_crt_value = vec!["crt".into(), "1".into(), "0".into()];
+        assert!(validate_ini_edit_args(&missing_crt_value).is_err());
     }
 
     #[test]
