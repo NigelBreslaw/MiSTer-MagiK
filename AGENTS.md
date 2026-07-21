@@ -93,8 +93,9 @@ those trees are part of the task.
 ```bash
 scripts/agent doctor
 scripts/agent task begin
-scripts/agent plan
 scripts/agent check
+scripts/agent deliver -m "Describe the completed change"
+scripts/agent plan
 scripts/agent verify
 scripts/agent commit -m "Describe the completed change"
 scripts/agent deploy
@@ -103,7 +104,7 @@ scripts/mister status
 
 `scripts/agent verify --staged` is the staged-index pre-commit interface and
 `--paths` is reserved for CI or diagnostics. Agents must record a task baseline
-before editing, use `check` while iterating, and use `verify` before completion.
+before editing, use `check` while iterating, and use `deliver` to complete work.
 Do not narrate successful operation counts or names: report only that validation
 is running, passed, or failed with the actionable summary. Agents must not
 construct Cargo, test, lint, host-validation, or Apple-container commands
@@ -112,6 +113,12 @@ directly; the harness selects, times, deduplicates, and records them.
 profile, scope, artifacts, CI qualification, transport, activation, rollback,
 and verification; agents must not invoke deployment/build implementation
 scripts or supply deployment feature flags.
+`deliver` owns final verification and committing. It contacts the MiSTer only
+for runtime or platform changes. Platform delivery records an external-pending
+commit until that exact commit is published on `main`; rerunning `deliver`
+resumes CI qualification and deployment. It never pushes automatically.
+`plan`, `verify`, `commit`, and `deploy` remain diagnostic and recovery
+interfaces.
 `scripts/agent commit` is the only agent-facing staging and commit interface;
 invoke it with first-attempt escalation because it writes `.git`. Do not stage
 or commit with raw Git when the task baseline workflow is available.

@@ -23,6 +23,13 @@ validation column explicitly calls for ARM, GUI, or an attended device.
 For dated evidence, search explicitly with `rg --no-ignore history/`. For
 unknown work, begin the task before editing and run `scripts/agent plan` before invoking
 checks.
+
+The normal feature loop is `scripts/agent task begin`, edit,
+`scripts/agent check`, then `scripts/agent deliver -m MESSAGE`. Delivery avoids
+device access for host-only work and infers runtime or platform deployment
+without agent-supplied build flags. Platform delivery may stop with
+`external_required`; publish or merge the recorded exact commit to `main` and
+rerun the same command to resume.
 # Deployment
 
 “Build and deploy” maps only to `scripts/agent deploy`. The CLI infers runtime

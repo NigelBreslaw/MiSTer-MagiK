@@ -10,10 +10,12 @@ Run from the repository root:
 
 ```bash
 scripts/agent task begin
-scripts/agent plan
 scripts/agent check
+scripts/agent deliver -m "Describe the completed change"
+scripts/agent plan
 scripts/agent verify
 scripts/agent commit -m "Describe the completed change"
+scripts/agent deploy
 scripts/agent --output ndjson verify --staged
 scripts/agent scripts review
 ```
@@ -29,6 +31,19 @@ commit without pushing or bypassing hooks. It is an inherently Git-writing
 operation and must receive `.git` write permission on its first invocation.
 Validation can inspect later edits to baseline-dirty files, but commit refuses
 those overlaps because it cannot safely separate task and pre-existing content.
+
+`deliver -m MESSAGE` is the normal completion interface. It verifies and
+commits every task, skips the device for non-deployable work, and performs the
+canonical runtime deployment when required. Platform work is committed with an
+external-pending requirement; after a human publishes that exact commit to
+`main`, the same command resumes exact-SHA CI qualification and transactional
+platform deployment. The CLI never pushes automatically.
+
+Planning is component-driven. Components own deployment impact, action risk,
+resource class, and external requirements. Actions run cheap-first, and the
+executor enforces the intent risk tier immediately before execution. One task
+change set is reused for planning and cache keys instead of rescanning the
+worktree for every operation.
 
 With no arguments in a terminal, the program opens its Ratatui operator view.
 With no terminal, it retains concise human output. Automation should explicitly
@@ -80,11 +95,11 @@ destructive. Required Apple-container checks may be planned automatically.
 Quartus and RBF builds are prohibited locally on macOS; FPGA changes produce an
 explicit GitHub Actions requirement instead.
 
-`scripts/mister` remains the sole device adapter. Deployment, reboot, fault
-injection, mode switching, and release acceptance remain outside typed device
-execution until their cleanup and recovery behavior is modeled as state
-machines and tested with a fake transport. The CLI must never expose arbitrary
-SSH or SFTP as an AI operation.
+`scripts/mister` remains the sole device adapter. Runtime and platform
+deployment use typed, bounded transactions with health verification and
+rollback. Fault injection and unrestricted device operations remain outside
+the public API. The CLI must never expose arbitrary SSH or SFTP as an AI
+operation.
 
 ## Validation ownership
 
