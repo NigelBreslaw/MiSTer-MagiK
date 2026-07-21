@@ -505,16 +505,12 @@ elif [[ "$REPLACE_LABEL" -eq 1 ]]; then
 fi
 
 case "$DEPLOY" in
-  device) "$HERE/scripts/deploy-rust.sh" --device --ui-scope launcher ;;
+  device) "$HERE/scripts/agent" deploy-recipe launcher-device ;;
   skip) : ;;
 esac
 
 if [[ "$CPU_PROFILE" -eq 1 ]]; then
-  profile_bin="$HERE/apps/mister/target/armv7-unknown-linux-gnueabihf/release-device-profile/mister-magik-fb"
-  echo "==> Building pprof-enabled first-scan launcher"
-  "$HERE/apps/mister/build-arm.sh" --profile --ui-scope launcher --bench-tools
-  echo "==> Deploying pprof-enabled first-scan launcher"
-  "$MISTER" agent deploy-magik-bin "$profile_bin" "$REMOTE_BIN" >/dev/null
+  "$HERE/scripts/agent" deploy-recipe launcher-profile
 fi
 
 ensure_launcher_recovered() {

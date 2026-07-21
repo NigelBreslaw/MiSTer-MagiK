@@ -110,7 +110,7 @@ cleanup() {
 trap cleanup EXIT
 
 case "$deploy" in
-  device) "$HERE/scripts/deploy-rust.sh" --device --ui-scope launcher --bench-tools --diagnostics ;;
+  device) "$HERE/scripts/agent" deploy-recipe launcher-diagnostics-device ;;
   skip) : ;;
 esac
 

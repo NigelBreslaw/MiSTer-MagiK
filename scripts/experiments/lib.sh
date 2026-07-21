@@ -33,7 +33,7 @@ require_experiment_binary() {
 
   if ! grep -q '^experiments=1$' <<<"$out"; then
     echo "ERROR: deployed MiSTer MagiK binary does not include experiments." >&2
-    echo "       Build/deploy with: scripts/deploy-rust.sh --experiments" >&2
+    echo "       Build/deploy with the typed experiment workflow." >&2
     echo "       Or run this script with --deploy-device." >&2
     return 1
   fi
@@ -50,7 +50,7 @@ require_preview_mega_transitions() {
   count="$( (grep -E '^[a-z0-9-]+$' <<<"$out" || true) | wc -l | tr -d ' ')"
   if [[ ! "$count" =~ ^[0-9]+$ || "$count" -le 1 ]]; then
     echo "ERROR: deployed binary does not expose experimental preview transitions." >&2
-    echo "       Build/deploy with: scripts/deploy-rust.sh --experiments" >&2
+    echo "       Build/deploy with the typed experiment workflow." >&2
     return 1
   fi
 }

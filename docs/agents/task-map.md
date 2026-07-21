@@ -23,3 +23,10 @@ validation column explicitly calls for ARM, GUI, or an attended device.
 For dated evidence, search explicitly with `rg --no-ignore history/`. For
 unknown work, begin the task before editing and run `scripts/agent plan` before invoking
 checks.
+# Deployment
+
+“Build and deploy” maps only to `scripts/agent deploy`. The CLI infers runtime
+or platform scope, owns CI qualification and device transactions, and records
+progress and evidence. Profiling, experiments, and acceptance scripts use
+hidden fixed recipes; they do not expose deployment implementation flags to AI
+agents.

@@ -52,6 +52,10 @@ pub enum Command {
     Verify(ScopeArgs),
     Doctor,
     Deploy,
+    #[command(hide = true)]
+    DeployRecipe {
+        recipe: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -159,6 +163,7 @@ impl Cli {
             },
             Some(Command::Doctor) => Intent::Doctor,
             Some(Command::Deploy) => Intent::Deploy { task_id },
+            Some(Command::DeployRecipe { recipe }) => Intent::DeployRecipe { recipe },
         }
     }
 }

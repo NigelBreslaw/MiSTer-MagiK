@@ -86,7 +86,7 @@ if [[ "$REPLACE_LABEL" -eq 1 ]]; then
 fi
 
 if [[ "$DEPLOY" -eq 1 ]]; then
-  "$HERE/scripts/deploy-rust.sh" --device --ui-scope launcher --bench-tools
+  "$HERE/scripts/agent" deploy-recipe launcher-bench-device
 fi
 
 remote_trace="/tmp/${LABEL}-launch-handoff.tsv"

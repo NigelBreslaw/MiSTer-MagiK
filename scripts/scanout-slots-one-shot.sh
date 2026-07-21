@@ -20,7 +20,7 @@ trap cleanup EXIT
 mkdir -p "$ROOT/build/scanout-slots"
 
 "$ROOT/scripts/build-scanout-slots-module.sh"
-"$ROOT/apps/mister/build-arm.sh" --diagnostics --bench-tools
+"$ROOT/scripts/agent" deploy-recipe all-diagnostics-device
 
 test -f "$LOCAL_KO"
 if ! grep -q 'vermagic:.*5\.15\.1-MiSTer' "$ROOT/build/scanout-slots/modinfo.txt"; then
@@ -37,9 +37,6 @@ cleanup
 
 echo "==> Uploading diagnostics binary and scanout-slots module"
 "$MISTER" run "mkdir -p '$REMOTE_DIR'"
-"$MISTER" agent deploy-magik-bin \
-  "$ROOT/apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb" \
-  "$REMOTE_BIN"
 "$MISTER" put "$LOCAL_KO" "$REMOTE_KO"
 "$MISTER" run "chmod 600 '$REMOTE_KO'; sync"
 
@@ -51,7 +48,7 @@ echo "==> Running scanout-slots-map-report"
 
 echo "==> Unloading module and restoring normal MagiK"
 cleanup
-"$ROOT/scripts/deploy-rust.sh"
+"$ROOT/scripts/agent" deploy
 "$ROOT/scripts/run-rust.sh" launcher 0
 "$MISTER" run "set -e; for i in \$(seq 1 20); do pidof mister-magik-fb >/dev/null 2>&1 && break; sleep 0.5; done; ! test -e /dev/mister-magik-scanout-slots; ! grep -q '^mister_magik_scanout_slots ' /proc/modules; pidof MiSTer_MagiKDev; pidof mister-magik-fb; ls -l /media/fat/mister-magik-dev/launcher.env /tmp/mister-magik/fs-fault* /media/fat/mister-magik-dev/rebuild-on-next-boot 2>/dev/null || true"
 

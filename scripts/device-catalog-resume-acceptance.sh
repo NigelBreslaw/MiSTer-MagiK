@@ -75,7 +75,7 @@ fi
 [[ "$TIMEOUT" =~ ^[0-9]+$ ]] || { echo "CATALOG_RESUME_TIMEOUT must be an integer" >&2; exit 2; }
 
 case "$DEPLOY" in
-  device) "$ROOT/scripts/deploy-rust.sh" --device --ui-scope launcher ;;
+  device) "$ROOT/scripts/agent" deploy-recipe launcher-device ;;
   skip) ;;
 esac
 

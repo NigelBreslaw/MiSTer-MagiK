@@ -4,7 +4,7 @@
 
 # Run the already-deployed Rust frontend on the MiSTer.
 #
-# This is intentionally separate from deploy-rust.sh: use it when the binary on
+# This is intentionally separate from deployment: use it when the binary on
 # /media/fat is already good and you only need to restart a scene.
 #
 #   scripts/run-rust.sh                  # restart supervised launcher, forever
@@ -46,7 +46,7 @@ case "$SCENE" in
   controller_test|tear_pattern|video_playback) ;;
   camera-effects|sprite-effects|text-effects|raster-effects|transition-effects)
     echo "'$SCENE' is an experimental effect scene, not a production UI scene." >&2
-    echo "Use scripts/experiments/ and deploy with scripts/deploy-rust.sh --experiments." >&2
+    echo "Use scripts/experiments/ and its typed deployment workflow." >&2
     exit 2
     ;;
   -h|--help)

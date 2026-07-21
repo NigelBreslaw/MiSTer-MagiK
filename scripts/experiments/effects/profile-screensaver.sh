@@ -64,7 +64,7 @@ if [[ ! "$secs" =~ ^[0-9]+$ || "$secs" -lt 1 ]]; then echo "--secs must be a pos
 mkdir -p "$OUT_DIR"
 
 case "$deploy" in
-  device) "$HERE/scripts/deploy-rust.sh" --experiments ;;
+  device) "$HERE/scripts/agent" deploy-recipe all-experiments-device ;;
   skip) : ;;
 esac
 

@@ -32,9 +32,9 @@ for wrapper in ("apps/mister/build-arm.sh", "apps/mister/build-arm64-apple-conta
     ).stdout
     assert "--fast" in help_text, f"{wrapper} help omits --fast"
 
-deploy = (ROOT / "scripts/deploy-rust.sh").read_text()
+deploy = (ROOT / "agent-cli/src/runtime_deploy.rs").read_text()
 bench = (ROOT / "scripts/bench-debug-build.sh").read_text()
-assert '--fast) PROFILE=release; BUILD_FLAG=(--fast)' in deploy
+assert '"launcher-fast"' in (ROOT / "agent-cli/src/deploy.rs").read_text()
 assert 'build-ui-fast) echo "apps/mister/build-arm.sh --fast"' in bench
 assert 'build-ui-fast) profile="release"' in bench
 assert 'restore_stamp="$(mktemp ' in bench
@@ -42,12 +42,11 @@ assert 'touch -r "$restore_stamp" "$restore_path"' in bench
 assert "image arch probe" not in apple
 assert 'container run --arch arm64 --rm "$IMAGE" uname -m' in apple
 assert "VERIFIED_STAMP=" in ffmpeg and "verified_cache_is_current" in ffmpeg
-assert 'agent deploy-magik-bin "$BIN" "$REMOTE" --json' in deploy
-assert "Reusing agent-verified transfer hash" in deploy
+assert '"deploy-magik-bin".into()' in deploy
 
 arcade_profile = (ROOT / "scripts/profile-arcade-scroll.sh").read_text()
 assert '--fast) build_profile="release"' in arcade_profile
-assert '"$HERE/scripts/deploy-rust.sh" --fast --ui-scope launcher --bench-tools' in arcade_profile
+assert 'deploy-recipe launcher-bench-fast' in arcade_profile
 
 assert 'include_str!("../../../LICENSE")' in licenses
 assert 'include_str!("../LICENSE")' not in licenses

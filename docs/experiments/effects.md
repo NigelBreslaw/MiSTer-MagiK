@@ -41,7 +41,7 @@ raw565-oriented preview packs.
 Build and deploy an experiment-enabled binary before running these tools:
 
 ```bash
-scripts/deploy-rust.sh --experiments
+scripts/agent deploy
 ```
 
 The experiment scripts also accept `--deploy-device`; that path deploys an

@@ -892,23 +892,16 @@ benchmark_cleanup_install profile_arcade_scroll_cleanup
 case "$deploy" in
   device)
     if [[ "$build_profile" == "release" ]]; then
-      "$HERE/scripts/deploy-rust.sh" --fast --ui-scope launcher --bench-tools
+      "$HERE/scripts/agent" deploy-recipe launcher-bench-fast
     else
-      "$HERE/scripts/deploy-rust.sh" --device --ui-scope launcher --bench-tools
+      "$HERE/scripts/agent" deploy-recipe launcher-bench-device
     fi
     ;;
   skip) : ;;
 esac
 
 if [[ "$cpu_profile" == "1" && "$self_test" != "1" ]]; then
-  profile_bin="$HERE/apps/mister/target/armv7-unknown-linux-gnueabihf/release-device-profile/mister-magik-fb"
-  echo "==> Build profiling binary for boot-entry Arcade CPU profile"
-  "$HERE/apps/mister/build-arm.sh" --profile --ui-scope launcher --bench-tools
-  echo "==> Deploy profiling binary for boot-entry Arcade CPU profile"
-  if ! "$MISTER" agent deploy-magik-bin "$profile_bin" "$REMOTE_BIN" >/dev/null; then
-    echo "agent deploy failed for profiling binary; falling back to device deploy transaction" >&2
-    "$MISTER" deploy-magik-bin "$profile_bin" "$REMOTE_BIN" >/dev/null
-  fi
+  "$HERE/scripts/agent" deploy-recipe launcher-profile
 fi
 
 profile="$build_profile"

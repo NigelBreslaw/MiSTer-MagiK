@@ -14,7 +14,7 @@ AGENT="$ROOT/mister/tools/agent/src/scanout_slots_contract.rs"
 RUST_CONTRACT="$ROOT/mister/platform/contracts/scanout/src/lib.rs"
 DOC="$ROOT/documentation/src/content/docs/architecture/kernel-scanout-plugin.mdx"
 KO="$ROOT/build/scanout-slots/mister_magik_scanout_slots.ko"
-DEPLOY="$ROOT/scripts/deploy-platform.sh"
+DEPLOY="$ROOT/mister/tools/host/src/main.rs"
 INSTALL="$ROOT/scripts/magik-mode.sh"
 PLATFORM_VERIFY="$ROOT/scripts/lib/platform-manifest-lib.sh"
 
@@ -65,7 +65,7 @@ ${CC:-cc} -std=c11 -Wall -Wextra -Werror \
 for text in platform-v2.manifest platform_contract_sha256 scanout_module_sha256 latch_rbf_sha256; do
   require_text "$PLATFORM_VERIFY" "$text"
 done
-require_text "$DEPLOY" platform_manifest_verify
+require_text "$DEPLOY" PlatformDeployTransaction
 require_text "$INSTALL" platform_manifest_verify
 for text in /dev/mister-magik-scanout-slots 960x540 RGB565 /dev/fb0 QEMU; do
   require_text "$DOC" "$text"

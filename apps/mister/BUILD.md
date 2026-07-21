@@ -171,10 +171,10 @@ apps/mister/build-arm.sh --profile
 
 # Deploy the runtime binary only (default = release-device). The command
 # preflights the dev platform and atomically rebinds only its GUI hash.
-MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh
+scripts/agent deploy
 
 # Deploy an experiment-enabled binary for lab scripts.
-MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh --all-scenes
+scripts/agent deploy
 ```
 
 Every `build-arm.sh` run prints the binary size and appends a local row to

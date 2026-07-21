@@ -130,7 +130,7 @@ effect_deploy_and_preflight() {
   local context="$2"
 
   case "$deploy" in
-    device) "$HERE/scripts/deploy-rust.sh" --device --experiments ;;
+    device) "$HERE/scripts/agent" deploy-recipe all-experiments-device ;;
     skip) : ;;
     *) echo "unknown deploy mode: $deploy" >&2; return 2 ;;
   esac

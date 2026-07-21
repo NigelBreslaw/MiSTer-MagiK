@@ -39,6 +39,7 @@ pub enum Intent {
     Interactive,
     Doctor,
     Deploy { task_id: String },
+    DeployRecipe { recipe: String },
 }
 
 impl Intent {
@@ -46,6 +47,7 @@ impl Intent {
     pub const fn risk(&self) -> Risk {
         match self {
             Self::Commit { .. } => Risk::LocalWrite,
+            Self::Deploy { .. } | Self::DeployRecipe { .. } => Risk::DeviceWrite,
             _ => Risk::ReadOnly,
         }
     }

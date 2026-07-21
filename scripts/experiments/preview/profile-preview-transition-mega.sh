@@ -56,7 +56,7 @@ case "$preview_format" in raw-rgb565|raw565|rgb565|565) ;; *) echo "--preview-fo
 if [[ ! "$visual_captures" =~ ^[0-9]+$ ]]; then echo "--visual-captures must be an integer" >&2; exit 2; fi
 
 if [[ "$deploy" == "--deploy-device" ]]; then
-  "$HERE/scripts/deploy-rust.sh" --device --experiments --bench-tools
+  "$HERE/scripts/agent" deploy-recipe all-experiments-bench-device
 fi
 
 require_preview_mega_transitions "$MISTER" "$REMOTE"

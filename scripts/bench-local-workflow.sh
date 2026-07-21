@@ -483,7 +483,7 @@ run_deploy_group() {
     echo "SKIP deploy fake-device: build $device_bin first" | tee "$logs/deploy-fake-device-skip.log"
   fi
   if [ "$device" -eq 1 ]; then
-    if ! device_command hil-unchanged 'scripts/deploy-rust.sh --fast' scripts/deploy-rust.sh --fast; then
+    if ! device_command hil-unchanged 'scripts/agent deploy-recipe launcher-fast' scripts/agent deploy-recipe launcher-fast; then
       echo "MiSTer deployment failed; stopping HIL phase after the first wrapper failure" >&2
       return
     fi
@@ -491,7 +491,7 @@ run_deploy_group() {
     touch -r "$rebuild_path" "$rebuild_stamp"
     restore_files+=("$rebuild_path"); restore_stamps+=("$rebuild_stamp")
     touch "$rebuild_path"
-    if ! device_command hil-rebuilt 'touch app Rust + scripts/deploy-rust.sh --fast' scripts/deploy-rust.sh --fast; then
+    if ! device_command hil-rebuilt 'touch app Rust + typed fast deploy recipe' scripts/agent deploy-recipe launcher-fast; then
       touch -r "$rebuild_stamp" "$rebuild_path"
       echo "MiSTer rebuilt deployment failed; stopping HIL phase after the first wrapper failure" >&2
       return

@@ -539,8 +539,13 @@ fn add_script_operations(path: &Path, _depth: Depth, add: &mut impl FnMut(Operat
         &["scripts/checks/check-license-headers.py"],
         "script source → license contract",
     ));
-    if path.extension().and_then(|extension| extension.to_str()) == Some("sh")
-        || path.file_name().and_then(|name| name.to_str()) == Some("mister")
+    let deleted_deployment_script = matches!(
+        path.to_str(),
+        Some("scripts/deploy-rust.sh" | "scripts/deploy-platform.sh")
+    );
+    if !deleted_deployment_script
+        && (path.extension().and_then(|extension| extension.to_str()) == Some("sh")
+            || path.file_name().and_then(|name| name.to_str()) == Some("mister"))
     {
         let id = format!("script.syntax.{}", text.replace(['/', '.'], "-"));
         add(op_owned(

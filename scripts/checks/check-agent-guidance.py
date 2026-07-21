@@ -99,6 +99,15 @@ def main() -> int:
                     f"{document.relative_to(ROOT)} contains {command!r}"
                 )
 
+    for caller in (ROOT / "scripts").rglob("*.sh"):
+        text = caller.read_text(encoding="utf-8")
+        for command in ("deploy-rust.sh", "deploy-platform.sh", "deploy-magik-bin"):
+            if command in text:
+                raise SystemExit(
+                    f"shell deployment orchestration survived CLI takeover: "
+                    f"{caller.relative_to(ROOT)} contains {command!r}"
+                )
+
     root_guidance = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
     for command in ("scripts/agent plan", "scripts/agent check", "scripts/agent verify", "scripts/agent deploy"):
         if command not in root_guidance:

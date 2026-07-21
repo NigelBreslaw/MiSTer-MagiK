@@ -223,6 +223,12 @@ fn dispatch(
             }
             return agent_cli::platform_deploy::execute(repository, &deployment, reporter);
         }
+        Intent::DeployRecipe { recipe } => {
+            let deployment = agent_cli::deploy::recipe_plan(recipe)?;
+            let plan = deployment.as_evidence_plan(intent.clone());
+            evidence.record_plan(request_id, &plan)?;
+            return agent_cli::runtime_deploy::execute(repository, &deployment, reporter);
+        }
         Intent::Plan {
             scope: selected, ..
         }

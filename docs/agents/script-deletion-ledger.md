@@ -63,3 +63,7 @@ none is migrated until a current capability owner justifies it.
 verification, Rust checks, doctor, host-tool checks, host release checks, and
 Apple-container ARM compilation. The five former orchestration entrypoints were
 deleted after their retained capabilities moved into the typed registry.
+# Deployment takeover
+
+- `scripts/deploy-rust.sh` — removed; runtime deployment is owned by `scripts/agent deploy` and internal typed recipes.
+- `scripts/deploy-platform.sh` — removed; qualified platform installation is owned by `scripts/agent deploy`.

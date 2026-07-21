@@ -68,12 +68,12 @@ case "$scene" in
     ;;
 esac
 
-echo "==> Build profiling binary"
-"$RUST_DIR/build-arm.sh" "${build_args[@]}"
-
-echo "==> Deploy profiling binary"
-trap '"$HERE/scripts/deploy-rust.sh" --device --ui-scope launcher >/dev/null 2>&1 || true' EXIT
-"$MISTER" agent deploy-magik-bin "$bin" /media/fat/mister-magik-dev/mister-magik-fb
+trap '"$HERE/scripts/agent" deploy-recipe launcher-device >/dev/null 2>&1 || true' EXIT
+if [[ "$scene" == launcher || "$scene" == controller_test ]]; then
+  "$HERE/scripts/agent" deploy-recipe launcher-profile
+else
+  "$HERE/scripts/agent" deploy-recipe all-scenes-profile
+fi
 
 echo "==> Run CPU profiler smoke"
 if ! "$MISTER" run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; rm -f $remote_smoke_svg $remote_smoke_log; MISTER_PPROF=1 MISTER_PPROF_OUT=$remote_smoke_svg /media/fat/mister-magik-dev/mister-magik-fb cpu-profile-smoke 3 >$remote_smoke_log 2>&1; status=\$?; grep 'cpu_profile' $remote_smoke_log || true; test -s $remote_smoke_svg || status=1; exit \$status"; then

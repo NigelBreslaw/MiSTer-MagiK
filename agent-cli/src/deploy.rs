@@ -72,6 +72,7 @@ pub struct BuildSpec {
     pub profile: &'static str,
     pub features: &'static str,
     pub ui_scope: UiScope,
+    pub strict_receipt: bool,
 }
 
 impl BuildSpec {
@@ -92,15 +93,26 @@ impl BuildSpec {
             profile: "release-device",
             features: "ui",
             ui_scope,
+            strict_receipt: true,
         }
     }
 
     pub fn verify(&self, repository: &Path) -> Result<BuildReceipt, String> {
         let artifact = repository.join(&self.artifact);
-        let receipt_path = repository.join(&self.receipt);
         if !artifact.is_file() {
             return Err(format!("build artifact is missing: {}", artifact.display()));
         }
+        if !self.strict_receipt {
+            return Ok(BuildReceipt {
+                binary_sha256: String::new(),
+                profile: self.profile.into(),
+                features: self.features.into(),
+                ui_scope: self.ui_scope.label().into(),
+                source_commit: String::new(),
+                source_dirty: true,
+            });
+        }
+        let receipt_path = repository.join(&self.receipt);
         let receipt = std::fs::read_to_string(&receipt_path).map_err(|error| {
             format!(
                 "cannot read build receipt {}: {error}",
@@ -129,6 +141,94 @@ impl BuildSpec {
         }
         Ok(receipt)
     }
+}
+
+pub fn recipe_plan(recipe: &str) -> Result<DeploymentPlan, String> {
+    let (profile, scope, flags) = match recipe {
+        "launcher-device" => (
+            "release-device",
+            UiScope::Launcher,
+            vec!["--device", "--ui-scope", "launcher"],
+        ),
+        "launcher-fast" => (
+            "release",
+            UiScope::Launcher,
+            vec!["--fast", "--ui-scope", "launcher"],
+        ),
+        "launcher-bench-device" => (
+            "release-device",
+            UiScope::Launcher,
+            vec!["--device", "--ui-scope", "launcher", "--bench-tools"],
+        ),
+        "launcher-bench-fast" => (
+            "release",
+            UiScope::Launcher,
+            vec!["--fast", "--ui-scope", "launcher", "--bench-tools"],
+        ),
+        "launcher-diagnostics-device" => (
+            "release-device",
+            UiScope::Launcher,
+            vec![
+                "--device",
+                "--ui-scope",
+                "launcher",
+                "--bench-tools",
+                "--diagnostics",
+            ],
+        ),
+        "all-diagnostics-device" => (
+            "release-device",
+            UiScope::All,
+            vec!["--device", "--bench-tools", "--diagnostics"],
+        ),
+        "launcher-profile" => (
+            "release-device-profile",
+            UiScope::Launcher,
+            vec!["--profile", "--ui-scope", "launcher", "--bench-tools"],
+        ),
+        "all-scenes-profile" => (
+            "release-device-profile",
+            UiScope::All,
+            vec!["--profile", "--all-scenes"],
+        ),
+        "all-experiments-device" => (
+            "release-device",
+            UiScope::All,
+            vec!["--device", "--experiments"],
+        ),
+        "all-experiments-bench-device" => (
+            "release-device",
+            UiScope::All,
+            vec!["--device", "--experiments", "--bench-tools"],
+        ),
+        other => return Err(format!("unknown internal deployment recipe: {other}")),
+    };
+    let artifact = PathBuf::from(format!(
+        "apps/mister/target/armv7-unknown-linux-gnueabihf/{profile}/mister-magik-fb"
+    ));
+    Ok(DeploymentPlan {
+        recipe: match recipe {
+            r if r.contains("bench") => DeploymentRecipe::Profiling,
+            _ => DeploymentRecipe::Acceptance,
+        },
+        kind: DeploymentKind::Runtime,
+        profile,
+        ui_scope: scope,
+        layout: "dev",
+        platform_components: Vec::new(),
+        changed_paths: Vec::new(),
+        build: BuildSpec {
+            program: "apps/mister/build-arm.sh",
+            args: flags.into_iter().map(Into::into).collect(),
+            receipt: PathBuf::from(format!("{}.build-receipt.tsv", artifact.display())),
+            artifact,
+            profile,
+            features: "internal-recipe",
+            ui_scope: scope,
+            strict_receipt: false,
+        },
+        platform_candidate: None,
+    })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

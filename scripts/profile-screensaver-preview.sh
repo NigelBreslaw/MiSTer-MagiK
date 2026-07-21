@@ -42,7 +42,7 @@ LOCAL_PNG="$OUT_DIR/$LABEL.png"
 LOCAL_JSON="$OUT_DIR/$LABEL.framebuffer.json"
 
 if [[ "$DEPLOY" -eq 1 ]]; then
-  "$HERE/scripts/deploy-rust.sh" --bench-tools --ui-scope launcher
+  "$HERE/scripts/agent" deploy-recipe launcher-bench-device
 fi
 
 BINARY_PATH="$HERE/apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"

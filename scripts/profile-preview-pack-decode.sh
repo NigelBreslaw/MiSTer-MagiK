@@ -169,7 +169,7 @@ EOF
 fi
 
 if [[ "$deploy_device" == "1" ]]; then
-  "$HERE/scripts/deploy-rust.sh" --device --bench-tools --ui-scope launcher
+  "$HERE/scripts/agent" deploy-recipe launcher-bench-device
 fi
 
 mkdir -p "$OUT_DIR"
@@ -199,7 +199,7 @@ if ! "$MISTER" run "rm -f '$remote_tsv' '$remote_log';${quoted} >'$remote_tsv' 2
   "$MISTER" get "$remote_log" "$OUT_DIR/${label}-preview-pack.log" >/dev/null || true
   if grep -q "unknown command 'preview-pack-bench'" "$local_tsv" "$OUT_DIR/${label}-preview-pack.log" 2>/dev/null; then
     echo "ERROR: deployed mister-magik-fb does not expose preview-pack-bench." >&2
-    echo "Build/deploy a bench-tools-capable binary first: scripts/deploy-rust.sh --device --bench-tools" >&2
+    echo "Run the typed profiling workflow first: scripts/agent deploy-recipe launcher-bench-device" >&2
     exit 3
   fi
   echo "preview pack decode profile failed; see $OUT_DIR/${label}-preview-pack.log" >&2

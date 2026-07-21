@@ -46,8 +46,8 @@ Removed lab comparisons include Slint-image upload, FFmpeg swscale conversion,
 alternate conversion backends, and decoder threading.
 
 Classic camera/sprite/text/raster/transition effect scenes are experiments, not
-production benchmark scenes. Build them with `scripts/deploy-rust.sh
---experiments` and run them through `scripts/experiments/`; see
+production benchmark scenes. Build and deploy them through the owning typed
+profiling workflow and run them through `scripts/experiments/`; see
 `docs/experiments/effects.md`.
 
 Shared window: [`../mister_window.slint`](../mister_window.slint).

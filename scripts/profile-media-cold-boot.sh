@@ -1004,9 +1004,9 @@ fi
 
 case "$deploy" in
   device)
-    deploy_args=(--device --ui-scope launcher)
-    if [[ "$arcade_trace_secs" -gt 0 ]]; then deploy_args+=(--bench-tools); fi
-    "$HERE/scripts/deploy-rust.sh" "${deploy_args[@]}"
+    deploy_recipe=launcher-device
+    if [[ "$arcade_trace_secs" -gt 0 ]]; then deploy_recipe=launcher-bench-device; fi
+    "$HERE/scripts/agent" deploy-recipe "$deploy_recipe"
     ;;
   skip) : ;;
   *) echo "internal deploy mode error: $deploy" >&2; exit 2 ;;

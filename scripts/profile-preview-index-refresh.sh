@@ -39,7 +39,7 @@ if [[ ! "$label" =~ ^[A-Za-z0-9_.-]+$ ]]; then
 fi
 
 if [[ "$deploy_device" == "1" ]]; then
-  "$HERE/scripts/deploy-rust.sh" --device --bench-tools --ui-scope launcher
+  "$HERE/scripts/agent" deploy-recipe launcher-bench-device
 fi
 
 mkdir -p "$OUT_DIR"
@@ -53,7 +53,7 @@ if ! "$MISTER" run "rm -f '$remote_tsv' '$remote_log'; /media/fat/mister-magik-d
   "$MISTER" get "$remote_tsv" "$local_tsv" >/dev/null || true
   if grep -q "unknown command 'preview-index-refresh-bench'" "$local_log" "$local_tsv" 2>/dev/null; then
     echo "ERROR: deployed mister-magik-fb does not expose preview-index-refresh-bench." >&2
-    echo "Build/deploy a bench-tools-capable binary first: scripts/deploy-rust.sh --device --bench-tools" >&2
+    echo "Run the typed profiling workflow first: scripts/agent deploy-recipe launcher-bench-device" >&2
     exit 3
   fi
   echo "preview index refresh profile failed; see $local_log" >&2
