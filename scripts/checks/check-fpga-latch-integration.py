@@ -113,9 +113,11 @@ def main() -> None:
             "if(magik_lfb_apply_hdmi)",
             "if(magik_lfb_apply_crt)",
             "if(magik_response_valid) io_dout_sys <= magik_response_data;",
-            ".inclk({magik_crt_clk, clk_vid, hdmi_clk_out, 1'b0})",
-            "if(magik_active_route == 2'd1)",
-            "d  <= {magik_crt_r, magik_crt_g, magik_crt_b};",
+            ".inclk({clk_vid, hdmi_clk_out, 2'b00})",
+            "wire hdmi_base_tx_clk;",
+            ".dataout(hdmi_base_tx_clk)",
+            "magik_crtclk_ddr",
+            "assign HDMI_TX_CLK = magik_crt_output ? magik_crt_tx_clk : hdmi_base_tx_clk;",
         )
         missing = [fragment for fragment in required if fragment not in patched]
         if missing:

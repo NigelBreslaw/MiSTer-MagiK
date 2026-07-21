@@ -622,55 +622,82 @@ index 7d2ac3f..25b1378 100644
  	coef_wr <= 0;
  	sl_r <= FB_EN ? 2'b00 : scanlines;
  
-@@ -1333,12 +1371,13 @@ wire hdmi_tx_clk;
+@@ -1335,6 +1373,7 @@ wire hdmi_tx_clk;
++wire hdmi_base_tx_clk;
  `ifndef MISTER_DEBUG_NOHDMI
  	cyclonev_clkselect hdmi_clk_sw
  	( 
--		.clkselect({1'b1, ~vga_fb & direct_video}),
--		.inclk({clk_vid, hdmi_clk_out, 2'b00}),
-+		.clkselect(magik_active_route == 2'd1 ? 2'd3 :
-+		           ((~vga_fb & direct_video) ? 2'd2 : 2'd1)),
-+		.inclk({magik_crt_clk, clk_vid, hdmi_clk_out, 1'b0}),
+ 		.clkselect({1'b1, ~vga_fb & direct_video}),
+ 		.inclk({clk_vid, hdmi_clk_out, 2'b00}),
  		.outclk(hdmi_tx_clk)
- 	);
- `else
--	assign hdmi_tx_clk = clk_vid;
-+	assign hdmi_tx_clk = (magik_active_route == 2'd1) ? magik_crt_clk : clk_vid;
- `endif
- 
- altddio_out
-@@ -1387,15 +1426,22 @@ always @(posedge hdmi_tx_clk) begin
- 	hdmi_dv_de   <= dv_de;
- 	
- `ifndef MISTER_DEBUG_NOHDMI
--	hs <= (~vga_fb & direct_video) ? hdmi_dv_hs   : (direct_video & csync_en) ? hdmi_cs_osd : hdmi_hs_osd;
--	vs <= (~vga_fb & direct_video) ? hdmi_dv_vs   : hdmi_vs_osd;
--	de <= (~vga_fb & direct_video) ? hdmi_dv_de   : hdmi_de_osd;
--	d  <= (~vga_fb & direct_video) ? hdmi_dv_data : hdmi_data_osd;
-+	if(magik_active_route == 2'd1) begin
-+		hs <= magik_crt_hs;
-+		vs <= magik_crt_vs;
-+		de <= magik_crt_de;
-+		d  <= {magik_crt_r, magik_crt_g, magik_crt_b};
-+	end else begin
-+		hs <= (~vga_fb & direct_video) ? hdmi_dv_hs   : (direct_video & csync_en) ? hdmi_cs_osd : hdmi_hs_osd;
-+		vs <= (~vga_fb & direct_video) ? hdmi_dv_vs   : hdmi_vs_osd;
-+		de <= (~vga_fb & direct_video) ? hdmi_dv_de   : hdmi_de_osd;
-+		d  <= (~vga_fb & direct_video) ? hdmi_dv_data : hdmi_data_osd;
-+	end
- `else
--	hs <= hdmi_dv_hs;
--	vs <= hdmi_dv_vs;
--	de <= hdmi_dv_de;
--	d  <= hdmi_dv_data;
-+	hs <= (magik_active_route == 2'd1) ? magik_crt_hs : hdmi_dv_hs;
-+	vs <= (magik_active_route == 2'd1) ? magik_crt_vs : hdmi_dv_vs;
-+	de <= (magik_active_route == 2'd1) ? magik_crt_de : hdmi_dv_de;
-+	d  <= (magik_active_route == 2'd1) ? {magik_crt_r, magik_crt_g, magik_crt_b} : hdmi_dv_data;
- `endif
- 
+@@ -1360,7 +1399,7 @@ hdmiclk_ddr
+ 	.datain_h(1'b0),
+ 	.datain_l(1'b1),
+ 	.outclock(hdmi_tx_clk),
+-	.dataout(HDMI_TX_CLK),
++	.dataout(hdmi_base_tx_clk),
+ 	.aclr(1'b0),
+ 	.aset(1'b0),
+ 	.oe(1'b1),
+@@ -1401,14 +1440,53 @@ always @(posedge hdmi_tx_clk) begin
  	hdmi_out_hs <= hs;
-@@ -1945,7 +2001,24 @@ emu emu
+ 	hdmi_out_vs <= vs;
+ 	hdmi_out_de <= de;
+ 	hdmi_out_d  <= d;
+ end
+ 
+-assign HDMI_TX_HS = hdmi_out_hs;
+-assign HDMI_TX_VS = hdmi_out_vs;
+-assign HDMI_TX_DE = hdmi_out_de;
+-assign HDMI_TX_D  = hdmi_out_d;
++wire magik_crt_tx_clk;
++altddio_out
++#(
++	.extend_oe_disable("OFF"),
++	.intended_device_family("Cyclone V"),
++	.invert_output("OFF"),
++	.lpm_hint("UNUSED"),
++	.lpm_type("altddio_out"),
++	.oe_reg("UNREGISTERED"),
++	.power_up_high("OFF"),
++	.width(1)
++)
++magik_crtclk_ddr
++(
++	.datain_h(1'b0),
++	.datain_l(1'b1),
++	.outclock(magik_crt_clk),
++	.dataout(magik_crt_tx_clk),
++	.aclr(1'b0),
++	.aset(1'b0),
++	.oe(1'b1),
++	.outclocken(1'b1),
++	.sclr(1'b0),
++	.sset(1'b0)
++);
++
++reg magik_crt_out_hs;
++reg magik_crt_out_vs;
++reg magik_crt_out_de;
++reg [23:0] magik_crt_out_d;
++always @(posedge magik_crt_clk) begin
++	magik_crt_out_hs <= magik_crt_hs;
++	magik_crt_out_vs <= magik_crt_vs;
++	magik_crt_out_de <= magik_crt_de;
++	magik_crt_out_d <= {magik_crt_r, magik_crt_g, magik_crt_b};
++end
++
++wire magik_crt_output = magik_active_route == 2'd1;
++assign HDMI_TX_CLK = magik_crt_output ? magik_crt_tx_clk : hdmi_base_tx_clk;
++assign HDMI_TX_HS = magik_crt_output ? magik_crt_out_hs : hdmi_out_hs;
++assign HDMI_TX_VS = magik_crt_output ? magik_crt_out_vs : hdmi_out_vs;
++assign HDMI_TX_DE = magik_crt_output ? magik_crt_out_de : hdmi_out_de;
++assign HDMI_TX_D  = magik_crt_output ? magik_crt_out_d  : hdmi_out_d;
+ 
+ /////////////////////////  VGA output  //////////////////////////////////
+ 
+ `ifndef MISTER_DUAL_SDRAM
+@@ -1945,7 +2023,24 @@ emu emu
  	.UART_DSR(uart_dtr),
  
  	.USER_OUT(user_out),
