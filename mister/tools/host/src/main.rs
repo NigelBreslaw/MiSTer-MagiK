@@ -260,7 +260,7 @@ impl DeviceOperations for NativeDevice {
             }
             DeviceRequest::RebootWait => {
                 let session = connect(10).map_err(device_failure)?;
-                issue_reboot(&session, RebootMode::Supervised).map_err(device_failure)?;
+                issue_delivery_reboot(&session).map_err(device_failure)?;
                 drop(session);
                 if !wait_down(40.0) || wait_up(120.0).map_err(device_failure)? != 0 {
                     return Err(DeviceFailure::Unavailable(
@@ -1353,6 +1353,26 @@ fn issue_reboot(sess: &Session, mode: RebootMode) -> Result<String> {
     } else {
         Ok(mode.to_string())
     }
+}
+
+fn delivery_reboot_mode(running_main: &str) -> RebootMode {
+    if matches!(running_main.trim(), "MiSTer_MagiKDev" | "MiSTer_MagiK") {
+        RebootMode::Supervised
+    } else {
+        RebootMode::Raw
+    }
+}
+
+fn issue_delivery_reboot(sess: &Session) -> Result<String> {
+    let probe = exec(
+        sess,
+        "if pidof MiSTer_MagiKDev >/dev/null 2>&1; then echo MiSTer_MagiKDev; elif pidof MiSTer_MagiK >/dev/null 2>&1; then echo MiSTer_MagiK; else echo MiSTer; fi",
+        true,
+    )?;
+    if let Some(message) = exec_failure_message("delivery reboot probe", &probe) {
+        return Err(message.into());
+    }
+    issue_reboot(sess, delivery_reboot_mode(&probe.stdout))
 }
 
 fn validate_remote_run_command(command: &str) -> Result<()> {
@@ -6602,6 +6622,17 @@ video_mode=14
 
         assert!(cmd.contains("/sbin/reboot"));
         assert!(!cmd.contains("mister_magik_reboot"));
+    }
+
+    #[test]
+    fn delivery_reboot_uses_the_running_main_capability() {
+        assert_eq!(
+            delivery_reboot_mode("MiSTer_MagiKDev"),
+            RebootMode::Supervised
+        );
+        assert_eq!(delivery_reboot_mode("MiSTer_MagiK"), RebootMode::Supervised);
+        assert_eq!(delivery_reboot_mode("MiSTer"), RebootMode::Raw);
+        assert_eq!(delivery_reboot_mode(""), RebootMode::Raw);
     }
 
     #[test]
