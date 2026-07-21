@@ -46,7 +46,7 @@ pub(super) fn run_crt_trial_loop(
         Ok(status) if status.supported() => CrtTrialCounters::from_status(status),
         Ok(status) => {
             crate::ui_errln!(
-                "crt_trial_status_v2 schema=2 ok=0 mode={} reason=latch-status-unsupported ack_high=0x{:04x} ack_low=0x{:04x}",
+                "crt_trial_status_v2 schema=2 ok=0 mode={} duration_ms=0 frames=0 flips=0 reason=latch-status-unsupported ack_high=0x{:04x} ack_low=0x{:04x}",
                 mode.label(),
                 status.magic_hi,
                 status.magic_lo

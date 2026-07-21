@@ -1304,6 +1304,9 @@ fn parse_crt_trial_status(output: &str) -> Result<&str> {
         )
         .into());
     }
+    if status.split_ascii_whitespace().any(|field| field == "ok=0") {
+        return Err(format!("CRT trial reported failure: {status}").into());
+    }
     for required in [
         "ok=1",
         "mode=crt-",
@@ -6666,10 +6669,12 @@ video_mode=14
     fn crt_trial_status_requires_successful_shared_latch_publication() {
         let valid = "crt_trial_status_v2 schema=2 ok=1 mode=crt-288p50 duration_ms=30001 frames=1500 flips=1500 reason=none\n";
         assert_eq!(parse_crt_trial_status(valid).unwrap(), valid.trim());
-        assert!(parse_crt_trial_status(
+        let failure = parse_crt_trial_status(
             "crt_trial_status_v2 schema=2 ok=0 mode=crt-240p60 duration_ms=12 frames=0 flips=0 reason=no-latch-flips"
         )
-        .is_err());
+        .unwrap_err()
+        .to_string();
+        assert!(failure.contains("reason=no-latch-flips"));
         assert!(parse_crt_trial_status("untyped success").is_err());
     }
 
