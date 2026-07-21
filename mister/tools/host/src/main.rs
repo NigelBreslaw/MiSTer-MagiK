@@ -324,8 +324,8 @@ impl DeviceOperations for NativeDevice {
                     .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
                 exec_checked(&session, "delivery smoke", &command)
                     .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
-                capture_buffer(&[]).map_err(device_failure)?;
-                "artifact=verified process=healthy module=ready latch=ready screen=recognized input=ready scanout=rgb565 capture=recorded arming=clear".into()
+                let capture = request_framebuffer_png().map_err(device_failure)?;
+                delivery_smoke_capture_detail(&capture)
             }
             DeviceRequest::PrepareBenchmark(scenario) => {
                 let session = connect(10).map_err(device_failure)?;
@@ -3018,6 +3018,27 @@ fn capture_buffer(args: &[String]) -> Result<()> {
 fn image_content_json(png: &[u8]) -> String {
     let data = base64::engine::general_purpose::STANDARD.encode(png);
     json!({"type": "image", "data": data, "mimeType": "image/png"}).to_string()
+}
+
+fn delivery_smoke_capture_detail(capture: &PngCapture) -> String {
+    let width = capture
+        .result
+        .get("width")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let height = capture
+        .result
+        .get("height")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let png_bytes = capture
+        .result
+        .get("png_bytes")
+        .and_then(Value::as_u64)
+        .unwrap_or(capture.png.len() as u64);
+    format!(
+        "artifact=verified process=healthy module=ready latch=ready screen=recognized input=ready scanout=rgb565 capture=verified width={width} height={height} png_bytes={png_bytes} arming=clear"
+    )
 }
 
 fn validate_capture_buffer_args(args: &[String]) -> Result<()> {
@@ -7635,6 +7656,31 @@ H: Handlers=event3 js0"#
                 .unwrap(),
             png
         );
+    }
+
+    #[test]
+    fn delivery_smoke_capture_summary_excludes_image_payload() {
+        let capture = PngCapture {
+            result: json!({
+                "width": 640,
+                "height": 480,
+                "png_bytes": 123_456,
+                "png_hex": "89504e470d0a1a0a-secret-image-data",
+            }),
+            png: b"\x89PNG\r\n\x1a\nsecret-image-data".to_vec(),
+            elapsed_ms: 42,
+        };
+
+        let summary = delivery_smoke_capture_detail(&capture);
+
+        assert!(summary.contains("capture=verified"));
+        assert!(summary.contains("width=640"));
+        assert!(summary.contains("height=480"));
+        assert!(summary.contains("png_bytes=123456"));
+        assert!(!summary.contains("data"));
+        assert!(!summary.contains("png_hex"));
+        assert!(!summary.contains("89504e470d0a1a0a"));
+        assert!(summary.len() < 256);
     }
 
     #[test]
