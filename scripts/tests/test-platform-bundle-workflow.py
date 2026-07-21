@@ -10,6 +10,8 @@ from pathlib import Path
 root = Path(__file__).resolve().parents[2]
 workflow = root / ".github/workflows/platform-bundle.yml"
 text = workflow.read_text()
+fast_text = (root / ".github/workflows/fpga-latch-fast.yml").read_text()
+rtl_test = (root / "scripts/tests/test-fpga-vblank-latch.sh").read_text()
 trigger = text.split("on:\n", 1)[1].split("\nconcurrency:", 1)[0]
 
 assert "name: Build MiSTer MagiK Platform" in text
@@ -69,6 +71,17 @@ assert "gh run download" in text
 assert "actions/artifacts?per_page=100" in text
 assert text.count("  workflow_dispatch:") == 1
 assert text.count("retention-days: 30") == 8
+for simulation in (
+    "tb_mister_magik_vblank_latch",
+    "tb_mister_magik_crt_timing",
+    "tb_mister_magik_crt_reader",
+):
+    assert simulation in rtl_test, simulation
+assert "scripts/tests/test-fpga-vblank-latch.sh" in fast_text
+assert "check-fpga-latch-coverage.py" in fast_text
+assert "check-fpga-quartus-delta.py" in text
+assert "quartus-delta-signoff.tsv" in text
+assert "latch_protocol_version" in (root / "scripts/build-fpga-vblank-latch-core.sh").read_text()
 
 for component in ("main", "fpga", "kernel"):
     job = text.split(f"  build-{component}:\n", 1)[1].split("\n  build-", 1)[0] if component != "kernel" else text.split("  build-kernel:\n", 1)[1].split("\n  build-fpga:\n", 1)[0]

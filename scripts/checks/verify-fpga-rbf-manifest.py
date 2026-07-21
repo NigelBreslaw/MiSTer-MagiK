@@ -25,7 +25,7 @@ def digest(path: Path) -> str:
     return hasher.hexdigest()
 
 
-def verify(metadata_path: Path) -> dict[str, str]:
+def verify(metadata_path: Path, *, require_protocol: bool = True) -> dict[str, str]:
     if not metadata_path.is_file():
         raise ValueError(f"missing metadata: {metadata_path}")
     fields: dict[str, str] = {}
@@ -45,6 +45,8 @@ def verify(metadata_path: Path) -> dict[str, str]:
         "workflow_url", "rbf_file", "rbf_sha256",
         "signoff_valid", "build_date",
     }
+    if require_protocol:
+        required.update(("latch_protocol_sha256", "latch_protocol_version"))
     missing = sorted(required - fields.keys())
     if missing:
         raise ValueError("missing metadata fields: " + ", ".join(missing))
@@ -53,9 +55,14 @@ def verify(metadata_path: Path) -> dict[str, str]:
     for name in ("magik_commit", "builder_commit", "source_commit"):
         if not COMMIT_RE.fullmatch(fields[name]):
             raise ValueError(f"{name} must be a full commit SHA")
-    for name in ("platform_contract_sha256", "patch_sha256", "latch_rtl_sha256", "rbf_sha256"):
+    for name in (
+        "platform_contract_sha256", "patch_sha256", "latch_rtl_sha256",
+        "rbf_sha256",
+    ):
         if not SHA256_RE.fullmatch(fields[name]):
             raise ValueError(f"invalid SHA-256 in {name}")
+    if "latch_protocol_sha256" in fields and not SHA256_RE.fullmatch(fields["latch_protocol_sha256"]):
+        raise ValueError("invalid SHA-256 in latch_protocol_sha256")
     if "component_input_sha256" in fields and not SHA256_RE.fullmatch(fields["component_input_sha256"]):
         raise ValueError("invalid component_input_sha256")
     if "component_revision" in fields and not COMMIT_RE.fullmatch(fields["component_revision"]):
@@ -64,6 +71,8 @@ def verify(metadata_path: Path) -> dict[str, str]:
         raise ValueError("release source tree was dirty")
     if fields["quartus_seed"] != "1":
         raise ValueError("release seed must be 1")
+    if "latch_protocol_version" in fields and fields["latch_protocol_version"] != "3":
+        raise ValueError("release must bind latch protocol version 3")
     if not fields["quartus_version"].startswith("17.0"):
         raise ValueError("release must use Quartus 17.0")
     if not fields["workflow_url"].startswith("https://"):

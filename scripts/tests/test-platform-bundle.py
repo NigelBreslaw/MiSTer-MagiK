@@ -10,6 +10,7 @@ import hashlib
 import importlib.util
 import json
 import shutil
+import subprocess
 import tempfile
 import unittest
 import zipfile
@@ -40,6 +41,7 @@ class PlatformBundleTests(unittest.TestCase):
         self.fpga_id = "a" * 64
         self.kernel_id = "b" * 64
         self.contract = "c" * 64
+        self.protocol = "a" * 64
         self.main.mkdir()
         main_binary = self.main / "MiSTer_MagiK"
         main_binary.write_bytes(b"main")
@@ -74,6 +76,8 @@ class PlatformBundleTests(unittest.TestCase):
                     "source_commit=" + "3" * 40,
                     "patch_sha256=" + "4" * 64,
                     "latch_rtl_sha256=" + "5" * 64,
+                    f"latch_protocol_sha256={self.protocol}",
+                    "latch_protocol_version=3",
                     f"component_input_sha256={self.fpga_id}",
                     "component_revision=" + "6" * 40,
                     "quartus_seed=1",
@@ -164,8 +168,57 @@ class PlatformBundleTests(unittest.TestCase):
         self.assertEqual(payload["main_input_sha256"], self.main_id)
         self.assertEqual(payload["fpga_input_sha256"], self.fpga_id)
         self.assertEqual(payload["kernel_input_sha256"], self.kernel_id)
+        self.assertEqual(payload["latch_protocol_sha256"], self.protocol)
+        self.assertEqual(payload["latch_protocol_version"], 3)
+        self.assertEqual(payload["latch_rbf_sha256"], sha(self.fpga / "patched/menu-magik-vblank-latch.rbf"))
         self.assertEqual(payload["release_version"], 2)
         self.assertEqual(archive.name, "mister-magik-platform-v0.2.zip")
+
+    def test_protocol_or_rbf_identity_tampering_is_rejected(self) -> None:
+        archive = self.create()
+        manifest = self.root / "output/platform-bundle-v0.2.json"
+        payload = json.loads(manifest.read_text())
+        payload["latch_protocol_version"] = 2
+        manifest.write_text(json.dumps(payload))
+        with self.assertRaisesRegex(ValueError, "release manifest differs|protocol version"):
+            bundle.verify(archive, manifest)
+
+    def test_attended_crt_evidence_requires_exact_identity_and_every_gate(self) -> None:
+        evidence = self.root / "crt-evidence.json"
+        payload = {
+            "format": "mister-magik-crt-qualification-v1",
+            "qualified": True,
+            "identity": {
+                "app_revision": "1" * 40,
+                "main_revision": self.main_revision,
+                "rbf_sha256": "2" * 64,
+                "platform_contract_sha256": self.contract,
+                "latch_protocol_sha256": self.protocol,
+                "latch_protocol_version": 3,
+                "platform_manifest_sha256": "3" * 64,
+            },
+            "trial": {
+                "duration_ms": 30_100,
+                "horizontal_hz": 15_734.2,
+                "vertical_hz": 60.055,
+                "underruns": 0,
+                "timeouts": 0,
+                "fallback": False,
+            },
+            "checks": {name: True for name in (
+                "launcher_rendering", "crt_hdmi_crt_switching", "osd_and_input",
+                "game_launch_and_return", "crash_recovery", "hdmi_resolution_matrix",
+                "cleanup_verified", "rollback_verified",
+            )},
+            "trial_log_sha256": "4" * 64,
+            "limitations": "V1 is 640x240p60 only.",
+        }
+        evidence.write_text(json.dumps(payload))
+        verifier = bundle.ROOT / "scripts/checks/verify-crt-qualification-evidence.py"
+        self.assertEqual(subprocess.run([str(verifier), str(evidence)]).returncode, 0)
+        payload["checks"]["rollback_verified"] = False
+        evidence.write_text(json.dumps(payload))
+        self.assertNotEqual(subprocess.run([str(verifier), str(evidence)]).returncode, 0)
 
     def test_update_plan_starts_at_one(self) -> None:
         plan = bundle.update_plan(None, 0, self.main_id, self.fpga_id, self.kernel_id)

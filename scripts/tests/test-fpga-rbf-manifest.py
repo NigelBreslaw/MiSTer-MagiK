@@ -35,6 +35,8 @@ class ManifestTest(unittest.TestCase):
                 "source_commit=" + "2" * 40,
                 "patch_sha256=" + "3" * 64,
                 "latch_rtl_sha256=" + "4" * 64,
+                "latch_protocol_sha256=" + "7" * 64,
+                "latch_protocol_version=3",
                 "quartus_seed=1",
                 "quartus_version=17.0.0 Build 595",
                 "workflow_url=https://github.example/actions/runs/1",
@@ -81,6 +83,15 @@ class ManifestTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             metadata = self.fixture(Path(directory))
             metadata.write_text(metadata.read_text() + "mailbox_module_sha256=" + "5" * 64 + "\n")
+            self.assertNotEqual(self.run_verify(metadata).returncode, 0)
+
+    def test_missing_or_wrong_protocol_identity_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            metadata = self.fixture(Path(directory))
+            valid = metadata.read_text()
+            metadata.write_text(valid.replace("latch_protocol_version=3\n", ""))
+            self.assertNotEqual(self.run_verify(metadata).returncode, 0)
+            metadata.write_text(valid.replace("latch_protocol_version=3", "latch_protocol_version=2"))
             self.assertNotEqual(self.run_verify(metadata).returncode, 0)
 
 

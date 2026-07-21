@@ -154,10 +154,11 @@ def tree_entries(root: Path) -> list[dict[str, object]]:
     return entries
 
 
-def verify_fpga_component(fpga_root: Path, fpga_id: str) -> str:
+def verify_fpga_component(fpga_root: Path, fpga_id: str, *, require_protocol: bool = True) -> str:
     require_hex("fpga_input_sha256", fpga_id, HEX64)
     patched = fpga_root / "patched"
     stock = fpga_root / "stock"
+    protocol_identities: set[tuple[str, str]] = set()
     for root in (patched, stock):
         metadata = root / "menu-magik-vblank-latch.metadata.txt"
         if not metadata.is_file():
@@ -168,9 +169,23 @@ def verify_fpga_component(fpga_root: Path, fpga_id: str) -> str:
         rbf = root / "menu-magik-vblank-latch.rbf"
         if not rbf.is_file() or fpga_fields.get("rbf_sha256") != digest(rbf):
             raise BundleError("FPGA metadata does not match RBF")
+        protocol_sha = fpga_fields.get("latch_protocol_sha256")
+        protocol_version = fpga_fields.get("latch_protocol_version")
+        if protocol_sha is not None or protocol_version is not None:
+            require_hex("latch_protocol_sha256", str(protocol_sha or ""), HEX64)
+            if protocol_version != "3":
+                raise BundleError("FPGA metadata does not bind latch protocol version 3")
+            protocol_identities.add((protocol_sha, protocol_version))
+        elif require_protocol:
+            raise BundleError("FPGA metadata is missing the latch protocol identity")
+    if protocol_identities and len(protocol_identities) != 1:
+        raise BundleError("stock and patched FPGA artifacts bind different latch protocols")
     verifier = load_module("verify_fpga_rbf_manifest", ROOT / "scripts/checks/verify-fpga-rbf-manifest.py")
     try:
-        verifier.verify(patched / "menu-magik-vblank-latch.metadata.txt")
+        verifier.verify(
+            patched / "menu-magik-vblank-latch.metadata.txt",
+            require_protocol=require_protocol,
+        )
     except ValueError as error:
         raise BundleError(f"invalid patched FPGA metadata: {error}") from error
     return fields(patched / "menu-magik-vblank-latch.metadata.txt")["platform_contract_sha256"]
@@ -289,8 +304,15 @@ def verify_kernel_component(scanout_root: Path, kernel_id: str) -> str:
     return contract
 
 
-def verify_component_inputs(fpga_root: Path, scanout_root: Path, fpga_id: str, kernel_id: str) -> tuple[str, Path, Path]:
-    contract = verify_fpga_component(fpga_root, fpga_id)
+def verify_component_inputs(
+    fpga_root: Path,
+    scanout_root: Path,
+    fpga_id: str,
+    kernel_id: str,
+    *,
+    require_protocol: bool = True,
+) -> tuple[str, Path, Path]:
+    contract = verify_fpga_component(fpga_root, fpga_id, require_protocol=require_protocol)
     kernel_contract = verify_kernel_component(scanout_root, kernel_id)
     if kernel_contract != contract:
         raise BundleError("mixed FPGA and scanout platform-contract hashes")
@@ -348,6 +370,7 @@ def create(args: argparse.Namespace) -> Path:
     if main_receipt.get("component_id") != main_id:
         raise BundleError("Main component identity does not match artifact")
     contract, _, _ = verify_component_inputs(args.fpga_dir, args.scanout_dir, fpga_id, kernel_id)
+    fpga_release = fields(args.fpga_dir / "patched/menu-magik-vblank-latch.metadata.txt")
     identity = bundle_id(main_id, fpga_id, kernel_id)
     component_workflows = {
         component: getattr(args, f"{component}_workflow", "platform-bundle.yml")
@@ -374,6 +397,9 @@ def create(args: argparse.Namespace) -> Path:
             "fpga_input_sha256": fpga_id,
             "kernel_input_sha256": kernel_id,
             "platform_contract_sha256": contract,
+            "latch_protocol_sha256": fpga_release["latch_protocol_sha256"],
+            "latch_protocol_version": int(fpga_release["latch_protocol_version"]),
+            "latch_rbf_sha256": fpga_release["rbf_sha256"],
             "components": {
                 "main": {"workflow": component_workflows["main"], "run_id": args.main_run_id, "head_sha": args.main_head_sha, "head_branch": "mister-magik", "source": component_sources["main"]},
                 "fpga": {"workflow": component_workflows["fpga"], "run_id": args.fpga_run_id, "head_sha": args.fpga_head_sha, "head_branch": "main", "source": component_sources["fpga"]},
@@ -465,9 +491,31 @@ def verify(
             path = root / relative
             if not path.is_file() or digest(path) != value:
                 raise BundleError("bundle checksum mismatch")
-        contract, _, _ = verify_component_inputs(root / "fpga", root / "scanout", fpga_id, kernel_id)
+        protocol_keys = {
+            "latch_protocol_sha256",
+            "latch_protocol_version",
+            "latch_rbf_sha256",
+        }
+        present_protocol_keys = protocol_keys.intersection(payload)
+        if present_protocol_keys and present_protocol_keys != protocol_keys:
+            raise BundleError("bundle has an incomplete latch protocol identity")
+        contract, _, _ = verify_component_inputs(
+            root / "fpga",
+            root / "scanout",
+            fpga_id,
+            kernel_id,
+            require_protocol=bool(present_protocol_keys),
+        )
         if contract != payload.get("platform_contract_sha256"):
             raise BundleError("bundle platform contract does not match components")
+        if bundle_format == FORMAT and present_protocol_keys:
+            fpga_release = fields(root / "fpga/patched/menu-magik-vblank-latch.metadata.txt")
+            if payload.get("latch_protocol_sha256") != fpga_release.get("latch_protocol_sha256"):
+                raise BundleError("bundle latch protocol identity does not match FPGA metadata")
+            if payload.get("latch_protocol_version") != 3:
+                raise BundleError("bundle does not require latch protocol version 3")
+            if payload.get("latch_rbf_sha256") != fpga_release.get("rbf_sha256"):
+                raise BundleError("bundle RBF identity does not match FPGA metadata")
         if bundle_format == FORMAT:
             main = load_module("main_component_verify", ROOT / "scripts/release/platform/main-component.py")
             try:
