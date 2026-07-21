@@ -168,6 +168,9 @@ jobs:
       - name: Check ARM shared libraries
         run: apps/mister/scripts/check-arm-shared-libs.sh "apps/mister/target/armv7-unknown-linux-gnueabihf/$MISTER_CI_ARM_PROFILE/mister-magik-fb"
 
+      - name: Record binary size
+        run: apps/mister/scripts/record-binary-size.sh "$MISTER_CI_ARM_PROFILE" ui "apps/mister/target/armv7-unknown-linux-gnueabihf/$MISTER_CI_ARM_PROFILE/mister-magik-fb"
+
       - name: Upload ARM binary
         uses: actions/upload-artifact@v7
         with:
