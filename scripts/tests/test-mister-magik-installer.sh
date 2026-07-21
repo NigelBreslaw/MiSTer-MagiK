@@ -95,6 +95,36 @@ assert_one_main() {
   ' "$FAT/MiSTer.ini"
 }
 
+assert_ini_value() {
+  selected_section="$1"
+  selected_key="$2"
+  expected="$3"
+  awk -v selected_section="$selected_section" -v selected_key="$selected_key" -v expected="$expected" '
+    BEGIN { section = ""; selected = "" }
+    { sub(/\r$/, "") }
+    /^[[:space:]]*\[[^]]+\]/ {
+      section = $0
+      sub(/^[[:space:]]*\[/, "", section)
+      sub(/\].*$/, "", section)
+      gsub(/[[:space:]]/, "", section)
+      next
+    }
+    tolower(section) == tolower(selected_section) && $0 ~ /=/ {
+      key = $0
+      sub(/=.*/, "", key)
+      gsub(/[[:space:]]/, "", key)
+      if (tolower(key) == tolower(selected_key)) {
+        value = $0
+        sub(/^[^=]*=[[:space:]]*/, "", value)
+        sub(/[[:space:]]*[;#].*$/, "", value)
+        gsub(/[[:space:]]/, "", value)
+        selected = value
+      }
+    }
+    END { exit(selected == expected ? 0 : 1) }
+  ' "$FAT/MiSTer.ini"
+}
+
 assert_menu_1080p() {
   awk '
     BEGIN { section = ""; count = 0; selected = "" }
@@ -157,9 +187,12 @@ test "$(sha256sum "$FAT/MiSTer.ini")" = "$ini_before_confirmation"
 run_installer install >/dev/null
 assert_one_main MiSTer_MagiK
 assert_menu_1080p
-grep -q '^direct_video=2$' "$FAT/MiSTer.ini"
-grep -q '^menu_pal=0$' "$FAT/MiSTer.ini"
-grep -q '^forced_scandoubler=0$' "$FAT/MiSTer.ini"
+assert_ini_value Menu direct_video 2
+assert_ini_value Menu menu_pal 0
+assert_ini_value Menu forced_scandoubler 0
+assert_ini_value MiSTer direct_video 0
+assert_ini_value MiSTer menu_pal 0
+assert_ini_value MiSTer forced_scandoubler 0
 grep -qx auto "$APP/installer-output-mode-v1"
 cmp "$TMP/MiSTer.ini.before-install" "$FAT/MiSTer.ini.bak.before-magik"
 test ! -e "$FAT/MiSTer.ini.bak"
@@ -176,9 +209,9 @@ for mode_values in \
   rm -f "$APP/installer-output-mode-v1"
   MISTER_MAGIK_TEST_CONFIRM_31KHZ=1 MISTER_MAGIK_TEST_OUTPUT_MODE="$1" \
     run_installer install >/dev/null
-  grep -q '^direct_video=1$' "$FAT/MiSTer.ini"
-  grep -q "^menu_pal=$2$" "$FAT/MiSTer.ini"
-  grep -q "^forced_scandoubler=$3$" "$FAT/MiSTer.ini"
+  assert_ini_value Menu direct_video 1
+  assert_ini_value Menu menu_pal "$2"
+  assert_ini_value Menu forced_scandoubler "$3"
   grep -qx "$1" "$APP/installer-output-mode-v1"
 done
 rm -f "$APP/installer-output-mode-v1"
@@ -193,7 +226,7 @@ MISTER_MAGIK_TEST_REBOOT_TRACE="$TMP/reboot.trace" \
   run_installer_with_keys enter,enter >"$TMP/restore-reboot.log"
 assert_one_main MiSTer
 assert_menu_1080p
-grep -q '^direct_video=0$' "$FAT/MiSTer.ini"
+assert_ini_value Menu direct_video 0
 grep -q '^user_after_install=keep$' "$FAT/MiSTer.ini"
 test -f "$FAT/MiSTer.ini.bak.before-magik"
 grep -q 'TEST: normal reboot requested' "$TMP/restore-reboot.log"
@@ -203,9 +236,9 @@ MISTER_MAGIK_TEST_REBOOT_TRACE="$TMP/reboot.trace" \
   run_installer_with_keys other install >"$TMP/install-reboot-skip.log"
 grep -q 'reboot skipped' "$TMP/install-reboot-skip.log"
 test ! -e "$TMP/reboot.trace"
-grep -q '^direct_video=2$' "$FAT/MiSTer.ini"
+assert_ini_value Menu direct_video 2
 MISTER_MAGIK_TEST_OUTPUT_MODE=hdmi run_installer install >/dev/null
-grep -q '^direct_video=2$' "$FAT/MiSTer.ini"
+assert_ini_value Menu direct_video 2
 grep -qx auto "$APP/installer-output-mode-v1"
 if run_installer_with_keys down,enter,other >"$TMP/menu-uninstall-cancel.log" 2>&1; then
   echo "menu uninstall cancellation unexpectedly succeeded" >&2
@@ -285,7 +318,6 @@ printf '[MiSTer]\r\nMAIN=MiSTer_MagiK\r\n;main=Commented\r\nmain=Other_Main\r\n[
 run_installer >"$TMP/effective-other.log"
 grep -q 'installed. Reboot to start MiSTer MagiK.' "$TMP/effective-other.log"
 assert_one_main MiSTer_MagiK
-assert_menu_1080p
 python3 - "$FAT/MiSTer.ini" <<'PY'
 import pathlib, sys
 data = pathlib.Path(sys.argv[1]).read_bytes()
@@ -293,12 +325,15 @@ assert b"\r\n" in data
 assert b"\n" not in data.replace(b"\r\n", b"")
 assert b"[Menu] ; primary\r\n" in data
 assert b"  custom_setting = keep ; untouched\r\n" in data
+assert b"video_mode=5\r\n" in data
+assert b"VIDEO_MODE=6 ; old mode\r\n" in data
 PY
 grep -q ';main=Commented' "$FAT/MiSTer.ini"
 grep -q '^;main=Other_Main' "$FAT/MiSTer.ini"
 grep -q '^;main=Another_Main ; note' "$FAT/MiSTer.ini"
-grep -q '^video_mode=8' "$FAT/MiSTer.ini"
-grep -q '^;VIDEO_MODE=6 ; old mode' "$FAT/MiSTer.ini"
+assert_ini_value Menu direct_video 2
+assert_ini_value Menu menu_pal 0
+assert_ini_value Menu forced_scandoubler 0
 test ! -e "$FAT/THIRD-PARTY-NOTICES.txt" && test ! -e "$FAT/SOURCE-OFFER.txt"
 test ! -e "$FAT/licenses/MiSTer-MagiK-GPL-3.0-or-later.txt"
 test -e "$FAT/licenses/USER-LICENSE.txt"
@@ -320,7 +355,7 @@ test -f "$APP/mister-magik-fb"
 test -f "$FAT/MiSTer.ini.bak.before-magik"
 rm -f "$APP/installer-output-mode-v1"
 MISTER_MAGIK_TEST_OUTPUT_MODE=hdmi run_installer install >/dev/null
-grep -q '^direct_video=0$' "$FAT/MiSTer.ini"
+assert_ini_value Menu direct_video 0
 grep -qx hdmi "$APP/installer-output-mode-v1"
 
 ini_before="$(sha256sum "$FAT/MiSTer.ini")"

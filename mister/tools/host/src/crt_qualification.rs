@@ -4,7 +4,7 @@
 use super::{
     acknowledged_main_command, connect, crt_trial_run_command, edit_remote_ini, exec, exec_checked,
     exec_checked_output, issue_reboot, parse_crt_trial_status, remote_write, wait_down,
-    wait_launcher_ready, wait_up, IniEdit, RebootMode, Result,
+    wait_launcher_ready, wait_up, IniEdit, MenuOutputProfile, RebootMode, Result,
 };
 use serde_json::{json, Value};
 use ssh2::Session;
@@ -36,39 +36,29 @@ extern "C" fn note_interruption(_signal: i32) {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct CrtMode {
     output: &'static str,
-    direct_video: &'static str,
-    menu_pal: &'static str,
-    forced_scandoubler: &'static str,
+    profile: MenuOutputProfile,
     expected_rate: &'static str,
 }
 
 const CRT_MODES: [CrtMode; 4] = [
     CrtMode {
         output: "crt-240p60",
-        direct_video: "1",
-        menu_pal: "0",
-        forced_scandoubler: "0",
+        profile: MenuOutputProfile::Crt240p60,
         expected_rate: "15.734 kHz / 60.052 Hz",
     },
     CrtMode {
         output: "crt-288p50",
-        direct_video: "1",
-        menu_pal: "1",
-        forced_scandoubler: "0",
+        profile: MenuOutputProfile::Crt288p50,
         expected_rate: "15.734 kHz / 50.429 Hz",
     },
     CrtMode {
         output: "crt-480p60",
-        direct_video: "1",
-        menu_pal: "0",
-        forced_scandoubler: "1",
+        profile: MenuOutputProfile::Crt480p60,
         expected_rate: "31.469 kHz / 59.940 Hz",
     },
     CrtMode {
         output: "crt-576p50",
-        direct_video: "1",
-        menu_pal: "1",
-        forced_scandoubler: "1",
+        profile: MenuOutputProfile::Crt576p50,
         expected_rate: "31.469 kHz / 50.431 Hz",
     },
 ];
@@ -271,13 +261,14 @@ fn run_mode_matrix(output: &Path, interrupted: &AtomicBool) -> Result<bool> {
         let resolved = apply_mode(mode)?;
         let mode_directory = output.join(mode.output);
         fs::create_dir(&mode_directory)?;
+        let (direct_video, menu_pal, forced_scandoubler) = mode.profile.settings();
         fs::write(
             mode_directory.join("expected.json"),
             serde_json::to_vec_pretty(&json!({
                 "output": mode.output,
-                "direct_video": mode.direct_video,
-                "menu_pal": mode.menu_pal,
-                "forced_scandoubler": mode.forced_scandoubler,
+                "direct_video": direct_video,
+                "menu_pal": menu_pal,
+                "forced_scandoubler": forced_scandoubler,
                 "expected_rate": mode.expected_rate,
             }))?,
         )?;
@@ -298,15 +289,7 @@ fn run_mode_matrix(output: &Path, interrupted: &AtomicBool) -> Result<bool> {
 
 fn apply_mode(mode: CrtMode) -> Result<OriginalState> {
     let session = connect(10)?;
-    edit_remote_ini(
-        &session,
-        IniEdit::Crt {
-            direct_video: mode.direct_video.to_string(),
-            menu_pal: mode.menu_pal.to_string(),
-            forced_scandoubler: mode.forced_scandoubler.to_string(),
-        },
-        false,
-    )?;
+    edit_remote_ini(&session, IniEdit::MenuOutput(mode.profile), false)?;
     issue_reboot(&session, RebootMode::Supervised)?;
     drop(session);
     if !wait_down(40.0) || wait_up(120.0)? != 0 {
@@ -314,9 +297,20 @@ fn apply_mode(mode: CrtMode) -> Result<OriginalState> {
     }
     let session = connect(10)?;
     wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))?;
-    let mut resolved = read_resolved_state(&session)?;
-    resolved.output = mode.output.to_string();
+    let resolved = read_resolved_state(&session)?;
+    validate_resolved_mode(&resolved, mode)?;
     Ok(resolved)
+}
+
+fn validate_resolved_mode(resolved: &OriginalState, mode: CrtMode) -> Result<()> {
+    if resolved.output != mode.output {
+        return Err(format!(
+            "{} resolved as {} after reboot",
+            mode.output, resolved.output
+        )
+        .into());
+    }
+    Ok(())
 }
 
 fn capture_analyzer(directory: &Path, mode: CrtMode, interrupted: &AtomicBool) -> Result<()> {
@@ -614,12 +608,10 @@ mod tests {
         assert_eq!(
             CRT_MODES
                 .iter()
-                .map(|mode| (
-                    mode.output,
-                    mode.direct_video,
-                    mode.menu_pal,
-                    mode.forced_scandoubler,
-                ))
+                .map(|mode| {
+                    let (direct_video, menu_pal, forced_scandoubler) = mode.profile.settings();
+                    (mode.output, direct_video, menu_pal, forced_scandoubler)
+                })
                 .collect::<Vec<_>>(),
             vec![
                 ("crt-240p60", "1", "0", "0"),
@@ -628,6 +620,18 @@ mod tests {
                 ("crt-576p50", "1", "1", "1"),
             ]
         );
+    }
+
+    #[test]
+    fn requested_mode_must_match_mains_resolved_output() {
+        let resolved = OriginalState {
+            main: "MiSTer_MagiKDev".into(),
+            output: "hdmi".into(),
+        };
+        let error = validate_resolved_mode(&resolved, CRT_MODES[0])
+            .expect_err("a mismatched resolved mode must fail qualification")
+            .to_string();
+        assert!(error.contains("crt-240p60 resolved as hdmi"));
     }
 
     #[test]

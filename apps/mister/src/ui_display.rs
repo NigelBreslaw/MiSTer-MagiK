@@ -221,11 +221,13 @@ impl UiDisplayPlan {
         let direct_video = direct_video_from_parsed(parsed);
         if direct_video {
             let pal = parsed
-                .value("MiSTer", "menu_pal")
+                .value("Menu", "menu_pal")
+                .or_else(|| parsed.value("MiSTer", "menu_pal"))
                 .or_else(|| parsed.value("global", "menu_pal"))
                 .is_some_and(|value| value == "1");
             let scandoubler = parsed
-                .value("MiSTer", "forced_scandoubler")
+                .value("Menu", "forced_scandoubler")
+                .or_else(|| parsed.value("MiSTer", "forced_scandoubler"))
                 .or_else(|| parsed.value("global", "forced_scandoubler"))
                 .is_some_and(|value| value == "1");
             let route = match (pal, scandoubler) {
@@ -609,7 +611,8 @@ fn predefined_video_mode(mode: usize) -> Option<VideoModeGeometry> {
 
 fn direct_video_from_parsed(parsed: &ParsedIni<'_>) -> bool {
     parsed
-        .value("MiSTer", "direct_video")
+        .value("Menu", "direct_video")
+        .or_else(|| parsed.value("MiSTer", "direct_video"))
         .or_else(|| parsed.value("global", "direct_video"))
         .is_some_and(|value| value == "1" || value == "2")
 }
@@ -1122,7 +1125,7 @@ mod tests {
     #[test]
     fn plan_reads_direct_video_ntsc_and_pal_modes() {
         let ntsc = UiDisplayPlan::from_mister_ini_text(
-            "[MiSTer]\ndirect_video=1\nmenu_pal=0\nforced_scandoubler=0\n",
+            "[MiSTer]\ndirect_video=0\nmenu_pal=1\nforced_scandoubler=1\n[Menu]\ndirect_video=1\nmenu_pal=0\nforced_scandoubler=0\n",
         )
         .expect("ntsc plan");
         assert_eq!((ntsc.output_w, ntsc.output_h), (640, 240));
@@ -1131,7 +1134,7 @@ mod tests {
         assert!(ntsc.direct_video);
 
         let pal31 = UiDisplayPlan::from_mister_ini_text(
-            "[MiSTer]\ndirect_video=1\nmenu_pal=1\nforced_scandoubler=1\n",
+            "[MiSTer]\ndirect_video=0\nmenu_pal=0\nforced_scandoubler=0\n[Menu]\ndirect_video=1\nmenu_pal=1\nforced_scandoubler=1\n",
         )
         .expect("pal plan");
         assert_eq!((pal31.output_w, pal31.output_h), (640, 576));

@@ -588,8 +588,8 @@ restore_installer_owned_ini() {
     write_ini_with_stock_main
     return 0
   fi
-  for owned in "MiSTer main" "MiSTer direct_video" "MiSTer menu_pal" \
-    "MiSTer forced_scandoubler" "Menu video_mode"; do
+  for owned in "MiSTer main" "Menu direct_video" "Menu menu_pal" \
+    "Menu forced_scandoubler"; do
     set -- $owned
     if prior="$(ini_effective_value "$INI_BACKUP" "$1" "$2")"; then
       write_ini_with_selected_value "$1" "$2" "$prior"
@@ -604,37 +604,36 @@ write_ini_with_main() {
   mkdir -p "$APP_DIR"
   backup_ini_before_magik
   write_ini_with_selected_value MiSTer main MiSTer_MagiK
-  write_ini_with_selected_value Menu video_mode 8
   case "$output_mode" in
     auto)
-      write_ini_with_selected_value MiSTer direct_video 2
-      write_ini_with_selected_value MiSTer menu_pal 0
-      write_ini_with_selected_value MiSTer forced_scandoubler 0
+      write_ini_with_selected_value Menu direct_video 2
+      write_ini_with_selected_value Menu menu_pal 0
+      write_ini_with_selected_value Menu forced_scandoubler 0
       ;;
     crt-240p60)
-      write_ini_with_selected_value MiSTer direct_video 1
-      write_ini_with_selected_value MiSTer menu_pal 0
-      write_ini_with_selected_value MiSTer forced_scandoubler 0
+      write_ini_with_selected_value Menu direct_video 1
+      write_ini_with_selected_value Menu menu_pal 0
+      write_ini_with_selected_value Menu forced_scandoubler 0
       ;;
     crt-288p50)
-      write_ini_with_selected_value MiSTer direct_video 1
-      write_ini_with_selected_value MiSTer menu_pal 1
-      write_ini_with_selected_value MiSTer forced_scandoubler 0
+      write_ini_with_selected_value Menu direct_video 1
+      write_ini_with_selected_value Menu menu_pal 1
+      write_ini_with_selected_value Menu forced_scandoubler 0
       ;;
     crt-480p60)
-      write_ini_with_selected_value MiSTer direct_video 1
-      write_ini_with_selected_value MiSTer menu_pal 0
-      write_ini_with_selected_value MiSTer forced_scandoubler 1
+      write_ini_with_selected_value Menu direct_video 1
+      write_ini_with_selected_value Menu menu_pal 0
+      write_ini_with_selected_value Menu forced_scandoubler 1
       ;;
     crt-576p50)
-      write_ini_with_selected_value MiSTer direct_video 1
-      write_ini_with_selected_value MiSTer menu_pal 1
-      write_ini_with_selected_value MiSTer forced_scandoubler 1
+      write_ini_with_selected_value Menu direct_video 1
+      write_ini_with_selected_value Menu menu_pal 1
+      write_ini_with_selected_value Menu forced_scandoubler 1
       ;;
     hdmi)
-      write_ini_with_selected_value MiSTer direct_video 0
-      write_ini_with_selected_value MiSTer menu_pal 0
-      write_ini_with_selected_value MiSTer forced_scandoubler 0
+      write_ini_with_selected_value Menu direct_video 0
+      write_ini_with_selected_value Menu menu_pal 0
+      write_ini_with_selected_value Menu forced_scandoubler 0
       ;;
     *) say "ERROR: unsupported output mode $output_mode"; return 1 ;;
   esac
