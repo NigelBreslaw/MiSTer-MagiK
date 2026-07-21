@@ -79,6 +79,15 @@ impl ResolvedOutputRoute {
             Self::Crt576p50 => Some(VideoModeGeometry::new(640, 576)),
         }
     }
+
+    const fn framebuffer_geometry(self) -> Option<(usize, usize)> {
+        match self {
+            Self::Hdmi => None,
+            Self::Crt240p60 => Some((320, 240)),
+            Self::Crt288p50 => Some((384, 288)),
+            Self::Crt480p60 | Self::Crt576p50 => Some((640, 480)),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -351,8 +360,14 @@ impl UiDisplayPlan {
         source: &'static str,
         fb_policy: UiFramebufferSizePolicy,
     ) -> Self {
-        let (fb_w, fb_h) =
-            fb_policy.framebuffer_size(geometry.output_w as usize, geometry.output_h as usize);
+        let (fb_w, fb_h, fb_policy) = match output_route.framebuffer_geometry() {
+            Some((fb_w, fb_h)) => (fb_w, fb_h, UiFramebufferSizePolicy::Auto),
+            None => {
+                let (fb_w, fb_h) = fb_policy
+                    .framebuffer_size(geometry.output_w as usize, geometry.output_h as usize);
+                (fb_w, fb_h, fb_policy)
+            }
+        };
         Self {
             fb_w,
             fb_h,
@@ -816,22 +831,19 @@ mod tests {
     #[test]
     fn direct_video_and_custom_modes_follow_the_same_contract() {
         let direct_video_cases = [
-            (0, 0, (640, 240), 1280, 153_600),
-            (0, 1, (640, 480), 1280, 307_200),
-            (1, 0, (640, 288), 1280, 184_320),
-            (1, 1, (640, 576), 1280, 368_640),
+            (0, 0, (640, 240), (320, 240), 640, 76_800),
+            (0, 1, (640, 480), (640, 480), 1280, 307_200),
+            (1, 0, (640, 288), (384, 288), 768, 110_592),
+            (1, 1, (640, 576), (640, 480), 1280, 307_200),
         ];
-        for (pal, scandoubler, framebuffer, stride, pixels) in direct_video_cases {
+        for (pal, scandoubler, scan, framebuffer, stride, pixels) in direct_video_cases {
             let ini = format!(
                 "[MiSTer]\ndirect_video=1\nmenu_pal={pal}\nforced_scandoubler={scandoubler}\n"
             );
             let plan = UiDisplayPlan::from_mister_ini_text(&ini).expect("direct-video mode");
-            assert_eq!((plan.output_w, plan.output_h), framebuffer);
-            assert_eq!((plan.scan_w, plan.scan_h), framebuffer);
-            assert_eq!(
-                (plan.fb_w, plan.fb_h),
-                (usize::from(framebuffer.0), usize::from(framebuffer.1))
-            );
+            assert_eq!((plan.output_w, plan.output_h), scan);
+            assert_eq!((plan.scan_w, plan.scan_h), scan);
+            assert_eq!((plan.fb_w, plan.fb_h), framebuffer);
             assert_eq!(rgb565_stride_bytes(plan.fb_w), stride);
             assert_eq!(plan.fb_w * plan.fb_h, pixels);
         }
@@ -990,34 +1002,41 @@ mod tests {
     fn resolved_crt_modes_override_detected_hdmi_geometry() {
         let runtime = RuntimeDisplayGeometry::from_video_words(640, 480, 640, 480);
         let ini = "[MiSTer]\ndirect_video=2\n[Menu]\nvideo_mode=8\n";
-        for (settings, route, height) in [
+        for (settings, route, scan, framebuffer) in [
             (
                 "schema=1&output=crt-240p60",
                 ResolvedOutputRoute::Crt240p60,
-                240,
+                (640, 240),
+                (320, 240),
             ),
             (
                 "schema=1&output=crt-288p50",
                 ResolvedOutputRoute::Crt288p50,
-                288,
+                (640, 288),
+                (384, 288),
             ),
             (
                 "schema=1&output=crt-480p60",
                 ResolvedOutputRoute::Crt480p60,
-                480,
+                (640, 480),
+                (640, 480),
             ),
             (
                 "schema=1&output=crt-576p50",
                 ResolvedOutputRoute::Crt576p50,
-                576,
+                (640, 576),
+                (640, 480),
             ),
         ] {
             let plan = UiDisplayPlan::from_runtime_or_mister_ini_text(runtime, ini, Some(settings))
                 .expect("plan");
 
             assert_eq!(plan.source, "test-runtime-settings-crt");
-            assert_eq!((plan.output_w, plan.output_h), (640, height));
-            assert_eq!((plan.fb_w, plan.fb_h), (640, height as usize));
+            assert_eq!((plan.output_w, plan.output_h), scan);
+            assert_eq!((plan.scan_w, plan.scan_h), scan);
+            assert_eq!((plan.fb_w, plan.fb_h), framebuffer);
+            let ui = UiDisplay::for_plan(plan);
+            assert_eq!((ui.render_w(), ui.render_h()), framebuffer);
             assert!(plan.direct_video);
             assert_eq!(plan.output_route, route);
         }
@@ -1089,7 +1108,8 @@ mod tests {
         )
         .expect("ntsc plan");
         assert_eq!((ntsc.output_w, ntsc.output_h), (640, 240));
-        assert_eq!((ntsc.fb_w, ntsc.fb_h), (640, 240));
+        assert_eq!((ntsc.scan_w, ntsc.scan_h), (640, 240));
+        assert_eq!((ntsc.fb_w, ntsc.fb_h), (320, 240));
         assert!(ntsc.direct_video);
 
         let pal31 = UiDisplayPlan::from_mister_ini_text(
@@ -1097,7 +1117,8 @@ mod tests {
         )
         .expect("pal plan");
         assert_eq!((pal31.output_w, pal31.output_h), (640, 576));
-        assert_eq!((pal31.fb_w, pal31.fb_h), (640, 576));
+        assert_eq!((pal31.scan_w, pal31.scan_h), (640, 576));
+        assert_eq!((pal31.fb_w, pal31.fb_h), (640, 480));
         assert!(pal31.direct_video);
     }
 
