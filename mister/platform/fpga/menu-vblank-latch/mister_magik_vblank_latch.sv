@@ -105,7 +105,6 @@ module mister_magik_vblank_latch (
 				4'd13: response_data = reader_flags;
 				4'd14: response_data = reader_underrun_count;
 				4'd15: response_data = reader_timeout_count;
-				default: response_data = 16'd0;
 			endcase
 		end
 		else if(cmd_data && (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_CAPS)) begin
