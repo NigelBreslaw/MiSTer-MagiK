@@ -828,7 +828,7 @@ pub fn run_cli() -> Result<()> {
 
 fn usage() {
     println!(
-        "usage: mister --capture-buffer\n       mister <status|arming-status|mode|scene|core-list|catalog|media-check|media-download|agent|reboot-wait|doctor|mame-metadata-build> ...\n       mode <status|dev|public|stock>\n       scene <launcher|controller_test|tear_pattern|video_playback> [seconds]\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>]\n       operator commands are typed and bounded; direct-reset-no-sync remains experimental and requires a volatile session token"
+        "usage: mister --capture-buffer\n       mister <status|arming-status|mode|scene|core-list|catalog|media-check|media-download|agent|reboot-wait|doctor|mame-metadata-build> ...\n       mode <status|dev|public|stock>\n       scene <launcher|controller_test|tear_pattern|video_playback|crt_trial> [seconds]\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>]\n       operator commands are typed and bounded; direct-reset-no-sync remains experimental and requires a volatile session token"
     );
 }
 
@@ -1187,10 +1187,10 @@ fn scene_cli(args: &[String]) -> Result<()> {
     let scene = args.first().map(String::as_str).unwrap_or("launcher");
     if !matches!(
         scene,
-        "launcher" | "controller_test" | "tear_pattern" | "video_playback"
+        "launcher" | "controller_test" | "tear_pattern" | "video_playback" | "crt_trial"
     ) {
         return Err(
-            "usage: mister scene <launcher|controller_test|tear_pattern|video_playback> [seconds]"
+            "usage: mister scene <launcher|controller_test|tear_pattern|video_playback|crt_trial> [seconds]"
                 .into(),
         );
     }
@@ -1198,7 +1198,16 @@ fn scene_cli(args: &[String]) -> Result<()> {
         .get(1)
         .map(|value| value.parse::<u64>())
         .transpose()?
-        .unwrap_or(if scene == "launcher" { 0 } else { 10 });
+        .unwrap_or(if scene == "launcher" {
+            0
+        } else if scene == "crt_trial" {
+            30
+        } else {
+            10
+        });
+    if scene == "crt_trial" && seconds != 30 {
+        return Err("crt_trial duration is fixed at 30 seconds".into());
+    }
     if args.len() > 2 || seconds > 3_600 || (scene != "launcher" && seconds == 0) {
         return Err("scene duration must be 1..=3600 seconds".into());
     }
@@ -1212,24 +1221,89 @@ fn scene_cli(args: &[String]) -> Result<()> {
             },
         );
     }
+    if scene == "crt_trial" {
+        exec_checked(
+            &session,
+            "CRT trial HDMI recovery selection",
+            &acknowledged_main_command("mister_magik_settings_set_v1 output=hdmi"),
+        )?;
+    }
     exec_checked(
         &session,
         "scene suspend",
         &acknowledged_main_command("mister_magik_suspend"),
     )?;
-    let run = exec_checked(
-        &session,
-        "operator scene",
-        &format!(
+    let run_command = if scene == "crt_trial" {
+        crt_trial_run_command()
+    } else {
+        format!(
             "set -eu; test -x /media/fat/mister-magik-dev/mister-magik-fb; /media/fat/mister-magik-dev/mister-magik-fb ui {scene} {seconds} >/tmp/mister-magik-{scene}.log 2>&1"
-        ),
-    );
-    let resume = exec_checked(
-        &session,
-        "scene resume",
-        &acknowledged_main_command("mister_magik_resume"),
-    );
-    run.and(resume)
+        )
+    };
+    let run = exec_checked(&session, "operator scene", &run_command);
+    let report = if scene == "crt_trial" {
+        match exec(
+            &session,
+            "sed -n '/^crt_trial_status_v1 /p' /tmp/mister-magik-crt_trial.log | tail -n 1",
+            true,
+        ) {
+            Ok(output) if output.rc == 0 => match parse_crt_trial_status(&output.stdout) {
+                Ok(status) => {
+                    println!("{status}");
+                    Ok(())
+                }
+                Err(error) => Err(error),
+            },
+            Ok(output) => Err(exec_failure_message("CRT trial status", &output)
+                .unwrap_or_else(|| "CRT trial status unavailable".into())
+                .into()),
+            Err(error) => Err(error),
+        }
+    } else {
+        Ok(())
+    };
+    let resume = if scene == "crt_trial" {
+        Ok(())
+    } else {
+        exec_checked(
+            &session,
+            "scene resume",
+            &acknowledged_main_command("mister_magik_resume"),
+        )
+    };
+    run.and(report).and(resume)
+}
+
+fn crt_trial_run_command() -> String {
+    let resume = acknowledged_main_command("mister_magik_resume");
+    format!(
+        "cleanup() {{ trap - EXIT HUP INT TERM; {resume}; }}; trap cleanup EXIT HUP INT TERM; set -eu; test -x /media/fat/mister-magik-dev/mister-magik-fb; MISTER_MAGIK_RUNTIME_SETTINGS_V1='schema=1&output=crt-240p60' /media/fat/mister-magik-dev/mister-magik-fb ui crt_trial 30 >/tmp/mister-magik-crt_trial.log 2>&1"
+    )
+}
+
+fn parse_crt_trial_status(output: &str) -> Result<&str> {
+    let status = output.trim();
+    if !status.starts_with("crt_trial_status_v1 schema=1 ") {
+        return Err("CRT trial did not return a typed status response".into());
+    }
+    for required in [
+        "ok=",
+        "duration_ms=",
+        "frames=",
+        "flips=",
+        "underruns=",
+        "timeouts=",
+        "fallback=",
+        "reason=",
+    ] {
+        if !status
+            .split_ascii_whitespace()
+            .any(|field| field.starts_with(required))
+        {
+            return Err(format!("CRT trial status omitted {required}").into());
+        }
+    }
+    Ok(status)
 }
 
 fn benchmark_trace_path(warmup: bool) -> &'static str {
@@ -6484,6 +6558,28 @@ video_mode=14
             "printf 'mister_magik_restart_launcher\\n' > /dev/MiSTer_cmd"
         )
         .is_ok());
+    }
+
+    #[test]
+    fn crt_trial_status_requires_the_versioned_typed_fields() {
+        let valid = "crt_trial_status_v1 schema=1 ok=1 duration_ms=30001 frames=1800 flips=1800 underruns=0 timeouts=0 fallback=0 reason=none\n";
+        assert_eq!(parse_crt_trial_status(valid).unwrap(), valid.trim());
+        assert!(parse_crt_trial_status(
+            "crt_trial_status_v1 schema=1 ok=0 duration_ms=12 frames=0"
+        )
+        .is_err());
+        assert!(parse_crt_trial_status("untyped success").is_err());
+    }
+
+    #[test]
+    fn crt_trial_command_is_fixed_bounded_and_restores_main_on_exit_or_signal() {
+        let command = crt_trial_run_command();
+        assert!(command.contains("trap cleanup EXIT HUP INT TERM"));
+        assert!(command.contains("trap - EXIT HUP INT TERM"));
+        assert!(command.contains("mister_magik_resume"));
+        assert!(command.contains("schema=1&output=crt-240p60"));
+        assert!(command.contains(" ui crt_trial 30 "));
+        assert!(!command.contains("launcher.env"));
     }
 
     #[test]
