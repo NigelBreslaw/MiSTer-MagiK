@@ -198,7 +198,7 @@ class PlatformBundleTests(unittest.TestCase):
     def test_attended_crt_evidence_requires_exact_identity_and_every_gate(self) -> None:
         evidence = self.root / "crt-evidence.json"
         payload = {
-            "format": "mister-magik-crt-qualification-v1",
+            "format": "mister-magik-crt-qualification-v2",
             "qualified": True,
             "identity": {
                 "app_revision": "1" * 40,
@@ -211,19 +211,34 @@ class PlatformBundleTests(unittest.TestCase):
             },
             "trial": {
                 "duration_ms": 30_100,
+                "mode": "crt-240p60",
+                "frames": 1800,
+                "flips": 1800,
+                "presentation_failures": 0,
+            },
+            "measurements": {
+                "pixel_clock_hz": 12_587_000,
                 "horizontal_hz": 15_734.2,
                 "vertical_hz": 60.055,
-                "underruns": 0,
-                "timeouts": 0,
-                "fallback": False,
+                "h_active": 640,
+                "h_front_porch": 30,
+                "h_sync_width": 60,
+                "h_back_porch": 70,
+                "v_active": 240,
+                "v_front_porch": 4,
+                "v_sync_width": 4,
+                "v_back_porch": 14,
+                "h_sync_polarity": "negative",
+                "v_sync_polarity": "negative",
             },
             "checks": {name: True for name in (
-                "launcher_rendering", "crt_hdmi_crt_switching", "osd_and_input",
+                "launcher_rendering", "core_handoff_native_timing", "osd_and_input",
                 "game_launch_and_return", "crash_recovery", "hdmi_resolution_matrix",
                 "cleanup_verified", "rollback_verified",
             )},
             "trial_log_sha256": "4" * 64,
-            "limitations": "V1 is 640x240p60 only.",
+            "analyzer": "Morph 4K analog bridge capture",
+            "limitations": "Analyzer evidence is not yet an attended real-CRT qualification.",
         }
         evidence.write_text(json.dumps(payload))
         verifier = bundle.ROOT / "scripts/checks/verify-crt-qualification-evidence.py"

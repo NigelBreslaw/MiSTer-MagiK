@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Nigel Breslaw
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Verify attended CRT evidence tied to one exact qualified platform."""
+"""Verify attended analyzer evidence for the shared MiSTer Direct Video path."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ HEX40 = re.compile(r"^[0-9a-f]{40}$")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 REQUIRED_CHECKS = {
     "launcher_rendering",
-    "crt_hdmi_crt_switching",
+    "core_handoff_native_timing",
     "osd_and_input",
     "game_launch_and_return",
     "crash_recovery",
@@ -24,11 +24,21 @@ REQUIRED_CHECKS = {
     "cleanup_verified",
     "rollback_verified",
 }
+MODE_TIMINGS = {
+    "crt-240p60": (12_587_000, 640, 30, 60, 70, 240, 4, 4, 14),
+    "crt-288p50": (12_587_000, 640, 30, 60, 70, 288, 6, 4, 14),
+    "crt-480p60": (25_175_000, 640, 16, 96, 48, 480, 8, 4, 33),
+    "crt-576p50": (25_175_000, 640, 16, 96, 48, 576, 2, 4, 42),
+}
+
+
+def close(actual: float, expected: float, tolerance: float) -> bool:
+    return abs(actual - expected) <= expected * tolerance
 
 
 def verify(path: Path) -> dict[str, object]:
     payload = json.loads(path.read_text())
-    if payload.get("format") != "mister-magik-crt-qualification-v1":
+    if payload.get("format") != "mister-magik-crt-qualification-v2":
         raise ValueError("unsupported CRT qualification format")
     if payload.get("qualified") is not True:
         raise ValueError("hardware evidence must explicitly be qualified")
@@ -51,20 +61,50 @@ def verify(path: Path) -> dict[str, object]:
 
     trial = payload.get("trial")
     if not isinstance(trial, dict):
-        raise ValueError("missing trial measurements")
-    duration = int(trial.get("duration_ms", 0))
-    horizontal_hz = float(trial.get("horizontal_hz", 0))
-    vertical_hz = float(trial.get("vertical_hz", 0))
-    if not 30_000 <= duration <= 35_000:
+        raise ValueError("missing bounded publication trial")
+    mode = trial.get("mode")
+    expected = MODE_TIMINGS.get(mode)
+    if expected is None:
+        raise ValueError("trial mode is not a standard progressive Direct Video mode")
+    if not 30_000 <= int(trial.get("duration_ms", 0)) <= 35_000:
         raise ValueError("CRT trial duration is outside the attended bound")
-    if not 15_700 <= horizontal_hz <= 15_770:
-        raise ValueError("horizontal timing is outside the 240p60 qualification range")
-    if not 59.9 <= vertical_hz <= 60.2:
-        raise ValueError("vertical timing is outside the 240p60 qualification range")
-    if trial.get("underruns") != 0 or trial.get("timeouts") != 0:
-        raise ValueError("CRT trial contains scanout errors")
-    if trial.get("fallback") is not False:
-        raise ValueError("CRT trial entered fallback")
+    if int(trial.get("frames", 0)) <= 0 or int(trial.get("flips", 0)) <= 0:
+        raise ValueError("CRT trial did not advance shared latch publication")
+    if trial.get("presentation_failures") != 0:
+        raise ValueError("CRT trial contains presentation failures")
+
+    measurements = payload.get("measurements")
+    if not isinstance(measurements, dict):
+        raise ValueError("missing external analyzer measurements")
+    names = (
+        "pixel_clock_hz",
+        "h_active",
+        "h_front_porch",
+        "h_sync_width",
+        "h_back_porch",
+        "v_active",
+        "v_front_porch",
+        "v_sync_width",
+        "v_back_porch",
+    )
+    for name, value in zip(names, expected):
+        actual = float(measurements.get(name, 0))
+        if name == "pixel_clock_hz":
+            if not close(actual, value, 0.01):
+                raise ValueError("pixel clock is outside the Main mode tolerance")
+        elif int(actual) != value:
+            raise ValueError(f"{name} does not match Main's standard mode")
+    if measurements.get("h_sync_polarity") != "negative":
+        raise ValueError("horizontal sync polarity must be recorded as negative")
+    if measurements.get("v_sync_polarity") != "negative":
+        raise ValueError("vertical sync polarity must be recorded as negative")
+    h_total = sum(int(measurements[name]) for name in names[1:5])
+    v_total = sum(int(measurements[name]) for name in names[5:])
+    pixel_clock = float(measurements["pixel_clock_hz"])
+    if not close(float(measurements.get("horizontal_hz", 0)), pixel_clock / h_total, 0.01):
+        raise ValueError("measured horizontal rate is inconsistent with clock and totals")
+    if not close(float(measurements.get("vertical_hz", 0)), pixel_clock / h_total / v_total, 0.01):
+        raise ValueError("measured vertical rate is inconsistent with clock and totals")
 
     checks = payload.get("checks")
     if not isinstance(checks, dict) or set(checks) != REQUIRED_CHECKS:
@@ -74,6 +114,8 @@ def verify(path: Path) -> dict[str, object]:
         raise ValueError("failed attended checks: " + ", ".join(failed))
     if not HEX64.fullmatch(str(payload.get("trial_log_sha256", ""))):
         raise ValueError("invalid trial_log_sha256")
+    if not isinstance(payload.get("analyzer"), str) or not payload["analyzer"].strip():
+        raise ValueError("external analyzer must be identified")
     if not isinstance(payload.get("limitations"), str):
         raise ValueError("limitations must be recorded")
     return payload

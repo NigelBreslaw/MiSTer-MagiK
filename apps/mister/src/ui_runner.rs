@@ -77,6 +77,7 @@ mod arcade_drawer;
 mod catalog_worker;
 mod controller_loop;
 mod controller_setup_input_session;
+mod crt_trial_loop;
 #[cfg(mister_experiments)]
 mod experiments;
 mod launch_handoff_session;
@@ -110,6 +111,7 @@ mod video_loop;
 use catalog_worker::*;
 use controller_loop::*;
 use controller_setup_input_session::*;
+use crt_trial_loop::*;
 #[cfg(mister_experiments)]
 use experiments::effects::{
     run_camera_effects_loop, run_raster_effects_loop, run_screensaver_loop,
@@ -174,6 +176,7 @@ pub const UI_SCENES: &[&str] = &[
     #[cfg(mister_experiments)]
     "transition-effects",
     "controller_test",
+    "crt_trial",
     "tear_pattern",
     #[cfg(all(target_os = "linux", target_arch = "arm"))]
     "video_playback",
@@ -331,6 +334,11 @@ pub fn run_ui(f: &mut Fpga) {
     #[cfg(mister_experiments)]
     if scene == "transition-effects" {
         run_transition_effects_loop(secs, &ui, &mut disp);
+        return;
+    }
+
+    if scene == "crt_trial" {
+        run_crt_trial_loop(secs, &ui, f, &mut display_session);
         return;
     }
 

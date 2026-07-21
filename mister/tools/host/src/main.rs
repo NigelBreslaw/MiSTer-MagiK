@@ -828,7 +828,7 @@ pub fn run_cli() -> Result<()> {
 
 fn usage() {
     println!(
-        "usage: mister --capture-buffer\n       mister <status|arming-status|mode|scene|core-list|catalog|media-check|media-download|agent|reboot-wait|doctor|mame-metadata-build> ...\n       mode <status|dev|public|stock>\n       scene <launcher|controller_test|tear_pattern|video_playback> [seconds]\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>]\n       operator commands are typed and bounded; direct-reset-no-sync remains experimental and requires a volatile session token"
+        "usage: mister --capture-buffer\n       mister <status|arming-status|mode|scene|core-list|catalog|media-check|media-download|agent|reboot-wait|doctor|mame-metadata-build> ...\n       mode <status|dev|public|stock>\n       scene <launcher|controller_test|tear_pattern|video_playback|crt_trial> [seconds]\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>]\n       operator commands are typed and bounded; direct-reset-no-sync remains experimental and requires a volatile session token"
     );
 }
 
@@ -1187,10 +1187,10 @@ fn scene_cli(args: &[String]) -> Result<()> {
     let scene = args.first().map(String::as_str).unwrap_or("launcher");
     if !matches!(
         scene,
-        "launcher" | "controller_test" | "tear_pattern" | "video_playback"
+        "launcher" | "controller_test" | "tear_pattern" | "video_playback" | "crt_trial"
     ) {
         return Err(
-            "usage: mister scene <launcher|controller_test|tear_pattern|video_playback> [seconds]"
+            "usage: mister scene <launcher|controller_test|tear_pattern|video_playback|crt_trial> [seconds]"
                 .into(),
         );
     }
@@ -1198,7 +1198,16 @@ fn scene_cli(args: &[String]) -> Result<()> {
         .get(1)
         .map(|value| value.parse::<u64>())
         .transpose()?
-        .unwrap_or(if scene == "launcher" { 0 } else { 10 });
+        .unwrap_or(if scene == "launcher" {
+            0
+        } else if scene == "crt_trial" {
+            30
+        } else {
+            10
+        });
+    if scene == "crt_trial" && seconds != 30 {
+        return Err("crt_trial duration is fixed at 30 seconds".into());
+    }
     if args.len() > 2 || seconds > 3_600 || (scene != "launcher" && seconds == 0) {
         return Err("scene duration must be 1..=3600 seconds".into());
     }
@@ -1212,24 +1221,95 @@ fn scene_cli(args: &[String]) -> Result<()> {
             },
         );
     }
+    let runtime_settings = if scene == "crt_trial" {
+        let output = exec_checked_output(
+            &session,
+            "resolved CRT mode",
+            &acknowledged_main_command("mister_magik_settings_get_v1"),
+        )?;
+        Some(parse_crt_runtime_settings_reply(&output.stdout)?)
+    } else {
+        None
+    };
     exec_checked(
         &session,
         "scene suspend",
         &acknowledged_main_command("mister_magik_suspend"),
     )?;
-    let run = exec_checked(
-        &session,
-        "operator scene",
-        &format!(
+    let run_command = if let Some(runtime_settings) = runtime_settings.as_deref() {
+        crt_trial_run_command(runtime_settings)
+    } else {
+        format!(
             "set -eu; test -x /media/fat/mister-magik-dev/mister-magik-fb; /media/fat/mister-magik-dev/mister-magik-fb ui {scene} {seconds} >/tmp/mister-magik-{scene}.log 2>&1"
-        ),
-    );
-    let resume = exec_checked(
-        &session,
-        "scene resume",
-        &acknowledged_main_command("mister_magik_resume"),
-    );
-    run.and(resume)
+        )
+    };
+    let run = exec_checked(&session, "operator scene", &run_command);
+    if scene == "crt_trial" {
+        run?;
+        let output = exec_checked_output(
+            &session,
+            "CRT trial status",
+            "sed -n '/^crt_trial_status_v2 /p' /tmp/mister-magik-crt_trial.log | tail -n 1",
+        )?;
+        println!("{}", parse_crt_trial_status(&output.stdout)?);
+        Ok(())
+    } else {
+        let resume = exec_checked(
+            &session,
+            "scene resume",
+            &acknowledged_main_command("mister_magik_resume"),
+        );
+        run.and(resume)
+    }
+}
+
+fn parse_crt_runtime_settings_reply(output: &str) -> Result<String> {
+    let settings = output
+        .trim()
+        .strip_prefix("ok SettingsV1 ")
+        .ok_or("Main did not return runtime settings v1")?;
+    let mode = settings
+        .split_ascii_whitespace()
+        .find_map(|field| field.strip_prefix("output="))
+        .ok_or("Main runtime settings omitted output")?;
+    if !matches!(
+        mode,
+        "crt-240p60" | "crt-288p50" | "crt-480p60" | "crt-576p50"
+    ) {
+        return Err(format!("CRT trial requires a resolved standard CRT mode, got {mode}").into());
+    }
+    Ok(format!("schema=1&output={mode}"))
+}
+
+fn crt_trial_run_command(runtime_settings: &str) -> String {
+    let resume = acknowledged_main_command("mister_magik_resume");
+    format!(
+        "cleanup() {{ trap - EXIT HUP INT TERM; {resume}; }}; trap cleanup EXIT HUP INT TERM; set -eu; test -x /media/fat/mister-magik-dev/mister-magik-fb; MISTER_MAGIK_RUNTIME_SETTINGS_V1={} /media/fat/mister-magik-dev/mister-magik-fb ui crt_trial 30 >/tmp/mister-magik-crt_trial.log 2>&1",
+        sh(runtime_settings)
+    )
+}
+
+fn parse_crt_trial_status(output: &str) -> Result<&str> {
+    let status = output.trim();
+    if !status.starts_with("crt_trial_status_v2 schema=2 ") {
+        return Err("CRT trial did not return a typed status response".into());
+    }
+    for required in [
+        "ok=1",
+        "mode=crt-",
+        "duration_ms=",
+        "frames=",
+        "flips=",
+        "reason=none",
+    ] {
+        if !status
+            .split_ascii_whitespace()
+            .any(|field| field.starts_with(required))
+        {
+            return Err(format!("CRT trial status omitted successful {required}").into());
+        }
+    }
+    Ok(status)
 }
 
 fn benchmark_trace_path(warmup: bool) -> &'static str {
@@ -2267,6 +2347,15 @@ fn exec_checked(sess: &Session, label: &str, command: &str) -> Result<()> {
         Err(message.into())
     } else {
         Ok(())
+    }
+}
+
+fn exec_checked_output(sess: &Session, label: &str, command: &str) -> Result<ExecOutput> {
+    let output = exec(sess, command, true)?;
+    if let Some(message) = exec_failure_message(label, &output) {
+        Err(message.into())
+    } else {
+        Ok(output)
     }
 }
 
@@ -6546,6 +6635,40 @@ video_mode=14
             "printf 'mister_magik_restart_launcher\\n' > /dev/MiSTer_cmd"
         )
         .is_ok());
+    }
+
+    #[test]
+    fn crt_trial_requires_main_to_report_a_standard_crt_mode() {
+        for mode in ["crt-240p60", "crt-288p50", "crt-480p60", "crt-576p50"] {
+            let reply = format!("ok SettingsV1 schema=1 output={mode}\n");
+            assert_eq!(
+                parse_crt_runtime_settings_reply(&reply).unwrap(),
+                format!("schema=1&output={mode}")
+            );
+        }
+        assert!(parse_crt_runtime_settings_reply("ok SettingsV1 schema=1 output=hdmi").is_err());
+    }
+
+    #[test]
+    fn crt_trial_status_requires_successful_shared_latch_publication() {
+        let valid = "crt_trial_status_v2 schema=2 ok=1 mode=crt-288p50 duration_ms=30001 frames=1500 flips=1500 reason=none\n";
+        assert_eq!(parse_crt_trial_status(valid).unwrap(), valid.trim());
+        assert!(parse_crt_trial_status(
+            "crt_trial_status_v2 schema=2 ok=0 mode=crt-240p60 duration_ms=12 frames=0 flips=0 reason=no-latch-flips"
+        )
+        .is_err());
+        assert!(parse_crt_trial_status("untyped success").is_err());
+    }
+
+    #[test]
+    fn crt_trial_command_is_bounded_and_never_changes_output_routes() {
+        let command = crt_trial_run_command("schema=1&output=crt-480p60");
+        assert!(command.contains("trap cleanup EXIT HUP INT TERM"));
+        assert!(command.contains("mister_magik_resume"));
+        assert!(command.contains("schema=1&output=crt-480p60"));
+        assert!(command.contains(" ui crt_trial 30 "));
+        assert!(!command.contains("settings_set"));
+        assert!(!command.contains("launcher.env"));
     }
 
     #[test]
