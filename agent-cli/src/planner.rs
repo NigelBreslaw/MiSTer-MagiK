@@ -93,31 +93,7 @@ pub fn workflow_plan(intent: Intent) -> Plan {
 }
 
 fn classified(path: &Path) -> bool {
-    is_root_file(path)
-        || path.starts_with("LICENSES")
-        || path.starts_with("agent-cli")
-        || path.starts_with("apps/mister")
-        || path.starts_with("apps/desktop")
-        || path.starts_with("crates/catalog")
-        || path.starts_with("crates/magik-core")
-        || path.starts_with("crates/framebuffer-stream")
-        || path.starts_with("crates/agent-protocol")
-        || path.starts_with("crates/media-contract")
-        || path.starts_with("mister/platform/runtime")
-        || path.starts_with("mister/platform/contracts")
-        || path.starts_with("mister/platform/kernel")
-        || path.starts_with("mister/platform/fpga")
-        || path.starts_with("mister/tools/host")
-        || path.starts_with("mister/tools/agent")
-        || path.starts_with("scripts")
-        || path.starts_with(".github")
-        || path.starts_with(".githooks")
-        || path.starts_with("docs")
-        || path.starts_with("documentation")
-        || path.starts_with("history")
-        || path.starts_with("private")
-        || path.starts_with("tools")
-        || path.file_name().and_then(|name| name.to_str()) == Some("AGENTS.md")
+    crate::components::classify(path).is_some()
 }
 
 fn is_root_file(path: &Path) -> bool {

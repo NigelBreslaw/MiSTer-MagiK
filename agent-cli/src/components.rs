@@ -1,0 +1,121 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+use serde::{Deserialize, Serialize};
+use std::path::Path;
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Component {
+    Repository,
+    AgentCli,
+    MisterApp,
+    Desktop,
+    Catalog,
+    CoreCrate,
+    Runtime,
+    PlatformContracts,
+    Kernel,
+    Fpga,
+    HostTool,
+    DeviceAgent,
+    Scripts,
+    Workflow,
+    Documentation,
+    Private,
+    Tools,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeploymentImpact {
+    None,
+    Runtime,
+    Platform,
+}
+
+impl Component {
+    #[must_use]
+    pub const fn deployment_impact(self) -> DeploymentImpact {
+        match self {
+            Self::MisterApp | Self::Catalog | Self::CoreCrate | Self::Runtime => {
+                DeploymentImpact::Runtime
+            }
+            Self::PlatformContracts | Self::Kernel | Self::Fpga => DeploymentImpact::Platform,
+            _ => DeploymentImpact::None,
+        }
+    }
+}
+
+pub fn classify(path: &Path) -> Option<Component> {
+    if path
+        .parent()
+        .is_some_and(|parent| parent.as_os_str().is_empty())
+        || path.file_name().and_then(|name| name.to_str()) == Some("AGENTS.md")
+        || path.starts_with("LICENSES")
+    {
+        Some(Component::Repository)
+    } else if path.starts_with("agent-cli") {
+        Some(Component::AgentCli)
+    } else if path.starts_with("apps/mister") {
+        Some(Component::MisterApp)
+    } else if path.starts_with("apps/desktop") {
+        Some(Component::Desktop)
+    } else if path.starts_with("crates/catalog") {
+        Some(Component::Catalog)
+    } else if path.starts_with("crates/") {
+        Some(Component::CoreCrate)
+    } else if path.starts_with("mister/platform/runtime") {
+        Some(Component::Runtime)
+    } else if path.starts_with("mister/platform/contracts") {
+        Some(Component::PlatformContracts)
+    } else if path.starts_with("mister/platform/kernel") {
+        Some(Component::Kernel)
+    } else if path.starts_with("mister/platform/fpga") {
+        Some(Component::Fpga)
+    } else if path.starts_with("mister/tools/host") {
+        Some(Component::HostTool)
+    } else if path.starts_with("mister/tools/agent") {
+        Some(Component::DeviceAgent)
+    } else if path.starts_with("scripts") {
+        Some(Component::Scripts)
+    } else if path.starts_with(".github") || path.starts_with(".githooks") {
+        Some(Component::Workflow)
+    } else if path.starts_with("docs") || path.starts_with("documentation") {
+        Some(Component::Documentation)
+    } else if path.starts_with("history") || path.starts_with("private") {
+        Some(Component::Private)
+    } else if path.starts_with("tools") {
+        Some(Component::Tools)
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deployment_impact_is_owned_by_components() {
+        assert_eq!(
+            classify(Path::new("apps/mister/src/launcher.rs"))
+                .unwrap()
+                .deployment_impact(),
+            DeploymentImpact::Runtime
+        );
+        assert_eq!(
+            classify(Path::new("mister/platform/fpga/menu.sv"))
+                .unwrap()
+                .deployment_impact(),
+            DeploymentImpact::Platform
+        );
+        assert_eq!(
+            classify(Path::new("docs/device.md"))
+                .unwrap()
+                .deployment_impact(),
+            DeploymentImpact::None
+        );
+        assert!(classify(Path::new("unknown/new.tree")).is_none());
+    }
+}

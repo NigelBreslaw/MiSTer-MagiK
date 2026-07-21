@@ -13,6 +13,28 @@ pub enum Risk {
     Destructive,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceClass {
+    Cpu,
+    Cargo,
+    AppleContainer,
+    GitIndex,
+    Network,
+    Device,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionKind {
+    Cargo,
+    Script,
+    AppleContainer,
+    Git,
+    PlatformCi,
+    DeviceTransaction,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Scope {
@@ -64,6 +86,37 @@ pub struct Operation {
     pub failure_hint: String,
     #[serde(default)]
     pub inputs: Vec<String>,
+}
+
+impl Operation {
+    #[must_use]
+    pub fn action_kind(&self) -> ActionKind {
+        if self.risk >= Risk::DeviceWrite {
+            ActionKind::DeviceTransaction
+        } else if self.program == "cargo" {
+            ActionKind::Cargo
+        } else if self.program == "git" {
+            ActionKind::Git
+        } else if self.program.ends_with("build-arm.sh") {
+            ActionKind::AppleContainer
+        } else if self.program == "gh" {
+            ActionKind::PlatformCi
+        } else {
+            ActionKind::Script
+        }
+    }
+
+    #[must_use]
+    pub fn resource_class(&self) -> ResourceClass {
+        match self.action_kind() {
+            ActionKind::Cargo => ResourceClass::Cargo,
+            ActionKind::AppleContainer => ResourceClass::AppleContainer,
+            ActionKind::Git => ResourceClass::GitIndex,
+            ActionKind::PlatformCi => ResourceClass::Network,
+            ActionKind::DeviceTransaction => ResourceClass::Device,
+            ActionKind::Script => ResourceClass::Cpu,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

@@ -3,6 +3,7 @@
 
 pub mod cli;
 pub mod commit;
+pub mod components;
 pub mod deploy;
 pub mod evidence;
 pub mod executor;
