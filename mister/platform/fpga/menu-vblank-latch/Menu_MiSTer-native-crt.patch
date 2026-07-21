@@ -622,8 +622,9 @@ index 7d2ac3f..25b1378 100644
  	coef_wr <= 0;
  	sl_r <= FB_EN ? 2'b00 : scanlines;
  
-@@ -1335,6 +1373,7 @@ wire hdmi_tx_clk;
-+wire hdmi_base_tx_clk;
+@@ -1335,6 +1373,8 @@ wire hdmi_tx_clk;
++wire magik_crt_output = magik_active_route == 2'd1;
++wire magik_tx_clk = magik_crt_output ? magik_crt_clk : hdmi_tx_clk;
  `ifndef MISTER_DEBUG_NOHDMI
  	cyclonev_clkselect hdmi_clk_sw
  	( 
@@ -633,13 +634,13 @@ index 7d2ac3f..25b1378 100644
 @@ -1360,7 +1399,7 @@ hdmiclk_ddr
  	.datain_h(1'b0),
  	.datain_l(1'b1),
- 	.outclock(hdmi_tx_clk),
--	.dataout(HDMI_TX_CLK),
-+	.dataout(hdmi_base_tx_clk),
+-	.outclock(hdmi_tx_clk),
++	.outclock(magik_tx_clk),
+ 	.dataout(HDMI_TX_CLK),
  	.aclr(1'b0),
  	.aset(1'b0),
  	.oe(1'b1),
-@@ -1401,14 +1440,53 @@ always @(posedge hdmi_tx_clk) begin
+@@ -1401,14 +1441,25 @@ always @(posedge hdmi_tx_clk) begin
  	hdmi_out_hs <= hs;
  	hdmi_out_vs <= vs;
  	hdmi_out_de <= de;
@@ -650,32 +651,6 @@ index 7d2ac3f..25b1378 100644
 -assign HDMI_TX_VS = hdmi_out_vs;
 -assign HDMI_TX_DE = hdmi_out_de;
 -assign HDMI_TX_D  = hdmi_out_d;
-+wire magik_crt_tx_clk;
-+altddio_out
-+#(
-+	.extend_oe_disable("OFF"),
-+	.intended_device_family("Cyclone V"),
-+	.invert_output("OFF"),
-+	.lpm_hint("UNUSED"),
-+	.lpm_type("altddio_out"),
-+	.oe_reg("UNREGISTERED"),
-+	.power_up_high("OFF"),
-+	.width(1)
-+)
-+magik_crtclk_ddr
-+(
-+	.datain_h(1'b0),
-+	.datain_l(1'b1),
-+	.outclock(magik_crt_clk),
-+	.dataout(magik_crt_tx_clk),
-+	.aclr(1'b0),
-+	.aset(1'b0),
-+	.oe(1'b1),
-+	.outclocken(1'b1),
-+	.sclr(1'b0),
-+	.sset(1'b0)
-+);
-+
 +reg magik_crt_out_hs;
 +reg magik_crt_out_vs;
 +reg magik_crt_out_de;
@@ -687,8 +662,6 @@ index 7d2ac3f..25b1378 100644
 +	magik_crt_out_d <= {magik_crt_r, magik_crt_g, magik_crt_b};
 +end
 +
-+wire magik_crt_output = magik_active_route == 2'd1;
-+assign HDMI_TX_CLK = magik_crt_output ? magik_crt_tx_clk : hdmi_base_tx_clk;
 +assign HDMI_TX_HS = magik_crt_output ? magik_crt_out_hs : hdmi_out_hs;
 +assign HDMI_TX_VS = magik_crt_output ? magik_crt_out_vs : hdmi_out_vs;
 +assign HDMI_TX_DE = magik_crt_output ? magik_crt_out_de : hdmi_out_de;

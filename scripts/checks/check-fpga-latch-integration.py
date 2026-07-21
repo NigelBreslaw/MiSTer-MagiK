@@ -114,10 +114,9 @@ def main() -> None:
             "if(magik_lfb_apply_crt)",
             "if(magik_response_valid) io_dout_sys <= magik_response_data;",
             ".inclk({clk_vid, hdmi_clk_out, 2'b00})",
-            "wire hdmi_base_tx_clk;",
-            ".dataout(hdmi_base_tx_clk)",
-            "magik_crtclk_ddr",
-            "assign HDMI_TX_CLK = magik_crt_output ? magik_crt_tx_clk : hdmi_base_tx_clk;",
+            "wire magik_tx_clk = magik_crt_output ? magik_crt_clk : hdmi_tx_clk;",
+            ".outclock(magik_tx_clk)",
+            ".dataout(HDMI_TX_CLK)",
         )
         missing = [fragment for fragment in required if fragment not in patched]
         if missing:
@@ -145,6 +144,8 @@ def main() -> None:
             fail("patched Menu route is missing: " + ", ".join(menu_missing))
         if "cyclonev_clkselect magik_video_clk_sw" in menu_text:
             fail("CRT clock selector must live at the HDMI destination boundary")
+        if "magik_crtclk_ddr" in patched or "hdmi_base_tx_clk" in patched:
+            fail("DDIO clock generators must drive the HDMI clock pin directly")
         if "ddram ddr" in menu_text:
             fail("legacy DDR-clearing client remains in the patched Menu core")
 
