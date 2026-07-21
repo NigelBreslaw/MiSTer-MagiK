@@ -4950,6 +4950,7 @@ fn remote_trim(sess: &Session, path: &str) -> Option<String> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum IniEdit {
     MagikBoot,
+    MagikBootHdmi,
     SelectMain(String),
     ZaparooBoot,
     ArcadeVideo,
@@ -4967,6 +4968,7 @@ enum IniEdit {
 fn parse_ini_edit_args(args: &[String]) -> Result<IniEdit> {
     match args.first().map(String::as_str) {
         Some("magik-boot") => Ok(IniEdit::MagikBoot),
+        Some("magik-boot-hdmi") => Ok(IniEdit::MagikBootHdmi),
         Some("zaparoo-boot") => Ok(IniEdit::ZaparooBoot),
         Some("arcade-video") => Ok(IniEdit::ArcadeVideo),
         Some("menu-mode") => {
@@ -4994,8 +4996,8 @@ fn parse_ini_edit_args(args: &[String]) -> Result<IniEdit> {
 fn validate_ini_edit_local_args(args: &[String]) -> Result<()> {
     let expected = match args.first().map(String::as_str) {
         Some(
-            "magik-boot" | "zaparoo-boot" | "arcade-video" | "menu-auto" | "comment-main"
-            | "stock-boot",
+            "magik-boot" | "magik-boot-hdmi" | "zaparoo-boot" | "arcade-video" | "menu-auto"
+            | "comment-main" | "stock-boot",
         ) => 3,
         Some("menu-mode") => 4,
         Some("crt") => 6,
@@ -5004,7 +5006,7 @@ fn validate_ini_edit_local_args(args: &[String]) -> Result<()> {
     };
     if args.len() != expected {
         return Err(
-            "ini-edit-local needs <magik-boot|zaparoo-boot|arcade-video|menu-mode|menu-auto|crt|comment-main|stock-boot> ... <input> <output>"
+            "ini-edit-local needs <magik-boot|magik-boot-hdmi|zaparoo-boot|arcade-video|menu-mode|menu-auto|crt|comment-main|stock-boot> ... <input> <output>"
                 .into(),
         );
     }
@@ -5092,9 +5094,17 @@ fn edit_mister_ini(input: &str, edit: IniEdit) -> String {
 
     match edit {
         IniEdit::MagikBoot => {
+            set_ini_key(&mut lines, "MiSTer", "forced_scandoubler", "0");
+            set_ini_key(&mut lines, "MiSTer", "menu_pal", "0");
+            set_ini_key(&mut lines, "MiSTer", "direct_video", "2");
+            set_ini_key(&mut lines, "MiSTer", "main", "MiSTer_MagiK");
+            set_ini_key(&mut lines, "Menu", "video_mode", "8");
+        }
+        IniEdit::MagikBootHdmi => {
+            set_ini_key(&mut lines, "MiSTer", "forced_scandoubler", "0");
+            set_ini_key(&mut lines, "MiSTer", "menu_pal", "0");
             set_ini_key(&mut lines, "MiSTer", "direct_video", "0");
             set_ini_key(&mut lines, "MiSTer", "main", "MiSTer_MagiK");
-            set_ini_key(&mut lines, "Menu", "direct_video", "0");
             set_ini_key(&mut lines, "Menu", "video_mode", "8");
         }
         IniEdit::SelectMain(value) => {
@@ -5821,10 +5831,10 @@ fn doctor_findings(status: &Value) -> Vec<(String, String)> {
             format!("[MiSTer] main is not {expected_main}"),
         ));
     }
-    if ini_value(status, "MiSTer", "direct_video") != Some("0") {
+    if !matches!(ini_value(status, "MiSTer", "direct_video"), Some("0" | "2")) {
         findings.push((
             "warn".into(),
-            "[MiSTer] direct_video is not 0; launcher boot may use direct-video timings".into(),
+            "[MiSTer] direct_video is neither HDMI-only (0) nor automatic CRT/HDMI (2)".into(),
         ));
     }
     if ini_value(status, "arcade", "direct_video") != Some("1") {
@@ -5832,9 +5842,6 @@ fn doctor_findings(status: &Value) -> Vec<(String, String)> {
             "warn".into(),
             "[arcade] direct_video is not 1; normal arcade games will use scaler output".into(),
         ));
-    }
-    if ini_value(status, "Menu", "direct_video") != Some("0") {
-        findings.push(("error".into(), "[Menu] direct_video is not 0".into()));
     }
     if ini_value(status, "Menu", "video_mode") != Some("8") {
         findings.push(("warn".into(), "[Menu] video_mode is not 8".into()));
@@ -6433,7 +6440,7 @@ video_mode=14
 
         let edited = edit_mister_ini(ini, IniEdit::MagikBoot);
 
-        assert!(edited.contains("direct_video=0\r\nmain=MiSTer_MagiK ; old handoff"));
+        assert!(edited.contains("direct_video=2\r\nmain=MiSTer_MagiK ; old handoff"));
         assert!(edited
             .contains("[arcade_vertical]\r\ndirect_video=0\r\nvideo_mode=14\r\nvscale_mode=1"));
         assert!(edited.contains("[Menu]\r\ndirect_video=0\r\nvideo_mode=8 ; menu probe"));
@@ -6457,12 +6464,26 @@ video_mode=14
     }
 
     #[test]
-    fn magik_boot_edit_adds_menu_section_and_sets_global_direct_video_off() {
+    fn magik_boot_edit_defaults_to_auto_crt_with_hdmi_fallback() {
         let ini = "[MiSTer]\ndirect_video=1\n";
         let edited = edit_mister_ini(ini, IniEdit::MagikBoot);
 
-        assert!(edited.contains("[MiSTer]\ndirect_video=0\nmain=MiSTer_MagiK"));
-        assert!(edited.contains("[Menu]\ndirect_video=0\nvideo_mode=8"));
+        assert!(edited.contains(
+            "[MiSTer]\ndirect_video=2\nforced_scandoubler=0\nmenu_pal=0\nmain=MiSTer_MagiK"
+        ));
+        assert!(edited.contains("[Menu]\nvideo_mode=8"));
+    }
+
+    #[test]
+    fn magik_boot_hdmi_choice_uses_the_same_owned_keys() {
+        let ini = "[MiSTer]\ndirect_video=2\nmenu_pal=1\nforced_scandoubler=1\n";
+        let edited = edit_mister_ini(ini, IniEdit::MagikBootHdmi);
+
+        assert!(edited.contains("direct_video=0"));
+        assert!(edited.contains("menu_pal=0"));
+        assert!(edited.contains("forced_scandoubler=0"));
+        assert!(edited.contains("main=MiSTer_MagiK"));
+        assert!(edited.contains("[Menu]\nvideo_mode=8"));
     }
 
     #[test]
@@ -7052,12 +7073,11 @@ H: Handlers=event3 js0"#
         let texts: Vec<_> = findings.iter().map(|(_, text)| text.as_str()).collect();
         assert!(texts.contains(&"[MiSTer] main is not MiSTer_MagiK"));
         assert!(texts.contains(
-            &"[MiSTer] direct_video is not 0; launcher boot may use direct-video timings"
+            &"[MiSTer] direct_video is neither HDMI-only (0) nor automatic CRT/HDMI (2)"
         ));
         assert!(texts.contains(
             &"[arcade] direct_video is not 1; normal arcade games will use scaler output"
         ));
-        assert!(texts.contains(&"[Menu] direct_video is not 0"));
         assert!(texts.contains(&"[Menu] video_mode is not 8"));
         assert!(texts.contains(&"mister-magik-fb is not running"));
         assert!(texts.contains(&"/dev/fb0 samples as mostly_black"));

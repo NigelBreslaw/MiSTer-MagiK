@@ -35,7 +35,7 @@ printf 'format=mister-magik-fpga-release-v1\nplatform_contract_sha256=%s\nmagik_
   --latch-metadata "$APP/fpga/menu-magik-vblank-latch.metadata.txt" \
   --main-revision "$main" --magik-revision "$magik" >/dev/null
 
-printf '[MiSTer]\ndirect_video=0\n' >"$FAT/MiSTer.ini"
+printf '[MiSTer]\nmain=MiSTer\ndirect_video=0\nmenu_pal=0\nforced_scandoubler=0\n\n[Menu]\nvideo_mode=8\n' >"$FAT/MiSTer.ini"
 cp "$FAT/MiSTer.ini" "$TMP/MiSTer.ini.before-install"
 printf '::sysinit:/media/fat/MiSTer &\n' >"$TMP/inittab"
 run_installer() {
@@ -134,19 +134,30 @@ if MISTER_MAGIK_FAT="$FAT" MISTER_MAGIK_INITTAB="$TMP/inittab" \
   echo "noninteractive install unexpectedly succeeded" >&2
   exit 1
 fi
-grep -q 'currently only supports 1080p' "$TMP/noninteractive-install.log"
+grep -q 'supports automatic known-DAC CRT selection' "$TMP/noninteractive-install.log"
 grep -q 'interactive input is unavailable; installation refused' "$TMP/noninteractive-install.log"
 test "$(sha256sum "$FAT/MiSTer.ini")" = "$ini_before_confirmation"
 test "$(sha256sum "$TMP/inittab")" = "$inittab_before_confirmation"
+if MISTER_MAGIK_TEST_OUTPUT_MODE=invalid run_installer install >"$TMP/output-choice-invalid.log" 2>&1; then
+  echo "invalid output choice unexpectedly installed" >&2
+  exit 1
+fi
+grep -q 'test output mode must be auto or hdmi' "$TMP/output-choice-invalid.log"
+test "$(sha256sum "$FAT/MiSTer.ini")" = "$ini_before_confirmation"
 
 run_installer install >/dev/null
 assert_one_main MiSTer_MagiK
 assert_menu_1080p
+grep -q '^direct_video=2$' "$FAT/MiSTer.ini"
+grep -q '^menu_pal=0$' "$FAT/MiSTer.ini"
+grep -q '^forced_scandoubler=0$' "$FAT/MiSTer.ini"
+grep -qx auto "$APP/installer-output-mode-v1"
 cmp "$TMP/MiSTer.ini.before-install" "$FAT/MiSTer.ini.bak.before-magik"
 test ! -e "$FAT/MiSTer.ini.bak"
 grep -qx '::sysinit:/media/fat/MiSTer &' "$TMP/inittab"
 test -x "$FAT/MiSTer_MagiK"
 test -x "$APP/mister-magik-fb"
+printf 'user_after_install=keep\n' >>"$FAT/MiSTer.ini"
 
 # The installed-state menu is testable without optional host PTY tooling.
 ini_before_cancel="$(sha256sum "$FAT/MiSTer.ini")"
@@ -156,6 +167,8 @@ MISTER_MAGIK_TEST_REBOOT_TRACE="$TMP/reboot.trace" \
   run_installer_with_keys enter,enter >"$TMP/restore-reboot.log"
 assert_one_main MiSTer
 assert_menu_1080p
+grep -q '^direct_video=0$' "$FAT/MiSTer.ini"
+grep -q '^user_after_install=keep$' "$FAT/MiSTer.ini"
 test -f "$FAT/MiSTer.ini.bak.before-magik"
 grep -q 'TEST: normal reboot requested' "$TMP/restore-reboot.log"
 test "$(cat "$TMP/reboot.trace")" = "$(printf 'sync\nreboot')"
@@ -164,6 +177,10 @@ MISTER_MAGIK_TEST_REBOOT_TRACE="$TMP/reboot.trace" \
   run_installer_with_keys other install >"$TMP/install-reboot-skip.log"
 grep -q 'reboot skipped' "$TMP/install-reboot-skip.log"
 test ! -e "$TMP/reboot.trace"
+grep -q '^direct_video=2$' "$FAT/MiSTer.ini"
+MISTER_MAGIK_TEST_OUTPUT_MODE=hdmi run_installer install >/dev/null
+grep -q '^direct_video=2$' "$FAT/MiSTer.ini"
+grep -qx auto "$APP/installer-output-mode-v1"
 if run_installer_with_keys down,enter,other >"$TMP/menu-uninstall-cancel.log" 2>&1; then
   echo "menu uninstall cancellation unexpectedly succeeded" >&2
   exit 1
@@ -192,7 +209,7 @@ EOF
 log_user 0
 set timeout 5
 spawn env MISTER_MAGIK_FAT=$env(TEST_FAT) MISTER_MAGIK_INITTAB=$env(TEST_INITTAB) MISTER_MAGIK_TEST_MODE=1 MISTER_MAGIK_NO_PAUSE=1 $env(TEST_INSTALLER) install
-expect "currently only supports 1080p"
+expect "supports automatic known-DAC CRT selection"
 expect "Continue by pressing A/Enter"
 send -- "x"
 expect "cancelled; no changes made"
@@ -275,7 +292,10 @@ assert_one_main MiSTer
 assert_menu_1080p
 test -f "$APP/mister-magik-fb"
 test -f "$FAT/MiSTer.ini.bak.before-magik"
-run_installer install >/dev/null
+rm -f "$APP/installer-output-mode-v1"
+MISTER_MAGIK_TEST_OUTPUT_MODE=hdmi run_installer install >/dev/null
+grep -q '^direct_video=0$' "$FAT/MiSTer.ini"
+grep -qx hdmi "$APP/installer-output-mode-v1"
 
 ini_before="$(sha256sum "$FAT/MiSTer.ini")"
 inittab_before="$(sha256sum "$TMP/inittab")"

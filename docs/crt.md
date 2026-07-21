@@ -109,5 +109,11 @@ the resolved route from the literal INI value.
 The FPGA powers up on HDMI and remains there until a valid protocol-v3 request.
 Main owns crash and lifecycle fallback. A frontend failure must leave a black
 or HDMI-recoverable display and must never trigger a reboot. The attended CRT
-trial is volatile, bounded to 30 seconds, and restores the prior route on
+trial is volatile, bounded to 30 seconds, and restores HDMI on
 normal completion, error, or interruption.
+
+Fresh installation defaults to **Auto CRT/HDMI**, which writes
+`direct_video=2`, `menu_pal=0`, and `forced_scandoubler=0`; **HDMI only** writes
+`direct_video=0`. Both choices retain `[Menu] video_mode=8` as the HDMI
+fallback. The installer records the explicit choice for upgrades and restores
+only its owned INI keys from the pre-MagiK snapshot during restore or uninstall.

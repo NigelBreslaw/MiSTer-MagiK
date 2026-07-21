@@ -17,6 +17,7 @@ GUI_BIN="$APP_DIR/mister-magik-fb"
 SNAP_DIR="$APP_DIR/snapshots"
 PENDING="$FAT/.MiSTer.ini.magik.new"
 MANIFEST="$APP_DIR/platform-v2.manifest"
+OUTPUT_MODE_FILE="$APP_DIR/installer-output-mode-v1"
 INSTALLED_SCRIPT="$FAT/Scripts/MiSTer-MagiK.sh"
 LEGACY_INSTALLED_SCRIPT="$FAT/Scripts/mister-magik.sh"
 LEGACY_CHANNEL_SCRIPT="$FAT/Scripts/mister-magik-channel.sh"
@@ -188,8 +189,7 @@ choose_installed_action() {
 
 confirm_install() {
   echo
-  echo "MiSTer MagiK currently only supports 1080p."
-  echo "Other resolutions and CRT support are coming later."
+  echo "MiSTer MagiK supports automatic known-DAC CRT selection with safe HDMI fallback."
   echo
   echo "Continue by pressing A/Enter. Any other key cancels."
   if [ "${MISTER_MAGIK_TEST_MODE:-0}" = 1 ] && [ "${MISTER_MAGIK_TEST_CONFIRM_INSTALL:-0}" = 1 ]; then
@@ -203,6 +203,49 @@ confirm_install() {
     say "cancelled; no changes made."
     return 1
   fi
+}
+
+choose_output_mode() {
+  if [ -r "$OUTPUT_MODE_FILE" ]; then
+    OUTPUT_MODE="$(sed -n '1p' "$OUTPUT_MODE_FILE")"
+    case "$OUTPUT_MODE" in auto|hdmi) return 0 ;; esac
+    say "ERROR: invalid saved output choice."
+    return 1
+  fi
+  if [ "${MISTER_MAGIK_TEST_MODE:-0}" = 1 ]; then
+    OUTPUT_MODE="${MISTER_MAGIK_TEST_OUTPUT_MODE:-auto}"
+    case "$OUTPUT_MODE" in auto|hdmi) return 0 ;; esac
+    say "ERROR: test output mode must be auto or hdmi."
+    return 1
+  fi
+
+  OUTPUT_MODE=auto
+  while :; do
+    echo
+    echo "Choose launcher output. Known HDMI-to-analog DACs can select native 240p."
+    echo "Use UP/DOWN to choose, A/Enter to continue, or B/Escape to cancel."
+    if [ "$OUTPUT_MODE" = auto ]; then
+      echo "> Auto CRT/HDMI"
+      echo "  HDMI only"
+    else
+      echo "  Auto CRT/HDMI"
+      echo "> HDMI only"
+    fi
+    if ! read_menu_key; then
+      say "interactive input is unavailable; installation refused."
+      return 1
+    fi
+    case "$MENU_KEY" in
+      up|down) if [ "$OUTPUT_MODE" = auto ]; then OUTPUT_MODE=hdmi; else OUTPUT_MODE=auto; fi ;;
+      enter) return 0 ;;
+      cancel) say "cancelled; no changes made."; return 1 ;;
+    esac
+  done
+}
+
+save_output_mode() {
+  printf '%s\n' "$OUTPUT_MODE" >"$OUTPUT_MODE_FILE.new"
+  mv "$OUTPUT_MODE_FILE.new" "$OUTPUT_MODE_FILE"
 }
 
 confirm_uninstall() {
@@ -433,11 +476,93 @@ END {
   sync "$INI" 2>/dev/null || sync
 }
 
+ini_effective_value() {
+  source_file="$1"
+  wanted_section="$2"
+  wanted_key="$3"
+  awk -v wanted_section="$wanted_section" -v wanted_key="$wanted_key" '
+BEGIN { section = ""; found = 0; value = "" }
+{ sub(/\r$/, "") }
+/^[[:space:]]*\[[^]]+\]/ {
+  section = $0
+  sub(/^[[:space:]]*\[/, "", section)
+  sub(/\].*$/, "", section)
+  gsub(/[[:space:]]/, "", section)
+  next
+}
+tolower(section) == tolower(wanted_section) && $0 ~ /=/ {
+  key = $0
+  sub(/=.*/, "", key)
+  gsub(/[[:space:]]/, "", key)
+  if (tolower(key) == tolower(wanted_key)) {
+    value = $0
+    sub(/^[^=]*=[[:space:]]*/, "", value)
+    sub(/[[:space:]]*[;#].*$/, "", value)
+    found = 1
+  }
+}
+END { if (found) print value; exit(found ? 0 : 1) }
+' "$source_file"
+}
+
+write_ini_without_selected_key() {
+  selected_section="$1"
+  selected_key="$2"
+  cr="$(awk 'sub(/\r$/, "") { print "\r"; exit }' "$INI")"
+  awk -v selected_section="$selected_section" -v selected_key="$selected_key" -v cr="$cr" '
+BEGIN { section = "" }
+{ sub(/\r$/, "") }
+/^[[:space:]]*\[[^]]+\]/ {
+  section = $0
+  sub(/^[[:space:]]*\[/, "", section)
+  sub(/\].*$/, "", section)
+  gsub(/[[:space:]]/, "", section)
+  print $0 cr
+  next
+}
+tolower(section) == tolower(selected_section) && $0 ~ /=/ {
+  key = $0
+  sub(/=.*/, "", key)
+  gsub(/[[:space:]]/, "", key)
+  if (tolower(key) == tolower(selected_key)) {
+    print ";" $0 " ; MiSTer MagiK restored absent value" cr
+    next
+  }
+}
+{ print $0 cr }
+' "$INI" >"$PENDING"
+  mv "$PENDING" "$INI"
+}
+
+restore_installer_owned_ini() {
+  if [ ! -r "$INI_BACKUP" ]; then
+    write_ini_with_stock_main
+    return 0
+  fi
+  for owned in "MiSTer main" "MiSTer direct_video" "MiSTer menu_pal" \
+    "MiSTer forced_scandoubler" "Menu video_mode"; do
+    set -- $owned
+    if prior="$(ini_effective_value "$INI_BACKUP" "$1" "$2")"; then
+      write_ini_with_selected_value "$1" "$2" "$prior"
+    else
+      write_ini_without_selected_key "$1" "$2"
+    fi
+  done
+}
+
 write_ini_with_main() {
+  output_mode="$1"
   mkdir -p "$APP_DIR"
   backup_ini_before_magik
   write_ini_with_selected_value MiSTer main MiSTer_MagiK
   write_ini_with_selected_value Menu video_mode 8
+  write_ini_with_selected_value MiSTer menu_pal 0
+  write_ini_with_selected_value MiSTer forced_scandoubler 0
+  case "$output_mode" in
+    auto) write_ini_with_selected_value MiSTer direct_video 2 ;;
+    hdmi) write_ini_with_selected_value MiSTer direct_video 0 ;;
+    *) say "ERROR: unsupported output mode $output_mode"; return 1 ;;
+  esac
 }
 
 write_ini_with_stock_main() {
@@ -445,7 +570,10 @@ write_ini_with_stock_main() {
 }
 
 verify_stock_boot() {
-  ini_has_one_main MiSTer || { say "ERROR: MiSTer.ini does not select exactly one stock Main."; return 1; }
+  if ini_selects_magik; then
+    say "ERROR: MiSTer.ini still selects MiSTer MagiK."
+    return 1
+  fi
   stock_count="$(grep -c '^::sysinit:/media/fat/MiSTer[[:space:]]*&[[:space:]]*$' "$INITTAB" 2>/dev/null || true)"
   [ "$stock_count" = 1 ] || { say "ERROR: inittab does not contain exactly one stock Main entry."; return 1; }
   if grep -Eq '^::sysinit:/media/fat/(MiSTer_MagiK|mister-magik/boot\.sh)' "$INITTAB" 2>/dev/null; then
@@ -457,19 +585,21 @@ verify_stock_boot() {
 restore_stock_boot() {
   snapshot
   ensure_stock_inittab
-  write_ini_with_stock_main
+  restore_installer_owned_ini
   [ "${MISTER_MAGIK_TEST_MODE:-0}" = 1 ] || sync
   verify_stock_boot
 }
 
 install_magik() {
   confirm_install || return 1
+  choose_output_mode || return 1
   verify_platform || { say "ERROR: platform verification failed; boot configuration was not changed."; exit 1; }
   remove_legacy_root_legal_files
   snapshot
   chmod +x "$MAIN_BIN" "$GUI_BIN"
   ensure_stock_inittab
-  write_ini_with_main
+  write_ini_with_main "$OUTPUT_MODE"
+  save_output_mode
   [ "${MISTER_MAGIK_TEST_MODE:-0}" = 1 ] || sync
   say "installed. Reboot to start MiSTer MagiK."
   offer_normal_reboot
