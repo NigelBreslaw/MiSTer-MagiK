@@ -10,7 +10,8 @@ module tb_mister_magik_crt_reader;
 	wire ready_toggle,ready_bank,reader_valid,fallback,timeout_error;
 	wire [15:0] timeout_count,video_pixel; wire ddram_clk,rd,we;
 	wire [7:0] burst,be; wire [28:0] addr; wire [63:0] din;
-	integer bursts=0, beats_left=0, delay_count=0, seed=0;
+	integer bursts=0, beats_left=0, delay_count=0;
+	reg [15:0] seed=0;
 	mister_magik_crt_reader #(.TIMEOUT_CYCLES(12)) dut(
 		.clk_sys(clk),.reset(reset),.frame_base(frame_base),.frame_width(width),
 		.frame_height(height),.frame_stride(stride),.request_toggle(request_toggle),
@@ -27,7 +28,7 @@ module tb_mister_magik_crt_reader;
 		if(rd) begin bursts=bursts+1; beats_left=burst; delay_count=2; seed=seed+1000; end
 		else if(delay_count>0) delay_count=delay_count-1;
 		else if(beats_left>0) begin
-			dout<={seed+3,seed+2,seed+1,seed}; seed=seed+4;
+			dout<={seed+16'd3,seed+16'd2,seed+16'd1,seed}; seed=seed+16'd4;
 			dout_ready<=1; beats_left=beats_left-1;
 		end
 	end

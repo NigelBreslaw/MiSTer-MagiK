@@ -63,8 +63,8 @@ keeps the version-2 words in their existing positions and appends route data.
 
 ### Set command `0x57`
 
-Words 0-9 retain the framebuffer route fields. Word 10 still commits the
-sequence. Word 11 stages the requested output route for that commit:
+Words 0-9 retain the framebuffer route fields and word 10 still commits the
+sequence. The requested output route is staged in word 0 bits 7-6:
 
 - `0`: HDMI;
 - `1`: CRT 640x240p60.
@@ -80,7 +80,7 @@ Words 0-10 retain the version-2 layout. Appended words are:
 
 | Word | Meaning |
 | ---: | --- |
-| 11 | requested route |
+| 11 | most recently requested route |
 | 12 | active route |
 | 13 | reader flags: valid, fallback, underrun, timeout |
 | 14 | underrun count |

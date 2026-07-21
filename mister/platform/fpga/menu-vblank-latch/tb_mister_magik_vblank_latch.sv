@@ -12,6 +12,7 @@ module tb_mister_magik_vblank_latch;
 
 	reg clk_sys = 1'b0;
 	reg hdmi_vbl = 1'b0;
+	reg crt_vblank = 1'b0;
 	reg cmd_start = 1'b0;
 	reg cmd_data = 1'b0;
 	reg [7:0] cmd_id = 8'd0;
@@ -22,10 +23,15 @@ module tb_mister_magik_vblank_latch;
 	reg [11:0] active_lfb_width = 12'd0;
 	reg [11:0] active_lfb_height = 12'd0;
 	reg [13:0] active_lfb_stride = 14'd0;
+	reg [15:0] reader_flags = 16'd0;
+	reg [15:0] reader_underrun_count = 16'd0;
+	reg [15:0] reader_timeout_count = 16'd0;
 
 	wire response_valid;
 	wire [15:0] response_data;
 	wire apply;
+	wire apply_hdmi;
+	wire apply_crt;
 	wire route_en;
 	wire route_flt;
 	wire [5:0] route_fmt;
@@ -43,6 +49,8 @@ module tb_mister_magik_vblank_latch;
 	wire [15:0] post_count;
 	wire [15:0] flip_count;
 	wire [15:0] drop_count;
+	wire [1:0] requested_route;
+	wire [1:0] active_route;
 
 	integer apply_count = 0;
 	reg [7:0] requirement_coverage = 8'd0;
@@ -60,6 +68,7 @@ module tb_mister_magik_vblank_latch;
 	mister_magik_vblank_latch dut (
 		.clk_sys(clk_sys),
 		.hdmi_vbl(hdmi_vbl),
+		.crt_vblank(crt_vblank),
 		.cmd_start(cmd_start),
 		.cmd_data(cmd_data),
 		.cmd_id(cmd_id),
@@ -70,9 +79,14 @@ module tb_mister_magik_vblank_latch;
 		.active_lfb_width(active_lfb_width),
 		.active_lfb_height(active_lfb_height),
 		.active_lfb_stride(active_lfb_stride),
+		.reader_flags(reader_flags),
+		.reader_underrun_count(reader_underrun_count),
+		.reader_timeout_count(reader_timeout_count),
 		.response_valid(response_valid),
 		.response_data(response_data),
 		.apply(apply),
+		.apply_hdmi(apply_hdmi),
+		.apply_crt(apply_crt),
 		.route_en(route_en),
 		.route_flt(route_flt),
 		.route_fmt(route_fmt),
@@ -89,7 +103,9 @@ module tb_mister_magik_vblank_latch;
 		.active_seq(active_seq),
 		.post_count(post_count),
 		.flip_count(flip_count),
-		.drop_count(drop_count)
+		.drop_count(drop_count),
+		.requested_route(requested_route),
+		.active_route(active_route)
 	);
 
 	always #5 clk_sys = ~clk_sys;
@@ -287,11 +303,13 @@ module tb_mister_magik_vblank_latch;
 		check_ack(SET_LATCH, 16'h4D47);
 		check_ack(GET_LATCH, 16'h4D48);
 		check_ack(GET_CAPS, 16'h4D49);
-		expect_caps(4'd0, 16'd2);
+		expect_caps(4'd0, 16'd3);
 		expect_caps(4'd1, 16'h0007);
 		expect_caps(4'd2, 16'd1366);
 		expect_caps(4'd3, 16'd768);
 		expect_caps(4'd4, 16'd2736);
+		expect_caps(4'd5, 16'h0003);
+		expect_caps(4'd6, 16'd1);
 		expect_caps(4'd15, 16'd0);
 		requirement_coverage[0] = 1'b1; // LATCH-001
 		check_unrelated_ack();
@@ -378,7 +396,14 @@ module tb_mister_magik_vblank_latch;
 		expect_status(4'd8, 16'd1280);
 		expect_status(4'd9, 16'd720);
 		expect_status(4'd10, 16'd2560);
-		expect_status(4'd15, 16'd0);
+		expect_status(4'd11, 16'd0);
+		expect_status(4'd12, 16'd0);
+		reader_flags = 16'h000f;
+		reader_underrun_count = 16'd7;
+		reader_timeout_count = 16'd8;
+		expect_status(4'd13, 16'h000f);
+		expect_status(4'd14, 16'd7);
+		expect_status(4'd15, 16'd8);
 		requirement_coverage[5] = 1'b1; // LATCH-006
 
 		// Force the natural 16-bit wrap boundaries, then exercise them normally.
@@ -403,6 +428,20 @@ module tb_mister_magik_vblank_latch;
 		raise_vblank_and_wait_for_flip(16'h0001, 4);
 		expect16(active_seq, 16'h0000, "active sequence wrap");
 		requirement_coverage[6] = 1'b1; // LATCH-007
+		lower_vblank();
+
+		// CRT requests ignore HDMI blank and apply only at the CRT boundary.
+		send_route(16'hC06A, 32'h227E9000, 12'd640, 12'd240,
+		           12'd0, 12'd639, 12'd0, 12'd239, 14'd1280, 16'h0042);
+		expect16({14'd0, requested_route}, 16'd1, "requested CRT route");
+		@(negedge clk_sys); hdmi_vbl = 1'b1; idle_cycles(5);
+		if((flip_count != 1) || (apply_count != 4) || !pending)
+			fail("CRT request applied on HDMI boundary");
+		lower_vblank();
+		@(negedge clk_sys); crt_vblank = 1'b1; idle_cycles(5);
+		if((flip_count != 2) || (apply_count != 5) || active_route != 1)
+			fail("CRT request did not apply at CRT boundary");
+		@(negedge clk_sys); crt_vblank = 1'b0; idle_cycles(4);
 
 		if(requirement_coverage !== 8'hFF) fail("not all RTL requirement coverpoints hit");
 		$display("COVER LATCH-001..LATCH-008 all RTL requirements hit");

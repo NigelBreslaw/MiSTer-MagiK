@@ -28,8 +28,8 @@ checks = [
 for text, pattern in checks:
     if re.search(pattern, text) is None:
         raise SystemExit(f"latch protocol generated contract mismatch: {pattern}")
-if len(spec["status_words"]) != 11 or "STATUS_WORD_COUNT: usize = 11" not in rust:
+if len(spec["status_words"]) != 16 or "STATUS_WORD_COUNT: usize = 16" not in rust:
     raise SystemExit("latch status word schema mismatch")
-if len(spec["capability_words"]) != 5 or "CAPS_WORD_COUNT: usize = 5" not in rust:
+if len(spec["capability_words"]) != 7 or "CAPS_WORD_COUNT: usize = 7" not in rust:
     raise SystemExit("latch capability word schema mismatch")
 print("latch protocol contract: ok")

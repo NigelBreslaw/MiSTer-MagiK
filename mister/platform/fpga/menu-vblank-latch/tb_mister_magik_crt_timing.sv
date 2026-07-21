@@ -8,7 +8,7 @@ module tb_mister_magik_crt_timing;
 	wire hsync,vsync,de,hblank,vblank,frame_start,vblank_start;
 	wire [7:0] test_r,test_g,test_b;
 	integer ticks=0, active_ticks=0, hsync_ticks=0, vsync_ticks=0;
-	integer frame_pulses=0, vblank_pulses=0, ce_gap=0; reg old_ce=0;
+	integer frame_pulses=0, vblank_pulses=0, ce_gap=0; reg old_ce=0, seen_ce=0;
 	mister_magik_crt_timing dut(.clk_video(clk_video),.reset(reset),
 		.test_pattern_enable(test_pattern_enable),.ce_pixel(ce_pixel),.x(x),.y(y),
 		.hsync(hsync),.vsync(vsync),.de(de),.hblank(hblank),.vblank(vblank),
@@ -20,7 +20,8 @@ module tb_mister_magik_crt_timing;
 	always @(negedge clk_video) if(!reset) begin
 		if(ce_pixel && old_ce) fail("CE_PIXEL high on adjacent clocks");
 		if(ce_pixel) begin
-			if(ce_gap!=1) fail("CE_PIXEL is not divide-by-two"); ce_gap=0; ticks=ticks+1;
+			if(seen_ce && ce_gap!=1) fail("CE_PIXEL is not divide-by-two");
+			seen_ce=1; ce_gap=0; ticks=ticks+1;
 			if(de) active_ticks=active_ticks+1;
 			if(!hsync) hsync_ticks=hsync_ticks+1;
 			if(!vsync) vsync_ticks=vsync_ticks+1;
@@ -39,7 +40,7 @@ module tb_mister_magik_crt_timing;
 		old_ce=ce_pixel;
 	end
 	initial begin
-		repeat(4) @(posedge clk_video); reset=0; ce_gap=1;
+		repeat(4) @(posedge clk_video); reset=0;
 		wait(frame_pulses==1); @(negedge clk_video);
 		if(ticks!=800*262) fail("incorrect pixel ticks per frame");
 		if(active_ticks!=640*240) fail("incorrect active rectangle");

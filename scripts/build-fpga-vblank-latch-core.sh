@@ -6,8 +6,11 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PATCH="$ROOT/mister/platform/fpga/menu-vblank-latch/Menu_MiSTer-vblank-latched-fbuf.patch"
+CRT_PATCH="$ROOT/mister/platform/fpga/menu-vblank-latch/Menu_MiSTer-native-crt.patch"
 LATCH_RTL="$ROOT/mister/platform/fpga/menu-vblank-latch/mister_magik_vblank_latch.sv"
 LATCH_PROTOCOL="$ROOT/mister/platform/fpga/menu-vblank-latch/mister_magik_latch_protocol.svh"
+CRT_TIMING_RTL="$ROOT/mister/platform/fpga/menu-vblank-latch/mister_magik_crt_timing.sv"
+CRT_READER_RTL="$ROOT/mister/platform/fpga/menu-vblank-latch/mister_magik_crt_reader.sv"
 OUT_DIR="${MISTER_FPGA_OUT_DIR:-$ROOT/build/fpga-vblank-latch}"
 WORK_DIR="${MISTER_MENU_BUILD_DIR:-$OUT_DIR/Menu_MiSTer-vblank-latch-work}"
 if [[ -n "${MISTER_MENU_DIR:-}" ]]; then
@@ -79,6 +82,10 @@ if [[ ! -f "$LATCH_PROTOCOL" ]]; then
   echo "missing latch protocol header: $LATCH_PROTOCOL" >&2
   exit 1
 fi
+if [[ ! -f "$CRT_PATCH" || ! -f "$CRT_TIMING_RTL" || ! -f "$CRT_READER_RTL" ]]; then
+  echo "missing native CRT integration input" >&2
+  exit 1
+fi
 
 MENU_ABS="$(abs_path "$MENU_DIR")"
 
@@ -129,9 +136,13 @@ case "$APPLY_PATCH" in
       echo "patch does not apply cleanly to $MENU_ABS" >&2
       git -C "$WORK_DIR" apply --recount --check "$PATCH"
     fi
+    git -C "$WORK_DIR" apply --recount --ignore-space-change --check "$CRT_PATCH"
+    git -C "$WORK_DIR" apply --recount --ignore-space-change --whitespace=nowarn "$CRT_PATCH"
     cp "$LATCH_RTL" "$WORK_DIR/sys/mister_magik_vblank_latch.sv"
     cp "$LATCH_PROTOCOL" "$WORK_DIR/sys/mister_magik_latch_protocol.svh"
-    printf '\nset_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_vblank_latch.sv\n' >> "$WORK_DIR/menu.qsf"
+    cp "$CRT_TIMING_RTL" "$WORK_DIR/sys/mister_magik_crt_timing.sv"
+    cp "$CRT_READER_RTL" "$WORK_DIR/sys/mister_magik_crt_reader.sv"
+    printf '\nset_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_vblank_latch.sv\nset_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_crt_timing.sv\nset_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_crt_reader.sv\n' >> "$WORK_DIR/menu.qsf"
     ;;
 esac
 if [[ ! "$BUILD_DATE" =~ ^[0-9]{6}$ ]]; then
@@ -180,8 +191,11 @@ PY
   git -C "$MENU_ABS" rev-parse HEAD 2>/dev/null | sed 's/^/source_commit=/'
   git -C "$MENU_ABS" status --short 2>/dev/null | sed 's/^/source_status=/'
   shasum -a 256 "$PATCH" | awk '{print "patch_sha256="$1}'
+  shasum -a 256 "$CRT_PATCH" | awk '{print "crt_patch_sha256="$1}'
   shasum -a 256 "$LATCH_RTL" | awk '{print "latch_rtl_sha256="$1}'
   shasum -a 256 "$LATCH_PROTOCOL" | awk '{print "latch_protocol_sha256="$1}'
+  shasum -a 256 "$CRT_TIMING_RTL" | awk '{print "crt_timing_rtl_sha256="$1}'
+  shasum -a 256 "$CRT_READER_RTL" | awk '{print "crt_reader_rtl_sha256="$1}'
   echo "apply_patch=$APPLY_PATCH"
   echo "build_date=$BUILD_DATE"
   echo "work_dir=$WORK_DIR"

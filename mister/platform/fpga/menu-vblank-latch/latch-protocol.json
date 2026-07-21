@@ -5,10 +5,15 @@
   "latch_magic": 19783,
   "status_magic": 19784,
   "caps_magic": 19785,
-  "protocol_version": 2,
-  "capability_words": ["protocol_version", "flags", "max_width", "max_height", "max_stride_bytes"],
+  "protocol_version": 3,
+  "capability_words": [
+    "protocol_version", "flags", "max_width", "max_height", "max_stride_bytes",
+    "supported_routes", "timing_table_version"
+  ],
   "status_words": [
     "active_seq", "pending_seq", "flags", "flip_count", "post_count",
-    "drop_count", "base_low", "base_high", "width", "height", "stride"
+    "drop_count", "base_low", "base_high", "width", "height", "stride",
+    "requested_route", "active_route", "reader_flags", "underrun_count",
+    "timeout_count"
   ]
 }

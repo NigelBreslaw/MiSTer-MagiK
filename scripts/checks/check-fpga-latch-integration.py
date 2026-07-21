@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Nigel Breslaw
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Apply and structurally verify the latch-only Menu integration patch."""
+"""Apply and structurally verify the Menu latch and native CRT patches."""
 
 from __future__ import annotations
 
@@ -72,33 +72,73 @@ def main() -> None:
         fail("upstream opcode conflict: " + "; ".join(conflicts))
 
     patch = root / "mister/platform/fpga/menu-vblank-latch/Menu_MiSTer-vblank-latched-fbuf.patch"
+    crt_patch = root / "mister/platform/fpga/menu-vblank-latch/Menu_MiSTer-native-crt.patch"
     rtl = root / "mister/platform/fpga/menu-vblank-latch/mister_magik_vblank_latch.sv"
     protocol = root / "mister/platform/fpga/menu-vblank-latch/mister_magik_latch_protocol.svh"
+    crt_timing = root / "mister/platform/fpga/menu-vblank-latch/mister_magik_crt_timing.sv"
+    crt_reader = root / "mister/platform/fpga/menu-vblank-latch/mister_magik_crt_reader.sv"
     with tempfile.TemporaryDirectory(prefix="mister-magik-fpga-integration-") as temporary:
         work = Path(temporary) / "Menu_MiSTer"
         shutil.copytree(menu, work, ignore=shutil.ignore_patterns(".git", "db", "output_files"))
         subprocess.run(["git", "apply", "--check", str(patch)], cwd=work, check=True)
         subprocess.run(["git", "apply", str(patch)], cwd=work, check=True)
+        subprocess.run(
+            ["git", "apply", "--ignore-space-change", "--check", str(crt_patch)],
+            cwd=work,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "apply", "--ignore-space-change", str(crt_patch)],
+            cwd=work,
+            check=True,
+        )
         shutil.copy2(rtl, work / "sys/mister_magik_vblank_latch.sv")
         shutil.copy2(protocol, work / "sys/mister_magik_latch_protocol.svh")
+        shutil.copy2(crt_timing, work / "sys/mister_magik_crt_timing.sv")
+        shutil.copy2(crt_reader, work / "sys/mister_magik_crt_reader.sv")
         with (work / "menu.qsf").open("a") as output:
-            output.write("\nset_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_vblank_latch.sv\n")
+            output.write(
+                "\nset_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_vblank_latch.sv\n"
+                "set_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_crt_timing.sv\n"
+                "set_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_crt_reader.sv\n"
+            )
 
         patched = (work / "sys/sys_top.v").read_text()
         required = (
             "mister_magik_vblank_latch magik_vblank_latch",
+            ".crt_vblank(magik_crt_vblank)",
+            ".apply_crt(magik_lfb_apply_crt)",
             ".cmd_start(io_uio && io_strobe && !has_cmd)",
             ".cmd_data(io_uio && io_strobe && has_cmd)",
-            "if(magik_lfb_apply)",
+            "if(magik_lfb_apply_hdmi)",
+            "if(magik_lfb_apply_crt)",
             "if(magik_response_valid) io_dout_sys <= magik_response_data;",
         )
         missing = [fragment for fragment in required if fragment not in patched]
         if missing:
             fail("patched integration is missing: " + ", ".join(missing))
         qsf_text = (work / "menu.qsf").read_text()
-        assignment = "SYSTEMVERILOG_FILE sys/mister_magik_vblank_latch.sv"
-        if qsf_text.count(assignment) != 1:
-            fail("generated QSF must contain exactly one latch RTL assignment")
+        for module in (
+            "mister_magik_vblank_latch.sv",
+            "mister_magik_crt_timing.sv",
+            "mister_magik_crt_reader.sv",
+        ):
+            assignment = f"SYSTEMVERILOG_FILE sys/{module}"
+            if qsf_text.count(assignment) != 1:
+                fail(f"generated QSF must contain exactly one {module} assignment")
+
+        menu_text = (work / "menu.sv").read_text()
+        menu_required = (
+            "mister_magik_crt_timing crt_timing",
+            "mister_magik_crt_reader crt_reader",
+            "cyclonev_clkselect magik_video_clk_sw",
+            "assign VGA_DE  = MAGIK_CRT_ACTIVE",
+        )
+        menu_missing = [fragment for fragment in menu_required if fragment not in menu_text]
+        if menu_missing:
+            fail("patched Menu route is missing: " + ", ".join(menu_missing))
+        if "ddram ddr" in menu_text:
+            fail("legacy DDR-clearing client remains in the patched Menu core")
 
     print(f"COVER LATCH-009 pinned Menu integration and opcode ownership ({commit})")
     print("FPGA latch integration check passed")
