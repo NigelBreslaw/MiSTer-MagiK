@@ -26,6 +26,9 @@ const RUNTIME_SETTINGS_ENV: &str = "MISTER_MAGIK_RUNTIME_SETTINGS_V1";
 pub enum ResolvedOutputRoute {
     Hdmi,
     Crt240p60,
+    Crt288p50,
+    Crt480p60,
+    Crt576p50,
 }
 
 impl ResolvedOutputRoute {
@@ -46,18 +49,34 @@ impl ResolvedOutputRoute {
         match output? {
             "hdmi" => Some(Self::Hdmi),
             "crt-240p60" => Some(Self::Crt240p60),
+            "crt-288p50" => Some(Self::Crt288p50),
+            "crt-480p60" => Some(Self::Crt480p60),
+            "crt-576p50" => Some(Self::Crt576p50),
             _ => None,
         }
     }
 
     pub const fn is_crt(self) -> bool {
-        matches!(self, Self::Crt240p60)
+        !matches!(self, Self::Hdmi)
     }
 
     pub const fn label(self) -> &'static str {
         match self {
             Self::Hdmi => "hdmi",
             Self::Crt240p60 => "crt-240p60",
+            Self::Crt288p50 => "crt-288p50",
+            Self::Crt480p60 => "crt-480p60",
+            Self::Crt576p50 => "crt-576p50",
+        }
+    }
+
+    const fn progressive_geometry(self) -> Option<VideoModeGeometry> {
+        match self {
+            Self::Hdmi => None,
+            Self::Crt240p60 => Some(VideoModeGeometry::new(640, 240)),
+            Self::Crt288p50 => Some(VideoModeGeometry::new(640, 288)),
+            Self::Crt480p60 => Some(VideoModeGeometry::new(640, 480)),
+            Self::Crt576p50 => Some(VideoModeGeometry::new(640, 576)),
         }
     }
 }
@@ -132,12 +151,11 @@ impl UiDisplayPlan {
             .as_deref()
             .and_then(ResolvedOutputRoute::from_runtime_settings_v1)
             .unwrap_or(ResolvedOutputRoute::Hdmi);
-        if resolved_route == ResolvedOutputRoute::Crt240p60 {
-            return Self::from_output_with_policy(
-                640,
-                240,
-                true,
-                "main-runtime-settings-crt-240p60",
+        if let Some(geometry) = resolved_route.progressive_geometry() {
+            return Self::from_geometry_with_route(
+                geometry,
+                resolved_route,
+                "main-runtime-settings-crt",
                 UiFramebufferSizePolicy::Auto,
             );
         }
@@ -169,12 +187,12 @@ impl UiDisplayPlan {
         let resolved_route = runtime_settings
             .and_then(ResolvedOutputRoute::from_runtime_settings_v1)
             .unwrap_or(ResolvedOutputRoute::Hdmi);
-        if resolved_route == ResolvedOutputRoute::Crt240p60 {
-            return Some(Self::from_output(
-                640,
-                240,
-                true,
+        if let Some(geometry) = resolved_route.progressive_geometry() {
+            return Some(Self::from_geometry_with_route(
+                geometry,
+                resolved_route,
                 "test-runtime-settings-crt",
+                UiFramebufferSizePolicy::Auto,
             ));
         }
         if let Some(runtime) = runtime {
@@ -201,16 +219,15 @@ impl UiDisplayPlan {
                 .value("MiSTer", "forced_scandoubler")
                 .or_else(|| parsed.value("global", "forced_scandoubler"))
                 .is_some_and(|value| value == "1");
-            let (output_w, output_h) = match (pal, scandoubler) {
-                (false, false) => (640, 240),
-                (false, true) => (640, 480),
-                (true, false) => (640, 288),
-                (true, true) => (640, 576),
+            let route = match (pal, scandoubler) {
+                (false, false) => ResolvedOutputRoute::Crt240p60,
+                (false, true) => ResolvedOutputRoute::Crt480p60,
+                (true, false) => ResolvedOutputRoute::Crt288p50,
+                (true, true) => ResolvedOutputRoute::Crt576p50,
             };
-            return Some(Self::from_output_with_policy(
-                output_w,
-                output_h,
-                true,
+            return Some(Self::from_geometry_with_route(
+                route.progressive_geometry()?,
+                route,
                 "mister-ini-direct-video",
                 fb_policy,
             ));
@@ -320,6 +337,20 @@ impl UiDisplayPlan {
         source: &'static str,
         fb_policy: UiFramebufferSizePolicy,
     ) -> Self {
+        let output_route = if direct_video {
+            ResolvedOutputRoute::Crt240p60
+        } else {
+            ResolvedOutputRoute::Hdmi
+        };
+        Self::from_geometry_with_route(geometry, output_route, source, fb_policy)
+    }
+
+    fn from_geometry_with_route(
+        geometry: VideoModeGeometry,
+        output_route: ResolvedOutputRoute,
+        source: &'static str,
+        fb_policy: UiFramebufferSizePolicy,
+    ) -> Self {
         let (fb_w, fb_h) =
             fb_policy.framebuffer_size(geometry.output_w as usize, geometry.output_h as usize);
         Self {
@@ -329,12 +360,8 @@ impl UiDisplayPlan {
             output_h: geometry.output_h,
             scan_w: geometry.scan_w,
             scan_h: geometry.scan_h,
-            direct_video,
-            output_route: if direct_video {
-                ResolvedOutputRoute::Crt240p60
-            } else {
-                ResolvedOutputRoute::Hdmi
-            },
+            direct_video: output_route.is_crt(),
+            output_route,
             fb_policy,
             source,
             fallback: false,
@@ -960,22 +987,40 @@ mod tests {
     }
 
     #[test]
-    fn resolved_crt_route_overrides_detected_hdmi_geometry() {
+    fn resolved_crt_modes_override_detected_hdmi_geometry() {
         let runtime = RuntimeDisplayGeometry::from_video_words(640, 480, 640, 480);
-        let ini =
-            "[MiSTer]\ndirect_video=1\nmenu_pal=1\nforced_scandoubler=1\n[Menu]\nvideo_mode=8\n";
-        let plan = UiDisplayPlan::from_runtime_or_mister_ini_text(
-            runtime,
-            ini,
-            Some("schema=1&output=crt-240p60"),
-        )
-        .expect("plan");
+        let ini = "[MiSTer]\ndirect_video=2\n[Menu]\nvideo_mode=8\n";
+        for (settings, route, height) in [
+            (
+                "schema=1&output=crt-240p60",
+                ResolvedOutputRoute::Crt240p60,
+                240,
+            ),
+            (
+                "schema=1&output=crt-288p50",
+                ResolvedOutputRoute::Crt288p50,
+                288,
+            ),
+            (
+                "schema=1&output=crt-480p60",
+                ResolvedOutputRoute::Crt480p60,
+                480,
+            ),
+            (
+                "schema=1&output=crt-576p50",
+                ResolvedOutputRoute::Crt576p50,
+                576,
+            ),
+        ] {
+            let plan = UiDisplayPlan::from_runtime_or_mister_ini_text(runtime, ini, Some(settings))
+                .expect("plan");
 
-        assert_eq!(plan.source, "test-runtime-settings-crt");
-        assert_eq!((plan.output_w, plan.output_h), (640, 240));
-        assert_eq!((plan.fb_w, plan.fb_h), (640, 240));
-        assert!(plan.direct_video);
-        assert_eq!(plan.output_route, ResolvedOutputRoute::Crt240p60);
+            assert_eq!(plan.source, "test-runtime-settings-crt");
+            assert_eq!((plan.output_w, plan.output_h), (640, height));
+            assert_eq!((plan.fb_w, plan.fb_h), (640, height as usize));
+            assert!(plan.direct_video);
+            assert_eq!(plan.output_route, route);
+        }
     }
 
     #[test]
