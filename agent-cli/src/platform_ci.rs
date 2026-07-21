@@ -54,7 +54,7 @@ pub fn resolve(
 ) -> Result<Candidate, String> {
     if let Some(run) = exact_success(ci.runs(head_sha)?, branch, head_sha)? {
         progress("reusing exact verified platform candidate")?;
-        return download_and_verify(
+        match download_and_verify(
             ci,
             repository,
             run.id,
@@ -62,7 +62,10 @@ pub fn resolve(
             &run.head_branch,
             destination,
             true,
-        );
+        ) {
+            Ok(candidate) => return Ok(candidate),
+            Err(_) => progress("exact platform candidate is unavailable; dispatching replacement")?,
+        }
     }
     progress("dispatching platform candidate workflow")?;
     ci.dispatch(branch)?;
@@ -415,6 +418,7 @@ mod tests {
     struct FakeCi {
         batches: VecDeque<Vec<Run>>,
         dispatches: usize,
+        downloads: VecDeque<Result<(), String>>,
     }
 
     impl PlatformCi for FakeCi {
@@ -428,7 +432,9 @@ mod tests {
         }
 
         fn download(&mut self, _: u64, _: &Path) -> Result<(), String> {
-            Err("fixture download intentionally unavailable".into())
+            self.downloads
+                .pop_front()
+                .unwrap_or_else(|| Err("fixture download intentionally unavailable".into()))
         }
     }
 
@@ -480,6 +486,7 @@ mod tests {
         let mut ci = FakeCi {
             batches: VecDeque::from([Vec::new(), vec![run(3, "wanted", "failure")]]),
             dispatches: 0,
+            downloads: VecDeque::new(),
         };
         let result = resolve(
             &mut ci,
@@ -487,6 +494,28 @@ mod tests {
             "main",
             "wanted",
             Path::new("/tmp/unused-platform-fixture"),
+            |_| Ok(()),
+        );
+        assert!(result.is_err());
+        assert_eq!(ci.dispatches, 1);
+    }
+
+    #[test]
+    fn expired_exact_candidate_dispatches_replacement() {
+        let mut ci = FakeCi {
+            batches: VecDeque::from([
+                vec![run(2, "wanted", "success")],
+                vec![run(3, "wanted", "failure")],
+            ]),
+            dispatches: 0,
+            downloads: VecDeque::from([Err("artifact expired".into())]),
+        };
+        let result = resolve(
+            &mut ci,
+            Path::new("."),
+            "main",
+            "wanted",
+            Path::new("target/unused"),
             |_| Ok(()),
         );
         assert!(result.is_err());
