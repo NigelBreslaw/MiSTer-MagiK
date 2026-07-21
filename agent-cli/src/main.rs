@@ -433,23 +433,25 @@ fn deliver(
         };
         let mut deployment = agent_cli::deploy::plan(repository, paths)?;
         deployment.kind = recorded_delivery_kind(deployment.kind, &pending.impact);
-        let candidate = agent_cli::platform_ci::resolve_repository(repository, |progress| {
-            reporter.emit(EventKind::Progress, "platform-ci", progress, None)
-        })?;
-        evidence.attest_delivery(
-            task_id,
-            pending
-                .requirement_id
-                .as_deref()
-                .unwrap_or("github-actions.rbf-build"),
-            "platform-bundle.yml",
-            "main",
-            &sha,
-            &serde_json::to_string(&candidate).map_err(|error| error.to_string())?,
-        )?;
-        pending.state = "external_verified".into();
-        evidence.save_delivery(&pending)?;
-        deployment.platform_candidate = Some(candidate);
+        if delivery_requires_platform_candidate(&pending.impact) {
+            let candidate = agent_cli::platform_ci::resolve_repository(repository, |progress| {
+                reporter.emit(EventKind::Progress, "platform-ci", progress, None)
+            })?;
+            evidence.attest_delivery(
+                task_id,
+                pending
+                    .requirement_id
+                    .as_deref()
+                    .unwrap_or("github-actions.rbf-build"),
+                "platform-bundle.yml",
+                "main",
+                &sha,
+                &serde_json::to_string(&candidate).map_err(|error| error.to_string())?,
+            )?;
+            pending.state = "external_verified".into();
+            evidence.save_delivery(&pending)?;
+            deployment.platform_candidate = Some(candidate);
+        }
         if let Err(error) = agent_cli::delivery::execute(repository, &deployment, &sha, reporter) {
             pending.state = if error.starts_with("recovery_required:") {
                 "recovery_required"
@@ -540,6 +542,10 @@ fn deliver(
 
 fn delivery_state_can_resume(state: &str) -> bool {
     matches!(state, "external_pending" | "recovery_required")
+}
+
+fn delivery_requires_platform_candidate(impact: &str) -> bool {
+    impact == "platform"
 }
 
 fn recorded_delivery_kind(
@@ -672,6 +678,13 @@ mod tests {
             recorded_delivery_kind(DeploymentKind::Platform, "none"),
             DeploymentKind::Platform
         );
+    }
+
+    #[test]
+    fn only_platform_delivery_recovery_resolves_a_platform_candidate() {
+        assert!(delivery_requires_platform_candidate("platform"));
+        assert!(!delivery_requires_platform_candidate("runtime"));
+        assert!(!delivery_requires_platform_candidate("none"));
     }
 
     #[test]
