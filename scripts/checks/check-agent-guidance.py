@@ -95,7 +95,7 @@ def main() -> int:
         for command in deployment_forbidden:
             if command in text:
                 raise SystemExit(
-                    f"agent deployment guidance bypasses scripts/agent deploy: "
+                    f"agent deployment guidance bypasses scripts/agent deliver: "
                     f"{document.relative_to(ROOT)} contains {command!r}"
                 )
 
@@ -109,7 +109,7 @@ def main() -> int:
                 )
 
     root_guidance = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
-    for command in ("scripts/agent plan", "scripts/agent check", "scripts/agent verify", "scripts/agent deploy"):
+    for command in ("scripts/agent plan", "scripts/agent check", "scripts/agent verify", "scripts/agent commit", "scripts/agent deliver"):
         if command not in root_guidance:
             raise SystemExit(f"root agent workflow missing: {command}")
 

@@ -11,11 +11,10 @@ Run from the repository root:
 ```bash
 scripts/agent task begin
 scripts/agent check
-scripts/agent deliver -m "Describe the completed change"
+scripts/agent deliver
 scripts/agent plan
 scripts/agent verify
 scripts/agent commit -m "Describe the completed change"
-scripts/agent deploy
 scripts/agent --output ndjson verify --staged
 ```
 
@@ -31,12 +30,11 @@ operation and must receive `.git` write permission on its first invocation.
 Validation can inspect later edits to baseline-dirty files, but commit refuses
 those overlaps because it cannot safely separate task and pre-existing content.
 
-`deliver -m MESSAGE` is the normal completion interface. It verifies and
-commits every task, skips the device for non-deployable work, and performs the
-canonical runtime deployment when required. Platform work is committed with an
-external-pending requirement; after a human publishes that exact commit to
-`main`, the same command resumes exact-SHA CI qualification and transactional
-platform deployment. The CLI never pushes automatically.
+`commit -m MESSAGE` is the only interface that stages or creates a commit.
+`deliver` requires a clean HEAD created by that command and performs deployment
+only. Host-only work needs no delivery. Platform work pauses until a human
+publishes the exact commit to `main`; rerunning `deliver` resumes exact-SHA CI
+qualification and transactional platform deployment. The CLI never pushes.
 
 Planning is component-driven. Components own deployment impact, action risk,
 resource class, and external requirements. Actions run cheap-first, and the

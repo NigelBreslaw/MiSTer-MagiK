@@ -19,19 +19,6 @@ pub fn run(
     reporter: &mut Reporter<'_>,
 ) -> Result<(Outcome, String, String, Vec<PathBuf>), String> {
     run_with_external_policy(
-        evidence, request_id, repository, task_id, message, reporter, false,
-    )
-}
-
-pub fn run_allowing_external(
-    evidence: &Evidence,
-    request_id: &str,
-    repository: &Path,
-    task_id: &str,
-    message: &str,
-    reporter: &mut Reporter<'_>,
-) -> Result<(Outcome, String, String, Vec<PathBuf>), String> {
-    run_with_external_policy(
         evidence, request_id, repository, task_id, message, reporter, true,
     )
 }

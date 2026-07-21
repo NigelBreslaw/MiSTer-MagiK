@@ -207,7 +207,7 @@ The known-good activation sequence is:
    re-execs itself on that core, loads the scanout-slots module, then starts the
    launcher.
 
-   `scripts/agent deploy` infers when a full platform is required and installs Main, the matched Rust frontend, the
+   `scripts/agent deliver` infers when a full platform is required and installs Main, the matched Rust frontend, the
    scanout module and metadata, the CI-built latch RBF and metadata, and the
    newest verified published `game-databases-vN` release. It activates the game
    database manifest and `platform-v2.manifest` last. The deploy fails before
@@ -215,7 +215,7 @@ The known-good activation sequence is:
    `scripts/magik-mode.sh dev` refuses to arm MagiK boot unless the complete
    installed bundle verifies.
 
-   A runtime-only `scripts/agent deploy` update first verifies the installed
+   A runtime-only `scripts/agent deliver` update first verifies the installed
    dev platform, then replaces the GUI and atomically rebinds only
    `gui_sha256`. The remaining manifest fields retain the complete platform's
    original provenance and must still match their installed artifacts.

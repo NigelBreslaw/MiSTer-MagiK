@@ -9,7 +9,7 @@ slint/
   Main_MiSTer/         # real GitHub fork of MiSTer-devel/Main_MiSTer
 ```
 
-`scripts/agent deploy` infers platform impact and uses
+`scripts/agent deliver` infers platform impact and uses
 `../Main_MiSTer`. Set `MISTER_MAIN_DIR` when the fork lives elsewhere.
 
 The fork is not a submodule. It has its own history, CI, build wrapper, and
@@ -134,21 +134,21 @@ protocol details and device smoke results current in the fork's
 Deploy from this app repo:
 
 ```bash
-scripts/agent deploy
+scripts/agent deliver
 ```
 
 Use a non-default fork checkout:
 
 ```bash
 export MISTER_MAIN_DIR=/path/to/Main_MiSTer
-scripts/agent deploy
+scripts/agent deliver
 ```
 
 The deploy script no longer forces a clean Main build. Use `--clean-main` only
 when stale Main objects are suspected:
 
 ```bash
-scripts/agent deploy
+scripts/agent deliver
 ```
 
 The development script deploys:

@@ -47,8 +47,7 @@ pub enum Command {
     },
     Verify(ScopeArgs),
     Doctor,
-    Deliver(CommitArgs),
-    Deploy,
+    Deliver,
     #[command(hide = true)]
     DeployRecipe {
         #[arg(value_parser = [
@@ -157,11 +156,7 @@ impl Cli {
                 scope: scope.into_scope(Some(&task_id)),
             },
             Some(Command::Doctor) => Intent::Doctor,
-            Some(Command::Deliver(args)) => Intent::Deliver {
-                task_id,
-                message: args.message,
-            },
-            Some(Command::Deploy) => Intent::Deploy { task_id },
+            Some(Command::Deliver) => Intent::Deliver { task_id },
             Some(Command::DeployRecipe { recipe }) => Intent::DeployRecipe { recipe },
         }
     }
@@ -225,36 +220,16 @@ mod tests {
     }
 
     #[test]
-    fn deploy_is_flag_free_and_task_scoped() {
-        let cli = Cli::try_parse_from(["agent-cli", "--task-id", "task-1", "deploy"]).unwrap();
-        assert_eq!(
-            cli.into_intent(),
-            Intent::Deploy {
-                task_id: "task-1".into(),
-            }
-        );
-        assert!(Cli::try_parse_from(["agent-cli", "deploy", "--fast"]).is_err());
-        assert!(Cli::try_parse_from(["agent-cli", "deploy", "--ui-scope", "launcher"]).is_err());
-    }
-
-    #[test]
-    fn deliver_requires_only_a_commit_message() {
-        let cli = Cli::try_parse_from([
-            "agent-cli",
-            "--task-id",
-            "task-1",
-            "deliver",
-            "-m",
-            "Ship feature",
-        ])
-        .unwrap();
+    fn deliver_is_flag_free_and_task_scoped() {
+        let cli = Cli::try_parse_from(["agent-cli", "--task-id", "task-1", "deliver"]).unwrap();
         assert_eq!(
             cli.into_intent(),
             Intent::Deliver {
                 task_id: "task-1".into(),
-                message: "Ship feature".into(),
             }
         );
-        assert!(Cli::try_parse_from(["agent-cli", "deliver"]).is_err());
+        assert!(Cli::try_parse_from(["agent-cli", "deliver", "--fast"]).is_err());
+        assert!(Cli::try_parse_from(["agent-cli", "deliver", "-m", "message"]).is_err());
+        assert!(Cli::try_parse_from(["agent-cli", "deploy"]).is_err());
     }
 }

@@ -26,14 +26,16 @@ unknown work, begin the task before editing and run `scripts/agent plan` before 
 checks.
 
 The normal feature loop is `scripts/agent task begin`, edit,
-`scripts/agent check`, then `scripts/agent deliver -m MESSAGE`. Delivery avoids
+`scripts/agent check`, `scripts/agent verify`, and `scripts/agent commit -m MESSAGE`.
+Runtime or platform changes then use `scripts/agent deliver`. Delivery avoids
 device access for host-only work and infers runtime or platform deployment
 without agent-supplied build flags. Platform delivery may stop with
 `external_required`; publish or merge the recorded exact commit to `main` and
 rerun the same command to resume.
 # Deployment
 
-“Build and deploy” maps only to `scripts/agent deploy`. The CLI infers runtime
+“Build and deploy” maps to `scripts/agent commit -m MESSAGE` followed by
+`scripts/agent deliver`. The CLI infers runtime
 or platform scope, owns CI qualification and device transactions, and records
 progress and evidence. Profiling, experiments, and acceptance scripts use
 hidden fixed recipes; they do not expose deployment implementation flags to AI

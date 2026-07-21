@@ -410,6 +410,20 @@ impl Evidence {
         }
     }
 
+    pub fn latest_committed_task(
+        &self,
+        worktree: &Path,
+    ) -> Result<Option<(String, String)>, String> {
+        self.connection
+            .query_row(
+                "SELECT task_id, commit_sha FROM tasks WHERE worktree=?1 AND closed_ms IS NOT NULL AND commit_sha IS NOT NULL ORDER BY closed_ms DESC LIMIT 1",
+                [worktree.display().to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|error| error.to_string())
+    }
+
     pub fn claim_task_paths(&self, task_id: &str, paths: &[PathBuf]) -> Result<(), String> {
         let transaction = self
             .connection
@@ -963,6 +977,24 @@ mod tests {
             )
             .unwrap();
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn latest_committed_task_excludes_active_tasks() {
+        let root = temporary_root("latest-commit");
+        let evidence = Evidence::open_at(&root).unwrap();
+        let worktree = Path::new("/tmp/worktree");
+        evidence
+            .save_task_baseline("task-committed", worktree, &(), false)
+            .unwrap();
+        evidence.close_task("task-committed", "abc123").unwrap();
+        evidence
+            .save_task_baseline("task-active", worktree, &(), false)
+            .unwrap();
+        assert_eq!(
+            evidence.latest_committed_task(worktree).unwrap(),
+            Some(("task-committed".into(), "abc123".into()))
+        );
     }
 
     #[test]

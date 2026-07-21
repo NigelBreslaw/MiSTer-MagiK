@@ -125,18 +125,15 @@ fn resolve_task_intent(
             },
             message,
         },
-        Intent::Deliver { task_id, message } => Intent::Deliver {
+        Intent::Deliver { task_id } => Intent::Deliver {
             task_id: if task_id.is_empty() {
                 evidence
-                    .active_manual_task_id(repository)?
-                    .unwrap_or_default()
+                    .latest_committed_task(repository)?
+                    .map(|(task_id, _)| task_id)
+                    .ok_or("nothing_to_deliver: commit the verified task first")?
             } else {
                 task_id
             },
-            message,
-        },
-        Intent::Deploy { task_id } => Intent::Deploy {
-            task_id: resolve(task_id)?,
         },
         Intent::Plan {
             scope: agent_cli::model::Scope::Task(task_id),
@@ -202,41 +199,8 @@ fn dispatch(
             }
             return Ok(outcome);
         }
-        Intent::Deliver { task_id, message } => {
-            return deliver(
-                evidence, request_id, repository, task_id, message, output, reporter,
-            );
-        }
-        Intent::Deploy { task_id } => {
-            let task_paths = agent_cli::task::changes(evidence, repository, task_id)?;
-            let paths = agent_cli::deploy::deployment_paths(repository, task_paths)?;
-            let mut deployment = agent_cli::deploy::plan(repository, paths)?;
-            if deployment.kind == agent_cli::deploy::DeploymentKind::Platform {
-                let candidate =
-                    agent_cli::platform_ci::resolve_repository(repository, |message| {
-                        reporter.emit(EventKind::Progress, "platform-ci", message, None)
-                    })?;
-                deployment.platform_candidate = Some(candidate);
-            }
-            let plan = deployment.as_evidence_plan(intent.clone());
-            evidence.record_plan(request_id, &plan)?;
-            reporter.emit(
-                EventKind::Progress,
-                "deploy-plan",
-                &format!(
-                    "{} deployment planned (release-device, {} UI)",
-                    deployment.kind.label(),
-                    deployment.ui_scope.label()
-                ),
-                Some(100),
-            )?;
-            if output == OutputFormat::Human {
-                println!("{}", serde_json::to_string_pretty(&deployment).unwrap());
-            }
-            if deployment.kind == agent_cli::deploy::DeploymentKind::Runtime {
-                return agent_cli::runtime_deploy::execute(repository, &deployment, reporter);
-            }
-            return agent_cli::platform_deploy::execute(repository, &deployment, reporter);
+        Intent::Deliver { task_id } => {
+            return deliver(evidence, repository, task_id, reporter);
         }
         Intent::DeployRecipe { recipe } => {
             let deployment = agent_cli::deploy::recipe_plan(recipe)?;
@@ -360,11 +324,8 @@ fn dispatch(
 #[allow(clippy::too_many_arguments)]
 fn deliver(
     evidence: &Evidence,
-    request_id: &str,
     repository: &std::path::Path,
     task_id: &str,
-    message: &str,
-    output: OutputFormat,
     reporter: &mut Reporter<'_>,
 ) -> Result<Outcome, String> {
     use agent_cli::components::{self, DeploymentImpact};
@@ -385,7 +346,7 @@ fn deliver(
             .clone()
             .ok_or("delivery_state_invalid: pending delivery has no commit")?;
         if agent_cli::task::current_head(repository)? != sha {
-            return Err("external_pending: publish the recorded commit to main, check it out, and rerun `scripts/agent deliver -m ...`".into());
+            return Err("external_pending: publish the recorded commit to main, check it out, and rerun `scripts/agent deliver`".into());
         }
         let branch = git_value(repository, &["branch", "--show-current"])?;
         if branch != "main" {
@@ -422,6 +383,18 @@ fn deliver(
         return Ok(Outcome::Passed);
     }
 
+    let dirty = git_value(repository, &["status", "--porcelain"])?;
+    if !dirty.is_empty() {
+        return Err("dirty_worktree: commit or discard changes before delivery".into());
+    }
+    let (recorded_task, sha) = evidence
+        .latest_committed_task(repository)?
+        .filter(|(recorded, _)| recorded == task_id)
+        .ok_or("unverified_commit: use `scripts/agent commit -m MESSAGE` before delivery")?;
+    debug_assert_eq!(recorded_task, task_id);
+    if agent_cli::task::current_head(repository)? != sha {
+        return Err("moved_head: check out the exact commit created for this task".into());
+    }
     let paths = agent_cli::task::changes(evidence, repository, task_id)?;
     if paths.is_empty() {
         return Err("nothing_to_deliver: no task-owned changes were found".into());
@@ -432,25 +405,11 @@ fn deliver(
         .map(components::Component::deployment_impact)
         .max()
         .unwrap_or(DeploymentImpact::None);
-    let verify_intent = Intent::Verify {
-        scope: agent_cli::model::Scope::Task(task_id.into()),
-    };
-    let plan = planner::affected_plan_at(repository, verify_intent, paths.clone())?;
-    evidence.record_plan(request_id, &plan)?;
-    executor::execute_with_changes(evidence, request_id, repository, &plan, &paths, reporter)?;
-    evidence.claim_task_paths(task_id, &paths)?;
     let external = impact == DeploymentImpact::Platform;
-    let (_, sha, subject, committed_paths) = if external {
-        agent_cli::commit::run_allowing_external(
-            evidence, request_id, repository, task_id, message, reporter,
-        )?
-    } else {
-        agent_cli::commit::run(evidence, request_id, repository, task_id, message, reporter)?
-    };
     let mut delivery = DeliveryRecord {
         task_id: task_id.into(),
         worktree: repository.to_path_buf(),
-        source_tree: sha.clone(),
+        source_tree: git_value(repository, &["rev-parse", "HEAD^{tree}"])?,
         commit_sha: Some(sha.clone()),
         impact: match impact {
             DeploymentImpact::None => "none",
@@ -478,14 +437,11 @@ fn deliver(
         return Ok(Outcome::ExternalRequired);
     }
     if impact == DeploymentImpact::Runtime {
-        let deployment = agent_cli::deploy::plan(repository, committed_paths)?;
+        let deployment = agent_cli::deploy::plan(repository, paths)?;
         agent_cli::runtime_deploy::execute(repository, &deployment, reporter)?;
     }
     delivery.state = "complete".into();
     evidence.save_delivery(&delivery)?;
-    if output == OutputFormat::Human {
-        println!("delivery: {sha} — {subject}");
-    }
     Ok(Outcome::Passed)
 }
 

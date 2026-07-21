@@ -501,7 +501,7 @@ mod tests {
             vec![PathBuf::from("apps/mister/src/launcher.rs")],
         )
         .unwrap();
-        let plan = deployment.as_evidence_plan(Intent::Deploy {
+        let plan = deployment.as_evidence_plan(Intent::Deliver {
             task_id: "task-1".into(),
         });
         assert_eq!(plan.operations.len(), 1);

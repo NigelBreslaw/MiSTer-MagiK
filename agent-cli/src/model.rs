@@ -69,8 +69,7 @@ pub enum Intent {
     PruneLogs,
     Interactive,
     Doctor,
-    Deliver { task_id: String, message: String },
-    Deploy { task_id: String },
+    Deliver { task_id: String },
     DeployRecipe { recipe: String },
 }
 
@@ -79,9 +78,7 @@ impl Intent {
     pub const fn risk(&self) -> Risk {
         match self {
             Self::Commit { .. } | Self::Verify { .. } => Risk::LocalWrite,
-            Self::Deliver { .. } | Self::Deploy { .. } | Self::DeployRecipe { .. } => {
-                Risk::DeviceWrite
-            }
+            Self::Deliver { .. } | Self::DeployRecipe { .. } => Risk::DeviceWrite,
             _ => Risk::ReadOnly,
         }
     }
