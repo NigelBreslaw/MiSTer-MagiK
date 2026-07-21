@@ -1043,6 +1043,22 @@ mod tests {
     }
 
     #[test]
+    fn hdmi_framebuffer_policy_cannot_override_crt_render_geometry() {
+        let ini = "[MiSTer]\ndirect_video=1\nmenu_pal=1\nforced_scandoubler=1\n";
+        for policy in [
+            UiFramebufferSizePolicy::Force960x540,
+            UiFramebufferSizePolicy::Force1280x720,
+        ] {
+            let plan = UiDisplayPlan::from_mister_ini_text_with_policy(ini, policy)
+                .expect("576p CRT plan");
+
+            assert_eq!((plan.fb_w, plan.fb_h), (640, 480));
+            assert_eq!((plan.scan_w, plan.scan_h), (640, 576));
+            assert_eq!(plan.fb_policy, UiFramebufferSizePolicy::Auto);
+        }
+    }
+
+    #[test]
     fn ini_geometry_is_fallback_when_detection_fails() {
         let ini = "[MiSTer]\ndirect_video=0\n[Menu]\nvideo_mode=8\n";
         let plan =
