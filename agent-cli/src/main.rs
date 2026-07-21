@@ -367,7 +367,7 @@ fn deliver(
         if pending.state == "complete" {
             return Ok(Outcome::NoOp);
         }
-        if pending.state != "external_pending" {
+        if !delivery_state_can_resume(&pending.state) {
             return Err(format!(
                 "delivery_state_invalid: cannot resume delivery in {}",
                 pending.state
@@ -518,6 +518,10 @@ fn deliver(
     Ok(Outcome::Passed)
 }
 
+fn delivery_state_can_resume(state: &str) -> bool {
+    matches!(state, "external_pending" | "recovery_required")
+}
+
 fn git_value(repository: &std::path::Path, args: &[&str]) -> Result<String, String> {
     let output = std::process::Command::new("git")
         .args(args)
@@ -611,6 +615,14 @@ mod tests {
             }
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn attended_delivery_can_resume_after_physical_recovery() {
+        assert!(delivery_state_can_resume("external_pending"));
+        assert!(delivery_state_can_resume("recovery_required"));
+        assert!(!delivery_state_can_resume("failed"));
+        assert!(!delivery_state_can_resume("complete"));
     }
 
     #[test]
