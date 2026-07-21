@@ -57,25 +57,56 @@ pub enum Scope {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Intent {
-    TaskBegin { task_id: String, replace: bool },
-    TaskStatus { task_id: String },
-    Commit { task_id: String, message: String },
-    Plan { scope: Scope, verbose: bool },
-    Check { scope: Scope },
-    Verify { scope: Scope },
-    ListRuns { failed: bool, recent: usize },
-    ShowRun { run_id: String },
+    TaskBegin {
+        task_id: String,
+        replace: bool,
+    },
+    TaskStatus {
+        task_id: String,
+    },
+    Commit {
+        task_id: String,
+        message: String,
+    },
+    Plan {
+        scope: Scope,
+        verbose: bool,
+    },
+    Check {
+        scope: Scope,
+    },
+    Verify {
+        scope: Scope,
+    },
+    ListRuns {
+        failed: bool,
+        recent: usize,
+    },
+    ShowRun {
+        run_id: String,
+    },
     DatabaseStatus,
     PruneLogs,
     Interactive,
     Doctor,
     Diagnose,
-    DisplayMode { video_mode: String },
-    Deliver { task_id: String },
-    Benchmark { task_id: String },
+    DisplayMode {
+        video_mode: String,
+        main: Option<String>,
+    },
+    Deliver {
+        task_id: String,
+    },
+    Benchmark {
+        task_id: String,
+    },
     ReleaseQualify,
-    Build { intent: crate::build::BuildIntent },
-    DeployRecipe { recipe: String },
+    Build {
+        intent: crate::build::BuildIntent,
+    },
+    DeployRecipe {
+        recipe: String,
+    },
 }
 
 impl Intent {

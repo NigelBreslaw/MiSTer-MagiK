@@ -229,8 +229,16 @@ fn dispatch(
         Intent::Diagnose => {
             return agent_cli::diagnose::execute(repository, reporter);
         }
-        Intent::DisplayMode { video_mode } => {
+        Intent::DisplayMode { video_mode, main } => {
             let mut device = agent_cli::device::DeviceClient::default();
+            if let Some(main) = main {
+                let selection = match main.as_str() {
+                    "stock" => mister_tool::transport::MainSelection::Stock,
+                    "dev" => mister_tool::transport::MainSelection::Development,
+                    _ => return Err(format!("unsupported focused Main selection: {main}")),
+                };
+                device.execute(mister_tool::transport::DeviceRequest::SelectMain(selection))?;
+            }
             device.execute(mister_tool::transport::DeviceRequest::SetMenuVideoMode {
                 video_mode: video_mode.clone(),
             })?;

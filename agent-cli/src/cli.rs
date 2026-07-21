@@ -57,6 +57,8 @@ pub enum Command {
     DisplayMode {
         #[arg(value_parser = ["13", "14"])]
         video_mode: String,
+        #[arg(long, value_parser = ["stock", "dev"])]
+        main: Option<String>,
     },
     Deliver,
     Benchmark,
@@ -183,7 +185,9 @@ impl Cli {
             },
             Some(Command::Doctor) => Intent::Doctor,
             Some(Command::Diagnose) => Intent::Diagnose,
-            Some(Command::DisplayMode { video_mode }) => Intent::DisplayMode { video_mode },
+            Some(Command::DisplayMode { video_mode, main }) => {
+                Intent::DisplayMode { video_mode, main }
+            }
             Some(Command::Deliver) => Intent::Deliver { task_id },
             Some(Command::Benchmark) => Intent::Benchmark { task_id },
             Some(Command::Release {
@@ -305,7 +309,17 @@ mod tests {
                 .unwrap()
                 .into_intent(),
             Intent::DisplayMode {
-                video_mode: "13".into()
+                video_mode: "13".into(),
+                main: None,
+            }
+        );
+        assert_eq!(
+            Cli::try_parse_from(["agent-cli", "display-mode", "14", "--main", "stock"])
+                .unwrap()
+                .into_intent(),
+            Intent::DisplayMode {
+                video_mode: "14".into(),
+                main: Some("stock".into()),
             }
         );
         assert!(Cli::try_parse_from(["agent-cli", "display-mode", "10"]).is_err());
