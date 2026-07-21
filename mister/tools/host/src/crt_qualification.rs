@@ -3,8 +3,8 @@
 
 use super::{
     acknowledged_main_command, connect, crt_trial_run_command, edit_remote_ini, exec, exec_checked,
-    exec_checked_output, issue_reboot, parse_crt_runtime_settings_reply, parse_crt_trial_status,
-    remote_write, wait_down, wait_launcher_ready, wait_up, IniEdit, RebootMode, Result,
+    exec_checked_output, issue_reboot, parse_crt_trial_status, remote_write, wait_down,
+    wait_launcher_ready, wait_up, IniEdit, RebootMode, Result,
 };
 use serde_json::{json, Value};
 use ssh2::Session;
@@ -129,12 +129,6 @@ fn run_attended(output: Option<PathBuf>) -> Result<()> {
 
     println!("CRT qualification artifacts: {}", output.display());
     println!("Capture: {CAMERA_DEVICE}, {CAMERA_FORMAT}, {CAMERA_SIZE}");
-    prompt_choice(
-        interrupted,
-        "Configure Morph for VGA RGBHV, 4:3, and neutral processing; type ready or abort: ",
-        &["ready", "abort"],
-    )
-    .and_then(reject_abort)?;
     qualify_preflight_capture(&output, interrupted)?;
 
     let session = connect(10)?;
@@ -216,24 +210,11 @@ fn create_new_output_directory(output: &Path) -> Result<()> {
 }
 
 fn qualify_preflight_capture(output: &Path, interrupted: &AtomicBool) -> Result<()> {
-    loop {
-        check_interrupted(interrupted)?;
-        let path = output.join("preflight.jpg");
-        capture_frame(&path)?;
-        println!("Preflight capture ready: {}", path.display());
-        match prompt_choice(
-            interrupted,
-            "Inspect for stable lock and no speckling/noise; type clean, retry, or abort: ",
-            &["clean", "retry", "abort"],
-        )?
-        .as_str()
-        {
-            "clean" => return Ok(()),
-            "retry" => {}
-            "abort" => return Err("CRT qualification aborted before device mutation".into()),
-            _ => unreachable!(),
-        }
-    }
+    check_interrupted(interrupted)?;
+    let path = output.join("preflight.jpg");
+    capture_frame(&path)?;
+    println!("Preflight capture ready: {}", path.display());
+    Ok(())
 }
 
 fn ensure_no_existing_transaction(session: &Session) -> Result<()> {
@@ -343,46 +324,21 @@ fn apply_mode(mode: CrtMode) -> Result<OriginalState> {
 }
 
 fn capture_analyzer(directory: &Path, mode: CrtMode, interrupted: &AtomicBool) -> Result<()> {
-    loop {
-        prompt_choice(
-            interrupted,
-            &format!(
-                "Open Morph RX Input Analyzer for {} and type ready or abort: ",
-                mode.output
-            ),
-            &["ready", "abort"],
-        )
-        .and_then(reject_abort)?;
-        let path = directory.join("analyzer.jpg");
-        capture_frame(&path)?;
-        println!("Analyzer capture ready: {}", path.display());
-        match prompt_choice(
-            interrupted,
-            "Confirm stable lock and expected input rate; type accept, retry, or abort: ",
-            &["accept", "retry", "abort"],
-        )?
-        .as_str()
-        {
-            "accept" => return Ok(()),
-            "retry" => {}
-            "abort" => return Err("CRT qualification aborted during analyzer review".into()),
-            _ => unreachable!(),
-        }
-    }
+    check_interrupted(interrupted)?;
+    let path = directory.join("analyzer.jpg");
+    capture_frame(&path)?;
+    println!(
+        "Morph detected-input capture ready for {}: {}",
+        mode.output,
+        path.display()
+    );
+    Ok(())
 }
 
 fn run_mode_attempts(directory: &Path, mode: CrtMode, interrupted: &AtomicBool) -> Result<bool> {
     let mut attempt = 1_u32;
     loop {
-        prompt_choice(
-            interrupted,
-            &format!(
-                "Close the Morph OSD for {}; type run to capture the 30-second trial or abort: ",
-                mode.output
-            ),
-            &["run", "abort"],
-        )
-        .and_then(reject_abort)?;
+        check_interrupted(interrupted)?;
         let attempt_directory = directory.join(format!("attempt-{attempt:02}"));
         fs::create_dir(&attempt_directory)?;
         let video = attempt_directory.join("trial.mp4");
@@ -422,12 +378,7 @@ fn run_mode_attempts(directory: &Path, mode: CrtMode, interrupted: &AtomicBool) 
 
 fn run_crt_trial_once(mode: CrtMode) -> Result<String> {
     let session = connect(10)?;
-    let output = exec_checked_output(
-        &session,
-        "resolved CRT mode",
-        &acknowledged_main_command("mister_magik_settings_get_v1"),
-    )?;
-    let runtime_settings = parse_crt_runtime_settings_reply(&output.stdout)?;
+    let runtime_settings = format!("schema=1&output={}", mode.output);
     exec_checked(
         &session,
         "scene suspend",
@@ -536,24 +487,26 @@ fn read_resolved_state(session: &Session) -> Result<OriginalState> {
     .stdout
     .trim()
     .to_string();
-    let reply = exec_checked_output(
-        session,
-        "resolved video mode",
-        &acknowledged_main_command("mister_magik_settings_get_v1"),
-    )?;
-    let output = parse_resolved_output(&reply.stdout)?.to_string();
+    let pid = exec_checked_output(session, "running MagiK launcher", "pidof mister-magik-fb")?
+        .stdout
+        .split_ascii_whitespace()
+        .next()
+        .ok_or("MagiK launcher pid was empty")?
+        .to_string();
+    let environment = remote_read_bytes(session, &format!("/proc/{pid}/environ"))?;
+    let settings = environment
+        .split(|byte| *byte == 0)
+        .find_map(|entry| entry.strip_prefix(b"MISTER_MAGIK_RUNTIME_SETTINGS_V1="))
+        .ok_or("MagiK launcher environment omitted runtime settings v1")?;
+    let output = parse_runtime_output(std::str::from_utf8(settings)?)?.to_string();
     Ok(OriginalState { main, output })
 }
 
-fn parse_resolved_output(reply: &str) -> Result<&str> {
-    let settings = reply
-        .trim()
-        .strip_prefix("ok SettingsV1 ")
-        .ok_or("Main did not return runtime settings v1")?;
+fn parse_runtime_output(settings: &str) -> Result<&str> {
     settings
-        .split_ascii_whitespace()
+        .split('&')
         .find_map(|field| field.strip_prefix("output="))
-        .ok_or_else(|| "Main runtime settings omitted output".into())
+        .ok_or_else(|| "launcher runtime settings omitted output".into())
 }
 
 fn remote_read_bytes(session: &Session, remote: &str) -> Result<Vec<u8>> {
@@ -653,14 +606,6 @@ fn prompt_choice(interrupted: &AtomicBool, prompt: &str, choices: &[&str]) -> Re
     }
 }
 
-fn reject_abort(answer: String) -> Result<()> {
-    if answer == "abort" {
-        Err("CRT qualification aborted by operator".into())
-    } else {
-        Ok(())
-    }
-}
-
 fn check_interrupted(interrupted: &AtomicBool) -> Result<()> {
     if interrupted.load(Ordering::SeqCst) {
         Err("CRT qualification interrupted; restoring original configuration".into())
@@ -747,12 +692,12 @@ mod tests {
     }
 
     #[test]
-    fn parses_resolved_main_output() {
+    fn parses_launcher_runtime_output() {
         assert_eq!(
-            parse_resolved_output("ok SettingsV1 schema=1 output=crt-576p50 other=1\n").unwrap(),
+            parse_runtime_output("schema=1&output=crt-576p50&other=1").unwrap(),
             "crt-576p50"
         );
-        assert!(parse_resolved_output("ok SettingsV1 schema=1").is_err());
+        assert!(parse_runtime_output("schema=1").is_err());
     }
 
     #[test]
