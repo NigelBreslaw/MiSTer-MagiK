@@ -9,6 +9,7 @@ pub mod executor;
 pub mod model;
 pub mod planner;
 pub mod platform_ci;
+pub mod platform_deploy;
 pub mod policy;
 pub mod progress;
 pub mod redact;

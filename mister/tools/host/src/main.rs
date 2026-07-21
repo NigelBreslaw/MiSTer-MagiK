@@ -189,6 +189,12 @@ fn run_cli() -> Result<()> {
             let sess = connect(10)?;
             deploy_magik_bin(&sess, Path::new(&args[0]), &remote)?;
         }
+        "platform-deploy" => {
+            let stage = args.first().ok_or("platform-deploy needs STAGE_DIR")?;
+            let transaction = PlatformDeployTransaction::validate(Path::new(stage))?;
+            let sess = connect(10)?;
+            transaction.run(&sess)?;
+        }
         "get" => {
             if args.len() < 2 {
                 return Err("get needs <remote> <local>".into());
@@ -1148,6 +1154,171 @@ fn deploy_magik_bin(sess: &Session, local: &Path, remote: &str) -> Result<()> {
     let report = transaction.run_ssh(sess, validate_ms, total_t)?;
     report.print();
     Ok(())
+}
+
+const PLATFORM_DEPLOY_FILES: &[(&str, &str)] = &[
+    (
+        "mister-magik-fb",
+        "/media/fat/mister-magik-dev/mister-magik-fb",
+    ),
+    ("MiSTer_MagiKDev", "/media/fat/MiSTer_MagiKDev"),
+    (
+        "mister_magik_scanout_slots.ko",
+        "/media/fat/mister-magik-dev/mister_magik_scanout_slots.ko",
+    ),
+    (
+        "mister_magik_scanout_slots.metadata.txt",
+        "/media/fat/mister-magik-dev/mister_magik_scanout_slots.metadata.txt",
+    ),
+    (
+        "fpga/menu-magik-vblank-latch.rbf",
+        "/media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.rbf",
+    ),
+    (
+        "fpga/menu-magik-vblank-latch.metadata.txt",
+        "/media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.metadata.txt",
+    ),
+    ("mame.sqlite3", "/media/fat/mister-magik-dev/mame.sqlite3"),
+    (
+        "hbmame.sqlite3",
+        "/media/fat/mister-magik-dev/hbmame.sqlite3",
+    ),
+    (
+        "game-databases-manifest.json",
+        "/media/fat/mister-magik-dev/game-databases-manifest.json",
+    ),
+    (
+        "game-databases-SHA256SUMS",
+        "/media/fat/mister-magik-dev/game-databases-SHA256SUMS",
+    ),
+    (
+        "platform-v2.manifest",
+        "/media/fat/mister-magik-dev/platform-v2.manifest",
+    ),
+];
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PlatformDeployTransaction {
+    stage: PathBuf,
+    files: Vec<(PathBuf, String, String)>,
+}
+
+impl PlatformDeployTransaction {
+    fn validate(stage: &Path) -> Result<Self> {
+        if !stage.is_dir() {
+            return Err(format!("platform stage is missing: {}", stage.display()).into());
+        }
+        let mut files = Vec::new();
+        for (relative, remote) in PLATFORM_DEPLOY_FILES {
+            let local = stage.join(relative);
+            if !local.is_file() {
+                return Err(format!("platform stage is missing {relative}").into());
+            }
+            files.push((local, (*remote).into(), file_sha256(stage.join(relative))?));
+        }
+        Ok(Self {
+            stage: stage.to_path_buf(),
+            files,
+        })
+    }
+
+    fn run(&self, sess: &Session) -> Result<()> {
+        exec(
+            sess,
+            "mkdir -p /media/fat/mister-magik-dev/fpga /media/fat/mister-magik-dev/snapshots",
+            true,
+        )?;
+        exec(
+            sess,
+            "set -e; stamp=$(date +%Y%m%d-%H%M%S 2>/dev/null || echo unknown); snapshot=/media/fat/mister-magik-dev/snapshots/$stamp-agent-deploy; mkdir -p \"$snapshot\"; cp /etc/inittab \"$snapshot/inittab\" 2>/dev/null || true; cp /media/fat/MiSTer.ini \"$snapshot/MiSTer.ini\" 2>/dev/null || true; cp /media/fat/mister-magik-dev/platform-v2.manifest \"$snapshot/platform-v2.manifest\" 2>/dev/null || true",
+            true,
+        )?;
+        for (local, remote, _) in &self.files {
+            put(sess, local, &format!("{remote}.upload"))?;
+        }
+        let script = self.activation_script();
+        let output = exec(sess, &script, true)?;
+        if let Some(message) = exec_failure_message("platform activation", &output) {
+            return Err(message.into());
+        }
+        println!(
+            "platform deploy ok stage={} files={}",
+            self.stage.display(),
+            self.files.len()
+        );
+        Ok(())
+    }
+
+    fn activation_script(&self) -> String {
+        let mut verify = String::new();
+        let mut backup = String::new();
+        let mut activate = String::new();
+        let mut rollback = String::new();
+        let mut cleanup = String::new();
+        for (_, remote, checksum) in &self.files {
+            verify.push_str(&format!(
+                "test \"$(sha256sum {} | awk '{{print $1}}')\" = {}; ",
+                sh(&format!("{remote}.upload")),
+                sh(checksum)
+            ));
+            backup.push_str(&format!(
+                "if [ -e {path} ]; then cp -p {path} {backup}; else : > {missing}; fi; ",
+                path = sh(remote),
+                backup = sh(&format!("{remote}.rollback")),
+                missing = sh(&format!("{remote}.rollback-missing"))
+            ));
+            rollback.push_str(&format!(
+                "if [ -e {backup} ]; then mv -f {backup} {path}; elif [ -e {missing} ]; then rm -f {path} {missing}; fi; ",
+                path = sh(remote),
+                backup = sh(&format!("{remote}.rollback")),
+                missing = sh(&format!("{remote}.rollback-missing"))
+            ));
+            cleanup.push_str(&format!(
+                "rm -f {} {}; ",
+                sh(&format!("{remote}.rollback")),
+                sh(&format!("{remote}.rollback-missing"))
+            ));
+        }
+        for (_, remote, _) in self
+            .files
+            .iter()
+            .filter(|(_, remote, _)| !remote.ends_with("platform-v2.manifest"))
+        {
+            activate.push_str(&format!(
+                "mv -f {} {}; ",
+                sh(&format!("{remote}.upload")),
+                sh(remote)
+            ));
+        }
+        let manifest = self
+            .files
+            .iter()
+            .find(|(_, remote, _)| remote.ends_with("platform-v2.manifest"))
+            .map(|(_, remote, _)| remote)
+            .expect("validated platform manifest");
+        activate.push_str(&format!(
+            "mv -f {} {}; ",
+            sh(&format!("{manifest}.upload")),
+            sh(manifest)
+        ));
+        format!(
+            "set -eu; {verify} {backup} rollback() {{ {rollback} sync; }}; trap rollback EXIT INT TERM; {activate} chmod 755 /media/fat/MiSTer_MagiKDev /media/fat/mister-magik-dev/mister-magik-fb; sync; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot; trap - EXIT INT TERM; {cleanup} sync"
+        )
+    }
+}
+
+fn file_sha256(path: PathBuf) -> Result<String> {
+    let mut source = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let count = source.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+    Ok(encode_hex(&hasher.finalize()))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -6323,6 +6494,39 @@ H: Handlers=event3 js0"#
             .unwrap_err()
             .to_string();
         assert!(error.starts_with("Desktop directory does not exist:"));
+    }
+
+    #[test]
+    fn platform_deploy_validates_every_required_file_and_publishes_manifest_last() {
+        let stage = temp_path("platform-stage");
+        for (relative, _) in PLATFORM_DEPLOY_FILES {
+            let path = stage.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, relative.as_bytes()).unwrap();
+        }
+        let transaction = PlatformDeployTransaction::validate(&stage).unwrap();
+        let script = transaction.activation_script();
+        let gui = script
+            .find("mister-magik-fb.upload' '/media/fat/mister-magik-dev/mister-magik-fb'")
+            .unwrap();
+        let manifest = script
+            .find("platform-v2.manifest.upload' '/media/fat/mister-magik-dev/platform-v2.manifest'")
+            .unwrap();
+        assert!(manifest > gui);
+        assert!(script.contains("trap rollback EXIT INT TERM"));
+        assert!(script.contains("test ! -e /tmp/mister-magik/fs-fault-session"));
+        fs::remove_dir_all(stage).unwrap();
+    }
+
+    #[test]
+    fn platform_deploy_rejects_incomplete_stages() {
+        let stage = temp_path("platform-stage-missing");
+        fs::create_dir_all(&stage).unwrap();
+        let error = PlatformDeployTransaction::validate(&stage)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("platform stage is missing mister-magik-fb"));
+        fs::remove_dir_all(stage).unwrap();
     }
 
     const MAME_1942_FIXTURE: &str = r#"<?xml version="1.0"?>

@@ -147,7 +147,7 @@ impl RuntimeActions for ProcessActions<'_> {
     }
 }
 
-fn run_bounded(
+pub(crate) fn run_bounded(
     repository: &Path,
     program: &str,
     args: &[String],

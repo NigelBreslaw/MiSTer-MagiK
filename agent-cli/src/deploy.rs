@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::model::{ExternalRequirement, Intent, Plan};
+use crate::model::{Intent, Plan};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -165,14 +165,7 @@ impl BuildReceipt {
 impl DeploymentPlan {
     #[must_use]
     pub fn as_evidence_plan(&self, intent: Intent) -> Plan {
-        let external_requirements = if self.kind == DeploymentKind::Platform {
-            vec![ExternalRequirement {
-                id: "deploy.platform-execution-pending".into(),
-                message: "platform deployment execution is not enabled yet".into(),
-            }]
-        } else {
-            Vec::new()
-        };
+        let external_requirements = Vec::new();
         Plan {
             intent,
             operations: Vec::new(),

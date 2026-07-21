@@ -221,13 +221,7 @@ fn dispatch(
             if deployment.kind == agent_cli::deploy::DeploymentKind::Runtime {
                 return agent_cli::runtime_deploy::execute(repository, &deployment, reporter);
             }
-            reporter.emit(
-                EventKind::Warning,
-                "deploy",
-                "platform execution not yet enabled; deployment planning was recorded",
-                None,
-            )?;
-            return Ok(Outcome::ExternalRequired);
+            return agent_cli::platform_deploy::execute(repository, &deployment, reporter);
         }
         Intent::Plan {
             scope: selected, ..
