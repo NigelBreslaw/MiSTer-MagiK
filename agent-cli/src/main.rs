@@ -373,13 +373,11 @@ fn deliver(
                 pending.state
             ));
         }
-        let sha = pending
+        let mut sha = pending
             .commit_sha
             .clone()
             .ok_or("delivery_state_invalid: pending delivery has no commit")?;
-        if agent_cli::task::current_head(repository)? != sha {
-            return Err("external_pending: publish the recorded commit to main, check it out, and rerun `scripts/agent deliver`".into());
-        }
+        let current_head = agent_cli::task::current_head(repository)?;
         let branch = git_value(repository, &["branch", "--show-current"])?;
         if branch != "main" {
             reporter.emit(
@@ -390,7 +388,30 @@ fn deliver(
             )?;
             return Ok(Outcome::ExternalRequired);
         }
-        let paths = agent_cli::task::changes(evidence, repository, task_id)?;
+        let paths = if current_head == sha {
+            agent_cli::task::changes(evidence, repository, task_id)?
+        } else {
+            let latest = evidence
+                .latest_committed_task(repository)?
+                .filter(|(recorded, committed)| recorded == task_id && committed == &current_head)
+                .ok_or("external_pending: the newer HEAD was not committed by this task")?;
+            debug_assert_eq!(latest.0, task_id);
+            if !git_success(
+                repository,
+                &["merge-base", "--is-ancestor", &sha, &current_head],
+            )? {
+                return Err(
+                    "external_pending: the recorded candidate is not an ancestor of HEAD".into(),
+                );
+            }
+            let paths = git_changed_paths_including(repository, &sha, &current_head)?;
+            sha = current_head;
+            pending.commit_sha = Some(sha.clone());
+            pending.source_tree = git_value(repository, &["rev-parse", "HEAD^{tree}"])?;
+            pending.detail = Some("superseded by a newer verified task commit".into());
+            evidence.save_delivery(&pending)?;
+            paths
+        };
         let mut deployment = agent_cli::deploy::plan(repository, paths)?;
         let candidate = agent_cli::platform_ci::resolve_repository(repository, |progress| {
             reporter.emit(EventKind::Progress, "platform-ci", progress, None)
@@ -509,6 +530,44 @@ fn git_value(repository: &std::path::Path, args: &[&str]) -> Result<String, Stri
     Ok(String::from_utf8_lossy(&output.stdout).trim().into())
 }
 
+fn git_success(repository: &std::path::Path, args: &[&str]) -> Result<bool, String> {
+    std::process::Command::new("git")
+        .args(args)
+        .current_dir(repository)
+        .status()
+        .map(|status| status.success())
+        .map_err(|error| error.to_string())
+}
+
+fn git_changed_paths_including(
+    repository: &std::path::Path,
+    first_commit: &str,
+    last_commit: &str,
+) -> Result<Vec<std::path::PathBuf>, String> {
+    let first_parent = format!("{first_commit}^");
+    let output = std::process::Command::new("git")
+        .args([
+            "diff",
+            "--name-only",
+            "-z",
+            "--diff-filter=ACMRD",
+            &first_parent,
+            last_commit,
+        ])
+        .current_dir(repository)
+        .output()
+        .map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().into());
+    }
+    Ok(output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| std::path::PathBuf::from(String::from_utf8_lossy(path).into_owned()))
+        .collect())
+}
+
 fn fatal(message: &str) -> ! {
     eprintln!("agent-cli: {message}");
     std::process::exit(70);
@@ -550,6 +609,51 @@ mod tests {
                 task_id: "task-manual".into(),
                 message: "message".into(),
             }
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn superseding_delivery_keeps_original_and_follow_up_paths() {
+        let root = std::env::temp_dir().join(format!(
+            "agent-cli-delivery-range-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&root)
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?} failed");
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.name", "Test"]);
+        git(&["config", "user.email", "test@example.com"]);
+        fs::write(root.join("baseline"), "baseline\n").unwrap();
+        git(&["add", "baseline"]);
+        git(&["commit", "-qm", "baseline"]);
+        fs::write(root.join("platform"), "platform\n").unwrap();
+        git(&["add", "platform"]);
+        git(&["commit", "-qm", "platform"]);
+        let first = git_value(&root, &["rev-parse", "HEAD"]).unwrap();
+        fs::write(root.join("follow-up"), "follow-up\n").unwrap();
+        git(&["add", "follow-up"]);
+        git(&["commit", "-qm", "follow-up"]);
+        let last = git_value(&root, &["rev-parse", "HEAD"]).unwrap();
+
+        assert!(git_success(&root, &["merge-base", "--is-ancestor", &first, &last]).unwrap());
+        assert_eq!(
+            git_changed_paths_including(&root, &first, &last).unwrap(),
+            vec![
+                std::path::PathBuf::from("follow-up"),
+                std::path::PathBuf::from("platform")
+            ]
         );
         fs::remove_dir_all(root).unwrap();
     }
