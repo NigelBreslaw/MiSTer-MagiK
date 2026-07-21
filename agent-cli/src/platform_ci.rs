@@ -351,7 +351,7 @@ pub fn resolve_published_repository(
     };
     let run_id = payload
         .pointer("/components/main/run_id")
-        .and_then(Value::as_u64)
+        .and_then(manifest_run_id)
         .ok_or("published platform manifest is missing Main run_id")?;
     progress("qualified platform components ready for exact runtime manifest")?;
     Ok(Candidate {
@@ -366,6 +366,12 @@ pub fn resolve_published_repository(
         fpga_identity: required("fpga_input_sha256")?,
         kernel_identity: required("kernel_input_sha256")?,
     })
+}
+
+fn manifest_run_id(value: &Value) -> Option<u64> {
+    value
+        .as_u64()
+        .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
 }
 
 fn latest_platform_release(rows: &[Value]) -> Option<String> {
@@ -636,6 +642,16 @@ mod tests {
             latest_platform_release(&rows).as_deref(),
             Some("platform-v0.8")
         );
+    }
+
+    #[test]
+    fn published_platform_accepts_canonical_string_run_ids() {
+        assert_eq!(
+            manifest_run_id(&serde_json::json!("29856409043")),
+            Some(29_856_409_043)
+        );
+        assert_eq!(manifest_run_id(&serde_json::json!(42)), Some(42));
+        assert_eq!(manifest_run_id(&serde_json::json!("invalid")), None);
     }
 
     #[test]
