@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::*;
+use std::io;
 
 const CRT_TRIAL_SECS: u64 = 30;
+const CRT_LATCH_SETTLE_TIMEOUT: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct CrtTrialCounters {
@@ -42,7 +44,7 @@ pub(super) fn run_crt_trial_loop(
         return;
     }
 
-    let before = match hardware.read_magik_latched_fbuf_status() {
+    let before = match wait_for_crt_latch_settle(hardware) {
         Ok(status) if status.supported() => CrtTrialCounters::from_status(status),
         Ok(status) => {
             crate::ui_errln!(
@@ -88,6 +90,12 @@ pub(super) fn run_crt_trial_loop(
     };
     let mut failure = None;
     while started.elapsed() < Duration::from_secs(CRT_TRIAL_SECS) {
+        if frames > 0 {
+            if let Err(error) = wait_for_crt_latch_settle(hardware) {
+                failure = Some(format!("latch-settle-{}", safe_field(&error.to_string())));
+                break;
+            }
+        }
         render_crt_trial_frame(&mut frame, width, height, frames);
         let plan = LauncherFramePlan::new(full_damage, None, None, None, None);
         if let Err(error) = presenter.present_cached_full_frame(
@@ -123,6 +131,23 @@ pub(super) fn run_crt_trial_loop(
         flips,
         reason
     );
+}
+
+fn wait_for_crt_latch_settle(hardware: &mut Fpga) -> io::Result<crate::fpga::LatchedFbufStatus> {
+    let started = Instant::now();
+    loop {
+        let status = hardware.read_magik_latched_fbuf_status()?;
+        if !status.supported() || !status.pending() {
+            return Ok(status);
+        }
+        if started.elapsed() >= CRT_LATCH_SETTLE_TIMEOUT {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "pending-latch-did-not-settle",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
 }
 
 fn render_crt_trial_frame(dst: &mut [Rgb565Pixel], width: usize, height: usize, frame: u64) {
