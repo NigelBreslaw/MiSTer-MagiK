@@ -8,7 +8,7 @@ index 7c2a7c8..8df9a51 100644
  
 -assign DDRAM_CLK = clk_sys;
 -assign CE_PIXEL  = ce_pix;
-+assign CE_PIXEL  = MAGIK_CRT_ACTIVE ? crt_ce : ce_pix;
++assign CE_PIXEL  = ce_pix;
  
  assign VGA_SL = 0;
  assign VGA_F1 = 0;
@@ -36,14 +36,9 @@ index 7c2a7c8..8df9a51 100644
 +	.locked(locked)
 +);
 +
-+// Switch only when the wrapper atomically promotes a route during its
-+// destination vertical blank. The original 20 MHz HDMI clock is unchanged.
-+cyclonev_clkselect magik_video_clk_sw
-+(
-+	.clkselect({1'b1, MAGIK_CRT_ACTIVE}),
-+	.inclk({clk_crt, clk_hdmi, 2'b00}),
-+	.outclk(CLK_VIDEO)
-+);
++// Keep the stock Menu clock as a direct PLL output. The wrapper selects the
++// direct CRT PLL output at the HDMI destination boundary.
++assign CLK_VIDEO = clk_hdmi;
  
  
  /////////////////////   SDRAM   ///////////////////
@@ -402,12 +397,20 @@ index 7c2a7c8..8df9a51 100644
 -assign VGA_G   = comp_v;
 -assign VGA_R   = comp_v;
 -assign VGA_B   = comp_v;
-+assign VGA_DE  = MAGIK_CRT_ACTIVE ? (crt_de && crt_display_valid) : ~(HBlank | VBlank);
-+assign VGA_HS  = MAGIK_CRT_ACTIVE ? crt_hsync : HSync;
-+assign VGA_VS  = MAGIK_CRT_ACTIVE ? crt_vsync : VSync;
-+assign VGA_G   = MAGIK_CRT_ACTIVE ? crt_g : comp_v;
-+assign VGA_R   = MAGIK_CRT_ACTIVE ? crt_r : comp_v;
-+assign VGA_B   = MAGIK_CRT_ACTIVE ? crt_b : comp_v;
++assign VGA_DE  = ~(HBlank | VBlank);
++assign VGA_HS  = HSync;
++assign VGA_VS  = VSync;
++assign VGA_G   = comp_v;
++assign VGA_R   = comp_v;
++assign VGA_B   = comp_v;
++
++assign MAGIK_CRT_CLK = clk_crt;
++assign MAGIK_CRT_DE = crt_de && crt_display_valid;
++assign MAGIK_CRT_HS = crt_hsync;
++assign MAGIK_CRT_VS = crt_vsync;
++assign MAGIK_CRT_R = crt_r;
++assign MAGIK_CRT_G = crt_g;
++assign MAGIK_CRT_B = crt_b;
  
  endmodule
 diff --git a/rtl/pll.v b/rtl/pll.v
@@ -507,6 +510,13 @@ index ad59e00..6247173 100644
 +output [15:0] MAGIK_CRT_READER_FLAGS,
 +output [15:0] MAGIK_CRT_UNDERRUN_COUNT,
 +output [15:0] MAGIK_CRT_TIMEOUT_COUNT,
++output        MAGIK_CRT_CLK,
++output        MAGIK_CRT_DE,
++output        MAGIK_CRT_HS,
++output        MAGIK_CRT_VS,
++output  [7:0] MAGIK_CRT_R,
++output  [7:0] MAGIK_CRT_G,
++output  [7:0] MAGIK_CRT_B,
 +
 +input         OSD_STATUS
 diff --git a/sys/sys_top.v b/sys/sys_top.v
@@ -532,6 +542,13 @@ index 7d2ac3f..25b1378 100644
 +wire [15:0] magik_crt_reader_flags;
 +wire [15:0] magik_crt_underrun_count;
 +wire [15:0] magik_crt_timeout_count;
++wire        magik_crt_clk;
++wire        magik_crt_de;
++wire        magik_crt_hs;
++wire        magik_crt_vs;
++wire  [7:0] magik_crt_r;
++wire  [7:0] magik_crt_g;
++wire  [7:0] magik_crt_b;
 +reg  [31:0] magik_crt_base = 32'd0;
 +reg  [11:0] magik_crt_width = 12'd0;
 +reg  [11:0] magik_crt_height = 12'd0;
@@ -605,7 +622,55 @@ index 7d2ac3f..25b1378 100644
  	coef_wr <= 0;
  	sl_r <= FB_EN ? 2'b00 : scanlines;
  
-@@ -1945,7 +1976,17 @@ emu emu
+@@ -1333,13 +1364,15 @@ wire hdmi_tx_clk;
+ `ifndef MISTER_DEBUG_NOHDMI
+ 	cyclonev_clkselect hdmi_clk_sw
+ 	( 
+-		.clkselect({1'b1, ~vga_fb & direct_video}),
+-		.inclk({clk_vid, hdmi_clk_out, 2'b00}),
++		.clkselect(magik_active_route == 2'd1 ? 2'd3 :
++		           ((~vga_fb & direct_video) ? 2'd2 : 2'd1)),
++		.inclk({magik_crt_clk, clk_vid, hdmi_clk_out, 1'b0}),
+ 		.outclk(hdmi_tx_clk)
+ 	);
+ `else
+-	assign hdmi_tx_clk = clk_vid;
++	assign hdmi_tx_clk = (magik_active_route == 2'd1) ? magik_crt_clk : clk_vid;
+ `endif
+ 
+ altddio_out
+@@ -1387,10 +1420,18 @@ always @(posedge hdmi_tx_clk) begin
+ 	hdmi_dv_de   <= dv_de;
+ 	
+ `ifndef MISTER_DEBUG_NOHDMI
+-	hs <= (~vga_fb & direct_video) ? hdmi_dv_hs   : (direct_video & csync_en) ? hdmi_cs_osd : hdmi_hs_osd;
+-	vs <= (~vga_fb & direct_video) ? hdmi_dv_vs   : hdmi_vs_osd;
+-	de <= (~vga_fb & direct_video) ? hdmi_dv_de   : hdmi_de_osd;
+-	d  <= (~vga_fb & direct_video) ? hdmi_dv_data : hdmi_data_osd;
++	if(magik_active_route == 2'd1) begin
++		hs <= magik_crt_hs;
++		vs <= magik_crt_vs;
++		de <= magik_crt_de;
++		d  <= {magik_crt_r, magik_crt_g, magik_crt_b};
++	end else begin
++		hs <= (~vga_fb & direct_video) ? hdmi_dv_hs   : (direct_video & csync_en) ? hdmi_cs_osd : hdmi_hs_osd;
++		vs <= (~vga_fb & direct_video) ? hdmi_dv_vs   : hdmi_vs_osd;
++		de <= (~vga_fb & direct_video) ? hdmi_dv_de   : hdmi_de_osd;
++		d  <= (~vga_fb & direct_video) ? hdmi_dv_data : hdmi_data_osd;
++	end
+ `else
+-	hs <= hdmi_dv_hs;
+-	vs <= hdmi_dv_vs;
+-	de <= hdmi_dv_de;
+-	d  <= hdmi_dv_data;
++	hs <= (magik_active_route == 2'd1) ? magik_crt_hs : hdmi_dv_hs;
++	vs <= (magik_active_route == 2'd1) ? magik_crt_vs : hdmi_dv_vs;
++	de <= (magik_active_route == 2'd1) ? magik_crt_de : hdmi_dv_de;
++	d  <= (magik_active_route == 2'd1) ? {magik_crt_r, magik_crt_g, magik_crt_b} : hdmi_dv_data;
+ `endif
+ 
+ 	hdmi_out_hs <= hs;
+@@ -1945,7 +1986,24 @@ emu emu
  	.UART_DSR(uart_dtr),
  
  	.USER_OUT(user_out),
@@ -620,7 +685,14 @@ index 7d2ac3f..25b1378 100644
 +	.MAGIK_CRT_VBLANK(magik_crt_vblank),
 +	.MAGIK_CRT_READER_FLAGS(magik_crt_reader_flags),
 +	.MAGIK_CRT_UNDERRUN_COUNT(magik_crt_underrun_count),
-+	.MAGIK_CRT_TIMEOUT_COUNT(magik_crt_timeout_count)
++	.MAGIK_CRT_TIMEOUT_COUNT(magik_crt_timeout_count),
++	.MAGIK_CRT_CLK(magik_crt_clk),
++	.MAGIK_CRT_DE(magik_crt_de),
++	.MAGIK_CRT_HS(magik_crt_hs),
++	.MAGIK_CRT_VS(magik_crt_vs),
++	.MAGIK_CRT_R(magik_crt_r),
++	.MAGIK_CRT_G(magik_crt_g),
++	.MAGIK_CRT_B(magik_crt_b)
  );
  
  endmodule

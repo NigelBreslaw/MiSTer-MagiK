@@ -194,7 +194,7 @@ PY
   shasum -a 256 "$CRT_PATCH" | awk '{print "crt_patch_sha256="$1}'
   shasum -a 256 "$LATCH_RTL" | awk '{print "latch_rtl_sha256="$1}'
   shasum -a 256 "$LATCH_PROTOCOL" | awk '{print "latch_protocol_sha256="$1}'
-  python3 -c 'import json,sys; print("latch_protocol_version=" + str(json.load(open(sys.argv[1]))["protocol_version"]))' "$LATCH_PROTOCOL"
+  python3 -c 'import re,sys; source=open(sys.argv[1]).read(); match=re.search(r"MAGIK_FBUF_PROTOCOL_VERSION\s*=\s*16.d(\d+)", source); assert match; print("latch_protocol_version=" + match.group(1))' "$LATCH_PROTOCOL"
   shasum -a 256 "$CRT_TIMING_RTL" | awk '{print "crt_timing_rtl_sha256="$1}'
   shasum -a 256 "$CRT_READER_RTL" | awk '{print "crt_reader_rtl_sha256="$1}'
   echo "apply_patch=$APPLY_PATCH"

@@ -183,6 +183,18 @@ class PlatformBundleTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "release manifest differs|protocol version"):
             bundle.verify(archive, manifest)
 
+    def test_legacy_fpga_metadata_may_have_protocol_hash_without_version(self) -> None:
+        for flavour in ("stock", "patched"):
+            metadata = self.fpga / flavour / "menu-magik-vblank-latch.metadata.txt"
+            metadata.write_text(metadata.read_text().replace("latch_protocol_version=3\n", ""))
+
+        self.assertEqual(
+            bundle.verify_fpga_component(self.fpga, self.fpga_id, require_protocol=False),
+            self.contract,
+        )
+        with self.assertRaisesRegex(ValueError, "protocol"):
+            bundle.verify_fpga_component(self.fpga, self.fpga_id, require_protocol=True)
+
     def test_attended_crt_evidence_requires_exact_identity_and_every_gate(self) -> None:
         evidence = self.root / "crt-evidence.json"
         payload = {

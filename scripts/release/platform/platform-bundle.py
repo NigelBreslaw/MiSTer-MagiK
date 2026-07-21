@@ -171,13 +171,11 @@ def verify_fpga_component(fpga_root: Path, fpga_id: str, *, require_protocol: bo
             raise BundleError("FPGA metadata does not match RBF")
         protocol_sha = fpga_fields.get("latch_protocol_sha256")
         protocol_version = fpga_fields.get("latch_protocol_version")
-        if protocol_sha is not None or protocol_version is not None:
+        if require_protocol:
             require_hex("latch_protocol_sha256", str(protocol_sha or ""), HEX64)
             if protocol_version != "3":
                 raise BundleError("FPGA metadata does not bind latch protocol version 3")
             protocol_identities.add((protocol_sha, protocol_version))
-        elif require_protocol:
-            raise BundleError("FPGA metadata is missing the latch protocol identity")
     if protocol_identities and len(protocol_identities) != 1:
         raise BundleError("stock and patched FPGA artifacts bind different latch protocols")
     verifier = load_module("verify_fpga_rbf_manifest", ROOT / "scripts/checks/verify-fpga-rbf-manifest.py")
