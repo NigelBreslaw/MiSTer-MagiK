@@ -15,7 +15,7 @@ all = "deny"
 
 [[bin]]
 name = "mister"
-path = "src/main.rs"
+path = "src/bin/mister.rs"
 
 [dependencies]
 base64 = "0.22"

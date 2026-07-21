@@ -2,16 +2,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::deploy::{DeploymentKind, DeploymentPlan};
+use crate::device::DeviceClient;
 use crate::model::Outcome;
 use crate::progress::{EventKind, Reporter};
+use mister_tool::transport::{DeviceRequest, Layout};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
 const BUILD_DEADLINE: Duration = Duration::from_secs(30 * 60);
-const DEVICE_DEADLINE: Duration = Duration::from_secs(45);
-const DEPLOY_DEADLINE: Duration = Duration::from_secs(3 * 60);
 const REMOTE_RUNTIME: &str = "/media/fat/mister-magik-dev/mister-magik-fb";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -85,6 +85,7 @@ pub fn execute(
     let mut actions = ProcessActions {
         repository,
         deployment,
+        device: DeviceClient::default(),
     };
     run_transaction(&mut actions, &mut |phase, percent| {
         reporter.emit(
@@ -100,6 +101,7 @@ pub fn execute(
 struct ProcessActions<'a> {
     repository: &'a Path,
     deployment: &'a DeploymentPlan,
+    device: DeviceClient,
 }
 
 impl RuntimeActions for ProcessActions<'_> {
@@ -113,40 +115,24 @@ impl RuntimeActions for ProcessActions<'_> {
                 BUILD_DEADLINE,
             ),
             Phase::VerifyLocal => self.deployment.build.verify(self.repository).map(|_| ()),
-            Phase::Snapshot => run_bounded(
-                self.repository,
-                "scripts/mister",
-                &["status".into(), "--json".into()],
-                DEVICE_DEADLINE,
-            ),
-            Phase::Stage => run_bounded(
-                self.repository,
-                "scripts/mister",
-                &[
-                    "agent".into(),
-                    "deploy-magik-bin".into(),
-                    self.deployment.build.artifact.display().to_string(),
-                    REMOTE_RUNTIME.into(),
-                    "--json".into(),
-                ],
-                DEPLOY_DEADLINE,
-            ),
+            Phase::Snapshot => self.device.execute(DeviceRequest::Status).map(|_| ()),
+            Phase::Stage => self
+                .device
+                .execute(DeviceRequest::DeployRuntime {
+                    local: self.deployment.build.artifact.clone(),
+                    remote: REMOTE_RUNTIME.into(),
+                })
+                .map(|_| ()),
             Phase::Suspend | Phase::Activate | Phase::Resume => {
                 // The resident agent owns these indivisible phases and rolls back before
                 // deploy-magik-bin returns an error. They are retained in the state model
                 // so failure injection and evidence preserve the transaction boundary.
                 Ok(())
             }
-            Phase::VerifyHealth => {
-                run_bounded(
-                    self.repository,
-                    "scripts/mister",
-                    &["status".into(), "--json".into()],
-                    DEVICE_DEADLINE,
-                )?;
-                run_bounded(self.repository, "scripts/mister", &["run".into(),
-                    "set -eu; pidof MiSTer_MagiKDev >/dev/null; pidof mister-magik-fb >/dev/null; grep -q '^mister_magik_scanout_slots ' /proc/modules; test -c /dev/mister-magik-scanout-slots; report=$(/media/fat/mister-magik-dev/mister-magik-fb latch-readiness-report); printf '%s\\n' \"$report\" | grep -Eq 'latch_readiness_tsv[[:space:]]+valid=1[[:space:]]+state=ready'".into()], DEVICE_DEADLINE)
-            }
+            Phase::VerifyHealth => self
+                .device
+                .execute(DeviceRequest::VerifyHealth(Layout::Development))
+                .map(|_| ()),
         }
     }
 }

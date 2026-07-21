@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use base64::Engine;
+use mister_tool::transport::{
+    DeviceFailure, DeviceOperations, DeviceRequest, DeviceResponse, Layout, MainSelection,
+};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 use rusqlite::{params, Connection};
@@ -50,7 +53,7 @@ const DEFAULT_LAUNCHER_ENV_REMOTE: &str = "/media/fat/mister-magik/launcher.env"
 const MAIN_STATUS_REMOTE: &str = "/tmp/mister-magik/main-status.json";
 const SLINT_STATUS_REMOTE: &str = "/tmp/mister-magik/status.json";
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 fn configured_remote_path(name: &str, fallback: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| fallback.to_string())
@@ -114,6 +117,7 @@ impl RebootMode {
     }
 }
 
+#[allow(dead_code)]
 fn main() {
     if let Err(e) = run_cli() {
         eprintln!("{e}");
@@ -121,7 +125,125 @@ fn main() {
     }
 }
 
-fn run_cli() -> Result<()> {
+#[derive(Default)]
+pub struct NativeDevice {
+    prepared: bool,
+}
+
+impl NativeDevice {
+    fn prepare(&mut self) -> std::result::Result<(), DeviceFailure> {
+        if self.prepared {
+            return Ok(());
+        }
+        let device = discovery::resolve().map_err(device_failure)?;
+        std::env::set_var("MISTER_IP", device.address.to_string());
+        std::env::set_var("MISTER_DEVICE_ID", &device.id);
+        if std::env::var_os("MISTER_SKIP_AGENT_BOOTSTRAP").is_none() {
+            bootstrap_agent().map_err(device_failure)?;
+        }
+        self.prepared = true;
+        Ok(())
+    }
+}
+
+impl DeviceOperations for NativeDevice {
+    fn execute(
+        &mut self,
+        request: &DeviceRequest,
+    ) -> std::result::Result<DeviceResponse, DeviceFailure> {
+        self.prepare()?;
+        let detail = match request {
+            DeviceRequest::Discover => "connected".into(),
+            DeviceRequest::Status => {
+                let session = connect(10).map_err(device_failure)?;
+                serde_json::to_string(&collect_status(&session).map_err(device_failure)?)
+                    .map_err(device_failure)?
+            }
+            DeviceRequest::DeployRuntime { local, remote } => {
+                let session = connect(10).map_err(device_failure)?;
+                deploy_magik_bin(&session, local, remote).map_err(device_failure)?;
+                "deployed".into()
+            }
+            DeviceRequest::DeployPlatform { stage } => {
+                let transaction =
+                    PlatformDeployTransaction::validate(stage).map_err(device_failure)?;
+                let session = connect(10).map_err(device_failure)?;
+                transaction.run(&session).map_err(device_failure)?;
+                "staged".into()
+            }
+            DeviceRequest::RollbackPlatform => {
+                let session = connect(10).map_err(device_failure)?;
+                exec_checked(&session, "platform rollback", &platform_rollback_script())
+                    .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?;
+                "rolled-back".into()
+            }
+            DeviceRequest::CommitPlatform => {
+                let session = connect(10).map_err(device_failure)?;
+                exec_checked(&session, "platform commit", &platform_cleanup_script())
+                    .map_err(device_failure)?;
+                "committed".into()
+            }
+            DeviceRequest::SelectMain(selection) => {
+                let value = match selection {
+                    MainSelection::Stock => "MiSTer",
+                    MainSelection::Development => "MiSTer_MagiKDev",
+                    MainSelection::Public => "MiSTer_MagiK",
+                };
+                let session = connect(10).map_err(device_failure)?;
+                edit_remote_ini(&session, IniEdit::SelectMain(value.into()), false)
+                    .map_err(device_failure)?;
+                value.into()
+            }
+            DeviceRequest::RebootWait => {
+                let session = connect(10).map_err(device_failure)?;
+                issue_reboot(&session, RebootMode::Supervised).map_err(device_failure)?;
+                drop(session);
+                if !wait_down(40.0) || wait_up(120.0).map_err(device_failure)? != 0 {
+                    return Err(DeviceFailure::Unavailable(
+                        "device did not complete its reboot transition".into(),
+                    ));
+                }
+                "rebooted".into()
+            }
+            DeviceRequest::VerifyHealth(layout) => {
+                let label = match layout {
+                    Layout::Development => "dev",
+                    Layout::Public => "public",
+                };
+                let command = delivery_health_command(label).map_err(device_failure)?;
+                let session = connect(10).map_err(device_failure)?;
+                exec_checked(&session, "delivery health", &command)
+                    .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
+                "healthy".into()
+            }
+            DeviceRequest::CaptureFramebuffer => {
+                capture_buffer(&[]).map_err(device_failure)?;
+                "captured".into()
+            }
+        };
+        Ok(DeviceResponse {
+            operation: request.label(),
+            detail,
+        })
+    }
+}
+
+fn device_failure(error: impl std::fmt::Display) -> DeviceFailure {
+    let detail = error.to_string();
+    let lower = detail.to_ascii_lowercase();
+    if lower.contains("authentication") || lower.contains("permission denied") {
+        DeviceFailure::Authentication(detail)
+    } else if lower.contains("connect")
+        || lower.contains("timeout")
+        || lower.contains("unreachable")
+    {
+        DeviceFailure::Unavailable(detail)
+    } else {
+        DeviceFailure::OperationFailed(detail)
+    }
+}
+
+pub fn run_cli() -> Result<()> {
     let mut args: Vec<String> = env::args().skip(1).collect();
     if args.is_empty() {
         usage();
@@ -302,6 +424,13 @@ fn run_cli() -> Result<()> {
                 print_status_summary(&status);
             }
         }
+        "delivery-health" => {
+            let layout = args.first().map(String::as_str).unwrap_or("dev");
+            let command = delivery_health_command(layout)?;
+            let sess = connect(10)?;
+            exec_checked(&sess, "delivery health", &command)?;
+            println!("healthy");
+        }
         "doctor" => {
             let json_out = args.iter().any(|a| a == "--json");
             let sess = connect(10)?;
@@ -416,6 +545,17 @@ fn usage() {
     println!(
         "usage: scripts/mister --capture-buffer\n       scripts/mister <connected|run|put|deploy-magik-bin|get|db|library-db|wait|connection-profile|media-check|media-download|media-bench-download|media-cloudflare-check|launcher-restart|boot-net-profile|boot-tcp-profile|agent|watch-reboot|reboot|reboot-wait|status|doctor|boot-capture|display-read|ini-repair-boot|ini-select-main|inittab-ensure-stock|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|mame-metadata-build|recover> ...\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>]\n       launcher-restart [--env KEY=VALUE]... [--clear-env] [--timeout SECS]; agent <ping|status|logs|timeline|diagnostics|deploy-magik-bin|magik|reboot-wait|boot-profile>; reboot/reboot-wait default to supervised MagiK visual-lockdown reboot; pass --raw for detached Linux reboot recovery; pass --direct-reset for fast quiescent dev reboots; --direct-reset-no-sync is experimental"
     );
+}
+
+fn delivery_health_command(layout: &str) -> Result<String> {
+    let (main, directory) = match layout {
+        "dev" => ("MiSTer_MagiKDev", "/media/fat/mister-magik-dev"),
+        "public" => ("MiSTer_MagiK", "/media/fat/mister-magik"),
+        _ => return Err(format!("unsupported delivery layout: {layout}").into()),
+    };
+    Ok(format!(
+        "set -eu; pidof {main} >/dev/null; pidof mister-magik-fb >/dev/null; grep -q '^mister_magik_scanout_slots ' /proc/modules; test -c /dev/mister-magik-scanout-slots; report=$({directory}/mister-magik-fb latch-readiness-report); printf '%s\\n' \"$report\" | grep -Eq 'latch_readiness_tsv[[:space:]]+valid=1[[:space:]]+state=ready'; test ! -e {directory}/launcher.env; test ! -e {directory}/rebuild-on-next-boot; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json"
+    ))
 }
 
 fn action_uses_device(action: &str) -> bool {

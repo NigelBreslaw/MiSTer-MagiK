@@ -1,229 +1,86 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::collections::{BTreeMap, VecDeque};
-use std::io::Read;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::collections::VecDeque;
+use std::path::PathBuf;
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub enum Operation {
-    Discover,
-    Status,
-    VerifyManifest,
-    DeployRuntime,
-    ActivateDevelopment,
-    RebootWait,
-    VerifyHealth,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Layout {
+    Development,
+    Public,
 }
 
-impl Operation {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MainSelection {
+    Stock,
+    Development,
+    Public,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DeviceRequest {
+    Discover,
+    Status,
+    DeployRuntime { local: PathBuf, remote: String },
+    DeployPlatform { stage: PathBuf },
+    RollbackPlatform,
+    CommitPlatform,
+    SelectMain(MainSelection),
+    RebootWait,
+    VerifyHealth(Layout),
+    CaptureFramebuffer,
+}
+
+impl DeviceRequest {
     #[must_use]
-    pub fn label(self) -> &'static str {
+    pub const fn label(&self) -> &'static str {
         match self {
             Self::Discover => "discover",
             Self::Status => "status",
-            Self::VerifyManifest => "verify-manifest",
-            Self::DeployRuntime => "deploy-runtime",
-            Self::ActivateDevelopment => "activate-development",
+            Self::DeployRuntime { .. } => "deploy-runtime",
+            Self::DeployPlatform { .. } => "deploy-platform",
+            Self::RollbackPlatform => "rollback-platform",
+            Self::CommitPlatform => "commit-platform",
+            Self::SelectMain(_) => "select-main",
             Self::RebootWait => "reboot-wait",
-            Self::VerifyHealth => "verify-health",
+            Self::VerifyHealth(_) => "verify-health",
+            Self::CaptureFramebuffer => "capture-framebuffer",
         }
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Request {
-    pub operation: Operation,
-    pub args: Vec<String>,
-    pub deadline: Duration,
+pub struct DeviceResponse {
+    pub operation: &'static str,
+    pub detail: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Response {
-    pub operation: Operation,
-    pub stdout: String,
-    pub stderr: String,
-    pub elapsed_ms: u128,
+pub enum DeviceFailure {
+    Unavailable(String),
+    Authentication(String),
+    InvalidRequest(String),
+    ArtifactMismatch(String),
+    Unhealthy(String),
+    OperationFailed(String),
+    RecoveryRequired(String),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Failure {
-    Timeout,
-    Disconnected,
-    ChecksumMismatch,
-    Unhealthy,
-    RollbackFailed,
-    CommandFailed { code: Option<i32>, detail: String },
-}
-
-pub trait DeviceTransport {
-    fn execute(&mut self, request: &Request) -> Result<Response, Failure>;
-}
-
-#[derive(Clone, Debug)]
-pub struct HostCliTransport {
-    binary: PathBuf,
-    environment: BTreeMap<String, String>,
-}
-
-impl HostCliTransport {
-    #[must_use]
-    pub fn new(binary: impl Into<PathBuf>) -> Self {
-        Self {
-            binary: binary.into(),
-            environment: BTreeMap::new(),
-        }
-    }
-
-    #[must_use]
-    pub fn with_environment(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
-        self.environment.insert(name.into(), value.into());
-        self
-    }
-
-    fn command(&self, request: &Request) -> Result<Command, Failure> {
-        let mut command = Command::new(&self.binary);
-        command
-            .args(command_args(request)?)
-            .envs(&self.environment)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        Ok(command)
-    }
-}
-
-impl DeviceTransport for HostCliTransport {
-    fn execute(&mut self, request: &Request) -> Result<Response, Failure> {
-        let started = Instant::now();
-        let mut child = self
-            .command(request)?
-            .spawn()
-            .map_err(|error| Failure::CommandFailed {
-                code: None,
-                detail: error.to_string(),
-            })?;
-        let mut stdout = child.stdout.take().ok_or_else(|| Failure::CommandFailed {
-            code: None,
-            detail: "cannot capture host stdout".into(),
-        })?;
-        let mut stderr = child.stderr.take().ok_or_else(|| Failure::CommandFailed {
-            code: None,
-            detail: "cannot capture host stderr".into(),
-        })?;
-        let stdout_reader = thread::spawn(move || {
-            let mut bytes = Vec::new();
-            stdout.read_to_end(&mut bytes).map(|_| bytes)
-        });
-        let stderr_reader = thread::spawn(move || {
-            let mut bytes = Vec::new();
-            stderr.read_to_end(&mut bytes).map(|_| bytes)
-        });
-        loop {
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    let stdout = stdout_reader
-                        .join()
-                        .map_err(|_| Failure::CommandFailed {
-                            code: status.code(),
-                            detail: "host stdout reader failed".into(),
-                        })?
-                        .map_err(|error| Failure::CommandFailed {
-                            code: status.code(),
-                            detail: error.to_string(),
-                        })?;
-                    let stderr = stderr_reader
-                        .join()
-                        .map_err(|_| Failure::CommandFailed {
-                            code: status.code(),
-                            detail: "host stderr reader failed".into(),
-                        })?
-                        .map_err(|error| Failure::CommandFailed {
-                            code: status.code(),
-                            detail: error.to_string(),
-                        })?;
-                    if !status.success() {
-                        return Err(Failure::CommandFailed {
-                            code: status.code(),
-                            detail: String::from_utf8_lossy(&stderr).trim().to_owned(),
-                        });
-                    }
-                    return Ok(Response {
-                        operation: request.operation,
-                        stdout: String::from_utf8_lossy(&stdout).into_owned(),
-                        stderr: String::from_utf8_lossy(&stderr).into_owned(),
-                        elapsed_ms: started.elapsed().as_millis(),
-                    });
-                }
-                Ok(None) if started.elapsed() < request.deadline => {
-                    thread::sleep(Duration::from_millis(25));
-                }
-                Ok(None) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(Failure::Timeout);
-                }
-                Err(error) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(Failure::CommandFailed {
-                        code: None,
-                        detail: error.to_string(),
-                    });
-                }
-            }
-        }
-    }
-}
-
-fn command_args(request: &Request) -> Result<Vec<String>, Failure> {
-    let args = match request.operation {
-        Operation::Discover => vec!["connected".into()],
-        Operation::Status | Operation::VerifyHealth => vec!["status".into(), "--json".into()],
-        Operation::DeployRuntime => {
-            if request.args.len() != 2 {
-                return Err(invalid_args(request.operation));
-            }
-            vec![
-                "agent".into(),
-                "deploy-magik-bin".into(),
-                request.args[0].clone(),
-                request.args[1].clone(),
-                "--json".into(),
-            ]
-        }
-        Operation::ActivateDevelopment => {
-            vec!["ini-select-main".into(), "MiSTer_MagiKDev".into()]
-        }
-        Operation::RebootWait => vec!["reboot-wait".into()],
-        Operation::VerifyManifest => {
-            return Err(Failure::CommandFailed {
-                code: None,
-                detail: "manifest verification requires a typed host operation".into(),
-            });
-        }
-    };
-    Ok(args)
-}
-
-fn invalid_args(operation: Operation) -> Failure {
-    Failure::CommandFailed {
-        code: None,
-        detail: format!("invalid arguments for {}", operation.label()),
-    }
+pub trait DeviceOperations {
+    fn execute(&mut self, request: &DeviceRequest) -> Result<DeviceResponse, DeviceFailure>;
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct FakeTransport {
-    responses: VecDeque<Result<Response, Failure>>,
-    requests: Vec<Request>,
+pub struct FakeDevice {
+    responses: VecDeque<Result<DeviceResponse, DeviceFailure>>,
+    requests: Vec<DeviceRequest>,
 }
 
-impl FakeTransport {
+impl FakeDevice {
     #[must_use]
-    pub fn with_results(results: impl IntoIterator<Item = Result<Response, Failure>>) -> Self {
+    pub fn with_results(
+        results: impl IntoIterator<Item = Result<DeviceResponse, DeviceFailure>>,
+    ) -> Self {
         Self {
             responses: results.into_iter().collect(),
             requests: Vec::new(),
@@ -231,26 +88,19 @@ impl FakeTransport {
     }
 
     #[must_use]
-    pub fn requests(&self) -> &[Request] {
+    pub fn requests(&self) -> &[DeviceRequest] {
         &self.requests
     }
 }
 
-impl DeviceTransport for FakeTransport {
-    fn execute(&mut self, request: &Request) -> Result<Response, Failure> {
+impl DeviceOperations for FakeDevice {
+    fn execute(&mut self, request: &DeviceRequest) -> Result<DeviceResponse, DeviceFailure> {
         self.requests.push(request.clone());
-        self.responses
-            .pop_front()
-            .unwrap_or(Err(Failure::Disconnected))
-    }
-}
-
-#[must_use]
-pub fn runtime_deploy_request(local: &Path, remote: &str, deadline: Duration) -> Request {
-    Request {
-        operation: Operation::DeployRuntime,
-        args: vec![local.display().to_string(), remote.to_owned()],
-        deadline,
+        self.responses.pop_front().unwrap_or_else(|| {
+            Err(DeviceFailure::Unavailable(
+                "no fake response configured".into(),
+            ))
+        })
     }
 }
 
@@ -259,44 +109,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn runtime_request_maps_to_resident_agent_command() {
-        let request = runtime_deploy_request(
-            Path::new("build/mister-magik-fb"),
-            "/media/fat/mister-magik-dev/mister-magik-fb",
-            Duration::from_secs(30),
-        );
+    fn fake_records_typed_requests_and_failures() {
+        let mut fake = FakeDevice::with_results([
+            Ok(DeviceResponse {
+                operation: "status",
+                detail: "{}".into(),
+            }),
+            Err(DeviceFailure::Unavailable("offline".into())),
+        ]);
+        fake.execute(&DeviceRequest::Status).unwrap();
+        assert!(fake.execute(&DeviceRequest::RebootWait).is_err());
         assert_eq!(
-            command_args(&request).unwrap(),
-            vec![
-                "agent",
-                "deploy-magik-bin",
-                "build/mister-magik-fb",
-                "/media/fat/mister-magik-dev/mister-magik-fb",
-                "--json"
-            ]
+            fake.requests(),
+            &[DeviceRequest::Status, DeviceRequest::RebootWait]
         );
     }
 
     #[test]
-    fn fake_transport_records_requests_and_injects_failures() {
-        let mut transport = FakeTransport::with_results([Err(Failure::ChecksumMismatch)]);
-        let request = Request {
-            operation: Operation::VerifyManifest,
-            args: Vec::new(),
-            deadline: Duration::from_secs(1),
-        };
-        assert_eq!(transport.execute(&request), Err(Failure::ChecksumMismatch));
-        assert_eq!(transport.requests(), &[request]);
-    }
-
-    #[test]
-    fn host_process_is_killed_at_the_total_deadline() {
-        let mut transport = HostCliTransport::new("/usr/bin/yes");
-        let request = Request {
-            operation: Operation::Discover,
-            args: Vec::new(),
-            deadline: Duration::from_millis(20),
-        };
-        assert_eq!(transport.execute(&request), Err(Failure::Timeout));
+    fn normal_api_has_no_remote_shell_request() {
+        let labels = [
+            DeviceRequest::Discover,
+            DeviceRequest::Status,
+            DeviceRequest::RollbackPlatform,
+            DeviceRequest::CommitPlatform,
+            DeviceRequest::RebootWait,
+            DeviceRequest::VerifyHealth(Layout::Development),
+            DeviceRequest::CaptureFramebuffer,
+        ]
+        .map(|request| request.label());
+        assert!(!labels.contains(&"run"));
+        assert!(!labels.contains(&"shell"));
     }
 }

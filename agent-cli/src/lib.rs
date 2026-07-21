@@ -5,6 +5,7 @@ pub mod cli;
 pub mod commit;
 pub mod components;
 pub mod deploy;
+pub mod device;
 pub mod evidence;
 pub mod executor;
 pub mod model;

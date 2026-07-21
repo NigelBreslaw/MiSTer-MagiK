@@ -2,9 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::deploy::{DeploymentKind, DeploymentPlan};
+use crate::device::DeviceClient;
 use crate::model::Outcome;
 use crate::progress::{EventKind, Reporter};
 use crate::runtime_deploy::run_bounded;
+use mister_tool::transport::{DeviceRequest, Layout, MainSelection};
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -12,8 +14,6 @@ use std::time::Duration;
 
 const BUILD_DEADLINE: Duration = Duration::from_secs(30 * 60);
 const PREPARE_DEADLINE: Duration = Duration::from_secs(10 * 60);
-const DEVICE_DEADLINE: Duration = Duration::from_secs(5 * 60);
-const REBOOT_DEADLINE: Duration = Duration::from_secs(3 * 60);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Phase {
@@ -98,6 +98,7 @@ pub fn execute(
         deployment,
         stage,
         mutated: false,
+        device: DeviceClient::default(),
     };
     let result = run_transaction(&mut actions, &mut |phase, percent| {
         reporter.emit(
@@ -129,22 +130,14 @@ struct ProcessActions<'a> {
     deployment: &'a DeploymentPlan,
     stage: PathBuf,
     mutated: bool,
+    device: DeviceClient,
 }
 
 impl ProcessActions<'_> {
     fn rollback(&self) -> Result<(), String> {
-        run_bounded(
-            self.repository,
-            "scripts/mister",
-            &["platform-rollback".into()],
-            DEVICE_DEADLINE,
-        )?;
-        run_bounded(
-            self.repository,
-            "scripts/mister",
-            &["reboot-wait".into()],
-            REBOOT_DEADLINE,
-        )
+        let mut device = DeviceClient::default();
+        device.execute(DeviceRequest::RollbackPlatform)?;
+        device.execute(DeviceRequest::RebootWait).map(|_| ())
     }
 }
 
@@ -173,64 +166,31 @@ impl PlatformActions for ProcessActions<'_> {
                     &self.deployment.build.artifact,
                 )
             }
-            Phase::Snapshot => run_bounded(
-                self.repository,
-                "scripts/mister",
-                &["status".into(), "--json".into()],
-                DEVICE_DEADLINE,
-            ),
+            Phase::Snapshot => self.device.execute(DeviceRequest::Status).map(|_| ()),
             Phase::Stage => {
                 self.mutated = true;
-                run_bounded(
-                    self.repository,
-                    "scripts/mister",
-                    &["platform-deploy".into(), self.stage.display().to_string()],
-                    DEVICE_DEADLINE,
-                )?;
+                self.device.execute(DeviceRequest::DeployPlatform {
+                    stage: self.stage.clone(),
+                })?;
                 Ok(())
             }
             Phase::Suspend | Phase::Activate => Ok(()),
             Phase::Reboot => {
-                run_bounded(
-                    self.repository,
-                    "scripts/mister",
-                    &["ini-select-main".into(), "MiSTer_MagiKDev".into()],
-                    DEVICE_DEADLINE,
-                )?;
-                run_bounded(
-                    self.repository,
-                    "scripts/mister",
-                    &["reboot-wait".into()],
-                    REBOOT_DEADLINE,
-                )
+                self.device
+                    .execute(DeviceRequest::SelectMain(MainSelection::Development))?;
+                self.device.execute(DeviceRequest::RebootWait).map(|_| ())
             }
-            Phase::VerifyHealth => {
-                run_bounded(
-                    self.repository,
-                    "scripts/mister",
-                    &["status".into(), "--json".into()],
-                    DEVICE_DEADLINE,
-                )?;
-                run_bounded(
-                    self.repository,
-                    "scripts/mister",
-                    &["run".into(), platform_health_command().into()],
-                    DEVICE_DEADLINE,
-                )
-            }
-            Phase::Cleanup => run_bounded(
-                self.repository,
-                "scripts/mister",
-                &["platform-commit".into()],
-                DEVICE_DEADLINE,
-            ),
+            Phase::VerifyHealth => self
+                .device
+                .execute(DeviceRequest::VerifyHealth(Layout::Development))
+                .map(|_| ()),
+            Phase::Cleanup => self
+                .device
+                .execute(DeviceRequest::CommitPlatform)
+                .map(|_| ()),
             Phase::Complete => Ok(()),
         }
     }
-}
-
-fn platform_health_command() -> &'static str {
-    "set -eu; manifest=/media/fat/mister-magik-dev/platform-v2.manifest; field() { awk -F= -v key=\"$1\" '$1 == key { print $2 }' \"$manifest\"; }; check() { expected=$(field \"$1\"); actual=$(sha256sum \"$2\" | awk '{print $1}'); test \"$actual\" = \"$expected\"; }; pid=$(pidof MiSTer_MagiKDev); test -n \"$pid\"; gui=$(pidof mister-magik-fb); test -n \"$gui\"; check main_sha256 /media/fat/MiSTer_MagiKDev; check gui_sha256 /media/fat/mister-magik-dev/mister-magik-fb; check scanout_module_sha256 /media/fat/mister-magik-dev/mister_magik_scanout_slots.ko; check latch_rbf_sha256 /media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.rbf; grep -q '^mister_magik_scanout_slots ' /proc/modules; test -c /dev/mister-magik-scanout-slots; tr '\\000' ' ' < /proc/$pid/cmdline | grep -Fq /media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.rbf; report=$(/media/fat/mister-magik-dev/mister-magik-fb latch-readiness-report); printf '%s\\n' \"$report\" | grep -Eq 'latch_readiness_tsv[[:space:]]+valid=1[[:space:]]+state=ready'"
 }
 
 fn prepare_stage(

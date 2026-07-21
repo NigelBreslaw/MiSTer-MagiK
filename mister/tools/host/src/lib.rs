@@ -2,3 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 pub mod transport;
+
+extern crate self as mister_tool;
+
+include!("main.rs");
