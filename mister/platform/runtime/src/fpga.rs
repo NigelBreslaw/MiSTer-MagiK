@@ -155,9 +155,44 @@ impl FbParams {
 /// us forever, unlike MiSTer which reboots in that case.
 const SPIN_LIMIT: u32 = 2_000_000;
 
-pub struct Fpga {
+trait RegisterIo {
+    fn write_gpo(&mut self, value: u32);
+    fn read_gpi(&mut self) -> u32;
+}
+
+struct MmioRegisters {
     base: *mut u8,
     _file: std::fs::File,
+}
+
+impl RegisterIo for MmioRegisters {
+    fn write_gpo(&mut self, value: u32) {
+        debug_assert!(GPO_OFF + std::mem::size_of::<u32>() <= MGR_LEN);
+        // SAFETY: base is a live /dev/mem MMIO mapping for MGR_LEN bytes, and
+        // GPO_OFF is within that mapping. Volatile preserves the device write.
+        unsafe { write_volatile(self.base.add(GPO_OFF) as *mut u32, value) };
+    }
+
+    fn read_gpi(&mut self) -> u32 {
+        debug_assert!(GPI_OFF + std::mem::size_of::<u32>() <= MGR_LEN);
+        // SAFETY: base is a live /dev/mem MMIO mapping for MGR_LEN bytes, and
+        // GPI_OFF is within that mapping. Volatile preserves the device read.
+        unsafe { read_volatile(self.base.add(GPI_OFF) as *const u32) }
+    }
+}
+
+impl Drop for MmioRegisters {
+    fn drop(&mut self) {
+        // SAFETY: base/MGR_LEN come from a successful mmap and this Drop path
+        // runs once for the owning register mapping.
+        unsafe {
+            libc::munmap(self.base as *mut libc::c_void, MGR_LEN);
+        }
+    }
+}
+
+pub struct Fpga {
+    registers: Box<dyn RegisterIo>,
     gpo: u32,
 }
 
@@ -188,8 +223,10 @@ impl Fpga {
             return Err(io::Error::last_os_error());
         }
         Ok(Self {
-            base: base as *mut u8,
-            _file: file,
+            registers: Box::new(MmioRegisters {
+                base: base as *mut u8,
+                _file: file,
+            }),
             // GPO is write-only; we can't read its current value, so start from a
             // known-safe shadow (configured bit set, everything else clear).
             gpo: BIT31,
@@ -199,18 +236,12 @@ impl Fpga {
     #[inline]
     fn wr(&mut self, v: u32) {
         self.gpo = v;
-        debug_assert!(GPO_OFF + std::mem::size_of::<u32>() <= MGR_LEN);
-        // SAFETY: base is a live /dev/mem MMIO mapping for MGR_LEN bytes, and
-        // GPO_OFF is within that mapping. Volatile preserves the device write.
-        unsafe { write_volatile(self.base.add(GPO_OFF) as *mut u32, v) };
+        self.registers.write_gpo(v);
     }
 
     #[inline]
-    fn rd(&self) -> u32 {
-        debug_assert!(GPI_OFF + std::mem::size_of::<u32>() <= MGR_LEN);
-        // SAFETY: base is a live /dev/mem MMIO mapping for MGR_LEN bytes, and
-        // GPI_OFF is within that mapping. Volatile preserves the device read.
-        unsafe { read_volatile(self.base.add(GPI_OFF) as *const u32) }
+    fn rd(&mut self) -> u32 {
+        self.registers.read_gpi()
     }
 
     fn spi_en(&mut self, mask: u32, en: bool) {
@@ -590,19 +621,55 @@ impl LatchedFbufStatus {
     }
 }
 
-impl Drop for Fpga {
-    fn drop(&mut self) {
-        // SAFETY: base/MGR_LEN come from a successful mmap in Fpga::open and
-        // this Drop path runs once for the owning Fpga.
-        unsafe {
-            libc::munmap(self.base as *mut libc::c_void, MGR_LEN);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
+    use std::rc::Rc;
+
+    #[derive(Default)]
+    struct RegisterState {
+        reads: VecDeque<u32>,
+        default_read: u32,
+        writes: Vec<u32>,
+    }
+
+    struct ScriptedRegisters(Rc<RefCell<RegisterState>>);
+
+    impl RegisterIo for ScriptedRegisters {
+        fn write_gpo(&mut self, value: u32) {
+            self.0.borrow_mut().writes.push(value);
+        }
+
+        fn read_gpi(&mut self) -> u32 {
+            let mut state = self.0.borrow_mut();
+            state.reads.pop_front().unwrap_or(state.default_read)
+        }
+    }
+
+    fn scripted(pairs: &[(u16, u16)]) -> (Fpga, Rc<RefCell<RegisterState>>) {
+        let state = Rc::new(RefCell::new(RegisterState {
+            reads: pairs
+                .iter()
+                .flat_map(|(hi, lo)| [ACK | u32::from(*hi), u32::from(*lo)])
+                .collect(),
+            ..RegisterState::default()
+        }));
+        let fpga = Fpga {
+            registers: Box::new(ScriptedRegisters(Rc::clone(&state))),
+            gpo: BIT31,
+        };
+        (fpga, state)
+    }
+
+    fn words_from_writes(writes: &[u32]) -> Vec<u16> {
+        writes
+            .windows(2)
+            .filter(|pair| pair[1] == pair[0] | STROBE)
+            .map(|pair| pair[0] as u16)
+            .collect()
+    }
 
     #[test]
     fn framebuffer_sized_mode_uses_requested_active_area() {
@@ -612,5 +679,129 @@ mod tests {
         assert_eq!(mode.vact, 540);
         assert_eq!(mode.hbp as i32 - FB_DV_LBRD, 0);
         assert_eq!(mode.vbp as i32 - FB_DV_UBRD, 0);
+    }
+
+    #[test]
+    fn spi_sequences_strobe_and_returns_both_ack_phases() {
+        let (mut fpga, state) = scripted(&[(0x1234, 0x5678)]);
+
+        assert_eq!(fpga.spi_capture(0xabcd).unwrap(), (0x1234, 0x5678));
+        assert_eq!(
+            state.borrow().writes,
+            vec![BIT31 | 0xabcd, BIT31 | STROBE | 0xabcd, BIT31 | 0xabcd]
+        );
+    }
+
+    #[test]
+    fn spi_timeouts_restore_low_strobe_and_report_the_phase() {
+        let (mut high_timeout, high_state) = scripted(&[]);
+        let error = high_timeout.spi(0x55aa).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(error.to_string().contains("ACK high"));
+        assert_eq!(*high_state.borrow().writes.last().unwrap(), BIT31 | 0x55aa);
+
+        let (mut low_timeout, low_state) = scripted(&[]);
+        low_state.borrow_mut().default_read = ACK;
+        let error = low_timeout.spi(0xaa55).unwrap_err();
+        assert!(error.to_string().contains("ACK low"));
+        assert_eq!(*low_state.borrow().writes.last().unwrap(), BIT31 | 0xaa55);
+    }
+
+    #[test]
+    fn command_helpers_always_release_io_and_emit_expected_words() {
+        let (mut fpga, state) = scripted(&[(1, 2), (3, 4)]);
+        assert_eq!(fpga.uio_cmd16(0x10, 0x20).unwrap(), 4);
+        assert_eq!(words_from_writes(&state.borrow().writes), vec![0x10, 0x20]);
+        assert_eq!(fpga.gpo & IO_EN, 0);
+
+        let (mut failed, failed_state) = scripted(&[]);
+        assert!(failed.cmd_capture(0x33).is_err());
+        assert_eq!(failed.gpo & IO_EN, 0);
+        assert_eq!(*failed_state.borrow().writes.last().unwrap() & IO_EN, 0);
+    }
+
+    #[test]
+    fn video_and_framebuffer_responses_decode_wire_order() {
+        let video_words = [
+            0x0301, 0x0040, 0x0001, 0x0020, 0, 10, 0, 20, 0, 30, 0, 40, 0, 50, 0, 2, 640, 480,
+        ];
+        let mut video_pairs = vec![(0xaaaa, 0xbbbb)];
+        video_pairs.extend(video_words.map(|word| (0, word)));
+        let (mut fpga, _) = scripted(&video_pairs);
+        let info = fpga.read_video_info().unwrap();
+        assert_eq!((info.width, info.height), (0x1_0040, 0x20));
+        assert!(info.interlaced);
+        assert!(info.rotated);
+        assert!(info.log_line().contains("de=640x480"));
+
+        let (mut fpga, _) = scripted(&[
+            (0x12ab, 0),
+            (0, 0x1456),
+            (0, 0x0789),
+            (0, FB_EN | 0x40 | FB_FMT_565),
+            (0, 960),
+            (0, 540),
+        ]);
+        let params = fpga.read_fb_params().unwrap();
+        assert_eq!((params.crc, params.arx, params.ary), (0xab, 0x456, 0x789));
+        assert!(params.arxy);
+        assert!(params.fb_enabled);
+        assert!(params.log_line().contains("960x540"));
+    }
+
+    #[test]
+    fn framebuffer_commands_emit_complete_bounded_payloads() {
+        let mode = FramebufferRouteMode::framebuffer_sized(960, 540);
+        let (mut fpga, state) = scripted(&[(0x44, 0); 13]);
+        let support = fpga.fb_enable_rgb565(0, 960, 540, mode, true).unwrap();
+        assert_eq!(support, 0x44);
+        let words = words_from_writes(&state.borrow().writes);
+        assert!(words.starts_with(&[
+            UIO_SET_FBUF,
+            FB_EN | FB_FMT_565 | FB_FMT_RXB,
+            (FB_ADDR + 4096) as u16,
+            ((FB_ADDR + 4096) >> 16) as u16,
+            960,
+            540,
+        ]));
+        assert!(words.ends_with(&[
+            UIO_BUT_SW,
+            CONF_VGA_SCALER | CONF_DIRECT_VIDEO | CONF_VGA_FB
+        ]));
+        assert_eq!(fpga.gpo & IO_EN, 0);
+
+        let geometry = LatchedFbufGeometry::new(960, mode, 1);
+        let (mut fpga, state) = scripted(&[(0x55, 0); 12]);
+        assert_eq!(
+            fpga.post_magik_latched_fbuf_rgb565(7, FB_ADDR, 960, 540, geometry)
+                .unwrap(),
+            (0x55, 0)
+        );
+        let words = words_from_writes(&state.borrow().writes);
+        assert_eq!(words[0], MAGIK_UIO_SET_FBUF_LATCH);
+        assert_eq!(*words.last().unwrap(), 7);
+        assert_eq!(fpga.gpo & IO_EN, 0);
+    }
+
+    #[test]
+    fn latched_status_flags_have_stable_meanings() {
+        let status = LatchedFbufStatus {
+            magic_hi: MAGIK_FBUF_STATUS_MAGIC,
+            magic_lo: 0,
+            active_sequence: 1,
+            pending_sequence: 2,
+            flags: 0x0007,
+            flip_count: 3,
+            post_count: 4,
+            drop_count: 5,
+            active_base: FB_ADDR,
+            active_width: 960,
+            active_height: 540,
+            active_stride: 1920,
+        };
+        assert!(status.supported());
+        assert!(status.active_enabled());
+        assert!(status.pending_enabled());
+        assert!(status.pending());
     }
 }
