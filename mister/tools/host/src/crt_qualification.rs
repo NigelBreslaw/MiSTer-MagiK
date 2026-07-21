@@ -9,7 +9,7 @@ use super::{
 use serde_json::{json, Value};
 use ssh2::Session;
 use std::fs;
-use std::io::{self, IsTerminal, Read, Write};
+use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -142,23 +142,25 @@ fn run_attended(output: Option<PathBuf>) -> Result<()> {
     let trial_result = run_mode_matrix(&output, interrupted);
     let restore_result = restore_transaction(Some(&original));
     match (trial_result, restore_result) {
-        (Ok(all_passed), Ok(())) => {
+        (Ok(all_runtime_passed), Ok(())) => {
             fs::write(
                 output.join("summary.json"),
                 serde_json::to_vec_pretty(&json!({
                     "schema": 1,
                     "kind": "mister-magik-morph-functional-qualification",
-                    "all_modes_passed": all_passed,
+                    "all_modes_runtime_passed": all_runtime_passed,
+                    "all_modes_passed": false,
+                    "visual_review_pending": true,
                     "real_crt_qualified": false,
                 }))?,
             )?;
             println!(
-                "CRT Morph functional qualification complete: all_modes_passed={all_passed} real_crt_qualified=false"
+                "CRT capture complete: all_modes_runtime_passed={all_runtime_passed} visual_review_pending=true real_crt_qualified=false"
             );
-            if all_passed {
+            if all_runtime_passed {
                 Ok(())
             } else {
-                Err("one or more CRT modes failed attended visual review".into())
+                Err("one or more CRT modes failed runtime qualification".into())
             }
         }
         (Err(trial), Ok(())) => Err(trial),
@@ -330,47 +332,40 @@ fn capture_analyzer(directory: &Path, mode: CrtMode, interrupted: &AtomicBool) -
 }
 
 fn run_mode_attempts(directory: &Path, mode: CrtMode, interrupted: &AtomicBool) -> Result<bool> {
-    let mut attempt = 1_u32;
-    loop {
-        check_interrupted(interrupted)?;
-        let attempt_directory = directory.join(format!("attempt-{attempt:02}"));
-        fs::create_dir(&attempt_directory)?;
-        let video = attempt_directory.join("trial.mp4");
-        let mut camera = spawn_video_capture(&video)?;
-        let trial = run_crt_trial_once(mode);
-        let camera_status = camera.wait()?;
-        if !camera_status.success() {
-            return Err(format!("USB Video capture failed for {}", mode.output).into());
-        }
-        let trial_status = trial?;
-        fs::write(attempt_directory.join("trial-status.txt"), &trial_status)?;
-        extract_review_frames(&video, &attempt_directory)?;
-        println!("Review artifacts: {}", attempt_directory.display());
-        let verdict = prompt_choice(
-            interrupted,
-            "After joint visual review, type pass, fail, retry, or abort: ",
-            &["pass", "fail", "retry", "abort"],
-        )?;
-        fs::write(
-            attempt_directory.join("verdict.json"),
-            serde_json::to_vec_pretty(&json!({
-                "mode": mode.output,
-                "attempt": attempt,
-                "verdict": verdict,
-                "real_crt_qualified": false,
-            }))?,
-        )?;
-        match verdict.as_str() {
-            "pass" => return Ok(true),
-            "fail" => return Ok(false),
-            "retry" => attempt += 1,
-            "abort" => return Err("CRT qualification aborted during visual review".into()),
-            _ => unreachable!(),
-        }
+    check_interrupted(interrupted)?;
+    let attempt_directory = directory.join("attempt-01");
+    fs::create_dir(&attempt_directory)?;
+    let video = attempt_directory.join("trial.mp4");
+    let mut camera = spawn_video_capture(&video)?;
+    let trial = run_crt_trial_once(mode, &attempt_directory);
+    let camera_status = camera.wait()?;
+    if !camera_status.success() {
+        return Err(format!("USB Video capture failed for {}", mode.output).into());
     }
+    extract_review_frames(&video, &attempt_directory)?;
+    let trial_status = match trial {
+        Ok(status) => status,
+        Err(error) => {
+            fs::write(attempt_directory.join("trial-error.txt"), error.to_string())?;
+            return Err(error);
+        }
+    };
+    fs::write(attempt_directory.join("trial-status.txt"), &trial_status)?;
+    fs::write(
+        attempt_directory.join("verdict.json"),
+        serde_json::to_vec_pretty(&json!({
+            "mode": mode.output,
+            "attempt": 1,
+            "runtime_passed": true,
+            "verdict": "visual-review-pending",
+            "real_crt_qualified": false,
+        }))?,
+    )?;
+    println!("Review artifacts: {}", attempt_directory.display());
+    Ok(true)
 }
 
-fn run_crt_trial_once(mode: CrtMode) -> Result<String> {
+fn run_crt_trial_once(mode: CrtMode, artifact_directory: &Path) -> Result<String> {
     let session = connect(10)?;
     let runtime_settings = format!("schema=1&output={}", mode.output);
     exec_checked(
@@ -378,17 +373,19 @@ fn run_crt_trial_once(mode: CrtMode) -> Result<String> {
         "scene suspend",
         &acknowledged_main_command("mister_magik_suspend"),
     )?;
-    exec_checked(
+    let trial_result = exec_checked(
         &session,
         "operator CRT trial",
         &crt_trial_run_command(&runtime_settings),
-    )?;
-    let output = exec_checked_output(
+    );
+    let log = exec_checked_output(
         &session,
-        "CRT trial status",
-        "sed -n '/^crt_trial_status_v2 /p' /tmp/mister-magik-crt_trial.log | tail -n 1",
+        "CRT trial log snapshot",
+        "if test -e /tmp/mister-magik-crt_trial.log; then cat /tmp/mister-magik-crt_trial.log; fi",
     )?;
-    let status = parse_crt_trial_status(&output.stdout)?;
+    fs::write(artifact_directory.join("trial.log"), &log.stdout)?;
+    trial_result?;
+    let status = parse_crt_trial_status(&log.stdout)?;
     validate_trial_progress(status, mode)?;
     Ok(status.to_string())
 }
@@ -559,30 +556,6 @@ fn extract_review_frames(video: &Path, directory: &Path) -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn prompt_choice(interrupted: &AtomicBool, prompt: &str, choices: &[&str]) -> Result<String> {
-    loop {
-        check_interrupted(interrupted)?;
-        print!("{prompt}");
-        io::stdout().flush()?;
-        let mut answer = String::new();
-        match io::stdin().read_line(&mut answer) {
-            Ok(0) => return Err("interactive input closed".into()),
-            Ok(_) => {}
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => {
-                check_interrupted(interrupted)?;
-                continue;
-            }
-            Err(error) => return Err(error.into()),
-        }
-        check_interrupted(interrupted)?;
-        let answer = answer.trim().to_ascii_lowercase();
-        if choices.contains(&answer.as_str()) {
-            return Ok(answer);
-        }
-        println!("Expected one of: {}", choices.join(", "));
-    }
 }
 
 fn check_interrupted(interrupted: &AtomicBool) -> Result<()> {
