@@ -8,6 +8,7 @@ pub mod evidence;
 pub mod executor;
 pub mod model;
 pub mod planner;
+pub mod platform_ci;
 pub mod policy;
 pub mod progress;
 pub mod redact;

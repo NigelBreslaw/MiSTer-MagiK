@@ -51,6 +51,7 @@ pub struct DeploymentPlan {
     pub platform_components: Vec<&'static str>,
     pub changed_paths: Vec<PathBuf>,
     pub build: BuildSpec,
+    pub platform_candidate: Option<crate::platform_ci::Candidate>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -200,7 +201,30 @@ pub fn plan(repository: &Path, mut paths: Vec<PathBuf>) -> Result<DeploymentPlan
         platform_components: components,
         changed_paths: paths,
         build: BuildSpec::canonical(ui_scope),
+        platform_candidate: None,
     })
+}
+
+pub fn deployment_paths(
+    repository: &Path,
+    task_paths: Vec<PathBuf>,
+) -> Result<Vec<PathBuf>, String> {
+    if !task_paths.is_empty() {
+        return Ok(task_paths);
+    }
+    let output = Command::new("git")
+        .args(["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"])
+        .current_dir(repository)
+        .output()
+        .map_err(|error| format!("cannot inspect deployed commit: {error}"))?;
+    if !output.status.success() {
+        return Err("cannot inspect paths from the current commit".into());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(PathBuf::from)
+        .collect())
 }
 
 fn platform_components(paths: &[PathBuf]) -> Vec<&'static str> {

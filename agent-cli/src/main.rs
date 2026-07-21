@@ -193,8 +193,16 @@ fn dispatch(
             return Ok(outcome);
         }
         Intent::Deploy { task_id } => {
-            let paths = agent_cli::task::changes(evidence, repository, task_id)?;
-            let deployment = agent_cli::deploy::plan(repository, paths)?;
+            let task_paths = agent_cli::task::changes(evidence, repository, task_id)?;
+            let paths = agent_cli::deploy::deployment_paths(repository, task_paths)?;
+            let mut deployment = agent_cli::deploy::plan(repository, paths)?;
+            if deployment.kind == agent_cli::deploy::DeploymentKind::Platform {
+                let candidate =
+                    agent_cli::platform_ci::resolve_repository(repository, |message| {
+                        reporter.emit(EventKind::Progress, "platform-ci", message, None)
+                    })?;
+                deployment.platform_candidate = Some(candidate);
+            }
             let plan = deployment.as_evidence_plan(intent.clone());
             evidence.record_plan(request_id, &plan)?;
             reporter.emit(
