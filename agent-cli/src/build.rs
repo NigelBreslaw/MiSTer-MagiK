@@ -38,6 +38,7 @@ const FFMPEG_APPLE_CONTAINER_ENV: [(&str, &str); 5] = [
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub enum BuildIntent {
+    HostTool,
     RuntimeDevice,
     RuntimeFast,
     RuntimeBenchmark,
@@ -89,6 +90,9 @@ pub struct BuildSpec {
 impl BuildSpec {
     pub fn infer(intent: BuildIntent) -> Result<Self, String> {
         let (target, mode, profile, features, scope, artifact, strict_receipt) = match intent {
+            BuildIntent::HostTool => {
+                return Err("host-tool uses the native host build path".into());
+            }
             BuildIntent::RuntimeDevice => (
                 BuildTarget::Runtime,
                 BuildMode::Build,
@@ -405,6 +409,36 @@ pub fn execute(
             Some(percent),
         )
     })
+}
+
+pub fn execute_host_tool(repository: &Path, reporter: &mut Reporter<'_>) -> Result<(), String> {
+    reporter.emit(
+        EventKind::Progress,
+        "compile",
+        "build native MiSTer host tool",
+        Some(35),
+    )?;
+    let mut command = Command::new("cargo");
+    command.current_dir(repository).args([
+        "build",
+        "--locked",
+        "--manifest-path",
+        "mister/tools/host/Cargo.toml",
+    ]);
+    run_bounded(&mut command, BUILD_DEADLINE)?;
+    let artifact = repository.join("mister/tools/host/target/debug/mister");
+    if !artifact.is_file() {
+        return Err(format!(
+            "host tool build artifact is missing: {}",
+            artifact.display()
+        ));
+    }
+    reporter.emit(
+        EventKind::Progress,
+        "verify",
+        "native MiSTer host tool built",
+        Some(100),
+    )
 }
 
 pub fn execute_quiet(repository: &Path, spec: &BuildSpec) -> Result<(), String> {

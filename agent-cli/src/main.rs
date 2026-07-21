@@ -245,8 +245,12 @@ fn dispatch(
             return Ok(Outcome::Passed);
         }
         Intent::Build { intent } => {
-            let spec = agent_cli::build::BuildSpec::infer(*intent)?;
-            agent_cli::build::execute(repository, &spec, reporter)?;
+            if *intent == agent_cli::build::BuildIntent::HostTool {
+                agent_cli::build::execute_host_tool(repository, reporter)?;
+            } else {
+                let spec = agent_cli::build::BuildSpec::infer(*intent)?;
+                agent_cli::build::execute(repository, &spec, reporter)?;
+            }
         }
         Intent::DeployRecipe { recipe } => {
             let deployment = agent_cli::deploy::recipe_plan(recipe)?;

@@ -303,6 +303,18 @@ mod tests {
     }
 
     #[test]
+    fn host_tool_build_has_a_typed_intent() {
+        assert_eq!(
+            Cli::try_parse_from(["agent-cli", "build", "host-tool"])
+                .unwrap()
+                .into_intent(),
+            Intent::Build {
+                intent: BuildIntent::HostTool,
+            }
+        );
+    }
+
+    #[test]
     fn focused_display_mode_accepts_only_stress_presets() {
         assert_eq!(
             Cli::try_parse_from(["agent-cli", "display-mode", "6"])
