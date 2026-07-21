@@ -15,12 +15,12 @@ The maintained Main fork supports two ways to activate the shared CRT path.
 `direct_video=1`; `menu_pal` and `forced_scandoubler` then select one of the
 four built-in progressive Menu modes:
 
-| Resolved mode | Pixel clock | Horizontal timing (active/front/sync/back) | Vertical timing (active/front/sync/back) | Nominal rates |
-| --- | ---: | --- | --- | --- |
-| `crt-240p60` | 12.587 MHz | 640/30/60/70 | 240/4/4/14 | 15.7338 kHz / 60.052 Hz |
-| `crt-288p50` | 12.587 MHz | 640/30/60/70 | 288/6/4/14 | 15.7338 kHz / 50.429 Hz |
-| `crt-480p60` | 25.175 MHz | 640/16/96/48 | 480/8/4/33 | 31.4688 kHz / 59.940 Hz |
-| `crt-576p50` | 25.175 MHz | 640/16/96/48 | 576/2/4/42 | 31.4688 kHz / 50.431 Hz |
+| Resolved mode | RGB565 framebuffer → scan | Pixel clock | Horizontal timing (active/front/sync/back) | Vertical timing (active/front/sync/back) | Nominal rates |
+| --- | --- | ---: | --- | --- | --- |
+| `crt-240p60` | 320×240 → 640×240 | 12.587 MHz | 640/30/60/70 | 240/4/4/14 | 15.7338 kHz / 60.052 Hz |
+| `crt-288p50` | 384×288 → 640×288 | 12.587 MHz | 640/30/60/70 | 288/6/4/14 | 15.7338 kHz / 50.429 Hz |
+| `crt-480p60` | 640×480 → 640×480 | 25.175 MHz | 640/16/96/48 | 480/8/4/33 | 31.4688 kHz / 59.940 Hz |
+| `crt-576p50` | 640×480 → 640×576 | 25.175 MHz | 640/16/96/48 | 576/2/4/42 | 31.4688 kHz / 50.431 Hz |
 
 Both sync polarities are negative. These values come from Main's standard
 Menu Direct Video table; MagiK consumes the resolved name only to choose its
@@ -32,6 +32,13 @@ installer separately offers automatic HDMI-DAC detection, native VGA at
 `direct_video`, `menu_pal`, and
 `forced_scandoubler` keys, preserves saved upgrade choices, and restores only
 installer-owned keys from the pre-MagiK snapshot.
+
+The 240p60 and 288p50 choices are labelled as 15 kHz modes. The 480p60 and
+576p50 choices require separate confirmation that the attached VGA, multisync,
+or other CRT explicitly supports 31 kHz. DAC detection cannot discover a
+display's supported scan rates. An incompatible display may fail to lock or
+show a rolling or distorted image; MagiK does not claim that an unsupported
+scan rate is harmless on every CRT.
 
 ## Core handoff and interlace
 

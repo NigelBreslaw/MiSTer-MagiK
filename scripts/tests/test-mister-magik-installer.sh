@@ -42,6 +42,7 @@ run_installer() {
   MISTER_MAGIK_FAT="$FAT" MISTER_MAGIK_INITTAB="$TMP/inittab" \
     MISTER_MAGIK_INIT_DIR="$INIT_DIR" \
     MISTER_MAGIK_TEST_MODE=1 MISTER_MAGIK_TEST_CONFIRM_INSTALL=1 \
+    MISTER_MAGIK_TEST_CONFIRM_31KHZ="${MISTER_MAGIK_TEST_CONFIRM_31KHZ:-0}" \
     MISTER_MAGIK_NO_PAUSE=1 \
     "$ROOT/scripts/MiSTer-MagiK.sh" "$@"
 }
@@ -137,6 +138,14 @@ fi
 grep -q 'supports automatic known-DAC CRT selection' "$TMP/noninteractive-install.log"
 grep -q 'interactive input is unavailable; installation refused' "$TMP/noninteractive-install.log"
 test "$(sha256sum "$FAT/MiSTer.ini")" = "$ini_before_confirmation"
+
+if MISTER_MAGIK_TEST_OUTPUT_MODE=crt-480p60 run_installer install \
+  >"$TMP/unconfirmed-31khz.log" 2>&1; then
+  echo "unconfirmed 31 kHz output unexpectedly installed" >&2
+  exit 1
+fi
+grep -q '31 kHz CRT mode was not explicitly confirmed' "$TMP/unconfirmed-31khz.log"
+test "$(sha256sum "$FAT/MiSTer.ini")" = "$ini_before_confirmation"
 test "$(sha256sum "$TMP/inittab")" = "$inittab_before_confirmation"
 if MISTER_MAGIK_TEST_OUTPUT_MODE=invalid run_installer install >"$TMP/output-choice-invalid.log" 2>&1; then
   echo "invalid output choice unexpectedly installed" >&2
@@ -165,7 +174,8 @@ for mode_values in \
   'crt-576p50 1 1'; do
   set -- $mode_values
   rm -f "$APP/installer-output-mode-v1"
-  MISTER_MAGIK_TEST_OUTPUT_MODE="$1" run_installer install >/dev/null
+  MISTER_MAGIK_TEST_CONFIRM_31KHZ=1 MISTER_MAGIK_TEST_OUTPUT_MODE="$1" \
+    run_installer install >/dev/null
   grep -q '^direct_video=1$' "$FAT/MiSTer.ini"
   grep -q "^menu_pal=$2$" "$FAT/MiSTer.ini"
   grep -q "^forced_scandoubler=$3$" "$FAT/MiSTer.ini"

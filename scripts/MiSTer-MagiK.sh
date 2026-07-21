@@ -205,6 +205,25 @@ confirm_install() {
   fi
 }
 
+confirm_31khz_output() {
+  case "$OUTPUT_MODE" in crt-480p60|crt-576p50) ;; *) return 0 ;; esac
+  echo
+  echo "WARNING: $OUTPUT_MODE is a 31 kHz signal for VGA, multisync, or other explicitly compatible CRTs."
+  echo "DAC detection cannot determine whether the attached display supports this scan rate."
+  echo "Press A/Enter only if the display manual confirms 31 kHz support. Any other key returns."
+  if [ "${MISTER_MAGIK_TEST_MODE:-0}" = 1 ]; then
+    if [ "${MISTER_MAGIK_TEST_CONFIRM_31KHZ:-0}" = 1 ]; then
+      return 0
+    fi
+    say "31 kHz CRT mode was not explicitly confirmed; no changes made."
+    return 1
+  fi
+  if ! read_menu_key || [ "$MENU_KEY" != enter ]; then
+    say "31 kHz CRT mode was not selected."
+    return 1
+  fi
+}
+
 choose_output_mode() {
   if [ -r "$OUTPUT_MODE_FILE" ]; then
     OUTPUT_MODE="$(sed -n '1p' "$OUTPUT_MODE_FILE")"
@@ -214,7 +233,10 @@ choose_output_mode() {
   fi
   if [ "${MISTER_MAGIK_TEST_MODE:-0}" = 1 ]; then
     OUTPUT_MODE="${MISTER_MAGIK_TEST_OUTPUT_MODE:-auto}"
-    case "$OUTPUT_MODE" in auto|hdmi|crt-240p60|crt-288p50|crt-480p60|crt-576p50) return 0 ;; esac
+    case "$OUTPUT_MODE" in
+      auto|hdmi|crt-240p60|crt-288p50) return 0 ;;
+      crt-480p60|crt-576p50) confirm_31khz_output; return $? ;;
+    esac
     say "ERROR: test output mode must be auto, hdmi, or a supported crt mode."
     return 1
   fi
@@ -222,16 +244,16 @@ choose_output_mode() {
   OUTPUT_MODE=crt-240p60
   while :; do
     echo
-    echo "Choose launcher output. Native VGA modes use the Analog IO output; Auto detects an HDMI DAC."
+    echo "Choose launcher output. Native VGA modes use Analog IO; Auto detects an HDMI DAC, not CRT capability."
     echo "Use UP/DOWN to choose, A/Enter to continue, or B/Escape to cancel."
     for mode in crt-240p60 crt-288p50 crt-480p60 crt-576p50 auto hdmi; do
       marker=" "
       [ "$OUTPUT_MODE" = "$mode" ] && marker=">"
       case "$mode" in
-        crt-240p60) label="Analog IO VGA — CRT 240p60 (default)" ;;
-        crt-288p50) label="Analog IO VGA — CRT 288p50" ;;
-        crt-480p60) label="Analog IO VGA — CRT 480p60" ;;
-        crt-576p50) label="Analog IO VGA — CRT 576p50" ;;
+        crt-240p60) label="Analog IO VGA — 15 kHz CRT 240p60 (default)" ;;
+        crt-288p50) label="Analog IO VGA — 15 kHz CRT 288p50" ;;
+        crt-480p60) label="Analog IO VGA — 31 kHz CRT/VGA 480p60" ;;
+        crt-576p50) label="Analog IO VGA — 31 kHz CRT/VGA 576p50" ;;
         auto) label="Automatic HDMI DAC detection" ;;
         hdmi) label="HDMI only" ;;
       esac
@@ -262,7 +284,9 @@ choose_output_mode() {
           hdmi) OUTPUT_MODE=auto ;;
         esac
         ;;
-      enter) return 0 ;;
+      enter)
+        if confirm_31khz_output; then return 0; fi
+        ;;
       cancel) say "cancelled; no changes made."; return 1 ;;
     esac
   done
