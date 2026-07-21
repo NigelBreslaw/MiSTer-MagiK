@@ -65,7 +65,6 @@ pub enum Intent {
     Verify { scope: Scope },
     ListRuns { failed: bool, recent: usize },
     ShowRun { run_id: String },
-    ReviewScripts,
     DatabaseStatus,
     PruneLogs,
     Interactive,

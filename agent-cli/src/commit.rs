@@ -237,7 +237,7 @@ fn verify_staged(
         scope: Scope::Staged,
     };
     let paths = crate::scope::collect(evidence, request_id, repository, &Scope::Staged)?;
-    let plan = crate::planner::affected_plan(intent, paths)?;
+    let plan = crate::planner::affected_plan_at(repository, intent, paths)?;
     evidence.record_plan(request_id, &plan)?;
     crate::executor::execute(evidence, request_id, repository, &plan, reporter)?;
     if plan.external_requirements.is_empty() || allow_external {

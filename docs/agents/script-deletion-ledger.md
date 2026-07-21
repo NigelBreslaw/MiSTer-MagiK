@@ -35,11 +35,13 @@ Deleted on 2026-07-20 after updating callers to use their canonical interfaces:
 - `gate-cold-preview-systems.sh` → `profile-cold-preview-systems.sh --require-pass`
 - `gate-cold-turbo-preview.sh` → `profile-cold-turbo-preview.sh --require-pass`
 
-## Awaiting capability review
+## Unowned device workflows
 
-These active scripts have no current repository callers. Absence of a caller
-does not prove absence of an undocumented human workflow, so each requires an
-explicit keep-or-delete decision before migration:
+Deleted on 2026-07-21 after explicit capability review found no current caller
+or policy owner. Their useful safety requirements are already owned by the
+typed deployment workflow; the remaining implementations were standalone
+diagnostics, duplicated polling and cleanup, flag-driven profiling, or unsafe
+fault experiments:
 
 - `fpga-vblank-latch-one-shot.sh`
 - `profile-scene-report.sh`
@@ -52,10 +54,12 @@ explicit keep-or-delete decision before migration:
 - `profile-analytics-overhead.sh`
 - `device-catalog-resume-acceptance.sh`
 - `device-resource-exhaustion.sh`
+- `switch-ui.sh`
+- `mister-asset-diagnostics.sh`
 
-Run `scripts/agent scripts review`
-for the concise decision list. The default for every candidate is deletion;
-none is migrated until a current capability owner justifies it.
+The deleted scripts are not compatibility interfaces. Git history retains
+their implementations if a future requirement supplies a concrete owner and
+acceptance test.
 
 ## Compatibility implementations
 

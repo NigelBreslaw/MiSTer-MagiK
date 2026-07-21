@@ -17,7 +17,6 @@ scripts/agent verify
 scripts/agent commit -m "Describe the completed change"
 scripts/agent deploy
 scripts/agent --output ndjson verify --staged
-scripts/agent scripts review
 ```
 
 `task begin` snapshots the worktree under `CODEX_THREAD_ID` (or an explicit

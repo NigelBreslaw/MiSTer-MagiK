@@ -12,6 +12,17 @@ enum Depth {
 }
 
 pub fn affected_plan(intent: Intent, paths: Vec<PathBuf>) -> Result<Plan, String> {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("agent-cli must live below the repository root");
+    affected_plan_at(repository, intent, paths)
+}
+
+pub fn affected_plan_at(
+    repository: &Path,
+    intent: Intent,
+    paths: Vec<PathBuf>,
+) -> Result<Plan, String> {
     let depth = if matches!(intent, Intent::Verify { .. }) {
         Depth::Verify
     } else {
@@ -32,7 +43,7 @@ pub fn affected_plan(intent: Intent, paths: Vec<PathBuf>) -> Result<Plan, String
     let mut operations = BTreeMap::new();
     let mut external_requirements = Vec::new();
     for path in &paths {
-        add_path_operations(path, depth, &mut operations);
+        add_path_operations(repository, path, depth, &mut operations);
         if path.starts_with("mister/platform/fpga") {
             external_requirements.push(rbf_external_requirement());
         }
@@ -113,7 +124,12 @@ fn rbf_external_requirement() -> ExternalRequirement {
     }
 }
 
-fn add_path_operations(path: &Path, depth: Depth, out: &mut BTreeMap<String, Operation>) {
+fn add_path_operations(
+    repository: &Path,
+    path: &Path,
+    depth: Depth,
+    out: &mut BTreeMap<String, Operation>,
+) {
     let mut add = |operation: Operation| {
         out.entry(operation.id.clone()).or_insert(operation);
     };
@@ -433,7 +449,7 @@ fn add_path_operations(path: &Path, depth: Depth, out: &mut BTreeMap<String, Ope
         ));
     }
     if path.starts_with("scripts") {
-        add_script_operations(path, depth, &mut add);
+        add_script_operations(repository, path, depth, &mut add);
     }
     if path.starts_with(".github") || path.starts_with(".githooks") {
         add(op(
@@ -524,7 +540,12 @@ fn add_path_operations(path: &Path, depth: Depth, out: &mut BTreeMap<String, Ope
     add_crate(path, "mister/tools/agent", "mister-agent", depth, out);
 }
 
-fn add_script_operations(path: &Path, _depth: Depth, add: &mut impl FnMut(Operation)) {
+fn add_script_operations(
+    repository: &Path,
+    path: &Path,
+    _depth: Depth,
+    add: &mut impl FnMut(Operation),
+) {
     let text = path.to_string_lossy();
     add(op(
         "scripts.licenses",
@@ -533,11 +554,7 @@ fn add_script_operations(path: &Path, _depth: Depth, add: &mut impl FnMut(Operat
         &["scripts/checks/check-license-headers.py"],
         "script source → license contract",
     ));
-    let deleted_deployment_script = matches!(
-        path.to_str(),
-        Some("scripts/deploy-rust.sh" | "scripts/deploy-platform.sh")
-    );
-    if !deleted_deployment_script
+    if repository.join(path).exists()
         && (path.extension().and_then(|extension| extension.to_str()) == Some("sh")
             || matches!(
                 path.file_name().and_then(|name| name.to_str()),
@@ -1114,6 +1131,25 @@ mod tests {
             .operations
             .iter()
             .any(|operation| { operation.id == "script.syntax.scripts-rust-analyzer" }));
+    }
+
+    #[test]
+    fn deleted_script_does_not_select_a_syntax_check() {
+        let plan = affected_plan(
+            Intent::Check {
+                scope: Scope::Paths(vec![]),
+            },
+            vec!["scripts/definitely-deleted-script.sh".into()],
+        )
+        .unwrap();
+        assert!(plan
+            .operations
+            .iter()
+            .all(|operation| !operation.id.starts_with("script.syntax.")));
+        assert!(plan
+            .operations
+            .iter()
+            .any(|operation| operation.id == "scripts.licenses"));
     }
 
     #[test]

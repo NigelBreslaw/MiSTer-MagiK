@@ -41,10 +41,6 @@ pub enum Command {
         #[command(subcommand)]
         command: RunCommand,
     },
-    Scripts {
-        #[command(subcommand)]
-        command: ScriptsCommand,
-    },
     Db {
         #[command(subcommand)]
         command: DbCommand,
@@ -83,11 +79,6 @@ pub struct CommitArgs {
 #[derive(Debug, Subcommand)]
 pub enum RunCommand {
     Show { run_id: String },
-}
-
-#[derive(Debug, Subcommand)]
-pub enum ScriptsCommand {
-    Review,
 }
 
 #[derive(Debug, Subcommand)]
@@ -156,9 +147,6 @@ impl Cli {
             Some(Command::Run {
                 command: RunCommand::Show { run_id },
             }) => Intent::ShowRun { run_id },
-            Some(Command::Scripts {
-                command: ScriptsCommand::Review,
-            }) => Intent::ReviewScripts,
             Some(Command::Db {
                 command: DbCommand::Status,
             }) => Intent::DatabaseStatus,

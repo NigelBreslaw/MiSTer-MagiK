@@ -251,7 +251,7 @@ fn dispatch(
         | Intent::Verify { scope: selected } => {
             let paths = scope::collect(evidence, request_id, repository, selected)?;
             let claimed_paths = paths.clone();
-            let plan = planner::affected_plan(intent.clone(), paths)?;
+            let plan = planner::affected_plan_at(repository, intent.clone(), paths)?;
             evidence.record_plan(request_id, &plan)?;
             let summary = if plan.operations.is_empty() {
                 "No lint operations selected".to_owned()
@@ -351,14 +351,6 @@ fn dispatch(
                 println!("removed {removed} captured logs");
             }
         }
-        Intent::ReviewScripts => {
-            if output == OutputFormat::Human {
-                println!("decision\tscript\tevidence");
-                for (script, evidence) in agent_cli::registry::SCRIPT_REVIEW {
-                    println!("review\tscripts/{script}\t{evidence}");
-                }
-            }
-        }
         other if output == OutputFormat::Human => println!("request accepted: {other:?}"),
         _ => {}
     }
@@ -443,7 +435,7 @@ fn deliver(
     let verify_intent = Intent::Verify {
         scope: agent_cli::model::Scope::Task(task_id.into()),
     };
-    let plan = planner::affected_plan(verify_intent, paths.clone())?;
+    let plan = planner::affected_plan_at(repository, verify_intent, paths.clone())?;
     evidence.record_plan(request_id, &plan)?;
     executor::execute_with_changes(evidence, request_id, repository, &plan, &paths, reporter)?;
     evidence.claim_task_paths(task_id, &paths)?;
