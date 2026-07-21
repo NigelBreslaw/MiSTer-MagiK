@@ -730,4 +730,92 @@ mod tests {
         assert_eq!(state.last_raw_event, Some(unknown));
         assert_eq!(state.pressed_now, "A");
     }
+
+    #[test]
+    fn generic_profile_maps_every_supported_button_and_axis() {
+        let profile = InputProfile::generic();
+        let mut state = PadState::default();
+
+        for button in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 13] {
+            assert!(profile.apply_js_event(&mut state, js_button(button, 1), true));
+        }
+        assert_eq!(
+            state.pressed_now,
+            "Y, B, A, X, L, R, Select, Start, L3, R3, Home, Capture"
+        );
+
+        for axis in 0..=7 {
+            assert!(profile.apply_js_event(&mut state, js_axis(axis, 32767), true));
+        }
+        assert!(state.dpad_right);
+        assert!(state.dpad_down);
+        assert_eq!(state.left_x, 1.0);
+        assert_eq!(state.left_y, 1.0);
+        assert_eq!(state.right_x, 1.0);
+        assert_eq!(state.right_y, 1.0);
+
+        assert!(!profile.apply_js_event(&mut state, js_axis(8, 1), true));
+        assert_eq!(state.last_event_label, "unknown axis 8 val=1");
+    }
+
+    #[test]
+    fn dpad_axes_profile_maps_every_supported_button_and_axis() {
+        let profile = InputProfile::dpad_axes_45();
+        let mut state = PadState::default();
+
+        for button in 0..=13 {
+            assert!(profile.apply_js_event(&mut state, js_button(button, 1), true));
+        }
+
+        for axis in 0..=5 {
+            assert!(profile.apply_js_event(&mut state, js_axis(axis, -32767), true));
+        }
+        assert!(state.dpad_left);
+        assert!(state.dpad_up);
+        assert_eq!(state.left_x, -1.0);
+        assert_eq!(state.left_y, -1.0);
+        assert_eq!(state.right_x, -1.0);
+        assert_eq!(state.right_y, -1.0);
+        assert_eq!(
+            state.pressed_now,
+            "D-Up, D-Left, Y, B, A, X, L, R, ZL, ZR, Select, Start, L3, R3, Home, Capture, Left stick, Right stick"
+        );
+
+        assert!(!profile.apply_js_event(&mut state, js_axis(6, -1), true));
+        assert_eq!(state.last_event_label, "unknown axis 6 val=-1");
+    }
+
+    #[test]
+    fn pressed_summary_orders_dpad_buttons_and_sticks() {
+        let mut state = PadState {
+            dpad_up: true,
+            dpad_down: true,
+            dpad_left: true,
+            dpad_right: true,
+            btn_y: true,
+            btn_b: true,
+            btn_a: true,
+            btn_x: true,
+            btn_l: true,
+            btn_r: true,
+            btn_zl: true,
+            btn_zr: true,
+            btn_select: true,
+            btn_start: true,
+            btn_l3: true,
+            btn_r3: true,
+            btn_home: true,
+            btn_capture: true,
+            left_x: 0.02,
+            right_y: -0.02,
+            ..PadState::default()
+        };
+
+        state.rebuild_pressed_now();
+
+        assert_eq!(
+            state.pressed_now,
+            "D-Up, D-Down, D-Left, D-Right, Y, B, A, X, L, R, ZL, ZR, Select, Start, L3, R3, Home, Capture, Left stick, Right stick"
+        );
+    }
 }

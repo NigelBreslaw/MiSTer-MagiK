@@ -119,4 +119,18 @@ mod tests {
         gate.tick(false, t0 + Duration::from_millis(10));
         assert!(gate.tick(true, t0 + Duration::from_millis(20)));
     }
+
+    #[test]
+    fn navigation_directions_keep_independent_repeat_state() {
+        let mut nav = RepeatNav::default();
+        let t0 = Instant::now();
+
+        assert!(nav.tick_up(true, t0));
+        assert!(nav.tick_down(true, t0 + Duration::from_millis(1)));
+        assert!(nav.tick_left(true, t0 + Duration::from_millis(2)));
+        assert!(nav.tick_right(true, t0 + Duration::from_millis(3)));
+        assert!(!nav.tick_up(true, t0 + Duration::from_millis(500)));
+        assert!(!nav.tick_down(false, t0 + Duration::from_millis(500)));
+        assert!(nav.tick_down(true, t0 + Duration::from_millis(501)));
+    }
 }
