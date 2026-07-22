@@ -39,9 +39,12 @@ impl Component {
     #[must_use]
     pub const fn deployment_impact(self) -> DeploymentImpact {
         match self {
-            Self::MisterApp | Self::Catalog | Self::CoreCrate | Self::Runtime | Self::Manager => {
-                DeploymentImpact::Runtime
-            }
+            Self::MisterApp
+            | Self::Catalog
+            | Self::CoreCrate
+            | Self::Runtime
+            | Self::DeviceAgent
+            | Self::Manager => DeploymentImpact::Runtime,
             Self::PlatformContracts | Self::Kernel | Self::Fpga => DeploymentImpact::Platform,
             _ => DeploymentImpact::None,
         }
@@ -142,5 +145,11 @@ mod tests {
             DeploymentImpact::None
         );
         assert!(classify(Path::new("unknown/new.tree")).is_none());
+        assert_eq!(
+            classify(Path::new("mister/tools/agent/src/main.rs"))
+                .unwrap()
+                .deployment_impact(),
+            DeploymentImpact::Runtime
+        );
     }
 }

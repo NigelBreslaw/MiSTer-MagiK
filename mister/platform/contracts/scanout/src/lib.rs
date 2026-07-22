@@ -12,6 +12,8 @@ pub const REGION_OFFSET_BYTES: usize = 8_294_400;
 pub const MAX_WIDTH: usize = 1366;
 pub const MAX_HEIGHT: usize = 768;
 pub const MAX_STRIDE_BYTES: usize = 2736;
+pub const MIN_QUALIFIED_UI_WIDTH: usize = 320;
+pub const MIN_QUALIFIED_UI_HEIGHT: usize = 240;
 pub const SLOT_CAPACITY_BYTES: usize = MAX_STRIDE_BYTES * MAX_HEIGHT;
 pub const MAP_BYTES: usize = SLOT_CAPACITY_BYTES;
 pub const LAYOUT_WRITE_COMBINE: u32 = 1;
@@ -78,6 +80,10 @@ mod tests {
         assert_eq!(EXPECTED_LAYOUT.max_stride_bytes, 2736);
         assert_eq!(EXPECTED_LAYOUT.slot_capacity_bytes, 2_101_248);
         assert_eq!(EXPECTED_LAYOUT.slot_capacity_bytes % 4096, 0);
+        assert_eq!(
+            (MIN_QUALIFIED_UI_WIDTH, MIN_QUALIFIED_UI_HEIGHT),
+            (320, 240)
+        );
         assert_eq!(EXPECTED_LAYOUT.slots[1].mmap_offset_bytes, 1920 * 1080 * 4);
     }
 }

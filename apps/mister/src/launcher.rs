@@ -6761,6 +6761,27 @@ mod tests {
     }
 
     #[test]
+    fn display_confirmation_stays_cancellable_while_persistence_is_busy() {
+        let catalog = multi_system_catalog();
+        let mut nav = LauncherNav::new();
+        let t0 = Instant::now();
+        nav.confirm_action = Some(ConfirmAction::DisplayResolution);
+        nav.confirm_selected = 1;
+        nav.display_confirm_busy = true;
+
+        let press_a = pad_with(|pad| pad.btn_a = true);
+        assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
+        assert_eq!(nav.confirm_action, Some(ConfirmAction::DisplayResolution));
+        release(&mut nav, &catalog, t0, 16);
+
+        let press_b = pad_with(|pad| pad.btn_b = true);
+        let event = nav
+            .handle_input(&press_b, t0 + Duration::from_millis(32), &catalog)
+            .expect("busy confirmation remains cancellable");
+        assert_eq!(event.action, LauncherAction::CancelDisplayResolution);
+    }
+
+    #[test]
     fn display_state_reply_requires_schema_and_known_pending_mode() {
         let state = parse_display_state_response(
             "ok DisplayV1 schema=1 active=custom pending=crt-240p60 remaining=12 phase=failed error=persist-failed return=settings",
