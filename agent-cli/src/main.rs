@@ -318,17 +318,7 @@ fn dispatch(
             return Ok(outcome);
         }
         Intent::Doctor => {
-            let plan = planner::workflow_plan(intent.clone());
-            evidence.record_plan(request_id, &plan)?;
-            reporter.emit(
-                EventKind::Progress,
-                "plan",
-                &format!("Selected {} operation", plan.operations.len()),
-                Some(0),
-            )?;
-            return Ok(executor::execute(
-                evidence, request_id, repository, &plan, reporter,
-            )?);
+            return agent_cli::doctor::execute(repository, reporter);
         }
         Intent::DatabaseStatus => {
             let status = evidence.status()?;

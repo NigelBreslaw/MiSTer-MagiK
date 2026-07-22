@@ -63,25 +63,6 @@ pub fn affected_plan_at(
     })
 }
 
-#[must_use]
-pub fn workflow_plan(intent: Intent) -> Plan {
-    let operations = match &intent {
-        Intent::Doctor => vec![op(
-            "doctor.full-host",
-            "Inspect host prerequisites",
-            "python3",
-            &["scripts/lib/doctor.py", "--scope", "full-host"],
-            "host environment requested",
-        )],
-        _ => Vec::new(),
-    };
-    Plan {
-        intent,
-        operations,
-        external_requirements: Vec::new(),
-    }
-}
-
 fn classified(path: &Path) -> bool {
     crate::components::classify(path).is_some()
 }
