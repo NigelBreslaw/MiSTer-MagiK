@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::build::BuildSpec;
-use crate::model::{Intent, Operation, Plan, Risk};
+use crate::model::{ActionKind, Intent, Operation, Plan, Risk, WorkflowPhase};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -94,6 +94,8 @@ impl DeploymentPlan {
                 id: format!("deploy.{}", self.kind.label()),
                 title: format!("Deploy {} installation", self.kind.label()),
                 risk: Risk::DeviceWrite,
+                action: ActionKind::DeviceTransaction,
+                phase: WorkflowPhase::Device,
                 program: "scripts/agent".into(),
                 args: vec!["deploy".into()],
                 reason: "inferred deployment transaction".into(),

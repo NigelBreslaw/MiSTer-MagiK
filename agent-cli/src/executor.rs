@@ -5,7 +5,6 @@ use crate::evidence::{now_ms, Evidence};
 use crate::model::{Operation, Outcome, Plan};
 use crate::progress::{EventKind, Reporter};
 use crate::workflow::{Event, Machine, State};
-use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
 use std::hash::{Hash, Hasher};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -294,8 +293,7 @@ fn run_attempt(
 }
 
 fn is_cargo_dependency_operation(operation: &Operation) -> bool {
-    Path::new(&operation.program).file_name() == Some(OsStr::new("cargo"))
-        && operation.args.first().is_some_and(|arg| arg != "fmt")
+    operation.cargo_offline_first()
 }
 
 fn cargo_args(args: &[String], offline: bool) -> Vec<String> {
@@ -459,7 +457,7 @@ fn log_tail(path: &Path) -> Result<String, String> {
 mod tests {
     use super::*;
     use crate::cli::OutputFormat;
-    use crate::model::{Intent, Risk, Scope};
+    use crate::model::{ActionKind, Intent, Risk, Scope, WorkflowPhase};
     use crate::request::RawRequest;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
@@ -473,6 +471,10 @@ mod tests {
             id: "test.cargo".into(),
             title: "Test fake crate".into(),
             risk: Risk::ReadOnly,
+            action: ActionKind::Cargo {
+                offline_first: true,
+            },
+            phase: WorkflowPhase::Host,
             program: program.display().to_string(),
             args: vec!["test".into(), "--".into(), "--nocapture".into()],
             reason: "executor test".into(),
@@ -548,9 +550,12 @@ mod tests {
     }
 
     #[test]
-    fn cargo_format_is_excluded_from_dependency_policy() {
+    fn cargo_dependency_policy_is_explicit() {
         let mut operation = test_operation(Path::new("cargo"));
         operation.args = vec!["fmt".into(), "--check".into()];
+        operation.action = ActionKind::Cargo {
+            offline_first: false,
+        };
         assert!(!is_cargo_dependency_operation(&operation));
         assert_eq!(operation.args, ["fmt", "--check"]);
     }

@@ -23,6 +23,7 @@ pub fn authorize(operation: &Operation, maximum: Risk) -> Result<(), Rejection> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{ActionKind, WorkflowPhase};
 
     #[test]
     fn rejects_operations_above_the_allowed_risk() {
@@ -30,6 +31,8 @@ mod tests {
             id: "device.deploy".into(),
             title: "Deploy".into(),
             risk: Risk::DeviceWrite,
+            action: ActionKind::DeviceTransaction,
+            phase: WorkflowPhase::Device,
             program: "scripts/agent".into(),
             args: vec!["deploy".into()],
             reason: "deployment requested".into(),

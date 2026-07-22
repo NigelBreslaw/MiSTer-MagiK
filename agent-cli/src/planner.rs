@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::model::{ExternalRequirement, Intent, Operation, Plan, Risk};
+use crate::model::{ActionKind, ExternalRequirement, Intent, Operation, Plan, Risk, WorkflowPhase};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -51,11 +51,6 @@ pub fn affected_plan_at(
     external_requirements.sort_by(|left, right| left.id.cmp(&right.id));
     external_requirements.dedup_by(|left, right| left.id == right.id);
     let mut operations: Vec<_> = operations.into_values().collect();
-    for operation in &mut operations {
-        if operation.inputs.is_empty() {
-            operation.inputs = inferred_inputs(operation);
-        }
-    }
     operations.sort_by(|left, right| {
         left.workflow_phase()
             .cmp(&right.workflow_phase())
@@ -66,27 +61,6 @@ pub fn affected_plan_at(
         operations,
         external_requirements,
     })
-}
-
-fn inferred_inputs(operation: &Operation) -> Vec<String> {
-    let root = if operation.id.starts_with("app.") || operation.id.starts_with("arm.") {
-        Some("apps/mister")
-    } else if operation.id.starts_with("desktop.") {
-        Some("apps/desktop")
-    } else if operation.id.starts_with("documentation.") {
-        Some("documentation")
-    } else if operation.id.starts_with("kernel.") {
-        Some("mister/platform/kernel")
-    } else if operation.id.starts_with("fpga.") {
-        Some("mister/platform/fpga")
-    } else if operation.id.starts_with("scripts.") || operation.id.starts_with("script.syntax.") {
-        Some("scripts")
-    } else if operation.id.starts_with("tools.") {
-        Some("tools")
-    } else {
-        None
-    };
-    root.into_iter().map(str::to_owned).collect()
 }
 
 #[must_use]
@@ -130,7 +104,11 @@ fn add_path_operations(
     depth: Depth,
     out: &mut BTreeMap<String, Operation>,
 ) {
-    let mut add = |operation: Operation| {
+    let default_input = path.display().to_string();
+    let mut add = |mut operation: Operation| {
+        if operation.inputs.is_empty() {
+            operation.inputs.push(default_input.clone());
+        }
         out.entry(operation.id.clone()).or_insert(operation);
     };
     if path.file_name().and_then(|name| name.to_str()) == Some("AGENTS.md")
@@ -162,11 +140,11 @@ fn add_path_operations(
         || path.starts_with("history")
         || path.starts_with("private")
     {
-        add(crate::registry::operation("repo.diff-check").unwrap());
+        add(diff_check());
     }
     if path.starts_with("agent-cli") {
         add(with_inputs(
-            cargo(
+            cargo_format(
                 "agent-cli.format",
                 "Check agent-cli formatting",
                 &["fmt", "--manifest-path", "agent-cli/Cargo.toml", "--check"],
@@ -225,7 +203,7 @@ fn add_path_operations(
     }
     if path.starts_with("crates/catalog") {
         add(with_inputs(
-            cargo(
+            cargo_format(
                 "catalog.format",
                 "Check catalog formatting",
                 &[
@@ -291,7 +269,7 @@ fn add_path_operations(
         }
     }
     if path.starts_with("apps/mister") {
-        add(crate::registry::operation("repo.diff-check").unwrap());
+        add(diff_check());
         if repository.join(path).exists()
             && path.extension().and_then(|extension| extension.to_str()) == Some("sh")
         {
@@ -324,7 +302,7 @@ fn add_path_operations(
                 )
             ))
     {
-        add(cargo(
+        add(cargo_format(
             "app.format",
             "Check MiSTer app formatting",
             &[
@@ -398,7 +376,7 @@ fn add_path_operations(
                 "MiSTer app source → production UI check",
             ));
             if path.starts_with("apps/mister/ui") || path.starts_with("apps/mister/src/ui_runner") {
-                add(local_write(op(
+                add(apple_container(op(
                     "arm.check-launcher",
                     "Check launcher in Apple container",
                     "scripts/agent",
@@ -406,7 +384,7 @@ fn add_path_operations(
                     "launcher source → ARM validation",
                 )));
             } else {
-                add(local_write(op(
+                add(apple_container(op(
                     "arm.check-lib",
                     "Check library in Apple container",
                     "scripts/agent",
@@ -466,7 +444,7 @@ fn add_path_operations(
         }
     }
     if path.starts_with("docs") && !path.starts_with("docs/agents") {
-        add(crate::registry::operation("repo.diff-check").unwrap());
+        add(diff_check());
     }
     if path.starts_with("documentation") {
         add(op(
@@ -620,7 +598,7 @@ fn add_crate(
     }
     let manifest = format!("{root}/Cargo.toml");
     for mut operation in [
-        cargo(
+        cargo_format(
             &format!("{id}.format"),
             &format!("Check {id} formatting"),
             &["fmt", "--manifest-path", &manifest, "--check"],
@@ -657,13 +635,40 @@ fn add_crate(
 }
 
 fn cargo(id: &str, title: &str, args: &[&str], reason: &str) -> Operation {
-    op(id, title, "cargo", args, reason)
+    let mut operation = op(id, title, "cargo", args, reason);
+    operation.action = ActionKind::Cargo {
+        offline_first: true,
+    };
+    operation
+}
+fn diff_check() -> Operation {
+    Operation {
+        id: "repo.diff-check".into(),
+        title: "Check patch whitespace".into(),
+        risk: Risk::ReadOnly,
+        action: ActionKind::Git,
+        phase: WorkflowPhase::Cheap,
+        program: "git".into(),
+        args: vec!["diff".into(), "--check".into()],
+        reason: "all patches require whitespace validation".into(),
+        failure_hint: "inspect with scripts/agent run show RUN_ID".into(),
+        inputs: Vec::new(),
+    }
+}
+fn cargo_format(id: &str, title: &str, args: &[&str], reason: &str) -> Operation {
+    let mut operation = op(id, title, "cargo", args, reason);
+    operation.action = ActionKind::Cargo {
+        offline_first: false,
+    };
+    operation
 }
 fn op(id: &str, title: &str, program: &str, args: &[&str], reason: &str) -> Operation {
     Operation {
         id: id.into(),
         title: title.into(),
         risk: Risk::ReadOnly,
+        action: ActionKind::Script,
+        phase: WorkflowPhase::Host,
         program: program.into(),
         args: args.iter().map(|arg| (*arg).into()).collect(),
         reason: reason.into(),
@@ -676,6 +681,8 @@ fn op_owned(id: &str, title: &str, program: &str, args: Vec<String>, reason: &st
         id: id.into(),
         title: title.into(),
         risk: Risk::ReadOnly,
+        action: ActionKind::Script,
+        phase: WorkflowPhase::Cheap,
         program: program.into(),
         args,
         reason: reason.into(),
@@ -687,8 +694,10 @@ fn with_inputs(mut operation: Operation, inputs: &[&str]) -> Operation {
     operation.inputs = inputs.iter().map(|input| (*input).into()).collect();
     operation
 }
-fn local_write(mut operation: Operation) -> Operation {
+fn apple_container(mut operation: Operation) -> Operation {
     operation.risk = Risk::LocalWrite;
+    operation.action = ActionKind::AppleContainer;
+    operation.phase = WorkflowPhase::Expensive;
     operation
 }
 

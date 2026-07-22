@@ -27,7 +27,7 @@ pub enum ResourceClass {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ActionKind {
-    Cargo,
+    Cargo { offline_first: bool },
     Script,
     AppleContainer,
     Git,
@@ -126,6 +126,8 @@ pub struct Operation {
     pub id: String,
     pub title: String,
     pub risk: Risk,
+    pub action: ActionKind,
+    pub phase: WorkflowPhase,
     pub program: String,
     pub args: Vec<String>,
     pub reason: String,
@@ -137,26 +139,13 @@ pub struct Operation {
 impl Operation {
     #[must_use]
     pub fn action_kind(&self) -> ActionKind {
-        if self.risk >= Risk::DeviceWrite {
-            ActionKind::DeviceTransaction
-        } else if self.program == "cargo" {
-            ActionKind::Cargo
-        } else if self.program == "git" {
-            ActionKind::Git
-        } else if self.id.starts_with("arm.") || self.args.first().is_some_and(|arg| arg == "build")
-        {
-            ActionKind::AppleContainer
-        } else if self.program == "gh" {
-            ActionKind::PlatformCi
-        } else {
-            ActionKind::Script
-        }
+        self.action
     }
 
     #[must_use]
     pub fn resource_class(&self) -> ResourceClass {
         match self.action_kind() {
-            ActionKind::Cargo => ResourceClass::Cargo,
+            ActionKind::Cargo { .. } => ResourceClass::Cargo,
             ActionKind::AppleContainer => ResourceClass::AppleContainer,
             ActionKind::Git => ResourceClass::GitIndex,
             ActionKind::PlatformCi => ResourceClass::Network,
@@ -167,22 +156,17 @@ impl Operation {
 
     #[must_use]
     pub fn workflow_phase(&self) -> WorkflowPhase {
-        match self.resource_class() {
-            ResourceClass::Device => WorkflowPhase::Device,
-            ResourceClass::Network => WorkflowPhase::External,
-            ResourceClass::AppleContainer => WorkflowPhase::Expensive,
-            ResourceClass::Cargo => WorkflowPhase::Host,
-            ResourceClass::Cpu | ResourceClass::GitIndex => {
-                if self.id.contains("format")
-                    || self.id.contains("syntax")
-                    || self.id == "repo.diff-check"
-                {
-                    WorkflowPhase::Cheap
-                } else {
-                    WorkflowPhase::Host
-                }
+        self.phase
+    }
+
+    #[must_use]
+    pub const fn cargo_offline_first(&self) -> bool {
+        matches!(
+            self.action,
+            ActionKind::Cargo {
+                offline_first: true
             }
-        }
+        )
     }
 }
 

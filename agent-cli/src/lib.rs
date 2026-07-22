@@ -18,7 +18,6 @@ pub mod platform_ci;
 pub mod policy;
 pub mod progress;
 pub mod redact;
-pub mod registry;
 pub mod release;
 pub mod request;
 pub mod scope;
