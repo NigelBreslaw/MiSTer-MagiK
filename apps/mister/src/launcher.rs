@@ -982,7 +982,7 @@ impl LauncherNav {
             settings_focused: false,
             settings_selected: 0,
             display_combo_open: false,
-            display_selected: 0,
+            display_selected: usize::MAX,
             display_highlighted: 0,
             display_confirm_remaining: 0,
             screensaver_selected: 0,
@@ -2064,7 +2064,11 @@ impl LauncherNav {
             let count = mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS.len();
             if rising(now.btn_b, self.prev.btn_b) {
                 self.display_combo_open = false;
-                self.display_highlighted = self.display_selected;
+                self.display_highlighted = if self.display_selected < count {
+                    self.display_selected
+                } else {
+                    0
+                };
                 return None;
             }
             if self.repeat.tick_down(now.dpad_down, frame_now)
@@ -2110,7 +2114,13 @@ impl LauncherNav {
         if rising(now.btn_a, self.prev.btn_a) {
             if self.settings_selected == 0 {
                 self.display_combo_open = true;
-                self.display_highlighted = self.display_selected;
+                let count =
+                    mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS.len();
+                self.display_highlighted = if self.display_selected < count {
+                    self.display_selected
+                } else {
+                    0
+                };
                 return None;
             }
             if self.settings_selected == 1 {
@@ -6644,6 +6654,7 @@ mod tests {
     fn display_combo_selects_a_new_mode_and_confirmation_can_cancel() {
         let catalog = multi_system_catalog();
         let mut nav = LauncherNav::new();
+        assert_eq!(nav.display_selected, usize::MAX);
         let t0 = Instant::now();
         nav.screen = Screen::Settings;
         let press_a = pad_with(|pad| pad.btn_a = true);
