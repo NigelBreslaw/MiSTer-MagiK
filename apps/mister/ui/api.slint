@@ -68,8 +68,14 @@ export global MisterBridge {
     // Home focus: selected menu-item index, with settings-focused as the top cog target.
     in-out property <int> selected-index;
     in-out property <bool> settings-focused;
-    // Settings focus: 0=screensaver, 1=exit, 2=simple joystick, 3=reset database, 4=about, 5=licenses, 6=info.
+    // Settings focus: 0=display resolution, 1=screensaver, 2=exit, 3=simple joystick, 4=reset database, 5=about, 6=licenses, 7=info.
     in-out property <int> settings-selected;
+    in-out property <[string]> display-options;
+    in-out property <string> display-active-label;
+    in-out property <bool> display-combo-open;
+    in-out property <int> display-selected;
+    in-out property <int> display-highlighted;
+    in-out property <int> display-confirm-remaining;
     in-out property <bool> simple-joystick-handling;
     in-out property <int> screensaver-settings-selected;
     in-out property <bool> screensaver-enabled;

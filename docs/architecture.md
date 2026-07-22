@@ -47,6 +47,12 @@ The fork must not write the launcher framebuffer mode, route a generic 8888
 framebuffer, draw the stock menu OSD, or keep input grabbed while Slint owns the
 launcher.
 
+Display resolution changes are Main-owned provisional transactions. Main
+suspends Slint, applies the selected HDMI or CRT/VGA timing, and restarts the
+launcher with a ten-second confirmation deadline. `MiSTer.ini` remains
+unchanged until confirmation; cancellation, timeout, launcher failure, or
+power loss therefore returns to the last persisted working mode.
+
 Root `/media/fat/menu.rbf` is stock firmware owned by `update_all`; MagiK never
 writes it. `mister_magik_exit_to_menu` stays on the active latch Menu core.
 Game returns and `load_core menu.rbf` are redirected by `MiSTer_MagiK` to the

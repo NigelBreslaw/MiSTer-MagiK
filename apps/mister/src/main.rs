@@ -322,6 +322,7 @@ fn dispatch_pre_fpga(cmd: &str, args: &[String]) {
         "library-refresh" => run_library_refresh(),
         "request-library-rebuild" => run_request_library_rebuild(),
         "toggle-simple-joystick-setting" => run_toggle_simple_joystick_setting(),
+        "display-persist" => run_display_persist(args),
         "reset-delete-screenshot-packs" => run_reset_delete_screenshot_packs(args),
         #[cfg(feature = "bench-tools")]
         "media-bench-download" => media_bench_download::run(),
@@ -464,6 +465,20 @@ fn run_toggle_simple_joystick_setting() {
         ),
         Err(e) => {
             crate::ui_errln!("toggle_simple_joystick_setting\tfailed\t{e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn run_display_persist(args: &[String]) {
+    let Some(mode) = args.get(2) else {
+        crate::ui_errln!("display-persist requires a mode id");
+        std::process::exit(2);
+    };
+    match mister_magik_mister_runtime::display_resolution::persist(mode) {
+        Ok(()) => crate::ui_logln!("display_persist\tdone\tmode={mode}"),
+        Err(error) => {
+            crate::ui_errln!("display_persist\tfailed\tmode={mode}\terror={error}");
             std::process::exit(1);
         }
     }

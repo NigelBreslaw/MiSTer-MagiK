@@ -12,6 +12,7 @@ import { ScreensaverSettingsScreen } from "views/screensaver_settings.slint";
 import { LicensesScreen } from "views/licenses.slint";
 import { AboutScreen } from "views/about.slint";
 import { InfoScreen } from "views/info.slint";
+import { ComboBoxOverlay } from "components/combo_box.slint";
 import {
     BackgroundScanBadge,
     CatalogScanPopup,
@@ -72,6 +73,8 @@ export component Launcher inherits MisterWindow {
     }
 
     if MisterBridge.confirm-visible : ConfirmDialog { }
+
+    if MisterBridge.display-combo-open : ComboBoxOverlay { }
 
     if MisterBridge.loading-message != "" : LoadingOverlay { }
 

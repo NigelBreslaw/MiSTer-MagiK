@@ -65,7 +65,7 @@ const FIFO_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 const MISTER_START_TIMEOUT: Duration = Duration::from_secs(15);
 pub const LAUNCH_RETURN_STATE_PATH: &str = "/tmp/mister-magik/launcher-return-state.json";
 const LAUNCH_RETURN_STATE_SCHEMA: u32 = 3;
-const SETTINGS_MAX_SELECTED: usize = 6;
+const SETTINGS_MAX_SELECTED: usize = 7;
 const SCREENSAVER_SETTINGS_MAX_SELECTED: usize = 2;
 const LICENSES_MAX_SELECTED: usize = crate::licenses::LICENSE_TITLES.len() - 1;
 const LICENSE_SCROLL_LINE_PX: f64 = 10.0;
@@ -252,6 +252,7 @@ pub enum ConfirmAction {
     Restart,
     LibraryChanged,
     LibraryUpdateFailed,
+    DisplayResolution,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -264,6 +265,9 @@ pub enum LauncherAction {
     ContinueWithStaleLibrary,
     RebuildLibrary,
     PreviewScreensaver,
+    ApplyDisplayResolution,
+    ConfirmDisplayResolution,
+    CancelDisplayResolution,
 }
 
 pub struct LauncherEvent {
@@ -717,6 +721,10 @@ pub struct LauncherNav {
     pub scroll_x: i32,
     pub settings_focused: bool,
     pub settings_selected: usize,
+    pub display_combo_open: bool,
+    pub display_selected: usize,
+    pub display_highlighted: usize,
+    pub display_confirm_remaining: u8,
     pub screensaver_selected: usize,
     pub settings: MagikSettings,
     pub licenses_selected: usize,
@@ -973,6 +981,10 @@ impl LauncherNav {
             scroll_x: 0,
             settings_focused: false,
             settings_selected: 0,
+            display_combo_open: false,
+            display_selected: 0,
+            display_highlighted: 0,
+            display_confirm_remaining: 0,
             screensaver_selected: 0,
             settings: MagikSettings::default(),
             licenses_selected: 0,
@@ -2048,6 +2060,36 @@ impl LauncherNav {
     }
 
     fn handle_settings(&mut self, now: &PadState, frame_now: Instant) -> Option<LauncherEvent> {
+        if self.display_combo_open {
+            let count = mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS.len();
+            if rising(now.btn_b, self.prev.btn_b) {
+                self.display_combo_open = false;
+                self.display_highlighted = self.display_selected;
+                return None;
+            }
+            if self.repeat.tick_down(now.dpad_down, frame_now)
+                && self.display_highlighted + 1 < count
+            {
+                self.display_highlighted += 1;
+            }
+            if self.repeat.tick_up(now.dpad_up, frame_now) && self.display_highlighted > 0 {
+                self.display_highlighted -= 1;
+            }
+            if rising(now.btn_a, self.prev.btn_a) {
+                self.display_combo_open = false;
+                if self.display_highlighted == self.display_selected {
+                    return None;
+                }
+                let id = mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS
+                    [self.display_highlighted]
+                    .id;
+                return Some(LauncherEvent {
+                    action: LauncherAction::ApplyDisplayResolution,
+                    path: Some(id.to_owned()),
+                });
+            }
+            return None;
+        }
         if rising(now.btn_home, self.prev.btn_home) {
             self.go_root();
             return None;
@@ -2067,11 +2109,16 @@ impl LauncherNav {
         }
         if rising(now.btn_a, self.prev.btn_a) {
             if self.settings_selected == 0 {
+                self.display_combo_open = true;
+                self.display_highlighted = self.display_selected;
+                return None;
+            }
+            if self.settings_selected == 1 {
                 self.screensaver_selected = 0;
                 self.screen = Screen::Screensaver;
                 return None;
             }
-            if self.settings_selected == 2 {
+            if self.settings_selected == 3 {
                 let mut next_settings = self.settings.clone();
                 next_settings.simple_joystick_handling = !next_settings.simple_joystick_handling;
                 match next_settings.save() {
@@ -2082,24 +2129,24 @@ impl LauncherNav {
                 }
                 return None;
             }
-            if self.settings_selected == 4 {
+            if self.settings_selected == 5 {
                 self.screen = Screen::About;
                 return None;
             }
-            if self.settings_selected == 5 {
+            if self.settings_selected == 6 {
                 self.licenses_selected = 0;
                 self.licenses_expanded = false;
                 self.licenses_scroll.reset();
                 self.screen = Screen::Licenses;
                 return None;
             }
-            if self.settings_selected == 6 {
+            if self.settings_selected == 7 {
                 self.screen = Screen::Info;
                 return None;
             }
             self.confirm_selected = 0;
             self.confirm_action = Some(match self.settings_selected {
-                1 => ConfirmAction::ExitToMister,
+                2 => ConfirmAction::ExitToMister,
                 _ => ConfirmAction::ResetDatabase,
             });
         }
@@ -2220,6 +2267,14 @@ impl LauncherNav {
     fn handle_confirm(&mut self, now: &PadState, frame_now: Instant) -> Option<LauncherEvent> {
         let home_pressed = rising(now.btn_home, self.prev.btn_home);
         if rising(now.btn_b, self.prev.btn_b) || home_pressed {
+            if self.confirm_action == Some(ConfirmAction::DisplayResolution) {
+                self.confirm_action = None;
+                self.confirm_selected = 0;
+                return Some(LauncherEvent {
+                    action: LauncherAction::CancelDisplayResolution,
+                    path: None,
+                });
+            }
             if self.confirm_action == Some(ConfirmAction::LibraryChanged) {
                 self.confirm_action = None;
                 self.confirm_selected = 0;
@@ -2283,8 +2338,18 @@ impl LauncherNav {
                         path: None,
                     }),
                     Some(ConfirmAction::LibraryUpdateFailed) => None,
+                    Some(ConfirmAction::DisplayResolution) => Some(LauncherEvent {
+                        action: LauncherAction::ConfirmDisplayResolution,
+                        path: None,
+                    }),
                     None => None,
                 };
+            }
+            if action == Some(ConfirmAction::DisplayResolution) {
+                return Some(LauncherEvent {
+                    action: LauncherAction::CancelDisplayResolution,
+                    path: None,
+                });
             }
         }
         None
@@ -3508,7 +3573,7 @@ fn write_mister_command_nonblocking(cmd: &str) -> Result<(), String> {
     ))
 }
 
-fn write_magik_command_acknowledged(cmd: &str) -> Result<(), String> {
+fn write_magik_command_response(cmd: &str) -> Result<String, String> {
     let command_lock = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -3540,7 +3605,10 @@ fn write_magik_command_acknowledged(cmd: &str) -> Result<(), String> {
                 bytes.extend_from_slice(&chunk[..count]);
                 if let Some(end) = bytes.iter().position(|byte| *byte == b'\n') {
                     let response = String::from_utf8_lossy(&bytes[..end]);
-                    return parse_magik_command_reply(&response);
+                    if response == "ok" || response.starts_with("ok ") {
+                        return Ok(response.into_owned());
+                    }
+                    return Err(response.into_owned());
                 }
                 if bytes.len() > 512 {
                     return Err("MiSTer command reply too long".to_string());
@@ -3563,6 +3631,56 @@ fn write_magik_command_acknowledged(cmd: &str) -> Result<(), String> {
     }
 }
 
+fn write_magik_command_acknowledged(cmd: &str) -> Result<(), String> {
+    write_magik_command_response(cmd).map(|_| ())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DisplayCommandState {
+    pub active: String,
+    pub pending: Option<String>,
+    pub remaining: u8,
+}
+
+pub fn display_state() -> Result<DisplayCommandState, String> {
+    let response = write_magik_command_response("mister_magik_display_get_v1\n")?;
+    let mut active = None;
+    let mut pending = None;
+    let mut remaining = 0;
+    for field in response.split_whitespace() {
+        if let Some(value) = field.strip_prefix("active=") {
+            active = Some(value.to_owned());
+        }
+        if let Some(value) = field.strip_prefix("pending=") {
+            pending = (value != "none").then(|| value.to_owned());
+        }
+        if let Some(value) = field.strip_prefix("remaining=") {
+            remaining = value.parse::<u8>().unwrap_or(0).min(10);
+        }
+    }
+    Ok(DisplayCommandState {
+        active: active.ok_or("display state missing active mode")?,
+        pending,
+        remaining,
+    })
+}
+
+pub fn apply_display_resolution(id: &str) -> Result<(), String> {
+    if mister_magik_mister_runtime::display_resolution::find(id).is_none() {
+        return Err("unsupported display mode".into());
+    }
+    write_magik_command_acknowledged(&format!("mister_magik_display_apply_v1 mode={id}\n"))
+}
+
+pub fn confirm_display_resolution() -> Result<(), String> {
+    write_magik_command_acknowledged("mister_magik_display_confirm_v1\n")
+}
+
+pub fn cancel_display_resolution() -> Result<(), String> {
+    write_magik_command_acknowledged("mister_magik_display_cancel_v1\n")
+}
+
+#[cfg(test)]
 fn parse_magik_command_reply(response: &str) -> Result<(), String> {
     if response == "ok" || response.starts_with("ok ") {
         Ok(())
@@ -6065,7 +6183,7 @@ mod tests {
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
         nav.screen = Screen::Settings;
-        nav.settings_selected = 5;
+        nav.settings_selected = 6;
         let press_a = pad_with(|pad| pad.btn_a = true);
         assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
         assert_eq!(nav.screen, Screen::Licenses);
@@ -6114,7 +6232,7 @@ mod tests {
         let press_b = pad_with(|pad| pad.btn_b = true);
 
         nav.screen = Screen::Settings;
-        nav.settings_selected = 4;
+        nav.settings_selected = 5;
         assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
         assert_eq!(nav.screen, Screen::About);
         release(&mut nav, &catalog, t0, 16);
@@ -6124,7 +6242,7 @@ mod tests {
         assert_eq!(nav.screen, Screen::Settings);
         release(&mut nav, &catalog, t0, 48);
 
-        nav.settings_selected = 6;
+        nav.settings_selected = 7;
         assert!(nav
             .handle_input(&press_a, t0 + Duration::from_millis(64), &catalog)
             .is_none());
@@ -6469,7 +6587,7 @@ mod tests {
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
         nav.screen = Screen::Settings;
-        nav.settings_selected = 3;
+        nav.settings_selected = 4;
 
         let press_a = pad_with(|pad| pad.btn_a = true);
         assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
@@ -6506,12 +6624,42 @@ mod tests {
     }
 
     #[test]
+    fn display_combo_selects_a_new_mode_and_confirmation_can_cancel() {
+        let catalog = multi_system_catalog();
+        let mut nav = LauncherNav::new();
+        let t0 = Instant::now();
+        nav.screen = Screen::Settings;
+        let press_a = pad_with(|pad| pad.btn_a = true);
+        assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
+        assert!(nav.display_combo_open);
+        release(&mut nav, &catalog, t0, 16);
+        let down = pad_with(|pad| pad.dpad_down = true);
+        assert!(nav
+            .handle_input(&down, t0 + Duration::from_millis(32), &catalog)
+            .is_none());
+        release(&mut nav, &catalog, t0, 48);
+        let event = nav
+            .handle_input(&press_a, t0 + Duration::from_millis(64), &catalog)
+            .expect("new display mode");
+        assert_eq!(event.action, LauncherAction::ApplyDisplayResolution);
+        assert_eq!(event.path.as_deref(), Some("hdmi-1280x720p60"));
+
+        nav.confirm_action = Some(ConfirmAction::DisplayResolution);
+        nav.confirm_selected = 0;
+        release(&mut nav, &catalog, t0, 80);
+        let event = nav
+            .handle_input(&press_a, t0 + Duration::from_millis(96), &catalog)
+            .expect("cancel display");
+        assert_eq!(event.action, LauncherAction::CancelDisplayResolution);
+    }
+
+    #[test]
     fn launcher_exit_confirmation_defaults_to_cancel() {
         let catalog = multi_system_catalog();
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
         nav.screen = Screen::Settings;
-        nav.settings_selected = 1;
+        nav.settings_selected = 2;
 
         let press_a = pad_with(|pad| pad.btn_a = true);
         assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
@@ -6538,7 +6686,7 @@ mod tests {
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
         nav.screen = Screen::Settings;
-        nav.settings_selected = 1;
+        nav.settings_selected = 2;
 
         let press_a = pad_with(|pad| pad.btn_a = true);
         assert!(nav.handle_input(&press_a, t0, &catalog).is_none());

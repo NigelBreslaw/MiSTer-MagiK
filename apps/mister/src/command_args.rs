@@ -65,6 +65,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("library-refresh", CommandKind::PreFpga),
     CommandSpec::new("request-library-rebuild", CommandKind::PreFpga),
     CommandSpec::new("toggle-simple-joystick-setting", CommandKind::PreFpga),
+    CommandSpec::new("display-persist", CommandKind::PreFpga),
     CommandSpec::new("reset-delete-screenshot-packs", CommandKind::PreFpga),
     #[cfg(feature = "bench-tools")]
     CommandSpec::new("media-bench-download", CommandKind::PreFpga),
@@ -149,6 +150,7 @@ pub fn requires_process_exclusive(command: &str) -> bool {
             | "library-refresh"
             | "request-library-rebuild"
             | "toggle-simple-joystick-setting"
+            | "display-persist"
             | "reset-delete-screenshot-packs"
             | "media-bench-download"
             | "media-bench-save"

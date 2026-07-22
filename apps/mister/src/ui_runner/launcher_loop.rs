@@ -1744,6 +1744,29 @@ pub(super) fn run_launcher_loop(
     let mut nav = LauncherNav::new();
     nav.settings = crate::settings::MagikSettings::load();
     nav.screen = start_screen;
+    let mut display_confirm_deadline = None;
+    if std::env::var_os("MISTER_MAGIK_PARENT").is_some() {
+        if let Ok(state) = launcher::display_state() {
+            let selected_id = state.pending.as_deref().unwrap_or(&state.active);
+            if let Some(index) =
+                mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS
+                    .iter()
+                    .position(|mode| mode.id == selected_id)
+            {
+                nav.display_selected = index;
+                nav.display_highlighted = index;
+            }
+            if state.pending.is_some() {
+                nav.screen = Screen::Settings;
+                nav.settings_selected = 0;
+                nav.confirm_action = Some(launcher::ConfirmAction::DisplayResolution);
+                nav.confirm_selected = 0;
+                nav.display_confirm_remaining = state.remaining.max(1);
+                display_confirm_deadline =
+                    Some(Instant::now() + Duration::from_secs(u64::from(state.remaining.max(1))));
+            }
+        }
+    }
     let mut setup = SetupNav::new();
     let mut loading_title = String::new();
     let mut last_clock_update = Instant::now() - Duration::from_secs(2);
@@ -2241,6 +2264,13 @@ pub(super) fn run_launcher_loop(
             continue;
         }
         let loop_start = Instant::now();
+        if let Some(deadline) = display_confirm_deadline {
+            nav.display_confirm_remaining = if loop_start >= deadline {
+                0
+            } else {
+                ((deadline - loop_start).as_millis().div_ceil(1000) as u8).min(10)
+            };
+        }
         let frame_analytics_mode = frame_accounting.frame_analytics_mode();
         let cpu_loop_start = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let arcade_visual_index_at_loop_start = nav.arcade.visual_index;
@@ -3296,6 +3326,30 @@ pub(super) fn run_launcher_loop(
                                     start,
                                 );
                                 request_launcher_redraw!();
+                                continue;
+                            }
+                            LauncherAction::ApplyDisplayResolution => {
+                                if let Some(id) = event.path.as_deref() {
+                                    if let Err(error) = launcher::apply_display_resolution(id) {
+                                        crate::ui_errln!("display apply failed: {error}");
+                                    }
+                                }
+                                continue;
+                            }
+                            LauncherAction::ConfirmDisplayResolution => {
+                                if let Err(error) = launcher::confirm_display_resolution() {
+                                    crate::ui_errln!("display confirm failed: {error}");
+                                    nav.confirm_action =
+                                        Some(launcher::ConfirmAction::DisplayResolution);
+                                } else {
+                                    display_confirm_deadline = None;
+                                }
+                                continue;
+                            }
+                            LauncherAction::CancelDisplayResolution => {
+                                if let Err(error) = launcher::cancel_display_resolution() {
+                                    crate::ui_errln!("display rollback failed: {error}");
+                                }
                                 continue;
                             }
                             LauncherAction::PreviewScreensaver => {

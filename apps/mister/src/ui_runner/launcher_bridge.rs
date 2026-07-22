@@ -387,6 +387,15 @@ fn sync_launcher_confirm_bridge(
         nav.confirm_selected as i32
     );
     sync_confirm_bridge(bridge, nav.confirm_action);
+    if nav.confirm_action == Some(launcher::ConfirmAction::DisplayResolution) {
+        let label = format!("Cancel ({})", nav.display_confirm_remaining);
+        set_bridge_string_if_changed!(
+            bridge,
+            get_confirm_left_label,
+            set_confirm_left_label,
+            &label
+        );
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -428,6 +437,12 @@ fn confirm_bridge_text(action: Option<launcher::ConfirmAction>) -> ConfirmBridge
             message: "Continuing with the current library. Try rebuilding again later.",
             left_label: "OK",
             right_label: "",
+        },
+        Some(launcher::ConfirmAction::DisplayResolution) => ConfirmBridgeText {
+            title: "Confirm new resolution works",
+            message: "Keep this display resolution? It will be restored automatically if you cannot see this dialog.",
+            left_label: "Cancel (10)",
+            right_label: "Confirm",
         },
         None => ConfirmBridgeText {
             title: "",
@@ -475,6 +490,20 @@ pub(super) fn sync_bridge_launcher(
     bridge.set_menu_breadcrumb(nav.current_menu_breadcrumb().into());
     bridge.set_settings_focused(nav.settings_focused);
     bridge.set_settings_selected(nav.settings_selected as i32);
+    bridge.set_display_options(ModelRc::new(VecModel::from(
+        mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS
+            .iter()
+            .map(|mode| SharedString::from(mode.label))
+            .collect::<Vec<_>>(),
+    )));
+    let active_label = mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS
+        .get(nav.display_selected)
+        .map_or("Custom/current mode", |mode| mode.label);
+    bridge.set_display_active_label(active_label.into());
+    bridge.set_display_combo_open(nav.display_combo_open);
+    bridge.set_display_selected(nav.display_selected as i32);
+    bridge.set_display_highlighted(nav.display_highlighted as i32);
+    bridge.set_display_confirm_remaining(nav.display_confirm_remaining as i32);
     bridge.set_simple_joystick_handling(nav.settings.simple_joystick_handling);
     bridge.set_screensaver_settings_selected(nav.screensaver_selected as i32);
     bridge.set_screensaver_enabled(nav.settings.screensaver_enabled);
@@ -1009,6 +1038,10 @@ pub(super) struct LauncherBridgeKey {
     home_scroll_held: bool,
     settings_focused: bool,
     settings_selected: usize,
+    display_combo_open: bool,
+    display_selected: usize,
+    display_highlighted: usize,
+    display_confirm_remaining: u8,
     screensaver_selected: usize,
     screensaver_enabled: bool,
     screensaver_delay_minutes: u8,
@@ -1042,6 +1075,10 @@ impl LauncherBridgeKey {
             home_scroll_held: nav.home_horizontal_held(),
             settings_focused: nav.settings_focused,
             settings_selected: nav.settings_selected,
+            display_combo_open: nav.display_combo_open,
+            display_selected: nav.display_selected,
+            display_highlighted: nav.display_highlighted,
+            display_confirm_remaining: nav.display_confirm_remaining,
             screensaver_selected: nav.screensaver_selected,
             screensaver_enabled: nav.settings.screensaver_enabled,
             screensaver_delay_minutes: nav.settings.screensaver_delay_minutes,

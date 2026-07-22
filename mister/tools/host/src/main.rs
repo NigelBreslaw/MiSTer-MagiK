@@ -530,6 +530,7 @@ pub fn run_cli() -> Result<()> {
         "core-list" => core_list()?,
         "mode" => mode_cli(&args)?,
         "scene" => scene_cli(&args)?,
+        "display-matrix" => display_matrix_cli(&args)?,
         "crt" => crt_qualification::run(&args)?,
         "connected" => println!("connected"),
         "run" => {
@@ -813,8 +814,95 @@ pub fn run_cli() -> Result<()> {
 
 fn usage() {
     println!(
-        "usage: mister --capture-buffer\n       mister <status|arming-status|mode|scene|crt|ini-edit|core-list|catalog|media-check|media-download|agent|reboot-wait|doctor|mame-metadata-build> ...\n       mode <status|dev|public|stock>\n       scene <launcher|controller_test|tear_pattern|video_playback|crt_trial> [seconds]\n       crt qualify --attended [--out DIRECTORY]\n       crt qualify --restore\n       ini-edit menu <OUTPUT> [--dry-run]\n       OUTPUT: hdmi|auto|crt-240p60|crt-288p50|crt-480p60|crt-576p50\n               1280x720p60|1024x768p60|720x480p60|720x576p50|1280x1024p60\n               800x600p60|640x480p60|1280x720p50|1920x1080p60|1920x1080p50\n               1366x768p60|1024x600p60|1920x1440p60|2048x1536p60\n       2560x1440p60: Mister does not support 1440p\n       ini-edit stock-boot [--dry-run]\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>]\n       operator commands are typed and bounded; direct-reset-no-sync remains experimental and requires a volatile session token"
+        "usage: mister --capture-buffer\n       mister <status|arming-status|mode|scene|display-matrix|crt|ini-edit|core-list|catalog|media-check|media-download|agent|reboot-wait|doctor|mame-metadata-build> ...\n       mode <status|dev|public|stock>\n       scene <launcher|controller_test|tear_pattern|video_playback|crt_trial> [seconds]\n       display-matrix --out DIRECTORY\n       crt qualify --attended [--out DIRECTORY]\n       crt qualify --restore\n       ini-edit menu <OUTPUT> [--dry-run]\n       OUTPUT: hdmi|auto|crt-240p60|crt-288p50|crt-480p60|crt-576p50\n               1280x720p60|1024x768p60|720x480p60|720x576p50|1280x1024p60\n               800x600p60|640x480p60|1280x720p50|1920x1080p60|1920x1080p50\n               1366x768p60|1024x600p60|1920x1440p60|2048x1536p60\n       2560x1440p60: Mister does not support 1440p\n       ini-edit stock-boot [--dry-run]\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>]\n       operator commands are typed and bounded; direct-reset-no-sync remains experimental and requires a volatile session token"
     );
+}
+
+const DISPLAY_MATRIX_MODES: &[&str] = &[
+    "auto",
+    "hdmi-1280x720p60",
+    "hdmi-1366x768p60",
+    "hdmi-1920x1080p60",
+    "hdmi-1920x1200p60",
+    "hdmi-2048x1536p60",
+    "hdmi-2560x1440p60",
+    "crt-240p60",
+    "crt-288p50",
+    "crt-480p60",
+    "crt-576p50",
+];
+
+fn display_matrix_cli(args: &[String]) -> Result<()> {
+    if args.len() != 2 || args[0] != "--out" {
+        return Err("usage: mister display-matrix --out DIRECTORY".into());
+    }
+    let directory = PathBuf::from(&args[1]);
+    fs::create_dir_all(&directory)?;
+    let directory = fs::canonicalize(directory)?;
+    let mut entries = Vec::new();
+    for mode in DISPLAY_MATRIX_MODES {
+        let started = Instant::now();
+        let session = connect(10)?;
+        exec_checked(
+            &session,
+            "apply display matrix mode",
+            &acknowledged_main_command(&format!("mister_magik_display_apply_v1 mode={mode}")),
+        )?;
+        drop(session);
+        let result = (|| -> Result<Value> {
+            let session = connect(10)?;
+            wait_launcher_ready(&session, Instant::now(), Duration::from_secs(15))?;
+            let readiness = exec_checked_output(
+                &session,
+                "display matrix readiness",
+                &release_display_mode_command_for_runtime(),
+            )?;
+            drop(session);
+            let capture = request_framebuffer_png()?;
+            let path = directory.join(format!("{mode}.png"));
+            fs::write(&path, &capture.png)?;
+            let sha256 = encode_hex(&Sha256::digest(&capture.png));
+            let width = capture
+                .result
+                .get("width")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let height = capture
+                .result
+                .get("height")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            if width == 0 || height == 0 || capture.png.len() < 64 {
+                return Err(format!("invalid framebuffer capture for {mode}").into());
+            }
+            Ok(
+                json!({"mode": mode, "path": path, "width": width, "height": height, "png_bytes": capture.png.len(), "sha256": sha256, "elapsed_ms": started.elapsed().as_millis(), "readiness": readiness.stdout.trim()}),
+            )
+        })();
+        let session = connect(10)?;
+        let rollback = exec_checked(
+            &session,
+            "rollback display matrix mode",
+            &acknowledged_main_command("mister_magik_display_cancel_v1"),
+        );
+        drop(session);
+        rollback?;
+        let session = connect(10)?;
+        wait_launcher_ready(&session, Instant::now(), Duration::from_secs(15))?;
+        drop(session);
+        entries.push(result?);
+    }
+    let manifest = json!({"schema":"mister-magik-display-matrix-v1", "captures": entries});
+    fs::write(
+        directory.join("manifest.json"),
+        serde_json::to_vec_pretty(&manifest)?,
+    )?;
+    println!("{}", directory.display());
+    Ok(())
+}
+
+fn release_display_mode_command_for_runtime() -> String {
+    "set -eu; grep -Eq '\"launcher_active\"[[:space:]]*:[[:space:]]*true' /tmp/mister-magik/main-status.json; if pidof MiSTer_MagiKDev >/dev/null 2>&1; then root=/media/fat/mister-magik-dev; else root=/media/fat/mister-magik; fi; \"$root/mister-magik-fb\" latch-readiness-report --json | grep -Eq '\"state\"[[:space:]]*:[[:space:]]*\"ready\"'".to_string()
 }
 
 fn delivery_health_command(layout: &str) -> Result<String> {
@@ -6037,6 +6125,16 @@ fn unix_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn display_matrix_covers_every_supported_runtime_mode() {
+        assert_eq!(DISPLAY_MATRIX_MODES.len(), 11);
+        assert!(DISPLAY_MATRIX_MODES.contains(&"auto"));
+        assert!(DISPLAY_MATRIX_MODES.contains(&"crt-576p50"));
+        assert!(
+            release_display_mode_command_for_runtime().contains("latch-readiness-report --json")
+        );
+    }
     use std::cell::RefCell;
     use std::fs;
 

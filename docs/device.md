@@ -76,6 +76,14 @@ capture is saved under the OS temporary directory at
 `mister-magik/captures/`, and the command prints a Markdown link to the PNG so
 an image-capable agent can inspect it without receiving base64 text.
 
+`mister display-matrix --out DIRECTORY` performs the bounded runtime display
+matrix without rebooting Linux. Main applies each supported resolution as a
+provisional transaction, the launcher restarts, and the authenticated MagiK
+agent returns one PNG per mode. The command writes deterministic PNG names and
+`manifest.json`, cancels every provisional mode after capture, and verifies the
+original working mode is restored between cases. Framebuffer evidence still
+requires attended sink observation for HDMI or CRT visibility claims.
+
 The launcher keeps output geometry one-to-one through 1280x720 and uses half
 width and height when the output is at least 1366 pixels wide or 900 pixels
 high. Custom modes use the same rule. The qualified ABI v3 hidden slots support
