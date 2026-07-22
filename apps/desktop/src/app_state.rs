@@ -193,6 +193,17 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn initial_dashboard_is_scoped_to_the_requested_host() {
+        let state = DashboardSnapshot::initial("10.0.0.7");
+
+        assert_eq!(state.host, "10.0.0.7");
+        assert_eq!(state.connection_state, "Looking for MiSTer at 10.0.0.7");
+        assert_eq!(state.agent_status, "Not checked yet");
+        assert_eq!(state.scanout_slots_summary, "Scanout slots unavailable");
+        assert!(state.last_error.is_empty());
+    }
+
+    #[test]
     fn process_summary_reports_empty_and_pids() {
         let value = json!({"processes": {"MiSTer_MagiK": [12, 34], "mister-magik-fb": []}});
         assert_eq!(
@@ -232,6 +243,20 @@ mod tests {
         assert_eq!(
             scanout_slots_labels(Some(false), Some(false)).0,
             "Scanout slots module missing"
+        );
+        assert_eq!(
+            scanout_slots_labels(Some(true), None),
+            (
+                "Scanout slots device missing".to_string(),
+                "module ready; device unknown".to_string()
+            )
+        );
+        assert_eq!(
+            scanout_slots_labels(None, Some(true)),
+            (
+                "Scanout slots unavailable".to_string(),
+                "module unknown; device ready".to_string()
+            )
         );
     }
 
@@ -276,5 +301,10 @@ mod tests {
             number_string_at(&json!({"value": 12.34}), "/value").as_deref(),
             Some("12.3")
         );
+        assert_eq!(
+            number_string_at(&json!({"value": u64::MAX}), "/value").as_deref(),
+            Some("18446744073709551615")
+        );
+        assert_eq!(number_string_at(&json!({"value": true}), "/value"), None);
     }
 }
