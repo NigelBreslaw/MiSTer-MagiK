@@ -504,26 +504,7 @@ fn bounded_output(mut command: Command, label: &str, deadline: Duration) -> Resu
         let mut bytes = Vec::new();
         stderr.read_to_end(&mut bytes).map(|_| bytes)
     });
-    let started = Instant::now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if started.elapsed() < deadline => thread::sleep(Duration::from_millis(100)),
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!(
-                    "{label} exceeded its {}s deadline",
-                    deadline.as_secs()
-                ));
-            }
-            Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!("cannot wait for {label}: {error}"));
-            }
-        }
-    };
+    let status = crate::process::wait(&mut child, Some(deadline), label, || Ok(()))?;
     let stdout = stdout_reader
         .join()
         .map_err(|_| format!("{label} stdout reader failed"))?

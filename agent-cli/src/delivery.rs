@@ -11,8 +11,7 @@ use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const REMOTE_RUNTIME: &str = "/media/fat/mister-magik-dev/mister-magik-fb";
 const PREPARE_DEADLINE: Duration = Duration::from_secs(10 * 60);
@@ -166,8 +165,8 @@ struct ProcessActions<'a> {
 
 impl ProcessActions<'_> {
     fn validate_commit(&self) -> AgentResult<()> {
-        let head = git_value(self.repository, &["rev-parse", "HEAD"])?;
-        let dirty = !git_value(self.repository, &["status", "--porcelain"])?.is_empty();
+        let head = crate::git::value(self.repository, &["rev-parse", "HEAD"])?;
+        let dirty = !crate::git::value(self.repository, &["status", "--porcelain"])?.is_empty();
         validate_commit_identity(
             &head,
             self.expected_commit,
@@ -415,7 +414,7 @@ fn prepare_stage(
         "--main-revision".into(),
         main_revision.into(),
         "--magik-revision".into(),
-        git_value(repository, &["rev-parse", "HEAD"])?,
+        crate::git::value(repository, &["rev-parse", "HEAD"])?,
         "--layout".into(),
         "dev".into(),
     ];
@@ -428,18 +427,6 @@ fn copy(from: PathBuf, to: PathBuf) -> AgentResult<()> {
         .map_err(|error| format!("cannot copy {}: {error}", from.display()))?)
 }
 
-fn git_value(repository: &Path, args: &[&str]) -> AgentResult<String> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(repository)
-        .output()
-        .map_err(|error| error.to_string())?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().into());
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().into())
-}
-
 fn run_bounded(repository: &Path, program: &str, args: &[String]) -> AgentResult<()> {
     let mut child = Command::new(program)
         .args(args)
@@ -449,25 +436,11 @@ fn run_bounded(repository: &Path, program: &str, args: &[String]) -> AgentResult
         .stderr(Stdio::inherit())
         .spawn()
         .map_err(|error| format!("cannot start {program}: {error}"))?;
-    let started = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) if status.success() => return Ok(()),
-            Ok(Some(status)) => return Err(format!("{program} exited with {status}").into()),
-            Ok(None) if started.elapsed() < PREPARE_DEADLINE => {
-                thread::sleep(Duration::from_millis(100));
-            }
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!("{program} exceeded its preparation deadline").into());
-            }
-            Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!("cannot wait for {program}: {error}").into());
-            }
-        }
+    let status = crate::process::wait(&mut child, Some(PREPARE_DEADLINE), program, || Ok(()))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("{program} exited with {status}").into())
     }
 }
 

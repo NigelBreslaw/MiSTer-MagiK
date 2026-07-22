@@ -11,8 +11,6 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::thread;
-use std::time::Duration;
 
 pub fn execute(
     evidence: &Evidence,
@@ -280,13 +278,11 @@ fn run_attempt(
         .stderr(Stdio::from(log))
         .spawn()
         .map_err(|error| error.to_string())?;
-    let status = loop {
-        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
-            break status;
-        }
-        thread::sleep(Duration::from_millis(100));
-        reporter.emit(EventKind::Progress, phase, heartbeat, None)?;
-    };
+    let status = crate::process::wait(&mut child, None, &operation.program, || {
+        reporter
+            .emit(EventKind::Progress, phase, heartbeat, None)
+            .map_err(|error| error.to_string())
+    })?;
     let code = status.code().unwrap_or(1);
     evidence.finish_command(command_id, started, code)?;
     Ok(status)

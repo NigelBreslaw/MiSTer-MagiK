@@ -10,8 +10,7 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const TARGET: &str = "armv7-unknown-linux-gnueabihf";
 const IMAGE: &str = "mister-magik-cross-armv7:ubuntu20-arm64";
@@ -798,25 +797,11 @@ fn run_bounded(command: &mut Command, deadline: Duration) -> AgentResult<()> {
         .stderr(Stdio::inherit())
         .spawn()
         .map_err(|error| format!("cannot start {description}: {error}"))?;
-    let started = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) if status.success() => return Ok(()),
-            Ok(Some(status)) => return Err(format!("command exited with {status}").into()),
-            Ok(None) if started.elapsed() < deadline => thread::sleep(Duration::from_millis(100)),
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(
-                    format!("command exceeded its {}s deadline", deadline.as_secs()).into(),
-                );
-            }
-            Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!("cannot wait for build command: {error}").into());
-            }
-        }
+    let status = crate::process::wait(&mut child, Some(deadline), &description, || Ok(()))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("command exited with {status}").into())
     }
 }
 

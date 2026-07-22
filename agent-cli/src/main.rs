@@ -384,7 +384,7 @@ fn deliver(
             .clone()
             .ok_or("delivery_state_invalid: pending delivery has no commit")?;
         let current_head = agent_cli::task::current_head(repository)?;
-        let branch = git_value(repository, &["branch", "--show-current"])?;
+        let branch = agent_cli::git::value(repository, &["branch", "--show-current"])?;
         if branch != "main" {
             reporter.emit(
                 EventKind::Warning,
@@ -402,7 +402,7 @@ fn deliver(
                 .filter(|(recorded, committed)| recorded == task_id && committed == &current_head)
                 .ok_or("external_pending: the newer HEAD was not committed by this task")?;
             debug_assert_eq!(latest.0, task_id);
-            if !git_success(
+            if !agent_cli::git::succeeds(
                 repository,
                 &["merge-base", "--is-ancestor", &sha, &current_head],
             )? {
@@ -410,10 +410,10 @@ fn deliver(
                     "external_pending: the recorded candidate is not an ancestor of HEAD".into(),
                 );
             }
-            let paths = git_changed_paths_including(repository, &sha, &current_head)?;
+            let paths = agent_cli::git::changed_paths_including(repository, &sha, &current_head)?;
             sha = current_head;
             pending.commit_sha = Some(sha.clone());
-            pending.source_tree = git_value(repository, &["rev-parse", "HEAD^{tree}"])?;
+            pending.source_tree = agent_cli::git::value(repository, &["rev-parse", "HEAD^{tree}"])?;
             pending.detail = Some("superseded by a newer verified task commit".into());
             evidence.save_delivery(&pending)?;
             paths
@@ -463,7 +463,7 @@ fn deliver(
         return Ok(Outcome::Passed);
     }
 
-    let dirty = git_value(repository, &["status", "--porcelain"])?;
+    let dirty = agent_cli::git::value(repository, &["status", "--porcelain"])?;
     if !dirty.is_empty() {
         return Err("dirty_worktree: commit or discard changes before delivery".into());
     }
@@ -489,7 +489,7 @@ fn deliver(
     let mut delivery = DeliveryRecord {
         task_id: task_id.into(),
         worktree: repository.to_path_buf(),
-        source_tree: git_value(repository, &["rev-parse", "HEAD^{tree}"])?,
+        source_tree: agent_cli::git::value(repository, &["rev-parse", "HEAD^{tree}"])?,
         commit_sha: Some(sha.clone()),
         impact,
         state: if external {
@@ -545,56 +545,6 @@ fn recorded_delivery_kind(
         }
         _ => inferred,
     }
-}
-
-fn git_value(repository: &std::path::Path, args: &[&str]) -> Result<String, String> {
-    let output = std::process::Command::new("git")
-        .args(args)
-        .current_dir(repository)
-        .output()
-        .map_err(|error| error.to_string())?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().into());
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().into())
-}
-
-fn git_success(repository: &std::path::Path, args: &[&str]) -> Result<bool, String> {
-    std::process::Command::new("git")
-        .args(args)
-        .current_dir(repository)
-        .status()
-        .map(|status| status.success())
-        .map_err(|error| error.to_string())
-}
-
-fn git_changed_paths_including(
-    repository: &std::path::Path,
-    first_commit: &str,
-    last_commit: &str,
-) -> Result<Vec<std::path::PathBuf>, String> {
-    let first_parent = format!("{first_commit}^");
-    let output = std::process::Command::new("git")
-        .args([
-            "diff",
-            "--name-only",
-            "-z",
-            "--diff-filter=ACMRD",
-            &first_parent,
-            last_commit,
-        ])
-        .current_dir(repository)
-        .output()
-        .map_err(|error| error.to_string())?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().into());
-    }
-    Ok(output
-        .stdout
-        .split(|byte| *byte == 0)
-        .filter(|path| !path.is_empty())
-        .map(|path| std::path::PathBuf::from(String::from_utf8_lossy(path).into_owned()))
-        .collect())
 }
 
 fn fatal(message: &str) -> ! {
@@ -714,15 +664,18 @@ mod tests {
         fs::write(root.join("platform"), "platform\n").unwrap();
         git(&["add", "platform"]);
         git(&["commit", "-qm", "platform"]);
-        let first = git_value(&root, &["rev-parse", "HEAD"]).unwrap();
+        let first = agent_cli::git::value(&root, &["rev-parse", "HEAD"]).unwrap();
         fs::write(root.join("follow-up"), "follow-up\n").unwrap();
         git(&["add", "follow-up"]);
         git(&["commit", "-qm", "follow-up"]);
-        let last = git_value(&root, &["rev-parse", "HEAD"]).unwrap();
+        let last = agent_cli::git::value(&root, &["rev-parse", "HEAD"]).unwrap();
 
-        assert!(git_success(&root, &["merge-base", "--is-ancestor", &first, &last]).unwrap());
+        assert!(
+            agent_cli::git::succeeds(&root, &["merge-base", "--is-ancestor", &first, &last])
+                .unwrap()
+        );
         assert_eq!(
-            git_changed_paths_including(&root, &first, &last).unwrap(),
+            agent_cli::git::changed_paths_including(&root, &first, &last).unwrap(),
             vec![
                 std::path::PathBuf::from("follow-up"),
                 std::path::PathBuf::from("platform")

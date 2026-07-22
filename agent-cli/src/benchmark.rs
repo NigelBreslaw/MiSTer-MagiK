@@ -275,8 +275,8 @@ struct ProcessActions<'a> {
 
 impl ProcessActions<'_> {
     fn qualify_build(&self) -> AgentResult<()> {
-        let head = git_value(self.repository, &["rev-parse", "HEAD"])?;
-        let dirty = !git_value(self.repository, &["status", "--porcelain"])?.is_empty();
+        let head = crate::git::value(self.repository, &["rev-parse", "HEAD"])?;
+        let dirty = !crate::git::value(self.repository, &["status", "--porcelain"])?.is_empty();
         if head != self.expected_commit || dirty {
             return Err("benchmark requires the exact clean committed source".into());
         }
@@ -388,8 +388,8 @@ struct ProcessColdActions<'a> {
 
 impl ProcessColdActions<'_> {
     fn inspect(&self) -> AgentResult<()> {
-        let head = git_value(self.repository, &["rev-parse", "HEAD"])?;
-        let dirty = !git_value(self.repository, &["status", "--porcelain"])?.is_empty();
+        let head = crate::git::value(self.repository, &["rev-parse", "HEAD"])?;
+        let dirty = !crate::git::value(self.repository, &["status", "--porcelain"])?.is_empty();
         if head != self.expected_commit || dirty {
             return Err("benchmark requires the exact clean committed source".into());
         }
@@ -639,18 +639,6 @@ fn cold_scenario_label(scenario: ColdBenchmarkScenario) -> &'static str {
         ColdBenchmarkScenario::PreviewColdStart => "preview-cold-start",
         ColdBenchmarkScenario::LibraryPersistence => "library-persistence",
     }
-}
-
-fn git_value(repository: &Path, args: &[&str]) -> AgentResult<String> {
-    let output = std::process::Command::new("git")
-        .args(args)
-        .current_dir(repository)
-        .output()
-        .map_err(|error| error.to_string())?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().into());
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().into())
 }
 
 #[cfg(test)]
