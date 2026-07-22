@@ -905,6 +905,58 @@ impl Evidence {
 }
 
 fn primary_worktree(repository: &Path) -> Result<PathBuf, String> {
+    if let Ok(worktree) = primary_worktree_from_metadata(repository) {
+        return Ok(worktree);
+    }
+    primary_worktree_from_git(repository)
+}
+
+fn primary_worktree_from_metadata(repository: &Path) -> Result<PathBuf, String> {
+    let worktree = repository
+        .ancestors()
+        .find(|candidate| candidate.join(".git").exists())
+        .ok_or_else(|| "cannot locate Git metadata".to_owned())?;
+    let marker = worktree.join(".git");
+    if marker.is_dir() {
+        return fs::canonicalize(worktree)
+            .map_err(|error| format!("cannot resolve primary worktree: {error}"));
+    }
+
+    let marker_text = fs::read_to_string(&marker)
+        .map_err(|error| format!("cannot read {}: {error}", marker.display()))?;
+    let git_dir = marker_text
+        .trim()
+        .strip_prefix("gitdir:")
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .ok_or_else(|| format!("{} is not a Git directory pointer", marker.display()))?;
+    let git_dir = resolve_metadata_path(worktree, &git_dir);
+    let common_text = fs::read_to_string(git_dir.join("commondir"))
+        .map_err(|error| format!("cannot read linked-worktree common directory: {error}"))?;
+    let common_dir = fs::canonicalize(resolve_metadata_path(
+        &git_dir,
+        Path::new(common_text.trim()),
+    ))
+    .map_err(|error| format!("cannot resolve linked-worktree common directory: {error}"))?;
+    if common_dir.file_name().and_then(|name| name.to_str()) != Some(".git") {
+        return Err("linked worktree common directory is not a .git directory".into());
+    }
+    let primary = common_dir
+        .parent()
+        .ok_or_else(|| "linked worktree common directory has no parent".to_owned())?;
+    fs::canonicalize(primary).map_err(|error| format!("cannot resolve primary worktree: {error}"))
+}
+
+fn resolve_metadata_path(base: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        base.join(path)
+    }
+}
+
+fn primary_worktree_from_git(repository: &Path) -> Result<PathBuf, String> {
     let output = Command::new("git")
         .args(["worktree", "list", "--porcelain"])
         .current_dir(repository)
@@ -978,6 +1030,92 @@ mod tests {
 
     fn temporary_root(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("agent-cli-{name}-{}", std::process::id()))
+    }
+
+    #[test]
+    fn resolves_primary_worktree_from_git_directory() {
+        let root = temporary_root("primary-worktree");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::create_dir_all(root.join("nested/path")).unwrap();
+
+        assert_eq!(
+            primary_worktree_from_metadata(&root.join("nested/path")).unwrap(),
+            fs::canonicalize(&root).unwrap()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn resolves_linked_worktree_with_relative_metadata_paths() {
+        let root = temporary_root("linked-worktree-relative");
+        let _ = fs::remove_dir_all(&root);
+        let primary = root.join("primary");
+        let linked = root.join("linked");
+        let git_dir = primary.join(".git/worktrees/linked");
+        fs::create_dir_all(&git_dir).unwrap();
+        fs::create_dir_all(linked.join("nested")).unwrap();
+        fs::write(
+            linked.join(".git"),
+            "gitdir: ../primary/.git/worktrees/linked\n",
+        )
+        .unwrap();
+        fs::write(git_dir.join("commondir"), "../..\n").unwrap();
+
+        assert_eq!(
+            primary_worktree_from_metadata(&linked.join("nested")).unwrap(),
+            fs::canonicalize(&primary).unwrap()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn resolves_linked_worktree_with_absolute_common_directory() {
+        let root = temporary_root("linked-worktree-absolute");
+        let _ = fs::remove_dir_all(&root);
+        let primary = root.join("primary");
+        let linked = root.join("linked");
+        let git_dir = primary.join(".git/worktrees/linked");
+        fs::create_dir_all(&git_dir).unwrap();
+        fs::create_dir_all(&linked).unwrap();
+        fs::write(
+            linked.join(".git"),
+            format!("gitdir: {}\n", git_dir.display()),
+        )
+        .unwrap();
+        fs::write(
+            git_dir.join("commondir"),
+            format!("{}\n", primary.join(".git").display()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            primary_worktree_from_metadata(&linked).unwrap(),
+            fs::canonicalize(&primary).unwrap()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn falls_back_to_git_for_separate_git_directory() {
+        let root = temporary_root("separate-git-dir");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let worktree = root.join("worktree");
+        let git_dir = root.join("storage");
+        let output = Command::new("git")
+            .args(["init", "-q", "--separate-git-dir"])
+            .arg(&git_dir)
+            .arg(&worktree)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert!(primary_worktree_from_metadata(&worktree).is_err());
+        assert_eq!(
+            primary_worktree(&worktree).unwrap(),
+            fs::canonicalize(&git_dir).unwrap()
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Copyright (C) 2026 Nigel Breslaw
 # SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -10,10 +10,12 @@ TARGET_ROOT="${CARGO_TARGET_DIR:-$SOURCE_ROOT/target}"
 BINARY="${MISTER_AGENT_CLI_BINARY:-$TARGET_ROOT/release/agent-cli}"
 LOCK="$TARGET_ROOT/.agent-cli-build-lock"
 
-INPUTS=(
+REQUIRED_INPUTS=(
   "$MANIFEST"
   "$SOURCE_ROOT/Cargo.lock"
   "$SOURCE_ROOT/src"
+)
+DEPENDENCY_INPUTS=(
   "$SOURCE_ROOT/../mister/tools/host/Cargo.toml"
   "$SOURCE_ROOT/../mister/tools/host/src"
   "$SOURCE_ROOT/../crates/catalog/Cargo.toml"
@@ -26,17 +28,29 @@ INPUTS=(
 )
 
 inputs_are_stale() {
-  local input
+  local input newer
+  local directories=()
   [[ -x "$BINARY" ]] || return 0
-  for input in "${INPUTS[@]}"; do
+  for input in "${REQUIRED_INPUTS[@]}"; do
+    [[ -e "$input" ]] || return 0
+    if [[ -f "$input" && "$input" -nt "$BINARY" ]]; then
+      return 0
+    fi
+    [[ ! -d "$input" ]] || directories+=("$input")
+  done
+  for input in "${DEPENDENCY_INPUTS[@]}"; do
     [[ -e "$input" ]] || continue
     if [[ -f "$input" && "$input" -nt "$BINARY" ]]; then
       return 0
     fi
-    if [[ -d "$input" && -n "$(find "$input" -type f -newer "$BINARY" -print -quit)" ]]; then
+    [[ ! -d "$input" ]] || directories+=("$input")
+  done
+  if ((${#directories[@]})); then
+    if ! newer="$(find "${directories[@]}" -type f -newer "$BINARY" -print -quit)"; then
       return 0
     fi
-  done
+    [[ -z "$newer" ]] || return 0
+  fi
   return 1
 }
 
