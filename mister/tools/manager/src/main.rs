@@ -631,6 +631,14 @@ fn verify_platform(paths: &Paths) -> Result<()> {
     if fields["format"] != "mister-magik-platform-v2" {
         return Err("unsupported platform manifest".into());
     }
+    for name in ["main_revision", "magik_revision", "menu_revision"] {
+        require_lower_hex(name, &fields[name], 40)?;
+    }
+    require_lower_hex(
+        "platform_contract_sha256",
+        &fields["platform_contract_sha256"],
+        64,
+    )?;
     for name in [
         "main",
         "gui",
@@ -653,10 +661,39 @@ fn verify_platform(paths: &Paths) -> Result<()> {
         if fields[&format!("{name}_path")] != expected {
             return Err(format!("invalid {name}_path").into());
         }
+        require_lower_hex(
+            &format!("{name}_sha256"),
+            &fields[&format!("{name}_sha256")],
+            64,
+        )?;
         let local = paths.fat.join(expected.trim_start_matches("/media/fat/"));
         if digest(&local)? != fields[&format!("{name}_sha256")] {
             return Err(format!("hash mismatch for {}", local.display()).into());
         }
+    }
+    let module_metadata =
+        parse_key_values(&paths.app.join("mister_magik_scanout_slots.metadata.txt"))?;
+    let latch_metadata =
+        parse_key_values(&paths.app.join("fpga/menu-magik-vblank-latch.metadata.txt"))?;
+    if module_metadata.get("module_sha256") != Some(&fields["scanout_module_sha256"]) {
+        return Err("scanout metadata module hash mismatch".into());
+    }
+    if latch_metadata.get("rbf_sha256") != Some(&fields["latch_rbf_sha256"]) {
+        return Err("latch metadata RBF hash mismatch".into());
+    }
+    for metadata in [&module_metadata, &latch_metadata] {
+        if metadata.get("platform_contract_sha256") != Some(&fields["platform_contract_sha256"]) {
+            return Err("platform metadata contract mismatch".into());
+        }
+    }
+    if latch_metadata.get("source_commit") != Some(&fields["menu_revision"]) {
+        return Err("latch metadata source revision mismatch".into());
+    }
+    if !module_metadata
+        .get("vermagic")
+        .is_some_and(|value| value.starts_with("5.15.1-MiSTer "))
+    {
+        return Err("scanout module vermagic is incompatible".into());
     }
     println!(
         "MiSTer MagiK: verified platform {}",
@@ -666,6 +703,10 @@ fn verify_platform(paths: &Paths) -> Result<()> {
 }
 
 fn parse_manifest(path: &Path) -> Result<BTreeMap<String, String>> {
+    parse_key_values(path)
+}
+
+fn parse_key_values(path: &Path) -> Result<BTreeMap<String, String>> {
     let mut fields = BTreeMap::new();
     for line in fs::read_to_string(path)?
         .lines()
@@ -677,6 +718,18 @@ fn parse_manifest(path: &Path) -> Result<BTreeMap<String, String>> {
         }
     }
     Ok(fields)
+}
+
+fn require_lower_hex(name: &str, value: &str, length: usize) -> Result<()> {
+    if value.len() == length
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        Ok(())
+    } else {
+        Err(format!("invalid {name}: {value}").into())
+    }
 }
 
 fn digest(path: &Path) -> Result<String> {
@@ -698,6 +751,26 @@ fn snapshot(paths: &Paths) -> Result<()> {
     for (source, name) in [(&paths.inittab, "inittab"), (&paths.ini, "MiSTer.ini")] {
         if source.is_file() {
             fs::copy(source, directory.join(name))?;
+        }
+    }
+    if let Ok(output) = Command::new("ps").output() {
+        if output.status.success() {
+            fs::write(directory.join("ps.txt"), output.stdout)?;
+        }
+    }
+    for (source, name) in [
+        (
+            Path::new("/sys/module/MiSTer_fb/parameters/mode"),
+            "fb-mode.txt",
+        ),
+        (
+            Path::new("/tmp/mister-magik-main.log"),
+            "mister-magik-main.log",
+        ),
+        (Path::new("/tmp/mister-magik/status.json"), "status.json"),
+    ] {
+        if source.is_file() {
+            let _ = fs::copy(source, directory.join(name));
         }
     }
     println!("MiSTer MagiK: snapshot: {}", directory.display());
@@ -724,22 +797,56 @@ fn stop_children(paths: &Paths) -> Result<()> {
     for pid in String::from_utf8_lossy(&output.stdout).split_whitespace() {
         let _ = Command::new("kill").args(["-KILL", pid]).status();
     }
-    Ok(())
+    let remaining = Command::new("pidof").arg("mister-magik-fb").output()?;
+    if remaining
+        .stdout
+        .iter()
+        .any(|byte| !byte.is_ascii_whitespace())
+    {
+        Err("mister-magik-fb did not stop within the bounded timeout".into())
+    } else {
+        Ok(())
+    }
 }
 
 fn remove_owned(paths: &Paths) -> Result<()> {
-    let files = [
+    let files = vec![
         paths.fat.join("MiSTer_MagiK"),
         paths.fat.join("Scripts/mister-magik.sh"),
         paths.fat.join("Scripts/mister-magik-channel.sh"),
         paths.fat.join("downloader_mister_magik.ini"),
         paths.backup.clone(),
+        paths.fat.join("THIRD-PARTY-NOTICES.txt"),
+        paths.fat.join("SOURCE-OFFER.txt"),
+        paths.fat.join("licenses/MiSTer-MagiK-GPL-3.0-or-later.txt"),
+        paths.fat.join("licenses/RUST-LIBRARIES.txt"),
+        paths.fat.join("licenses/FFMPEG-LGPL-2.1-or-later.txt"),
+        paths.fat.join("licenses/PRESS-START-2P-OFL-1.1.txt"),
     ];
     for path in &files {
         if path.is_file() {
             fs::remove_file(path)?;
         }
     }
+    let mut stale = Vec::new();
+    for entry in fs::read_dir(&paths.fat)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with("downloader_mister_magik.ini.tmp.")
+            || name.starts_with(".downloader_mister_magik.ini")
+            || name.starts_with(".MiSTer.ini.bak.before-magik.new.")
+            || name.starts_with(".MiSTer.ini.magik.new")
+        {
+            stale.push(entry.path());
+        }
+    }
+    for path in &stale {
+        if path.is_file() {
+            fs::remove_file(path)?;
+        }
+    }
+    let _ = fs::remove_dir(paths.fat.join("licenses"));
     if paths.app.is_dir() {
         fs::remove_dir_all(&paths.app)?;
     }
@@ -748,6 +855,7 @@ fn remove_owned(paths: &Paths) -> Result<()> {
     }
     let residue: Vec<_> = files
         .iter()
+        .chain(stale.iter())
         .chain([&paths.app, &paths.script])
         .filter(|path| path.exists())
         .collect();

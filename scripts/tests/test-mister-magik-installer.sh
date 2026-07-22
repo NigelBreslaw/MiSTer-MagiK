@@ -96,6 +96,25 @@ grep -qx '::sysinit:/media/fat/MiSTer &' "$TMP/inittab"
 
 # Full uninstall also requires Down and restores stock before deleting its manager.
 MISTER_MAGIK_TEST_KEYS=down run_manager install >/dev/null
+mkdir -p "$FAT/licenses" "$FAT/mister-magik-dev" "$FAT/Scripts/.mister-magik-user"
+printf 'stock\n' >"$FAT/MiSTer"
+printf 'stock menu\n' >"$FAT/menu.rbf"
+printf 'user backup\n' >"$FAT/MiSTer.ini.bak"
+printf 'developer\n' >"$FAT/MiSTer_MagiKDev"
+printf 'developer payload\n' >"$FAT/mister-magik-dev/keep.txt"
+printf 'user license\n' >"$FAT/licenses/USER-LICENSE.txt"
+printf 'user hook\n' >"$FAT/Scripts/.mister-magik-user/hook"
+for owned in \
+  THIRD-PARTY-NOTICES.txt SOURCE-OFFER.txt \
+  licenses/MiSTer-MagiK-GPL-3.0-or-later.txt \
+  licenses/RUST-LIBRARIES.txt licenses/FFMPEG-LGPL-2.1-or-later.txt \
+  licenses/PRESS-START-2P-OFL-1.1.txt \
+  downloader_mister_magik.ini \
+  .downloader_mister_magik.ini.partial downloader_mister_magik.ini.tmp.123 \
+  .MiSTer.ini.bak.before-magik.new.123 .MiSTer.ini.magik.new.123; do
+  mkdir -p "$(dirname "$FAT/$owned")"
+  printf 'owned\n' >"$FAT/$owned"
+done
 if MISTER_MAGIK_TEST_KEYS=enter run_manager uninstall >"$TMP/uninstall-enter.log" 2>&1; then
   echo "Enter unexpectedly confirmed uninstall" >&2
   exit 1
@@ -105,5 +124,22 @@ MISTER_MAGIK_TEST_KEYS=down run_manager uninstall >"$TMP/uninstall.log"
 grep -q 'fully uninstalled' "$TMP/uninstall.log"
 test ! -e "$APP"
 test ! -e "$FAT/Scripts/MiSTer-MagiK.sh"
+for owned in \
+  THIRD-PARTY-NOTICES.txt SOURCE-OFFER.txt \
+  licenses/MiSTer-MagiK-GPL-3.0-or-later.txt \
+  licenses/RUST-LIBRARIES.txt licenses/FFMPEG-LGPL-2.1-or-later.txt \
+  licenses/PRESS-START-2P-OFL-1.1.txt \
+  downloader_mister_magik.ini \
+  .downloader_mister_magik.ini.partial downloader_mister_magik.ini.tmp.123 \
+  .MiSTer.ini.bak.before-magik.new.123 .MiSTer.ini.magik.new.123; do
+  test ! -e "$FAT/$owned"
+done
+test -e "$FAT/MiSTer"
+test -e "$FAT/menu.rbf"
+test -e "$FAT/MiSTer.ini.bak"
+test -e "$FAT/MiSTer_MagiKDev"
+test -e "$FAT/mister-magik-dev/keep.txt"
+test -e "$FAT/licenses/USER-LICENSE.txt"
+test -e "$FAT/Scripts/.mister-magik-user/hook"
 grep -qx '::sysinit:/media/fat/MiSTer &' "$TMP/inittab"
 grep -q 'main=Other' "$FAT/MiSTer.ini"
