@@ -495,7 +495,11 @@ fn verify_archive_checksums(files: &BTreeMap<String, Vec<u8>>) -> AgentResult<()
             return classified("platform_checksum", name);
         }
     }
-    if seen.len() + 1 != files.len() {
+    let unchecked: Vec<_> = files
+        .keys()
+        .filter(|name| name.as_str() != "SHA256SUMS" && !seen.contains(name.as_str()))
+        .collect();
+    if unchecked.iter().any(|name| !name.ends_with("/SHA256SUMS")) {
         return classified("platform_checksum_shape", "incomplete checksum set");
     }
     Ok(())
@@ -603,6 +607,23 @@ fn classified<T>(code: &'static str, detail: impl Into<String>) -> AgentResult<T
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn checksum_fixture(
+        entries: &[(&str, &[u8])],
+        checksummed: &[&str],
+    ) -> BTreeMap<String, Vec<u8>> {
+        let mut files: BTreeMap<_, _> = entries
+            .iter()
+            .map(|(name, bytes)| ((*name).to_owned(), bytes.to_vec()))
+            .collect();
+        let checksums = checksummed
+            .iter()
+            .map(|name| format!("{}  {name}\n", digest_bytes(&files[*name])))
+            .collect::<String>();
+        files.insert("SHA256SUMS".to_owned(), checksums.into_bytes());
+        files
+    }
+
     #[test]
     fn identity_is_stable() {
         let id = bundle_id(&"a".repeat(64), &"b".repeat(64), &"c".repeat(64)).unwrap();
@@ -618,5 +639,35 @@ mod tests {
             update_plan(None, 0, &"a".repeat(64), &"b".repeat(64), &"c".repeat(64)).unwrap();
         assert_eq!(value["next_version"], 1);
         assert_eq!(value["update_needed"], true);
+    }
+
+    #[test]
+    fn legacy_component_checksum_files_may_be_absent_from_root_checksums() {
+        let files = checksum_fixture(
+            &[
+                ("main/MiSTer_MagiK", b"binary"),
+                ("main/SHA256SUMS", b"nested"),
+            ],
+            &["main/MiSTer_MagiK"],
+        );
+        verify_archive_checksums(&files).unwrap();
+    }
+
+    #[test]
+    fn root_checksums_must_cover_other_archive_files() {
+        let files = checksum_fixture(
+            &[
+                ("main/MiSTer_MagiK", b"binary"),
+                ("main/provenance.txt", b"origin"),
+            ],
+            &["main/MiSTer_MagiK"],
+        );
+        assert!(matches!(
+            verify_archive_checksums(&files),
+            Err(AgentError::Classified {
+                code: "platform_checksum_shape",
+                ..
+            })
+        ));
     }
 }
