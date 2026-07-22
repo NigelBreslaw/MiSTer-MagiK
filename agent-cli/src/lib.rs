@@ -20,6 +20,7 @@ pub mod game_databases;
 pub mod git;
 pub mod model;
 pub mod planner;
+pub mod platform_bundle;
 pub mod platform_ci;
 pub mod platform_manifest;
 pub mod policy;

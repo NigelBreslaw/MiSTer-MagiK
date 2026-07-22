@@ -97,7 +97,7 @@ jobs:
           archive="$(find build/platform-current/release -name 'mister-magik-platform-v0.*.zip' -print -quit)"
           manifest="build/platform-current/release/platform-bundle-v0.2.json"
           test -n "$archive" && test -f "$manifest"
-          python3 scripts/release/platform/platform-bundle.py verify "$archive" \
+          scripts/agent ci platform-bundle verify "$archive" \
             --manifest "$manifest" --release-version "$version" >/dev/null
           test "$(jq -r .format "$manifest")" = mister-magik-platform-bundle-v0.2
           printf 'version=%s\narchive=%s\nmanifest=%s\n' "$version" "$archive" "$manifest" >> "$GITHUB_OUTPUT"
@@ -105,7 +105,7 @@ jobs:
       - name: Plan platform update
         id: plan
         run: |
-          python3 scripts/release/platform/platform-bundle.py plan-update \
+          scripts/agent ci platform-bundle plan-update \
             --manifest '${{ steps.current.outputs.manifest }}' \
             --current-version '${{ steps.current.outputs.version }}' \
             --main-id '${{ steps.identity.outputs.main_id }}' \
@@ -145,14 +145,14 @@ jobs:
               if [ "$kind" = candidate ]; then
                 archive="$attempt/mister-magik-platform-v0.$NEXT_VERSION.zip"
                 manifest="$attempt/platform-bundle-v0.2.json"
-                python3 scripts/release/platform/platform-bundle.py verify "$archive" \
+                scripts/agent ci platform-bundle verify "$archive" \
                   --manifest "$manifest" --release-version "$NEXT_VERSION" >/dev/null || continue
                 [ "$(jq -r .bundle_id "$manifest")" = "$BUNDLE_ID" ] || continue
               else
                 args=(--component "$kind" --artifact "$attempt" --component-id "$identity")
                 [ "$kind" != main ] || args+=(--revision "$MAIN_REVISION")
                 verification="build/platform-reuse/verification-$kind-$artifact_id.json"
-                python3 scripts/release/platform/platform-bundle.py verify-component "${args[@]}" > "$verification" || continue
+                scripts/agent ci platform-bundle verify-component "${args[@]}" > "$verification" || continue
                 run_id="$(jq -r .origin.run_id "$verification")"
                 head_sha="$(jq -r .origin.head_sha "$verification")"
               fi
@@ -302,7 +302,7 @@ jobs:
             --revision "$MAIN_REVISION" --toolchain "$MAIN_TOOLCHAIN_VERSION" >/dev/null
           python3 scripts/release/platform/main-component.py verify \
             --artifact build/main-component --revision "$MAIN_REVISION" >/dev/null
-          python3 scripts/release/platform/platform-bundle.py write-component-cache \
+          scripts/agent ci platform-bundle write-component-cache \
             --component main --artifact build/main-component \
             --component-id '${{ needs.plan.outputs.main-id }}' \
             --run-id "$GITHUB_RUN_ID" --head-sha "$MAIN_REVISION"
@@ -356,7 +356,7 @@ jobs:
             echo "builder_revision=$GITHUB_SHA"
           } >> build/scanout-slots/provenance.txt
           (cd build/scanout-slots && sha256sum mister_magik_scanout_slots.ko modinfo.txt provenance.txt imports.txt > SHA256SUMS)
-          python3 scripts/release/platform/platform-bundle.py write-component-cache \
+          scripts/agent ci platform-bundle write-component-cache \
             --component kernel --artifact build/scanout-slots \
             --component-id '${{ needs.plan.outputs.kernel-id }}' \
             --run-id "$GITHUB_RUN_ID" --head-sha "$GITHUB_SHA"
@@ -510,7 +510,7 @@ jobs:
           cp build/fpga-signoff/quartus-delta-signoff.tsv build/fpga-signoff/patched/reports/quartus-delta-signoff.tsv
           delta_sha="$(shasum -a 256 build/fpga-signoff/patched/reports/quartus-delta-signoff.tsv | awk '{print $1}')"
           printf 'report_sha256.reports/quartus-delta-signoff.tsv=%s\nsignoff_valid=1\n' "$delta_sha" >> build/fpga-signoff/patched/menu-magik-vblank-latch.metadata.txt
-          python3 scripts/release/platform/platform-bundle.py write-component-cache \
+          scripts/agent ci platform-bundle write-component-cache \
             --component fpga --artifact build/fpga-signoff \
             --component-id '${{ needs.plan.outputs.fpga-id }}' \
             --run-id "$GITHUB_RUN_ID" --head-sha "$GITHUB_SHA"
@@ -575,9 +575,9 @@ jobs:
           archive="$(find build/platform-current -name 'mister-magik-platform-v0.*.zip' -print -quit)"
           manifest="build/platform-current/platform-bundle-v0.2.json"
           test -n "$archive" && test -f "$manifest"
-          [ "$MAIN_CHANGED" = true ] || python3 scripts/release/platform/platform-bundle.py extract-component "$archive" --manifest "$manifest" --component main --component-id "$MAIN_ID" --output build/platform-input/main
-          [ "$FPGA_CHANGED" = true ] || python3 scripts/release/platform/platform-bundle.py extract-component "$archive" --manifest "$manifest" --component fpga --component-id "$FPGA_ID" --output build/platform-input/fpga
-          [ "$KERNEL_CHANGED" = true ] || python3 scripts/release/platform/platform-bundle.py extract-component "$archive" --manifest "$manifest" --component kernel --component-id "$KERNEL_ID" --output build/platform-input/scanout
+          [ "$MAIN_CHANGED" = true ] || scripts/agent ci platform-bundle extract-component "$archive" --manifest "$manifest" --component main --component-id "$MAIN_ID" --output build/platform-input/main
+          [ "$FPGA_CHANGED" = true ] || scripts/agent ci platform-bundle extract-component "$archive" --manifest "$manifest" --component fpga --component-id "$FPGA_ID" --output build/platform-input/fpga
+          [ "$KERNEL_CHANGED" = true ] || scripts/agent ci platform-bundle extract-component "$archive" --manifest "$manifest" --component kernel --component-id "$KERNEL_ID" --output build/platform-input/scanout
 
       - name: Assemble and verify candidate
         env:
@@ -613,7 +613,7 @@ jobs:
           fpga_workflow="$(origin "$FPGA_CHANGED" platform-bundle.yml fpga workflow)"
           kernel_workflow="$(origin "$KERNEL_CHANGED" platform-bundle.yml kernel workflow)"
           source() { if [ "$1" != true ]; then echo reused-from-latest-release; elif [ "$2" = true ]; then echo reused-from-actions-cache; else echo built-in-current-run; fi; }
-          python3 scripts/release/platform/platform-bundle.py create \
+          scripts/agent ci platform-bundle create \
             --main-dir build/platform-input/main --fpga-dir build/platform-input/fpga --scanout-dir build/platform-input/scanout \
             --main-id "$MAIN_ID" --fpga-id "$FPGA_ID" --kernel-id "$KERNEL_ID" \
             --main-run-id "$main_run" --fpga-run-id "$fpga_run" --kernel-run-id "$kernel_run" \
@@ -621,7 +621,7 @@ jobs:
             --main-workflow "$main_workflow" --fpga-workflow "$fpga_workflow" --kernel-workflow "$kernel_workflow" \
             --main-source "$(source "$MAIN_CHANGED" "$MAIN_CACHE_HIT")" --fpga-source "$(source "$FPGA_CHANGED" "$FPGA_CACHE_HIT")" --kernel-source "$(source "$KERNEL_CHANGED" "$KERNEL_CACHE_HIT")" \
             --release-version "$NEXT_VERSION" --output build/platform-bundle
-          python3 scripts/release/platform/platform-bundle.py verify \
+          scripts/agent ci platform-bundle verify \
             "build/platform-bundle/mister-magik-platform-v0.$NEXT_VERSION.zip" \
             --manifest build/platform-bundle/platform-bundle-v0.2.json --release-version "$NEXT_VERSION" >/dev/null
 
@@ -662,7 +662,7 @@ jobs:
           set -euo pipefail
           archive="candidate/mister-magik-platform-v0.$VERSION.zip"
           manifest="candidate/platform-bundle-v0.2.json"
-          python3 scripts/release/platform/platform-bundle.py verify "$archive" --manifest "$manifest" --release-version "$VERSION" >/dev/null
+          scripts/agent ci platform-bundle verify "$archive" --manifest "$manifest" --release-version "$VERSION" >/dev/null
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Tag $TAG already exists; numbered platform releases are immutable." >&2
             exit 1

@@ -107,7 +107,7 @@ fn check_platform_workflow(repository: &Path) -> Result<(), String> {
             "Plan component reuse and builds",
             "scripts/agent ci platform-candidates",
             "scripts/agent ci platform-eligible-run",
-            "platform-bundle.py plan-update",
+            "scripts/agent ci platform-bundle plan-update",
             "reused-from-latest-release",
             "reused-from-actions-cache",
             "platform-bundle-v0.2.json",

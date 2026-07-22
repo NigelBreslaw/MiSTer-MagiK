@@ -149,6 +149,9 @@ pub enum Intent {
     CiGameDatabases {
         command: crate::cli::GameDatabaseCommand,
     },
+    CiPlatformBundle {
+        command: crate::cli::PlatformBundleCommand,
+    },
 }
 
 impl Intent {

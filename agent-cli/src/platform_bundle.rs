@@ -1,0 +1,637 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+use crate::error::{AgentError, AgentResult};
+use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs::{self, File};
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+use zip::write::SimpleFileOptions;
+use zip::{CompressionMethod, ZipArchive, ZipWriter};
+
+pub const FORMAT: &str = "mister-magik-platform-bundle-v0.2";
+pub const MANIFEST: &str = "platform-bundle-v0.2.json";
+const ORIGIN: &str = "platform-component-origin-v1.json";
+const COMPONENT_CHECKSUMS: &str = "platform-component-SHA256SUMS";
+
+pub struct Create<'a> {
+    pub main: &'a Path,
+    pub fpga: &'a Path,
+    pub scanout: &'a Path,
+    pub main_id: &'a str,
+    pub fpga_id: &'a str,
+    pub kernel_id: &'a str,
+    pub main_run_id: &'a str,
+    pub fpga_run_id: &'a str,
+    pub kernel_run_id: &'a str,
+    pub main_head_sha: &'a str,
+    pub fpga_head_sha: &'a str,
+    pub kernel_head_sha: &'a str,
+    pub release_version: u64,
+    pub output: &'a Path,
+    pub main_source: &'a str,
+    pub fpga_source: &'a str,
+    pub kernel_source: &'a str,
+}
+
+pub fn bundle_id(main: &str, fpga: &str, kernel: &str) -> AgentResult<String> {
+    for (name, value) in [("main", main), ("fpga", fpga), ("kernel", kernel)] {
+        require_hex(name, value, 64)?;
+    }
+    Ok(digest_bytes(
+        format!("format={FORMAT}\nmain={main}\nfpga={fpga}\nkernel={kernel}\n").as_bytes(),
+    ))
+}
+
+pub fn update_plan(
+    current: Option<&Value>,
+    current_version: u64,
+    main: &str,
+    fpga: &str,
+    kernel: &str,
+) -> AgentResult<Value> {
+    let identity = bundle_id(main, fpga, kernel)?;
+    let Some(current) = current else {
+        if current_version != 0 {
+            return classified(
+                "platform_manifest_missing",
+                "current version requires a manifest",
+            );
+        }
+        return Ok(
+            json!({"current_version":0,"next_version":1,"current_bundle_id":"","bundle_id":identity,"update_needed":true,"main_changed":true,"fpga_changed":true,"kernel_changed":true,"release_tag":"platform-v0.1"}),
+        );
+    };
+    validate_manifest(current, Some(current_version))?;
+    let old_main = current["main_input_sha256"].as_str().unwrap_or_default();
+    let old_fpga = current["fpga_input_sha256"].as_str().unwrap_or_default();
+    let old_kernel = current["kernel_input_sha256"].as_str().unwrap_or_default();
+    let old_identity = bundle_id(old_main, old_fpga, old_kernel)?;
+    if current["bundle_id"] != old_identity {
+        return classified(
+            "platform_bundle_identity",
+            "current identity does not match components",
+        );
+    }
+    Ok(
+        json!({"current_version":current_version,"next_version":current_version+1,"current_bundle_id":old_identity,"bundle_id":identity,"update_needed":old_identity!=identity,"main_changed":old_main!=main,"fpga_changed":old_fpga!=fpga,"kernel_changed":old_kernel!=kernel,"release_tag":format!("platform-v0.{}",current_version+1)}),
+    )
+}
+
+pub fn write_component_cache(
+    component: &str,
+    artifact: &Path,
+    component_id: &str,
+    run_id: &str,
+    head_sha: &str,
+) -> AgentResult<()> {
+    validate_component_name(component)?;
+    require_hex("component_id", component_id, 64)?;
+    require_run_id(run_id)?;
+    require_hex("head_sha", head_sha, 40)?;
+    let branch = if component == "main" {
+        "mister-magik"
+    } else {
+        "main"
+    };
+    let origin = json!({"format":"mister-magik-platform-component-origin-v1","component":component,"component_id":component_id,"workflow":"platform-bundle.yml","run_id":run_id,"head_sha":head_sha,"head_branch":branch});
+    fs::write(
+        artifact.join(ORIGIN),
+        serde_json::to_string_pretty(&origin).unwrap() + "\n",
+    )
+    .map_err(|error| error.to_string())?;
+    let mut text = String::new();
+    for path in component_files(artifact)? {
+        text.push_str(&format!(
+            "{}  {}\n",
+            digest(&path)?,
+            relative(artifact, &path)?
+        ));
+    }
+    fs::write(artifact.join(COMPONENT_CHECKSUMS), text).map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+pub fn verify_component(
+    component: &str,
+    artifact: &Path,
+    component_id: &str,
+    revision: Option<&str>,
+) -> AgentResult<Value> {
+    validate_component_name(component)?;
+    require_hex("component_id", component_id, 64)?;
+    let contract = match component {
+        "main" => {
+            verify_main(artifact, component_id, revision)?;
+            None
+        }
+        "fpga" => Some(verify_fpga(artifact, component_id)?),
+        "kernel" => Some(verify_kernel(artifact, component_id)?),
+        _ => unreachable!(),
+    };
+    let origin = verify_component_cache(component, artifact, component_id)?;
+    let mut result = Map::new();
+    result.insert("component".into(), component.into());
+    result.insert("component_id".into(), component_id.into());
+    result.insert("origin".into(), origin);
+    if let Some(contract) = contract {
+        result.insert("platform_contract_sha256".into(), contract.into());
+    }
+    Ok(Value::Object(result))
+}
+
+pub fn create(request: &Create<'_>) -> AgentResult<PathBuf> {
+    if request.release_version == 0 {
+        return classified(
+            "invalid_platform_release",
+            "release version must be positive",
+        );
+    }
+    for id in [request.main_id, request.fpga_id, request.kernel_id] {
+        require_hex("component_id", id, 64)?;
+    }
+    verify_main(request.main, request.main_id, Some(request.main_head_sha))?;
+    let fpga_contract = verify_fpga(request.fpga, request.fpga_id)?;
+    let kernel_contract = verify_kernel(request.scanout, request.kernel_id)?;
+    if fpga_contract != kernel_contract {
+        return classified(
+            "platform_contract_mismatch",
+            "FPGA and kernel contracts differ",
+        );
+    }
+    let fpga_metadata = fields(
+        &request
+            .fpga
+            .join("patched/menu-magik-vblank-latch.metadata.txt"),
+    )?;
+    let mut files = Vec::new();
+    for (prefix, root) in [
+        ("main", request.main),
+        ("fpga", request.fpga),
+        ("scanout", request.scanout),
+    ] {
+        for path in all_files(root)? {
+            let name = format!("{prefix}/{}", relative(root, &path)?);
+            files.push((name, fs::read(path).map_err(|error| error.to_string())?));
+        }
+    }
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+    let identity = bundle_id(request.main_id, request.fpga_id, request.kernel_id)?;
+    let file_entries: Vec<_> = files
+        .iter()
+        .map(|(name, bytes)| json!({"path":name,"size":bytes.len(),"sha256":digest_bytes(bytes)}))
+        .collect();
+    let payload = json!({
+        "format":FORMAT,"release_version":request.release_version,"bundle_id":identity,
+        "main_input_sha256":request.main_id,"fpga_input_sha256":request.fpga_id,"kernel_input_sha256":request.kernel_id,
+        "platform_contract_sha256":fpga_contract,
+        "latch_protocol_sha256":fpga_metadata.get("latch_protocol_sha256").cloned().unwrap_or_default(),
+        "latch_protocol_version":fpga_metadata.get("latch_protocol_version").and_then(|value|value.parse::<u64>().ok()).unwrap_or(0),
+        "latch_rbf_sha256":fpga_metadata.get("rbf_sha256").cloned().unwrap_or_default(),
+        "components":{
+            "main":origin("main",request.main_run_id,request.main_head_sha,"mister-magik",request.main_source),
+            "fpga":origin("fpga",request.fpga_run_id,request.fpga_head_sha,"main",request.fpga_source),
+            "kernel":origin("kernel",request.kernel_run_id,request.kernel_head_sha,"main",request.kernel_source)},
+        "files":file_entries
+    });
+    validate_manifest(&payload, Some(request.release_version))?;
+    let manifest =
+        serde_json::to_string_pretty(&payload).map_err(|error| error.to_string())? + "\n";
+    let mut checksums = files
+        .iter()
+        .map(|(name, bytes)| format!("{}  {name}\n", digest_bytes(bytes)))
+        .collect::<String>();
+    checksums.push_str(&format!(
+        "{}  {MANIFEST}\n",
+        digest_bytes(manifest.as_bytes())
+    ));
+    fs::create_dir_all(request.output).map_err(|error| error.to_string())?;
+    let archive_path = request.output.join(format!(
+        "mister-magik-platform-v0.{}.zip",
+        request.release_version
+    ));
+    let mut archive =
+        ZipWriter::new(File::create(&archive_path).map_err(|error| error.to_string())?);
+    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    for (name, bytes) in files.iter().chain(
+        [
+            (MANIFEST.to_owned(), manifest.as_bytes().to_vec()),
+            ("SHA256SUMS".into(), checksums.as_bytes().to_vec()),
+        ]
+        .iter(),
+    ) {
+        archive
+            .start_file(name, options)
+            .map_err(|error| error.to_string())?;
+        archive
+            .write_all(bytes)
+            .map_err(|error| error.to_string())?;
+    }
+    archive.finish().map_err(|error| error.to_string())?;
+    fs::write(request.output.join(MANIFEST), manifest).map_err(|error| error.to_string())?;
+    fs::write(request.output.join("SHA256SUMS"), checksums).map_err(|error| error.to_string())?;
+    verify(
+        &archive_path,
+        Some(&request.output.join(MANIFEST)),
+        Some(request.release_version),
+    )?;
+    Ok(archive_path)
+}
+
+pub fn verify(
+    archive: &Path,
+    release_manifest: Option<&Path>,
+    release_version: Option<u64>,
+) -> AgentResult<Value> {
+    let files = read_archive(archive)?;
+    let manifest_bytes = files
+        .get(MANIFEST)
+        .ok_or("platform bundle manifest is missing")?;
+    let payload: Value =
+        serde_json::from_slice(manifest_bytes).map_err(|error| error.to_string())?;
+    validate_manifest(&payload, release_version)?;
+    if release_manifest.is_some_and(|path| fs::read(path).ok().as_deref() != Some(manifest_bytes)) {
+        return classified(
+            "platform_release_manifest_mismatch",
+            "release manifest differs from archive",
+        );
+    }
+    let expected_id = bundle_id(
+        payload["main_input_sha256"].as_str().unwrap_or_default(),
+        payload["fpga_input_sha256"].as_str().unwrap_or_default(),
+        payload["kernel_input_sha256"].as_str().unwrap_or_default(),
+    )?;
+    if payload["bundle_id"] != expected_id {
+        return classified(
+            "platform_bundle_identity",
+            "bundle identity does not match components",
+        );
+    }
+    let entries = payload["files"]
+        .as_array()
+        .ok_or("platform file manifest is missing")?;
+    let actual: BTreeMap<_, _> = files
+        .iter()
+        .filter(|(name, _)| name.as_str() != MANIFEST && name.as_str() != "SHA256SUMS")
+        .map(|(name, bytes)| (name.clone(), (bytes.len() as u64, digest_bytes(bytes))))
+        .collect();
+    if entries.len() != actual.len() {
+        return classified("platform_file_manifest", "file count mismatch");
+    }
+    for entry in entries {
+        let name = entry["path"].as_str().unwrap_or_default();
+        if actual.get(name)
+            != Some(&(
+                entry["size"].as_u64().unwrap_or_default(),
+                entry["sha256"].as_str().unwrap_or_default().to_owned(),
+            ))
+        {
+            return classified("platform_file_manifest", name);
+        }
+    }
+    verify_archive_checksums(&files)?;
+    verify_embedded_components(&payload, &files)?;
+    Ok(payload)
+}
+
+pub fn extract_component(
+    archive: &Path,
+    manifest: &Path,
+    component: &str,
+    component_id: &str,
+    output: &Path,
+) -> AgentResult<Value> {
+    validate_component_name(component)?;
+    require_hex("component_id", component_id, 64)?;
+    let payload = verify(archive, Some(manifest), None)?;
+    let (key, prefix) = match component {
+        "main" => ("main_input_sha256", "main/"),
+        "fpga" => ("fpga_input_sha256", "fpga/"),
+        "kernel" => ("kernel_input_sha256", "scanout/"),
+        _ => unreachable!(),
+    };
+    if payload[key] != component_id {
+        return classified("component_identity_mismatch", component);
+    }
+    if output.exists() {
+        return classified("component_output_exists", output.display().to_string());
+    }
+    fs::create_dir_all(output).map_err(|e| e.to_string())?;
+    for (name, bytes) in read_archive(archive)? {
+        if let Some(relative) = name.strip_prefix(prefix) {
+            let path = output.join(relative);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            fs::write(path, bytes).map_err(|e| e.to_string())?;
+        }
+    }
+    let origin = payload
+        .pointer(&format!("/components/{component}"))
+        .cloned()
+        .ok_or("component origin missing")?;
+    Ok(
+        json!({"component":component,"component_id":component_id,"run_id":origin["run_id"],"head_sha":origin["head_sha"],"workflow":origin["workflow"],"head_branch":origin["head_branch"],"release_version":payload["release_version"]}),
+    )
+}
+
+fn verify_embedded_components(
+    payload: &Value,
+    files: &BTreeMap<String, Vec<u8>>,
+) -> AgentResult<()> {
+    let fpga = payload["fpga_input_sha256"].as_str().unwrap_or_default();
+    let kernel = payload["kernel_input_sha256"].as_str().unwrap_or_default();
+    let patched = archive_fields(files, "fpga/patched/menu-magik-vblank-latch.metadata.txt")?;
+    let provenance = archive_fields(files, "scanout/provenance.txt")?;
+    if patched.get("component_input_sha256").map(String::as_str) != Some(fpga)
+        || provenance.get("component_input_sha256").map(String::as_str) != Some(kernel)
+    {
+        return classified("embedded_component_identity", "metadata mismatch");
+    }
+    if patched.get("platform_contract_sha256") != provenance.get("platform_contract_sha256")
+        || payload["platform_contract_sha256"]
+            != patched
+                .get("platform_contract_sha256")
+                .cloned()
+                .unwrap_or_default()
+    {
+        return classified("platform_contract_mismatch", "embedded components");
+    }
+    Ok(())
+}
+fn validate_manifest(payload: &Value, version: Option<u64>) -> AgentResult<()> {
+    if payload["format"] != FORMAT || payload["release_version"].as_u64().is_none_or(|v| v == 0) {
+        return classified("invalid_platform_manifest", "format or version");
+    }
+    if version.is_some_and(|v| payload["release_version"] != v) {
+        return classified("platform_release_version", "tag and manifest differ");
+    }
+    for name in ["main", "fpga", "kernel"] {
+        require_hex(
+            name,
+            payload[format!("{name}_input_sha256")]
+                .as_str()
+                .unwrap_or_default(),
+            64,
+        )?;
+        let origin = &payload["components"][name];
+        require_hex(
+            "head_sha",
+            origin["head_sha"].as_str().unwrap_or_default(),
+            40,
+        )?;
+        require_run_id(origin["run_id"].as_str().unwrap_or_default())?;
+    }
+    Ok(())
+}
+fn verify_main(root: &Path, id: &str, revision: Option<&str>) -> AgentResult<()> {
+    let payload: Value = serde_json::from_slice(
+        &fs::read(root.join("main-component-v0.1.json")).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    if payload["component_id"] != id || revision.is_some_and(|v| payload["source_revision"] != v) {
+        return classified("main_component_identity", "receipt mismatch");
+    }
+    let binary = root.join("MiSTer_MagiK");
+    if payload.pointer("/binary/sha256").and_then(Value::as_str) != Some(&digest(&binary)?) {
+        return classified("main_component_hash", "binary mismatch");
+    }
+    Ok(())
+}
+fn verify_fpga(root: &Path, id: &str) -> AgentResult<String> {
+    let mut contract = None;
+    for flavour in ["stock", "patched"] {
+        let directory = root.join(flavour);
+        let metadata = fields(&directory.join("menu-magik-vblank-latch.metadata.txt"))?;
+        if metadata.get("component_input_sha256").map(String::as_str) != Some(id)
+            || metadata.get("rbf_sha256")
+                != Some(&digest(&directory.join("menu-magik-vblank-latch.rbf"))?)
+        {
+            return classified("fpga_component_identity", flavour);
+        }
+        if metadata.get("latch_protocol_version").map(String::as_str) != Some("2") {
+            return classified("fpga_protocol", "version 2 required");
+        }
+        match &contract {
+            None => contract = metadata.get("platform_contract_sha256").cloned(),
+            Some(value) if metadata.get("platform_contract_sha256") != Some(value) => {
+                return classified("platform_contract_mismatch", "stock/patched FPGA")
+            }
+            _ => {}
+        }
+    }
+    contract.ok_or_else(|| AgentError::Classified {
+        code: "fpga_contract_missing",
+        detail: "metadata".into(),
+    })
+}
+fn verify_kernel(root: &Path, id: &str) -> AgentResult<String> {
+    let metadata = fields(&root.join("provenance.txt"))?;
+    if metadata.get("component_input_sha256").map(String::as_str) != Some(id)
+        || metadata.get("module_sha256")
+            != Some(&digest(&root.join("mister_magik_scanout_slots.ko"))?)
+    {
+        return classified("kernel_component_identity", "provenance mismatch");
+    }
+    verify_checksum_file(root, &root.join("SHA256SUMS"))?;
+    metadata
+        .get("platform_contract_sha256")
+        .cloned()
+        .ok_or_else(|| AgentError::Classified {
+            code: "kernel_contract_missing",
+            detail: "provenance".into(),
+        })
+}
+fn verify_component_cache(component: &str, root: &Path, id: &str) -> AgentResult<Value> {
+    let payload: Value =
+        serde_json::from_slice(&fs::read(root.join(ORIGIN)).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+    let branch = if component == "main" {
+        "mister-magik"
+    } else {
+        "main"
+    };
+    if payload["format"] != "mister-magik-platform-component-origin-v1"
+        || payload["component"] != component
+        || payload["component_id"] != id
+        || payload["workflow"] != "platform-bundle.yml"
+        || payload["head_branch"] != branch
+    {
+        return classified("component_origin", "invalid immutable origin");
+    }
+    require_run_id(payload["run_id"].as_str().unwrap_or_default())?;
+    require_hex(
+        "head_sha",
+        payload["head_sha"].as_str().unwrap_or_default(),
+        40,
+    )?;
+    verify_checksum_file(root, &root.join(COMPONENT_CHECKSUMS))?;
+    Ok(payload)
+}
+fn verify_checksum_file(root: &Path, path: &Path) -> AgentResult<()> {
+    let text = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    for line in text.lines() {
+        let (hash, name) = line.split_once("  ").ok_or("malformed checksum")?;
+        if digest(&root.join(name))? != hash {
+            return classified("component_checksum", name);
+        }
+    }
+    Ok(())
+}
+fn verify_archive_checksums(files: &BTreeMap<String, Vec<u8>>) -> AgentResult<()> {
+    let text = std::str::from_utf8(files.get("SHA256SUMS").ok_or("checksums missing")?)
+        .map_err(|e| e.to_string())?;
+    let mut seen = BTreeSet::new();
+    for line in text.lines() {
+        let (hash, name) = line.split_once("  ").ok_or("malformed checksums")?;
+        if files
+            .get(name)
+            .is_none_or(|bytes| digest_bytes(bytes) != hash)
+            || !seen.insert(name)
+        {
+            return classified("platform_checksum", name);
+        }
+    }
+    if seen.len() + 1 != files.len() {
+        return classified("platform_checksum_shape", "incomplete checksum set");
+    }
+    Ok(())
+}
+fn read_archive(path: &Path) -> AgentResult<BTreeMap<String, Vec<u8>>> {
+    let mut archive =
+        ZipArchive::new(File::open(path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    let mut files = BTreeMap::new();
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).map_err(|e| e.to_string())?;
+        let name = entry.name().to_owned();
+        if entry.is_dir() || entry.enclosed_name().is_none() || files.contains_key(&name) {
+            return classified("unsafe_archive_member", name);
+        }
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+        files.insert(name, bytes);
+    }
+    Ok(files)
+}
+fn all_files(root: &Path) -> AgentResult<Vec<PathBuf>> {
+    let mut output = Vec::new();
+    collect(root, &mut output)?;
+    output.sort();
+    Ok(output)
+}
+fn collect(path: &Path, out: &mut Vec<PathBuf>) -> AgentResult<()> {
+    for entry in fs::read_dir(path).map_err(|e| e.to_string())? {
+        let path = entry.map_err(|e| e.to_string())?.path();
+        if path.is_dir() {
+            collect(&path, out)?;
+        } else {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
+fn component_files(root: &Path) -> AgentResult<Vec<PathBuf>> {
+    Ok(all_files(root)?
+        .into_iter()
+        .filter(|path| {
+            path.file_name().and_then(|n| n.to_str()) != Some(COMPONENT_CHECKSUMS)
+                && !Path::new(&relative(root, path).unwrap_or_default())
+                    .components()
+                    .any(|part| part.as_os_str().to_string_lossy().starts_with('.'))
+        })
+        .collect())
+}
+fn relative(root: &Path, path: &Path) -> AgentResult<String> {
+    Ok(path
+        .strip_prefix(root)
+        .map_err(|e| e.to_string())
+        .map(|p| p.to_string_lossy().replace('\\', "/"))?)
+}
+fn fields(path: &Path) -> AgentResult<BTreeMap<String, String>> {
+    let text = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    parse_fields(&text)
+}
+fn archive_fields(
+    files: &BTreeMap<String, Vec<u8>>,
+    name: &str,
+) -> AgentResult<BTreeMap<String, String>> {
+    parse_fields(
+        std::str::from_utf8(files.get(name).ok_or("metadata missing")?)
+            .map_err(|e| e.to_string())?,
+    )
+}
+fn parse_fields(text: &str) -> AgentResult<BTreeMap<String, String>> {
+    let mut result = BTreeMap::new();
+    for line in text.lines() {
+        let (k, v) = line.split_once('=').ok_or("malformed metadata")?;
+        if k.is_empty() || v.is_empty() || result.insert(k.into(), v.into()).is_some() {
+            return classified("malformed_metadata", line);
+        }
+    }
+    Ok(result)
+}
+fn origin(component: &str, run: &str, sha: &str, branch: &str, source: &str) -> Value {
+    json!({"workflow":"platform-bundle.yml","run_id":run,"head_sha":sha,"head_branch":branch,"source":source,"component":component})
+}
+fn validate_component_name(value: &str) -> AgentResult<()> {
+    if matches!(value, "main" | "fpga" | "kernel") {
+        Ok(())
+    } else {
+        classified("invalid_platform_component", value)
+    }
+}
+fn require_run_id(value: &str) -> AgentResult<()> {
+    if value.parse::<u64>().is_ok_and(|v| v > 0) {
+        Ok(())
+    } else {
+        classified("invalid_platform_run_id", value)
+    }
+}
+fn require_hex(name: &str, value: &str, length: usize) -> AgentResult<()> {
+    if value.len() == length
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    {
+        Ok(())
+    } else {
+        classified("invalid_platform_identity", format!("{name}: {value}"))
+    }
+}
+fn digest(path: &Path) -> AgentResult<String> {
+    Ok(digest_bytes(&fs::read(path).map_err(|e| e.to_string())?))
+}
+fn digest_bytes(bytes: &[u8]) -> String {
+    let mut hash = Sha256::new();
+    hash.update(bytes);
+    hash.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+fn classified<T>(code: &'static str, detail: impl Into<String>) -> AgentResult<T> {
+    Err(AgentError::Classified {
+        code,
+        detail: detail.into(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn identity_is_stable() {
+        let id = bundle_id(&"a".repeat(64), &"b".repeat(64), &"c".repeat(64)).unwrap();
+        assert_eq!(id.len(), 64);
+        assert_eq!(
+            id,
+            bundle_id(&"a".repeat(64), &"b".repeat(64), &"c".repeat(64)).unwrap()
+        );
+    }
+    #[test]
+    fn new_plan_is_closed() {
+        let value =
+            update_plan(None, 0, &"a".repeat(64), &"b".repeat(64), &"c".repeat(64)).unwrap();
+        assert_eq!(value["next_version"], 1);
+        assert_eq!(value["update_needed"], true);
+    }
+}

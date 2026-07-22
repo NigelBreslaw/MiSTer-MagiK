@@ -131,7 +131,7 @@ pub trait PlatformCi {
 
 pub fn resolve(
     ci: &mut dyn PlatformCi,
-    repository: &Path,
+    _repository: &Path,
     branch: &str,
     head_sha: &str,
     destination: &Path,
@@ -139,15 +139,7 @@ pub fn resolve(
 ) -> Result<Candidate, String> {
     if let Some(run) = exact_success(ci.runs(head_sha)?, branch, head_sha)? {
         progress("reusing exact verified platform candidate")?;
-        match download_and_verify(
-            ci,
-            repository,
-            run.id,
-            head_sha,
-            &run.head_branch,
-            destination,
-            true,
-        ) {
+        match download_and_verify(ci, run.id, head_sha, &run.head_branch, destination, true) {
             Ok(candidate) => return Ok(candidate),
             Err(_) => progress("exact platform candidate is unavailable; dispatching replacement")?,
         }
@@ -159,15 +151,7 @@ pub fn resolve(
         let runs = ci.runs(head_sha)?;
         if let Some(run) = exact_success(runs.clone(), branch, head_sha)? {
             progress("platform candidate workflow completed")?;
-            return download_and_verify(
-                ci,
-                repository,
-                run.id,
-                head_sha,
-                &run.head_branch,
-                destination,
-                false,
-            );
+            return download_and_verify(ci, run.id, head_sha, &run.head_branch, destination, false);
         }
         if runs.iter().any(|run| {
             run.head_sha == head_sha && run.status == "completed" && run.conclusion != "success"
@@ -197,7 +181,6 @@ fn exact_success(runs: Vec<Run>, branch: &str, head_sha: &str) -> Result<Option<
 
 fn download_and_verify(
     ci: &mut dyn PlatformCi,
-    repository: &Path,
     run_id: u64,
     head_sha: &str,
     head_branch: &str,
@@ -209,7 +192,7 @@ fn download_and_verify(
     ci.download(run_id, destination)?;
     let archive = find_named(destination, "mister-magik-platform-", ".zip")?;
     let manifest = find_exact(destination, "platform-bundle-v0.2.json")?;
-    let payload = verify_manifest(repository, &archive, &manifest, "platform candidate")?;
+    let payload = verify_manifest(&archive, &manifest, "platform candidate")?;
     if payload.origin_sha().is_some_and(|sha| sha != head_sha) {
         return Err("platform candidate manifest does not match the requested commit".into());
     }
@@ -240,26 +223,12 @@ fn download_and_verify(
 }
 
 fn verify_manifest(
-    repository: &Path,
     archive: &Path,
     manifest: &Path,
     label: &str,
 ) -> Result<PlatformManifest, String> {
-    let mut verify = Command::new("python3");
-    verify
-        .arg(repository.join("scripts/release/platform/platform-bundle.py"))
-        .arg("verify")
-        .arg(archive)
-        .arg("--manifest")
-        .arg(manifest)
-        .current_dir(repository);
-    let verification = bounded_output(verify, &format!("{label} verification"), COMMAND_DEADLINE)?;
-    if !verification.status.success() {
-        return Err(format!(
-            "{label} failed verification: {}",
-            String::from_utf8_lossy(&verification.stderr).trim()
-        ));
-    }
+    crate::platform_bundle::verify(archive, Some(manifest), None)
+        .map_err(|error| format!("{label} failed verification: {error}"))?;
     serde_json::from_slice(
         &std::fs::read(manifest)
             .map_err(|error| format!("cannot read {label} manifest: {error}"))?,
@@ -478,7 +447,7 @@ fn published_releases(repository: &Path, owner: &str) -> Result<Vec<GithubReleas
 }
 
 fn published_candidate(
-    repository: &Path,
+    _repository: &Path,
     destination: &Path,
     branch: &str,
     head_sha: &str,
@@ -486,7 +455,7 @@ fn published_candidate(
 ) -> Result<Candidate, String> {
     let archive = find_named(destination, "mister-magik-platform-", ".zip")?;
     let manifest = find_exact(destination, "platform-bundle-v0.2.json")?;
-    let payload = verify_manifest(repository, &archive, &manifest, "published platform")?;
+    let payload = verify_manifest(&archive, &manifest, "published platform")?;
     let run_id = payload
         .main_run_id()
         .ok_or("published platform manifest is missing Main run_id")?;

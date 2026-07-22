@@ -127,7 +127,7 @@ jobs:
           archive="$(find build/qualified -name 'mister-magik-platform-v0.*.zip' -print -quit)"
           manifest="$(find build/qualified -name 'platform-bundle-v0.*.json' -print -quit)"
           test -n "$archive" && test -n "$manifest"
-          python3 scripts/release/platform/platform-bundle.py verify "$archive" \
+          scripts/agent ci platform-bundle verify "$archive" \
             --manifest "$manifest" \
             --release-version "$platform_version" >/dev/null
           unzip -q -o "$archive" -d build/qualified

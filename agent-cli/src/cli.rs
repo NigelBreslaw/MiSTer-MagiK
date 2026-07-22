@@ -106,6 +106,111 @@ pub enum CiCommand {
         #[command(subcommand)]
         command: GameDatabaseCommand,
     },
+    PlatformBundle {
+        #[command(subcommand)]
+        command: PlatformBundleCommand,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize, Subcommand)]
+#[allow(clippy::large_enum_variant)] // Clap owns this short-lived value; boxing fields obscures its flat CI API.
+pub enum PlatformBundleCommand {
+    Create {
+        #[arg(long)]
+        main_dir: PathBuf,
+        #[arg(long)]
+        fpga_dir: PathBuf,
+        #[arg(long)]
+        scanout_dir: PathBuf,
+        #[arg(long)]
+        main_id: String,
+        #[arg(long)]
+        fpga_id: String,
+        #[arg(long)]
+        kernel_id: String,
+        #[arg(long)]
+        main_run_id: String,
+        #[arg(long)]
+        fpga_run_id: String,
+        #[arg(long)]
+        kernel_run_id: String,
+        #[arg(long)]
+        main_head_sha: String,
+        #[arg(long)]
+        fpga_head_sha: String,
+        #[arg(long)]
+        kernel_head_sha: String,
+        #[arg(long)]
+        main_source: String,
+        #[arg(long)]
+        fpga_source: String,
+        #[arg(long)]
+        kernel_source: String,
+        #[arg(long)]
+        release_version: u64,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        main_workflow: Option<String>,
+        #[arg(long)]
+        fpga_workflow: Option<String>,
+        #[arg(long)]
+        kernel_workflow: Option<String>,
+    },
+    Verify {
+        archive: PathBuf,
+        #[arg(long)]
+        manifest: Option<PathBuf>,
+        #[arg(long)]
+        release_version: Option<u64>,
+    },
+    ExtractComponent {
+        archive: PathBuf,
+        #[arg(long)]
+        manifest: PathBuf,
+        #[arg(long)]
+        component: String,
+        #[arg(long)]
+        component_id: String,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    VerifyComponent {
+        #[arg(long)]
+        component: String,
+        #[arg(long)]
+        artifact: PathBuf,
+        #[arg(long)]
+        component_id: String,
+        #[arg(long)]
+        revision: Option<String>,
+    },
+    WriteComponentCache {
+        #[arg(long)]
+        component: String,
+        #[arg(long)]
+        artifact: PathBuf,
+        #[arg(long)]
+        component_id: String,
+        #[arg(long)]
+        run_id: String,
+        #[arg(long)]
+        head_sha: String,
+    },
+    PlanUpdate {
+        #[arg(long)]
+        manifest: Option<PathBuf>,
+        #[arg(long)]
+        current_version: u64,
+        #[arg(long)]
+        main_id: String,
+        #[arg(long)]
+        fpga_id: String,
+        #[arg(long)]
+        kernel_id: String,
+        #[arg(long)]
+        github_output: Option<PathBuf>,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize, Subcommand)]
@@ -359,6 +464,7 @@ impl Cli {
                     },
                 },
                 CiCommand::GameDatabases { command } => Intent::CiGameDatabases { command },
+                CiCommand::PlatformBundle { command } => Intent::CiPlatformBundle { command },
             },
         }
     }

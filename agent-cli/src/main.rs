@@ -443,6 +443,162 @@ fn dispatch(
             }
             return Ok(Outcome::Passed);
         }
+        Intent::CiPlatformBundle { command } => {
+            use agent_cli::cli::PlatformBundleCommand;
+            reporter.emit(
+                EventKind::Progress,
+                "platform",
+                "Processing platform bundle",
+                Some(30),
+            )?;
+            let output = match command {
+                PlatformBundleCommand::Create {
+                    main_dir,
+                    fpga_dir,
+                    scanout_dir,
+                    main_id,
+                    fpga_id,
+                    kernel_id,
+                    main_run_id,
+                    fpga_run_id,
+                    kernel_run_id,
+                    main_head_sha,
+                    fpga_head_sha,
+                    kernel_head_sha,
+                    main_source,
+                    fpga_source,
+                    kernel_source,
+                    release_version,
+                    output,
+                    ..
+                } => agent_cli::platform_bundle::create(&agent_cli::platform_bundle::Create {
+                    main: main_dir,
+                    fpga: fpga_dir,
+                    scanout: scanout_dir,
+                    main_id,
+                    fpga_id,
+                    kernel_id,
+                    main_run_id,
+                    fpga_run_id,
+                    kernel_run_id,
+                    main_head_sha,
+                    fpga_head_sha,
+                    kernel_head_sha,
+                    release_version: *release_version,
+                    output,
+                    main_source,
+                    fpga_source,
+                    kernel_source,
+                })?
+                .display()
+                .to_string(),
+                PlatformBundleCommand::Verify {
+                    archive,
+                    manifest,
+                    release_version,
+                } => serde_json::to_string(&agent_cli::platform_bundle::verify(
+                    archive,
+                    manifest.as_deref(),
+                    *release_version,
+                )?)
+                .unwrap(),
+                PlatformBundleCommand::ExtractComponent {
+                    archive,
+                    manifest,
+                    component,
+                    component_id,
+                    output,
+                } => serde_json::to_string(&agent_cli::platform_bundle::extract_component(
+                    archive,
+                    manifest,
+                    component,
+                    component_id,
+                    output,
+                )?)
+                .unwrap(),
+                PlatformBundleCommand::VerifyComponent {
+                    component,
+                    artifact,
+                    component_id,
+                    revision,
+                } => serde_json::to_string(&agent_cli::platform_bundle::verify_component(
+                    component,
+                    artifact,
+                    component_id,
+                    revision.as_deref(),
+                )?)
+                .unwrap(),
+                PlatformBundleCommand::WriteComponentCache {
+                    component,
+                    artifact,
+                    component_id,
+                    run_id,
+                    head_sha,
+                } => {
+                    agent_cli::platform_bundle::write_component_cache(
+                        component,
+                        artifact,
+                        component_id,
+                        run_id,
+                        head_sha,
+                    )?;
+                    String::new()
+                }
+                PlatformBundleCommand::PlanUpdate {
+                    manifest,
+                    current_version,
+                    main_id,
+                    fpga_id,
+                    kernel_id,
+                    github_output,
+                } => {
+                    let current: Option<serde_json::Value> = manifest
+                        .as_ref()
+                        .map(std::fs::read_to_string)
+                        .transpose()
+                        .map_err(|e| e.to_string())?
+                        .map(|text| serde_json::from_str(&text).map_err(|e| e.to_string()))
+                        .transpose()?;
+                    let result = agent_cli::platform_bundle::update_plan(
+                        current.as_ref(),
+                        *current_version,
+                        main_id,
+                        fpga_id,
+                        kernel_id,
+                    )?;
+                    if let Some(path) = github_output {
+                        use std::io::Write;
+                        let mut file = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(path)
+                            .map_err(|e| e.to_string())?;
+                        for key in [
+                            "current_version",
+                            "next_version",
+                            "current_bundle_id",
+                            "bundle_id",
+                            "update_needed",
+                            "main_changed",
+                            "fpga_changed",
+                            "kernel_changed",
+                            "release_tag",
+                        ] {
+                            let value = result[key]
+                                .as_str()
+                                .map(str::to_owned)
+                                .unwrap_or_else(|| result[key].to_string());
+                            writeln!(file, "{key}={value}").map_err(|e| e.to_string())?;
+                        }
+                    }
+                    serde_json::to_string(&result).unwrap()
+                }
+            };
+            if !output.is_empty() {
+                println!("{output}");
+            }
+            return Ok(Outcome::Passed);
+        }
         Intent::Plan {
             scope: selected, ..
         }
