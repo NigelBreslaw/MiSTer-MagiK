@@ -736,9 +736,6 @@ fn deliver_inner(
     use agent_cli::evidence::{DeliveryRecord, DeliveryState};
 
     if let Some(mut pending) = evidence.delivery(task_id)? {
-        if pending.state == DeliveryState::Complete {
-            return Ok(Outcome::NoOp);
-        }
         if !pending.state.can_resume() {
             return Err(format!(
                 "delivery_state_invalid: cannot resume delivery in {}",
@@ -1018,13 +1015,13 @@ mod tests {
     }
 
     #[test]
-    fn attended_delivery_can_resume_after_physical_recovery() {
+    fn delivery_can_repeat_after_completion_or_physical_recovery() {
         use agent_cli::evidence::DeliveryState;
 
         assert!(DeliveryState::ExternalPending.can_resume());
         assert!(DeliveryState::RecoveryRequired.can_resume());
+        assert!(DeliveryState::Complete.can_resume());
         assert!(!DeliveryState::Failed.can_resume());
-        assert!(!DeliveryState::Complete.can_resume());
     }
 
     #[test]
