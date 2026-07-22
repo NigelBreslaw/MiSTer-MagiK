@@ -1,7 +1,9 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::model::{ActionKind, ExternalRequirement, Intent, Operation, Plan, Risk, WorkflowPhase};
+use crate::model::{
+    ActionKind, BuiltinOperation, ExternalRequirement, Intent, Operation, Plan, Risk, WorkflowPhase,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -95,11 +97,10 @@ fn add_path_operations(
     if path.file_name().and_then(|name| name.to_str()) == Some("AGENTS.md")
         || path.starts_with("docs/agents")
     {
-        add(op(
+        add(builtin(
             "repo.guidance",
             "Check agent guidance",
-            "python3",
-            &["scripts/checks/check-agent-guidance.py"],
+            BuiltinOperation::AgentGuidance,
             "agent guidance changed",
         ));
     }
@@ -491,11 +492,10 @@ fn add_script_operations(
     add: &mut impl FnMut(Operation),
 ) {
     let text = path.to_string_lossy();
-    add(op(
+    add(builtin(
         "scripts.licenses",
         "Check script license headers",
-        "python3",
-        &["scripts/checks/check-license-headers.py"],
+        BuiltinOperation::LicenseHeaders,
         "script source → license contract",
     ));
     if repository.join(path).exists()
@@ -514,11 +514,10 @@ fn add_script_operations(
             "changed shell script → syntax",
         ));
     }
-    add(op(
+    add(builtin(
         "scripts.no-orchestrator-regrowth",
         "Check operational shell boundaries",
-        "python3",
-        &["scripts/checks/check-no-operational-shell-orchestrators.py"],
+        BuiltinOperation::ShellOwnership,
         "script source → orchestration ownership contract",
     ));
     if text.contains("platform-bundle") || text.contains("platform-artifact") {
@@ -615,6 +614,7 @@ fn diff_check() -> Operation {
         reason: "all patches require whitespace validation".into(),
         failure_hint: "inspect with scripts/agent run show RUN_ID".into(),
         inputs: Vec::new(),
+        builtin: None,
     }
 }
 fn cargo_format(id: &str, title: &str, args: &[&str], reason: &str) -> Operation {
@@ -636,7 +636,14 @@ fn op(id: &str, title: &str, program: &str, args: &[&str], reason: &str) -> Oper
         reason: reason.into(),
         failure_hint: "inspect with scripts/agent run show RUN_ID".into(),
         inputs: Vec::new(),
+        builtin: None,
     }
+}
+fn builtin(id: &str, title: &str, operation: BuiltinOperation, reason: &str) -> Operation {
+    let mut planned = op(id, title, "agent-cli", &[], reason);
+    planned.action = ActionKind::Builtin;
+    planned.builtin = Some(operation);
+    planned
 }
 fn op_owned(id: &str, title: &str, program: &str, args: Vec<String>, reason: &str) -> Operation {
     Operation {
@@ -650,6 +657,7 @@ fn op_owned(id: &str, title: &str, program: &str, args: Vec<String>, reason: &st
         reason: reason.into(),
         failure_hint: "inspect with scripts/agent run show RUN_ID".into(),
         inputs: Vec::new(),
+        builtin: None,
     }
 }
 fn with_inputs(mut operation: Operation, inputs: &[&str]) -> Operation {

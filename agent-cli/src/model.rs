@@ -27,12 +27,21 @@ pub enum ResourceClass {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ActionKind {
+    Builtin,
     Cargo { offline_first: bool },
     Script,
     AppleContainer,
     Git,
     PlatformCi,
     DeviceTransaction,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BuiltinOperation {
+    AgentGuidance,
+    LicenseHeaders,
+    ShellOwnership,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -134,6 +143,8 @@ pub struct Operation {
     pub failure_hint: String,
     #[serde(default)]
     pub inputs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub builtin: Option<BuiltinOperation>,
 }
 
 impl Operation {
@@ -145,6 +156,7 @@ impl Operation {
     #[must_use]
     pub fn resource_class(&self) -> ResourceClass {
         match self.action_kind() {
+            ActionKind::Builtin => ResourceClass::Cpu,
             ActionKind::Cargo { .. } => ResourceClass::Cargo,
             ActionKind::AppleContainer => ResourceClass::AppleContainer,
             ActionKind::Git => ResourceClass::GitIndex,

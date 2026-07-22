@@ -170,6 +170,10 @@ fn run_operation(
     failure_position: &str,
     reporter: &mut Reporter<'_>,
 ) -> Result<(), String> {
+    if let Some(builtin) = operation.builtin {
+        return crate::checks::execute(builtin, repository, reporter)
+            .map_err(|error| format!("{failure_position} — {}\nerror: {error}", operation.title));
+    }
     let log_path = evidence.log_path(request_id, &operation.id);
     File::create(&log_path).map_err(|error| error.to_string())?;
     let cargo_dependency = is_cargo_dependency_operation(operation);
@@ -476,6 +480,7 @@ mod tests {
             reason: "executor test".into(),
             failure_hint: "inspect run".into(),
             inputs: vec!["fixture".into()],
+            builtin: None,
         }
     }
 

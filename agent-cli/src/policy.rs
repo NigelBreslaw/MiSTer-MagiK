@@ -38,6 +38,7 @@ mod tests {
             reason: "deployment requested".into(),
             failure_hint: "inspect the recorded run".into(),
             inputs: Vec::new(),
+            builtin: None,
         };
         assert!(authorize(&operation, Risk::LocalWrite).is_err());
     }

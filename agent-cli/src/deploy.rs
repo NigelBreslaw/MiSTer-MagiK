@@ -101,6 +101,7 @@ impl DeploymentPlan {
                 reason: "inferred deployment transaction".into(),
                 failure_hint: "inspect the recorded deployment phases and rollback result".into(),
                 inputs,
+                builtin: None,
             }],
             external_requirements: Vec::new(),
         }

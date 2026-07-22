@@ -3,6 +3,7 @@
 
 pub mod benchmark;
 pub mod build;
+pub mod checks;
 pub mod cli;
 pub mod commit;
 pub mod components;
