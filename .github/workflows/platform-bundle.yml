@@ -84,25 +84,26 @@ jobs:
           printf 'main_revision=%s\nmain_id=%s\nfpga_id=%s\nkernel_id=%s\n' \
             "$main_revision" "$main_id" "$fpga_id" "$kernel_id" >> "$GITHUB_OUTPUT"
 
-      - name: Download and verify latest platform release
+      - name: Inspect latest platform release
         id: current
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          started=$SECONDS
           mkdir -p build/platform-current/release
           gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" > build/platform-current/releases.json
           tag="$(python3 scripts/release/databases/select-published-release.py platform --releases build/platform-current/releases.json)"
           version="$(python3 scripts/release/databases/select-published-release.py platform --field version --releases build/platform-current/releases.json)"
           gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir build/platform-current/release \
-            --pattern 'mister-magik-platform-v0.*.zip' --pattern 'platform-bundle-v0.2.json'
-          archive="$(find build/platform-current/release -name 'mister-magik-platform-v0.*.zip' -print -quit)"
+            --pattern 'platform-bundle-v0.2.json' --pattern 'SHA256SUMS'
           manifest="build/platform-current/release/platform-bundle-v0.2.json"
-          test -n "$archive" && test -f "$manifest"
-          scripts/agent ci platform-bundle verify "$archive" \
-            --manifest "$manifest" --release-version "$version" >/dev/null
+          test -f "$manifest"
+          grep '  platform-bundle-v0.2.json$' build/platform-current/release/SHA256SUMS \
+            | (cd build/platform-current/release && sha256sum -c -)
           test "$(jq -r .format "$manifest")" = mister-magik-platform-bundle-v0.2
-          printf 'version=%s\narchive=%s\nmanifest=%s\n' "$version" "$archive" "$manifest" >> "$GITHUB_OUTPUT"
+          printf 'version=%s\ntag=%s\nmanifest=%s\n' "$version" "$tag" "$manifest" >> "$GITHUB_OUTPUT"
+          printf 'latest manifest inspection: %ss, %s bytes\n' "$((SECONDS-started))" "$(stat -c %s "$manifest")" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Plan platform update
         id: plan
@@ -131,6 +132,7 @@ jobs:
           MAIN_REVISION: ${{ steps.identity.outputs.main_revision }}
         run: |
           set -euo pipefail
+          reuse_started=$SECONDS
           mkdir -p build/platform-reuse
           gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/artifacts?per_page=100" > build/platform-reuse/artifacts.json
           resolve() {
@@ -167,8 +169,13 @@ jobs:
               [[ "$run_id" =~ ^[0-9]+$ ]] || continue
               [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || continue
               canonical="build/platform-reuse/$kind"
-              mkdir -p "$canonical"
-              cp -R "$attempt"/. "$canonical"/
+              if [ "$kind" = fpga ]; then
+                scripts/agent ci platform-bundle compact-component \
+                  --component fpga --artifact "$attempt" --component-id "$identity" --output "$canonical" >/dev/null
+              else
+                mkdir -p "$canonical"
+                cp -R "$attempt"/. "$canonical"/
+              fi
               printf '%s_hit=true\n%s_run_id=%s\n' "$kind" "$kind" "$run_id" >> "$GITHUB_OUTPUT"
               printf '%s_head_sha=%s\n' "$kind" "$head_sha" >> "$GITHUB_OUTPUT"
               [ "$kind" = candidate ] || printf '%s_id=%s\n' "$kind" "$identity" >> "$GITHUB_OUTPUT"
@@ -208,8 +215,13 @@ jobs:
               component_inputs+=("$inputs_manifest")
               git diff --quiet "$head_sha" "$GITHUB_SHA" -- "${component_inputs[@]}" || continue
               canonical="build/platform-reuse/$kind"
-              mkdir -p "$canonical"
-              cp -R "$attempt"/. "$canonical"/
+              if [ "$kind" = fpga ]; then
+                scripts/agent ci platform-bundle compact-component \
+                  --component fpga --artifact "$attempt" --component-id "$identity" --output "$canonical" >/dev/null
+              else
+                mkdir -p "$canonical"
+                cp -R "$attempt"/. "$canonical"/
+              fi
               printf '%s_hit=true\n%s_id=%s\n%s_run_id=%s\n%s_head_sha=%s\n' \
                 "$kind" "$kind" "$identity" "$kind" "$run_id" "$kind" "$head_sha" >> "$GITHUB_OUTPUT"
               return 0
@@ -241,6 +253,13 @@ jobs:
             [ "$FPGA_CHANGED" = true ] || echo 'fpga_hit=false' >> "$GITHUB_OUTPUT"
             [ "$KERNEL_CHANGED" = true ] || echo 'kernel_hit=false' >> "$GITHUB_OUTPUT"
           fi
+          {
+            echo
+            echo "Reuse resolution: $((SECONDS-reuse_started))s"
+            if [ -d build/platform-reuse/fpga ]; then
+              echo "Compacted FPGA component: $(du -sb build/platform-reuse/fpga | cut -f1) bytes"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Carry exact candidate into current run
         if: steps.reuse.outputs.candidate_hit == 'true'
@@ -306,6 +325,24 @@ jobs:
               echo "Platform-v0.${{ steps.plan.outputs.current_version }} is current; no builds, candidate, or publication are needed."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Download and verify latest platform release for assembly
+        if: steps.plan.outputs.update_needed == 'true' && steps.reuse.outputs.candidate_hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.current.outputs.tag }}
+          VERSION: ${{ steps.current.outputs.version }}
+        run: |
+          set -euo pipefail
+          started=$SECONDS
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir build/platform-current/release \
+            --pattern 'mister-magik-platform-v0.*.zip'
+          archive="$(find build/platform-current/release -name 'mister-magik-platform-v0.*.zip' -print -quit)"
+          test -n "$archive"
+          scripts/agent ci platform-bundle verify "$archive" \
+            --manifest build/platform-current/release/platform-bundle-v0.2.json --release-version "$VERSION" >/dev/null
+          printf 'baseline download and verification: %ss, %s bytes\n' \
+            "$((SECONDS-started))" "$(stat -c %s "$archive")" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Retain verified baseline for assembly
         if: steps.plan.outputs.update_needed == 'true' && steps.reuse.outputs.candidate_hit != 'true'
@@ -585,13 +622,38 @@ jobs:
             --component-id '${{ needs.plan.outputs.fpga-id }}' \
             --run-id "$GITHUB_RUN_ID" --head-sha "$GITHUB_SHA"
 
+      - name: Compact and verify FPGA component
+        run: |
+          set -euo pipefail
+          started=$SECONDS
+          scripts/agent ci platform-bundle compact-component \
+            --component fpga --artifact build/fpga-signoff \
+            --component-id '${{ needs.plan.outputs.fpga-id }}' \
+            --output build/fpga-component >/dev/null
+          printf 'FPGA compaction: %ss, %s bytes\n' "$((SECONDS-started))" \
+            "$(du -sb build/fpga-component | cut -f1)" >> "$GITHUB_STEP_SUMMARY"
+
       - uses: actions/upload-artifact@v7
-        if: always()
         with:
           name: platform-fpga-v0.1-${{ needs.plan.outputs.fpga-id }}
-          path: build/fpga-signoff
+          path: build/fpga-component
           if-no-files-found: error
           retention-days: 30
+
+      - name: Retain failed FPGA diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: platform-fpga-diagnostics-${{ github.run_id }}
+          path: |
+            build/fpga-signoff/**/*.log
+            build/fpga-signoff/**/*.rpt
+            build/fpga-signoff/**/*.summary
+            build/fpga-signoff/**/*.txt
+            build/fpga-signoff/**/*.tsv
+            !build/fpga-signoff/**/Menu-work/**
+          if-no-files-found: warn
+          retention-days: 7
 
   assemble:
     name: Assemble verified platform candidate
@@ -674,6 +736,7 @@ jobs:
           KERNEL_CACHE_HEAD_SHA: ${{ needs.plan.outputs.kernel-cache-head-sha }}
         run: |
           set -euo pipefail
+          started=$SECONDS
           origin() { if [ "$1" = true ]; then printf '%s' "$2"; else jq -r ".components.$3.$4" "$CURRENT_MANIFEST"; fi; }
           cached() { if [ "$2" = true ]; then printf '%s' "$3"; else origin "$1" "$4" "$5" "$6"; fi; }
           main_run="$(cached "$MAIN_CHANGED" "$MAIN_CACHE_HIT" "$MAIN_CACHE_RUN_ID" "$GITHUB_RUN_ID" main run_id)"
@@ -694,9 +757,13 @@ jobs:
             --main-workflow "$main_workflow" --fpga-workflow "$fpga_workflow" --kernel-workflow "$kernel_workflow" \
             --main-source "$(source "$MAIN_CHANGED" "$MAIN_CACHE_HIT")" --fpga-source "$(source "$FPGA_CHANGED" "$FPGA_CACHE_HIT")" --kernel-source "$(source "$KERNEL_CHANGED" "$KERNEL_CACHE_HIT")" \
             --release-version "$NEXT_VERSION" --output build/platform-bundle
+          created=$SECONDS
           scripts/agent ci platform-bundle verify \
             "build/platform-bundle/mister-magik-platform-v0.$NEXT_VERSION.zip" \
             --manifest build/platform-bundle/platform-bundle-v0.2.json --release-version "$NEXT_VERSION" >/dev/null
+          archive="build/platform-bundle/mister-magik-platform-v0.$NEXT_VERSION.zip"
+          printf 'candidate creation: %ss; verification: %ss; archive: %s bytes\n' \
+            "$((created-started))" "$((SECONDS-created))" "$(stat -c %s "$archive")" >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v7
         with:

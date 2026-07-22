@@ -517,6 +517,19 @@ fn dispatch(
                     revision.as_deref(),
                 )?)
                 .unwrap(),
+                PlatformBundleCommand::CompactComponent {
+                    component,
+                    artifact,
+                    output,
+                    component_id,
+                } => agent_cli::platform_bundle::compact_component(
+                    component,
+                    artifact,
+                    output,
+                    component_id,
+                )?
+                .display()
+                .to_string(),
                 PlatformBundleCommand::WriteComponentCache {
                     component,
                     artifact,

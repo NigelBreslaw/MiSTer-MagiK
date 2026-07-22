@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
@@ -141,6 +141,108 @@ pub fn verify_component(
         result.insert("platform_contract_sha256".into(), contract.into());
     }
     Ok(Value::Object(result))
+}
+
+pub fn compact_component(
+    component: &str,
+    artifact: &Path,
+    output: &Path,
+    component_id: &str,
+) -> AgentResult<PathBuf> {
+    if component != "fpga" {
+        return classified("component_compaction_unsupported", component);
+    }
+    verify_component(component, artifact, component_id, None)?;
+    if output.exists() {
+        return classified("component_output_exists", output.display().to_string());
+    }
+
+    let result = (|| {
+        fs::create_dir_all(output).map_err(|error| error.to_string())?;
+        copy_component_file(artifact, output, Path::new("quartus-delta-signoff.tsv"))?;
+        for flavour in ["stock", "patched"] {
+            let root = artifact.join(flavour);
+            let metadata_name =
+                PathBuf::from(format!("{flavour}/menu-magik-vblank-latch.metadata.txt"));
+            for name in [
+                "menu-magik-vblank-latch.rbf",
+                "menu-magik-vblank-latch.metadata.txt",
+                "menu-magik-vblank-latch.build.log",
+            ] {
+                copy_component_file(
+                    artifact,
+                    output,
+                    &PathBuf::from(format!("{flavour}/{name}")),
+                )?;
+            }
+            for report in declared_reports(&root.join("menu-magik-vblank-latch.metadata.txt"))? {
+                copy_component_file(artifact, output, &PathBuf::from(flavour).join(report))?;
+            }
+            if !output.join(metadata_name).is_file() {
+                return classified("fpga_component_compaction", flavour);
+            }
+        }
+        copy_component_file(artifact, output, Path::new(ORIGIN))?;
+        let origin: Value = serde_json::from_slice(
+            &fs::read(output.join(ORIGIN)).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
+        write_component_cache(
+            component,
+            output,
+            component_id,
+            origin["run_id"].as_str().unwrap_or_default(),
+            origin["head_sha"].as_str().unwrap_or_default(),
+        )?;
+        verify_component(component, output, component_id, None)?;
+        Ok(output.to_path_buf())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_dir_all(output);
+    }
+    result
+}
+
+fn copy_component_file(root: &Path, output: &Path, relative: &Path) -> AgentResult<()> {
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|part| !matches!(part, Component::Normal(_)))
+    {
+        return classified("fpga_report_path", relative.display().to_string());
+    }
+    let source = root.join(relative);
+    let destination = output.join(relative);
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    fs::copy(&source, &destination).map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn declared_reports(metadata: &Path) -> AgentResult<Vec<PathBuf>> {
+    let metadata = fields(metadata)?;
+    let mut reports = Vec::new();
+    for name in metadata
+        .keys()
+        .filter_map(|key| key.strip_prefix("report_sha256."))
+    {
+        let path = PathBuf::from(name);
+        if path.is_absolute()
+            || path
+                .components()
+                .any(|part| !matches!(part, Component::Normal(_)))
+            || !name.starts_with("reports/")
+        {
+            return classified("fpga_report_path", name);
+        }
+        reports.push(path);
+    }
+    if reports.is_empty() {
+        return classified("fpga_reports_missing", metadata.len().to_string());
+    }
+    reports.sort();
+    Ok(reports)
 }
 
 pub fn create(request: &Create<'_>) -> AgentResult<PathBuf> {
@@ -415,6 +517,15 @@ fn verify_fpga(root: &Path, id: &str) -> AgentResult<String> {
         if metadata.get("latch_protocol_version").map(String::as_str) != Some("2") {
             return classified("fpga_protocol", "version 2 required");
         }
+        for report in declared_reports(&directory.join("menu-magik-vblank-latch.metadata.txt"))? {
+            let key = format!("report_sha256.{}", report.to_string_lossy());
+            if metadata.get(&key) != Some(&digest(&directory.join(&report))?) {
+                return classified(
+                    "fpga_report_hash",
+                    format!("{flavour}/{}", report.display()),
+                );
+            }
+        }
         match &contract {
             None => contract = metadata.get("platform_contract_sha256").cloned(),
             Some(value) if metadata.get("platform_contract_sha256") != Some(value) => {
@@ -607,6 +718,7 @@ fn classified<T>(code: &'static str, detail: impl Into<String>) -> AgentResult<T
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn checksum_fixture(
         entries: &[(&str, &[u8])],
@@ -622,6 +734,46 @@ mod tests {
             .collect::<String>();
         files.insert("SHA256SUMS".to_owned(), checksums.into_bytes());
         files
+    }
+
+    fn temp_root(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "agent-cli-platform-{label}-{}-{nonce}",
+            std::process::id()
+        ))
+    }
+
+    fn fpga_component(root: &Path, component_id: &str) {
+        let contract = "d".repeat(64);
+        fs::create_dir_all(root).unwrap();
+        fs::write(root.join("quartus-delta-signoff.tsv"), "valid=1\n").unwrap();
+        for flavour in ["stock", "patched"] {
+            let directory = root.join(flavour);
+            fs::create_dir_all(directory.join("reports")).unwrap();
+            let rbf = format!("{flavour}-rbf");
+            let report = format!("{flavour}-report");
+            fs::write(directory.join("menu-magik-vblank-latch.rbf"), &rbf).unwrap();
+            fs::write(
+                directory.join("menu-magik-vblank-latch.build.log"),
+                format!("{flavour}-log"),
+            )
+            .unwrap();
+            fs::write(directory.join("reports/menu.fit.rpt"), &report).unwrap();
+            fs::write(
+                directory.join("menu-magik-vblank-latch.metadata.txt"),
+                format!(
+                    "format=mister-magik-fpga-release-v1\ncomponent_input_sha256={component_id}\nplatform_contract_sha256={contract}\nlatch_protocol_version=2\nrbf_sha256={}\nreport_sha256.reports/menu.fit.rpt={}\n",
+                    digest_bytes(rbf.as_bytes()),
+                    digest_bytes(report.as_bytes())
+                ),
+            )
+            .unwrap();
+        }
+        write_component_cache("fpga", root, component_id, "123", &"e".repeat(40)).unwrap();
     }
 
     #[test]
@@ -669,5 +821,99 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn compaction_removes_quartus_workspaces_and_preserves_identity() {
+        let root = temp_root("compact");
+        let source = root.join("source");
+        let output = root.join("output");
+        let component_id = "a".repeat(64);
+        fpga_component(&source, &component_id);
+        let workspace = source.join("patched/Menu-work/db");
+        fs::create_dir_all(&workspace).unwrap();
+        let large = File::create(workspace.join("quartus-state.bin")).unwrap();
+        large.set_len(400 * 1024 * 1024).unwrap();
+
+        compact_component("fpga", &source, &output, &component_id).unwrap();
+
+        assert!(!output.join("patched/Menu-work").exists());
+        assert!(!output.join("stock/Menu-work").exists());
+        assert!(output.join("patched/reports/menu.fit.rpt").is_file());
+        let verified = verify_component("fpga", &output, &component_id, None).unwrap();
+        assert_eq!(verified["origin"]["run_id"], "123");
+        assert_eq!(verified["component_id"], component_id);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fpga_verification_rejects_tampered_declared_report() {
+        let root = temp_root("report-hash");
+        let component_id = "a".repeat(64);
+        fpga_component(&root, &component_id);
+        fs::write(root.join("patched/reports/menu.fit.rpt"), "tampered").unwrap();
+        assert!(matches!(
+            verify_component("fpga", &root, &component_id, None),
+            Err(AgentError::Classified {
+                code: "fpga_report_hash",
+                ..
+            })
+        ));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn compaction_rejects_existing_output_and_non_fpga_components() {
+        let root = temp_root("compact-errors");
+        let source = root.join("source");
+        let output = root.join("output");
+        let component_id = "a".repeat(64);
+        fpga_component(&source, &component_id);
+        fs::create_dir_all(&output).unwrap();
+        assert!(matches!(
+            compact_component("fpga", &source, &output, &component_id),
+            Err(AgentError::Classified {
+                code: "component_output_exists",
+                ..
+            })
+        ));
+        assert!(matches!(
+            compact_component("kernel", &root, &root.join("out"), &"a".repeat(64)),
+            Err(AgentError::Classified {
+                code: "component_compaction_unsupported",
+                ..
+            })
+        ));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn compaction_rejects_missing_evidence_and_unsafe_report_paths() {
+        let root = temp_root("compact-evidence");
+        let source = root.join("source");
+        let component_id = "a".repeat(64);
+        fpga_component(&source, &component_id);
+        fs::remove_file(source.join("stock/menu-magik-vblank-latch.build.log")).unwrap();
+        assert!(
+            compact_component("fpga", &source, &root.join("missing-output"), &component_id)
+                .is_err()
+        );
+        assert!(!root.join("missing-output").exists());
+
+        let metadata = source.join("patched/menu-magik-vblank-latch.metadata.txt");
+        let mut text = fs::read_to_string(&metadata).unwrap();
+        text.push_str(&format!(
+            "report_sha256.reports/../escape={}\n",
+            "f".repeat(64)
+        ));
+        fs::write(metadata, text).unwrap();
+        assert!(matches!(
+            verify_fpga(&source, &component_id),
+            Err(AgentError::Classified {
+                code: "fpga_report_path",
+                ..
+            })
+        ));
+        fs::remove_dir_all(root).unwrap();
     }
 }

@@ -186,6 +186,16 @@ pub enum PlatformBundleCommand {
         #[arg(long)]
         revision: Option<String>,
     },
+    CompactComponent {
+        #[arg(long)]
+        component: String,
+        #[arg(long)]
+        artifact: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        component_id: String,
+    },
     WriteComponentCache {
         #[arg(long)]
         component: String,
@@ -696,6 +706,22 @@ mod tests {
             &kernel_id,
             "--output",
             "kernel",
+        ])
+        .is_ok());
+
+        assert!(Cli::try_parse_from([
+            "agent-cli",
+            "ci",
+            "platform-bundle",
+            "compact-component",
+            "--component",
+            "fpga",
+            "--artifact",
+            "legacy-fpga",
+            "--component-id",
+            &fpga_id,
+            "--output",
+            "compact-fpga",
         ])
         .is_ok());
     }
