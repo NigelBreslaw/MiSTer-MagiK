@@ -366,16 +366,16 @@ fn deliver(
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<Outcome> {
     use agent_cli::components::{self, DeploymentImpact};
-    use agent_cli::evidence::DeliveryRecord;
+    use agent_cli::evidence::{DeliveryRecord, DeliveryState};
 
     if let Some(mut pending) = evidence.delivery(task_id)? {
-        if pending.state == "complete" {
+        if pending.state == DeliveryState::Complete {
             return Ok(Outcome::NoOp);
         }
-        if !delivery_state_can_resume(&pending.state) {
+        if !pending.state.can_resume() {
             return Err(format!(
                 "delivery_state_invalid: cannot resume delivery in {}",
-                pending.state
+                pending.state.as_str()
             )
             .into());
         }
@@ -419,8 +419,8 @@ fn deliver(
             paths
         };
         let mut deployment = agent_cli::deploy::plan(repository, paths)?;
-        deployment.kind = recorded_delivery_kind(deployment.kind, &pending.impact);
-        if delivery_requires_platform_candidate(&pending.impact) {
+        deployment.kind = recorded_delivery_kind(deployment.kind, pending.impact);
+        if pending.impact == DeploymentImpact::Platform {
             let candidate = agent_cli::platform_ci::resolve_repository(repository, |progress| {
                 reporter.emit(EventKind::Progress, "platform-ci", progress, None)
             })?;
@@ -435,7 +435,7 @@ fn deliver(
                 &sha,
                 &serde_json::to_string(&candidate).map_err(|error| error.to_string())?,
             )?;
-            pending.state = "external_verified".into();
+            pending.state = DeliveryState::ExternalVerified;
             evidence.save_delivery(&pending)?;
             deployment.platform_candidate = Some(candidate);
         }
@@ -450,16 +450,15 @@ fn deliver(
         }
         if let Err(error) = agent_cli::delivery::execute(repository, &deployment, &sha, reporter) {
             pending.state = if error.is_recovery_required() {
-                "recovery_required"
+                DeliveryState::RecoveryRequired
             } else {
-                "failed"
-            }
-            .into();
+                DeliveryState::Failed
+            };
             pending.detail = Some(error.to_string());
             evidence.save_delivery(&pending)?;
             return Err(error);
         }
-        pending.state = "complete".into();
+        pending.state = DeliveryState::Complete;
         evidence.save_delivery(&pending)?;
         return Ok(Outcome::Passed);
     }
@@ -492,18 +491,12 @@ fn deliver(
         worktree: repository.to_path_buf(),
         source_tree: git_value(repository, &["rev-parse", "HEAD^{tree}"])?,
         commit_sha: Some(sha.clone()),
-        impact: match impact {
-            DeploymentImpact::None => "none",
-            DeploymentImpact::Runtime => "runtime",
-            DeploymentImpact::Platform => "platform",
-        }
-        .into(),
+        impact,
         state: if external {
-            "external_pending"
+            DeliveryState::ExternalPending
         } else {
-            "committed"
-        }
-        .into(),
+            DeliveryState::Committed
+        },
         requirement_id: external.then(|| "github-actions.rbf-build".into()),
         detail: None,
     };
@@ -528,36 +521,28 @@ fn deliver(
         }
         if let Err(error) = agent_cli::delivery::execute(repository, &deployment, &sha, reporter) {
             delivery.state = if error.is_recovery_required() {
-                "recovery_required"
+                DeliveryState::RecoveryRequired
             } else {
-                "failed"
-            }
-            .into();
+                DeliveryState::Failed
+            };
             delivery.detail = Some(error.to_string());
             evidence.save_delivery(&delivery)?;
             return Err(error);
         }
     }
-    delivery.state = "complete".into();
+    delivery.state = DeliveryState::Complete;
     evidence.save_delivery(&delivery)?;
     Ok(Outcome::Passed)
 }
 
-fn delivery_state_can_resume(state: &str) -> bool {
-    matches!(state, "external_pending" | "recovery_required")
-}
-
-fn delivery_requires_platform_candidate(impact: &str) -> bool {
-    impact == "platform"
-}
-
 fn recorded_delivery_kind(
     inferred: agent_cli::deploy::DeploymentKind,
-    recorded_impact: &str,
+    recorded_impact: agent_cli::components::DeploymentImpact,
 ) -> agent_cli::deploy::DeploymentKind {
     match recorded_impact {
-        "platform" => agent_cli::deploy::DeploymentKind::Platform,
-        "runtime" => inferred,
+        agent_cli::components::DeploymentImpact::Platform => {
+            agent_cli::deploy::DeploymentKind::Platform
+        }
         _ => inferred,
     }
 }
@@ -666,10 +651,12 @@ mod tests {
 
     #[test]
     fn attended_delivery_can_resume_after_physical_recovery() {
-        assert!(delivery_state_can_resume("external_pending"));
-        assert!(delivery_state_can_resume("recovery_required"));
-        assert!(!delivery_state_can_resume("failed"));
-        assert!(!delivery_state_can_resume("complete"));
+        use agent_cli::evidence::DeliveryState;
+
+        assert!(DeliveryState::ExternalPending.can_resume());
+        assert!(DeliveryState::RecoveryRequired.can_resume());
+        assert!(!DeliveryState::Failed.can_resume());
+        assert!(!DeliveryState::Complete.can_resume());
     }
 
     #[test]
@@ -677,24 +664,26 @@ mod tests {
         use agent_cli::deploy::DeploymentKind;
 
         assert_eq!(
-            recorded_delivery_kind(DeploymentKind::Runtime, "platform"),
+            recorded_delivery_kind(
+                DeploymentKind::Runtime,
+                agent_cli::components::DeploymentImpact::Platform,
+            ),
             DeploymentKind::Platform
         );
         assert_eq!(
-            recorded_delivery_kind(DeploymentKind::Platform, "runtime"),
+            recorded_delivery_kind(
+                DeploymentKind::Platform,
+                agent_cli::components::DeploymentImpact::Runtime,
+            ),
             DeploymentKind::Platform
         );
         assert_eq!(
-            recorded_delivery_kind(DeploymentKind::Platform, "none"),
+            recorded_delivery_kind(
+                DeploymentKind::Platform,
+                agent_cli::components::DeploymentImpact::None,
+            ),
             DeploymentKind::Platform
         );
-    }
-
-    #[test]
-    fn only_platform_delivery_recovery_resolves_a_platform_candidate() {
-        assert!(delivery_requires_platform_candidate("platform"));
-        assert!(!delivery_requires_platform_candidate("runtime"));
-        assert!(!delivery_requires_platform_candidate("none"));
     }
 
     #[test]

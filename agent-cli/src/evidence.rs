@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use crate::components::DeploymentImpact;
 use crate::model::{Intent, Outcome};
 use crate::progress::ProgressEvent;
 use crate::request::RawRequest;
@@ -165,10 +166,52 @@ pub struct DeliveryRecord {
     pub worktree: PathBuf,
     pub source_tree: String,
     pub commit_sha: Option<String>,
-    pub impact: String,
-    pub state: String,
+    pub impact: DeploymentImpact,
+    pub state: DeliveryState,
     pub requirement_id: Option<String>,
     pub detail: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryState {
+    Committed,
+    ExternalPending,
+    ExternalVerified,
+    RecoveryRequired,
+    Failed,
+    Complete,
+}
+
+impl DeliveryState {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Committed => "committed",
+            Self::ExternalPending => "external_pending",
+            Self::ExternalVerified => "external_verified",
+            Self::RecoveryRequired => "recovery_required",
+            Self::Failed => "failed",
+            Self::Complete => "complete",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "committed" => Ok(Self::Committed),
+            "external_pending" => Ok(Self::ExternalPending),
+            "external_verified" => Ok(Self::ExternalVerified),
+            "recovery_required" => Ok(Self::RecoveryRequired),
+            "failed" => Ok(Self::Failed),
+            "complete" => Ok(Self::Complete),
+            _ => Err(format!("invalid persisted delivery state: {value}")),
+        }
+    }
+
+    #[must_use]
+    pub const fn can_resume(self) -> bool {
+        matches!(self, Self::ExternalPending | Self::RecoveryRequired)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -472,32 +515,57 @@ impl Evidence {
         self.connection
             .execute(
                 "INSERT INTO deliveries (task_id, worktree, source_tree, commit_sha, impact, state, requirement_id, detail, updated_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) ON CONFLICT(task_id) DO UPDATE SET source_tree=excluded.source_tree, commit_sha=excluded.commit_sha, impact=excluded.impact, state=excluded.state, requirement_id=excluded.requirement_id, detail=excluded.detail, updated_ms=excluded.updated_ms",
-                params![delivery.task_id, delivery.worktree.display().to_string(), delivery.source_tree, delivery.commit_sha, delivery.impact, delivery.state, delivery.requirement_id, delivery.detail, now_ms()],
+                params![delivery.task_id, delivery.worktree.display().to_string(), delivery.source_tree, delivery.commit_sha, delivery.impact.as_str(), delivery.state.as_str(), delivery.requirement_id, delivery.detail, now_ms()],
             )
             .map_err(|error| error.to_string())?;
         Ok(())
     }
 
     pub fn delivery(&self, task_id: &str) -> Result<Option<DeliveryRecord>, String> {
-        self.connection
+        let record = self.connection
             .query_row(
                 "SELECT task_id, worktree, source_tree, commit_sha, impact, state, requirement_id, detail FROM deliveries WHERE task_id=?1",
                 [task_id],
                 |row| {
-                    Ok(DeliveryRecord {
-                        task_id: row.get(0)?,
-                        worktree: PathBuf::from(row.get::<_, String>(1)?),
-                        source_tree: row.get(2)?,
-                        commit_sha: row.get(3)?,
-                        impact: row.get(4)?,
-                        state: row.get(5)?,
-                        requirement_id: row.get(6)?,
-                        detail: row.get(7)?,
-                    })
+                    Ok((
+                        row.get(0)?,
+                        PathBuf::from(row.get::<_, String>(1)?),
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                    ))
                 },
             )
             .optional()
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        record
+            .map(
+                |(
+                    task_id,
+                    worktree,
+                    source_tree,
+                    commit_sha,
+                    impact,
+                    state,
+                    requirement_id,
+                    detail,
+                )| {
+                    Ok(DeliveryRecord {
+                        task_id,
+                        worktree,
+                        source_tree,
+                        commit_sha,
+                        impact: DeploymentImpact::parse(&impact)?,
+                        state: DeliveryState::parse(&state)?,
+                        requirement_id,
+                        detail,
+                    })
+                },
+            )
+            .transpose()
     }
 
     pub fn attest_delivery(
@@ -939,8 +1007,8 @@ mod tests {
             worktree: PathBuf::from("/tmp/worktree"),
             source_tree: "tree-1".into(),
             commit_sha: Some("commit-1".into()),
-            impact: "platform".into(),
-            state: "external_pending".into(),
+            impact: DeploymentImpact::Platform,
+            state: DeliveryState::ExternalPending,
             requirement_id: Some("github-actions.rbf-build".into()),
             detail: None,
         };

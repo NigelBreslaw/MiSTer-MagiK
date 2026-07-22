@@ -47,6 +47,26 @@ impl Component {
     }
 }
 
+impl DeploymentImpact {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Runtime => "runtime",
+            Self::Platform => "platform",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "none" => Ok(Self::None),
+            "runtime" => Ok(Self::Runtime),
+            "platform" => Ok(Self::Platform),
+            _ => Err(format!("invalid persisted deployment impact: {value}")),
+        }
+    }
+}
+
 pub fn classify(path: &Path) -> Option<Component> {
     if path
         .parent()
