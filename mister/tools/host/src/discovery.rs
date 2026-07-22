@@ -19,6 +19,8 @@ use crate::Result;
 const CACHED_TIMEOUT: Duration = Duration::from_millis(300);
 const SCAN_TIMEOUT: Duration = Duration::from_millis(450);
 const WORKERS: usize = 64;
+const ACCESS_DENIED_MESSAGE: &str =
+    "local-network access denied while discovering the MiSTer; rerun with network escalation";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Device {
@@ -26,38 +28,58 @@ pub(crate) struct Device {
     pub(crate) id: String,
 }
 
+enum ProbeOutcome {
+    Connected(Device),
+    Unreachable,
+    AccessDenied,
+}
+
+struct ScanOutcome {
+    found: Vec<Device>,
+    access_denied: bool,
+}
+
 pub(crate) fn resolve() -> Result<Device> {
     if let Ok(explicit) = env::var("MISTER_IP") {
         let address = explicit.parse()?;
-        let device = probe(address, Duration::from_secs(2)).ok_or_else(
-            || -> Box<dyn std::error::Error> { "configured MiSTer is unavailable".into() },
-        )?;
+        let device = match probe(address, Duration::from_secs(2)) {
+            ProbeOutcome::Connected(device) => device,
+            ProbeOutcome::AccessDenied => return Err(ACCESS_DENIED_MESSAGE.into()),
+            ProbeOutcome::Unreachable => return Err("configured MiSTer is unavailable".into()),
+        };
         save_remembered(&device)?;
         return Ok(device);
     }
 
     let remembered = load_remembered();
     if let Some(device) = remembered.as_ref() {
-        if let Some(candidate) = probe(device.address, CACHED_TIMEOUT) {
-            if candidate.id == device.id {
+        match probe(device.address, CACHED_TIMEOUT) {
+            ProbeOutcome::Connected(candidate) if candidate.id == device.id => {
                 return Ok(candidate);
             }
+            ProbeOutcome::AccessDenied => return Err(ACCESS_DENIED_MESSAGE.into()),
+            ProbeOutcome::Connected(_) | ProbeOutcome::Unreachable => {}
         }
     }
 
-    let found = scan(&local_subnets()?, SCAN_TIMEOUT);
-    let selected = select_candidate(remembered.as_ref(), found)?;
+    let scan = scan(&local_subnets()?, SCAN_TIMEOUT);
+    let selected = select_candidate(remembered.as_ref(), scan)?;
     save_remembered(&selected)?;
     Ok(selected)
 }
 
-fn select_candidate(remembered: Option<&Device>, mut found: Vec<Device>) -> Result<Device> {
+fn select_candidate(remembered: Option<&Device>, scan: ScanOutcome) -> Result<Device> {
+    let ScanOutcome {
+        mut found,
+        access_denied,
+    } = scan;
     if let Some(device) = remembered {
         if let Some(index) = found.iter().position(|candidate| candidate.id == device.id) {
             return Ok(found.remove(index));
         }
     }
     match found.len() {
+        0 if access_denied => Err(ACCESS_DENIED_MESSAGE.into()),
         0 => Err("no connected MiSTer found".into()),
         1 => Ok(found.remove(0)),
         count => Err(format!(
@@ -176,7 +198,7 @@ fn parse_subnets(text: &str) -> Vec<[u8; 3]> {
     subnets.into_iter().collect()
 }
 
-fn scan(subnets: &[[u8; 3]], timeout: Duration) -> Vec<Device> {
+fn scan(subnets: &[[u8; 3]], timeout: Duration) -> ScanOutcome {
     let (job_tx, job_rx) = mpsc::channel::<Ipv4Addr>();
     let job_rx = Arc::new(Mutex::new(job_rx));
     let (found_tx, found_rx) = mpsc::channel();
@@ -188,9 +210,7 @@ fn scan(subnets: &[[u8; 3]], timeout: Duration) -> Vec<Device> {
             let Ok(ip) = jobs.lock().expect("discovery lock poisoned").recv() else {
                 break;
             };
-            if let Some(device) = probe(ip, timeout) {
-                let _ = found.send(device);
-            }
+            let _ = found.send(probe(ip, timeout));
         }));
     }
     drop(found_tx);
@@ -203,39 +223,72 @@ fn scan(subnets: &[[u8; 3]], timeout: Duration) -> Vec<Device> {
     for worker in workers {
         let _ = worker.join();
     }
-    let mut found: Vec<_> = found_rx.into_iter().collect();
+    let mut access_denied = false;
+    let mut found: Vec<_> = found_rx
+        .into_iter()
+        .filter_map(|outcome| match outcome {
+            ProbeOutcome::Connected(device) => Some(device),
+            ProbeOutcome::AccessDenied => {
+                access_denied = true;
+                None
+            }
+            ProbeOutcome::Unreachable => None,
+        })
+        .collect();
     found.sort_by_key(|device| device.address);
     found.dedup_by(|a, b| a.id == b.id);
-    found
+    ScanOutcome {
+        found,
+        access_denied,
+    }
 }
 
-fn probe(address: Ipv4Addr, timeout: Duration) -> Option<Device> {
-    let tcp = TcpStream::connect_timeout(&SocketAddrV4::new(address, 22).into(), timeout).ok()?;
-    tcp.set_read_timeout(Some(timeout)).ok()?;
-    tcp.set_write_timeout(Some(timeout)).ok()?;
-    let mut session = Session::new().ok()?;
-    session.set_tcp_stream(tcp);
-    session.handshake().ok()?;
-    session
-        .userauth_password(
-            &env::var("MISTER_USER").unwrap_or_else(|_| "root".into()),
-            &env::var("MISTER_PASS").unwrap_or_else(|_| "1".into()),
-        )
-        .ok()?;
-    let mut channel = session.channel_session().ok()?;
-    channel
-        .exec("test -d /media/fat && cat /sys/class/net/eth0/address")
-        .ok()?;
-    let mut output = String::new();
-    channel.read_to_string(&mut output).ok()?;
-    channel.wait_close().ok()?;
-    if channel.exit_status().ok()? != 0 {
-        return None;
+fn probe(address: Ipv4Addr, timeout: Duration) -> ProbeOutcome {
+    let tcp = match TcpStream::connect_timeout(&SocketAddrV4::new(address, 22).into(), timeout) {
+        Ok(tcp) => tcp,
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            return ProbeOutcome::AccessDenied;
+        }
+        Err(_) => return ProbeOutcome::Unreachable,
+    };
+    if tcp.set_read_timeout(Some(timeout)).is_err() || tcp.set_write_timeout(Some(timeout)).is_err()
+    {
+        return ProbeOutcome::Unreachable;
     }
-    Some(Device {
-        address,
-        id: normalize_id(output.trim())?,
-    })
+    let Ok(mut session) = Session::new() else {
+        return ProbeOutcome::Unreachable;
+    };
+    session.set_tcp_stream(tcp);
+    if session.handshake().is_err()
+        || session
+            .userauth_password(
+                &env::var("MISTER_USER").unwrap_or_else(|_| "root".into()),
+                &env::var("MISTER_PASS").unwrap_or_else(|_| "1".into()),
+            )
+            .is_err()
+    {
+        return ProbeOutcome::Unreachable;
+    }
+    let Ok(mut channel) = session.channel_session() else {
+        return ProbeOutcome::Unreachable;
+    };
+    if channel
+        .exec("test -d /media/fat && cat /sys/class/net/eth0/address")
+        .is_err()
+    {
+        return ProbeOutcome::Unreachable;
+    }
+    let mut output = String::new();
+    if channel.read_to_string(&mut output).is_err()
+        || channel.wait_close().is_err()
+        || channel.exit_status().ok() != Some(0)
+    {
+        return ProbeOutcome::Unreachable;
+    }
+    let Some(id) = normalize_id(output.trim()) else {
+        return ProbeOutcome::Unreachable;
+    };
+    ProbeOutcome::Connected(Device { address, id })
 }
 
 fn normalize_id(value: &str) -> Option<String> {
@@ -285,11 +338,46 @@ mod tests {
             id: remembered.id.clone(),
         };
         assert_eq!(
-            select_candidate(Some(&remembered), vec![first.clone(), moved.clone()]).unwrap(),
+            select_candidate(
+                Some(&remembered),
+                ScanOutcome {
+                    found: vec![first.clone(), moved.clone()],
+                    access_denied: false,
+                }
+            )
+            .unwrap(),
             moved
         );
-        assert!(select_candidate(None, vec![first, remembered]).is_err());
-        assert!(select_candidate(None, Vec::new()).is_err());
+        assert!(select_candidate(
+            None,
+            ScanOutcome {
+                found: vec![first, remembered],
+                access_denied: false,
+            }
+        )
+        .is_err());
+        assert!(select_candidate(
+            None,
+            ScanOutcome {
+                found: Vec::new(),
+                access_denied: false,
+            }
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn access_denied_scan_is_not_reported_as_device_unavailable() {
+        let error = select_candidate(
+            None,
+            ScanOutcome {
+                found: Vec::new(),
+                access_denied: true,
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error.to_string(), ACCESS_DENIED_MESSAGE);
     }
 
     #[cfg(unix)]

@@ -130,6 +130,7 @@ pub struct DeviceResponse {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DeviceFailure {
+    AccessDenied(String),
     Unavailable(String),
     Authentication(String),
     InvalidRequest(String),

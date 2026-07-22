@@ -494,7 +494,9 @@ impl DeviceOperations for NativeDevice {
 fn device_failure(error: impl std::fmt::Display) -> DeviceFailure {
     let detail = error.to_string();
     let lower = detail.to_ascii_lowercase();
-    if lower.contains("authentication") || lower.contains("permission denied") {
+    if lower.contains("local-network access denied") {
+        DeviceFailure::AccessDenied(detail)
+    } else if lower.contains("authentication") || lower.contains("permission denied") {
         DeviceFailure::Authentication(detail)
     } else if lower.contains("connect")
         || lower.contains("timeout")
@@ -8277,6 +8279,19 @@ H: Handlers=event3 js0"#
         }
         assert!(release_arming_cleanup_command().contains("rebuild-on-next-boot"));
         assert!(!DeviceRequest::CaptureFramebuffer.label().contains("run"));
+    }
+
+    #[test]
+    fn discovery_access_denial_has_a_distinct_typed_failure() {
+        assert_eq!(
+            device_failure(
+                "local-network access denied while discovering the MiSTer; rerun with network escalation"
+            ),
+            DeviceFailure::AccessDenied(
+                "local-network access denied while discovering the MiSTer; rerun with network escalation"
+                    .into()
+            )
+        );
     }
 
     const MAME_1942_FIXTURE: &str = r#"<?xml version="1.0"?>
