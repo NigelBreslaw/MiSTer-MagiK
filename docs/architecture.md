@@ -48,8 +48,9 @@ framebuffer, draw the stock menu OSD, or keep input grabbed while Slint owns the
 launcher.
 
 Display resolution changes are Main-owned provisional transactions. Main
-suspends Slint, applies the selected HDMI or CRT/VGA timing, and restarts the
-launcher with a ten-second confirmation deadline. `MiSTer.ini` remains
+suspends Slint, applies the selected HDMI or CRT/VGA timing, resets the launcher
+TTY so stale scan-out geometry cannot survive, and restarts the launcher with a
+ten-second confirmation deadline. `MiSTer.ini` remains
 unchanged until confirmation; cancellation, timeout, launcher failure, or
 power loss therefore returns to the last persisted working mode.
 Confirmation persistence runs in a supervised child while Main continues
