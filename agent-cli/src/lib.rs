@@ -23,5 +23,4 @@ pub mod release;
 pub mod request;
 pub mod scope;
 pub mod task;
-pub mod tui;
 pub mod workflow;

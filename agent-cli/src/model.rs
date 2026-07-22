@@ -87,7 +87,6 @@ pub enum Intent {
     },
     DatabaseStatus,
     PruneLogs,
-    Interactive,
     Doctor,
     Diagnose,
     DisplayMode {

@@ -13,7 +13,12 @@ pub enum OutputFormat {
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "agent-cli", version, about = "MiSTer MagiK workflow harness")]
+#[command(
+    name = "agent-cli",
+    version,
+    about = "MiSTer MagiK workflow harness",
+    arg_required_else_help = true
+)]
 pub struct Cli {
     #[arg(long, value_enum, default_value_t = OutputFormat::Human, global = true)]
     pub output: OutputFormat,
@@ -135,7 +140,7 @@ impl Cli {
             .or_else(|| std::env::var("CODEX_THREAD_ID").ok())
             .unwrap_or_default();
         match self.command {
-            None => Intent::Interactive,
+            None => unreachable!("clap requires a workflow command"),
             Some(Command::Task {
                 command: TaskCommand::Begin { replace },
             }) => Intent::TaskBegin {
@@ -200,6 +205,11 @@ fn generated_task_id() -> String {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    #[test]
+    fn bare_invocation_displays_help_instead_of_creating_an_intent() {
+        assert!(Cli::try_parse_from(["agent-cli"]).is_err());
+    }
 
     #[test]
     fn check_defaults_to_task() {

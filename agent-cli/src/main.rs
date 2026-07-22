@@ -9,9 +9,7 @@ use agent_cli::planner;
 use agent_cli::progress::{EventKind, Reporter};
 use agent_cli::request::RawRequest;
 use agent_cli::scope;
-use agent_cli::tui;
 use clap::Parser;
-use std::io::IsTerminal;
 
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
@@ -41,13 +39,6 @@ fn main() {
     evidence
         .record_intent(&raw.id, &intent)
         .unwrap_or_else(|error| fatal(&error));
-    if intent == Intent::Interactive && std::io::stdout().is_terminal() {
-        tui::run(&evidence, &raw.id).unwrap_or_else(|error| fatal(&error));
-        evidence
-            .finish(&raw.id, Outcome::Passed)
-            .unwrap_or_else(|error| fatal(&error));
-        return;
-    }
     let mut reporter = Reporter::new(&evidence, output, &raw.id);
     reporter
         .emit(EventKind::Started, "request", "Accepted request", None)
@@ -92,10 +83,12 @@ fn main() {
 }
 
 fn is_discovery_request(args: &[std::ffi::OsString]) -> bool {
-    matches!(
-        args.last().and_then(|arg| arg.to_str()),
-        Some("-h" | "--help")
-    ) || (args.len() == 2 && matches!(args[1].to_str(), Some("-V" | "--version")))
+    args.len() == 1
+        || matches!(
+            args.last().and_then(|arg| arg.to_str()),
+            Some("-h" | "--help")
+        )
+        || (args.len() == 2 && matches!(args[1].to_str(), Some("-V" | "--version")))
 }
 
 fn resolve_task_intent(
@@ -355,8 +348,6 @@ fn dispatch(
                 println!("removed {removed} captured logs");
             }
         }
-        other if output == OutputFormat::Human => println!("request accepted: {other:?}"),
-        _ => {}
     }
     Ok(Outcome::NoOp)
 }
@@ -625,6 +616,13 @@ mod tests {
     use std::fs;
     use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn bare_invocation_is_help_discovery() {
+        assert!(is_discovery_request(&["agent-cli".into()]));
+        assert!(is_discovery_request(&["agent-cli".into(), "--help".into()]));
+        assert!(!is_discovery_request(&["agent-cli".into(), "check".into()]));
+    }
 
     #[test]
     fn manual_task_is_reused_by_bare_commands() {
