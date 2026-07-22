@@ -204,12 +204,6 @@ fn run_inner(
     let sha = git_text(repository, &["rev-parse", "HEAD"])?;
     let subject = git_text(repository, &["log", "-1", "--format=%s"])?;
     evidence.close_task(task_id, &sha)?;
-    reporter.emit(
-        EventKind::Completed,
-        "commit",
-        &format!("{sha} — {subject} — {} paths", paths.len()),
-        Some(100),
-    )?;
     Ok((Outcome::Passed, sha, subject, paths))
 }
 
@@ -645,6 +639,10 @@ mod tests {
             .id
             .clone();
         let detail = fixture.evidence.run_detail(&run_id).unwrap().unwrap();
+        assert!(!detail
+            .events
+            .iter()
+            .any(|event| { event.kind == "completed" && event.phase == "commit" }));
         let attempt = detail.commit_attempt.unwrap();
         assert_eq!(attempt.status, "committed");
         assert_eq!(attempt.commit_sha.as_deref(), Some(sha.as_str()));
