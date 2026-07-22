@@ -1,8 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use serde::Serialize;
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -26,6 +25,86 @@ pub struct Candidate {
     pub main_identity: String,
     pub fpga_identity: String,
     pub kernel_identity: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PlatformManifest {
+    #[serde(default)]
+    bundle_id: String,
+    #[serde(default)]
+    main_input_sha256: String,
+    #[serde(default)]
+    fpga_input_sha256: String,
+    #[serde(default)]
+    kernel_input_sha256: String,
+    source: Option<ManifestSource>,
+    magik_revision: Option<String>,
+    components: Option<ManifestComponents>,
+}
+
+impl PlatformManifest {
+    fn origin_sha(&self) -> Option<&str> {
+        self.source
+            .as_ref()
+            .and_then(|source| source.magik_revision.as_deref())
+            .or(self.magik_revision.as_deref())
+    }
+
+    fn main_run_id(&self) -> Option<u64> {
+        self.components
+            .as_ref()
+            .and_then(|components| components.main.as_ref())
+            .and_then(|main| main.run_id.as_ref())
+            .and_then(ManifestRunId::get)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ManifestSource {
+    magik_revision: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ManifestComponents {
+    main: Option<ManifestMain>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ManifestMain {
+    run_id: Option<ManifestRunId>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ManifestRunId {
+    Number(u64),
+    Text(String),
+}
+
+impl ManifestRunId {
+    fn get(&self) -> Option<u64> {
+        match self {
+            Self::Number(value) => Some(*value),
+            Self::Text(value) => value.parse().ok(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GithubRun {
+    database_id: u64,
+    head_sha: String,
+    head_branch: String,
+    status: String,
+    conclusion: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GithubRelease {
+    tag_name: String,
+    is_draft: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -124,43 +203,10 @@ fn download_and_verify(
     ci.download(run_id, destination)?;
     let archive = find_named(destination, "mister-magik-platform-", ".zip")?;
     let manifest = find_exact(destination, "platform-bundle-v0.2.json")?;
-    let mut verify = Command::new("python3");
-    verify
-        .arg(repository.join("scripts/release/platform/platform-bundle.py"))
-        .arg("verify")
-        .arg(&archive)
-        .arg("--manifest")
-        .arg(&manifest)
-        .current_dir(repository);
-    let verification = bounded_output(verify, "platform candidate verification", COMMAND_DEADLINE)?;
-    if !verification.status.success() {
-        let detail = String::from_utf8_lossy(&verification.stderr);
-        return Err(format!(
-            "downloaded platform candidate failed verification: {}",
-            detail.trim()
-        ));
-    }
-    let payload: Value = serde_json::from_slice(
-        &std::fs::read(&manifest)
-            .map_err(|error| format!("cannot read platform candidate manifest: {error}"))?,
-    )
-    .map_err(|error| format!("invalid platform candidate manifest: {error}"))?;
-    let origin_sha = payload
-        .get("source")
-        .and_then(|source| source.get("magik_revision"))
-        .or_else(|| payload.get("magik_revision"))
-        .and_then(Value::as_str);
-    if origin_sha.is_some_and(|sha| sha != head_sha) {
+    let payload = verify_manifest(repository, &archive, &manifest, "platform candidate")?;
+    if payload.origin_sha().is_some_and(|sha| sha != head_sha) {
         return Err("platform candidate manifest does not match the requested commit".into());
     }
-    let required = |name: &str| {
-        payload
-            .get(name)
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned)
-            .ok_or_else(|| format!("platform candidate manifest is missing {name}"))
-    };
     Ok(Candidate {
         run_id,
         head_sha: head_sha.into(),
@@ -168,11 +214,59 @@ fn download_and_verify(
         manifest,
         reused,
         head_branch: head_branch.into(),
-        bundle_id: required("bundle_id")?,
-        main_identity: required("main_input_sha256")?,
-        fpga_identity: required("fpga_input_sha256")?,
-        kernel_identity: required("kernel_input_sha256")?,
+        bundle_id: required_manifest_value(payload.bundle_id, "bundle_id", "platform candidate")?,
+        main_identity: required_manifest_value(
+            payload.main_input_sha256,
+            "main_input_sha256",
+            "platform candidate",
+        )?,
+        fpga_identity: required_manifest_value(
+            payload.fpga_input_sha256,
+            "fpga_input_sha256",
+            "platform candidate",
+        )?,
+        kernel_identity: required_manifest_value(
+            payload.kernel_input_sha256,
+            "kernel_input_sha256",
+            "platform candidate",
+        )?,
     })
+}
+
+fn verify_manifest(
+    repository: &Path,
+    archive: &Path,
+    manifest: &Path,
+    label: &str,
+) -> Result<PlatformManifest, String> {
+    let mut verify = Command::new("python3");
+    verify
+        .arg(repository.join("scripts/release/platform/platform-bundle.py"))
+        .arg("verify")
+        .arg(archive)
+        .arg("--manifest")
+        .arg(manifest)
+        .current_dir(repository);
+    let verification = bounded_output(verify, &format!("{label} verification"), COMMAND_DEADLINE)?;
+    if !verification.status.success() {
+        return Err(format!(
+            "{label} failed verification: {}",
+            String::from_utf8_lossy(&verification.stderr).trim()
+        ));
+    }
+    serde_json::from_slice(
+        &std::fs::read(manifest)
+            .map_err(|error| format!("cannot read {label} manifest: {error}"))?,
+    )
+    .map_err(|error| format!("invalid {label} manifest: {error}"))
+}
+
+fn required_manifest_value(value: String, name: &str, label: &str) -> Result<String, String> {
+    if value.is_empty() {
+        Err(format!("{label} manifest is missing {name}"))
+    } else {
+        Ok(value)
+    }
 }
 
 fn find_exact(root: &Path, name: &str) -> Result<PathBuf, String> {
@@ -290,7 +384,7 @@ pub fn resolve_published_repository(
             "tagName,isDraft,isPrerelease",
         ],
     )?;
-    let rows: Vec<Value> = serde_json::from_str(&releases)
+    let rows: Vec<GithubRelease> = serde_json::from_str(&releases)
         .map_err(|error| format!("invalid GitHub release response: {error}"))?;
     let tag = latest_platform_release(&rows)
         .ok_or("no published numbered platform release is available")?;
@@ -321,37 +415,9 @@ pub fn resolve_published_repository(
     }
     let archive = find_named(&destination, "mister-magik-platform-", ".zip")?;
     let manifest = find_exact(&destination, "platform-bundle-v0.2.json")?;
-    let mut verify = Command::new("python3");
-    verify
-        .arg(repository.join("scripts/release/platform/platform-bundle.py"))
-        .arg("verify")
-        .arg(&archive)
-        .arg("--manifest")
-        .arg(&manifest)
-        .current_dir(repository);
-    let verification = bounded_output(verify, "published platform verification", COMMAND_DEADLINE)?;
-    if !verification.status.success() {
-        return Err(format!(
-            "published platform failed verification: {}",
-            String::from_utf8_lossy(&verification.stderr).trim()
-        ));
-    }
-    let payload: Value = serde_json::from_slice(
-        &std::fs::read(&manifest)
-            .map_err(|error| format!("cannot read published platform manifest: {error}"))?,
-    )
-    .map_err(|error| format!("invalid published platform manifest: {error}"))?;
-    let required = |name: &str| {
-        payload
-            .get(name)
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned)
-            .ok_or_else(|| format!("published platform manifest is missing {name}"))
-    };
+    let payload = verify_manifest(repository, &archive, &manifest, "published platform")?;
     let run_id = payload
-        .pointer("/components/main/run_id")
-        .and_then(manifest_run_id)
+        .main_run_id()
         .ok_or("published platform manifest is missing Main run_id")?;
     progress("qualified platform components ready for exact runtime manifest")?;
     Ok(Candidate {
@@ -361,26 +427,32 @@ pub fn resolve_published_repository(
         manifest,
         reused: true,
         head_branch: branch,
-        bundle_id: required("bundle_id")?,
-        main_identity: required("main_input_sha256")?,
-        fpga_identity: required("fpga_input_sha256")?,
-        kernel_identity: required("kernel_input_sha256")?,
+        bundle_id: required_manifest_value(payload.bundle_id, "bundle_id", "published platform")?,
+        main_identity: required_manifest_value(
+            payload.main_input_sha256,
+            "main_input_sha256",
+            "published platform",
+        )?,
+        fpga_identity: required_manifest_value(
+            payload.fpga_input_sha256,
+            "fpga_input_sha256",
+            "published platform",
+        )?,
+        kernel_identity: required_manifest_value(
+            payload.kernel_input_sha256,
+            "kernel_input_sha256",
+            "published platform",
+        )?,
     })
 }
 
-fn manifest_run_id(value: &Value) -> Option<u64> {
-    value
-        .as_u64()
-        .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
-}
-
-fn latest_platform_release(rows: &[Value]) -> Option<String> {
+fn latest_platform_release(rows: &[GithubRelease]) -> Option<String> {
     rows.iter()
-        .filter(|row| !row["isDraft"].as_bool().unwrap_or(true))
+        .filter(|row| !row.is_draft)
         .filter_map(|row| {
-            let tag = row["tagName"].as_str()?;
+            let tag = &row.tag_name;
             let version = tag.strip_prefix("platform-v0.")?.parse::<u64>().ok()?;
-            (version > 0).then(|| (version, tag.to_owned()))
+            (version > 0).then(|| (version, tag.clone()))
         })
         .max_by_key(|(version, _)| *version)
         .map(|(_, tag)| tag)
@@ -417,22 +489,19 @@ impl PlatformCi for GhPlatformCi {
         if !output.status.success() {
             return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
         }
-        let rows: Vec<Value> = serde_json::from_slice(&output.stdout)
+        let rows: Vec<GithubRun> = serde_json::from_slice(&output.stdout)
             .map_err(|error| format!("invalid GitHub run response: {error}"))?;
-        rows.into_iter()
-            .map(|row| {
-                Ok(Run {
-                    id: row["databaseId"]
-                        .as_u64()
-                        .ok_or("GitHub run is missing databaseId")?,
-                    head_sha: row["headSha"].as_str().unwrap_or_default().into(),
-                    status: row["status"].as_str().unwrap_or_default().into(),
-                    conclusion: row["conclusion"].as_str().unwrap_or_default().into(),
-                    workflow: WORKFLOW.into(),
-                    head_branch: row["headBranch"].as_str().unwrap_or_default().into(),
-                })
+        Ok(rows
+            .into_iter()
+            .map(|row| Run {
+                id: row.database_id,
+                head_sha: row.head_sha,
+                status: row.status,
+                conclusion: row.conclusion,
+                workflow: WORKFLOW.into(),
+                head_branch: row.head_branch,
             })
-            .collect()
+            .collect())
     }
 
     fn dispatch(&mut self, branch: &str) -> Result<(), String> {
@@ -613,12 +682,13 @@ mod tests {
 
     #[test]
     fn latest_published_platform_accepts_prereleases_and_ignores_drafts() {
-        let rows = vec![
+        let rows: Vec<GithubRelease> = serde_json::from_value(serde_json::json!([
             serde_json::json!({"tagName":"platform-v0.7","isDraft":false,"isPrerelease":false}),
             serde_json::json!({"tagName":"platform-v0.9","isDraft":true,"isPrerelease":false}),
             serde_json::json!({"tagName":"platform-v0.1-deadbeef","isDraft":false,"isPrerelease":false}),
             serde_json::json!({"tagName":"platform-v0.8","isDraft":false,"isPrerelease":true}),
-        ];
+        ]))
+        .unwrap();
         assert_eq!(
             latest_platform_release(&rows).as_deref(),
             Some("platform-v0.8")
@@ -627,12 +697,14 @@ mod tests {
 
     #[test]
     fn published_platform_accepts_canonical_string_run_ids() {
-        assert_eq!(
-            manifest_run_id(&serde_json::json!("29856409043")),
-            Some(29_856_409_043)
-        );
-        assert_eq!(manifest_run_id(&serde_json::json!(42)), Some(42));
-        assert_eq!(manifest_run_id(&serde_json::json!("invalid")), None);
+        let string_id: ManifestRunId =
+            serde_json::from_value(serde_json::json!("29856409043")).unwrap();
+        let number_id: ManifestRunId = serde_json::from_value(serde_json::json!(42)).unwrap();
+        let invalid_id: ManifestRunId =
+            serde_json::from_value(serde_json::json!("invalid")).unwrap();
+        assert_eq!(string_id.get(), Some(29_856_409_043));
+        assert_eq!(number_id.get(), Some(42));
+        assert_eq!(invalid_id.get(), None);
     }
 
     #[test]
