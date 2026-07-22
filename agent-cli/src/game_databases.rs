@@ -1,16 +1,17 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use crate::archive::{read_zip, MemberLayout};
 use crate::error::{AgentError, AgentResult};
 use rusqlite::{Connection, OpenFlags};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use zip::write::SimpleFileOptions;
-use zip::{CompressionMethod, ZipArchive, ZipWriter};
+use zip::{CompressionMethod, ZipWriter};
 
 pub const FORMAT: &str = "mister-magik-game-databases-manifest-v1";
 pub const MANIFEST: &str = "game-databases-manifest.json";
@@ -119,7 +120,7 @@ pub fn verify(
     manifest: Option<&Path>,
     checksums: Option<&Path>,
 ) -> AgentResult<Value> {
-    let files = read_archive(archive)?;
+    let files = read_zip(archive, MemberLayout::Flat)?;
     let names: BTreeSet<_> = files.keys().map(String::as_str).collect();
     let expected: BTreeSet<_> = [DATABASES[0], DATABASES[1], MANIFEST, CHECKSUMS]
         .into_iter()
@@ -208,7 +209,7 @@ pub fn extract_release(release: &Path, output: &Path) -> AgentResult<Value> {
     {
         return classified("database_extract_not_empty", output.display().to_string());
     }
-    for (name, bytes) in read_archive(&archive)? {
+    for (name, bytes) in read_zip(&archive, MemberLayout::Flat)? {
         fs::write(output.join(name), bytes).map_err(|error| error.to_string())?;
     }
     Ok(verified)
@@ -359,31 +360,6 @@ fn validate_database(path: &Path, kind: DatabaseKind, mame_tag: Option<&str>) ->
         }
     }
     Ok(())
-}
-
-fn read_archive(path: &Path) -> AgentResult<BTreeMap<String, Vec<u8>>> {
-    let mut archive = ZipArchive::new(File::open(path).map_err(|error| error.to_string())?)
-        .map_err(|error| error.to_string())?;
-    let mut files = BTreeMap::new();
-    for index in 0..archive.len() {
-        let mut entry = archive.by_index(index).map_err(|error| error.to_string())?;
-        let name = entry.name().to_owned();
-        let enclosed = entry
-            .enclosed_name()
-            .ok_or_else(|| AgentError::Classified {
-                code: "unsafe_archive_member",
-                detail: name.clone(),
-            })?;
-        if entry.is_dir() || enclosed.components().count() != 1 || files.contains_key(&name) {
-            return classified("unsafe_archive_member", name);
-        }
-        let mut bytes = Vec::new();
-        entry
-            .read_to_end(&mut bytes)
-            .map_err(|error| error.to_string())?;
-        files.insert(name, bytes);
-    }
-    Ok(files)
 }
 
 fn verify_file_entries(payload: &Value, files: &BTreeMap<String, Vec<u8>>) -> AgentResult<()> {

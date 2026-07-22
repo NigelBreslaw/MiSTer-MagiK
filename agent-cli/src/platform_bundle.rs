@@ -1,15 +1,16 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use crate::archive::{read_zip, MemberLayout};
 use crate::error::{AgentError, AgentResult};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use zip::write::SimpleFileOptions;
-use zip::{CompressionMethod, ZipArchive, ZipWriter};
+use zip::{CompressionMethod, ZipWriter};
 
 pub const FORMAT: &str = "mister-magik-platform-bundle-v0.2";
 pub const MANIFEST: &str = "platform-bundle-v0.2.json";
@@ -245,7 +246,7 @@ pub fn verify(
     release_manifest: Option<&Path>,
     release_version: Option<u64>,
 ) -> AgentResult<Value> {
-    let files = read_archive(archive)?;
+    let files = read_zip(archive, MemberLayout::Nested)?;
     let manifest_bytes = files
         .get(MANIFEST)
         .ok_or("platform bundle manifest is missing")?;
@@ -319,7 +320,7 @@ pub fn extract_component(
         return classified("component_output_exists", output.display().to_string());
     }
     fs::create_dir_all(output).map_err(|e| e.to_string())?;
-    for (name, bytes) in read_archive(archive)? {
+    for (name, bytes) in read_zip(archive, MemberLayout::Nested)? {
         if let Some(relative) = name.strip_prefix(prefix) {
             let path = output.join(relative);
             if let Some(parent) = path.parent() {
@@ -498,22 +499,6 @@ fn verify_archive_checksums(files: &BTreeMap<String, Vec<u8>>) -> AgentResult<()
         return classified("platform_checksum_shape", "incomplete checksum set");
     }
     Ok(())
-}
-fn read_archive(path: &Path) -> AgentResult<BTreeMap<String, Vec<u8>>> {
-    let mut archive =
-        ZipArchive::new(File::open(path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-    let mut files = BTreeMap::new();
-    for index in 0..archive.len() {
-        let mut entry = archive.by_index(index).map_err(|e| e.to_string())?;
-        let name = entry.name().to_owned();
-        if entry.is_dir() || entry.enclosed_name().is_none() || files.contains_key(&name) {
-            return classified("unsafe_archive_member", name);
-        }
-        let mut bytes = Vec::new();
-        entry.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-        files.insert(name, bytes);
-    }
-    Ok(files)
 }
 fn all_files(root: &Path) -> AgentResult<Vec<PathBuf>> {
     let mut output = Vec::new();
