@@ -7,5 +7,5 @@ crates shared by applications and platform adapters.
   installed-layout knowledge.
 - Wire crates preserve their existing schemas, bounds checks, and error modes.
 - Platform hardware contracts belong under `mister/platform/contracts/`.
-- Use `scripts/agent check --paths PATH` while iterating, then
-  `scripts/agent verify --paths PATH` before completion.
+- Use `scripts/agent check` while iterating, then `scripts/agent verify` before
+  completion; the task baseline supplies the affected paths.

@@ -26,9 +26,8 @@ transport lives in `remote.rs` and `agent_client.rs`.
 ## Checks
 
 ```bash
-scripts/agent check --paths mister/tools/host
-scripts/agent verify --paths mister/tools/host
-scripts/agent verify --paths mister/tools/host
+scripts/agent check
+scripts/agent verify
 ```
 
 These checks are host-only. Running the tool against the MiSTer requires

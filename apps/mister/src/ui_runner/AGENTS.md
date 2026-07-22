@@ -24,10 +24,9 @@ ordering source of truth.
 ## Checks
 
 ```bash
-scripts/agent plan --paths apps/mister/src/ui_runner
-scripts/agent check --paths apps/mister/src/ui_runner
-scripts/agent verify --paths apps/mister/src/ui_runner
-scripts/agent arm check-launcher
+scripts/agent plan
+scripts/agent check
+scripts/agent verify
 ```
 
 Device validation is required only when behavior depends on scan-out, timing,

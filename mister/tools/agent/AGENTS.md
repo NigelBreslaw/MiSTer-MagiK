@@ -22,9 +22,8 @@ the scanout contract is in `scanout_slots_contract.rs`.
 ## Checks
 
 ```bash
-scripts/agent check --paths mister/tools/agent
-scripts/agent verify --paths mister/tools/agent
-scripts/agent verify --paths mister/tools/agent
+scripts/agent check
+scripts/agent verify
 ```
 
 Building/deploying the ARM agent and all device communication require

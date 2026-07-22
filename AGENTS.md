@@ -71,12 +71,14 @@ those trees are part of the task.
   work.
 - Never use the Codex GitHub plugin for repository, issue, PR, or Actions work.
   Use `gh`.
-- Use typed commands in the Rust `mister` host binary for device communication;
-  never raw SSH/SCP or its generic `run` command in maintained automation.
-- Device, Apple container, virtualization, and MiSTer commands require
-  first-attempt escalation using their direct repository command.
+- Agents use `scripts/agent deliver`, `benchmark`, or `diagnose` for device
+  workflows. Attended human operations use typed commands in the Rust `mister`
+  host binary; never raw SSH/SCP or generic remote-shell orchestration.
+- Device workflows, Apple container, virtualization, and attended `mister`
+  commands require first-attempt escalation using their direct repository
+  command.
 - On device timeout, refusal, route, or authentication failure, stop after the
-  first wrapper attempt and report the device unavailable.
+  first typed attempt and report the device unavailable.
 - Edit `MiSTer.ini` only through typed `mister` mutators or approved
   install/restore scripts.
 - Apple Silicon ARM builds use Apple `container` by default. Do not switch to
@@ -100,28 +102,23 @@ scripts/agent verify
 scripts/agent commit -m "Describe the completed change"
 scripts/agent benchmark
 scripts/agent diagnose
-mister status
-mister mode status
+scripts/agent release qualify
 ```
 
-`scripts/agent verify --staged` is the staged-index pre-commit interface and
-`--paths` is reserved for CI or diagnostics. Agents must record a task baseline
-before editing, use `check` while iterating, then use `verify` and `commit` to
-complete host-only work. Run `deliver` only when the committed change has
-runtime or platform impact.
+Agents must record a task baseline before editing, use `check` while iterating,
+then use `verify` and `commit` to complete host-only work. `--paths` is reserved
+for CI or diagnostics, and `verify --staged` is the pre-commit interface. Run
+`deliver` only when the committed change has runtime or platform impact.
+`release qualify` is an attended operator gate; run it only when explicitly
+requested.
 Do not narrate successful operation counts or names: report only that validation
 is running, passed, or failed with the actionable summary. Agents must not
 construct Cargo, test, lint, host-validation, or Apple-container commands
 directly; the harness selects, times, deduplicates, and records them.
-“Build and deploy” means commit first, then `scripts/agent deliver`. The CLI owns build
-profile, scope, artifacts, CI qualification, transport, activation, rollback,
-and verification; agents must not invoke deployment/build implementation
-scripts or supply deployment feature flags.
-`commit` owns final staged verification and committing. `deliver` never changes
-Git state and contacts the MiSTer only for runtime or platform changes. Platform
-delivery remains external-pending until that exact commit is published on
-`main`; rerunning `deliver` resumes CI qualification and deployment. It never
-pushes automatically.
+“Build and deploy” means commit first, then `scripts/agent deliver`; do not call
+implementation scripts or supply deployment feature flags. `deliver` never
+changes Git state or pushes. Platform delivery waits until the exact commit is
+published on `main`; rerun `deliver` to resume it.
 `scripts/agent commit` is the only agent-facing staging and commit interface;
 invoke it with first-attempt escalation because it writes `.git`. Do not stage
 or commit with raw Git when the task baseline workflow is available.
@@ -145,7 +142,6 @@ then `scripts/agent commit` to validate and complete work.
 
 ## Universal Hard Rules
 
-- Never leave the MiSTer in a persistent boot loop.
 - Never set `main=mister-magik-fb`; Slint cannot replace Main video
   initialization. Use `MiSTer_MagiK` or `MiSTer_MagiKDev`.
 - Never launch cores with external `rbf_load`; use Main's command/FIFO handoff.
