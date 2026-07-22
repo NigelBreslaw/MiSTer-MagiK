@@ -93,6 +93,8 @@ fn run_inner(
                 .into(),
         );
     }
+    let paths = crate::task::changes(evidence, repository, task_id)?;
+    let baseline = crate::task::load(evidence, repository, task_id)?;
     let head = crate::task::current_head(repository)?;
     if baseline.head != head {
         return Err(format!(
@@ -103,7 +105,6 @@ fn run_inner(
     if !baseline.staged_paths.is_empty() || has_staged_changes(repository)? {
         return Err("staged_changes_present: commit requires an untouched Git index".into());
     }
-    let paths = crate::task::changes(evidence, repository, task_id)?;
     if paths.is_empty() {
         return Err("nothing_to_commit: no task-owned changes were found".into());
     }
@@ -654,6 +655,27 @@ mod tests {
     }
 
     #[test]
+    fn reconciles_safe_head_advance_and_commits_only_task_changes() {
+        let fixture = Fixture::new();
+        fixture.begin("advanced");
+        fs::write(fixture.root.join("docs/task.md"), "task change\n").unwrap();
+        fs::write(
+            fixture.root.join("docs/intervening.md"),
+            "intervening change\n",
+        )
+        .unwrap();
+        git(&fixture.root, &["add", "docs/intervening.md"]);
+        git(&fixture.root, &["commit", "-qm", "intervening commit"]);
+
+        let (_, _, _, paths) = fixture.commit("advanced").unwrap();
+        assert_eq!(paths, [PathBuf::from("docs/task.md")]);
+        assert_eq!(
+            git_text(&fixture.root, &["show", "--format=", "--name-only", "HEAD"]).unwrap(),
+            "docs/task.md"
+        );
+    }
+
+    #[test]
     fn refuses_dirty_baseline_overlap_and_active_task_overlap() {
         let fixture = Fixture::new();
         fs::write(fixture.root.join("docs/existing.md"), "user change\n").unwrap();
@@ -682,7 +704,7 @@ mod tests {
     }
 
     #[test]
-    fn refuses_missing_baseline_staged_changes_moved_head_and_forbidden_files() {
+    fn refuses_missing_baseline_staged_changes_and_forbidden_files() {
         let fixture = Fixture::new();
         assert!(fixture
             .commit("missing")
@@ -696,17 +718,6 @@ mod tests {
             .commit("staged")
             .unwrap_err()
             .starts_with("staged_changes_present:"));
-
-        let fixture = Fixture::new();
-        fixture.begin("moved");
-        fs::write(fixture.root.join("docs/new.md"), "new\n").unwrap();
-        git(&fixture.root, &["add", "."]);
-        git(&fixture.root, &["commit", "-qm", "concurrent commit"]);
-        fs::write(fixture.root.join("docs/another.md"), "another\n").unwrap();
-        assert!(fixture
-            .commit("moved")
-            .unwrap_err()
-            .starts_with("baseline_head_changed:"));
 
         let fixture = Fixture::new();
         fixture.begin("forbidden");

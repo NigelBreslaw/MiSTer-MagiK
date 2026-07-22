@@ -62,7 +62,7 @@ pub fn changes(
             "No task baseline exists. Run `scripts/agent task begin` before editing.".into(),
         );
     }
-    let Some((worktree, baseline)): Option<(PathBuf, Baseline)> =
+    let Some((worktree, mut baseline)): Option<(PathBuf, Baseline)> =
         evidence.load_task_baseline(task_id)?
     else {
         return Err(
@@ -76,6 +76,7 @@ pub fn changes(
             repository.display()
         ));
     }
+    reconcile_head_advance(evidence, repository, task_id, &mut baseline)?;
     let mut paths = changed_paths(repository, false)?;
     paths.extend(baseline.dirty_paths.iter().cloned());
     if baseline.head != current_head(repository)? {
@@ -101,6 +102,84 @@ pub fn changes(
         }
     }
     Ok(changes)
+}
+
+fn reconcile_head_advance(
+    evidence: &Evidence,
+    repository: &Path,
+    task_id: &str,
+    baseline: &mut Baseline,
+) -> Result<(), String> {
+    let head = current_head(repository)?;
+    if baseline.head == head {
+        return Ok(());
+    }
+    if !is_ancestor(repository, &baseline.head, &head)? {
+        return Err(format!(
+            "baseline_head_changed: task began at {}, current HEAD is {head}; history diverged",
+            baseline.head
+        ));
+    }
+
+    let state = workspace_state(repository)?;
+    if !baseline.staged_paths.is_empty() || !state.staged.is_empty() {
+        return Err(format!(
+            "baseline_head_changed: task began at {}, current HEAD is {head}; staged changes prevent safe reconciliation",
+            baseline.head
+        ));
+    }
+
+    let intervening = diff_paths(repository, &baseline.head)?;
+    let protected: BTreeSet<_> = state.dirty.union(&baseline.dirty_paths).cloned().collect();
+    let overlap: Vec<_> = intervening.intersection(&protected).cloned().collect();
+    if !overlap.is_empty() {
+        return Err(format!(
+            "baseline_head_changed: task began at {}, current HEAD is {head}; intervening commits overlap task or baseline paths: {}",
+            baseline.head,
+            display_paths(&overlap)
+        ));
+    }
+
+    for path in intervening {
+        match fingerprint_v4(repository, &path)? {
+            Some(fingerprint) => {
+                baseline.files.insert(path, fingerprint);
+            }
+            None => {
+                baseline.files.remove(&path);
+            }
+        }
+    }
+    if current_head(repository)? != head {
+        return Err(
+            "baseline_head_changed: HEAD changed during baseline reconciliation; retry the command"
+                .into(),
+        );
+    }
+    baseline.head = head;
+    baseline.toolchain = toolchain_identity(repository);
+    evidence.update_task_baseline(task_id, repository, baseline)
+}
+
+fn is_ancestor(repository: &Path, ancestor: &str, descendant: &str) -> Result<bool, String> {
+    let output = Command::new("git")
+        .args(["merge-base", "--is-ancestor", ancestor, descendant])
+        .current_dir(repository)
+        .output()
+        .map_err(|error| error.to_string())?;
+    match output.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => Err(String::from_utf8_lossy(&output.stderr).trim().to_owned()),
+    }
+}
+
+fn display_paths(paths: &[PathBuf]) -> String {
+    paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn diff_paths(repository: &Path, baseline_head: &str) -> Result<BTreeSet<PathBuf>, String> {
@@ -557,6 +636,103 @@ mod tests {
     }
 
     #[test]
+    fn safe_head_advance_preserves_task_changes_and_claims() {
+        let root = fixture_root("safe-head-advance");
+        let evidence = Evidence::open_at(&root.join(".git/agent-state")).unwrap();
+        begin(&evidence, &root, "task-safe", false).unwrap();
+        fs::write(root.join("task.txt"), "task change\n").unwrap();
+        evidence
+            .claim_task_paths("task-safe", &[PathBuf::from("task.txt")])
+            .unwrap();
+
+        fs::write(root.join("upstream.txt"), "upstream change\n").unwrap();
+        run(&root, &["add", "upstream.txt"]);
+        run(&root, &["commit", "-qm", "upstream"]);
+        let head = current_head(&root).unwrap();
+
+        assert_eq!(
+            changes(&evidence, &root, "task-safe").unwrap(),
+            [PathBuf::from("task.txt")]
+        );
+        let (_, baseline): (PathBuf, Baseline) =
+            evidence.load_task_baseline("task-safe").unwrap().unwrap();
+        assert_eq!(baseline.head, head);
+        assert_eq!(
+            evidence.task_claims("task-safe").unwrap(),
+            [PathBuf::from("task.txt")]
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn clean_head_advance_reconciles_to_no_task_changes() {
+        let root = fixture_root("clean-head-advance");
+        let evidence = Evidence::open_at(&root.join(".git/agent-state")).unwrap();
+        begin(&evidence, &root, "task-clean", false).unwrap();
+        fs::write(root.join("upstream.txt"), "upstream change\n").unwrap();
+        run(&root, &["add", "upstream.txt"]);
+        run(&root, &["commit", "-qm", "upstream"]);
+
+        assert!(changes(&evidence, &root, "task-clean").unwrap().is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn head_advance_rejects_overlap_staging_and_divergence() {
+        let root = fixture_root("overlapping-head-advance");
+        let evidence = Evidence::open_at(&root.join(".git/agent-state")).unwrap();
+        begin(&evidence, &root, "task-overlap", false).unwrap();
+        fs::write(root.join("tracked.txt"), "committed task change\n").unwrap();
+        run(&root, &["add", "tracked.txt"]);
+        run(&root, &["commit", "-qm", "intervening overlap"]);
+        fs::write(root.join("tracked.txt"), "remaining task change\n").unwrap();
+        assert!(changes(&evidence, &root, "task-overlap")
+            .unwrap_err()
+            .contains("intervening commits overlap"));
+        fs::remove_dir_all(root).unwrap();
+
+        let root = fixture_root("baseline-dirty-head-advance");
+        fs::write(root.join("tracked.txt"), "pre-existing change\n").unwrap();
+        let evidence = Evidence::open_at(&root.join(".git/agent-state")).unwrap();
+        begin(&evidence, &root, "task-baseline-dirty", false).unwrap();
+        run(&root, &["add", "tracked.txt"]);
+        run(&root, &["commit", "-qm", "intervening baseline overlap"]);
+        assert!(changes(&evidence, &root, "task-baseline-dirty")
+            .unwrap_err()
+            .contains("intervening commits overlap"));
+        fs::remove_dir_all(root).unwrap();
+
+        let root = fixture_root("staged-head-advance");
+        let evidence = Evidence::open_at(&root.join(".git/agent-state")).unwrap();
+        begin(&evidence, &root, "task-staged", false).unwrap();
+        fs::write(root.join("upstream.txt"), "upstream change\n").unwrap();
+        run(&root, &["add", "upstream.txt"]);
+        run(&root, &["commit", "-qm", "upstream"]);
+        fs::write(root.join("staged.txt"), "staged change\n").unwrap();
+        run(&root, &["add", "staged.txt"]);
+        assert!(changes(&evidence, &root, "task-staged")
+            .unwrap_err()
+            .contains("staged changes prevent"));
+        fs::remove_dir_all(root).unwrap();
+
+        let root = fixture_root("diverged-head-advance");
+        let evidence = Evidence::open_at(&root.join(".git/agent-state")).unwrap();
+        run(&root, &["checkout", "-qb", "baseline"]);
+        fs::write(root.join("baseline.txt"), "baseline branch\n").unwrap();
+        run(&root, &["add", "baseline.txt"]);
+        run(&root, &["commit", "-qm", "baseline branch"]);
+        begin(&evidence, &root, "task-diverged", false).unwrap();
+        run(&root, &["checkout", "-qb", "diverged", "HEAD^"]);
+        fs::write(root.join("diverged.txt"), "diverged branch\n").unwrap();
+        run(&root, &["add", "diverged.txt"]);
+        run(&root, &["commit", "-qm", "diverged branch"]);
+        assert!(changes(&evidence, &root, "task-diverged")
+            .unwrap_err()
+            .contains("history diverged"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn legacy_baseline_can_prove_clean_but_rejects_preexisting_changes() {
         let root = std::env::temp_dir().join(format!(
             "agent-cli-legacy-task-{}-{}",
@@ -595,6 +771,28 @@ mod tests {
         dirty.staged_paths.clear();
         assert!(!legacy_baseline_was_clean(&root, &dirty).unwrap());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    fn fixture_root(label: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "agent-cli-task-{label}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        run(&root, &["init", "-q"]);
+        run(&root, &["config", "user.name", "Agent CLI Test"]);
+        run(
+            &root,
+            &["config", "user.email", "agent-cli@example.invalid"],
+        );
+        fs::write(root.join("tracked.txt"), "original\n").unwrap();
+        run(&root, &["add", "."]);
+        run(&root, &["commit", "-qm", "fixture"]);
+        root
     }
 
     fn run(root: &Path, args: &[&str]) {

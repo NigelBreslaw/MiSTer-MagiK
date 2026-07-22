@@ -434,6 +434,29 @@ impl Evidence {
             .transpose()
     }
 
+    pub fn update_task_baseline<T: Serialize>(
+        &self,
+        task_id: &str,
+        worktree: &Path,
+        baseline: &T,
+    ) -> Result<(), String> {
+        let baseline = serde_json::to_string(baseline).map_err(|error| error.to_string())?;
+        let changed = self
+            .connection
+            .execute(
+                "UPDATE tasks SET baseline_json=?3 WHERE task_id=?1 AND worktree=?2 AND closed_ms IS NULL",
+                params![task_id, worktree.display().to_string(), baseline],
+            )
+            .map_err(|error| format!("cannot update task baseline: {error}"))?;
+        if changed == 1 {
+            Ok(())
+        } else {
+            Err(format!(
+                "task_baseline_missing: no active task baseline exists for {task_id}"
+            ))
+        }
+    }
+
     pub fn active_task_ids(&self, worktree: &Path, except: &str) -> Result<Vec<String>, String> {
         let mut statement = self
             .connection
@@ -1230,6 +1253,54 @@ mod tests {
             evidence.latest_committed_task(worktree).unwrap(),
             Some(("task-committed".into(), "abc123".into()))
         );
+    }
+
+    #[test]
+    fn updating_baseline_preserves_task_metadata_and_claims() {
+        let root = temporary_root("baseline-update");
+        let evidence = Evidence::open_at(&root).unwrap();
+        let worktree = Path::new("/tmp/baseline-update-worktree");
+        evidence
+            .save_task_baseline("task-update", worktree, &"before", false)
+            .unwrap();
+        evidence
+            .claim_task_paths("task-update", &[PathBuf::from("owned.txt")])
+            .unwrap();
+        let created_ms: i64 = evidence
+            .connection
+            .query_row(
+                "SELECT created_ms FROM tasks WHERE task_id='task-update'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        evidence
+            .update_task_baseline("task-update", worktree, &"after")
+            .unwrap();
+
+        let row: (i64, Option<i64>, Option<String>) = evidence
+            .connection
+            .query_row(
+                "SELECT created_ms, closed_ms, commit_sha FROM tasks WHERE task_id='task-update'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row, (created_ms, None, None));
+        assert_eq!(
+            evidence.task_claims("task-update").unwrap(),
+            [PathBuf::from("owned.txt")]
+        );
+        assert_eq!(
+            evidence
+                .load_task_baseline::<String>("task-update")
+                .unwrap()
+                .unwrap()
+                .1,
+            "after"
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
