@@ -217,4 +217,69 @@ mod tests {
         assert!(!labels.contains(&"run"));
         assert!(!labels.contains(&"shell"));
     }
+
+    #[test]
+    fn every_typed_request_has_a_stable_non_shell_label() {
+        let requests = vec![
+            DeviceRequest::Discover,
+            DeviceRequest::Status,
+            DeviceRequest::SnapshotRuntime { remote: "r".into() },
+            DeviceRequest::DeployRuntime {
+                local: "l".into(),
+                remote: "r".into(),
+            },
+            DeviceRequest::RollbackRuntime { remote: "r".into() },
+            DeviceRequest::CommitRuntime { remote: "r".into() },
+            DeviceRequest::DeployPlatform { stage: "s".into() },
+            DeviceRequest::SnapshotPlatform,
+            DeviceRequest::RollbackPlatform,
+            DeviceRequest::CommitPlatform,
+            DeviceRequest::SelectMain(MainSelection::Stock),
+            DeviceRequest::SetMenuVideoMode {
+                video_mode: "v".into(),
+            },
+            DeviceRequest::RebootWait,
+            DeviceRequest::VerifyHealth(Layout::Public),
+            DeviceRequest::SmokeDelivery {
+                layout: Layout::Development,
+                expected_sha256: "s".into(),
+            },
+            DeviceRequest::PrepareBenchmark(BenchmarkScenario::LauncherVelocity),
+            DeviceRequest::WarmupBenchmark(BenchmarkScenario::FramebufferVelocity),
+            DeviceRequest::CaptureBenchmark(BenchmarkScenario::LauncherVelocity),
+            DeviceRequest::RestoreBenchmark,
+            DeviceRequest::SnapshotBenchmarkData(ColdBenchmarkScenario::CatalogLifecycle),
+            DeviceRequest::EstablishBenchmarkFixture(ColdBenchmarkScenario::PreviewColdStart),
+            DeviceRequest::ExecuteColdBenchmark(ColdBenchmarkScenario::LibraryPersistence),
+            DeviceRequest::CollectBenchmarkEvents(ColdBenchmarkScenario::CatalogLifecycle),
+            DeviceRequest::RestoreBenchmarkData(ColdBenchmarkScenario::PreviewColdStart),
+            DeviceRequest::BeginReleaseQualification,
+            DeviceRequest::QualifyReleaseRuntime,
+            DeviceRequest::QualifyReleaseCatalog,
+            DeviceRequest::QualifyReleaseInputAndHandoff,
+            DeviceRequest::QualifyReleaseDisplay,
+            DeviceRequest::QualifyReleaseRecovery,
+            DeviceRequest::RestoreReleaseQualification,
+            DeviceRequest::CollectDiagnosticFacts,
+            DeviceRequest::RepairSafeDeviceState,
+            DeviceRequest::CaptureFramebuffer,
+        ];
+        let labels: Vec<_> = requests.iter().map(DeviceRequest::label).collect();
+        assert_eq!(labels.len(), 34);
+        assert!(labels.iter().all(|label| !label.is_empty()));
+        assert!(!labels.contains(&"run"));
+        assert!(!labels.contains(&"shell"));
+    }
+
+    #[test]
+    fn fake_without_scripted_result_fails_closed_and_records_request() {
+        let mut fake = FakeDevice::default();
+        assert_eq!(
+            fake.execute(&DeviceRequest::Status),
+            Err(DeviceFailure::Unavailable(
+                "no fake response configured".into()
+            ))
+        );
+        assert_eq!(fake.requests(), &[DeviceRequest::Status]);
+    }
 }

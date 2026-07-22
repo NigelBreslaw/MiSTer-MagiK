@@ -399,6 +399,12 @@ pub(crate) fn port_open(timeout: Duration) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
 
     #[test]
     fn shell_command_builders_quote_every_dynamic_value() {
@@ -518,5 +524,43 @@ mod tests {
             summarize_command_output(None, "", "failure", None),
             "rc=-1 failure"
         );
+    }
+
+    #[test]
+    fn connection_environment_has_stable_defaults_and_overrides() {
+        let _guard = env_lock();
+        let old_ip = env::var_os("MISTER_IP");
+        let old_user = env::var_os("MISTER_USER");
+        let old_pass = env::var_os("MISTER_PASS");
+        env::remove_var("MISTER_IP");
+        env::remove_var("MISTER_USER");
+        env::remove_var("MISTER_PASS");
+        assert_eq!(host(), "MiSTer address was not resolved");
+        assert_eq!(user(), "root");
+        assert_eq!(pass(), "1");
+        env::set_var("MISTER_IP", "192.0.2.1");
+        env::set_var("MISTER_USER", "operator");
+        env::set_var("MISTER_PASS", "secret");
+        assert_eq!(host(), "192.0.2.1");
+        assert_eq!(user(), "operator");
+        assert_eq!(pass(), "secret");
+        match old_ip {
+            Some(value) => env::set_var("MISTER_IP", value),
+            None => env::remove_var("MISTER_IP"),
+        }
+        match old_user {
+            Some(value) => env::set_var("MISTER_USER", value),
+            None => env::remove_var("MISTER_USER"),
+        }
+        match old_pass {
+            Some(value) => env::set_var("MISTER_PASS", value),
+            None => env::remove_var("MISTER_PASS"),
+        }
+    }
+
+    #[test]
+    fn command_summary_reports_spawn_errors_without_panicking() {
+        let summary = command_summary("/definitely/missing/mister-magik-command", &[], None);
+        assert!(summary.starts_with("error="));
     }
 }

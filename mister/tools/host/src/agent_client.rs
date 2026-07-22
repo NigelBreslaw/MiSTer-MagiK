@@ -61,17 +61,8 @@ pub(crate) fn bootstrap_agent() -> Result<()> {
         .filter(|token| !token.trim().is_empty());
     let device_id = env::var("MISTER_DEVICE_ID")?;
     let token_file = token_path(&device_id)?;
-    let local_token = explicit_token
-        .as_deref()
-        .map(str::trim)
-        .filter(|token| !token.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            fs::read_to_string(&token_file)
-                .ok()
-                .map(|token| token.trim().to_string())
-                .filter(|token| valid_token(token))
-        });
+    let stored_token = fs::read_to_string(&token_file).ok();
+    let local_token = preferred_token(explicit_token.as_deref(), stored_token.as_deref());
     if let Some(token) = local_token.as_ref() {
         env::set_var("MISTER_AGENT_TOKEN", token);
         if apply_installed_version_policy()? {
@@ -119,6 +110,19 @@ pub(crate) fn bootstrap_agent() -> Result<()> {
     }
     rollback_agent(&session)?;
     Err("MiSTer agent installation did not pass authenticated version verification".into())
+}
+
+fn preferred_token(explicit: Option<&str>, stored: Option<&str>) -> Option<String> {
+    explicit
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            stored
+                .map(str::trim)
+                .filter(|token| valid_token(token))
+                .map(str::to_string)
+        })
 }
 
 fn apply_installed_version_policy() -> Result<bool> {
@@ -325,25 +329,31 @@ esac
 }
 
 fn rollback_agent(session: &ssh2::Session) -> Result<()> {
-    let command = format!(
+    exec(session, &rollback_agent_command(), true)?;
+    Ok(())
+}
+
+fn rollback_agent_command() -> String {
+    format!(
         "mount -o remount,rw /; {init} stop 2>/dev/null || true; if [ -f {agent}.prev ]; then mv {agent}.prev {agent}; elif [ -f {agent}.prev-missing ]; then rm -f {agent}; fi; if [ -f {init}.prev ]; then mv {init}.prev {init}; elif [ -f {init}.prev-missing ]; then rm -f {init}; fi; if [ -f {token}.prev ]; then mv {token}.prev {token}; elif [ -f {token}.prev-missing ]; then rm -f {token}; fi; rm -f {agent}.prev-missing {init}.prev-missing {token}.prev-missing; {init} start 2>/dev/null || true; sync; mount -o remount,ro / || true",
         agent = REMOTE_AGENT,
         init = REMOTE_INIT,
         token = REMOTE_TOKEN,
-    );
-    exec(session, &command, true)?;
-    Ok(())
+    )
 }
 
 fn cleanup_agent_backup(session: &ssh2::Session) -> Result<()> {
-    let command = format!(
+    exec(session, &cleanup_agent_backup_command(), true)?;
+    Ok(())
+}
+
+fn cleanup_agent_backup_command() -> String {
+    format!(
         "mount -o remount,rw /; rm -f {agent}.prev {init}.prev {token}.prev {agent}.prev-missing {init}.prev-missing {token}.prev-missing; sync; mount -o remount,ro / || true",
         agent = REMOTE_AGENT,
         init = REMOTE_INIT,
         token = REMOTE_TOKEN,
-    );
-    exec(session, &command, true)?;
-    Ok(())
+    )
 }
 
 pub(crate) fn agent_request(cmd: &str, args: Value, timeout: Duration) -> Result<AgentResponse> {
@@ -730,5 +740,74 @@ mod tests {
         assert!(valid_token(&"ab".repeat(32)));
         assert!(!valid_token("short"));
         assert!(!valid_token(&"zz".repeat(32)));
+    }
+
+    #[test]
+    fn token_preference_uses_nonempty_explicit_then_valid_stored_token() {
+        let stored = "b".repeat(64);
+        assert_eq!(
+            preferred_token(Some(" explicit "), Some(&stored)).as_deref(),
+            Some("explicit")
+        );
+        assert_eq!(
+            preferred_token(Some("  "), Some(&stored)).as_deref(),
+            Some(stored.as_str())
+        );
+        assert_eq!(preferred_token(None, Some("invalid")), None);
+    }
+
+    #[test]
+    fn generated_tokens_are_valid_and_not_constant() {
+        let first = generate_token().unwrap();
+        let second = generate_token().unwrap();
+        assert!(valid_token(&first));
+        assert!(valid_token(&second));
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn rollback_and_cleanup_commands_cover_every_transaction_artifact() {
+        let rollback = rollback_agent_command();
+        let cleanup = cleanup_agent_backup_command();
+        for path in [REMOTE_AGENT, REMOTE_INIT, REMOTE_TOKEN] {
+            assert!(rollback.contains(path));
+            assert!(rollback.contains(&format!("{path}.prev")));
+            assert!(rollback.contains(&format!("{path}.prev-missing")));
+            assert!(cleanup.contains(&format!("{path}.prev")));
+            assert!(cleanup.contains(&format!("{path}.prev-missing")));
+        }
+        assert!(rollback.contains("mount -o remount,ro /"));
+        assert!(cleanup.contains("mount -o remount,ro /"));
+    }
+
+    #[test]
+    fn deploy_verification_rejects_each_untrusted_field() {
+        let valid = json!({
+            "remote": "/remote",
+            "remote_bytes": 42,
+            "checksum_algorithm": "sha256",
+            "checksum": "sum",
+            "published": true,
+            "rolled_back": false,
+        });
+        assert_eq!(
+            verify_agent_deploy_result(&valid, 42, "/remote", "sum").unwrap(),
+            42
+        );
+        for (field, value) in [
+            ("remote", json!("/wrong")),
+            ("remote_bytes", json!(41)),
+            ("checksum_algorithm", json!("md5")),
+            ("checksum", json!("wrong")),
+            ("published", json!(false)),
+            ("rolled_back", json!(true)),
+        ] {
+            let mut invalid = valid.clone();
+            invalid[field] = value;
+            assert!(verify_agent_deploy_result(&invalid, 42, "/remote", "sum").is_err());
+        }
+        let mut missing_size = valid;
+        missing_size["remote_bytes"] = Value::Null;
+        assert!(verify_agent_deploy_result(&missing_size, 42, "/remote", "sum").is_err());
     }
 }
