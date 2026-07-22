@@ -20,6 +20,7 @@ path = "src/bin/mister.rs"
 [dependencies]
 flate2 = "1"
 lz4_flex = "0.14.0"
+libc = "0.2"
 mister-magik-catalog = { path = "../../../crates/catalog" }
 mister-magik-media-contract = { path = "../../../crates/media-contract" }
 mister-magik-ini = { path = "../../../crates/mister-ini" }

@@ -2420,6 +2420,7 @@ mod linux {
         let geometry_us = 0;
         let source_json = source.json();
         let source_label = source.label();
+        let (content_nonzero_bytes, content_varied) = framebuffer_content_stats(&raw, geometry);
         let png_t = Instant::now();
         let png = framebuffer_png(&raw, geometry)?;
         let png_total_us = elapsed_us(png_t);
@@ -2440,6 +2441,8 @@ mod linux {
             "png_bytes": png.bytes.len(),
             "png_hex_bytes": png_hex.len(),
             "png_hex": png_hex,
+            "content_nonzero_bytes": content_nonzero_bytes,
+            "content_varied": content_varied,
             "elapsed_ms": total_us / 1000,
             "timings": {
                 "request_received_uptime_ms": request_received_uptime_ms,
@@ -2454,6 +2457,26 @@ mod linux {
                 "total_us": total_us,
             },
         }))
+    }
+
+    fn framebuffer_content_stats(raw: &[u8], geometry: FramebufferGeometry) -> (usize, bool) {
+        let bytes_per_pixel = (geometry.bpp / 8).max(1);
+        let active_row_bytes = geometry.width.saturating_mul(bytes_per_pixel);
+        let mut nonzero = 0usize;
+        let mut first_pixel: Option<&[u8]> = None;
+        let mut varied = false;
+        for row in raw.chunks(geometry.stride).take(geometry.height) {
+            let active = &row[..active_row_bytes.min(row.len())];
+            nonzero = nonzero.saturating_add(active.iter().filter(|byte| **byte != 0).count());
+            for pixel in active.chunks_exact(bytes_per_pixel).step_by(16) {
+                match first_pixel {
+                    Some(first) if first != pixel => varied = true,
+                    None => first_pixel = Some(pixel),
+                    Some(_) => {}
+                }
+            }
+        }
+        (nonzero, varied)
     }
 
     fn read_framebuffer_capture() -> Result<FramebufferRead, String> {

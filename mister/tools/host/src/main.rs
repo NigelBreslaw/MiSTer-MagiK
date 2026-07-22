@@ -814,95 +814,424 @@ pub fn run_cli() -> Result<()> {
 
 fn usage() {
     println!(
-        "usage: mister --capture-buffer\n       mister <status|arming-status|mode|scene|display-matrix|crt|ini-edit|core-list|catalog|media-check|media-download|agent|reboot-wait|doctor|mame-metadata-build> ...\n       mode <status|dev|public|stock>\n       scene <launcher|controller_test|tear_pattern|video_playback|crt_trial> [seconds]\n       display-matrix --out DIRECTORY\n       crt qualify --attended [--out DIRECTORY]\n       crt qualify --restore\n       ini-edit menu <OUTPUT> [--dry-run]\n       OUTPUT: hdmi|auto|crt-240p60|crt-288p50|crt-480p60|crt-576p50\n               1280x720p60|1024x768p60|720x480p60|720x576p50|1280x1024p60\n               800x600p60|640x480p60|1280x720p50|1920x1080p60|1920x1080p50\n               1366x768p60|1024x600p60|1920x1440p60|2048x1536p60\n       2560x1440p60: Mister does not support 1440p\n       ini-edit stock-boot [--dry-run]\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>]\n       operator commands are typed and bounded; direct-reset-no-sync remains experimental and requires a volatile session token"
+        "usage: mister --capture-buffer\n       mister <status|arming-status|mode|scene|display-matrix|crt|ini-edit|core-list|catalog|media-check|media-download|agent|reboot-wait|doctor|mame-metadata-build> ...\n       mode <status|dev|public|stock>\n       scene <launcher|controller_test|tear_pattern|video_playback|crt_trial> [seconds]\n       display-matrix --attended --out DIRECTORY\n       crt qualify --attended [--out DIRECTORY]\n       crt qualify --restore\n       ini-edit menu <OUTPUT> [--dry-run]\n       OUTPUT: hdmi|auto|crt-240p60|crt-288p50|crt-480p60|crt-576p50\n               1280x720p60|1024x768p60|720x480p60|720x576p50|1280x1024p60\n               800x600p60|640x480p60|1280x720p50|1920x1080p60|1920x1080p50\n               1366x768p60|1024x600p60|1920x1440p60|2048x1536p60\n       2560x1440p60: Mister does not support 1440p\n       ini-edit stock-boot [--dry-run]\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>]\n       operator commands are typed and bounded; direct-reset-no-sync remains experimental and requires a volatile session token"
     );
 }
 
-const DISPLAY_MATRIX_MODES: &[&str] = &[
-    "auto",
-    "hdmi-1280x720p60",
-    "hdmi-1366x768p60",
-    "hdmi-1920x1080p60",
-    "hdmi-1920x1200p60",
-    "hdmi-2048x1536p60",
-    "hdmi-2560x1440p60",
-    "crt-240p60",
-    "crt-288p50",
-    "crt-480p60",
-    "crt-576p50",
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DisplayMatrixMode {
+    id: &'static str,
+    output: Option<(u16, u16)>,
+    framebuffer: Option<(usize, usize)>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DisplayMatrixReadiness {
+    output: (usize, usize),
+    framebuffer: (usize, usize),
+    frames_before: u64,
+    frames_after: u64,
+}
+
+const DISPLAY_MATRIX_MODES: &[DisplayMatrixMode] = &[
+    DisplayMatrixMode {
+        id: "auto",
+        output: None,
+        framebuffer: None,
+    },
+    DisplayMatrixMode {
+        id: "hdmi-1280x720p60",
+        output: Some((1280, 720)),
+        framebuffer: Some((1280, 720)),
+    },
+    DisplayMatrixMode {
+        id: "hdmi-1366x768p60",
+        output: Some((1366, 768)),
+        framebuffer: Some((1366, 768)),
+    },
+    DisplayMatrixMode {
+        id: "hdmi-1920x1080p60",
+        output: Some((1920, 1080)),
+        framebuffer: Some((960, 540)),
+    },
+    DisplayMatrixMode {
+        id: "hdmi-1920x1200p60",
+        output: Some((1920, 1200)),
+        framebuffer: Some((960, 600)),
+    },
+    DisplayMatrixMode {
+        id: "hdmi-2048x1536p60",
+        output: Some((2048, 1536)),
+        framebuffer: Some((1024, 768)),
+    },
+    DisplayMatrixMode {
+        id: "hdmi-2560x1440p60",
+        output: Some((2560, 1440)),
+        framebuffer: Some((1280, 720)),
+    },
+    DisplayMatrixMode {
+        id: "crt-240p60",
+        output: Some((640, 240)),
+        framebuffer: Some((320, 240)),
+    },
+    DisplayMatrixMode {
+        id: "crt-288p50",
+        output: Some((640, 288)),
+        framebuffer: Some((384, 288)),
+    },
+    DisplayMatrixMode {
+        id: "crt-480p60",
+        output: Some((640, 480)),
+        framebuffer: Some((640, 480)),
+    },
+    DisplayMatrixMode {
+        id: "crt-576p50",
+        output: Some((640, 576)),
+        framebuffer: Some((640, 480)),
+    },
 ];
 
+static DISPLAY_MATRIX_INTERRUPTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+extern "C" fn display_matrix_interrupt_handler(_: libc::c_int) {
+    DISPLAY_MATRIX_INTERRUPTED.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
 fn display_matrix_cli(args: &[String]) -> Result<()> {
-    if args.len() != 2 || args[0] != "--out" {
-        return Err("usage: mister display-matrix --out DIRECTORY".into());
+    if args.len() != 3 || args[0] != "--attended" || args[1] != "--out" {
+        return Err("usage: mister display-matrix --attended --out DIRECTORY".into());
     }
-    let directory = PathBuf::from(&args[1]);
+    if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
+        return Err("display matrix is attended and requires an interactive terminal".into());
+    }
+    eprintln!("WARNING: this matrix includes 31 kHz CRT/VGA modes. Type 31KHZ only if the connected display supports them:");
+    let mut acknowledgement = String::new();
+    io::stdin().read_line(&mut acknowledgement)?;
+    if acknowledgement.trim() != "31KHZ" {
+        return Err("31 kHz display support was not acknowledged; no modes changed".into());
+    }
+    let directory = PathBuf::from(&args[2]);
     fs::create_dir_all(&directory)?;
     let directory = fs::canonicalize(directory)?;
+    DISPLAY_MATRIX_INTERRUPTED.store(false, std::sync::atomic::Ordering::SeqCst);
+    let session = connect(10)?;
+    let original_reply = exec_checked_output(
+        &session,
+        "query original display mode",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    let original_mode = parse_display_reply_active(original_reply.stdout.trim())?;
+    if parse_display_reply_pending(original_reply.stdout.trim())?.is_some() {
+        return Err("display matrix cannot start while a display transaction is pending".into());
+    }
+    let original_ready = wait_launcher_ready(&session, Instant::now(), Duration::from_secs(15))?;
+    drop(session);
+    let previous_sigint = unsafe {
+        libc::signal(
+            libc::SIGINT,
+            display_matrix_interrupt_handler as *const () as libc::sighandler_t,
+        )
+    };
+    let mut current_pid = original_ready.launcher_pid;
     let mut entries = Vec::new();
-    for mode in DISPLAY_MATRIX_MODES {
-        let started = Instant::now();
-        let session = connect(10)?;
-        exec_checked(
-            &session,
-            "apply display matrix mode",
-            &acknowledged_main_command(&format!("mister_magik_display_apply_v1 mode={mode}")),
-        )?;
-        drop(session);
-        let result = (|| -> Result<Value> {
+    let mut seen_hashes = std::collections::HashSet::new();
+    let run_result = (|| -> Result<()> {
+        for mode in DISPLAY_MATRIX_MODES {
+            if DISPLAY_MATRIX_INTERRUPTED.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err("display matrix interrupted".into());
+            }
+            let started = Instant::now();
             let session = connect(10)?;
-            wait_launcher_ready(&session, Instant::now(), Duration::from_secs(15))?;
-            let readiness = exec_checked_output(
+            exec_checked(
                 &session,
-                "display matrix readiness",
-                &release_display_mode_command_for_runtime(),
+                "apply display matrix mode",
+                &acknowledged_main_command(&format!(
+                    "mister_magik_display_apply_v1 mode={}",
+                    mode.id
+                )),
             )?;
             drop(session);
-            let capture = request_framebuffer_png()?;
-            let path = directory.join(format!("{mode}.png"));
-            fs::write(&path, &capture.png)?;
-            let sha256 = encode_hex(&Sha256::digest(&capture.png));
-            let width = capture
-                .result
-                .get("width")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            let height = capture
-                .result
-                .get("height")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            if width == 0 || height == 0 || capture.png.len() < 64 {
-                return Err(format!("invalid framebuffer capture for {mode}").into());
+            let result = capture_display_matrix_mode(
+                *mode,
+                current_pid,
+                &directory,
+                &mut seen_hashes,
+                started,
+            );
+            if let Ok((_, new_pid)) = &result {
+                current_pid = *new_pid;
+            } else if let Ok(session) = connect(10) {
+                if let Ok(ready) =
+                    wait_launcher_ready(&session, Instant::now(), Duration::from_secs(2))
+                {
+                    current_pid = ready.launcher_pid;
+                }
             }
-            Ok(
-                json!({"mode": mode, "path": path, "width": width, "height": height, "png_bytes": capture.png.len(), "sha256": sha256, "elapsed_ms": started.elapsed().as_millis(), "readiness": readiness.stdout.trim()}),
-            )
-        })();
-        let session = connect(10)?;
-        let rollback = exec_checked(
-            &session,
-            "rollback display matrix mode",
-            &acknowledged_main_command("mister_magik_display_cancel_v1"),
-        );
-        drop(session);
-        rollback?;
-        let session = connect(10)?;
-        wait_launcher_ready(&session, Instant::now(), Duration::from_secs(15))?;
-        drop(session);
-        entries.push(result?);
+            let session = connect(10)?;
+            let rollback = exec_checked(
+                &session,
+                "rollback display matrix mode",
+                &acknowledged_main_command("mister_magik_display_cancel_v1"),
+            );
+            drop(session);
+            rollback?;
+            let session = connect(10)?;
+            let restored = wait_launcher_ready_after(
+                &session,
+                current_pid,
+                Instant::now(),
+                Duration::from_secs(15),
+            )?;
+            current_pid = restored.launcher_pid;
+            drop(session);
+            match result {
+                Ok((entry, _)) => entries.push(entry),
+                Err(error) => {
+                    entries.push(json!({"mode": mode.id, "status": "fail", "error": error.to_string(), "elapsed_ms": started.elapsed().as_millis()}));
+                    write_display_matrix_manifest(&directory, &original_mode, &entries)?;
+                    return Err(error);
+                }
+            }
+            write_display_matrix_manifest(&directory, &original_mode, &entries)?;
+        }
+        Ok(())
+    })();
+    let restore_result = restore_display_matrix_original(&original_mode, current_pid);
+    unsafe {
+        libc::signal(libc::SIGINT, previous_sigint);
     }
-    let manifest = json!({"schema":"mister-magik-display-matrix-v1", "captures": entries});
-    fs::write(
-        directory.join("manifest.json"),
-        serde_json::to_vec_pretty(&manifest)?,
-    )?;
+    write_display_matrix_manifest(&directory, &original_mode, &entries)?;
+    run_result?;
+    restore_result?;
     println!("{}", directory.display());
     Ok(())
 }
 
+fn capture_display_matrix_mode(
+    mode: DisplayMatrixMode,
+    previous_pid: i64,
+    directory: &Path,
+    seen_hashes: &mut std::collections::HashSet<String>,
+    started: Instant,
+) -> Result<(Value, i64)> {
+    let session = connect(10)?;
+    let ready = wait_launcher_ready_after(
+        &session,
+        previous_pid,
+        Instant::now(),
+        Duration::from_secs(15),
+    )?;
+    let readiness = exec_checked_output(
+        &session,
+        "display matrix readiness",
+        &release_display_mode_command_for_runtime(),
+    )?;
+    drop(session);
+    let readiness = parse_display_matrix_readiness(&readiness.stdout)?;
+    let output = readiness.output;
+    let framebuffer = readiness.framebuffer;
+    let frames_before = readiness.frames_before;
+    let frames_after = readiness.frames_after;
+    validate_display_matrix_geometry(mode, output, framebuffer)?;
+    if frames_after <= frames_before {
+        return Err(format!("presentation did not advance for {}", mode.id).into());
+    }
+    let capture = request_framebuffer_png()?;
+    let path = directory.join(format!("{}.png", mode.id));
+    fs::write(&path, &capture.png)?;
+    let sha256 = encode_hex(&Sha256::digest(&capture.png));
+    let width = capture
+        .result
+        .get("width")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let height = capture
+        .result
+        .get("height")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let stride = capture
+        .result
+        .get("stride")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let bpp = capture
+        .result
+        .get("bpp")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let nonzero = capture
+        .result
+        .get("content_nonzero_bytes")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let varied = capture
+        .result
+        .get("content_varied")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if width != framebuffer.0 as u64
+        || height != framebuffer.1 as u64
+        || png_dimensions(&capture.png)? != (width as u32, height as u32)
+        || stride != width.saturating_mul(2)
+        || bpp != 16
+        || nonzero == 0
+        || !varied
+    {
+        return Err(format!("invalid or blank framebuffer capture for {}", mode.id).into());
+    }
+    if !seen_hashes.insert(sha256.clone()) {
+        return Err(format!("stale or duplicate framebuffer capture for {}", mode.id).into());
+    }
+    Ok((
+        json!({"mode": mode.id, "status": "pass", "path": path, "requested_output": mode.output.map(|(w,h)| format!("{w}x{h}")), "output_geometry": format!("{}x{}", output.0, output.1), "framebuffer_geometry": format!("{}x{}", framebuffer.0, framebuffer.1), "stride": stride, "capture_width": width, "capture_height": height, "bpp": bpp, "png_bytes": capture.png.len(), "sha256": sha256, "launcher_pid": ready.launcher_pid, "frames_before": frames_before, "frames_after": frames_after, "agent_elapsed_ms": capture.elapsed_ms, "elapsed_ms": started.elapsed().as_millis()}),
+        ready.launcher_pid,
+    ))
+}
+
+fn write_display_matrix_manifest(
+    directory: &Path,
+    original_mode: &str,
+    entries: &[Value],
+) -> Result<()> {
+    let manifest = json!({"schema":"mister-magik-display-matrix-v2", "original_mode": original_mode, "captures": entries});
+    fs::write(
+        directory.join("manifest.json"),
+        serde_json::to_vec_pretty(&manifest)?,
+    )?;
+    Ok(())
+}
+
+fn parse_display_reply_active(reply: &str) -> Result<String> {
+    reply
+        .split_whitespace()
+        .find_map(|field| field.strip_prefix("active="))
+        .map(str::to_owned)
+        .ok_or_else(|| "display reply missing active mode".into())
+}
+
+fn parse_display_reply_pending(reply: &str) -> Result<Option<String>> {
+    let pending = reply
+        .split_whitespace()
+        .find_map(|field| field.strip_prefix("pending="))
+        .ok_or("display reply missing pending mode")?;
+    Ok((pending != "none").then(|| pending.to_owned()))
+}
+
+fn restore_display_matrix_original(original_mode: &str, previous_pid: i64) -> Result<()> {
+    let session = connect(10)?;
+    let state = exec_checked_output(
+        &session,
+        "query display transaction for cleanup",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    if state
+        .stdout
+        .split_whitespace()
+        .any(|field| field.starts_with("pending=") && field != "pending=none")
+    {
+        exec_checked(
+            &session,
+            "rollback display matrix cleanup",
+            &acknowledged_main_command("mister_magik_display_cancel_v1"),
+        )?;
+        let _ = wait_launcher_ready_after(
+            &session,
+            previous_pid,
+            Instant::now(),
+            Duration::from_secs(15),
+        )?;
+    }
+    let restored = exec_checked_output(
+        &session,
+        "verify original display mode",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    let active = parse_display_reply_active(restored.stdout.trim())?;
+    if active != original_mode {
+        return Err(format!("display matrix restored {active}, expected {original_mode}").into());
+    }
+    Ok(())
+}
+
+fn png_dimensions(png: &[u8]) -> Result<(u32, u32)> {
+    if png.len() < 24 || &png[12..16] != b"IHDR" {
+        return Err("PNG is missing IHDR dimensions".into());
+    }
+    Ok((
+        u32::from_be_bytes(png[16..20].try_into()?),
+        u32::from_be_bytes(png[20..24].try_into()?),
+    ))
+}
+
+fn validate_display_matrix_geometry(
+    mode: DisplayMatrixMode,
+    output: (usize, usize),
+    framebuffer: (usize, usize),
+) -> Result<()> {
+    if mode
+        .output
+        .is_some_and(|(w, h)| output != (usize::from(w), usize::from(h)))
+    {
+        return Err(format!(
+            "unexpected output geometry for {}: {}x{}",
+            mode.id, output.0, output.1
+        )
+        .into());
+    }
+    if mode
+        .framebuffer
+        .is_some_and(|expected| framebuffer != expected)
+    {
+        return Err(format!(
+            "unexpected framebuffer geometry for {}: {}x{}",
+            mode.id, framebuffer.0, framebuffer.1
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn parse_display_matrix_readiness(stdout: &str) -> Result<DisplayMatrixReadiness> {
+    let plan = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("plan\t"))
+        .ok_or("display readiness missing plan")?;
+    let output = parse_geometry_token(plan, "output=")?;
+    let framebuffer = parse_geometry_token(plan, "fb=")?;
+    let frames = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("frames\t"))
+        .ok_or("display readiness missing frame counters")?;
+    let mut values = frames.split('\t');
+    let before = values
+        .next()
+        .ok_or("missing initial frame counter")?
+        .parse()?;
+    let after = values
+        .next()
+        .ok_or("missing final frame counter")?
+        .parse()?;
+    Ok(DisplayMatrixReadiness {
+        output,
+        framebuffer,
+        frames_before: before,
+        frames_after: after,
+    })
+}
+
+fn parse_geometry_token(text: &str, prefix: &str) -> Result<(usize, usize)> {
+    let value = text
+        .split_whitespace()
+        .find_map(|field| field.strip_prefix(prefix))
+        .ok_or_else(|| format!("display plan missing {prefix}"))?;
+    let (width, height) = value.split_once('x').ok_or("invalid display geometry")?;
+    Ok((width.parse()?, height.parse()?))
+}
+
 fn release_display_mode_command_for_runtime() -> String {
-    "set -eu; grep -Eq '\"launcher_active\"[[:space:]]*:[[:space:]]*true' /tmp/mister-magik/main-status.json; if pidof MiSTer_MagiKDev >/dev/null 2>&1; then root=/media/fat/mister-magik-dev; else root=/media/fat/mister-magik; fi; \"$root/mister-magik-fb\" latch-readiness-report --json | grep -Eq '\"state\"[[:space:]]*:[[:space:]]*\"ready\"'".to_string()
+    "set -eu; grep -Eq '\"launcher_active\"[[:space:]]*:[[:space:]]*true' /tmp/mister-magik/main-status.json; if pidof MiSTer_MagiKDev >/dev/null 2>&1; then root=/media/fat/mister-magik-dev; else root=/media/fat/mister-magik; fi; report=$(\"$root/mister-magik-fb\" latch-readiness-report --json); printf '%s\\n' \"$report\" | grep -Eq '\"state\"[[:space:]]*:[[:space:]]*\"ready\"'; plan=$(grep '^display-plan:' /tmp/mister-magik-slint.log | tail -n 1); before=$(sed -n 's/.*\"frames\":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' /tmp/mister-magik/status.json); sleep 1; after=$(sed -n 's/.*\"frames\":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' /tmp/mister-magik/status.json); test -n \"$before\"; test -n \"$after\"; test \"$after\" -gt \"$before\"; printf 'plan\\t%s\\nframes\\t%s\\t%s\\nreadiness\\t%s\\n' \"$plan\" \"$before\" \"$after\" \"$report\"".to_string()
 }
 
 fn delivery_health_command(layout: &str) -> Result<String> {
@@ -4014,6 +4343,33 @@ fn wait_launcher_ready(
     .into())
 }
 
+fn wait_launcher_ready_after(
+    sess: &Session,
+    previous_pid: i64,
+    started: Instant,
+    timeout: Duration,
+) -> Result<LauncherReadyStatus> {
+    let mut last_pid = previous_pid;
+    while started.elapsed() < timeout {
+        let elapsed_ms = started.elapsed().as_millis();
+        let main = remote_read(sess, MAIN_STATUS_REMOTE)
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+        let slint = remote_read(sess, SLINT_STATUS_REMOTE)
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+        if let Some(ready) = launcher_ready_status(elapsed_ms, main.as_ref(), slint.as_ref()) {
+            last_pid = ready.launcher_pid;
+            if ready.launcher_pid != previous_pid {
+                return Ok(ready);
+            }
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+    Err(
+        format!("launcher did not restart after pid {previous_pid}; last launcher pid={last_pid}")
+            .into(),
+    )
+}
+
 fn launcher_ready_status(
     elapsed_ms: u128,
     main: Option<&Value>,
@@ -6129,11 +6485,51 @@ mod tests {
     #[test]
     fn display_matrix_covers_every_supported_runtime_mode() {
         assert_eq!(DISPLAY_MATRIX_MODES.len(), 11);
-        assert!(DISPLAY_MATRIX_MODES.contains(&"auto"));
-        assert!(DISPLAY_MATRIX_MODES.contains(&"crt-576p50"));
+        assert!(DISPLAY_MATRIX_MODES.iter().any(|mode| mode.id == "auto"));
+        assert!(DISPLAY_MATRIX_MODES
+            .iter()
+            .any(|mode| mode.id == "crt-576p50"));
         assert!(
             release_display_mode_command_for_runtime().contains("latch-readiness-report --json")
         );
+    }
+
+    #[test]
+    fn display_matrix_readiness_requires_geometry_and_advancing_frames() {
+        let parsed = parse_display_matrix_readiness(
+            "plan\tdisplay-plan: output=640x240 scan=640x240 fb=320x240\nframes\t10\t12\n",
+        )
+        .unwrap();
+        assert_eq!(
+            parsed,
+            DisplayMatrixReadiness {
+                output: (640, 240),
+                framebuffer: (320, 240),
+                frames_before: 10,
+                frames_after: 12,
+            }
+        );
+        assert!(parse_display_matrix_readiness("frames\t10\t12\n").is_err());
+    }
+
+    #[test]
+    fn display_matrix_geometry_rejects_wrong_framebuffer() {
+        let mode = DISPLAY_MATRIX_MODES
+            .iter()
+            .find(|mode| mode.id == "crt-240p60")
+            .copied()
+            .unwrap();
+        assert!(validate_display_matrix_geometry(mode, (640, 240), (320, 240)).is_ok());
+        assert!(validate_display_matrix_geometry(mode, (640, 240), (640, 240)).is_err());
+    }
+
+    #[test]
+    fn png_dimensions_read_ihdr() {
+        let mut png = vec![0u8; 24];
+        png[12..16].copy_from_slice(b"IHDR");
+        png[16..20].copy_from_slice(&320u32.to_be_bytes());
+        png[20..24].copy_from_slice(&240u32.to_be_bytes());
+        assert_eq!(png_dimensions(&png).unwrap(), (320, 240));
     }
     use std::cell::RefCell;
     use std::fs;
