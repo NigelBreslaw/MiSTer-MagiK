@@ -51,7 +51,9 @@ pub fn execute_with_changes(
     };
     let fingerprints = FingerprintContext::new(repository, &plan.operations, changes)?;
     let mut machine = Machine::default();
-    for operation in &plan.operations {
+    let mut index = 0;
+    while index < plan.operations.len() {
+        let operation = &plan.operations[index];
         crate::policy::authorize(operation, plan.intent.risk()).map_err(|rejection| {
             format!(
                 "policy_rejected: {}: {}",
@@ -63,8 +65,91 @@ pub fn execute_with_changes(
             machine.apply(Event::Advance(state))?;
             reporter.emit(EventKind::Progress, command, state.label(), None)?;
         }
+        if operation.builtin.is_some() && operation.risk == crate::model::Risk::ReadOnly {
+            let start = index;
+            while index < plan.operations.len()
+                && plan.operations[index].workflow_phase() == operation.workflow_phase()
+                && plan.operations[index].builtin.is_some()
+                && plan.operations[index].risk == crate::model::Risk::ReadOnly
+            {
+                crate::policy::authorize(&plan.operations[index], plan.intent.risk()).map_err(
+                    |rejection| {
+                        format!(
+                            "policy_rejected: {}: {}",
+                            rejection.operation_id, rejection.reason
+                        )
+                    },
+                )?;
+                index += 1;
+            }
+            if let Err(error) = run_builtin_batch(
+                evidence,
+                request_id,
+                repository,
+                plan,
+                &plan.operations[start..index],
+                &fingerprints,
+                reporter,
+                command,
+            ) {
+                machine.apply(Event::Fail)?;
+                return Err(error);
+            }
+            continue;
+        }
         let heartbeat = state.label();
         let cache = operation_cache_key(plan, operation, &fingerprints)?;
+        if let Some((task_id, fingerprint)) = cache.as_ref() {
+            if evidence.has_cached_operation(task_id, &operation.id, fingerprint)? {
+                evidence.record_reused_command(
+                    request_id,
+                    &operation.id,
+                    &operation.program,
+                    &operation.args,
+                )?;
+                index += 1;
+                continue;
+            }
+        }
+        if let Err(error) = run_operation(
+            evidence,
+            request_id,
+            repository,
+            operation,
+            command,
+            heartbeat,
+            &format!("{command}: failed"),
+            reporter,
+        ) {
+            machine.apply(Event::Fail)?;
+            return Err(error);
+        }
+        if operation.risk == crate::model::Risk::ReadOnly {
+            if let Some((task_id, fingerprint)) = cache {
+                evidence.cache_operation(&task_id, &operation.id, &fingerprint)?;
+            }
+        }
+        index += 1;
+    }
+    machine.apply(Event::Finish)?;
+    reporter.emit(EventKind::Completed, command, "passed", Some(100))?;
+    Ok(Outcome::Passed)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_builtin_batch(
+    evidence: &Evidence,
+    request_id: &str,
+    repository: &Path,
+    plan: &Plan,
+    operations: &[Operation],
+    fingerprints: &FingerprintContext,
+    reporter: &mut Reporter<'_>,
+    command: &str,
+) -> Result<(), String> {
+    let mut pending = Vec::new();
+    for operation in operations {
+        let cache = operation_cache_key(plan, operation, fingerprints)?;
         if let Some((task_id, fingerprint)) = cache.as_ref() {
             if evidence.has_cached_operation(task_id, &operation.id, fingerprint)? {
                 evidence.record_reused_command(
@@ -76,25 +161,62 @@ pub fn execute_with_changes(
                 continue;
             }
         }
-        run_operation(
-            evidence,
-            request_id,
-            repository,
-            operation,
+        let builtin = operation.builtin.expect("batch contains only builtins");
+        reporter.emit(
+            EventKind::Progress,
             command,
-            heartbeat,
-            &format!("{command}: failed"),
-            reporter,
+            &format!("Checking {}", crate::checks::label(builtin)),
+            None,
         )?;
-        if operation.risk == crate::model::Risk::ReadOnly {
-            if let Some((task_id, fingerprint)) = cache {
-                evidence.cache_operation(&task_id, &operation.id, &fingerprint)?;
+        pending.push((operation, builtin, cache));
+    }
+    let limit = std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1)
+        .min(4);
+    for chunk in pending.chunks(limit) {
+        let results = run_parallel_ordered(chunk, limit, |(_, builtin, _)| {
+            crate::checks::run(*builtin, repository)
+        });
+        let mut first_error = None;
+        for ((operation, _, cache), result) in chunk.iter().zip(results) {
+            if let Err(error) = result {
+                first_error.get_or_insert_with(|| {
+                    format!("{command}: failed — {}\nerror: {error}", operation.title)
+                });
+            } else if let Some((task_id, fingerprint)) = cache {
+                evidence.cache_operation(task_id, &operation.id, fingerprint)?;
             }
         }
+        if let Some(error) = first_error {
+            return Err(error);
+        }
     }
-    machine.apply(Event::Finish)?;
-    reporter.emit(EventKind::Completed, command, "passed", Some(100))?;
-    Ok(Outcome::Passed)
+    Ok(())
+}
+
+fn run_parallel_ordered<T: Sync>(
+    items: &[T],
+    limit: usize,
+    run: impl Fn(&T) -> Result<(), String> + Sync,
+) -> Vec<Result<(), String>> {
+    let mut results = Vec::with_capacity(items.len());
+    for chunk in items.chunks(limit.max(1)) {
+        results.extend(std::thread::scope(|scope| {
+            chunk
+                .iter()
+                .map(|item| scope.spawn(|| run(item)))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|worker| {
+                    worker
+                        .join()
+                        .unwrap_or_else(|_| Err("validation worker panicked".into()))
+                })
+                .collect::<Vec<_>>()
+        }));
+    }
+    results
 }
 
 fn operation_cache_key(
@@ -562,6 +684,7 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     static TEST_NONCE: AtomicU64 = AtomicU64::new(0);
@@ -727,6 +850,27 @@ mod tests {
         assert!(!is_cacheable(&operation));
         operation.risk = Risk::DeviceWrite;
         assert!(!is_cacheable(&operation));
+    }
+
+    #[test]
+    fn parallel_scheduler_overlaps_work_and_preserves_result_order() {
+        let active = Arc::new(AtomicU64::new(0));
+        let maximum = Arc::new(AtomicU64::new(0));
+        let items = [0_u64, 1, 2, 3];
+        let results = run_parallel_ordered(&items, 4, |item| {
+            let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+            maximum.fetch_max(current, Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            active.fetch_sub(1, Ordering::SeqCst);
+            if *item == 1 || *item == 3 {
+                Err(format!("failure-{item}"))
+            } else {
+                Ok(())
+            }
+        });
+        assert!(maximum.load(Ordering::SeqCst) > 1);
+        assert_eq!(results[1].as_ref().unwrap_err(), "failure-1");
+        assert_eq!(results[3].as_ref().unwrap_err(), "failure-3");
     }
 
     #[test]

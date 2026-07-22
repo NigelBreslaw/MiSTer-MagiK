@@ -13,7 +13,17 @@ pub fn execute(
     repository: &Path,
     reporter: &mut Reporter<'_>,
 ) -> Result<(), String> {
-    let label = match operation {
+    reporter.emit(
+        EventKind::Progress,
+        "check",
+        &format!("Checking {}", label(operation)),
+        None,
+    )?;
+    run(operation, repository)
+}
+
+pub fn label(operation: BuiltinOperation) -> &'static str {
+    match operation {
         BuiltinOperation::AgentGuidance => "agent guidance",
         BuiltinOperation::LicenseHeaders => "license headers",
         BuiltinOperation::ShellOwnership => "shell ownership",
@@ -21,13 +31,10 @@ pub fn execute(
         BuiltinOperation::KernelWorkflow => "kernel workflow",
         BuiltinOperation::PlatformWorkflow => "platform workflow",
         BuiltinOperation::CiCache => "CI cache policy",
-    };
-    reporter.emit(
-        EventKind::Progress,
-        "check",
-        &format!("Checking {label}"),
-        None,
-    )?;
+    }
+}
+
+pub fn run(operation: BuiltinOperation, repository: &Path) -> Result<(), String> {
     match operation {
         BuiltinOperation::AgentGuidance => check_agent_guidance(repository),
         BuiltinOperation::LicenseHeaders => check_license_headers(repository),
