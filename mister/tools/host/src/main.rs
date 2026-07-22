@@ -832,7 +832,7 @@ pub fn run_cli() -> Result<()> {
 
 fn usage() {
     println!(
-        "usage: mister --capture-buffer\n       mister <status|arming-status|mode|scene|crt|ini-edit|core-list|catalog|media-check|media-download|agent|reboot-wait|doctor|mame-metadata-build> ...\n       mode <status|dev|public|stock>\n       scene <launcher|controller_test|tear_pattern|video_playback|crt_trial> [seconds]\n       crt qualify --attended [--out DIRECTORY]\n       crt qualify --restore\n       ini-edit menu <hdmi|auto|crt-240p60|crt-288p50|crt-480p60|crt-576p50> [--dry-run]\n       ini-edit stock-boot [--dry-run]\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>]\n       operator commands are typed and bounded; direct-reset-no-sync remains experimental and requires a volatile session token"
+        "usage: mister --capture-buffer\n       mister <status|arming-status|mode|scene|crt|ini-edit|core-list|catalog|media-check|media-download|agent|reboot-wait|doctor|mame-metadata-build> ...\n       mode <status|dev|public|stock>\n       scene <launcher|controller_test|tear_pattern|video_playback|crt_trial> [seconds]\n       crt qualify --attended [--out DIRECTORY]\n       crt qualify --restore\n       ini-edit menu <OUTPUT> [--dry-run]\n       OUTPUT: hdmi|auto|crt-240p60|crt-288p50|crt-480p60|crt-576p50\n               1280x720p60|1024x768p60|720x480p60|720x576p50|1280x1024p60\n               800x600p60|640x480p60|1280x720p50|1920x1080p60|1920x1080p50\n               1366x768p60|1024x600p60|1920x1440p60|2048x1536p60\n       2560x1440p60: Mister does not support 1440p\n       ini-edit stock-boot [--dry-run]\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>]\n       operator commands are typed and bounded; direct-reset-no-sync remains experimental and requires a volatile session token"
     );
 }
 
@@ -5052,6 +5052,7 @@ enum IniEdit {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MenuOutputProfile {
     Hdmi,
+    HdmiMode(&'static str),
     Auto,
     Crt240p60,
     Crt288p50,
@@ -5063,6 +5064,21 @@ impl MenuOutputProfile {
     fn parse(value: &str) -> Result<Self> {
         match value {
             "hdmi" => Ok(Self::Hdmi),
+            "1280x720p60" => Ok(Self::HdmiMode("0")),
+            "1024x768p60" => Ok(Self::HdmiMode("1")),
+            "720x480p60" => Ok(Self::HdmiMode("2")),
+            "720x576p50" => Ok(Self::HdmiMode("3")),
+            "1280x1024p60" => Ok(Self::HdmiMode("4")),
+            "800x600p60" => Ok(Self::HdmiMode("5")),
+            "640x480p60" => Ok(Self::HdmiMode("6")),
+            "1280x720p50" => Ok(Self::HdmiMode("7")),
+            "1920x1080p60" => Ok(Self::HdmiMode("8")),
+            "1920x1080p50" => Ok(Self::HdmiMode("9")),
+            "1366x768p60" => Ok(Self::HdmiMode("10")),
+            "1024x600p60" => Ok(Self::HdmiMode("11")),
+            "1920x1440p60" => Ok(Self::HdmiMode("12")),
+            "2048x1536p60" => Ok(Self::HdmiMode("13")),
+            "2560x1440p60" => Err("Mister does not support 1440p".into()),
             "auto" => Ok(Self::Auto),
             "crt-240p60" => Ok(Self::Crt240p60),
             "crt-288p50" => Ok(Self::Crt288p50),
@@ -5074,12 +5090,19 @@ impl MenuOutputProfile {
 
     fn settings(self) -> (&'static str, &'static str, &'static str) {
         match self {
-            Self::Hdmi => ("0", "0", "0"),
+            Self::Hdmi | Self::HdmiMode(_) => ("0", "0", "0"),
             Self::Auto => ("2", "0", "0"),
             Self::Crt240p60 => ("1", "0", "0"),
             Self::Crt288p50 => ("1", "1", "0"),
             Self::Crt480p60 => ("1", "0", "1"),
             Self::Crt576p50 => ("1", "1", "1"),
+        }
+    }
+
+    fn video_mode(self) -> Option<&'static str> {
+        match self {
+            Self::HdmiMode(mode) => Some(mode),
+            _ => None,
         }
     }
 }
@@ -5198,6 +5221,9 @@ fn set_menu_output_profile(lines: &mut Vec<String>, profile: MenuOutputProfile) 
     set_ini_key(lines, "Menu", "direct_video", direct_video);
     set_ini_key(lines, "Menu", "menu_pal", menu_pal);
     set_ini_key(lines, "Menu", "forced_scandoubler", forced_scandoubler);
+    if let Some(video_mode) = profile.video_mode() {
+        set_ini_key(lines, "Menu", "video_mode", video_mode);
+    }
 }
 
 fn edit_mister_ini(input: &str, edit: IniEdit) -> String {
@@ -6577,6 +6603,60 @@ video_mode=14
     }
 
     #[test]
+    fn hdmi_menu_profiles_set_the_selected_mode_only_in_menu() {
+        let ini = "[MiSTer]\nmain=MiSTer_MagiKDev\ndirect_video=7\nvideo_mode=4\n\n[Menu]\nvideo_mode=6 ; mode note\ndirect_video=9 ; route note\nmenu_pal=9 ; region note\nforced_scandoubler=9 ; scan note\n\n[arcade]\ndirect_video=1\nvideo_mode=5\n";
+        for (name, mode) in [
+            ("1280x720p60", "0"),
+            ("1024x768p60", "1"),
+            ("720x480p60", "2"),
+            ("720x576p50", "3"),
+            ("1280x1024p60", "4"),
+            ("800x600p60", "5"),
+            ("640x480p60", "6"),
+            ("1280x720p50", "7"),
+            ("1920x1080p60", "8"),
+            ("1920x1080p50", "9"),
+            ("1366x768p60", "10"),
+            ("1024x600p60", "11"),
+            ("1920x1440p60", "12"),
+            ("2048x1536p60", "13"),
+        ] {
+            let profile = MenuOutputProfile::parse(name).expect("supported HDMI profile");
+            assert_eq!(profile, MenuOutputProfile::HdmiMode(mode));
+            let edited = edit_mister_ini(ini, IniEdit::MenuOutput(profile));
+            let expected = ini
+                .replace(
+                    "video_mode=6 ; mode note",
+                    &format!("video_mode={mode} ; mode note"),
+                )
+                .replace("direct_video=9 ; route note", "direct_video=0 ; route note")
+                .replace("menu_pal=9 ; region note", "menu_pal=0 ; region note")
+                .replace(
+                    "forced_scandoubler=9 ; scan note",
+                    "forced_scandoubler=0 ; scan note",
+                );
+            assert_eq!(edited, expected, "HDMI profile {name}");
+        }
+    }
+
+    #[test]
+    fn mode_14_returns_the_required_error_before_ini_editing() {
+        let error = parse_ini_edit_args(&["menu".into(), "2560x1440p60".into()])
+            .expect_err("mode 14 must be rejected");
+        assert_eq!(error.to_string(), "Mister does not support 1440p");
+    }
+
+    #[test]
+    fn hdmi_menu_profile_preserves_crlf_and_creates_only_menu() {
+        let ini = "[MiSTer]\r\nmain=MiSTer_MagiKDev\r\n";
+        let edited = edit_mister_ini(ini, IniEdit::MenuOutput(MenuOutputProfile::HdmiMode("10")));
+        assert_eq!(
+            edited,
+            "[MiSTer]\r\nmain=MiSTer_MagiKDev\r\n\r\n[Menu]\r\ndirect_video=0\r\nmenu_pal=0\r\nforced_scandoubler=0\r\nvideo_mode=10\r\n"
+        );
+    }
+
+    #[test]
     fn menu_output_profile_preserves_crlf_and_appends_only_missing_owned_keys() {
         let ini = "[MiSTer]\r\nmain=MiSTer_MagiKDev\r\ndirect_video=0\r\n\r\n[Menu]\r\nvideo_mode=6 ; untouched\r\n";
         let edited = edit_mister_ini(ini, IniEdit::MenuOutput(MenuOutputProfile::Crt576p50));
@@ -7035,6 +7115,20 @@ video_mode=14
             "crt-288p50",
             "crt-480p60",
             "crt-576p50",
+            "1280x720p60",
+            "1024x768p60",
+            "720x480p60",
+            "720x576p50",
+            "1280x1024p60",
+            "800x600p60",
+            "640x480p60",
+            "1280x720p50",
+            "1920x1080p60",
+            "1920x1080p50",
+            "1366x768p60",
+            "1024x600p60",
+            "1920x1440p60",
+            "2048x1536p60",
         ] {
             assert!(parse_ini_edit_args(&["menu".into(), profile.into()]).is_ok());
         }
