@@ -891,15 +891,8 @@ fn sha256(path: &Path) -> AgentResult<String> {
 }
 
 fn git_output(repository: &Path, args: &[&str]) -> AgentResult<String> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(repository)
-        .output()
-        .map_err(|error| format!("cannot inspect Git build identity: {error}"))?;
-    if !output.status.success() {
-        return Err("cannot inspect Git build identity".into());
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    crate::git::value_with_context(repository, args, "inspect Git build identity")
+        .map_err(Into::into)
 }
 
 fn ffmpeg_cross_env(repository: &Path) -> Vec<(&'static str, OsString)> {

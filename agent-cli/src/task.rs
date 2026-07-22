@@ -496,15 +496,7 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 }
 
 fn git(repository: &Path, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(repository)
-        .output()
-        .map_err(|error| error.to_string())?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    crate::git::value(repository, args)
 }
 
 fn canonical(path: &Path) -> PathBuf {
