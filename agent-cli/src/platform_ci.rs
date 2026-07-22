@@ -10,8 +10,13 @@ use std::time::{Duration, Instant};
 
 const WORKFLOW: &str = "platform-bundle.yml";
 const WAIT_DEADLINE: Duration = Duration::from_secs(45 * 60);
-const POLL_INTERVAL: Duration = Duration::from_secs(15);
 const COMMAND_DEADLINE: Duration = Duration::from_secs(5 * 60);
+const POLL_DELAYS: [Duration; 4] = [
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(3),
+    Duration::from_secs(5),
+];
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct Candidate {
@@ -137,6 +142,39 @@ pub fn resolve(
     destination: &Path,
     mut progress: impl FnMut(&str) -> Result<(), String>,
 ) -> Result<Candidate, String> {
+    let mut clock = RealPollClock {
+        started: Instant::now(),
+    };
+    resolve_with_clock(ci, branch, head_sha, destination, &mut progress, &mut clock)
+}
+
+trait PollClock {
+    fn elapsed(&self) -> Duration;
+    fn sleep(&mut self, duration: Duration);
+}
+
+struct RealPollClock {
+    started: Instant,
+}
+
+impl PollClock for RealPollClock {
+    fn elapsed(&self) -> Duration {
+        self.started.elapsed()
+    }
+
+    fn sleep(&mut self, duration: Duration) {
+        thread::sleep(duration);
+    }
+}
+
+fn resolve_with_clock(
+    ci: &mut dyn PlatformCi,
+    branch: &str,
+    head_sha: &str,
+    destination: &Path,
+    progress: &mut impl FnMut(&str) -> Result<(), String>,
+    clock: &mut dyn PollClock,
+) -> Result<Candidate, String> {
     if let Some(run) = exact_success(ci.runs(head_sha)?, branch, head_sha)? {
         progress("reusing exact verified platform candidate")?;
         match download_and_verify(ci, run.id, head_sha, &run.head_branch, destination, true) {
@@ -146,8 +184,9 @@ pub fn resolve(
     }
     progress("dispatching platform candidate workflow")?;
     ci.dispatch(branch)?;
-    let started = Instant::now();
-    while started.elapsed() < WAIT_DEADLINE {
+    let mut previous = None;
+    let mut delay_index = 0;
+    while clock.elapsed() < WAIT_DEADLINE {
         let runs = ci.runs(head_sha)?;
         if let Some(run) = exact_success(runs.clone(), branch, head_sha)? {
             progress("platform candidate workflow completed")?;
@@ -159,7 +198,18 @@ pub fn resolve(
             return Err("platform CI workflow failed for the requested commit".into());
         }
         progress("waiting for platform candidate workflow")?;
-        thread::sleep(POLL_INTERVAL);
+        let state = runs
+            .iter()
+            .filter(|run| run.head_sha == head_sha && run.workflow == WORKFLOW)
+            .map(|run| (run.id, run.status.clone(), run.conclusion.clone()))
+            .collect::<Vec<_>>();
+        if previous.as_ref() != Some(&state) {
+            delay_index = 0;
+        }
+        let remaining = WAIT_DEADLINE.saturating_sub(clock.elapsed());
+        clock.sleep(POLL_DELAYS[delay_index].min(remaining));
+        previous = Some(state);
+        delay_index = (delay_index + 1).min(POLL_DELAYS.len() - 1);
     }
     Err("platform CI workflow exceeded its 2700s deadline".into())
 }
@@ -654,6 +704,23 @@ mod tests {
         downloads: VecDeque<Result<(), String>>,
     }
 
+    #[derive(Default)]
+    struct FakeClock {
+        elapsed: Duration,
+        sleeps: Vec<Duration>,
+    }
+
+    impl PollClock for FakeClock {
+        fn elapsed(&self) -> Duration {
+            self.elapsed
+        }
+
+        fn sleep(&mut self, duration: Duration) {
+            self.sleeps.push(duration);
+            self.elapsed += duration;
+        }
+    }
+
     impl PlatformCi for FakeCi {
         fn runs(&mut self, _: &str) -> Result<Vec<Run>, String> {
             Ok(self.batches.pop_front().unwrap_or_default())
@@ -677,6 +744,17 @@ mod tests {
             head_sha: sha.into(),
             status: "completed".into(),
             conclusion: conclusion.into(),
+            workflow: WORKFLOW.into(),
+            head_branch: "main".into(),
+        }
+    }
+
+    fn pending_run(id: u64, status: &str) -> Run {
+        Run {
+            id,
+            head_sha: "wanted".into(),
+            status: status.into(),
+            conclusion: String::new(),
             workflow: WORKFLOW.into(),
             head_branch: "main".into(),
         }
@@ -730,6 +808,40 @@ mod tests {
             |_| Ok(()),
         );
         assert!(result.is_err());
+        assert_eq!(ci.dispatches, 1);
+    }
+
+    #[test]
+    fn polling_backs_off_and_resets_when_workflow_state_changes() {
+        let mut ci = FakeCi {
+            batches: VecDeque::from([
+                Vec::new(),
+                vec![pending_run(3, "queued")],
+                vec![pending_run(3, "queued")],
+                vec![pending_run(3, "in_progress")],
+                vec![run(3, "wanted", "failure")],
+            ]),
+            dispatches: 0,
+            downloads: VecDeque::new(),
+        };
+        let mut clock = FakeClock::default();
+        let result = resolve_with_clock(
+            &mut ci,
+            "main",
+            "wanted",
+            Path::new("/tmp/unused-platform-fixture"),
+            &mut |_| Ok(()),
+            &mut clock,
+        );
+        assert!(result.is_err());
+        assert_eq!(
+            clock.sleeps,
+            [
+                Duration::from_secs(1),
+                Duration::from_secs(2),
+                Duration::from_secs(1)
+            ]
+        );
         assert_eq!(ci.dispatches, 1);
     }
 
