@@ -39,8 +39,8 @@ jobs:
       fpga-changed: ${{ steps.plan.outputs.fpga_changed }}
       kernel-changed: ${{ steps.plan.outputs.kernel_changed }}
       main-id: ${{ steps.identity.outputs.main_id }}
-      fpga-id: ${{ steps.identity.outputs.fpga_id }}
-      kernel-id: ${{ steps.identity.outputs.kernel_id }}
+      fpga-id: ${{ steps.reuse.outputs.fpga_id || steps.identity.outputs.fpga_id }}
+      kernel-id: ${{ steps.reuse.outputs.kernel_id || steps.identity.outputs.kernel_id }}
       main-revision: ${{ steps.identity.outputs.main_revision }}
       bundle-id: ${{ steps.plan.outputs.bundle_id }}
       candidate-hit: ${{ steps.reuse.outputs.candidate_hit }}
@@ -171,8 +171,56 @@ jobs:
               cp -R "$attempt"/. "$canonical"/
               printf '%s_hit=true\n%s_run_id=%s\n' "$kind" "$kind" "$run_id" >> "$GITHUB_OUTPUT"
               printf '%s_head_sha=%s\n' "$kind" "$head_sha" >> "$GITHUB_OUTPUT"
+              [ "$kind" = candidate ] || printf '%s_id=%s\n' "$kind" "$identity" >> "$GITHUB_OUTPUT"
               return 0
             done < <(scripts/agent ci platform-candidates build/platform-reuse/artifacts.json "$name")
+            echo "${kind}_hit=false" >> "$GITHUB_OUTPUT"
+            return 1
+          }
+          resolve_equivalent() {
+            local kind="$1" prefix="$2" inputs_manifest="$3" artifact_id run_id head_sha name identity attempt details verification canonical
+            local -a component_inputs
+            while IFS=$'\t' read -r artifact_id run_id head_sha name; do
+              [[ "$artifact_id" =~ ^[0-9]+$ ]] || continue
+              [[ "$run_id" =~ ^[0-9]+$ ]] || continue
+              [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || continue
+              [[ "$name" = "$prefix"* ]] || continue
+              identity="${name#"$prefix"}"
+              [[ "$identity" =~ ^[0-9a-f]{64}$ ]] || continue
+              details="build/platform-reuse/run-$run_id.json"
+              gh run view "$run_id" --repo "$GITHUB_REPOSITORY" \
+                --json status,conclusion,workflowName,headBranch,event,headSha > "$details" || continue
+              scripts/agent ci platform-eligible-run "$details" "$head_sha" || continue
+              attempt="build/platform-reuse/attempt-$kind-$artifact_id"
+              mkdir -p "$attempt"
+              gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name "$name" --dir "$attempt" || continue
+              verification="build/platform-reuse/verification-$kind-$artifact_id.json"
+              scripts/agent ci platform-bundle verify-component \
+                --component "$kind" --artifact "$attempt" --component-id "$identity" > "$verification" || continue
+              if ! run_id="$(jq -er '.origin.run_id | tostring | select(test("^[0-9]+$"))' "$verification")"; then
+                continue
+              fi
+              if ! head_sha="$(jq -er '.origin.head_sha | strings | select(test("^[0-9a-f]{40}$"))' "$verification")"; then
+                continue
+              fi
+              git merge-base --is-ancestor "$head_sha" "$GITHUB_SHA" || continue
+              mapfile -t component_inputs < <(sed -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d' -e '\#^\.github/workflows/platform-bundle.yml$#d' "$inputs_manifest")
+              component_inputs+=("$inputs_manifest")
+              git diff --quiet "$head_sha" "$GITHUB_SHA" -- "${component_inputs[@]}" || continue
+              canonical="build/platform-reuse/$kind"
+              mkdir -p "$canonical"
+              cp -R "$attempt"/. "$canonical"/
+              printf '%s_hit=true\n%s_id=%s\n%s_run_id=%s\n%s_head_sha=%s\n' \
+                "$kind" "$kind" "$identity" "$kind" "$run_id" "$kind" "$head_sha" >> "$GITHUB_OUTPUT"
+              return 0
+            done < <(jq -r --arg prefix "$prefix" '
+              [.[]?.artifacts[]? |
+                select((.name | startswith($prefix)) and (.expired == false) and
+                  (.workflow_run.head_branch == "main") and
+                  (.workflow_run.repository_id == .workflow_run.head_repository_id))] |
+              sort_by(.created_at) | reverse[] |
+              [.id, .workflow_run.id, .workflow_run.head_sha, .name] | @tsv
+            ' build/platform-reuse/artifacts.json)
             echo "${kind}_hit=false" >> "$GITHUB_OUTPUT"
             return 1
           }
@@ -183,8 +231,12 @@ jobs:
             echo 'kernel_hit=false' >> "$GITHUB_OUTPUT"
           else
             [ "$MAIN_CHANGED" = true ] && resolve main "platform-main-v0.1-$MAIN_ID" "$MAIN_ID" || [ "$MAIN_CHANGED" != true ] || true
-            [ "$FPGA_CHANGED" = true ] && resolve fpga "platform-fpga-v0.1-$FPGA_ID" "$FPGA_ID" || [ "$FPGA_CHANGED" != true ] || true
-            [ "$KERNEL_CHANGED" = true ] && resolve kernel "platform-kernel-v0.1-$KERNEL_ID" "$KERNEL_ID" || [ "$KERNEL_CHANGED" != true ] || true
+            if [ "$FPGA_CHANGED" = true ] && ! resolve fpga "platform-fpga-v0.1-$FPGA_ID" "$FPGA_ID"; then
+              resolve_equivalent fpga platform-fpga-v0.1- scripts/platform-component-inputs/fpga-v0.1.txt || true
+            fi
+            if [ "$KERNEL_CHANGED" = true ] && ! resolve kernel "platform-kernel-v0.1-$KERNEL_ID" "$KERNEL_ID"; then
+              resolve_equivalent kernel platform-kernel-v0.1- scripts/platform-component-inputs/kernel-v0.1.txt || true
+            fi
             [ "$MAIN_CHANGED" = true ] || echo 'main_hit=false' >> "$GITHUB_OUTPUT"
             [ "$FPGA_CHANGED" = true ] || echo 'fpga_hit=false' >> "$GITHUB_OUTPUT"
             [ "$KERNEL_CHANGED" = true ] || echo 'kernel_hit=false' >> "$GITHUB_OUTPUT"
@@ -212,7 +264,7 @@ jobs:
         if: steps.reuse.outputs.fpga_hit == 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: platform-fpga-v0.1-${{ steps.identity.outputs.fpga_id }}
+          name: platform-fpga-v0.1-${{ steps.reuse.outputs.fpga_id }}
           path: build/platform-reuse/fpga
           if-no-files-found: error
           retention-days: 30
@@ -221,7 +273,7 @@ jobs:
         if: steps.reuse.outputs.kernel_hit == 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: platform-kernel-v0.1-${{ steps.identity.outputs.kernel_id }}
+          name: platform-kernel-v0.1-${{ steps.reuse.outputs.kernel_id }}
           path: build/platform-reuse/kernel
           if-no-files-found: error
           retention-days: 30
@@ -241,8 +293,8 @@ jobs:
             echo "| Component | Decision | Identity |"
             echo "|---|---|---|"
             echo "| Main | $(status '${{ steps.plan.outputs.main_changed }}' '${{ steps.reuse.outputs.main_hit }}') | \`${{ steps.identity.outputs.main_id }}\` |"
-            echo "| FPGA | $(status '${{ steps.plan.outputs.fpga_changed }}' '${{ steps.reuse.outputs.fpga_hit }}') | \`${{ steps.identity.outputs.fpga_id }}\` |"
-            echo "| Kernel | $(status '${{ steps.plan.outputs.kernel_changed }}' '${{ steps.reuse.outputs.kernel_hit }}') | \`${{ steps.identity.outputs.kernel_id }}\` |"
+            echo "| FPGA | $(status '${{ steps.plan.outputs.fpga_changed }}' '${{ steps.reuse.outputs.fpga_hit }}') | \`${{ steps.reuse.outputs.fpga_id || steps.identity.outputs.fpga_id }}\` |"
+            echo "| Kernel | $(status '${{ steps.plan.outputs.kernel_changed }}' '${{ steps.reuse.outputs.kernel_hit }}') | \`${{ steps.reuse.outputs.kernel_id || steps.identity.outputs.kernel_id }}\` |"
             if [ '${{ steps.reuse.outputs.candidate_hit }}' = true ]; then
               echo
               echo "Exact verified candidate recovered; component builds and assembly will be skipped."
