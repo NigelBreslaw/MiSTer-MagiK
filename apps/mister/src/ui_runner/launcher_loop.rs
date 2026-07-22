@@ -1772,15 +1772,14 @@ pub(super) fn run_launcher_loop(
                     nav.confirm_selected = 0;
                 }
             }
-            if state.pending.is_some() {
-                nav.screen = Screen::Settings;
-                nav.settings_selected = 0;
-                nav.confirm_action = Some(launcher::ConfirmAction::DisplayResolution);
-                nav.confirm_selected = 0;
-                nav.display_confirm_remaining = state.remaining.max(1);
-                display_confirm_deadline =
-                    Some(Instant::now() + Duration::from_secs(u64::from(state.remaining.max(1))));
-            }
+            display_confirm_deadline = apply_startup_pending_display(
+                &mut nav,
+                &state,
+                display_confirmation_ui_enabled(
+                    std::env::var_os("MISTER_MAGIK_DISPLAY_CONFIRM_UI").as_deref(),
+                ),
+                Instant::now(),
+            );
         }
     }
     let mut setup = SetupNav::new();
@@ -4700,6 +4699,27 @@ pub(super) fn run_launcher_loop(
     }
 }
 
+fn display_confirmation_ui_enabled(value: Option<&std::ffi::OsStr>) -> bool {
+    value != Some(std::ffi::OsStr::new("0"))
+}
+
+fn apply_startup_pending_display(
+    nav: &mut LauncherNav,
+    state: &launcher::DisplayCommandState,
+    confirmation_ui_enabled: bool,
+    now: Instant,
+) -> Option<Instant> {
+    if state.pending.is_none() || !confirmation_ui_enabled {
+        return None;
+    }
+    nav.screen = Screen::Settings;
+    nav.settings_selected = 0;
+    nav.confirm_action = Some(launcher::ConfirmAction::DisplayResolution);
+    nav.confirm_selected = 0;
+    nav.display_confirm_remaining = state.remaining.max(1);
+    Some(now + Duration::from_secs(u64::from(state.remaining.max(1))))
+}
+
 fn should_desire_direct_layer(wants_layer: bool, composition_allows_layer: bool) -> bool {
     wants_layer && composition_allows_layer
 }
@@ -7544,6 +7564,36 @@ mod tests {
         assert!(!should_desire_direct_layer(false, true));
         assert!(!should_desire_direct_layer(true, false));
         assert!(!should_desire_direct_layer(false, false));
+    }
+
+    #[test]
+    fn startup_pending_display_only_enters_confirmation_for_the_ui_route() {
+        let state = launcher::DisplayCommandState {
+            active: "hdmi-1920x1080p60".to_string(),
+            pending: Some("hdmi-1280x720p60".to_string()),
+            remaining: 10,
+            phase: launcher::DisplayTransactionPhase::Provisional,
+            error: None,
+            return_to_settings: false,
+        };
+        let now = Instant::now();
+        let mut ui_nav = LauncherNav::new();
+        let deadline = apply_startup_pending_display(&mut ui_nav, &state, true, now);
+        assert_eq!(ui_nav.screen, Screen::Settings);
+        assert_eq!(
+            ui_nav.confirm_action,
+            Some(launcher::ConfirmAction::DisplayResolution)
+        );
+        assert_eq!(ui_nav.display_confirm_remaining, 10);
+        assert_eq!(deadline, Some(now + Duration::from_secs(10)));
+
+        let mut headless_nav = LauncherNav::new();
+        assert_eq!(
+            apply_startup_pending_display(&mut headless_nav, &state, false, now),
+            None
+        );
+        assert_eq!(headless_nav.screen, Screen::Home);
+        assert_eq!(headless_nav.confirm_action, None);
     }
 
     #[test]
