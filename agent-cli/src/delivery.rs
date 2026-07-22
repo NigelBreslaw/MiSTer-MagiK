@@ -366,11 +366,7 @@ fn prepare_stage(
     }
     copy(repository.join(gui_artifact), stage.join("mister-magik-fb"))?;
     let databases = stage.join("databases");
-    run_bounded(
-        repository,
-        "scripts/fetch-game-databases-release.sh",
-        &[databases.display().to_string()],
-    )?;
+    prepare_game_databases(repository, &databases)?;
     for name in [
         "mame.sqlite3",
         "hbmame.sqlite3",
@@ -425,6 +421,98 @@ fn copy(from: PathBuf, to: PathBuf) -> AgentResult<()> {
     Ok(fs::copy(&from, &to)
         .map(|_| ())
         .map_err(|error| format!("cannot copy {}: {error}", from.display()))?)
+}
+
+fn prepare_game_databases(repository: &Path, output: &Path) -> AgentResult<()> {
+    let (owner, tag, version) = crate::platform_ci::latest_game_database_release(repository)?;
+    let cache_root = repository.join("build/agent-deploy/release-cache/game-databases");
+    let cached = cache_root.join(&tag);
+    if reuse_verified_cache(&cached, output, || {
+        extract_game_databases(repository, &cached, output)
+    })? {
+        return Ok(());
+    }
+    fs::create_dir_all(&cache_root)
+        .map_err(|error| format!("cannot create game-database cache: {error}"))?;
+    let temporary = cache_root.join(format!(".{tag}.download-{}", std::process::id()));
+    if temporary.exists() {
+        fs::remove_dir_all(&temporary)
+            .map_err(|error| format!("cannot clear temporary game-database download: {error}"))?;
+    }
+    fs::create_dir_all(&temporary)
+        .map_err(|error| format!("cannot create temporary game-database download: {error}"))?;
+    let archive_pattern = format!("mister-magik-game-databases-v{version}.zip");
+    let download = run_bounded(
+        repository,
+        "gh",
+        &[
+            "release".into(),
+            "download".into(),
+            tag.clone(),
+            "--repo".into(),
+            owner,
+            "--dir".into(),
+            temporary.display().to_string(),
+            "--pattern".into(),
+            archive_pattern,
+            "--pattern".into(),
+            "game-databases-manifest.json".into(),
+            "--pattern".into(),
+            "SHA256SUMS".into(),
+        ],
+    );
+    if let Err(error) = download {
+        let _ = fs::remove_dir_all(&temporary);
+        return Err(error);
+    }
+    if let Err(error) = extract_game_databases(repository, &temporary, output) {
+        let _ = fs::remove_dir_all(&temporary);
+        if output.exists() {
+            let _ = fs::remove_dir_all(output);
+        }
+        return Err(error);
+    }
+    if let Err(error) = fs::rename(&temporary, &cached) {
+        let _ = fs::remove_dir_all(&temporary);
+        return Err(format!("cannot publish game-database cache: {error}").into());
+    }
+    Ok(())
+}
+
+fn reuse_verified_cache(
+    cached: &Path,
+    output: &Path,
+    verify: impl FnOnce() -> AgentResult<()>,
+) -> AgentResult<bool> {
+    if !cached.is_dir() {
+        return Ok(false);
+    }
+    if verify().is_ok() {
+        return Ok(true);
+    }
+    if output.exists() {
+        fs::remove_dir_all(output).map_err(|error| error.to_string())?;
+    }
+    fs::remove_dir_all(cached)
+        .map_err(|error| format!("cannot clear invalid game-database cache: {error}"))?;
+    Ok(false)
+}
+
+fn extract_game_databases(repository: &Path, release: &Path, output: &Path) -> AgentResult<()> {
+    run_bounded(
+        repository,
+        "/usr/bin/python3",
+        &[
+            repository
+                .join("scripts/release/databases/game-databases-bundle.py")
+                .display()
+                .to_string(),
+            "extract-release".into(),
+            release.display().to_string(),
+            "--output".into(),
+            output.display().to_string(),
+        ],
+    )
 }
 
 fn run_bounded(repository: &Path, program: &str, args: &[String]) -> AgentResult<()> {
@@ -562,5 +650,23 @@ mod tests {
                 "Git mutation remains: {forbidden}"
             );
         }
+    }
+
+    #[test]
+    fn verified_release_cache_is_reused_and_invalid_cache_is_evicted() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-delivery-cache-test-{}",
+            std::process::id()
+        ));
+        let cached = root.join("cached");
+        let output = root.join("output");
+        fs::create_dir_all(&cached).unwrap();
+        assert!(reuse_verified_cache(&cached, &output, || Ok(())).unwrap());
+        assert!(cached.is_dir());
+        fs::create_dir_all(&output).unwrap();
+        assert!(!reuse_verified_cache(&cached, &output, || Err("corrupt".into())).unwrap());
+        assert!(!cached.exists());
+        assert!(!output.exists());
+        let _ = fs::remove_dir_all(root);
     }
 }

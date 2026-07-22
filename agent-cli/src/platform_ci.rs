@@ -107,6 +107,12 @@ struct GithubRelease {
     is_draft: bool,
 }
 
+#[derive(Debug, Deserialize)]
+struct GithubApiRelease {
+    tag_name: String,
+    draft: bool,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Run {
     pub id: u64,
@@ -370,38 +376,33 @@ pub fn resolve_published_repository(
     )?;
     let branch = command_text(repository, "git", &["branch", "--show-current"])?;
     let head_sha = command_text(repository, "git", &["rev-parse", "HEAD"])?;
-    let releases = command_text(
-        repository,
-        "gh",
-        &[
-            "release",
-            "list",
-            "--repo",
-            &owner,
-            "--limit",
-            "100",
-            "--json",
-            "tagName,isDraft,isPrerelease",
-        ],
-    )?;
-    let rows: Vec<GithubRelease> = serde_json::from_str(&releases)
-        .map_err(|error| format!("invalid GitHub release response: {error}"))?;
+    let rows = published_releases(repository, &owner)?;
     let tag = latest_platform_release(&rows)
         .ok_or("no published numbered platform release is available")?;
-    let destination = repository
-        .join("build/agent-deploy/platform-published")
-        .join(&head_sha);
+    let cache_root = repository.join("build/agent-deploy/release-cache/platform");
+    let destination = cache_root.join(&tag);
+    if let Ok(candidate) = published_candidate(repository, &destination, &branch, &head_sha, true) {
+        progress("reusing cached qualified platform components")?;
+        return Ok(candidate);
+    }
     if destination.exists() {
         std::fs::remove_dir_all(&destination)
-            .map_err(|error| format!("cannot clear published platform cache: {error}"))?;
+            .map_err(|error| format!("cannot clear invalid published platform cache: {error}"))?;
     }
-    std::fs::create_dir_all(&destination)
+    std::fs::create_dir_all(&cache_root)
         .map_err(|error| format!("cannot create published platform cache: {error}"))?;
+    let temporary = cache_root.join(format!(".{tag}.download-{}", std::process::id()));
+    if temporary.exists() {
+        std::fs::remove_dir_all(&temporary)
+            .map_err(|error| format!("cannot clear temporary platform download: {error}"))?;
+    }
+    std::fs::create_dir_all(&temporary)
+        .map_err(|error| format!("cannot create temporary platform download: {error}"))?;
     progress("downloading latest qualified platform components")?;
     let mut download = Command::new("gh");
     download
         .args(["release", "download", &tag, "--repo", &owner, "--dir"])
-        .arg(&destination)
+        .arg(&temporary)
         .args([
             "--pattern",
             "mister-magik-platform-v0.*.zip",
@@ -409,24 +410,93 @@ pub fn resolve_published_repository(
             "platform-bundle-v0.2.json",
         ])
         .current_dir(repository);
-    let output = bounded_output(download, "published platform download", COMMAND_DEADLINE)?;
+    let output = match bounded_output(download, "published platform download", COMMAND_DEADLINE) {
+        Ok(output) => output,
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&temporary);
+            return Err(error);
+        }
+    };
     if !output.status.success() {
+        let _ = std::fs::remove_dir_all(&temporary);
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
     }
-    let archive = find_named(&destination, "mister-magik-platform-", ".zip")?;
-    let manifest = find_exact(&destination, "platform-bundle-v0.2.json")?;
+    let mut candidate = match published_candidate(repository, &temporary, &branch, &head_sha, false)
+    {
+        Ok(candidate) => candidate,
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&temporary);
+            return Err(error);
+        }
+    };
+    if let Err(error) = std::fs::rename(&temporary, &destination) {
+        let _ = std::fs::remove_dir_all(&temporary);
+        return Err(format!("cannot publish platform cache: {error}"));
+    }
+    candidate.archive = destination.join(
+        candidate
+            .archive
+            .file_name()
+            .ok_or("downloaded platform archive has no filename")?,
+    );
+    candidate.manifest = destination.join(
+        candidate
+            .manifest
+            .file_name()
+            .ok_or("downloaded platform manifest has no filename")?,
+    );
+    progress("qualified platform components ready for exact runtime manifest")?;
+    Ok(candidate)
+}
+
+pub fn latest_game_database_release(repository: &Path) -> Result<(String, String, u64), String> {
+    let owner = std::env::var("MISTER_MAGIK_GITHUB_REPOSITORY")
+        .unwrap_or_else(|_| "NigelBreslaw/MiSTer-MagiK".into());
+    let rows = published_releases(repository, &owner)?;
+    latest_game_database_release_from(&rows)
+        .map(|(tag, version)| (owner, tag, version))
+        .ok_or_else(|| "no published numbered game-database release is available".into())
+}
+
+fn published_releases(repository: &Path, owner: &str) -> Result<Vec<GithubRelease>, String> {
+    let endpoint = format!("repos/{owner}/releases?per_page=100");
+    let releases = command_text(
+        repository,
+        "gh",
+        &["api", "--paginate", "--slurp", &endpoint],
+    )?;
+    let pages: Vec<Vec<GithubApiRelease>> = serde_json::from_str(&releases)
+        .map_err(|error| format!("invalid GitHub release response: {error}"))?;
+    Ok(pages
+        .into_iter()
+        .flatten()
+        .map(|release| GithubRelease {
+            tag_name: release.tag_name,
+            is_draft: release.draft,
+        })
+        .collect())
+}
+
+fn published_candidate(
+    repository: &Path,
+    destination: &Path,
+    branch: &str,
+    head_sha: &str,
+    reused: bool,
+) -> Result<Candidate, String> {
+    let archive = find_named(destination, "mister-magik-platform-", ".zip")?;
+    let manifest = find_exact(destination, "platform-bundle-v0.2.json")?;
     let payload = verify_manifest(repository, &archive, &manifest, "published platform")?;
     let run_id = payload
         .main_run_id()
         .ok_or("published platform manifest is missing Main run_id")?;
-    progress("qualified platform components ready for exact runtime manifest")?;
     Ok(Candidate {
         run_id,
-        head_sha,
+        head_sha: head_sha.into(),
         archive,
         manifest,
-        reused: true,
-        head_branch: branch,
+        reused,
+        head_branch: branch.into(),
         bundle_id: required_manifest_value(payload.bundle_id, "bundle_id", "published platform")?,
         main_identity: required_manifest_value(
             payload.main_input_sha256,
@@ -456,6 +526,20 @@ fn latest_platform_release(rows: &[GithubRelease]) -> Option<String> {
         })
         .max_by_key(|(version, _)| *version)
         .map(|(_, tag)| tag)
+}
+
+fn latest_game_database_release_from(rows: &[GithubRelease]) -> Option<(String, u64)> {
+    rows.iter()
+        .filter(|row| !row.is_draft)
+        .filter_map(|row| {
+            let version = row
+                .tag_name
+                .strip_prefix("game-databases-v")?
+                .parse::<u64>()
+                .ok()?;
+            (version > 0).then(|| (row.tag_name.clone(), version))
+        })
+        .max_by_key(|(_, version)| *version)
 }
 
 fn command_text(repository: &Path, program: &str, args: &[&str]) -> Result<String, String> {
@@ -692,6 +776,22 @@ mod tests {
         assert_eq!(
             latest_platform_release(&rows).as_deref(),
             Some("platform-v0.8")
+        );
+    }
+
+    #[test]
+    fn latest_game_database_release_is_numeric_and_ignores_drafts() {
+        let rows: Vec<GithubRelease> = serde_json::from_value(serde_json::json!([
+            {"tagName":"game-databases-v9","isDraft":false},
+            {"tagName":"game-databases-v10","isDraft":false},
+            {"tagName":"game-databases-v99","isDraft":true},
+            {"tagName":"game-databases-v10-invalid","isDraft":false},
+            {"tagName":"platform-v0.8","isDraft":false}
+        ]))
+        .unwrap();
+        assert_eq!(
+            latest_game_database_release_from(&rows),
+            Some(("game-databases-v10".into(), 10))
         );
     }
 

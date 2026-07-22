@@ -71,6 +71,9 @@ deleted after their retained capabilities moved into the typed registry.
 
 - `scripts/deploy-rust.sh` — removed; runtime deployment is owned by `scripts/agent deliver`.
 - `scripts/deploy-platform.sh` — removed; qualified platform installation is owned by `scripts/agent deliver`.
+- `scripts/fetch-game-databases-release.sh` — removed; immutable release selection,
+  caching, download orchestration, and verified extraction are owned by the
+  Rust delivery workflow.
 
 ## Typed ARM build takeover
 
