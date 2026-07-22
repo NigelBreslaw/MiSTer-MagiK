@@ -122,3 +122,10 @@ if "$ROOT/scripts/agent" failure >/dev/null 2>&1; then
   echo "launcher accepted a failed build" >&2
   exit 1
 fi
+
+CI_ACTION="$ROOT/.github/actions/setup-agent-cli/action.yml"
+grep -q 'MISTER_AGENT_CLI_PROFILE=debug.*GITHUB_ENV' "$CI_ACTION"
+if grep -q 'RUSTUP_TOOLCHAIN=.*GITHUB_ENV' "$CI_ACTION"; then
+  echo "CI agent setup leaked its bootstrap toolchain into host validation" >&2
+  exit 1
+fi

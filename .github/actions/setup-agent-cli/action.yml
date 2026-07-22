@@ -36,9 +36,7 @@ runs:
 
     - name: Select debug agent CLI
       shell: bash
-      run: |
-        echo "MISTER_AGENT_CLI_PROFILE=debug" >> "$GITHUB_ENV"
-        echo "RUSTUP_TOOLCHAIN=${{ steps.identity.outputs.toolchain }}" >> "$GITHUB_ENV"
+      run: echo "MISTER_AGENT_CLI_PROFILE=debug" >> "$GITHUB_ENV"
 
     - name: Install Rust for a cold cache
       if: steps.cache.outputs.cache-hit != 'true'
