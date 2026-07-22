@@ -134,6 +134,10 @@ references, types, call hierarchy, hover information, and diagnostics. Resolve
 the reported semantic-tooling prerequisites before Rust work if MCP is
 unavailable.
 
+`lspi` tools may be deferred and absent from the initial visible tool list.
+Search the full tool catalog for `mcp__lspi__*` before reporting semantic
+tooling unavailable.
+
 The LSP integration is navigation-only. Never use LSP formatting, code actions,
 renames, or other write operations. Make edits through the normal repository
 tools, use `scripts/agent check` while iterating, and use `scripts/agent verify`
