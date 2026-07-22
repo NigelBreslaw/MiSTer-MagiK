@@ -10,34 +10,31 @@ import { ScreenshotPackProgressRow } from "progress.slint";
 export component CompatibilityScreen inherits Rectangle {
     property <int> s: MisterUi.scale;
 
-    background: #09070d;
+    background: CrtTheme.background;
 
     VerticalLayout {
-        padding-left: 80px * root.s;
-        padding-right: 80px * root.s;
-        padding-top: 70px * root.s;
-        padding-bottom: 70px * root.s;
-        spacing: 22px * root.s;
+        padding: MisterUi.grid;
+        spacing: MisterUi.compact-layout ? MisterUi.grid : 16px;
         alignment: center;
 
         Text {
             text: "MiSTer MagiK compatibility check failed";
             color: #ff5d73;
-            font-size: 18px * root.s;
+            font-size: MisterUi.heading-font;
             horizontal-alignment: center;
         }
 
         Text {
             text: MisterBridge.compatibility-reason;
             color: #ffd166;
-            font-size: 11px * root.s;
+            font-size: MisterUi.body-font;
             horizontal-alignment: center;
         }
 
         Text {
             text: MisterBridge.compatibility-detail;
             color: #e8e0f0;
-            font-size: 8px * root.s;
+            font-size: MisterUi.body-font;
             horizontal-alignment: center;
             wrap: word-wrap;
         }
@@ -45,7 +42,7 @@ export component CompatibilityScreen inherits Rectangle {
         Text {
             text: "The normal launcher is disabled. Diagnostics: /tmp/mister-magik";
             color: #9080a8;
-            font-size: 7px * root.s;
+            font-size: MisterUi.body-font;
             horizontal-alignment: center;
             wrap: word-wrap;
         }
@@ -54,8 +51,8 @@ export component CompatibilityScreen inherits Rectangle {
 
 export component CatalogScanPopup inherits Rectangle {
     in property <int> s;
-    property <length> scan-osd-width: 56px * s;
-    property <length> scan-horizontal-padding: 70px * s;
+    property <length> scan-osd-width: MisterUi.compact-layout ? 0px : 56px * s;
+    property <length> scan-horizontal-padding: MisterUi.compact-layout ? MisterUi.grid : 70px * s;
     property <length> scan-column-width: root.width > scan-osd-width
         ? root.width - scan-osd-width
         : 0px;
@@ -66,18 +63,18 @@ export component CatalogScanPopup inherits Rectangle {
         ? scan-content-width
         : 560px * s;
 
-    background: #0b0d14;
+    background: CrtTheme.background;
 
     HorizontalLayout {
-        OsdSideLabel { }
+        if !MisterUi.compact-layout : OsdSideLabel { }
 
         VerticalLayout {
             horizontal-stretch: 1;
             padding-left: root.scan-horizontal-padding;
             padding-right: root.scan-horizontal-padding;
-            padding-top: 82px * s;
-            padding-bottom: 76px * s;
-            spacing: 18px * s;
+            padding-top: MisterUi.compact-layout ? MisterUi.grid : 82px * s;
+            padding-bottom: MisterUi.compact-layout ? MisterUi.grid : 76px * s;
+            spacing: MisterUi.compact-layout ? MisterUi.grid : 18px * s;
             alignment: center;
             cross-axis-alignment: center;
 
@@ -87,7 +84,7 @@ export component CatalogScanPopup inherits Rectangle {
                 width: root.scan-content-width;
                 text: "MiSTer MagiK";
                 color: #06d6a0;
-                font-size: 20px * s;
+                font-size: MisterUi.heading-font;
                 horizontal-alignment: center;
             }
 
@@ -95,7 +92,7 @@ export component CatalogScanPopup inherits Rectangle {
                 width: root.scan-content-width;
                 text: MisterBridge.catalog-scan-message;
                 color: #e8e0f0;
-                font-size: 16px * s;
+                font-size: MisterUi.body-font;
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }
@@ -104,7 +101,7 @@ export component CatalogScanPopup inherits Rectangle {
                 width: root.scan-content-width;
                 text: MisterBridge.catalog-scan-title;
                 color: #d7eef8;
-                font-size: 10px * s;
+                font-size: MisterUi.body-font;
                 horizontal-alignment: center;
             }
 
@@ -112,7 +109,7 @@ export component CatalogScanPopup inherits Rectangle {
                 width: root.scan-content-width;
                 text: MisterBridge.catalog-scan-detail;
                 color: #9080a8;
-                font-size: 8px * s;
+                font-size: MisterUi.body-font;
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }
@@ -142,11 +139,11 @@ export component CatalogScanPopup inherits Rectangle {
 export component MediaProgressPopup inherits Rectangle {
     in property <int> s;
 
-    width: 560px * s;
-    height: 100px * s;
+    width: min(560px * s, MisterUi.window-width * 1px - 16px);
+    height: min(100px * s, MisterUi.window-height * 1px - 16px);
     x: MisterUi.window-width * 1px / 2 - self.width / 2;
-    y: MisterUi.window-height * 1px - self.height - 24px * s;
-    background: #0b0d14;
+    y: MisterUi.window-height * 1px - self.height - MisterUi.grid;
+    background: CrtTheme.panel;
     border-width: 1px;
     border-color: #5c4a72;
     clip: true;

@@ -898,6 +898,12 @@ const DISPLAY_MATRIX_MODES: &[DisplayMatrixMode] = &[
 static DISPLAY_MATRIX_INTERRUPTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+#[derive(Clone, Copy)]
+struct DisplayMatrixEvidence {
+    usb_video: bool,
+    screensaver_wait_secs: Option<u64>,
+}
+
 extern "C" fn display_matrix_interrupt_handler(_: libc::c_int) {
     DISPLAY_MATRIX_INTERRUPTED.store(true, std::sync::atomic::Ordering::SeqCst);
 }
@@ -1135,7 +1141,7 @@ fn display_transaction_complete(reply: &str, interrupted: bool) -> Result<bool> 
 }
 
 fn display_matrix_cli(args: &[String]) -> Result<()> {
-    let (directory, capture_usb_video) = parse_display_matrix_args(args)?;
+    let (directory, capture_usb_video, screensaver_wait_secs) = parse_display_matrix_args(args)?;
     if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
         return Err("display matrix is attended and requires an interactive terminal".into());
     }
@@ -1171,10 +1177,15 @@ fn display_matrix_cli(args: &[String]) -> Result<()> {
     let mut entries = Vec::new();
     let mut seen_hashes = std::collections::HashSet::new();
     let mut seen_usb_hashes = std::collections::HashSet::new();
+    let mut morph_port_b = false;
     let run_result = (|| -> Result<()> {
         for mode in DISPLAY_MATRIX_MODES {
             if DISPLAY_MATRIX_INTERRUPTED.load(std::sync::atomic::Ordering::SeqCst) {
                 return Err("display matrix interrupted".into());
+            }
+            if capture_usb_video && mode.id.starts_with("crt-") && !morph_port_b {
+                confirm_display_matrix_route("PORTB", "route Morph 4K to Port B")?;
+                morph_port_b = true;
             }
             let started = Instant::now();
             let session = connect(10)?;
@@ -1193,7 +1204,10 @@ fn display_matrix_cli(args: &[String]) -> Result<()> {
                 &directory,
                 &mut seen_hashes,
                 &mut seen_usb_hashes,
-                capture_usb_video,
+                DisplayMatrixEvidence {
+                    usb_video: capture_usb_video,
+                    screensaver_wait_secs,
+                },
                 started,
             );
             if let Ok((_, new_pid)) = &result {
@@ -1235,22 +1249,39 @@ fn display_matrix_cli(args: &[String]) -> Result<()> {
         Ok(())
     })();
     let restore_result = restore_display_matrix_original(&original_mode, current_pid);
+    let morph_restore_result = if morph_port_b {
+        confirm_display_matrix_route("HDMI", "restore Morph 4K to HDMI")
+    } else {
+        Ok(())
+    };
     unsafe {
         libc::signal(libc::SIGINT, previous_sigint);
     }
     write_display_matrix_manifest(&directory, &original_mode, &entries)?;
     run_result?;
     restore_result?;
+    morph_restore_result?;
     println!("{}", directory.display());
     Ok(())
 }
 
-fn parse_display_matrix_args(args: &[String]) -> Result<(&str, bool)> {
+fn confirm_display_matrix_route(token: &str, instruction: &str) -> Result<()> {
+    eprintln!("{instruction}, then type {token}:");
+    let mut acknowledgement = String::new();
+    io::stdin().read_line(&mut acknowledgement)?;
+    if acknowledgement.trim() != token {
+        return Err(format!("Morph 4K route was not confirmed with {token}").into());
+    }
+    Ok(())
+}
+
+fn parse_display_matrix_args(args: &[String]) -> Result<(&str, bool, Option<u64>)> {
     if args.first().map(String::as_str) != Some("--attended") {
         return Err("usage: mister display-matrix --attended --out DIRECTORY [--usb-video]".into());
     }
     let mut directory = None;
     let mut capture_usb_video = false;
+    let mut screensaver_wait_secs = None;
     let mut index = 1;
     while index < args.len() {
         match args[index].as_str() {
@@ -1265,6 +1296,16 @@ fn parse_display_matrix_args(args: &[String]) -> Result<(&str, bool)> {
                 capture_usb_video = true;
                 index += 1;
             }
+            "--screensaver-wait" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or("--screensaver-wait needs SECONDS")?
+                    .parse::<u64>()?;
+                if value == 0 || screensaver_wait_secs.replace(value).is_some() {
+                    return Err("--screensaver-wait must be specified once with SECONDS > 0".into());
+                }
+                index += 2;
+            }
             argument => {
                 return Err(format!("unsupported display matrix argument: {argument}").into());
             }
@@ -1273,6 +1314,7 @@ fn parse_display_matrix_args(args: &[String]) -> Result<(&str, bool)> {
     Ok((
         directory.ok_or("display matrix requires --out DIRECTORY")?,
         capture_usb_video,
+        screensaver_wait_secs,
     ))
 }
 
@@ -1282,7 +1324,7 @@ fn capture_display_matrix_mode(
     directory: &Path,
     seen_hashes: &mut std::collections::HashSet<String>,
     seen_usb_hashes: &mut std::collections::HashSet<String>,
-    capture_usb_video: bool,
+    evidence: DisplayMatrixEvidence,
     started: Instant,
 ) -> Result<(Value, i64)> {
     let session = connect(10)?;
@@ -1355,7 +1397,7 @@ fn capture_display_matrix_mode(
     if !seen_hashes.insert(sha256.clone()) {
         return Err(format!("stale or duplicate framebuffer capture for {}", mode.id).into());
     }
-    let usb_video = if capture_usb_video {
+    let usb_video = if evidence.usb_video {
         let usb_path = directory.join(format!("{}-usb-video.jpg", mode.id));
         crt_qualification::capture_usb_video_frame(&usb_path)?;
         let bytes = fs::read(&usb_path)?;
@@ -1370,8 +1412,42 @@ fn capture_display_matrix_mode(
     } else {
         None
     };
+    let screensaver = if let Some(wait_secs) = evidence.screensaver_wait_secs {
+        std::thread::sleep(Duration::from_secs(wait_secs));
+        let saver_capture = request_framebuffer_png()?;
+        validate_visible_launcher_capture(&saver_capture)?;
+        let saver_sha256 = encode_hex(&Sha256::digest(&saver_capture.png));
+        if saver_sha256 == sha256 || !seen_hashes.insert(saver_sha256.clone()) {
+            return Err(format!(
+                "screensaver did not advance to distinct content for {}",
+                mode.id
+            )
+            .into());
+        }
+        let saver_path = directory.join(format!("{}-screensaver.png", mode.id));
+        fs::write(&saver_path, &saver_capture.png)?;
+        let saver_usb = if evidence.usb_video {
+            let saver_usb_path = directory.join(format!("{}-screensaver-usb-video.jpg", mode.id));
+            crt_qualification::capture_usb_video_frame(&saver_usb_path)?;
+            let bytes = fs::read(&saver_usb_path)?;
+            let saver_usb_sha256 = encode_hex(&Sha256::digest(&bytes));
+            if bytes.len() < 1_024 || !seen_usb_hashes.insert(saver_usb_sha256.clone()) {
+                return Err(
+                    format!("invalid or stale screensaver USB Video for {}", mode.id).into(),
+                );
+            }
+            Some(json!({"path": saver_usb_path, "bytes": bytes.len(), "sha256": saver_usb_sha256}))
+        } else {
+            None
+        };
+        Some(
+            json!({"path": saver_path, "sha256": saver_sha256, "usb_video": saver_usb, "wait_secs": wait_secs}),
+        )
+    } else {
+        None
+    };
     Ok((
-        json!({"mode": mode.id, "status": "pass", "path": path, "usb_video": usb_video, "requested_output": mode.output.map(|(w,h)| format!("{w}x{h}")), "output_geometry": format!("{}x{}", output.0, output.1), "framebuffer_geometry": format!("{}x{}", framebuffer.0, framebuffer.1), "stride": stride, "capture_width": width, "capture_height": height, "bpp": bpp, "png_bytes": capture.png.len(), "sha256": sha256, "launcher_pid": ready.launcher_pid, "frames_before": frames_before, "frames_after": frames_after, "agent_elapsed_ms": capture.elapsed_ms, "elapsed_ms": started.elapsed().as_millis()}),
+        json!({"mode": mode.id, "status": "pass", "path": path, "usb_video": usb_video, "screensaver": screensaver, "requested_output": mode.output.map(|(w,h)| format!("{w}x{h}")), "output_geometry": format!("{}x{}", output.0, output.1), "framebuffer_geometry": format!("{}x{}", framebuffer.0, framebuffer.1), "stride": stride, "capture_width": width, "capture_height": height, "bpp": bpp, "png_bytes": capture.png.len(), "sha256": sha256, "launcher_pid": ready.launcher_pid, "frames_before": frames_before, "frames_after": frames_after, "agent_elapsed_ms": capture.elapsed_ms, "elapsed_ms": started.elapsed().as_millis()}),
         ready.launcher_pid,
     ))
 }
@@ -7000,15 +7076,23 @@ mod tests {
 
     #[test]
     fn display_matrix_args_enable_usb_video_without_exposing_credentials() {
-        let args = ["--attended", "--out", "/tmp/evidence", "--usb-video"].map(str::to_string);
+        let args = [
+            "--attended",
+            "--out",
+            "/tmp/evidence",
+            "--usb-video",
+            "--screensaver-wait",
+            "65",
+        ]
+        .map(str::to_string);
         assert_eq!(
             parse_display_matrix_args(&args).unwrap(),
-            ("/tmp/evidence", true)
+            ("/tmp/evidence", true, Some(65))
         );
         let args = ["--attended", "--out", "/tmp/evidence"].map(str::to_string);
         assert_eq!(
             parse_display_matrix_args(&args).unwrap(),
-            ("/tmp/evidence", false)
+            ("/tmp/evidence", false, None)
         );
         let duplicate = [
             "--attended",

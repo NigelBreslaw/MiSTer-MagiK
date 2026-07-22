@@ -10,7 +10,7 @@ export component AboutScreen inherits Rectangle {
 
     VerticalLayout {
         padding: MisterUi.grid;
-        spacing: MisterUi.grid;
+        spacing: MisterUi.compact-layout ? 0px : MisterUi.grid;
 
         CrtHeader { title: "About"; subtitle: "MiSTer MagiK"; status: ""; }
 

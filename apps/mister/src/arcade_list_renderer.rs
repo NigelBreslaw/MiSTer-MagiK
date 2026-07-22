@@ -64,10 +64,16 @@ impl ArcadeListGeometry {
     };
 
     pub(crate) fn search_for_render_w(render_w: usize) -> Self {
+        let x = if render_w <= 640 {
+            render_w * 2 / 5 + ARCADE_LIST_X * 2
+        } else {
+            render_w / 2 + ARCADE_LIST_X
+        }
+        .min(render_w.saturating_sub(1));
         Self {
-            x: render_w.saturating_sub(ARCADE_LIST_X + ARCADE_SEARCH_LIST_W),
+            x,
             y: ARCADE_SEARCH_LIST_Y,
-            width: ARCADE_SEARCH_LIST_W,
+            width: render_w.saturating_sub(x + ARCADE_LIST_X).max(1),
         }
     }
 
@@ -106,6 +112,7 @@ pub(crate) struct ArcadeListRenderer {
     last_filter_draw: Option<ArcadeFilterListDrawKey>,
     geometry: ArcadeListGeometry,
     width: usize,
+    visible_height: usize,
 }
 
 pub(crate) struct CachedArcadeRow {
@@ -183,11 +190,14 @@ impl ArcadeListRenderer {
             last_filter_draw: None,
             geometry: ArcadeListGeometry::NORMAL,
             width: ARCADE_LIST_W,
+            visible_height: ARCADE_LIST_H,
         }
     }
 
     pub(crate) fn dirty_rect(&self) -> DirtyRect {
-        self.geometry.dirty_rect()
+        let mut rect = self.geometry.dirty_rect();
+        rect.y1 = rect.y0 + self.visible_height;
+        rect
     }
 
     pub(crate) fn width(&self) -> usize {
@@ -195,6 +205,15 @@ impl ArcadeListRenderer {
     }
 
     pub(crate) fn set_geometry(&mut self, geometry: ArcadeListGeometry) {
+        self.set_geometry_for_render_h(geometry, ARCADE_LIST_Y + ARCADE_LIST_H);
+    }
+
+    pub(crate) fn set_geometry_for_render_h(
+        &mut self,
+        geometry: ArcadeListGeometry,
+        render_h: usize,
+    ) {
+        self.visible_height = render_h.saturating_sub(geometry.y + 32).min(ARCADE_LIST_H);
         if self.geometry != geometry {
             if self.width != geometry.width {
                 self.width = geometry.width;
@@ -1542,6 +1561,12 @@ mod tests {
         let search = ArcadeListGeometry::search_for_render_w(960);
         assert_eq!(search.x, 960 / 2 + ARCADE_LIST_X);
         assert_eq!(search.x + search.width, 960 - ARCADE_LIST_X);
+        for render_w in [320, 384] {
+            let search = ArcadeListGeometry::search_for_render_w(render_w);
+            assert!(search.x >= render_w * 2 / 5);
+            assert!(search.x + search.width <= render_w);
+            assert!(search.width > 0);
+        }
         assert_eq!(
             ArcadeListGeometry::search_for_render_w(1280),
             ArcadeListGeometry {
@@ -1550,6 +1575,24 @@ mod tests {
                 width: ARCADE_SEARCH_LIST_W,
             }
         );
+    }
+
+    #[test]
+    fn direct_layer_dirty_rect_is_bounded_at_crt_heights() {
+        let mut renderer = ArcadeListRenderer::new();
+        for (width, height) in [(320, 240), (384, 288)] {
+            renderer
+                .set_geometry_for_render_h(ArcadeListGeometry::normal_for_render_w(width), height);
+            let rect = renderer.dirty_rect();
+            assert!(rect.x1 <= width);
+            assert!(rect.y1 <= height - 32);
+
+            renderer
+                .set_geometry_for_render_h(ArcadeListGeometry::search_for_render_w(width), height);
+            let rect = renderer.dirty_rect();
+            assert!(rect.x1 <= width);
+            assert!(rect.y1 <= height - 32);
+        }
     }
 
     #[test]

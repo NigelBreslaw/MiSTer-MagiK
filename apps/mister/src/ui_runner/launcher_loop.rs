@@ -4256,11 +4256,14 @@ pub(super) fn run_launcher_loop(
         let custom_draw_start = Instant::now();
         let arcade_list_update_start = Instant::now();
         let arcade_list_rect = if wants_arcade_list && composition_decision.allow_arcade_list_blit {
-            arcade_list_renderer.set_geometry(if arcade_search_active {
-                ArcadeListGeometry::search_for_render_w(ui.render_w())
-            } else {
-                ArcadeListGeometry::normal_for_render_w(ui.render_w())
-            });
+            arcade_list_renderer.set_geometry_for_render_h(
+                if arcade_search_active {
+                    ArcadeListGeometry::search_for_render_w(ui.render_w())
+                } else {
+                    ArcadeListGeometry::normal_for_render_w(ui.render_w())
+                },
+                ui.render_h(),
+            );
             let force_arcade_redraw = arcade_list_needs_forced_redraw(
                 &arcade_list_renderer,
                 this_rect,
