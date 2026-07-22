@@ -8,7 +8,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FIXTURE="$(mktemp -d "${TMPDIR:-/tmp}/agent-launcher.XXXXXX")"
 trap 'rm -rf "$FIXTURE"' EXIT
 
-mkdir -p "$FIXTURE/project/src" "$FIXTURE/bin" "$FIXTURE/target/debug"
+mkdir -p "$FIXTURE/project/src" "$FIXTURE/bin" "$FIXTURE/target/release"
 touch "$FIXTURE/project/Cargo.toml" "$FIXTURE/project/Cargo.lock" "$FIXTURE/project/src/main.rs"
 
 cat >"$FIXTURE/bin/rustc" <<'EOF'
@@ -19,6 +19,7 @@ cat >"$FIXTURE/bin/cargo" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 count_file="$FIXTURE_BUILD_COUNT"
+printf '%s\n' "$*" >"$FIXTURE_CARGO_ARGS"
 count=0
 [[ ! -f "$count_file" ]] || count="$(<"$count_file")"
 printf '%s\n' "$((count + 1))" >"$count_file"
@@ -33,13 +34,15 @@ chmod +x "$FIXTURE/bin/rustc" "$FIXTURE/bin/cargo"
 
 export PATH="$FIXTURE/bin:$PATH"
 export FIXTURE_BUILD_COUNT="$FIXTURE/build-count"
+export FIXTURE_CARGO_ARGS="$FIXTURE/cargo-args"
 export MISTER_AGENT_CLI_MANIFEST="$FIXTURE/project/Cargo.toml"
-export MISTER_AGENT_CLI_BINARY="$FIXTURE/target/debug/agent-cli"
+export MISTER_AGENT_CLI_BINARY="$FIXTURE/target/release/agent-cli"
 export CARGO_TARGET_DIR="$FIXTURE/target"
 
 output="$($ROOT/scripts/agent plan)"
 [[ "$output" == "agent:plan" ]]
 [[ "$(<"$FIXTURE_BUILD_COUNT")" == 1 ]]
+[[ "$(<"$FIXTURE_CARGO_ARGS")" == "build --release --locked --quiet --manifest-path $MISTER_AGENT_CLI_MANIFEST" ]]
 
 "$ROOT/scripts/agent" check >/dev/null
 [[ "$(<"$FIXTURE_BUILD_COUNT")" == 1 ]]

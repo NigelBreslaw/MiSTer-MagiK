@@ -22,6 +22,10 @@ build intents exist for CI compatibility, not as a public flag matrix. `commit`
 is the only lifecycle command that changes Git state;
 `deliver` never commits or pushes.
 
+The launcher builds and runs `agent-cli` with Cargo's release profile. Explicit
+manifest, target-directory, and binary overrides remain available for tests and
+specialized host environments.
+
 Device operations use `DeviceClient` and closed `DeviceRequest` variants.
 The separate Rust `mister` binary remains available to humans for fixed operator
 operations, but `agent-cli` never invokes it as a subprocess.
