@@ -489,20 +489,8 @@ fn reuse_verified_cache(
 }
 
 fn extract_game_databases(repository: &Path, release: &Path, output: &Path) -> AgentResult<()> {
-    run_bounded(
-        repository,
-        "/usr/bin/python3",
-        &[
-            repository
-                .join("scripts/release/databases/game-databases-bundle.py")
-                .display()
-                .to_string(),
-            "extract-release".into(),
-            release.display().to_string(),
-            "--output".into(),
-            output.display().to_string(),
-        ],
-    )
+    let _ = repository;
+    crate::game_databases::extract_release(release, output).map(|_| ())
 }
 
 fn run_bounded(repository: &Path, program: &str, args: &[String]) -> AgentResult<()> {

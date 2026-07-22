@@ -16,6 +16,7 @@ pub mod doctor;
 pub mod error;
 pub mod evidence;
 pub mod executor;
+pub mod game_databases;
 pub mod git;
 pub mod model;
 pub mod planner;

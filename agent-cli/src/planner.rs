@@ -109,11 +109,15 @@ fn add_path_operations(
         || path == Path::new("scripts/rust-analyzer")
         || path == Path::new("apps/mister/rust-toolchain.toml")
     {
-        add(op(
+        add(cargo(
             "host.doctor-tests",
             "Test host doctor",
-            "python3",
-            &["scripts/tests/test-doctor.py"],
+            &[
+                "test",
+                "--manifest-path",
+                "agent-cli/Cargo.toml",
+                "doctor::tests",
+            ],
             "semantic tooling changed → doctor contract",
         ));
     }
