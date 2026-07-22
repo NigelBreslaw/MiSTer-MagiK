@@ -133,6 +133,7 @@ pub enum Intent {
         output: PathBuf,
         main: PathBuf,
         gui: PathBuf,
+        manager: PathBuf,
         scanout_module: PathBuf,
         scanout_metadata: PathBuf,
         latch_rbf: PathBuf,

@@ -461,6 +461,7 @@ fn add_path_operations(
     );
     add_crate(path, "crates/agent-protocol", "agent-protocol", depth, out);
     add_crate(path, "crates/media-contract", "media-contract", depth, out);
+    add_crate(path, "crates/mister-ini", "mister-ini", depth, out);
     add_crate(
         path,
         "mister/platform/runtime",
@@ -484,6 +485,7 @@ fn add_path_operations(
     );
     add_crate(path, "mister/tools/host", "mister-host", depth, out);
     add_crate(path, "mister/tools/agent", "mister-agent", depth, out);
+    add_crate(path, "mister/tools/manager", "mister-manager", depth, out);
 }
 
 fn add_script_operations(
@@ -536,6 +538,38 @@ fn add_script_operations(
             BuiltinOperation::DistributionWorkflow,
             "packaging tooling changed",
         ));
+    }
+    if text.ends_with("MiSTer-MagiK.sh") || text.ends_with("test-mister-magik-installer.sh") {
+        add(with_inputs(
+            cargo(
+                "mister-manager.host-binary",
+                "Build host installer manager fixture",
+                &[
+                    "build",
+                    "--manifest-path",
+                    "mister/tools/manager/Cargo.toml",
+                    "--bin",
+                    "mister-magik-manager",
+                ],
+                "installer lifecycle fixture requires the host manager binary",
+            ),
+            &["mister/tools/manager"],
+        ));
+        let mut lifecycle = with_inputs(
+            op_owned(
+                "scripts.installer-lifecycle",
+                "Test installer lifecycle",
+                "bash",
+                vec!["scripts/tests/test-mister-magik-installer.sh".into()],
+                "installer or its lifecycle fixture changed",
+            ),
+            &[
+                "scripts/MiSTer-MagiK.sh",
+                "scripts/tests/test-mister-magik-installer.sh",
+            ],
+        );
+        lifecycle.phase = WorkflowPhase::Expensive;
+        add(lifecycle);
     }
 }
 

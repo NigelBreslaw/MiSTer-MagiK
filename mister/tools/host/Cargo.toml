@@ -22,6 +22,7 @@ flate2 = "1"
 lz4_flex = "0.14.0"
 mister-magik-catalog = { path = "../../../crates/catalog" }
 mister-magik-media-contract = { path = "../../../crates/media-contract" }
+mister-magik-ini = { path = "../../../crates/mister-ini" }
 mister-magik-agent-protocol = { path = "../../../crates/agent-protocol" }
 quick-xml = "0.41"
 rusqlite = { version = "0.40.0", default-features = false, features = ["bundled", "modern_sqlite"] }

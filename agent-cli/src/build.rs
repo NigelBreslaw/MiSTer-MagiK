@@ -44,6 +44,7 @@ pub enum BuildCommand {
     ValidateLauncher,
     ValidateLibrary,
     DeviceAgent,
+    ManagerDevice,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -55,6 +56,7 @@ pub enum BuildRecipe {
     ValidateLauncher,
     ValidateLibrary,
     DeviceAgent,
+    ManagerDevice,
 }
 
 impl From<BuildCommand> for BuildRecipe {
@@ -66,6 +68,7 @@ impl From<BuildCommand> for BuildRecipe {
             BuildCommand::ValidateLauncher => Self::ValidateLauncher,
             BuildCommand::ValidateLibrary => Self::ValidateLibrary,
             BuildCommand::DeviceAgent => Self::DeviceAgent,
+            BuildCommand::ManagerDevice => Self::ManagerDevice,
         }
     }
 }
@@ -75,6 +78,7 @@ impl From<BuildCommand> for BuildRecipe {
 pub enum BuildTarget {
     Runtime,
     DeviceAgent,
+    Manager,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -171,6 +175,17 @@ impl BuildSpec {
                 UiScope::All,
                 PathBuf::from(
                     "mister/tools/agent/target/armv7-unknown-linux-gnueabihf/release/mister-magik-agent",
+                ),
+                false,
+            ),
+            BuildRecipe::ManagerDevice => (
+                BuildTarget::Manager,
+                BuildMode::Build,
+                "release",
+                Vec::new(),
+                UiScope::All,
+                PathBuf::from(
+                    "mister/tools/manager/target/armv7-unknown-linux-gnueabihf/release/mister-magik-manager",
                 ),
                 false,
             ),
@@ -390,6 +405,9 @@ impl<'a> ProcessBuildActions<'a> {
         let target_dir = match spec.target {
             BuildTarget::DeviceAgent => {
                 PathBuf::from("/private/tmp/mister-magik-agent-apple-container-target")
+            }
+            BuildTarget::Manager => {
+                PathBuf::from("/private/tmp/mister-magik-manager-apple-container-target")
             }
             _ => PathBuf::from("/private/tmp/mister-magik-apple-container-target"),
         };
@@ -862,7 +880,7 @@ fn cargo_args(spec: &BuildSpec) -> Vec<OsString> {
         args.extend(["--profile".into(), spec.profile.into()]);
     }
     match spec.target {
-        BuildTarget::Runtime | BuildTarget::DeviceAgent => {}
+        BuildTarget::Runtime | BuildTarget::DeviceAgent | BuildTarget::Manager => {}
     }
     if spec.mode == BuildMode::CheckLibrary {
         args.extend(["--lib".into(), "--no-default-features".into()]);
@@ -876,6 +894,7 @@ fn host_workdir(target: BuildTarget) -> &'static str {
     match target {
         BuildTarget::Runtime => "apps/mister",
         BuildTarget::DeviceAgent => "mister/tools/agent",
+        BuildTarget::Manager => "mister/tools/manager",
     }
 }
 
@@ -883,6 +902,7 @@ fn container_workdir(target: BuildTarget) -> &'static str {
     match target {
         BuildTarget::Runtime => "/project/apps/mister",
         BuildTarget::DeviceAgent => "/project/mister/tools/agent",
+        BuildTarget::Manager => "/project/mister/tools/manager",
     }
 }
 
@@ -890,6 +910,7 @@ fn lockfile(target: BuildTarget) -> &'static str {
     match target {
         BuildTarget::Runtime => "apps/mister/Cargo.lock",
         BuildTarget::DeviceAgent => "mister/tools/agent/Cargo.lock",
+        BuildTarget::Manager => "mister/tools/manager/Cargo.lock",
     }
 }
 

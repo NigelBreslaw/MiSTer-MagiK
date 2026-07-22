@@ -148,7 +148,7 @@ pub enum PlatformBundleCommand {
         kernel_source: String,
         #[arg(long)]
         release_version: u64,
-        #[arg(long)]
+        #[arg(long, id = "manifest_output")]
         output: PathBuf,
         #[arg(long)]
         main_workflow: Option<String>,
@@ -272,12 +272,14 @@ pub enum GameDatabaseCommand {
 #[derive(Debug, Subcommand)]
 pub enum PlatformManifestCommand {
     Generate {
-        #[arg(long)]
+        #[arg(long, id = "platform_manifest_output")]
         output: PathBuf,
         #[arg(long)]
         main: PathBuf,
         #[arg(long)]
         gui: PathBuf,
+        #[arg(long)]
+        manager: PathBuf,
         #[arg(long)]
         scanout_module: PathBuf,
         #[arg(long)]
@@ -434,6 +436,7 @@ impl Cli {
                         output,
                         main,
                         gui,
+                        manager,
                         scanout_module,
                         scanout_metadata,
                         latch_rbf,
@@ -445,6 +448,7 @@ impl Cli {
                         output,
                         main,
                         gui,
+                        manager,
                         scanout_module,
                         scanout_metadata,
                         latch_rbf,
@@ -588,6 +592,7 @@ mod tests {
             "validate-launcher",
             "validate-library",
             "device-agent",
+            "manager-device",
         ] {
             assert!(Cli::try_parse_from(["agent-cli", "build", intent]).is_ok());
         }

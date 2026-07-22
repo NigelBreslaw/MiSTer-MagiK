@@ -51,6 +51,40 @@ checkOnSave = false
 
 [servers.initialize_options.files]
 excludeDirs = ["target"]
+
+[[servers]]
+id = "mister-ini"
+kind = "rust_analyzer"
+extensions = ["rs"]
+root_dir = "crates/mister-ini"
+cwd = "."
+command = "scripts/rust-analyzer"
+initialize_timeout_ms = 30000
+request_timeout_ms = 120000
+warmup_timeout_ms = 30000
+
+[servers.initialize_options]
+checkOnSave = false
+
+[servers.initialize_options.files]
+excludeDirs = ["target"]
+
+[[servers]]
+id = "mister-manager"
+kind = "rust_analyzer"
+extensions = ["rs"]
+root_dir = "mister/tools/manager"
+cwd = "."
+command = "scripts/rust-analyzer"
+initialize_timeout_ms = 30000
+request_timeout_ms = 120000
+warmup_timeout_ms = 30000
+
+[servers.initialize_options]
+checkOnSave = false
+
+[servers.initialize_options.files]
+excludeDirs = ["target"]
 [[servers]]
 id = "desktop"
 kind = "rust_analyzer"

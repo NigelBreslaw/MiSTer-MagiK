@@ -235,6 +235,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "mister-magik-ini"
+version = "0.1.0"
+
+[[package]]
 name = "mister-magik-media-contract"
 version = "0.1.0"
 dependencies = [
@@ -249,6 +253,7 @@ dependencies = [
  "lz4_flex",
  "mister-magik-agent-protocol",
  "mister-magik-catalog",
+ "mister-magik-ini",
  "mister-magik-media-contract",
  "quick-xml",
  "rusqlite",

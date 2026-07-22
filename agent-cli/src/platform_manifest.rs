@@ -13,12 +13,14 @@ const FIELDS: &[&str] = &[
     "format",
     "main_path",
     "gui_path",
+    "manager_path",
     "scanout_module_path",
     "scanout_metadata_path",
     "latch_rbf_path",
     "latch_metadata_path",
     "main_sha256",
     "gui_sha256",
+    "manager_sha256",
     "scanout_module_sha256",
     "scanout_metadata_sha256",
     "latch_rbf_sha256",
@@ -47,7 +49,7 @@ impl Layout {
         }
     }
 
-    fn paths(self) -> [(&'static str, &'static str); 6] {
+    fn paths(self) -> [(&'static str, &'static str); 7] {
         let main = match self {
             Self::Public => "/media/fat/MiSTer_MagiK",
             Self::Development => "/media/fat/MiSTer_MagiKDev",
@@ -60,6 +62,14 @@ impl Layout {
                     "/media/fat/mister-magik/mister-magik-fb"
                 } else {
                     "/media/fat/mister-magik-dev/mister-magik-fb"
+                },
+            ),
+            (
+                "manager",
+                if self == Self::Public {
+                    "/media/fat/mister-magik/mister-magik-manager"
+                } else {
+                    "/media/fat/mister-magik-dev/mister-magik-manager"
                 },
             ),
             (
@@ -101,6 +111,7 @@ impl Layout {
 pub struct Artifacts {
     pub main: PathBuf,
     pub gui: PathBuf,
+    pub manager: PathBuf,
     pub scanout_module: PathBuf,
     pub scanout_metadata: PathBuf,
     pub latch_rbf: PathBuf,
@@ -108,10 +119,11 @@ pub struct Artifacts {
 }
 
 impl Artifacts {
-    fn values(&self) -> [(&'static str, &Path); 6] {
+    fn values(&self) -> [(&'static str, &Path); 7] {
         [
             ("main", &self.main),
             ("gui", &self.gui),
+            ("manager", &self.manager),
             ("scanout_module", &self.scanout_module),
             ("scanout_metadata", &self.scanout_metadata),
             ("latch_rbf", &self.latch_rbf),
@@ -200,6 +212,7 @@ pub fn verify(manifest: &Path, artifact_root: Option<&Path>, layout: Layout) -> 
     let artifacts = Artifacts {
         main: artifact("main")?,
         gui: artifact("gui")?,
+        manager: artifact("manager")?,
         scanout_module: artifact("scanout_module")?,
         scanout_metadata: artifact("scanout_metadata")?,
         latch_rbf: artifact("latch_rbf")?,

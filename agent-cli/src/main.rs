@@ -285,6 +285,7 @@ fn dispatch(
             output,
             main,
             gui,
+            manager,
             scanout_module,
             scanout_metadata,
             latch_rbf,
@@ -304,6 +305,7 @@ fn dispatch(
                 &agent_cli::platform_manifest::Artifacts {
                     main: main.clone(),
                     gui: gui.clone(),
+                    manager: manager.clone(),
                     scanout_module: scanout_module.clone(),
                     scanout_metadata: scanout_metadata.clone(),
                     latch_rbf: latch_rbf.clone(),

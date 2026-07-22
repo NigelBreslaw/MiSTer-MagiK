@@ -378,6 +378,10 @@ fn prepare_stage(
         copy(extracted.join(from), stage.join(to))?;
     }
     copy(repository.join(gui_artifact), stage.join("mister-magik-fb"))?;
+    copy(
+        repository.join("mister/tools/manager/target/armv7-unknown-linux-gnueabihf/release/mister-magik-manager"),
+        stage.join("mister-magik-manager"),
+    )?;
     let databases = stage.join("databases");
     prepare_game_databases(repository, &databases)?;
     for name in [
@@ -396,6 +400,7 @@ fn prepare_stage(
         &crate::platform_manifest::Artifacts {
             main: stage.join("MiSTer_MagiKDev"),
             gui: stage.join("mister-magik-fb"),
+            manager: stage.join("mister-magik-manager"),
             scanout_module: stage.join("mister_magik_scanout_slots.ko"),
             scanout_metadata: stage.join("mister_magik_scanout_slots.metadata.txt"),
             latch_rbf: stage.join("fpga/menu-magik-vblank-latch.rbf"),

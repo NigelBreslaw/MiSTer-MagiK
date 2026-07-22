@@ -19,6 +19,7 @@ pub enum Component {
     Fpga,
     HostTool,
     DeviceAgent,
+    Manager,
     Scripts,
     Workflow,
     Documentation,
@@ -38,7 +39,7 @@ impl Component {
     #[must_use]
     pub const fn deployment_impact(self) -> DeploymentImpact {
         match self {
-            Self::MisterApp | Self::Catalog | Self::CoreCrate | Self::Runtime => {
+            Self::MisterApp | Self::Catalog | Self::CoreCrate | Self::Runtime | Self::Manager => {
                 DeploymentImpact::Runtime
             }
             Self::PlatformContracts | Self::Kernel | Self::Fpga => DeploymentImpact::Platform,
@@ -99,6 +100,8 @@ pub fn classify(path: &Path) -> Option<Component> {
         Some(Component::HostTool)
     } else if path.starts_with("mister/tools/agent") {
         Some(Component::DeviceAgent)
+    } else if path.starts_with("mister/tools/manager") {
+        Some(Component::Manager)
     } else if path.starts_with("scripts") {
         Some(Component::Scripts)
     } else if path.starts_with(".github") || path.starts_with(".githooks") {

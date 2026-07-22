@@ -1,0 +1,404 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! Loss-minimizing mutation of MiSTer.ini files.
+
+use std::fmt;
+
+pub const MAX_INI_BYTES: usize = 1024 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Error {
+    TooLarge { bytes: usize },
+    InvalidUtf8,
+    InteriorNul,
+    UnsupportedOutputMode(String),
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TooLarge { bytes } => {
+                write!(formatter, "MiSTer.ini is too large ({bytes} bytes)")
+            }
+            Self::InvalidUtf8 => formatter.write_str("MiSTer.ini is not valid UTF-8"),
+            Self::InteriorNul => formatter.write_str("MiSTer.ini contains a NUL byte"),
+            Self::UnsupportedOutputMode(mode) => {
+                write!(formatter, "unsupported output mode: {mode}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Document {
+    lines: Vec<String>,
+    newline: &'static str,
+    final_newline: bool,
+}
+
+impl Document {
+    pub fn parse(input: &[u8]) -> Result<Self, Error> {
+        if input.len() > MAX_INI_BYTES {
+            return Err(Error::TooLarge { bytes: input.len() });
+        }
+        if input.contains(&0) {
+            return Err(Error::InteriorNul);
+        }
+        let text = std::str::from_utf8(input).map_err(|_| Error::InvalidUtf8)?;
+        let newline = if text.contains("\r\n") { "\r\n" } else { "\n" };
+        let final_newline = text.ends_with('\n');
+        let lines = text
+            .lines()
+            .map(|line| line.strip_suffix('\r').unwrap_or(line).to_string())
+            .collect();
+        Ok(Self {
+            lines,
+            newline,
+            final_newline,
+        })
+    }
+
+    pub fn effective_value(&self, section: &str, key: &str) -> Option<String> {
+        let mut current = String::new();
+        let mut value = None;
+        for line in &self.lines {
+            if let Some(name) = section_name(line) {
+                current = name;
+            } else if current.eq_ignore_ascii_case(section) && active_key_eq(line, key) {
+                value = assignment_value(line);
+            }
+        }
+        value
+    }
+
+    pub fn active_count(&self, section: &str, key: &str) -> usize {
+        let mut current = String::new();
+        let mut count = 0;
+        for line in &self.lines {
+            if let Some(name) = section_name(line) {
+                current = name;
+            } else if current.eq_ignore_ascii_case(section) && active_key_eq(line, key) {
+                count += 1;
+            }
+        }
+        count
+    }
+
+    pub fn set(&mut self, section: &str, key: &str, value: &str) {
+        let mut current = String::new();
+        let mut first = None;
+        let mut saw_section = false;
+        let mut insert_at = None;
+
+        for (index, line) in self.lines.iter().enumerate() {
+            if let Some(name) = section_name(line) {
+                if current.eq_ignore_ascii_case(section) {
+                    insert_at = Some(index);
+                }
+                current = name;
+                saw_section |= current.eq_ignore_ascii_case(section);
+            } else if current.eq_ignore_ascii_case(section) && active_key_eq(line, key) {
+                first.get_or_insert(index);
+            }
+        }
+        if current.eq_ignore_ascii_case(section) {
+            insert_at = Some(self.lines.len());
+        }
+
+        if let Some(first_index) = first {
+            self.lines[first_index] = replace_assignment_value(&self.lines[first_index], value);
+            let mut current = String::new();
+            for index in 0..self.lines.len() {
+                if let Some(name) = section_name(&self.lines[index]) {
+                    current = name;
+                } else if index != first_index
+                    && current.eq_ignore_ascii_case(section)
+                    && active_key_eq(&self.lines[index], key)
+                {
+                    self.lines[index] = format!(";{}", self.lines[index]);
+                }
+            }
+            return;
+        }
+
+        if saw_section {
+            self.lines.insert(
+                insert_at.unwrap_or(self.lines.len()),
+                format!("{key}={value}"),
+            );
+        } else {
+            if self
+                .lines
+                .last()
+                .is_some_and(|line| !line.trim().is_empty())
+            {
+                self.lines.push(String::new());
+            }
+            self.lines.push(format!("[{section}]"));
+            self.lines.push(format!("{key}={value}"));
+        }
+    }
+
+    pub fn remove(&mut self, section: &str, key: &str, reason: &str) {
+        let mut current = String::new();
+        for line in &mut self.lines {
+            if let Some(name) = section_name(line) {
+                current = name;
+            } else if current.eq_ignore_ascii_case(section) && active_key_eq(line, key) {
+                *line = format!(";{line} ; {reason}");
+            }
+        }
+    }
+
+    pub fn comment_if_value(&mut self, section: &str, key: &str, values: &[&str], reason: &str) {
+        let mut current = String::new();
+        for line in &mut self.lines {
+            if let Some(name) = section_name(line) {
+                current = name;
+            } else if current.eq_ignore_ascii_case(section)
+                && active_key_eq(line, key)
+                && assignment_value(line).is_some_and(|value| {
+                    values
+                        .iter()
+                        .any(|expected| value.eq_ignore_ascii_case(expected))
+                })
+            {
+                *line = format!(";{line} ; {reason}");
+            }
+        }
+    }
+
+    pub fn ensure_section_after(&mut self, earlier: &str, later: &str) {
+        let Some(earlier_range) = section_range(&self.lines, earlier) else {
+            return;
+        };
+        let Some(later_range) = section_range(&self.lines, later) else {
+            return;
+        };
+        if earlier_range.start < later_range.start {
+            return;
+        }
+        let later_len = later_range.end - later_range.start;
+        let moved: Vec<_> = self.lines.drain(later_range).collect();
+        let insertion = earlier_range.end.saturating_sub(later_len);
+        self.lines.splice(insertion..insertion, moved);
+    }
+
+    pub fn render(&self) -> Vec<u8> {
+        let mut output = self.lines.join(self.newline);
+        if self.final_newline {
+            output.push_str(self.newline);
+        }
+        output.into_bytes()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OutputMode {
+    Auto,
+    Hdmi,
+    Crt240p60,
+    Crt288p50,
+    Crt480p60,
+    Crt576p50,
+}
+
+impl OutputMode {
+    pub fn parse(value: &str) -> Result<Self, Error> {
+        match value {
+            "auto" => Ok(Self::Auto),
+            "hdmi" => Ok(Self::Hdmi),
+            "crt-240p60" => Ok(Self::Crt240p60),
+            "crt-288p50" => Ok(Self::Crt288p50),
+            "crt-480p60" => Ok(Self::Crt480p60),
+            "crt-576p50" => Ok(Self::Crt576p50),
+            other => Err(Error::UnsupportedOutputMode(other.to_string())),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Hdmi => "hdmi",
+            Self::Crt240p60 => "crt-240p60",
+            Self::Crt288p50 => "crt-288p50",
+            Self::Crt480p60 => "crt-480p60",
+            Self::Crt576p50 => "crt-576p50",
+        }
+    }
+
+    pub fn settings(self) -> (&'static str, &'static str, &'static str) {
+        match self {
+            Self::Auto => ("2", "0", "0"),
+            Self::Hdmi => ("0", "0", "0"),
+            Self::Crt240p60 => ("1", "0", "0"),
+            Self::Crt288p50 => ("1", "1", "0"),
+            Self::Crt480p60 => ("1", "0", "1"),
+            Self::Crt576p50 => ("1", "1", "1"),
+        }
+    }
+
+    pub fn is_31khz(self) -> bool {
+        matches!(self, Self::Crt480p60 | Self::Crt576p50)
+    }
+}
+
+pub fn apply_install(document: &mut Document, mode: OutputMode) {
+    let (direct_video, menu_pal, forced_scandoubler) = mode.settings();
+    document.set("MiSTer", "main", "MiSTer_MagiK");
+    document.set("Menu", "direct_video", direct_video);
+    document.set("Menu", "menu_pal", menu_pal);
+    document.set("Menu", "forced_scandoubler", forced_scandoubler);
+}
+
+pub fn apply_restore(document: &mut Document, backup: Option<&Document>) {
+    for (section, key) in [
+        ("MiSTer", "main"),
+        ("Menu", "direct_video"),
+        ("Menu", "menu_pal"),
+        ("Menu", "forced_scandoubler"),
+    ] {
+        if let Some(value) = backup.and_then(|source| source.effective_value(section, key)) {
+            document.set(section, key, &value);
+        } else if backup.is_some() {
+            document.remove(section, key, "MiSTer MagiK restored absent value");
+        } else if section == "MiSTer" && key == "main" {
+            document.set(section, key, "MiSTer");
+        }
+    }
+}
+
+fn section_name(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.starts_with(';') || trimmed.starts_with('#') || !trimmed.starts_with('[') {
+        return None;
+    }
+    let end = trimmed.find(']')?;
+    Some(trimmed[1..end].trim().to_string())
+}
+
+fn active_key_eq(line: &str, expected: &str) -> bool {
+    let trimmed = line.trim_start();
+    if trimmed.is_empty() || trimmed.starts_with(';') || trimmed.starts_with('#') {
+        return false;
+    }
+    trimmed
+        .split_once('=')
+        .is_some_and(|(key, _)| key.trim().eq_ignore_ascii_case(expected))
+}
+
+fn assignment_value(line: &str) -> Option<String> {
+    Some(
+        line.split_once('=')?
+            .1
+            .split([';', '#'])
+            .next()?
+            .trim()
+            .to_string(),
+    )
+}
+
+fn replace_assignment_value(line: &str, value: &str) -> String {
+    let Some(eq) = line.find('=') else {
+        return line.to_string();
+    };
+    let after_eq = &line[eq + 1..];
+    let value_start = after_eq
+        .find(|character: char| !character.is_whitespace())
+        .unwrap_or(after_eq.len());
+    let value_and_comment = &after_eq[value_start..];
+    let comment = value_and_comment.find([';', '#']).map_or("", |position| {
+        let before = &value_and_comment[..position];
+        let whitespace = before.trim_end().len();
+        &value_and_comment[whitespace..]
+    });
+    format!("{}{}{}", &line[..eq + 1 + value_start], value, comment)
+}
+
+fn section_range(lines: &[String], section: &str) -> Option<std::ops::Range<usize>> {
+    let start = lines.iter().position(|line| {
+        section_name(line).is_some_and(|name| name.eq_ignore_ascii_case(section))
+    })?;
+    let end = lines[start + 1..]
+        .iter()
+        .position(|line| section_name(line).is_some())
+        .map(|offset| start + 1 + offset)
+        .unwrap_or(lines.len());
+    Some(start..end)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn effective_value_uses_last_active_assignment_across_repeated_sections() {
+        let document =
+            Document::parse(b"[MiSTer]\nmain=First\n[Menu]\nx=1\n[mister]\nMAIN=Last ; note\n")
+                .unwrap();
+        assert_eq!(
+            document.effective_value("MiSTer", "main").as_deref(),
+            Some("Last")
+        );
+    }
+
+    #[test]
+    fn set_preserves_first_context_and_comments_later_duplicates() {
+        let mut document = Document::parse(
+            b"[MiSTer]\r\n MAIN = Old ; first\r\nfoo=keep\r\n[mister]\r\nmain=Later # context\r\n",
+        )
+        .unwrap();
+        document.set("MiSTer", "main", "MiSTer_MagiK");
+        assert_eq!(document.active_count("MiSTer", "main"), 1);
+        assert_eq!(
+            document.effective_value("MiSTer", "main").as_deref(),
+            Some("MiSTer_MagiK")
+        );
+        assert_eq!(document.render(), b"[MiSTer]\r\n MAIN = MiSTer_MagiK ; first\r\nfoo=keep\r\n[mister]\r\n;main=Later # context\r\n");
+    }
+
+    #[test]
+    fn install_is_idempotent_and_deduplicates_every_owned_key() {
+        let input = b"[MiSTer]\nmain=MiSTer\nmain=Other\n[Menu]\ndirect_video=9\ndirect_video=8\nmenu_pal=9\nforced_scandoubler=9\ncustom=keep\n";
+        let mut once = Document::parse(input).unwrap();
+        apply_install(&mut once, OutputMode::Auto);
+        let rendered = once.render();
+        let mut twice = Document::parse(&rendered).unwrap();
+        apply_install(&mut twice, OutputMode::Auto);
+        assert_eq!(twice.render(), rendered);
+        for (section, key) in [
+            ("MiSTer", "main"),
+            ("Menu", "direct_video"),
+            ("Menu", "menu_pal"),
+            ("Menu", "forced_scandoubler"),
+        ] {
+            assert_eq!(twice.active_count(section, key), 1);
+        }
+        assert!(String::from_utf8(rendered).unwrap().contains("custom=keep"));
+    }
+
+    #[test]
+    fn restore_uses_backup_values_without_losing_later_user_lines() {
+        let mut live = Document::parse(b"[MiSTer]\nmain=MiSTer_MagiK\n[Menu]\ndirect_video=2\nmenu_pal=0\nforced_scandoubler=0\nuser=keep\n").unwrap();
+        let backup = Document::parse(b"[MiSTer]\nmain=Other\n[Menu]\ndirect_video=1\n").unwrap();
+        apply_restore(&mut live, Some(&backup));
+        let output = String::from_utf8(live.render()).unwrap();
+        assert!(output.contains("main=Other"));
+        assert!(output.contains("direct_video=1"));
+        assert!(output.contains(";menu_pal=0 ; MiSTer MagiK restored absent value"));
+        assert!(output.contains("user=keep"));
+    }
+
+    #[test]
+    fn hostile_encodings_are_rejected() {
+        assert_eq!(Document::parse(b"a=\0b"), Err(Error::InteriorNul));
+        assert_eq!(Document::parse(&[0xff]), Err(Error::InvalidUtf8));
+        assert!(matches!(
+            Document::parse(&vec![b'x'; MAX_INI_BYTES + 1]),
+            Err(Error::TooLarge { .. })
+        ));
+    }
+}

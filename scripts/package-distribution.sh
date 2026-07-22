@@ -8,12 +8,14 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEFAULT_BIN="$ROOT/apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
 DEFAULT_INSTALLER="$ROOT/scripts/MiSTer-MagiK.sh"
+DEFAULT_MANAGER="$ROOT/mister/tools/manager/target/armv7-unknown-linux-gnueabihf/release/mister-magik-manager"
 
 BIN="$DEFAULT_BIN"
 GAME_DATABASES_RELEASE_DIR=""
 MAME_SQLITE=""
 HBMAME_SQLITE=""
 INSTALLER="$DEFAULT_INSTALLER"
+MANAGER="$DEFAULT_MANAGER"
 ASSET_PACK=""
 MAIN_BIN=""
 MAIN_SOURCE_REVISION=""
@@ -45,6 +47,8 @@ Options:
                        its archive, manifest, and SHA256SUMS (required).
   --installer PATH     MiSTer Scripts menu installer.
                        Default: $DEFAULT_INSTALLER
+  --manager PATH       ARM installer lifecycle manager.
+                       Default: $DEFAULT_MANAGER
   --asset-pack PATH    Optional preview asset pack. Build/publish packs from private/magik-cloud.
   --main-bin PATH      Required MiSTer_MagiK Main fork binary.
   --main-source-revision SHA
@@ -71,6 +75,7 @@ Options:
 The zip is laid out relative to the MiSTer SD-card root:
   Scripts/MiSTer-MagiK.sh
   mister-magik/mister-magik-fb
+  mister-magik/mister-magik-manager
   mister-magik/mame.sqlite3
   mister-magik/hbmame.sqlite3
   mister-magik/assets/...     when --asset-pack is provided
@@ -102,6 +107,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --installer)
       INSTALLER="${2:?--installer requires a path}"
+      shift 2
+      ;;
+    --manager)
+      MANAGER="${2:?--manager requires a path}"
       shift 2
       ;;
     --asset-pack)
@@ -314,6 +323,8 @@ cp "$INSTALLER" "$STAGE/Scripts/MiSTer-MagiK.sh"
 chmod 755 "$STAGE/Scripts/MiSTer-MagiK.sh"
 cp "$BIN" "$STAGE/mister-magik/mister-magik-fb"
 chmod 755 "$STAGE/mister-magik/mister-magik-fb"
+cp "$MANAGER" "$STAGE/mister-magik/mister-magik-manager"
+chmod 755 "$STAGE/mister-magik/mister-magik-manager"
 cp "$MAME_SQLITE" "$STAGE/mister-magik/mame.sqlite3"
 if [[ -n "$HBMAME_SQLITE" ]]; then
   cp "$HBMAME_SQLITE" "$STAGE/mister-magik/hbmame.sqlite3"

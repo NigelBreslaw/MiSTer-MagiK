@@ -5203,6 +5203,7 @@ fn ensure_stock_inittab_text(input: &str) -> String {
     edited
 }
 
+#[expect(dead_code)]
 fn set_magik_boot_mode(
     lines: &mut Vec<String>,
     direct_video: &str,
@@ -5216,6 +5217,7 @@ fn set_magik_boot_mode(
     set_ini_key(lines, "Menu", "video_mode", "8");
 }
 
+#[expect(dead_code)]
 fn set_menu_output_profile(lines: &mut Vec<String>, profile: MenuOutputProfile) {
     let (direct_video, menu_pal, forced_scandoubler) = profile.settings();
     set_ini_key(lines, "Menu", "direct_video", direct_video);
@@ -5227,42 +5229,49 @@ fn set_menu_output_profile(lines: &mut Vec<String>, profile: MenuOutputProfile) 
 }
 
 fn edit_mister_ini(input: &str, edit: IniEdit) -> String {
-    let newline = if input.contains("\r\n") { "\r\n" } else { "\n" };
-    let mut lines: Vec<String> = input
-        .lines()
-        .map(|line| line.strip_suffix('\r').unwrap_or(line).to_string())
-        .collect();
+    let mut document = mister_magik_ini::Document::parse(input.as_bytes())
+        .expect("host-provided MiSTer.ini must be valid");
 
     match edit {
         IniEdit::MagikBoot => {
-            set_magik_boot_mode(&mut lines, "2", "0", "0");
+            document.set("MiSTer", "forced_scandoubler", "0");
+            document.set("MiSTer", "menu_pal", "0");
+            document.set("MiSTer", "direct_video", "2");
+            document.set("MiSTer", "main", "MiSTer_MagiK");
+            document.set("Menu", "video_mode", "8");
         }
-        IniEdit::MenuOutput(profile) => set_menu_output_profile(&mut lines, profile),
+        IniEdit::MenuOutput(profile) => {
+            let (direct_video, menu_pal, forced_scandoubler) = profile.settings();
+            document.set("Menu", "direct_video", direct_video);
+            document.set("Menu", "menu_pal", menu_pal);
+            document.set("Menu", "forced_scandoubler", forced_scandoubler);
+            if let Some(video_mode) = profile.video_mode() {
+                document.set("Menu", "video_mode", video_mode);
+            }
+        }
         IniEdit::SelectMain(value) => {
-            set_ini_key(&mut lines, "MiSTer", "main", &value);
-            deduplicate_ini_key(&mut lines, "MiSTer", "main");
+            document.set("MiSTer", "main", &value);
         }
         IniEdit::ZaparooBoot => {
-            set_ini_key(&mut lines, "MiSTer", "direct_video", "0");
-            set_ini_key(&mut lines, "MiSTer", "main", "zaparoo/MiSTer_Zaparoo");
-            set_ini_key(&mut lines, "Menu", "direct_video", "0");
-            set_ini_key(&mut lines, "Menu", "video_mode", "8");
+            document.set("MiSTer", "direct_video", "0");
+            document.set("MiSTer", "main", "zaparoo/MiSTer_Zaparoo");
+            document.set("Menu", "direct_video", "0");
+            document.set("Menu", "video_mode", "8");
         }
         IniEdit::ArcadeVideo => {
-            set_ini_key(&mut lines, "MiSTer", "direct_video", "0");
-            set_ini_key(&mut lines, "arcade", "direct_video", "1");
-            set_ini_key(&mut lines, "arcade_vertical", "direct_video", "0");
-            set_ini_key(&mut lines, "arcade_vertical", "video_mode", "8");
-            set_ini_key(&mut lines, "arcade_vertical", "vscale_mode", "1");
-            ensure_section_after(&mut lines, "arcade", "arcade_vertical");
+            document.set("MiSTer", "direct_video", "0");
+            document.set("arcade", "direct_video", "1");
+            document.set("arcade_vertical", "direct_video", "0");
+            document.set("arcade_vertical", "video_mode", "8");
+            document.set("arcade_vertical", "vscale_mode", "1");
+            document.ensure_section_after("arcade", "arcade_vertical");
         }
         IniEdit::MenuMode(mode) => {
-            set_ini_key(&mut lines, "Menu", "video_mode", &mode);
+            document.set("Menu", "video_mode", &mode);
         }
         IniEdit::StockBoot => {
-            comment_ini_key_if_value(
-                &mut lines,
-                Some("MiSTer"),
+            document.comment_if_value(
+                "MiSTer",
                 "main",
                 &["MiSTer_MagiK", "MiSTer_MagiKDev", "mister-magik-fb"],
                 "MiSTer MagiK stock boot restore",
@@ -5270,13 +5279,10 @@ fn edit_mister_ini(input: &str, edit: IniEdit) -> String {
         }
     }
 
-    let mut out = lines.join(newline);
-    if input.ends_with('\n') {
-        out.push_str(newline);
-    }
-    out
+    String::from_utf8(document.render()).expect("MiSTer.ini renderer emits UTF-8")
 }
 
+#[expect(dead_code)]
 fn set_ini_key(lines: &mut Vec<String>, section: &str, key: &str, value: &str) {
     let mut current = String::from("global");
     let mut saw_section = false;
@@ -5320,6 +5326,7 @@ fn set_ini_key(lines: &mut Vec<String>, section: &str, key: &str, value: &str) {
     }
 }
 
+#[expect(dead_code)]
 fn deduplicate_ini_key(lines: &mut Vec<String>, section: &str, key: &str) {
     let mut current = String::from("global");
     let mut found = false;
@@ -5341,6 +5348,7 @@ fn deduplicate_ini_key(lines: &mut Vec<String>, section: &str, key: &str) {
     }
 }
 
+#[expect(dead_code)]
 fn ensure_section_after(lines: &mut Vec<String>, earlier: &str, later: &str) {
     let Some(earlier_range) = section_range(lines, earlier) else {
         return;
@@ -5358,6 +5366,7 @@ fn ensure_section_after(lines: &mut Vec<String>, earlier: &str, later: &str) {
     lines.splice(adjusted_earlier_end..adjusted_earlier_end, moved);
 }
 
+#[expect(dead_code)]
 fn section_range(lines: &[String], section: &str) -> Option<std::ops::Range<usize>> {
     let start = lines.iter().position(|line| {
         section_name(line).is_some_and(|name| name.eq_ignore_ascii_case(section))
@@ -5370,6 +5379,7 @@ fn section_range(lines: &[String], section: &str) -> Option<std::ops::Range<usiz
     Some(start..end)
 }
 
+#[expect(dead_code)]
 fn comment_ini_key_if_value(
     lines: &mut [String],
     section: Option<&str>,
@@ -5399,6 +5409,7 @@ fn comment_ini_key_if_value(
     }
 }
 
+#[expect(dead_code)]
 fn section_name(line: &str) -> Option<String> {
     let trimmed = line.trim();
     if trimmed.starts_with(';') || trimmed.starts_with('#') || !trimmed.starts_with('[') {
@@ -5408,6 +5419,7 @@ fn section_name(line: &str) -> Option<String> {
     Some(trimmed[1..end].trim().to_string())
 }
 
+#[expect(dead_code)]
 fn active_key_eq(line: &str, expected: &str) -> bool {
     let trimmed = line.trim_start();
     if trimmed.is_empty() || trimmed.starts_with(';') || trimmed.starts_with('#') {
@@ -5419,6 +5431,7 @@ fn active_key_eq(line: &str, expected: &str) -> bool {
     key.trim().eq_ignore_ascii_case(expected)
 }
 
+#[expect(dead_code)]
 fn replace_assignment_value(line: &str, value: &str) -> String {
     let Some(eq) = line.find('=') else {
         return line.to_string();
@@ -5449,6 +5462,7 @@ fn replace_assignment_value(line: &str, value: &str) -> String {
     format!("{}{}{}", &line[..eq + 1 + value_start], value, suffix)
 }
 
+#[expect(dead_code)]
 fn assignment_value(line: &str) -> Option<String> {
     let (_, after_eq) = line.split_once('=')?;
     let value = after_eq

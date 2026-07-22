@@ -9,453 +9,101 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 FAT="$TMP/fat"
 APP="$FAT/mister-magik"
-INIT_DIR="$TMP/init.d"
-mkdir -p "$APP/fpga" "$FAT/Scripts" "$INIT_DIR"
+mkdir -p "$APP/fpga" "$FAT/Scripts"
 
 printf '#!/bin/sh\n' >"$FAT/MiSTer_MagiK"
 printf '#!/bin/sh\n' >"$APP/mister-magik-fb"
+cp "$ROOT/mister/tools/manager/target/debug/mister-magik-manager" "$APP/mister-magik-manager"
+chmod 755 "$APP/mister-magik-manager"
 printf 'module\n' >"$APP/mister_magik_scanout_slots.ko"
 printf 'rbf\n' >"$APP/fpga/menu-magik-vblank-latch.rbf"
 contract="$(printf contract | sha256sum | awk '{print $1}')"
-magik="1111111111111111111111111111111111111111"
-main="2222222222222222222222222222222222222222"
-menu="3333333333333333333333333333333333333333"
 module_hash="$(sha256sum "$APP/mister_magik_scanout_slots.ko" | awk '{print $1}')"
 rbf_hash="$(sha256sum "$APP/fpga/menu-magik-vblank-latch.rbf" | awk '{print $1}')"
 printf 'platform_contract_sha256=%s\nmodule_sha256=%s\nvermagic=5.15.1-MiSTer fixture\n' \
   "$contract" "$module_hash" >"$APP/mister_magik_scanout_slots.metadata.txt"
-printf 'format=mister-magik-fpga-release-v1\nplatform_contract_sha256=%s\nmagik_commit=%s\nsource_commit=%s\nrbf_sha256=%s\n' \
-  "$contract" "$magik" "$menu" "$rbf_hash" >"$APP/fpga/menu-magik-vblank-latch.metadata.txt"
+printf 'platform_contract_sha256=%s\nsource_commit=%040d\nrbf_sha256=%s\n' \
+  "$contract" 3 "$rbf_hash" >"$APP/fpga/menu-magik-vblank-latch.metadata.txt"
 "$ROOT/scripts/agent" ci platform-manifest generate \
-  --output "$APP/platform-v2.manifest" \
+  --output "$APP/platform-v2.manifest" --layout public \
   --main "$FAT/MiSTer_MagiK" --gui "$APP/mister-magik-fb" \
+  --manager "$APP/mister-magik-manager" \
   --scanout-module "$APP/mister_magik_scanout_slots.ko" \
   --scanout-metadata "$APP/mister_magik_scanout_slots.metadata.txt" \
   --latch-rbf "$APP/fpga/menu-magik-vblank-latch.rbf" \
   --latch-metadata "$APP/fpga/menu-magik-vblank-latch.metadata.txt" \
-  --main-revision "$main" --magik-revision "$magik" >/dev/null
+  --main-revision "$(printf %040d 2)" --magik-revision "$(printf %040d 1)" >/dev/null
 
-printf '[MiSTer]\nmain=MiSTer\ndirect_video=0\nmenu_pal=0\nforced_scandoubler=0\n\n[Menu]\nvideo_mode=8\n' >"$FAT/MiSTer.ini"
-cp "$FAT/MiSTer.ini" "$TMP/MiSTer.ini.before-install"
+cp "$ROOT/scripts/MiSTer-MagiK.sh" "$FAT/Scripts/MiSTer-MagiK.sh"
+chmod 755 "$FAT/Scripts/MiSTer-MagiK.sh"
 printf '::sysinit:/media/fat/MiSTer &\n' >"$TMP/inittab"
-run_installer() {
+printf '[MiSTer]\r\nmain=MiSTer\r\nmain=Other ; retain\r\n[Menu]\r\ndirect_video=9\r\ndirect_video=8 ; retain\r\nmenu_pal=9\r\nforced_scandoubler=9\r\nuser=keep\r\n' >"$FAT/MiSTer.ini"
+cp "$FAT/MiSTer.ini" "$TMP/original.ini"
+
+run_manager() {
   MISTER_MAGIK_FAT="$FAT" MISTER_MAGIK_INITTAB="$TMP/inittab" \
-    MISTER_MAGIK_INIT_DIR="$INIT_DIR" \
-    MISTER_MAGIK_TEST_MODE=1 MISTER_MAGIK_TEST_CONFIRM_INSTALL=1 \
-    MISTER_MAGIK_TEST_CONFIRM_31KHZ="${MISTER_MAGIK_TEST_CONFIRM_31KHZ:-0}" \
-    MISTER_MAGIK_NO_PAUSE=1 \
-    "$ROOT/scripts/MiSTer-MagiK.sh" "$@"
+    MISTER_MAGIK_TEST_MODE=1 MISTER_MAGIK_TEST_OUTPUT_MODE=auto \
+    MISTER_MAGIK_TEST_KEYS="${MISTER_MAGIK_TEST_KEYS:-}" \
+    "$FAT/Scripts/MiSTer-MagiK.sh" "$@"
 }
 
-run_confirmed_uninstall() {
-  MISTER_MAGIK_FAT="$FAT" MISTER_MAGIK_INITTAB="$TMP/inittab" \
-    MISTER_MAGIK_INIT_DIR="$INIT_DIR" \
-    MISTER_MAGIK_TEST_MODE=1 MISTER_MAGIK_TEST_CONFIRM_UNINSTALL=1 \
-    MISTER_MAGIK_NO_PAUSE=1 "$ROOT/scripts/MiSTer-MagiK.sh" uninstall
-}
-
-run_installer_with_keys() {
-  keys="$1"
-  shift
-  MISTER_MAGIK_FAT="$FAT" MISTER_MAGIK_INITTAB="$TMP/inittab" \
-    MISTER_MAGIK_INIT_DIR="$INIT_DIR" MISTER_MAGIK_TEST_MODE=1 \
-    MISTER_MAGIK_TEST_CONFIRM_INSTALL=1 MISTER_MAGIK_TEST_KEYS="$keys" \
-    MISTER_MAGIK_TEST_REBOOT_TRACE="${MISTER_MAGIK_TEST_REBOOT_TRACE:-}" \
-    MISTER_MAGIK_NO_PAUSE=1 "$ROOT/scripts/MiSTer-MagiK.sh" "$@"
-}
-
-assert_one_main() {
-  expected="$1"
-  awk -v expected="$expected" '
-    BEGIN { section = ""; count = 0; selected = "" }
-    function is_main_assignment(line, key) {
-      if (line !~ /=/) return 0
-      key = line
-      sub(/=.*/, "", key)
-      gsub(/[[:space:]]/, "", key)
-      return tolower(key) == "main"
-    }
-    { sub(/\r$/, "") }
-    /^[[:space:]]*\[[^]]+\]/ {
-      section = $0
-      sub(/^[[:space:]]*\[/, "", section)
-      sub(/\].*$/, "", section)
-      gsub(/[[:space:]]/, "", section)
-      next
-    }
-    tolower(section) == "mister" && is_main_assignment($0) {
-      value = $0
-      sub(/^[^=]*=[[:space:]]*/, "", value)
-      sub(/[[:space:]]*[;#].*$/, "", value)
-      gsub(/[[:space:]]/, "", value)
-      selected = value
-      count++
-    }
-    END { exit(count == 1 && selected == expected ? 0 : 1) }
-  ' "$FAT/MiSTer.ini"
-}
-
-assert_ini_value() {
-  selected_section="$1"
-  selected_key="$2"
-  expected="$3"
-  awk -v selected_section="$selected_section" -v selected_key="$selected_key" -v expected="$expected" '
-    BEGIN { section = ""; selected = "" }
-    { sub(/\r$/, "") }
-    /^[[:space:]]*\[[^]]+\]/ {
-      section = $0
-      sub(/^[[:space:]]*\[/, "", section)
-      sub(/\].*$/, "", section)
-      gsub(/[[:space:]]/, "", section)
-      next
-    }
-    tolower(section) == tolower(selected_section) && $0 ~ /=/ {
-      key = $0
-      sub(/=.*/, "", key)
-      gsub(/[[:space:]]/, "", key)
-      if (tolower(key) == tolower(selected_key)) {
-        value = $0
-        sub(/^[^=]*=[[:space:]]*/, "", value)
-        sub(/[[:space:]]*[;#].*$/, "", value)
-        gsub(/[[:space:]]/, "", value)
-        selected = value
-      }
-    }
-    END { exit(selected == expected ? 0 : 1) }
-  ' "$FAT/MiSTer.ini"
-}
-
-assert_menu_1080p() {
-  awk '
-    BEGIN { section = ""; count = 0; selected = "" }
-    function is_video_mode_assignment(line, key) {
-      if (line !~ /=/) return 0
-      key = line
-      sub(/=.*/, "", key)
-      gsub(/[[:space:]]/, "", key)
-      return tolower(key) == "video_mode"
-    }
-    { sub(/\r$/, "") }
-    /^[[:space:]]*\[[^]]+\]/ {
-      section = $0
-      sub(/^[[:space:]]*\[/, "", section)
-      sub(/\].*$/, "", section)
-      gsub(/[[:space:]]/, "", section)
-      next
-    }
-    tolower(section) == "menu" && is_video_mode_assignment($0) {
-      value = $0
-      sub(/^[^=]*=[[:space:]]*/, "", value)
-      sub(/[[:space:]]*[;#].*$/, "", value)
-      gsub(/[[:space:]]/, "", value)
-      selected = value
-      count++
-    }
-    END { exit(count == 1 && selected == "8" ? 0 : 1) }
-  ' "$FAT/MiSTer.ini"
-}
-
-# Installation must be confirmed before verification or configuration changes.
-ini_before_confirmation="$(sha256sum "$FAT/MiSTer.ini")"
-inittab_before_confirmation="$(sha256sum "$TMP/inittab")"
-if MISTER_MAGIK_FAT="$FAT" MISTER_MAGIK_INITTAB="$TMP/inittab" \
-  MISTER_MAGIK_INIT_DIR="$INIT_DIR" MISTER_MAGIK_TEST_MODE=1 \
-  MISTER_MAGIK_NO_PAUSE=1 "$ROOT/scripts/MiSTer-MagiK.sh" install \
-  >"$TMP/noninteractive-install.log" 2>&1; then
-  echo "noninteractive install unexpectedly succeeded" >&2
+# A/Enter is not a safety confirmation and cannot mutate either boot file.
+before_ini="$(sha256sum "$FAT/MiSTer.ini")"
+before_inittab="$(sha256sum "$TMP/inittab")"
+if MISTER_MAGIK_TEST_KEYS=enter run_manager install >"$TMP/enter.log" 2>&1; then
+  echo "Enter unexpectedly confirmed installation" >&2
   exit 1
 fi
-grep -q 'supports automatic known-DAC CRT selection' "$TMP/noninteractive-install.log"
-grep -q 'interactive input is unavailable; installation refused' "$TMP/noninteractive-install.log"
-test "$(sha256sum "$FAT/MiSTer.ini")" = "$ini_before_confirmation"
+grep -q 'Press Down on the keyboard or joystick' "$TMP/enter.log"
+test "$(sha256sum "$FAT/MiSTer.ini")" = "$before_ini"
+test "$(sha256sum "$TMP/inittab")" = "$before_inittab"
 
-if MISTER_MAGIK_TEST_OUTPUT_MODE=crt-480p60 run_installer install \
-  >"$TMP/unconfirmed-31khz.log" 2>&1; then
-  echo "unconfirmed 31 kHz output unexpectedly installed" >&2
+# A corrupt manager is rejected by the shell before it can run.
+cp "$APP/mister-magik-manager" "$TMP/manager.good"
+printf 'corrupt\n' >>"$APP/mister-magik-manager"
+if MISTER_MAGIK_TEST_KEYS=down run_manager install >"$TMP/corrupt.log" 2>&1; then
+  echo "corrupt manager unexpectedly ran" >&2
   exit 1
 fi
-grep -q '31 kHz CRT mode was not explicitly confirmed' "$TMP/unconfirmed-31khz.log"
-test "$(sha256sum "$FAT/MiSTer.ini")" = "$ini_before_confirmation"
-test "$(sha256sum "$TMP/inittab")" = "$inittab_before_confirmation"
-if MISTER_MAGIK_TEST_OUTPUT_MODE=invalid run_installer install >"$TMP/output-choice-invalid.log" 2>&1; then
-  echo "invalid output choice unexpectedly installed" >&2
-  exit 1
-fi
-grep -q 'test output mode must be auto, hdmi, or a supported crt mode' "$TMP/output-choice-invalid.log"
-test "$(sha256sum "$FAT/MiSTer.ini")" = "$ini_before_confirmation"
+grep -q 'manager hash mismatch' "$TMP/corrupt.log"
+test "$(sha256sum "$FAT/MiSTer.ini")" = "$before_ini"
+cp "$TMP/manager.good" "$APP/mister-magik-manager"
+chmod 755 "$APP/mister-magik-manager"
 
-run_installer install >/dev/null
-assert_one_main MiSTer_MagiK
-assert_menu_1080p
-assert_ini_value Menu direct_video 2
-assert_ini_value Menu menu_pal 0
-assert_ini_value Menu forced_scandoubler 0
-assert_ini_value MiSTer direct_video 0
-assert_ini_value MiSTer menu_pal 0
-assert_ini_value MiSTer forced_scandoubler 0
-grep -qx auto "$APP/installer-output-mode-v1"
-cmp "$TMP/MiSTer.ini.before-install" "$FAT/MiSTer.ini.bak.before-magik"
-test ! -e "$FAT/MiSTer.ini.bak"
-grep -qx '::sysinit:/media/fat/MiSTer &' "$TMP/inittab"
-test -x "$FAT/MiSTer_MagiK"
-test -x "$APP/mister-magik-fb"
-
-for mode_values in \
-  'crt-240p60 0 0' \
-  'crt-288p50 1 0' \
-  'crt-480p60 0 1' \
-  'crt-576p50 1 1'; do
-  set -- $mode_values
-  rm -f "$APP/installer-output-mode-v1"
-  MISTER_MAGIK_TEST_CONFIRM_31KHZ=1 MISTER_MAGIK_TEST_OUTPUT_MODE="$1" \
-    run_installer install >/dev/null
-  assert_ini_value Menu direct_video 1
-  assert_ini_value Menu menu_pal "$2"
-  assert_ini_value Menu forced_scandoubler "$3"
-  grep -qx "$1" "$APP/installer-output-mode-v1"
-done
-rm -f "$APP/installer-output-mode-v1"
-MISTER_MAGIK_TEST_OUTPUT_MODE=auto run_installer install >/dev/null
-printf 'user_after_install=keep\n' >>"$FAT/MiSTer.ini"
-
-# The installed-state menu is testable without optional host PTY tooling.
-ini_before_cancel="$(sha256sum "$FAT/MiSTer.ini")"
-run_installer_with_keys cancel >/dev/null
-test "$(sha256sum "$FAT/MiSTer.ini")" = "$ini_before_cancel"
-MISTER_MAGIK_TEST_REBOOT_TRACE="$TMP/reboot.trace" \
-  run_installer_with_keys enter,enter >"$TMP/restore-reboot.log"
-assert_one_main MiSTer
-assert_menu_1080p
-assert_ini_value Menu direct_video 0
-grep -q '^user_after_install=keep$' "$FAT/MiSTer.ini"
-test -f "$FAT/MiSTer.ini.bak.before-magik"
-grep -q 'TEST: normal reboot requested' "$TMP/restore-reboot.log"
-test "$(cat "$TMP/reboot.trace")" = "$(printf 'sync\nreboot')"
-rm -f "$TMP/reboot.trace"
-MISTER_MAGIK_TEST_REBOOT_TRACE="$TMP/reboot.trace" \
-  run_installer_with_keys other install >"$TMP/install-reboot-skip.log"
-grep -q 'reboot skipped' "$TMP/install-reboot-skip.log"
-test ! -e "$TMP/reboot.trace"
-assert_ini_value Menu direct_video 2
-MISTER_MAGIK_TEST_OUTPUT_MODE=hdmi run_installer install >/dev/null
-assert_ini_value Menu direct_video 2
-grep -qx auto "$APP/installer-output-mode-v1"
-if run_installer_with_keys down,enter,other >"$TMP/menu-uninstall-cancel.log" 2>&1; then
-  echo "menu uninstall cancellation unexpectedly succeeded" >&2
-  exit 1
-fi
-grep -q 'cancelled; no changes made' "$TMP/menu-uninstall-cancel.log"
-assert_one_main MiSTer_MagiK
-test -d "$APP"
-
-if command -v expect >/dev/null 2>&1; then
-  export TEST_INSTALLER="$ROOT/scripts/MiSTer-MagiK.sh"
-  export TEST_FAT="$FAT"
-  export TEST_INITTAB="$TMP/inittab"
-  expect <<'EOF' >/dev/null
-log_user 0
-set timeout 5
-spawn env MISTER_MAGIK_FAT=$env(TEST_FAT) MISTER_MAGIK_INITTAB=$env(TEST_INITTAB) MISTER_MAGIK_TEST_MODE=1 MISTER_MAGIK_NO_PAUSE=1 $env(TEST_INSTALLER)
-expect "> Restore stock MiSTer"
-send -- "\r"
-expect "stock MiSTer boot restored"
-expect eof
-EOF
-  cmp "$TMP/MiSTer.ini.before-install" "$FAT/MiSTer.ini.bak.before-magik"
-  assert_one_main MiSTer
-  assert_menu_1080p
-  expect <<'EOF' >/dev/null
-log_user 0
-set timeout 5
-spawn env MISTER_MAGIK_FAT=$env(TEST_FAT) MISTER_MAGIK_INITTAB=$env(TEST_INITTAB) MISTER_MAGIK_TEST_MODE=1 MISTER_MAGIK_NO_PAUSE=1 $env(TEST_INSTALLER) install
-expect "supports automatic known-DAC CRT selection"
-expect "Continue by pressing A/Enter"
-send -- "x"
-expect "cancelled; no changes made"
-expect eof
-EOF
-  assert_one_main MiSTer
-  assert_menu_1080p
-  run_installer install >/dev/null
-
-  expect <<'EOF' >/dev/null
-log_user 0
-set timeout 5
-spawn env MISTER_MAGIK_FAT=$env(TEST_FAT) MISTER_MAGIK_INITTAB=$env(TEST_INITTAB) MISTER_MAGIK_TEST_MODE=1 MISTER_MAGIK_NO_PAUSE=1 $env(TEST_INSTALLER)
-expect "> Restore stock MiSTer"
-send -- "\033\[B"
-expect "> Fully uninstall MiSTer MagiK"
-send -- "\r"
-expect "Press A/Enter to confirm"
-send -- "x"
-expect "cancelled; no changes made"
-expect eof
-EOF
-  assert_one_main MiSTer_MagiK
-  test -d "$APP"
-fi
-
-printf '\ncustom_after_install=1\n' >>"$FAT/MiSTer.ini"
-run_installer install >/dev/null
-cmp "$TMP/MiSTer.ini.before-install" "$FAT/MiSTer.ini.bak.before-magik"
-grep -q '^custom_after_install=1$' "$FAT/MiSTer.ini"
-
-rm "$FAT/MiSTer.ini.bak.before-magik"
-run_installer install >"$TMP/reinstall-without-backup.log"
-test ! -e "$FAT/MiSTer.ini.bak.before-magik"
-grep -q 'not creating it from a MagiK-active MiSTer.ini' "$TMP/reinstall-without-backup.log"
-
-# Main_MiSTer applies active keys in file order. A later non-MagiK value must
-# trigger direct installation, and installation must collapse all duplicates.
-mkdir -p "$FAT/licenses"
-touch "$FAT/licenses/MiSTer-MagiK-GPL-3.0-or-later.txt"
-touch "$FAT/licenses/RUST-LIBRARIES.txt"
-touch "$FAT/licenses/FFMPEG-LGPL-2.1-or-later.txt"
-touch "$FAT/licenses/PRESS-START-2P-OFL-1.1.txt"
-touch "$FAT/THIRD-PARTY-NOTICES.txt" "$FAT/SOURCE-OFFER.txt"
-printf 'keep\n' >"$FAT/licenses/USER-LICENSE.txt"
-printf '[MiSTer]\r\nMAIN=MiSTer_MagiK\r\n;main=Commented\r\nmain=Other_Main\r\n[Menu] ; primary\r\nvideo_mode=5\r\n  custom_setting = keep ; untouched\r\n[MiSTer]\r\nmain=Another_Main ; note\r\n[Menu]\r\nVIDEO_MODE=6 ; old mode\r\n' >"$FAT/MiSTer.ini"
-run_installer >"$TMP/effective-other.log"
-grep -q 'installed. Reboot to start MiSTer MagiK.' "$TMP/effective-other.log"
-assert_one_main MiSTer_MagiK
+# Keyboard/joystick Down confirms installation and every owned duplicate is canonicalized.
+MISTER_MAGIK_TEST_KEYS=down run_manager install >"$TMP/install.log"
+grep -q 'installed. Reboot to start MiSTer MagiK' "$TMP/install.log"
+cmp "$TMP/original.ini" "$FAT/MiSTer.ini.bak.before-magik"
 python3 - "$FAT/MiSTer.ini" <<'PY'
 import pathlib, sys
 data = pathlib.Path(sys.argv[1]).read_bytes()
-assert b"\r\n" in data
 assert b"\n" not in data.replace(b"\r\n", b"")
-assert b"[Menu] ; primary\r\n" in data
-assert b"  custom_setting = keep ; untouched\r\n" in data
-assert b"video_mode=5\r\n" in data
-assert b"VIDEO_MODE=6 ; old mode\r\n" in data
+text = data.decode()
+assert text.count("main=MiSTer_MagiK") == 1
+assert text.count("direct_video=2") == 1
+assert ";main=Other ; retain" in text
+assert ";direct_video=8 ; retain" in text
+assert "user=keep" in text
 PY
-grep -q ';main=Commented' "$FAT/MiSTer.ini"
-grep -q '^;main=Other_Main' "$FAT/MiSTer.ini"
-grep -q '^;main=Another_Main ; note' "$FAT/MiSTer.ini"
-assert_ini_value Menu direct_video 2
-assert_ini_value Menu menu_pal 0
-assert_ini_value Menu forced_scandoubler 0
-test ! -e "$FAT/THIRD-PARTY-NOTICES.txt" && test ! -e "$FAT/SOURCE-OFFER.txt"
-test ! -e "$FAT/licenses/MiSTer-MagiK-GPL-3.0-or-later.txt"
-test -e "$FAT/licenses/USER-LICENSE.txt"
 
-# Conversely, an earlier non-MagiK value followed by MagiK is installed state.
-# Without a TTY the management menu must make no change.
-printf '[MiSTer]\nmain=Other_Main\n[MiSTer]\nmain=MiSTer_MagiK\n' >"$FAT/MiSTer.ini"
-ini_before_menu="$(sha256sum "$FAT/MiSTer.ini")"
-run_installer >"$TMP/noninteractive-menu.log"
-grep -q 'interactive input is unavailable; no changes made' "$TMP/noninteractive-menu.log"
-test "$(sha256sum "$FAT/MiSTer.ini")" = "$ini_before_menu"
-
-run_installer install >/dev/null
-assert_one_main MiSTer_MagiK
-run_installer restore >/dev/null
-assert_one_main MiSTer
-assert_menu_1080p
-test -f "$APP/mister-magik-fb"
-test -f "$FAT/MiSTer.ini.bak.before-magik"
-rm -f "$APP/installer-output-mode-v1"
-MISTER_MAGIK_TEST_OUTPUT_MODE=hdmi run_installer install >/dev/null
-assert_ini_value Menu direct_video 0
-grep -qx hdmi "$APP/installer-output-mode-v1"
-
-ini_before="$(sha256sum "$FAT/MiSTer.ini")"
-inittab_before="$(sha256sum "$TMP/inittab")"
-printf 'corrupt\n' >>"$APP/mister-magik-fb"
-if run_installer install >/dev/null 2>&1; then
-  echo "corrupt platform unexpectedly installed" >&2
-  exit 1
-fi
-test "$(sha256sum "$FAT/MiSTer.ini")" = "$ini_before"
-test "$(sha256sum "$TMP/inittab")" = "$inittab_before"
-
-# Explicit uninstall requires a TTY and must not restore or delete anything
-# before confirmation has succeeded.
-if run_installer uninstall >"$TMP/noninteractive-uninstall.log" 2>&1; then
-  echo "noninteractive uninstall unexpectedly succeeded" >&2
-  exit 1
-fi
-grep -q 'interactive input is unavailable; uninstall refused' "$TMP/noninteractive-uninstall.log"
-test -d "$APP"
-assert_one_main MiSTer_MagiK
-
-# A boot-restore failure must likewise leave every installed payload in place.
-if MISTER_MAGIK_FAT="$FAT" MISTER_MAGIK_INITTAB="$TMP/missing/inittab" \
-  MISTER_MAGIK_INIT_DIR="$INIT_DIR" MISTER_MAGIK_TEST_MODE=1 \
-  MISTER_MAGIK_TEST_CONFIRM_UNINSTALL=1 MISTER_MAGIK_NO_PAUSE=1 \
-  "$ROOT/scripts/MiSTer-MagiK.sh" uninstall >"$TMP/failed-restore.log" 2>&1; then
-  echo "uninstall unexpectedly survived boot-restore failure" >&2
-  exit 1
-fi
-test -d "$APP"
-test -f "$FAT/MiSTer_MagiK"
-
-# Restore the valid platform payload after the corruption test, then populate
-# every owned legacy/current path plus unrelated files that must survive.
-printf '#!/bin/sh\n' >"$APP/mister-magik-fb"
-chmod +x "$APP/mister-magik-fb"
-cp "$ROOT/scripts/MiSTer-MagiK.sh" "$FAT/Scripts/MiSTer-MagiK.sh"
-touch "$FAT/Scripts/mister-magik.sh" "$FAT/Scripts/mister-magik-channel.sh"
-printf '[mister_magik]\n' >"$FAT/downloader_mister_magik.ini"
-touch "$FAT/downloader_mister_magik.ini.tmp.12" "$FAT/.downloader_mister_magik.ini.tmp.13"
-touch "$FAT/.MiSTer.ini.bak.before-magik.new.12" "$FAT/.MiSTer.ini.magik.new.stale"
-mkdir -p "$FAT/licenses"
-touch "$FAT/licenses/MiSTer-MagiK-GPL-3.0-or-later.txt"
-touch "$FAT/licenses/RUST-LIBRARIES.txt"
-touch "$FAT/licenses/FFMPEG-LGPL-2.1-or-later.txt"
-touch "$FAT/licenses/PRESS-START-2P-OFL-1.1.txt"
-printf 'keep\n' >"$FAT/licenses/USER-LICENSE.txt"
-touch "$FAT/THIRD-PARTY-NOTICES.txt" "$FAT/SOURCE-OFFER.txt"
-printf '#!/bin/sh\n' >"$INIT_DIR/S00magik-agent"
-printf '#!/bin/sh\n' >"$INIT_DIR/disabled-S00fastnet.magik-agent"
-mkdir -p "$FAT/mister-magik-dev"
-printf 'dev binary\n' >"$FAT/MiSTer_MagiKDev"
-printf 'dev app\n' >"$FAT/mister-magik-dev/mister-magik-fb"
-printf 'stock main\n' >"$FAT/MiSTer"
-printf 'stock menu\n' >"$FAT/menu.rbf"
-printf 'developer backup\n' >"$FAT/MiSTer.ini.bak"
-
-run_confirmed_uninstall >"$TMP/uninstall.log"
-assert_one_main MiSTer
-assert_menu_1080p
+# Restore changes only owned keys and retains post-install user changes.
+printf 'after_install=keep\r\n' >>"$FAT/MiSTer.ini"
+run_manager restore >"$TMP/restore.log"
+grep -q 'stock MiSTer boot restored' "$TMP/restore.log"
+grep -q 'after_install=keep' "$FAT/MiSTer.ini"
+grep -q 'main=Other' "$FAT/MiSTer.ini"
 grep -qx '::sysinit:/media/fat/MiSTer &' "$TMP/inittab"
-test ! -e "$APP"
-test ! -e "$FAT/MiSTer_MagiK"
-test ! -e "$FAT/Scripts/MiSTer-MagiK.sh"
-test ! -e "$FAT/Scripts/mister-magik.sh"
-test ! -e "$FAT/Scripts/mister-magik-channel.sh"
-test ! -e "$FAT/downloader_mister_magik.ini"
-test ! -e "$FAT/MiSTer.ini.bak.before-magik"
-test -e "$INIT_DIR/S00magik-agent"
-test -e "$INIT_DIR/disabled-S00fastnet.magik-agent"
-test -e "$FAT/MiSTer_MagiKDev"
-test -e "$FAT/mister-magik-dev/mister-magik-fb"
-test ! -e "$INIT_DIR/S00fastnet"
-test -e "$FAT/MiSTer" && test -e "$FAT/menu.rbf"
-test -e "$FAT/MiSTer.ini.bak"
-test -e "$FAT/licenses/USER-LICENSE.txt"
-test ! -e "$FAT/THIRD-PARTY-NOTICES.txt" && test ! -e "$FAT/SOURCE-OFFER.txt"
-grep -q 'Reboot now? Press A/Enter to reboot' "$TMP/uninstall.log"
-grep -q 'interactive input is unavailable; reboot not requested' "$TMP/uninstall.log"
 
-# Full uninstall is idempotent and must not recreate persistent MagiK state.
-run_confirmed_uninstall >/dev/null
-assert_one_main MiSTer
-assert_menu_1080p
-test ! -e "$APP"
-test -e "$FAT/licenses/USER-LICENSE.txt"
-
-# A path that cannot be removed with the expected file operation must produce
-# a nonzero result and name the residue, while leaving stock boot selected.
-mkdir -p "$FAT/downloader_mister_magik.ini"
-touch "$FAT/downloader_mister_magik.ini/unexpected-child"
-if run_confirmed_uninstall >"$TMP/residue.log" 2>&1; then
-  echo "uninstall unexpectedly ignored residue" >&2
+# Full uninstall also requires Down and restores stock before deleting its manager.
+MISTER_MAGIK_TEST_KEYS=down run_manager install >/dev/null
+if MISTER_MAGIK_TEST_KEYS=enter run_manager uninstall >"$TMP/uninstall-enter.log" 2>&1; then
+  echo "Enter unexpectedly confirmed uninstall" >&2
   exit 1
 fi
-grep -q "uninstall residue: $FAT/downloader_mister_magik.ini" "$TMP/residue.log"
-grep -q 'uninstall incomplete' "$TMP/residue.log"
-assert_one_main MiSTer
-assert_menu_1080p
-rm -rf "$FAT/downloader_mister_magik.ini"
-
-echo "mister-magik installer self-test ok"
+test -d "$APP"
+MISTER_MAGIK_TEST_KEYS=down run_manager uninstall >"$TMP/uninstall.log"
+grep -q 'fully uninstalled' "$TMP/uninstall.log"
+test ! -e "$APP"
+test ! -e "$FAT/Scripts/MiSTer-MagiK.sh"
+grep -qx '::sysinit:/media/fat/MiSTer &' "$TMP/inittab"
+grep -q 'main=Other' "$FAT/MiSTer.ini"

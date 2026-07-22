@@ -5,6 +5,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BIN="$ROOT/apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
+MANAGER="$ROOT/mister/tools/manager/target/armv7-unknown-linux-gnueabihf/release/mister-magik-manager"
 WORK="$ROOT/build/release-check-host"
 MAIN_BIN="${MISTER_MAIN_BIN:-$ROOT/../Main_MiSTer/bin/MiSTer}"
 cd "$ROOT"
@@ -29,6 +30,7 @@ scripts/agent verify --paths \
   apps/mister/src/lib.rs
 
 scripts/agent build runtime-device
+scripts/agent build manager-device
 apps/mister/scripts/check-arm-shared-libs.sh \
   "$BIN"
 
@@ -94,6 +96,7 @@ printf 'format=mister-magik-fpga-release-v1\nplatform_contract_sha256=%s\nmagik_
 scripts/agent ci platform-manifest generate \
   --layout public --output "$WORK/platform-v2.manifest" \
   --main "$MAIN_BIN" --gui "$BIN" \
+  --manager "$MANAGER" \
   --scanout-module "$WORK/mister_magik_scanout_slots.ko" \
   --scanout-metadata "$WORK/scanout.metadata.txt" \
   --latch-rbf "$WORK/menu-magik-vblank-latch.rbf" \
@@ -106,6 +109,7 @@ VERSION="$(source scripts/lib/bench-context-lib.sh; bench_context_build_receipt_
 BUILD_NUMBER="$(source scripts/lib/bench-context-lib.sh; bench_context_build_receipt_field "$BIN" build_number)"
 ZIP="$(scripts/package-distribution.sh \
   --binary "$BIN" \
+  --manager "$MANAGER" \
   --game-databases-release-dir "$WORK/game-databases" \
   --name release-check --out-dir "$WORK" \
   --version "$VERSION" --build-number "$BUILD_NUMBER" \
@@ -127,6 +131,7 @@ required = {
     "Scripts/MiSTer-MagiK.sh",
     "MiSTer_MagiK",
     "mister-magik/mister-magik-fb",
+    "mister-magik/mister-magik-manager",
     "mister-magik/mame.sqlite3",
     "mister-magik/hbmame.sqlite3",
     "mister-magik/platform-v2.manifest",

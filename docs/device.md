@@ -4,6 +4,10 @@ The Rust `mister` host binary is the operator interface for MiSTer access.
 Maintained automation must use typed `DeviceRequest` operations; raw SSH/SCP
 and generic remote-shell orchestration are not accepted interfaces.
 
+Public installation and removal are handled by the dedicated Rust
+`mister-magik-manager`; see [installer.md](installer.md). The Scripts-menu shell
+file is only a fail-closed, hash-verifying bootstrap.
+
 Build the host tool through `scripts/agent check` or use the binary produced at
 `mister/tools/host/target/debug/mister`. Common attended commands are:
 

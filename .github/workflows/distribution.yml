@@ -295,10 +295,12 @@ jobs:
           fi
           test -f "$rbf" && test -f "$rbf_meta" && test -f "$module" && test -f "$module_meta"
           test -f "$main_bin" && [[ "$main_revision" =~ ^[0-9a-f]{40}$ ]]
+          scripts/agent build manager-device
           scripts/agent ci platform-manifest generate \
             --output build/platform-v2.manifest \
             --main "$main_bin" \
             --gui apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb \
+            --manager mister/tools/manager/target/armv7-unknown-linux-gnueabihf/release/mister-magik-manager \
             --scanout-module "$module" \
             --scanout-metadata "$module_meta" \
             --latch-rbf "$rbf" \
