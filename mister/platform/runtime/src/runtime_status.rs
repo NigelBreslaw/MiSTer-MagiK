@@ -18,6 +18,7 @@ pub struct LauncherStatus<'a> {
     pub frames: u64,
     pub idle: bool,
     pub idle_loops: u64,
+    pub status_sequence: u64,
     pub fps_estimate: f64,
     pub rolling_fps: f64,
     pub rolling_prepare_us: u64,
@@ -243,6 +244,7 @@ fn launcher_status_value(status: LauncherStatus<'_>, ts_unix_ms: u128, pid: u32)
     insert!("frames", status.frames);
     insert!("idle", status.idle);
     insert!("idle_loops", status.idle_loops);
+    insert!("status_sequence", status.status_sequence);
     insert!("fps_estimate", (status.fps_estimate * 10.0).round() / 10.0);
     insert!("rolling_fps", (status.rolling_fps * 10.0).round() / 10.0);
     insert!("rolling_prepare_us", status.rolling_prepare_us);
@@ -598,6 +600,7 @@ mod tests {
                 frames: 42,
                 idle: true,
                 idle_loops: 12,
+                status_sequence: 9,
                 fps_estimate: 59.94,
                 rolling_fps: 60.0,
                 rolling_prepare_us: 1,
@@ -805,6 +808,7 @@ mod tests {
         assert_eq!(value["frames"], 42);
         assert_eq!(value["idle"], true);
         assert_eq!(value["idle_loops"], 12);
+        assert_eq!(value["status_sequence"], 9);
         assert_eq!(value["fps_estimate"], 59.9);
         assert_eq!(value["rolling_fps"], 60.0);
         assert_eq!(value["rolling_present_us"], 5);
@@ -883,6 +887,7 @@ mod tests {
             frames: 7,
             idle: false,
             idle_loops: 0,
+            status_sequence: 1,
             fps_estimate: 60.04,
             rolling_fps: 59.9,
             rolling_prepare_us: 11,

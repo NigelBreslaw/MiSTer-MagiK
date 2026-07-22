@@ -219,6 +219,15 @@ impl VsyncPacer {
         self.period_us
     }
 
+    /// Drop the current worker channel and open a fresh framebuffer wait after
+    /// Main has completed a display-mode transition. A worker still blocked in
+    /// the old ioctl cannot block the render thread and exits when it returns
+    /// to the disconnected channel.
+    pub fn rearm_after_display_mode_change(&mut self) {
+        *self = Self::from_env();
+        boot_analytics::event("vsync_rearmed", "reason=display_mode_change");
+    }
+
     pub fn hits(&self) -> u64 {
         self.hits
     }
@@ -544,7 +553,12 @@ fn configured_direct_wait_enabled() -> bool {
 }
 
 fn direct_wait_enabled_from(value: Option<&str>) -> bool {
-    !matches!(value, Some("0" | "off" | "false" | "no"))
+    value.is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "on" | "true" | "yes"
+        )
+    })
 }
 
 fn mister_ini_menu_pal_enabled() -> bool {
@@ -589,8 +603,9 @@ mod tests {
         );
         assert!(!direct_wait_enabled_from(Some("off")));
         assert!(!direct_wait_enabled_from(Some("0")));
-        assert!(direct_wait_enabled_from(Some("OFF")));
-        assert!(direct_wait_enabled_from(None));
+        assert!(direct_wait_enabled_from(Some("1")));
+        assert!(direct_wait_enabled_from(Some("TRUE")));
+        assert!(!direct_wait_enabled_from(None));
     }
 
     #[test]
@@ -725,6 +740,17 @@ mod tests {
                 .is_err(),
             "second status must not queue behind an unread frame"
         );
+    }
+
+    #[test]
+    fn missing_worker_result_falls_back_within_one_frame_deadline() {
+        let mut pacer = test_pacer(1_000);
+        let started = Instant::now();
+
+        let pace = pacer.wait();
+
+        assert_eq!(pace.source, VsyncPaceSource::Fallback);
+        assert!(started.elapsed() < Duration::from_millis(20));
     }
 
     #[test]

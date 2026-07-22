@@ -56,6 +56,11 @@ Confirmation persistence runs in a supervised child while Main continues
 polling the launcher and rollback deadline. Persistence failure leaves the
 transaction provisional for retry or cancellation, and rollback publishes a
 one-shot Settings return intent for the replacement launcher.
+Framebuffer-vsync ioctls run only on a disposable worker in production. The
+render thread waits on its bounded channel and falls back to timer pacing when
+a mode change strands the worker in the old framebuffer ioctl. Apply,
+confirmation completion, and cancellation rearm the worker against the stable
+mode; direct render-thread waits remain diagnostic opt-in only.
 
 Root `/media/fat/menu.rbf` is stock firmware owned by `update_all`; MagiK never
 writes it. `mister_magik_exit_to_menu` stays on the active latch Menu core.
@@ -291,6 +296,10 @@ selected-index change can finish its nav state on the same loop that moves the
 direct layer to its final row alignment. That final visual tick must still be
 rendered and copied before the idle path may sleep, otherwise the stale
 intermediate row pixels can remain visible until an unrelated redraw.
+Rendered and idle launcher loops both advance `status_sequence` in the periodic
+runtime status. Delivery smoke and diagnosis sample that sequence with the same
+PID so a live but stalled process cannot pass health checks, while a correctly
+sleeping Slint screen does not need to produce extra frames.
 
 ## Game Launch Handoff
 

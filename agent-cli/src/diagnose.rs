@@ -44,6 +44,8 @@ pub struct DeviceFacts {
     pub reboot_unstable: bool,
     pub arming_files: u64,
     pub temporary_state: bool,
+    #[serde(default)]
+    pub launcher_heartbeat_advancing: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -192,6 +194,8 @@ pub fn correlate(facts: &DeviceFacts, repaired: bool) -> DiagnosticReport {
         Some("Install the compatible MiSTer MagiK platform firmware, then rerun diagnosis.".into())
     } else if !facts.main_running || !facts.launcher_running || !facts.agent_running {
         Some("Restore the missing MiSTer MagiK service through the attended recovery path.".into())
+    } else if !facts.launcher_heartbeat_advancing {
+        Some("The MagiK launcher event loop is stalled; reboot through the attended recovery path, then rerun diagnosis.".into())
     } else {
         None
     };
@@ -234,6 +238,7 @@ mod tests {
             agent_running: true,
             credentials_ready: true,
             firmware_compatible: true,
+            launcher_heartbeat_advancing: true,
             ..DeviceFacts::default()
         }
     }
@@ -270,6 +275,22 @@ mod tests {
         );
         assert!(report.repaired_temporary_state);
         assert!(report.next_action.is_none());
+    }
+
+    #[test]
+    fn stalled_launcher_heartbeat_is_not_reported_healthy() {
+        let report = correlate(
+            &DeviceFacts {
+                launcher_heartbeat_advancing: false,
+                ..healthy()
+            },
+            false,
+        );
+        assert_eq!(report.status, "user_action_required");
+        assert!(report
+            .next_action
+            .unwrap()
+            .contains("event loop is stalled"));
     }
 
     #[test]

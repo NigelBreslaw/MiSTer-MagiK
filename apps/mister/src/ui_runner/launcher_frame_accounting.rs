@@ -49,6 +49,7 @@ pub(super) struct LauncherFrameAccounting {
     #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
     boot_frame_profile: Option<boot_analytics::LauncherFrameWriter>,
     last_status_write: Instant,
+    status_sequence: u64,
     first_copy_logged: bool,
     first_frame_logged: bool,
     first_visible_copy_done: bool,
@@ -922,6 +923,7 @@ impl LauncherFrameAccounting {
             #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
             boot_frame_profile: boot_analytics::LauncherFrameWriter::from_env(),
             last_status_write: Instant::now() - Duration::from_secs(2),
+            status_sequence: 0,
             first_copy_logged: false,
             first_frame_logged: false,
             first_visible_copy_done: false,
@@ -1793,12 +1795,14 @@ impl LauncherFrameAccounting {
         } else {
             self.current_frame_budget_status()
         };
+        self.status_sequence = self.status_sequence.saturating_add(1);
         runtime_status::write_launcher_status(LauncherStatus {
             scene: "launcher",
             screen: screen_label(nav.screen),
             frames,
             idle,
             idle_loops,
+            status_sequence: self.status_sequence,
             fps_estimate,
             rolling_fps,
             rolling_prepare_us,

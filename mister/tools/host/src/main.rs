@@ -1265,8 +1265,13 @@ fn delivery_smoke_command(layout: &str, expected_sha256: &str) -> Result<String>
         _ => return Err(format!("unsupported delivery layout: {layout}").into()),
     };
     Ok(format!(
-        "set -eu; test \"$(sha256sum {directory}/mister-magik-fb | awk '{{print $1}}')\" = '{expected_sha256}'; pidof {main} >/dev/null; pidof mister-magik-fb >/dev/null; grep -q '^mister_magik_scanout_slots ' /proc/modules; test -c /dev/mister-magik-scanout-slots; report=$({directory}/mister-magik-fb latch-readiness-report); printf '%s\\n' \"$report\" | grep -Eq 'latch_readiness_tsv[[:space:]]+valid=1[[:space:]]+state=ready'; grep -Eq '\"scene\"[[:space:]]*:[[:space:]]*\"launcher\"' /tmp/mister-magik/status.json; grep -Eq '\"screen\"[[:space:]]*:[[:space:]]*\"(home|arcade|settings|systems)\"' /tmp/mister-magik/status.json; grep -Eq '\"input_enabled\"[[:space:]]*:[[:space:]]*true' /tmp/mister-magik/status.json; test \"$(cat /sys/class/graphics/fb0/bits_per_pixel)\" = 16; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json"
+        "set -eu; test \"$(sha256sum {directory}/mister-magik-fb | awk '{{print $1}}')\" = '{expected_sha256}'; pidof {main} >/dev/null; pidof mister-magik-fb >/dev/null; {}; test -n \"$pid_before\"; test \"$pid_before\" = \"$pid_after\"; test -n \"$sequence_before\"; test -n \"$sequence_after\"; test \"$sequence_after\" -gt \"$sequence_before\"; grep -q '^mister_magik_scanout_slots ' /proc/modules; test -c /dev/mister-magik-scanout-slots; report=$({directory}/mister-magik-fb latch-readiness-report); printf '%s\\n' \"$report\" | grep -Eq 'latch_readiness_tsv[[:space:]]+valid=1[[:space:]]+state=ready'; grep -Eq '\"scene\"[[:space:]]*:[[:space:]]*\"launcher\"' \"$status\"; grep -Eq '\"screen\"[[:space:]]*:[[:space:]]*\"(home|arcade|settings|systems)\"' \"$status\"; grep -Eq '\"input_enabled\"[[:space:]]*:[[:space:]]*true' \"$status\"; test \"$(cat /sys/class/graphics/fb0/bits_per_pixel)\" = 16; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json",
+        launcher_heartbeat_sample_command()
     ))
+}
+
+fn launcher_heartbeat_sample_command() -> &'static str {
+    "status=/tmp/mister-magik/status.json; pid_before=$(sed -n 's/.*\"pid\":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' \"$status\"); sequence_before=$(sed -n 's/.*\"status_sequence\":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' \"$status\"); sleep 2; pid_after=$(sed -n 's/.*\"pid\":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' \"$status\"); sequence_after=$(sed -n 's/.*\"status_sequence\":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' \"$status\")"
 }
 
 fn benchmark_scenario_label(scenario: BenchmarkScenario) -> &'static str {
@@ -1494,7 +1499,10 @@ fn release_restore_command() -> String {
 }
 
 fn diagnostic_facts_command() -> String {
-    "set -eu; main=false; launcher=false; agent=false; credentials=false; firmware=false; unstable=false; temporary=false; { pidof MiSTer_MagiKDev >/dev/null 2>&1 || pidof MiSTer_MagiK >/dev/null 2>&1; } && main=true; pidof mister-magik-fb >/dev/null 2>&1 && launcher=true; pidof mister-magik-agent >/dev/null 2>&1 && agent=true; test -s /media/fat/mister-magik-dev/agent.token && credentials=true; { grep -q '^mister_magik_scanout_slots ' /proc/modules 2>/dev/null && test -c /dev/mister-magik-scanout-slots; } && firmware=true; test -e /tmp/mister-magik/reboot-unstable && unstable=true; arming=0; for path in /media/fat/mister-magik/launcher.env /media/fat/mister-magik-dev/launcher.env /tmp/mister-magik/fs-fault-launcher.env /tmp/mister-magik/fs-fault-session /tmp/mister-magik/fs-fault.json /media/fat/mister-magik/rebuild-on-next-boot /media/fat/mister-magik-dev/rebuild-on-next-boot; do test ! -e \"$path\" || arming=$((arming + 1)); done; for path in /tmp/mister-magik/agent-benchmark.tsv /tmp/mister-magik/agent-benchmark-warmup.tsv /tmp/mister-magik/agent-cold-benchmark.out /tmp/mister-magik/stale-launcher-return-state.json; do test ! -e \"$path\" || temporary=true; done; printf '{\"main_running\":%s,\"launcher_running\":%s,\"agent_running\":%s,\"credentials_ready\":%s,\"firmware_compatible\":%s,\"reboot_unstable\":%s,\"arming_files\":%s,\"temporary_state\":%s}\\n' \"$main\" \"$launcher\" \"$agent\" \"$credentials\" \"$firmware\" \"$unstable\" \"$arming\" \"$temporary\"".into()
+    format!(
+        "set -eu; main=false; launcher=false; agent=false; credentials=false; firmware=false; unstable=false; temporary=false; launcher_heartbeat_advancing=false; {{ pidof MiSTer_MagiKDev >/dev/null 2>&1 || pidof MiSTer_MagiK >/dev/null 2>&1; }} && main=true; pidof mister-magik-fb >/dev/null 2>&1 && launcher=true; pidof mister-magik-agent >/dev/null 2>&1 && agent=true; test -s /media/fat/mister-magik-dev/agent.token && credentials=true; {{ grep -q '^mister_magik_scanout_slots ' /proc/modules 2>/dev/null && test -c /dev/mister-magik-scanout-slots; }} && firmware=true; {}; if test -n \"$pid_before\" && test \"$pid_before\" = \"$pid_after\" && test -n \"$sequence_before\" && test -n \"$sequence_after\" && test \"$sequence_after\" -gt \"$sequence_before\"; then launcher_heartbeat_advancing=true; fi; test -e /tmp/mister-magik/reboot-unstable && unstable=true; arming=0; for path in /media/fat/mister-magik/launcher.env /media/fat/mister-magik-dev/launcher.env /tmp/mister-magik/fs-fault-launcher.env /tmp/mister-magik/fs-fault-session /tmp/mister-magik/fs-fault.json /media/fat/mister-magik/rebuild-on-next-boot /media/fat/mister-magik-dev/rebuild-on-next-boot; do test ! -e \"$path\" || arming=$((arming + 1)); done; for path in /tmp/mister-magik/agent-benchmark.tsv /tmp/mister-magik/agent-benchmark-warmup.tsv /tmp/mister-magik/agent-cold-benchmark.out /tmp/mister-magik/stale-launcher-return-state.json; do test ! -e \"$path\" || temporary=true; done; printf '{{\"main_running\":%s,\"launcher_running\":%s,\"agent_running\":%s,\"credentials_ready\":%s,\"firmware_compatible\":%s,\"reboot_unstable\":%s,\"arming_files\":%s,\"temporary_state\":%s,\"launcher_heartbeat_advancing\":%s}}\\n' \"$main\" \"$launcher\" \"$agent\" \"$credentials\" \"$firmware\" \"$unstable\" \"$arming\" \"$temporary\" \"$launcher_heartbeat_advancing\"",
+        launcher_heartbeat_sample_command()
+    )
 }
 
 fn safe_repair_command() -> String {
@@ -8481,6 +8489,9 @@ H: Handlers=event3 js0"#
             "\"scene\"",
             "\"screen\"",
             "\"input_enabled\"",
+            "status_sequence",
+            "pid_before",
+            "pid_after",
             "bits_per_pixel",
             "/media/fat/mister-magik/launcher.env",
             "/media/fat/mister-magik-dev/launcher.env",
@@ -8491,7 +8502,17 @@ H: Handlers=event3 js0"#
                 "missing smoke check: {required}"
             );
         }
+        assert!(command.contains("test \"$sequence_after\" -gt \"$sequence_before\""));
         assert!(validate_delivery_remote("/tmp/not-owned").is_err());
+    }
+
+    #[test]
+    fn diagnostic_facts_sample_launcher_heartbeat() {
+        let command = diagnostic_facts_command();
+        assert!(command.contains("status_sequence"));
+        assert!(command.contains("launcher_heartbeat_advancing"));
+        assert!(command.contains("pid_before"));
+        assert!(command.contains("pid_after"));
     }
 
     #[test]

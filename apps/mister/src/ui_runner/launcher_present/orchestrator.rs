@@ -292,7 +292,6 @@ impl LivePresentationAdapters<'_, '_> {
 
     fn present_suppressed(&mut self) -> LauncherPresentCycle {
         let (_, frame_t3, cpu_t3, pacing_trace) = self.pace_before_fb0();
-        let _ = self.targets.fb0.wait_vsync();
         LauncherPresentCycle {
             presentation: empty_present_result(),
             frame_t3,
@@ -695,6 +694,13 @@ mod tests {
         assert_eq!(presenter.present_with(frame(), &mut adapters), 2);
         assert_eq!(adapters.events, [Event::Fb0(Fb0PresentReason::Explicit)]);
         assert_eq!(presenter.pacing_backend(), LauncherPresentBackend::Fb0Dirty);
+    }
+
+    #[test]
+    fn production_presenter_never_waits_directly_on_framebuffer_vsync() {
+        let source = include_str!("orchestrator.rs");
+        assert!(!source.contains(&["fb0", ".wait_vsync()"].concat()));
+        assert!(!source.contains(&["fb0", ".wait_vsync_status()"].concat()));
     }
 
     #[test]

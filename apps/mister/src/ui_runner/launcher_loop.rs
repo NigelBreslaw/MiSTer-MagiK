@@ -2287,6 +2287,7 @@ pub(super) fn run_launcher_loop(
             };
         }
         while let Ok(result) = display_confirm_rx.try_recv() {
+            pacer.rearm_after_display_mode_change();
             nav.display_confirm_busy = false;
             match result {
                 Ok(state) => {
@@ -3383,7 +3384,9 @@ pub(super) fn run_launcher_loop(
                             }
                             LauncherAction::ApplyDisplayResolution => {
                                 if let Some(id) = event.path.as_deref() {
-                                    if let Err(error) = launcher::apply_display_resolution(id) {
+                                    let result = launcher::apply_display_resolution(id);
+                                    pacer.rearm_after_display_mode_change();
+                                    if let Err(error) = result {
                                         crate::ui_errln!("display apply failed: {error}");
                                         nav.display_error = Some(format!(
                                             "Could not apply the selected resolution: {error}"
@@ -3408,7 +3411,9 @@ pub(super) fn run_launcher_loop(
                                 });
                             }
                             LauncherAction::CancelDisplayResolution => {
-                                if let Err(error) = launcher::cancel_display_resolution() {
+                                let result = launcher::cancel_display_resolution();
+                                pacer.rearm_after_display_mode_change();
+                                if let Err(error) = result {
                                     crate::ui_errln!("display rollback failed: {error}");
                                     nav.display_error = Some(format!(
                                         "Could not restore the previous resolution: {error}"
@@ -6625,6 +6630,13 @@ mod tests {
             .expect("continue button should choose stale library");
         assert_eq!(event.action, LauncherAction::ContinueWithStaleLibrary);
         assert_eq!(nav.confirm_action, None);
+    }
+
+    #[test]
+    fn display_transactions_rearm_vsync_after_every_stable_boundary() {
+        let source = include_str!("launcher_loop.rs");
+        let call = ["pacer", ".rearm_after_display_mode_change()"].concat();
+        assert_eq!(source.matches(&call).count(), 3);
     }
 
     #[test]
