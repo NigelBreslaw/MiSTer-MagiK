@@ -3,131 +3,58 @@
 
 import { MisterUi } from "../mister_window.slint";
 import { MisterBridge } from "../api.slint";
-import { LauncherTile, SettingsButton } from "../components/launcher_chrome.slint";
+import { CrtTheme, CrtHeader, CrtFooter, CrtMenuRow } from "../components/crt_ui.slint";
 
 export component HomeGrid inherits Rectangle {
-    property <int> s: MisterUi.scale;
-    property <bool> root-menu: MisterBridge.menu-breadcrumb == "";
-    property <length> narrow-tile-width: 191px * s;
-    property <length> tile-gap: 16px * s;
-    property <length> tile-width: root-menu
-        ? (system-viewport.width - 3 * tile-gap) / 4
-        : narrow-tile-width;
-    property <length> tile-pitch: tile-width + tile-gap;
-    property <int> layout-item-count: root-menu ? Math.max(4, MisterBridge.menu-items.length)
-        : MisterBridge.menu-items.length;
-    property <length> content-width: layout-item-count * tile-width
-        + Math.max(0, layout-item-count - 1) * tile-gap;
-    property <length> scroll-x: MisterBridge.home-scroll-x * 1px * s;
-    property <int> first-visible-index: floor(scroll-x / tile-pitch);
+    // The selected row is always kept inside the clipped vertical viewport.
+    property <length> outer-padding: MisterUi.grid;
+    property <length> row-gap: MisterUi.grid;
+    property <length> row-height: MisterUi.compact-layout ? 32px : 48px;
+    property <length> row-pitch: row-height + row-gap;
+    property <int> visible-rows: max(1, floor(menu-viewport.height / row-pitch));
+    property <int> first-visible-row: MisterBridge.selected-index < visible-rows
+        ? 0
+        : MisterBridge.selected-index - visible-rows + 1;
 
-    background: transparent;
+    background: CrtTheme.background;
 
-    HorizontalLayout {
-        VerticalLayout {
-            padding: 18px * s;
-            spacing: 14px * s;
+    VerticalLayout {
+        padding: root.outer-padding;
+        spacing: root.row-gap;
+
+        CrtHeader {
+            title: MisterBridge.menu-title;
+            subtitle: MisterBridge.menu-breadcrumb != "" ? MisterBridge.menu-breadcrumb
+                : MisterBridge.dev-mode ? "DEV MODE"
+                : MisterBridge.update-available ? "Update Available" : "";
+            status: MisterBridge.clock-text;
+        }
+
+        menu-viewport := Rectangle {
+            vertical-stretch: 1;
+            background: transparent;
+            clip: true;
 
             Rectangle {
-                height: 42px * s;
-                background: #172131;
-                border-width: 1px;
-                border-color: #52647d;
-
-                HorizontalLayout {
-                    padding-left: 14px * s;
-                    padding-right: 10px * s;
-                    spacing: 12px * s;
-                    cross-axis-alignment: center;
-
-                    Rectangle {
-                        horizontal-stretch: 1;
-                        background: transparent;
-
-                        VerticalLayout {
-                            spacing: 2px * s;
-                            alignment: center;
-
-                            Text {
-                                width: 100%;
-                                text: MisterBridge.menu-title;
-                                color: #d7eef8;
-                                font-size: 16px * s;
-                                vertical-alignment: center;
-                                overflow: elide;
-                            }
-
-                            if (MisterBridge.dev-mode || MisterBridge.update-available)
-                                && MisterBridge.menu-breadcrumb == "" : Text {
-                                width: 100%;
-                                text: MisterBridge.dev-mode ? "DEV MODE" : "Update Available";
-                                color: MisterBridge.dev-mode ? #ffb347 : #06d6a0;
-                                font-size: 8px * s;
-                                vertical-alignment: center;
-                                overflow: elide;
-                            }
-
-                            if MisterBridge.menu-breadcrumb != "" : Text {
-                                width: 100%;
-                                text: MisterBridge.menu-breadcrumb;
-                                color: #8ca4b5;
-                                font-size: 8px * s;
-                                vertical-alignment: center;
-                                overflow: elide;
-                            }
-                        }
-                    }
-
-                    Text {
-                        text: MisterBridge.clock-text;
-                        color: #d7eef8;
-                        font-size: 16px * s;
-                        horizontal-alignment: right;
-                        vertical-alignment: center;
-                    }
-
-                    SettingsButton {
-                        width: 34px * s;
-                        height: 34px * s;
-                        focused: MisterBridge.settings-focused;
-                    }
-                }
-            }
-
-            system-viewport := Rectangle {
-                vertical-stretch: 1;
+                y: -root.first-visible-row * root.row-pitch;
+                width: parent.width;
+                height: MisterBridge.menu-items.length * root.row-pitch;
                 background: transparent;
-                clip: true;
 
-                Rectangle {
-                    x: -root.scroll-x;
-                    width: root.content-width;
-                    height: parent.height;
-                    background: transparent;
-
-                    // Root tiles always retain their final four-column width while catalog
-                    // destinations publish progressively. Nested menus retain four 191px tiles,
-                    // four 16px gaps, and half of the fifth tile
-                    // in the 924px viewport. A sixth, fully off-screen delegate ensures the
-                    // incoming tile is already present while a slot is recycled across a pitch
-                    // boundary. At the end, clamping aligns the final tile's right edge.
-                    for slot in 6: LauncherTile {
-                        property <int> menu-index: root.first-visible-index
-                            + Math.mod(Math.mod(slot - root.first-visible-index, 6) + 6, 6);
-
-                        visible: menu-index < MisterBridge.menu-items.length;
-                        x: menu-index * root.tile-pitch;
-                        width: root.tile-width;
-                        height: parent.height;
-                        label: MisterBridge.menu-items[menu-index].label;
-                        subtitle: MisterBridge.menu-items[menu-index].subtitle;
-                        status: MisterBridge.menu-items[menu-index].status;
-                        focused: !MisterBridge.settings-focused
-                            && MisterBridge.menu-items[menu-index].focused;
-                        flat-focus-style: true;
-                    }
+                for item[index] in MisterBridge.menu-items : CrtMenuRow {
+                    y: index * root.row-pitch;
+                    width: parent.width;
+                    height: root.row-height;
+                    label: item.label;
+                    detail: item.subtitle;
+                    focused: item.focused;
                 }
             }
+        }
+
+        CrtFooter {
+            left-hint: MisterBridge.menu-breadcrumb == "" ? "A Select" : "A Select   B Back";
+            right-hint: MisterBridge.menu-breadcrumb == "" ? "HOME Settings" : "HOME Launcher";
         }
     }
 }

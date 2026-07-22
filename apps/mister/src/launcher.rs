@@ -1690,7 +1690,15 @@ impl LauncherNav {
         emit_collection_intents: bool,
     ) -> Option<LauncherEvent> {
         if rising(now.btn_home, self.prev.btn_home) {
-            self.go_root();
+            // Home is an escape everywhere except the root, where it opens Settings.
+            if self.current_menu_id() == ROOT_MENU_ID {
+                self.remember_current_menu_view();
+                self.settings_selected = 0;
+                self.settings_focused = false;
+                self.screen = Screen::Settings;
+            } else {
+                self.go_root();
+            }
             return None;
         }
         if rising(now.btn_b, self.prev.btn_b) {
@@ -1699,23 +1707,6 @@ impl LauncherNav {
         }
 
         let item_count = self.current_menu_count();
-        if self.repeat.tick_up(now.dpad_up, frame_now) {
-            self.settings_focused = true;
-        }
-        if self.repeat.tick_down(now.dpad_down, frame_now) {
-            self.settings_focused = false;
-        }
-        if self.settings_focused {
-            self.home_scroll = HomeScrollState::default();
-            self.home_scroll_animation.snap_to(self.scroll_x as f64);
-            if rising(now.btn_a, self.prev.btn_a) {
-                self.remember_current_menu_view();
-                self.settings_selected = 0;
-                self.screen = Screen::Settings;
-            }
-            return None;
-        }
-
         if item_count == 0 {
             self.home_scroll = HomeScrollState::default();
             self.scroll_x = 0;
@@ -1768,8 +1759,10 @@ impl LauncherNav {
             });
         self.home_scroll.last_frame_at = Some(frame_now);
 
-        let dir = i32::from(now.dpad_right) - i32::from(now.dpad_left);
-        let previous_dir = i32::from(self.prev.dpad_right) - i32::from(self.prev.dpad_left);
+        let dir =
+            i32::from(now.dpad_down || now.dpad_right) - i32::from(now.dpad_up || now.dpad_left);
+        let previous_dir = i32::from(self.prev.dpad_down || self.prev.dpad_right)
+            - i32::from(self.prev.dpad_up || self.prev.dpad_left);
         if dir == 0 {
             let settle_direction = if previous_dir != 0 {
                 previous_dir
@@ -6226,31 +6219,32 @@ mod tests {
     }
 
     #[test]
-    fn settings_b_returns_to_originating_menu_while_home_returns_root() {
+    fn home_returns_to_root_then_opens_settings_and_b_returns_root() {
         let catalog = hierarchy_catalog();
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
         nav.sync_launcher_taxonomy(&catalog);
         assert!(nav.open_menu("menu:consoles:nintendo"));
-        nav.settings_focused = true;
 
-        let _ = nav.handle_input(&pad_with(|pad| pad.btn_a = true), t0, &catalog);
-        assert_eq!(nav.screen, Screen::Settings);
-        release(&mut nav, &catalog, t0, 16);
-        let _ = nav.handle_input(
-            &pad_with(|pad| pad.btn_b = true),
-            t0 + Duration::from_millis(32),
-            &catalog,
-        );
+        let _ = nav.handle_input(&pad_with(|pad| pad.btn_home = true), t0, &catalog);
         assert_eq!(nav.screen, Screen::Home);
-        assert_eq!(nav.current_menu_id(), "menu:consoles:nintendo");
-        release(&mut nav, &catalog, t0, 48);
+        assert_eq!(nav.current_menu_id(), ROOT_MENU_ID);
+        release(&mut nav, &catalog, t0, 16);
 
         let _ = nav.handle_input(
             &pad_with(|pad| pad.btn_home = true),
+            t0 + Duration::from_millis(32),
+            &catalog,
+        );
+        assert_eq!(nav.screen, Screen::Settings);
+        release(&mut nav, &catalog, t0, 48);
+
+        let _ = nav.handle_input(
+            &pad_with(|pad| pad.btn_b = true),
             t0 + Duration::from_millis(64),
             &catalog,
         );
+        assert_eq!(nav.screen, Screen::Home);
         assert_eq!(nav.current_menu_id(), ROOT_MENU_ID);
     }
 
