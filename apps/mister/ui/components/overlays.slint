@@ -223,17 +223,37 @@ export component BackgroundScanBadge inherits Rectangle {
     }
 }
 
+component CompactDialogButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> focused;
+
+    height: 42px;
+    background: focused ? #2a2236 : #181829;
+    border-width: focused ? 2px : 1px;
+    border-color: focused ? #06d6a0 : #5a4973;
+
+    Text {
+        text: root.label;
+        color: root.focused ? #06d6a0 : #e8e0f0;
+        font-size: 8px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        wrap: word-wrap;
+    }
+}
+
 export component ConfirmDialog inherits Rectangle {
+    property <bool> compact: MisterUi.window-height <= 288;
     background: #000000b0;
 
     Rectangle {
-        width: 680px;
-        height: 260px;
+        width: root.compact ? (MisterUi.window-width - 16) * 1px : 680px;
+        height: root.compact ? (MisterUi.window-height - 12) * 1px : 260px;
         background: #0e0c14;
-        border-width: 4px;
+        border-width: root.compact ? 2px : 4px;
         border-color: #06d6a0;
 
-        VerticalLayout {
+        if !root.compact : VerticalLayout {
             padding: 24px;
             spacing: 18px;
 
@@ -266,6 +286,44 @@ export component ConfirmDialog inherits Rectangle {
                 if MisterBridge.confirm-right-label != "" : LauncherTile {
                     label: MisterBridge.confirm-right-label;
                     subtitle: "";
+                    focused: MisterBridge.confirm-selected == 1;
+                }
+            }
+        }
+
+        if root.compact : VerticalLayout {
+            padding: 10px;
+            spacing: 8px;
+
+            Text {
+                text: MisterBridge.confirm-title;
+                color: #06d6a0;
+                font-size: 10px;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+
+            Text {
+                text: MisterBridge.confirm-message;
+                color: #e8e0f0;
+                font-size: 7px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                wrap: word-wrap;
+                vertical-stretch: 1;
+            }
+
+            HorizontalLayout {
+                height: 42px;
+                spacing: 8px;
+
+                if MisterBridge.confirm-left-label != "" : CompactDialogButton {
+                    label: MisterBridge.confirm-left-label;
+                    focused: MisterBridge.confirm-selected == 0;
+                }
+
+                if MisterBridge.confirm-right-label != "" : CompactDialogButton {
+                    label: MisterBridge.confirm-right-label;
                     focused: MisterBridge.confirm-selected == 1;
                 }
             }

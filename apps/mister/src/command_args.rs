@@ -150,7 +150,6 @@ pub fn requires_process_exclusive(command: &str) -> bool {
             | "library-refresh"
             | "request-library-rebuild"
             | "toggle-simple-joystick-setting"
-            | "display-persist"
             | "reset-delete-screenshot-packs"
             | "media-bench-download"
             | "media-bench-save"

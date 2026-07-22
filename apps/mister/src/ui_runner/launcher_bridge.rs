@@ -395,6 +395,44 @@ fn sync_launcher_confirm_bridge(
             set_confirm_left_label,
             &label
         );
+        if nav.display_confirm_busy {
+            set_bridge_string_if_changed!(
+                bridge,
+                get_confirm_message,
+                set_confirm_message,
+                "Saving the new resolution…"
+            );
+            set_bridge_string_if_changed!(
+                bridge,
+                get_confirm_right_label,
+                set_confirm_right_label,
+                "Saving…"
+            );
+        } else if let Some(error) = nav.display_error.as_deref() {
+            let message = format!("Could not save the resolution: {error}. Retry or cancel.");
+            set_bridge_string_if_changed!(
+                bridge,
+                get_confirm_title,
+                set_confirm_title,
+                "Resolution change failed"
+            );
+            set_bridge_string_if_changed!(
+                bridge,
+                get_confirm_message,
+                set_confirm_message,
+                &message
+            );
+            set_bridge_string_if_changed!(
+                bridge,
+                get_confirm_right_label,
+                set_confirm_right_label,
+                "Retry"
+            );
+        }
+    } else if nav.confirm_action == Some(launcher::ConfirmAction::DisplayResolutionError) {
+        if let Some(error) = nav.display_error.as_deref() {
+            set_bridge_string_if_changed!(bridge, get_confirm_message, set_confirm_message, error);
+        }
     }
 }
 
@@ -443,6 +481,12 @@ fn confirm_bridge_text(action: Option<launcher::ConfirmAction>) -> ConfirmBridge
             message: "Keep this display resolution? It will be restored automatically if you cannot see this dialog.",
             left_label: "Cancel (10)",
             right_label: "Confirm",
+        },
+        Some(launcher::ConfirmAction::DisplayResolutionError) => ConfirmBridgeText {
+            title: "Resolution change failed",
+            message: "The display resolution could not be changed.",
+            left_label: "OK",
+            right_label: "",
         },
         None => ConfirmBridgeText {
             title: "",

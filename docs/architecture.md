@@ -52,6 +52,10 @@ suspends Slint, applies the selected HDMI or CRT/VGA timing, and restarts the
 launcher with a ten-second confirmation deadline. `MiSTer.ini` remains
 unchanged until confirmation; cancellation, timeout, launcher failure, or
 power loss therefore returns to the last persisted working mode.
+Confirmation persistence runs in a supervised child while Main continues
+polling the launcher and rollback deadline. Persistence failure leaves the
+transaction provisional for retry or cancellation, and rollback publishes a
+one-shot Settings return intent for the replacement launcher.
 
 Root `/media/fat/menu.rbf` is stock firmware owned by `update_all`; MagiK never
 writes it. `mister_magik_exit_to_menu` stays on the active latch Menu core.

@@ -253,6 +253,7 @@ pub enum ConfirmAction {
     LibraryChanged,
     LibraryUpdateFailed,
     DisplayResolution,
+    DisplayResolutionError,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -725,6 +726,8 @@ pub struct LauncherNav {
     pub display_selected: usize,
     pub display_highlighted: usize,
     pub display_confirm_remaining: u8,
+    pub display_confirm_busy: bool,
+    pub display_error: Option<String>,
     pub screensaver_selected: usize,
     pub settings: MagikSettings,
     pub licenses_selected: usize,
@@ -985,6 +988,8 @@ impl LauncherNav {
             display_selected: usize::MAX,
             display_highlighted: 0,
             display_confirm_remaining: 0,
+            display_confirm_busy: false,
+            display_error: None,
             screensaver_selected: 0,
             settings: MagikSettings::default(),
             licenses_selected: 0,
@@ -2276,6 +2281,17 @@ impl LauncherNav {
 
     fn handle_confirm(&mut self, now: &PadState, frame_now: Instant) -> Option<LauncherEvent> {
         let home_pressed = rising(now.btn_home, self.prev.btn_home);
+        if self.confirm_action == Some(ConfirmAction::DisplayResolutionError) {
+            if rising(now.btn_a, self.prev.btn_a)
+                || rising(now.btn_b, self.prev.btn_b)
+                || home_pressed
+            {
+                self.confirm_action = None;
+                self.confirm_selected = 0;
+                self.display_error = None;
+            }
+            return None;
+        }
         if rising(now.btn_b, self.prev.btn_b) || home_pressed {
             if self.confirm_action == Some(ConfirmAction::DisplayResolution) {
                 self.confirm_action = None;
@@ -2323,6 +2339,12 @@ impl LauncherNav {
                 Some(ConfirmAction::LibraryUpdateFailed) => false,
                 _ => selected == 1,
             };
+            if action == Some(ConfirmAction::DisplayResolution)
+                && confirmed
+                && self.display_confirm_busy
+            {
+                return None;
+            }
             self.confirm_action = None;
             self.confirm_selected = 0;
             if confirmed {
@@ -2352,6 +2374,7 @@ impl LauncherNav {
                         action: LauncherAction::ConfirmDisplayResolution,
                         path: None,
                     }),
+                    Some(ConfirmAction::DisplayResolutionError) => None,
                     None => None,
                 };
             }
@@ -3494,7 +3517,7 @@ fn rising(now: bool, prev: bool) -> bool {
 
 fn confirm_max_selected(action: Option<ConfirmAction>) -> usize {
     match action {
-        Some(ConfirmAction::LibraryUpdateFailed) => 0,
+        Some(ConfirmAction::LibraryUpdateFailed | ConfirmAction::DisplayResolutionError) => 0,
         Some(_) => 1,
         None => 0,
     }
@@ -3650,6 +3673,18 @@ pub struct DisplayCommandState {
     pub active: String,
     pub pending: Option<String>,
     pub remaining: u8,
+    pub phase: DisplayTransactionPhase,
+    pub error: Option<String>,
+    pub return_to_settings: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum DisplayTransactionPhase {
+    #[default]
+    Idle,
+    Provisional,
+    Persisting,
+    Failed,
 }
 
 pub fn display_state() -> Result<DisplayCommandState, String> {
@@ -3662,6 +3697,9 @@ fn parse_display_state_response(response: &str) -> Result<DisplayCommandState, S
     let mut pending = None;
     let mut remaining = 0;
     let mut schema = None;
+    let mut phase = DisplayTransactionPhase::Idle;
+    let mut error = None;
+    let mut return_to_settings = false;
     for field in response.split_whitespace() {
         if let Some(value) = field.strip_prefix("schema=") {
             schema = Some(value);
@@ -3674,6 +3712,25 @@ fn parse_display_state_response(response: &str) -> Result<DisplayCommandState, S
         }
         if let Some(value) = field.strip_prefix("remaining=") {
             remaining = value.parse::<u8>().unwrap_or(0).min(10);
+        }
+        if let Some(value) = field.strip_prefix("phase=") {
+            phase = match value {
+                "idle" => DisplayTransactionPhase::Idle,
+                "provisional" => DisplayTransactionPhase::Provisional,
+                "persisting" => DisplayTransactionPhase::Persisting,
+                "failed" => DisplayTransactionPhase::Failed,
+                _ => return Err("display state has unsupported phase".into()),
+            };
+        }
+        if let Some(value) = field.strip_prefix("error=") {
+            error = (value != "none").then(|| value.to_owned());
+        }
+        if let Some(value) = field.strip_prefix("return=") {
+            return_to_settings = match value {
+                "none" => false,
+                "settings" => true,
+                _ => return Err("display state has unsupported return screen".into()),
+            };
         }
     }
     if schema != Some("1") {
@@ -3689,6 +3746,9 @@ fn parse_display_state_response(response: &str) -> Result<DisplayCommandState, S
         active: active.ok_or("display state missing active mode")?,
         pending,
         remaining,
+        phase,
+        error,
+        return_to_settings,
     })
 }
 
@@ -3701,6 +3761,25 @@ pub fn apply_display_resolution(id: &str) -> Result<(), String> {
 
 pub fn confirm_display_resolution() -> Result<(), String> {
     write_magik_command_acknowledged("mister_magik_display_confirm_v1\n")
+}
+
+pub fn confirm_display_resolution_and_wait(
+    timeout: Duration,
+) -> Result<DisplayCommandState, String> {
+    confirm_display_resolution()?;
+    let started = Instant::now();
+    while started.elapsed() < timeout {
+        let state = display_state()?;
+        match state.phase {
+            DisplayTransactionPhase::Idle if state.pending.is_none() => return Ok(state),
+            DisplayTransactionPhase::Failed => return Ok(state),
+            DisplayTransactionPhase::Idle
+            | DisplayTransactionPhase::Provisional
+            | DisplayTransactionPhase::Persisting => {}
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    Err("display persistence timed out".to_string())
 }
 
 pub fn cancel_display_resolution() -> Result<(), String> {
@@ -6684,12 +6763,15 @@ mod tests {
     #[test]
     fn display_state_reply_requires_schema_and_known_pending_mode() {
         let state = parse_display_state_response(
-            "ok DisplayV1 schema=1 active=custom pending=crt-240p60 remaining=12",
+            "ok DisplayV1 schema=1 active=custom pending=crt-240p60 remaining=12 phase=failed error=persist-failed return=settings",
         )
         .unwrap();
         assert_eq!(state.active, "custom");
         assert_eq!(state.pending.as_deref(), Some("crt-240p60"));
         assert_eq!(state.remaining, 10);
+        assert_eq!(state.phase, DisplayTransactionPhase::Failed);
+        assert_eq!(state.error.as_deref(), Some("persist-failed"));
+        assert!(state.return_to_settings);
         assert!(parse_display_state_response(
             "ok DisplayV1 active=custom pending=none remaining=0"
         )

@@ -173,7 +173,11 @@ pub fn persist_to(path: impl AsRef<Path>, id: &str) -> io::Result<()> {
     file.write_all(lines.join("\n").as_bytes())?;
     file.write_all(b"\n")?;
     file.sync_all()?;
-    fs::rename(tmp, path)
+    fs::rename(tmp, path)?;
+    if let Some(parent) = path.parent() {
+        OpenOptions::new().read(true).open(parent)?.sync_all()?;
+    }
+    Ok(())
 }
 
 fn set_ini_key(lines: &mut Vec<String>, wanted_section: &str, wanted_key: &str, value: &str) {

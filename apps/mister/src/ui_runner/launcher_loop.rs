@@ -1745,6 +1745,8 @@ pub(super) fn run_launcher_loop(
     nav.settings = crate::settings::MagikSettings::load();
     nav.screen = start_screen;
     let mut display_confirm_deadline = None;
+    let (display_confirm_tx, display_confirm_rx) =
+        mpsc::channel::<Result<launcher::DisplayCommandState, String>>();
     if std::env::var_os("MISTER_MAGIK_PARENT").is_some() {
         if let Ok(state) = launcher::display_state() {
             let selected_id = state.pending.as_deref().unwrap_or(&state.active);
@@ -1755,6 +1757,17 @@ pub(super) fn run_launcher_loop(
             {
                 nav.display_selected = index;
                 nav.display_highlighted = index;
+            }
+            if state.return_to_settings {
+                nav.screen = Screen::Settings;
+                nav.settings_selected = 0;
+                if let Some(error) = state.error.as_deref() {
+                    nav.display_error = Some(format!(
+                        "The previous resolution was restored after a display failure: {error}"
+                    ));
+                    nav.confirm_action = Some(launcher::ConfirmAction::DisplayResolutionError);
+                    nav.confirm_selected = 0;
+                }
             }
             if state.pending.is_some() {
                 nav.screen = Screen::Settings;
@@ -2264,12 +2277,52 @@ pub(super) fn run_launcher_loop(
             continue;
         }
         let loop_start = Instant::now();
+        let mut full_bridge_dirty = false;
         if let Some(deadline) = display_confirm_deadline {
             nav.display_confirm_remaining = if loop_start >= deadline {
                 0
             } else {
                 ((deadline - loop_start).as_millis().div_ceil(1000) as u8).min(10)
             };
+        }
+        while let Ok(result) = display_confirm_rx.try_recv() {
+            nav.display_confirm_busy = false;
+            match result {
+                Ok(state) => {
+                    if state.phase == launcher::DisplayTransactionPhase::Failed {
+                        nav.confirm_action = Some(launcher::ConfirmAction::DisplayResolution);
+                        nav.confirm_selected = 0;
+                        nav.display_error = Some(
+                            state
+                                .error
+                                .unwrap_or_else(|| "display persistence failed".to_string()),
+                        );
+                        nav.display_confirm_remaining = state.remaining.max(1);
+                        display_confirm_deadline = Some(
+                            Instant::now() + Duration::from_secs(u64::from(state.remaining.max(1))),
+                        );
+                    } else {
+                        nav.confirm_action = None;
+                        nav.display_error = None;
+                        display_confirm_deadline = None;
+                        if let Some(index) =
+                            mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS
+                                .iter()
+                                .position(|mode| mode.id == state.active)
+                        {
+                            nav.display_selected = index;
+                            nav.display_highlighted = index;
+                        }
+                    }
+                }
+                Err(error) => {
+                    nav.confirm_action = Some(launcher::ConfirmAction::DisplayResolution);
+                    nav.confirm_selected = 0;
+                    nav.display_error = Some(error);
+                }
+            }
+            full_bridge_dirty = true;
+            request_launcher_redraw!();
         }
         let frame_analytics_mode = frame_accounting.frame_analytics_mode();
         let cpu_loop_start = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
@@ -2286,7 +2339,6 @@ pub(super) fn run_launcher_loop(
             scheduler.launch_is_active() || !loading_title.is_empty() || compatibility_active;
         let setup_active = setup.is_active();
         let mut light_bridge_dirty = false;
-        let mut full_bridge_dirty = false;
         let mut pad_changed_for_input = if !launching && lifecycle.startup_input_enabled() {
             Some(pad.poll_with_debug_labels(setup_active))
         } else {
@@ -3332,23 +3384,39 @@ pub(super) fn run_launcher_loop(
                                 if let Some(id) = event.path.as_deref() {
                                     if let Err(error) = launcher::apply_display_resolution(id) {
                                         crate::ui_errln!("display apply failed: {error}");
+                                        nav.display_error = Some(format!(
+                                            "Could not apply the selected resolution: {error}"
+                                        ));
+                                        nav.confirm_action =
+                                            Some(launcher::ConfirmAction::DisplayResolutionError);
+                                        nav.confirm_selected = 0;
                                     }
                                 }
                                 continue;
                             }
                             LauncherAction::ConfirmDisplayResolution => {
-                                if let Err(error) = launcher::confirm_display_resolution() {
-                                    crate::ui_errln!("display confirm failed: {error}");
-                                    nav.confirm_action =
-                                        Some(launcher::ConfirmAction::DisplayResolution);
-                                } else {
-                                    display_confirm_deadline = None;
-                                }
+                                nav.display_confirm_busy = true;
+                                nav.display_error = None;
+                                nav.confirm_action =
+                                    Some(launcher::ConfirmAction::DisplayResolution);
+                                let result_tx = display_confirm_tx.clone();
+                                std::thread::spawn(move || {
+                                    let result = launcher::confirm_display_resolution_and_wait(
+                                        Duration::from_secs(12),
+                                    );
+                                    let _ = result_tx.send(result);
+                                });
                                 continue;
                             }
                             LauncherAction::CancelDisplayResolution => {
                                 if let Err(error) = launcher::cancel_display_resolution() {
                                     crate::ui_errln!("display rollback failed: {error}");
+                                    nav.display_error = Some(format!(
+                                        "Could not restore the previous resolution: {error}"
+                                    ));
+                                    nav.confirm_action =
+                                        Some(launcher::ConfirmAction::DisplayResolutionError);
+                                    nav.confirm_selected = 0;
                                 }
                                 continue;
                             }
