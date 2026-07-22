@@ -329,7 +329,7 @@ jobs:
       - name: Install checkout and kernel tools
         run: >-
           apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y
-          git ca-certificates curl make gcc-arm-linux-gnueabihf flex bison bc libssl-dev
+          git ca-certificates curl make gcc-arm-linux-gnueabihf flex bison bc libssl-dev pkg-config
           libelf-dev kmod sparse python3
 
       - uses: actions/checkout@v7
