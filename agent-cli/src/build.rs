@@ -949,7 +949,7 @@ fn run_bounded(command: &mut Command, deadline: Duration) -> AgentResult<()> {
         .stderr(Stdio::inherit())
         .spawn()
         .map_err(|error| format!("cannot start {description}: {error}"))?;
-    let status = crate::process::wait(&mut child, Some(deadline), &description, || Ok(()))?;
+    let status = crate::process::wait(&mut child, Some(deadline), &description, None, || Ok(()))?;
     if status.success() {
         Ok(())
     } else {

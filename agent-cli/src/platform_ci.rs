@@ -626,7 +626,7 @@ fn bounded_output(mut command: Command, label: &str, deadline: Duration) -> Resu
         let mut bytes = Vec::new();
         stderr.read_to_end(&mut bytes).map(|_| bytes)
     });
-    let status = crate::process::wait(&mut child, Some(deadline), label, || Ok(()))?;
+    let status = crate::process::wait(&mut child, Some(deadline), label, None, || Ok(()))?;
     let stdout = stdout_reader
         .join()
         .map_err(|_| format!("{label} stdout reader failed"))?

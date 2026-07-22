@@ -502,7 +502,8 @@ fn run_bounded(repository: &Path, program: &str, args: &[String]) -> AgentResult
         .stderr(Stdio::inherit())
         .spawn()
         .map_err(|error| format!("cannot start {program}: {error}"))?;
-    let status = crate::process::wait(&mut child, Some(PREPARE_DEADLINE), program, || Ok(()))?;
+    let status =
+        crate::process::wait(&mut child, Some(PREPARE_DEADLINE), program, None, || Ok(()))?;
     if status.success() {
         Ok(())
     } else {

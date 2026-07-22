@@ -236,14 +236,20 @@ fn output(
             code: "command_missing",
             detail: format!("cannot start {program}: {error}"),
         })?;
-    let status = crate::process::wait(&mut child, Some(Duration::from_secs(30)), program, || {
-        reporter.emit(
-            EventKind::Progress,
-            "doctor",
-            "Inspecting host prerequisites",
-            None,
-        )
-    })?;
+    let status = crate::process::wait(
+        &mut child,
+        Some(Duration::from_secs(30)),
+        program,
+        Some(Duration::from_secs(10)),
+        || {
+            reporter.emit(
+                EventKind::Progress,
+                "doctor",
+                "Inspecting host prerequisites",
+                None,
+            )
+        },
+    )?;
     let mut text = String::new();
     child
         .stdout
@@ -274,17 +280,21 @@ fn command_status(
         .stderr(Stdio::null())
         .spawn()
         .map_err(|error| format!("cannot start {program}: {error}"))?;
-    Ok(
-        crate::process::wait(&mut child, Some(Duration::from_secs(5)), program, || {
+    Ok(crate::process::wait(
+        &mut child,
+        Some(Duration::from_secs(5)),
+        program,
+        Some(Duration::from_secs(10)),
+        || {
             reporter.emit(
                 EventKind::Progress,
                 "doctor",
                 "Inspecting host prerequisites",
                 None,
             )
-        })?
-        .success(),
-    )
+        },
+    )?
+    .success())
 }
 
 fn quoted_value(text: &str, key: &str) -> Option<String> {

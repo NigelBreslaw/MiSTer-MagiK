@@ -374,11 +374,19 @@ fn run_attempt(
         .stderr(Stdio::from(log))
         .spawn()
         .map_err(|error| error.to_string())?;
-    let status = crate::process::wait(&mut child, None, &operation.program, || {
-        reporter
-            .emit(EventKind::Progress, phase, heartbeat, None)
-            .map_err(|error| error.to_string())
-    })?;
+    let status = crate::process::wait(
+        &mut child,
+        None,
+        &operation.program,
+        Some(std::time::Duration::from_millis(
+            crate::progress::HEARTBEAT_MS,
+        )),
+        || {
+            reporter
+                .emit(EventKind::Progress, phase, heartbeat, None)
+                .map_err(|error| error.to_string())
+        },
+    )?;
     let code = status.code().unwrap_or(1);
     evidence.finish_command(command_id, started, code)?;
     Ok(status)
