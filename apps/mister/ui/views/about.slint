@@ -1,6 +1,26 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { MisterBridge } from "../api.slint";
+
+component AboutRow inherits Rectangle {
+    in property <string> label;
+    in property <string> detail;
+    in property <bool> focused;
+
+    height: 52px;
+    background: focused ? #2a2236 : #1e1828;
+    border-width: focused ? 2px : 1px;
+    border-color: focused ? #06d6a0 : #5c4a72;
+
+    VerticalLayout {
+        padding: 10px;
+        spacing: 4px;
+        Text { text: label; color: focused ? #06d6a0 : #e8e0f0; font-size: 16px; }
+        Text { text: detail; color: #9080a8; font-size: 8px; }
+    }
+}
+
 export component AboutScreen inherits Rectangle {
     background: #0b0d14;
     VerticalLayout {
@@ -34,6 +54,18 @@ export component AboutScreen inherits Rectangle {
             horizontal-alignment: center;
         }
         Rectangle { vertical-stretch: 1; background: transparent; }
+
+        AboutRow {
+            label: "Info";
+            detail: "Build, display, database, and kernel details";
+            focused: MisterBridge.about-selected == 0;
+        }
+        AboutRow {
+            label: "Licenses";
+            detail: "Open source licenses and acknowledgements";
+            focused: MisterBridge.about-selected == 1;
+        }
+
         Text { text: "B: back"; color: #6f8198; font-size: 8px; horizontal-alignment: center; }
     }
 

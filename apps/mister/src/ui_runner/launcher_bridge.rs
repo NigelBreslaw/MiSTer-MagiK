@@ -39,6 +39,7 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     bridge.set_selected_index(0);
     bridge.set_settings_focused(false);
     bridge.set_settings_selected(0);
+    bridge.set_about_selected(0);
     bridge.set_display_options(ModelRc::new(VecModel::from(
         mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS
             .iter()
@@ -121,6 +122,12 @@ pub(super) fn sync_settings_bridge(
         get_settings_selected,
         set_settings_selected,
         nav.settings_selected as i32
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_about_selected,
+        set_about_selected,
+        nav.about_selected as i32
     );
     let active_label = mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS
         .get(nav.display_selected)
@@ -637,6 +644,7 @@ pub(super) fn sync_bridge_launcher(
     bridge.set_menu_breadcrumb(nav.current_menu_breadcrumb().into());
     bridge.set_settings_focused(nav.settings_focused);
     bridge.set_settings_selected(nav.settings_selected as i32);
+    bridge.set_about_selected(nav.about_selected as i32);
     let active_label = mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS
         .get(nav.display_selected)
         .map_or("Custom/current mode", |mode| mode.label);
@@ -788,6 +796,12 @@ pub(super) fn sync_bridge_launcher_light(
         get_settings_selected,
         set_settings_selected,
         nav.settings_selected as i32
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_about_selected,
+        set_about_selected,
+        nav.about_selected as i32
     );
     set_bridge_if_changed!(
         bridge,

@@ -65,7 +65,8 @@ const FIFO_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 const MISTER_START_TIMEOUT: Duration = Duration::from_secs(15);
 pub const LAUNCH_RETURN_STATE_PATH: &str = "/tmp/mister-magik/launcher-return-state.json";
 const LAUNCH_RETURN_STATE_SCHEMA: u32 = 3;
-const SETTINGS_MAX_SELECTED: usize = 7;
+const SETTINGS_MAX_SELECTED: usize = 4;
+const ABOUT_MAX_SELECTED: usize = 1;
 const SCREENSAVER_SETTINGS_MAX_SELECTED: usize = 2;
 const LICENSES_MAX_SELECTED: usize = crate::licenses::LICENSE_TITLES.len() - 1;
 const LICENSE_SCROLL_LINE_PX: f64 = 10.0;
@@ -722,6 +723,7 @@ pub struct LauncherNav {
     pub scroll_x: i32,
     pub settings_focused: bool,
     pub settings_selected: usize,
+    pub about_selected: usize,
     pub display_combo_open: bool,
     pub display_selected: usize,
     pub display_highlighted: usize,
@@ -984,6 +986,7 @@ impl LauncherNav {
             scroll_x: 0,
             settings_focused: false,
             settings_selected: 0,
+            about_selected: 0,
             display_combo_open: false,
             display_selected: usize::MAX,
             display_highlighted: 0,
@@ -1667,7 +1670,8 @@ impl LauncherNav {
                 Screen::Arcade => self.handle_arcade(now, frame_now, catalog),
                 Screen::Settings => self.handle_settings(now, frame_now),
                 Screen::Screensaver => self.handle_screensaver_settings(now, frame_now),
-                Screen::About | Screen::Info => {
+                Screen::About => self.handle_about(now, frame_now),
+                Screen::Info => {
                     self.handle_settings_subscreen(now);
                     None
                 }
@@ -2133,30 +2137,9 @@ impl LauncherNav {
                 self.screen = Screen::Screensaver;
                 return None;
             }
-            if self.settings_selected == 3 {
-                let mut next_settings = self.settings.clone();
-                next_settings.simple_joystick_handling = !next_settings.simple_joystick_handling;
-                match next_settings.save() {
-                    Ok(()) => self.settings = next_settings,
-                    Err(e) => {
-                        crate::ui_errln!("settings: failed to save simple joystick toggle: {e}")
-                    }
-                }
-                return None;
-            }
-            if self.settings_selected == 5 {
+            if self.settings_selected == 4 {
+                self.about_selected = 0;
                 self.screen = Screen::About;
-                return None;
-            }
-            if self.settings_selected == 6 {
-                self.licenses_selected = 0;
-                self.licenses_expanded = false;
-                self.licenses_scroll.reset();
-                self.screen = Screen::Licenses;
-                return None;
-            }
-            if self.settings_selected == 7 {
-                self.screen = Screen::Info;
                 return None;
             }
             self.confirm_selected = 0;
@@ -2164,6 +2147,36 @@ impl LauncherNav {
                 2 => ConfirmAction::ExitToMister,
                 _ => ConfirmAction::ResetDatabase,
             });
+        }
+        None
+    }
+
+    fn handle_about(&mut self, now: &PadState, frame_now: Instant) -> Option<LauncherEvent> {
+        if rising(now.btn_home, self.prev.btn_home) {
+            self.go_root();
+            return None;
+        }
+        if rising(now.btn_b, self.prev.btn_b) {
+            self.screen = Screen::Settings;
+            return None;
+        }
+        if self.repeat.tick_down(now.dpad_down, frame_now)
+            && self.about_selected < ABOUT_MAX_SELECTED
+        {
+            self.about_selected += 1;
+        }
+        if self.repeat.tick_up(now.dpad_up, frame_now) && self.about_selected > 0 {
+            self.about_selected -= 1;
+        }
+        if rising(now.btn_a, self.prev.btn_a) {
+            if self.about_selected == 0 {
+                self.screen = Screen::Info;
+            } else {
+                self.licenses_selected = 0;
+                self.licenses_expanded = false;
+                self.licenses_scroll.reset();
+                self.screen = Screen::Licenses;
+            }
         }
         None
     }
@@ -2242,7 +2255,7 @@ impl LauncherNav {
             return None;
         }
         if rising(now.btn_b, self.prev.btn_b) {
-            self.screen = Screen::Settings;
+            self.screen = Screen::About;
             self.licenses_scroll.reset();
             return None;
         }
@@ -2265,7 +2278,7 @@ impl LauncherNav {
         if rising(now.btn_home, self.prev.btn_home) {
             self.go_root();
         } else if rising(now.btn_b, self.prev.btn_b) {
-            self.screen = Screen::Settings;
+            self.screen = Screen::About;
         }
     }
 
@@ -6284,12 +6297,12 @@ mod tests {
     }
 
     #[test]
-    fn launcher_settings_opens_and_navigates_licenses() {
+    fn launcher_about_opens_and_navigates_licenses() {
         let catalog = multi_system_catalog();
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
-        nav.screen = Screen::Settings;
-        nav.settings_selected = 6;
+        nav.screen = Screen::About;
+        nav.about_selected = 1;
         let press_a = pad_with(|pad| pad.btn_a = true);
         assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
         assert_eq!(nav.screen, Screen::Licenses);
@@ -6326,11 +6339,11 @@ mod tests {
         assert!(nav
             .handle_input(&back, t0 + Duration::from_millis(160), &catalog)
             .is_none());
-        assert_eq!(nav.screen, Screen::Settings);
+        assert_eq!(nav.screen, Screen::About);
     }
 
     #[test]
-    fn launcher_settings_opens_about_and_info_and_b_returns() {
+    fn launcher_settings_opens_about_then_info_and_b_returns_through_hierarchy() {
         let catalog = multi_system_catalog();
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
@@ -6338,7 +6351,7 @@ mod tests {
         let press_b = pad_with(|pad| pad.btn_b = true);
 
         nav.screen = Screen::Settings;
-        nav.settings_selected = 5;
+        nav.settings_selected = 4;
         assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
         assert_eq!(nav.screen, Screen::About);
         release(&mut nav, &catalog, t0, 16);
@@ -6348,11 +6361,21 @@ mod tests {
         assert_eq!(nav.screen, Screen::Settings);
         release(&mut nav, &catalog, t0, 48);
 
-        nav.settings_selected = 7;
+        nav.settings_selected = 4;
         assert!(nav
             .handle_input(&press_a, t0 + Duration::from_millis(64), &catalog)
             .is_none());
+        assert_eq!(nav.screen, Screen::About);
+        release(&mut nav, &catalog, t0, 80);
+        assert!(nav
+            .handle_input(&press_a, t0 + Duration::from_millis(96), &catalog)
+            .is_none());
         assert_eq!(nav.screen, Screen::Info);
+        release(&mut nav, &catalog, t0, 112);
+        assert!(nav
+            .handle_input(&press_b, t0 + Duration::from_millis(128), &catalog)
+            .is_none());
+        assert_eq!(nav.screen, Screen::About);
     }
 
     #[test]
@@ -6693,7 +6716,7 @@ mod tests {
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
         nav.screen = Screen::Settings;
-        nav.settings_selected = 4;
+        nav.settings_selected = 3;
 
         let press_a = pad_with(|pad| pad.btn_a = true);
         assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
