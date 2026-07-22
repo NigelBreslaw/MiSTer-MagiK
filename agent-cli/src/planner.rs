@@ -377,20 +377,18 @@ fn add_path_operations(
         }
     }
     if path.starts_with("mister/platform/kernel") {
-        add(op(
+        add(builtin(
             "kernel.workflow-contract",
             "Test kernel scanout workflow",
-            "python3",
-            &["scripts/tests/test-kernel-scanout-workflows.py"],
+            BuiltinOperation::KernelWorkflow,
             "kernel source → workflow contract",
         ));
     }
     if path.starts_with("mister/platform/fpga") {
-        add(op(
+        add(builtin(
             "fpga.workflow-contract",
             "Test platform workflow",
-            "python3",
-            &["scripts/tests/test-platform-bundle-workflow.py"],
+            BuiltinOperation::PlatformWorkflow,
             "FPGA source → workflow contract",
         ));
     }
@@ -407,11 +405,10 @@ fn add_path_operations(
         add_script_operations(repository, path, depth, &mut add);
     }
     if path.starts_with(".github") || path.starts_with(".githooks") {
-        add(op(
+        add(builtin(
             "repo.workflow-contract",
             "Check workflow contracts",
-            "python3",
-            &["scripts/tests/test-ci-cache-contract.py"],
+            BuiltinOperation::CiCache,
             "workflow configuration changed",
         ));
     }
@@ -521,11 +518,10 @@ fn add_script_operations(
         "script source → orchestration ownership contract",
     ));
     if text.contains("platform-bundle") {
-        add(op(
+        add(builtin(
             "scripts.platform-workflow",
             "Test platform workflow",
-            "python3",
-            &["scripts/tests/test-platform-bundle-workflow.py"],
+            BuiltinOperation::PlatformWorkflow,
             "platform tooling changed",
         ));
     }

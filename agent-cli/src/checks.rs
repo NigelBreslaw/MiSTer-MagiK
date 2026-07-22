@@ -18,6 +18,9 @@ pub fn execute(
         BuiltinOperation::LicenseHeaders => "license headers",
         BuiltinOperation::ShellOwnership => "shell ownership",
         BuiltinOperation::DistributionWorkflow => "distribution workflow",
+        BuiltinOperation::KernelWorkflow => "kernel workflow",
+        BuiltinOperation::PlatformWorkflow => "platform workflow",
+        BuiltinOperation::CiCache => "CI cache policy",
     };
     reporter.emit(
         EventKind::Progress,
@@ -30,7 +33,150 @@ pub fn execute(
         BuiltinOperation::LicenseHeaders => check_license_headers(repository),
         BuiltinOperation::ShellOwnership => check_shell_ownership(repository),
         BuiltinOperation::DistributionWorkflow => check_distribution_workflow(repository),
+        BuiltinOperation::KernelWorkflow => check_kernel_workflow(repository),
+        BuiltinOperation::PlatformWorkflow => check_platform_workflow(repository),
+        BuiltinOperation::CiCache => check_ci_cache(repository),
     }
+}
+
+fn require_fragments(
+    label: &str,
+    text: &str,
+    required: &[&str],
+    forbidden: &[&str],
+) -> Result<(), String> {
+    for fragment in required {
+        if !text.contains(fragment) {
+            return Err(format!("{label}_contract_missing: {fragment}"));
+        }
+    }
+    for fragment in forbidden {
+        if text.contains(fragment) {
+            return Err(format!("{label}_contract_forbidden: {fragment}"));
+        }
+    }
+    Ok(())
+}
+
+fn check_kernel_workflow(repository: &Path) -> Result<(), String> {
+    let heavy = read(repository, ".github/workflows/kernel-scanout.yml")?;
+    let light = read(repository, ".github/workflows/scanout-contract.yml")?;
+    require_fragments(
+        "kernel_heavy",
+        &heavy,
+        &[
+            "contract-and-build:",
+            "clang-build:",
+            "coccinelle:",
+            "Sparse type check",
+            "Warning-clean rebuild",
+            "mister/platform/kernel/scanout-slots/**",
+        ],
+        &[
+            "workflow_dispatch:",
+            "upload-artifact",
+            "component_input_sha256=",
+        ],
+    )?;
+    require_fragments(
+        "kernel_light",
+        &light,
+        &[
+            "scripts/checks/check-scanout-slots-contract.sh",
+            "mister/platform/runtime/src/framebuffer/scanout_slots.rs",
+            "mister/tools/agent/src/scanout_slots_contract.rs",
+        ],
+        &[
+            "Linux-Kernel_MiSTer",
+            "build-scanout-slots-module.sh",
+            "coccinelle",
+            "upload-artifact",
+            "workflow_dispatch",
+        ],
+    )
+}
+
+fn check_platform_workflow(repository: &Path) -> Result<(), String> {
+    let workflow = read(repository, ".github/workflows/platform-bundle.yml")?;
+    require_fragments(
+        "platform_workflow",
+        &workflow,
+        &[
+            "name: Build MiSTer MagiK Platform",
+            "workflow_dispatch:",
+            "Plan component reuse and builds",
+            "scripts/agent ci platform-candidates",
+            "scripts/agent ci platform-eligible-run",
+            "platform-bundle.py plan-update",
+            "reused-from-latest-release",
+            "reused-from-actions-cache",
+            "platform-bundle-v0.2.json",
+            "inputs.publish == true",
+            "contents: write",
+        ],
+        &[
+            "recover-platform-component.sh",
+            "main-mister.yml",
+            "fpga-vblank-latch.yml",
+        ],
+    )?;
+    if workflow.matches("  workflow_dispatch:").count() != 1 {
+        return Err("platform_workflow_contract: workflow_dispatch must occur once".into());
+    }
+    Ok(())
+}
+
+fn check_ci_cache(repository: &Path) -> Result<(), String> {
+    let mut combined = String::new();
+    let workflows = repository.join(".github/workflows");
+    for entry in fs::read_dir(&workflows).map_err(|error| error.to_string())? {
+        let path = entry.map_err(|error| error.to_string())?.path();
+        if path.extension().and_then(|extension| extension.to_str()) == Some("yml") {
+            combined.push_str(&fs::read_to_string(path).map_err(|error| error.to_string())?);
+        }
+    }
+    for forbidden in [
+        "actions/cache@v1",
+        "actions/cache@v2",
+        "actions/cache@v3",
+        "actions/cache@v4",
+        "actions/cache@v5",
+        "ci-clippy",
+        "target-clippy",
+        "target-arm-dist",
+        "cross-custom-rust",
+    ] {
+        if combined.contains(forbidden) {
+            return Err(format!("ci_cache_contract_forbidden: {forbidden}"));
+        }
+    }
+    let rust = read(repository, ".github/workflows/rust-arm.yml")?;
+    require_fragments(
+        "rust_arm_cache",
+        &rust,
+        &[
+            "steps.cache-id.outputs.cargo_host",
+            "steps.cache-id.outputs.cross_abi",
+            "ci-cache-identity.py",
+        ],
+        &[
+            "target-host-",
+            "Cache host build outputs",
+            "scripts/agent verify --paths desktop",
+        ],
+    )?;
+    let distribution = read(repository, ".github/workflows/distribution.yml")?;
+    require_fragments(
+        "distribution_cache",
+        &distribution,
+        &[
+            "uses: actions/cache/restore@v6",
+            "target-arm-v2-",
+            "packages: read",
+            "GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+        ],
+        &[],
+    )
 }
 
 fn check_distribution_workflow(repository: &Path) -> Result<(), String> {

@@ -43,6 +43,9 @@ pub enum BuiltinOperation {
     LicenseHeaders,
     ShellOwnership,
     DistributionWorkflow,
+    KernelWorkflow,
+    PlatformWorkflow,
+    CiCache,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
