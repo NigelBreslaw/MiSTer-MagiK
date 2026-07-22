@@ -564,7 +564,7 @@ impl VideoModeGeometry {
 }
 
 fn launcher_framebuffer_size(output_w: usize, output_h: usize) -> (usize, usize) {
-    if output_w >= 1600 || output_h >= 900 {
+    if output_w >= 1366 || output_h >= 900 {
         ((output_w / 2).max(1), (output_h / 2).max(1))
     } else {
         (output_w.max(1), output_h.max(1))
@@ -755,9 +755,9 @@ mod tests {
                 mode: 10,
                 output: (1366, 768),
                 scan: (1366, 768),
-                framebuffer: (1366, 768),
-                stride_bytes: 2736,
-                rendered_pixels: 1_049_088,
+                framebuffer: (683, 384),
+                stride_bytes: 1376,
+                rendered_pixels: 262_272,
             },
             ExpectedDisplayPlan {
                 mode: 11,
@@ -935,6 +935,7 @@ mod tests {
 
     #[test]
     fn display_plan_halves_larger_modes() {
+        assert_eq!(launcher_framebuffer_size(1366, 768), (683, 384));
         assert_eq!(launcher_framebuffer_size(1920, 1440), (960, 720));
         assert_eq!(launcher_framebuffer_size(2048, 1536), (1024, 768));
     }

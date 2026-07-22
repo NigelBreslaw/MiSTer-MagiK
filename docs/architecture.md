@@ -69,8 +69,8 @@ The launcher path uses a planned Linux framebuffer and FPGA scaling:
 - Rust sets `/dev/fb0` to RGB565 for the launcher/UI path.
 - Rust derives launcher geometry from `MiSTer.ini` menu output settings before
   startup drawing. Outputs remain one-to-one through 1280x720. Modes at least
-  1600 pixels wide or 900 pixels high use half width and height, so 1920x1080
-  renders at 960x540 and 2048x1536 renders at 1024x768. Custom modes follow the
+  1366 pixels wide or 900 pixels high use half width and height, so 1366x768
+  renders at 683x384 and 1920x1080 renders at 960x540. Custom modes follow the
   same rule; the qualified hidden-slot maximum is 1366x768.
 - Slint renders the planned launcher framebuffer into cached RAM.
 - Rust sends the FPGA `SET_FBUF` route so buffer 0 is scanned to HDMI and scaled

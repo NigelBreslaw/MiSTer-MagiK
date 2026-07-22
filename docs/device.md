@@ -73,6 +73,6 @@ capture is saved under the OS temporary directory at
 an image-capable agent can inspect it without receiving base64 text.
 
 The launcher keeps output geometry one-to-one through 1280x720 and uses half
-width and height when the output is at least 1600 pixels wide or 900 pixels
+width and height when the output is at least 1366 pixels wide or 900 pixels
 high. Custom modes use the same rule. The qualified ABI v3 hidden slots support
 up to 1366x768 with a 2736-byte RGB565 stride and 2,101,248 bytes per slot.
