@@ -104,6 +104,11 @@ mode, and applies the override file as a generic adapter while constructing its
 normal input maps. Main must not parse MRA XML or classify arcade labels such as
 coin, start, pause, service, or player-two controls.
 
+Runtime display transactions preserve automatic sink detection only while
+applying `auto`. Every explicit HDMI or CRT mode clears Main's automatic-routing
+latch before loading geometry, so cancel and timeout restore the saved route
+instead of re-resolving the previous automatic route against the current sink.
+
 ## Defensive Diagnostics
 
 The clean model is not "clever suppression" as normal operation. Main should not
