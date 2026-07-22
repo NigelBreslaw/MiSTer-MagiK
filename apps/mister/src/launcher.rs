@@ -3644,10 +3644,18 @@ pub struct DisplayCommandState {
 
 pub fn display_state() -> Result<DisplayCommandState, String> {
     let response = write_magik_command_response("mister_magik_display_get_v1\n")?;
+    parse_display_state_response(&response)
+}
+
+fn parse_display_state_response(response: &str) -> Result<DisplayCommandState, String> {
     let mut active = None;
     let mut pending = None;
     let mut remaining = 0;
+    let mut schema = None;
     for field in response.split_whitespace() {
+        if let Some(value) = field.strip_prefix("schema=") {
+            schema = Some(value);
+        }
         if let Some(value) = field.strip_prefix("active=") {
             active = Some(value.to_owned());
         }
@@ -3657,6 +3665,15 @@ pub fn display_state() -> Result<DisplayCommandState, String> {
         if let Some(value) = field.strip_prefix("remaining=") {
             remaining = value.parse::<u8>().unwrap_or(0).min(10);
         }
+    }
+    if schema != Some("1") {
+        return Err("display state has unsupported schema".into());
+    }
+    if pending
+        .as_deref()
+        .is_some_and(|id| mister_magik_mister_runtime::display_resolution::find(id).is_none())
+    {
+        return Err("display state has unsupported pending mode".into());
     }
     Ok(DisplayCommandState {
         active: active.ok_or("display state missing active mode")?,
@@ -6651,6 +6668,25 @@ mod tests {
             .handle_input(&press_a, t0 + Duration::from_millis(96), &catalog)
             .expect("cancel display");
         assert_eq!(event.action, LauncherAction::CancelDisplayResolution);
+    }
+
+    #[test]
+    fn display_state_reply_requires_schema_and_known_pending_mode() {
+        let state = parse_display_state_response(
+            "ok DisplayV1 schema=1 active=custom pending=crt-240p60 remaining=12",
+        )
+        .unwrap();
+        assert_eq!(state.active, "custom");
+        assert_eq!(state.pending.as_deref(), Some("crt-240p60"));
+        assert_eq!(state.remaining, 10);
+        assert!(parse_display_state_response(
+            "ok DisplayV1 active=custom pending=none remaining=0"
+        )
+        .is_err());
+        assert!(parse_display_state_response(
+            "ok DisplayV1 schema=1 active=custom pending=unsafe remaining=10"
+        )
+        .is_err());
     }
 
     #[test]
