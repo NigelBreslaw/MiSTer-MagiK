@@ -1,83 +1,44 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { MisterUi } from "../mister_window.slint";
 import { MisterBridge } from "../api.slint";
-
-component SettingsRow inherits Rectangle {
-    in property <string> label;
-    in property <string> detail;
-    in property <bool> focused;
-
-    height: 52px;
-    background: focused ? #2a2236 : #1e1828;
-    border-width: focused ? 2px : 1px;
-    border-color: focused ? #06d6a0 : #5c4a72;
-
-    VerticalLayout {
-        padding: 10px;
-        spacing: 4px;
-
-        Text {
-            text: label;
-            color: focused ? #06d6a0 : #e8e0f0;
-            font-size: 16px;
-        }
-
-        Text {
-            text: detail;
-            color: #9080a8;
-            font-size: 8px;
-        }
-    }
-}
+import { CrtTheme, CrtHeader, CrtFooter, CrtMenuRow } from "../components/crt_ui.slint";
 
 export component SettingsScreen inherits Rectangle {
-    background: #0b0d14;
+    background: CrtTheme.background;
 
-    HorizontalLayout {
+    VerticalLayout {
+        padding: MisterUi.grid;
+        spacing: MisterUi.grid;
 
-        VerticalLayout {
-            padding: 20px;
-            spacing: 8px;
-
-            Text {
-                text: "MiSTer MagiK";
-                color: #e8e0f0;
-                font-size: 24px;
-                horizontal-alignment: center;
-            }
-
-            SettingsRow {
-                label: "Display resolution";
-                detail: MisterBridge.display-active-label;
-                focused: MisterBridge.settings-selected == 0;
-            }
-
-            SettingsRow {
-                label: "Screensaver";
-                detail: "Configure the idle display";
-                focused: MisterBridge.settings-selected == 1;
-            }
-
-            SettingsRow {
-                label: "Exit to MiSTer";
-                detail: "Use the stock MiSTer menu until reboot";
-                focused: MisterBridge.settings-selected == 2;
-            }
-
-            SettingsRow {
-                label: "Reset Database";
-                detail: "Delete library database and reboot";
-                focused: MisterBridge.settings-selected == 3;
-            }
-
-            SettingsRow {
-                label: "About";
-                detail: "MiSTer MagiK and Slint";
-                focused: MisterBridge.settings-selected == 4;
-            }
-
-            Rectangle { vertical-stretch: 1; background: transparent; }
+        CrtHeader { title: "Settings"; subtitle: ""; status: ""; }
+        CrtMenuRow {
+            label: "Resolution";
+            detail: MisterBridge.display-active-label;
+            focused: MisterBridge.settings-selected == 0;
         }
+        CrtMenuRow {
+            label: "Screensaver";
+            detail: "Configure";
+            focused: MisterBridge.settings-selected == 1;
+        }
+        CrtMenuRow {
+            label: "Exit to MiSTer";
+            detail: "Until reboot";
+            focused: MisterBridge.settings-selected == 2;
+        }
+        CrtMenuRow {
+            label: "Reset Database";
+            detail: "Delete and reboot";
+            focused: MisterBridge.settings-selected == 3;
+        }
+        CrtMenuRow {
+            label: "About";
+            detail: "MagiK and Slint";
+            focused: MisterBridge.settings-selected == 4;
+        }
+        Rectangle { vertical-stretch: 1; background: transparent; }
+        CrtFooter { left-hint: "A Change   B Back"; right-hint: "HOME Launcher"; }
     }
 }

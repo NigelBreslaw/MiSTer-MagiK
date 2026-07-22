@@ -2,81 +2,41 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { MisterBridge } from "../api.slint";
+import { MisterUi } from "../mister_window.slint";
+import { CrtTheme, CrtHeader, CrtFooter, CrtMenuRow } from "../components/crt_ui.slint";
 import { ListView } from "std-widgets.slint";
 
-component LicenseRow inherits Rectangle {
-    in property <string> label;
-    in property <bool> focused;
-
-    height: 64px;
-    background: focused ? #2a2236 : #1e1828;
-    border-width: focused ? 2px : 1px;
-    border-color: focused ? #06d6a0 : #5c4a72;
-
-    HorizontalLayout {
-        padding: 12px;
-        Text {
-            text: label;
-            color: focused ? #06d6a0 : #e8e0f0;
-            font-size: 16px;
-            vertical-alignment: center;
-        }
-        Rectangle { horizontal-stretch: 1; background: transparent; }
-        Text {
-            text: ">";
-            color: focused ? #06d6a0 : #9080a8;
-            font-size: 16px;
-            vertical-alignment: center;
-        }
-    }
-}
-
 export component LicensesScreen inherits Rectangle {
-    background: #0b0d14;
+    background: CrtTheme.background;
 
     if !MisterBridge.licenses-expanded : VerticalLayout {
-        padding: 24px;
-        spacing: 12px;
-
-        HorizontalLayout {
-            height: license-title.preferred-height;
-            padding-left: 12px;
-            license-title := Text {
-                text: "Licenses";
-                color: #e8e0f0;
-                font-size: 24px;
-                horizontal-alignment: left;
-            }
-        }
-        LicenseRow { label: "MiSTer MagiK"; focused: MisterBridge.licenses-selected == 0; }
-        LicenseRow { label: "FFmpeg"; focused: MisterBridge.licenses-selected == 1; }
-        LicenseRow { label: "Press Start 2P"; focused: MisterBridge.licenses-selected == 2; }
-        LicenseRow { label: "Slint"; focused: MisterBridge.licenses-selected == 3; }
+        padding: MisterUi.grid;
+        spacing: MisterUi.grid;
+        CrtHeader { title: "Licenses"; subtitle: "Open source software"; status: ""; }
+        CrtMenuRow { label: "MiSTer MagiK"; detail: ">"; focused: MisterBridge.licenses-selected == 0; }
+        CrtMenuRow { label: "FFmpeg"; detail: ">"; focused: MisterBridge.licenses-selected == 1; }
+        CrtMenuRow { label: "Press Start 2P"; detail: ">"; focused: MisterBridge.licenses-selected == 2; }
+        CrtMenuRow { label: "Slint"; detail: ">"; focused: MisterBridge.licenses-selected == 3; }
         Rectangle { vertical-stretch: 1; background: transparent; }
-        Text {
-            text: "A: open    B: back";
-            color: #6f8198;
-            font-size: 8px;
-            horizontal-alignment: center;
-        }
+        CrtFooter { left-hint: "A Open   B Back"; right-hint: "HOME Launcher"; }
     }
 
     if MisterBridge.licenses-expanded : VerticalLayout {
-        padding: 24px;
-        spacing: 12px;
+        padding: MisterUi.grid;
+        spacing: MisterUi.grid;
         Text {
             text: MisterBridge.licenses-selected == 0 ? "MiSTer MagiK  v" :
                   MisterBridge.licenses-selected == 1 ? "FFmpeg  v" :
                   MisterBridge.licenses-selected == 2 ? "Press Start 2P  v" : "Slint  v";
-            color: #06d6a0;
-            font-size: 16px;
+            color: CrtTheme.accent;
+            font-size: MisterUi.heading-font;
             horizontal-alignment: center;
         }
         Rectangle {
             vertical-stretch: 1;
-            background: #12101a;
+            background: CrtTheme.panel;
             border-width: 1px;
-            border-color: #5c4a72;
+            border-color: CrtTheme.border;
             ListView {
                 x: 12px;
                 y: 12px;
@@ -85,19 +45,14 @@ export component LicensesScreen inherits Rectangle {
                 viewport-y: -MisterBridge.licenses-scroll-y * 1px;
                 for line in MisterBridge.license-lines : Text {
                     text: line;
-                    color: #d8d0e0;
-                    font-size: 8px;
+                    color: CrtTheme.text;
+                    font-size: MisterUi.body-font;
                     height: 10px;
                     overflow: clip;
                     vertical-alignment: top;
                 }
             }
         }
-        Text {
-            text: "Up/Down: scroll    A/B: close";
-            color: #6f8198;
-            font-size: 8px;
-            horizontal-alignment: center;
-        }
+        CrtFooter { left-hint: "UP/DOWN Scroll"; right-hint: "A/B Close"; }
     }
 }

@@ -1,72 +1,45 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { MisterUi } from "../mister_window.slint";
 import { MisterBridge } from "../api.slint";
-
-component AboutRow inherits Rectangle {
-    in property <string> label;
-    in property <string> detail;
-    in property <bool> focused;
-
-    height: 52px;
-    background: focused ? #2a2236 : #1e1828;
-    border-width: focused ? 2px : 1px;
-    border-color: focused ? #06d6a0 : #5c4a72;
-
-    VerticalLayout {
-        padding: 10px;
-        spacing: 4px;
-        Text { text: label; color: focused ? #06d6a0 : #e8e0f0; font-size: 16px; }
-        Text { text: detail; color: #9080a8; font-size: 8px; }
-    }
-}
+import { CrtTheme, CrtHeader, CrtFooter, CrtMenuRow } from "../components/crt_ui.slint";
 
 export component AboutScreen inherits Rectangle {
-    background: #0b0d14;
-    VerticalLayout {
-        padding: 48px;
-        spacing: 24px;
-        Text {
-            text: "About";
-            color: #06d6a0;
-            font-size: 24px;
-            horizontal-alignment: center;
-        }
-        Text {
-            text: "MiSTer MagiK is an Unintuitive.com software production. Crafted with love in Finland by Nigel Breslaw.";
-            color: #e8e0f0;
-            font-size: 16px;
-            wrap: word-wrap;
-            horizontal-alignment: center;
-        }
-        Text {
-            text: "Thanks to the MiSTer project for making all of this possible";
-            color: #b8acc8;
-            font-size: 16px;
-            wrap: word-wrap;
-            horizontal-alignment: center;
-        }
-        Text {
-            text: "Made with Slint. Delivering beautiful UI's on the most challenging of hardware www.slint.dev";
-            color: #70e1f5;
-            font-size: 16px;
-            wrap: word-wrap;
-            horizontal-alignment: center;
-        }
-        Rectangle { vertical-stretch: 1; background: transparent; }
+    background: CrtTheme.background;
 
-        AboutRow {
+    VerticalLayout {
+        padding: MisterUi.grid;
+        spacing: MisterUi.grid;
+
+        CrtHeader { title: "About"; subtitle: "MiSTer MagiK"; status: ""; }
+
+        Text {
+            text: "An Unintuitive.com production, crafted in Finland by Nigel Breslaw.";
+            color: CrtTheme.text;
+            font-size: MisterUi.body-font;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: "Thanks to the MiSTer project. Made with Slint.";
+            color: CrtTheme.muted;
+            font-size: MisterUi.body-font;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+        }
+
+        Rectangle { vertical-stretch: 1; background: transparent; }
+        CrtMenuRow {
             label: "Info";
-            detail: "Build, display, database, and kernel details";
+            detail: "Build and display";
             focused: MisterBridge.about-selected == 0;
         }
-        AboutRow {
+        CrtMenuRow {
             label: "Licenses";
-            detail: "Open source licenses and acknowledgements";
+            detail: "Open source";
             focused: MisterBridge.about-selected == 1;
         }
-
-        Text { text: "B: back"; color: #6f8198; font-size: 8px; horizontal-alignment: center; }
+        CrtFooter { left-hint: "A Open   B Back"; right-hint: "HOME Launcher"; }
     }
-
 }

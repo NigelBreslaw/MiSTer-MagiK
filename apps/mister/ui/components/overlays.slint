@@ -3,7 +3,8 @@
 
 import { MisterUi } from "../mister_window.slint";
 import { MisterBridge } from "../api.slint";
-import { LauncherTile, OsdSideLabel } from "launcher_chrome.slint";
+import { OsdSideLabel } from "launcher_chrome.slint";
+import { CrtTheme } from "crt_ui.slint";
 import { ScreenshotPackProgressRow } from "progress.slint";
 
 export component CompatibilityScreen inherits Rectangle {
@@ -227,15 +228,15 @@ component CompactDialogButton inherits Rectangle {
     in property <string> label;
     in property <bool> focused;
 
-    height: 42px;
-    background: focused ? #2a2236 : #181829;
-    border-width: focused ? 2px : 1px;
-    border-color: focused ? #06d6a0 : #5a4973;
+    height: 32px;
+    background: focused ? CrtTheme.accent : CrtTheme.panel-alt;
+    border-width: 1px;
+    border-color: focused ? CrtTheme.accent : CrtTheme.border;
 
     Text {
         text: root.label;
-        color: root.focused ? #06d6a0 : #e8e0f0;
-        font-size: 8px;
+        color: root.focused ? CrtTheme.accent-text : CrtTheme.text;
+        font-size: MisterUi.body-font;
         horizontal-alignment: center;
         vertical-alignment: center;
         wrap: word-wrap;
@@ -243,70 +244,33 @@ component CompactDialogButton inherits Rectangle {
 }
 
 export component ConfirmDialog inherits Rectangle {
-    property <bool> compact: MisterUi.window-height <= 288;
     background: #000000b0;
 
     Rectangle {
-        width: root.compact ? (MisterUi.window-width - 16) * 1px : 680px;
-        height: root.compact ? (MisterUi.window-height - 12) * 1px : 260px;
-        background: #0e0c14;
-        border-width: root.compact ? 2px : 4px;
-        border-color: #06d6a0;
+        width: MisterUi.compact-layout ? parent.width - 16px : min(640px, parent.width - 32px);
+        height: MisterUi.compact-layout ? min(160px, parent.height - 16px) : 192px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: CrtTheme.panel;
+        border-width: 1px;
+        border-color: CrtTheme.accent;
 
-        if !root.compact : VerticalLayout {
-            padding: 24px;
-            spacing: 18px;
-
-            Text {
-                text: MisterBridge.confirm-title;
-                color: #06d6a0;
-                font-size: 16px;
-                horizontal-alignment: center;
-            }
-
-            Text {
-                text: MisterBridge.confirm-message;
-                color: #e8e0f0;
-                font-size: 8px;
-                horizontal-alignment: center;
-                wrap: word-wrap;
-            }
-
-            Rectangle { vertical-stretch: 1; background: transparent; }
-
-            HorizontalLayout {
-                spacing: 16px;
-
-                if MisterBridge.confirm-left-label != "" : LauncherTile {
-                    label: MisterBridge.confirm-left-label;
-                    subtitle: "";
-                    focused: MisterBridge.confirm-selected == 0;
-                }
-
-                if MisterBridge.confirm-right-label != "" : LauncherTile {
-                    label: MisterBridge.confirm-right-label;
-                    subtitle: "";
-                    focused: MisterBridge.confirm-selected == 1;
-                }
-            }
-        }
-
-        if root.compact : VerticalLayout {
-            padding: 10px;
-            spacing: 8px;
+        VerticalLayout {
+            padding: MisterUi.grid;
+            spacing: MisterUi.grid;
 
             Text {
                 text: MisterBridge.confirm-title;
-                color: #06d6a0;
-                font-size: 10px;
+                color: CrtTheme.accent;
+                font-size: MisterUi.heading-font;
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }
 
             Text {
                 text: MisterBridge.confirm-message;
-                color: #e8e0f0;
-                font-size: 7px;
+                color: CrtTheme.text;
+                font-size: MisterUi.body-font;
                 horizontal-alignment: center;
                 vertical-alignment: center;
                 wrap: word-wrap;
@@ -314,8 +278,8 @@ export component ConfirmDialog inherits Rectangle {
             }
 
             HorizontalLayout {
-                height: 42px;
-                spacing: 8px;
+                height: 32px;
+                spacing: MisterUi.grid;
 
                 if MisterBridge.confirm-left-label != "" : CompactDialogButton {
                     label: MisterBridge.confirm-left-label;
