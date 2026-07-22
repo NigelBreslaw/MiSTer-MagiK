@@ -49,7 +49,7 @@ impl Phase {
     fn may_have_mutated(self) -> bool {
         matches!(
             self,
-            Self::Stage | Self::Activate | Self::RebootIfNeeded | Self::Smoke
+            Self::Snapshot | Self::Stage | Self::Activate | Self::RebootIfNeeded | Self::Smoke
         )
     }
 
@@ -524,7 +524,7 @@ mod tests {
     }
 
     #[test]
-    fn every_mutation_boundary_compensates() {
+    fn every_phase_that_may_have_mutated_compensates() {
         for (index, phase) in PHASES.iter().enumerate() {
             let mut actions = FakeActions {
                 fail_at: Some(*phase),
@@ -536,7 +536,7 @@ mod tests {
                 index
                     >= PHASES
                         .iter()
-                        .position(|item| *item == Phase::Stage)
+                        .position(|item| *item == Phase::Snapshot)
                         .unwrap()
             );
             assert!(error.contains("injected failure"));
