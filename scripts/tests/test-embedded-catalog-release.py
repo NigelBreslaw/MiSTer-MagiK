@@ -49,8 +49,8 @@ def main() -> None:
     forbid(package, "mister-magik-catalog-builder", "release package")
     require(package, "platform-v2.manifest", "release package")
 
-    manifest = read("scripts/release/platform/platform-manifest.py")
-    require(manifest, 'FORMAT = "mister-magik-platform-v2"', "platform manifest")
+    manifest = read("agent-cli/src/platform_manifest.rs")
+    require(manifest, 'FORMAT: &str = "mister-magik-platform-v2"', "platform manifest")
     forbid(manifest, '"catalog_builder"', "platform manifest")
 
     print("embedded catalog release checks ok")

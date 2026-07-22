@@ -279,6 +279,58 @@ fn dispatch(
             agent_cli::ci::require_alpha_promotion(channel, alpha_sha, candidate_sha)?;
             return Ok(Outcome::Passed);
         }
+        Intent::CiPlatformManifestGenerate {
+            output,
+            main,
+            gui,
+            scanout_module,
+            scanout_metadata,
+            latch_rbf,
+            latch_metadata,
+            main_revision,
+            magik_revision,
+            layout,
+        } => {
+            reporter.emit(
+                EventKind::Progress,
+                "manifest",
+                "Generating platform manifest",
+                Some(40),
+            )?;
+            agent_cli::platform_manifest::generate(
+                output,
+                &agent_cli::platform_manifest::Artifacts {
+                    main: main.clone(),
+                    gui: gui.clone(),
+                    scanout_module: scanout_module.clone(),
+                    scanout_metadata: scanout_metadata.clone(),
+                    latch_rbf: latch_rbf.clone(),
+                    latch_metadata: latch_metadata.clone(),
+                },
+                main_revision,
+                magik_revision,
+                agent_cli::platform_manifest::Layout::parse(layout)?,
+            )?;
+            return Ok(Outcome::Passed);
+        }
+        Intent::CiPlatformManifestVerify {
+            manifest,
+            root,
+            layout,
+        } => {
+            reporter.emit(
+                EventKind::Progress,
+                "manifest",
+                "Verifying platform manifest",
+                Some(40),
+            )?;
+            agent_cli::platform_manifest::verify(
+                manifest,
+                root.as_deref(),
+                agent_cli::platform_manifest::Layout::parse(layout)?,
+            )?;
+            return Ok(Outcome::Passed);
+        }
         Intent::Plan {
             scope: selected, ..
         }

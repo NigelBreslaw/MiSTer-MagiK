@@ -26,7 +26,7 @@ printf 'platform_contract_sha256=%s\nmodule_sha256=%s\nvermagic=5.15.1-MiSTer fi
   "$contract" "$module_hash" >"$APP/mister_magik_scanout_slots.metadata.txt"
 printf 'format=mister-magik-fpga-release-v1\nplatform_contract_sha256=%s\nmagik_commit=%s\nsource_commit=%s\nrbf_sha256=%s\n' \
   "$contract" "$magik" "$menu" "$rbf_hash" >"$APP/fpga/menu-magik-vblank-latch.metadata.txt"
-"$ROOT/scripts/release/platform/platform-manifest.py" generate \
+"$ROOT/scripts/agent" ci platform-manifest generate \
   --output "$APP/platform-v2.manifest" \
   --main "$FAT/MiSTer_MagiK" --gui "$APP/mister-magik-fb" \
   --scanout-module "$APP/mister_magik_scanout_slots.ko" \

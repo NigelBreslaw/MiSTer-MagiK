@@ -42,6 +42,7 @@ pub enum BuiltinOperation {
     AgentGuidance,
     LicenseHeaders,
     ShellOwnership,
+    DistributionWorkflow,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -124,6 +125,23 @@ pub enum Intent {
         channel: String,
         alpha_sha: String,
         candidate_sha: String,
+    },
+    CiPlatformManifestGenerate {
+        output: PathBuf,
+        main: PathBuf,
+        gui: PathBuf,
+        scanout_module: PathBuf,
+        scanout_metadata: PathBuf,
+        latch_rbf: PathBuf,
+        latch_metadata: PathBuf,
+        main_revision: String,
+        magik_revision: String,
+        layout: String,
+    },
+    CiPlatformManifestVerify {
+        manifest: PathBuf,
+        root: Option<PathBuf>,
+        layout: String,
     },
 }
 

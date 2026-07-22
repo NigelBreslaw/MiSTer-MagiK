@@ -289,7 +289,7 @@ jobs:
           fi
           test -f "$rbf" && test -f "$rbf_meta" && test -f "$module" && test -f "$module_meta"
           test -f "$main_bin" && [[ "$main_revision" =~ ^[0-9a-f]{40}$ ]]
-          scripts/release/platform/platform-manifest.py generate \
+          scripts/agent ci platform-manifest generate \
             --output build/platform-v2.manifest \
             --main "$main_bin" \
             --gui apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb \

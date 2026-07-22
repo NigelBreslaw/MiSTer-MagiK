@@ -530,11 +530,10 @@ fn add_script_operations(
         ));
     }
     if text.contains("install") || text.contains("distribution") || text.contains("package-") {
-        add(op(
+        add(builtin(
             "scripts.distribution",
             "Test distribution workflow",
-            "python3",
-            &["scripts/tests/test-distribution-workflow.py"],
+            BuiltinOperation::DistributionWorkflow,
             "packaging tooling changed",
         ));
     }

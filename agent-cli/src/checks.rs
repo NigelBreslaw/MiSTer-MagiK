@@ -17,6 +17,7 @@ pub fn execute(
         BuiltinOperation::AgentGuidance => "agent guidance",
         BuiltinOperation::LicenseHeaders => "license headers",
         BuiltinOperation::ShellOwnership => "shell ownership",
+        BuiltinOperation::DistributionWorkflow => "distribution workflow",
     };
     reporter.emit(
         EventKind::Progress,
@@ -28,7 +29,61 @@ pub fn execute(
         BuiltinOperation::AgentGuidance => check_agent_guidance(repository),
         BuiltinOperation::LicenseHeaders => check_license_headers(repository),
         BuiltinOperation::ShellOwnership => check_shell_ownership(repository),
+        BuiltinOperation::DistributionWorkflow => check_distribution_workflow(repository),
     }
+}
+
+fn check_distribution_workflow(repository: &Path) -> Result<(), String> {
+    let workflow = read(repository, ".github/workflows/distribution.yml")?;
+    let cross = read(repository, "apps/mister/Cross.toml")?;
+    let package = read(repository, "scripts/package-distribution.sh")?;
+    for variable in [
+        "MISTER_MAGIK_BUILD_NUMBER",
+        "MISTER_MAGIK_VERSION",
+        "MISTER_MAGIK_BUILD_TIME",
+    ] {
+        if !cross.contains(&format!("\"{variable}\"")) {
+            return Err(format!("distribution_contract_missing: {variable}"));
+        }
+    }
+    for required in [
+        "release_channel:",
+        "scripts/agent build runtime-device",
+        "scripts/agent ci require-alpha-promotion",
+        "scripts/agent ci platform-manifest generate",
+        "game-databases-bundle.py verify",
+        "contents: write",
+        "gh release create",
+        "initialize_feed_branch()",
+        "cancel-in-progress: false",
+    ] {
+        if !workflow.contains(required) {
+            return Err(format!("distribution_contract_missing: {required}"));
+        }
+    }
+    for forbidden in [
+        "scripts/release/check-alpha-promotion.sh",
+        "platform-manifest.py",
+        "game-databases-bundle.py create",
+        "mame-metadata-build",
+        "--mame-sqlite",
+        "--hbmame-sqlite",
+    ] {
+        if workflow.contains(forbidden) {
+            return Err(format!("distribution_contract_forbidden: {forbidden}"));
+        }
+    }
+    for forbidden in [
+        "--mame-sqlite)",
+        "--hbmame-sqlite)",
+        "--hbmame-sqlite-default)",
+        "--game-databases-manifest)",
+    ] {
+        if package.contains(forbidden) {
+            return Err(format!("package_contract_forbidden: {forbidden}"));
+        }
+    }
+    Ok(())
 }
 
 fn check_agent_guidance(repository: &Path) -> Result<(), String> {

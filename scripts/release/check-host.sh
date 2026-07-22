@@ -91,7 +91,7 @@ printf 'format=mister-magik-fpga-release-v1\nplatform_contract_sha256=%s\nmagik_
   "$CONTRACT" "$MAGIK_REVISION" "$MENU_REVISION" \
   "$(sha256sum "$WORK/menu-magik-vblank-latch.rbf" | awk '{print $1}')" \
   >"$WORK/latch.metadata.txt"
-scripts/release/platform/platform-manifest.py generate \
+scripts/agent ci platform-manifest generate \
   --layout public --output "$WORK/platform-v2.manifest" \
   --main "$MAIN_BIN" --gui "$BIN" \
   --scanout-module "$WORK/mister_magik_scanout_slots.ko" \

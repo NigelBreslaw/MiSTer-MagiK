@@ -345,7 +345,7 @@ platform_bundle_id=$PLATFORM_BUNDLE_ID
 game_database_version=$GAME_DATABASE_VERSION
 EOF
 chmod 755 "$STAGE/MiSTer_MagiK"
-python3 "$ROOT/scripts/release/platform/platform-manifest.py" verify \
+"$ROOT/scripts/agent" ci platform-manifest verify \
   "$STAGE/mister-magik/platform-v2.manifest" --root "$STAGE" --layout public >/dev/null
 if find "$STAGE" -type f \( -path '*/experiments/*' -o -name menu.rbf \) -print -quit | grep -q .; then
   echo "ERROR: production package contains experiments/ or root menu.rbf" >&2

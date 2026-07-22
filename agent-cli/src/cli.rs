@@ -98,6 +98,43 @@ pub enum CiCommand {
         alpha_sha: String,
         candidate_sha: String,
     },
+    PlatformManifest {
+        #[command(subcommand)]
+        command: PlatformManifestCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PlatformManifestCommand {
+    Generate {
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        main: PathBuf,
+        #[arg(long)]
+        gui: PathBuf,
+        #[arg(long)]
+        scanout_module: PathBuf,
+        #[arg(long)]
+        scanout_metadata: PathBuf,
+        #[arg(long)]
+        latch_rbf: PathBuf,
+        #[arg(long)]
+        latch_metadata: PathBuf,
+        #[arg(long)]
+        main_revision: String,
+        #[arg(long)]
+        magik_revision: String,
+        #[arg(long, default_value = "public")]
+        layout: String,
+    },
+    Verify {
+        manifest: PathBuf,
+        #[arg(long)]
+        root: Option<PathBuf>,
+        #[arg(long, default_value = "public")]
+        layout: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -226,6 +263,40 @@ impl Cli {
                     channel,
                     alpha_sha,
                     candidate_sha,
+                },
+                CiCommand::PlatformManifest { command } => match command {
+                    PlatformManifestCommand::Generate {
+                        output,
+                        main,
+                        gui,
+                        scanout_module,
+                        scanout_metadata,
+                        latch_rbf,
+                        latch_metadata,
+                        main_revision,
+                        magik_revision,
+                        layout,
+                    } => Intent::CiPlatformManifestGenerate {
+                        output,
+                        main,
+                        gui,
+                        scanout_module,
+                        scanout_metadata,
+                        latch_rbf,
+                        latch_metadata,
+                        main_revision,
+                        magik_revision,
+                        layout,
+                    },
+                    PlatformManifestCommand::Verify {
+                        manifest,
+                        root,
+                        layout,
+                    } => Intent::CiPlatformManifestVerify {
+                        manifest,
+                        root,
+                        layout,
+                    },
                 },
             },
         }
