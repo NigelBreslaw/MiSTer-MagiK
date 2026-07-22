@@ -97,7 +97,7 @@ pub fn execute_with_changes(
             }
             continue;
         }
-        let heartbeat = state.label();
+        let heartbeat = operation_heartbeat(operation);
         let cache = operation_cache_key(plan, operation, &fingerprints)?;
         if let Some((task_id, fingerprint)) = cache.as_ref() {
             if evidence.has_cached_operation(task_id, &operation.id, fingerprint)? {
@@ -371,6 +371,10 @@ fn hex(bytes: &[u8]) -> String {
 
 fn is_cacheable(operation: &Operation) -> bool {
     operation.risk == crate::model::Risk::ReadOnly
+}
+
+fn operation_heartbeat(operation: &Operation) -> &str {
+    &operation.title
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -784,6 +788,12 @@ mod tests {
         };
         assert!(!is_cargo_dependency_operation(&operation));
         assert_eq!(operation.args, ["fmt", "--check"]);
+    }
+
+    #[test]
+    fn command_heartbeat_names_the_current_operation() {
+        let operation = test_operation(Path::new("cargo"));
+        assert_eq!(operation_heartbeat(&operation), "Test fake crate");
     }
 
     #[test]
