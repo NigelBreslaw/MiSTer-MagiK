@@ -5,11 +5,18 @@ version: 2
 updates:
   - package-ecosystem: "cargo"
     directories:
-      - "/desktop"
-      - "/framebuffer-stream"
+      - "/agent-cli"
+      - "/apps/desktop"
       - "/apps/mister"
-      - "/crates/catalog"
       - "/apps/mister/ui-generated"
+      - "/crates/agent-protocol"
+      - "/crates/catalog"
+      - "/crates/framebuffer-stream"
+      - "/crates/magik-core"
+      - "/crates/media-contract"
+      - "/mister/platform/contracts/latch"
+      - "/mister/platform/contracts/scanout"
+      - "/mister/platform/runtime"
       - "/mister/tools/agent"
       - "/mister/tools/host"
     schedule:
@@ -19,6 +26,18 @@ updates:
       timezone: "Europe/Helsinki"
     groups:
       rust-crates:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "npm"
+    directory: "/documentation"
+    schedule:
+      interval: "weekly"
+      day: "friday"
+      time: "08:00"
+      timezone: "Europe/Helsinki"
+    groups:
+      documentation:
         patterns:
           - "*"
 
