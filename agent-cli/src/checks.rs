@@ -485,7 +485,20 @@ fn check_shell_ownership(repository: &Path) -> Result<(), String> {
     .collect();
     for path in files {
         let relative = path.to_string_lossy();
-        if exclusions.contains(relative.as_ref())
+        let maintained = relative == "AGENTS.md"
+            || [
+                "agent-cli/",
+                "apps/",
+                "docs/",
+                "documentation/",
+                "mister/",
+                "scripts/",
+                ".github/",
+            ]
+            .iter()
+            .any(|prefix| relative.starts_with(prefix));
+        if !maintained
+            || exclusions.contains(relative.as_ref())
             || relative.starts_with("docs/performance-review-")
             || relative.starts_with("docs/2026-")
         {
@@ -580,9 +593,15 @@ mod tests {
             .success());
         assert!(check_shell_ownership(&root).is_ok());
 
-        fs::write(root.join("contract.md"), "scripts/run-rust.sh\n").unwrap();
+        fs::create_dir_all(root.join("docs")).unwrap();
+        fs::write(root.join("docs/contract.md"), "scripts/run-rust.sh\n").unwrap();
         let error = check_shell_ownership(&root).unwrap_err();
-        assert!(error.contains("contract.md contains scripts/run-rust.sh"));
+        assert!(error.contains("docs/contract.md contains scripts/run-rust.sh"));
+
+        fs::create_dir_all(root.join("history")).unwrap();
+        fs::remove_file(root.join("docs/contract.md")).unwrap();
+        fs::write(root.join("history/evidence.md"), "scripts/run-rust.sh\n").unwrap();
+        assert!(check_shell_ownership(&root).is_ok());
         fs::remove_dir_all(root).unwrap();
     }
 }
