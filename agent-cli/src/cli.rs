@@ -60,7 +60,7 @@ pub enum Command {
     Diagnose,
     #[command(hide = true)]
     DisplayMode {
-        #[arg(value_parser = ["6", "13", "14"])]
+        #[arg(value_parser = ["6", "8", "13", "14"])]
         video_mode: String,
         #[arg(long, value_parser = ["stock", "dev"])]
         main: Option<String>,
@@ -615,6 +615,15 @@ mod tests {
                 .into_intent(),
             Intent::DisplayMode {
                 video_mode: "6".into(),
+                main: None,
+            }
+        );
+        assert_eq!(
+            Cli::try_parse_from(["agent-cli", "display-mode", "8"])
+                .unwrap()
+                .into_intent(),
+            Intent::DisplayMode {
+                video_mode: "8".into(),
                 main: None,
             }
         );

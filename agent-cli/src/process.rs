@@ -76,7 +76,9 @@ mod tests {
                 .unwrap()
                 .success());
         }
-        assert!(started.elapsed() < Duration::from_secs(1));
+        // A 50 ms polling delay would take at least five seconds here. Allow
+        // slower process spawning on loaded hosts without masking that regression.
+        assert!(started.elapsed() < Duration::from_secs(4));
     }
 
     #[test]
