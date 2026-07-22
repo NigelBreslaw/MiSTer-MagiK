@@ -215,7 +215,7 @@ impl DeliveryState {
     pub const fn can_resume(self) -> bool {
         matches!(
             self,
-            Self::ExternalPending | Self::RecoveryRequired | Self::Complete
+            Self::ExternalPending | Self::RecoveryRequired | Self::Failed | Self::Complete
         )
     }
 }

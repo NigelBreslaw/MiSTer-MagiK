@@ -1067,7 +1067,7 @@ mod tests {
         assert!(DeliveryState::ExternalPending.can_resume());
         assert!(DeliveryState::RecoveryRequired.can_resume());
         assert!(DeliveryState::Complete.can_resume());
-        assert!(!DeliveryState::Failed.can_resume());
+        assert!(DeliveryState::Failed.can_resume());
     }
 
     #[test]
