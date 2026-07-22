@@ -138,6 +138,22 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &Path, label: &str) -> AgentRes
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::{json, Value};
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn fixture(payload: &Value) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "agent-cli-artifacts-{}-{nonce}.json",
+            std::process::id()
+        ));
+        fs::write(&path, serde_json::to_vec(payload).unwrap()).unwrap();
+        path
+    }
 
     fn artifact(id: u64, created_at: &str) -> Artifact {
         Artifact {
@@ -163,6 +179,37 @@ mod tests {
             values.iter().map(|value| value.id).collect::<Vec<_>>(),
             [2, 1]
         );
+    }
+
+    #[test]
+    fn candidate_selection_filters_and_orders_exact_reusable_artifacts() {
+        let payload = json!({"artifacts":[
+            {"id":1,"name":"wanted","expired":false,"created_at":"2026-01-01","workflow_run":{"id":101,"head_branch":"main","head_sha":"1111111111111111111111111111111111111111","repository_id":1,"head_repository_id":1}},
+            {"id":2,"name":"wanted","expired":false,"created_at":"2026-01-03","workflow_run":{"id":102,"head_branch":"main","head_sha":"2222222222222222222222222222222222222222","repository_id":1,"head_repository_id":1}},
+            {"id":3,"name":"wanted","expired":true,"created_at":"2026-01-04","workflow_run":{"id":103,"head_branch":"main","head_sha":"3333333333333333333333333333333333333333","repository_id":1,"head_repository_id":1}},
+            {"id":4,"name":"other","expired":false,"created_at":"2026-01-05","workflow_run":{"id":104,"head_branch":"main","head_sha":"4444444444444444444444444444444444444444","repository_id":1,"head_repository_id":1}}
+        ]});
+        let path = fixture(&payload);
+        let selected = candidates(&path, "wanted").unwrap();
+        fs::remove_file(path).unwrap();
+        assert_eq!(
+            selected
+                .iter()
+                .map(|artifact| artifact.id)
+                .collect::<Vec<_>>(),
+            [2, 1]
+        );
+    }
+
+    #[test]
+    fn candidate_selection_handles_missing_and_malformed_metadata() {
+        let missing = fixture(&json!({"artifacts":[]}));
+        assert!(candidates(&missing, "wanted").unwrap().is_empty());
+        fs::remove_file(missing).unwrap();
+
+        let malformed = fixture(&json!({"artifacts":[{"id":"not-a-number"}]}));
+        assert!(candidates(&malformed, "wanted").is_err());
+        fs::remove_file(malformed).unwrap();
     }
 
     #[test]

@@ -36,7 +36,7 @@ fn main() {
             std::process::exit(2);
         }
     };
-    let output = cli.output;
+    let output = cli.output_format;
     let intent = resolve_task_intent(&evidence, &repository, cli.into_intent())
         .unwrap_or_else(|error| fatal(&error));
     evidence

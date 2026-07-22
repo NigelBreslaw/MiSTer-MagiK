@@ -20,8 +20,13 @@ pub enum OutputFormat {
     arg_required_else_help = true
 )]
 pub struct Cli {
-    #[arg(long, value_enum, default_value_t = OutputFormat::Human, global = true)]
-    pub output: OutputFormat,
+    #[arg(
+        long = "output-format",
+        value_enum,
+        default_value_t = OutputFormat::Human,
+        global = true
+    )]
+    pub output_format: OutputFormat,
     #[arg(long, global = true)]
     pub task_id: Option<String>,
     #[command(subcommand)]
@@ -144,7 +149,7 @@ pub enum PlatformBundleCommand {
         kernel_source: String,
         #[arg(long)]
         release_version: u64,
-        #[arg(long, id = "manifest_output")]
+        #[arg(long)]
         output: PathBuf,
         #[arg(long)]
         main_workflow: Option<String>,
@@ -268,7 +273,7 @@ pub enum GameDatabaseCommand {
 #[derive(Debug, Subcommand)]
 pub enum PlatformManifestCommand {
     Generate {
-        #[arg(long, id = "platform_manifest_output")]
+        #[arg(long)]
         output: PathBuf,
         #[arg(long)]
         main: PathBuf,
@@ -622,5 +627,109 @@ mod tests {
     #[test]
     fn display_mode_operator_surface_is_not_available() {
         assert!(Cli::try_parse_from(["agent-cli", "display-mode", "8"]).is_err());
+    }
+
+    #[test]
+    fn platform_bundle_output_paths_do_not_collide_with_output_format() {
+        let main_id = "a".repeat(64);
+        let fpga_id = "b".repeat(64);
+        let kernel_id = "c".repeat(64);
+        let main_sha = "d".repeat(40);
+        let fpga_sha = "e".repeat(40);
+        let kernel_sha = "f".repeat(40);
+        let create = [
+            "agent-cli",
+            "--output-format",
+            "ndjson",
+            "ci",
+            "platform-bundle",
+            "create",
+            "--main-dir",
+            "main",
+            "--fpga-dir",
+            "fpga",
+            "--scanout-dir",
+            "scanout",
+            "--main-id",
+            &main_id,
+            "--fpga-id",
+            &fpga_id,
+            "--kernel-id",
+            &kernel_id,
+            "--main-run-id",
+            "1",
+            "--fpga-run-id",
+            "2",
+            "--kernel-run-id",
+            "3",
+            "--main-head-sha",
+            &main_sha,
+            "--fpga-head-sha",
+            &fpga_sha,
+            "--kernel-head-sha",
+            &kernel_sha,
+            "--main-source",
+            "reused-from-actions-cache",
+            "--fpga-source",
+            "reused-from-actions-cache",
+            "--kernel-source",
+            "reused-from-actions-cache",
+            "--release-version",
+            "8",
+            "--output",
+            "bundle",
+        ];
+        let cli = Cli::try_parse_from(create).unwrap();
+        assert_eq!(cli.output_format, OutputFormat::Ndjson);
+
+        assert!(Cli::try_parse_from([
+            "agent-cli",
+            "ci",
+            "platform-bundle",
+            "extract-component",
+            "bundle.zip",
+            "--manifest",
+            "manifest.json",
+            "--component",
+            "kernel",
+            "--component-id",
+            &kernel_id,
+            "--output",
+            "kernel",
+        ])
+        .is_ok());
+    }
+
+    #[test]
+    fn platform_manifest_output_path_parses() {
+        let main_revision = "a".repeat(40);
+        let magik_revision = "b".repeat(40);
+        assert!(Cli::try_parse_from([
+            "agent-cli",
+            "ci",
+            "platform-manifest",
+            "generate",
+            "--output",
+            "platform.json",
+            "--main",
+            "MiSTer_MagiK",
+            "--gui",
+            "mister-magik-fb",
+            "--manager",
+            "mister-magik-manager",
+            "--scanout-module",
+            "scanout.ko",
+            "--scanout-metadata",
+            "scanout.txt",
+            "--latch-rbf",
+            "latch.rbf",
+            "--latch-metadata",
+            "latch.txt",
+            "--main-revision",
+            &main_revision,
+            "--magik-revision",
+            &magik_revision,
+        ])
+        .is_ok());
     }
 }

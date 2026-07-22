@@ -145,7 +145,7 @@ impl<'a> Reporter<'a> {
                     && !(event.kind == EventKind::Completed
                         && event.message == "Request complete") =>
             {
-                println!("{}", render_human(&event));
+                eprintln!("{}", render_human(&event));
             }
             OutputFormat::Human => {}
         }

@@ -136,7 +136,9 @@ jobs:
           resolve() {
             local kind="$1" name="$2" identity="$3" artifact_id run_id head_sha attempt details canonical archive manifest verification
             while IFS=$'\t' read -r artifact_id run_id head_sha; do
-              [ -n "$artifact_id" ] || continue
+              [[ "$artifact_id" =~ ^[0-9]+$ ]] || continue
+              [[ "$run_id" =~ ^[0-9]+$ ]] || continue
+              [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || continue
               details="build/platform-reuse/run-$run_id.json"
               gh run view "$run_id" --repo "$GITHUB_REPOSITORY" \
                 --json status,conclusion,workflowName,headBranch,event,headSha > "$details" || continue
@@ -155,9 +157,15 @@ jobs:
                 [ "$kind" != main ] || args+=(--revision "$MAIN_REVISION")
                 verification="build/platform-reuse/verification-$kind-$artifact_id.json"
                 scripts/agent ci platform-bundle verify-component "${args[@]}" > "$verification" || continue
-                run_id="$(jq -r .origin.run_id "$verification")"
-                head_sha="$(jq -r .origin.head_sha "$verification")"
+                if ! run_id="$(jq -er '.origin.run_id | tostring | select(test("^[0-9]+$"))' "$verification")"; then
+                  continue
+                fi
+                if ! head_sha="$(jq -er '.origin.head_sha | strings | select(test("^[0-9a-f]{40}$"))' "$verification")"; then
+                  continue
+                fi
               fi
+              [[ "$run_id" =~ ^[0-9]+$ ]] || continue
+              [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || continue
               canonical="build/platform-reuse/$kind"
               mkdir -p "$canonical"
               cp -R "$attempt"/. "$canonical"/
