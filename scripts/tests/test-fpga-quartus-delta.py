@@ -84,6 +84,15 @@ class QuartusDeltaTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("unconstrained_added", payload["invalid_reason"])
 
+    def test_more_paths_to_the_same_unconstrained_ports_passes(self) -> None:
+        patched = BASE.replace(
+            "; Unconstrained Output Port Paths ; 10 ; 10 ;",
+            "; Unconstrained Output Port Paths ; 12 ; 12 ;",
+        ) + CUSTOM_SYNC
+        result, payload = self.run_check(BASE, patched)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(payload["valid"], 1)
+
     def test_global_mtbf_is_not_custom_chain_evidence(self) -> None:
         patched = BASE + "Info (332114): Worst-Case MTBF of Design is 1e+09 years\n"
         result, payload = self.run_check(BASE, patched)

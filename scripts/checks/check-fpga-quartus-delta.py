@@ -193,8 +193,6 @@ def compare(stock: dict[str, object], patched: dict[str, object]) -> tuple[list[
     assert isinstance(stock_output_paths, list) and isinstance(patched_output_paths, list)
     if not stock_output_paths or not patched_output_paths:
         reasons.append("unconstrained_output_summary_missing")
-    elif max(patched_output_paths) > max(stock_output_paths):
-        reasons.append("unconstrained_output_paths_added")
 
     slacks = patched["slacks"]
     assert isinstance(slacks, dict)

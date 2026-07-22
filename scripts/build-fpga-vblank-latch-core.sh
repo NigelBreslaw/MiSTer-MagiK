@@ -30,6 +30,7 @@ BUILD_DATE="${MISTER_FPGA_BUILD_DATE:-$(git -C "$ROOT" show -s --format=%cd --da
 QUALIFIED_MAGIK_REVISION="${MISTER_FPGA_QUALIFIED_MAGIK_REVISION:-$(git -C "$ROOT" rev-parse HEAD)}"
 COMPONENT_INPUT_SHA256="${MISTER_FPGA_COMPONENT_INPUT_SHA256:-}"
 COMPONENT_REVISION="${MISTER_FPGA_COMPONENT_REVISION:-}"
+QUARTUS_SEED="${MISTER_FPGA_QUARTUS_SEED:-}"
 PLATFORM_CONTRACT="$ROOT/mister/platform/kernel/scanout-slots/mister_magik_scanout_platform.h"
 
 usage() {
@@ -144,6 +145,31 @@ fi
 if [[ -n "$COMPONENT_REVISION" && ! "$COMPONENT_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
   echo "MISTER_FPGA_COMPONENT_REVISION must be a full commit SHA" >&2
   exit 1
+fi
+if [[ -n "$QUARTUS_SEED" && ! "$QUARTUS_SEED" =~ ^[1-9][0-9]*$ ]]; then
+  echo "MISTER_FPGA_QUARTUS_SEED must be a positive integer" >&2
+  exit 1
+fi
+if [[ -n "$QUARTUS_SEED" ]]; then
+  python3 - "$WORK_DIR/menu.qsf" "$QUARTUS_SEED" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+seed = sys.argv[2]
+source = path.read_text()
+updated, count = re.subn(
+    r"^(?:-?set_global_assignment -name SEED) [0-9]+$",
+    rf"set_global_assignment -name SEED {seed}",
+    source,
+    count=1,
+    flags=re.MULTILINE,
+)
+if count != 1:
+    raise SystemExit("failed to set Quartus fitter seed")
+path.write_text(updated)
+PY
 fi
 python3 - "$WORK_DIR/sys/build_id.tcl" "$BUILD_DATE" <<'PY'
 from pathlib import Path

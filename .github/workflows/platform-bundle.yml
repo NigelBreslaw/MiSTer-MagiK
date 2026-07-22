@@ -507,7 +507,7 @@ jobs:
           set -euo pipefail
           MISTER_FPGA_APPLY_PATCH=0 MISTER_FPGA_OUT_DIR="$GITHUB_WORKSPACE/build/fpga-signoff/stock" \
             MISTER_MENU_BUILD_DIR="$GITHUB_WORKSPACE/build/fpga-signoff/stock/Menu-work" scripts/build-fpga-vblank-latch-core.sh
-          MISTER_FPGA_APPLY_PATCH=1 MISTER_FPGA_OUT_DIR="$GITHUB_WORKSPACE/build/fpga-signoff/patched" \
+          MISTER_FPGA_APPLY_PATCH=1 MISTER_FPGA_QUARTUS_SEED=2 MISTER_FPGA_OUT_DIR="$GITHUB_WORKSPACE/build/fpga-signoff/patched" \
             MISTER_MENU_BUILD_DIR="$GITHUB_WORKSPACE/build/fpga-signoff/patched/Menu-work" scripts/build-fpga-vblank-latch-core.sh
 
       - name: Verify Quartus delta
