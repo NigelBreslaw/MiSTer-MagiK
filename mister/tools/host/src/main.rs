@@ -1,7 +1,6 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use base64::Engine;
 use mister_tool::transport::{
     BenchmarkScenario, ColdBenchmarkScenario, DeviceFailure, DeviceOperations, DeviceRequest,
     DeviceResponse, Layout, MainSelection,
@@ -3010,14 +3009,48 @@ fn capture_buffer(args: &[String]) -> Result<()> {
     if io::stdout().is_terminal() {
         println!("{}", write_desktop_capture(&capture.png)?.display());
     } else {
-        println!("{}", image_content_json(&capture.png));
+        let path = write_temporary_capture(&capture.png)?;
+        println!("{}", capture_markdown_link(&path));
     }
     Ok(())
 }
 
-fn image_content_json(png: &[u8]) -> String {
-    let data = base64::engine::general_purpose::STANDARD.encode(png);
-    json!({"type": "image", "data": data, "mimeType": "image/png"}).to_string()
+fn write_temporary_capture(png: &[u8]) -> Result<PathBuf> {
+    write_temporary_capture_at(&env::temp_dir(), unix_ms_now(), png)
+}
+
+fn write_temporary_capture_at(temp_root: &Path, timestamp_ms: u128, png: &[u8]) -> Result<PathBuf> {
+    let directory = temp_root.join("mister-magik").join("captures");
+    fs::create_dir_all(&directory)?;
+    let directory = fs::canonicalize(directory)?;
+    for suffix in 1_u64.. {
+        let path = temporary_capture_path(&directory, timestamp_ms, suffix);
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut file) => {
+                file.write_all(png)?;
+                file.sync_all()?;
+                return Ok(path);
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    unreachable!("capture suffix space exhausted")
+}
+
+fn temporary_capture_path(directory: &Path, timestamp_ms: u128, suffix: u64) -> PathBuf {
+    let suffix = if suffix == 1 {
+        String::new()
+    } else {
+        format!("-{suffix}")
+    };
+    directory.join(format!(
+        "mister-magik-framebuffer-{timestamp_ms}{suffix}.png"
+    ))
+}
+
+fn capture_markdown_link(path: &Path) -> String {
+    format!("[MiSTer framebuffer](<{}>)", path.display())
 }
 
 fn delivery_smoke_capture_detail(capture: &PngCapture) -> String {
@@ -7631,31 +7664,39 @@ H: Handlers=event3 js0"#
     }
 
     #[test]
-    fn capture_buffer_image_content_round_trips_png() {
-        use base64::engine::general_purpose::STANDARD;
-
+    fn capture_buffer_writes_timestamped_temporary_files_without_overwriting() {
+        let root = temp_path("capture-temporary");
         let png = b"\x89PNG\r\n\x1a\nfixture";
-        let output = image_content_json(png);
+        let first = write_temporary_capture_at(&root, 1_753_012_345_678, png).unwrap();
+        let second = write_temporary_capture_at(&root, 1_753_012_345_678, png).unwrap();
+        let captures = fs::canonicalize(root.join("mister-magik/captures")).unwrap();
+
+        assert_eq!(first.parent(), Some(captures.as_path()));
+        assert_eq!(
+            first.file_name().unwrap(),
+            "mister-magik-framebuffer-1753012345678.png"
+        );
+        assert_eq!(
+            second.file_name().unwrap(),
+            "mister-magik-framebuffer-1753012345678-2.png"
+        );
+        assert_eq!(fs::read(&first).unwrap(), png);
+        assert_eq!(fs::read(&second).unwrap(), png);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn capture_buffer_markdown_link_contains_only_the_absolute_path() {
+        let path = Path::new("/private/tmp/mister-magik/captures/framebuffer fixture.png");
+        let output = capture_markdown_link(path);
+
         assert_eq!(
             output,
-            format!(
-                "{{\"data\":\"{}\",\"mimeType\":\"image/png\",\"type\":\"image\"}}",
-                STANDARD.encode(png)
-            )
+            "[MiSTer framebuffer](</private/tmp/mister-magik/captures/framebuffer fixture.png>)"
         );
-        assert!(!output.contains('\n'));
-        let value: Value = serde_json::from_str(&output).unwrap();
-        assert_eq!(value.get("type").and_then(Value::as_str), Some("image"));
-        assert_eq!(
-            value.get("mimeType").and_then(Value::as_str),
-            Some("image/png")
-        );
-        assert_eq!(
-            STANDARD
-                .decode(value.get("data").and_then(Value::as_str).unwrap())
-                .unwrap(),
-            png
-        );
+        assert!(!output.contains("data"));
+        assert!(!output.contains("iVBOR"));
     }
 
     #[test]

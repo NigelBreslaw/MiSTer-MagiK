@@ -67,6 +67,11 @@ visibility. Use Analytics streaming for continuous inspection and
 `mister --capture-buffer` for a still, then pair it with attended HDMI evidence
 when making scan-out claims.
 
+Interactive captures are saved to the Desktop. When stdout is redirected, the
+capture is saved under the OS temporary directory at
+`mister-magik/captures/`, and the command prints a Markdown link to the PNG so
+an image-capable agent can inspect it without receiving base64 text.
+
 The launcher keeps output geometry one-to-one through 1280x720 and uses half
 width and height when the output is at least 1600 pixels wide or 900 pixels
 high. Custom modes use the same rule. The qualified ABI v3 hidden slots support
