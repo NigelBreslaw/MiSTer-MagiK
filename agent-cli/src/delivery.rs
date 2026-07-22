@@ -154,6 +154,19 @@ pub fn execute(
     Ok(Outcome::Passed)
 }
 
+pub fn cleanup_workspace(repository: &Path) -> Result<(), String> {
+    let workspace = repository.join("build/agent-deploy");
+    if workspace.exists() {
+        fs::remove_dir_all(&workspace).map_err(|error| {
+            format!(
+                "cannot clear delivery workspace {}: {error}",
+                workspace.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
 struct ProcessActions<'a> {
     repository: &'a Path,
     deployment: &'a DeploymentPlan,
@@ -667,6 +680,22 @@ mod tests {
         assert!(!reuse_verified_cache(&cached, &output, || Err("corrupt".into())).unwrap());
         assert!(!cached.exists());
         assert!(!output.exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn delivery_workspace_is_removed_after_use() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-delivery-workspace-test-{}",
+            std::process::id()
+        ));
+        let workspace = root.join("build/agent-deploy/stage/commit");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::write(workspace.join("artifact"), b"generated").unwrap();
+
+        cleanup_workspace(&root).unwrap();
+
+        assert!(!root.join("build/agent-deploy").exists());
         let _ = fs::remove_dir_all(root);
     }
 }

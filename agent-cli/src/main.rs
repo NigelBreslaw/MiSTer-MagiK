@@ -365,6 +365,31 @@ fn deliver(
     task_id: &str,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<Outcome> {
+    let delivery = deliver_inner(evidence, repository, task_id, reporter);
+    let cleanup = agent_cli::delivery::cleanup_workspace(repository);
+    match (delivery, cleanup) {
+        (Ok(outcome), Ok(())) => Ok(outcome),
+        (Ok(_), Err(error)) => Err(error.into()),
+        (Err(error), Ok(())) => Err(error),
+        (Err(error), Err(cleanup)) => {
+            let _ = reporter.emit(
+                EventKind::Warning,
+                "cleanup",
+                &format!("delivery workspace cleanup failed: {cleanup}"),
+                None,
+            );
+            Err(error)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn deliver_inner(
+    evidence: &Evidence,
+    repository: &std::path::Path,
+    task_id: &str,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
     use agent_cli::components::{self, DeploymentImpact};
     use agent_cli::evidence::{DeliveryRecord, DeliveryState};
 
