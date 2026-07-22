@@ -13,7 +13,8 @@ touch "$FIXTURE/project/Cargo.toml" "$FIXTURE/project/Cargo.lock" "$FIXTURE/proj
 
 cat >"$FIXTURE/bin/rustc" <<'EOF'
 #!/usr/bin/env bash
-printf 'rustc fixture\n'
+printf 'invoked\n' >>"$FIXTURE_RUSTC_CALLS"
+exit 99
 EOF
 cat >"$FIXTURE/bin/cargo" <<'EOF'
 #!/usr/bin/env bash
@@ -35,6 +36,7 @@ chmod +x "$FIXTURE/bin/rustc" "$FIXTURE/bin/cargo"
 export PATH="$FIXTURE/bin:$PATH"
 export FIXTURE_BUILD_COUNT="$FIXTURE/build-count"
 export FIXTURE_CARGO_ARGS="$FIXTURE/cargo-args"
+export FIXTURE_RUSTC_CALLS="$FIXTURE/rustc-calls"
 export MISTER_AGENT_CLI_MANIFEST="$FIXTURE/project/Cargo.toml"
 export MISTER_AGENT_CLI_BINARY="$FIXTURE/target/release/agent-cli"
 export CARGO_TARGET_DIR="$FIXTURE/target"
@@ -43,9 +45,11 @@ output="$($ROOT/scripts/agent plan)"
 [[ "$output" == "agent:plan" ]]
 [[ "$(<"$FIXTURE_BUILD_COUNT")" == 1 ]]
 [[ "$(<"$FIXTURE_CARGO_ARGS")" == "build --release --locked --quiet --manifest-path $MISTER_AGENT_CLI_MANIFEST" ]]
+[[ ! -e "$FIXTURE_RUSTC_CALLS" ]]
 
 "$ROOT/scripts/agent" check >/dev/null
 [[ "$(<"$FIXTURE_BUILD_COUNT")" == 1 ]]
+[[ ! -e "$FIXTURE_RUSTC_CALLS" ]]
 
 sleep 1
 touch "$FIXTURE/project/src/main.rs"

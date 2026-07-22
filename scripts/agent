@@ -8,12 +8,10 @@ MANIFEST="${MISTER_AGENT_CLI_MANIFEST:-$ROOT/agent-cli/Cargo.toml}"
 SOURCE_ROOT="$(dirname "$MANIFEST")"
 TARGET_ROOT="${CARGO_TARGET_DIR:-$SOURCE_ROOT/target}"
 BINARY="${MISTER_AGENT_CLI_BINARY:-$TARGET_ROOT/release/agent-cli}"
-STAMP="$TARGET_ROOT/.agent-cli-toolchain"
 LOCK="$TARGET_ROOT/.agent-cli-build-lock"
 
-toolchain="$(rustc --version 2>/dev/null || true)"
 stale=false
-if [[ ! -x "$BINARY" || ! -f "$STAMP" || "$(<"$STAMP")" != "$toolchain" ]]; then
+if [[ ! -x "$BINARY" ]]; then
   stale=true
 elif [[ "$MANIFEST" -nt "$BINARY" || "$SOURCE_ROOT/Cargo.lock" -nt "$BINARY" ]]; then
   stale=true
@@ -36,9 +34,8 @@ if [[ "$stale" == true ]]; then
   trap cleanup EXIT INT TERM
 
   # Another launcher may have completed the build while this process waited.
-  if [[ ! -x "$BINARY" || ! -f "$STAMP" || "$(<"$STAMP")" != "$toolchain" || "$MANIFEST" -nt "$BINARY" || "$SOURCE_ROOT/Cargo.lock" -nt "$BINARY" || -n "$(find "$SOURCE_ROOT/src" -type f -newer "$BINARY" -print -quit)" ]]; then
+  if [[ ! -x "$BINARY" || "$MANIFEST" -nt "$BINARY" || "$SOURCE_ROOT/Cargo.lock" -nt "$BINARY" || -n "$(find "$SOURCE_ROOT/src" -type f -newer "$BINARY" -print -quit)" ]]; then
     cargo build --release --locked --quiet --manifest-path "$MANIFEST"
-    printf '%s' "$toolchain" >"$STAMP"
   fi
   cleanup
   trap - EXIT INT TERM
