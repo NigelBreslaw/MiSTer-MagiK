@@ -819,6 +819,7 @@ fn usage() {
     println!(
         "usage: mister --capture-buffer\n       mister <status|arming-status|mode|scene|display-mode|display-matrix|crt|ini-edit|core-list|catalog|media-check|media-download|agent|reboot-wait|doctor|mame-metadata-build> ...\n       mode <status|dev|public|stock>\n       scene <launcher|controller_test|tear_pattern|video_playback|crt_trial> [seconds]\n       display-mode MODE --attended [--keep]\n         MODE: auto|hdmi-1280x720p60|hdmi-1366x768p60|hdmi-1920x1080p60\n               hdmi-1920x1200p60|hdmi-2048x1536p60|hdmi-2560x1440p60\n               crt-240p60|crt-288p50|crt-480p60|crt-576p50\n       display-matrix --attended --out DIRECTORY\n       crt qualify --attended [--out DIRECTORY]\n       crt qualify --restore\n       ini-edit menu <OUTPUT> [--dry-run]\n       OUTPUT: hdmi|auto|crt-240p60|crt-288p50|crt-480p60|crt-576p50\n               1280x720p60|1024x768p60|720x480p60|720x576p50|1280x1024p60\n               800x600p60|640x480p60|1280x720p50|1920x1080p60|1920x1080p50\n               1366x768p60|1024x600p60|1920x1440p60|2048x1536p60\n       2560x1440p60: Mister does not support 1440p\n       ini-edit stock-boot [--dry-run]\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>]\n       operator commands are typed and bounded; direct-reset-no-sync remains experimental and requires a volatile session token"
     );
+    println!("       display-matrix optional evidence: --usb-video");
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1134,9 +1135,7 @@ fn display_transaction_complete(reply: &str, interrupted: bool) -> Result<bool> 
 }
 
 fn display_matrix_cli(args: &[String]) -> Result<()> {
-    if args.len() != 3 || args[0] != "--attended" || args[1] != "--out" {
-        return Err("usage: mister display-matrix --attended --out DIRECTORY".into());
-    }
+    let (directory, capture_usb_video) = parse_display_matrix_args(args)?;
     if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
         return Err("display matrix is attended and requires an interactive terminal".into());
     }
@@ -1146,7 +1145,7 @@ fn display_matrix_cli(args: &[String]) -> Result<()> {
     if acknowledgement.trim() != "31KHZ" {
         return Err("31 kHz display support was not acknowledged; no modes changed".into());
     }
-    let directory = PathBuf::from(&args[2]);
+    let directory = PathBuf::from(directory);
     fs::create_dir_all(&directory)?;
     let directory = fs::canonicalize(directory)?;
     DISPLAY_MATRIX_INTERRUPTED.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -1171,6 +1170,7 @@ fn display_matrix_cli(args: &[String]) -> Result<()> {
     let mut current_pid = original_ready.launcher_pid;
     let mut entries = Vec::new();
     let mut seen_hashes = std::collections::HashSet::new();
+    let mut seen_usb_hashes = std::collections::HashSet::new();
     let run_result = (|| -> Result<()> {
         for mode in DISPLAY_MATRIX_MODES {
             if DISPLAY_MATRIX_INTERRUPTED.load(std::sync::atomic::Ordering::SeqCst) {
@@ -1192,6 +1192,8 @@ fn display_matrix_cli(args: &[String]) -> Result<()> {
                 current_pid,
                 &directory,
                 &mut seen_hashes,
+                &mut seen_usb_hashes,
+                capture_usb_video,
                 started,
             );
             if let Ok((_, new_pid)) = &result {
@@ -1243,11 +1245,44 @@ fn display_matrix_cli(args: &[String]) -> Result<()> {
     Ok(())
 }
 
+fn parse_display_matrix_args(args: &[String]) -> Result<(&str, bool)> {
+    if args.first().map(String::as_str) != Some("--attended") {
+        return Err("usage: mister display-matrix --attended --out DIRECTORY [--usb-video]".into());
+    }
+    let mut directory = None;
+    let mut capture_usb_video = false;
+    let mut index = 1;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--out" => {
+                let value = args.get(index + 1).ok_or("--out needs DIRECTORY")?;
+                if directory.replace(value.as_str()).is_some() {
+                    return Err("--out may be specified only once".into());
+                }
+                index += 2;
+            }
+            "--usb-video" if !capture_usb_video => {
+                capture_usb_video = true;
+                index += 1;
+            }
+            argument => {
+                return Err(format!("unsupported display matrix argument: {argument}").into());
+            }
+        }
+    }
+    Ok((
+        directory.ok_or("display matrix requires --out DIRECTORY")?,
+        capture_usb_video,
+    ))
+}
+
 fn capture_display_matrix_mode(
     mode: DisplayMatrixMode,
     previous_pid: i64,
     directory: &Path,
     seen_hashes: &mut std::collections::HashSet<String>,
+    seen_usb_hashes: &mut std::collections::HashSet<String>,
+    capture_usb_video: bool,
     started: Instant,
 ) -> Result<(Value, i64)> {
     let session = connect(10)?;
@@ -1320,8 +1355,23 @@ fn capture_display_matrix_mode(
     if !seen_hashes.insert(sha256.clone()) {
         return Err(format!("stale or duplicate framebuffer capture for {}", mode.id).into());
     }
+    let usb_video = if capture_usb_video {
+        let usb_path = directory.join(format!("{}-usb-video.jpg", mode.id));
+        crt_qualification::capture_usb_video_frame(&usb_path)?;
+        let bytes = fs::read(&usb_path)?;
+        if bytes.len() < 1_024 {
+            return Err(format!("USB Video capture is blank or truncated for {}", mode.id).into());
+        }
+        let usb_sha256 = encode_hex(&Sha256::digest(&bytes));
+        if !seen_usb_hashes.insert(usb_sha256.clone()) {
+            return Err(format!("stale or duplicate USB Video capture for {}", mode.id).into());
+        }
+        Some(json!({"path": usb_path, "bytes": bytes.len(), "sha256": usb_sha256}))
+    } else {
+        None
+    };
     Ok((
-        json!({"mode": mode.id, "status": "pass", "path": path, "requested_output": mode.output.map(|(w,h)| format!("{w}x{h}")), "output_geometry": format!("{}x{}", output.0, output.1), "framebuffer_geometry": format!("{}x{}", framebuffer.0, framebuffer.1), "stride": stride, "capture_width": width, "capture_height": height, "bpp": bpp, "png_bytes": capture.png.len(), "sha256": sha256, "launcher_pid": ready.launcher_pid, "frames_before": frames_before, "frames_after": frames_after, "agent_elapsed_ms": capture.elapsed_ms, "elapsed_ms": started.elapsed().as_millis()}),
+        json!({"mode": mode.id, "status": "pass", "path": path, "usb_video": usb_video, "requested_output": mode.output.map(|(w,h)| format!("{w}x{h}")), "output_geometry": format!("{}x{}", output.0, output.1), "framebuffer_geometry": format!("{}x{}", framebuffer.0, framebuffer.1), "stride": stride, "capture_width": width, "capture_height": height, "bpp": bpp, "png_bytes": capture.png.len(), "sha256": sha256, "launcher_pid": ready.launcher_pid, "frames_before": frames_before, "frames_after": frames_after, "agent_elapsed_ms": capture.elapsed_ms, "elapsed_ms": started.elapsed().as_millis()}),
         ready.launcher_pid,
     ))
 }
@@ -6946,6 +6996,29 @@ mod tests {
         assert!(
             release_display_mode_command_for_runtime().contains("latch-readiness-report --json")
         );
+    }
+
+    #[test]
+    fn display_matrix_args_enable_usb_video_without_exposing_credentials() {
+        let args = ["--attended", "--out", "/tmp/evidence", "--usb-video"].map(str::to_string);
+        assert_eq!(
+            parse_display_matrix_args(&args).unwrap(),
+            ("/tmp/evidence", true)
+        );
+        let args = ["--attended", "--out", "/tmp/evidence"].map(str::to_string);
+        assert_eq!(
+            parse_display_matrix_args(&args).unwrap(),
+            ("/tmp/evidence", false)
+        );
+        let duplicate = [
+            "--attended",
+            "--out",
+            "/tmp/evidence",
+            "--usb-video",
+            "--usb-video",
+        ]
+        .map(str::to_string);
+        assert!(parse_display_matrix_args(&duplicate).is_err());
     }
 
     #[test]

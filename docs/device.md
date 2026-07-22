@@ -91,7 +91,7 @@ capture is saved under the OS temporary directory at
 `mister-magik/captures/`, and the command prints a Markdown link to the PNG so
 an image-capable agent can inspect it without receiving base64 text.
 
-`mister display-matrix --attended --out DIRECTORY` performs the bounded runtime display
+`mister display-matrix --attended --out DIRECTORY [--usb-video]` performs the bounded runtime display
 matrix without rebooting Linux. Main applies each supported resolution as a
 provisional transaction, the launcher restarts, and the authenticated MagiK
 agent returns one PNG per mode. The command writes deterministic PNG names and
@@ -102,6 +102,12 @@ checks launcher PID replacement, output/framebuffer geometry, advancing frame
 counters, RGB565 stride, nonblank content, and unique capture hashes. The v2
 manifest records partial failures before cleanup. Framebuffer evidence still
 requires attended sink observation for HDMI or CRT visibility claims.
+
+With `--usb-video`, each case also captures the fixed `USB Video` input after
+the authoritative framebuffer capture and records its path, size, and hash in
+the manifest. CRT/VGA acceptance requires routing Morph 4K Port B before those
+cases and restoring HDMI afterward. Morph credentials are runtime-only operator
+input and must never be passed as command arguments or written to artifacts.
 
 The launcher keeps output geometry one-to-one through 1280x720 and uses half
 width and height when the output is at least 1366 pixels wide or 900 pixels

@@ -204,7 +204,7 @@ fn create_new_output_directory(output: &Path) -> Result<()> {
 fn qualify_preflight_capture(output: &Path, interrupted: &AtomicBool) -> Result<()> {
     check_interrupted(interrupted)?;
     let path = output.join("preflight.jpg");
-    capture_frame(&path)?;
+    capture_usb_video_frame(&path)?;
     println!("Preflight capture ready: {}", path.display());
     Ok(())
 }
@@ -316,7 +316,7 @@ fn validate_resolved_mode(resolved: &OriginalState, mode: CrtMode) -> Result<()>
 fn capture_analyzer(directory: &Path, mode: CrtMode, interrupted: &AtomicBool) -> Result<()> {
     check_interrupted(interrupted)?;
     let path = directory.join("analyzer.jpg");
-    capture_frame(&path)?;
+    capture_usb_video_frame(&path)?;
     println!(
         "Morph detected-input capture ready for {}: {}",
         mode.output,
@@ -510,7 +510,7 @@ fn camera_args(command: &str, output: &Path) -> Vec<String> {
     args
 }
 
-fn capture_frame(output: &Path) -> Result<()> {
+pub(super) fn capture_usb_video_frame(output: &Path) -> Result<()> {
     let status = Command::new(camera_helper())
         .args(camera_args("frame", output))
         .status()?;
