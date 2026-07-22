@@ -634,6 +634,19 @@ mod tests {
         assert_eq!(attempt.commit_sha.as_deref(), Some(sha.as_str()));
         assert_eq!(attempt.subject.as_deref(), Some("Test change"));
         assert!(attempt.paths.to_string().contains("docs/new.md"));
+        let committed = fixture
+            .evidence
+            .latest_committed_scope(&fixture.root)
+            .unwrap()
+            .unwrap();
+        assert_eq!(committed.task_id, "task-a");
+        assert_eq!(committed.commit_sha, sha);
+        assert_eq!(committed.paths, paths);
+        assert!(fixture
+            .evidence
+            .active_task_ids(&fixture.root, "none")
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

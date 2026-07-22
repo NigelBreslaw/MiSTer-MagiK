@@ -229,6 +229,13 @@ pub struct CommitAttemptDetail {
     pub detail: Option<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommittedTask {
+    pub task_id: String,
+    pub commit_sha: String,
+    pub paths: Vec<PathBuf>,
+}
+
 impl Evidence {
     pub fn open_for_repository(repository: &Path) -> Result<Self, String> {
         if let Some(root) = std::env::var_os("MISTER_AGENT_CLI_STATE_DIR") {
@@ -517,6 +524,41 @@ impl Evidence {
             )
             .optional()
             .map_err(|error| error.to_string())
+    }
+
+    pub fn latest_committed_scope(&self, worktree: &Path) -> Result<Option<CommittedTask>, String> {
+        let Some((task_id, commit_sha)) = self.latest_committed_task(worktree)? else {
+            return Ok(None);
+        };
+        let paths: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT paths_json FROM commit_attempts WHERE task_id=?1 AND commit_sha=?2 AND status='committed' ORDER BY rowid DESC LIMIT 1",
+                params![task_id, commit_sha],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?;
+        let paths = paths.ok_or_else(|| {
+            format!(
+                "commit_evidence_corrupt: task {task_id} commit {commit_sha} has no successful commit attempt"
+            )
+        })?;
+        let paths: Vec<PathBuf> = serde_json::from_str(&paths).map_err(|error| {
+            format!(
+                "commit_evidence_corrupt: task {task_id} commit {commit_sha} has invalid committed paths: {error}"
+            )
+        })?;
+        if paths.is_empty() {
+            return Err(format!(
+                "commit_evidence_corrupt: task {task_id} commit {commit_sha} has no committed paths"
+            ));
+        }
+        Ok(Some(CommittedTask {
+            task_id,
+            commit_sha,
+            paths,
+        }))
     }
 
     pub fn claim_task_paths(&self, task_id: &str, paths: &[PathBuf]) -> Result<(), String> {
@@ -1253,6 +1295,86 @@ mod tests {
             evidence.latest_committed_task(worktree).unwrap(),
             Some(("task-committed".into(), "abc123".into()))
         );
+    }
+
+    #[test]
+    fn committed_scope_uses_immutable_commit_attempt_paths() {
+        let root = temporary_root("committed-scope");
+        let evidence = Evidence::open_at(&root).unwrap();
+        let worktree = Path::new("/tmp/committed-scope-worktree");
+        evidence
+            .save_task_baseline("task-committed", worktree, &"baseline", false)
+            .unwrap();
+        let request = RawRequest::capture([OsString::from("agent-cli")]);
+        evidence.begin_request(&request).unwrap();
+        evidence
+            .begin_commit_attempt(&request.id, "task-committed", "message")
+            .unwrap();
+        evidence.close_task("task-committed", "abc123").unwrap();
+        evidence
+            .update_commit_attempt(
+                &request.id,
+                &[PathBuf::from("apps/mister/src/main.rs")],
+                "committed",
+                Some("abc123"),
+                Some("message"),
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(
+            evidence.latest_committed_scope(worktree).unwrap(),
+            Some(CommittedTask {
+                task_id: "task-committed".into(),
+                commit_sha: "abc123".into(),
+                paths: vec![PathBuf::from("apps/mister/src/main.rs")],
+            })
+        );
+        assert_eq!(
+            evidence
+                .load_task_baseline::<String>("task-committed")
+                .unwrap()
+                .unwrap()
+                .1,
+            "baseline"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn committed_scope_rejects_missing_or_mismatched_attempts() {
+        let root = temporary_root("committed-scope-corrupt");
+        let evidence = Evidence::open_at(&root).unwrap();
+        let worktree = Path::new("/tmp/committed-scope-corrupt-worktree");
+        evidence
+            .save_task_baseline("task-committed", worktree, &(), false)
+            .unwrap();
+        evidence.close_task("task-committed", "abc123").unwrap();
+        assert!(evidence
+            .latest_committed_scope(worktree)
+            .unwrap_err()
+            .starts_with("commit_evidence_corrupt:"));
+
+        let request = RawRequest::capture([OsString::from("agent-cli")]);
+        evidence.begin_request(&request).unwrap();
+        evidence
+            .begin_commit_attempt(&request.id, "task-committed", "message")
+            .unwrap();
+        evidence
+            .update_commit_attempt(
+                &request.id,
+                &[PathBuf::from("apps/mister/src/main.rs")],
+                "committed",
+                Some("different-sha"),
+                Some("message"),
+                None,
+            )
+            .unwrap();
+        assert!(evidence
+            .latest_committed_scope(worktree)
+            .unwrap_err()
+            .starts_with("commit_evidence_corrupt:"));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

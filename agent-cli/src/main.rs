@@ -210,15 +210,18 @@ fn dispatch(
             return deliver(evidence, repository, task_id, reporter);
         }
         Intent::Benchmark { task_id } => {
-            let (recorded_task, sha) = evidence
-                .latest_committed_task(repository)?
-                .filter(|(recorded, _)| recorded == task_id)
+            let committed = evidence
+                .latest_committed_scope(repository)?
+                .filter(|committed| committed.task_id == *task_id)
                 .ok_or(
                     "unverified_commit: use `scripts/agent commit -m MESSAGE` before benchmarking",
                 )?;
-            debug_assert_eq!(recorded_task, *task_id);
-            let paths = agent_cli::task::changes(evidence, repository, task_id)?;
-            return agent_cli::benchmark::execute(repository, &paths, &sha, reporter);
+            return agent_cli::benchmark::execute(
+                repository,
+                &committed.paths,
+                &committed.commit_sha,
+                reporter,
+            );
         }
         Intent::ReleaseQualify => {
             return agent_cli::release::execute(reporter);
@@ -759,7 +762,13 @@ fn deliver_inner(
             return Ok(Outcome::ExternalRequired);
         }
         let paths = if current_head == sha {
-            agent_cli::task::changes(evidence, repository, task_id)?
+            evidence
+                .latest_committed_scope(repository)?
+                .filter(|committed| {
+                    committed.task_id == task_id && committed.commit_sha == current_head
+                })
+                .ok_or("external_pending: current HEAD was not committed by this task")?
+                .paths
         } else {
             let latest = evidence
                 .latest_committed_task(repository)?
@@ -831,18 +840,15 @@ fn deliver_inner(
     if !dirty.is_empty() {
         return Err("dirty_worktree: commit or discard changes before delivery".into());
     }
-    let (recorded_task, sha) = evidence
-        .latest_committed_task(repository)?
-        .filter(|(recorded, _)| recorded == task_id)
+    let committed = evidence
+        .latest_committed_scope(repository)?
+        .filter(|committed| committed.task_id == task_id)
         .ok_or("unverified_commit: use `scripts/agent commit -m MESSAGE` before delivery")?;
-    debug_assert_eq!(recorded_task, task_id);
-    if agent_cli::task::current_head(repository)? != sha {
+    if agent_cli::task::current_head(repository)? != committed.commit_sha {
         return Err("moved_head: check out the exact commit created for this task".into());
     }
-    let paths = agent_cli::task::changes(evidence, repository, task_id)?;
-    if paths.is_empty() {
-        return Err("nothing_to_deliver: no task-owned changes were found".into());
-    }
+    let sha = committed.commit_sha;
+    let paths = committed.paths;
     let impact = paths
         .iter()
         .filter_map(|path| components::classify(path))
