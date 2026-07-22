@@ -71,25 +71,37 @@ output="$($ROOT/scripts/agent plan)"
 [[ "$(<"$FIXTURE_BUILD_COUNT")" == 1 ]]
 [[ ! -e "$FIXTURE_RUSTC_CALLS" ]]
 
+rm -f "$MISTER_AGENT_CLI_BINARY"
+export MISTER_AGENT_CLI_PROFILE=debug
+unset MISTER_AGENT_CLI_BINARY
+output="$($ROOT/scripts/agent plan)"
+[[ "$output" == "agent:plan" ]]
+[[ -x "$FIXTURE/target/debug/agent-cli" ]]
+[[ "$(<"$FIXTURE_BUILD_COUNT")" == 2 ]]
+[[ "$(<"$FIXTURE_CARGO_ARGS")" == "build --locked --quiet --manifest-path $MISTER_AGENT_CLI_MANIFEST" ]]
+
+export MISTER_AGENT_CLI_PROFILE=release
+export MISTER_AGENT_CLI_BINARY="$FIXTURE/target/release/agent-cli"
+
 sleep 1
 touch "$FIXTURE/agent-cli/src/main.rs"
 "$ROOT/scripts/agent" verify >/dev/null
-[[ "$(<"$FIXTURE_BUILD_COUNT")" == 2 ]]
+[[ "$(<"$FIXTURE_BUILD_COUNT")" == 3 ]]
 
 sleep 1
 touch "$FIXTURE/agent-cli/Cargo.toml"
 "$ROOT/scripts/agent" plan >/dev/null
-[[ "$(<"$FIXTURE_BUILD_COUNT")" == 3 ]]
+[[ "$(<"$FIXTURE_BUILD_COUNT")" == 4 ]]
 
 sleep 1
 touch "$FIXTURE/agent-cli/Cargo.lock"
 "$ROOT/scripts/agent" check >/dev/null
-[[ "$(<"$FIXTURE_BUILD_COUNT")" == 4 ]]
+[[ "$(<"$FIXTURE_BUILD_COUNT")" == 5 ]]
 
 sleep 1
 touch "$FIXTURE/crates/catalog/src/lib.rs"
 "$ROOT/scripts/agent" verify >/dev/null
-[[ "$(<"$FIXTURE_BUILD_COUNT")" == 5 ]]
+[[ "$(<"$FIXTURE_BUILD_COUNT")" == 6 ]]
 
 rm -f "$MISTER_AGENT_CLI_BINARY"
 export FIXTURE_BUILD_DELAY=0.2
@@ -98,7 +110,7 @@ first=$!
 "$ROOT/scripts/agent" two >/dev/null &
 second=$!
 wait "$first" "$second"
-[[ "$(<"$FIXTURE_BUILD_COUNT")" == 6 ]]
+[[ "$(<"$FIXTURE_BUILD_COUNT")" == 7 ]]
 
 rm -f "$MISTER_AGENT_CLI_BINARY"
 cat >"$FIXTURE/bin/cargo" <<'EOF'

@@ -48,6 +48,8 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: ./.github/actions/setup-agent-cli
+
       - name: Verify checked-out main
         run: |
           set -euo pipefail
@@ -253,6 +255,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - uses: ./.github/actions/setup-agent-cli
+
       - name: Install package tools
         run: sudo apt-get update && sudo apt-get install -y sqlite3 unzip
 
@@ -349,6 +353,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/setup-agent-cli
 
       - uses: actions/download-artifact@v8
         with:

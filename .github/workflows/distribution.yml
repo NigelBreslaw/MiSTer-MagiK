@@ -52,6 +52,8 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: ./.github/actions/setup-agent-cli
+
       - name: Derive build-based version
         id: release
         run: |
@@ -90,6 +92,8 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      - uses: ./.github/actions/setup-agent-cli
 
       - name: Compute cache identities
         id: cache-id
@@ -228,7 +232,9 @@ jobs:
         env:
           MISTER_MAGIK_BUILD_NUMBER: ${{ needs.release-metadata.outputs.build-number }}
           MISTER_MAGIK_VERSION: ${{ needs.release-metadata.outputs.version }}
-        run: MISTER_ARM_BUILD_BACKEND=cross scripts/agent build runtime-device
+        run: |
+          docker image inspect "${{ steps.cache-id.outputs.cross_image }}" >/dev/null
+          MISTER_ARM_BUILD_BACKEND=cross scripts/agent build runtime-device
 
       - name: Check ARM shared libraries
         run: apps/mister/scripts/check-arm-shared-libs.sh apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb

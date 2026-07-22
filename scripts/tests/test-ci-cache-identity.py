@@ -51,6 +51,7 @@ def main() -> int:
         changed_ui = MODULE.identities(fixture)
         assert changed_ui["host_target"] != initial["host_target"]
         assert changed_ui["arm_target"] != initial["arm_target"]
+        assert changed_ui["agent_cli"] == initial["agent_cli"]
 
         cross = fixture / "apps/mister/Cross.toml"
         cross.write_text(cross.read_text(encoding="utf-8").replace("d047ace4d737", "changedimage1"), encoding="utf-8")
@@ -65,6 +66,7 @@ def main() -> int:
         changed_lock = MODULE.identities(fixture)
         assert changed_lock["cargo_host"] != changed_cross["cargo_host"]
         assert changed_lock["host_target"] != changed_cross["host_target"]
+        assert changed_lock["agent_cli"] != changed_cross["agent_cli"]
 
         toolchain = fixture / "apps/mister/rust-toolchain.toml"
         toolchain.write_text(
@@ -73,6 +75,7 @@ def main() -> int:
         )
         changed_toolchain = MODULE.identities(fixture)
         assert changed_toolchain["rust_abi"] != changed_lock["rust_abi"]
+        assert changed_toolchain["agent_cli"] != changed_lock["agent_cli"]
         assert changed_toolchain["host_target"] != changed_lock["host_target"]
         assert changed_toolchain["arm_target"] != changed_lock["arm_target"]
         assert changed_toolchain["agent_target"] != changed_lock["agent_target"]
@@ -125,10 +128,16 @@ def main() -> int:
         source_expectations = (
             ("apps/mister/src/**/*.rs", ("host_target", "arm_target")),
             ("crates/magik-core/src/**/*.rs", ("host_target", "arm_target")),
-            ("crates/catalog/src/**/*.rs", ("host_target", "arm_target")),
+            (
+                "crates/catalog/src/**/*.rs",
+                ("host_target", "arm_target", "agent_cli"),
+            ),
             ("mister/platform/runtime/src/**/*.rs", ("host_target", "arm_target")),
-            ("mister/tools/host/src/**/*.rs", ("host_target",)),
+            ("mister/tools/host/src/**/*.rs", ("host_target", "agent_cli")),
             ("mister/tools/agent/src/**/*.rs", ("host_target", "agent_target")),
+            ("agent-cli/src/**/*.rs", ("host_target", "agent_cli")),
+            ("crates/media-contract/src/**/*.rs", ("agent_cli",)),
+            ("crates/agent-protocol/src/**/*.rs", ("agent_cli",)),
         )
         previous = changed_stream_source
         for pattern, changed_groups in source_expectations:
@@ -143,17 +152,23 @@ def main() -> int:
             previous = current
 
         compiled_input_expectations = (
-            ("crates/catalog/data/**/*.json", ("host_target", "arm_target")),
+            (
+                "crates/catalog/data/**/*.json",
+                ("host_target", "arm_target", "agent_cli"),
+            ),
             ("crates/catalog/tests/**/*.rs", ("host_target",)),
             ("apps/mister/ui/fonts/*.ttf", ("host_target", "arm_target")),
             ("apps/mister/ui/icons/*.svg", ("host_target", "arm_target")),
         )
         for pattern, changed_groups in compiled_input_expectations:
+            previous_agent_cli = previous["agent_cli"]
             source = next(iter(MODULE.files_for(fixture, (pattern,))))
             source.write_bytes(source.read_bytes() + b"\n")
             current = MODULE.identities(fixture)
             for group in changed_groups:
                 assert current[group] != previous[group], (pattern, group)
+            if "agent_cli" not in changed_groups:
+                assert current["agent_cli"] == previous_agent_cli, pattern
             previous = current
 
     print("cache identity tests ok")

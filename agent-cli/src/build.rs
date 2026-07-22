@@ -499,6 +499,7 @@ impl<'a> ProcessBuildActions<'a> {
             .env("MISTER_MAGIK_VERSION", version)
             .env("MISTER_MAGIK_BUILD_TIME", build_time)
             .args(cargo_args(self.spec));
+        configure_cross_environment(&mut command, self.repository)?;
         if self.spec.target == BuildTarget::Runtime && self.spec.mode != BuildMode::CheckLibrary {
             command.envs(ffmpeg_cross_env(self.repository));
         }
@@ -566,6 +567,36 @@ impl<'a> ProcessBuildActions<'a> {
         .map_err(|error| format!("cannot write build feature identity: {error}"))?;
         Ok(())
     }
+}
+
+fn configure_cross_environment(command: &mut Command, repository: &Path) -> AgentResult<()> {
+    let config = repository.join("apps/mister/Cross.toml");
+    if !config.is_file() {
+        return Err(format!("canonical cross config is missing: {}", config.display()).into());
+    }
+    command
+        .env("CROSS_CONFIG", config)
+        .env("RUSTUP_TOOLCHAIN", rust_toolchain_channel(repository)?);
+    Ok(())
+}
+
+fn rust_toolchain_channel(repository: &Path) -> AgentResult<String> {
+    let path = repository.join("apps/mister/rust-toolchain.toml");
+    let text = std::fs::read_to_string(&path)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    text.lines()
+        .map(str::trim)
+        .find_map(|line| {
+            line.strip_prefix("channel")?
+                .trim_start()
+                .strip_prefix('=')?
+                .trim()
+                .strip_prefix('"')?
+                .strip_suffix('"')
+                .map(str::to_owned)
+        })
+        .filter(|channel| !channel.is_empty())
+        .ok_or_else(|| format!("{} has no toolchain channel", path.display()).into())
 }
 
 fn build_minimal_ffmpeg(repository: &Path, backend: BuildBackend) -> AgentResult<()> {
@@ -953,6 +984,7 @@ fn run_bounded(command: &mut Command, deadline: Duration) -> AgentResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsStr;
 
     #[derive(Default)]
     struct FakeActions {
@@ -1011,6 +1043,30 @@ mod tests {
             OsString::from("/checkout/apps/mister/target/ffmpeg-minimal/armv7/dist/lib/pkgconfig")
         )));
         assert!(environment.contains(&("PKG_CONFIG_ALLOW_CROSS", OsString::from("1"))));
+    }
+
+    #[test]
+    fn every_cross_target_uses_canonical_config_and_toolchain() {
+        let repository = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        for target in [BuildTarget::Runtime, BuildTarget::DeviceAgent] {
+            let mut command = Command::new("cross");
+            command.current_dir(repository.join(host_workdir(target)));
+            configure_cross_environment(&mut command, repository).unwrap();
+            let environment: BTreeMap<_, _> = command
+                .get_envs()
+                .filter_map(|(key, value)| value.map(|value| (key.to_owned(), value.to_owned())))
+                .collect();
+            let expected_config = repository.join("apps/mister/Cross.toml").into_os_string();
+            let expected_toolchain = OsString::from("1.97.1");
+            assert_eq!(
+                environment.get(OsStr::new("CROSS_CONFIG")),
+                Some(&expected_config)
+            );
+            assert_eq!(
+                environment.get(OsStr::new("RUSTUP_TOOLCHAIN")),
+                Some(&expected_toolchain)
+            );
+        }
     }
 
     #[test]

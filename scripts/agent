@@ -7,7 +7,22 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MANIFEST="${MISTER_AGENT_CLI_MANIFEST:-$ROOT/agent-cli/Cargo.toml}"
 SOURCE_ROOT="$(dirname "$MANIFEST")"
 TARGET_ROOT="${CARGO_TARGET_DIR:-$SOURCE_ROOT/target}"
-BINARY="${MISTER_AGENT_CLI_BINARY:-$TARGET_ROOT/release/agent-cli}"
+PROFILE="${MISTER_AGENT_CLI_PROFILE:-release}"
+case "$PROFILE" in
+  debug)
+    PROFILE_DIR=debug
+    BUILD_ARGS=(build --locked --quiet)
+    ;;
+  release)
+    PROFILE_DIR=release
+    BUILD_ARGS=(build --release --locked --quiet)
+    ;;
+  *)
+    echo "MISTER_AGENT_CLI_PROFILE must be debug or release; got $PROFILE" >&2
+    exit 2
+    ;;
+esac
+BINARY="${MISTER_AGENT_CLI_BINARY:-$TARGET_ROOT/$PROFILE_DIR/agent-cli}"
 LOCK="$TARGET_ROOT/.agent-cli-build-lock"
 
 REQUIRED_INPUTS=(
@@ -70,7 +85,7 @@ if inputs_are_stale; then
 
   # Another launcher may have completed the build while this process waited.
   if inputs_are_stale; then
-    cargo build --release --locked --quiet --manifest-path "$MANIFEST"
+    MISTER_AGENT_CLI_BINARY="$BINARY" cargo "${BUILD_ARGS[@]}" --manifest-path "$MANIFEST"
   fi
   cleanup
   trap - EXIT INT TERM

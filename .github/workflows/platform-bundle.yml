@@ -64,6 +64,8 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: ./.github/actions/setup-agent-cli
+
       - name: Verify checked-out main
         run: |
           set -euo pipefail
@@ -263,6 +265,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - uses: ./.github/actions/setup-agent-cli
+
       - uses: actions/checkout@v7
         with:
           repository: NigelBreslaw/Main_MiSTer
@@ -325,12 +329,16 @@ jobs:
       - name: Install checkout and kernel tools
         run: >-
           apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y
-          git ca-certificates make gcc-arm-linux-gnueabihf flex bison bc libssl-dev
+          git ca-certificates curl make gcc-arm-linux-gnueabihf flex bison bc libssl-dev
           libelf-dev kmod sparse python3
 
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      - uses: ./.github/actions/setup-agent-cli
+        with:
+          cache-scope: ubuntu-20.04
 
       - name: Trust checkout and fetch pinned kernel
         run: |
@@ -411,6 +419,8 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      - uses: ./.github/actions/setup-agent-cli
 
       - name: Resolve Menu and component metadata
         id: metadata
@@ -539,6 +549,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - uses: ./.github/actions/setup-agent-cli
+
       - uses: actions/download-artifact@v8
         with:
           name: platform-latest-verified
@@ -647,6 +659,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/setup-agent-cli
 
       - uses: actions/download-artifact@v8
         with:

@@ -47,6 +47,22 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "mister/tools/host/Cargo.lock",
         "mister/platform/runtime/Cargo.lock",
     ),
+    "agent_cli": (
+        "apps/mister/rust-toolchain.toml",
+        "scripts/agent",
+        "agent-cli/Cargo.lock",
+        "agent-cli/Cargo.toml",
+        "agent-cli/src/**/*.rs",
+        "mister/tools/host/Cargo.toml",
+        "mister/tools/host/src/**/*.rs",
+        "crates/catalog/Cargo.toml",
+        "crates/catalog/data/**/*.json",
+        "crates/catalog/src/**/*.rs",
+        "crates/media-contract/Cargo.toml",
+        "crates/media-contract/src/**/*.rs",
+        "crates/agent-protocol/Cargo.toml",
+        "crates/agent-protocol/src/**/*.rs",
+    ),
     "host_target": (
         "apps/mister/rust-toolchain.toml",
         "apps/mister/Cargo.lock",
@@ -184,7 +200,7 @@ def main() -> int:
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument("--github-output", type=Path)
     parser.add_argument("--json", action="store_true")
-    parser.add_argument("--value", choices=("cross_image",))
+    parser.add_argument("--value", choices=("cross_image", *GROUPS))
     args = parser.parse_args()
 
     values = identities(args.root.resolve())

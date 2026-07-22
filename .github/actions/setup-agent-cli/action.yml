@@ -1,0 +1,58 @@
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+name: Set up agent CLI
+description: Restore or build the exact debug agent-cli used by CI workflows
+
+inputs:
+  cache-scope:
+    description: Binary compatibility scope for the runner or job container
+    required: false
+    default: host
+
+runs:
+  using: composite
+  steps:
+    - name: Compute agent CLI cache identity
+      id: identity
+      shell: bash
+      run: |
+        echo "value=$(python3 scripts/checks/ci-cache-identity.py --value agent_cli)" >> "$GITHUB_OUTPUT"
+        toolchain="$(sed -n 's/^channel = "\([^"]*\)"/\1/p' apps/mister/rust-toolchain.toml)"
+        test -n "$toolchain"
+        echo "toolchain=$toolchain" >> "$GITHUB_OUTPUT"
+
+    - name: Restore agent CLI
+      id: cache
+      uses: actions/cache@v6
+      with:
+        path: agent-cli/target/debug/agent-cli
+        key: agent-cli-debug-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.cache-scope }}-${{ steps.identity.outputs.value }}
+
+    - name: Certify restored agent CLI
+      if: steps.cache.outputs.cache-hit == 'true'
+      shell: bash
+      run: touch agent-cli/target/debug/agent-cli
+
+    - name: Select debug agent CLI
+      shell: bash
+      run: |
+        echo "MISTER_AGENT_CLI_PROFILE=debug" >> "$GITHUB_ENV"
+        echo "RUSTUP_TOOLCHAIN=${{ steps.identity.outputs.toolchain }}" >> "$GITHUB_ENV"
+
+    - name: Install Rust for a cold cache
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        if ! command -v cargo >/dev/null; then
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+            sh -s -- -y --profile minimal --default-toolchain "${{ steps.identity.outputs.toolchain }}"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+        fi
+
+    - name: Bootstrap agent CLI
+      shell: bash
+      env:
+        MISTER_AGENT_CLI_PROFILE: debug
+        RUSTUP_TOOLCHAIN: ${{ steps.identity.outputs.toolchain }}
+      run: scripts/agent --help >/dev/null
