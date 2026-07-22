@@ -76,6 +76,28 @@ pub enum Command {
         #[arg(value_enum)]
         intent: BuildCommand,
     },
+    #[command(hide = true)]
+    Ci {
+        #[command(subcommand)]
+        command: CiCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CiCommand {
+    PlatformCandidates {
+        artifacts: PathBuf,
+        name: String,
+    },
+    PlatformEligibleRun {
+        run: PathBuf,
+        head_sha: String,
+    },
+    RequireAlphaPromotion {
+        channel: String,
+        alpha_sha: String,
+        candidate_sha: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -189,6 +211,23 @@ impl Cli {
                 command: ReleaseCommand::Qualify,
             }) => Intent::ReleaseQualify,
             Some(Command::Build { intent }) => Intent::Build { intent },
+            Some(Command::Ci { command }) => match command {
+                CiCommand::PlatformCandidates { artifacts, name } => {
+                    Intent::CiPlatformCandidates { artifacts, name }
+                }
+                CiCommand::PlatformEligibleRun { run, head_sha } => {
+                    Intent::CiPlatformEligibleRun { run, head_sha }
+                }
+                CiCommand::RequireAlphaPromotion {
+                    channel,
+                    alpha_sha,
+                    candidate_sha,
+                } => Intent::CiRequireAlphaPromotion {
+                    channel,
+                    alpha_sha,
+                    candidate_sha,
+                },
+            },
         }
     }
 }

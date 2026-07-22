@@ -138,8 +138,7 @@ jobs:
               details="build/platform-reuse/run-$run_id.json"
               gh run view "$run_id" --repo "$GITHUB_REPOSITORY" \
                 --json status,conclusion,workflowName,headBranch,event,headSha > "$details" || continue
-              python3 scripts/release/platform/platform-artifact-selection.py eligible-run \
-                --run "$details" --head-sha "$head_sha" || continue
+              scripts/agent ci platform-eligible-run "$details" "$head_sha" || continue
               attempt="build/platform-reuse/attempt-$kind-$artifact_id"
               mkdir -p "$attempt"
               gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name "$name" --dir "$attempt" || continue
@@ -163,8 +162,7 @@ jobs:
               printf '%s_hit=true\n%s_run_id=%s\n' "$kind" "$kind" "$run_id" >> "$GITHUB_OUTPUT"
               printf '%s_head_sha=%s\n' "$kind" "$head_sha" >> "$GITHUB_OUTPUT"
               return 0
-            done < <(python3 scripts/release/platform/platform-artifact-selection.py candidates \
-              --artifacts build/platform-reuse/artifacts.json --name "$name")
+            done < <(scripts/agent ci platform-candidates build/platform-reuse/artifacts.json "$name")
             echo "${kind}_hit=false" >> "$GITHUB_OUTPUT"
             return 1
           }

@@ -112,6 +112,19 @@ pub enum Intent {
     Build {
         intent: crate::build::BuildCommand,
     },
+    CiPlatformCandidates {
+        artifacts: PathBuf,
+        name: String,
+    },
+    CiPlatformEligibleRun {
+        run: PathBuf,
+        head_sha: String,
+    },
+    CiRequireAlphaPromotion {
+        channel: String,
+        alpha_sha: String,
+        candidate_sha: String,
+    },
 }
 
 impl Intent {

@@ -520,19 +520,12 @@ fn add_script_operations(
         BuiltinOperation::ShellOwnership,
         "script source → orchestration ownership contract",
     ));
-    if text.contains("platform-bundle") || text.contains("platform-artifact") {
+    if text.contains("platform-bundle") {
         add(op(
             "scripts.platform-workflow",
             "Test platform workflow",
             "python3",
             &["scripts/tests/test-platform-bundle-workflow.py"],
-            "platform tooling changed",
-        ));
-        add(op(
-            "scripts.platform-selection",
-            "Test platform artifact selection",
-            "python3",
-            &["scripts/tests/test-platform-artifact-selection.py"],
             "platform tooling changed",
         ));
     }

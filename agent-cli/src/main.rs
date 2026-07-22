@@ -245,6 +245,40 @@ fn dispatch(
             let spec = agent_cli::build::BuildSpec::for_recipe((*intent).into());
             agent_cli::build::execute(repository, &spec, reporter)?;
         }
+        Intent::CiPlatformCandidates { artifacts, name } => {
+            reporter.emit(
+                EventKind::Progress,
+                "ci",
+                "Selecting reusable platform artifacts",
+                Some(50),
+            )?;
+            agent_cli::ci::print_candidates(artifacts, name)?;
+            return Ok(Outcome::Passed);
+        }
+        Intent::CiPlatformEligibleRun { run, head_sha } => {
+            reporter.emit(
+                EventKind::Progress,
+                "ci",
+                "Checking platform run provenance",
+                Some(50),
+            )?;
+            agent_cli::ci::require_eligible_run(run, head_sha)?;
+            return Ok(Outcome::Passed);
+        }
+        Intent::CiRequireAlphaPromotion {
+            channel,
+            alpha_sha,
+            candidate_sha,
+        } => {
+            reporter.emit(
+                EventKind::Progress,
+                "ci",
+                "Checking release promotion",
+                Some(50),
+            )?;
+            agent_cli::ci::require_alpha_promotion(channel, alpha_sha, candidate_sha)?;
+            return Ok(Outcome::Passed);
+        }
         Intent::Plan {
             scope: selected, ..
         }
