@@ -258,25 +258,6 @@ impl DeviceOperations for NativeDevice {
                     .map_err(device_failure)?;
                 value.into()
             }
-            DeviceRequest::SetMenuVideoMode { video_mode } => {
-                if !matches!(video_mode.as_str(), "6" | "8" | "13" | "14") {
-                    return Err(DeviceFailure::InvalidRequest(format!(
-                        "unsupported focused video mode: {video_mode}"
-                    )));
-                }
-                let session = connect(10).map_err(device_failure)?;
-                edit_remote_ini(&session, IniEdit::MenuMode(video_mode.clone()), false)
-                    .map_err(device_failure)?;
-                exec_checked(&session, "video mode sync", "sync").map_err(device_failure)?;
-                issue_delivery_reboot(&session).map_err(device_failure)?;
-                drop(session);
-                if !wait_down(40.0) || wait_up(120.0).map_err(device_failure)? != 0 {
-                    return Err(DeviceFailure::Unavailable(format!(
-                        "video mode {video_mode} did not complete its reboot transition"
-                    )));
-                }
-                format!("video_mode={video_mode}")
-            }
             DeviceRequest::RebootWait => {
                 let session = connect(10).map_err(device_failure)?;
                 issue_delivery_reboot(&session).map_err(device_failure)?;

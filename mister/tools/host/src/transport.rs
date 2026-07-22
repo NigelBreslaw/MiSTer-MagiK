@@ -54,9 +54,6 @@ pub enum DeviceRequest {
     RollbackPlatform,
     CommitPlatform,
     SelectMain(MainSelection),
-    SetMenuVideoMode {
-        video_mode: String,
-    },
     RebootWait,
     VerifyHealth(Layout),
     SmokeDelivery {
@@ -99,7 +96,6 @@ impl DeviceRequest {
             Self::RollbackPlatform => "rollback-platform",
             Self::CommitPlatform => "commit-platform",
             Self::SelectMain(_) => "select-main",
-            Self::SetMenuVideoMode { .. } => "set-menu-video-mode",
             Self::RebootWait => "reboot-wait",
             Self::VerifyHealth(_) => "verify-health",
             Self::SmokeDelivery { .. } => "smoke-delivery",
@@ -235,9 +231,6 @@ mod tests {
             DeviceRequest::RollbackPlatform,
             DeviceRequest::CommitPlatform,
             DeviceRequest::SelectMain(MainSelection::Stock),
-            DeviceRequest::SetMenuVideoMode {
-                video_mode: "v".into(),
-            },
             DeviceRequest::RebootWait,
             DeviceRequest::VerifyHealth(Layout::Public),
             DeviceRequest::SmokeDelivery {
@@ -265,7 +258,7 @@ mod tests {
             DeviceRequest::CaptureFramebuffer,
         ];
         let labels: Vec<_> = requests.iter().map(DeviceRequest::label).collect();
-        assert_eq!(labels.len(), 34);
+        assert_eq!(labels.len(), 33);
         assert!(labels.iter().all(|label| !label.is_empty()));
         assert!(!labels.contains(&"run"));
         assert!(!labels.contains(&"shell"));

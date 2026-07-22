@@ -58,13 +58,6 @@ pub enum Command {
     #[command(hide = true)]
     Doctor,
     Diagnose,
-    #[command(hide = true)]
-    DisplayMode {
-        #[arg(value_parser = ["6", "8", "13", "14"])]
-        video_mode: String,
-        #[arg(long, value_parser = ["stock", "dev"])]
-        main: Option<String>,
-    },
     Deliver,
     Benchmark,
     Release {
@@ -406,9 +399,6 @@ impl Cli {
             },
             Some(Command::Doctor) => Intent::Doctor,
             Some(Command::Diagnose) => Intent::Diagnose,
-            Some(Command::DisplayMode { video_mode, main }) => {
-                Intent::DisplayMode { video_mode, main }
-            }
             Some(Command::Deliver) => Intent::Deliver { task_id },
             Some(Command::Benchmark) => Intent::Benchmark { task_id },
             Some(Command::Release {
@@ -608,34 +598,7 @@ mod tests {
     }
 
     #[test]
-    fn focused_display_mode_accepts_only_stress_presets() {
-        assert_eq!(
-            Cli::try_parse_from(["agent-cli", "display-mode", "6"])
-                .unwrap()
-                .into_intent(),
-            Intent::DisplayMode {
-                video_mode: "6".into(),
-                main: None,
-            }
-        );
-        assert_eq!(
-            Cli::try_parse_from(["agent-cli", "display-mode", "8"])
-                .unwrap()
-                .into_intent(),
-            Intent::DisplayMode {
-                video_mode: "8".into(),
-                main: None,
-            }
-        );
-        assert_eq!(
-            Cli::try_parse_from(["agent-cli", "display-mode", "14", "--main", "stock"])
-                .unwrap()
-                .into_intent(),
-            Intent::DisplayMode {
-                video_mode: "14".into(),
-                main: Some("stock".into()),
-            }
-        );
-        assert!(Cli::try_parse_from(["agent-cli", "display-mode", "10"]).is_err());
+    fn display_mode_operator_surface_is_not_available() {
+        assert!(Cli::try_parse_from(["agent-cli", "display-mode", "8"]).is_err());
     }
 }

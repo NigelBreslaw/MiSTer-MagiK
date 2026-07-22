@@ -102,10 +102,6 @@ pub enum Intent {
     PruneLogs,
     Doctor,
     Diagnose,
-    DisplayMode {
-        video_mode: String,
-        main: Option<String>,
-    },
     Deliver {
         task_id: String,
     },
@@ -161,10 +157,7 @@ impl Intent {
         match self {
             Self::Commit { .. } | Self::Verify { .. } => Risk::LocalWrite,
             Self::ReleaseQualify => Risk::Destructive,
-            Self::Deliver { .. }
-            | Self::Benchmark { .. }
-            | Self::Diagnose
-            | Self::DisplayMode { .. } => Risk::DeviceWrite,
+            Self::Deliver { .. } | Self::Benchmark { .. } | Self::Diagnose => Risk::DeviceWrite,
             Self::Build { .. } => Risk::LocalWrite,
             _ => Risk::ReadOnly,
         }
