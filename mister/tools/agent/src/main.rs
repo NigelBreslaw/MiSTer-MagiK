@@ -3,6 +3,19 @@
 
 use std::env;
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn select_framebuffer_capture<T>(
+    scanout_slots_present: bool,
+    read_latched: impl FnOnce() -> Result<T, String>,
+    read_fb0: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    if scanout_slots_present {
+        read_latched().map_err(|error| format!("authoritative scanout capture failed: {error}"))
+    } else {
+        read_fb0()
+    }
+}
+
 #[cfg(any(target_os = "linux", test))]
 use serde_json::{json, Value};
 
@@ -2112,6 +2125,7 @@ mod linux {
                     "pong": true,
                     "agent_version": mister_magik_agent_protocol::AGENT_VERSION,
                     "protocol_version": mister_magik_agent_protocol::PROTOCOL_VERSION,
+                    "capabilities": [mister_magik_agent_protocol::FRAMEBUFFER_CAPTURE_CAPABILITY],
                 })),
                 None,
             ),
@@ -2187,6 +2201,7 @@ mod linux {
                 "version": env!("CARGO_PKG_VERSION"),
                 "agent_version": mister_magik_agent_protocol::AGENT_VERSION,
                 "protocol_version": mister_magik_agent_protocol::PROTOCOL_VERSION,
+                "capabilities": [mister_magik_agent_protocol::FRAMEBUFFER_CAPTURE_CAPABILITY],
                 "boot_id": boot_id,
                 "uptime_ms": started.elapsed().as_millis() as u64,
                 "port": AGENT_PORT,
@@ -2429,7 +2444,7 @@ mod linux {
         let hex_encode_us = elapsed_us(hex_t);
         let total_us = elapsed_us(start);
         Ok(json!({
-            "schema": "mister-magik-framebuffer-capture-v1",
+            "schema": "mister-magik-framebuffer-capture-v2",
             "source": source_label,
             "capture_source": source_json,
             "width": geometry.width,
@@ -2480,7 +2495,11 @@ mod linux {
     }
 
     fn read_framebuffer_capture() -> Result<FramebufferRead, String> {
-        read_fpga_latched_scanout_slots_capture().or_else(|_| read_fb0_capture())
+        select_framebuffer_capture(
+            Path::new(SCANOUT_SLOTS_DEVICE).exists(),
+            read_fpga_latched_scanout_slots_capture,
+            read_fb0_capture,
+        )
     }
 
     fn read_fb0_capture() -> Result<FramebufferRead, String> {
@@ -2808,6 +2827,7 @@ mod linux {
         let raw = capture.raw;
         let source_json = capture.source.json();
         let source_label = capture.source.label();
+        let (content_nonzero_bytes, content_varied) = framebuffer_content_stats(&raw, geometry);
         let geometry_us = 0;
         let lz4_t = Instant::now();
         let payload = if lz4 {
@@ -2819,7 +2839,7 @@ mod linux {
         let total_us = elapsed_us(start);
         Ok(RawFramebufferCapture {
             result: json!({
-                "schema": "mister-magik-framebuffer-raw-stream-v1",
+                "schema": "mister-magik-framebuffer-raw-stream-v2",
                 "boot_id": boot_id,
                 "source": source_label,
                 "capture_source": source_json,
@@ -2831,6 +2851,8 @@ mod linux {
                 "encoding": if lz4 { "lz4-block-size-prepended" } else { "raw" },
                 "raw_bytes": raw.len(),
                 "payload_bytes": payload.len(),
+                "content_nonzero_bytes": content_nonzero_bytes,
+                "content_varied": content_varied,
                 "elapsed_ms": total_us / 1000,
                 "timings": {
                     "request_received_uptime_ms": request_received_uptime_ms,
@@ -3915,6 +3937,36 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authoritative_capture_failure_never_falls_back_when_slots_exist() {
+        let mut fb0_reads = 0;
+        let error = select_framebuffer_capture(
+            true,
+            || Err::<u8, _>("latch unavailable".to_string()),
+            || {
+                fb0_reads += 1;
+                Ok(1)
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(fb0_reads, 0);
+        assert!(error.contains("authoritative scanout capture failed"));
+        assert!(error.contains("latch unavailable"));
+    }
+
+    #[test]
+    fn fb0_capture_remains_available_without_scanout_slots() {
+        let value = select_framebuffer_capture(
+            false,
+            || Err::<u8, _>("must not read latch".to_string()),
+            || Ok(7),
+        )
+        .unwrap();
+
+        assert_eq!(value, 7);
+    }
 
     #[test]
     fn direct_main_replies_accept_ok_and_preserve_failures() {

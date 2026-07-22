@@ -71,6 +71,13 @@ visibility. Use Analytics streaming for continuous inspection and
 `mister --capture-buffer` for a still, then pair it with attended HDMI evidence
 when making scan-out claims.
 
+Framebuffer capture v2 reads the FPGA-latched hidden RGB565 slot while MagiK
+scan-out slots are available. A latch, status, or slot-mapping failure is
+reported directly and never replaced with a successful `/dev/fb0` capture.
+`/dev/fb0` remains the explicit legacy source when scan-out slots are absent.
+Delivery smoke requires authoritative, nonblank hidden-slot content; manual
+captures may still represent a legitimately blank authoritative frame.
+
 Interactive captures are saved to the Desktop. When stdout is redirected, the
 capture is saved under the OS temporary directory at
 `mister-magik/captures/`, and the command prints a Markdown link to the PNG so

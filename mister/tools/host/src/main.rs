@@ -305,7 +305,7 @@ impl DeviceOperations for NativeDevice {
                 exec_checked(&session, "delivery smoke", &command)
                     .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
                 let capture = request_framebuffer_png().map_err(device_failure)?;
-                delivery_smoke_capture_detail(&capture)
+                delivery_smoke_capture_detail(&capture).map_err(device_failure)?
             }
             DeviceRequest::PrepareBenchmark(scenario) => {
                 let session = connect(10).map_err(device_failure)?;
@@ -1040,6 +1040,7 @@ fn capture_display_matrix_mode(
         return Err(format!("presentation did not advance for {}", mode.id).into());
     }
     let capture = request_framebuffer_png()?;
+    validate_visible_launcher_capture(&capture)?;
     let path = directory.join(format!("{}.png", mode.id));
     fs::write(&path, &capture.png)?;
     let sha256 = encode_hex(&Sha256::digest(&capture.png));
@@ -3408,7 +3409,7 @@ fn agent_cli(args: &[String]) -> Result<()> {
 
 fn agent_usage() {
     println!(
-        "usage: mister agent <ping|status|logs|timeline|sd-list|diagnostics|deploy-magik-bin|magik|reboot-wait|boot-profile>\n       logs [--json]\n       timeline [--json]\n       sd-list PATH [--protocol auto|v1|v2] [--show-hidden] [--repeat N] [--json]\n       diagnostics [--out DIR]\n       deploy-magik-bin LOCAL [REMOTE]\n       magik <status|suspend|resume|restart-launcher>\n       reboot-wait [--timeout SECS] [--raw|--direct-reset|--direct-reset-no-sync]\n       boot-profile [samples] [--timeout SECS] [--probe-timeout-ms MS] [--sleep-ms MS] [--raw|--direct-reset|--direct-reset-no-sync] [--fail-on-timeout]"
+        "usage: mister agent <ping|status|logs|timeline|sd-list|diagnostics|framebuffer-capture|framebuffer-capture-raw|framebuffer-capture-lz4|deploy-magik-bin|magik|reboot-wait|boot-profile>\n       logs [--json]\n       timeline [--json]\n       sd-list PATH [--protocol auto|v1|v2] [--show-hidden] [--repeat N] [--json]\n       diagnostics [--out DIR]\n       framebuffer-capture OUT.png [--json OUT.json]\n       framebuffer-capture-raw OUT.raw [--json OUT.json]\n       framebuffer-capture-lz4 OUT.raw [--json OUT.json]\n       deploy-magik-bin LOCAL [REMOTE]\n       magik <status|suspend|resume|restart-launcher>\n       reboot-wait [--timeout SECS] [--raw|--direct-reset|--direct-reset-no-sync]\n       boot-profile [samples] [--timeout SECS] [--probe-timeout-ms MS] [--sleep-ms MS] [--raw|--direct-reset|--direct-reset-no-sync] [--fail-on-timeout]"
     );
 }
 
@@ -3539,6 +3540,10 @@ struct PngCapture {
 fn capture_buffer(args: &[String]) -> Result<()> {
     validate_capture_buffer_args(args)?;
     let capture = request_framebuffer_png()?;
+    eprintln!(
+        "framebuffer capture source={}",
+        capture_source_label(&capture.result)?
+    );
     if io::stdout().is_terminal() {
         println!("{}", write_desktop_capture(&capture.png)?.display());
     } else {
@@ -3586,7 +3591,8 @@ fn capture_markdown_link(path: &Path) -> String {
     format!("[MiSTer framebuffer](<{}>)", path.display())
 }
 
-fn delivery_smoke_capture_detail(capture: &PngCapture) -> String {
+fn delivery_smoke_capture_detail(capture: &PngCapture) -> Result<String> {
+    validate_visible_launcher_capture(capture)?;
     let width = capture
         .result
         .get("width")
@@ -3602,9 +3608,93 @@ fn delivery_smoke_capture_detail(capture: &PngCapture) -> String {
         .get("png_bytes")
         .and_then(Value::as_u64)
         .unwrap_or(capture.png.len() as u64);
-    format!(
+    Ok(format!(
         "artifact=verified process=healthy module=ready latch=ready screen=recognized input=ready scanout=rgb565 capture=verified width={width} height={height} png_bytes={png_bytes} arming=clear"
-    )
+    ))
+}
+
+fn capture_source_label(result: &Value) -> Result<&str> {
+    result
+        .get("source")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "agent framebuffer capture response missing source".into())
+}
+
+fn validate_capture_contract(result: &Value) -> Result<()> {
+    validate_capture_contract_schema(result, "mister-magik-framebuffer-capture-v2")
+}
+
+fn validate_capture_contract_schema(result: &Value, expected_schema: &str) -> Result<()> {
+    if result.get("schema").and_then(Value::as_str) != Some(expected_schema) {
+        return Err("agent framebuffer capture returned an unsupported schema".into());
+    }
+    let source = capture_source_label(result)?;
+    let source_kind = result
+        .get("capture_source")
+        .and_then(|value| value.get("kind"))
+        .and_then(Value::as_str)
+        .ok_or("agent framebuffer capture response missing capture_source.kind")?;
+    if source != source_kind || !matches!(source, "fb0" | "fpga-latched-scanout-slots") {
+        return Err(format!("agent framebuffer capture returned invalid source {source:?}").into());
+    }
+    result
+        .get("content_nonzero_bytes")
+        .and_then(Value::as_u64)
+        .ok_or("agent framebuffer capture response missing content_nonzero_bytes")?;
+    result
+        .get("content_varied")
+        .and_then(Value::as_bool)
+        .ok_or("agent framebuffer capture response missing content_varied")?;
+    if source == "fpga-latched-scanout-slots" {
+        let metadata = result.get("capture_source").unwrap_or(&Value::Null);
+        for field in [
+            "active_base",
+            "active_sequence",
+            "region_index",
+            "region_name",
+        ] {
+            if metadata.get(field).is_none() {
+                return Err(format!(
+                    "agent framebuffer capture response missing latch field {field}"
+                )
+                .into());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_visible_launcher_capture(capture: &PngCapture) -> Result<()> {
+    let result = &capture.result;
+    if capture_source_label(result)? != "fpga-latched-scanout-slots" {
+        return Err(format!(
+            "launcher capture used non-authoritative source {}",
+            capture_source_label(result)?
+        )
+        .into());
+    }
+    let width = result.get("width").and_then(Value::as_u64).unwrap_or(0);
+    let height = result.get("height").and_then(Value::as_u64).unwrap_or(0);
+    let stride = result.get("stride").and_then(Value::as_u64).unwrap_or(0);
+    let bpp = result.get("bpp").and_then(Value::as_u64).unwrap_or(0);
+    if width == 0 || height == 0 || bpp != 16 || stride != width.saturating_mul(2) {
+        return Err(format!(
+            "authoritative launcher capture has invalid RGB565 geometry {width}x{height} stride={stride} bpp={bpp}"
+        )
+        .into());
+    }
+    let nonzero = result
+        .get("content_nonzero_bytes")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let varied = result
+        .get("content_varied")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if nonzero == 0 || !varied {
+        return Err("authoritative launcher framebuffer capture is blank or uniform".into());
+    }
+    Ok(())
 }
 
 fn validate_capture_buffer_args(args: &[String]) -> Result<()> {
@@ -3621,9 +3711,7 @@ fn request_framebuffer_png() -> Result<PngCapture> {
         .response
         .get("result")
         .ok_or("agent framebuffer capture response missing result")?;
-    if result.get("schema").and_then(Value::as_str) != Some("mister-magik-framebuffer-capture-v1") {
-        return Err("agent framebuffer capture returned an unsupported schema".into());
-    }
+    validate_capture_contract(result)?;
     let png_hex = result
         .get("png_hex")
         .and_then(Value::as_str)
@@ -3744,10 +3832,11 @@ fn agent_framebuffer_capture(args: &[String]) -> Result<()> {
         .and_then(Value::as_u64)
         .unwrap_or(capture.png.len() as u64);
     println!(
-        "framebuffer_capture: {} ({}x{}, {}, {}ms)",
+        "framebuffer_capture: {} ({}x{}, source={}, {}, {}ms)",
         output.display(),
         width,
         height,
+        capture_source_label(result)?,
         format_bytes_nearest_kb(png_bytes),
         capture.elapsed_ms
     );
@@ -3819,6 +3908,7 @@ fn agent_framebuffer_capture_binary(args: &[String], encoding: &str) -> Result<(
         .response
         .get("result")
         .ok_or("agent framebuffer binary response missing result")?;
+    validate_capture_contract_schema(result, "mister-magik-framebuffer-raw-stream-v2")?;
     let expected_raw = result
         .get("raw_bytes")
         .and_then(Value::as_u64)
@@ -8204,16 +8294,29 @@ H: Handlers=event3 js0"#
     fn delivery_smoke_capture_summary_excludes_image_payload() {
         let capture = PngCapture {
             result: json!({
+                "schema": "mister-magik-framebuffer-capture-v2",
+                "source": "fpga-latched-scanout-slots",
+                "capture_source": {
+                    "kind": "fpga-latched-scanout-slots",
+                    "active_base": "0x30000000",
+                    "active_sequence": 2,
+                    "region_index": 0,
+                    "region_name": "hidden-slot-1"
+                },
                 "width": 640,
                 "height": 480,
+                "stride": 1280,
+                "bpp": 16,
                 "png_bytes": 123_456,
+                "content_nonzero_bytes": 100,
+                "content_varied": true,
                 "png_hex": "89504e470d0a1a0a-secret-image-data",
             }),
             png: b"\x89PNG\r\n\x1a\nsecret-image-data".to_vec(),
             elapsed_ms: 42,
         };
 
-        let summary = delivery_smoke_capture_detail(&capture);
+        let summary = delivery_smoke_capture_detail(&capture).unwrap();
 
         assert!(summary.contains("capture=verified"));
         assert!(summary.contains("width=640"));
@@ -8223,6 +8326,56 @@ H: Handlers=event3 js0"#
         assert!(!summary.contains("png_hex"));
         assert!(!summary.contains("89504e470d0a1a0a"));
         assert!(summary.len() < 256);
+    }
+
+    #[test]
+    fn capture_contract_rejects_stale_missing_metadata() {
+        let stale = json!({
+            "schema": "mister-magik-framebuffer-capture-v1",
+            "source": "fb0"
+        });
+        assert!(validate_capture_contract(&stale)
+            .unwrap_err()
+            .to_string()
+            .contains("unsupported schema"));
+    }
+
+    #[test]
+    fn launcher_smoke_rejects_fallback_and_blank_authoritative_capture() {
+        let mut result = json!({
+            "schema": "mister-magik-framebuffer-capture-v2",
+            "source": "fb0",
+            "capture_source": {"kind": "fb0"},
+            "width": 640,
+            "height": 480,
+            "stride": 1280,
+            "bpp": 16,
+            "content_nonzero_bytes": 100,
+            "content_varied": true
+        });
+        let capture = PngCapture {
+            result: result.clone(),
+            png: vec![],
+            elapsed_ms: 0,
+        };
+        assert!(validate_visible_launcher_capture(&capture).is_err());
+
+        result["source"] = json!("fpga-latched-scanout-slots");
+        result["capture_source"] = json!({
+            "kind": "fpga-latched-scanout-slots",
+            "active_base": "0x30000000",
+            "active_sequence": 2,
+            "region_index": 0,
+            "region_name": "hidden-slot-1"
+        });
+        result["content_nonzero_bytes"] = json!(0);
+        result["content_varied"] = json!(false);
+        let capture = PngCapture {
+            result,
+            png: vec![],
+            elapsed_ms: 0,
+        };
+        assert!(validate_visible_launcher_capture(&capture).is_err());
     }
 
     #[test]

@@ -97,10 +97,11 @@ pub(crate) fn bootstrap_agent() -> Result<()> {
 
     install_agent(&session, &token)?;
     for _ in 0..20 {
-        if installed_version()
+        if installed_identity()
             == Ok((
                 agent_protocol::AGENT_VERSION,
                 agent_protocol::PROTOCOL_VERSION,
+                true,
             ))
         {
             cleanup_agent_backup(&session)?;
@@ -126,10 +127,10 @@ fn preferred_token(explicit: Option<&str>, stored: Option<&str>) -> Option<Strin
 }
 
 fn apply_installed_version_policy() -> Result<bool> {
-    let Ok((agent, protocol)) = installed_version() else {
+    let Ok((agent, protocol, has_capture_v2)) = installed_identity() else {
         return Ok(false);
     };
-    match version_action(agent, protocol) {
+    match version_action(agent, protocol, has_capture_v2) {
         VersionAction::Current => Ok(true),
         VersionAction::Upgrade => Ok(false),
         VersionAction::RejectNewer => Err(format!(
@@ -139,8 +140,11 @@ fn apply_installed_version_policy() -> Result<bool> {
     }
 }
 
-fn version_action(agent: u64, protocol: u64) -> VersionAction {
-    if agent == agent_protocol::AGENT_VERSION && protocol == agent_protocol::PROTOCOL_VERSION {
+fn version_action(agent: u64, protocol: u64, has_capture_v2: bool) -> VersionAction {
+    if agent == agent_protocol::AGENT_VERSION
+        && protocol == agent_protocol::PROTOCOL_VERSION
+        && has_capture_v2
+    {
         VersionAction::Current
     } else if agent > agent_protocol::AGENT_VERSION || protocol > agent_protocol::PROTOCOL_VERSION {
         VersionAction::RejectNewer
@@ -149,20 +153,27 @@ fn version_action(agent: u64, protocol: u64) -> VersionAction {
     }
 }
 
-fn installed_version() -> std::result::Result<(u64, u64), String> {
+fn installed_identity() -> std::result::Result<(u64, u64, bool), String> {
     let reply = agent_request("ping", json!({}), Duration::from_millis(500))
         .map_err(|error| error.to_string())?;
     let result = reply.response.get("result").unwrap_or(&Value::Null);
-    Ok((
-        result
-            .get("agent_version")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| "missing agent version".to_string())?,
-        result
-            .get("protocol_version")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| "missing protocol version".to_string())?,
-    ))
+    let agent = result
+        .get("agent_version")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "missing agent version".to_string())?;
+    let protocol = result
+        .get("protocol_version")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "missing protocol version".to_string())?;
+    let has_capture_v2 = result
+        .get("capabilities")
+        .and_then(Value::as_array)
+        .is_some_and(|capabilities| {
+            capabilities.iter().any(|capability| {
+                capability.as_str() == Some(agent_protocol::FRAMEBUFFER_CAPTURE_CAPABILITY)
+            })
+        });
+    Ok((agent, protocol, has_capture_v2))
 }
 
 fn valid_token(token: &str) -> bool {
@@ -720,17 +731,26 @@ mod tests {
         assert_eq!(
             version_action(
                 agent_protocol::AGENT_VERSION,
-                agent_protocol::PROTOCOL_VERSION
+                agent_protocol::PROTOCOL_VERSION,
+                true,
             ),
             VersionAction::Current
         );
-        assert_eq!(version_action(0, 0), VersionAction::Upgrade);
+        assert_eq!(version_action(0, 0, false), VersionAction::Upgrade);
         assert_eq!(
-            version_action(agent_protocol::AGENT_VERSION + 1, 0),
+            version_action(
+                agent_protocol::AGENT_VERSION,
+                agent_protocol::PROTOCOL_VERSION,
+                false,
+            ),
+            VersionAction::Upgrade
+        );
+        assert_eq!(
+            version_action(agent_protocol::AGENT_VERSION + 1, 0, false),
             VersionAction::RejectNewer
         );
         assert_eq!(
-            version_action(0, agent_protocol::PROTOCOL_VERSION + 1),
+            version_action(0, agent_protocol::PROTOCOL_VERSION + 1, false),
             VersionAction::RejectNewer
         );
     }
