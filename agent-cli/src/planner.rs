@@ -411,6 +411,15 @@ fn add_path_operations(
             &["scripts/tests/test-platform-bundle-workflow.py"],
             "FPGA source → workflow contract",
         ));
+        if path == Path::new("mister/platform/fpga/test-quartus-r2-cache.sh") {
+            add(op(
+                "scripts.quartus-cache",
+                "Test fake Quartus cache contract",
+                "mister/platform/fpga/test-quartus-r2-cache.sh",
+                &[],
+                "Quartus cache test changed",
+            ));
+        }
     }
     if path == Path::new("tools/host-camera-native.swift") {
         add(op(
@@ -437,7 +446,7 @@ fn add_path_operations(
             add(op(
                 "scripts.quartus-cache",
                 "Test fake Quartus cache contract",
-                "scripts/tests/test-quartus-r2-cache.sh",
+                "mister/platform/fpga/test-quartus-r2-cache.sh",
                 &[],
                 "Quartus cache workflow changed",
             ));
@@ -554,7 +563,7 @@ fn add_script_operations(
         add(op(
             "scripts.quartus-cache",
             "Test fake Quartus cache contract",
-            "scripts/tests/test-quartus-r2-cache.sh",
+            "mister/platform/fpga/test-quartus-r2-cache.sh",
             &[],
             "Quartus cache tooling changed",
         ));
