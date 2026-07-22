@@ -1749,6 +1749,7 @@ pub(super) fn run_launcher_loop(
     let mut display_confirm_deadline = None;
     let (display_confirm_tx, display_confirm_rx) =
         mpsc::channel::<Result<launcher::DisplayCommandState, String>>();
+    // Main owns the active display mode; the launcher only mirrors its reported state.
     if std::env::var_os("MISTER_MAGIK_PARENT").is_some() {
         if let Ok(state) = launcher::display_state() {
             let selected_id = state.pending.as_deref().unwrap_or(&state.active);
