@@ -1184,8 +1184,8 @@ fn display_matrix_cli(args: &[String]) -> Result<()> {
                 return Err("display matrix interrupted".into());
             }
             if capture_usb_video && mode.id.starts_with("crt-") && !morph_port_b {
-                confirm_display_matrix_route("PORTB", "route Morph 4K to Port B")?;
                 morph_port_b = true;
+                confirm_display_matrix_route("PORTB", "route Morph 4K to Port B")?;
             }
             let started = Instant::now();
             let session = connect(10)?;
@@ -1271,6 +1271,21 @@ fn confirm_display_matrix_route(token: &str, instruction: &str) -> Result<()> {
     io::stdin().read_line(&mut acknowledgement)?;
     if acknowledgement.trim() != token {
         return Err(format!("Morph 4K route was not confirmed with {token}").into());
+    }
+    Ok(())
+}
+
+fn wait_display_matrix_interval(duration: Duration) -> Result<()> {
+    let deadline = Instant::now() + duration;
+    while Instant::now() < deadline {
+        if DISPLAY_MATRIX_INTERRUPTED.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("display matrix interrupted".into());
+        }
+        std::thread::sleep(
+            deadline
+                .saturating_duration_since(Instant::now())
+                .min(Duration::from_millis(100)),
+        );
     }
     Ok(())
 }
@@ -1413,7 +1428,7 @@ fn capture_display_matrix_mode(
         None
     };
     let screensaver = if let Some(wait_secs) = evidence.screensaver_wait_secs {
-        std::thread::sleep(Duration::from_secs(wait_secs));
+        wait_display_matrix_interval(Duration::from_secs(wait_secs))?;
         let saver_capture = request_framebuffer_png()?;
         validate_visible_launcher_capture(&saver_capture)?;
         let saver_sha256 = encode_hex(&Sha256::digest(&saver_capture.png));
@@ -7103,6 +7118,13 @@ mod tests {
         ]
         .map(str::to_string);
         assert!(parse_display_matrix_args(&duplicate).is_err());
+    }
+
+    #[test]
+    fn display_matrix_wait_honors_interruption() {
+        DISPLAY_MATRIX_INTERRUPTED.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(wait_display_matrix_interval(Duration::from_secs(1)).is_err());
+        DISPLAY_MATRIX_INTERRUPTED.store(false, std::sync::atomic::Ordering::SeqCst);
     }
 
     #[test]

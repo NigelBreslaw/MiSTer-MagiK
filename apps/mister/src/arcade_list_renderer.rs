@@ -287,18 +287,18 @@ impl ArcadeListRenderer {
         self.last_draw = Some(key);
         if previous.is_none() || !can_reuse_scrolled_surface || games.is_empty() {
             self.surface_y = 0;
-            self.draw_content_band(games, visual_px, 0, ARCADE_LIST_H);
+            self.draw_content_band(games, visual_px, 0, self.visible_height);
         } else if content_delta == 0 {
-        } else if content_delta.unsigned_abs() as usize >= ARCADE_LIST_H {
+        } else if content_delta.unsigned_abs() as usize >= self.visible_height {
             self.surface_y = 0;
-            self.draw_content_band(games, visual_px, 0, ARCADE_LIST_H);
+            self.draw_content_band(games, visual_px, 0, self.visible_height);
         } else if content_delta < 0 {
             let d = content_delta.unsigned_abs() as usize;
-            self.surface_y = (self.surface_y + d) % ARCADE_LIST_H;
-            self.draw_content_band(games, visual_px, ARCADE_LIST_H - d, d);
+            self.surface_y = (self.surface_y + d) % self.visible_height;
+            self.draw_content_band(games, visual_px, self.visible_height - d, d);
         } else {
             let d = content_delta as usize;
-            self.surface_y = (self.surface_y + ARCADE_LIST_H - d) % ARCADE_LIST_H;
+            self.surface_y = (self.surface_y + self.visible_height - d) % self.visible_height;
             self.draw_content_band(games, visual_px, 0, d);
         }
         if force {
@@ -310,7 +310,7 @@ impl ArcadeListRenderer {
         if !can_reuse_scrolled_surface {
             return Some(ArcadeListUpdate::Full(self.dirty_rect()));
         }
-        if content_delta == 0 || content_delta.unsigned_abs() as usize >= ARCADE_LIST_H {
+        if content_delta == 0 || content_delta.unsigned_abs() as usize >= self.visible_height {
             return Some(ArcadeListUpdate::Full(self.dirty_rect()));
         }
         Some(ArcadeListUpdate::Scroll {
@@ -352,25 +352,25 @@ impl ArcadeListRenderer {
         });
         if previous.is_none() || !can_reuse_scrolled_surface || items.is_empty() {
             self.surface_y = 0;
-            self.draw_filter_content_band(items, visual_px, 0, ARCADE_LIST_H);
+            self.draw_filter_content_band(items, visual_px, 0, self.visible_height);
             RENDERED_FILTER_CONTENT_HASH.store(key.content_hash, Ordering::Relaxed);
         } else if content_delta == 0 {
-        } else if content_delta.unsigned_abs() as usize >= ARCADE_LIST_H {
+        } else if content_delta.unsigned_abs() as usize >= self.visible_height {
             self.surface_y = 0;
-            self.draw_filter_content_band(items, visual_px, 0, ARCADE_LIST_H);
+            self.draw_filter_content_band(items, visual_px, 0, self.visible_height);
         } else if content_delta < 0 {
             let d = content_delta.unsigned_abs() as usize;
-            self.surface_y = (self.surface_y + d) % ARCADE_LIST_H;
-            self.draw_filter_content_band(items, visual_px, ARCADE_LIST_H - d, d);
+            self.surface_y = (self.surface_y + d) % self.visible_height;
+            self.draw_filter_content_band(items, visual_px, self.visible_height - d, d);
         } else {
             let d = content_delta as usize;
-            self.surface_y = (self.surface_y + ARCADE_LIST_H - d) % ARCADE_LIST_H;
+            self.surface_y = (self.surface_y + self.visible_height - d) % self.visible_height;
             self.draw_filter_content_band(items, visual_px, 0, d);
         }
         if force || previous.is_none() || !can_reuse_scrolled_surface {
             return Some(ArcadeListUpdate::Full(self.dirty_rect()));
         }
-        if content_delta == 0 || content_delta.unsigned_abs() as usize >= ARCADE_LIST_H {
+        if content_delta == 0 || content_delta.unsigned_abs() as usize >= self.visible_height {
             return Some(ArcadeListUpdate::Full(self.dirty_rect()));
         }
         Some(ArcadeListUpdate::Scroll {
@@ -380,7 +380,7 @@ impl ArcadeListRenderer {
     }
 
     pub(crate) fn selection_rect(&self) -> DirtyRect {
-        let y = Self::centered_selection_y();
+        let y = self.selection_y();
         DirtyRect {
             x0: self.geometry.x,
             y0: self.geometry.y + y,
@@ -390,8 +390,16 @@ impl ArcadeListRenderer {
     }
 
     fn centered_selection_y() -> usize {
+        Self::selection_y_for_height(ARCADE_LIST_H)
+    }
+
+    fn selection_y(&self) -> usize {
+        Self::selection_y_for_height(self.visible_height)
+    }
+
+    fn selection_y_for_height(height: usize) -> usize {
         let row_h = ARCADE_ROW_HEIGHT as usize;
-        let visible_rows = (ARCADE_LIST_H / row_h).max(1);
+        let visible_rows = (height / row_h).max(1);
         (visible_rows / 2) * row_h
     }
 
@@ -402,10 +410,10 @@ impl ArcadeListRenderer {
         band_y: usize,
         band_h: usize,
     ) {
-        if band_h == 0 || band_y >= ARCADE_LIST_H {
+        if band_h == 0 || band_y >= self.visible_height {
             return;
         }
-        let band_h = band_h.min(ARCADE_LIST_H - band_y);
+        let band_h = band_h.min(self.visible_height - band_y);
         if games.is_empty() {
             let mut band = std::mem::take(&mut self.band_scratch);
             band.resize(self.width * band_h, ARCADE_LIST_BG_COLOR);
@@ -417,7 +425,7 @@ impl ArcadeListRenderer {
                 0,
                 band_h,
                 96,
-                (ARCADE_LIST_H / 2).saturating_sub(band_y) as isize,
+                (self.visible_height / 2).saturating_sub(band_y) as isize,
                 "NO GAMES",
                 Pixel(0x00706080),
             );
@@ -431,7 +439,7 @@ impl ArcadeListRenderer {
             return;
         };
         for idx in first..=end {
-            let y = arcade_row_y(idx, visual_px);
+            let y = arcade_row_y(idx, visual_px, self.selection_y());
             let clip_y0 = y.max(band_y as isize);
             let clip_y1 = (y + row_h).min((band_y + band_h) as isize);
             if clip_y1 <= clip_y0 {
@@ -451,10 +459,10 @@ impl ArcadeListRenderer {
         band_y: usize,
         band_h: usize,
     ) {
-        if band_h == 0 || band_y >= ARCADE_LIST_H {
+        if band_h == 0 || band_y >= self.visible_height {
             return;
         }
-        let band_h = band_h.min(ARCADE_LIST_H - band_y);
+        let band_h = band_h.min(self.visible_height - band_y);
         self.fill_surface_band(band_y, band_h, ARCADE_LIST_BG_COLOR_565);
         if items.is_empty() {
             let mut band = std::mem::take(&mut self.band_scratch);
@@ -467,7 +475,7 @@ impl ArcadeListRenderer {
                 0,
                 band_h,
                 96,
-                (ARCADE_LIST_H / 2).saturating_sub(band_y) as isize,
+                (self.visible_height / 2).saturating_sub(band_y) as isize,
                 "NO FILTERS",
                 Pixel(0x00706080),
             );
@@ -480,7 +488,7 @@ impl ArcadeListRenderer {
             return;
         };
         for (idx, item) in items.iter().enumerate().take(end + 1).skip(first) {
-            let y = arcade_row_y(idx, visual_px);
+            let y = arcade_row_y(idx, visual_px, self.selection_y());
             let clip_y0 = y.max(band_y as isize);
             let clip_y1 = (y + row_h).min((band_y + band_h) as isize);
             if clip_y1 <= clip_y0 {
@@ -492,7 +500,7 @@ impl ArcadeListRenderer {
             for row_y in 0..copy_h {
                 let src = (src_y + row_y) * self.width;
                 let viewport_y = clip_y0 as usize + row_y;
-                let dst_y = (self.surface_y + viewport_y) % ARCADE_LIST_H;
+                let dst_y = (self.surface_y + viewport_y) % self.visible_height;
                 let dst = dst_y * self.width;
                 self.surface[dst..dst + self.width].copy_from_slice(&row[src..src + self.width]);
             }
@@ -544,7 +552,7 @@ impl ArcadeListRenderer {
         for row_y in 0..copy_h {
             let src = (src_y + row_y) * self.width;
             let viewport_y = band_y + dst_y + row_y;
-            let dst_y = (self.surface_y + viewport_y) % ARCADE_LIST_H;
+            let dst_y = (self.surface_y + viewport_y) % self.visible_height;
             let dst = dst_y * self.width;
             self.surface[dst..dst + self.width].copy_from_slice(&row[src..src + self.width]);
         }
@@ -552,7 +560,7 @@ impl ArcadeListRenderer {
 
     fn fill_surface_band(&mut self, band_y: usize, band_h: usize, color: Rgb565Pixel) {
         for row in 0..band_h {
-            let dst_y = (self.surface_y + band_y + row) % ARCADE_LIST_H;
+            let dst_y = (self.surface_y + band_y + row) % self.visible_height;
             let dst = dst_y * self.width;
             self.surface[dst..dst + self.width].fill(color);
         }
@@ -613,7 +621,7 @@ impl ArcadeListRenderer {
     fn copy_band_to_surface(&mut self, band: &[Pixel], band_y: usize, band_h: usize) {
         for row in 0..band_h {
             let src = row * self.width;
-            let dst_y = (self.surface_y + band_y + row) % ARCADE_LIST_H;
+            let dst_y = (self.surface_y + band_y + row) % self.visible_height;
             let dst = dst_y * self.width;
             copy_pixel_to_rgb565_row(
                 &band[src..src + self.width],
@@ -627,9 +635,7 @@ impl ArcadeListRenderer {
         disp: &mut MappedRgb565Framebuffer,
         redraw_selection_frame: bool,
     ) {
-        for (viewport_y, h) in ARCADE_LIST_LAYER_COPY_BANDS {
-            self.copy_viewport_band_to_fb0(disp, viewport_y, h);
-        }
+        self.copy_viewport_band_to_fb0(disp, 0, self.visible_height);
         if redraw_selection_frame {
             self.copy_selection_frame_to_fb0(disp);
         }
@@ -640,9 +646,7 @@ impl ArcadeListRenderer {
         target: &mut UiFrameTarget,
         redraw_selection_frame: bool,
     ) {
-        for (viewport_y, h) in ARCADE_LIST_LAYER_COPY_BANDS {
-            self.compose_viewport_band_to_cached(target, viewport_y, h);
-        }
+        self.compose_viewport_band_to_cached(target, 0, self.visible_height);
         if redraw_selection_frame {
             self.compose_selection_frame_to_cached(target);
         }
@@ -653,9 +657,7 @@ impl ArcadeListRenderer {
         hidden: &mut ScanoutSlotsRgb565Framebuffer,
         redraw_selection_frame: bool,
     ) {
-        for (viewport_y, h) in ARCADE_LIST_LAYER_COPY_BANDS {
-            self.copy_viewport_band_to_hidden(hidden, viewport_y, h);
-        }
+        self.copy_viewport_band_to_hidden(hidden, 0, self.visible_height);
         if redraw_selection_frame {
             self.copy_selection_frame_to_hidden(hidden);
         }
@@ -667,12 +669,17 @@ impl ArcadeListRenderer {
         viewport_y: usize,
         h: usize,
     ) {
-        if h == 0 || viewport_y >= ARCADE_LIST_H {
+        if h == 0 || viewport_y >= self.visible_height {
             return;
         }
-        let h = h.min(ARCADE_LIST_H - viewport_y);
-        for_each_arcade_list_present_segment(self.width, viewport_y, h, |kind, x, y, w, h| {
-            match kind {
+        let h = h.min(self.visible_height - viewport_y);
+        for_each_arcade_list_present_segment_with_geometry(
+            self.width,
+            viewport_y,
+            h,
+            self.selection_y(),
+            self.visible_height,
+            |kind, x, y, w, h| match kind {
                 ArcadeListPresentKind::Normal => {
                     self.copy_surface_rect_to_fb0(disp, x, y, w, h);
                 }
@@ -683,8 +690,8 @@ impl ArcadeListRenderer {
                         self.copy_surface_rect_to_fb0(disp, x, y, w, h);
                     }
                 }
-            }
-        });
+            },
+        );
     }
 
     fn copy_surface_rect_to_fb0(
@@ -835,12 +842,17 @@ impl ArcadeListRenderer {
         viewport_y: usize,
         h: usize,
     ) {
-        if h == 0 || viewport_y >= ARCADE_LIST_H {
+        if h == 0 || viewport_y >= self.visible_height {
             return;
         }
-        let h = h.min(ARCADE_LIST_H - viewport_y);
-        for_each_arcade_list_present_segment(self.width, viewport_y, h, |kind, x, y, w, h| {
-            match kind {
+        let h = h.min(self.visible_height - viewport_y);
+        for_each_arcade_list_present_segment_with_geometry(
+            self.width,
+            viewport_y,
+            h,
+            self.selection_y(),
+            self.visible_height,
+            |kind, x, y, w, h| match kind {
                 ArcadeListPresentKind::Normal => {
                     self.compose_surface_rect_to_cached(target, x, y, w, h);
                 }
@@ -851,8 +863,8 @@ impl ArcadeListRenderer {
                         self.compose_surface_rect_to_cached(target, x, y, w, h);
                     }
                 }
-            }
-        });
+            },
+        );
     }
 
     fn copy_viewport_band_to_hidden(
@@ -861,12 +873,17 @@ impl ArcadeListRenderer {
         viewport_y: usize,
         h: usize,
     ) {
-        if h == 0 || viewport_y >= ARCADE_LIST_H {
+        if h == 0 || viewport_y >= self.visible_height {
             return;
         }
-        let h = h.min(ARCADE_LIST_H - viewport_y);
-        for_each_arcade_list_present_segment(self.width, viewport_y, h, |kind, x, y, w, h| {
-            match kind {
+        let h = h.min(self.visible_height - viewport_y);
+        for_each_arcade_list_present_segment_with_geometry(
+            self.width,
+            viewport_y,
+            h,
+            self.selection_y(),
+            self.visible_height,
+            |kind, x, y, w, h| match kind {
                 ArcadeListPresentKind::Normal => {
                     self.copy_surface_rect_to_hidden(hidden, x, y, w, h);
                 }
@@ -877,8 +894,8 @@ impl ArcadeListRenderer {
                         self.copy_surface_rect_to_hidden(hidden, x, y, w, h);
                     }
                 }
-            }
-        });
+            },
+        );
     }
 
     fn compose_surface_rect_to_cached(
@@ -1185,13 +1202,30 @@ pub(crate) fn for_each_arcade_list_present_segment(
     h: usize,
     emit: impl FnMut(ArcadeListPresentKind, usize, usize, usize, usize),
 ) {
-    if h == 0 || viewport_y >= ARCADE_LIST_H {
+    for_each_arcade_list_present_segment_with_geometry(
+        width,
+        viewport_y,
+        h,
+        ArcadeListRenderer::centered_selection_y(),
+        ARCADE_LIST_H,
+        emit,
+    );
+}
+
+fn for_each_arcade_list_present_segment_with_geometry(
+    width: usize,
+    viewport_y: usize,
+    h: usize,
+    selection_y: usize,
+    visible_height: usize,
+    emit: impl FnMut(ArcadeListPresentKind, usize, usize, usize, usize),
+) {
+    if h == 0 || viewport_y >= visible_height {
         return;
     }
     let y0 = viewport_y;
-    let y1 = (viewport_y + h).min(ARCADE_LIST_H);
+    let y1 = (viewport_y + h).min(visible_height);
 
-    let selection_y = ArcadeListRenderer::centered_selection_y();
     let selection_bottom = selection_y + ARCADE_ROW_HEIGHT as usize;
     let inner_top = selection_y + ARCADE_SELECTION_FRAME_THICKNESS;
     let inner_bottom = selection_bottom.saturating_sub(ARCADE_SELECTION_FRAME_THICKNESS);
@@ -1215,7 +1249,7 @@ pub(crate) fn for_each_arcade_list_present_segment(
     );
     emit_row_overlap(
         y0..y1,
-        selection_bottom..ARCADE_LIST_H,
+        selection_bottom..visible_height,
         0,
         width,
         ArcadeListPresentKind::Normal,
@@ -1371,9 +1405,8 @@ fn arcade_anchor_for_visual_px(len: usize, visual_px: i32) -> usize {
     (anchor as usize).min(len - 1)
 }
 
-fn arcade_row_y(idx: usize, visual_px: i32) -> isize {
-    ArcadeListRenderer::centered_selection_y() as isize + idx as isize * ARCADE_ROW_HEIGHT as isize
-        - visual_px.max(0) as isize
+fn arcade_row_y(idx: usize, visual_px: i32, selection_y: usize) -> isize {
+    selection_y as isize + idx as isize * ARCADE_ROW_HEIGHT as isize - visual_px.max(0) as isize
 }
 
 fn arcade_visible_window_range_px(len: usize, visual_px: i32) -> Option<(usize, usize)> {
@@ -1586,12 +1619,18 @@ mod tests {
             let rect = renderer.dirty_rect();
             assert!(rect.x1 <= width);
             assert!(rect.y1 <= height - 32);
+            let selection = renderer.selection_rect();
+            assert!(selection.y0 >= rect.y0);
+            assert!(selection.y1 <= rect.y1);
 
             renderer
                 .set_geometry_for_render_h(ArcadeListGeometry::search_for_render_w(width), height);
             let rect = renderer.dirty_rect();
             assert!(rect.x1 <= width);
             assert!(rect.y1 <= height - 32);
+            let selection = renderer.selection_rect();
+            assert!(selection.y0 >= rect.y0);
+            assert!(selection.y1 <= rect.y1);
         }
     }
 
