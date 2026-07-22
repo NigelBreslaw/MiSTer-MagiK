@@ -1,0 +1,100 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+use mister_tool::transport::DeviceFailure;
+use thiserror::Error;
+
+pub type AgentResult<T> = Result<T, AgentError>;
+
+#[derive(Clone, Debug, Eq, Error, PartialEq)]
+pub enum AgentError {
+    #[error("{0}")]
+    Message(String),
+    #[error("{code}: {detail}")]
+    Classified { code: &'static str, detail: String },
+    #[error("{phase}: {source}")]
+    Phase {
+        phase: &'static str,
+        #[source]
+        source: Box<Self>,
+    },
+    #[error("cancelled: {0}")]
+    Cancelled(Box<Self>),
+    #[error("recovery_required: {message}")]
+    RecoveryRequired { message: String },
+}
+
+impl AgentError {
+    #[must_use]
+    pub fn phase(phase: &'static str, source: impl Into<Self>) -> Self {
+        Self::Phase {
+            phase,
+            source: Box::new(source.into()),
+        }
+    }
+
+    #[must_use]
+    pub fn cancelled(source: impl Into<Self>) -> Self {
+        Self::Cancelled(Box::new(source.into()))
+    }
+
+    #[must_use]
+    pub fn recovery_required(context: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self::RecoveryRequired {
+            message: format!("{}; {}", context.into(), detail.into()),
+        }
+    }
+
+    #[must_use]
+    pub fn is_recovery_required(&self) -> bool {
+        match self {
+            Self::RecoveryRequired { .. } => true,
+            Self::Phase { source, .. } | Self::Cancelled(source) => source.is_recovery_required(),
+            Self::Message(_) | Self::Classified { .. } => false,
+        }
+    }
+}
+
+impl From<String> for AgentError {
+    fn from(value: String) -> Self {
+        Self::Message(value)
+    }
+}
+
+impl From<&str> for AgentError {
+    fn from(value: &str) -> Self {
+        Self::Message(value.to_owned())
+    }
+}
+
+impl From<DeviceFailure> for AgentError {
+    fn from(failure: DeviceFailure) -> Self {
+        let (code, detail) = match failure {
+            DeviceFailure::Unavailable(detail) => ("device_unavailable", detail),
+            DeviceFailure::Authentication(detail) => ("authentication_required", detail),
+            DeviceFailure::InvalidRequest(detail) => ("invalid_device_request", detail),
+            DeviceFailure::ArtifactMismatch(detail) => ("artifact_mismatch", detail),
+            DeviceFailure::Unhealthy(detail) => ("device_unhealthy", detail),
+            DeviceFailure::OperationFailed(detail) => ("device_operation_failed", detail),
+            DeviceFailure::RecoveryRequired(detail) => {
+                return Self::RecoveryRequired { message: detail };
+            }
+        };
+        Self::Classified { code, detail }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recovery_classification_survives_context() {
+        let error = AgentError::phase(
+            "smoke",
+            AgentError::recovery_required("rollback failed", "device unavailable"),
+        );
+        assert!(error.is_recovery_required());
+        assert!(error.to_string().starts_with("smoke: recovery_required:"));
+    }
+}

@@ -1,7 +1,8 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use mister_tool::transport::{DeviceFailure, DeviceOperations, DeviceRequest};
+use crate::error::{AgentError, AgentResult};
+use mister_tool::transport::{DeviceOperations, DeviceRequest};
 
 pub struct DeviceClient<D = mister_tool::NativeDevice> {
     device: D,
@@ -21,30 +22,18 @@ impl<D: DeviceOperations> DeviceClient<D> {
         Self { device }
     }
 
-    pub fn execute(&mut self, request: DeviceRequest) -> Result<String, String> {
+    pub fn execute(&mut self, request: DeviceRequest) -> AgentResult<String> {
         self.device
             .execute(&request)
             .map(|response| response.detail)
-            .map_err(render_failure)
-    }
-}
-
-fn render_failure(failure: DeviceFailure) -> String {
-    match failure {
-        DeviceFailure::Unavailable(detail) => format!("device_unavailable: {detail}"),
-        DeviceFailure::Authentication(detail) => format!("authentication_required: {detail}"),
-        DeviceFailure::InvalidRequest(detail) => format!("invalid_device_request: {detail}"),
-        DeviceFailure::ArtifactMismatch(detail) => format!("artifact_mismatch: {detail}"),
-        DeviceFailure::Unhealthy(detail) => format!("device_unhealthy: {detail}"),
-        DeviceFailure::OperationFailed(detail) => format!("device_operation_failed: {detail}"),
-        DeviceFailure::RecoveryRequired(detail) => format!("recovery_required: {detail}"),
+            .map_err(AgentError::from)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mister_tool::transport::{DeviceResponse, FakeDevice};
+    use mister_tool::transport::{DeviceFailure, DeviceResponse, FakeDevice};
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -67,7 +56,7 @@ mod tests {
         let error = DeviceClient::new(fake)
             .execute(DeviceRequest::Status)
             .unwrap_err();
-        assert_eq!(error, "authentication_required: bad token");
+        assert_eq!(error.to_string(), "authentication_required: bad token");
     }
 
     #[test]
@@ -130,7 +119,7 @@ mod tests {
         ];
 
         for (failure, expected) in cases {
-            assert_eq!(render_failure(failure), expected);
+            assert_eq!(AgentError::from(failure).to_string(), expected);
         }
     }
 }

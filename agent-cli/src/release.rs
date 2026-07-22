@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::device::DeviceClient;
+use crate::error::{AgentError, AgentResult};
 use crate::model::Outcome;
 use crate::progress::{EventKind, Reporter};
 use mister_tool::transport::DeviceRequest;
@@ -35,15 +36,15 @@ impl Phase {
 }
 
 pub trait ReleaseActions {
-    fn run(&mut self, phase: Phase) -> Result<(), String>;
+    fn run(&mut self, phase: Phase) -> AgentResult<()>;
     fn armed(&self) -> bool;
-    fn restore(&mut self) -> Result<(), String>;
+    fn restore(&mut self) -> AgentResult<()>;
 }
 
 pub fn run_workflow(
     actions: &mut dyn ReleaseActions,
-    progress: &mut dyn FnMut(Phase, u8) -> Result<(), String>,
-) -> Result<(), String> {
+    progress: &mut dyn FnMut(Phase, u8) -> AgentResult<()>,
+) -> AgentResult<()> {
     const PHASES: &[(Phase, u8)] = &[
         (Phase::ConfirmAttendance, 2),
         (Phase::RecoveryPreflight, 10),
@@ -56,7 +57,7 @@ pub fn run_workflow(
     ];
     for (phase, percent) in PHASES {
         if let Err(error) = progress(*phase, *percent) {
-            return restore_after_error(actions, format!("cancelled: {error}"));
+            return restore_after_error(actions, AgentError::cancelled(error));
         }
         let result = if *phase == Phase::Restore {
             actions.restore()
@@ -64,37 +65,38 @@ pub fn run_workflow(
             actions.run(*phase)
         };
         if let Err(error) = result {
-            return restore_after_error(actions, format!("{}: {error}", phase.label()));
+            return restore_after_error(actions, AgentError::phase(phase.label(), error));
         }
     }
     Ok(())
 }
 
-fn restore_after_error(actions: &mut dyn ReleaseActions, error: String) -> Result<(), String> {
+fn restore_after_error(actions: &mut dyn ReleaseActions, error: AgentError) -> AgentResult<()> {
     if !actions.armed() {
         return Err(error);
     }
     match actions.restore() {
-        Ok(()) => Err(format!("{error}; restore=complete")),
-        Err(restore) => Err(format!(
-            "recovery_required: {error}; release qualification restore failed ({restore})"
+        Ok(()) => Err(format!("{error}; restore=complete").into()),
+        Err(restore) => Err(AgentError::recovery_required(
+            error.to_string(),
+            format!("release qualification restore failed ({restore})"),
         )),
     }
 }
 
-pub fn execute(reporter: &mut Reporter<'_>) -> Result<Outcome, String> {
+pub fn execute(reporter: &mut Reporter<'_>) -> AgentResult<Outcome> {
     let mut actions = ProcessActions {
         device: DeviceClient::default(),
         confirmed: false,
         armed: false,
     };
     run_workflow(&mut actions, &mut |phase, percent| {
-        reporter.emit(
+        Ok(reporter.emit(
             EventKind::Progress,
             phase.label(),
             &format!("release qualification {}", phase.label()),
             Some(percent),
-        )
+        )?)
     })?;
     Ok(Outcome::Passed)
 }
@@ -106,7 +108,7 @@ struct ProcessActions {
 }
 
 impl ProcessActions {
-    fn confirm_attendance(&mut self) -> Result<(), String> {
+    fn confirm_attendance(&mut self) -> AgentResult<()> {
         if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
             return Err("attendance_required: run this command in an attended terminal".into());
         }
@@ -125,7 +127,7 @@ impl ProcessActions {
 }
 
 impl ReleaseActions for ProcessActions {
-    fn run(&mut self, phase: Phase) -> Result<(), String> {
+    fn run(&mut self, phase: Phase) -> AgentResult<()> {
         match phase {
             Phase::ConfirmAttendance => self.confirm_attendance(),
             Phase::RecoveryPreflight => {
@@ -165,7 +167,7 @@ impl ReleaseActions for ProcessActions {
         self.armed
     }
 
-    fn restore(&mut self) -> Result<(), String> {
+    fn restore(&mut self) -> AgentResult<()> {
         if !self.armed {
             return Ok(());
         }
@@ -190,7 +192,7 @@ mod tests {
     }
 
     impl ReleaseActions for FakeActions {
-        fn run(&mut self, phase: Phase) -> Result<(), String> {
+        fn run(&mut self, phase: Phase) -> AgentResult<()> {
             if phase == Phase::ConfirmAttendance && self.refuse {
                 return Err("attendance refused".into());
             }
@@ -208,7 +210,7 @@ mod tests {
             self.armed
         }
 
-        fn restore(&mut self) -> Result<(), String> {
+        fn restore(&mut self) -> AgentResult<()> {
             self.restored += 1;
             self.armed = false;
             if self.restore_fails {
@@ -245,7 +247,7 @@ mod tests {
                 ..FakeActions::default()
             };
             let error = run_workflow(&mut actions, &mut |_, _| Ok(())).unwrap_err();
-            assert!(error.contains("restore=complete"));
+            assert!(error.to_string().contains("restore=complete"));
             assert_eq!(actions.restored, 1);
         }
         let mut actions = FakeActions::default();
@@ -257,7 +259,7 @@ mod tests {
             }
         })
         .unwrap_err();
-        assert!(error.starts_with("cancelled:"));
+        assert!(error.to_string().starts_with("cancelled:"));
         assert_eq!(actions.restored, 1);
     }
 
@@ -270,6 +272,6 @@ mod tests {
         };
         assert!(run_workflow(&mut actions, &mut |_, _| Ok(()))
             .unwrap_err()
-            .starts_with("recovery_required:"));
+            .is_recovery_required());
     }
 }

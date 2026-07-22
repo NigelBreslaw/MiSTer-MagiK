@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::device::DeviceClient;
+use crate::error::AgentResult;
 use crate::model::Outcome;
 use crate::progress::{EventKind, Reporter};
 use mister_tool::transport::DeviceRequest;
@@ -53,13 +54,13 @@ pub struct DiagnosticReport {
 }
 
 pub trait DiagnoseActions {
-    fn run(&mut self, phase: Phase) -> Result<(), String>;
+    fn run(&mut self, phase: Phase) -> AgentResult<()>;
 }
 
 pub fn run_workflow(
     actions: &mut dyn DiagnoseActions,
-    progress: &mut dyn FnMut(Phase, u8) -> Result<(), String>,
-) -> Result<(), String> {
+    progress: &mut dyn FnMut(Phase, u8) -> AgentResult<()>,
+) -> AgentResult<()> {
     const PHASES: &[(Phase, u8)] = &[
         (Phase::Discover, 5),
         (Phase::HostFacts, 18),
@@ -78,7 +79,7 @@ pub fn run_workflow(
     Ok(())
 }
 
-pub fn execute(repository: &Path, reporter: &mut Reporter<'_>) -> Result<Outcome, String> {
+pub fn execute(repository: &Path, reporter: &mut Reporter<'_>) -> AgentResult<Outcome> {
     let mut actions = ProcessActions {
         repository,
         device: DeviceClient::default(),
@@ -88,12 +89,12 @@ pub fn execute(repository: &Path, reporter: &mut Reporter<'_>) -> Result<Outcome
         repaired: false,
     };
     run_workflow(&mut actions, &mut |phase, percent| {
-        reporter.emit(
+        Ok(reporter.emit(
             EventKind::Progress,
             phase.label(),
             &format!("diagnose {}", phase.label()),
             Some(percent),
-        )
+        )?)
     })?;
     let report = actions.report.ok_or("diagnosis produced no report")?;
     reporter.emit(
@@ -123,7 +124,7 @@ struct ProcessActions<'a> {
 }
 
 impl ProcessActions<'_> {
-    fn collect_facts(&mut self) -> Result<(), String> {
+    fn collect_facts(&mut self) -> AgentResult<()> {
         let detail = self.device.execute(DeviceRequest::CollectDiagnosticFacts)?;
         self.facts = Some(
             serde_json::from_str(&detail)
@@ -134,7 +135,7 @@ impl ProcessActions<'_> {
 }
 
 impl DiagnoseActions for ProcessActions<'_> {
-    fn run(&mut self, phase: Phase) -> Result<(), String> {
+    fn run(&mut self, phase: Phase) -> AgentResult<()> {
         match phase {
             Phase::Discover => self.device.execute(DeviceRequest::Discover).map(|_| ()),
             Phase::HostFacts => {
@@ -216,7 +217,7 @@ mod tests {
     }
 
     impl DiagnoseActions for FakeActions {
-        fn run(&mut self, phase: Phase) -> Result<(), String> {
+        fn run(&mut self, phase: Phase) -> AgentResult<()> {
             self.phases.push(phase);
             if self.fail_at == Some(phase) {
                 Err("injected failure".into())
@@ -251,6 +252,7 @@ mod tests {
             }
         })
         .unwrap_err()
+        .to_string()
         .starts_with("cancelled:"));
     }
 

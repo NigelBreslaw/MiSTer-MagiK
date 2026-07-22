@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use agent_cli::cli::{Cli, OutputFormat};
+use agent_cli::error::AgentResult;
 use agent_cli::evidence::Evidence;
 use agent_cli::executor;
 use agent_cli::model::{Intent, Outcome};
@@ -53,10 +54,11 @@ fn main() {
     ) {
         Ok(outcome) => outcome,
         Err(error) => {
-            let (phase, message) = error
+            let rendered = error.to_string();
+            let (phase, message) = rendered
                 .split_once(": ")
                 .filter(|(phase, _)| matches!(*phase, "check" | "verify"))
-                .unwrap_or(("request", error.as_str()));
+                .unwrap_or(("request", rendered.as_str()));
             reporter
                 .emit(EventKind::Failed, phase, message, None)
                 .unwrap_or_else(|audit_error| fatal(&audit_error));
@@ -166,7 +168,7 @@ fn dispatch(
     intent: &Intent,
     output: OutputFormat,
     reporter: &mut Reporter<'_>,
-) -> Result<Outcome, String> {
+) -> AgentResult<Outcome> {
     match intent {
         Intent::TaskBegin { task_id, replace } => {
             agent_cli::task::begin(evidence, repository, task_id, *replace)?;
@@ -228,7 +230,9 @@ fn dispatch(
                 let selection = match main.as_str() {
                     "stock" => mister_tool::transport::MainSelection::Stock,
                     "dev" => mister_tool::transport::MainSelection::Development,
-                    _ => return Err(format!("unsupported focused Main selection: {main}")),
+                    _ => {
+                        return Err(format!("unsupported focused Main selection: {main}").into());
+                    }
                 };
                 device.execute(mister_tool::transport::DeviceRequest::SelectMain(selection))?;
             }
@@ -322,7 +326,9 @@ fn dispatch(
                 &format!("Selected {} operation", plan.operations.len()),
                 Some(0),
             )?;
-            return executor::execute(evidence, request_id, repository, &plan, reporter);
+            return Ok(executor::execute(
+                evidence, request_id, repository, &plan, reporter,
+            )?);
         }
         Intent::DatabaseStatus => {
             let status = evidence.status()?;
@@ -358,7 +364,7 @@ fn deliver(
     repository: &std::path::Path,
     task_id: &str,
     reporter: &mut Reporter<'_>,
-) -> Result<Outcome, String> {
+) -> AgentResult<Outcome> {
     use agent_cli::components::{self, DeploymentImpact};
     use agent_cli::evidence::DeliveryRecord;
 
@@ -370,7 +376,8 @@ fn deliver(
             return Err(format!(
                 "delivery_state_invalid: cannot resume delivery in {}",
                 pending.state
-            ));
+            )
+            .into());
         }
         let mut sha = pending
             .commit_sha
@@ -442,13 +449,13 @@ fn deliver(
             );
         }
         if let Err(error) = agent_cli::delivery::execute(repository, &deployment, &sha, reporter) {
-            pending.state = if error.starts_with("recovery_required:") {
+            pending.state = if error.is_recovery_required() {
                 "recovery_required"
             } else {
                 "failed"
             }
             .into();
-            pending.detail = Some(error.clone());
+            pending.detail = Some(error.to_string());
             evidence.save_delivery(&pending)?;
             return Err(error);
         }
@@ -520,13 +527,13 @@ fn deliver(
             );
         }
         if let Err(error) = agent_cli::delivery::execute(repository, &deployment, &sha, reporter) {
-            delivery.state = if error.starts_with("recovery_required:") {
+            delivery.state = if error.is_recovery_required() {
                 "recovery_required"
             } else {
                 "failed"
             }
             .into();
-            delivery.detail = Some(error.clone());
+            delivery.detail = Some(error.to_string());
             evidence.save_delivery(&delivery)?;
             return Err(error);
         }

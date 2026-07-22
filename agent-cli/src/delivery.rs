@@ -3,6 +3,7 @@
 
 use crate::deploy::{DeploymentKind, DeploymentPlan};
 use crate::device::DeviceClient;
+use crate::error::{AgentError, AgentResult};
 use crate::model::Outcome;
 use crate::progress::{EventKind, Reporter};
 use mister_tool::transport::{DeviceRequest, Layout, MainSelection};
@@ -68,14 +69,14 @@ pub enum Step {
 }
 
 pub trait DeliveryActions {
-    fn run(&mut self, phase: Phase) -> Result<(), String>;
-    fn compensate(&mut self) -> Result<(), String>;
+    fn run(&mut self, phase: Phase) -> AgentResult<()>;
+    fn compensate(&mut self) -> AgentResult<()>;
 }
 
 pub fn run_transaction(
     actions: &mut dyn DeliveryActions,
-    progress: &mut dyn FnMut(Step, u8) -> Result<(), String>,
-) -> Result<(), String> {
+    progress: &mut dyn FnMut(Step, u8) -> AgentResult<()>,
+) -> AgentResult<()> {
     const PHASES: &[(Phase, u8)] = &[
         (Phase::Classify, 2),
         (Phase::ValidateCommit, 7),
@@ -94,27 +95,28 @@ pub fn run_transaction(
             if mutation_started {
                 let _ = progress(Step::Compensation, 95);
                 return match actions.compensate() {
-                    Ok(()) => Err(format!("cancelled: {error}; rollback=complete")),
-                    Err(rollback) => Err(format!(
-                        "recovery_required: delivery cancelled ({error}); rollback failed ({rollback})"
+                    Ok(()) => Err(format!("cancelled: {error}; rollback=complete").into()),
+                    Err(rollback) => Err(AgentError::recovery_required(
+                        format!("delivery cancelled ({error})"),
+                        format!("rollback failed ({rollback})"),
                     )),
                 };
             }
-            return Err(format!("cancelled: {error}"));
+            return Err(AgentError::cancelled(error));
         }
         match actions.run(*phase) {
             Ok(()) => mutation_started |= phase.starts_mutation(),
             Err(error) if mutation_started || phase.may_have_mutated() => {
                 let _ = progress(Step::Compensation, 95);
                 return match actions.compensate() {
-                    Ok(()) => Err(format!("{}: {error}; rollback=complete", phase.label())),
-                    Err(rollback) => Err(format!(
-                        "recovery_required: {} failed ({error}); rollback failed ({rollback})",
-                        phase.label()
+                    Ok(()) => Err(format!("{}: {error}; rollback=complete", phase.label()).into()),
+                    Err(rollback) => Err(AgentError::recovery_required(
+                        format!("{} failed ({error})", phase.label()),
+                        format!("rollback failed ({rollback})"),
                     )),
                 };
             }
-            Err(error) => return Err(format!("{}: {error}", phase.label())),
+            Err(error) => return Err(AgentError::phase(phase.label(), error)),
         }
     }
     Ok(())
@@ -125,7 +127,7 @@ pub fn execute(
     deployment: &DeploymentPlan,
     expected_commit: &str,
     reporter: &mut Reporter<'_>,
-) -> Result<Outcome, String> {
+) -> AgentResult<Outcome> {
     let mut actions = ProcessActions {
         repository,
         deployment,
@@ -137,18 +139,18 @@ pub fn execute(
         device: DeviceClient::default(),
     };
     run_transaction(&mut actions, &mut |step, percent| match step {
-        Step::Action(phase) => reporter.emit(
+        Step::Action(phase) => Ok(reporter.emit(
             EventKind::Progress,
             phase.label(),
             &format!("delivery {}", phase.label()),
             Some(percent),
-        ),
-        Step::Compensation => reporter.emit(
+        )?),
+        Step::Compensation => Ok(reporter.emit(
             EventKind::Warning,
             "compensate",
             "delivery failed; restoring verified snapshot",
             Some(percent),
-        ),
+        )?),
     })?;
     Ok(Outcome::Passed)
 }
@@ -163,7 +165,7 @@ struct ProcessActions<'a> {
 }
 
 impl ProcessActions<'_> {
-    fn validate_commit(&self) -> Result<(), String> {
+    fn validate_commit(&self) -> AgentResult<()> {
         let head = git_value(self.repository, &["rev-parse", "HEAD"])?;
         let dirty = !git_value(self.repository, &["status", "--porcelain"])?.is_empty();
         validate_commit_identity(
@@ -177,7 +179,7 @@ impl ProcessActions<'_> {
         )
     }
 
-    fn qualify(&mut self) -> Result<(), String> {
+    fn qualify(&mut self) -> AgentResult<()> {
         crate::build::execute_quiet(self.repository, &self.deployment.build)?;
         let receipt = self.deployment.build.verify(self.repository)?;
         if receipt.source_commit != self.expected_commit || receipt.source_dirty {
@@ -204,7 +206,7 @@ impl ProcessActions<'_> {
         Ok(())
     }
 
-    fn smoke(&mut self) -> Result<(), String> {
+    fn smoke(&mut self) -> AgentResult<()> {
         self.device
             .execute(DeviceRequest::SmokeDelivery {
                 layout: Layout::Development,
@@ -222,7 +224,7 @@ fn validate_commit_identity(
     expected: &str,
     dirty: bool,
     platform_candidate: Option<&str>,
-) -> Result<(), String> {
+) -> AgentResult<()> {
     if head != expected {
         return Err("delivery HEAD does not match the recorded commit".into());
     }
@@ -236,7 +238,7 @@ fn validate_commit_identity(
 }
 
 impl DeliveryActions for ProcessActions<'_> {
-    fn run(&mut self, phase: Phase) -> Result<(), String> {
+    fn run(&mut self, phase: Phase) -> AgentResult<()> {
         match phase {
             Phase::Classify => Ok(()),
             Phase::ValidateCommit => self.validate_commit(),
@@ -298,7 +300,7 @@ impl DeliveryActions for ProcessActions<'_> {
         }
     }
 
-    fn compensate(&mut self) -> Result<(), String> {
+    fn compensate(&mut self) -> AgentResult<()> {
         match self.deployment.kind {
             DeploymentKind::Runtime => {
                 self.device.execute(DeviceRequest::RollbackRuntime {
@@ -323,7 +325,7 @@ fn prepare_stage(
     candidate: &crate::platform_ci::Candidate,
     stage: &Path,
     gui_artifact: &Path,
-) -> Result<(), String> {
+) -> AgentResult<()> {
     let manifest: Value =
         serde_json::from_slice(&fs::read(&candidate.manifest).map_err(|error| error.to_string())?)
             .map_err(|error| format!("invalid platform candidate manifest: {error}"))?;
@@ -420,13 +422,13 @@ fn prepare_stage(
     run_bounded(repository, "/usr/bin/python3", &args)
 }
 
-fn copy(from: PathBuf, to: PathBuf) -> Result<(), String> {
-    fs::copy(&from, &to)
+fn copy(from: PathBuf, to: PathBuf) -> AgentResult<()> {
+    Ok(fs::copy(&from, &to)
         .map(|_| ())
-        .map_err(|error| format!("cannot copy {}: {error}", from.display()))
+        .map_err(|error| format!("cannot copy {}: {error}", from.display()))?)
 }
 
-fn git_value(repository: &Path, args: &[&str]) -> Result<String, String> {
+fn git_value(repository: &Path, args: &[&str]) -> AgentResult<String> {
     let output = Command::new("git")
         .args(args)
         .current_dir(repository)
@@ -438,7 +440,7 @@ fn git_value(repository: &Path, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().into())
 }
 
-fn run_bounded(repository: &Path, program: &str, args: &[String]) -> Result<(), String> {
+fn run_bounded(repository: &Path, program: &str, args: &[String]) -> AgentResult<()> {
     let mut child = Command::new(program)
         .args(args)
         .current_dir(repository)
@@ -451,19 +453,19 @@ fn run_bounded(repository: &Path, program: &str, args: &[String]) -> Result<(), 
     loop {
         match child.try_wait() {
             Ok(Some(status)) if status.success() => return Ok(()),
-            Ok(Some(status)) => return Err(format!("{program} exited with {status}")),
+            Ok(Some(status)) => return Err(format!("{program} exited with {status}").into()),
             Ok(None) if started.elapsed() < PREPARE_DEADLINE => {
                 thread::sleep(Duration::from_millis(100));
             }
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(format!("{program} exceeded its preparation deadline"));
+                return Err(format!("{program} exceeded its preparation deadline").into());
             }
             Err(error) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(format!("cannot wait for {program}: {error}"));
+                return Err(format!("cannot wait for {program}: {error}").into());
             }
         }
     }
@@ -481,7 +483,7 @@ mod tests {
     }
 
     impl DeliveryActions for FakeActions {
-        fn run(&mut self, phase: Phase) -> Result<(), String> {
+        fn run(&mut self, phase: Phase) -> AgentResult<()> {
             self.visited.push(Step::Action(phase));
             if self.fail_at == Some(phase) {
                 Err("injected failure".into())
@@ -490,7 +492,7 @@ mod tests {
             }
         }
 
-        fn compensate(&mut self) -> Result<(), String> {
+        fn compensate(&mut self) -> AgentResult<()> {
             self.visited.push(Step::Compensation);
             if self.rollback_fails {
                 Err("injected rollback failure".into())
@@ -539,7 +541,7 @@ mod tests {
                         .position(|item| *item == Phase::Snapshot)
                         .unwrap()
             );
-            assert!(error.contains("injected failure"));
+            assert!(error.to_string().contains("injected failure"));
             assert!(actions.visited.len() > index);
         }
     }
@@ -552,7 +554,7 @@ mod tests {
             ..FakeActions::default()
         };
         let error = run_transaction(&mut actions, &mut |_, _| Ok(())).unwrap_err();
-        assert!(error.starts_with("recovery_required:"));
+        assert!(error.is_recovery_required());
     }
 
     #[test]
@@ -566,7 +568,7 @@ mod tests {
             }
         })
         .unwrap_err();
-        assert!(error.starts_with("cancelled:"));
+        assert!(error.to_string().starts_with("cancelled:"));
         assert_eq!(actions.visited.last(), Some(&Step::Compensation));
     }
 

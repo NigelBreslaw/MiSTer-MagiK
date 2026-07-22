@@ -3,6 +3,7 @@
 
 use crate::build::{BuildRecipe, BuildSpec};
 use crate::device::DeviceClient;
+use crate::error::{AgentError, AgentResult};
 use crate::model::Outcome;
 use crate::progress::{EventKind, Reporter};
 use mister_tool::transport::{BenchmarkScenario, ColdBenchmarkScenario, DeviceRequest, Layout};
@@ -83,15 +84,15 @@ pub struct ColdBenchmarkResult {
 }
 
 pub trait ColdBenchmarkActions {
-    fn run(&mut self, phase: ColdPhase) -> Result<(), String>;
+    fn run(&mut self, phase: ColdPhase) -> AgentResult<()>;
     fn needs_restore(&self) -> bool;
-    fn restore(&mut self) -> Result<(), String>;
+    fn restore(&mut self) -> AgentResult<()>;
 }
 
 pub fn run_cold_workflow(
     actions: &mut dyn ColdBenchmarkActions,
-    progress: &mut dyn FnMut(ColdPhase, u8) -> Result<(), String>,
-) -> Result<(), String> {
+    progress: &mut dyn FnMut(ColdPhase, u8) -> AgentResult<()>,
+) -> AgentResult<()> {
     const PHASES: &[(ColdPhase, u8)] = &[
         (ColdPhase::Inspect, 5),
         (ColdPhase::SnapshotData, 20),
@@ -103,7 +104,7 @@ pub fn run_cold_workflow(
     ];
     for (phase, percent) in PHASES {
         if let Err(error) = progress(*phase, *percent) {
-            return restore_cold_after_error(actions, format!("cancelled: {error}"));
+            return restore_cold_after_error(actions, AgentError::cancelled(error));
         }
         let result = if *phase == ColdPhase::Restore {
             actions.restore()
@@ -111,7 +112,7 @@ pub fn run_cold_workflow(
             actions.run(*phase)
         };
         if let Err(error) = result {
-            return restore_cold_after_error(actions, format!("{}: {error}", phase.label()));
+            return restore_cold_after_error(actions, AgentError::phase(phase.label(), error));
         }
     }
     Ok(())
@@ -119,29 +120,30 @@ pub fn run_cold_workflow(
 
 fn restore_cold_after_error(
     actions: &mut dyn ColdBenchmarkActions,
-    error: String,
-) -> Result<(), String> {
+    error: AgentError,
+) -> AgentResult<()> {
     if !actions.needs_restore() {
         return Err(error);
     }
     match actions.restore() {
-        Ok(()) => Err(format!("{error}; restore=complete")),
-        Err(restore) => Err(format!(
-            "recovery_required: {error}; cold benchmark restore failed ({restore})"
+        Ok(()) => Err(format!("{error}; restore=complete").into()),
+        Err(restore) => Err(AgentError::recovery_required(
+            error.to_string(),
+            format!("cold benchmark restore failed ({restore})"),
         )),
     }
 }
 
 pub trait BenchmarkActions {
-    fn run(&mut self, phase: Phase) -> Result<(), String>;
+    fn run(&mut self, phase: Phase) -> AgentResult<()>;
     fn needs_restore(&self) -> bool;
-    fn restore(&mut self) -> Result<(), String>;
+    fn restore(&mut self) -> AgentResult<()>;
 }
 
 pub fn run_workflow(
     actions: &mut dyn BenchmarkActions,
-    progress: &mut dyn FnMut(Phase, u8) -> Result<(), String>,
-) -> Result<(), String> {
+    progress: &mut dyn FnMut(Phase, u8) -> AgentResult<()>,
+) -> AgentResult<()> {
     const PHASES: &[(Phase, u8)] = &[
         (Phase::Select, 2),
         (Phase::QualifyBuild, 10),
@@ -154,7 +156,7 @@ pub fn run_workflow(
     ];
     for (phase, percent) in PHASES {
         if let Err(error) = progress(*phase, *percent) {
-            return restore_after_error(actions, format!("cancelled: {error}"));
+            return restore_after_error(actions, AgentError::cancelled(error));
         }
         let result = if *phase == Phase::Restore {
             actions.restore()
@@ -162,25 +164,26 @@ pub fn run_workflow(
             actions.run(*phase)
         };
         if let Err(error) = result {
-            return restore_after_error(actions, format!("{}: {error}", phase.label()));
+            return restore_after_error(actions, AgentError::phase(phase.label(), error));
         }
     }
     Ok(())
 }
 
-fn restore_after_error(actions: &mut dyn BenchmarkActions, error: String) -> Result<(), String> {
+fn restore_after_error(actions: &mut dyn BenchmarkActions, error: AgentError) -> AgentResult<()> {
     if !actions.needs_restore() {
         return Err(error);
     }
     match actions.restore() {
-        Ok(()) => Err(format!("{error}; restore=complete")),
-        Err(restore) => Err(format!(
-            "recovery_required: {error}; benchmark restore failed ({restore})"
+        Ok(()) => Err(format!("{error}; restore=complete").into()),
+        Err(restore) => Err(AgentError::recovery_required(
+            error.to_string(),
+            format!("benchmark restore failed ({restore})"),
         )),
     }
 }
 
-pub fn infer_scenario(paths: &[PathBuf]) -> Result<BenchmarkScenario, String> {
+pub fn infer_scenario(paths: &[PathBuf]) -> AgentResult<BenchmarkScenario> {
     if paths.iter().any(|path| {
         path.starts_with("mister/platform/runtime/src/framebuffer")
             || path.starts_with("mister/platform/contracts")
@@ -205,7 +208,7 @@ pub fn execute(
     paths: &[PathBuf],
     expected_commit: &str,
     reporter: &mut Reporter<'_>,
-) -> Result<Outcome, String> {
+) -> AgentResult<Outcome> {
     if let Some(scenario) = infer_cold_scenario(paths) {
         return execute_cold(repository, expected_commit, scenario, reporter);
     }
@@ -221,12 +224,12 @@ pub fn execute(
         device: DeviceClient::default(),
     };
     run_workflow(&mut actions, &mut |phase, percent| {
-        reporter.emit(
+        Ok(reporter.emit(
             EventKind::Progress,
             phase.label(),
             &format!("benchmark {}", phase.label()),
             Some(percent),
-        )
+        )?)
     })?;
     let result = actions.result.ok_or("benchmark produced no result")?;
     reporter.emit(
@@ -265,7 +268,7 @@ fn execute_cold(
     expected_commit: &str,
     scenario: ColdBenchmarkScenario,
     reporter: &mut Reporter<'_>,
-) -> Result<Outcome, String> {
+) -> AgentResult<Outcome> {
     let mut actions = ProcessColdActions {
         repository,
         expected_commit,
@@ -277,12 +280,12 @@ fn execute_cold(
         device: DeviceClient::default(),
     };
     run_cold_workflow(&mut actions, &mut |phase, percent| {
-        reporter.emit(
+        Ok(reporter.emit(
             EventKind::Progress,
             phase.label(),
             &format!("benchmark {}", phase.label()),
             Some(percent),
-        )
+        )?)
     })?;
     let result = actions.result.ok_or("cold benchmark produced no result")?;
     reporter.emit(
@@ -306,7 +309,7 @@ struct ProcessActions<'a> {
 }
 
 impl ProcessActions<'_> {
-    fn qualify_build(&self) -> Result<(), String> {
+    fn qualify_build(&self) -> AgentResult<()> {
         let head = git_value(self.repository, &["rev-parse", "HEAD"])?;
         let dirty = !git_value(self.repository, &["status", "--porcelain"])?.is_empty();
         if head != self.expected_commit || dirty {
@@ -320,7 +323,7 @@ impl ProcessActions<'_> {
         Ok(())
     }
 
-    fn prepare(&mut self) -> Result<(), String> {
+    fn prepare(&mut self) -> AgentResult<()> {
         self.device.execute(DeviceRequest::Discover)?;
         self.device.execute(DeviceRequest::SnapshotRuntime {
             remote: REMOTE_RUNTIME.into(),
@@ -335,7 +338,7 @@ impl ProcessActions<'_> {
         Ok(())
     }
 
-    fn restore_all(&mut self) -> Result<(), String> {
+    fn restore_all(&mut self) -> AgentResult<()> {
         if !self.snapshot_created {
             return Ok(());
         }
@@ -355,13 +358,18 @@ impl ProcessActions<'_> {
             self.snapshot_created = false;
             Ok(())
         } else {
-            Err(errors.join("; "))
+            Err(errors
+                .into_iter()
+                .map(|error| error.to_string())
+                .collect::<Vec<_>>()
+                .join("; ")
+                .into())
         }
     }
 }
 
 impl BenchmarkActions for ProcessActions<'_> {
-    fn run(&mut self, phase: Phase) -> Result<(), String> {
+    fn run(&mut self, phase: Phase) -> AgentResult<()> {
         match phase {
             Phase::Select => Ok(()),
             Phase::QualifyBuild => self.qualify_build(),
@@ -397,7 +405,7 @@ impl BenchmarkActions for ProcessActions<'_> {
         self.snapshot_created
     }
 
-    fn restore(&mut self) -> Result<(), String> {
+    fn restore(&mut self) -> AgentResult<()> {
         self.restore_all()
     }
 }
@@ -414,7 +422,7 @@ struct ProcessColdActions<'a> {
 }
 
 impl ProcessColdActions<'_> {
-    fn inspect(&self) -> Result<(), String> {
+    fn inspect(&self) -> AgentResult<()> {
         let head = git_value(self.repository, &["rev-parse", "HEAD"])?;
         let dirty = !git_value(self.repository, &["status", "--porcelain"])?.is_empty();
         if head != self.expected_commit || dirty {
@@ -428,7 +436,7 @@ impl ProcessColdActions<'_> {
         Ok(())
     }
 
-    fn snapshot(&mut self) -> Result<(), String> {
+    fn snapshot(&mut self) -> AgentResult<()> {
         self.device.execute(DeviceRequest::Discover)?;
         self.device.execute(DeviceRequest::SnapshotRuntime {
             remote: REMOTE_RUNTIME.into(),
@@ -443,7 +451,7 @@ impl ProcessColdActions<'_> {
         Ok(())
     }
 
-    fn restore_all(&mut self) -> Result<(), String> {
+    fn restore_all(&mut self) -> AgentResult<()> {
         if !self.restore_required {
             return Ok(());
         }
@@ -463,13 +471,18 @@ impl ProcessColdActions<'_> {
             self.restore_required = false;
             Ok(())
         } else {
-            Err(errors.join("; "))
+            Err(errors
+                .into_iter()
+                .map(|error| error.to_string())
+                .collect::<Vec<_>>()
+                .join("; ")
+                .into())
         }
     }
 }
 
 impl ColdBenchmarkActions for ProcessColdActions<'_> {
-    fn run(&mut self, phase: ColdPhase) -> Result<(), String> {
+    fn run(&mut self, phase: ColdPhase) -> AgentResult<()> {
         match phase {
             ColdPhase::Inspect => self.inspect(),
             ColdPhase::SnapshotData => self.snapshot(),
@@ -505,7 +518,7 @@ impl ColdBenchmarkActions for ProcessColdActions<'_> {
         self.restore_required
     }
 
-    fn restore(&mut self) -> Result<(), String> {
+    fn restore(&mut self) -> AgentResult<()> {
         self.restore_all()
     }
 }
@@ -513,7 +526,7 @@ impl ColdBenchmarkActions for ProcessColdActions<'_> {
 fn analyze_cold_events(
     text: &str,
     scenario: ColdBenchmarkScenario,
-) -> Result<ColdBenchmarkResult, String> {
+) -> AgentResult<ColdBenchmarkResult> {
     let expected = match scenario {
         ColdBenchmarkScenario::CatalogLifecycle => "catalog_lifecycle_complete",
         ColdBenchmarkScenario::PreviewColdStart => "preview_cold_start_complete",
@@ -530,7 +543,7 @@ fn analyze_cold_events(
             .and_then(|value| value.as_str())
             .ok_or("cold benchmark event has no status")?;
         if status != "ok" {
-            return Err(format!("cold benchmark event status is {status}"));
+            return Err(format!("cold benchmark event status is {status}").into());
         }
         return Ok(ColdBenchmarkResult {
             scenario: cold_scenario_label(scenario),
@@ -542,10 +555,10 @@ fn analyze_cold_events(
             status: status.into(),
         });
     }
-    Err(format!("required structured event {expected} is missing"))
+    Err(format!("required structured event {expected} is missing").into())
 }
 
-fn analyze_trace(text: &str, scenario: BenchmarkScenario) -> Result<BenchmarkResult, String> {
+fn analyze_trace(text: &str, scenario: BenchmarkScenario) -> AgentResult<BenchmarkResult> {
     let mut lines = text.lines().filter(|line| !line.trim().is_empty());
     let header_line = lines
         .find(|line| line.split('\t').any(|field| field == "wall_us"))
@@ -600,7 +613,8 @@ fn analyze_trace(text: &str, scenario: BenchmarkScenario) -> Result<BenchmarkRes
         return Err(format!(
             "benchmark trace contains only {} usable frames",
             walls.len()
-        ));
+        )
+        .into());
     }
     let average_wall = walls.iter().sum::<u64>() as f64 / walls.len() as f64;
     Ok(BenchmarkResult {
@@ -614,7 +628,7 @@ fn analyze_trace(text: &str, scenario: BenchmarkScenario) -> Result<BenchmarkRes
     })
 }
 
-fn evaluate(result: &BenchmarkResult) -> Result<(), String> {
+fn evaluate(result: &BenchmarkResult) -> AgentResult<()> {
     let mut failures = Vec::new();
     if result.average_fps < 55.0 {
         failures.push(format!("average_fps={:.1}<55", result.average_fps));
@@ -634,7 +648,7 @@ fn evaluate(result: &BenchmarkResult) -> Result<(), String> {
     if failures.is_empty() {
         Ok(())
     } else {
-        Err(format!("benchmark gate failed: {}", failures.join(", ")))
+        Err(format!("benchmark gate failed: {}", failures.join(", ")).into())
     }
 }
 
@@ -662,7 +676,7 @@ fn cold_scenario_label(scenario: ColdBenchmarkScenario) -> &'static str {
     }
 }
 
-fn git_value(repository: &Path, args: &[&str]) -> Result<String, String> {
+fn git_value(repository: &Path, args: &[&str]) -> AgentResult<String> {
     let output = std::process::Command::new("git")
         .args(args)
         .current_dir(repository)
@@ -695,7 +709,7 @@ mod tests {
     }
 
     impl ColdBenchmarkActions for FakeColdActions {
-        fn run(&mut self, phase: ColdPhase) -> Result<(), String> {
+        fn run(&mut self, phase: ColdPhase) -> AgentResult<()> {
             if phase == ColdPhase::SnapshotData {
                 self.snapshot_started = true;
             }
@@ -710,7 +724,7 @@ mod tests {
             self.snapshot_started
         }
 
-        fn restore(&mut self) -> Result<(), String> {
+        fn restore(&mut self) -> AgentResult<()> {
             self.restored += 1;
             self.snapshot_started = false;
             if self.restore_fails {
@@ -722,7 +736,7 @@ mod tests {
     }
 
     impl BenchmarkActions for FakeActions {
-        fn run(&mut self, phase: Phase) -> Result<(), String> {
+        fn run(&mut self, phase: Phase) -> AgentResult<()> {
             if phase == Phase::PrepareDevice {
                 self.prepared = true;
             }
@@ -737,7 +751,7 @@ mod tests {
             self.prepared
         }
 
-        fn restore(&mut self) -> Result<(), String> {
+        fn restore(&mut self) -> AgentResult<()> {
             self.restored += 1;
             self.prepared = false;
             if self.restore_fails {
@@ -796,7 +810,7 @@ mod tests {
                 ..FakeActions::default()
             };
             let error = run_workflow(&mut actions, &mut |_, _| Ok(())).unwrap_err();
-            assert!(error.contains("restore=complete"));
+            assert!(error.to_string().contains("restore=complete"));
             assert_eq!(actions.restored, 1);
         }
         let mut actions = FakeActions::default();
@@ -808,7 +822,7 @@ mod tests {
             }
         })
         .unwrap_err();
-        assert!(error.starts_with("cancelled:"));
+        assert!(error.to_string().starts_with("cancelled:"));
         assert_eq!(actions.restored, 1);
     }
 
@@ -838,7 +852,7 @@ mod tests {
         };
         assert!(run_workflow(&mut actions, &mut |_, _| Ok(()))
             .unwrap_err()
-            .starts_with("recovery_required:"));
+            .is_recovery_required());
     }
 
     #[test]
@@ -855,7 +869,7 @@ mod tests {
                 ..FakeColdActions::default()
             };
             let error = run_cold_workflow(&mut actions, &mut |_, _| Ok(())).unwrap_err();
-            assert!(error.contains("restore=complete"));
+            assert!(error.to_string().contains("restore=complete"));
             assert_eq!(actions.restored, 1);
         }
         let mut actions = FakeColdActions::default();
@@ -867,7 +881,7 @@ mod tests {
             }
         })
         .unwrap_err();
-        assert!(error.starts_with("cancelled:"));
+        assert!(error.to_string().starts_with("cancelled:"));
         assert_eq!(actions.restored, 1);
     }
 
@@ -896,6 +910,6 @@ mod tests {
         };
         assert!(run_cold_workflow(&mut actions, &mut |_, _| Ok(()))
             .unwrap_err()
-            .starts_with("recovery_required:"));
+            .is_recovery_required());
     }
 }

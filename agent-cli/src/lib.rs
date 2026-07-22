@@ -10,6 +10,7 @@ pub mod delivery;
 pub mod deploy;
 pub mod device;
 pub mod diagnose;
+pub mod error;
 pub mod evidence;
 pub mod executor;
 pub mod model;

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::deploy::UiScope;
+use crate::error::AgentResult;
 use crate::progress::{EventKind, Reporter};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
@@ -214,13 +215,13 @@ impl BuildSpec {
         self.ui_scope
     }
 
-    pub fn verify(&self, repository: &Path) -> Result<BuildReceipt, String> {
+    pub fn verify(&self, repository: &Path) -> AgentResult<BuildReceipt> {
         if self.mode != BuildMode::Build {
             return Ok(BuildReceipt::empty(self));
         }
         let artifact = repository.join(&self.artifact);
         if !artifact.is_file() {
-            return Err(format!("build artifact is missing: {}", artifact.display()));
+            return Err(format!("build artifact is missing: {}", artifact.display()).into());
         }
         if !self.strict_receipt {
             return Ok(BuildReceipt::empty(self));
@@ -273,7 +274,7 @@ impl BuildReceipt {
         }
     }
 
-    pub fn parse(text: &str) -> Result<Self, String> {
+    pub fn parse(text: &str) -> AgentResult<Self> {
         let fields: BTreeMap<_, _> = text
             .trim()
             .split('\t')
@@ -331,13 +332,13 @@ impl Phase {
 }
 
 pub trait BuildActions {
-    fn run(&mut self, phase: Phase) -> Result<(), String>;
+    fn run(&mut self, phase: Phase) -> AgentResult<()>;
 }
 
 pub fn run_state_machine(
     actions: &mut dyn BuildActions,
-    progress: &mut dyn FnMut(Phase, u8) -> Result<(), String>,
-) -> Result<(), String> {
+    progress: &mut dyn FnMut(Phase, u8) -> AgentResult<()>,
+) -> AgentResult<()> {
     const PHASES: &[(Phase, u8)] = &[
         (Phase::Infer, 2),
         (Phase::Preflight, 8),
@@ -360,19 +361,19 @@ pub fn execute(
     repository: &Path,
     spec: &BuildSpec,
     reporter: &mut Reporter<'_>,
-) -> Result<(), String> {
+) -> AgentResult<()> {
     let mut actions = ProcessBuildActions::new(repository, spec)?;
     run_state_machine(&mut actions, &mut |phase, percent| {
-        reporter.emit(
+        Ok(reporter.emit(
             EventKind::Progress,
             phase.label(),
             &format!("build {}", phase.label()),
             Some(percent),
-        )
+        )?)
     })
 }
 
-pub fn execute_quiet(repository: &Path, spec: &BuildSpec) -> Result<(), String> {
+pub fn execute_quiet(repository: &Path, spec: &BuildSpec) -> AgentResult<()> {
     let mut actions = ProcessBuildActions::new(repository, spec)?;
     run_state_machine(&mut actions, &mut |_, _| Ok(()))
 }
@@ -385,7 +386,7 @@ struct ProcessBuildActions<'a> {
 }
 
 impl<'a> ProcessBuildActions<'a> {
-    fn new(repository: &'a Path, spec: &'a BuildSpec) -> Result<Self, String> {
+    fn new(repository: &'a Path, spec: &'a BuildSpec) -> AgentResult<Self> {
         let backend = infer_backend()?;
         let target_dir = match spec.target {
             BuildTarget::DeviceAgent => {
@@ -401,7 +402,7 @@ impl<'a> ProcessBuildActions<'a> {
         })
     }
 
-    fn compile(&self) -> Result<(), String> {
+    fn compile(&self) -> AgentResult<()> {
         if self.spec.target == BuildTarget::Runtime && self.spec.mode != BuildMode::CheckLibrary {
             let mut ffmpeg = Command::new(
                 self.repository
@@ -416,7 +417,7 @@ impl<'a> ProcessBuildActions<'a> {
         }
     }
 
-    fn compile_in_apple_container(&self) -> Result<(), String> {
+    fn compile_in_apple_container(&self) -> AgentResult<()> {
         let cpus = std::thread::available_parallelism()
             .map_err(|error| format!("cannot detect online CPUs: {error}"))?
             .get()
@@ -487,7 +488,7 @@ impl<'a> ProcessBuildActions<'a> {
         run_bounded(&mut command, BUILD_DEADLINE)
     }
 
-    fn compile_with_cross(&self) -> Result<(), String> {
+    fn compile_with_cross(&self) -> AgentResult<()> {
         let (build_number, version, build_time) = build_metadata(self.repository)?;
         let rustflags = if self.spec.profile == "release-device-profile" {
             "-D warnings -C target-cpu=cortex-a9 -C force-frame-pointers=yes"
@@ -510,7 +511,7 @@ impl<'a> ProcessBuildActions<'a> {
         run_bounded(&mut command, BUILD_DEADLINE)
     }
 
-    fn mirror_artifact(&self) -> Result<(), String> {
+    fn mirror_artifact(&self) -> AgentResult<()> {
         if self.spec.mode != BuildMode::Build || self.backend == BuildBackend::Cross {
             return Ok(());
         }
@@ -521,10 +522,9 @@ impl<'a> ProcessBuildActions<'a> {
                 .ok_or("build artifact has no filename")?,
         );
         if !source.is_file() {
-            return Err(format!(
-                "expected container output is missing: {}",
-                source.display()
-            ));
+            return Err(
+                format!("expected container output is missing: {}", source.display()).into(),
+            );
         }
         let destination = self.repository.join(&self.spec.artifact);
         if let Some(parent) = destination.parent() {
@@ -536,7 +536,7 @@ impl<'a> ProcessBuildActions<'a> {
         Ok(())
     }
 
-    fn write_receipt(&self) -> Result<(), String> {
+    fn write_receipt(&self) -> AgentResult<()> {
         if self.spec.mode != BuildMode::Build || !self.spec.strict_receipt {
             return Ok(());
         }
@@ -569,12 +569,13 @@ impl<'a> ProcessBuildActions<'a> {
             format!("{}.features", artifact.display()),
             self.spec.features.join(","),
         )
-        .map_err(|error| format!("cannot write build feature identity: {error}"))
+        .map_err(|error| format!("cannot write build feature identity: {error}"))?;
+        Ok(())
     }
 }
 
 impl BuildActions for ProcessBuildActions<'_> {
-    fn run(&mut self, phase: Phase) -> Result<(), String> {
+    fn run(&mut self, phase: Phase) -> AgentResult<()> {
         match phase {
             Phase::Infer | Phase::Complete => Ok(()),
             Phase::Preflight => preflight(self.backend),
@@ -600,11 +601,11 @@ impl BuildActions for ProcessBuildActions<'_> {
     }
 }
 
-fn infer_backend() -> Result<BuildBackend, String> {
+fn infer_backend() -> AgentResult<BuildBackend> {
     match std::env::var("MISTER_ARM_BUILD_BACKEND").as_deref() {
         Ok("cross") => return Ok(BuildBackend::Cross),
         Ok("apple-container") => return Ok(BuildBackend::AppleContainer),
-        Ok(other) => return Err(format!("unsupported ARM build backend: {other}")),
+        Ok(other) => return Err(format!("unsupported ARM build backend: {other}").into()),
         Err(_) => {}
     }
     if std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true") {
@@ -616,7 +617,7 @@ fn infer_backend() -> Result<BuildBackend, String> {
     }
 }
 
-fn preflight(backend: BuildBackend) -> Result<(), String> {
+fn preflight(backend: BuildBackend) -> AgentResult<()> {
     let program = match backend {
         BuildBackend::AppleContainer => "container",
         BuildBackend::Cross => "cross",
@@ -631,11 +632,11 @@ fn preflight(backend: BuildBackend) -> Result<(), String> {
     if status.success() {
         Ok(())
     } else {
-        Err(format!("{program} preflight failed"))
+        Err(format!("{program} preflight failed").into())
     }
 }
 
-fn prepare_container(repository: &Path, target_dir: &Path) -> Result<(), String> {
+fn prepare_container(repository: &Path, target_dir: &Path) -> AgentResult<()> {
     std::fs::create_dir_all(target_dir)
         .map_err(|error| format!("cannot create target cache: {error}"))?;
     let dockerfile = repository.join("apps/mister/Dockerfile.cross-armv7");
@@ -665,7 +666,8 @@ fn prepare_container(repository: &Path, target_dir: &Path) -> Result<(), String>
     ]);
     run_bounded(&mut build, BUILD_DEADLINE)?;
     std::fs::write(stamp_path, format!("{expected}\n"))
-        .map_err(|error| format!("cannot update image stamp: {error}"))
+        .map_err(|error| format!("cannot update image stamp: {error}"))?;
+    Ok(())
 }
 
 fn cargo_args(spec: &BuildSpec) -> Vec<OsString> {
@@ -715,13 +717,13 @@ fn runtime_artifact(profile: &str) -> PathBuf {
     ))
 }
 
-fn home_dir() -> Result<PathBuf, String> {
+fn home_dir() -> AgentResult<PathBuf> {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or("HOME is unavailable for the build cache".into())
 }
 
-fn sha256(path: &Path) -> Result<String, String> {
+fn sha256(path: &Path) -> AgentResult<String> {
     for (program, args) in [("shasum", vec!["-a", "256"]), ("sha256sum", Vec::new())] {
         if let Ok(output) = Command::new(program).args(args).arg(path).output() {
             if output.status.success() {
@@ -734,10 +736,10 @@ fn sha256(path: &Path) -> Result<String, String> {
             }
         }
     }
-    Err(format!("cannot hash {}", path.display()))
+    Err(format!("cannot hash {}", path.display()).into())
 }
 
-fn git_output(repository: &Path, args: &[&str]) -> Result<String, String> {
+fn git_output(repository: &Path, args: &[&str]) -> AgentResult<String> {
     let output = Command::new("git")
         .args(args)
         .current_dir(repository)
@@ -767,7 +769,7 @@ fn ffmpeg_cross_env(repository: &Path) -> Vec<(&'static str, OsString)> {
     ]
 }
 
-fn build_metadata(repository: &Path) -> Result<(String, String, String), String> {
+fn build_metadata(repository: &Path) -> AgentResult<(String, String, String)> {
     let build_number = std::env::var("MISTER_MAGIK_BUILD_NUMBER")
         .unwrap_or(git_output(repository, &["rev-list", "--count", "HEAD"])?);
     let version =
@@ -788,7 +790,7 @@ fn build_metadata(repository: &Path) -> Result<(String, String, String), String>
     Ok((build_number, version, build_time))
 }
 
-fn run_bounded(command: &mut Command, deadline: Duration) -> Result<(), String> {
+fn run_bounded(command: &mut Command, deadline: Duration) -> AgentResult<()> {
     let description = format!("{command:?}");
     let mut child = command
         .stdin(Stdio::null())
@@ -800,20 +802,19 @@ fn run_bounded(command: &mut Command, deadline: Duration) -> Result<(), String> 
     loop {
         match child.try_wait() {
             Ok(Some(status)) if status.success() => return Ok(()),
-            Ok(Some(status)) => return Err(format!("command exited with {status}")),
+            Ok(Some(status)) => return Err(format!("command exited with {status}").into()),
             Ok(None) if started.elapsed() < deadline => thread::sleep(Duration::from_millis(100)),
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(format!(
-                    "command exceeded its {}s deadline",
-                    deadline.as_secs()
-                ));
+                return Err(
+                    format!("command exceeded its {}s deadline", deadline.as_secs()).into(),
+                );
             }
             Err(error) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(format!("cannot wait for build command: {error}"));
+                return Err(format!("cannot wait for build command: {error}").into());
             }
         }
     }
@@ -830,7 +831,7 @@ mod tests {
     }
 
     impl BuildActions for FakeActions {
-        fn run(&mut self, phase: Phase) -> Result<(), String> {
+        fn run(&mut self, phase: Phase) -> AgentResult<()> {
             self.visited.push(phase);
             if self.fail_at == Some(phase) {
                 Err("injected failure".into())
@@ -899,7 +900,7 @@ mod tests {
                 visited: Vec::new(),
             };
             let error = run_state_machine(&mut actions, &mut |_, _| Ok(())).unwrap_err();
-            assert!(error.starts_with(phase.label()));
+            assert!(error.to_string().starts_with(phase.label()));
             assert_eq!(actions.visited, phases[..=index]);
         }
     }
