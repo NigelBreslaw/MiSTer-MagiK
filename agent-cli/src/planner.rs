@@ -411,15 +411,6 @@ fn add_path_operations(
             &["scripts/tests/test-platform-bundle-workflow.py"],
             "FPGA source → workflow contract",
         ));
-        if path == Path::new("mister/platform/fpga/test-quartus-r2-cache.sh") {
-            add(op(
-                "scripts.quartus-cache",
-                "Test fake Quartus cache contract",
-                "mister/platform/fpga/test-quartus-r2-cache.sh",
-                &[],
-                "Quartus cache test changed",
-            ));
-        }
     }
     if path == Path::new("tools/host-camera-native.swift") {
         add(op(
@@ -441,16 +432,6 @@ fn add_path_operations(
             &["scripts/tests/test-ci-cache-contract.py"],
             "workflow configuration changed",
         ));
-        let text = path.to_string_lossy();
-        if text.contains("platform-bundle") || text.contains("quartus") {
-            add(op(
-                "scripts.quartus-cache",
-                "Test fake Quartus cache contract",
-                "mister/platform/fpga/test-quartus-r2-cache.sh",
-                &[],
-                "Quartus cache workflow changed",
-            ));
-        }
     }
     if path.starts_with("docs") && !path.starts_with("docs/agents") {
         add(diff_check());
@@ -559,15 +540,6 @@ fn add_script_operations(
         &["scripts/checks/check-no-operational-shell-orchestrators.py"],
         "script source → orchestration ownership contract",
     ));
-    if text.contains("quartus-r2-cache") || text.contains("install-quartus-lite") {
-        add(op(
-            "scripts.quartus-cache",
-            "Test fake Quartus cache contract",
-            "mister/platform/fpga/test-quartus-r2-cache.sh",
-            &[],
-            "Quartus cache tooling changed",
-        ));
-    }
     if text.contains("platform-bundle") || text.contains("platform-artifact") {
         add(op(
             "scripts.platform-workflow",
@@ -910,22 +882,6 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("unclassified task paths"));
-    }
-
-    #[test]
-    fn quartus_cache_test_is_owned_by_quartus_tooling() {
-        let plan = affected_plan(
-            Intent::Check {
-                scope: Scope::Paths(vec![]),
-            },
-            vec!["scripts/quartus-r2-cache.sh".into()],
-        )
-        .unwrap();
-        assert!(plan
-            .operations
-            .iter()
-            .any(|operation| operation.id == "scripts.quartus-cache"));
-        assert!(plan.external_requirements.is_empty());
     }
 
     #[test]
