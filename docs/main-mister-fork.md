@@ -137,18 +137,26 @@ Deploy from this app repo:
 scripts/agent deliver
 ```
 
-Use a non-default fork checkout:
+When GitHub cannot publish a new platform candidate, a committed and pushed
+Main-only change can be delivered transactionally from the local fork:
+
+```bash
+scripts/agent deliver --local-main
+```
+
+This development-only escape hatch builds and checks the clean
+`mister-magik` branch, reuses the latest published candidate's unchanged
+FPGA and kernel artifacts, substitutes the locally built Main, regenerates the
+complete development manifest, and uses the normal snapshot, activation,
+reboot, smoke, and rollback transaction. It does not publish a platform release
+and never copies Main directly onto the device. App-repository platform changes
+remain blocked until their exact candidate is published.
+
+Use a non-default fork checkout with the same option:
 
 ```bash
 export MISTER_MAIN_DIR=/path/to/Main_MiSTer
-scripts/agent deliver
-```
-
-The deploy script no longer forces a clean Main build. Use `--clean-main` only
-when stale Main objects are suspected:
-
-```bash
-scripts/agent deliver
+scripts/agent deliver --local-main
 ```
 
 The development script deploys:

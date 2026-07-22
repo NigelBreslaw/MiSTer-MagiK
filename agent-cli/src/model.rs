@@ -104,6 +104,8 @@ pub enum Intent {
     Diagnose,
     Deliver {
         task_id: String,
+        #[serde(default)]
+        local_main: bool,
     },
     Benchmark {
         task_id: String,

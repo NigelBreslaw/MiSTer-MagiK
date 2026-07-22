@@ -58,7 +58,10 @@ pub enum Command {
     #[command(hide = true)]
     Doctor,
     Diagnose,
-    Deliver,
+    Deliver {
+        #[arg(long)]
+        local_main: bool,
+    },
     Benchmark,
     Release {
         #[command(subcommand)]
@@ -399,7 +402,10 @@ impl Cli {
             },
             Some(Command::Doctor) => Intent::Doctor,
             Some(Command::Diagnose) => Intent::Diagnose,
-            Some(Command::Deliver) => Intent::Deliver { task_id },
+            Some(Command::Deliver { local_main }) => Intent::Deliver {
+                task_id,
+                local_main,
+            },
             Some(Command::Benchmark) => Intent::Benchmark { task_id },
             Some(Command::Release {
                 command: ReleaseCommand::Qualify,
@@ -527,12 +533,28 @@ mod tests {
     }
 
     #[test]
-    fn deliver_is_flag_free_and_task_scoped() {
+    fn deliver_is_task_scoped_and_accepts_local_main_override() {
         let cli = Cli::try_parse_from(["agent-cli", "--task-id", "task-1", "deliver"]).unwrap();
         assert_eq!(
             cli.into_intent(),
             Intent::Deliver {
                 task_id: "task-1".into(),
+                local_main: false,
+            }
+        );
+        let cli = Cli::try_parse_from([
+            "agent-cli",
+            "--task-id",
+            "task-1",
+            "deliver",
+            "--local-main",
+        ])
+        .unwrap();
+        assert_eq!(
+            cli.into_intent(),
+            Intent::Deliver {
+                task_id: "task-1".into(),
+                local_main: true,
             }
         );
         assert!(Cli::try_parse_from(["agent-cli", "deliver", "--fast"]).is_err());

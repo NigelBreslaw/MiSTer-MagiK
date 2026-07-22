@@ -293,6 +293,7 @@ mod tests {
         .unwrap();
         let plan = deployment.as_evidence_plan(Intent::Deliver {
             task_id: "task-1".into(),
+            local_main: false,
         });
         assert_eq!(plan.operations.len(), 1);
         assert_eq!(plan.operations[0].risk, Risk::DeviceWrite);

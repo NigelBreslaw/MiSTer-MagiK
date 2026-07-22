@@ -125,6 +125,7 @@ pub fn execute(
     repository: &Path,
     deployment: &DeploymentPlan,
     expected_commit: &str,
+    local_main: Option<&Path>,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<Outcome> {
     let mut actions = ProcessActions {
@@ -132,6 +133,7 @@ pub fn execute(
         deployment,
         expected_commit,
         artifact_sha256: None,
+        local_main: local_main.map(Path::to_path_buf),
         stage: repository
             .join("build/agent-deploy/stage")
             .join(expected_commit),
@@ -172,6 +174,7 @@ struct ProcessActions<'a> {
     deployment: &'a DeploymentPlan,
     expected_commit: &'a str,
     artifact_sha256: Option<String>,
+    local_main: Option<PathBuf>,
     stage: PathBuf,
     device: DeviceClient,
 }
@@ -208,11 +211,15 @@ impl ProcessActions<'_> {
                 fs::remove_dir_all(&self.stage).map_err(|error| error.to_string())?;
             }
             fs::create_dir_all(self.stage.join("fpga")).map_err(|error| error.to_string())?;
+            if let Some(main_dir) = self.local_main.as_deref() {
+                qualify_local_main(main_dir)?;
+            }
             prepare_stage(
                 self.repository,
                 candidate,
                 &self.stage,
                 self.deployment.build.artifact(),
+                self.local_main.as_deref(),
             )?;
         }
         Ok(())
@@ -337,11 +344,12 @@ fn prepare_stage(
     candidate: &crate::platform_ci::Candidate,
     stage: &Path,
     gui_artifact: &Path,
+    local_main: Option<&Path>,
 ) -> AgentResult<()> {
     let manifest: Value =
         serde_json::from_slice(&fs::read(&candidate.manifest).map_err(|error| error.to_string())?)
             .map_err(|error| format!("invalid platform candidate manifest: {error}"))?;
-    let main_revision = manifest
+    let candidate_main_revision = manifest
         .pointer("/components/main/head_sha")
         .and_then(Value::as_str)
         .ok_or("platform candidate is missing Main revision")?;
@@ -357,7 +365,6 @@ fn prepare_stage(
         ],
     )?;
     for (from, to) in [
-        ("main/MiSTer_MagiK", "MiSTer_MagiKDev"),
         (
             "scanout/mister_magik_scanout_slots.ko",
             "mister_magik_scanout_slots.ko",
@@ -377,6 +384,16 @@ fn prepare_stage(
     ] {
         copy(extracted.join(from), stage.join(to))?;
     }
+    let main_revision = if let Some(main_dir) = local_main {
+        copy(main_dir.join("bin/MiSTer"), stage.join("MiSTer_MagiKDev"))?;
+        crate::git::value(main_dir, &["rev-parse", "HEAD"])?
+    } else {
+        copy(
+            extracted.join("main/MiSTer_MagiK"),
+            stage.join("MiSTer_MagiKDev"),
+        )?;
+        candidate_main_revision.to_owned()
+    };
     copy(repository.join(gui_artifact), stage.join("mister-magik-fb"))?;
     copy(
         repository.join("mister/tools/manager/target/armv7-unknown-linux-gnueabihf/release/mister-magik-manager"),
@@ -406,10 +423,52 @@ fn prepare_stage(
             latch_rbf: stage.join("fpga/menu-magik-vblank-latch.rbf"),
             latch_metadata: stage.join("fpga/menu-magik-vblank-latch.metadata.txt"),
         },
-        main_revision,
+        &main_revision,
         &crate::git::value(repository, &["rev-parse", "HEAD"])?,
         crate::platform_manifest::Layout::Development,
     )
+}
+
+fn qualify_local_main(main_dir: &Path) -> AgentResult<()> {
+    if !main_dir.join("build-container.sh").is_file() {
+        return Err(format!(
+            "local_main_missing: {} does not contain build-container.sh",
+            main_dir.display()
+        )
+        .into());
+    }
+    let dirty = !crate::git::value(main_dir, &["status", "--porcelain"])?.is_empty();
+    let branch = crate::git::value(main_dir, &["branch", "--show-current"])?;
+    let unpublished = crate::git::value(main_dir, &["rev-list", "--count", "@{upstream}..HEAD"])?
+        .parse::<usize>()
+        .map_err(|error| format!("local_main_upstream: invalid Git revision count: {error}"))?;
+    validate_local_main_identity(dirty, &branch, unpublished)?;
+    for (program, args) in [
+        ("./build-container.sh", Vec::<String>::new()),
+        ("scripts/test-magik-state.sh", Vec::<String>::new()),
+        ("scripts/check-magik-patch-surface.sh", Vec::<String>::new()),
+    ] {
+        run_bounded(main_dir, program, &args)?;
+    }
+    if !main_dir.join("bin/MiSTer").is_file() {
+        return Err("local_main_build: bin/MiSTer was not produced".into());
+    }
+    Ok(())
+}
+
+fn validate_local_main_identity(dirty: bool, branch: &str, unpublished: usize) -> AgentResult<()> {
+    if dirty {
+        return Err(
+            "local_main_dirty: commit or discard Main_MiSTer changes before delivery".into(),
+        );
+    }
+    if branch != "mister-magik" {
+        return Err(format!("local_main_branch: expected mister-magik, found {branch}").into());
+    }
+    if unpublished != 0 {
+        return Err("local_main_unpublished: push the Main_MiSTer commit before delivery".into());
+    }
+    Ok(())
 }
 
 fn copy(from: PathBuf, to: PathBuf) -> AgentResult<()> {
@@ -623,6 +682,23 @@ mod tests {
         assert!(validate_commit_identity("other", "abc", false, None).is_err());
         assert!(validate_commit_identity("abc", "abc", true, None).is_err());
         assert!(validate_commit_identity("abc", "abc", false, Some("other")).is_err());
+    }
+
+    #[test]
+    fn local_main_requires_clean_published_mister_magik_branch() {
+        assert!(validate_local_main_identity(false, "mister-magik", 0).is_ok());
+        assert!(validate_local_main_identity(true, "mister-magik", 0)
+            .unwrap_err()
+            .to_string()
+            .contains("local_main_dirty"));
+        assert!(validate_local_main_identity(false, "feature", 0)
+            .unwrap_err()
+            .to_string()
+            .contains("local_main_branch"));
+        assert!(validate_local_main_identity(false, "mister-magik", 1)
+            .unwrap_err()
+            .to_string()
+            .contains("local_main_unpublished"));
     }
 
     #[test]

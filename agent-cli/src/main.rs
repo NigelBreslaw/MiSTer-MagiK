@@ -122,7 +122,10 @@ fn resolve_task_intent(
             },
             message,
         },
-        Intent::Deliver { task_id } => Intent::Deliver {
+        Intent::Deliver {
+            task_id,
+            local_main,
+        } => Intent::Deliver {
             task_id: if task_id.is_empty() {
                 evidence
                     .latest_committed_task(repository)?
@@ -131,6 +134,7 @@ fn resolve_task_intent(
             } else {
                 task_id
             },
+            local_main,
         },
         Intent::Benchmark { task_id } => Intent::Benchmark {
             task_id: if task_id.is_empty() {
@@ -206,8 +210,11 @@ fn dispatch(
             }
             return Ok(outcome);
         }
-        Intent::Deliver { task_id } => {
-            return deliver(evidence, repository, task_id, reporter);
+        Intent::Deliver {
+            task_id,
+            local_main,
+        } => {
+            return deliver(evidence, repository, task_id, *local_main, reporter);
         }
         Intent::Benchmark { task_id } => {
             let committed = evidence
@@ -705,9 +712,10 @@ fn deliver(
     evidence: &Evidence,
     repository: &std::path::Path,
     task_id: &str,
+    local_main: bool,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<Outcome> {
-    let delivery = deliver_inner(evidence, repository, task_id, reporter);
+    let delivery = deliver_inner(evidence, repository, task_id, local_main, reporter);
     let cleanup = agent_cli::delivery::cleanup_workspace(repository);
     match (delivery, cleanup) {
         (Ok(outcome), Ok(())) => Ok(outcome),
@@ -730,6 +738,7 @@ fn deliver_inner(
     evidence: &Evidence,
     repository: &std::path::Path,
     task_id: &str,
+    local_main: bool,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<Outcome> {
     use agent_cli::components::{self, DeploymentImpact};
@@ -790,6 +799,12 @@ fn deliver_inner(
         };
         let mut deployment = agent_cli::deploy::plan(repository, paths)?;
         deployment.kind = recorded_delivery_kind(deployment.kind, pending.impact);
+        if local_main {
+            if pending.impact == DeploymentImpact::Platform {
+                return Err("local_main_conflict: --local-main cannot bypass app-repository platform changes".into());
+            }
+            deployment.kind = agent_cli::deploy::DeploymentKind::Platform;
+        }
         if pending.impact == DeploymentImpact::Platform {
             let candidate = agent_cli::platform_ci::resolve_repository(repository, |progress| {
                 reporter.emit(EventKind::Progress, "platform-ci", progress, None)
@@ -818,7 +833,15 @@ fn deliver_inner(
                 })?,
             );
         }
-        if let Err(error) = agent_cli::delivery::execute(repository, &deployment, &sha, reporter) {
+        if let Err(error) = agent_cli::delivery::execute(
+            repository,
+            &deployment,
+            &sha,
+            local_main
+                .then(|| local_main_directory(repository))
+                .as_deref(),
+            reporter,
+        ) {
             pending.state = if error.is_recovery_required() {
                 DeliveryState::RecoveryRequired
             } else {
@@ -852,6 +875,12 @@ fn deliver_inner(
         .map(components::Component::deployment_impact)
         .max()
         .unwrap_or(DeploymentImpact::None);
+    if local_main && impact == DeploymentImpact::Platform {
+        return Err(
+            "local_main_conflict: --local-main cannot bypass app-repository platform changes"
+                .into(),
+        );
+    }
     let external = impact == DeploymentImpact::Platform;
     let mut delivery = DeliveryRecord {
         task_id: task_id.into(),
@@ -877,8 +906,11 @@ fn deliver_inner(
         )?;
         return Ok(Outcome::ExternalRequired);
     }
-    if impact == DeploymentImpact::Runtime {
+    if impact == DeploymentImpact::Runtime || local_main {
         let mut deployment = agent_cli::deploy::plan(repository, paths)?;
+        if local_main {
+            deployment.kind = agent_cli::deploy::DeploymentKind::Platform;
+        }
         if deployment.kind == agent_cli::deploy::DeploymentKind::Platform {
             deployment.platform_candidate = Some(
                 agent_cli::platform_ci::resolve_published_repository(repository, |progress| {
@@ -886,7 +918,15 @@ fn deliver_inner(
                 })?,
             );
         }
-        if let Err(error) = agent_cli::delivery::execute(repository, &deployment, &sha, reporter) {
+        if let Err(error) = agent_cli::delivery::execute(
+            repository,
+            &deployment,
+            &sha,
+            local_main
+                .then(|| local_main_directory(repository))
+                .as_deref(),
+            reporter,
+        ) {
             delivery.state = if error.is_recovery_required() {
                 DeliveryState::RecoveryRequired
             } else {
@@ -900,6 +940,12 @@ fn deliver_inner(
     delivery.state = DeliveryState::Complete;
     evidence.save_delivery(&delivery)?;
     Ok(Outcome::Passed)
+}
+
+fn local_main_directory(repository: &Path) -> std::path::PathBuf {
+    std::env::var_os("MISTER_MAIN_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| repository.join("../Main_MiSTer"))
 }
 
 fn recorded_delivery_kind(
