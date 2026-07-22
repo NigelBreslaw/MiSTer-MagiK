@@ -198,7 +198,7 @@ impl ProcessActions<'_> {
                 self.repository,
                 candidate,
                 &self.stage,
-                &self.deployment.build.artifact,
+                self.deployment.build.artifact(),
             )?;
         }
         Ok(())
@@ -258,7 +258,7 @@ impl DeliveryActions for ProcessActions<'_> {
                 DeploymentKind::Runtime => self
                     .device
                     .execute(DeviceRequest::DeployRuntime {
-                        local: self.deployment.build.artifact.clone(),
+                        local: self.deployment.build.artifact().to_path_buf(),
                         remote: REMOTE_RUNTIME.into(),
                     })
                     .map(|_| ()),

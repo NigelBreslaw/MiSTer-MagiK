@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::build::BuildIntent;
+use crate::build::BuildCommand;
 use crate::model::{Intent, Scope};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
@@ -74,7 +74,7 @@ pub enum Command {
     #[command(hide = true)]
     Build {
         #[arg(value_enum)]
-        intent: BuildIntent,
+        intent: BuildCommand,
     },
 }
 
@@ -307,7 +307,6 @@ mod tests {
         for intent in [
             "runtime-device",
             "runtime-fast",
-            "runtime-benchmark",
             "runtime-profile",
             "validate-launcher",
             "validate-library",
@@ -317,6 +316,7 @@ mod tests {
         }
         for intent in [
             "host-tool",
+            "runtime-benchmark",
             "runtime-diagnostics",
             "runtime-experiments",
             "catalog-builder",

@@ -37,14 +37,37 @@ const FFMPEG_APPLE_CONTAINER_ENV: [(&str, &str); 5] = [
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
-pub enum BuildIntent {
+pub enum BuildCommand {
     RuntimeDevice,
+    RuntimeFast,
+    RuntimeProfile,
+    ValidateLauncher,
+    ValidateLibrary,
+    DeviceAgent,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BuildRecipe {
+    RuntimeDevice(UiScope),
     RuntimeFast,
     RuntimeBenchmark,
     RuntimeProfile,
     ValidateLauncher,
     ValidateLibrary,
     DeviceAgent,
+}
+
+impl From<BuildCommand> for BuildRecipe {
+    fn from(command: BuildCommand) -> Self {
+        match command {
+            BuildCommand::RuntimeDevice => Self::RuntimeDevice(UiScope::All),
+            BuildCommand::RuntimeFast => Self::RuntimeFast,
+            BuildCommand::RuntimeProfile => Self::RuntimeProfile,
+            BuildCommand::ValidateLauncher => Self::ValidateLauncher,
+            BuildCommand::ValidateLibrary => Self::ValidateLibrary,
+            BuildCommand::DeviceAgent => Self::DeviceAgent,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -71,30 +94,31 @@ pub enum BuildBackend {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct BuildSpec {
-    pub target: BuildTarget,
-    pub mode: BuildMode,
-    pub profile: &'static str,
-    pub features: Vec<&'static str>,
-    pub ui_scope: UiScope,
-    pub artifact: PathBuf,
-    pub receipt: PathBuf,
-    pub cache_identity: String,
-    pub strict_receipt: bool,
+    target: BuildTarget,
+    mode: BuildMode,
+    profile: &'static str,
+    features: Vec<&'static str>,
+    ui_scope: UiScope,
+    artifact: PathBuf,
+    receipt: PathBuf,
+    cache_identity: String,
+    strict_receipt: bool,
 }
 
 impl BuildSpec {
-    pub fn infer(intent: BuildIntent) -> Result<Self, String> {
-        let (target, mode, profile, features, scope, artifact, strict_receipt) = match intent {
-            BuildIntent::RuntimeDevice => (
+    #[must_use]
+    pub fn for_recipe(recipe: BuildRecipe) -> Self {
+        let (target, mode, profile, features, scope, artifact, strict_receipt) = match recipe {
+            BuildRecipe::RuntimeDevice(scope) => (
                 BuildTarget::Runtime,
                 BuildMode::Build,
                 "release-device",
                 vec!["ui"],
-                UiScope::All,
+                scope,
                 runtime_artifact("release-device"),
                 true,
             ),
-            BuildIntent::RuntimeFast => (
+            BuildRecipe::RuntimeFast => (
                 BuildTarget::Runtime,
                 BuildMode::Build,
                 "release",
@@ -103,7 +127,7 @@ impl BuildSpec {
                 runtime_artifact("release"),
                 true,
             ),
-            BuildIntent::RuntimeBenchmark => (
+            BuildRecipe::RuntimeBenchmark => (
                 BuildTarget::Runtime,
                 BuildMode::Build,
                 "release-device",
@@ -112,7 +136,7 @@ impl BuildSpec {
                 runtime_artifact("release-device"),
                 true,
             ),
-            BuildIntent::RuntimeProfile => (
+            BuildRecipe::RuntimeProfile => (
                 BuildTarget::Runtime,
                 BuildMode::Build,
                 "release-device-profile",
@@ -121,7 +145,7 @@ impl BuildSpec {
                 runtime_artifact("release-device-profile"),
                 true,
             ),
-            BuildIntent::ValidateLauncher => (
+            BuildRecipe::ValidateLauncher => (
                 BuildTarget::Runtime,
                 BuildMode::Check,
                 "release-device",
@@ -130,7 +154,7 @@ impl BuildSpec {
                 runtime_artifact("release-device"),
                 false,
             ),
-            BuildIntent::ValidateLibrary => (
+            BuildRecipe::ValidateLibrary => (
                 BuildTarget::Runtime,
                 BuildMode::CheckLibrary,
                 "release-device",
@@ -139,7 +163,7 @@ impl BuildSpec {
                 runtime_artifact("release-device"),
                 false,
             ),
-            BuildIntent::DeviceAgent => (
+            BuildRecipe::DeviceAgent => (
                 BuildTarget::DeviceAgent,
                 BuildMode::Build,
                 "release",
@@ -153,11 +177,11 @@ impl BuildSpec {
         };
         let receipt = PathBuf::from(format!("{}.build-receipt.tsv", artifact.display()));
         let cache_identity = format!(
-            "v3:{TARGET}:{target:?}:{mode:?}:{profile}:{}:{}",
+            "v4:{TARGET}:{target:?}:{mode:?}:{profile}:{}:{}",
             features.join(","),
             scope.label()
         );
-        Ok(Self {
+        Self {
             target,
             mode,
             profile,
@@ -167,15 +191,27 @@ impl BuildSpec {
             receipt,
             cache_identity,
             strict_receipt,
-        })
+        }
     }
 
     #[must_use]
     pub fn canonical(ui_scope: UiScope) -> Self {
-        let mut spec = Self::infer(BuildIntent::RuntimeDevice).expect("static build intent");
-        spec.ui_scope = ui_scope;
-        spec.cache_identity = format!("{}:{}", spec.cache_identity, ui_scope.label());
-        spec
+        Self::for_recipe(BuildRecipe::RuntimeDevice(ui_scope))
+    }
+
+    #[must_use]
+    pub fn artifact(&self) -> &Path {
+        &self.artifact
+    }
+
+    #[must_use]
+    pub fn features(&self) -> &[&'static str] {
+        &self.features
+    }
+
+    #[must_use]
+    pub const fn ui_scope(&self) -> UiScope {
+        self.ui_scope
     }
 
     pub fn verify(&self, repository: &Path) -> Result<BuildReceipt, String> {
@@ -806,28 +842,34 @@ mod tests {
 
     #[test]
     fn runtime_and_validation_intents_infer_fixed_identity() {
-        let runtime = BuildSpec::infer(BuildIntent::RuntimeDevice).unwrap();
+        let runtime = BuildSpec::for_recipe(BuildRecipe::RuntimeDevice(UiScope::All));
         assert_eq!(runtime.profile, "release-device");
         assert_eq!(runtime.features, ["ui"]);
         assert_eq!(runtime.ui_scope, UiScope::All);
-        let launcher = BuildSpec::infer(BuildIntent::ValidateLauncher).unwrap();
+        let launcher = BuildSpec::for_recipe(BuildRecipe::ValidateLauncher);
         assert_eq!(launcher.mode, BuildMode::Check);
         assert_eq!(launcher.ui_scope, UiScope::Launcher);
-        let library = BuildSpec::infer(BuildIntent::ValidateLibrary).unwrap();
+        let library = BuildSpec::for_recipe(BuildRecipe::ValidateLibrary);
         assert_eq!(library.mode, BuildMode::CheckLibrary);
     }
 
     #[test]
     fn cache_identity_changes_with_profile_scope_and_target() {
-        let device = BuildSpec::infer(BuildIntent::RuntimeDevice).unwrap();
-        let fast = BuildSpec::infer(BuildIntent::RuntimeFast).unwrap();
-        let agent = BuildSpec::infer(BuildIntent::DeviceAgent).unwrap();
+        let device = BuildSpec::for_recipe(BuildRecipe::RuntimeDevice(UiScope::All));
+        let fast = BuildSpec::for_recipe(BuildRecipe::RuntimeFast);
+        let agent = BuildSpec::for_recipe(BuildRecipe::DeviceAgent);
         assert_ne!(device.cache_identity, fast.cache_identity);
         assert_ne!(device.cache_identity, agent.cache_identity);
         assert_ne!(
             device.cache_identity,
             BuildSpec::canonical(UiScope::Launcher).cache_identity
         );
+        assert!(BuildSpec::canonical(UiScope::Launcher)
+            .cache_identity
+            .ends_with(":launcher"));
+        assert!(!BuildSpec::canonical(UiScope::Launcher)
+            .cache_identity
+            .contains(":all:launcher"));
     }
 
     #[test]

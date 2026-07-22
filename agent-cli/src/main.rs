@@ -238,7 +238,7 @@ fn dispatch(
             return Ok(Outcome::Passed);
         }
         Intent::Build { intent } => {
-            let spec = agent_cli::build::BuildSpec::infer(*intent)?;
+            let spec = agent_cli::build::BuildSpec::for_recipe((*intent).into());
             agent_cli::build::execute(repository, &spec, reporter)?;
         }
         Intent::Plan {

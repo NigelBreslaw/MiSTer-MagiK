@@ -63,7 +63,7 @@ impl DeploymentPlan {
             format!("profile={}", self.profile),
             format!("ui_scope={}", self.ui_scope.label()),
             format!("layout={}", self.layout),
-            format!("artifact={}", self.build.artifact.display()),
+            format!("artifact={}", self.build.artifact().display()),
         ];
         inputs.extend(
             self.platform_components
@@ -277,8 +277,8 @@ mod tests {
     #[test]
     fn canonical_build_never_adds_non_production_features() {
         let build = BuildSpec::canonical(UiScope::Launcher);
-        assert_eq!(build.features, vec!["ui"]);
-        assert_eq!(build.ui_scope, UiScope::Launcher);
+        assert_eq!(build.features(), ["ui"]);
+        assert_eq!(build.ui_scope(), UiScope::Launcher);
     }
 
     #[test]

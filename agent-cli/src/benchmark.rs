@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::build::{BuildIntent, BuildSpec};
+use crate::build::{BuildRecipe, BuildSpec};
 use crate::device::DeviceClient;
 use crate::model::Outcome;
 use crate::progress::{EventKind, Reporter};
@@ -214,7 +214,7 @@ pub fn execute(
         repository,
         expected_commit,
         scenario,
-        build: BuildSpec::infer(BuildIntent::RuntimeBenchmark)?,
+        build: BuildSpec::for_recipe(BuildRecipe::RuntimeBenchmark),
         snapshot_created: false,
         trace: None,
         result: None,
@@ -270,7 +270,7 @@ fn execute_cold(
         repository,
         expected_commit,
         scenario,
-        build: BuildSpec::infer(BuildIntent::RuntimeBenchmark)?,
+        build: BuildSpec::for_recipe(BuildRecipe::RuntimeBenchmark),
         restore_required: false,
         events: None,
         result: None,
@@ -327,7 +327,7 @@ impl ProcessActions<'_> {
         })?;
         self.snapshot_created = true;
         self.device.execute(DeviceRequest::DeployRuntime {
-            local: self.build.artifact.clone(),
+            local: self.build.artifact().to_path_buf(),
             remote: REMOTE_RUNTIME.into(),
         })?;
         self.device
@@ -435,7 +435,7 @@ impl ProcessColdActions<'_> {
         })?;
         self.restore_required = true;
         self.device.execute(DeviceRequest::DeployRuntime {
-            local: self.build.artifact.clone(),
+            local: self.build.artifact().to_path_buf(),
             remote: REMOTE_RUNTIME.into(),
         })?;
         self.device

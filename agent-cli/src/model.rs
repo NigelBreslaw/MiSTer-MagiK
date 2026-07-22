@@ -101,7 +101,7 @@ pub enum Intent {
     },
     ReleaseQualify,
     Build {
-        intent: crate::build::BuildIntent,
+        intent: crate::build::BuildCommand,
     },
 }
 
