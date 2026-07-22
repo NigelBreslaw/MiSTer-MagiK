@@ -170,10 +170,16 @@ fn add_path_operations(
     if path.starts_with("crates/agent-protocol") {
         add(with_inputs(
             cargo(
-                "protocol.host-consumer",
-                "Check host protocol consumer",
-                &["check", "--manifest-path", "mister/tools/host/Cargo.toml"],
-                "agent protocol → host consumer",
+                "protocol.host-binary",
+                "Build host protocol consumer",
+                &[
+                    "build",
+                    "--manifest-path",
+                    "mister/tools/host/Cargo.toml",
+                    "--bin",
+                    "mister",
+                ],
+                "agent protocol → runnable host consumer",
             ),
             &["crates/agent-protocol", "mister/tools/host"],
         ));
@@ -185,6 +191,23 @@ fn add_path_operations(
                 "agent protocol → device-agent consumer",
             ),
             &["crates/agent-protocol", "mister/tools/agent"],
+        ));
+    }
+    if path.starts_with("mister/tools/host") {
+        add(with_inputs(
+            cargo(
+                "mister-host.binary",
+                "Build runnable mister host tool",
+                &[
+                    "build",
+                    "--manifest-path",
+                    "mister/tools/host/Cargo.toml",
+                    "--bin",
+                    "mister",
+                ],
+                "host source → runnable operator binary",
+            ),
+            &["crates/agent-protocol", "mister/tools/host"],
         ));
     }
     if path.starts_with("crates/catalog") {
@@ -774,6 +797,27 @@ mod tests {
         )
         .unwrap();
         assert!(check.operations.len() < verify.operations.len());
+    }
+
+    #[test]
+    fn protocol_and_host_changes_refresh_the_runnable_mister_binary() {
+        for path in [
+            "crates/agent-protocol/src/lib.rs",
+            "mister/tools/host/src/agent_client.rs",
+        ] {
+            let plan = affected_plan(
+                Intent::Check {
+                    scope: Scope::Paths(vec![]),
+                },
+                vec![path.into()],
+            )
+            .unwrap();
+            assert!(plan.operations.iter().any(|operation| {
+                operation.args.first().map(String::as_str) == Some("build")
+                    && operation.args.contains(&"--bin".into())
+                    && operation.args.contains(&"mister".into())
+            }));
+        }
     }
 
     #[test]
