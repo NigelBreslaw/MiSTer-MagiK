@@ -613,7 +613,7 @@ fn failure_message(
     let next = if classification == "network_required" {
         format!(
             "rerun with network access: {}",
-            retry_command(&evidence.request_args(request_id)?)
+            crate::shell::agent_retry_command(&evidence.request_args(request_id)?)
         )
     } else {
         format!("scripts/agent run show {request_id}")
@@ -624,25 +624,6 @@ fn failure_message(
         log_tail(log_path)?,
         log_path.display()
     ))
-}
-
-fn retry_command(args: &[String]) -> String {
-    std::iter::once("scripts/agent".to_owned())
-        .chain(args.iter().skip(1).map(|arg| shell_quote(arg)))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn shell_quote(arg: &str) -> String {
-    if !arg.is_empty()
-        && arg
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"-_./".contains(&byte))
-    {
-        arg.to_owned()
-    } else {
-        format!("'{}'", arg.replace('\'', "'\\''"))
-    }
 }
 
 fn read_log(path: &Path) -> Result<String, String> {

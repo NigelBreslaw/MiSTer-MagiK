@@ -486,22 +486,7 @@ fn classify_git_write(evidence: &Evidence, request_id: &str, message: String) ->
 
 fn retry_command(evidence: &Evidence, request_id: &str) -> Result<String, String> {
     let args = evidence.request_args(request_id)?;
-    Ok(std::iter::once("scripts/agent".to_owned())
-        .chain(args.iter().skip(1).map(|arg| shell_quote(arg)))
-        .collect::<Vec<_>>()
-        .join(" "))
-}
-
-fn shell_quote(arg: &str) -> String {
-    if !arg.is_empty()
-        && arg
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"-_./".contains(&byte))
-    {
-        arg.to_owned()
-    } else {
-        format!("'{}'", arg.replace('\'', "'\\''"))
-    }
+    Ok(crate::shell::agent_retry_command(&args))
 }
 
 fn display_paths(paths: &[PathBuf]) -> String {

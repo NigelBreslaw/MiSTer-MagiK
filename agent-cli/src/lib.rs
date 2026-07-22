@@ -31,5 +31,6 @@ pub mod redact;
 pub mod release;
 pub mod request;
 pub mod scope;
+mod shell;
 pub mod task;
 pub mod workflow;
