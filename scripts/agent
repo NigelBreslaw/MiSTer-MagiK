@@ -4,4 +4,44 @@
 
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-exec cargo run --locked --quiet --manifest-path "$ROOT/agent-cli/Cargo.toml" -- "$@"
+MANIFEST="${MISTER_AGENT_CLI_MANIFEST:-$ROOT/agent-cli/Cargo.toml}"
+SOURCE_ROOT="$(dirname "$MANIFEST")"
+TARGET_ROOT="${CARGO_TARGET_DIR:-$SOURCE_ROOT/target}"
+BINARY="${MISTER_AGENT_CLI_BINARY:-$TARGET_ROOT/debug/agent-cli}"
+STAMP="$TARGET_ROOT/.agent-cli-toolchain"
+LOCK="$TARGET_ROOT/.agent-cli-build-lock"
+
+toolchain="$(rustc --version 2>/dev/null || true)"
+stale=false
+if [[ ! -x "$BINARY" || ! -f "$STAMP" || "$(<"$STAMP")" != "$toolchain" ]]; then
+  stale=true
+elif [[ "$MANIFEST" -nt "$BINARY" || "$SOURCE_ROOT/Cargo.lock" -nt "$BINARY" ]]; then
+  stale=true
+elif [[ -n "$(find "$SOURCE_ROOT/src" -type f -newer "$BINARY" -print -quit)" ]]; then
+  stale=true
+fi
+
+if [[ "$stale" == true ]]; then
+  mkdir -p "$TARGET_ROOT"
+  waited=0
+  until mkdir "$LOCK" 2>/dev/null; do
+    if (( waited >= 1200 )); then
+      echo "agent-cli build lock timed out" >&2
+      exit 1
+    fi
+    sleep 0.05
+    waited=$((waited + 1))
+  done
+  cleanup() { rmdir "$LOCK" 2>/dev/null || true; }
+  trap cleanup EXIT INT TERM
+
+  # Another launcher may have completed the build while this process waited.
+  if [[ ! -x "$BINARY" || ! -f "$STAMP" || "$(<"$STAMP")" != "$toolchain" || "$MANIFEST" -nt "$BINARY" || "$SOURCE_ROOT/Cargo.lock" -nt "$BINARY" || -n "$(find "$SOURCE_ROOT/src" -type f -newer "$BINARY" -print -quit)" ]]; then
+    cargo build --locked --quiet --manifest-path "$MANIFEST"
+    printf '%s' "$toolchain" >"$STAMP"
+  fi
+  cleanup
+  trap - EXIT INT TERM
+fi
+
+exec "$BINARY" "$@"
