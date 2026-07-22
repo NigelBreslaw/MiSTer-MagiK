@@ -704,8 +704,8 @@ impl ArcadeListRenderer {
     ) {
         let mut copied = 0usize;
         while copied < h {
-            let src_y = (self.surface_y + viewport_y + copied) % ARCADE_LIST_H;
-            let copy_h = (h - copied).min(ARCADE_LIST_H - src_y);
+            let src_y = (self.surface_y + viewport_y + copied) % self.visible_height;
+            let copy_h = (h - copied).min(self.visible_height - src_y);
             self.copy_surface_chunk_to_fb0(disp, x, viewport_y + copied, w, copy_h);
             copied += copy_h;
         }
@@ -722,7 +722,7 @@ impl ArcadeListRenderer {
         if w == 0 || h == 0 {
             return;
         }
-        let src_y = (self.surface_y + viewport_y) % ARCADE_LIST_H;
+        let src_y = (self.surface_y + viewport_y) % self.visible_height;
         if x == 0 && w == self.width {
             let src = src_y * self.width;
             copy_dense_rect_565(
@@ -758,8 +758,8 @@ impl ArcadeListRenderer {
     ) {
         let mut copied = 0usize;
         while copied < h {
-            let src_y = (self.surface_y + viewport_y + copied) % ARCADE_LIST_H;
-            let copy_h = (h - copied).min(ARCADE_LIST_H - src_y);
+            let src_y = (self.surface_y + viewport_y + copied) % self.visible_height;
+            let copy_h = (h - copied).min(self.visible_height - src_y);
             let target_x = self.geometry.x + x;
             let target_y = self.geometry.y + viewport_y + copied;
             let inverted = self.prepare_inverted_surface_chunk(x, viewport_y + copied, w, copy_h);
@@ -780,7 +780,7 @@ impl ArcadeListRenderer {
         if w == 0 || h == 0 {
             return &self.selection_invert_scratch;
         }
-        let src_y = (self.surface_y + viewport_y) % ARCADE_LIST_H;
+        let src_y = (self.surface_y + viewport_y) % self.visible_height;
         for row in 0..h {
             let src = (src_y + row) * self.width + x;
             let dst = row * w;
@@ -908,8 +908,8 @@ impl ArcadeListRenderer {
     ) {
         let mut copied = 0usize;
         while copied < h {
-            let src_y = (self.surface_y + viewport_y + copied) % ARCADE_LIST_H;
-            let copy_h = (h - copied).min(ARCADE_LIST_H - src_y);
+            let src_y = (self.surface_y + viewport_y + copied) % self.visible_height;
+            let copy_h = (h - copied).min(self.visible_height - src_y);
             target.compose_rect_565_strided(
                 self.geometry.x + x,
                 self.geometry.y + viewport_y + copied,
@@ -934,8 +934,8 @@ impl ArcadeListRenderer {
     ) {
         let mut copied = 0usize;
         while copied < h {
-            let src_y = (self.surface_y + viewport_y + copied) % ARCADE_LIST_H;
-            let copy_h = (h - copied).min(ARCADE_LIST_H - src_y);
+            let src_y = (self.surface_y + viewport_y + copied) % self.visible_height;
+            let copy_h = (h - copied).min(self.visible_height - src_y);
             if let Err(e) = hidden.copy_rect_565_strided(
                 self.geometry.x + x,
                 self.geometry.y + viewport_y + copied,
@@ -962,8 +962,8 @@ impl ArcadeListRenderer {
     ) {
         let mut copied = 0usize;
         while copied < h {
-            let src_y = (self.surface_y + viewport_y + copied) % ARCADE_LIST_H;
-            let copy_h = (h - copied).min(ARCADE_LIST_H - src_y);
+            let src_y = (self.surface_y + viewport_y + copied) % self.visible_height;
+            let copy_h = (h - copied).min(self.visible_height - src_y);
             let target_x = self.geometry.x + x;
             let target_y = self.geometry.y + viewport_y + copied;
             let inverted = self.prepare_inverted_surface_chunk(x, viewport_y + copied, w, copy_h);
@@ -982,8 +982,8 @@ impl ArcadeListRenderer {
     ) {
         let mut copied = 0usize;
         while copied < h {
-            let src_y = (self.surface_y + viewport_y + copied) % ARCADE_LIST_H;
-            let copy_h = (h - copied).min(ARCADE_LIST_H - src_y);
+            let src_y = (self.surface_y + viewport_y + copied) % self.visible_height;
+            let copy_h = (h - copied).min(self.visible_height - src_y);
             let target_x = self.geometry.x + x;
             let target_y = self.geometry.y + viewport_y + copied;
             let inverted = self.prepare_inverted_surface_chunk(x, viewport_y + copied, w, copy_h);
@@ -1632,6 +1632,21 @@ mod tests {
             assert!(selection.y0 >= rect.y0);
             assert!(selection.y1 <= rect.y1);
         }
+    }
+
+    #[test]
+    fn compact_surface_reads_wrap_at_visible_height() {
+        let mut renderer = ArcadeListRenderer::new();
+        renderer.set_geometry_for_render_h(ArcadeListGeometry::normal_for_render_w(320), 240);
+        for row in 0..renderer.visible_height {
+            renderer.surface[row * renderer.width..(row + 1) * renderer.width]
+                .fill(Rgb565Pixel(row as u16));
+        }
+        renderer.surface_y = renderer.visible_height - 1;
+        let sample = renderer.prepare_inverted_surface_chunk(0, 0, 1, 2);
+        assert_eq!(sample.len(), 2);
+        assert_ne!(sample[0], sample[1]);
+        assert_eq!(renderer.visible_height, 152);
     }
 
     #[test]
