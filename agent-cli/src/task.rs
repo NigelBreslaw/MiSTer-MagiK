@@ -5,11 +5,11 @@ use crate::evidence::Evidence;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::Read;
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const PLANNER_SCHEMA: u8 = 3;
+const PLANNER_SCHEMA: u8 = 4;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Baseline {
@@ -28,6 +28,13 @@ struct Fingerprint {
     kind: String,
     mode: u32,
     hash: String,
+}
+
+#[derive(Debug, Default)]
+struct WorkspaceState {
+    dirty: BTreeSet<PathBuf>,
+    staged: BTreeSet<PathBuf>,
+    untracked: BTreeSet<PathBuf>,
 }
 
 pub fn begin(
@@ -76,7 +83,11 @@ pub fn changes(
     }
     let mut changes = Vec::new();
     for path in paths {
-        let current = fingerprint(&repository.join(&path))?;
+        let current = if baseline.planner_schema >= 4 {
+            fingerprint_v4(repository, &path)?
+        } else {
+            fingerprint(&repository.join(&path))?
+        };
         if baseline.planner_schema < 3
             && !baseline.files.contains_key(&path)
             && current
@@ -187,8 +198,10 @@ pub(crate) fn legacy_baseline_was_clean(
             .current_dir(repository)
             .output()
             .map_err(|error| error.to_string())?;
+        let content_matches = fingerprint.hash == format!("git:{oid}")
+            || fingerprint.hash == format!("{:016x}", fnv1a(&blob.stdout));
         if !blob.status.success()
-            || fingerprint.hash != format!("{:016x}", fnv1a(&blob.stdout))
+            || !content_matches
             || fingerprint.kind != if mode == "120000" { "symlink" } else { "file" }
             || (mode != "120000" && (fingerprint.mode & 0o111 != 0) != (mode == "100755"))
         {
@@ -200,8 +213,9 @@ pub(crate) fn legacy_baseline_was_clean(
 
 fn capture(repository: &Path) -> Result<Baseline, String> {
     let head = git(repository, &["rev-parse", "HEAD"])?;
+    let state = workspace_state(repository)?;
     let output = Command::new("git")
-        .args(["ls-files", "-co", "--exclude-standard", "-z"])
+        .args(["ls-files", "-s", "-z"])
         .current_dir(repository)
         .output()
         .map_err(|error| format!("cannot enumerate task files: {error}"))?;
@@ -214,8 +228,29 @@ fn capture(repository: &Path) -> Result<Baseline, String> {
         .split(|byte| *byte == 0)
         .filter(|part| !part.is_empty())
     {
-        let path = PathBuf::from(String::from_utf8_lossy(raw).into_owned());
-        if let Some(fingerprint) = fingerprint(&repository.join(&path))? {
+        let Some(tab) = raw.iter().position(|byte| *byte == b'\t') else {
+            return Err("git ls-files returned a malformed index entry".into());
+        };
+        let header = String::from_utf8_lossy(&raw[..tab]);
+        let mut fields = header.split_whitespace();
+        let mode = fields.next().unwrap_or("");
+        let oid = fields.next().unwrap_or("");
+        let stage = fields.next().unwrap_or("");
+        if stage != "0" {
+            continue;
+        }
+        let path = PathBuf::from(String::from_utf8_lossy(&raw[tab + 1..]).into_owned());
+        let fingerprint = if state.dirty.contains(&path) {
+            fingerprint_v4(repository, &path)?
+        } else {
+            index_fingerprint(mode, oid)
+        };
+        if let Some(fingerprint) = fingerprint {
+            files.insert(path, fingerprint);
+        }
+    }
+    for path in state.untracked {
+        if let Some(fingerprint) = fingerprint_v4(repository, &path)? {
             files.insert(path, fingerprint);
         }
     }
@@ -224,9 +259,132 @@ fn capture(repository: &Path) -> Result<Baseline, String> {
         head,
         toolchain: toolchain_identity(repository),
         files,
-        dirty_paths: changed_paths(repository, false)?,
-        staged_paths: changed_paths(repository, true)?,
+        dirty_paths: state.dirty,
+        staged_paths: state.staged,
     })
+}
+
+fn workspace_state(repository: &Path) -> Result<WorkspaceState, String> {
+    let output = Command::new("git")
+        .args(["status", "--porcelain=v1", "-z", "--untracked-files=all"])
+        .current_dir(repository)
+        .output()
+        .map_err(|error| format!("cannot inspect task changes: {error}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
+    }
+    let entries: Vec<_> = output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|part| !part.is_empty())
+        .collect();
+    let mut dirty = BTreeSet::new();
+    let mut staged = BTreeSet::new();
+    let mut untracked = BTreeSet::new();
+    let mut index = 0;
+    while index < entries.len() {
+        let entry = entries[index];
+        if entry.len() < 4 || entry[2] != b' ' {
+            return Err("git status returned a malformed porcelain entry".into());
+        }
+        let x = entry[0];
+        let y = entry[1];
+        let path = PathBuf::from(String::from_utf8_lossy(&entry[3..]).into_owned());
+        dirty.insert(path.clone());
+        if x == b'?' {
+            untracked.insert(path);
+        } else if x != b' ' {
+            staged.insert(path.clone());
+        }
+        if matches!(x, b'R' | b'C') || matches!(y, b'R' | b'C') {
+            index += 1;
+            let Some(origin) = entries.get(index) else {
+                return Err("git status omitted a rename origin".into());
+            };
+            let origin = PathBuf::from(String::from_utf8_lossy(origin).into_owned());
+            dirty.insert(origin.clone());
+            if x != b' ' {
+                staged.insert(origin);
+            }
+        }
+        index += 1;
+    }
+    Ok(WorkspaceState {
+        dirty,
+        staged,
+        untracked,
+    })
+}
+
+fn index_fingerprint(mode: &str, oid: &str) -> Option<Fingerprint> {
+    let kind = match mode {
+        "120000" => "symlink",
+        "160000" => "gitlink",
+        "100644" | "100755" => "file",
+        _ => return None,
+    };
+    Some(Fingerprint {
+        kind: kind.into(),
+        mode: u32::from_str_radix(mode, 8).unwrap_or_default(),
+        hash: format!("git:{oid}"),
+    })
+}
+
+fn fingerprint_v4(repository: &Path, relative: &Path) -> Result<Option<Fingerprint>, String> {
+    let path = repository.join(relative);
+    let metadata = match fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("cannot inspect {}: {error}", path.display())),
+    };
+    let (kind, mode, hash) = if metadata.file_type().is_symlink() {
+        let target = fs::read_link(&path).map_err(|error| error.to_string())?;
+        (
+            "symlink",
+            0o120000,
+            format!("{:016x}", fnv1a(target.as_os_str().as_encoded_bytes())),
+        )
+    } else if metadata.is_dir() && path.join(".git").exists() {
+        let oid = git(&path, &["rev-parse", "HEAD"])?;
+        ("gitlink", 0o160000, format!("git:{oid}"))
+    } else if metadata.is_file() {
+        #[cfg(unix)]
+        use std::os::unix::fs::PermissionsExt;
+        #[cfg(unix)]
+        let executable = metadata.permissions().mode() & 0o111 != 0;
+        #[cfg(not(unix))]
+        let executable = false;
+        let file = fs::File::open(&path)
+            .map_err(|error| format!("cannot fingerprint {}: {error}", path.display()))?;
+        let hash = fnv1a_reader(BufReader::new(file))
+            .map_err(|error| format!("cannot fingerprint {}: {error}", path.display()))?;
+        (
+            "file",
+            if executable { 0o100755 } else { 0o100644 },
+            format!("{hash:016x}"),
+        )
+    } else {
+        return Ok(None);
+    };
+    Ok(Some(Fingerprint {
+        kind: kind.into(),
+        mode,
+        hash,
+    }))
+}
+
+fn fnv1a_reader(mut reader: impl Read) -> std::io::Result<u64> {
+    let mut hash = 0xcbf29ce484222325_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            return Ok(hash);
+        }
+        for byte in &buffer[..read] {
+            hash = (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3);
+        }
+    }
 }
 
 fn changed_paths(repository: &Path, staged_only: bool) -> Result<BTreeSet<PathBuf>, String> {
