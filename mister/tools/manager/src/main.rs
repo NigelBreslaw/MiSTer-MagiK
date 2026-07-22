@@ -44,6 +44,34 @@ enum InputEvent {
     Other,
 }
 
+#[derive(Default)]
+struct InputDecoder {
+    bytes: Vec<u8>,
+}
+
+impl InputDecoder {
+    fn push(&mut self, bytes: &[u8]) -> Option<InputEvent> {
+        self.bytes.extend_from_slice(bytes);
+        match self.bytes.as_slice() {
+            [b'\n' | b'\r', ..] => Some(InputEvent::Confirm),
+            [0x1b, b'[' | b'O', b'A', ..] => Some(InputEvent::Up),
+            [0x1b, b'[' | b'O', b'B', ..] => Some(InputEvent::Down),
+            [0x1b] | [0x1b, b'[' | b'O'] => None,
+            [0x1b, ..] => Some(InputEvent::Cancel),
+            [] => None,
+            _ => Some(InputEvent::Other),
+        }
+    }
+
+    fn finish(&self) -> Option<InputEvent> {
+        match self.bytes.as_slice() {
+            [] => None,
+            [0x1b] | [0x1b, b'[' | b'O'] => Some(InputEvent::Cancel),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Action {
     Restore,
@@ -230,16 +258,6 @@ fn restore_stock(paths: &Paths) -> Result<()> {
 
 fn safety_confirmation(paths: &Paths, message: &str, operation: &str) -> Result<()> {
     println!("\n{message}\n\nPress Down on the keyboard or joystick to confirm. Any other input cancels.");
-    if paths.test_mode() {
-        let variable = match operation {
-            "installation" => "MISTER_MAGIK_TEST_CONFIRM_INSTALL",
-            "uninstall" => "MISTER_MAGIK_TEST_CONFIRM_UNINSTALL",
-            _ => "",
-        };
-        if !variable.is_empty() && env::var(variable).as_deref() == Ok("1") {
-            return Ok(());
-        }
-    }
     match read_event(paths)? {
         Some(InputEvent::Down) => Ok(()),
         Some(_) => Err(format!("{operation} cancelled; no changes made").into()),
@@ -302,9 +320,6 @@ fn confirm_31khz(paths: &Paths, mode: OutputMode) -> Result<()> {
         return Ok(());
     }
     println!("\nWARNING: {} is a 31 kHz signal.\nPress Down on the keyboard or joystick only if the display manual confirms 31 kHz support.", mode.as_str());
-    if paths.test_mode() && env::var("MISTER_MAGIK_TEST_CONFIRM_31KHZ").as_deref() == Ok("1") {
-        return Ok(());
-    }
     if read_event(paths)? == Some(InputEvent::Down) {
         Ok(())
     } else {
@@ -391,22 +406,19 @@ fn read_event(paths: &Paths) -> Result<Option<InputEvent>> {
 fn read_event_bytes() -> Result<InputEvent> {
     let mut first = [0_u8; 1];
     io::stdin().read_exact(&mut first)?;
-    if first[0] == b'\n' || first[0] == b'\r' {
-        return Ok(InputEvent::Confirm);
-    }
-    if first[0] != 0x1b {
-        return Ok(InputEvent::Other);
+    let mut decoder = InputDecoder::default();
+    if let Some(event) = decoder.push(&first) {
+        return Ok(event);
     }
     let mut tail = [0_u8; 2];
     let _ = Command::new("stty")
         .args(["min", "0", "time", "1"])
         .status();
     let count = io::stdin().read(&mut tail)?;
-    Ok(match &tail[..count] {
-        b"[A" | b"OA" => InputEvent::Up,
-        b"[B" | b"OB" => InputEvent::Down,
-        _ => InputEvent::Cancel,
-    })
+    decoder
+        .push(&tail[..count])
+        .or_else(|| decoder.finish())
+        .ok_or_else(|| "interactive input ended before a complete event".into())
 }
 
 fn effective(path: &Path, section: &str, key: &str) -> Result<Option<String>> {
@@ -955,16 +967,40 @@ mod tests {
     }
 
     #[test]
-    fn down_sequences_decode_to_the_same_event() {
-        for bytes in [b"[B".as_slice(), b"OB".as_slice()] {
-            assert_eq!(
-                match bytes {
-                    b"[B" | b"OB" => InputEvent::Down,
-                    _ => InputEvent::Other,
-                },
-                InputEvent::Down
-            );
+    fn fragmented_keyboard_and_joystick_sequences_decode() {
+        for chunks in [
+            vec![b"\x1b".as_slice(), b"[".as_slice(), b"B".as_slice()],
+            vec![b"\x1bO".as_slice(), b"B".as_slice()],
+        ] {
+            let mut decoder = InputDecoder::default();
+            let mut event = None;
+            for chunk in chunks {
+                event = decoder.push(chunk).or(event);
+            }
+            assert_eq!(event, Some(InputEvent::Down));
         }
+    }
+
+    #[test]
+    fn decoder_distinguishes_navigation_confirmation_and_cancellation() {
+        for (bytes, expected) in [
+            (b"\x1b[A".as_slice(), InputEvent::Up),
+            (b"\x1bOA".as_slice(), InputEvent::Up),
+            (b"\n".as_slice(), InputEvent::Confirm),
+            (b"\r".as_slice(), InputEvent::Confirm),
+            (b"x".as_slice(), InputEvent::Other),
+            (b"\x1bx".as_slice(), InputEvent::Cancel),
+        ] {
+            let mut decoder = InputDecoder::default();
+            assert_eq!(decoder.push(bytes), Some(expected));
+        }
+
+        let mut controller_b = InputDecoder::default();
+        assert_eq!(controller_b.push(b"\x1b"), None);
+        assert_eq!(controller_b.finish(), Some(InputEvent::Cancel));
+
+        let unavailable = InputDecoder::default();
+        assert_eq!(unavailable.finish(), None);
     }
 
     #[test]

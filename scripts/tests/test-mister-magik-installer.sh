@@ -42,7 +42,8 @@ cp "$FAT/MiSTer.ini" "$TMP/original.ini"
 
 run_manager() {
   MISTER_MAGIK_FAT="$FAT" MISTER_MAGIK_INITTAB="$TMP/inittab" \
-    MISTER_MAGIK_TEST_MODE=1 MISTER_MAGIK_TEST_OUTPUT_MODE=auto \
+    MISTER_MAGIK_TEST_MODE=1 \
+    MISTER_MAGIK_TEST_OUTPUT_MODE="${MISTER_MAGIK_TEST_OUTPUT_MODE:-auto}" \
     MISTER_MAGIK_TEST_KEYS="${MISTER_MAGIK_TEST_KEYS:-}" \
     "$FAT/Scripts/MiSTer-MagiK.sh" "$@"
 }
@@ -50,13 +51,33 @@ run_manager() {
 # A/Enter is not a safety confirmation and cannot mutate either boot file.
 before_ini="$(sha256sum "$FAT/MiSTer.ini")"
 before_inittab="$(sha256sum "$TMP/inittab")"
-if MISTER_MAGIK_TEST_KEYS=enter run_manager install >"$TMP/enter.log" 2>&1; then
+if MISTER_MAGIK_TEST_CONFIRM_INSTALL=1 MISTER_MAGIK_TEST_KEYS=enter run_manager install >"$TMP/enter.log" 2>&1; then
   echo "Enter unexpectedly confirmed installation" >&2
   exit 1
 fi
 grep -q 'Press Down on the keyboard or joystick' "$TMP/enter.log"
 test "$(sha256sum "$FAT/MiSTer.ini")" = "$before_ini"
 test "$(sha256sum "$TMP/inittab")" = "$before_inittab"
+
+# A 31 kHz mode has its own Down-only boundary after installation consent.
+if MISTER_MAGIK_TEST_OUTPUT_MODE=crt-480p60 MISTER_MAGIK_TEST_KEYS=down,enter \
+    run_manager install >"$TMP/31khz-enter.log" 2>&1; then
+  echo "Enter unexpectedly confirmed a 31 kHz mode" >&2
+  exit 1
+fi
+grep -q '31 kHz CRT mode was not explicitly confirmed' "$TMP/31khz-enter.log"
+test "$(sha256sum "$FAT/MiSTer.ini")" = "$before_ini"
+test "$(sha256sum "$TMP/inittab")" = "$before_inittab"
+
+# A missing manager is refused by the bootstrap without touching boot files.
+mv "$APP/mister-magik-manager" "$TMP/manager.missing"
+if MISTER_MAGIK_TEST_KEYS=down run_manager install >"$TMP/missing.log" 2>&1; then
+  echo "missing manager unexpectedly ran" >&2
+  exit 1
+fi
+grep -q 'missing .*mister-magik-manager' "$TMP/missing.log"
+test "$(sha256sum "$FAT/MiSTer.ini")" = "$before_ini"
+mv "$TMP/manager.missing" "$APP/mister-magik-manager"
 
 # A corrupt manager is rejected by the shell before it can run.
 cp "$APP/mister-magik-manager" "$TMP/manager.good"
