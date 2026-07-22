@@ -1402,7 +1402,7 @@ fn capture_display_matrix_mode(
     if width != framebuffer.0 as u64
         || height != framebuffer.1 as u64
         || png_dimensions(&capture.png)? != (width as u32, height as u32)
-        || stride != width.saturating_mul(2)
+        || !valid_rgb565_stride(width, stride)
         || bpp != 16
         || nonzero == 0
         || !varied
@@ -4051,7 +4051,7 @@ fn validate_visible_launcher_capture(capture: &PngCapture) -> Result<()> {
     let height = result.get("height").and_then(Value::as_u64).unwrap_or(0);
     let stride = result.get("stride").and_then(Value::as_u64).unwrap_or(0);
     let bpp = result.get("bpp").and_then(Value::as_u64).unwrap_or(0);
-    if width == 0 || height == 0 || bpp != 16 || stride != width.saturating_mul(2) {
+    if width == 0 || height == 0 || bpp != 16 || !valid_rgb565_stride(width, stride) {
         return Err(format!(
             "authoritative launcher capture has invalid RGB565 geometry {width}x{height} stride={stride} bpp={bpp}"
         )
@@ -4069,6 +4069,10 @@ fn validate_visible_launcher_capture(capture: &PngCapture) -> Result<()> {
         return Err("authoritative launcher framebuffer capture is blank or uniform".into());
     }
     Ok(())
+}
+
+fn valid_rgb565_stride(width: u64, stride: u64) -> bool {
+    width > 0 && stride >= width.saturating_mul(2) && stride.is_multiple_of(2)
 }
 
 fn validate_capture_buffer_args(args: &[String]) -> Result<()> {
@@ -8873,6 +8877,15 @@ H: Handlers=event3 js0"#
             elapsed_ms: 0,
         };
         assert!(validate_visible_launcher_capture(&capture).is_err());
+    }
+
+    #[test]
+    fn rgb565_stride_accepts_aligned_padding_but_rejects_invalid_rows() {
+        assert!(valid_rgb565_stride(683, 1_376));
+        assert!(valid_rgb565_stride(960, 1_920));
+        assert!(!valid_rgb565_stride(683, 1_366 - 2));
+        assert!(!valid_rgb565_stride(683, 1_367));
+        assert!(!valid_rgb565_stride(0, 0));
     }
 
     #[test]
