@@ -348,13 +348,13 @@ pub fn run_state_machine(
         (Phase::Receipt, 92),
         (Phase::Complete, 100),
     ];
-    for (phase, percent) in PHASES {
-        progress(*phase, *percent)?;
-        actions
-            .run(*phase)
-            .map_err(|error| format!("{}: {error}", phase.label()))?;
-    }
-    Ok(())
+    crate::workflow::run_phases(
+        actions,
+        PHASES,
+        progress,
+        |actions, phase| actions.run(phase),
+        Phase::label,
+    )
 }
 
 pub fn execute(

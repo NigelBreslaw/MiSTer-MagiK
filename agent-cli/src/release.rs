@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::device::DeviceClient;
-use crate::error::{AgentError, AgentResult};
+use crate::error::AgentResult;
 use crate::model::Outcome;
 use crate::progress::{EventKind, Reporter};
 use mister_tool::transport::DeviceRequest;
@@ -55,33 +55,17 @@ pub fn run_workflow(
         (Phase::Recovery, 88),
         (Phase::Restore, 100),
     ];
-    for (phase, percent) in PHASES {
-        if let Err(error) = progress(*phase, *percent) {
-            return restore_after_error(actions, AgentError::cancelled(error));
-        }
-        let result = if *phase == Phase::Restore {
-            actions.restore()
-        } else {
-            actions.run(*phase)
-        };
-        if let Err(error) = result {
-            return restore_after_error(actions, AgentError::phase(phase.label(), error));
-        }
-    }
-    Ok(())
-}
-
-fn restore_after_error(actions: &mut dyn ReleaseActions, error: AgentError) -> AgentResult<()> {
-    if !actions.armed() {
-        return Err(error);
-    }
-    match actions.restore() {
-        Ok(()) => Err(format!("{error}; restore=complete").into()),
-        Err(restore) => Err(AgentError::recovery_required(
-            error.to_string(),
-            format!("release qualification restore failed ({restore})"),
-        )),
-    }
+    crate::workflow::run_restorable_phases(
+        actions,
+        PHASES,
+        progress,
+        |actions, phase| actions.run(phase),
+        ReleaseActions::restore,
+        |actions| actions.armed(),
+        |phase| phase == Phase::Restore,
+        Phase::label,
+        "release qualification",
+    )
 }
 
 pub fn execute(reporter: &mut Reporter<'_>) -> AgentResult<Outcome> {

@@ -3,7 +3,7 @@
 
 use crate::build::{BuildRecipe, BuildSpec};
 use crate::device::DeviceClient;
-use crate::error::{AgentError, AgentResult};
+use crate::error::AgentResult;
 use crate::model::Outcome;
 use crate::progress::{EventKind, Reporter};
 use mister_tool::transport::{BenchmarkScenario, ColdBenchmarkScenario, DeviceRequest, Layout};
@@ -102,36 +102,17 @@ pub fn run_cold_workflow(
         (ColdPhase::Evaluate, 90),
         (ColdPhase::Restore, 100),
     ];
-    for (phase, percent) in PHASES {
-        if let Err(error) = progress(*phase, *percent) {
-            return restore_cold_after_error(actions, AgentError::cancelled(error));
-        }
-        let result = if *phase == ColdPhase::Restore {
-            actions.restore()
-        } else {
-            actions.run(*phase)
-        };
-        if let Err(error) = result {
-            return restore_cold_after_error(actions, AgentError::phase(phase.label(), error));
-        }
-    }
-    Ok(())
-}
-
-fn restore_cold_after_error(
-    actions: &mut dyn ColdBenchmarkActions,
-    error: AgentError,
-) -> AgentResult<()> {
-    if !actions.needs_restore() {
-        return Err(error);
-    }
-    match actions.restore() {
-        Ok(()) => Err(format!("{error}; restore=complete").into()),
-        Err(restore) => Err(AgentError::recovery_required(
-            error.to_string(),
-            format!("cold benchmark restore failed ({restore})"),
-        )),
-    }
+    crate::workflow::run_restorable_phases(
+        actions,
+        PHASES,
+        progress,
+        |actions, phase| actions.run(phase),
+        ColdBenchmarkActions::restore,
+        |actions| actions.needs_restore(),
+        |phase| phase == ColdPhase::Restore,
+        ColdPhase::label,
+        "cold benchmark",
+    )
 }
 
 pub trait BenchmarkActions {
@@ -154,33 +135,17 @@ pub fn run_workflow(
         (Phase::Evaluate, 90),
         (Phase::Restore, 100),
     ];
-    for (phase, percent) in PHASES {
-        if let Err(error) = progress(*phase, *percent) {
-            return restore_after_error(actions, AgentError::cancelled(error));
-        }
-        let result = if *phase == Phase::Restore {
-            actions.restore()
-        } else {
-            actions.run(*phase)
-        };
-        if let Err(error) = result {
-            return restore_after_error(actions, AgentError::phase(phase.label(), error));
-        }
-    }
-    Ok(())
-}
-
-fn restore_after_error(actions: &mut dyn BenchmarkActions, error: AgentError) -> AgentResult<()> {
-    if !actions.needs_restore() {
-        return Err(error);
-    }
-    match actions.restore() {
-        Ok(()) => Err(format!("{error}; restore=complete").into()),
-        Err(restore) => Err(AgentError::recovery_required(
-            error.to_string(),
-            format!("benchmark restore failed ({restore})"),
-        )),
-    }
+    crate::workflow::run_restorable_phases(
+        actions,
+        PHASES,
+        progress,
+        |actions, phase| actions.run(phase),
+        BenchmarkActions::restore,
+        |actions| actions.needs_restore(),
+        |phase| phase == Phase::Restore,
+        Phase::label,
+        "benchmark",
+    )
 }
 
 pub fn infer_scenario(paths: &[PathBuf]) -> AgentResult<BenchmarkScenario> {

@@ -70,13 +70,13 @@ pub fn run_workflow(
         (Phase::Recheck, 84),
         (Phase::Report, 100),
     ];
-    for (phase, percent) in PHASES {
-        progress(*phase, *percent).map_err(|error| format!("cancelled: {error}"))?;
-        actions
-            .run(*phase)
-            .map_err(|error| format!("{}: {error}", phase.label()))?;
-    }
-    Ok(())
+    crate::workflow::run_phases(
+        actions,
+        PHASES,
+        progress,
+        |actions, phase| actions.run(phase),
+        Phase::label,
+    )
 }
 
 pub fn execute(repository: &Path, reporter: &mut Reporter<'_>) -> AgentResult<Outcome> {
