@@ -11,6 +11,8 @@ use agent_cli::progress::{EventKind, Reporter};
 use agent_cli::request::RawRequest;
 use agent_cli::scope;
 use clap::Parser;
+use std::io::Write;
+use std::path::Path;
 
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
@@ -418,25 +420,17 @@ fn dispatch(
                         hbmame_sha,
                     )?;
                     if let Some(path) = github_output {
-                        use std::io::Write;
-                        let mut file = std::fs::OpenOptions::new()
-                            .create(true)
-                            .append(true)
-                            .open(path)
-                            .map_err(|error| error.to_string())?;
-                        for key in [
-                            "current_version",
-                            "next_version",
-                            "mame_changed",
-                            "hbmame_changed",
-                            "update_needed",
-                        ] {
-                            let value = result[key]
-                                .as_str()
-                                .map(str::to_owned)
-                                .unwrap_or_else(|| result[key].to_string());
-                            writeln!(file, "{key}={value}").map_err(|error| error.to_string())?;
-                        }
+                        append_github_output(
+                            path,
+                            &result,
+                            &[
+                                "current_version",
+                                "next_version",
+                                "mame_changed",
+                                "hbmame_changed",
+                                "update_needed",
+                            ],
+                        )?;
                     }
                     println!("{}", serde_json::to_string(&result).unwrap());
                 }
@@ -567,29 +561,21 @@ fn dispatch(
                         kernel_id,
                     )?;
                     if let Some(path) = github_output {
-                        use std::io::Write;
-                        let mut file = std::fs::OpenOptions::new()
-                            .create(true)
-                            .append(true)
-                            .open(path)
-                            .map_err(|e| e.to_string())?;
-                        for key in [
-                            "current_version",
-                            "next_version",
-                            "current_bundle_id",
-                            "bundle_id",
-                            "update_needed",
-                            "main_changed",
-                            "fpga_changed",
-                            "kernel_changed",
-                            "release_tag",
-                        ] {
-                            let value = result[key]
-                                .as_str()
-                                .map(str::to_owned)
-                                .unwrap_or_else(|| result[key].to_string());
-                            writeln!(file, "{key}={value}").map_err(|e| e.to_string())?;
-                        }
+                        append_github_output(
+                            path,
+                            &result,
+                            &[
+                                "current_version",
+                                "next_version",
+                                "current_bundle_id",
+                                "bundle_id",
+                                "update_needed",
+                                "main_changed",
+                                "fpga_changed",
+                                "kernel_changed",
+                                "release_tag",
+                            ],
+                        )?;
                     }
                     serde_json::to_string(&result).unwrap()
                 }
@@ -700,6 +686,30 @@ fn dispatch(
         }
     }
     Ok(Outcome::NoOp)
+}
+
+fn append_github_output(path: &Path, result: &serde_json::Value, keys: &[&str]) -> AgentResult<()> {
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|error| error.to_string())?;
+    write_github_output(&mut file, result, keys)
+}
+
+fn write_github_output(
+    output: &mut impl Write,
+    result: &serde_json::Value,
+    keys: &[&str],
+) -> AgentResult<()> {
+    for key in keys {
+        let value = result[*key]
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| result[*key].to_string());
+        writeln!(output, "{key}={value}").map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -925,14 +935,62 @@ fn fatal(message: &str) -> ! {
 mod tests {
     use super::*;
     use std::fs;
-    use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct FailingWriter;
+
+    impl Write for FailingWriter {
+        fn write(&mut self, _buffer: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("write failed"))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn bare_invocation_is_help_discovery() {
         assert!(is_discovery_request(&["agent-cli".into()]));
         assert!(is_discovery_request(&["agent-cli".into(), "--help".into()]));
         assert!(!is_discovery_request(&["agent-cli".into(), "check".into()]));
+    }
+
+    #[test]
+    fn github_output_appends_ordered_scalar_fields() {
+        let root = std::env::temp_dir().join(format!(
+            "agent-cli-github-output-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("output");
+        fs::write(&path, "existing=value\n").unwrap();
+        let result = serde_json::json!({"text":"release-v1","enabled":true,"version":2});
+        append_github_output(&path, &result, &["version", "text", "enabled"]).unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "existing=value\nversion=2\ntext=release-v1\nenabled=true\n"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn github_output_propagates_open_and_write_failures() {
+        let result = serde_json::json!({"value":1});
+        let missing_parent = std::env::temp_dir()
+            .join("agent-cli-missing-output-parent")
+            .join("output");
+        assert!(append_github_output(&missing_parent, &result, &["value"]).is_err());
+        assert_eq!(
+            write_github_output(&mut FailingWriter, &result, &["value"])
+                .unwrap_err()
+                .to_string(),
+            "write failed"
+        );
     }
 
     #[test]
