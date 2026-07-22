@@ -3,24 +3,28 @@
 
 use crate::redact::redact_args;
 use std::ffi::OsString;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RawRequest {
     pub id: String,
     pub args: Vec<String>,
+    pub started_ms: i64,
+    pub started: Instant,
 }
 
 impl RawRequest {
     #[must_use]
     pub fn capture(args: impl IntoIterator<Item = OsString>) -> Self {
-        let now = SystemTime::now()
+        let started = Instant::now();
+        let duration = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
+            .unwrap_or_default();
         Self {
-            id: format!("{now:x}-{:x}", std::process::id()),
+            id: format!("{:x}-{:x}", duration.as_nanos(), std::process::id()),
             args: redact_args(args),
+            started_ms: duration.as_millis().try_into().unwrap_or(i64::MAX),
+            started,
         }
     }
 }

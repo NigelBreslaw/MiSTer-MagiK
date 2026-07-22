@@ -22,7 +22,10 @@ CREATE TABLE IF NOT EXISTS requests (
     intent_json TEXT,
     plan_json TEXT,
     rejection_reason TEXT,
-    outcome TEXT
+    outcome TEXT,
+    bootstrap_ms INTEGER,
+    execution_started_ms INTEGER,
+    execution_ms INTEGER
 );
 CREATE TABLE IF NOT EXISTS commands (
     id INTEGER PRIMARY KEY,
@@ -100,7 +103,7 @@ CREATE TABLE IF NOT EXISTS delivery_attestations (
     created_ms INTEGER NOT NULL,
     PRIMARY KEY (task_id, requirement_id)
 );
-PRAGMA user_version = 6;
+PRAGMA user_version = 7;
 "#;
 
 #[derive(Debug)]
@@ -259,6 +262,15 @@ impl Evidence {
             "rolled_back",
             "INTEGER NOT NULL DEFAULT 0",
         )?;
+        ensure_column(&connection, "requests", "bootstrap_ms", "INTEGER")?;
+        ensure_column(&connection, "requests", "execution_started_ms", "INTEGER")?;
+        ensure_column(&connection, "requests", "execution_ms", "INTEGER")?;
+        connection
+            .execute(
+                "DELETE FROM operation_cache WHERE task_id NOT IN (SELECT task_id FROM tasks WHERE closed_ms IS NULL)",
+                [],
+            )
+            .map_err(|error| format!("cannot prune operation cache: {error}"))?;
         Ok(Self {
             connection,
             root: root.to_path_buf(),
@@ -288,7 +300,7 @@ impl Evidence {
         self.connection
             .execute(
                 "INSERT INTO requests (id, started_ms, args_json) VALUES (?1, ?2, ?3)",
-                params![request.id, now_ms(), args],
+                params![request.id, request.started_ms, args],
             )
             .map_err(|error| format!("cannot record request: {error}"))?;
         Ok(())
@@ -296,10 +308,11 @@ impl Evidence {
 
     pub fn record_intent(&self, request_id: &str, intent: &Intent) -> Result<(), String> {
         let intent = serde_json::to_string(intent).map_err(|error| error.to_string())?;
+        let now = now_ms();
         self.connection
             .execute(
-                "UPDATE requests SET parse_status = 'parsed', intent_json = ?2 WHERE id = ?1",
-                params![request_id, intent],
+                "UPDATE requests SET parse_status = 'parsed', intent_json = ?2, bootstrap_ms=?3-started_ms, execution_started_ms=?3 WHERE id = ?1",
+                params![request_id, intent, now],
             )
             .map_err(|error| format!("cannot record parsed intent: {error}"))?;
         Ok(())
@@ -323,7 +336,7 @@ impl Evidence {
             .to_owned();
         self.connection
             .execute(
-                "UPDATE requests SET completed_ms = ?2, outcome = ?3 WHERE id = ?1",
+                "UPDATE requests SET completed_ms = ?2, outcome = ?3, execution_ms=CASE WHEN execution_started_ms IS NULL THEN NULL ELSE ?2-execution_started_ms END WHERE id = ?1",
                 params![request_id, now_ms(), outcome],
             )
             .map_err(|error| format!("cannot record request outcome: {error}"))?;
@@ -331,12 +344,25 @@ impl Evidence {
     }
 
     pub fn record_event(&self, event: &ProgressEvent) -> Result<(), String> {
-        self.connection
-            .execute(
+        self.record_events(std::slice::from_ref(event))
+    }
+
+    pub fn record_events(&self, events: &[ProgressEvent]) -> Result<(), String> {
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|error| format!("cannot begin progress transaction: {error}"))?;
+        for event in events {
+            transaction
+                .execute(
                 "INSERT INTO events (request_id, sequence, elapsed_ms, kind, phase, message, percent) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![event.run, i64::from(event.seq), i64::try_from(event.elapsed_ms).unwrap_or(i64::MAX), event.kind.as_str(), event.phase, event.message, event.percent.map(i64::from)],
             )
             .map_err(|error| format!("cannot record progress event: {error}"))?;
+        }
+        transaction
+            .commit()
+            .map_err(|error| format!("cannot commit progress events: {error}"))?;
         Ok(())
     }
 
@@ -445,6 +471,9 @@ impl Evidence {
             )
             .map_err(|error| error.to_string())?;
         if changed == 1 {
+            self.connection
+                .execute("DELETE FROM operation_cache WHERE task_id=?1", [task_id])
+                .map_err(|error| error.to_string())?;
             Ok(())
         } else {
             Err(format!(
@@ -1139,6 +1168,48 @@ mod tests {
             .unwrap());
         assert!(!evidence
             .has_cached_operation("task-b", "check.one", "fingerprint-a")
+            .unwrap());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn closing_task_prunes_cache_and_request_timing_includes_bootstrap() {
+        let root = temporary_root("cache-pruning-and-timing");
+        let _ = fs::remove_dir_all(&root);
+        let evidence = Evidence::open_at(&root).unwrap();
+        evidence
+            .save_task_baseline("task-timed", Path::new("/tmp/worktree"), &(), false)
+            .unwrap();
+        evidence
+            .cache_operation("task-timed", "check.one", "fingerprint")
+            .unwrap();
+
+        let request = RawRequest::capture([OsString::from("agent-cli"), OsString::from("check")]);
+        thread::sleep(std::time::Duration::from_millis(5));
+        evidence.begin_request(&request).unwrap();
+        evidence
+            .record_intent(
+                &request.id,
+                &Intent::Check {
+                    scope: crate::model::Scope::WorkingTree,
+                },
+            )
+            .unwrap();
+        evidence.finish(&request.id, Outcome::Passed).unwrap();
+        let (bootstrap_ms, execution_ms): (i64, i64) = evidence
+            .connection
+            .query_row(
+                "SELECT bootstrap_ms, execution_ms FROM requests WHERE id=?1",
+                [&request.id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert!(bootstrap_ms >= 5);
+        assert!(execution_ms >= 0);
+
+        evidence.close_task("task-timed", "abc123").unwrap();
+        assert!(!evidence
+            .has_cached_operation("task-timed", "check.one", "fingerprint")
             .unwrap());
         fs::remove_dir_all(root).unwrap();
     }

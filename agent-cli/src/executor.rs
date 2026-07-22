@@ -685,7 +685,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Arc;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
     static TEST_NONCE: AtomicU64 = AtomicU64::new(0);
 
@@ -735,6 +735,8 @@ mod tests {
         let request = RawRequest {
             id: "test-run".into(),
             args: vec!["agent-cli".into(), "check".into()],
+            started_ms: now_ms(),
+            started: Instant::now(),
         };
         evidence.begin_request(&request).unwrap();
         evidence
@@ -901,6 +903,8 @@ mod tests {
         let request = RawRequest {
             id: "risk-run".into(),
             args: vec!["agent-cli".into(), "check".into()],
+            started_ms: now_ms(),
+            started: Instant::now(),
         };
         evidence.begin_request(&request).unwrap();
         let mut operation = test_operation(&cargo);

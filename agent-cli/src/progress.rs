@@ -79,18 +79,30 @@ pub struct Reporter<'a> {
     started: Instant,
     sequence: u32,
     gate: ProgressGate,
+    pending: Vec<ProgressEvent>,
 }
 
 impl<'a> Reporter<'a> {
     #[must_use]
     pub fn new(evidence: &'a Evidence, output: OutputFormat, run: &'a str) -> Self {
+        Self::new_at(evidence, output, run, Instant::now())
+    }
+
+    #[must_use]
+    pub fn new_at(
+        evidence: &'a Evidence,
+        output: OutputFormat,
+        run: &'a str,
+        started: Instant,
+    ) -> Self {
         Self {
             evidence,
             output,
             run,
-            started: Instant::now(),
+            started,
             sequence: 0,
             gate: ProgressGate::default(),
+            pending: Vec::new(),
         }
     }
 
@@ -121,7 +133,11 @@ impl<'a> Reporter<'a> {
             percent: percent.map(|value| value.min(100)),
         };
         self.sequence = self.sequence.saturating_add(1);
-        self.evidence.record_event(&event)?;
+        self.pending.push(event.clone());
+        if kind != EventKind::Progress || self.pending.len() >= 4 {
+            self.evidence.record_events(&self.pending)?;
+            self.pending.clear();
+        }
         match self.output {
             OutputFormat::Ndjson => println!("{}", serde_json::to_string(&event).unwrap()),
             OutputFormat::Human

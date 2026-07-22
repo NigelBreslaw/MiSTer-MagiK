@@ -40,7 +40,7 @@ fn main() {
     evidence
         .record_intent(&raw.id, &intent)
         .unwrap_or_else(|error| fatal(&error));
-    let mut reporter = Reporter::new(&evidence, output, &raw.id);
+    let mut reporter = Reporter::new_at(&evidence, output, &raw.id, raw.started);
     reporter
         .emit(EventKind::Started, "request", "Accepted request", None)
         .unwrap_or_else(|error| fatal(&error));
