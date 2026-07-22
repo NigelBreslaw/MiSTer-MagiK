@@ -22,3 +22,9 @@ does not replace the live file with the backup.
 Installation, 31 kHz output, and full uninstall require an explicit Down event
 from the keyboard or joystick. A/Enter selects ordinary menu entries and may
 confirm a normal reboot, but it cannot approve those safety boundaries.
+
+If the Scripts entrypoint reports a missing or corrupt manager, do not edit
+`MiSTer.ini` or `inittab` by hand. Re-run Downloader or reinstall the complete
+MiSTer MagiK package so `mister-magik-manager` and `platform-v2.manifest` come
+from the same release, then run the entrypoint again. The bootstrap refuses to
+run a partial or mismatched package and leaves boot configuration unchanged.

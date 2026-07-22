@@ -16,6 +16,9 @@ fail() {
 
 [ -r "$MANIFEST" ] || fail "missing $MANIFEST"
 [ -f "$MANAGER" ] || fail "missing $MANAGER"
+for tool in grep sed sha256sum awk chmod env; do
+  command -v "$tool" >/dev/null 2>&1 || fail "required tool is unavailable: $tool"
+done
 
 manifest_value() {
   key="$1"

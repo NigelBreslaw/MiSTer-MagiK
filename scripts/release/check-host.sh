@@ -33,6 +33,8 @@ scripts/agent build runtime-device
 scripts/agent build manager-device
 apps/mister/scripts/check-arm-shared-libs.sh \
   "$BIN"
+apps/mister/scripts/check-arm-shared-libs.sh \
+  "$MANAGER"
 
 rm -rf "$WORK"
 mkdir -p "$WORK"
@@ -123,6 +125,7 @@ ZIP="$(scripts/package-distribution.sh \
   --platform-bundle-manifest "$WORK/platform-bundle-v0.1.json")"
 
 ZIP="$ZIP" python3 - <<'PY'
+import hashlib
 import os
 import sys
 import zipfile
@@ -144,9 +147,25 @@ required = {
 }
 with zipfile.ZipFile(os.environ["ZIP"]) as archive:
     names = set(archive.namelist())
+    manager = archive.read("mister-magik/mister-magik-manager")
+    manager_mode = archive.getinfo("mister-magik/mister-magik-manager").external_attr >> 16
+    manifest = dict(
+        line.split("=", 1)
+        for line in archive.read("mister-magik/platform-v2.manifest").decode().splitlines()
+        if line and not line.startswith("#")
+    )
 missing = sorted(required - names)
 if missing:
     print(f"package validation failed: missing {', '.join(missing)}", file=sys.stderr)
+    raise SystemExit(1)
+if manager_mode & 0o111 == 0:
+    print("package validation failed: manager is not executable", file=sys.stderr)
+    raise SystemExit(1)
+if manifest.get("manager_path") != "/media/fat/mister-magik/mister-magik-manager":
+    print("package validation failed: manager path is not canonical", file=sys.stderr)
+    raise SystemExit(1)
+if hashlib.sha256(manager).hexdigest() != manifest.get("manager_sha256"):
+    print("package validation failed: manager hash does not match manifest", file=sys.stderr)
     raise SystemExit(1)
 forbidden = sorted(
     name for name in names

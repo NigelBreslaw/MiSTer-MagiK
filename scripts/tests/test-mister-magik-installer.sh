@@ -59,6 +59,43 @@ grep -q 'Press Down on the keyboard or joystick' "$TMP/enter.log"
 test "$(sha256sum "$FAT/MiSTer.ini")" = "$before_ini"
 test "$(sha256sum "$TMP/inittab")" = "$before_inittab"
 
+# Malformed, duplicate, and noncanonical bootstrap fields are refused byte-identically.
+cp "$APP/platform-v2.manifest" "$TMP/manifest.good"
+for case_name in malformed duplicate noncanonical; do
+  cp "$TMP/manifest.good" "$APP/platform-v2.manifest"
+  case "$case_name" in
+    malformed)
+      sed -i.bak 's/^manager_sha256=.*/manager_sha256=UPPERCASE/' "$APP/platform-v2.manifest"
+      ;;
+    duplicate)
+      printf 'manager_path=/media/fat/mister-magik/mister-magik-manager\n' >>"$APP/platform-v2.manifest"
+      ;;
+    noncanonical)
+      sed -i.bak 's#^manager_path=.*#manager_path=/media/fat/mister-magik/../mister-magik/mister-magik-manager#' "$APP/platform-v2.manifest"
+      ;;
+  esac
+  if MISTER_MAGIK_TEST_KEYS=down run_manager install >"$TMP/bootstrap-$case_name.log" 2>&1; then
+    echo "$case_name manifest unexpectedly ran" >&2
+    exit 1
+  fi
+  test "$(sha256sum "$FAT/MiSTer.ini")" = "$before_ini"
+  test "$(sha256sum "$TMP/inittab")" = "$before_inittab"
+done
+cp "$TMP/manifest.good" "$APP/platform-v2.manifest"
+
+# The bootstrap reports a missing hashing tool and refuses to run the manager.
+mkdir "$TMP/bootstrap-bin"
+for tool in grep sed awk chmod env; do
+  ln -s "$(command -v "$tool")" "$TMP/bootstrap-bin/$tool"
+done
+if PATH="$TMP/bootstrap-bin" MISTER_MAGIK_TEST_KEYS=down run_manager install >"$TMP/missing-tool.log" 2>&1; then
+  echo "bootstrap unexpectedly ran without sha256sum" >&2
+  exit 1
+fi
+grep -q 'required tool is unavailable: sha256sum' "$TMP/missing-tool.log"
+test "$(sha256sum "$FAT/MiSTer.ini")" = "$before_ini"
+test "$(sha256sum "$TMP/inittab")" = "$before_inittab"
+
 # A 31 kHz mode has its own Down-only boundary after installation consent.
 if MISTER_MAGIK_TEST_OUTPUT_MODE=crt-480p60 MISTER_MAGIK_TEST_KEYS=down,enter \
     run_manager install >"$TMP/31khz-enter.log" 2>&1; then

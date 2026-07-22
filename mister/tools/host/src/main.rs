@@ -1183,7 +1183,7 @@ fn installed_platform_verify_command(layout: Layout) -> String {
         Layout::Public => ("/media/fat/mister-magik", "/media/fat/MiSTer_MagiK"),
     };
     format!(
-        "set -eu; root={root}; manifest=$root/platform-v2.manifest; test -s \"$manifest\"; test -x {main}; test -x \"$root/mister-magik-fb\"; test -r \"$root/mister_magik_scanout_slots.ko\"; test -r \"$root/fpga/menu-magik-vblank-latch.rbf\"; grep -qx 'format=mister-magik-platform-v2' \"$manifest\"; get() {{ sed -n \"s/^$1=//p\" \"$manifest\"; }}; test \"$(sha256sum {main} | awk '{{print $1}}')\" = \"$(get main_sha256)\"; test \"$(sha256sum \"$root/mister-magik-fb\" | awk '{{print $1}}')\" = \"$(get gui_sha256)\"; test \"$(sha256sum \"$root/mister_magik_scanout_slots.ko\" | awk '{{print $1}}')\" = \"$(get scanout_module_sha256)\"; test \"$(sha256sum \"$root/fpga/menu-magik-vblank-latch.rbf\" | awk '{{print $1}}')\" = \"$(get latch_rbf_sha256)\""
+        "set -eu; root={root}; manifest=$root/platform-v2.manifest; test -s \"$manifest\"; test -x {main}; test -x \"$root/mister-magik-fb\"; test -x \"$root/mister-magik-manager\"; test -r \"$root/mister_magik_scanout_slots.ko\"; test -r \"$root/fpga/menu-magik-vblank-latch.rbf\"; grep -qx 'format=mister-magik-platform-v2' \"$manifest\"; get() {{ sed -n \"s/^$1=//p\" \"$manifest\"; }}; test \"$(sha256sum {main} | awk '{{print $1}}')\" = \"$(get main_sha256)\"; test \"$(sha256sum \"$root/mister-magik-fb\" | awk '{{print $1}}')\" = \"$(get gui_sha256)\"; test \"$(sha256sum \"$root/mister-magik-manager\" | awk '{{print $1}}')\" = \"$(get manager_sha256)\"; test \"$(sha256sum \"$root/mister_magik_scanout_slots.ko\" | awk '{{print $1}}')\" = \"$(get scanout_module_sha256)\"; test \"$(sha256sum \"$root/fpga/menu-magik-vblank-latch.rbf\" | awk '{{print $1}}')\" = \"$(get latch_rbf_sha256)\""
     )
 }
 
@@ -2167,6 +2167,10 @@ const PLATFORM_DEPLOY_FILES: &[(&str, &str)] = &[
         "mister-magik-fb",
         "/media/fat/mister-magik-dev/mister-magik-fb",
     ),
+    (
+        "mister-magik-manager",
+        "/media/fat/mister-magik-dev/mister-magik-manager",
+    ),
     ("MiSTer_MagiKDev", "/media/fat/MiSTer_MagiKDev"),
     (
         "mister_magik_scanout_slots.ko",
@@ -2302,7 +2306,7 @@ impl PlatformDeployTransaction {
             sh(manifest)
         ));
         format!(
-            "set -eu; rm -f /media/fat/MiSTer.ini.platform-rollback; cp -p /media/fat/MiSTer.ini /media/fat/MiSTer.ini.platform-rollback; {verify} {backup} rollback() {{ {rollback} mv -f /media/fat/MiSTer.ini.platform-rollback /media/fat/MiSTer.ini 2>/dev/null || true; sync; }}; trap rollback EXIT INT TERM; {activate} chmod 755 /media/fat/MiSTer_MagiKDev /media/fat/mister-magik-dev/mister-magik-fb; sync; {safety} trap - EXIT INT TERM; sync",
+            "set -eu; rm -f /media/fat/MiSTer.ini.platform-rollback; cp -p /media/fat/MiSTer.ini /media/fat/MiSTer.ini.platform-rollback; {verify} {backup} rollback() {{ {rollback} mv -f /media/fat/MiSTer.ini.platform-rollback /media/fat/MiSTer.ini 2>/dev/null || true; sync; }}; trap rollback EXIT INT TERM; {activate} chmod 755 /media/fat/MiSTer_MagiKDev /media/fat/mister-magik-dev/mister-magik-fb /media/fat/mister-magik-dev/mister-magik-manager; sync; {safety} trap - EXIT INT TERM; sync",
             safety = platform_safety_script(),
         )
     }
@@ -7791,6 +7795,8 @@ H: Handlers=event3 js0"#
             let verify = installed_platform_verify_command(layout);
             assert!(verify.contains("platform-v2.manifest"));
             assert!(verify.contains("sha256sum"));
+            assert!(verify.contains("mister-magik-manager"));
+            assert!(verify.contains("manager_sha256"));
             assert!(verify.contains("scanout_module_sha256"));
             assert!(verify.contains("latch_rbf_sha256"));
         }

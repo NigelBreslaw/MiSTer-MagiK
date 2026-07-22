@@ -5,6 +5,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPOSITORY="$(cd "$HERE/../.." && pwd)"
 apple_container_cpus() { getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.logicalcpu; }
 apple_container_memory() { printf '8g\n'; }
 BIN="${1:-$HERE/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb}"
@@ -29,57 +30,44 @@ if command -v arm-linux-gnueabihf-readelf >/dev/null 2>&1; then
       | sort -Vu
   )"
 else
-  if [[ "$BIN" != "$HERE/"* ]]; then
-    echo "ERROR: binary must be under $HERE so the container helper can read it" >&2
+  if [[ "$BIN" != "$REPOSITORY/"* ]]; then
+    echo "ERROR: binary must be under $REPOSITORY so the container helper can read it" >&2
     exit 1
   fi
-  REL_BIN="/project/${BIN#"$HERE/"}"
+  REL_BIN="/project/${BIN#"$REPOSITORY/"}"
 
   if [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ] && command -v container >/dev/null 2>&1; then
     echo "==> using Apple-container helper image $APPLE_IMAGE"
     CONTAINER_CPUS="$(apple_container_cpus)"
     CONTAINER_MEMORY="$(apple_container_memory)"
     container build --arch arm64 --file "$HERE/Dockerfile.cross-armv7" --tag "$APPLE_IMAGE" "$HERE" >/dev/null
-    NEEDED="$(
+    INSPECTION="$(
       container run --arch arm64 --rm \
         --cpus "$CONTAINER_CPUS" \
         --memory "$CONTAINER_MEMORY" \
-        --volume "$HERE:/project:ro" \
-        --workdir /project \
+        --volume "$REPOSITORY:/project:ro" \
+        --workdir /project/apps/mister \
         "$APPLE_IMAGE" \
-        bash -lc "arm-linux-gnueabihf-readelf -d '$REL_BIN' | awk '/NEEDED/ { gsub(/[][]/, \"\", \$5); print \$5 }'"
+        bash -lc "set -e -o pipefail; arm-linux-gnueabihf-readelf -d '$REL_BIN' | awk '/NEEDED/ { gsub(/[][]/, \"\", \$5); print \"needed \" \$5 }'; arm-linux-gnueabihf-readelf --version-info '$REL_BIN' | grep -o 'GLIBC_[0-9.]*' | sort -Vu | sed 's/^/glibc /'"
     )"
-    GLIBC_VERSIONS="$(
-      container run --arch arm64 --rm \
-        --cpus "$CONTAINER_CPUS" \
-        --memory "$CONTAINER_MEMORY" \
-        --volume "$HERE:/project:ro" \
-        --workdir /project \
-        "$APPLE_IMAGE" \
-        bash -lc "arm-linux-gnueabihf-readelf --version-info '$REL_BIN' | grep -o 'GLIBC_[0-9.]*' | sort -Vu"
-    )"
+    NEEDED="$(printf '%s\n' "$INSPECTION" | sed -n 's/^needed //p')"
+    GLIBC_VERSIONS="$(printf '%s\n' "$INSPECTION" | sed -n 's/^glibc //p')"
   else
     export DOCKER_DEFAULT_PLATFORM="${DOCKER_DEFAULT_PLATFORM:-linux/amd64}"
     if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
       echo "==> building cross helper image $IMAGE"
       docker build -t "$IMAGE" -f "$HERE/Dockerfile.cross-armv7" "$HERE"
     fi
-    NEEDED="$(
+    INSPECTION="$(
       docker run --rm \
         --platform linux/amd64 \
-        -v "$HERE:/project:ro" \
-        -w /project \
+        -v "$REPOSITORY:/project:ro" \
+        -w /project/apps/mister \
         "$IMAGE" \
-        bash -lc "arm-linux-gnueabihf-readelf -d '$REL_BIN' | awk '/NEEDED/ { gsub(/[][]/, \"\", \$5); print \$5 }'"
+        bash -lc "set -e -o pipefail; arm-linux-gnueabihf-readelf -d '$REL_BIN' | awk '/NEEDED/ { gsub(/[][]/, \"\", \$5); print \"needed \" \$5 }'; arm-linux-gnueabihf-readelf --version-info '$REL_BIN' | grep -o 'GLIBC_[0-9.]*' | sort -Vu | sed 's/^/glibc /'"
     )"
-    GLIBC_VERSIONS="$(
-      docker run --rm \
-        --platform linux/amd64 \
-        -v "$HERE:/project:ro" \
-        -w /project \
-        "$IMAGE" \
-        bash -lc "arm-linux-gnueabihf-readelf --version-info '$REL_BIN' | grep -o 'GLIBC_[0-9.]*' | sort -Vu"
-    )"
+    NEEDED="$(printf '%s\n' "$INSPECTION" | sed -n 's/^needed //p')"
+    GLIBC_VERSIONS="$(printf '%s\n' "$INSPECTION" | sed -n 's/^glibc //p')"
   fi
 fi
 
