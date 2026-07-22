@@ -5,6 +5,8 @@ use crate::evidence::{now_ms, Evidence};
 use crate::model::{Operation, Outcome, Plan};
 use crate::progress::{EventKind, Reporter};
 use crate::workflow::{Event, Machine, State};
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::hash::{Hash, Hasher};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -47,6 +49,7 @@ pub fn execute_with_changes(
         crate::model::Intent::Verify { .. } => "verify",
         _ => "check",
     };
+    let fingerprints = FingerprintContext::new(repository, &plan.operations, changes)?;
     let mut machine = Machine::default();
     for operation in &plan.operations {
         crate::policy::authorize(operation, plan.intent.risk()).map_err(|rejection| {
@@ -61,7 +64,7 @@ pub fn execute_with_changes(
             reporter.emit(EventKind::Progress, command, state.label(), None)?;
         }
         let heartbeat = state.label();
-        let cache = operation_cache_key(repository, plan, operation, changes)?;
+        let cache = operation_cache_key(plan, operation, &fingerprints)?;
         if let Some((task_id, fingerprint)) = cache.as_ref() {
             if evidence.has_cached_operation(task_id, &operation.id, fingerprint)? {
                 evidence.record_reused_command(
@@ -95,10 +98,9 @@ pub fn execute_with_changes(
 }
 
 fn operation_cache_key(
-    repository: &Path,
     plan: &Plan,
     operation: &Operation,
-    changes: &[PathBuf],
+    fingerprints: &FingerprintContext,
 ) -> Result<Option<(String, String)>, String> {
     let task_id = match &plan.intent {
         crate::model::Intent::Check {
@@ -118,41 +120,131 @@ fn operation_cache_key(
     operation.program.hash(&mut hasher);
     operation.args.hash(&mut hasher);
     operation.inputs.hash(&mut hasher);
-    let toolchain = Command::new("rustc")
-        .arg("--version")
-        .output()
-        .ok()
-        .map(|output| output.stdout)
-        .unwrap_or_default();
-    toolchain.hash(&mut hasher);
-    for name in [
-        "RUSTFLAGS",
-        "CARGO_BUILD_TARGET",
-        "CC",
-        "CXX",
-        "PKG_CONFIG_PATH",
-        "MISTER_ARM_BUILD_BACKEND",
-    ] {
-        name.hash(&mut hasher);
-        std::env::var_os(name)
-            .map(|value| value.as_encoded_bytes().to_vec())
-            .unwrap_or_default()
-            .hash(&mut hasher);
-    }
-    for path in changes {
+    fingerprints.toolchain.hash(&mut hasher);
+    fingerprints.environment.hash(&mut hasher);
+    for (path, fingerprint) in &fingerprints.files {
         if !operation.inputs.iter().any(|input| path.starts_with(input)) {
             continue;
         }
         path.hash(&mut hasher);
-        match std::fs::read(repository.join(path)) {
-            Ok(bytes) => bytes.hash(&mut hasher),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                "deleted".hash(&mut hasher)
-            }
-            Err(error) => return Err(format!("cannot fingerprint {}: {error}", path.display())),
-        }
+        fingerprint.hash(&mut hasher);
     }
     Ok(Some((task_id.clone(), format!("{:016x}", hasher.finish()))))
+}
+
+#[derive(Debug)]
+struct FingerprintContext {
+    toolchain: Vec<u8>,
+    environment: Vec<(String, Vec<u8>)>,
+    files: BTreeMap<PathBuf, String>,
+}
+
+impl FingerprintContext {
+    fn new(
+        repository: &Path,
+        operations: &[Operation],
+        changes: &[PathBuf],
+    ) -> Result<Self, String> {
+        let toolchain = Command::new("rustc")
+            .arg("--version")
+            .output()
+            .ok()
+            .map(|output| output.stdout)
+            .unwrap_or_default();
+        let environment = [
+            "RUSTFLAGS",
+            "CARGO_BUILD_TARGET",
+            "CC",
+            "CXX",
+            "PKG_CONFIG_PATH",
+            "MISTER_ARM_BUILD_BACKEND",
+        ]
+        .into_iter()
+        .map(|name| {
+            (
+                name.to_owned(),
+                std::env::var_os(name)
+                    .map(|value| value.as_encoded_bytes().to_vec())
+                    .unwrap_or_default(),
+            )
+        })
+        .collect();
+        let mut files = BTreeMap::new();
+        for path in changes {
+            let relevant = operations.iter().any(|operation| {
+                is_cacheable(operation)
+                    && operation.inputs.iter().any(|input| path.starts_with(input))
+            });
+            if relevant {
+                files.insert(path.clone(), fingerprint_path(&repository.join(path))?);
+            }
+        }
+        Ok(Self {
+            toolchain,
+            environment,
+            files,
+        })
+    }
+}
+
+fn fingerprint_path(path: &Path) -> Result<String, String> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok("deleted".into()),
+        Err(error) => return Err(format!("cannot fingerprint {}: {error}", path.display())),
+    };
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    #[cfg(unix)]
+    let mode = metadata.permissions().mode();
+    #[cfg(not(unix))]
+    let mode = u32::from(metadata.permissions().readonly());
+    let (kind, digest) = if metadata.file_type().is_symlink() {
+        let target = std::fs::read_link(path)
+            .map_err(|error| format!("cannot fingerprint {}: {error}", path.display()))?;
+        (
+            "symlink",
+            Sha256::digest(target.as_os_str().as_encoded_bytes()).to_vec(),
+        )
+    } else if metadata.is_file() {
+        let mut file = File::open(path)
+            .map_err(|error| format!("cannot fingerprint {}: {error}", path.display()))?;
+        let mut hasher = Sha256::new();
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            let read = file
+                .read(&mut buffer)
+                .map_err(|error| format!("cannot fingerprint {}: {error}", path.display()))?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+        }
+        ("file", hasher.finalize().to_vec())
+    } else if metadata.is_dir() && path.join(".git").exists() {
+        let output = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(path)
+            .output()
+            .map_err(|error| format!("cannot fingerprint {}: {error}", path.display()))?;
+        if !output.status.success() {
+            return Err(format!("cannot fingerprint submodule {}", path.display()));
+        }
+        ("gitlink", output.stdout)
+    } else {
+        ("other", Vec::new())
+    };
+    Ok(format!("{kind}:{mode:o}:{}", hex(&digest)))
+}
+
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    bytes
+        .iter()
+        .fold(String::with_capacity(bytes.len() * 2), |mut out, byte| {
+            let _ = write!(out, "{byte:02x}");
+            out
+        })
 }
 
 fn is_cacheable(operation: &Operation) -> bool {
@@ -627,6 +719,27 @@ mod tests {
         assert!(!is_cacheable(&operation));
         operation.risk = Risk::DeviceWrite;
         assert!(!is_cacheable(&operation));
+    }
+
+    #[test]
+    fn fingerprint_context_hashes_overlapping_inputs_once_at_scale() {
+        let (root, cargo) = fake_cargo("#!/bin/sh\nexit 0\n");
+        let fixture = root.join("fixture");
+        fs::create_dir_all(&fixture).unwrap();
+        let mut changes = Vec::new();
+        for index in 0..1_000 {
+            let relative = PathBuf::from(format!("fixture/file-{index}.txt"));
+            fs::write(root.join(&relative), format!("value-{index}")).unwrap();
+            changes.push(relative);
+        }
+        let operations = vec![test_operation(&cargo), test_operation(&cargo)];
+        let context = FingerprintContext::new(&root, &operations, &changes).unwrap();
+        assert_eq!(context.files.len(), changes.len());
+        assert!(context
+            .files
+            .values()
+            .all(|fingerprint| fingerprint.starts_with("file:")));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
