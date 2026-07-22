@@ -71,6 +71,14 @@ impl ArcadeListGeometry {
         }
     }
 
+    pub(crate) fn normal_for_render_w(render_w: usize) -> Self {
+        Self {
+            x: ARCADE_LIST_X,
+            y: ARCADE_LIST_Y,
+            width: render_w.saturating_sub(ARCADE_LIST_X * 2).max(1),
+        }
+    }
+
     pub(crate) fn dirty_rect(self) -> DirtyRect {
         DirtyRect {
             x0: self.x,

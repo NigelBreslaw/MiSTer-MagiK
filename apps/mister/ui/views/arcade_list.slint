@@ -3,21 +3,22 @@
 
 import { MisterUi } from "../mister_window.slint";
 import { MisterBridge } from "../api.slint";
+import { CrtTheme, CrtHeader, CrtFooter } from "../components/crt_ui.slint";
 
 component SearchKey inherits Rectangle {
     in property <string> label;
     in property <bool> selected;
     in property <bool> keyboard-focused;
 
-    height: 42px * MisterUi.scale;
-    background: selected ? (keyboard-focused ? #06d6a0 : #2a2236) : #181220;
-    border-width: selected ? 2px : 1px;
-    border-color: selected ? (keyboard-focused ? #ffffff : #5c4a72) : #352848;
+    height: 32px;
+    background: selected && keyboard-focused ? CrtTheme.accent : CrtTheme.panel-alt;
+    border-width: 1px;
+    border-color: selected ? CrtTheme.accent : CrtTheme.border;
 
     Text {
         text: root.label;
-        color: root.selected && root.keyboard-focused ? #101420 : #e8e0f0;
-        font-size: (root.label == "CLEAR" || root.label == "SPACE") ? 7px * MisterUi.scale : 10px * MisterUi.scale;
+        color: root.selected && root.keyboard-focused ? CrtTheme.accent-text : CrtTheme.text;
+        font-size: MisterUi.body-font;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -26,14 +27,12 @@ component SearchKey inherits Rectangle {
 component SearchKeyboardRow inherits Rectangle {
     in property <int> start-index;
     in property <int> key-count;
-
-    height: 42px * MisterUi.scale;
-    background: transparent;
+    height: 32px;
 
     HorizontalLayout {
-        spacing: 6px * MisterUi.scale;
+        spacing: MisterUi.grid;
 
-        for key-offset in root.key-count: SearchKey {
+        for key-offset in root.key-count : SearchKey {
             horizontal-stretch: 1;
             label: MisterBridge.arcade-search-keys[root.start-index + key-offset];
             selected: MisterBridge.arcade-search-key-selected == root.start-index + key-offset;
@@ -43,75 +42,27 @@ component SearchKeyboardRow inherits Rectangle {
 }
 
 component SearchKeyboard inherits Rectangle {
-    property <int> s: MisterUi.scale;
-
-    background: #1a1424;
+    background: CrtTheme.background;
 
     VerticalLayout {
-        padding: 16px * root.s;
-        spacing: 10px * root.s;
-
-        Text {
-            text: "Search";
-            color: #e8e0f0;
-            font-size: 22px * root.s;
-        }
+        padding: MisterUi.grid;
+        spacing: MisterUi.grid;
 
         Rectangle {
-            height: 46px * root.s;
-            background: #120d1a;
-            border-width: MisterBridge.arcade-search-pane == 0 ? 2px : 1px;
-            border-color: MisterBridge.arcade-search-pane == 0 ? #06d6a0 : #352848;
+            height: 32px;
+            background: CrtTheme.panel-alt;
+            border-width: 1px;
+            border-color: MisterBridge.arcade-search-pane == 0 ? CrtTheme.accent : CrtTheme.border;
 
             Text {
-                x: 10px * root.s;
-                y: 0px;
-                width: parent.width - 20px * root.s;
+                x: MisterUi.grid;
+                width: parent.width - 16px;
                 height: parent.height;
                 text: MisterBridge.arcade-search-query == "" ? "_" : MisterBridge.arcade-search-query;
-                color: MisterBridge.arcade-search-query == "" ? #706080 : #d7eef8;
-                font-size: 12px * root.s;
+                color: CrtTheme.text;
+                font-size: MisterUi.body-font;
                 vertical-alignment: center;
                 overflow: elide;
-            }
-        }
-
-        Rectangle {
-            height: 30px * root.s;
-            background: MisterBridge.arcade-search-suggestion == "" ? #15101d : #211a2b;
-            border-width: 1px;
-            border-color: MisterBridge.arcade-search-suggestion == "" ? #2a2236 : #5c4a72;
-
-            HorizontalLayout {
-                padding-left: 10px * root.s;
-                padding-right: 10px * root.s;
-                spacing: 8px * root.s;
-
-                Rectangle {
-                    width: 26px * root.s;
-                    height: 18px * root.s;
-                    background: MisterBridge.arcade-search-suggestion == "" ? #20182a : #06d6a0;
-                    border-width: 1px;
-                    border-color: MisterBridge.arcade-search-suggestion == "" ? #352848 : #ffffff;
-
-                    Text {
-                        text: "Y";
-                        color: MisterBridge.arcade-search-suggestion == "" ? #706080 : #101420;
-                        font-size: 9px * root.s;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-                }
-
-                Text {
-                    text: MisterBridge.arcade-search-preparing ? "Preparing search…" :
-                        (MisterBridge.arcade-search-suggestion == "" ? "" : MisterBridge.arcade-search-suggestion);
-                    color: MisterBridge.arcade-search-suggestion == "" ? #706080 : #d7eef8;
-                    font-size: 11px * root.s;
-                    vertical-alignment: center;
-                    overflow: elide;
-                    horizontal-stretch: 1;
-                }
             }
         }
 
@@ -121,134 +72,61 @@ component SearchKeyboard inherits Rectangle {
         SearchKeyboardRow { start-index: 24; key-count: 8; }
         SearchKeyboardRow { start-index: 32; key-count: 8; }
         SearchKeyboardRow { start-index: 40; key-count: 3; }
-
-        Rectangle { vertical-stretch: 1; background: transparent; }
     }
 }
 
 export component ArcadeListScreen inherits Rectangle {
-    property <int> s: MisterUi.scale;
     property <int> count: MisterBridge.active-system-count;
-    property <bool> games-loading: MisterBridge.arcade-games-loading;
-    background: #1a1424;
+    background: CrtTheme.background;
 
-    HorizontalLayout {
+    CrtHeader {
+        x: MisterUi.grid;
+        y: MisterUi.grid;
+        width: parent.width - 16px;
+        title: MisterBridge.arcade-search-active ? "Search" : MisterBridge.active-system-title;
+        subtitle: "";
+        status: root.count + (MisterBridge.arcade-search-active ? " matches" : " games");
+    }
 
-        // Left half - scrollable game list or search keyboard
-        Rectangle {
-            horizontal-stretch: 1;
-            vertical-stretch: 1;
-            visible: MisterBridge.arcade-list-visible;
+    if MisterBridge.arcade-search-active : SearchKeyboard {
+        x: MisterUi.grid;
+        y: 48px;
+        width: MisterUi.compact-layout ? parent.width * 2 / 5 : parent.width / 2;
+        height: parent.height - 80px;
+    }
 
-            if MisterBridge.arcade-search-active : SearchKeyboard { }
+    Rectangle {
+        x: MisterBridge.arcade-list-x * 1px;
+        y: MisterBridge.arcade-list-y * 1px;
+        width: MisterBridge.arcade-list-width * 1px;
+        height: parent.height - self.y - 32px;
+        background: CrtTheme.panel-alt;
+        border-width: 1px;
+        border-color: MisterBridge.arcade-search-pane == 1 ? CrtTheme.accent : CrtTheme.border;
+        clip: true;
+    }
 
-            // Rust draws the animated game rows into this reserved viewport.
-            if !MisterBridge.arcade-search-active : Rectangle {
-                x: MisterBridge.arcade-list-x * 1px * s;
-                y: MisterBridge.arcade-list-y * 1px * s;
-                width: MisterBridge.arcade-list-width * 1px * s;
-                height: MisterBridge.arcade-list-height * 1px * s;
-                background: #120d1a;
-                border-width: 1px;
-                border-color: #352848;
-                clip: true;
-            }
+    if MisterBridge.arcade-games-loading : Rectangle {
+        x: MisterBridge.arcade-list-x * 1px;
+        y: MisterBridge.arcade-list-y * 1px;
+        width: MisterBridge.arcade-list-width * 1px;
+        height: parent.height - self.y - 32px;
+        background: CrtTheme.panel-alt;
 
-            if !MisterBridge.arcade-search-active : Rectangle {
-                x: MisterBridge.arcade-list-x * 1px * s;
-                y: MisterBridge.arcade-list-y * 1px * s;
-                width: MisterBridge.arcade-list-width * 1px * s;
-                height: MisterBridge.arcade-list-height * 1px * s;
-                visible: root.games-loading || self.opacity > 0;
-                opacity: root.games-loading ? 1 : 0;
-                background: #120d1a;
-                border-width: 1px;
-                border-color: #352848;
-                animate opacity { duration: 180ms; }
-
-                VerticalLayout {
-                    alignment: center;
-                    spacing: 10px * root.s;
-
-                    Rectangle {
-                        width: 180px * root.s;
-                        height: 4px * root.s;
-                        background: #1a1424;
-                        border-width: 1px;
-                        border-color: #5c4a72;
-                    }
-                }
-            }
-
-            if !MisterBridge.arcade-search-active : Rectangle {
-                x: MisterBridge.arcade-list-x * 1px * s;
-                y: (MisterBridge.arcade-list-y + MisterBridge.arcade-list-height + 4) * 1px * s;
-                width: MisterBridge.arcade-list-width * 1px * s;
-                height: parent.height > self.y + 8px * s ? parent.height - self.y - 8px * s : 0px;
-                background: #131018;
-                border-width: 1px;
-                border-color: #352848;
-            }
-        }
-
-        // Right half - screenshot for highlighted game or search results
-        Rectangle {
-            horizontal-stretch: 1;
-            vertical-stretch: 1;
-            background: #131018;
-
-            if MisterBridge.arcade-search-active : Rectangle {
-                x: 0px;
-                y: 0px;
-                width: parent.width;
-                height: parent.height;
-                background: #131018;
-
-                Text {
-                    x: 16px * root.s;
-                    y: 16px * root.s;
-                    text: count + " matches";
-                    color: MisterBridge.arcade-search-pane == 1 ? #06d6a0 : #706080;
-                    font-size: 12px * root.s;
-                }
-
-                Rectangle {
-                    x: (MisterBridge.arcade-list-x - MisterUi.window-width / 2) * 1px * root.s;
-                    y: MisterBridge.arcade-list-y * 1px * root.s;
-                    width: MisterBridge.arcade-list-width * 1px * root.s;
-                    height: MisterBridge.arcade-list-height * 1px * root.s;
-                    background: #120d1a;
-                    border-width: 1px;
-                    border-color: MisterBridge.arcade-search-pane == 1 ? #06d6a0 : #352848;
-                    clip: true;
-                }
-            }
+        Text {
+            text: "Loading list...";
+            color: CrtTheme.muted;
+            font-size: MisterUi.body-font;
+            horizontal-alignment: center;
+            vertical-alignment: center;
         }
     }
 
-    if !MisterBridge.arcade-search-active : Rectangle {
-        x: 0px;
-        y: 0px;
-        width: parent.width;
-        height: MisterBridge.arcade-list-y * 1px * root.s;
-        background: #1a1424;
-
-        Text {
-            x: 16px * root.s;
-            y: 16px * root.s;
-            width: parent.width - 32px * root.s;
-            text: MisterBridge.active-system-title;
-            color: #e8e0f0;
-            font-size: 24px * root.s;
-            overflow: elide;
-        }
-
-        Text {
-            x: 16px * root.s;
-            y: 44px * root.s;
-            text: root.count + " games";
-            color: #706080;
-            font-size: 8px * root.s;
-        }
+    CrtFooter {
+        x: MisterUi.grid;
+        y: parent.height - 32px;
+        width: parent.width - 16px;
+        left-hint: "A Launch   Y Search";
+        right-hint: "B Back   HOME Launcher";
     }
 }

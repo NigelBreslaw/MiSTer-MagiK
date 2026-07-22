@@ -4259,7 +4259,7 @@ pub(super) fn run_launcher_loop(
             arcade_list_renderer.set_geometry(if arcade_search_active {
                 ArcadeListGeometry::search_for_render_w(ui.render_w())
             } else {
-                ArcadeListGeometry::NORMAL
+                ArcadeListGeometry::normal_for_render_w(ui.render_w())
             });
             let force_arcade_redraw = arcade_list_needs_forced_redraw(
                 &arcade_list_renderer,
