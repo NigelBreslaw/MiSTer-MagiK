@@ -189,6 +189,7 @@ fn generate_token() -> Result<String> {
 fn build_agent() -> Result<PathBuf> {
     const TARGET: &str = "armv7-unknown-linux-gnueabihf";
     let repository = env::current_dir()?;
+    ensure_protocol_source_matches_cli(&repository)?;
     let path = repository
         .join("mister/tools/agent/target")
         .join(TARGET)
@@ -268,6 +269,39 @@ fn build_agent() -> Result<PathBuf> {
         return Err("agent build artifact is missing".into());
     }
     Ok(path)
+}
+
+fn ensure_protocol_source_matches_cli(repository: &Path) -> Result<()> {
+    let source = fs::read_to_string(repository.join("crates/agent-protocol/src/lib.rs"))?;
+    validate_protocol_source_identity(&source)
+}
+
+fn validate_protocol_source_identity(source: &str) -> Result<()> {
+    let source_agent = rust_u64_constant(source, "AGENT_VERSION")?;
+    let source_protocol = rust_u64_constant(source, "PROTOCOL_VERSION")?;
+    let cli_identity = (
+        agent_protocol::AGENT_VERSION,
+        agent_protocol::PROTOCOL_VERSION,
+    );
+    let source_identity = (source_agent, source_protocol);
+    if source_identity != cli_identity {
+        return Err(format!(
+            "mister CLI is stale relative to agent protocol source (cli={}.{}, source={}.{}); rebuild the CLI before agent bootstrap",
+            cli_identity.0, cli_identity.1, source_identity.0, source_identity.1
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn rust_u64_constant(source: &str, name: &str) -> Result<u64> {
+    let prefix = format!("pub const {name}: u64 = ");
+    source
+        .lines()
+        .find_map(|line| line.trim().strip_prefix(&prefix))
+        .and_then(|value| value.strip_suffix(';'))
+        .and_then(|value| value.parse().ok())
+        .ok_or_else(|| format!("agent protocol source is missing {name}").into())
 }
 
 fn run_agent_build_bounded(command: &mut Command) -> Result<()> {
@@ -753,6 +787,33 @@ mod tests {
             version_action(0, agent_protocol::PROTOCOL_VERSION + 1, false),
             VersionAction::RejectNewer
         );
+    }
+
+    #[test]
+    fn protocol_source_identity_parser_rejects_stale_cli_inputs() {
+        let current = format!(
+            "pub const AGENT_VERSION: u64 = {};\npub const PROTOCOL_VERSION: u64 = {};\n",
+            agent_protocol::AGENT_VERSION,
+            agent_protocol::PROTOCOL_VERSION
+        );
+        assert_eq!(
+            rust_u64_constant(&current, "AGENT_VERSION").unwrap(),
+            agent_protocol::AGENT_VERSION
+        );
+        assert_eq!(
+            rust_u64_constant(&current, "PROTOCOL_VERSION").unwrap(),
+            agent_protocol::PROTOCOL_VERSION
+        );
+        validate_protocol_source_identity(&current).unwrap();
+        let stale = format!(
+            "pub const AGENT_VERSION: u64 = {};\npub const PROTOCOL_VERSION: u64 = {};\n",
+            agent_protocol::AGENT_VERSION,
+            agent_protocol::PROTOCOL_VERSION + 1
+        );
+        assert!(validate_protocol_source_identity(&stale)
+            .unwrap_err()
+            .to_string()
+            .contains("mister CLI is stale"));
     }
 
     #[test]
