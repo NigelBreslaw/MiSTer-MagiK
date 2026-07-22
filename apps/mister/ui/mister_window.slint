@@ -7,6 +7,10 @@ export global MisterUi {
     in-out property <int> scale: 1;
     in-out property <int> window-width: 960;
     in-out property <int> window-height: 540;
+    out property <bool> compact-layout: window-width * 3 <= window-height * 4;
+    out property <length> grid: 8px;
+    out property <length> body-font: 8px;
+    out property <length> heading-font: 16px;
 }
 
 export component MisterWindow inherits Window {

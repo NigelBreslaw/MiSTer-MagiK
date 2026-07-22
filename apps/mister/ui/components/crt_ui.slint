@@ -1,0 +1,129 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+import { MisterUi } from "../mister_window.slint";
+
+export global CrtTheme {
+    in-out property <color> background: #080b12;
+    in-out property <color> panel: #101827;
+    in-out property <color> panel-alt: #14152a;
+    in-out property <color> border: #5c4a72;
+    in-out property <color> text: #e8e0f0;
+    in-out property <color> muted: #9080a8;
+    in-out property <color> accent: #06d6a0;
+    in-out property <color> accent-text: #08131c;
+    in-out property <color> warning: #ffd166;
+    in-out property <color> danger: #ff5d73;
+}
+
+export component CrtHeader inherits Rectangle {
+    in property <string> title;
+    in property <string> status;
+    in property <string> subtitle;
+
+    height: root.subtitle == "" ? 32px : 40px;
+    background: CrtTheme.panel;
+    border-width: 1px;
+    border-color: CrtTheme.border;
+
+    HorizontalLayout {
+        padding-left: MisterUi.grid;
+        padding-right: MisterUi.grid;
+        spacing: MisterUi.grid;
+        cross-axis-alignment: center;
+
+        VerticalLayout {
+            spacing: 0px;
+            horizontal-stretch: 1;
+
+            Text {
+                text: root.title;
+                color: CrtTheme.text;
+                font-size: MisterUi.heading-font;
+                overflow: elide;
+            }
+
+            if root.subtitle != "" : Text {
+                text: root.subtitle;
+                color: CrtTheme.warning;
+                font-size: MisterUi.body-font;
+                overflow: elide;
+            }
+        }
+
+        Text {
+            text: root.status;
+            color: CrtTheme.text;
+            font-size: MisterUi.body-font;
+            horizontal-alignment: right;
+        }
+    }
+}
+
+export component CrtFooter inherits Rectangle {
+    in property <string> left-hint;
+    in property <string> right-hint;
+
+    height: 24px;
+    background: CrtTheme.background;
+    border-width: 1px;
+    border-color: CrtTheme.border;
+
+    HorizontalLayout {
+        padding-left: MisterUi.grid;
+        padding-right: MisterUi.grid;
+        spacing: MisterUi.grid;
+        cross-axis-alignment: center;
+
+        Text {
+            text: root.left-hint;
+            color: CrtTheme.muted;
+            font-size: MisterUi.body-font;
+            horizontal-stretch: 1;
+        }
+
+        Text {
+            text: root.right-hint;
+            color: CrtTheme.muted;
+            font-size: MisterUi.body-font;
+            horizontal-alignment: right;
+        }
+    }
+}
+
+export component CrtMenuRow inherits Rectangle {
+    in property <string> label;
+    in property <string> detail;
+    in property <bool> focused;
+    in property <bool> enabled: true;
+
+    height: MisterUi.compact-layout ? 32px : 48px;
+    background: root.focused ? CrtTheme.accent : CrtTheme.panel-alt;
+    border-width: 1px;
+    border-color: root.focused ? CrtTheme.accent : CrtTheme.border;
+
+    HorizontalLayout {
+        padding-left: MisterUi.grid;
+        padding-right: MisterUi.grid;
+        spacing: MisterUi.grid;
+        cross-axis-alignment: center;
+
+        Text {
+            text: (root.focused ? "> " : "  ") + root.label;
+            color: !root.enabled ? CrtTheme.muted
+                : root.focused ? CrtTheme.accent-text : CrtTheme.text;
+            font-size: MisterUi.body-font;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+
+        Text {
+            text: root.detail;
+            color: !root.enabled ? CrtTheme.muted
+                : root.focused ? CrtTheme.accent-text : CrtTheme.muted;
+            font-size: MisterUi.body-font;
+            horizontal-alignment: right;
+            overflow: elide;
+        }
+    }
+}
