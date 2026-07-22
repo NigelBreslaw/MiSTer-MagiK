@@ -13,7 +13,7 @@ MANIFEST = ROOT / "apps/mister/Cargo.toml"
 OUTPUT = ROOT / "apps/mister/licenses/RUST-LIBRARIES.txt"
 FFMPEG_OUTPUT = ROOT / "apps/mister/licenses/FFMPEG.txt"
 FONT_OUTPUT = ROOT / "apps/mister/licenses/PRESS-START-2P.txt"
-FFMPEG_BUILD_SCRIPT = ROOT / "apps/mister/scripts/build-minimal-ffmpeg.sh"
+FFMPEG_BUILD_SOURCE = ROOT / "agent-cli/src/build.rs"
 FONT_LICENSE = ROOT / "apps/mister/ui/fonts/PressStart2P-Regular.ttf.license"
 
 
@@ -137,7 +137,7 @@ def main():
     )
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT.write_text(header + inventory + "\n\n" + texts + "\n")
-    configure = FFMPEG_BUILD_SCRIPT.read_text()
+    configure = FFMPEG_BUILD_SOURCE.read_text()
     for required in (
         "--disable-autodetect",
         "--disable-everything",

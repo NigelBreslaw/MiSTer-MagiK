@@ -47,7 +47,7 @@ MiSTer MagiK source (including build and installation scripts):
 FFmpeg 8.1.2 source, used by this UI build:
   https://github.com/FFmpeg/FFmpeg/tree/n8.1.2
 The exact configure flags and cross-build procedure are in
-apps/mister/scripts/build-minimal-ffmpeg.sh at the source revision above. The
+agent-cli/src/build.rs at the source revision above. The
 MiSTer MagiK source, Cargo.lock, and build scripts are the complete source
 needed to rebuild the application and relink it with a modified FFmpeg build.
 EOF

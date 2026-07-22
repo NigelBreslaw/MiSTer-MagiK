@@ -117,7 +117,6 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "agent-cli/src/build.rs",
         "apps/mister/Cross.toml",
         "apps/mister/Dockerfile.cross-armv7",
-        "apps/mister/scripts/build-minimal-ffmpeg.sh",
     ),
     "agent_target": (
         "apps/mister/rust-toolchain.toml",
@@ -134,7 +133,6 @@ GROUPS: dict[str, tuple[str, ...]] = {
     "ffmpeg": (
         "apps/mister/Cross.toml",
         "apps/mister/Dockerfile.cross-armv7",
-        "apps/mister/scripts/build-minimal-ffmpeg.sh",
     ),
 }
 

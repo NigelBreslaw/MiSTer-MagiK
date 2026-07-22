@@ -403,12 +403,7 @@ impl<'a> ProcessBuildActions<'a> {
 
     fn compile(&self) -> AgentResult<()> {
         if self.spec.target == BuildTarget::Runtime && self.spec.mode != BuildMode::CheckLibrary {
-            let mut ffmpeg = Command::new(
-                self.repository
-                    .join("apps/mister/scripts/build-minimal-ffmpeg.sh"),
-            );
-            ffmpeg.current_dir(self.repository.join("apps/mister"));
-            run_bounded(&mut ffmpeg, BUILD_DEADLINE)?;
+            build_minimal_ffmpeg(self.repository, self.backend)?;
         }
         match self.backend {
             BuildBackend::AppleContainer => self.compile_in_apple_container(),
@@ -571,6 +566,163 @@ impl<'a> ProcessBuildActions<'a> {
         .map_err(|error| format!("cannot write build feature identity: {error}"))?;
         Ok(())
     }
+}
+
+fn build_minimal_ffmpeg(repository: &Path, backend: BuildBackend) -> AgentResult<()> {
+    const VERSION: &str = "8.1.2";
+    const MODE: &str = "video-fast-noswscale";
+    let app = repository.join("apps/mister");
+    let work = app.join("target/ffmpeg-minimal/armv7");
+    let source = work.join(format!("ffmpeg-{VERSION}"));
+    let dist = work.join("dist");
+    let required = [
+        format!(".mister-minimal-ffmpeg-{VERSION}-h264-aac-s16le-swresample-{MODE}-cortex-a9-o3"),
+        "include/libavcodec/avcodec.h".into(),
+        "include/libavcodec/version_major.h".into(),
+        "include/libavformat/avformat.h".into(),
+        "include/libavutil/avutil.h".into(),
+        "include/libswresample/swresample.h".into(),
+        "lib/libavcodec.a".into(),
+        "lib/libavformat.a".into(),
+        "lib/libavutil.a".into(),
+        "lib/libswresample.a".into(),
+        "lib/pkgconfig/libavcodec.pc".into(),
+        "lib/pkgconfig/libswresample.pc".into(),
+    ];
+    if required.iter().all(|name| dist.join(name).is_file()) {
+        return verify_minimal_ffmpeg(&source, &dist);
+    }
+    if dist.exists() {
+        std::fs::remove_dir_all(&dist)
+            .map_err(|error| format!("cannot replace incomplete FFmpeg cache: {error}"))?;
+    }
+    std::fs::create_dir_all(&work)
+        .map_err(|error| format!("cannot create FFmpeg workspace: {error}"))?;
+    if !source.join(".git").is_dir() {
+        if source.exists() {
+            std::fs::remove_dir_all(&source)
+                .map_err(|error| format!("cannot replace FFmpeg source: {error}"))?;
+        }
+        let mut clone = Command::new("git");
+        clone
+            .args([
+                "clone",
+                "--depth=1",
+                "-b",
+                &format!("n{VERSION}"),
+                "https://github.com/FFmpeg/FFmpeg",
+            ])
+            .arg(&source);
+        run_bounded(&mut clone, BUILD_DEADLINE)?;
+    }
+    let cpus = std::thread::available_parallelism()
+        .map_err(|error| format!("cannot detect online CPUs: {error}"))?
+        .get()
+        .to_string();
+    let configure = r#"rm -rf ../dist
+./configure --prefix=/project/apps/mister/target/ffmpeg-minimal/armv7/dist --cross-prefix=arm-linux-gnueabihf- --arch=arm --cpu=cortex-a9 --target-os=linux --enable-cross-compile --extra-cflags='-O3 -mcpu=cortex-a9 -mfpu=neon-vfpv3 -mfloat-abi=hard' --extra-cxxflags='-O3 -mcpu=cortex-a9 -mfpu=neon-vfpv3 -mfloat-abi=hard' --enable-static --disable-shared --enable-pic --disable-autodetect --disable-programs --disable-doc --disable-debug --enable-stripping --disable-everything --disable-avdevice --disable-avfilter --enable-swresample --enable-avcodec --enable-avformat --enable-avutil --disable-swscale --enable-decoder=h264 --enable-decoder=aac --enable-decoder=pcm_s16le --enable-parser=aac --enable-parser=h264 --enable-demuxer=mov --enable-protocol=file
+grep -q '^#define CONFIG_GPL 0$' config.h && grep -q '^#define CONFIG_VERSION3 0$' config.h && grep -q '^#define CONFIG_NONFREE 0$' config.h
+make install"#;
+    let mut runner = match backend {
+        BuildBackend::AppleContainer => {
+            prepare_container(
+                repository,
+                &PathBuf::from("/private/tmp/mister-magik-apple-container-target"),
+            )?;
+            let mut command = Command::new("container");
+            command
+                .current_dir(repository)
+                .args([
+                    "run", "--arch", "arm64", "--rm", "--cpus", &cpus, "--memory", "8g", "--env",
+                ])
+                .arg(format!("MAKEFLAGS=-j{cpus}"))
+                .arg("--volume")
+                .arg(format!("{}:/project", repository.display()))
+                .args([
+                    "--workdir",
+                    &format!("/project/apps/mister/target/ffmpeg-minimal/armv7/ffmpeg-{VERSION}"),
+                    IMAGE,
+                    "sh",
+                    "-ec",
+                    configure,
+                ]);
+            command
+        }
+        BuildBackend::Cross => {
+            let cross = std::fs::read_to_string(app.join("Cross.toml"))
+                .map_err(|error| format!("cannot read Cross.toml: {error}"))?;
+            let image = cross
+                .lines()
+                .find_map(|line| {
+                    line.trim()
+                        .strip_prefix("image = \"")
+                        .and_then(|value| value.strip_suffix('"'))
+                })
+                .ok_or("Cross.toml has no target image")?;
+            let mut command = Command::new("docker");
+            let uid = numeric_identity("-u")?;
+            let gid = numeric_identity("-g")?;
+            command
+                .current_dir(repository)
+                .args(["run", "--rm", "--platform", "linux/amd64", "--user"])
+                .arg(format!("{uid}:{gid}"))
+                .arg("-e")
+                .arg(format!("MAKEFLAGS=-j{cpus}"))
+                .arg("-v")
+                .arg(format!("{}:/project", repository.display()))
+                .args([
+                    "-w",
+                    &format!("/project/apps/mister/target/ffmpeg-minimal/armv7/ffmpeg-{VERSION}"),
+                    image,
+                    "sh",
+                    "-ec",
+                    configure,
+                ]);
+            command
+        }
+    };
+    run_bounded(&mut runner, BUILD_DEADLINE)?;
+    std::fs::write(dist.join(&required[0]), b"")
+        .map_err(|error| format!("cannot stamp FFmpeg cache: {error}"))?;
+    verify_minimal_ffmpeg(&source, &dist)
+}
+
+fn numeric_identity(flag: &str) -> AgentResult<String> {
+    let output = Command::new("id")
+        .arg(flag)
+        .output()
+        .map_err(|error| format!("cannot determine host identity: {error}"))?;
+    if !output.status.success() {
+        return Err("cannot determine host identity".into());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+fn verify_minimal_ffmpeg(source: &Path, dist: &Path) -> AgentResult<()> {
+    let config = std::fs::read_to_string(source.join("config.h"))
+        .map_err(|error| format!("cannot verify FFmpeg config: {error}"))?;
+    for required in [
+        "#define ARCH_ARM 1",
+        "#define HAVE_NEON 1",
+        "#define CONFIG_RUNTIME_CPUDETECT 1",
+    ] {
+        if !config.lines().any(|line| line == required) {
+            return Err(format!("FFmpeg configuration is missing {required}").into());
+        }
+    }
+    let output = Command::new("ar")
+        .arg("t")
+        .arg(dist.join("lib/libavcodec.a"))
+        .output()
+        .map_err(|error| format!("cannot inspect FFmpeg archive: {error}"))?;
+    if !output.status.success()
+        || !String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .any(|line| line.contains("neon") && line.contains("h264"))
+    {
+        return Err("FFmpeg archive does not contain H.264 NEON objects".into());
+    }
+    Ok(())
 }
 
 impl BuildActions for ProcessBuildActions<'_> {
