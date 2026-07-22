@@ -401,4 +401,50 @@ mod tests {
             Err(Error::TooLarge { .. })
         ));
     }
+
+    #[test]
+    fn every_conflicting_duplicate_is_made_inactive_without_losing_text() {
+        let mut input = String::from("[Menu] ; first\n");
+        for index in 0..64 {
+            input.push_str(&format!(" DiReCt_ViDeO = {index} ; user note {index}\n"));
+            if index % 8 == 7 {
+                input.push_str("[Other]\nuntouched=yes\n[menu]\n");
+            }
+        }
+        let mut document = Document::parse(input.as_bytes()).unwrap();
+        document.set("Menu", "direct_video", "2");
+        let output = String::from_utf8(document.render()).unwrap();
+        assert_eq!(document.active_count("Menu", "direct_video"), 1);
+        assert_eq!(
+            document.effective_value("Menu", "direct_video").as_deref(),
+            Some("2")
+        );
+        for index in 0..64 {
+            assert!(output.contains(&format!("user note {index}")));
+        }
+        assert_eq!(output.matches("untouched=yes").count(), 8);
+    }
+
+    #[test]
+    fn malformed_headers_and_commented_assignments_are_never_claimed() {
+        let input = b"[MiSTer\nmain=decoy\n; [MiSTer]\nmain=also-decoy\n[MiSTer] ; real\n#main=commented\nmain=MiSTer\n";
+        let mut document = Document::parse(input).unwrap();
+        document.set("MiSTer", "main", "MiSTer_MagiK");
+        let output = String::from_utf8(document.render()).unwrap();
+        assert!(output.contains("main=decoy"));
+        assert!(output.contains("main=also-decoy"));
+        assert!(output.contains("#main=commented"));
+        assert!(output.ends_with("main=MiSTer_MagiK\n"));
+    }
+
+    #[test]
+    fn no_final_newline_is_preserved_across_idempotent_edits() {
+        let mut document = Document::parse(b"[Menu]\ndirect_video=0").unwrap();
+        document.set("Menu", "direct_video", "2");
+        let once = document.render();
+        assert!(!once.ends_with(b"\n"));
+        let mut document = Document::parse(&once).unwrap();
+        document.set("Menu", "direct_video", "2");
+        assert_eq!(document.render(), once);
+    }
 }

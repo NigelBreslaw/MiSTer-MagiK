@@ -684,4 +684,31 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn pending_file_collision_cannot_damage_the_original() {
+        let root = env::temp_dir().join(format!("mister-manager-collision-{}", process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let target = root.join("MiSTer.ini");
+        fs::write(&target, b"original\n").unwrap();
+        let pending = root.join(format!(".MiSTer.ini.new.{}", process::id()));
+        fs::write(&pending, b"hostile pending\n").unwrap();
+
+        assert!(atomic_write(&target, b"replacement\n").is_err());
+        assert_eq!(fs::read(&target).unwrap(), b"original\n");
+        assert!(!pending.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn manifest_parser_rejects_duplicate_fields() {
+        let root = env::temp_dir().join(format!("mister-manager-manifest-{}", process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let manifest = root.join("platform-v2.manifest");
+        fs::write(&manifest, b"format=one\nformat=two\n").unwrap();
+        assert!(parse_manifest(&manifest).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
 }
