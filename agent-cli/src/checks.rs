@@ -476,19 +476,7 @@ fn check_shell_ownership(repository: &Path) -> Result<(), String> {
             return Err(format!("retired_entrypoint_exists: {path}"));
         }
     }
-    let mut files = Vec::new();
-    for root in [
-        "AGENTS.md",
-        "agent-cli",
-        "apps",
-        "docs",
-        "documentation",
-        "mister",
-        "scripts",
-        ".github",
-    ] {
-        collect_files(&repository.join(root), &mut files)?;
-    }
+    let files = repository_files(repository)?;
     let exclusions: BTreeSet<&str> = [
         "agent-cli/src/checks.rs",
         "docs/agents/script-deletion-ledger.md",
@@ -496,17 +484,14 @@ fn check_shell_ownership(repository: &Path) -> Result<(), String> {
     .into_iter()
     .collect();
     for path in files {
-        let relative = path
-            .strip_prefix(repository)
-            .unwrap_or(&path)
-            .to_string_lossy();
+        let relative = path.to_string_lossy();
         if exclusions.contains(relative.as_ref())
             || relative.starts_with("docs/performance-review-")
             || relative.starts_with("docs/2026-")
         {
             continue;
         }
-        let Ok(text) = fs::read_to_string(&path) else {
+        let Ok(text) = fs::read_to_string(repository.join(&path)) else {
             continue;
         };
         for retired in RETIRED {
@@ -520,27 +505,27 @@ fn check_shell_ownership(repository: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn collect_files(path: &Path, output: &mut Vec<PathBuf>) -> Result<(), String> {
-    if path.is_file() {
-        output.push(path.to_owned());
-        return Ok(());
+fn repository_files(repository: &Path) -> Result<Vec<PathBuf>, String> {
+    let output = Command::new("git")
+        .args([
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+        ])
+        .current_dir(repository)
+        .output()
+        .map_err(|error| format!("cannot enumerate policy files: {error}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
     }
-    for entry in
-        fs::read_dir(path).map_err(|error| format!("cannot scan {}: {error}", path.display()))?
-    {
-        let entry = entry.map_err(|error| error.to_string())?;
-        let path = entry.path();
-        if path.is_dir()
-            && matches!(
-                path.file_name().and_then(|name| name.to_str()),
-                Some("target" | "node_modules" | "build" | "dist")
-            )
-        {
-            continue;
-        }
-        collect_files(&path, output)?;
-    }
-    Ok(())
+    Ok(output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| PathBuf::from(String::from_utf8_lossy(path).into_owned()))
+        .collect())
 }
 
 fn read(repository: &Path, path: &str) -> Result<String, String> {
@@ -560,6 +545,7 @@ fn git_ignored(repository: &Path, path: &str) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn header_order_matches_platform_policy() {
@@ -571,5 +557,32 @@ mod tests {
             Path::new("mister/platform/kernel/scanout-slots/a.c"),
             "// SPDX-License-Identifier: GPL-3.0-or-later\n// Copyright (C) 2026 Nigel Breslaw\n"
         ));
+    }
+
+    #[test]
+    fn shell_policy_scans_tracked_and_untracked_but_not_ignored_files() {
+        let root = std::env::temp_dir().join(format!(
+            "agent-cli-shell-policy-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("target")).unwrap();
+        fs::write(root.join(".gitignore"), "target/\n").unwrap();
+        fs::write(root.join("target/generated.txt"), "scripts/run-rust.sh\n").unwrap();
+        assert!(Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&root)
+            .status()
+            .unwrap()
+            .success());
+        assert!(check_shell_ownership(&root).is_ok());
+
+        fs::write(root.join("contract.md"), "scripts/run-rust.sh\n").unwrap();
+        let error = check_shell_ownership(&root).unwrap_err();
+        assert!(error.contains("contract.md contains scripts/run-rust.sh"));
+        fs::remove_dir_all(root).unwrap();
     }
 }
