@@ -50,6 +50,47 @@ enum Action {
     Uninstall,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WriteStep {
+    BeforeCreate,
+    AfterWrite,
+    AfterFlush,
+    AfterPendingReadback,
+    AfterRename,
+    AfterFinalReadback,
+    AfterDirectorySync,
+}
+
+trait WriteFaults {
+    fn check(&mut self, _path: &Path, _step: WriteStep) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+struct NoWriteFaults;
+impl WriteFaults for NoWriteFaults {}
+
+struct PreparedFile {
+    path: PathBuf,
+    original: Option<Vec<u8>>,
+    replacement: Vec<u8>,
+}
+
+impl PreparedFile {
+    fn new(path: PathBuf, replacement: Vec<u8>) -> Result<Self> {
+        let original = if path.exists() {
+            Some(fs::read(&path)?)
+        } else {
+            None
+        };
+        Ok(Self {
+            path,
+            original,
+            replacement,
+        })
+    }
+}
+
 struct Paths {
     fat: PathBuf,
     inittab: PathBuf,
@@ -135,13 +176,20 @@ fn install(paths: &Paths) -> Result<()> {
     ensure_executable(paths.fat.join("MiSTer_MagiK"))?;
     ensure_executable(paths.app.join("mister-magik-fb"))?;
     ensure_executable(paths.app.join("mister-magik-manager"))?;
-    write_stock_inittab(paths)?;
-    mutate_ini(&paths.ini, |document| apply_install(document, mode))?;
-    atomic_write(
-        &paths.output_mode,
-        format!("{}\n", mode.as_str()).as_bytes(),
-    )?;
-    sync_storage(paths)?;
+    remount_root_writable(paths)?;
+    let ini = prepare_ini(&paths.ini, |document| apply_install(document, mode))?;
+    let inittab = prepare_stock_inittab(&paths.inittab)?;
+    let files = vec![
+        PreparedFile::new(paths.inittab.clone(), inittab)?,
+        PreparedFile::new(paths.ini.clone(), ini)?,
+        PreparedFile::new(
+            paths.output_mode.clone(),
+            format!("{}\n", mode.as_str()).into_bytes(),
+        )?,
+    ];
+    replace_transaction(paths, &files, &mut NoWriteFaults, || {
+        validate_install(paths, mode)
+    })?;
     println!("MiSTer MagiK: installed. Reboot to start MiSTer MagiK.");
     offer_reboot(paths)
 }
@@ -163,20 +211,21 @@ fn uninstall(paths: &Paths) -> Result<()> {
 
 fn restore_stock(paths: &Paths) -> Result<()> {
     snapshot(paths)?;
-    write_stock_inittab(paths)?;
+    remount_root_writable(paths)?;
     let backup = if paths.backup.is_file() {
         Some(Document::parse(&fs::read(&paths.backup)?)?)
     } else {
         None
     };
-    mutate_ini(&paths.ini, |document| {
+    let ini = prepare_ini(&paths.ini, |document| {
         apply_restore(document, backup.as_ref())
     })?;
-    sync_storage(paths)?;
-    if selects_magik(&paths.ini)? {
-        return Err("MiSTer.ini still selects MiSTer MagiK".into());
-    }
-    verify_stock_inittab(&paths.inittab)
+    let inittab = prepare_stock_inittab(&paths.inittab)?;
+    let files = vec![
+        PreparedFile::new(paths.inittab.clone(), inittab)?,
+        PreparedFile::new(paths.ini.clone(), ini)?,
+    ];
+    replace_transaction(paths, &files, &mut NoWriteFaults, || validate_stock(paths))
 }
 
 fn safety_confirmation(paths: &Paths, message: &str, operation: &str) -> Result<()> {
@@ -371,7 +420,7 @@ fn selects_magik(path: &Path) -> Result<bool> {
     Ok(effective(path, "MiSTer", "main")?.as_deref() == Some("MiSTer_MagiK"))
 }
 
-fn mutate_ini(path: &Path, mutation: impl FnOnce(&mut Document)) -> Result<()> {
+fn prepare_ini(path: &Path, mutation: impl FnOnce(&mut Document)) -> Result<Vec<u8>> {
     let input = if path.is_file() {
         fs::read(path)?
     } else {
@@ -380,12 +429,15 @@ fn mutate_ini(path: &Path, mutation: impl FnOnce(&mut Document)) -> Result<()> {
     let mut document = Document::parse(&input)?;
     mutation(&mut document);
     let output = document.render();
-    let check = Document::parse(&output)?;
-    drop(check);
-    atomic_write(path, &output)
+    Document::parse(&output)?;
+    Ok(output)
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
+    atomic_write_with_faults(path, bytes, &mut NoWriteFaults)
+}
+
+fn atomic_write_with_faults(path: &Path, bytes: &[u8], faults: &mut dyn WriteFaults) -> Result<()> {
     let parent = path.parent().ok_or("target has no parent")?;
     fs::create_dir_all(parent)?;
     let pending = parent.join(format!(
@@ -396,27 +448,72 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
         process::id()
     ));
     let result = (|| -> Result<()> {
+        faults.check(path, WriteStep::BeforeCreate)?;
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&pending)?;
         file.write_all(bytes)?;
+        faults.check(path, WriteStep::AfterWrite)?;
         file.sync_all()?;
+        faults.check(path, WriteStep::AfterFlush)?;
         drop(file);
         if fs::read(&pending)? != bytes {
             return Err("pending file read-back mismatch".into());
         }
+        faults.check(path, WriteStep::AfterPendingReadback)?;
         fs::rename(&pending, path)?;
+        faults.check(path, WriteStep::AfterRename)?;
         if fs::read(path)? != bytes {
             return Err("replaced file read-back mismatch".into());
         }
+        faults.check(path, WriteStep::AfterFinalReadback)?;
         File::open(parent)?.sync_all()?;
+        faults.check(path, WriteStep::AfterDirectorySync)?;
         Ok(())
     })();
     if result.is_err() {
         let _ = fs::remove_file(&pending);
     }
     result
+}
+
+fn replace_transaction(
+    paths: &Paths,
+    files: &[PreparedFile],
+    faults: &mut dyn WriteFaults,
+    validate: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    for (index, file) in files.iter().enumerate() {
+        if let Err(error) = atomic_write_with_faults(&file.path, &file.replacement, faults) {
+            rollback_files(&files[..=index])?;
+            return Err(format!(
+                "cannot replace {}: {error}; rollback=complete",
+                file.path.display()
+            )
+            .into());
+        }
+    }
+    let finish = sync_storage(paths).and_then(|()| validate());
+    if let Err(error) = finish {
+        rollback_files(files)?;
+        sync_storage(paths)?;
+        return Err(
+            format!("boot configuration validation failed: {error}; rollback=complete").into(),
+        );
+    }
+    Ok(())
+}
+
+fn rollback_files(files: &[PreparedFile]) -> Result<()> {
+    for file in files.iter().rev() {
+        match &file.original {
+            Some(bytes) => atomic_write(&file.path, bytes)?,
+            None if file.path.exists() => fs::remove_file(&file.path)?,
+            None => {}
+        }
+    }
+    Ok(())
 }
 
 fn backup_ini(paths: &Paths) -> Result<()> {
@@ -430,8 +527,8 @@ fn backup_ini(paths: &Paths) -> Result<()> {
     atomic_write(&paths.backup, &fs::read(&paths.ini)?)
 }
 
-fn write_stock_inittab(paths: &Paths) -> Result<()> {
-    let input = fs::read_to_string(&paths.inittab)?;
+fn prepare_stock_inittab(path: &Path) -> Result<Vec<u8>> {
+    let input = fs::read_to_string(path)?;
     let newline = if input.contains("\r\n") { "\r\n" } else { "\n" };
     let mut output = Vec::new();
     let mut wrote = false;
@@ -453,7 +550,56 @@ fn write_stock_inittab(paths: &Paths) -> Result<()> {
     }
     let mut bytes = output.join(newline).into_bytes();
     bytes.extend_from_slice(newline.as_bytes());
-    atomic_write(&paths.inittab, &bytes)
+    Ok(bytes)
+}
+
+fn remount_root_writable(paths: &Paths) -> Result<()> {
+    if paths.test_mode() {
+        return Ok(());
+    }
+    let status = Command::new("mount")
+        .args(["-o", "remount,rw", "/"])
+        .status()?;
+    if !status.success() {
+        return Err("cannot remount root filesystem writable".into());
+    }
+    Ok(())
+}
+
+fn validate_install(paths: &Paths, mode: OutputMode) -> Result<()> {
+    let document = Document::parse(&fs::read(&paths.ini)?)?;
+    let (direct_video, menu_pal, forced_scandoubler) = mode.settings();
+    for (section, key, expected) in [
+        ("MiSTer", "main", "MiSTer_MagiK"),
+        ("Menu", "direct_video", direct_video),
+        ("Menu", "menu_pal", menu_pal),
+        ("Menu", "forced_scandoubler", forced_scandoubler),
+    ] {
+        if document.active_count(section, key) != 1
+            || document.effective_value(section, key).as_deref() != Some(expected)
+        {
+            return Err(format!("{section}.{key} did not validate").into());
+        }
+    }
+    verify_stock_inittab(&paths.inittab)
+}
+
+fn validate_stock(paths: &Paths) -> Result<()> {
+    let document = Document::parse(&fs::read(&paths.ini)?)?;
+    if document.effective_value("MiSTer", "main").as_deref() == Some("MiSTer_MagiK") {
+        return Err("MiSTer.ini still selects MiSTer MagiK".into());
+    }
+    for (section, key) in [
+        ("MiSTer", "main"),
+        ("Menu", "direct_video"),
+        ("Menu", "menu_pal"),
+        ("Menu", "forced_scandoubler"),
+    ] {
+        if document.active_count(section, key) > 1 {
+            return Err(format!("{section}.{key} remains duplicated").into());
+        }
+    }
+    verify_stock_inittab(&paths.inittab)
 }
 
 fn verify_stock_inittab(path: &Path) -> Result<()> {
@@ -654,6 +800,34 @@ fn offer_reboot(paths: &Paths) -> Result<()> {
 mod tests {
     use super::*;
 
+    struct FailAt {
+        step: WriteStep,
+        suffix: &'static str,
+    }
+
+    impl WriteFaults for FailAt {
+        fn check(&mut self, path: &Path, step: WriteStep) -> io::Result<()> {
+            if step == self.step && path.ends_with(self.suffix) {
+                Err(io::Error::other("injected write failure"))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    fn fixture_paths(root: &Path) -> Paths {
+        Paths {
+            fat: root.to_path_buf(),
+            inittab: root.join("inittab"),
+            ini: root.join("MiSTer.ini"),
+            backup: root.join("backup"),
+            app: root.join("mister-magik"),
+            manifest: root.join("manifest"),
+            output_mode: root.join("mode"),
+            script: root.join("script"),
+        }
+    }
+
     #[test]
     fn stock_inittab_repair_is_idempotent() {
         let input = "x\n::sysinit:/media/fat/MiSTer_MagiK &\n::sysinit:/media/fat/MiSTer &\n::sysinit:/media/fat/MiSTer &\n";
@@ -709,6 +883,76 @@ mod tests {
         let manifest = root.join("platform-v2.manifest");
         fs::write(&manifest, b"format=one\nformat=two\n").unwrap();
         assert!(parse_manifest(&manifest).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn every_write_boundary_rolls_back_all_replaced_files() {
+        env::set_var("MISTER_MAGIK_TEST_MODE", "1");
+        for (index, step) in [
+            WriteStep::BeforeCreate,
+            WriteStep::AfterWrite,
+            WriteStep::AfterFlush,
+            WriteStep::AfterPendingReadback,
+            WriteStep::AfterRename,
+            WriteStep::AfterFinalReadback,
+            WriteStep::AfterDirectorySync,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let root =
+                env::temp_dir().join(format!("mister-manager-rollback-{}-{index}", process::id()));
+            let _ = fs::remove_dir_all(&root);
+            fs::create_dir_all(&root).unwrap();
+            let first = root.join("first");
+            let second = root.join("second");
+            fs::write(&first, b"first original").unwrap();
+            fs::write(&second, b"second original").unwrap();
+            let files = vec![
+                PreparedFile::new(first.clone(), b"first replacement".to_vec()).unwrap(),
+                PreparedFile::new(second.clone(), b"second replacement".to_vec()).unwrap(),
+            ];
+            let paths = fixture_paths(&root);
+            let error = replace_transaction(
+                &paths,
+                &files,
+                &mut FailAt {
+                    step,
+                    suffix: "second",
+                },
+                || Ok(()),
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("rollback=complete"));
+            assert_eq!(fs::read(&first).unwrap(), b"first original");
+            assert_eq!(fs::read(&second).unwrap(), b"second original");
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn validation_failure_restores_files_and_removes_new_targets() {
+        env::set_var("MISTER_MAGIK_TEST_MODE", "1");
+        let root = env::temp_dir().join(format!("mister-manager-validation-{}", process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let existing = root.join("existing");
+        let created = root.join("created");
+        fs::write(&existing, b"original").unwrap();
+        let files = vec![
+            PreparedFile::new(existing.clone(), b"replacement".to_vec()).unwrap(),
+            PreparedFile::new(created.clone(), b"new".to_vec()).unwrap(),
+        ];
+        let paths = fixture_paths(&root);
+        assert!(
+            replace_transaction(&paths, &files, &mut NoWriteFaults, || Err(
+                "invalid result".into()
+            ))
+            .is_err()
+        );
+        assert_eq!(fs::read(existing).unwrap(), b"original");
+        assert!(!created.exists());
         fs::remove_dir_all(root).unwrap();
     }
 }
