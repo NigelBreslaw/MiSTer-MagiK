@@ -872,7 +872,9 @@ mod linux {
         ScanoutSlotsLayout, DEVICE as SCANOUT_SLOTS_DEVICE, EXPECTED_LAYOUT,
         GET_LAYOUT as SCANOUT_SLOTS_GET_LAYOUT,
     };
-    use super::{parse_control_request, require_ok_main_reply, ControlRequest};
+    use super::{
+        parse_control_request, require_ok_main_reply, select_framebuffer_capture, ControlRequest,
+    };
     use flate2::{write::ZlibEncoder, Compression};
     use libc::{c_ulong, ioctl};
     use mister_magik_framebuffer_stream::SCHEMA as FRAMEBUFFER_STREAM_SCHEMA;
