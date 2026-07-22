@@ -391,43 +391,20 @@ fn prepare_stage(
         databases.join("SHA256SUMS"),
         stage.join("game-databases-SHA256SUMS"),
     )?;
-    let args = vec![
-        "scripts/release/platform/platform-manifest.py".into(),
-        "generate".into(),
-        "--output".into(),
-        stage.join("platform-v2.manifest").display().to_string(),
-        "--main".into(),
-        stage.join("MiSTer_MagiKDev").display().to_string(),
-        "--gui".into(),
-        stage.join("mister-magik-fb").display().to_string(),
-        "--scanout-module".into(),
-        stage
-            .join("mister_magik_scanout_slots.ko")
-            .display()
-            .to_string(),
-        "--scanout-metadata".into(),
-        stage
-            .join("mister_magik_scanout_slots.metadata.txt")
-            .display()
-            .to_string(),
-        "--latch-rbf".into(),
-        stage
-            .join("fpga/menu-magik-vblank-latch.rbf")
-            .display()
-            .to_string(),
-        "--latch-metadata".into(),
-        stage
-            .join("fpga/menu-magik-vblank-latch.metadata.txt")
-            .display()
-            .to_string(),
-        "--main-revision".into(),
-        main_revision.into(),
-        "--magik-revision".into(),
-        crate::git::value(repository, &["rev-parse", "HEAD"])?,
-        "--layout".into(),
-        "dev".into(),
-    ];
-    run_bounded(repository, "/usr/bin/python3", &args)
+    crate::platform_manifest::generate(
+        &stage.join("platform-v2.manifest"),
+        &crate::platform_manifest::Artifacts {
+            main: stage.join("MiSTer_MagiKDev"),
+            gui: stage.join("mister-magik-fb"),
+            scanout_module: stage.join("mister_magik_scanout_slots.ko"),
+            scanout_metadata: stage.join("mister_magik_scanout_slots.metadata.txt"),
+            latch_rbf: stage.join("fpga/menu-magik-vblank-latch.rbf"),
+            latch_metadata: stage.join("fpga/menu-magik-vblank-latch.metadata.txt"),
+        },
+        main_revision,
+        &crate::git::value(repository, &["rev-parse", "HEAD"])?,
+        crate::platform_manifest::Layout::Development,
+    )
 }
 
 fn copy(from: PathBuf, to: PathBuf) -> AgentResult<()> {
