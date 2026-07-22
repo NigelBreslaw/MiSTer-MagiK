@@ -22,7 +22,13 @@ mister mode public
 mister mode stock
 mister scene launcher
 mister --capture-buffer
+mister display-mode hdmi-1280x720p60 --attended
+mister display-mode hdmi-1920x1080p60 --attended --keep
 ```
+
+`display-mode` applies one provisional Main-owned transaction, verifies the
+replacement launcher and framebuffer geometry, and rolls back unless `--keep`
+is supplied. It never bypasses the confirmation transaction.
 
 Mode changes verify the selected platform manifest, preserve stock inittab,
 mutate `MiSTer.ini` through the comment-preserving Rust editor, clear all

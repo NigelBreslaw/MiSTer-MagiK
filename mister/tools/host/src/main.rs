@@ -532,6 +532,7 @@ pub fn run_cli() -> Result<()> {
         "core-list" => core_list()?,
         "mode" => mode_cli(&args)?,
         "scene" => scene_cli(&args)?,
+        "display-mode" => display_mode_cli(&args)?,
         "display-matrix" => display_matrix_cli(&args)?,
         "crt" => crt_qualification::run(&args)?,
         "connected" => println!("connected"),
@@ -816,7 +817,7 @@ pub fn run_cli() -> Result<()> {
 
 fn usage() {
     println!(
-        "usage: mister --capture-buffer\n       mister <status|arming-status|mode|scene|display-matrix|crt|ini-edit|core-list|catalog|media-check|media-download|agent|reboot-wait|doctor|mame-metadata-build> ...\n       mode <status|dev|public|stock>\n       scene <launcher|controller_test|tear_pattern|video_playback|crt_trial> [seconds]\n       display-matrix --attended --out DIRECTORY\n       crt qualify --attended [--out DIRECTORY]\n       crt qualify --restore\n       ini-edit menu <OUTPUT> [--dry-run]\n       OUTPUT: hdmi|auto|crt-240p60|crt-288p50|crt-480p60|crt-576p50\n               1280x720p60|1024x768p60|720x480p60|720x576p50|1280x1024p60\n               800x600p60|640x480p60|1280x720p50|1920x1080p60|1920x1080p50\n               1366x768p60|1024x600p60|1920x1440p60|2048x1536p60\n       2560x1440p60: Mister does not support 1440p\n       ini-edit stock-boot [--dry-run]\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>]\n       operator commands are typed and bounded; direct-reset-no-sync remains experimental and requires a volatile session token"
+        "usage: mister --capture-buffer\n       mister <status|arming-status|mode|scene|display-mode|display-matrix|crt|ini-edit|core-list|catalog|media-check|media-download|agent|reboot-wait|doctor|mame-metadata-build> ...\n       mode <status|dev|public|stock>\n       scene <launcher|controller_test|tear_pattern|video_playback|crt_trial> [seconds]\n       display-mode MODE --attended [--keep]\n       display-matrix --attended --out DIRECTORY\n       crt qualify --attended [--out DIRECTORY]\n       crt qualify --restore\n       ini-edit menu <OUTPUT> [--dry-run]\n       OUTPUT: hdmi|auto|crt-240p60|crt-288p50|crt-480p60|crt-576p50\n               1280x720p60|1024x768p60|720x480p60|720x576p50|1280x1024p60\n               800x600p60|640x480p60|1280x720p50|1920x1080p60|1920x1080p50\n               1366x768p60|1024x600p60|1920x1440p60|2048x1536p60\n       2560x1440p60: Mister does not support 1440p\n       ini-edit stock-boot [--dry-run]\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>]\n       operator commands are typed and bounded; direct-reset-no-sync remains experimental and requires a volatile session token"
     );
 }
 
@@ -849,7 +850,7 @@ const DISPLAY_MATRIX_MODES: &[DisplayMatrixMode] = &[
     DisplayMatrixMode {
         id: "hdmi-1366x768p60",
         output: Some((1366, 768)),
-        framebuffer: Some((1366, 768)),
+        framebuffer: Some((683, 384)),
     },
     DisplayMatrixMode {
         id: "hdmi-1920x1080p60",
@@ -898,6 +899,235 @@ static DISPLAY_MATRIX_INTERRUPTED: std::sync::atomic::AtomicBool =
 
 extern "C" fn display_matrix_interrupt_handler(_: libc::c_int) {
     DISPLAY_MATRIX_INTERRUPTED.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+struct SignalHandlerGuard(libc::sighandler_t);
+
+impl Drop for SignalHandlerGuard {
+    fn drop(&mut self) {
+        unsafe {
+            libc::signal(libc::SIGINT, self.0);
+        }
+    }
+}
+
+fn parse_display_mode_args(args: &[String]) -> Result<(DisplayMatrixMode, bool)> {
+    if args.len() < 2 || args.len() > 3 || args[1] != "--attended" {
+        return Err("usage: mister display-mode MODE --attended [--keep]".into());
+    }
+    let keep = args.len() == 3 && args[2] == "--keep";
+    if args.len() == 3 && !keep {
+        return Err("usage: mister display-mode MODE --attended [--keep]".into());
+    }
+    let mode = DISPLAY_MATRIX_MODES
+        .iter()
+        .find(|mode| mode.id == args[0])
+        .copied()
+        .ok_or_else(|| format!("unsupported display mode: {}", args[0]))?;
+    Ok((mode, keep))
+}
+
+fn display_mode_cli(args: &[String]) -> Result<()> {
+    let (mode, keep) = parse_display_mode_args(args)?;
+    if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
+        return Err("display mode changes are attended and require an interactive terminal".into());
+    }
+    if matches!(mode.id, "crt-480p60" | "crt-576p50") {
+        eprintln!("WARNING: this is a 31 kHz CRT/VGA mode. Type 31KHZ only if the connected display supports it:");
+        let mut acknowledgement = String::new();
+        io::stdin().read_line(&mut acknowledgement)?;
+        if acknowledgement.trim() != "31KHZ" {
+            return Err("31 kHz display support was not acknowledged; no mode changed".into());
+        }
+    }
+    DISPLAY_MATRIX_INTERRUPTED.store(false, std::sync::atomic::Ordering::SeqCst);
+    let signal_guard = SignalHandlerGuard(unsafe {
+        libc::signal(
+            libc::SIGINT,
+            display_matrix_interrupt_handler as *const () as libc::sighandler_t,
+        )
+    });
+    let session = connect(10)?;
+    let original_reply = exec_checked_output(
+        &session,
+        "query original display mode",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    let original_mode = parse_display_reply_active(original_reply.stdout.trim())?;
+    if parse_display_reply_pending(original_reply.stdout.trim())?.is_some() {
+        return Err("display mode cannot change while a transaction is pending".into());
+    }
+    let original_ready = wait_launcher_ready(&session, Instant::now(), Duration::from_secs(15))?;
+    exec_checked(
+        &session,
+        "apply display mode",
+        &acknowledged_main_command(&format!("mister_magik_display_apply_v1 mode={}", mode.id)),
+    )?;
+    drop(session);
+    let mut current_pid = original_ready.launcher_pid;
+    let result = (|| -> Result<()> {
+        let session = connect(10)?;
+        let ready = wait_launcher_ready_after(
+            &session,
+            current_pid,
+            Instant::now(),
+            Duration::from_secs(15),
+        )?;
+        current_pid = ready.launcher_pid;
+        let readiness = validate_live_display_mode(&session, mode)?;
+        let capture = request_framebuffer_png()?;
+        validate_visible_launcher_capture(&capture)?;
+        if png_dimensions(&capture.png)?
+            != (
+                readiness.framebuffer.0 as u32,
+                readiness.framebuffer.1 as u32,
+            )
+        {
+            return Err("framebuffer capture geometry does not match display plan".into());
+        }
+        match display_mode_completion_action(
+            keep,
+            DISPLAY_MATRIX_INTERRUPTED.load(std::sync::atomic::Ordering::SeqCst),
+        )? {
+            DisplayModeCompletionAction::Confirm => {
+                exec_checked(
+                    &session,
+                    "confirm display mode",
+                    &acknowledged_main_command("mister_magik_display_confirm_v1"),
+                )?;
+                wait_display_transaction_idle(&session, Duration::from_secs(15))?;
+                println!("kept {}", mode.id);
+            }
+            DisplayModeCompletionAction::Rollback => {
+                exec_checked(
+                    &session,
+                    "rollback display mode",
+                    &acknowledged_main_command("mister_magik_display_cancel_v1"),
+                )?;
+                let _ = wait_launcher_ready_after(
+                    &session,
+                    current_pid,
+                    Instant::now(),
+                    Duration::from_secs(15),
+                )?;
+                let restored = exec_checked_output(
+                    &session,
+                    "verify restored display mode",
+                    &acknowledged_main_command("mister_magik_display_get_v1"),
+                )?;
+                let active = parse_display_reply_active(restored.stdout.trim())?;
+                if active != original_mode {
+                    return Err(format!(
+                        "display mode restored {active}, expected {original_mode}"
+                    )
+                    .into());
+                }
+                if let Some(original) = DISPLAY_MATRIX_MODES
+                    .iter()
+                    .find(|candidate| candidate.id == original_mode)
+                    .copied()
+                {
+                    validate_live_display_mode(&session, original)?;
+                }
+                println!("verified {} and restored {}", mode.id, original_mode);
+            }
+        }
+        Ok(())
+    })();
+    let result = if result.is_err() {
+        combine_display_mode_result(
+            result,
+            restore_display_matrix_original(&original_mode, current_pid),
+        )
+    } else {
+        result
+    };
+    drop(signal_guard);
+    result
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DisplayModeCompletionAction {
+    Confirm,
+    Rollback,
+}
+
+fn display_mode_completion_action(
+    keep: bool,
+    interrupted: bool,
+) -> Result<DisplayModeCompletionAction> {
+    if interrupted {
+        return Err("display mode change interrupted".into());
+    }
+    Ok(if keep {
+        DisplayModeCompletionAction::Confirm
+    } else {
+        DisplayModeCompletionAction::Rollback
+    })
+}
+
+fn combine_display_mode_result(primary: Result<()>, cleanup: Result<()>) -> Result<()> {
+    match (primary, cleanup) {
+        (Err(error), Err(cleanup)) => {
+            Err(format!("{error}; display rollback failed: {cleanup}").into())
+        }
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(cleanup)) => Err(cleanup),
+        (Ok(()), Ok(())) => Ok(()),
+    }
+}
+
+fn validate_live_display_mode(
+    session: &Session,
+    mode: DisplayMatrixMode,
+) -> Result<DisplayMatrixReadiness> {
+    let readiness = exec_checked_output(
+        session,
+        "display mode readiness",
+        &release_display_mode_command_for_runtime(),
+    )?;
+    let readiness = parse_display_matrix_readiness(&readiness.stdout)?;
+    validate_display_matrix_geometry(mode, readiness.output, readiness.framebuffer)?;
+    if readiness.frames_after <= readiness.frames_before {
+        return Err("display presentation did not advance".into());
+    }
+    Ok(readiness)
+}
+
+fn wait_display_transaction_idle(session: &Session, timeout: Duration) -> Result<()> {
+    let started = Instant::now();
+    while !display_poll_timed_out(started.elapsed(), timeout) {
+        let reply = exec_checked_output(
+            session,
+            "query display confirmation",
+            &acknowledged_main_command("mister_magik_display_get_v1"),
+        )?;
+        if display_transaction_complete(
+            reply.stdout.trim(),
+            DISPLAY_MATRIX_INTERRUPTED.load(std::sync::atomic::Ordering::SeqCst),
+        )? {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    Err("display persistence timed out".into())
+}
+
+fn display_poll_timed_out(elapsed: Duration, timeout: Duration) -> bool {
+    elapsed >= timeout
+}
+
+fn display_transaction_complete(reply: &str, interrupted: bool) -> Result<bool> {
+    if interrupted {
+        return Err("display mode change interrupted".into());
+    }
+    if reply
+        .split_whitespace()
+        .any(|field| field == "phase=failed")
+    {
+        return Err("display persistence failed".into());
+    }
+    Ok(parse_display_reply_pending(reply)?.is_none())
 }
 
 fn display_matrix_cli(args: &[String]) -> Result<()> {
@@ -6716,6 +6946,31 @@ mod tests {
     }
 
     #[test]
+    fn single_display_mode_args_require_attended_and_parse_keep() {
+        let args = |values: &[&str]| {
+            values
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect::<Vec<_>>()
+        };
+        let (mode, keep) =
+            parse_display_mode_args(&args(&["hdmi-1280x720p60", "--attended"])).unwrap();
+        assert_eq!(mode.id, "hdmi-1280x720p60");
+        assert!(!keep);
+        assert!(
+            parse_display_mode_args(&args(&["hdmi-1920x1080p60", "--attended", "--keep",]))
+                .unwrap()
+                .1
+        );
+        assert!(parse_display_mode_args(&args(&["hdmi-1280x720p60"])).is_err());
+        assert!(parse_display_mode_args(&args(&["unsafe", "--attended"])).is_err());
+        assert!(
+            parse_display_mode_args(&args(&["hdmi-1280x720p60", "--attended", "--other",]))
+                .is_err()
+        );
+    }
+
+    #[test]
     fn display_matrix_readiness_requires_geometry_and_advancing_frames() {
         let parsed = parse_display_matrix_readiness(
             "plan\tdisplay-plan: output=640x240 scan=640x240 fb=320x240\nframes\t10\t12\n",
@@ -6742,6 +6997,66 @@ mod tests {
             .unwrap();
         assert!(validate_display_matrix_geometry(mode, (640, 240), (320, 240)).is_ok());
         assert!(validate_display_matrix_geometry(mode, (640, 240), (640, 240)).is_err());
+        let hdmi = DISPLAY_MATRIX_MODES
+            .iter()
+            .find(|mode| mode.id == "hdmi-1366x768p60")
+            .copied()
+            .unwrap();
+        assert!(validate_display_matrix_geometry(hdmi, (1366, 768), (683, 384)).is_ok());
+        assert!(validate_display_matrix_geometry(hdmi, (1366, 768), (1366, 768)).is_err());
+    }
+
+    #[test]
+    fn display_confirmation_status_handles_success_failure_timeout_and_interrupt() {
+        assert!(display_transaction_complete(
+            "ok DisplayV1 schema=1 active=hdmi-1280x720p60 pending=none phase=idle",
+            false,
+        )
+        .unwrap());
+        assert!(!display_transaction_complete(
+            "ok DisplayV1 schema=1 active=hdmi-1920x1080p60 pending=hdmi-1280x720p60 phase=persisting",
+            false,
+        )
+        .unwrap());
+        assert!(display_transaction_complete(
+            "ok DisplayV1 schema=1 active=hdmi-1920x1080p60 pending=hdmi-1280x720p60 phase=failed",
+            false,
+        )
+        .is_err());
+        assert!(display_transaction_complete(
+            "ok DisplayV1 schema=1 active=hdmi-1920x1080p60 pending=hdmi-1280x720p60 phase=persisting",
+            true,
+        )
+        .is_err());
+        assert_eq!(
+            display_mode_completion_action(true, false).unwrap(),
+            DisplayModeCompletionAction::Confirm
+        );
+        assert_eq!(
+            display_mode_completion_action(false, false).unwrap(),
+            DisplayModeCompletionAction::Rollback
+        );
+        assert!(display_mode_completion_action(true, true).is_err());
+        assert!(!display_poll_timed_out(
+            Duration::from_millis(999),
+            Duration::from_secs(1)
+        ));
+        assert!(display_poll_timed_out(
+            Duration::from_secs(1),
+            Duration::from_secs(1)
+        ));
+        let primary = combine_display_mode_result(Err("readiness failed".into()), Ok(()))
+            .unwrap_err()
+            .to_string();
+        assert_eq!(primary, "readiness failed");
+        let combined =
+            combine_display_mode_result(Err("capture failed".into()), Err("cancel failed".into()))
+                .unwrap_err()
+                .to_string();
+        assert_eq!(
+            combined,
+            "capture failed; display rollback failed: cancel failed"
+        );
     }
 
     #[test]

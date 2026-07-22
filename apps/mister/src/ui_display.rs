@@ -21,6 +21,7 @@ const MIN_RUNTIME_SCAN_W: u16 = 320;
 const MIN_RUNTIME_SCAN_H: u16 = 200;
 const UI_FB_SIZE_ENV: &str = "MISTER_UI_FB_SIZE";
 const RUNTIME_SETTINGS_ENV: &str = "MISTER_MAGIK_RUNTIME_SETTINGS_V1";
+const RUNTIME_DISPLAY_ENV: &str = "MISTER_MAGIK_RUNTIME_DISPLAY_V1";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResolvedOutputRoute {
@@ -168,6 +169,18 @@ impl UiDisplayPlan {
                 UiFramebufferSizePolicy::Auto,
             );
         }
+        if let Some(geometry) = std::env::var(RUNTIME_DISPLAY_ENV)
+            .ok()
+            .as_deref()
+            .and_then(runtime_display_geometry_v1)
+        {
+            return Self::from_geometry_with_route(
+                geometry,
+                resolved_route,
+                "main-runtime-display-mode",
+                fb_policy,
+            );
+        }
         if let Some(runtime) = runtime {
             return Self::from_runtime_geometry_with_policy(runtime, false, fb_policy);
         }
@@ -192,6 +205,7 @@ impl UiDisplayPlan {
         runtime: Option<RuntimeDisplayGeometry>,
         ini: &str,
         runtime_settings: Option<&str>,
+        runtime_display: Option<&str>,
     ) -> Option<Self> {
         let resolved_route = runtime_settings
             .and_then(ResolvedOutputRoute::from_runtime_settings_v1)
@@ -201,6 +215,14 @@ impl UiDisplayPlan {
                 geometry,
                 resolved_route,
                 "test-runtime-settings-crt",
+                UiFramebufferSizePolicy::Auto,
+            ));
+        }
+        if let Some(geometry) = runtime_display.and_then(runtime_display_geometry_v1) {
+            return Some(Self::from_geometry_with_route(
+                geometry,
+                resolved_route,
+                "test-runtime-display-mode",
                 UiFramebufferSizePolicy::Auto,
             ));
         }
@@ -568,6 +590,32 @@ fn launcher_framebuffer_size(output_w: usize, output_h: usize) -> (usize, usize)
         ((output_w / 2).max(1), (output_h / 2).max(1))
     } else {
         (output_w.max(1), output_h.max(1))
+    }
+}
+
+fn runtime_display_geometry_v1(value: &str) -> Option<VideoModeGeometry> {
+    let mut schema = None;
+    let mut mode = None;
+    for field in value.split('&') {
+        let (key, value) = field.split_once('=')?;
+        match key {
+            "schema" if schema.replace(value).is_none() => {}
+            "mode" if mode.replace(value).is_none() => {}
+            _ => return None,
+        }
+    }
+    if schema != Some("1") {
+        return None;
+    }
+    match mode? {
+        "hdmi-1280x720p60" => Some(VideoModeGeometry::new(1280, 720)),
+        "hdmi-1366x768p60" => Some(VideoModeGeometry::new(1366, 768)),
+        "hdmi-1920x1080p60" => Some(VideoModeGeometry::new(1920, 1080)),
+        "hdmi-1920x1200p60" => Some(VideoModeGeometry::new(1920, 1200)),
+        "hdmi-2048x1536p60" => Some(VideoModeGeometry::new(2048, 1536)),
+        "hdmi-2560x1440p60" => Some(VideoModeGeometry::with_scan(2560, 1440, 1280, 1440)),
+        "auto" | "custom" => None,
+        _ => None,
     }
 }
 
@@ -994,6 +1042,7 @@ mod tests {
             runtime,
             ini,
             Some("schema=1&output=hdmi"),
+            None,
         )
         .expect("plan");
 
@@ -1033,8 +1082,9 @@ mod tests {
                 (640, 480),
             ),
         ] {
-            let plan = UiDisplayPlan::from_runtime_or_mister_ini_text(runtime, ini, Some(settings))
-                .expect("plan");
+            let plan =
+                UiDisplayPlan::from_runtime_or_mister_ini_text(runtime, ini, Some(settings), None)
+                    .expect("plan");
 
             assert_eq!(plan.source, "test-runtime-settings-crt");
             assert_eq!((plan.output_w, plan.output_h), scan);
@@ -1067,9 +1117,13 @@ mod tests {
     #[test]
     fn ini_geometry_is_fallback_when_detection_fails() {
         let ini = "[MiSTer]\ndirect_video=0\n[Menu]\nvideo_mode=8\n";
-        let plan =
-            UiDisplayPlan::from_runtime_or_mister_ini_text(None, ini, Some("schema=1&output=hdmi"))
-                .expect("plan");
+        let plan = UiDisplayPlan::from_runtime_or_mister_ini_text(
+            None,
+            ini,
+            Some("schema=1&output=hdmi"),
+            None,
+        )
+        .expect("plan");
 
         assert_eq!(plan.source, "mister-ini-hdmi-fallback");
         assert_eq!((plan.output_w, plan.output_h), (1920, 1080));
@@ -1079,7 +1133,8 @@ mod tests {
     #[test]
     fn custom_ini_geometry_stays_compatible_as_fallback() {
         let ini = "[MiSTer]\ndirect_video=0\n[Menu]\nvideo_mode=1280,110,40,220,720,5,5,20,74250\n";
-        let plan = UiDisplayPlan::from_runtime_or_mister_ini_text(None, ini, None).expect("plan");
+        let plan =
+            UiDisplayPlan::from_runtime_or_mister_ini_text(None, ini, None, None).expect("plan");
 
         assert_eq!(plan.source, "mister-ini-hdmi-fallback");
         assert_eq!((plan.output_w, plan.output_h), (1280, 720));
@@ -1096,12 +1151,102 @@ mod tests {
             Some("schema=1&output=crt-480i"),
             Some("schema=1&output=crt-240p60&extra=1"),
         ] {
-            let plan = UiDisplayPlan::from_runtime_or_mister_ini_text(runtime, ini, settings)
+            let plan = UiDisplayPlan::from_runtime_or_mister_ini_text(runtime, ini, settings, None)
                 .expect("safe HDMI plan");
             assert_eq!(plan.output_route, ResolvedOutputRoute::Hdmi);
             assert!(!plan.direct_video);
             assert_eq!((plan.output_w, plan.output_h), (1920, 1080));
         }
+    }
+
+    #[test]
+    fn authoritative_runtime_display_mode_overrides_stale_fpga_geometry() {
+        let ini = "[Menu]\nvideo_mode=8\n";
+        for (runtime, display, output, framebuffer) in [
+            (
+                RuntimeDisplayGeometry::from_video_words(1920, 1080, 1920, 1080),
+                "schema=1&mode=hdmi-1280x720p60",
+                (1280, 720),
+                (1280, 720),
+            ),
+            (
+                RuntimeDisplayGeometry::from_video_words(1280, 720, 1280, 720),
+                "schema=1&mode=hdmi-1920x1080p60",
+                (1920, 1080),
+                (960, 540),
+            ),
+        ] {
+            let plan = UiDisplayPlan::from_runtime_or_mister_ini_text(
+                runtime,
+                ini,
+                Some("schema=1&output=hdmi"),
+                Some(display),
+            )
+            .expect("plan");
+            assert_eq!(plan.source, "test-runtime-display-mode");
+            assert_eq!((plan.output_w, plan.output_h), output);
+            assert_eq!((plan.fb_w, plan.fb_h), framebuffer);
+        }
+    }
+
+    #[test]
+    fn runtime_display_mode_is_strict_and_preserves_special_scan_geometry() {
+        for (mode, output) in [
+            ("hdmi-1280x720p60", (1280, 720)),
+            ("hdmi-1366x768p60", (1366, 768)),
+            ("hdmi-1920x1080p60", (1920, 1080)),
+            ("hdmi-1920x1200p60", (1920, 1200)),
+            ("hdmi-2048x1536p60", (2048, 1536)),
+            ("hdmi-2560x1440p60", (2560, 1440)),
+        ] {
+            let geometry = runtime_display_geometry_v1(&format!("schema=1&mode={mode}"))
+                .expect("supported runtime mode");
+            assert_eq!((geometry.output_w, geometry.output_h), output);
+        }
+        let special = runtime_display_geometry_v1("schema=1&mode=hdmi-2560x1440p60").unwrap();
+        assert_eq!((special.output_w, special.output_h), (2560, 1440));
+        assert_eq!((special.scan_w, special.scan_h), (1280, 1440));
+        for invalid in [
+            "schema=2&mode=hdmi-1280x720p60",
+            "schema=1&mode=hdmi-1280x720p60&extra=1",
+            "schema=1&schema=1&mode=hdmi-1280x720p60",
+            "schema=1&mode=unsafe",
+            "schema=1&mode=auto",
+            "schema=1&mode=custom",
+        ] {
+            assert!(runtime_display_geometry_v1(invalid).is_none(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn absent_auto_custom_and_invalid_runtime_display_values_fall_back() {
+        let runtime = RuntimeDisplayGeometry::from_video_words(1280, 720, 1280, 720);
+        let ini = "[Menu]\nvideo_mode=8\n";
+        for display in [
+            None,
+            Some("schema=1&mode=auto"),
+            Some("schema=1&mode=custom"),
+            Some("schema=1&mode=unsafe"),
+        ] {
+            let plan = UiDisplayPlan::from_runtime_or_mister_ini_text(
+                runtime,
+                ini,
+                Some("schema=1&output=hdmi"),
+                display,
+            )
+            .expect("runtime fallback");
+            assert_eq!(plan.source, "runtime-video-info");
+            assert_eq!((plan.output_w, plan.output_h), (1280, 720));
+        }
+        let plan = UiDisplayPlan::from_runtime_or_mister_ini_text(
+            None,
+            ini,
+            Some("schema=1&output=hdmi"),
+            Some("schema=1&mode=auto"),
+        )
+        .expect("ini fallback");
+        assert_eq!(plan.source, "mister-ini-hdmi-fallback");
+        assert_eq!((plan.output_w, plan.output_h), (1920, 1080));
     }
 
     #[test]
