@@ -10,16 +10,37 @@ TARGET_ROOT="${CARGO_TARGET_DIR:-$SOURCE_ROOT/target}"
 BINARY="${MISTER_AGENT_CLI_BINARY:-$TARGET_ROOT/release/agent-cli}"
 LOCK="$TARGET_ROOT/.agent-cli-build-lock"
 
-stale=false
-if [[ ! -x "$BINARY" ]]; then
-  stale=true
-elif [[ "$MANIFEST" -nt "$BINARY" || "$SOURCE_ROOT/Cargo.lock" -nt "$BINARY" ]]; then
-  stale=true
-elif [[ -n "$(find "$SOURCE_ROOT/src" -type f -newer "$BINARY" -print -quit)" ]]; then
-  stale=true
-fi
+INPUTS=(
+  "$MANIFEST"
+  "$SOURCE_ROOT/Cargo.lock"
+  "$SOURCE_ROOT/src"
+  "$SOURCE_ROOT/../mister/tools/host/Cargo.toml"
+  "$SOURCE_ROOT/../mister/tools/host/src"
+  "$SOURCE_ROOT/../crates/catalog/Cargo.toml"
+  "$SOURCE_ROOT/../crates/catalog/src"
+  "$SOURCE_ROOT/../crates/catalog/data"
+  "$SOURCE_ROOT/../crates/media-contract/Cargo.toml"
+  "$SOURCE_ROOT/../crates/media-contract/src"
+  "$SOURCE_ROOT/../crates/agent-protocol/Cargo.toml"
+  "$SOURCE_ROOT/../crates/agent-protocol/src"
+)
 
-if [[ "$stale" == true ]]; then
+inputs_are_stale() {
+  local input
+  [[ -x "$BINARY" ]] || return 0
+  for input in "${INPUTS[@]}"; do
+    [[ -e "$input" ]] || continue
+    if [[ -f "$input" && "$input" -nt "$BINARY" ]]; then
+      return 0
+    fi
+    if [[ -d "$input" && -n "$(find "$input" -type f -newer "$BINARY" -print -quit)" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+if inputs_are_stale; then
   mkdir -p "$TARGET_ROOT"
   waited=0
   until mkdir "$LOCK" 2>/dev/null; do
@@ -34,7 +55,7 @@ if [[ "$stale" == true ]]; then
   trap cleanup EXIT INT TERM
 
   # Another launcher may have completed the build while this process waited.
-  if [[ ! -x "$BINARY" || "$MANIFEST" -nt "$BINARY" || "$SOURCE_ROOT/Cargo.lock" -nt "$BINARY" || -n "$(find "$SOURCE_ROOT/src" -type f -newer "$BINARY" -print -quit)" ]]; then
+  if inputs_are_stale; then
     cargo build --release --locked --quiet --manifest-path "$MANIFEST"
   fi
   cleanup

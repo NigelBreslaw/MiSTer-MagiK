@@ -8,8 +8,28 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FIXTURE="$(mktemp -d "${TMPDIR:-/tmp}/agent-launcher.XXXXXX")"
 trap 'rm -rf "$FIXTURE"' EXIT
 
-mkdir -p "$FIXTURE/project/src" "$FIXTURE/bin" "$FIXTURE/target/release"
-touch "$FIXTURE/project/Cargo.toml" "$FIXTURE/project/Cargo.lock" "$FIXTURE/project/src/main.rs"
+mkdir -p \
+  "$FIXTURE/agent-cli/src" \
+  "$FIXTURE/mister/tools/host/src" \
+  "$FIXTURE/crates/catalog/src" \
+  "$FIXTURE/crates/catalog/data" \
+  "$FIXTURE/crates/media-contract/src" \
+  "$FIXTURE/crates/agent-protocol/src" \
+  "$FIXTURE/bin" \
+  "$FIXTURE/target/release"
+touch \
+  "$FIXTURE/agent-cli/Cargo.toml" \
+  "$FIXTURE/agent-cli/Cargo.lock" \
+  "$FIXTURE/agent-cli/src/main.rs" \
+  "$FIXTURE/mister/tools/host/Cargo.toml" \
+  "$FIXTURE/mister/tools/host/src/lib.rs" \
+  "$FIXTURE/crates/catalog/Cargo.toml" \
+  "$FIXTURE/crates/catalog/src/lib.rs" \
+  "$FIXTURE/crates/catalog/data/system.json" \
+  "$FIXTURE/crates/media-contract/Cargo.toml" \
+  "$FIXTURE/crates/media-contract/src/lib.rs" \
+  "$FIXTURE/crates/agent-protocol/Cargo.toml" \
+  "$FIXTURE/crates/agent-protocol/src/lib.rs"
 
 cat >"$FIXTURE/bin/rustc" <<'EOF'
 #!/usr/bin/env bash
@@ -37,7 +57,7 @@ export PATH="$FIXTURE/bin:$PATH"
 export FIXTURE_BUILD_COUNT="$FIXTURE/build-count"
 export FIXTURE_CARGO_ARGS="$FIXTURE/cargo-args"
 export FIXTURE_RUSTC_CALLS="$FIXTURE/rustc-calls"
-export MISTER_AGENT_CLI_MANIFEST="$FIXTURE/project/Cargo.toml"
+export MISTER_AGENT_CLI_MANIFEST="$FIXTURE/agent-cli/Cargo.toml"
 export MISTER_AGENT_CLI_BINARY="$FIXTURE/target/release/agent-cli"
 export CARGO_TARGET_DIR="$FIXTURE/target"
 
@@ -52,9 +72,24 @@ output="$($ROOT/scripts/agent plan)"
 [[ ! -e "$FIXTURE_RUSTC_CALLS" ]]
 
 sleep 1
-touch "$FIXTURE/project/src/main.rs"
+touch "$FIXTURE/agent-cli/src/main.rs"
 "$ROOT/scripts/agent" verify >/dev/null
 [[ "$(<"$FIXTURE_BUILD_COUNT")" == 2 ]]
+
+sleep 1
+touch "$FIXTURE/agent-cli/Cargo.toml"
+"$ROOT/scripts/agent" plan >/dev/null
+[[ "$(<"$FIXTURE_BUILD_COUNT")" == 3 ]]
+
+sleep 1
+touch "$FIXTURE/agent-cli/Cargo.lock"
+"$ROOT/scripts/agent" check >/dev/null
+[[ "$(<"$FIXTURE_BUILD_COUNT")" == 4 ]]
+
+sleep 1
+touch "$FIXTURE/crates/catalog/src/lib.rs"
+"$ROOT/scripts/agent" verify >/dev/null
+[[ "$(<"$FIXTURE_BUILD_COUNT")" == 5 ]]
 
 rm -f "$MISTER_AGENT_CLI_BINARY"
 export FIXTURE_BUILD_DELAY=0.2
@@ -63,7 +98,7 @@ first=$!
 "$ROOT/scripts/agent" two >/dev/null &
 second=$!
 wait "$first" "$second"
-[[ "$(<"$FIXTURE_BUILD_COUNT")" == 3 ]]
+[[ "$(<"$FIXTURE_BUILD_COUNT")" == 6 ]]
 
 rm -f "$MISTER_AGENT_CLI_BINARY"
 cat >"$FIXTURE/bin/cargo" <<'EOF'
