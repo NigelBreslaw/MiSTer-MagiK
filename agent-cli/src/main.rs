@@ -245,12 +245,8 @@ fn dispatch(
             return Ok(Outcome::Passed);
         }
         Intent::Build { intent } => {
-            if *intent == agent_cli::build::BuildIntent::HostTool {
-                agent_cli::build::execute_host_tool(repository, reporter)?;
-            } else {
-                let spec = agent_cli::build::BuildSpec::infer(*intent)?;
-                agent_cli::build::execute(repository, &spec, reporter)?;
-            }
+            let spec = agent_cli::build::BuildSpec::infer(*intent)?;
+            agent_cli::build::execute(repository, &spec, reporter)?;
         }
         Intent::Plan {
             scope: selected, ..

@@ -38,17 +38,13 @@ const FFMPEG_APPLE_CONTAINER_ENV: [(&str, &str); 5] = [
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub enum BuildIntent {
-    HostTool,
     RuntimeDevice,
     RuntimeFast,
     RuntimeBenchmark,
-    RuntimeDiagnostics,
     RuntimeProfile,
-    RuntimeExperiments,
     ValidateLauncher,
     ValidateLibrary,
     DeviceAgent,
-    CatalogBuilder,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -56,7 +52,6 @@ pub enum BuildIntent {
 pub enum BuildTarget {
     Runtime,
     DeviceAgent,
-    CatalogBuilder,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -90,9 +85,6 @@ pub struct BuildSpec {
 impl BuildSpec {
     pub fn infer(intent: BuildIntent) -> Result<Self, String> {
         let (target, mode, profile, features, scope, artifact, strict_receipt) = match intent {
-            BuildIntent::HostTool => {
-                return Err("host-tool uses the native host build path".into());
-            }
             BuildIntent::RuntimeDevice => (
                 BuildTarget::Runtime,
                 BuildMode::Build,
@@ -120,15 +112,6 @@ impl BuildSpec {
                 runtime_artifact("release-device"),
                 true,
             ),
-            BuildIntent::RuntimeDiagnostics => (
-                BuildTarget::Runtime,
-                BuildMode::Build,
-                "release-device",
-                vec!["ui", "bench-tools", "diagnostics"],
-                UiScope::All,
-                runtime_artifact("release-device"),
-                true,
-            ),
             BuildIntent::RuntimeProfile => (
                 BuildTarget::Runtime,
                 BuildMode::Build,
@@ -136,15 +119,6 @@ impl BuildSpec {
                 vec!["ui", "bench-tools", "profile"],
                 UiScope::All,
                 runtime_artifact("release-device-profile"),
-                true,
-            ),
-            BuildIntent::RuntimeExperiments => (
-                BuildTarget::Runtime,
-                BuildMode::Build,
-                "release-device",
-                vec!["ui", "experiments"],
-                UiScope::All,
-                runtime_artifact("release-device"),
                 true,
             ),
             BuildIntent::ValidateLauncher => (
@@ -175,17 +149,6 @@ impl BuildSpec {
                     "mister/tools/agent/target/armv7-unknown-linux-gnueabihf/release/mister-magik-agent",
                 ),
                 false,
-            ),
-            BuildIntent::CatalogBuilder => (
-                BuildTarget::CatalogBuilder,
-                BuildMode::Build,
-                "release-device",
-                vec!["builder"],
-                UiScope::All,
-                PathBuf::from(
-                    "apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-catalog-builder",
-                ),
-                true,
             ),
         };
         let receipt = PathBuf::from(format!("{}.build-receipt.tsv", artifact.display()));
@@ -371,36 +334,6 @@ pub fn execute(
             Some(percent),
         )
     })
-}
-
-pub fn execute_host_tool(repository: &Path, reporter: &mut Reporter<'_>) -> Result<(), String> {
-    reporter.emit(
-        EventKind::Progress,
-        "compile",
-        "build native MiSTer host tool",
-        Some(35),
-    )?;
-    let mut command = Command::new("cargo");
-    command.current_dir(repository).args([
-        "build",
-        "--locked",
-        "--manifest-path",
-        "mister/tools/host/Cargo.toml",
-    ]);
-    run_bounded(&mut command, BUILD_DEADLINE)?;
-    let artifact = repository.join("mister/tools/host/target/debug/mister");
-    if !artifact.is_file() {
-        return Err(format!(
-            "host tool build artifact is missing: {}",
-            artifact.display()
-        ));
-    }
-    reporter.emit(
-        EventKind::Progress,
-        "verify",
-        "native MiSTer host tool built",
-        Some(100),
-    )
 }
 
 pub fn execute_quiet(repository: &Path, spec: &BuildSpec) -> Result<(), String> {
@@ -709,14 +642,7 @@ fn cargo_args(spec: &BuildSpec) -> Vec<OsString> {
         args.extend(["--profile".into(), spec.profile.into()]);
     }
     match spec.target {
-        BuildTarget::Runtime => {}
-        BuildTarget::DeviceAgent => {}
-        BuildTarget::CatalogBuilder => args.extend([
-            "--manifest-path".into(),
-            "../../crates/catalog/Cargo.toml".into(),
-            "--bin".into(),
-            "mister-magik-catalog-builder".into(),
-        ]),
+        BuildTarget::Runtime | BuildTarget::DeviceAgent => {}
     }
     if spec.mode == BuildMode::CheckLibrary {
         args.extend(["--lib".into(), "--no-default-features".into()]);
@@ -728,21 +654,21 @@ fn cargo_args(spec: &BuildSpec) -> Vec<OsString> {
 
 fn host_workdir(target: BuildTarget) -> &'static str {
     match target {
-        BuildTarget::Runtime | BuildTarget::CatalogBuilder => "apps/mister",
+        BuildTarget::Runtime => "apps/mister",
         BuildTarget::DeviceAgent => "mister/tools/agent",
     }
 }
 
 fn container_workdir(target: BuildTarget) -> &'static str {
     match target {
-        BuildTarget::Runtime | BuildTarget::CatalogBuilder => "/project/apps/mister",
+        BuildTarget::Runtime => "/project/apps/mister",
         BuildTarget::DeviceAgent => "/project/mister/tools/agent",
     }
 }
 
 fn lockfile(target: BuildTarget) -> &'static str {
     match target {
-        BuildTarget::Runtime | BuildTarget::CatalogBuilder => "apps/mister/Cargo.lock",
+        BuildTarget::Runtime => "apps/mister/Cargo.lock",
         BuildTarget::DeviceAgent => "mister/tools/agent/Cargo.lock",
     }
 }

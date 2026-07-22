@@ -293,15 +293,26 @@ mod tests {
     }
 
     #[test]
-    fn host_tool_build_has_a_typed_intent() {
-        assert_eq!(
-            Cli::try_parse_from(["agent-cli", "build", "host-tool"])
-                .unwrap()
-                .into_intent(),
-            Intent::Build {
-                intent: BuildIntent::HostTool,
-            }
-        );
+    fn build_accepts_only_owned_intents() {
+        for intent in [
+            "runtime-device",
+            "runtime-fast",
+            "runtime-benchmark",
+            "runtime-profile",
+            "validate-launcher",
+            "validate-library",
+            "device-agent",
+        ] {
+            assert!(Cli::try_parse_from(["agent-cli", "build", intent]).is_ok());
+        }
+        for intent in [
+            "host-tool",
+            "runtime-diagnostics",
+            "runtime-experiments",
+            "catalog-builder",
+        ] {
+            assert!(Cli::try_parse_from(["agent-cli", "build", intent]).is_err());
+        }
     }
 
     #[test]
