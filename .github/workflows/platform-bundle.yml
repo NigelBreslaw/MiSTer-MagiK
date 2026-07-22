@@ -526,6 +526,7 @@ jobs:
             --run-id "$GITHUB_RUN_ID" --head-sha "$GITHUB_SHA"
 
       - uses: actions/upload-artifact@v7
+        if: always()
         with:
           name: platform-fpga-v0.1-${{ needs.plan.outputs.fpga-id }}
           path: build/fpga-signoff
