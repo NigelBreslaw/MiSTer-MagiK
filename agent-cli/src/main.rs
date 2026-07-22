@@ -331,6 +331,118 @@ fn dispatch(
             )?;
             return Ok(Outcome::Passed);
         }
+        Intent::CiGameDatabases { command } => {
+            use agent_cli::cli::GameDatabaseCommand;
+            reporter.emit(
+                EventKind::Progress,
+                "databases",
+                "Processing game-database bundle",
+                Some(30),
+            )?;
+            match command {
+                GameDatabaseCommand::Create {
+                    mame_sqlite,
+                    hbmame_sqlite,
+                    release_version,
+                    mame_tag,
+                    mame_sha,
+                    mame_listxml_asset,
+                    mame_listxml_sha256,
+                    hbmame_tag,
+                    hbmame_sha,
+                    mame_builder_sha,
+                    hbmame_builder_sha,
+                    output,
+                } => {
+                    let archive =
+                        agent_cli::game_databases::create(&agent_cli::game_databases::Create {
+                            mame: mame_sqlite,
+                            hbmame: hbmame_sqlite,
+                            release_version: *release_version,
+                            mame_tag,
+                            mame_sha,
+                            listxml_asset: mame_listxml_asset,
+                            listxml_sha256: mame_listxml_sha256,
+                            hbmame_tag,
+                            hbmame_sha,
+                            mame_builder_sha,
+                            hbmame_builder_sha,
+                            output,
+                        })?;
+                    println!("{}", archive.display());
+                }
+                GameDatabaseCommand::Verify {
+                    archive,
+                    manifest,
+                    checksums,
+                } => {
+                    println!(
+                        "{}",
+                        serde_json::to_string(&agent_cli::game_databases::verify(
+                            archive,
+                            manifest.as_deref(),
+                            checksums.as_deref()
+                        )?)
+                        .unwrap()
+                    );
+                }
+                GameDatabaseCommand::ExtractRelease { release, output } => {
+                    println!(
+                        "{}",
+                        serde_json::to_string(&agent_cli::game_databases::extract_release(
+                            release, output
+                        )?)
+                        .unwrap()
+                    );
+                }
+                GameDatabaseCommand::PlanUpdate {
+                    manifest,
+                    mame_tag,
+                    mame_sha,
+                    hbmame_tag,
+                    hbmame_sha,
+                    github_output,
+                } => {
+                    let current = manifest
+                        .as_ref()
+                        .map(std::fs::read_to_string)
+                        .transpose()
+                        .map_err(|error| error.to_string())?
+                        .map(|text| serde_json::from_str(&text).map_err(|error| error.to_string()))
+                        .transpose()?;
+                    let result = agent_cli::game_databases::update_plan(
+                        current.as_ref(),
+                        mame_tag,
+                        mame_sha,
+                        hbmame_tag,
+                        hbmame_sha,
+                    )?;
+                    if let Some(path) = github_output {
+                        use std::io::Write;
+                        let mut file = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(path)
+                            .map_err(|error| error.to_string())?;
+                        for key in [
+                            "current_version",
+                            "next_version",
+                            "mame_changed",
+                            "hbmame_changed",
+                            "update_needed",
+                        ] {
+                            let value = result[key]
+                                .as_str()
+                                .map(str::to_owned)
+                                .unwrap_or_else(|| result[key].to_string());
+                            writeln!(file, "{key}={value}").map_err(|error| error.to_string())?;
+                        }
+                    }
+                    println!("{}", serde_json::to_string(&result).unwrap());
+                }
+            }
+            return Ok(Outcome::Passed);
+        }
         Intent::Plan {
             scope: selected, ..
         }

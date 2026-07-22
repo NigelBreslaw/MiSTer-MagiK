@@ -197,7 +197,7 @@ fn check_distribution_workflow(repository: &Path) -> Result<(), String> {
         "scripts/agent build runtime-device",
         "scripts/agent ci require-alpha-promotion",
         "scripts/agent ci platform-manifest generate",
-        "game-databases-bundle.py verify",
+        "scripts/agent ci game-databases verify",
         "contents: write",
         "gh release create",
         "initialize_feed_branch()",
@@ -210,7 +210,7 @@ fn check_distribution_workflow(repository: &Path) -> Result<(), String> {
     for forbidden in [
         "scripts/release/check-alpha-promotion.sh",
         "platform-manifest.py",
-        "game-databases-bundle.py create",
+        "scripts/agent ci game-databases create",
         "mame-metadata-build",
         "--mame-sqlite",
         "--hbmame-sqlite",

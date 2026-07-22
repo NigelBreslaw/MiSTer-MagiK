@@ -185,7 +185,7 @@ if [[ -z "$GAME_DATABASES_RELEASE_DIR" || ! -d "$GAME_DATABASES_RELEASE_DIR" ]];
 fi
 DATABASE_TMP="$(mktemp -d "${TMPDIR:-/tmp}/mister-magik-game-databases.XXXXXX")"
 trap 'rm -rf "$DATABASE_TMP"' EXIT
-python3 "$ROOT/scripts/release/databases/game-databases-bundle.py" extract-release \
+"$ROOT/scripts/agent" ci game-databases extract-release \
   "$GAME_DATABASES_RELEASE_DIR" --output "$DATABASE_TMP" >/dev/null
 MAME_SQLITE="$DATABASE_TMP/mame.sqlite3"
 HBMAME_SQLITE="$DATABASE_TMP/hbmame.sqlite3"

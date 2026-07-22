@@ -79,7 +79,7 @@ pub enum Command {
     #[command(hide = true)]
     Ci {
         #[command(subcommand)]
-        command: CiCommand,
+        command: Box<CiCommand>,
     },
 }
 
@@ -101,6 +101,66 @@ pub enum CiCommand {
     PlatformManifest {
         #[command(subcommand)]
         command: PlatformManifestCommand,
+    },
+    GameDatabases {
+        #[command(subcommand)]
+        command: GameDatabaseCommand,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize, Subcommand)]
+pub enum GameDatabaseCommand {
+    Create {
+        #[arg(long)]
+        mame_sqlite: PathBuf,
+        #[arg(long)]
+        hbmame_sqlite: PathBuf,
+        #[arg(long)]
+        release_version: u64,
+        #[arg(long)]
+        mame_tag: String,
+        #[arg(long)]
+        mame_sha: String,
+        #[arg(long)]
+        mame_listxml_asset: String,
+        #[arg(long)]
+        mame_listxml_sha256: String,
+        #[arg(long)]
+        hbmame_tag: String,
+        #[arg(long)]
+        hbmame_sha: String,
+        #[arg(long)]
+        mame_builder_sha: String,
+        #[arg(long)]
+        hbmame_builder_sha: String,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    Verify {
+        archive: PathBuf,
+        #[arg(long)]
+        manifest: Option<PathBuf>,
+        #[arg(long)]
+        checksums: Option<PathBuf>,
+    },
+    ExtractRelease {
+        release: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    PlanUpdate {
+        #[arg(long)]
+        manifest: Option<PathBuf>,
+        #[arg(long)]
+        mame_tag: String,
+        #[arg(long)]
+        mame_sha: String,
+        #[arg(long)]
+        hbmame_tag: String,
+        #[arg(long)]
+        hbmame_sha: String,
+        #[arg(long)]
+        github_output: Option<PathBuf>,
     },
 }
 
@@ -248,7 +308,7 @@ impl Cli {
                 command: ReleaseCommand::Qualify,
             }) => Intent::ReleaseQualify,
             Some(Command::Build { intent }) => Intent::Build { intent },
-            Some(Command::Ci { command }) => match command {
+            Some(Command::Ci { command }) => match *command {
                 CiCommand::PlatformCandidates { artifacts, name } => {
                     Intent::CiPlatformCandidates { artifacts, name }
                 }
@@ -298,6 +358,7 @@ impl Cli {
                         layout,
                     },
                 },
+                CiCommand::GameDatabases { command } => Intent::CiGameDatabases { command },
             },
         }
     }

@@ -146,6 +146,9 @@ pub enum Intent {
         root: Option<PathBuf>,
         layout: String,
     },
+    CiGameDatabases {
+        command: crate::cli::GameDatabaseCommand,
+    },
 }
 
 impl Intent {

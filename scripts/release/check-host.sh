@@ -61,7 +61,7 @@ hbmame.commit()
 hbmame.close()
 PY
 
-scripts/release/databases/game-databases-bundle.py create \
+scripts/agent ci game-databases create \
   --mame-sqlite "$WORK/mame.sqlite3" --hbmame-sqlite "$WORK/hbmame.sqlite3" \
   --release-version 1 --mame-tag mame0288 \
   --mame-sha 1111111111111111111111111111111111111111 \

@@ -155,7 +155,7 @@ jobs:
             --pattern "mister-magik-game-databases-v${databases_version}.zip" \
             --pattern game-databases-manifest.json --pattern SHA256SUMS
           databases_archive="build/game-databases/mister-magik-game-databases-v${databases_version}.zip"
-          python3 scripts/release/databases/game-databases-bundle.py verify "$databases_archive" \
+          scripts/agent ci game-databases verify "$databases_archive" \
             --manifest build/game-databases/game-databases-manifest.json \
             --checksums build/game-databases/SHA256SUMS >/dev/null
 
