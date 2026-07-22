@@ -1061,6 +1061,63 @@ mod tests {
     }
 
     #[test]
+    fn archive_member_classifies_missing_and_unsafe_payloads() {
+        let root = unique_temp_dir("archive-member-classification");
+        let stage = root.join("stage");
+        let mut member = mister_magik_catalog::archive_member::ArchiveMemberRef {
+            archive_path: root.join("missing.zip").display().to_string(),
+            member_path: "Game.bin".to_string(),
+            local_header_offset: 0,
+            compression_method: 0,
+            compressed_size: 3,
+            uncompressed_size: 3,
+            crc32: crc32fast::hash(b"rom"),
+        };
+
+        assert_eq!(
+            extract_archive_member(&member, &stage)
+                .expect_err("missing archive")
+                .kind,
+            LaunchPreparationFailureKind::MissingPayload
+        );
+
+        member.member_path = "../Game.bin".into();
+        assert_eq!(
+            extract_archive_member(&member, &stage)
+                .expect_err("parent traversal")
+                .kind,
+            LaunchPreparationFailureKind::DamagedArchive
+        );
+        assert!(!stage.exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn truncated_archive_payload_is_rejected_and_staging_is_cleaned() {
+        let root = unique_temp_dir("archive-member-truncated");
+        let stage = root.join("stage");
+        let (archive, crc32) = stored_zip_member(&root, "Game.bin", b"rom");
+        let member = mister_magik_catalog::archive_member::ArchiveMemberRef {
+            archive_path: archive.display().to_string(),
+            member_path: "Game.bin".to_string(),
+            local_header_offset: 0,
+            compression_method: 0,
+            compressed_size: 2,
+            uncompressed_size: 3,
+            crc32,
+        };
+
+        assert_eq!(
+            extract_archive_member(&member, &stage)
+                .expect_err("truncated member")
+                .kind,
+            LaunchPreparationFailureKind::DamagedArchive
+        );
+        assert!(!stage.exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn direct_launch_ref_prepares_without_materialization() {
         assert_eq!(
             prepare_launch_ref("/media/fat/_Arcade/test.mra").expect("prepare direct"),
