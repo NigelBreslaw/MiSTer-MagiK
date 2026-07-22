@@ -104,9 +104,6 @@ pub enum Intent {
     Build {
         intent: crate::build::BuildIntent,
     },
-    DeployRecipe {
-        recipe: String,
-    },
 }
 
 impl Intent {
@@ -118,8 +115,7 @@ impl Intent {
             Self::Deliver { .. }
             | Self::Benchmark { .. }
             | Self::Diagnose
-            | Self::DisplayMode { .. }
-            | Self::DeployRecipe { .. } => Risk::DeviceWrite,
+            | Self::DisplayMode { .. } => Risk::DeviceWrite,
             Self::Build { .. } => Risk::LocalWrite,
             _ => Risk::ReadOnly,
         }

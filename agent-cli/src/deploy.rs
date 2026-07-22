@@ -14,14 +14,6 @@ pub enum DeploymentKind {
     Platform,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum DeploymentRecipe {
-    Canonical,
-    Profiling,
-    Acceptance,
-}
-
 impl DeploymentKind {
     #[must_use]
     pub fn label(self) -> &'static str {
@@ -53,7 +45,6 @@ impl UiScope {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct DeploymentPlan {
-    pub recipe: DeploymentRecipe,
     pub kind: DeploymentKind,
     pub profile: &'static str,
     pub ui_scope: UiScope,
@@ -64,91 +55,11 @@ pub struct DeploymentPlan {
     pub platform_candidate: Option<crate::platform_ci::Candidate>,
 }
 
-pub fn recipe_plan(recipe: &str) -> Result<DeploymentPlan, String> {
-    let (profile, scope, flags) = match recipe {
-        "launcher-device" => (
-            "release-device",
-            UiScope::Launcher,
-            vec!["--device", "--ui-scope", "launcher"],
-        ),
-        "launcher-fast" => (
-            "release",
-            UiScope::Launcher,
-            vec!["--fast", "--ui-scope", "launcher"],
-        ),
-        "launcher-bench-device" => (
-            "release-device",
-            UiScope::Launcher,
-            vec!["--device", "--ui-scope", "launcher", "--bench-tools"],
-        ),
-        "launcher-bench-fast" => (
-            "release",
-            UiScope::Launcher,
-            vec!["--fast", "--ui-scope", "launcher", "--bench-tools"],
-        ),
-        "launcher-diagnostics-device" => (
-            "release-device",
-            UiScope::Launcher,
-            vec![
-                "--device",
-                "--ui-scope",
-                "launcher",
-                "--bench-tools",
-                "--diagnostics",
-            ],
-        ),
-        "all-diagnostics-device" => (
-            "release-device",
-            UiScope::All,
-            vec!["--device", "--bench-tools", "--diagnostics"],
-        ),
-        "launcher-profile" => (
-            "release-device-profile",
-            UiScope::Launcher,
-            vec!["--profile", "--ui-scope", "launcher", "--bench-tools"],
-        ),
-        "all-scenes-profile" => (
-            "release-device-profile",
-            UiScope::All,
-            vec!["--profile", "--all-scenes"],
-        ),
-        "all-experiments-device" => (
-            "release-device",
-            UiScope::All,
-            vec!["--device", "--experiments"],
-        ),
-        "all-experiments-bench-device" => (
-            "release-device",
-            UiScope::All,
-            vec!["--device", "--experiments", "--bench-tools"],
-        ),
-        other => return Err(format!("unknown internal deployment recipe: {other}")),
-    };
-    let artifact = PathBuf::from(format!(
-        "apps/mister/target/armv7-unknown-linux-gnueabihf/{profile}/mister-magik-fb"
-    ));
-    Ok(DeploymentPlan {
-        recipe: match recipe {
-            r if r.contains("bench") => DeploymentRecipe::Profiling,
-            _ => DeploymentRecipe::Acceptance,
-        },
-        kind: DeploymentKind::Runtime,
-        profile,
-        ui_scope: scope,
-        layout: "dev",
-        platform_components: Vec::new(),
-        changed_paths: Vec::new(),
-        build: BuildSpec::internal_recipe(profile, scope, &flags, artifact),
-        platform_candidate: None,
-    })
-}
-
 impl DeploymentPlan {
     #[must_use]
     pub fn as_evidence_plan(&self, intent: Intent) -> Plan {
         let mut inputs = vec![
             format!("kind={}", self.kind.label()),
-            format!("recipe={:?}", self.recipe),
             format!("profile={}", self.profile),
             format!("ui_scope={}", self.ui_scope.label()),
             format!("layout={}", self.layout),
@@ -208,7 +119,6 @@ pub fn plan(repository: &Path, mut paths: Vec<PathBuf>) -> Result<DeploymentPlan
     }
     let ui_scope = ui_scope(&paths);
     Ok(DeploymentPlan {
-        recipe: DeploymentRecipe::Canonical,
         kind: if !components.is_empty() || coherent_runtime {
             DeploymentKind::Platform
         } else {

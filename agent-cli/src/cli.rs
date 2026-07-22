@@ -71,16 +71,6 @@ pub enum Command {
         #[arg(value_enum)]
         intent: BuildIntent,
     },
-    #[command(hide = true)]
-    DeployRecipe {
-        #[arg(value_parser = [
-            "launcher-device", "launcher-fast", "launcher-bench-device",
-            "launcher-bench-fast", "launcher-diagnostics-device",
-            "all-diagnostics-device", "launcher-profile", "all-scenes-profile",
-            "all-experiments-device", "all-experiments-bench-device"
-        ])]
-        recipe: String,
-    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -194,7 +184,6 @@ impl Cli {
                 command: ReleaseCommand::Qualify,
             }) => Intent::ReleaseQualify,
             Some(Command::Build { intent }) => Intent::Build { intent },
-            Some(Command::DeployRecipe { recipe }) => Intent::DeployRecipe { recipe },
         }
     }
 }
@@ -268,6 +257,7 @@ mod tests {
         assert!(Cli::try_parse_from(["agent-cli", "deliver", "--fast"]).is_err());
         assert!(Cli::try_parse_from(["agent-cli", "deliver", "-m", "message"]).is_err());
         assert!(Cli::try_parse_from(["agent-cli", "deploy"]).is_err());
+        assert!(Cli::try_parse_from(["agent-cli", "deploy-recipe", "launcher-device"]).is_err());
     }
 
     #[test]

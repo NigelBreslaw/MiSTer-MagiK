@@ -18,8 +18,8 @@ scripts/agent diagnose
 ```
 
 `scripts/agent release qualify` is an attended operator command. Hidden typed
-build/deployment intents exist for CI compatibility, not as a public flag
-matrix. `commit` is the only lifecycle command that changes Git state;
+build intents exist for CI compatibility, not as a public flag matrix. `commit`
+is the only lifecycle command that changes Git state;
 `deliver` never commits or pushes.
 
 Device operations use `DeviceClient` and closed `DeviceRequest` variants.

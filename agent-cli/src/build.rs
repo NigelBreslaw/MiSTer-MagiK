@@ -215,44 +215,6 @@ impl BuildSpec {
         spec
     }
 
-    #[must_use]
-    pub fn internal_recipe(
-        profile: &'static str,
-        scope: UiScope,
-        flags: &[&str],
-        artifact: PathBuf,
-    ) -> Self {
-        let mut features = vec!["ui"];
-        if flags.contains(&"--bench-tools") {
-            features.push("bench-tools");
-        }
-        if flags.contains(&"--diagnostics") {
-            features.push("diagnostics");
-        }
-        if flags.contains(&"--experiments") || flags.contains(&"--all-scenes") {
-            features.push("experiments");
-        }
-        if flags.contains(&"--profile") {
-            features.push("profile");
-        }
-        let receipt = PathBuf::from(format!("{}.build-receipt.tsv", artifact.display()));
-        Self {
-            target: BuildTarget::Runtime,
-            mode: BuildMode::Build,
-            profile,
-            cache_identity: format!(
-                "v3:{TARGET}:runtime:{profile}:{}:{}",
-                features.join(","),
-                scope.label()
-            ),
-            features,
-            ui_scope: scope,
-            artifact,
-            receipt,
-            strict_receipt: true,
-        }
-    }
-
     pub fn verify(&self, repository: &Path) -> Result<BuildReceipt, String> {
         if self.mode != BuildMode::Build {
             return Ok(BuildReceipt::empty(self));
