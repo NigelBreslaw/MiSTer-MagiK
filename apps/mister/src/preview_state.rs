@@ -1967,8 +1967,8 @@ fn preview_result_system_id(result: &PreviewResult) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui_runner::ui_platform::MisterPlatform;
-    use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
+    use crate::ui_runner::ui_platform::{MisterPlatform, MisterSoftwareWindow};
+    use slint::platform::software_renderer::RepaintBufferType;
     use slint::ComponentHandle;
     use std::cell::Cell;
     use std::rc::Rc;
@@ -2876,7 +2876,7 @@ mod tests {
     fn init_test_slint_platform() {
         static INIT: Once = Once::new();
         INIT.call_once(|| {
-            let window = MinimalSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
+            let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
             let fixed_time = Some(Rc::new(Cell::new(Duration::ZERO)));
             let _ = slint::platform::set_platform(Box::new(MisterPlatform {
                 window,

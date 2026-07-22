@@ -8,7 +8,7 @@ pub(super) fn run_bench_frame(
     disp: &mut MappedRgb565Framebuffer,
     _f: &mut Fpga,
     target: &mut UiFrameTarget,
-    window: &Rc<MinimalSoftwareWindow>,
+    window: &Rc<MisterSoftwareWindow>,
     frame_order: FrameOrder,
     animation_clock: &AnimationClock,
     pacer: &mut VsyncPacer,
@@ -111,7 +111,7 @@ pub(super) fn run_frame_loop(
     ui: &UiDisplay,
     disp: &mut MappedRgb565Framebuffer,
     f: &mut Fpga,
-    window: &Rc<MinimalSoftwareWindow>,
+    window: &Rc<MisterSoftwareWindow>,
     target: &mut UiFrameTarget,
     animation_clock: &AnimationClock,
 ) {

@@ -39,6 +39,12 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     bridge.set_selected_index(0);
     bridge.set_settings_focused(false);
     bridge.set_settings_selected(0);
+    bridge.set_display_options(ModelRc::new(VecModel::from(
+        mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS
+            .iter()
+            .map(|mode| SharedString::from(mode.label))
+            .collect::<Vec<_>>(),
+    )));
     bridge.set_simple_joystick_handling(false);
     bridge.set_licenses_selected(0);
     bridge.set_licenses_expanded(false);
@@ -87,6 +93,103 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     bridge.set_arcade_preview_display_height(0);
     LauncherStatusPresenter::new(&bridge).init();
     sync_bridge_pad_launcher(&bridge, pad);
+}
+
+pub(super) fn sync_settings_bridge(
+    app: &slint_ui::launcher::Launcher,
+    nav: &LauncherNav,
+    lifecycle: &LauncherLifecycle,
+) {
+    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+    set_bridge_if_changed!(
+        bridge,
+        get_screen_mode,
+        set_screen_mode,
+        match nav.screen {
+            Screen::Home => 0,
+            Screen::Controller => 1,
+            Screen::Arcade => 2,
+            Screen::Settings => 3,
+            Screen::About => 4,
+            Screen::Licenses => 5,
+            Screen::Info => 6,
+            Screen::Screensaver => 7,
+        }
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_settings_selected,
+        set_settings_selected,
+        nav.settings_selected as i32
+    );
+    let active_label = mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS
+        .get(nav.display_selected)
+        .map_or("Custom/current mode", |mode| mode.label);
+    set_bridge_string_if_changed!(
+        bridge,
+        get_display_active_label,
+        set_display_active_label,
+        active_label
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_display_combo_open,
+        set_display_combo_open,
+        nav.display_combo_open
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_display_selected,
+        set_display_selected,
+        nav.display_selected as i32
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_display_highlighted,
+        set_display_highlighted,
+        nav.display_highlighted as i32
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_display_confirm_remaining,
+        set_display_confirm_remaining,
+        nav.display_confirm_remaining as i32
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_simple_joystick_handling,
+        set_simple_joystick_handling,
+        nav.settings.simple_joystick_handling
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_screensaver_settings_selected,
+        set_screensaver_settings_selected,
+        nav.screensaver_selected as i32
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_screensaver_enabled,
+        set_screensaver_enabled,
+        nav.settings.screensaver_enabled
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_screensaver_delay_minutes,
+        set_screensaver_delay_minutes,
+        nav.settings.screensaver_delay_minutes as i32
+    );
+    if matches!(nav.screen, Screen::Settings | Screen::Screensaver)
+        || matches!(
+            nav.confirm_action,
+            Some(
+                launcher::ConfirmAction::DisplayResolution
+                    | launcher::ConfirmAction::DisplayResolutionError
+            )
+        )
+    {
+        sync_launcher_confirm_bridge(&bridge, nav, lifecycle);
+    }
 }
 
 fn build_label() -> String {
@@ -534,12 +637,6 @@ pub(super) fn sync_bridge_launcher(
     bridge.set_menu_breadcrumb(nav.current_menu_breadcrumb().into());
     bridge.set_settings_focused(nav.settings_focused);
     bridge.set_settings_selected(nav.settings_selected as i32);
-    bridge.set_display_options(ModelRc::new(VecModel::from(
-        mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS
-            .iter()
-            .map(|mode| SharedString::from(mode.label))
-            .collect::<Vec<_>>(),
-    )));
     let active_label = mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS
         .get(nav.display_selected)
         .map_or("Custom/current mode", |mode| mode.label);
@@ -1081,15 +1178,6 @@ pub(super) struct LauncherBridgeKey {
     home_scroll_repeat_active: bool,
     home_scroll_held: bool,
     settings_focused: bool,
-    settings_selected: usize,
-    display_combo_open: bool,
-    display_selected: usize,
-    display_highlighted: usize,
-    display_confirm_remaining: u8,
-    screensaver_selected: usize,
-    screensaver_enabled: bool,
-    screensaver_delay_minutes: u8,
-    simple_joystick_handling: bool,
     licenses_selected: usize,
     licenses_expanded: bool,
     licenses_scroll_y: i32,
@@ -1118,15 +1206,6 @@ impl LauncherBridgeKey {
             home_scroll_repeat_active: nav.home_horizontal_repeat_active(),
             home_scroll_held: nav.home_horizontal_held(),
             settings_focused: nav.settings_focused,
-            settings_selected: nav.settings_selected,
-            display_combo_open: nav.display_combo_open,
-            display_selected: nav.display_selected,
-            display_highlighted: nav.display_highlighted,
-            display_confirm_remaining: nav.display_confirm_remaining,
-            screensaver_selected: nav.screensaver_selected,
-            screensaver_enabled: nav.settings.screensaver_enabled,
-            screensaver_delay_minutes: nav.settings.screensaver_delay_minutes,
-            simple_joystick_handling: nav.settings.simple_joystick_handling,
             licenses_selected: nav.licenses_selected,
             licenses_expanded: nav.licenses_expanded,
             licenses_scroll_y: nav.licenses_scroll_y(),
@@ -1308,22 +1387,48 @@ mod tests {
     }
 
     #[test]
-    fn launcher_bridge_key_tracks_screensaver_settings() {
+    fn settings_sync_does_not_depend_on_launcher_bridge_key() {
+        init_test_slint_platform();
+        let app = slint_ui::launcher::Launcher::new().expect("launcher component");
         let mut nav = LauncherNav::new();
         nav.screen = Screen::Screensaver;
-
         let before = LauncherBridgeKey::from_nav(&nav);
+
+        nav.settings_selected = 3;
+        nav.display_combo_open = true;
+        nav.display_selected = 1;
+        nav.display_highlighted = 2;
         nav.screensaver_selected = 1;
-        let selected = LauncherBridgeKey::from_nav(&nav);
-        assert!(before != selected);
-
         nav.settings.screensaver_enabled = !nav.settings.screensaver_enabled;
-        let enabled = LauncherBridgeKey::from_nav(&nav);
-        assert!(selected != enabled);
-
         nav.settings.screensaver_delay_minutes += 1;
-        let delay = LauncherBridgeKey::from_nav(&nav);
-        assert!(enabled != delay);
+        nav.settings.simple_joystick_handling = true;
+
+        assert!(before == LauncherBridgeKey::from_nav(&nav));
+
+        let lifecycle = LauncherLifecycle::new(
+            LauncherLifecycleConfig {
+                catalog_worker_enabled: false,
+            },
+            Instant::now(),
+        );
+        sync_settings_bridge(&app, &nav, &lifecycle);
+
+        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+        assert_eq!(bridge.get_screen_mode(), 7);
+        assert_eq!(bridge.get_settings_selected(), 3);
+        assert!(bridge.get_display_combo_open());
+        assert_eq!(bridge.get_display_selected(), 1);
+        assert_eq!(bridge.get_display_highlighted(), 2);
+        assert_eq!(bridge.get_screensaver_settings_selected(), 1);
+        assert_eq!(
+            bridge.get_screensaver_enabled(),
+            nav.settings.screensaver_enabled
+        );
+        assert_eq!(
+            bridge.get_screensaver_delay_minutes(),
+            nav.settings.screensaver_delay_minutes as i32
+        );
+        assert!(bridge.get_simple_joystick_handling());
     }
 
     #[test]
@@ -1390,7 +1495,7 @@ mod tests {
     fn init_test_slint_platform() {
         static INIT: Once = Once::new();
         INIT.call_once(|| {
-            let window = MinimalSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
+            let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
             let fixed_time = Some(Rc::new(Cell::new(Duration::ZERO)));
             let _ = slint::platform::set_platform(Box::new(MisterPlatform {
                 window,

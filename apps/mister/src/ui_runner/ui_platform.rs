@@ -3,8 +3,78 @@
 
 use super::*;
 
+pub(crate) struct MisterSoftwareWindow {
+    window: Window,
+    renderer: SoftwareRenderer,
+    redraw_pending: Cell<bool>,
+    size: Cell<PhysicalSize>,
+}
+
+impl MisterSoftwareWindow {
+    pub(crate) fn new(repaint_buffer_type: RepaintBufferType) -> Rc<Self> {
+        Rc::new_cyclic(|weak: &Weak<Self>| Self {
+            window: Window::new(weak.clone()),
+            renderer: SoftwareRenderer::new_with_repaint_buffer_type(repaint_buffer_type),
+            redraw_pending: Cell::new(false),
+            size: Cell::new(PhysicalSize::default()),
+        })
+    }
+
+    pub(crate) fn redraw_pending(&self) -> bool {
+        self.redraw_pending.get()
+    }
+
+    pub(crate) fn draw_if_needed(&self, render_callback: impl FnOnce(&SoftwareRenderer)) -> bool {
+        if self.redraw_pending.replace(false) {
+            render_callback(&self.renderer);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn set_size(&self, size: impl Into<slint::WindowSize>) {
+        self.window.set_size(size);
+    }
+}
+
+impl WindowAdapter for MisterSoftwareWindow {
+    fn window(&self) -> &Window {
+        &self.window
+    }
+
+    fn renderer(&self) -> &dyn slint::platform::Renderer {
+        &self.renderer
+    }
+
+    fn size(&self) -> PhysicalSize {
+        self.size.get()
+    }
+
+    fn set_size(&self, size: slint::WindowSize) {
+        let scale_factor = self.window.scale_factor();
+        self.size.set(size.to_physical(scale_factor));
+        self.window
+            .dispatch_event(slint::platform::WindowEvent::Resized {
+                size: size.to_logical(scale_factor),
+            });
+    }
+
+    fn request_redraw(&self) {
+        self.redraw_pending.set(true);
+    }
+}
+
+impl std::ops::Deref for MisterSoftwareWindow {
+    type Target = Window;
+
+    fn deref(&self) -> &Self::Target {
+        &self.window
+    }
+}
+
 pub(crate) struct MisterPlatform {
-    pub(crate) window: Rc<MinimalSoftwareWindow>,
+    pub(crate) window: Rc<MisterSoftwareWindow>,
     pub(crate) start: Instant,
     pub(crate) fixed_time: Option<Rc<Cell<Duration>>>,
 }
@@ -164,6 +234,21 @@ impl Platform for MisterPlatform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn software_window_redraw_state_is_authoritative() {
+        let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
+        assert!(!window.redraw_pending());
+
+        WindowAdapter::request_redraw(window.as_ref());
+        assert!(window.redraw_pending());
+
+        let mut rendered = false;
+        assert!(window.draw_if_needed(|_| rendered = true));
+        assert!(rendered);
+        assert!(!window.redraw_pending());
+        assert!(!window.draw_if_needed(|_| panic!("idle window rendered")));
+    }
 
     #[test]
     fn present_delay_parses_microseconds() {

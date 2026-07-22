@@ -989,7 +989,9 @@ fn expand_home_pan_dirty_rect(
 }
 
 fn launcher_idle_sleep_duration(pacer: &VsyncPacer) -> Duration {
-    Duration::from_micros(pacer.period_us().max(1))
+    let frame_period = Duration::from_micros(pacer.period_us().max(1));
+    slint::platform::duration_until_next_timer_update()
+        .map_or(frame_period, |timer| frame_period.min(timer))
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -1659,7 +1661,7 @@ pub(super) fn run_launcher_loop(
     disp: &mut MappedRgb565Framebuffer,
     f: &mut Fpga,
     display_session: &mut LauncherDisplaySession,
-    window: &Rc<MinimalSoftwareWindow>,
+    window: &Rc<MisterSoftwareWindow>,
     target: &mut UiFrameTarget,
     mut pad: PadPool,
     app: slint_ui::launcher::Launcher,
@@ -2240,10 +2242,8 @@ pub(super) fn run_launcher_loop(
     let _ = lifecycle.after_boot_splash_presented(startup_catalog_state, &mut lifecycle_effects);
     apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
     window.request_redraw();
-    let mut launcher_redraw_pending = true;
     macro_rules! request_launcher_redraw {
         () => {{
-            launcher_redraw_pending = true;
             window.request_redraw();
         }};
     }
@@ -2277,6 +2277,7 @@ pub(super) fn run_launcher_loop(
             continue;
         }
         let loop_start = Instant::now();
+        slint::platform::update_timers_and_animations();
         let mut full_bridge_dirty = false;
         if let Some(deadline) = display_confirm_deadline {
             nav.display_confirm_remaining = if loop_start >= deadline {
@@ -3392,7 +3393,6 @@ pub(super) fn run_launcher_loop(
                                         nav.confirm_selected = 0;
                                     }
                                 }
-                                continue;
                             }
                             LauncherAction::ConfirmDisplayResolution => {
                                 nav.display_confirm_busy = true;
@@ -3406,7 +3406,6 @@ pub(super) fn run_launcher_loop(
                                     );
                                     let _ = result_tx.send(result);
                                 });
-                                continue;
                             }
                             LauncherAction::CancelDisplayResolution => {
                                 if let Err(error) = launcher::cancel_display_resolution() {
@@ -3418,7 +3417,6 @@ pub(super) fn run_launcher_loop(
                                         Some(launcher::ConfirmAction::DisplayResolutionError);
                                     nav.confirm_selected = 0;
                                 }
-                                continue;
                             }
                             LauncherAction::PreviewScreensaver => {
                                 if !screensaver.preview_active {
@@ -3619,6 +3617,7 @@ pub(super) fn run_launcher_loop(
             request_launcher_redraw!();
         }
 
+        sync_settings_bridge(&app, &nav, &lifecycle);
         match launcher_bridge_sync_plan(
             launching,
             lifecycle.startup_input_enabled(),
@@ -3951,7 +3950,7 @@ pub(super) fn run_launcher_loop(
             let _ = launcher_presenter.publish_stream_refinement_if_due();
         }
         let mut wake_reasons = LauncherWakeReasons::default();
-        wake_reasons.insert_if(LauncherWakeReasons::REDRAW_PENDING, launcher_redraw_pending);
+        wake_reasons.insert_if(LauncherWakeReasons::REDRAW_PENDING, window.redraw_pending());
         wake_reasons.insert_if(LauncherWakeReasons::LAUNCHING, launching);
         wake_reasons.insert_if(LauncherWakeReasons::SETUP_ACTIVE, setup_active);
         wake_reasons.insert_if(LauncherWakeReasons::BENCHMARK_ACTIVE, launcher_bench_active);
@@ -4089,7 +4088,7 @@ pub(super) fn run_launcher_loop(
         }
 
         let frame_start_phase_us = pacer.age_since_last_hit_us(loop_start);
-        let redraw_pending_for_trace = launcher_redraw_pending;
+        let redraw_pending_for_trace = window.redraw_pending();
         let wake_reasons_bits = wake_reasons.bits();
         let latch_backend_active = launcher_presenter.pacing_backend().is_latch();
         let home_motion_active = home_frame_driven_redraw_active(
@@ -4246,7 +4245,6 @@ pub(super) fn run_launcher_loop(
                 );
             }
         }
-        launcher_redraw_pending = false;
         let cpu_t2 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let frame_t2 = Instant::now();
         let cpu_custom_draw_start = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);

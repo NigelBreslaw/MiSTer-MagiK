@@ -7,7 +7,7 @@ pub(super) fn run_tear_pattern_loop(
     secs: u64,
     ui: &UiDisplay,
     disp: &mut MappedRgb565Framebuffer,
-    window: &Rc<MinimalSoftwareWindow>,
+    window: &Rc<MisterSoftwareWindow>,
     animation_clock: &AnimationClock,
 ) {
     let mut cached = vec![Rgb565Pixel(0); ui.render_w() * ui.render_h()];

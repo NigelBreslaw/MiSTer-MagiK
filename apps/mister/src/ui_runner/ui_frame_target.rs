@@ -414,7 +414,7 @@ pub(super) fn frame_rect(rect: DirtyRect) -> FrameRect {
     }
 }
 
-pub(super) fn configure_window(ui: &UiDisplay, window: &Rc<MinimalSoftwareWindow>) {
+pub(super) fn configure_window(ui: &UiDisplay, window: &Rc<MisterSoftwareWindow>) {
     window.set_size(PhysicalSize::new(
         ui.render_w() as u32,
         ui.render_h() as u32,

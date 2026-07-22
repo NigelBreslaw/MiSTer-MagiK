@@ -235,6 +235,14 @@ and preview layers must be repainted in the same frame. This prevents Slint's
 cached base frame from silently overwriting a still-truthful `exact` preview
 with the blank placeholder area.
 
+Slint owns invalidation of the cached base UI. The launcher window adapter's
+pending-redraw state is the scheduler's source of truth, and cheap Settings and
+Screensaver Settings bridge properties are synchronized with change-aware
+setters every event-loop iteration. They must not be added to the launcher's
+manual bridge dirty key. Explicit frame intent remains limited to work outside
+Slint, including direct Arcade layers, framebuffer routing, workers, and FPGA
+presentation.
+
 ```mermaid
 stateDiagram-v2
     [*] --> FullSlint

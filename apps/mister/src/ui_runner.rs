@@ -11,11 +11,11 @@ use mister_magik_fb::framebuffer::mapped::MappedRgb565Framebuffer;
 use mister_magik_fb::framebuffer::vsync::VsyncPaceSource;
 use mister_magik_fb::framebuffer::vsync::VsyncPacer;
 use slint::platform::software_renderer::{
-    MinimalSoftwareWindow, RepaintBufferType, Rgb565Pixel, TargetPixel,
+    RepaintBufferType, Rgb565Pixel, SoftwareRenderer, TargetPixel,
 };
 use slint::platform::{Platform, WindowAdapter};
-use slint::{ComponentHandle, Model, ModelRc, PhysicalSize, SharedString, VecModel};
-use std::rc::Rc;
+use slint::{ComponentHandle, Model, ModelRc, PhysicalSize, SharedString, VecModel, Window};
+use std::rc::{Rc, Weak};
 use std::time::{Duration, Instant};
 
 use mister_magik_ui as slint_ui;
@@ -342,7 +342,7 @@ pub fn run_ui(f: &mut Fpga) {
         return;
     }
 
-    let window = MinimalSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
+    let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
     let animation_clock = AnimationClock::from_env();
     slint::platform::set_platform(Box::new(MisterPlatform {
         window: window.clone(),

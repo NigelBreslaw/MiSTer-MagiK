@@ -55,10 +55,7 @@ impl<'a> LayerTarget<'a> {
         Self { target, ui }
     }
 
-    pub(super) fn render_slint_base(
-        &mut self,
-        window: &MinimalSoftwareWindow,
-    ) -> Option<DirtyRect> {
+    pub(super) fn render_slint_base(&mut self, window: &MisterSoftwareWindow) -> Option<DirtyRect> {
         let mut slint_dirty = None;
         window.draw_if_needed(|renderer| {
             let region = self.target.render(renderer, frame_target_geometry(self.ui));
