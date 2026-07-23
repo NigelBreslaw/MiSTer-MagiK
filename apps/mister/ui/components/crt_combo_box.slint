@@ -1,0 +1,65 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+import { MisterUi } from "../mister_window.slint";
+import { MisterBridge } from "../api.slint";
+import { CrtTheme, CrtHeader, CrtFooter, CrtMenuRow } from "crt_ui.slint";
+
+export component CrtComboBoxOverlay inherits Rectangle {
+    property <int> visible-count: 7;
+    property <int> first-visible: (MisterBridge.display-highlighted - 3).clamp(
+        0,
+        (MisterBridge.display-options.length - root.visible-count).max(0),
+    );
+    property <bool> more-above: root.first-visible > 0;
+    property <bool> more-below: root.first-visible + root.visible-count
+        < MisterBridge.display-options.length;
+
+    background: CrtTheme.background;
+
+    VerticalLayout {
+        padding: MisterUi.grid * 2;
+        spacing: MisterUi.grid;
+
+        CrtHeader { title: "Resolution"; subtitle: ""; status: ""; }
+
+        Text {
+            height: MisterUi.body-font;
+            text: root.more-above ? "▲" : "";
+            font-family: "W95FA";
+            color: CrtTheme.text;
+            font-size: MisterUi.body-font;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+
+        Rectangle {
+            vertical-stretch: 1;
+            background: CrtTheme.background;
+            clip: true;
+            VerticalLayout {
+                spacing: 0px;
+                for option[index] in MisterBridge.display-options : CrtMenuRow {
+                    visible: index >= root.first-visible
+                        && index < root.first-visible + root.visible-count;
+                    vertical-stretch: 1;
+                    label: option;
+                    detail: index == MisterBridge.display-selected ? "Selected" : "";
+                    focused: index == MisterBridge.display-highlighted;
+                }
+            }
+        }
+
+        Text {
+            height: MisterUi.body-font;
+            text: root.more-below ? "▼" : "";
+            font-family: "W95FA";
+            color: CrtTheme.text;
+            font-size: MisterUi.body-font;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+
+        CrtFooter { left-hint: "UP/DOWN Choose   A Apply"; right-hint: "B Cancel"; }
+    }
+}

@@ -9,16 +9,18 @@ export component ScreensaverSettingsScreen inherits Rectangle {
     background: CrtTheme.background;
 
     VerticalLayout {
-        padding: MisterUi.grid;
-        spacing: 0px;
+        padding: MisterUi.grid * 2;
+        spacing: MisterUi.grid;
 
         CrtHeader { title: "Screensaver"; subtitle: ""; status: ""; }
         CrtMenuRow {
+            vertical-stretch: 1;
             label: "Enabled";
             detail: MisterBridge.screensaver-enabled ? "Yes" : "No";
             focused: MisterBridge.screensaver-settings-selected == 0;
         }
         CrtMenuRow {
+            vertical-stretch: 1;
             label: "Start after";
             detail: MisterBridge.screensaver-delay-minutes == 1
                 ? "1 minute" : MisterBridge.screensaver-delay-minutes + " minutes";
@@ -26,11 +28,11 @@ export component ScreensaverSettingsScreen inherits Rectangle {
             enabled: MisterBridge.screensaver-enabled;
         }
         CrtMenuRow {
+            vertical-stretch: 1;
             label: "Preview";
             detail: "Show now";
             focused: MisterBridge.screensaver-settings-selected == 2;
         }
-        Rectangle { vertical-stretch: 1; background: transparent; }
         CrtFooter { left-hint: "A Change   B Back"; right-hint: "HOME Launcher"; }
     }
 }

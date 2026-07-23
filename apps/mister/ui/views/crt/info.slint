@@ -8,14 +8,13 @@ import { CrtTheme, CrtHeader, CrtFooter, CrtMenuRow } from "../../components/crt
 export component InfoScreen inherits Rectangle {
     background: CrtTheme.background;
     VerticalLayout {
-        padding: MisterUi.grid;
-        spacing: 0px;
+        padding: MisterUi.grid * 2;
+        spacing: MisterUi.grid;
         CrtHeader { title: "Info"; subtitle: "System details"; status: ""; }
-        CrtMenuRow { label: "Build"; detail: MisterBridge.build-label; focused: false; }
-        CrtMenuRow { label: "Display"; detail: MisterBridge.present-mode-label; focused: false; }
-        CrtMenuRow { label: "Database"; detail: MisterBridge.info-database-build; focused: false; }
-        CrtMenuRow { label: "Kernel"; detail: MisterBridge.info-kernel-version; focused: false; }
-        Rectangle { vertical-stretch: 1; background: transparent; }
+        CrtMenuRow { vertical-stretch: 1; label: "Build"; detail: MisterBridge.build-label; focused: false; }
+        CrtMenuRow { vertical-stretch: 1; label: "Display"; detail: MisterBridge.present-mode-label; focused: false; }
+        CrtMenuRow { vertical-stretch: 1; label: "Database"; detail: MisterBridge.info-database-build; focused: false; }
+        CrtMenuRow { vertical-stretch: 1; label: "Kernel"; detail: MisterBridge.info-kernel-version; focused: false; }
         CrtFooter { left-hint: "B Back"; right-hint: "HOME Launcher"; }
     }
 }

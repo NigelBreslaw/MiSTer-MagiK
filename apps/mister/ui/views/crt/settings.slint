@@ -9,29 +9,21 @@ export component SettingsScreen inherits Rectangle {
     background: CrtTheme.background;
 
     VerticalLayout {
-        padding: MisterUi.grid;
-        spacing: 0px;
+        padding: MisterUi.grid * 2;
+        spacing: MisterUi.grid;
 
         CrtHeader { title: "Settings"; subtitle: ""; status: ""; }
+
         VerticalLayout {
+            vertical-stretch: 1;
             spacing: 0px;
-            HorizontalLayout {
-                spacing: MisterUi.grid;
-                CrtMenuRow { label: "Resolution"; detail: MisterBridge.display-active-label; focused: MisterBridge.settings-selected == 0; }
-                CrtMenuRow { label: "Screensaver"; detail: "Configure"; focused: MisterBridge.settings-selected == 1; }
-            }
-            HorizontalLayout {
-                spacing: MisterUi.grid;
-                CrtMenuRow { label: "Exit to MiSTer"; detail: "Until reboot"; focused: MisterBridge.settings-selected == 2; }
-                CrtMenuRow { label: "Reset Database"; detail: "Delete and reboot"; focused: MisterBridge.settings-selected == 3; }
-            }
-            HorizontalLayout {
-                spacing: MisterUi.grid;
-                CrtMenuRow { label: "About"; detail: "MagiK and Slint"; focused: MisterBridge.settings-selected == 4; }
-                Rectangle { background: transparent; }
-            }
+            CrtMenuRow { vertical-stretch: 1; label: "Resolution"; detail: MisterBridge.display-active-label; focused: MisterBridge.settings-selected == 0; }
+            CrtMenuRow { vertical-stretch: 1; label: "Screensaver"; detail: "Configure"; focused: MisterBridge.settings-selected == 1; }
+            CrtMenuRow { vertical-stretch: 1; label: "Exit to MiSTer"; detail: "Until reboot"; focused: MisterBridge.settings-selected == 2; }
+            CrtMenuRow { vertical-stretch: 1; label: "Reset Database"; detail: "Delete and reboot"; focused: MisterBridge.settings-selected == 3; }
+            CrtMenuRow { vertical-stretch: 1; label: "About"; detail: "MiSTer MagiK"; focused: MisterBridge.settings-selected == 4; }
         }
-        Rectangle { vertical-stretch: 1; background: transparent; }
-        CrtFooter { left-hint: "A Change   B Back"; right-hint: "HOME Launcher"; }
+
+        CrtFooter { left-hint: "A Change"; right-hint: "B Back"; }
     }
 }

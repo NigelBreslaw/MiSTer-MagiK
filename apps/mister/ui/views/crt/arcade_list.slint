@@ -10,12 +10,13 @@ component SearchKey inherits Rectangle {
     in property <bool> selected;
     in property <bool> keyboard-focused;
 
-    height: 24px;
+    height: MisterUi.footer-height;
     background: selected && keyboard-focused ? CrtTheme.accent : CrtTheme.panel-alt;
-    border-width: 1px;
+    border-width: MisterUi.border;
     border-color: selected ? CrtTheme.accent : CrtTheme.border;
 
     Text {
+            font-family: "W95FA";
         text: root.label;
         color: root.selected && root.keyboard-focused ? CrtTheme.accent-text : CrtTheme.text;
         font-size: MisterUi.body-font;
@@ -27,7 +28,7 @@ component SearchKey inherits Rectangle {
 component SearchKeyboardRow inherits Rectangle {
     in property <int> start-index;
     in property <int> key-count;
-    height: 24px;
+    height: MisterUi.footer-height;
 
     HorizontalLayout {
         spacing: 0px;
@@ -49,12 +50,13 @@ component SearchKeyboard inherits Rectangle {
         spacing: 0px;
 
         Rectangle {
-            height: 16px;
+            height: MisterUi.footer-height;
             background: CrtTheme.panel-alt;
-            border-width: 1px;
+            border-width: MisterUi.border;
             border-color: MisterBridge.arcade-search-pane == 0 ? CrtTheme.accent : CrtTheme.border;
 
             Text {
+            font-family: "W95FA";
                 x: MisterUi.grid;
                 width: parent.width - 16px;
                 height: parent.height;
@@ -80,9 +82,9 @@ export component ArcadeListScreen inherits Rectangle {
     background: CrtTheme.background;
 
     CrtHeader {
-        x: MisterUi.grid;
-        y: MisterUi.grid;
-        width: parent.width - 16px;
+        x: MisterUi.grid * 2;
+        y: MisterUi.grid * 2;
+        width: parent.width - MisterUi.grid * 4;
         title: MisterBridge.arcade-search-active ? "Search" : MisterBridge.active-system-title;
         subtitle: "";
         status: root.count + (MisterBridge.arcade-search-active ? " matches" : " games");
@@ -90,18 +92,18 @@ export component ArcadeListScreen inherits Rectangle {
 
     if MisterBridge.arcade-search-active : SearchKeyboard {
         x: MisterUi.grid;
-        y: 48px;
+        y: MisterUi.header-height + MisterUi.grid * 3;
         width: parent.width * 2 / 5;
-        height: parent.height - 80px;
+        height: parent.height - self.y - MisterUi.footer-height - MisterUi.grid * 3;
     }
 
     Rectangle {
         x: MisterBridge.arcade-list-x * 1px;
         y: MisterBridge.arcade-list-y * 1px;
         width: MisterBridge.arcade-list-width * 1px;
-        height: parent.height - self.y - 32px;
+        height: MisterBridge.arcade-list-height * 1px;
         background: CrtTheme.panel-alt;
-        border-width: 1px;
+        border-width: MisterUi.border;
         border-color: MisterBridge.arcade-search-pane == 1 ? CrtTheme.accent : CrtTheme.border;
         clip: true;
     }
@@ -110,10 +112,11 @@ export component ArcadeListScreen inherits Rectangle {
         x: MisterBridge.arcade-list-x * 1px;
         y: MisterBridge.arcade-list-y * 1px;
         width: MisterBridge.arcade-list-width * 1px;
-        height: parent.height - self.y - 32px;
+        height: MisterBridge.arcade-list-height * 1px;
         background: CrtTheme.panel-alt;
 
         Text {
+            font-family: "W95FA";
             text: "Loading list...";
             color: CrtTheme.muted;
             font-size: MisterUi.body-font;
@@ -123,9 +126,9 @@ export component ArcadeListScreen inherits Rectangle {
     }
 
     CrtFooter {
-        x: MisterUi.grid;
-        y: parent.height - 32px;
-        width: parent.width - 16px;
+        x: MisterUi.grid * 2;
+        y: parent.height - MisterUi.footer-height - MisterUi.grid * 2;
+        width: parent.width - MisterUi.grid * 4;
         left-hint: "A Launch   Y Search";
         right-hint: "B Back   HOME Launcher";
     }

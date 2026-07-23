@@ -2,9 +2,37 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { MisterUi } from "../mister_window.slint";
-import { MisterBridge } from "../api.slint";
+import { MisterBridge, ScreenshotPackProgress } from "../api.slint";
 import { CrtTheme } from "../components/crt_ui.slint";
-import { ScreenshotPackProgressRow } from "../components/progress.slint";
+
+component CrtProgressRow inherits Rectangle {
+    in property <ScreenshotPackProgress> pack;
+    height: MisterUi.footer-height;
+    background: CrtTheme.panel-alt;
+    border-width: MisterUi.border;
+    border-color: CrtTheme.border;
+
+    HorizontalLayout {
+        padding-left: MisterUi.grid;
+        padding-right: MisterUi.grid;
+        spacing: MisterUi.grid;
+        cross-axis-alignment: center;
+        Text {
+            font-family: "W95FA";
+            text: root.pack.system + "  " + root.pack.phase;
+            color: CrtTheme.text;
+            font-size: MisterUi.body-font;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+        Text {
+            font-family: "W95FA";
+            text: root.pack.percent < 0 ? "..." : root.pack.percent + "%";
+            color: CrtTheme.muted;
+            font-size: MisterUi.body-font;
+        }
+    }
+}
 
 export component CompatibilityScreen inherits Rectangle {
     property <int> s: MisterUi.scale;
@@ -17,6 +45,7 @@ export component CompatibilityScreen inherits Rectangle {
         alignment: center;
 
         Text {
+            font-family: "W95FA";
             text: "MiSTer MagiK compatibility check failed";
             color: #ff5d73;
             font-size: MisterUi.heading-font;
@@ -24,6 +53,7 @@ export component CompatibilityScreen inherits Rectangle {
         }
 
         Text {
+            font-family: "W95FA";
             text: MisterBridge.compatibility-reason;
             color: #ffd166;
             font-size: MisterUi.body-font;
@@ -31,16 +61,18 @@ export component CompatibilityScreen inherits Rectangle {
         }
 
         Text {
+            font-family: "W95FA";
             text: MisterBridge.compatibility-detail;
-            color: #e8e0f0;
+            color: CrtTheme.text;
             font-size: MisterUi.body-font;
             horizontal-alignment: center;
             wrap: word-wrap;
         }
 
         Text {
+            font-family: "W95FA";
             text: "The normal launcher is disabled. Diagnostics: /tmp/mister-magik";
-            color: #9080a8;
+            color: CrtTheme.muted;
             font-size: MisterUi.body-font;
             horizontal-alignment: center;
             wrap: word-wrap;
@@ -78,23 +110,26 @@ export component CatalogScanPopup inherits Rectangle {
             Rectangle { vertical-stretch: 1; background: transparent; }
 
             Text {
+            font-family: "W95FA";
                 width: root.scan-content-width;
                 text: "MiSTer MagiK";
-                color: #06d6a0;
+                color: CrtTheme.accent;
                 font-size: MisterUi.heading-font;
                 horizontal-alignment: center;
             }
 
             Text {
+            font-family: "W95FA";
                 width: root.scan-content-width;
                 text: MisterBridge.catalog-scan-message;
-                color: #e8e0f0;
+                color: CrtTheme.text;
                 font-size: MisterUi.body-font;
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }
 
             Text {
+            font-family: "W95FA";
                 width: root.scan-content-width;
                 text: MisterBridge.catalog-scan-title;
                 color: #d7eef8;
@@ -103,9 +138,10 @@ export component CatalogScanPopup inherits Rectangle {
             }
 
             Text {
+            font-family: "W95FA";
                 width: root.scan-content-width;
                 text: MisterBridge.catalog-scan-detail;
-                color: #9080a8;
+                color: CrtTheme.muted;
                 font-size: MisterUi.body-font;
                 horizontal-alignment: center;
                 wrap: word-wrap;
@@ -116,14 +152,14 @@ export component CatalogScanPopup inherits Rectangle {
                 spacing: 5px * s;
 
                 Text {
+            font-family: "W95FA";
                     text: MisterBridge.media-pack-summary;
                     color: #d7eef8;
-                    font-size: 6px * s;
+                    font-size: MisterUi.body-font;
                     horizontal-alignment: center;
                 }
 
-                for pack in MisterBridge.media-pack-progresses: ScreenshotPackProgressRow {
-                    s: root.s;
+                for pack in MisterBridge.media-pack-progresses: CrtProgressRow {
                     pack: pack;
                 }
             }
@@ -153,14 +189,14 @@ export component MediaProgressPopup inherits Rectangle {
         spacing: 5px * root.s;
 
         Text {
+            font-family: "W95FA";
             text: MisterBridge.media-pack-summary;
             color: #d7eef8;
-            font-size: 6px * root.s;
+            font-size: MisterUi.body-font;
             horizontal-alignment: center;
         }
 
-        for pack in MisterBridge.media-pack-progresses: ScreenshotPackProgressRow {
-            s: root.s;
+        for pack in MisterBridge.media-pack-progresses: CrtProgressRow {
             pack: pack;
         }
     }
@@ -169,16 +205,17 @@ export component MediaProgressPopup inherits Rectangle {
 export component StartupSplash inherits Rectangle {
     property <int> s: MisterUi.scale;
 
-    background: #1a1424;
+    background: CrtTheme.background;
 
     VerticalLayout {
         alignment: center;
         spacing: 12px * s;
 
         Text {
+            font-family: "W95FA";
             text: "MiSTer MagiK";
-            color: #e8e0f0;
-            font-size: 28px * s;
+            color: CrtTheme.text;
+            font-size: MisterUi.heading-font;
             horizontal-alignment: center;
         }
     }
@@ -193,7 +230,7 @@ export component BackgroundScanBadge inherits Rectangle {
     x: MisterUi.window-width * 1px - self.width - 18px * s;
     y: MisterUi.window-height * 1px - self.height - 16px * s;
     background: #101420;
-    border-width: 1px;
+    border-width: MisterUi.border;
     border-color: #52647d;
 
 
@@ -201,16 +238,18 @@ export component BackgroundScanBadge inherits Rectangle {
         alignment: start;
         width: self.preferred-width;
         Text {
+            font-family: "W95FA";
             text: "Building library";
             color: #d7eef8;
-            font-size: 8px * root.s;
+            font-size: MisterUi.body-font;
             horizontal-alignment: center;
             vertical-alignment: center;
         }
         Text {
+            font-family: "W95FA";
             text: ".";
             color: root.dot-visible ? #d7eef8 : transparent;
-            font-size: 8px * root.s;
+            font-size: MisterUi.body-font;
             horizontal-alignment: center;
             vertical-alignment: center;
         }
@@ -228,6 +267,7 @@ component CompactDialogButton inherits Rectangle {
     border-color: focused ? CrtTheme.accent : CrtTheme.border;
 
     Text {
+            font-family: "W95FA";
         text: root.label;
         color: root.focused ? CrtTheme.accent-text : CrtTheme.text;
         font-size: MisterUi.body-font;
@@ -254,6 +294,7 @@ export component ConfirmDialog inherits Rectangle {
             spacing: MisterUi.grid;
 
             Text {
+            font-family: "W95FA";
                 text: MisterBridge.confirm-title;
                 color: CrtTheme.accent;
                 font-size: MisterUi.heading-font;
@@ -262,6 +303,7 @@ export component ConfirmDialog inherits Rectangle {
             }
 
             Text {
+            font-family: "W95FA";
                 text: MisterBridge.confirm-message;
                 color: CrtTheme.text;
                 font-size: MisterUi.body-font;
@@ -290,23 +332,25 @@ export component ConfirmDialog inherits Rectangle {
 }
 
 export component LoadingOverlay inherits Rectangle {
-    background: #1a1424;
+    background: CrtTheme.background;
 
     VerticalLayout {
         alignment: center;
         spacing: 12px;
 
         Text {
+            font-family: "W95FA";
             text: MisterBridge.loading-message;
-            color: #e8e0f0;
-            font-size: 16px;
+            color: CrtTheme.text;
+            font-size: MisterUi.heading-font;
             horizontal-alignment: center;
         }
 
         Text {
+            font-family: "W95FA";
             text: MisterBridge.loading-detail != "" ? MisterBridge.loading-detail : "Please wait...";
-            color: #9080a8;
-            font-size: 8px;
+            color: CrtTheme.muted;
+            font-size: MisterUi.body-font;
             horizontal-alignment: center;
         }
     }

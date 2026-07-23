@@ -1,0 +1,22 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+import { MisterUi } from "../../mister_window.slint";
+import { MisterBridge } from "../../api.slint";
+import { CrtTheme, CrtHeader, CrtFooter, CrtMenuRow } from "../../components/crt_ui.slint";
+
+export component CrtControllerPanel inherits Rectangle {
+    background: CrtTheme.background;
+
+    VerticalLayout {
+        padding: MisterUi.grid * 2;
+        spacing: MisterUi.grid;
+
+        CrtHeader { title: "Controller"; subtitle: "Input test"; status: ""; }
+        CrtMenuRow { vertical-stretch: 1; label: "Device"; detail: MisterBridge.device-name; focused: false; }
+        CrtMenuRow { vertical-stretch: 1; label: "USB"; detail: MisterBridge.usb-port; focused: false; }
+        CrtMenuRow { vertical-stretch: 1; label: "Pressed"; detail: MisterBridge.pressed-now; focused: MisterBridge.pressed-now != ""; }
+        CrtMenuRow { vertical-stretch: 1; label: "Last event"; detail: MisterBridge.last-event-label; focused: false; }
+        CrtFooter { left-hint: "Test controls"; right-hint: "B Back   HOME Launcher"; }
+    }
+}

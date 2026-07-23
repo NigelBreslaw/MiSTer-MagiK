@@ -3,24 +3,26 @@
 
 import { MisterUi } from "../../mister_window.slint";
 import { MisterBridge } from "../../api.slint";
-import { CrtTheme, CrtHeader, CrtFooter, CrtMenuRow } from "../../components/crt_ui.slint";
+import { CrtTheme, CrtHeader, CrtFooter, CrtCard } from "../../components/crt_ui.slint";
 
 export component HomeGrid inherits Rectangle {
-    // The selected row is always kept inside the clipped vertical viewport.
-    property <length> outer-padding: MisterUi.grid;
-    property <length> row-gap: MisterUi.grid;
-    property <length> row-height: 32px;
-    property <length> row-pitch: row-height + row-gap;
-    property <int> visible-rows: max(1, floor(menu-viewport.height / row-pitch));
-    property <int> first-visible-row: MisterBridge.selected-index < visible-rows
-        ? 0
-        : MisterBridge.selected-index - visible-rows + 1;
+    property <bool> root-menu: MisterBridge.menu-breadcrumb == "";
+    property <length> card-gap: MisterUi.grid;
+    property <length> card-height: root.root-menu
+        ? (menu-viewport.height - root.card-gap * 3) / 4
+        : (menu-viewport.height - root.card-gap * 4) / 4.5;
+    property <length> card-pitch: root.card-height + root.card-gap;
+    property <int> first-visible-row: root.root-menu ? 0
+        : (MisterBridge.selected-index - 2).clamp(
+            0,
+            (MisterBridge.menu-items.length - 5).max(0),
+        );
 
     background: CrtTheme.background;
 
     VerticalLayout {
-        padding: root.outer-padding;
-        spacing: root.row-gap;
+        padding: MisterUi.grid * 2;
+        spacing: MisterUi.grid;
 
         CrtHeader {
             title: MisterBridge.menu-title;
@@ -32,29 +34,22 @@ export component HomeGrid inherits Rectangle {
 
         menu-viewport := Rectangle {
             vertical-stretch: 1;
-            background: transparent;
+            background: CrtTheme.background;
             clip: true;
 
-            Rectangle {
-                y: -root.first-visible-row * root.row-pitch;
+            for item[index] in MisterBridge.menu-items : CrtCard {
+                y: (index - root.first-visible-row) * root.card-pitch;
                 width: parent.width;
-                height: MisterBridge.menu-items.length * root.row-pitch;
-                background: transparent;
-
-                for item[index] in MisterBridge.menu-items : CrtMenuRow {
-                    y: index * root.row-pitch;
-                    width: parent.width;
-                    height: root.row-height;
-                    label: item.label;
-                    detail: item.subtitle;
-                    focused: item.focused;
-                }
+                height: root.card-height;
+                label: item.label;
+                detail: root.root-menu ? "" : item.subtitle;
+                focused: item.focused;
             }
         }
 
         CrtFooter {
-            left-hint: MisterBridge.menu-breadcrumb == "" ? "A Select" : "A Select   B Back";
-            right-hint: MisterBridge.menu-breadcrumb == "" ? "HOME Settings" : "HOME Launcher";
+            left-hint: root.root-menu ? "A Select" : "B Back   A Open";
+            right-hint: root.root-menu ? "HOME Settings" : "HOME Launcher";
         }
     }
 }

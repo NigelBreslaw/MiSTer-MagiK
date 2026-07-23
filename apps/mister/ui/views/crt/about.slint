@@ -9,12 +9,13 @@ export component AboutScreen inherits Rectangle {
     background: CrtTheme.background;
 
     VerticalLayout {
-        padding: MisterUi.grid;
-        spacing: 0px;
+        padding: MisterUi.grid * 2;
+        spacing: MisterUi.grid;
 
         CrtHeader { title: "About"; subtitle: "MiSTer MagiK"; status: ""; }
 
         Text {
+            font-family: "W95FA";
             text: "An Unintuitive.com production, crafted in Finland by Nigel Breslaw.";
             color: CrtTheme.text;
             font-size: MisterUi.body-font;
@@ -22,6 +23,7 @@ export component AboutScreen inherits Rectangle {
             horizontal-alignment: center;
         }
         Text {
+            font-family: "W95FA";
             text: "Thanks to the MiSTer project. Made with Slint.";
             color: CrtTheme.muted;
             font-size: MisterUi.body-font;
@@ -29,13 +31,14 @@ export component AboutScreen inherits Rectangle {
             horizontal-alignment: center;
         }
 
-        Rectangle { vertical-stretch: 1; background: transparent; }
         CrtMenuRow {
+            vertical-stretch: 1;
             label: "Info";
             detail: "Build and display";
             focused: MisterBridge.about-selected == 0;
         }
         CrtMenuRow {
+            vertical-stretch: 1;
             label: "Licenses";
             detail: "Open source";
             focused: MisterBridge.about-selected == 1;
