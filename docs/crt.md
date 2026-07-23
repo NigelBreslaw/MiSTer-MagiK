@@ -26,6 +26,30 @@ Both sync polarities are negative. These values come from Main's standard
 Menu Direct Video table; MagiK consumes the resolved name only to choose its
 framebuffer and scan geometry. It does not synthesize or alter those timings.
 
+Framebuffer dimensions, scan timing, and destination placement are separate.
+The framebuffer dimensions describe RGB565 memory. The scan timing describes
+the analogue raster owned by Main and Menu. The inclusive destination
+rectangle places the framebuffer inside Menu's scan space:
+
+| Mode | RGB565 framebuffer | Nominal scan | Destination rectangle |
+| --- | --- | --- | --- |
+| `crt-240p60` | 320×240 | 640×240 | `(67,706,12,251)` |
+| `crt-288p50` | 384×288 | 640×288 | `(67,706,32,286)` |
+| `crt-480p60` | 640×480 | 640×480 | `(45,684,31,510)` |
+| `crt-576p50` | 640×480 | 640×576 | `(45,684,40,614)` |
+
+The 288p rectangle is the attended USB Video calibration result. The 576p
+framebuffer remains full width: narrowing its destination crops source columns
+because Menu disables framebuffer downscaling. The launcher composition
+already keeps its visible content within `x=8..631`, and a full-width perimeter
+trial confirmed both horizontal edges.
+
+For 576p only, the maintained Main fork transfers the final transformed active
+line into vertical blanking. This removes unstable pixels at the physical
+bottom raster edge while preserving the mode's total line count and horizontal
+timing. The corresponding destination therefore ends at line 614. The 240p,
+288p, and 480p Main timings are unchanged.
+
 Fresh CRT configuration defaults to native Analog IO VGA at 240p60. The
 installer separately offers automatic HDMI-DAC detection, native VGA at
 288p50, 480p60 or 576p50, and HDMI-only output. It maps them onto the existing

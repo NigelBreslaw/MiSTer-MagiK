@@ -230,9 +230,9 @@ impl FpgaVblankLatchHiddenPresenter<PluginLatchFrameBuffers> {
             buffers,
             width,
             height,
-            crate::fpga::LatchedFbufGeometry::new(
+            crate::fpga::LatchedFbufGeometry::new_for_route(
                 width as u16,
-                route.mode(),
+                route,
                 configured_fpga_latch_right_guard_cols(),
             ),
         ))

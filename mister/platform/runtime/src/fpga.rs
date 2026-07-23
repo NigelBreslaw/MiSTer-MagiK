@@ -17,7 +17,9 @@ use std::io;
 use std::os::unix::io::AsRawFd;
 use std::ptr::{read_volatile, write_volatile};
 
-use crate::framebuffer::route::{FramebufferRouteMode, LauncherFramebufferRoute};
+use crate::framebuffer::route::{
+    FramebufferPlacement, FramebufferRouteMode, LauncherFramebufferRoute,
+};
 
 const MGR_BASE: i64 = 0xFF70_6000; // SOCFPGA FPGA-manager, page aligned
 const MGR_LEN: usize = 0x1000;
@@ -70,15 +72,36 @@ pub struct LatchedFbufGeometry {
 
 impl LatchedFbufGeometry {
     pub fn new(fb_width: u16, mode: FramebufferRouteMode, right_guard_cols: i32) -> Self {
+        Self::new_with_placement(
+            fb_width,
+            FramebufferPlacement::from_mode(mode),
+            right_guard_cols,
+        )
+    }
+
+    pub fn new_for_route(
+        fb_width: u16,
+        route: LauncherFramebufferRoute,
+        right_guard_cols: i32,
+    ) -> Self {
+        Self::new_with_placement(fb_width, route.placement(), right_guard_cols)
+    }
+
+    fn new_with_placement(
+        fb_width: u16,
+        placement: FramebufferPlacement,
+        right_guard_cols: i32,
+    ) -> Self {
         let [xoff, right, yoff, bottom] = diagnostic_fbuf_rectangle().unwrap_or_else(|| {
-            let xoff = mode.hbp as i32 - FB_DV_LBRD;
-            let yoff = mode.vbp as i32 - FB_DV_UBRD;
-            let right_guard_cols = right_guard_cols.clamp(0, mode.hact.saturating_sub(1) as i32);
+            let xoff = i32::from(placement.left);
+            let yoff = i32::from(placement.top);
+            let right_guard_cols =
+                right_guard_cols.clamp(0, placement.width.saturating_sub(1) as i32);
             [
                 xoff,
-                xoff + mode.hact as i32 - 1 - right_guard_cols,
+                xoff + i32::from(placement.width) - 1 - right_guard_cols,
                 yoff,
-                yoff + mode.vact as i32 - 1,
+                yoff + i32::from(placement.height) - 1,
             ]
         });
         Self {
@@ -608,13 +631,30 @@ impl Fpga {
         fb_width: usize,
         fb_height: usize,
     ) -> io::Result<u16> {
-        self.fb_enable_rgb565(
+        self.fb_enable_rgb565_with_placement(
             0,
             fb_width as u16,
             fb_height as u16,
-            route.mode(),
+            route.placement(),
             route.set_vga_fb(),
         )
+    }
+
+    fn fb_enable_rgb565_with_placement(
+        &mut self,
+        n: u32,
+        fb_width: u16,
+        fb_height: u16,
+        placement: FramebufferPlacement,
+        set_vga_fb: bool,
+    ) -> io::Result<u16> {
+        let mode = FramebufferRouteMode {
+            hact: placement.width,
+            hbp: placement.left.saturating_add(FB_DV_LBRD as u16),
+            vact: placement.height,
+            vbp: placement.top.saturating_add(FB_DV_UBRD as u16),
+        };
+        self.fb_enable_rgb565(n, fb_width, fb_height, mode, set_vga_fb)
     }
 }
 
@@ -824,6 +864,34 @@ mod tests {
         assert_eq!(words[0], MAGIK_UIO_SET_FBUF_LATCH);
         assert_eq!(*words.last().unwrap(), 7);
         assert_eq!(fpga.gpo & IO_EN, 0);
+    }
+
+    #[test]
+    fn production_crt_routes_emit_exact_destinations_through_both_paths() {
+        for (scan_h, expected) in [
+            (240, [67, 706, 12, 251]),
+            (288, [67, 706, 32, 286]),
+            (480, [45, 684, 31, 510]),
+            (576, [45, 684, 40, 614]),
+        ] {
+            let route = LauncherFramebufferRoute::for_scan(640, scan_h, true);
+            let geometry = LatchedFbufGeometry::new_for_route(640, route, 0);
+            assert_eq!(
+                [
+                    geometry.xoff,
+                    geometry.right,
+                    geometry.yoff,
+                    geometry.bottom,
+                ],
+                expected
+            );
+
+            let (mut fpga, state) = scripted(&[(0x44, 0); 13]);
+            fpga.enable_launcher_framebuffer_route(route, 640, 480)
+                .unwrap();
+            let words = words_from_writes(&state.borrow().writes);
+            assert_eq!(&words[6..10], &expected);
+        }
     }
 
     #[test]

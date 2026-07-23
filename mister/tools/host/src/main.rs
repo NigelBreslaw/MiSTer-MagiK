@@ -2081,7 +2081,7 @@ fn crt_trial_run_command(runtime_settings: &str, rectangle: Option<[u16; 4]>) ->
     let diagnostic = rectangle.map_or_else(String::new, |[left, right, top, bottom]| {
         if runtime_settings.contains("output=crt-576p50") {
             format!(
-                "MISTER_MAGIK_CRT_TRIAL=1 MISTER_FB_DIAGNOSTIC_RECT=45,684,40,615 MISTER_CRT_TRIAL_CONTENT_BOUNDS={left},{right} "
+                "MISTER_MAGIK_CRT_TRIAL=1 MISTER_FB_DIAGNOSTIC_RECT=45,684,{top},{bottom} MISTER_CRT_TRIAL_CONTENT_BOUNDS={left},{right} "
             )
         } else {
             format!(
@@ -2164,7 +2164,7 @@ fn run_crt_geometry_trial(rectangle: [u16; 4]) -> Result<String> {
         .contains("output=crt-576p50")
         .then_some([rectangle[0], rectangle[1]]);
     let destination_rectangle = if content_bounds.is_some() {
-        [45, 684, 40, 615]
+        [45, 684, rectangle[2], rectangle[3]]
     } else {
         rectangle
     };
@@ -2200,7 +2200,7 @@ fn validate_crt_geometry_trial(runtime_settings: &str, rectangle: [u16; 4]) -> R
     }
     let fixed_axis_matches = match variable_axis {
         "vertical" => left == baseline[0] && right == baseline[1],
-        "horizontal" => top == baseline[2] && bottom == baseline[3],
+        "horizontal" => top == baseline[2] && bottom <= baseline[3] && bottom >= baseline[3] - 8,
         _ => false,
     };
     if !fixed_axis_matches {
@@ -7947,6 +7947,12 @@ video_mode=14
         );
         assert!(
             validate_crt_geometry_trial("schema=1&output=crt-576p50", [40, 679, 41, 615]).is_err()
+        );
+        assert!(
+            validate_crt_geometry_trial("schema=1&output=crt-576p50", [32, 607, 40, 614]).is_ok()
+        );
+        assert!(
+            validate_crt_geometry_trial("schema=1&output=crt-576p50", [32, 607, 40, 606]).is_err()
         );
         assert!(
             validate_crt_geometry_trial("schema=1&output=crt-576p50", [40, 680, 40, 615]).is_ok()
