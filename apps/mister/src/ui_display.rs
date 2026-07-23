@@ -40,6 +40,7 @@ pub struct CrtUiMetrics {
     pub heading_font: i32,
     pub card_title_font: i32,
     pub card_detail_font: i32,
+    pub game_row_height: i32,
     pub header_height: i32,
     pub footer_height: i32,
 }
@@ -54,6 +55,7 @@ impl CrtUiMetrics {
                 heading_font: 32,
                 card_title_font: 24,
                 card_detail_font: 16,
+                game_row_height: 32,
                 header_height: 48,
                 footer_height: 40,
             }
@@ -65,6 +67,7 @@ impl CrtUiMetrics {
                 heading_font: 16,
                 card_title_font: 16,
                 card_detail_font: 8,
+                game_row_height: 24,
                 header_height: 32,
                 footer_height: 24,
             }
@@ -1397,5 +1400,12 @@ mod tests {
         assert_eq!((plan.output_w, plan.output_h), (1920, 1080));
         assert_eq!((plan.fb_w, plan.fb_h), (960, 540));
         assert!(plan.fallback);
+    }
+
+    #[test]
+    fn crt_game_rows_scale_with_the_supported_framebuffer_profiles() {
+        assert_eq!(CrtUiMetrics::for_framebuffer(320, 240).game_row_height, 24);
+        assert_eq!(CrtUiMetrics::for_framebuffer(384, 288).game_row_height, 24);
+        assert_eq!(CrtUiMetrics::for_framebuffer(640, 480).game_row_height, 32);
     }
 }

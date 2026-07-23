@@ -102,6 +102,18 @@ impl ConsoleFont {
         }
         let ellipsis = "...";
         let ellipsis_width = self.text_width(ellipsis);
+        if ellipsis_width > max_width {
+            let mut fitted = String::new();
+            for ch in ellipsis.chars() {
+                let mut candidate = fitted.clone();
+                candidate.push(ch);
+                if self.text_width(&candidate) > max_width {
+                    break;
+                }
+                fitted = candidate;
+            }
+            return Cow::Owned(fitted);
+        }
         let mut width = 0usize;
         let mut end = 0usize;
         for (index, ch) in text.char_indices() {
@@ -331,6 +343,16 @@ mod tests {
 
         assert!(clipped.ends_with("..."));
         assert!(font.text_width(&clipped) <= 80);
+    }
+
+    #[test]
+    fn clipping_never_returns_an_ellipsis_wider_than_the_requested_width() {
+        let mut font = ConsoleFont::new_with_typeface(16.0, ConsoleTypeface::W95FA);
+
+        for max_width in 0..font.text_width("...") {
+            let clipped = font.clipped_text("Arcade", max_width).into_owned();
+            assert!(font.text_width(&clipped) <= max_width);
+        }
     }
 
     #[test]

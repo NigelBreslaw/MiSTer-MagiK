@@ -1743,7 +1743,11 @@ pub(super) fn run_launcher_loop(
         .is_none()
         .then(|| env_start_menu.clone())
         .flatten();
-    let mut nav = LauncherNav::for_crt_layout(ui.output_route().is_crt());
+    let crt_layout = ui.output_route().is_crt();
+    let crt_metrics = crate::ui_display::CrtUiMetrics::for_display(ui);
+    let preview_route = PreviewRoutePolicy::new(crt_layout);
+    let mut nav =
+        LauncherNav::for_crt_layout_with_row_height(crt_layout, crt_metrics.game_row_height);
     nav.settings = crate::settings::MagikSettings::load();
     nav.screen = start_screen;
     let mut display_confirm_deadline = None;
@@ -1848,7 +1852,10 @@ pub(super) fn run_launcher_loop(
     let mut pacer = VsyncPacer::from_env();
     let pacing_policy = LauncherFramePacingPolicy::default();
     let present_timing = PresentTiming::from_env();
-    if launcher_bench_scenario.is_some() && !preview_archive_warm_skip_enabled() {
+    if preview_route.allows_preview_work()
+        && launcher_bench_scenario.is_some()
+        && !preview_archive_warm_skip_enabled()
+    {
         let warm_t = Instant::now();
         match preview_worker::warm_preview_archives_from_env() {
             Ok(loaded) => print_startup_event(
@@ -1866,7 +1873,7 @@ pub(super) fn run_launcher_loop(
                 std::process::exit(13);
             }
         }
-    } else if launcher_bench_scenario.is_some() {
+    } else if preview_route.allows_preview_work() && launcher_bench_scenario.is_some() {
         print_startup_event(start, "preview_archive_warm_skipped", "env=1");
     }
     let mut preview = PreviewState::new_with_trace_start(start);
@@ -1876,7 +1883,11 @@ pub(super) fn run_launcher_loop(
     let transition_picker_enabled = preview_transition.picker_enabled();
     let mut transition_picker_prev_left = false;
     let mut transition_picker_prev_right = false;
-    let mut arcade_list_renderer = ArcadeListRenderer::new();
+    let mut arcade_list_renderer = if crt_layout {
+        ArcadeListRenderer::new_for_crt(crt_metrics.game_row_height)
+    } else {
+        ArcadeListRenderer::new()
+    };
     let mut launcher_preview_version = 1u64;
     let mut launcher_arcade_version = 1u64;
     let mut launcher_arcade_scroll_offset = 0i64;
@@ -1955,7 +1966,7 @@ pub(super) fn run_launcher_loop(
     if capsule_seed_ready {
         startup_ready_catalog_source = CatalogSource::ReturnCapsule;
         catalog_session.note_summary_seed_ready();
-        if !nav.uses_crt_layout() {
+        if preview_route.allows_preview_work() {
             media_session.request_catalog_seed();
         }
         catalog_version = catalog_version.wrapping_add(1);
@@ -1988,7 +1999,7 @@ pub(super) fn run_launcher_loop(
     } else if sharded_seed_ready {
         startup_ready_catalog_source = CatalogSource::ShardedRegistry;
         catalog_session.note_summary_seed_ready();
-        if !nav.uses_crt_layout() {
+        if preview_route.allows_preview_work() {
             media_session.request_catalog_seed();
         }
         catalog_version = catalog_version.wrapping_add(1);
@@ -2113,7 +2124,7 @@ pub(super) fn run_launcher_loop(
             .current_menu_items()
             .get(nav.selected)
             .is_some_and(|item| item.id == arcade_catalog::MENU_ARCADE_SYSTEM_ID);
-    if catalog_ready && root_arcade_focused && !nav.uses_crt_layout() {
+    if catalog_ready && root_arcade_focused && preview_route.allows_preview_work() {
         let games = catalog.system_game_view(arcade_catalog::MENU_ARCADE_SYSTEM_ID);
         if !games.is_empty() {
             let selected = nav.arcade.selected.min(games.len() - 1);
@@ -2693,22 +2704,24 @@ pub(super) fn run_launcher_loop(
         }
         let media_worker_trace_start = prepare_trace_enabled.then(Instant::now);
         let mut media_message_seen = false;
-        scheduler.poll_media(&mut media_events);
-        for message in media_events.drain() {
-            media_message_seen = true;
-            let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-            let catalog_scan_visible = bridge.get_catalog_scan_visible();
-            let effects =
-                media_session.handle_worker_message(message, catalog_scan_visible, loop_start);
-            apply_screenshot_media_update_effects(
-                effects,
-                &app,
-                &mut catalog,
-                &mut scheduler,
-                Some(&mut preview),
-                &mut full_bridge_dirty,
-                start,
-            );
+        if preview_route.allows_preview_work() {
+            scheduler.poll_media(&mut media_events);
+            for message in media_events.drain() {
+                media_message_seen = true;
+                let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+                let catalog_scan_visible = bridge.get_catalog_scan_visible();
+                let effects =
+                    media_session.handle_worker_message(message, catalog_scan_visible, loop_start);
+                apply_screenshot_media_update_effects(
+                    effects,
+                    &app,
+                    &mut catalog,
+                    &mut scheduler,
+                    Some(&mut preview),
+                    &mut full_bridge_dirty,
+                    start,
+                );
+            }
         }
         if let Some(trace_start) = media_worker_trace_start {
             prepare_trace.media_worker_us = trace_start.elapsed().as_micros();
@@ -3812,7 +3825,7 @@ pub(super) fn run_launcher_loop(
         if dirty_opt
             && !preview_scheduled_this_loop
             && !launching
-            && !nav.uses_crt_layout()
+            && preview_route.allows_preview_work()
             && nav.screen == Screen::Arcade
             && active_arcade_games_available
             && !arcade_search_active
@@ -3839,7 +3852,7 @@ pub(super) fn run_launcher_loop(
         let preview_apply_dirty = if !launching
             && !arcade_search_active
             && !memory_guard.active()
-            && !nav.uses_crt_layout()
+            && preview_route.allows_preview_work()
         {
             let dirty = apply_ready_preview(
                 &app,
@@ -3891,7 +3904,7 @@ pub(super) fn run_launcher_loop(
             || startup_reveal_ready;
         let wants_arcade_list = !screensaver.active
             && should_draw_arcade_overlay(&nav, launching, active_arcade_games_available);
-        let wants_preview = !nav.uses_crt_layout()
+        let wants_preview = preview_route.allows_preview_work()
             && !screensaver.active
             && direct_preview_requested(
                 nav.screen,
@@ -4311,7 +4324,7 @@ pub(super) fn run_launcher_loop(
         };
         let arcade_list_update_us = arcade_list_update_start.elapsed().as_micros();
         let preview_blit_start = Instant::now();
-        let (raw_preview, preview_transition_trace) = if !nav.uses_crt_layout()
+        let (raw_preview, preview_transition_trace) = if preview_route.allows_preview_work()
             && composition_decision.allow_preview_blit
             && !memory_guard.active()
         {
@@ -4748,6 +4761,21 @@ fn apply_startup_pending_display(
 
 fn should_desire_direct_layer(wants_layer: bool, composition_allows_layer: bool) -> bool {
     wants_layer && composition_allows_layer
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PreviewRoutePolicy {
+    crt_layout: bool,
+}
+
+impl PreviewRoutePolicy {
+    const fn new(crt_layout: bool) -> Self {
+        Self { crt_layout }
+    }
+
+    const fn allows_preview_work(self) -> bool {
+        !self.crt_layout
+    }
 }
 
 #[cfg(not(any(feature = "bench-tools", feature = "diagnostics")))]
@@ -5831,6 +5859,37 @@ mod tests {
     use crate::ui_effect_bench::{EffectFill, EffectTarget};
     #[cfg(mister_experiments)]
     use mister_magik_fb::experiments::effects::framebuffer_effects::EffectSize;
+
+    #[derive(Clone, Copy)]
+    enum PreviewLifecycleStage {
+        StartupWarm,
+        CatalogSeed,
+        Schedule,
+        Apply,
+        Compose,
+        Blit,
+        WorkerResult,
+    }
+
+    #[test]
+    fn preview_route_policy_covers_the_complete_worker_and_render_sequence() {
+        let lifecycle = [
+            PreviewLifecycleStage::StartupWarm,
+            PreviewLifecycleStage::CatalogSeed,
+            PreviewLifecycleStage::Schedule,
+            PreviewLifecycleStage::Apply,
+            PreviewLifecycleStage::Compose,
+            PreviewLifecycleStage::Blit,
+            PreviewLifecycleStage::WorkerResult,
+        ];
+
+        let crt = PreviewRoutePolicy::new(true);
+        let hdmi = PreviewRoutePolicy::new(false);
+        for _stage in lifecycle {
+            assert!(!crt.allows_preview_work());
+            assert!(hdmi.allows_preview_work());
+        }
+    }
 
     #[test]
     fn media_benchmark_contention_disables_only_the_benchmark_media_gate() {

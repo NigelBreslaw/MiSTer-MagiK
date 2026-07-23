@@ -283,6 +283,7 @@ macro_rules! with_scene_app {
             mister_ui.set_crt_card_detail_font(crt_metrics.card_detail_font);
             mister_ui.set_crt_header_height(crt_metrics.header_height);
             mister_ui.set_crt_footer_height(crt_metrics.footer_height);
+            mister_ui.set_crt_game_row_height(crt_metrics.game_row_height);
         }
         configure_window($ui, $window);
         $body

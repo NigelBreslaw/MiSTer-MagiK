@@ -48,6 +48,61 @@ const ARCADE_NEW_BADGE_FILL: Pixel = Pixel(0x0006d6a0);
 const ARCADE_NEW_BADGE_FILL_565: Rgb565Pixel = rgb565_from_rgb888(0x06, 0xd6, 0xa0);
 const ARCADE_NEW_BADGE_TEXT: Pixel = Pixel(0x00120d1a);
 
+#[derive(Clone, Copy)]
+struct ArcadeListStyle {
+    row_height: i32,
+    background: Pixel,
+    background_565: Rgb565Pixel,
+    alternate_background: Pixel,
+    alternate_background_565: Rgb565Pixel,
+    border: Pixel,
+    border_565: Rgb565Pixel,
+    text: Pixel,
+    muted_text: Pixel,
+    selection_fill_565: Rgb565Pixel,
+    selection_text_565: Rgb565Pixel,
+    selection_frame_565: Rgb565Pixel,
+    typeface: ConsoleTypeface,
+}
+
+impl ArcadeListStyle {
+    const fn hdmi() -> Self {
+        Self {
+            row_height: ARCADE_ROW_HEIGHT,
+            background: ARCADE_LIST_BG_COLOR,
+            background_565: ARCADE_LIST_BG_COLOR_565,
+            alternate_background: Pixel(0x00150f20),
+            alternate_background_565: ARCADE_LIST_ALT_BG_COLOR_565,
+            border: Pixel(0x00251c34),
+            border_565: ARCADE_LIST_ROW_BORDER_COLOR_565,
+            text: Pixel(0x00fff6ff),
+            muted_text: Pixel(0x00706080),
+            selection_fill_565: ARCADE_SELECTION_FILL_COLOR_565,
+            selection_text_565: Rgb565Pixel(0),
+            selection_frame_565: ARCADE_SELECTION_FRAME_COLOR,
+            typeface: ConsoleTypeface::PressStart2P,
+        }
+    }
+
+    const fn crt(row_height: i32) -> Self {
+        Self {
+            row_height,
+            background: Pixel(0x00020817),
+            background_565: rgb565_from_rgb888(0x02, 0x08, 0x17),
+            alternate_background: Pixel(0x0006122b),
+            alternate_background_565: rgb565_from_rgb888(0x06, 0x12, 0x2b),
+            border: Pixel(0x005e59aa),
+            border_565: rgb565_from_rgb888(0x5e, 0x59, 0xaa),
+            text: Pixel(0x00aaa5ff),
+            muted_text: Pixel(0x005e59aa),
+            selection_fill_565: rgb565_from_rgb888(0x40, 0xe5, 0xe7),
+            selection_text_565: rgb565_from_rgb888(0x03, 0x13, 0x2d),
+            selection_frame_565: rgb565_from_rgb888(0x40, 0xe5, 0xe7),
+            typeface: ConsoleTypeface::W95FA,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ArcadeListGeometry {
     pub(crate) x: usize,
@@ -141,6 +196,7 @@ pub(crate) struct ArcadeListRenderer {
     geometry: ArcadeListGeometry,
     width: usize,
     visible_height: usize,
+    style: ArcadeListStyle,
 }
 
 pub(crate) struct CachedArcadeRow {
@@ -201,14 +257,19 @@ pub(crate) enum ArcadeListUpdate {
 
 impl ArcadeListRenderer {
     pub(crate) fn new() -> Self {
+        Self::new_with_style(ArcadeListStyle::hdmi())
+    }
+
+    pub(crate) fn new_for_crt(row_height: i32) -> Self {
+        Self::new_with_style(ArcadeListStyle::crt(row_height.max(1)))
+    }
+
+    fn new_with_style(style: ArcadeListStyle) -> Self {
         Self {
-            title_font: ConsoleFont::new_with_typeface(ARCADE_LIST_FONT_PX, ConsoleTypeface::W95FA),
-            meta_font: ConsoleFont::new_with_typeface(
-                ARCADE_LIST_META_FONT_PX,
-                ConsoleTypeface::W95FA,
-            ),
+            title_font: ConsoleFont::new_with_typeface(ARCADE_LIST_FONT_PX, style.typeface),
+            meta_font: ConsoleFont::new_with_typeface(ARCADE_LIST_META_FONT_PX, style.typeface),
             row_cache: HashMap::new(),
-            surface: vec![ARCADE_LIST_BG_COLOR_565; ARCADE_LIST_W * ARCADE_LIST_H],
+            surface: vec![style.background_565; ARCADE_LIST_W * ARCADE_LIST_H],
             band_scratch: Vec::new(),
             selection_invert_scratch: Vec::new(),
             selection_horizontal: Vec::new(),
@@ -222,6 +283,7 @@ impl ArcadeListRenderer {
             geometry: ArcadeListGeometry::NORMAL,
             width: ARCADE_LIST_W,
             visible_height: ARCADE_LIST_H,
+            style,
         }
     }
 
@@ -248,7 +310,7 @@ impl ArcadeListRenderer {
         if self.geometry != geometry {
             if self.width != geometry.width {
                 self.width = geometry.width;
-                self.surface = vec![ARCADE_LIST_BG_COLOR_565; self.width * ARCADE_LIST_H];
+                self.surface = vec![self.style.background_565; self.width * ARCADE_LIST_H];
                 self.row_cache.clear();
                 self.row_fingerprint_cache.clear();
             }
@@ -273,8 +335,8 @@ impl ArcadeListRenderer {
         force: bool,
     ) -> Option<ArcadeListUpdate> {
         self.last_filter_draw = None;
-        let visual_px = arcade_visual_px(visual_index);
-        let anchor = arcade_anchor_for_visual_px(games.len(), visual_px);
+        let visual_px = arcade_visual_px(visual_index, self.style.row_height);
+        let anchor = arcade_anchor_for_visual_px(games.len(), visual_px, self.style.row_height);
         let previous = self.last_draw;
         let anchor_hash = games
             .get(anchor)
@@ -358,12 +420,16 @@ impl ArcadeListRenderer {
         force: bool,
     ) -> Option<ArcadeListUpdate> {
         self.last_draw = None;
-        let visual_px = arcade_visual_px(visual_index);
+        let visual_px = arcade_visual_px(visual_index, self.style.row_height);
         let key = ArcadeFilterListDrawKey {
             len: items.len(),
             visual_px,
             content_hash: arcade_filter_content_hash(items),
-            visible_hash: arcade_filter_visible_window_hash(items, visual_px),
+            visible_hash: arcade_filter_visible_window_hash(
+                items,
+                visual_px,
+                self.style.row_height,
+            ),
         };
         REQUESTED_FILTER_CONTENT_HASH.store(key.content_hash, Ordering::Relaxed);
         if !force && self.last_filter_draw.as_ref() == Some(&key) {
@@ -416,20 +482,20 @@ impl ArcadeListRenderer {
             x0: self.geometry.x,
             y0: self.geometry.y + y,
             x1: self.geometry.x + self.width,
-            y1: self.geometry.y + y + ARCADE_ROW_HEIGHT as usize,
+            y1: self.geometry.y + y + self.style.row_height as usize,
         }
     }
 
     fn centered_selection_y() -> usize {
-        Self::selection_y_for_height(ARCADE_LIST_H)
+        Self::selection_y_for_height(ARCADE_LIST_H, ARCADE_ROW_HEIGHT)
     }
 
     fn selection_y(&self) -> usize {
-        Self::selection_y_for_height(self.visible_height)
+        Self::selection_y_for_height(self.visible_height, self.style.row_height)
     }
 
-    fn selection_y_for_height(height: usize) -> usize {
-        let row_h = ARCADE_ROW_HEIGHT as usize;
+    fn selection_y_for_height(height: usize, row_height: i32) -> usize {
+        let row_h = row_height.max(1) as usize;
         let visible_rows = (height / row_h).max(1);
         (visible_rows / 2) * row_h
     }
@@ -447,8 +513,8 @@ impl ArcadeListRenderer {
         let band_h = band_h.min(self.visible_height - band_y);
         if games.is_empty() {
             let mut band = std::mem::take(&mut self.band_scratch);
-            band.resize(self.width * band_h, ARCADE_LIST_BG_COLOR);
-            band.fill(ARCADE_LIST_BG_COLOR);
+            band.resize(self.width * band_h, self.style.background);
+            band.fill(self.style.background);
             self.meta_font.draw_text_clipped(
                 &mut band,
                 self.width,
@@ -458,19 +524,21 @@ impl ArcadeListRenderer {
                 96,
                 (self.visible_height / 2).saturating_sub(band_y) as isize,
                 "NO GAMES",
-                Pixel(0x00706080),
+                self.style.muted_text,
             );
             self.copy_band_to_surface(&band, band_y, band_h);
             self.band_scratch = band;
             return;
         }
-        self.fill_surface_band(band_y, band_h, ARCADE_LIST_BG_COLOR_565);
-        let row_h = ARCADE_ROW_HEIGHT as isize;
-        let Some((first, end)) = arcade_visible_window_range_px(games.len(), visual_px) else {
+        self.fill_surface_band(band_y, band_h, self.style.background_565);
+        let row_h = self.style.row_height as isize;
+        let Some((first, end)) =
+            arcade_visible_window_range_px(games.len(), visual_px, self.style.row_height)
+        else {
             return;
         };
         for idx in first..=end {
-            let y = arcade_row_y(idx, visual_px, self.selection_y());
+            let y = arcade_row_y(idx, visual_px, self.selection_y(), self.style.row_height);
             let clip_y0 = y.max(band_y as isize);
             let clip_y1 = (y + row_h).min((band_y + band_h) as isize);
             if clip_y1 <= clip_y0 {
@@ -494,11 +562,11 @@ impl ArcadeListRenderer {
             return;
         }
         let band_h = band_h.min(self.visible_height - band_y);
-        self.fill_surface_band(band_y, band_h, ARCADE_LIST_BG_COLOR_565);
+        self.fill_surface_band(band_y, band_h, self.style.background_565);
         if items.is_empty() {
             let mut band = std::mem::take(&mut self.band_scratch);
-            band.resize(self.width * band_h, ARCADE_LIST_BG_COLOR);
-            band.fill(ARCADE_LIST_BG_COLOR);
+            band.resize(self.width * band_h, self.style.background);
+            band.fill(self.style.background);
             self.meta_font.draw_text_clipped(
                 &mut band,
                 self.width,
@@ -508,18 +576,20 @@ impl ArcadeListRenderer {
                 96,
                 (self.visible_height / 2).saturating_sub(band_y) as isize,
                 "NO FILTERS",
-                Pixel(0x00706080),
+                self.style.muted_text,
             );
             self.copy_band_to_surface(&band, band_y, band_h);
             self.band_scratch = band;
             return;
         }
-        let row_h = ARCADE_ROW_HEIGHT as isize;
-        let Some((first, end)) = arcade_visible_window_range_px(items.len(), visual_px) else {
+        let row_h = self.style.row_height as isize;
+        let Some((first, end)) =
+            arcade_visible_window_range_px(items.len(), visual_px, self.style.row_height)
+        else {
             return;
         };
         for (idx, item) in items.iter().enumerate().take(end + 1).skip(first) {
-            let y = arcade_row_y(idx, visual_px, self.selection_y());
+            let y = arcade_row_y(idx, visual_px, self.selection_y(), self.style.row_height);
             let clip_y0 = y.max(band_y as isize);
             let clip_y1 = (y + row_h).min((band_y + band_h) as isize);
             if clip_y1 <= clip_y0 {
@@ -571,7 +641,7 @@ impl ArcadeListRenderer {
             }
         }
         let row = &self.row_cache.get(&idx).expect("row cache insert").pixels;
-        let row_h = ARCADE_ROW_HEIGHT as isize;
+        let row_h = self.style.row_height as isize;
         let clip_y0 = y.max(band_y as isize);
         let clip_y1 = (y + row_h).min((band_y + band_h) as isize);
         if clip_y1 <= clip_y0 {
@@ -609,7 +679,9 @@ impl ArcadeListRenderer {
 
     fn arcade_visible_window_hash(&mut self, games: ArcadeGameView<'_>, visual_px: i32) -> u64 {
         let mut hash = ARCADE_LIST_HASH_OFFSET;
-        let Some((first, end)) = arcade_visible_window_range_px(games.len(), visual_px) else {
+        let Some((first, end)) =
+            arcade_visible_window_range_px(games.len(), visual_px, self.style.row_height)
+        else {
             return hash;
         };
         arcade_hash_usize(&mut hash, first);
@@ -710,12 +782,15 @@ impl ArcadeListRenderer {
             h,
             self.selection_y(),
             self.visible_height,
+            self.style.row_height as usize,
             |kind, x, y, w, h| match kind {
                 ArcadeListPresentKind::Normal => {
                     self.copy_surface_rect_to_fb0(disp, x, y, w, h);
                 }
                 ArcadeListPresentKind::Inverted => {
-                    if arcade_selection_inversion_enabled() {
+                    if self.style.typeface == ConsoleTypeface::W95FA
+                        || arcade_selection_inversion_enabled()
+                    {
                         self.copy_inverted_surface_rect_to_fb0(disp, x, y, w, h);
                     } else {
                         self.copy_surface_rect_to_fb0(disp, x, y, w, h);
@@ -817,7 +892,7 @@ impl ArcadeListRenderer {
             let dst = row * w;
             for col in 0..w {
                 self.selection_invert_scratch[dst + col] =
-                    selected_aperture_pixel(self.surface[src + col]);
+                    selected_aperture_pixel_with_style(self.surface[src + col], self.style);
             }
         }
         &self.selection_invert_scratch
@@ -825,7 +900,7 @@ impl ArcadeListRenderer {
 
     fn copy_selection_frame_to_fb0(&mut self, disp: &mut MappedRgb565Framebuffer) {
         let rect = self.selection_rect();
-        let color = ARCADE_SELECTION_FRAME_COLOR;
+        let color = self.style.selection_frame_565;
         let thickness = ARCADE_SELECTION_FRAME_THICKNESS;
         let h = rect.y1.saturating_sub(rect.y0).min(ARCADE_LIST_H);
         self.selection_horizontal
@@ -883,12 +958,15 @@ impl ArcadeListRenderer {
             h,
             self.selection_y(),
             self.visible_height,
+            self.style.row_height as usize,
             |kind, x, y, w, h| match kind {
                 ArcadeListPresentKind::Normal => {
                     self.compose_surface_rect_to_cached(target, x, y, w, h);
                 }
                 ArcadeListPresentKind::Inverted => {
-                    if arcade_selection_inversion_enabled() {
+                    if self.style.typeface == ConsoleTypeface::W95FA
+                        || arcade_selection_inversion_enabled()
+                    {
                         self.compose_inverted_surface_rect_to_cached(target, x, y, w, h);
                     } else {
                         self.compose_surface_rect_to_cached(target, x, y, w, h);
@@ -914,12 +992,15 @@ impl ArcadeListRenderer {
             h,
             self.selection_y(),
             self.visible_height,
+            self.style.row_height as usize,
             |kind, x, y, w, h| match kind {
                 ArcadeListPresentKind::Normal => {
                     self.copy_surface_rect_to_hidden(hidden, x, y, w, h);
                 }
                 ArcadeListPresentKind::Inverted => {
-                    if arcade_selection_inversion_enabled() {
+                    if self.style.typeface == ConsoleTypeface::W95FA
+                        || arcade_selection_inversion_enabled()
+                    {
                         self.copy_inverted_surface_rect_to_hidden(hidden, x, y, w, h);
                     } else {
                         self.copy_surface_rect_to_hidden(hidden, x, y, w, h);
@@ -1029,7 +1110,7 @@ impl ArcadeListRenderer {
 
     fn compose_selection_frame_to_cached(&mut self, target: &mut UiFrameTarget) {
         let rect = self.selection_rect();
-        let color = ARCADE_SELECTION_FRAME_COLOR;
+        let color = self.style.selection_frame_565;
         let thickness = ARCADE_SELECTION_FRAME_THICKNESS;
         let h = rect.y1.saturating_sub(rect.y0).min(ARCADE_LIST_H);
         self.selection_horizontal
@@ -1063,7 +1144,7 @@ impl ArcadeListRenderer {
 
     fn copy_selection_frame_to_hidden(&mut self, hidden: &mut ScanoutSlotsRgb565Framebuffer) {
         let rect = self.selection_rect();
-        let color = ARCADE_SELECTION_FRAME_COLOR;
+        let color = self.style.selection_frame_565;
         let thickness = ARCADE_SELECTION_FRAME_THICKNESS;
         let h = rect.y1.saturating_sub(rect.y0).min(ARCADE_LIST_H);
         self.selection_horizontal
@@ -1122,37 +1203,42 @@ impl ArcadeListRenderer {
     }
 
     fn render_row(&mut self, title: &str, is_new: bool, idx: usize) -> Vec<Rgb565Pixel> {
-        let mut row = vec![Pixel(0); self.width * ARCADE_ROW_HEIGHT as usize];
-        draw_arcade_row_background(&mut row, self.width, idx);
+        let row_height = self.style.row_height as usize;
+        let mut row = vec![Pixel(0); self.width * row_height];
+        draw_arcade_row_background_with_style(&mut row, self.width, idx, self.style);
         let reserved = if is_new { 76 } else { 24 };
         let title = self
             .title_font
             .clipped_text(title, self.width.saturating_sub(reserved));
+        let gradient = TextGradient::new(self.style.text, self.style.text, self.style.text);
         self.title_font.draw_text_clipped_gradient(
             &mut row,
             self.width,
             self.width,
             0,
-            ARCADE_ROW_HEIGHT as usize,
+            row_height,
             12,
-            30,
+            (row_height / 2 + 6) as isize,
             &title,
-            ARCADE_TITLE_GRADIENT,
+            gradient,
         );
         if is_new {
-            draw_new_badge(&mut row, self.width, &mut self.meta_font);
+            draw_new_badge(&mut row, self.width, row_height, &mut self.meta_font);
         }
         row.into_iter().map(pixel_to_rgb565).collect()
     }
 
     fn render_filter_row(&mut self, item: &ArcadeListItem, idx: usize) -> Vec<Rgb565Pixel> {
-        let mut row = vec![Pixel(0); self.width * ARCADE_ROW_HEIGHT as usize];
-        draw_arcade_row_background(&mut row, self.width, idx);
+        let row_height = self.style.row_height as usize;
+        let mut row = vec![Pixel(0); self.width * row_height];
+        draw_arcade_row_background_with_style(&mut row, self.width, idx, self.style);
         let reserved = if item.count.is_some() { 68 } else { 24 };
         let title = self
             .title_font
             .clipped_text(&item.title, self.width.saturating_sub(reserved));
-        let gradient = if item.active {
+        let gradient = if self.style.typeface == ConsoleTypeface::W95FA {
+            TextGradient::new(self.style.text, self.style.text, self.style.text)
+        } else if item.active {
             ARCADE_FILTER_ACTIVE_GRADIENT
         } else {
             ARCADE_TITLE_GRADIENT
@@ -1162,9 +1248,9 @@ impl ArcadeListRenderer {
             self.width,
             self.width,
             0,
-            ARCADE_ROW_HEIGHT as usize,
+            row_height,
             12,
-            30,
+            (row_height / 2 + 6) as isize,
             &title,
             gradient,
         );
@@ -1175,11 +1261,11 @@ impl ArcadeListRenderer {
                 self.width,
                 self.width,
                 0,
-                ARCADE_ROW_HEIGHT as usize,
+                row_height,
                 self.width.saturating_sub(60) as isize,
-                29,
+                (row_height / 2 + 5) as isize,
                 &count,
-                Pixel(0x00706080),
+                self.style.muted_text,
             );
         }
         row.into_iter().map(pixel_to_rgb565).collect()
@@ -1194,14 +1280,14 @@ pub(crate) fn requested_filter_content_hash() -> u64 {
     REQUESTED_FILTER_CONTENT_HASH.load(Ordering::Relaxed)
 }
 
-fn draw_new_badge(row: &mut [Pixel], width: usize, font: &mut ConsoleFont) {
+fn draw_new_badge(row: &mut [Pixel], width: usize, row_height: usize, font: &mut ConsoleFont) {
     let x = width.saturating_sub(58);
-    let y = 14usize;
+    let y = if row_height <= 32 { 4 } else { 14 };
     let w = 42usize;
     let h = 18usize;
     for dy in 0..h {
         let row_y = y + dy;
-        if row_y >= ARCADE_ROW_HEIGHT as usize {
+        if row_y >= row_height {
             break;
         }
         let start = row_y * width + x;
@@ -1213,7 +1299,7 @@ fn draw_new_badge(row: &mut [Pixel], width: usize, font: &mut ConsoleFont) {
         width,
         width,
         0,
-        ARCADE_ROW_HEIGHT as usize,
+        row_height,
         x as isize + 9,
         y as isize + 12,
         "NEW",
@@ -1239,6 +1325,7 @@ pub(crate) fn for_each_arcade_list_present_segment(
         h,
         ArcadeListRenderer::centered_selection_y(),
         ARCADE_LIST_H,
+        ARCADE_ROW_HEIGHT as usize,
         emit,
     );
 }
@@ -1249,6 +1336,7 @@ fn for_each_arcade_list_present_segment_with_geometry(
     h: usize,
     selection_y: usize,
     visible_height: usize,
+    row_height: usize,
     emit: impl FnMut(ArcadeListPresentKind, usize, usize, usize, usize),
 ) {
     if h == 0 || viewport_y >= visible_height {
@@ -1257,7 +1345,7 @@ fn for_each_arcade_list_present_segment_with_geometry(
     let y0 = viewport_y;
     let y1 = (viewport_y + h).min(visible_height);
 
-    let selection_bottom = selection_y + ARCADE_ROW_HEIGHT as usize;
+    let selection_bottom = selection_y + row_height;
     let inner_top = selection_y + ARCADE_SELECTION_FRAME_THICKNESS;
     let inner_bottom = selection_bottom.saturating_sub(ARCADE_SELECTION_FRAME_THICKNESS);
     let mut emit = emit;
@@ -1370,9 +1458,11 @@ fn arcade_anchor_hash(game: Option<&ArcadeGameEntry>) -> u64 {
 #[cfg(test)]
 fn arcade_visible_window_hash(games: ArcadeGameView<'_>, visual_index: f32) -> u64 {
     let mut hash = ARCADE_LIST_HASH_OFFSET;
-    let Some((first, end)) =
-        arcade_visible_window_range_px(games.len(), arcade_visual_px(visual_index))
-    else {
+    let Some((first, end)) = arcade_visible_window_range_px(
+        games.len(),
+        arcade_visual_px(visual_index, ARCADE_ROW_HEIGHT),
+        ARCADE_ROW_HEIGHT,
+    ) else {
         return hash;
     };
     arcade_hash_usize(&mut hash, first);
@@ -1386,9 +1476,14 @@ fn arcade_visible_window_hash(games: ArcadeGameView<'_>, visual_index: f32) -> u
     hash
 }
 
-fn arcade_filter_visible_window_hash(items: &[ArcadeListItem], visual_px: i32) -> u64 {
+fn arcade_filter_visible_window_hash(
+    items: &[ArcadeListItem],
+    visual_px: i32,
+    row_height: i32,
+) -> u64 {
     let mut hash = ARCADE_LIST_HASH_OFFSET;
-    let Some((first, end)) = arcade_visible_window_range_px(items.len(), visual_px) else {
+    let Some((first, end)) = arcade_visible_window_range_px(items.len(), visual_px, row_height)
+    else {
         return hash;
     };
     arcade_hash_usize(&mut hash, first);
@@ -1420,31 +1515,35 @@ fn arcade_game_hash(game: &ArcadeGameEntry) -> u64 {
     hash
 }
 
-fn arcade_visual_px(visual_index: f32) -> i32 {
+fn arcade_visual_px(visual_index: f32, row_height: i32) -> i32 {
     if !visual_index.is_finite() {
         return 0;
     }
-    (visual_index * ARCADE_ROW_HEIGHT as f32).round().max(0.0) as i32
+    (visual_index * row_height.max(1) as f32).round().max(0.0) as i32
 }
 
-fn arcade_anchor_for_visual_px(len: usize, visual_px: i32) -> usize {
+fn arcade_anchor_for_visual_px(len: usize, visual_px: i32, row_height: i32) -> usize {
     if len == 0 {
         return 0;
     }
-    let row_h = ARCADE_ROW_HEIGHT.max(1);
+    let row_h = row_height.max(1);
     let anchor = (visual_px.max(0) + row_h / 2).div_euclid(row_h);
     (anchor as usize).min(len - 1)
 }
 
-fn arcade_row_y(idx: usize, visual_px: i32, selection_y: usize) -> isize {
-    selection_y as isize + idx as isize * ARCADE_ROW_HEIGHT as isize - visual_px.max(0) as isize
+fn arcade_row_y(idx: usize, visual_px: i32, selection_y: usize, row_height: i32) -> isize {
+    selection_y as isize + idx as isize * row_height.max(1) as isize - visual_px.max(0) as isize
 }
 
-fn arcade_visible_window_range_px(len: usize, visual_px: i32) -> Option<(usize, usize)> {
+fn arcade_visible_window_range_px(
+    len: usize,
+    visual_px: i32,
+    row_height: i32,
+) -> Option<(usize, usize)> {
     if len == 0 {
         return None;
     }
-    let row_h = ARCADE_ROW_HEIGHT.max(1);
+    let row_h = row_height.max(1);
     let visual_px = visual_px.max(0);
     let floor = visual_px.div_euclid(row_h);
     let ceil = (visual_px + row_h - 1).div_euclid(row_h);
@@ -1480,21 +1579,29 @@ fn arc_str_eq(left: &Arc<str>, right: &Arc<str>) -> bool {
 }
 
 pub(crate) fn draw_arcade_row_background(row: &mut [Pixel], width: usize, idx: usize) {
+    draw_arcade_row_background_with_style(row, width, idx, ArcadeListStyle::hdmi());
+}
+
+fn draw_arcade_row_background_with_style(
+    row: &mut [Pixel],
+    width: usize,
+    idx: usize,
+    style: ArcadeListStyle,
+) {
     let bg = if idx.is_multiple_of(2) {
-        Pixel(0x001a1424)
+        style.background
     } else {
-        Pixel(0x00150f20)
+        style.alternate_background
     };
-    let border = Pixel(0x00251c34);
-    for row_y in 0..ARCADE_ROW_HEIGHT as isize {
+    for row_y in 0..style.row_height as isize {
         let dy = row_y as usize;
         let line = &mut row[dy * width..(dy + 1) * width];
         for px in line.iter_mut() {
             *px = bg;
         }
-        if row_y == 0 || row_y == ARCADE_ROW_HEIGHT as isize - 1 {
+        if row_y == 0 || row_y == style.row_height as isize - 1 {
             for px in line.iter_mut() {
-                *px = border;
+                *px = style.border;
             }
         }
     }
@@ -1509,20 +1616,30 @@ fn invert_rgb565(pixel: Rgb565Pixel) -> Rgb565Pixel {
 }
 
 fn selected_aperture_pixel(pixel: Rgb565Pixel) -> Rgb565Pixel {
-    if is_arcade_row_background_pixel(pixel) {
-        ARCADE_SELECTION_FILL_COLOR_565
+    selected_aperture_pixel_with_style(pixel, ArcadeListStyle::hdmi())
+}
+
+fn selected_aperture_pixel_with_style(pixel: Rgb565Pixel, style: ArcadeListStyle) -> Rgb565Pixel {
+    if is_arcade_row_background_pixel_with_style(pixel, style) {
+        style.selection_fill_565
+    } else if style.typeface == ConsoleTypeface::W95FA {
+        style.selection_text_565
     } else {
         invert_rgb565(pixel)
     }
 }
 
 fn is_arcade_row_background_pixel(pixel: Rgb565Pixel) -> bool {
+    is_arcade_row_background_pixel_with_style(pixel, ArcadeListStyle::hdmi())
+}
+
+fn is_arcade_row_background_pixel_with_style(pixel: Rgb565Pixel, style: ArcadeListStyle) -> bool {
     matches!(
         pixel,
-        ARCADE_LIST_BG_COLOR_565
-            | ARCADE_LIST_ALT_BG_COLOR_565
-            | ARCADE_LIST_ROW_BORDER_COLOR_565
-            | ARCADE_NEW_BADGE_FILL_565
+        value if value == style.background_565
+            || value == style.alternate_background_565
+            || value == style.border_565
+            || value == ARCADE_NEW_BADGE_FILL_565
     )
 }
 
@@ -2085,6 +2202,23 @@ mod tests {
             selected_aperture_pixel(rgb565_from_rgb888(0xff, 0xf6, 0xff)),
             invert_rgb565(rgb565_from_rgb888(0xff, 0xf6, 0xff))
         );
+    }
+
+    #[test]
+    fn crt_renderer_uses_compact_rows_and_card_palette_without_changing_hdmi() {
+        let crt = ArcadeListRenderer::new_for_crt(24);
+        let hdmi = ArcadeListRenderer::new();
+
+        assert_eq!(crt.style.row_height, 24);
+        assert_eq!(crt.style.typeface, ConsoleTypeface::W95FA);
+        assert_eq!(crt.style.background.0, 0x00020817);
+        assert_eq!(
+            crt.style.selection_fill_565,
+            rgb565_from_rgb888(0x40, 0xe5, 0xe7)
+        );
+        assert_eq!(hdmi.style.row_height, ARCADE_ROW_HEIGHT);
+        assert_eq!(hdmi.style.typeface, ConsoleTypeface::PressStart2P);
+        assert_eq!(hdmi.style.background.0, ARCADE_LIST_BG_COLOR.0);
     }
 
     #[test]

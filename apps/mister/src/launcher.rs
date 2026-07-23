@@ -973,8 +973,16 @@ impl Default for LauncherNav {
 
 impl LauncherNav {
     pub fn for_crt_layout(crt_layout: bool) -> Self {
+        Self::for_crt_layout_with_row_height(crt_layout, ARCADE_ROW_HEIGHT)
+    }
+
+    pub fn for_crt_layout_with_row_height(crt_layout: bool, row_height: i32) -> Self {
         let mut nav = Self::new();
         nav.crt_layout = crt_layout;
+        if crt_layout {
+            nav.arcade = ArcadeNav::with_row_height(row_height);
+            nav.arcade_filter.scroll = ArcadeNav::with_row_height(row_height);
+        }
         nav
     }
 
@@ -6284,6 +6292,16 @@ mod tests {
         );
         assert_eq!(nav.screen, Screen::Home);
         assert_eq!(nav.current_menu_id(), ROOT_MENU_ID);
+    }
+
+    #[test]
+    fn crt_navigation_uses_the_renderer_row_height() {
+        let mut nav = LauncherNav::for_crt_layout_with_row_height(true, 24);
+        nav.arcade.restore_position(3, 72, 8);
+
+        assert_eq!(nav.arcade.selected, 3);
+        assert_eq!(nav.arcade.scroll_y, 72);
+        assert_eq!(nav.arcade.visual_index, 3.0);
     }
 
     #[test]
