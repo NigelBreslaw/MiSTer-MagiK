@@ -58,11 +58,36 @@ pub fn affected_plan_at(
             .cmp(&right.workflow_phase())
             .then_with(|| left.id.cmp(&right.id))
     });
+    let operations = normalize_operations(operations);
     Ok(Plan {
         intent,
         operations,
         external_requirements,
     })
+}
+
+fn normalize_operations(operations: Vec<Operation>) -> Vec<Operation> {
+    let mut normalized: Vec<Operation> = Vec::new();
+    for mut operation in operations {
+        if let Some(existing) = normalized.iter_mut().find(|existing| {
+            existing.program == operation.program
+                && existing.args == operation.args
+                && existing.action == operation.action
+                && existing.risk == operation.risk
+                && existing.workflow_phase() == operation.workflow_phase()
+        }) {
+            existing.inputs.append(&mut operation.inputs);
+            existing.inputs.sort();
+            existing.inputs.dedup();
+            if !existing.reason.contains(&operation.reason) {
+                existing.reason.push_str("; ");
+                existing.reason.push_str(&operation.reason);
+            }
+        } else {
+            normalized.push(operation);
+        }
+    }
+    normalized
 }
 
 fn classified(path: &Path) -> bool {
@@ -960,6 +985,19 @@ mod tests {
         assert_eq!(arm.program, "scripts/agent");
         assert_eq!(arm.args, ["build", "validate-launcher"]);
         assert_eq!(arm.risk, Risk::LocalWrite);
+    }
+
+    #[test]
+    fn identical_executions_merge_reasons_and_inputs() {
+        let mut first = cargo("first", "First", &["test"], "first reason");
+        first.inputs = vec!["one".into()];
+        let mut second = cargo("second", "Second", &["test"], "second reason");
+        second.inputs = vec!["two".into()];
+        let normalized = normalize_operations(vec![first, second]);
+        assert_eq!(normalized.len(), 1);
+        assert_eq!(normalized[0].inputs, ["one", "two"]);
+        assert!(normalized[0].reason.contains("first reason"));
+        assert!(normalized[0].reason.contains("second reason"));
     }
 
     #[test]
