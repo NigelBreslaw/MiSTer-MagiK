@@ -130,7 +130,9 @@ use ui_runner::ui_boot::{detect_runtime_display_geometry_for_plan, settle_boot_b
 
 const DEFAULT_PROCESS_LOCK_PATH: &str = "/tmp/mister-magik/process.lock";
 fn main() {
-    mister_magik_catalog::device_layout::initialize_process_env();
+    // SAFETY: this is the first operation in main, before hooks, UI state, or
+    // worker threads exist.
+    unsafe { mister_magik_catalog::device_layout::initialize_process_env() };
     let args: Vec<String> = std::env::args().collect();
     mister_magik_fb::crash_report::install_panic_hook(args.clone());
     boot_analytics::event("process_start", format!("args={}", args.join(" ")));

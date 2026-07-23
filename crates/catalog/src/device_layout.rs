@@ -61,14 +61,18 @@ pub fn current_app_path(relative: &str) -> PathBuf {
 
 /// Seed existing path override interfaces from the executable's fixed layout.
 /// Explicit benchmark/test overrides retain precedence.
-pub fn initialize_process_env() {
+///
+/// # Safety
+///
+/// The caller must ensure no other thread can read or write the process
+/// environment for the duration of this call.
+pub unsafe fn initialize_process_env() {
     let layout = DeviceLayout::current();
     initialize_process_env_with(
         layout,
         |name| std::env::var_os(name).is_some(),
         |name, value| {
-            // SAFETY: the device entrypoint calls this before installing hooks,
-            // creating the UI, or starting any worker threads.
+            // SAFETY: upheld by initialize_process_env's caller.
             unsafe { std::env::set_var(name, value) };
         },
     );
