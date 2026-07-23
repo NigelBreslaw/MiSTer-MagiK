@@ -9,10 +9,11 @@ export global MisterUi {
     in-out property <int> window-height: 540;
     in-out property <bool> crt-layout: false;
     out property <bool> compact-layout: crt-layout;
+    // Defaults preserve the HDMI contract; Rust overrides them for CRT routes.
     in-out property <int> crt-grid: 8;
-    in-out property <int> crt-border: 2;
-    in-out property <int> crt-body-font: 16;
-    in-out property <int> crt-heading-font: 32;
+    in-out property <int> crt-border: 1;
+    in-out property <int> crt-body-font: 8;
+    in-out property <int> crt-heading-font: 16;
     in-out property <int> crt-card-title-font: 24;
     in-out property <int> crt-card-detail-font: 16;
     in-out property <int> crt-header-height: 48;

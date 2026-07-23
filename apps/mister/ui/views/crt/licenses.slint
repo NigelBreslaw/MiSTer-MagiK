@@ -16,7 +16,8 @@ export component LicensesScreen inherits Rectangle {
         CrtMenuRow { label: "MiSTer MagiK"; detail: ">"; focused: MisterBridge.licenses-selected == 0; }
         CrtMenuRow { label: "FFmpeg"; detail: ">"; focused: MisterBridge.licenses-selected == 1; }
         CrtMenuRow { label: "Press Start 2P"; detail: ">"; focused: MisterBridge.licenses-selected == 2; }
-        CrtMenuRow { label: "Slint"; detail: ">"; focused: MisterBridge.licenses-selected == 3; }
+        CrtMenuRow { label: "W95FA"; detail: ">"; focused: MisterBridge.licenses-selected == 3; }
+        CrtMenuRow { label: "Slint"; detail: ">"; focused: MisterBridge.licenses-selected == 4; }
         Rectangle { vertical-stretch: 1; background: transparent; }
         CrtFooter { left-hint: "A Open   B Back"; right-hint: "HOME Launcher"; }
     }
@@ -27,7 +28,8 @@ export component LicensesScreen inherits Rectangle {
         Text {
             text: MisterBridge.licenses-selected == 0 ? "MiSTer MagiK  v" :
                   MisterBridge.licenses-selected == 1 ? "FFmpeg  v" :
-                  MisterBridge.licenses-selected == 2 ? "Press Start 2P  v" : "Slint  v";
+                  MisterBridge.licenses-selected == 2 ? "Press Start 2P  v" :
+                  MisterBridge.licenses-selected == 3 ? "W95FA  v" : "Slint  v";
             color: CrtTheme.accent;
             font-size: MisterUi.heading-font;
             horizontal-alignment: center;

@@ -3,24 +3,28 @@
 
 use std::sync::OnceLock;
 
-pub const LICENSE_TITLES: [&str; 4] = ["MiSTer MagiK", "FFmpeg", "Press Start 2P", "Slint"];
+// Directly shipped fonts remain visible in the in-app legal surface.
+pub const LICENSE_TITLES: [&str; 5] =
+    ["MiSTer MagiK", "FFmpeg", "Press Start 2P", "W95FA", "Slint"];
 
 const GPL3: &str = include_str!("../../../LICENSE");
 const FFMPEG: &str = include_str!("../licenses/FFMPEG.txt");
 const PRESS_START_2P: &str = include_str!("../licenses/PRESS-START-2P.txt");
+const W95FA: &str = include_str!("../licenses/W95FA.txt");
 const LICENSE_LINE_COLUMNS: usize = 105;
 const LICENSE_VISIBLE_ROWS: usize = 40;
 
 pub fn text(index: usize) -> &'static str {
     match index {
-        0 | 3 => GPL3,
+        0 | 4 => GPL3,
         1 => FFMPEG,
-        _ => PRESS_START_2P,
+        2 => PRESS_START_2P,
+        _ => W95FA,
     }
 }
 
 pub fn wrapped_lines(index: usize) -> &'static [String] {
-    static LINES: [OnceLock<Vec<String>>; 4] = [const { OnceLock::new() }; 4];
+    static LINES: [OnceLock<Vec<String>>; 5] = [const { OnceLock::new() }; 5];
     let index = index.min(LICENSE_TITLES.len() - 1);
     LINES[index].get_or_init(|| wrap_text(index))
 }
@@ -91,10 +95,11 @@ mod tests {
     fn app_surface_is_limited_to_directly_relevant_license_texts() {
         assert_eq!(
             LICENSE_TITLES,
-            ["MiSTer MagiK", "FFmpeg", "Press Start 2P", "Slint"]
+            ["MiSTer MagiK", "FFmpeg", "Press Start 2P", "W95FA", "Slint"]
         );
-        assert_eq!(text(3), GPL3);
+        assert_eq!(text(4), GPL3);
         assert!(FFMPEG.contains("FFmpeg 8.1.2"));
         assert!(PRESS_START_2P.contains("SIL Open Font License"));
+        assert!(W95FA.contains("SIL OPEN FONT LICENSE"));
     }
 }
