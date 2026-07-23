@@ -4,6 +4,7 @@
 mod archive;
 pub mod benchmark;
 pub mod build;
+pub mod capture;
 pub mod checks;
 pub mod ci;
 pub mod cli;

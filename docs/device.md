@@ -91,6 +91,13 @@ capture is saved under the OS temporary directory at
 `mister-magik/captures/`, and the command prints a Markdown link to the PNG so
 an image-capable agent can inspect it without receiving base64 text.
 
+On macOS, `scripts/agent capture usb-video [--output PATH]` captures the first
+nonblank 1920x1080 frame from the fixed `USB Video` input. The one-shot native
+AVFoundation path writes JPEG only, refuses to overwrite an explicit output,
+and otherwise saves a unique file under the same temporary capture directory
+before printing a Markdown link. It is sink evidence, not a replacement for
+the authoritative framebuffer capture.
+
 `mister display-matrix --attended --out DIRECTORY [--usb-video]
 [--screensaver-wait SECONDS]` performs the bounded runtime display
 matrix without rebooting Linux. Main applies each supported resolution as a

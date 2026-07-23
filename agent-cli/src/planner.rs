@@ -522,17 +522,15 @@ fn add_path_operations(
             "FPGA source → workflow contract",
         ));
     }
-    if path == Path::new("tools/host-camera-native.swift") {
-        add(op(
-            "tools.host-camera-typecheck",
-            "Type-check native host camera helper",
-            "swiftc",
-            &["-typecheck", "tools/host-camera-native.swift"],
-            "native host-camera source changed",
-        ));
+    if path.starts_with("tools") {
+        add(diff_check());
     }
     if path.starts_with("scripts") {
-        add_script_operations(repository, path, depth, &mut add);
+        if repository.join(path).exists() {
+            add_script_operations(repository, path, depth, &mut add);
+        } else {
+            add(diff_check());
+        }
     }
     if path.starts_with(".github") || path.starts_with(".githooks") {
         add(builtin(
@@ -999,7 +997,11 @@ mod tests {
         assert!(plan
             .operations
             .iter()
-            .any(|operation| operation.id == "scripts.licenses"));
+            .any(|operation| operation.id == "repo.diff-check"));
+        assert!(plan
+            .operations
+            .iter()
+            .all(|operation| operation.id != "scripts.licenses"));
     }
 
     #[test]

@@ -65,6 +65,10 @@ pub enum Command {
     Diagnose,
     Deliver,
     Benchmark,
+    Capture {
+        #[command(subcommand)]
+        command: CaptureCommand,
+    },
     Release {
         #[command(subcommand)]
         command: ReleaseCommand,
@@ -327,6 +331,14 @@ pub enum ReleaseCommand {
     Qualify,
 }
 
+#[derive(Debug, Subcommand)]
+pub enum CaptureCommand {
+    UsbVideo {
+        #[arg(long, value_name = "PATH")]
+        output: Option<PathBuf>,
+    },
+}
+
 #[derive(Clone, Debug, Args)]
 pub struct CommitArgs {
     #[arg(short = 'm', long, required = true)]
@@ -428,6 +440,9 @@ impl Cli {
             Some(Command::Diagnose) => Intent::Diagnose,
             Some(Command::Deliver) => Intent::Deliver,
             Some(Command::Benchmark) => Intent::Benchmark { task_id },
+            Some(Command::Capture {
+                command: CaptureCommand::UsbVideo { output },
+            }) => Intent::CaptureUsbVideo { output },
             Some(Command::Release {
                 command: ReleaseCommand::Qualify,
             }) => Intent::ReleaseQualify,
@@ -587,6 +602,30 @@ mod tests {
             }
         );
         assert!(Cli::try_parse_from(["agent-cli", "benchmark", "--duration", "10"]).is_err());
+    }
+
+    #[test]
+    fn usb_video_capture_preserves_optional_output() {
+        assert_eq!(
+            Cli::try_parse_from(["agent-cli", "capture", "usb-video"])
+                .unwrap()
+                .into_intent(),
+            Intent::CaptureUsbVideo { output: None }
+        );
+        assert_eq!(
+            Cli::try_parse_from([
+                "agent-cli",
+                "capture",
+                "usb-video",
+                "--output",
+                "/tmp/frame.jpg",
+            ])
+            .unwrap()
+            .into_intent(),
+            Intent::CaptureUsbVideo {
+                output: Some(PathBuf::from("/tmp/frame.jpg"))
+            }
+        );
     }
 
     #[test]

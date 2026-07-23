@@ -111,6 +111,9 @@ pub enum Intent {
     Benchmark {
         task_id: String,
     },
+    CaptureUsbVideo {
+        output: Option<PathBuf>,
+    },
     ReleaseQualify,
     Build {
         intent: crate::build::BuildCommand,
@@ -158,7 +161,9 @@ impl Intent {
     #[must_use]
     pub const fn risk(&self) -> Risk {
         match self {
-            Self::Commit { .. } | Self::Verify { .. } => Risk::LocalWrite,
+            Self::Commit { .. } | Self::Verify { .. } | Self::CaptureUsbVideo { .. } => {
+                Risk::LocalWrite
+            }
             Self::ReleaseQualify | Self::DatabaseRotate => Risk::Destructive,
             Self::Deliver { .. } | Self::Benchmark { .. } | Self::Diagnose => Risk::DeviceWrite,
             Self::Build { .. } => Risk::LocalWrite,
@@ -254,4 +259,17 @@ pub enum Outcome {
     Rejected,
     NoOp,
     ExternalRequired,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn usb_video_capture_is_a_local_write() {
+        assert_eq!(
+            Intent::CaptureUsbVideo { output: None }.risk(),
+            Risk::LocalWrite
+        );
+    }
 }

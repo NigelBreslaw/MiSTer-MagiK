@@ -232,6 +232,18 @@ fn dispatch(
                 reporter,
             );
         }
+        Intent::CaptureUsbVideo {
+            output: destination,
+        } => {
+            let artifact = agent_cli::capture::execute(destination.as_deref())?;
+            match output {
+                OutputFormat::Human => println!("{}", artifact.markdown_link()),
+                OutputFormat::Ndjson => {
+                    println!("{}", serde_json::to_string(&artifact).unwrap());
+                }
+            }
+            return Ok(Outcome::Passed);
+        }
         Intent::ReleaseQualify => {
             return agent_cli::release::execute(reporter);
         }

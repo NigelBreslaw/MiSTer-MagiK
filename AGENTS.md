@@ -101,6 +101,7 @@ scripts/agent plan
 scripts/agent verify
 scripts/agent commit -m "Describe the completed change"
 scripts/agent benchmark
+scripts/agent capture usb-video
 scripts/agent diagnose
 scripts/agent release qualify
 ```
@@ -118,6 +119,9 @@ workflow evidence analysis. Run
 `deliver` only when the committed change has runtime or platform impact.
 `release qualify` is an attended operator gate; run it only when explicitly
 requested.
+`capture usb-video` is a macOS-only, one-shot capture of the fixed `USB Video`
+input. It writes a validated 1920x1080 JPEG under the OS temporary directory
+unless `--output PATH` is supplied, then prints a Markdown image link.
 Do not narrate successful operation counts or names: report only that validation
 is running, passed, or failed with the actionable summary. Agents must not
 construct Cargo, test, lint, host-validation, or Apple-container commands

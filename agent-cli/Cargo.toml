@@ -22,3 +22,14 @@ thiserror = "2"
 zip = { version = "8", default-features = false, features = ["deflate"] }
 rusqlite = { version = "0.40", default-features = false, features = ["bundled", "modern_sqlite"] }
 mister-tool = { path = "../mister/tools/host" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
+dispatch2 = "0.3.1"
+objc2 = "0.6.4"
+objc2-av-foundation = { version = "0.3.2", features = ["block2", "dispatch2", "objc2-core-media"] }
+objc2-core-graphics = "0.3.2"
+objc2-core-image = { version = "0.3.2", features = ["objc2-core-graphics", "objc2-core-video"] }
+objc2-core-media = { version = "0.3.2", features = ["objc2-core-video"] }
+objc2-core-video = "0.3.2"
+objc2-foundation = "0.3.2"
