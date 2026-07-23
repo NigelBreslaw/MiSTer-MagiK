@@ -8,6 +8,7 @@ use crate::model::Outcome;
 use crate::progress::{EventKind, Reporter};
 use mister_tool::transport::{DeviceRequest, Layout, MainSelection};
 use serde_json::Value;
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -505,10 +506,19 @@ fn manifest_value<'a>(manifest: &'a str, key: &str) -> Option<&'a str> {
 }
 
 fn qualify_local_kernel(repository: &Path) -> AgentResult<()> {
-    run_bounded(
+    let kernel_source = kernel_source_directory(repository, std::env::var_os("MISTER_KERNEL_DIR"));
+    if !kernel_source.is_dir() {
+        return Err(format!(
+            "local_kernel_missing: {} does not contain the pinned Linux-Kernel_MiSTer checkout; set MISTER_KERNEL_DIR to override it",
+            kernel_source.display()
+        )
+        .into());
+    }
+    run_bounded_with_env(
         repository,
         "scripts/build-scanout-slots-module.sh",
         &Vec::<String>::new(),
+        &[("KERNEL_SRC", kernel_source.as_os_str().to_os_string())],
     )?;
     for artifact in [
         "build/scanout-slots/mister_magik_scanout_slots.ko",
@@ -519,6 +529,12 @@ fn qualify_local_kernel(repository: &Path) -> AgentResult<()> {
         }
     }
     Ok(())
+}
+
+fn kernel_source_directory(repository: &Path, configured: Option<OsString>) -> PathBuf {
+    configured
+        .map(PathBuf::from)
+        .unwrap_or_else(|| repository.join("../Linux-Kernel_MiSTer"))
 }
 
 fn validate_local_main_identity(dirty: bool, branch: &str) -> AgentResult<()> {
@@ -620,8 +636,18 @@ fn extract_game_databases(repository: &Path, release: &Path, output: &Path) -> A
 }
 
 fn run_bounded(repository: &Path, program: &str, args: &[String]) -> AgentResult<()> {
+    run_bounded_with_env(repository, program, args, &[])
+}
+
+fn run_bounded_with_env(
+    repository: &Path,
+    program: &str,
+    args: &[String],
+    environment: &[(&str, OsString)],
+) -> AgentResult<()> {
     let mut child = Command::new(program)
         .args(args)
+        .envs(environment.iter().cloned())
         .current_dir(repository)
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
@@ -758,6 +784,19 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("local_main_branch"));
+    }
+
+    #[test]
+    fn kernel_source_defaults_next_to_the_repository_and_accepts_an_override() {
+        let repository = Path::new("/work/mister-slint");
+        assert_eq!(
+            kernel_source_directory(repository, None),
+            PathBuf::from("/work/mister-slint/../Linux-Kernel_MiSTer")
+        );
+        assert_eq!(
+            kernel_source_directory(repository, Some(OsString::from("/srv/mister-kernel"))),
+            PathBuf::from("/srv/mister-kernel")
+        );
     }
 
     #[test]

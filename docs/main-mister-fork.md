@@ -150,6 +150,8 @@ latch without rebuilding or overwriting those platform components.
 Use `scripts/agent deliver --local-main` for a Main-only development refresh.
 It forces the coherent platform transaction, builds and checks the clean local
 Main and kernel, and reuses the verified FPGA artifact from CI.
+The pinned kernel source defaults to the persistent sibling checkout
+`../Linux-Kernel_MiSTer`; set `MISTER_KERNEL_DIR` when it lives elsewhere.
 
 When kernel or FPGA source changes select a platform delivery, it also builds
 and checks the clean local `mister-magik` branch, builds the app and kernel

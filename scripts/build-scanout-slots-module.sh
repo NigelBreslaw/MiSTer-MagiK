@@ -5,7 +5,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-KERNEL_SRC="${KERNEL_SRC:-/private/tmp/Linux-Kernel_MiSTer}"
+KERNEL_SRC="${KERNEL_SRC:-$ROOT/../Linux-Kernel_MiSTer}"
 KERNEL_BUILD="${KERNEL_BUILD:-$ROOT/build/scanout-slots-kernel}"
 MODULE_DIR="$ROOT/mister/platform/kernel/scanout-slots"
 OUT_DIR="$ROOT/build/scanout-slots"
@@ -15,7 +15,6 @@ IMAGE="${MISTER_ARM_BUILD_IMAGE:-mister-magik-cross-armv7:ubuntu20-arm64}"
 PINNED_KERNEL_REVISION="f0fb626acadd07f0718934826b143b6e4c9ce81c"
 PINNED_FB_DRIVER_SHA256="b85ccabd33c3360c60873eb29deb933500b117759c3a3e898637a3e46e25312c"
 PINNED_DT_SHA256="36d7f660df55253a9ba11ebce615f304b91c3d7c99be94173af443574ad28a95"
-KERNEL_REVISION="$(git -c safe.directory="$KERNEL_SRC" -C "$KERNEL_SRC" rev-parse --verify 'HEAD^{commit}')"
 OBSERVED_SOURCE_REVISION="$(git -c safe.directory="$ROOT" -C "$ROOT" rev-parse --verify 'HEAD^{commit}')"
 if [[ -z "$(git -c safe.directory="$ROOT" -C "$ROOT" status --porcelain --untracked-files=all)" ]]; then
   OBSERVED_SOURCE_DIRTY=0
@@ -45,7 +44,8 @@ Usage:
   scripts/build-scanout-slots-module.sh
 
 Builds the production mister_magik_scanout_slots.ko against the MiSTer 5.15
-kernel source. Set KERNEL_SRC to override the source checkout.
+kernel source. The default checkout is ../Linux-Kernel_MiSTer. Set KERNEL_SRC
+to override it.
 EOF
 }
 
@@ -68,6 +68,7 @@ if [[ ! -d "$KERNEL_SRC" ]]; then
   echo "clone MiSTer-devel/Linux-Kernel_MiSTer branch MiSTer-v5.15 or set KERNEL_SRC" >&2
   exit 1
 fi
+KERNEL_REVISION="$(git -c safe.directory="$KERNEL_SRC" -C "$KERNEL_SRC" rev-parse --verify 'HEAD^{commit}')"
 if [[ ! "$KERNEL_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
   echo "kernel source must be a git checkout at an exact revision" >&2
   exit 1
