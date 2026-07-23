@@ -80,7 +80,8 @@ development layout, and the development agent.
 
 ## Framebuffer Ownership
 
-The launcher path uses a planned Linux framebuffer and FPGA scaling:
+The launcher path uses a planned Linux framebuffer and explicit presentation
+conversion:
 
 - Rust sets `/dev/fb0` to RGB565 for the launcher/UI path.
 - Rust derives launcher geometry from `MiSTer.ini` menu output settings before
@@ -88,12 +89,21 @@ The launcher path uses a planned Linux framebuffer and FPGA scaling:
   1366 pixels wide or 900 pixels high use half width and height, so 1366x768
   renders at 683x384 and 1920x1080 renders at 960x540. Custom modes follow the
   same rule; the qualified hidden-slot maximum is 1366x768.
-- Slint renders the planned launcher framebuffer into cached RAM.
+- HDMI Slint renders the planned launcher framebuffer into cached RAM. Every
+  CRT route instead composes Slint, Rust Arcade rows, screensavers, and overlays
+  into one authoritative 640×480 cached RGB565 frame.
+- CRT presentation preserves all 640 horizontal pixels and converts only the
+  vertical axis with centred nearest-row sampling into mode-native
+  640×240/288/480/576 scanout. Dirty source rectangles map to exact destination
+  bands; both hidden latch slots and diagnostic `/dev/fb0` use the same
+  transform. Native scanout geometry, not composition geometry, is the
+  authoritative framebuffer capture geometry.
 - CRT and HDMI routes use Press Start 2P for Slint text and the custom Rust
   games renderer. Lilliput Steps remains embedded and licensed for future CRT
   design work.
-- Rust sends the FPGA `SET_FBUF` route so buffer 0 is scanned to HDMI and scaled
-  to the output mode.
+- Rust sends the FPGA `SET_FBUF` route so buffer 0 is scanned to HDMI. For CRT,
+  the FPGA receives a framebuffer already matching the full active raster; its
+  OSD path is a direct overlay and is not relied on for UI scaling.
 - The default renderer is the FPGA vblank latch path when the MagiK Menu latch
   RBF and stock-kernel plugin support are available. It copies complete cached
   RGB565 frames into scanout-slot-module hidden slots, posts the selected physical
@@ -230,7 +240,9 @@ Historical evidence:
 
 Normal launcher rendering is governed by a small composition controller. The
 cached RGB565 frame is the complete base in every state; Rust direct-blitted
-layers are legal only while the controller is in `MixedArcade`. `Screensaver`
+layers are legal only on HDMI while the controller is in `MixedArcade`. CRT
+Arcade rows are composed into the cached 640×480 frame before conversion.
+`Screensaver`
 owns the complete cached frame and clears all direct layers on entry regardless
 of the underlying navigation screen. `ModalOverArcade` clears direct
 layer assumptions and forces a full Slint present before showing the dialog.
