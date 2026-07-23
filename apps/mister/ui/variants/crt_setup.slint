@@ -19,7 +19,7 @@ export component SetupOverlay inherits Rectangle {
 
     VerticalLayout {
         padding: MisterUi.grid;
-        spacing: MisterUi.compact-layout ? 0px : MisterUi.grid;
+        spacing: 0px;
 
         CrtHeader { title: root.title; subtitle: "Controller setup"; status: ""; }
 
@@ -47,7 +47,7 @@ export component SetupOverlay inherits Rectangle {
             background: transparent;
             clip: true;
             VerticalLayout {
-                spacing: MisterUi.compact-layout ? 0px : MisterUi.grid;
+                spacing: 0px;
                 for item[i] in root.list-items : CrtMenuRow {
                     label: item;
                     detail: "";
@@ -102,4 +102,3 @@ export component SetupOverlay inherits Rectangle {
         }
     }
 }
-

@@ -3,7 +3,6 @@
 
 import { MisterUi } from "../mister_window.slint";
 import { MisterBridge } from "../api.slint";
-import { OsdSideLabel } from "../components/launcher_chrome.slint";
 import { CrtTheme } from "../components/crt_ui.slint";
 import { ScreenshotPackProgressRow } from "../components/progress.slint";
 
@@ -14,7 +13,7 @@ export component CompatibilityScreen inherits Rectangle {
 
     VerticalLayout {
         padding: MisterUi.grid;
-        spacing: MisterUi.compact-layout ? MisterUi.grid : 16px;
+        spacing: MisterUi.grid;
         alignment: center;
 
         Text {
@@ -51,8 +50,8 @@ export component CompatibilityScreen inherits Rectangle {
 
 export component CatalogScanPopup inherits Rectangle {
     in property <int> s;
-    property <length> scan-osd-width: MisterUi.compact-layout ? 0px : 56px * s;
-    property <length> scan-horizontal-padding: MisterUi.compact-layout ? MisterUi.grid : 70px * s;
+    property <length> scan-osd-width: 0px;
+    property <length> scan-horizontal-padding: MisterUi.grid;
     property <length> scan-column-width: root.width > scan-osd-width
         ? root.width - scan-osd-width
         : 0px;
@@ -66,15 +65,13 @@ export component CatalogScanPopup inherits Rectangle {
     background: CrtTheme.background;
 
     HorizontalLayout {
-        if !MisterUi.compact-layout : OsdSideLabel { }
-
         VerticalLayout {
             horizontal-stretch: 1;
             padding-left: root.scan-horizontal-padding;
             padding-right: root.scan-horizontal-padding;
-            padding-top: MisterUi.compact-layout ? MisterUi.grid : 82px * s;
-            padding-bottom: MisterUi.compact-layout ? MisterUi.grid : 76px * s;
-            spacing: MisterUi.compact-layout ? MisterUi.grid : 18px * s;
+            padding-top: MisterUi.grid;
+            padding-bottom: MisterUi.grid;
+            spacing: MisterUi.grid;
             alignment: center;
             cross-axis-alignment: center;
 
@@ -244,8 +241,8 @@ export component ConfirmDialog inherits Rectangle {
     background: #000000b0;
 
     Rectangle {
-        width: MisterUi.compact-layout ? parent.width - 16px : min(640px, parent.width - 32px);
-        height: MisterUi.compact-layout ? min(160px, parent.height - 16px) : 192px;
+        width: parent.width - 16px;
+        height: min(160px, parent.height - 16px);
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         background: CrtTheme.panel;
@@ -314,4 +311,3 @@ export component LoadingOverlay inherits Rectangle {
         }
     }
 }
-

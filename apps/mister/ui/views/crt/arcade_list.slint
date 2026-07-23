@@ -10,7 +10,7 @@ component SearchKey inherits Rectangle {
     in property <bool> selected;
     in property <bool> keyboard-focused;
 
-    height: MisterUi.compact-layout ? 24px : 32px;
+    height: 24px;
     background: selected && keyboard-focused ? CrtTheme.accent : CrtTheme.panel-alt;
     border-width: 1px;
     border-color: selected ? CrtTheme.accent : CrtTheme.border;
@@ -27,10 +27,10 @@ component SearchKey inherits Rectangle {
 component SearchKeyboardRow inherits Rectangle {
     in property <int> start-index;
     in property <int> key-count;
-    height: MisterUi.compact-layout ? 24px : 32px;
+    height: 24px;
 
     HorizontalLayout {
-        spacing: MisterUi.compact-layout ? 0px : MisterUi.grid;
+        spacing: 0px;
 
         for key-offset in root.key-count : SearchKey {
             horizontal-stretch: 1;
@@ -45,11 +45,11 @@ component SearchKeyboard inherits Rectangle {
     background: CrtTheme.background;
 
     VerticalLayout {
-        padding: MisterUi.compact-layout ? 0px : MisterUi.grid;
-        spacing: MisterUi.compact-layout ? 0px : MisterUi.grid;
+        padding: 0px;
+        spacing: 0px;
 
         Rectangle {
-            height: MisterUi.compact-layout ? 16px : 32px;
+            height: 16px;
             background: CrtTheme.panel-alt;
             border-width: 1px;
             border-color: MisterBridge.arcade-search-pane == 0 ? CrtTheme.accent : CrtTheme.border;
@@ -91,7 +91,7 @@ export component ArcadeListScreen inherits Rectangle {
     if MisterBridge.arcade-search-active : SearchKeyboard {
         x: MisterUi.grid;
         y: 48px;
-        width: MisterUi.compact-layout ? parent.width * 2 / 5 : parent.width / 2;
+        width: parent.width * 2 / 5;
         height: parent.height - 80px;
     }
 
@@ -130,4 +130,3 @@ export component ArcadeListScreen inherits Rectangle {
         right-hint: "B Back   HOME Launcher";
     }
 }
-

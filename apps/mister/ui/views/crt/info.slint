@@ -9,7 +9,7 @@ export component InfoScreen inherits Rectangle {
     background: CrtTheme.background;
     VerticalLayout {
         padding: MisterUi.grid;
-        spacing: MisterUi.compact-layout ? 0px : MisterUi.grid;
+        spacing: 0px;
         CrtHeader { title: "Info"; subtitle: "System details"; status: ""; }
         CrtMenuRow { label: "Build"; detail: MisterBridge.build-label; focused: false; }
         CrtMenuRow { label: "Display"; detail: MisterBridge.present-mode-label; focused: false; }
@@ -19,4 +19,3 @@ export component InfoScreen inherits Rectangle {
         CrtFooter { left-hint: "B Back"; right-hint: "HOME Launcher"; }
     }
 }
-

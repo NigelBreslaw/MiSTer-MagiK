@@ -9,7 +9,7 @@ export component HomeGrid inherits Rectangle {
     // The selected row is always kept inside the clipped vertical viewport.
     property <length> outer-padding: MisterUi.grid;
     property <length> row-gap: MisterUi.grid;
-    property <length> row-height: MisterUi.compact-layout ? 32px : 48px;
+    property <length> row-height: 32px;
     property <length> row-pitch: row-height + row-gap;
     property <int> visible-rows: max(1, floor(menu-viewport.height / row-pitch));
     property <int> first-visible-row: MisterBridge.selected-index < visible-rows
@@ -58,4 +58,3 @@ export component HomeGrid inherits Rectangle {
         }
     }
 }
-

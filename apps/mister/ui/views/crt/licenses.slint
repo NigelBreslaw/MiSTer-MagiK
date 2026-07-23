@@ -11,7 +11,7 @@ export component LicensesScreen inherits Rectangle {
 
     if !MisterBridge.licenses-expanded : VerticalLayout {
         padding: MisterUi.grid;
-        spacing: MisterUi.compact-layout ? 0px : MisterUi.grid;
+        spacing: 0px;
         CrtHeader { title: "Licenses"; subtitle: "Open source software"; status: ""; }
         CrtMenuRow { label: "MiSTer MagiK"; detail: ">"; focused: MisterBridge.licenses-selected == 0; }
         CrtMenuRow { label: "FFmpeg"; detail: ">"; focused: MisterBridge.licenses-selected == 1; }
@@ -23,7 +23,7 @@ export component LicensesScreen inherits Rectangle {
 
     if MisterBridge.licenses-expanded : VerticalLayout {
         padding: MisterUi.grid;
-        spacing: MisterUi.compact-layout ? 0px : MisterUi.grid;
+        spacing: 0px;
         Text {
             text: MisterBridge.licenses-selected == 0 ? "MiSTer MagiK  v" :
                   MisterBridge.licenses-selected == 1 ? "FFmpeg  v" :
@@ -56,4 +56,3 @@ export component LicensesScreen inherits Rectangle {
         CrtFooter { left-hint: "UP/DOWN Scroll"; right-hint: "A/B Close"; }
     }
 }
-
