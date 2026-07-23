@@ -4206,6 +4206,7 @@ pub(super) fn run_launcher_loop(
                     ui.render_w(),
                     ui.render_h(),
                     screensaver_show_started,
+                    ui.output_route().is_crt(),
                 ));
             }
             let loader = screensaver_loader.as_ref().expect("created above");

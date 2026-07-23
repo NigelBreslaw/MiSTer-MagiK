@@ -255,10 +255,11 @@ impl LauncherScreensaver {
         archive_rx: Receiver<ArchiveLoadResult>,
         archive_cancelled: Arc<AtomicBool>,
         startup_started_at: Option<Instant>,
+        sampling_profile: ParadeSamplingProfile,
     ) -> Self {
         let now = Instant::now();
         Self {
-            parade: ParadeState::new(random_seed()),
+            parade: ParadeState::new_with_profile(random_seed(), sampling_profile),
             archive_rx: Some(archive_rx),
             archive_cancelled,
             startup_started_at,
@@ -308,7 +309,11 @@ impl LauncherScreensaver {
                     loaded.open_us,
                     loaded.open_us
                 );
-                let mut parade = ParadeState::new_with_archive(random_seed(), loaded.archive);
+                let mut parade = ParadeState::new_with_archive(
+                    random_seed(),
+                    loaded.archive,
+                    self.parade.sampling_profile,
+                );
                 parade.begin_archive_streaming(loaded.asset_keys, w, h, self.startup_started_at);
                 self.parade = parade;
                 self.archive_rx = None;
@@ -357,12 +362,18 @@ impl LauncherScreensaverLoader {
         _w: usize,
         _h: usize,
         startup_started_at: Option<Instant>,
+        crt_output: bool,
     ) -> Self {
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let (archive_tx, archive_rx) = mpsc::sync_channel(1);
         let archive_cancelled = Arc::new(AtomicBool::new(false));
         let worker_cancelled = Arc::clone(&archive_cancelled);
-        let saver = LauncherScreensaver::loading(archive_rx, archive_cancelled, startup_started_at);
+        let saver = LauncherScreensaver::loading(
+            archive_rx,
+            archive_cancelled,
+            startup_started_at,
+            ParadeSamplingProfile::for_crt_output(crt_output),
+        );
         let _ = ready_tx.send(saver);
         std::thread::Builder::new()
             .name("screensaver-load".into())
@@ -402,9 +413,9 @@ impl LauncherScreensaverLoader {
 }
 
 impl ScreensaverRenderState {
-    fn new(w: usize, h: usize) -> Self {
+    fn new(w: usize, h: usize, sampling_profile: ParadeSamplingProfile) -> Self {
         Self {
-            parade: ParadeState::new(random_seed()),
+            parade: ParadeState::new_with_profile(random_seed(), sampling_profile),
             phosphor_grid: vec![Rgb565Pixel(0); w * h],
             phosphor_grid_page: usize::MAX,
             phosphor_grid_valid: false,
@@ -466,7 +477,11 @@ pub(in crate::ui_runner) fn run_screensaver_loop(
     );
 
     let mut backbuffer = vec![Rgb565Pixel(0); ui.render_w() * ui.render_h()];
-    let mut render_state = ScreensaverRenderState::new(ui.render_w(), ui.render_h());
+    let mut render_state = ScreensaverRenderState::new(
+        ui.render_w(),
+        ui.render_h(),
+        ParadeSamplingProfile::for_crt_output(ui.output_route().is_crt()),
+    );
     if cfg.modes.contains(&ScreensaverMode::SpriteMultiplexParade) {
         render_state
             .parade
@@ -907,6 +922,195 @@ fn blit_scaled_subpixel_x(
     blit_rounded_card(dst, screen_w, screen_h, image, corner_insets, snapped_x, y);
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CrtQuantizedPhase {
+    x: isize,
+    phase: usize,
+}
+
+fn quantize_crt_phase(x_fp: i64) -> CrtQuantizedPhase {
+    let mut x = x_fp.div_euclid(PARADE_SUBPIXEL_ONE) as isize;
+    let fraction = x_fp.rem_euclid(PARADE_SUBPIXEL_ONE) as usize;
+    let mut phase = (fraction + CRT_PHASE_STEP / 2) / CRT_PHASE_STEP;
+    if phase == CRT_PHASE_COUNT {
+        x += 1;
+        phase = 0;
+    }
+    CrtQuantizedPhase { x, phase }
+}
+
+fn blit_scaled_crt_sixteenth_x(
+    dst: &mut [Rgb565Pixel],
+    screen_w: usize,
+    screen_h: usize,
+    image: &SaverImage,
+    phase_set: &ParadePhaseSet,
+    corner_insets: &[u8],
+    x_fp: i64,
+    y: isize,
+) {
+    let quantized = quantize_crt_phase(x_fp);
+    if quantized.phase == 0 {
+        blit_rounded_shadow(
+            dst,
+            screen_w,
+            screen_h,
+            image,
+            corner_insets,
+            quantized.x,
+            y,
+        );
+        blit_rounded_card(
+            dst,
+            screen_w,
+            screen_h,
+            image,
+            corner_insets,
+            quantized.x,
+            y,
+        );
+        return;
+    }
+
+    let Some(shifted) = phase_set.crt_phase(quantized.phase) else {
+        debug_assert!(false, "CRT tile missing sixteenth-pixel phase bank");
+        blit_scaled_subpixel_x(
+            dst,
+            screen_w,
+            screen_h,
+            image,
+            phase_set.legacy_half(),
+            corner_insets,
+            x_fp,
+            y,
+        );
+        return;
+    };
+    let phase_alpha = (quantized.phase * CRT_PHASE_STEP) as u8;
+    blit_rounded_shadow_fractional(
+        dst,
+        screen_w,
+        screen_h,
+        image,
+        corner_insets,
+        quantized.x,
+        y,
+        phase_alpha,
+    );
+    blit_rounded_card_fractional(
+        dst,
+        screen_w,
+        screen_h,
+        image,
+        shifted,
+        corner_insets,
+        quantized.x,
+        y,
+        phase_alpha,
+    );
+}
+
+fn blit_rounded_shadow_fractional(
+    dst: &mut [Rgb565Pixel],
+    screen_w: usize,
+    screen_h: usize,
+    image: &SaverImage,
+    corner_insets: &[u8],
+    x: isize,
+    y: isize,
+    phase_alpha: u8,
+) {
+    const OFFSET: isize = 2;
+    let shadow = color565(0, 0, 4);
+    for shadow_y in 0..image.h {
+        let dst_y = y + shadow_y as isize + OFFSET;
+        if dst_y < 0 || dst_y >= screen_h as isize {
+            continue;
+        }
+        let inset = corner_insets.get(shadow_y).copied().unwrap_or(0) as isize;
+        let x0 = x + OFFSET + inset;
+        let x1 = x + OFFSET + image.w as isize - inset;
+        blend_fractional_span(dst, screen_w, dst_y, x0, x1, shadow, 112, phase_alpha);
+    }
+}
+
+fn blend_fractional_span(
+    dst: &mut [Rgb565Pixel],
+    screen_w: usize,
+    y: isize,
+    x0: isize,
+    x1: isize,
+    color: Rgb565Pixel,
+    alpha: u8,
+    phase_alpha: u8,
+) {
+    if x1 <= x0 {
+        return;
+    }
+    let row = y as usize * screen_w;
+    if x0 >= 0 && x0 < screen_w as isize {
+        let edge_alpha = (u16::from(alpha) * u16::from(255 - phase_alpha) / 255) as u8;
+        dst[row + x0 as usize] = blend_565(dst[row + x0 as usize], color, edge_alpha);
+    }
+    blend_shadow_span(dst, screen_w, y, x0 + 1, x1, color, alpha);
+    if x1 >= 0 && x1 < screen_w as isize {
+        let edge_alpha = (u16::from(alpha) * u16::from(phase_alpha) / 255) as u8;
+        dst[row + x1 as usize] = blend_565(dst[row + x1 as usize], color, edge_alpha);
+    }
+}
+
+fn blit_rounded_card_fractional(
+    dst: &mut [Rgb565Pixel],
+    screen_w: usize,
+    screen_h: usize,
+    image: &SaverImage,
+    shifted: &SaverImage,
+    corner_insets: &[u8],
+    x: isize,
+    y: isize,
+    phase_alpha: u8,
+) {
+    for src_y in 0..image.h {
+        let dst_y = y + src_y as isize;
+        if dst_y < 0 || dst_y >= screen_h as isize {
+            continue;
+        }
+        let dst_row = dst_y as usize * screen_w;
+        let src_row = src_y * image.stride;
+        let shifted_row = src_y * shifted.stride;
+        let inset = corner_insets.get(src_y).copied().unwrap_or(0) as usize;
+        let source_end = image.w.saturating_sub(inset);
+        if inset >= source_end {
+            continue;
+        }
+        let left = x + inset as isize;
+        if left >= 0 && left < screen_w as isize {
+            dst[dst_row + left as usize] = blend_565(
+                dst[dst_row + left as usize],
+                image.pixels[src_row + inset],
+                255 - phase_alpha,
+            );
+        }
+        let copy_x0 = (left + 1).max(0) as usize;
+        let copy_x1 = (x + source_end as isize).clamp(0, screen_w as isize) as usize;
+        if copy_x1 > copy_x0 {
+            let source_x0 = (copy_x0 as isize - x) as usize;
+            dst[dst_row + copy_x0..dst_row + copy_x1].copy_from_slice(
+                &shifted.pixels
+                    [shifted_row + source_x0..shifted_row + source_x0 + copy_x1 - copy_x0],
+            );
+        }
+        let right = x + source_end as isize;
+        if right >= 0 && right < screen_w as isize {
+            dst[dst_row + right as usize] = blend_565(
+                dst[dst_row + right as usize],
+                image.pixels[src_row + source_end - 1],
+                phase_alpha,
+            );
+        }
+    }
+}
+
 fn blit_rounded_shadow(
     dst: &mut [Rgb565Pixel],
     screen_w: usize,
@@ -1008,15 +1212,19 @@ fn blit_rounded_card(
     }
 }
 
-fn prepare_half_shifted(image: &SaverImage) -> SaverImage {
+fn prepare_fractional_shifted(image: &SaverImage, phase_alpha: u8) -> SaverImage {
+    debug_assert!(phase_alpha > 0);
     let width = image.w + 1;
     let mut pixels = vec![Rgb565Pixel(0); width * image.h];
     for y in 0..image.h {
         let source = y * image.stride;
         let target = y * width;
         for x in 1..image.w {
-            pixels[target + x] =
-                blend_565(image.pixels[source + x - 1], image.pixels[source + x], 128);
+            pixels[target + x] = blend_565(
+                image.pixels[source + x - 1],
+                image.pixels[source + x],
+                255 - phase_alpha,
+            );
         }
     }
     SaverImage {
@@ -1024,6 +1232,56 @@ fn prepare_half_shifted(image: &SaverImage) -> SaverImage {
         w: width,
         h: image.h,
         stride: width,
+    }
+}
+
+fn prepare_half_shifted(image: &SaverImage) -> SaverImage {
+    prepare_fractional_shifted(image, 128)
+}
+
+enum ParadePhaseSet {
+    LegacyHalf(SaverImage),
+    CrtSixteenth(Box<[SaverImage; CRT_SHIFTED_PHASE_COUNT]>),
+}
+
+impl ParadePhaseSet {
+    fn prepare(image: &SaverImage, profile: ParadeSamplingProfile) -> Self {
+        match profile {
+            ParadeSamplingProfile::LegacyHalf => Self::LegacyHalf(prepare_half_shifted(image)),
+            ParadeSamplingProfile::CrtSixteenth => {
+                let phases = std::array::from_fn(|index| {
+                    prepare_fractional_shifted(image, ((index + 1) * CRT_PHASE_STEP) as u8)
+                });
+                Self::CrtSixteenth(Box::new(phases))
+            }
+        }
+    }
+
+    fn legacy_half(&self) -> &SaverImage {
+        match self {
+            Self::LegacyHalf(image) => image,
+            Self::CrtSixteenth(phases) => &phases[CRT_PHASE_COUNT / 2 - 1],
+        }
+    }
+
+    fn crt_phase(&self, phase: usize) -> Option<&SaverImage> {
+        if phase == 0 || phase >= CRT_PHASE_COUNT {
+            return None;
+        }
+        match self {
+            Self::CrtSixteenth(phases) => phases.get(phase - 1),
+            Self::LegacyHalf(_) => None,
+        }
+    }
+
+    fn resident_bytes(&self) -> usize {
+        match self {
+            Self::LegacyHalf(image) => image.pixels.len() * std::mem::size_of::<Rgb565Pixel>(),
+            Self::CrtSixteenth(phases) => phases
+                .iter()
+                .map(|image| image.pixels.len() * std::mem::size_of::<Rgb565Pixel>())
+                .sum(),
+        }
     }
 }
 
@@ -1829,6 +2087,32 @@ const PARADE_TICK_ONE: i64 = 1 << 16;
 const PARADE_MIN_TILE_SPEED: usize = 1;
 const PARADE_SPEED_COUNT: usize = 5;
 const PARADE_REFERENCE_PLACEMENT_GAP: usize = 18;
+const CRT_PHASE_COUNT: usize = 16;
+const CRT_SHIFTED_PHASE_COUNT: usize = CRT_PHASE_COUNT - 1;
+const CRT_PHASE_STEP: usize = PARADE_SUBPIXEL_ONE as usize / CRT_PHASE_COUNT;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ParadeSamplingProfile {
+    LegacyHalf,
+    CrtSixteenth,
+}
+
+impl ParadeSamplingProfile {
+    const fn for_crt_output(crt_output: bool) -> Self {
+        if crt_output {
+            Self::CrtSixteenth
+        } else {
+            Self::LegacyHalf
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::LegacyHalf => "legacy-half",
+            Self::CrtSixteenth => "crt-16",
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ParadeMotion {
@@ -2152,7 +2436,7 @@ struct ParadeTile {
     velocity_remainder: i64,
     image_idx: usize,
     scaled: SaverImage,
-    half_shifted: SaverImage,
+    phase_set: ParadePhaseSet,
     corner_insets: Vec<u8>,
     active: bool,
     next: Option<PreparedParadeCard>,
@@ -2178,9 +2462,10 @@ struct PreparedParadeCard {
     image_idx: usize,
     speed: usize,
     scaled: SaverImage,
-    half_shifted: SaverImage,
+    phase_set: ParadePhaseSet,
     corner_insets: Vec<u8>,
     scale_us: u128,
+    phase_us: u128,
 }
 
 struct ParadeScaleJob {
@@ -2211,6 +2496,9 @@ struct ParadeState {
     scale_count: u64,
     scale_total_us: u128,
     scale_max_us: u128,
+    phase_count: u64,
+    phase_total_us: u128,
+    phase_max_us: u128,
     scale_tx: Sender<ParadeScaleJob>,
     scale_rx: Receiver<ParadeScaleResult>,
     scale_worker_connected: bool,
@@ -2222,6 +2510,7 @@ struct ParadeState {
     decode_failures: u64,
     unique_decoded: HashSet<usize>,
     failed_images: HashSet<usize>,
+    sampling_profile: ParadeSamplingProfile,
     screen_w: usize,
     screen_h: usize,
     layer_targets: [usize; PARADE_SPEED_COUNT],
@@ -2233,20 +2522,38 @@ struct ParadeState {
 
 impl ParadeState {
     fn new(seed: u64) -> Self {
-        Self::new_with_motion(seed, ParadeMotion::from_env())
+        Self::new_with_profile(seed, ParadeSamplingProfile::LegacyHalf)
     }
 
-    fn new_with_motion(seed: u64, motion: ParadeMotion) -> Self {
-        Self::new_with_source(seed, motion, None)
+    fn new_with_profile(seed: u64, sampling_profile: ParadeSamplingProfile) -> Self {
+        Self::new_with_motion(seed, ParadeMotion::from_env(), sampling_profile)
     }
 
-    fn new_with_archive(seed: u64, archive: preview_worker::ResidentPreviewArchive) -> Self {
-        Self::new_with_source(seed, ParadeMotion::from_env(), Some(archive))
+    fn new_with_motion(
+        seed: u64,
+        motion: ParadeMotion,
+        sampling_profile: ParadeSamplingProfile,
+    ) -> Self {
+        Self::new_with_source(seed, motion, sampling_profile, None)
+    }
+
+    fn new_with_archive(
+        seed: u64,
+        archive: preview_worker::ResidentPreviewArchive,
+        sampling_profile: ParadeSamplingProfile,
+    ) -> Self {
+        Self::new_with_source(
+            seed,
+            ParadeMotion::from_env(),
+            sampling_profile,
+            Some(archive),
+        )
     }
 
     fn new_with_source(
         seed: u64,
         motion: ParadeMotion,
+        sampling_profile: ParadeSamplingProfile,
         mut archive: Option<preview_worker::ResidentPreviewArchive>,
     ) -> Self {
         let archive_backed = archive.is_some();
@@ -2274,14 +2581,17 @@ impl ParadeState {
                     let card = source.map(|source| {
                         let (scaled, corner_insets) =
                             prepare_parade_scaled(&source, job.speed, job.screen_h);
-                        let half_shifted = prepare_half_shifted(&scaled);
+                        let phase_started = Instant::now();
+                        let phase_set = ParadePhaseSet::prepare(&scaled, sampling_profile);
+                        let phase_us = phase_started.elapsed().as_micros();
                         PreparedParadeCard {
                             image_idx: job.image_idx,
                             speed: job.speed,
                             scaled,
-                            half_shifted,
+                            phase_set,
                             corner_insets,
                             scale_us: started.elapsed().as_micros(),
+                            phase_us,
                         }
                     });
                     if result_tx
@@ -2306,6 +2616,9 @@ impl ParadeState {
             scale_count: 0,
             scale_total_us: 0,
             scale_max_us: 0,
+            phase_count: 0,
+            phase_total_us: 0,
+            phase_max_us: 0,
             scale_tx,
             scale_rx,
             scale_worker_connected: true,
@@ -2317,6 +2630,7 @@ impl ParadeState {
             decode_failures: 0,
             unique_decoded: HashSet::new(),
             failed_images: HashSet::new(),
+            sampling_profile,
             screen_w: 0,
             screen_h: PARADE_REFERENCE_HEIGHT,
             layer_targets: PARADE_WIDE_LAYER_TARGETS,
@@ -2392,7 +2706,7 @@ impl ParadeState {
                     velocity_remainder: 0,
                     image_idx: card.image_idx,
                     scaled: card.scaled,
-                    half_shifted: card.half_shifted,
+                    phase_set: card.phase_set,
                     corner_insets: card.corner_insets,
                     active,
                     next: None,
@@ -2454,6 +2768,13 @@ impl ParadeState {
     fn push_empty_streaming_tile(&mut self, layer_idx: usize) -> usize {
         let speed = PARADE_MIN_TILE_SPEED + layer_idx;
         let tile_idx = self.tiles.len();
+        let scaled = SaverImage {
+            pixels: Vec::new(),
+            w: 0,
+            h: 0,
+            stride: 0,
+        };
+        let phase_set = ParadePhaseSet::prepare(&scaled, self.sampling_profile);
         self.tiles.push(ParadeTile {
             x_fp: 0,
             y: 0,
@@ -2462,18 +2783,8 @@ impl ParadeState {
             velocity_fp: self.motion.card_velocity_fp(layer_idx, self.screen_h),
             velocity_remainder: 0,
             image_idx: usize::MAX,
-            scaled: SaverImage {
-                pixels: Vec::new(),
-                w: 0,
-                h: 0,
-                stride: 0,
-            },
-            half_shifted: SaverImage {
-                pixels: Vec::new(),
-                w: 0,
-                h: 0,
-                stride: 0,
-            },
+            scaled,
+            phase_set,
             corner_insets: Vec::new(),
             active: false,
             next: None,
@@ -2580,7 +2891,7 @@ impl ParadeState {
                     break;
                 };
                 let (scaled, corner_insets) = self.scale_image(&images[image_idx], speed);
-                let half_shifted = prepare_half_shifted(&scaled);
+                let phase_set = self.prepare_phase_set(&scaled);
                 let frames_until_exit = phase + rank as u64 * interval_frames;
                 let x_fp = w as i64 * PARADE_SUBPIXEL_ONE - frames_until_exit as i64 * velocity_fp;
                 let x = x_fp.div_euclid(PARADE_SUBPIXEL_ONE) as isize;
@@ -2597,7 +2908,7 @@ impl ParadeState {
                     velocity_remainder: 0,
                     image_idx,
                     scaled,
-                    half_shifted,
+                    phase_set,
                     corner_insets,
                     active,
                     next: None,
@@ -2700,7 +3011,7 @@ impl ParadeState {
             tile.y = y;
             tile.image_idx = next.image_idx;
             tile.scaled = next.scaled;
-            tile.half_shifted = next.half_shifted;
+            tile.phase_set = next.phase_set;
             tile.corner_insets = next.corner_insets;
             tile.active = true;
             tile.velocity_remainder = 0;
@@ -2749,14 +3060,15 @@ impl ParadeState {
         if !self.scale_worker_connected {
             if let Some(images) = images {
                 let (scaled, corner_insets) = self.scale_image(&images[image_idx], speed);
-                let half_shifted = prepare_half_shifted(&scaled);
+                let phase_set = self.prepare_phase_set(&scaled);
                 let card = PreparedParadeCard {
                     image_idx,
                     speed,
                     scaled,
-                    half_shifted,
+                    phase_set,
                     corner_insets,
                     scale_us: 0,
+                    phase_us: 0,
                 };
                 self.tiles[tile_idx].next = Some(card);
             }
@@ -2857,15 +3169,16 @@ impl ParadeState {
                     continue;
                 };
                 let (scaled, corner_insets) = self.scale_image(&images[image_idx], speed);
-                let half_shifted = prepare_half_shifted(&scaled);
+                let phase_set = self.prepare_phase_set(&scaled);
                 self.tiles[tile_idx].pending_image_idx = None;
                 let card = PreparedParadeCard {
                     image_idx,
                     speed,
                     scaled,
-                    half_shifted,
+                    phase_set,
                     corner_insets,
                     scale_us: 0,
+                    phase_us: 0,
                 };
                 self.tiles[tile_idx].next = Some(card);
             }
@@ -2884,6 +3197,9 @@ impl ParadeState {
         self.scale_count += 1;
         self.scale_total_us += card.scale_us;
         self.scale_max_us = self.scale_max_us.max(card.scale_us);
+        self.phase_count += 1;
+        self.phase_total_us += card.phase_us;
+        self.phase_max_us = self.phase_max_us.max(card.phase_us);
         if self.archive_backed {
             self.decode_successes += 1;
             self.unique_decoded.insert(card.image_idx);
@@ -2898,6 +3214,16 @@ impl ParadeState {
         self.scale_total_us += elapsed_us;
         self.scale_max_us = self.scale_max_us.max(elapsed_us);
         prepared
+    }
+
+    fn prepare_phase_set(&mut self, image: &SaverImage) -> ParadePhaseSet {
+        let started = Instant::now();
+        let phases = ParadePhaseSet::prepare(image, self.sampling_profile);
+        let elapsed_us = started.elapsed().as_micros();
+        self.phase_count += 1;
+        self.phase_total_us += elapsed_us;
+        self.phase_max_us = self.phase_max_us.max(elapsed_us);
+        phases
     }
 
     fn jittered_interval(&mut self, base: u64) -> u64 {
@@ -2958,15 +3284,34 @@ impl ParadeState {
 
     fn log_scaler_stats(&self) {
         let average_us = self.scale_total_us / self.scale_count.max(1) as u128;
+        let phase_average_us = self.phase_total_us / self.phase_count.max(1) as u128;
+        let phase_cache_bytes = self
+            .tiles
+            .iter()
+            .map(|tile| {
+                tile.scaled.pixels.len() * std::mem::size_of::<Rgb565Pixel>()
+                    + tile.phase_set.resident_bytes()
+                    + tile.next.as_ref().map_or(0, |next| {
+                        next.scaled.pixels.len() * std::mem::size_of::<Rgb565Pixel>()
+                            + next.phase_set.resident_bytes()
+                    })
+            })
+            .sum::<usize>();
         crate::ui_logln!(
-            "screensaver_lanczos scales={} total_us={} average_us={} max_us={} queue_max={} queue_bound={} worker_connected={}",
+            "screensaver_lanczos sampling={} scales={} total_us={} average_us={} max_us={} phase_prepares={} phase_total_us={} phase_average_us={} phase_max_us={} queue_max={} queue_bound={} worker_connected={} phase_cache_bytes={}",
+            self.sampling_profile.label(),
             self.scale_count,
             self.scale_total_us,
             average_us,
             self.scale_max_us,
+            self.phase_count,
+            self.phase_total_us,
+            phase_average_us,
+            self.phase_max_us,
             self.scale_queue_max,
             self.layer_targets.iter().sum::<usize>(),
-            self.scale_worker_connected
+            self.scale_worker_connected,
+            phase_cache_bytes
         );
         if self.archive_backed {
             crate::ui_logln!(
@@ -3037,6 +3382,37 @@ fn parade_draw_order(state: &ParadeState) -> Vec<usize> {
     order
 }
 
+fn blit_parade_tile(
+    dst: &mut [Rgb565Pixel],
+    w: usize,
+    h: usize,
+    sampling_profile: ParadeSamplingProfile,
+    tile: &ParadeTile,
+) {
+    match sampling_profile {
+        ParadeSamplingProfile::LegacyHalf => blit_scaled_subpixel_x(
+            dst,
+            w,
+            h,
+            &tile.scaled,
+            tile.phase_set.legacy_half(),
+            &tile.corner_insets,
+            tile.x_fp,
+            tile.y,
+        ),
+        ParadeSamplingProfile::CrtSixteenth => blit_scaled_crt_sixteenth_x(
+            dst,
+            w,
+            h,
+            &tile.scaled,
+            &tile.phase_set,
+            &tile.corner_insets,
+            tile.x_fp,
+            tile.y,
+        ),
+    }
+}
+
 fn render_parade(
     dst: &mut [Rgb565Pixel],
     state: &mut ParadeState,
@@ -3052,16 +3428,7 @@ fn render_parade(
     let draw_order = parade_draw_order(state);
     for tile_idx in draw_order {
         let tile = &state.tiles[tile_idx];
-        blit_scaled_subpixel_x(
-            dst,
-            w,
-            h,
-            &tile.scaled,
-            &tile.half_shifted,
-            &tile.corner_insets,
-            tile.x_fp,
-            tile.y,
-        );
+        blit_parade_tile(dst, w, h, state.sampling_profile, tile);
     }
 }
 
@@ -3078,16 +3445,7 @@ fn render_archive_parade(
     let draw_order = parade_draw_order(state);
     for tile_idx in draw_order {
         let tile = &state.tiles[tile_idx];
-        blit_scaled_subpixel_x(
-            dst,
-            w,
-            h,
-            &tile.scaled,
-            &tile.half_shifted,
-            &tile.corner_insets,
-            tile.x_fp,
-            tile.y,
-        );
+        blit_parade_tile(dst, w, h, state.sampling_profile, tile);
     }
 }
 
@@ -3403,10 +3761,11 @@ mod tests {
         state.tiles[tile_idx].next = Some(PreparedParadeCard {
             image_idx: 0,
             speed: PARADE_MIN_TILE_SPEED + layer_idx,
-            half_shifted: prepare_half_shifted(&scaled),
+            phase_set: ParadePhaseSet::prepare(&scaled, ParadeSamplingProfile::LegacyHalf),
             corner_insets: prepare_parade_corner_insets(scaled.w, scaled.h),
             scaled,
             scale_us: 0,
+            phase_us: 0,
         });
         state.layers[layer_idx].next_spawn_frame = 0;
         state.layers[layer_idx].interval_frames = 30;
@@ -3550,6 +3909,183 @@ mod tests {
             assert_ne!(fraction, fraction0);
             assert_eq!(fraction, frame as u8 * 16);
         }
+    }
+
+    #[test]
+    fn sampling_profile_is_selected_only_by_the_output_route() {
+        assert_eq!(
+            ParadeSamplingProfile::for_crt_output(false),
+            ParadeSamplingProfile::LegacyHalf
+        );
+        assert_eq!(
+            ParadeSamplingProfile::for_crt_output(true),
+            ParadeSamplingProfile::CrtSixteenth
+        );
+    }
+
+    #[test]
+    fn crt_phase_bank_contains_all_shifted_phases_and_preserves_half_shift() {
+        let image = SaverImage {
+            pixels: vec![
+                color565(255, 0, 0),
+                color565(0, 255, 0),
+                color565(0, 0, 255),
+            ],
+            w: 3,
+            h: 1,
+            stride: 3,
+        };
+        let expected_half = prepare_half_shifted(&image);
+        let phases = ParadePhaseSet::prepare(&image, ParadeSamplingProfile::CrtSixteenth);
+        let ParadePhaseSet::CrtSixteenth(phases) = phases else {
+            panic!("CRT profile did not create a sixteenth-pixel phase bank");
+        };
+
+        assert_eq!(phases.len(), CRT_SHIFTED_PHASE_COUNT);
+        assert!(phases.iter().all(|phase| phase.w == image.w + 1
+            && phase.h == image.h
+            && phase.stride == image.w + 1));
+        assert_eq!(phases[CRT_PHASE_COUNT / 2 - 1].pixels, expected_half.pixels);
+        assert!(
+            phases
+                .windows(2)
+                .all(|pair| pair[0].pixels != pair[1].pixels)
+        );
+    }
+
+    #[test]
+    fn crt_phase_quantization_rounds_to_nearest_and_carries() {
+        for (x_fp, expected) in [
+            (0, CrtQuantizedPhase { x: 0, phase: 0 }),
+            (7, CrtQuantizedPhase { x: 0, phase: 0 }),
+            (8, CrtQuantizedPhase { x: 0, phase: 1 }),
+            (247, CrtQuantizedPhase { x: 0, phase: 15 }),
+            (248, CrtQuantizedPhase { x: 1, phase: 0 }),
+            (-8, CrtQuantizedPhase { x: 0, phase: 0 }),
+            (-9, CrtQuantizedPhase { x: -1, phase: 15 }),
+        ] {
+            assert_eq!(quantize_crt_phase(x_fp), expected, "x_fp={x_fp}");
+        }
+    }
+
+    #[test]
+    fn crt_motion_selects_a_new_raster_phase_on_every_50_and_60_hz_frame() {
+        for refresh_hz in [50_u64, 60] {
+            for layer_idx in 0..PARADE_SPEED_COUNT {
+                let velocity_fp = ParadeMotion::Subpixel.card_velocity_fp(layer_idx, 480);
+                let mut x_fp = 0_i64;
+                let mut velocity_remainder = 0_i64;
+                let mut previous_ticks = 0_u64;
+                let mut previous = quantize_crt_phase(x_fp);
+                for frame in 1..=refresh_hz {
+                    let elapsed_ns = 1_000_000_000_u64 * frame / refresh_hz;
+                    let motion_ticks =
+                        parade_tick_delta_fp(Duration::from_nanos(elapsed_ns)) as u64;
+                    let tick_delta = motion_ticks.saturating_sub(previous_ticks) as i64;
+                    let motion = velocity_fp
+                        .saturating_mul(tick_delta)
+                        .saturating_add(velocity_remainder);
+                    x_fp = x_fp.saturating_add(motion / PARADE_TICK_ONE);
+                    velocity_remainder = motion % PARADE_TICK_ONE;
+                    previous_ticks = motion_ticks;
+                    let current = quantize_crt_phase(x_fp);
+                    assert_ne!(
+                        current, previous,
+                        "refresh={refresh_hz} layer={layer_idx} frame={frame}"
+                    );
+                    previous = current;
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_profile_dispatch_is_pixel_identical_to_the_existing_blitter() {
+        let scaled = SaverImage {
+            pixels: vec![
+                color565(255, 0, 0),
+                color565(0, 255, 0),
+                color565(0, 0, 255),
+            ],
+            w: 3,
+            h: 1,
+            stride: 3,
+        };
+        let phase_set = ParadePhaseSet::prepare(&scaled, ParadeSamplingProfile::LegacyHalf);
+        let tile = ParadeTile {
+            x_fp: PARADE_SUBPIXEL_ONE + PARADE_SUBPIXEL_ONE / 2,
+            y: 1,
+            layer: 1,
+            speed: 1,
+            velocity_fp: PARADE_SUBPIXEL_ONE / 2,
+            velocity_remainder: 0,
+            image_idx: 0,
+            corner_insets: vec![0],
+            scaled,
+            phase_set,
+            active: true,
+            next: None,
+            pending_image_idx: None,
+        };
+        let background = color565(5, 9, 13);
+        let mut expected = vec![background; 8 * 5];
+        let mut actual = expected.clone();
+
+        blit_scaled_subpixel_x(
+            &mut expected,
+            8,
+            5,
+            &tile.scaled,
+            tile.phase_set.legacy_half(),
+            &tile.corner_insets,
+            tile.x_fp,
+            tile.y,
+        );
+        blit_parade_tile(&mut actual, 8, 5, ParadeSamplingProfile::LegacyHalf, &tile);
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn crt_fractional_renderer_respects_corner_insets_and_phases_the_shadow() {
+        let white = color565(255, 255, 255);
+        let background = color565(180, 180, 180);
+        let scaled = SaverImage {
+            pixels: vec![white; 12],
+            w: 4,
+            h: 3,
+            stride: 4,
+        };
+        let phases = ParadePhaseSet::prepare(&scaled, ParadeSamplingProfile::CrtSixteenth);
+        let mut integer = vec![background; 10 * 7];
+        let mut fractional = integer.clone();
+
+        blit_scaled_crt_sixteenth_x(
+            &mut integer,
+            10,
+            7,
+            &scaled,
+            &phases,
+            &[1, 0, 1],
+            PARADE_SUBPIXEL_ONE,
+            0,
+        );
+        blit_scaled_crt_sixteenth_x(
+            &mut fractional,
+            10,
+            7,
+            &scaled,
+            &phases,
+            &[1, 0, 1],
+            PARADE_SUBPIXEL_ONE + PARADE_SUBPIXEL_ONE / 2,
+            0,
+        );
+
+        assert_eq!(fractional[1], background);
+        assert_ne!(fractional[2], background);
+        assert_ne!(fractional[2], white);
+        assert_ne!(fractional[2 * 10 + 3], integer[2 * 10 + 3]);
+        assert_ne!(fractional[2 * 10 + 7], integer[2 * 10 + 7]);
     }
 
     #[test]
@@ -3727,7 +4263,7 @@ mod tests {
             h: 4,
             stride: 4,
         };
-        let half_shifted = prepare_half_shifted(&scaled);
+        let phase_set = ParadePhaseSet::prepare(&scaled, ParadeSamplingProfile::LegacyHalf);
         let corner_insets = prepare_parade_corner_insets(scaled.w, scaled.h);
         state.tiles.push(ParadeTile {
             x_fp: -20 * PARADE_SUBPIXEL_ONE,
@@ -3738,7 +4274,7 @@ mod tests {
             velocity_remainder: 0,
             image_idx: 0,
             scaled,
-            half_shifted,
+            phase_set,
             corner_insets,
             active: true,
             next: None,
@@ -3789,10 +4325,12 @@ mod tests {
         state.image_count = images.len();
         state.deck = vec![0, 1];
         let slow_scaled = scale_lanczos3_rgb565_tinted(&images[0], 77, 58, 154);
-        let slow_half_shifted = prepare_half_shifted(&slow_scaled);
+        let slow_phase_set =
+            ParadePhaseSet::prepare(&slow_scaled, ParadeSamplingProfile::LegacyHalf);
         let slow_corner_insets = prepare_parade_corner_insets(slow_scaled.w, slow_scaled.h);
         let fast_scaled = scale_lanczos3_rgb565_tinted(&images[1], 192, 144, 255);
-        let fast_half_shifted = prepare_half_shifted(&fast_scaled);
+        let fast_phase_set =
+            ParadePhaseSet::prepare(&fast_scaled, ParadeSamplingProfile::LegacyHalf);
         let fast_corner_insets = prepare_parade_corner_insets(fast_scaled.w, fast_scaled.h);
         state.tiles = vec![
             ParadeTile {
@@ -3804,7 +4342,7 @@ mod tests {
                 velocity_remainder: 0,
                 image_idx: 0,
                 scaled: slow_scaled,
-                half_shifted: slow_half_shifted,
+                phase_set: slow_phase_set,
                 corner_insets: slow_corner_insets,
                 active: true,
                 next: None,
@@ -3819,7 +4357,7 @@ mod tests {
                 velocity_remainder: 0,
                 image_idx: 1,
                 scaled: fast_scaled,
-                half_shifted: fast_half_shifted,
+                phase_set: fast_phase_set,
                 corner_insets: fast_corner_insets,
                 active: true,
                 next: None,
@@ -3889,6 +4427,46 @@ mod tests {
                 PARADE_WIDE_LAYER_TARGETS[layer] * 3
             );
         }
+    }
+
+    #[test]
+    fn crt_phase_storage_for_active_cards_and_successors_stays_below_34_mib() {
+        let bytes_per_pixel = std::mem::size_of::<Rgb565Pixel>();
+        let one_population_bytes = PARADE_COMPACT_LAYER_TARGETS
+            .iter()
+            .enumerate()
+            .map(|(layer_idx, target)| {
+                let speed = PARADE_MIN_TILE_SPEED + layer_idx;
+                let (width, height, _) = parade_depth_style(speed, 480);
+                let base = width * height;
+                let shifted = CRT_SHIFTED_PHASE_COUNT * (width + 1) * height;
+                let descriptors = CRT_PHASE_COUNT * std::mem::size_of::<SaverImage>();
+                target * ((base + shifted) * bytes_per_pixel + descriptors)
+            })
+            .sum::<usize>();
+        let active_and_successors = one_population_bytes * 2;
+
+        assert!(active_and_successors < 34 * 1024 * 1024);
+        assert!(active_and_successors > 32 * 1024 * 1024);
+    }
+
+    #[test]
+    fn crt_initial_cards_own_complete_phase_banks() {
+        let tile_count = PARADE_COMPACT_LAYER_TARGETS.iter().sum::<usize>();
+        let images = test_images(tile_count);
+        let mut state =
+            ParadeState::new_with_profile(0x16_16_16_16, ParadeSamplingProfile::CrtSixteenth);
+
+        state.ensure_initialized(&images, 640, 480);
+
+        assert_eq!(state.sampling_profile, ParadeSamplingProfile::CrtSixteenth);
+        assert!(state.tiles.iter().all(|tile| {
+            matches!(
+                &tile.phase_set,
+                ParadePhaseSet::CrtSixteenth(phases)
+                    if phases.len() == CRT_SHIFTED_PHASE_COUNT
+            )
+        }));
     }
 
     #[test]
