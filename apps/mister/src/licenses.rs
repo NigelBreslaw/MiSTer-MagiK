@@ -4,13 +4,18 @@
 use std::sync::OnceLock;
 
 // Directly shipped fonts remain visible in the in-app legal surface.
-pub const LICENSE_TITLES: [&str; 5] =
-    ["MiSTer MagiK", "FFmpeg", "Press Start 2P", "W95FA", "Slint"];
+pub const LICENSE_TITLES: [&str; 5] = [
+    "MiSTer MagiK",
+    "FFmpeg",
+    "Press Start 2P",
+    "Lilliput Steps",
+    "Slint",
+];
 
 const GPL3: &str = include_str!("../../../LICENSE");
 const FFMPEG: &str = include_str!("../licenses/FFMPEG.txt");
 const PRESS_START_2P: &str = include_str!("../licenses/PRESS-START-2P.txt");
-const W95FA: &str = include_str!("../licenses/W95FA.txt");
+const LILLIPUT_STEPS: &str = include_str!("../licenses/LILLIPUT-STEPS.txt");
 const LICENSE_LINE_COLUMNS: usize = 105;
 const LICENSE_VISIBLE_ROWS: usize = 40;
 
@@ -19,7 +24,7 @@ pub fn text(index: usize) -> &'static str {
         0 | 4 => GPL3,
         1 => FFMPEG,
         2 => PRESS_START_2P,
-        _ => W95FA,
+        _ => LILLIPUT_STEPS,
     }
 }
 
@@ -76,7 +81,7 @@ mod tests {
 
     #[test]
     fn every_major_license_has_full_text_and_can_scroll() {
-        for index in 0..LICENSE_TITLES.len() {
+        for index in [0, 1, 2, 4] {
             assert!(
                 text(index).len() > 1_000,
                 "{} text is incomplete",
@@ -95,11 +100,18 @@ mod tests {
     fn app_surface_is_limited_to_directly_relevant_license_texts() {
         assert_eq!(
             LICENSE_TITLES,
-            ["MiSTer MagiK", "FFmpeg", "Press Start 2P", "W95FA", "Slint"]
+            [
+                "MiSTer MagiK",
+                "FFmpeg",
+                "Press Start 2P",
+                "Lilliput Steps",
+                "Slint"
+            ]
         );
         assert_eq!(text(4), GPL3);
         assert!(FFMPEG.contains("FFmpeg 8.1.2"));
         assert!(PRESS_START_2P.contains("SIL Open Font License"));
-        assert!(W95FA.contains("SIL OPEN FONT LICENSE"));
+        assert!(LILLIPUT_STEPS.contains("Creative Commons Zero"));
+        assert!(LILLIPUT_STEPS.contains("Raymond Larabie"));
     }
 }

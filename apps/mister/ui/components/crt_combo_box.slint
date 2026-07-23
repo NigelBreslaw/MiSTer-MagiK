@@ -23,13 +23,13 @@ component CrtResolutionRow inherits Rectangle {
         Text {
             width: MisterUi.body-font;
             text: root.focused ? ">" : "";
-            font-family: "W95FA";
+            font-family: "Lilliput Steps";
             color: CrtTheme.accent-text;
             font-size: MisterUi.body-font;
         }
         Text {
             text: root.label;
-            font-family: "W95FA";
+            font-family: "Lilliput Steps";
             color: root.focused ? CrtTheme.accent-text : CrtTheme.text;
             font-size: MisterUi.body-font;
             overflow: elide;
@@ -37,7 +37,7 @@ component CrtResolutionRow inherits Rectangle {
         }
         Text {
             text: root.detail;
-            font-family: "W95FA";
+            font-family: "Lilliput Steps";
             color: root.focused ? CrtTheme.accent-text : CrtTheme.muted;
             font-size: MisterUi.body-font;
             horizontal-alignment: right;
@@ -66,7 +66,7 @@ export component CrtComboBoxOverlay inherits Rectangle {
         Text {
             height: MisterUi.body-font;
             text: root.more-above ? "▲" : "";
-            font-family: "W95FA";
+            font-family: "Lilliput Steps";
             color: CrtTheme.text;
             font-size: MisterUi.body-font;
             horizontal-alignment: center;
@@ -93,7 +93,7 @@ export component CrtComboBoxOverlay inherits Rectangle {
         Text {
             height: MisterUi.body-font;
             text: root.more-below ? "▼" : "";
-            font-family: "W95FA";
+            font-family: "Lilliput Steps";
             color: CrtTheme.text;
             font-size: MisterUi.body-font;
             horizontal-alignment: center;

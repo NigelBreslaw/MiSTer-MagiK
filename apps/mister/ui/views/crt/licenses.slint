@@ -16,7 +16,7 @@ export component LicensesScreen inherits Rectangle {
         CrtMenuRow { label: "MiSTer MagiK"; detail: ">"; focused: MisterBridge.licenses-selected == 0; }
         CrtMenuRow { label: "FFmpeg"; detail: ">"; focused: MisterBridge.licenses-selected == 1; }
         CrtMenuRow { label: "Press Start 2P"; detail: ">"; focused: MisterBridge.licenses-selected == 2; }
-        CrtMenuRow { label: "W95FA"; detail: ">"; focused: MisterBridge.licenses-selected == 3; }
+        CrtMenuRow { label: "Lilliput Steps"; detail: ">"; focused: MisterBridge.licenses-selected == 3; }
         CrtMenuRow { label: "Slint"; detail: ">"; focused: MisterBridge.licenses-selected == 4; }
         CrtFooter { left-hint: "A Open   B Back"; right-hint: "HOME Launcher"; }
     }
@@ -25,11 +25,11 @@ export component LicensesScreen inherits Rectangle {
         padding: MisterUi.grid * 2;
         spacing: MisterUi.grid;
         Text {
-            font-family: "W95FA";
+            font-family: "Lilliput Steps";
             text: MisterBridge.licenses-selected == 0 ? "MiSTer MagiK  v" :
                   MisterBridge.licenses-selected == 1 ? "FFmpeg  v" :
                   MisterBridge.licenses-selected == 2 ? "Press Start 2P  v" :
-                  MisterBridge.licenses-selected == 3 ? "W95FA  v" : "Slint  v";
+                  MisterBridge.licenses-selected == 3 ? "Lilliput Steps  v" : "Slint  v";
             color: CrtTheme.accent;
             font-size: MisterUi.heading-font;
             horizontal-alignment: center;
@@ -46,7 +46,7 @@ export component LicensesScreen inherits Rectangle {
                 height: parent.height - 24px;
                 viewport-y: -MisterBridge.licenses-scroll-y * 1px;
                 for line in MisterBridge.license-lines : Text {
-            font-family: "W95FA";
+            font-family: "Lilliput Steps";
                     text: line;
                     color: CrtTheme.text;
                     font-size: MisterUi.body-font;

@@ -51,7 +51,7 @@ export component LicensesScreen inherits Rectangle {
         LicenseRow { label: "MiSTer MagiK"; focused: MisterBridge.licenses-selected == 0; }
         LicenseRow { label: "FFmpeg"; focused: MisterBridge.licenses-selected == 1; }
         LicenseRow { label: "Press Start 2P"; focused: MisterBridge.licenses-selected == 2; }
-        LicenseRow { label: "W95FA"; focused: MisterBridge.licenses-selected == 3; }
+        LicenseRow { label: "Lilliput Steps"; focused: MisterBridge.licenses-selected == 3; }
         LicenseRow { label: "Slint"; focused: MisterBridge.licenses-selected == 4; }
         Rectangle { vertical-stretch: 1; background: transparent; }
         Text {
@@ -69,7 +69,7 @@ export component LicensesScreen inherits Rectangle {
             text: MisterBridge.licenses-selected == 0 ? "MiSTer MagiK  v" :
                   MisterBridge.licenses-selected == 1 ? "FFmpeg  v" :
                   MisterBridge.licenses-selected == 2 ? "Press Start 2P  v" :
-                  MisterBridge.licenses-selected == 3 ? "W95FA  v" : "Slint  v";
+                  MisterBridge.licenses-selected == 3 ? "Lilliput Steps  v" : "Slint  v";
             color: #06d6a0;
             font-size: 16px;
             horizontal-alignment: center;

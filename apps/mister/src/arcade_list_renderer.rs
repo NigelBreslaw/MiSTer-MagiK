@@ -107,7 +107,7 @@ impl ArcadeListStyle {
             badge_fill: Pixel(0x0040e5e7),
             badge_fill_565: rgb565_from_rgb888(0x40, 0xe5, 0xe7),
             badge_text: Pixel(0x0003132d),
-            typeface: ConsoleTypeface::W95FA,
+            typeface: ConsoleTypeface::LilliputSteps,
         }
     }
 }
@@ -797,7 +797,7 @@ impl ArcadeListRenderer {
                     self.copy_surface_rect_to_fb0(disp, x, y, w, h);
                 }
                 ArcadeListPresentKind::Inverted => {
-                    if self.style.typeface == ConsoleTypeface::W95FA
+                    if self.style.typeface == ConsoleTypeface::LilliputSteps
                         || arcade_selection_inversion_enabled()
                     {
                         self.copy_inverted_surface_rect_to_fb0(disp, x, y, w, h);
@@ -973,7 +973,7 @@ impl ArcadeListRenderer {
                     self.compose_surface_rect_to_cached(target, x, y, w, h);
                 }
                 ArcadeListPresentKind::Inverted => {
-                    if self.style.typeface == ConsoleTypeface::W95FA
+                    if self.style.typeface == ConsoleTypeface::LilliputSteps
                         || arcade_selection_inversion_enabled()
                     {
                         self.compose_inverted_surface_rect_to_cached(target, x, y, w, h);
@@ -1007,7 +1007,7 @@ impl ArcadeListRenderer {
                     self.copy_surface_rect_to_hidden(hidden, x, y, w, h);
                 }
                 ArcadeListPresentKind::Inverted => {
-                    if self.style.typeface == ConsoleTypeface::W95FA
+                    if self.style.typeface == ConsoleTypeface::LilliputSteps
                         || arcade_selection_inversion_enabled()
                     {
                         self.copy_inverted_surface_rect_to_hidden(hidden, x, y, w, h);
@@ -1252,7 +1252,7 @@ impl ArcadeListRenderer {
         let title = self
             .title_font
             .clipped_text(&item.title, self.width.saturating_sub(reserved));
-        let gradient = if self.style.typeface == ConsoleTypeface::W95FA {
+        let gradient = if self.style.typeface == ConsoleTypeface::LilliputSteps {
             TextGradient::new(self.style.text, self.style.text, self.style.text)
         } else if item.active {
             ARCADE_FILTER_ACTIVE_GRADIENT
@@ -1645,7 +1645,7 @@ fn selected_aperture_pixel(pixel: Rgb565Pixel) -> Rgb565Pixel {
 fn selected_aperture_pixel_with_style(pixel: Rgb565Pixel, style: ArcadeListStyle) -> Rgb565Pixel {
     if is_arcade_row_background_pixel_with_style(pixel, style) {
         style.selection_fill_565
-    } else if style.typeface == ConsoleTypeface::W95FA {
+    } else if style.typeface == ConsoleTypeface::LilliputSteps {
         style.selection_text_565
     } else {
         invert_rgb565(pixel)
@@ -2233,7 +2233,7 @@ mod tests {
         let hdmi = ArcadeListRenderer::new();
 
         assert_eq!(crt.style.row_height, 24);
-        assert_eq!(crt.style.typeface, ConsoleTypeface::W95FA);
+        assert_eq!(crt.style.typeface, ConsoleTypeface::LilliputSteps);
         assert_eq!(crt.style.background.0, 0x00020817);
         assert_eq!(
             crt.style.selection_fill_565,

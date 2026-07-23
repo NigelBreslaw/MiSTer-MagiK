@@ -24,6 +24,7 @@ cp "$BIN" "$OUT/mister-magik-fb"
 cp "$ROOT/LICENSE" "$OUT/LICENSE"
 cp "$ROOT/apps/mister/licenses/FFMPEG.txt" "$OUT/licenses/"
 cp "$ROOT/apps/mister/licenses/PRESS-START-2P.txt" "$OUT/licenses/"
+cp "$ROOT/apps/mister/licenses/LILLIPUT-STEPS.txt" "$OUT/licenses/"
 cp "$ROOT/apps/mister/licenses/RUST-LIBRARIES.txt" "$OUT/licenses/"
 cat > "$OUT/THIRD-PARTY-NOTICES.txt" <<'EOF'
 MiSTer MagiK alpha distribution notices
@@ -32,7 +33,7 @@ MiSTer MagiK alpha distribution notices
 Copyright (C) 2026 Nigel Breslaw
 
 MiSTer MagiK is GPL-3.0-or-later. This directory contains the full GPL text,
-plus the FFmpeg LGPL-2.1-or-later, Press Start 2P SIL OFL-1.1, and generated
+plus the FFmpeg LGPL-2.1-or-later, Press Start 2P SIL OFL-1.1, Lilliput Steps CC0 1.0, and generated
 normal-runtime Rust dependency notices in licenses/.
 
 The launcher uses Slint under its GPL-3.0-only option.
