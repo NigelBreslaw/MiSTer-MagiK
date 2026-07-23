@@ -106,8 +106,11 @@ scripts/agent release qualify
 ```
 
 Agents must record a task baseline before editing, use `check` while iterating,
-then use `verify` and `commit` to complete host-only work. `--paths` is reserved
-for CI or diagnostics, and `verify --staged` is the pre-commit interface. Run
+then use `commit` to verify the exact staged tree and complete host-only work.
+Use standalone `verify` only when full assurance is required without committing.
+`--paths` is reserved for CI or diagnostics, and `verify --staged` is the raw
+Git pre-commit interface. Use `scripts/agent db report`, not ad-hoc SQL, for
+workflow evidence analysis. Run
 `deliver` only when the committed change has runtime or platform impact.
 `release qualify` is an attended operator gate; run it only when explicitly
 requested.
@@ -138,8 +141,8 @@ tooling unavailable.
 
 The LSP integration is navigation-only. Never use LSP formatting, code actions,
 renames, or other write operations. Make edits through the normal repository
-tools, use `scripts/agent check` while iterating, and use `scripts/agent verify`
-then `scripts/agent commit` to validate and complete work.
+tools, use `scripts/agent check` while iterating, and use `scripts/agent commit`
+to validate the staged tree and complete work.
 
 ## Universal Hard Rules
 

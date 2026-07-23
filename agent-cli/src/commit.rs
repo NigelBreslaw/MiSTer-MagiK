@@ -182,7 +182,15 @@ fn run_inner(
     }
 
     reporter.emit(EventKind::Progress, "commit", "creating commit", Some(75))?;
-    let commit_args = vec!["commit".into(), "-m".into(), message.into()];
+    // The exact staged tree was verified above. Avoid invoking the repository
+    // hook, which would otherwise run the same staged verification again.
+    // Raw human `git commit` continues to use the hook normally.
+    let commit_args = vec![
+        "commit".into(),
+        "--no-verify".into(),
+        "-m".into(),
+        message.into(),
+    ];
     let committed = git_output(
         evidence,
         request_id,
@@ -743,7 +751,7 @@ mod tests {
     }
 
     #[test]
-    fn verification_and_hook_failures_restore_the_index() {
+    fn verification_failures_restore_the_index_and_verified_commit_skips_hook() {
         let fixture = Fixture::new();
         fixture.begin("verify-failure");
         fs::create_dir_all(fixture.root.join("docs/agents")).unwrap();
@@ -765,10 +773,7 @@ mod tests {
         let mut permissions = fs::metadata(&hook).unwrap().permissions();
         permissions.set_mode(0o755);
         fs::set_permissions(&hook, permissions).unwrap();
-        assert!(fixture
-            .commit("hook-failure")
-            .unwrap_err()
-            .starts_with("commit_failed:"));
+        assert!(fixture.commit("hook-failure").is_ok());
         assert!(fixture.staged().is_empty());
     }
 

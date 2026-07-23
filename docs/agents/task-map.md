@@ -27,7 +27,9 @@ unknown work, begin the task before editing and run `scripts/agent plan` before 
 checks.
 
 The normal feature loop is `scripts/agent task begin`, edit,
-`scripts/agent check`, `scripts/agent verify`, and `scripts/agent commit -m MESSAGE`.
+`scripts/agent check`, and `scripts/agent commit -m MESSAGE`. Commit performs
+full verification of the exact staged tree. Use standalone `verify` only when
+assurance is needed without creating a commit.
 Runtime or platform changes then use `scripts/agent deliver`. Delivery uses the
 exact clean local app commit without consulting task records or requiring
 publication. Runtime-only delivery replaces `mister-magik-fb` transactionally

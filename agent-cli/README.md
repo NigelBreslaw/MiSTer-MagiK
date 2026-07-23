@@ -17,6 +17,12 @@ scripts/agent benchmark
 scripts/agent diagnose
 ```
 
+The normal AI loop is `task begin`, edit, `check` as needed, then `commit`.
+`commit` stages task-owned paths and verifies that exact tree before creating
+the commit. Do not run `verify` immediately before `commit`; standalone
+`verify` exists for assurance without a commit. Workflow evidence analysis uses
+the hidden typed `scripts/agent db report` command rather than direct SQL.
+
 `scripts/agent release qualify` is an attended operator command. Hidden typed
 build intents exist for CI compatibility, not as a public flag matrix. `commit`
 is the only lifecycle command that changes Git state;
