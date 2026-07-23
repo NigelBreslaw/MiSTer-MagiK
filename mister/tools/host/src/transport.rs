@@ -78,6 +78,10 @@ pub enum DeviceRequest {
     QualifyReleaseRecovery,
     RestoreReleaseQualification,
     CollectDiagnosticFacts,
+    /// Runs one bounded, self-restoring CRT destination-rectangle experiment.
+    RunCrtGeometryTrial {
+        rectangle: [u16; 4],
+    },
     RepairSafeDeviceState,
     CaptureFramebuffer,
 }
@@ -118,6 +122,7 @@ impl DeviceRequest {
             Self::QualifyReleaseRecovery => "qualify-release-recovery",
             Self::RestoreReleaseQualification => "restore-release-qualification",
             Self::CollectDiagnosticFacts => "collect-diagnostic-facts",
+            Self::RunCrtGeometryTrial { .. } => "run-crt-geometry-trial",
             Self::RepairSafeDeviceState => "repair-safe-device-state",
             Self::CaptureFramebuffer => "capture-framebuffer",
         }
@@ -259,11 +264,14 @@ mod tests {
             DeviceRequest::QualifyReleaseRecovery,
             DeviceRequest::RestoreReleaseQualification,
             DeviceRequest::CollectDiagnosticFacts,
+            DeviceRequest::RunCrtGeometryTrial {
+                rectangle: [45, 684, 40, 615],
+            },
             DeviceRequest::RepairSafeDeviceState,
             DeviceRequest::CaptureFramebuffer,
         ];
         let labels: Vec<_> = requests.iter().map(DeviceRequest::label).collect();
-        assert_eq!(labels.len(), 34);
+        assert_eq!(labels.len(), 35);
         assert!(labels.iter().all(|label| !label.is_empty()));
         assert!(!labels.contains(&"run"));
         assert!(!labels.contains(&"shell"));

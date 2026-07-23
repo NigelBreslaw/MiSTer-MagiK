@@ -89,6 +89,8 @@ pub fn execute(repository: &Path, reporter: &mut Reporter<'_>) -> AgentResult<Ou
         report: None,
         repair_needed: false,
         repaired: false,
+        geometry_trial: geometry_trial_from_env()?,
+        geometry_trial_detail: None,
     };
     run_workflow(&mut actions, &mut |phase, percent| {
         Ok(reporter.emit(
@@ -99,6 +101,9 @@ pub fn execute(repository: &Path, reporter: &mut Reporter<'_>) -> AgentResult<Ou
         )?)
     })?;
     let report = actions.report.ok_or("diagnosis produced no report")?;
+    if let Some(detail) = actions.geometry_trial_detail.as_deref() {
+        reporter.emit(EventKind::Progress, "geometry-trial", detail, Some(95))?;
+    }
     reporter.emit(
         if report.next_action.is_some() {
             EventKind::Warning
@@ -123,6 +128,24 @@ struct ProcessActions<'a> {
     report: Option<DiagnosticReport>,
     repair_needed: bool,
     repaired: bool,
+    geometry_trial: Option<[u16; 4]>,
+    geometry_trial_detail: Option<String>,
+}
+
+fn geometry_trial_from_env() -> AgentResult<Option<[u16; 4]>> {
+    // Geometry trials are deliberately available only through `diagnose`.
+    let Some(value) = std::env::var("MISTER_CRT_GEOMETRY_TRIAL_RECT").ok() else {
+        return Ok(None);
+    };
+    let values = value
+        .split(',')
+        .map(str::parse::<u16>)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|_| "MISTER_CRT_GEOMETRY_TRIAL_RECT must contain four unsigned integers")?;
+    values
+        .try_into()
+        .map(Some)
+        .map_err(|_| "MISTER_CRT_GEOMETRY_TRIAL_RECT must contain four coordinates".into())
 }
 
 impl ProcessActions<'_> {
@@ -157,6 +180,12 @@ impl DiagnoseActions for ProcessActions<'_> {
                 if self.repair_needed {
                     self.device.execute(DeviceRequest::RepairSafeDeviceState)?;
                     self.repaired = true;
+                }
+                if let Some(rectangle) = self.geometry_trial.take() {
+                    self.geometry_trial_detail = Some(
+                        self.device
+                            .execute(DeviceRequest::RunCrtGeometryTrial { rectangle })?,
+                    );
                 }
                 Ok(())
             }

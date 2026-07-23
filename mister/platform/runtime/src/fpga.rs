@@ -92,7 +92,8 @@ impl LatchedFbufGeometry {
 }
 
 fn diagnostic_fbuf_rectangle() -> Option<[i32; 4]> {
-    if std::env::var("MISTER_FB_DIAGNOSTIC_ACTIVE").ok().as_deref() != Some("1") {
+    // The bounded host workflow provides this only for the standalone CRT trial.
+    if std::env::var("MISTER_MAGIK_CRT_TRIAL").ok().as_deref() != Some("1") {
         return None;
     }
     let value = std::env::var("MISTER_FB_DIAGNOSTIC_RECT").ok()?;

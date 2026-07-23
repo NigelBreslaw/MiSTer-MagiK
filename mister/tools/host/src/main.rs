@@ -478,6 +478,9 @@ impl DeviceOperations for NativeDevice {
                 }
                 output.stdout.trim().into()
             }
+            DeviceRequest::RunCrtGeometryTrial { rectangle } => {
+                run_crt_geometry_trial(*rectangle).map_err(device_failure)?
+            }
             DeviceRequest::RepairSafeDeviceState => {
                 let session = connect(10).map_err(device_failure)?;
                 exec_checked(&session, "safe diagnostic repair", &safe_repair_command())
@@ -2029,7 +2032,7 @@ fn scene_cli(args: &[String]) -> Result<()> {
         &acknowledged_main_command("mister_magik_suspend"),
     )?;
     let run_command = if let Some(runtime_settings) = runtime_settings.as_deref() {
-        crt_trial_run_command(runtime_settings)
+        crt_trial_run_command(runtime_settings, None)
     } else {
         format!(
             "set -eu; test -x /media/fat/mister-magik-dev/mister-magik-fb; /media/fat/mister-magik-dev/mister-magik-fb ui {scene} {seconds} >/tmp/mister-magik-{scene}.log 2>&1"
@@ -2073,12 +2076,104 @@ fn parse_crt_runtime_settings_reply(output: &str) -> Result<String> {
     Ok(format!("schema=1&output={mode}"))
 }
 
-fn crt_trial_run_command(runtime_settings: &str) -> String {
+fn crt_trial_run_command(runtime_settings: &str, rectangle: Option<[u16; 4]>) -> String {
     let resume = acknowledged_main_command("mister_magik_resume");
+    let diagnostic = rectangle.map_or_else(String::new, |[left, right, top, bottom]| {
+        format!("MISTER_MAGIK_CRT_TRIAL=1 MISTER_FB_DIAGNOSTIC_RECT={left},{right},{top},{bottom} ")
+    });
     format!(
-        "cleanup() {{ trap - EXIT HUP INT TERM; {resume}; }}; trap cleanup EXIT HUP INT TERM; set -eu; test -x /media/fat/mister-magik-dev/mister-magik-fb; MISTER_MAGIK_RUNTIME_SETTINGS_V1={} /media/fat/mister-magik-dev/mister-magik-fb ui crt_trial 30 >/tmp/mister-magik-crt_trial.log 2>&1",
-        sh(runtime_settings)
+        "cleanup() {{ trap - EXIT HUP INT TERM; {resume}; }}; trap cleanup EXIT HUP INT TERM; set -eu; test -x /media/fat/mister-magik-dev/mister-magik-fb; {diagnostic}MISTER_MAGIK_RUNTIME_SETTINGS_V1={} /media/fat/mister-magik-dev/mister-magik-fb ui crt_trial 30 >/tmp/mister-magik-crt_trial.log 2>&1",
+        sh(runtime_settings),
     )
+}
+
+fn run_crt_geometry_trial(rectangle: [u16; 4]) -> Result<String> {
+    // The remote trial trap resumes Main after success, failure, or disconnect.
+    let settings_session = connect(10)?;
+    let output = exec_checked_output(
+        &settings_session,
+        "resolved CRT mode",
+        &acknowledged_main_command("mister_magik_settings_get_v1"),
+    )?;
+    let runtime_settings = parse_crt_runtime_settings_reply(&output.stdout)?;
+    validate_crt_geometry_trial(&runtime_settings, rectangle)?;
+    drop(settings_session);
+
+    let output = std::env::temp_dir().join(format!(
+        "mister-magik-crt-geometry-{}.png",
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
+    ));
+    let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+    let runtime_settings_for_trial = runtime_settings.clone();
+    let trial = std::thread::spawn(move || -> std::result::Result<(), String> {
+        let session = connect(10).map_err(|error| error.to_string())?;
+        exec_checked(
+            &session,
+            "geometry trial suspend",
+            &acknowledged_main_command("mister_magik_suspend"),
+        )
+        .map_err(|error| error.to_string())?;
+        if ready_tx.send(()).is_err() {
+            exec_checked(
+                &session,
+                "geometry trial resume after observer disconnect",
+                &acknowledged_main_command("mister_magik_resume"),
+            )
+            .map_err(|error| error.to_string())?;
+            return Err("geometry trial observer disconnected".to_owned());
+        }
+        exec_checked(
+            &session,
+            "geometry trial",
+            &crt_trial_run_command(&runtime_settings_for_trial, Some(rectangle)),
+        )
+        .map_err(|error| error.to_string())
+    });
+    ready_rx
+        .recv_timeout(Duration::from_secs(10))
+        .map_err(|_| "geometry trial did not start")?;
+    std::thread::sleep(Duration::from_secs(2));
+    let capture = crt_qualification::capture_usb_video_frame(&output);
+    let trial_result = trial.join().map_err(|_| "geometry trial worker panicked")?;
+    trial_result.map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+    capture?;
+    Ok(json!({
+        "runtime_settings": runtime_settings,
+        "rectangle": rectangle,
+        "usb_video": output,
+    })
+    .to_string())
+}
+
+fn validate_crt_geometry_trial(runtime_settings: &str, rectangle: [u16; 4]) -> Result<()> {
+    let (baseline, variable_axis) = if runtime_settings.contains("output=crt-288p50") {
+        ([67, 706, 12, 299], "vertical")
+    } else if runtime_settings.contains("output=crt-576p50") {
+        ([45, 684, 40, 615], "horizontal")
+    } else {
+        return Err("geometry trials are limited to crt-288p50 and crt-576p50".into());
+    };
+    let [left, right, top, bottom] = rectangle;
+    if left > right || top > bottom {
+        return Err("geometry trial rectangle is unordered".into());
+    }
+    let delta = |value: u16, expected: u16| value.abs_diff(expected) <= 64;
+    if !rectangle
+        .iter()
+        .zip(baseline)
+        .all(|(value, expected)| delta(*value, expected))
+    {
+        return Err("geometry trial rectangle exceeds the 64-pixel safety window".into());
+    }
+    let fixed_axis_matches = match variable_axis {
+        "vertical" => left == baseline[0] && right == baseline[1],
+        "horizontal" => top == baseline[2] && bottom == baseline[3],
+        _ => false,
+    };
+    if !fixed_axis_matches {
+        return Err("288p trials are vertical-only and 576p trials are horizontal-only".into());
+    }
+    Ok(())
 }
 
 fn parse_crt_trial_status(output: &str) -> Result<&str> {
@@ -2156,22 +2251,20 @@ fn run_launcher_benchmark(
         BenchmarkScenario::LauncherVelocity => "velocity-scroll",
         BenchmarkScenario::FramebufferVelocity => "dirty-band",
     };
-    let mut env_vars = vec![
-        ("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()),
-        ("MISTER_LAUNCHER_START_SYSTEM".into(), "arcade".into()),
-        (
-            "MISTER_LAUNCHER_BENCH_SCENARIO".into(),
-            scenario_value.into(),
-        ),
-        ("MISTER_PREVIEW_SCROLL_TRACE_SECS".into(), seconds.into()),
-        ("MISTER_PREVIEW_SCROLL_TRACE".into(), trace.into()),
-        ("MISTER_PREVIEW_SCROLL_EXIT_AFTER_TRACE".into(), "1".into()),
-    ];
-    env_vars.extend(diagnostic_framebuffer_env()?);
     launcher_restart(
         session,
         &LauncherRestartOptions {
-            env_vars,
+            env_vars: vec![
+                ("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()),
+                ("MISTER_LAUNCHER_START_SYSTEM".into(), "arcade".into()),
+                (
+                    "MISTER_LAUNCHER_BENCH_SCENARIO".into(),
+                    scenario_value.into(),
+                ),
+                ("MISTER_PREVIEW_SCROLL_TRACE_SECS".into(), seconds.into()),
+                ("MISTER_PREVIEW_SCROLL_TRACE".into(), trace.into()),
+                ("MISTER_PREVIEW_SCROLL_EXIT_AFTER_TRACE".into(), "1".into()),
+            ],
             timeout_secs: 30,
             ..LauncherRestartOptions::default()
         },
@@ -2184,30 +2277,6 @@ fn run_launcher_benchmark(
         ),
     )?;
     Ok(())
-}
-
-fn diagnostic_framebuffer_env() -> Result<Vec<(String, String)>> {
-    if std::env::var("MISTER_FB_DIAGNOSTIC_ACTIVE").ok().as_deref() != Some("1") {
-        return Ok(Vec::new());
-    }
-    let rectangle = std::env::var("MISTER_FB_DIAGNOSTIC_RECT")
-        .map_err(|_| "MISTER_FB_DIAGNOSTIC_ACTIVE requires MISTER_FB_DIAGNOSTIC_RECT")?;
-    diagnostic_framebuffer_env_for(&rectangle)
-}
-
-fn diagnostic_framebuffer_env_for(rectangle: &str) -> Result<Vec<(String, String)>> {
-    let values = rectangle
-        .split(',')
-        .map(str::parse::<u16>)
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|_| "MISTER_FB_DIAGNOSTIC_RECT must contain four unsigned integers")?;
-    if values.len() != 4 || values[0] > values[1] || values[2] > values[3] {
-        return Err("MISTER_FB_DIAGNOSTIC_RECT must be left,right,top,bottom".into());
-    }
-    Ok(vec![
-        ("MISTER_FB_DIAGNOSTIC_ACTIVE".into(), "1".into()),
-        ("MISTER_FB_DIAGNOSTIC_RECT".into(), rectangle.into()),
-    ])
 }
 
 fn action_uses_device(action: &str) -> bool {
@@ -7820,7 +7889,7 @@ video_mode=14
 
     #[test]
     fn crt_trial_command_is_bounded_and_never_changes_output_routes() {
-        let command = crt_trial_run_command("schema=1&output=crt-480p60");
+        let command = crt_trial_run_command("schema=1&output=crt-480p60", None);
         assert!(command.contains("trap cleanup EXIT HUP INT TERM"));
         assert!(command.contains("mister_magik_resume"));
         assert!(command.contains("schema=1&output=crt-480p60"));
@@ -7830,17 +7899,27 @@ video_mode=14
     }
 
     #[test]
-    fn diagnostic_framebuffer_environment_is_explicit_and_bounded() {
-        assert_eq!(
-            diagnostic_framebuffer_env_for("45,684,40,615").unwrap(),
-            vec![
-                ("MISTER_FB_DIAGNOSTIC_ACTIVE".into(), "1".into()),
-                ("MISTER_FB_DIAGNOSTIC_RECT".into(), "45,684,40,615".into()),
-            ]
+    fn geometry_trials_are_mode_bounded_and_change_only_one_axis() {
+        assert!(
+            validate_crt_geometry_trial("schema=1&output=crt-288p50", [67, 706, 14, 297]).is_ok()
         );
-        assert!(diagnostic_framebuffer_env_for("45,44,40,615").is_err());
-        assert!(diagnostic_framebuffer_env_for("45,684,40").is_err());
-        assert!(diagnostic_framebuffer_env_for("-1,684,40,615").is_err());
+        assert!(
+            validate_crt_geometry_trial("schema=1&output=crt-288p50", [66, 706, 14, 297]).is_err()
+        );
+        assert!(
+            validate_crt_geometry_trial("schema=1&output=crt-576p50", [40, 679, 40, 615]).is_ok()
+        );
+        assert!(
+            validate_crt_geometry_trial("schema=1&output=crt-576p50", [40, 679, 41, 615]).is_err()
+        );
+        assert!(
+            validate_crt_geometry_trial("schema=1&output=crt-480p60", [45, 684, 31, 510]).is_err()
+        );
+
+        let command = crt_trial_run_command("schema=1&output=crt-576p50", Some([40, 679, 40, 615]));
+        assert!(command.contains("MISTER_MAGIK_CRT_TRIAL=1"));
+        assert!(command.contains("MISTER_FB_DIAGNOSTIC_RECT=40,679,40,615"));
+        assert!(!command.contains("launcher.env"));
     }
 
     #[test]

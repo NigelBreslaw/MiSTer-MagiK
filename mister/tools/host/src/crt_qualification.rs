@@ -370,7 +370,7 @@ fn run_crt_trial_once(mode: CrtMode, artifact_directory: &Path) -> Result<String
     let trial_result = exec_checked(
         &session,
         "operator CRT trial",
-        &crt_trial_run_command(&runtime_settings),
+        &crt_trial_run_command(&runtime_settings, None), // Qualification never applies an override.
     );
     let log = exec_checked_output(
         &session,

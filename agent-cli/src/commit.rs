@@ -108,17 +108,6 @@ fn run_inner(
     if paths.is_empty() {
         return Err("nothing_to_commit: no task-owned changes were found".into());
     }
-    let overlapping_baseline: Vec<_> = paths
-        .iter()
-        .filter(|path| baseline.dirty_paths.contains(*path))
-        .cloned()
-        .collect();
-    if !overlapping_baseline.is_empty() {
-        return Err(format!(
-            "commit_scope_ambiguous: task changed paths that were dirty at baseline: {}",
-            display_paths(&overlapping_baseline)
-        ));
-    }
     reject_forbidden_paths(repository, &paths)?;
     let claims: BTreeSet<_> = evidence.task_claims(task_id)?.into_iter().collect();
     let unclaimed: Vec<_> = paths
@@ -689,29 +678,32 @@ mod tests {
     }
 
     #[test]
-    fn refuses_dirty_baseline_overlap_and_active_task_overlap() {
+    fn commits_verified_changes_to_dirty_baseline_paths() {
         let fixture = Fixture::new();
         fs::write(fixture.root.join("docs/existing.md"), "user change\n").unwrap();
         fixture.begin("dirty");
         fs::write(fixture.root.join("docs/existing.md"), "task change\n").unwrap();
-        assert!(fixture
-            .commit("dirty")
-            .unwrap_err()
-            .starts_with("commit_scope_ambiguous:"));
+        fixture.commit("dirty").unwrap();
+        assert_eq!(
+            git_text(&fixture.root, &["show", "--format=", "--name-only", "HEAD"]).unwrap(),
+            "docs/existing.md"
+        );
+    }
 
+    #[test]
+    fn latest_verified_task_supersedes_stale_path_claims() {
         let fixture = Fixture::new();
-        fixture.begin("task-a");
+        fixture.begin("thread-a");
         fs::write(fixture.root.join("docs/existing.md"), "first\n").unwrap();
-        fixture.begin("task-b");
+        fixture.begin("thread-b");
         fs::write(fixture.root.join("docs/existing.md"), "second\n").unwrap();
         let task_b_paths =
-            crate::task::changes(&fixture.evidence, &fixture.root, "task-b").unwrap();
+            crate::task::changes(&fixture.evidence, &fixture.root, "thread-b").unwrap();
         fixture
             .evidence
-            .claim_task_paths("task-b", &task_b_paths)
+            .claim_task_paths("thread-b", &task_b_paths)
             .unwrap();
-        let error = fixture.commit("task-a").unwrap_err();
-        assert!(error.contains("already claimed by active task"), "{error}");
+        fixture.commit("thread-a").unwrap();
     }
 
     #[test]
