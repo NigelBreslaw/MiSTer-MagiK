@@ -2015,6 +2015,59 @@ mod tests {
     }
 
     #[test]
+    fn validation_cache_is_cross_task_and_leases_recover_after_expiry() {
+        let root = temporary_root("validation-cache");
+        let evidence = Evidence::open_at(&root).unwrap();
+        evidence
+            .cache_validation("check.one", "fingerprint", "passed", None)
+            .unwrap();
+        assert_eq!(
+            evidence
+                .cached_validation("check.one", "fingerprint")
+                .unwrap(),
+            Some(("passed".into(), None))
+        );
+        assert!(evidence
+            .claim_validation("check.two", "fingerprint", "owner-one")
+            .unwrap());
+        assert!(!evidence
+            .claim_validation("check.two", "fingerprint", "owner-two")
+            .unwrap());
+        evidence
+            .connection
+            .execute(
+                "UPDATE operation_leases SET expires_ms=0 WHERE operation_id='check.two'",
+                [],
+            )
+            .unwrap();
+        assert!(evidence
+            .claim_validation("check.two", "fingerprint", "owner-two")
+            .unwrap());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rotation_archives_integrity_checked_evidence_and_starts_empty() {
+        let root = temporary_root("rotation");
+        let evidence = Evidence::open_at(&root).unwrap();
+        let request = RawRequest::capture([OsString::from("agent-cli"), OsString::from("check")]);
+        evidence.begin_request(&request).unwrap();
+        evidence.finish(&request.id, Outcome::Passed).unwrap();
+        let archive = evidence.rotate("abc123").unwrap();
+        assert!(archive.is_file());
+        let archived = Connection::open(archive).unwrap();
+        assert_eq!(
+            archived
+                .query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
+                .unwrap(),
+            "ok"
+        );
+        assert_eq!(evidence.status().unwrap().requests, 0);
+        assert_eq!(evidence.report().unwrap().requests, 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn closing_task_prunes_cache_and_request_timing_includes_bootstrap() {
         let root = temporary_root("cache-pruning-and-timing");
         let _ = fs::remove_dir_all(&root);

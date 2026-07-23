@@ -942,6 +942,23 @@ mod tests {
     }
 
     #[test]
+    fn only_deterministic_failures_are_cacheable() {
+        assert!(deterministic_failure(
+            "error: test_failure (exit 101): assertion failed"
+        ));
+        assert!(deterministic_failure(
+            "error: command_failed (exit 1): compiler error"
+        ));
+        assert!(!deterministic_failure(
+            "error: command_failed: operation timed out"
+        ));
+        assert!(!deterministic_failure(
+            "error: command_failed: permission denied"
+        ));
+        assert!(!deterministic_failure("error: network_required"));
+    }
+
+    #[test]
     fn parallel_scheduler_overlaps_work_and_preserves_result_order() {
         let active = Arc::new(AtomicU64::new(0));
         let maximum = Arc::new(AtomicU64::new(0));

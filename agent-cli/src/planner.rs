@@ -1022,6 +1022,28 @@ mod tests {
     }
 
     #[test]
+    fn mixed_runtime_changes_select_one_combined_arm_operation() {
+        let plan = affected_plan(
+            Intent::Verify {
+                scope: Scope::Paths(Vec::new()),
+            },
+            vec![
+                "apps/mister/ui/launcher.slint".into(),
+                "apps/mister/src/media_update.rs".into(),
+            ],
+        )
+        .unwrap();
+        let arm: Vec<_> = plan
+            .operations
+            .iter()
+            .filter(|operation| operation.id.starts_with("arm.check"))
+            .collect();
+        assert_eq!(arm.len(), 1);
+        assert_eq!(arm[0].id, "arm.check-runtime");
+        assert_eq!(arm[0].args, ["build", "validate-runtime"]);
+    }
+
+    #[test]
     fn identical_executions_merge_reasons_and_inputs() {
         let mut first = cargo("first", "First", &["test"], "first reason");
         first.inputs = vec!["one".into()];
