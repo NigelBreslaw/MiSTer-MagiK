@@ -9,9 +9,10 @@ slint/
   Main_MiSTer/         # real GitHub fork of MiSTer-devel/Main_MiSTer
 ```
 
-`scripts/agent deliver` infers platform impact. Runtime-only app changes retain
-the installed qualified platform. A platform delivery uses `../Main_MiSTer`;
-set `MISTER_MAIN_DIR` when the fork lives elsewhere.
+`scripts/agent deliver` installs one coherent development platform using
+`../Main_MiSTer`; set `MISTER_MAIN_DIR` when the fork lives elsewhere. The
+platform manifest binds the app, Main, kernel module, and FPGA latch, so none of
+those artifacts is deployed independently.
 
 The fork is not a submodule. It has its own history, CI, build wrapper, and
 patch ledger.
@@ -143,23 +144,16 @@ Deploy from this app repo:
 scripts/agent deliver
 ```
 
-Runtime-only development delivery builds and transactionally replaces the app,
-then verifies it against the installed qualified Main, kernel module, and FPGA
-latch without rebuilding or overwriting those platform components.
-
-Use `scripts/agent deliver --local-main` for a Main-only development refresh.
-It forces the coherent platform transaction, builds and checks the clean local
-Main and kernel, and reuses the verified FPGA artifact from CI.
+Development delivery builds and checks the clean local Main and kernel, reuses
+the verified FPGA artifact from CI, regenerates the manifest, and activates the
+entire set transactionally.
 The pinned kernel source defaults to the persistent sibling checkout
 `../Linux-Kernel_MiSTer`; set `MISTER_KERNEL_DIR` when it lives elsewhere.
 
-When kernel or FPGA source changes select a platform delivery, it also builds
-and checks the clean local `mister-magik` branch, builds the app and kernel
-locally, reuses a verified FPGA artifact, regenerates the complete development
-manifest, and uses the normal snapshot, activation, reboot, smoke, and rollback
-transaction. Neither local commit must be pushed, and Main is never copied
-directly onto the device outside that transaction. A Main-only change lives in
-the external repository and is not inferred from app commit paths.
+The transaction uses the exact clean `mister-magik` app branch and local
+`Main_MiSTer` branch, followed by snapshot, activation, reboot, smoke, and
+rollback protection. Neither local commit must be pushed, and Main is never
+copied directly onto the device outside that transaction.
 
 Use a non-default fork checkout with the same option:
 
@@ -176,8 +170,8 @@ The development script deploys:
 - the qualified Menu latch RBF and metadata to `/media/fat/mister-magik-dev/fpga/`
 - the complete platform contract to `/media/fat/mister-magik-dev/platform-v2.manifest`
 
-It does not change the selected Main. Activate it with `mister mode dev` after
-the complete manifest verifies.
+The transaction selects the development Main only after the complete manifest
+has been activated.
 
 The manifest is activated last. The deploy script never writes root
 `/media/fat/menu.rbf`, which remains owned by `update_all`.

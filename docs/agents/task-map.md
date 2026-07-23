@@ -31,17 +31,14 @@ The normal feature loop is `scripts/agent task begin`, edit,
 full verification of the exact staged tree. Use standalone `verify` only when
 assurance is needed without creating a commit.
 Runtime or platform changes then use `scripts/agent deliver`. Delivery uses the
-exact clean local app commit without consulting task records or requiring
-publication. Runtime-only delivery replaces `mister-magik-fb` transactionally
-while preserving the installed qualified Main, kernel module, and FPGA latch.
-Kernel or FPGA source changes select the complete platform transaction,
-including the clean local Main checkout and component qualification. Main lives
-in its external repository, so a Main-only change is not inferred from app
-commit paths.
+exact clean local app and Main commits without consulting task records or
+requiring publication. Every delivery uses the complete platform transaction
+because the development manifest binds `mister-magik-fb`, Main, the kernel
+module, and the FPGA latch into one coherent set.
 # Deployment
 
 “Build and deploy” maps to `scripts/agent commit -m MESSAGE` followed by
-`scripts/agent deliver`. The CLI infers runtime
-or platform scope, owns CI qualification and device transactions, and records
+`scripts/agent deliver`. The CLI owns platform qualification and device
+transactions, and records
 progress and evidence. Performance, diagnosis, and attended acceptance use the
 typed `benchmark`, `diagnose`, and `release qualify` state machines.

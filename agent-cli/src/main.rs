@@ -133,7 +133,7 @@ fn resolve_task_intent(
             task_id: resolve(task_id)?,
             message,
         },
-        Intent::Deliver { local_main } => Intent::Deliver { local_main },
+        Intent::Deliver => Intent::Deliver,
         Intent::Benchmark { task_id } => Intent::Benchmark {
             task_id: if task_id.is_empty() {
                 evidence
@@ -217,9 +217,7 @@ fn dispatch(
             }
             return Ok(outcome);
         }
-        Intent::Deliver { local_main } => {
-            return deliver(evidence, repository, *local_main, reporter);
-        }
+        Intent::Deliver => return deliver(evidence, repository, reporter),
         Intent::Benchmark { task_id } => {
             let committed = evidence
                 .latest_committed_scope(repository)?
@@ -740,10 +738,9 @@ fn write_github_output(
 fn deliver(
     evidence: &Evidence,
     repository: &std::path::Path,
-    local_main: bool,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<Outcome> {
-    let delivery = deliver_inner(evidence, repository, local_main, reporter);
+    let delivery = deliver_inner(evidence, repository, reporter);
     let cleanup = agent_cli::delivery::cleanup_workspace(repository);
     match (delivery, cleanup) {
         (Ok(outcome), Ok(())) => Ok(outcome),
@@ -764,7 +761,6 @@ fn deliver(
 fn deliver_inner(
     _evidence: &Evidence,
     repository: &std::path::Path,
-    local_main: bool,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<Outcome> {
     let dirty = agent_cli::git::value(repository, &["status", "--porcelain"])?;
@@ -774,9 +770,10 @@ fn deliver_inner(
     let sha = agent_cli::task::current_head(repository)?;
     let paths = agent_cli::deploy::deployment_paths(repository, Vec::new())?;
     let mut deployment = agent_cli::deploy::plan(repository, paths)?;
-    if local_main {
-        deployment.kind = agent_cli::deploy::DeploymentKind::Platform;
-    }
+    // The development manifest binds the launcher hash to Main, the scanout
+    // module, and the latch RBF. A launcher-only transaction would make that
+    // installed set invalid, so every delivery must publish one coherent set.
+    deployment.kind = agent_cli::deploy::DeploymentKind::Platform;
     let local_main = if deployment.kind == agent_cli::deploy::DeploymentKind::Platform {
         deployment.platform_candidate = Some(agent_cli::platform_ci::resolve_published_repository(
             repository,
@@ -938,8 +935,8 @@ mod tests {
             }
         );
         assert_eq!(
-            resolve_task_intent(&evidence, worktree, Intent::Deliver { local_main: true }).unwrap(),
-            Intent::Deliver { local_main: true }
+            resolve_task_intent(&evidence, worktree, Intent::Deliver).unwrap(),
+            Intent::Deliver
         );
         fs::remove_dir_all(root).unwrap();
     }

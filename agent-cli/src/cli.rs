@@ -63,11 +63,7 @@ pub enum Command {
     #[command(hide = true)]
     Doctor,
     Diagnose,
-    Deliver {
-        /// Build the clean local Main and kernel while reusing the qualified CI RBF.
-        #[arg(long)]
-        local_main: bool,
-    },
+    Deliver,
     Benchmark,
     Release {
         #[command(subcommand)]
@@ -430,7 +426,7 @@ impl Cli {
             },
             Some(Command::Doctor) => Intent::Doctor,
             Some(Command::Diagnose) => Intent::Diagnose,
-            Some(Command::Deliver { local_main }) => Intent::Deliver { local_main },
+            Some(Command::Deliver) => Intent::Deliver,
             Some(Command::Benchmark) => Intent::Benchmark { task_id },
             Some(Command::Release {
                 command: ReleaseCommand::Qualify,
@@ -558,11 +554,10 @@ mod tests {
     }
 
     #[test]
-    fn deliver_accepts_local_main_and_remains_task_independent() {
+    fn deliver_is_flag_free_and_task_independent() {
         let cli = Cli::try_parse_from(["agent-cli", "--task-id", "task-1", "deliver"]).unwrap();
-        assert_eq!(cli.into_intent(), Intent::Deliver { local_main: false });
-        let cli = Cli::try_parse_from(["agent-cli", "deliver", "--local-main"]).unwrap();
-        assert_eq!(cli.into_intent(), Intent::Deliver { local_main: true });
+        assert_eq!(cli.into_intent(), Intent::Deliver);
+        assert!(Cli::try_parse_from(["agent-cli", "deliver", "--local-main"]).is_err());
         assert!(Cli::try_parse_from(["agent-cli", "deliver", "--fast"]).is_err());
         assert!(Cli::try_parse_from(["agent-cli", "deliver", "-m", "message"]).is_err());
         assert!(Cli::try_parse_from(["agent-cli", "deploy"]).is_err());

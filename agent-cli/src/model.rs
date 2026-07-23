@@ -107,9 +107,7 @@ pub enum Intent {
     PruneLogs,
     Doctor,
     Diagnose,
-    Deliver {
-        local_main: bool,
-    },
+    Deliver,
     Benchmark {
         task_id: String,
     },

@@ -112,12 +112,17 @@ pub fn plan(repository: &Path, mut paths: Vec<PathBuf>) -> Result<DeploymentPlan
     paths.sort();
     paths.dedup();
     let components = platform_components(&paths);
+    let changes_manifest_bound_runtime = paths.iter().any(|path| {
+        crate::components::classify(path).is_some_and(|component| {
+            component.deployment_impact() == crate::components::DeploymentImpact::Runtime
+        })
+    });
     if !components.is_empty() {
         require_platform_source_available(repository, &paths)?;
     }
     let ui_scope = ui_scope(&paths);
     Ok(DeploymentPlan {
-        kind: if !components.is_empty() {
+        kind: if !components.is_empty() || changes_manifest_bound_runtime {
             DeploymentKind::Platform
         } else {
             DeploymentKind::Runtime
@@ -233,7 +238,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn runtime_launcher_change_selects_runtime_installation() {
+    fn runtime_launcher_change_selects_coherent_platform_installation() {
         let paths = vec![PathBuf::from(
             "apps/mister/src/ui_runner/launcher_composition.rs",
         )];
@@ -241,7 +246,7 @@ mod tests {
         assert_eq!(ui_scope(&paths), UiScope::Launcher);
         assert_eq!(
             plan(Path::new("."), paths).unwrap().kind,
-            DeploymentKind::Runtime
+            DeploymentKind::Platform
         );
     }
 
@@ -289,13 +294,13 @@ mod tests {
             vec![PathBuf::from("apps/mister/src/launcher.rs")],
         )
         .unwrap();
-        let plan = deployment.as_evidence_plan(Intent::Deliver { local_main: false });
+        let plan = deployment.as_evidence_plan(Intent::Deliver);
         assert_eq!(plan.operations.len(), 1);
         assert_eq!(plan.operations[0].risk, Risk::DeviceWrite);
         assert!(plan.operations[0]
             .inputs
             .iter()
-            .any(|input| input == "kind=runtime"));
+            .any(|input| input == "kind=platform"));
         assert!(plan.operations[0]
             .inputs
             .iter()
