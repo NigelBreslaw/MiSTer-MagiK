@@ -752,16 +752,20 @@ fn deliver_inner(
     let sha = agent_cli::task::current_head(repository)?;
     let paths = agent_cli::deploy::deployment_paths(repository, Vec::new())?;
     let mut deployment = agent_cli::deploy::plan(repository, paths)?;
-    deployment.kind = agent_cli::deploy::DeploymentKind::Platform;
-    deployment.platform_candidate = Some(agent_cli::platform_ci::resolve_published_repository(
-        repository,
-        |progress| reporter.emit(EventKind::Progress, "platform", progress, None),
-    )?);
+    let local_main = if deployment.kind == agent_cli::deploy::DeploymentKind::Platform {
+        deployment.platform_candidate = Some(agent_cli::platform_ci::resolve_published_repository(
+            repository,
+            |progress| reporter.emit(EventKind::Progress, "platform", progress, None),
+        )?);
+        Some(local_main_directory(repository))
+    } else {
+        None
+    };
     agent_cli::delivery::execute(
         repository,
         &deployment,
         &sha,
-        Some(&local_main_directory(repository)),
+        local_main.as_deref(),
         reporter,
     )
 }

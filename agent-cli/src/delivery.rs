@@ -280,6 +280,9 @@ impl DeliveryActions for ProcessActions<'_> {
             Phase::ValidateCommit => self.validate_commit(),
             Phase::Connect => self.device.execute(DeviceRequest::Discover).map(|_| ()),
             Phase::Reconcile => {
+                if self.deployment.kind == DeploymentKind::Runtime {
+                    return Ok(());
+                }
                 let main_dir = self
                     .local_main
                     .as_deref()

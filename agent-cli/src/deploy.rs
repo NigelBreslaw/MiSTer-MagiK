@@ -112,17 +112,12 @@ pub fn plan(repository: &Path, mut paths: Vec<PathBuf>) -> Result<DeploymentPlan
     paths.sort();
     paths.dedup();
     let components = platform_components(&paths);
-    let coherent_runtime = paths.iter().any(|path| {
-        crate::components::classify(path).is_some_and(|component| {
-            component.deployment_impact() == crate::components::DeploymentImpact::Runtime
-        })
-    });
     if !components.is_empty() {
         require_platform_source_available(repository, &paths)?;
     }
     let ui_scope = ui_scope(&paths);
     Ok(DeploymentPlan {
-        kind: if !components.is_empty() || coherent_runtime {
+        kind: if !components.is_empty() {
             DeploymentKind::Platform
         } else {
             DeploymentKind::Runtime
@@ -245,7 +240,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn runtime_launcher_change_selects_coherent_platform_installation() {
+    fn runtime_launcher_change_selects_runtime_installation() {
         let paths = vec![PathBuf::from(
             "apps/mister/src/ui_runner/launcher_composition.rs",
         )];
@@ -253,7 +248,7 @@ mod tests {
         assert_eq!(ui_scope(&paths), UiScope::Launcher);
         assert_eq!(
             plan(Path::new("."), paths).unwrap().kind,
-            DeploymentKind::Platform
+            DeploymentKind::Runtime
         );
     }
 
@@ -297,7 +292,7 @@ mod tests {
         assert!(plan.operations[0]
             .inputs
             .iter()
-            .any(|input| input == "kind=platform"));
+            .any(|input| input == "kind=runtime"));
         assert!(plan.operations[0]
             .inputs
             .iter()
