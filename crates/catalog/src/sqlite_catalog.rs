@@ -55,26 +55,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-thread_local! {
-    static PUBLISH_BENCH_ITERATION: std::cell::Cell<Option<usize>> = const {
-        std::cell::Cell::new(None)
-    };
-}
-
-struct PublishBenchIterationGuard(Option<usize>);
-
-impl Drop for PublishBenchIterationGuard {
-    fn drop(&mut self) {
-        PUBLISH_BENCH_ITERATION.set(self.0);
-    }
-}
-
-pub(crate) fn with_publish_bench_iteration<T>(iteration: usize, action: impl FnOnce() -> T) -> T {
-    let previous = PUBLISH_BENCH_ITERATION.replace(Some(iteration));
-    let _guard = PublishBenchIterationGuard(previous);
-    action()
-}
-
 const NEW_GAME_BADGE_SECS: i64 = 14 * 24 * 60 * 60;
 const SQLITE_PUBLISH_COPY_CHUNK_BYTES: usize = 256 * 1024;
 const SQLITE_PATH_CHUNK_BYTES: usize = 256 * 1024;
@@ -1659,6 +1639,37 @@ pub(crate) fn save_sqlite_scan_with_progress_and_stamp_and_projections(
     root: &Path,
     progress: ProgressCallback<'_>,
 ) -> Result<u64, String> {
+    save_sqlite_scan_with_progress_and_stamp_and_projections_with_bench_iteration(
+        path, scan, stamp, root, progress, None,
+    )
+}
+
+pub(crate) fn save_sqlite_scan_with_progress_and_stamp_and_projections_for_bench(
+    path: &Path,
+    scan: &LibraryScan,
+    stamp: &catalog_stamp::CatalogStamp,
+    root: &Path,
+    progress: ProgressCallback<'_>,
+    iteration: usize,
+) -> Result<u64, String> {
+    save_sqlite_scan_with_progress_and_stamp_and_projections_with_bench_iteration(
+        path,
+        scan,
+        stamp,
+        root,
+        progress,
+        Some(iteration),
+    )
+}
+
+fn save_sqlite_scan_with_progress_and_stamp_and_projections_with_bench_iteration(
+    path: &Path,
+    scan: &LibraryScan,
+    stamp: &catalog_stamp::CatalogStamp,
+    root: &Path,
+    progress: ProgressCallback<'_>,
+    bench_iteration: Option<usize>,
+) -> Result<u64, String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("create sqlite dir: {e}"))?;
     }
@@ -1685,12 +1696,13 @@ pub(crate) fn save_sqlite_scan_with_progress_and_stamp_and_projections(
                 )?);
                 Ok(())
             };
-        save_sqlite_scan_with_progress_using_writer(
+        save_sqlite_scan_with_progress_using_writer_and_bench_iteration(
             path,
             scan,
             progress,
             sqlite_build_temp_plan(path),
             &mut writer,
+            bench_iteration,
         )?
     };
     let projections = projections
@@ -1783,9 +1795,33 @@ pub(crate) fn save_sqlite_scan_with_progress_using_writer(
     initial_plan: SqliteBuildTempPlan,
     writer: &mut dyn FnMut(&Path, &LibraryScan, &mut ProgressCallback<'_>) -> Result<(), String>,
 ) -> Result<u64, String> {
+    save_sqlite_scan_with_progress_using_writer_and_bench_iteration(
+        path,
+        scan,
+        progress,
+        initial_plan,
+        writer,
+        None,
+    )
+}
+
+fn save_sqlite_scan_with_progress_using_writer_and_bench_iteration(
+    path: &Path,
+    scan: &LibraryScan,
+    progress: ProgressCallback<'_>,
+    initial_plan: SqliteBuildTempPlan,
+    writer: &mut dyn FnMut(&Path, &LibraryScan, &mut ProgressCallback<'_>) -> Result<(), String>,
+    bench_iteration: Option<usize>,
+) -> Result<u64, String> {
     let mut progress = progress;
-    let first =
-        save_sqlite_scan_attempt_with_writer(path, scan, &mut progress, &initial_plan, writer);
+    let first = save_sqlite_scan_attempt_with_writer_and_bench_iteration(
+        path,
+        scan,
+        &mut progress,
+        &initial_plan,
+        writer,
+        bench_iteration,
+    );
     match first {
         Ok(bytes) => Ok(bytes),
         Err(e)
@@ -1797,18 +1833,26 @@ pub(crate) fn save_sqlite_scan_with_progress_using_writer(
                 initial_plan.build_tmp_path.display()
             );
             let fallback_plan = sqlite_build_temp_plan_beside_final(path);
-            save_sqlite_scan_attempt_with_writer(path, scan, &mut progress, &fallback_plan, writer)
+            save_sqlite_scan_attempt_with_writer_and_bench_iteration(
+                path,
+                scan,
+                &mut progress,
+                &fallback_plan,
+                writer,
+                bench_iteration,
+            )
         }
         Err(e) => Err(e),
     }
 }
 
-pub(crate) fn save_sqlite_scan_attempt_with_writer(
+fn save_sqlite_scan_attempt_with_writer_and_bench_iteration(
     path: &Path,
     scan: &LibraryScan,
     progress: &mut ProgressCallback<'_>,
     plan: &SqliteBuildTempPlan,
     writer: &mut dyn FnMut(&Path, &LibraryScan, &mut ProgressCallback<'_>) -> Result<(), String>,
+    bench_iteration: Option<usize>,
 ) -> Result<u64, String> {
     if let Some(parent) = plan.build_tmp_path.parent() {
         std::fs::create_dir_all(parent)
@@ -1834,7 +1878,7 @@ pub(crate) fn save_sqlite_scan_attempt_with_writer(
         let _ = std::fs::remove_file(&plan.final_tmp_path);
         let _ = std::fs::remove_file(&plan.build_tmp_path);
     })?;
-    report_sqlite_publish_metrics(&metrics, "bench-ok");
+    report_sqlite_publish_metrics(&metrics, "bench-ok", bench_iteration);
     std::fs::metadata(path)
         .map(|m| m.len())
         .map_err(|e| format!("stat sqlite: {e}"))
@@ -1927,10 +1971,14 @@ fn emit_sqlite_save_progress(progress: &mut ProgressCallback<'_>, done: u64, tot
     );
 }
 
-fn report_sqlite_publish_metrics(metrics: &SqlitePublishMetrics, result: &str) {
+fn report_sqlite_publish_metrics(
+    metrics: &SqlitePublishMetrics,
+    result: &str,
+    bench_iteration: Option<usize>,
+) {
     let label =
         std::env::var("MISTER_LIBRARY_BENCH_LABEL").unwrap_or_else(|_| "LIB-BENCH".to_string());
-    let iteration = PUBLISH_BENCH_ITERATION.get().unwrap_or_default();
+    let iteration = bench_iteration.unwrap_or_default();
     crate::catalog_logln!(
         "library_sqlite_publish_tsv\t{label}\t{iteration}\tprogress\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
         metrics.bytes,

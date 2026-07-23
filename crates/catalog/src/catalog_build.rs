@@ -231,8 +231,28 @@ impl<'a> CatalogRefreshPipeline<'a> {
         artifact: LibraryScanArtifact,
         progress: ProgressCallback<'_>,
     ) -> Result<LibraryRefreshSummary, String> {
-        self.save_artifact_with_catalog(artifact, arcade_catalog::DEFAULT_ARCADE_ROOT, progress)
-            .map(|refresh| refresh.summary)
+        self.save_artifact_with_catalog_and_bench_iteration(
+            artifact,
+            arcade_catalog::DEFAULT_ARCADE_ROOT,
+            progress,
+            None,
+        )
+        .map(|refresh| refresh.summary)
+    }
+
+    pub(crate) fn save_artifact_for_bench(
+        &self,
+        artifact: LibraryScanArtifact,
+        progress: ProgressCallback<'_>,
+        iteration: usize,
+    ) -> Result<LibraryRefreshSummary, String> {
+        self.save_artifact_with_catalog_and_bench_iteration(
+            artifact,
+            arcade_catalog::DEFAULT_ARCADE_ROOT,
+            progress,
+            Some(iteration),
+        )
+        .map(|refresh| refresh.summary)
     }
 
     pub(crate) fn save_artifact_with_catalog(
@@ -240,6 +260,16 @@ impl<'a> CatalogRefreshPipeline<'a> {
         artifact: LibraryScanArtifact,
         root: impl AsRef<Path>,
         progress: ProgressCallback<'_>,
+    ) -> Result<LibraryRefreshCatalog, String> {
+        self.save_artifact_with_catalog_and_bench_iteration(artifact, root, progress, None)
+    }
+
+    fn save_artifact_with_catalog_and_bench_iteration(
+        &self,
+        artifact: LibraryScanArtifact,
+        root: impl AsRef<Path>,
+        progress: ProgressCallback<'_>,
+        bench_iteration: Option<usize>,
     ) -> Result<LibraryRefreshCatalog, String> {
         let root = root.as_ref();
         let import_t = Instant::now();
@@ -251,13 +281,25 @@ impl<'a> CatalogRefreshPipeline<'a> {
             catalog_t,
             format!("rows={}", catalog.len()),
         );
-        let bytes = sqlite_catalog::save_sqlite_scan_with_progress_and_stamp_and_projections(
-            &self.cfg.sqlite_path,
-            &artifact.scan,
-            artifact.stamp(),
-            root,
-            progress,
-        )?;
+        let bytes = match bench_iteration {
+            Some(iteration) => {
+                sqlite_catalog::save_sqlite_scan_with_progress_and_stamp_and_projections_for_bench(
+                    &self.cfg.sqlite_path,
+                    &artifact.scan,
+                    artifact.stamp(),
+                    root,
+                    progress,
+                    iteration,
+                )
+            }
+            None => sqlite_catalog::save_sqlite_scan_with_progress_and_stamp_and_projections(
+                &self.cfg.sqlite_path,
+                &artifact.scan,
+                artifact.stamp(),
+                root,
+                progress,
+            ),
+        }?;
         let import_us = import_t.elapsed().as_micros() as u64;
         Ok(LibraryRefreshCatalog {
             summary: LibraryRefreshSummary {

@@ -52,9 +52,9 @@ pub(crate) fn run_scan_bench() {
         let build_us = build_t.elapsed().as_micros() as u64;
 
         let import_t = Instant::now();
-        let summary = match crate::sqlite_catalog::with_publish_bench_iteration(iteration, || {
-            library_db::save_scan_artifact_to_sqlite(&cfg, artifact, None)
-        }) {
+        let summary = match library_db::save_scan_artifact_to_sqlite_for_bench(
+            &cfg, artifact, None, iteration,
+        ) {
             Ok(summary) => summary,
             Err(e) => {
                 crate::catalog_logln!(

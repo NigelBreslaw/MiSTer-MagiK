@@ -1274,6 +1274,15 @@ pub(crate) fn save_scan_artifact_to_sqlite(
     CatalogRefreshPipeline::new(cfg).save_artifact(artifact, progress)
 }
 
+pub(crate) fn save_scan_artifact_to_sqlite_for_bench(
+    cfg: &BenchConfig,
+    artifact: LibraryScanArtifact,
+    progress: ProgressCallback<'_>,
+    iteration: usize,
+) -> Result<LibraryRefreshSummary, String> {
+    CatalogRefreshPipeline::new(cfg).save_artifact_for_bench(artifact, progress, iteration)
+}
+
 pub(crate) fn save_scan_artifact_to_sqlite_with_catalog(
     cfg: &BenchConfig,
     artifact: LibraryScanArtifact,
