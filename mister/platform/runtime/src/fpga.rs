@@ -865,6 +865,14 @@ mod tests {
                 .unwrap();
             let words = words_from_writes(&state.borrow().writes);
             assert_eq!(&words[6..10], &expected);
+
+            let (mut fpga, state) = scripted(&[(0x55, 0); 12]);
+            fpga.post_magik_latched_fbuf_rgb565(7, FB_ADDR, 640, 480, geometry)
+                .unwrap();
+            let words = words_from_writes(&state.borrow().writes);
+            assert_eq!(words[0], MAGIK_UIO_SET_FBUF_LATCH);
+            assert_eq!(&words[6..10], &expected);
+            assert_eq!(*words.last().unwrap(), 7);
         }
     }
 
