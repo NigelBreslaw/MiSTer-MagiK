@@ -111,14 +111,27 @@ pub(super) fn run_crt_trial_loop(
         frames += 1;
     }
 
-    let flips = hardware
-        .read_magik_latched_fbuf_status()
-        .ok()
-        .filter(|status| status.supported())
+    let final_status = match wait_for_crt_latch_settle(hardware) {
+        Ok(status) if status.supported() => Some(status),
+        Ok(_) => {
+            failure.get_or_insert_with(|| "final-latch-status-unsupported".to_string());
+            None
+        }
+        Err(error) => {
+            failure.get_or_insert_with(|| {
+                format!("final-latch-settle-{}", safe_field(&error.to_string()))
+            });
+            None
+        }
+    };
+    let flips = final_status
         .map(CrtTrialCounters::from_status)
         .unwrap_or(before)
         .delta(before)
         .flips;
+    if failure.is_none() && u64::from(flips) != frames {
+        failure = Some("incomplete-latch-flips".to_string());
+    }
     let reason = failure
         .as_deref()
         .unwrap_or(if flips == 0 { "no-latch-flips" } else { "none" });

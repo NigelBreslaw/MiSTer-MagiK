@@ -6,6 +6,8 @@ use mister_magik_fb::framebuffer::downsample::Rgb565FrameView;
 use mister_magik_fb::latch_readiness::{LatchFailure, LatchFailureReason, LatchFailureStage};
 use std::io;
 
+const TRANSIENT_PENDING_SETTLE_TIMEOUT: Duration = Duration::from_millis(100);
+
 pub(in crate::ui_runner) trait LatchHardware: LauncherDisplayHardware {
     fn read_latch_capabilities(
         &mut self,
@@ -312,7 +314,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         }
 
         let status_start = Instant::now();
-        let before_status = hardware.read_latched_status().map_err(|e| {
+        let mut before_status = hardware.read_latched_status().map_err(|e| {
             LatchFailure::runtime(
                 LatchFailureStage::FpgaStatus,
                 LatchFailureReason::FpgaTransportFailed,
@@ -322,7 +324,28 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         let mut status_us = status_start.elapsed().as_micros() as u64;
         self.sync_latch_state_from_status(before_status, display_session)?;
 
-        let plan = self.latch_state.plan_next(input).ok_or_else(|| {
+        let mut plan = self.latch_state.plan_next(input);
+        if plan.is_none() && before_status.pending() {
+            let settle_started = Instant::now();
+            while settle_started.elapsed() < TRANSIENT_PENDING_SETTLE_TIMEOUT {
+                std::thread::sleep(Duration::from_millis(1));
+                let retry_started = Instant::now();
+                before_status = hardware.read_latched_status().map_err(|e| {
+                    LatchFailure::runtime(
+                        LatchFailureStage::FpgaStatus,
+                        LatchFailureReason::FpgaTransportFailed,
+                        e.to_string(),
+                    )
+                })?;
+                status_us = status_us.saturating_add(retry_started.elapsed().as_micros() as u64);
+                self.sync_latch_state_from_status(before_status, display_session)?;
+                plan = self.latch_state.plan_next(input);
+                if plan.is_some() || !before_status.pending() {
+                    break;
+                }
+            }
+        }
+        let plan = plan.ok_or_else(|| {
             LatchFailure::runtime(
                 LatchFailureStage::PostVerification,
                 LatchFailureReason::NoWritableHiddenBuffer,
@@ -1042,14 +1065,37 @@ mod tests {
     fn pending_status_blocks_hidden_writes_before_post() {
         let mut presenter = presenter();
         let mut hardware = FakeHardware {
-            statuses: vec![Ok(status(BASE1, 0x0001 | 0x0004))],
+            statuses: (0..128)
+                .map(|_| Ok(status(BASE1, 0x0001 | 0x0004)))
+                .collect(),
             ..FakeHardware::default()
         };
         let mut display = display_session();
 
         assert!(present(&mut presenter, &mut hardware, &mut display).is_err());
         assert!(hardware.post_bases.is_empty());
-        assert_eq!(hardware.read_count, 1);
+        assert!(hardware.read_count > 1);
+    }
+
+    #[test]
+    fn transient_pending_status_settles_before_hidden_write() {
+        let mut presenter = presenter();
+        let mut hardware = FakeHardware {
+            statuses: vec![
+                Ok(status(BASE1, 0x0001 | 0x0004)),
+                Ok(status(BASE1, 0x0001)),
+                Ok(status(BASE2, 0x0001)),
+            ],
+            ..FakeHardware::default()
+        };
+        let mut display = display_session();
+
+        let stats = present(&mut presenter, &mut hardware, &mut display)
+            .expect("pending latch should settle before allocation");
+
+        assert_eq!(stats.buffer_index, 2);
+        assert_eq!(hardware.post_bases, [BASE2]);
+        assert_eq!(hardware.read_count, 3);
     }
 
     #[test]

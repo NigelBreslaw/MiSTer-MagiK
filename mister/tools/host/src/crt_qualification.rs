@@ -393,13 +393,22 @@ fn validate_trial_progress(status: &str, mode: CrtMode) -> Result<()> {
     if field("mode") != Some(mode.output) {
         return Err(format!("CRT trial status did not report {}", mode.output).into());
     }
-    for name in ["frames", "flips"] {
+    let mut values = [0_u64; 2];
+    for (index, name) in ["frames", "flips"].into_iter().enumerate() {
         let value = field(name)
             .ok_or_else(|| format!("CRT trial status omitted {name}"))?
             .parse::<u64>()?;
         if value == 0 {
             return Err(format!("CRT trial status reported no advancing {name}").into());
         }
+        values[index] = value;
+    }
+    if values[0] != values[1] {
+        return Err(format!(
+            "CRT trial left a latch flip incomplete: frames={} flips={}",
+            values[0], values[1]
+        )
+        .into());
     }
     Ok(())
 }
@@ -657,6 +666,11 @@ mod tests {
         .is_ok());
         assert!(validate_trial_progress(
             "crt_trial_status_v2 schema=2 ok=1 mode=crt-240p60 duration_ms=30000 frames=1800 flips=0 reason=none",
+            mode,
+        )
+        .is_err());
+        assert!(validate_trial_progress(
+            "crt_trial_status_v2 schema=2 ok=1 mode=crt-240p60 duration_ms=30000 frames=1800 flips=1799 reason=none",
             mode,
         )
         .is_err());
