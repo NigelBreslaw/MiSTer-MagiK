@@ -49,11 +49,15 @@ pub const fn ui_fpga_scaled_mode(
     scan_h: u16,
     direct_video: bool,
 ) -> FramebufferRouteMode {
-    let (hbp, vbp) = if direct_video && scan_w == 640 && scan_h == 480 {
-        // The 31 kHz NTSC menu route uses standard VGA 640x480 timing.
-        // Direct-video routing subtracts the FPGA's fixed 3/2-pixel border,
-        // producing the required 45/31-pixel framebuffer origin.
-        (48, 33)
+    let (hbp, vbp) = if direct_video {
+        // Main's standard Menu Direct Video timings. Route programming
+        // subtracts the FPGA's fixed 3/2-pixel border from these porches.
+        match (scan_w, scan_h) {
+            (640, 240 | 288) => (70, 14),
+            (640, 480) => (48, 33),
+            (640, 576) => (48, 42),
+            _ => (3, 2),
+        }
     } else {
         (3, 2)
     };
@@ -88,16 +92,35 @@ mod tests {
     }
 
     #[test]
-    fn crt_480p_uses_standard_vga_back_porches() {
-        let route = LauncherFramebufferRoute::for_scan(640, 480, true);
+    fn crt_modes_use_main_direct_video_back_porches_and_framebuffer_origins() {
+        for (scan_h, hbp, vbp, xoff, yoff) in [
+            (240, 70, 14, 67, 12),
+            (288, 70, 14, 67, 12),
+            (480, 48, 33, 45, 31),
+            (576, 48, 42, 45, 40),
+        ] {
+            let route = LauncherFramebufferRoute::for_scan(640, scan_h, true);
+            let mode = route.mode();
 
-        assert_eq!(route.mode().hbp, 48);
-        assert_eq!(route.mode().vbp, 33);
+            assert_eq!((mode.hact, mode.vact), (640, scan_h));
+            assert_eq!((mode.hbp, mode.vbp), (hbp, vbp));
+            assert_eq!((mode.hbp as i32 - 3, mode.vbp as i32 - 2), (xoff, yoff));
+        }
     }
 
     #[test]
-    fn hdmi_480p_does_not_use_direct_video_back_porches() {
-        let route = LauncherFramebufferRoute::for_scan(640, 480, false);
+    fn non_direct_video_routes_keep_neutral_back_porches() {
+        for scan_h in [240, 288, 480, 576] {
+            let route = LauncherFramebufferRoute::for_scan(640, scan_h, false);
+
+            assert_eq!(route.mode().hbp, 3);
+            assert_eq!(route.mode().vbp, 2);
+        }
+    }
+
+    #[test]
+    fn unknown_direct_video_geometry_keeps_neutral_back_porches() {
+        let route = LauncherFramebufferRoute::for_scan(960, 540, true);
 
         assert_eq!(route.mode().hbp, 3);
         assert_eq!(route.mode().vbp, 2);
