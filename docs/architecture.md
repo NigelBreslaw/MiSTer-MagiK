@@ -89,18 +89,21 @@ conversion:
   1366 pixels wide or 900 pixels high use half width and height, so 1366x768
   renders at 683x384 and 1920x1080 renders at 960x540. Custom modes follow the
   same rule; the qualified hidden-slot maximum is 1366x768.
-- HDMI Slint renders the planned launcher framebuffer into cached RAM. Every
-  CRT route instead composes Slint, Rust Arcade rows, screensavers, and overlays
-  into one authoritative 640×480 cached RGB565 frame.
-- CRT presentation preserves all 640 horizontal pixels and converts only the
-  vertical axis with centred nearest-row sampling into mode-native
-  640×240/288/480/576 scanout. Dirty source rectangles map to exact destination
-  bands; both hidden latch slots and diagnostic `/dev/fb0` use the same
-  transform. Native scanout geometry, not composition geometry, is the
-  authoritative framebuffer capture geometry.
+- HDMI Slint renders the planned launcher framebuffer into cached RAM. CRT
+  routes compose Slint, Rust Arcade rows, screensavers, and overlays into one
+  route-owned cached RGB565 frame: 640×480 for 240p/480p, 640×288 for 288p,
+  and 640×576 for 576p.
+- CRT presentation preserves all 640 horizontal pixels. Only 240p converts the
+  vertical axis, using centred nearest-row sampling from 480 to 240 rows.
+  Dirty source rectangles map to exact destination bands there; 288p, 480p,
+  and 576p use identity presentation and damage mapping. Both hidden latch
+  slots and diagnostic `/dev/fb0` use the same route plan. Native scanout
+  geometry is the authoritative framebuffer capture geometry.
 - CRT and HDMI routes use Press Start 2P for Slint text and the custom Rust
-  games renderer. Lilliput Steps remains embedded and licensed for future CRT
-  design work.
+  games renderer. Native PAL routes select renamed OFL-derived families whose
+  glyph outlines and vertical metrics are scaled 3:5 for 288p and 6:5 for
+  576p while horizontal advances remain unchanged. Lilliput Steps remains
+  embedded and licensed for future CRT design work.
 - Rust sends the FPGA `SET_FBUF` route so buffer 0 is scanned to HDMI. For CRT,
   the FPGA receives a framebuffer already matching the full active raster; its
   OSD path is a direct overlay and is not relied on for UI scaling.
@@ -108,12 +111,14 @@ conversion:
   RBF and stock-kernel plugin support are available. It copies complete cached
   RGB565 frames into scanout-slot-module hidden slots, posts the selected physical
   address before vblank, then waits for vblank only as the pacing boundary for
-  the next frame. A latch readiness failure enters a compatibility screen and
-  emits machine-readable failure records; it never presents the normal launcher
-  through `/dev/fb0`. The single-frame `/dev/fb0` dirty-copy path is an explicit
-  diagnostic renderer selected only with `MISTER_PRESENT_BACKEND=fb0-dirty`;
-  that path intentionally keeps the older order: wait for vblank, then
-  dirty-copy to `/dev/fb0`.
+  the next frame. Hidden-slot writes follow copy → overlay → publish → post;
+  ARM publication uses a full-system store barrier to drain write-combined
+  stores before the FPGA latch sees the slot. A latch readiness failure enters
+  a compatibility screen and emits machine-readable failure records; it never
+  presents the normal launcher through `/dev/fb0`. The single-frame `/dev/fb0`
+  dirty-copy path is an explicit diagnostic renderer selected only with
+  `MISTER_PRESENT_BACKEND=fb0-dirty`; that path intentionally keeps the older
+  order: wait for vblank, then dirty-copy to `/dev/fb0`.
   Latch mode keeps a larger late-frame headroom window than `/dev/fb0` for
   inactive or non-motion frames, but active Home horizontal motion bypasses the
   pre-render deferral. Holding left/right or running the Home pan window keeps

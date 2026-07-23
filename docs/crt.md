@@ -15,12 +15,12 @@ The maintained Main fork supports two ways to activate the shared CRT path.
 `direct_video=1`; `menu_pal` and `forced_scandoubler` then select one of the
 four built-in progressive Menu modes:
 
-| Resolved mode | 640×480 composition → RGB565 scanout | Pixel clock | Horizontal timing (active/front/sync/back) | Vertical timing (active/front/sync/back) | Nominal rates |
+| Resolved mode | RGB565 composition → scanout | Pixel clock | Horizontal timing (active/front/sync/back) | Vertical timing (active/front/sync/back) | Nominal rates |
 | --- | --- | ---: | --- | --- | --- |
 | `crt-240p60` | 640×480 → 640×240 | 12.587 MHz | 640/30/60/70 | 240/4/4/14 | 15.7338 kHz / 60.052 Hz |
-| `crt-288p50` | 640×480 → 640×288 | 12.587 MHz | 640/30/60/70 | 288/6/4/14 | 15.7338 kHz / 50.429 Hz |
+| `crt-288p50` | 640×288 → 640×288 | 12.587 MHz | 640/30/60/70 | 288/6/4/14 | 15.7338 kHz / 50.429 Hz |
 | `crt-480p60` | 640×480 → 640×480 | 25.175 MHz | 640/16/96/48 | 480/8/4/33 | 31.4688 kHz / 59.940 Hz |
-| `crt-576p50` | 640×480 → 640×576 | 25.175 MHz | 640/16/96/48 | 576/2/4/42 | 31.4688 kHz / 50.431 Hz |
+| `crt-576p50` | 640×576 → 640×576 | 25.175 MHz | 640/16/96/48 | 576/2/4/42 | 31.4688 kHz / 50.431 Hz |
 
 Both sync polarities are negative. These values come from Main's standard
 Menu Direct Video table; MagiK consumes the resolved name only to choose its
@@ -28,40 +28,58 @@ scanout and scan geometry. It does not synthesize or alter those timings.
 
 Composition dimensions, scanout dimensions, scan timing, and destination
 placement are separate. Slint, Rust Arcade rows, screensavers, and overlays
-converge in one cached 640×480 RGB565 composition. A centred nearest-row
-vertical transform writes the mode-native scanout buffer while preserving all
-640 horizontal pixels. The scan timing describes the analogue raster owned by
-Main and Menu. The inclusive destination rectangle posts the complete native
-scanout raster into Menu's scan space:
+converge in one cached RGB565 composition owned by the resolved route. Only
+240p uses the centred nearest-row vertical transform, mapping 480 composition
+rows to 240 scanout rows while preserving all 640 horizontal pixels. Both PAL
+routes compose natively, so presentation and dirty-row mapping are identity
+operations. The scan timing describes the analogue raster owned by Main and
+Menu. The inclusive destination rectangle posts the complete native scanout
+raster into Menu's scan space:
 
 | Mode | Composition | RGB565 scanout/capture | Destination rectangle |
 | --- | --- | --- | --- |
 | `crt-240p60` | 640×480 | 640×240 | `(67,706,12,251)` |
-| `crt-288p50` | 640×480 | 640×288 | `(67,706,12,299)` |
+| `crt-288p50` | 640×288 | 640×288 | `(67,706,12,299)` |
 | `crt-480p60` | 640×480 | 640×480 | `(45,684,31,510)` |
-| `crt-576p50` | 640×480 | 640×576 | `(45,684,40,615)` |
+| `crt-576p50` | 640×576 | 640×576 | `(45,684,40,615)` |
 
 The FPGA OSD/framebuffer path is a direct scan overlay, not a general-purpose
 product scaler. Exact 2× relationships such as 320×144→640×288 or
-320×288→640×576 are therefore not the UI objective. MagiK performs the
-vertical conversion in userspace and gives the FPGA a framebuffer that already
-matches the complete destination raster. Authoritative framebuffer captures
-are consequently 640×240, 640×288, 640×480, or 640×576, not 640×480 source
-captures.
+320×288→640×576 are therefore not the UI objective. MagiK gives the FPGA a
+framebuffer that already matches the complete destination raster, apart from
+the deliberate 480→240 conversion on the 240p route. Authoritative framebuffer
+captures are consequently 640×240, 640×288, 640×480, or 640×576.
 
 Route-owned safe areas affect content, not the full-screen background. The
-288p master canvas reserves 34 composition rows at the top and 22 at the
-bottom; the 576p canvas reserves 64 pixels at the right. The 240p and 480p
-routes use the complete composition. The 15 kHz routes use larger 16-pixel body
-text, 32-pixel headings, 2-pixel borders, and an 8-pixel grid so important
-strokes survive conversion. The 31 kHz routes retain the fine 640×480 metrics.
+288p canvas reserves 20 native rows at the top and 13 at the bottom, producing
+a 640×255 content rectangle; the 576p canvas reserves 64 pixels at the right.
+The 240p and 480p routes use the complete composition. The 288p route retains
+the 15 kHz horizontal metrics but uses 5-line vertical grid units, 2×1
+axis-specific border tokens, 14-line rows, a 29-line header, and a 24-line
+footer. The 576p route uses 4×5 grid units, 1-line borders, 29-line rows, a
+38-line header, and a 29-line footer. The 60 Hz routes remain unchanged.
+
+PAL text uses OFL-derived Press Start assets with horizontal advances
+unchanged and glyph outlines plus vertical metrics scaled by 3:5 for 288p and
+6:5 for 576p. Slint and the Rust Arcade renderer select the same route-owned
+family. This compensates for the physical PAL pixel aspect without relying on
+an anisotropic Slint software-renderer transform.
+
+Hidden RGB565 slot publication has a strict copy → overlay → publish → latch
+order. On ARM, `publish_writes()` issues a full-system store barrier after
+write-combined framebuffer writes and before posting the FPGA latch. Route
+fallback and fixed-animation pacing use Main's resolved periods: 16,652 µs
+for 240p, 19,830 µs for 288p, 16,683 µs for 480p, and 19,829 µs for 576p.
 
 An attended trial moving the 576p destination bottom from line 615 through line
 607 did not move or remove the unstable coloured pixels observed on the final
 physical raster row. A coordinated Main trial that transferred that row into
-vertical blanking also left the fault unchanged. The evidence therefore rules
-out framebuffer destination height and Main's transformed active/blanking split
-as causes; the standard Main timing and full-height destination remain in use.
+vertical blanking also left the fault unchanged. A subsequent write-publication
+barrier trial did not eliminate the larger lower-screen motion glitch visible
+on the physical TV. Static USB Video output remained clean. This narrows the
+fault to a motion-sensitive PAL path but does not prove a Main, FPGA, display,
+or application cause. The standard Main timing and full-height destinations
+remain in use while native PAL composition is qualified.
 
 Fresh CRT configuration defaults to native Analog IO VGA at 240p60. The
 installer separately offers automatic HDMI-DAC detection, native VGA at
@@ -88,11 +106,12 @@ framebuffer route override across that handoff.
 
 ## Qualification
 
-The bounded `crt_trial` scene exercises composition conversion and native
+The bounded `crt_trial` scene exercises route-owned composition and native
 RGB565 publication through the shared
 protocol-v2 latch for exactly 30 seconds. It requires Main to report one of the
 four standard CRT modes, advancing flip counters, and no presentation failure.
-It never switches an FPGA output route.
+Matching top and bottom frame markers expose mixed-frame publication
+immediately. It never switches an FPGA output route.
 
 Morph 4K's analog bridge is useful for checking the emitted clock, totals,
 porches, sync widths, polarities, and horizontal/vertical rates without owning
