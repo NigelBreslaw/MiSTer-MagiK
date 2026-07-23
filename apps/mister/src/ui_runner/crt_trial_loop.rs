@@ -188,6 +188,7 @@ fn finish_crt_trial(
 
 fn render_crt_trial_frame(dst: &mut [Rgb565Pixel], width: usize, height: usize, frame: u64) {
     debug_assert_eq!(dst.len(), width * height);
+    const BORDER: usize = 2;
     const BARS: [u16; 8] = [
         0xffff, 0xffe0, 0x07ff, 0x07e0, 0xf81f, 0xf800, 0x001f, 0x0000,
     ];
@@ -207,6 +208,13 @@ fn render_crt_trial_frame(dst: &mut [Rgb565Pixel], width: usize, height: usize, 
     for y in 0..height {
         for dx in 0..3 {
             dst[y * width + (marker_x + dx) % width] = Rgb565Pixel(0xffff);
+        }
+    }
+    for y in 0..height {
+        for x in 0..width {
+            if x < BORDER || x >= width - BORDER || y < BORDER || y >= height - BORDER {
+                dst[y * width + x] = Rgb565Pixel(0xffff);
+            }
         }
     }
 }
@@ -257,6 +265,9 @@ mod tests {
             assert_eq!(first[(height / 2) * 640 + 32].0, 0x8410);
             assert_eq!(first[50 * 640].0, 0xffff);
             assert_eq!(second[50 * 640 + 5].0, 0xffff);
+            assert_eq!(first[height * 640 - 1].0, 0xffff);
+            assert_eq!(first[(height - 1) * 640 + 320].0, 0xffff);
+            assert_eq!(first[100 * 640 + 639].0, 0xffff);
             assert_ne!(first, second);
         }
     }
