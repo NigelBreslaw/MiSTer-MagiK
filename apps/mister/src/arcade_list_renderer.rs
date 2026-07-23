@@ -110,11 +110,12 @@ impl ArcadeListStyle {
             badge_fill: Pixel(0x0040e5e7),
             badge_fill_565: rgb565_from_rgb888(0x40, 0xe5, 0xe7),
             badge_text: Pixel(0x0003132d),
+            // PAL routes keep horizontal advances while selecting vertically
+            // derived glyph outlines that match their native scanline density.
             typeface: match metrics.font_family {
+                CrtFontFamily::PressStart2PPal288 => ConsoleTypeface::PressStart2PPal288,
                 CrtFontFamily::PressStart2PPal576 => ConsoleTypeface::PressStart2PPal576,
-                CrtFontFamily::PressStart2P | CrtFontFamily::PressStart2PPal288 => {
-                    ConsoleTypeface::PressStart2P
-                }
+                CrtFontFamily::PressStart2P => ConsoleTypeface::PressStart2P,
             },
             crt_palette: true,
         }

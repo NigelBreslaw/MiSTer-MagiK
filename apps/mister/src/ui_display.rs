@@ -88,7 +88,7 @@ impl CrtUiMetrics {
 
     pub const fn for_display(display: &UiDisplay) -> Self {
         match display.output_route {
-            ResolvedOutputRoute::Crt240p60 | ResolvedOutputRoute::Crt288p50 => Self {
+            ResolvedOutputRoute::Crt240p60 => Self {
                 grid_x: 8,
                 grid_y: 8,
                 border_x: 2,
@@ -101,6 +101,20 @@ impl CrtUiMetrics {
                 header_height: 48,
                 footer_height: 40,
                 font_family: CrtFontFamily::PressStart2P,
+            },
+            ResolvedOutputRoute::Crt288p50 => Self {
+                grid_x: 8,
+                grid_y: 5,
+                border_x: 2,
+                border_y: 1,
+                body_font: 16,
+                heading_font: 32,
+                card_title_font: 24,
+                card_detail_font: 16,
+                game_row_height: 14,
+                header_height: 29,
+                footer_height: 24,
+                font_family: CrtFontFamily::PressStart2PPal288,
             },
             ResolvedOutputRoute::Crt576p50 => Self {
                 grid_x: 4,
@@ -202,8 +216,8 @@ impl ResolvedOutputRoute {
     pub const fn content_insets(self) -> CrtContentInsets {
         match self {
             Self::Crt288p50 => CrtContentInsets {
-                top: 34,
-                bottom: 22,
+                top: 20,
+                bottom: 13,
                 left: 0,
                 right: 0,
             },
@@ -244,10 +258,8 @@ impl ResolvedOutputRoute {
 
     const fn composition_geometry(self, framebuffer: (usize, usize)) -> (usize, usize) {
         match self {
-            Self::Crt576p50 => framebuffer,
-            Self::Crt240p60 | Self::Crt288p50 | Self::Crt480p60 => {
-                (CRT_COMPOSITION_W, CRT_COMPOSITION_H)
-            }
+            Self::Crt288p50 | Self::Crt576p50 => framebuffer,
+            Self::Crt240p60 | Self::Crt480p60 => (CRT_COMPOSITION_W, CRT_COMPOSITION_H),
             Self::Hdmi => framebuffer,
         }
     }
@@ -1309,10 +1321,10 @@ mod tests {
             let ui = UiDisplay::for_plan(plan);
             assert_eq!(
                 (ui.render_w(), ui.render_h()),
-                if route == ResolvedOutputRoute::Crt576p50 {
-                    (640, 576)
-                } else {
-                    (640, 480)
+                match route {
+                    ResolvedOutputRoute::Crt288p50 => (640, 288),
+                    ResolvedOutputRoute::Crt576p50 => (640, 576),
+                    _ => (640, 480),
                 }
             );
             assert!(plan.direct_video);
@@ -1360,11 +1372,11 @@ mod tests {
                 ResolvedOutputRoute::Crt288p50,
                 CrtContentRect {
                     x: 0,
-                    y: 34,
+                    y: 20,
                     width: 640,
-                    height: 424,
+                    height: 255,
                 },
-                (8, 8, 2, 2, 16, 32, 24, 16, 24, 48, 40),
+                (8, 5, 2, 1, 16, 32, 24, 16, 14, 29, 24),
             ),
             (
                 ResolvedOutputRoute::Crt480p60,
@@ -1413,14 +1425,12 @@ mod tests {
                 ),
                 expected_metrics
             );
-            assert_eq!(
-                metrics.font_family,
-                if route == ResolvedOutputRoute::Crt576p50 {
-                    CrtFontFamily::PressStart2PPal576
-                } else {
-                    CrtFontFamily::PressStart2P
-                }
-            );
+            let expected_font = match route {
+                ResolvedOutputRoute::Crt288p50 => CrtFontFamily::PressStart2PPal288,
+                ResolvedOutputRoute::Crt576p50 => CrtFontFamily::PressStart2PPal576,
+                _ => CrtFontFamily::PressStart2P,
+            };
+            assert_eq!(metrics.font_family, expected_font);
         }
     }
 
