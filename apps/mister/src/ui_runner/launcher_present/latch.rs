@@ -228,7 +228,9 @@ pub(in crate::ui_runner) struct FpgaVblankLatchHiddenPresentStats {
     pub(in crate::ui_runner) status_us: u64,
     pub(in crate::ui_runner) set_supported: bool,
     pub(in crate::ui_runner) status_supported: bool,
+    pub(in crate::ui_runner) posted_sequence: u16,
     pub(in crate::ui_runner) flip_count: u16,
+    pub(in crate::ui_runner) drop_count: u16,
 }
 
 impl FpgaVblankLatchHiddenPresenter<PluginLatchFrameBuffers> {
@@ -481,6 +483,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         status_us = status_us.saturating_add(status_start.elapsed().as_micros() as u64);
         let status_supported = after_status.supported();
         let flip_count = after_status.flip_count;
+        let drop_count = after_status.drop_count;
 
         if !set_supported || !status_supported {
             self.latch_state.mark_attempt_failed(buffer_index);
@@ -533,7 +536,9 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             status_us,
             set_supported,
             status_supported,
+            posted_sequence: sequence,
             flip_count,
+            drop_count,
         })
     }
 

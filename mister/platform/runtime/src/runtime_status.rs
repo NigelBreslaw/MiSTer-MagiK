@@ -16,6 +16,7 @@ const EVENTS_PATH: &str = "/tmp/mister-magik/events.jsonl";
 pub struct LauncherStatus<'a> {
     pub scene: &'a str,
     pub screen: &'a str,
+    pub output_route: &'a str,
     pub frames: u64,
     pub idle: bool,
     pub idle_loops: u64,
@@ -29,6 +30,14 @@ pub struct LauncherStatus<'a> {
     pub rolling_present_us: u64,
     pub rolling_rows: u64,
     pub last_frame_ms_ago: u64,
+    pub vsync_source: &'a str,
+    pub vsync_period_us: u64,
+    pub present_backend: &'a str,
+    pub present_status: &'a str,
+    pub present_buffer: u8,
+    pub latch_sequence: u16,
+    pub latch_flip_count: u16,
+    pub latch_drop_count: u16,
     pub catalog_ready: bool,
     pub catalog_games: usize,
     pub catalog_systems: usize,
@@ -242,6 +251,7 @@ fn launcher_status_value(status: LauncherStatus<'_>, ts_unix_ms: u128, pid: u32)
     insert!("mode", "ui");
     insert!("scene", status.scene);
     insert!("screen", status.screen);
+    insert!("output_route", status.output_route);
     insert!("frames", status.frames);
     insert!("idle", status.idle);
     insert!("idle_loops", status.idle_loops);
@@ -255,6 +265,14 @@ fn launcher_status_value(status: LauncherStatus<'_>, ts_unix_ms: u128, pid: u32)
     insert!("rolling_present_us", status.rolling_present_us);
     insert!("rolling_rows", status.rolling_rows);
     insert!("last_frame_ms_ago", status.last_frame_ms_ago);
+    insert!("vsync_source", status.vsync_source);
+    insert!("vsync_period_us", status.vsync_period_us);
+    insert!("present_backend", status.present_backend);
+    insert!("present_status", status.present_status);
+    insert!("present_buffer", status.present_buffer);
+    insert!("latch_sequence", status.latch_sequence);
+    insert!("latch_flip_count", status.latch_flip_count);
+    insert!("latch_drop_count", status.latch_drop_count);
     insert!("catalog_ready", status.catalog_ready);
     insert!("catalog_games", status.catalog_games);
     insert!("catalog_systems", status.catalog_systems);
@@ -598,6 +616,7 @@ mod tests {
             LauncherStatus {
                 scene: "launcher",
                 screen: "home",
+                output_route: "crt-576p50",
                 frames: 42,
                 idle: true,
                 idle_loops: 12,
@@ -611,6 +630,14 @@ mod tests {
                 rolling_present_us: 5,
                 rolling_rows: 6,
                 last_frame_ms_ago: 7,
+                vsync_source: "vsync",
+                vsync_period_us: 19_829,
+                present_backend: "fpga-vblank-latch-hidden",
+                present_status: "ok",
+                present_buffer: 2,
+                latch_sequence: 41,
+                latch_flip_count: 40,
+                latch_drop_count: 0,
                 catalog_ready: true,
                 catalog_games: 9014,
                 catalog_systems: 13,
@@ -806,6 +833,12 @@ mod tests {
         assert_eq!(value["mode"], "ui");
         assert_eq!(value["scene"], "launcher");
         assert_eq!(value["screen"], "home");
+        assert_eq!(value["output_route"], "crt-576p50");
+        assert_eq!(value["vsync_period_us"], 19_829);
+        assert_eq!(value["present_backend"], "fpga-vblank-latch-hidden");
+        assert_eq!(value["latch_sequence"], 41);
+        assert_eq!(value["latch_flip_count"], 40);
+        assert_eq!(value["latch_drop_count"], 0);
         assert_eq!(value["frames"], 42);
         assert_eq!(value["idle"], true);
         assert_eq!(value["idle_loops"], 12);
@@ -886,6 +919,7 @@ mod tests {
         write_launcher_status(LauncherStatus {
             scene: "launcher",
             screen: "arcade",
+            output_route: "crt-288p50",
             frames: 7,
             idle: false,
             idle_loops: 0,
@@ -899,6 +933,14 @@ mod tests {
             rolling_present_us: 55,
             rolling_rows: 66,
             last_frame_ms_ago: 1,
+            vsync_source: "fallback",
+            vsync_period_us: 19_830,
+            present_backend: "fpga-vblank-latch-hidden",
+            present_status: "ok",
+            present_buffer: 1,
+            latch_sequence: 7,
+            latch_flip_count: 6,
+            latch_drop_count: 0,
             catalog_ready: false,
             catalog_games: 12,
             catalog_systems: 2,

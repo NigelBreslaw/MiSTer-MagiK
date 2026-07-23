@@ -24,6 +24,7 @@ const FRAME_SLOW_SAMPLE_CAP: usize = 32;
 const PREVIEW_SCROLL_TRACE_FLUSH_ROWS: usize = 60;
 
 pub(super) struct LauncherFrameAccounting {
+    output_route: &'static str,
     fps_window_start: Instant,
     fps_frames: u64,
     prepare_us: u128,
@@ -63,6 +64,14 @@ pub(super) struct LauncherFrameAccounting {
     last_rolling_vsync_us: u64,
     last_rolling_present_us: u64,
     last_rolling_rows: u64,
+    last_vsync_source: &'static str,
+    last_vsync_period_us: u64,
+    last_present_backend: &'static str,
+    last_present_status: &'static str,
+    last_present_buffer: u8,
+    last_latch_sequence: u16,
+    last_latch_flip_count: u16,
+    last_latch_drop_count: u16,
     frame_budget_total: FrameBudgetAccumulator,
     frame_budget_window: FrameBudgetAccumulator,
     last_frame_budget_status: runtime_status::FrameBudgetStatus,
@@ -118,7 +127,9 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) main_present_request_us: u128,
     pub(super) main_present_set_vga_fb_us: u128,
     pub(super) main_present_wait_us: u64,
-    pub(super) main_present_route_us: u64,
+    pub(super) main_present_sequence: u16,
+    pub(super) main_present_flip_count: u16,
+    pub(super) main_present_drop_count: u16,
     pub(super) vsync_source: Option<VsyncPaceSource>,
     pub(super) vsync_period_us: u64,
     pub(super) vsync_miss_streak: u32,
@@ -313,7 +324,9 @@ impl LauncherFrameSnapshotBuilder {
             main_present_request_us: self.presentation.main_present_request_us,
             main_present_set_vga_fb_us: self.presentation.main_present_set_vga_fb_us,
             main_present_wait_us: self.presentation.main_present_wait_us,
-            main_present_route_us: self.presentation.main_present_route_us,
+            main_present_sequence: self.presentation.main_present_sequence,
+            main_present_flip_count: self.presentation.main_present_flip_count,
+            main_present_drop_count: self.presentation.main_present_drop_count,
             vsync_source: self.pacing.vsync_source,
             vsync_period_us: self.pacing.vsync_period_us,
             vsync_miss_streak: self.pacing.vsync_miss_streak,
@@ -499,7 +512,9 @@ struct PreviewScrollTraceRow {
     main_present_request_us: u128,
     main_present_set_vga_fb_us: u128,
     main_present_wait_us: u64,
-    main_present_route_us: u64,
+    main_present_sequence: u16,
+    main_present_flip_count: u16,
+    main_present_drop_count: u16,
     vsync_source: &'static str,
     vsync_period_us: u64,
     vsync_miss_streak: u32,
@@ -623,7 +638,9 @@ impl PreviewScrollTraceRow {
             self.main_present_request_us,
             self.main_present_set_vga_fb_us,
             self.main_present_wait_us,
-            self.main_present_route_us,
+            self.main_present_sequence,
+            self.main_present_flip_count,
+            self.main_present_drop_count,
             self.vsync_source,
             self.vsync_period_us,
             self.vsync_miss_streak,
@@ -739,7 +756,9 @@ fn preview_scroll_trace_row_from_frame(
         main_present_request_us: frame.main_present_request_us,
         main_present_set_vga_fb_us: frame.main_present_set_vga_fb_us,
         main_present_wait_us: frame.main_present_wait_us,
-        main_present_route_us: frame.main_present_route_us,
+        main_present_sequence: frame.main_present_sequence,
+        main_present_flip_count: frame.main_present_flip_count,
+        main_present_drop_count: frame.main_present_drop_count,
         vsync_source: frame
             .vsync_source
             .map(VsyncPaceSource::label)
@@ -896,8 +915,9 @@ impl std::fmt::Display for ArcadeUpdateTrace {
 }
 
 impl LauncherFrameAccounting {
-    pub(super) fn new(run_start: Instant) -> Self {
+    pub(super) fn new(run_start: Instant, output_route: &'static str) -> Self {
         Self {
+            output_route,
             fps_window_start: run_start,
             fps_frames: 0,
             prepare_us: 0,
@@ -937,6 +957,14 @@ impl LauncherFrameAccounting {
             last_rolling_vsync_us: 0,
             last_rolling_present_us: 0,
             last_rolling_rows: 0,
+            last_vsync_source: "none",
+            last_vsync_period_us: 0,
+            last_present_backend: "none",
+            last_present_status: "none",
+            last_present_buffer: 0,
+            last_latch_sequence: 0,
+            last_latch_flip_count: 0,
+            last_latch_drop_count: 0,
             frame_budget_total: FrameBudgetAccumulator::default(),
             frame_budget_window: FrameBudgetAccumulator::default(),
             last_frame_budget_status: runtime_status::FrameBudgetStatus {
@@ -1087,6 +1115,14 @@ impl LauncherFrameAccounting {
         self.record_first_copy(&frame, disp);
         self.accumulate_fps(&frame);
         self.accumulate_frame_budget(&frame);
+        self.last_vsync_source = vsync_source_label(frame.vsync_source);
+        self.last_vsync_period_us = frame.vsync_period_us;
+        self.last_present_backend = frame.main_present_backend.trace_label();
+        self.last_present_status = frame.main_present_status.trace_label();
+        self.last_present_buffer = frame.main_present_buffer;
+        self.last_latch_sequence = frame.main_present_sequence;
+        self.last_latch_flip_count = frame.main_present_flip_count;
+        self.last_latch_drop_count = frame.main_present_drop_count;
         self.record_stable_samples(frame.frames, disp);
         self.last_rendered_frame_at = frame.frame_t4;
         self.idle_loops_since_status = 0;
@@ -1799,6 +1835,7 @@ impl LauncherFrameAccounting {
         runtime_status::write_launcher_status(LauncherStatus {
             scene: "launcher",
             screen: screen_label(nav.screen),
+            output_route: self.output_route,
             frames,
             idle,
             idle_loops,
@@ -1812,6 +1849,14 @@ impl LauncherFrameAccounting {
             rolling_present_us,
             rolling_rows,
             last_frame_ms_ago,
+            vsync_source: self.last_vsync_source,
+            vsync_period_us: self.last_vsync_period_us,
+            present_backend: self.last_present_backend,
+            present_status: self.last_present_status,
+            present_buffer: self.last_present_buffer,
+            latch_sequence: self.last_latch_sequence,
+            latch_flip_count: self.last_latch_flip_count,
+            latch_drop_count: self.last_latch_drop_count,
             catalog_ready,
             catalog_games: catalog.len(),
             catalog_systems: catalog.systems.len(),
@@ -1909,8 +1954,10 @@ fn frame_tail_slack_us(frame: &LauncherPresentedFrame) -> u128 {
     u128::from(frame.vsync_period_us).saturating_sub(frame_wall_us)
 }
 
-fn should_defer_runtime_status_write(frame: &LauncherPresentedFrame) -> bool {
-    frame.status_write_due && frame.main_present_backend.is_latch()
+fn should_defer_runtime_status_write(_frame: &LauncherPresentedFrame) -> bool {
+    // Runtime status has no deferred flush path: suppressing this write would
+    // freeze heartbeat and presentation evidence while animation continued.
+    false
 }
 
 fn frame_analytics_mode_label(mode: FrameAnalyticsMode) -> &'static str {
@@ -2091,7 +2138,9 @@ mod tests {
             main_present_request_us: 0,
             main_present_set_vga_fb_us: 0,
             main_present_wait_us: 0,
-            main_present_route_us: 0,
+            main_present_sequence: 0,
+            main_present_flip_count: 0,
+            main_present_drop_count: 0,
             vsync_source: Some(VsyncPaceSource::Timeout),
             vsync_period_us: 16_667,
             vsync_miss_streak: 3,
@@ -2194,7 +2243,9 @@ mod tests {
                 main_present_request_us: frame.main_present_request_us,
                 main_present_set_vga_fb_us: frame.main_present_set_vga_fb_us,
                 main_present_wait_us: frame.main_present_wait_us,
-                main_present_route_us: frame.main_present_route_us,
+                main_present_sequence: frame.main_present_sequence,
+                main_present_flip_count: frame.main_present_flip_count,
+                main_present_drop_count: frame.main_present_drop_count,
                 arcade_update_label: frame.arcade_update_label,
             },
             status: LauncherFrameStatusData {
@@ -2422,20 +2473,20 @@ mod tests {
     }
 
     #[test]
-    fn low_slack_latch_frames_defer_runtime_status_writes() {
+    fn rendered_latch_frames_keep_runtime_status_live() {
         let start = Instant::now();
         let mut low_slack = presented_frame(46, start, 15_500);
         low_slack.status_write_due = true;
         low_slack.main_present_backend = LauncherPresentBackend::FpgaVblankLatchHidden;
 
         assert_eq!(frame_tail_slack_us(&low_slack), 1_167);
-        assert!(should_defer_runtime_status_write(&low_slack));
+        assert!(!should_defer_runtime_status_write(&low_slack));
 
         let mut enough_slack = presented_frame(47, start, 14_000);
         enough_slack.status_write_due = true;
         enough_slack.main_present_backend = LauncherPresentBackend::FpgaVblankLatchHidden;
         assert_eq!(frame_tail_slack_us(&enough_slack), 2_667);
-        assert!(should_defer_runtime_status_write(&enough_slack));
+        assert!(!should_defer_runtime_status_write(&enough_slack));
 
         let mut non_latch = presented_frame(48, start, 15_500);
         non_latch.status_write_due = true;
@@ -2492,7 +2543,7 @@ mod tests {
     #[test]
     fn slow_frame_samples_are_bounded_and_survive_recent_frame_clears() {
         let start = Instant::now();
-        let mut accounting = LauncherFrameAccounting::new(start);
+        let mut accounting = LauncherFrameAccounting::new(start, "crt-576p50");
         for frame in 0..40 {
             accounting.accumulate_frame_budget(&presented_frame(
                 frame,
@@ -2530,7 +2581,7 @@ mod tests {
     #[test]
     fn near_drop_frame_samples_are_retained_before_budget_miss() {
         let start = Instant::now();
-        let mut accounting = LauncherFrameAccounting::new(start);
+        let mut accounting = LauncherFrameAccounting::new(start, "crt-576p50");
         accounting.accumulate_frame_budget(&presented_frame(7, start, FRAME_NEAR_DROP_US));
 
         let status = accounting.current_frame_budget_status();
@@ -2561,7 +2612,7 @@ fn open_preview_scroll_trace() -> Option<PreviewScrollTrace> {
                 .ok()?;
             let mut file = BufWriter::with_capacity(64 * 1024, file);
             file.write_all(
-                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\thome_screen\thome_menu_token\thome_selected_token\thome_selected_index\thome_scroll_x\thome_scroll_max\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tdirect_preview_rows\tpresent_bytes\twasted_present_bytes\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\tpreview_fade_wall_us\tpreview_fade_cpu_us\tpreview_fade_pixels\tpreview_fade_rows\tpreview_fade_path\tpreview_fade_alpha_bucket\teffect_label_us\tpre_render_wait_us\tpost_present_wait_us\tpost_frame_tail_us\tvsync_us\tfb_present_us\tcached_present_us\thidden_compose_us\thidden_preview_compose_us\thidden_arcade_compose_us\tdirect_preview_present_us\tarcade_list_present_us\tmain_present_backend\tmain_present_status\tmain_present_buffer\tmain_present_hidden_copy_us\tmain_present_hidden_invalid_bytes\tmain_present_hidden_rect_count\tmain_present_hidden_catchup_bytes\tmain_present_hidden_full_copy\tmain_present_request_us\tmain_present_set_vga_fb_us\tmain_present_wait_us\tmain_present_route_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\tvsync_stale_hits\tvsync_wait_start_age_us\tvsync_accepted_hit_age_us\tframe_start_phase_us\tpresent_phase_us\thome_pan_present_active\thome_horizontal_input_held\tredraw_pending\twake_reasons_bits\tdirty_y0\tdirty_y1\tstatus_write_due\truntime_status_write_deferred\tframe_tail_slack_us\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\tstatus_write_duration_us\twall_us\tframe_finish_us\tpost_finish_tail_us\tsearch_index_state\tstartup_elapsed_us\tmonotonic_us\n",
+                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\thome_screen\thome_menu_token\thome_selected_token\thome_selected_index\thome_scroll_x\thome_scroll_max\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tdirect_preview_rows\tpresent_bytes\twasted_present_bytes\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\tpreview_fade_wall_us\tpreview_fade_cpu_us\tpreview_fade_pixels\tpreview_fade_rows\tpreview_fade_path\tpreview_fade_alpha_bucket\teffect_label_us\tpre_render_wait_us\tpost_present_wait_us\tpost_frame_tail_us\tvsync_us\tfb_present_us\tcached_present_us\thidden_compose_us\thidden_preview_compose_us\thidden_arcade_compose_us\tdirect_preview_present_us\tarcade_list_present_us\tmain_present_backend\tmain_present_status\tmain_present_buffer\tmain_present_hidden_copy_us\tmain_present_hidden_invalid_bytes\tmain_present_hidden_rect_count\tmain_present_hidden_catchup_bytes\tmain_present_hidden_full_copy\tmain_present_request_us\tmain_present_set_vga_fb_us\tmain_present_wait_us\tmain_present_sequence\tmain_present_flip_count\tmain_present_drop_count\tvsync_source\tvsync_period_us\tvsync_miss_streak\tvsync_stale_hits\tvsync_wait_start_age_us\tvsync_accepted_hit_age_us\tframe_start_phase_us\tpresent_phase_us\thome_pan_present_active\thome_horizontal_input_held\tredraw_pending\twake_reasons_bits\tdirty_y0\tdirty_y1\tstatus_write_due\truntime_status_write_deferred\tframe_tail_slack_us\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\tstatus_write_duration_us\twall_us\tframe_finish_us\tpost_finish_tail_us\tsearch_index_state\tstartup_elapsed_us\tmonotonic_us\n",
             )
             .map_err(|e| crate::ui_errln!("preview scroll trace: header write failed: {e}"))
             .ok()?;

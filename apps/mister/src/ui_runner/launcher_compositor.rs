@@ -230,7 +230,9 @@ pub(super) struct LauncherPresentResult {
     pub(super) main_present_request_us: u128,
     pub(super) main_present_set_vga_fb_us: u128,
     pub(super) main_present_wait_us: u64,
-    pub(super) main_present_route_us: u64,
+    pub(super) main_present_sequence: u16,
+    pub(super) main_present_flip_count: u16,
+    pub(super) main_present_drop_count: u16,
     pub(super) arcade_update_label: ArcadeUpdateTrace,
 }
 

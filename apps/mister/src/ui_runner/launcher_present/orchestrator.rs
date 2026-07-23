@@ -492,7 +492,9 @@ fn fb0_present_result(
         main_present_request_us: 0,
         main_present_set_vga_fb_us: 0,
         main_present_wait_us: 0,
-        main_present_route_us: 0,
+        main_present_sequence: 0,
+        main_present_flip_count: 0,
+        main_present_drop_count: 0,
         arcade_update_label: stats.arcade_update_label,
     }
 }
@@ -550,7 +552,9 @@ fn latch_present_result(
         main_present_request_us: stats.post_us + stats.set_vga_fb_us,
         main_present_set_vga_fb_us: stats.set_vga_fb_us,
         main_present_wait_us: stats.status_us,
-        main_present_route_us: u64::from(stats.flip_count),
+        main_present_sequence: stats.posted_sequence,
+        main_present_flip_count: stats.flip_count,
+        main_present_drop_count: stats.drop_count,
         arcade_update_label: ArcadeUpdateTrace::from_update(arcade_redraw_update.as_ref()),
     }
 }
@@ -580,7 +584,9 @@ fn empty_present_result() -> LauncherPresentResult {
         main_present_request_us: 0,
         main_present_set_vga_fb_us: 0,
         main_present_wait_us: 0,
-        main_present_route_us: 0,
+        main_present_sequence: 0,
+        main_present_flip_count: 0,
+        main_present_drop_count: 0,
         arcade_update_label: ArcadeUpdateTrace::None,
     }
 }

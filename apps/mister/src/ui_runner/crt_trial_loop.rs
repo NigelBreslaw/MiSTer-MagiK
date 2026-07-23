@@ -231,6 +231,15 @@ fn render_crt_trial_frame(
             dst[y * width + x] = Rgb565Pixel(0xffff);
         }
     }
+    render_frame_code_band(
+        dst,
+        width,
+        height,
+        frame,
+        content_left,
+        content_right,
+        BORDER,
+    );
     for y in 0..height {
         for x in content_left..=content_right {
             if x < content_left + BORDER
@@ -239,6 +248,41 @@ fn render_crt_trial_frame(
                 || y >= height - BORDER
             {
                 dst[y * width + x] = Rgb565Pixel(0xffff);
+            }
+        }
+    }
+}
+
+/// Draws the same frame identity at both raster edges so a mixed lower field
+/// is visible without relying on motion in the trial scene.
+fn render_frame_code_band(
+    dst: &mut [Rgb565Pixel],
+    width: usize,
+    height: usize,
+    frame: u64,
+    content_left: usize,
+    content_right: usize,
+    border: usize,
+) {
+    const CODE_BITS: usize = 16;
+    const BAND_HEIGHT: usize = 8;
+    if height < border * 2 + BAND_HEIGHT * 2 {
+        return;
+    }
+    let content_width = content_right - content_left + 1;
+    for (y0, y1) in [
+        (border, border + BAND_HEIGHT),
+        (height - border - BAND_HEIGHT, height - border),
+    ] {
+        for y in y0..y1 {
+            for x in content_left..=content_right {
+                let bit = ((x - content_left) * CODE_BITS / content_width).min(CODE_BITS - 1);
+                let value = if frame & (1 << bit) != 0 {
+                    0xffff
+                } else {
+                    0x0000
+                };
+                dst[y * width + x] = Rgb565Pixel(value);
             }
         }
     }
@@ -294,7 +338,25 @@ mod tests {
             assert_eq!(first[(height - 1) * 640 + 320].0, 0xffff);
             assert_eq!(first[100 * 640 + 639].0, 0xffff);
             assert_ne!(first, second);
+            assert_eq!(
+                &second[2 * 640..10 * 640],
+                &second[(height - 10) * 640..(height - 2) * 640]
+            );
         }
+    }
+
+    #[test]
+    fn frame_code_changes_and_matches_at_the_top_and_bottom() {
+        let mut first = vec![Rgb565Pixel(0); 640 * 288];
+        let mut second = first.clone();
+        render_crt_trial_frame(&mut first, 640, 288, 1, None);
+        render_crt_trial_frame(&mut second, 640, 288, 2, None);
+
+        assert_ne!(&first[2 * 640..10 * 640], &second[2 * 640..10 * 640]);
+        assert_eq!(
+            &second[2 * 640..10 * 640],
+            &second[(288 - 10) * 640..(288 - 2) * 640]
+        );
     }
 
     #[test]

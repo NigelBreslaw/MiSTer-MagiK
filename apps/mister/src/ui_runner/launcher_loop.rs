@@ -2279,7 +2279,7 @@ pub(super) fn run_launcher_loop(
     let mut first_render_logged = false;
     let mut first_vsync_logged = false;
     let mut first_launcher_frame_logged = false;
-    let mut frame_accounting = LauncherFrameAccounting::new(run_start);
+    let mut frame_accounting = LauncherFrameAccounting::new(run_start, ui.output_route().label());
     let mut arcade_entry_latency = ArcadeEntryLatencyTracker::from_env();
     let mut memory_guard = crate::memory_pressure::MemoryPressureGuard::from_env();
     let catalog_contention_quiet_previews = matches!(
@@ -2906,7 +2906,8 @@ pub(super) fn run_launcher_loop(
                 && arcade_navigation_ready(catalog_ready, &catalog)
             {
                 run_start = Instant::now();
-                frame_accounting = LauncherFrameAccounting::new(run_start);
+                frame_accounting =
+                    LauncherFrameAccounting::new(run_start, ui.output_route().label());
                 launcher_bench_active = true;
                 launcher_bench_waiting_for_initial_preview = false;
                 launcher_bench_next_step = run_start;
