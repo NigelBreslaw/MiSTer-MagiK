@@ -289,7 +289,7 @@ mod tests {
             vec![PathBuf::from("apps/mister/src/launcher.rs")],
         )
         .unwrap();
-        let plan = deployment.as_evidence_plan(Intent::Deliver);
+        let plan = deployment.as_evidence_plan(Intent::Deliver { local_main: false });
         assert_eq!(plan.operations.len(), 1);
         assert_eq!(plan.operations[0].risk, Risk::DeviceWrite);
         assert!(plan.operations[0]

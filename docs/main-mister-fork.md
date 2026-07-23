@@ -147,6 +147,10 @@ Runtime-only development delivery builds and transactionally replaces the app,
 then verifies it against the installed qualified Main, kernel module, and FPGA
 latch without rebuilding or overwriting those platform components.
 
+Use `scripts/agent deliver --local-main` for a Main-only development refresh.
+It forces the coherent platform transaction, builds and checks the clean local
+Main and kernel, and reuses the verified FPGA artifact from CI.
+
 When kernel or FPGA source changes select a platform delivery, it also builds
 and checks the clean local `mister-magik` branch, builds the app and kernel
 locally, reuses a verified FPGA artifact, regenerates the complete development
