@@ -120,7 +120,7 @@ impl ResolvedOutputRoute {
             Self::Crt240p60 => Some((320, 240)),
             Self::Crt288p50 => Some((384, 288)),
             Self::Crt480p60 => Some((640, 480)),
-            Self::Crt576p50 => Some((576, 490)),
+            Self::Crt576p50 => Some((576, 480)),
         }
     }
 }
@@ -924,7 +924,7 @@ mod tests {
             (0, 0, (640, 240), (320, 240), 640, 76_800),
             (0, 1, (640, 480), (640, 480), 1280, 307_200),
             (1, 0, (640, 288), (384, 288), 768, 110_592),
-            (1, 1, (640, 576), (576, 490), 1152, 282_240),
+            (1, 1, (640, 576), (576, 480), 1152, 276_480),
         ];
         for (pal, scandoubler, scan, framebuffer, stride, pixels) in direct_video_cases {
             let ini = format!(
@@ -1117,7 +1117,7 @@ mod tests {
                 "schema=1&output=crt-576p50",
                 ResolvedOutputRoute::Crt576p50,
                 (640, 576),
-                (576, 490),
+                (576, 480),
             ),
         ] {
             let plan =
@@ -1166,7 +1166,7 @@ mod tests {
             let plan = UiDisplayPlan::from_mister_ini_text_with_policy(ini, policy)
                 .expect("576p CRT plan");
 
-            assert_eq!((plan.fb_w, plan.fb_h), (576, 490));
+            assert_eq!((plan.fb_w, plan.fb_h), (576, 480));
             assert_eq!((plan.scan_w, plan.scan_h), (640, 576));
             assert_eq!(plan.fb_policy, UiFramebufferSizePolicy::Auto);
             assert!(plan.log_line().contains("scan_scaled=true"));
@@ -1370,7 +1370,7 @@ mod tests {
         .expect("pal plan");
         assert_eq!((pal31.output_w, pal31.output_h), (640, 576));
         assert_eq!((pal31.scan_w, pal31.scan_h), (640, 576));
-        assert_eq!((pal31.fb_w, pal31.fb_h), (576, 490));
+        assert_eq!((pal31.fb_w, pal31.fb_h), (576, 480));
         assert!(pal31.direct_video);
     }
 
