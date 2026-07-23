@@ -22,15 +22,37 @@ impl FramebufferRouteMode {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FramebufferPlacement {
+    pub left: u16,
+    pub top: u16,
+    pub width: u16,
+    pub height: u16,
+}
+
+impl FramebufferPlacement {
+    pub const fn from_mode(mode: FramebufferRouteMode) -> Self {
+        Self {
+            left: mode.hbp.saturating_sub(3),
+            top: mode.vbp.saturating_sub(2),
+            width: mode.hact,
+            height: mode.vact,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LauncherFramebufferRoute {
     mode: FramebufferRouteMode,
+    placement: FramebufferPlacement,
     set_vga_fb: bool,
 }
 
 impl LauncherFramebufferRoute {
     pub const fn for_scan(scan_w: u16, scan_h: u16, set_vga_fb: bool) -> Self {
+        let mode = ui_fpga_scaled_mode(scan_w, scan_h, set_vga_fb);
         Self {
-            mode: ui_fpga_scaled_mode(scan_w, scan_h, set_vga_fb),
+            mode,
+            placement: ui_fpga_placement(mode, set_vga_fb),
             set_vga_fb,
         }
     }
@@ -41,6 +63,10 @@ impl LauncherFramebufferRoute {
 
     pub const fn set_vga_fb(self) -> bool {
         self.set_vga_fb
+    }
+
+    pub const fn placement(self) -> FramebufferPlacement {
+        self.placement
     }
 }
 
@@ -66,6 +92,26 @@ pub const fn ui_fpga_scaled_mode(
         hbp,
         vact: scan_h,
         vbp,
+    }
+}
+
+const fn ui_fpga_placement(mode: FramebufferRouteMode, direct_video: bool) -> FramebufferPlacement {
+    let default = FramebufferPlacement::from_mode(mode);
+    if !direct_video {
+        return default;
+    }
+    match (mode.hact, mode.vact) {
+        // The 288p capture path expands a full-height destination beyond the
+        // visible raster. Inset by eight lines on each edge.
+        (640, 288) => FramebufferPlacement {
+            top: default.top + 8,
+            height: 272,
+            ..default
+        },
+        // The 576p route already has the correct width and vertical scaling,
+        // but its porch-derived horizontal displacement clips the right edge.
+        (640, 576) => FramebufferPlacement { left: 0, ..default },
+        _ => default,
     }
 }
 
@@ -105,6 +151,54 @@ mod tests {
             assert_eq!((mode.hact, mode.vact), (640, scan_h));
             assert_eq!((mode.hbp, mode.vbp), (hbp, vbp));
             assert_eq!((mode.hbp as i32 - 3, mode.vbp as i32 - 2), (xoff, yoff));
+        }
+    }
+
+    #[test]
+    fn crt_routes_apply_only_the_observed_288p_and_576p_placement_corrections() {
+        let expected = [
+            (
+                240,
+                FramebufferPlacement {
+                    left: 67,
+                    top: 12,
+                    width: 640,
+                    height: 240,
+                },
+            ),
+            (
+                288,
+                FramebufferPlacement {
+                    left: 67,
+                    top: 20,
+                    width: 640,
+                    height: 272,
+                },
+            ),
+            (
+                480,
+                FramebufferPlacement {
+                    left: 45,
+                    top: 31,
+                    width: 640,
+                    height: 480,
+                },
+            ),
+            (
+                576,
+                FramebufferPlacement {
+                    left: 0,
+                    top: 40,
+                    width: 640,
+                    height: 576,
+                },
+            ),
+        ];
+        for (scan_h, placement) in expected {
+            assert_eq!(
+                LauncherFramebufferRoute::for_scan(640, scan_h, true).placement(),
+                placement
+            );
         }
     }
 
