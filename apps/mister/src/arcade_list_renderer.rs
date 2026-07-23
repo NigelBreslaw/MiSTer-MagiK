@@ -67,6 +67,7 @@ struct ArcadeListStyle {
     badge_fill_565: Rgb565Pixel,
     badge_text: Pixel,
     typeface: ConsoleTypeface,
+    crt_palette: bool,
 }
 
 impl ArcadeListStyle {
@@ -88,6 +89,7 @@ impl ArcadeListStyle {
             badge_fill_565: ARCADE_NEW_BADGE_FILL_565,
             badge_text: ARCADE_NEW_BADGE_TEXT,
             typeface: ConsoleTypeface::PressStart2P,
+            crt_palette: false,
         }
     }
 
@@ -109,6 +111,7 @@ impl ArcadeListStyle {
             badge_fill_565: rgb565_from_rgb888(0x40, 0xe5, 0xe7),
             badge_text: Pixel(0x0003132d),
             typeface: ConsoleTypeface::PressStart2P,
+            crt_palette: true,
         }
     }
 }
@@ -798,9 +801,7 @@ impl ArcadeListRenderer {
                     self.copy_surface_rect_to_fb0(disp, x, y, w, h);
                 }
                 ArcadeListPresentKind::Inverted => {
-                    if self.style.typeface == ConsoleTypeface::LilliputSteps
-                        || arcade_selection_inversion_enabled()
-                    {
+                    if self.style.crt_palette || arcade_selection_inversion_enabled() {
                         self.copy_inverted_surface_rect_to_fb0(disp, x, y, w, h);
                     } else {
                         self.copy_surface_rect_to_fb0(disp, x, y, w, h);
@@ -974,9 +975,7 @@ impl ArcadeListRenderer {
                     self.compose_surface_rect_to_cached(target, x, y, w, h);
                 }
                 ArcadeListPresentKind::Inverted => {
-                    if self.style.typeface == ConsoleTypeface::LilliputSteps
-                        || arcade_selection_inversion_enabled()
-                    {
+                    if self.style.crt_palette || arcade_selection_inversion_enabled() {
                         self.compose_inverted_surface_rect_to_cached(target, x, y, w, h);
                     } else {
                         self.compose_surface_rect_to_cached(target, x, y, w, h);
@@ -1008,9 +1007,7 @@ impl ArcadeListRenderer {
                     self.copy_surface_rect_to_hidden(hidden, x, y, w, h);
                 }
                 ArcadeListPresentKind::Inverted => {
-                    if self.style.typeface == ConsoleTypeface::LilliputSteps
-                        || arcade_selection_inversion_enabled()
-                    {
+                    if self.style.crt_palette || arcade_selection_inversion_enabled() {
                         self.copy_inverted_surface_rect_to_hidden(hidden, x, y, w, h);
                     } else {
                         self.copy_surface_rect_to_hidden(hidden, x, y, w, h);
@@ -1253,7 +1250,7 @@ impl ArcadeListRenderer {
         let title = self
             .title_font
             .clipped_text(&item.title, self.width.saturating_sub(reserved));
-        let gradient = if self.style.typeface == ConsoleTypeface::LilliputSteps {
+        let gradient = if self.style.crt_palette {
             TextGradient::new(self.style.text, self.style.text, self.style.text)
         } else if item.active {
             ARCADE_FILTER_ACTIVE_GRADIENT
@@ -1646,7 +1643,7 @@ fn selected_aperture_pixel(pixel: Rgb565Pixel) -> Rgb565Pixel {
 fn selected_aperture_pixel_with_style(pixel: Rgb565Pixel, style: ArcadeListStyle) -> Rgb565Pixel {
     if is_arcade_row_background_pixel_with_style(pixel, style) {
         style.selection_fill_565
-    } else if style.typeface == ConsoleTypeface::LilliputSteps {
+    } else if style.crt_palette {
         style.selection_text_565
     } else {
         invert_rgb565(pixel)
@@ -1782,6 +1779,36 @@ mod tests {
             }
         );
         assert_eq!(search.visible_height(480), 400);
+    }
+
+    #[test]
+    fn crt_640_window_clips_to_sixteen_complete_24px_rows() {
+        let geometry = ArcadeListGeometry::crt_for_render_size(640, 480, false);
+        let mut renderer = ArcadeListRenderer::new_for_crt(24);
+        renderer.set_geometry_for_render_h(geometry, 480);
+
+        assert_eq!(renderer.visible_height, 400);
+        assert_eq!(
+            renderer.visible_height / renderer.style.row_height as usize,
+            16
+        );
+        assert_eq!(
+            renderer.visible_height % renderer.style.row_height as usize,
+            16
+        );
+        assert_eq!(
+            renderer.dirty_rect(),
+            DirtyRect {
+                x0: 8,
+                y0: 44,
+                x1: 632,
+                y1: 444,
+            }
+        );
+        let selection = renderer.selection_rect();
+        assert_eq!(selection.y1 - selection.y0, 24);
+        assert!(selection.y0 >= renderer.dirty_rect().y0);
+        assert!(selection.y1 <= renderer.dirty_rect().y1);
     }
 
     #[test]
@@ -2260,6 +2287,7 @@ mod tests {
 
         assert_eq!(crt.style.row_height, 24);
         assert_eq!(crt.style.typeface, ConsoleTypeface::PressStart2P);
+        assert!(crt.style.crt_palette);
         assert_eq!(crt.style.background.0, 0x00020817);
         assert_eq!(
             crt.style.selection_fill_565,
@@ -2269,6 +2297,7 @@ mod tests {
         assert_eq!(crt.style.badge_text.0, 0x0003132d);
         assert_eq!(hdmi.style.row_height, ARCADE_ROW_HEIGHT);
         assert_eq!(hdmi.style.typeface, ConsoleTypeface::PressStart2P);
+        assert!(!hdmi.style.crt_palette);
         assert_eq!(hdmi.style.background.0, ARCADE_LIST_BG_COLOR.0);
         assert_eq!(hdmi.style.badge_fill.0, ARCADE_NEW_BADGE_FILL.0);
     }

@@ -1140,12 +1140,16 @@ mod tests {
         assert_eq!(
             (
                 compact.grid,
+                compact.border,
                 compact.body_font,
                 compact.heading_font,
+                compact.card_title_font,
+                compact.card_detail_font,
+                compact.game_row_height,
                 compact.header_height,
                 compact.footer_height,
             ),
-            (4, 8, 16, 32, 24)
+            (4, 1, 8, 16, 16, 8, 24, 32, 24)
         );
         assert_eq!(CrtUiMetrics::for_framebuffer(384, 288), compact);
         assert_eq!(CrtUiMetrics::for_framebuffer(640, 480), compact);
