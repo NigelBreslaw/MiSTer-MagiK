@@ -1,0 +1,234 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+import "../fonts/W95F.otf";
+
+component NavHint inherits HorizontalLayout {
+    in property <string> button;
+    in property <string> label;
+
+    spacing: 8px;
+    cross-axis-alignment: center;
+
+    Rectangle {
+        width: root.button == "HOME" ? 48px : 24px;
+        height: 24px;
+        background: #aaa5ff;
+
+        Text {
+            width: parent.width;
+            height: parent.height;
+            text: root.button;
+            color: #03132d;
+            font-size: 16px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+
+    Text {
+        text: root.label;
+        color: #aaa5ff;
+        font-size: 16px;
+        vertical-alignment: center;
+    }
+}
+
+export component CrtSystemsListMockup inherits Window {
+    width: 640px;
+    height: 480px;
+    title: "MiSTer MagiK CRT Systems List Mockup";
+    background: #020817;
+    default-font-family: "W95FA";
+    forward-focus: focus-scope;
+
+    in-out property <[{ name: string, detail: string }]> systems: [
+        { name: "Nintendo Entertainment System", detail: "1,842 games" },
+        { name: "Super Nintendo", detail: "1,736 games" },
+        { name: "Sega Genesis / Mega Drive", detail: "1,124 games" },
+        { name: "Sony PlayStation", detail: "3,218 games" },
+        { name: "Nintendo 64", detail: "388 games" },
+        { name: "Sega Saturn", detail: "1,046 games" },
+        { name: "PC Engine / TurboGrafx-16", detail: "742 games" },
+        { name: "Neo Geo", detail: "148 games" },
+        { name: "Atari 2600", detail: "565 games" },
+    ];
+    in-out property <int> highlighted-index: 1;
+    property <int> visible-complete: 4;
+    property <int> first-visible: (highlighted-index - 2).clamp(
+        0,
+        (systems.length - visible-complete - 1).max(0),
+    );
+    property <length> card-height: 72px;
+    property <length> card-gap: 8px;
+    property <length> card-pitch: card-height + card-gap;
+
+    focus-scope := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.DownArrow && root.highlighted-index < root.systems.length - 1) {
+                root.highlighted-index += 1;
+                return accept;
+            }
+            if (event.text == Key.UpArrow && root.highlighted-index > 0) {
+                root.highlighted-index -= 1;
+                return accept;
+            }
+            return reject;
+        }
+
+        Rectangle {
+            x: 16px;
+            y: 16px;
+            width: 608px;
+            height: 448px;
+            background: #020817;
+            border-width: 2px;
+            border-color: #8b94f8;
+
+            VerticalLayout {
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                min-height: parent.height;
+                max-height: parent.height;
+                spacing: 0px;
+
+                Rectangle {
+                    min-height: 48px;
+                    max-height: 48px;
+                    background: #020817;
+
+                    HorizontalLayout {
+                        padding-left: 16px;
+                        padding-right: 16px;
+                        cross-axis-alignment: center;
+
+                        Rectangle { width: 136px; background: transparent; }
+
+                        Text {
+                            text: "Consoles";
+                            color: #aaa5ff;
+                            font-size: 32px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            width: 136px;
+                            text: "9 systems";
+                            color: #aaa5ff;
+                            font-size: 16px;
+                            horizontal-alignment: right;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                Rectangle {
+                    vertical-stretch: 1;
+                    max-height: 1000px;
+                    background: #020817;
+
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        spacing: 8px;
+                        cross-axis-alignment: start;
+
+                        system-viewport := Rectangle {
+                            height: 360px;
+                            horizontal-stretch: 1;
+                            background: #020817;
+                            clip: true;
+
+                            for system[index] in root.systems : Rectangle {
+                                y: (index - root.first-visible) * root.card-pitch;
+                                width: parent.width;
+                                height: root.card-height;
+                                background: index == root.highlighted-index ? #40e5e7 : #06122b;
+                                border-width: 2px;
+                                border-color: index == root.highlighted-index ? #40e5e7 : #5e59aa;
+
+                                HorizontalLayout {
+                                    padding-left: 16px;
+                                    padding-right: 16px;
+                                    spacing: 16px;
+                                    cross-axis-alignment: center;
+
+                                    Text {
+                                        width: 24px;
+                                        text: index == root.highlighted-index ? ">" : "";
+                                        color: #03132d;
+                                        font-size: 24px;
+                                        vertical-alignment: center;
+                                    }
+
+                                    VerticalLayout {
+                                        spacing: 0px;
+                                        alignment: center;
+                                        horizontal-stretch: 1;
+
+                                        Text {
+                                            text: system.name;
+                                            color: index == root.highlighted-index
+                                                ? #03132d : #aaa5ff;
+                                            font-size: 24px;
+                                            overflow: elide;
+                                            vertical-alignment: center;
+                                        }
+
+                                        Text {
+                                            text: system.detail;
+                                            color: index == root.highlighted-index
+                                                ? #17304a : #8b94f8;
+                                            font-size: 16px;
+                                            overflow: elide;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            width: 16px;
+                            height: system-viewport.height;
+                            background: #0b0d25;
+                            border-width: 2px;
+                            border-color: #8b94f8;
+
+                            Rectangle {
+                                y: root.first-visible * (parent.height - self.height)
+                                    / (root.systems.length - root.visible-complete - 1);
+                                width: parent.width;
+                                height: parent.height * root.visible-complete
+                                    / root.systems.length;
+                                background: #8b94f8;
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    min-height: 40px;
+                    max-height: 40px;
+                    background: #020817;
+                    border-width: 2px;
+                    border-color: #8b94f8;
+
+                    HorizontalLayout {
+                        padding-left: 24px;
+                        padding-right: 24px;
+                        spacing: 16px;
+                        cross-axis-alignment: center;
+
+                        NavHint { button: "B"; label: "Back"; }
+                        Rectangle { horizontal-stretch: 1; background: transparent; }
+                        NavHint { button: "A"; label: "Open"; }
+                        NavHint { button: "HOME"; label: "Launcher"; }
+                    }
+                }
+            }
+        }
+    }
+}
