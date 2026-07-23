@@ -2343,11 +2343,15 @@ mod tests {
     #[test]
     fn crt_palette_behavior_is_independent_of_the_selected_typeface() {
         let crt = ArcadeListStyle::crt(24);
+        let mut crt_lilliput = crt;
+        crt_lilliput.typeface = ConsoleTypeface::LilliputSteps;
         let hdmi = ArcadeListStyle::hdmi();
         let flat_crt = TextGradient::new(crt.text, crt.text, crt.text);
 
         assert_eq!(arcade_filter_gradient(crt, false), flat_crt);
         assert_eq!(arcade_filter_gradient(crt, true), flat_crt);
+        assert_eq!(arcade_filter_gradient(crt_lilliput, false), flat_crt);
+        assert_eq!(arcade_filter_gradient(crt_lilliput, true), flat_crt);
         assert_eq!(arcade_filter_gradient(hdmi, false), ARCADE_TITLE_GRADIENT);
         assert_eq!(
             arcade_filter_gradient(hdmi, true),
@@ -2362,6 +2366,14 @@ mod tests {
         assert_eq!(
             selected_aperture_pixel_with_style(crt_text, crt),
             crt.selection_text_565
+        );
+        assert_eq!(
+            selected_aperture_pixel_with_style(crt_lilliput.background_565, crt_lilliput),
+            crt_lilliput.selection_fill_565
+        );
+        assert_eq!(
+            selected_aperture_pixel_with_style(crt_text, crt_lilliput),
+            crt_lilliput.selection_text_565
         );
 
         let hdmi_text = pixel_to_rgb565(hdmi.text);
