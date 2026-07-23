@@ -4780,17 +4780,42 @@ impl PreviewRoutePolicy {
     const fn allows_preview_work(self) -> bool {
         !self.crt_layout
     }
+}
 
-    fn allows_catalog_effect(self, effect: &CatalogSessionEffect) -> bool {
-        self.allows_preview_work()
-            || !matches!(
-                effect,
-                CatalogSessionEffect::FinishMediaWorker
-                    | CatalogSessionEffect::FinishMediaWorkerIfNoCatalogSeedPending
-                    | CatalogSessionEffect::RequestMediaCatalogSeed
-                    | CatalogSessionEffect::MediaSystemDiscovered { .. }
-            )
+/// Runs the catalog-to-media boundary only for routes that own screenshot work.
+fn dispatch_catalog_media_effect(
+    policy: PreviewRoutePolicy,
+    effect: &CatalogSessionEffect,
+    media_session: &mut ScreenshotMediaUpdateSession,
+) -> Option<ScreenshotMediaUpdateEffects> {
+    let is_media_effect = matches!(
+        effect,
+        CatalogSessionEffect::FinishMediaWorker
+            | CatalogSessionEffect::FinishMediaWorkerIfNoCatalogSeedPending
+            | CatalogSessionEffect::RequestMediaCatalogSeed
+            | CatalogSessionEffect::MediaSystemDiscovered { .. }
+    );
+    if !is_media_effect {
+        return None;
     }
+    if !policy.allows_preview_work() {
+        return Some(ScreenshotMediaUpdateEffects::default());
+    }
+    Some(match effect {
+        CatalogSessionEffect::FinishMediaWorker => media_session.finish_worker(),
+        CatalogSessionEffect::FinishMediaWorkerIfNoCatalogSeedPending => {
+            media_session.finish_worker_if_no_catalog_seed_pending()
+        }
+        CatalogSessionEffect::RequestMediaCatalogSeed => {
+            media_session.request_catalog_seed();
+            ScreenshotMediaUpdateEffects::default()
+        }
+        CatalogSessionEffect::MediaSystemDiscovered {
+            system_id,
+            media_gate,
+        } => media_session.handle_catalog_system_discovered(system_id.clone(), *media_gate),
+        _ => unreachable!("non-media catalog effect returned above"),
+    })
 }
 
 #[cfg(not(any(feature = "bench-tools", feature = "diagnostics")))]
@@ -5201,7 +5226,18 @@ fn apply_catalog_session_effects(
 ) {
     let preview_route = PreviewRoutePolicy::new(nav.uses_crt_layout());
     for effect in effects.into_effects() {
-        if !preview_route.allows_catalog_effect(&effect) {
+        if let Some(media_effects) =
+            dispatch_catalog_media_effect(preview_route, &effect, media_session)
+        {
+            apply_screenshot_media_update_effects(
+                media_effects,
+                app,
+                catalog,
+                scheduler,
+                Some(&mut *preview),
+                full_bridge_dirty,
+                start,
+            );
             continue;
         }
         match effect {
@@ -5375,27 +5411,11 @@ fn apply_catalog_session_effects(
             CatalogSessionEffect::Ui(intent) => {
                 apply_launcher_worker_ui_intent(app, intent, full_bridge_dirty);
             }
-            CatalogSessionEffect::FinishMediaWorker => {
-                apply_screenshot_media_update_effects(
-                    media_session.finish_worker(),
-                    app,
-                    catalog,
-                    scheduler,
-                    Some(&mut *preview),
-                    full_bridge_dirty,
-                    start,
-                );
-            }
-            CatalogSessionEffect::FinishMediaWorkerIfNoCatalogSeedPending => {
-                apply_screenshot_media_update_effects(
-                    media_session.finish_worker_if_no_catalog_seed_pending(),
-                    app,
-                    catalog,
-                    scheduler,
-                    Some(&mut *preview),
-                    full_bridge_dirty,
-                    start,
-                );
+            CatalogSessionEffect::FinishMediaWorker
+            | CatalogSessionEffect::FinishMediaWorkerIfNoCatalogSeedPending
+            | CatalogSessionEffect::RequestMediaCatalogSeed
+            | CatalogSessionEffect::MediaSystemDiscovered { .. } => {
+                unreachable!("media effects dispatched before general catalog effects")
             }
             CatalogSessionEffect::CatalogValidationFinished => {
                 lifecycle.handle(
@@ -5403,23 +5423,6 @@ fn apply_catalog_session_effects(
                     lifecycle_effects,
                 );
                 apply_lifecycle_effects(lifecycle_effects, scheduler, start);
-            }
-            CatalogSessionEffect::RequestMediaCatalogSeed => {
-                media_session.request_catalog_seed();
-            }
-            CatalogSessionEffect::MediaSystemDiscovered {
-                system_id,
-                media_gate,
-            } => {
-                apply_screenshot_media_update_effects(
-                    media_session.handle_catalog_system_discovered(system_id, media_gate),
-                    app,
-                    catalog,
-                    scheduler,
-                    Some(&mut *preview),
-                    full_bridge_dirty,
-                    start,
-                );
             }
             CatalogSessionEffect::ApplySystemShard { system_id, games } => {
                 let (replacement, launch_plans) = arcade_rows_from_shard(&system_id, &games);
@@ -5878,23 +5881,58 @@ mod tests {
     use mister_magik_fb::experiments::effects::framebuffer_effects::EffectSize;
 
     #[test]
-    fn crt_catalog_dispatch_drops_every_media_worker_effect_while_hdmi_keeps_them() {
-        let effects = [
-            CatalogSessionEffect::RequestMediaCatalogSeed,
-            CatalogSessionEffect::MediaSystemDiscovered {
-                system_id: "arcade".to_string(),
-                media_gate: None,
-            },
-            CatalogSessionEffect::FinishMediaWorkerIfNoCatalogSeedPending,
-            CatalogSessionEffect::FinishMediaWorker,
-        ];
-        let crt = PreviewRoutePolicy::new(true);
-        let hdmi = PreviewRoutePolicy::new(false);
-
-        for effect in &effects {
-            assert!(!crt.allows_catalog_effect(effect));
-            assert!(hdmi.allows_catalog_effect(effect));
+    fn crt_catalog_discovery_sequence_never_reaches_media_worker_actions() {
+        fn dispatched_media_actions(crt_layout: bool) -> Vec<&'static str> {
+            let now = Instant::now();
+            let mut catalog_session = LauncherCatalogSession::new(false);
+            let catalog_effects = catalog_session.handle_worker_message(
+                CatalogWorkerMessageContext {
+                    catalog_ready: false,
+                    catalog_partial: true,
+                    screen: Screen::Home,
+                    media_gate: None,
+                },
+                CatalogWorkerMessage::SystemDiscovered {
+                    system_id: "arcade".to_string(),
+                },
+                now,
+            );
+            let mut media_session = ScreenshotMediaUpdateSession::default();
+            let mut actions = Vec::new();
+            for effect in catalog_effects.into_effects() {
+                let Some(media_effects) = dispatch_catalog_media_effect(
+                    PreviewRoutePolicy::new(crt_layout),
+                    &effect,
+                    &mut media_session,
+                ) else {
+                    continue;
+                };
+                actions.extend(
+                    media_effects
+                        .into_effects()
+                        .into_iter()
+                        .filter_map(|effect| match effect {
+                            ScreenshotMediaUpdateEffect::EnsureWorker { .. } => {
+                                Some("ensure-worker")
+                            }
+                            ScreenshotMediaUpdateEffect::EnsureSystem { .. } => {
+                                Some("ensure-system")
+                            }
+                            ScreenshotMediaUpdateEffect::SetInteractionActive { .. } => {
+                                Some("set-interaction")
+                            }
+                            _ => None,
+                        }),
+                );
+            }
+            actions
         }
+
+        assert!(dispatched_media_actions(true).is_empty());
+        assert_eq!(
+            dispatched_media_actions(false),
+            vec!["ensure-worker", "set-interaction", "ensure-system"]
+        );
     }
 
     #[test]
