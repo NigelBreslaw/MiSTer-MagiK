@@ -149,9 +149,10 @@ if ! command -v container >/dev/null 2>&1; then
   exit 1
 fi
 
+CONTAINER_KERNEL_SRC="/kernel-src"
 container run --arch arm64 --rm --cpus 8 --memory 8g \
   --volume "$ROOT:/project" \
-  --volume "$KERNEL_SRC:$KERNEL_SRC" \
+  --volume "$KERNEL_SRC:$CONTAINER_KERNEL_SRC" \
   --workdir /project \
   "$IMAGE" bash -lc "
     set -euo pipefail
@@ -159,7 +160,7 @@ container run --arch arm64 --rm --cpus 8 --memory 8g \
       apt-get update >/dev/null
       DEBIAN_FRONTEND=noninteractive apt-get install -y flex bison bc libssl-dev libelf-dev kmod >/dev/null
     fi
-    export KERNEL_SRC='$KERNEL_SRC'
+    export KERNEL_SRC='$CONTAINER_KERNEL_SRC'
     export KERNEL_BUILD='/project/build/scanout-slots-kernel'
     export MODULE_DIR='/project/mister/platform/kernel/scanout-slots'
     export OUT_DIR='/project/build/scanout-slots'
