@@ -132,7 +132,6 @@ export component CrtSystemsListMockup inherits Window {
                     HorizontalLayout {
                         padding-left: 8px;
                         padding-right: 8px;
-                        spacing: 8px;
                         cross-axis-alignment: start;
 
                         system-viewport := Rectangle {
@@ -187,23 +186,6 @@ export component CrtSystemsListMockup inherits Window {
                                         }
                                     }
                                 }
-                            }
-                        }
-
-                        Rectangle {
-                            width: 16px;
-                            height: system-viewport.height;
-                            background: #0b0d25;
-                            border-width: 2px;
-                            border-color: #8b94f8;
-
-                            Rectangle {
-                                y: root.first-visible * (parent.height - self.height)
-                                    / (root.systems.length - root.visible-complete - 1);
-                                width: parent.width;
-                                height: parent.height * root.visible-complete
-                                    / root.systems.length;
-                                background: #8b94f8;
                             }
                         }
                     }
