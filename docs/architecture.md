@@ -89,6 +89,8 @@ The launcher path uses a planned Linux framebuffer and FPGA scaling:
   renders at 683x384 and 1920x1080 renders at 960x540. Custom modes follow the
   same rule; the qualified hidden-slot maximum is 1366x768.
 - Slint renders the planned launcher framebuffer into cached RAM.
+- CRT routes embed Lilliput Steps for Slint text and the custom Rust games
+  renderer; HDMI routes retain Press Start 2P.
 - Rust sends the FPGA `SET_FBUF` route so buffer 0 is scanned to HDMI and scaled
   to the output mode.
 - The default renderer is the FPGA vblank latch path when the MagiK Menu latch
