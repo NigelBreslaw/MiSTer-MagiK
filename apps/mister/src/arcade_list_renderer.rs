@@ -545,9 +545,13 @@ impl ArcadeListRenderer {
         }
         self.fill_surface_band(band_y, band_h, self.style.background_565);
         let row_h = self.style.row_height as isize;
-        let Some((first, end)) =
-            arcade_visible_window_range_px(games.len(), visual_px, self.style.row_height)
-        else {
+        let Some((first, end)) = arcade_visible_window_range_px(
+            games.len(),
+            visual_px,
+            self.style.row_height,
+            self.selection_y(),
+            self.visible_height,
+        ) else {
             return;
         };
         for idx in first..=end {
@@ -596,9 +600,13 @@ impl ArcadeListRenderer {
             return;
         }
         let row_h = self.style.row_height as isize;
-        let Some((first, end)) =
-            arcade_visible_window_range_px(items.len(), visual_px, self.style.row_height)
-        else {
+        let Some((first, end)) = arcade_visible_window_range_px(
+            items.len(),
+            visual_px,
+            self.style.row_height,
+            self.selection_y(),
+            self.visible_height,
+        ) else {
             return;
         };
         for (idx, item) in items.iter().enumerate().take(end + 1).skip(first) {
@@ -692,9 +700,13 @@ impl ArcadeListRenderer {
 
     fn arcade_visible_window_hash(&mut self, games: ArcadeGameView<'_>, visual_px: i32) -> u64 {
         let mut hash = ARCADE_LIST_HASH_OFFSET;
-        let Some((first, end)) =
-            arcade_visible_window_range_px(games.len(), visual_px, self.style.row_height)
-        else {
+        let Some((first, end)) = arcade_visible_window_range_px(
+            games.len(),
+            visual_px,
+            self.style.row_height,
+            self.selection_y(),
+            self.visible_height,
+        ) else {
             return hash;
         };
         arcade_hash_usize(&mut hash, first);
@@ -1250,13 +1262,7 @@ impl ArcadeListRenderer {
         let title = self
             .title_font
             .clipped_text(&item.title, self.width.saturating_sub(reserved));
-        let gradient = if self.style.crt_palette {
-            TextGradient::new(self.style.text, self.style.text, self.style.text)
-        } else if item.active {
-            ARCADE_FILTER_ACTIVE_GRADIENT
-        } else {
-            ARCADE_TITLE_GRADIENT
-        };
+        let gradient = arcade_filter_gradient(self.style, item.active);
         self.title_font.draw_text_clipped_gradient(
             &mut row,
             self.width,
@@ -1483,6 +1489,8 @@ fn arcade_visible_window_hash(games: ArcadeGameView<'_>, visual_index: f32) -> u
         games.len(),
         arcade_visual_px(visual_index, ARCADE_ROW_HEIGHT),
         ARCADE_ROW_HEIGHT,
+        ArcadeListRenderer::centered_selection_y(),
+        ARCADE_LIST_H,
     ) else {
         return hash;
     };
@@ -1503,8 +1511,13 @@ fn arcade_filter_visible_window_hash(
     row_height: i32,
 ) -> u64 {
     let mut hash = ARCADE_LIST_HASH_OFFSET;
-    let Some((first, end)) = arcade_visible_window_range_px(items.len(), visual_px, row_height)
-    else {
+    let Some((first, end)) = arcade_visible_window_range_px(
+        items.len(),
+        visual_px,
+        row_height,
+        ArcadeListRenderer::selection_y_for_height(ARCADE_LIST_H, row_height),
+        ARCADE_LIST_H,
+    ) else {
         return hash;
     };
     arcade_hash_usize(&mut hash, first);
@@ -1560,17 +1573,31 @@ fn arcade_visible_window_range_px(
     len: usize,
     visual_px: i32,
     row_height: i32,
+    selection_y: usize,
+    visible_height: usize,
 ) -> Option<(usize, usize)> {
     if len == 0 {
         return None;
     }
-    let row_h = row_height.max(1);
-    let visual_px = visual_px.max(0);
-    let floor = visual_px.div_euclid(row_h);
-    let ceil = (visual_px + row_h - 1).div_euclid(row_h);
-    let first = (floor as isize - 7).max(0) as usize;
-    let last = (ceil as isize + 8).max(0) as usize;
+    let row_h = i64::from(row_height.max(1));
+    let visual_px = i64::from(visual_px.max(0));
+    let selection_y = selection_y as i64;
+    let visible_height = visible_height as i64;
+    let first = (visual_px - selection_y - row_h).div_euclid(row_h) + 1;
+    let last = (visual_px - selection_y + visible_height - 1).div_euclid(row_h);
+    let first = first.max(0) as usize;
+    let last = last.max(0) as usize;
     Some((first.min(len - 1), last.min(len - 1)))
+}
+
+fn arcade_filter_gradient(style: ArcadeListStyle, active: bool) -> TextGradient {
+    if style.crt_palette {
+        TextGradient::new(style.text, style.text, style.text)
+    } else if active {
+        ARCADE_FILTER_ACTIVE_GRADIENT
+    } else {
+        ARCADE_TITLE_GRADIENT
+    }
 }
 
 fn arcade_hash_game(hash: &mut u64, game: &ArcadeGameEntry) {
@@ -1809,6 +1836,17 @@ mod tests {
         assert_eq!(selection.y1 - selection.y0, 24);
         assert!(selection.y0 >= renderer.dirty_rect().y0);
         assert!(selection.y1 <= renderer.dirty_rect().y1);
+
+        assert_eq!(
+            arcade_visible_window_range_px(
+                100,
+                50 * renderer.style.row_height,
+                renderer.style.row_height,
+                renderer.selection_y(),
+                renderer.visible_height,
+            ),
+            Some((42, 58))
+        );
     }
 
     #[test]
@@ -2300,6 +2338,37 @@ mod tests {
         assert!(!hdmi.style.crt_palette);
         assert_eq!(hdmi.style.background.0, ARCADE_LIST_BG_COLOR.0);
         assert_eq!(hdmi.style.badge_fill.0, ARCADE_NEW_BADGE_FILL.0);
+    }
+
+    #[test]
+    fn crt_palette_behavior_is_independent_of_the_selected_typeface() {
+        let crt = ArcadeListStyle::crt(24);
+        let hdmi = ArcadeListStyle::hdmi();
+        let flat_crt = TextGradient::new(crt.text, crt.text, crt.text);
+
+        assert_eq!(arcade_filter_gradient(crt, false), flat_crt);
+        assert_eq!(arcade_filter_gradient(crt, true), flat_crt);
+        assert_eq!(arcade_filter_gradient(hdmi, false), ARCADE_TITLE_GRADIENT);
+        assert_eq!(
+            arcade_filter_gradient(hdmi, true),
+            ARCADE_FILTER_ACTIVE_GRADIENT
+        );
+
+        let crt_text = pixel_to_rgb565(crt.text);
+        assert_eq!(
+            selected_aperture_pixel_with_style(crt.background_565, crt),
+            crt.selection_fill_565
+        );
+        assert_eq!(
+            selected_aperture_pixel_with_style(crt_text, crt),
+            crt.selection_text_565
+        );
+
+        let hdmi_text = pixel_to_rgb565(hdmi.text);
+        assert_eq!(
+            selected_aperture_pixel_with_style(hdmi_text, hdmi),
+            invert_rgb565(hdmi_text)
+        );
     }
 
     #[test]
