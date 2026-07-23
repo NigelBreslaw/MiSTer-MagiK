@@ -1,6 +1,28 @@
-use super::downsample::Rgb565FrameView;
-use super::target::DirtyRect;
-use slint::platform::software_renderer::Rgb565Pixel;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VerticalRect {
+    pub x0: usize,
+    pub y0: usize,
+    pub x1: usize,
+    pub y1: usize,
+}
+
+impl VerticalRect {
+    pub const fn width(self) -> usize {
+        self.x1 - self.x0
+    }
+
+    pub const fn rows(self) -> usize {
+        self.y1 - self.y0
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Rgb565FrameView<'a, P> {
+    pub pixels: &'a [P],
+    pub width: usize,
+    pub height: usize,
+    pub stride_pixels: usize,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct VerticalRgb565Transform {
@@ -11,7 +33,7 @@ pub struct VerticalRgb565Transform {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct VerticalCopyStats {
-    pub destination_rect: DirtyRect,
+    pub destination_rect: VerticalRect,
     pub bytes: usize,
 }
 
@@ -26,11 +48,11 @@ impl VerticalRgb565Transform {
         }
         width
             .checked_mul(source_height)
-            .and_then(|pixels| pixels.checked_mul(std::mem::size_of::<Rgb565Pixel>()))
+            .and_then(|pixels| pixels.checked_mul(2))
             .ok_or("vertical transform source geometry overflow")?;
         width
             .checked_mul(destination_height)
-            .and_then(|pixels| pixels.checked_mul(std::mem::size_of::<Rgb565Pixel>()))
+            .and_then(|pixels| pixels.checked_mul(2))
             .ok_or("vertical transform destination geometry overflow")?;
         Ok(Self {
             width,
@@ -60,11 +82,11 @@ impl VerticalRgb565Transform {
         Some((numerator / (self.destination_height * 2)).min(self.source_height - 1))
     }
 
-    pub fn destination_rect_for_source(self, source_rect: DirtyRect) -> Option<DirtyRect> {
+    pub fn destination_rect_for_source(self, source_rect: VerticalRect) -> Option<VerticalRect> {
         let source_rect = self.valid_source_rect(source_rect)?;
         let first_destination_y = (0..self.destination_height).find(|&y| {
             self.source_row_for_destination(y)
-                .is_some_and(|sy| sy >= source_rect.y0)
+                .is_some_and(|sy| sy >= source_rect.y0 && sy < source_rect.y1)
         })?;
         let destination_y_end = (first_destination_y..self.destination_height)
             .find(|&y| {
@@ -73,7 +95,7 @@ impl VerticalRgb565Transform {
             })
             .unwrap_or(self.destination_height);
 
-        Some(DirtyRect {
+        Some(VerticalRect {
             x0: source_rect.x0,
             y0: first_destination_y,
             x1: source_rect.x1,
@@ -81,11 +103,11 @@ impl VerticalRgb565Transform {
         })
     }
 
-    pub fn copy_rect(
+    pub fn copy_rect<P: Copy>(
         self,
-        source: Rgb565FrameView<'_>,
-        source_rect: DirtyRect,
-        destination: &mut [Rgb565Pixel],
+        source: Rgb565FrameView<'_, P>,
+        source_rect: VerticalRect,
+        destination: &mut [P],
         destination_stride: usize,
     ) -> Result<Option<VerticalCopyStats>, &'static str> {
         self.validate_source(source)?;
@@ -119,13 +141,11 @@ impl VerticalRgb565Transform {
 
         Ok(Some(VerticalCopyStats {
             destination_rect,
-            bytes: destination_rect.width()
-                * destination_rect.rows() as usize
-                * std::mem::size_of::<Rgb565Pixel>(),
+            bytes: destination_rect.width() * destination_rect.rows() * 2,
         }))
     }
 
-    fn valid_source_rect(self, source_rect: DirtyRect) -> Option<DirtyRect> {
+    fn valid_source_rect(self, source_rect: VerticalRect) -> Option<VerticalRect> {
         if source_rect.x0 >= source_rect.x1
             || source_rect.y0 >= source_rect.y1
             || source_rect.x1 > self.width
@@ -136,7 +156,7 @@ impl VerticalRgb565Transform {
         Some(source_rect)
     }
 
-    fn validate_source(self, source: Rgb565FrameView<'_>) -> Result<(), &'static str> {
+    fn validate_source<P>(self, source: Rgb565FrameView<'_, P>) -> Result<(), &'static str> {
         if source.width != self.width || source.height != self.source_height {
             return Err("source geometry does not match vertical transform");
         }
@@ -162,8 +182,8 @@ mod tests {
         VerticalRgb565Transform::new(640, 480, destination_height).unwrap()
     }
 
-    fn rect(x: usize, y: usize, width: usize, height: usize) -> DirtyRect {
-        DirtyRect {
+    fn rect(x: usize, y: usize, width: usize, height: usize) -> VerticalRect {
+        VerticalRect {
             x0: x,
             y0: y,
             x1: x + width,

@@ -3,6 +3,7 @@
 
 use super::super::*;
 use mister_magik_fb::framebuffer::downsample::Rgb565FrameView;
+use mister_magik_fb::framebuffer::vertical_scale::Rgb565FrameView as VerticalRgb565FrameView;
 use mister_magik_fb::latch_readiness::{LatchFailure, LatchFailureReason, LatchFailureStage};
 use std::io;
 
@@ -124,7 +125,7 @@ impl LatchFrameBuffers for PluginLatchFrameBuffers {
     ) -> Result<usize, String> {
         buffer
             .copy_vertical_rect(
-                Rgb565FrameView {
+                VerticalRgb565FrameView {
                     pixels: cached.pixels(),
                     width: cached.width(),
                     height: cached.height(),
@@ -389,8 +390,17 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         let copied_rows = plan
             .restore_rects
             .iter()
-            .filter_map(|rect| vertical_transform.destination_rect_for_source(rect))
-            .map(DirtyRect::rows)
+            .filter_map(|rect| {
+                vertical_transform.destination_rect_for_source(
+                    mister_magik_fb::framebuffer::vertical_scale::VerticalRect {
+                        x0: rect.x0,
+                        y0: rect.y0,
+                        x1: rect.x1,
+                        y1: rect.y1,
+                    },
+                )
+            })
+            .map(|rect| rect.rows() as u32)
             .sum::<u32>();
         let full_copy = rect_list_contains(plan.restore_rects, self.full_rect());
         let catchup_bytes = plan.restore_rects.total_rgb565_bytes();

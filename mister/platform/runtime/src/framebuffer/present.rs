@@ -1,13 +1,14 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::framebuffer::downsample::Rgb565FrameView;
 use crate::framebuffer::mapped::MappedRgb565Framebuffer;
 use crate::framebuffer::scanout_slots::ScanoutSlotsRgb565Framebuffer;
 use crate::framebuffer::stream;
 use crate::framebuffer::target::{
     dirty_rect_is_broad, CachedFrameView, DirectPreviewView, DirtyRect, StridedFrameRegion,
 };
+use crate::framebuffer::vertical_scale::Rgb565FrameView;
+use crate::framebuffer::vertical_scale::VerticalRect;
 use mister_magik_framebuffer_stream::{FrameGeometry, FrameRect};
 use slint::platform::software_renderer::Rgb565Pixel;
 
@@ -25,6 +26,15 @@ fn stream_rect(rect: DirtyRect) -> FrameRect {
         y: rect.y0 as u32,
         width: rect.width() as u32,
         height: rect.rows(),
+    }
+}
+
+fn target_rect(rect: VerticalRect) -> DirtyRect {
+    DirtyRect {
+        x0: rect.x0,
+        y0: rect.y0,
+        x1: rect.x1,
+        y1: rect.y1,
     }
 }
 
@@ -101,13 +111,13 @@ pub fn copy_cached_rows_565(
     let destination = disp.frame_view_565();
     stream::publish_strided_rect(
         stream_geometry(disp),
-        stream_rect(stats.destination_rect),
+        stream_rect(target_rect(stats.destination_rect)),
         destination.pixels,
         destination.stride_pixels,
         stats.destination_rect.x0,
         stats.destination_rect.y0,
     );
-    stats.destination_rect.rows()
+    stats.destination_rect.rows() as u32
 }
 
 pub fn copy_cached_rect_565(
@@ -148,13 +158,13 @@ pub fn copy_cached_rect_565(
     let destination = disp.frame_view_565();
     stream::publish_strided_rect(
         stream_geometry(disp),
-        stream_rect(stats.destination_rect),
+        stream_rect(target_rect(stats.destination_rect)),
         destination.pixels,
         destination.stride_pixels,
         stats.destination_rect.x0,
         stats.destination_rect.y0,
     );
-    Some(stats.destination_rect)
+    Some(target_rect(stats.destination_rect))
 }
 
 pub fn copy_dense_rect_565(

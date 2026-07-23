@@ -12,14 +12,15 @@
 //! /dev/fb0 also provides the FBIO_WAITFORVSYNC ioctl we pace on.
 
 use crate::boot_analytics;
-use crate::framebuffer::downsample::Rgb565FrameView;
 use crate::framebuffer::format::{
     fb_mode_format_from_bits_per_pixel, production_label, restore_mode_line, rgb565_mode_line,
     rgb565_stride_bytes, RGB565_BITS_PER_PIXEL,
 };
 use crate::framebuffer::sample::Rgb565SampleView;
 use crate::framebuffer::target::DirtyRect;
-use crate::framebuffer::vertical_scale::{VerticalCopyStats, VerticalRgb565Transform};
+use crate::framebuffer::vertical_scale::{
+    Rgb565FrameView, VerticalCopyStats, VerticalRect, VerticalRgb565Transform,
+};
 use crate::framebuffer::vsync::{wait_vsync_fd, VsyncWaitStatus};
 
 use slint::platform::software_renderer::{PremultipliedRgbaColor, Rgb565Pixel, TargetPixel};
@@ -955,18 +956,28 @@ impl MappedRgb565Framebuffer {
 
     pub fn present_vertical_rect_565(
         &mut self,
-        source: Rgb565FrameView<'_>,
+        source: Rgb565FrameView<'_, Rgb565Pixel>,
         rect: DirtyRect,
     ) -> Result<Option<VerticalCopyStats>, FramebufferPresentError> {
         let transform = VerticalRgb565Transform::new(self.w, source.height, self.h)
             .map_err(FramebufferPresentError::InvalidVerticalTransform)?;
         let stride_pixels = self.stride_pixels;
         transform
-            .copy_rect(source, rect, self.buffer_565_mut(), stride_pixels)
+            .copy_rect(
+                source,
+                VerticalRect {
+                    x0: rect.x0,
+                    y0: rect.y0,
+                    x1: rect.x1,
+                    y1: rect.y1,
+                },
+                self.buffer_565_mut(),
+                stride_pixels,
+            )
             .map_err(FramebufferPresentError::InvalidVerticalTransform)
     }
 
-    pub fn frame_view_565(&self) -> Rgb565FrameView<'_> {
+    pub fn frame_view_565(&self) -> Rgb565FrameView<'_, Rgb565Pixel> {
         Rgb565FrameView {
             pixels: self.buffer_565(),
             width: self.w,

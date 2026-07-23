@@ -7,10 +7,9 @@
 //! attributes. This module validates the reported regions before the launcher
 //! uses them as Main-flippable hidden RGB565 buffers.
 
-use crate::framebuffer::downsample::Rgb565FrameView;
 use crate::framebuffer::format::rgb565_stride_bytes;
 use crate::framebuffer::target::DirtyRect;
-use crate::framebuffer::vertical_scale::VerticalRgb565Transform;
+use crate::framebuffer::vertical_scale::{Rgb565FrameView, VerticalRect, VerticalRgb565Transform};
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -227,14 +226,24 @@ impl ScanoutSlotsRgb565Framebuffer {
 
     pub fn copy_vertical_rect(
         &mut self,
-        source: Rgb565FrameView<'_>,
+        source: Rgb565FrameView<'_, Rgb565Pixel>,
         rect: DirtyRect,
     ) -> Result<usize, ScanoutSlotsError> {
         let transform = VerticalRgb565Transform::new(self.width, source.height, self.height)
             .map_err(|error| ScanoutSlotsError::InvalidGeometry(error.to_string()))?;
         let stride_pixels = self.stride_pixels;
         transform
-            .copy_rect(source, rect, self.buffer_mut(), stride_pixels)
+            .copy_rect(
+                source,
+                VerticalRect {
+                    x0: rect.x0,
+                    y0: rect.y0,
+                    x1: rect.x1,
+                    y1: rect.y1,
+                },
+                self.buffer_mut(),
+                stride_pixels,
+            )
             .map_err(|error| ScanoutSlotsError::InvalidGeometry(error.to_string()))
             .map(|stats| stats.map_or(0, |stats| stats.bytes))
     }
