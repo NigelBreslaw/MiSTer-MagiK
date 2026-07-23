@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct VerticalRect {
     pub x0: usize,

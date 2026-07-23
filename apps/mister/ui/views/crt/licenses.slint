@@ -10,8 +10,11 @@ export component LicensesScreen inherits Rectangle {
     background: CrtTheme.background;
 
     if !MisterBridge.licenses-expanded : VerticalLayout {
-        padding: MisterUi.grid * 2;
-        spacing: MisterUi.grid;
+        padding-left: MisterUi.grid-x * 2;
+        padding-right: MisterUi.grid-x * 2;
+        padding-top: MisterUi.grid-y * 2;
+        padding-bottom: MisterUi.grid-y * 2;
+        spacing: MisterUi.grid-y;
         CrtHeader { title: "Licenses"; subtitle: "Open source software"; status: ""; }
         CrtMenuRow { label: "MiSTer MagiK"; detail: ">"; focused: MisterBridge.licenses-selected == 0; }
         CrtMenuRow { label: "FFmpeg"; detail: ">"; focused: MisterBridge.licenses-selected == 1; }
@@ -22,10 +25,13 @@ export component LicensesScreen inherits Rectangle {
     }
 
     if MisterBridge.licenses-expanded : VerticalLayout {
-        padding: MisterUi.grid * 2;
-        spacing: MisterUi.grid;
+        padding-left: MisterUi.grid-x * 2;
+        padding-right: MisterUi.grid-x * 2;
+        padding-top: MisterUi.grid-y * 2;
+        padding-bottom: MisterUi.grid-y * 2;
+        spacing: MisterUi.grid-y;
         Text {
-            font-family: "Press Start 2P";
+            font-family: MisterUi.crt-font-family;
             text: MisterBridge.licenses-selected == 0 ? "MiSTer MagiK  v" :
                   MisterBridge.licenses-selected == 1 ? "FFmpeg  v" :
                   MisterBridge.licenses-selected == 2 ? "Press Start 2P  v" :
@@ -46,7 +52,7 @@ export component LicensesScreen inherits Rectangle {
                 height: parent.height - 24px;
                 viewport-y: -MisterBridge.licenses-scroll-y * 1px;
                 for line in MisterBridge.license-lines : Text {
-            font-family: "Press Start 2P";
+            font-family: MisterUi.crt-font-family;
                     text: line;
                     color: CrtTheme.text;
                     font-size: MisterUi.body-font;

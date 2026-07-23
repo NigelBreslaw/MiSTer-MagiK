@@ -9,8 +9,11 @@ export component CrtControllerPanel inherits Rectangle {
     background: CrtTheme.background;
 
     VerticalLayout {
-        padding: MisterUi.grid * 2;
-        spacing: MisterUi.grid;
+        padding-left: MisterUi.grid-x * 2;
+        padding-right: MisterUi.grid-x * 2;
+        padding-top: MisterUi.grid-y * 2;
+        padding-bottom: MisterUi.grid-y * 2;
+        spacing: MisterUi.grid-y;
 
         CrtHeader { title: "Controller"; subtitle: "Input test"; status: ""; }
         CrtMenuRow { vertical-stretch: 1; label: "Device"; detail: MisterBridge.device-name; focused: false; }

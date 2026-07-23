@@ -276,8 +276,11 @@ macro_rules! with_scene_app {
         if $ui.output_route().is_crt() {
             let crt_metrics = CrtUiMetrics::for_display($ui);
             let content = $ui.content_rect();
-            mister_ui.set_crt_grid(crt_metrics.grid);
-            mister_ui.set_crt_border(crt_metrics.border);
+            mister_ui.set_crt_grid_x(crt_metrics.grid_x);
+            mister_ui.set_crt_grid_y(crt_metrics.grid_y);
+            mister_ui.set_crt_border_x(crt_metrics.border_x);
+            mister_ui.set_crt_border_y(crt_metrics.border_y);
+            mister_ui.set_crt_font_family(crt_metrics.font_family.label().into());
             mister_ui.set_crt_body_font(crt_metrics.body_font);
             mister_ui.set_crt_heading_font(crt_metrics.heading_font);
             mister_ui.set_crt_card_title_font(crt_metrics.card_title_font);

@@ -248,6 +248,7 @@ fn sync_arcade_list_geometry_bridge(
     nav: &LauncherNav,
     ui: &UiDisplay,
 ) {
+    // Rust and Slint consume one route-owned PAL geometry contract.
     let geometry = arcade_list_geometry(nav, ui);
     let render_h = if nav.uses_crt_layout() {
         ui.content_rect().bottom()
@@ -257,7 +258,10 @@ fn sync_arcade_list_geometry_bridge(
     bridge.set_arcade_list_x(geometry.x as i32);
     bridge.set_arcade_list_y(geometry.y as i32);
     bridge.set_arcade_list_width(geometry.width as i32);
-    bridge.set_arcade_list_height(geometry.visible_height(render_h) as i32);
+    bridge.set_arcade_list_height(geometry.visible_height_with_metrics(
+        render_h,
+        nav.uses_crt_layout().then(|| CrtUiMetrics::for_display(ui)),
+    ) as i32);
 }
 
 fn arcade_list_geometry(nav: &LauncherNav, ui: &UiDisplay) -> ArcadeListGeometry {
@@ -1122,7 +1126,10 @@ fn sync_arcade_list_geometry_bridge_if_changed(
         bridge,
         get_arcade_list_height,
         set_arcade_list_height,
-        geometry.visible_height(render_h) as i32
+        geometry.visible_height_with_metrics(
+            render_h,
+            nav.uses_crt_layout().then(|| CrtUiMetrics::for_display(ui)),
+        ) as i32
     );
 }
 

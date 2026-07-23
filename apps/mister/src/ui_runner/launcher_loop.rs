@@ -1894,7 +1894,7 @@ pub(super) fn run_launcher_loop(
     let mut transition_picker_prev_left = false;
     let mut transition_picker_prev_right = false;
     let mut arcade_list_renderer = if crt_layout {
-        ArcadeListRenderer::new_for_crt(crt_metrics.game_row_height)
+        ArcadeListRenderer::new_for_crt_metrics(crt_metrics)
     } else {
         ArcadeListRenderer::new()
     };

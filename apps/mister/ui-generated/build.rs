@@ -80,6 +80,8 @@ fn main() {
         "../ui/views/hdmi/settings.slint",
         "../ui/fonts/PressStart2P-Regular.ttf",
         "../ui/fonts/PressStart2P-Regular.ttf.license",
+        "../ui/fonts/PressStart2P-PAL576-Regular.ttf",
+        "../ui/fonts/PressStart2P-PAL576-Regular.ttf.license",
         "../ui/fonts/LilliputSteps.otf",
         "../ui/fonts/LilliputSteps.otf.license",
         "../ui/icons/settings.svg",

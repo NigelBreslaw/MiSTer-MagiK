@@ -68,6 +68,7 @@ pub(crate) struct ConsoleFont {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ConsoleTypeface {
     PressStart2P,
+    PressStart2PPal576,
     LilliputSteps,
 }
 
@@ -81,6 +82,10 @@ impl ConsoleFont {
             ConsoleTypeface::PressStart2P => (
                 include_bytes!("../ui/fonts/PressStart2P-Regular.ttf"),
                 "PressStart2P-Regular.ttf",
+            ),
+            ConsoleTypeface::PressStart2PPal576 => (
+                include_bytes!("../ui/fonts/PressStart2P-PAL576-Regular.ttf"),
+                "PressStart2P-PAL576-Regular.ttf",
             ),
             ConsoleTypeface::LilliputSteps => (
                 include_bytes!("../ui/fonts/LilliputSteps.otf"),

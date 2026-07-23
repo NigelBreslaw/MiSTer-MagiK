@@ -10,7 +10,7 @@ use crate::arcade_catalog::{
     ARCADE_LIST_VISIBLE_H, ARCADE_ROW_HEIGHT, ArcadeGameEntry, ArcadeGameView,
 };
 use crate::bitmap_text::{ConsoleFont, ConsoleTypeface, TextGradient};
-use crate::ui_display::{CrtContentRect, CrtUiMetrics};
+use crate::ui_display::{CrtContentRect, CrtFontFamily, CrtUiMetrics};
 use mister_magik_fb::framebuffer::mapped::{MappedRgb565Framebuffer, Pixel, pixel_to_rgb565};
 use mister_magik_fb::framebuffer::present::{copy_dense_rect_565, copy_strided_rect_565};
 use mister_magik_fb::framebuffer::scanout_slots::ScanoutSlotsRgb565Framebuffer;
@@ -93,9 +93,9 @@ impl ArcadeListStyle {
         }
     }
 
-    const fn crt(row_height: i32) -> Self {
+    const fn crt(metrics: CrtUiMetrics) -> Self {
         Self {
-            row_height,
+            row_height: metrics.game_row_height,
             background: Pixel(0x00020817),
             background_565: rgb565_from_rgb888(0x02, 0x08, 0x17),
             alternate_background: Pixel(0x0006122b),
@@ -110,7 +110,12 @@ impl ArcadeListStyle {
             badge_fill: Pixel(0x0040e5e7),
             badge_fill_565: rgb565_from_rgb888(0x40, 0xe5, 0xe7),
             badge_text: Pixel(0x0003132d),
-            typeface: ConsoleTypeface::PressStart2P,
+            typeface: match metrics.font_family {
+                CrtFontFamily::PressStart2PPal576 => ConsoleTypeface::PressStart2PPal576,
+                CrtFontFamily::PressStart2P | CrtFontFamily::PressStart2PPal288 => {
+                    ConsoleTypeface::PressStart2P
+                }
+            },
             crt_palette: true,
         }
     }
@@ -157,9 +162,10 @@ impl ArcadeListGeometry {
         metrics: CrtUiMetrics,
         search: bool,
     ) -> Self {
-        let grid = metrics.grid.max(1) as usize;
-        let margin = grid * 2;
-        let y = content.y + metrics.header_height.max(1) as usize + grid * 3;
+        let grid_x = metrics.grid_x.max(1) as usize;
+        let grid_y = metrics.grid_y.max(1) as usize;
+        let margin = grid_x * 2;
+        let y = content.y + metrics.header_height.max(1) as usize + grid_y * 3;
         let x = if search {
             (content.x + content.width * 2 / 5 + margin * 2).min(content.right().saturating_sub(1))
         } else {
@@ -182,11 +188,20 @@ impl ArcadeListGeometry {
     }
 
     pub(crate) fn visible_height(self, render_h: usize) -> usize {
+        self.visible_height_with_metrics(render_h, None)
+    }
+
+    pub(crate) fn visible_height_with_metrics(
+        self,
+        render_h: usize,
+        metrics: Option<CrtUiMetrics>,
+    ) -> usize {
         let bottom_inset = if self.y == ARCADE_LIST_Y {
             32
         } else {
-            let metrics = CrtUiMetrics::for_framebuffer(self.width, render_h);
-            metrics.footer_height.max(1) as usize + metrics.grid.max(1) as usize * 3
+            let metrics =
+                metrics.unwrap_or_else(|| CrtUiMetrics::for_framebuffer(self.width, render_h));
+            metrics.footer_height.max(1) as usize + metrics.grid_y.max(1) as usize * 3
         };
         render_h
             .saturating_sub(self.y + bottom_inset)
@@ -213,6 +228,7 @@ pub(crate) struct ArcadeListRenderer {
     width: usize,
     visible_height: usize,
     style: ArcadeListStyle,
+    crt_metrics: Option<CrtUiMetrics>,
 }
 
 pub(crate) struct CachedArcadeRow {
@@ -273,14 +289,21 @@ pub(crate) enum ArcadeListUpdate {
 
 impl ArcadeListRenderer {
     pub(crate) fn new() -> Self {
-        Self::new_with_style(ArcadeListStyle::hdmi())
+        Self::new_with_style(ArcadeListStyle::hdmi(), None)
     }
 
     pub(crate) fn new_for_crt(row_height: i32) -> Self {
-        Self::new_with_style(ArcadeListStyle::crt(row_height.max(1)))
+        let mut metrics = CrtUiMetrics::for_framebuffer(640, 480);
+        metrics.game_row_height = row_height.max(1);
+        Self::new_for_crt_metrics(metrics)
     }
 
-    fn new_with_style(style: ArcadeListStyle) -> Self {
+    /// Uses the same route-owned metrics and font as the Slint CRT layer.
+    pub(crate) fn new_for_crt_metrics(metrics: CrtUiMetrics) -> Self {
+        Self::new_with_style(ArcadeListStyle::crt(metrics), Some(metrics))
+    }
+
+    fn new_with_style(style: ArcadeListStyle, crt_metrics: Option<CrtUiMetrics>) -> Self {
         Self {
             title_font: ConsoleFont::new_with_typeface(ARCADE_LIST_FONT_PX, style.typeface),
             meta_font: ConsoleFont::new_with_typeface(ARCADE_LIST_META_FONT_PX, style.typeface),
@@ -300,6 +323,7 @@ impl ArcadeListRenderer {
             width: ARCADE_LIST_W,
             visible_height: ARCADE_LIST_H,
             style,
+            crt_metrics,
         }
     }
 
@@ -322,7 +346,7 @@ impl ArcadeListRenderer {
         geometry: ArcadeListGeometry,
         render_h: usize,
     ) {
-        self.visible_height = geometry.visible_height(render_h);
+        self.visible_height = geometry.visible_height_with_metrics(render_h, self.crt_metrics);
         if self.geometry != geometry {
             if self.width != geometry.width {
                 self.width = geometry.width;
@@ -2365,7 +2389,7 @@ mod tests {
 
     #[test]
     fn crt_palette_behavior_is_independent_of_the_selected_typeface() {
-        let crt = ArcadeListStyle::crt(24);
+        let crt = ArcadeListStyle::crt(CrtUiMetrics::for_framebuffer(640, 480));
         let mut crt_lilliput = crt;
         crt_lilliput.typeface = ConsoleTypeface::LilliputSteps;
         let hdmi = ArcadeListStyle::hdmi();

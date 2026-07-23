@@ -10,8 +10,11 @@ export global MisterUi {
     in-out property <bool> crt-layout: false;
     out property <bool> compact-layout: crt-layout;
     // Defaults preserve the HDMI contract; Rust overrides them for CRT routes.
-    in-out property <int> crt-grid: 8;
-    in-out property <int> crt-border: 1;
+    in-out property <int> crt-grid-x: 8;
+    in-out property <int> crt-grid-y: 8;
+    in-out property <int> crt-border-x: 1;
+    in-out property <int> crt-border-y: 1;
+    in-out property <string> crt-font-family: "Press Start 2P";
     in-out property <int> crt-body-font: 8;
     in-out property <int> crt-heading-font: 16;
     in-out property <int> crt-card-title-font: 24;
@@ -23,8 +26,14 @@ export global MisterUi {
     in-out property <int> crt-content-y: 0;
     in-out property <int> crt-content-width: window-width;
     in-out property <int> crt-content-height: window-height;
-    out property <length> grid: crt-grid * 1px;
-    out property <length> border: crt-border * 1px;
+    out property <length> grid-x: crt-grid-x * 1px;
+    out property <length> grid-y: crt-grid-y * 1px;
+    out property <length> border-x: crt-border-x * 1px;
+    out property <length> border-y: crt-border-y * 1px;
+    // Transitional aliases remain for non-layout consumers. CRT layout code
+    // uses explicit axes.
+    out property <length> grid: grid-y;
+    out property <length> border: border-x;
     out property <length> body-font: crt-body-font * 1px;
     out property <length> heading-font: crt-heading-font * 1px;
     out property <length> card-title-font: crt-card-title-font * 1px;

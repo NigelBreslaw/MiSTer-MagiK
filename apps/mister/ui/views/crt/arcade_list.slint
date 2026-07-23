@@ -16,7 +16,7 @@ component SearchKey inherits Rectangle {
     border-color: selected ? CrtTheme.accent : CrtTheme.border;
 
     Text {
-            font-family: "Press Start 2P";
+            font-family: MisterUi.crt-font-family;
         text: root.label;
         color: root.selected && root.keyboard-focused ? CrtTheme.accent-text : CrtTheme.text;
         font-size: MisterUi.body-font;
@@ -56,8 +56,8 @@ component SearchKeyboard inherits Rectangle {
             border-color: MisterBridge.arcade-search-pane == 0 ? CrtTheme.accent : CrtTheme.border;
 
             Text {
-            font-family: "Press Start 2P";
-                x: MisterUi.grid;
+            font-family: MisterUi.crt-font-family;
+                x: MisterUi.grid-x;
                 width: parent.width - 16px;
                 height: parent.height;
                 text: MisterBridge.arcade-search-query == "" ? "_" : MisterBridge.arcade-search-query;
@@ -93,19 +93,19 @@ export component ArcadeListScreen inherits Rectangle {
     background: CrtTheme.background;
 
     CrtHeader {
-        x: MisterUi.grid * 2;
-        y: MisterUi.grid * 2;
-        width: parent.width - MisterUi.grid * 4;
+        x: MisterUi.grid-x * 2;
+        y: MisterUi.grid-y * 2;
+        width: parent.width - MisterUi.grid-x * 4;
         title: MisterBridge.arcade-search-active ? "Search" : MisterBridge.active-system-title;
         subtitle: "";
         status: root.count + (MisterBridge.arcade-search-active ? " matches" : " games");
     }
 
     if MisterBridge.arcade-search-active : SearchKeyboard {
-        x: MisterUi.grid;
-        y: MisterUi.header-height + MisterUi.grid * 3;
+        x: MisterUi.grid-x;
+        y: MisterUi.header-height + MisterUi.grid-y * 3;
         width: parent.width * 2 / 5;
-        height: parent.height - self.y - MisterUi.footer-height - MisterUi.grid * 3;
+        height: parent.height - self.y - MisterUi.footer-height - MisterUi.grid-y * 3;
     }
 
     Rectangle {
@@ -121,9 +121,9 @@ export component ArcadeListScreen inherits Rectangle {
 
     if root.count > root.visible-game-rows : Rectangle {
         x: (MisterBridge.arcade-list-x + MisterBridge.arcade-list-width) * 1px
-            - MisterUi.grid;
+            - MisterUi.grid-x;
         y: MisterBridge.arcade-list-y * 1px;
-        width: MisterUi.grid;
+        width: MisterUi.grid-x;
         height: MisterBridge.arcade-list-height * 1px;
         background: CrtTheme.background;
         border-width: MisterUi.border;
@@ -146,7 +146,7 @@ export component ArcadeListScreen inherits Rectangle {
         background: CrtTheme.panel-alt;
 
         Text {
-            font-family: "Press Start 2P";
+            font-family: MisterUi.crt-font-family;
             text: "Loading list...";
             color: CrtTheme.muted;
             font-size: MisterUi.body-font;
@@ -156,9 +156,9 @@ export component ArcadeListScreen inherits Rectangle {
     }
 
     CrtFooter {
-        x: MisterUi.grid * 2;
-        y: parent.height - MisterUi.footer-height - MisterUi.grid * 2;
-        width: parent.width - MisterUi.grid * 4;
+        x: MisterUi.grid-x * 2;
+        y: parent.height - MisterUi.footer-height - MisterUi.grid-y * 2;
+        width: parent.width - MisterUi.grid-x * 4;
         left-hint: "A Launch   Y Search";
         right-hint: "B Back   HOME Launcher";
     }

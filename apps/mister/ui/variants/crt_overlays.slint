@@ -13,12 +13,12 @@ component CrtProgressRow inherits Rectangle {
     border-color: CrtTheme.border;
 
     HorizontalLayout {
-        padding-left: MisterUi.grid;
-        padding-right: MisterUi.grid;
-        spacing: MisterUi.grid;
+        padding-left: MisterUi.grid-x;
+        padding-right: MisterUi.grid-x;
+        spacing: MisterUi.grid-x;
         cross-axis-alignment: center;
         Text {
-            font-family: "Press Start 2P";
+            font-family: MisterUi.crt-font-family;
             text: root.pack.system + "  " + root.pack.phase;
             color: CrtTheme.text;
             font-size: MisterUi.body-font;
@@ -26,7 +26,7 @@ component CrtProgressRow inherits Rectangle {
             horizontal-stretch: 1;
         }
         Text {
-            font-family: "Press Start 2P";
+            font-family: MisterUi.crt-font-family;
             text: root.pack.percent < 0 ? "..." : root.pack.percent + "%";
             color: CrtTheme.muted;
             font-size: MisterUi.body-font;
@@ -40,12 +40,15 @@ export component CompatibilityScreen inherits Rectangle {
     background: CrtTheme.background;
 
     VerticalLayout {
-        padding: MisterUi.grid;
-        spacing: MisterUi.grid;
+        padding-left: MisterUi.grid-x;
+        padding-right: MisterUi.grid-x;
+        padding-top: MisterUi.grid-y;
+        padding-bottom: MisterUi.grid-y;
+        spacing: MisterUi.grid-y;
         alignment: center;
 
         Text {
-            font-family: "Press Start 2P";
+            font-family: MisterUi.crt-font-family;
             text: "MiSTer MagiK compatibility check failed";
             color: #ff5d73;
             font-size: MisterUi.heading-font;
@@ -53,7 +56,7 @@ export component CompatibilityScreen inherits Rectangle {
         }
 
         Text {
-            font-family: "Press Start 2P";
+            font-family: MisterUi.crt-font-family;
             text: MisterBridge.compatibility-reason;
             color: #ffd166;
             font-size: MisterUi.body-font;
@@ -61,7 +64,7 @@ export component CompatibilityScreen inherits Rectangle {
         }
 
         Text {
-            font-family: "Press Start 2P";
+            font-family: MisterUi.crt-font-family;
             text: MisterBridge.compatibility-detail;
             color: CrtTheme.text;
             font-size: MisterUi.body-font;
@@ -70,7 +73,7 @@ export component CompatibilityScreen inherits Rectangle {
         }
 
         Text {
-            font-family: "Press Start 2P";
+            font-family: MisterUi.crt-font-family;
             text: "The normal launcher is disabled. Diagnostics: /tmp/mister-magik";
             color: CrtTheme.muted;
             font-size: MisterUi.body-font;
@@ -83,7 +86,7 @@ export component CompatibilityScreen inherits Rectangle {
 export component CatalogScanPopup inherits Rectangle {
     in property <int> s;
     property <length> scan-osd-width: 0px;
-    property <length> scan-horizontal-padding: MisterUi.grid;
+    property <length> scan-horizontal-padding: MisterUi.grid-x;
     property <length> scan-column-width: root.width > scan-osd-width
         ? root.width - scan-osd-width
         : 0px;
@@ -101,16 +104,16 @@ export component CatalogScanPopup inherits Rectangle {
             horizontal-stretch: 1;
             padding-left: root.scan-horizontal-padding;
             padding-right: root.scan-horizontal-padding;
-            padding-top: MisterUi.grid;
-            padding-bottom: MisterUi.grid;
-            spacing: MisterUi.grid;
+            padding-top: MisterUi.grid-y;
+            padding-bottom: MisterUi.grid-y;
+            spacing: MisterUi.grid-y;
             alignment: center;
             cross-axis-alignment: center;
 
             Rectangle { vertical-stretch: 1; background: transparent; }
 
             Text {
-            font-family: "Press Start 2P";
+            font-family: MisterUi.crt-font-family;
                 width: root.scan-content-width;
                 text: "MiSTer MagiK";
                 color: CrtTheme.accent;
@@ -119,7 +122,7 @@ export component CatalogScanPopup inherits Rectangle {
             }
 
             Text {
-            font-family: "Press Start 2P";
+            font-family: MisterUi.crt-font-family;
                 width: root.scan-content-width;
                 text: MisterBridge.catalog-scan-message;
                 color: CrtTheme.text;
@@ -129,7 +132,7 @@ export component CatalogScanPopup inherits Rectangle {
             }
 
             Text {
-            font-family: "Press Start 2P";
+            font-family: MisterUi.crt-font-family;
                 width: root.scan-content-width;
                 text: MisterBridge.catalog-scan-title;
                 color: #d7eef8;
@@ -138,7 +141,7 @@ export component CatalogScanPopup inherits Rectangle {
             }
 
             Text {
-            font-family: "Press Start 2P";
+            font-family: MisterUi.crt-font-family;
                 width: root.scan-content-width;
                 text: MisterBridge.catalog-scan-detail;
                 color: CrtTheme.muted;
@@ -152,7 +155,7 @@ export component CatalogScanPopup inherits Rectangle {
                 spacing: 5px * s;
 
                 Text {
-            font-family: "Press Start 2P";
+            font-family: MisterUi.crt-font-family;
                     text: MisterBridge.media-pack-summary;
                     color: #d7eef8;
                     font-size: MisterUi.body-font;
@@ -175,7 +178,7 @@ export component MediaProgressPopup inherits Rectangle {
     width: min(560px * s, MisterUi.content-width - 16px);
     height: min(100px * s, MisterUi.content-height - 16px);
     x: MisterUi.content-width / 2 - self.width / 2;
-    y: MisterUi.content-height - self.height - MisterUi.grid;
+    y: MisterUi.content-height - self.height - MisterUi.grid-y;
     background: CrtTheme.panel;
     border-width: 1px;
     border-color: #5c4a72;
@@ -189,7 +192,7 @@ export component MediaProgressPopup inherits Rectangle {
         spacing: 5px * root.s;
 
         Text {
-            font-family: "Press Start 2P";
+            font-family: MisterUi.crt-font-family;
             text: MisterBridge.media-pack-summary;
             color: #d7eef8;
             font-size: MisterUi.body-font;
@@ -212,7 +215,7 @@ export component StartupSplash inherits Rectangle {
         spacing: 12px * s;
 
         Text {
-            font-family: "Press Start 2P";
+            font-family: MisterUi.crt-font-family;
             text: "MiSTer MagiK";
             color: CrtTheme.text;
             font-size: MisterUi.heading-font;
@@ -238,7 +241,7 @@ export component BackgroundScanBadge inherits Rectangle {
         alignment: start;
         width: self.preferred-width;
         Text {
-            font-family: "Press Start 2P";
+            font-family: MisterUi.crt-font-family;
             text: "Building library";
             color: #d7eef8;
             font-size: MisterUi.body-font;
@@ -246,7 +249,7 @@ export component BackgroundScanBadge inherits Rectangle {
             vertical-alignment: center;
         }
         Text {
-            font-family: "Press Start 2P";
+            font-family: MisterUi.crt-font-family;
             text: ".";
             color: root.dot-visible ? #d7eef8 : transparent;
             font-size: MisterUi.body-font;
@@ -267,7 +270,7 @@ component CompactDialogButton inherits Rectangle {
     border-color: focused ? CrtTheme.accent : CrtTheme.border;
 
     Text {
-            font-family: "Press Start 2P";
+            font-family: MisterUi.crt-font-family;
         text: root.label;
         color: root.focused ? CrtTheme.accent-text : CrtTheme.text;
         font-size: MisterUi.body-font;
@@ -290,11 +293,14 @@ export component ConfirmDialog inherits Rectangle {
         border-color: CrtTheme.accent;
 
         VerticalLayout {
-            padding: MisterUi.grid;
-            spacing: MisterUi.grid;
+            padding-left: MisterUi.grid-x;
+            padding-right: MisterUi.grid-x;
+            padding-top: MisterUi.grid-y;
+            padding-bottom: MisterUi.grid-y;
+            spacing: MisterUi.grid-y;
 
             Text {
-            font-family: "Press Start 2P";
+            font-family: MisterUi.crt-font-family;
                 text: MisterBridge.confirm-title;
                 color: CrtTheme.accent;
                 font-size: MisterUi.heading-font;
@@ -303,7 +309,7 @@ export component ConfirmDialog inherits Rectangle {
             }
 
             Text {
-            font-family: "Press Start 2P";
+            font-family: MisterUi.crt-font-family;
                 text: MisterBridge.confirm-message;
                 color: CrtTheme.text;
                 font-size: MisterUi.body-font;
@@ -315,7 +321,7 @@ export component ConfirmDialog inherits Rectangle {
 
             HorizontalLayout {
                 height: 32px;
-                spacing: MisterUi.grid;
+                spacing: MisterUi.grid-x;
 
                 if MisterBridge.confirm-left-label != "" : CompactDialogButton {
                     label: MisterBridge.confirm-left-label;
@@ -339,7 +345,7 @@ export component LoadingOverlay inherits Rectangle {
         spacing: 12px;
 
         Text {
-            font-family: "Press Start 2P";
+            font-family: MisterUi.crt-font-family;
             text: MisterBridge.loading-message;
             color: CrtTheme.text;
             font-size: MisterUi.heading-font;
@@ -347,7 +353,7 @@ export component LoadingOverlay inherits Rectangle {
         }
 
         Text {
-            font-family: "Press Start 2P";
+            font-family: MisterUi.crt-font-family;
             text: MisterBridge.loading-detail != "" ? MisterBridge.loading-detail : "Please wait...";
             color: CrtTheme.muted;
             font-size: MisterUi.body-font;

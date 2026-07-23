@@ -35,9 +35,29 @@ pub enum ResolvedOutputRoute {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CrtFontFamily {
+    PressStart2P,
+    PressStart2PPal576,
+    PressStart2PPal288,
+}
+
+impl CrtFontFamily {
+    /// Slint family name embedded in the route's selected font asset.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::PressStart2P => "Press Start 2P",
+            Self::PressStart2PPal576 => "Press Start 2P PAL 576",
+            Self::PressStart2PPal288 => "Press Start 2P PAL 288",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CrtUiMetrics {
-    pub grid: i32,
-    pub border: i32,
+    pub grid_x: i32,
+    pub grid_y: i32,
+    pub border_x: i32,
+    pub border_y: i32,
     pub body_font: i32,
     pub heading_font: i32,
     pub card_title_font: i32,
@@ -45,13 +65,16 @@ pub struct CrtUiMetrics {
     pub game_row_height: i32,
     pub header_height: i32,
     pub footer_height: i32,
+    pub font_family: CrtFontFamily,
 }
 
 impl CrtUiMetrics {
     pub const fn for_framebuffer(_fb_w: usize, _fb_h: usize) -> Self {
         Self {
-            grid: 4,
-            border: 1,
+            grid_x: 4,
+            grid_y: 4,
+            border_x: 1,
+            border_y: 1,
             body_font: 8,
             heading_font: 16,
             card_title_font: 16,
@@ -59,14 +82,17 @@ impl CrtUiMetrics {
             game_row_height: 24,
             header_height: 32,
             footer_height: 24,
+            font_family: CrtFontFamily::PressStart2P,
         }
     }
 
     pub const fn for_display(display: &UiDisplay) -> Self {
         match display.output_route {
             ResolvedOutputRoute::Crt240p60 | ResolvedOutputRoute::Crt288p50 => Self {
-                grid: 8,
-                border: 2,
+                grid_x: 8,
+                grid_y: 8,
+                border_x: 2,
+                border_y: 2,
                 body_font: 16,
                 heading_font: 32,
                 card_title_font: 24,
@@ -74,6 +100,21 @@ impl CrtUiMetrics {
                 game_row_height: 24,
                 header_height: 48,
                 footer_height: 40,
+                font_family: CrtFontFamily::PressStart2P,
+            },
+            ResolvedOutputRoute::Crt576p50 => Self {
+                grid_x: 4,
+                grid_y: 5,
+                border_x: 1,
+                border_y: 1,
+                body_font: 8,
+                heading_font: 16,
+                card_title_font: 16,
+                card_detail_font: 8,
+                game_row_height: 29,
+                header_height: 38,
+                footer_height: 29,
+                font_family: CrtFontFamily::PressStart2PPal576,
             },
             _ => Self::for_framebuffer(display.render_w, display.render_h),
         }
@@ -202,10 +243,12 @@ impl ResolvedOutputRoute {
     }
 
     const fn composition_geometry(self, framebuffer: (usize, usize)) -> (usize, usize) {
-        if self.is_crt() {
-            (CRT_COMPOSITION_W, CRT_COMPOSITION_H)
-        } else {
-            framebuffer
+        match self {
+            Self::Crt576p50 => framebuffer,
+            Self::Crt240p60 | Self::Crt288p50 | Self::Crt480p60 => {
+                (CRT_COMPOSITION_W, CRT_COMPOSITION_H)
+            }
+            Self::Hdmi => framebuffer,
         }
     }
 }
@@ -1061,7 +1104,14 @@ mod tests {
             assert_eq!((plan.output_w, plan.output_h), scan);
             assert_eq!((plan.scan_w, plan.scan_h), scan);
             assert_eq!((plan.fb_w, plan.fb_h), framebuffer);
-            assert_eq!((plan.render_w, plan.render_h), (640, 480));
+            assert_eq!(
+                (plan.render_w, plan.render_h),
+                if pal == 1 && scandoubler == 1 {
+                    (640, 576)
+                } else {
+                    (640, 480)
+                }
+            );
             assert_eq!(rgb565_stride_bytes(plan.fb_w), stride);
             assert_eq!(plan.fb_w * plan.fb_h, pixels);
         }
@@ -1257,7 +1307,14 @@ mod tests {
             assert_eq!((plan.scan_w, plan.scan_h), scan);
             assert_eq!((plan.fb_w, plan.fb_h), framebuffer);
             let ui = UiDisplay::for_plan(plan);
-            assert_eq!((ui.render_w(), ui.render_h()), (640, 480));
+            assert_eq!(
+                (ui.render_w(), ui.render_h()),
+                if route == ResolvedOutputRoute::Crt576p50 {
+                    (640, 576)
+                } else {
+                    (640, 480)
+                }
+            );
             assert!(plan.direct_video);
             assert_eq!(plan.output_route, route);
         }
@@ -1268,8 +1325,10 @@ mod tests {
         let compact = CrtUiMetrics::for_framebuffer(320, 240);
         assert_eq!(
             (
-                compact.grid,
-                compact.border,
+                compact.grid_x,
+                compact.grid_y,
+                compact.border_x,
+                compact.border_y,
                 compact.body_font,
                 compact.heading_font,
                 compact.card_title_font,
@@ -1278,7 +1337,7 @@ mod tests {
                 compact.header_height,
                 compact.footer_height,
             ),
-            (4, 1, 8, 16, 16, 8, 24, 32, 24)
+            (4, 4, 1, 1, 8, 16, 16, 8, 24, 32, 24)
         );
         assert_eq!(CrtUiMetrics::for_framebuffer(384, 288), compact);
         assert_eq!(CrtUiMetrics::for_framebuffer(640, 480), compact);
@@ -1295,7 +1354,7 @@ mod tests {
                     width: 640,
                     height: 480,
                 },
-                (8, 2, 16, 32, 24, 16, 24, 48, 40),
+                (8, 8, 2, 2, 16, 32, 24, 16, 24, 48, 40),
             ),
             (
                 ResolvedOutputRoute::Crt288p50,
@@ -1305,7 +1364,7 @@ mod tests {
                     width: 640,
                     height: 424,
                 },
-                (8, 2, 16, 32, 24, 16, 24, 48, 40),
+                (8, 8, 2, 2, 16, 32, 24, 16, 24, 48, 40),
             ),
             (
                 ResolvedOutputRoute::Crt480p60,
@@ -1315,7 +1374,7 @@ mod tests {
                     width: 640,
                     height: 480,
                 },
-                (4, 1, 8, 16, 16, 8, 24, 32, 24),
+                (4, 4, 1, 1, 8, 16, 16, 8, 24, 32, 24),
             ),
             (
                 ResolvedOutputRoute::Crt576p50,
@@ -1323,9 +1382,9 @@ mod tests {
                     x: 0,
                     y: 0,
                     width: 576,
-                    height: 480,
+                    height: 576,
                 },
-                (4, 1, 8, 16, 16, 8, 24, 32, 24),
+                (4, 5, 1, 1, 8, 16, 16, 8, 29, 38, 29),
             ),
         ] {
             let plan = UiDisplayPlan::from_geometry_with_route(
@@ -1340,8 +1399,10 @@ mod tests {
             assert_eq!(display.content_rect(), expected_content);
             assert_eq!(
                 (
-                    metrics.grid,
-                    metrics.border,
+                    metrics.grid_x,
+                    metrics.grid_y,
+                    metrics.border_x,
+                    metrics.border_y,
                     metrics.body_font,
                     metrics.heading_font,
                     metrics.card_title_font,
@@ -1351,6 +1412,14 @@ mod tests {
                     metrics.footer_height,
                 ),
                 expected_metrics
+            );
+            assert_eq!(
+                metrics.font_family,
+                if route == ResolvedOutputRoute::Crt576p50 {
+                    CrtFontFamily::PressStart2PPal576
+                } else {
+                    CrtFontFamily::PressStart2P
+                }
             );
         }
     }
@@ -1366,10 +1435,10 @@ mod tests {
                 .expect("576p CRT plan");
 
             assert_eq!((plan.fb_w, plan.fb_h), (640, 576));
-            assert_eq!((plan.render_w, plan.render_h), (640, 480));
+            assert_eq!((plan.render_w, plan.render_h), (640, 576));
             assert_eq!((plan.scan_w, plan.scan_h), (640, 576));
             assert_eq!(plan.fb_policy, UiFramebufferSizePolicy::Auto);
-            assert!(plan.log_line().contains("composition_transformed=true"));
+            assert!(plan.log_line().contains("composition_transformed=false"));
         }
     }
 
@@ -1572,7 +1641,7 @@ mod tests {
         assert_eq!((pal31.output_w, pal31.output_h), (640, 576));
         assert_eq!((pal31.scan_w, pal31.scan_h), (640, 576));
         assert_eq!((pal31.fb_w, pal31.fb_h), (640, 576));
-        assert_eq!((pal31.render_w, pal31.render_h), (640, 480));
+        assert_eq!((pal31.render_w, pal31.render_h), (640, 576));
         assert!(pal31.direct_video);
     }
 

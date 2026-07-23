@@ -23,13 +23,16 @@ export component SetupOverlay inherits Rectangle {
     background: CrtTheme.background;
 
     VerticalLayout {
-        padding: MisterUi.grid * 2;
-        spacing: MisterUi.grid;
+        padding-left: MisterUi.grid-x * 2;
+        padding-right: MisterUi.grid-x * 2;
+        padding-top: MisterUi.grid-y * 2;
+        padding-bottom: MisterUi.grid-y * 2;
+        spacing: MisterUi.grid-y;
 
         CrtHeader { title: root.title; subtitle: "Controller setup"; status: ""; }
 
         if root.phase != 4 : Text {
-            font-family: "Press Start 2P";
+            font-family: MisterUi.crt-font-family;
             text: root.subtitle;
             color: CrtTheme.muted;
             font-size: MisterUi.body-font;
@@ -64,7 +67,7 @@ export component SetupOverlay inherits Rectangle {
         }
 
         if root.phase == 4 : Text {
-            font-family: "Press Start 2P";
+            font-family: MisterUi.crt-font-family;
             text: root.subtitle;
             color: CrtTheme.accent;
             font-size: MisterUi.body-font;

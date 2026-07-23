@@ -7,7 +7,7 @@ import { CrtTheme, CrtHeader, CrtFooter, CrtCard } from "../../components/crt_ui
 
 export component HomeGrid inherits Rectangle {
     property <bool> root-menu: MisterBridge.menu-breadcrumb == "";
-    property <length> card-gap: MisterUi.grid;
+    property <length> card-gap: MisterUi.grid-y;
     property <length> card-height: root.root-menu
         ? (menu-viewport.height - root.card-gap * 3) / 4
         : (menu-viewport.height - root.card-gap * 4) / 4.5;
@@ -23,8 +23,11 @@ export component HomeGrid inherits Rectangle {
     background: CrtTheme.background;
 
     VerticalLayout {
-        padding: MisterUi.grid * 2;
-        spacing: MisterUi.grid;
+        padding-left: MisterUi.grid-x * 2;
+        padding-right: MisterUi.grid-x * 2;
+        padding-top: MisterUi.grid-y * 2;
+        padding-bottom: MisterUi.grid-y * 2;
+        spacing: MisterUi.grid-y;
 
         CrtHeader {
             title: MisterBridge.menu-title;
