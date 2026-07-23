@@ -1,0 +1,242 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+import "../fonts/W95F.otf";
+
+export component CrtArcadeListMockup inherits Window {
+    width: 640px;
+    height: 480px;
+    title: "MiSTer MagiK CRT Arcade List Mockup";
+    background: #020817;
+    default-font-family: "W95FA";
+    forward-focus: focus-scope;
+
+    in-out property <[string]> games: [
+        "1941: Counter Attack",
+        "1942 (Revision B)",
+        "Bubble Bobble",
+        "Cadillacs and Dinosaurs",
+        "DoDonPachi",
+        "Metal Slug 3",
+        "Out Run",
+        "Street Fighter II",
+        "The Simpsons",
+        "Wonder Boy",
+        "X-Men",
+        "Zero Wing",
+        "Raiden II",
+        "R-Type",
+        "Shinobi",
+    ];
+    in-out property <int> highlighted-index: 5;
+    property <int> visible-count: 10;
+    property <int> first-visible: (highlighted-index - 5).clamp(
+        0,
+        (games.length - visible-count).max(0),
+    );
+    property <length> row-height: 32px;
+
+    focus-scope := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.DownArrow && root.highlighted-index < root.games.length - 1) {
+                root.highlighted-index += 1;
+                return accept;
+            }
+            if (event.text == Key.UpArrow && root.highlighted-index > 0) {
+                root.highlighted-index -= 1;
+                return accept;
+            }
+            return reject;
+        }
+
+        Rectangle {
+            x: 16px;
+            y: 16px;
+            width: 608px;
+            height: 448px;
+            background: #020817;
+            border-width: 2px;
+            border-color: #8b94f8;
+
+            Text {
+                x: 16px;
+                y: 0;
+                width: parent.width - 32px;
+                height: 56px;
+                text: "Arcade";
+                color: #aaa5ff;
+                font-size: 32px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            Text {
+                x: parent.width - 152px;
+                y: 0;
+                width: 136px;
+                height: 56px;
+                text: "245 / 915";
+                color: #aaa5ff;
+                font-size: 24px;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+            }
+
+            list-viewport := Rectangle {
+                x: 8px;
+                y: 56px;
+                width: parent.width - 40px;
+                height: root.visible-count * root.row-height;
+                background: #06122b;
+                border-width: 2px;
+                border-color: #8b94f8;
+                clip: true;
+
+                for game[index] in root.games : Rectangle {
+                    y: (index - root.first-visible) * root.row-height;
+                    width: parent.width;
+                    height: root.row-height;
+                    visible: index >= root.first-visible
+                        && index < root.first-visible + root.visible-count;
+                    background: index == root.highlighted-index ? #40e5e7 : #06122b;
+                    border-width: 1px;
+                    border-color: index == root.highlighted-index ? #40e5e7 : #5e59aa;
+
+                    Text {
+                        x: 8px;
+                        width: 24px;
+                        height: parent.height;
+                        text: index == root.highlighted-index ? ">" : "";
+                        color: #03132d;
+                        font-size: 24px;
+                        vertical-alignment: center;
+                    }
+
+                    Text {
+                        x: 40px;
+                        width: parent.width - 56px;
+                        height: parent.height;
+                        text: game;
+                        color: index == root.highlighted-index ? #03132d : #aaa5ff;
+                        font-size: 16px;
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            Rectangle {
+                x: parent.width - 24px;
+                y: list-viewport.y;
+                width: 16px;
+                height: list-viewport.height;
+                background: #0b0d25;
+                border-width: 2px;
+                border-color: #8b94f8;
+
+                Rectangle {
+                    y: root.first-visible * (parent.height - self.height)
+                        / (root.games.length - root.visible-count);
+                    width: parent.width;
+                    height: parent.height * root.visible-count / root.games.length;
+                    background: #8b94f8;
+                }
+            }
+
+            Rectangle {
+                x: 0;
+                y: 384px;
+                width: parent.width;
+                height: 2px;
+                background: #8b94f8;
+            }
+
+            Rectangle {
+                x: 24px;
+                y: 400px;
+                width: 24px;
+                height: 24px;
+                background: #aaa5ff;
+
+                Text {
+                    width: parent.width;
+                    height: parent.height;
+                    text: "B";
+                    color: #03132d;
+                    font-size: 16px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            Text {
+                x: 56px;
+                y: 400px;
+                width: 104px;
+                height: 24px;
+                text: "Back";
+                color: #aaa5ff;
+                font-size: 16px;
+                vertical-alignment: center;
+            }
+
+            Rectangle {
+                x: parent.width - 248px;
+                y: 400px;
+                width: 24px;
+                height: 24px;
+                background: #aaa5ff;
+
+                Text {
+                    width: parent.width;
+                    height: parent.height;
+                    text: "A";
+                    color: #03132d;
+                    font-size: 16px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            Text {
+                x: parent.width - 216px;
+                y: 400px;
+                width: 80px;
+                height: 24px;
+                text: "Launch";
+                color: #aaa5ff;
+                font-size: 16px;
+                vertical-alignment: center;
+            }
+
+            Rectangle {
+                x: parent.width - 120px;
+                y: 400px;
+                width: 24px;
+                height: 24px;
+                background: #aaa5ff;
+
+                Text {
+                    width: parent.width;
+                    height: parent.height;
+                    text: "Y";
+                    color: #03132d;
+                    font-size: 16px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            Text {
+                x: parent.width - 88px;
+                y: 400px;
+                width: 72px;
+                height: 24px;
+                text: "Search";
+                color: #aaa5ff;
+                font-size: 16px;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
