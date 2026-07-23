@@ -223,6 +223,7 @@ pub(super) struct LauncherPresentResult {
     pub(super) main_present_status: LauncherPresentStatus,
     pub(super) main_present_buffer: u8,
     pub(super) main_present_hidden_copy_us: u128,
+    pub(super) main_present_hidden_publish_us: u128,
     pub(super) main_present_hidden_invalid_bytes: usize,
     pub(super) main_present_hidden_rect_count: u32,
     pub(super) main_present_hidden_catchup_bytes: usize,

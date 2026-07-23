@@ -60,6 +60,7 @@ pub(in crate::ui_runner) trait LatchFrameBuffers {
         cached: CachedFrameView<'_>,
         rect: DirtyRect,
     ) -> Result<usize, String>;
+    fn publish_writes(buffer: &mut Self::Buffer);
 }
 
 pub(in crate::ui_runner) struct PluginLatchFrameBuffers {
@@ -134,6 +135,10 @@ impl LatchFrameBuffers for PluginLatchFrameBuffers {
                 rect,
             )
             .map_err(|e| e.to_string())
+    }
+
+    fn publish_writes(buffer: &mut Self::Buffer) {
+        buffer.publish_writes();
     }
 }
 
@@ -223,6 +228,7 @@ pub(in crate::ui_runner) struct FpgaVblankLatchHiddenPresentStats {
     pub(in crate::ui_runner) buffer_index: u8,
     pub(in crate::ui_runner) copied_rows: u32,
     pub(in crate::ui_runner) copy_us: u128,
+    pub(in crate::ui_runner) publish_us: u128,
     pub(in crate::ui_runner) post_us: u128,
     pub(in crate::ui_runner) set_vga_fb_us: u128,
     pub(in crate::ui_runner) status_us: u64,
@@ -432,6 +438,9 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                 e,
             ));
         }
+        let publish_start = Instant::now();
+        B::publish_writes(buffer);
+        let publish_us = publish_start.elapsed().as_micros();
 
         let sequence = self.sequence;
         self.sequence = self.sequence.wrapping_add(1).max(1);
@@ -531,6 +540,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             buffer_index,
             copied_rows,
             copy_us,
+            publish_us,
             post_us,
             set_vga_fb_us,
             status_us,
@@ -759,6 +769,7 @@ mod tests {
         ReadStatus,
         Copy,
         Overlay,
+        Publish,
         Post,
         ArmRoute,
     }
@@ -826,6 +837,10 @@ mod tests {
                 buffer.pixels[start..end].copy_from_slice(&cached.pixels()[start..end]);
             }
             Ok(rect.width() * rect.rows() as usize * 2)
+        }
+
+        fn publish_writes(buffer: &mut Self::Buffer) {
+            buffer.events.borrow_mut().push(TestEvent::Publish);
         }
     }
 
@@ -1012,6 +1027,7 @@ mod tests {
                 TestEvent::ReadStatus,
                 TestEvent::Copy,
                 TestEvent::Overlay,
+                TestEvent::Publish,
                 TestEvent::Post,
                 TestEvent::ArmRoute,
                 TestEvent::ReadStatus,

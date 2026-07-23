@@ -35,6 +35,7 @@ pub struct LauncherStatus<'a> {
     pub present_backend: &'a str,
     pub present_status: &'a str,
     pub present_buffer: u8,
+    pub latch_publish_us: u64,
     pub latch_sequence: u16,
     pub latch_flip_count: u16,
     pub latch_drop_count: u16,
@@ -270,6 +271,7 @@ fn launcher_status_value(status: LauncherStatus<'_>, ts_unix_ms: u128, pid: u32)
     insert!("present_backend", status.present_backend);
     insert!("present_status", status.present_status);
     insert!("present_buffer", status.present_buffer);
+    insert!("latch_publish_us", status.latch_publish_us);
     insert!("latch_sequence", status.latch_sequence);
     insert!("latch_flip_count", status.latch_flip_count);
     insert!("latch_drop_count", status.latch_drop_count);
@@ -635,6 +637,7 @@ mod tests {
                 present_backend: "fpga-vblank-latch-hidden",
                 present_status: "ok",
                 present_buffer: 2,
+                latch_publish_us: 3,
                 latch_sequence: 41,
                 latch_flip_count: 40,
                 latch_drop_count: 0,
@@ -836,6 +839,7 @@ mod tests {
         assert_eq!(value["output_route"], "crt-576p50");
         assert_eq!(value["vsync_period_us"], 19_829);
         assert_eq!(value["present_backend"], "fpga-vblank-latch-hidden");
+        assert_eq!(value["latch_publish_us"], 3);
         assert_eq!(value["latch_sequence"], 41);
         assert_eq!(value["latch_flip_count"], 40);
         assert_eq!(value["latch_drop_count"], 0);
@@ -938,6 +942,7 @@ mod tests {
             present_backend: "fpga-vblank-latch-hidden",
             present_status: "ok",
             present_buffer: 1,
+            latch_publish_us: 4,
             latch_sequence: 7,
             latch_flip_count: 6,
             latch_drop_count: 0,

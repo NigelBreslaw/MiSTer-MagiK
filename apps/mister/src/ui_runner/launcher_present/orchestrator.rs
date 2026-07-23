@@ -485,6 +485,7 @@ fn fb0_present_result(
         },
         main_present_buffer: 0,
         main_present_hidden_copy_us: 0,
+        main_present_hidden_publish_us: 0,
         main_present_hidden_invalid_bytes: 0,
         main_present_hidden_rect_count: 0,
         main_present_hidden_catchup_bytes: 0,
@@ -515,8 +516,11 @@ fn latch_present_result(
     preview_redraw_rect: Option<DirtyRect>,
     arcade_redraw_update: Option<ArcadeListUpdate>,
 ) -> LauncherPresentResult {
-    let present_us =
-        stats.copy_us + stats.post_us + stats.set_vga_fb_us + u128::from(stats.status_us);
+    let present_us = stats.copy_us
+        + stats.publish_us
+        + stats.post_us
+        + stats.set_vga_fb_us
+        + u128::from(stats.status_us);
     let preview_present_bytes = preview_redraw_rect
         .map(|rect| {
             rect.width()
@@ -545,6 +549,7 @@ fn latch_present_result(
         },
         main_present_buffer: stats.buffer_index,
         main_present_hidden_copy_us: stats.copy_us,
+        main_present_hidden_publish_us: stats.publish_us,
         main_present_hidden_invalid_bytes: stats.invalid_bytes,
         main_present_hidden_rect_count: stats.rect_count,
         main_present_hidden_catchup_bytes: stats.catchup_bytes,
@@ -577,6 +582,7 @@ fn empty_present_result() -> LauncherPresentResult {
         main_present_status: LauncherPresentStatus::None,
         main_present_buffer: 0,
         main_present_hidden_copy_us: 0,
+        main_present_hidden_publish_us: 0,
         main_present_hidden_invalid_bytes: 0,
         main_present_hidden_rect_count: 0,
         main_present_hidden_catchup_bytes: 0,

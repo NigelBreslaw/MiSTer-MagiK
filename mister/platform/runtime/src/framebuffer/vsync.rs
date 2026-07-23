@@ -136,6 +136,7 @@ pub struct VsyncPace {
 pub struct VsyncPacer {
     rx: Receiver<VsyncWaitStatus>,
     direct_fb: Option<File>,
+    default_period_us: u64,
     period_us: u64,
     last_hit_at: Option<Instant>,
     last_frame_at: Instant,
@@ -174,7 +175,11 @@ pub fn wait_vsync_fd(fd: std::os::unix::io::RawFd) -> VsyncWaitStatus {
 
 impl VsyncPacer {
     pub fn from_env() -> Self {
-        let period_us = configured_fallback_period_us();
+        Self::from_env_with_default_period(configured_fallback_period_us())
+    }
+
+    pub fn from_env_with_default_period(default_period_us: u64) -> Self {
+        let period_us = configured_fallback_period_us_with_default(default_period_us);
         let degraded_threshold = std::env::var("MISTER_VSYNC_DEGRADED_MISSES")
             .ok()
             .and_then(|s| s.parse().ok())
@@ -201,6 +206,7 @@ impl VsyncPacer {
         Self {
             rx,
             direct_fb,
+            default_period_us,
             period_us,
             last_hit_at: None,
             last_frame_at: Instant::now(),
@@ -224,7 +230,7 @@ impl VsyncPacer {
     /// the old ioctl cannot block the render thread and exits when it returns
     /// to the disconnected channel.
     pub fn rearm_after_display_mode_change(&mut self) {
-        *self = Self::from_env();
+        *self = Self::from_env_with_default_period(self.default_period_us);
         boot_analytics::event("vsync_rearmed", "reason=display_mode_change");
     }
 
@@ -510,13 +516,34 @@ fn vsync_worker_backoff(status: &VsyncWaitStatus, fallback_period_us: u64) -> Op
 }
 
 fn configured_fallback_period_us() -> u64 {
-    fallback_period_us_from(
+    let default_period_us = if mister_ini_menu_pal_enabled() {
+        PAL_VSYNC_FALLBACK_US
+    } else {
+        DEFAULT_VSYNC_FALLBACK_US
+    };
+    configured_fallback_period_us_with_default(default_period_us)
+}
+
+fn configured_fallback_period_us_with_default(default_period_us: u64) -> u64 {
+    fallback_period_us_from_default(
         std::env::var("MISTER_VSYNC_FALLBACK_HZ").ok().as_deref(),
-        mister_ini_menu_pal_enabled(),
+        default_period_us,
     )
 }
 
+#[cfg(test)]
 fn fallback_period_us_from(hz: Option<&str>, menu_pal: bool) -> u64 {
+    fallback_period_us_from_default(
+        hz,
+        if menu_pal {
+            PAL_VSYNC_FALLBACK_US
+        } else {
+            DEFAULT_VSYNC_FALLBACK_US
+        },
+    )
+}
+
+fn fallback_period_us_from_default(hz: Option<&str>, default_period_us: u64) -> u64 {
     if let Some(period_us) = hz
         .and_then(|value| value.parse::<f64>().ok())
         .filter(|hz| *hz > 1.0)
@@ -524,12 +551,7 @@ fn fallback_period_us_from(hz: Option<&str>, menu_pal: bool) -> u64 {
     {
         return period_us;
     }
-
-    if menu_pal {
-        PAL_VSYNC_FALLBACK_US
-    } else {
-        DEFAULT_VSYNC_FALLBACK_US
-    }
+    default_period_us
 }
 
 fn configured_fresh_hit_max_age_us() -> u64 {
@@ -605,6 +627,8 @@ mod tests {
         assert!(direct_wait_enabled_from(Some("1")));
         assert!(direct_wait_enabled_from(Some("TRUE")));
         assert!(!direct_wait_enabled_from(None));
+        assert_eq!(fallback_period_us_from_default(None, 19_830), 19_830);
+        assert_eq!(fallback_period_us_from_default(Some("50"), 19_830), 20_000);
     }
 
     #[test]
@@ -715,6 +739,7 @@ mod tests {
         VsyncPacer {
             rx,
             direct_fb: None,
+            default_period_us: period_us,
             period_us,
             last_hit_at: None,
             last_frame_at: Instant::now() - Duration::from_micros(period_us),
@@ -803,6 +828,7 @@ mod tests {
         let mut pacer = VsyncPacer {
             rx,
             direct_fb: None,
+            default_period_us: DEFAULT_VSYNC_FALLBACK_US,
             period_us: DEFAULT_VSYNC_FALLBACK_US,
             last_hit_at: None,
             last_frame_at: Instant::now() - Duration::from_micros(DEFAULT_VSYNC_FALLBACK_US),
@@ -940,6 +966,7 @@ mod tests {
         let mut pacer = VsyncPacer {
             rx,
             direct_fb: None,
+            default_period_us: DEFAULT_VSYNC_FALLBACK_US,
             period_us: DEFAULT_VSYNC_FALLBACK_US,
             last_hit_at: None,
             last_frame_at: Instant::now() - Duration::from_micros(DEFAULT_VSYNC_FALLBACK_US),

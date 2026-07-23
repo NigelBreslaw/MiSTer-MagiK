@@ -364,7 +364,12 @@ pub fn run_ui(f: &mut Fpga) {
     }
 
     let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
-    let animation_clock = AnimationClock::from_env();
+    let animation_clock = AnimationClock::from_env_with_fixed_step(
+        ui.output_route()
+            .nominal_period_us()
+            .map(Duration::from_micros)
+            .unwrap_or(Duration::from_nanos(16_666_667)),
+    );
     slint::platform::set_platform(Box::new(MisterPlatform {
         window: window.clone(),
         start: Instant::now(),

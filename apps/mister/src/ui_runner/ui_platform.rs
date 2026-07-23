@@ -87,6 +87,10 @@ pub(crate) struct AnimationClock {
 
 impl AnimationClock {
     pub(crate) fn from_env() -> Self {
+        Self::from_env_with_fixed_step(Duration::from_nanos(16_666_667))
+    }
+
+    pub(crate) fn from_env_with_fixed_step(fixed_step: Duration) -> Self {
         match std::env::var("MISTER_ANIMATION_CLOCK")
             .ok()
             .map(|s| s.to_ascii_lowercase().replace('_', "-"))
@@ -95,17 +99,17 @@ impl AnimationClock {
             None | Some("") | Some("fixed60") | Some("fixed-60") | Some("frame")
             | Some("frame-clock") => Self {
                 fixed_time: Some(Rc::new(Cell::new(Duration::ZERO))),
-                fixed_step: Duration::from_nanos(16_666_667),
+                fixed_step,
             },
             Some("wall") | Some("wall-clock") => Self {
                 fixed_time: None,
-                fixed_step: Duration::from_nanos(16_666_667),
+                fixed_step,
             },
             other => {
                 crate::ui_errln!("ui: unknown MISTER_ANIMATION_CLOCK={other:?}; use wall|fixed60");
                 Self {
                     fixed_time: None,
-                    fixed_step: Duration::from_nanos(16_666_667),
+                    fixed_step,
                 }
             }
         }

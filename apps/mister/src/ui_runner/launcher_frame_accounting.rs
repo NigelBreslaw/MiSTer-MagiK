@@ -69,6 +69,7 @@ pub(super) struct LauncherFrameAccounting {
     last_present_backend: &'static str,
     last_present_status: &'static str,
     last_present_buffer: u8,
+    last_latch_publish_us: u64,
     last_latch_sequence: u16,
     last_latch_flip_count: u16,
     last_latch_drop_count: u16,
@@ -120,6 +121,7 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) main_present_status: LauncherPresentStatus,
     pub(super) main_present_buffer: u8,
     pub(super) main_present_hidden_copy_us: u128,
+    pub(super) main_present_hidden_publish_us: u128,
     pub(super) main_present_hidden_invalid_bytes: usize,
     pub(super) main_present_hidden_rect_count: u32,
     pub(super) main_present_hidden_catchup_bytes: usize,
@@ -317,6 +319,7 @@ impl LauncherFrameSnapshotBuilder {
             main_present_status: self.presentation.main_present_status,
             main_present_buffer: self.presentation.main_present_buffer,
             main_present_hidden_copy_us: self.presentation.main_present_hidden_copy_us,
+            main_present_hidden_publish_us: self.presentation.main_present_hidden_publish_us,
             main_present_hidden_invalid_bytes: self.presentation.main_present_hidden_invalid_bytes,
             main_present_hidden_rect_count: self.presentation.main_present_hidden_rect_count,
             main_present_hidden_catchup_bytes: self.presentation.main_present_hidden_catchup_bytes,
@@ -962,6 +965,7 @@ impl LauncherFrameAccounting {
             last_present_backend: "none",
             last_present_status: "none",
             last_present_buffer: 0,
+            last_latch_publish_us: 0,
             last_latch_sequence: 0,
             last_latch_flip_count: 0,
             last_latch_drop_count: 0,
@@ -1120,6 +1124,7 @@ impl LauncherFrameAccounting {
         self.last_present_backend = frame.main_present_backend.trace_label();
         self.last_present_status = frame.main_present_status.trace_label();
         self.last_present_buffer = frame.main_present_buffer;
+        self.last_latch_publish_us = u128_to_u64_saturating(frame.main_present_hidden_publish_us);
         self.last_latch_sequence = frame.main_present_sequence;
         self.last_latch_flip_count = frame.main_present_flip_count;
         self.last_latch_drop_count = frame.main_present_drop_count;
@@ -1854,6 +1859,7 @@ impl LauncherFrameAccounting {
             present_backend: self.last_present_backend,
             present_status: self.last_present_status,
             present_buffer: self.last_present_buffer,
+            latch_publish_us: self.last_latch_publish_us,
             latch_sequence: self.last_latch_sequence,
             latch_flip_count: self.last_latch_flip_count,
             latch_drop_count: self.last_latch_drop_count,
@@ -2131,6 +2137,7 @@ mod tests {
             main_present_status: LauncherPresentStatus::None,
             main_present_buffer: 0,
             main_present_hidden_copy_us: 0,
+            main_present_hidden_publish_us: 0,
             main_present_hidden_invalid_bytes: 0,
             main_present_hidden_rect_count: 0,
             main_present_hidden_catchup_bytes: 0,
@@ -2236,6 +2243,7 @@ mod tests {
                 main_present_status: frame.main_present_status,
                 main_present_buffer: frame.main_present_buffer,
                 main_present_hidden_copy_us: frame.main_present_hidden_copy_us,
+                main_present_hidden_publish_us: frame.main_present_hidden_publish_us,
                 main_present_hidden_invalid_bytes: frame.main_present_hidden_invalid_bytes,
                 main_present_hidden_rect_count: frame.main_present_hidden_rect_count,
                 main_present_hidden_catchup_bytes: frame.main_present_hidden_catchup_bytes,

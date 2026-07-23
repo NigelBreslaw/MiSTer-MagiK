@@ -248,6 +248,12 @@ impl ScanoutSlotsRgb565Framebuffer {
             .map(|stats| stats.map_or(0, |stats| stats.bytes))
     }
 
+    /// Publishes every prior CPU write to the write-combined scanout mapping
+    /// before the FPGA is told that this slot is ready to read.
+    pub fn publish_writes(&mut self) {
+        publish_scanout_writes();
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn copy_rect_565_strided(
         &mut self,
@@ -344,6 +350,21 @@ impl ScanoutSlotsRgb565Framebuffer {
             )
         }
     }
+}
+
+#[inline]
+fn publish_scanout_writes() {
+    use std::sync::atomic::{Ordering, compiler_fence};
+
+    compiler_fence(Ordering::Release);
+    #[cfg(target_arch = "arm")]
+    // SAFETY: this instruction has no memory operands of its own. It drains
+    // prior stores through the ARM system domain before MMIO publishes the
+    // framebuffer address to the FPGA.
+    unsafe {
+        core::arch::asm!("dsb sy", options(nostack, preserves_flags));
+    }
+    compiler_fence(Ordering::SeqCst);
 }
 
 fn copy_full_frame_pixels(

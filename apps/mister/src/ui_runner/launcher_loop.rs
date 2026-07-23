@@ -1851,7 +1851,11 @@ pub(super) fn run_launcher_loop(
             setup.open_for(status, idx);
         }
     }
-    let mut pacer = VsyncPacer::from_env();
+    let mut pacer = ui
+        .output_route()
+        .nominal_period_us()
+        .map(VsyncPacer::from_env_with_default_period)
+        .unwrap_or_else(VsyncPacer::from_env);
     let pacing_policy = LauncherFramePacingPolicy::default();
     let present_timing = PresentTiming::from_env();
     if preview_route.allows_preview_work()

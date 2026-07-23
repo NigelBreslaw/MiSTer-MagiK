@@ -497,7 +497,11 @@ pub(in crate::ui_runner) fn run_screensaver_loop(
         x1: ui.render_w(),
         y1: ui.render_h(),
     });
-    let mut pacer = VsyncPacer::from_env();
+    let mut pacer = ui
+        .output_route()
+        .nominal_period_us()
+        .map(VsyncPacer::from_env_with_default_period)
+        .unwrap_or_else(VsyncPacer::from_env);
     let start = Instant::now();
     let mut frame = 0_u64;
     loop {

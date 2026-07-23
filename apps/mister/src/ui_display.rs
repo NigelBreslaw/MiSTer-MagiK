@@ -145,6 +145,19 @@ impl ResolvedOutputRoute {
         }
     }
 
+    /// Nominal period of Main's resolved progressive CRT raster. This is the
+    /// route-owned fallback for animation and vsync pacing, rounded to the
+    /// nearest microsecond.
+    pub const fn nominal_period_us(self) -> Option<u64> {
+        match self {
+            Self::Hdmi => None,
+            Self::Crt240p60 => Some(16_652),
+            Self::Crt288p50 => Some(19_830),
+            Self::Crt480p60 => Some(16_683),
+            Self::Crt576p50 => Some(19_829),
+        }
+    }
+
     pub const fn content_insets(self) -> CrtContentInsets {
         match self {
             Self::Crt288p50 => CrtContentInsets {
@@ -835,6 +848,27 @@ impl<'a> ParsedIni<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn crt_routes_expose_main_raster_periods() {
+        assert_eq!(ResolvedOutputRoute::Hdmi.nominal_period_us(), None);
+        assert_eq!(
+            ResolvedOutputRoute::Crt240p60.nominal_period_us(),
+            Some(16_652)
+        );
+        assert_eq!(
+            ResolvedOutputRoute::Crt288p50.nominal_period_us(),
+            Some(19_830)
+        );
+        assert_eq!(
+            ResolvedOutputRoute::Crt480p60.nominal_period_us(),
+            Some(16_683)
+        );
+        assert_eq!(
+            ResolvedOutputRoute::Crt576p50.nominal_period_us(),
+            Some(19_829)
+        );
+    }
     use mister_magik_fb::framebuffer::format::rgb565_stride_bytes;
 
     #[derive(Clone, Copy)]
