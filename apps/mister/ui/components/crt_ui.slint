@@ -4,14 +4,14 @@
 import { MisterUi } from "../mister_window.slint";
 
 export global CrtTheme {
-    in-out property <color> background: #080b12;
-    in-out property <color> panel: #101827;
-    in-out property <color> panel-alt: #14152a;
-    in-out property <color> border: #5c4a72;
-    in-out property <color> text: #e8e0f0;
-    in-out property <color> muted: #9080a8;
-    in-out property <color> accent: #06d6a0;
-    in-out property <color> accent-text: #08131c;
+    in-out property <color> background: #020817;
+    in-out property <color> panel: #050d23;
+    in-out property <color> panel-alt: #06122b;
+    in-out property <color> border: #5e59aa;
+    in-out property <color> text: #aaa5ff;
+    in-out property <color> muted: #8b94f8;
+    in-out property <color> accent: #40e5e7;
+    in-out property <color> accent-text: #03132d;
     in-out property <color> warning: #ffd166;
     in-out property <color> danger: #ff5d73;
 }
@@ -21,9 +21,9 @@ export component CrtHeader inherits Rectangle {
     in property <string> status;
     in property <string> subtitle;
 
-    height: root.subtitle == "" ? 32px : 40px;
-    background: CrtTheme.panel;
-    border-width: 1px;
+    height: MisterUi.header-height;
+    background: CrtTheme.background;
+    border-width: MisterUi.border;
     border-color: CrtTheme.border;
 
     HorizontalLayout {
@@ -38,6 +38,7 @@ export component CrtHeader inherits Rectangle {
 
             Text {
                 text: root.title;
+                font-family: "W95FA";
                 color: CrtTheme.text;
                 font-size: MisterUi.heading-font;
                 overflow: elide;
@@ -45,6 +46,7 @@ export component CrtHeader inherits Rectangle {
 
             if root.subtitle != "" : Text {
                 text: root.subtitle;
+                font-family: "W95FA";
                 color: CrtTheme.warning;
                 font-size: MisterUi.body-font;
                 overflow: elide;
@@ -53,6 +55,7 @@ export component CrtHeader inherits Rectangle {
 
         Text {
             text: root.status;
+            font-family: "W95FA";
             color: CrtTheme.text;
             font-size: MisterUi.body-font;
             horizontal-alignment: right;
@@ -64,9 +67,9 @@ export component CrtFooter inherits Rectangle {
     in property <string> left-hint;
     in property <string> right-hint;
 
-    height: 24px;
+    height: MisterUi.footer-height;
     background: CrtTheme.background;
-    border-width: 1px;
+    border-width: MisterUi.border;
     border-color: CrtTheme.border;
 
     HorizontalLayout {
@@ -77,6 +80,7 @@ export component CrtFooter inherits Rectangle {
 
         Text {
             text: root.left-hint;
+            font-family: "W95FA";
             color: CrtTheme.muted;
             font-size: MisterUi.body-font;
             horizontal-stretch: 1;
@@ -84,6 +88,7 @@ export component CrtFooter inherits Rectangle {
 
         Text {
             text: root.right-hint;
+            font-family: "W95FA";
             color: CrtTheme.muted;
             font-size: MisterUi.body-font;
             horizontal-alignment: right;
@@ -97,9 +102,9 @@ export component CrtMenuRow inherits Rectangle {
     in property <bool> focused;
     in property <bool> enabled: true;
 
-    height: MisterUi.compact-layout ? 24px : 48px;
+    min-height: MisterUi.footer-height;
     background: root.focused ? CrtTheme.accent : CrtTheme.panel-alt;
-    border-width: 1px;
+    border-width: MisterUi.border;
     border-color: root.focused ? CrtTheme.accent : CrtTheme.border;
 
     HorizontalLayout {
@@ -110,6 +115,7 @@ export component CrtMenuRow inherits Rectangle {
 
         Text {
             text: (root.focused ? "> " : "  ") + root.label;
+            font-family: "W95FA";
             color: !root.enabled ? CrtTheme.muted
                 : root.focused ? CrtTheme.accent-text : CrtTheme.text;
             font-size: MisterUi.body-font;
@@ -119,11 +125,94 @@ export component CrtMenuRow inherits Rectangle {
 
         Text {
             text: root.detail;
+            font-family: "W95FA";
             color: !root.enabled ? CrtTheme.muted
                 : root.focused ? CrtTheme.accent-text : CrtTheme.muted;
             font-size: MisterUi.body-font;
             horizontal-alignment: right;
             overflow: elide;
         }
+    }
+}
+
+export component CrtCard inherits Rectangle {
+    in property <string> label;
+    in property <string> detail;
+    in property <bool> focused;
+    in property <bool> show-marker: true;
+
+    background: root.focused ? CrtTheme.accent : CrtTheme.panel-alt;
+    border-width: MisterUi.border;
+    border-color: root.focused ? CrtTheme.accent : CrtTheme.border;
+
+    HorizontalLayout {
+        padding-left: MisterUi.grid * 2;
+        padding-right: MisterUi.grid * 2;
+        spacing: MisterUi.grid;
+        cross-axis-alignment: center;
+
+        Text {
+            width: MisterUi.card-title-font;
+            text: root.focused && root.show-marker ? ">" : "";
+            font-family: "W95FA";
+            color: CrtTheme.accent-text;
+            font-size: MisterUi.card-title-font;
+            vertical-alignment: center;
+        }
+
+        VerticalLayout {
+            spacing: 0px;
+            alignment: center;
+            horizontal-stretch: 1;
+
+            Text {
+                text: root.label;
+                font-family: "W95FA";
+                color: root.focused ? CrtTheme.accent-text : CrtTheme.text;
+                font-size: MisterUi.card-title-font;
+                overflow: elide;
+                vertical-alignment: center;
+            }
+
+            if root.detail != "" : Text {
+                text: root.detail;
+                font-family: "W95FA";
+                color: root.focused ? #17304a : CrtTheme.muted;
+                font-size: MisterUi.card-detail-font;
+                overflow: elide;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
+export component CrtNavHint inherits HorizontalLayout {
+    in property <string> button;
+    in property <string> label;
+
+    spacing: MisterUi.grid;
+    cross-axis-alignment: center;
+
+    Rectangle {
+        width: root.button == "HOME" ? MisterUi.body-font * 3 : MisterUi.body-font * 3 / 2;
+        height: MisterUi.body-font * 3 / 2;
+        background: CrtTheme.accent;
+
+        Text {
+            text: root.button;
+            font-family: "W95FA";
+            color: CrtTheme.accent-text;
+            font-size: MisterUi.body-font;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+
+    Text {
+        text: root.label;
+        font-family: "W95FA";
+        color: CrtTheme.text;
+        font-size: MisterUi.body-font;
+        vertical-alignment: center;
     }
 }

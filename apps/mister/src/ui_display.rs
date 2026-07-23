@@ -32,6 +32,50 @@ pub enum ResolvedOutputRoute {
     Crt576p50,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CrtUiMetrics {
+    pub grid: i32,
+    pub border: i32,
+    pub body_font: i32,
+    pub heading_font: i32,
+    pub card_title_font: i32,
+    pub card_detail_font: i32,
+    pub header_height: i32,
+    pub footer_height: i32,
+}
+
+impl CrtUiMetrics {
+    pub const fn for_framebuffer(fb_w: usize, fb_h: usize) -> Self {
+        if fb_w >= 640 && fb_h >= 480 {
+            Self {
+                grid: 8,
+                border: 2,
+                body_font: 16,
+                heading_font: 32,
+                card_title_font: 24,
+                card_detail_font: 16,
+                header_height: 48,
+                footer_height: 40,
+            }
+        } else {
+            Self {
+                grid: 4,
+                border: 1,
+                body_font: 8,
+                heading_font: 16,
+                card_title_font: 16,
+                card_detail_font: 8,
+                header_height: 32,
+                footer_height: 24,
+            }
+        }
+    }
+
+    pub const fn for_display(display: &UiDisplay) -> Self {
+        Self::for_framebuffer(display.render_w, display.render_h)
+    }
+}
+
 impl ResolvedOutputRoute {
     fn from_runtime_settings_v1(value: &str) -> Option<Self> {
         let mut schema = None;
@@ -1099,6 +1143,34 @@ mod tests {
             assert!(plan.direct_video);
             assert_eq!(plan.output_route, route);
         }
+    }
+
+    #[test]
+    fn crt_ui_metrics_preserve_the_two_embedded_type_profiles() {
+        let compact = CrtUiMetrics::for_framebuffer(320, 240);
+        assert_eq!(
+            (
+                compact.grid,
+                compact.body_font,
+                compact.heading_font,
+                compact.header_height,
+                compact.footer_height,
+            ),
+            (4, 8, 16, 32, 24)
+        );
+        assert_eq!(CrtUiMetrics::for_framebuffer(384, 288), compact);
+
+        let full = CrtUiMetrics::for_framebuffer(640, 480);
+        assert_eq!(
+            (
+                full.grid,
+                full.body_font,
+                full.heading_font,
+                full.header_height,
+                full.footer_height,
+            ),
+            (8, 16, 32, 48, 40)
+        );
     }
 
     #[test]

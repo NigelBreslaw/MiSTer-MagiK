@@ -76,6 +76,8 @@ fn main() {
         "../ui/views/hdmi/settings.slint",
         "../ui/fonts/PressStart2P-Regular.ttf",
         "../ui/fonts/PressStart2P-Regular.ttf.license",
+        "../ui/fonts/W95F.otf",
+        "../ui/fonts/W95F.otf.license",
         "../ui/icons/settings.svg",
     ];
     if bench_scenes {

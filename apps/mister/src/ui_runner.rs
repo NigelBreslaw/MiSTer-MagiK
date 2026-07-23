@@ -49,7 +49,9 @@ use crate::screenshot_transitions::{
     PreviewTransitionTrace,
 };
 use crate::setup_nav::{SetupAction, SetupNav, SetupPhase};
-use crate::ui_display::{RuntimeDisplayGeometry, UiDisplay, UiDisplayPlan, SLINT_UI_SCALE};
+use crate::ui_display::{
+    CrtUiMetrics, RuntimeDisplayGeometry, UiDisplay, UiDisplayPlan, SLINT_UI_SCALE,
+};
 #[cfg(mister_experiments)]
 use mister_magik_fb::experiments::effects::framebuffer_effects::{
     EffectKind, EffectSize, EFFECT_SIZES,
@@ -270,6 +272,15 @@ macro_rules! with_scene_app {
         mister_ui.set_window_width($ui.render_w() as i32);
         mister_ui.set_window_height($ui.render_h() as i32);
         mister_ui.set_crt_layout($ui.output_route().is_crt());
+        let crt_metrics = CrtUiMetrics::for_display($ui);
+        mister_ui.set_crt_grid(crt_metrics.grid);
+        mister_ui.set_crt_border(crt_metrics.border);
+        mister_ui.set_crt_body_font(crt_metrics.body_font);
+        mister_ui.set_crt_heading_font(crt_metrics.heading_font);
+        mister_ui.set_crt_card_title_font(crt_metrics.card_title_font);
+        mister_ui.set_crt_card_detail_font(crt_metrics.card_detail_font);
+        mister_ui.set_crt_header_height(crt_metrics.header_height);
+        mister_ui.set_crt_footer_height(crt_metrics.footer_height);
         configure_window($ui, $window);
         $body
     }};

@@ -9,9 +9,22 @@ export global MisterUi {
     in-out property <int> window-height: 540;
     in-out property <bool> crt-layout: false;
     out property <bool> compact-layout: crt-layout;
-    out property <length> grid: 8px;
-    out property <length> body-font: 8px;
-    out property <length> heading-font: 16px;
+    in-out property <int> crt-grid: 8;
+    in-out property <int> crt-border: 2;
+    in-out property <int> crt-body-font: 16;
+    in-out property <int> crt-heading-font: 32;
+    in-out property <int> crt-card-title-font: 24;
+    in-out property <int> crt-card-detail-font: 16;
+    in-out property <int> crt-header-height: 48;
+    in-out property <int> crt-footer-height: 40;
+    out property <length> grid: crt-grid * 1px;
+    out property <length> border: crt-border * 1px;
+    out property <length> body-font: crt-body-font * 1px;
+    out property <length> heading-font: crt-heading-font * 1px;
+    out property <length> card-title-font: crt-card-title-font * 1px;
+    out property <length> card-detail-font: crt-card-detail-font * 1px;
+    out property <length> header-height: crt-header-height * 1px;
+    out property <length> footer-height: crt-footer-height * 1px;
 }
 
 export component MisterWindow inherits Window {
