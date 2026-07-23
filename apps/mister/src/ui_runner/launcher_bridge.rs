@@ -246,34 +246,30 @@ pub(super) fn sync_launcher_arcade_geometry_bridge(bridge: &slint_ui::launcher::
 fn sync_arcade_list_geometry_bridge(
     bridge: &slint_ui::launcher::MisterBridge,
     nav: &LauncherNav,
-    render_w: usize,
+    ui: &UiDisplay,
 ) {
-    let geometry = arcade_list_geometry(nav, render_w);
-    let render_h = crt_render_h(nav, render_w);
+    let geometry = arcade_list_geometry(nav, ui);
+    let render_h = if nav.uses_crt_layout() {
+        ui.content_rect().bottom()
+    } else {
+        ui.render_h()
+    };
     bridge.set_arcade_list_x(geometry.x as i32);
     bridge.set_arcade_list_y(geometry.y as i32);
     bridge.set_arcade_list_width(geometry.width as i32);
     bridge.set_arcade_list_height(geometry.visible_height(render_h) as i32);
 }
 
-fn crt_render_h(nav: &LauncherNav, render_w: usize) -> usize {
-    if !nav.uses_crt_layout() {
-        return ARCADE_LIST_Y + ARCADE_LIST_H + 32;
-    }
-    match render_w {
-        0..=320 => 240,
-        321..=384 => 288,
-        _ => 480,
-    }
-}
-
-fn arcade_list_geometry(nav: &LauncherNav, render_w: usize) -> ArcadeListGeometry {
+fn arcade_list_geometry(nav: &LauncherNav, ui: &UiDisplay) -> ArcadeListGeometry {
     let search = nav.arcade_search.is_active(&nav.arcade_filter.active);
     if nav.uses_crt_layout() {
-        let render_h = crt_render_h(nav, render_w);
-        ArcadeListGeometry::crt_for_render_size(render_w, render_h, search)
+        ArcadeListGeometry::crt_for_content(
+            ui.content_rect(),
+            CrtUiMetrics::for_display(ui),
+            search,
+        )
     } else if search {
-        ArcadeListGeometry::search_for_render_w(render_w)
+        ArcadeListGeometry::search_for_render_w(ui.render_w())
     } else {
         ArcadeListGeometry::NORMAL
     }
@@ -641,7 +637,7 @@ pub(super) fn sync_bridge_launcher(
     models: &mut LauncherBridgeModels,
     catalog_version: usize,
     defer_selected_preview: bool,
-    render_w: usize,
+    ui: &UiDisplay,
 ) {
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     bridge.set_startup_visible(false);
@@ -682,7 +678,7 @@ pub(super) fn sync_bridge_launcher(
     bridge.set_licenses_expanded(nav.licenses_expanded);
     bridge.set_licenses_scroll_y(nav.licenses_scroll_y());
     bridge.set_license_lines(models.license_lines(nav.licenses_selected));
-    sync_arcade_list_geometry_bridge(&bridge, nav, render_w);
+    sync_arcade_list_geometry_bridge(&bridge, nav, ui);
     if !(defer_selected_preview && nav.screen == Screen::Arcade) {
         bridge.set_arcade_selected(nav.arcade.selected as i32);
         bridge.set_arcade_scroll_y(nav.arcade.scroll_y);
@@ -739,7 +735,7 @@ pub(super) fn sync_bridge_launcher_light(
     preview: &mut PreviewState,
     defer_arcade_overlay_bridge: bool,
     defer_selected_preview: bool,
-    render_w: usize,
+    ui: &UiDisplay,
 ) {
     models.sync_menu_item_focus(nav.selected);
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
@@ -870,7 +866,7 @@ pub(super) fn sync_bridge_launcher_light(
     if models.license_lines_index() != Some(nav.licenses_selected) {
         bridge.set_license_lines(models.license_lines(nav.licenses_selected));
     }
-    sync_arcade_list_geometry_bridge_if_changed(&bridge, nav, render_w);
+    sync_arcade_list_geometry_bridge_if_changed(&bridge, nav, ui);
     if !(defer_arcade_overlay_bridge && nav.screen == Screen::Arcade) {
         set_bridge_if_changed!(
             bridge,
@@ -1096,10 +1092,14 @@ fn sync_arcade_search_bridge(bridge: &slint_ui::launcher::MisterBridge, nav: &La
 fn sync_arcade_list_geometry_bridge_if_changed(
     bridge: &slint_ui::launcher::MisterBridge,
     nav: &LauncherNav,
-    render_w: usize,
+    ui: &UiDisplay,
 ) {
-    let geometry = arcade_list_geometry(nav, render_w);
-    let render_h = crt_render_h(nav, render_w);
+    let geometry = arcade_list_geometry(nav, ui);
+    let render_h = if nav.uses_crt_layout() {
+        ui.content_rect().bottom()
+    } else {
+        ui.render_h()
+    };
     set_bridge_if_changed!(
         bridge,
         get_arcade_list_x,
@@ -1670,6 +1670,7 @@ mod tests {
             Instant::now(),
         );
         let _ = models.menu_items(&nav, 1);
+        let ui = UiDisplay::for_framebuffer(960, 540);
 
         sync_bridge_launcher_light(
             &app,
@@ -1684,7 +1685,7 @@ mod tests {
             &mut preview,
             false,
             false,
-            960,
+            &ui,
         );
 
         assert_eq!(bridge.get_active_system_title().as_str(), "Arcade");

@@ -172,10 +172,10 @@ export component CatalogScanPopup inherits Rectangle {
 export component MediaProgressPopup inherits Rectangle {
     in property <int> s;
 
-    width: min(560px * s, MisterUi.window-width * 1px - 16px);
-    height: min(100px * s, MisterUi.window-height * 1px - 16px);
-    x: MisterUi.window-width * 1px / 2 - self.width / 2;
-    y: MisterUi.window-height * 1px - self.height - MisterUi.grid;
+    width: min(560px * s, MisterUi.content-width - 16px);
+    height: min(100px * s, MisterUi.content-height - 16px);
+    x: MisterUi.content-width / 2 - self.width / 2;
+    y: MisterUi.content-height - self.height - MisterUi.grid;
     background: CrtTheme.panel;
     border-width: 1px;
     border-color: #5c4a72;
@@ -227,8 +227,8 @@ export component BackgroundScanBadge inherits Rectangle {
 
     width: t.width + 20px;
     height: 28px * s;
-    x: MisterUi.window-width * 1px - self.width - 18px * s;
-    y: MisterUi.window-height * 1px - self.height - 16px * s;
+    x: MisterUi.content-width - self.width - 18px * s;
+    y: MisterUi.content-height - self.height - 16px * s;
     background: #101420;
     border-width: MisterUi.border;
     border-color: #52647d;

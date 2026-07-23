@@ -63,7 +63,46 @@ impl CrtUiMetrics {
     }
 
     pub const fn for_display(display: &UiDisplay) -> Self {
-        Self::for_framebuffer(display.render_w, display.render_h)
+        match display.output_route {
+            ResolvedOutputRoute::Crt240p60 | ResolvedOutputRoute::Crt288p50 => Self {
+                grid: 8,
+                border: 2,
+                body_font: 16,
+                heading_font: 32,
+                card_title_font: 24,
+                card_detail_font: 16,
+                game_row_height: 24,
+                header_height: 48,
+                footer_height: 40,
+            },
+            _ => Self::for_framebuffer(display.render_w, display.render_h),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CrtContentInsets {
+    pub left: usize,
+    pub top: usize,
+    pub right: usize,
+    pub bottom: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CrtContentRect {
+    pub x: usize,
+    pub y: usize,
+    pub width: usize,
+    pub height: usize,
+}
+
+impl CrtContentRect {
+    pub const fn right(self) -> usize {
+        self.x + self.width
+    }
+
+    pub const fn bottom(self) -> usize {
+        self.y + self.height
     }
 }
 
@@ -103,6 +142,29 @@ impl ResolvedOutputRoute {
             Self::Crt288p50 => "crt-288p50",
             Self::Crt480p60 => "crt-480p60",
             Self::Crt576p50 => "crt-576p50",
+        }
+    }
+
+    pub const fn content_insets(self) -> CrtContentInsets {
+        match self {
+            Self::Crt288p50 => CrtContentInsets {
+                top: 34,
+                bottom: 22,
+                left: 0,
+                right: 0,
+            },
+            Self::Crt576p50 => CrtContentInsets {
+                right: 64,
+                left: 0,
+                top: 0,
+                bottom: 0,
+            },
+            _ => CrtContentInsets {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            },
         }
     }
 
@@ -594,6 +656,20 @@ impl UiDisplay {
 
     pub fn output_route(&self) -> ResolvedOutputRoute {
         self.output_route
+    }
+
+    pub fn content_rect(&self) -> CrtContentRect {
+        let insets = self.output_route.content_insets();
+        CrtContentRect {
+            x: insets.left.min(self.render_w),
+            y: insets.top.min(self.render_h),
+            width: self
+                .render_w
+                .saturating_sub(insets.left.saturating_add(insets.right)),
+            height: self
+                .render_h
+                .saturating_sub(insets.top.saturating_add(insets.bottom)),
+        }
     }
 
     pub fn log_line(&self) -> String {
@@ -1172,6 +1248,77 @@ mod tests {
         );
         assert_eq!(CrtUiMetrics::for_framebuffer(384, 288), compact);
         assert_eq!(CrtUiMetrics::for_framebuffer(640, 480), compact);
+    }
+
+    #[test]
+    fn crt_routes_own_safe_content_rects_and_scan_family_metrics() {
+        for (route, expected_content, expected_metrics) in [
+            (
+                ResolvedOutputRoute::Crt240p60,
+                CrtContentRect {
+                    x: 0,
+                    y: 0,
+                    width: 640,
+                    height: 480,
+                },
+                (8, 2, 16, 32, 24, 16, 24, 48, 40),
+            ),
+            (
+                ResolvedOutputRoute::Crt288p50,
+                CrtContentRect {
+                    x: 0,
+                    y: 34,
+                    width: 640,
+                    height: 424,
+                },
+                (8, 2, 16, 32, 24, 16, 24, 48, 40),
+            ),
+            (
+                ResolvedOutputRoute::Crt480p60,
+                CrtContentRect {
+                    x: 0,
+                    y: 0,
+                    width: 640,
+                    height: 480,
+                },
+                (4, 1, 8, 16, 16, 8, 24, 32, 24),
+            ),
+            (
+                ResolvedOutputRoute::Crt576p50,
+                CrtContentRect {
+                    x: 0,
+                    y: 0,
+                    width: 576,
+                    height: 480,
+                },
+                (4, 1, 8, 16, 16, 8, 24, 32, 24),
+            ),
+        ] {
+            let plan = UiDisplayPlan::from_geometry_with_route(
+                route.progressive_geometry().unwrap(),
+                route,
+                "test-crt-content",
+                UiFramebufferSizePolicy::Auto,
+            );
+            let display = UiDisplay::for_plan(plan);
+            let metrics = CrtUiMetrics::for_display(&display);
+
+            assert_eq!(display.content_rect(), expected_content);
+            assert_eq!(
+                (
+                    metrics.grid,
+                    metrics.border,
+                    metrics.body_font,
+                    metrics.heading_font,
+                    metrics.card_title_font,
+                    metrics.card_detail_font,
+                    metrics.game_row_height,
+                    metrics.header_height,
+                    metrics.footer_height,
+                ),
+                expected_metrics
+            );
+        }
     }
 
     #[test]

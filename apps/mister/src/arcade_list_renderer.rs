@@ -10,7 +10,7 @@ use crate::arcade_catalog::{
     ArcadeGameEntry, ArcadeGameView, ARCADE_LIST_VISIBLE_H, ARCADE_ROW_HEIGHT,
 };
 use crate::bitmap_text::{ConsoleFont, ConsoleTypeface, TextGradient};
-use crate::ui_display::CrtUiMetrics;
+use crate::ui_display::{CrtContentRect, CrtUiMetrics};
 use mister_magik_fb::framebuffer::mapped::{pixel_to_rgb565, MappedRgb565Framebuffer, Pixel};
 use mister_magik_fb::framebuffer::present::{copy_dense_rect_565, copy_strided_rect_565};
 use mister_magik_fb::framebuffer::scanout_slots::ScanoutSlotsRgb565Framebuffer;
@@ -152,20 +152,23 @@ impl ArcadeListGeometry {
         }
     }
 
-    pub(crate) fn crt_for_render_size(render_w: usize, render_h: usize, search: bool) -> Self {
-        let metrics = CrtUiMetrics::for_framebuffer(render_w, render_h);
+    pub(crate) fn crt_for_content(
+        content: CrtContentRect,
+        metrics: CrtUiMetrics,
+        search: bool,
+    ) -> Self {
         let grid = metrics.grid.max(1) as usize;
         let margin = grid * 2;
-        let y = metrics.header_height.max(1) as usize + grid * 3;
+        let y = content.y + metrics.header_height.max(1) as usize + grid * 3;
         let x = if search {
-            (render_w * 2 / 5 + margin * 2).min(render_w.saturating_sub(1))
+            (content.x + content.width * 2 / 5 + margin * 2).min(content.right().saturating_sub(1))
         } else {
-            margin
+            content.x + margin
         };
         Self {
             x,
             y,
-            width: render_w.saturating_sub(x + margin).max(1),
+            width: content.right().saturating_sub(x + margin).max(1),
         }
     }
 
@@ -1784,8 +1787,15 @@ mod tests {
     }
 
     #[test]
-    fn crt_geometry_uses_native_density_metrics_at_640x480() {
-        let geometry = ArcadeListGeometry::crt_for_render_size(640, 480, false);
+    fn crt_geometry_uses_31khz_metrics_at_640x480() {
+        let content = CrtContentRect {
+            x: 0,
+            y: 0,
+            width: 640,
+            height: 480,
+        };
+        let metrics = CrtUiMetrics::for_framebuffer(640, 480);
+        let geometry = ArcadeListGeometry::crt_for_content(content, metrics, false);
         assert_eq!(
             geometry,
             ArcadeListGeometry {
@@ -1796,7 +1806,7 @@ mod tests {
         );
         assert_eq!(geometry.visible_height(480), 400);
 
-        let search = ArcadeListGeometry::crt_for_render_size(640, 480, true);
+        let search = ArcadeListGeometry::crt_for_content(content, metrics, true);
         assert_eq!(
             search,
             ArcadeListGeometry {
@@ -1810,7 +1820,16 @@ mod tests {
 
     #[test]
     fn crt_640_window_clips_to_sixteen_complete_24px_rows() {
-        let geometry = ArcadeListGeometry::crt_for_render_size(640, 480, false);
+        let geometry = ArcadeListGeometry::crt_for_content(
+            CrtContentRect {
+                x: 0,
+                y: 0,
+                width: 640,
+                height: 480,
+            },
+            CrtUiMetrics::for_framebuffer(640, 480),
+            false,
+        );
         let mut renderer = ArcadeListRenderer::new_for_crt(24);
         renderer.set_geometry_for_render_h(geometry, 480);
 

@@ -275,6 +275,7 @@ macro_rules! with_scene_app {
         // HDMI keeps the legacy shared metrics; CRT profiles are route-owned.
         if $ui.output_route().is_crt() {
             let crt_metrics = CrtUiMetrics::for_display($ui);
+            let content = $ui.content_rect();
             mister_ui.set_crt_grid(crt_metrics.grid);
             mister_ui.set_crt_border(crt_metrics.border);
             mister_ui.set_crt_body_font(crt_metrics.body_font);
@@ -284,6 +285,10 @@ macro_rules! with_scene_app {
             mister_ui.set_crt_header_height(crt_metrics.header_height);
             mister_ui.set_crt_footer_height(crt_metrics.footer_height);
             mister_ui.set_crt_game_row_height(crt_metrics.game_row_height);
+            mister_ui.set_crt_content_x(content.x as i32);
+            mister_ui.set_crt_content_y(content.y as i32);
+            mister_ui.set_crt_content_width(content.width as i32);
+            mister_ui.set_crt_content_height(content.height as i32);
         }
         configure_window($ui, $window);
         $body

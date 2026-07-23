@@ -2208,7 +2208,7 @@ pub(super) fn run_launcher_loop(
         &mut bridge_models,
         catalog_version,
         false,
-        ui.render_w(),
+        ui,
     );
     print_startup_event(
         start,
@@ -2775,7 +2775,7 @@ pub(super) fn run_launcher_loop(
                         &mut bridge_models,
                         catalog_version,
                         false,
-                        ui.render_w(),
+                        ui,
                     );
                     update_slint_animations(animation_clock);
                     let mut recovery_rect = None;
@@ -3245,7 +3245,7 @@ pub(super) fn run_launcher_loop(
                                     &mut bridge_models,
                                     catalog_version,
                                     false,
-                                    ui.render_w(),
+                                    ui,
                                 );
                                 window.request_redraw();
                                 update_slint_animations(animation_clock);
@@ -3292,7 +3292,7 @@ pub(super) fn run_launcher_loop(
                                     &mut bridge_models,
                                     catalog_version,
                                     false,
-                                    ui.render_w(),
+                                    ui,
                                 );
                                 window.request_redraw();
                                 update_slint_animations(animation_clock);
@@ -3331,7 +3331,7 @@ pub(super) fn run_launcher_loop(
                                     &mut bridge_models,
                                     catalog_version,
                                     false,
-                                    ui.render_w(),
+                                    ui,
                                 );
                                 window.request_redraw();
                                 update_slint_animations(animation_clock);
@@ -3522,7 +3522,7 @@ pub(super) fn run_launcher_loop(
                                 &mut bridge_models,
                                 catalog_version,
                                 false,
-                                ui.render_w(),
+                                ui,
                             );
                             window.request_redraw();
                             update_slint_animations(animation_clock);
@@ -3664,7 +3664,7 @@ pub(super) fn run_launcher_loop(
                     &mut bridge_models,
                     catalog_version,
                     defer_selected_preview,
-                    ui.render_w(),
+                    ui,
                 );
                 preview_scheduled_this_loop = nav.screen == Screen::Arcade;
                 request_launcher_redraw!();
@@ -3688,7 +3688,7 @@ pub(super) fn run_launcher_loop(
                     &mut preview,
                     should_defer_arcade_overlay_bridge(dirty_opt, launching, &nav, &catalog),
                     defer_selected_preview,
-                    ui.render_w(),
+                    ui,
                 );
                 preview_scheduled_this_loop = nav.screen == Screen::Arcade;
                 request_launcher_redraw!();
@@ -4290,9 +4290,9 @@ pub(super) fn run_launcher_loop(
         let arcade_list_rect = if wants_arcade_list && composition_decision.allow_arcade_list_blit {
             arcade_list_renderer.set_geometry_for_render_h(
                 if nav.uses_crt_layout() {
-                    ArcadeListGeometry::crt_for_render_size(
-                        ui.render_w(),
-                        ui.render_h(),
+                    ArcadeListGeometry::crt_for_content(
+                        ui.content_rect(),
+                        CrtUiMetrics::for_display(ui),
                         arcade_search_active,
                     )
                 } else if arcade_search_active {
@@ -4300,7 +4300,11 @@ pub(super) fn run_launcher_loop(
                 } else {
                     ArcadeListGeometry::NORMAL
                 },
-                ui.render_h(),
+                if nav.uses_crt_layout() {
+                    ui.content_rect().bottom()
+                } else {
+                    ui.render_h()
+                },
             );
             let force_arcade_redraw = arcade_list_needs_forced_redraw(
                 &arcade_list_renderer,

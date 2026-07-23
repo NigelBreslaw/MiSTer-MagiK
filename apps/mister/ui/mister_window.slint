@@ -19,6 +19,10 @@ export global MisterUi {
     in-out property <int> crt-header-height: 48;
     in-out property <int> crt-footer-height: 40;
     in-out property <int> crt-game-row-height: 48;
+    in-out property <int> crt-content-x: 0;
+    in-out property <int> crt-content-y: 0;
+    in-out property <int> crt-content-width: window-width;
+    in-out property <int> crt-content-height: window-height;
     out property <length> grid: crt-grid * 1px;
     out property <length> border: crt-border * 1px;
     out property <length> body-font: crt-body-font * 1px;
@@ -28,6 +32,10 @@ export global MisterUi {
     out property <length> header-height: crt-header-height * 1px;
     out property <length> footer-height: crt-footer-height * 1px;
     out property <length> game-row-height: crt-game-row-height * 1px;
+    out property <length> content-x: crt-content-x * 1px;
+    out property <length> content-y: crt-content-y * 1px;
+    out property <length> content-width: crt-content-width * 1px;
+    out property <length> content-height: crt-content-height * 1px;
 }
 
 export component MisterWindow inherits Window {
