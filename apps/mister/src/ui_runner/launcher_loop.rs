@@ -4384,6 +4384,15 @@ pub(super) fn run_launcher_loop(
             launcher_arcade_scroll_offset =
                 launcher_arcade_scroll_offset.saturating_add(delta_y as i64);
         }
+        let crt_arcade_cached_rect = if crt_layout {
+            arcade_list_rect.map(|update| {
+                let rect = arcade_update_dirty_rect(&update);
+                let _ = layer_target.compose_arcade_list_update(&mut arcade_list_renderer, update);
+                rect
+            })
+        } else {
+            None
+        };
         let preview_layer_desired =
             should_desire_direct_layer(wants_preview, composition_decision.allow_preview_blit);
         let preview_desired = if preview_layer_desired
@@ -4397,10 +4406,11 @@ pub(super) fn run_launcher_loop(
         } else {
             None
         };
-        let arcade_desired = if should_desire_direct_layer(
-            wants_arcade_list,
-            composition_decision.allow_arcade_list_blit,
-        ) {
+        let arcade_desired = if !crt_layout
+            && should_desire_direct_layer(
+                wants_arcade_list,
+                composition_decision.allow_arcade_list_blit,
+            ) {
             Some(
                 DirectLayerState::new(arcade_list_renderer.dirty_rect(), launcher_arcade_version)
                     .with_content_offset_y(launcher_arcade_scroll_offset),
@@ -4411,12 +4421,13 @@ pub(super) fn run_launcher_loop(
         let mut cached_damage = DirtyRectList::new();
         cached_damage.push_if_some(base_damage);
         cached_damage.push_if_some(raw_preview_cached_rect);
+        cached_damage.push_if_some(crt_arcade_cached_rect);
         let frame_plan = LauncherFramePlan::new(
             cached_damage,
             preview_desired,
             raw_preview_direct_rect,
             arcade_desired,
-            arcade_list_rect,
+            if crt_layout { None } else { arcade_list_rect },
         );
         let startup_can_present = lifecycle.startup_can_present_frame();
         let stream_motion_active = stream_motion_before_render || preview_transition_trace.active;
