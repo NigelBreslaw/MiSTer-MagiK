@@ -45,11 +45,18 @@ impl LauncherFramebufferRoute {
 }
 
 pub const fn ui_fpga_scaled_mode(scan_w: u16, scan_h: u16) -> FramebufferRouteMode {
+    let (hbp, vbp) = if scan_w == 640 && scan_h == 480 {
+        // Diagnostic: standard VGA 640x480 porch values. Direct-video routing
+        // subtracts the FPGA's fixed 3/2-pixel border from these values.
+        (48, 33)
+    } else {
+        (3, 2)
+    };
     FramebufferRouteMode {
         hact: scan_w,
-        hbp: 3,
+        hbp,
         vact: scan_h,
-        vbp: 2,
+        vbp,
     }
 }
 
@@ -73,5 +80,13 @@ mod tests {
         assert_eq!(route.mode().hact, 1920);
         assert_eq!(route.mode().vact, 1080);
         assert!(!route.set_vga_fb());
+    }
+
+    #[test]
+    fn crt_480p_uses_standard_vga_back_porches() {
+        let route = LauncherFramebufferRoute::for_scan(640, 480, true);
+
+        assert_eq!(route.mode().hbp, 48);
+        assert_eq!(route.mode().vbp, 33);
     }
 }
