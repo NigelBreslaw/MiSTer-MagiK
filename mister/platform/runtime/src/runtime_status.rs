@@ -6,6 +6,7 @@
 use serde_json::{json, Value};
 use std::fs::{create_dir_all, OpenOptions};
 use std::io::Write;
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const DIR: &str = "/tmp/mister-magik";
@@ -190,11 +191,11 @@ pub fn event(name: &str, detail: impl std::fmt::Display) {
         boot_ms(),
         std::process::id(),
     );
-    if let Ok(mut file) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(EVENTS_PATH)
-    {
+    append_event_row(Path::new(EVENTS_PATH), &row);
+}
+
+fn append_event_row(path: &Path, row: &Value) {
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(file, "{row}");
     }
 }
@@ -860,12 +861,13 @@ mod tests {
 
     #[test]
     fn event_appends_jsonl_row_to_runtime_event_file() {
-        let _restore = FileRestore::capture(EVENTS_PATH);
-        let _ = fs::remove_file(EVENTS_PATH);
         let name = unique_name("coverage_event");
-        event(&name, "detail=ok");
+        let path = std::env::temp_dir().join(format!("{name}.jsonl"));
+        let row = event_value(&name, "detail=ok", unix_ms(), boot_ms(), std::process::id());
+        append_event_row(&path, &row);
 
-        let text = fs::read_to_string(EVENTS_PATH).expect("events jsonl should be written");
+        let text = fs::read_to_string(&path).expect("events jsonl should be written");
+        let _ = fs::remove_file(path);
         let row: Value = serde_json::from_str(text.lines().last().unwrap()).unwrap();
         assert_eq!(row["source"], "slint");
         assert_eq!(row["event"], name);

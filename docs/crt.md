@@ -36,7 +36,7 @@ rectangle places the framebuffer inside Menu's scan space:
 | `crt-240p60` | 320×240 | 640×240 | `(67,706,12,251)` |
 | `crt-288p50` | 384×288 | 640×288 | `(67,706,32,286)` |
 | `crt-480p60` | 640×480 | 640×480 | `(45,684,31,510)` |
-| `crt-576p50` | 640×480 | 640×576 | `(45,684,40,614)` |
+| `crt-576p50` | 640×480 | 640×576 | `(45,684,40,615)` |
 
 The 288p rectangle is the attended USB Video calibration result. The 576p
 framebuffer remains full width: narrowing its destination crops source columns
@@ -44,11 +44,12 @@ because Menu disables framebuffer downscaling. The launcher composition
 already keeps its visible content within `x=8..631`, and a full-width perimeter
 trial confirmed both horizontal edges.
 
-For 576p only, the maintained Main fork transfers the final transformed active
-line into vertical blanking. This removes unstable pixels at the physical
-bottom raster edge while preserving the mode's total line count and horizontal
-timing. The corresponding destination therefore ends at line 614. The 240p,
-288p, and 480p Main timings are unchanged.
+An attended trial moving the 576p destination bottom from line 615 through line
+607 did not move or remove the unstable coloured pixels observed on the final
+physical raster row. A coordinated Main trial that transferred that row into
+vertical blanking also left the fault unchanged. The evidence therefore rules
+out framebuffer destination height and Main's transformed active/blanking split
+as causes; the standard Main timing and full-height destination remain in use.
 
 Fresh CRT configuration defaults to native Analog IO VGA at 240p60. The
 installer separately offers automatic HDMI-DAC detection, native VGA at
