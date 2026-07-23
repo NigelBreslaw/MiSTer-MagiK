@@ -48,8 +48,21 @@ pub fn begin(
             "no task identity is available; pass --task-id ID or set MISTER_AGENT_TASK_ID".into(),
         );
     }
+    if replace {
+        if let Some(active_id) = evidence.active_task_id_for_session(repository, task_id)? {
+            let paths = changes(evidence, repository, &active_id)?;
+            if !paths.is_empty() {
+                return Err(format!(
+                    "unsafe_baseline_replacement: task changed paths since its active baseline: {}; commit or restore them before recovery",
+                    display_paths(&paths)
+                ));
+            }
+        }
+    }
     let baseline = capture(repository)?;
-    evidence.save_task_baseline(task_id, repository, &baseline, replace)
+    evidence
+        .save_task_baseline(task_id, repository, &baseline, replace)
+        .map(|_| ())
 }
 
 pub fn changes(
@@ -674,6 +687,40 @@ mod tests {
         run(&root, &["commit", "-qm", "upstream"]);
 
         assert!(changes(&evidence, &root, "task-clean").unwrap().is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn replacement_refuses_changes_since_active_baseline() {
+        let root = fixture_root("unsafe-baseline-replacement");
+        let evidence = Evidence::open_at(&root.join(".git/agent-state")).unwrap();
+        begin(&evidence, &root, "thread-one", false).unwrap();
+        fs::write(root.join("tracked.txt"), "task change\n").unwrap();
+
+        let error = begin(&evidence, &root, "thread-one", true).unwrap_err();
+        assert!(error.starts_with("unsafe_baseline_replacement:"));
+        assert_eq!(
+            evidence
+                .active_task_id_for_session(&root, "thread-one")
+                .unwrap(),
+            Some("thread-one".into())
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn clean_replacement_creates_a_new_lifecycle() {
+        let root = fixture_root("clean-baseline-replacement");
+        let evidence = Evidence::open_at(&root.join(".git/agent-state")).unwrap();
+        begin(&evidence, &root, "thread-one", false).unwrap();
+        begin(&evidence, &root, "thread-one", true).unwrap();
+
+        assert_eq!(
+            evidence
+                .active_task_id_for_session(&root, "thread-one")
+                .unwrap(),
+            Some("thread-one::g2".into())
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

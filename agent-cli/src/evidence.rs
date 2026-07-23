@@ -52,6 +52,8 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE TABLE IF NOT EXISTS tasks (
     task_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    generation INTEGER NOT NULL,
     worktree TEXT NOT NULL,
     created_ms INTEGER NOT NULL,
     baseline_json TEXT NOT NULL,
@@ -103,7 +105,7 @@ CREATE TABLE IF NOT EXISTS delivery_attestations (
     created_ms INTEGER NOT NULL,
     PRIMARY KEY (task_id, requirement_id)
 );
-PRAGMA user_version = 7;
+PRAGMA user_version = 8;
 "#;
 
 #[derive(Debug)]
@@ -265,6 +267,25 @@ impl Evidence {
             .map_err(|error| format!("cannot migrate audit database: {error}"))?;
         ensure_column(&connection, "tasks", "closed_ms", "INTEGER")?;
         ensure_column(&connection, "tasks", "commit_sha", "TEXT")?;
+        ensure_column(&connection, "tasks", "session_id", "TEXT")?;
+        ensure_column(
+            &connection,
+            "tasks",
+            "generation",
+            "INTEGER NOT NULL DEFAULT 1",
+        )?;
+        connection
+            .execute(
+                "UPDATE tasks SET session_id=task_id WHERE session_id IS NULL",
+                [],
+            )
+            .map_err(|error| format!("cannot migrate tasks.session_id: {error}"))?;
+        connection
+            .execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS tasks_session_generation ON tasks(session_id, generation)",
+                [],
+            )
+            .map_err(|error| format!("cannot index task lifecycles: {error}"))?;
         ensure_column(&connection, "commit_attempts", "subject", "TEXT")?;
         ensure_column(
             &connection,
@@ -389,35 +410,86 @@ impl Evidence {
 
     pub fn save_task_baseline<T: Serialize>(
         &self,
-        task_id: &str,
+        session_id: &str,
         worktree: &Path,
         baseline: &T,
         replace: bool,
-    ) -> Result<(), String> {
+    ) -> Result<String, String> {
         let baseline = serde_json::to_string(baseline).map_err(|error| error.to_string())?;
-        if task_id.starts_with("task-") {
-            self.connection
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|error| error.to_string())?;
+        let active: Option<String> = transaction
+            .query_row(
+                "SELECT task_id FROM tasks WHERE session_id=?1 AND worktree=?2 AND closed_ms IS NULL",
+                params![session_id, worktree.display().to_string()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?;
+        if active.is_some() && !replace {
+            return Err(format!(
+                "task lifecycle already active for {session_id}; finish it before beginning another"
+            ));
+        }
+        if active.is_some() {
+            transaction
                 .execute(
-                    "UPDATE tasks SET closed_ms=?2 WHERE worktree=?1 AND task_id LIKE 'task-%' AND closed_ms IS NULL",
+                    "UPDATE tasks SET closed_ms=?2 WHERE session_id=?1 AND worktree=?3 AND closed_ms IS NULL",
+                    params![session_id, now_ms(), worktree.display().to_string()],
+                )
+                .map_err(|error| error.to_string())?;
+        }
+        if session_id.starts_with("task-") {
+            transaction
+                .execute(
+                    "UPDATE tasks SET closed_ms=?2 WHERE worktree=?1 AND session_id LIKE 'task-%' AND closed_ms IS NULL",
                     params![worktree.display().to_string(), now_ms()],
                 )
                 .map_err(|error| error.to_string())?;
         }
-        let sql = if replace {
-            "INSERT INTO tasks (task_id, worktree, created_ms, baseline_json, closed_ms, commit_sha) VALUES (?1, ?2, ?3, ?4, NULL, NULL) ON CONFLICT(task_id) DO UPDATE SET worktree=excluded.worktree, created_ms=excluded.created_ms, baseline_json=excluded.baseline_json, closed_ms=NULL, commit_sha=NULL"
+        let generation: i64 = transaction
+            .query_row(
+                "SELECT COALESCE(MAX(generation), 0) + 1 FROM tasks WHERE session_id=?1",
+                [session_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        let task_id = if generation == 1 {
+            session_id.to_owned()
         } else {
-            "INSERT INTO tasks (task_id, worktree, created_ms, baseline_json) VALUES (?1, ?2, ?3, ?4)"
+            format!("{session_id}::g{generation}")
         };
-        self.connection
-            .execute(sql, params![task_id, worktree.display().to_string(), now_ms(), baseline])
+        transaction
+            .execute(
+                "INSERT INTO tasks (task_id, session_id, generation, worktree, created_ms, baseline_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![task_id, session_id, generation, worktree.display().to_string(), now_ms(), baseline],
+            )
             .map_err(|error| {
                 if error.to_string().contains("UNIQUE constraint failed") {
-                    format!("task baseline already exists for {task_id}; use task begin --replace only for recovery")
+                    format!("cannot allocate a new task lifecycle for {session_id}")
                 } else {
                     format!("cannot save task baseline: {error}")
                 }
             })?;
-        Ok(())
+        transaction.commit().map_err(|error| error.to_string())?;
+        Ok(task_id)
+    }
+
+    pub fn active_task_id_for_session(
+        &self,
+        worktree: &Path,
+        session_id: &str,
+    ) -> Result<Option<String>, String> {
+        self.connection
+            .query_row(
+                "SELECT task_id FROM tasks WHERE worktree=?1 AND session_id=?2 AND closed_ms IS NULL ORDER BY generation DESC LIMIT 1",
+                params![worktree.display().to_string(), session_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())
     }
 
     pub fn load_task_baseline<T: serde::de::DeserializeOwned>(
@@ -487,7 +559,7 @@ impl Evidence {
     pub fn active_manual_task_id(&self, worktree: &Path) -> Result<Option<String>, String> {
         self.connection
             .query_row(
-                "SELECT task_id FROM tasks WHERE worktree=?1 AND task_id LIKE 'task-%' AND closed_ms IS NULL ORDER BY created_ms DESC LIMIT 1",
+                "SELECT session_id FROM tasks WHERE worktree=?1 AND session_id LIKE 'task-%' AND closed_ms IS NULL ORDER BY created_ms DESC LIMIT 1",
                 [worktree.display().to_string()],
                 |row| row.get(0),
             )
@@ -523,6 +595,21 @@ impl Evidence {
             .query_row(
                 "SELECT task_id, commit_sha FROM tasks WHERE worktree=?1 AND closed_ms IS NOT NULL AND commit_sha IS NOT NULL ORDER BY closed_ms DESC LIMIT 1",
                 [worktree.display().to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn latest_committed_task_for_session(
+        &self,
+        worktree: &Path,
+        session_id: &str,
+    ) -> Result<Option<(String, String)>, String> {
+        self.connection
+            .query_row(
+                "SELECT task_id, commit_sha FROM tasks WHERE worktree=?1 AND session_id=?2 AND closed_ms IS NOT NULL AND commit_sha IS NOT NULL ORDER BY closed_ms DESC LIMIT 1",
+                params![worktree.display().to_string(), session_id],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()
@@ -1226,6 +1313,50 @@ mod tests {
         );
         evidence.close_task("task-one", "abc123").unwrap();
         assert_eq!(evidence.active_manual_task_id(worktree).unwrap(), None);
+        let second = evidence
+            .save_task_baseline("task-one", worktree, &serde_json::json!({}), false)
+            .unwrap();
+        assert_eq!(second, "task-one::g2");
+        assert_eq!(
+            evidence
+                .active_task_id_for_session(worktree, "task-one")
+                .unwrap(),
+            Some(second)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn session_retains_independent_task_lifecycles() {
+        let root = temporary_root("task-generations");
+        let evidence = Evidence::open_at(&root).unwrap();
+        let worktree = Path::new("/tmp/task-generations-worktree");
+        let first = evidence
+            .save_task_baseline("thread-one", worktree, &"first", false)
+            .unwrap();
+        assert_eq!(first, "thread-one");
+        assert!(evidence
+            .save_task_baseline("thread-one", worktree, &"duplicate", false)
+            .unwrap_err()
+            .contains("lifecycle already active"));
+        evidence.close_task(&first, "commit-one").unwrap();
+
+        let second = evidence
+            .save_task_baseline("thread-one", worktree, &"second", false)
+            .unwrap();
+        assert_eq!(second, "thread-one::g2");
+        assert_eq!(
+            evidence
+                .active_task_id_for_session(worktree, "thread-one")
+                .unwrap(),
+            Some(second)
+        );
+        assert_eq!(
+            evidence
+                .latest_committed_task_for_session(worktree, "thread-one")
+                .unwrap(),
+            Some((first, "commit-one".into()))
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -102,24 +102,29 @@ fn resolve_task_intent(
 ) -> Result<Intent, String> {
     let resolve = |task_id: String| -> Result<String, String> {
         if !task_id.is_empty() {
-            return Ok(task_id);
+            return evidence
+                .active_task_id_for_session(repository, &task_id)?
+                .ok_or_else(|| {
+                    format!(
+                        "No active task lifecycle exists for {task_id}. Run `scripts/agent task begin` before editing."
+                    )
+                });
         }
-        evidence.active_manual_task_id(repository)?.ok_or_else(|| {
-            "No task baseline exists. Run `scripts/agent task begin` before editing.".into()
-        })
+        let session_id = evidence.active_manual_task_id(repository)?.ok_or_else(|| {
+            "No task baseline exists. Run `scripts/agent task begin` before editing.".to_owned()
+        })?;
+        evidence
+            .active_task_id_for_session(repository, &session_id)?
+            .ok_or_else(|| {
+                "No task baseline exists. Run `scripts/agent task begin` before editing.".to_owned()
+            })
     };
     Ok(match intent {
         Intent::TaskStatus { task_id } => Intent::TaskStatus {
             task_id: resolve(task_id)?,
         },
         Intent::Commit { task_id, message } => Intent::Commit {
-            task_id: if task_id.is_empty() {
-                evidence
-                    .active_manual_task_id(repository)?
-                    .unwrap_or_default()
-            } else {
-                task_id
-            },
+            task_id: resolve(task_id)?,
             message,
         },
         Intent::Deliver {
@@ -132,7 +137,10 @@ fn resolve_task_intent(
                     .map(|(task_id, _)| task_id)
                     .ok_or("nothing_to_deliver: commit the verified task first")?
             } else {
-                task_id
+                evidence
+                    .latest_committed_task_for_session(repository, &task_id)?
+                    .map(|(task_id, _)| task_id)
+                    .ok_or("nothing_to_deliver: commit the verified task first")?
             },
             local_main,
         },
@@ -143,7 +151,10 @@ fn resolve_task_intent(
                     .map(|(task_id, _)| task_id)
                     .ok_or("nothing_to_benchmark: commit the verified task first")?
             } else {
-                task_id
+                evidence
+                    .latest_committed_task_for_session(repository, &task_id)?
+                    .map(|(task_id, _)| task_id)
+                    .ok_or("nothing_to_benchmark: commit the verified task first")?
             },
         },
         Intent::Plan {
@@ -1068,6 +1079,60 @@ mod tests {
             Intent::Commit {
                 task_id: "task-manual".into(),
                 message: "message".into(),
+            }
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn repeated_session_resolves_active_and_latest_committed_lifecycles() {
+        let root = std::env::temp_dir().join(format!(
+            "agent-cli-session-resolution-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let evidence = Evidence::open_at(&root).unwrap();
+        let worktree = Path::new("/tmp/session-resolution-worktree");
+        let first = evidence
+            .save_task_baseline("thread-one", worktree, &(), false)
+            .unwrap();
+        evidence.close_task(&first, "commit-one").unwrap();
+        let second = evidence
+            .save_task_baseline("thread-one", worktree, &(), false)
+            .unwrap();
+
+        assert_eq!(
+            resolve_task_intent(
+                &evidence,
+                worktree,
+                Intent::Commit {
+                    task_id: "thread-one".into(),
+                    message: "message".into(),
+                }
+            )
+            .unwrap(),
+            Intent::Commit {
+                task_id: second,
+                message: "message".into(),
+            }
+        );
+        assert_eq!(
+            resolve_task_intent(
+                &evidence,
+                worktree,
+                Intent::Deliver {
+                    task_id: "thread-one".into(),
+                    local_main: false,
+                }
+            )
+            .unwrap(),
+            Intent::Deliver {
+                task_id: first,
+                local_main: false,
             }
         );
         fs::remove_dir_all(root).unwrap();
