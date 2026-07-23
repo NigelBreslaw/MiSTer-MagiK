@@ -1,0 +1,195 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+import "../fonts/W95F.otf";
+
+export component CrtResolutionComboMockup inherits Window {
+    width: 640px;
+    height: 480px;
+    title: "MiSTer MagiK CRT Resolution Combo Mockup";
+    background: #020817;
+    default-font-family: "W95FA";
+    forward-focus: focus-scope;
+
+    in-out property <[string]> resolutions: [
+        "Automatic (HDMI / VGA DAC)",
+        "1280×720 (16:9)",
+        "1366×768 (16:9)",
+        "1920×1080 (16:9)",
+        "1920×1200 (16:10)",
+        "2048×1536 (4:3)",
+        "2560×1440 (16:9)",
+        "640×240 @ 60 Hz (4:3) — CRT/VGA, 15 kHz",
+        "640×288 @ 50 Hz (4:3) — CRT/VGA, 15 kHz",
+        "640×480 @ 60 Hz (4:3) — CRT/VGA, 31 kHz",
+        "640×576 @ 50 Hz (4:3) — CRT/VGA, 31 kHz",
+    ];
+    in-out property <int> selected-index: 3;
+    in-out property <int> highlighted-index: 6;
+    property <int> visible-count: 7;
+    property <int> first-visible: (highlighted-index - 3).clamp(
+        0,
+        (resolutions.length - visible-count).max(0),
+    );
+    property <length> row-height: 40px;
+
+    focus-scope := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.DownArrow && root.highlighted-index < root.resolutions.length - 1) {
+                root.highlighted-index += 1;
+                return accept;
+            }
+            if (event.text == Key.UpArrow && root.highlighted-index > 0) {
+                root.highlighted-index -= 1;
+                return accept;
+            }
+            if (event.text == Key.Return) {
+                root.selected-index = root.highlighted-index;
+                return accept;
+            }
+            return reject;
+        }
+
+        Rectangle {
+            x: 16px;
+            y: 16px;
+            width: 608px;
+            height: 448px;
+            background: #020817;
+            border-width: 2px;
+            border-color: #8b94f8;
+
+            Text {
+                x: 16px;
+                y: 8px;
+                width: parent.width - 32px;
+                height: 48px;
+                text: "Display resolution";
+                color: #aaa5ff;
+                font-size: 32px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            Rectangle {
+                x: 16px;
+                y: 64px;
+                width: parent.width - 32px;
+                height: 2px;
+                background: #756bd4;
+            }
+
+            Text {
+                x: 24px;
+                y: 72px;
+                width: parent.width - 48px;
+                height: 24px;
+                text: first-visible > 0 ? "▲" : "";
+                color: #8b94f8;
+                font-size: 16px;
+                vertical-alignment: center;
+            }
+
+            list-viewport := Rectangle {
+                x: 24px;
+                y: 96px;
+                width: parent.width - 64px;
+                height: root.visible-count * root.row-height;
+                background: #06122b;
+                border-width: 2px;
+                border-color: #5e59aa;
+                clip: true;
+
+                for resolution[index] in root.resolutions : Rectangle {
+                    y: (index - root.first-visible) * root.row-height;
+                    width: parent.width;
+                    height: root.row-height;
+                    visible: index >= root.first-visible
+                        && index < root.first-visible + root.visible-count;
+                    background: index == root.highlighted-index ? #40e5e7 : #06122b;
+                    border-width: 1px;
+                    border-color: index == root.highlighted-index ? #40e5e7 : #5e59aa;
+
+                    Text {
+                        x: 8px;
+                        width: 24px;
+                        height: parent.height;
+                        text: index == root.highlighted-index ? ">" : "";
+                        color: #03132d;
+                        font-size: 24px;
+                        vertical-alignment: center;
+                    }
+
+                    Text {
+                        x: 40px;
+                        width: parent.width - 80px;
+                        height: parent.height;
+                        text: resolution;
+                        color: index == root.highlighted-index ? #03132d : #aaa5ff;
+                        font-size: 16px;
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
+
+                    Text {
+                        x: parent.width - 40px;
+                        width: 24px;
+                        height: parent.height;
+                        text: index == root.selected-index ? "*" : "";
+                        color: index == root.highlighted-index ? #03132d : #40e5e7;
+                        font-size: 24px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            Rectangle {
+                x: parent.width - 32px;
+                y: list-viewport.y;
+                width: 8px;
+                height: list-viewport.height;
+                background: #17143d;
+
+                Rectangle {
+                    y: root.first-visible * (parent.height - self.height)
+                        / (root.resolutions.length - root.visible-count);
+                    width: parent.width;
+                    height: parent.height * root.visible-count / root.resolutions.length;
+                    background: #8b94f8;
+                }
+            }
+
+            Text {
+                x: 24px;
+                y: 376px;
+                width: parent.width - 48px;
+                height: 24px;
+                text: first-visible + visible-count < resolutions.length ? "▼" : "";
+                color: #8b94f8;
+                font-size: 16px;
+                vertical-alignment: center;
+            }
+
+            Rectangle {
+                x: 16px;
+                y: 408px;
+                width: parent.width - 32px;
+                height: 2px;
+                background: #756bd4;
+            }
+
+            Text {
+                x: 24px;
+                y: 416px;
+                width: parent.width - 48px;
+                height: 24px;
+                text: "UP/DOWN Move     A Select     B Cancel     * Current";
+                color: #aaa5ff;
+                font-size: 16px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
