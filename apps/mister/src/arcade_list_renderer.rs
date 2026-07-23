@@ -10,6 +10,7 @@ use crate::arcade_catalog::{
     ArcadeGameEntry, ArcadeGameView, ARCADE_LIST_VISIBLE_H, ARCADE_ROW_HEIGHT,
 };
 use crate::bitmap_text::{ConsoleFont, ConsoleTypeface, TextGradient};
+use crate::ui_display::CrtUiMetrics;
 use mister_magik_fb::framebuffer::mapped::{pixel_to_rgb565, MappedRgb565Framebuffer, Pixel};
 use mister_magik_fb::framebuffer::present::{copy_dense_rect_565, copy_strided_rect_565};
 use mister_magik_fb::framebuffer::scanout_slots::ScanoutSlotsRgb565Framebuffer;
@@ -107,7 +108,7 @@ impl ArcadeListStyle {
             badge_fill: Pixel(0x0040e5e7),
             badge_fill_565: rgb565_from_rgb888(0x40, 0xe5, 0xe7),
             badge_text: Pixel(0x0003132d),
-            typeface: ConsoleTypeface::LilliputSteps,
+            typeface: ConsoleTypeface::PressStart2P,
         }
     }
 }
@@ -149,9 +150,10 @@ impl ArcadeListGeometry {
     }
 
     pub(crate) fn crt_for_render_size(render_w: usize, render_h: usize, search: bool) -> Self {
-        let full = render_w >= 640 && render_h >= 480;
-        let margin = if full { 16 } else { 8 };
-        let y = if full { 72 } else { 44 };
+        let metrics = CrtUiMetrics::for_framebuffer(render_w, render_h);
+        let grid = metrics.grid.max(1) as usize;
+        let margin = grid * 2;
+        let y = metrics.header_height.max(1) as usize + grid * 3;
         let x = if search {
             (render_w * 2 / 5 + margin * 2).min(render_w.saturating_sub(1))
         } else {
@@ -174,12 +176,11 @@ impl ArcadeListGeometry {
     }
 
     pub(crate) fn visible_height(self, render_h: usize) -> usize {
-        let bottom_inset = if self.y == 72 && render_h == 480 {
-            64
-        } else if self.y == 44 {
-            36
-        } else {
+        let bottom_inset = if self.y == ARCADE_LIST_Y {
             32
+        } else {
+            let metrics = CrtUiMetrics::for_framebuffer(self.width, render_h);
+            metrics.footer_height.max(1) as usize + metrics.grid.max(1) as usize * 3
         };
         render_h
             .saturating_sub(self.y + bottom_inset)
@@ -1759,6 +1760,31 @@ mod tests {
     }
 
     #[test]
+    fn crt_geometry_uses_native_density_metrics_at_640x480() {
+        let geometry = ArcadeListGeometry::crt_for_render_size(640, 480, false);
+        assert_eq!(
+            geometry,
+            ArcadeListGeometry {
+                x: 8,
+                y: 44,
+                width: 624,
+            }
+        );
+        assert_eq!(geometry.visible_height(480), 400);
+
+        let search = ArcadeListGeometry::crt_for_render_size(640, 480, true);
+        assert_eq!(
+            search,
+            ArcadeListGeometry {
+                x: 272,
+                y: 44,
+                width: 360,
+            }
+        );
+        assert_eq!(search.visible_height(480), 400);
+    }
+
+    #[test]
     fn direct_layer_dirty_rect_is_bounded_at_crt_heights() {
         let mut renderer = ArcadeListRenderer::new();
         for (width, height) in [(320, 240), (384, 288)] {
@@ -2233,7 +2259,7 @@ mod tests {
         let hdmi = ArcadeListRenderer::new();
 
         assert_eq!(crt.style.row_height, 24);
-        assert_eq!(crt.style.typeface, ConsoleTypeface::LilliputSteps);
+        assert_eq!(crt.style.typeface, ConsoleTypeface::PressStart2P);
         assert_eq!(crt.style.background.0, 0x00020817);
         assert_eq!(
             crt.style.selection_fill_565,

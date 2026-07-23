@@ -18,7 +18,7 @@ component CrtProgressRow inherits Rectangle {
         spacing: MisterUi.grid;
         cross-axis-alignment: center;
         Text {
-            font-family: "Lilliput Steps";
+            font-family: "Press Start 2P";
             text: root.pack.system + "  " + root.pack.phase;
             color: CrtTheme.text;
             font-size: MisterUi.body-font;
@@ -26,7 +26,7 @@ component CrtProgressRow inherits Rectangle {
             horizontal-stretch: 1;
         }
         Text {
-            font-family: "Lilliput Steps";
+            font-family: "Press Start 2P";
             text: root.pack.percent < 0 ? "..." : root.pack.percent + "%";
             color: CrtTheme.muted;
             font-size: MisterUi.body-font;
@@ -45,7 +45,7 @@ export component CompatibilityScreen inherits Rectangle {
         alignment: center;
 
         Text {
-            font-family: "Lilliput Steps";
+            font-family: "Press Start 2P";
             text: "MiSTer MagiK compatibility check failed";
             color: #ff5d73;
             font-size: MisterUi.heading-font;
@@ -53,7 +53,7 @@ export component CompatibilityScreen inherits Rectangle {
         }
 
         Text {
-            font-family: "Lilliput Steps";
+            font-family: "Press Start 2P";
             text: MisterBridge.compatibility-reason;
             color: #ffd166;
             font-size: MisterUi.body-font;
@@ -61,7 +61,7 @@ export component CompatibilityScreen inherits Rectangle {
         }
 
         Text {
-            font-family: "Lilliput Steps";
+            font-family: "Press Start 2P";
             text: MisterBridge.compatibility-detail;
             color: CrtTheme.text;
             font-size: MisterUi.body-font;
@@ -70,7 +70,7 @@ export component CompatibilityScreen inherits Rectangle {
         }
 
         Text {
-            font-family: "Lilliput Steps";
+            font-family: "Press Start 2P";
             text: "The normal launcher is disabled. Diagnostics: /tmp/mister-magik";
             color: CrtTheme.muted;
             font-size: MisterUi.body-font;
@@ -110,7 +110,7 @@ export component CatalogScanPopup inherits Rectangle {
             Rectangle { vertical-stretch: 1; background: transparent; }
 
             Text {
-            font-family: "Lilliput Steps";
+            font-family: "Press Start 2P";
                 width: root.scan-content-width;
                 text: "MiSTer MagiK";
                 color: CrtTheme.accent;
@@ -119,7 +119,7 @@ export component CatalogScanPopup inherits Rectangle {
             }
 
             Text {
-            font-family: "Lilliput Steps";
+            font-family: "Press Start 2P";
                 width: root.scan-content-width;
                 text: MisterBridge.catalog-scan-message;
                 color: CrtTheme.text;
@@ -129,7 +129,7 @@ export component CatalogScanPopup inherits Rectangle {
             }
 
             Text {
-            font-family: "Lilliput Steps";
+            font-family: "Press Start 2P";
                 width: root.scan-content-width;
                 text: MisterBridge.catalog-scan-title;
                 color: #d7eef8;
@@ -138,7 +138,7 @@ export component CatalogScanPopup inherits Rectangle {
             }
 
             Text {
-            font-family: "Lilliput Steps";
+            font-family: "Press Start 2P";
                 width: root.scan-content-width;
                 text: MisterBridge.catalog-scan-detail;
                 color: CrtTheme.muted;
@@ -152,7 +152,7 @@ export component CatalogScanPopup inherits Rectangle {
                 spacing: 5px * s;
 
                 Text {
-            font-family: "Lilliput Steps";
+            font-family: "Press Start 2P";
                     text: MisterBridge.media-pack-summary;
                     color: #d7eef8;
                     font-size: MisterUi.body-font;
@@ -189,7 +189,7 @@ export component MediaProgressPopup inherits Rectangle {
         spacing: 5px * root.s;
 
         Text {
-            font-family: "Lilliput Steps";
+            font-family: "Press Start 2P";
             text: MisterBridge.media-pack-summary;
             color: #d7eef8;
             font-size: MisterUi.body-font;
@@ -212,7 +212,7 @@ export component StartupSplash inherits Rectangle {
         spacing: 12px * s;
 
         Text {
-            font-family: "Lilliput Steps";
+            font-family: "Press Start 2P";
             text: "MiSTer MagiK";
             color: CrtTheme.text;
             font-size: MisterUi.heading-font;
@@ -238,7 +238,7 @@ export component BackgroundScanBadge inherits Rectangle {
         alignment: start;
         width: self.preferred-width;
         Text {
-            font-family: "Lilliput Steps";
+            font-family: "Press Start 2P";
             text: "Building library";
             color: #d7eef8;
             font-size: MisterUi.body-font;
@@ -246,7 +246,7 @@ export component BackgroundScanBadge inherits Rectangle {
             vertical-alignment: center;
         }
         Text {
-            font-family: "Lilliput Steps";
+            font-family: "Press Start 2P";
             text: ".";
             color: root.dot-visible ? #d7eef8 : transparent;
             font-size: MisterUi.body-font;
@@ -267,7 +267,7 @@ component CompactDialogButton inherits Rectangle {
     border-color: focused ? CrtTheme.accent : CrtTheme.border;
 
     Text {
-            font-family: "Lilliput Steps";
+            font-family: "Press Start 2P";
         text: root.label;
         color: root.focused ? CrtTheme.accent-text : CrtTheme.text;
         font-size: MisterUi.body-font;
@@ -294,7 +294,7 @@ export component ConfirmDialog inherits Rectangle {
             spacing: MisterUi.grid;
 
             Text {
-            font-family: "Lilliput Steps";
+            font-family: "Press Start 2P";
                 text: MisterBridge.confirm-title;
                 color: CrtTheme.accent;
                 font-size: MisterUi.heading-font;
@@ -303,7 +303,7 @@ export component ConfirmDialog inherits Rectangle {
             }
 
             Text {
-            font-family: "Lilliput Steps";
+            font-family: "Press Start 2P";
                 text: MisterBridge.confirm-message;
                 color: CrtTheme.text;
                 font-size: MisterUi.body-font;
@@ -339,7 +339,7 @@ export component LoadingOverlay inherits Rectangle {
         spacing: 12px;
 
         Text {
-            font-family: "Lilliput Steps";
+            font-family: "Press Start 2P";
             text: MisterBridge.loading-message;
             color: CrtTheme.text;
             font-size: MisterUi.heading-font;
@@ -347,7 +347,7 @@ export component LoadingOverlay inherits Rectangle {
         }
 
         Text {
-            font-family: "Lilliput Steps";
+            font-family: "Press Start 2P";
             text: MisterBridge.loading-detail != "" ? MisterBridge.loading-detail : "Please wait...";
             color: CrtTheme.muted;
             font-size: MisterUi.body-font;

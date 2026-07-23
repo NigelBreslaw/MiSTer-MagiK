@@ -16,7 +16,7 @@ component SearchKey inherits Rectangle {
     border-color: selected ? CrtTheme.accent : CrtTheme.border;
 
     Text {
-            font-family: "Lilliput Steps";
+            font-family: "Press Start 2P";
         text: root.label;
         color: root.selected && root.keyboard-focused ? CrtTheme.accent-text : CrtTheme.text;
         font-size: MisterUi.body-font;
@@ -56,7 +56,7 @@ component SearchKeyboard inherits Rectangle {
             border-color: MisterBridge.arcade-search-pane == 0 ? CrtTheme.accent : CrtTheme.border;
 
             Text {
-            font-family: "Lilliput Steps";
+            font-family: "Press Start 2P";
                 x: MisterUi.grid;
                 width: parent.width - 16px;
                 height: parent.height;
@@ -146,7 +146,7 @@ export component ArcadeListScreen inherits Rectangle {
         background: CrtTheme.panel-alt;
 
         Text {
-            font-family: "Lilliput Steps";
+            font-family: "Press Start 2P";
             text: "Loading list...";
             color: CrtTheme.muted;
             font-size: MisterUi.body-font;

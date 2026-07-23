@@ -46,31 +46,17 @@ pub struct CrtUiMetrics {
 }
 
 impl CrtUiMetrics {
-    pub const fn for_framebuffer(fb_w: usize, fb_h: usize) -> Self {
-        if fb_w >= 640 && fb_h >= 480 {
-            Self {
-                grid: 8,
-                border: 2,
-                body_font: 16,
-                heading_font: 32,
-                card_title_font: 24,
-                card_detail_font: 16,
-                game_row_height: 32,
-                header_height: 48,
-                footer_height: 40,
-            }
-        } else {
-            Self {
-                grid: 4,
-                border: 1,
-                body_font: 8,
-                heading_font: 16,
-                card_title_font: 16,
-                card_detail_font: 8,
-                game_row_height: 24,
-                header_height: 32,
-                footer_height: 24,
-            }
+    pub const fn for_framebuffer(_fb_w: usize, _fb_h: usize) -> Self {
+        Self {
+            grid: 4,
+            border: 1,
+            body_font: 8,
+            heading_font: 16,
+            card_title_font: 16,
+            card_detail_font: 8,
+            game_row_height: 24,
+            header_height: 32,
+            footer_height: 24,
         }
     }
 
@@ -1149,7 +1135,7 @@ mod tests {
     }
 
     #[test]
-    fn crt_ui_metrics_preserve_the_two_embedded_type_profiles() {
+    fn crt_ui_metrics_use_native_density_at_every_supported_framebuffer_size() {
         let compact = CrtUiMetrics::for_framebuffer(320, 240);
         assert_eq!(
             (
@@ -1162,18 +1148,7 @@ mod tests {
             (4, 8, 16, 32, 24)
         );
         assert_eq!(CrtUiMetrics::for_framebuffer(384, 288), compact);
-
-        let full = CrtUiMetrics::for_framebuffer(640, 480);
-        assert_eq!(
-            (
-                full.grid,
-                full.body_font,
-                full.heading_font,
-                full.header_height,
-                full.footer_height,
-            ),
-            (8, 16, 32, 48, 40)
-        );
+        assert_eq!(CrtUiMetrics::for_framebuffer(640, 480), compact);
     }
 
     #[test]
@@ -1406,6 +1381,6 @@ mod tests {
     fn crt_game_rows_scale_with_the_supported_framebuffer_profiles() {
         assert_eq!(CrtUiMetrics::for_framebuffer(320, 240).game_row_height, 24);
         assert_eq!(CrtUiMetrics::for_framebuffer(384, 288).game_row_height, 24);
-        assert_eq!(CrtUiMetrics::for_framebuffer(640, 480).game_row_height, 32);
+        assert_eq!(CrtUiMetrics::for_framebuffer(640, 480).game_row_height, 24);
     }
 }

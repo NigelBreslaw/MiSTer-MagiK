@@ -38,7 +38,7 @@ export component CrtHeader inherits Rectangle {
 
             Text {
                 text: root.title;
-                font-family: "Lilliput Steps";
+                font-family: "Press Start 2P";
                 color: CrtTheme.text;
                 font-size: MisterUi.heading-font;
                 overflow: elide;
@@ -46,7 +46,7 @@ export component CrtHeader inherits Rectangle {
 
             if root.subtitle != "" : Text {
                 text: root.subtitle;
-                font-family: "Lilliput Steps";
+                font-family: "Press Start 2P";
                 color: CrtTheme.warning;
                 font-size: MisterUi.body-font;
                 overflow: elide;
@@ -55,7 +55,7 @@ export component CrtHeader inherits Rectangle {
 
         Text {
             text: root.status;
-            font-family: "Lilliput Steps";
+            font-family: "Press Start 2P";
             color: CrtTheme.text;
             font-size: MisterUi.body-font;
             horizontal-alignment: right;
@@ -80,7 +80,7 @@ export component CrtFooter inherits Rectangle {
 
         Text {
             text: root.left-hint;
-            font-family: "Lilliput Steps";
+            font-family: "Press Start 2P";
             color: CrtTheme.muted;
             font-size: MisterUi.body-font;
             horizontal-stretch: 1;
@@ -88,7 +88,7 @@ export component CrtFooter inherits Rectangle {
 
         Text {
             text: root.right-hint;
-            font-family: "Lilliput Steps";
+            font-family: "Press Start 2P";
             color: CrtTheme.muted;
             font-size: MisterUi.body-font;
             horizontal-alignment: right;
@@ -115,7 +115,7 @@ export component CrtMenuRow inherits Rectangle {
 
         Text {
             text: (root.focused ? "> " : "  ") + root.label;
-            font-family: "Lilliput Steps";
+            font-family: "Press Start 2P";
             color: !root.enabled ? CrtTheme.muted
                 : root.focused ? CrtTheme.accent-text : CrtTheme.text;
             font-size: MisterUi.body-font;
@@ -125,7 +125,7 @@ export component CrtMenuRow inherits Rectangle {
 
         Text {
             text: root.detail;
-            font-family: "Lilliput Steps";
+            font-family: "Press Start 2P";
             color: !root.enabled ? CrtTheme.muted
                 : root.focused ? CrtTheme.accent-text : CrtTheme.muted;
             font-size: MisterUi.body-font;
@@ -154,7 +154,7 @@ export component CrtCard inherits Rectangle {
         Text {
             width: MisterUi.card-title-font;
             text: root.focused && root.show-marker ? ">" : "";
-            font-family: "Lilliput Steps";
+            font-family: "Press Start 2P";
             color: CrtTheme.accent-text;
             font-size: MisterUi.card-title-font;
             vertical-alignment: center;
@@ -167,7 +167,7 @@ export component CrtCard inherits Rectangle {
 
             Text {
                 text: root.label;
-                font-family: "Lilliput Steps";
+                font-family: "Press Start 2P";
                 color: root.focused ? CrtTheme.accent-text : CrtTheme.text;
                 font-size: MisterUi.card-title-font;
                 overflow: elide;
@@ -176,7 +176,7 @@ export component CrtCard inherits Rectangle {
 
             if root.detail != "" : Text {
                 text: root.detail;
-                font-family: "Lilliput Steps";
+                font-family: "Press Start 2P";
                 color: root.focused ? #17304a : CrtTheme.muted;
                 font-size: MisterUi.card-detail-font;
                 overflow: elide;
@@ -200,7 +200,7 @@ export component CrtNavHint inherits HorizontalLayout {
 
         Text {
             text: root.button;
-            font-family: "Lilliput Steps";
+            font-family: "Press Start 2P";
             color: CrtTheme.accent-text;
             font-size: MisterUi.body-font;
             horizontal-alignment: center;
@@ -210,7 +210,7 @@ export component CrtNavHint inherits HorizontalLayout {
 
     Text {
         text: root.label;
-        font-family: "Lilliput Steps";
+        font-family: "Press Start 2P";
         color: CrtTheme.text;
         font-size: MisterUi.body-font;
         vertical-alignment: center;
