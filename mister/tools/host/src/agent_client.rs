@@ -14,8 +14,7 @@ use std::time::{Duration, Instant};
 
 use crate::Result;
 use crate::discovery::{secure_write, token_path};
-use crate::remote::host;
-use crate::remote::{connect, exec, put, put_bytes};
+use crate::remote::{ConnectionConfig, connect_with, exec, host, put, put_bytes};
 
 pub(crate) const AGENT_PORT: u16 = agent_protocol::PORT;
 const REMOTE_AGENT: &str = "/media/fat/mister-magik-dev/mister-magik-agent";
@@ -35,6 +34,25 @@ pub(crate) struct AgentBinaryResponse {
     pub(crate) elapsed_ms: u128,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AgentEndpoint {
+    host: String,
+    token: String,
+}
+
+impl AgentEndpoint {
+    pub(crate) fn new(host: impl Into<String>, token: impl Into<String>) -> Self {
+        Self {
+            host: host.into(),
+            token: token.into(),
+        }
+    }
+
+    pub(crate) fn from_environment() -> Result<Self> {
+        Ok(Self::new(host(), agent_token()?))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum VersionAction {
     Current,
@@ -42,41 +60,51 @@ enum VersionAction {
     RejectNewer,
 }
 
-fn set_bootstrap_token(token: &str) {
-    // SAFETY: bootstrap_agent runs synchronously during device preparation,
-    // before the host CLI starts any concurrent request work.
-    unsafe { env::set_var("MISTER_AGENT_TOKEN", token) };
+pub(crate) fn agent_token() -> Result<String> {
+    let device_id = env::var("MISTER_DEVICE_ID")?;
+    agent_token_for_device(&device_id, env::var("MISTER_AGENT_TOKEN").ok().as_deref())
 }
 
-pub(crate) fn agent_token() -> Result<String> {
-    if let Ok(token) = env::var("MISTER_AGENT_TOKEN") {
-        let token = token.trim().to_string();
-        if !token.is_empty() {
-            return Ok(token);
-        }
+pub(crate) fn agent_token_for_device(
+    device_id: &str,
+    explicit_token: Option<&str>,
+) -> Result<String> {
+    if let Some(token) = explicit_token
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+    {
+        return Ok(token.to_string());
     }
-    let device_id = env::var("MISTER_DEVICE_ID")?;
-    Ok(fs::read_to_string(token_path(&device_id)?)?
+    Ok(fs::read_to_string(token_path(device_id)?)?
         .trim()
         .to_string())
 }
 
-pub(crate) fn bootstrap_agent() -> Result<()> {
+pub(crate) fn bootstrap_agent() -> Result<String> {
+    let connection = ConnectionConfig::from_environment();
     let explicit_token = env::var("MISTER_AGENT_TOKEN")
         .ok()
         .filter(|token| !token.trim().is_empty());
     let device_id = env::var("MISTER_DEVICE_ID")?;
-    let token_file = token_path(&device_id)?;
+    bootstrap_agent_with(&connection, &device_id, explicit_token.as_deref())
+}
+
+pub(crate) fn bootstrap_agent_with(
+    connection: &ConnectionConfig,
+    device_id: &str,
+    explicit_token: Option<&str>,
+) -> Result<String> {
+    let token_file = token_path(device_id)?;
     let stored_token = fs::read_to_string(&token_file).ok();
-    let local_token = preferred_token(explicit_token.as_deref(), stored_token.as_deref());
+    let local_token = preferred_token(explicit_token, stored_token.as_deref());
     if let Some(token) = local_token.as_ref() {
-        set_bootstrap_token(token);
-        if apply_installed_version_policy()? {
-            return Ok(());
+        let endpoint = AgentEndpoint::new(connection.host(), token);
+        if apply_installed_version_policy(&endpoint)? {
+            return Ok(token.clone());
         }
     }
 
-    let session = connect(3)?;
+    let session = connect_with(connection, 3)?;
     let token = if explicit_token.is_some() {
         local_token.ok_or("MISTER_AGENT_TOKEN is empty")?
     } else {
@@ -96,14 +124,14 @@ pub(crate) fn bootstrap_agent() -> Result<()> {
         secure_write(&token_file, format!("{token}\n").as_bytes())?;
         token
     };
-    set_bootstrap_token(&token);
-    if apply_installed_version_policy()? {
-        return Ok(());
+    let endpoint = AgentEndpoint::new(connection.host(), &token);
+    if apply_installed_version_policy(&endpoint)? {
+        return Ok(token);
     }
 
     install_agent(&session, &token)?;
     for _ in 0..20 {
-        if installed_identity()
+        if installed_identity(&endpoint)
             == Ok((
                 agent_protocol::AGENT_VERSION,
                 agent_protocol::PROTOCOL_VERSION,
@@ -111,7 +139,7 @@ pub(crate) fn bootstrap_agent() -> Result<()> {
             ))
         {
             cleanup_agent_backup(&session)?;
-            return Ok(());
+            return Ok(token);
         }
         thread::sleep(Duration::from_millis(100));
     }
@@ -132,8 +160,8 @@ fn preferred_token(explicit: Option<&str>, stored: Option<&str>) -> Option<Strin
         })
 }
 
-fn apply_installed_version_policy() -> Result<bool> {
-    let Ok((agent, protocol, has_capture_v2)) = installed_identity() else {
+fn apply_installed_version_policy(endpoint: &AgentEndpoint) -> Result<bool> {
+    let Ok((agent, protocol, has_capture_v2)) = installed_identity(endpoint) else {
         return Ok(false);
     };
     match version_action(agent, protocol, has_capture_v2) {
@@ -159,8 +187,8 @@ fn version_action(agent: u64, protocol: u64, has_capture_v2: bool) -> VersionAct
     }
 }
 
-fn installed_identity() -> std::result::Result<(u64, u64, bool), String> {
-    let reply = agent_request("ping", json!({}), Duration::from_millis(500))
+fn installed_identity(endpoint: &AgentEndpoint) -> std::result::Result<(u64, u64, bool), String> {
+    let reply = agent_request_at(endpoint, "ping", json!({}), Duration::from_millis(500))
         .map_err(|error| error.to_string())?;
     let result = reply.response.get("result").unwrap_or(&Value::Null);
     let agent = result
@@ -408,12 +436,20 @@ fn cleanup_agent_backup_command() -> String {
 }
 
 pub(crate) fn agent_request(cmd: &str, args: Value, timeout: Duration) -> Result<AgentResponse> {
-    let token = agent_token()?;
-    let addr = format!("{}:{AGENT_PORT}", host())
+    agent_request_at(&AgentEndpoint::from_environment()?, cmd, args, timeout)
+}
+
+pub(crate) fn agent_request_at(
+    endpoint: &AgentEndpoint,
+    cmd: &str,
+    args: Value,
+    timeout: Duration,
+) -> Result<AgentResponse> {
+    let addr = format!("{}:{AGENT_PORT}", endpoint.host)
         .to_socket_addrs()?
         .next()
         .ok_or("could not resolve MiSTer agent host")?;
-    let request = agent_protocol::request(&token, 1, cmd, args);
+    let request = agent_protocol::request(&endpoint.token, 1, cmd, args);
     let start = Instant::now();
     let mut stream = TcpStream::connect_timeout(&addr, timeout)?;
     stream.set_read_timeout(Some(timeout))?;
@@ -430,12 +466,12 @@ pub(crate) fn agent_request_with_liveness(
     args: Value,
     connect_timeout: Duration,
 ) -> Result<AgentResponse> {
-    let token = agent_token()?;
-    let addr = format!("{}:{AGENT_PORT}", host())
+    let endpoint = AgentEndpoint::from_environment()?;
+    let addr = format!("{}:{AGENT_PORT}", endpoint.host)
         .to_socket_addrs()?
         .next()
         .ok_or("could not resolve MiSTer agent host")?;
-    let request = agent_protocol::request(&token, 1, cmd, args);
+    let request = agent_protocol::request(&endpoint.token, 1, cmd, args);
     let start = Instant::now();
     let mut stream = TcpStream::connect_timeout(&addr, connect_timeout)?;
     stream.set_write_timeout(Some(connect_timeout))?;
@@ -456,7 +492,7 @@ pub(crate) fn agent_request_with_liveness(
             {
                 // Renew the bounded transport wait only when a separate agent
                 // request proves that the remote service is still responsive.
-                agent_request("ping", json!({}), connect_timeout)?;
+                agent_request_at(&endpoint, "ping", json!({}), connect_timeout)?;
             }
             Err(error) => return Err(error.into()),
         }
@@ -469,12 +505,12 @@ pub(crate) fn agent_binary_request_bounded(
     timeout: Duration,
     max_payload_bytes: u64,
 ) -> Result<AgentBinaryResponse> {
-    let token = agent_token()?;
-    let addr = format!("{}:{AGENT_PORT}", host())
+    let endpoint = AgentEndpoint::from_environment()?;
+    let addr = format!("{}:{AGENT_PORT}", endpoint.host)
         .to_socket_addrs()?
         .next()
         .ok_or("could not resolve MiSTer agent host")?;
-    let request = agent_protocol::request(&token, 1, cmd, args);
+    let request = agent_protocol::request(&endpoint.token, 1, cmd, args);
     let start = Instant::now();
     let mut stream = TcpStream::connect_timeout(&addr, timeout)?;
     stream.set_read_timeout(Some(timeout))?;
@@ -518,12 +554,12 @@ pub(crate) fn agent_stream_request_reader(
     payload: &mut dyn Read,
     timeout: Duration,
 ) -> Result<AgentResponse> {
-    let token = agent_token()?;
-    let addr = format!("{}:{AGENT_PORT}", host())
+    let endpoint = AgentEndpoint::from_environment()?;
+    let addr = format!("{}:{AGENT_PORT}", endpoint.host)
         .to_socket_addrs()?
         .next()
         .ok_or("could not resolve MiSTer agent host")?;
-    let request = agent_protocol::request(&token, 1, cmd, args);
+    let request = agent_protocol::request(&endpoint.token, 1, cmd, args);
     let start = Instant::now();
     let mut stream = TcpStream::connect_timeout(&addr, timeout)?;
     stream.set_read_timeout(Some(timeout))?;
@@ -849,6 +885,14 @@ mod tests {
             Some(stored.as_str())
         );
         assert_eq!(preferred_token(None, Some("invalid")), None);
+    }
+
+    #[test]
+    fn agent_endpoint_retains_forwarded_host_and_token() {
+        let endpoint = AgentEndpoint::new("192.0.2.4", "token-value");
+
+        assert_eq!(endpoint.host, "192.0.2.4");
+        assert_eq!(endpoint.token, "token-value");
     }
 
     #[test]

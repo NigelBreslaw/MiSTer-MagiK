@@ -13,16 +13,49 @@ use std::time::{Duration, Instant};
 
 use crate::Result;
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ConnectionConfig {
+    host: String,
+    user: String,
+    password: String,
+}
+
+impl ConnectionConfig {
+    pub(crate) fn from_environment() -> Self {
+        Self::from_values(
+            host_from(env::var("MISTER_IP").ok().as_deref()),
+            env::var("MISTER_USER").ok().as_deref(),
+            env::var("MISTER_PASS").ok().as_deref(),
+        )
+    }
+
+    pub(crate) fn for_resolved_host(host: impl Into<String>) -> Self {
+        Self::from_values(
+            host,
+            env::var("MISTER_USER").ok().as_deref(),
+            env::var("MISTER_PASS").ok().as_deref(),
+        )
+    }
+
+    pub(crate) fn from_values(
+        host: impl Into<String>,
+        user: Option<&str>,
+        password: Option<&str>,
+    ) -> Self {
+        Self {
+            host: host.into(),
+            user: user_from(user),
+            password: pass_from(password),
+        }
+    }
+
+    pub(crate) fn host(&self) -> &str {
+        &self.host
+    }
+}
+
 pub(crate) fn host() -> String {
-    host_from(env::var("MISTER_IP").ok().as_deref())
-}
-
-fn user() -> String {
-    user_from(env::var("MISTER_USER").ok().as_deref())
-}
-
-fn pass() -> String {
-    pass_from(env::var("MISTER_PASS").ok().as_deref())
+    ConnectionConfig::from_environment().host
 }
 
 fn host_from(value: Option<&str>) -> String {
@@ -40,7 +73,11 @@ fn pass_from(value: Option<&str>) -> String {
 }
 
 pub(crate) fn connect(timeout_secs: u64) -> Result<Session> {
-    let addr = format!("{}:22", host())
+    connect_with(&ConnectionConfig::from_environment(), timeout_secs)
+}
+
+pub(crate) fn connect_with(config: &ConnectionConfig, timeout_secs: u64) -> Result<Session> {
+    let addr = format!("{}:22", config.host)
         .to_socket_addrs()?
         .next()
         .ok_or("could not resolve MiSTer host")?;
@@ -50,7 +87,7 @@ pub(crate) fn connect(timeout_secs: u64) -> Result<Session> {
     let mut sess = Session::new()?;
     sess.set_tcp_stream(tcp);
     sess.handshake()?;
-    sess.userauth_password(&user(), &pass())?;
+    sess.userauth_password(&config.user, &config.password)?;
     if !sess.authenticated() {
         return Err("SSH password authentication failed".into());
     }
@@ -287,8 +324,15 @@ pub(crate) struct TimedSession {
 }
 
 pub(crate) fn connect_timed(timeout_secs: u64) -> Result<TimedSession> {
+    connect_timed_with(&ConnectionConfig::from_environment(), timeout_secs)
+}
+
+pub(crate) fn connect_timed_with(
+    config: &ConnectionConfig,
+    timeout_secs: u64,
+) -> Result<TimedSession> {
     let resolve_t = Instant::now();
-    let addr = format!("{}:22", host())
+    let addr = format!("{}:22", config.host)
         .to_socket_addrs()?
         .next()
         .ok_or("could not resolve MiSTer host")?;
@@ -306,7 +350,7 @@ pub(crate) fn connect_timed(timeout_secs: u64) -> Result<TimedSession> {
     sess.handshake()?;
     let handshake_ms = handshake_t.elapsed().as_millis();
     let auth_t = Instant::now();
-    sess.userauth_password(&user(), &pass())?;
+    sess.userauth_password(&config.user, &config.password)?;
     let auth_ms = auth_t.elapsed().as_millis();
     if !sess.authenticated() {
         return Err("SSH password authentication failed".into());
@@ -333,7 +377,11 @@ pub(crate) fn tcp_probe_label(timeout: Duration) -> String {
 }
 
 pub(crate) fn tcp_probe_label_port(port: u16, timeout: Duration) -> String {
-    let addr = match format!("{}:{port}", host()).to_socket_addrs() {
+    tcp_probe_label_port_with(&ConnectionConfig::from_environment(), port, timeout)
+}
+
+fn tcp_probe_label_port_with(config: &ConnectionConfig, port: u16, timeout: Duration) -> String {
+    let addr = match format!("{}:{port}", config.host).to_socket_addrs() {
         Ok(mut addrs) => match addrs.next() {
             Some(addr) => addr,
             None => return "resolve_none".to_string(),
@@ -360,14 +408,14 @@ fn io_error_label(err: &io::Error) -> String {
     }
 }
 
-pub(crate) fn host_wait_diagnostics() -> String {
-    let host = host();
-    let tcp = tcp_probe_label(Duration::from_millis(500));
-    let arp = command_summary("arp", &["-an"], Some(&host));
+pub(crate) fn host_wait_diagnostics_with(config: &ConnectionConfig) -> String {
+    let host = config.host();
+    let tcp = tcp_probe_label_port_with(config, 22, Duration::from_millis(500));
+    let arp = command_summary("arp", &["-an"], Some(host));
     let ping = if cfg!(target_os = "macos") {
-        command_summary("ping", &["-c", "1", "-W", "1000", &host], None)
+        command_summary("ping", &["-c", "1", "-W", "1000", host], None)
     } else {
-        command_summary("ping", &["-c", "1", "-W", "1", &host], None)
+        command_summary("ping", &["-c", "1", "-W", "1", host], None)
     };
     format!("tcp={tcp}; arp={arp}; ping={ping}")
 }
@@ -401,7 +449,11 @@ fn summarize_command_output(
 }
 
 pub(crate) fn port_open(timeout: Duration) -> bool {
-    let Ok(mut addrs) = format!("{}:22", host()).to_socket_addrs() else {
+    port_open_with(&ConnectionConfig::from_environment(), timeout)
+}
+
+pub(crate) fn port_open_with(config: &ConnectionConfig, timeout: Duration) -> bool {
+    let Ok(mut addrs) = format!("{}:22", config.host).to_socket_addrs() else {
         return false;
     };
     let Some(addr) = addrs.next() else {
@@ -542,6 +594,22 @@ mod tests {
         assert_eq!(host_from(Some("192.0.2.1")), "192.0.2.1");
         assert_eq!(user_from(Some("operator")), "operator");
         assert_eq!(pass_from(Some("secret")), "secret");
+        assert_eq!(
+            ConnectionConfig::from_values("192.0.2.2", None, None),
+            ConnectionConfig {
+                host: "192.0.2.2".into(),
+                user: "root".into(),
+                password: "1".into(),
+            }
+        );
+        assert_eq!(
+            ConnectionConfig::from_values("192.0.2.3", Some("operator"), Some("credential"),),
+            ConnectionConfig {
+                host: "192.0.2.3".into(),
+                user: "operator".into(),
+                password: "credential".into(),
+            }
+        );
     }
 
     #[test]

@@ -26,13 +26,15 @@ mod media;
 mod remote;
 
 use agent_client::{
-    AGENT_PORT, agent_binary_request_bounded, agent_request, agent_request_with_liveness,
-    agent_stream_request_reader, agent_token, bootstrap_agent, verify_agent_deploy_result,
+    AGENT_PORT, AgentEndpoint, agent_binary_request_bounded, agent_request, agent_request_at,
+    agent_request_with_liveness, agent_stream_request_reader, agent_token, agent_token_for_device,
+    bootstrap_agent, bootstrap_agent_with, verify_agent_deploy_result,
 };
 use remote::{
-    ExecOutput, acknowledged_main_command, connect, connect_timed, create_dir_command, exec,
-    exec_failure_message, get, host, host_wait_diagnostics, launcher_restart_command, port_open,
-    put, put_bytes, put_dir, remote_subcommand, remove_files_command, sftp_write_profile,
+    ConnectionConfig, ExecOutput, acknowledged_main_command, connect, connect_timed,
+    connect_timed_with, connect_with, create_dir_command, exec, exec_failure_message, get, host,
+    host_wait_diagnostics_with, launcher_restart_command, port_open, port_open_with, put,
+    put_bytes, put_dir, remote_subcommand, remove_files_command, sftp_write_profile,
     shell_quote as sh, stream_command, tcp_probe_label, tcp_probe_label_port,
 };
 
@@ -52,6 +54,7 @@ const DEFAULT_REMOTE_LIBRARY_DB: &str = "/media/fat/mister-magik/library.sqlite3
 const DEFAULT_LAUNCHER_ENV_REMOTE: &str = "/media/fat/mister-magik/launcher.env";
 const MAIN_STATUS_REMOTE: &str = "/tmp/mister-magik/main-status.json";
 const SLINT_STATUS_REMOTE: &str = "/tmp/mister-magik/status.json";
+const RESOLVED_DEVICE_CHILD: &str = "MISTER_MAGIK_RESOLVED_DEVICE_CHILD";
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -125,31 +128,46 @@ fn main() {
     }
 }
 
-#[derive(Default)]
-pub struct NativeDevice {
-    prepared: bool,
+#[derive(Clone, Debug)]
+struct NativeDeviceConfig {
+    connection: ConnectionConfig,
+    device_id: String,
+    agent: AgentEndpoint,
 }
 
-fn set_resolved_device_env(address: &str, device_id: &str) {
-    // SAFETY: device preparation is a synchronous CLI state transition. It
-    // completes before any request can start work on another thread.
-    unsafe {
-        std::env::set_var("MISTER_IP", address);
-        std::env::set_var("MISTER_DEVICE_ID", device_id);
+impl NativeDeviceConfig {
+    fn new(connection: ConnectionConfig, device_id: String, token: String) -> Self {
+        let agent = AgentEndpoint::new(connection.host(), token);
+        Self {
+            connection,
+            device_id,
+            agent,
+        }
     }
+}
+
+#[derive(Default)]
+pub struct NativeDevice {
+    config: Option<NativeDeviceConfig>,
 }
 
 impl NativeDevice {
     fn prepare(&mut self) -> std::result::Result<(), DeviceFailure> {
-        if self.prepared {
+        if self.config.is_some() {
             return Ok(());
         }
         let device = discovery::resolve().map_err(device_failure)?;
-        set_resolved_device_env(&device.address.to_string(), &device.id);
-        if std::env::var_os("MISTER_SKIP_AGENT_BOOTSTRAP").is_none() {
-            bootstrap_agent().map_err(device_failure)?;
-        }
-        self.prepared = true;
+        let connection = ConnectionConfig::for_resolved_host(device.address.to_string());
+        let explicit_token = env::var("MISTER_AGENT_TOKEN")
+            .ok()
+            .filter(|token| !token.trim().is_empty());
+        let token = if std::env::var_os("MISTER_SKIP_AGENT_BOOTSTRAP").is_none() {
+            bootstrap_agent_with(&connection, &device.id, explicit_token.as_deref())
+                .map_err(device_failure)?
+        } else {
+            agent_token_for_device(&device.id, explicit_token.as_deref()).map_err(device_failure)?
+        };
+        self.config = Some(NativeDeviceConfig::new(connection, device.id, token));
         Ok(())
     }
 }
@@ -160,6 +178,11 @@ impl DeviceOperations for NativeDevice {
         request: &DeviceRequest,
     ) -> std::result::Result<DeviceResponse, DeviceFailure> {
         self.prepare()?;
+        let config = self.config.clone().ok_or_else(|| {
+            DeviceFailure::OperationFailed("device configuration is unavailable".into())
+        })?;
+        debug_assert!(!config.device_id.is_empty());
+        let connect = |timeout_secs| connect_with(&config.connection, timeout_secs);
         let detail = match request {
             DeviceRequest::Discover => "connected".into(),
             DeviceRequest::Status => {
@@ -274,7 +297,9 @@ impl DeviceOperations for NativeDevice {
                 let session = connect(10).map_err(device_failure)?;
                 issue_delivery_reboot(&session).map_err(device_failure)?;
                 drop(session);
-                if !wait_down(40.0) || wait_up(120.0).map_err(device_failure)? != 0 {
+                if !wait_down_with(&config.connection, 40.0)
+                    || wait_up_with(&config.connection, 120.0).map_err(device_failure)? != 0
+                {
                     return Err(DeviceFailure::Unavailable(
                         "device did not complete its reboot transition".into(),
                     ));
@@ -316,7 +341,7 @@ impl DeviceOperations for NativeDevice {
                     .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
                 exec_checked(&session, "delivery smoke", &command)
                     .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
-                let capture = request_framebuffer_png().map_err(device_failure)?;
+                let capture = request_framebuffer_png_at(&config.agent).map_err(device_failure)?;
                 delivery_smoke_capture_detail(&capture).map_err(device_failure)?
             }
             DeviceRequest::PrepareBenchmark(scenario) => {
@@ -450,7 +475,8 @@ impl DeviceOperations for NativeDevice {
                 "input=ready handoff=ready return=ready".into()
             }
             DeviceRequest::QualifyReleaseDisplay => {
-                qualify_release_display_matrix().map_err(device_failure)?
+                qualify_release_display_matrix_with(&config.connection, &config.agent)
+                    .map_err(device_failure)?
             }
             DeviceRequest::QualifyReleaseRecovery => {
                 let session = connect(10).map_err(device_failure)?;
@@ -465,8 +491,8 @@ impl DeviceOperations for NativeDevice {
                 issue_reboot(&session, RebootMode::Supervised)
                     .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?;
                 drop(session);
-                if !wait_down(40.0)
-                    || wait_up(120.0)
+                if !wait_down_with(&config.connection, 40.0)
+                    || wait_up_with(&config.connection, 120.0)
                         .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?
                         != 0
                 {
@@ -486,7 +512,8 @@ impl DeviceOperations for NativeDevice {
                 output.stdout.trim().into()
             }
             DeviceRequest::RunCrtGeometryTrial { rectangle } => {
-                run_crt_geometry_trial(*rectangle).map_err(device_failure)?
+                run_crt_geometry_trial_with(&config.connection, *rectangle)
+                    .map_err(device_failure)?
             }
             DeviceRequest::RepairSafeDeviceState => {
                 let session = connect(10).map_err(device_failure)?;
@@ -495,7 +522,7 @@ impl DeviceOperations for NativeDevice {
                 "temporary-state=clear".into()
             }
             DeviceRequest::CaptureFramebuffer => {
-                capture_buffer(&[]).map_err(device_failure)?;
+                capture_buffer_at(&config.agent, &[]).map_err(device_failure)?;
                 "captured".into()
             }
         };
@@ -534,8 +561,19 @@ pub fn run_cli() -> Result<()> {
         validate_capture_buffer_args(&args)?;
     }
     if action_uses_device(&action) {
-        let device = discovery::resolve()?;
-        set_resolved_device_env(&device.address.to_string(), &device.id);
+        if env::var_os(RESOLVED_DEVICE_CHILD).is_none() {
+            let device = discovery::resolve()?;
+            let status = Command::new(env::current_exe()?)
+                .args(env::args_os().skip(1))
+                .env("MISTER_IP", device.address.to_string())
+                .env("MISTER_DEVICE_ID", &device.id)
+                .env(RESOLVED_DEVICE_CHILD, "1")
+                .status()?;
+            if status.success() {
+                return Ok(());
+            }
+            std::process::exit(status.code().unwrap_or(1));
+        }
         if std::env::var_os("MISTER_SKIP_AGENT_BOOTSTRAP").is_none() {
             bootstrap_agent()?;
         }
@@ -1842,9 +1880,12 @@ fn release_display_mode_command(mode: ReleaseDisplayMode) -> String {
     )
 }
 
-fn qualify_release_display_matrix() -> Result<String> {
+fn qualify_release_display_matrix_with(
+    connection: &ConnectionConfig,
+    agent: &AgentEndpoint,
+) -> Result<String> {
     for mode in RELEASE_DISPLAY_MODES {
-        let session = connect(10)?;
+        let session = connect_with(connection, 10)?;
         exec_checked(
             &session,
             "release display token",
@@ -1858,10 +1899,10 @@ fn qualify_release_display_matrix() -> Result<String> {
         exec_checked(&session, "release display sync", "sync")?;
         issue_reboot(&session, RebootMode::Supervised)?;
         drop(session);
-        if !wait_down(40.0) || wait_up(120.0)? != 0 {
+        if !wait_down_with(connection, 40.0) || wait_up_with(connection, 120.0)? != 0 {
             return Err(format!("{} did not complete its reboot transition", mode.label).into());
         }
-        let session = connect(10)?;
+        let session = connect_with(connection, 10)?;
         wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))?;
         exec_checked(
             &session,
@@ -1869,7 +1910,7 @@ fn qualify_release_display_matrix() -> Result<String> {
             &release_display_mode_command(mode),
         )?;
         drop(session);
-        capture_buffer(&[])?;
+        capture_buffer_at(agent, &[])?;
     }
     Ok(format!(
         "display=qualified modes={} captures={}",
@@ -2108,9 +2149,12 @@ fn crt_trial_run_command(runtime_settings: &str, rectangle: Option<[u16; 4]>) ->
     )
 }
 
-fn run_crt_geometry_trial(rectangle: [u16; 4]) -> Result<String> {
+fn run_crt_geometry_trial_with(
+    connection: &ConnectionConfig,
+    rectangle: [u16; 4],
+) -> Result<String> {
     // The remote trial trap resumes Main after success, failure, or disconnect.
-    let settings_session = connect(10)?;
+    let settings_session = connect_with(connection, 10)?;
     let output = exec_checked_output(
         &settings_session,
         "resolved CRT mode",
@@ -2126,8 +2170,9 @@ fn run_crt_geometry_trial(rectangle: [u16; 4]) -> Result<String> {
     ));
     let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
     let runtime_settings_for_trial = runtime_settings.clone();
+    let trial_connection = connection.clone();
     let trial = std::thread::spawn(move || -> std::result::Result<(), String> {
-        let session = connect(10).map_err(|error| error.to_string())?;
+        let session = connect_with(&trial_connection, 10).map_err(|error| error.to_string())?;
         exec_checked(
             &session,
             "geometry trial suspend",
@@ -2149,7 +2194,7 @@ fn run_crt_geometry_trial(rectangle: [u16; 4]) -> Result<String> {
             &crt_trial_run_command(&runtime_settings_for_trial, Some(rectangle)),
         );
         if let Err(error) = result {
-            let recovery = connect(10).and_then(|recovery| {
+            let recovery = connect_with(&trial_connection, 10).and_then(|recovery| {
                 exec_checked(
                     &recovery,
                     "geometry trial compensating resume",
@@ -4058,8 +4103,12 @@ struct PngCapture {
 }
 
 fn capture_buffer(args: &[String]) -> Result<()> {
+    capture_buffer_at(&AgentEndpoint::from_environment()?, args)
+}
+
+fn capture_buffer_at(agent: &AgentEndpoint, args: &[String]) -> Result<()> {
     validate_capture_buffer_args(args)?;
-    let capture = request_framebuffer_png()?;
+    let capture = request_framebuffer_png_at(agent)?;
     eprintln!(
         "framebuffer capture source={}",
         capture_source_label(&capture.result)?
@@ -4230,7 +4279,16 @@ fn validate_capture_buffer_args(args: &[String]) -> Result<()> {
 }
 
 fn request_framebuffer_png() -> Result<PngCapture> {
-    let reply = agent_request("framebuffer_capture", json!({}), Duration::from_secs(10))?;
+    request_framebuffer_png_at(&AgentEndpoint::from_environment()?)
+}
+
+fn request_framebuffer_png_at(agent: &AgentEndpoint) -> Result<PngCapture> {
+    let reply = agent_request_at(
+        agent,
+        "framebuffer_capture",
+        json!({}),
+        Duration::from_secs(10),
+    )?;
     let result = reply
         .response
         .get("result")
@@ -6147,16 +6205,20 @@ fn remote_write(sess: &Session, remote: &str, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn userspace_ready_fast() -> Option<String> {
-    let timed = connect_timed(2).ok()?;
+fn userspace_ready_fast_with(connection: &ConnectionConfig) -> Option<String> {
+    let timed = connect_timed_with(connection, 2).ok()?;
     let out = exec(&timed.sess, "pidof MiSTer || echo BOOTING", true).ok()?;
     Some(out.stdout.trim().to_string())
 }
 
 fn wait_down(max_seconds: f64) -> bool {
+    wait_down_with(&ConnectionConfig::from_environment(), max_seconds)
+}
+
+fn wait_down_with(connection: &ConnectionConfig, max_seconds: f64) -> bool {
     let start = Instant::now();
     while start.elapsed().as_secs_f64() < max_seconds {
-        if !port_open(Duration::from_secs(2)) {
+        if !port_open_with(connection, Duration::from_secs(2)) {
             println!(
                 "  device went down after {:.1}s",
                 start.elapsed().as_secs_f64()
@@ -6170,14 +6232,18 @@ fn wait_down(max_seconds: f64) -> bool {
 }
 
 fn wait_up(max_seconds: f64) -> Result<i32> {
+    wait_up_with(&ConnectionConfig::from_environment(), max_seconds)
+}
+
+fn wait_up_with(connection: &ConnectionConfig, max_seconds: f64) -> Result<i32> {
     let start = Instant::now();
     let mut attempt = 0;
     let mut last_print = Duration::MAX;
     while start.elapsed().as_secs_f64() < max_seconds {
         attempt += 1;
         let elapsed = start.elapsed().as_secs_f64();
-        if port_open(Duration::from_millis(150))
-            && let Some(status) = userspace_ready_fast()
+        if port_open_with(connection, Duration::from_millis(150))
+            && let Some(status) = userspace_ready_fast_with(connection)
         {
             let mister = if status == "BOOTING" {
                 "booting".to_string()
@@ -6198,7 +6264,7 @@ fn wait_up(max_seconds: f64) -> Result<i32> {
         thread::sleep(Duration::from_millis(250));
     }
     println!("TIMEOUT: device not ready after {max_seconds:.0}s");
-    println!("diagnostics: {}", host_wait_diagnostics());
+    println!("diagnostics: {}", host_wait_diagnostics_with(connection));
     Ok(1)
 }
 
@@ -7224,6 +7290,18 @@ fn unix_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_device_config_retains_resolved_identity_and_forwards_agent_state() {
+        let connection =
+            ConnectionConfig::from_values("192.0.2.5", Some("operator"), Some("credential"));
+        let config =
+            NativeDeviceConfig::new(connection.clone(), "device-id".into(), "token-value".into());
+
+        assert_eq!(config.connection, connection);
+        assert_eq!(config.device_id, "device-id");
+        assert_eq!(config.agent, AgentEndpoint::new("192.0.2.5", "token-value"));
+    }
 
     #[test]
     fn display_matrix_covers_every_supported_runtime_mode() {
