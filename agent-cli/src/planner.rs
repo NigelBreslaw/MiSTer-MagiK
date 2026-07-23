@@ -58,7 +58,7 @@ pub fn affected_plan_at(
             .cmp(&right.workflow_phase())
             .then_with(|| left.id.cmp(&right.id))
     });
-    let operations = combine_arm_validation(normalize_operations(operations));
+    let operations = combine_arm_validation(subsume_cargo(normalize_operations(operations)));
     Ok(Plan {
         intent,
         operations,
@@ -122,6 +122,50 @@ fn normalize_operations(operations: Vec<Operation>) -> Vec<Operation> {
         }
     }
     normalized
+}
+
+fn subsume_cargo(mut operations: Vec<Operation>) -> Vec<Operation> {
+    let covered: BTreeSet<_> = operations
+        .iter()
+        .enumerate()
+        .filter(|(_, operation)| {
+            operation.program == "cargo"
+                && operation.args.first().is_some_and(|arg| arg == "check")
+                && operation.args.iter().any(|arg| arg == "--all-targets")
+        })
+        .filter_map(|(index, check)| {
+            operations
+                .iter()
+                .any(|clippy| cargo_clippy_subsumes(clippy, check))
+                .then_some(index)
+        })
+        .collect();
+    operations = operations
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, operation)| (!covered.contains(&index)).then_some(operation))
+        .collect();
+    operations
+}
+
+fn cargo_clippy_subsumes(clippy: &Operation, check: &Operation) -> bool {
+    if clippy.program != "cargo"
+        || clippy.args.first().is_none_or(|arg| arg != "clippy")
+        || !clippy.args.iter().any(|arg| arg == "--all-targets")
+    {
+        return false;
+    }
+    let signature = |operation: &Operation| {
+        operation
+            .args
+            .iter()
+            .skip(1)
+            .take_while(|arg| arg.as_str() != "--")
+            .filter(|arg| arg.as_str() != "--all-targets")
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    signature(clippy) == signature(check)
 }
 
 fn classified(path: &Path) -> bool {
@@ -1054,6 +1098,37 @@ mod tests {
         assert_eq!(normalized[0].inputs, ["one", "two"]);
         assert!(normalized[0].reason.contains("first reason"));
         assert!(normalized[0].reason.contains("second reason"));
+    }
+
+    #[test]
+    fn all_target_clippy_subsumes_matching_check_only() {
+        let check = cargo(
+            "check",
+            "Check",
+            &[
+                "check",
+                "--manifest-path",
+                "crate/Cargo.toml",
+                "--all-targets",
+            ],
+            "check",
+        );
+        let clippy = cargo(
+            "clippy",
+            "Clippy",
+            &[
+                "clippy",
+                "--manifest-path",
+                "crate/Cargo.toml",
+                "--all-targets",
+                "--",
+                "-D",
+                "warnings",
+            ],
+            "clippy",
+        );
+        let operations = subsume_cargo(vec![check, clippy.clone()]);
+        assert_eq!(operations, [clippy]);
     }
 
     #[test]

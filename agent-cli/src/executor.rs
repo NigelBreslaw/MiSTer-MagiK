@@ -109,6 +109,7 @@ pub fn execute_with_changes(
                     &operation.id,
                     &operation.program,
                     &operation.args,
+                    operation.resource_class().as_str(),
                 )?;
                 if result == "failed" {
                     machine.apply(Event::Fail)?;
@@ -119,27 +120,20 @@ pub fn execute_with_changes(
             }
         }
         if let Some(fingerprint) = cache.as_ref() {
-            if !evidence.claim_validation(&operation.id, fingerprint, request_id)? {
-                let joined_owner = evidence.validation_owner(&operation.id, fingerprint)?;
-                let cached =
-                    wait_for_validation(evidence, reporter, command, operation, fingerprint)?;
-                if let Some(owner) = joined_owner.as_deref() {
-                    evidence.record_joined_command(
-                        request_id,
-                        owner,
-                        &operation.id,
-                        &operation.program,
-                        &operation.args,
-                    )?;
+            if let Some((result, detail)) = claim_or_wait(
+                evidence,
+                request_id,
+                reporter,
+                command,
+                operation,
+                fingerprint,
+            )? {
+                if result == "failed" {
+                    machine.apply(Event::Fail)?;
+                    return Err(detail.unwrap_or_else(|| "joined validation failed".into()));
                 }
-                if let Some((result, detail)) = cached {
-                    if result == "failed" {
-                        machine.apply(Event::Fail)?;
-                        return Err(detail.unwrap_or_else(|| "joined validation failed".into()));
-                    }
-                    index += 1;
-                    continue;
-                }
+                index += 1;
+                continue;
             }
         }
         if let Err(error) = run_operation(
@@ -151,6 +145,7 @@ pub fn execute_with_changes(
             heartbeat,
             &format!("{command}: failed"),
             reporter,
+            cache.as_deref(),
         ) {
             if let Some(fingerprint) = cache.as_ref() {
                 if deterministic_failure(&error) {
@@ -177,6 +172,41 @@ pub fn execute_with_changes(
     machine.apply(Event::Finish)?;
     reporter.emit(EventKind::Completed, command, "passed", Some(100))?;
     Ok(Outcome::Passed)
+}
+
+fn claim_or_wait(
+    evidence: &Evidence,
+    request_id: &str,
+    reporter: &mut Reporter<'_>,
+    phase: &str,
+    operation: &Operation,
+    fingerprint: &str,
+) -> Result<Option<(String, Option<String>)>, String> {
+    loop {
+        if evidence.claim_validation(&operation.id, fingerprint, request_id)? {
+            return Ok(None);
+        }
+        let queued = Instant::now();
+        let owner = evidence.validation_owner(&operation.id, fingerprint)?;
+        let result = wait_for_validation(evidence, reporter, phase, operation, fingerprint)?;
+        evidence.add_queue_ms(
+            request_id,
+            i64::try_from(queued.elapsed().as_millis()).unwrap_or(i64::MAX),
+        )?;
+        if let Some(owner) = owner.as_deref() {
+            evidence.record_joined_command(
+                request_id,
+                owner,
+                &operation.id,
+                &operation.program,
+                &operation.args,
+                operation.resource_class().as_str(),
+            )?;
+        }
+        if result.is_some() {
+            return Ok(result);
+        }
+    }
 }
 
 fn wait_for_validation(
@@ -239,7 +269,21 @@ fn run_builtin_batch(
                     &operation.id,
                     &operation.program,
                     &operation.args,
+                    operation.resource_class().as_str(),
                 )?;
+                continue;
+            }
+            if let Some((result, detail)) = claim_or_wait(
+                evidence,
+                request_id,
+                reporter,
+                command,
+                operation,
+                fingerprint,
+            )? {
+                if result == "failed" {
+                    return Err(detail.unwrap_or_else(|| "cached builtin validation failed".into()));
+                }
                 continue;
             }
         }
@@ -263,11 +307,20 @@ fn run_builtin_batch(
         let mut first_error = None;
         for ((operation, _, cache), result) in chunk.iter().zip(results) {
             if let Err(error) = result {
-                first_error.get_or_insert_with(|| {
-                    format!("{command}: failed — {}\nerror: {error}", operation.title)
-                });
+                let detail = format!("{command}: failed — {}\nerror: {error}", operation.title);
+                if let Some(fingerprint) = cache {
+                    evidence.cache_validation(
+                        &operation.id,
+                        fingerprint,
+                        "failed",
+                        Some(&detail),
+                    )?;
+                    evidence.release_validation(&operation.id, fingerprint, request_id)?;
+                }
+                first_error.get_or_insert(detail);
             } else if let Some(fingerprint) = cache {
                 evidence.cache_validation(&operation.id, fingerprint, "passed", None)?;
+                evidence.release_validation(&operation.id, fingerprint, request_id)?;
             }
         }
         if let Some(error) = first_error {
@@ -387,15 +440,39 @@ impl FingerprintContext {
             )
         })
         .collect();
+        let roots: std::collections::BTreeSet<_> = operations
+            .iter()
+            .filter(|operation| is_cacheable(operation))
+            .flat_map(|operation| operation.inputs.iter().map(PathBuf::from))
+            .collect();
+        let mut tracked = Command::new("git");
+        tracked
+            .current_dir(repository)
+            .args([
+                "ls-files",
+                "-z",
+                "--cached",
+                "--others",
+                "--exclude-standard",
+                "--",
+            ])
+            .args(&roots);
+        let output = tracked
+            .output()
+            .map_err(|error| format!("cannot enumerate validation inputs: {error}"))?;
         let mut files = BTreeMap::new();
-        for path in changes {
-            let relevant = operations.iter().any(|operation| {
-                is_cacheable(operation)
-                    && operation.inputs.iter().any(|input| path.starts_with(input))
-            });
-            if relevant {
-                files.insert(path.clone(), fingerprint_path(&repository.join(path))?);
-            }
+        let paths: Vec<PathBuf> = if output.status.success() {
+            output
+                .stdout
+                .split(|byte| *byte == 0)
+                .filter(|part| !part.is_empty())
+                .map(|part| PathBuf::from(String::from_utf8_lossy(part).into_owned()))
+                .collect()
+        } else {
+            changes.to_vec()
+        };
+        for path in paths {
+            files.insert(path.clone(), fingerprint_path(&repository.join(path))?);
         }
         Ok(Self {
             toolchain,
@@ -483,6 +560,7 @@ fn run_operation(
     heartbeat: &str,
     failure_position: &str,
     reporter: &mut Reporter<'_>,
+    fingerprint: Option<&str>,
 ) -> Result<(), String> {
     if let Some(builtin) = operation.builtin {
         return crate::checks::execute(builtin, repository, reporter)
@@ -511,6 +589,7 @@ fn run_operation(
         } else {
             "primary"
         },
+        fingerprint,
     )?;
     if first_status.success() {
         return Ok(());
@@ -532,6 +611,7 @@ fn run_operation(
             &log_path,
             &online_args,
             "network-fallback",
+            fingerprint,
         )?;
         if online_status.success() {
             return Ok(());
@@ -570,6 +650,7 @@ fn run_attempt(
     log_path: &Path,
     args: &[String],
     attempt: &str,
+    fingerprint: Option<&str>,
 ) -> Result<std::process::ExitStatus, String> {
     let mut log = OpenOptions::new()
         .append(true)
@@ -583,9 +664,13 @@ fn run_attempt(
         &operation.program,
         args,
         Some(log_path),
+        operation.resource_class().as_str(),
     )?;
     let mut command = Command::new(&operation.program);
-    command.args(args).current_dir(repository);
+    command
+        .args(args)
+        .current_dir(repository)
+        .env("MISTER_AGENT_PARENT_REQUEST_ID", request_id);
     if attempt == "network-fallback" {
         command.env("CARGO_NET_RETRY", "0");
     }
@@ -604,6 +689,9 @@ fn run_attempt(
             crate::progress::HEARTBEAT_MS,
         )),
         || {
+            if let Some(fingerprint) = fingerprint {
+                evidence.heartbeat_validation(&operation.id, fingerprint, request_id)?;
+            }
             reporter
                 .emit(EventKind::Progress, phase, heartbeat, None)
                 .map_err(|error| error.to_string())
@@ -857,6 +945,49 @@ mod tests {
     }
 
     #[test]
+    fn child_commands_receive_parent_request_identity() {
+        let (result, _, _) = execute_fake_cargo(
+            "#!/bin/sh\n[ \"$MISTER_AGENT_PARENT_REQUEST_ID\" = \"test-run\" ]\n",
+        );
+        assert_eq!(result.unwrap(), Outcome::Passed);
+    }
+
+    #[test]
+    fn cheap_failure_prevents_host_operation_from_starting() {
+        let (root, failing) = fake_cargo("#!/bin/sh\nexit 1\n");
+        let marker = root.join("host-ran");
+        let host = root.join("host");
+        fs::write(&host, format!("#!/bin/sh\ntouch '{}'\n", marker.display())).unwrap();
+        let mut permissions = fs::metadata(&host).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&host, permissions).unwrap();
+        let evidence = Evidence::open_at(&root.join("state")).unwrap();
+        let request = RawRequest {
+            id: "preflight-run".into(),
+            args: vec!["agent-cli".into(), "check".into()],
+            started_ms: now_ms(),
+            started: Instant::now(),
+        };
+        evidence.begin_request(&request).unwrap();
+        let mut cheap = test_operation(&failing);
+        cheap.phase = WorkflowPhase::Cheap;
+        let mut host_operation = test_operation(&host);
+        host_operation.id = "host.operation".into();
+        host_operation.action = ActionKind::Script;
+        let plan = Plan {
+            intent: Intent::Check {
+                scope: Scope::WorkingTree,
+            },
+            operations: vec![cheap, host_operation],
+            external_requirements: Vec::new(),
+        };
+        let mut reporter = Reporter::new(&evidence, OutputFormat::Human, &request.id);
+        assert!(execute(&evidence, &request.id, &root, &plan, &mut reporter).is_err());
+        assert!(!marker.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn cargo_dependency_policy_is_explicit() {
         let mut operation = test_operation(Path::new("cargo"));
         operation.args = vec!["fmt".into(), "--check".into()];
@@ -997,6 +1128,46 @@ mod tests {
             .files
             .values()
             .all(|fingerprint| fingerprint.starts_with("file:")));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn repository_fingerprint_includes_unchanged_task_dependencies() {
+        let (root, cargo) = fake_cargo("#!/bin/sh\nexit 0\n");
+        fs::create_dir_all(root.join("fixture")).unwrap();
+        fs::write(root.join("fixture/a.rs"), "a").unwrap();
+        fs::write(root.join("fixture/b.rs"), "b").unwrap();
+        for args in [
+            vec!["init", "-q"],
+            vec!["config", "user.name", "Agent"],
+            vec!["config", "user.email", "agent@example.invalid"],
+            vec!["add", "."],
+            vec!["commit", "-qm", "fixture"],
+        ] {
+            assert!(Command::new("git")
+                .args(args)
+                .current_dir(&root)
+                .status()
+                .unwrap()
+                .success());
+        }
+        let operation = test_operation(&cargo);
+        let changes = vec![PathBuf::from("fixture/a.rs")];
+        let first =
+            FingerprintContext::new(&root, std::slice::from_ref(&operation), &changes).unwrap();
+        let plan = Plan {
+            intent: Intent::Check {
+                scope: Scope::Task("one".into()),
+            },
+            operations: vec![operation.clone()],
+            external_requirements: Vec::new(),
+        };
+        let first_key = operation_cache_key(&plan, &operation, &first).unwrap();
+        fs::write(root.join("fixture/b.rs"), "changed").unwrap();
+        let second =
+            FingerprintContext::new(&root, std::slice::from_ref(&operation), &changes).unwrap();
+        let second_key = operation_cache_key(&plan, &operation, &second).unwrap();
+        assert_ne!(first_key, second_key);
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -159,7 +159,7 @@ impl Intent {
     pub const fn risk(&self) -> Risk {
         match self {
             Self::Commit { .. } | Self::Verify { .. } => Risk::LocalWrite,
-            Self::ReleaseQualify => Risk::Destructive,
+            Self::ReleaseQualify | Self::DatabaseRotate => Risk::Destructive,
             Self::Deliver { .. } | Self::Benchmark { .. } | Self::Diagnose => Risk::DeviceWrite,
             Self::Build { .. } => Risk::LocalWrite,
             _ => Risk::ReadOnly,
@@ -216,6 +216,20 @@ impl Operation {
                 offline_first: true
             }
         )
+    }
+}
+
+impl ResourceClass {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Cpu => "cpu",
+            Self::Cargo => "cargo",
+            Self::AppleContainer => "apple_container",
+            Self::GitIndex => "git_index",
+            Self::Network => "network",
+            Self::Device => "device",
+        }
     }
 }
 

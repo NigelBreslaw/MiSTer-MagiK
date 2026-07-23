@@ -99,6 +99,13 @@ CREATE TABLE IF NOT EXISTS cohorts (
     planner_schema INTEGER NOT NULL,
     label TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS cohort_summaries (
+    archived_ms INTEGER PRIMARY KEY,
+    git_sha TEXT NOT NULL,
+    requests INTEGER NOT NULL,
+    p95_request_ms INTEGER NOT NULL,
+    cache_effectiveness_percent REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS task_claims (
     task_id TEXT NOT NULL REFERENCES tasks(task_id),
     path TEXT NOT NULL,
@@ -152,6 +159,7 @@ fn baseline_head(value: &str) -> Option<String> {
 pub struct Evidence {
     connection: Connection,
     root: PathBuf,
+    git_sha: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -173,8 +181,12 @@ pub struct DatabaseReport {
     pub p50_request_ms: i64,
     pub p95_request_ms: i64,
     pub cache_hits: i64,
+    pub cache_misses: i64,
+    pub cache_effectiveness_percent: f64,
     pub failures: i64,
     pub repeated_requests: i64,
+    pub previous_p95_request_ms: Option<i64>,
+    pub p95_regression_ms: Option<i64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -304,7 +316,10 @@ impl Evidence {
         let primary = primary_worktree(repository)?;
         let root = primary.join(".agent-cli");
         migrate_common_dir_database(repository, &root)?;
-        Self::open_at(&root)
+        let mut evidence = Self::open_at(&root)?;
+        evidence.git_sha = crate::git::value(repository, &["rev-parse", "HEAD"])
+            .unwrap_or_else(|_| "unknown".into());
+        Ok(evidence)
     }
 
     pub fn open_at(root: &Path) -> Result<Self, String> {
@@ -394,9 +409,27 @@ impl Evidence {
                 [now_ms()],
             )
             .map_err(|error| format!("cannot prune validation cache: {error}"))?;
+        connection
+            .execute_batch(
+                "DELETE FROM events WHERE request_id IN (
+                     SELECT id FROM requests
+                     WHERE id NOT IN (SELECT id FROM requests ORDER BY started_ms DESC LIMIT 20000)
+                       AND id NOT IN (SELECT request_id FROM commit_attempts)
+                 );
+                 DELETE FROM commands WHERE request_id IN (
+                     SELECT id FROM requests
+                     WHERE id NOT IN (SELECT id FROM requests ORDER BY started_ms DESC LIMIT 20000)
+                       AND id NOT IN (SELECT request_id FROM commit_attempts)
+                 );
+                 DELETE FROM requests
+                 WHERE id NOT IN (SELECT id FROM requests ORDER BY started_ms DESC LIMIT 20000)
+                   AND id NOT IN (SELECT request_id FROM commit_attempts);",
+            )
+            .map_err(|error| format!("cannot bound workflow telemetry: {error}"))?;
         Ok(Self {
             connection,
             root: root.to_path_buf(),
+            git_sha: "unknown".into(),
         })
     }
 
@@ -427,8 +460,8 @@ impl Evidence {
             .map_err(|error| error.to_string())?;
         self.connection
             .execute(
-                "INSERT INTO requests (id, started_ms, args_json, cohort_id, parent_request_id) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![request.id, request.started_ms, args, cohort, parent],
+                "INSERT INTO requests (id, started_ms, args_json, cohort_id, parent_request_id, git_sha) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![request.id, request.started_ms, args, cohort, parent, self.git_sha],
             )
             .map_err(|error| format!("cannot record request: {error}"))?;
         Ok(())
@@ -1065,6 +1098,36 @@ impl Evidence {
             .map_err(|error| error.to_string())
     }
 
+    pub fn heartbeat_validation(
+        &self,
+        operation_id: &str,
+        fingerprint: &str,
+        request_id: &str,
+    ) -> Result<(), String> {
+        self.connection
+            .execute(
+                "UPDATE operation_leases SET expires_ms=?4 WHERE operation_id=?1 AND fingerprint=?2 AND owner_request_id=?3",
+                params![
+                    operation_id,
+                    fingerprint,
+                    request_id,
+                    now_ms().saturating_add(31 * 60 * 1_000)
+                ],
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    pub fn add_queue_ms(&self, request_id: &str, elapsed_ms: i64) -> Result<(), String> {
+        self.connection
+            .execute(
+                "UPDATE requests SET queue_ms=queue_ms+?2 WHERE id=?1",
+                params![request_id, elapsed_ms],
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
     pub fn release_validation(
         &self,
         operation_id: &str,
@@ -1114,9 +1177,10 @@ impl Evidence {
         program: &str,
         args: &[String],
         log_path: Option<&Path>,
+        resource_class: &str,
     ) -> Result<i64, String> {
         let args = serde_json::to_string(args).map_err(|error| error.to_string())?;
-        self.connection.execute("INSERT INTO commands (request_id, operation_id, program, args_json, started_ms, status, log_path) VALUES (?1, ?2, ?3, ?4, ?5, 'running', ?6)", params![request_id, operation_id, program, args, now_ms(), log_path.map(|path| path.display().to_string())]).map_err(|error| format!("cannot record command: {error}"))?;
+        self.connection.execute("INSERT INTO commands (request_id, operation_id, program, args_json, started_ms, status, log_path, resource_class, cache_decision) VALUES (?1, ?2, ?3, ?4, ?5, 'running', ?6, ?7, 'miss')", params![request_id, operation_id, program, args, now_ms(), log_path.map(|path| path.display().to_string()), resource_class]).map_err(|error| format!("cannot record command: {error}"))?;
         Ok(self.connection.last_insert_rowid())
     }
 
@@ -1138,11 +1202,12 @@ impl Evidence {
         operation_id: &str,
         program: &str,
         args: &[String],
+        resource_class: &str,
     ) -> Result<(), String> {
         let args = serde_json::to_string(args).map_err(|error| error.to_string())?;
         self.connection.execute(
-            "INSERT INTO commands (request_id, operation_id, program, args_json, started_ms, completed_ms, duration_ms, exit_code, status) VALUES (?1, ?2, ?3, ?4, ?5, ?5, 0, 0, 'reused')",
-            params![request_id, operation_id, program, args, now_ms()],
+            "INSERT INTO commands (request_id, operation_id, program, args_json, started_ms, completed_ms, duration_ms, exit_code, status, cache_decision, resource_class) VALUES (?1, ?2, ?3, ?4, ?5, ?5, 0, 0, 'reused', 'hit', ?6)",
+            params![request_id, operation_id, program, args, now_ms(), resource_class],
         ).map_err(|error| error.to_string())?;
         Ok(())
     }
@@ -1154,11 +1219,12 @@ impl Evidence {
         operation_id: &str,
         program: &str,
         args: &[String],
+        resource_class: &str,
     ) -> Result<(), String> {
         let args = serde_json::to_string(args).map_err(|error| error.to_string())?;
         self.connection.execute(
-            "INSERT INTO commands (request_id, operation_id, program, args_json, started_ms, completed_ms, duration_ms, exit_code, status, cache_decision, owner_request_id) VALUES (?1, ?2, ?3, ?4, ?5, ?5, 0, 0, 'joined', 'joined_in_flight', ?6)",
-            params![request_id, operation_id, program, args, now_ms(), owner_request_id],
+            "INSERT INTO commands (request_id, operation_id, program, args_json, started_ms, completed_ms, duration_ms, exit_code, status, cache_decision, owner_request_id, resource_class) VALUES (?1, ?2, ?3, ?4, ?5, ?5, 0, 0, 'joined', 'joined_in_flight', ?6, ?7)",
+            params![request_id, operation_id, program, args, now_ms(), owner_request_id, resource_class],
         ).map_err(|error| error.to_string())?;
         Ok(())
     }
@@ -1190,29 +1256,50 @@ impl Evidence {
                 .query_row(sql, [cohort_id], |row| row.get::<_, i64>(0))
                 .map_err(|error| error.to_string())
         };
-        let percentile = |offset_percent: i64| {
+        let percentile = |selected_cohort: i64, offset_percent: i64| {
             self.connection
                 .query_row(
                     "SELECT COALESCE(execution_ms,0) FROM requests WHERE cohort_id=?1 AND parent_request_id IS NULL AND completed_ms IS NOT NULL ORDER BY COALESCE(execution_ms,0) LIMIT 1 OFFSET MAX(0, ((SELECT count(*) FROM requests WHERE cohort_id=?1 AND parent_request_id IS NULL AND completed_ms IS NOT NULL) * ?2 + 99) / 100 - 1)",
-                    params![cohort_id, offset_percent],
+                    params![selected_cohort, offset_percent],
                     |row| row.get::<_, i64>(0),
                 )
                 .optional()
                 .map(|value| value.unwrap_or(0))
                 .map_err(|error| error.to_string())
         };
+        let previous_p95: Option<i64> = self
+            .connection
+            .query_row(
+                "SELECT p95_request_ms FROM cohort_summaries ORDER BY archived_ms DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?;
+        let p50 = percentile(cohort_id, 50)?;
+        let p95 = percentile(cohort_id, 95)?;
+        let cache_hits = scalar("SELECT count(*) FROM commands WHERE request_id IN (SELECT id FROM requests WHERE cohort_id=?1) AND status IN ('reused','joined')")?;
+        let cache_misses = scalar("SELECT count(*) FROM commands WHERE request_id IN (SELECT id FROM requests WHERE cohort_id=?1) AND cache_decision='miss'")?;
         Ok(DatabaseReport {
             cohort_id,
             requests: scalar("SELECT count(*) FROM requests WHERE cohort_id=?1")?,
             commands: scalar("SELECT count(*) FROM commands WHERE request_id IN (SELECT id FROM requests WHERE cohort_id=?1)")?,
-            wall_ms: scalar("SELECT COALESCE(sum(execution_ms),0) FROM requests WHERE cohort_id=?1 AND parent_request_id IS NULL")?,
+            wall_ms: scalar("SELECT COALESCE(max(completed_ms)-min(started_ms),0) FROM requests WHERE cohort_id=?1")?,
             command_ms: scalar("SELECT COALESCE(sum(duration_ms),0) FROM commands WHERE request_id IN (SELECT id FROM requests WHERE cohort_id=?1)")?,
             critical_path_ms: scalar("SELECT COALESCE(sum(CASE WHEN execution_ms > 0 THEN execution_ms ELSE 0 END),0) FROM requests WHERE cohort_id=?1 AND parent_request_id IS NULL")?,
-            p50_request_ms: percentile(50)?,
-            p95_request_ms: percentile(95)?,
-            cache_hits: scalar("SELECT count(*) FROM commands WHERE request_id IN (SELECT id FROM requests WHERE cohort_id=?1) AND status IN ('reused','joined')")?,
+            p50_request_ms: p50,
+            p95_request_ms: p95,
+            cache_hits,
+            cache_misses,
+            cache_effectiveness_percent: if cache_hits + cache_misses == 0 {
+                0.0
+            } else {
+                cache_hits as f64 * 100.0 / (cache_hits + cache_misses) as f64
+            },
             failures: scalar("SELECT count(*) FROM commands WHERE request_id IN (SELECT id FROM requests WHERE cohort_id=?1) AND status='failed'")?,
             repeated_requests: scalar("SELECT count(*) FROM requests r WHERE cohort_id=?1 AND EXISTS (SELECT 1 FROM requests p WHERE p.cohort_id=r.cohort_id AND p.id<>r.id AND p.args_json=r.args_json AND p.started_ms BETWEEN r.started_ms-60000 AND r.started_ms)")?,
+            previous_p95_request_ms: previous_p95,
+            p95_regression_ms: previous_p95.map(|previous| p95.saturating_sub(previous)),
         })
     }
 
@@ -1228,6 +1315,7 @@ impl Evidence {
         if active != 0 {
             return Err("database_rotation_refused: active task lifecycles exist".into());
         }
+        let summary = self.report()?;
         self.connection
             .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
             .map_err(|error| format!("cannot checkpoint evidence database: {error}"))?;
@@ -1261,6 +1349,8 @@ impl Evidence {
                  DELETE FROM commit_attempts;
                  DELETE FROM task_claims;
                  DELETE FROM operation_cache;
+                 DELETE FROM validation_results;
+                 DELETE FROM operation_leases;
                  DELETE FROM events;
                  DELETE FROM commands;
                  DELETE FROM requests;
@@ -1275,6 +1365,18 @@ impl Evidence {
             .execute(
                 "UPDATE cohorts SET git_sha=?1 WHERE id=(SELECT max(id) FROM cohorts)",
                 [git_sha],
+            )
+            .map_err(|error| error.to_string())?;
+        self.connection
+            .execute(
+                "INSERT INTO cohort_summaries (archived_ms, git_sha, requests, p95_request_ms, cache_effectiveness_percent) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    stamp,
+                    git_sha,
+                    summary.requests,
+                    summary.p95_request_ms,
+                    summary.cache_effectiveness_percent
+                ],
             )
             .map_err(|error| error.to_string())?;
         Ok(archive)
@@ -1968,7 +2070,7 @@ mod tests {
         let request = RawRequest::capture([OsString::from("agent-cli")]);
         evidence.begin_request(&request).unwrap();
         let command = evidence
-            .begin_command(&request.id, "check.one", "true", &[], None)
+            .begin_command(&request.id, "check.one", "true", &[], None, "cpu")
             .unwrap();
         evidence.finish_command(command, now_ms(), 0).unwrap();
         evidence
@@ -2047,12 +2149,44 @@ mod tests {
     }
 
     #[test]
+    fn separate_connections_share_one_validation_lease() {
+        let root = temporary_root("shared-lease");
+        let first = Evidence::open_at(&root).unwrap();
+        let second = Evidence::open_at(&root).unwrap();
+        assert!(first
+            .claim_validation("check.one", "fingerprint", "owner")
+            .unwrap());
+        assert!(!second
+            .claim_validation("check.one", "fingerprint", "waiter")
+            .unwrap());
+        first
+            .cache_validation("check.one", "fingerprint", "passed", None)
+            .unwrap();
+        first
+            .release_validation("check.one", "fingerprint", "owner")
+            .unwrap();
+        assert_eq!(
+            second
+                .cached_validation("check.one", "fingerprint")
+                .unwrap(),
+            Some(("passed".into(), None))
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn rotation_archives_integrity_checked_evidence_and_starts_empty() {
         let root = temporary_root("rotation");
         let evidence = Evidence::open_at(&root).unwrap();
         let request = RawRequest::capture([OsString::from("agent-cli"), OsString::from("check")]);
         evidence.begin_request(&request).unwrap();
         evidence.finish(&request.id, Outcome::Passed).unwrap();
+        evidence
+            .cache_validation("check.one", "fingerprint", "passed", None)
+            .unwrap();
+        evidence
+            .claim_validation("check.two", "fingerprint", "owner")
+            .unwrap();
         let archive = evidence.rotate("abc123").unwrap();
         assert!(archive.is_file());
         let archived = Connection::open(archive).unwrap();
@@ -2063,7 +2197,25 @@ mod tests {
             "ok"
         );
         assert_eq!(evidence.status().unwrap().requests, 0);
-        assert_eq!(evidence.report().unwrap().requests, 0);
+        let report = evidence.report().unwrap();
+        assert_eq!(report.requests, 0);
+        assert!(report.previous_p95_request_ms.is_some());
+        assert_eq!(
+            evidence
+                .connection
+                .query_row("SELECT count(*) FROM validation_results", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            evidence
+                .connection
+                .query_row("SELECT count(*) FROM operation_leases", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

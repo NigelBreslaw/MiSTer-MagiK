@@ -439,7 +439,8 @@ fn git_output(
     args: &[String],
 ) -> Result<Output, String> {
     let started = now_ms();
-    let command_id = evidence.begin_command(request_id, operation_id, "git", args, None)?;
+    let command_id =
+        evidence.begin_command(request_id, operation_id, "git", args, None, "git_index")?;
     let output = Command::new("git")
         .args(args)
         .current_dir(repository)

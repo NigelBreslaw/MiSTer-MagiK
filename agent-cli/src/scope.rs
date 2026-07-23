@@ -72,7 +72,8 @@ fn run_git(
 ) -> Result<Vec<PathBuf>, String> {
     let owned: Vec<_> = args.iter().map(|arg| (*arg).to_owned()).collect();
     let started = now_ms();
-    let command_id = evidence.begin_command(request_id, "scope.git", "git", &owned, None)?;
+    let command_id =
+        evidence.begin_command(request_id, "scope.git", "git", &owned, None, "git_index")?;
     let output = Command::new("git")
         .args(args)
         .current_dir(repository)

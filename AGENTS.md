@@ -105,8 +105,12 @@ scripts/agent diagnose
 scripts/agent release qualify
 ```
 
-Agents must record a task baseline before editing, use `check` while iterating,
-then use `commit` to verify the exact staged tree and complete host-only work.
+Agents must record a task baseline before editing, then use `check` at meaningful
+iteration boundaries and `commit` to verify the exact staged tree and complete
+host-only work. Batch related edits before checking. Do not rerun `check` after
+every small patch, formatting correction, or immediately obvious follow-up;
+rerun it when a coherent slice is ready, when a failure could have multiple
+causes, or before handing work off.
 Use standalone `verify` only when full assurance is required without committing.
 `--paths` is reserved for CI or diagnostics, and `verify --staged` is the raw
 Git pre-commit interface. Use `scripts/agent db report`, not ad-hoc SQL, for
