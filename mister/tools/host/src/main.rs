@@ -2151,20 +2151,22 @@ fn run_launcher_benchmark(
         BenchmarkScenario::LauncherVelocity => "velocity-scroll",
         BenchmarkScenario::FramebufferVelocity => "dirty-band",
     };
+    let mut env_vars = vec![
+        ("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()),
+        ("MISTER_LAUNCHER_START_SYSTEM".into(), "arcade".into()),
+        (
+            "MISTER_LAUNCHER_BENCH_SCENARIO".into(),
+            scenario_value.into(),
+        ),
+        ("MISTER_PREVIEW_SCROLL_TRACE_SECS".into(), seconds.into()),
+        ("MISTER_PREVIEW_SCROLL_TRACE".into(), trace.into()),
+        ("MISTER_PREVIEW_SCROLL_EXIT_AFTER_TRACE".into(), "1".into()),
+    ];
+    env_vars.extend(diagnostic_framebuffer_env()?);
     launcher_restart(
         session,
         &LauncherRestartOptions {
-            env_vars: vec![
-                ("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()),
-                ("MISTER_LAUNCHER_START_SYSTEM".into(), "arcade".into()),
-                (
-                    "MISTER_LAUNCHER_BENCH_SCENARIO".into(),
-                    scenario_value.into(),
-                ),
-                ("MISTER_PREVIEW_SCROLL_TRACE_SECS".into(), seconds.into()),
-                ("MISTER_PREVIEW_SCROLL_TRACE".into(), trace.into()),
-                ("MISTER_PREVIEW_SCROLL_EXIT_AFTER_TRACE".into(), "1".into()),
-            ],
+            env_vars,
             timeout_secs: 30,
             ..LauncherRestartOptions::default()
         },
@@ -2177,6 +2179,30 @@ fn run_launcher_benchmark(
         ),
     )?;
     Ok(())
+}
+
+fn diagnostic_framebuffer_env() -> Result<Vec<(String, String)>> {
+    if std::env::var("MISTER_FB_DIAGNOSTIC_ACTIVE").ok().as_deref() != Some("1") {
+        return Ok(Vec::new());
+    }
+    let rectangle = std::env::var("MISTER_FB_DIAGNOSTIC_RECT")
+        .map_err(|_| "MISTER_FB_DIAGNOSTIC_ACTIVE requires MISTER_FB_DIAGNOSTIC_RECT")?;
+    diagnostic_framebuffer_env_for(&rectangle)
+}
+
+fn diagnostic_framebuffer_env_for(rectangle: &str) -> Result<Vec<(String, String)>> {
+    let values = rectangle
+        .split(',')
+        .map(str::parse::<u16>)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|_| "MISTER_FB_DIAGNOSTIC_RECT must contain four unsigned integers")?;
+    if values.len() != 4 || values[0] > values[1] || values[2] > values[3] {
+        return Err("MISTER_FB_DIAGNOSTIC_RECT must be left,right,top,bottom".into());
+    }
+    Ok(vec![
+        ("MISTER_FB_DIAGNOSTIC_ACTIVE".into(), "1".into()),
+        ("MISTER_FB_DIAGNOSTIC_RECT".into(), rectangle.into()),
+    ])
 }
 
 fn action_uses_device(action: &str) -> bool {
@@ -7796,6 +7822,20 @@ video_mode=14
         assert!(command.contains(" ui crt_trial 30 "));
         assert!(!command.contains("settings_set"));
         assert!(!command.contains("launcher.env"));
+    }
+
+    #[test]
+    fn diagnostic_framebuffer_environment_is_explicit_and_bounded() {
+        assert_eq!(
+            diagnostic_framebuffer_env_for("45,684,40,615").unwrap(),
+            vec![
+                ("MISTER_FB_DIAGNOSTIC_ACTIVE".into(), "1".into()),
+                ("MISTER_FB_DIAGNOSTIC_RECT".into(), "45,684,40,615".into()),
+            ]
+        );
+        assert!(diagnostic_framebuffer_env_for("45,44,40,615").is_err());
+        assert!(diagnostic_framebuffer_env_for("45,684,40").is_err());
+        assert!(diagnostic_framebuffer_env_for("-1,684,40,615").is_err());
     }
 
     #[test]

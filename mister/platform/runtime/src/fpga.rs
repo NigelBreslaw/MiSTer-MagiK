@@ -70,11 +70,17 @@ pub struct LatchedFbufGeometry {
 
 impl LatchedFbufGeometry {
     pub fn new(fb_width: u16, mode: FramebufferRouteMode, right_guard_cols: i32) -> Self {
-        let xoff = mode.hbp as i32 - FB_DV_LBRD;
-        let yoff = mode.vbp as i32 - FB_DV_UBRD;
-        let right_guard_cols = right_guard_cols.clamp(0, mode.hact.saturating_sub(1) as i32);
-        let right = xoff + mode.hact as i32 - 1 - right_guard_cols;
-        let bottom = yoff + mode.vact as i32 - 1;
+        let [xoff, right, yoff, bottom] = diagnostic_fbuf_rectangle().unwrap_or_else(|| {
+            let xoff = mode.hbp as i32 - FB_DV_LBRD;
+            let yoff = mode.vbp as i32 - FB_DV_UBRD;
+            let right_guard_cols = right_guard_cols.clamp(0, mode.hact.saturating_sub(1) as i32);
+            [
+                xoff,
+                xoff + mode.hact as i32 - 1 - right_guard_cols,
+                yoff,
+                yoff + mode.vact as i32 - 1,
+            ]
+        });
         Self {
             xoff: xoff as u16,
             right: right as u16,
@@ -83,6 +89,26 @@ impl LatchedFbufGeometry {
             stride_bytes: rgb565_stride_bytes(fb_width as usize) as u16,
         }
     }
+}
+
+fn diagnostic_fbuf_rectangle() -> Option<[i32; 4]> {
+    if std::env::var("MISTER_FB_DIAGNOSTIC_ACTIVE").ok().as_deref() != Some("1") {
+        return None;
+    }
+    let value = std::env::var("MISTER_FB_DIAGNOSTIC_RECT").ok()?;
+    parse_diagnostic_fbuf_rectangle(&value)
+}
+
+fn parse_diagnostic_fbuf_rectangle(value: &str) -> Option<[i32; 4]> {
+    let values = value
+        .split(',')
+        .map(str::parse::<i32>)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    let rectangle: [i32; 4] = values.try_into().ok()?;
+    let [left, right, top, bottom] = rectangle;
+    (left >= 0 && top >= 0 && right >= left && bottom >= top && right <= 2047 && bottom <= 2047)
+        .then_some(rectangle)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -531,8 +557,12 @@ impl Fpga {
             .and_then(|v| v.parse::<i32>().ok())
             .unwrap_or(0)
             .clamp(0, mode.hact.saturating_sub(1) as i32);
-        let right = xoff + mode.hact as i32 - 1 - right_guard_cols;
-        let bottom = yoff + mode.vact as i32 - 1;
+        let [xoff, right, yoff, bottom] = diagnostic_fbuf_rectangle().unwrap_or([
+            xoff,
+            xoff + mode.hact as i32 - 1 - right_guard_cols,
+            yoff,
+            yoff + mode.vact as i32 - 1,
+        ]);
 
         // Clean chip-select edge first (we may be interrupting a stopped MiSTer
         // mid-transaction), then send the command and read its support flag from
@@ -679,6 +709,18 @@ mod tests {
         assert_eq!(mode.vact, 540);
         assert_eq!(mode.hbp as i32 - FB_DV_LBRD, 0);
         assert_eq!(mode.vbp as i32 - FB_DV_UBRD, 0);
+    }
+
+    #[test]
+    fn diagnostic_rectangle_parser_accepts_only_bounded_ordered_coordinates() {
+        assert_eq!(
+            parse_diagnostic_fbuf_rectangle("45,684,40,615"),
+            Some([45, 684, 40, 615])
+        );
+        assert_eq!(parse_diagnostic_fbuf_rectangle("45,44,40,615"), None);
+        assert_eq!(parse_diagnostic_fbuf_rectangle("-1,684,40,615"), None);
+        assert_eq!(parse_diagnostic_fbuf_rectangle("45,684,40"), None);
+        assert_eq!(parse_diagnostic_fbuf_rectangle("45,684,40,2048"), None);
     }
 
     #[test]
