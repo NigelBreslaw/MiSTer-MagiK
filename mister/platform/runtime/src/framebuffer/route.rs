@@ -107,7 +107,7 @@ const fn ui_fpga_placement(mode: FramebufferRouteMode, direct_video: bool) -> Fr
             ..default
         },
         (640, 576) => FramebufferPlacement {
-            width: 620,
+            width: 576,
             ..default
         },
         _ => default,
@@ -188,7 +188,7 @@ mod tests {
                 FramebufferPlacement {
                     left: 45,
                     top: 40,
-                    width: 620,
+                    width: 576,
                     height: 576,
                 },
             ),

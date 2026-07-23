@@ -20,7 +20,7 @@ four built-in progressive Menu modes:
 | `crt-240p60` | 320×240 → 640×240 | 12.587 MHz | 640/30/60/70 | 240/4/4/14 | 15.7338 kHz / 60.052 Hz |
 | `crt-288p50` | 384×288 → 640×288 | 12.587 MHz | 640/30/60/70 | 288/6/4/14 | 15.7338 kHz / 50.429 Hz |
 | `crt-480p60` | 640×480 → 640×480 | 25.175 MHz | 640/16/96/48 | 480/8/4/33 | 31.4688 kHz / 59.940 Hz |
-| `crt-576p50` | 620×480 → 640×576 | 25.175 MHz | 640/16/96/48 | 576/2/4/42 | 31.4688 kHz / 50.431 Hz |
+| `crt-576p50` | 576×490 → 640×576 | 25.175 MHz | 640/16/96/48 | 576/2/4/42 | 31.4688 kHz / 50.431 Hz |
 
 Both sync polarities are negative. These values come from Main's standard
 Menu Direct Video table; MagiK consumes the resolved name only to choose its
@@ -36,10 +36,10 @@ rectangle places the framebuffer inside Menu's scan space:
 | `crt-240p60` | 320×240 | 640×240 | `(67,706,12,251)` |
 | `crt-288p50` | 384×288 | 640×288 | `(67,706,32,286)` |
 | `crt-480p60` | 640×480 | 640×480 | `(45,684,31,510)` |
-| `crt-576p50` | 620×480 | 640×576 | `(45,664,40,615)` |
+| `crt-576p50` | 576×490 | 640×576 | `(45,620,40,615)` |
 
 The 288p rectangle is the attended USB Video calibration result. The 576p
-launcher uses matching 620-pixel framebuffer and destination widths. Earlier
+launcher uses matching 576-pixel framebuffer and destination widths. Earlier
 trials narrowed only the destination while retaining a 640-pixel source, which
 cropped source columns because Menu disables framebuffer downscaling. Matching
 the source and destination widths instead preserves the complete Slint layout

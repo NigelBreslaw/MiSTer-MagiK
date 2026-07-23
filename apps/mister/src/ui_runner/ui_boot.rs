@@ -275,7 +275,7 @@ mod tests {
 
         let route = LauncherFramebufferRoute::for_scan(plan.scan_w, plan.scan_h, plan.direct_video);
 
-        assert_eq!((plan.fb_w, plan.fb_h), (620, 480));
+        assert_eq!((plan.fb_w, plan.fb_h), (576, 490));
         assert_eq!((route.mode().hact, route.mode().vact), (640, 576));
         assert!(route.set_vga_fb());
     }

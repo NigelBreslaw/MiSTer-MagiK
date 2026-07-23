@@ -872,7 +872,7 @@ mod tests {
             (240, [67, 706, 12, 251]),
             (288, [67, 706, 32, 286]),
             (480, [45, 684, 31, 510]),
-            (576, [45, 664, 40, 615]),
+            (576, [45, 620, 40, 615]),
         ] {
             let route = LauncherFramebufferRoute::for_scan(640, scan_h, true);
             let geometry = LatchedFbufGeometry::new_for_route(640, route, 0);
