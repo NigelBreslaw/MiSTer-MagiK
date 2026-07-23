@@ -11,7 +11,7 @@ use ssh2::Session;
 use std::fs;
 use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -19,9 +19,6 @@ const REMOTE_INI: &str = "/media/fat/MiSTer.ini";
 const REMOTE_BACKUP: &str = "/media/fat/MiSTer.ini.mister-magik-crt-backup";
 const REMOTE_JOURNAL: &str = "/media/fat/MiSTer.ini.mister-magik-crt-journal-v1";
 const REMOTE_RESTORE_NEW: &str = "/media/fat/MiSTer.ini.mister-magik-crt-restore-new";
-const CAMERA_DEVICE: &str = "USB Video";
-const CAMERA_FORMAT: &str = "uyvy422";
-const CAMERA_SIZE: &str = "1920x1080";
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(unix)]
@@ -118,7 +115,7 @@ fn run_attended(output: Option<PathBuf>) -> Result<()> {
     create_new_output_directory(&output)?;
 
     println!("CRT qualification artifacts: {}", output.display());
-    println!("Capture: {CAMERA_DEVICE}, {CAMERA_FORMAT}, {CAMERA_SIZE}");
+    println!("Capture: agent-cli native USB Video 1920x1080 JPEG");
     qualify_preflight_capture(&output, interrupted)?;
 
     let session = connect(10)?;
@@ -329,14 +326,8 @@ fn run_mode_attempts(directory: &Path, mode: CrtMode, interrupted: &AtomicBool) 
     check_interrupted(interrupted)?;
     let attempt_directory = directory.join("attempt-01");
     fs::create_dir(&attempt_directory)?;
-    let video = attempt_directory.join("trial.mp4");
-    let mut camera = spawn_video_capture(&video)?;
     let trial = run_crt_trial_once(mode, &attempt_directory);
-    let camera_status = camera.wait()?;
-    if !camera_status.success() {
-        return Err(format!("USB Video capture failed for {}", mode.output).into());
-    }
-    extract_review_frames(&video, &attempt_directory)?;
+    capture_usb_video_frame(&attempt_directory.join("trial.jpg"))?;
     let trial_status = match trial {
         Ok(status) => status,
         Err(error) => {
@@ -496,67 +487,25 @@ fn remote_read_bytes(session: &Session, remote: &str) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn camera_helper() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../scripts/host-camera")
+fn agent_helper() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../scripts/agent")
 }
 
-fn camera_args(command: &str, output: &Path) -> Vec<String> {
-    let mut args = vec![
-        command.to_string(),
-        "--device".to_string(),
-        CAMERA_DEVICE.to_string(),
-        "--size".to_string(),
-        CAMERA_SIZE.to_string(),
-        "--pixel-format".to_string(),
-        CAMERA_FORMAT.to_string(),
-        "--framerate".to_string(),
-        "30".to_string(),
-    ];
-    if command == "video" {
-        args.extend(["--duration".to_string(), "32".to_string()]);
-    }
-    args.extend(["--output".to_string(), output.display().to_string()]);
-    args
+fn camera_args(output: &Path) -> Vec<String> {
+    vec![
+        "capture".to_string(),
+        "usb-video".to_string(),
+        "--output".to_string(),
+        output.display().to_string(),
+    ]
 }
 
 pub(super) fn capture_usb_video_frame(output: &Path) -> Result<()> {
-    let status = Command::new(camera_helper())
-        .args(camera_args("frame", output))
+    let status = Command::new(agent_helper())
+        .args(camera_args(output))
         .status()?;
     if !status.success() {
         return Err("USB Video still capture failed".into());
-    }
-    Ok(())
-}
-
-fn spawn_video_capture(output: &Path) -> Result<std::process::Child> {
-    Ok(Command::new(camera_helper())
-        .args(camera_args("video", output))
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .spawn()?)
-}
-
-fn extract_review_frames(video: &Path, directory: &Path) -> Result<()> {
-    for (label, seconds) in [("start", "1"), ("middle", "16"), ("end", "30")] {
-        let output = directory.join(format!("frame-{label}.jpg"));
-        let status = Command::new("ffmpeg")
-            .args([
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-y",
-                "-ss",
-                seconds,
-                "-i",
-            ])
-            .arg(video)
-            .args(["-frames:v", "1", "-update", "1"])
-            .arg(output)
-            .status()?;
-        if !status.success() {
-            return Err(format!("failed to extract {label} CRT review frame").into());
-        }
     }
     Ok(())
 }
@@ -645,15 +594,10 @@ mod tests {
 
     #[test]
     fn capture_is_fixed_to_usb_video_contract() {
-        let args = camera_args("video", Path::new("/tmp/trial.mp4"));
-        assert!(args
-            .windows(2)
-            .any(|pair| pair == ["--device", "USB Video"]));
-        assert!(args.windows(2).any(|pair| pair == ["--size", "1920x1080"]));
-        assert!(args
-            .windows(2)
-            .any(|pair| pair == ["--pixel-format", "uyvy422"]));
-        assert!(args.windows(2).any(|pair| pair == ["--duration", "32"]));
+        assert_eq!(
+            camera_args(Path::new("/tmp/trial.jpg")),
+            ["capture", "usb-video", "--output", "/tmp/trial.jpg"]
+        );
     }
 
     #[test]

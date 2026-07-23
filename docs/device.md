@@ -112,10 +112,11 @@ manifest records partial failures before cleanup. Framebuffer evidence still
 requires attended sink observation for HDMI or CRT visibility claims.
 
 With `--usb-video`, each case also captures the fixed `USB Video` input after
-the authoritative framebuffer capture and records its path, size, and hash in
-the manifest. CRT/VGA acceptance requires routing Morph 4K Port B before those
-cases and restoring HDMI afterward. Morph credentials are runtime-only operator
-input and must never be passed as command arguments or written to artifacts.
+the authoritative framebuffer capture through the native agent capture command,
+and records its path, size, and hash in the manifest. CRT/VGA acceptance
+requires routing Morph 4K Port B before those cases and restoring HDMI afterward.
+Morph credentials are runtime-only operator input and must never be passed as
+command arguments or written to artifacts.
 `--screensaver-wait` adds a second authoritative framebuffer capture after the
 bounded idle interval and, when combined with `--usb-video`, a second sink
 capture. The case fails if screensaver content is not distinct from the launcher.

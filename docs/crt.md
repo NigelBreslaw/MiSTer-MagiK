@@ -103,8 +103,10 @@ reports, but neither CI nor Morph analysis proves compatibility with every
 physical CRT.
 
 Qualification requires authoritative native-raster framebuffer captures plus
-USB Video stills in all four modes. Text must remain sharp and readable,
-proportions and safe areas must be correct, and latch, visual, and FPGA drops
-must stay zero. HDMI regression, core launch/return (including native
-interlace), cleanup, recovery, and stock rollback remain part of the gate. No
-current document should be read as claiming that attended gate has passed.
+native `scripts/agent capture usb-video` JPEG stills in all four modes. The CRT
+trial stores a single post-trial sink frame rather than recording video. Text
+must remain sharp and readable, proportions and safe areas must be correct, and
+latch, visual, and FPGA drops must stay zero. HDMI regression, core
+launch/return (including native interlace), cleanup, recovery, and stock
+rollback remain part of the gate. No current document should be read as
+claiming that attended gate has passed.
