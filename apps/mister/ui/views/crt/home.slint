@@ -12,11 +12,13 @@ export component HomeGrid inherits Rectangle {
         ? (menu-viewport.height - root.card-gap * 3) / 4
         : (menu-viewport.height - root.card-gap * 4) / 4.5;
     property <length> card-pitch: root.card-height + root.card-gap;
+    property <bool> bottom-window: !root.root-menu
+        && MisterBridge.menu-items.length > 4
+        && MisterBridge.selected-index >= MisterBridge.menu-items.length - 2;
     property <int> first-visible-row: root.root-menu ? 0
-        : (MisterBridge.selected-index - 2).clamp(
-            0,
-            (MisterBridge.menu-items.length - 5).max(0),
-        );
+        : root.bottom-window ? MisterBridge.menu-items.length - 5
+        : (MisterBridge.selected-index - 2).clamp(0, (MisterBridge.menu-items.length - 5).max(0));
+    property <length> leading-clip: root.bottom-window ? root.card-pitch / 2 : 0px;
 
     background: CrtTheme.background;
 
@@ -38,7 +40,7 @@ export component HomeGrid inherits Rectangle {
             clip: true;
 
             for item[index] in MisterBridge.menu-items : CrtCard {
-                y: (index - root.first-visible-row) * root.card-pitch;
+                y: (index - root.first-visible-row) * root.card-pitch - root.leading-clip;
                 width: parent.width;
                 height: root.card-height;
                 label: item.label;

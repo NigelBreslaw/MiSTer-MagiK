@@ -3,7 +3,47 @@
 
 import { MisterUi } from "../mister_window.slint";
 import { MisterBridge } from "../api.slint";
-import { CrtTheme, CrtHeader, CrtFooter, CrtMenuRow } from "crt_ui.slint";
+import { CrtTheme, CrtHeader, CrtFooter } from "crt_ui.slint";
+
+component CrtResolutionRow inherits Rectangle {
+    in property <string> label;
+    in property <string> detail;
+    in property <bool> focused;
+
+    background: root.focused ? CrtTheme.accent : CrtTheme.panel-alt;
+    border-width: MisterUi.border;
+    border-color: root.focused ? CrtTheme.accent : CrtTheme.border;
+
+    HorizontalLayout {
+        padding-left: MisterUi.grid * 2;
+        padding-right: MisterUi.grid * 2;
+        spacing: MisterUi.grid;
+        cross-axis-alignment: center;
+
+        Text {
+            width: MisterUi.body-font;
+            text: root.focused ? ">" : "";
+            font-family: "W95FA";
+            color: CrtTheme.accent-text;
+            font-size: MisterUi.body-font;
+        }
+        Text {
+            text: root.label;
+            font-family: "W95FA";
+            color: root.focused ? CrtTheme.accent-text : CrtTheme.text;
+            font-size: MisterUi.body-font;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+        Text {
+            text: root.detail;
+            font-family: "W95FA";
+            color: root.focused ? CrtTheme.accent-text : CrtTheme.muted;
+            font-size: MisterUi.body-font;
+            horizontal-alignment: right;
+        }
+    }
+}
 
 export component CrtComboBoxOverlay inherits Rectangle {
     property <int> visible-count: 7;
@@ -39,7 +79,7 @@ export component CrtComboBoxOverlay inherits Rectangle {
             clip: true;
             VerticalLayout {
                 spacing: 0px;
-                for option[index] in MisterBridge.display-options : CrtMenuRow {
+                for option[index] in MisterBridge.display-options : CrtResolutionRow {
                     visible: index >= root.first-visible
                         && index < root.first-visible + root.visible-count;
                     vertical-stretch: 1;

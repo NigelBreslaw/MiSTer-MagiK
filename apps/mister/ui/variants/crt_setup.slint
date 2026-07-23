@@ -14,6 +14,11 @@ export component SetupOverlay inherits Rectangle {
     in property <[string]> config-values;
     in property <string> setup-name;
     in property <string> setup-kind-label;
+    property <int> setup-visible-rows: 7;
+    property <int> setup-first-visible: (root.list-selected - 3).clamp(
+        0,
+        (root.list-items.length - root.setup-visible-rows).max(0),
+    );
 
     background: CrtTheme.background;
 
@@ -47,13 +52,14 @@ export component SetupOverlay inherits Rectangle {
             vertical-stretch: 1;
             background: transparent;
             clip: true;
-            VerticalLayout {
-                spacing: 0px;
-                for item[i] in root.list-items : CrtMenuRow {
-                    label: item;
-                    detail: "";
-                    focused: root.list-selected == i;
-                }
+
+            for item[i] in root.list-items : CrtMenuRow {
+                y: (i - root.setup-first-visible) * parent.height / root.setup-visible-rows;
+                width: parent.width;
+                height: parent.height / root.setup-visible-rows;
+                label: item;
+                detail: "";
+                focused: root.list-selected == i;
             }
         }
 
