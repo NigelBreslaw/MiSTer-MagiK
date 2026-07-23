@@ -338,7 +338,7 @@ mod tests {
         TextGradient::new(Pixel(0x00ffffff), Pixel(0x00c8bfd8), Pixel(0x00887f90));
 
     #[test]
-    fn w95fa_clipping_uses_measured_advances_and_fits_the_requested_width() {
+    fn lilliput_steps_clipping_uses_measured_advances_and_fits_the_requested_width() {
         let mut font = ConsoleFont::new_with_typeface(16.0, ConsoleTypeface::LilliputSteps);
         let clipped = font
             .clipped_text("Cadillacs and Dinosaurs", 80)
