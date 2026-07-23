@@ -147,12 +147,13 @@ Runtime-only development delivery builds and transactionally replaces the app,
 then verifies it against the installed qualified Main, kernel module, and FPGA
 latch without rebuilding or overwriting those platform components.
 
-When Main, kernel, or FPGA source changes, development delivery builds and
-checks the clean local `mister-magik` branch, builds the app and kernel locally,
-reuses a verified FPGA artifact, regenerates the complete development manifest,
-and uses the normal snapshot, activation, reboot, smoke, and rollback
+When kernel or FPGA source changes select a platform delivery, it also builds
+and checks the clean local `mister-magik` branch, builds the app and kernel
+locally, reuses a verified FPGA artifact, regenerates the complete development
+manifest, and uses the normal snapshot, activation, reboot, smoke, and rollback
 transaction. Neither local commit must be pushed, and Main is never copied
-directly onto the device.
+directly onto the device outside that transaction. A Main-only change lives in
+the external repository and is not inferred from app commit paths.
 
 Use a non-default fork checkout with the same option:
 

@@ -32,9 +32,10 @@ Runtime or platform changes then use `scripts/agent deliver`. Delivery uses the
 exact clean local app commit without consulting task records or requiring
 publication. Runtime-only delivery replaces `mister-magik-fb` transactionally
 while preserving the installed qualified Main, kernel module, and FPGA latch.
-Actual Main, kernel, or FPGA source changes select the complete platform
-transaction, including the clean local Main checkout and component
-qualification.
+Kernel or FPGA source changes select the complete platform transaction,
+including the clean local Main checkout and component qualification. Main lives
+in its external repository, so a Main-only change is not inferred from app
+commit paths.
 # Deployment
 
 “Build and deploy” maps to `scripts/agent commit -m MESSAGE` followed by

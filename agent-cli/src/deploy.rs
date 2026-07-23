@@ -168,12 +168,6 @@ fn platform_components(paths: &[PathBuf]) -> Vec<&'static str> {
     {
         components.push("fpga");
     }
-    if paths
-        .iter()
-        .any(|path| path.starts_with("mister/platform/runtime/main"))
-    {
-        components.push("main");
-    }
     components
 }
 
@@ -265,9 +259,8 @@ mod tests {
         let paths = vec![
             PathBuf::from("mister/platform/fpga/menu-vblank-latch/menu.sv"),
             PathBuf::from("mister/platform/kernel/scanout-slots/scanout.c"),
-            PathBuf::from("mister/platform/runtime/main/contract.rs"),
         ];
-        assert_eq!(platform_components(&paths), vec!["kernel", "fpga", "main"]);
+        assert_eq!(platform_components(&paths), vec!["kernel", "fpga"]);
         assert_eq!(ui_scope(&paths), UiScope::All);
     }
 
