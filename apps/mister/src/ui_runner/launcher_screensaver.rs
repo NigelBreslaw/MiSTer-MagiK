@@ -246,6 +246,8 @@ pub(in crate::ui_runner) struct LauncherScreensaver {
     archive_cancelled: Arc<AtomicBool>,
     startup_started_at: Option<Instant>,
     frame: u64,
+    motion_started_at: Instant,
+    motion_ticks_fp: u64,
 }
 
 impl LauncherScreensaver {
@@ -254,18 +256,35 @@ impl LauncherScreensaver {
         archive_cancelled: Arc<AtomicBool>,
         startup_started_at: Option<Instant>,
     ) -> Self {
+        let now = Instant::now();
         Self {
             parade: ParadeState::new(random_seed()),
             archive_rx: Some(archive_rx),
             archive_cancelled,
             startup_started_at,
             frame: 0,
+            motion_started_at: now,
+            motion_ticks_fp: 0,
         }
     }
 
     pub(in crate::ui_runner) fn render(&mut self, dst: &mut [Rgb565Pixel], w: usize, h: usize) {
+        let now = Instant::now();
+        let next_motion_ticks_fp =
+            parade_tick_delta_fp(now.saturating_duration_since(self.motion_started_at)) as u64;
+        let tick_delta_fp = next_motion_ticks_fp
+            .saturating_sub(self.motion_ticks_fp)
+            .min(i64::MAX as u64) as i64;
+        self.motion_ticks_fp = next_motion_ticks_fp;
         self.poll_archive(w, h);
-        render_archive_parade(dst, &mut self.parade, w, h, self.frame);
+        render_archive_parade(
+            dst,
+            &mut self.parade,
+            w,
+            h,
+            self.motion_ticks_fp,
+            tick_delta_fp,
+        );
         if self.frame > 0 && self.frame % 600 == 0 {
             self.parade.log_scaler_stats();
         }
@@ -1289,13 +1308,13 @@ fn render_horizontal_starfield(
     dst: &mut [Rgb565Pixel],
     w: usize,
     h: usize,
-    frame: u64,
+    motion_ticks_fp: u64,
     _motion: ParadeMotion,
 ) {
     clear(dst, color565(0, 0, 10));
     for i in 0..210usize {
         let layer = i & 3;
-        let (x, fraction) = horizontal_star_position(i, w, frame);
+        let (x, fraction) = horizontal_star_position(i, w, h, motion_ticks_fp);
         let y = (i.wrapping_mul(83).wrapping_add(i.wrapping_mul(i) * 7)) % h;
         let brightness = [70, 110, 170, 235][layer];
         let color = color565(brightness / 2, brightness, 255);
@@ -1309,10 +1328,21 @@ fn render_horizontal_starfield(
 }
 
 fn horizontal_star_x(star: usize, width: usize, frame: u64) -> usize {
-    horizontal_star_position(star, width, frame).0
+    horizontal_star_position(
+        star,
+        width,
+        PARADE_REFERENCE_HEIGHT,
+        frame.saturating_mul(PARADE_TICK_ONE as u64),
+    )
+    .0
 }
 
-fn horizontal_star_position(star: usize, width: usize, frame: u64) -> (usize, u8) {
+fn horizontal_star_position(
+    star: usize,
+    width: usize,
+    screen_h: usize,
+    motion_ticks_fp: u64,
+) -> (usize, u8) {
     const STAR_SPEED_DENOMINATOR: u64 = 16;
     const SUBPIXEL_ONE: u64 = 256;
     let speed_numerator = PARADE_MIN_TILE_SPEED as u64 * ((star & 3) + 1) as u64;
@@ -1320,10 +1350,14 @@ fn horizontal_star_position(star: usize, width: usize, frame: u64) -> (usize, u8
         .wrapping_mul(197)
         .wrapping_add(star.wrapping_mul(star) * 13))
         % width;
-    let travel = frame
+    let scaled_ticks_fp = motion_ticks_fp
+        .saturating_mul(screen_h as u64)
+        .saturating_add((PARADE_REFERENCE_HEIGHT / 2) as u64)
+        / PARADE_REFERENCE_HEIGHT as u64;
+    let travel = scaled_ticks_fp
         .saturating_mul(speed_numerator)
         .saturating_mul(SUBPIXEL_ONE)
-        / STAR_SPEED_DENOMINATOR;
+        / (STAR_SPEED_DENOMINATOR * PARADE_TICK_ONE as u64);
     let position = (start_x as u64 * SUBPIXEL_ONE + travel) % (width as u64 * SUBPIXEL_ONE);
     (
         (position / SUBPIXEL_ONE) as usize,
@@ -1786,6 +1820,8 @@ const PARADE_COMPACT_LAYER_TARGETS: [usize; 5] = [48, 18, 15, 12, 9];
 // and leaves one slower whole-pixel speed for the star field.
 const PARADE_LAYER_SPEEDS: [usize; 5] = [2, 3, 4, 5, 6];
 const PARADE_REFERENCE_HEIGHT: usize = 540;
+const PARADE_REFERENCE_HZ: u64 = 60;
+const PARADE_TICK_ONE: i64 = 1 << 16;
 const PARADE_MIN_TILE_SPEED: usize = 1;
 const PARADE_SPEED_COUNT: usize = 5;
 const PARADE_REFERENCE_PLACEMENT_GAP: usize = 18;
@@ -1815,12 +1851,31 @@ impl ParadeMotion {
         }
     }
 
-    fn card_velocity_fp(self, layer_idx: usize) -> i64 {
-        match self {
+    fn card_velocity_fp(self, layer_idx: usize, screen_h: usize) -> i64 {
+        let reference = match self {
             Self::Integer => PARADE_LAYER_SPEEDS[layer_idx] as i64 * PARADE_SUBPIXEL_ONE,
             Self::Subpixel => (layer_idx as i64 + 1) * PARADE_SUBPIXEL_ONE / 2,
-        }
+        };
+        scale_parade_velocity(reference, screen_h)
     }
+}
+
+fn scale_parade_velocity(reference_fp: i64, screen_h: usize) -> i64 {
+    reference_fp
+        .saturating_mul(screen_h as i64)
+        .saturating_add((PARADE_REFERENCE_HEIGHT / 2) as i64)
+        .checked_div(PARADE_REFERENCE_HEIGHT as i64)
+        .unwrap_or(1)
+        .max(1)
+}
+
+fn parade_tick_delta_fp(elapsed: Duration) -> i64 {
+    let ticks = elapsed
+        .as_nanos()
+        .saturating_mul(PARADE_REFERENCE_HZ as u128)
+        .saturating_mul(PARADE_TICK_ONE as u128)
+        / 1_000_000_000u128;
+    ticks.min(i64::MAX as u128) as i64
 }
 
 fn parade_layer_targets(screen_w: usize, screen_h: usize) -> [usize; PARADE_SPEED_COUNT] {
@@ -2090,6 +2145,7 @@ struct ParadeTile {
     layer: usize,
     speed: usize,
     velocity_fp: i64,
+    velocity_remainder: i64,
     image_idx: usize,
     scaled: SaverImage,
     half_shifted: SaverImage,
@@ -2293,7 +2349,7 @@ impl ParadeState {
         }
         for (layer_idx, target) in self.layer_targets.into_iter().enumerate() {
             let speed = PARADE_MIN_TILE_SPEED + layer_idx;
-            let velocity_fp = self.motion.card_velocity_fp(layer_idx);
+            let velocity_fp = self.motion.card_velocity_fp(layer_idx, h);
             let (tile_w, _, _) = parade_depth_style(speed, h);
             let interval_frames = parade_layer_interval_frames(w, tile_w, velocity_fp, target);
             let phase = self.random_below(interval_frames as usize) as u64;
@@ -2329,6 +2385,7 @@ impl ParadeState {
                     layer: speed,
                     speed,
                     velocity_fp,
+                    velocity_remainder: 0,
                     image_idx: card.image_idx,
                     scaled: card.scaled,
                     half_shifted: card.half_shifted,
@@ -2370,7 +2427,7 @@ impl ParadeState {
         }
         for layer_idx in (0..PARADE_SPEED_COUNT).rev() {
             let speed = PARADE_MIN_TILE_SPEED + layer_idx;
-            let velocity_fp = self.motion.card_velocity_fp(layer_idx);
+            let velocity_fp = self.motion.card_velocity_fp(layer_idx, screen_h);
             let (tile_w, _, _) = parade_depth_style(speed, screen_h);
             let interval_frames = parade_layer_interval_frames(
                 screen_w,
@@ -2398,7 +2455,8 @@ impl ParadeState {
             y: 0,
             layer: speed,
             speed,
-            velocity_fp: self.motion.card_velocity_fp(layer_idx),
+            velocity_fp: self.motion.card_velocity_fp(layer_idx, self.screen_h),
+            velocity_remainder: 0,
             image_idx: usize::MAX,
             scaled: SaverImage {
                 pixels: Vec::new(),
@@ -2495,7 +2553,7 @@ impl ParadeState {
         self.image_count = image_count;
         for (layer_idx, target) in self.layer_targets.into_iter().enumerate() {
             let speed = PARADE_MIN_TILE_SPEED + layer_idx;
-            let velocity_fp = self.motion.card_velocity_fp(layer_idx);
+            let velocity_fp = self.motion.card_velocity_fp(layer_idx, h);
             let (tile_w, _, _) = parade_depth_style(speed, h);
             let interval_frames = parade_layer_interval_frames(w, tile_w, velocity_fp, target);
             let phase = self.random_below(interval_frames as usize) as u64;
@@ -2532,6 +2590,7 @@ impl ParadeState {
                     layer: speed,
                     speed,
                     velocity_fp,
+                    velocity_remainder: 0,
                     image_idx,
                     scaled,
                     half_shifted,
@@ -2584,13 +2643,21 @@ impl ParadeState {
         screen_w: usize,
         screen_h: usize,
         images: Option<&[SaverImage]>,
-        frame: u64,
+        motion_ticks_fp: u64,
+        tick_delta_fp: i64,
     ) {
+        let nominal_frame = motion_ticks_fp / PARADE_TICK_ONE as u64;
         self.collect_scaled_cards(images);
         let mut exited = Vec::new();
         for tile_idx in 0..self.tiles.len() {
             if self.tiles[tile_idx].active {
-                self.tiles[tile_idx].x_fp += self.tiles[tile_idx].velocity_fp;
+                let tile = &mut self.tiles[tile_idx];
+                let motion = tile
+                    .velocity_fp
+                    .saturating_mul(tick_delta_fp)
+                    .saturating_add(tile.velocity_remainder);
+                tile.x_fp = tile.x_fp.saturating_add(motion / PARADE_TICK_ONE);
+                tile.velocity_remainder = motion % PARADE_TICK_ONE;
                 if self.tiles[tile_idx].x() >= screen_w as isize {
                     self.tiles[tile_idx].active = false;
                     exited.push(tile_idx);
@@ -2601,7 +2668,7 @@ impl ParadeState {
             self.queue_successor(tile_idx, images);
         }
         for layer_idx in 0..PARADE_SPEED_COUNT {
-            if frame < self.layers[layer_idx].next_spawn_frame {
+            if nominal_frame < self.layers[layer_idx].next_spawn_frame {
                 continue;
             }
             let speed = PARADE_MIN_TILE_SPEED + layer_idx;
@@ -2621,7 +2688,7 @@ impl ParadeState {
                 self.random_tile_y(screen_h, x, next.scaled.w, next.scaled.h, speed, tile_idx)
             else {
                 self.tiles[tile_idx].next = Some(next);
-                self.layers[layer_idx].next_spawn_frame = frame + 1;
+                self.layers[layer_idx].next_spawn_frame = nominal_frame + 1;
                 continue;
             };
             let tile = &mut self.tiles[tile_idx];
@@ -2632,8 +2699,9 @@ impl ParadeState {
             tile.half_shifted = next.half_shifted;
             tile.corner_insets = next.corner_insets;
             tile.active = true;
+            tile.velocity_remainder = 0;
             let interval = self.jittered_interval(self.layers[layer_idx].interval_frames);
-            self.layers[layer_idx].next_spawn_frame = frame + interval;
+            self.layers[layer_idx].next_spawn_frame = nominal_frame + interval;
             self.layers[layer_idx].spawn_count += 1;
             if self.archive_backed {
                 let layer_tile_count = self.tiles.iter().filter(|tile| tile.layer == speed).count();
@@ -2915,7 +2983,8 @@ impl ParadeState {
                 "screensaver_parade_layer motion={} layer={} velocity_px={:.2} size={}x{} target={} interval_ms={} spawns={} average_active={:.2}",
                 self.motion.label(),
                 speed,
-                self.motion.card_velocity_fp(layer_idx) as f64 / PARADE_SUBPIXEL_ONE as f64,
+                self.motion.card_velocity_fp(layer_idx, self.screen_h) as f64
+                    / PARADE_SUBPIXEL_ONE as f64,
                 w,
                 h,
                 self.layer_targets[layer_idx],
@@ -2972,9 +3041,10 @@ fn render_parade(
     images: &[SaverImage],
     frame: u64,
 ) {
-    render_horizontal_starfield(dst, w, h, frame, state.motion);
+    let motion_ticks_fp = frame.saturating_mul(PARADE_TICK_ONE as u64);
+    render_horizontal_starfield(dst, w, h, motion_ticks_fp, state.motion);
     state.ensure_initialized(images, w, h);
-    state.advance(w, h, Some(images), frame);
+    state.advance(w, h, Some(images), motion_ticks_fp, PARADE_TICK_ONE);
     let draw_order = parade_draw_order(state);
     for tile_idx in draw_order {
         let tile = &state.tiles[tile_idx];
@@ -2996,10 +3066,11 @@ fn render_archive_parade(
     state: &mut ParadeState,
     w: usize,
     h: usize,
-    frame: u64,
+    motion_ticks_fp: u64,
+    tick_delta_fp: i64,
 ) {
-    render_horizontal_starfield(dst, w, h, frame, state.motion);
-    state.advance(w, h, None, frame);
+    render_horizontal_starfield(dst, w, h, motion_ticks_fp, state.motion);
+    state.advance(w, h, None, motion_ticks_fp, tick_delta_fp);
     let draw_order = parade_draw_order(state);
     for tile_idx in draw_order {
         let tile = &state.tiles[tile_idx];
@@ -3336,7 +3407,7 @@ mod tests {
         state.layers[layer_idx].next_spawn_frame = 0;
         state.layers[layer_idx].interval_frames = 30;
 
-        state.advance(960, 540, None, 0);
+        state.advance(960, 540, None, 0, 0);
 
         assert!(state.tiles[tile_idx].active);
         assert_eq!(state.tiles[tile_idx].x(), -4);
@@ -3420,13 +3491,19 @@ mod tests {
         let width = state.tiles[0].scaled.w;
         state.tiles[0].x_fp = 960 * PARADE_SUBPIXEL_ONE - velocity_fp - 1;
 
-        state.advance(960, 540, Some(&images), 0);
+        state.advance(960, 540, Some(&images), 0, PARADE_TICK_ONE);
         assert_eq!(state.tiles[0].image_idx, original);
         assert_eq!(state.tiles[0].x(), 959);
 
         let layer_idx = speed - PARADE_MIN_TILE_SPEED;
         state.layers[layer_idx].next_spawn_frame = 0;
-        state.advance(960, 540, Some(&images), 1);
+        state.advance(
+            960,
+            540,
+            Some(&images),
+            PARADE_TICK_ONE as u64,
+            PARADE_TICK_ONE,
+        );
         assert_eq!(state.tiles[0].x(), -(state.tiles[0].scaled.w as isize));
         assert_ne!(state.tiles[0].image_idx, original);
         assert_ne!(state.tiles[0].scaled.w, 0);
@@ -3458,9 +3535,14 @@ mod tests {
 
     #[test]
     fn slowest_star_has_a_new_subpixel_phase_every_frame() {
-        let (_, fraction0) = horizontal_star_position(0, 960, 0);
+        let (_, fraction0) = horizontal_star_position(0, 960, PARADE_REFERENCE_HEIGHT, 0);
         for frame in 1..16 {
-            let (_, fraction) = horizontal_star_position(0, 960, frame);
+            let (_, fraction) = horizontal_star_position(
+                0,
+                960,
+                PARADE_REFERENCE_HEIGHT,
+                frame * PARADE_TICK_ONE as u64,
+            );
             assert_ne!(fraction, fraction0);
             assert_eq!(fraction, frame as u8 * 16);
         }
@@ -3470,11 +3552,68 @@ mod tests {
     fn both_motion_modes_advance_every_card_on_every_frame() {
         for motion in [ParadeMotion::Integer, ParadeMotion::Subpixel] {
             for layer_idx in 0..PARADE_SPEED_COUNT {
-                let velocity = motion.card_velocity_fp(layer_idx);
+                let velocity = motion.card_velocity_fp(layer_idx, PARADE_REFERENCE_HEIGHT);
                 assert!(velocity > 0);
                 let positions = (0..4).map(|frame| frame * velocity).collect::<Vec<_>>();
                 assert!(positions.windows(2).all(|pair| pair[0] != pair[1]));
             }
+        }
+    }
+
+    #[test]
+    fn parade_velocity_uses_the_required_framebuffer_height_ratios() {
+        let reference = PARADE_REFERENCE_HEIGHT as i64 * PARADE_SUBPIXEL_ONE;
+        for (height, numerator, denominator) in [
+            (240, 4, 9),
+            (288, 8, 15),
+            (384, 32, 45),
+            (480, 8, 9),
+            (540, 1, 1),
+            (600, 10, 9),
+            (768, 64, 45),
+        ] {
+            let scaled = scale_parade_velocity(reference, height);
+            assert_eq!(scaled, height as i64 * PARADE_SUBPIXEL_ONE);
+            assert_eq!(
+                scaled * denominator,
+                reference * numerator,
+                "incorrect motion ratio at {height}p"
+            );
+        }
+    }
+
+    fn one_second_card_travel(refresh_hz: u64, screen_h: usize) -> (i64, i64, u64) {
+        let velocity_fp = ParadeMotion::Subpixel.card_velocity_fp(3, screen_h);
+        let mut x_fp = 0_i64;
+        let mut remainder = 0_i64;
+        let mut previous_ticks = 0_u64;
+        for frame in 1..=refresh_hz {
+            let elapsed_ns = 1_000_000_000_u64 * frame / refresh_hz;
+            let motion_ticks = parade_tick_delta_fp(Duration::from_nanos(elapsed_ns)) as u64;
+            let tick_delta = motion_ticks.saturating_sub(previous_ticks) as i64;
+            let motion = velocity_fp
+                .saturating_mul(tick_delta)
+                .saturating_add(remainder);
+            x_fp = x_fp.saturating_add(motion / PARADE_TICK_ONE);
+            remainder = motion % PARADE_TICK_ONE;
+            previous_ticks = motion_ticks;
+        }
+        (x_fp, remainder, previous_ticks)
+    }
+
+    #[test]
+    fn parade_motion_is_identical_after_one_second_at_50_and_60_hz() {
+        for height in [240, 288, 384, 480, 540, 600, 768] {
+            let at_50_hz = one_second_card_travel(50, height);
+            let at_60_hz = one_second_card_travel(60, height);
+            assert_eq!(at_50_hz, at_60_hz, "card travel differs at {height}p");
+
+            let star_at_50_hz = horizontal_star_position(3, 4_096, height, at_50_hz.2);
+            let star_at_60_hz = horizontal_star_position(3, 4_096, height, at_60_hz.2);
+            assert_eq!(
+                star_at_50_hz, star_at_60_hz,
+                "star travel differs at {height}p"
+            );
         }
     }
 
@@ -3484,7 +3623,8 @@ mod tests {
         let x1 = horizontal_star_x(3, 960, 16);
         let fastest_star_travel = (x1 + 960 - x0) % 960;
         let slowest_card_travel =
-            ParadeMotion::Subpixel.card_velocity_fp(0) as usize * 16 / PARADE_SUBPIXEL_ONE as usize;
+            ParadeMotion::Subpixel.card_velocity_fp(0, PARADE_REFERENCE_HEIGHT) as usize * 16
+                / PARADE_SUBPIXEL_ONE as usize;
         assert!(fastest_star_travel < slowest_card_travel);
     }
 
@@ -3591,6 +3731,7 @@ mod tests {
             layer: 3,
             speed: 3,
             velocity_fp: 3 * PARADE_SUBPIXEL_ONE / 2,
+            velocity_remainder: 0,
             image_idx: 0,
             scaled,
             half_shifted,
@@ -3656,6 +3797,7 @@ mod tests {
                 layer: 2,
                 speed: 2,
                 velocity_fp: PARADE_SUBPIXEL_ONE,
+                velocity_remainder: 0,
                 image_idx: 0,
                 scaled: slow_scaled,
                 half_shifted: slow_half_shifted,
@@ -3670,6 +3812,7 @@ mod tests {
                 layer: 5,
                 speed: 5,
                 velocity_fp: 5 * PARADE_SUBPIXEL_ONE / 2,
+                velocity_remainder: 0,
                 image_idx: 1,
                 scaled: fast_scaled,
                 half_shifted: fast_half_shifted,
