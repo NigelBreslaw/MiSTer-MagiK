@@ -111,7 +111,58 @@ pub(super) fn run_crt_trial_loop(
         frames += 1;
     }
 
-    let final_status = match wait_for_crt_latch_settle(hardware) {
+    let (flips, failure) =
+        finish_crt_trial(before, frames, failure, wait_for_crt_latch_settle(hardware));
+    let reason = failure
+        .as_deref()
+        .unwrap_or(if flips == 0 { "no-latch-flips" } else { "none" });
+    crate::ui_logln!(
+        "crt_trial_status_v2 schema=2 ok={} mode={} duration_ms={} frames={} flips={} reason={}",
+        u8::from(failure.is_none() && frames > 0 && flips > 0),
+        mode.label(),
+        started.elapsed().as_millis(),
+        frames,
+        flips,
+        reason
+    );
+}
+
+fn wait_for_crt_latch_settle(hardware: &mut Fpga) -> io::Result<crate::fpga::LatchedFbufStatus> {
+    wait_for_crt_latch_settle_with(
+        || hardware.read_magik_latched_fbuf_status(),
+        CRT_LATCH_SETTLE_TIMEOUT,
+        std::thread::sleep,
+    )
+}
+
+fn wait_for_crt_latch_settle_with(
+    mut read_status: impl FnMut() -> io::Result<crate::fpga::LatchedFbufStatus>,
+    timeout: Duration,
+    mut sleep: impl FnMut(Duration),
+) -> io::Result<crate::fpga::LatchedFbufStatus> {
+    let started = Instant::now();
+    loop {
+        let status = read_status()?;
+        if !status.supported() || !status.pending() {
+            return Ok(status);
+        }
+        if started.elapsed() >= timeout {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "pending-latch-did-not-settle",
+            ));
+        }
+        sleep(Duration::from_millis(1));
+    }
+}
+
+fn finish_crt_trial(
+    before: CrtTrialCounters,
+    frames: u64,
+    mut failure: Option<String>,
+    final_status: io::Result<crate::fpga::LatchedFbufStatus>,
+) -> (u16, Option<String>) {
+    let final_status = match final_status {
         Ok(status) if status.supported() => Some(status),
         Ok(_) => {
             failure.get_or_insert_with(|| "final-latch-status-unsupported".to_string());
@@ -132,35 +183,7 @@ pub(super) fn run_crt_trial_loop(
     if failure.is_none() && u64::from(flips) != frames {
         failure = Some("incomplete-latch-flips".to_string());
     }
-    let reason = failure
-        .as_deref()
-        .unwrap_or(if flips == 0 { "no-latch-flips" } else { "none" });
-    crate::ui_logln!(
-        "crt_trial_status_v2 schema=2 ok={} mode={} duration_ms={} frames={} flips={} reason={}",
-        u8::from(failure.is_none() && frames > 0 && flips > 0),
-        mode.label(),
-        started.elapsed().as_millis(),
-        frames,
-        flips,
-        reason
-    );
-}
-
-fn wait_for_crt_latch_settle(hardware: &mut Fpga) -> io::Result<crate::fpga::LatchedFbufStatus> {
-    let started = Instant::now();
-    loop {
-        let status = hardware.read_magik_latched_fbuf_status()?;
-        if !status.supported() || !status.pending() {
-            return Ok(status);
-        }
-        if started.elapsed() >= CRT_LATCH_SETTLE_TIMEOUT {
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "pending-latch-did-not-settle",
-            ));
-        }
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    (flips, failure)
 }
 
 fn render_crt_trial_frame(dst: &mut [Rgb565Pixel], width: usize, height: usize, frame: u64) {
@@ -205,6 +228,23 @@ fn safe_field(value: &str) -> String {
 mod tests {
     use super::*;
 
+    fn status(flips: u16, pending: bool) -> crate::fpga::LatchedFbufStatus {
+        crate::fpga::LatchedFbufStatus {
+            magic_hi: crate::fpga::MAGIK_FBUF_STATUS_MAGIC,
+            magic_lo: 0,
+            active_sequence: 1,
+            pending_sequence: 2,
+            flags: 0x0001 | if pending { 0x0004 } else { 0 },
+            flip_count: flips,
+            post_count: flips,
+            drop_count: 0,
+            active_base: 0x227e_9000,
+            active_width: 640,
+            active_height: 480,
+            active_stride: 1280,
+        }
+    }
+
     #[test]
     fn pattern_scales_to_each_standard_crt_height() {
         for height in [240, 288, 480, 576] {
@@ -226,5 +266,52 @@ mod tests {
         let before = CrtTrialCounters { flips: u16::MAX };
         let after = CrtTrialCounters { flips: 1 };
         assert_eq!(after.delta(before), CrtTrialCounters { flips: 2 });
+    }
+
+    #[test]
+    fn final_latch_wait_accepts_pending_then_settled() {
+        let mut statuses = vec![status(10, false), status(9, true)];
+        let settled = wait_for_crt_latch_settle_with(
+            || Ok(statuses.pop().expect("scripted status")),
+            Duration::from_millis(10),
+            |_| {},
+        )
+        .expect("pending latch should settle");
+
+        assert_eq!(settled.flip_count, 10);
+        assert!(!settled.pending());
+    }
+
+    #[test]
+    fn final_latch_wait_times_out_when_pending_never_clears() {
+        let error = wait_for_crt_latch_settle_with(|| Ok(status(9, true)), Duration::ZERO, |_| {})
+            .expect_err("permanent pending latch must time out");
+
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    }
+
+    #[test]
+    fn final_completion_requires_supported_settled_status_and_matching_flips() {
+        let before = CrtTrialCounters { flips: 20 };
+        let (flips, failure) = finish_crt_trial(before, 2, None, Ok(status(22, false)));
+        assert_eq!(flips, 2);
+        assert_eq!(failure, None);
+
+        let (flips, failure) = finish_crt_trial(before, 2, None, Ok(status(21, false)));
+        assert_eq!(flips, 1);
+        assert_eq!(failure.as_deref(), Some("incomplete-latch-flips"));
+
+        let mut unsupported = status(22, false);
+        unsupported.magic_hi = 0;
+        let (_, failure) = finish_crt_trial(before, 2, None, Ok(unsupported));
+        assert_eq!(failure.as_deref(), Some("final-latch-status-unsupported"));
+
+        let (_, failure) = finish_crt_trial(
+            before,
+            2,
+            None,
+            Err(io::Error::new(io::ErrorKind::TimedOut, "pending")),
+        );
+        assert_eq!(failure.as_deref(), Some("final-latch-settle-pending"));
     }
 }

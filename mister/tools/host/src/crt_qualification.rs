@@ -679,5 +679,10 @@ mod tests {
             mode,
         )
         .is_err());
+        assert!(validate_trial_progress(
+            "crt_trial_status_v2 schema=2 ok=1 mode=crt-288p50 duration_ms=30000 frames=1500 flips=1500 reason=none",
+            CRT_MODES[1],
+        )
+        .is_ok());
     }
 }
