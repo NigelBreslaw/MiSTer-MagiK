@@ -9,7 +9,6 @@ args = [
   ".",
   "--config",
   ".lspi/config.toml",
-  "--warmup",
   "--read-only",
 ]
 required = false
