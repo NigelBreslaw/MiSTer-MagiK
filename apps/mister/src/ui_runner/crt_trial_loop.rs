@@ -67,6 +67,7 @@ pub(super) fn run_crt_trial_loop(
 
     let width = ui.render_w();
     let height = ui.render_h();
+    let content_bounds = crt_trial_content_bounds_from_env(width);
     let started = Instant::now();
     let mut frames = 0u64;
     let mut frame = vec![Rgb565Pixel(0); width * height];
@@ -96,7 +97,7 @@ pub(super) fn run_crt_trial_loop(
                 break;
             }
         }
-        render_crt_trial_frame(&mut frame, width, height, frames);
+        render_crt_trial_frame(&mut frame, width, height, frames, content_bounds);
         let plan = LauncherFramePlan::new(full_damage, None, None, None, None);
         if let Err(error) = presenter.present_cached_full_frame(
             CachedFrameView::new(&frame, width, height),
@@ -186,17 +187,36 @@ fn finish_crt_trial(
     (flips, failure)
 }
 
-fn render_crt_trial_frame(dst: &mut [Rgb565Pixel], width: usize, height: usize, frame: u64) {
+fn crt_trial_content_bounds_from_env(width: usize) -> Option<(usize, usize)> {
+    let value = std::env::var("MISTER_CRT_TRIAL_CONTENT_BOUNDS").ok()?;
+    let (left, right) = value.split_once(',')?;
+    let left = left.parse::<usize>().ok()?;
+    let right = right.parse::<usize>().ok()?;
+    (left <= right && right < width).then_some((left, right))
+}
+
+fn render_crt_trial_frame(
+    dst: &mut [Rgb565Pixel],
+    width: usize,
+    height: usize,
+    frame: u64,
+    content_bounds: Option<(usize, usize)>,
+) {
     debug_assert_eq!(dst.len(), width * height);
     const BORDER: usize = 2;
     const BARS: [u16; 8] = [
         0xffff, 0xffe0, 0x07ff, 0x07e0, 0xf81f, 0xf800, 0x001f, 0x0000,
     ];
+    let (content_left, content_right) = content_bounds.unwrap_or((0, width - 1));
+    let content_width = content_right - content_left + 1;
     for y in 0..height {
         for x in 0..width {
-            let value = if y < height / 2 {
-                BARS[(x * BARS.len() / width).min(BARS.len() - 1)]
-            } else if x % 16 == 0 || y % 16 == 0 {
+            let value = if x < content_left || x > content_right {
+                0x0000
+            } else if y < height / 2 {
+                let content_x = x - content_left;
+                BARS[(content_x * BARS.len() / content_width).min(BARS.len() - 1)]
+            } else if (x - content_left) % 16 == 0 || y % 16 == 0 {
                 0x8410
             } else {
                 0x1082
@@ -204,15 +224,20 @@ fn render_crt_trial_frame(dst: &mut [Rgb565Pixel], width: usize, height: usize, 
             dst[y * width + x] = Rgb565Pixel(value);
         }
     }
-    let marker_x = ((frame * 5) % width as u64) as usize;
+    let marker_x = content_left + ((frame * 5) % content_width as u64) as usize;
     for y in 0..height {
         for dx in 0..3 {
-            dst[y * width + (marker_x + dx) % width] = Rgb565Pixel(0xffff);
+            let x = content_left + (marker_x - content_left + dx) % content_width;
+            dst[y * width + x] = Rgb565Pixel(0xffff);
         }
     }
     for y in 0..height {
-        for x in 0..width {
-            if x < BORDER || x >= width - BORDER || y < BORDER || y >= height - BORDER {
+        for x in content_left..=content_right {
+            if x < content_left + BORDER
+                || x > content_right.saturating_sub(BORDER)
+                || y < BORDER
+                || y >= height - BORDER
+            {
                 dst[y * width + x] = Rgb565Pixel(0xffff);
             }
         }
@@ -258,8 +283,8 @@ mod tests {
         for height in [240, 288, 480, 576] {
             let mut first = vec![Rgb565Pixel(0); 640 * height];
             let mut second = first.clone();
-            render_crt_trial_frame(&mut first, 640, height, 0);
-            render_crt_trial_frame(&mut second, 640, height, 1);
+            render_crt_trial_frame(&mut first, 640, height, 0, None);
+            render_crt_trial_frame(&mut second, 640, height, 1, None);
 
             assert_eq!(first[10 * 640 + 100].0, 0xffe0);
             assert_eq!(first[(height / 2) * 640 + 32].0, 0x8410);
@@ -270,6 +295,20 @@ mod tests {
             assert_eq!(first[100 * 640 + 639].0, 0xffff);
             assert_ne!(first, second);
         }
+    }
+
+    #[test]
+    fn bounded_pattern_compresses_complete_content_inside_black_margins() {
+        let mut frame = vec![Rgb565Pixel(0); 640 * 480];
+
+        render_crt_trial_frame(&mut frame, 640, 480, 0, Some((64, 575)));
+
+        assert_eq!(frame[100 * 640 + 63].0, 0x0000);
+        assert_eq!(frame[100 * 640 + 64].0, 0xffff);
+        assert_eq!(frame[100 * 640 + 575].0, 0xffff);
+        assert_eq!(frame[100 * 640 + 576].0, 0x0000);
+        assert_eq!(frame[10 * 640 + 128].0, 0xffe0);
+        assert_eq!(frame[(480 - 1) * 640 + 320].0, 0xffff);
     }
 
     #[test]

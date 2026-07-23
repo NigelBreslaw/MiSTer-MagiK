@@ -2079,7 +2079,15 @@ fn parse_crt_runtime_settings_reply(output: &str) -> Result<String> {
 fn crt_trial_run_command(runtime_settings: &str, rectangle: Option<[u16; 4]>) -> String {
     let resume = acknowledged_main_command("mister_magik_resume");
     let diagnostic = rectangle.map_or_else(String::new, |[left, right, top, bottom]| {
-        format!("MISTER_MAGIK_CRT_TRIAL=1 MISTER_FB_DIAGNOSTIC_RECT={left},{right},{top},{bottom} ")
+        if runtime_settings.contains("output=crt-576p50") {
+            format!(
+                "MISTER_MAGIK_CRT_TRIAL=1 MISTER_FB_DIAGNOSTIC_RECT=45,684,40,615 MISTER_CRT_TRIAL_CONTENT_BOUNDS={left},{right} "
+            )
+        } else {
+            format!(
+                "MISTER_MAGIK_CRT_TRIAL=1 MISTER_FB_DIAGNOSTIC_RECT={left},{right},{top},{bottom} "
+            )
+        }
     });
     format!(
         "cleanup() {{ trap - EXIT HUP INT TERM; {resume}; }}; trap cleanup EXIT HUP INT TERM; set -eu; test -x /media/fat/mister-magik-dev/mister-magik-fb; {diagnostic}MISTER_MAGIK_RUNTIME_SETTINGS_V1={} /media/fat/mister-magik-dev/mister-magik-fb ui crt_trial 30 >/tmp/mister-magik-crt_trial.log 2>&1",
@@ -2152,19 +2160,29 @@ fn run_crt_geometry_trial(rectangle: [u16; 4]) -> Result<String> {
     let trial_result = trial.join().map_err(|_| "geometry trial worker panicked")?;
     trial_result.map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
     capture?;
+    let content_bounds = runtime_settings
+        .contains("output=crt-576p50")
+        .then_some([rectangle[0], rectangle[1]]);
+    let destination_rectangle = if content_bounds.is_some() {
+        [45, 684, 40, 615]
+    } else {
+        rectangle
+    };
     Ok(json!({
         "runtime_settings": runtime_settings,
-        "rectangle": rectangle,
+        "destination_rectangle": destination_rectangle,
+        "content_bounds": content_bounds,
         "usb_video": output,
     })
     .to_string())
 }
 
 fn validate_crt_geometry_trial(runtime_settings: &str, rectangle: [u16; 4]) -> Result<()> {
-    let (baseline, variable_axis) = if runtime_settings.contains("output=crt-288p50") {
-        ([67, 706, 12, 299], "vertical")
+    let (baseline, variable_axis, safety_window) = if runtime_settings.contains("output=crt-288p50")
+    {
+        ([67, 706, 12, 299], "vertical", 64)
     } else if runtime_settings.contains("output=crt-576p50") {
-        ([45, 684, 40, 615], "horizontal")
+        ([45, 684, 40, 615], "horizontal", 192)
     } else {
         return Err("geometry trials are limited to crt-288p50 and crt-576p50".into());
     };
@@ -2172,13 +2190,13 @@ fn validate_crt_geometry_trial(runtime_settings: &str, rectangle: [u16; 4]) -> R
     if left > right || top > bottom {
         return Err("geometry trial rectangle is unordered".into());
     }
-    let delta = |value: u16, expected: u16| value.abs_diff(expected) <= 64;
+    let delta = |value: u16, expected: u16| value.abs_diff(expected) <= safety_window;
     if !rectangle
         .iter()
         .zip(baseline)
         .all(|(value, expected)| delta(*value, expected))
     {
-        return Err("geometry trial rectangle exceeds the 64-pixel safety window".into());
+        return Err("geometry trial rectangle exceeds the mode safety window".into());
     }
     let fixed_axis_matches = match variable_axis {
         "vertical" => left == baseline[0] && right == baseline[1],
@@ -2187,18 +2205,6 @@ fn validate_crt_geometry_trial(runtime_settings: &str, rectangle: [u16; 4]) -> R
     };
     if !fixed_axis_matches {
         return Err("288p trials are vertical-only and 576p trials are horizontal-only".into());
-    }
-    let (start, end, baseline_start, baseline_end) = match variable_axis {
-        "vertical" => (top, bottom, baseline[2], baseline[3]),
-        "horizontal" => (left, right, baseline[0], baseline[1]),
-        _ => unreachable!(),
-    };
-    let start_delta = i32::from(start) - i32::from(baseline_start);
-    let end_delta = i32::from(end) - i32::from(baseline_end);
-    if start_delta != end_delta && start_delta != -end_delta {
-        return Err(
-            "geometry trial must change position or symmetric size, not both at once".into(),
-        );
     }
     Ok(())
 }
@@ -7931,6 +7937,9 @@ video_mode=14
             validate_crt_geometry_trial("schema=1&output=crt-288p50", [67, 706, 14, 297]).is_ok()
         );
         assert!(
+            validate_crt_geometry_trial("schema=1&output=crt-288p50", [67, 706, 32, 286]).is_ok()
+        );
+        assert!(
             validate_crt_geometry_trial("schema=1&output=crt-288p50", [66, 706, 14, 297]).is_err()
         );
         assert!(
@@ -7940,7 +7949,13 @@ video_mode=14
             validate_crt_geometry_trial("schema=1&output=crt-576p50", [40, 679, 41, 615]).is_err()
         );
         assert!(
-            validate_crt_geometry_trial("schema=1&output=crt-576p50", [40, 680, 40, 615]).is_err()
+            validate_crt_geometry_trial("schema=1&output=crt-576p50", [40, 680, 40, 615]).is_ok()
+        );
+        assert!(
+            validate_crt_geometry_trial("schema=1&output=crt-576p50", [0, 511, 40, 615]).is_ok()
+        );
+        assert!(
+            validate_crt_geometry_trial("schema=1&output=crt-576p50", [0, 491, 40, 615]).is_err()
         );
         assert!(
             validate_crt_geometry_trial("schema=1&output=crt-480p60", [45, 684, 31, 510]).is_err()
@@ -7948,8 +7963,13 @@ video_mode=14
 
         let command = crt_trial_run_command("schema=1&output=crt-576p50", Some([40, 679, 40, 615]));
         assert!(command.contains("MISTER_MAGIK_CRT_TRIAL=1"));
-        assert!(command.contains("MISTER_FB_DIAGNOSTIC_RECT=40,679,40,615"));
+        assert!(command.contains("MISTER_FB_DIAGNOSTIC_RECT=45,684,40,615"));
+        assert!(command.contains("MISTER_CRT_TRIAL_CONTENT_BOUNDS=40,679"));
         assert!(!command.contains("launcher.env"));
+
+        let command = crt_trial_run_command("schema=1&output=crt-288p50", Some([67, 706, 32, 286]));
+        assert!(command.contains("MISTER_FB_DIAGNOSTIC_RECT=67,706,32,286"));
+        assert!(!command.contains("MISTER_CRT_TRIAL_CONTENT_BOUNDS"));
     }
 
     #[test]
