@@ -102,6 +102,8 @@ pub enum Intent {
         run_id: String,
     },
     DatabaseStatus,
+    DatabaseReport,
+    DatabaseRotate,
     PruneLogs,
     Doctor,
     Diagnose,

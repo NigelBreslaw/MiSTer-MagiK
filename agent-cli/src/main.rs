@@ -81,6 +81,11 @@ fn main() {
     evidence
         .finish(&raw.id, outcome)
         .unwrap_or_else(|error| fatal(&error));
+    if matches!(intent, Intent::DatabaseRotate) {
+        let sha = agent_cli::task::current_head(&repository).unwrap_or_else(|error| fatal(&error));
+        let archive = evidence.rotate(&sha).unwrap_or_else(|error| fatal(&error));
+        println!("archived evidence: {}", archive.display());
+    }
     if outcome == Outcome::ExternalRequired {
         std::process::exit(3);
     }
@@ -670,6 +675,15 @@ fn dispatch(
             if output == OutputFormat::Human {
                 println!("{}", serde_json::to_string_pretty(&status).unwrap());
             }
+        }
+        Intent::DatabaseReport => {
+            let report = evidence.report()?;
+            if output == OutputFormat::Human {
+                println!("{}", serde_json::to_string_pretty(&report).unwrap());
+            }
+        }
+        Intent::DatabaseRotate => {
+            return Ok(Outcome::Passed);
         }
         Intent::ListRuns { failed, recent } => {
             let runs = evidence.recent_runs(*failed, *recent)?;

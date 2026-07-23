@@ -25,7 +25,12 @@ CREATE TABLE IF NOT EXISTS requests (
     outcome TEXT,
     bootstrap_ms INTEGER,
     execution_started_ms INTEGER,
-    execution_ms INTEGER
+    execution_ms INTEGER,
+    cohort_id INTEGER,
+    parent_request_id TEXT,
+    git_sha TEXT,
+    planner_schema INTEGER NOT NULL DEFAULT 3,
+    queue_ms INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS commands (
     id INTEGER PRIMARY KEY,
@@ -38,7 +43,10 @@ CREATE TABLE IF NOT EXISTS commands (
     duration_ms INTEGER,
     exit_code INTEGER,
     status TEXT NOT NULL,
-    log_path TEXT
+    log_path TEXT,
+    resource_class TEXT,
+    cache_decision TEXT,
+    owner_request_id TEXT
 );
 CREATE TABLE IF NOT EXISTS events (
     request_id TEXT NOT NULL REFERENCES requests(id),
@@ -66,6 +74,13 @@ CREATE TABLE IF NOT EXISTS operation_cache (
     fingerprint TEXT NOT NULL,
     completed_ms INTEGER NOT NULL,
     PRIMARY KEY (task_id, operation_id, fingerprint)
+);
+CREATE TABLE IF NOT EXISTS cohorts (
+    id INTEGER PRIMARY KEY,
+    created_ms INTEGER NOT NULL,
+    git_sha TEXT NOT NULL,
+    planner_schema INTEGER NOT NULL,
+    label TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS task_claims (
     task_id TEXT NOT NULL REFERENCES tasks(task_id),
@@ -105,7 +120,7 @@ CREATE TABLE IF NOT EXISTS delivery_attestations (
     created_ms INTEGER NOT NULL,
     PRIMARY KEY (task_id, requirement_id)
 );
-PRAGMA user_version = 8;
+PRAGMA user_version = 9;
 "#;
 
 fn baseline_head(value: &str) -> Option<String> {
@@ -128,6 +143,21 @@ pub struct DatabaseStatus {
     pub requests: i64,
     pub commands: i64,
     pub events: i64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct DatabaseReport {
+    pub cohort_id: i64,
+    pub requests: i64,
+    pub commands: i64,
+    pub wall_ms: i64,
+    pub command_ms: i64,
+    pub critical_path_ms: i64,
+    pub p50_request_ms: i64,
+    pub p95_request_ms: i64,
+    pub cache_hits: i64,
+    pub failures: i64,
+    pub repeated_requests: i64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -304,6 +334,36 @@ impl Evidence {
         ensure_column(&connection, "requests", "bootstrap_ms", "INTEGER")?;
         ensure_column(&connection, "requests", "execution_started_ms", "INTEGER")?;
         ensure_column(&connection, "requests", "execution_ms", "INTEGER")?;
+        ensure_column(&connection, "requests", "cohort_id", "INTEGER")?;
+        ensure_column(&connection, "requests", "parent_request_id", "TEXT")?;
+        ensure_column(&connection, "requests", "git_sha", "TEXT")?;
+        ensure_column(
+            &connection,
+            "requests",
+            "planner_schema",
+            "INTEGER NOT NULL DEFAULT 3",
+        )?;
+        ensure_column(
+            &connection,
+            "requests",
+            "queue_ms",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        ensure_column(&connection, "commands", "resource_class", "TEXT")?;
+        ensure_column(&connection, "commands", "cache_decision", "TEXT")?;
+        ensure_column(&connection, "commands", "owner_request_id", "TEXT")?;
+        connection
+            .execute(
+                "INSERT OR IGNORE INTO cohorts (id, created_ms, git_sha, planner_schema, label) VALUES (1, ?1, 'legacy', 3, 'legacy')",
+                [now_ms()],
+            )
+            .map_err(|error| format!("cannot initialize evidence cohort: {error}"))?;
+        connection
+            .execute(
+                "UPDATE requests SET cohort_id=1 WHERE cohort_id IS NULL",
+                [],
+            )
+            .map_err(|error| format!("cannot migrate request cohorts: {error}"))?;
         connection
             .execute(
                 "DELETE FROM operation_cache WHERE task_id NOT IN (SELECT task_id FROM tasks WHERE closed_ms IS NULL)",
@@ -336,10 +396,15 @@ impl Evidence {
 
     pub fn begin_request(&self, request: &RawRequest) -> Result<(), String> {
         let args = serde_json::to_string(&request.args).map_err(|error| error.to_string())?;
+        let parent = std::env::var("MISTER_AGENT_PARENT_REQUEST_ID").ok();
+        let cohort: i64 = self
+            .connection
+            .query_row("SELECT max(id) FROM cohorts", [], |row| row.get(0))
+            .map_err(|error| error.to_string())?;
         self.connection
             .execute(
-                "INSERT INTO requests (id, started_ms, args_json) VALUES (?1, ?2, ?3)",
-                params![request.id, request.started_ms, args],
+                "INSERT INTO requests (id, started_ms, args_json, cohort_id, parent_request_id) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![request.id, request.started_ms, args, cohort, parent],
             )
             .map_err(|error| format!("cannot record request: {error}"))?;
         Ok(())
@@ -979,6 +1044,106 @@ impl Evidence {
             commands: self.count("commands")?,
             events: self.count("events")?,
         })
+    }
+
+    pub fn report(&self) -> Result<DatabaseReport, String> {
+        let cohort_id: i64 = self
+            .connection
+            .query_row("SELECT max(id) FROM cohorts", [], |row| row.get(0))
+            .map_err(|error| error.to_string())?;
+        let scalar = |sql: &str| {
+            self.connection
+                .query_row(sql, [cohort_id], |row| row.get::<_, i64>(0))
+                .map_err(|error| error.to_string())
+        };
+        let percentile = |offset_percent: i64| {
+            self.connection
+                .query_row(
+                    "SELECT COALESCE(execution_ms,0) FROM requests WHERE cohort_id=?1 AND parent_request_id IS NULL AND completed_ms IS NOT NULL ORDER BY COALESCE(execution_ms,0) LIMIT 1 OFFSET MAX(0, ((SELECT count(*) FROM requests WHERE cohort_id=?1 AND parent_request_id IS NULL AND completed_ms IS NOT NULL) * ?2 + 99) / 100 - 1)",
+                    params![cohort_id, offset_percent],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()
+                .map(|value| value.unwrap_or(0))
+                .map_err(|error| error.to_string())
+        };
+        Ok(DatabaseReport {
+            cohort_id,
+            requests: scalar("SELECT count(*) FROM requests WHERE cohort_id=?1")?,
+            commands: scalar("SELECT count(*) FROM commands WHERE request_id IN (SELECT id FROM requests WHERE cohort_id=?1)")?,
+            wall_ms: scalar("SELECT COALESCE(sum(execution_ms),0) FROM requests WHERE cohort_id=?1 AND parent_request_id IS NULL")?,
+            command_ms: scalar("SELECT COALESCE(sum(duration_ms),0) FROM commands WHERE request_id IN (SELECT id FROM requests WHERE cohort_id=?1)")?,
+            critical_path_ms: scalar("SELECT COALESCE(sum(CASE WHEN execution_ms > 0 THEN execution_ms ELSE 0 END),0) FROM requests WHERE cohort_id=?1 AND parent_request_id IS NULL")?,
+            p50_request_ms: percentile(50)?,
+            p95_request_ms: percentile(95)?,
+            cache_hits: scalar("SELECT count(*) FROM commands WHERE request_id IN (SELECT id FROM requests WHERE cohort_id=?1) AND status IN ('reused','joined')")?,
+            failures: scalar("SELECT count(*) FROM commands WHERE request_id IN (SELECT id FROM requests WHERE cohort_id=?1) AND status='failed'")?,
+            repeated_requests: scalar("SELECT count(*) FROM requests r WHERE cohort_id=?1 AND EXISTS (SELECT 1 FROM requests p WHERE p.cohort_id=r.cohort_id AND p.id<>r.id AND p.args_json=r.args_json AND p.started_ms BETWEEN r.started_ms-60000 AND r.started_ms)")?,
+        })
+    }
+
+    pub fn rotate(&self, git_sha: &str) -> Result<PathBuf, String> {
+        let active: i64 = self
+            .connection
+            .query_row(
+                "SELECT count(*) FROM tasks WHERE closed_ms IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        if active != 0 {
+            return Err("database_rotation_refused: active task lifecycles exist".into());
+        }
+        self.connection
+            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+            .map_err(|error| format!("cannot checkpoint evidence database: {error}"))?;
+        let archives = self.root.join("archives");
+        fs::create_dir_all(&archives).map_err(|error| error.to_string())?;
+        let stamp = now_ms();
+        let archive = archives.join(format!("agent-{stamp}-{git_sha}.sqlite3"));
+        fs::copy(self.root.join("agent.sqlite3"), &archive)
+            .map_err(|error| format!("cannot archive evidence database: {error}"))?;
+        let archived = Connection::open(&archive).map_err(|error| error.to_string())?;
+        let integrity: String = archived
+            .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+            .map_err(|error| error.to_string())?;
+        if integrity != "ok" {
+            let _ = fs::remove_file(&archive);
+            return Err(format!(
+                "database archive failed integrity check: {integrity}"
+            ));
+        }
+        let archived_logs = archives.join(format!("agent-{stamp}-{git_sha}-logs"));
+        if self.root.join("logs").exists() {
+            fs::rename(self.root.join("logs"), &archived_logs)
+                .map_err(|error| format!("cannot archive evidence logs: {error}"))?;
+            fs::create_dir_all(self.root.join("logs")).map_err(|error| error.to_string())?;
+        }
+        self.connection
+            .execute_batch(
+                "BEGIN IMMEDIATE;
+                 DELETE FROM delivery_attestations;
+                 DELETE FROM deliveries;
+                 DELETE FROM commit_attempts;
+                 DELETE FROM task_claims;
+                 DELETE FROM operation_cache;
+                 DELETE FROM events;
+                 DELETE FROM commands;
+                 DELETE FROM requests;
+                 DELETE FROM tasks;
+                 DELETE FROM cohorts;
+                 INSERT INTO cohorts (created_ms, git_sha, planner_schema, label)
+                 VALUES (unixepoch('subsec') * 1000, 'pending', 3, 'post-optimization');
+                 COMMIT;",
+            )
+            .map_err(|error| format!("cannot reset evidence database: {error}"))?;
+        self.connection
+            .execute(
+                "UPDATE cohorts SET git_sha=?1 WHERE id=(SELECT max(id) FROM cohorts)",
+                [git_sha],
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(archive)
     }
 
     pub fn recent_runs(&self, failed: bool, limit: usize) -> Result<Vec<RunSummary>, String> {

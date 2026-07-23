@@ -341,6 +341,8 @@ pub enum RunCommand {
 #[derive(Debug, Subcommand)]
 pub enum DbCommand {
     Status,
+    Report,
+    Rotate,
     PruneLogs,
 }
 
@@ -410,6 +412,12 @@ impl Cli {
             Some(Command::Db {
                 command: DbCommand::Status,
             }) => Intent::DatabaseStatus,
+            Some(Command::Db {
+                command: DbCommand::Report,
+            }) => Intent::DatabaseReport,
+            Some(Command::Db {
+                command: DbCommand::Rotate,
+            }) => Intent::DatabaseRotate,
             Some(Command::Db {
                 command: DbCommand::PruneLogs,
             }) => Intent::PruneLogs,
