@@ -929,10 +929,12 @@ mod tests {
         assert_eq!(browser.current_path(), "/MiSTer.ini");
         assert_eq!(browser.status(), "Selected /MiSTer.ini");
         assert!(!browser.loading());
-        assert!(browser
-            .rows()
-            .iter()
-            .any(|row| row.id == "/MiSTer.ini" && row.current));
+        assert!(
+            browser
+                .rows()
+                .iter()
+                .any(|row| row.id == "/MiSTer.ini" && row.current)
+        );
     }
 
     #[test]

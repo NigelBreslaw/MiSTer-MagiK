@@ -30,22 +30,35 @@ struct FaultConfig {
 
 impl FaultConfig {
     fn from_env() -> Option<Self> {
-        let point = std::env::var(POINT_ENV).ok()?;
+        Self::from_values(
+            std::env::var(POINT_ENV).ok().as_deref(),
+            std::env::var(ACTION_ENV).ok().as_deref(),
+            std::env::var(DELAY_ENV).ok().as_deref(),
+            std::env::var(SESSION_ENV).ok().as_deref(),
+        )
+    }
+
+    fn from_values(
+        point: Option<&str>,
+        action: Option<&str>,
+        delay_ms: Option<&str>,
+        session: Option<&str>,
+    ) -> Option<Self> {
+        let point = point?;
         if point.trim().is_empty() {
             return None;
         }
-        let action = std::env::var(ACTION_ENV).unwrap_or_else(|_| DIRECT_RESET_NO_SYNC.to_string());
-        let delay_ms = std::env::var(DELAY_ENV)
-            .ok()
+        let action = action.unwrap_or(DIRECT_RESET_NO_SYNC).to_string();
+        let delay_ms = delay_ms
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(DEFAULT_DELAY_MS);
         Some(Self {
-            point,
+            point: point.to_string(),
             action,
             delay_ms,
-            session: std::env::var(SESSION_ENV)
-                .ok()
-                .filter(|value| !value.trim().is_empty()),
+            session: session
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_string),
         })
     }
 }
@@ -154,7 +167,6 @@ impl FaultRuntime for SystemFaultRuntime {
 mod tests {
     use super::*;
     use std::path::PathBuf;
-    use std::sync::{Mutex, OnceLock};
 
     #[derive(Default)]
     struct FakeRuntime {
@@ -186,50 +198,9 @@ mod tests {
         }
     }
 
-    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
-    }
-
-    struct EnvRestore {
-        key: &'static str,
-        value: Option<String>,
-    }
-
-    impl EnvRestore {
-        fn set(key: &'static str, value: &str) -> Self {
-            let previous = std::env::var(key).ok();
-            std::env::set_var(key, value);
-            Self {
-                key,
-                value: previous,
-            }
-        }
-
-        fn remove(key: &'static str) -> Self {
-            let previous = std::env::var(key).ok();
-            std::env::remove_var(key);
-            Self {
-                key,
-                value: previous,
-            }
-        }
-    }
-
-    impl Drop for EnvRestore {
-        fn drop(&mut self) {
-            match &self.value {
-                Some(value) => std::env::set_var(self.key, value),
-                None => std::env::remove_var(self.key),
-            }
-        }
-    }
-
     #[test]
     fn config_is_absent_without_point_env() {
-        let _guard = env_lock();
-        let _point = EnvRestore::remove(POINT_ENV);
-        assert!(FaultConfig::from_env().is_none());
+        assert!(FaultConfig::from_values(None, None, None, None).is_none());
     }
 
     #[test]
@@ -326,12 +297,8 @@ mod tests {
 
     #[test]
     fn env_config_defaults_to_direct_reset_no_sync() {
-        let _guard = env_lock();
-        let _point = EnvRestore::set(POINT_ENV, "settings.after_rename");
-        let _action = EnvRestore::remove(ACTION_ENV);
-        let _delay = EnvRestore::remove(DELAY_ENV);
-        let _session = EnvRestore::remove(SESSION_ENV);
-        let config = FaultConfig::from_env().expect("config");
+        let config = FaultConfig::from_values(Some("settings.after_rename"), None, None, None)
+            .expect("config");
         assert_eq!(config.action, DIRECT_RESET_NO_SYNC);
         assert_eq!(config.delay_ms, DEFAULT_DELAY_MS);
         assert_eq!(config.session, None);

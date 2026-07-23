@@ -208,6 +208,9 @@ mod tests {
             message: "Uploading ARM binary".into(),
             percent: None,
         };
-        assert_eq!(serde_json::to_string(&event).unwrap(), "{\"v\":1,\"event\":\"progress\",\"run\":\"run-1\",\"seq\":3,\"elapsed_ms\":20000,\"phase\":\"transfer\",\"message\":\"Uploading ARM binary\"}");
+        assert_eq!(
+            serde_json::to_string(&event).unwrap(),
+            "{\"v\":1,\"event\":\"progress\",\"run\":\"run-1\",\"seq\":3,\"elapsed_ms\":20000,\"phase\":\"transfer\",\"message\":\"Uploading ARM binary\"}"
+        );
     }
 }

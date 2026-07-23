@@ -87,10 +87,10 @@ impl ProgressiveCatalogScheduler {
     /// Promote a placeholder selected by the user without interrupting the
     /// currently materializing shard.
     pub fn request(&mut self, system_id: &SystemId) {
-        if let Some(entry) = self.entries.get_mut(system_id) {
-            if matches!(entry.state, SystemBuildState::Queued) {
-                entry.requested = true;
-            }
+        if let Some(entry) = self.entries.get_mut(system_id)
+            && matches!(entry.state, SystemBuildState::Queued)
+        {
+            entry.requested = true;
         }
     }
 

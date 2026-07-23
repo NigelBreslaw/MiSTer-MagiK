@@ -14,7 +14,7 @@ use crate::game_discovery::variant_score_from_haystack;
 use crate::library_db;
 use crate::prepared_collections::PreparedLaunchProvenance;
 use crate::software_identity::ConsolePreviewAsset;
-use rusqlite::{params, Transaction};
+use rusqlite::{Transaction, params};
 use std::collections::{BTreeMap, HashMap, HashSet};
 #[cfg(test)]
 use std::path::Path;
@@ -711,13 +711,13 @@ pub(crate) fn materialize_arcade_ui_projection_rows(
                     || row.has_preview != canonical.has_preview
                 {
                     return Err(format!(
-                            "canonical arcade preview mismatch for {}: prepared_key={} prepared_has_preview={} canonical_key={} canonical_has_preview={}",
-                            canonical.mra_path,
-                            row.preview_asset_key,
-                            row.has_preview,
-                            canonical.preview_asset_key,
-                            canonical.has_preview
-                        ));
+                        "canonical arcade preview mismatch for {}: prepared_key={} prepared_has_preview={} canonical_key={} canonical_has_preview={}",
+                        canonical.mra_path,
+                        row.preview_asset_key,
+                        row.has_preview,
+                        canonical.preview_asset_key,
+                        canonical.has_preview
+                    ));
                 }
                 (canonical.preview_asset_key.as_ref(), canonical.has_preview)
             } else {
@@ -1014,15 +1014,21 @@ mod tests {
         let games = collapse_catalog_variants(rows);
 
         assert_eq!(games.len(), 4);
-        assert!(games
-            .iter()
-            .any(|game| game.mra_path.as_ref() == "/eye-final.lnx"));
-        assert!(games
-            .iter()
-            .any(|game| game.mra_path.as_ref() == "/empty-a.lnx"));
-        assert!(games
-            .iter()
-            .any(|game| game.mra_path.as_ref() == "/empty-b.lnx"));
+        assert!(
+            games
+                .iter()
+                .any(|game| game.mra_path.as_ref() == "/eye-final.lnx")
+        );
+        assert!(
+            games
+                .iter()
+                .any(|game| game.mra_path.as_ref() == "/empty-a.lnx")
+        );
+        assert!(
+            games
+                .iter()
+                .any(|game| game.mra_path.as_ref() == "/empty-b.lnx")
+        );
         assert!(games.iter().any(|game| game.mra_path.as_ref() == "/a.lnx"));
     }
 
@@ -1058,9 +1064,11 @@ mod tests {
         let games = collapse_catalog_variants(vec![snes, genesis, disc_two, disc_one]);
 
         assert_eq!(games.len(), 3);
-        assert!(games
-            .iter()
-            .any(|game| game.mra_path.as_ref() == "/psx/disc1.chd"));
+        assert!(
+            games
+                .iter()
+                .any(|game| game.mra_path.as_ref() == "/psx/disc1.chd")
+        );
     }
 
     #[test]
@@ -1136,9 +1144,11 @@ mod tests {
 
         assert_eq!(games.len(), 2);
         assert!(games.iter().any(|game| game.title.as_ref() == "Agony"));
-        assert!(games
-            .iter()
-            .any(|game| game.title.as_ref() == "Alien Breed"));
+        assert!(
+            games
+                .iter()
+                .any(|game| game.title.as_ref() == "Alien Breed")
+        );
     }
 
     #[test]

@@ -262,10 +262,11 @@ fn append_zip_member_extensions(path: &Path, extensions: &mut BTreeSet<String>) 
         }
         let name = String::from_utf8_lossy(&name);
         let member = Path::new(name.as_ref());
-        if !name.ends_with('/') && !should_ignore_hidden_path(member) {
-            if let Some(ext) = member.extension().and_then(|value| value.to_str()) {
-                extensions.insert(ext.to_ascii_lowercase());
-            }
+        if !name.ends_with('/')
+            && !should_ignore_hidden_path(member)
+            && let Some(ext) = member.extension().and_then(|value| value.to_str())
+        {
+            extensions.insert(ext.to_ascii_lowercase());
         }
     }
 }
@@ -661,9 +662,10 @@ mod tests {
         assert!(dirs.iter().any(|dir| {
             dir.name == "NeoGeoPocket" && !dir.has_payload_files && dir.has_zip_files
         }));
-        assert!(dirs
-            .iter()
-            .any(|dir| { dir.name == "Empty" && !dir.has_payloadish_files() }));
+        assert!(
+            dirs.iter()
+                .any(|dir| { dir.name == "Empty" && !dir.has_payloadish_files() })
+        );
         assert!(!dirs.iter().any(|dir| dir.name == "screenshot-magik"));
         let _ = std::fs::remove_dir_all(root);
     }

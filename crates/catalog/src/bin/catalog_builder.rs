@@ -2,11 +2,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use mister_magik_catalog::builder_protocol::CatalogBuilderEvent;
-use mister_magik_catalog::builder_service::{run, BuilderOperation};
+use mister_magik_catalog::builder_service::{BuilderOperation, run};
 use std::io::{self, Write};
 
 fn main() {
-    std::env::set_var("MISTER_CATALOG_PROTOCOL_STDOUT", "1");
+    // SAFETY: this is the first operation in the single-threaded process
+    // entrypoint, before catalog workers or output handles are created.
+    unsafe { std::env::set_var("MISTER_CATALOG_PROTOCOL_STDOUT", "1") };
     let mut args = std::env::args();
     let _binary = args.next();
     let operation = match args.next().as_deref() {

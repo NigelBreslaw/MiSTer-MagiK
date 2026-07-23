@@ -1,8 +1,9 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use mister_magik_ini::{apply_install, apply_restore, Document, OutputMode};
-use std::collections::BTreeMap;
+use mister_magik_ini::{Document, OutputMode, apply_install, apply_restore};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, VecDeque};
 use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, IsTerminal, Read, Write};
@@ -128,6 +129,8 @@ struct Paths {
     manifest: PathBuf,
     output_mode: PathBuf,
     script: PathBuf,
+    test_mode: bool,
+    test_keys: RefCell<VecDeque<InputEvent>>,
 }
 
 impl Paths {
@@ -144,13 +147,32 @@ impl Paths {
             manifest: app.join("platform-v2.manifest"),
             output_mode: app.join("installer-output-mode-v1"),
             script: fat.join("Scripts/MiSTer-MagiK.sh"),
+            test_mode: env::var("MISTER_MAGIK_TEST_MODE").as_deref() == Ok("1"),
+            test_keys: RefCell::new(
+                env::var("MISTER_MAGIK_TEST_KEYS")
+                    .unwrap_or_default()
+                    .split(',')
+                    .filter(|key| !key.is_empty())
+                    .map(input_event_from_key)
+                    .collect(),
+            ),
             app,
             fat,
         }
     }
 
     fn test_mode(&self) -> bool {
-        env::var("MISTER_MAGIK_TEST_MODE").as_deref() == Ok("1")
+        self.test_mode
+    }
+}
+
+fn input_event_from_key(key: &str) -> InputEvent {
+    match key {
+        "up" => InputEvent::Up,
+        "down" => InputEvent::Down,
+        "enter" => InputEvent::Confirm,
+        "cancel" => InputEvent::Cancel,
+        _ => InputEvent::Other,
     }
 }
 
@@ -229,7 +251,11 @@ fn restore(paths: &Paths) -> Result<()> {
 }
 
 fn uninstall(paths: &Paths) -> Result<()> {
-    safety_confirmation(paths, "This permanently removes MiSTer MagiK, its settings, catalog, downloaded media, installer scripts, update_all entry, and saved backup. Stock MiSTer boot will be restored first.", "uninstall")?;
+    safety_confirmation(
+        paths,
+        "This permanently removes MiSTer MagiK, its settings, catalog, downloaded media, installer scripts, update_all entry, and saved backup. Stock MiSTer boot will be restored first.",
+        "uninstall",
+    )?;
     restore_stock(paths)?;
     stop_children(paths)?;
     remove_owned(paths)?;
@@ -257,7 +283,9 @@ fn restore_stock(paths: &Paths) -> Result<()> {
 }
 
 fn safety_confirmation(paths: &Paths, message: &str, operation: &str) -> Result<()> {
-    println!("\n{message}\n\nPress Down on the keyboard or joystick to confirm. Any other input cancels.");
+    println!(
+        "\n{message}\n\nPress Down on the keyboard or joystick to confirm. Any other input cancels."
+    );
     match read_event(paths)? {
         Some(InputEvent::Down) => Ok(()),
         Some(_) => Err(format!("{operation} cancelled; no changes made").into()),
@@ -286,7 +314,9 @@ fn choose_output_mode(paths: &Paths) -> Result<OutputMode> {
     ];
     let mut selected = 0;
     loop {
-        println!("\nChoose launcher output. Use Up/Down to choose, A/Enter to continue, or B/Escape to cancel.");
+        println!(
+            "\nChoose launcher output. Use Up/Down to choose, A/Enter to continue, or B/Escape to cancel."
+        );
         for (index, mode) in modes.iter().enumerate() {
             println!(
                 "{} {}",
@@ -308,7 +338,7 @@ fn choose_output_mode(paths: &Paths) -> Result<OutputMode> {
                 return Ok(modes[selected]);
             }
             Some(InputEvent::Cancel | InputEvent::Other) => {
-                return Err("cancelled; no changes made".into())
+                return Err("cancelled; no changes made".into());
             }
             None => return Err("interactive input is unavailable; installation refused".into()),
         }
@@ -319,7 +349,10 @@ fn confirm_31khz(paths: &Paths, mode: OutputMode) -> Result<()> {
     if !mode.is_31khz() {
         return Ok(());
     }
-    println!("\nWARNING: {} is a 31 kHz signal.\nPress Down on the keyboard or joystick only if the display manual confirms 31 kHz support.", mode.as_str());
+    println!(
+        "\nWARNING: {} is a 31 kHz signal.\nPress Down on the keyboard or joystick only if the display manual confirms 31 kHz support.",
+        mode.as_str()
+    );
     if read_event(paths)? == Some(InputEvent::Down) {
         Ok(())
     } else {
@@ -341,7 +374,9 @@ fn output_label(mode: OutputMode) -> &'static str {
 fn choose_installed_action(paths: &Paths) -> Result<Option<Action>> {
     let mut action = Action::Restore;
     loop {
-        println!("MiSTer MagiK is installed and selected as Main.\nUse Up/Down to choose, A/Enter to continue, or B/Escape to cancel.");
+        println!(
+            "MiSTer MagiK is installed and selected as Main.\nUse Up/Down to choose, A/Enter to continue, or B/Escape to cancel."
+        );
         println!(
             "{} Restore stock MiSTer\n{} Fully uninstall MiSTer MagiK",
             if action == Action::Restore { '>' } else { ' ' },
@@ -368,22 +403,7 @@ fn choose_installed_action(paths: &Paths) -> Result<Option<Action>> {
 
 fn read_event(paths: &Paths) -> Result<Option<InputEvent>> {
     if paths.test_mode() {
-        let Ok(keys) = env::var("MISTER_MAGIK_TEST_KEYS") else {
-            return Ok(None);
-        };
-        if keys.is_empty() {
-            return Ok(None);
-        }
-        let key = keys.split(',').next().unwrap_or("");
-        let remaining = keys.split_once(',').map_or("", |(_, rest)| rest);
-        env::set_var("MISTER_MAGIK_TEST_KEYS", remaining);
-        return Ok(Some(match key {
-            "up" => InputEvent::Up,
-            "down" => InputEvent::Down,
-            "enter" => InputEvent::Confirm,
-            "cancel" => InputEvent::Cancel,
-            _ => InputEvent::Other,
-        }));
+        return Ok(paths.test_keys.borrow_mut().pop_front());
     }
     if !io::stdin().is_terminal() {
         return Ok(None);
@@ -497,7 +517,8 @@ fn replace_transaction(
     validate: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
     for (index, file) in files.iter().enumerate() {
-        if let Err(error) = atomic_write_with_faults(&file.path, &file.replacement, faults) {
+        let write_result = atomic_write_with_faults(&file.path, &file.replacement, faults);
+        if let Err(error) = write_result {
             rollback_files(&files[..=index])?;
             return Err(format!(
                 "cannot replace {}: {error}; rollback=complete",
@@ -533,7 +554,9 @@ fn backup_ini(paths: &Paths) -> Result<()> {
         return Ok(());
     }
     if selects_magik(&paths.ini)? {
-        println!("MiSTer MagiK: WARNING: backup missing; not creating it from a MagiK-active MiSTer.ini.");
+        println!(
+            "MiSTer MagiK: WARNING: backup missing; not creating it from a MagiK-active MiSTer.ini."
+        );
         return Ok(());
     }
     atomic_write(&paths.backup, &fs::read(&paths.ini)?)
@@ -765,10 +788,10 @@ fn snapshot(paths: &Paths) -> Result<()> {
             fs::copy(source, directory.join(name))?;
         }
     }
-    if let Ok(output) = Command::new("ps").output() {
-        if output.status.success() {
-            fs::write(directory.join("ps.txt"), output.stdout)?;
-        }
+    if let Ok(output) = Command::new("ps").output()
+        && output.status.success()
+    {
+        fs::write(directory.join("ps.txt"), output.stdout)?;
     }
     for (source, name) in [
         (
@@ -945,6 +968,8 @@ mod tests {
             manifest: root.join("manifest"),
             output_mode: root.join("mode"),
             script: root.join("script"),
+            test_mode: true,
+            test_keys: RefCell::default(),
         }
     }
 
@@ -1032,7 +1057,6 @@ mod tests {
 
     #[test]
     fn every_write_boundary_rolls_back_all_replaced_files() {
-        env::set_var("MISTER_MAGIK_TEST_MODE", "1");
         for (index, step) in [
             WriteStep::BeforeCreate,
             WriteStep::AfterWrite,
@@ -1077,7 +1101,6 @@ mod tests {
 
     #[test]
     fn validation_failure_restores_files_and_removes_new_targets() {
-        env::set_var("MISTER_MAGIK_TEST_MODE", "1");
         let root = env::temp_dir().join(format!("mister-manager-validation-{}", process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();

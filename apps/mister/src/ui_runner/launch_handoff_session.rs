@@ -536,9 +536,11 @@ mod tests {
 
     fn one_game_catalog() -> ArcadeCatalog {
         arcade_catalog(
-            vec![arcade_game("1942")
-                .path("/media/fat/_Arcade/1942.mra")
-                .build()],
+            vec![
+                arcade_game("1942")
+                    .path("/media/fat/_Arcade/1942.mra")
+                    .build(),
+            ],
             vec![arcade_system("arcade", 1)],
         )
     }

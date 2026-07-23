@@ -447,10 +447,12 @@ mod tests {
 
         assert!(!bars[0].over_budget);
         assert!(bars[1].over_budget);
-        assert!(bars[1]
-            .segments
-            .iter()
-            .any(|segment| segment.key == "arcade_list_present_us" && segment.us == 30));
+        assert!(
+            bars[1]
+                .segments
+                .iter()
+                .any(|segment| segment.key == "arcade_list_present_us" && segment.us == 30)
+        );
     }
 
     #[test]
@@ -469,12 +471,16 @@ mod tests {
         let profile = FrameProfile::parse_tsv(SAMPLE).expect("profile");
         let histogram = profile.histogram("wall_us");
 
-        assert!(histogram
-            .iter()
-            .any(|bucket| bucket.label == "[1,2ms)" && bucket.count == 1));
-        assert!(histogram
-            .iter()
-            .any(|bucket| bucket.label == "[17,30ms)" && bucket.count == 1));
+        assert!(
+            histogram
+                .iter()
+                .any(|bucket| bucket.label == "[1,2ms)" && bucket.count == 1)
+        );
+        assert!(
+            histogram
+                .iter()
+                .any(|bucket| bucket.label == "[17,30ms)" && bucket.count == 1)
+        );
     }
 
     #[test]

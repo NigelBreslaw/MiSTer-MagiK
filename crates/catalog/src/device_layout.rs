@@ -66,7 +66,11 @@ pub fn initialize_process_env() {
     initialize_process_env_with(
         layout,
         |name| std::env::var_os(name).is_some(),
-        |name, value| std::env::set_var(name, value),
+        |name, value| {
+            // SAFETY: the device entrypoint calls this before installing hooks,
+            // creating the UI, or starting any worker threads.
+            unsafe { std::env::set_var(name, value) };
+        },
     );
 }
 

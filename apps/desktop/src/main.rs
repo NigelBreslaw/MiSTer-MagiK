@@ -17,12 +17,12 @@ mod platform_lifecycle;
 mod sd_card;
 
 use agent_client::{
+    DeviceTelemetrySample, DeviceTelemetryStreamControl, FramebufferStreamControl,
     connect_device_telemetry_stream, connect_framebuffer_stream, connect_framebuffer_stream_seeded,
     drain_framebuffer_stream, drain_framebuffer_stream_for, fetch_dashboard,
-    fetch_framebuffer_capture, fetch_sd_directory, fetch_sd_item_detail, DeviceTelemetrySample,
-    DeviceTelemetryStreamControl, FramebufferStreamControl,
+    fetch_framebuffer_capture, fetch_sd_directory, fetch_sd_item_detail,
 };
-use app_state::{DashboardSnapshot, DEFAULT_HOST};
+use app_state::{DEFAULT_HOST, DashboardSnapshot};
 use framebuffer_cadence::{CadenceEventKind, FramebufferCadenceTrace};
 use sd_card::SdCardBrowser;
 #[cfg(feature = "compiled-ui")]
@@ -36,7 +36,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::{AtomicI32, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -616,7 +616,7 @@ fn install_framebuffer_render_notifier(
     window: &slint::Window,
     metrics: Arc<FramebufferRenderMetrics>,
 ) {
-    use slint::winit_030::{winit, EventResult, WinitWindowAccessor};
+    use slint::winit_030::{EventResult, WinitWindowAccessor, winit};
 
     let redraw_metrics = Arc::clone(&metrics);
     window.on_winit_window_event(move |_window, event| {
@@ -1046,11 +1046,7 @@ fn library_discovered_label(value: &str) -> String {
 }
 
 fn library_preview_label(has_preview: bool) -> &'static str {
-    if has_preview {
-        "Preview"
-    } else {
-        "Missing"
-    }
+    if has_preview { "Preview" } else { "Missing" }
 }
 
 fn realtime_view_from_history(
@@ -1590,7 +1586,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         // Formal display results have one renderer identity. Do not allow an
         // ambient desktop backend to turn the benchmark into another test.
-        std::env::set_var("SLINT_BACKEND", "winit-skia");
+        // SAFETY: main has not initialized Slint or spawned application
+        // threads; this selects the backend before either can happen.
+        unsafe { std::env::set_var("SLINT_BACKEND", "winit-skia") };
         select_backend()?;
         #[cfg(feature = "compiled-ui")]
         return match args.source {
@@ -1611,7 +1609,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     if std::env::var_os("SLINT_BACKEND").is_none() {
-        std::env::set_var("SLINT_BACKEND", default_slint_backend());
+        // SAFETY: this is still single-threaded process initialization before
+        // select_backend creates any UI or worker state.
+        unsafe { std::env::set_var("SLINT_BACKEND", default_slint_backend()) };
     }
     select_backend()?;
 
@@ -1688,7 +1688,7 @@ fn parse_framebuffer_display_bench_args(
                 index += 2;
             }
             other => {
-                return Err(format!("unknown desktop display benchmark option: {other}").into())
+                return Err(format!("unknown desktop display benchmark option: {other}").into());
             }
         }
     }
@@ -1733,8 +1733,8 @@ impl FramebufferBenchMode {
     }
 }
 
-fn framebuffer_stream_bench_args(
-) -> Result<Option<(FramebufferBenchMode, FramebufferBenchLimit)>, Box<dyn Error>> {
+fn framebuffer_stream_bench_args()
+-> Result<Option<(FramebufferBenchMode, FramebufferBenchLimit)>, Box<dyn Error>> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     parse_framebuffer_stream_bench_args(&args)
 }
@@ -1912,8 +1912,8 @@ fn prepare_compiled_framebuffer_benchmark_window(
     ui: &AppWindow,
     metrics: Arc<FramebufferRenderMetrics>,
 ) -> Result<(), Box<dyn Error>> {
-    use slint::winit_030::WinitWindowAccessor;
     use slint::ComponentHandle;
+    use slint::winit_030::WinitWindowAccessor;
 
     let ui_weak = ui.as_weak();
     slint::spawn_local(async move {
@@ -2383,7 +2383,11 @@ fn print_framebuffer_display_bench(
         "framebuffer_display_bench_tsv\tsource={source}\tchrome={}\tclock={}\tseconds={seconds}\tbuild_profile={}\tcompleted={}\tinvalid_reason={invalid_reason}\treceived={}\tapplied={}\trendered={}\trender_callbacks={}\treceived_fps={:.2}\tapplied_fps={:.2}\trendered_fps={:.2}\tcoalesced={}\trender_p95_ms={:.1}\tnotifier_supported={}\tobserver_ready={}\twinit_observer_ready={}\trendering_notifier_ready={}\tfocused={}\toccluded={}\tlost_focus={}\twas_occluded={}\tmonitor_refresh_millihertz={}\tdisplay_ticks={}\twinit_events={}\twinit_redraws={}\tforeground_redraws={}\trendering_setup={}\trendering_before={}\trendering_after={}\trendering_teardown={}",
         if chrome { "on" } else { "off" },
         render_metrics.clock_kind().label(),
-        if cfg!(debug_assertions) { "debug" } else { "release" },
+        if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        },
         u8::from(invalid_reason == "none"),
         snapshot.received,
         snapshot.applied,
@@ -2396,11 +2400,7 @@ fn print_framebuffer_display_bench(
         snapshot.latency_p95_ms,
         u8::from(snapshot.supported),
         u8::from(render_metrics.observer_ready.load(Ordering::Acquire)),
-        u8::from(
-            render_metrics
-                .winit_observer_ready
-                .load(Ordering::Acquire),
-        ),
+        u8::from(render_metrics.winit_observer_ready.load(Ordering::Acquire),),
         u8::from(
             render_metrics
                 .rendering_notifier_ready
@@ -2704,11 +2704,12 @@ fn create_live_instance(
     let sd_current_browser = Arc::clone(&sd_browser);
     instance.set_global_callback("Actions", "sd-row-current", move |args| {
         if let Some(Value::String(path)) = args.first() {
-            let detail_request = if let Ok(mut browser) = sd_current_browser.lock() {
-                browser.select_path(path.as_str());
-                browser.begin_detail_fetch_current(false)
-            } else {
-                None
+            let detail_request = match sd_current_browser.lock() {
+                Ok(mut browser) => {
+                    browser.select_path(path.as_str());
+                    browser.begin_detail_fetch_current(false)
+                }
+                Err(_) => None,
             };
             if let Some(instance) = sd_current_instance.upgrade() {
                 apply_live_sd_state(&instance, &sd_current_browser);
@@ -6964,11 +6965,13 @@ mod tests {
             parse_framebuffer_stream_bench_args(&["--framebuffer-stream-dump".to_string()])
                 .is_err()
         );
-        assert!(parse_framebuffer_stream_bench_args(&[
-            "--framebuffer-poll-bench".to_string(),
-            "not-a-count".to_string(),
-        ])
-        .is_err());
+        assert!(
+            parse_framebuffer_stream_bench_args(&[
+                "--framebuffer-poll-bench".to_string(),
+                "not-a-count".to_string(),
+            ])
+            .is_err()
+        );
     }
 
     #[test]
@@ -7422,9 +7425,11 @@ mod tests {
         let frames = build_synthetic_display_frames();
 
         assert_eq!(frames.len(), 60);
-        assert!(frames
-            .iter()
-            .all(|frame| frame.width() == 480 && frame.height() == 270));
+        assert!(
+            frames
+                .iter()
+                .all(|frame| frame.width() == 480 && frame.height() == 270)
+        );
         assert_ne!(frames[0].as_bytes(), frames[1].as_bytes());
     }
 

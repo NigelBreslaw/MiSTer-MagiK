@@ -417,9 +417,11 @@ mod tests {
             live.effective_value("Menu", "direct_video").as_deref(),
             Some("2")
         );
-        assert!(String::from_utf8(live.render())
-            .unwrap()
-            .contains("user=keep"));
+        assert!(
+            String::from_utf8(live.render())
+                .unwrap()
+                .contains("user=keep")
+        );
     }
 
     #[test]
@@ -507,9 +509,11 @@ mod tests {
         let input = format!("[MiSTer]\nmain=MiSTer\nuser={note}\n");
         let mut document = Document::parse(input.as_bytes()).unwrap();
         document.set("MiSTer", "main", "MiSTer_MagiK");
-        assert!(String::from_utf8(document.render())
-            .unwrap()
-            .contains(&note));
+        assert!(
+            String::from_utf8(document.render())
+                .unwrap()
+                .contains(&note)
+        );
     }
 
     #[test]
@@ -538,9 +542,11 @@ mod tests {
                 twice.effective_value("MiSTer", "main").as_deref(),
                 Some("MiSTer_MagiK")
             );
-            assert!(String::from_utf8(rendered)
-                .unwrap()
-                .contains(&format!("user_seed_{seed}=keep-{seed}")));
+            assert!(
+                String::from_utf8(rendered)
+                    .unwrap()
+                    .contains(&format!("user_seed_{seed}=keep-{seed}"))
+            );
         }
     }
 
@@ -562,9 +568,11 @@ mod tests {
                 live.effective_value("MiSTer", "main").as_deref(),
                 Some(expected.as_str())
             );
-            assert!(String::from_utf8(live.render())
-                .unwrap()
-                .contains(&format!("post_install_{seed}=keep")));
+            assert!(
+                String::from_utf8(live.render())
+                    .unwrap()
+                    .contains(&format!("post_install_{seed}=keep"))
+            );
         }
     }
 }

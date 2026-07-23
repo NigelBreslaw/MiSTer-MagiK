@@ -3,17 +3,16 @@
 
 //! Transactional multi-system projection from one globally resolved scan.
 
-use crate::catalog_classify::{system_definition, LauncherSection, SystemId};
+use crate::catalog_classify::{LauncherSection, SystemId, system_definition};
 use crate::catalog_domain::ScanUnitId;
 use crate::catalog_navigation::CatalogNavigationProjection;
-use crate::library_db::{scan_library_artifact, BenchConfig};
+use crate::library_db::{BenchConfig, scan_library_artifact};
 use crate::shard_registry::{
-    garbage_collect_unreferenced, manifest_slots_present, publish_manifest,
-    publish_system_artifacts, read_latest_manifest, CatalogManifest, ManifestSystem,
-    RegistryLimits,
+    CatalogManifest, ManifestSystem, RegistryLimits, garbage_collect_unreferenced,
+    manifest_slots_present, publish_manifest, publish_system_artifacts, read_latest_manifest,
 };
 use crate::sharded_catalog::CatalogConfig;
-use crate::system_shard::{write_system_shard, SystemGame, SystemShardData};
+use crate::system_shard::{SystemGame, SystemShardData, write_system_shard};
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
@@ -230,7 +229,7 @@ impl Error for MultiSystemError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::system_shard::{open_system_shard, SystemShardLimits};
+    use crate::system_shard::{SystemShardLimits, open_system_shard};
     use std::path::PathBuf;
 
     #[test]
@@ -268,10 +267,12 @@ mod tests {
         let manifest = read_latest_manifest(config.storage_root(), limits()).unwrap();
         assert_eq!(manifest.generation, 1);
         assert_eq!(manifest.systems.len(), outcome.systems.len());
-        assert!(manifest
-            .systems
-            .iter()
-            .all(|system| system.producers == vec![ScanUnitId::parse("source-root").unwrap()]));
+        assert!(
+            manifest
+                .systems
+                .iter()
+                .all(|system| system.producers == vec![ScanUnitId::parse("source-root").unwrap()])
+        );
         for system in &manifest.systems {
             let loaded = open_system_shard(
                 &config.storage_root().join(&system.active.sqlite_path),

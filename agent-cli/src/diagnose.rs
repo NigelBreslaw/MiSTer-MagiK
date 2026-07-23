@@ -278,16 +278,18 @@ mod tests {
         run_workflow(&mut actions, &mut |_, _| Ok(())).unwrap();
         assert_eq!(actions.phases.len(), 7);
         let mut actions = FakeActions::default();
-        assert!(run_workflow(&mut actions, &mut |phase, _| {
-            if phase == Phase::Correlate {
-                Err("stop".into())
-            } else {
-                Ok(())
-            }
-        })
-        .unwrap_err()
-        .to_string()
-        .starts_with("cancelled:"));
+        assert!(
+            run_workflow(&mut actions, &mut |phase, _| {
+                if phase == Phase::Correlate {
+                    Err("stop".into())
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap_err()
+            .to_string()
+            .starts_with("cancelled:")
+        );
     }
 
     #[test]
@@ -316,10 +318,12 @@ mod tests {
             false,
         );
         assert_eq!(report.status, "user_action_required");
-        assert!(report
-            .next_action
-            .unwrap()
-            .contains("event loop is stalled"));
+        assert!(
+            report
+                .next_action
+                .unwrap()
+                .contains("event loop is stalled")
+        );
     }
 
     #[test]

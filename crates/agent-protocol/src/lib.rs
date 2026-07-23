@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 pub const PORT: u16 = 7498;
 pub const AGENT_VERSION: u64 = 2;

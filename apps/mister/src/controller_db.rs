@@ -271,10 +271,10 @@ impl ControllerDb {
     }
 
     pub fn display_label(&self, info: &PadInfo) -> String {
-        if let Some(entry) = self.get(info) {
-            if !entry.label.is_empty() {
-                return entry.label.clone();
-            }
+        if let Some(entry) = self.get(info)
+            && !entry.label.is_empty()
+        {
+            return entry.label.clone();
         }
         if !info.name.is_empty() {
             return info.name.clone();

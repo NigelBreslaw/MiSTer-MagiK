@@ -1,13 +1,13 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use super::{classified, is_nonblank_luma, EncodedFrame, JPEG_HEIGHT, JPEG_WIDTH};
+use super::{EncodedFrame, JPEG_HEIGHT, JPEG_WIDTH, classified, is_nonblank_luma};
 use crate::error::AgentResult;
 use block2::RcBlock;
 use dispatch2::{DispatchQueue, DispatchQueueAttr};
-use objc2::rc::{autoreleasepool, Retained};
+use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::{AnyObject, Bool, ProtocolObject};
-use objc2::{define_class, msg_send, AnyThread, DefinedClass};
+use objc2::{AnyThread, DefinedClass, define_class, msg_send};
 use objc2_av_foundation::{
     AVAuthorizationStatus, AVCaptureConnection, AVCaptureDevice, AVCaptureDeviceDiscoverySession,
     AVCaptureDeviceFormat, AVCaptureDeviceInput, AVCaptureDevicePosition, AVCaptureDeviceType,
@@ -16,20 +16,20 @@ use objc2_av_foundation::{
 };
 use objc2_core_graphics::CGColorSpace;
 use objc2_core_image::{
-    kCIContextUseSoftwareRenderer, CIContext, CIImage, CIImageRepresentationOption,
+    CIContext, CIImage, CIImageRepresentationOption, kCIContextUseSoftwareRenderer,
 };
 use objc2_core_media::{CMSampleBuffer, CMVideoFormatDescriptionGetDimensions};
 use objc2_core_video::{
-    kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, kCVReturnSuccess,
     CVPixelBufferGetBaseAddressOfPlane, CVPixelBufferGetBytesPerRowOfPlane, CVPixelBufferGetHeight,
     CVPixelBufferGetHeightOfPlane, CVPixelBufferGetPixelFormatType, CVPixelBufferGetPlaneCount,
     CVPixelBufferGetWidth, CVPixelBufferGetWidthOfPlane, CVPixelBufferLockBaseAddress,
     CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress,
+    kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, kCVReturnSuccess,
 };
-use objc2_foundation::{ns_string, NSArray, NSDictionary, NSNumber, NSObject, NSObjectProtocol};
+use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSObject, NSObjectProtocol, ns_string};
 use std::slice;
-use std::sync::mpsc::{self, SyncSender};
 use std::sync::Mutex;
+use std::sync::mpsc::{self, SyncSender};
 use std::time::Duration;
 
 const DEVICE_NAME: &str = "USB Video";
@@ -59,13 +59,10 @@ define_class!(
         ) {
             let result = process_sample(sample_buffer);
             let should_send = !matches!(&result, Ok(None));
-            if should_send {
-                if let Some(sender) = self.ivars().result.lock().unwrap().take() {
-                    let _ =
-                        sender.send(result.map(|frame| {
-                            frame.expect("nonblank sample result must contain a frame")
-                        }));
-                }
+            if should_send && let Some(sender) = self.ivars().result.lock().unwrap().take() {
+                let _ = sender.send(
+                    result.map(|frame| frame.expect("nonblank sample result must contain a frame")),
+                );
             }
         }
     }

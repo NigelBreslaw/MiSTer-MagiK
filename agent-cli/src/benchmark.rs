@@ -803,9 +803,11 @@ mod tests {
             restore_fails: true,
             ..FakeActions::default()
         };
-        assert!(run_workflow(&mut actions, &mut |_, _| Ok(()))
-            .unwrap_err()
-            .is_recovery_required());
+        assert!(
+            run_workflow(&mut actions, &mut |_, _| Ok(()))
+                .unwrap_err()
+                .is_recovery_required()
+        );
     }
 
     #[test]
@@ -847,11 +849,13 @@ mod tests {
         .unwrap();
         assert_eq!(result.elapsed_ms, 1234);
         assert_eq!(result.status, "ok");
-        assert!(analyze_cold_events(
-            r#"{"event":"preview_cold_start_complete","elapsed_ms":1,"status":"failed"}"#,
-            ColdBenchmarkScenario::PreviewColdStart,
-        )
-        .is_err());
+        assert!(
+            analyze_cold_events(
+                r#"{"event":"preview_cold_start_complete","elapsed_ms":1,"status":"failed"}"#,
+                ColdBenchmarkScenario::PreviewColdStart,
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -861,8 +865,10 @@ mod tests {
             restore_fails: true,
             ..FakeColdActions::default()
         };
-        assert!(run_cold_workflow(&mut actions, &mut |_, _| Ok(()))
-            .unwrap_err()
-            .is_recovery_required());
+        assert!(
+            run_cold_workflow(&mut actions, &mut |_, _| Ok(()))
+                .unwrap_err()
+                .is_recovery_required()
+        );
     }
 }

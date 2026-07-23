@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use mister_magik_agent_protocol::{self as agent_protocol, ResponseEnvelope};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::env;
 use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Write};
@@ -12,10 +12,10 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::Result;
 use crate::discovery::{secure_write, token_path};
 use crate::remote::host;
 use crate::remote::{connect, exec, put, put_bytes};
-use crate::Result;
 
 pub(crate) const AGENT_PORT: u16 = agent_protocol::PORT;
 const REMOTE_AGENT: &str = "/media/fat/mister-magik-dev/mister-magik-agent";
@@ -42,6 +42,12 @@ enum VersionAction {
     RejectNewer,
 }
 
+fn set_bootstrap_token(token: &str) {
+    // SAFETY: bootstrap_agent runs synchronously during device preparation,
+    // before the host CLI starts any concurrent request work.
+    unsafe { env::set_var("MISTER_AGENT_TOKEN", token) };
+}
+
 pub(crate) fn agent_token() -> Result<String> {
     if let Ok(token) = env::var("MISTER_AGENT_TOKEN") {
         let token = token.trim().to_string();
@@ -64,7 +70,7 @@ pub(crate) fn bootstrap_agent() -> Result<()> {
     let stored_token = fs::read_to_string(&token_file).ok();
     let local_token = preferred_token(explicit_token.as_deref(), stored_token.as_deref());
     if let Some(token) = local_token.as_ref() {
-        env::set_var("MISTER_AGENT_TOKEN", token);
+        set_bootstrap_token(token);
         if apply_installed_version_policy()? {
             return Ok(());
         }
@@ -90,7 +96,7 @@ pub(crate) fn bootstrap_agent() -> Result<()> {
         secure_write(&token_file, format!("{token}\n").as_bytes())?;
         token
     };
-    env::set_var("MISTER_AGENT_TOKEN", &token);
+    set_bootstrap_token(&token);
     if apply_installed_version_policy()? {
         return Ok(());
     }
@@ -636,10 +642,12 @@ mod tests {
     fn agent_response_parser_rejects_empty_and_error_responses() {
         let start = Instant::now();
 
-        assert!(parse_agent_response_line(String::new(), start)
-            .expect_err("empty response should fail")
-            .to_string()
-            .contains("empty response"));
+        assert!(
+            parse_agent_response_line(String::new(), start)
+                .expect_err("empty response should fail")
+                .to_string()
+                .contains("empty response")
+        );
         assert_eq!(
             parse_agent_response_line(
                 "{\"ok\":false,\"error\":\"permission denied\"}\n".to_string(),
@@ -726,18 +734,22 @@ mod tests {
 
     #[test]
     fn agent_binary_payload_len_rejects_missing_or_oversized_values() {
-        assert!(agent_binary_payload_len(&json!({"result": {}}))
-            .expect_err("missing payload len should fail")
+        assert!(
+            agent_binary_payload_len(&json!({"result": {}}))
+                .expect_err("missing payload len should fail")
+                .to_string()
+                .contains("missing result payload byte count")
+        );
+        assert!(
+            agent_binary_payload_len(&json!({
+                "result": {
+                    "payload_bytes": agent_protocol::MAX_BINARY_PAYLOAD_BYTES + 1,
+                }
+            }))
+            .expect_err("oversized payload len should fail")
             .to_string()
-            .contains("missing result payload byte count"));
-        assert!(agent_binary_payload_len(&json!({
-            "result": {
-                "payload_bytes": agent_protocol::MAX_BINARY_PAYLOAD_BYTES + 1,
-            }
-        }))
-        .expect_err("oversized payload len should fail")
-        .to_string()
-        .contains("payload too large"));
+            .contains("payload too large")
+        );
     }
 
     #[test]
@@ -810,10 +822,12 @@ mod tests {
             agent_protocol::AGENT_VERSION,
             agent_protocol::PROTOCOL_VERSION + 1
         );
-        assert!(validate_protocol_source_identity(&stale)
-            .unwrap_err()
-            .to_string()
-            .contains("mister CLI is stale"));
+        assert!(
+            validate_protocol_source_identity(&stale)
+                .unwrap_err()
+                .to_string()
+                .contains("mister CLI is stale")
+        );
     }
 
     #[test]

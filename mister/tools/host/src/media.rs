@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use ssh2::{ExtendedData, Session};
 use std::collections::BTreeMap;
 use std::env;
@@ -198,18 +198,17 @@ pub(crate) fn media_bench_download(sess: &Session, args: &[String]) -> Result<()
             println!("{}", row.to_tsv());
             rows.push(row);
         }
-        if parsed.save_preference {
-            if let Some(best) = rows
+        if parsed.save_preference
+            && let Some(best) = rows
                 .iter()
                 .filter(|row| matches!(row.result.as_str(), "downloaded" | "bench-ok"))
                 .min_by_key(|row| row.total_ms)
-            {
-                update_remote_state(sess, pack, &best.variant, best)?;
-                println!(
-                    "media_preference\t{}\t{}\ttotal_ms={}",
-                    pack.system, best.variant, best.total_ms
-                );
-            }
+        {
+            update_remote_state(sess, pack, &best.variant, best)?;
+            println!(
+                "media_preference\t{}\t{}\ttotal_ms={}",
+                pack.system, best.variant, best.total_ms
+            );
         }
     }
     Ok(())
@@ -1315,7 +1314,9 @@ mod tests {
         assert_eq!(manifest.packs[0].local_path, DEFAULT_ARCADE_ARCHIVE_PATH);
         assert_eq!(
             manifest_url_for_pack(&manifest, &manifest.packs[0]),
-            format!("http://assets.mistermagik.com/mister-magik/v1/packs/arcade/2026.06.22/{sha}.mmlz4b")
+            format!(
+                "http://assets.mistermagik.com/mister-magik/v1/packs/arcade/2026.06.22/{sha}.mmlz4b"
+            )
         );
         let index = manifest.packs[0].index.as_ref().unwrap();
         assert_eq!(index.bytes, 321);
@@ -1348,8 +1349,7 @@ mod tests {
 
     #[test]
     fn remote_benchmark_rows_reject_bad_shape_and_non_numeric_fields() {
-        let wrong_prefix =
-            "wrong\tlabel\tnes\tgzip\t10\t20\t1\t2\t3\t4\t10\t80.00\t16.00\tetag\tgzip\tHIT\tbench-ok";
+        let wrong_prefix = "wrong\tlabel\tnes\tgzip\t10\t20\t1\t2\t3\t4\t10\t80.00\t16.00\tetag\tgzip\tHIT\tbench-ok";
         assert!(parse_remote_row(wrong_prefix).is_err());
         assert!(parse_remote_row("screenshot_download_bench_tsv\ttoo-short").is_err());
         assert!(parse_remote_row(
@@ -1460,9 +1460,10 @@ mod tests {
         assert_eq!(selected[0].system, "snes");
 
         let err = selected_packs(&manifest, "arcade").expect_err("missing pack");
-        assert!(err
-            .to_string()
-            .contains("manifest has no screenshot pack for system 'arcade'"));
+        assert!(
+            err.to_string()
+                .contains("manifest has no screenshot pack for system 'arcade'")
+        );
     }
 
     #[test]
@@ -1539,32 +1540,40 @@ mod tests {
         );
 
         index["codec"] = json!("zip-index");
-        assert!(parse_index("nes", &identity, &index)
-            .unwrap_err()
-            .to_string()
-            .contains("unsupported index codec"));
+        assert!(
+            parse_index("nes", &identity, &index)
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported index codec")
+        );
         index["codec"] = json!("mmlz4b-index-v1");
 
         index["bytes"] = json!(0);
-        assert!(parse_index("nes", &identity, &index)
-            .unwrap_err()
-            .to_string()
-            .contains("zero bytes"));
+        assert!(
+            parse_index("nes", &identity, &index)
+                .unwrap_err()
+                .to_string()
+                .contains("zero bytes")
+        );
         index["bytes"] = json!(4);
 
         index["object"] = json!("packs/nes.txt");
-        assert!(parse_index("nes", &identity, &index)
-            .unwrap_err()
-            .to_string()
-            .contains("must end with .mmlz4b.idx"));
+        assert!(
+            parse_index("nes", &identity, &index)
+                .unwrap_err()
+                .to_string()
+                .contains("must end with .mmlz4b.idx")
+        );
         index["object"] = json!("packs/nes.mmlz4b.idx");
 
         index["archive_sha256"] =
             json!("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc");
-        assert!(parse_index("nes", &identity, &index)
-            .unwrap_err()
-            .to_string()
-            .contains("archive_sha256 mismatch"));
+        assert!(
+            parse_index("nes", &identity, &index)
+                .unwrap_err()
+                .to_string()
+                .contains("archive_sha256 mismatch")
+        );
     }
 
     #[test]

@@ -6,14 +6,14 @@
 use crate::catalog_classify::SystemId;
 use crate::catalog_domain::ScanUnitId;
 use crate::shard_registry::{
+    CatalogManifest, ManifestSystem, PublishedGeneration, RegistryLimits,
     garbage_collect_unreferenced_with_retained, manifest_slots_present, publish_manifest,
     publish_prevalidated_system_artifacts_deferred, read_latest_manifest, sync_artifact_batch,
-    validate_published_system, CatalogManifest, ManifestSystem, PublishedGeneration,
-    RegistryLimits,
+    validate_published_system,
 };
 use crate::sharded_catalog::{PlannedSystem, PlannedSystemAction, ReconcilePlan};
 use crate::system_shard::{
-    write_system_shard_with_durability, ShardDurability, SystemGame, SystemShardData,
+    ShardDurability, SystemGame, SystemShardData, write_system_shard_with_durability,
 };
 use std::collections::{BTreeSet, HashMap};
 use std::error::Error;
@@ -297,14 +297,17 @@ pub fn execute_reconciliation(
                     Ok(false) => {
                         crate::catalog_logln!(
                             "catalog_resume_tsv\tphase=shard-invalidated\tsystem_id={}\tgeneration={}\treason=canonical-mismatch",
-                            planned.system_id.as_str(), expected_generation
+                            planned.system_id.as_str(),
+                            expected_generation
                         );
                         remove_saved_system_artifacts(storage_root, &saved);
                     }
                     Err(error) => {
                         crate::catalog_logln!(
                             "catalog_resume_tsv\tphase=shard-invalidated\tsystem_id={}\tgeneration={}\treason={}",
-                            planned.system_id.as_str(), expected_generation, error
+                            planned.system_id.as_str(),
+                            expected_generation,
+                            error
                         );
                         remove_saved_system_artifacts(storage_root, &saved);
                     }
@@ -357,7 +360,8 @@ pub fn execute_reconciliation(
                             .map_err(|error| ReconciliationError::new("shard-checkpoint", error))?;
                         crate::catalog_logln!(
                             "catalog_resume_tsv\tphase=shard-committed\tsystem_id={}\tgeneration={}\treason=durable",
-                            shard.system.system_id.as_str(), expected_generation
+                            shard.system.system_id.as_str(),
+                            expected_generation
                         );
                     }
                     shard_build_wall_time += shard.elapsed.saturating_sub(shard.publish_time);
@@ -913,7 +917,10 @@ fn publish_staged_shard(
         publish_time.as_micros(),
         artifact_bytes,
         copy_hash_time.as_micros(),
-        staged.build_elapsed.saturating_add(publish_time).as_micros(),
+        staged
+            .build_elapsed
+            .saturating_add(publish_time)
+            .as_micros(),
     );
     Ok(CompletedShard {
         system: ManifestSystem {
@@ -1062,7 +1069,7 @@ impl Error for ReconciliationError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shard_registry::{read_latest_manifest, RegistryLimits};
+    use crate::shard_registry::{RegistryLimits, read_latest_manifest};
     use crate::sharded_catalog::{PlannedSystem, ReconcilePlan, ReconcileReason};
     use crate::system_shard::SystemShardLimits;
     use std::collections::BTreeMap;
@@ -1651,7 +1658,9 @@ mod tests {
                 section: "Fixture".to_string(),
                 family: "Fixture".to_string(),
                 order: 0,
-                producers: vec![ScanUnitId::parse(&format!("{}-root", system_id.as_str())).unwrap()],
+                producers: vec![
+                    ScanUnitId::parse(&format!("{}-root", system_id.as_str())).unwrap(),
+                ],
                 projection_stats: None,
                 games: self.games.get(system_id.as_str()).unwrap().clone(),
             };

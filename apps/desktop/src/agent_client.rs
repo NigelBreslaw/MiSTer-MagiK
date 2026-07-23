@@ -2,18 +2,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::app_state::{
-    catalog_summary, input_summary, process_summary, screen_summary, string_at, uptime_label,
-    ConnectionOutcome, DashboardSnapshot,
+    ConnectionOutcome, DashboardSnapshot, catalog_summary, input_summary, process_summary,
+    screen_summary, string_at, uptime_label,
 };
 use crate::sd_card::{
-    item_name, SdDirectoryListing, SdEntry, SdEntryKind, SdItemDetail, SdMetadataRow,
+    SdDirectoryListing, SdEntry, SdEntryKind, SdItemDetail, SdMetadataRow, item_name,
 };
 use mister_magik_agent_protocol::{self as agent_protocol, ResponseEnvelope};
 use mister_magik_framebuffer_stream::{
-    read_frame, FrameGeometry, FrameHeader, FrameKind, FrameRect, FLAG_LZ4_SIZE_PREPENDED,
-    MAX_FRAME_SURFACE_BYTES,
+    FLAG_LZ4_SIZE_PREPENDED, FrameGeometry, FrameHeader, FrameKind, FrameRect,
+    MAX_FRAME_SURFACE_BYTES, read_frame,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -303,26 +303,29 @@ impl Default for FramebufferStreamState {
 }
 
 pub fn read_token() -> (String, TokenSource) {
-    if let Ok(token) = env::var("MISTER_AGENT_TOKEN") {
+    let token = env::var("MISTER_AGENT_TOKEN").ok();
+    let token_file = env::var("MISTER_AGENT_TOKEN_FILE").ok();
+    read_token_from(token.as_deref(), token_file.as_deref().map(Path::new))
+}
+
+fn read_token_from(token: Option<&str>, token_file: Option<&Path>) -> (String, TokenSource) {
+    if let Some(token) = token {
         let token = token.trim().to_string();
         if !token.is_empty() {
             return (token, TokenSource::Env);
         }
     }
 
-    let path = local_token_path();
+    let path = local_token_path_from(token_file);
     match fs::read_to_string(&path) {
         Ok(token) => (token.trim().to_string(), TokenSource::LocalFile(path)),
         Err(_) => (String::new(), TokenSource::Missing(path)),
     }
 }
 
-fn local_token_path() -> PathBuf {
-    if let Ok(path) = env::var("MISTER_AGENT_TOKEN_FILE") {
-        let path = path.trim();
-        if !path.is_empty() {
-            return PathBuf::from(path);
-        }
+fn local_token_path_from(configured: Option<&Path>) -> PathBuf {
+    if let Some(path) = configured.filter(|path| !path.as_os_str().is_empty()) {
+        return path.to_path_buf();
     }
 
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -1667,7 +1670,7 @@ fn parse_framebuffer_capture_lz4(
         other => {
             return Err(AgentError::Protocol(format!(
                 "unsupported framebuffer raw stream encoding: {other}"
-            )))
+            )));
         }
     };
     let width = value.pointer("/width").and_then(Value::as_u64).unwrap_or(0);
@@ -1794,7 +1797,7 @@ fn framebuffer_raw_to_rgba(
         _ => {
             return Err(AgentError::Protocol(format!(
                 "unsupported framebuffer bpp: {bpp}"
-            )))
+            )));
         }
     };
     let packed_stride = width
@@ -1927,7 +1930,7 @@ fn parse_sd_entry(value: &Value) -> Result<SdEntry, AgentError> {
         Some(other) => {
             return Err(AgentError::Protocol(format!(
                 "unsupported sd entry kind: {other}"
-            )))
+            )));
         }
         None => return Err(AgentError::Protocol("missing sd entry kind".to_string())),
     };
@@ -2037,11 +2040,7 @@ fn format_unix_ms(ms: u64) -> String {
 }
 
 fn yes_no(value: bool) -> &'static str {
-    if value {
-        "yes"
-    } else {
-        "no"
-    }
+    if value { "yes" } else { "no" }
 }
 
 fn flags_label(readonly: bool, hidden: bool) -> String {
@@ -2092,8 +2091,6 @@ mod tests {
     use std::io::Cursor;
     use std::sync::Arc;
     use std::sync::Mutex;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     struct ScriptedTransport {
         response: Cursor<Vec<u8>>,
@@ -2421,48 +2418,35 @@ tiny"#
 
     #[test]
     fn local_token_path_defaults_to_worktree_build_directory() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        env::remove_var("MISTER_AGENT_TOKEN_FILE");
-
         let worktree_root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .ancestors()
             .nth(2)
             .expect("desktop crate should be nested under the worktree root");
 
         assert_eq!(
-            local_token_path(),
+            local_token_path_from(None),
             worktree_root.join("build/mister-agent.token")
         );
     }
 
     #[test]
     fn read_token_prefers_env_then_configured_file_then_missing() {
-        let _guard = ENV_LOCK.lock().unwrap();
         let token_path = env::temp_dir().join(format!("mister-agent-token-{}", std::process::id()));
         fs::write(&token_path, " file-token \n").expect("write token fixture");
 
-        env::set_var("MISTER_AGENT_TOKEN_FILE", &token_path);
-        env::remove_var("MISTER_AGENT_TOKEN");
-        let (token, source) = read_token();
+        let (token, source) = read_token_from(None, Some(&token_path));
         assert_eq!(token, "file-token");
         assert_eq!(source, TokenSource::LocalFile(token_path.clone()));
 
-        env::set_var("MISTER_AGENT_TOKEN", " env-token ");
-        let (token, source) = read_token();
+        let (token, source) = read_token_from(Some(" env-token "), Some(&token_path));
         assert_eq!(token, "env-token");
         assert_eq!(source, TokenSource::Env);
 
-        env::set_var("MISTER_AGENT_TOKEN", "   ");
-        env::set_var(
-            "MISTER_AGENT_TOKEN_FILE",
-            token_path.with_extension("missing"),
-        );
-        let (token, source) = read_token();
+        let missing = token_path.with_extension("missing");
+        let (token, source) = read_token_from(Some("   "), Some(&missing));
         assert_eq!(token, "");
         assert!(matches!(source, TokenSource::Missing(_)));
 
-        env::remove_var("MISTER_AGENT_TOKEN");
-        env::remove_var("MISTER_AGENT_TOKEN_FILE");
         let _ = fs::remove_file(token_path);
     }
 
@@ -2624,9 +2608,11 @@ tiny"#
         assert_eq!(capture.timing.raw_read_us, 10);
         assert_eq!(capture.timing.zlib_encode_us, 20);
         assert_eq!(capture.timing.total_us, 30);
-        assert!(fs::read(&capture.png_path)
-            .expect("capture PNG should be written")
-            .starts_with(b"\x89PNG\r\n\x1a\n"));
+        assert!(
+            fs::read(&capture.png_path)
+                .expect("capture PNG should be written")
+                .starts_with(b"\x89PNG\r\n\x1a\n")
+        );
         let _ = fs::remove_file(capture.png_path);
     }
 

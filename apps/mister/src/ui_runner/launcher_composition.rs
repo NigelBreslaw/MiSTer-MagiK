@@ -481,9 +481,11 @@ mod tests {
         let decision = controller.tick(input(Screen::Home));
 
         assert_eq!(decision.state, UiCompositionState::FullSlint);
-        assert!(decision
-            .events
-            .iter()
-            .any(|event| event.name == "ui_composition_recovered"));
+        assert!(
+            decision
+                .events
+                .iter()
+                .any(|event| event.name == "ui_composition_recovered")
+        );
     }
 }

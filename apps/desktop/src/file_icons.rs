@@ -4,7 +4,7 @@
 use slint::Image;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const FALLBACK_ICON: &str = "document";
 const ICON_ENV: &str = "MISTER_MAGIK_DESKTOP_MATERIAL_ICON_DIR";
@@ -39,20 +39,29 @@ fn sanitize_icon_key(icon_key: &str) -> &str {
 }
 
 fn load_material_icon(icon_key: &str) -> Image {
-    let path = material_icon_dir().join(format!("{icon_key}.svg"));
+    load_material_icon_from_dir(icon_key, &material_icon_dir())
+}
+
+fn load_material_icon_from_dir(icon_key: &str, directory: &Path) -> Image {
+    let path = directory.join(format!("{icon_key}.svg"));
     Image::load_from_path(&path).unwrap_or_else(|_| {
         if icon_key == FALLBACK_ICON {
             Image::default()
         } else {
-            load_material_icon(FALLBACK_ICON)
+            load_material_icon_from_dir(FALLBACK_ICON, directory)
         }
     })
 }
 
 fn material_icon_dir() -> PathBuf {
+    let configured = std::env::var_os(ICON_ENV).map(PathBuf::from);
+    material_icon_dir_from_override(configured.as_deref())
+}
+
+fn material_icon_dir_from_override(configured: Option<&Path>) -> PathBuf {
     let mut candidates = Vec::new();
-    if let Some(path) = std::env::var_os(ICON_ENV) {
-        candidates.push(PathBuf::from(path));
+    if let Some(path) = configured {
+        candidates.push(path.to_path_buf());
     }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
@@ -78,13 +87,6 @@ fn material_icon_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    fn clear_icon_cache() {
-        ICON_CACHE.with_borrow_mut(HashMap::clear);
-    }
 
     #[test]
     fn icon_key_rejects_path_like_values() {
@@ -98,25 +100,19 @@ mod tests {
 
     #[test]
     fn material_icon_dir_prefers_env_when_it_contains_fallback_icon() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        clear_icon_cache();
         let root =
             std::env::temp_dir().join(format!("mister-magik-icon-dir-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("document.svg"), "<svg/>").unwrap();
 
-        std::env::set_var(ICON_ENV, &root);
-        assert_eq!(material_icon_dir(), root);
+        assert_eq!(material_icon_dir_from_override(Some(&root)), root);
 
-        std::env::remove_var(ICON_ENV);
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn material_icon_falls_back_to_document_for_missing_or_unsafe_keys() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        clear_icon_cache();
         let root =
             std::env::temp_dir().join(format!("mister-magik-icon-fallback-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
@@ -127,12 +123,17 @@ mod tests {
         )
         .unwrap();
 
-        std::env::set_var(ICON_ENV, &root);
-        assert!(material_icon("missing").to_rgba8().is_some());
-        assert!(material_icon("../missing").to_rgba8().is_some());
+        assert!(
+            load_material_icon_from_dir("missing", &root)
+                .to_rgba8()
+                .is_some()
+        );
+        assert!(
+            load_material_icon_from_dir("../missing", &root)
+                .to_rgba8()
+                .is_some()
+        );
 
-        std::env::remove_var(ICON_ENV);
-        clear_icon_cache();
         let _ = std::fs::remove_dir_all(&root);
     }
 }

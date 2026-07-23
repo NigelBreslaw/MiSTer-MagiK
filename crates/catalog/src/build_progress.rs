@@ -6,7 +6,7 @@
 //! This database is never catalog authority. A caller must still publish the
 //! normal shard manifest, binding, scanner cache, and catalog state in order.
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -236,8 +236,7 @@ impl BuildProgressJournal {
             .conn
             .prepare("SELECT shard_json FROM completed_shards ORDER BY system_id")
             .map_err(|error| format!("prepare completed shards: {error}"))?;
-        let decoded = stmt
-            .query_map([], |row| row.get::<_, String>(0))
+        stmt.query_map([], |row| row.get::<_, String>(0))
             .map_err(|error| format!("read completed shards: {error}"))?
             .map(|row| {
                 serde_json::from_str(
@@ -245,8 +244,7 @@ impl BuildProgressJournal {
                 )
                 .map_err(|error| format!("decode completed shard: {error}"))
             })
-            .collect();
-        decoded
+            .collect()
     }
 
     fn create(
@@ -427,18 +425,16 @@ fn read_targets(conn: &Connection) -> Result<Vec<ScanTarget>, String> {
     let mut stmt = conn
         .prepare("SELECT ordinal,target_key,path FROM scan_targets ORDER BY ordinal")
         .map_err(|error| format!("prepare scan targets: {error}"))?;
-    let targets = stmt
-        .query_map([], |row| {
-            Ok(ScanTarget {
-                ordinal: row.get(0)?,
-                key: row.get(1)?,
-                path: row.get(2)?,
-            })
+    stmt.query_map([], |row| {
+        Ok(ScanTarget {
+            ordinal: row.get(0)?,
+            key: row.get(1)?,
+            path: row.get(2)?,
         })
-        .map_err(|error| format!("read scan targets: {error}"))?
-        .map(|row| row.map_err(|error| format!("read scan target: {error}")))
-        .collect();
-    targets
+    })
+    .map_err(|error| format!("read scan targets: {error}"))?
+    .map(|row| row.map_err(|error| format!("read scan target: {error}")))
+    .collect()
 }
 
 fn validate_targets(targets: &[ScanTarget]) -> Result<(), String> {

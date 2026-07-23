@@ -278,12 +278,16 @@ mod tests {
         };
         let mut destination = [0; 8];
         let transform = VerticalRgb565Transform::new(4, 4, 2).unwrap();
-        assert!(transform
-            .copy_rect(view, rect(3, 0, 2, 1), &mut destination, 4,)
-            .unwrap()
-            .is_none());
-        assert!(transform
-            .copy_rect(view, rect(0, 0, 4, 4), &mut destination, 3,)
-            .is_err());
+        assert!(
+            transform
+                .copy_rect(view, rect(3, 0, 2, 1), &mut destination, 4,)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            transform
+                .copy_rect(view, rect(0, 0, 4, 4), &mut destination, 3,)
+                .is_err()
+        );
     }
 }

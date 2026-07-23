@@ -24,21 +24,24 @@ pub const SCHEMA_VERSION: u32 = 66;
 pub const CATALOG_BUILD_VERSION: u32 = 14;
 
 pub fn default_sqlite_path() -> PathBuf {
-    std::env::var("MISTER_LIBRARY_SQLITE")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| current_app_path("library.sqlite3"))
+    configured_path(
+        std::env::var("MISTER_LIBRARY_SQLITE").ok().as_deref(),
+        "library.sqlite3",
+    )
 }
 
 pub fn default_mame_sqlite_path() -> PathBuf {
-    std::env::var("MISTER_MAME_SQLITE")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| current_app_path("mame.sqlite3"))
+    configured_path(
+        std::env::var("MISTER_MAME_SQLITE").ok().as_deref(),
+        "mame.sqlite3",
+    )
 }
 
 pub fn default_hbmame_sqlite_path() -> PathBuf {
-    std::env::var("MISTER_HBMAME_SQLITE")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| current_app_path("hbmame.sqlite3"))
+    configured_path(
+        std::env::var("MISTER_HBMAME_SQLITE").ok().as_deref(),
+        "hbmame.sqlite3",
+    )
 }
 
 pub fn default_sharded_catalog_path() -> PathBuf {
@@ -53,8 +56,17 @@ pub fn default_build_progress_path() -> PathBuf {
 }
 
 pub fn library_roots_from_env() -> Vec<String> {
-    std::env::var("MISTER_LIBRARY_ROOTS")
-        .ok()
+    library_roots_from_value(std::env::var("MISTER_LIBRARY_ROOTS").ok().as_deref())
+}
+
+fn configured_path(value: Option<&str>, default_name: &str) -> PathBuf {
+    value
+        .map(PathBuf::from)
+        .unwrap_or_else(|| current_app_path(default_name))
+}
+
+fn library_roots_from_value(value: Option<&str>) -> Vec<String> {
+    value
         .map(|s| {
             s.split('|')
                 .map(str::trim)
@@ -103,10 +115,10 @@ pub fn map_library_path(value: &str, rules: &[PathMapRule]) -> String {
         if value == rule.from {
             return rule.to.clone();
         }
-        if let Some(rest) = value.strip_prefix(&rule.from) {
-            if rest.starts_with('/') {
-                return format!("{}{}", rule.to, rest);
-            }
+        if let Some(rest) = value.strip_prefix(&rule.from)
+            && rest.starts_with('/')
+        {
+            return format!("{}{}", rule.to, rest);
         }
     }
     value.to_string()
@@ -123,82 +135,32 @@ fn trim_trailing_slash(value: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
-
-    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
-    }
-
-    struct EnvRestore {
-        key: &'static str,
-        value: Option<String>,
-    }
-
-    impl EnvRestore {
-        fn set(key: &'static str, value: &str) -> Self {
-            let previous = std::env::var(key).ok();
-            std::env::set_var(key, value);
-            Self {
-                key,
-                value: previous,
-            }
-        }
-
-        fn remove(key: &'static str) -> Self {
-            let previous = std::env::var(key).ok();
-            std::env::remove_var(key);
-            Self {
-                key,
-                value: previous,
-            }
-        }
-    }
-
-    impl Drop for EnvRestore {
-        fn drop(&mut self) {
-            if let Some(value) = &self.value {
-                std::env::set_var(self.key, value);
-            } else {
-                std::env::remove_var(self.key);
-            }
-        }
-    }
 
     #[test]
     fn catalog_paths_use_env_overrides_and_defaults() {
-        let _guard = env_lock();
-        let _library = EnvRestore::set("MISTER_LIBRARY_SQLITE", "/tmp/library.sqlite3");
-        let _mame = EnvRestore::set("MISTER_MAME_SQLITE", "/tmp/mame.sqlite3");
-        let _hbmame = EnvRestore::remove("MISTER_HBMAME_SQLITE");
-
-        assert_eq!(default_sqlite_path(), PathBuf::from("/tmp/library.sqlite3"));
         assert_eq!(
-            default_mame_sqlite_path(),
+            configured_path(Some("/tmp/library.sqlite3"), "library.sqlite3"),
+            PathBuf::from("/tmp/library.sqlite3")
+        );
+        assert_eq!(
+            configured_path(Some("/tmp/mame.sqlite3"), "mame.sqlite3"),
             PathBuf::from("/tmp/mame.sqlite3")
         );
         assert_eq!(
-            default_hbmame_sqlite_path(),
+            configured_path(None, "hbmame.sqlite3"),
             PathBuf::from(DEFAULT_HBMAME_SQLITE_PATH)
         );
     }
 
     #[test]
     fn library_roots_trim_empty_env_segments_and_default_when_absent() {
-        let _guard = env_lock();
-        let roots = EnvRestore::set(
-            "MISTER_LIBRARY_ROOTS",
-            " /media/fat/_Arcade | | /media/fat/games ||",
-        );
-
         assert_eq!(
-            library_roots_from_env(),
+            library_roots_from_value(Some(" /media/fat/_Arcade | | /media/fat/games ||")),
             vec!["/media/fat/_Arcade", "/media/fat/games"]
         );
-        drop(roots);
 
         assert_eq!(
-            library_roots_from_env(),
+            library_roots_from_value(None),
             DEFAULT_ROOTS
                 .iter()
                 .map(|root| root.to_string())

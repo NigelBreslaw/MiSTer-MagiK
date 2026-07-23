@@ -5,7 +5,7 @@
 
 use crate::library_db::LibraryScan;
 use crate::software_identity::{SoftwareHashCache, SoftwareHashCacheKey};
-use rusqlite::{params, Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, params};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 

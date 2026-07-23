@@ -3,12 +3,12 @@
 
 use crate::arcade_catalog::ArcadeCatalog;
 use crate::builder_protocol::{
-    BuilderSummary, CatalogBuilderEvent, CATALOG_BUILDER_PROTOCOL_VERSION,
+    BuilderSummary, CATALOG_BUILDER_PROTOCOL_VERSION, CatalogBuilderEvent,
 };
 use crate::catalog_build_record;
 use crate::catalog_navigation::write_catalog_navigation_snapshot_with_timing;
 use crate::library_db;
-use crate::runtime_thread::{apply_runtime_thread_policy, RuntimeThreadRole};
+use crate::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
 use std::cell::RefCell;
 use std::fs::{File, OpenOptions};
 use std::os::fd::AsRawFd;
@@ -52,15 +52,13 @@ pub fn run(
     operation: BuilderOperation,
     mut emit: impl FnMut(CatalogBuilderEvent),
 ) -> Result<(), String> {
-    if matches!(
-        operation,
-        BuilderOperation::Build | BuilderOperation::FreshBuild
-    ) {
-        std::env::set_var("MISTER_CATALOG_DURABLE_RESUME", "1");
-    }
     let mut backend = SystemBuilderBackend {
         replacement_rebuild: operation == BuilderOperation::Rebuild,
         bootstrap_first_visible: matches!(
+            operation,
+            BuilderOperation::Build | BuilderOperation::FreshBuild
+        ),
+        durable_resume: matches!(
             operation,
             BuilderOperation::Build | BuilderOperation::FreshBuild
         ),
@@ -514,6 +512,7 @@ enum BootstrapSource {
 struct SystemBuilderBackend {
     replacement_rebuild: bool,
     bootstrap_first_visible: bool,
+    durable_resume: bool,
     arcade_bootstrap_scan: Option<library_db::LibraryRamScanArtifact>,
 }
 
@@ -524,12 +523,11 @@ fn repair_v3_after_unchanged_check(catalog_fingerprint: &str) -> String {
     let generation = crate::shard_registry::read_latest_manifest_lazy(&storage, limits)
         .ok()
         .map(|manifest| manifest.generation);
-    if let Some(generation) = generation {
-        if crate::production_sharded_projection::validate_production_binding(&storage, generation)
+    if let Some(generation) = generation
+        && crate::production_sharded_projection::validate_production_binding(&storage, generation)
             .is_ok()
-        {
-            return "current".to_string();
-        }
+    {
+        return "current".to_string();
     }
     crate::catalog_errln!(
         "catalog_v3_repair_tsv\tstatus=rebuild-required\tfingerprint={}\telapsed_us={}",
@@ -576,7 +574,7 @@ fn remove_v3_and_bootstrap_artifacts_at(
             return Err(format!(
                 "remove Arcade bootstrap index {}: {error}",
                 bootstrap_index.display()
-            ))
+            ));
         }
     }
     Ok(removed)
@@ -755,11 +753,7 @@ impl BuilderBackend for SystemBuilderBackend {
                     "builder_first_visible_prepare".into(),
                     format!(
                         "wall_us={} audit_us={} stamp_us={} catalog_us={} games={}",
-                        timing.wall_us,
-                        timing.audit_us,
-                        timing.stamp_us,
-                        timing.catalog_us,
-                        games,
+                        timing.wall_us, timing.audit_us, timing.stamp_us, timing.catalog_us, games,
                     ),
                 ),
             ],
@@ -784,11 +778,13 @@ impl BuilderBackend for SystemBuilderBackend {
             library_db::scan_default_library_ram_background_with_events(
                 Some(progress),
                 Some(&mut scan_events),
+                self.durable_resume,
             )?
         } else {
             library_db::scan_default_library_ram_foreground_with_events(
                 Some(progress),
                 Some(&mut scan_events),
+                self.durable_resume,
             )?
         };
         let stats = scanned.stats();
@@ -862,9 +858,27 @@ impl BuilderBackend for SystemBuilderBackend {
                     timing.stamp_us,
                     timing.catalog_us,
                     timing.overlapped_us,
-                    if background_full_build { "sequential-background" } else { "sequential-foreground" },
-                    if background_full_build { RuntimeThreadRole::CatalogWorker.label() } else { RuntimeThreadRole::CatalogForeground.label() },
-                    if background_full_build { RuntimeThreadRole::CatalogWorker.default_policy().affinity.label() } else { RuntimeThreadRole::CatalogForeground.default_policy().affinity.label() },
+                    if background_full_build {
+                        "sequential-background"
+                    } else {
+                        "sequential-foreground"
+                    },
+                    if background_full_build {
+                        RuntimeThreadRole::CatalogWorker.label()
+                    } else {
+                        RuntimeThreadRole::CatalogForeground.label()
+                    },
+                    if background_full_build {
+                        RuntimeThreadRole::CatalogWorker
+                            .default_policy()
+                            .affinity
+                            .label()
+                    } else {
+                        RuntimeThreadRole::CatalogForeground
+                            .default_policy()
+                            .affinity
+                            .label()
+                    },
                 ),
             ),
         ];
@@ -1740,9 +1754,11 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(failures, [stage], "events={events:?}");
             assert!(!snapshot.exists(), "snapshot leaked after {stage}");
-            assert!(!events
-                .iter()
-                .any(|event| matches!(event, CatalogBuilderEvent::Done { .. })));
+            assert!(
+                !events
+                    .iter()
+                    .any(|event| matches!(event, CatalogBuilderEvent::Done { .. }))
+            );
         }
     }
 
@@ -1752,13 +1768,15 @@ mod tests {
         let held = BuilderLock::acquire(&config.lock_path).unwrap();
         let mut backend = FakeBackend::default();
         let mut events = Vec::new();
-        assert!(run_with_backend(
-            BuilderOperation::Build,
-            config.clone(),
-            &mut backend,
-            &mut |event| events.push(event),
-        )
-        .is_err());
+        assert!(
+            run_with_backend(
+                BuilderOperation::Build,
+                config.clone(),
+                &mut backend,
+                &mut |event| events.push(event),
+            )
+            .is_err()
+        );
         assert!(matches!(
             events.last(),
             Some(CatalogBuilderEvent::Failure { stage, .. }) if stage == "lock"

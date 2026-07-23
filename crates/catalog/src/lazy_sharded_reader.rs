@@ -4,7 +4,7 @@
 //! Manifest-first reader which opens system navigation only on demand.
 
 use crate::catalog_classify::SystemId;
-use crate::shard_registry::{read_latest_manifest_lazy, CatalogManifest, RegistryLimits};
+use crate::shard_registry::{CatalogManifest, RegistryLimits, read_latest_manifest_lazy};
 use crate::sharded_catalog::{
     CatalogError, CatalogGame, CatalogLaunchPlan, CatalogReader, CatalogRegistry, SystemCatalog,
     SystemSummary,
@@ -135,9 +135,9 @@ mod tests {
     use super::*;
     use crate::catalog_domain::ScanUnitId;
     use crate::shard_registry::{
-        publish_manifest, publish_system_artifacts, CatalogManifest, ManifestSystem,
+        CatalogManifest, ManifestSystem, publish_manifest, publish_system_artifacts,
     };
-    use crate::system_shard::{write_system_shard, SystemGame, SystemShardData, SystemShardLimits};
+    use crate::system_shard::{SystemGame, SystemShardData, SystemShardLimits, write_system_shard};
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 

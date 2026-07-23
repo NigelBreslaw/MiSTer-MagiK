@@ -15,10 +15,12 @@ const OUT_PATH: &str = "/tmp/mister-magik-boot-analytics.tsv";
 static SEQ: AtomicU64 = AtomicU64::new(0);
 
 pub fn enabled() -> bool {
+    enabled_from_value(std::env::var("MISTER_BOOT_ANALYTICS").ok().as_deref())
+}
+
+fn enabled_from_value(value: Option<&str>) -> bool {
     matches!(
-        std::env::var("MISTER_BOOT_ANALYTICS")
-            .ok()
-            .map(|s| s.to_ascii_lowercase()),
+        value.map(str::to_ascii_lowercase),
         Some(s) if s == "1" || s == "true" || s == "yes"
     )
 }
@@ -59,15 +61,19 @@ pub struct LauncherFrameWriter {
 
 impl LauncherFrameWriter {
     pub fn from_env() -> Option<Self> {
-        if !enabled() {
-            return None;
-        }
         let path = std::env::var("MISTER_BOOT_FRAME_PROFILE_FILE")
             .unwrap_or_else(|_| "/tmp/mister-magik-launcher-frame-profile.tsv".to_string());
         let limit = std::env::var("MISTER_BOOT_FRAME_PROFILE_FRAMES")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(300);
+        Self::from_config(enabled(), path, limit)
+    }
+
+    fn from_config(enabled: bool, path: String, limit: u64) -> Option<Self> {
+        if !enabled {
+            return None;
+        }
         match File::create(&path) {
             Ok(mut file) => {
                 let _ = writeln!(
@@ -154,59 +160,13 @@ fn sanitize(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, MutexGuard};
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    // Environment variables are process-global, so keep these tests serialized.
-    struct EnvScope {
-        originals: Vec<(&'static str, Option<String>)>,
-        _guard: MutexGuard<'static, ()>,
-    }
-
-    impl EnvScope {
-        fn new() -> Self {
-            let guard = ENV_LOCK.lock().expect("lock env");
-            Self {
-                originals: Vec::new(),
-                _guard: guard,
-            }
-        }
-
-        fn set(&mut self, key: &'static str, value: &str) {
-            if !self
-                .originals
-                .iter()
-                .any(|(existing_key, _)| *existing_key == key)
-            {
-                self.originals.push((key, std::env::var(key).ok()));
-            }
-            std::env::set_var(key, value);
-        }
-    }
-
-    impl Drop for EnvScope {
-        fn drop(&mut self) {
-            for (key, original) in self.originals.iter().rev() {
-                match original {
-                    Some(value) => std::env::set_var(key, value),
-                    None => std::env::remove_var(key),
-                }
-            }
-        }
-    }
 
     #[test]
     fn enabled_accepts_only_explicit_truthy_values() {
-        let mut env = EnvScope::new();
-        env.set("MISTER_BOOT_ANALYTICS", "YeS");
-        assert!(enabled());
-
-        std::env::set_var("MISTER_BOOT_ANALYTICS", "0");
-        assert!(!enabled());
-
-        std::env::set_var("MISTER_BOOT_ANALYTICS", "false");
-        assert!(!enabled());
+        assert!(enabled_from_value(Some("YeS")));
+        assert!(!enabled_from_value(Some("0")));
+        assert!(!enabled_from_value(Some("false")));
+        assert!(!enabled_from_value(None));
     }
 
     #[test]
@@ -221,16 +181,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("create temp dir");
         let profile_path = root.join("frames.tsv");
-        let mut env = EnvScope::new();
-        env.set("MISTER_BOOT_ANALYTICS", "1");
-        env.set(
-            "MISTER_BOOT_FRAME_PROFILE_FILE",
-            profile_path.to_str().expect("utf8 path"),
-        );
-        env.set("MISTER_BOOT_FRAME_PROFILE_FRAMES", "1");
 
         {
-            let mut writer = LauncherFrameWriter::from_env().expect("profile writer");
+            let mut writer = LauncherFrameWriter::from_config(
+                true,
+                profile_path.to_str().expect("utf8 path").to_owned(),
+                1,
+            )
+            .expect("profile writer");
             assert!(writer.should_record(0));
             assert!(!writer.should_record(1));
             writer.record(

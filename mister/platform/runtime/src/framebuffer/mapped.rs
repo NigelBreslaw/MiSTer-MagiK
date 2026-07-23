@@ -13,22 +13,22 @@
 
 use crate::boot_analytics;
 use crate::framebuffer::format::{
-    fb_mode_format_from_bits_per_pixel, production_label, restore_mode_line, rgb565_mode_line,
-    rgb565_stride_bytes, RGB565_BITS_PER_PIXEL,
+    RGB565_BITS_PER_PIXEL, fb_mode_format_from_bits_per_pixel, production_label, restore_mode_line,
+    rgb565_mode_line, rgb565_stride_bytes,
 };
 use crate::framebuffer::sample::Rgb565SampleView;
 use crate::framebuffer::target::DirtyRect;
 use crate::framebuffer::vertical_scale::{
     Rgb565FrameView, VerticalCopyStats, VerticalRect, VerticalRgb565Transform,
 };
-use crate::framebuffer::vsync::{wait_vsync_fd, VsyncWaitStatus};
+use crate::framebuffer::vsync::{VsyncWaitStatus, wait_vsync_fd};
 
 use slint::platform::software_renderer::{PremultipliedRgbaColor, Rgb565Pixel, TargetPixel};
 use std::fs::OpenOptions;
 use std::io;
 use std::os::unix::io::AsRawFd;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 const MAX_FRAMEBUFFER_PIXELS: usize = 1920 * 1080;
 
@@ -1357,9 +1357,11 @@ mod tests {
         assert_eq!(&dst[0..fb_w], &src[0..fb_w]);
         assert!(dst[fb_w..dst_stride].iter().all(|p| *p == sentinel));
         assert_eq!(&dst[dst_stride..dst_stride + fb_w], &src[fb_w..fb_w * fb_h]);
-        assert!(dst[dst_stride + fb_w..dst_stride * fb_h]
-            .iter()
-            .all(|p| *p == sentinel));
+        assert!(
+            dst[dst_stride + fb_w..dst_stride * fb_h]
+                .iter()
+                .all(|p| *p == sentinel)
+        );
     }
 
     #[test]
@@ -1387,9 +1389,11 @@ mod tests {
         assert!(dst[961..dst_stride].iter().all(|p| *p == sentinel));
         assert_eq!(dst[dst_stride + 959], Rgb565Pixel(5));
         assert_eq!(dst[dst_stride + 960], Rgb565Pixel(6));
-        assert!(dst[dst_stride + 961..dst_stride * fb_h]
-            .iter()
-            .all(|p| *p == sentinel));
+        assert!(
+            dst[dst_stride + 961..dst_stride * fb_h]
+                .iter()
+                .all(|p| *p == sentinel)
+        );
     }
 
     #[test]

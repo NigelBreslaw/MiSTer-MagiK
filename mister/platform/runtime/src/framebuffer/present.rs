@@ -5,7 +5,7 @@ use crate::framebuffer::mapped::MappedRgb565Framebuffer;
 use crate::framebuffer::scanout_slots::ScanoutSlotsRgb565Framebuffer;
 use crate::framebuffer::stream;
 use crate::framebuffer::target::{
-    dirty_rect_is_broad, CachedFrameView, DirectPreviewView, DirtyRect, StridedFrameRegion,
+    CachedFrameView, DirectPreviewView, DirtyRect, StridedFrameRegion, dirty_rect_is_broad,
 };
 use crate::framebuffer::vertical_scale::Rgb565FrameView;
 use crate::framebuffer::vertical_scale::VerticalRect;

@@ -386,14 +386,16 @@ mod tests {
 
     #[test]
     fn unchanged_plan_has_no_system_work() {
-        assert!(ReconcilePlan {
-            current_generation: Some(4),
-            intended_generation: 4,
-            scan_units: Vec::new(),
-            systems: Vec::new(),
-            global_rebuild: false,
-            manifest_only: false,
-        }
-        .is_unchanged());
+        assert!(
+            ReconcilePlan {
+                current_generation: Some(4),
+                intended_generation: 4,
+                scan_units: Vec::new(),
+                systems: Vec::new(),
+                global_rebuild: false,
+                manifest_only: false,
+            }
+            .is_unchanged()
+        );
     }
 }

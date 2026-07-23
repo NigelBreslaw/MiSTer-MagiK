@@ -439,9 +439,11 @@ mod tests {
             ..FakeHardware::default()
         };
 
-        assert!(session
-            .arm_latch_route_with_hardware(&mut hardware)
-            .is_err());
+        assert!(
+            session
+                .arm_latch_route_with_hardware(&mut hardware)
+                .is_err()
+        );
         session
             .arm_latch_route_with_hardware(&mut hardware)
             .unwrap();

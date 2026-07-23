@@ -5,7 +5,7 @@
 
 use crate::controller_db::{ControllerDb, ControllerKind, PadRegistryStatus};
 use crate::input_repeat::RepeatNav;
-use crate::input_state::{layout_profile_name, PadInfo, PadState};
+use crate::input_state::{PadInfo, PadState, layout_profile_name};
 use std::time::Instant;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -6,15 +6,14 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use mister_magik_ui as slint_ui;
-use slint::platform::software_renderer::Rgb565Pixel;
 use slint::ComponentHandle;
+use slint::platform::software_renderer::Rgb565Pixel;
 use slint_ui::launcher::PreviewStatus;
 
 use crate::arcade_catalog::{ArcadeGameEntry, ArcadeGameView};
 use crate::preview_worker::{
-    preview_asset_cache_key, preview_window_indices, PreviewLoadSource, PreviewPixels,
-    PreviewPriority, PreviewResult, PreviewWorker, DEFAULT_PREVIEW_CACHE_CAP,
-    DEFAULT_PREVIEW_RADIUS,
+    DEFAULT_PREVIEW_CACHE_CAP, DEFAULT_PREVIEW_RADIUS, PreviewLoadSource, PreviewPixels,
+    PreviewPriority, PreviewResult, PreviewWorker, preview_asset_cache_key, preview_window_indices,
 };
 use crate::ui_display::{UI_FB_H, UI_FB_W};
 
@@ -1968,8 +1967,8 @@ fn preview_result_system_id(result: &PreviewResult) -> &'static str {
 mod tests {
     use super::*;
     use crate::ui_runner::ui_platform::{MisterPlatform, MisterSoftwareWindow};
-    use slint::platform::software_renderer::RepaintBufferType;
     use slint::ComponentHandle;
+    use slint::platform::software_renderer::RepaintBufferType;
     use std::cell::Cell;
     use std::rc::Rc;
     use std::sync::Once;
@@ -2309,9 +2308,11 @@ mod tests {
         request_preview_prefetches(ArcadeGameView::contiguous(&games), 1, &mut preview, true);
 
         assert!(preview.prefetch_throttle_until.is_none());
-        assert!(preview
-            .pending_prefetch_keys
-            .contains(&game_preview_key(&games[2]).unwrap()));
+        assert!(
+            preview
+                .pending_prefetch_keys
+                .contains(&game_preview_key(&games[2]).unwrap())
+        );
     }
 
     #[test]

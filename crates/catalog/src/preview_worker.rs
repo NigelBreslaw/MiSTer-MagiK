@@ -15,18 +15,18 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use crate::media_identity::{
-    default_screenshot_asset_dir, legacy_screenshot_pack_path, preferred_screenshot_image_size,
-    screenshot_media_state_path_in_root, screenshot_pack_id_from_legacy_filename,
-    size_qualified_screenshot_pack_path_in_root, supported_screenshot_pack_ids,
-    valid_screenshot_image_size, DEFAULT_SCREENSHOT_IMAGE_SIZE,
-};
-use crate::preview_archive::{
-    read_file_entry, read_sidecar_entry, read_u32, validate_entry_count, validate_entry_geometry,
-    PreviewArchiveEntry, SIDECAR_INDEX_MAGIC, V2_PIXELS_MAGIC,
+    DEFAULT_SCREENSHOT_IMAGE_SIZE, default_screenshot_asset_dir, legacy_screenshot_pack_path,
+    preferred_screenshot_image_size, screenshot_media_state_path_in_root,
+    screenshot_pack_id_from_legacy_filename, size_qualified_screenshot_pack_path_in_root,
+    supported_screenshot_pack_ids, valid_screenshot_image_size,
 };
 #[cfg(test)]
 use crate::preview_archive::{MAX_PREVIEW_ARCHIVE_ENTRIES, MAX_PREVIEW_ARCHIVE_RAW_BYTES};
-use crate::runtime_thread::{apply_runtime_thread_policy, RuntimeThreadRole};
+use crate::preview_archive::{
+    PreviewArchiveEntry, SIDECAR_INDEX_MAGIC, V2_PIXELS_MAGIC, read_file_entry, read_sidecar_entry,
+    read_u32, validate_entry_count, validate_entry_geometry,
+};
+use crate::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
 use crate::work_coordinator;
 
 pub const DEFAULT_PREVIEW_RADIUS: usize = 12;
@@ -593,10 +593,10 @@ where
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for idx in preview_window_indices(items.len(), selected, radius) {
-        if let Some(p) = path(&items[idx]) {
-            if seen.insert(p) {
-                out.push(p);
-            }
+        if let Some(p) = path(&items[idx])
+            && seen.insert(p)
+        {
+            out.push(p);
         }
     }
     out
@@ -1015,12 +1015,11 @@ fn load_raw565_preview_asset_timed(
         return Err("preview asset missing archive path or key".to_string());
     }
     let entry_name = format!("{asset_key}.rgb565");
-    if preview_archive_mem_primary_enabled() {
-        if let Some(loaded) =
+    if preview_archive_mem_primary_enabled()
+        && let Some(loaded) =
             load_raw565_preview_asset_from_archive_mem(archive_path, &entry_name, scratch)?
-        {
-            return Ok(loaded);
-        }
+    {
+        return Ok(loaded);
     }
     if let Some(loaded) =
         try_load_raw565_preview_asset_from_index(Path::new(archive_path), &entry_name, scratch)
@@ -1243,12 +1242,11 @@ fn preview_archives_for_paths_with_cache(
             return Err(e);
         }
     };
-    if let Ok(cached) = cache.lock() {
-        if let Some(cached) = cached.as_ref() {
-            if cached.fingerprints == fingerprints {
-                return Ok(Some(Arc::clone(&cached.archives)));
-            }
-        }
+    if let Ok(cached) = cache.lock()
+        && let Some(cached) = cached.as_ref()
+        && cached.fingerprints == fingerprints
+    {
+        return Ok(Some(Arc::clone(&cached.archives)));
     }
 
     let mut archives = Vec::with_capacity(fingerprints.len());
@@ -1537,10 +1535,10 @@ fn index_pread_archive_open_calls(path: &str) -> usize {
 #[cfg(test)]
 fn expire_preview_archive_metadata_cache_for_tests() {
     let expired_at = Instant::now() - PREVIEW_ARCHIVE_METADATA_TTL - Duration::from_millis(1);
-    if let Ok(mut cached) = preview_archive_cache().lock() {
-        if let Some(cached) = cached.as_mut() {
-            cached.checked_at = expired_at;
-        }
+    if let Ok(mut cached) = preview_archive_cache().lock()
+        && let Some(cached) = cached.as_mut()
+    {
+        cached.checked_at = expired_at;
     }
     if let Ok(mut cached) = preview_archive_sidecar_index_cache().lock() {
         for cached in cached.values_mut() {
@@ -1899,43 +1897,43 @@ fn preview_archive_sidecar_lookup(
     let cache = preview_archive_sidecar_index_cache();
     let cache_key = archive_path.display().to_string();
     let now = Instant::now();
-    if let Ok(mut cache) = cache.lock() {
-        if let Some(cached) = cache.get_mut(&cache_key) {
-            if now.duration_since(cached.checked_at) < PREVIEW_ARCHIVE_METADATA_TTL {
-                if preview_trace_enabled() {
-                    crate::catalog_errln!(
-                        "preview_trace metadata_cache event=hit scope=sidecar archive_path={} ttl_ms={}",
-                        archive_path.display(),
-                        PREVIEW_ARCHIVE_METADATA_TTL.as_millis()
-                    );
-                }
-                return Ok(Some(PreviewArchiveSidecarLookup {
-                    archive_fingerprint: cached.archive_fingerprint.clone(),
-                    index: Arc::clone(&cached.index),
-                }));
-            }
-            let archive_fingerprint = preview_archive_fingerprint(archive_path)?;
-            let index_fingerprint = preview_archive_fingerprint(&index_path)?;
-            if cached.archive_fingerprint == archive_fingerprint
-                && cached.index_fingerprint == index_fingerprint
-            {
-                cached.checked_at = now;
-                if preview_trace_enabled() {
-                    crate::catalog_errln!(
-                        "preview_trace metadata_cache event=miss scope=sidecar reason=ttl_revalidated archive_path={}",
-                        archive_path.display()
-                    );
-                }
-                return Ok(Some(PreviewArchiveSidecarLookup {
-                    archive_fingerprint,
-                    index: Arc::clone(&cached.index),
-                }));
-            } else if preview_trace_enabled() {
+    if let Ok(mut cache) = cache.lock()
+        && let Some(cached) = cache.get_mut(&cache_key)
+    {
+        if now.duration_since(cached.checked_at) < PREVIEW_ARCHIVE_METADATA_TTL {
+            if preview_trace_enabled() {
                 crate::catalog_errln!(
-                    "preview_trace metadata_cache event=forced_invalidation scope=sidecar reason=fingerprint_changed archive_path={}",
+                    "preview_trace metadata_cache event=hit scope=sidecar archive_path={} ttl_ms={}",
+                    archive_path.display(),
+                    PREVIEW_ARCHIVE_METADATA_TTL.as_millis()
+                );
+            }
+            return Ok(Some(PreviewArchiveSidecarLookup {
+                archive_fingerprint: cached.archive_fingerprint.clone(),
+                index: Arc::clone(&cached.index),
+            }));
+        }
+        let archive_fingerprint = preview_archive_fingerprint(archive_path)?;
+        let index_fingerprint = preview_archive_fingerprint(&index_path)?;
+        if cached.archive_fingerprint == archive_fingerprint
+            && cached.index_fingerprint == index_fingerprint
+        {
+            cached.checked_at = now;
+            if preview_trace_enabled() {
+                crate::catalog_errln!(
+                    "preview_trace metadata_cache event=miss scope=sidecar reason=ttl_revalidated archive_path={}",
                     archive_path.display()
                 );
             }
+            return Ok(Some(PreviewArchiveSidecarLookup {
+                archive_fingerprint,
+                index: Arc::clone(&cached.index),
+            }));
+        } else if preview_trace_enabled() {
+            crate::catalog_errln!(
+                "preview_trace metadata_cache event=forced_invalidation scope=sidecar reason=fingerprint_changed archive_path={}",
+                archive_path.display()
+            );
         }
     }
     if !index_path.is_file() {
@@ -1978,8 +1976,8 @@ fn preview_archive_sidecar_lookup(
     }))
 }
 
-fn preview_archive_sidecar_index_cache(
-) -> &'static Mutex<HashMap<String, CachedPreviewArchiveSidecarIndex>> {
+fn preview_archive_sidecar_index_cache()
+-> &'static Mutex<HashMap<String, CachedPreviewArchiveSidecarIndex>> {
     static INDEXES: OnceLock<Mutex<HashMap<String, CachedPreviewArchiveSidecarIndex>>> =
         OnceLock::new();
     INDEXES.get_or_init(|| Mutex::new(HashMap::new()))
@@ -2084,19 +2082,17 @@ fn sidecar_state_entry_matches(
     if let Some(size) = value
         .get("preferred_size")
         .and_then(serde_json::Value::as_str)
+        && let Some(pack_state) = value.get("packs").and_then(|packs| packs.get(size))
+        && pack_state_matches(
+            pack_state,
+            archive_path,
+            index_path,
+            archive_bytes,
+            archive_sha256,
+            found_archive_state,
+        )?
     {
-        if let Some(pack_state) = value.get("packs").and_then(|packs| packs.get(size)) {
-            if pack_state_matches(
-                pack_state,
-                archive_path,
-                index_path,
-                archive_bytes,
-                archive_sha256,
-                found_archive_state,
-            )? {
-                return Ok(true);
-            }
-        }
+        return Ok(true);
     }
     if let Some(packs) = value.get("packs").and_then(serde_json::Value::as_object) {
         for pack_state in packs.values() {
@@ -2255,10 +2251,10 @@ fn open_preview_archive_file_for_index_pread(path: &Path) -> std::io::Result<Fil
 fn start_background_preview_archive_load(archive_path: String) {
     static LOADING: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
     let loading = LOADING.get_or_init(|| Mutex::new(HashSet::new()));
-    if let Ok(mut loading) = loading.lock() {
-        if !loading.insert(archive_path.clone()) {
-            return;
-        }
+    if let Ok(mut loading) = loading.lock()
+        && !loading.insert(archive_path.clone())
+    {
+        return;
     }
     let loading = LOADING.get_or_init(|| Mutex::new(HashSet::new()));
     let _ = std::thread::Builder::new()
@@ -3404,15 +3400,21 @@ mod tests {
     fn catalog_projection_paths_include_default_console_packs_without_stat() {
         let paths = preview_archive_paths_for_catalog_projection();
 
-        assert!(paths
-            .iter()
-            .any(|path| path == "/media/fat/mister-magik/assets/arcade-screenshots.mmlz4b"));
-        assert!(paths
-            .iter()
-            .any(|path| path == "/media/fat/mister-magik/assets/nes-screenshots.mmlz4b"));
-        assert!(paths
-            .iter()
-            .any(|path| path == "/media/fat/mister-magik/assets/saturn-screenshots.mmlz4b"));
+        assert!(
+            paths
+                .iter()
+                .any(|path| path == "/media/fat/mister-magik/assets/arcade-screenshots.mmlz4b")
+        );
+        assert!(
+            paths
+                .iter()
+                .any(|path| path == "/media/fat/mister-magik/assets/nes-screenshots.mmlz4b")
+        );
+        assert!(
+            paths
+                .iter()
+                .any(|path| path == "/media/fat/mister-magik/assets/saturn-screenshots.mmlz4b")
+        );
     }
 
     #[test]
@@ -3849,10 +3851,12 @@ mod tests {
 
         assert!(!Arc::ptr_eq(&first, &second));
         let mut scratch = PreviewArchiveScratch::default();
-        assert!(second[0]
-            .load_timed("new-long.rgb565", &mut scratch)
-            .expect("load from changed archive")
-            .is_some());
+        assert!(
+            second[0]
+                .load_timed("new-long.rgb565", &mut scratch)
+                .expect("load from changed archive")
+                .is_some()
+        );
         let _ = std::fs::remove_file(path);
     }
 

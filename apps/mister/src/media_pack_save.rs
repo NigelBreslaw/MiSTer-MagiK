@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::artifact_publish::{
-    cleanup_static_and_timestamped_temps, prepare_artifact_publish, static_temp_path_for,
-    sync_path_rust_best_effort, ArtifactPublishLabels,
+    ArtifactPublishLabels, cleanup_static_and_timestamped_temps, prepare_artifact_publish,
+    static_temp_path_for, sync_path_rust_best_effort,
 };
 use std::fs::{self, File};
 use std::io::{Read, Write};
@@ -238,9 +238,11 @@ mod tests {
         assert_eq!(metrics.bytes, PROGRESS_COPY_CHUNK_BYTES as u64 + 17);
         assert!(copy_events.len() >= 2);
         assert_eq!(copy_events.last().unwrap().bytes_done, metrics.bytes);
-        assert!(copy_events
-            .windows(2)
-            .all(|items| items[0].bytes_done < items[1].bytes_done));
+        assert!(
+            copy_events
+                .windows(2)
+                .all(|items| items[0].bytes_done < items[1].bytes_done)
+        );
 
         let _ = fs::remove_dir_all(dir);
     }

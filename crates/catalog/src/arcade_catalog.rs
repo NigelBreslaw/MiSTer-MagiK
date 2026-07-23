@@ -2025,9 +2025,11 @@ mod tests {
             isolated.structured_launch_plan_for_ref(&arcade_plan.launch_ref),
             Some(&arcade_plan)
         );
-        assert!(isolated
-            .structured_launch_plan_for_ref("magik-plan:snes")
-            .is_none());
+        assert!(
+            isolated
+                .structured_launch_plan_for_ref("magik-plan:snes")
+                .is_none()
+        );
     }
     use crate::test_support::arcade_game;
 
@@ -2778,9 +2780,11 @@ mod tests {
         };
 
         assert!(catalog.search_game_indexes("arcade", "capcom").len() >= 50);
-        assert!(!catalog
-            .search_game_indexes("arcade", "street fighter")
-            .is_empty());
+        assert!(
+            !catalog
+                .search_game_indexes("arcade", "street fighter")
+                .is_empty()
+        );
         assert!(!catalog.search_game_indexes("arcade", "pac man").is_empty());
         assert!(!catalog.search_game_indexes("arcade", "194").is_empty());
 
@@ -3120,10 +3124,12 @@ mod tests {
             catalog.search_game_indexes(MENU_ARCADE_SYSTEM_ID, "cyberbots"),
             vec![1]
         );
-        assert!(catalog
-            .autocomplete
-            .words
-            .get("cyberbots")
-            .is_some_and(|stats| stats.system_scores.contains_key(MENU_ARCADE_SYSTEM_ID)));
+        assert!(
+            catalog
+                .autocomplete
+                .words
+                .get("cyberbots")
+                .is_some_and(|stats| stats.system_scores.contains_key(MENU_ARCADE_SYSTEM_ID))
+        );
     }
 }

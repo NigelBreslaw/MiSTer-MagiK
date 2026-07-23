@@ -1,15 +1,15 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use super::arcade_drawer::{arcade_filter_cache_token, ArcadeDrawerViewCache};
+use super::arcade_drawer::{ArcadeDrawerViewCache, arcade_filter_cache_token};
 use super::launcher_frame_accounting::{
     FrameAnalyticsCpuStamp, LauncherCustomDrawTrace, LauncherFrameAccounting,
     LauncherFrameCpuTrace, LauncherFrameIdentity, LauncherFrameRenderData,
     LauncherFrameSnapshotBuilder, LauncherFrameStatusData, LauncherFrameTiming,
 };
 use super::launcher_pacing::{
-    LauncherFramePacingInput, LauncherFramePacingPolicy, LauncherPacingTrace,
     FB0_LATE_FRAME_START_HEADROOM_US, FPGA_LATCH_LATE_FRAME_START_HEADROOM_US,
+    LauncherFramePacingInput, LauncherFramePacingPolicy, LauncherPacingTrace,
 };
 use super::launcher_worker_intents::{apply_launcher_worker_ui_intent, catalog_scan_message};
 #[cfg(test)]
@@ -172,7 +172,9 @@ impl ArcadeEntryLatencyTrace {
                 u8::from(accepted),
                 system,
                 selected,
-                frame.map(|frame| frame.to_string()).unwrap_or_else(|| "-".to_string()),
+                frame
+                    .map(|frame| frame.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
                 prepare_us
                     .map(|value| value.to_string())
                     .unwrap_or_else(|| "-".to_string()),
@@ -2866,7 +2868,12 @@ pub(super) fn run_launcher_loop(
         if let Some(system_id) = pending_start_system.take() {
             if arcade_navigation_ready(catalog_ready, &catalog) {
                 let before = LauncherBridgeKey::from_nav(&nav);
-                if apply_start_system_from_env(&mut nav, &catalog, &system_id) {
+                if apply_start_system_from_env(
+                    &mut nav,
+                    &catalog,
+                    &system_id,
+                    ui_frame_target::forced_arcade_selected_index(),
+                ) {
                     print_startup_event(
                         start,
                         "launcher_start_system_applied",
@@ -5840,13 +5847,14 @@ fn apply_start_system_from_env(
     nav: &mut LauncherNav,
     catalog: &ArcadeCatalog,
     system_id: &str,
+    forced_arcade_selected: Option<usize>,
 ) -> bool {
     if !nav.open_system(catalog, system_id) {
         return false;
     }
     nav.arcade_filter.drawer_open = false;
     nav.arcade_filter.level = launcher::ArcadeFilterLevel::Top;
-    ui_frame_target::apply_forced_arcade_selected(nav, catalog);
+    ui_frame_target::apply_forced_arcade_selected_index(nav, catalog, forced_arcade_selected);
     true
 }
 
@@ -6145,7 +6153,9 @@ mod tests {
         let catalog = catalog_for_media_systems(&["arcade", "neogeo", "saturn"]);
         let mut nav = LauncherNav::new();
 
-        assert!(apply_start_system_from_env(&mut nav, &catalog, "neogeo"));
+        assert!(apply_start_system_from_env(
+            &mut nav, &catalog, "neogeo", None,
+        ));
 
         assert_eq!(nav.screen, Screen::Arcade);
         assert_eq!(nav.selected, 1);
@@ -6181,11 +6191,7 @@ mod tests {
             ],
         );
         let mut nav = LauncherNav::new();
-        std::env::set_var("MISTER_ARCADE_SELECTED_INDEX", "1");
-
-        let applied = apply_start_system_from_env(&mut nav, &catalog, "neogeo");
-
-        std::env::remove_var("MISTER_ARCADE_SELECTED_INDEX");
+        let applied = apply_start_system_from_env(&mut nav, &catalog, "neogeo", Some(1));
         assert!(applied);
         assert_eq!(nav.screen, Screen::Arcade);
         assert_eq!(nav.selected, 1);
@@ -6197,7 +6203,9 @@ mod tests {
         let catalog = catalog_for_media_systems(&["arcade", "neogeo", "saturn"]);
         let mut nav = LauncherNav::new();
 
-        assert!(apply_start_system_from_env(&mut nav, &catalog, "SATURN"));
+        assert!(apply_start_system_from_env(
+            &mut nav, &catalog, "SATURN", None,
+        ));
 
         assert_eq!(nav.screen, Screen::Arcade);
         assert_eq!(nav.selected, 2);
@@ -6228,7 +6236,9 @@ mod tests {
         let catalog = catalog_for_media_systems(&["arcade", "neogeo", "saturn"]);
         let mut nav = LauncherNav::new();
 
-        assert!(!apply_start_system_from_env(&mut nav, &catalog, "psx"));
+        assert!(!apply_start_system_from_env(
+            &mut nav, &catalog, "psx", None,
+        ));
 
         assert_eq!(nav.screen, Screen::Home);
         assert_eq!(nav.selected, 0);
@@ -6242,9 +6252,11 @@ mod tests {
             vec![crate::test_support::arcade_system("c64", 1)],
         );
         let hydrated = crate::test_support::arcade_catalog(
-            vec![crate::test_support::arcade_game("C64 Game")
-                .system_id("c64")
-                .build()],
+            vec![
+                crate::test_support::arcade_game("C64 Game")
+                    .system_id("c64")
+                    .build(),
+            ],
             vec![crate::test_support::arcade_system("c64", 1)],
         );
         let mut nav = LauncherNav::new();
@@ -6854,9 +6866,10 @@ mod tests {
             .input_for(&nav, start + LIBRARY_CHANGED_TEST_ACTION_SETTLE, start)
             .expect("rebuild driver should press right first");
         assert!(right.dpad_right);
-        assert!(nav
-            .handle_input(&right, start + LIBRARY_CHANGED_TEST_ACTION_SETTLE, &catalog)
-            .is_none());
+        assert!(
+            nav.handle_input(&right, start + LIBRARY_CHANGED_TEST_ACTION_SETTLE, &catalog)
+                .is_none()
+        );
         assert_eq!(nav.confirm_selected, 1);
 
         let release = driver
@@ -6868,13 +6881,14 @@ mod tests {
             .expect("rebuild driver should release right before A");
         assert!(!release.dpad_right);
         assert!(!release.btn_a);
-        assert!(nav
-            .handle_input(
+        assert!(
+            nav.handle_input(
                 &release,
                 start + LIBRARY_CHANGED_TEST_ACTION_SETTLE + Duration::from_millis(16),
                 &catalog,
             )
-            .is_none());
+            .is_none()
+        );
 
         let press_a = driver
             .input_for(
@@ -7102,12 +7116,14 @@ mod tests {
             LauncherWakeReasons::COMPOSITION_CLEARS_DIRECT_LAYERS,
             LauncherWakeReasons::FB0_ROUTE_RECOVERY_PENDING,
         ] {
-            assert!(!LauncherRenderIntent {
-                first_visible_copy_done: true,
-                startup_input_enabled: true,
-                wake_reasons: reason,
-            }
-            .can_sleep());
+            assert!(
+                !LauncherRenderIntent {
+                    first_visible_copy_done: true,
+                    startup_input_enabled: true,
+                    wake_reasons: reason,
+                }
+                .can_sleep()
+            );
         }
     }
 
@@ -7141,12 +7157,14 @@ mod tests {
             | LauncherWakeReasons::COMPOSITION_CLEARS_DIRECT_LAYERS;
 
         for reasons in [home, arcade, search_preview, composition] {
-            assert!(!LauncherRenderIntent {
-                first_visible_copy_done: true,
-                startup_input_enabled: true,
-                wake_reasons: reasons,
-            }
-            .can_sleep());
+            assert!(
+                !LauncherRenderIntent {
+                    first_visible_copy_done: true,
+                    startup_input_enabled: true,
+                    wake_reasons: reasons,
+                }
+                .can_sleep()
+            );
         }
     }
 

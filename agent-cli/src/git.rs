@@ -97,12 +97,14 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("agent-cli-git-{}-{nonce}", std::process::id()));
         fs::create_dir_all(&root).unwrap();
-        assert!(Command::new("git")
-            .args(["init", "--quiet"])
-            .current_dir(&root)
-            .status()
-            .unwrap()
-            .success());
+        assert!(
+            Command::new("git")
+                .args(["init", "--quiet"])
+                .current_dir(&root)
+                .status()
+                .unwrap()
+                .success()
+        );
         root
     }
 

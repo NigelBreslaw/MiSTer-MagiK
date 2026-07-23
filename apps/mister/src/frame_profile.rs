@@ -676,7 +676,12 @@ impl FrameProfiler {
         }
         crate::ui_logln!(
             "slow-frame dominant phase: prepare={} anim={} slint-render={} custom-draw={} vsync-or-fb-present={} video-or-audio={}",
-            slow_by_phase[0], slow_by_phase[1], slow_by_phase[2], slow_by_phase[3], slow_by_phase[4], slow_by_phase[5]
+            slow_by_phase[0],
+            slow_by_phase[1],
+            slow_by_phase[2],
+            slow_by_phase[3],
+            slow_by_phase[4],
+            slow_by_phase[5]
         );
 
         print_histogram("wall_ms", &totals, MS_BUCKETS);

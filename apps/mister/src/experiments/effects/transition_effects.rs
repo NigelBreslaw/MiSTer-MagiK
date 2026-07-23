@@ -6,7 +6,7 @@
 
 use std::time::Instant;
 
-use super::camera_effects::{color, synthetic_images, CameraImage, CameraPixel};
+use super::camera_effects::{CameraImage, CameraPixel, color, synthetic_images};
 use super::render_helpers::{clear, elapsed_us, time};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1474,11 +1474,7 @@ fn block_pick(
     y: usize,
     reveal: bool,
 ) -> CameraPixel {
-    if reveal {
-        b[y * w + x]
-    } else {
-        a[y * w + x]
-    }
+    if reveal { b[y * w + x] } else { a[y * w + x] }
 }
 
 fn count_row(reveal: bool, w: usize, counters: &mut TransitionCounters) {

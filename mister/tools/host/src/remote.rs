@@ -14,15 +14,29 @@ use std::time::{Duration, Instant};
 use crate::Result;
 
 pub(crate) fn host() -> String {
-    env::var("MISTER_IP").unwrap_or_else(|_| "MiSTer address was not resolved".to_string())
+    host_from(env::var("MISTER_IP").ok().as_deref())
 }
 
 fn user() -> String {
-    env::var("MISTER_USER").unwrap_or_else(|_| "root".to_string())
+    user_from(env::var("MISTER_USER").ok().as_deref())
 }
 
 fn pass() -> String {
-    env::var("MISTER_PASS").unwrap_or_else(|_| "1".to_string())
+    pass_from(env::var("MISTER_PASS").ok().as_deref())
+}
+
+fn host_from(value: Option<&str>) -> String {
+    value
+        .unwrap_or("MiSTer address was not resolved")
+        .to_string()
+}
+
+fn user_from(value: Option<&str>) -> String {
+    value.unwrap_or("root").to_string()
+}
+
+fn pass_from(value: Option<&str>) -> String {
+    value.unwrap_or("1").to_string()
 }
 
 pub(crate) fn connect(timeout_secs: u64) -> Result<Session> {
@@ -399,12 +413,6 @@ pub(crate) fn port_open(timeout: Duration) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
-
-    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
-    }
 
     #[test]
     fn shell_command_builders_quote_every_dynamic_value() {
@@ -528,34 +536,12 @@ mod tests {
 
     #[test]
     fn connection_environment_has_stable_defaults_and_overrides() {
-        let _guard = env_lock();
-        let old_ip = env::var_os("MISTER_IP");
-        let old_user = env::var_os("MISTER_USER");
-        let old_pass = env::var_os("MISTER_PASS");
-        env::remove_var("MISTER_IP");
-        env::remove_var("MISTER_USER");
-        env::remove_var("MISTER_PASS");
-        assert_eq!(host(), "MiSTer address was not resolved");
-        assert_eq!(user(), "root");
-        assert_eq!(pass(), "1");
-        env::set_var("MISTER_IP", "192.0.2.1");
-        env::set_var("MISTER_USER", "operator");
-        env::set_var("MISTER_PASS", "secret");
-        assert_eq!(host(), "192.0.2.1");
-        assert_eq!(user(), "operator");
-        assert_eq!(pass(), "secret");
-        match old_ip {
-            Some(value) => env::set_var("MISTER_IP", value),
-            None => env::remove_var("MISTER_IP"),
-        }
-        match old_user {
-            Some(value) => env::set_var("MISTER_USER", value),
-            None => env::remove_var("MISTER_USER"),
-        }
-        match old_pass {
-            Some(value) => env::set_var("MISTER_PASS", value),
-            None => env::remove_var("MISTER_PASS"),
-        }
+        assert_eq!(host_from(None), "MiSTer address was not resolved");
+        assert_eq!(user_from(None), "root");
+        assert_eq!(pass_from(None), "1");
+        assert_eq!(host_from(Some("192.0.2.1")), "192.0.2.1");
+        assert_eq!(user_from(Some("operator")), "operator");
+        assert_eq!(pass_from(Some("secret")), "secret");
     }
 
     #[test]

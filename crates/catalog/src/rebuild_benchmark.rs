@@ -6,7 +6,7 @@
 use crate::catalog_classify::SystemId;
 use crate::catalog_domain::ScanUnitId;
 use crate::reconciliation_executor::{
-    execute_reconciliation, MaterializedSystem, ReconciliationError, ReconciliationMaterializer,
+    MaterializedSystem, ReconciliationError, ReconciliationMaterializer, execute_reconciliation,
 };
 use crate::shard_registry::RegistryLimits;
 use crate::sharded_catalog::{PlannedSystem, PlannedSystemAction, ReconcilePlan, ReconcileReason};
@@ -219,8 +219,10 @@ impl ReconciliationMaterializer for BenchmarkMaterializer {
             family: "Fixture".to_string(),
             order: u32::try_from(generation)
                 .map_err(|_| ReconciliationError::new("benchmark", "generation exceeds u32"))?,
-            producers: vec![ScanUnitId::parse(&format!("{}-root", system_id.as_str()))
-                .map_err(|error| ReconciliationError::new("benchmark", error.to_string()))?],
+            producers: vec![
+                ScanUnitId::parse(&format!("{}-root", system_id.as_str()))
+                    .map_err(|error| ReconciliationError::new("benchmark", error.to_string()))?,
+            ],
             projection_stats: None,
             games,
         })

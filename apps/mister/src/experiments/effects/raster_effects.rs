@@ -7,7 +7,7 @@
 use std::time::Instant;
 
 pub use super::camera_effects::pixel_to_rgb888;
-use super::camera_effects::{color, synthetic_images, CameraImage, CameraPixel};
+use super::camera_effects::{CameraImage, CameraPixel, color, synthetic_images};
 use super::render_helpers::{clear, elapsed_us, time};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

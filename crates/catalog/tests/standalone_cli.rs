@@ -58,9 +58,11 @@ fn catalog_lab_creates_a_deterministic_synthetic_library() {
         .output()
         .unwrap();
     assert!(output.status.success(), "{:?}", output);
-    assert!(String::from_utf8(output.stdout)
-        .unwrap()
-        .contains("files=9"));
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("files=9")
+    );
     let manifest: serde_json::Value =
         serde_json::from_slice(&std::fs::read(fixture.join("fixture.json")).unwrap()).unwrap();
     assert_eq!(
@@ -68,9 +70,11 @@ fn catalog_lab_creates_a_deterministic_synthetic_library() {
         "mister-magik-synthetic-catalog-fixture-v1"
     );
     assert_eq!(manifest["files"], 9);
-    assert!(fixture
-        .join("games/C64/level-00-00/level-01-00/bucket-00000000/Synthetic C64 00000002.d64")
-        .is_file());
+    assert!(
+        fixture
+            .join("games/C64/level-00-00/level-01-00/bucket-00000000/Synthetic C64 00000002.d64")
+            .is_file()
+    );
     std::fs::remove_dir_all(temp).unwrap();
 }
 
@@ -115,14 +119,18 @@ fn catalog_lab_bootstraps_and_reopens_a_fixture_without_magik() {
     };
     let first = run();
     assert!(first.status.success(), "{:?}", first);
-    assert!(String::from_utf8(first.stdout)
-        .unwrap()
-        .contains("generation=1\tgames=2\tpublished=1"));
+    assert!(
+        String::from_utf8(first.stdout)
+            .unwrap()
+            .contains("generation=1\tgames=2\tpublished=1")
+    );
     let second = run();
     assert!(second.status.success(), "{:?}", second);
-    assert!(String::from_utf8(second.stdout)
-        .unwrap()
-        .contains("generation=1\tgames=2\tpublished=0"));
+    assert!(
+        String::from_utf8(second.stdout)
+            .unwrap()
+            .contains("generation=1\tgames=2\tpublished=0")
+    );
     std::fs::remove_dir_all(temp).unwrap();
 }
 
@@ -178,10 +186,12 @@ fn production_builder_publishes_v3_without_creating_v2_artifacts() {
     assert!(report.contains("catalog_v3_summary_tsv\tvalid=1\tschema=1"));
     assert!(report.contains("\tsystems=2\ttotal_games=3\tarcade_resident_games=1"));
     assert_eq!(report.matches("catalog_v3_system_tsv").count(), 2);
-    assert!(report
-        .lines()
-        .filter(|line| line.starts_with("catalog_v3_system_tsv"))
-        .all(|line| line.contains("\tpreview_keys=") && line.contains("\tavailable_previews=")));
+    assert!(
+        report
+            .lines()
+            .filter(|line| line.starts_with("catalog_v3_system_tsv"))
+            .all(|line| line.contains("\tpreview_keys=") && line.contains("\tavailable_previews="))
+    );
     assert!(!legacy.exists());
     assert!(!temp.join("library.summary.json").exists());
     assert!(!temp.join("library.nav.lz4b").exists());

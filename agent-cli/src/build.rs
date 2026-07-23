@@ -1028,15 +1028,13 @@ fn home_dir() -> AgentResult<PathBuf> {
 
 fn sha256(path: &Path) -> AgentResult<String> {
     for (program, args) in [("shasum", vec!["-a", "256"]), ("sha256sum", Vec::new())] {
-        if let Ok(output) = Command::new(program).args(args).arg(path).output() {
-            if output.status.success() {
-                if let Some(value) = String::from_utf8_lossy(&output.stdout)
-                    .split_whitespace()
-                    .next()
-                {
-                    return Ok(value.to_lowercase());
-                }
-            }
+        if let Ok(output) = Command::new(program).args(args).arg(path).output()
+            && output.status.success()
+            && let Some(value) = String::from_utf8_lossy(&output.stdout)
+                .split_whitespace()
+                .next()
+        {
+            return Ok(value.to_lowercase());
         }
     }
     Err(format!("cannot hash {}", path.display()).into())
@@ -1148,12 +1146,16 @@ mod tests {
             device.cache_identity,
             BuildSpec::canonical(UiScope::Launcher).cache_identity
         );
-        assert!(BuildSpec::canonical(UiScope::Launcher)
-            .cache_identity
-            .ends_with(":launcher"));
-        assert!(!BuildSpec::canonical(UiScope::Launcher)
-            .cache_identity
-            .contains(":all:launcher"));
+        assert!(
+            BuildSpec::canonical(UiScope::Launcher)
+                .cache_identity
+                .ends_with(":launcher")
+        );
+        assert!(
+            !BuildSpec::canonical(UiScope::Launcher)
+                .cache_identity
+                .contains(":all:launcher")
+        );
     }
 
     #[test]

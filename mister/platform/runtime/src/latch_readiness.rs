@@ -4,7 +4,7 @@
 //! Stable latch-readiness vocabulary shared by runtime policy and diagnostics.
 
 use serde::{Deserialize, Serialize};
-use std::fs::{create_dir_all, rename, OpenOptions};
+use std::fs::{OpenOptions, create_dir_all, rename};
 use std::io::{self, Write};
 use std::path::Path;
 
@@ -403,9 +403,11 @@ mod tests {
             persisted["expected_kernel_release"],
             mister_magik_scanout_contract::QUALIFIED_KERNEL_RELEASE
         );
-        assert!(!root
-            .join(format!("nested/readiness.json.tmp.{}", std::process::id()))
-            .exists());
+        assert!(
+            !root
+                .join(format!("nested/readiness.json.tmp.{}", std::process::id()))
+                .exists()
+        );
         fs::remove_dir_all(root).unwrap();
     }
 }

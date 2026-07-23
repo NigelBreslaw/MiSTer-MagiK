@@ -1,9 +1,9 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::framebuffer::downsample::{downsample_rgb565_2x, Rgb565FrameView};
+use crate::framebuffer::downsample::{Rgb565FrameView, downsample_rgb565_2x};
 use mister_magik_framebuffer_stream::{
-    write_frame, FrameGeometry, FrameHeader, FrameKind, FrameRect, FLAG_LZ4_SIZE_PREPENDED,
+    FLAG_LZ4_SIZE_PREPENDED, FrameGeometry, FrameHeader, FrameKind, FrameRect, write_frame,
 };
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::io;
@@ -527,7 +527,8 @@ fn run_worker(queue: Arc<WorkerQueue>) {
     let mut encoder = StreamEncoder::new();
     let mut sequence = 0_u64;
     loop {
-        match queue.recv_timeout(Duration::from_millis(500)) {
+        let event = queue.recv_timeout(Duration::from_millis(500));
+        match event {
             WorkerEvent::Subscriber(stream) => {
                 subscriber = Some(stream);
                 sequence = 0;

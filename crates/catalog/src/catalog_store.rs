@@ -8,7 +8,7 @@
 use crate::bounded_lz4;
 use crate::catalog_checkpoint::CatalogDiscoveryCheckpoint;
 use crate::catalog_stamp::CatalogStamp;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 
 const MAX_COMPRESSED_LINE_STORE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_COMPRESSED_LINE_STORE_PAYLOAD_BYTES: i64 = 64 * 1024 * 1024;
@@ -266,9 +266,11 @@ mod tests {
         let conn = Connection::open_in_memory().expect("open sqlite");
 
         assert!(read_catalog_stamp(&conn).expect("read missing").is_none());
-        assert!(read_catalog_discovery_checkpoint(&conn)
-            .expect("read missing checkpoint")
-            .is_none());
+        assert!(
+            read_catalog_discovery_checkpoint(&conn)
+                .expect("read missing checkpoint")
+                .is_none()
+        );
     }
 
     #[test]

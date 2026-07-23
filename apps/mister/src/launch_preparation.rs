@@ -1425,9 +1425,11 @@ mod tests {
             decode_launch_component("Agony%XZ").expect_err("bad hex"),
             "invalid percent escape in launch ref"
         );
-        assert!(decode_launch_component("%ff")
-            .expect_err("bad utf8")
-            .contains("invalid UTF-8 in launch ref"));
+        assert!(
+            decode_launch_component("%ff")
+                .expect_err("bad utf8")
+                .contains("invalid UTF-8 in launch ref")
+        );
     }
 
     #[test]

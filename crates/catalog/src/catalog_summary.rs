@@ -3,7 +3,7 @@
 
 //! Compact catalog summary projection for warm launcher startup.
 
-use crate::arcade_catalog::{ArcadeCatalog, ArcadeGameEntry, PlatformKind, MENU_ARCADE_SYSTEM_ID};
+use crate::arcade_catalog::{ArcadeCatalog, ArcadeGameEntry, MENU_ARCADE_SYSTEM_ID, PlatformKind};
 use crate::catalog_config::{CATALOG_BUILD_VERSION, SCHEMA_VERSION};
 use crate::catalog_load_metrics;
 use crate::catalog_stamp::CatalogStamp;
@@ -87,7 +87,7 @@ pub fn read_catalog_summary(
             return Err(format!(
                 "read catalog summary {}: {e}",
                 summary_path.display()
-            ))
+            ));
         }
     };
     let summary: CatalogSummaryProjection = serde_json::from_str(&text)

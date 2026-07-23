@@ -9,13 +9,13 @@ use crate::arcade_catalog::{
 };
 use crate::catalog_checkpoint::{self, CatalogDriftSummary};
 use crate::catalog_config::{
-    default_hbmame_sqlite_path, default_mame_sqlite_path, default_sqlite_path,
-    DEFAULT_SQLITE_BUILD_DIR, SCHEMA_VERSION,
+    DEFAULT_SQLITE_BUILD_DIR, SCHEMA_VERSION, default_hbmame_sqlite_path, default_mame_sqlite_path,
+    default_sqlite_path,
 };
 use crate::catalog_discovery;
 use crate::catalog_load_metrics;
 use crate::catalog_navigation;
-use crate::catalog_progress::{report_catalog_progress, CatalogProgress};
+use crate::catalog_progress::{CatalogProgress, report_catalog_progress};
 use crate::catalog_projection::{
     self, ArcadeCompatibilityRow, ArcadePreviewProjection, CanonicalLaunchIdIndex,
     CatalogProjectionRow, CatalogProjectionSource, LauncherPreviewAsset,
@@ -27,10 +27,10 @@ use crate::core_audit;
 #[cfg(test)]
 use crate::game_discovery::unique_discovery_count;
 use crate::game_discovery::{
-    catalog_system_id_for_discovery, confidence_str, covered_payload_paths, is_launcher_launch_ref,
-    is_raw_arcade_zip_set_discovery, launch_kind_for_discovery, launch_ref_for_discovery,
-    preferred_playable_discoveries_by_key, profile_id_for_discovery, DiscoverySourceKind,
-    GameDiscovery,
+    DiscoverySourceKind, GameDiscovery, catalog_system_id_for_discovery, confidence_str,
+    covered_payload_paths, is_launcher_launch_ref, is_raw_arcade_zip_set_discovery,
+    launch_kind_for_discovery, launch_ref_for_discovery, preferred_playable_discoveries_by_key,
+    profile_id_for_discovery,
 };
 use crate::launch_profiles::{self, LaunchProfile, MountKind, MountSpec, RuleSourceKind};
 use crate::library_db::{
@@ -41,19 +41,39 @@ use crate::media_identity;
 use crate::media_metadata;
 use crate::preview_worker;
 use crate::software_identity::{
-    console_preview_asset, load_arcade_machine_metadata_for_setnames, load_mame_software_metadata,
+    PreviewArchivePaths, SoftwareHashCache, console_preview_asset,
+    load_arcade_machine_metadata_for_setnames, load_mame_software_metadata,
     mame_identity_for_discovery, mame_identity_projection, mame_software_identity_for_discovery,
-    PreviewArchivePaths, SoftwareHashCache,
 };
 use rusqlite::functions::FunctionFlags;
 use rusqlite::types::ValueRef;
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+
+thread_local! {
+    static PUBLISH_BENCH_ITERATION: std::cell::Cell<Option<usize>> = const {
+        std::cell::Cell::new(None)
+    };
+}
+
+struct PublishBenchIterationGuard(Option<usize>);
+
+impl Drop for PublishBenchIterationGuard {
+    fn drop(&mut self) {
+        PUBLISH_BENCH_ITERATION.set(self.0);
+    }
+}
+
+pub(crate) fn with_publish_bench_iteration<T>(iteration: usize, action: impl FnOnce() -> T) -> T {
+    let previous = PUBLISH_BENCH_ITERATION.replace(Some(iteration));
+    let _guard = PublishBenchIterationGuard(previous);
+    action()
+}
 
 const NEW_GAME_BADGE_SECS: i64 = 14 * 24 * 60 * 60;
 const SQLITE_PUBLISH_COPY_CHUNK_BYTES: usize = 256 * 1024;
@@ -657,36 +677,35 @@ fn load_arcade_catalog_from_connection(
 ) -> Result<LibraryCatalogLoad, String> {
     let root = root.as_ref().to_path_buf();
     let query_t = Instant::now();
-    if allow_embedded_navigation {
-        if let Some(stamp) = stamp.as_ref() {
-            if let Some(projection) = load_embedded_catalog_navigation(conn, stamp)? {
-                let query_us = query_t.elapsed().as_micros() as u64;
-                let rows = projection.games.len();
-                let catalog_t = Instant::now();
-                let catalog = ArcadeCatalog::from_navigation_projection(root, projection);
-                let catalog_us = catalog_t.elapsed().as_micros() as u64;
-                return Ok(LibraryCatalogLoad {
-                    catalog,
-                    stamp: Some(stamp.clone()),
-                    projection_repair_safe: true,
-                    us: started.elapsed().as_micros() as u64,
-                    open_us,
-                    schema_check_us,
-                    query_us,
-                    query_prepare_us: 0,
-                    query_first_row_us: 0,
-                    query_row_read_us: 0,
-                    query_row_hydrate_us: 0,
-                    launch_plans_us: 0,
-                    systems_us: 0,
-                    catalog_us,
-                    navigation_file_read_us: 0,
-                    navigation_decompress_us: 0,
-                    navigation_decode_us: 0,
-                    rows,
-                });
-            }
-        }
+    if allow_embedded_navigation
+        && let Some(stamp) = stamp.as_ref()
+        && let Some(projection) = load_embedded_catalog_navigation(conn, stamp)?
+    {
+        let query_us = query_t.elapsed().as_micros() as u64;
+        let rows = projection.games.len();
+        let catalog_t = Instant::now();
+        let catalog = ArcadeCatalog::from_navigation_projection(root, projection);
+        let catalog_us = catalog_t.elapsed().as_micros() as u64;
+        return Ok(LibraryCatalogLoad {
+            catalog,
+            stamp: Some(stamp.clone()),
+            projection_repair_safe: true,
+            us: started.elapsed().as_micros() as u64,
+            open_us,
+            schema_check_us,
+            query_us,
+            query_prepare_us: 0,
+            query_first_row_us: 0,
+            query_row_read_us: 0,
+            query_row_hydrate_us: 0,
+            launch_plans_us: 0,
+            systems_us: 0,
+            catalog_us,
+            navigation_file_read_us: 0,
+            navigation_decompress_us: 0,
+            navigation_decode_us: 0,
+            rows,
+        });
     }
     let mut query_timing = CatalogSqlQueryTiming::default();
     let (games, projection_repair_safe) = match load_materialized_launcher_catalog(conn) {
@@ -1911,8 +1930,7 @@ fn emit_sqlite_save_progress(progress: &mut ProgressCallback<'_>, done: u64, tot
 fn report_sqlite_publish_metrics(metrics: &SqlitePublishMetrics, result: &str) {
     let label =
         std::env::var("MISTER_LIBRARY_BENCH_LABEL").unwrap_or_else(|_| "LIB-BENCH".to_string());
-    let iteration =
-        std::env::var("MISTER_LIBRARY_BENCH_ACTIVE_ITERATION").unwrap_or_else(|_| "0".to_string());
+    let iteration = PUBLISH_BENCH_ITERATION.get().unwrap_or_default();
     crate::catalog_logln!(
         "library_sqlite_publish_tsv\t{label}\t{iteration}\tprogress\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
         metrics.bytes,
@@ -2024,10 +2042,10 @@ pub(crate) fn sqlite_temp_path(path: &Path) -> PathBuf {
 }
 
 pub(crate) fn sync_parent_dir(path: &Path) {
-    if let Some(parent) = path.parent() {
-        if let Ok(dir) = File::open(parent) {
-            let _ = dir.sync_all();
-        }
+    if let Some(parent) = path.parent()
+        && let Ok(dir) = File::open(parent)
+    {
+        let _ = dir.sync_all();
     }
 }
 
@@ -4115,7 +4133,7 @@ mod tests {
     use crate::arcade_catalog::GameSystemEntry;
     use crate::catalog_config::{DEFAULT_SQLITE_BUILD_DIR, SCHEMA_VERSION};
     use crate::library_db::{
-        save_scan_artifact_to_sqlite, scan_library_artifact, BenchConfig, ProgressCallback,
+        BenchConfig, ProgressCallback, save_scan_artifact_to_sqlite, scan_library_artifact,
     };
 
     #[test]
@@ -4717,11 +4735,13 @@ mod tests {
             sqlite_path: db.clone(),
         };
         let artifact = scan_library_artifact(&cfg, None);
-        assert!(artifact
-            .scan
-            .profiles
-            .iter()
-            .any(|profile| profile.id == "colecovision"));
+        assert!(
+            artifact
+                .scan
+                .profiles
+                .iter()
+                .any(|profile| profile.id == "colecovision")
+        );
 
         save_scan_artifact_to_sqlite(&cfg, artifact, None).expect("save artifact");
 
@@ -4778,9 +4798,10 @@ mod tests {
         let plan = sqlite_build_temp_plan_for(path, None);
 
         assert_eq!(plan.source, SqliteBuildTempSource::DefaultTmpfs);
-        assert!(plan
-            .build_tmp_path
-            .starts_with(Path::new(DEFAULT_SQLITE_BUILD_DIR)));
+        assert!(
+            plan.build_tmp_path
+                .starts_with(Path::new(DEFAULT_SQLITE_BUILD_DIR))
+        );
         let expected_name = format!(".library.sqlite3.build.{}", std::process::id());
         assert_eq!(
             plan.build_tmp_path
@@ -4956,11 +4977,13 @@ mod tests {
 
         assert_eq!(loaded.rows, ROWS);
         assert_eq!(loaded.catalog.games.len(), ROWS);
-        assert!(loaded
-            .catalog
-            .games
-            .iter()
-            .any(|game| game.title.as_ref() == "Game 20004"));
+        assert!(
+            loaded
+                .catalog
+                .games
+                .iter()
+                .any(|game| game.title.as_ref() == "Game 20004")
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -5578,10 +5601,12 @@ mod tests {
         let missing_ref = "magik-plan:payload:/media/fat/games/Saturn/Missing.chd";
         let catalog = ArcadeCatalog::new_with_deferred_text_indexes(
             PathBuf::from(arcade_catalog::DEFAULT_ARCADE_ROOT),
-            vec![arcade_game("Missing")
-                .path(missing_ref)
-                .system_id("saturn")
-                .build()],
+            vec![
+                arcade_game("Missing")
+                    .path(missing_ref)
+                    .system_id("saturn")
+                    .build(),
+            ],
             vec![GameSystemEntry {
                 id: "saturn".to_string(),
                 title: "Saturn".to_string(),
@@ -5620,10 +5645,12 @@ mod tests {
         let world_ref = world.launch_ref.clone();
         let catalog = ArcadeCatalog::new_with_deferred_text_indexes(
             PathBuf::from(arcade_catalog::DEFAULT_ARCADE_ROOT),
-            vec![arcade_game("1942 (World)")
-                .path(&world_ref)
-                .preview("1942")
-                .build()],
+            vec![
+                arcade_game("1942 (World)")
+                    .path(&world_ref)
+                    .preview("1942")
+                    .build(),
+            ],
             vec![GameSystemEntry {
                 id: "arcade".to_string(),
                 title: "Arcade".to_string(),
@@ -5726,10 +5753,12 @@ mod tests {
         discovery.parent = Some("puckman".to_string());
         let catalog = ArcadeCatalog::new_with_deferred_text_indexes(
             PathBuf::from(arcade_catalog::DEFAULT_ARCADE_ROOT),
-            vec![arcade_game("Pac-Manic Miner")
-                .path(path)
-                .preview("puckman")
-                .build()],
+            vec![
+                arcade_game("Pac-Manic Miner")
+                    .path(path)
+                    .preview("puckman")
+                    .build(),
+            ],
             vec![GameSystemEntry {
                 id: "arcade".to_string(),
                 title: "Arcade".to_string(),
@@ -5927,20 +5956,21 @@ mod tests {
             retained_summary.catalog_stamp_fingerprint,
             old_stamp.fingerprint_hex()
         );
-        assert!(catalog_navigation::read_catalog_navigation_projection(
-            &navigation_path,
-            &new_stamp
-        )
-        .expect("read replaced navigation")
-        .is_some());
+        assert!(
+            catalog_navigation::read_catalog_navigation_projection(&navigation_path, &new_stamp)
+                .expect("read replaced navigation")
+                .is_some()
+        );
         let loaded = load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db)
             .expect("new sqlite database should remain live");
         assert_eq!(loaded.catalog.len(), 2);
-        assert!(loaded
-            .catalog
-            .games
-            .iter()
-            .any(|game| game.title.as_ref() == "New Beta"));
+        assert!(
+            loaded
+                .catalog
+                .games
+                .iter()
+                .any(|game| game.title.as_ref() == "New Beta")
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -6141,10 +6171,12 @@ mod tests {
         .expect("read repaired projection")
         .expect("repaired projection exists");
         let repaired = ArcadeCatalog::from_navigation_projection("/media/fat/_Arcade", repaired);
-        assert!(hydrated
-            .catalog
-            .filter_option_mismatches(&repaired)
-            .is_empty());
+        assert!(
+            hydrated
+                .catalog
+                .filter_option_mismatches(&repaired)
+                .is_empty()
+        );
         assert_eq!(repaired.manufacturer_option_count("arcade"), 2);
         let _ = std::fs::remove_dir_all(root);
     }
@@ -6722,13 +6754,17 @@ mod tests {
                 .expect("payload_path")
         );
         assert!(sqlite_column_exists(&conn, "games", "game_key_id").expect("game_key_id"));
-        assert!(sqlite_column_exists(&conn, "launch_targets", "game_key_id")
-            .expect("target game_key_id"));
+        assert!(
+            sqlite_column_exists(&conn, "launch_targets", "game_key_id")
+                .expect("target game_key_id")
+        );
         assert!(
             sqlite_column_exists(&conn, "launch_targets", "mount_kind").expect("target mount_kind")
         );
-        assert!(sqlite_column_exists(&conn, "launch_targets", "mount_index")
-            .expect("target mount_index"));
+        assert!(
+            sqlite_column_exists(&conn, "launch_targets", "mount_index")
+                .expect("target mount_index")
+        );
         assert!(
             sqlite_column_exists(&conn, "launch_targets", "delay_secs").expect("target delay_secs")
         );

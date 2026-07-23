@@ -4,7 +4,9 @@
 [package]
 name = "mister-magik-catalog"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.97.1"
+# Keep catalog builds aligned with the repository's pinned Rust toolchain.
 description = "Catalog, library scan, and preview-loading logic for MiSTer MagiK."
 license = "GPL-3.0-or-later"
 

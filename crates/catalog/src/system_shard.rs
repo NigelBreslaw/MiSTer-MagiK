@@ -673,7 +673,12 @@ fn optional_projection_stats(
         optional_usize(connection, "visible_family_count")?,
         optional_usize(connection, "collapsed_variant_count")?,
     ];
-    let [Some(source_games), Some(visible_families), Some(collapsed_variants)] = values else {
+    let [
+        Some(source_games),
+        Some(visible_families),
+        Some(collapsed_variants),
+    ] = values
+    else {
         if values.iter().all(Option::is_none) {
             return Ok(None);
         }

@@ -870,14 +870,18 @@ mod tests {
             .find(|operation| operation.id == "app.ui-tests")
             .unwrap();
         assert!(!tests.args.contains(&"--lib".into()));
-        assert!(tests
-            .args
-            .windows(2)
-            .any(|args| args == ["--bin", "mister-magik-fb"]));
+        assert!(
+            tests
+                .args
+                .windows(2)
+                .any(|args| args == ["--bin", "mister-magik-fb"])
+        );
         assert!(tests.args.contains(&"ui".into()));
-        assert!(tests
-            .args
-            .contains(&"launcher_catalog_session::tests".into()));
+        assert!(
+            tests
+                .args
+                .contains(&"launcher_catalog_session::tests".into())
+        );
     }
 
     #[test]
@@ -975,10 +979,11 @@ mod tests {
             vec!["scripts/rust-analyzer".into()],
         )
         .unwrap();
-        assert!(plan
-            .operations
-            .iter()
-            .any(|operation| { operation.id == "script.syntax.scripts-rust-analyzer" }));
+        assert!(
+            plan.operations
+                .iter()
+                .any(|operation| { operation.id == "script.syntax.scripts-rust-analyzer" })
+        );
     }
 
     #[test]
@@ -990,18 +995,21 @@ mod tests {
             vec!["scripts/definitely-deleted-script.sh".into()],
         )
         .unwrap();
-        assert!(plan
-            .operations
-            .iter()
-            .all(|operation| !operation.id.starts_with("script.syntax.")));
-        assert!(plan
-            .operations
-            .iter()
-            .any(|operation| operation.id == "repo.diff-check"));
-        assert!(plan
-            .operations
-            .iter()
-            .all(|operation| operation.id != "scripts.licenses"));
+        assert!(
+            plan.operations
+                .iter()
+                .all(|operation| !operation.id.starts_with("script.syntax."))
+        );
+        assert!(
+            plan.operations
+                .iter()
+                .any(|operation| operation.id == "repo.diff-check")
+        );
+        assert!(
+            plan.operations
+                .iter()
+                .all(|operation| operation.id != "scripts.licenses")
+        );
     }
 
     #[test]
@@ -1015,10 +1023,11 @@ mod tests {
         .unwrap();
         assert_eq!(plan.external_requirements.len(), 1);
         assert!(!plan.operations.is_empty());
-        assert!(plan
-            .operations
-            .iter()
-            .all(|operation| !operation.program.to_ascii_lowercase().contains("quartus")));
+        assert!(
+            plan.operations
+                .iter()
+                .all(|operation| !operation.program.to_ascii_lowercase().contains("quartus"))
+        );
     }
 
     #[test]
@@ -1031,9 +1040,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(plan.external_requirements.len(), 1);
-        assert!(plan.external_requirements[0]
-            .message
-            .contains("Under no circumstances"));
+        assert!(
+            plan.external_requirements[0]
+                .message
+                .contains("Under no circumstances")
+        );
     }
 
     #[test]

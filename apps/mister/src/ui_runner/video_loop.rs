@@ -549,7 +549,11 @@ pub(super) fn run_video_playback_loop(
             let (target_width, target_height) = size_animation.target_dimensions();
             crate::ui_logln!(
                 "video_size_transition trigger={} start={}x{} target={}x{} animation=spring-smooth response_ms={}",
-                if controller_toggle { "controller-a" } else { "automatic" },
+                if controller_toggle {
+                    "controller-a"
+                } else {
+                    "automatic"
+                },
                 width,
                 height,
                 target_width,

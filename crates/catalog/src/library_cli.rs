@@ -7,8 +7,8 @@ use crate::catalog_config::default_sqlite_path;
 use crate::catalog_scan;
 use crate::library_db::{self, BenchConfig};
 use crate::sqlite_inspect::{
-    append_sqlite_timing_row, sqlite_cell_to_string, sqlite_query_hash,
-    sqlite_statement_is_inspect_only, SqliteInspectTiming,
+    SqliteInspectTiming, append_sqlite_timing_row, sqlite_cell_to_string, sqlite_query_hash,
+    sqlite_statement_is_inspect_only,
 };
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
@@ -52,14 +52,11 @@ pub(crate) fn run_scan_bench() {
         let build_us = build_t.elapsed().as_micros() as u64;
 
         let import_t = Instant::now();
-        std::env::set_var(
-            "MISTER_LIBRARY_BENCH_ACTIVE_ITERATION",
-            iteration.to_string(),
-        );
-        let summary = match library_db::save_scan_artifact_to_sqlite(&cfg, artifact, None) {
+        let summary = match crate::sqlite_catalog::with_publish_bench_iteration(iteration, || {
+            library_db::save_scan_artifact_to_sqlite(&cfg, artifact, None)
+        }) {
             Ok(summary) => summary,
             Err(e) => {
-                std::env::remove_var("MISTER_LIBRARY_BENCH_ACTIVE_ITERATION");
                 crate::catalog_logln!(
                     "library_scan_bench_tsv\t{label}\t{iteration}\timport_error\t{}\t{e}",
                     import_t.elapsed().as_micros()
@@ -67,7 +64,6 @@ pub(crate) fn run_scan_bench() {
                 continue;
             }
         };
-        std::env::remove_var("MISTER_LIBRARY_BENCH_ACTIVE_ITERATION");
         let import_us = import_t.elapsed().as_micros() as u64;
         let bytes = summary.bytes;
 
@@ -136,7 +132,10 @@ pub(crate) fn run_scan_bench() {
                 check.checkpoint_compare_us,
                 check.stored_fingerprint.as_deref().unwrap_or("missing"),
                 check.current_fingerprint,
-                check.stored_checkpoint_fingerprint.as_deref().unwrap_or("missing"),
+                check
+                    .stored_checkpoint_fingerprint
+                    .as_deref()
+                    .unwrap_or("missing"),
                 check.current_checkpoint_fingerprint,
                 check.stored_lines,
                 check.current_lines,

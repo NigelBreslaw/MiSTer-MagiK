@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use ssh2::Session;
 use std::collections::BTreeSet;
 use std::env;
@@ -10,7 +10,7 @@ use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddrV4, TcpStream};
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -73,10 +73,10 @@ fn select_candidate(remembered: Option<&Device>, scan: ScanOutcome) -> Result<De
         mut found,
         access_denied,
     } = scan;
-    if let Some(device) = remembered {
-        if let Some(index) = found.iter().position(|candidate| candidate.id == device.id) {
-            return Ok(found.remove(index));
-        }
+    if let Some(device) = remembered
+        && let Some(index) = found.iter().position(|candidate| candidate.id == device.id)
+    {
+        return Ok(found.remove(index));
     }
     match found.len() {
         0 if access_denied => Err(ACCESS_DENIED_MESSAGE.into()),
@@ -206,11 +206,13 @@ fn scan(subnets: &[[u8; 3]], timeout: Duration) -> ScanOutcome {
     for _ in 0..WORKERS {
         let jobs = Arc::clone(&job_rx);
         let found = found_tx.clone();
-        workers.push(thread::spawn(move || loop {
-            let Ok(ip) = jobs.lock().expect("discovery lock poisoned").recv() else {
-                break;
-            };
-            let _ = found.send(probe(ip, timeout));
+        workers.push(thread::spawn(move || {
+            loop {
+                let Ok(ip) = jobs.lock().expect("discovery lock poisoned").recv() else {
+                    break;
+                };
+                let _ = found.send(probe(ip, timeout));
+            }
         }));
     }
     drop(found_tx);
@@ -348,22 +350,26 @@ mod tests {
             .unwrap(),
             moved
         );
-        assert!(select_candidate(
-            None,
-            ScanOutcome {
-                found: vec![first, remembered],
-                access_denied: false,
-            }
-        )
-        .is_err());
-        assert!(select_candidate(
-            None,
-            ScanOutcome {
-                found: Vec::new(),
-                access_denied: false,
-            }
-        )
-        .is_err());
+        assert!(
+            select_candidate(
+                None,
+                ScanOutcome {
+                    found: vec![first, remembered],
+                    access_denied: false,
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            select_candidate(
+                None,
+                ScanOutcome {
+                    found: Vec::new(),
+                    access_denied: false,
+                }
+            )
+            .is_err()
+        );
     }
 
     #[test]

@@ -3,6 +3,7 @@
 
 //! FFmpeg-backed media pump for the Slint video benchmark.
 
+use ffmpeg::ChannelLayout;
 use ffmpeg::codec;
 use ffmpeg::format;
 use ffmpeg::media;
@@ -11,18 +12,18 @@ use ffmpeg::util::format::pixel::Pixel as FfmpegPixel;
 use ffmpeg::util::format::sample::{Sample, Type as SampleType};
 use ffmpeg::util::frame::audio::Audio;
 use ffmpeg::util::frame::video::Video;
-use ffmpeg::ChannelLayout;
 use ffmpeg::{codec::packet::Packet, util::error::EAGAIN};
 use ffmpeg_next as ffmpeg;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{
+    Arc,
     atomic::{AtomicU32, Ordering},
-    mpsc, Arc,
+    mpsc,
 };
 use std::time::{Duration, Instant};
 
-use mister_magik_catalog::runtime_thread::{apply_runtime_thread_policy, RuntimeThreadRole};
+use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
 
 use crate::video_i420::{convert_i420_to_rgb565, convert_i420_to_rgb565_2x_rust_optimized};
 
@@ -56,11 +57,11 @@ pub fn video_paths_from_env() -> Result<Vec<String>, String> {
             return Ok(paths);
         }
     }
-    Ok(vec![mister_magik_catalog::device_layout::current_app_path(
-        "mslug3.mov",
-    )
-    .display()
-    .to_string()])
+    Ok(vec![
+        mister_magik_catalog::device_layout::current_app_path("mslug3.mov")
+            .display()
+            .to_string(),
+    ])
 }
 
 fn sorted_mp4_files(dir: PathBuf) -> Result<Vec<String>, String> {

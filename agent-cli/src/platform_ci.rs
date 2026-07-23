@@ -774,22 +774,26 @@ mod tests {
 
     #[test]
     fn stale_wrong_commit_and_failed_runs_are_not_reused() {
-        assert!(exact_success(
-            vec![run(1, "stale", "success"), run(2, "wanted", "failure")],
-            "main",
-            "wanted"
-        )
-        .unwrap()
-        .is_none());
+        assert!(
+            exact_success(
+                vec![run(1, "stale", "success"), run(2, "wanted", "failure")],
+                "main",
+                "wanted"
+            )
+            .unwrap()
+            .is_none()
+        );
     }
 
     #[test]
     fn successful_run_from_wrong_branch_is_not_reused() {
         let mut candidate = run(1, "wanted", "success");
         candidate.head_branch = "other".into();
-        assert!(exact_success(vec![candidate], "main", "wanted")
-            .unwrap()
-            .is_none());
+        assert!(
+            exact_success(vec![candidate], "main", "wanted")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

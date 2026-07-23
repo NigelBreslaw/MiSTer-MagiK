@@ -7,11 +7,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use crate::arcade_catalog::{
-    ArcadeGameEntry, ArcadeGameView, ARCADE_LIST_VISIBLE_H, ARCADE_ROW_HEIGHT,
+    ARCADE_LIST_VISIBLE_H, ARCADE_ROW_HEIGHT, ArcadeGameEntry, ArcadeGameView,
 };
 use crate::bitmap_text::{ConsoleFont, ConsoleTypeface, TextGradient};
 use crate::ui_display::{CrtContentRect, CrtUiMetrics};
-use mister_magik_fb::framebuffer::mapped::{pixel_to_rgb565, MappedRgb565Framebuffer, Pixel};
+use mister_magik_fb::framebuffer::mapped::{MappedRgb565Framebuffer, Pixel, pixel_to_rgb565};
 use mister_magik_fb::framebuffer::present::{copy_dense_rect_565, copy_strided_rect_565};
 use mister_magik_fb::framebuffer::scanout_slots::ScanoutSlotsRgb565Framebuffer;
 use mister_magik_fb::framebuffer::target::{DirtyRect, UiFrameTarget};
@@ -1956,9 +1956,11 @@ mod tests {
             renderer.draw(ArcadeGameView::contiguous(&games), 7, 7.0, false),
             Some(ArcadeListUpdate::Full(_))
         ));
-        assert!(renderer
-            .draw(ArcadeGameView::contiguous(&games), 7, 7.0, false)
-            .is_none());
+        assert!(
+            renderer
+                .draw(ArcadeGameView::contiguous(&games), 7, 7.0, false)
+                .is_none()
+        );
 
         games[3].title = "Changed visible row".into();
 
@@ -2287,9 +2289,11 @@ mod tests {
             ARCADE_LIST_H,
             |_, _, _, w, h| segments.push((w, h)),
         );
-        assert!(segments
-            .iter()
-            .all(|&(width, _)| width <= ARCADE_SEARCH_LIST_W));
+        assert!(
+            segments
+                .iter()
+                .all(|&(width, _)| width <= ARCADE_SEARCH_LIST_W)
+        );
 
         let update = ArcadeListUpdate::Full(DirtyRect {
             x0: 488,
@@ -2476,9 +2480,11 @@ mod tests {
             renderer.draw(ArcadeGameView::contiguous(&games), 7, 7.0, false),
             Some(ArcadeListUpdate::Full(_))
         ));
-        assert!(renderer
-            .draw(ArcadeGameView::contiguous(&games), 7, 7.0, false)
-            .is_none());
+        assert!(
+            renderer
+                .draw(ArcadeGameView::contiguous(&games), 7, 7.0, false)
+                .is_none()
+        );
 
         games[3].is_new = true;
 

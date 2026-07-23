@@ -4,7 +4,9 @@
 [package]
 name = "mister-magik-fb"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.97.1"
+# Keep device builds aligned with the repository's pinned Rust toolchain.
 description = "Native MiSTer MagiK frontend: owns the FPGA framebuffer and renders Slint."
 license = "GPL-3.0-or-later"
 

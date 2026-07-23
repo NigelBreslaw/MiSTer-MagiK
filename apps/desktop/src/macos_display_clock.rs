@@ -1,9 +1,9 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::platform_lifecycle::{seconds_to_microseconds, DisplayClockTick};
+use crate::platform_lifecycle::{DisplayClockTick, seconds_to_microseconds};
 use objc2::rc::Retained;
-use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
+use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
 use objc2_app_kit::NSView;
 use objc2_foundation::{NSObject, NSObjectProtocol, NSRunLoop, NSRunLoopCommonModes};
 use objc2_quartz_core::CADisplayLink;

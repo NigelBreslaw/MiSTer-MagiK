@@ -10,7 +10,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
-use crate::media_metadata::{inspect_mgl, resolve_mgl_payload_path, MglInspection};
+use crate::media_metadata::{MglInspection, inspect_mgl, resolve_mgl_payload_path};
 
 pub const PREPARED_COLLECTION_ADAPTER_VERSION: u32 = 5;
 
@@ -142,13 +142,12 @@ impl PreparedPayloadIndex {
                 continue;
             }
             let normalized = lexically_normalized_path(entry.path());
-            if let Some(key) = ascii_path_key(&normalized) {
-                if ascii_entries
+            if let Some(key) = ascii_path_key(&normalized)
+                && ascii_entries
                     .insert(key, normalized.clone())
                     .is_some_and(|previous| previous != normalized)
-                {
-                    complete = false;
-                }
+            {
+                complete = false;
             }
             let kind = entry.file_type();
             if kind.is_file() {
@@ -925,9 +924,11 @@ mod tests {
             r#"<mistergamedescription><rbf>Minimig</rbf><file path="game.vhd"/><reset/></mistergamedescription>"#,
         )
         .expect("write wrong core");
-        assert!(validate_0mhz_mgl(&wrong_core)
-            .expect_err("wrong core should fail")
-            .contains("expected AO486"));
+        assert!(
+            validate_0mhz_mgl(&wrong_core)
+                .expect_err("wrong core should fail")
+                .contains("expected AO486")
+        );
 
         let missing = dir.join("missing.mgl");
         std::fs::write(
@@ -935,9 +936,11 @@ mod tests {
             r#"<mistergamedescription><rbf>AO486</rbf><file path="missing.vhd"/><reset/></mistergamedescription>"#,
         )
         .expect("write missing payload");
-        assert!(validate_0mhz_mgl(&missing)
-            .expect_err("missing payload should fail")
-            .contains("payload is missing"));
+        assert!(
+            validate_0mhz_mgl(&missing)
+                .expect_err("missing payload should fail")
+                .contains("payload is missing")
+        );
 
         std::fs::write(dir.join("game.vhd"), b"vhd").expect("write vhd");
         let no_reset = dir.join("no-reset.mgl");
@@ -946,9 +949,11 @@ mod tests {
             r#"<mistergamedescription><rbf>AO486</rbf><file path="game.vhd"/></mistergamedescription>"#,
         )
         .expect("write no reset");
-        assert!(validate_0mhz_mgl(&no_reset)
-            .expect_err("missing reset should fail")
-            .contains("no reset"));
+        assert!(
+            validate_0mhz_mgl(&no_reset)
+                .expect_err("missing reset should fail")
+                .contains("no reset")
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -979,9 +984,11 @@ mod tests {
             r#"<mistergamedescription><rbf>X68000</rbf><file path="Keyboard + Mouse/game.hdf"/></mistergamedescription>"#,
         )
         .expect("write missing setname MGL");
-        assert!(validate_neon68k_mgl(&missing_setname)
-            .expect_err("missing setname should fail")
-            .contains("no setname"));
+        assert!(
+            validate_neon68k_mgl(&missing_setname)
+                .expect_err("missing setname should fail")
+                .contains("no setname")
+        );
 
         let missing_hdf = dir.join("missing-hdf.mgl");
         std::fs::write(
@@ -989,9 +996,11 @@ mod tests {
             r#"<mistergamedescription><rbf>X68000</rbf><setname>Missing</setname><file path="missing.hdf"/></mistergamedescription>"#,
         )
         .expect("write missing HDF MGL");
-        assert!(validate_neon68k_mgl(&missing_hdf)
-            .expect_err("missing HDF should fail")
-            .contains("payload is missing"));
+        assert!(
+            validate_neon68k_mgl(&missing_hdf)
+                .expect_err("missing HDF should fail")
+                .contains("payload is missing")
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1021,9 +1030,11 @@ mod tests {
         assert!(oneload64_provenance(&alternative).is_none());
         assert!(oneload64_provenance(&extra).is_none());
         assert_eq!(validate_prepared_launch_path(&primary), Ok(true));
-        assert!(validate_prepared_launch_path(&dump)
-            .expect_err("excluded prepared path should fail")
-            .contains("outside the primary"));
+        assert!(
+            validate_prepared_launch_path(&dump)
+                .expect_err("excluded prepared path should fail")
+                .contains("outside the primary")
+        );
 
         let unmarked = dir.join("General C64 CRTs/Game.crt");
         std::fs::create_dir_all(unmarked.parent().expect("unmarked parent"))

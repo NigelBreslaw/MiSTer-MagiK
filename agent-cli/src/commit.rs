@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::evidence::{now_ms, Evidence};
+use crate::evidence::{Evidence, now_ms};
 use crate::model::{Intent, Outcome, Scope};
 use crate::progress::{EventKind, Reporter};
 use std::collections::BTreeSet;
@@ -562,10 +562,8 @@ mod tests {
             task_id: &str,
             claim: bool,
         ) -> Result<(Outcome, String, String, Vec<PathBuf>), String> {
-            if claim {
-                if let Ok(paths) = crate::task::changes(&self.evidence, &self.root, task_id) {
-                    self.evidence.claim_task_paths(task_id, &paths)?;
-                }
+            if claim && let Ok(paths) = crate::task::changes(&self.evidence, &self.root, task_id) {
+                self.evidence.claim_task_paths(task_id, &paths)?;
             }
             let request = RawRequest::capture([
                 OsString::from("agent-cli"),
@@ -622,22 +620,28 @@ mod tests {
         );
         assert!(paths.contains(&PathBuf::from("docs/new.md")));
         assert_eq!(subject, "Test change");
-        assert!(git_text(&fixture.root, &["status", "--porcelain"])
-            .unwrap()
-            .is_empty());
-        assert!(fixture
-            .evidence
-            .active_task_ids(&fixture.root, "none")
-            .unwrap()
-            .is_empty());
+        assert!(
+            git_text(&fixture.root, &["status", "--porcelain"])
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            fixture
+                .evidence
+                .active_task_ids(&fixture.root, "none")
+                .unwrap()
+                .is_empty()
+        );
         let run_id = fixture.evidence.recent_runs(false, 1).unwrap()[0]
             .id
             .clone();
         let detail = fixture.evidence.run_detail(&run_id).unwrap().unwrap();
-        assert!(!detail
-            .events
-            .iter()
-            .any(|event| { event.kind == "completed" && event.phase == "commit" }));
+        assert!(
+            !detail
+                .events
+                .iter()
+                .any(|event| { event.kind == "completed" && event.phase == "commit" })
+        );
         let attempt = detail.commit_attempt.unwrap();
         assert_eq!(attempt.status, "committed");
         assert_eq!(attempt.commit_sha.as_deref(), Some(sha.as_str()));
@@ -651,11 +655,13 @@ mod tests {
         assert_eq!(committed.task_id, "task-a");
         assert_eq!(committed.commit_sha, sha);
         assert_eq!(committed.paths, paths);
-        assert!(fixture
-            .evidence
-            .active_task_ids(&fixture.root, "none")
-            .unwrap()
-            .is_empty());
+        assert!(
+            fixture
+                .evidence
+                .active_task_ids(&fixture.root, "none")
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -703,10 +709,12 @@ mod tests {
         fs::write(fixture.root.join("docs/existing.md"), "user change\n").unwrap();
         fixture.begin("dirty");
         fs::write(fixture.root.join("docs/existing.md"), "task change\n").unwrap();
-        assert!(fixture
-            .commit("dirty")
-            .unwrap_err()
-            .starts_with("commit_scope_ambiguous:"));
+        assert!(
+            fixture
+                .commit("dirty")
+                .unwrap_err()
+                .starts_with("commit_scope_ambiguous:")
+        );
     }
 
     #[test]
@@ -729,26 +737,32 @@ mod tests {
     #[test]
     fn refuses_missing_baseline_staged_changes_and_forbidden_files() {
         let fixture = Fixture::new();
-        assert!(fixture
-            .commit("missing")
-            .unwrap_err()
-            .starts_with("task_baseline_missing:"));
+        assert!(
+            fixture
+                .commit("missing")
+                .unwrap_err()
+                .starts_with("task_baseline_missing:")
+        );
 
         fixture.begin("staged");
         fs::write(fixture.root.join("docs/new.md"), "new\n").unwrap();
         git(&fixture.root, &["add", "docs/new.md"]);
-        assert!(fixture
-            .commit("staged")
-            .unwrap_err()
-            .starts_with("staged_changes_present:"));
+        assert!(
+            fixture
+                .commit("staged")
+                .unwrap_err()
+                .starts_with("staged_changes_present:")
+        );
 
         let fixture = Fixture::new();
         fixture.begin("forbidden");
         fs::write(fixture.root.join(".env"), "SECRET=value\n").unwrap();
-        assert!(fixture
-            .commit("forbidden")
-            .unwrap_err()
-            .contains("forbidden path .env"));
+        assert!(
+            fixture
+                .commit("forbidden")
+                .unwrap_err()
+                .contains("forbidden path .env")
+        );
     }
 
     #[test]
@@ -783,10 +797,12 @@ mod tests {
         let fixture = Fixture::new();
         fixture.begin("unclaimed");
         fs::write(fixture.root.join("docs/new.md"), "change\n").unwrap();
-        assert!(fixture
-            .commit_with_claim("unclaimed", false)
-            .unwrap_err()
-            .contains("not claimed by successful validation"));
+        assert!(
+            fixture
+                .commit_with_claim("unclaimed", false)
+                .unwrap_err()
+                .contains("not claimed by successful validation")
+        );
     }
 
     #[test]

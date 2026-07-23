@@ -8,8 +8,8 @@ use crate::catalog_config::SCHEMA_VERSION;
 use crate::catalog_projection::CatalogProjectionRow;
 use crate::game_discovery::{DiscoveryConfidence, DiscoverySourceKind, GameDiscovery};
 use crate::launch_profiles;
-use crate::library_db::{title_from_path, unix_now_secs, LibraryPayloadFile, LibraryScan};
-use rusqlite::{params, Connection};
+use crate::library_db::{LibraryPayloadFile, LibraryScan, title_from_path, unix_now_secs};
+use rusqlite::{Connection, params};
 use std::path::{Path, PathBuf};
 
 type MameMachineFixture<'a> = (

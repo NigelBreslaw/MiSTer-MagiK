@@ -797,7 +797,7 @@ fn decode_navigation_projection(bytes: &[u8]) -> Result<CatalogNavigationProject
             value => {
                 return Err(format!(
                     "navigation projection launch ref mode {value} is invalid"
-                ))
+                ));
             }
         };
         let preview_asset_key = reader.read_arc_string()?;
@@ -1319,9 +1319,11 @@ mod tests {
 
         write_catalog_navigation_projection_for_catalog(&db, &projection_catalog(), &current_stamp)
             .expect("write projection");
-        assert!(read_catalog_navigation_projection(&path, &stale_stamp)
-            .expect("read stale projection")
-            .is_none());
+        assert!(
+            read_catalog_navigation_projection(&path, &stale_stamp)
+                .expect("read stale projection")
+                .is_none()
+        );
         std::fs::write(&path, b"not-lz4").expect("write corrupt projection");
         assert!(read_catalog_navigation_projection(&path, &current_stamp).is_err());
         let _ = std::fs::remove_dir_all(root);

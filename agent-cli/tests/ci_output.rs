@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::fmt::Write;
 use std::fs;
@@ -72,9 +72,11 @@ fn platform_candidates_keep_payload_on_stdout_and_progress_on_stderr() {
         String::from_utf8(output.stdout).unwrap(),
         "17\t29\taaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
     );
-    assert!(String::from_utf8(output.stderr)
-        .unwrap()
-        .contains("Selecting reusable platform artifacts"));
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("Selecting reusable platform artifacts")
+    );
 }
 
 #[test]
@@ -144,7 +146,9 @@ fn verify_component_keeps_json_on_stdout_and_progress_on_stderr() {
     let payload: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(payload["origin"]["run_id"], "123");
     assert_eq!(payload["origin"]["head_sha"], head_sha);
-    assert!(String::from_utf8(output.stderr)
-        .unwrap()
-        .contains("Processing platform bundle"));
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("Processing platform bundle")
+    );
 }

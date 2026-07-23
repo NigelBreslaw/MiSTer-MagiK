@@ -427,11 +427,10 @@ impl VsyncPacer {
         // The MiSTer fb ioctl can occasionally return one vblank late when it
         // is armed very early in the period. Sleep in userspace until close to
         // the predicted vblank, but keep the full wait in the trace timing.
-        if self.last_hit_at.is_some() {
-            if let Some(sleep_us) = direct_wait_pre_arm_sleep_us(wait_start_age_us, self.period_us)
-            {
-                thread::sleep(Duration::from_micros(sleep_us));
-            }
+        if self.last_hit_at.is_some()
+            && let Some(sleep_us) = direct_wait_pre_arm_sleep_us(wait_start_age_us, self.period_us)
+        {
+            thread::sleep(Duration::from_micros(sleep_us));
         }
         match wait_vsync_fd(fd) {
             VsyncWaitStatus::Hit { at, .. } => {

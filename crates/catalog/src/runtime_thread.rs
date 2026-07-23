@@ -160,10 +160,11 @@ fn affinity_disabled() -> bool {
 }
 
 fn env_flag_is_off(name: &str) -> bool {
-    matches!(
-        std::env::var(name).as_deref(),
-        Ok("0") | Ok("off") | Ok("false") | Ok("no") | Ok("any")
-    )
+    env_value_is_off(std::env::var(name).ok().as_deref())
+}
+
+fn env_value_is_off(value: Option<&str>) -> bool {
+    matches!(value, Some("0" | "off" | "false" | "no" | "any"))
 }
 
 #[cfg(target_os = "linux")]
@@ -172,11 +173,7 @@ fn apply_nice(nice: i32) -> &'static str {
     // nice value. Failure is non-fatal; the worker continues at its inherited
     // priority and the status is emitted for benchmarks.
     let rc = unsafe { libc::setpriority(libc::PRIO_PROCESS, 0, nice) };
-    if rc == 0 {
-        "ok"
-    } else {
-        "failed"
-    }
+    if rc == 0 { "ok" } else { "failed" }
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -203,11 +200,7 @@ fn apply_affinity(affinity: ThreadAffinity) -> &'static str {
                     libc::CPU_SET(cpu, &mut set);
                 }
                 let rc = libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &set);
-                if rc == 0 {
-                    "ok"
-                } else {
-                    "failed"
-                }
+                if rc == 0 { "ok" } else { "failed" }
             }
         }
     }
@@ -492,11 +485,9 @@ mod tests {
     #[test]
     fn env_off_values_are_recognized() {
         for value in ["0", "off", "false", "no", "any"] {
-            std::env::set_var("MISTER_THREAD_POLICY", value);
-            assert!(env_flag_is_off("MISTER_THREAD_POLICY"));
+            assert!(env_value_is_off(Some(value)));
         }
-        std::env::set_var("MISTER_THREAD_POLICY", "on");
-        assert!(!env_flag_is_off("MISTER_THREAD_POLICY"));
-        std::env::remove_var("MISTER_THREAD_POLICY");
+        assert!(!env_value_is_off(Some("on")));
+        assert!(!env_value_is_off(None));
     }
 }

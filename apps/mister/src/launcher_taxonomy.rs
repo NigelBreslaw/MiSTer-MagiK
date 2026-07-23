@@ -3,11 +3,11 @@
 
 //! Stable, catalog-derived hierarchy used by the launcher home screen.
 
-use crate::arcade_catalog::{ArcadeCatalog, GameSystemEntry, PlatformKind, MENU_ARCADE_SYSTEM_ID};
+use crate::arcade_catalog::{ArcadeCatalog, GameSystemEntry, MENU_ARCADE_SYSTEM_ID, PlatformKind};
 #[cfg(test)]
 use mister_magik_catalog::catalog_classify::system_definitions;
 use mister_magik_catalog::catalog_classify::{
-    normalize_system_id, system_definition, LauncherSection,
+    LauncherSection, normalize_system_id, system_definition,
 };
 use std::collections::HashMap;
 use std::sync::Arc;

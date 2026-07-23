@@ -152,9 +152,16 @@ pub fn validate_pack_object_path(object: &str) -> Result<(), String> {
         {
             validate_pack_filename(file)
         }
-        ["mister-magik", "v1", "packs", system, "screenshots", size, version, file]
-            if supported(system) && valid_image_size(size) && valid_component(version) =>
-        {
+        [
+            "mister-magik",
+            "v1",
+            "packs",
+            system,
+            "screenshots",
+            size,
+            version,
+            file,
+        ] if supported(system) && valid_image_size(size) && valid_component(version) => {
             validate_pack_filename(file)
         }
         _ => Err(format!("unexpected media object path: {object}")),
@@ -167,11 +174,19 @@ pub fn validate_index_object_path(object: &str) -> Result<(), String> {
     }
     let parts: Vec<_> = object.split('/').collect();
     match parts.as_slice() {
-        ["mister-magik", "v1", "packs", system, "screenshots", size, version, file]
-            if supported(system)
-                && valid_image_size(size)
-                && valid_component(version)
-                && file.ends_with(".mmlz4b.idx") =>
+        [
+            "mister-magik",
+            "v1",
+            "packs",
+            system,
+            "screenshots",
+            size,
+            version,
+            file,
+        ] if supported(system)
+            && valid_image_size(size)
+            && valid_component(version)
+            && file.ends_with(".mmlz4b.idx") =>
         {
             Sha256::parse(file.split('.').next().unwrap_or(""))?;
             Ok(())

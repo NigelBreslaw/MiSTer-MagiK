@@ -4,7 +4,7 @@
 //! Incremental, policy-filtered source facts for sharded reconciliation.
 
 use crate::catalog_domain::{InputId, ScanUnitId};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
 use std::fmt;
@@ -551,12 +551,14 @@ mod tests {
         let probe = probe_scan_unit(&root, &unit, &InputSnapshot::default(), &GamesOnly).unwrap();
         let mra = InputId::new(unit.clone(), PathBuf::from("arcade/game.mra")).unwrap();
         let payload = InputId::new(unit, PathBuf::from("games/game.sfc")).unwrap();
-        assert!(probe
-            .snapshot
-            .signature(&mra)
-            .unwrap()
-            .content_fingerprint
-            .is_some());
+        assert!(
+            probe
+                .snapshot
+                .signature(&mra)
+                .unwrap()
+                .content_fingerprint
+                .is_some()
+        );
         assert_eq!(
             probe
                 .snapshot
@@ -585,11 +587,13 @@ mod tests {
                 .count(),
             3
         );
-        assert!(second
-            .snapshot
-            .facts()
-            .keys()
-            .all(|input| !input.relative_path().starts_with("games/nested")));
+        assert!(
+            second
+                .snapshot
+                .facts()
+                .keys()
+                .all(|input| !input.relative_path().starts_with("games/nested"))
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

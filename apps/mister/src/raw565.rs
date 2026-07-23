@@ -109,12 +109,16 @@ mod tests {
 
     #[test]
     fn rejects_bad_geometry() {
-        assert!(decode_raw565(&raw565_bytes(0, 1, 16, &[0; 16]))
-            .unwrap_err()
-            .contains("geometry"));
-        assert!(decode_raw565(&raw565_bytes(9, 1, 16, &[0; 16]))
-            .unwrap_err()
-            .contains("geometry"));
+        assert!(
+            decode_raw565(&raw565_bytes(0, 1, 16, &[0; 16]))
+                .unwrap_err()
+                .contains("geometry")
+        );
+        assert!(
+            decode_raw565(&raw565_bytes(9, 1, 16, &[0; 16]))
+                .unwrap_err()
+                .contains("geometry")
+        );
     }
 
     #[test]

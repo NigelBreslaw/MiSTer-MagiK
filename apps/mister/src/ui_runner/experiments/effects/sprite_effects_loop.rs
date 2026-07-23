@@ -1,11 +1,11 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use super::effect_loop_support::{run_effect_picker_loop, EffectLoopConfig, EffectTraceRow};
+use super::effect_loop_support::{EffectLoopConfig, EffectTraceRow, run_effect_picker_loop};
 use super::*;
 use mister_magik_fb::experiments::effects::sprite_effects::{
-    render_sprite_effect_frame, synthetic_sprite_images, SpriteEffectFrameStats, SpriteEffectKind,
-    SpriteEffectRenderState,
+    SpriteEffectFrameStats, SpriteEffectKind, SpriteEffectRenderState, render_sprite_effect_frame,
+    synthetic_sprite_images,
 };
 use std::fs::File;
 use std::io::Write;

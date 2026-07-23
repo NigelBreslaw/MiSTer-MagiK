@@ -110,21 +110,27 @@ mod tests {
         assert_eq!(status.height, 0x0fff);
         assert_eq!(status.stride, 0x3fff);
         assert!(decode_status(&[]).unwrap_err().contains("got 0"));
-        assert!(decode_status(&[0; STATUS_WORD_COUNT + 1])
-            .unwrap_err()
-            .contains("got 12"));
+        assert!(
+            decode_status(&[0; STATUS_WORD_COUNT + 1])
+                .unwrap_err()
+                .contains("got 12")
+        );
     }
 
     #[test]
     fn production_capabilities_require_protocol_v2_and_qualified_maximum() {
         let caps = decode_capabilities(&[2, REQUIRED_CAPS, 1366, 768, 2736]).unwrap();
         assert!(caps.production_ready());
-        assert!(!decode_capabilities(&[1, REQUIRED_CAPS, 1366, 768, 2736])
-            .unwrap()
-            .production_ready());
-        assert!(!decode_capabilities(&[2, REQUIRED_CAPS, 1280, 720, 2560])
-            .unwrap()
-            .production_ready());
+        assert!(
+            !decode_capabilities(&[1, REQUIRED_CAPS, 1366, 768, 2736])
+                .unwrap()
+                .production_ready()
+        );
+        assert!(
+            !decode_capabilities(&[2, REQUIRED_CAPS, 1280, 720, 2560])
+                .unwrap()
+                .production_ready()
+        );
         assert!(decode_capabilities(&[]).is_err());
     }
 }

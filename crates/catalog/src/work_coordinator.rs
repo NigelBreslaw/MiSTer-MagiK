@@ -86,7 +86,8 @@ impl WorkCoordinator {
             state.fairness_passes += 1;
             crate::catalog_logln!(
                 "work_coordinator_tsv\tphase=fairness-pass\tclass=background\tlabel={}\tforeground_active={}",
-                label, state.foreground_active
+                label,
+                state.foreground_active
             );
             return false;
         }
@@ -100,7 +101,9 @@ impl WorkCoordinator {
             .expect("work coordinator wait poisoned");
         crate::catalog_logln!(
             "work_coordinator_tsv\tphase=yield\tclass=background\tlabel={}\thold_us={}\tforeground_active={}",
-            label, started.elapsed().as_micros(), foreground_active
+            label,
+            started.elapsed().as_micros(),
+            foreground_active
         );
         true
     }
@@ -121,7 +124,11 @@ impl WorkCoordinator {
         drop(state);
         crate::catalog_logln!(
             "work_coordinator_tsv\tphase=release\tclass={}\tlabel={}\thold_us={}\tforeground_active={}\tbackground_active={}",
-            class.label(), label, acquired.elapsed().as_micros(), foreground_active, background_active
+            class.label(),
+            label,
+            acquired.elapsed().as_micros(),
+            foreground_active,
+            background_active
         );
     }
 }

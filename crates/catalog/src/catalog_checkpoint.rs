@@ -12,7 +12,7 @@ use crate::catalog_discovery;
 use crate::catalog_scan::should_ignore_path;
 use crate::core_audit::CatalogAuditRow;
 use crate::launch_profiles::{
-    self, core_launch_manifest_fingerprint, CORE_LAUNCH_MANIFEST_VERSION, PROFILE_SET_VERSION,
+    self, CORE_LAUNCH_MANIFEST_VERSION, PROFILE_SET_VERSION, core_launch_manifest_fingerprint,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -736,10 +736,12 @@ mod tests {
         let drift = CatalogDriftSummary::from_checkpoints(Some(&first), &second);
         assert!(!drift.unchanged);
         assert!(drift.changed_cores > 0 || drift.changed_core_roots > 0);
-        assert!(second
-            .lines()
-            .iter()
-            .any(|line| line.contains("installed-core") && line.contains("known")));
+        assert!(
+            second
+                .lines()
+                .iter()
+                .any(|line| line.contains("installed-core") && line.contains("known"))
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -770,14 +772,18 @@ mod tests {
         let drift = CatalogDriftSummary::from_checkpoints(Some(&first), &second);
         assert!(!drift.unchanged);
         assert!(drift.changed_cores > 0 || drift.changed_game_dirs > 0);
-        assert!(second
-            .lines()
-            .iter()
-            .any(|line| line.contains("installed-core") && line.contains("unknown")));
-        assert!(second
-            .lines()
-            .iter()
-            .any(|line| line.contains("game-dir") && line.contains("payloadish")));
+        assert!(
+            second
+                .lines()
+                .iter()
+                .any(|line| line.contains("installed-core") && line.contains("unknown"))
+        );
+        assert!(
+            second
+                .lines()
+                .iter()
+                .any(|line| line.contains("game-dir") && line.contains("payloadish"))
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -865,10 +871,12 @@ mod tests {
             &[],
         );
 
-        assert!(!checkpoint
-            .lines()
-            .iter()
-            .any(|line| line.contains("._ColecoVision")));
+        assert!(
+            !checkpoint
+                .lines()
+                .iter()
+                .any(|line| line.contains("._ColecoVision"))
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

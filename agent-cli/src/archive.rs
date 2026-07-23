@@ -69,8 +69,8 @@ mod tests {
     use std::fs;
     use std::io::Write;
     use std::time::{SystemTime, UNIX_EPOCH};
-    use zip::write::SimpleFileOptions;
     use zip::ZipWriter;
+    use zip::write::SimpleFileOptions;
 
     enum Entry<'a> {
         File(&'a str, &'a [u8]),

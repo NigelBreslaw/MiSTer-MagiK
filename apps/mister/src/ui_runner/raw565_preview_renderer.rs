@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::*;
+use mister_magik_fb::framebuffer::target::DirtyRect;
 #[cfg(any(test, mister_experiments))]
 use mister_magik_fb::framebuffer::target::blend_565;
 #[cfg(mister_experiments)]
 use mister_magik_fb::framebuffer::target::brighten_565;
-use mister_magik_fb::framebuffer::target::DirtyRect;
 use std::sync::OnceLock;
 use std::time::Instant;
 
@@ -654,11 +654,7 @@ fn transition_gate(
         }
         PreviewTransitionEffect::VenetianBlinds => {
             let open = ((16.0 * progress).round() as usize).min(16);
-            if local_x % 16 < open {
-                255
-            } else {
-                0
-            }
+            if local_x % 16 < open { 255 } else { 0 }
         }
         PreviewTransitionEffect::BarnDoor => {
             let half = (w as f32 * progress / 2.0).round() as usize;
@@ -763,11 +759,7 @@ fn transition_gate(
         }
         PreviewTransitionEffect::Linecrunch => {
             let crunch = ((local_y as f32 - h as f32 / 2.0).abs() * (1.0 - progress)) as usize;
-            if crunch < reveal_h / 2 {
-                alpha
-            } else {
-                0
-            }
+            if crunch < reveal_h / 2 { alpha } else { 0 }
         }
         PreviewTransitionEffect::RacingBeam => {
             let beam = reveal_w as isize;
@@ -798,19 +790,11 @@ fn transition_gate(
         PreviewTransitionEffect::SuperScalerPop => {
             let d = dist2_from_center(local_x, local_y, w, h);
             let r = (w.min(h) as f32 * (0.08 + progress * 0.92)) as u64;
-            if d <= r * r {
-                alpha
-            } else {
-                0
-            }
+            if d <= r * r { alpha } else { 0 }
         }
         PreviewTransitionEffect::MaskBlit => {
             let mask = ((local_x ^ local_y) + (local_x / 7) + (local_y / 11)) & 255;
-            if mask <= alpha as usize {
-                255
-            } else {
-                0
-            }
+            if mask <= alpha as usize { 255 } else { 0 }
         }
         PreviewTransitionEffect::PhosphorDecay => {
             if local_y < reveal_h {
@@ -1284,11 +1268,7 @@ mod transition_experiments {
                     }
                     PreviewTransitionEffect::VenetianBlinds => {
                         let open = ((16.0 * progress).round() as usize).min(16);
-                        if local_x % 16 < open {
-                            curr
-                        } else {
-                            prev
-                        }
+                        if local_x % 16 < open { curr } else { prev }
                     }
                     PreviewTransitionEffect::Iris => {
                         if dist2_from_center(
@@ -1397,11 +1377,7 @@ mod transition_experiments {
                     }
                     PreviewTransitionEffect::MaskBlit => {
                         let mask = ((local_x ^ local_y) + (local_x / 7) + (local_y / 11)) & 255;
-                        if mask <= alpha as usize {
-                            curr
-                        } else {
-                            prev
-                        }
+                        if mask <= alpha as usize { curr } else { prev }
                     }
                     PreviewTransitionEffect::SpriteMultiplex => {
                         if hash2_u8(local_x / 32, (local_y + alpha as usize) / 20) <= alpha {
@@ -1601,11 +1577,7 @@ mod transition_experiments {
             PreviewTransitionEffect::Fade => blend_rgb(prev, current, alpha),
             PreviewTransitionEffect::Wipe => {
                 let reveal_w = ((screen.width() as f32) * progress).round() as usize;
-                if local_x < reveal_w {
-                    current
-                } else {
-                    prev
-                }
+                if local_x < reveal_w { current } else { prev }
             }
             PreviewTransitionEffect::Slide => {
                 let pane_w = screen.width() as isize;
@@ -1645,19 +1617,11 @@ mod transition_experiments {
             PreviewTransitionEffect::Checker => {
                 let tile = 16usize;
                 let gate = hash2_u8(local_x / tile, local_y / tile);
-                if gate <= alpha {
-                    current
-                } else {
-                    prev
-                }
+                if gate <= alpha { current } else { prev }
             }
             PreviewTransitionEffect::Dissolve => {
                 let gate = hash2_u8(local_x / 2, local_y / 2);
-                if gate <= alpha {
-                    current
-                } else {
-                    prev
-                }
+                if gate <= alpha { current } else { prev }
             }
             PreviewTransitionEffect::CrtBeamWipe => {
                 let beam_y = (progress * (screen.rows() as f32 + 4.0)).round() as isize - 2;

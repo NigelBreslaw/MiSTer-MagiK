@@ -595,12 +595,14 @@ mod tests {
         fs::create_dir_all(root.join("target")).unwrap();
         fs::write(root.join(".gitignore"), "target/\n").unwrap();
         fs::write(root.join("target/generated.txt"), "scripts/run-rust.sh\n").unwrap();
-        assert!(Command::new("git")
-            .args(["init", "-q"])
-            .current_dir(&root)
-            .status()
-            .unwrap()
-            .success());
+        assert!(
+            Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(&root)
+                .status()
+                .unwrap()
+                .success()
+        );
         assert!(check_shell_ownership(&root).is_ok());
 
         fs::create_dir_all(root.join("docs")).unwrap();

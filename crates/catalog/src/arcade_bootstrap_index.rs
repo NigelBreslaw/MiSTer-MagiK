@@ -12,7 +12,7 @@
 
 use crate::arcade_catalog::ArcadeCatalog;
 use crate::catalog_navigation::read_catalog_navigation_snapshot;
-use crate::catalog_stamp::{compute_catalog_stamp_for_paths, CatalogStamp};
+use crate::catalog_stamp::{CatalogStamp, compute_catalog_stamp_for_paths};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -180,9 +180,11 @@ mod tests {
     fn catalog(root: &Path) -> ArcadeCatalog {
         ArcadeCatalog::new(
             root.to_path_buf(),
-            vec![arcade_game("1942")
-                .path(root.join("1942.mra").display().to_string())
-                .build()],
+            vec![
+                arcade_game("1942")
+                    .path(root.join("1942.mra").display().to_string())
+                    .build(),
+            ],
             vec![GameSystemEntry {
                 id: "arcade".to_string(),
                 title: "Arcade".to_string(),

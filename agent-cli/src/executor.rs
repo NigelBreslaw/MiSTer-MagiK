@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::evidence::{now_ms, Evidence};
+use crate::evidence::{Evidence, now_ms};
 use crate::model::{Operation, Outcome, Plan};
 use crate::progress::{EventKind, Reporter};
 use crate::workflow::{Event, Machine, State};
@@ -100,41 +100,40 @@ pub fn execute_with_changes(
         }
         let heartbeat = operation_heartbeat(operation);
         let cache = operation_cache_key(plan, operation, &fingerprints)?;
-        if let Some(fingerprint) = cache.as_ref() {
-            if let Some((result, detail)) =
+        if let Some(fingerprint) = cache.as_ref()
+            && let Some((result, detail)) =
                 evidence.cached_validation(&operation.id, fingerprint)?
-            {
-                evidence.record_reused_command(
-                    request_id,
-                    &operation.id,
-                    &operation.program,
-                    &operation.args,
-                    operation.resource_class().as_str(),
-                )?;
-                if result == "failed" {
-                    machine.apply(Event::Fail)?;
-                    return Err(detail.unwrap_or_else(|| "cached validation failed".into()));
-                }
-                index += 1;
-                continue;
+        {
+            evidence.record_reused_command(
+                request_id,
+                &operation.id,
+                &operation.program,
+                &operation.args,
+                operation.resource_class().as_str(),
+            )?;
+            if result == "failed" {
+                machine.apply(Event::Fail)?;
+                return Err(detail.unwrap_or_else(|| "cached validation failed".into()));
             }
+            index += 1;
+            continue;
         }
-        if let Some(fingerprint) = cache.as_ref() {
-            if let Some((result, detail)) = claim_or_wait(
+        if let Some(fingerprint) = cache.as_ref()
+            && let Some((result, detail)) = claim_or_wait(
                 evidence,
                 request_id,
                 reporter,
                 command,
                 operation,
                 fingerprint,
-            )? {
-                if result == "failed" {
-                    machine.apply(Event::Fail)?;
-                    return Err(detail.unwrap_or_else(|| "joined validation failed".into()));
-                }
-                index += 1;
-                continue;
+            )?
+        {
+            if result == "failed" {
+                machine.apply(Event::Fail)?;
+                return Err(detail.unwrap_or_else(|| "joined validation failed".into()));
             }
+            index += 1;
+            continue;
         }
         if let Err(error) = run_operation(
             evidence,
@@ -161,11 +160,11 @@ pub fn execute_with_changes(
             machine.apply(Event::Fail)?;
             return Err(error);
         }
-        if operation.risk == crate::model::Risk::ReadOnly {
-            if let Some(fingerprint) = cache {
-                evidence.cache_validation(&operation.id, &fingerprint, "passed", None)?;
-                evidence.release_validation(&operation.id, &fingerprint, request_id)?;
-            }
+        if operation.risk == crate::model::Risk::ReadOnly
+            && let Some(fingerprint) = cache
+        {
+            evidence.cache_validation(&operation.id, &fingerprint, "passed", None)?;
+            evidence.release_validation(&operation.id, &fingerprint, request_id)?;
         }
         index += 1;
     }
@@ -852,8 +851,8 @@ mod tests {
     use crate::request::RawRequest;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
-    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
     static TEST_NONCE: AtomicU64 = AtomicU64::new(0);
@@ -1010,12 +1009,14 @@ mod tests {
         assert_eq!(result.unwrap(), Outcome::Passed);
         assert_eq!(detail.commands.len(), 1);
         assert!(log.contains("=== agent-cli attempt: offline ==="));
-        assert!(detail.commands[0]
-            .args
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|arg| arg == "--offline"));
+        assert!(
+            detail.commands[0]
+                .args
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|arg| arg == "--offline")
+        );
     }
 
     #[test]
@@ -1124,10 +1125,12 @@ mod tests {
         let operations = vec![test_operation(&cargo), test_operation(&cargo)];
         let context = FingerprintContext::new(&root, &operations, &changes).unwrap();
         assert_eq!(context.files.len(), changes.len());
-        assert!(context
-            .files
-            .values()
-            .all(|fingerprint| fingerprint.starts_with("file:")));
+        assert!(
+            context
+                .files
+                .values()
+                .all(|fingerprint| fingerprint.starts_with("file:"))
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1144,12 +1147,14 @@ mod tests {
             vec!["add", "."],
             vec!["commit", "-qm", "fixture"],
         ] {
-            assert!(Command::new("git")
-                .args(args)
-                .current_dir(&root)
-                .status()
-                .unwrap()
-                .success());
+            assert!(
+                Command::new("git")
+                    .args(args)
+                    .current_dir(&root)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
         }
         let operation = test_operation(&cargo);
         let changes = vec![PathBuf::from("fixture/a.rs")];
@@ -1194,12 +1199,14 @@ mod tests {
         let mut reporter = Reporter::new(&evidence, OutputFormat::Human, &request.id);
         let error = execute(&evidence, &request.id, &root, &plan, &mut reporter).unwrap_err();
         assert!(error.contains("policy_rejected"));
-        assert!(evidence
-            .run_detail(&request.id)
-            .unwrap()
-            .unwrap()
-            .commands
-            .is_empty());
+        assert!(
+            evidence
+                .run_detail(&request.id)
+                .unwrap()
+                .unwrap()
+                .commands
+                .is_empty()
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

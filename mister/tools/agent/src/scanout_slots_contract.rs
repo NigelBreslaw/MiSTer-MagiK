@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 pub(crate) use mister_magik_scanout_contract::{
-    ScanoutSlotsLayout, DEVICE, EXPECTED_LAYOUT, GET_LAYOUT,
+    DEVICE, EXPECTED_LAYOUT, GET_LAYOUT, ScanoutSlotsLayout,
 };
 
 #[cfg(test)]

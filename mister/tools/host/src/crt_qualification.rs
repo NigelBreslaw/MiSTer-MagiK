@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::{
-    acknowledged_main_command, connect, crt_trial_run_command, edit_remote_ini, exec, exec_checked,
-    exec_checked_output, issue_reboot, parse_crt_trial_status, remote_write, wait_down,
-    wait_launcher_ready, wait_up, IniEdit, MenuOutputProfile, RebootMode, Result,
+    IniEdit, MenuOutputProfile, RebootMode, Result, acknowledged_main_command, connect,
+    crt_trial_run_command, edit_remote_ini, exec, exec_checked, exec_checked_output, issue_reboot,
+    parse_crt_trial_status, remote_write, wait_down, wait_launcher_ready, wait_up,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use ssh2::Session;
 use std::fs;
 use std::io::{self, IsTerminal, Read};
@@ -428,10 +428,10 @@ fn restore_transaction(expected: Option<&OriginalState>) -> Result<()> {
             .ok_or("CRT recovery journal omitted original_output")?
             .to_string(),
     };
-    if let Some(expected) = expected {
-        if expected.main != journal_expected.main || expected.output != journal_expected.output {
-            return Err("CRT recovery journal does not match the active session".into());
-        }
+    if let Some(expected) = expected
+        && (expected.main != journal_expected.main || expected.output != journal_expected.output)
+    {
+        return Err("CRT recovery journal does not match the active session".into());
     }
     remote_write(&session, REMOTE_RESTORE_NEW, &backup)?;
     exec_checked(
@@ -549,15 +549,17 @@ mod tests {
     #[test]
     fn rejects_unattended_or_ambiguous_commands() {
         assert!(parse_args(&["qualify".into()]).is_err());
-        assert!(parse_args(&[
-            "qualify".into(),
-            "--attended".into(),
-            "--out".into(),
-            "a".into(),
-            "--out".into(),
-            "b".into(),
-        ])
-        .is_err());
+        assert!(
+            parse_args(&[
+                "qualify".into(),
+                "--attended".into(),
+                "--out".into(),
+                "a".into(),
+                "--out".into(),
+                "b".into(),
+            ])
+            .is_err()
+        );
     }
 
     #[test]

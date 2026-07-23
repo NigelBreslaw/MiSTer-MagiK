@@ -5,8 +5,8 @@
 
 use crate::arcade_button_overrides::{remove_button_overrides, write_button_overrides_for_mra};
 use crate::arcade_catalog::{
-    ArcadeCatalog, ArcadeFilter, ArcadeFilterOption, LaunchTarget, StructuredLaunchPlan,
-    ARCADE_ROW_HEIGHT, HOME_LIST_VISIBLE_W, HOME_TILE_GAP, HOME_TILE_WIDTH,
+    ARCADE_ROW_HEIGHT, ArcadeCatalog, ArcadeFilter, ArcadeFilterOption, HOME_LIST_VISIBLE_W,
+    HOME_TILE_GAP, HOME_TILE_WIDTH, LaunchTarget, StructuredLaunchPlan,
 };
 use crate::input_repeat::RepeatNav;
 use crate::input_state::PadState;
@@ -28,8 +28,8 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -593,15 +593,15 @@ impl ArcadeNav {
     }
 
     fn record_release(&mut self, dir: i32, now: Instant, count: usize) {
-        if let Some(started) = self.scroll.hold_started_at {
-            if self.scroll.held_dir == dir {
-                if now.saturating_duration_since(started) <= ARCADE_QUICK_TAP_MAX {
-                    self.scroll.last_quick_tap_dir = dir;
-                    self.scroll.last_quick_tap_released_at = Some(now);
-                } else {
-                    self.scroll.last_quick_tap_dir = 0;
-                    self.scroll.last_quick_tap_released_at = None;
-                }
+        if let Some(started) = self.scroll.hold_started_at
+            && self.scroll.held_dir == dir
+        {
+            if now.saturating_duration_since(started) <= ARCADE_QUICK_TAP_MAX {
+                self.scroll.last_quick_tap_dir = dir;
+                self.scroll.last_quick_tap_released_at = Some(now);
+            } else {
+                self.scroll.last_quick_tap_dir = 0;
+                self.scroll.last_quick_tap_released_at = None;
             }
         }
         self.scroll.held_dir = 0;
@@ -1073,18 +1073,15 @@ impl LauncherNav {
         }
         self.active_collection_id = old_collection
             .filter(|collection_id| self.taxonomy.collection(collection_id).is_some());
-        if let Some(collection_id) = self.active_collection_id.clone() {
-            if !self
+        if let Some(collection_id) = self.active_collection_id.clone()
+            && !self
                 .taxonomy
                 .collection_path_is_valid(&self.menu_path, &collection_id)
-            {
-                if let Some(destination) = self
-                    .taxonomy
-                    .primary_destination_for_collection(&collection_id)
-                {
-                    self.menu_path = destination.menu_path.clone();
-                }
-            }
+            && let Some(destination) = self
+                .taxonomy
+                .primary_destination_for_collection(&collection_id)
+        {
+            self.menu_path = destination.menu_path.clone();
         }
 
         if self.screen == Screen::Arcade && self.active_collection_id.is_none() {
@@ -1122,12 +1119,11 @@ impl LauncherNav {
         } else if self.screen == Screen::Home {
             self.restore_current_menu_view();
         }
-        if self.screen == Screen::Arcade {
-            if let Some(collection_id) = self.active_collection_id.clone() {
-                if self.resolve_arcade_filter_for_collection(catalog, &collection_id) {
-                    self.arcade.reset();
-                }
-            }
+        if self.screen == Screen::Arcade
+            && let Some(collection_id) = self.active_collection_id.clone()
+            && self.resolve_arcade_filter_for_collection(catalog, &collection_id)
+        {
+            self.arcade.reset();
         }
         true
     }
@@ -2699,10 +2695,10 @@ impl LauncherNav {
             0
         };
         let items = self.arcade_filter_items(catalog, system_id);
-        if self.arcade_filter.level != ArcadeFilterLevel::Top {
-            if let Some(active_idx) = items.iter().position(|item| item.active) {
-                self.arcade_filter.selected = active_idx;
-            }
+        if self.arcade_filter.level != ArcadeFilterLevel::Top
+            && let Some(active_idx) = items.iter().position(|item| item.active)
+        {
+            self.arcade_filter.selected = active_idx;
         }
         self.snap_arcade_filter_scroll(items.len());
     }
@@ -3408,23 +3404,23 @@ fn resolve_return_destination(
     catalog: &ArcadeCatalog,
     state: &LaunchReturnState,
 ) -> Option<(Vec<String>, String)> {
-    if let Some(collection_id) = state.collection_id.as_deref() {
-        if nav.taxonomy.collection(collection_id).is_some() {
-            if nav
-                .taxonomy
-                .collection_path_is_valid(&state.menu_path, collection_id)
-            {
-                return Some((state.menu_path.clone(), collection_id.to_string()));
-            }
-            if let Some(destination) = nav
-                .taxonomy
-                .primary_destination_for_collection(collection_id)
-            {
-                return Some((
-                    destination.menu_path.clone(),
-                    destination.collection_id.clone(),
-                ));
-            }
+    if let Some(collection_id) = state.collection_id.as_deref()
+        && nav.taxonomy.collection(collection_id).is_some()
+    {
+        if nav
+            .taxonomy
+            .collection_path_is_valid(&state.menu_path, collection_id)
+        {
+            return Some((state.menu_path.clone(), collection_id.to_string()));
+        }
+        if let Some(destination) = nav
+            .taxonomy
+            .primary_destination_for_collection(collection_id)
+        {
+            return Some((
+                destination.menu_path.clone(),
+                destination.collection_id.clone(),
+            ));
         }
     }
 
@@ -4273,13 +4269,13 @@ fn execute_game_launch_with(
             false,
         ));
     }
-    if let LaunchTarget::Path(path) = launch_target {
-        if !io.target_exists(path) {
-            return Err(
-                LaunchError::new(format!("launch target not found: {path}"), false)
-                    .with_kind(LaunchFailureKind::UnreadablePayload),
-            );
-        }
+    if let LaunchTarget::Path(path) = launch_target
+        && !io.target_exists(path)
+    {
+        return Err(
+            LaunchError::new(format!("launch target not found: {path}"), false)
+                .with_kind(LaunchFailureKind::UnreadablePayload),
+        );
     }
 
     let spawned = if io.mister_running() {
@@ -4388,7 +4384,7 @@ fn delete_screenshot_packs_at(asset_dir: &Path) -> Result<usize, String> {
             return Err(format!(
                 "read screenshot asset dir {}: {e}",
                 asset_dir.display()
-            ))
+            ));
         }
     };
     let mut removed = 0usize;
@@ -4619,10 +4615,12 @@ mod tests {
 
     fn image_less_amiga_catalog() -> ArcadeCatalog {
         arcade_catalog(
-            vec![arcade_game("Agony")
-                .path("magik-plan:amiga-agony")
-                .system_id("amiga")
-                .build()],
+            vec![
+                arcade_game("Agony")
+                    .path("magik-plan:amiga-agony")
+                    .system_id("amiga")
+                    .build(),
+            ],
             vec![arcade_system("amiga", 1)],
         )
     }
@@ -5574,12 +5572,14 @@ mod tests {
             vec![arcade_system("arcade", 1)],
         );
         let singleton = arcade_catalog(
-            vec![arcade_game("Known")
-                .system_id("arcade")
-                .year(1984)
-                .manufacturer("Capcom")
-                .control("Shooter")
-                .build()],
+            vec![
+                arcade_game("Known")
+                    .system_id("arcade")
+                    .year(1984)
+                    .manufacturer("Capcom")
+                    .control("Shooter")
+                    .build(),
+            ],
             vec![arcade_system("arcade", 1)],
         );
         let two_metadata_filters = arcade_catalog(
@@ -5673,10 +5673,11 @@ mod tests {
                         assert_eq!(labels.contains(&"Controls".to_string()), controls == 2);
                         assert_eq!(rows[0].item.count, 2);
                         assert_eq!(rows[1].item.count, 2);
-                        assert!(rows
-                            .iter()
-                            .skip(2)
-                            .all(|row| row.item.count == 2 && !row.item.active));
+                        assert!(
+                            rows.iter()
+                                .skip(2)
+                                .all(|row| row.item.count == 2 && !row.item.active)
+                        );
 
                         for (selected, row) in rows.iter().enumerate().skip(2) {
                             let mut activated = LauncherNav::new();
@@ -5736,10 +5737,12 @@ mod tests {
     #[test]
     fn remembered_filter_resets_when_dimension_is_hidden() {
         let catalog = arcade_catalog(
-            vec![arcade_game("Only Shooter")
-                .system_id("arcade")
-                .control("Shooter")
-                .build()],
+            vec![
+                arcade_game("Only Shooter")
+                    .system_id("arcade")
+                    .control("Shooter")
+                    .build(),
+            ],
             vec![arcade_system("arcade", 1)],
         );
         let mut nav = LauncherNav::new();
@@ -6055,9 +6058,10 @@ mod tests {
         nav.selected = 8;
         nav.scroll_x = 9999;
 
-        assert!(nav
-            .handle_input(&PadState::default(), Instant::now(), &catalog)
-            .is_none());
+        assert!(
+            nav.handle_input(&PadState::default(), Instant::now(), &catalog)
+                .is_none()
+        );
 
         assert_eq!(nav.selected, 0);
         assert_eq!(nav.scroll_x, 0);
@@ -6386,19 +6390,22 @@ mod tests {
         assert_eq!(nav.screen, Screen::Licenses);
         release(&mut nav, &catalog, t0, 16);
         let down = pad_with(|pad| pad.dpad_down = true);
-        assert!(nav
-            .handle_input(&down, t0 + Duration::from_millis(32), &catalog)
-            .is_none());
+        assert!(
+            nav.handle_input(&down, t0 + Duration::from_millis(32), &catalog)
+                .is_none()
+        );
         assert_eq!(nav.licenses_selected, 1);
         release(&mut nav, &catalog, t0, 48);
-        assert!(nav
-            .handle_input(&press_a, t0 + Duration::from_millis(64), &catalog)
-            .is_none());
+        assert!(
+            nav.handle_input(&press_a, t0 + Duration::from_millis(64), &catalog)
+                .is_none()
+        );
         assert!(nav.licenses_expanded);
         release(&mut nav, &catalog, t0, 80);
-        assert!(nav
-            .handle_input(&down, t0 + Duration::from_millis(96), &catalog)
-            .is_none());
+        assert!(
+            nav.handle_input(&down, t0 + Duration::from_millis(96), &catalog)
+                .is_none()
+        );
         assert_eq!(nav.licenses_scroll.selected, 3);
         assert!(nav.licenses_scroll_active());
         assert_eq!(
@@ -6408,15 +6415,17 @@ mod tests {
         release(&mut nav, &catalog, t0, 112);
         assert!(nav.licenses_scroll.scroll_animation.value() > 0.0);
         let back = pad_with(|pad| pad.btn_b = true);
-        assert!(nav
-            .handle_input(&back, t0 + Duration::from_millis(128), &catalog)
-            .is_none());
+        assert!(
+            nav.handle_input(&back, t0 + Duration::from_millis(128), &catalog)
+                .is_none()
+        );
         assert!(!nav.licenses_expanded);
         assert_eq!(nav.licenses_scroll.selected, 0);
         release(&mut nav, &catalog, t0, 144);
-        assert!(nav
-            .handle_input(&back, t0 + Duration::from_millis(160), &catalog)
-            .is_none());
+        assert!(
+            nav.handle_input(&back, t0 + Duration::from_millis(160), &catalog)
+                .is_none()
+        );
         assert_eq!(nav.screen, Screen::About);
     }
 
@@ -6433,26 +6442,30 @@ mod tests {
         assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
         assert_eq!(nav.screen, Screen::About);
         release(&mut nav, &catalog, t0, 16);
-        assert!(nav
-            .handle_input(&press_b, t0 + Duration::from_millis(32), &catalog)
-            .is_none());
+        assert!(
+            nav.handle_input(&press_b, t0 + Duration::from_millis(32), &catalog)
+                .is_none()
+        );
         assert_eq!(nav.screen, Screen::Settings);
         release(&mut nav, &catalog, t0, 48);
 
         nav.settings_selected = 4;
-        assert!(nav
-            .handle_input(&press_a, t0 + Duration::from_millis(64), &catalog)
-            .is_none());
+        assert!(
+            nav.handle_input(&press_a, t0 + Duration::from_millis(64), &catalog)
+                .is_none()
+        );
         assert_eq!(nav.screen, Screen::About);
         release(&mut nav, &catalog, t0, 80);
-        assert!(nav
-            .handle_input(&press_a, t0 + Duration::from_millis(96), &catalog)
-            .is_none());
+        assert!(
+            nav.handle_input(&press_a, t0 + Duration::from_millis(96), &catalog)
+                .is_none()
+        );
         assert_eq!(nav.screen, Screen::Info);
         release(&mut nav, &catalog, t0, 112);
-        assert!(nav
-            .handle_input(&press_b, t0 + Duration::from_millis(128), &catalog)
-            .is_none());
+        assert!(
+            nav.handle_input(&press_b, t0 + Duration::from_millis(128), &catalog)
+                .is_none()
+        );
         assert_eq!(nav.screen, Screen::About);
     }
 
@@ -6484,13 +6497,14 @@ mod tests {
         assert_eq!(nav.licenses_scroll.selected, 3);
         assert!(!nav.licenses_scroll.scroll.continuous_active);
 
-        assert!(nav
-            .handle_input(
+        assert!(
+            nav.handle_input(
                 &down,
                 t0 + ARCADE_QUICK_TAP_MAX + Duration::from_millis(1),
                 &catalog,
             )
-            .is_none());
+            .is_none()
+        );
         assert!(nav.licenses_scroll.scroll.continuous_active);
         assert!(nav.licenses_scroll.scroll_animation.velocity() > 0.0);
         assert_eq!(
@@ -6500,18 +6514,20 @@ mod tests {
         assert_eq!(nav.licenses_scroll.step_rows, 3);
 
         let release_at = t0 + ARCADE_QUICK_TAP_MAX + Duration::from_millis(17);
-        assert!(nav
-            .handle_input(&PadState::default(), release_at, &catalog)
-            .is_none());
+        assert!(
+            nav.handle_input(&PadState::default(), release_at, &catalog)
+                .is_none()
+        );
         assert!(!nav.licenses_scroll.scroll.continuous_active);
         for frame in 1..=60 {
-            assert!(nav
-                .handle_input(
+            assert!(
+                nav.handle_input(
                     &PadState::default(),
                     release_at + Duration::from_millis(frame * 16),
                     &catalog,
                 )
-                .is_none());
+                .is_none()
+            );
         }
         assert!(nav.licenses_scroll.is_settled());
     }
@@ -6529,23 +6545,26 @@ mod tests {
         assert!(nav.handle_input(&down, t0, &catalog).is_none());
         assert_eq!(nav.licenses_scroll.selected, 3);
         release(&mut nav, &catalog, t0, 16);
-        assert!(nav
-            .handle_input(&up, t0 + Duration::from_millis(32), &catalog)
-            .is_none());
+        assert!(
+            nav.handle_input(&up, t0 + Duration::from_millis(32), &catalog)
+                .is_none()
+        );
         assert_eq!(nav.licenses_scroll.selected, 0);
         release(&mut nav, &catalog, t0, 48);
-        assert!(nav
-            .handle_input(&up, t0 + Duration::from_millis(64), &catalog)
-            .is_none());
+        assert!(
+            nav.handle_input(&up, t0 + Duration::from_millis(64), &catalog)
+                .is_none()
+        );
         assert_eq!(nav.licenses_scroll.selected, 0);
 
         let count = crate::licenses::max_scroll_line(nav.licenses_selected) + 1;
         nav.licenses_scroll.selected = count - 1;
         nav.licenses_scroll.snap_to_selected();
         release(&mut nav, &catalog, t0, 80);
-        assert!(nav
-            .handle_input(&down, t0 + Duration::from_millis(96), &catalog)
-            .is_none());
+        assert!(
+            nav.handle_input(&down, t0 + Duration::from_millis(96), &catalog)
+                .is_none()
+        );
         assert_eq!(nav.licenses_scroll.selected, count - 1);
     }
 
@@ -6559,31 +6578,35 @@ mod tests {
 
         assert!(nav.open_default_arcade(&catalog));
         assert_eq!(nav.screen, Screen::Arcade);
-        assert!(nav
-            .handle_input(
+        assert!(
+            nav.handle_input(
                 &PadState::default(),
                 t0 + Duration::from_millis(16),
                 &catalog
             )
-            .is_none());
+            .is_none()
+        );
 
         nav.arcade.selected = 3;
         nav.arcade.snap_to_selected();
-        assert!(nav
-            .handle_input(&back, t0 + Duration::from_millis(32), &catalog)
-            .is_none());
+        assert!(
+            nav.handle_input(&back, t0 + Duration::from_millis(32), &catalog)
+                .is_none()
+        );
         assert_eq!(nav.screen, Screen::Home);
-        assert!(nav
-            .handle_input(
+        assert!(
+            nav.handle_input(
                 &PadState::default(),
                 t0 + Duration::from_millis(48),
                 &catalog
             )
-            .is_none());
+            .is_none()
+        );
 
-        assert!(nav
-            .handle_input(&press_a, t0 + Duration::from_millis(64), &catalog)
-            .is_none());
+        assert!(
+            nav.handle_input(&press_a, t0 + Duration::from_millis(64), &catalog)
+                .is_none()
+        );
         assert_eq!(nav.screen, Screen::Arcade);
         assert_eq!(nav.arcade.selected, 3);
         assert_eq!(nav.arcade.scroll_y, 3 * ARCADE_ROW_HEIGHT);
@@ -6800,26 +6823,29 @@ mod tests {
         assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
         assert_eq!(nav.confirm_action, Some(ConfirmAction::ResetDatabase));
         assert_eq!(nav.confirm_selected, 0);
-        assert!(nav
-            .handle_input(
+        assert!(
+            nav.handle_input(
                 &PadState::default(),
                 t0 + Duration::from_millis(16),
                 &catalog,
             )
-            .is_none());
+            .is_none()
+        );
 
         let right = pad_with(|pad| pad.dpad_right = true);
-        assert!(nav
-            .handle_input(&right, t0 + Duration::from_millis(32), &catalog)
-            .is_none());
+        assert!(
+            nav.handle_input(&right, t0 + Duration::from_millis(32), &catalog)
+                .is_none()
+        );
         assert_eq!(nav.confirm_selected, 1);
-        assert!(nav
-            .handle_input(
+        assert!(
+            nav.handle_input(
                 &PadState::default(),
                 t0 + Duration::from_millis(48),
                 &catalog,
             )
-            .is_none());
+            .is_none()
+        );
 
         let event = nav
             .handle_input(&press_a, t0 + Duration::from_millis(64), &catalog)
@@ -6842,9 +6868,10 @@ mod tests {
         assert!(nav.display_combo_open);
         release(&mut nav, &catalog, t0, 16);
         let down = pad_with(|pad| pad.dpad_down = true);
-        assert!(nav
-            .handle_input(&down, t0 + Duration::from_millis(32), &catalog)
-            .is_none());
+        assert!(
+            nav.handle_input(&down, t0 + Duration::from_millis(32), &catalog)
+                .is_none()
+        );
         release(&mut nav, &catalog, t0, 48);
         let event = nav
             .handle_input(&press_a, t0 + Duration::from_millis(64), &catalog)
@@ -6894,14 +6921,16 @@ mod tests {
         assert_eq!(state.phase, DisplayTransactionPhase::Failed);
         assert_eq!(state.error.as_deref(), Some("persist-failed"));
         assert!(state.return_to_settings);
-        assert!(parse_display_state_response(
-            "ok DisplayV1 active=custom pending=none remaining=0"
-        )
-        .is_err());
-        assert!(parse_display_state_response(
-            "ok DisplayV1 schema=1 active=custom pending=unsafe remaining=10"
-        )
-        .is_err());
+        assert!(
+            parse_display_state_response("ok DisplayV1 active=custom pending=none remaining=0")
+                .is_err()
+        );
+        assert!(
+            parse_display_state_response(
+                "ok DisplayV1 schema=1 active=custom pending=unsafe remaining=10"
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -6916,17 +6945,19 @@ mod tests {
         assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
         assert_eq!(nav.confirm_action, Some(ConfirmAction::ExitToMister));
         assert_eq!(nav.confirm_selected, 0);
-        assert!(nav
-            .handle_input(
+        assert!(
+            nav.handle_input(
                 &PadState::default(),
                 t0 + Duration::from_millis(16),
                 &catalog,
             )
-            .is_none());
+            .is_none()
+        );
 
-        assert!(nav
-            .handle_input(&press_a, t0 + Duration::from_millis(32), &catalog)
-            .is_none());
+        assert!(
+            nav.handle_input(&press_a, t0 + Duration::from_millis(32), &catalog)
+                .is_none()
+        );
         assert_eq!(nav.confirm_action, None);
         assert_eq!(nav.confirm_selected, 0);
     }
@@ -6941,26 +6972,29 @@ mod tests {
 
         let press_a = pad_with(|pad| pad.btn_a = true);
         assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
-        assert!(nav
-            .handle_input(
+        assert!(
+            nav.handle_input(
                 &PadState::default(),
                 t0 + Duration::from_millis(16),
                 &catalog,
             )
-            .is_none());
+            .is_none()
+        );
 
         let right = pad_with(|pad| pad.dpad_right = true);
-        assert!(nav
-            .handle_input(&right, t0 + Duration::from_millis(32), &catalog)
-            .is_none());
+        assert!(
+            nav.handle_input(&right, t0 + Duration::from_millis(32), &catalog)
+                .is_none()
+        );
         assert_eq!(nav.confirm_selected, 1);
-        assert!(nav
-            .handle_input(
+        assert!(
+            nav.handle_input(
                 &PadState::default(),
                 t0 + Duration::from_millis(48),
                 &catalog,
             )
-            .is_none());
+            .is_none()
+        );
 
         let event = nav
             .handle_input(&press_a, t0 + Duration::from_millis(64), &catalog)
@@ -6978,13 +7012,14 @@ mod tests {
         nav.screen = Screen::Settings;
         nav.confirm_action = Some(ConfirmAction::ResetDatabase);
 
-        assert!(nav
-            .handle_input(
+        assert!(
+            nav.handle_input(
                 &pad_with(|pad| pad.btn_home = true),
                 Instant::now(),
                 &catalog,
             )
-            .is_none());
+            .is_none()
+        );
 
         assert_eq!(nav.confirm_action, None);
         assert_eq!(nav.screen, Screen::Home);
@@ -7142,9 +7177,10 @@ mod tests {
         let t0 = Instant::now();
         nav.confirm_action = Some(ConfirmAction::LibraryUpdateFailed);
 
-        assert!(nav
-            .handle_input(&pad_with(|pad| pad.btn_a = true), t0, &catalog)
-            .is_none());
+        assert!(
+            nav.handle_input(&pad_with(|pad| pad.btn_a = true), t0, &catalog)
+                .is_none()
+        );
         assert_eq!(nav.confirm_action, None);
         assert_eq!(nav.confirm_selected, 0);
     }
@@ -7159,13 +7195,14 @@ mod tests {
         assert!(nav.open_system(&catalog, "amiga"));
         assert_eq!(nav.screen, Screen::Arcade);
 
-        assert!(nav
-            .handle_input(
+        assert!(
+            nav.handle_input(
                 &PadState::default(),
                 t0 + Duration::from_millis(16),
                 &catalog
             )
-            .is_none());
+            .is_none()
+        );
         let event = nav
             .handle_input(&press_a, t0 + Duration::from_millis(32), &catalog)
             .expect("image-less game should launch");

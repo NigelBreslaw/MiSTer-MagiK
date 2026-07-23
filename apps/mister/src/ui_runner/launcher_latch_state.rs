@@ -1,8 +1,8 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use super::{arcade_update_dirty_rect, ArcadeListUpdate};
-use mister_magik_fb::framebuffer::target::{subtract_dirty_rects, DirtyRect, DirtyRectList};
+use super::{ArcadeListUpdate, arcade_update_dirty_rect};
+use mister_magik_fb::framebuffer::target::{DirtyRect, DirtyRectList, subtract_dirty_rects};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum LatchSlotHardwareState {
@@ -1002,9 +1002,11 @@ mod tests {
         let mut state = TwoBufferLatchState::new(WIDTH, HEIGHT);
         state.sync_hardware(None, 0, true, 7);
 
-        assert!(state
-            .plan_next(input(None, None, None, None, None))
-            .is_none());
+        assert!(
+            state
+                .plan_next(input(None, None, None, None, None))
+                .is_none()
+        );
     }
 
     #[test]

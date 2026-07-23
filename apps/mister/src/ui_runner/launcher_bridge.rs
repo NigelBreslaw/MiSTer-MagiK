@@ -1349,7 +1349,7 @@ impl LauncherBridgeModels {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arcade_catalog::{ArcadeCatalog, GameSystemEntry, DEFAULT_ARCADE_ROOT};
+    use crate::arcade_catalog::{ArcadeCatalog, DEFAULT_ARCADE_ROOT, GameSystemEntry};
     use crate::input_state::PadState;
     use crate::test_support::arcade_game;
     use std::cell::Cell;

@@ -25,7 +25,10 @@ pub(crate) fn stdout(args: fmt::Arguments<'_>) -> io::Result<()> {
         .lock()
         .unwrap_or_else(|error| error.into_inner());
     let stdout = io::stdout();
-    stdout.lock().write_fmt(args)
+    let mut output = stdout.lock();
+    let result = output.write_fmt(args);
+    drop(output);
+    result
 }
 
 pub(crate) fn stderr_line(args: fmt::Arguments<'_>) -> io::Result<()> {

@@ -7,7 +7,7 @@ use crate::game_discovery::{DiscoverySourceKind, GameDiscovery};
 use crate::library_db;
 use crate::media_identity::ScreenshotAssetId;
 use crate::preview_worker;
-use rusqlite::{params, params_from_iter, Connection};
+use rusqlite::{Connection, params, params_from_iter};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::Read;
@@ -235,8 +235,7 @@ pub(crate) fn load_mame_software_metadata(path: &Path) -> MameSoftwareMetadata {
     if let Ok(mut stmt) = conn.prepare(
         "SELECT list_name,software_name,parent_name,description,year,publisher,region,source_version
          FROM mame_software_items",
-    ) {
-        if let Ok(rows) = stmt.query_map([], |row| {
+    ) && let Ok(rows) = stmt.query_map([], |row| {
             let _source_version = row.get::<_, String>(7)?;
             Ok((
                 row.get::<_, String>(0)?,
@@ -249,77 +248,73 @@ pub(crate) fn load_mame_software_metadata(path: &Path) -> MameSoftwareMetadata {
                     region: row.get(6)?,
                 },
             ))
-        }) {
-            for row in rows.flatten() {
-                let (list, name, item) = row;
-                let title_key = library_db::canonical_variant_title(&item.description);
-                metadata
-                    .title_index
-                    .entry((list.clone(), title_key))
-                    .or_default()
-                    .push(name.clone());
-                let family = item
-                    .parent_name
-                    .as_deref()
-                    .filter(|parent| !parent.trim().is_empty())
-                    .unwrap_or(&name)
-                    .to_string();
-                metadata
-                    .family_members
-                    .entry((list.clone(), family))
-                    .or_default()
-                    .push(name.clone());
-                metadata.items.insert((list, name), item);
-            }
+        })
+    {
+        for row in rows.flatten() {
+            let (list, name, item) = row;
+            let title_key = library_db::canonical_variant_title(&item.description);
+            metadata
+                .title_index
+                .entry((list.clone(), title_key))
+                .or_default()
+                .push(name.clone());
+            let family = item
+                .parent_name
+                .as_deref()
+                .filter(|parent| !parent.trim().is_empty())
+                .unwrap_or(&name)
+                .to_string();
+            metadata
+                .family_members
+                .entry((list.clone(), family))
+                .or_default()
+                .push(name.clone());
+            metadata.items.insert((list, name), item);
         }
     }
     if let Ok(mut stmt) = conn.prepare(
         "SELECT list_name,software_name,size,crc32
          FROM mame_software_hashes
          WHERE size IS NOT NULL AND crc32 IS NOT NULL",
-    ) {
-        if let Ok(rows) = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, String>(3)?,
-            ))
-        }) {
-            for (list, name, size, crc_hex) in rows.flatten() {
-                let Ok(size) = u64::try_from(size) else {
-                    continue;
-                };
-                let Some(crc) = parse_hex_u32(&crc_hex) else {
-                    continue;
-                };
-                metadata
-                    .hash_index
-                    .entry((list, size, crc))
-                    .or_default()
-                    .push(name);
-            }
+    ) && let Ok(rows) = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, String>(3)?,
+        ))
+    }) {
+        for (list, name, size, crc_hex) in rows.flatten() {
+            let Ok(size) = u64::try_from(size) else {
+                continue;
+            };
+            let Some(crc) = parse_hex_u32(&crc_hex) else {
+                continue;
+            };
+            metadata
+                .hash_index
+                .entry((list, size, crc))
+                .or_default()
+                .push(name);
         }
     }
     if let Ok(mut stmt) = conn.prepare(
         "SELECT list_name,software_name,disk_sha1
          FROM mame_software_hashes
          WHERE disk_sha1 IS NOT NULL",
-    ) {
-        if let Ok(rows) = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-            ))
-        }) {
-            for (list, name, sha1) in rows.flatten() {
-                metadata
-                    .disk_index
-                    .entry((list, sha1.to_ascii_lowercase()))
-                    .or_default()
-                    .push(name);
-            }
+    ) && let Ok(rows) = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    }) {
+        for (list, name, sha1) in rows.flatten() {
+            metadata
+                .disk_index
+                .entry((list, sha1.to_ascii_lowercase()))
+                .or_default()
+                .push(name);
         }
     }
     for members in metadata.family_members.values_mut() {
@@ -1298,12 +1293,14 @@ mod tests {
         discovery.platform_id = "atarilynx".to_string();
         discovery.title = "Unknown Homebrew".to_string();
 
-        assert!(mame_software_identity_for_discovery_with_hash_matcher(
-            &discovery,
-            &MameSoftwareMetadata::default(),
-            |_, _, _| None,
-        )
-        .is_none());
+        assert!(
+            mame_software_identity_for_discovery_with_hash_matcher(
+                &discovery,
+                &MameSoftwareMetadata::default(),
+                |_, _, _| None,
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -1901,18 +1898,24 @@ mod tests {
             .into_iter()
             .chain(b"plain-snes".iter().copied())
             .collect::<Vec<_>>();
-        assert!(rom_hash_candidates("snes", &snes)
-            .iter()
-            .any(|candidate| candidate == b"plain-snes"));
+        assert!(
+            rom_hash_candidates("snes", &snes)
+                .iter()
+                .any(|candidate| candidate == b"plain-snes")
+        );
 
         let z64 = [0x12, 0x34, 0x56, 0x78];
         let candidates = rom_hash_candidates("n64", &z64);
-        assert!(candidates
-            .iter()
-            .any(|candidate| candidate == &[0x34, 0x12, 0x78, 0x56]));
-        assert!(candidates
-            .iter()
-            .any(|candidate| candidate == &[0x56, 0x78, 0x12, 0x34]));
+        assert!(
+            candidates
+                .iter()
+                .any(|candidate| candidate == &[0x34, 0x12, 0x78, 0x56])
+        );
+        assert!(
+            candidates
+                .iter()
+                .any(|candidate| candidate == &[0x56, 0x78, 0x12, 0x34])
+        );
     }
 
     #[test]

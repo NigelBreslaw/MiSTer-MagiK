@@ -72,9 +72,11 @@ mod tests {
         let started = Instant::now();
         for _ in 0..100 {
             let mut child = Command::new("sh").args(["-c", "exit 0"]).spawn().unwrap();
-            assert!(wait(&mut child, None, "short process", None, || Ok(()))
-                .unwrap()
-                .success());
+            assert!(
+                wait(&mut child, None, "short process", None, || Ok(()))
+                    .unwrap()
+                    .success()
+            );
         }
         // A 50 ms polling delay would take at least five seconds here. Allow
         // slower process spawning on loaded hosts without masking that regression.
@@ -88,18 +90,20 @@ mod tests {
             .args(["-c", "sleep 0.08"])
             .spawn()
             .unwrap();
-        assert!(wait(
-            &mut child,
-            Some(Duration::from_secs(1)),
-            "heartbeat process",
-            Some(Duration::from_millis(10)),
-            || {
-                heartbeats += 1;
-                Ok(())
-            },
-        )
-        .unwrap()
-        .success());
+        assert!(
+            wait(
+                &mut child,
+                Some(Duration::from_secs(1)),
+                "heartbeat process",
+                Some(Duration::from_millis(10)),
+                || {
+                    heartbeats += 1;
+                    Ok(())
+                },
+            )
+            .unwrap()
+            .success()
+        );
         assert!(heartbeats >= 2);
 
         let mut child = Command::new("sh").args(["-c", "sleep 1"]).spawn().unwrap();

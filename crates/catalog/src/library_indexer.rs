@@ -8,12 +8,12 @@
 //! and return a complete `LibraryScan`.
 
 use crate::catalog_config::SCHEMA_VERSION;
-use crate::catalog_progress::{report_catalog_progress, CatalogProgress};
+use crate::catalog_progress::{CatalogProgress, report_catalog_progress};
 use crate::catalog_scan::{self, DiscoveryEvent};
 use crate::core_audit;
 use crate::game_discovery::{
-    catalog_system_id_for_discovery, discovery_from_profile_archive_entry,
-    discovery_from_profile_file_with_prepared_index, GameDiscovery,
+    GameDiscovery, catalog_system_id_for_discovery, discovery_from_profile_archive_entry,
+    discovery_from_profile_file_with_prepared_index,
 };
 use crate::launch_profiles::{self, PayloadDisposition, PayloadRule, ProfilePathClass};
 use crate::library_db::{
@@ -32,6 +32,7 @@ const BOOTSTRAP_PROGRESS_BATCH: usize = 50;
 pub(crate) struct LibraryIndexer<'a> {
     cfg: &'a BenchConfig,
     priority: LibraryScanPriority,
+    durable_resume: bool,
 }
 
 impl<'a> LibraryIndexer<'a> {
@@ -39,6 +40,7 @@ impl<'a> LibraryIndexer<'a> {
         Self {
             cfg,
             priority: LibraryScanPriority::Background,
+            durable_resume: library_db::env_bool("MISTER_CATALOG_DURABLE_RESUME"),
         }
     }
 
@@ -46,7 +48,13 @@ impl<'a> LibraryIndexer<'a> {
         Self {
             cfg,
             priority: LibraryScanPriority::Foreground,
+            durable_resume: library_db::env_bool("MISTER_CATALOG_DURABLE_RESUME"),
         }
+    }
+
+    pub(crate) fn with_durable_resume(mut self, durable_resume: bool) -> Self {
+        self.durable_resume = durable_resume;
+        self
     }
 
     #[cfg(test)]
@@ -66,6 +74,7 @@ impl<'a> LibraryIndexer<'a> {
             progress,
             scan_events,
             Vec::new(),
+            self.durable_resume,
         )
     }
 
@@ -94,6 +103,7 @@ impl<'a> LibraryIndexer<'a> {
             progress,
             scan_events,
             excluded_targets,
+            self.durable_resume,
         )
     }
 
@@ -296,8 +306,9 @@ fn prepare_resume_scan(
     plan: &launch_profiles::CatalogScanPlan,
     excluded_targets: &[PathBuf],
     priority: LibraryScanPriority,
+    durable_resume: bool,
 ) -> Option<ResumeScan> {
-    if !library_db::env_bool("MISTER_CATALOG_DURABLE_RESUME") {
+    if !durable_resume {
         return None;
     }
     let descriptors =
@@ -535,6 +546,7 @@ fn scan_library_with_progress_and_events(
     mut progress: ProgressCallback<'_>,
     mut scan_events: ScanEventCallback<'_>,
     excluded_targets: Vec<PathBuf>,
+    durable_resume: bool,
 ) -> LibraryScan {
     crate::cooperative_work::checkpoint();
     let discover_t = Instant::now();
@@ -551,7 +563,7 @@ fn scan_library_with_progress_and_events(
             plan.game_dir_headers().len(),
         ),
     );
-    let mut resume = prepare_resume_scan(cfg, &plan, &excluded_targets, priority);
+    let mut resume = prepare_resume_scan(cfg, &plan, &excluded_targets, priority, durable_resume);
     let prepared_payload_t = Instant::now();
     let prepared_payload_index = PreparedPayloadIndex::from_library_roots(&cfg.roots);
     crate::cooperative_work::checkpoint();
@@ -613,19 +625,18 @@ fn scan_library_with_progress_and_events(
                     &discoveries,
                 ));
                 skip_target = false;
-                if let Some(state) = resume.as_mut() {
-                    if state
+                if let Some(state) = resume.as_mut()
+                    && state
                         .invalidated_targets
                         .remove(&(descriptor.ordinal as u32))
-                    {
-                        state.invalidated += 1;
-                        report_resume(
-                            state,
-                            "target-invalidated",
-                            descriptor.ordinal,
-                            "fingerprint-changed",
-                        );
-                    }
+                {
+                    state.invalidated += 1;
+                    report_resume(
+                        state,
+                        "target-invalidated",
+                        descriptor.ordinal,
+                        "fingerprint-changed",
+                    );
                 }
                 if let Some(saved) = resume
                     .as_mut()
@@ -674,39 +685,40 @@ fn scan_library_with_progress_and_events(
                 Vec::new()
             }
             DiscoveryEvent::TargetComplete(descriptor) => {
-                if !skip_target && target_checkpointable {
-                    if let (Some(offsets), Some(state)) = (target_offsets, resume.as_mut()) {
-                        let output = TargetOutput {
-                            game_dir_facts: game_dir_facts[offsets.facts..].to_vec(),
-                            normal_files: normal_files[offsets.files..].to_vec(),
-                            containers: containers[offsets.containers..].to_vec(),
-                            entries: entries[offsets.entries..].to_vec(),
-                            ignored_files: ignored_files.saturating_sub(offsets.ignored),
-                            discoveries: discoveries[offsets.discoveries..].to_vec(),
-                        };
-                        match serde_json::to_string(&output) {
-                            Ok(output_json) => {
-                                let completed = crate::build_progress::CompletedTarget {
-                                    target: progress_target(&descriptor),
-                                    input_fingerprint: target_fingerprint.finish(),
-                                    output_json,
-                                    accumulated_stats: crate::build_progress::BuildStats {
-                                        normal_files: normal_files.len() as u64,
-                                        containers: containers.len() as u64,
-                                        entries: entries.len() as u64,
-                                        audit_rows: 0,
-                                        discoveries: discoveries.len() as u64,
-                                    },
-                                };
-                                queue_target_checkpoint(state, completed);
-                            }
-                            Err(error) => report_resume(
-                                state,
-                                "checkpoint-failed",
-                                descriptor.ordinal,
-                                &format!("encode-error:{error}"),
-                            ),
+                if !skip_target
+                    && target_checkpointable
+                    && let (Some(offsets), Some(state)) = (target_offsets, resume.as_mut())
+                {
+                    let output = TargetOutput {
+                        game_dir_facts: game_dir_facts[offsets.facts..].to_vec(),
+                        normal_files: normal_files[offsets.files..].to_vec(),
+                        containers: containers[offsets.containers..].to_vec(),
+                        entries: entries[offsets.entries..].to_vec(),
+                        ignored_files: ignored_files.saturating_sub(offsets.ignored),
+                        discoveries: discoveries[offsets.discoveries..].to_vec(),
+                    };
+                    match serde_json::to_string(&output) {
+                        Ok(output_json) => {
+                            let completed = crate::build_progress::CompletedTarget {
+                                target: progress_target(&descriptor),
+                                input_fingerprint: target_fingerprint.finish(),
+                                output_json,
+                                accumulated_stats: crate::build_progress::BuildStats {
+                                    normal_files: normal_files.len() as u64,
+                                    containers: containers.len() as u64,
+                                    entries: entries.len() as u64,
+                                    audit_rows: 0,
+                                    discoveries: discoveries.len() as u64,
+                                },
+                            };
+                            queue_target_checkpoint(state, completed);
                         }
+                        Err(error) => report_resume(
+                            state,
+                            "checkpoint-failed",
+                            descriptor.ordinal,
+                            &format!("encode-error:{error}"),
+                        ),
                     }
                 }
                 target_descriptor = None;
@@ -813,24 +825,24 @@ fn scan_library_with_progress_and_events(
                         continue;
                     }
                     let mut has_archive_entries = false;
-                    if !profile.archive_entry_rules.is_empty() {
-                        if let Some(format) = ArchiveFormat::from_ext(&f.ext) {
-                            crate::cooperative_work::checkpoint();
-                            let archive_t = Instant::now();
-                            let scan = catalog_scan::scan_archive_toc(&f, format, profile);
-                            timing.archive_toc_us += archive_t.elapsed().as_micros() as u64;
-                            timing.archive_toc_count += 1;
-                            has_archive_entries = !scan.entries.is_empty();
-                            for entry in scan.entries {
-                                discoveries.push(discovery_from_profile_archive_entry(
-                                    &entry,
-                                    profile,
-                                    &entry.rule,
-                                ));
-                                entries.push(entry);
-                            }
-                            containers.push(scan.container);
+                    if !profile.archive_entry_rules.is_empty()
+                        && let Some(format) = ArchiveFormat::from_ext(&f.ext)
+                    {
+                        crate::cooperative_work::checkpoint();
+                        let archive_t = Instant::now();
+                        let scan = catalog_scan::scan_archive_toc(&f, format, profile);
+                        timing.archive_toc_us += archive_t.elapsed().as_micros() as u64;
+                        timing.archive_toc_count += 1;
+                        has_archive_entries = !scan.entries.is_empty();
+                        for entry in scan.entries {
+                            discoveries.push(discovery_from_profile_archive_entry(
+                                &entry,
+                                profile,
+                                &entry.rule,
+                            ));
+                            entries.push(entry);
                         }
+                        containers.push(scan.container);
                     }
                     if has_archive_entries {
                         continue;

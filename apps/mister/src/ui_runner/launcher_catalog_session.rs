@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::launcher_worker_intents::{
+    CatalogCounterPhase, CatalogProgressUiIntent, CatalogWorkerUiContext, LauncherWorkerUiIntent,
     cached_catalog_validation_intent, catalog_persistence_failed_intent,
-    catalog_rebuild_started_intent, parse_games_found_detail, CatalogCounterPhase,
-    CatalogProgressUiIntent, CatalogWorkerUiContext, LauncherWorkerUiIntent,
+    catalog_rebuild_started_intent, parse_games_found_detail,
 };
 use super::*;
 
@@ -990,10 +990,12 @@ mod tests {
             CatalogWorkerMessage::FreshCleanupStarted,
             now,
         );
-        assert!(started
-            .into_effects()
-            .into_iter()
-            .any(|effect| matches!(effect, CatalogSessionEffect::CatalogBuildStarted)));
+        assert!(
+            started
+                .into_effects()
+                .into_iter()
+                .any(|effect| matches!(effect, CatalogSessionEffect::CatalogBuildStarted))
+        );
 
         let discovered = session.handle_worker_message(
             context(),
@@ -1029,10 +1031,12 @@ mod tests {
             },
             now,
         );
-        assert!(finished
-            .into_effects()
-            .into_iter()
-            .any(|effect| matches!(effect, CatalogSessionEffect::CatalogBuildFinished)));
+        assert!(
+            finished
+                .into_effects()
+                .into_iter()
+                .any(|effect| matches!(effect, CatalogSessionEffect::CatalogBuildFinished))
+        );
     }
 
     #[test]
@@ -1063,10 +1067,12 @@ mod tests {
             },
             now,
         );
-        assert!(!ready_effects
-            .into_effects()
-            .into_iter()
-            .any(|effect| { matches!(effect, CatalogSessionEffect::StartSearchIndex { .. }) }));
+        assert!(
+            !ready_effects
+                .into_effects()
+                .into_iter()
+                .any(|effect| { matches!(effect, CatalogSessionEffect::StartSearchIndex { .. }) })
+        );
 
         let persisted_effects = session.handle_worker_message(
             CatalogWorkerMessageContext {
@@ -1082,10 +1088,12 @@ mod tests {
             },
             now,
         );
-        assert!(!persisted_effects
-            .into_effects()
-            .into_iter()
-            .any(|effect| { matches!(effect, CatalogSessionEffect::StartSearchIndex { .. }) }));
+        assert!(
+            !persisted_effects
+                .into_effects()
+                .into_iter()
+                .any(|effect| { matches!(effect, CatalogSessionEffect::StartSearchIndex { .. }) })
+        );
         assert!(effect_names(session.maybe_start_search_index(false, false)).is_empty());
         assert_eq!(
             effect_names(session.maybe_start_search_index(true, false)),
@@ -1178,9 +1186,11 @@ mod tests {
 
         assert_eq!(effect_names(effects), vec!["event"]);
         assert!(!session.refresh_done());
-        assert!(session
-            .maybe_start_deferred_worker(false, true, false, now, Duration::ZERO, || true)
-            .is_none());
+        assert!(
+            session
+                .maybe_start_deferred_worker(false, true, false, now, Duration::ZERO, || true)
+                .is_none()
+        );
         let worker = session
             .maybe_start_deferred_worker(false, true, true, now, Duration::ZERO, || true)
             .expect("validation worker after idle gate opens");
@@ -1440,10 +1450,12 @@ mod tests {
             },
             now,
         );
-        assert!(effects
-            .into_effects()
-            .into_iter()
-            .any(|effect| matches!(effect, CatalogSessionEffect::ConfirmCatalogSeed)));
+        assert!(
+            effects
+                .into_effects()
+                .into_iter()
+                .any(|effect| matches!(effect, CatalogSessionEffect::ConfirmCatalogSeed))
+        );
         assert!(session.refresh_done());
 
         let (effects, ui_effects) = effect_and_ui_names(session.handle_worker_message(
@@ -1753,19 +1765,23 @@ mod tests {
             CatalogExecutionMode::BackgroundInteractive,
         );
 
-        assert!(session
-            .maybe_start_deferred_worker(false, false, true, now + delay, delay, || true)
-            .is_none());
-        assert!(session
-            .maybe_start_deferred_worker(
-                false,
-                true,
-                true,
-                now + Duration::from_millis(20),
-                delay,
-                || true,
-            )
-            .is_none());
+        assert!(
+            session
+                .maybe_start_deferred_worker(false, false, true, now + delay, delay, || true)
+                .is_none()
+        );
+        assert!(
+            session
+                .maybe_start_deferred_worker(
+                    false,
+                    true,
+                    true,
+                    now + Duration::from_millis(20),
+                    delay,
+                    || true,
+                )
+                .is_none()
+        );
 
         let worker = session
             .maybe_start_deferred_worker(
@@ -1785,16 +1801,18 @@ mod tests {
             worker.execution_mode,
             CatalogExecutionMode::BackgroundInteractive
         );
-        assert!(session
-            .maybe_start_deferred_worker(
-                false,
-                true,
-                true,
-                now + Duration::from_millis(200),
-                delay,
-                || true,
-            )
-            .is_none());
+        assert!(
+            session
+                .maybe_start_deferred_worker(
+                    false,
+                    true,
+                    true,
+                    now + Duration::from_millis(200),
+                    delay,
+                    || true,
+                )
+                .is_none()
+        );
     }
 
     #[test]
@@ -1810,26 +1828,30 @@ mod tests {
             CatalogExecutionMode::BackgroundInteractive,
         );
 
-        assert!(session
-            .maybe_start_deferred_worker(
-                false,
-                true,
-                false,
-                now + Duration::from_millis(70),
-                delay,
-                || true,
-            )
-            .is_none());
-        assert!(session
-            .maybe_start_deferred_worker(
-                false,
-                true,
-                true,
-                now + Duration::from_millis(80),
-                delay,
-                || true,
-            )
-            .is_none());
+        assert!(
+            session
+                .maybe_start_deferred_worker(
+                    false,
+                    true,
+                    false,
+                    now + Duration::from_millis(70),
+                    delay,
+                    || true,
+                )
+                .is_none()
+        );
+        assert!(
+            session
+                .maybe_start_deferred_worker(
+                    false,
+                    true,
+                    true,
+                    now + Duration::from_millis(80),
+                    delay,
+                    || true,
+                )
+                .is_none()
+        );
 
         let worker = session
             .maybe_start_deferred_worker(
@@ -1845,16 +1867,18 @@ mod tests {
         assert_eq!(worker.root, "/media/fat/_Arcade");
         assert_eq!(worker.request, CatalogWorkerRequest::CheckStamp);
         assert_eq!(worker.initial_cache, CatalogWorkerInitialCache::ProbeSqlite);
-        assert!(session
-            .maybe_start_deferred_worker(
-                false,
-                true,
-                true,
-                now + Duration::from_millis(200),
-                delay,
-                || true,
-            )
-            .is_none());
+        assert!(
+            session
+                .maybe_start_deferred_worker(
+                    false,
+                    true,
+                    true,
+                    now + Duration::from_millis(200),
+                    delay,
+                    || true,
+                )
+                .is_none()
+        );
     }
 
     #[test]
@@ -1869,31 +1893,37 @@ mod tests {
             CatalogExecutionMode::BackgroundInteractive,
         );
 
-        assert!(session
-            .maybe_start_deferred_worker(false, true, true, now, delay, || {
-                panic!("lock must not be probed before validation delay")
-            })
-            .is_none());
-        assert!(session
-            .maybe_start_deferred_worker(
-                false,
-                true,
-                true,
-                now + Duration::from_millis(60),
-                delay,
-                || false,
-            )
-            .is_none());
-        assert!(session
-            .maybe_start_deferred_worker(
-                false,
-                true,
-                true,
-                now + Duration::from_millis(900),
-                delay,
-                || panic!("lock must not be reprobed before retry deadline"),
-            )
-            .is_none());
+        assert!(
+            session
+                .maybe_start_deferred_worker(false, true, true, now, delay, || {
+                    panic!("lock must not be probed before validation delay")
+                })
+                .is_none()
+        );
+        assert!(
+            session
+                .maybe_start_deferred_worker(
+                    false,
+                    true,
+                    true,
+                    now + Duration::from_millis(60),
+                    delay,
+                    || false,
+                )
+                .is_none()
+        );
+        assert!(
+            session
+                .maybe_start_deferred_worker(
+                    false,
+                    true,
+                    true,
+                    now + Duration::from_millis(900),
+                    delay,
+                    || panic!("lock must not be reprobed before retry deadline"),
+                )
+                .is_none()
+        );
         let worker = session
             .maybe_start_deferred_worker(
                 false,

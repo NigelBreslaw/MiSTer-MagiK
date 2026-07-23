@@ -4,7 +4,8 @@
 [package]
 name = "mister-magik-core"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.97.1"
 description = "Portable domain and platform interface for MiSTer MagiK applications."
 license = "GPL-3.0-or-later"
 

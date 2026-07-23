@@ -2,20 +2,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::artifact_publish::{
-    hidden_timestamped_temp_path_for, prepare_artifact_publish, sync_path_rust_best_effort,
-    timestamped_temp_path_for, ArtifactPublishLabels,
+    ArtifactPublishLabels, hidden_timestamped_temp_path_for, prepare_artifact_publish,
+    sync_path_rust_best_effort, timestamped_temp_path_for,
 };
 use mister_magik_catalog::media_identity::preferred_screenshot_image_size;
 use mister_magik_catalog::preview_worker::invalidate_preview_archive_metadata_cache;
 use mister_magik_catalog::production_sharded_projection::{
-    production_registry_limits, reconcile_production_preview_availability,
-    PreviewAvailabilityReconciliationOutcome,
+    PreviewAvailabilityReconciliationOutcome, production_registry_limits,
+    reconcile_production_preview_availability,
 };
-use mister_magik_catalog::runtime_thread::{apply_runtime_thread_policy, RuntimeThreadRole};
+use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
 use mister_magik_fb::media_update::{
-    index_path_for_pack_path, pack_status_from_state, parse_manifest_json,
-    size_qualified_pack_path, state_path, valid_image_size, LocalPackStatus, MediaIndex, MediaPack,
-    MediaUpdatePolicy, MediaVariant, DEFAULT_ASSET_DIR, DEFAULT_IMAGE_SIZE, DEFAULT_MANIFEST_URL,
+    DEFAULT_ASSET_DIR, DEFAULT_IMAGE_SIZE, DEFAULT_MANIFEST_URL, LocalPackStatus, MediaIndex,
+    MediaPack, MediaUpdatePolicy, MediaVariant, index_path_for_pack_path, pack_status_from_state,
+    parse_manifest_json, size_qualified_pack_path, state_path, valid_image_size,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -1617,7 +1617,10 @@ fn media_benchmark_auto_finish_enabled() -> bool {
 }
 
 fn media_download_concurrency_from_env() -> usize {
-    let _ = std::env::var("MISTER_MEDIA_CONCURRENCY");
+    media_download_concurrency_from_value(std::env::var("MISTER_MEDIA_CONCURRENCY").ok().as_deref())
+}
+
+fn media_download_concurrency_from_value(_value: Option<&str>) -> usize {
     DEFAULT_MAX_CONCURRENT_MEDIA_DOWNLOADS
 }
 
@@ -1737,7 +1740,9 @@ impl HttpCacheMetadata {
             "scope={} source={} status={} etag={} last_modified={} cache_control={} age={} cf_cache_status={} cf_ray={} content_length={} content_encoding={} effective_url={}",
             scope,
             self.source,
-            self.status.map(|value| value.to_string()).unwrap_or_default(),
+            self.status
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
             self.etag,
             self.last_modified,
             self.cache_control,
@@ -2046,9 +2051,7 @@ mod tests {
 
     #[test]
     fn media_download_concurrency_env_is_clamped_to_single_pack() {
-        std::env::set_var("MISTER_MEDIA_CONCURRENCY", "3");
-        assert_eq!(media_download_concurrency_from_env(), 1);
-        std::env::remove_var("MISTER_MEDIA_CONCURRENCY");
+        assert_eq!(media_download_concurrency_from_value(Some("3")), 1);
     }
 
     #[test]
@@ -2276,9 +2279,10 @@ mod tests {
 
         assert_eq!(fs::read(&final_path).unwrap(), b"ix");
         assert!(!temp_path.exists());
-        assert!(rx
-            .try_iter()
-            .all(|message| !matches!(message, MediaWorkerMessage::Progress(_))));
+        assert!(
+            rx.try_iter()
+                .all(|message| !matches!(message, MediaWorkerMessage::Progress(_)))
+        );
         let _ = fs::remove_dir_all(dir);
     }
 

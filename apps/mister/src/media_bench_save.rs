@@ -2,15 +2,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::artifact_publish::{
-    prepare_artifact_publish, sync_path_rust_best_effort, timestamped_temp_path_for,
-    ArtifactPublishLabels,
+    ArtifactPublishLabels, prepare_artifact_publish, sync_path_rust_best_effort,
+    timestamped_temp_path_for,
 };
 use crate::media_pack_save::{
-    publish_pack_file_for_bench, temp_path_for, PackSaveMetrics, PROGRESS_COPY_CHUNK_BYTES,
+    PROGRESS_COPY_CHUNK_BYTES, PackSaveMetrics, publish_pack_file_for_bench, temp_path_for,
 };
 use mister_magik_fb::media_update::{
-    index_path_for_pack_path, size_qualified_pack_path, state_path, valid_image_size,
-    DEFAULT_ASSET_DIR, DEFAULT_IMAGE_SIZE,
+    DEFAULT_ASSET_DIR, DEFAULT_IMAGE_SIZE, index_path_for_pack_path, size_qualified_pack_path,
+    state_path, valid_image_size,
 };
 use std::fs::{self, File};
 use std::io::Write;
@@ -150,7 +150,7 @@ where
             "--modes" => {
                 return Err(
                     "--modes was removed; media save has one progress-capable path".to_string(),
-                )
+                );
             }
             "-h" | "--help" => {
                 print_usage();

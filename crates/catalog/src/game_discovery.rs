@@ -6,7 +6,7 @@
 use crate::catalog_scan::{self, FoundFile};
 use crate::launch_profiles::{LaunchProfile, PayloadRule, RuleSourceKind};
 use crate::library_db::{
-    self, LibraryContainerEntry, AMIGAVISION_GAME_LAUNCH_PREFIX, AMIGAVISION_LAUNCHER_REF,
+    self, AMIGAVISION_GAME_LAUNCH_PREFIX, AMIGAVISION_LAUNCHER_REF, LibraryContainerEntry,
 };
 use crate::media_metadata;
 use crate::prepared_collections::PreparedLaunchProvenance;
@@ -153,10 +153,10 @@ fn number_after_marker(haystack: &str, marker: &str) -> Option<u32> {
             {
                 digit_end += 1;
             }
-            if digit_end > digit_start {
-                if let Ok(number) = haystack[digit_start..digit_end].parse() {
-                    return Some(number);
-                }
+            if digit_end > digit_start
+                && let Ok(number) = haystack[digit_start..digit_end].parse()
+            {
+                return Some(number);
             }
         }
         start = marker_end;
@@ -202,149 +202,146 @@ pub(crate) fn discovery_from_profile_file_with_prepared_index(
     prepared_index: Option<&prepared_collections::PreparedPayloadIndex>,
 ) -> GameDiscovery {
     let source_path = file.path.display().to_string();
-    if file.ext == "mra" {
-        if let Some(mra) = media_metadata::read_mra_metadata(&file.path) {
-            let core_id = mra
+    if file.ext == "mra"
+        && let Some(mra) = media_metadata::read_mra_metadata(&file.path)
+    {
+        let core_id = mra
+            .rbf
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .map(library_db::normalize_id)
+            .unwrap_or_else(|| profile.core_name.to_string());
+        let hardware_id = mra
+            .platform
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .map(library_db::normalize_id)
+            .unwrap_or_else(|| core_id.clone());
+        return GameDiscovery {
+            source_path: source_path.clone(),
+            launch_ref: source_path.clone(),
+            source_kind: DiscoverySourceKind::Mra,
+            title: mra
+                .name
+                .unwrap_or_else(|| library_db::title_from_path(&source_path)),
+            category: profile.category.to_string(),
+            platform_id: profile.system_id.to_string(),
+            core_id,
+            hardware_id,
+            manufacturer: mra.manufacturer,
+            genre: None,
+            year: mra.year.and_then(|s| s.parse::<u16>().ok()),
+            setname: mra.setname,
+            parent: mra.parent,
+            covered_payload_path: None,
+            prepared: None,
+            confidence: if mra.platform.is_some() {
+                DiscoveryConfidence::MraHardware
+            } else {
+                DiscoveryConfidence::MraCore
+            },
+        };
+    }
+    if file.ext == "mgl"
+        && let Some(document) = media_metadata::read_mgl_document(&file.path)
+    {
+        let media_metadata::MglDocument {
+            metadata: mgl,
+            inspection,
+        } = document;
+        let payload_profile = mgl
+            .file_path
+            .as_deref()
+            .filter(|_| profile.id == "mgl")
+            .and_then(|payload| profile_for_mgl_payload(profiles, &file.path, payload));
+        let profile = payload_profile.unwrap_or(profile);
+        let setname = if profile.system_id == "neogeo" {
+            media_metadata::neogeo_mgl_setname(&file.path, mgl.file_path.as_deref())
+        } else if profile.id == "neon68k" {
+            mgl.setname.clone()
+        } else {
+            None
+        };
+        let covered_payload_path = mgl.file_path.as_deref().map(|payload| {
+            let path = if profile.system_id == "dos"
+                && file.path.components().any(|component| {
+                    component
+                        .as_os_str()
+                        .to_str()
+                        .is_some_and(|value| value.eq_ignore_ascii_case("_DOS Games"))
+                }) {
+                prepared_index.map_or_else(
+                    || prepared_collections::resolve_0mhz_payload_path(&file.path, payload),
+                    |index| index.resolve_0mhz_payload_path(&file.path, payload),
+                )
+            } else {
+                media_metadata::resolve_mgl_payload_path(&file.path, payload)
+            };
+            path.display().to_string()
+        });
+        let prepared = (profile.system_id == "dos"
+            && inspection.as_ref().is_ok_and(|inspection| {
+                prepared_index
+                    .map_or_else(
+                        || {
+                            prepared_collections::validate_0mhz_mgl_inspection(
+                                &file.path, inspection,
+                            )
+                        },
+                        |index| {
+                            prepared_collections::validate_0mhz_mgl_inspection_with_index(
+                                &file.path, inspection, index,
+                            )
+                        },
+                    )
+                    .is_ok()
+            }))
+        .then(|| PreparedLaunchProvenance::prepared(PreparedCollectionId::ZeroMhz));
+        let prepared = prepared.or_else(|| {
+            (profile.id == "neon68k"
+                && inspection.as_ref().is_ok_and(|inspection| {
+                    prepared_collections::validate_neon68k_mgl_inspection(&file.path, inspection)
+                        .is_ok()
+                }))
+            .then(|| PreparedLaunchProvenance::prepared(PreparedCollectionId::Neon68k))
+        });
+        let genre = if prepared
+            .is_some_and(|value| value.collection_id == PreparedCollectionId::ZeroMhz)
+        {
+            Some("0MHz".to_string())
+        } else if prepared.is_some_and(|value| value.collection_id == PreparedCollectionId::Neon68k)
+        {
+            Some(
+                prepared_collections::neon68k_source_category(&file.path)
+                    .map(|category| format!("Neon68K / {category}"))
+                    .unwrap_or_else(|| "Neon68K".to_string()),
+            )
+        } else {
+            None
+        };
+        return GameDiscovery {
+            source_path: source_path.clone(),
+            launch_ref: source_path.clone(),
+            source_kind: DiscoverySourceKind::Mgl,
+            title: library_db::title_from_path(&source_path),
+            category: profile.category.to_string(),
+            platform_id: profile.system_id.to_string(),
+            core_id: mgl
                 .rbf
                 .as_deref()
                 .filter(|value| !value.trim().is_empty())
                 .map(library_db::normalize_id)
-                .unwrap_or_else(|| profile.core_name.to_string());
-            let hardware_id = mra
-                .platform
-                .as_deref()
-                .filter(|value| !value.trim().is_empty())
-                .map(library_db::normalize_id)
-                .unwrap_or_else(|| core_id.clone());
-            return GameDiscovery {
-                source_path: source_path.clone(),
-                launch_ref: source_path.clone(),
-                source_kind: DiscoverySourceKind::Mra,
-                title: mra
-                    .name
-                    .unwrap_or_else(|| library_db::title_from_path(&source_path)),
-                category: profile.category.to_string(),
-                platform_id: profile.system_id.to_string(),
-                core_id,
-                hardware_id,
-                manufacturer: mra.manufacturer,
-                genre: None,
-                year: mra.year.and_then(|s| s.parse::<u16>().ok()),
-                setname: mra.setname,
-                parent: mra.parent,
-                covered_payload_path: None,
-                prepared: None,
-                confidence: if mra.platform.is_some() {
-                    DiscoveryConfidence::MraHardware
-                } else {
-                    DiscoveryConfidence::MraCore
-                },
-            };
-        }
-    }
-    if file.ext == "mgl" {
-        if let Some(document) = media_metadata::read_mgl_document(&file.path) {
-            let media_metadata::MglDocument {
-                metadata: mgl,
-                inspection,
-            } = document;
-            let payload_profile = mgl
-                .file_path
-                .as_deref()
-                .filter(|_| profile.id == "mgl")
-                .and_then(|payload| profile_for_mgl_payload(profiles, &file.path, payload));
-            let profile = payload_profile.unwrap_or(profile);
-            let setname = if profile.system_id == "neogeo" {
-                media_metadata::neogeo_mgl_setname(&file.path, mgl.file_path.as_deref())
-            } else if profile.id == "neon68k" {
-                mgl.setname.clone()
-            } else {
-                None
-            };
-            let covered_payload_path = mgl.file_path.as_deref().map(|payload| {
-                let path = if profile.system_id == "dos"
-                    && file.path.components().any(|component| {
-                        component
-                            .as_os_str()
-                            .to_str()
-                            .is_some_and(|value| value.eq_ignore_ascii_case("_DOS Games"))
-                    }) {
-                    prepared_index.map_or_else(
-                        || prepared_collections::resolve_0mhz_payload_path(&file.path, payload),
-                        |index| index.resolve_0mhz_payload_path(&file.path, payload),
-                    )
-                } else {
-                    media_metadata::resolve_mgl_payload_path(&file.path, payload)
-                };
-                path.display().to_string()
-            });
-            let prepared = (profile.system_id == "dos"
-                && inspection.as_ref().is_ok_and(|inspection| {
-                    prepared_index
-                        .map_or_else(
-                            || {
-                                prepared_collections::validate_0mhz_mgl_inspection(
-                                    &file.path, inspection,
-                                )
-                            },
-                            |index| {
-                                prepared_collections::validate_0mhz_mgl_inspection_with_index(
-                                    &file.path, inspection, index,
-                                )
-                            },
-                        )
-                        .is_ok()
-                }))
-            .then(|| PreparedLaunchProvenance::prepared(PreparedCollectionId::ZeroMhz));
-            let prepared = prepared.or_else(|| {
-                (profile.id == "neon68k"
-                    && inspection.as_ref().is_ok_and(|inspection| {
-                        prepared_collections::validate_neon68k_mgl_inspection(
-                            &file.path, inspection,
-                        )
-                        .is_ok()
-                    }))
-                .then(|| PreparedLaunchProvenance::prepared(PreparedCollectionId::Neon68k))
-            });
-            let genre = if prepared
-                .is_some_and(|value| value.collection_id == PreparedCollectionId::ZeroMhz)
-            {
-                Some("0MHz".to_string())
-            } else if prepared
-                .is_some_and(|value| value.collection_id == PreparedCollectionId::Neon68k)
-            {
-                Some(
-                    prepared_collections::neon68k_source_category(&file.path)
-                        .map(|category| format!("Neon68K / {category}"))
-                        .unwrap_or_else(|| "Neon68K".to_string()),
-                )
-            } else {
-                None
-            };
-            return GameDiscovery {
-                source_path: source_path.clone(),
-                launch_ref: source_path.clone(),
-                source_kind: DiscoverySourceKind::Mgl,
-                title: library_db::title_from_path(&source_path),
-                category: profile.category.to_string(),
-                platform_id: profile.system_id.to_string(),
-                core_id: mgl
-                    .rbf
-                    .as_deref()
-                    .filter(|value| !value.trim().is_empty())
-                    .map(library_db::normalize_id)
-                    .unwrap_or_else(|| profile.core_name.to_string()),
-                hardware_id: profile.system_id.to_string(),
-                manufacturer: None,
-                genre,
-                year: None,
-                setname,
-                parent: None,
-                covered_payload_path,
-                prepared,
-                confidence: DiscoveryConfidence::PayloadPath,
-            };
-        }
+                .unwrap_or_else(|| profile.core_name.to_string()),
+            hardware_id: profile.system_id.to_string(),
+            manufacturer: None,
+            genre,
+            year: None,
+            setname,
+            parent: None,
+            covered_payload_path,
+            prepared,
+            confidence: DiscoveryConfidence::PayloadPath,
+        };
     }
 
     let payload_setname = if profile.system_id == "neogeo" {
@@ -637,7 +634,7 @@ pub(crate) fn is_raw_arcade_zip_set_discovery(discovery: &GameDiscovery) -> bool
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog_scan::{profile_for_path, FoundFile};
+    use crate::catalog_scan::{FoundFile, profile_for_path};
     use crate::launch_profiles;
     use crate::library_db::mtime_secs;
     use crate::test_support::*;

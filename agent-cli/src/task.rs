@@ -735,9 +735,11 @@ mod tests {
         run(&root, &["add", "tracked.txt"]);
         run(&root, &["commit", "-qm", "intervening overlap"]);
         fs::write(root.join("tracked.txt"), "remaining task change\n").unwrap();
-        assert!(changes(&evidence, &root, "task-overlap")
-            .unwrap_err()
-            .contains("intervening commits overlap"));
+        assert!(
+            changes(&evidence, &root, "task-overlap")
+                .unwrap_err()
+                .contains("intervening commits overlap")
+        );
         fs::remove_dir_all(root).unwrap();
 
         let root = fixture_root("baseline-dirty-head-advance");
@@ -746,9 +748,11 @@ mod tests {
         begin(&evidence, &root, "task-baseline-dirty", false).unwrap();
         run(&root, &["add", "tracked.txt"]);
         run(&root, &["commit", "-qm", "intervening baseline overlap"]);
-        assert!(changes(&evidence, &root, "task-baseline-dirty")
-            .unwrap_err()
-            .contains("intervening commits overlap"));
+        assert!(
+            changes(&evidence, &root, "task-baseline-dirty")
+                .unwrap_err()
+                .contains("intervening commits overlap")
+        );
         fs::remove_dir_all(root).unwrap();
 
         let root = fixture_root("staged-head-advance");
@@ -759,9 +763,11 @@ mod tests {
         run(&root, &["commit", "-qm", "upstream"]);
         fs::write(root.join("staged.txt"), "staged change\n").unwrap();
         run(&root, &["add", "staged.txt"]);
-        assert!(changes(&evidence, &root, "task-staged")
-            .unwrap_err()
-            .contains("staged changes prevent"));
+        assert!(
+            changes(&evidence, &root, "task-staged")
+                .unwrap_err()
+                .contains("staged changes prevent")
+        );
         fs::remove_dir_all(root).unwrap();
 
         let root = fixture_root("diverged-head-advance");
@@ -775,9 +781,11 @@ mod tests {
         fs::write(root.join("diverged.txt"), "diverged branch\n").unwrap();
         run(&root, &["add", "diverged.txt"]);
         run(&root, &["commit", "-qm", "diverged branch"]);
-        assert!(changes(&evidence, &root, "task-diverged")
-            .unwrap_err()
-            .contains("history diverged"));
+        assert!(
+            changes(&evidence, &root, "task-diverged")
+                .unwrap_err()
+                .contains("history diverged")
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -845,11 +853,13 @@ mod tests {
     }
 
     fn run(root: &Path, args: &[&str]) {
-        assert!(Command::new("git")
-            .args(args)
-            .current_dir(root)
-            .status()
-            .unwrap()
-            .success());
+        assert!(
+            Command::new("git")
+                .args(args)
+                .current_dir(root)
+                .status()
+                .unwrap()
+                .success()
+        );
     }
 }

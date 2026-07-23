@@ -21,26 +21,26 @@ use std::time::{Duration, Instant};
 use mister_magik_ui as slint_ui;
 
 use crate::arcade_catalog::{
-    self, ArcadeCatalog, ArcadeGameView, LaunchTarget, ARCADE_LIST_VISIBLE_H, ARCADE_ROW_HEIGHT,
-    HOME_LIST_VISIBLE_W, HOME_TILE_GAP, HOME_TILE_WIDTH,
+    self, ARCADE_LIST_VISIBLE_H, ARCADE_ROW_HEIGHT, ArcadeCatalog, ArcadeGameView,
+    HOME_LIST_VISIBLE_W, HOME_TILE_GAP, HOME_TILE_WIDTH, LaunchTarget,
 };
 use crate::arcade_list_renderer::{
-    arcade_list_present_pixels, ArcadeListGeometry, ArcadeListItem, ArcadeListRenderer,
-    ArcadeListUpdate, ARCADE_LIST_H, ARCADE_LIST_W, ARCADE_LIST_X, ARCADE_LIST_Y,
+    ARCADE_LIST_H, ARCADE_LIST_W, ARCADE_LIST_X, ARCADE_LIST_Y, ArcadeListGeometry, ArcadeListItem,
+    ArcadeListRenderer, ArcadeListUpdate, arcade_list_present_pixels,
 };
 use crate::boot_analytics;
 use crate::controller_db::ControllerDb;
 use crate::cpu_profile;
-use crate::display_config::{detect_runtime_display_geometry, DisplayConfig};
+use crate::display_config::{DisplayConfig, detect_runtime_display_geometry};
 use crate::frame_profile::{FrameProfiler, FrameRect, FrameSample, VideoFrameProfile};
 use crate::input::{PadInfo, PadPool};
 use crate::launcher::{self, LauncherAction, LauncherNav, Screen};
 use crate::library_db;
 use crate::preview_state::{
-    apply_ready_preview, preview_visual_pct, prewarm_arcade_selected_preview,
-    request_arcade_preview_window, schedule_arcade_preview_window, PreviewRawFrame,
-    PreviewRawFrameStatus, PreviewRawPixels, PreviewRawTransitionFrame, PreviewState,
     ARCADE_PREVIEW_BOX_H, ARCADE_PREVIEW_BOX_W, ARCADE_PREVIEW_BOX_X, ARCADE_PREVIEW_BOX_Y,
+    PreviewRawFrame, PreviewRawFrameStatus, PreviewRawPixels, PreviewRawTransitionFrame,
+    PreviewState, apply_ready_preview, preview_visual_pct, prewarm_arcade_selected_preview,
+    request_arcade_preview_window, schedule_arcade_preview_window,
 };
 use crate::return_catalog_capsule;
 use crate::runtime_status::{self, LauncherStatus};
@@ -50,11 +50,11 @@ use crate::screenshot_transitions::{
 };
 use crate::setup_nav::{SetupAction, SetupNav, SetupPhase};
 use crate::ui_display::{
-    CrtUiMetrics, RuntimeDisplayGeometry, UiDisplay, UiDisplayPlan, SLINT_UI_SCALE,
+    CrtUiMetrics, RuntimeDisplayGeometry, SLINT_UI_SCALE, UiDisplay, UiDisplayPlan,
 };
 #[cfg(mister_experiments)]
 use mister_magik_fb::experiments::effects::framebuffer_effects::{
-    EffectKind, EffectSize, EFFECT_SIZES,
+    EFFECT_SIZES, EffectKind, EffectSize,
 };
 use mister_magik_fb::framebuffer::present::{
     copy_cached_rect_565, copy_cached_rows_565, copy_direct_preview_rect_565,
@@ -62,9 +62,9 @@ use mister_magik_fb::framebuffer::present::{
 };
 use mister_magik_fb::framebuffer::route::LauncherFramebufferRoute;
 use mister_magik_fb::framebuffer::target::{
-    blend_565, brighten_565, build_launcher_present_plan_from_layers, dirty_rect,
-    format_dirty_rect, CachedFrameView, DirectPreviewView, DirtyRect, DirtyRectList,
-    FramebufferTargetGeometry, UiFrameTarget,
+    CachedFrameView, DirectPreviewView, DirtyRect, DirtyRectList, FramebufferTargetGeometry,
+    UiFrameTarget, blend_565, brighten_565, build_launcher_present_plan_from_layers, dirty_rect,
+    format_dirty_rect,
 };
 use mister_magik_fb::framebuffer::{
     format::rgb565_stride_bytes,
@@ -73,7 +73,7 @@ use mister_magik_fb::framebuffer::{
 use slint_ui::launcher::PreviewStatus;
 use std::cell::Cell;
 use std::path::PathBuf;
-use std::sync::{mpsc, OnceLock};
+use std::sync::{OnceLock, mpsc};
 
 mod arcade_drawer;
 mod catalog_worker;

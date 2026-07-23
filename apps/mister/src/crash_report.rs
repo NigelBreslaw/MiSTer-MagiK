@@ -3,7 +3,7 @@
 
 //! Local crash reports for MiSTer MagiK.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};

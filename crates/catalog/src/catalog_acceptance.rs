@@ -3,7 +3,7 @@
 
 //! Read-only Catalog V3 integrity report used by host/device acceptance.
 
-use crate::catalog_classify::{platform_kind_for_system, PlatformKind};
+use crate::catalog_classify::{PlatformKind, platform_kind_for_system};
 use crate::catalog_config;
 use crate::sharded_catalog::CatalogReader;
 

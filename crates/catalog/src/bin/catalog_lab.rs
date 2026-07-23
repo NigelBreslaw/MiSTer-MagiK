@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use mister_magik_catalog::synthetic_fixture::{generate_synthetic_fixture, SyntheticFixtureSpec};
+use mister_magik_catalog::synthetic_fixture::{SyntheticFixtureSpec, generate_synthetic_fixture};
 use std::path::PathBuf;
 
 fn main() {

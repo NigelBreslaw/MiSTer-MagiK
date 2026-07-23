@@ -1806,11 +1806,11 @@ fn ao486_profile() -> LaunchProfile {
             file_names: str_vec(&["boot0.rom", "boot1.rom", "boot1_opensource.rom"]),
             extensions: Vec::new(),
             reason: IgnoreReason::Bios,
-            provenance: RuleProvenance::main(
-                "AO486 boot ROMs are support files under games/AO486",
-            ),
+            provenance: RuleProvenance::main("AO486 boot ROMs are support files under games/AO486"),
         }],
-        provenance: RuleProvenance::main("Main detects AO486 by core name and routes image mounts through x86_set_image"),
+        provenance: RuleProvenance::main(
+            "Main detects AO486 by core name and routes image mounts through x86_set_image",
+        ),
     }
 }
 
@@ -2040,10 +2040,11 @@ fn path_ext(path: &Path) -> Option<String> {
 
 pub(crate) fn canonical_core_id(stem: &str) -> String {
     let mut core = stem;
-    if let Some((prefix, suffix)) = stem.rsplit_once('_') {
-        if suffix.len() == 8 && suffix.chars().all(|c| c.is_ascii_digit()) {
-            core = prefix;
-        }
+    if let Some((prefix, suffix)) = stem.rsplit_once('_')
+        && suffix.len() == 8
+        && suffix.chars().all(|c| c.is_ascii_digit())
+    {
+        core = prefix;
     }
     core.to_string()
 }
@@ -2083,9 +2084,11 @@ mod tests {
         let coleco =
             profile_for_game_dir(&with_core, "ColecoVision").expect("colecovision profile");
         assert_eq!(coleco.system_id, "colecovision");
-        assert!(coleco
-            .classify_archive_entry(Path::new("Smurf Rescue.col"))
-            .is_some());
+        assert!(
+            coleco
+                .classify_archive_entry(Path::new("Smurf Rescue.col"))
+                .is_some()
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -2103,22 +2106,27 @@ mod tests {
         let roots = vec![root.display().to_string()];
         let plan = CatalogScanPlan::for_roots(&roots);
 
-        assert!(plan
-            .installed_cores()
-            .iter()
-            .any(|core| core.core_id == "NES"));
-        assert!(plan
-            .base_profiles()
-            .iter()
-            .any(|profile| profile.system_id == "nes"));
-        assert!(plan
-            .game_dir_headers()
-            .iter()
-            .any(|header| header.name == "Loose"));
-        assert!(!plan
-            .game_dir_headers()
-            .iter()
-            .any(|header| header.name.eq_ignore_ascii_case("NES")));
+        assert!(
+            plan.installed_cores()
+                .iter()
+                .any(|core| core.core_id == "NES")
+        );
+        assert!(
+            plan.base_profiles()
+                .iter()
+                .any(|profile| profile.system_id == "nes")
+        );
+        assert!(
+            plan.game_dir_headers()
+                .iter()
+                .any(|header| header.name == "Loose")
+        );
+        assert!(
+            !plan
+                .game_dir_headers()
+                .iter()
+                .any(|header| header.name.eq_ignore_ascii_case("NES"))
+        );
 
         let game_dirs = plan
             .game_dir_headers()
@@ -2554,17 +2562,20 @@ mod tests {
                 }
             }
         ));
-        assert!(snes
-            .classify_archive_entry(Path::new("ActRaiser.sfc"))
-            .is_some());
+        assert!(
+            snes.classify_archive_entry(Path::new("ActRaiser.sfc"))
+                .is_some()
+        );
 
         let wonderswan_color =
             profile_for_game_dir(&profiles, "WonderSwanColor").expect("wonderswan profile");
         assert_eq!(wonderswan_color.id, "wonderswan");
         assert_eq!(wonderswan_color.system_id, "wonderswan");
-        assert!(wonderswan_color
-            .classify_archive_entry(Path::new("Gunpey EX.wsc"))
-            .is_some());
+        assert!(
+            wonderswan_color
+                .classify_archive_entry(Path::new("Gunpey EX.wsc"))
+                .is_some()
+        );
         assert!(matches!(
             wonderswan_color
                 .classify_path(Path::new("/media/fat/games/WonderSwanColor/Gunpey EX.wsc")),
@@ -2662,10 +2673,12 @@ mod tests {
         let profile = profile_for_game_dir(&profiles, "GBC").expect("GBC profile");
 
         assert_eq!(profile.system_id, "gbc");
-        assert!(profile
-            .core_path
-            .as_deref()
-            .is_some_and(|path| path.contains("Gameboy")));
+        assert!(
+            profile
+                .core_path
+                .as_deref()
+                .is_some_and(|path| path.contains("Gameboy"))
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -2710,14 +2723,18 @@ mod tests {
         let profile = profile_for_game_dir(&profiles, "Atari2600").expect("Atari 2600 profile");
 
         assert_eq!(profile.system_id, "atari2600");
-        assert!(profile
-            .core_path
-            .as_deref()
-            .is_some_and(|path| path.contains("Atari2600")));
-        assert!(!profile
-            .core_path
-            .as_deref()
-            .is_some_and(|path| path.contains("Atari7800")));
+        assert!(
+            profile
+                .core_path
+                .as_deref()
+                .is_some_and(|path| path.contains("Atari2600"))
+        );
+        assert!(
+            !profile
+                .core_path
+                .as_deref()
+                .is_some_and(|path| path.contains("Atari7800"))
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

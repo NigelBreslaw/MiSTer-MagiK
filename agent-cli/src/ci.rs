@@ -138,7 +138,7 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &Path, label: &str) -> AgentRes
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 

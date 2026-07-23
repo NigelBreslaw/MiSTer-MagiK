@@ -297,22 +297,26 @@ mod tests {
                 },
             ))
             .unwrap();
-        assert!(sequence
-            .accept(&ShardedCatalogEnvelope::new(
-                &second,
-                4,
-                1,
-                ShardedCatalogEvent::PlanReady { systems: 2 },
-            ))
-            .is_err());
-        assert!(sequence
-            .accept(&ShardedCatalogEnvelope::new(
-                &first,
-                4,
-                2,
-                ShardedCatalogEvent::PlanReady { systems: 2 },
-            ))
-            .is_err());
+        assert!(
+            sequence
+                .accept(&ShardedCatalogEnvelope::new(
+                    &second,
+                    4,
+                    1,
+                    ShardedCatalogEvent::PlanReady { systems: 2 },
+                ))
+                .is_err()
+        );
+        assert!(
+            sequence
+                .accept(&ShardedCatalogEnvelope::new(
+                    &first,
+                    4,
+                    2,
+                    ShardedCatalogEvent::PlanReady { systems: 2 },
+                ))
+                .is_err()
+        );
         sequence
             .accept(&ShardedCatalogEnvelope::new(
                 &first,
@@ -331,14 +335,16 @@ mod tests {
                 ShardedCatalogEvent::Done,
             ))
             .unwrap();
-        assert!(sequence
-            .accept(&ShardedCatalogEnvelope::new(
-                &first,
-                4,
-                3,
-                ShardedCatalogEvent::Done,
-            ))
-            .is_err());
+        assert!(
+            sequence
+                .accept(&ShardedCatalogEnvelope::new(
+                    &first,
+                    4,
+                    3,
+                    ShardedCatalogEvent::Done,
+                ))
+                .is_err()
+        );
     }
 
     #[test]
@@ -354,11 +360,13 @@ mod tests {
                 games: 1,
             },
         );
-        assert!(decode_event(
-            &serde_json::to_vec(&wrong_generation).unwrap(),
-            DEFAULT_MAX_EVENT_BYTES
-        )
-        .is_err());
+        assert!(
+            decode_event(
+                &serde_json::to_vec(&wrong_generation).unwrap(),
+                DEFAULT_MAX_EVENT_BYTES
+            )
+            .is_err()
+        );
         let noncanonical = ShardedCatalogEnvelope::new(
             &run_id,
             8,
@@ -367,11 +375,13 @@ mod tests {
                 system_id: "SNES".to_string(),
             },
         );
-        assert!(decode_event(
-            &serde_json::to_vec(&noncanonical).unwrap(),
-            DEFAULT_MAX_EVENT_BYTES
-        )
-        .is_err());
+        assert!(
+            decode_event(
+                &serde_json::to_vec(&noncanonical).unwrap(),
+                DEFAULT_MAX_EVENT_BYTES
+            )
+            .is_err()
+        );
         assert!(decode_event(&[b' '; 9], 8).is_err());
     }
 }

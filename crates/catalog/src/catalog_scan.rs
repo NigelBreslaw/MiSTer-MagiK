@@ -13,7 +13,7 @@ use crate::library_db::{
 use crate::namespace_walk::{
     self, NamespaceEntry, NamespaceEntryKind, NamespaceSignatureCapture, NamespaceWalkStats,
 };
-use crate::runtime_thread::{apply_runtime_thread_policy, RuntimeThreadRole};
+use crate::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
@@ -103,10 +103,10 @@ pub(crate) fn profile_for_path<'a>(
 ) -> Option<&'a LaunchProfile> {
     let mut previous_was_games = false;
     for component in path_components_str(path) {
-        if previous_was_games {
-            if let Some(profile) = launch_profiles::profile_for_game_dir(profiles, component) {
-                return Some(profile);
-            }
+        if previous_was_games
+            && let Some(profile) = launch_profiles::profile_for_game_dir(profiles, component)
+        {
+            return Some(profile);
         }
         previous_was_games = component.eq_ignore_ascii_case("games");
     }
@@ -355,10 +355,10 @@ fn walk_index_candidates_with_plan(
                     |file| target_send_stats.send(tx, DiscoveryEvent::File(file)),
                 );
                 let in_target_send_us = target_send_stats.elapsed_us;
-                if let Some(facts) = facts {
-                    if !target_send_stats.send(tx, DiscoveryEvent::GameDirFacts(facts)) {
-                        break;
-                    }
+                if let Some(facts) = facts
+                    && !target_send_stats.send(tx, DiscoveryEvent::GameDirFacts(facts))
+                {
+                    break;
                 }
                 producer_us =
                     producer_us.saturating_add(stats.elapsed_us.saturating_sub(in_target_send_us));
@@ -1127,10 +1127,10 @@ fn is_real_dir(path: &Path) -> bool {
 }
 
 fn candidate_signature_for_namespace_entry(entry: &NamespaceEntry, ext: &str) -> (u64, i64) {
-    if ext.eq_ignore_ascii_case("zip") {
-        if let Some(signature) = entry.zip_signature {
-            return signature;
-        }
+    if ext.eq_ignore_ascii_case("zip")
+        && let Some(signature) = entry.zip_signature
+    {
+        return signature;
     }
     (0, 0)
 }
@@ -1281,32 +1281,33 @@ fn scan_zip_central_directory_entries(
             remaining -= trailing_len;
         }
         let name = String::from_utf8_lossy(&name_buf).into_owned();
-        if !name.ends_with('/') && !should_ignore_path(Path::new(&name)) {
-            if let Some(rule) = profile.classify_archive_entry(Path::new(&name)) {
-                let launch_ref = crate::archive_member::encode_archive_member_ref(
-                    &crate::archive_member::ArchiveMemberRef {
-                        archive_path: file_path.to_string(),
-                        member_path: name.clone(),
-                        local_header_offset,
-                        compression_method,
-                        compressed_size: compressed,
-                        uncompressed_size: uncompressed,
-                        crc32,
-                    },
-                )?;
-                entries.push(LibraryContainerEntry {
-                    file_path: file_path.to_string(),
-                    entry_path: name.clone(),
-                    normalized_title: library_db::normalize_title(&name),
-                    profile_id: profile.id.to_string(),
-                    rule,
-                    compressed_size: Some(compressed),
-                    uncompressed_size: Some(uncompressed),
-                    crc32: Some(crc32),
-                    launchable: true,
-                    launch_ref,
-                });
-            }
+        if !name.ends_with('/')
+            && !should_ignore_path(Path::new(&name))
+            && let Some(rule) = profile.classify_archive_entry(Path::new(&name))
+        {
+            let launch_ref = crate::archive_member::encode_archive_member_ref(
+                &crate::archive_member::ArchiveMemberRef {
+                    archive_path: file_path.to_string(),
+                    member_path: name.clone(),
+                    local_header_offset,
+                    compression_method,
+                    compressed_size: compressed,
+                    uncompressed_size: uncompressed,
+                    crc32,
+                },
+            )?;
+            entries.push(LibraryContainerEntry {
+                file_path: file_path.to_string(),
+                entry_path: name.clone(),
+                normalized_title: library_db::normalize_title(&name),
+                profile_id: profile.id.to_string(),
+                rule,
+                compressed_size: Some(compressed),
+                uncompressed_size: Some(uncompressed),
+                crc32: Some(crc32),
+                launchable: true,
+                launch_ref,
+            });
         }
     }
     Ok(entries)
@@ -1432,7 +1433,7 @@ mod tests {
     use super::*;
     use crate::game_discovery::DiscoverySourceKind;
     use crate::launch_profiles::{self, ProfilePathClass};
-    use crate::library_db::{mtime_secs, scan_library, BenchConfig};
+    use crate::library_db::{BenchConfig, mtime_secs, scan_library};
     use crate::sqlite_catalog::{load_arcade_catalog_from_sqlite_at, save_sqlite_scan};
     use crate::test_support::*;
     use std::collections::BTreeSet;
@@ -1494,16 +1495,20 @@ mod tests {
     fn rbf_cores_are_not_profile_candidates() {
         let profiles = launch_profiles::builtin_profiles();
 
-        assert!(classify_profile_path(
-            &profiles,
-            Path::new("/media/fat/_Computer/AcornAtom_20251001.rbf")
-        )
-        .is_none());
-        assert!(classify_profile_path(
-            &profiles,
-            Path::new("/media/fat/_LLAPI/NES_LLAPI_20251206.rbf")
-        )
-        .is_none());
+        assert!(
+            classify_profile_path(
+                &profiles,
+                Path::new("/media/fat/_Computer/AcornAtom_20251001.rbf")
+            )
+            .is_none()
+        );
+        assert!(
+            classify_profile_path(
+                &profiles,
+                Path::new("/media/fat/_LLAPI/NES_LLAPI_20251206.rbf")
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -1548,21 +1553,24 @@ mod tests {
             unique_profile_ids.len(),
             "{profile_ids:?}"
         );
-        assert!(scan
-            .discoveries
-            .iter()
-            .any(|discovery| discovery.platform_id == "gameboy" && discovery.title == "Tetris"));
-        assert!(scan
-            .discoveries
-            .iter()
-            .any(|discovery| discovery.platform_id == "gameboy" && discovery.title == "Camera"));
+        assert!(
+            scan.discoveries
+                .iter()
+                .any(|discovery| discovery.platform_id == "gameboy" && discovery.title == "Tetris")
+        );
+        assert!(
+            scan.discoveries
+                .iter()
+                .any(|discovery| discovery.platform_id == "gameboy" && discovery.title == "Camera")
+        );
         assert!(scan.discoveries.iter().any(|discovery| {
             discovery.platform_id == "colecovision" && discovery.title == "Smurf Rescue"
         }));
-        assert!(scan
-            .discoveries
-            .iter()
-            .any(|discovery| discovery.platform_id == "sms" && discovery.title == "Hang On"));
+        assert!(
+            scan.discoveries
+                .iter()
+                .any(|discovery| discovery.platform_id == "sms" && discovery.title == "Hang On")
+        );
         assert!(scan.discoveries.iter().any(|discovery| {
             discovery.platform_id == "neogeo-cd" && discovery.title == "Metal Slug"
         }));
@@ -1775,9 +1783,11 @@ mod tests {
                 .collect::<Vec<_>>(),
             (0..completed.len()).collect::<Vec<_>>()
         );
-        assert!(completed
-            .iter()
-            .any(|target| { target.path == arcade && target.kind == ScanTargetKind::Static }));
+        assert!(
+            completed
+                .iter()
+                .any(|target| { target.path == arcade && target.kind == ScanTargetKind::Static })
+        );
         assert!(dirs >= 1);
         let _ = std::fs::remove_dir_all(root);
     }
@@ -1831,11 +1841,13 @@ mod tests {
         assert_eq!(loaded.rows, 1);
         assert_eq!(loaded.catalog.games[0].system_id.as_ref(), "neogeo");
         assert!(loaded.catalog.games[0].mra_path.starts_with("magik-plan:"));
-        assert!(loaded
-            .catalog
-            .systems
-            .iter()
-            .any(|system| system.id == "neogeo" && system.count == 1));
+        assert!(
+            loaded
+                .catalog
+                .systems
+                .iter()
+                .any(|system| system.id == "neogeo" && system.count == 1)
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1942,11 +1954,12 @@ mod tests {
             scan.normal_files[0].path,
             nes_dir.join("Mario.nes").display().to_string()
         );
-        assert!(scan
-            .discoveries
-            .iter()
-            .all(|discovery| !discovery.launch_ref.contains("gamelist.xml")
-                && !discovery.launch_ref.contains("Not A Game.nes")));
+        assert!(
+            scan.discoveries
+                .iter()
+                .all(|discovery| !discovery.launch_ref.contains("gamelist.xml")
+                    && !discovery.launch_ref.contains("Not A Game.nes"))
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -2051,18 +2064,21 @@ mod tests {
             scan.normal_files[0].path,
             gameboy_dir.join("Tetris.gb").display().to_string()
         );
-        assert!(scan
-            .profiles
-            .iter()
-            .any(|profile| profile.id == "runtime-gameboy"));
-        assert!(scan
-            .discoveries
-            .iter()
-            .any(|discovery| discovery.platform_id == "gameboy" && discovery.title == "Tetris"));
-        assert!(scan
-            .discoveries
-            .iter()
-            .all(|discovery| !discovery.launch_ref.contains("Ghost.nope")));
+        assert!(
+            scan.profiles
+                .iter()
+                .any(|profile| profile.id == "runtime-gameboy")
+        );
+        assert!(
+            scan.discoveries
+                .iter()
+                .any(|discovery| discovery.platform_id == "gameboy" && discovery.title == "Tetris")
+        );
+        assert!(
+            scan.discoveries
+                .iter()
+                .all(|discovery| !discovery.launch_ref.contains("Ghost.nope"))
+        );
         assert!(scan.audit_rows.iter().any(|row| {
             row.expected_game_dir == "games/NotACoreProfile"
                 && row.catalog_status == "uncataloged"
@@ -2125,14 +2141,16 @@ mod tests {
                 && profile.system_id == "bbcmicro"
                 && profile.game_dirs == vec!["BBCMicro".to_string()]
         }));
-        assert!(scan
-            .discoveries
-            .iter()
-            .any(|discovery| discovery.platform_id == "bbcmicro" && discovery.title == "Elite"));
-        assert!(scan
-            .discoveries
-            .iter()
-            .all(|discovery| !discovery.launch_ref.ends_with("metadata.xml")));
+        assert!(
+            scan.discoveries
+                .iter()
+                .any(|discovery| discovery.platform_id == "bbcmicro" && discovery.title == "Elite")
+        );
+        assert!(
+            scan.discoveries
+                .iter()
+                .all(|discovery| !discovery.launch_ref.ends_with("metadata.xml"))
+        );
 
         save_sqlite_scan(&db, &scan).expect("save sqlite");
         let conn = library_db::open_sqlite_read_only(&db).expect("open sqlite");
@@ -2283,10 +2301,11 @@ mod tests {
         assert!(scan.discoveries.iter().any(|discovery| {
             discovery.platform_id == "zx-spectrum" && discovery.title == "Jet Set Willy"
         }));
-        assert!(scan
-            .discoveries
-            .iter()
-            .all(|discovery| !discovery.launch_ref.ends_with("support.rom")));
+        assert!(
+            scan.discoveries
+                .iter()
+                .all(|discovery| !discovery.launch_ref.ends_with("support.rom"))
+        );
 
         save_sqlite_scan(&db, &scan).expect("save sqlite");
         let conn = library_db::open_sqlite_read_only(&db).expect("open sqlite");
@@ -2416,10 +2435,11 @@ mod tests {
             .map(|discovery| discovery.title.as_str())
             .collect::<BTreeSet<_>>();
         assert_eq!(pc88_games, BTreeSet::from(["Thexder", "Ys"]));
-        assert!(scan
-            .discoveries
-            .iter()
-            .all(|discovery| discovery.title != "boot"));
+        assert!(
+            scan.discoveries
+                .iter()
+                .all(|discovery| discovery.title != "boot")
+        );
         assert!(scan.audit_rows.iter().any(|row| {
             row.expected_game_dir == "games/PC8801"
                 && row.catalog_status == "cataloged"
@@ -2446,10 +2466,11 @@ mod tests {
         assert_eq!(scan.normal_files.len(), 1);
         assert_eq!(scan.entries.len(), 1);
         assert_eq!(scan.discoveries.len(), 2);
-        assert!(scan
-            .discoveries
-            .iter()
-            .all(|discovery| discovery.platform_id == "sms"));
+        assert!(
+            scan.discoveries
+                .iter()
+                .all(|discovery| discovery.platform_id == "sms")
+        );
         assert!(scan.audit_rows.iter().all(|row| {
             row.expected_game_dir != "games/SMS" || !row.reason.contains("zip-archive-not-indexed")
         }));
@@ -2472,21 +2493,24 @@ mod tests {
         let scan = scan_library(&cfg);
 
         assert_eq!(scan.normal_files.len(), 1);
-        assert!(scan
-            .profiles
-            .iter()
-            .any(|profile| profile.id == "colecovision"));
+        assert!(
+            scan.profiles
+                .iter()
+                .any(|profile| profile.id == "colecovision")
+        );
         assert!(scan.discoveries.iter().any(|discovery| {
             discovery.platform_id == "colecovision" && discovery.title == "Mouse Trap"
         }));
         save_sqlite_scan(&db, &scan).expect("save sqlite");
         let loaded =
             load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
-        assert!(loaded
-            .catalog
-            .systems
-            .iter()
-            .any(|system| system.id == "colecovision" && system.count == 1));
+        assert!(
+            loaded
+                .catalog
+                .systems
+                .iter()
+                .any(|system| system.id == "colecovision" && system.count == 1)
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -2518,11 +2542,13 @@ mod tests {
         save_sqlite_scan(&db, &scan).expect("save sqlite");
         let loaded =
             load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
-        assert!(loaded
-            .catalog
-            .systems
-            .iter()
-            .any(|system| system.id == "colecovision" && system.count == 1));
+        assert!(
+            loaded
+                .catalog
+                .systems
+                .iter()
+                .any(|system| system.id == "colecovision" && system.count == 1)
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -2563,10 +2589,11 @@ mod tests {
 
         assert!(scan.normal_files.is_empty());
         assert!(scan.discoveries.is_empty());
-        assert!(scan
-            .profiles
-            .iter()
-            .all(|profile| profile.id != "colecovision"));
+        assert!(
+            scan.profiles
+                .iter()
+                .all(|profile| profile.id != "colecovision")
+        );
         assert!(scan.audit_rows.iter().any(|row| {
             row.core_id == "ColecoVision"
                 && row.expected_game_dir == "games/ColecoVision"
@@ -2601,11 +2628,13 @@ mod tests {
         save_sqlite_scan(&db, &scan).expect("save sqlite");
         let loaded =
             load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
-        assert!(loaded
-            .catalog
-            .systems
-            .iter()
-            .any(|system| system.id == "wonderswan" && system.count == 1));
+        assert!(
+            loaded
+                .catalog
+                .systems
+                .iter()
+                .any(|system| system.id == "wonderswan" && system.count == 1)
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -2636,10 +2665,12 @@ mod tests {
         assert!(scan.audit_rows.iter().any(|row| {
             row.reason == format!("zip-archive-not-indexed:{}", direct_zip.display())
         }));
-        assert!(!scan
-            .audit_rows
-            .iter()
-            .any(|row| row.reason.contains("Nested PSX Games.zip")));
+        assert!(
+            !scan
+                .audit_rows
+                .iter()
+                .any(|row| row.reason.contains("Nested PSX Games.zip"))
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -2704,18 +2735,23 @@ mod tests {
         assert!(scan.discoveries.iter().any(|discovery| discovery.launch_ref
             == dos_mgl.display().to_string()
             && discovery.platform_id == "dos"));
-        assert!(scan
-            .discoveries
-            .iter()
-            .any(|discovery| discovery.launch_ref == nes_rom.display().to_string()));
-        assert!(!scan
-            .discoveries
-            .iter()
-            .any(|discovery| discovery.launch_ref == raw_media.display().to_string()));
-        assert!(!scan
-            .normal_files
-            .iter()
-            .any(|file| file.path == raw_media.display().to_string()));
+        assert!(
+            scan.discoveries
+                .iter()
+                .any(|discovery| discovery.launch_ref == nes_rom.display().to_string())
+        );
+        assert!(
+            !scan
+                .discoveries
+                .iter()
+                .any(|discovery| discovery.launch_ref == raw_media.display().to_string())
+        );
+        assert!(
+            !scan
+                .normal_files
+                .iter()
+                .any(|file| file.path == raw_media.display().to_string())
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -2891,11 +2927,13 @@ mod tests {
         assert!(diagnostic.2.contains("expected AO486"));
         let loaded = load_arcade_catalog_from_sqlite_at(&root, &cfg.sqlite_path)
             .expect("load generic fallback");
-        assert!(loaded
-            .catalog
-            .games
-            .iter()
-            .any(|game| game.mra_path.as_ref() == mgl.display().to_string()));
+        assert!(
+            loaded
+                .catalog
+                .games
+                .iter()
+                .any(|game| game.mra_path.as_ref() == mgl.display().to_string())
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -3035,10 +3073,11 @@ mod tests {
             scan.normal_files[0].path,
             arcade_dir.join("Diamond Run.mra").display().to_string()
         );
-        assert!(scan
-            .discoveries
-            .iter()
-            .all(|discovery| !discovery.launch_ref.contains("_Organized")));
+        assert!(
+            scan.discoveries
+                .iter()
+                .all(|discovery| !discovery.launch_ref.contains("_Organized"))
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 }

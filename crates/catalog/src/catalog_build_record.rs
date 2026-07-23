@@ -42,7 +42,7 @@ pub fn read_completed_build_duration(sqlite_path: &Path) -> Result<Option<u64>, 
             return Err(format!(
                 "read catalog build duration {}: {error}",
                 path.display()
-            ))
+            ));
         }
     };
     let seconds = text

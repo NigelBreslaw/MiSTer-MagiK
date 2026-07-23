@@ -139,17 +139,17 @@ fn audit_game_directories(
         let name = fact.name.as_str();
         let key = name.to_ascii_lowercase();
         if cataloged_dirs.contains(&key) {
-            if let Some(profile) = launch_profiles::profile_for_game_dir(profiles, name) {
-                if profile.provenance.kind == RuleSourceKind::ConfStr {
-                    insert_audit_row(
-                        rows,
-                        cataloged_row_for_profile(
-                            profile,
-                            profile.core_path.as_deref().unwrap_or_default().to_string(),
-                            format!("games/{name}"),
-                        ),
-                    );
-                }
+            if let Some(profile) = launch_profiles::profile_for_game_dir(profiles, name)
+                && profile.provenance.kind == RuleSourceKind::ConfStr
+            {
+                insert_audit_row(
+                    rows,
+                    cataloged_row_for_profile(
+                        profile,
+                        profile.core_path.as_deref().unwrap_or_default().to_string(),
+                        format!("games/{name}"),
+                    ),
+                );
             }
             if fact.has_zip_files {
                 audit_non_indexed_zips_in_cataloged_dir(fact, profiles, rows);
@@ -474,9 +474,11 @@ mod tests {
             &launch_profiles::builtin_profiles(),
         );
 
-        assert!(!rows
-            .iter()
-            .any(|row| { row.reason.contains("._Packed SMS Games.zip") }));
+        assert!(
+            !rows
+                .iter()
+                .any(|row| { row.reason.contains("._Packed SMS Games.zip") })
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

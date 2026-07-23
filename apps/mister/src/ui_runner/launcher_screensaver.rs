@@ -9,9 +9,9 @@ use std::ffi::OsStr;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
-use std::sync::Arc;
 
 #[cfg(not(mister_bench_scenes))]
 fn hash2_u8(x: usize, y: usize) -> u8 {

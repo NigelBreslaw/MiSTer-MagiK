@@ -1,10 +1,10 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::archive::{read_zip, MemberLayout};
+use crate::archive::{MemberLayout, read_zip};
 use crate::error::{AgentError, AgentResult};
 use rusqlite::{Connection, OpenFlags};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
@@ -317,12 +317,11 @@ fn validate_database(path: &Path, kind: DatabaseKind, mame_tag: Option<&str>) ->
         let mut statement = database
             .prepare("PRAGMA table_info(mame_machines)")
             .map_err(|error| error.to_string())?;
-        let columns = statement
+        statement
             .query_map([], |row| row.get(1))
             .map_err(|error| error.to_string())?
             .filter_map(Result::ok)
-            .collect();
-        columns
+            .collect()
     };
     if !columns.contains("players") || !columns.contains("control_type") {
         return classified("database_schema", "missing player/control metadata");

@@ -5,10 +5,10 @@ use mister_tool::transport::{
     BenchmarkScenario, ColdBenchmarkScenario, DeviceFailure, DeviceOperations, DeviceRequest,
     DeviceResponse, Layout, MainSelection,
 };
-use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
-use rusqlite::{params, Connection};
-use serde_json::{json, Value};
+use quick_xml::events::{BytesStart, Event};
+use rusqlite::{Connection, params};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use ssh2::Session;
 use std::env;
@@ -26,15 +26,14 @@ mod media;
 mod remote;
 
 use agent_client::{
-    agent_binary_request_bounded, agent_request, agent_request_with_liveness,
+    AGENT_PORT, agent_binary_request_bounded, agent_request, agent_request_with_liveness,
     agent_stream_request_reader, agent_token, bootstrap_agent, verify_agent_deploy_result,
-    AGENT_PORT,
 };
 use remote::{
-    acknowledged_main_command, connect, connect_timed, create_dir_command, exec,
+    ExecOutput, acknowledged_main_command, connect, connect_timed, create_dir_command, exec,
     exec_failure_message, get, host, host_wait_diagnostics, launcher_restart_command, port_open,
     put, put_bytes, put_dir, remote_subcommand, remove_files_command, sftp_write_profile,
-    shell_quote as sh, stream_command, tcp_probe_label, tcp_probe_label_port, ExecOutput,
+    shell_quote as sh, stream_command, tcp_probe_label, tcp_probe_label_port,
 };
 
 #[cfg(test)]
@@ -131,14 +130,22 @@ pub struct NativeDevice {
     prepared: bool,
 }
 
+fn set_resolved_device_env(address: &str, device_id: &str) {
+    // SAFETY: device preparation is a synchronous CLI state transition. It
+    // completes before any request can start work on another thread.
+    unsafe {
+        std::env::set_var("MISTER_IP", address);
+        std::env::set_var("MISTER_DEVICE_ID", device_id);
+    }
+}
+
 impl NativeDevice {
     fn prepare(&mut self) -> std::result::Result<(), DeviceFailure> {
         if self.prepared {
             return Ok(());
         }
         let device = discovery::resolve().map_err(device_failure)?;
-        std::env::set_var("MISTER_IP", device.address.to_string());
-        std::env::set_var("MISTER_DEVICE_ID", &device.id);
+        set_resolved_device_env(&device.address.to_string(), &device.id);
         if std::env::var_os("MISTER_SKIP_AGENT_BOOTSTRAP").is_none() {
             bootstrap_agent().map_err(device_failure)?;
         }
@@ -528,8 +535,7 @@ pub fn run_cli() -> Result<()> {
     }
     if action_uses_device(&action) {
         let device = discovery::resolve()?;
-        std::env::set_var("MISTER_IP", device.address.to_string());
-        std::env::set_var("MISTER_DEVICE_ID", &device.id);
+        set_resolved_device_env(&device.address.to_string(), &device.id);
         if std::env::var_os("MISTER_SKIP_AGENT_BOOTSTRAP").is_none() {
             bootstrap_agent()?;
         }
@@ -948,7 +954,9 @@ fn display_mode_cli(args: &[String]) -> Result<()> {
         return Err("display mode changes are attended and require an interactive terminal".into());
     }
     if matches!(mode.id, "crt-480p60" | "crt-576p50") {
-        eprintln!("WARNING: this is a 31 kHz CRT/VGA mode. Type 31KHZ only if the connected display supports it:");
+        eprintln!(
+            "WARNING: this is a 31 kHz CRT/VGA mode. Type 31KHZ only if the connected display supports it:"
+        );
         let mut acknowledgement = String::new();
         io::stdin().read_line(&mut acknowledgement)?;
         if acknowledgement.trim() != "31KHZ" {
@@ -1153,7 +1161,9 @@ fn display_matrix_cli(args: &[String]) -> Result<()> {
     if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
         return Err("display matrix is attended and requires an interactive terminal".into());
     }
-    eprintln!("WARNING: this matrix includes 31 kHz CRT/VGA modes. Type 31KHZ only if the connected display supports them:");
+    eprintln!(
+        "WARNING: this matrix includes 31 kHz CRT/VGA modes. Type 31KHZ only if the connected display supports them:"
+    );
     let mut acknowledgement = String::new();
     io::stdin().read_line(&mut acknowledgement)?;
     if acknowledgement.trim() != "31KHZ" {
@@ -1220,11 +1230,14 @@ fn display_matrix_cli(args: &[String]) -> Result<()> {
             );
             if let Ok((_, new_pid)) = &result {
                 current_pid = *new_pid;
-            } else if let Ok(session) = connect(10) {
-                if let Ok(ready) =
-                    wait_launcher_ready(&session, Instant::now(), Duration::from_secs(2))
-                {
-                    current_pid = ready.launcher_pid;
+            } else {
+                let reconnect = connect(10);
+                if let Ok(session) = reconnect {
+                    let ready =
+                        wait_launcher_ready(&session, Instant::now(), Duration::from_secs(2));
+                    if let Ok(ready) = ready {
+                        current_pid = ready.launcher_pid;
+                    }
                 }
             }
             let session = connect(10)?;
@@ -2642,13 +2655,13 @@ fn parse_mame_listxml(xml: &str) -> Result<Vec<MameMachine>> {
             }
             Ok(Event::End(e)) => {
                 let tag = String::from_utf8_lossy(e.name().as_ref()).into_owned();
-                if tag == "machine" {
-                    if let Some(mut machine) = current.take() {
-                        if machine.title.is_empty() {
-                            machine.title = machine.setname.clone();
-                        }
-                        machines.push(machine);
+                if tag == "machine"
+                    && let Some(mut machine) = current.take()
+                {
+                    if machine.title.is_empty() {
+                        machine.title = machine.setname.clone();
                     }
+                    machines.push(machine);
                 }
                 field.clear();
             }
@@ -4654,7 +4667,9 @@ fn agent_magik(args: &[String]) -> Result<()> {
         "status" | "suspend" | "resume" | "restart-launcher" | "return-to-launcher"
         | "exit-to-menu" | "launch" => {}
         "-h" | "--help" => {
-            println!("usage: mister agent magik <status|suspend|resume|restart-launcher|return-to-launcher|exit-to-menu|launch TARGET> [--json]");
+            println!(
+                "usage: mister agent magik <status|suspend|resume|restart-launcher|return-to-launcher|exit-to-menu|launch TARGET> [--json]"
+            );
             return Ok(());
         }
         other => return Err(format!("unknown agent magik action: {other}").into()),
@@ -4794,7 +4809,8 @@ fn agent_reboot_wait(args: &[String]) -> Result<()> {
     let mut last_note = String::new();
     while start.elapsed().as_secs_f64() < timeout_secs {
         if agent_ready_ms.is_none() {
-            match agent_request("ping", json!({}), Duration::from_millis(300)) {
+            let agent_probe = agent_request("ping", json!({}), Duration::from_millis(300));
+            match agent_probe {
                 Ok(_) => {
                     agent_ready_ms = Some(start.elapsed().as_millis());
                     println!("  agent ready after {}ms", opt_ms(agent_ready_ms));
@@ -4803,7 +4819,8 @@ fn agent_reboot_wait(args: &[String]) -> Result<()> {
             }
         }
         if ssh_ready_ms.is_none() {
-            match connect_timed(2) {
+            let ssh_probe = connect_timed(2);
+            match ssh_probe {
                 Ok(timed) => {
                     let out = exec(&timed.sess, "cat /proc/uptime", true)?;
                     if out.rc == 0 {
@@ -5330,10 +5347,10 @@ fn remote_crash_report_paths(
 }
 
 fn write_json_member(out_dir: &Path, name: &str, value: Option<&Value>) -> Result<()> {
-    if let Some(value) = value {
-        if !value.is_null() {
-            fs::write(out_dir.join(name), serde_json::to_vec_pretty(value)?)?;
-        }
+    if let Some(value) = value
+        && !value.is_null()
+    {
+        fs::write(out_dir.join(name), serde_json::to_vec_pretty(value)?)?;
     }
     Ok(())
 }
@@ -5434,9 +5451,8 @@ fn agent_boot_profile(args: &[String]) -> Result<()> {
                 agent_stats.observe(&label, elapsed_ms);
                 if label == "ok" {
                     agent_ready_ms = Some(elapsed_ms);
-                    if let Ok(reply) =
-                        agent_request("status", json!({}), Duration::from_millis(500))
-                    {
+                    let status = agent_request("status", json!({}), Duration::from_millis(500));
+                    if let Ok(reply) = status {
                         first_agent_net = agent_net_snapshot(&reply.response);
                         agent_uptime_ms = reply
                             .response
@@ -5449,7 +5465,8 @@ fn agent_boot_profile(args: &[String]) -> Result<()> {
             }
 
             if ssh_ready_ms.is_none() {
-                match connect_timed(2) {
+                let ssh_probe = connect_timed(2);
+                match ssh_probe {
                     Ok(timed) => {
                         let exec_t = Instant::now();
                         let out = exec(&timed.sess, "cat /proc/uptime", true)?;
@@ -5474,17 +5491,16 @@ fn agent_boot_profile(args: &[String]) -> Result<()> {
                             {
                                 if let Some(text) =
                                     remote_read(&timed.sess, "/tmp/mister-magik/main-status.json")
+                                    && let Ok(value) = serde_json::from_str::<Value>(&text)
                                 {
-                                    if let Ok(value) = serde_json::from_str::<Value>(&text) {
-                                        main_status_ms = Some(start.elapsed().as_millis());
-                                        launcher_state = value
-                                            .get("launcher_state")
-                                            .and_then(Value::as_str)
-                                            .unwrap_or("")
-                                            .to_string();
-                                        if launcher_state == "LauncherActive" {
-                                            break;
-                                        }
+                                    main_status_ms = Some(start.elapsed().as_millis());
+                                    launcher_state = value
+                                        .get("launcher_state")
+                                        .and_then(Value::as_str)
+                                        .unwrap_or("")
+                                        .to_string();
+                                    if launcher_state == "LauncherActive" {
+                                        break;
                                     }
                                 }
                                 thread::sleep(Duration::from_millis(250));
@@ -5509,7 +5525,8 @@ fn agent_boot_profile(args: &[String]) -> Result<()> {
         }
 
         if agent_ready_ms.is_some() {
-            if let Ok(reply) = agent_request("status", json!({}), Duration::from_millis(500)) {
+            let status = agent_request("status", json!({}), Duration::from_millis(500));
+            if let Ok(reply) = status {
                 final_agent_net = agent_net_snapshot(&reply.response);
             }
         }
@@ -5779,25 +5796,25 @@ fn apply_reboot_status(
     slint: Option<&Value>,
     elapsed_ms: u128,
 ) {
-    if measurement.main_status_ms.is_none() {
-        if let Some(value) = main {
-            measurement.main_status_ms = Some(elapsed_ms);
-            measurement.launcher_state = value
-                .get("launcher_state")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
-        }
+    if measurement.main_status_ms.is_none()
+        && let Some(value) = main
+    {
+        measurement.main_status_ms = Some(elapsed_ms);
+        measurement.launcher_state = value
+            .get("launcher_state")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
     }
-    if measurement.slint_status_ms.is_none() {
-        if let Some(value) = slint {
-            measurement.slint_status_ms = Some(elapsed_ms);
-            measurement.slint_frames = value
-                .get("frames")
-                .and_then(Value::as_u64)
-                .map(|value| value.to_string())
-                .unwrap_or_default();
-        }
+    if measurement.slint_status_ms.is_none()
+        && let Some(value) = slint
+    {
+        measurement.slint_status_ms = Some(elapsed_ms);
+        measurement.slint_frames = value
+            .get("frames")
+            .and_then(Value::as_u64)
+            .map(|value| value.to_string())
+            .unwrap_or_default();
     }
 }
 
@@ -6159,19 +6176,19 @@ fn wait_up(max_seconds: f64) -> Result<i32> {
     while start.elapsed().as_secs_f64() < max_seconds {
         attempt += 1;
         let elapsed = start.elapsed().as_secs_f64();
-        if port_open(Duration::from_millis(150)) {
-            if let Some(status) = userspace_ready_fast() {
-                let mister = if status == "BOOTING" {
-                    "booting".to_string()
-                } else {
-                    format!("pid {status}")
-                };
-                println!(
-                    "SSH ready after {:.1}s (attempt {attempt}); MiSTer {mister}",
-                    start.elapsed().as_secs_f64()
-                );
-                return Ok(0);
-            }
+        if port_open(Duration::from_millis(150))
+            && let Some(status) = userspace_ready_fast()
+        {
+            let mister = if status == "BOOTING" {
+                "booting".to_string()
+            } else {
+                format!("pid {status}")
+            };
+            println!(
+                "SSH ready after {:.1}s (attempt {attempt}); MiSTer {mister}",
+                start.elapsed().as_secs_f64()
+            );
+            return Ok(0);
         }
         if last_print == Duration::MAX || start.elapsed().saturating_sub(last_print).as_secs() >= 1
         {
@@ -6188,11 +6205,7 @@ fn wait_up(max_seconds: f64) -> Result<i32> {
 fn remote_read(sess: &Session, path: &str) -> Option<String> {
     let cmd = format!("cat {} 2>/dev/null", sh(path));
     let out = exec(sess, &cmd, true).ok()?;
-    if out.rc == 0 {
-        Some(out.stdout)
-    } else {
-        None
-    }
+    if out.rc == 0 { Some(out.stdout) } else { None }
 }
 
 fn remote_trim(sess: &Session, path: &str) -> Option<String> {
@@ -6685,10 +6698,10 @@ fn classify_fb(raw: &[u8], geometry: &FbGeometry) -> Value {
             blackish += u32::from(r < 8 && g < 8 && b < 8);
             color_min = color_min.min(p);
             color_max = color_max.max(p);
-            if let Some(prev) = prev {
-                if color_distance(prev, p) > 96 {
-                    transitions += 1;
-                }
+            if let Some(prev) = prev
+                && color_distance(prev, p) > 96
+            {
+                transitions += 1;
             }
             prev = Some(p);
             hash ^= p as u64;
@@ -6918,14 +6931,13 @@ fn doctor_findings(status: &Value) -> Vec<(String, String)> {
     if let (Some(arcade), Some(vertical)) = (
         ini_line(status, "arcade", "direct_video"),
         ini_line(status, "arcade_vertical", "direct_video"),
-    ) {
-        if arcade > vertical {
-            findings.push((
-                "warn".into(),
-                "[arcade] appears after [arcade_vertical]; vertical arcade settings will be overwritten"
-                    .into(),
-            ));
-        }
+    ) && arcade > vertical
+    {
+        findings.push((
+            "warn".into(),
+            "[arcade] appears after [arcade_vertical]; vertical arcade settings will be overwritten"
+                .into(),
+        ));
     }
     for name in [expected_main.as_str(), "mister-magik-fb"] {
         if status["processes"][name]
@@ -6955,13 +6967,13 @@ fn doctor_findings(status: &Value) -> Vec<(String, String)> {
         }
         _ => {}
     }
-    if let Some(owner) = status["runtime"]["main_status"]["visible_owner"].as_str() {
-        if owner != "fb0" {
-            findings.push((
-                "warn".into(),
-                format!("Main reports visible_owner={owner} rather than fb0"),
-            ));
-        }
+    if let Some(owner) = status["runtime"]["main_status"]["visible_owner"].as_str()
+        && owner != "fb0"
+    {
+        findings.push((
+            "warn".into(),
+            format!("Main reports visible_owner={owner} rather than fb0"),
+        ));
     }
     let fb_owned = status["owners"]["by_device"]["/dev/fb0"]
         .as_array()
@@ -7000,12 +7012,11 @@ fn magik_fb0_owner_pids(status: &Value) -> Vec<u64> {
     let mut pids = Vec::new();
     if let Some(items) = status["owners"]["by_device"]["/dev/fb0"].as_array() {
         for item in items {
-            if item["process"].as_str() == Some("mister-magik-fb") {
-                if let Some(pid) = item["pid"].as_u64() {
-                    if !pids.contains(&pid) {
-                        pids.push(pid);
-                    }
-                }
+            if item["process"].as_str() == Some("mister-magik-fb")
+                && let Some(pid) = item["pid"].as_u64()
+                && !pids.contains(&pid)
+            {
+                pids.push(pid);
             }
         }
     }
@@ -7218,9 +7229,11 @@ mod tests {
     fn display_matrix_covers_every_supported_runtime_mode() {
         assert_eq!(DISPLAY_MATRIX_MODES.len(), 11);
         assert!(DISPLAY_MATRIX_MODES.iter().any(|mode| mode.id == "auto"));
-        assert!(DISPLAY_MATRIX_MODES
-            .iter()
-            .any(|mode| mode.id == "crt-576p50"));
+        assert!(
+            DISPLAY_MATRIX_MODES
+                .iter()
+                .any(|mode| mode.id == "crt-576p50")
+        );
         assert!(
             release_display_mode_command_for_runtime().contains("latch-readiness-report --json")
         );
@@ -7327,11 +7340,13 @@ mod tests {
 
     #[test]
     fn display_confirmation_status_handles_success_failure_timeout_and_interrupt() {
-        assert!(display_transaction_complete(
-            "ok DisplayV1 schema=1 active=hdmi-1280x720p60 pending=none phase=idle",
-            false,
-        )
-        .unwrap());
+        assert!(
+            display_transaction_complete(
+                "ok DisplayV1 schema=1 active=hdmi-1280x720p60 pending=none phase=idle",
+                false,
+            )
+            .unwrap()
+        );
         assert!(!display_transaction_complete(
             "ok DisplayV1 schema=1 active=hdmi-1920x1080p60 pending=hdmi-1280x720p60 phase=persisting",
             false,
@@ -7472,16 +7487,14 @@ mod tests {
     #[test]
     fn rejects_invalid_sd_list_probe_options() {
         assert!(parse_sd_list_options(&[]).is_err());
-        assert!(parse_sd_list_options(
-            &["/".to_string(), "--repeat".to_string(), "0".to_string(),]
-        )
-        .is_err());
-        assert!(parse_sd_list_options(&[
-            "/".to_string(),
-            "--protocol".to_string(),
-            "v3".to_string(),
-        ])
-        .is_err());
+        assert!(
+            parse_sd_list_options(&["/".to_string(), "--repeat".to_string(), "0".to_string(),])
+                .is_err()
+        );
+        assert!(
+            parse_sd_list_options(&["/".to_string(), "--protocol".to_string(), "v3".to_string(),])
+                .is_err()
+        );
     }
 
     #[test]
@@ -7671,8 +7684,10 @@ video_mode=14
         let edited = edit_mister_ini(ini, IniEdit::MagikBoot);
 
         assert!(edited.contains("direct_video=2\r\nmain=MiSTer_MagiK ; old handoff"));
-        assert!(edited
-            .contains("[arcade_vertical]\r\ndirect_video=0\r\nvideo_mode=14\r\nvscale_mode=1"));
+        assert!(
+            edited
+                .contains("[arcade_vertical]\r\ndirect_video=0\r\nvideo_mode=14\r\nvscale_mode=1")
+        );
         assert!(edited.contains("[Menu]\r\ndirect_video=0\r\nvideo_mode=8 ; menu probe"));
         assert!(edited.contains("; keep original core output for external scaler"));
     }
@@ -7867,30 +7882,34 @@ video_mode=14
 
     #[test]
     fn remote_run_rejects_removed_direct_arcade_scene() {
-        assert!(validate_remote_run_command(
-            "/media/fat/mister-magik/mister-magik-fb ui arcade 20"
-        )
-        .is_err());
-        assert!(validate_remote_run_command(
-            "'/media/fat/mister-magik/mister-magik-fb' ui arcade 20"
-        )
-        .is_err());
-        assert!(validate_remote_run_command(
-            "scene=arcade; /media/fat/mister-magik/mister-magik-fb ui \"$scene\" 20"
-        )
-        .is_err());
+        assert!(
+            validate_remote_run_command("/media/fat/mister-magik/mister-magik-fb ui arcade 20")
+                .is_err()
+        );
+        assert!(
+            validate_remote_run_command("'/media/fat/mister-magik/mister-magik-fb' ui arcade 20")
+                .is_err()
+        );
+        assert!(
+            validate_remote_run_command(
+                "scene=arcade; /media/fat/mister-magik/mister-magik-fb ui \"$scene\" 20"
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn remote_run_allows_launcher_and_restart_paths() {
-        assert!(validate_remote_run_command(
-            "/media/fat/mister-magik/mister-magik-fb ui launcher 0"
-        )
-        .is_ok());
-        assert!(validate_remote_run_command(
-            "printf 'mister_magik_restart_launcher\\n' > /dev/MiSTer_cmd"
-        )
-        .is_ok());
+        assert!(
+            validate_remote_run_command("/media/fat/mister-magik/mister-magik-fb ui launcher 0")
+                .is_ok()
+        );
+        assert!(
+            validate_remote_run_command(
+                "printf 'mister_magik_restart_launcher\\n' > /dev/MiSTer_cmd"
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -8014,18 +8033,22 @@ video_mode=14
             parse_launcher_restart_args(&["--env".to_string(), "BAD-NAME=value".to_string()])
                 .is_err()
         );
-        assert!(parse_launcher_restart_args(&[
-            "--clear-env".to_string(),
-            "--env".to_string(),
-            "MISTER_CATALOG_REFRESH=off".to_string()
-        ])
-        .is_err());
-        assert!(parse_launcher_restart_args(&[
-            "--clear-env".to_string(),
-            "--remote-env".to_string(),
-            "relative/launcher.env".to_string()
-        ])
-        .is_err());
+        assert!(
+            parse_launcher_restart_args(&[
+                "--clear-env".to_string(),
+                "--env".to_string(),
+                "MISTER_CATALOG_REFRESH=off".to_string()
+            ])
+            .is_err()
+        );
+        assert!(
+            parse_launcher_restart_args(&[
+                "--clear-env".to_string(),
+                "--remote-env".to_string(),
+                "relative/launcher.env".to_string()
+            ])
+            .is_err()
+        );
     }
 
     #[test]
@@ -8118,12 +8141,14 @@ video_mode=14
         assert_eq!(ready.frames, 2);
         assert_eq!(ready.screen, "arcade");
         assert!(launcher_ready_status(125, Some(&main), None).is_none());
-        assert!(launcher_ready_status(
-            125,
-            Some(&main),
-            Some(&json!({"scene": "launcher", "frames": 0}))
-        )
-        .is_none());
+        assert!(
+            launcher_ready_status(
+                125,
+                Some(&main),
+                Some(&json!({"scene": "launcher", "frames": 0}))
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -8424,11 +8449,13 @@ H: Handlers=event3 js0"#
             bpp: 16,
         };
 
-        assert!(geometry
-            .bytes()
-            .unwrap_err()
-            .to_string()
-            .contains("overflow"));
+        assert!(
+            geometry
+                .bytes()
+                .unwrap_err()
+                .to_string()
+                .contains("overflow")
+        );
     }
 
     #[test]
@@ -8689,21 +8716,25 @@ H: Handlers=event3 js0"#
             .unwrap(),
             42
         );
-        assert!(verify_agent_deploy_result(
-            &result,
-            43,
-            "/media/fat/mister-magik/mister-magik-fb",
-            "abc"
-        )
-        .is_err());
+        assert!(
+            verify_agent_deploy_result(
+                &result,
+                43,
+                "/media/fat/mister-magik/mister-magik-fb",
+                "abc"
+            )
+            .is_err()
+        );
         assert!(verify_agent_deploy_result(&result, 42, "/tmp/other", "abc").is_err());
-        assert!(verify_agent_deploy_result(
-            &result,
-            42,
-            "/media/fat/mister-magik/mister-magik-fb",
-            "wrong"
-        )
-        .is_err());
+        assert!(
+            verify_agent_deploy_result(
+                &result,
+                42,
+                "/media/fat/mister-magik/mister-magik-fb",
+                "wrong"
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -9015,10 +9046,12 @@ H: Handlers=event3 js0"#
             "schema": "mister-magik-framebuffer-capture-v1",
             "source": "fb0"
         });
-        assert!(validate_capture_contract(&stale)
-            .unwrap_err()
-            .to_string()
-            .contains("unsupported schema"));
+        assert!(
+            validate_capture_contract(&stale)
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported schema")
+        );
     }
 
     #[test]
@@ -9262,15 +9295,21 @@ H: Handlers=event3 js0"#
 
         assert_eq!(report.changed_files, 2);
         assert_eq!(uploads.len(), 2);
-        assert!(uploads
-            .iter()
-            .any(|event| event.ends_with(&format!("{gui}.upload"))));
-        assert!(uploads
-            .iter()
-            .any(|event| event.ends_with(&format!("{manifest}.upload"))));
-        assert!(!events
-            .iter()
-            .any(|event| event.starts_with("put ") && event.contains("mame.sqlite3")));
+        assert!(
+            uploads
+                .iter()
+                .any(|event| event.ends_with(&format!("{gui}.upload")))
+        );
+        assert!(
+            uploads
+                .iter()
+                .any(|event| event.ends_with(&format!("{manifest}.upload")))
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| event.starts_with("put ") && event.contains("mame.sqlite3"))
+        );
         assert!(!activation.contains("cp -p '/media/fat/mister-magik-dev/mame.sqlite3'"));
         assert!(
             activation.find(&format!("{gui}.upload")).unwrap()
@@ -9302,10 +9341,12 @@ H: Handlers=event3 js0"#
         let error = transaction.run_with(&remote).unwrap_err().to_string();
 
         assert!(error.contains("platform inventory returned"));
-        assert!(!remote
-            .events()
-            .iter()
-            .any(|event| event.starts_with("put ")));
+        assert!(
+            !remote
+                .events()
+                .iter()
+                .any(|event| event.starts_with("put "))
+        );
         fs::remove_dir_all(stage).unwrap();
     }
 

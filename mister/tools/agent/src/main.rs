@@ -17,7 +17,7 @@ fn select_framebuffer_capture<T>(
 }
 
 #[cfg(any(target_os = "linux", test))]
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 #[cfg(target_os = "linux")]
 mod scanout_slots_contract;
@@ -129,10 +129,10 @@ fn require_ok_main_reply(reply: &str) -> Result<(), String> {
 #[cfg(any(target_os = "linux", test))]
 #[cfg_attr(all(test, not(target_os = "linux")), allow(dead_code))]
 mod sd_browse {
-    use quick_xml::events::{BytesStart, Event};
     use quick_xml::Reader as XmlReader;
     use quick_xml::XmlVersion;
-    use serde_json::{json, Value};
+    use quick_xml::events::{BytesStart, Event};
+    use serde_json::{Value, json};
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::time::{Instant, UNIX_EPOCH};
@@ -783,7 +783,7 @@ mod sd_browse {
 
 #[cfg(any(target_os = "linux", test))]
 mod library_snapshot {
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use std::fs;
     use std::path::Path;
     use std::time::UNIX_EPOCH;
@@ -869,16 +869,16 @@ mod library_snapshot {
 #[cfg(target_os = "linux")]
 mod linux {
     use super::scanout_slots_contract::{
-        ScanoutSlotsLayout, DEVICE as SCANOUT_SLOTS_DEVICE, EXPECTED_LAYOUT,
-        GET_LAYOUT as SCANOUT_SLOTS_GET_LAYOUT,
+        DEVICE as SCANOUT_SLOTS_DEVICE, EXPECTED_LAYOUT, GET_LAYOUT as SCANOUT_SLOTS_GET_LAYOUT,
+        ScanoutSlotsLayout,
     };
     use super::{
-        parse_control_request, require_ok_main_reply, select_framebuffer_capture, ControlRequest,
+        ControlRequest, parse_control_request, require_ok_main_reply, select_framebuffer_capture,
     };
-    use flate2::{write::ZlibEncoder, Compression};
+    use flate2::{Compression, write::ZlibEncoder};
     use libc::{c_ulong, ioctl};
     use mister_magik_framebuffer_stream::SCHEMA as FRAMEBUFFER_STREAM_SCHEMA;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use sha2::{Digest, Sha256};
     use std::collections::{HashMap, VecDeque};
     use std::ffi::CString;
@@ -2714,7 +2714,9 @@ mod linux {
                 if magic_hi != MAGIK_FBUF_STATUS_MAGIC && magic_lo != MAGIK_FBUF_STATUS_MAGIC {
                     return Err(io::Error::new(
                         io::ErrorKind::NotFound,
-                        format!("latched framebuffer status unsupported: ack_high=0x{magic_hi:04x} ack_low=0x{magic_lo:04x}"),
+                        format!(
+                            "latched framebuffer status unsupported: ack_high=0x{magic_hi:04x} ack_low=0x{magic_lo:04x}"
+                        ),
                     ));
                 }
                 let mut words = [0u16; 11];
@@ -3170,7 +3172,10 @@ mod linux {
                         format!("published checksum mismatch and rollback failed: {err}")
                     })?;
                     let _ = fs::remove_file(&failed);
-                    return Err(format!("published checksum mismatch expected={} actual={published_checksum}; previous executable restored", expectations.checksum));
+                    return Err(format!(
+                        "published checksum mismatch expected={} actual={published_checksum}; previous executable restored",
+                        expectations.checksum
+                    ));
                 }
                 let _ = fs::remove_file(&rollback);
                 if let Ok(dir) = File::open(parent) {
@@ -3992,17 +3997,21 @@ mod tests {
         );
 
         assert!(decompress_lz4_block_exact(&payload, 6, 16, "fixture").is_err());
-        assert!(decompress_lz4_block_exact(&payload, 17, 16, "fixture")
-            .expect_err("oversized metadata should fail")
-            .contains("exceeds max"));
+        assert!(
+            decompress_lz4_block_exact(&payload, 17, 16, "fixture")
+                .expect_err("oversized metadata should fail")
+                .contains("exceeds max")
+        );
     }
 
     #[test]
     fn control_request_validation_is_portable_and_authenticates_before_dispatch() {
-        assert!(parse_control_request("{", "secret", false)
-            .unwrap_err()
-            .message
-            .starts_with("invalid json:"));
+        assert!(
+            parse_control_request("{", "secret", false)
+                .unwrap_err()
+                .message
+                .starts_with("invalid json:")
+        );
         assert_eq!(
             parse_control_request(r#"{"id":7,"token":"wrong","cmd":"ping"}"#, "secret", false)
                 .unwrap_err(),
@@ -4304,15 +4313,19 @@ mod tests {
 
         assert_eq!(parsed["schema"], "mister-magik-sd-parse-mra-v1");
         assert!(parsed["raw_xml"].as_str().unwrap().contains("Moon Patrol"));
-        assert!(rows
-            .iter()
-            .any(|row| row["kind"] == "attribute" && row["name"] == "@zip"));
-        assert!(rows
-            .iter()
-            .any(|row| row["kind"] == "text" && row["value"] == "Moon Patrol"));
-        assert!(path_rows
-            .iter()
-            .any(|row| row["value"].as_str().unwrap_or("").contains("mpatrol.zip")));
+        assert!(
+            rows.iter()
+                .any(|row| row["kind"] == "attribute" && row["name"] == "@zip")
+        );
+        assert!(
+            rows.iter()
+                .any(|row| row["kind"] == "text" && row["value"] == "Moon Patrol")
+        );
+        assert!(
+            path_rows
+                .iter()
+                .any(|row| row["value"].as_str().unwrap_or("").contains("mpatrol.zip"))
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -4360,10 +4373,10 @@ mod tests {
 
     #[test]
     fn library_snapshot_rejects_non_allowlisted_paths() {
-        assert!(library_snapshot::validate_remote_path(
-            "/media/fat/mister-magik-dev/other.sqlite3"
-        )
-        .is_err());
+        assert!(
+            library_snapshot::validate_remote_path("/media/fat/mister-magik-dev/other.sqlite3")
+                .is_err()
+        );
         assert!(library_snapshot::validate_remote_path("/tmp/library.sqlite3").is_err());
         assert!(library_snapshot::validate_remote_path(library_snapshot::LIBRARY_DB_PATH).is_ok());
     }

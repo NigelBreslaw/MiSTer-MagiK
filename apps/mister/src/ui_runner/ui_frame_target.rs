@@ -96,7 +96,15 @@ pub(super) fn forced_arcade_selected_index() -> Option<usize> {
 }
 
 pub(super) fn apply_forced_arcade_selected(nav: &mut LauncherNav, catalog: &ArcadeCatalog) {
-    let Some(index) = forced_arcade_selected_index() else {
+    apply_forced_arcade_selected_index(nav, catalog, forced_arcade_selected_index());
+}
+
+pub(super) fn apply_forced_arcade_selected_index(
+    nav: &mut LauncherNav,
+    catalog: &ArcadeCatalog,
+    index: Option<usize>,
+) {
+    let Some(index) = index else {
         return;
     };
     let count = active_system_game_view(catalog, nav).len();

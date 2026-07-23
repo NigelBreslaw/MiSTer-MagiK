@@ -123,8 +123,10 @@ mod tests {
         );
 
         guard.last_sample_at = Some(now);
-        assert!(guard
-            .last_sample_at
-            .is_some_and(|last| now.saturating_duration_since(last) < guard.sample_interval));
+        assert!(
+            guard
+                .last_sample_at
+                .is_some_and(|last| now.saturating_duration_since(last) < guard.sample_interval)
+        );
     }
 }

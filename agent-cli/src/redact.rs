@@ -19,10 +19,10 @@ pub fn redact_args(args: impl IntoIterator<Item = OsString>) -> Vec<String> {
                 redact_next = true;
                 return text;
             }
-            if let Some((name, _)) = text.split_once('=') {
-                if SECRET_FLAGS.contains(&name) {
-                    return format!("{name}=[REDACTED]");
-                }
+            if let Some((name, _)) = text.split_once('=')
+                && SECRET_FLAGS.contains(&name)
+            {
+                return format!("{name}=[REDACTED]");
             }
             text
         })

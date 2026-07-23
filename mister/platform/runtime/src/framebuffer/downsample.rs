@@ -96,13 +96,17 @@ unsafe fn downsample_rgb565_2x_fixed_scalar(
         );
     }
 
-    mister_magik_downsample_rgb565_2x_scalar(
-        source.pixels.as_ptr().cast::<u16>(),
-        source.height,
-        source.stride_pixels,
-        destination.as_mut_ptr().cast::<u16>(),
-        geometry.width,
-    );
+    // SAFETY: the safe caller validates the source and destination lengths,
+    // strides, and fixed 2x geometry before selecting the scalar FFI path.
+    unsafe {
+        mister_magik_downsample_rgb565_2x_scalar(
+            source.pixels.as_ptr().cast::<u16>(),
+            source.height,
+            source.stride_pixels,
+            destination.as_mut_ptr().cast::<u16>(),
+            geometry.width,
+        );
+    }
 }
 
 #[cfg(feature = "bench-tools")]

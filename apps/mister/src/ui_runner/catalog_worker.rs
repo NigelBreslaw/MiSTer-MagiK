@@ -4,7 +4,7 @@
 use super::*;
 use mister_magik_catalog::builder_protocol::{BuilderSummary, CatalogBuilderEvent};
 use mister_magik_catalog::builder_service::{self, BuilderOperation};
-use mister_magik_catalog::runtime_thread::{apply_runtime_thread_policy, RuntimeThreadRole};
+use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
 use mister_magik_catalog::{
     arcade_catalog::{self, ArcadeCatalog},
     catalog_stamp, catalog_summary,
@@ -552,6 +552,9 @@ pub(super) fn start_library_catalog_worker(
                     let ram_artifact_result = library_db::scan_default_library_ram_foreground_with_events(
                         Some(&mut progress),
                         Some(&mut scan_events),
+                        // Interactive rebuilds cannot own the durable
+                        // catalog-builder resume journal.
+                        false,
                     );
                     let ram_artifact = match ram_artifact_result {
                         Ok(artifact) => artifact,
@@ -1845,14 +1848,16 @@ mod tests {
         assert_eq!(nav.current_menu_game_count(), 2);
         assert!(nav.open_menu(crate::launcher_taxonomy::HANDHELDS_MENU_ID));
         assert_eq!(nav.current_menu_game_count(), 3);
-        assert!(nav
-            .current_menu_items()
-            .iter()
-            .any(|item| item.title == "Nintendo" && item.count == 2));
-        assert!(nav
-            .current_menu_items()
-            .iter()
-            .any(|item| item.title.contains("Lynx") && item.count == 1));
+        assert!(
+            nav.current_menu_items()
+                .iter()
+                .any(|item| item.title == "Nintendo" && item.count == 2)
+        );
+        assert!(
+            nav.current_menu_items()
+                .iter()
+                .any(|item| item.title.contains("Lynx") && item.count == 1)
+        );
         assert!(nav.open_system(&catalog, "gb"));
         assert!(super::super::launcher_bridge::active_system_games_loading(
             &catalog, &nav

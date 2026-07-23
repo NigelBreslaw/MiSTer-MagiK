@@ -354,8 +354,8 @@ fn unix_timestamp_nanos(seconds: i64, nanos: i64) -> i64 {
 #[cfg(target_os = "linux")]
 mod linux {
     use super::{
-        is_zip_path, unix_timestamp_nanos, DirectorySignatureProbe, NamespaceEntry,
-        NamespaceEntryKind, NamespaceSignatureCapture, NamespaceWalkStats,
+        DirectorySignatureProbe, NamespaceEntry, NamespaceEntryKind, NamespaceSignatureCapture,
+        NamespaceWalkStats, is_zip_path, unix_timestamp_nanos,
     };
     use std::ffi::{CString, OsString};
     use std::io;
@@ -915,23 +915,33 @@ mod tests {
         let (depth_zero, _) = walkdir_snapshot(&dir, Some(0), &ignore);
         assert!(depth_zero.is_empty());
         let (depth_one, _) = walkdir_snapshot(&dir, Some(1), &ignore);
-        assert!(depth_one
-            .iter()
-            .any(|entry| entry.0 == Path::new("one.rom")));
-        assert!(!depth_one
-            .iter()
-            .any(|entry| entry.0 == Path::new("dir/two.rom")));
+        assert!(
+            depth_one
+                .iter()
+                .any(|entry| entry.0 == Path::new("one.rom"))
+        );
+        assert!(
+            !depth_one
+                .iter()
+                .any(|entry| entry.0 == Path::new("dir/two.rom"))
+        );
         let (depth_two, _) = walkdir_snapshot(&dir, Some(2), &ignore);
-        assert!(depth_two
-            .iter()
-            .any(|entry| entry.0 == Path::new("dir/two.rom")));
-        assert!(!depth_two
-            .iter()
-            .any(|entry| entry.0 == Path::new("dir/deep/three.rom")));
+        assert!(
+            depth_two
+                .iter()
+                .any(|entry| entry.0 == Path::new("dir/two.rom"))
+        );
+        assert!(
+            !depth_two
+                .iter()
+                .any(|entry| entry.0 == Path::new("dir/deep/three.rom"))
+        );
         let (unbounded, _) = walkdir_snapshot(&dir, None, &ignore);
-        assert!(unbounded
-            .iter()
-            .any(|entry| entry.0 == Path::new("dir/deep/three.rom")));
+        assert!(
+            unbounded
+                .iter()
+                .any(|entry| entry.0 == Path::new("dir/deep/three.rom"))
+        );
         assert!(!unbounded.iter().any(|entry| entry.0.starts_with("ignored")));
 
         fs::remove_dir_all(dir).unwrap();

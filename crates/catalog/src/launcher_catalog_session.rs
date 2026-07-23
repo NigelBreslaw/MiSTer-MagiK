@@ -437,16 +437,18 @@ mod tests {
                 },
             ))
             .unwrap();
-        assert!(session
-            .handle(&ShardedCatalogEnvelope::new(
-                &run,
-                4,
-                1,
-                ShardedCatalogEvent::SystemQueued {
-                    system_id: "arcade".to_string(),
-                },
-            ))
-            .is_err());
+        assert!(
+            session
+                .handle(&ShardedCatalogEnvelope::new(
+                    &run,
+                    4,
+                    1,
+                    ShardedCatalogEvent::SystemQueued {
+                        system_id: "arcade".to_string(),
+                    },
+                ))
+                .is_err()
+        );
         session
             .handle(&ShardedCatalogEnvelope::new(
                 &run,

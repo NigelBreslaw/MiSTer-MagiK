@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::*;
-use mister_magik_fb::framebuffer::mode::{fb_mode_action, FbModeAction, FbModeGuard};
+use mister_magik_fb::framebuffer::mode::{FbModeAction, FbModeGuard, fb_mode_action};
 
 const DEFAULT_BOOT_BLACK_SETTLE_FRAMES: u32 = 4;
 const MAX_BOOT_BLACK_SETTLE_FRAMES: u32 = 60;

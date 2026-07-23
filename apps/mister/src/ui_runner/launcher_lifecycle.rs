@@ -1913,10 +1913,12 @@ mod tests {
                 has_stale_catalog: false
             }
         );
-        assert!(effects
-            .as_slice()
-            .iter()
-            .any(|effect| matches!(effect, LauncherEffect::StartCatalogRetry { .. })));
+        assert!(
+            effects
+                .as_slice()
+                .iter()
+                .any(|effect| matches!(effect, LauncherEffect::StartCatalogRetry { .. }))
+        );
 
         effects.clear();
         lifecycle.handle(
@@ -1978,10 +1980,12 @@ mod tests {
                 has_stale_catalog: true,
             }
         );
-        assert!(effects
-            .as_slice()
-            .iter()
-            .any(|effect| matches!(effect, LauncherEffect::StartFreshCatalogBuild { .. })));
+        assert!(
+            effects
+                .as_slice()
+                .iter()
+                .any(|effect| matches!(effect, LauncherEffect::StartFreshCatalogBuild { .. }))
+        );
 
         effects.clear();
         lifecycle.handle(

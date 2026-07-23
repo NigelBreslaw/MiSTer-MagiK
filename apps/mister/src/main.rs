@@ -120,8 +120,8 @@ use mister_magik_fb::framebuffer::ownership::DisplayOwnerLock;
 use mister_magik_fb::framebuffer::route::FramebufferRouteMode;
 #[cfg(all(feature = "diagnostics", feature = "ui"))]
 use mister_magik_fb::framebuffer::scanout_slots::{
-    read_scanout_slots_layout, HiddenRgb565BufferIndex, ScanoutSlotsRgb565Framebuffer,
-    SCANOUT_SLOTS_DEVICE,
+    HiddenRgb565BufferIndex, SCANOUT_SLOTS_DEVICE, ScanoutSlotsRgb565Framebuffer,
+    read_scanout_slots_layout,
 };
 use mister_magik_fb::framebuffer::vsync::{VsyncPacer, VsyncWaitStatus};
 use ui_display::{UiDisplay, UiDisplayPlan};
@@ -425,7 +425,9 @@ fn print_experiment_capabilities() {
     #[cfg(mister_experiments)]
     {
         crate::ui_logln!("experiments=1");
-        crate::ui_logln!("commands=effects,camera-effects,sprite-effects,text-effects,raster-effects,transition-effects,effect-bench");
+        crate::ui_logln!(
+            "commands=effects,camera-effects,sprite-effects,text-effects,raster-effects,transition-effects,effect-bench"
+        );
     }
     #[cfg(not(mister_experiments))]
     {
@@ -626,7 +628,7 @@ fn run_library_sql() {
 }
 
 fn run_catalog_inspect() {
-    use mister_magik_catalog::arcade_catalog::{LaunchTarget, DEFAULT_ARCADE_ROOT};
+    use mister_magik_catalog::arcade_catalog::{DEFAULT_ARCADE_ROOT, LaunchTarget};
 
     let args: Vec<String> = std::env::args().skip(2).collect();
     let result = (|| -> Result<String, String> {
@@ -1803,11 +1805,7 @@ fn fill_hidden_latch_pattern(
 }
 
 fn bool_tsv(value: bool) -> &'static str {
-    if value {
-        "1"
-    } else {
-        "0"
-    }
+    if value { "1" } else { "0" }
 }
 
 #[cfg(feature = "diagnostics")]

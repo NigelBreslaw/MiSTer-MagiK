@@ -1,9 +1,9 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::archive::{read_zip, MemberLayout};
+use crate::archive::{MemberLayout, read_zip};
 use crate::error::{AgentError, AgentResult};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
@@ -529,7 +529,7 @@ fn verify_fpga(root: &Path, id: &str) -> AgentResult<String> {
         match &contract {
             None => contract = metadata.get("platform_contract_sha256").cloned(),
             Some(value) if metadata.get("platform_contract_sha256") != Some(value) => {
-                return classified("platform_contract_mismatch", "stock/patched FPGA")
+                return classified("platform_contract_mismatch", "stock/patched FPGA");
             }
             _ => {}
         }

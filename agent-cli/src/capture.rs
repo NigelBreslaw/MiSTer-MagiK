@@ -241,7 +241,7 @@ mod native;
 
 #[cfg(not(target_os = "macos"))]
 mod native {
-    use super::{classified, EncodedFrame};
+    use super::{EncodedFrame, classified};
     use crate::error::AgentResult;
     use std::time::Duration;
 

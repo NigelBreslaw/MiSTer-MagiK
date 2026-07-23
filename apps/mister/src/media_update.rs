@@ -295,10 +295,10 @@ fn image_size_from_pack(value: &Value) -> Option<String> {
         "size",
         "resolution",
     ] {
-        if let Some(size) = value.get(key).and_then(Value::as_str) {
-            if valid_image_size(size) {
-                return Some(size.to_string());
-            }
+        if let Some(size) = value.get(key).and_then(Value::as_str)
+            && valid_image_size(size)
+        {
+            return Some(size.to_string());
         }
     }
     let width = value
@@ -508,7 +508,12 @@ mod tests {
         assert_eq!(pack.id, "arcade");
         assert_eq!(pack.image_size, "320x320");
         assert_eq!(manifest.origin, "https://assets.mistermagik.com");
-        assert_eq!(pack.raw.url, format!("http://assets.mistermagik.com/mister-magik/v1/packs/arcade/screenshots/320x320/2026.06.22/{SHA}.mmlz4b"));
+        assert_eq!(
+            pack.raw.url,
+            format!(
+                "http://assets.mistermagik.com/mister-magik/v1/packs/arcade/screenshots/320x320/2026.06.22/{SHA}.mmlz4b"
+            )
+        );
         assert_eq!(
             pack.identity(),
             PackIdentity {
@@ -534,7 +539,9 @@ mod tests {
         assert_eq!(index.archive_sha256, pack.raw.sha256);
         assert_eq!(
             index.url,
-            format!("http://assets.mistermagik.com/mister-magik/v1/packs/arcade/screenshots/320x320/2026.06.22/{IDX_SHA}.mmlz4b.idx")
+            format!(
+                "http://assets.mistermagik.com/mister-magik/v1/packs/arcade/screenshots/320x320/2026.06.22/{IDX_SHA}.mmlz4b.idx"
+            )
         );
     }
 
@@ -545,9 +552,11 @@ mod tests {
             r#""archive_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc""#,
         );
 
-        assert!(parse_manifest_json(DEFAULT_MANIFEST_URL, &text)
-            .unwrap_err()
-            .contains("archive_sha256"));
+        assert!(
+            parse_manifest_json(DEFAULT_MANIFEST_URL, &text)
+                .unwrap_err()
+                .contains("archive_sha256")
+        );
     }
 
     #[test]
@@ -597,7 +606,9 @@ mod tests {
         );
         assert_eq!(
             pack.variant_for_compression("gzip").unwrap().url,
-            format!("http://assets.mistermagik.com/mister-magik/v1/packs/neogeo/screenshots/240x240/2026.06.22/{GZ_SHA}.mmlz4b.gz")
+            format!(
+                "http://assets.mistermagik.com/mister-magik/v1/packs/neogeo/screenshots/240x240/2026.06.22/{GZ_SHA}.mmlz4b.gz"
+            )
         );
     }
 
@@ -774,9 +785,11 @@ mod tests {
     fn rejects_unsupported_pack_id() {
         let text = raw_manifest("").replace(r#""id": "arcade""#, r#""id": "psx""#);
 
-        assert!(parse_manifest_json(DEFAULT_MANIFEST_URL, &text)
-            .unwrap_err()
-            .contains("unsupported"));
+        assert!(
+            parse_manifest_json(DEFAULT_MANIFEST_URL, &text)
+                .unwrap_err()
+                .contains("unsupported")
+        );
     }
 
     #[test]
@@ -786,9 +799,11 @@ mod tests {
             "../packs/arcade/screenshots/320x320/2026.06.22/",
         );
 
-        assert!(parse_manifest_json(DEFAULT_MANIFEST_URL, &text)
-            .unwrap_err()
-            .contains("unsafe"));
+        assert!(
+            parse_manifest_json(DEFAULT_MANIFEST_URL, &text)
+                .unwrap_err()
+                .contains("unsafe")
+        );
     }
 
     #[test]
@@ -817,7 +832,9 @@ mod tests {
 
         assert_eq!(
             manifest.packs[0].raw.url,
-            format!("https://media.example.test/mister-magik/v1/packs/arcade/screenshots/320x320/2026.06.22/{SHA}.mmlz4b")
+            format!(
+                "https://media.example.test/mister-magik/v1/packs/arcade/screenshots/320x320/2026.06.22/{SHA}.mmlz4b"
+            )
         );
     }
 
@@ -835,7 +852,9 @@ mod tests {
 
         assert_eq!(
             manifest.packs[0].raw.url,
-            format!("https://cdn.example.test/mister-magik/v1/packs/arcade/screenshots/320x320/2026.06.22/{SHA}.mmlz4b")
+            format!(
+                "https://cdn.example.test/mister-magik/v1/packs/arcade/screenshots/320x320/2026.06.22/{SHA}.mmlz4b"
+            )
         );
     }
 
@@ -846,8 +865,10 @@ mod tests {
             "mister-magik/v1/packs/arcade/covers/320x320/2026.06.22/",
         );
 
-        assert!(parse_manifest_json(DEFAULT_MANIFEST_URL, &text)
-            .unwrap_err()
-            .contains("unexpected"));
+        assert!(
+            parse_manifest_json(DEFAULT_MANIFEST_URL, &text)
+                .unwrap_err()
+                .contains("unexpected")
+        );
     }
 }

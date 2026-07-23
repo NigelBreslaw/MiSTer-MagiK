@@ -254,8 +254,10 @@ mod tests {
             restore_fails: true,
             ..FakeActions::default()
         };
-        assert!(run_workflow(&mut actions, &mut |_, _| Ok(()))
-            .unwrap_err()
-            .is_recovery_required());
+        assert!(
+            run_workflow(&mut actions, &mut |_, _| Ok(()))
+                .unwrap_err()
+                .is_recovery_required()
+        );
     }
 }

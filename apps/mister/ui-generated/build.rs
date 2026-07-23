@@ -11,7 +11,9 @@ fn main() {
     let font_sizes = if let Ok(font_sizes) = std::env::var("SLINT_FONT_SIZES") {
         font_sizes
     } else {
-        std::env::set_var("SLINT_FONT_SIZES", "8,16,24,32");
+        // SAFETY: Cargo runs this build script in its own process before the
+        // script creates any threads.
+        unsafe { std::env::set_var("SLINT_FONT_SIZES", "8,16,24,32") };
         "8,16,24,32".into()
     };
 

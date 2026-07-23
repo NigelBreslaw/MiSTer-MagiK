@@ -7,11 +7,11 @@
 //! builder needs to run.
 
 use crate::catalog_config::{
-    default_hbmame_sqlite_path, default_mame_sqlite_path, CATALOG_BUILD_VERSION, SCHEMA_VERSION,
+    CATALOG_BUILD_VERSION, SCHEMA_VERSION, default_hbmame_sqlite_path, default_mame_sqlite_path,
 };
 use crate::core_audit::CatalogAuditRow;
 use crate::launch_profiles::{
-    core_launch_manifest_fingerprint, CORE_LAUNCH_MANIFEST_VERSION, PROFILE_SET_VERSION,
+    CORE_LAUNCH_MANIFEST_VERSION, PROFILE_SET_VERSION, core_launch_manifest_fingerprint,
 };
 use crate::prepared_collections::PREPARED_COLLECTION_ADAPTER_VERSION;
 use std::path::Path;
@@ -303,19 +303,25 @@ mod tests {
         let stamp =
             compute_catalog_stamp_for_paths(&roots, &root.join("mame"), &root.join("hbmame"));
 
-        assert!(stamp
-            .lines()
-            .iter()
-            .any(|line| line.contains(&root.display().to_string())));
+        assert!(
+            stamp
+                .lines()
+                .iter()
+                .any(|line| line.contains(&root.display().to_string()))
+        );
         assert!(stamp.lines().iter().any(|line| line == "stamp-targets\t0"));
-        assert!(!stamp
-            .lines()
-            .iter()
-            .any(|line| line.contains(&system.display().to_string())));
-        assert!(!stamp
-            .lines()
-            .iter()
-            .any(|line| line.contains(&nested.display().to_string())));
+        assert!(
+            !stamp
+                .lines()
+                .iter()
+                .any(|line| line.contains(&system.display().to_string()))
+        );
+        assert!(
+            !stamp
+                .lines()
+                .iter()
+                .any(|line| line.contains(&nested.display().to_string()))
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -348,10 +354,12 @@ mod tests {
             compute_catalog_stamp_for_paths(&roots, &root.join("mame"), &root.join("hbmame"));
 
         assert_ne!(first.fingerprint_hex(), second.fingerprint_hex());
-        assert!(second
-            .lines()
-            .iter()
-            .any(|line| line.ends_with("\tmissing")));
+        assert!(
+            second
+                .lines()
+                .iter()
+                .any(|line| line.ends_with("\tmissing"))
+        );
     }
 
     #[test]
@@ -370,10 +378,12 @@ mod tests {
 
         assert_ne!(first.fingerprint_hex(), second.fingerprint_hex());
         assert_eq!(second.fingerprint_hex(), third.fingerprint_hex());
-        assert!(!third
-            .lines()
-            .iter()
-            .any(|line| line.starts_with("preview-pack")));
+        assert!(
+            !third
+                .lines()
+                .iter()
+                .any(|line| line.starts_with("preview-pack"))
+        );
     }
 
     #[test]
@@ -396,10 +406,12 @@ mod tests {
         let changed = compute_catalog_stamp_for_paths_with_audit(&roots, &mame, &hbmame, &audit);
 
         assert_ne!(base.fingerprint_hex(), changed.fingerprint_hex());
-        assert!(changed
-            .lines()
-            .iter()
-            .any(|line| line.contains("WonderSwanColor")));
+        assert!(
+            changed
+                .lines()
+                .iter()
+                .any(|line| line.contains("WonderSwanColor"))
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

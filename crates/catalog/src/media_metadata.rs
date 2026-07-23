@@ -7,13 +7,13 @@ use crate::catalog_scan::FoundFile;
 use crate::game_discovery::{DiscoveryConfidence, DiscoverySourceKind, GameDiscovery};
 use crate::launch_profiles::{CollectionListing, CollectionRule, LaunchProfile};
 use crate::library_db::{
-    amigavision_installed_listings, AMIGAVISION_GAME_LAUNCH_PREFIX, AMIGAVISION_LAUNCHER_REF,
-    MRA_PREFIX_BYTES,
+    AMIGAVISION_GAME_LAUNCH_PREFIX, AMIGAVISION_LAUNCHER_REF, MRA_PREFIX_BYTES,
+    amigavision_installed_listings,
 };
 use crate::prepared_collections::{PreparedCollectionId, PreparedLaunchProvenance};
-use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader as XmlReader;
 use quick_xml::XmlVersion;
+use quick_xml::events::{BytesStart, Event};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -464,24 +464,24 @@ fn apply_mra_metadata_event(
             field_text.clear();
         }
         Event::Text(e) => {
-            if field.is_some() {
-                if let Ok(value) = e.xml10_content() {
-                    field_text.push_str(&value);
-                }
+            if field.is_some()
+                && let Ok(value) = e.xml10_content()
+            {
+                field_text.push_str(&value);
             }
         }
         Event::CData(e) => {
-            if field.is_some() {
-                if let Ok(value) = e.xml10_content() {
-                    field_text.push_str(&value);
-                }
+            if field.is_some()
+                && let Ok(value) = e.xml10_content()
+            {
+                field_text.push_str(&value);
             }
         }
         Event::GeneralRef(e) => {
-            if field.is_some() {
-                if let Some(value) = xml_general_ref_text(e.as_ref()) {
-                    field_text.push_str(value);
-                }
+            if field.is_some()
+                && let Some(value) = xml_general_ref_text(e.as_ref())
+            {
+                field_text.push_str(value);
             }
         }
         Event::End(e) => {
@@ -864,7 +864,7 @@ mod tests {
     use crate::catalog_scan::FoundFile;
     use crate::game_discovery::{is_launcher_launch_ref, unique_discovery_count};
     use crate::launch_profiles;
-    use crate::library_db::{scan_library, BenchConfig};
+    use crate::library_db::{BenchConfig, scan_library};
     use crate::sqlite_catalog::{load_arcade_catalog_from_sqlite_at, save_sqlite_scan};
     use crate::test_support::*;
     use std::time::Duration;
@@ -1089,10 +1089,12 @@ mod tests {
             document.metadata.file_path.as_deref(),
             Some("games/NES/Mario.nes")
         );
-        assert!(document
-            .inspection
-            .expect_err("rootless MGL must fail strict inspection")
-            .contains("missing mistergamedescription root"));
+        assert!(
+            document
+                .inspection
+                .expect_err("rootless MGL must fail strict inspection")
+                .contains("missing mistergamedescription root")
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1180,29 +1182,37 @@ mod tests {
         );
 
         assert_eq!(unique_discovery_count(&discoveries), 2);
-        assert!(discoveries.iter().all(|discovery| discovery
-            .launch_ref
-            .starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX)));
+        assert!(discoveries.iter().all(|discovery| {
+            discovery
+                .launch_ref
+                .starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX)
+        }));
         save_sqlite_scan(&db, &sqlite_scan_with_discoveries(discoveries)).expect("save sqlite");
         let loaded =
             load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
 
         assert_eq!(loaded.rows, 2);
-        assert!(loaded
-            .catalog
-            .games
-            .iter()
-            .all(|game| game.system_id.as_ref() == "amiga"));
-        assert!(loaded
-            .catalog
-            .systems
-            .iter()
-            .any(|system| system.id == "amiga" && system.count == 2));
-        assert!(loaded
-            .catalog
-            .games
-            .iter()
-            .all(|game| game.mra_path.starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX)));
+        assert!(
+            loaded
+                .catalog
+                .games
+                .iter()
+                .all(|game| game.system_id.as_ref() == "amiga")
+        );
+        assert!(
+            loaded
+                .catalog
+                .systems
+                .iter()
+                .any(|system| system.id == "amiga" && system.count == 2)
+        );
+        assert!(
+            loaded
+                .catalog
+                .games
+                .iter()
+                .all(|game| game.mra_path.starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX))
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1273,10 +1283,11 @@ mod tests {
                 .count(),
             4
         );
-        assert!(scan
-            .discoveries
-            .iter()
-            .all(|discovery| !discovery.launch_ref.ends_with("AmigaVision.hdf")));
+        assert!(
+            scan.discoveries
+                .iter()
+                .all(|discovery| !discovery.launch_ref.ends_with("AmigaVision.hdf"))
+        );
 
         save_sqlite_scan(&db, &scan).expect("save sqlite");
         let loaded =
@@ -1287,11 +1298,13 @@ mod tests {
             game.mra_path.as_ref() == AMIGAVISION_LAUNCHER_REF
                 || game.mra_path.starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX)
         }));
-        assert!(loaded
-            .catalog
-            .systems
-            .iter()
-            .any(|system| system.id == "amiga" && system.count == 5));
+        assert!(
+            loaded
+                .catalog
+                .systems
+                .iter()
+                .any(|system| system.id == "amiga" && system.count == 5)
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

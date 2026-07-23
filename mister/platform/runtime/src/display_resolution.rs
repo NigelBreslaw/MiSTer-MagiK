@@ -223,9 +223,11 @@ mod tests {
     #[test]
     fn catalog_has_unique_stable_ids() {
         for (index, mode) in DISPLAY_RESOLUTIONS.iter().enumerate() {
-            assert!(DISPLAY_RESOLUTIONS[..index]
-                .iter()
-                .all(|other| other.id != mode.id));
+            assert!(
+                DISPLAY_RESOLUTIONS[..index]
+                    .iter()
+                    .all(|other| other.id != mode.id)
+            );
             assert!(!mode.label.is_empty());
         }
     }

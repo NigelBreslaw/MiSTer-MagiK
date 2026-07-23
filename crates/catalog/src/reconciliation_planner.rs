@@ -253,9 +253,11 @@ mod tests {
         .unwrap();
         assert!(plan.global_rebuild);
         assert_eq!(plan.systems.len(), 2);
-        assert!(plan.systems.iter().all(|system| system
-            .reasons
-            .contains(&ReconcileReason::SemanticVersionChanged)));
+        assert!(plan.systems.iter().all(|system| {
+            system
+                .reasons
+                .contains(&ReconcileReason::SemanticVersionChanged)
+        }));
     }
 
     #[test]

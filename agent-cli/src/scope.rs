@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::evidence::{now_ms, Evidence};
+use crate::evidence::{Evidence, now_ms};
 use crate::model::Scope;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

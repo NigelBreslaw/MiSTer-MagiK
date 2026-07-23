@@ -5,7 +5,7 @@ use crate::components::DeploymentImpact;
 use crate::model::{Intent, Outcome};
 use crate::progress::ProgressEvent;
 use crate::request::RawRequest;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -1278,15 +1278,27 @@ impl Evidence {
             .map_err(|error| error.to_string())?;
         let p50 = percentile(cohort_id, 50)?;
         let p95 = percentile(cohort_id, 95)?;
-        let cache_hits = scalar("SELECT count(*) FROM commands WHERE request_id IN (SELECT id FROM requests WHERE cohort_id=?1) AND status IN ('reused','joined')")?;
-        let cache_misses = scalar("SELECT count(*) FROM commands WHERE request_id IN (SELECT id FROM requests WHERE cohort_id=?1) AND cache_decision='miss'")?;
+        let cache_hits = scalar(
+            "SELECT count(*) FROM commands WHERE request_id IN (SELECT id FROM requests WHERE cohort_id=?1) AND status IN ('reused','joined')",
+        )?;
+        let cache_misses = scalar(
+            "SELECT count(*) FROM commands WHERE request_id IN (SELECT id FROM requests WHERE cohort_id=?1) AND cache_decision='miss'",
+        )?;
         Ok(DatabaseReport {
             cohort_id,
             requests: scalar("SELECT count(*) FROM requests WHERE cohort_id=?1")?,
-            commands: scalar("SELECT count(*) FROM commands WHERE request_id IN (SELECT id FROM requests WHERE cohort_id=?1)")?,
-            wall_ms: scalar("SELECT COALESCE(max(completed_ms)-min(started_ms),0) FROM requests WHERE cohort_id=?1")?,
-            command_ms: scalar("SELECT COALESCE(sum(duration_ms),0) FROM commands WHERE request_id IN (SELECT id FROM requests WHERE cohort_id=?1)")?,
-            critical_path_ms: scalar("SELECT COALESCE(sum(CASE WHEN execution_ms > 0 THEN execution_ms ELSE 0 END),0) FROM requests WHERE cohort_id=?1 AND parent_request_id IS NULL")?,
+            commands: scalar(
+                "SELECT count(*) FROM commands WHERE request_id IN (SELECT id FROM requests WHERE cohort_id=?1)",
+            )?,
+            wall_ms: scalar(
+                "SELECT COALESCE(max(completed_ms)-min(started_ms),0) FROM requests WHERE cohort_id=?1",
+            )?,
+            command_ms: scalar(
+                "SELECT COALESCE(sum(duration_ms),0) FROM commands WHERE request_id IN (SELECT id FROM requests WHERE cohort_id=?1)",
+            )?,
+            critical_path_ms: scalar(
+                "SELECT COALESCE(sum(CASE WHEN execution_ms > 0 THEN execution_ms ELSE 0 END),0) FROM requests WHERE cohort_id=?1 AND parent_request_id IS NULL",
+            )?,
             p50_request_ms: p50,
             p95_request_ms: p95,
             cache_hits,
@@ -1296,8 +1308,12 @@ impl Evidence {
             } else {
                 cache_hits as f64 * 100.0 / (cache_hits + cache_misses) as f64
             },
-            failures: scalar("SELECT count(*) FROM commands WHERE request_id IN (SELECT id FROM requests WHERE cohort_id=?1) AND status='failed'")?,
-            repeated_requests: scalar("SELECT count(*) FROM requests r WHERE cohort_id=?1 AND EXISTS (SELECT 1 FROM requests p WHERE p.cohort_id=r.cohort_id AND p.id<>r.id AND p.args_json=r.args_json AND p.started_ms BETWEEN r.started_ms-60000 AND r.started_ms)")?,
+            failures: scalar(
+                "SELECT count(*) FROM commands WHERE request_id IN (SELECT id FROM requests WHERE cohort_id=?1) AND status='failed'",
+            )?,
+            repeated_requests: scalar(
+                "SELECT count(*) FROM requests r WHERE cohort_id=?1 AND EXISTS (SELECT 1 FROM requests p WHERE p.cohort_id=r.cohort_id AND p.id<>r.id AND p.args_json=r.args_json AND p.started_ms BETWEEN r.started_ms-60000 AND r.started_ms)",
+            )?,
             previous_p95_request_ms: previous_p95,
             p95_regression_ms: previous_p95.map(|previous| p95.saturating_sub(previous)),
         })
@@ -1795,10 +1811,12 @@ mod tests {
             .save_task_baseline("thread-one", worktree, &"first", false)
             .unwrap();
         assert_eq!(first, "thread-one");
-        assert!(evidence
-            .save_task_baseline("thread-one", worktree, &"duplicate", false)
-            .unwrap_err()
-            .contains("lifecycle already active"));
+        assert!(
+            evidence
+                .save_task_baseline("thread-one", worktree, &"duplicate", false)
+                .unwrap_err()
+                .contains("lifecycle already active")
+        );
         evidence.close_task(&first, "commit-one").unwrap();
 
         let second = evidence
@@ -1840,26 +1858,30 @@ mod tests {
         };
         evidence.save_delivery(&delivery).unwrap();
         assert_eq!(evidence.delivery("task-delivery").unwrap(), Some(delivery));
-        assert!(evidence
-            .attest_delivery(
-                "task-delivery",
-                "github-actions.rbf-build",
-                "platform-bundle.yml",
-                "wrong-branch",
-                "commit-1",
-                "{}",
-            )
-            .is_err());
-        assert!(evidence
-            .attest_delivery(
-                "task-delivery",
-                "github-actions.rbf-build",
-                "platform-bundle.yml",
-                "main",
-                "wrong-commit",
-                "{}",
-            )
-            .is_err());
+        assert!(
+            evidence
+                .attest_delivery(
+                    "task-delivery",
+                    "github-actions.rbf-build",
+                    "platform-bundle.yml",
+                    "wrong-branch",
+                    "commit-1",
+                    "{}",
+                )
+                .is_err()
+        );
+        assert!(
+            evidence
+                .attest_delivery(
+                    "task-delivery",
+                    "github-actions.rbf-build",
+                    "platform-bundle.yml",
+                    "main",
+                    "wrong-commit",
+                    "{}",
+                )
+                .is_err()
+        );
         evidence
             .attest_delivery(
                 "task-delivery",
@@ -1963,10 +1985,12 @@ mod tests {
             .save_task_baseline("task-committed", worktree, &(), false)
             .unwrap();
         evidence.close_task("task-committed", "abc123").unwrap();
-        assert!(evidence
-            .latest_committed_scope(worktree)
-            .unwrap_err()
-            .starts_with("commit_evidence_corrupt:"));
+        assert!(
+            evidence
+                .latest_committed_scope(worktree)
+                .unwrap_err()
+                .starts_with("commit_evidence_corrupt:")
+        );
 
         let request = RawRequest::capture([OsString::from("agent-cli")]);
         evidence.begin_request(&request).unwrap();
@@ -1983,10 +2007,12 @@ mod tests {
                 None,
             )
             .unwrap();
-        assert!(evidence
-            .latest_committed_scope(worktree)
-            .unwrap_err()
-            .starts_with("commit_evidence_corrupt:"));
+        assert!(
+            evidence
+                .latest_committed_scope(worktree)
+                .unwrap_err()
+                .starts_with("commit_evidence_corrupt:")
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -2098,21 +2124,29 @@ mod tests {
     fn operation_cache_requires_exact_task_operation_and_fingerprint() {
         let root = temporary_root("operation-cache");
         let evidence = Evidence::open_at(&root).unwrap();
-        assert!(!evidence
-            .has_cached_operation("task-a", "check.one", "fingerprint-a")
-            .unwrap());
+        assert!(
+            !evidence
+                .has_cached_operation("task-a", "check.one", "fingerprint-a")
+                .unwrap()
+        );
         evidence
             .cache_operation("task-a", "check.one", "fingerprint-a")
             .unwrap();
-        assert!(evidence
-            .has_cached_operation("task-a", "check.one", "fingerprint-a")
-            .unwrap());
-        assert!(!evidence
-            .has_cached_operation("task-a", "check.one", "fingerprint-b")
-            .unwrap());
-        assert!(!evidence
-            .has_cached_operation("task-b", "check.one", "fingerprint-a")
-            .unwrap());
+        assert!(
+            evidence
+                .has_cached_operation("task-a", "check.one", "fingerprint-a")
+                .unwrap()
+        );
+        assert!(
+            !evidence
+                .has_cached_operation("task-a", "check.one", "fingerprint-b")
+                .unwrap()
+        );
+        assert!(
+            !evidence
+                .has_cached_operation("task-b", "check.one", "fingerprint-a")
+                .unwrap()
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -2129,12 +2163,16 @@ mod tests {
                 .unwrap(),
             Some(("passed".into(), None))
         );
-        assert!(evidence
-            .claim_validation("check.two", "fingerprint", "owner-one")
-            .unwrap());
-        assert!(!evidence
-            .claim_validation("check.two", "fingerprint", "owner-two")
-            .unwrap());
+        assert!(
+            evidence
+                .claim_validation("check.two", "fingerprint", "owner-one")
+                .unwrap()
+        );
+        assert!(
+            !evidence
+                .claim_validation("check.two", "fingerprint", "owner-two")
+                .unwrap()
+        );
         evidence
             .connection
             .execute(
@@ -2142,9 +2180,11 @@ mod tests {
                 [],
             )
             .unwrap();
-        assert!(evidence
-            .claim_validation("check.two", "fingerprint", "owner-two")
-            .unwrap());
+        assert!(
+            evidence
+                .claim_validation("check.two", "fingerprint", "owner-two")
+                .unwrap()
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -2153,12 +2193,16 @@ mod tests {
         let root = temporary_root("shared-lease");
         let first = Evidence::open_at(&root).unwrap();
         let second = Evidence::open_at(&root).unwrap();
-        assert!(first
-            .claim_validation("check.one", "fingerprint", "owner")
-            .unwrap());
-        assert!(!second
-            .claim_validation("check.one", "fingerprint", "waiter")
-            .unwrap());
+        assert!(
+            first
+                .claim_validation("check.one", "fingerprint", "owner")
+                .unwrap()
+        );
+        assert!(
+            !second
+                .claim_validation("check.one", "fingerprint", "waiter")
+                .unwrap()
+        );
         first
             .cache_validation("check.one", "fingerprint", "passed", None)
             .unwrap();
@@ -2255,9 +2299,11 @@ mod tests {
         assert!(execution_ms >= 0);
 
         evidence.close_task("task-timed", "abc123").unwrap();
-        assert!(!evidence
-            .has_cached_operation("task-timed", "check.one", "fingerprint")
-            .unwrap());
+        assert!(
+            !evidence
+                .has_cached_operation("task-timed", "check.one", "fingerprint")
+                .unwrap()
+        );
         fs::remove_dir_all(root).unwrap();
     }
 }

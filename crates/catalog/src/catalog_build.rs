@@ -4,7 +4,7 @@
 //! Catalog build orchestration and progress events.
 
 use crate::arcade_catalog;
-use crate::catalog_progress::{report_catalog_progress, CatalogProgress};
+use crate::catalog_progress::{CatalogProgress, report_catalog_progress};
 use crate::catalog_stamp;
 use crate::game_discovery::{
     covered_payload_paths, preferred_playable_discovery_indices_by_key, unique_discovery_count,
@@ -103,13 +103,27 @@ impl<'a> CatalogRefreshPipeline<'a> {
         )
     }
 
-    pub(crate) fn scan_ram_artifact_with_events(
+    pub(crate) fn scan_ram_artifact_foreground_with_events_and_durable_resume(
         &self,
         progress: ProgressCallback<'_>,
         scan_events: ScanEventCallback<'_>,
+        durable_resume: bool,
     ) -> LibraryRamScanArtifact {
         self.scan_ram_artifact_with_events_using(
-            LibraryIndexer::new(self.cfg),
+            LibraryIndexer::foreground(self.cfg).with_durable_resume(durable_resume),
+            progress,
+            scan_events,
+        )
+    }
+
+    pub(crate) fn scan_ram_artifact_with_events_and_durable_resume(
+        &self,
+        progress: ProgressCallback<'_>,
+        scan_events: ScanEventCallback<'_>,
+        durable_resume: bool,
+    ) -> LibraryRamScanArtifact {
+        self.scan_ram_artifact_with_events_using(
+            LibraryIndexer::new(self.cfg).with_durable_resume(durable_resume),
             progress,
             scan_events,
         )

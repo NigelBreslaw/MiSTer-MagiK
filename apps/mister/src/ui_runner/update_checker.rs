@@ -259,7 +259,9 @@ mod tests {
         let ini = "[other]\ndb_url = https://example.test/nope\n\n[mister_magik]\ndb_url = https://raw.githubusercontent.com/Owner/Repo/downloader/mister-magik-beta-db.json.zip\n";
         assert_eq!(
             configured_db_url(ini),
-            Some("https://raw.githubusercontent.com/Owner/Repo/downloader/mister-magik-beta-db.json.zip")
+            Some(
+                "https://raw.githubusercontent.com/Owner/Repo/downloader/mister-magik-beta-db.json.zip"
+            )
         );
     }
 

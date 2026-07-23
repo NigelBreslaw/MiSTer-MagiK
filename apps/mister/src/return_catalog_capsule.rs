@@ -211,10 +211,10 @@ fn prepare_return_catalog_capsule_inner(
     let mut plan_refs = HashSet::new();
     let mut launch_plans = Vec::new();
     for game in &games {
-        if let LaunchTarget::Structured(plan) = catalog.launch_target_for_ref(&game.mra_path) {
-            if plan_refs.insert(plan.launch_ref.clone()) {
-                launch_plans.push(plan);
-            }
+        if let LaunchTarget::Structured(plan) = catalog.launch_target_for_ref(&game.mra_path)
+            && plan_refs.insert(plan.launch_ref.clone())
+        {
+            launch_plans.push(plan);
         }
     }
     if launch_plans.len() > RETURN_CATALOG_CAPSULE_MAX_PLANS {
@@ -1110,10 +1110,12 @@ mod tests {
                 .expect("take");
         assert_eq!(restored.len(), 2);
         assert_eq!(restored.system_game_view("arcade").len(), 2);
-        assert!(restored
-            .games
-            .iter()
-            .any(|game| game.mra_path.as_ref() == "/games/two.mra"));
+        assert!(
+            restored
+                .games
+                .iter()
+                .any(|game| game.mra_path.as_ref() == "/games/two.mra")
+        );
         assert!(!path.exists());
         let _ = fs::remove_dir_all(root);
     }
@@ -1148,13 +1150,15 @@ mod tests {
         let mut source = catalog(&root);
         Arc::make_mut(&mut source.games)[0].title =
             Arc::from("x".repeat(RETURN_CATALOG_CAPSULE_MAX_STRING_BYTES + 1));
-        assert!(prepare_return_catalog_capsule_with_binding(
-            &source,
-            "arcade",
-            "/games/one.mra",
-            binding(&root),
-        )
-        .is_err());
+        assert!(
+            prepare_return_catalog_capsule_with_binding(
+                &source,
+                "arcade",
+                "/games/one.mra",
+                binding(&root),
+            )
+            .is_err()
+        );
 
         let mut too_many_roots = binding(&root);
         too_many_roots.library_roots =
@@ -1172,32 +1176,40 @@ mod tests {
     #[test]
     fn malicious_counts_and_strings_reject_before_reservation() {
         let count = u32::MAX.to_le_bytes();
-        assert!(CapsuleBinaryReader::new(&count)
-            .read_count(
-                "games",
-                RETURN_CATALOG_CAPSULE_MAX_ROWS,
-                MIN_ENCODED_GAME_BYTES
-            )
-            .is_err());
-        assert!(CapsuleBinaryReader::new(&count)
-            .read_count(
-                "library roots",
-                RETURN_CATALOG_CAPSULE_MAX_ROOTS,
-                MIN_ENCODED_STRING_BYTES,
-            )
-            .is_err());
-        assert!(CapsuleBinaryReader::new(&count)
-            .read_count(
-                "path maps",
-                RETURN_CATALOG_CAPSULE_MAX_PATH_MAPS,
-                MIN_ENCODED_STRING_BYTES * 2,
-            )
-            .is_err());
+        assert!(
+            CapsuleBinaryReader::new(&count)
+                .read_count(
+                    "games",
+                    RETURN_CATALOG_CAPSULE_MAX_ROWS,
+                    MIN_ENCODED_GAME_BYTES
+                )
+                .is_err()
+        );
+        assert!(
+            CapsuleBinaryReader::new(&count)
+                .read_count(
+                    "library roots",
+                    RETURN_CATALOG_CAPSULE_MAX_ROOTS,
+                    MIN_ENCODED_STRING_BYTES,
+                )
+                .is_err()
+        );
+        assert!(
+            CapsuleBinaryReader::new(&count)
+                .read_count(
+                    "path maps",
+                    RETURN_CATALOG_CAPSULE_MAX_PATH_MAPS,
+                    MIN_ENCODED_STRING_BYTES * 2,
+                )
+                .is_err()
+        );
 
         let declared = ((RETURN_CATALOG_CAPSULE_MAX_STRING_BYTES + 1) as u32).to_le_bytes();
-        assert!(CapsuleBinaryReader::new(&declared)
-            .read_string("malicious string")
-            .is_err());
+        assert!(
+            CapsuleBinaryReader::new(&declared)
+                .read_string("malicious string")
+                .is_err()
+        );
 
         let exact = "x".repeat(RETURN_CATALOG_CAPSULE_MAX_STRING_BYTES);
         let mut writer = CapsuleBinaryWriter::new();
@@ -1210,13 +1222,15 @@ mod tests {
         );
 
         let plausible_but_truncated = 10u32.to_le_bytes();
-        assert!(CapsuleBinaryReader::new(&plausible_but_truncated)
-            .read_count(
-                "systems",
-                RETURN_CATALOG_CAPSULE_MAX_SYSTEMS,
-                MIN_ENCODED_SYSTEM_BYTES
-            )
-            .is_err());
+        assert!(
+            CapsuleBinaryReader::new(&plausible_but_truncated)
+                .read_count(
+                    "systems",
+                    RETURN_CATALOG_CAPSULE_MAX_SYSTEMS,
+                    MIN_ENCODED_SYSTEM_BYTES
+                )
+                .is_err()
+        );
     }
 
     #[test]
@@ -1243,20 +1257,24 @@ mod tests {
         );
 
         let bytes = encoded_capsule(&root);
-        assert!(decode_return_catalog_capsule(
-            &bytes[..bytes.len() - 1],
-            &expected,
-            "arcade",
-            "/games/two.mra"
-        )
-        .is_err());
+        assert!(
+            decode_return_catalog_capsule(
+                &bytes[..bytes.len() - 1],
+                &expected,
+                "arcade",
+                "/games/two.mra"
+            )
+            .is_err()
+        );
 
         assert!(CapsuleBinaryReader::new(&[2]).read_bool().is_err());
         assert!(decode_platform_kind(255).is_err());
         let invalid_utf8 = [1, 0, 0, 0, 0xff];
-        assert!(CapsuleBinaryReader::new(&invalid_utf8)
-            .read_string("invalid utf8")
-            .is_err());
+        assert!(
+            CapsuleBinaryReader::new(&invalid_utf8)
+                .read_string("invalid utf8")
+                .is_err()
+        );
         let _ = fs::remove_dir_all(root);
     }
 

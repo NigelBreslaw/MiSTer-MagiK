@@ -10,7 +10,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use crate::input_state::{InputProfile, PadRawEvent, JS_EVENT_AXIS, JS_EVENT_BUTTON};
+use crate::input_state::{InputProfile, JS_EVENT_AXIS, JS_EVENT_BUTTON, PadRawEvent};
 pub use crate::input_state::{PadInfo, PadState};
 
 const JS_EVENT_SIZE: usize = 8;

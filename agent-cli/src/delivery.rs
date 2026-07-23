@@ -776,14 +776,18 @@ mod tests {
     #[test]
     fn local_main_requires_only_clean_mister_magik_branch() {
         assert!(validate_local_main_identity(false, "mister-magik").is_ok());
-        assert!(validate_local_main_identity(true, "mister-magik")
-            .unwrap_err()
-            .to_string()
-            .contains("local_main_dirty"));
-        assert!(validate_local_main_identity(false, "feature")
-            .unwrap_err()
-            .to_string()
-            .contains("local_main_branch"));
+        assert!(
+            validate_local_main_identity(true, "mister-magik")
+                .unwrap_err()
+                .to_string()
+                .contains("local_main_dirty")
+        );
+        assert!(
+            validate_local_main_identity(false, "feature")
+                .unwrap_err()
+                .to_string()
+                .contains("local_main_branch")
+        );
     }
 
     #[test]

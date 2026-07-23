@@ -4,19 +4,19 @@
 //! Production V3 projection from the canonical RAM catalog into system shards.
 
 use crate::arcade_catalog::ArcadeCatalog;
-use crate::catalog_classify::{system_definition, LauncherSection, SystemId};
+use crate::catalog_classify::{LauncherSection, SystemId, system_definition};
 use crate::catalog_domain::ScanUnitId;
 use crate::reconciliation_executor::{
-    execute_reconciliation, MaterializedSystem, ReconciliationError, ReconciliationMaterializer,
-    ReconciliationOutcome,
+    MaterializedSystem, ReconciliationError, ReconciliationMaterializer, ReconciliationOutcome,
+    execute_reconciliation,
 };
 use crate::shard_registry::{
-    manifest_slots_present, read_latest_manifest, read_latest_manifest_lazy, ManifestSystem,
-    RegistryLimits,
+    ManifestSystem, RegistryLimits, manifest_slots_present, read_latest_manifest,
+    read_latest_manifest_lazy,
 };
 use crate::sharded_catalog::{PlannedSystem, PlannedSystemAction, ReconcilePlan, ReconcileReason};
 use crate::system_shard::{
-    open_system_shard, SystemGame, SystemLaunchPlan, SystemShardProjectionStats,
+    SystemGame, SystemLaunchPlan, SystemShardProjectionStats, open_system_shard,
 };
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
@@ -821,9 +821,11 @@ mod tests {
             .open_system(&SystemId::parse("arcade").unwrap())
             .unwrap();
         assert!(system.games()[0].has_preview);
-        assert!(system.games()[0]
-            .preview_archive_path
-            .ends_with("/arcade-screenshots.mmlz4b"));
+        assert!(
+            system.games()[0]
+                .preview_archive_path
+                .ends_with("/arcade-screenshots.mmlz4b")
+        );
         assert!(!system.games()[1].has_preview);
 
         let unchanged = reconcile_production_preview_availability(
@@ -855,13 +857,15 @@ mod tests {
         let pack = root.join("missing-index.mmlz4b");
         fs::write(&pack, b"pack").unwrap();
 
-        assert!(reconcile_production_preview_availability(
-            &root,
-            &SystemId::parse("snes").unwrap(),
-            &pack,
-            limits(),
-        )
-        .is_err());
+        assert!(
+            reconcile_production_preview_availability(
+                &root,
+                &SystemId::parse("snes").unwrap(),
+                &pack,
+                limits(),
+            )
+            .is_err()
+        );
         assert_eq!(read_latest_manifest(&root, limits()).unwrap().generation, 1);
         validate_production_binding(&root, 1).unwrap();
         let _ = fs::remove_dir_all(root);

@@ -397,11 +397,7 @@ pub(super) fn launcher_bench_step(
             }
             nav.screen = Screen::Arcade;
             let (dir, previous_dir) = if state.step < 10 {
-                if state.step % 2 == 0 {
-                    (1, 0)
-                } else {
-                    (0, 1)
-                }
+                if state.step % 2 == 0 { (1, 0) } else { (0, 1) }
             } else {
                 (0, 0)
             };

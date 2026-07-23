@@ -201,11 +201,7 @@ fn rgb(r: u32, g: u32, b: u32) -> u32 {
 
 fn wave(v: i32) -> u32 {
     let t = (v & 255) as u32;
-    if t < 128 {
-        t * 2
-    } else {
-        (255 - t) * 2
-    }
+    if t < 128 { t * 2 } else { (255 - t) * 2 }
 }
 
 fn palette(i: u32) -> u32 {
@@ -680,11 +676,7 @@ fn wrap_shifted_x(x: usize, shift: i32, w: usize) -> usize {
         sx
     } else {
         let shift = (-shift) as usize % w;
-        if x >= shift {
-            x - shift
-        } else {
-            w + x - shift
-        }
+        if x >= shift { x - shift } else { w + x - shift }
     }
 }
 

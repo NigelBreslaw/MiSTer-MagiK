@@ -6,9 +6,9 @@
 use crate::catalog_classify::SystemId;
 use crate::catalog_domain::ScanUnitId;
 use crate::sharded_catalog::MANIFEST_SCHEMA_VERSION;
+use crate::system_shard::SystemShardLimits;
 #[cfg(feature = "builder")]
 use crate::system_shard::open_system_shard;
-use crate::system_shard::SystemShardLimits;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::error::Error;
@@ -992,7 +992,7 @@ impl Error for RegistryError {}
 mod tests {
     use super::*;
     #[cfg(feature = "builder")]
-    use crate::system_shard::{write_system_shard, SystemGame, SystemShardData};
+    use crate::system_shard::{SystemGame, SystemShardData, write_system_shard};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -1026,9 +1026,11 @@ mod tests {
 
         assert!(error.message().contains("size does not match"));
         assert!(!target.exists());
-        assert!(!root
-            .join(format!(".target.tmp.{}", std::process::id()))
-            .exists());
+        assert!(
+            !root
+                .join(format!(".target.tmp.{}", std::process::id()))
+                .exists()
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

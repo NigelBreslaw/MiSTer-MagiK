@@ -4,7 +4,9 @@
 [package]
 name = "mister-tool"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.97.1"
+# Keep host tooling aligned with the repository's pinned Rust toolchain.
 license = "GPL-3.0-or-later"
 
 [lints.rust]

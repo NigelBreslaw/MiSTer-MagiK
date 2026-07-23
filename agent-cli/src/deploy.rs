@@ -297,14 +297,18 @@ mod tests {
         let plan = deployment.as_evidence_plan(Intent::Deliver);
         assert_eq!(plan.operations.len(), 1);
         assert_eq!(plan.operations[0].risk, Risk::DeviceWrite);
-        assert!(plan.operations[0]
-            .inputs
-            .iter()
-            .any(|input| input == "kind=platform"));
-        assert!(plan.operations[0]
-            .inputs
-            .iter()
-            .any(|input| input == "changed=apps/mister/src/launcher.rs"));
+        assert!(
+            plan.operations[0]
+                .inputs
+                .iter()
+                .any(|input| input == "kind=platform")
+        );
+        assert!(
+            plan.operations[0]
+                .inputs
+                .iter()
+                .any(|input| input == "changed=apps/mister/src/launcher.rs")
+        );
     }
 
     #[test]

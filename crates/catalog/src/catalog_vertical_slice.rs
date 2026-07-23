@@ -6,16 +6,15 @@
 use crate::catalog_classify::SystemId;
 use crate::catalog_domain::ScanUnitId;
 use crate::incremental_inputs::{
-    probe_scan_unit, InputFactStore, InputKind, InputProbePolicy, InputSnapshot,
+    InputFactStore, InputKind, InputProbePolicy, InputSnapshot, probe_scan_unit,
 };
 use crate::shard_registry::{
-    garbage_collect_unreferenced, manifest_slots_present, publish_manifest,
-    publish_system_artifacts, read_latest_manifest, CatalogManifest, ManifestSystem,
-    RegistryLimits,
+    CatalogManifest, ManifestSystem, RegistryLimits, garbage_collect_unreferenced,
+    manifest_slots_present, publish_manifest, publish_system_artifacts, read_latest_manifest,
 };
 use crate::sharded_catalog::CatalogConfig;
 use crate::system_shard::{
-    open_system_shard, write_system_shard, LoadedSystemShard, SystemGame, SystemShardData,
+    LoadedSystemShard, SystemGame, SystemShardData, open_system_shard, write_system_shard,
 };
 use std::error::Error;
 use std::fmt;
@@ -75,23 +74,23 @@ pub fn bootstrap_fixture_system(
         }
         Err(_) => None,
     };
-    if probe.changes.is_empty() {
-        if let Some(existing) = current_manifest.as_ref().and_then(|manifest| {
+    if probe.changes.is_empty()
+        && let Some(existing) = current_manifest.as_ref().and_then(|manifest| {
             manifest
                 .systems
                 .iter()
                 .find(|system| &system.system_id == system_id)
-        }) {
-            let loaded = open_system_shard(
-                &config.storage_root().join(&existing.active.sqlite_path),
-                &config.storage_root().join(&existing.active.navigation_path),
-                system_id,
-                existing.active.generation,
-                limits.shard,
-            )
-            .map_err(|error| VerticalSliceError::new("read", error.to_string()))?;
-            return Ok(outcome(&loaded, false, 0));
-        }
+        })
+    {
+        let loaded = open_system_shard(
+            &config.storage_root().join(&existing.active.sqlite_path),
+            &config.storage_root().join(&existing.active.navigation_path),
+            system_id,
+            existing.active.generation,
+            limits.shard,
+        )
+        .map_err(|error| VerticalSliceError::new("read", error.to_string()))?;
+        return Ok(outcome(&loaded, false, 0));
     }
 
     let manifest_generation = current_manifest.as_ref().map_or(Ok(1), |manifest| {
@@ -321,7 +320,7 @@ impl Error for VerticalSliceError {}
 mod tests {
     use super::*;
     use crate::shard_registry::RegistryLimits;
-    use crate::synthetic_fixture::{generate_synthetic_fixture, SyntheticFixtureSpec};
+    use crate::synthetic_fixture::{SyntheticFixtureSpec, generate_synthetic_fixture};
     use crate::system_shard::SystemShardLimits;
 
     #[test]

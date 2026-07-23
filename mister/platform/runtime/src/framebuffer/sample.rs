@@ -250,11 +250,7 @@ fn hash_sample(hash: u64, pixel_rgb888: u32) -> u64 {
 }
 
 fn pct(n: u32, d: u32) -> u32 {
-    if d == 0 {
-        0
-    } else {
-        n.saturating_mul(100) / d
-    }
+    if d == 0 { 0 } else { n.saturating_mul(100) / d }
 }
 
 fn color_distance(a: u32, b: u32) -> u32 {

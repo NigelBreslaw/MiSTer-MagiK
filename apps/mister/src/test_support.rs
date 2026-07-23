@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use crate::arcade_catalog::{ArcadeCatalog, ArcadeGameEntry, GameSystemEntry, DEFAULT_ARCADE_ROOT};
+use crate::arcade_catalog::{ArcadeCatalog, ArcadeGameEntry, DEFAULT_ARCADE_ROOT, GameSystemEntry};
 
 pub(crate) struct ArcadeGameFixture {
     title: String,

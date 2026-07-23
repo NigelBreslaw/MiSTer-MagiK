@@ -217,9 +217,11 @@ mod tests {
         );
 
         assert!(plan.contains(&rect(600, 120, 920, 360)));
-        assert!(!plan
-            .iter()
-            .any(|candidate| candidate.intersection(rect(48, 54, 432, 486)).is_some()));
+        assert!(
+            !plan
+                .iter()
+                .any(|candidate| candidate.intersection(rect(48, 54, 432, 486)).is_some())
+        );
     }
 
     #[test]
@@ -243,9 +245,11 @@ mod tests {
         let preview = rect(600, 120, 920, 360);
         let plan = present_plan_for_test(true, None, None, Some(preview), None);
 
-        assert!(!plan
-            .iter()
-            .any(|candidate| candidate.intersection(preview).is_some()));
+        assert!(
+            !plan
+                .iter()
+                .any(|candidate| candidate.intersection(preview).is_some())
+        );
     }
 
     #[test]

@@ -10,7 +10,7 @@
 use crate::catalog_checkpoint::CatalogDiscoveryCheckpoint;
 use crate::catalog_stamp::CatalogStamp;
 use crate::{catalog_store, sqlite_catalog};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::path::{Path, PathBuf};
 
 const STATE_SCHEMA_VERSION: u32 = 1;

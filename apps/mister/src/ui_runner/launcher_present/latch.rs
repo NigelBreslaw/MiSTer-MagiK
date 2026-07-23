@@ -489,14 +489,15 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                 LatchFailureStage::FpgaStatus,
                 LatchFailureReason::FpgaStatusUnsupported,
                 format!(
-                "unsupported latch core set_supported={} status_supported={} ack_high=0x{:04x} ack_low=0x{:04x} status_high=0x{:04x} status_low=0x{:04x}",
-                u8::from(set_supported),
-                u8::from(status_supported),
-                ack.0,
-                ack.1,
-                after_status.magic_hi,
-                after_status.magic_lo
-            )));
+                    "unsupported latch core set_supported={} status_supported={} ack_high=0x{:04x} ack_low=0x{:04x} status_high=0x{:04x} status_low=0x{:04x}",
+                    u8::from(set_supported),
+                    u8::from(status_supported),
+                    ack.0,
+                    ack.1,
+                    after_status.magic_hi,
+                    after_status.magic_lo
+                ),
+            ));
         }
 
         let posted_sequence_observed = after_status.active_sequence == sequence
@@ -604,8 +605,9 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                     LatchFailureStage::PostVerification,
                     LatchFailureReason::ActiveGeometryMismatch,
                     format!(
-                    "latched framebuffer geometry mismatch active={active_width}x{active_height} stride={active_stride} expected={expected_width}x{expected_height} stride={expected_stride}"
-                )));
+                        "latched framebuffer geometry mismatch active={active_width}x{active_height} stride={active_stride} expected={expected_width}x{expected_height} stride={expected_stride}"
+                    ),
+                ));
             }
         };
 
@@ -790,11 +792,7 @@ mod tests {
         type Buffer = FakeBuffer;
 
         fn base_addr(&self, slot_index: u8) -> u32 {
-            if slot_index == 1 {
-                BASE1
-            } else {
-                BASE2
-            }
+            if slot_index == 1 { BASE1 } else { BASE2 }
         }
 
         fn buffer_mut(&mut self, slot_index: u8) -> &mut Self::Buffer {
@@ -1158,10 +1156,12 @@ mod tests {
         let mut display = display_session();
 
         assert!(present(&mut presenter, &mut hardware, &mut display).is_err());
-        assert!(present(&mut presenter, &mut hardware, &mut display)
-            .unwrap_err()
-            .to_string()
-            .contains("disabled"));
+        assert!(
+            present(&mut presenter, &mut hardware, &mut display)
+                .unwrap_err()
+                .to_string()
+                .contains("disabled")
+        );
         assert_eq!(hardware.read_count, 1);
     }
 

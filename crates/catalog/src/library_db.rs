@@ -19,13 +19,13 @@ pub use crate::catalog_config::{
 use crate::catalog_discovery::{GameDirFact, InstalledCore};
 use crate::catalog_load_metrics;
 pub use crate::catalog_navigation::{
-    navigation_path_for_sqlite, read_catalog_navigation_projection,
+    CatalogNavigationProjection, navigation_path_for_sqlite, read_catalog_navigation_projection,
     read_catalog_navigation_projection_with_timing,
-    write_catalog_navigation_projection_for_catalog, CatalogNavigationProjection,
+    write_catalog_navigation_projection_for_catalog,
 };
 pub(crate) use crate::catalog_progress::ProgressCallback;
 pub use crate::catalog_progress::{
-    catalog_progress_percent_from_display, CatalogProgress, CatalogProgressPhase,
+    CatalogProgress, CatalogProgressPhase, catalog_progress_percent_from_display,
 };
 pub(crate) use crate::catalog_projection::canonical_variant_title;
 use crate::catalog_projection::{
@@ -36,22 +36,22 @@ use crate::core_audit::{self, CatalogAuditRow};
 #[cfg(test)]
 use crate::game_discovery::preferred_playable_discoveries_by_key;
 use crate::game_discovery::{
-    catalog_system_id_for_discovery, covered_payload_paths, is_launcher_launch_ref,
-    is_raw_arcade_zip_set_discovery, launch_kind_for_discovery, launch_ref_for_discovery,
-    preferred_playable_discovery_indices_by_key, profile_id_for_discovery, DiscoverySourceKind,
-    GameDiscovery,
+    DiscoverySourceKind, GameDiscovery, catalog_system_id_for_discovery, covered_payload_paths,
+    is_launcher_launch_ref, is_raw_arcade_zip_set_discovery, launch_kind_for_discovery,
+    launch_ref_for_discovery, preferred_playable_discovery_indices_by_key,
+    profile_id_for_discovery,
 };
 use crate::launch_profiles::{self, CollectionListing, LaunchProfile, PayloadRule};
 use crate::library_indexer::LibraryIndexer;
 use crate::prepared_collections::PreparedCollectionId;
 use crate::preview_worker;
-use crate::runtime_thread::{apply_runtime_thread_policy, RuntimeThreadRole};
+use crate::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
 use crate::software_identity::{
-    console_preview_asset, load_arcade_machine_metadata_for_setnames,
+    ArcadeMachineMetadata, MachineMetadataRows, MameSoftwareMetadata, PreviewArchivePaths,
+    SoftwareHashCache, console_preview_asset, load_arcade_machine_metadata_for_setnames,
     load_mame_machine_metadata_for_setnames, load_mame_software_metadata,
     mame_identity_for_discovery, mame_identity_projection, mame_software_identity_for_discovery,
-    write_simple_mame_metadata_db, ArcadeMachineMetadata, MachineMetadataRows,
-    MameSoftwareMetadata, PreviewArchivePaths, SoftwareHashCache,
+    write_simple_mame_metadata_db,
 };
 use crate::sqlite_catalog;
 use rusqlite::Connection;
@@ -748,7 +748,7 @@ pub fn run_sqlite_inspect_cli(args: &[String]) -> Result<String, String> {
     crate::library_cli::run_sqlite_inspect_cli(args)
 }
 
-pub use sqlite_catalog::{PreviewIndexRefreshRow, PREVIEW_INDEX_REFRESH_TSV_HEADER};
+pub use sqlite_catalog::{PREVIEW_INDEX_REFRESH_TSV_HEADER, PreviewIndexRefreshRow};
 
 pub fn refresh_default_preview_index_flags(
     label: &str,
@@ -979,10 +979,15 @@ pub fn scan_default_library_foreground_with_events(
 pub fn scan_default_library_ram_foreground_with_events(
     progress: ProgressCallback<'_>,
     scan_events: ScanEventCallback<'_>,
+    durable_resume: bool,
 ) -> Result<LibraryRamScanArtifact, String> {
     let cfg = BenchConfig::production();
     Ok(CatalogRefreshPipeline::new(&cfg)
-        .scan_ram_artifact_foreground_with_events(progress, scan_events))
+        .scan_ram_artifact_foreground_with_events_and_durable_resume(
+            progress,
+            scan_events,
+            durable_resume,
+        ))
 }
 
 /// Scan only the first visible Arcade collection for cold-start publication.
@@ -1004,9 +1009,16 @@ pub fn scan_arcade_bootstrap_ram_foreground_with_events(
 pub fn scan_default_library_ram_background_with_events(
     progress: ProgressCallback<'_>,
     scan_events: ScanEventCallback<'_>,
+    durable_resume: bool,
 ) -> Result<LibraryRamScanArtifact, String> {
     let cfg = BenchConfig::production();
-    Ok(CatalogRefreshPipeline::new(&cfg).scan_ram_artifact_with_events(progress, scan_events))
+    Ok(
+        CatalogRefreshPipeline::new(&cfg).scan_ram_artifact_with_events_and_durable_resume(
+            progress,
+            scan_events,
+            durable_resume,
+        ),
+    )
 }
 
 pub fn scan_default_library_ram_background_reusing_arcade_with_events(
@@ -2745,11 +2757,13 @@ mod tests {
         assert_eq!(sqlite_catalog.catalog.system_game_count("arcade"), 1);
         assert_eq!(ram_catalog.games[0].title.as_ref(), "Puck Man");
         assert_eq!(sqlite_catalog.catalog.games[0].title.as_ref(), "Puck Man");
-        assert!(!ram_catalog
-            .games
-            .iter()
-            .any(|game| game.mra_path.contains("/games/mame/")
-                || game.mra_path.contains("/games/hbmame/")));
+        assert!(
+            !ram_catalog
+                .games
+                .iter()
+                .any(|game| game.mra_path.contains("/games/mame/")
+                    || game.mra_path.contains("/games/hbmame/"))
+        );
         assert_eq!(stored_games, 1);
         let _ = std::fs::remove_dir_all(root);
     }
@@ -2807,16 +2821,20 @@ mod tests {
         assert_eq!(unique_discovery_count(&scan.discoveries), 2);
         assert_eq!(loaded.catalog.system_game_count("arcade"), 2);
         assert_eq!(stored_games, 2);
-        assert!(loaded
-            .catalog
-            .games
-            .iter()
-            .any(|game| game.title.as_ref() == "Puck Man"));
-        assert!(loaded
-            .catalog
-            .games
-            .iter()
-            .any(|game| game.title.as_ref() == "Homebrew Demo"));
+        assert!(
+            loaded
+                .catalog
+                .games
+                .iter()
+                .any(|game| game.title.as_ref() == "Puck Man")
+        );
+        assert!(
+            loaded
+                .catalog
+                .games
+                .iter()
+                .any(|game| game.title.as_ref() == "Homebrew Demo")
+        );
         assert!(!loaded.catalog.games.iter().any(|game| {
             game.mra_path.contains("/games/mame/") || game.mra_path.contains("/games/hbmame/")
         }));
@@ -2986,10 +3004,12 @@ mod tests {
             &scan.installed_cores,
             &scan.game_dir_facts,
         );
-        assert!(checkpoint
-            .lines()
-            .iter()
-            .all(|line| !line.contains("/source/library")));
+        assert!(
+            checkpoint
+                .lines()
+                .iter()
+                .all(|line| !line.contains("/source/library"))
+        );
     }
 
     #[test]
@@ -3230,10 +3250,12 @@ mod tests {
             .expect("neogeo game without setname");
         assert!(!neogeo_without_preview.has_preview);
         assert_eq!(neogeo_without_preview.preview_asset_key.as_ref(), "");
-        assert!(ram_catalog
-            .games
-            .iter()
-            .any(|game| game.mra_path.starts_with("magik-amigavision:")));
+        assert!(
+            ram_catalog
+                .games
+                .iter()
+                .any(|game| game.mra_path.starts_with("magik-amigavision:"))
+        );
         let virtual_ref = ram_catalog
             .games
             .iter()
@@ -3292,10 +3314,12 @@ mod tests {
         let scan = scan_library_with_progress(&cfg, Some(&mut progress));
 
         assert_eq!(unique_discovery_count(&scan.discoveries), 1);
-        assert!(!messages
-            .iter()
-            .any(|(title, detail)| title == "Classifying library"
-                && detail.starts_with("Games found: ")));
+        assert!(
+            !messages
+                .iter()
+                .any(|(title, detail)| title == "Classifying library"
+                    && detail.starts_with("Games found: "))
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -3380,12 +3404,16 @@ mod tests {
         let summary = bootstrap_library_progress(&cfg, Some(&mut progress));
 
         assert_eq!(summary.launchers, 55);
-        assert!(messages
-            .iter()
-            .any(|(title, detail)| title == "Finding games" && detail == "Games found: 50"));
-        assert!(!messages
-            .iter()
-            .any(|(title, detail)| title == "Finding games" && detail == "Games found: 1"));
+        assert!(
+            messages
+                .iter()
+                .any(|(title, detail)| title == "Finding games" && detail == "Games found: 50")
+        );
+        assert!(
+            !messages
+                .iter()
+                .any(|(title, detail)| title == "Finding games" && detail == "Games found: 1")
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

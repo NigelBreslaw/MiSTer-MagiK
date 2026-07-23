@@ -4,8 +4,8 @@
 use super::*;
 use std::collections::{BTreeSet, VecDeque};
 use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 pub(super) const CATALOG_MESSAGES_PER_FRAME: usize = 2;
