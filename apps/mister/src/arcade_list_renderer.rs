@@ -62,6 +62,9 @@ struct ArcadeListStyle {
     selection_fill_565: Rgb565Pixel,
     selection_text_565: Rgb565Pixel,
     selection_frame_565: Rgb565Pixel,
+    badge_fill: Pixel,
+    badge_fill_565: Rgb565Pixel,
+    badge_text: Pixel,
     typeface: ConsoleTypeface,
 }
 
@@ -80,6 +83,9 @@ impl ArcadeListStyle {
             selection_fill_565: ARCADE_SELECTION_FILL_COLOR_565,
             selection_text_565: Rgb565Pixel(0),
             selection_frame_565: ARCADE_SELECTION_FRAME_COLOR,
+            badge_fill: ARCADE_NEW_BADGE_FILL,
+            badge_fill_565: ARCADE_NEW_BADGE_FILL_565,
+            badge_text: ARCADE_NEW_BADGE_TEXT,
             typeface: ConsoleTypeface::PressStart2P,
         }
     }
@@ -98,6 +104,9 @@ impl ArcadeListStyle {
             selection_fill_565: rgb565_from_rgb888(0x40, 0xe5, 0xe7),
             selection_text_565: rgb565_from_rgb888(0x03, 0x13, 0x2d),
             selection_frame_565: rgb565_from_rgb888(0x40, 0xe5, 0xe7),
+            badge_fill: Pixel(0x0040e5e7),
+            badge_fill_565: rgb565_from_rgb888(0x40, 0xe5, 0xe7),
+            badge_text: Pixel(0x0003132d),
             typeface: ConsoleTypeface::W95FA,
         }
     }
@@ -1223,7 +1232,14 @@ impl ArcadeListRenderer {
             gradient,
         );
         if is_new {
-            draw_new_badge(&mut row, self.width, row_height, &mut self.meta_font);
+            draw_new_badge(
+                &mut row,
+                self.width,
+                row_height,
+                self.style.badge_fill,
+                self.style.badge_text,
+                &mut self.meta_font,
+            );
         }
         row.into_iter().map(pixel_to_rgb565).collect()
     }
@@ -1280,7 +1296,14 @@ pub(crate) fn requested_filter_content_hash() -> u64 {
     REQUESTED_FILTER_CONTENT_HASH.load(Ordering::Relaxed)
 }
 
-fn draw_new_badge(row: &mut [Pixel], width: usize, row_height: usize, font: &mut ConsoleFont) {
+fn draw_new_badge(
+    row: &mut [Pixel],
+    width: usize,
+    row_height: usize,
+    fill: Pixel,
+    text: Pixel,
+    font: &mut ConsoleFont,
+) {
     let x = width.saturating_sub(58);
     let y = if row_height <= 32 { 4 } else { 14 };
     let w = 42usize;
@@ -1292,7 +1315,7 @@ fn draw_new_badge(row: &mut [Pixel], width: usize, row_height: usize, font: &mut
         }
         let start = row_y * width + x;
         let end = (start + w).min((row_y + 1) * width);
-        row[start..end].fill(ARCADE_NEW_BADGE_FILL);
+        row[start..end].fill(fill);
     }
     font.draw_text_clipped(
         row,
@@ -1303,7 +1326,7 @@ fn draw_new_badge(row: &mut [Pixel], width: usize, row_height: usize, font: &mut
         x as isize + 9,
         y as isize + 12,
         "NEW",
-        ARCADE_NEW_BADGE_TEXT,
+        text,
     );
 }
 
@@ -1639,7 +1662,7 @@ fn is_arcade_row_background_pixel_with_style(pixel: Rgb565Pixel, style: ArcadeLi
         value if value == style.background_565
             || value == style.alternate_background_565
             || value == style.border_565
-            || value == ARCADE_NEW_BADGE_FILL_565
+            || value == style.badge_fill_565
     )
 }
 
@@ -2216,9 +2239,12 @@ mod tests {
             crt.style.selection_fill_565,
             rgb565_from_rgb888(0x40, 0xe5, 0xe7)
         );
+        assert_eq!(crt.style.badge_fill.0, 0x0040e5e7);
+        assert_eq!(crt.style.badge_text.0, 0x0003132d);
         assert_eq!(hdmi.style.row_height, ARCADE_ROW_HEIGHT);
         assert_eq!(hdmi.style.typeface, ConsoleTypeface::PressStart2P);
         assert_eq!(hdmi.style.background.0, ARCADE_LIST_BG_COLOR.0);
+        assert_eq!(hdmi.style.badge_fill.0, ARCADE_NEW_BADGE_FILL.0);
     }
 
     #[test]

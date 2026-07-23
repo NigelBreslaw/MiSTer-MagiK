@@ -1879,7 +1879,11 @@ pub(super) fn run_launcher_loop(
     let mut preview = PreviewState::new_with_trace_start(start);
     let mut launcher_bench_waiting_for_initial_preview = launcher_bench_scenario
         .is_some_and(|scenario| scenario.starts_on_arcade() && !launcher_bench_after_input_script);
-    let mut preview_transition = PreviewTransitionDemo::from_env();
+    let mut preview_transition = if preview_route.allows_preview_work() {
+        PreviewTransitionDemo::from_env()
+    } else {
+        PreviewTransitionDemo::disabled()
+    };
     let transition_picker_enabled = preview_transition.picker_enabled();
     let mut transition_picker_prev_left = false;
     let mut transition_picker_prev_right = false;
@@ -4776,6 +4780,17 @@ impl PreviewRoutePolicy {
     const fn allows_preview_work(self) -> bool {
         !self.crt_layout
     }
+
+    fn allows_catalog_effect(self, effect: &CatalogSessionEffect) -> bool {
+        self.allows_preview_work()
+            || !matches!(
+                effect,
+                CatalogSessionEffect::FinishMediaWorker
+                    | CatalogSessionEffect::FinishMediaWorkerIfNoCatalogSeedPending
+                    | CatalogSessionEffect::RequestMediaCatalogSeed
+                    | CatalogSessionEffect::MediaSystemDiscovered { .. }
+            )
+    }
 }
 
 #[cfg(not(any(feature = "bench-tools", feature = "diagnostics")))]
@@ -5184,7 +5199,11 @@ fn apply_catalog_session_effects(
     now: Instant,
     start: Instant,
 ) {
+    let preview_route = PreviewRoutePolicy::new(nav.uses_crt_layout());
     for effect in effects.into_effects() {
+        if !preview_route.allows_catalog_effect(&effect) {
+            continue;
+        }
         match effect {
             CatalogSessionEffect::StartupEvent(event) => {
                 print_startup_event(start, &event.name, event.detail);
@@ -5386,9 +5405,7 @@ fn apply_catalog_session_effects(
                 apply_lifecycle_effects(lifecycle_effects, scheduler, start);
             }
             CatalogSessionEffect::RequestMediaCatalogSeed => {
-                if !nav.uses_crt_layout() {
-                    media_session.request_catalog_seed();
-                }
+                media_session.request_catalog_seed();
             }
             CatalogSessionEffect::MediaSystemDiscovered {
                 system_id,
@@ -5860,35 +5877,48 @@ mod tests {
     #[cfg(mister_experiments)]
     use mister_magik_fb::experiments::effects::framebuffer_effects::EffectSize;
 
-    #[derive(Clone, Copy)]
-    enum PreviewLifecycleStage {
-        StartupWarm,
-        CatalogSeed,
-        Schedule,
-        Apply,
-        Compose,
-        Blit,
-        WorkerResult,
+    #[test]
+    fn crt_catalog_dispatch_drops_every_media_worker_effect_while_hdmi_keeps_them() {
+        let effects = [
+            CatalogSessionEffect::RequestMediaCatalogSeed,
+            CatalogSessionEffect::MediaSystemDiscovered {
+                system_id: "arcade".to_string(),
+                media_gate: None,
+            },
+            CatalogSessionEffect::FinishMediaWorkerIfNoCatalogSeedPending,
+            CatalogSessionEffect::FinishMediaWorker,
+        ];
+        let crt = PreviewRoutePolicy::new(true);
+        let hdmi = PreviewRoutePolicy::new(false);
+
+        for effect in &effects {
+            assert!(!crt.allows_catalog_effect(effect));
+            assert!(hdmi.allows_catalog_effect(effect));
+        }
     }
 
     #[test]
-    fn preview_route_policy_covers_the_complete_worker_and_render_sequence() {
-        let lifecycle = [
-            PreviewLifecycleStage::StartupWarm,
-            PreviewLifecycleStage::CatalogSeed,
-            PreviewLifecycleStage::Schedule,
-            PreviewLifecycleStage::Apply,
-            PreviewLifecycleStage::Compose,
-            PreviewLifecycleStage::Blit,
-            PreviewLifecycleStage::WorkerResult,
-        ];
+    fn full_present_during_crt_arcade_keeps_same_frame_list_repaint_ownership() {
+        let mut composition = UiCompositionController::new();
+        let input = UiCompositionInput {
+            screen: Screen::Arcade,
+            screensaver_active: false,
+            confirm_visible: false,
+            fullscreen_overlay_visible: false,
+            arcade_ready: true,
+            route_ok: true,
+            wants_arcade_list: true,
+            wants_preview: false,
+            preview_cache_state: "empty",
+            preview_frame_status: PreviewRawFrameStatus::Empty,
+        };
+        let first = composition.tick(input);
+        let full_present = composition.tick(input);
+        let renderer = ArcadeListRenderer::new_for_crt(24);
 
-        let crt = PreviewRoutePolicy::new(true);
-        let hdmi = PreviewRoutePolicy::new(false);
-        for _stage in lifecycle {
-            assert!(!crt.allows_preview_work());
-            assert!(hdmi.allows_preview_work());
-        }
+        assert!(first.allow_arcade_list_blit);
+        assert!(full_present.allow_arcade_list_blit);
+        assert!(arcade_list_needs_forced_redraw(&renderer, None, true));
     }
 
     #[test]

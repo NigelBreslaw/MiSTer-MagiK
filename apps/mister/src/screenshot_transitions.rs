@@ -217,6 +217,18 @@ pub(crate) struct PreviewTransitionDemo {
 }
 
 impl PreviewTransitionDemo {
+    pub(crate) fn disabled() -> Self {
+        Self {
+            effects: vec![PreviewTransitionEffect::Fade],
+            picker_index: None,
+            segment: Duration::from_secs(1),
+            duration: Duration::from_millis(DEFAULT_PREVIEW_TRANSITION_MS),
+            last_transition_id: u64::MAX,
+            active: None,
+            label_overlay: false,
+        }
+    }
+
     pub(crate) fn from_env() -> Self {
         let spec = std::env::var("MISTER_PREVIEW_TRANSITION").unwrap_or_default();
         let mut effects = Vec::new();
@@ -534,6 +546,14 @@ mod tests {
             &[PreviewTransitionEffect::Fade]
         );
         assert_eq!(DEFAULT_PREVIEW_TRANSITION_MS, 200);
+    }
+
+    #[test]
+    fn disabled_transition_has_no_picker_or_label_overlay() {
+        let transition = PreviewTransitionDemo::disabled();
+
+        assert!(!transition.picker_enabled());
+        assert!(!transition.label_overlay_enabled());
     }
 
     #[cfg(not(mister_experiments))]
