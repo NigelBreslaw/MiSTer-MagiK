@@ -1955,7 +1955,9 @@ pub(super) fn run_launcher_loop(
     if capsule_seed_ready {
         startup_ready_catalog_source = CatalogSource::ReturnCapsule;
         catalog_session.note_summary_seed_ready();
-        media_session.request_catalog_seed();
+        if !nav.uses_crt_layout() {
+            media_session.request_catalog_seed();
+        }
         catalog_version = catalog_version.wrapping_add(1);
         let request = summary_seed_catalog_worker_request(
             catalog_refresh_policy,
@@ -1986,7 +1988,9 @@ pub(super) fn run_launcher_loop(
     } else if sharded_seed_ready {
         startup_ready_catalog_source = CatalogSource::ShardedRegistry;
         catalog_session.note_summary_seed_ready();
-        media_session.request_catalog_seed();
+        if !nav.uses_crt_layout() {
+            media_session.request_catalog_seed();
+        }
         catalog_version = catalog_version.wrapping_add(1);
         let return_catalog_hydration_needed = startup_return_requested;
         let request = summary_seed_catalog_worker_request(
@@ -2109,7 +2113,7 @@ pub(super) fn run_launcher_loop(
             .current_menu_items()
             .get(nav.selected)
             .is_some_and(|item| item.id == arcade_catalog::MENU_ARCADE_SYSTEM_ID);
-    if catalog_ready && root_arcade_focused {
+    if catalog_ready && root_arcade_focused && !nav.uses_crt_layout() {
         let games = catalog.system_game_view(arcade_catalog::MENU_ARCADE_SYSTEM_ID);
         if !games.is_empty() {
             let selected = nav.arcade.selected.min(games.len() - 1);
@@ -3685,7 +3689,12 @@ pub(super) fn run_launcher_loop(
                 media_benchmark_contention,
                 loop_start,
             );
-            let media_gate = if memory_guard.active() {
+            let media_gate = if nav.uses_crt_layout() {
+                MediaInteractionGate {
+                    active: true,
+                    reason: "crt-no-screenshots",
+                }
+            } else if memory_guard.active() {
                 MediaInteractionGate {
                     active: true,
                     reason: "low-memory",
@@ -3803,6 +3812,7 @@ pub(super) fn run_launcher_loop(
         if dirty_opt
             && !preview_scheduled_this_loop
             && !launching
+            && !nav.uses_crt_layout()
             && nav.screen == Screen::Arcade
             && active_arcade_games_available
             && !arcade_search_active
@@ -3826,7 +3836,11 @@ pub(super) fn run_launcher_loop(
         }
         let preview_apply_trace_start = prepare_trace_enabled.then(Instant::now);
         let mut preview_apply_trace = PreviewApplyTrace::default();
-        let preview_apply_dirty = if !launching && !arcade_search_active && !memory_guard.active() {
+        let preview_apply_dirty = if !launching
+            && !arcade_search_active
+            && !memory_guard.active()
+            && !nav.uses_crt_layout()
+        {
             let dirty = apply_ready_preview(
                 &app,
                 &mut preview,
@@ -3877,7 +3891,8 @@ pub(super) fn run_launcher_loop(
             || startup_reveal_ready;
         let wants_arcade_list = !screensaver.active
             && should_draw_arcade_overlay(&nav, launching, active_arcade_games_available);
-        let wants_preview = !screensaver.active
+        let wants_preview = !nav.uses_crt_layout()
+            && !screensaver.active
             && direct_preview_requested(
                 nav.screen,
                 memory_guard.active(),
@@ -4257,10 +4272,16 @@ pub(super) fn run_launcher_loop(
         let arcade_list_update_start = Instant::now();
         let arcade_list_rect = if wants_arcade_list && composition_decision.allow_arcade_list_blit {
             arcade_list_renderer.set_geometry_for_render_h(
-                if arcade_search_active {
+                if nav.uses_crt_layout() {
+                    ArcadeListGeometry::crt_for_render_size(
+                        ui.render_w(),
+                        ui.render_h(),
+                        arcade_search_active,
+                    )
+                } else if arcade_search_active {
                     ArcadeListGeometry::search_for_render_w(ui.render_w())
                 } else {
-                    ArcadeListGeometry::normal_for_render_w(ui.render_w())
+                    ArcadeListGeometry::NORMAL
                 },
                 ui.render_h(),
             );
@@ -4290,18 +4311,20 @@ pub(super) fn run_launcher_loop(
         };
         let arcade_list_update_us = arcade_list_update_start.elapsed().as_micros();
         let preview_blit_start = Instant::now();
-        let (raw_preview, preview_transition_trace) =
-            if composition_decision.allow_preview_blit && !memory_guard.active() {
-                layer_target.blit_raw_preview_if_needed(
-                    &mut preview,
-                    &mut preview_transition,
-                    loop_start.duration_since(run_start),
-                    this_rect,
-                    full_frame_present,
-                )
-            } else {
-                (None, PreviewTransitionTrace::default())
-            };
+        let (raw_preview, preview_transition_trace) = if !nav.uses_crt_layout()
+            && composition_decision.allow_preview_blit
+            && !memory_guard.active()
+        {
+            layer_target.blit_raw_preview_if_needed(
+                &mut preview,
+                &mut preview_transition,
+                loop_start.duration_since(run_start),
+                this_rect,
+                full_frame_present,
+            )
+        } else {
+            (None, PreviewTransitionTrace::default())
+        };
         let preview_blit_us = preview_blit_start.elapsed().as_micros();
         if preview_transition_trace.active {
             request_launcher_redraw!();
@@ -4816,7 +4839,14 @@ fn process_catalog_worker_message(
             media_benchmark_contention,
             loop_start,
         );
-        let media_gate = catalog_build_media_gate(catalog_session.refresh_done(), media_gate);
+        let media_gate = if nav.uses_crt_layout() {
+            MediaInteractionGate {
+                active: true,
+                reason: "crt-no-screenshots",
+            }
+        } else {
+            catalog_build_media_gate(catalog_session.refresh_done(), media_gate)
+        };
         apply_screenshot_media_update_effects(
             media_session.sync_gate(media_gate),
             app,
@@ -5328,7 +5358,9 @@ fn apply_catalog_session_effects(
                 apply_lifecycle_effects(lifecycle_effects, scheduler, start);
             }
             CatalogSessionEffect::RequestMediaCatalogSeed => {
-                media_session.request_catalog_seed();
+                if !nav.uses_crt_layout() {
+                    media_session.request_catalog_seed();
+                }
             }
             CatalogSessionEffect::MediaSystemDiscovered {
                 system_id,

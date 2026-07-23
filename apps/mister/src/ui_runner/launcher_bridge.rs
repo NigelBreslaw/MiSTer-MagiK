@@ -248,16 +248,35 @@ fn sync_arcade_list_geometry_bridge(
     nav: &LauncherNav,
     render_w: usize,
 ) {
-    let geometry = if nav.arcade_search.is_active(&nav.arcade_filter.active) {
-        ArcadeListGeometry::search_for_render_w(render_w)
-    } else if nav.uses_crt_layout() {
-        ArcadeListGeometry::normal_for_render_w(render_w)
-    } else {
-        ArcadeListGeometry::NORMAL
-    };
+    let geometry = arcade_list_geometry(nav, render_w);
+    let render_h = crt_render_h(nav, render_w);
     bridge.set_arcade_list_x(geometry.x as i32);
     bridge.set_arcade_list_y(geometry.y as i32);
     bridge.set_arcade_list_width(geometry.width as i32);
+    bridge.set_arcade_list_height(geometry.visible_height(render_h) as i32);
+}
+
+fn crt_render_h(nav: &LauncherNav, render_w: usize) -> usize {
+    if !nav.uses_crt_layout() {
+        return ARCADE_LIST_Y + ARCADE_LIST_H + 32;
+    }
+    match render_w {
+        0..=320 => 240,
+        321..=384 => 288,
+        _ => 480,
+    }
+}
+
+fn arcade_list_geometry(nav: &LauncherNav, render_w: usize) -> ArcadeListGeometry {
+    let search = nav.arcade_search.is_active(&nav.arcade_filter.active);
+    if nav.uses_crt_layout() {
+        let render_h = crt_render_h(nav, render_w);
+        ArcadeListGeometry::crt_for_render_size(render_w, render_h, search)
+    } else if search {
+        ArcadeListGeometry::search_for_render_w(render_w)
+    } else {
+        ArcadeListGeometry::NORMAL
+    }
 }
 
 pub(super) struct CatalogScanBridgeStatus {
@@ -1079,11 +1098,8 @@ fn sync_arcade_list_geometry_bridge_if_changed(
     nav: &LauncherNav,
     render_w: usize,
 ) {
-    let geometry = if nav.arcade_search.is_active(&nav.arcade_filter.active) {
-        ArcadeListGeometry::search_for_render_w(render_w)
-    } else {
-        ArcadeListGeometry::NORMAL
-    };
+    let geometry = arcade_list_geometry(nav, render_w);
+    let render_h = crt_render_h(nav, render_w);
     set_bridge_if_changed!(
         bridge,
         get_arcade_list_x,
@@ -1101,6 +1117,12 @@ fn sync_arcade_list_geometry_bridge_if_changed(
         get_arcade_list_width,
         set_arcade_list_width,
         geometry.width as i32
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_arcade_list_height,
+        set_arcade_list_height,
+        geometry.visible_height(render_h) as i32
     );
 }
 

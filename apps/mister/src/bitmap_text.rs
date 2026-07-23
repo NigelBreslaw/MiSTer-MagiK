@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use mister_magik_fb::framebuffer::mapped::Pixel;
@@ -64,10 +65,26 @@ pub(crate) struct ConsoleFont {
     units_per_em: f32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ConsoleTypeface {
+    PressStart2P,
+    W95FA,
+}
+
 impl ConsoleFont {
     pub(crate) fn new(pixel_size: f32) -> Self {
-        let data = include_bytes!("../ui/fonts/PressStart2P-Regular.ttf");
-        let font = swash::FontRef::from_index(data, 0).expect("PressStart2P-Regular.ttf");
+        Self::new_with_typeface(pixel_size, ConsoleTypeface::PressStart2P)
+    }
+
+    pub(crate) fn new_with_typeface(pixel_size: f32, typeface: ConsoleTypeface) -> Self {
+        let (data, name): (&'static [u8], &str) = match typeface {
+            ConsoleTypeface::PressStart2P => (
+                include_bytes!("../ui/fonts/PressStart2P-Regular.ttf"),
+                "PressStart2P-Regular.ttf",
+            ),
+            ConsoleTypeface::W95FA => (include_bytes!("../ui/fonts/W95F.otf"), "W95F.otf"),
+        };
+        let font = swash::FontRef::from_index(data, 0).unwrap_or_else(|| panic!("{name}"));
         let units_per_em = font.metrics(&[]).units_per_em as f32;
         Self {
             font,
@@ -77,6 +94,41 @@ impl ConsoleFont {
             pixel_size,
             units_per_em,
         }
+    }
+
+    pub(crate) fn clipped_text<'a>(&mut self, text: &'a str, max_width: usize) -> Cow<'a, str> {
+        if self.text_width(text) <= max_width {
+            return Cow::Borrowed(text);
+        }
+        let ellipsis = "...";
+        let ellipsis_width = self.text_width(ellipsis);
+        let mut width = 0usize;
+        let mut end = 0usize;
+        for (index, ch) in text.char_indices() {
+            let advance = self
+                .glyph(ch)
+                .map(|glyph| glyph.advance.max(0) as usize)
+                .unwrap_or(0);
+            if width.saturating_add(advance).saturating_add(ellipsis_width) > max_width {
+                break;
+            }
+            width = width.saturating_add(advance);
+            end = index + ch.len_utf8();
+        }
+        let mut clipped = String::with_capacity(end + ellipsis.len());
+        clipped.push_str(&text[..end]);
+        clipped.push_str(ellipsis);
+        Cow::Owned(clipped)
+    }
+
+    fn text_width(&mut self, text: &str) -> usize {
+        let mut width = 0usize;
+        for ch in text.chars() {
+            if let Some(glyph) = self.glyph(ch) {
+                width = width.saturating_add(glyph.advance.max(0) as usize);
+            }
+        }
+        width
     }
 
     fn glyph(&mut self, ch: char) -> Option<&ConsoleGlyph> {
@@ -269,6 +321,17 @@ mod tests {
         TextGradient::new(Pixel(0x00fff6ff), Pixel(0x00dbd1e6), Pixel(0x00938a9b));
     const ALT_TEST_GRADIENT: TextGradient =
         TextGradient::new(Pixel(0x00ffffff), Pixel(0x00c8bfd8), Pixel(0x00887f90));
+
+    #[test]
+    fn w95fa_clipping_uses_measured_advances_and_fits_the_requested_width() {
+        let mut font = ConsoleFont::new_with_typeface(16.0, ConsoleTypeface::W95FA);
+        let clipped = font
+            .clipped_text("Cadillacs and Dinosaurs", 80)
+            .into_owned();
+
+        assert!(clipped.ends_with("..."));
+        assert!(font.text_width(&clipped) <= 80);
+    }
 
     #[test]
     fn gradient_glyph_cache_reuses_colored_glyphs_for_repeated_draws() {

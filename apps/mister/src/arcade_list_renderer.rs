@@ -1,7 +1,6 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -10,7 +9,7 @@ use std::sync::{Arc, OnceLock};
 use crate::arcade_catalog::{
     ArcadeGameEntry, ArcadeGameView, ARCADE_LIST_VISIBLE_H, ARCADE_ROW_HEIGHT,
 };
-use crate::bitmap_text::{ConsoleFont, TextGradient};
+use crate::bitmap_text::{ConsoleFont, ConsoleTypeface, TextGradient};
 use mister_magik_fb::framebuffer::mapped::{pixel_to_rgb565, MappedRgb565Framebuffer, Pixel};
 use mister_magik_fb::framebuffer::present::{copy_dense_rect_565, copy_strided_rect_565};
 use mister_magik_fb::framebuffer::scanout_slots::ScanoutSlotsRgb565Framebuffer;
@@ -85,6 +84,22 @@ impl ArcadeListGeometry {
         }
     }
 
+    pub(crate) fn crt_for_render_size(render_w: usize, render_h: usize, search: bool) -> Self {
+        let full = render_w >= 640 && render_h >= 480;
+        let margin = if full { 16 } else { 8 };
+        let y = if full { 72 } else { 44 };
+        let x = if search {
+            (render_w * 2 / 5 + margin * 2).min(render_w.saturating_sub(1))
+        } else {
+            margin
+        };
+        Self {
+            x,
+            y,
+            width: render_w.saturating_sub(x + margin).max(1),
+        }
+    }
+
     pub(crate) fn dirty_rect(self) -> DirtyRect {
         DirtyRect {
             x0: self.x,
@@ -92,6 +107,19 @@ impl ArcadeListGeometry {
             x1: self.x + self.width,
             y1: self.y + ARCADE_LIST_H,
         }
+    }
+
+    pub(crate) fn visible_height(self, render_h: usize) -> usize {
+        let bottom_inset = if self.y == 72 && render_h == 480 {
+            64
+        } else if self.y == 44 {
+            36
+        } else {
+            32
+        };
+        render_h
+            .saturating_sub(self.y + bottom_inset)
+            .min(ARCADE_LIST_H)
     }
 }
 
@@ -174,8 +202,11 @@ pub(crate) enum ArcadeListUpdate {
 impl ArcadeListRenderer {
     pub(crate) fn new() -> Self {
         Self {
-            title_font: ConsoleFont::new(ARCADE_LIST_FONT_PX),
-            meta_font: ConsoleFont::new(ARCADE_LIST_META_FONT_PX),
+            title_font: ConsoleFont::new_with_typeface(ARCADE_LIST_FONT_PX, ConsoleTypeface::W95FA),
+            meta_font: ConsoleFont::new_with_typeface(
+                ARCADE_LIST_META_FONT_PX,
+                ConsoleTypeface::W95FA,
+            ),
             row_cache: HashMap::new(),
             surface: vec![ARCADE_LIST_BG_COLOR_565; ARCADE_LIST_W * ARCADE_LIST_H],
             band_scratch: Vec::new(),
@@ -213,7 +244,7 @@ impl ArcadeListRenderer {
         geometry: ArcadeListGeometry,
         render_h: usize,
     ) {
-        self.visible_height = render_h.saturating_sub(geometry.y + 32).min(ARCADE_LIST_H);
+        self.visible_height = geometry.visible_height(render_h);
         if self.geometry != geometry {
             if self.width != geometry.width {
                 self.width = geometry.width;
@@ -1093,10 +1124,10 @@ impl ArcadeListRenderer {
     fn render_row(&mut self, title: &str, is_new: bool, idx: usize) -> Vec<Rgb565Pixel> {
         let mut row = vec![Pixel(0); self.width * ARCADE_ROW_HEIGHT as usize];
         draw_arcade_row_background(&mut row, self.width, idx);
-        let title = clipped_title(
-            title,
-            scaled_title_max_chars(self.width, if is_new { 26 } else { 33 }),
-        );
+        let reserved = if is_new { 76 } else { 24 };
+        let title = self
+            .title_font
+            .clipped_text(title, self.width.saturating_sub(reserved));
         self.title_font.draw_text_clipped_gradient(
             &mut row,
             self.width,
@@ -1117,10 +1148,10 @@ impl ArcadeListRenderer {
     fn render_filter_row(&mut self, item: &ArcadeListItem, idx: usize) -> Vec<Rgb565Pixel> {
         let mut row = vec![Pixel(0); self.width * ARCADE_ROW_HEIGHT as usize];
         draw_arcade_row_background(&mut row, self.width, idx);
-        let title = clipped_title(
-            &item.title,
-            scaled_title_max_chars(self.width, if item.count.is_some() { 29 } else { 33 }),
-        );
+        let reserved = if item.count.is_some() { 68 } else { 24 };
+        let title = self
+            .title_font
+            .clipped_text(&item.title, self.width.saturating_sub(reserved));
         let gradient = if item.active {
             ARCADE_FILTER_ACTIVE_GRADIENT
         } else {
@@ -1514,29 +1545,6 @@ fn copy_pixel_to_rgb565_row(src: &[Pixel], dst: &mut [Rgb565Pixel]) {
     for (src, dst) in src.iter().zip(dst.iter_mut()) {
         *dst = pixel_to_rgb565(*src);
     }
-}
-
-fn clipped_title(title: &str, max_chars: usize) -> Cow<'_, str> {
-    if max_chars == 0 {
-        return Cow::Borrowed("");
-    }
-    let mut chars = title.char_indices();
-    for _ in 0..max_chars {
-        if chars.next().is_none() {
-            return Cow::Borrowed(title);
-        }
-    }
-    let Some((cut, _)) = chars.next() else {
-        return Cow::Borrowed(title);
-    };
-    let mut out = String::with_capacity(cut + 3);
-    out.push_str(&title[..cut]);
-    out.push_str("...");
-    Cow::Owned(out)
-}
-
-fn scaled_title_max_chars(width: usize, normal_width_max_chars: usize) -> usize {
-    width.saturating_mul(normal_width_max_chars) / ARCADE_LIST_W
 }
 
 #[cfg(test)]
