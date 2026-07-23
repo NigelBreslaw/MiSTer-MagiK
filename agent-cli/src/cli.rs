@@ -617,6 +617,7 @@ mod tests {
             "runtime-profile",
             "validate-launcher",
             "validate-library",
+            "validate-runtime",
             "device-agent",
             "manager-device",
         ] {

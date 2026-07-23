@@ -239,6 +239,10 @@ fn dispatch(
             return agent_cli::diagnose::execute(repository, reporter);
         }
         Intent::Build { intent } => {
+            if matches!(intent, agent_cli::build::BuildCommand::ValidateRuntime) {
+                agent_cli::build::execute_runtime_validation(repository, reporter)?;
+                return Ok(Outcome::Passed);
+            }
             let spec = agent_cli::build::BuildSpec::for_recipe((*intent).into());
             agent_cli::build::execute(repository, &spec, reporter)?;
         }

@@ -43,6 +43,7 @@ pub enum BuildCommand {
     RuntimeProfile,
     ValidateLauncher,
     ValidateLibrary,
+    ValidateRuntime,
     DeviceAgent,
     ManagerDevice,
 }
@@ -67,6 +68,7 @@ impl From<BuildCommand> for BuildRecipe {
             BuildCommand::RuntimeProfile => Self::RuntimeProfile,
             BuildCommand::ValidateLauncher => Self::ValidateLauncher,
             BuildCommand::ValidateLibrary => Self::ValidateLibrary,
+            BuildCommand::ValidateRuntime => Self::ValidateLauncher,
             BuildCommand::DeviceAgent => Self::DeviceAgent,
             BuildCommand::ManagerDevice => Self::ManagerDevice,
         }
@@ -390,6 +392,28 @@ pub fn execute(
 pub fn execute_quiet(repository: &Path, spec: &BuildSpec) -> AgentResult<()> {
     let mut actions = ProcessBuildActions::new(repository, spec)?;
     run_state_machine(&mut actions, &mut |_, _| Ok(()))
+}
+
+pub fn execute_runtime_validation(
+    repository: &Path,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<()> {
+    reporter.emit(
+        EventKind::Progress,
+        "prepare-container",
+        "preparing shared runtime validation",
+        Some(10),
+    )?;
+    execute(
+        repository,
+        &BuildSpec::for_recipe(BuildRecipe::ValidateLauncher),
+        reporter,
+    )?;
+    execute(
+        repository,
+        &BuildSpec::for_recipe(BuildRecipe::ValidateLibrary),
+        reporter,
+    )
 }
 
 struct ProcessBuildActions<'a> {

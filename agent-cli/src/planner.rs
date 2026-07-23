@@ -58,12 +58,46 @@ pub fn affected_plan_at(
             .cmp(&right.workflow_phase())
             .then_with(|| left.id.cmp(&right.id))
     });
-    let operations = normalize_operations(operations);
+    let operations = combine_arm_validation(normalize_operations(operations));
     Ok(Plan {
         intent,
         operations,
         external_requirements,
     })
+}
+
+fn combine_arm_validation(mut operations: Vec<Operation>) -> Vec<Operation> {
+    let launcher = operations
+        .iter()
+        .position(|operation| operation.id == "arm.check-launcher");
+    let library = operations
+        .iter()
+        .position(|operation| operation.id == "arm.check-lib");
+    if let (Some(launcher), Some(library)) = (launcher, library) {
+        let mut inputs = operations[launcher].inputs.clone();
+        inputs.extend(operations[library].inputs.clone());
+        inputs.sort();
+        inputs.dedup();
+        let first = launcher.min(library);
+        let second = launcher.max(library);
+        operations.remove(second);
+        operations.remove(first);
+        let mut combined = apple_container(op(
+            "arm.check-runtime",
+            "Check launcher and library in shared Apple container setup",
+            "scripts/agent",
+            &["build", "validate-runtime"],
+            "mixed runtime changes → combined ARM validation",
+        ));
+        combined.inputs = inputs;
+        operations.push(combined);
+        operations.sort_by(|left, right| {
+            left.workflow_phase()
+                .cmp(&right.workflow_phase())
+                .then_with(|| left.id.cmp(&right.id))
+        });
+    }
+    operations
 }
 
 fn normalize_operations(operations: Vec<Operation>) -> Vec<Operation> {
