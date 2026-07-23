@@ -822,9 +822,33 @@ mod tests {
     }
 
     #[test]
-    fn launcher_routes_emit_explicit_288p_and_576p_destination_rectangles() {
-        for (scan_h, expected) in [(288, [67, 706, 20, 291]), (576, [0, 639, 40, 615])] {
-            let route = LauncherFramebufferRoute::for_scan(640, scan_h, true);
+    fn launcher_routes_emit_exact_crt_and_fallback_destination_rectangles() {
+        for (route, expected) in [
+            (
+                LauncherFramebufferRoute::for_scan(640, 240, true),
+                [67, 706, 12, 251],
+            ),
+            (
+                LauncherFramebufferRoute::for_scan(640, 288, true),
+                [67, 706, 20, 291],
+            ),
+            (
+                LauncherFramebufferRoute::for_scan(640, 480, true),
+                [45, 684, 31, 510],
+            ),
+            (
+                LauncherFramebufferRoute::for_scan(640, 576, true),
+                [0, 639, 40, 615],
+            ),
+            (
+                LauncherFramebufferRoute::for_scan(640, 288, false),
+                [0, 639, 0, 287],
+            ),
+            (
+                LauncherFramebufferRoute::for_scan(960, 540, true),
+                [0, 959, 0, 539],
+            ),
+        ] {
             let geometry = LatchedFbufGeometry::new_for_route(640, route, 0);
             assert_eq!(
                 [

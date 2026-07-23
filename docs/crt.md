@@ -25,6 +25,11 @@ four built-in progressive Menu modes:
 Both sync polarities are negative. These values come from Main's standard
 Menu Direct Video table; MagiK consumes the resolved name only to choose its
 framebuffer and scan geometry. It does not synthesize or alter those timings.
+The HPS framebuffer destination remains distinct from the raster: 288p is
+inset vertically into a 640×272 destination within the unchanged 640×288
+raster, and 576p uses the full 640-pixel destination width from horizontal
+origin zero. The 240p and 480p destinations retain Main's porch-derived
+placement.
 
 Fresh CRT configuration defaults to native Analog IO VGA at 240p60. The
 installer separately offers automatic HDMI-DAC detection, native VGA at

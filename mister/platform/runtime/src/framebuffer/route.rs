@@ -209,6 +209,15 @@ mod tests {
 
             assert_eq!(route.mode().hbp, 3);
             assert_eq!(route.mode().vbp, 2);
+            assert_eq!(
+                route.placement(),
+                FramebufferPlacement {
+                    left: 0,
+                    top: 0,
+                    width: 640,
+                    height: scan_h,
+                }
+            );
         }
     }
 
@@ -218,5 +227,14 @@ mod tests {
 
         assert_eq!(route.mode().hbp, 3);
         assert_eq!(route.mode().vbp, 2);
+        assert_eq!(
+            route.placement(),
+            FramebufferPlacement {
+                left: 0,
+                top: 0,
+                width: 960,
+                height: 540,
+            }
+        );
     }
 }
