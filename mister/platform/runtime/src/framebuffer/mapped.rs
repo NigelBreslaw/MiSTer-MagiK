@@ -12,11 +12,14 @@
 //! /dev/fb0 also provides the FBIO_WAITFORVSYNC ioctl we pace on.
 
 use crate::boot_analytics;
+use crate::framebuffer::downsample::Rgb565FrameView;
 use crate::framebuffer::format::{
     fb_mode_format_from_bits_per_pixel, production_label, restore_mode_line, rgb565_mode_line,
     rgb565_stride_bytes, RGB565_BITS_PER_PIXEL,
 };
 use crate::framebuffer::sample::Rgb565SampleView;
+use crate::framebuffer::target::DirtyRect;
+use crate::framebuffer::vertical_scale::{VerticalCopyStats, VerticalRgb565Transform};
 use crate::framebuffer::vsync::{wait_vsync_fd, VsyncWaitStatus};
 
 use slint::platform::software_renderer::{PremultipliedRgbaColor, Rgb565Pixel, TargetPixel};
@@ -35,6 +38,7 @@ pub enum FramebufferPresentError {
     InvalidFramebufferStride { stride: usize, width: usize },
     InvalidSourceStride { stride: usize, min_stride: usize },
     SourceTooShort { needed: usize, actual: usize },
+    InvalidVerticalTransform(&'static str),
 }
 
 impl std::fmt::Display for FramebufferPresentError {
@@ -59,6 +63,7 @@ impl std::fmt::Display for FramebufferPresentError {
             Self::SourceTooShort { needed, actual } => {
                 write!(f, "source has {actual} pixels, need {needed}")
             }
+            Self::InvalidVerticalTransform(message) => write!(f, "{message}"),
         }
     }
 }
@@ -946,6 +951,28 @@ impl MappedRgb565Framebuffer {
         let dst_stride = self.stride_pixels;
         let dst = self.buffer_565_mut();
         present_rect_565_to(dst, fb_w, fb_h, dst_stride, x, y, w, h, src)
+    }
+
+    pub fn present_vertical_rect_565(
+        &mut self,
+        source: Rgb565FrameView<'_>,
+        rect: DirtyRect,
+    ) -> Result<Option<VerticalCopyStats>, FramebufferPresentError> {
+        let transform = VerticalRgb565Transform::new(self.w, source.height, self.h)
+            .map_err(FramebufferPresentError::InvalidVerticalTransform)?;
+        let stride_pixels = self.stride_pixels;
+        transform
+            .copy_rect(source, rect, self.buffer_565_mut(), stride_pixels)
+            .map_err(FramebufferPresentError::InvalidVerticalTransform)
+    }
+
+    pub fn frame_view_565(&self) -> Rgb565FrameView<'_> {
+        Rgb565FrameView {
+            pixels: self.buffer_565(),
+            width: self.w,
+            height: self.h,
+            stride_pixels: self.stride_pixels,
+        }
     }
 
     #[allow(clippy::too_many_arguments)]

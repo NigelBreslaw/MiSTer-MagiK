@@ -267,7 +267,7 @@ mod tests {
     }
 
     #[test]
-    fn pal_576p_route_scales_square_pixel_framebuffer_to_scan_geometry() {
+    fn pal_576p_route_uses_native_scanout_geometry() {
         let plan = UiDisplayPlan::from_mister_ini_text(
             "[MiSTer]\ndirect_video=1\nmenu_pal=1\nforced_scandoubler=1\n",
         )
@@ -275,7 +275,8 @@ mod tests {
 
         let route = LauncherFramebufferRoute::for_scan(plan.scan_w, plan.scan_h, plan.direct_video);
 
-        assert_eq!((plan.fb_w, plan.fb_h), (576, 480));
+        assert_eq!((plan.render_w, plan.render_h), (640, 480));
+        assert_eq!((plan.fb_w, plan.fb_h), (640, 576));
         assert_eq!((route.mode().hact, route.mode().vact), (640, 576));
         assert!(route.set_vga_fb());
     }

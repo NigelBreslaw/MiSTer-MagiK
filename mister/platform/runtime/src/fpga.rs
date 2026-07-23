@@ -870,9 +870,9 @@ mod tests {
     fn production_crt_routes_emit_exact_destinations_through_both_paths() {
         for (scan_h, expected) in [
             (240, [67, 706, 12, 251]),
-            (288, [67, 706, 32, 286]),
+            (288, [67, 706, 12, 299]),
             (480, [45, 684, 31, 510]),
-            (576, [45, 620, 40, 615]),
+            (576, [45, 684, 40, 615]),
         ] {
             let route = LauncherFramebufferRoute::for_scan(640, scan_h, true);
             let geometry = LatchedFbufGeometry::new_for_route(640, route, 0);
@@ -887,7 +887,7 @@ mod tests {
             );
 
             let (mut fpga, state) = scripted(&[(0x44, 0); 13]);
-            fpga.enable_launcher_framebuffer_route(route, 640, 480)
+            fpga.enable_launcher_framebuffer_route(route, 640, scan_h as usize)
                 .unwrap();
             let words = words_from_writes(&state.borrow().writes);
             assert_eq!(&words[6..10], &expected);

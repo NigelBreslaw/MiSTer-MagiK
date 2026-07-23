@@ -17,6 +17,8 @@ pub const UI_FB_W: usize = 960;
 pub const UI_FB_H: usize = 540;
 pub const UI_FB_720P_W: usize = 1280;
 pub const UI_FB_720P_H: usize = 720;
+pub const CRT_COMPOSITION_W: usize = 640;
+pub const CRT_COMPOSITION_H: usize = 480;
 const MIN_RUNTIME_SCAN_W: u16 = 320;
 const MIN_RUNTIME_SCAN_H: u16 = 200;
 const UI_FB_SIZE_ENV: &str = "MISTER_UI_FB_SIZE";
@@ -117,10 +119,18 @@ impl ResolvedOutputRoute {
     const fn framebuffer_geometry(self) -> Option<(usize, usize)> {
         match self {
             Self::Hdmi => None,
-            Self::Crt240p60 => Some((320, 240)),
-            Self::Crt288p50 => Some((384, 288)),
+            Self::Crt240p60 => Some((640, 240)),
+            Self::Crt288p50 => Some((640, 288)),
             Self::Crt480p60 => Some((640, 480)),
-            Self::Crt576p50 => Some((576, 480)),
+            Self::Crt576p50 => Some((640, 576)),
+        }
+    }
+
+    const fn composition_geometry(self, framebuffer: (usize, usize)) -> (usize, usize) {
+        if self.is_crt() {
+            (CRT_COMPOSITION_W, CRT_COMPOSITION_H)
+        } else {
+            framebuffer
         }
     }
 }
@@ -175,6 +185,8 @@ impl UiFramebufferSizePolicy {
 pub struct UiDisplayPlan {
     pub fb_w: usize,
     pub fb_h: usize,
+    pub render_w: usize,
+    pub render_h: usize,
     pub output_w: u16,
     pub output_h: u16,
     pub scan_w: u16,
@@ -430,9 +442,12 @@ impl UiDisplayPlan {
                 (fb_w, fb_h, fb_policy)
             }
         };
+        let (render_w, render_h) = output_route.composition_geometry((fb_w, fb_h));
         Self {
             fb_w,
             fb_h,
+            render_w,
+            render_h,
             output_w: geometry.output_w,
             output_h: geometry.output_h,
             scan_w: geometry.scan_w,
@@ -447,16 +462,18 @@ impl UiDisplayPlan {
 
     pub fn log_line(self) -> String {
         format!(
-            "display-plan: source={} route={} output={}x{} scan={}x{} fb={}x{} scan_scaled={} fb_policy={} direct_video={} fallback={}",
+            "display-plan: source={} route={} output={}x{} scan={}x{} render={}x{} fb={}x{} composition_transformed={} fb_policy={} direct_video={} fallback={}",
             self.source,
             self.output_route.label(),
             self.output_w,
             self.output_h,
             self.scan_w,
             self.scan_h,
+            self.render_w,
+            self.render_h,
             self.fb_w,
             self.fb_h,
-            self.fb_w != usize::from(self.scan_w) || self.fb_h != usize::from(self.scan_h),
+            self.render_w != self.fb_w || self.render_h != self.fb_h,
             self.fb_policy.label(),
             self.direct_video,
             self.fallback
@@ -528,8 +545,8 @@ impl UiDisplay {
         Self {
             fb_w: plan.fb_w,
             fb_h: plan.fb_h,
-            render_w: plan.fb_w,
-            render_h: plan.fb_h,
+            render_w: plan.render_w,
+            render_h: plan.render_h,
             output_w: plan.output_w,
             output_h: plan.output_h,
             scan_w: plan.scan_w,
@@ -921,10 +938,10 @@ mod tests {
     #[test]
     fn direct_video_and_custom_modes_follow_the_same_contract() {
         let direct_video_cases = [
-            (0, 0, (640, 240), (320, 240), 640, 76_800),
+            (0, 0, (640, 240), (640, 240), 1280, 153_600),
             (0, 1, (640, 480), (640, 480), 1280, 307_200),
-            (1, 0, (640, 288), (384, 288), 768, 110_592),
-            (1, 1, (640, 576), (576, 480), 1152, 276_480),
+            (1, 0, (640, 288), (640, 288), 1280, 184_320),
+            (1, 1, (640, 576), (640, 576), 1280, 368_640),
         ];
         for (pal, scandoubler, scan, framebuffer, stride, pixels) in direct_video_cases {
             let ini = format!(
@@ -934,6 +951,7 @@ mod tests {
             assert_eq!((plan.output_w, plan.output_h), scan);
             assert_eq!((plan.scan_w, plan.scan_h), scan);
             assert_eq!((plan.fb_w, plan.fb_h), framebuffer);
+            assert_eq!((plan.render_w, plan.render_h), (640, 480));
             assert_eq!(rgb565_stride_bytes(plan.fb_w), stride);
             assert_eq!(plan.fb_w * plan.fb_h, pixels);
         }
@@ -1099,13 +1117,13 @@ mod tests {
                 "schema=1&output=crt-240p60",
                 ResolvedOutputRoute::Crt240p60,
                 (640, 240),
-                (320, 240),
+                (640, 240),
             ),
             (
                 "schema=1&output=crt-288p50",
                 ResolvedOutputRoute::Crt288p50,
                 (640, 288),
-                (384, 288),
+                (640, 288),
             ),
             (
                 "schema=1&output=crt-480p60",
@@ -1117,7 +1135,7 @@ mod tests {
                 "schema=1&output=crt-576p50",
                 ResolvedOutputRoute::Crt576p50,
                 (640, 576),
-                (576, 480),
+                (640, 576),
             ),
         ] {
             let plan =
@@ -1129,7 +1147,7 @@ mod tests {
             assert_eq!((plan.scan_w, plan.scan_h), scan);
             assert_eq!((plan.fb_w, plan.fb_h), framebuffer);
             let ui = UiDisplay::for_plan(plan);
-            assert_eq!((ui.render_w(), ui.render_h()), framebuffer);
+            assert_eq!((ui.render_w(), ui.render_h()), (640, 480));
             assert!(plan.direct_video);
             assert_eq!(plan.output_route, route);
         }
@@ -1166,10 +1184,11 @@ mod tests {
             let plan = UiDisplayPlan::from_mister_ini_text_with_policy(ini, policy)
                 .expect("576p CRT plan");
 
-            assert_eq!((plan.fb_w, plan.fb_h), (576, 480));
+            assert_eq!((plan.fb_w, plan.fb_h), (640, 576));
+            assert_eq!((plan.render_w, plan.render_h), (640, 480));
             assert_eq!((plan.scan_w, plan.scan_h), (640, 576));
             assert_eq!(plan.fb_policy, UiFramebufferSizePolicy::Auto);
-            assert!(plan.log_line().contains("scan_scaled=true"));
+            assert!(plan.log_line().contains("composition_transformed=true"));
         }
     }
 
@@ -1361,7 +1380,8 @@ mod tests {
         .expect("ntsc plan");
         assert_eq!((ntsc.output_w, ntsc.output_h), (640, 240));
         assert_eq!((ntsc.scan_w, ntsc.scan_h), (640, 240));
-        assert_eq!((ntsc.fb_w, ntsc.fb_h), (320, 240));
+        assert_eq!((ntsc.fb_w, ntsc.fb_h), (640, 240));
+        assert_eq!((ntsc.render_w, ntsc.render_h), (640, 480));
         assert!(ntsc.direct_video);
 
         let pal31 = UiDisplayPlan::from_mister_ini_text(
@@ -1370,7 +1390,8 @@ mod tests {
         .expect("pal plan");
         assert_eq!((pal31.output_w, pal31.output_h), (640, 576));
         assert_eq!((pal31.scan_w, pal31.scan_h), (640, 576));
-        assert_eq!((pal31.fb_w, pal31.fb_h), (576, 480));
+        assert_eq!((pal31.fb_w, pal31.fb_h), (640, 576));
+        assert_eq!((pal31.render_w, pal31.render_h), (640, 480));
         assert!(pal31.direct_video);
     }
 

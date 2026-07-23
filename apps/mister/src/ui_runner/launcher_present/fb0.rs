@@ -86,7 +86,7 @@ impl Fb0DirtyPresenter {
             let rows = sink.copy_cached(cached_frame, rect);
             copied_rows += rows;
             if rows != 0 {
-                present_bytes += present_bytes_for_rect(rect);
+                present_bytes += present_bytes_for_rows(rect.width(), rows);
             }
             cached_present_us += copy_start.elapsed().as_micros();
         }
@@ -99,7 +99,7 @@ impl Fb0DirtyPresenter {
             direct_preview_present_us = copy_start.elapsed().as_micros();
             copied_rows += direct_preview_rows;
             if direct_preview_rows != 0 {
-                present_bytes += present_bytes_for_rect(rect);
+                present_bytes += present_bytes_for_rows(rect.width(), direct_preview_rows);
             }
         }
 
@@ -135,9 +135,9 @@ impl Fb0DirtyPresenter {
     }
 }
 
-fn present_bytes_for_rect(rect: DirtyRect) -> usize {
-    rect.width()
-        .saturating_mul(rect.rows() as usize)
+fn present_bytes_for_rows(width: usize, rows: u32) -> usize {
+    width
+        .saturating_mul(rows as usize)
         .saturating_mul(mister_magik_fb::framebuffer::format::RGB565_BYTES_PER_PIXEL)
 }
 
@@ -270,7 +270,10 @@ mod tests {
             frame_plan.preview_dirty(),
             Some(arcade_rect),
         );
-        let expected_cached_bytes = cached_plan.total_rgb565_bytes();
+        let expected_cached_bytes = cached_plan
+            .iter()
+            .map(|rect| present_bytes_for_rows(rect.width(), 1))
+            .sum::<usize>();
         let cached_copy_count = cached_plan.len();
         let mut sink = FakeCopySink {
             events: Vec::new(),
@@ -289,7 +292,7 @@ mod tests {
         assert_eq!(stats.direct_preview_rows, 2);
         assert_eq!(
             stats.present_bytes,
-            expected_cached_bytes + present_bytes_for_rect(preview_rect) + 99
+            expected_cached_bytes + present_bytes_for_rows(preview_rect.width(), 2) + 99
         );
         assert_eq!(stats.arcade_update_label.to_string(), "full");
     }

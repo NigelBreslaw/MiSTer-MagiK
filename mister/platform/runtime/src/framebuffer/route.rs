@@ -97,21 +97,8 @@ pub const fn ui_fpga_scaled_mode(
 
 const fn ui_fpga_placement(mode: FramebufferRouteMode, direct_video: bool) -> FramebufferPlacement {
     let default = FramebufferPlacement::from_mode(mode);
-    if !direct_video {
-        return default;
-    }
-    match (mode.hact, mode.vact) {
-        (640, 288) => FramebufferPlacement {
-            top: 32,
-            height: 255,
-            ..default
-        },
-        (640, 576) => FramebufferPlacement {
-            width: 576,
-            ..default
-        },
-        _ => default,
-    }
+    let _ = direct_video;
+    default
 }
 
 #[cfg(test)]
@@ -154,7 +141,7 @@ mod tests {
     }
 
     #[test]
-    fn crt_routes_apply_only_measured_288p_and_576p_placements() {
+    fn crt_routes_post_the_full_native_raster() {
         for (scan_h, expected) in [
             (
                 240,
@@ -169,9 +156,9 @@ mod tests {
                 288,
                 FramebufferPlacement {
                     left: 67,
-                    top: 32,
+                    top: 12,
                     width: 640,
-                    height: 255,
+                    height: 288,
                 },
             ),
             (
@@ -188,7 +175,7 @@ mod tests {
                 FramebufferPlacement {
                     left: 45,
                     top: 40,
-                    width: 576,
+                    width: 640,
                     height: 576,
                 },
             ),

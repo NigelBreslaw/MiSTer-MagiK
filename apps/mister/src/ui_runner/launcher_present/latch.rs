@@ -123,7 +123,15 @@ impl LatchFrameBuffers for PluginLatchFrameBuffers {
         rect: DirtyRect,
     ) -> Result<usize, String> {
         buffer
-            .copy_rect(cached.pixels(), cached.stride(), rect)
+            .copy_vertical_rect(
+                Rgb565FrameView {
+                    pixels: cached.pixels(),
+                    width: cached.width(),
+                    height: cached.height(),
+                    stride_pixels: cached.stride(),
+                },
+                rect,
+            )
             .map_err(|e| e.to_string())
     }
 }
@@ -195,6 +203,8 @@ pub(in crate::ui_runner) struct FpgaVblankLatchHiddenPresenter<B = PluginLatchFr
     sequence: u16,
     width: usize,
     height: usize,
+    render_width: usize,
+    render_height: usize,
     latch_geometry: crate::fpga::LatchedFbufGeometry,
     hidden_active_verified: bool,
     capabilities_verified: bool,
@@ -222,14 +232,16 @@ pub(in crate::ui_runner) struct FpgaVblankLatchHiddenPresentStats {
 
 impl FpgaVblankLatchHiddenPresenter<PluginLatchFrameBuffers> {
     pub(in crate::ui_runner) fn open(ui: &UiDisplay) -> Result<Self, LatchFailure> {
-        let width = ui.render_w();
-        let height = ui.render_h();
+        let width = ui.fb_w();
+        let height = ui.fb_h();
         let buffers = PluginLatchFrameBuffers::open(width, height)?;
         let route = LauncherFramebufferRoute::for_scan(ui.scan_w(), ui.scan_h(), ui.direct_video());
         Ok(Self::new(
             buffers,
             width,
             height,
+            ui.render_w(),
+            ui.render_h(),
             crate::fpga::LatchedFbufGeometry::new_for_route(
                 width as u16,
                 route,
@@ -244,6 +256,8 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         buffers: B,
         width: usize,
         height: usize,
+        render_width: usize,
+        render_height: usize,
         latch_geometry: crate::fpga::LatchedFbufGeometry,
     ) -> Self {
         Self {
@@ -252,11 +266,13 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             sequence: 1,
             width,
             height,
+            render_width,
+            render_height,
             latch_geometry,
             hidden_active_verified: false,
             capabilities_verified: false,
             last_committed_buffer: None,
-            latch_state: TwoBufferLatchState::new(width, height),
+            latch_state: TwoBufferLatchState::new(render_width, render_height),
         }
     }
 
@@ -355,7 +371,27 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         let buffer_index = plan.slot_index;
         let invalid_bytes = self.latch_state.restore_bytes_for_slot(buffer_index);
         let rect_count = plan.restore_rects.len() as u32;
-        let copied_rows = plan.restore_rects.iter().map(DirtyRect::rows).sum::<u32>();
+        // Damage remains in composition coordinates; analytics report the
+        // destination rows that the native scanout copy actually touched.
+        let vertical_transform =
+            mister_magik_fb::framebuffer::vertical_scale::VerticalRgb565Transform::new(
+                self.width,
+                self.render_height,
+                self.height,
+            )
+            .map_err(|error| {
+                LatchFailure::runtime(
+                    LatchFailureStage::FrameCopy,
+                    LatchFailureReason::FrameCopyFailed,
+                    error,
+                )
+            })?;
+        let copied_rows = plan
+            .restore_rects
+            .iter()
+            .filter_map(|rect| vertical_transform.destination_rect_for_source(rect))
+            .map(DirtyRect::rows)
+            .sum::<u32>();
         let full_copy = rect_list_contains(plan.restore_rects, self.full_rect());
         let catchup_bytes = plan.restore_rects.total_rgb565_bytes();
         let base_addr = self.buffers.base_addr(buffer_index);
@@ -516,8 +552,8 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         DirtyRect {
             x0: 0,
             y0: 0,
-            x1: self.width,
-            y1: self.height,
+            x1: self.render_width,
+            y1: self.render_height,
         }
     }
 
@@ -889,6 +925,8 @@ mod tests {
         let route = LauncherFramebufferRoute::for_scan(plan.scan_w, plan.scan_h, plan.direct_video);
         FpgaVblankLatchHiddenPresenter::new(
             FakeBuffers::new(events),
+            WIDTH,
+            HEIGHT,
             WIDTH,
             HEIGHT,
             crate::fpga::LatchedFbufGeometry::new(WIDTH as u16, route.mode(), 1),

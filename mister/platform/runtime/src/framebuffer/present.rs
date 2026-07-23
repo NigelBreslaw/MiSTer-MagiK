@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use crate::framebuffer::downsample::Rgb565FrameView;
 use crate::framebuffer::mapped::MappedRgb565Framebuffer;
 use crate::framebuffer::scanout_slots::ScanoutSlotsRgb565Framebuffer;
 use crate::framebuffer::stream;
@@ -15,14 +16,6 @@ fn stream_geometry(disp: &MappedRgb565Framebuffer) -> FrameGeometry {
         width: disp.width() as u32,
         height: disp.height() as u32,
         stride_pixels: disp.width() as u32,
-    }
-}
-
-fn cached_stream_geometry(view: CachedFrameView<'_>) -> FrameGeometry {
-    FrameGeometry {
-        width: view.width() as u32,
-        height: view.height() as u32,
-        stride_pixels: view.stride() as u32,
     }
 }
 
@@ -54,12 +47,8 @@ fn cached_copy_rect(view: CachedFrameView<'_>, rect: DirtyRect) -> DirtyRect {
     }
 }
 
-fn cached_geometry_matches(
-    view: CachedFrameView<'_>,
-    framebuffer_width: usize,
-    framebuffer_height: usize,
-) -> bool {
-    view.width() == framebuffer_width && view.height() == framebuffer_height
+fn cached_geometry_compatible(view: CachedFrameView<'_>, framebuffer_width: usize) -> bool {
+    view.width() == framebuffer_width && view.height() != 0
 }
 
 fn copy_cached_rows_to_fb0(
@@ -67,9 +56,8 @@ fn copy_cached_rows_to_fb0(
     view: CachedFrameView<'_>,
     y0: usize,
     y1: usize,
-) -> bool {
-    if !cached_geometry_matches(view, disp.width(), disp.height()) || y1 > view.height() || y0 > y1
-    {
+) -> Option<crate::framebuffer::vertical_scale::VerticalCopyStats> {
+    if !cached_geometry_compatible(view, disp.width()) || y1 > view.height() || y0 > y1 {
         log_copy_error(
             "rows",
             &format_args!(
@@ -80,13 +68,25 @@ fn copy_cached_rows_to_fb0(
                 disp.height(),
             ),
         );
-        return false;
+        return None;
     }
-    if let Err(e) = disp.present_rows_565(view.pixels(), y0, y1) {
-        log_copy_error("rows", &e);
-        return false;
-    }
-    true
+    disp.present_vertical_rect_565(
+        Rgb565FrameView {
+            pixels: view.pixels(),
+            width: view.width(),
+            height: view.height(),
+            stride_pixels: view.stride(),
+        },
+        DirtyRect {
+            x0: 0,
+            y0,
+            x1: view.width(),
+            y1,
+        },
+    )
+    .map_err(|error| log_copy_error("rows", &error))
+    .ok()
+    .flatten()
 }
 
 pub fn copy_cached_rows_565(
@@ -95,20 +95,19 @@ pub fn copy_cached_rows_565(
     y0: usize,
     y1: usize,
 ) -> u32 {
-    if !copy_cached_rows_to_fb0(disp, view, y0, y1) {
+    let Some(stats) = copy_cached_rows_to_fb0(disp, view, y0, y1) else {
         return 0;
-    }
-    stream::publish_cached_rect(
-        cached_stream_geometry(view),
-        stream_rect(DirtyRect {
-            x0: 0,
-            y0,
-            x1: view.width(),
-            y1,
-        }),
-        view.pixels(),
+    };
+    let destination = disp.frame_view_565();
+    stream::publish_strided_rect(
+        stream_geometry(disp),
+        stream_rect(stats.destination_rect),
+        destination.pixels,
+        destination.stride_pixels,
+        stats.destination_rect.x0,
+        stats.destination_rect.y0,
     );
-    y1.saturating_sub(y0) as u32
+    stats.destination_rect.rows()
 }
 
 pub fn copy_cached_rect_565(
@@ -116,7 +115,7 @@ pub fn copy_cached_rect_565(
     view: CachedFrameView<'_>,
     rect: DirtyRect,
 ) -> Option<DirtyRect> {
-    if !cached_geometry_matches(view, disp.width(), disp.height()) {
+    if !cached_geometry_compatible(view, disp.width()) {
         log_copy_error(
             "rect",
             &format_args!(
@@ -130,36 +129,32 @@ pub fn copy_cached_rect_565(
         return None;
     }
     let copied_rect = cached_copy_rect(view, rect);
-    if copied_rect.is_full_width(view.width()) {
-        if !copy_cached_rows_to_fb0(disp, view, rect.y0, rect.y1) {
+    let stats = match disp.present_vertical_rect_565(
+        Rgb565FrameView {
+            pixels: view.pixels(),
+            width: view.width(),
+            height: view.height(),
+            stride_pixels: view.stride(),
+        },
+        copied_rect,
+    ) {
+        Ok(Some(stats)) => stats,
+        Ok(None) => return None,
+        Err(e) => {
+            log_copy_error("rect", &e);
             return None;
         }
-        stream::publish_cached_rect(
-            cached_stream_geometry(view),
-            stream_rect(copied_rect),
-            view.pixels(),
-        );
-        return Some(copied_rect);
-    }
-    if let Err(e) = disp.present_rect_565_strided(
-        rect.x0,
-        rect.y0,
-        rect.width(),
-        rect.rows() as usize,
-        view.pixels(),
-        view.stride(),
-        rect.x0,
-        rect.y0,
-    ) {
-        log_copy_error("rect", &e);
-        return None;
-    }
-    stream::publish_cached_rect(
-        cached_stream_geometry(view),
-        stream_rect(copied_rect),
-        view.pixels(),
+    };
+    let destination = disp.frame_view_565();
+    stream::publish_strided_rect(
+        stream_geometry(disp),
+        stream_rect(stats.destination_rect),
+        destination.pixels,
+        destination.stride_pixels,
+        stats.destination_rect.x0,
+        stats.destination_rect.y0,
     );
-    Some(copied_rect)
+    Some(stats.destination_rect)
 }
 
 pub fn copy_dense_rect_565(
@@ -324,13 +319,11 @@ mod tests {
     }
 
     #[test]
-    fn cached_geometry_requires_an_exact_framebuffer_match() {
+    fn cached_geometry_requires_matching_width_and_nonzero_source_height() {
         let pixels = vec![Rgb565Pixel(0); 100 * 20];
         let view = CachedFrameView::new(&pixels, 100, 20);
-        assert!(cached_geometry_matches(view, 100, 20));
-        assert!(!cached_geometry_matches(view, 99, 20));
-        assert!(!cached_geometry_matches(view, 100, 19));
-        assert!(!cached_geometry_matches(view, 100, 21));
+        assert!(cached_geometry_compatible(view, 100));
+        assert!(!cached_geometry_compatible(view, 99));
     }
 
     #[test]
