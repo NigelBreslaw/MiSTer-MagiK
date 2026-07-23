@@ -3,25 +3,8 @@
 
 import { MisterWindow, MisterUi } from "mister_window.slint";
 import { MisterBridge, PreviewStatus, ScreenshotPackProgress } from "api.slint";
-import { ControllerPanel } from "controller_panel.slint";
-import { SetupOverlay } from "controller_setup.slint";
-import { ArcadeListScreen } from "views/arcade_list.slint";
-import { HomeGrid } from "views/home.slint";
-import { SettingsScreen } from "views/settings.slint";
-import { ScreensaverSettingsScreen } from "views/screensaver_settings.slint";
-import { LicensesScreen } from "views/licenses.slint";
-import { AboutScreen } from "views/about.slint";
-import { InfoScreen } from "views/info.slint";
-import { ComboBoxOverlay } from "components/combo_box.slint";
-import {
-    BackgroundScanBadge,
-    CatalogScanPopup,
-    ConfirmDialog,
-    LoadingOverlay,
-    MediaProgressPopup,
-    StartupSplash,
-    CompatibilityScreen,
-} from "components/overlays.slint";
+import { CrtLauncherUi } from "variants/crt_ui.slint";
+import { HdmiLauncherUi } from "variants/hdmi_ui.slint";
 import "fonts/PressStart2P-Regular.ttf";
 
 export { MisterUi }
@@ -34,51 +17,6 @@ export component Launcher inherits MisterWindow {
     title: "MiSTer MagiK Launcher";
     background: MisterBridge.screen-mode == 0 ? #0b0d14 : #1a1424;
 
-    if MisterBridge.screen-mode == 0 : HomeGrid { }
-
-    if MisterBridge.screen-mode == 1 : ControllerPanel {
-        width: 100%;
-        height: 100%;
-    }
-
-    if MisterBridge.screen-mode == 2 : ArcadeListScreen { }
-
-    if MisterBridge.screen-mode == 3 : SettingsScreen { }
-
-    if MisterBridge.screen-mode == 4 : AboutScreen { }
-    if MisterBridge.screen-mode == 5 : LicensesScreen { }
-    if MisterBridge.screen-mode == 6 : InfoScreen { }
-    if MisterBridge.screen-mode == 7 : ScreensaverSettingsScreen { }
-
-    if MisterBridge.catalog-background-scan-visible : BackgroundScanBadge { }
-
-    if MisterBridge.setup-visible : SetupOverlay {
-        phase: MisterBridge.setup-phase;
-        title: MisterBridge.setup-title;
-        subtitle: MisterBridge.setup-subtitle;
-        list-items: MisterBridge.setup-list;
-        list-selected: MisterBridge.setup-selected;
-        config-labels: MisterBridge.setup-config-labels;
-        config-values: MisterBridge.setup-config-values;
-        setup-name: MisterBridge.setup-name;
-        setup-kind-label: MisterBridge.setup-kind-label;
-    }
-
-    if !MisterBridge.catalog-scan-visible && MisterBridge.media-pack-progresses.length > 0 : MediaProgressPopup {
-        s: MisterUi.scale;
-    }
-
-    if MisterBridge.catalog-scan-visible : CatalogScanPopup {
-        s: MisterUi.scale;
-    }
-
-    if MisterBridge.confirm-visible : ConfirmDialog { }
-
-    if MisterBridge.display-combo-open : ComboBoxOverlay { }
-
-    if MisterBridge.loading-message != "" : LoadingOverlay { }
-
-    if MisterBridge.startup-visible : StartupSplash { }
-
-    if MisterBridge.compatibility-visible : CompatibilityScreen { }
+    if MisterUi.crt-layout : CrtLauncherUi { }
+    if !MisterUi.crt-layout : HdmiLauncherUi { }
 }

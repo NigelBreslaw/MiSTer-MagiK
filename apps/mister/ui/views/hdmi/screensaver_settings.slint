@@ -1,0 +1,48 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+import { MisterBridge } from "../../api.slint";
+
+component SaverRow inherits Rectangle {
+    in property <string> label;
+    in property <string> detail;
+    in property <bool> focused;
+    in property <bool> enabled: true;
+    height: 70px;
+    background: focused ? #2a2236 : #1e1828;
+    border-width: focused ? 2px : 1px;
+    border-color: !enabled ? #3c3448 : (focused ? #06d6a0 : #5c4a72);
+    VerticalLayout {
+        padding: 12px;
+        spacing: 8px;
+        Text { text: label; color: !enabled ? #686070 : (focused ? #06d6a0 : #e8e0f0); font-size: 16px; }
+        Text { text: detail; color: enabled ? #a898b8 : #585060; font-size: 8px; }
+    }
+}
+
+export component ScreensaverSettingsScreen inherits Rectangle {
+    background: #0b0d14;
+    VerticalLayout {
+        padding: 20px;
+        spacing: 12px;
+        Text { text: "Screensaver"; color: #e8e0f0; font-size: 24px; horizontal-alignment: center; }
+        SaverRow {
+            label: "Screensaver enabled";
+            detail: MisterBridge.screensaver-enabled ? "Yes" : "No";
+            focused: MisterBridge.screensaver-settings-selected == 0;
+        }
+        SaverRow {
+            label: "Show screensaver after";
+            detail: MisterBridge.screensaver-delay-minutes == 1 ? "1 minute" : MisterBridge.screensaver-delay-minutes + " minutes";
+            focused: MisterBridge.screensaver-settings-selected == 1;
+            enabled: MisterBridge.screensaver-enabled;
+        }
+        SaverRow {
+            label: "Preview screensaver";
+            detail: "Show it now";
+            focused: MisterBridge.screensaver-settings-selected == 2;
+        }
+        Rectangle { vertical-stretch: 1; background: transparent; }
+    }
+}
+

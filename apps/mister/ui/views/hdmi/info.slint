@@ -1,0 +1,35 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+import { MisterBridge } from "../../api.slint";
+
+component InfoRow inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    height: 54px;
+    background: #1e1828;
+    border-width: 1px;
+    border-color: #5c4a72;
+    VerticalLayout {
+        padding: 10px;
+        spacing: 5px;
+        Text { text: label; color: #06d6a0; font-size: 12px; }
+        Text { text: value; color: #e8e0f0; font-size: 8px; overflow: elide; }
+    }
+}
+
+export component InfoScreen inherits Rectangle {
+    background: #0b0d14;
+    VerticalLayout {
+        padding: 32px;
+        spacing: 12px;
+        Text { text: "Info"; color: #06d6a0; font-size: 24px; horizontal-alignment: center; }
+        InfoRow { label: "Build"; value: MisterBridge.build-label; }
+        InfoRow { label: "Display mode"; value: MisterBridge.present-mode-label; }
+        InfoRow { label: "Database build"; value: MisterBridge.info-database-build; }
+        InfoRow { label: "MiSTer kernel"; value: MisterBridge.info-kernel-version; }
+        Rectangle { vertical-stretch: 1; background: transparent; }
+        Text { text: "B: back"; color: #6f8198; font-size: 8px; horizontal-alignment: center; }
+    }
+}
+

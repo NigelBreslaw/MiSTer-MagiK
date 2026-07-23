@@ -1,0 +1,133 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+import { MisterUi } from "../../mister_window.slint";
+import { MisterBridge } from "../../api.slint";
+import { CrtTheme, CrtHeader, CrtFooter } from "../../components/crt_ui.slint";
+
+component SearchKey inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected;
+    in property <bool> keyboard-focused;
+
+    height: MisterUi.compact-layout ? 24px : 32px;
+    background: selected && keyboard-focused ? CrtTheme.accent : CrtTheme.panel-alt;
+    border-width: 1px;
+    border-color: selected ? CrtTheme.accent : CrtTheme.border;
+
+    Text {
+        text: root.label;
+        color: root.selected && root.keyboard-focused ? CrtTheme.accent-text : CrtTheme.text;
+        font-size: MisterUi.body-font;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+component SearchKeyboardRow inherits Rectangle {
+    in property <int> start-index;
+    in property <int> key-count;
+    height: MisterUi.compact-layout ? 24px : 32px;
+
+    HorizontalLayout {
+        spacing: MisterUi.compact-layout ? 0px : MisterUi.grid;
+
+        for key-offset in root.key-count : SearchKey {
+            horizontal-stretch: 1;
+            label: MisterBridge.arcade-search-keys[root.start-index + key-offset];
+            selected: MisterBridge.arcade-search-key-selected == root.start-index + key-offset;
+            keyboard-focused: MisterBridge.arcade-search-pane == 0;
+        }
+    }
+}
+
+component SearchKeyboard inherits Rectangle {
+    background: CrtTheme.background;
+
+    VerticalLayout {
+        padding: MisterUi.compact-layout ? 0px : MisterUi.grid;
+        spacing: MisterUi.compact-layout ? 0px : MisterUi.grid;
+
+        Rectangle {
+            height: MisterUi.compact-layout ? 16px : 32px;
+            background: CrtTheme.panel-alt;
+            border-width: 1px;
+            border-color: MisterBridge.arcade-search-pane == 0 ? CrtTheme.accent : CrtTheme.border;
+
+            Text {
+                x: MisterUi.grid;
+                width: parent.width - 16px;
+                height: parent.height;
+                text: MisterBridge.arcade-search-query == "" ? "_" : MisterBridge.arcade-search-query;
+                color: CrtTheme.text;
+                font-size: MisterUi.body-font;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+
+        SearchKeyboardRow { start-index: 0; key-count: 8; }
+        SearchKeyboardRow { start-index: 8; key-count: 8; }
+        SearchKeyboardRow { start-index: 16; key-count: 8; }
+        SearchKeyboardRow { start-index: 24; key-count: 8; }
+        SearchKeyboardRow { start-index: 32; key-count: 8; }
+        SearchKeyboardRow { start-index: 40; key-count: 3; }
+    }
+}
+
+export component ArcadeListScreen inherits Rectangle {
+    property <int> count: MisterBridge.active-system-count;
+    background: CrtTheme.background;
+
+    CrtHeader {
+        x: MisterUi.grid;
+        y: MisterUi.grid;
+        width: parent.width - 16px;
+        title: MisterBridge.arcade-search-active ? "Search" : MisterBridge.active-system-title;
+        subtitle: "";
+        status: root.count + (MisterBridge.arcade-search-active ? " matches" : " games");
+    }
+
+    if MisterBridge.arcade-search-active : SearchKeyboard {
+        x: MisterUi.grid;
+        y: 48px;
+        width: MisterUi.compact-layout ? parent.width * 2 / 5 : parent.width / 2;
+        height: parent.height - 80px;
+    }
+
+    Rectangle {
+        x: MisterBridge.arcade-list-x * 1px;
+        y: MisterBridge.arcade-list-y * 1px;
+        width: MisterBridge.arcade-list-width * 1px;
+        height: parent.height - self.y - 32px;
+        background: CrtTheme.panel-alt;
+        border-width: 1px;
+        border-color: MisterBridge.arcade-search-pane == 1 ? CrtTheme.accent : CrtTheme.border;
+        clip: true;
+    }
+
+    if MisterBridge.arcade-games-loading : Rectangle {
+        x: MisterBridge.arcade-list-x * 1px;
+        y: MisterBridge.arcade-list-y * 1px;
+        width: MisterBridge.arcade-list-width * 1px;
+        height: parent.height - self.y - 32px;
+        background: CrtTheme.panel-alt;
+
+        Text {
+            text: "Loading list...";
+            color: CrtTheme.muted;
+            font-size: MisterUi.body-font;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+
+    CrtFooter {
+        x: MisterUi.grid;
+        y: parent.height - 32px;
+        width: parent.width - 16px;
+        left-hint: "A Launch   Y Search";
+        right-hint: "B Back   HOME Launcher";
+    }
+}
+

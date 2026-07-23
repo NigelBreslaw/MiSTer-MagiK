@@ -1,0 +1,105 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+import { MisterUi } from "../mister_window.slint";
+import { CrtTheme, CrtHeader, CrtFooter, CrtMenuRow } from "../components/crt_ui.slint";
+
+export component SetupOverlay inherits Rectangle {
+    in property <int> phase;
+    in property <string> title;
+    in property <string> subtitle;
+    in property <[string]> list-items;
+    in property <int> list-selected;
+    in property <[string]> config-labels;
+    in property <[string]> config-values;
+    in property <string> setup-name;
+    in property <string> setup-kind-label;
+
+    background: CrtTheme.background;
+
+    VerticalLayout {
+        padding: MisterUi.grid;
+        spacing: MisterUi.compact-layout ? 0px : MisterUi.grid;
+
+        CrtHeader { title: root.title; subtitle: "Controller setup"; status: ""; }
+
+        if root.phase != 4 : Text {
+            text: root.subtitle;
+            color: CrtTheme.muted;
+            font-size: MisterUi.body-font;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+
+        if root.phase == 2 : CrtMenuRow {
+            label: "New controller";
+            detail: "Create";
+            focused: root.list-selected == 0;
+        }
+        if root.phase == 2 : CrtMenuRow {
+            label: "Existing controller";
+            detail: "Rebind";
+            focused: root.list-selected == 1;
+        }
+
+        if root.phase == 3 : Rectangle {
+            vertical-stretch: 1;
+            background: transparent;
+            clip: true;
+            VerticalLayout {
+                spacing: MisterUi.compact-layout ? 0px : MisterUi.grid;
+                for item[i] in root.list-items : CrtMenuRow {
+                    label: item;
+                    detail: "";
+                    focused: root.list-selected == i;
+                }
+            }
+        }
+
+        if root.phase == 4 : Text {
+            text: root.subtitle;
+            color: CrtTheme.accent;
+            font-size: MisterUi.body-font;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+        if root.phase == 4 : Rectangle {
+            vertical-stretch: 1;
+            background: CrtTheme.panel;
+            border-width: 1px;
+            border-color: CrtTheme.border;
+            clip: true;
+            Flickable {
+                width: 100%;
+                height: 100%;
+                VerticalLayout {
+                    for label[i] in root.config-labels : CrtMenuRow {
+                        label: label;
+                        detail: root.config-values[i];
+                        focused: false;
+                    }
+                }
+            }
+        }
+
+        if root.phase == 5 : CrtMenuRow {
+            label: "Name";
+            detail: root.setup-name;
+            focused: false;
+        }
+        if root.phase == 5 : CrtMenuRow {
+            label: "Type";
+            detail: root.setup-kind-label;
+            focused: true;
+        }
+
+        Rectangle { vertical-stretch: 1; background: transparent; }
+        CrtFooter {
+            left-hint: root.phase == 1 ? "BUTTON Continue"
+                : root.phase == 4 ? "A Continue"
+                : root.phase == 5 ? "DPAD Type   A Save" : "DPAD Choose   A Confirm";
+            right-hint: "";
+        }
+    }
+}
+

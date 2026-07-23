@@ -1,0 +1,356 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+import { MisterUi } from "../mister_window.slint";
+import { MisterBridge } from "../api.slint";
+import { LauncherTile, OsdSideLabel } from "../components/launcher_chrome.slint";
+import { ScreenshotPackProgressRow } from "../components/progress.slint";
+
+export component CompatibilityScreen inherits Rectangle {
+    property <int> s: MisterUi.scale;
+
+    background: #09070d;
+
+    VerticalLayout {
+        padding-left: 80px * root.s;
+        padding-right: 80px * root.s;
+        padding-top: 70px * root.s;
+        padding-bottom: 70px * root.s;
+        spacing: 22px * root.s;
+        alignment: center;
+
+        Text {
+            text: "MiSTer MagiK compatibility check failed";
+            color: #ff5d73;
+            font-size: 18px * root.s;
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: MisterBridge.compatibility-reason;
+            color: #ffd166;
+            font-size: 11px * root.s;
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: MisterBridge.compatibility-detail;
+            color: #e8e0f0;
+            font-size: 8px * root.s;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+
+        Text {
+            text: "The normal launcher is disabled. Diagnostics: /tmp/mister-magik";
+            color: #9080a8;
+            font-size: 7px * root.s;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+    }
+}
+
+export component CatalogScanPopup inherits Rectangle {
+    in property <int> s;
+    property <length> scan-osd-width: 56px * s;
+    property <length> scan-horizontal-padding: 70px * s;
+    property <length> scan-column-width: root.width > scan-osd-width
+        ? root.width - scan-osd-width
+        : 0px;
+    property <length> scan-content-width: scan-column-width > scan-horizontal-padding * 2
+        ? scan-column-width - scan-horizontal-padding * 2
+        : 0px;
+    property <length> scan-progress-width: scan-content-width < 560px * s
+        ? scan-content-width
+        : 560px * s;
+
+    background: #0b0d14;
+
+    HorizontalLayout {
+        OsdSideLabel { }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            padding-left: root.scan-horizontal-padding;
+            padding-right: root.scan-horizontal-padding;
+            padding-top: 82px * s;
+            padding-bottom: 76px * s;
+            spacing: 18px * s;
+            alignment: center;
+            cross-axis-alignment: center;
+
+            Rectangle { vertical-stretch: 1; background: transparent; }
+
+            Text {
+                width: root.scan-content-width;
+                text: "MiSTer MagiK";
+                color: #06d6a0;
+                font-size: 20px * s;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                width: root.scan-content-width;
+                text: MisterBridge.catalog-scan-message;
+                color: #e8e0f0;
+                font-size: 16px * s;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+
+            Text {
+                width: root.scan-content-width;
+                text: MisterBridge.catalog-scan-title;
+                color: #d7eef8;
+                font-size: 10px * s;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                width: root.scan-content-width;
+                text: MisterBridge.catalog-scan-detail;
+                color: #9080a8;
+                font-size: 8px * s;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+
+            if MisterBridge.media-pack-progresses.length > 0 : VerticalLayout {
+                width: root.scan-progress-width;
+                spacing: 5px * s;
+
+                Text {
+                    text: MisterBridge.media-pack-summary;
+                    color: #d7eef8;
+                    font-size: 6px * s;
+                    horizontal-alignment: center;
+                }
+
+                for pack in MisterBridge.media-pack-progresses: ScreenshotPackProgressRow {
+                    s: root.s;
+                    pack: pack;
+                }
+            }
+
+            Rectangle { vertical-stretch: 1; background: transparent; }
+        }
+    }
+}
+
+export component MediaProgressPopup inherits Rectangle {
+    in property <int> s;
+
+    width: 560px * s;
+    height: 100px * s;
+    x: MisterUi.window-width * 1px / 2 - self.width / 2;
+    y: MisterUi.window-height * 1px - self.height - 24px * s;
+    background: #0b0d14;
+    border-width: 1px;
+    border-color: #5c4a72;
+    clip: true;
+
+    VerticalLayout {
+        padding-left: 12px * root.s;
+        padding-right: 12px * root.s;
+        padding-top: 8px * root.s;
+        padding-bottom: 8px * root.s;
+        spacing: 5px * root.s;
+
+        Text {
+            text: MisterBridge.media-pack-summary;
+            color: #d7eef8;
+            font-size: 6px * root.s;
+            horizontal-alignment: center;
+        }
+
+        for pack in MisterBridge.media-pack-progresses: ScreenshotPackProgressRow {
+            s: root.s;
+            pack: pack;
+        }
+    }
+}
+
+export component StartupSplash inherits Rectangle {
+    property <int> s: MisterUi.scale;
+
+    background: #1a1424;
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 12px * s;
+
+        Text {
+            text: "MiSTer MagiK";
+            color: #e8e0f0;
+            font-size: 28px * s;
+            horizontal-alignment: center;
+        }
+    }
+}
+
+export component BackgroundScanBadge inherits Rectangle {
+    property <int> s: MisterUi.scale;
+    property <bool> dot-visible: Math.mod(floor(animation-tick() / 1ms / 500), 2) == 0;
+
+    width: t.width + 20px;
+    height: 28px * s;
+    x: MisterUi.window-width * 1px - self.width - 18px * s;
+    y: MisterUi.window-height * 1px - self.height - 16px * s;
+    background: #101420;
+    border-width: 1px;
+    border-color: #52647d;
+
+
+    t := HorizontalLayout {
+        alignment: start;
+        width: self.preferred-width;
+        Text {
+            text: "Building library";
+            color: #d7eef8;
+            font-size: 8px * root.s;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        Text {
+            text: ".";
+            color: root.dot-visible ? #d7eef8 : transparent;
+            font-size: 8px * root.s;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+
+    }
+}
+
+component CompactDialogButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> focused;
+
+    height: 42px;
+    background: focused ? #2a2236 : #181829;
+    border-width: focused ? 2px : 1px;
+    border-color: focused ? #06d6a0 : #5a4973;
+
+    Text {
+        text: root.label;
+        color: root.focused ? #06d6a0 : #e8e0f0;
+        font-size: 8px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        wrap: word-wrap;
+    }
+}
+
+export component ConfirmDialog inherits Rectangle {
+    property <bool> compact: MisterUi.window-height <= 288;
+    background: #000000b0;
+
+    Rectangle {
+        width: root.compact ? (MisterUi.window-width - 16) * 1px : 680px;
+        height: root.compact ? (MisterUi.window-height - 12) * 1px : 260px;
+        background: #0e0c14;
+        border-width: root.compact ? 2px : 4px;
+        border-color: #06d6a0;
+
+        if !root.compact : VerticalLayout {
+            padding: 24px;
+            spacing: 18px;
+
+            Text {
+                text: MisterBridge.confirm-title;
+                color: #06d6a0;
+                font-size: 16px;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: MisterBridge.confirm-message;
+                color: #e8e0f0;
+                font-size: 8px;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+
+            Rectangle { vertical-stretch: 1; background: transparent; }
+
+            HorizontalLayout {
+                spacing: 16px;
+
+                if MisterBridge.confirm-left-label != "" : LauncherTile {
+                    label: MisterBridge.confirm-left-label;
+                    subtitle: "";
+                    focused: MisterBridge.confirm-selected == 0;
+                }
+
+                if MisterBridge.confirm-right-label != "" : LauncherTile {
+                    label: MisterBridge.confirm-right-label;
+                    subtitle: "";
+                    focused: MisterBridge.confirm-selected == 1;
+                }
+            }
+        }
+
+        if root.compact : VerticalLayout {
+            padding: 10px;
+            spacing: 8px;
+
+            Text {
+                text: MisterBridge.confirm-title;
+                color: #06d6a0;
+                font-size: 10px;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+
+            Text {
+                text: MisterBridge.confirm-message;
+                color: #e8e0f0;
+                font-size: 7px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                wrap: word-wrap;
+                vertical-stretch: 1;
+            }
+
+            HorizontalLayout {
+                height: 42px;
+                spacing: 8px;
+
+                if MisterBridge.confirm-left-label != "" : CompactDialogButton {
+                    label: MisterBridge.confirm-left-label;
+                    focused: MisterBridge.confirm-selected == 0;
+                }
+
+                if MisterBridge.confirm-right-label != "" : CompactDialogButton {
+                    label: MisterBridge.confirm-right-label;
+                    focused: MisterBridge.confirm-selected == 1;
+                }
+            }
+        }
+    }
+}
+
+export component LoadingOverlay inherits Rectangle {
+    background: #1a1424;
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 12px;
+
+        Text {
+            text: MisterBridge.loading-message;
+            color: #e8e0f0;
+            font-size: 16px;
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: MisterBridge.loading-detail != "" ? MisterBridge.loading-detail : "Please wait...";
+            color: #9080a8;
+            font-size: 8px;
+            horizontal-alignment: center;
+        }
+    }
+}
+

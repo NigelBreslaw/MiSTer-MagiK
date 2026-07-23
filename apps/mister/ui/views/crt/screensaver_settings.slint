@@ -1,0 +1,37 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+import { MisterUi } from "../../mister_window.slint";
+import { MisterBridge } from "../../api.slint";
+import { CrtTheme, CrtHeader, CrtFooter, CrtMenuRow } from "../../components/crt_ui.slint";
+
+export component ScreensaverSettingsScreen inherits Rectangle {
+    background: CrtTheme.background;
+
+    VerticalLayout {
+        padding: MisterUi.grid;
+        spacing: MisterUi.compact-layout ? 0px : MisterUi.grid;
+
+        CrtHeader { title: "Screensaver"; subtitle: ""; status: ""; }
+        CrtMenuRow {
+            label: "Enabled";
+            detail: MisterBridge.screensaver-enabled ? "Yes" : "No";
+            focused: MisterBridge.screensaver-settings-selected == 0;
+        }
+        CrtMenuRow {
+            label: "Start after";
+            detail: MisterBridge.screensaver-delay-minutes == 1
+                ? "1 minute" : MisterBridge.screensaver-delay-minutes + " minutes";
+            focused: MisterBridge.screensaver-settings-selected == 1;
+            enabled: MisterBridge.screensaver-enabled;
+        }
+        CrtMenuRow {
+            label: "Preview";
+            detail: "Show now";
+            focused: MisterBridge.screensaver-settings-selected == 2;
+        }
+        Rectangle { vertical-stretch: 1; background: transparent; }
+        CrtFooter { left-hint: "A Change   B Back"; right-hint: "HOME Launcher"; }
+    }
+}
+

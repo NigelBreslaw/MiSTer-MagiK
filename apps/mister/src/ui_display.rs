@@ -153,6 +153,10 @@ pub struct UiDisplayPlan {
 }
 
 impl UiDisplayPlan {
+    pub const fn uses_crt_ui(self) -> bool {
+        self.output_route.is_crt()
+    }
+
     pub fn from_runtime_or_mister_ini_file(runtime: Option<RuntimeDisplayGeometry>) -> Self {
         let ini = std::fs::read_to_string(MISTER_INI_PATH).ok();
         let fb_policy = UiFramebufferSizePolicy::from_env();
@@ -1216,6 +1220,32 @@ mod tests {
         ] {
             assert!(runtime_display_geometry_v1(invalid).is_none(), "{invalid}");
         }
+    }
+
+    #[test]
+    fn ui_family_is_selected_from_resolved_route_not_aspect_ratio() {
+        for route in [
+            ResolvedOutputRoute::Crt240p60,
+            ResolvedOutputRoute::Crt288p50,
+            ResolvedOutputRoute::Crt480p60,
+            ResolvedOutputRoute::Crt576p50,
+        ] {
+            let plan = UiDisplayPlan::from_geometry_with_route(
+                route.progressive_geometry().unwrap(),
+                route,
+                "test-crt-ui",
+                UiFramebufferSizePolicy::Auto,
+            );
+            assert!(plan.uses_crt_ui(), "{}", route.label());
+        }
+
+        let hdmi_4_3 = UiDisplayPlan::from_geometry_with_route(
+            VideoModeGeometry::new(2048, 1536),
+            ResolvedOutputRoute::Hdmi,
+            "test-hdmi-ui",
+            UiFramebufferSizePolicy::Auto,
+        );
+        assert!(!hdmi_4_3.uses_crt_ui());
     }
 
     #[test]

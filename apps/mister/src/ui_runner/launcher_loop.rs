@@ -1743,7 +1743,7 @@ pub(super) fn run_launcher_loop(
         .is_none()
         .then(|| env_start_menu.clone())
         .flatten();
-    let mut nav = LauncherNav::new();
+    let mut nav = LauncherNav::for_crt_layout(ui.output_route().is_crt());
     nav.settings = crate::settings::MagikSettings::load();
     nav.screen = start_screen;
     let mut display_confirm_deadline = None;

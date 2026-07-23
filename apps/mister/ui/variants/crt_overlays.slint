@@ -1,0 +1,317 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+import { MisterUi } from "../mister_window.slint";
+import { MisterBridge } from "../api.slint";
+import { OsdSideLabel } from "../components/launcher_chrome.slint";
+import { CrtTheme } from "../components/crt_ui.slint";
+import { ScreenshotPackProgressRow } from "../components/progress.slint";
+
+export component CompatibilityScreen inherits Rectangle {
+    property <int> s: MisterUi.scale;
+
+    background: CrtTheme.background;
+
+    VerticalLayout {
+        padding: MisterUi.grid;
+        spacing: MisterUi.compact-layout ? MisterUi.grid : 16px;
+        alignment: center;
+
+        Text {
+            text: "MiSTer MagiK compatibility check failed";
+            color: #ff5d73;
+            font-size: MisterUi.heading-font;
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: MisterBridge.compatibility-reason;
+            color: #ffd166;
+            font-size: MisterUi.body-font;
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: MisterBridge.compatibility-detail;
+            color: #e8e0f0;
+            font-size: MisterUi.body-font;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+
+        Text {
+            text: "The normal launcher is disabled. Diagnostics: /tmp/mister-magik";
+            color: #9080a8;
+            font-size: MisterUi.body-font;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+    }
+}
+
+export component CatalogScanPopup inherits Rectangle {
+    in property <int> s;
+    property <length> scan-osd-width: MisterUi.compact-layout ? 0px : 56px * s;
+    property <length> scan-horizontal-padding: MisterUi.compact-layout ? MisterUi.grid : 70px * s;
+    property <length> scan-column-width: root.width > scan-osd-width
+        ? root.width - scan-osd-width
+        : 0px;
+    property <length> scan-content-width: scan-column-width > scan-horizontal-padding * 2
+        ? scan-column-width - scan-horizontal-padding * 2
+        : 0px;
+    property <length> scan-progress-width: scan-content-width < 560px * s
+        ? scan-content-width
+        : 560px * s;
+
+    background: CrtTheme.background;
+
+    HorizontalLayout {
+        if !MisterUi.compact-layout : OsdSideLabel { }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            padding-left: root.scan-horizontal-padding;
+            padding-right: root.scan-horizontal-padding;
+            padding-top: MisterUi.compact-layout ? MisterUi.grid : 82px * s;
+            padding-bottom: MisterUi.compact-layout ? MisterUi.grid : 76px * s;
+            spacing: MisterUi.compact-layout ? MisterUi.grid : 18px * s;
+            alignment: center;
+            cross-axis-alignment: center;
+
+            Rectangle { vertical-stretch: 1; background: transparent; }
+
+            Text {
+                width: root.scan-content-width;
+                text: "MiSTer MagiK";
+                color: #06d6a0;
+                font-size: MisterUi.heading-font;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                width: root.scan-content-width;
+                text: MisterBridge.catalog-scan-message;
+                color: #e8e0f0;
+                font-size: MisterUi.body-font;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+
+            Text {
+                width: root.scan-content-width;
+                text: MisterBridge.catalog-scan-title;
+                color: #d7eef8;
+                font-size: MisterUi.body-font;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                width: root.scan-content-width;
+                text: MisterBridge.catalog-scan-detail;
+                color: #9080a8;
+                font-size: MisterUi.body-font;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+
+            if MisterBridge.media-pack-progresses.length > 0 : VerticalLayout {
+                width: root.scan-progress-width;
+                spacing: 5px * s;
+
+                Text {
+                    text: MisterBridge.media-pack-summary;
+                    color: #d7eef8;
+                    font-size: 6px * s;
+                    horizontal-alignment: center;
+                }
+
+                for pack in MisterBridge.media-pack-progresses: ScreenshotPackProgressRow {
+                    s: root.s;
+                    pack: pack;
+                }
+            }
+
+            Rectangle { vertical-stretch: 1; background: transparent; }
+        }
+    }
+}
+
+export component MediaProgressPopup inherits Rectangle {
+    in property <int> s;
+
+    width: min(560px * s, MisterUi.window-width * 1px - 16px);
+    height: min(100px * s, MisterUi.window-height * 1px - 16px);
+    x: MisterUi.window-width * 1px / 2 - self.width / 2;
+    y: MisterUi.window-height * 1px - self.height - MisterUi.grid;
+    background: CrtTheme.panel;
+    border-width: 1px;
+    border-color: #5c4a72;
+    clip: true;
+
+    VerticalLayout {
+        padding-left: 12px * root.s;
+        padding-right: 12px * root.s;
+        padding-top: 8px * root.s;
+        padding-bottom: 8px * root.s;
+        spacing: 5px * root.s;
+
+        Text {
+            text: MisterBridge.media-pack-summary;
+            color: #d7eef8;
+            font-size: 6px * root.s;
+            horizontal-alignment: center;
+        }
+
+        for pack in MisterBridge.media-pack-progresses: ScreenshotPackProgressRow {
+            s: root.s;
+            pack: pack;
+        }
+    }
+}
+
+export component StartupSplash inherits Rectangle {
+    property <int> s: MisterUi.scale;
+
+    background: #1a1424;
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 12px * s;
+
+        Text {
+            text: "MiSTer MagiK";
+            color: #e8e0f0;
+            font-size: 28px * s;
+            horizontal-alignment: center;
+        }
+    }
+}
+
+export component BackgroundScanBadge inherits Rectangle {
+    property <int> s: MisterUi.scale;
+    property <bool> dot-visible: Math.mod(floor(animation-tick() / 1ms / 500), 2) == 0;
+
+    width: t.width + 20px;
+    height: 28px * s;
+    x: MisterUi.window-width * 1px - self.width - 18px * s;
+    y: MisterUi.window-height * 1px - self.height - 16px * s;
+    background: #101420;
+    border-width: 1px;
+    border-color: #52647d;
+
+
+    t := HorizontalLayout {
+        alignment: start;
+        width: self.preferred-width;
+        Text {
+            text: "Building library";
+            color: #d7eef8;
+            font-size: 8px * root.s;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        Text {
+            text: ".";
+            color: root.dot-visible ? #d7eef8 : transparent;
+            font-size: 8px * root.s;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+
+    }
+}
+
+component CompactDialogButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> focused;
+
+    height: 32px;
+    background: focused ? CrtTheme.accent : CrtTheme.panel-alt;
+    border-width: 1px;
+    border-color: focused ? CrtTheme.accent : CrtTheme.border;
+
+    Text {
+        text: root.label;
+        color: root.focused ? CrtTheme.accent-text : CrtTheme.text;
+        font-size: MisterUi.body-font;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        wrap: word-wrap;
+    }
+}
+
+export component ConfirmDialog inherits Rectangle {
+    background: #000000b0;
+
+    Rectangle {
+        width: MisterUi.compact-layout ? parent.width - 16px : min(640px, parent.width - 32px);
+        height: MisterUi.compact-layout ? min(160px, parent.height - 16px) : 192px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: CrtTheme.panel;
+        border-width: 1px;
+        border-color: CrtTheme.accent;
+
+        VerticalLayout {
+            padding: MisterUi.grid;
+            spacing: MisterUi.grid;
+
+            Text {
+                text: MisterBridge.confirm-title;
+                color: CrtTheme.accent;
+                font-size: MisterUi.heading-font;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+
+            Text {
+                text: MisterBridge.confirm-message;
+                color: CrtTheme.text;
+                font-size: MisterUi.body-font;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                wrap: word-wrap;
+                vertical-stretch: 1;
+            }
+
+            HorizontalLayout {
+                height: 32px;
+                spacing: MisterUi.grid;
+
+                if MisterBridge.confirm-left-label != "" : CompactDialogButton {
+                    label: MisterBridge.confirm-left-label;
+                    focused: MisterBridge.confirm-selected == 0;
+                }
+
+                if MisterBridge.confirm-right-label != "" : CompactDialogButton {
+                    label: MisterBridge.confirm-right-label;
+                    focused: MisterBridge.confirm-selected == 1;
+                }
+            }
+        }
+    }
+}
+
+export component LoadingOverlay inherits Rectangle {
+    background: #1a1424;
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 12px;
+
+        Text {
+            text: MisterBridge.loading-message;
+            color: #e8e0f0;
+            font-size: 16px;
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: MisterBridge.loading-detail != "" ? MisterBridge.loading-detail : "Please wait...";
+            color: #9080a8;
+            font-size: 8px;
+            horizontal-alignment: center;
+        }
+    }
+}
+

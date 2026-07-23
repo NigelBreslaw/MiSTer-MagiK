@@ -250,8 +250,10 @@ fn sync_arcade_list_geometry_bridge(
 ) {
     let geometry = if nav.arcade_search.is_active(&nav.arcade_filter.active) {
         ArcadeListGeometry::search_for_render_w(render_w)
-    } else {
+    } else if nav.uses_crt_layout() {
         ArcadeListGeometry::normal_for_render_w(render_w)
+    } else {
+        ArcadeListGeometry::NORMAL
     };
     bridge.set_arcade_list_x(geometry.x as i32);
     bridge.set_arcade_list_y(geometry.y as i32);
@@ -666,6 +668,7 @@ pub(super) fn sync_bridge_launcher(
         bridge.set_arcade_selected(nav.arcade.selected as i32);
         bridge.set_arcade_scroll_y(nav.arcade.scroll_y);
     }
+    let mut active_games_for_preview: Option<ArcadeGameView<'_>> = None;
     let mut active_games_loading = false;
     if let Some(catalog) = catalog {
         let games = active_system_game_view(catalog, nav);
@@ -674,12 +677,33 @@ pub(super) fn sync_bridge_launcher(
         bridge.set_menu_items(models.menu_items(nav, catalog_version));
         bridge.set_active_system_title(header.title.into());
         bridge.set_active_system_count(header.count as i32);
+        active_games_for_preview = Some(games);
     }
     bridge.set_arcade_games_loading(active_games_loading);
     sync_arcade_search_bridge(&bridge, nav);
     sync_launcher_confirm_bridge(&bridge, nav, lifecycle);
     LauncherStatusPresenter::new(&bridge).sync_loading(loading_message, loading_detail);
-    preview.clear(&bridge);
+    if nav.uses_crt_layout()
+        || (nav.screen == Screen::Arcade
+            && (active_games_loading || nav.arcade_search.is_active(&nav.arcade_filter.active)))
+    {
+        preview.clear(&bridge);
+    } else if nav.screen == Screen::Arcade {
+        let games = active_games_for_preview
+            .or_else(|| catalog.map(|catalog| active_system_game_view(catalog, nav)))
+            .unwrap_or_else(ArcadeGameView::empty);
+        let _ = request_arcade_preview_window(
+            &bridge,
+            games,
+            nav.arcade.selected,
+            preview,
+            defer_selected_preview,
+            nav.arcade.is_scroll_active(),
+            nav.arcade.is_turbo_active(),
+        );
+    } else {
+        preview.clear(&bridge);
+    }
     sync_setup_bridge(&bridge, pad, setup);
 }
 
@@ -695,7 +719,7 @@ pub(super) fn sync_bridge_launcher_light(
     active_arcade_games: Option<ArcadeGameView<'_>>,
     preview: &mut PreviewState,
     defer_arcade_overlay_bridge: bool,
-    _defer_selected_preview: bool,
+    defer_selected_preview: bool,
     render_w: usize,
 ) {
     models.sync_menu_item_focus(nav.selected);
@@ -852,7 +876,25 @@ pub(super) fn sync_bridge_launcher_light(
     sync_launcher_confirm_bridge(&bridge, nav, lifecycle);
     let status_presenter = LauncherStatusPresenter::new(&bridge);
     status_presenter.sync_loading(loading_message, loading_detail);
-    preview.clear(&bridge);
+    if nav.uses_crt_layout()
+        || (nav.screen == Screen::Arcade
+            && (active_games_loading || nav.arcade_search.is_active(&nav.arcade_filter.active)))
+    {
+        preview.clear(&bridge);
+    } else if nav.screen == Screen::Arcade {
+        let games = active_arcade_games.unwrap_or_else(|| active_system_game_view(catalog, nav));
+        schedule_arcade_preview_window(
+            &bridge,
+            games,
+            nav.arcade.selected,
+            preview,
+            defer_selected_preview,
+            nav.arcade.is_scroll_active(),
+            nav.arcade.is_turbo_active(),
+        );
+    } else {
+        preview.clear(&bridge);
+    }
     status_presenter.sync_setup_visible(setup.is_active());
 }
 

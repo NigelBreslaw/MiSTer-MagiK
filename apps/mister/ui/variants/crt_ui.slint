@@ -1,0 +1,60 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+import { MisterUi } from "../mister_window.slint";
+import { MisterBridge } from "../api.slint";
+import { ControllerPanel } from "../controller_panel.slint";
+import { SetupOverlay } from "crt_setup.slint";
+import { ArcadeListScreen } from "../views/crt/arcade_list.slint";
+import { HomeGrid } from "../views/crt/home.slint";
+import { SettingsScreen } from "../views/crt/settings.slint";
+import { ScreensaverSettingsScreen } from "../views/crt/screensaver_settings.slint";
+import { LicensesScreen } from "../views/crt/licenses.slint";
+import { AboutScreen } from "../views/crt/about.slint";
+import { InfoScreen } from "../views/crt/info.slint";
+import { ComboBoxOverlay } from "../components/combo_box.slint";
+import {
+    BackgroundScanBadge,
+    CatalogScanPopup,
+    ConfirmDialog,
+    LoadingOverlay,
+    MediaProgressPopup,
+    StartupSplash,
+    CompatibilityScreen,
+} from "crt_overlays.slint";
+
+export component CrtLauncherUi inherits Rectangle {
+    background: MisterBridge.screen-mode == 0 ? #0b0d14 : #1a1424;
+
+    if MisterBridge.screen-mode == 0 : HomeGrid { }
+    if MisterBridge.screen-mode == 1 : ControllerPanel { width: 100%; height: 100%; }
+    if MisterBridge.screen-mode == 2 : ArcadeListScreen { }
+    if MisterBridge.screen-mode == 3 : SettingsScreen { }
+    if MisterBridge.screen-mode == 4 : AboutScreen { }
+    if MisterBridge.screen-mode == 5 : LicensesScreen { }
+    if MisterBridge.screen-mode == 6 : InfoScreen { }
+    if MisterBridge.screen-mode == 7 : ScreensaverSettingsScreen { }
+
+    if MisterBridge.catalog-background-scan-visible : BackgroundScanBadge { }
+    if MisterBridge.setup-visible : SetupOverlay {
+        phase: MisterBridge.setup-phase;
+        title: MisterBridge.setup-title;
+        subtitle: MisterBridge.setup-subtitle;
+        list-items: MisterBridge.setup-list;
+        list-selected: MisterBridge.setup-selected;
+        config-labels: MisterBridge.setup-config-labels;
+        config-values: MisterBridge.setup-config-values;
+        setup-name: MisterBridge.setup-name;
+        setup-kind-label: MisterBridge.setup-kind-label;
+    }
+    if !MisterBridge.catalog-scan-visible && MisterBridge.media-pack-progresses.length > 0 : MediaProgressPopup {
+        s: MisterUi.scale;
+    }
+    if MisterBridge.catalog-scan-visible : CatalogScanPopup { s: MisterUi.scale; }
+    if MisterBridge.confirm-visible : ConfirmDialog { }
+    if MisterBridge.display-combo-open : ComboBoxOverlay { }
+    if MisterBridge.loading-message != "" : LoadingOverlay { }
+    if MisterBridge.startup-visible : StartupSplash { }
+    if MisterBridge.compatibility-visible : CompatibilityScreen { }
+}
+

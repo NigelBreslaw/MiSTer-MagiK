@@ -1,0 +1,59 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+import { MisterBridge } from "../../api.slint";
+import { MisterUi } from "../../mister_window.slint";
+import { CrtTheme, CrtHeader, CrtFooter, CrtMenuRow } from "../../components/crt_ui.slint";
+import { ListView } from "std-widgets.slint";
+
+export component LicensesScreen inherits Rectangle {
+    background: CrtTheme.background;
+
+    if !MisterBridge.licenses-expanded : VerticalLayout {
+        padding: MisterUi.grid;
+        spacing: MisterUi.compact-layout ? 0px : MisterUi.grid;
+        CrtHeader { title: "Licenses"; subtitle: "Open source software"; status: ""; }
+        CrtMenuRow { label: "MiSTer MagiK"; detail: ">"; focused: MisterBridge.licenses-selected == 0; }
+        CrtMenuRow { label: "FFmpeg"; detail: ">"; focused: MisterBridge.licenses-selected == 1; }
+        CrtMenuRow { label: "Press Start 2P"; detail: ">"; focused: MisterBridge.licenses-selected == 2; }
+        CrtMenuRow { label: "Slint"; detail: ">"; focused: MisterBridge.licenses-selected == 3; }
+        Rectangle { vertical-stretch: 1; background: transparent; }
+        CrtFooter { left-hint: "A Open   B Back"; right-hint: "HOME Launcher"; }
+    }
+
+    if MisterBridge.licenses-expanded : VerticalLayout {
+        padding: MisterUi.grid;
+        spacing: MisterUi.compact-layout ? 0px : MisterUi.grid;
+        Text {
+            text: MisterBridge.licenses-selected == 0 ? "MiSTer MagiK  v" :
+                  MisterBridge.licenses-selected == 1 ? "FFmpeg  v" :
+                  MisterBridge.licenses-selected == 2 ? "Press Start 2P  v" : "Slint  v";
+            color: CrtTheme.accent;
+            font-size: MisterUi.heading-font;
+            horizontal-alignment: center;
+        }
+        Rectangle {
+            vertical-stretch: 1;
+            background: CrtTheme.panel;
+            border-width: 1px;
+            border-color: CrtTheme.border;
+            ListView {
+                x: 12px;
+                y: 12px;
+                width: parent.width - 24px;
+                height: parent.height - 24px;
+                viewport-y: -MisterBridge.licenses-scroll-y * 1px;
+                for line in MisterBridge.license-lines : Text {
+                    text: line;
+                    color: CrtTheme.text;
+                    font-size: MisterUi.body-font;
+                    height: 10px;
+                    overflow: clip;
+                    vertical-alignment: top;
+                }
+            }
+        }
+        CrtFooter { left-hint: "UP/DOWN Scroll"; right-hint: "A/B Close"; }
+    }
+}
+
