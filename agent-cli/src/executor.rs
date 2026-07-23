@@ -99,14 +99,20 @@ pub fn execute_with_changes(
         }
         let heartbeat = operation_heartbeat(operation);
         let cache = operation_cache_key(plan, operation, &fingerprints)?;
-        if let Some((task_id, fingerprint)) = cache.as_ref() {
-            if evidence.has_cached_operation(task_id, &operation.id, fingerprint)? {
+        if let Some(fingerprint) = cache.as_ref() {
+            if let Some((result, detail)) =
+                evidence.cached_validation(&operation.id, fingerprint)?
+            {
                 evidence.record_reused_command(
                     request_id,
                     &operation.id,
                     &operation.program,
                     &operation.args,
                 )?;
+                if result == "failed" {
+                    machine.apply(Event::Fail)?;
+                    return Err(detail.unwrap_or_else(|| "cached validation failed".into()));
+                }
                 index += 1;
                 continue;
             }
@@ -121,12 +127,22 @@ pub fn execute_with_changes(
             &format!("{command}: failed"),
             reporter,
         ) {
+            if let Some(fingerprint) = cache.as_ref() {
+                if deterministic_failure(&error) {
+                    evidence.cache_validation(
+                        &operation.id,
+                        fingerprint,
+                        "failed",
+                        Some(&error),
+                    )?;
+                }
+            }
             machine.apply(Event::Fail)?;
             return Err(error);
         }
         if operation.risk == crate::model::Risk::ReadOnly {
-            if let Some((task_id, fingerprint)) = cache {
-                evidence.cache_operation(&task_id, &operation.id, &fingerprint)?;
+            if let Some(fingerprint) = cache {
+                evidence.cache_validation(&operation.id, &fingerprint, "passed", None)?;
             }
         }
         index += 1;
@@ -150,8 +166,11 @@ fn run_builtin_batch(
     let mut pending = Vec::new();
     for operation in operations {
         let cache = operation_cache_key(plan, operation, fingerprints)?;
-        if let Some((task_id, fingerprint)) = cache.as_ref() {
-            if evidence.has_cached_operation(task_id, &operation.id, fingerprint)? {
+        if let Some(fingerprint) = cache.as_ref() {
+            if evidence
+                .cached_validation(&operation.id, fingerprint)?
+                .is_some_and(|(result, _)| result == "passed")
+            {
                 evidence.record_reused_command(
                     request_id,
                     &operation.id,
@@ -184,8 +203,8 @@ fn run_builtin_batch(
                 first_error.get_or_insert_with(|| {
                     format!("{command}: failed — {}\nerror: {error}", operation.title)
                 });
-            } else if let Some((task_id, fingerprint)) = cache {
-                evidence.cache_operation(task_id, &operation.id, fingerprint)?;
+            } else if let Some(fingerprint) = cache {
+                evidence.cache_validation(&operation.id, fingerprint, "passed", None)?;
             }
         }
         if let Some(error) = first_error {
@@ -223,16 +242,16 @@ fn operation_cache_key(
     plan: &Plan,
     operation: &Operation,
     fingerprints: &FingerprintContext,
-) -> Result<Option<(String, String)>, String> {
-    let task_id = match &plan.intent {
+) -> Result<Option<String>, String> {
+    match &plan.intent {
         crate::model::Intent::Check {
-            scope: crate::model::Scope::Task(task_id),
+            scope: crate::model::Scope::Task(_),
         }
         | crate::model::Intent::Verify {
-            scope: crate::model::Scope::Task(task_id),
-        } => task_id,
+            scope: crate::model::Scope::Task(_),
+        } => {}
         _ => return Ok(None),
-    };
+    }
     if !is_cacheable(operation) || operation.inputs.is_empty() {
         return Ok(None);
     }
@@ -251,7 +270,21 @@ fn operation_cache_key(
         path.hash(&mut hasher);
         fingerprint.hash(&mut hasher);
     }
-    Ok(Some((task_id.clone(), format!("{:016x}", hasher.finish()))))
+    Ok(Some(format!("{:016x}", hasher.finish())))
+}
+
+fn deterministic_failure(error: &str) -> bool {
+    (error.contains("test_failure") || error.contains("command_failed"))
+        && ![
+            "timed out",
+            "permission",
+            "network",
+            "cancelled",
+            "container",
+            "index lock",
+        ]
+        .iter()
+        .any(|value| error.to_ascii_lowercase().contains(value))
 }
 
 #[derive(Debug)]

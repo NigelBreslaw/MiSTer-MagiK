@@ -75,6 +75,15 @@ CREATE TABLE IF NOT EXISTS operation_cache (
     completed_ms INTEGER NOT NULL,
     PRIMARY KEY (task_id, operation_id, fingerprint)
 );
+CREATE TABLE IF NOT EXISTS validation_results (
+    operation_id TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    result TEXT NOT NULL,
+    detail TEXT,
+    completed_ms INTEGER NOT NULL,
+    expires_ms INTEGER NOT NULL,
+    PRIMARY KEY (operation_id, fingerprint)
+);
 CREATE TABLE IF NOT EXISTS cohorts (
     id INTEGER PRIMARY KEY,
     created_ms INTEGER NOT NULL,
@@ -370,6 +379,12 @@ impl Evidence {
                 [],
             )
             .map_err(|error| format!("cannot prune operation cache: {error}"))?;
+        connection
+            .execute(
+                "DELETE FROM validation_results WHERE expires_ms < ?1 OR rowid NOT IN (SELECT rowid FROM validation_results ORDER BY completed_ms DESC LIMIT 10000)",
+                [now_ms()],
+            )
+            .map_err(|error| format!("cannot prune validation cache: {error}"))?;
         Ok(Self {
             connection,
             root: root.to_path_buf(),
@@ -960,6 +975,43 @@ impl Evidence {
                 |row| row.get(0),
             )
             .map_err(|error| error.to_string())
+    }
+
+    pub fn cached_validation(
+        &self,
+        operation_id: &str,
+        fingerprint: &str,
+    ) -> Result<Option<(String, Option<String>)>, String> {
+        self.connection
+            .query_row(
+                "SELECT result, detail FROM validation_results WHERE operation_id=?1 AND fingerprint=?2 AND expires_ms>=?3",
+                params![operation_id, fingerprint, now_ms()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn cache_validation(
+        &self,
+        operation_id: &str,
+        fingerprint: &str,
+        result: &str,
+        detail: Option<&str>,
+    ) -> Result<(), String> {
+        let lifetime_ms = if result == "passed" {
+            30 * 24 * 60 * 60 * 1_000_i64
+        } else {
+            10 * 60 * 1_000_i64
+        };
+        let completed = now_ms();
+        self.connection
+            .execute(
+                "INSERT OR REPLACE INTO validation_results (operation_id, fingerprint, result, detail, completed_ms, expires_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![operation_id, fingerprint, result, detail, completed, completed.saturating_add(lifetime_ms)],
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(())
     }
 
     pub fn cache_operation(
