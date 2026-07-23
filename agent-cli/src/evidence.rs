@@ -84,6 +84,14 @@ CREATE TABLE IF NOT EXISTS validation_results (
     expires_ms INTEGER NOT NULL,
     PRIMARY KEY (operation_id, fingerprint)
 );
+CREATE TABLE IF NOT EXISTS operation_leases (
+    operation_id TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    owner_request_id TEXT NOT NULL,
+    acquired_ms INTEGER NOT NULL,
+    expires_ms INTEGER NOT NULL,
+    PRIMARY KEY (operation_id, fingerprint)
+);
 CREATE TABLE IF NOT EXISTS cohorts (
     id INTEGER PRIMARY KEY,
     created_ms INTEGER NOT NULL,
@@ -309,6 +317,7 @@ impl Evidence {
             .map_err(|error| format!("cannot open audit database: {error}"))?;
         connection
             .pragma_update(None, "journal_mode", "WAL")
+            .and_then(|()| connection.busy_timeout(std::time::Duration::from_secs(5)))
             .and_then(|()| connection.pragma_update(None, "foreign_keys", true))
             .and_then(|()| connection.execute_batch(SCHEMA))
             .map_err(|error| format!("cannot migrate audit database: {error}"))?;
@@ -1014,6 +1023,63 @@ impl Evidence {
         Ok(())
     }
 
+    pub fn claim_validation(
+        &self,
+        operation_id: &str,
+        fingerprint: &str,
+        request_id: &str,
+    ) -> Result<bool, String> {
+        let now = now_ms();
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|error| error.to_string())?;
+        transaction
+            .execute(
+                "DELETE FROM operation_leases WHERE operation_id=?1 AND fingerprint=?2 AND expires_ms<?3",
+                params![operation_id, fingerprint, now],
+            )
+            .map_err(|error| error.to_string())?;
+        let inserted = transaction
+            .execute(
+                "INSERT OR IGNORE INTO operation_leases (operation_id, fingerprint, owner_request_id, acquired_ms, expires_ms) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![operation_id, fingerprint, request_id, now, now.saturating_add(31 * 60 * 1_000)],
+            )
+            .map_err(|error| error.to_string())?;
+        transaction.commit().map_err(|error| error.to_string())?;
+        Ok(inserted == 1)
+    }
+
+    pub fn validation_owner(
+        &self,
+        operation_id: &str,
+        fingerprint: &str,
+    ) -> Result<Option<String>, String> {
+        self.connection
+            .query_row(
+                "SELECT owner_request_id FROM operation_leases WHERE operation_id=?1 AND fingerprint=?2",
+                params![operation_id, fingerprint],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn release_validation(
+        &self,
+        operation_id: &str,
+        fingerprint: &str,
+        request_id: &str,
+    ) -> Result<(), String> {
+        self.connection
+            .execute(
+                "DELETE FROM operation_leases WHERE operation_id=?1 AND fingerprint=?2 AND owner_request_id=?3",
+                params![operation_id, fingerprint, request_id],
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
     pub fn cache_operation(
         &self,
         task_id: &str,
@@ -1077,6 +1143,22 @@ impl Evidence {
         self.connection.execute(
             "INSERT INTO commands (request_id, operation_id, program, args_json, started_ms, completed_ms, duration_ms, exit_code, status) VALUES (?1, ?2, ?3, ?4, ?5, ?5, 0, 0, 'reused')",
             params![request_id, operation_id, program, args, now_ms()],
+        ).map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    pub fn record_joined_command(
+        &self,
+        request_id: &str,
+        owner_request_id: &str,
+        operation_id: &str,
+        program: &str,
+        args: &[String],
+    ) -> Result<(), String> {
+        let args = serde_json::to_string(args).map_err(|error| error.to_string())?;
+        self.connection.execute(
+            "INSERT INTO commands (request_id, operation_id, program, args_json, started_ms, completed_ms, duration_ms, exit_code, status, cache_decision, owner_request_id) VALUES (?1, ?2, ?3, ?4, ?5, ?5, 0, 0, 'joined', 'joined_in_flight', ?6)",
+            params![request_id, operation_id, program, args, now_ms(), owner_request_id],
         ).map_err(|error| error.to_string())?;
         Ok(())
     }

@@ -13,6 +13,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 pub fn execute(
     evidence: &Evidence,
@@ -117,6 +118,30 @@ pub fn execute_with_changes(
                 continue;
             }
         }
+        if let Some(fingerprint) = cache.as_ref() {
+            if !evidence.claim_validation(&operation.id, fingerprint, request_id)? {
+                let joined_owner = evidence.validation_owner(&operation.id, fingerprint)?;
+                let cached =
+                    wait_for_validation(evidence, reporter, command, operation, fingerprint)?;
+                if let Some(owner) = joined_owner.as_deref() {
+                    evidence.record_joined_command(
+                        request_id,
+                        owner,
+                        &operation.id,
+                        &operation.program,
+                        &operation.args,
+                    )?;
+                }
+                if let Some((result, detail)) = cached {
+                    if result == "failed" {
+                        machine.apply(Event::Fail)?;
+                        return Err(detail.unwrap_or_else(|| "joined validation failed".into()));
+                    }
+                    index += 1;
+                    continue;
+                }
+            }
+        }
         if let Err(error) = run_operation(
             evidence,
             request_id,
@@ -136,6 +161,7 @@ pub fn execute_with_changes(
                         Some(&error),
                     )?;
                 }
+                evidence.release_validation(&operation.id, fingerprint, request_id)?;
             }
             machine.apply(Event::Fail)?;
             return Err(error);
@@ -143,6 +169,7 @@ pub fn execute_with_changes(
         if operation.risk == crate::model::Risk::ReadOnly {
             if let Some(fingerprint) = cache {
                 evidence.cache_validation(&operation.id, &fingerprint, "passed", None)?;
+                evidence.release_validation(&operation.id, &fingerprint, request_id)?;
             }
         }
         index += 1;
@@ -150,6 +177,42 @@ pub fn execute_with_changes(
     machine.apply(Event::Finish)?;
     reporter.emit(EventKind::Completed, command, "passed", Some(100))?;
     Ok(Outcome::Passed)
+}
+
+fn wait_for_validation(
+    evidence: &Evidence,
+    reporter: &mut Reporter<'_>,
+    phase: &str,
+    operation: &Operation,
+    fingerprint: &str,
+) -> Result<Option<(String, Option<String>)>, String> {
+    let started = Instant::now();
+    let mut next_progress = Duration::from_secs(10);
+    while started.elapsed() < Duration::from_secs(31 * 60) {
+        if let Some(result) = evidence.cached_validation(&operation.id, fingerprint)? {
+            return Ok(Some(result));
+        }
+        if evidence
+            .validation_owner(&operation.id, fingerprint)?
+            .is_none()
+        {
+            return Ok(None);
+        }
+        if started.elapsed() >= next_progress {
+            reporter.emit(
+                EventKind::Progress,
+                phase,
+                &format!("Waiting for shared {}", operation.title),
+                None,
+            )?;
+            next_progress += Duration::from_secs(10);
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    Err(format!(
+        "validation_wait_timeout: shared {} exceeded its deadline",
+        operation.title
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
