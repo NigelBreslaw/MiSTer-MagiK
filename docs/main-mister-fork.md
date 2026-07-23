@@ -9,8 +9,9 @@ slint/
   Main_MiSTer/         # real GitHub fork of MiSTer-devel/Main_MiSTer
 ```
 
-`scripts/agent deliver` infers platform impact and uses
-`../Main_MiSTer`. Set `MISTER_MAIN_DIR` when the fork lives elsewhere.
+`scripts/agent deliver` infers platform impact. Runtime-only app changes retain
+the installed qualified platform. A platform delivery uses `../Main_MiSTer`;
+set `MISTER_MAIN_DIR` when the fork lives elsewhere.
 
 The fork is not a submodule. It has its own history, CI, build wrapper, and
 patch ledger.
@@ -142,11 +143,16 @@ Deploy from this app repo:
 scripts/agent deliver
 ```
 
-Development delivery always builds and checks the clean local `mister-magik`
-branch. It builds the app and kernel locally, reuses a verified FPGA artifact,
-regenerates the complete development manifest, and uses the normal snapshot,
-activation, reboot, smoke, and rollback transaction. Neither local commit must
-be pushed, and Main is never copied directly onto the device.
+Runtime-only development delivery builds and transactionally replaces the app,
+then verifies it against the installed qualified Main, kernel module, and FPGA
+latch without rebuilding or overwriting those platform components.
+
+When Main, kernel, or FPGA source changes, development delivery builds and
+checks the clean local `mister-magik` branch, builds the app and kernel locally,
+reuses a verified FPGA artifact, regenerates the complete development manifest,
+and uses the normal snapshot, activation, reboot, smoke, and rollback
+transaction. Neither local commit must be pushed, and Main is never copied
+directly onto the device.
 
 Use a non-default fork checkout with the same option:
 

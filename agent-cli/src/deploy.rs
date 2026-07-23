@@ -168,11 +168,10 @@ fn platform_components(paths: &[PathBuf]) -> Vec<&'static str> {
     {
         components.push("fpga");
     }
-    if paths.iter().any(|path| {
-        path.starts_with("mister/platform/runtime/main")
-            || path.starts_with("docs/main-mister-fork.md")
-            || path.starts_with(".github/workflows/platform-bundle.yml")
-    }) {
+    if paths
+        .iter()
+        .any(|path| path.starts_with("mister/platform/runtime/main"))
+    {
         components.push("main");
     }
     components
@@ -266,10 +265,21 @@ mod tests {
         let paths = vec![
             PathBuf::from("mister/platform/fpga/menu-vblank-latch/menu.sv"),
             PathBuf::from("mister/platform/kernel/scanout-slots/scanout.c"),
-            PathBuf::from(".github/workflows/platform-bundle.yml"),
+            PathBuf::from("mister/platform/runtime/main/contract.rs"),
         ];
         assert_eq!(platform_components(&paths), vec!["kernel", "fpga", "main"]);
         assert_eq!(ui_scope(&paths), UiScope::All);
+    }
+
+    #[test]
+    fn documentation_and_workflow_changes_do_not_rebuild_platform_components() {
+        assert_eq!(
+            platform_components(&[
+                PathBuf::from("docs/main-mister-fork.md"),
+                PathBuf::from(".github/workflows/platform-bundle.yml"),
+            ]),
+            Vec::<&str>::new()
+        );
     }
 
     #[test]
