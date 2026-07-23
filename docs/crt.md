@@ -36,13 +36,14 @@ rectangle places the framebuffer inside Menu's scan space:
 | `crt-240p60` | 320×240 | 640×240 | `(67,706,12,251)` |
 | `crt-288p50` | 384×288 | 640×288 | `(67,706,32,286)` |
 | `crt-480p60` | 640×480 | 640×480 | `(45,684,31,510)` |
-| `crt-576p50` | 620×480 | 640×576 | `(45,684,40,615)` |
+| `crt-576p50` | 620×480 | 640×576 | `(45,664,40,615)` |
 
 The 288p rectangle is the attended USB Video calibration result. The 576p
-destination remains full width: narrowing that destination crops source
-columns because Menu disables framebuffer downscaling. Its 620-pixel
-framebuffer instead lets Slint reflow the complete launcher slightly narrower,
-then Menu expands that source across the unchanged 640-pixel destination.
+launcher uses matching 620-pixel framebuffer and destination widths. Earlier
+trials narrowed only the destination while retaining a 640-pixel source, which
+cropped source columns because Menu disables framebuffer downscaling. Matching
+the source and destination widths instead preserves the complete Slint layout
+while reducing its analogue width.
 
 An attended trial moving the 576p destination bottom from line 615 through line
 607 did not move or remove the unstable coloured pixels observed on the final
