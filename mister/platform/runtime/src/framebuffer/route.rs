@@ -30,7 +30,7 @@ pub struct LauncherFramebufferRoute {
 impl LauncherFramebufferRoute {
     pub const fn for_scan(scan_w: u16, scan_h: u16, set_vga_fb: bool) -> Self {
         Self {
-            mode: ui_fpga_scaled_mode(scan_w, scan_h),
+            mode: ui_fpga_scaled_mode(scan_w, scan_h, set_vga_fb),
             set_vga_fb,
         }
     }
@@ -44,10 +44,15 @@ impl LauncherFramebufferRoute {
     }
 }
 
-pub const fn ui_fpga_scaled_mode(scan_w: u16, scan_h: u16) -> FramebufferRouteMode {
-    let (hbp, vbp) = if scan_w == 640 && scan_h == 480 {
-        // Diagnostic: standard VGA 640x480 porch values. Direct-video routing
-        // subtracts the FPGA's fixed 3/2-pixel border from these values.
+pub const fn ui_fpga_scaled_mode(
+    scan_w: u16,
+    scan_h: u16,
+    direct_video: bool,
+) -> FramebufferRouteMode {
+    let (hbp, vbp) = if direct_video && scan_w == 640 && scan_h == 480 {
+        // The 31 kHz NTSC menu route uses standard VGA 640x480 timing.
+        // Direct-video routing subtracts the FPGA's fixed 3/2-pixel border,
+        // producing the required 45/31-pixel framebuffer origin.
         (48, 33)
     } else {
         (3, 2)
@@ -88,5 +93,13 @@ mod tests {
 
         assert_eq!(route.mode().hbp, 48);
         assert_eq!(route.mode().vbp, 33);
+    }
+
+    #[test]
+    fn hdmi_480p_does_not_use_direct_video_back_porches() {
+        let route = LauncherFramebufferRoute::for_scan(640, 480, false);
+
+        assert_eq!(route.mode().hbp, 3);
+        assert_eq!(route.mode().vbp, 2);
     }
 }
