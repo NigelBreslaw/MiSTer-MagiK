@@ -305,10 +305,10 @@ impl Default for FramebufferStreamState {
 pub fn read_token() -> (String, TokenSource) {
     let token = env::var("MISTER_AGENT_TOKEN").ok();
     let token_file = env::var("MISTER_AGENT_TOKEN_FILE").ok();
-    read_token_from(token.as_deref(), token_file.as_deref().map(Path::new))
+    read_token_from(token.as_deref(), token_file.as_deref())
 }
 
-fn read_token_from(token: Option<&str>, token_file: Option<&Path>) -> (String, TokenSource) {
+fn read_token_from(token: Option<&str>, token_file: Option<&str>) -> (String, TokenSource) {
     if let Some(token) = token {
         let token = token.trim().to_string();
         if !token.is_empty() {
@@ -323,9 +323,9 @@ fn read_token_from(token: Option<&str>, token_file: Option<&Path>) -> (String, T
     }
 }
 
-fn local_token_path_from(configured: Option<&Path>) -> PathBuf {
-    if let Some(path) = configured.filter(|path| !path.as_os_str().is_empty()) {
-        return path.to_path_buf();
+fn local_token_path_from(configured: Option<&str>) -> PathBuf {
+    if let Some(path) = configured.map(str::trim).filter(|path| !path.is_empty()) {
+        return PathBuf::from(path);
     }
 
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -2433,19 +2433,35 @@ tiny"#
     fn read_token_prefers_env_then_configured_file_then_missing() {
         let token_path = env::temp_dir().join(format!("mister-agent-token-{}", std::process::id()));
         fs::write(&token_path, " file-token \n").expect("write token fixture");
+        let token_path_text = token_path.to_str().expect("UTF-8 token fixture path");
 
-        let (token, source) = read_token_from(None, Some(&token_path));
+        let (token, source) = read_token_from(None, Some(token_path_text));
         assert_eq!(token, "file-token");
         assert_eq!(source, TokenSource::LocalFile(token_path.clone()));
 
-        let (token, source) = read_token_from(Some(" env-token "), Some(&token_path));
+        let (token, source) = read_token_from(Some(" env-token "), Some(token_path_text));
         assert_eq!(token, "env-token");
         assert_eq!(source, TokenSource::Env);
 
         let missing = token_path.with_extension("missing");
-        let (token, source) = read_token_from(Some("   "), Some(&missing));
+        let (token, source) = read_token_from(
+            Some("   "),
+            Some(missing.to_str().expect("UTF-8 missing token path")),
+        );
         assert_eq!(token, "");
         assert!(matches!(source, TokenSource::Missing(_)));
+
+        let padded = format!("  {token_path_text}  ");
+        let (token, source) = read_token_from(None, Some(&padded));
+        assert_eq!(token, "file-token");
+        assert_eq!(source, TokenSource::LocalFile(token_path.clone()));
+
+        let (_, source) = read_token_from(None, Some("   "));
+        let source_path = match source {
+            TokenSource::LocalFile(path) | TokenSource::Missing(path) => path,
+            TokenSource::Env => panic!("whitespace-only file override must use the default path"),
+        };
+        assert_eq!(source_path, local_token_path_from(None));
 
         let _ = fs::remove_file(token_path);
     }
