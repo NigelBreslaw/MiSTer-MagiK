@@ -21,4 +21,6 @@ pub mod scanout_slots;
 pub mod stream;
 #[cfg(feature = "ui")]
 pub mod target;
+#[cfg(feature = "ui")]
+pub mod vertical_scale;
 pub mod vsync;
