@@ -123,27 +123,12 @@ fn resolve_task_intent(
         Intent::TaskStatus { task_id } => Intent::TaskStatus {
             task_id: resolve(task_id)?,
         },
+        Intent::TaskSupersede { task_id } => Intent::TaskSupersede { task_id },
         Intent::Commit { task_id, message } => Intent::Commit {
             task_id: resolve(task_id)?,
             message,
         },
-        Intent::Deliver {
-            task_id,
-            local_main,
-        } => Intent::Deliver {
-            task_id: if task_id.is_empty() {
-                evidence
-                    .latest_committed_task(repository)?
-                    .map(|(task_id, _)| task_id)
-                    .ok_or("nothing_to_deliver: commit the verified task first")?
-            } else {
-                evidence
-                    .latest_committed_task_for_session(repository, &task_id)?
-                    .map(|(task_id, _)| task_id)
-                    .ok_or("nothing_to_deliver: commit the verified task first")?
-            },
-            local_main,
-        },
+        Intent::Deliver => Intent::Deliver,
         Intent::Benchmark { task_id } => Intent::Benchmark {
             task_id: if task_id.is_empty() {
                 evidence
@@ -203,6 +188,12 @@ fn dispatch(
                 );
             }
         }
+        Intent::TaskSupersede { task_id } => {
+            evidence.supersede_task(repository, task_id)?;
+            if output == OutputFormat::Human {
+                println!("task: superseded ({task_id})");
+            }
+        }
         Intent::Commit { task_id, message } => {
             let (outcome, sha, subject, paths) = agent_cli::commit::run(
                 evidence, request_id, repository, task_id, message, reporter,
@@ -221,12 +212,7 @@ fn dispatch(
             }
             return Ok(outcome);
         }
-        Intent::Deliver {
-            task_id,
-            local_main,
-        } => {
-            return deliver(evidence, repository, task_id, *local_main, reporter);
-        }
+        Intent::Deliver => return deliver(evidence, repository, reporter),
         Intent::Benchmark { task_id } => {
             let committed = evidence
                 .latest_committed_scope(repository)?
@@ -731,15 +717,12 @@ fn write_github_output(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn deliver(
     evidence: &Evidence,
     repository: &std::path::Path,
-    task_id: &str,
-    local_main: bool,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<Outcome> {
-    let delivery = deliver_inner(evidence, repository, task_id, local_main, reporter);
+    let delivery = deliver_inner(evidence, repository, reporter);
     let cleanup = agent_cli::delivery::cleanup_workspace(repository);
     match (delivery, cleanup) {
         (Ok(outcome), Ok(())) => Ok(outcome),
@@ -757,231 +740,36 @@ fn deliver(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn deliver_inner(
-    evidence: &Evidence,
+    _evidence: &Evidence,
     repository: &std::path::Path,
-    task_id: &str,
-    local_main: bool,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<Outcome> {
-    use agent_cli::components::{self, DeploymentImpact};
-    use agent_cli::evidence::{DeliveryRecord, DeliveryState};
-
-    if let Some(mut pending) = evidence.delivery(task_id)? {
-        if !pending.state.can_resume() {
-            return Err(format!(
-                "delivery_state_invalid: cannot resume delivery in {}",
-                pending.state.as_str()
-            )
-            .into());
-        }
-        let mut sha = pending
-            .commit_sha
-            .clone()
-            .ok_or("delivery_state_invalid: pending delivery has no commit")?;
-        let current_head = agent_cli::task::current_head(repository)?;
-        let branch = agent_cli::git::value(repository, &["branch", "--show-current"])?;
-        if branch != "main" {
-            reporter.emit(
-                EventKind::Warning,
-                "external",
-                "publish or merge this exact commit to main, then rerun deliver",
-                None,
-            )?;
-            return Ok(Outcome::ExternalRequired);
-        }
-        let paths = if current_head == sha {
-            evidence
-                .latest_committed_scope(repository)?
-                .filter(|committed| {
-                    committed.task_id == task_id && committed.commit_sha == current_head
-                })
-                .ok_or("external_pending: current HEAD was not committed by this task")?
-                .paths
-        } else {
-            let latest = evidence
-                .latest_committed_task(repository)?
-                .filter(|(recorded, committed)| recorded == task_id && committed == &current_head)
-                .ok_or("external_pending: the newer HEAD was not committed by this task")?;
-            debug_assert_eq!(latest.0, task_id);
-            if !agent_cli::git::succeeds(
-                repository,
-                &["merge-base", "--is-ancestor", &sha, &current_head],
-            )? {
-                return Err(
-                    "external_pending: the recorded candidate is not an ancestor of HEAD".into(),
-                );
-            }
-            let paths = agent_cli::git::changed_paths_including(repository, &sha, &current_head)?;
-            sha = current_head;
-            pending.commit_sha = Some(sha.clone());
-            pending.source_tree = agent_cli::git::value(repository, &["rev-parse", "HEAD^{tree}"])?;
-            pending.detail = Some("superseded by a newer verified task commit".into());
-            evidence.save_delivery(&pending)?;
-            paths
-        };
-        let mut deployment = agent_cli::deploy::plan(repository, paths)?;
-        deployment.kind = recorded_delivery_kind(deployment.kind, pending.impact);
-        if local_main {
-            if pending.impact == DeploymentImpact::Platform {
-                return Err("local_main_conflict: --local-main cannot bypass app-repository platform changes".into());
-            }
-            deployment.kind = agent_cli::deploy::DeploymentKind::Platform;
-        }
-        if pending.impact == DeploymentImpact::Platform {
-            let candidate = agent_cli::platform_ci::resolve_repository(repository, |progress| {
-                reporter.emit(EventKind::Progress, "platform-ci", progress, None)
-            })?;
-            evidence.attest_delivery(
-                task_id,
-                pending
-                    .requirement_id
-                    .as_deref()
-                    .unwrap_or("github-actions.rbf-build"),
-                "platform-bundle.yml",
-                "main",
-                &sha,
-                &serde_json::to_string(&candidate).map_err(|error| error.to_string())?,
-            )?;
-            pending.state = DeliveryState::ExternalVerified;
-            evidence.save_delivery(&pending)?;
-            deployment.platform_candidate = Some(candidate);
-        }
-        if deployment.kind == agent_cli::deploy::DeploymentKind::Platform
-            && deployment.platform_candidate.is_none()
-        {
-            deployment.platform_candidate = Some(
-                agent_cli::platform_ci::resolve_published_repository(repository, |progress| {
-                    reporter.emit(EventKind::Progress, "platform", progress, None)
-                })?,
-            );
-        }
-        if let Err(error) = agent_cli::delivery::execute(
-            repository,
-            &deployment,
-            &sha,
-            local_main
-                .then(|| local_main_directory(repository))
-                .as_deref(),
-            reporter,
-        ) {
-            pending.state = if error.is_recovery_required() {
-                DeliveryState::RecoveryRequired
-            } else {
-                DeliveryState::Failed
-            };
-            pending.detail = Some(error.to_string());
-            evidence.save_delivery(&pending)?;
-            return Err(error);
-        }
-        pending.state = DeliveryState::Complete;
-        evidence.save_delivery(&pending)?;
-        return Ok(Outcome::Passed);
-    }
-
     let dirty = agent_cli::git::value(repository, &["status", "--porcelain"])?;
     if !dirty.is_empty() {
         return Err("dirty_worktree: commit or discard changes before delivery".into());
     }
-    let committed = evidence
-        .latest_committed_scope(repository)?
-        .filter(|committed| committed.task_id == task_id)
-        .ok_or("unverified_commit: use `scripts/agent commit -m MESSAGE` before delivery")?;
-    if agent_cli::task::current_head(repository)? != committed.commit_sha {
-        return Err("moved_head: check out the exact commit created for this task".into());
-    }
-    let sha = committed.commit_sha;
-    let paths = committed.paths;
-    let impact = paths
-        .iter()
-        .filter_map(|path| components::classify(path))
-        .map(components::Component::deployment_impact)
-        .max()
-        .unwrap_or(DeploymentImpact::None);
-    if local_main && impact == DeploymentImpact::Platform {
-        return Err(
-            "local_main_conflict: --local-main cannot bypass app-repository platform changes"
-                .into(),
-        );
-    }
-    let external = impact == DeploymentImpact::Platform;
-    let mut delivery = DeliveryRecord {
-        task_id: task_id.into(),
-        worktree: repository.to_path_buf(),
-        source_tree: agent_cli::git::value(repository, &["rev-parse", "HEAD^{tree}"])?,
-        commit_sha: Some(sha.clone()),
-        impact,
-        state: if external {
-            DeliveryState::ExternalPending
-        } else {
-            DeliveryState::Committed
-        },
-        requirement_id: external.then(|| "github-actions.rbf-build".into()),
-        detail: None,
-    };
-    evidence.save_delivery(&delivery)?;
-    if external {
-        reporter.emit(
-            EventKind::Warning,
-            "external",
-            "publish or merge this exact commit to main, then rerun deliver",
-            None,
-        )?;
-        return Ok(Outcome::ExternalRequired);
-    }
-    if impact == DeploymentImpact::Runtime || local_main {
-        let mut deployment = agent_cli::deploy::plan(repository, paths)?;
-        if local_main {
-            deployment.kind = agent_cli::deploy::DeploymentKind::Platform;
-        }
-        if deployment.kind == agent_cli::deploy::DeploymentKind::Platform {
-            deployment.platform_candidate = Some(
-                agent_cli::platform_ci::resolve_published_repository(repository, |progress| {
-                    reporter.emit(EventKind::Progress, "platform", progress, None)
-                })?,
-            );
-        }
-        if let Err(error) = agent_cli::delivery::execute(
-            repository,
-            &deployment,
-            &sha,
-            local_main
-                .then(|| local_main_directory(repository))
-                .as_deref(),
-            reporter,
-        ) {
-            delivery.state = if error.is_recovery_required() {
-                DeliveryState::RecoveryRequired
-            } else {
-                DeliveryState::Failed
-            };
-            delivery.detail = Some(error.to_string());
-            evidence.save_delivery(&delivery)?;
-            return Err(error);
-        }
-    }
-    delivery.state = DeliveryState::Complete;
-    evidence.save_delivery(&delivery)?;
-    Ok(Outcome::Passed)
+    let sha = agent_cli::task::current_head(repository)?;
+    let paths = agent_cli::deploy::deployment_paths(repository, Vec::new())?;
+    let mut deployment = agent_cli::deploy::plan(repository, paths)?;
+    deployment.kind = agent_cli::deploy::DeploymentKind::Platform;
+    deployment.platform_candidate = Some(agent_cli::platform_ci::resolve_published_repository(
+        repository,
+        |progress| reporter.emit(EventKind::Progress, "platform", progress, None),
+    )?);
+    agent_cli::delivery::execute(
+        repository,
+        &deployment,
+        &sha,
+        Some(&local_main_directory(repository)),
+        reporter,
+    )
 }
 
 fn local_main_directory(repository: &Path) -> std::path::PathBuf {
     std::env::var_os("MISTER_MAIN_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| repository.join("../Main_MiSTer"))
-}
-
-fn recorded_delivery_kind(
-    inferred: agent_cli::deploy::DeploymentKind,
-    recorded_impact: agent_cli::components::DeploymentImpact,
-) -> agent_cli::deploy::DeploymentKind {
-    match recorded_impact {
-        agent_cli::components::DeploymentImpact::Platform => {
-            agent_cli::deploy::DeploymentKind::Platform
-        }
-        _ => inferred,
-    }
 }
 
 fn fatal(message: &str) -> ! {
@@ -1121,19 +909,8 @@ mod tests {
             }
         );
         assert_eq!(
-            resolve_task_intent(
-                &evidence,
-                worktree,
-                Intent::Deliver {
-                    task_id: "thread-one".into(),
-                    local_main: false,
-                }
-            )
-            .unwrap(),
-            Intent::Deliver {
-                task_id: first,
-                local_main: false,
-            }
+            resolve_task_intent(&evidence, worktree, Intent::Deliver).unwrap(),
+            Intent::Deliver
         );
         fs::remove_dir_all(root).unwrap();
     }
@@ -1146,33 +923,6 @@ mod tests {
         assert!(DeliveryState::RecoveryRequired.can_resume());
         assert!(DeliveryState::Complete.can_resume());
         assert!(DeliveryState::Failed.can_resume());
-    }
-
-    #[test]
-    fn resumed_delivery_preserves_platform_impact_and_inferred_runtime_shape() {
-        use agent_cli::deploy::DeploymentKind;
-
-        assert_eq!(
-            recorded_delivery_kind(
-                DeploymentKind::Runtime,
-                agent_cli::components::DeploymentImpact::Platform,
-            ),
-            DeploymentKind::Platform
-        );
-        assert_eq!(
-            recorded_delivery_kind(
-                DeploymentKind::Platform,
-                agent_cli::components::DeploymentImpact::Runtime,
-            ),
-            DeploymentKind::Platform
-        );
-        assert_eq!(
-            recorded_delivery_kind(
-                DeploymentKind::Platform,
-                agent_cli::components::DeploymentImpact::None,
-            ),
-            DeploymentKind::Platform
-        );
     }
 
     #[test]

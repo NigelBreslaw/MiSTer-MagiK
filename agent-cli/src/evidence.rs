@@ -108,6 +108,14 @@ CREATE TABLE IF NOT EXISTS delivery_attestations (
 PRAGMA user_version = 8;
 "#;
 
+fn baseline_head(value: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(value)
+        .ok()?
+        .get("head")?
+        .as_str()
+        .map(str::to_owned)
+}
+
 #[derive(Debug)]
 pub struct Evidence {
     connection: Connection,
@@ -587,6 +595,26 @@ impl Evidence {
         }
     }
 
+    pub fn supersede_task(&self, worktree: &Path, task_id: &str) -> Result<(), String> {
+        let changed = self
+            .connection
+            .execute(
+                "UPDATE tasks SET closed_ms=?3 WHERE task_id=?1 AND worktree=?2 AND closed_ms IS NULL",
+                params![task_id, worktree.display().to_string(), now_ms()],
+            )
+            .map_err(|error| error.to_string())?;
+        if changed == 1 {
+            self.connection
+                .execute("DELETE FROM operation_cache WHERE task_id=?1", [task_id])
+                .map_err(|error| error.to_string())?;
+            Ok(())
+        } else {
+            Err(format!(
+                "task_supersede_missing: no active task lifecycle exists for {task_id}"
+            ))
+        }
+    }
+
     pub fn latest_committed_task(
         &self,
         worktree: &Path,
@@ -652,24 +680,55 @@ impl Evidence {
     }
 
     pub fn claim_task_paths(&self, task_id: &str, paths: &[PathBuf]) -> Result<(), String> {
+        let (worktree, current_baseline): (String, String) = self
+            .connection
+            .query_row(
+                "SELECT worktree, baseline_json FROM tasks WHERE task_id=?1",
+                [task_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(|error| format!("cannot load active task identity: {error}"))?;
+        let current_head = baseline_head(&current_baseline);
         let transaction = self
             .connection
             .unchecked_transaction()
             .map_err(|error| error.to_string())?;
         for path in paths {
             let path = path.display().to_string();
-            let conflict: Option<String> = transaction
+            let conflict: Option<(String, String)> = transaction
                 .query_row(
-                    "SELECT c.task_id FROM task_claims c JOIN tasks t ON t.task_id=c.task_id WHERE c.path=?1 AND c.task_id<>?2 AND t.closed_ms IS NULL LIMIT 1",
+                    "SELECT c.task_id, t.baseline_json FROM task_claims c JOIN tasks t ON t.task_id=c.task_id WHERE c.path=?1 AND c.task_id<>?2 AND t.closed_ms IS NULL LIMIT 1",
                     params![path, task_id],
-                    |row| row.get(0),
+                    |row| Ok((row.get(0)?, row.get(1)?)),
                 )
                 .optional()
                 .map_err(|error| error.to_string())?;
-            if let Some(other) = conflict {
-                return Err(format!(
-                    "commit_scope_ambiguous: path {path} is already claimed by active task {other}"
-                ));
+            if let Some((other, other_baseline)) = conflict {
+                let other_head = baseline_head(&other_baseline);
+                let superseded = current_head
+                    .as_deref()
+                    .zip(other_head.as_deref())
+                    .is_some_and(|(current, other)| {
+                        current != other
+                            && Command::new("git")
+                                .args(["merge-base", "--is-ancestor", other, current])
+                                .current_dir(&worktree)
+                                .status()
+                                .map(|status| status.success())
+                                .unwrap_or(false)
+                    });
+                if superseded {
+                    transaction
+                        .execute(
+                            "UPDATE tasks SET closed_ms=?2 WHERE task_id=?1 AND closed_ms IS NULL",
+                            params![other, now_ms()],
+                        )
+                        .map_err(|error| error.to_string())?;
+                } else {
+                    return Err(format!(
+                        "commit_scope_ambiguous: path {path} is already claimed by active task {other}"
+                    ));
+                }
             }
             transaction
                 .execute(
@@ -1429,6 +1488,25 @@ mod tests {
             evidence.latest_committed_task(worktree).unwrap(),
             Some(("task-committed".into(), "abc123".into()))
         );
+    }
+
+    #[test]
+    fn superseding_a_task_closes_it_without_fabricating_a_commit() {
+        let root = temporary_root("task-supersede");
+        let evidence = Evidence::open_at(&root).unwrap();
+        let worktree = Path::new("/tmp/task-supersede-worktree");
+        evidence
+            .save_task_baseline("stale-task", worktree, &(), false)
+            .unwrap();
+        evidence.supersede_task(worktree, "stale-task").unwrap();
+        assert_eq!(
+            evidence
+                .active_task_id_for_session(worktree, "stale-task")
+                .unwrap(),
+            None
+        );
+        assert_eq!(evidence.latest_committed_task(worktree).unwrap(), None);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

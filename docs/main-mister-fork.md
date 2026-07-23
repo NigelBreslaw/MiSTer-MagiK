@@ -142,26 +142,17 @@ Deploy from this app repo:
 scripts/agent deliver
 ```
 
-When GitHub cannot publish a new platform candidate, a committed and pushed
-Main-only change can be delivered transactionally from the local fork:
-
-```bash
-scripts/agent deliver --local-main
-```
-
-This development-only escape hatch builds and checks the clean
-`mister-magik` branch, reuses the latest published candidate's unchanged
-FPGA and kernel artifacts, substitutes the locally built Main, regenerates the
-complete development manifest, and uses the normal snapshot, activation,
-reboot, smoke, and rollback transaction. It does not publish a platform release
-and never copies Main directly onto the device. App-repository platform changes
-remain blocked until their exact candidate is published.
+Development delivery always builds and checks the clean local `mister-magik`
+branch. It builds the app and kernel locally, reuses a verified FPGA artifact,
+regenerates the complete development manifest, and uses the normal snapshot,
+activation, reboot, smoke, and rollback transaction. Neither local commit must
+be pushed, and Main is never copied directly onto the device.
 
 Use a non-default fork checkout with the same option:
 
 ```bash
 export MISTER_MAIN_DIR=/path/to/Main_MiSTer
-scripts/agent deliver --local-main
+scripts/agent deliver
 ```
 
 The development script deploys:

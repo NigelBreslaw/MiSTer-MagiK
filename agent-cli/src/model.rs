@@ -77,6 +77,9 @@ pub enum Intent {
     TaskStatus {
         task_id: String,
     },
+    TaskSupersede {
+        task_id: String,
+    },
     Commit {
         task_id: String,
         message: String,
@@ -102,11 +105,7 @@ pub enum Intent {
     PruneLogs,
     Doctor,
     Diagnose,
-    Deliver {
-        task_id: String,
-        #[serde(default)]
-        local_main: bool,
-    },
+    Deliver,
     Benchmark {
         task_id: String,
     },

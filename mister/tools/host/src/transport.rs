@@ -34,6 +34,7 @@ pub enum ColdBenchmarkScenario {
 pub enum DeviceRequest {
     Discover,
     Status,
+    ReadDevelopmentManifest,
     SnapshotRuntime {
         remote: String,
     },
@@ -87,6 +88,7 @@ impl DeviceRequest {
         match self {
             Self::Discover => "discover",
             Self::Status => "status",
+            Self::ReadDevelopmentManifest => "read-development-manifest",
             Self::SnapshotRuntime { .. } => "snapshot-runtime",
             Self::DeployRuntime { .. } => "deploy-runtime",
             Self::RollbackRuntime { .. } => "rollback-runtime",
@@ -204,6 +206,7 @@ mod tests {
         let labels = [
             DeviceRequest::Discover,
             DeviceRequest::Status,
+            DeviceRequest::ReadDevelopmentManifest,
             DeviceRequest::RollbackPlatform,
             DeviceRequest::CommitPlatform,
             DeviceRequest::RebootWait,
@@ -220,6 +223,7 @@ mod tests {
         let requests = vec![
             DeviceRequest::Discover,
             DeviceRequest::Status,
+            DeviceRequest::ReadDevelopmentManifest,
             DeviceRequest::SnapshotRuntime { remote: "r".into() },
             DeviceRequest::DeployRuntime {
                 local: "l".into(),
@@ -259,7 +263,7 @@ mod tests {
             DeviceRequest::CaptureFramebuffer,
         ];
         let labels: Vec<_> = requests.iter().map(DeviceRequest::label).collect();
-        assert_eq!(labels.len(), 33);
+        assert_eq!(labels.len(), 34);
         assert!(labels.iter().all(|label| !label.is_empty()));
         assert!(!labels.contains(&"run"));
         assert!(!labels.contains(&"shell"));

@@ -14,9 +14,9 @@ scripts/agent deliver
 scripts/agent release qualify
 ```
 
-Platform delivery may remain `external_required` until the exact commit is
-published on `main`; rerun `deliver` after CI publishes the matching artifact.
-Delivery never pushes automatically.
+Development delivery uses clean local commits and never pushes automatically.
+Published commit and CI provenance are checked by release qualification and
+artifact publication, not by `deliver`.
 
 The attended qualification is fixed and flag-free. It checks runtime, catalog,
 input/handoff/return, display, recovery capability, and restoration. Rollback is

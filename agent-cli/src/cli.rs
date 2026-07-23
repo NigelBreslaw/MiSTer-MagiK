@@ -63,10 +63,7 @@ pub enum Command {
     #[command(hide = true)]
     Doctor,
     Diagnose,
-    Deliver {
-        #[arg(long)]
-        local_main: bool,
-    },
+    Deliver,
     Benchmark,
     Release {
         #[command(subcommand)]
@@ -322,6 +319,7 @@ pub enum TaskCommand {
         replace: bool,
     },
     Status,
+    Supersede,
 }
 
 #[derive(Debug, Subcommand)]
@@ -391,6 +389,9 @@ impl Cli {
             Some(Command::Task {
                 command: TaskCommand::Status,
             }) => Intent::TaskStatus { task_id },
+            Some(Command::Task {
+                command: TaskCommand::Supersede,
+            }) => Intent::TaskSupersede { task_id },
             Some(Command::Commit(args)) => Intent::Commit {
                 task_id,
                 message: args.message,
@@ -417,10 +418,7 @@ impl Cli {
             },
             Some(Command::Doctor) => Intent::Doctor,
             Some(Command::Diagnose) => Intent::Diagnose,
-            Some(Command::Deliver { local_main }) => Intent::Deliver {
-                task_id,
-                local_main,
-            },
+            Some(Command::Deliver) => Intent::Deliver,
             Some(Command::Benchmark) => Intent::Benchmark { task_id },
             Some(Command::Release {
                 command: ReleaseCommand::Qualify,
@@ -548,34 +546,27 @@ mod tests {
     }
 
     #[test]
-    fn deliver_is_task_scoped_and_accepts_local_main_override() {
+    fn deliver_is_flag_free_and_task_independent() {
         let cli = Cli::try_parse_from(["agent-cli", "--task-id", "task-1", "deliver"]).unwrap();
-        assert_eq!(
-            cli.into_intent(),
-            Intent::Deliver {
-                task_id: "task-1".into(),
-                local_main: false,
-            }
-        );
-        let cli = Cli::try_parse_from([
-            "agent-cli",
-            "--task-id",
-            "task-1",
-            "deliver",
-            "--local-main",
-        ])
-        .unwrap();
-        assert_eq!(
-            cli.into_intent(),
-            Intent::Deliver {
-                task_id: "task-1".into(),
-                local_main: true,
-            }
-        );
+        assert_eq!(cli.into_intent(), Intent::Deliver);
+        assert!(Cli::try_parse_from(["agent-cli", "deliver", "--local-main"]).is_err());
         assert!(Cli::try_parse_from(["agent-cli", "deliver", "--fast"]).is_err());
         assert!(Cli::try_parse_from(["agent-cli", "deliver", "-m", "message"]).is_err());
         assert!(Cli::try_parse_from(["agent-cli", "deploy"]).is_err());
         assert!(Cli::try_parse_from(["agent-cli", "deploy-recipe", "launcher-device"]).is_err());
+    }
+
+    #[test]
+    fn task_supersede_names_the_exact_session() {
+        let cli =
+            Cli::try_parse_from(["agent-cli", "--task-id", "stale-task", "task", "supersede"])
+                .unwrap();
+        assert_eq!(
+            cli.into_intent(),
+            Intent::TaskSupersede {
+                task_id: "stale-task".into()
+            }
+        );
     }
 
     #[test]

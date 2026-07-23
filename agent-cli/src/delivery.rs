@@ -20,8 +20,9 @@ const PREPARE_DEADLINE: Duration = Duration::from_secs(10 * 60);
 pub enum Phase {
     Classify,
     ValidateCommit,
-    QualifyArtifact,
     Connect,
+    Reconcile,
+    QualifyArtifact,
     Snapshot,
     Stage,
     Activate,
@@ -35,8 +36,9 @@ impl Phase {
         match self {
             Self::Classify => "classify",
             Self::ValidateCommit => "validate-commit",
-            Self::QualifyArtifact => "qualify-artifact",
             Self::Connect => "connect",
+            Self::Reconcile => "reconcile",
+            Self::QualifyArtifact => "qualify-artifact",
             Self::Snapshot => "snapshot",
             Self::Stage => "stage",
             Self::Activate => "activate",
@@ -79,8 +81,9 @@ pub fn run_transaction(
     const PHASES: &[(Phase, u8)] = &[
         (Phase::Classify, 2),
         (Phase::ValidateCommit, 7),
-        (Phase::QualifyArtifact, 15),
-        (Phase::Connect, 38),
+        (Phase::Connect, 12),
+        (Phase::Reconcile, 15),
+        (Phase::QualifyArtifact, 38),
         (Phase::Snapshot, 46),
         (Phase::Stage, 56),
         (Phase::Activate, 68),
@@ -133,6 +136,7 @@ pub fn execute(
         deployment,
         expected_commit,
         artifact_sha256: None,
+        no_op: false,
         local_main: local_main.map(Path::to_path_buf),
         stage: repository
             .join("build/agent-deploy/stage")
@@ -174,6 +178,7 @@ struct ProcessActions<'a> {
     deployment: &'a DeploymentPlan,
     expected_commit: &'a str,
     artifact_sha256: Option<String>,
+    no_op: bool,
     local_main: Option<PathBuf>,
     stage: PathBuf,
     device: DeviceClient,
@@ -187,14 +192,22 @@ impl ProcessActions<'_> {
             &head,
             self.expected_commit,
             dirty,
-            self.deployment
-                .platform_candidate
-                .as_ref()
-                .map(|candidate| candidate.head_sha.as_str()),
+            self.local_main
+                .is_none()
+                .then(|| {
+                    self.deployment
+                        .platform_candidate
+                        .as_ref()
+                        .map(|candidate| candidate.head_sha.as_str())
+                })
+                .flatten(),
         )
     }
 
     fn qualify(&mut self) -> AgentResult<()> {
+        if self.no_op {
+            return Ok(());
+        }
         crate::build::execute_quiet(self.repository, &self.deployment.build)?;
         let receipt = self.deployment.build.verify(self.repository)?;
         if receipt.source_commit != self.expected_commit || receipt.source_dirty {
@@ -214,6 +227,7 @@ impl ProcessActions<'_> {
             if let Some(main_dir) = self.local_main.as_deref() {
                 qualify_local_main(main_dir)?;
             }
+            qualify_local_kernel(self.repository)?;
             prepare_stage(
                 self.repository,
                 candidate,
@@ -226,6 +240,9 @@ impl ProcessActions<'_> {
     }
 
     fn smoke(&mut self) -> AgentResult<()> {
+        if self.no_op {
+            return Ok(());
+        }
         self.device
             .execute(DeviceRequest::SmokeDelivery {
                 layout: Layout::Development,
@@ -261,9 +278,25 @@ impl DeliveryActions for ProcessActions<'_> {
         match phase {
             Phase::Classify => Ok(()),
             Phase::ValidateCommit => self.validate_commit(),
-            Phase::QualifyArtifact => self.qualify(),
             Phase::Connect => self.device.execute(DeviceRequest::Discover).map(|_| ()),
+            Phase::Reconcile => {
+                let main_dir = self
+                    .local_main
+                    .as_deref()
+                    .ok_or("local Main_MiSTer checkout is required")?;
+                validate_local_main_checkout(main_dir)?;
+                let main_revision = crate::git::value(main_dir, &["rev-parse", "HEAD"])?;
+                let installed = self
+                    .device
+                    .execute(DeviceRequest::ReadDevelopmentManifest)?;
+                self.no_op = manifest_value(&installed, "magik_revision")
+                    == Some(self.expected_commit)
+                    && manifest_value(&installed, "main_revision") == Some(main_revision.as_str());
+                Ok(())
+            }
+            Phase::QualifyArtifact => self.qualify(),
             Phase::Snapshot => match self.deployment.kind {
+                _ if self.no_op => Ok(()),
                 DeploymentKind::Runtime => self
                     .device
                     .execute(DeviceRequest::SnapshotRuntime {
@@ -276,6 +309,7 @@ impl DeliveryActions for ProcessActions<'_> {
                     .map(|_| ()),
             },
             Phase::Stage => match self.deployment.kind {
+                _ if self.no_op => Ok(()),
                 DeploymentKind::Runtime => self
                     .device
                     .execute(DeviceRequest::DeployRuntime {
@@ -291,6 +325,7 @@ impl DeliveryActions for ProcessActions<'_> {
                     .map(|_| ()),
             },
             Phase::Activate => match self.deployment.kind {
+                _ if self.no_op => Ok(()),
                 DeploymentKind::Runtime => Ok(()),
                 DeploymentKind::Platform => self
                     .device
@@ -298,6 +333,7 @@ impl DeliveryActions for ProcessActions<'_> {
                     .map(|_| ()),
             },
             Phase::RebootIfNeeded => match self.deployment.kind {
+                _ if self.no_op => Ok(()),
                 DeploymentKind::Runtime => Ok(()),
                 DeploymentKind::Platform => {
                     self.device.execute(DeviceRequest::RebootWait).map(|_| ())
@@ -305,6 +341,7 @@ impl DeliveryActions for ProcessActions<'_> {
             },
             Phase::Smoke => self.smoke(),
             Phase::Complete => match self.deployment.kind {
+                _ if self.no_op => Ok(()),
                 DeploymentKind::Runtime => self
                     .device
                     .execute(DeviceRequest::CommitRuntime {
@@ -366,14 +403,6 @@ fn prepare_stage(
     )?;
     for (from, to) in [
         (
-            "scanout/mister_magik_scanout_slots.ko",
-            "mister_magik_scanout_slots.ko",
-        ),
-        (
-            "scanout/provenance.txt",
-            "mister_magik_scanout_slots.metadata.txt",
-        ),
-        (
             "fpga/patched/menu-magik-vblank-latch.rbf",
             "fpga/menu-magik-vblank-latch.rbf",
         ),
@@ -384,6 +413,14 @@ fn prepare_stage(
     ] {
         copy(extracted.join(from), stage.join(to))?;
     }
+    copy(
+        repository.join("build/scanout-slots/mister_magik_scanout_slots.ko"),
+        stage.join("mister_magik_scanout_slots.ko"),
+    )?;
+    copy(
+        repository.join("build/scanout-slots/provenance.txt"),
+        stage.join("mister_magik_scanout_slots.metadata.txt"),
+    )?;
     let main_revision = if let Some(main_dir) = local_main {
         copy(main_dir.join("bin/MiSTer"), stage.join("MiSTer_MagiKDev"))?;
         crate::git::value(main_dir, &["rev-parse", "HEAD"])?
@@ -430,19 +467,7 @@ fn prepare_stage(
 }
 
 fn qualify_local_main(main_dir: &Path) -> AgentResult<()> {
-    if !main_dir.join("build-container.sh").is_file() {
-        return Err(format!(
-            "local_main_missing: {} does not contain build-container.sh",
-            main_dir.display()
-        )
-        .into());
-    }
-    let dirty = !crate::git::value(main_dir, &["status", "--porcelain"])?.is_empty();
-    let branch = crate::git::value(main_dir, &["branch", "--show-current"])?;
-    let unpublished = crate::git::value(main_dir, &["rev-list", "--count", "@{upstream}..HEAD"])?
-        .parse::<usize>()
-        .map_err(|error| format!("local_main_upstream: invalid Git revision count: {error}"))?;
-    validate_local_main_identity(dirty, &branch, unpublished)?;
+    validate_local_main_checkout(main_dir)?;
     for (program, args) in [
         ("./build-container.sh", Vec::<String>::new()),
         ("scripts/test-magik-state.sh", Vec::<String>::new()),
@@ -456,7 +481,44 @@ fn qualify_local_main(main_dir: &Path) -> AgentResult<()> {
     Ok(())
 }
 
-fn validate_local_main_identity(dirty: bool, branch: &str, unpublished: usize) -> AgentResult<()> {
+fn validate_local_main_checkout(main_dir: &Path) -> AgentResult<()> {
+    if !main_dir.join("build-container.sh").is_file() {
+        return Err(format!(
+            "local_main_missing: {} does not contain build-container.sh",
+            main_dir.display()
+        )
+        .into());
+    }
+    let dirty = !crate::git::value(main_dir, &["status", "--porcelain"])?.is_empty();
+    let branch = crate::git::value(main_dir, &["branch", "--show-current"])?;
+    validate_local_main_identity(dirty, &branch)?;
+    Ok(())
+}
+
+fn manifest_value<'a>(manifest: &'a str, key: &str) -> Option<&'a str> {
+    manifest
+        .lines()
+        .find_map(|line| line.strip_prefix(key)?.strip_prefix('='))
+}
+
+fn qualify_local_kernel(repository: &Path) -> AgentResult<()> {
+    run_bounded(
+        repository,
+        "scripts/build-scanout-slots-module.sh",
+        &Vec::<String>::new(),
+    )?;
+    for artifact in [
+        "build/scanout-slots/mister_magik_scanout_slots.ko",
+        "build/scanout-slots/provenance.txt",
+    ] {
+        if !repository.join(artifact).is_file() {
+            return Err(format!("local_kernel_build: {artifact} was not produced").into());
+        }
+    }
+    Ok(())
+}
+
+fn validate_local_main_identity(dirty: bool, branch: &str) -> AgentResult<()> {
     if dirty {
         return Err(
             "local_main_dirty: commit or discard Main_MiSTer changes before delivery".into(),
@@ -464,9 +526,6 @@ fn validate_local_main_identity(dirty: bool, branch: &str, unpublished: usize) -
     }
     if branch != "mister-magik" {
         return Err(format!("local_main_branch: expected mister-magik, found {branch}").into());
-    }
-    if unpublished != 0 {
-        return Err("local_main_unpublished: push the Main_MiSTer commit before delivery".into());
     }
     Ok(())
 }
@@ -606,11 +665,12 @@ mod tests {
         }
     }
 
-    const PHASES: [Phase; 10] = [
+    const PHASES: [Phase; 11] = [
         Phase::Classify,
         Phase::ValidateCommit,
-        Phase::QualifyArtifact,
         Phase::Connect,
+        Phase::Reconcile,
+        Phase::QualifyArtifact,
         Phase::Snapshot,
         Phase::Stage,
         Phase::Activate,
@@ -685,20 +745,24 @@ mod tests {
     }
 
     #[test]
-    fn local_main_requires_clean_published_mister_magik_branch() {
-        assert!(validate_local_main_identity(false, "mister-magik", 0).is_ok());
-        assert!(validate_local_main_identity(true, "mister-magik", 0)
+    fn local_main_requires_only_clean_mister_magik_branch() {
+        assert!(validate_local_main_identity(false, "mister-magik").is_ok());
+        assert!(validate_local_main_identity(true, "mister-magik")
             .unwrap_err()
             .to_string()
             .contains("local_main_dirty"));
-        assert!(validate_local_main_identity(false, "feature", 0)
+        assert!(validate_local_main_identity(false, "feature")
             .unwrap_err()
             .to_string()
             .contains("local_main_branch"));
-        assert!(validate_local_main_identity(false, "mister-magik", 1)
-            .unwrap_err()
-            .to_string()
-            .contains("local_main_unpublished"));
+    }
+
+    #[test]
+    fn installed_manifest_identity_controls_local_no_op() {
+        let manifest = "format=mister-magik-platform-v2\nmain_revision=abc\nmagik_revision=def\n";
+        assert_eq!(manifest_value(manifest, "main_revision"), Some("abc"));
+        assert_eq!(manifest_value(manifest, "magik_revision"), Some("def"));
+        assert_eq!(manifest_value(manifest, "missing"), None);
     }
 
     #[test]

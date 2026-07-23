@@ -710,10 +710,8 @@ mod tests {
             .evidence
             .claim_task_paths("task-b", &task_b_paths)
             .unwrap();
-        assert!(fixture
-            .commit("task-a")
-            .unwrap_err()
-            .contains("already claimed by active task task-b"));
+        let error = fixture.commit("task-a").unwrap_err();
+        assert!(error.contains("already claimed by active task"), "{error}");
     }
 
     #[test]

@@ -20,14 +20,20 @@ scripts/agent diagnose
 `scripts/agent release qualify` is an attended operator command. Hidden typed
 build intents exist for CI compatibility, not as a public flag matrix. `commit`
 is the only lifecycle command that changes Git state;
-`deliver` never commits or pushes.
+`deliver` never commits or pushes. It is task-independent: the exact clean
+local app commit and clean local `Main_MiSTer` `mister-magik` commit are its
+source authority, whether or not either commit is published.
 
 The task identity supplied by Codex or `--task-id` is a persistent session
 identity. Each successful `task begin` creates a new internal lifecycle for
 that session, so follow-up commits in the same conversation do not replace
 earlier baselines or delivery evidence. Begin every new edit batch before
 editing. `task begin --replace` is recovery-only and refuses to replace an
-active baseline after its files have changed.
+active baseline after its files have changed. Task lifecycles scope validation
+and commits; they do not authorize delivery. When an abandoned lifecycle still
+claims paths, close it explicitly with
+`scripts/agent --task-id ID task supersede`; this records abandonment without
+attributing a commit to that task.
 
 The launcher builds and runs `agent-cli` with Cargo's release profile. Explicit
 manifest, target-directory, and binary overrides remain available for tests and

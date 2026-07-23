@@ -117,8 +117,9 @@ construct Cargo, test, lint, host-validation, or Apple-container commands
 directly; the harness selects, times, deduplicates, and records them.
 “Build and deploy” means commit first, then `scripts/agent deliver`; do not call
 implementation scripts or supply deployment feature flags. `deliver` never
-changes Git state or pushes. Platform delivery waits until the exact commit is
-published on `main`; rerun `deliver` to resume it.
+changes Git state or pushes. Development delivery uses the exact clean local
+commits in this repository and the `mister-magik` branch of `Main_MiSTer`;
+publication and CI provenance are release concerns, not development gates.
 `scripts/agent commit` is the only agent-facing staging and commit interface;
 invoke it with first-attempt escalation because it writes `.git`. Do not stage
 or commit with raw Git when the task baseline workflow is available.

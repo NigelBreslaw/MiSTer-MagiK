@@ -28,11 +28,10 @@ checks.
 
 The normal feature loop is `scripts/agent task begin`, edit,
 `scripts/agent check`, `scripts/agent verify`, and `scripts/agent commit -m MESSAGE`.
-Runtime or platform changes then use `scripts/agent deliver`. Delivery avoids
-device access for host-only work and infers runtime or platform deployment
-without agent-supplied build flags. Platform delivery may stop with
-`external_required`; publish or merge the recorded exact commit to `main` and
-rerun the same command to resume.
+Runtime or platform changes then use `scripts/agent deliver`. Delivery uses the
+exact clean local app and Main commits without consulting task records or
+requiring publication. It builds Main and the kernel locally, reuses a verified
+FPGA artifact, and performs the normal transactional device update.
 # Deployment
 
 “Build and deploy” maps to `scripts/agent commit -m MESSAGE` followed by

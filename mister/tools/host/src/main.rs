@@ -160,6 +160,11 @@ impl DeviceOperations for NativeDevice {
                 serde_json::to_string(&collect_status(&session).map_err(device_failure)?)
                     .map_err(device_failure)?
             }
+            DeviceRequest::ReadDevelopmentManifest => {
+                let session = connect(10).map_err(device_failure)?;
+                remote_read(&session, "/media/fat/mister-magik-dev/platform-v2.manifest")
+                    .unwrap_or_default()
+            }
             DeviceRequest::SnapshotRuntime { remote } => {
                 validate_delivery_remote(remote).map_err(device_failure)?;
                 let session = connect(10).map_err(device_failure)?;
