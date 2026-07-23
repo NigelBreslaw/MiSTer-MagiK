@@ -28,10 +28,11 @@ The task identity supplied by Codex or `--task-id` is a persistent session
 identity. Each successful `task begin` creates a new internal lifecycle for
 that session, so follow-up commits in the same conversation do not replace
 earlier baselines or delivery evidence. Begin every new edit batch before
-editing. `task begin --replace` is recovery-only and refuses to replace an
-active baseline after its files have changed. Task lifecycles scope validation
-and commits; they do not authorize delivery. When an abandoned lifecycle still
-claims paths, close it explicitly with
+editing. `task begin --replace` is recovery-only: it starts a new lifecycle
+while carrying forward the active baseline, so existing task changes remain
+visible and owned without a stash/restore cycle. Task lifecycles scope
+validation and commits; they do not authorize delivery. When an abandoned
+lifecycle from another session still claims paths, close it explicitly with
 `scripts/agent --task-id ID task supersede`; this records abandonment without
 attributing a commit to that task.
 

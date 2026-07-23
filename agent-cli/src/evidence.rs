@@ -108,6 +108,14 @@ CREATE TABLE IF NOT EXISTS delivery_attestations (
 PRAGMA user_version = 8;
 "#;
 
+fn baseline_head(value: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(value)
+        .ok()?
+        .get("head")?
+        .as_str()
+        .map(str::to_owned)
+}
+
 #[derive(Debug)]
 pub struct Evidence {
     connection: Connection,
@@ -672,12 +680,15 @@ impl Evidence {
     }
 
     pub fn claim_task_paths(&self, task_id: &str, paths: &[PathBuf]) -> Result<(), String> {
-        let _: i64 = self
+        let (worktree, current_baseline): (String, String) = self
             .connection
-            .query_row("SELECT 1 FROM tasks WHERE task_id=?1", [task_id], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT worktree, baseline_json FROM tasks WHERE task_id=?1",
+                [task_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
             .map_err(|error| format!("cannot load active task identity: {error}"))?;
+        let current_head = baseline_head(&current_baseline);
         let transaction = self
             .connection
             .unchecked_transaction()
@@ -692,13 +703,32 @@ impl Evidence {
                 )
                 .optional()
                 .map_err(|error| error.to_string())?;
-            if conflict.is_some() {
-                transaction
-                    .execute(
-                        "DELETE FROM task_claims WHERE path=?1 AND task_id<>?2",
-                        params![path, task_id],
-                    )
-                    .map_err(|error| error.to_string())?;
+            if let Some((other, other_baseline)) = conflict {
+                let other_head = baseline_head(&other_baseline);
+                let superseded = current_head
+                    .as_deref()
+                    .zip(other_head.as_deref())
+                    .is_some_and(|(current, other)| {
+                        current != other
+                            && Command::new("git")
+                                .args(["merge-base", "--is-ancestor", other, current])
+                                .current_dir(&worktree)
+                                .status()
+                                .map(|status| status.success())
+                                .unwrap_or(false)
+                    });
+                if superseded {
+                    transaction
+                        .execute(
+                            "UPDATE tasks SET closed_ms=?2 WHERE task_id=?1 AND closed_ms IS NULL",
+                            params![other, now_ms()],
+                        )
+                        .map_err(|error| error.to_string())?;
+                } else {
+                    return Err(format!(
+                        "commit_scope_ambiguous: path {path} is already claimed by active task {other}"
+                    ));
+                }
             }
             transaction
                 .execute(

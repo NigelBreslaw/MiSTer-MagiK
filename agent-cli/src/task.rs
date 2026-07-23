@@ -48,7 +48,17 @@ pub fn begin(
             "no task identity is available; pass --task-id ID or set MISTER_AGENT_TASK_ID".into(),
         );
     }
-    let baseline = capture(repository)?;
+    let baseline = if replace {
+        if let Some(active_id) = evidence.active_task_id_for_session(repository, task_id)? {
+            let mut baseline = load(evidence, repository, &active_id)?;
+            reconcile_head_advance(evidence, repository, &active_id, &mut baseline)?;
+            baseline
+        } else {
+            capture(repository)?
+        }
+    } else {
+        capture(repository)?
+    };
     evidence
         .save_task_baseline(task_id, repository, &baseline, replace)
         .map(|_| ())
@@ -680,7 +690,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_replacement_recovers_a_stale_dirty_lifecycle() {
+    fn explicit_replacement_preserves_stale_task_changes() {
         let root = fixture_root("dirty-baseline-replacement");
         let evidence = Evidence::open_at(&root.join(".git/agent-state")).unwrap();
         begin(&evidence, &root, "thread-one", false).unwrap();
@@ -693,9 +703,10 @@ mod tests {
                 .unwrap(),
             Some("thread-one::g2".into())
         );
-        assert!(changes(&evidence, &root, "thread-one::g2")
-            .unwrap()
-            .is_empty());
+        assert_eq!(
+            changes(&evidence, &root, "thread-one::g2").unwrap(),
+            [PathBuf::from("tracked.txt")]
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

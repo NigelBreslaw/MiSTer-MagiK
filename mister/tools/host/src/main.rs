@@ -2122,12 +2122,27 @@ fn run_crt_geometry_trial(rectangle: [u16; 4]) -> Result<String> {
             .map_err(|error| error.to_string())?;
             return Err("geometry trial observer disconnected".to_owned());
         }
-        exec_checked(
+        let result = exec_checked(
             &session,
             "geometry trial",
             &crt_trial_run_command(&runtime_settings_for_trial, Some(rectangle)),
-        )
-        .map_err(|error| error.to_string())
+        );
+        if let Err(error) = result {
+            let recovery = connect(10).and_then(|recovery| {
+                exec_checked(
+                    &recovery,
+                    "geometry trial compensating resume",
+                    &acknowledged_main_command("mister_magik_resume"),
+                )
+            });
+            return match recovery {
+                Ok(()) => Err(error.to_string()),
+                Err(recovery_error) => Err(format!(
+                    "{error}; compensating Main resume failed: {recovery_error}"
+                )),
+            };
+        }
+        Ok(())
     });
     ready_rx
         .recv_timeout(Duration::from_secs(10))
@@ -2172,6 +2187,18 @@ fn validate_crt_geometry_trial(runtime_settings: &str, rectangle: [u16; 4]) -> R
     };
     if !fixed_axis_matches {
         return Err("288p trials are vertical-only and 576p trials are horizontal-only".into());
+    }
+    let (start, end, baseline_start, baseline_end) = match variable_axis {
+        "vertical" => (top, bottom, baseline[2], baseline[3]),
+        "horizontal" => (left, right, baseline[0], baseline[1]),
+        _ => unreachable!(),
+    };
+    let start_delta = i32::from(start) - i32::from(baseline_start);
+    let end_delta = i32::from(end) - i32::from(baseline_end);
+    if start_delta != end_delta && start_delta != -end_delta {
+        return Err(
+            "geometry trial must change position or symmetric size, not both at once".into(),
+        );
     }
     Ok(())
 }
@@ -7911,6 +7938,9 @@ video_mode=14
         );
         assert!(
             validate_crt_geometry_trial("schema=1&output=crt-576p50", [40, 679, 41, 615]).is_err()
+        );
+        assert!(
+            validate_crt_geometry_trial("schema=1&output=crt-576p50", [40, 680, 40, 615]).is_err()
         );
         assert!(
             validate_crt_geometry_trial("schema=1&output=crt-480p60", [45, 684, 31, 510]).is_err()

@@ -108,6 +108,17 @@ fn run_inner(
     if paths.is_empty() {
         return Err("nothing_to_commit: no task-owned changes were found".into());
     }
+    let overlapping_baseline: Vec<_> = paths
+        .iter()
+        .filter(|path| baseline.dirty_paths.contains(*path))
+        .cloned()
+        .collect();
+    if !overlapping_baseline.is_empty() {
+        return Err(format!(
+            "commit_scope_ambiguous: task changed paths that were dirty at baseline: {}",
+            display_paths(&overlapping_baseline)
+        ));
+    }
     reject_forbidden_paths(repository, &paths)?;
     let claims: BTreeSet<_> = evidence.task_claims(task_id)?.into_iter().collect();
     let unclaimed: Vec<_> = paths
@@ -678,20 +689,19 @@ mod tests {
     }
 
     #[test]
-    fn commits_verified_changes_to_dirty_baseline_paths() {
+    fn refuses_changes_to_dirty_baseline_paths() {
         let fixture = Fixture::new();
         fs::write(fixture.root.join("docs/existing.md"), "user change\n").unwrap();
         fixture.begin("dirty");
         fs::write(fixture.root.join("docs/existing.md"), "task change\n").unwrap();
-        fixture.commit("dirty").unwrap();
-        assert_eq!(
-            git_text(&fixture.root, &["show", "--format=", "--name-only", "HEAD"]).unwrap(),
-            "docs/existing.md"
-        );
+        assert!(fixture
+            .commit("dirty")
+            .unwrap_err()
+            .starts_with("commit_scope_ambiguous:"));
     }
 
     #[test]
-    fn latest_verified_task_supersedes_stale_path_claims() {
+    fn active_task_claims_remain_isolated() {
         let fixture = Fixture::new();
         fixture.begin("thread-a");
         fs::write(fixture.root.join("docs/existing.md"), "first\n").unwrap();
@@ -703,7 +713,8 @@ mod tests {
             .evidence
             .claim_task_paths("thread-b", &task_b_paths)
             .unwrap();
-        fixture.commit("thread-a").unwrap();
+        let error = fixture.commit("thread-a").unwrap_err();
+        assert!(error.contains("already claimed by active task"), "{error}");
     }
 
     #[test]
