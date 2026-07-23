@@ -404,16 +404,92 @@ pub fn execute_runtime_validation(
         "preparing shared runtime validation",
         Some(10),
     )?;
-    execute(
-        repository,
-        &BuildSpec::for_recipe(BuildRecipe::ValidateLauncher),
-        reporter,
+    let backend = infer_backend()?;
+    if backend == BuildBackend::Cross {
+        execute(
+            repository,
+            &BuildSpec::for_recipe(BuildRecipe::ValidateLauncher),
+            reporter,
+        )?;
+        return execute(
+            repository,
+            &BuildSpec::for_recipe(BuildRecipe::ValidateLibrary),
+            reporter,
+        );
+    }
+    preflight(backend)?;
+    build_minimal_ffmpeg(repository, backend)?;
+    let target_dir = PathBuf::from("/private/tmp/mister-magik-apple-container-target");
+    prepare_container(repository, &target_dir)?;
+    let cpus = std::thread::available_parallelism()
+        .map_err(|error| format!("cannot detect online CPUs: {error}"))?
+        .get()
+        .to_string();
+    let cargo_home = home_dir()?.join(".cargo");
+    let rust_toolchain = home_dir()?.join(".rustup/toolchains/stable-aarch64-unknown-linux-gnu");
+    let (build_number, version, build_time) = build_metadata(repository)?;
+    let mut command = Command::new("container");
+    command
+        .current_dir(repository)
+        .args(["run", "--arch", "arm64", "--rm", "--cpus"])
+        .arg(&cpus)
+        .args([
+            "--memory",
+            "8g",
+            "--env",
+            "CARGO_HOME=/cargo",
+            "--env",
+            "CARGO_TARGET_DIR=/target",
+            "--env",
+            "RUSTC_WRAPPER=",
+            "--env",
+            "RUSTFLAGS=-D warnings -C target-cpu=cortex-a9",
+            "--env",
+            "SLINT_FONT_SIZES=8,16,24,32",
+        ])
+        .arg("--env")
+        .arg(format!("CARGO_BUILD_JOBS={cpus}"));
+    for value in [
+        format!("MISTER_MAGIK_BUILD_NUMBER={build_number}"),
+        format!("MISTER_MAGIK_VERSION={version}"),
+        format!("MISTER_MAGIK_BUILD_TIME={build_time}"),
+    ] {
+        command.arg("--env").arg(value);
+    }
+    for (name, value) in FFMPEG_APPLE_CONTAINER_ENV {
+        command.arg("--env").arg(format!("{name}={value}"));
+    }
+    command
+        .arg("--volume")
+        .arg(format!("{}:/cargo", cargo_home.display()))
+        .arg("--volume")
+        .arg(format!("{}:/rust:ro", rust_toolchain.display()))
+        .arg("--volume")
+        .arg(format!("{}:/project", repository.display()))
+        .arg("--volume")
+        .arg(format!("{}:/target", target_dir.display()))
+        .args([
+            "--workdir",
+            "/project/apps/mister",
+            IMAGE,
+            "sh",
+            "-lc",
+            "PATH=/rust/bin:$PATH MISTER_UI_BUILD_SCOPE=launcher cargo check --target armv7-unknown-linux-gnueabihf --locked --features ui && PATH=/rust/bin:$PATH MISTER_UI_BUILD_SCOPE=all cargo check --target armv7-unknown-linux-gnueabihf --locked --lib --no-default-features",
+        ]);
+    reporter.emit(
+        EventKind::Progress,
+        "compile",
+        "checking launcher and library in one container",
+        Some(35),
     )?;
-    execute(
-        repository,
-        &BuildSpec::for_recipe(BuildRecipe::ValidateLibrary),
-        reporter,
-    )
+    run_bounded(&mut command, BUILD_DEADLINE)?;
+    reporter.emit(
+        EventKind::Completed,
+        "complete",
+        "combined runtime validation passed",
+        Some(100),
+    )?;
+    Ok(())
 }
 
 struct ProcessBuildActions<'a> {
