@@ -9612,6 +9612,18 @@ H: Handlers=event3 js0"#
     }
 
     #[test]
+    fn delivery_process_lock_is_nonblocking_and_released_on_drop() {
+        let device = format!("test-{}", std::process::id());
+        let first = DeliveryProcessLock::acquire(&device).unwrap();
+        assert!(matches!(
+            DeliveryProcessLock::acquire(&device),
+            Err(DeviceFailure::Busy(_))
+        ));
+        drop(first);
+        assert!(DeliveryProcessLock::acquire(&device).is_ok());
+    }
+
+    #[test]
     fn deploy_transaction_derives_remote_paths_and_local_size() {
         let local = temp_path("deploy-bin");
         fs::write(&local, b"abc").unwrap();

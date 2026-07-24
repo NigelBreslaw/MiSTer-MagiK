@@ -29,6 +29,7 @@ pub enum Phase {
     RuntimeBuild,
     MainQualification,
     KernelQualification,
+    ManagerQualification,
     LocalStaging,
     DatabasePreparation,
     Snapshot,
@@ -50,6 +51,7 @@ impl Phase {
             Self::RuntimeBuild => "runtime-build",
             Self::MainQualification => "main-qualification",
             Self::KernelQualification => "kernel-qualification",
+            Self::ManagerQualification => "manager-qualification",
             Self::LocalStaging => "local-staging",
             Self::DatabasePreparation => "database-preparation",
             Self::Snapshot => "snapshot",
@@ -116,13 +118,14 @@ pub fn run_transaction(
         (Phase::RuntimeBuild, 32),
         (Phase::MainQualification, 39),
         (Phase::KernelQualification, 46),
-        (Phase::LocalStaging, 53),
-        (Phase::DatabasePreparation, 60),
-        (Phase::Snapshot, 67),
-        (Phase::RemoteInventoryUpload, 74),
-        (Phase::Activate, 81),
-        (Phase::RebootIfNeeded, 87),
-        (Phase::Smoke, 94),
+        (Phase::ManagerQualification, 50),
+        (Phase::LocalStaging, 55),
+        (Phase::DatabasePreparation, 62),
+        (Phase::Snapshot, 68),
+        (Phase::RemoteInventoryUpload, 76),
+        (Phase::Activate, 82),
+        (Phase::RebootIfNeeded, 88),
+        (Phase::Smoke, 95),
         (Phase::Complete, 100),
     ];
     let mut mutation_started = false;
@@ -204,6 +207,7 @@ fn execute_with_device<D: DeviceOperations>(
         decision: DeliveryDecision::Platform,
         installed_manifest: String::new(),
         installed_manager_sha256: None,
+        manager_artifact: None,
         main_revision: None,
         local_main: local_main.to_path_buf(),
         stage: repository
@@ -261,6 +265,7 @@ struct ProcessActions<'a, D = mister_tool::NativeDevice> {
     decision: DeliveryDecision,
     installed_manifest: String,
     installed_manager_sha256: Option<String>,
+    manager_artifact: Option<PathBuf>,
     main_revision: Option<String>,
     local_main: PathBuf,
     stage: PathBuf,
@@ -312,7 +317,10 @@ impl<D: DeviceOperations> ProcessActions<'_, D> {
     }
 
     fn prepare_local_stage(&mut self) -> AgentResult<()> {
-        let manager = self.prepare_manager()?;
+        let manager = self
+            .manager_artifact
+            .clone()
+            .ok_or("manager qualification did not produce an artifact")?;
         let candidate = self
             .deployment
             .platform_candidate
@@ -330,6 +338,11 @@ impl<D: DeviceOperations> ProcessActions<'_, D> {
             Some(&self.local_main),
             &manager,
         )?);
+        Ok(())
+    }
+
+    fn qualify_manager(&mut self) -> AgentResult<()> {
+        self.manager_artifact = Some(self.prepare_manager()?);
         Ok(())
     }
 
@@ -456,6 +469,7 @@ impl<D: DeviceOperations> DeliveryActions for ProcessActions<'_, D> {
             Phase::RuntimeBuild => self.build_runtime(),
             Phase::MainQualification => self.qualify_main(),
             Phase::KernelQualification => self.qualify_kernel(),
+            Phase::ManagerQualification => self.qualify_manager(),
             Phase::LocalStaging => self.prepare_local_stage(),
             Phase::DatabasePreparation => self.prepare_databases(),
             Phase::Snapshot => Ok(()),
@@ -494,6 +508,7 @@ impl<D: DeviceOperations> DeliveryActions for ProcessActions<'_, D> {
             Phase::GithubResolution
             | Phase::MainQualification
             | Phase::KernelQualification
+            | Phase::ManagerQualification
             | Phase::LocalStaging
             | Phase::DatabasePreparation
             | Phase::Activate
@@ -933,6 +948,21 @@ fn run_bounded_with_env(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mister_tool::transport::{DeviceFailure, DeviceResponse};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    struct RequestRecorder(Rc<RefCell<Vec<DeviceRequest>>>);
+
+    impl DeviceOperations for RequestRecorder {
+        fn execute(&mut self, request: &DeviceRequest) -> Result<DeviceResponse, DeviceFailure> {
+            self.0.borrow_mut().push(request.clone());
+            Ok(DeviceResponse {
+                operation: request.label(),
+                detail: "ok".into(),
+            })
+        }
+    }
 
     #[derive(Default)]
     struct FakeActions {
@@ -961,7 +991,7 @@ mod tests {
         }
     }
 
-    const PHASES: [Phase; 16] = [
+    const PHASES: [Phase; 17] = [
         Phase::Classify,
         Phase::ValidateCommit,
         Phase::Connect,
@@ -970,6 +1000,7 @@ mod tests {
         Phase::RuntimeBuild,
         Phase::MainQualification,
         Phase::KernelQualification,
+        Phase::ManagerQualification,
         Phase::LocalStaging,
         Phase::DatabasePreparation,
         Phase::Snapshot,
@@ -1125,13 +1156,97 @@ mod tests {
     }
 
     #[test]
+    fn main_receipt_requires_every_versioned_identity_and_exact_artifact() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-main-receipt-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let receipt = root.join("main.receipt");
+        let expected = MainReceiptIdentity {
+            revision: "a",
+            source_input_sha256: "b",
+            artifact_sha256: "c",
+            compiler: "d",
+            dockerfile_sha256: "e",
+            image: "f",
+            image_digest: "g",
+        };
+        let valid = "receipt_version=2\nmain_revision=a\nsource_input_sha256=b\nartifact_sha256=c\ncompiler=d\ndockerfile_sha256=e\nimage_reference=f\nimage_digest=g\n";
+        fs::write(&receipt, valid).unwrap();
+        assert!(main_receipt_matches(&receipt, &expected).unwrap());
+        for invalid in [
+            valid.replace("receipt_version=2\n", ""),
+            valid.replace("artifact_sha256=c", "artifact_sha256=tampered"),
+            valid.replace("image_digest=g", "image_digest=other"),
+            format!("{valid}extra=value\n"),
+        ] {
+            fs::write(&receipt, invalid).unwrap();
+            assert!(!main_receipt_matches(&receipt, &expected).unwrap());
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn deterministic_runtime_uses_one_transaction_without_reboot() {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let mut actions = scenario_actions(
+            DeploymentKind::Runtime,
+            DeviceClient::new(RequestRecorder(Rc::clone(&requests))),
+        );
+        actions.run(Phase::RemoteInventoryUpload).unwrap();
+        assert!(matches!(
+            requests.borrow().as_slice(),
+            [DeviceRequest::DeliverRuntimeTransaction { .. }]
+        ));
+    }
+
+    #[test]
+    fn deterministic_platform_uses_one_transaction_request() {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let mut actions = scenario_actions(
+            DeploymentKind::Platform,
+            DeviceClient::new(RequestRecorder(Rc::clone(&requests))),
+        );
+        actions.run(Phase::RemoteInventoryUpload).unwrap();
+        assert!(matches!(
+            requests.borrow().as_slice(),
+            [DeviceRequest::DeliverPlatformTransaction { .. }]
+        ));
+    }
+
+    fn scenario_actions(
+        kind: DeploymentKind,
+        device: DeviceClient<RequestRecorder>,
+    ) -> ProcessActions<'static, RequestRecorder> {
+        let mut deployment = crate::deploy::plan(Path::new("."), Vec::new()).unwrap();
+        deployment.kind = kind;
+        ProcessActions {
+            repository: Path::new("."),
+            deployment,
+            expected_commit: "revision",
+            artifact_sha256: Some("a".repeat(64)),
+            no_op: false,
+            decision: if kind == DeploymentKind::Runtime {
+                DeliveryDecision::Runtime
+            } else {
+                DeliveryDecision::Platform
+            },
+            installed_manifest: String::new(),
+            installed_manager_sha256: None,
+            manager_artifact: None,
+            main_revision: None,
+            local_main: PathBuf::new(),
+            stage: PathBuf::from("stage"),
+            device,
+        }
+    }
+
+    #[test]
     fn exact_manifest_fake_device_stops_after_reconciliation() {
         use crate::cli::OutputFormat;
         use crate::evidence::Evidence;
         use crate::request::RawRequest;
-        use mister_tool::transport::{DeviceFailure, DeviceResponse};
-        use std::cell::RefCell;
-        use std::rc::Rc;
 
         struct RecordingDevice {
             requests: Rc<RefCell<Vec<DeviceRequest>>>,

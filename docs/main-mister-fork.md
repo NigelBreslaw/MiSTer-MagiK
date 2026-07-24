@@ -148,25 +148,39 @@ scripts/agent deliver
 Development delivery first compares the installed manifest revisions with the
 exact clean local app and Main commits:
 
+The installed manifest is accepted only when it contains the exact canonical
+field set once, uses the fixed paths for its layout, has lowercase hashes, and
+contains valid source revisions. Missing, partial, duplicate, extra, or
+noncanonical manifests select `Platform`.
+
 - `NoOp` returns after reconciliation when the revisions already match or all
   accumulated app changes are non-deploying.
 - `Runtime` verifies the installed platform, builds the app, snapshots the old
   app and manifest, uploads both replacements, activates the manifest last,
-  smoke-tests, and rolls both files back on failure. It does not reboot.
+  smoke-tests, and rolls both files back on failure inside one typed host
+  transaction. It does not reboot.
 - `Platform` qualifies and activates the complete Main, app, kernel, FPGA,
   manager, database-support, and manifest set with reboot and rollback
-  protection.
+  protection inside one typed host transaction.
 
 Component receipts under `build/agent-cache/` bind immutable source, build,
-toolchain, configuration, and artifact identities. Verified Main, kernel,
+toolchain, compiler, Dockerfile, OCI image, configuration, and artifact
+identities. Old receipt versions are cache misses. Verified Main, kernel,
 published platform, and game-database artifacts are reused across deliveries;
 cleanup removes only disposable `build/agent-deploy/` staging.
+An unchanged manager is fetched only through the typed host API after the
+installed manifest and remote checksum have been verified, then cached by
+SHA-256. Changed manager inputs or failed installed verification use a strict
+local build receipt instead.
 The pinned kernel source defaults to the persistent sibling checkout
 `../Linux-Kernel_MiSTer`; set `MISTER_KERNEL_DIR` when it lives elsewhere.
 
 Each mutating transaction uses the exact clean app commit and local
 `Main_MiSTer` `mister-magik` branch. Neither local commit must be pushed, and
 Main is never copied directly onto the device outside the platform transaction.
+The host serializes a transaction with a nonblocking process-owned OS lock.
+The lock is released automatically when the process exits, including abnormal
+exit, and creates no persistent device lease or expiry/recovery state.
 
 Use a non-default fork checkout with the same option:
 

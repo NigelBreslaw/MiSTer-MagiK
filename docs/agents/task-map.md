@@ -37,11 +37,18 @@ all paths between its recorded app revision and `HEAD`. `NoOp` stops before
 GitHub, builds, or staging. `Runtime` updates the GUI and manifest as one
 rollback-capable transaction without rebooting. `Platform` retains the complete
 manifest-bound transaction for Main, kernel, FPGA, and contract changes.
+Runtime and platform mutation each execute as one typed host transaction from
+snapshot through health verification and commit or rollback. A nonblocking,
+process-owned host lock prevents concurrent delivery and cannot leave stale
+device state. There is no persistent delivery lease.
 
 Verified component receipts live under `build/agent-cache/` and survive
 delivery cleanup. Main, kernel, published platform artifacts, and game
 databases are reused only when their immutable inputs and artifact hashes still
-match; transient staging remains under `build/agent-deploy/`.
+match. An unchanged manager is verified against the installed canonical
+manifest, fetched through the typed host transport, and cached by SHA-256;
+otherwise it is rebuilt under a strict receipt. Transient staging remains under
+`build/agent-deploy/`.
 # Deployment
 
 “Build and deploy” maps to an ordinary Git commit followed by
