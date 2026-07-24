@@ -106,3 +106,55 @@ speculative software pacing correction. The next investigation target is the
 frame boundary, `hdmi_vbl`, and the VGA/Direct Video raster. Native VGA blanking
 must not replace `hdmi_vbl` without first proving the VGA route lies outside the
 same scaler/fetch boundary.
+
+## Scaler-safe ownership-release experiment
+
+Commit `3913a1c14d5d986b9d4110190ef9abceb3b19fa6` retained the early
+`hdmi_vbl` route apply but delayed `active_seq`, `flip_count`, and old-slot
+ownership release until blanking ended. Commit
+`757b4ec0f14e215c39818ef148fef3e11f212e14` corrected one test expectation.
+The experiment tested whether software was rewriting the old slot after the
+latch advertised a flip but before `ascal` captured the new base.
+
+- Qualified platform workflow: `30089626684`
+- Delivered source revision:
+  `8fbdfd8ebad7db49dd80459fa04bc189e62e70c8`
+- FPGA component ID:
+  `50da9ccca1a4581db6959d3e13d7e0d05554e2bce24ba8fe7e9fe3ac05aa5952`
+- Patched RBF SHA-256:
+  `431f82b08b203f0c40807b1ac3091134c4d8a412e32fcc4d5f3eac0e744099a3`
+- Quartus delta: positive setup and hold slack, zero TNS, identical warning
+  count, and one additional calculable synchronizer chain.
+
+The attended `motion` probe remained visibly unstable with the same lower-band
+horizontal displacement/ghost. Machine telemetry reported 20.006 seconds,
+1,009 posts/flips, zero drops, zero unsafe active writes, zero pending writes,
+a matching final active sequence, and one isolated cadence miss. Report hashes:
+
+- Manifest:
+  `85a144f7f2a62f3fa88400766714afee979311684e08a481200c4a18d912f88b`
+- Status:
+  `20e4c9c9d1fc98c2ae3e32cacd3f69a4923f4ac554856d7495455dfa62c8715f`
+- Log:
+  `93fb6cbb6ff73ee634f13ca6b25b95d02b66ebfb86e9d6a988e76550ebdc8b81`
+
+The attended `slow-ab` probe changed between the 24-pixel-offset A/B grids once
+per second. No physical CRT corruption was observed. Machine telemetry reported
+20 posts/flips, zero drops, zero unsafe active writes, zero pending writes, and
+a matching final active sequence. Its cadence-miss count reflects the
+intentional one-second transition interval rather than missed 50 Hz presents.
+Report hashes:
+
+- Manifest:
+  `c3c142c5418241e23a8920e5be098fc981f83e1fff27ab1eb8ee5e666f66178e`
+- Status:
+  `6121f3997e42b2f61bd84a66b669bd52caba2522a8653843de00e4a3956fbc9a`
+- Log:
+  `89a0fbed7bf5fd01860487913b84305c69a92cb773b16abf68e1c02d314fef23`
+
+The experiment is disproven: delaying old-slot ownership release through the
+entire blanking interval does not affect the continuous-motion fault. Isolated
+base changes are not visibly corrupt; sustained frame-by-frame change is
+required. The next candidate must therefore distinguish scaler fetch/pipeline
+history under continuous alternation from an analog CRT-only 50 Hz temporal or
+sync effect.
