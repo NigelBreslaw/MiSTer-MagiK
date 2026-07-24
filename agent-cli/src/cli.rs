@@ -336,6 +336,8 @@ pub enum CaptureCommand {
     UsbVideo {
         #[arg(long, value_name = "PATH")]
         output: Option<PathBuf>,
+        #[arg(long, value_name = "SECONDS")]
+        seconds: Option<u64>,
     },
 }
 
@@ -441,8 +443,8 @@ impl Cli {
             Some(Command::Deliver) => Intent::Deliver,
             Some(Command::Benchmark) => Intent::Benchmark { task_id },
             Some(Command::Capture {
-                command: CaptureCommand::UsbVideo { output },
-            }) => Intent::CaptureUsbVideo { output },
+                command: CaptureCommand::UsbVideo { output, seconds },
+            }) => Intent::CaptureUsbVideo { output, seconds },
             Some(Command::Release {
                 command: ReleaseCommand::Qualify,
             }) => Intent::ReleaseQualify,
@@ -610,7 +612,10 @@ mod tests {
             Cli::try_parse_from(["agent-cli", "capture", "usb-video"])
                 .unwrap()
                 .into_intent(),
-            Intent::CaptureUsbVideo { output: None }
+            Intent::CaptureUsbVideo {
+                output: None,
+                seconds: None,
+            }
         );
         assert_eq!(
             Cli::try_parse_from([
@@ -623,7 +628,25 @@ mod tests {
             .unwrap()
             .into_intent(),
             Intent::CaptureUsbVideo {
-                output: Some(PathBuf::from("/tmp/frame.jpg"))
+                output: Some(PathBuf::from("/tmp/frame.jpg")),
+                seconds: None,
+            }
+        );
+        assert_eq!(
+            Cli::try_parse_from([
+                "agent-cli",
+                "capture",
+                "usb-video",
+                "--seconds",
+                "24",
+                "--output",
+                "/tmp/probe.mov",
+            ])
+            .unwrap()
+            .into_intent(),
+            Intent::CaptureUsbVideo {
+                output: Some(PathBuf::from("/tmp/probe.mov")),
+                seconds: Some(24),
             }
         );
     }

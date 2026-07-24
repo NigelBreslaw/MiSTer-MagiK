@@ -234,8 +234,14 @@ fn dispatch(
         }
         Intent::CaptureUsbVideo {
             output: destination,
+            seconds,
         } => {
-            let artifact = agent_cli::capture::execute(destination.as_deref())?;
+            let artifact = match seconds {
+                Some(seconds) => {
+                    agent_cli::capture::execute_movie(destination.as_deref(), *seconds)?
+                }
+                None => agent_cli::capture::execute(destination.as_deref())?,
+            };
             match output {
                 OutputFormat::Human => println!("{}", artifact.markdown_link()),
                 OutputFormat::Ndjson => {

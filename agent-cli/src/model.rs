@@ -113,6 +113,7 @@ pub enum Intent {
     },
     CaptureUsbVideo {
         output: Option<PathBuf>,
+        seconds: Option<u64>,
     },
     ReleaseQualify,
     Build {
@@ -268,7 +269,11 @@ mod tests {
     #[test]
     fn usb_video_capture_is_a_local_write() {
         assert_eq!(
-            Intent::CaptureUsbVideo { output: None }.risk(),
+            Intent::CaptureUsbVideo {
+                output: None,
+                seconds: None,
+            }
+            .risk(),
             Risk::LocalWrite
         );
     }

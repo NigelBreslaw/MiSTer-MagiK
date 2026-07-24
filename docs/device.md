@@ -92,11 +92,13 @@ capture is saved under the OS temporary directory at
 an image-capable agent can inspect it without receiving base64 text.
 
 On macOS, `scripts/agent capture usb-video [--output PATH]` captures the first
-nonblank 1920x1080 frame from the fixed `USB Video` input. The one-shot native
-AVFoundation path writes JPEG only, refuses to overwrite an explicit output,
-and otherwise saves a unique file under the same temporary capture directory
-before printing a Markdown link. It is sink evidence, not a replacement for
-the authoritative framebuffer capture.
+nonblank 1920x1080 frame from the fixed `USB Video` input. The native
+AVFoundation path writes JPEG, refuses to overwrite an explicit output, and
+otherwise saves a unique file under the same temporary capture directory before
+printing a Markdown link. `--seconds N` selects a bounded 1–60 second native
+AVFoundation movie capture at the same 1920x1080 format; its output is a `.mov`
+file and is intended for attended motion diagnosis. Both are sink evidence, not
+a replacement for the authoritative framebuffer capture.
 
 `mister display-matrix --attended --out DIRECTORY [--usb-video]
 [--screensaver-wait SECONDS]` performs the bounded runtime display

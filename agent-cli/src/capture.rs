@@ -10,8 +10,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(3);
 const JPEG_MEDIA_TYPE: &str = "image/jpeg";
+const MOVIE_MEDIA_TYPE: &str = "video/quicktime";
 const JPEG_WIDTH: u32 = 1920;
 const JPEG_HEIGHT: u32 = 1080;
+const MOVIE_MIN_SECONDS: u64 = 1;
+const MOVIE_MAX_SECONDS: u64 = 60;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct CaptureArtifact {
@@ -29,7 +32,12 @@ pub struct CaptureArtifact {
 impl CaptureArtifact {
     #[must_use]
     pub fn markdown_link(&self) -> String {
-        format!("[USB Video frame](<{}>)", self.path.display())
+        let label = if self.kind == "usb_video_movie" {
+            "USB Video recording"
+        } else {
+            "USB Video frame"
+        };
+        format!("[{label}](<{}>)", self.path.display())
     }
 }
 
@@ -65,6 +73,113 @@ pub fn execute(output: Option<&Path>) -> AgentResult<CaptureArtifact> {
         timestamp_ms,
         started,
     )
+}
+
+pub fn execute_movie(output: Option<&Path>, seconds: u64) -> AgentResult<CaptureArtifact> {
+    if !(MOVIE_MIN_SECONDS..=MOVIE_MAX_SECONDS).contains(&seconds) {
+        return Err(classified(
+            "camera_duration_invalid",
+            format!(
+                "USB Video movie duration must be {MOVIE_MIN_SECONDS}..={MOVIE_MAX_SECONDS} seconds"
+            ),
+        ));
+    }
+    let started = Instant::now();
+    let timestamp_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| classified("camera_clock_invalid", error.to_string()))?
+        .as_millis();
+    let destination = movie_destination(output, &std::env::temp_dir(), timestamp_ms)?;
+    native::record(&destination, Duration::from_secs(seconds))?;
+    let bytes = fs::metadata(&destination)
+        .map_err(|error| classified("camera_output_failed", error.to_string()))?
+        .len()
+        .try_into()
+        .unwrap_or(usize::MAX);
+    if bytes == 0 {
+        let _ = fs::remove_file(&destination);
+        return Err(classified(
+            "camera_recording_failed",
+            "USB Video movie is empty",
+        ));
+    }
+    Ok(CaptureArtifact {
+        v: 1,
+        event: "artifact",
+        kind: "usb_video_movie",
+        path: destination,
+        media_type: MOVIE_MEDIA_TYPE,
+        width: JPEG_WIDTH,
+        height: JPEG_HEIGHT,
+        bytes,
+        capture_ms: started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
+    })
+}
+
+fn movie_destination(
+    output: Option<&Path>,
+    temporary_root: &Path,
+    timestamp_ms: u128,
+) -> AgentResult<PathBuf> {
+    if let Some(output) = output {
+        return explicit_movie_destination(output);
+    }
+    let directory = temporary_capture_directory(temporary_root)?;
+    for suffix in 1_u64.. {
+        let suffix = if suffix == 1 {
+            String::new()
+        } else {
+            format!("-{suffix}")
+        };
+        let path = directory.join(format!("mister-magik-usb-video-{timestamp_ms}{suffix}.mov"));
+        if !path.exists() {
+            return Ok(path);
+        }
+    }
+    unreachable!("capture suffix space exhausted")
+}
+
+fn explicit_movie_destination(path: &Path) -> AgentResult<PathBuf> {
+    let extension = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase);
+    if extension.as_deref() != Some("mov") {
+        return Err(classified(
+            "camera_output_invalid",
+            format!("movie output must use a .mov extension: {}", path.display()),
+        ));
+    }
+    let file_name = path.file_name().ok_or_else(|| {
+        classified(
+            "camera_output_invalid",
+            format!("output has no file name: {}", path.display()),
+        )
+    })?;
+    let parent = match path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        Some(parent) => parent.to_path_buf(),
+        None => std::env::current_dir()
+            .map_err(|error| classified("camera_output_invalid", error.to_string()))?,
+    };
+    if !parent.is_dir() {
+        return Err(classified(
+            "camera_output_invalid",
+            format!("output directory does not exist: {}", parent.display()),
+        ));
+    }
+    let destination = fs::canonicalize(&parent)
+        .map_err(|error| classified("camera_output_invalid", error.to_string()))?
+        .join(file_name);
+    if destination.exists() {
+        return Err(classified(
+            "camera_output_exists",
+            format!("refusing to overwrite {}", destination.display()),
+        ));
+    }
+    Ok(destination)
 }
 
 fn execute_with_backend(
@@ -244,9 +359,17 @@ mod native;
 mod native {
     use super::{EncodedFrame, classified};
     use crate::error::AgentResult;
+    use std::path::Path;
     use std::time::Duration;
 
     pub(super) fn capture(_timeout: Duration) -> AgentResult<EncodedFrame> {
+        Err(classified(
+            "camera_unsupported",
+            "USB Video capture is available only on macOS",
+        ))
+    }
+
+    pub(super) fn record(_output: &Path, _duration: Duration) -> AgentResult<()> {
         Err(classified(
             "camera_unsupported",
             "USB Video capture is available only on macOS",
@@ -345,6 +468,24 @@ mod tests {
                 .starts_with("camera_output_exists:")
         );
         assert_eq!(backend.calls.load(Ordering::SeqCst), 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn movie_destination_is_bounded_unique_and_mov_only() {
+        let root = temp_root("movie");
+        fs::create_dir_all(&root).unwrap();
+        let first = movie_destination(None, &root, 1234).unwrap();
+        fs::write(&first, b"existing").unwrap();
+        let second = movie_destination(None, &root, 1234).unwrap();
+        assert!(first.ends_with("mister-magik/captures/mister-magik-usb-video-1234.mov"));
+        assert!(second.ends_with("mister-magik/captures/mister-magik-usb-video-1234-2.mov"));
+        assert!(
+            explicit_movie_destination(&root.join("capture.mp4"))
+                .unwrap_err()
+                .to_string()
+                .starts_with("camera_output_invalid:")
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

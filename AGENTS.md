@@ -124,9 +124,11 @@ repository Apple Linux image and caches its Linux Rust toolchain under
 `deliver` only when the committed change has runtime or platform impact.
 `release qualify` is an attended operator gate; run it only when explicitly
 requested.
-`capture usb-video` is a macOS-only, one-shot capture of the fixed `USB Video`
-input. It writes a validated 1920x1080 JPEG under the OS temporary directory
-unless `--output PATH` is supplied, then prints a Markdown image link.
+`capture usb-video` is a macOS-only native capture of the fixed `USB Video`
+input. By default it writes a validated 1920x1080 JPEG under the OS temporary
+directory unless `--output PATH` is supplied. With `--seconds N` it instead
+writes a bounded 1920x1080 QuickTime movie for 1–60 seconds. Both modes print a
+Markdown artifact link and refuse to overwrite explicit output paths.
 Do not narrate successful operation counts or names: report only that validation
 is running, passed, or failed with the actionable summary. Agents must not
 construct Cargo, test, lint, host-validation, or Apple-container commands
