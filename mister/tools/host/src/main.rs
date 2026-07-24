@@ -2173,10 +2173,12 @@ fn cold_benchmark_events_path(scenario: ColdBenchmarkScenario) -> &'static str {
 }
 
 fn cold_benchmark_snapshot_command(_scenario: ColdBenchmarkScenario) -> String {
-    format!(
-        "set -eu; {}; root=/media/fat/mister-magik-dev; snap=/tmp/mister-magik/agent-benchmark-data; rm -rf \"$snap\"; mkdir -p \"$snap\"; for name in catalog-v3 library.sqlite3 arcade-bootstrap.nav.lz4b; do if test -e \"$root/$name\"; then cp -a \"$root/$name\" \"$snap/$name\"; touch \"$snap/$name.present\"; fi; done",
-        platform_safety_script()
-    )
+    let safety = platform_safety_script();
+    shell_sequence([
+        "set -eu",
+        safety.as_str(),
+        "root=/media/fat/mister-magik-dev; snap=/tmp/mister-magik/agent-benchmark-data; rm -rf \"$snap\"; mkdir -p \"$snap\"; for name in catalog-v3 library.sqlite3 arcade-bootstrap.nav.lz4b; do if test -e \"$root/$name\"; then cp -a \"$root/$name\" \"$snap/$name\"; touch \"$snap/$name.present\"; fi; done",
+    ])
 }
 
 fn cold_benchmark_fixture_command(scenario: ColdBenchmarkScenario) -> String {
@@ -2187,11 +2189,12 @@ fn cold_benchmark_fixture_command(scenario: ColdBenchmarkScenario) -> String {
         }
         ColdBenchmarkScenario::LibraryPersistence => "rm -f \"$root/library.sqlite3\"",
     };
-    format!(
-        "set -eu; {}; root=/media/fat/mister-magik-dev; test -d /tmp/mister-magik/agent-benchmark-data; {mutation}; rm -f {}",
-        platform_safety_script(),
+    let safety = platform_safety_script();
+    let fixture = format!(
+        "root=/media/fat/mister-magik-dev; test -d /tmp/mister-magik/agent-benchmark-data; {mutation}; rm -f {}",
         cold_benchmark_events_path(scenario)
-    )
+    );
+    shell_sequence(["set -eu", safety.as_str(), fixture.as_str()])
 }
 
 fn cold_benchmark_execute_command(scenario: ColdBenchmarkScenario) -> String {
@@ -2216,11 +2219,12 @@ fn cold_benchmark_execute_command(scenario: ColdBenchmarkScenario) -> String {
 }
 
 fn cold_benchmark_restore_command(scenario: ColdBenchmarkScenario) -> String {
-    format!(
-        "set -eu; root=/media/fat/mister-magik-dev; snap=/tmp/mister-magik/agent-benchmark-data; test -d \"$snap\"; rm -rf \"$root/catalog-v3\"; rm -f \"$root/library.sqlite3\" \"$root/arcade-bootstrap.nav.lz4b\"; for name in catalog-v3 library.sqlite3 arcade-bootstrap.nav.lz4b; do if test -e \"$snap/$name.present\"; then mv \"$snap/$name\" \"$root/$name\"; fi; done; rm -rf \"$snap\"; rm -f {} /tmp/mister-magik/agent-cold-benchmark.out; {}",
-        cold_benchmark_events_path(scenario),
-        platform_safety_script()
-    )
+    let restore = format!(
+        "root=/media/fat/mister-magik-dev; snap=/tmp/mister-magik/agent-benchmark-data; test -d \"$snap\"; rm -rf \"$root/catalog-v3\"; rm -f \"$root/library.sqlite3\" \"$root/arcade-bootstrap.nav.lz4b\"; for name in catalog-v3 library.sqlite3 arcade-bootstrap.nav.lz4b; do if test -e \"$snap/$name.present\"; then mv \"$snap/$name\" \"$root/$name\"; fi; done; rm -rf \"$snap\"; rm -f {} /tmp/mister-magik/agent-cold-benchmark.out",
+        cold_benchmark_events_path(scenario)
+    );
+    let safety = platform_safety_script();
+    shell_sequence(["set -eu", restore.as_str(), safety.as_str()])
 }
 
 const RELEASE_TOKEN: &str = "/tmp/mister-magik/release-qualification-session";
@@ -2231,11 +2235,16 @@ fn release_arming_cleanup_command() -> &'static str {
 }
 
 fn release_begin_command() -> String {
-    format!(
-        "set -eu; {}; {} snap={RELEASE_SNAPSHOT}; rm -rf \"$snap\"; mkdir -p \"$snap\"; if test -e /media/fat/MiSTer.ini; then cp -a /media/fat/MiSTer.ini \"$snap/MiSTer.ini\"; fi; printf '%s\\n' attended-non-network-recovery-confirmed >{RELEASE_TOKEN}; test -s {RELEASE_TOKEN}",
+    let safety = platform_safety_script();
+    let snapshot = format!(
+        "snap={RELEASE_SNAPSHOT}; rm -rf \"$snap\"; mkdir -p \"$snap\"; if test -e /media/fat/MiSTer.ini; then cp -a /media/fat/MiSTer.ini \"$snap/MiSTer.ini\"; fi; printf '%s\\n' attended-non-network-recovery-confirmed >{RELEASE_TOKEN}; test -s {RELEASE_TOKEN}"
+    );
+    shell_sequence([
+        "set -eu",
         release_arming_cleanup_command(),
-        platform_safety_script()
-    )
+        safety.as_str(),
+        snapshot.as_str(),
+    ])
 }
 
 fn release_catalog_command() -> String {
@@ -2355,19 +2364,31 @@ fn qualify_release_display_matrix_with(
 }
 
 fn release_recovery_command() -> String {
-    format!(
-        "set -eu; test \"$(cat {RELEASE_TOKEN})\" = attended-non-network-recovery-confirmed; test -p /dev/MiSTer_cmd; {}; {}",
+    let preflight = format!(
+        "test \"$(cat {RELEASE_TOKEN})\" = attended-non-network-recovery-confirmed; test -p /dev/MiSTer_cmd"
+    );
+    let safety = platform_safety_script();
+    shell_sequence([
+        "set -eu",
+        preflight.as_str(),
         release_arming_cleanup_command(),
-        platform_safety_script()
-    )
+        safety.as_str(),
+    ])
 }
 
 fn release_restore_command() -> String {
-    format!(
-        "set -eu; snap={RELEASE_SNAPSHOT}; {}; if test -s \"$snap/MiSTer.ini\"; then cp -a \"$snap/MiSTer.ini\" /media/fat/MiSTer.ini; fi; rm -f {RELEASE_TOKEN}; rm -rf \"$snap\"; {} test ! -e {RELEASE_TOKEN}",
-        release_arming_cleanup_command(),
-        platform_safety_script()
-    )
+    let snapshot = format!(
+        "snap={RELEASE_SNAPSHOT}; {}; if test -s \"$snap/MiSTer.ini\"; then cp -a \"$snap/MiSTer.ini\" /media/fat/MiSTer.ini; fi; rm -f {RELEASE_TOKEN}; rm -rf \"$snap\"",
+        release_arming_cleanup_command()
+    );
+    let safety = platform_safety_script();
+    let verify = format!("test ! -e {RELEASE_TOKEN}");
+    shell_sequence([
+        "set -eu",
+        snapshot.as_str(),
+        safety.as_str(),
+        verify.as_str(),
+    ])
 }
 
 fn diagnostic_facts_command() -> String {
@@ -2389,10 +2410,12 @@ fn is_safe_crash_report_path(path: &str) -> bool {
 }
 
 fn safe_repair_command() -> String {
-    format!(
-        "set -eu; rm -f /tmp/mister-magik/agent-benchmark.tsv /tmp/mister-magik/agent-benchmark-warmup.tsv /tmp/mister-magik/agent-cold-benchmark.out /tmp/mister-magik/stale-launcher-return-state.json; {}",
-        platform_safety_script()
-    )
+    let safety = platform_safety_script();
+    shell_sequence([
+        "set -eu",
+        "rm -f /tmp/mister-magik/agent-benchmark.tsv /tmp/mister-magik/agent-benchmark-warmup.tsv /tmp/mister-magik/agent-cold-benchmark.out /tmp/mister-magik/stale-launcher-return-state.json",
+        safety.as_str(),
+    ])
 }
 
 fn arming_status() -> Result<()> {
@@ -2451,15 +2474,10 @@ fn mode_cli(args: &[String]) -> Result<()> {
     };
     ensure_stock_inittab(&session, false)?;
     edit_remote_ini(&session, IniEdit::SelectMain(selection.into()), false)?;
-    exec_checked(
-        &session,
-        "mode arming cleanup",
-        &format!(
-            "set -eu; {}; {}",
-            release_arming_cleanup_command(),
-            platform_safety_script()
-        ),
-    )?;
+    let safety = platform_safety_script();
+    let arming_cleanup =
+        shell_sequence(["set -eu", release_arming_cleanup_command(), safety.as_str()]);
+    exec_checked(&session, "mode arming cleanup", &arming_cleanup)?;
     issue_reboot(&session, RebootMode::Supervised)?;
     drop(session);
     if !wait_down(40.0) || wait_up(120.0)? != 0 {
@@ -3013,25 +3031,32 @@ fn benchmark_trace_complete_path(warmup: bool) -> &'static str {
 }
 
 fn benchmark_prepare_command(_scenario: BenchmarkScenario) -> String {
-    format!(
-        "set -eu; {} rm -f {} {} {} {}; mkdir -p /tmp/mister-magik",
-        platform_safety_script(),
+    let safety = platform_safety_script();
+    let reset = format!(
+        "rm -f {} {} {} {}",
         benchmark_trace_path(true),
         benchmark_trace_path(false),
         benchmark_trace_complete_path(true),
         benchmark_trace_complete_path(false)
-    )
+    );
+    shell_sequence([
+        "set -eu",
+        safety.as_str(),
+        reset.as_str(),
+        "mkdir -p /tmp/mister-magik",
+    ])
 }
 
 fn benchmark_restore_command() -> String {
-    format!(
-        "set -eu; rm -f {} {} {} {}; {}",
+    let cleanup = format!(
+        "rm -f {} {} {} {}",
         benchmark_trace_path(true),
         benchmark_trace_path(false),
         benchmark_trace_complete_path(true),
-        benchmark_trace_complete_path(false),
-        platform_safety_script()
-    )
+        benchmark_trace_complete_path(false)
+    );
+    let safety = platform_safety_script();
+    shell_sequence(["set -eu", cleanup.as_str(), safety.as_str()])
 }
 
 fn run_launcher_benchmark(
@@ -4286,9 +4311,10 @@ impl PlatformDeployTransaction {
         }) {
             chmod.push_str(&format!("chmod 755 {}; ", sh(&file.remote)));
         }
+        let safety = platform_safety_script();
+        let finish = shell_sequence([safety.as_str(), "trap - EXIT INT TERM", "sync"]);
         format!(
-            "set -eu; test -f /media/fat/MiSTer.ini.platform-rollback; {verify} rollback() {{ {rollback} mv -f /media/fat/MiSTer.ini.platform-rollback /media/fat/MiSTer.ini 2>/dev/null || true; sync; }}; trap rollback EXIT INT TERM; {activate} {chmod} sync; {safety} trap - EXIT INT TERM; sync",
-            safety = platform_safety_script(),
+            "set -eu; test -f /media/fat/MiSTer.ini.platform-rollback; {verify} rollback() {{ {rollback} mv -f /media/fat/MiSTer.ini.platform-rollback /media/fat/MiSTer.ini 2>/dev/null || true; sync; }}; trap rollback EXIT INT TERM; {activate} {chmod} sync; {finish}"
         )
     }
 }
@@ -4310,9 +4336,11 @@ fn platform_rollback_script() -> String {
             missing = sh(&format!("{remote}.rollback-missing"))
         ));
     }
-    rollback.push_str("mv -f /media/fat/MiSTer.ini.platform-rollback /media/fat/MiSTer.ini 2>/dev/null || true; sync; ");
-    rollback.push_str(&platform_safety_script());
-    rollback
+    rollback.push_str(
+        "mv -f /media/fat/MiSTer.ini.platform-rollback /media/fat/MiSTer.ini 2>/dev/null || true; sync",
+    );
+    let safety = platform_safety_script();
+    shell_sequence([rollback.as_str(), safety.as_str()])
 }
 
 fn platform_snapshot_script() -> String {
@@ -4337,20 +4365,52 @@ fn platform_snapshot_script() -> String {
 }
 
 fn platform_cleanup_script() -> String {
-    let mut cleanup = format!("set -eu; {} ", platform_safety_script());
+    let mut commands = vec!["set -eu".to_string(), platform_safety_script()];
     for (_, remote) in PLATFORM_DEPLOY_FILES {
-        cleanup.push_str(&format!(
-            "rm -f {} {}; ",
+        commands.push(format!(
+            "rm -f {} {}",
             sh(&format!("{remote}.rollback")),
             sh(&format!("{remote}.rollback-missing"))
         ));
     }
-    cleanup.push_str("rm -f /media/fat/MiSTer.ini.platform-rollback; sync; ");
-    cleanup
+    commands.push("rm -f /media/fat/MiSTer.ini.platform-rollback".to_string());
+    commands.push("sync".to_string());
+    shell_sequence(commands.iter().map(String::as_str))
 }
 
 fn platform_safety_script() -> String {
-    "test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot;".into()
+    shell_sequence([
+        "test ! -e /media/fat/mister-magik/launcher.env",
+        "test ! -e /media/fat/mister-magik-dev/launcher.env",
+        "test ! -e /tmp/mister-magik/fs-fault-launcher.env",
+        "test ! -e /tmp/mister-magik/fs-fault-session",
+        "test ! -e /tmp/mister-magik/fs-fault.json",
+        "test ! -e /media/fat/mister-magik/rebuild-on-next-boot",
+        "test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
+    ])
+}
+
+fn shell_sequence<I, S>(commands: I) -> String
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    commands
+        .into_iter()
+        .map(|command| {
+            let command = command.as_ref().trim();
+            assert!(
+                !command.is_empty(),
+                "shell command fragment must not be empty"
+            );
+            assert!(
+                !command.starts_with(';') && !command.ends_with(';'),
+                "shell command fragments must not own sequence separators"
+            );
+            command.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 fn exec_checked(sess: &Session, label: &str, command: &str) -> Result<()> {
@@ -10765,10 +10825,33 @@ H: Handlers=event3 js0"#
 
     #[test]
     fn benchmark_prepare_composes_one_valid_safety_command() {
-        let command = benchmark_prepare_command(BenchmarkScenario::ScreensaverVelocity);
+        assert!(!platform_safety_script().trim_end().ends_with(';'));
+        for command in [
+            benchmark_prepare_command(BenchmarkScenario::ScreensaverVelocity),
+            benchmark_restore_command(),
+        ] {
+            assert!(!command.contains(";;"));
+            let syntax = Command::new("sh")
+                .args(["-n", "-c"])
+                .arg(&command)
+                .output()
+                .unwrap();
+            assert!(
+                syntax.status.success(),
+                "generated command failed shell parsing: {}",
+                String::from_utf8_lossy(&syntax.stderr)
+            );
+        }
+        assert!(
+            benchmark_prepare_command(BenchmarkScenario::ScreensaverVelocity)
+                .contains(benchmark_trace_complete_path(false))
+        );
+    }
 
-        assert!(!command.contains(";;"));
-        assert!(command.contains(benchmark_trace_complete_path(false)));
+    #[test]
+    #[should_panic(expected = "shell command fragments must not own sequence separators")]
+    fn shell_sequence_rejects_fragment_owned_separators() {
+        shell_sequence(["set -eu;", "true"]);
     }
 
     #[test]
