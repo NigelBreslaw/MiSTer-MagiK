@@ -10,19 +10,49 @@ const CRT_LATCH_SETTLE_TIMEOUT: Duration = Duration::from_millis(100);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct CrtTrialCounters {
     flips: u16,
+    posts: u16,
+    drops: u16,
 }
 
 impl CrtTrialCounters {
     fn from_status(status: crate::fpga::LatchedFbufStatus) -> Self {
         Self {
             flips: status.flip_count,
+            posts: status.post_count,
+            drops: status.drop_count,
         }
     }
 
     fn delta(self, before: Self) -> Self {
         Self {
             flips: self.flips.wrapping_sub(before.flips),
+            posts: self.posts.wrapping_sub(before.posts),
+            drops: self.drops.wrapping_sub(before.drops),
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct CrtTrialCadence {
+    last_completed_at: Option<Instant>,
+    max_interval_us: u64,
+    missed_intervals: u64,
+}
+
+impl CrtTrialCadence {
+    fn record(&mut self, completed_at: Instant, nominal_period_us: u64) {
+        if let Some(previous) = self.last_completed_at {
+            let interval_us = completed_at
+                .saturating_duration_since(previous)
+                .as_micros()
+                .try_into()
+                .unwrap_or(u64::MAX);
+            self.max_interval_us = self.max_interval_us.max(interval_us);
+            if interval_us > nominal_period_us.saturating_mul(3) / 2 {
+                self.missed_intervals += 1;
+            }
+        }
+        self.last_completed_at = Some(completed_at);
     }
 }
 
@@ -35,7 +65,7 @@ pub(super) fn run_crt_trial_loop(
     let mode = ui.output_route();
     if secs != CRT_TRIAL_SECS || !mode.is_crt() {
         crate::ui_errln!(
-            "crt_trial_status_v2 schema=2 ok=0 mode={} reason=invalid-contract requested_secs={} geometry={}x{}",
+            "crt_trial_status_v3 schema=3 ok=0 mode={} reason=invalid-contract requested_secs={} geometry={}x{}",
             mode.label(),
             secs,
             ui.render_w(),
@@ -44,11 +74,11 @@ pub(super) fn run_crt_trial_loop(
         return;
     }
 
-    let before = match wait_for_crt_latch_settle(hardware) {
-        Ok(status) if status.supported() => CrtTrialCounters::from_status(status),
+    let initial_status = match wait_for_crt_latch_settle(hardware) {
+        Ok(status) if status.supported() => status,
         Ok(status) => {
             crate::ui_errln!(
-                "crt_trial_status_v2 schema=2 ok=0 mode={} duration_ms=0 frames=0 flips=0 reason=latch-status-unsupported ack_high=0x{:04x} ack_low=0x{:04x}",
+                "crt_trial_status_v3 schema=3 ok=0 mode={} duration_ms=0 frames=0 flips=0 posts=0 drops=0 reason=latch-status-unsupported ack_high=0x{:04x} ack_low=0x{:04x}",
                 mode.label(),
                 status.magic_hi,
                 status.magic_lo
@@ -57,13 +87,14 @@ pub(super) fn run_crt_trial_loop(
         }
         Err(error) => {
             crate::ui_errln!(
-                "crt_trial_status_v2 schema=2 ok=0 mode={} reason=latch-status-read detail={}",
+                "crt_trial_status_v3 schema=3 ok=0 mode={} reason=latch-status-read detail={}",
                 mode.label(),
                 safe_field(&error.to_string())
             );
             return;
         }
     };
+    let before = CrtTrialCounters::from_status(initial_status);
 
     let width = ui.render_w();
     let height = ui.render_h();
@@ -81,7 +112,7 @@ pub(super) fn run_crt_trial_loop(
         Ok(presenter) => presenter,
         Err(failure) => {
             crate::ui_errln!(
-                "crt_trial_status_v2 schema=2 ok=0 mode={} reason=presenter-open stage={} detail={}",
+                "crt_trial_status_v3 schema=3 ok=0 mode={} reason=presenter-open stage={} detail={}",
                 mode.label(),
                 failure.stage.code(),
                 safe_field(&failure.detail)
@@ -90,40 +121,99 @@ pub(super) fn run_crt_trial_loop(
         }
     };
     let mut failure = None;
+    let nominal_period_us = mode.nominal_period_us().unwrap_or(20_000);
+    let mut cadence = CrtTrialCadence::default();
+    let mut settled_status = initial_status;
+    let mut last_buffer = None;
+    let mut last_sequence = 0;
+    let mut unsafe_active_writes = 0u64;
+    let mut pending_writes = 0u64;
+    let mut alternation_misses = 0u64;
     while started.elapsed() < Duration::from_secs(CRT_TRIAL_SECS) {
         if frames > 0 {
-            if let Err(error) = wait_for_crt_latch_settle(hardware) {
-                failure = Some(format!("latch-settle-{}", safe_field(&error.to_string())));
-                break;
+            match wait_for_crt_latch_settle(hardware) {
+                Ok(status) => settled_status = status,
+                Err(error) => {
+                    failure = Some(format!("latch-settle-{}", safe_field(&error.to_string())));
+                    break;
+                }
             }
         }
         render_crt_trial_frame(&mut frame, width, height, frames, content_bounds);
         let plan = LauncherFramePlan::new(full_damage, None, None, None, None);
-        if let Err(error) = presenter.present_cached_full_frame(
+        let stats = match presenter.present_cached_full_frame(
             CachedFrameView::new(&frame, width, height),
             plan,
             hardware,
             display_session,
             |_hidden, _plan| Ok(()),
         ) {
-            failure = Some(format!("{}-{}", error.stage.code(), error.reason_code()));
-            break;
+            Ok(stats) => stats,
+            Err(error) => {
+                failure = Some(format!("{}-{}", error.stage.code(), error.reason_code()));
+                break;
+            }
+        };
+        let selected_base = presenter.buffer_base_addr(stats.buffer_index);
+        if settled_status.active_enabled() && settled_status.active_base == selected_base {
+            unsafe_active_writes += 1;
         }
+        if settled_status.pending() {
+            pending_writes += 1;
+        }
+        if last_buffer == Some(stats.buffer_index) {
+            alternation_misses += 1;
+        }
+        last_buffer = Some(stats.buffer_index);
+        last_sequence = stats.posted_sequence;
+        cadence.record(Instant::now(), nominal_period_us);
         frames += 1;
     }
 
-    let (flips, failure) =
+    let (counters, final_status, mut failure) =
         finish_crt_trial(before, frames, failure, wait_for_crt_latch_settle(hardware));
-    let reason = failure
-        .as_deref()
-        .unwrap_or(if flips == 0 { "no-latch-flips" } else { "none" });
+    if failure.is_none() && unsafe_active_writes > 0 {
+        failure = Some("active-buffer-write".to_string());
+    }
+    if failure.is_none() && pending_writes > 0 {
+        failure = Some("pending-buffer-write".to_string());
+    }
+    if failure.is_none() && alternation_misses > 0 {
+        failure = Some("buffer-alternation-miss".to_string());
+    }
+    let final_pending = final_status.is_some_and(crate::fpga::LatchedFbufStatus::pending);
+    let final_active_matches = final_status.is_some_and(|status| {
+        last_buffer.is_some_and(|buffer| {
+            status.active_base == presenter.buffer_base_addr(buffer)
+                && status.active_sequence == last_sequence
+        })
+    });
+    if failure.is_none() && (!final_active_matches || final_pending) {
+        failure = Some("final-active-route-mismatch".to_string());
+    }
+    let reason = failure.as_deref().unwrap_or(if counters.flips == 0 {
+        "no-latch-flips"
+    } else {
+        "none"
+    });
     crate::ui_logln!(
-        "crt_trial_status_v2 schema=2 ok={} mode={} duration_ms={} frames={} flips={} reason={}",
-        u8::from(failure.is_none() && frames > 0 && flips > 0),
+        "crt_trial_status_v3 schema=3 ok={} mode={} duration_ms={} frames={} flips={} posts={} drops={} final_pending={} final_active_matches={} unsafe_active_writes={} pending_writes={} alternation_misses={} cadence_misses={} max_interval_us={} last_buffer={} last_sequence={} reason={}",
+        u8::from(failure.is_none() && frames > 0 && counters.flips > 0),
         mode.label(),
         started.elapsed().as_millis(),
         frames,
-        flips,
+        counters.flips,
+        counters.posts,
+        counters.drops,
+        u8::from(final_pending),
+        u8::from(final_active_matches),
+        unsafe_active_writes,
+        pending_writes,
+        alternation_misses,
+        cadence.missed_intervals,
+        cadence.max_interval_us,
+        last_buffer.unwrap_or(0),
+        last_sequence,
         reason
     );
 }
@@ -162,7 +252,11 @@ fn finish_crt_trial(
     frames: u64,
     mut failure: Option<String>,
     final_status: io::Result<crate::fpga::LatchedFbufStatus>,
-) -> (u16, Option<String>) {
+) -> (
+    CrtTrialCounters,
+    Option<crate::fpga::LatchedFbufStatus>,
+    Option<String>,
+) {
     let final_status = match final_status {
         Ok(status) if status.supported() => Some(status),
         Ok(_) => {
@@ -176,15 +270,19 @@ fn finish_crt_trial(
             None
         }
     };
-    let flips = final_status
+    let counters = final_status
         .map(CrtTrialCounters::from_status)
         .unwrap_or(before)
-        .delta(before)
-        .flips;
-    if failure.is_none() && u64::from(flips) != frames {
+        .delta(before);
+    if failure.is_none()
+        && (u64::from(counters.flips) != frames || u64::from(counters.posts) != frames)
+    {
         failure = Some("incomplete-latch-flips".to_string());
     }
-    (flips, failure)
+    if failure.is_none() && counters.drops != 0 {
+        failure = Some("unexpected-latch-drops".to_string());
+    }
+    (counters, final_status, failure)
 }
 
 fn crt_trial_content_bounds_from_env(width: usize) -> Option<(usize, usize)> {
@@ -375,9 +473,37 @@ mod tests {
 
     #[test]
     fn flip_counter_delta_wraps_without_panicking() {
-        let before = CrtTrialCounters { flips: u16::MAX };
-        let after = CrtTrialCounters { flips: 1 };
-        assert_eq!(after.delta(before), CrtTrialCounters { flips: 2 });
+        let before = CrtTrialCounters {
+            flips: u16::MAX,
+            posts: u16::MAX,
+            drops: u16::MAX,
+        };
+        let after = CrtTrialCounters {
+            flips: 1,
+            posts: 1,
+            drops: 1,
+        };
+        assert_eq!(
+            after.delta(before),
+            CrtTrialCounters {
+                flips: 2,
+                posts: 2,
+                drops: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn cadence_flags_only_intervals_over_one_and_a_half_frames() {
+        let start = Instant::now();
+        let mut cadence = CrtTrialCadence::default();
+
+        cadence.record(start, 20_000);
+        cadence.record(start + Duration::from_micros(30_000), 20_000);
+        cadence.record(start + Duration::from_micros(60_001), 20_000);
+
+        assert_eq!(cadence.max_interval_us, 30_001);
+        assert_eq!(cadence.missed_intervals, 1);
     }
 
     #[test]
@@ -404,21 +530,27 @@ mod tests {
 
     #[test]
     fn final_completion_requires_supported_settled_status_and_matching_flips() {
-        let before = CrtTrialCounters { flips: 20 };
-        let (flips, failure) = finish_crt_trial(before, 2, None, Ok(status(22, false)));
-        assert_eq!(flips, 2);
+        let before = CrtTrialCounters {
+            flips: 20,
+            posts: 20,
+            drops: 0,
+        };
+        let (counters, _, failure) = finish_crt_trial(before, 2, None, Ok(status(22, false)));
+        assert_eq!(counters.flips, 2);
+        assert_eq!(counters.posts, 2);
+        assert_eq!(counters.drops, 0);
         assert_eq!(failure, None);
 
-        let (flips, failure) = finish_crt_trial(before, 2, None, Ok(status(21, false)));
-        assert_eq!(flips, 1);
+        let (counters, _, failure) = finish_crt_trial(before, 2, None, Ok(status(21, false)));
+        assert_eq!(counters.flips, 1);
         assert_eq!(failure.as_deref(), Some("incomplete-latch-flips"));
 
         let mut unsupported = status(22, false);
         unsupported.magic_hi = 0;
-        let (_, failure) = finish_crt_trial(before, 2, None, Ok(unsupported));
+        let (_, _, failure) = finish_crt_trial(before, 2, None, Ok(unsupported));
         assert_eq!(failure.as_deref(), Some("final-latch-status-unsupported"));
 
-        let (_, failure) = finish_crt_trial(
+        let (_, _, failure) = finish_crt_trial(
             before,
             2,
             None,

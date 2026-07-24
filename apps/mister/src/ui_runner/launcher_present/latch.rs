@@ -560,6 +560,10 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             .frame_view(buffer_index, self.width, self.height)
     }
 
+    pub(in crate::ui_runner) fn buffer_base_addr(&self, buffer_index: u8) -> u32 {
+        self.buffers.base_addr(buffer_index)
+    }
+
     pub(in crate::ui_runner) fn publish_requested_full_snapshot(&self) -> bool {
         if !mister_magik_fb::framebuffer::stream::adaptive_full_snapshot_due() {
             return false;

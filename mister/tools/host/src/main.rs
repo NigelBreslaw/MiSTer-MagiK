@@ -2098,7 +2098,7 @@ fn scene_cli(args: &[String]) -> Result<()> {
         let output = exec_checked_output(
             &session,
             "CRT trial status",
-            "sed -n '/^crt_trial_status_v2 /p' /tmp/mister-magik-crt_trial.log | tail -n 1",
+            "sed -n '/^crt_trial_status_v[23] /p' /tmp/mister-magik-crt_trial.log | tail -n 1",
         )?;
         println!("{}", parse_crt_trial_status(&output.stdout)?);
         Ok(())
@@ -2223,7 +2223,7 @@ fn run_crt_geometry_trial_with(
     let trial_status = exec_checked_output(
         &recovery_session,
         "geometry trial status",
-        "sed -n '/^crt_trial_status_v2 /p' /tmp/mister-magik-crt_trial.log | tail -n 1",
+        "sed -n '/^crt_trial_status_v[23] /p' /tmp/mister-magik-crt_trial.log | tail -n 1",
     )?;
     let trial_status = parse_crt_trial_status(&trial_status.stdout)?;
     let content_bounds = runtime_settings
@@ -2282,16 +2282,25 @@ fn validate_crt_geometry_trial(runtime_settings: &str, rectangle: [u16; 4]) -> R
 }
 
 fn parse_crt_trial_status(output: &str) -> Result<&str> {
-    let marker = "crt_trial_status_v2 schema=2 ";
+    const MARKERS: [&str; 2] = [
+        "crt_trial_status_v2 schema=2 ",
+        "crt_trial_status_v3 schema=3 ",
+    ];
     let status = output
-        .rfind(marker)
+        .match_indices("crt_trial_status_v")
+        .map(|(offset, _)| offset)
+        .last()
         .map(|offset| &output[offset..])
         .unwrap_or(output)
         .lines()
         .next()
         .unwrap_or_default()
         .trim();
-    if !status.starts_with(marker) {
+    let marker = MARKERS
+        .iter()
+        .find(|marker| status.starts_with(**marker))
+        .copied();
+    if marker.is_none() {
         return Err(format!(
             "CRT trial did not return a typed status response: {}",
             status.replace(['\t', '\n', '\r'], " ")
@@ -2314,6 +2323,28 @@ fn parse_crt_trial_status(output: &str) -> Result<&str> {
             .any(|field| field.starts_with(required))
         {
             return Err(format!("CRT trial status omitted successful {required}").into());
+        }
+    }
+    if marker == Some(MARKERS[1]) {
+        for required in [
+            "posts=",
+            "drops=",
+            "final_pending=",
+            "final_active_matches=",
+            "unsafe_active_writes=",
+            "pending_writes=",
+            "alternation_misses=",
+            "cadence_misses=",
+            "max_interval_us=",
+            "last_buffer=",
+            "last_sequence=",
+        ] {
+            if !status
+                .split_ascii_whitespace()
+                .any(|field| field.starts_with(required))
+            {
+                return Err(format!("CRT trial status omitted diagnostic {required}").into());
+            }
         }
     }
     Ok(status)
@@ -8020,6 +8051,11 @@ video_mode=14
     fn crt_trial_status_requires_successful_shared_latch_publication() {
         let valid = "crt_trial_status_v2 schema=2 ok=1 mode=crt-288p50 duration_ms=30001 frames=1500 flips=1500 reason=none\n";
         assert_eq!(parse_crt_trial_status(valid).unwrap(), valid.trim());
+        let diagnostic = "crt_trial_status_v3 schema=3 ok=1 mode=crt-576p50 duration_ms=30001 frames=1513 flips=1513 posts=1513 drops=0 final_pending=0 final_active_matches=1 unsafe_active_writes=0 pending_writes=0 alternation_misses=0 cadence_misses=0 max_interval_us=20500 last_buffer=1 last_sequence=1513 reason=none\n";
+        assert_eq!(
+            parse_crt_trial_status(diagnostic).unwrap(),
+            diagnostic.trim()
+        );
         let failure = parse_crt_trial_status(
             "crt_trial_status_v2 schema=2 ok=0 mode=crt-240p60 duration_ms=12 frames=0 flips=0 reason=no-latch-flips"
         )
@@ -8028,6 +8064,12 @@ video_mode=14
         assert!(failure.contains("reason=no-latch-flips"));
         let appended = format!("runtime log without trailing newline {valid}");
         assert_eq!(parse_crt_trial_status(&appended).unwrap(), valid.trim());
+        assert!(
+            parse_crt_trial_status(
+                "crt_trial_status_v3 schema=3 ok=1 mode=crt-576p50 duration_ms=30001 frames=1513 flips=1513 reason=none"
+            )
+            .is_err()
+        );
         assert!(parse_crt_trial_status("untyped success").is_err());
     }
 
