@@ -2378,6 +2378,7 @@ struct ParadeScaleResult {
 
 struct ParadeState {
     tiles: Vec<ParadeTile>,
+    draw_order: Vec<usize>,
     deck: Vec<usize>,
     cursor: usize,
     rng: u64,
@@ -2498,6 +2499,7 @@ impl ParadeState {
             .expect("spawn screensaver Lanczos worker");
         Self {
             tiles: Vec::new(),
+            draw_order: Vec::with_capacity(PARADE_WIDE_LAYER_TARGETS.iter().sum()),
             deck: Vec::new(),
             cursor: 0,
             rng: seed,
@@ -3295,15 +3297,16 @@ fn advance_rng(rng: &mut u64) -> u64 {
     *rng
 }
 
-fn parade_draw_order(state: &ParadeState) -> Vec<usize> {
-    let mut order = Vec::with_capacity(state.layer_targets.iter().sum());
-    for (idx, tile) in state.tiles.iter().enumerate() {
-        if tile.active {
-            order.push(idx);
+fn prepare_parade_draw_order(state: &mut ParadeState) {
+    state.draw_order.clear();
+    for layer_idx in 0..PARADE_SPEED_COUNT {
+        let speed = PARADE_MIN_TILE_SPEED + layer_idx;
+        for (tile_idx, tile) in state.tiles.iter().enumerate() {
+            if tile.active && tile.layer == speed {
+                state.draw_order.push(tile_idx);
+            }
         }
     }
-    order.sort_unstable_by_key(|idx| state.tiles[*idx].layer);
-    order
 }
 
 fn blit_parade_tile(
@@ -3349,8 +3352,8 @@ fn render_parade(
     render_horizontal_starfield(dst, w, h, motion_ticks_fp, state.motion);
     state.ensure_initialized(images, w, h);
     let _ = state.advance(w, h, Some(images), motion_ticks_fp, PARADE_TICK_ONE);
-    let draw_order = parade_draw_order(state);
-    for tile_idx in draw_order {
+    prepare_parade_draw_order(state);
+    for &tile_idx in &state.draw_order {
         let tile = &state.tiles[tile_idx];
         blit_parade_tile(dst, w, h, state.sampling_profile, tile);
     }
@@ -3370,10 +3373,10 @@ fn render_archive_parade(
     let (card_adopt_us, cards_adopted, parade_advance_us) =
         state.advance(w, h, None, motion_ticks_fp, tick_delta_fp);
     let draw_order_start = Instant::now();
-    let draw_order = parade_draw_order(state);
+    prepare_parade_draw_order(state);
     let draw_order_us = draw_order_start.elapsed().as_micros();
     let tile_blit_start = Instant::now();
-    for tile_idx in draw_order {
+    for &tile_idx in &state.draw_order {
         let tile = &state.tiles[tile_idx];
         blit_parade_tile(dst, w, h, state.sampling_profile, tile);
     }
@@ -4365,14 +4368,31 @@ mod tests {
             tile.layer = speed;
             tile.speed = speed;
         }
-        let order = parade_draw_order(&state);
-        let speeds = order
-            .into_iter()
+        prepare_parade_draw_order(&mut state);
+        let speeds = state
+            .draw_order
+            .iter()
+            .copied()
             .map(|idx| state.tiles[idx].layer)
             .collect::<Vec<_>>();
         assert!(speeds.windows(2).all(|pair| pair[0] <= pair[1]));
         assert_eq!(speeds.first(), Some(&2));
         assert_eq!(speeds.last(), Some(&5));
+    }
+
+    #[test]
+    fn parade_draw_order_reuses_its_allocation() {
+        let mut state = ParadeState::new(11);
+        let images = test_images(64);
+        state.ensure_initialized(&images, 960, 540);
+
+        prepare_parade_draw_order(&mut state);
+        let pointer = state.draw_order.as_ptr();
+        let capacity = state.draw_order.capacity();
+        prepare_parade_draw_order(&mut state);
+
+        assert_eq!(state.draw_order.as_ptr(), pointer);
+        assert_eq!(state.draw_order.capacity(), capacity);
     }
 
     #[test]
