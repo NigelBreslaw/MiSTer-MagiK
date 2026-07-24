@@ -641,7 +641,7 @@ fn post_probe_slot(
         .arm_latch_route_with_hardware(hardware)
         .map_err(|error| format!("route-arm-{}", safe_field(&error.to_string())))?;
     let settle_started = Instant::now();
-    let after = wait_for_crt_latch_settle(hardware)
+    let after = wait_for_crt_post_settle(hardware, posted_sequence)
         .map_err(|error| format!("post-settle-{}", safe_field(&error.to_string())))?;
     telemetry.max_settle_us = telemetry.max_settle_us.max(
         settle_started
@@ -753,6 +753,49 @@ fn wait_for_crt_latch_settle(hardware: &mut Fpga) -> io::Result<crate::fpga::Lat
         CRT_LATCH_SETTLE_TIMEOUT,
         std::thread::sleep,
     )
+}
+
+fn wait_for_crt_post_settle(
+    hardware: &mut Fpga,
+    posted_sequence: u16,
+) -> io::Result<crate::fpga::LatchedFbufStatus> {
+    wait_for_crt_post_settle_with(
+        || hardware.read_magik_latched_fbuf_status(),
+        posted_sequence,
+        CRT_LATCH_SETTLE_TIMEOUT,
+        std::thread::sleep,
+    )
+}
+
+fn wait_for_crt_post_settle_with(
+    mut read_status: impl FnMut() -> io::Result<crate::fpga::LatchedFbufStatus>,
+    posted_sequence: u16,
+    timeout: Duration,
+    mut sleep: impl FnMut(Duration),
+) -> io::Result<crate::fpga::LatchedFbufStatus> {
+    let started = Instant::now();
+    let mut post_observed = false;
+    loop {
+        let status = read_status()?;
+        if !status.supported() {
+            return Ok(status);
+        }
+        if !status.pending() && status.active_sequence == posted_sequence {
+            return Ok(status);
+        }
+        post_observed |= status.pending() && status.pending_sequence == posted_sequence;
+        if started.elapsed() >= timeout {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                if post_observed {
+                    "posted-latch-did-not-settle"
+                } else {
+                    "posted-latch-not-observed"
+                },
+            ));
+        }
+        sleep(Duration::from_millis(1));
+    }
 }
 
 fn wait_for_crt_latch_settle_with(
@@ -1055,6 +1098,40 @@ mod tests {
             .expect_err("permanent pending latch must time out");
 
         assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    }
+
+    #[test]
+    fn post_latch_wait_ignores_stale_active_status_until_post_settles() {
+        let mut stale = status(9, false);
+        stale.active_sequence = 8;
+        let mut pending = status(9, true);
+        pending.active_sequence = 8;
+        pending.pending_sequence = 9;
+        let mut settled_status = status(10, false);
+        settled_status.active_sequence = 9;
+        let mut statuses = vec![settled_status, pending, stale];
+
+        let settled = wait_for_crt_post_settle_with(
+            || Ok(statuses.pop().expect("scripted status")),
+            9,
+            Duration::from_millis(10),
+            |_| {},
+        )
+        .expect("posted latch should be observed and settle");
+
+        assert_eq!(settled.active_sequence, 9);
+        assert!(!settled.pending());
+    }
+
+    #[test]
+    fn post_latch_wait_rejects_a_post_that_is_never_observed() {
+        let mut stale = status(8, false);
+        stale.active_sequence = 8;
+        let error = wait_for_crt_post_settle_with(|| Ok(stale), 9, Duration::ZERO, |_| {})
+            .expect_err("stale active status must not verify a new post");
+
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(error.to_string(), "posted-latch-not-observed");
     }
 
     #[test]
