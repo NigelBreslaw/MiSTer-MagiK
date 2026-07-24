@@ -8,6 +8,7 @@ use mister_magik_fb::latch_readiness::{LatchFailure, LatchFailureReason, LatchFa
 use std::io;
 
 const TRANSIENT_PENDING_SETTLE_TIMEOUT: Duration = Duration::from_millis(100);
+const POST_OBSERVATION_MAX_READS: usize = 3;
 
 pub(in crate::ui_runner) trait LatchHardware: LauncherDisplayHardware {
     fn read_latch_capabilities(
@@ -477,9 +478,8 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         let set_supported = ack.0 == crate::fpga::MAGIK_FBUF_LATCH_MAGIC
             || ack.1 == crate::fpga::MAGIK_FBUF_LATCH_MAGIC;
 
-        let status_start = Instant::now();
-        let after_status = match hardware.read_latched_status() {
-            Ok(status) => status,
+        let (after_status, post_status_us) = match read_post_status(hardware, sequence) {
+            Ok(result) => result,
             Err(e) => {
                 self.latch_state.mark_attempt_failed(buffer_index);
                 return Err(LatchFailure::runtime(
@@ -489,7 +489,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                 ));
             }
         };
-        status_us = status_us.saturating_add(status_start.elapsed().as_micros() as u64);
+        status_us = status_us.saturating_add(post_status_us);
         let status_supported = after_status.supported();
         let flip_count = after_status.flip_count;
         let drop_count = after_status.drop_count;
@@ -512,9 +512,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             ));
         }
 
-        let posted_sequence_observed = after_status.active_sequence == sequence
-            || (after_status.pending() && after_status.pending_sequence == sequence);
-        if !posted_sequence_observed {
+        if !posted_sequence_observed(after_status, sequence) {
             self.latch_state.mark_attempt_failed(buffer_index);
             return Err(LatchFailure::runtime(
                 LatchFailureStage::PostVerification,
@@ -672,6 +670,29 @@ enum LatchStatusSyncError {
         expected_height: u16,
         expected_stride: u16,
     },
+}
+
+fn read_post_status(
+    hardware: &mut impl LatchHardware,
+    sequence: u16,
+) -> io::Result<(crate::fpga::LatchedFbufStatus, u64)> {
+    let started = Instant::now();
+    let mut status = hardware.read_latched_status()?;
+    for _ in 1..POST_OBSERVATION_MAX_READS {
+        if !status.supported() || posted_sequence_observed(status, sequence) {
+            break;
+        }
+        std::thread::yield_now();
+        status = hardware.read_latched_status()?;
+    }
+    Ok((
+        status,
+        started.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
+    ))
+}
+
+fn posted_sequence_observed(status: crate::fpga::LatchedFbufStatus, sequence: u16) -> bool {
+    status.active_sequence == sequence || (status.pending() && status.pending_sequence == sequence)
 }
 
 fn classify_latch_status(
@@ -855,6 +876,7 @@ mod tests {
         read_count: usize,
         post_bases: Vec<u32>,
         last_posted_sequence: Option<u16>,
+        posted_sequence_visibility_delay_reads: usize,
         set_vga_fb_calls: usize,
         events: Option<EventLog>,
     }
@@ -902,7 +924,9 @@ mod tests {
             }
             self.read_count += 1;
             let mut status = self.statuses.remove(0)?;
-            if let Some(sequence) = self.last_posted_sequence.take() {
+            if self.posted_sequence_visibility_delay_reads > 0 {
+                self.posted_sequence_visibility_delay_reads -= 1;
+            } else if let Some(sequence) = self.last_posted_sequence.take() {
                 status.pending_sequence = sequence;
                 status.flags |= 0x0004;
             }
@@ -1166,6 +1190,28 @@ mod tests {
 
         assert_eq!(stats.buffer_index, 2);
         assert_eq!(hardware.post_bases, [BASE2]);
+        assert_eq!(hardware.read_count, 3);
+    }
+
+    #[test]
+    fn transient_post_visibility_gap_is_retried_before_failure() {
+        let mut presenter = presenter();
+        let mut hardware = FakeHardware {
+            statuses: vec![
+                Ok(status(FRONT_BASE, 0x0001)),
+                Ok(status(FRONT_BASE, 0x0001)),
+                Ok(status(FRONT_BASE, 0x0001)),
+            ],
+            posted_sequence_visibility_delay_reads: 2,
+            ..FakeHardware::default()
+        };
+        let mut display = display_session();
+
+        let stats = present(&mut presenter, &mut hardware, &mut display)
+            .expect("a transient status gap must not reject a successful post");
+
+        assert_eq!(stats.buffer_index, 1);
+        assert_eq!(hardware.post_bases, [BASE1]);
         assert_eq!(hardware.read_count, 3);
     }
 
