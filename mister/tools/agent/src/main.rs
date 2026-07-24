@@ -1117,10 +1117,10 @@ mod linux {
     }
 
     fn timeline_record_once(name: &str, detail: String) {
-        if let Some(timeline) = TIMELINE.get() {
-            if let Ok(mut timeline) = timeline.lock() {
-                timeline.record_once(name, detail);
-            }
+        if let Some(timeline) = TIMELINE.get()
+            && let Ok(mut timeline) = timeline.lock()
+        {
+            timeline.record_once(name, detail);
         }
     }
 
@@ -3806,10 +3806,10 @@ mod linux {
         if sshd_pid != "none" {
             timeline_record_once("sshd_seen", format!("pid={sshd_pid}"));
         }
-        if let Some(name) = active_magik_main_name() {
-            if let Some(pid) = read_pidof(name) {
-                timeline_record_once("magik_main_seen", format!("name={name} pid={pid}"));
-            }
+        if let Some(name) = active_magik_main_name()
+            && let Some(pid) = read_pidof(name)
+        {
+            timeline_record_once("magik_main_seen", format!("name={name} pid={pid}"));
         }
         if let Some(pid) = read_pidof("mister-magik-fb") {
             timeline_record_once("magik_launcher_seen", format!("pid={pid}"));
