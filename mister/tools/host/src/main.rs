@@ -7307,6 +7307,7 @@ enum IniEdit {
     MagikBoot,
     MenuOutput(MenuOutputProfile),
     SelectMain(String),
+    RestoreDevelopmentMenu,
     ZaparooBoot,
     ArcadeVideo,
     MenuMode(String),
@@ -7375,6 +7376,7 @@ fn parse_ini_edit_args(args: &[String]) -> Result<IniEdit> {
     validate_ini_edit_args(args)?;
     match args.first().map(String::as_str) {
         Some("menu") => Ok(IniEdit::MenuOutput(MenuOutputProfile::parse(&args[1])?)),
+        Some("restore-development-menu") => Ok(IniEdit::RestoreDevelopmentMenu),
         Some("stock-boot") => Ok(IniEdit::StockBoot),
         _ => unreachable!("validated ini-edit arguments must parse"),
     }
@@ -7385,8 +7387,9 @@ fn validate_ini_edit_args(args: &[String]) -> Result<()> {
         Some("menu") if args.len() == 2 => {
             MenuOutputProfile::parse(&args[1])?;
         }
+        Some("restore-development-menu") if args.len() == 1 => {}
         Some("stock-boot") if args.len() == 1 => {}
-        Some("menu" | "stock-boot") => {
+        Some("menu" | "restore-development-menu" | "stock-boot") => {
             return Err("ini-edit received the wrong number of arguments".into());
         }
         Some(other) => return Err(format!("unsupported ini-edit operation: {other}").into()),
@@ -7490,6 +7493,19 @@ fn edit_mister_ini(input: &str, edit: IniEdit) -> String {
         }
         IniEdit::SelectMain(value) => {
             document.set("MiSTer", "main", &value);
+        }
+        IniEdit::RestoreDevelopmentMenu => {
+            document.set("MiSTer", "main", "MiSTer_MagiKDev");
+            document.remove(
+                "Menu",
+                "video_mode",
+                "MiSTer MagiK benchmark override removed",
+            );
+            document.remove(
+                "Menu",
+                "direct_video",
+                "MiSTer MagiK benchmark override removed",
+            );
         }
         IniEdit::ZaparooBoot => {
             document.set("MiSTer", "direct_video", "0");
@@ -8960,6 +8976,19 @@ video_mode=14
     }
 
     #[test]
+    fn development_menu_restore_removes_benchmark_overrides_only() {
+        let ini = "[MiSTer]\nmain=MiSTer\nforced_scandoubler=0\n\n[Menu]\nvideo_mode=0\ndirect_video=0\nmenu_pal=0\n";
+
+        let edited = edit_mister_ini(ini, IniEdit::RestoreDevelopmentMenu);
+
+        assert!(edited.contains("main=MiSTer_MagiKDev"));
+        assert!(edited.contains(";video_mode=0 ; MiSTer MagiK benchmark override removed"));
+        assert!(edited.contains(";direct_video=0 ; MiSTer MagiK benchmark override removed"));
+        assert!(edited.contains("menu_pal=0"));
+        assert!(edited.contains("forced_scandoubler=0"));
+    }
+
+    #[test]
     fn stock_boot_restore_leaves_missing_or_unrelated_main_alone() {
         let missing = "[Menu]\nvideo_mode=8\n";
         assert_eq!(edit_mister_ini(missing, IniEdit::StockBoot), missing);
@@ -9489,6 +9518,10 @@ video_mode=14
         assert_eq!(
             parse_ini_edit_args(&["stock-boot".into()]).unwrap(),
             IniEdit::StockBoot
+        );
+        assert_eq!(
+            parse_ini_edit_args(&["restore-development-menu".into()]).unwrap(),
+            IniEdit::RestoreDevelopmentMenu
         );
         for retired in [
             vec!["magik-boot".into()],
