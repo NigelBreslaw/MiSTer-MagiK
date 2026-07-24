@@ -108,8 +108,8 @@ pub fn run_transaction(
         (Phase::Classify, 2),
         (Phase::ValidateCommit, 7),
         (Phase::Connect, 12),
-        (Phase::Reconcile, 15),
-        (Phase::GithubResolution, 22),
+        (Phase::GithubResolution, 15),
+        (Phase::Reconcile, 22),
         (Phase::RuntimeBuild, 32),
         (Phase::ManagerQualification, 50),
         (Phase::LocalStaging, 55),
@@ -176,6 +176,7 @@ pub fn execute(
     execute_with_device(
         repository,
         expected_commit,
+        None,
         reporter,
         DeviceClient::default(),
     )
@@ -184,10 +185,12 @@ pub fn execute(
 fn execute_with_device<D: DeviceOperations>(
     repository: &Path,
     expected_commit: &str,
+    platform_candidate: Option<crate::platform_ci::Candidate>,
     reporter: &mut Reporter<'_>,
     device: DeviceClient<D>,
 ) -> AgentResult<DeliveryExecution> {
-    let deployment = crate::deploy::plan(repository, Vec::new())?;
+    let mut deployment = crate::deploy::plan(repository, Vec::new())?;
+    deployment.platform_candidate = platform_candidate;
     let mut actions = ProcessActions {
         repository,
         deployment,
@@ -268,6 +271,9 @@ impl<D: DeviceOperations> ProcessActions<'_, D> {
     }
 
     fn resolve_github(&mut self) -> AgentResult<()> {
+        if self.deployment.platform_candidate.is_some() {
+            return Ok(());
+        }
         self.deployment.platform_candidate = Some(
             crate::platform_ci::resolve_published_repository(self.repository, |_| Ok(()))?,
         );
@@ -430,12 +436,56 @@ fn reconciled_delivery_decision(
     }
 }
 
+fn published_platform_matches_installed(
+    installed: &crate::platform_manifest::InstalledManifest,
+    candidate_manifest: &Path,
+) -> AgentResult<bool> {
+    let published: Value =
+        serde_json::from_slice(&fs::read(candidate_manifest).map_err(|error| error.to_string())?)
+            .map_err(|error| format!("invalid platform candidate manifest: {error}"))?;
+    let published_main_revision = published
+        .pointer("/components/main/head_sha")
+        .and_then(Value::as_str)
+        .ok_or("platform candidate is missing Main revision")?;
+    let expected = [
+        ("main/MiSTer_MagiK", installed.main_sha256()),
+        (
+            "scanout/mister_magik_scanout_slots.ko",
+            installed.scanout_module_sha256(),
+        ),
+        (
+            "scanout/provenance.txt",
+            installed.scanout_metadata_sha256(),
+        ),
+        (
+            "fpga/patched/menu-magik-vblank-latch.rbf",
+            installed.latch_rbf_sha256(),
+        ),
+        (
+            "fpga/patched/menu-magik-vblank-latch.metadata.txt",
+            installed.latch_metadata_sha256(),
+        ),
+    ];
+    let files = published
+        .get("files")
+        .and_then(Value::as_array)
+        .ok_or("platform candidate is missing its file inventory")?;
+    let hashes_match = expected.iter().all(|(path, installed_sha256)| {
+        files.iter().any(|file| {
+            file.get("path").and_then(Value::as_str) == Some(path)
+                && file.get("sha256").and_then(Value::as_str) == Some(*installed_sha256)
+        })
+    });
+    Ok(hashes_match && published_main_revision == installed.main_revision())
+}
+
 impl<D: DeviceOperations> DeliveryActions for ProcessActions<'_, D> {
     fn run(&mut self, phase: Phase) -> AgentResult<()> {
         match phase {
             Phase::Classify => Ok(()),
             Phase::ValidateCommit => self.validate_commit(),
             Phase::Connect => self.device.execute(DeviceRequest::Discover).map(|_| ()),
+            Phase::GithubResolution => self.resolve_github(),
             Phase::Reconcile => {
                 let installed = self
                     .device
@@ -448,31 +498,46 @@ impl<D: DeviceOperations> DeliveryActions for ProcessActions<'_, D> {
                     Err(mister_tool::transport::DeviceFailure::ArtifactMismatch(_)) => false,
                     Err(error) => return Err(error.into()),
                 };
-                self.installed_manager_sha256 = crate::platform_manifest::parse_installed(
+                let parsed_installed = crate::platform_manifest::parse_installed(
                     &installed,
                     crate::platform_manifest::Layout::Development,
-                )
-                .ok()
-                .map(|manifest| manifest.manager_sha256().to_owned());
+                );
+                self.installed_manager_sha256 = parsed_installed
+                    .as_ref()
+                    .ok()
+                    .map(|manifest| manifest.manager_sha256().to_owned());
+                let installed_matches_published = match parsed_installed {
+                    Ok(manifest) => published_platform_matches_installed(
+                        &manifest,
+                        &self
+                            .deployment
+                            .platform_candidate
+                            .as_ref()
+                            .ok_or("GitHub resolution did not produce a platform candidate")?
+                            .manifest,
+                    )?,
+                    Err(_) => false,
+                };
                 let reconciliation =
                     crate::deploy::reconcile(self.repository, &installed, self.expected_commit);
                 self.decision = reconciled_delivery_decision(
                     reconciliation.decision,
-                    installed_platform_verified,
+                    installed_platform_verified && installed_matches_published,
                 );
                 self.no_op = self.decision == DeliveryDecision::NoOp;
                 self.installed_manifest = installed;
                 if self.no_op {
                     return Ok(());
                 }
+                let platform_candidate = self.deployment.platform_candidate.take();
                 self.deployment =
                     crate::deploy::plan(self.repository, reconciliation.changed_paths)?;
+                self.deployment.platform_candidate = platform_candidate;
                 if self.decision == DeliveryDecision::Platform {
                     self.deployment.kind = DeploymentKind::Platform;
                 }
                 Ok(())
             }
-            Phase::GithubResolution => self.resolve_github(),
             Phase::RuntimeBuild => self.build_runtime(),
             Phase::ManagerQualification => self.qualify_manager(),
             Phase::LocalStaging => self.prepare_local_stage(),
@@ -510,8 +575,7 @@ impl<D: DeviceOperations> DeliveryActions for ProcessActions<'_, D> {
 
     fn should_run(&self, phase: Phase) -> bool {
         match phase {
-            Phase::GithubResolution
-            | Phase::ManagerQualification
+            Phase::ManagerQualification
             | Phase::LocalStaging
             | Phase::DatabasePreparation
             | Phase::Activate
@@ -782,8 +846,8 @@ mod tests {
         Phase::Classify,
         Phase::ValidateCommit,
         Phase::Connect,
-        Phase::Reconcile,
         Phase::GithubResolution,
+        Phase::Reconcile,
         Phase::RuntimeBuild,
         Phase::ManagerQualification,
         Phase::LocalStaging,
@@ -1094,6 +1158,24 @@ mod tests {
         let app_revision = crate::git::value(&repository, &["rev-parse", "HEAD"]).unwrap();
         let main_revision = "b".repeat(40);
         let manifest = canonical_test_manifest(&app_revision, &main_revision);
+        let candidate_manifest = root.join("platform-bundle-v0.2.json");
+        fs::write(
+            &candidate_manifest,
+            canonical_candidate_manifest(&main_revision),
+        )
+        .unwrap();
+        let candidate = crate::platform_ci::Candidate {
+            run_id: 1,
+            head_sha: app_revision.clone(),
+            archive: root.join("platform.zip"),
+            manifest: candidate_manifest,
+            reused: true,
+            head_branch: "main".into(),
+            bundle_id: "c".repeat(64),
+            main_identity: "d".repeat(64),
+            fpga_identity: "e".repeat(64),
+            kernel_identity: "f".repeat(64),
+        };
         let requests = Rc::new(RefCell::new(Vec::new()));
         let evidence = Evidence::open_at(&root.join("evidence")).unwrap();
         let request = RawRequest::capture(["agent-cli", "deliver"].map(std::ffi::OsString::from));
@@ -1103,6 +1185,7 @@ mod tests {
         let execution = execute_with_device(
             &repository,
             &app_revision,
+            Some(candidate),
             &mut reporter,
             DeviceClient::new(RecordingDevice {
                 requests: Rc::clone(&requests),
@@ -1122,6 +1205,28 @@ mod tests {
             ]
         );
         assert!(!repository.join("build").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn installed_platform_must_match_every_published_platform_artifact() {
+        let main_revision = "b".repeat(40);
+        let installed = crate::platform_manifest::parse_installed(
+            &canonical_test_manifest(&"a".repeat(40), &main_revision),
+            crate::platform_manifest::Layout::Development,
+        )
+        .unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-published-platform-match-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let candidate = root.join("platform-bundle-v0.2.json");
+        fs::write(&candidate, canonical_candidate_manifest(&main_revision)).unwrap();
+        assert!(published_platform_matches_installed(&installed, &candidate).unwrap());
+
+        fs::write(&candidate, canonical_candidate_manifest(&"c".repeat(40))).unwrap();
+        assert!(!published_platform_matches_installed(&installed, &candidate).unwrap());
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1189,5 +1294,21 @@ mod tests {
             .iter()
             .map(|field| format!("{field}={}\n", fields[*field]))
             .collect()
+    }
+
+    fn canonical_candidate_manifest(main_revision: &str) -> String {
+        let files = [
+            "main/MiSTer_MagiK",
+            "scanout/mister_magik_scanout_slots.ko",
+            "scanout/provenance.txt",
+            "fpga/patched/menu-magik-vblank-latch.rbf",
+            "fpga/patched/menu-magik-vblank-latch.metadata.txt",
+        ]
+        .map(|path| serde_json::json!({"path":path,"sha256":"a".repeat(64)}));
+        serde_json::to_string(&serde_json::json!({
+            "components":{"main":{"head_sha":main_revision}},
+            "files":files,
+        }))
+        .unwrap()
     }
 }

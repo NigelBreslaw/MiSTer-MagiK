@@ -125,6 +125,11 @@ pub struct InstalledManifest {
 
 impl InstalledManifest {
     #[must_use]
+    pub fn main_sha256(&self) -> &str {
+        &self.values["main_sha256"]
+    }
+
+    #[must_use]
     pub fn main_revision(&self) -> &str {
         &self.values["main_revision"]
     }
@@ -137,6 +142,26 @@ impl InstalledManifest {
     #[must_use]
     pub fn manager_sha256(&self) -> &str {
         &self.values["manager_sha256"]
+    }
+
+    #[must_use]
+    pub fn scanout_module_sha256(&self) -> &str {
+        &self.values["scanout_module_sha256"]
+    }
+
+    #[must_use]
+    pub fn scanout_metadata_sha256(&self) -> &str {
+        &self.values["scanout_metadata_sha256"]
+    }
+
+    #[must_use]
+    pub fn latch_rbf_sha256(&self) -> &str {
+        &self.values["latch_rbf_sha256"]
+    }
+
+    #[must_use]
+    pub fn latch_metadata_sha256(&self) -> &str {
+        &self.values["latch_metadata_sha256"]
     }
 }
 

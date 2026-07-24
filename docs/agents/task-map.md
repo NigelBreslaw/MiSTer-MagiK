@@ -15,7 +15,6 @@ validation column explicitly calls for ARM, GUI, or an attended device.
 | Host MiSTer tool | `mister/tools/host/src/main.rs` | `docs/device.md` | `scripts/agent check` | `scripts/agent verify` | No device unless command execution is under test | `apps/desktop/`, `fpga/` |
 | MagiK agent | `mister/tools/agent/src/main.rs` | `docs/magik-agent.md` | `scripts/agent check` | `scripts/agent verify`; Linux-specific: `scripts/agent-linux-verify --paths mister/tools/host mister/tools/agent` | ARM/device for Linux-only operations | `documentation/`, launcher UI |
 | Installer manager | `mister/tools/manager/src/main.rs` | `docs/installer.md` | `scripts/agent check` | `scripts/agent verify` | ARM/device only after host fixtures pass | launcher rendering, catalog policy |
-| Rust semantic tooling | `.codex/config.toml`, `.lspi/config.toml`, `scripts/rust-analyzer`, `apps/mister/rust-toolchain.toml` | `AGENTS.md` | `scripts/agent check` | `scripts/agent deliver` | Doctor contract and read-only MCP smoke test | Device communication, runtime deployment |
 | Desktop UI | `apps/desktop/src/main.rs`, `apps/desktop/ui/main.slint` | `apps/desktop/AGENTS.md` | `scripts/agent check` | `scripts/agent verify` | Slint MCP visual check for UI changes | MiSTer kernel/FPGA and device launcher internals |
 | Documentation | `documentation/src/content/docs/` | `documentation/src/content/docs/contributing/` | `scripts/agent check` | `scripts/agent verify` | None | Rust targets, device |
 | Packaging/releases | `scripts/package-distribution.sh` | `docs/releases.md` | `scripts/agent check` | `scripts/agent verify`; operator gate: `scripts/agent release qualify` | Release workflow only after host checks | UI runtime internals |
@@ -36,8 +35,9 @@ RBF together. The verified archive is cached by release tag and reused until
 the latest tag changes. Reconciliation reads and verifies the installed
 development manifest first, then selects `NoOp`, `Runtime`, or `Platform` from
 all paths between its recorded app revision and `HEAD`. An installed artifact
-mismatch forces a complete `Platform` repair. `NoOp` stops before GitHub,
-builds, or staging. `Runtime` updates the GUI and manifest as one
+mismatch forces a complete `Platform` repair. Delivery checks the latest GitHub
+release tag before reconciliation but reuses its verified cached archive.
+`NoOp` stops before builds or staging. `Runtime` updates the GUI and manifest as one
 rollback-capable transaction without rebooting. `Platform` retains the complete
 manifest-bound transaction for Main, kernel, FPGA, and contract changes.
 Runtime and platform mutation each execute as one typed host transaction from
