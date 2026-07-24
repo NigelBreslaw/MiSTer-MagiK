@@ -218,3 +218,43 @@ fault boundary is inside the scaler path: `LFB_BASE` changes in `clk_sys`, while
 `ascal` copies and consumes the base in its Avalon fetch domain at scaler VS
 falling. The next FPGA experiment must make that fetch-domain base selection
 atomic and acknowledge completion only after that event.
+
+## Correction: the preloaded transition probe observes CRT scan history
+
+The preceding mixed-base conclusion was disproven by a clearer photograph and
+must not be used as the basis for a production FPGA change.
+
+Experimental commit `edb03e2e40824601dcf80c032a9d1c9501f768c6` staged a
+pending base for a complete raster before ownership completion. Fast FPGA
+simulation, lint, structural integration, and coverage passed in workflow
+`30093833712`. Non-publishing platform workflow `30093926589` successfully
+built matched stock/patched RBFs, passed Quartus delta verification, compacted
+the FPGA component, and assembled the candidate.
+
+Three repetitions of `preloaded-bars-slow` on that candidate retained clean
+machine telemetry: two initial writes, 20 posts/flips, zero drops, zero
+active-buffer writes, zero pending-buffer writes, no final pending
+transaction, and a matching final active route. Manifest hashes:
+
+- `216d4c2d956568632013abf388d067ea28fe3457f9041fb3800a97ff2830517d`
+- `fad483c660920d72b9e1a916b8f5f2fdf1379b836cc594f1b8f7ceae972022b7`
+- `21b5e58a2cda40affa5cc57a782ebc50d0dc288a9f45979a25a85fa34efd4b2d`
+
+The operator still observed the old bar at the bottom, although the retained
+amount appeared smaller. Photograph `Screenshot 2026-07-24 at 16.07.46.png`
+(SHA-256
+`08f944e24e4fac51e730073e28a9eb1f7db05ff53a9817cfbd2bba1b8a221c08`)
+shows one horizontal time boundary across both preloaded bars: the upper CRT
+region has already been refreshed while the lower phosphor still contains the
+previous scan. A camera exposure or human visual integration can observe that
+state during any correct top-to-bottom CRT refresh. It is especially visible
+at 50 Hz and can retain multiple earlier positions according to phosphor decay.
+
+Therefore the high-contrast transition probes cannot distinguish an illegal
+mixed framebuffer raster from normal CRT raster/phosphor history. The apparent
+reduction under the experiment is not acceptance evidence. Combined with clean
+USB Video, clean framebuffer/latch telemetry, static stability, failure only
+during motion, the stronger current explanation is PAL-rate CRT temporal
+behavior rather than a proven digital base-switch fault. The experimental FPGA
+timing is not promoted and is removed from the active branch by a
+non-destructive revert.
