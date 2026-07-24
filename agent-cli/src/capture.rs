@@ -218,6 +218,7 @@ fn classified(code: &'static str, detail: impl Into<String>) -> AgentError {
 }
 
 #[must_use]
+#[cfg(any(target_os = "macos", test))]
 fn is_nonblank_luma(luma: &[u8], width: usize, height: usize, row_bytes: usize) -> bool {
     let Some(required) = row_bytes.checked_mul(height) else {
         return false;
