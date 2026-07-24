@@ -518,6 +518,9 @@ impl DeviceOperations for NativeDevice {
             DeviceRequest::RunCrtScreensaverTrial => {
                 run_crt_screensaver_trial_with(&config.connection).map_err(device_failure)?
             }
+            DeviceRequest::RunCrtScreensaverMatrix => {
+                run_crt_screensaver_matrix_with(&config.connection).map_err(device_failure)?
+            }
             DeviceRequest::RepairSafeDeviceState => {
                 let session = connect(10).map_err(device_failure)?;
                 exec_checked(&session, "safe diagnostic repair", &safe_repair_command())
@@ -2358,6 +2361,84 @@ fn run_crt_screensaver_trial_with(connection: &ConnectionConfig) -> Result<Strin
         "launcher_pid": ready.launcher_pid,
     })
     .to_string())
+}
+
+fn run_crt_screensaver_matrix_with(connection: &ConnectionConfig) -> Result<String> {
+    let session = connect_with(connection, 10)?;
+    let original_reply = exec_checked_output(
+        &session,
+        "query original display mode",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    let original_mode = parse_display_reply_active(original_reply.stdout.trim())?;
+    if parse_display_reply_pending(original_reply.stdout.trim())?.is_some() {
+        return Err("CRT screensaver matrix cannot start during a display transaction".into());
+    }
+    let mut current_pid =
+        wait_launcher_ready(&session, Instant::now(), Duration::from_secs(15))?.launcher_pid;
+    drop(session);
+
+    let mut entries = Vec::new();
+    let run_result = (|| -> Result<()> {
+        for mode in crt_screensaver_matrix_modes() {
+            let session = connect_with(connection, 10)?;
+            exec_checked(
+                &session,
+                "apply CRT screensaver matrix mode",
+                &acknowledged_main_command(&format!(
+                    "mister_magik_display_apply_headless_v1 mode={}",
+                    mode.id
+                )),
+            )?;
+            drop(session);
+            let session = connect_with(connection, 10)?;
+            current_pid = wait_launcher_ready_after(
+                &session,
+                current_pid,
+                Instant::now(),
+                Duration::from_secs(15),
+            )?
+            .launcher_pid;
+            drop(session);
+
+            let detail: Value = serde_json::from_str(&run_crt_screensaver_trial_with(connection)?)?;
+            current_pid = detail
+                .get("launcher_pid")
+                .and_then(Value::as_i64)
+                .ok_or("screensaver matrix trial omitted restored launcher pid")?;
+            entries.push(json!({"mode": mode.id, "result": detail}));
+
+            let session = connect_with(connection, 10)?;
+            exec_checked(
+                &session,
+                "rollback CRT screensaver matrix mode",
+                &acknowledged_main_command("mister_magik_display_cancel_v1"),
+            )?;
+            let restored = wait_launcher_ready_after(
+                &session,
+                current_pid,
+                Instant::now(),
+                Duration::from_secs(15),
+            )?;
+            current_pid = restored.launcher_pid;
+        }
+        Ok(())
+    })();
+    let restore_result = restore_display_matrix_original(&original_mode, current_pid);
+    run_result?;
+    restore_result?;
+    Ok(json!({
+        "schema": "mister-magik-crt-screensaver-matrix-v1",
+        "original_mode": original_mode,
+        "modes": entries,
+    })
+    .to_string())
+}
+
+fn crt_screensaver_matrix_modes() -> impl Iterator<Item = &'static DisplayMatrixMode> {
+    DISPLAY_MATRIX_MODES
+        .iter()
+        .filter(|mode| mode.id.starts_with("crt-"))
 }
 
 fn validate_crt_geometry_trial(runtime_settings: &str, rectangle: [u16; 4]) -> Result<()> {
@@ -8211,6 +8292,16 @@ video_mode=14
         assert!(command.contains("rm -f /tmp/mister-magik/realtime-frame-analytics"));
         assert!(command.contains("crt-screensaver-status.json"));
         assert!(!command.contains("MiSTer.ini"));
+    }
+
+    #[test]
+    fn crt_screensaver_matrix_contains_exactly_the_four_standard_crt_modes() {
+        assert_eq!(
+            crt_screensaver_matrix_modes()
+                .map(|mode| mode.id)
+                .collect::<Vec<_>>(),
+            ["crt-240p60", "crt-288p50", "crt-480p60", "crt-576p50"]
+        );
     }
 
     #[test]

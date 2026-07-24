@@ -84,6 +84,8 @@ pub enum DeviceRequest {
     },
     /// Runs the product launcher screensaver for a bounded interval in the active CRT mode.
     RunCrtScreensaverTrial,
+    /// Runs the product screensaver trial in each standard CRT mode and restores the original mode.
+    RunCrtScreensaverMatrix,
     RepairSafeDeviceState,
     CaptureFramebuffer,
 }
@@ -126,6 +128,7 @@ impl DeviceRequest {
             Self::CollectDiagnosticFacts => "collect-diagnostic-facts",
             Self::RunCrtGeometryTrial { .. } => "run-crt-geometry-trial",
             Self::RunCrtScreensaverTrial => "run-crt-screensaver-trial",
+            Self::RunCrtScreensaverMatrix => "run-crt-screensaver-matrix",
             Self::RepairSafeDeviceState => "repair-safe-device-state",
             Self::CaptureFramebuffer => "capture-framebuffer",
         }
@@ -271,11 +274,12 @@ mod tests {
                 rectangle: [45, 684, 40, 615],
             },
             DeviceRequest::RunCrtScreensaverTrial,
+            DeviceRequest::RunCrtScreensaverMatrix,
             DeviceRequest::RepairSafeDeviceState,
             DeviceRequest::CaptureFramebuffer,
         ];
         let labels: Vec<_> = requests.iter().map(DeviceRequest::label).collect();
-        assert_eq!(labels.len(), 36);
+        assert_eq!(labels.len(), 37);
         assert!(labels.iter().all(|label| !label.is_empty()));
         assert!(!labels.contains(&"run"));
         assert!(!labels.contains(&"shell"));

@@ -93,6 +93,8 @@ pub fn execute(repository: &Path, reporter: &mut Reporter<'_>) -> AgentResult<Ou
         geometry_trial_detail: None,
         screensaver_trial: screensaver_trial_from_env(),
         screensaver_trial_detail: None,
+        screensaver_matrix: screensaver_matrix_from_env(),
+        screensaver_matrix_detail: None,
     };
     run_workflow(&mut actions, &mut |phase, percent| {
         Ok(reporter.emit(
@@ -108,6 +110,9 @@ pub fn execute(repository: &Path, reporter: &mut Reporter<'_>) -> AgentResult<Ou
     }
     if let Some(detail) = actions.screensaver_trial_detail.as_deref() {
         reporter.emit(EventKind::Progress, "screensaver-trial", detail, Some(95))?;
+    }
+    if let Some(detail) = actions.screensaver_matrix_detail.as_deref() {
+        reporter.emit(EventKind::Progress, "screensaver-matrix", detail, Some(95))?;
     }
     reporter.emit(
         if report.next_action.is_some() {
@@ -137,6 +142,8 @@ struct ProcessActions<'a> {
     geometry_trial_detail: Option<String>,
     screensaver_trial: bool,
     screensaver_trial_detail: Option<String>,
+    screensaver_matrix: bool,
+    screensaver_matrix_detail: Option<String>,
 }
 
 fn geometry_trial_from_env() -> AgentResult<Option<[u16; 4]>> {
@@ -158,6 +165,13 @@ fn geometry_trial_from_env() -> AgentResult<Option<[u16; 4]>> {
 fn screensaver_trial_from_env() -> bool {
     matches!(
         std::env::var("MISTER_CRT_SCREENSAVER_TRIAL").as_deref(),
+        Ok("1" | "true")
+    )
+}
+
+fn screensaver_matrix_from_env() -> bool {
+    matches!(
+        std::env::var("MISTER_CRT_SCREENSAVER_MATRIX").as_deref(),
         Ok("1" | "true")
     )
 }
@@ -205,6 +219,13 @@ impl DiagnoseActions for ProcessActions<'_> {
                     self.screensaver_trial = false;
                     self.screensaver_trial_detail =
                         Some(self.device.execute(DeviceRequest::RunCrtScreensaverTrial)?);
+                }
+                if self.screensaver_matrix {
+                    self.screensaver_matrix = false;
+                    self.screensaver_matrix_detail = Some(
+                        self.device
+                            .execute(DeviceRequest::RunCrtScreensaverMatrix)?,
+                    );
                 }
                 Ok(())
             }
