@@ -170,6 +170,14 @@ def counter_delta(left: Counter[str], right: Counter[str]) -> list[str]:
     return result
 
 
+def estimated_calculable_chains(chain_counts: list[int], uncalculated_fractions: list[float]) -> int | None:
+    if not chain_counts or not uncalculated_fractions:
+        return None
+    total = max(chain_counts)
+    uncalculated_fraction = min(uncalculated_fractions)
+    return int(math.floor(total * (1.0 - uncalculated_fraction) + 0.5))
+
+
 def compare(stock: dict[str, object], patched: dict[str, object]) -> tuple[list[str], dict[str, object]]:
     reasons: list[str] = []
     stock_warnings = stock["warnings"]
@@ -222,13 +230,12 @@ def compare(stock: dict[str, object], patched: dict[str, object]) -> tuple[list[
     stock_fractions = stock["uncalculated_fractions"]
     patched_fractions = patched["uncalculated_fractions"]
     assert isinstance(stock_fractions, list) and isinstance(patched_fractions, list)
+    stock_calculable_chains = estimated_calculable_chains(stock_chain_counts, stock_fractions)
+    patched_calculable_chains = estimated_calculable_chains(chain_counts, patched_fractions)
     custom_delta_calculable = (
-        bool(stock_chain_counts)
-        and bool(chain_counts)
-        and max(chain_counts) == max(stock_chain_counts) + 1
-        and bool(stock_fractions)
-        and bool(patched_fractions)
-        and min(patched_fractions) < min(stock_fractions)
+        stock_calculable_chains is not None
+        and patched_calculable_chains is not None
+        and patched_calculable_chains >= stock_calculable_chains + 1
     )
     if not custom_assignment_seen:
         reasons.append("custom_synchronizer_missing")
@@ -245,6 +252,8 @@ def compare(stock: dict[str, object], patched: dict[str, object]) -> tuple[list[
         "patched_hold_slack_min": min(slacks["hold"]) if slacks["hold"] else None,
         "patched_tns_max_abs": max((abs(value) for value in tns), default=None),
         "patched_synchronizer_chains": max(chain_counts, default=None),
+        "stock_calculable_synchronizer_chains": stock_calculable_chains,
+        "patched_calculable_synchronizer_chains": patched_calculable_chains,
         "custom_sync_seen": custom_assignment_seen,
         "custom_sync_mtbf": custom_delta_calculable,
         "stock_unconstrained_output_paths": max(stock_output_paths, default=None),

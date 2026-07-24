@@ -62,6 +62,24 @@ class QuartusDeltaTest(unittest.TestCase):
         self.assertEqual(payload["valid"], 1)
         self.assertEqual(payload["invalid_reason"], "ok")
 
+    def test_same_total_with_one_more_calculable_chain_passes(self) -> None:
+        stock = BASE.replace(
+            "Found 5 synchronizer chains",
+            "Found 391 synchronizer chains",
+        ).replace(
+            "Could Not be Calculated: 0.800",
+            "Could Not be Calculated: 0.990",
+        )
+        assignments = "\n".join(CUSTOM_SYNC.splitlines()[:2]) + "\n"
+        patched = stock.replace(
+            "Could Not be Calculated: 0.990",
+            "Could Not be Calculated: 0.987",
+        ) + assignments
+        result, payload = self.run_check(stock, patched)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(payload["stock_calculable_synchronizer_chains"], 4)
+        self.assertEqual(payload["patched_calculable_synchronizer_chains"], 5)
+
     def test_new_warning_fails_even_when_warning_code_is_inherited(self) -> None:
         result, payload = self.run_check(BASE, BASE + "Warning (10001): different warning\n" + CUSTOM_SYNC)
         self.assertEqual(result.returncode, 1)
@@ -102,6 +120,16 @@ class QuartusDeltaTest(unittest.TestCase):
     def test_named_chain_without_mtbf_fails(self) -> None:
         assignments = "; SYNCHRONIZER_IDENTIFICATION ; FORCED_IF_ASYNCHRONOUS ; - ; vbl_meta ;\n; SYNCHRONIZER_IDENTIFICATION ; FORCED_IF_ASYNCHRONOUS ; - ; vbl_sys ;\n"
         result, payload = self.run_check(BASE, BASE + assignments)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("custom_synchronizer_mtbf_missing", payload["invalid_reason"])
+
+    def test_fraction_change_without_an_extra_calculable_chain_fails(self) -> None:
+        assignments = "; SYNCHRONIZER_IDENTIFICATION ; FORCED_IF_ASYNCHRONOUS ; - ; vbl_meta ;\n; SYNCHRONIZER_IDENTIFICATION ; FORCED_IF_ASYNCHRONOUS ; - ; vbl_sys ;\n"
+        patched = BASE.replace(
+            "Could Not be Calculated: 0.800",
+            "Could Not be Calculated: 0.790",
+        ) + assignments
+        result, payload = self.run_check(BASE, patched)
         self.assertEqual(result.returncode, 1)
         self.assertIn("custom_synchronizer_mtbf_missing", payload["invalid_reason"])
 
