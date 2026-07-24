@@ -14,6 +14,20 @@ pub enum DeploymentKind {
     Platform,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DeliveryDecision {
+    NoOp,
+    Runtime,
+    Platform,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Reconciliation {
+    pub decision: DeliveryDecision,
+    pub changed_paths: Vec<PathBuf>,
+}
+
 impl DeploymentKind {
     #[must_use]
     pub fn label(self) -> &'static str {
@@ -112,17 +126,12 @@ pub fn plan(repository: &Path, mut paths: Vec<PathBuf>) -> Result<DeploymentPlan
     paths.sort();
     paths.dedup();
     let components = platform_components(&paths);
-    let changes_manifest_bound_runtime = paths.iter().any(|path| {
-        crate::components::classify(path).is_some_and(|component| {
-            component.deployment_impact() == crate::components::DeploymentImpact::Runtime
-        })
-    });
     if !components.is_empty() {
         require_platform_source_available(repository, &paths)?;
     }
     let ui_scope = ui_scope(&paths);
     Ok(DeploymentPlan {
-        kind: if !components.is_empty() || changes_manifest_bound_runtime {
+        kind: if !components.is_empty() {
             DeploymentKind::Platform
         } else {
             DeploymentKind::Runtime
@@ -135,6 +144,82 @@ pub fn plan(repository: &Path, mut paths: Vec<PathBuf>) -> Result<DeploymentPlan
         build: BuildSpec::canonical(ui_scope),
         platform_candidate: None,
     })
+}
+
+pub fn reconcile(
+    repository: &Path,
+    installed_manifest: &str,
+    local_main_revision: &str,
+    head: &str,
+) -> Reconciliation {
+    let fields = installed_manifest
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let installed_magik = fields.get("magik_revision").copied().unwrap_or_default();
+    let installed_main = fields.get("main_revision").copied().unwrap_or_default();
+    let manifest_valid = fields.get("format").copied() == Some("mister-magik-platform-v2")
+        && is_hex(installed_magik, 40)
+        && is_hex(installed_main, 40);
+    if !manifest_valid || installed_main != local_main_revision {
+        return Reconciliation {
+            decision: DeliveryDecision::Platform,
+            changed_paths: Vec::new(),
+        };
+    }
+    if installed_magik == head {
+        return Reconciliation {
+            decision: DeliveryDecision::NoOp,
+            changed_paths: Vec::new(),
+        };
+    }
+    let range = format!("{installed_magik}..{head}");
+    let ancestor = Command::new("git")
+        .args(["merge-base", "--is-ancestor", installed_magik, head])
+        .current_dir(repository)
+        .status()
+        .is_ok_and(|status| status.success());
+    let output = Command::new("git")
+        .args(["diff", "--name-only", "--diff-filter=ACMRD", &range])
+        .current_dir(repository)
+        .output();
+    let Ok(output) = output else {
+        return conservative_reconciliation();
+    };
+    if !ancestor || !output.status.success() {
+        return conservative_reconciliation();
+    }
+    let changed_paths = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    let impact = changed_paths
+        .iter()
+        .filter_map(|path| crate::components::classify(path))
+        .map(crate::components::Component::deployment_impact)
+        .max()
+        .unwrap_or(crate::components::DeploymentImpact::None);
+    let decision = match impact {
+        crate::components::DeploymentImpact::None => DeliveryDecision::NoOp,
+        crate::components::DeploymentImpact::Runtime => DeliveryDecision::Runtime,
+        crate::components::DeploymentImpact::Platform => DeliveryDecision::Platform,
+    };
+    Reconciliation {
+        decision,
+        changed_paths,
+    }
+}
+
+fn conservative_reconciliation() -> Reconciliation {
+    Reconciliation {
+        decision: DeliveryDecision::Platform,
+        changed_paths: Vec::new(),
+    }
+}
+
+fn is_hex(value: &str, length: usize) -> bool {
+    value.len() == length && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 pub fn deployment_paths(
@@ -246,7 +331,123 @@ mod tests {
         assert_eq!(ui_scope(&paths), UiScope::Launcher);
         assert_eq!(
             plan(Path::new("."), paths).unwrap().kind,
-            DeploymentKind::Platform
+            DeploymentKind::Runtime
+        );
+    }
+
+    #[test]
+    fn exact_installed_revisions_are_a_no_op() {
+        let revision = "a".repeat(40);
+        let main = "b".repeat(40);
+        let manifest = manifest(&revision, &main);
+        assert_eq!(
+            reconcile(Path::new("."), &manifest, &main, &revision).decision,
+            DeliveryDecision::NoOp
+        );
+    }
+
+    #[test]
+    fn invalid_manifest_or_changed_main_is_conservatively_platform() {
+        let revision = "a".repeat(40);
+        let main = "b".repeat(40);
+        assert_eq!(
+            reconcile(Path::new("."), "invalid", &main, &revision).decision,
+            DeliveryDecision::Platform
+        );
+        assert_eq!(
+            reconcile(
+                Path::new("."),
+                &manifest(&revision, &main),
+                &"c".repeat(40),
+                &revision
+            )
+            .decision,
+            DeliveryDecision::Platform
+        );
+    }
+
+    #[test]
+    fn accumulated_paths_select_no_op_runtime_and_platform() {
+        let root = std::env::temp_dir().join(format!("agent-cli-reconcile-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("docs")).unwrap();
+        std::fs::create_dir_all(root.join("apps/mister/src")).unwrap();
+        std::fs::create_dir_all(root.join("mister/platform/kernel")).unwrap();
+        git(&root, &["init", "-q"]);
+        std::fs::write(root.join("README.md"), "base").unwrap();
+        commit_all(&root, "base");
+        let installed = git_value(&root, &["rev-parse", "HEAD"]);
+        let main = "b".repeat(40);
+        let installed_manifest = manifest(&installed, &main);
+
+        std::fs::write(root.join("docs/note.md"), "docs").unwrap();
+        commit_all(&root, "docs");
+        let docs_head = git_value(&root, &["rev-parse", "HEAD"]);
+        assert_eq!(
+            reconcile(&root, &installed_manifest, &main, &docs_head).decision,
+            DeliveryDecision::NoOp
+        );
+
+        std::fs::write(root.join("apps/mister/src/runtime.rs"), "runtime").unwrap();
+        commit_all(&root, "runtime");
+        let runtime_head = git_value(&root, &["rev-parse", "HEAD"]);
+        assert_eq!(
+            reconcile(&root, &installed_manifest, &main, &runtime_head).decision,
+            DeliveryDecision::Runtime
+        );
+
+        std::fs::write(root.join("mister/platform/kernel/module.c"), "kernel").unwrap();
+        commit_all(&root, "kernel");
+        let platform_head = git_value(&root, &["rev-parse", "HEAD"]);
+        assert_eq!(
+            reconcile(&root, &installed_manifest, &main, &platform_head).decision,
+            DeliveryDecision::Platform
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn manifest(magik: &str, main: &str) -> String {
+        format!("format=mister-magik-platform-v2\nmagik_revision={magik}\nmain_revision={main}\n")
+    }
+
+    fn git(repository: &Path, args: &[&str]) {
+        assert!(
+            Command::new("git")
+                .args(args)
+                .current_dir(repository)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+
+    fn git_value(repository: &Path, args: &[&str]) -> String {
+        String::from_utf8(
+            Command::new("git")
+                .args(args)
+                .current_dir(repository)
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .into()
+    }
+
+    fn commit_all(repository: &Path, message: &str) {
+        git(repository, &["add", "."]);
+        git(
+            repository,
+            &[
+                "-c",
+                "user.name=Agent CLI",
+                "-c",
+                "user.email=agent@example.invalid",
+                "commit",
+                "-q",
+                "-m",
+                message,
+            ],
         );
     }
 
@@ -301,7 +502,7 @@ mod tests {
             plan.operations[0]
                 .inputs
                 .iter()
-                .any(|input| input == "kind=platform")
+                .any(|input| input == "kind=runtime")
         );
         assert!(
             plan.operations[0]

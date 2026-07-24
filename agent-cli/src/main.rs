@@ -669,28 +669,8 @@ fn deliver_inner(
         return Err("dirty_worktree: commit or discard changes before delivery".into());
     }
     let sha = agent_cli::git::value(repository, &["rev-parse", "HEAD"])?;
-    let paths = agent_cli::deploy::deployment_paths(repository, Vec::new())?;
-    let mut deployment = agent_cli::deploy::plan(repository, paths)?;
-    // The development manifest binds the launcher hash to Main, the scanout
-    // module, and the latch RBF. A launcher-only transaction would make that
-    // installed set invalid, so every delivery must publish one coherent set.
-    deployment.kind = agent_cli::deploy::DeploymentKind::Platform;
-    let local_main = if deployment.kind == agent_cli::deploy::DeploymentKind::Platform {
-        deployment.platform_candidate = Some(agent_cli::platform_ci::resolve_published_repository(
-            repository,
-            |progress| reporter.emit(EventKind::Progress, "platform", progress, None),
-        )?);
-        Some(local_main_directory(repository))
-    } else {
-        None
-    };
-    agent_cli::delivery::execute(
-        repository,
-        &deployment,
-        &sha,
-        local_main.as_deref(),
-        reporter,
-    )
+    let local_main = local_main_directory(repository);
+    agent_cli::delivery::execute(repository, &sha, &local_main, reporter)
 }
 
 fn local_main_directory(repository: &Path) -> std::path::PathBuf {

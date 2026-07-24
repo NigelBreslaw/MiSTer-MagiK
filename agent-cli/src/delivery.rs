@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::deploy::{DeploymentKind, DeploymentPlan};
+use crate::deploy::{DeliveryDecision, DeploymentKind, DeploymentPlan};
 use crate::device::DeviceClient;
 use crate::error::{AgentError, AgentResult};
 use crate::model::Outcome;
@@ -127,18 +127,18 @@ pub fn run_transaction(
 
 pub fn execute(
     repository: &Path,
-    deployment: &DeploymentPlan,
     expected_commit: &str,
-    local_main: Option<&Path>,
+    local_main: &Path,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<Outcome> {
+    let deployment = crate::deploy::plan(repository, Vec::new())?;
     let mut actions = ProcessActions {
         repository,
         deployment,
         expected_commit,
         artifact_sha256: None,
         no_op: false,
-        local_main: local_main.map(Path::to_path_buf),
+        local_main: local_main.to_path_buf(),
         stage: repository
             .join("build/agent-deploy/stage")
             .join(expected_commit),
@@ -158,7 +158,11 @@ pub fn execute(
             Some(percent),
         )?),
     })?;
-    Ok(Outcome::Passed)
+    Ok(if actions.no_op {
+        Outcome::NoOp
+    } else {
+        Outcome::Passed
+    })
 }
 
 pub fn cleanup_workspace(repository: &Path) -> Result<(), String> {
@@ -176,11 +180,11 @@ pub fn cleanup_workspace(repository: &Path) -> Result<(), String> {
 
 struct ProcessActions<'a> {
     repository: &'a Path,
-    deployment: &'a DeploymentPlan,
+    deployment: DeploymentPlan,
     expected_commit: &'a str,
     artifact_sha256: Option<String>,
     no_op: bool,
-    local_main: Option<PathBuf>,
+    local_main: PathBuf,
     stage: PathBuf,
     device: DeviceClient,
 }
@@ -189,20 +193,7 @@ impl ProcessActions<'_> {
     fn validate_commit(&self) -> AgentResult<()> {
         let head = crate::git::value(self.repository, &["rev-parse", "HEAD"])?;
         let dirty = !crate::git::value(self.repository, &["status", "--porcelain"])?.is_empty();
-        validate_commit_identity(
-            &head,
-            self.expected_commit,
-            dirty,
-            self.local_main
-                .is_none()
-                .then(|| {
-                    self.deployment
-                        .platform_candidate
-                        .as_ref()
-                        .map(|candidate| candidate.head_sha.as_str())
-                })
-                .flatten(),
-        )
+        validate_commit_identity(&head, self.expected_commit, dirty, None)
     }
 
     fn qualify(&mut self) -> AgentResult<()> {
@@ -225,16 +216,14 @@ impl ProcessActions<'_> {
                 fs::remove_dir_all(&self.stage).map_err(|error| error.to_string())?;
             }
             fs::create_dir_all(self.stage.join("fpga")).map_err(|error| error.to_string())?;
-            if let Some(main_dir) = self.local_main.as_deref() {
-                qualify_local_main(main_dir)?;
-            }
+            qualify_local_main(&self.local_main)?;
             qualify_local_kernel(self.repository)?;
             prepare_stage(
                 self.repository,
                 candidate,
                 &self.stage,
                 self.deployment.build.artifact(),
-                self.local_main.as_deref(),
+                Some(&self.local_main),
             )?;
         }
         Ok(())
@@ -281,21 +270,31 @@ impl DeliveryActions for ProcessActions<'_> {
             Phase::ValidateCommit => self.validate_commit(),
             Phase::Connect => self.device.execute(DeviceRequest::Discover).map(|_| ()),
             Phase::Reconcile => {
-                if self.deployment.kind == DeploymentKind::Runtime {
-                    return Ok(());
-                }
-                let main_dir = self
-                    .local_main
-                    .as_deref()
-                    .ok_or("local Main_MiSTer checkout is required")?;
-                validate_local_main_checkout(main_dir)?;
-                let main_revision = crate::git::value(main_dir, &["rev-parse", "HEAD"])?;
+                validate_local_main_checkout(&self.local_main)?;
+                let main_revision = crate::git::value(&self.local_main, &["rev-parse", "HEAD"])?;
                 let installed = self
                     .device
                     .execute(DeviceRequest::ReadDevelopmentManifest)?;
-                self.no_op = manifest_value(&installed, "magik_revision")
-                    == Some(self.expected_commit)
-                    && manifest_value(&installed, "main_revision") == Some(main_revision.as_str());
+                let reconciliation = crate::deploy::reconcile(
+                    self.repository,
+                    &installed,
+                    &main_revision,
+                    self.expected_commit,
+                );
+                self.no_op = reconciliation.decision == DeliveryDecision::NoOp;
+                if self.no_op {
+                    return Ok(());
+                }
+                self.deployment =
+                    crate::deploy::plan(self.repository, reconciliation.changed_paths)?;
+                if reconciliation.decision == DeliveryDecision::Platform {
+                    self.deployment.kind = DeploymentKind::Platform;
+                    self.deployment.platform_candidate = Some(
+                        crate::platform_ci::resolve_published_repository(self.repository, |_| {
+                            Ok(())
+                        })?,
+                    );
+                }
                 Ok(())
             }
             Phase::QualifyArtifact => self.qualify(),
@@ -497,12 +496,6 @@ fn validate_local_main_checkout(main_dir: &Path) -> AgentResult<()> {
     let branch = crate::git::value(main_dir, &["branch", "--show-current"])?;
     validate_local_main_identity(dirty, &branch)?;
     Ok(())
-}
-
-fn manifest_value<'a>(manifest: &'a str, key: &str) -> Option<&'a str> {
-    manifest
-        .lines()
-        .find_map(|line| line.strip_prefix(key)?.strip_prefix('='))
 }
 
 fn qualify_local_kernel(repository: &Path) -> AgentResult<()> {
@@ -801,14 +794,6 @@ mod tests {
             kernel_source_directory(repository, Some(OsString::from("/srv/mister-kernel"))),
             PathBuf::from("/srv/mister-kernel")
         );
-    }
-
-    #[test]
-    fn installed_manifest_identity_controls_local_no_op() {
-        let manifest = "format=mister-magik-platform-v2\nmain_revision=abc\nmagik_revision=def\n";
-        assert_eq!(manifest_value(manifest, "main_revision"), Some("abc"));
-        assert_eq!(manifest_value(manifest, "magik_revision"), Some("def"));
-        assert_eq!(manifest_value(manifest, "missing"), None);
     }
 
     #[test]
