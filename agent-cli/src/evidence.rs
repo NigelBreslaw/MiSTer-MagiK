@@ -112,17 +112,6 @@ CREATE TABLE IF NOT EXISTS task_claims (
     claimed_ms INTEGER NOT NULL,
     PRIMARY KEY (task_id, path)
 );
-CREATE TABLE IF NOT EXISTS commit_attempts (
-    request_id TEXT PRIMARY KEY REFERENCES requests(id),
-    task_id TEXT NOT NULL,
-    message TEXT NOT NULL,
-    paths_json TEXT NOT NULL,
-    status TEXT NOT NULL,
-    commit_sha TEXT,
-    subject TEXT,
-    rolled_back INTEGER NOT NULL DEFAULT 0,
-    detail TEXT
-);
 CREATE TABLE IF NOT EXISTS deliveries (
     task_id TEXT PRIMARY KEY REFERENCES tasks(task_id),
     worktree TEXT NOT NULL,
@@ -208,7 +197,6 @@ pub struct RunDetail {
     pub outcome: Option<String>,
     pub commands: Vec<CommandDetail>,
     pub events: Vec<EventDetail>,
-    pub commit_attempt: Option<CommitAttemptDetail>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -289,25 +277,6 @@ impl DeliveryState {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct CommitAttemptDetail {
-    pub task_id: String,
-    pub message: String,
-    pub paths: serde_json::Value,
-    pub status: String,
-    pub commit_sha: Option<String>,
-    pub subject: Option<String>,
-    pub rolled_back: bool,
-    pub detail: Option<String>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CommittedTask {
-    pub task_id: String,
-    pub commit_sha: String,
-    pub paths: Vec<PathBuf>,
-}
-
 impl Evidence {
     pub fn open_for_repository(repository: &Path) -> Result<Self, String> {
         if let Some(root) = std::env::var_os("MISTER_AGENT_CLI_STATE_DIR") {
@@ -357,13 +326,6 @@ impl Evidence {
                 [],
             )
             .map_err(|error| format!("cannot index task lifecycles: {error}"))?;
-        ensure_column(&connection, "commit_attempts", "subject", "TEXT")?;
-        ensure_column(
-            &connection,
-            "commit_attempts",
-            "rolled_back",
-            "INTEGER NOT NULL DEFAULT 0",
-        )?;
         ensure_column(&connection, "requests", "bootstrap_ms", "INTEGER")?;
         ensure_column(&connection, "requests", "execution_started_ms", "INTEGER")?;
         ensure_column(&connection, "requests", "execution_ms", "INTEGER")?;
@@ -414,16 +376,13 @@ impl Evidence {
                 "DELETE FROM events WHERE request_id IN (
                      SELECT id FROM requests
                      WHERE id NOT IN (SELECT id FROM requests ORDER BY started_ms DESC LIMIT 20000)
-                       AND id NOT IN (SELECT request_id FROM commit_attempts)
                  );
                  DELETE FROM commands WHERE request_id IN (
                      SELECT id FROM requests
                      WHERE id NOT IN (SELECT id FROM requests ORDER BY started_ms DESC LIMIT 20000)
-                       AND id NOT IN (SELECT request_id FROM commit_attempts)
                  );
                  DELETE FROM requests
-                 WHERE id NOT IN (SELECT id FROM requests ORDER BY started_ms DESC LIMIT 20000)
-                   AND id NOT IN (SELECT request_id FROM commit_attempts);",
+                 WHERE id NOT IN (SELECT id FROM requests ORDER BY started_ms DESC LIMIT 20000);",
             )
             .map_err(|error| format!("cannot bound workflow telemetry: {error}"))?;
         Ok(Self {
@@ -766,41 +725,6 @@ impl Evidence {
             .map_err(|error| error.to_string())
     }
 
-    pub fn latest_committed_scope(&self, worktree: &Path) -> Result<Option<CommittedTask>, String> {
-        let Some((task_id, commit_sha)) = self.latest_committed_task(worktree)? else {
-            return Ok(None);
-        };
-        let paths: Option<String> = self
-            .connection
-            .query_row(
-                "SELECT paths_json FROM commit_attempts WHERE task_id=?1 AND commit_sha=?2 AND status='committed' ORDER BY rowid DESC LIMIT 1",
-                params![task_id, commit_sha],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|error| error.to_string())?;
-        let paths = paths.ok_or_else(|| {
-            format!(
-                "commit_evidence_corrupt: task {task_id} commit {commit_sha} has no successful commit attempt"
-            )
-        })?;
-        let paths: Vec<PathBuf> = serde_json::from_str(&paths).map_err(|error| {
-            format!(
-                "commit_evidence_corrupt: task {task_id} commit {commit_sha} has invalid committed paths: {error}"
-            )
-        })?;
-        if paths.is_empty() {
-            return Err(format!(
-                "commit_evidence_corrupt: task {task_id} commit {commit_sha} has no committed paths"
-            ));
-        }
-        Ok(Some(CommittedTask {
-            task_id,
-            commit_sha,
-            paths,
-        }))
-    }
-
     pub fn claim_task_paths(&self, task_id: &str, paths: &[PathBuf]) -> Result<(), String> {
         let (worktree, current_baseline): (String, String) = self
             .connection
@@ -955,50 +879,6 @@ impl Evidence {
             .execute(
                 "INSERT OR REPLACE INTO delivery_attestations (task_id, requirement_id, workflow, branch, commit_sha, evidence_json, created_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![task_id, requirement_id, workflow, branch, commit_sha, evidence_json, now_ms()],
-            )
-            .map_err(|error| error.to_string())?;
-        Ok(())
-    }
-
-    pub fn begin_commit_attempt(
-        &self,
-        request_id: &str,
-        task_id: &str,
-        message: &str,
-    ) -> Result<(), String> {
-        self.connection
-            .execute(
-                "INSERT INTO commit_attempts (request_id, task_id, message, paths_json, status) VALUES (?1, ?2, ?3, '[]', 'started')",
-                params![request_id, task_id, message],
-            )
-            .map_err(|error| error.to_string())?;
-        Ok(())
-    }
-
-    pub fn update_commit_attempt(
-        &self,
-        request_id: &str,
-        paths: &[PathBuf],
-        status: &str,
-        commit_sha: Option<&str>,
-        subject: Option<&str>,
-        detail: Option<&str>,
-    ) -> Result<(), String> {
-        let paths = serde_json::to_string(paths).map_err(|error| error.to_string())?;
-        self.connection
-            .execute(
-                "UPDATE commit_attempts SET paths_json=?2, status=?3, commit_sha=?4, subject=?5, detail=?6 WHERE request_id=?1",
-                params![request_id, paths, status, commit_sha, subject, detail],
-            )
-            .map_err(|error| error.to_string())?;
-        Ok(())
-    }
-
-    pub fn record_commit_rollback(&self, request_id: &str, detail: &str) -> Result<(), String> {
-        self.connection
-            .execute(
-                "UPDATE commit_attempts SET status='rolled_back', rolled_back=1, detail=?2 WHERE request_id=?1",
-                params![request_id, detail],
             )
             .map_err(|error| error.to_string())?;
         Ok(())
@@ -1362,7 +1242,6 @@ impl Evidence {
                 "BEGIN IMMEDIATE;
                  DELETE FROM delivery_attestations;
                  DELETE FROM deliveries;
-                 DELETE FROM commit_attempts;
                  DELETE FROM task_claims;
                  DELETE FROM operation_cache;
                  DELETE FROM validation_results;
@@ -1440,7 +1319,6 @@ impl Evidence {
                         outcome: row.get(5)?,
                         commands: Vec::new(),
                         events: Vec::new(),
-                        commit_attempt: None,
                     })
                 },
             )
@@ -1484,27 +1362,6 @@ impl Evidence {
                 })
                 .map_err(|error| error.to_string())?
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(|error| error.to_string())?;
-            value.commit_attempt = self
-                .connection
-                .query_row(
-                    "SELECT task_id, message, paths_json, status, commit_sha, subject, rolled_back, detail FROM commit_attempts WHERE request_id=?1",
-                    [id],
-                    |row| {
-                        let paths: String = row.get(2)?;
-                        Ok(CommitAttemptDetail {
-                            task_id: row.get(0)?,
-                            message: row.get(1)?,
-                            paths: serde_json::from_str(&paths).unwrap_or_default(),
-                            status: row.get(3)?,
-                            commit_sha: row.get(4)?,
-                            subject: row.get(5)?,
-                            rolled_back: row.get::<_, i64>(6)? != 0,
-                            detail: row.get(7)?,
-                        })
-                    },
-                )
-                .optional()
                 .map_err(|error| error.to_string())?;
         }
         Ok(detail)
@@ -1929,90 +1786,6 @@ mod tests {
             None
         );
         assert_eq!(evidence.latest_committed_task(worktree).unwrap(), None);
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn committed_scope_uses_immutable_commit_attempt_paths() {
-        let root = temporary_root("committed-scope");
-        let evidence = Evidence::open_at(&root).unwrap();
-        let worktree = Path::new("/tmp/committed-scope-worktree");
-        evidence
-            .save_task_baseline("task-committed", worktree, &"baseline", false)
-            .unwrap();
-        let request = RawRequest::capture([OsString::from("agent-cli")]);
-        evidence.begin_request(&request).unwrap();
-        evidence
-            .begin_commit_attempt(&request.id, "task-committed", "message")
-            .unwrap();
-        evidence.close_task("task-committed", "abc123").unwrap();
-        evidence
-            .update_commit_attempt(
-                &request.id,
-                &[PathBuf::from("apps/mister/src/main.rs")],
-                "committed",
-                Some("abc123"),
-                Some("message"),
-                None,
-            )
-            .unwrap();
-
-        assert_eq!(
-            evidence.latest_committed_scope(worktree).unwrap(),
-            Some(CommittedTask {
-                task_id: "task-committed".into(),
-                commit_sha: "abc123".into(),
-                paths: vec![PathBuf::from("apps/mister/src/main.rs")],
-            })
-        );
-        assert_eq!(
-            evidence
-                .load_task_baseline::<String>("task-committed")
-                .unwrap()
-                .unwrap()
-                .1,
-            "baseline"
-        );
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn committed_scope_rejects_missing_or_mismatched_attempts() {
-        let root = temporary_root("committed-scope-corrupt");
-        let evidence = Evidence::open_at(&root).unwrap();
-        let worktree = Path::new("/tmp/committed-scope-corrupt-worktree");
-        evidence
-            .save_task_baseline("task-committed", worktree, &(), false)
-            .unwrap();
-        evidence.close_task("task-committed", "abc123").unwrap();
-        assert!(
-            evidence
-                .latest_committed_scope(worktree)
-                .unwrap_err()
-                .starts_with("commit_evidence_corrupt:")
-        );
-
-        let request = RawRequest::capture([OsString::from("agent-cli")]);
-        evidence.begin_request(&request).unwrap();
-        evidence
-            .begin_commit_attempt(&request.id, "task-committed", "message")
-            .unwrap();
-        evidence
-            .update_commit_attempt(
-                &request.id,
-                &[PathBuf::from("apps/mister/src/main.rs")],
-                "committed",
-                Some("different-sha"),
-                Some("message"),
-                None,
-            )
-            .unwrap();
-        assert!(
-            evidence
-                .latest_committed_scope(worktree)
-                .unwrap_err()
-                .starts_with("commit_evidence_corrupt:")
-        );
         fs::remove_dir_all(root).unwrap();
     }
 

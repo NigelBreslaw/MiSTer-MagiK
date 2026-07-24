@@ -50,6 +50,25 @@ pub fn affected_plan_at(
             external_requirements.push(rbf_external_requirement());
         }
     }
+    if matches!(
+        &intent,
+        Intent::Verify {
+            scope: crate::model::Scope::Staged
+        }
+    ) && !paths.is_empty()
+    {
+        let mut policy = builtin(
+            "git.staged-policy",
+            "Check staged Git policy",
+            BuiltinOperation::StagedGitPolicy,
+            "staged verification → repository staging policy",
+        );
+        policy.inputs = paths
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect();
+        operations.insert(policy.id.clone(), policy);
+    }
     external_requirements.sort_by(|left, right| left.id.cmp(&right.id));
     external_requirements.dedup_by(|left, right| left.id == right.id);
     let mut operations: Vec<_> = operations.into_values().collect();

@@ -129,10 +129,6 @@ fn resolve_task_intent(
             task_id: resolve(task_id)?,
         },
         Intent::TaskSupersede { task_id } => Intent::TaskSupersede { task_id },
-        Intent::Commit { task_id, message } => Intent::Commit {
-            task_id: resolve(task_id)?,
-            message,
-        },
         Intent::Deliver => Intent::Deliver,
         Intent::Benchmark => Intent::Benchmark,
         Intent::Plan {
@@ -186,24 +182,6 @@ fn dispatch(
             if output == OutputFormat::Human {
                 println!("task: superseded ({task_id})");
             }
-        }
-        Intent::Commit { task_id, message } => {
-            let (outcome, sha, subject, paths) = agent_cli::commit::run(
-                evidence, request_id, repository, task_id, message, reporter,
-            )?;
-            if output == OutputFormat::Human {
-                println!(
-                    "commit: {} — {}\npaths: {}",
-                    sha,
-                    subject,
-                    paths
-                        .iter()
-                        .map(|path| path.display().to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
-            }
-            return Ok(outcome);
         }
         Intent::Deliver => return deliver(evidence, repository, reporter),
         Intent::Benchmark => {
@@ -863,82 +841,6 @@ mod tests {
                 .to_string(),
             "write failed"
         );
-    }
-
-    #[test]
-    fn manual_task_is_reused_by_bare_commands() {
-        let root = std::env::temp_dir().join(format!(
-            "agent-cli-main-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&root).unwrap();
-        let evidence = Evidence::open_at(&root).unwrap();
-        evidence
-            .save_task_baseline("task-manual", Path::new("/tmp/worktree"), &(), false)
-            .unwrap();
-        assert_eq!(
-            resolve_task_intent(
-                &evidence,
-                Path::new("/tmp/worktree"),
-                Intent::Commit {
-                    task_id: String::new(),
-                    message: "message".into(),
-                }
-            )
-            .unwrap(),
-            Intent::Commit {
-                task_id: "task-manual".into(),
-                message: "message".into(),
-            }
-        );
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn repeated_session_resolves_active_and_latest_committed_lifecycles() {
-        let root = std::env::temp_dir().join(format!(
-            "agent-cli-session-resolution-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&root).unwrap();
-        let evidence = Evidence::open_at(&root).unwrap();
-        let worktree = Path::new("/tmp/session-resolution-worktree");
-        let first = evidence
-            .save_task_baseline("thread-one", worktree, &(), false)
-            .unwrap();
-        evidence.close_task(&first, "commit-one").unwrap();
-        let second = evidence
-            .save_task_baseline("thread-one", worktree, &(), false)
-            .unwrap();
-
-        assert_eq!(
-            resolve_task_intent(
-                &evidence,
-                worktree,
-                Intent::Commit {
-                    task_id: "thread-one".into(),
-                    message: "message".into(),
-                }
-            )
-            .unwrap(),
-            Intent::Commit {
-                task_id: second,
-                message: "message".into(),
-            }
-        );
-        assert_eq!(
-            resolve_task_intent(&evidence, worktree, Intent::Deliver).unwrap(),
-            Intent::Deliver
-        );
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

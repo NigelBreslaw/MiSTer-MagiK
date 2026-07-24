@@ -8,7 +8,6 @@ pub mod capture;
 pub mod checks;
 pub mod ci;
 pub mod cli;
-pub mod commit;
 pub mod components;
 pub mod delivery;
 pub mod deploy;

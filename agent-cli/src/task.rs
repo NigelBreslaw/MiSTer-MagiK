@@ -250,58 +250,6 @@ pub fn current_head(repository: &Path) -> Result<String, String> {
     git(repository, &["rev-parse", "HEAD"])
 }
 
-pub(crate) fn legacy_baseline_was_clean(
-    repository: &Path,
-    baseline: &Baseline,
-) -> Result<bool, String> {
-    let output = Command::new("git")
-        .args(["ls-tree", "-r", "-z", &baseline.head])
-        .current_dir(repository)
-        .output()
-        .map_err(|error| error.to_string())?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
-    }
-    let mut tracked = BTreeSet::new();
-    for entry in output
-        .stdout
-        .split(|byte| *byte == 0)
-        .filter(|part| !part.is_empty())
-    {
-        let Some(tab) = entry.iter().position(|byte| *byte == b'\t') else {
-            return Ok(false);
-        };
-        let header = String::from_utf8_lossy(&entry[..tab]);
-        let mut fields = header.split_whitespace();
-        let mode = fields.next().unwrap_or("");
-        let kind = fields.next().unwrap_or("");
-        let oid = fields.next().unwrap_or("");
-        let path = PathBuf::from(String::from_utf8_lossy(&entry[tab + 1..]).into_owned());
-        tracked.insert(path.clone());
-        if kind == "commit" {
-            continue;
-        }
-        let Some(fingerprint) = baseline.files.get(&path) else {
-            return Ok(false);
-        };
-        let blob = Command::new("git")
-            .args(["cat-file", "blob", oid])
-            .current_dir(repository)
-            .output()
-            .map_err(|error| error.to_string())?;
-        let content_matches = fingerprint.hash == format!("git:{oid}")
-            || fingerprint.hash == format!("{:016x}", fnv1a(&blob.stdout));
-        if !blob.status.success()
-            || !content_matches
-            || fingerprint.kind != if mode == "120000" { "symlink" } else { "file" }
-            || (mode != "120000" && (fingerprint.mode & 0o111 != 0) != (mode == "100755"))
-        {
-            return Ok(false);
-        }
-    }
-    Ok(baseline.files.keys().all(|path| tracked.contains(path)))
-}
-
 fn capture(repository: &Path) -> Result<Baseline, String> {
     let head = git(repository, &["rev-parse", "HEAD"])?;
     let state = workspace_state(repository)?;
@@ -786,47 +734,6 @@ mod tests {
                 .unwrap_err()
                 .contains("history diverged")
         );
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn legacy_baseline_can_prove_clean_but_rejects_preexisting_changes() {
-        let root = std::env::temp_dir().join(format!(
-            "agent-cli-legacy-task-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&root).unwrap();
-        run(&root, &["init", "-q"]);
-        run(&root, &["config", "user.name", "Agent CLI Test"]);
-        run(
-            &root,
-            &["config", "user.email", "agent-cli@example.invalid"],
-        );
-        fs::write(root.join("tracked.txt"), "original\n").unwrap();
-        run(&root, &["add", "."]);
-        run(&root, &["commit", "-qm", "fixture"]);
-
-        let evidence = Evidence::open_at(&root.join(".git/agent-state")).unwrap();
-        begin(&evidence, &root, "clean", false).unwrap();
-        let (_, mut clean): (PathBuf, Baseline) =
-            evidence.load_task_baseline("clean").unwrap().unwrap();
-        clean.planner_schema = 2;
-        clean.dirty_paths.clear();
-        clean.staged_paths.clear();
-        assert!(legacy_baseline_was_clean(&root, &clean).unwrap());
-
-        fs::write(root.join("tracked.txt"), "preexisting\n").unwrap();
-        begin(&evidence, &root, "dirty", false).unwrap();
-        let (_, mut dirty): (PathBuf, Baseline) =
-            evidence.load_task_baseline("dirty").unwrap().unwrap();
-        dirty.planner_schema = 2;
-        dirty.dirty_paths.clear();
-        dirty.staged_paths.clear();
-        assert!(!legacy_baseline_was_clean(&root, &dirty).unwrap());
         fs::remove_dir_all(root).unwrap();
     }
 

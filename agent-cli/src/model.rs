@@ -40,6 +40,7 @@ pub enum ActionKind {
 #[serde(rename_all = "snake_case")]
 pub enum BuiltinOperation {
     AgentGuidance,
+    StagedGitPolicy,
     LicenseHeaders,
     ShellOwnership,
     DistributionWorkflow,
@@ -79,10 +80,6 @@ pub enum Intent {
     },
     TaskSupersede {
         task_id: String,
-    },
-    Commit {
-        task_id: String,
-        message: String,
     },
     Plan {
         scope: Scope,
@@ -160,9 +157,7 @@ impl Intent {
     #[must_use]
     pub const fn risk(&self) -> Risk {
         match self {
-            Self::Commit { .. } | Self::Verify { .. } | Self::CaptureUsbVideo { .. } => {
-                Risk::LocalWrite
-            }
+            Self::Verify { .. } | Self::CaptureUsbVideo { .. } => Risk::LocalWrite,
             Self::ReleaseQualify | Self::DatabaseRotate => Risk::Destructive,
             Self::Deliver { .. } | Self::Benchmark { .. } | Self::Diagnose => Risk::DeviceWrite,
             Self::Build { .. } => Risk::LocalWrite,

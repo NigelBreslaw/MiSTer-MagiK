@@ -25,6 +25,7 @@ pub fn execute(
 pub fn label(operation: BuiltinOperation) -> &'static str {
     match operation {
         BuiltinOperation::AgentGuidance => "agent guidance",
+        BuiltinOperation::StagedGitPolicy => "staged Git policy",
         BuiltinOperation::LicenseHeaders => "license headers",
         BuiltinOperation::ShellOwnership => "shell ownership",
         BuiltinOperation::DistributionWorkflow => "distribution workflow",
@@ -37,6 +38,7 @@ pub fn label(operation: BuiltinOperation) -> &'static str {
 pub fn run(operation: BuiltinOperation, repository: &Path) -> Result<(), String> {
     match operation {
         BuiltinOperation::AgentGuidance => check_agent_guidance(repository),
+        BuiltinOperation::StagedGitPolicy => check_staged_git_policy(repository),
         BuiltinOperation::LicenseHeaders => check_license_headers(repository),
         BuiltinOperation::ShellOwnership => check_shell_ownership(repository),
         BuiltinOperation::DistributionWorkflow => check_distribution_workflow(repository),
@@ -44,6 +46,105 @@ pub fn run(operation: BuiltinOperation, repository: &Path) -> Result<(), String>
         BuiltinOperation::PlatformWorkflow => check_platform_workflow(repository),
         BuiltinOperation::CiCache => check_ci_cache(repository),
     }
+}
+
+fn check_staged_git_policy(repository: &Path) -> Result<(), String> {
+    let output = Command::new("git")
+        .args([
+            "diff",
+            "--cached",
+            "--name-only",
+            "-z",
+            "--diff-filter=ACMRD",
+        ])
+        .current_dir(repository)
+        .output()
+        .map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
+    }
+    let paths: Vec<PathBuf> = output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|part| !part.is_empty())
+        .map(|part| PathBuf::from(String::from_utf8_lossy(part).into_owned()))
+        .collect();
+    reject_forbidden_paths(repository, &paths)?;
+    validate_submodules(repository, &paths)
+}
+
+fn reject_forbidden_paths(repository: &Path, paths: &[PathBuf]) -> Result<(), String> {
+    for path in paths {
+        let text = path.to_string_lossy();
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("");
+        let extension = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("");
+        let private_image = text.starts_with("private/")
+            && matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "png" | "jpg" | "jpeg" | "gif" | "webp"
+            );
+        if text.starts_with("private/test-fixtures/")
+            || path
+                .components()
+                .any(|part| part.as_os_str() == ".wrangler")
+            || name == ".env"
+            || name.starts_with(".env.")
+            || private_image
+            || matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "zip" | "7z" | "tgz" | "tar" | "gz" | "bz2" | "xz" | "rar" | "key" | "p12" | "pfx"
+            )
+            || matches!(name, "credentials" | "secrets" | "id_rsa" | "id_ed25519")
+            || name.starts_with("credentials.")
+            || name.starts_with("secrets.")
+        {
+            return Err(format!("staged_git_forbidden: {}", path.display()));
+        }
+        let ignored = Command::new("git")
+            .args(["check-ignore", "-q", "--"])
+            .arg(path)
+            .current_dir(repository)
+            .status()
+            .map_err(|error| error.to_string())?;
+        if ignored.success() {
+            return Err(format!("staged_git_ignored: {}", path.display()));
+        }
+    }
+    Ok(())
+}
+
+fn validate_submodules(repository: &Path, paths: &[PathBuf]) -> Result<(), String> {
+    for path in paths {
+        let mode = crate::git::value(
+            repository,
+            &["ls-files", "-s", "--", &path.to_string_lossy()],
+        )?;
+        if !mode.starts_with("160000 ") {
+            continue;
+        }
+        let submodule = repository.join(path);
+        if !crate::git::value(&submodule, &["status", "--porcelain"])?.is_empty() {
+            return Err(format!("staged_git_dirty_submodule: {}", path.display()));
+        }
+        if path == Path::new("private/magik-cloud") {
+            let upstream = crate::git::value(&submodule, &["rev-parse", "@{u}"])
+                .map_err(|_| "staged_git_private_submodule_has_no_upstream".to_owned())?;
+            let head = crate::git::value(&submodule, &["rev-parse", "HEAD"])?;
+            if !crate::git::succeeds(
+                &submodule,
+                &["merge-base", "--is-ancestor", &head, &upstream],
+            )? {
+                return Err("staged_git_private_submodule_must_be_pushed_first".into());
+            }
+        }
+    }
+    Ok(())
 }
 
 fn require_fragments(
@@ -624,6 +725,41 @@ mod tests {
         fs::remove_file(root.join("docs/contract.md")).unwrap();
         fs::write(root.join("history/evidence.md"), "scripts/run-rust.sh\n").unwrap();
         assert!(check_shell_ownership(&root).is_ok());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn staged_git_policy_rejects_forbidden_paths() {
+        let root = std::env::temp_dir().join(format!(
+            "agent-cli-staged-policy-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        assert!(
+            Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(&root)
+                .status()
+                .unwrap()
+                .success()
+        );
+        fs::write(root.join(".env"), "SECRET=fixture\n").unwrap();
+        assert!(
+            Command::new("git")
+                .args(["add", "-f", ".env"])
+                .current_dir(&root)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert_eq!(
+            check_staged_git_policy(&root).unwrap_err(),
+            "staged_git_forbidden: .env"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 }
