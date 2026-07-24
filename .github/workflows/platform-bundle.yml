@@ -42,7 +42,6 @@ jobs:
       fpga-id: ${{ steps.reuse.outputs.fpga_id || steps.identity.outputs.fpga_id }}
       kernel-id: ${{ steps.reuse.outputs.kernel_id || steps.identity.outputs.kernel_id }}
       main-revision: ${{ steps.identity.outputs.main_revision }}
-      kernel-revision: ${{ steps.identity.outputs.kernel_revision }}
       bundle-id: ${{ steps.plan.outputs.bundle_id }}
       candidate-hit: ${{ steps.reuse.outputs.candidate_hit }}
       main-cache-hit: ${{ steps.reuse.outputs.main_hit }}
@@ -82,10 +81,8 @@ jobs:
           main_id="$(python3 scripts/release/platform/main-component.py identity --revision "$main_revision")"
           fpga_id="$(python3 scripts/release/platform/platform-component-id.py component fpga)"
           kernel_id="$(python3 scripts/release/platform/platform-component-id.py component kernel)"
-          kernel_revision="$(git log -1 --format=%H -- $(sed '/^#/d;/^$/d' scripts/platform-component-inputs/kernel-v0.1.txt))"
-          [[ "$kernel_revision" =~ ^[0-9a-f]{40}$ ]]
-          printf 'main_revision=%s\nmain_id=%s\nfpga_id=%s\nkernel_id=%s\nkernel_revision=%s\n' \
-            "$main_revision" "$main_id" "$fpga_id" "$kernel_id" "$kernel_revision" >> "$GITHUB_OUTPUT"
+          printf 'main_revision=%s\nmain_id=%s\nfpga_id=%s\nkernel_id=%s\n' \
+            "$main_revision" "$main_id" "$fpga_id" "$kernel_id" >> "$GITHUB_OUTPUT"
 
       - name: Inspect latest platform release
         id: current
@@ -430,7 +427,7 @@ jobs:
         run: >-
           apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y
           git ca-certificates curl make gcc-arm-linux-gnueabihf flex bison bc libssl-dev pkg-config
-          libelf-dev kmod sparse python3
+          libelf-dev kmod sparse python3 ripgrep
 
       - uses: actions/checkout@v7
         with:
@@ -450,9 +447,6 @@ jobs:
           git -C build/Linux-Kernel_MiSTer checkout --detach FETCH_HEAD
 
       - name: Build and attest module
-        env:
-          SOURCE_REVISION: ${{ needs.plan.outputs.kernel-revision }}
-          SOURCE_DIRTY: "0"
         run: |
           scripts/checks/check-scanout-slots-contract.sh
           python3 scripts/tests/test-scanout-platform-contract.py

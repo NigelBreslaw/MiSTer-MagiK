@@ -50,7 +50,7 @@ jobs:
         run: >-
           apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y
           make gcc-arm-linux-gnueabihf flex bison bc libssl-dev libelf-dev kmod
-          sparse python3
+          sparse python3 ripgrep
 
       - name: Fetch pinned MiSTer kernel with provenance
         run: |
@@ -66,9 +66,6 @@ jobs:
           python3 scripts/tests/test-scanout-platform-contract.py
 
       - name: Build and attest module
-        env:
-          SOURCE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
-          SOURCE_DIRTY: "0"
         run: >-
           KERNEL_SRC="$PWD/build/Linux-Kernel_MiSTer"
           KERNEL_BUILD="$PWD/build/scanout-slots-kernel"

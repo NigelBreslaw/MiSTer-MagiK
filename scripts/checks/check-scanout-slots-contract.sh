@@ -16,6 +16,11 @@ DOC="$ROOT/documentation/src/content/docs/architecture/kernel-scanout-plugin.mdx
 KO="$ROOT/build/scanout-slots/mister_magik_scanout_slots.ko"
 DEPLOY="$ROOT/mister/tools/host/src/main.rs"
 
+if ! command -v rg >/dev/null 2>&1; then
+  echo "scanout contract requires ripgrep (rg)" >&2
+  exit 1
+fi
+
 require_text() {
   local file="$1" text="$2"
   if ! grep -Fq "$text" "$file"; then
