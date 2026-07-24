@@ -412,7 +412,7 @@ module tb_mister_magik_vblank_latch;
 		active_lfb_stride = 14'd2560;
 		expect_status(4'd0, 16'h0031);
 		expect_status(4'd1, 16'h0031);
-		expect_status(4'd2, 16'h0001);
+		expect_status(4'd2, 16'h0003);
 		expect_status(4'd3, 16'd4);
 		expect_status(4'd4, 16'd5);
 		expect_status(4'd5, 16'd2);
