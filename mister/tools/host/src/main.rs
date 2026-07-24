@@ -2164,10 +2164,10 @@ fn run_crt_geometry_trial_with(
     validate_crt_geometry_trial(&runtime_settings, rectangle)?;
     drop(settings_session);
 
-    let output = std::env::temp_dir().join(format!(
-        "mister-magik-crt-geometry-{}.png",
-        SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
-    ));
+    let output = crt_geometry_capture_path(
+        &std::env::temp_dir(),
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis(),
+    );
     let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
     let runtime_settings_for_trial = runtime_settings.clone();
     let trial_connection = connection.clone();
@@ -2233,6 +2233,10 @@ fn run_crt_geometry_trial_with(
         "usb_video": output,
     })
     .to_string())
+}
+
+fn crt_geometry_capture_path(temporary_directory: &Path, timestamp_ms: u128) -> PathBuf {
+    temporary_directory.join(format!("mister-magik-crt-geometry-{timestamp_ms}.jpg"))
 }
 
 fn validate_crt_geometry_trial(runtime_settings: &str, rectangle: [u16; 4]) -> Result<()> {
@@ -8073,6 +8077,14 @@ video_mode=14
         let command = crt_trial_run_command("schema=1&output=crt-288p50", Some([67, 706, 32, 286]));
         assert!(command.contains("MISTER_FB_DIAGNOSTIC_RECT=67,706,32,286"));
         assert!(!command.contains("MISTER_CRT_TRIAL_CONTENT_BOUNDS"));
+    }
+
+    #[test]
+    fn geometry_trial_usb_capture_uses_the_camera_jpeg_contract() {
+        assert_eq!(
+            crt_geometry_capture_path(Path::new("/tmp"), 1234),
+            Path::new("/tmp/mister-magik-crt-geometry-1234.jpg")
+        );
     }
 
     #[test]
