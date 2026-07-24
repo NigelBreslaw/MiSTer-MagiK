@@ -219,7 +219,7 @@ fault boundary is inside the scaler path: `LFB_BASE` changes in `clk_sys`, while
 falling. The next FPGA experiment must make that fetch-domain base selection
 atomic and acknowledge completion only after that event.
 
-## Correction: the preloaded transition probe observes CRT scan history
+## Correction: the preloaded transition probe does not localize the fault
 
 The preceding mixed-base conclusion was disproven by a clearer photograph and
 must not be used as the basis for a production FPGA change.
@@ -244,17 +244,19 @@ The operator still observed the old bar at the bottom, although the retained
 amount appeared smaller. Photograph `Screenshot 2026-07-24 at 16.07.46.png`
 (SHA-256
 `08f944e24e4fac51e730073e28a9eb1f7db05ff53a9817cfbd2bba1b8a221c08`)
-shows one horizontal time boundary across both preloaded bars: the upper CRT
-region has already been refreshed while the lower phosphor still contains the
-previous scan. A camera exposure or human visual integration can observe that
-state during any correct top-to-bottom CRT refresh. It is especially visible
-at 50 Hz and can retain multiple earlier positions according to phosphor decay.
+shows one horizontal time boundary across both preloaded bars. The operator
+then clarified that the display is an OLED television: MiSTer VGA feeds a
+Morph4K analog bridge, whose HDMI output feeds the OLED. There is no CRT
+phosphor in this path, so the earlier phosphor explanation was wrong.
 
-Therefore the high-contrast transition probes cannot distinguish an illegal
-mixed framebuffer raster from normal CRT raster/phosphor history. The apparent
-reduction under the experiment is not acceptance evidence. Combined with clean
-USB Video, clean framebuffer/latch telemetry, static stability, failure only
-during motion, the stronger current explanation is PAL-rate CRT temporal
-behavior rather than a proven digital base-switch fault. The experimental FPGA
-timing is not promoted and is removed from the active branch by a
-non-destructive revert.
+The image and attended observation still do not identify which component
+created the boundary. Candidates include MiSTer's 50 Hz VGA clock/sync/analog
+output, Morph4K analog capture or frame conversion, OLED 50 Hz processing, and
+any topology difference between the USB capture and OLED paths. The USB Video
+tap point must be established before its clean result can localize the fault.
+The apparent reduction under the experiment is not acceptance evidence.
+
+The high-contrast probe therefore disproves neither a digital/analog timing
+fault nor a downstream conversion fault. It does prove that the FPGA preroll
+candidate failed acceptance. That experimental timing is not promoted and was
+removed from the active branch by non-destructive revert `10320431`.
