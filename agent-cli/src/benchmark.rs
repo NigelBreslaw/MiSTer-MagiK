@@ -156,10 +156,10 @@ pub fn run_workflow(
 }
 
 pub fn infer_scenario(paths: &[PathBuf]) -> AgentResult<BenchmarkScenario> {
-    if paths
-        .iter()
-        .any(|path| path.ends_with("ui_runner/launcher_screensaver.rs"))
-    {
+    if paths.iter().any(|path| {
+        path.ends_with("ui_runner/launcher_screensaver.rs")
+            || path == Path::new("mister/tools/host/src/main.rs")
+    }) {
         return Ok(BenchmarkScenario::ScreensaverVelocity);
     }
     if paths.iter().any(|path| {
@@ -921,6 +921,10 @@ mod tests {
                 "apps/mister/src/ui_runner/launcher_screensaver.rs"
             )])
             .unwrap(),
+            BenchmarkScenario::ScreensaverVelocity
+        );
+        assert_eq!(
+            infer_scenario(&[PathBuf::from("mister/tools/host/src/main.rs")]).unwrap(),
             BenchmarkScenario::ScreensaverVelocity
         );
         assert!(infer_scenario(&[PathBuf::from("docs/device.md")]).is_err());

@@ -53,6 +53,7 @@ const DIRECT_RESET_NO_SYNC_REMOTE_CMD: &str = "if [ -p /dev/MiSTer_cmd ] && { pi
 #[cfg(test)]
 const DEFAULT_REMOTE_LIBRARY_DB: &str = "/media/fat/mister-magik/library.sqlite3";
 const DEFAULT_LAUNCHER_ENV_REMOTE: &str = "/media/fat/mister-magik/launcher.env";
+const DEVELOPMENT_LAUNCHER_ENV_REMOTE: &str = "/media/fat/mister-magik-dev/launcher.env";
 const MAIN_STATUS_REMOTE: &str = "/tmp/mister-magik/main-status.json";
 const SLINT_STATUS_REMOTE: &str = "/tmp/mister-magik/status.json";
 const RESOLVED_DEVICE_CHILD: &str = "MISTER_MAGIK_RESOLVED_DEVICE_CHILD";
@@ -375,10 +376,11 @@ impl DeviceOperations for NativeDevice {
             }
             DeviceRequest::RestoreBenchmark => {
                 let session = connect_with(&config.connection, 10).map_err(device_failure)?;
-                launcher_restart(
+                prepare_launcher_env(
                     &session,
                     &LauncherRestartOptions {
                         clear_env: true,
+                        remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
                         ..LauncherRestartOptions::default()
                     },
                 )
@@ -3037,6 +3039,36 @@ fn run_launcher_benchmark(
     scenario: BenchmarkScenario,
     warmup: bool,
 ) -> Result<()> {
+    let options = benchmark_launcher_restart_options(scenario, warmup);
+    reset_benchmark_trace(session, warmup)?;
+    launcher_restart(session, &options)?;
+    wait_benchmark_trace(session, warmup)
+}
+
+fn reset_benchmark_trace(session: &Session, warmup: bool) -> Result<()> {
+    let trace = benchmark_trace_path(warmup);
+    let complete = benchmark_trace_complete_path(warmup);
+    exec_checked(
+        session,
+        "reset benchmark trace",
+        &format!("rm -f {trace} {complete}"),
+    )
+}
+
+fn wait_benchmark_trace(session: &Session, warmup: bool) -> Result<()> {
+    let trace = benchmark_trace_path(warmup);
+    let complete = benchmark_trace_complete_path(warmup);
+    exec_checked(
+        session,
+        "benchmark trace wait",
+        &benchmark_trace_wait_command(trace, complete),
+    )
+}
+
+fn benchmark_launcher_restart_options(
+    scenario: BenchmarkScenario,
+    warmup: bool,
+) -> LauncherRestartOptions {
     let trace = benchmark_trace_path(warmup);
     let complete = benchmark_trace_complete_path(warmup);
     let seconds = if warmup {
@@ -3066,29 +3098,17 @@ fn run_launcher_benchmark(
     ];
     if scenario == BenchmarkScenario::ScreensaverVelocity {
         env_vars.push(("MISTER_SCREENSAVER_START_ACTIVE".into(), "1".into()));
+        env_vars.push(("MISTER_CATALOG_REFRESH".into(), "off".into()));
     } else {
         env_vars.push(("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()));
         env_vars.push(("MISTER_LAUNCHER_START_SYSTEM".into(), "arcade".into()));
     }
-    exec_checked(
-        session,
-        "reset benchmark trace",
-        &format!("rm -f {trace} {complete}"),
-    )?;
-    launcher_restart(
-        session,
-        &LauncherRestartOptions {
-            env_vars,
-            timeout_secs: 30,
-            ..LauncherRestartOptions::default()
-        },
-    )?;
-    exec_checked(
-        session,
-        "benchmark trace wait",
-        &benchmark_trace_wait_command(trace, complete),
-    )?;
-    Ok(())
+    LauncherRestartOptions {
+        env_vars,
+        timeout_secs: 30,
+        remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+        ..LauncherRestartOptions::default()
+    }
 }
 
 fn benchmark_trace_wait_command(trace: &str, complete: &str) -> String {
@@ -3152,6 +3172,11 @@ fn run_screensaver_benchmark_matrix(connection: &ConnectionConfig) -> Result<Str
         for mode in SCREENSAVER_BENCHMARK_MODES {
             let session = connect_with(connection, 10)?;
             let ready = wait_launcher_ready(&session, Instant::now(), Duration::from_secs(15))?;
+            reset_benchmark_trace(&session, false)?;
+            prepare_launcher_env(
+                &session,
+                &benchmark_launcher_restart_options(BenchmarkScenario::ScreensaverVelocity, false),
+            )?;
             exec_checked(
                 &session,
                 "apply screensaver benchmark display mode",
@@ -3169,7 +3194,7 @@ fn run_screensaver_benchmark_matrix(connection: &ConnectionConfig) -> Result<Str
                 Instant::now(),
                 Duration::from_secs(15),
             )?;
-            run_launcher_benchmark(&session, BenchmarkScenario::ScreensaverVelocity, false)?;
+            wait_benchmark_trace(&session, false)?;
             let trace = remote_read(&session, benchmark_trace_path(false))
                 .ok_or("screensaver benchmark trace is missing")?;
             output.push_str(&format!(
@@ -3180,6 +3205,14 @@ fn run_screensaver_benchmark_matrix(connection: &ConnectionConfig) -> Result<Str
             if !trace.ends_with('\n') {
                 output.push('\n');
             }
+            prepare_launcher_env(
+                &session,
+                &LauncherRestartOptions {
+                    clear_env: true,
+                    remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+                    ..LauncherRestartOptions::default()
+                },
+            )?;
             restore_benchmark_display_if_pending(&session)?;
         }
         Ok(())
@@ -3187,6 +3220,14 @@ fn run_screensaver_benchmark_matrix(connection: &ConnectionConfig) -> Result<Str
 
     if let Err(error) = run_result {
         if let Ok(session) = connect_with(connection, 10) {
+            let _ = prepare_launcher_env(
+                &session,
+                &LauncherRestartOptions {
+                    clear_env: true,
+                    remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+                    ..LauncherRestartOptions::default()
+                },
+            );
             let _ = restore_benchmark_display_if_pending(&session);
         }
         return Err(error);
@@ -10738,6 +10779,38 @@ H: Handlers=event3 js0"#
         assert!(command.contains("wc -l"));
         assert!(command.contains("launcher_bench_scenario"));
         assert!(command.contains("/tmp/mister-magik-slint.log"));
+    }
+
+    #[test]
+    fn screensaver_benchmark_uses_development_env_without_catalog_refresh() {
+        let options =
+            benchmark_launcher_restart_options(BenchmarkScenario::ScreensaverVelocity, false);
+
+        assert_eq!(options.remote_env, DEVELOPMENT_LAUNCHER_ENV_REMOTE);
+        assert!(
+            options
+                .env_vars
+                .contains(&("MISTER_SCREENSAVER_START_ACTIVE".into(), "1".into()))
+        );
+        assert!(
+            options
+                .env_vars
+                .contains(&("MISTER_CATALOG_REFRESH".into(), "off".into()))
+        );
+    }
+
+    #[test]
+    fn launcher_velocity_benchmark_keeps_catalog_refresh_enabled() {
+        let options =
+            benchmark_launcher_restart_options(BenchmarkScenario::LauncherVelocity, false);
+
+        assert_eq!(options.remote_env, DEVELOPMENT_LAUNCHER_ENV_REMOTE);
+        assert!(
+            !options
+                .env_vars
+                .iter()
+                .any(|(key, _)| key == "MISTER_CATALOG_REFRESH")
+        );
     }
 
     #[test]
