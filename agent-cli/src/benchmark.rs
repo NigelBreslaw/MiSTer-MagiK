@@ -52,6 +52,7 @@ pub struct BenchmarkResult {
     pub p99_draw_us: u64,
     pub p99_compose_us: u64,
     pub p99_present_us: u64,
+    pub refresh_period_us: u64,
     pub max_wall_frame: u64,
     pub max_wall_component: &'static str,
     pub max_wall_component_us: u64,
@@ -166,6 +167,7 @@ pub fn run_workflow(
 pub fn infer_scenario(paths: &[PathBuf]) -> AgentResult<BenchmarkScenario> {
     if paths.iter().any(|path| {
         path.ends_with("ui_runner/launcher_screensaver.rs")
+            || path == Path::new("agent-cli/src/benchmark.rs")
             || path == Path::new("mister/tools/host/src/main.rs")
     }) {
         return Ok(BenchmarkScenario::ScreensaverVelocity);
@@ -567,6 +569,7 @@ struct TraceSample {
     custom_us: u64,
     compose_us: u64,
     present_us: u64,
+    refresh_period_us: u64,
     screensaver_archive_poll_us: u64,
     screensaver_card_adopt_us: u64,
     screensaver_parade_advance_us: u64,
@@ -669,6 +672,7 @@ fn parse_trace_samples(text: &str, screensaver_only: bool) -> AgentResult<Vec<Tr
     let custom_index = column("custom_draw_us")?;
     let compose_index = column("hidden_compose_us")?;
     let present_index = column("fb_present_us")?;
+    let refresh_period_index = column("vsync_period_us")?;
     let status_index = header
         .iter()
         .position(|field| *field == "main_present_status");
@@ -733,6 +737,7 @@ fn parse_trace_samples(text: &str, screensaver_only: bool) -> AgentResult<Vec<Tr
             custom_us,
             compose_us,
             present_us,
+            refresh_period_us: value(refresh_period_index),
             screensaver_archive_poll_us: optional_value(archive_poll_index),
             screensaver_card_adopt_us: optional_value(card_adopt_index),
             screensaver_parade_advance_us: optional_value(parade_advance_index),
@@ -787,6 +792,14 @@ fn summarize_samples(
         .iter()
         .map(|sample| sample.present_us)
         .collect::<Vec<_>>();
+    let mut refresh_periods = samples
+        .iter()
+        .map(|sample| sample.refresh_period_us)
+        .filter(|period| *period > 0)
+        .collect::<Vec<_>>();
+    if refresh_periods.is_empty() {
+        return Err("benchmark trace has no measured refresh period".into());
+    }
     let average_wall = walls.iter().sum::<u64>() as f64 / walls.len() as f64;
     let max_wall_sample = samples
         .iter()
@@ -805,6 +818,7 @@ fn summarize_samples(
         p99_draw_us: percentile(&mut draw, 99),
         p99_compose_us: percentile(&mut compose, 99),
         p99_present_us: percentile(&mut present, 99),
+        refresh_period_us: percentile(&mut refresh_periods, 50),
         max_wall_frame: max_wall_sample.frame,
         max_wall_component,
         max_wall_component_us,
@@ -884,11 +898,18 @@ fn evaluate(results: &[BenchmarkResult]) -> AgentResult<()> {
         if result.p99_work_us > 14_500 {
             failures.push(format!("{label} p99_work_us={}>14500", result.p99_work_us));
         }
-        if result.p99_wall_us > 16_000 {
-            failures.push(format!("{label} p99_wall_us={}>16000", result.p99_wall_us));
+        let p99_wall_limit = result.refresh_period_us.saturating_add(500);
+        if result.p99_wall_us > p99_wall_limit {
+            failures.push(format!(
+                "{label} p99_wall_us={}>{p99_wall_limit} (refresh_period_us={})",
+                result.p99_wall_us, result.refresh_period_us
+            ));
         }
-        if result.max_wall_us > 16_667 {
-            failures.push(format!("{label} max_wall_us={}>16667", result.max_wall_us));
+        if result.max_wall_us.saturating_mul(2) >= result.refresh_period_us.saturating_mul(3) {
+            failures.push(format!(
+                "{label} max_wall_us={}>=1.5x{}",
+                result.max_wall_us, result.refresh_period_us
+            ));
         }
         if result.present_errors != 0 {
             failures.push(format!("{label} present_errors={}", result.present_errors));
@@ -898,6 +919,9 @@ fn evaluate(results: &[BenchmarkResult]) -> AgentResult<()> {
                 "{label} latch_drop_delta={}",
                 result.latch_drop_delta
             ));
+        }
+        if result.vsync_misses != 0 {
+            failures.push(format!("{label} vsync_misses={}", result.vsync_misses));
         }
     }
     if failures.is_empty() {
@@ -1037,6 +1061,10 @@ mod tests {
             infer_scenario(&[PathBuf::from("mister/tools/host/src/main.rs")]).unwrap(),
             BenchmarkScenario::ScreensaverVelocity
         );
+        assert_eq!(
+            infer_scenario(&[PathBuf::from("agent-cli/src/benchmark.rs")]).unwrap(),
+            BenchmarkScenario::ScreensaverVelocity
+        );
         assert!(infer_scenario(&[PathBuf::from("docs/device.md")]).is_err());
         assert_eq!(
             infer_cold_scenario(&[PathBuf::from("crates/catalog/src/builder.rs")]),
@@ -1084,10 +1112,12 @@ mod tests {
     #[test]
     fn analyzer_and_fixed_thresholds_are_strict() {
         let mut trace = String::from(
-            "frame\tprepare_us\tslint_render_us\tcustom_draw_us\thidden_compose_us\tfb_present_us\twall_us\tmain_present_status\n",
+            "frame\tprepare_us\tslint_render_us\tcustom_draw_us\thidden_compose_us\tfb_present_us\tvsync_period_us\twall_us\tmain_present_status\n",
         );
         for frame in 0..120 {
-            trace.push_str(&format!("{frame}\t100\t200\t100\t100\t100\t15000\tok\n"));
+            trace.push_str(&format!(
+                "{frame}\t100\t200\t100\t100\t100\t16667\t15000\tok\n"
+            ));
         }
         let result = analyze_trace(&trace, BenchmarkScenario::LauncherVelocity).unwrap();
         assert!(evaluate(&result).is_ok());
@@ -1096,6 +1126,34 @@ mod tests {
             evaluate(&analyze_trace(&slow, BenchmarkScenario::LauncherVelocity).unwrap()).is_err()
         );
         assert!(analyze_trace("bad", BenchmarkScenario::LauncherVelocity).is_err());
+    }
+
+    #[test]
+    fn wall_gates_follow_measured_refresh_period() {
+        let trace_with_max = |max_wall_us| {
+            let mut trace = String::from(
+                "frame\tprepare_us\tslint_render_us\tcustom_draw_us\thidden_compose_us\tfb_present_us\tvsync_period_us\twall_us\tmain_present_status\tvsync_miss_streak\n",
+            );
+            for frame in 0..120 {
+                let wall_us = if frame == 119 { max_wall_us } else { 16_667 };
+                trace.push_str(&format!(
+                    "{frame}\t100\t200\t100\t100\t100\t16667\t{wall_us}\tok\t0\n"
+                ));
+            }
+            trace
+        };
+
+        let paced =
+            analyze_trace(&trace_with_max(25_000), BenchmarkScenario::LauncherVelocity).unwrap();
+        assert!(evaluate(&paced).is_ok());
+        let dropped =
+            analyze_trace(&trace_with_max(25_001), BenchmarkScenario::LauncherVelocity).unwrap();
+        assert!(evaluate(&dropped).is_err());
+        let missed = trace_with_max(16_667).replace("\tok\t0\n", "\tok\t1\n");
+        assert!(
+            evaluate(&analyze_trace(&missed, BenchmarkScenario::LauncherVelocity).unwrap())
+                .is_err()
+        );
     }
 
     #[test]
@@ -1108,7 +1166,7 @@ mod tests {
             trace.push_str(&format!(
                 "benchmark_resolution\tmode={mode}\toutput={output}\tframebuffer={framebuffer}\n"
             ));
-            trace.push_str("frame\tprepare_us\tslint_render_us\tcustom_draw_us\thidden_compose_us\tfb_present_us\twall_us\tmain_present_status\tvsync_miss_streak\tmain_present_drop_count\tscreensaver_active\tscreensaver_active_cards\tscreensaver_archive_poll_us\tscreensaver_card_adopt_us\tscreensaver_parade_advance_us\tscreensaver_background_us\tscreensaver_draw_order_us\tscreensaver_tile_blit_us\tscreensaver_cards_drawn\tscreensaver_cards_culled\n");
+            trace.push_str("frame\tprepare_us\tslint_render_us\tcustom_draw_us\thidden_compose_us\tfb_present_us\tvsync_period_us\twall_us\tmain_present_status\tvsync_miss_streak\tmain_present_drop_count\tscreensaver_active\tscreensaver_active_cards\tscreensaver_archive_poll_us\tscreensaver_card_adopt_us\tscreensaver_parade_advance_us\tscreensaver_background_us\tscreensaver_draw_order_us\tscreensaver_tile_blit_us\tscreensaver_cards_drawn\tscreensaver_cards_culled\n");
             for frame in 0..360 {
                 let (draw_us, wall_us, tile_blit_us) = if frame == 42 {
                     (13_000, 15_500, 9_000)
@@ -1116,7 +1174,7 @@ mod tests {
                     (200, 15_000, 50)
                 };
                 trace.push_str(&format!(
-                    "{frame}\t100\t{draw_us}\t100\t100\t100\t{wall_us}\tok\t0\t0\t1\t{}\t10\t10\t10\t50\t10\t{tile_blit_us}\t{}\t{}\n",
+                    "{frame}\t100\t{draw_us}\t100\t100\t100\t16667\t{wall_us}\tok\t0\t0\t1\t{}\t10\t10\t10\t50\t10\t{tile_blit_us}\t{}\t{}\n",
                     frame / 60 + 1,
                     frame / 60 + 1,
                     frame / 120

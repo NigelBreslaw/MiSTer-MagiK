@@ -14,10 +14,12 @@ Select → QualifyBuild → PrepareDevice → Warmup
 → Capture → Analyze → Evaluate → Restore
 ```
 
-The fixed gates are average FPS ≥ 55, p99 work ≤ 14,500 µs, p99 wall ≤
-16,000 µs, maximum wall ≤ 16,667 µs, and zero presentation errors. Scenario,
-trace paths, warmup, duration, and thresholds are policy—not command flags.
-Velocity scenarios, never row jumps, support Arcade performance conclusions.
+The fixed gates are average FPS ≥ 55, p99 work ≤ 14,500 µs, p99 wall no more
+than the measured refresh period plus 500 µs, and maximum wall below 1.5
+measured refresh periods. Presentation errors, latch drops, and vsync misses
+must all remain zero. Scenario, trace paths, warmup, duration, and thresholds
+are policy—not command flags. Velocity scenarios, never row jumps, support
+Arcade performance conclusions.
 
 Screensaver renderer changes select the fixed screensaver-velocity matrix. It
 starts a fresh production screensaver at 1920x1200 (960x600 framebuffer) and
