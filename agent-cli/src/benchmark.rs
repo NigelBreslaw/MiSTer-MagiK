@@ -58,6 +58,8 @@ pub struct BenchmarkResult {
     pub active_cards_frame_60: usize,
     pub active_cards_frame_120: usize,
     pub active_cards_frame_180: usize,
+    pub max_cards_drawn: usize,
+    pub max_cards_culled: usize,
     pub present_errors: usize,
     pub vsync_misses: usize,
     pub latch_drop_delta: u16,
@@ -572,6 +574,8 @@ struct TraceSample {
     screensaver_draw_order_us: u64,
     screensaver_tile_blit_us: u64,
     active_cards: usize,
+    cards_drawn: usize,
+    cards_culled: usize,
     present_error: bool,
     vsync_miss: bool,
     latch_drop_count: u16,
@@ -683,6 +687,8 @@ fn parse_trace_samples(text: &str, screensaver_only: bool) -> AgentResult<Vec<Tr
     let draw_order_index = optional_column("screensaver_draw_order_us");
     let tile_blit_index = optional_column("screensaver_tile_blit_us");
     let active_cards_index = optional_column("screensaver_active_cards");
+    let cards_drawn_index = optional_column("screensaver_cards_drawn");
+    let cards_culled_index = optional_column("screensaver_cards_culled");
     let screensaver_index = header
         .iter()
         .position(|field| *field == "screensaver_active");
@@ -734,6 +740,8 @@ fn parse_trace_samples(text: &str, screensaver_only: bool) -> AgentResult<Vec<Tr
             screensaver_draw_order_us: optional_value(draw_order_index),
             screensaver_tile_blit_us: optional_value(tile_blit_index),
             active_cards: optional_value(active_cards_index) as usize,
+            cards_drawn: optional_value(cards_drawn_index) as usize,
+            cards_culled: optional_value(cards_culled_index) as usize,
             present_error: status_index
                 .and_then(|index| fields.get(index))
                 .is_some_and(|status| !matches!(*status, "ok" | "latched" | "presented")),
@@ -803,6 +811,16 @@ fn summarize_samples(
         active_cards_frame_60: active_cards_at(samples, 60),
         active_cards_frame_120: active_cards_at(samples, 120),
         active_cards_frame_180: active_cards_at(samples, 180),
+        max_cards_drawn: samples
+            .iter()
+            .map(|sample| sample.cards_drawn)
+            .max()
+            .unwrap_or_default(),
+        max_cards_culled: samples
+            .iter()
+            .map(|sample| sample.cards_culled)
+            .max()
+            .unwrap_or_default(),
         present_errors: samples.iter().filter(|sample| sample.present_error).count(),
         vsync_misses: samples.iter().filter(|sample| sample.vsync_miss).count(),
         latch_drop_delta: samples
@@ -1090,7 +1108,7 @@ mod tests {
             trace.push_str(&format!(
                 "benchmark_resolution\tmode={mode}\toutput={output}\tframebuffer={framebuffer}\n"
             ));
-            trace.push_str("frame\tprepare_us\tslint_render_us\tcustom_draw_us\thidden_compose_us\tfb_present_us\twall_us\tmain_present_status\tvsync_miss_streak\tmain_present_drop_count\tscreensaver_active\tscreensaver_active_cards\tscreensaver_archive_poll_us\tscreensaver_card_adopt_us\tscreensaver_parade_advance_us\tscreensaver_background_us\tscreensaver_draw_order_us\tscreensaver_tile_blit_us\n");
+            trace.push_str("frame\tprepare_us\tslint_render_us\tcustom_draw_us\thidden_compose_us\tfb_present_us\twall_us\tmain_present_status\tvsync_miss_streak\tmain_present_drop_count\tscreensaver_active\tscreensaver_active_cards\tscreensaver_archive_poll_us\tscreensaver_card_adopt_us\tscreensaver_parade_advance_us\tscreensaver_background_us\tscreensaver_draw_order_us\tscreensaver_tile_blit_us\tscreensaver_cards_drawn\tscreensaver_cards_culled\n");
             for frame in 0..360 {
                 let (draw_us, wall_us, tile_blit_us) = if frame == 42 {
                     (13_000, 15_500, 9_000)
@@ -1098,8 +1116,10 @@ mod tests {
                     (200, 15_000, 50)
                 };
                 trace.push_str(&format!(
-                    "{frame}\t100\t{draw_us}\t100\t100\t100\t{wall_us}\tok\t0\t0\t1\t{}\t10\t10\t10\t50\t10\t{tile_blit_us}\n",
-                    frame / 60 + 1
+                    "{frame}\t100\t{draw_us}\t100\t100\t100\t{wall_us}\tok\t0\t0\t1\t{}\t10\t10\t10\t50\t10\t{tile_blit_us}\t{}\t{}\n",
+                    frame / 60 + 1,
+                    frame / 60 + 1,
+                    frame / 120
                 ));
             }
         }
@@ -1117,6 +1137,8 @@ mod tests {
         assert_eq!(results[0].active_cards_frame_60, 1);
         assert_eq!(results[0].active_cards_frame_120, 2);
         assert_eq!(results[0].active_cards_frame_180, 3);
+        assert_eq!(results[0].max_cards_drawn, 6);
+        assert_eq!(results[0].max_cards_culled, 2);
         assert!(evaluate(&results).is_ok());
     }
 

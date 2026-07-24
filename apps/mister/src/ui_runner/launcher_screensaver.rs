@@ -259,6 +259,8 @@ pub(super) struct ScreensaverFrameTrace {
     pub(super) background_us: u128,
     pub(super) draw_order_us: u128,
     pub(super) tile_blit_us: u128,
+    pub(super) cards_drawn: usize,
+    pub(super) cards_culled: usize,
 }
 
 impl LauncherScreensaver {
@@ -2379,6 +2381,8 @@ struct ParadeScaleResult {
 struct ParadeState {
     tiles: Vec<ParadeTile>,
     draw_order: Vec<usize>,
+    visible_draw_order: Vec<usize>,
+    depth_coverage: Vec<DirtyRect>,
     deck: Vec<usize>,
     cursor: usize,
     rng: u64,
@@ -2500,6 +2504,8 @@ impl ParadeState {
         Self {
             tiles: Vec::new(),
             draw_order: Vec::with_capacity(PARADE_WIDE_LAYER_TARGETS.iter().sum()),
+            visible_draw_order: Vec::with_capacity(PARADE_WIDE_LAYER_TARGETS.iter().sum()),
+            depth_coverage: Vec::with_capacity(PARADE_WIDE_LAYER_TARGETS.iter().sum()),
             deck: Vec::new(),
             cursor: 0,
             rng: seed,
@@ -3309,6 +3315,115 @@ fn prepare_parade_draw_order(state: &mut ParadeState) {
     }
 }
 
+fn clipped_parade_rect(
+    x: isize,
+    y: isize,
+    width: usize,
+    height: usize,
+    screen_w: usize,
+    screen_h: usize,
+) -> Option<DirtyRect> {
+    let x0 = x.clamp(0, screen_w as isize) as usize;
+    let y0 = y.clamp(0, screen_h as isize) as usize;
+    let x1 = x.saturating_add(width as isize).clamp(0, screen_w as isize) as usize;
+    let y1 = y
+        .saturating_add(height as isize)
+        .clamp(0, screen_h as isize) as usize;
+    (x1 > x0 && y1 > y0).then_some(DirtyRect { x0, y0, x1, y1 })
+}
+
+fn parade_tile_origin_and_fractional_width(
+    sampling_profile: ParadeSamplingProfile,
+    x_fp: i64,
+    width: usize,
+) -> (isize, usize, bool) {
+    match sampling_profile {
+        ParadeSamplingProfile::LegacyHalf => {
+            let x = x_fp.div_euclid(PARADE_SUBPIXEL_ONE) as isize;
+            match x_fp.rem_euclid(PARADE_SUBPIXEL_ONE) {
+                0 => (x, width, false),
+                128 => (x, width.saturating_add(1), true),
+                fraction if fraction < 128 => (x, width, false),
+                _ => (x.saturating_add(1), width, false),
+            }
+        }
+        ParadeSamplingProfile::CrtSixteenth => {
+            let quantized = quantize_crt_phase(x_fp);
+            (
+                quantized.x,
+                width.saturating_add(usize::from(quantized.phase != 0)),
+                quantized.phase != 0,
+            )
+        }
+    }
+}
+
+fn parade_tile_draw_bounds(
+    tile: &ParadeTile,
+    sampling_profile: ParadeSamplingProfile,
+    screen_w: usize,
+    screen_h: usize,
+) -> Option<DirtyRect> {
+    let (x, width, _) =
+        parade_tile_origin_and_fractional_width(sampling_profile, tile.x_fp, tile.scaled.w);
+    clipped_parade_rect(x, tile.y, width, tile.scaled.h, screen_w, screen_h)
+}
+
+fn parade_tile_opaque_bounds(
+    tile: &ParadeTile,
+    sampling_profile: ParadeSamplingProfile,
+    screen_w: usize,
+    screen_h: usize,
+) -> Option<DirtyRect> {
+    let (x, _, fractional) =
+        parade_tile_origin_and_fractional_width(sampling_profile, tile.x_fp, tile.scaled.w);
+    let inset = tile.corner_insets.iter().copied().max().unwrap_or_default() as usize
+        + usize::from(fractional);
+    let width = tile.scaled.w.saturating_sub(inset.saturating_mul(2));
+    clipped_parade_rect(
+        x.saturating_add(inset as isize),
+        tile.y,
+        width,
+        tile.scaled.h,
+        screen_w,
+        screen_h,
+    )
+}
+
+fn prepare_parade_visible_draw_order(
+    state: &mut ParadeState,
+    screen_w: usize,
+    screen_h: usize,
+) -> usize {
+    state.visible_draw_order.clear();
+    state.depth_coverage.clear();
+    let mut culled = 0;
+    for &tile_idx in state.draw_order.iter().rev() {
+        let tile = &state.tiles[tile_idx];
+        let Some(draw_bounds) =
+            parade_tile_draw_bounds(tile, state.sampling_profile, screen_w, screen_h)
+        else {
+            continue;
+        };
+        if state
+            .depth_coverage
+            .iter()
+            .any(|coverage| coverage.contains(draw_bounds))
+        {
+            culled += 1;
+            continue;
+        }
+        state.visible_draw_order.push(tile_idx);
+        if let Some(opaque_bounds) =
+            parade_tile_opaque_bounds(tile, state.sampling_profile, screen_w, screen_h)
+        {
+            state.depth_coverage.push(opaque_bounds);
+        }
+    }
+    state.visible_draw_order.reverse();
+    culled
+}
+
 fn blit_parade_tile(
     dst: &mut [Rgb565Pixel],
     w: usize,
@@ -3353,7 +3468,8 @@ fn render_parade(
     state.ensure_initialized(images, w, h);
     let _ = state.advance(w, h, Some(images), motion_ticks_fp, PARADE_TICK_ONE);
     prepare_parade_draw_order(state);
-    for &tile_idx in &state.draw_order {
+    prepare_parade_visible_draw_order(state, w, h);
+    for &tile_idx in &state.visible_draw_order {
         let tile = &state.tiles[tile_idx];
         blit_parade_tile(dst, w, h, state.sampling_profile, tile);
     }
@@ -3374,9 +3490,10 @@ fn render_archive_parade(
         state.advance(w, h, None, motion_ticks_fp, tick_delta_fp);
     let draw_order_start = Instant::now();
     prepare_parade_draw_order(state);
+    let cards_culled = prepare_parade_visible_draw_order(state, w, h);
     let draw_order_us = draw_order_start.elapsed().as_micros();
     let tile_blit_start = Instant::now();
-    for &tile_idx in &state.draw_order {
+    for &tile_idx in &state.visible_draw_order {
         let tile = &state.tiles[tile_idx];
         blit_parade_tile(dst, w, h, state.sampling_profile, tile);
     }
@@ -3387,6 +3504,8 @@ fn render_archive_parade(
         background_us,
         draw_order_us,
         tile_blit_us: tile_blit_start.elapsed().as_micros(),
+        cards_drawn: state.visible_draw_order.len(),
+        cards_culled,
         ..ScreensaverFrameTrace::default()
     }
 }
@@ -3636,6 +3755,58 @@ mod tests {
                 stride: 2,
             })
             .collect()
+    }
+
+    fn solid_parade_tile(
+        color: Rgb565Pixel,
+        width: usize,
+        height: usize,
+        x_fp: i64,
+        y: isize,
+        layer: usize,
+        sampling_profile: ParadeSamplingProfile,
+    ) -> ParadeTile {
+        let scaled = SaverImage {
+            pixels: vec![color; width * height],
+            w: width,
+            h: height,
+            stride: width,
+        };
+        let phase_set = ParadePhaseSet::prepare(&scaled, sampling_profile);
+        let corner_insets = prepare_parade_corner_insets(width, height);
+        ParadeTile {
+            x_fp,
+            y,
+            layer,
+            speed: layer,
+            velocity_fp: PARADE_SUBPIXEL_ONE,
+            velocity_remainder: 0,
+            image_idx: 0,
+            scaled,
+            phase_set,
+            corner_insets,
+            active: true,
+            next: None,
+            pending_image_idx: None,
+        }
+    }
+
+    fn render_parade_order(
+        dst: &mut [Rgb565Pixel],
+        state: &ParadeState,
+        order: &[usize],
+        width: usize,
+        height: usize,
+    ) {
+        for &tile_idx in order {
+            blit_parade_tile(
+                dst,
+                width,
+                height,
+                state.sampling_profile,
+                &state.tiles[tile_idx],
+            );
+        }
     }
 
     fn collect_initial_successors(
@@ -4393,6 +4564,110 @@ mod tests {
 
         assert_eq!(state.draw_order.as_ptr(), pointer);
         assert_eq!(state.draw_order.capacity(), capacity);
+    }
+
+    #[test]
+    fn parade_depth_culling_is_pixel_equivalent_for_fully_covered_card() {
+        let mut state = ParadeState::new(31);
+        state.tiles = vec![
+            solid_parade_tile(
+                color565(255, 0, 0),
+                4,
+                4,
+                10 * PARADE_SUBPIXEL_ONE,
+                8,
+                2,
+                state.sampling_profile,
+            ),
+            solid_parade_tile(
+                color565(0, 255, 0),
+                24,
+                18,
+                2 * PARADE_SUBPIXEL_ONE,
+                2,
+                5,
+                state.sampling_profile,
+            ),
+        ];
+        prepare_parade_draw_order(&mut state);
+        let mut expected = vec![color565(0, 0, 20); 32 * 24];
+        render_parade_order(&mut expected, &state, &state.draw_order, 32, 24);
+
+        assert_eq!(prepare_parade_visible_draw_order(&mut state, 32, 24), 1);
+        assert_eq!(state.visible_draw_order, vec![1]);
+        let mut actual = vec![color565(0, 0, 20); 32 * 24];
+        render_parade_order(&mut actual, &state, &state.visible_draw_order, 32, 24);
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn parade_depth_culling_preserves_lower_card_at_rounded_edge() {
+        let mut state = ParadeState::new(37);
+        state.tiles = vec![
+            solid_parade_tile(
+                color565(255, 0, 0),
+                12,
+                10,
+                3 * PARADE_SUBPIXEL_ONE,
+                3,
+                2,
+                state.sampling_profile,
+            ),
+            solid_parade_tile(
+                color565(0, 255, 0),
+                12,
+                10,
+                4 * PARADE_SUBPIXEL_ONE,
+                3,
+                5,
+                state.sampling_profile,
+            ),
+        ];
+        prepare_parade_draw_order(&mut state);
+        let mut expected = vec![color565(0, 0, 20); 24 * 18];
+        render_parade_order(&mut expected, &state, &state.draw_order, 24, 18);
+
+        assert_eq!(prepare_parade_visible_draw_order(&mut state, 24, 18), 0);
+        let mut actual = vec![color565(0, 0, 20); 24 * 18];
+        render_parade_order(&mut actual, &state, &state.visible_draw_order, 24, 18);
+
+        assert_eq!(actual, expected);
+        assert_eq!(actual[5 * 24 + 3], color565(255, 0, 0));
+    }
+
+    #[test]
+    fn parade_depth_culling_is_pixel_equivalent_at_half_pixel_phase() {
+        let mut state = ParadeState::new_with_profile(41, ParadeSamplingProfile::LegacyHalf);
+        state.tiles = vec![
+            solid_parade_tile(
+                color565(255, 0, 0),
+                4,
+                4,
+                10 * PARADE_SUBPIXEL_ONE,
+                8,
+                2,
+                state.sampling_profile,
+            ),
+            solid_parade_tile(
+                color565(0, 255, 0),
+                24,
+                18,
+                2 * PARADE_SUBPIXEL_ONE + PARADE_SUBPIXEL_ONE / 2,
+                2,
+                5,
+                state.sampling_profile,
+            ),
+        ];
+        prepare_parade_draw_order(&mut state);
+        let mut expected = vec![color565(0, 0, 20); 32 * 24];
+        render_parade_order(&mut expected, &state, &state.draw_order, 32, 24);
+
+        assert_eq!(prepare_parade_visible_draw_order(&mut state, 32, 24), 1);
+        let mut actual = vec![color565(0, 0, 20); 32 * 24];
+        render_parade_order(&mut actual, &state, &state.visible_draw_order, 32, 24);
+
+        assert_eq!(actual, expected);
     }
 
     #[test]
