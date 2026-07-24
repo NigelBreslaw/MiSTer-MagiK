@@ -1815,12 +1815,11 @@ mod linux {
         });
         if let Some(source) = source {
             let base = source.rsplit('/').next().unwrap_or(source);
-            if let Some(index) = base.rfind('p') {
-                if base.starts_with("mmcblk")
-                    && base[index + 1..].chars().all(|c| c.is_ascii_digit())
-                {
-                    return Some(base[..index].to_string());
-                }
+            if let Some(index) = base.rfind('p')
+                && base.starts_with("mmcblk")
+                && base[index + 1..].chars().all(|c| c.is_ascii_digit())
+            {
+                return Some(base[..index].to_string());
             }
             if base.starts_with("sd") {
                 return Some(
@@ -3410,12 +3409,12 @@ mod linux {
         let started = Instant::now();
         let ready = current_main_ready()?;
         let before_generation = main_generation(&ready).unwrap_or(0);
-        if let Some(expected) = args.get("expected_generation").and_then(Value::as_u64) {
-            if expected != before_generation {
-                return Err(format!(
-                    "stale_main_generation expected={expected} actual={before_generation}"
-                ));
-            }
+        if let Some(expected) = args.get("expected_generation").and_then(Value::as_u64)
+            && expected != before_generation
+        {
+            return Err(format!(
+                "stale_main_generation expected={expected} actual={before_generation}"
+            ));
         }
         if action == "suspend"
             && ready.get("launcher_state").and_then(Value::as_str) == Some("LauncherSuspended")
