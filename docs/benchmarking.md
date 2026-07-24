@@ -25,7 +25,8 @@ Arcade performance conclusions.
 
 Screensaver renderer changes select the fixed screensaver-velocity scenario at
 1280x720 output and framebuffer resolution. It selects the 720p boot mode
-through the typed INI mutator and performs one supervised reboot. The freshly
+through the typed INI mutator and performs one bounded normal Linux reboot,
+independent of MagiK Main's command channel. The freshly
 booted launcher starts on Home,
 uses production controller input to open Settings and activate Show
 Screensaver, then traces 30 seconds from activation. The normal catalog

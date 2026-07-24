@@ -3169,7 +3169,7 @@ fn benchmark_launcher_restart_options(
 
 fn benchmark_trace_wait_command(trace: &str, complete: &str, timeout_secs: u64) -> String {
     format!(
-        "set -u; elapsed=0; while [ $elapsed -lt {timeout_secs} ]; do test -s {trace} && test -e {complete} && exit 0; sleep 1; elapsed=$((elapsed + 1)); done; printf 'benchmark_trace_diagnostic\\ttrace='; if test -e {trace}; then wc -l <{trace}; else printf 'missing\\n'; fi; printf 'benchmark_trace_diagnostic\\tcomplete='; if test -e {complete}; then printf 'present\\n'; else printf 'missing\\n'; fi; grep -E 'launcher_bench_scenario|launcher_input_script|screensaver_startup|preview_scroll_trace|done:|error|failed' /tmp/mister-magik-slint.log 2>/dev/null | tail -n 40 || true; exit 1"
+        "set -u; elapsed=0; while [ $elapsed -lt {timeout_secs} ]; do test -s {trace} && test -e {complete} && exit 0; sleep 1; elapsed=$((elapsed + 1)); done; printf 'benchmark_trace_diagnostic\\ttrace='; if test -e {trace}; then wc -l <{trace}; else printf 'missing\\n'; fi; printf 'benchmark_trace_diagnostic\\tcomplete='; if test -e {complete}; then printf 'present\\n'; else printf 'missing\\n'; fi; grep -E 'latch_readiness_tsv|latch_startup_tsv|launcher_bench_scenario|launcher_input_script|screensaver_startup|preview_scroll_trace|Text file busy|stream producer|done:|error|failed' /tmp/mister-magik-slint.log 2>/dev/null | tail -n 40 || true; exit 1"
     )
 }
 
@@ -3203,9 +3203,9 @@ fn restore_benchmark_display_if_pending(session: &Session) -> Result<()> {
     Ok(())
 }
 
-fn wait_for_supervised_benchmark_reboot(connection: &ConnectionConfig) -> Result<()> {
+fn wait_for_benchmark_reboot(connection: &ConnectionConfig) -> Result<()> {
     if !wait_down_with(connection, 40.0) {
-        return Err("screensaver benchmark did not observe the supervised reboot".into());
+        return Err("screensaver benchmark did not observe the device reboot".into());
     }
     if wait_up_with(connection, 120.0)? != 0 {
         return Err("screensaver benchmark device did not return after reboot".into());
@@ -3250,9 +3250,9 @@ fn run_screensaver_boot_benchmark(connection: &ConnectionConfig) -> Result<Strin
                 &benchmark_launcher_restart_options(BenchmarkScenario::ScreensaverVelocity, false),
             )?;
             edit_remote_ini(&session, IniEdit::MenuMode("0".into()), false)?;
-            issue_reboot(&session, RebootMode::Supervised)?;
+            issue_reboot(&session, RebootMode::Raw)?;
             drop(session);
-            wait_for_supervised_benchmark_reboot(connection)?;
+            wait_for_benchmark_reboot(connection)?;
 
             let session = connect_with(connection, 10)?;
             let active_reply = exec_checked_output(
@@ -10884,6 +10884,8 @@ H: Handlers=event3 js0"#
         assert!(command.contains("benchmark_trace_diagnostic"));
         assert!(command.contains("$elapsed -lt 120"));
         assert!(command.contains("wc -l"));
+        assert!(command.contains("latch_readiness_tsv"));
+        assert!(command.contains("latch_startup_tsv"));
         assert!(command.contains("launcher_bench_scenario"));
         assert!(command.contains("/tmp/mister-magik-slint.log"));
     }
