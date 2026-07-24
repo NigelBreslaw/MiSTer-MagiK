@@ -212,8 +212,24 @@ mod tests {
 
     #[test]
     fn catalog_has_unique_stable_ids() {
-        assert_eq!(DISPLAY_RESOLUTIONS.len(), 10);
-        assert!(find("hdmi-2560x1440p60").is_none());
+        assert_eq!(
+            DISPLAY_RESOLUTIONS
+                .iter()
+                .map(|mode| mode.id)
+                .collect::<Vec<_>>(),
+            vec![
+                "auto",
+                "hdmi-1280x720p60",
+                "hdmi-1366x768p60",
+                "hdmi-1920x1080p60",
+                "hdmi-1920x1200p60",
+                "hdmi-2048x1536p60",
+                "crt-240p60",
+                "crt-288p50",
+                "crt-480p60",
+                "crt-576p50",
+            ]
+        );
         for (index, mode) in DISPLAY_RESOLUTIONS.iter().enumerate() {
             assert!(
                 DISPLAY_RESOLUTIONS[..index]
