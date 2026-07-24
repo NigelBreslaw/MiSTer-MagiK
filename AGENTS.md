@@ -99,6 +99,7 @@ scripts/agent check
 scripts/agent deliver
 scripts/agent plan
 scripts/agent verify
+scripts/agent-linux-verify --paths mister/tools/host mister/tools/agent
 scripts/agent commit -m "Describe the completed change"
 scripts/agent benchmark
 scripts/agent capture usb-video
@@ -116,6 +117,10 @@ Use standalone `verify` only when full assurance is required without committing.
 `--paths` is reserved for CI or diagnostics, and `verify --staged` is the raw
 Git pre-commit interface. Use `scripts/agent db report`, not ad-hoc SQL, for
 workflow evidence analysis. Run
+`agent-linux-verify` on Apple Silicon when Linux-only Rust or Linux-specific
+Clippy behavior is in scope. It runs the normal verification harness inside the
+repository Apple Linux image and caches its Linux Rust toolchain under
+`/private/tmp`; invoke it with first-attempt escalation.
 `deliver` only when the committed change has runtime or platform impact.
 `release qualify` is an attended operator gate; run it only when explicitly
 requested.

@@ -17,3 +17,15 @@ rejected by `scripts/checks/check-no-operational-shell-orchestrators.py`.
 Normal repository work uses `scripts/agent task begin`, `check`, `verify`, and
 `commit`; committed runtime/platform work then uses `deliver`. Performance and
 diagnosis use the flag-free `benchmark` and `diagnose` commands.
+
+Linux-only Rust and Clippy diagnostics can be reproduced from Apple Silicon
+with:
+
+```bash
+scripts/agent-linux-verify --paths mister/tools/host mister/tools/agent
+```
+
+The command runs the normal verification harness inside the repository Apple
+Linux image. Its Rust 1.97.1, Clippy, Rustfmt, Cargo, and target caches live
+under `/private/tmp/mister-magik-linux-verify` by default. Apple container
+execution requires first-attempt escalation.
