@@ -1027,10 +1027,46 @@ fn blit_rounded_shadow_fractional(
         if dst_y < 0 || dst_y >= screen_h as isize {
             continue;
         }
-        let inset = corner_insets.get(shadow_y).copied().unwrap_or(0) as isize;
-        let x0 = x + OFFSET + inset;
-        let x1 = x + OFFSET + image.w as isize - inset;
-        blend_fractional_span(dst, screen_w, dst_y, x0, x1, shadow, 112, phase_alpha);
+        let shadow_inset = corner_insets.get(shadow_y).copied().unwrap_or(0) as isize;
+        let shadow_x0 = x + OFFSET + shadow_inset;
+        let shadow_x1 = x + OFFSET + image.w as isize - shadow_inset;
+        let card_y = shadow_y as isize + OFFSET;
+        if card_y >= image.h as isize {
+            blend_fractional_span(
+                dst,
+                screen_w,
+                dst_y,
+                shadow_x0,
+                shadow_x1,
+                shadow,
+                112,
+                phase_alpha,
+            );
+            continue;
+        }
+        let card_inset = corner_insets.get(card_y as usize).copied().unwrap_or(0) as isize;
+        let card_x0 = x + card_inset;
+        let card_x1 = x + image.w as isize - card_inset;
+        blend_fractional_span(
+            dst,
+            screen_w,
+            dst_y,
+            shadow_x0,
+            shadow_x1.min(card_x0),
+            shadow,
+            112,
+            phase_alpha,
+        );
+        blend_fractional_span(
+            dst,
+            screen_w,
+            dst_y,
+            shadow_x0.max(card_x1),
+            shadow_x1,
+            shadow,
+            112,
+            phase_alpha,
+        );
     }
 }
 
@@ -4086,6 +4122,24 @@ mod tests {
         assert_ne!(fractional[2], white);
         assert_ne!(fractional[2 * 10 + 3], integer[2 * 10 + 3]);
         assert_ne!(fractional[2 * 10 + 7], integer[2 * 10 + 7]);
+    }
+
+    #[test]
+    fn crt_fractional_shadow_skips_pixels_fully_occluded_by_the_card() {
+        let background = color565(180, 180, 180);
+        let image = SaverImage {
+            pixels: vec![color565(255, 255, 255); 8 * 6],
+            w: 8,
+            h: 6,
+            stride: 8,
+        };
+        let mut dst = vec![background; 14 * 10];
+
+        blit_rounded_shadow_fractional(&mut dst, 14, 10, &image, &[0; 6], 1, 0, 128);
+
+        assert_eq!(dst[2 * 14 + 4], background);
+        assert_ne!(dst[2 * 14 + 10], background);
+        assert_ne!(dst[7 * 14 + 4], background);
     }
 
     #[test]
