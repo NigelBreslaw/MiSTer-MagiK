@@ -21,7 +21,7 @@ module mister_magik_vblank_latch (
 
 	output wire        response_valid,
 	output reg  [15:0] response_data,
-	output wire        route_apply,
+	output wire        apply,
 
 	output reg         route_en = 1'b0,
 	output reg         route_flt = 1'b0,
@@ -50,15 +50,8 @@ module mister_magik_vblank_latch (
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
 	reg vbl_sys = 1'b0;
 	reg vbl_old = 1'b0;
-	// Route early enough for ascal to capture the new base at VS falling, but
-	// retain ownership of the old slot until output blanking has fully ended.
-	reg route_in_flight = 1'b0;
-	reg replacement_queued = 1'b0;
-	reg [15:0] in_flight_seq = 16'd0;
 	wire vbl_rise = ~vbl_old & vbl_sys;
-	wire vbl_fall = vbl_old & ~vbl_sys;
-	wire complete = route_in_flight && vbl_fall;
-	assign route_apply = pending && !route_in_flight && vbl_rise;
+	assign apply = pending && vbl_rise;
 	assign response_valid =
 		(cmd_start && ((cmd_id == MAGIK_UIO_SET_FBUF_LATCH) ||
 		               (cmd_id == MAGIK_UIO_GET_FBUF_LATCH) ||
@@ -108,20 +101,10 @@ module mister_magik_vblank_latch (
 		vbl_meta <= hdmi_vbl;
 		vbl_sys <= vbl_meta;
 		vbl_old <= vbl_sys;
-		if(route_apply) begin
-			in_flight_seq <= pending_seq;
-			route_in_flight <= 1'b1;
-		end
-		if(complete) begin
-			active_seq <= in_flight_seq;
+		if(apply) begin
+			active_seq <= pending_seq;
 			flip_count <= flip_count + 1'd1;
-			route_in_flight <= 1'b0;
-			if(replacement_queued) begin
-				replacement_queued <= 1'b0;
-			end
-			else begin
-				pending <= 1'b0;
-			end
+			pending <= 1'b0;
 		end
 
 		if(cmd_data && (cmd_id == MAGIK_UIO_SET_FBUF_LATCH)) begin
@@ -142,7 +125,6 @@ module mister_magik_vblank_latch (
 					pending <= 1'b1;
 					post_count <= post_count + 1'd1;
 					if(pending) drop_count <= drop_count + 1'd1;
-					if(route_in_flight || route_apply) replacement_queued <= 1'b1;
 				end
 				default: begin end
 			endcase

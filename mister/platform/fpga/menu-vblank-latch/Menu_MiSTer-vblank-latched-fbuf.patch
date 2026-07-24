@@ -12,7 +12,7 @@ index a416879..7d2ac3f 100644
 +
 +wire        magik_response_valid;
 +wire [15:0] magik_response_data;
-+wire        magik_lfb_route_apply;
++wire        magik_lfb_apply;
 +wire        magik_lfb_en;
 +wire        magik_lfb_flt;
 +wire  [5:0] magik_lfb_fmt;
@@ -47,7 +47,7 @@ index a416879..7d2ac3f 100644
 +	.active_lfb_stride(LFB_STRIDE),
 +	.response_valid(magik_response_valid),
 +	.response_data(magik_response_data),
-+	.route_apply(magik_lfb_route_apply),
++	.apply(magik_lfb_apply),
 +	.route_en(magik_lfb_en),
 +	.route_flt(magik_lfb_flt),
 +	.route_fmt(magik_lfb_fmt),
@@ -76,7 +76,7 @@ index a416879..7d2ac3f 100644
  	reg  [7:0] fb_crc;
  	reg  [1:0] sl_r;
  
-+	if(magik_lfb_route_apply) begin
++	if(magik_lfb_apply) begin
 +		LFB_EN     <= magik_lfb_en;
 +		LFB_FLT    <= magik_lfb_flt;
 +		LFB_FMT    <= magik_lfb_fmt;

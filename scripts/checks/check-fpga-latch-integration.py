@@ -87,11 +87,9 @@ def main() -> None:
         patched = (work / "sys/sys_top.v").read_text()
         required = (
             "mister_magik_vblank_latch magik_vblank_latch",
-            ".hdmi_vbl(hdmi_vbl)",
             ".cmd_start(io_uio && io_strobe && !has_cmd)",
             ".cmd_data(io_uio && io_strobe && has_cmd)",
-            ".route_apply(magik_lfb_route_apply)",
-            "if(magik_lfb_route_apply)",
+            "if(magik_lfb_apply)",
             "if(magik_response_valid) io_dout_sys <= magik_response_data;",
         )
         missing = [fragment for fragment in required if fragment not in patched]
