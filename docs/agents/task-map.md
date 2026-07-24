@@ -30,8 +30,8 @@ The normal feature loop is edit, `scripts/agent check`, explicit
 verification of the exact staged tree. Use standalone `verify` when assurance
 is needed without creating a commit.
 Runtime or platform changes then use `scripts/agent deliver`. Delivery uses the
-exact clean local app and Main commits without consulting task records or
-requiring publication. Every delivery uses the complete platform transaction
+exact clean local app and Main commits without consulting workflow ownership
+records or requiring publication. Every delivery uses the complete platform transaction
 because the development manifest binds `mister-magik-fb`, Main, the kernel
 module, and the FPGA latch into one coherent set.
 # Deployment

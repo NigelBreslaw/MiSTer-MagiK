@@ -22,16 +22,7 @@ pub fn execute(
     plan: &Plan,
     reporter: &mut Reporter<'_>,
 ) -> Result<Outcome, String> {
-    let changes = match &plan.intent {
-        crate::model::Intent::Check {
-            scope: crate::model::Scope::Task(task_id),
-        }
-        | crate::model::Intent::Verify {
-            scope: crate::model::Scope::Task(task_id),
-        } => crate::task::changes(evidence, repository, task_id)?,
-        _ => Vec::new(),
-    };
-    execute_with_changes(evidence, request_id, repository, plan, &changes, reporter)
+    execute_with_changes(evidence, request_id, repository, plan, &[], reporter)
 }
 
 pub fn execute_with_changes(

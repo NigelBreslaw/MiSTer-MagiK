@@ -27,18 +27,12 @@ pub struct Cli {
         global = true
     )]
     pub output_format: OutputFormat,
-    #[arg(long, global = true)]
-    pub task_id: Option<String>,
     #[command(subcommand)]
     pub command: Option<Command>,
 }
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    Task {
-        #[command(subcommand)]
-        command: TaskCommand,
-    },
     Plan(ScopeArgs),
     Check(ScopeArgs),
     #[command(hide = true)]
@@ -316,16 +310,6 @@ pub enum PlatformManifestCommand {
 }
 
 #[derive(Debug, Subcommand)]
-pub enum TaskCommand {
-    Begin {
-        #[arg(long)]
-        replace: bool,
-    },
-    Status,
-    Supersede,
-}
-
-#[derive(Debug, Subcommand)]
 pub enum ReleaseCommand {
     Qualify,
 }
@@ -378,29 +362,8 @@ impl ScopeArgs {
 impl Cli {
     #[must_use]
     pub fn into_intent(self) -> Intent {
-        let task_id = self
-            .task_id
-            .or_else(|| std::env::var("MISTER_AGENT_TASK_ID").ok())
-            .or_else(|| std::env::var("CODEX_THREAD_ID").ok())
-            .unwrap_or_default();
         match self.command {
             None => unreachable!("clap requires a workflow command"),
-            Some(Command::Task {
-                command: TaskCommand::Begin { replace },
-            }) => Intent::TaskBegin {
-                task_id: if task_id.is_empty() {
-                    generated_task_id()
-                } else {
-                    task_id
-                },
-                replace,
-            },
-            Some(Command::Task {
-                command: TaskCommand::Status,
-            }) => Intent::TaskStatus { task_id },
-            Some(Command::Task {
-                command: TaskCommand::Supersede,
-            }) => Intent::TaskSupersede { task_id },
             Some(Command::Plan(scope)) => Intent::Plan {
                 verbose: scope.verbose,
                 scope: scope.into_scope(),
@@ -497,14 +460,6 @@ impl Cli {
     }
 }
 
-fn generated_task_id() -> String {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    format!("task-{nanos:x}-{:x}", std::process::id())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -539,8 +494,8 @@ mod tests {
     }
 
     #[test]
-    fn deliver_is_flag_free_and_task_independent() {
-        let cli = Cli::try_parse_from(["agent-cli", "--task-id", "task-1", "deliver"]).unwrap();
+    fn deliver_is_flag_free_and_git_independent() {
+        let cli = Cli::try_parse_from(["agent-cli", "deliver"]).unwrap();
         assert_eq!(cli.into_intent(), Intent::Deliver);
         assert!(Cli::try_parse_from(["agent-cli", "deliver", "--local-main"]).is_err());
         assert!(Cli::try_parse_from(["agent-cli", "deliver", "--fast"]).is_err());
@@ -550,23 +505,17 @@ mod tests {
     }
 
     #[test]
-    fn task_supersede_names_the_exact_session() {
-        let cli =
-            Cli::try_parse_from(["agent-cli", "--task-id", "stale-task", "task", "supersede"])
-                .unwrap();
-        assert_eq!(
-            cli.into_intent(),
-            Intent::TaskSupersede {
-                task_id: "stale-task".into()
-            }
-        );
-    }
-
-    #[test]
-    fn benchmark_is_flag_free_and_task_independent() {
+    fn benchmark_is_flag_free_and_uses_git_identity() {
         let cli = Cli::try_parse_from(["agent-cli", "benchmark"]).unwrap();
         assert_eq!(cli.into_intent(), Intent::Benchmark);
         assert!(Cli::try_parse_from(["agent-cli", "benchmark", "--duration", "10"]).is_err());
+    }
+
+    #[test]
+    fn removed_task_and_commit_surfaces_are_rejected() {
+        assert!(Cli::try_parse_from(["agent-cli", "task", "begin"]).is_err());
+        assert!(Cli::try_parse_from(["agent-cli", "commit", "-m", "message"]).is_err());
+        assert!(Cli::try_parse_from(["agent-cli", "--task-id", "task-1", "check"]).is_err());
     }
 
     #[test]

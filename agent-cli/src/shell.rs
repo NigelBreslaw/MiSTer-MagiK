@@ -28,9 +28,9 @@ mod tests {
     fn retry_command_preserves_shell_arguments() {
         let args = [
             "agent-cli/target/debug/agent-cli",
-            "commit",
-            "-m",
-            "Quoted message",
+            "verify",
+            "--paths",
+            "Quoted path",
             "",
             "it's",
             "safe/path-1.2",
@@ -38,7 +38,7 @@ mod tests {
         .map(str::to_owned);
         assert_eq!(
             agent_retry_command(&args),
-            "scripts/agent commit -m 'Quoted message' '' 'it'\\''s' safe/path-1.2"
+            "scripts/agent verify --paths 'Quoted path' '' 'it'\\''s' safe/path-1.2"
         );
     }
 }

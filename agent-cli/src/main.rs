@@ -37,8 +37,7 @@ fn main() {
         }
     };
     let output = cli.output_format;
-    let intent = resolve_task_intent(&evidence, &repository, cli.into_intent())
-        .unwrap_or_else(|error| fatal(&error));
+    let intent = cli.into_intent();
     evidence
         .record_intent(&raw.id, &intent)
         .unwrap_or_else(|error| fatal(&error));
@@ -82,7 +81,8 @@ fn main() {
         .finish(&raw.id, outcome)
         .unwrap_or_else(|error| fatal(&error));
     if matches!(intent, Intent::DatabaseRotate) {
-        let sha = agent_cli::task::current_head(&repository).unwrap_or_else(|error| fatal(&error));
+        let sha = agent_cli::git::value(&repository, &["rev-parse", "HEAD"])
+            .unwrap_or_else(|error| fatal(&error));
         let archive = evidence.rotate(&sha).unwrap_or_else(|error| fatal(&error));
         println!("archived evidence: {}", archive.display());
     }
@@ -100,58 +100,6 @@ fn is_discovery_request(args: &[std::ffi::OsString]) -> bool {
         || (args.len() == 2 && matches!(args[1].to_str(), Some("-V" | "--version")))
 }
 
-fn resolve_task_intent(
-    evidence: &Evidence,
-    repository: &std::path::Path,
-    intent: Intent,
-) -> Result<Intent, String> {
-    let resolve = |task_id: String| -> Result<String, String> {
-        if !task_id.is_empty() {
-            return evidence
-                .active_task_id_for_session(repository, &task_id)?
-                .ok_or_else(|| {
-                    format!(
-                        "No active task lifecycle exists for {task_id}. Run `scripts/agent task begin` before editing."
-                    )
-                });
-        }
-        let session_id = evidence.active_manual_task_id(repository)?.ok_or_else(|| {
-            "No task baseline exists. Run `scripts/agent task begin` before editing.".to_owned()
-        })?;
-        evidence
-            .active_task_id_for_session(repository, &session_id)?
-            .ok_or_else(|| {
-                "No task baseline exists. Run `scripts/agent task begin` before editing.".to_owned()
-            })
-    };
-    Ok(match intent {
-        Intent::TaskStatus { task_id } => Intent::TaskStatus {
-            task_id: resolve(task_id)?,
-        },
-        Intent::TaskSupersede { task_id } => Intent::TaskSupersede { task_id },
-        Intent::Deliver => Intent::Deliver,
-        Intent::Benchmark => Intent::Benchmark,
-        Intent::Plan {
-            scope: agent_cli::model::Scope::Task(task_id),
-            verbose,
-        } => Intent::Plan {
-            scope: agent_cli::model::Scope::Task(resolve(task_id)?),
-            verbose,
-        },
-        Intent::Check {
-            scope: agent_cli::model::Scope::Task(task_id),
-        } => Intent::Check {
-            scope: agent_cli::model::Scope::Task(resolve(task_id)?),
-        },
-        Intent::Verify {
-            scope: agent_cli::model::Scope::Task(task_id),
-        } => Intent::Verify {
-            scope: agent_cli::model::Scope::Task(resolve(task_id)?),
-        },
-        other => other,
-    })
-}
-
 fn dispatch(
     evidence: &Evidence,
     request_id: &str,
@@ -161,28 +109,6 @@ fn dispatch(
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<Outcome> {
     match intent {
-        Intent::TaskBegin { task_id, replace } => {
-            agent_cli::task::begin(evidence, repository, task_id, *replace)?;
-            if output == OutputFormat::Human {
-                println!("task: baseline recorded ({task_id})");
-            }
-        }
-        Intent::TaskStatus { task_id } => {
-            let paths = agent_cli::task::status(evidence, repository, task_id)?;
-            if output == OutputFormat::Human {
-                println!(
-                    "task: {} changed path{}",
-                    paths.len(),
-                    if paths.len() == 1 { "" } else { "s" }
-                );
-            }
-        }
-        Intent::TaskSupersede { task_id } => {
-            evidence.supersede_task(repository, task_id)?;
-            if output == OutputFormat::Human {
-                println!("task: superseded ({task_id})");
-            }
-        }
         Intent::Deliver => return deliver(evidence, repository, reporter),
         Intent::Benchmark => {
             if !agent_cli::git::value(repository, &["status", "--porcelain"])?.is_empty() {
@@ -638,9 +564,6 @@ fn dispatch(
                 &claimed_paths,
                 reporter,
             )?;
-            if let agent_cli::model::Scope::Task(task_id) = selected {
-                evidence.claim_task_paths(task_id, &claimed_paths)?;
-            }
             if !plan.external_requirements.is_empty() {
                 for requirement in &plan.external_requirements {
                     reporter.emit(EventKind::Warning, "external", &requirement.message, None)?;
@@ -745,7 +668,7 @@ fn deliver_inner(
     if !dirty.is_empty() {
         return Err("dirty_worktree: commit or discard changes before delivery".into());
     }
-    let sha = agent_cli::task::current_head(repository)?;
+    let sha = agent_cli::git::value(repository, &["rev-parse", "HEAD"])?;
     let paths = agent_cli::deploy::deployment_paths(repository, Vec::new())?;
     let mut deployment = agent_cli::deploy::plan(repository, paths)?;
     // The development manifest binds the launcher hash to Main, the scanout
@@ -841,16 +764,6 @@ mod tests {
                 .to_string(),
             "write failed"
         );
-    }
-
-    #[test]
-    fn delivery_can_repeat_after_completion_or_physical_recovery() {
-        use agent_cli::evidence::DeliveryState;
-
-        assert!(DeliveryState::ExternalPending.can_resume());
-        assert!(DeliveryState::RecoveryRequired.can_resume());
-        assert!(DeliveryState::Complete.can_resume());
-        assert!(DeliveryState::Failed.can_resume());
     }
 
     #[test]

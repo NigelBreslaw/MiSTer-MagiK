@@ -62,7 +62,6 @@ pub enum WorkflowPhase {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Scope {
-    Task(String),
     Staged,
     WorkingTree,
     Paths(Vec<PathBuf>),
@@ -71,16 +70,6 @@ pub enum Scope {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Intent {
-    TaskBegin {
-        task_id: String,
-        replace: bool,
-    },
-    TaskStatus {
-        task_id: String,
-    },
-    TaskSupersede {
-        task_id: String,
-    },
     Plan {
         scope: Scope,
         verbose: bool,

@@ -15,7 +15,6 @@ pub fn collect(
 ) -> Result<Vec<PathBuf>, String> {
     let mut paths = BTreeSet::new();
     match scope {
-        Scope::Task(task_id) => paths.extend(crate::task::changes(evidence, repository, task_id)?),
         Scope::Paths(explicit) => {
             paths.extend(explicit.iter().map(|path| normalize(repository, path)))
         }

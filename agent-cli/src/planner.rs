@@ -38,7 +38,7 @@ pub fn affected_plan_at(
         .collect();
     if !unclassified.is_empty() {
         return Err(format!(
-            "unclassified task paths: {}; add them to the typed impact map",
+            "unclassified changed paths: {}; add them to the typed impact map",
             unclassified.join(", ")
         ));
     }
@@ -1096,7 +1096,7 @@ mod tests {
             vec!["new-subsystem/source.xyz".into()],
         )
         .unwrap_err();
-        assert!(error.contains("unclassified task paths"));
+        assert!(error.contains("unclassified changed paths"));
     }
 
     #[test]

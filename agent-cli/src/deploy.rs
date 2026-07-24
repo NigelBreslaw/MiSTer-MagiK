@@ -139,10 +139,10 @@ pub fn plan(repository: &Path, mut paths: Vec<PathBuf>) -> Result<DeploymentPlan
 
 pub fn deployment_paths(
     repository: &Path,
-    task_paths: Vec<PathBuf>,
+    explicit_paths: Vec<PathBuf>,
 ) -> Result<Vec<PathBuf>, String> {
-    if !task_paths.is_empty() {
-        return Ok(task_paths);
+    if !explicit_paths.is_empty() {
+        return Ok(explicit_paths);
     }
     let output = Command::new("git")
         .args(["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"])

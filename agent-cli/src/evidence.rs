@@ -1,7 +1,6 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::components::DeploymentImpact;
 use crate::model::{Intent, Outcome};
 use crate::progress::ProgressEvent;
 use crate::request::RawRequest;
@@ -58,23 +57,6 @@ CREATE TABLE IF NOT EXISTS events (
     percent INTEGER,
     PRIMARY KEY (request_id, sequence)
 );
-CREATE TABLE IF NOT EXISTS tasks (
-    task_id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL,
-    generation INTEGER NOT NULL,
-    worktree TEXT NOT NULL,
-    created_ms INTEGER NOT NULL,
-    baseline_json TEXT NOT NULL,
-    closed_ms INTEGER,
-    commit_sha TEXT
-);
-CREATE TABLE IF NOT EXISTS operation_cache (
-    task_id TEXT NOT NULL,
-    operation_id TEXT NOT NULL,
-    fingerprint TEXT NOT NULL,
-    completed_ms INTEGER NOT NULL,
-    PRIMARY KEY (task_id, operation_id, fingerprint)
-);
 CREATE TABLE IF NOT EXISTS validation_results (
     operation_id TEXT NOT NULL,
     fingerprint TEXT NOT NULL,
@@ -106,43 +88,8 @@ CREATE TABLE IF NOT EXISTS cohort_summaries (
     p95_request_ms INTEGER NOT NULL,
     cache_effectiveness_percent REAL NOT NULL
 );
-CREATE TABLE IF NOT EXISTS task_claims (
-    task_id TEXT NOT NULL REFERENCES tasks(task_id),
-    path TEXT NOT NULL,
-    claimed_ms INTEGER NOT NULL,
-    PRIMARY KEY (task_id, path)
-);
-CREATE TABLE IF NOT EXISTS deliveries (
-    task_id TEXT PRIMARY KEY REFERENCES tasks(task_id),
-    worktree TEXT NOT NULL,
-    source_tree TEXT NOT NULL,
-    commit_sha TEXT,
-    impact TEXT NOT NULL,
-    state TEXT NOT NULL,
-    requirement_id TEXT,
-    detail TEXT,
-    updated_ms INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS delivery_attestations (
-    task_id TEXT NOT NULL REFERENCES deliveries(task_id),
-    requirement_id TEXT NOT NULL,
-    workflow TEXT NOT NULL,
-    branch TEXT NOT NULL,
-    commit_sha TEXT NOT NULL,
-    evidence_json TEXT NOT NULL,
-    created_ms INTEGER NOT NULL,
-    PRIMARY KEY (task_id, requirement_id)
-);
-PRAGMA user_version = 9;
+PRAGMA user_version = 10;
 "#;
-
-fn baseline_head(value: &str) -> Option<String> {
-    serde_json::from_str::<serde_json::Value>(value)
-        .ok()?
-        .get("head")?
-        .as_str()
-        .map(str::to_owned)
-}
 
 #[derive(Debug)]
 pub struct Evidence {
@@ -220,63 +167,6 @@ pub struct EventDetail {
     pub percent: Option<i64>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct DeliveryRecord {
-    pub task_id: String,
-    pub worktree: PathBuf,
-    pub source_tree: String,
-    pub commit_sha: Option<String>,
-    pub impact: DeploymentImpact,
-    pub state: DeliveryState,
-    pub requirement_id: Option<String>,
-    pub detail: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DeliveryState {
-    Committed,
-    ExternalPending,
-    ExternalVerified,
-    RecoveryRequired,
-    Failed,
-    Complete,
-}
-
-impl DeliveryState {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Committed => "committed",
-            Self::ExternalPending => "external_pending",
-            Self::ExternalVerified => "external_verified",
-            Self::RecoveryRequired => "recovery_required",
-            Self::Failed => "failed",
-            Self::Complete => "complete",
-        }
-    }
-
-    pub fn parse(value: &str) -> Result<Self, String> {
-        match value {
-            "committed" => Ok(Self::Committed),
-            "external_pending" => Ok(Self::ExternalPending),
-            "external_verified" => Ok(Self::ExternalVerified),
-            "recovery_required" => Ok(Self::RecoveryRequired),
-            "failed" => Ok(Self::Failed),
-            "complete" => Ok(Self::Complete),
-            _ => Err(format!("invalid persisted delivery state: {value}")),
-        }
-    }
-
-    #[must_use]
-    pub const fn can_resume(self) -> bool {
-        matches!(
-            self,
-            Self::ExternalPending | Self::RecoveryRequired | Self::Failed | Self::Complete
-        )
-    }
-}
-
 impl Evidence {
     pub fn open_for_repository(repository: &Path) -> Result<Self, String> {
         if let Some(root) = std::env::var_os("MISTER_AGENT_CLI_STATE_DIR") {
@@ -305,27 +195,6 @@ impl Evidence {
             .and_then(|()| connection.pragma_update(None, "foreign_keys", true))
             .and_then(|()| connection.execute_batch(SCHEMA))
             .map_err(|error| format!("cannot migrate audit database: {error}"))?;
-        ensure_column(&connection, "tasks", "closed_ms", "INTEGER")?;
-        ensure_column(&connection, "tasks", "commit_sha", "TEXT")?;
-        ensure_column(&connection, "tasks", "session_id", "TEXT")?;
-        ensure_column(
-            &connection,
-            "tasks",
-            "generation",
-            "INTEGER NOT NULL DEFAULT 1",
-        )?;
-        connection
-            .execute(
-                "UPDATE tasks SET session_id=task_id WHERE session_id IS NULL",
-                [],
-            )
-            .map_err(|error| format!("cannot migrate tasks.session_id: {error}"))?;
-        connection
-            .execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS tasks_session_generation ON tasks(session_id, generation)",
-                [],
-            )
-            .map_err(|error| format!("cannot index task lifecycles: {error}"))?;
         ensure_column(&connection, "requests", "bootstrap_ms", "INTEGER")?;
         ensure_column(&connection, "requests", "execution_started_ms", "INTEGER")?;
         ensure_column(&connection, "requests", "execution_ms", "INTEGER")?;
@@ -359,12 +228,6 @@ impl Evidence {
                 [],
             )
             .map_err(|error| format!("cannot migrate request cohorts: {error}"))?;
-        connection
-            .execute(
-                "DELETE FROM operation_cache WHERE task_id NOT IN (SELECT task_id FROM tasks WHERE closed_ms IS NULL)",
-                [],
-            )
-            .map_err(|error| format!("cannot prune operation cache: {error}"))?;
         connection
             .execute(
                 "DELETE FROM validation_results WHERE expires_ms < ?1 OR rowid NOT IN (SELECT rowid FROM validation_results ORDER BY completed_ms DESC LIMIT 10000)",
@@ -497,408 +360,6 @@ impl Evidence {
         Ok(())
     }
 
-    pub fn save_task_baseline<T: Serialize>(
-        &self,
-        session_id: &str,
-        worktree: &Path,
-        baseline: &T,
-        replace: bool,
-    ) -> Result<String, String> {
-        let baseline = serde_json::to_string(baseline).map_err(|error| error.to_string())?;
-        let transaction = self
-            .connection
-            .unchecked_transaction()
-            .map_err(|error| error.to_string())?;
-        let active: Option<String> = transaction
-            .query_row(
-                "SELECT task_id FROM tasks WHERE session_id=?1 AND worktree=?2 AND closed_ms IS NULL",
-                params![session_id, worktree.display().to_string()],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|error| error.to_string())?;
-        if active.is_some() && !replace {
-            return Err(format!(
-                "task lifecycle already active for {session_id}; finish it before beginning another"
-            ));
-        }
-        if active.is_some() {
-            transaction
-                .execute(
-                    "UPDATE tasks SET closed_ms=?2 WHERE session_id=?1 AND worktree=?3 AND closed_ms IS NULL",
-                    params![session_id, now_ms(), worktree.display().to_string()],
-                )
-                .map_err(|error| error.to_string())?;
-        }
-        if session_id.starts_with("task-") {
-            transaction
-                .execute(
-                    "UPDATE tasks SET closed_ms=?2 WHERE worktree=?1 AND session_id LIKE 'task-%' AND closed_ms IS NULL",
-                    params![worktree.display().to_string(), now_ms()],
-                )
-                .map_err(|error| error.to_string())?;
-        }
-        let generation: i64 = transaction
-            .query_row(
-                "SELECT COALESCE(MAX(generation), 0) + 1 FROM tasks WHERE session_id=?1",
-                [session_id],
-                |row| row.get(0),
-            )
-            .map_err(|error| error.to_string())?;
-        let task_id = if generation == 1 {
-            session_id.to_owned()
-        } else {
-            format!("{session_id}::g{generation}")
-        };
-        transaction
-            .execute(
-                "INSERT INTO tasks (task_id, session_id, generation, worktree, created_ms, baseline_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![task_id, session_id, generation, worktree.display().to_string(), now_ms(), baseline],
-            )
-            .map_err(|error| {
-                if error.to_string().contains("UNIQUE constraint failed") {
-                    format!("cannot allocate a new task lifecycle for {session_id}")
-                } else {
-                    format!("cannot save task baseline: {error}")
-                }
-            })?;
-        transaction.commit().map_err(|error| error.to_string())?;
-        Ok(task_id)
-    }
-
-    pub fn active_task_id_for_session(
-        &self,
-        worktree: &Path,
-        session_id: &str,
-    ) -> Result<Option<String>, String> {
-        self.connection
-            .query_row(
-                "SELECT task_id FROM tasks WHERE worktree=?1 AND session_id=?2 AND closed_ms IS NULL ORDER BY generation DESC LIMIT 1",
-                params![worktree.display().to_string(), session_id],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|error| error.to_string())
-    }
-
-    pub fn load_task_baseline<T: serde::de::DeserializeOwned>(
-        &self,
-        task_id: &str,
-    ) -> Result<Option<(PathBuf, T)>, String> {
-        self.connection
-            .query_row(
-                "SELECT worktree, baseline_json FROM tasks WHERE task_id = ?1",
-                [task_id],
-                |row| {
-                    let worktree: String = row.get(0)?;
-                    let baseline: String = row.get(1)?;
-                    Ok((PathBuf::from(worktree), baseline))
-                },
-            )
-            .optional()
-            .map_err(|error| error.to_string())?
-            .map(|(worktree, baseline)| {
-                serde_json::from_str(&baseline)
-                    .map(|value| (worktree, value))
-                    .map_err(|error| format!("cannot decode task baseline: {error}"))
-            })
-            .transpose()
-    }
-
-    pub fn update_task_baseline<T: Serialize>(
-        &self,
-        task_id: &str,
-        worktree: &Path,
-        baseline: &T,
-    ) -> Result<(), String> {
-        let baseline = serde_json::to_string(baseline).map_err(|error| error.to_string())?;
-        let changed = self
-            .connection
-            .execute(
-                "UPDATE tasks SET baseline_json=?3 WHERE task_id=?1 AND worktree=?2 AND closed_ms IS NULL",
-                params![task_id, worktree.display().to_string(), baseline],
-            )
-            .map_err(|error| format!("cannot update task baseline: {error}"))?;
-        if changed == 1 {
-            Ok(())
-        } else {
-            Err(format!(
-                "task_baseline_missing: no active task baseline exists for {task_id}"
-            ))
-        }
-    }
-
-    pub fn active_task_ids(&self, worktree: &Path, except: &str) -> Result<Vec<String>, String> {
-        let mut statement = self
-            .connection
-            .prepare(
-                "SELECT task_id FROM tasks WHERE worktree=?1 AND closed_ms IS NULL AND task_id<>?2 ORDER BY created_ms",
-            )
-            .map_err(|error| error.to_string())?;
-        let task_ids = statement
-            .query_map(params![worktree.display().to_string(), except], |row| {
-                row.get(0)
-            })
-            .map_err(|error| error.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| error.to_string())?;
-        Ok(task_ids)
-    }
-
-    pub fn active_manual_task_id(&self, worktree: &Path) -> Result<Option<String>, String> {
-        self.connection
-            .query_row(
-                "SELECT session_id FROM tasks WHERE worktree=?1 AND session_id LIKE 'task-%' AND closed_ms IS NULL ORDER BY created_ms DESC LIMIT 1",
-                [worktree.display().to_string()],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|error| error.to_string())
-    }
-
-    pub fn close_task(&self, task_id: &str, commit_sha: &str) -> Result<(), String> {
-        let changed = self
-            .connection
-            .execute(
-                "UPDATE tasks SET closed_ms=?2, commit_sha=?3 WHERE task_id=?1 AND closed_ms IS NULL",
-                params![task_id, now_ms(), commit_sha],
-            )
-            .map_err(|error| error.to_string())?;
-        if changed == 1 {
-            self.connection
-                .execute("DELETE FROM operation_cache WHERE task_id=?1", [task_id])
-                .map_err(|error| error.to_string())?;
-            Ok(())
-        } else {
-            Err(format!(
-                "task_baseline_missing: no active task baseline exists for {task_id}"
-            ))
-        }
-    }
-
-    pub fn supersede_task(&self, worktree: &Path, task_id: &str) -> Result<(), String> {
-        let changed = self
-            .connection
-            .execute(
-                "UPDATE tasks SET closed_ms=?3 WHERE task_id=?1 AND worktree=?2 AND closed_ms IS NULL",
-                params![task_id, worktree.display().to_string(), now_ms()],
-            )
-            .map_err(|error| error.to_string())?;
-        if changed == 1 {
-            self.connection
-                .execute("DELETE FROM operation_cache WHERE task_id=?1", [task_id])
-                .map_err(|error| error.to_string())?;
-            Ok(())
-        } else {
-            Err(format!(
-                "task_supersede_missing: no active task lifecycle exists for {task_id}"
-            ))
-        }
-    }
-
-    pub fn latest_committed_task(
-        &self,
-        worktree: &Path,
-    ) -> Result<Option<(String, String)>, String> {
-        self.connection
-            .query_row(
-                "SELECT task_id, commit_sha FROM tasks WHERE worktree=?1 AND closed_ms IS NOT NULL AND commit_sha IS NOT NULL ORDER BY closed_ms DESC LIMIT 1",
-                [worktree.display().to_string()],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()
-            .map_err(|error| error.to_string())
-    }
-
-    pub fn latest_committed_task_for_session(
-        &self,
-        worktree: &Path,
-        session_id: &str,
-    ) -> Result<Option<(String, String)>, String> {
-        self.connection
-            .query_row(
-                "SELECT task_id, commit_sha FROM tasks WHERE worktree=?1 AND session_id=?2 AND closed_ms IS NOT NULL AND commit_sha IS NOT NULL ORDER BY closed_ms DESC LIMIT 1",
-                params![worktree.display().to_string(), session_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()
-            .map_err(|error| error.to_string())
-    }
-
-    pub fn claim_task_paths(&self, task_id: &str, paths: &[PathBuf]) -> Result<(), String> {
-        let (worktree, current_baseline): (String, String) = self
-            .connection
-            .query_row(
-                "SELECT worktree, baseline_json FROM tasks WHERE task_id=?1",
-                [task_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .map_err(|error| format!("cannot load active task identity: {error}"))?;
-        let current_head = baseline_head(&current_baseline);
-        let transaction = self
-            .connection
-            .unchecked_transaction()
-            .map_err(|error| error.to_string())?;
-        for path in paths {
-            let path = path.display().to_string();
-            let conflict: Option<(String, String)> = transaction
-                .query_row(
-                    "SELECT c.task_id, t.baseline_json FROM task_claims c JOIN tasks t ON t.task_id=c.task_id WHERE c.path=?1 AND c.task_id<>?2 AND t.closed_ms IS NULL LIMIT 1",
-                    params![path, task_id],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .optional()
-                .map_err(|error| error.to_string())?;
-            if let Some((other, other_baseline)) = conflict {
-                let other_head = baseline_head(&other_baseline);
-                let superseded = current_head
-                    .as_deref()
-                    .zip(other_head.as_deref())
-                    .is_some_and(|(current, other)| {
-                        current != other
-                            && Command::new("git")
-                                .args(["merge-base", "--is-ancestor", other, current])
-                                .current_dir(&worktree)
-                                .status()
-                                .map(|status| status.success())
-                                .unwrap_or(false)
-                    });
-                if superseded {
-                    transaction
-                        .execute(
-                            "UPDATE tasks SET closed_ms=?2 WHERE task_id=?1 AND closed_ms IS NULL",
-                            params![other, now_ms()],
-                        )
-                        .map_err(|error| error.to_string())?;
-                } else {
-                    return Err(format!(
-                        "commit_scope_ambiguous: path {path} is already claimed by active task {other}"
-                    ));
-                }
-            }
-            transaction
-                .execute(
-                    "INSERT OR REPLACE INTO task_claims (task_id, path, claimed_ms) VALUES (?1, ?2, ?3)",
-                    params![task_id, path, now_ms()],
-                )
-                .map_err(|error| error.to_string())?;
-        }
-        transaction.commit().map_err(|error| error.to_string())
-    }
-
-    pub fn task_claims(&self, task_id: &str) -> Result<Vec<PathBuf>, String> {
-        let mut statement = self
-            .connection
-            .prepare("SELECT path FROM task_claims WHERE task_id=?1 ORDER BY path")
-            .map_err(|error| error.to_string())?;
-        let paths = statement
-            .query_map([task_id], |row| row.get::<_, String>(0))
-            .map_err(|error| error.to_string())?
-            .map(|value| value.map(PathBuf::from))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| error.to_string())?;
-        Ok(paths)
-    }
-
-    pub fn save_delivery(&self, delivery: &DeliveryRecord) -> Result<(), String> {
-        self.connection
-            .execute(
-                "INSERT INTO deliveries (task_id, worktree, source_tree, commit_sha, impact, state, requirement_id, detail, updated_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) ON CONFLICT(task_id) DO UPDATE SET source_tree=excluded.source_tree, commit_sha=excluded.commit_sha, impact=excluded.impact, state=excluded.state, requirement_id=excluded.requirement_id, detail=excluded.detail, updated_ms=excluded.updated_ms",
-                params![delivery.task_id, delivery.worktree.display().to_string(), delivery.source_tree, delivery.commit_sha, delivery.impact.as_str(), delivery.state.as_str(), delivery.requirement_id, delivery.detail, now_ms()],
-            )
-            .map_err(|error| error.to_string())?;
-        Ok(())
-    }
-
-    pub fn delivery(&self, task_id: &str) -> Result<Option<DeliveryRecord>, String> {
-        let record = self.connection
-            .query_row(
-                "SELECT task_id, worktree, source_tree, commit_sha, impact, state, requirement_id, detail FROM deliveries WHERE task_id=?1",
-                [task_id],
-                |row| {
-                    Ok((
-                        row.get(0)?,
-                        PathBuf::from(row.get::<_, String>(1)?),
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get::<_, String>(4)?,
-                        row.get::<_, String>(5)?,
-                        row.get(6)?,
-                        row.get(7)?,
-                    ))
-                },
-            )
-            .optional()
-            .map_err(|error| error.to_string())?;
-        record
-            .map(
-                |(
-                    task_id,
-                    worktree,
-                    source_tree,
-                    commit_sha,
-                    impact,
-                    state,
-                    requirement_id,
-                    detail,
-                )| {
-                    Ok(DeliveryRecord {
-                        task_id,
-                        worktree,
-                        source_tree,
-                        commit_sha,
-                        impact: DeploymentImpact::parse(&impact)?,
-                        state: DeliveryState::parse(&state)?,
-                        requirement_id,
-                        detail,
-                    })
-                },
-            )
-            .transpose()
-    }
-
-    pub fn attest_delivery(
-        &self,
-        task_id: &str,
-        requirement_id: &str,
-        workflow: &str,
-        branch: &str,
-        commit_sha: &str,
-        evidence_json: &str,
-    ) -> Result<(), String> {
-        if workflow != "platform-bundle.yml" || branch != "main" {
-            return Err("external_attestation_rejected: workflow and branch must be platform-bundle.yml on main".into());
-        }
-        let delivery = self
-            .delivery(task_id)?
-            .ok_or("external_attestation_rejected: delivery does not exist")?;
-        if delivery.commit_sha.as_deref() != Some(commit_sha) {
-            return Err("external_attestation_rejected: commit SHA does not match delivery".into());
-        }
-        self.connection
-            .execute(
-                "INSERT OR REPLACE INTO delivery_attestations (task_id, requirement_id, workflow, branch, commit_sha, evidence_json, created_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![task_id, requirement_id, workflow, branch, commit_sha, evidence_json, now_ms()],
-            )
-            .map_err(|error| error.to_string())?;
-        Ok(())
-    }
-
-    pub fn has_cached_operation(
-        &self,
-        task_id: &str,
-        operation_id: &str,
-        fingerprint: &str,
-    ) -> Result<bool, String> {
-        self.connection
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM operation_cache WHERE task_id=?1 AND operation_id=?2 AND fingerprint=?3)",
-                params![task_id, operation_id, fingerprint],
-                |row| row.get(0),
-            )
-            .map_err(|error| error.to_string())
-    }
-
     pub fn cached_validation(
         &self,
         operation_id: &str,
@@ -1018,21 +479,6 @@ impl Evidence {
             .execute(
                 "DELETE FROM operation_leases WHERE operation_id=?1 AND fingerprint=?2 AND owner_request_id=?3",
                 params![operation_id, fingerprint, request_id],
-            )
-            .map_err(|error| error.to_string())?;
-        Ok(())
-    }
-
-    pub fn cache_operation(
-        &self,
-        task_id: &str,
-        operation_id: &str,
-        fingerprint: &str,
-    ) -> Result<(), String> {
-        self.connection
-            .execute(
-                "INSERT OR REPLACE INTO operation_cache (task_id, operation_id, fingerprint, completed_ms) VALUES (?1, ?2, ?3, ?4)",
-                params![task_id, operation_id, fingerprint, now_ms()],
             )
             .map_err(|error| error.to_string())?;
         Ok(())
@@ -1200,17 +646,6 @@ impl Evidence {
     }
 
     pub fn rotate(&self, git_sha: &str) -> Result<PathBuf, String> {
-        let active: i64 = self
-            .connection
-            .query_row(
-                "SELECT count(*) FROM tasks WHERE closed_ms IS NULL",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(|error| error.to_string())?;
-        if active != 0 {
-            return Err("database_rotation_refused: active task lifecycles exist".into());
-        }
         let summary = self.report()?;
         self.connection
             .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
@@ -1240,16 +675,11 @@ impl Evidence {
         self.connection
             .execute_batch(
                 "BEGIN IMMEDIATE;
-                 DELETE FROM delivery_attestations;
-                 DELETE FROM deliveries;
-                 DELETE FROM task_claims;
-                 DELETE FROM operation_cache;
                  DELETE FROM validation_results;
                  DELETE FROM operation_leases;
                  DELETE FROM events;
                  DELETE FROM commands;
                  DELETE FROM requests;
-                 DELETE FROM tasks;
                  DELETE FROM cohorts;
                  INSERT INTO cohorts (created_ms, git_sha, planner_schema, label)
                  VALUES (unixepoch('subsec') * 1000, 'pending', 3, 'post-optimization');
@@ -1623,216 +1053,53 @@ mod tests {
     }
 
     #[test]
-    fn migrates_task_completion_columns_and_tracks_manual_session() {
-        let root = temporary_root("task-migration");
+    fn legacy_ownership_tables_remain_inert() {
+        let root = temporary_root("legacy-ownership");
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         let connection = Connection::open(root.join("agent.sqlite3")).unwrap();
         connection
             .execute_batch(
-                "CREATE TABLE tasks (task_id TEXT PRIMARY KEY, worktree TEXT NOT NULL, created_ms INTEGER NOT NULL, baseline_json TEXT NOT NULL);",
+                "CREATE TABLE tasks (
+                    task_id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    generation INTEGER NOT NULL,
+                    worktree TEXT NOT NULL,
+                    created_ms INTEGER NOT NULL,
+                    baseline_json TEXT NOT NULL,
+                    closed_ms INTEGER,
+                    commit_sha TEXT
+                );
+                CREATE TABLE task_claims (
+                    task_id TEXT NOT NULL,
+                    path TEXT NOT NULL,
+                    claimed_ms INTEGER NOT NULL,
+                    PRIMARY KEY (task_id, path)
+                );
+                INSERT INTO tasks
+                    (task_id, session_id, generation, worktree, created_ms, baseline_json)
+                    VALUES ('legacy-task', 'legacy-task', 1, '/tmp/worktree', 1, '{}');
+                INSERT INTO task_claims (task_id, path, claimed_ms)
+                    VALUES ('legacy-task', 'legacy.txt', 1);
+                PRAGMA user_version = 9;",
             )
             .unwrap();
         drop(connection);
 
         let evidence = Evidence::open_at(&root).unwrap();
-        let worktree = Path::new("/tmp/manual-worktree");
-        evidence
-            .save_task_baseline("task-one", worktree, &serde_json::json!({}), false)
-            .unwrap();
-        assert_eq!(
-            evidence.active_manual_task_id(worktree).unwrap(),
-            Some("task-one".into())
-        );
-        evidence.close_task("task-one", "abc123").unwrap();
-        assert_eq!(evidence.active_manual_task_id(worktree).unwrap(), None);
-        let second = evidence
-            .save_task_baseline("task-one", worktree, &serde_json::json!({}), false)
-            .unwrap();
-        assert_eq!(second, "task-one::g2");
         assert_eq!(
             evidence
-                .active_task_id_for_session(worktree, "task-one")
+                .connection
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .unwrap(),
-            Some(second)
+            10
         );
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn session_retains_independent_task_lifecycles() {
-        let root = temporary_root("task-generations");
-        let evidence = Evidence::open_at(&root).unwrap();
-        let worktree = Path::new("/tmp/task-generations-worktree");
-        let first = evidence
-            .save_task_baseline("thread-one", worktree, &"first", false)
-            .unwrap();
-        assert_eq!(first, "thread-one");
-        assert!(
-            evidence
-                .save_task_baseline("thread-one", worktree, &"duplicate", false)
-                .unwrap_err()
-                .contains("lifecycle already active")
-        );
-        evidence.close_task(&first, "commit-one").unwrap();
-
-        let second = evidence
-            .save_task_baseline("thread-one", worktree, &"second", false)
-            .unwrap();
-        assert_eq!(second, "thread-one::g2");
         assert_eq!(
             evidence
-                .active_task_id_for_session(worktree, "thread-one")
+                .connection
+                .query_row("SELECT count(*) FROM tasks", [], |row| row.get::<_, i64>(0))
                 .unwrap(),
-            Some(second)
-        );
-        assert_eq!(
-            evidence
-                .latest_committed_task_for_session(worktree, "thread-one")
-                .unwrap(),
-            Some((first, "commit-one".into()))
-        );
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn delivery_state_is_resumable_and_attestation_is_exact() {
-        let root = temporary_root("delivery");
-        let _ = fs::remove_dir_all(&root);
-        let evidence = Evidence::open_at(&root).unwrap();
-        evidence
-            .save_task_baseline("task-delivery", Path::new("/tmp/worktree"), &(), false)
-            .unwrap();
-        let delivery = DeliveryRecord {
-            task_id: "task-delivery".into(),
-            worktree: PathBuf::from("/tmp/worktree"),
-            source_tree: "tree-1".into(),
-            commit_sha: Some("commit-1".into()),
-            impact: DeploymentImpact::Platform,
-            state: DeliveryState::ExternalPending,
-            requirement_id: Some("github-actions.rbf-build".into()),
-            detail: None,
-        };
-        evidence.save_delivery(&delivery).unwrap();
-        assert_eq!(evidence.delivery("task-delivery").unwrap(), Some(delivery));
-        assert!(
-            evidence
-                .attest_delivery(
-                    "task-delivery",
-                    "github-actions.rbf-build",
-                    "platform-bundle.yml",
-                    "wrong-branch",
-                    "commit-1",
-                    "{}",
-                )
-                .is_err()
-        );
-        assert!(
-            evidence
-                .attest_delivery(
-                    "task-delivery",
-                    "github-actions.rbf-build",
-                    "platform-bundle.yml",
-                    "main",
-                    "wrong-commit",
-                    "{}",
-                )
-                .is_err()
-        );
-        evidence
-            .attest_delivery(
-                "task-delivery",
-                "github-actions.rbf-build",
-                "platform-bundle.yml",
-                "main",
-                "commit-1",
-                "{}",
-            )
-            .unwrap();
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn latest_committed_task_excludes_active_tasks() {
-        let root = temporary_root("latest-commit");
-        let evidence = Evidence::open_at(&root).unwrap();
-        let worktree = Path::new("/tmp/worktree");
-        evidence
-            .save_task_baseline("task-committed", worktree, &(), false)
-            .unwrap();
-        evidence.close_task("task-committed", "abc123").unwrap();
-        evidence
-            .save_task_baseline("task-active", worktree, &(), false)
-            .unwrap();
-        assert_eq!(
-            evidence.latest_committed_task(worktree).unwrap(),
-            Some(("task-committed".into(), "abc123".into()))
-        );
-    }
-
-    #[test]
-    fn superseding_a_task_closes_it_without_fabricating_a_commit() {
-        let root = temporary_root("task-supersede");
-        let evidence = Evidence::open_at(&root).unwrap();
-        let worktree = Path::new("/tmp/task-supersede-worktree");
-        evidence
-            .save_task_baseline("stale-task", worktree, &(), false)
-            .unwrap();
-        evidence.supersede_task(worktree, "stale-task").unwrap();
-        assert_eq!(
-            evidence
-                .active_task_id_for_session(worktree, "stale-task")
-                .unwrap(),
-            None
-        );
-        assert_eq!(evidence.latest_committed_task(worktree).unwrap(), None);
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn updating_baseline_preserves_task_metadata_and_claims() {
-        let root = temporary_root("baseline-update");
-        let evidence = Evidence::open_at(&root).unwrap();
-        let worktree = Path::new("/tmp/baseline-update-worktree");
-        evidence
-            .save_task_baseline("task-update", worktree, &"before", false)
-            .unwrap();
-        evidence
-            .claim_task_paths("task-update", &[PathBuf::from("owned.txt")])
-            .unwrap();
-        let created_ms: i64 = evidence
-            .connection
-            .query_row(
-                "SELECT created_ms FROM tasks WHERE task_id='task-update'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-
-        evidence
-            .update_task_baseline("task-update", worktree, &"after")
-            .unwrap();
-
-        let row: (i64, Option<i64>, Option<String>) = evidence
-            .connection
-            .query_row(
-                "SELECT created_ms, closed_ms, commit_sha FROM tasks WHERE task_id='task-update'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .unwrap();
-        assert_eq!(row, (created_ms, None, None));
-        assert_eq!(
-            evidence.task_claims("task-update").unwrap(),
-            [PathBuf::from("owned.txt")]
-        );
-        assert_eq!(
-            evidence
-                .load_task_baseline::<String>("task-update")
-                .unwrap()
-                .unwrap()
-                .1,
-            "after"
+            1
         );
         fs::remove_dir_all(root).unwrap();
     }
@@ -1894,37 +1161,7 @@ mod tests {
     }
 
     #[test]
-    fn operation_cache_requires_exact_task_operation_and_fingerprint() {
-        let root = temporary_root("operation-cache");
-        let evidence = Evidence::open_at(&root).unwrap();
-        assert!(
-            !evidence
-                .has_cached_operation("task-a", "check.one", "fingerprint-a")
-                .unwrap()
-        );
-        evidence
-            .cache_operation("task-a", "check.one", "fingerprint-a")
-            .unwrap();
-        assert!(
-            evidence
-                .has_cached_operation("task-a", "check.one", "fingerprint-a")
-                .unwrap()
-        );
-        assert!(
-            !evidence
-                .has_cached_operation("task-a", "check.one", "fingerprint-b")
-                .unwrap()
-        );
-        assert!(
-            !evidence
-                .has_cached_operation("task-b", "check.one", "fingerprint-a")
-                .unwrap()
-        );
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn validation_cache_is_cross_task_and_leases_recover_after_expiry() {
+    fn validation_cache_is_content_scoped_and_leases_recover_after_expiry() {
         let root = temporary_root("validation-cache");
         let evidence = Evidence::open_at(&root).unwrap();
         evidence
@@ -2037,16 +1274,10 @@ mod tests {
     }
 
     #[test]
-    fn closing_task_prunes_cache_and_request_timing_includes_bootstrap() {
-        let root = temporary_root("cache-pruning-and-timing");
+    fn request_timing_includes_bootstrap() {
+        let root = temporary_root("request-timing");
         let _ = fs::remove_dir_all(&root);
         let evidence = Evidence::open_at(&root).unwrap();
-        evidence
-            .save_task_baseline("task-timed", Path::new("/tmp/worktree"), &(), false)
-            .unwrap();
-        evidence
-            .cache_operation("task-timed", "check.one", "fingerprint")
-            .unwrap();
 
         let request = RawRequest::capture([OsString::from("agent-cli"), OsString::from("check")]);
         thread::sleep(std::time::Duration::from_millis(5));
@@ -2070,13 +1301,6 @@ mod tests {
             .unwrap();
         assert!(bootstrap_ms >= 5);
         assert!(execution_ms >= 0);
-
-        evidence.close_task("task-timed", "abc123").unwrap();
-        assert!(
-            !evidence
-                .has_cached_operation("task-timed", "check.one", "fingerprint")
-                .unwrap()
-        );
         fs::remove_dir_all(root).unwrap();
     }
 }
