@@ -355,16 +355,22 @@ impl DeviceOperations for NativeDevice {
                 benchmark_scenario_label(*scenario).into()
             }
             DeviceRequest::WarmupBenchmark(scenario) => {
-                let session = connect(10).map_err(device_failure)?;
-                run_launcher_benchmark(&session, *scenario, true).map_err(device_failure)?;
+                if *scenario != BenchmarkScenario::ScreensaverVelocity {
+                    let session = connect(10).map_err(device_failure)?;
+                    run_launcher_benchmark(&session, *scenario, true).map_err(device_failure)?;
+                }
                 "warmed".into()
             }
             DeviceRequest::CaptureBenchmark(scenario) => {
-                let session = connect(10).map_err(device_failure)?;
-                run_launcher_benchmark(&session, *scenario, false).map_err(device_failure)?;
-                remote_read(&session, benchmark_trace_path(false)).ok_or_else(|| {
-                    DeviceFailure::OperationFailed("benchmark trace is missing".into())
-                })?
+                if *scenario == BenchmarkScenario::ScreensaverVelocity {
+                    run_screensaver_benchmark_matrix().map_err(device_failure)?
+                } else {
+                    let session = connect(10).map_err(device_failure)?;
+                    run_launcher_benchmark(&session, *scenario, false).map_err(device_failure)?;
+                    remote_read(&session, benchmark_trace_path(false)).ok_or_else(|| {
+                        DeviceFailure::OperationFailed("benchmark trace is missing".into())
+                    })?
+                }
             }
             DeviceRequest::RestoreBenchmark => {
                 let session = connect(10).map_err(device_failure)?;
@@ -376,6 +382,7 @@ impl DeviceOperations for NativeDevice {
                     },
                 )
                 .map_err(device_failure)?;
+                restore_benchmark_display_if_pending(&session).map_err(device_failure)?;
                 exec_checked(&session, "benchmark restore", &benchmark_restore_command())
                     .map_err(device_failure)?;
                 "restored".into()
@@ -1772,6 +1779,7 @@ fn benchmark_scenario_label(scenario: BenchmarkScenario) -> &'static str {
     match scenario {
         BenchmarkScenario::LauncherVelocity => "launcher-velocity",
         BenchmarkScenario::FramebufferVelocity => "framebuffer-velocity",
+        BenchmarkScenario::ScreensaverVelocity => "screensaver-velocity",
     }
 }
 
@@ -2629,20 +2637,32 @@ fn benchmark_trace_path(warmup: bool) -> &'static str {
     }
 }
 
+fn benchmark_trace_complete_path(warmup: bool) -> &'static str {
+    if warmup {
+        "/tmp/mister-magik/agent-benchmark-warmup.complete"
+    } else {
+        "/tmp/mister-magik/agent-benchmark.complete"
+    }
+}
+
 fn benchmark_prepare_command(_scenario: BenchmarkScenario) -> String {
     format!(
-        "set -eu; {}; rm -f {} {}; mkdir -p /tmp/mister-magik",
+        "set -eu; {} rm -f {} {} {} {}; mkdir -p /tmp/mister-magik",
         platform_safety_script(),
         benchmark_trace_path(true),
-        benchmark_trace_path(false)
+        benchmark_trace_path(false),
+        benchmark_trace_complete_path(true),
+        benchmark_trace_complete_path(false)
     )
 }
 
 fn benchmark_restore_command() -> String {
     format!(
-        "set -eu; rm -f {} {}; {}",
+        "set -eu; rm -f {} {} {} {}; {}",
         benchmark_trace_path(true),
         benchmark_trace_path(false),
+        benchmark_trace_complete_path(true),
+        benchmark_trace_complete_path(false),
         platform_safety_script()
     )
 }
@@ -2653,25 +2673,47 @@ fn run_launcher_benchmark(
     warmup: bool,
 ) -> Result<()> {
     let trace = benchmark_trace_path(warmup);
-    let seconds = if warmup { "2" } else { "8" };
+    let complete = benchmark_trace_complete_path(warmup);
+    let seconds = if warmup {
+        "2"
+    } else if scenario == BenchmarkScenario::ScreensaverVelocity {
+        "10"
+    } else {
+        "8"
+    };
     let scenario_value = match scenario {
         BenchmarkScenario::LauncherVelocity => "velocity-scroll",
         BenchmarkScenario::FramebufferVelocity => "dirty-band",
+        BenchmarkScenario::ScreensaverVelocity => "screensaver-startup",
     };
+    let mut env_vars = vec![
+        (
+            "MISTER_LAUNCHER_BENCH_SCENARIO".into(),
+            scenario_value.into(),
+        ),
+        ("MISTER_PREVIEW_SCROLL_TRACE_SECS".into(), seconds.into()),
+        ("MISTER_PREVIEW_SCROLL_TRACE".into(), trace.into()),
+        (
+            "MISTER_PREVIEW_SCROLL_TRACE_COMPLETE".into(),
+            complete.into(),
+        ),
+        ("MISTER_PREVIEW_SCROLL_EXIT_AFTER_TRACE".into(), "1".into()),
+    ];
+    if scenario == BenchmarkScenario::ScreensaverVelocity {
+        env_vars.push(("MISTER_SCREENSAVER_START_ACTIVE".into(), "1".into()));
+    } else {
+        env_vars.push(("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()));
+        env_vars.push(("MISTER_LAUNCHER_START_SYSTEM".into(), "arcade".into()));
+    }
+    exec_checked(
+        session,
+        "reset benchmark trace",
+        &format!("rm -f {trace} {complete}"),
+    )?;
     launcher_restart(
         session,
         &LauncherRestartOptions {
-            env_vars: vec![
-                ("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()),
-                ("MISTER_LAUNCHER_START_SYSTEM".into(), "arcade".into()),
-                (
-                    "MISTER_LAUNCHER_BENCH_SCENARIO".into(),
-                    scenario_value.into(),
-                ),
-                ("MISTER_PREVIEW_SCROLL_TRACE_SECS".into(), seconds.into()),
-                ("MISTER_PREVIEW_SCROLL_TRACE".into(), trace.into()),
-                ("MISTER_PREVIEW_SCROLL_EXIT_AFTER_TRACE".into(), "1".into()),
-            ],
+            env_vars,
             timeout_secs: 30,
             ..LauncherRestartOptions::default()
         },
@@ -2680,10 +2722,120 @@ fn run_launcher_benchmark(
         session,
         "benchmark trace wait",
         &format!(
-            "set -eu; elapsed=0; while [ $elapsed -lt 20 ]; do test -s {trace} && exit 0; sleep 1; elapsed=$((elapsed + 1)); done; exit 1"
+            "set -eu; elapsed=0; while [ $elapsed -lt 20 ]; do test -s {trace} && test -e {complete} && exit 0; sleep 1; elapsed=$((elapsed + 1)); done; exit 1"
         ),
     )?;
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct ScreensaverBenchmarkMode {
+    id: &'static str,
+    output: &'static str,
+    framebuffer: &'static str,
+}
+
+const SCREENSAVER_BENCHMARK_MODES: [ScreensaverBenchmarkMode; 2] = [
+    ScreensaverBenchmarkMode {
+        id: "hdmi-1920x1200p60",
+        output: "1920x1200",
+        framebuffer: "960x600",
+    },
+    ScreensaverBenchmarkMode {
+        id: "hdmi-1280x720p60",
+        output: "1280x720",
+        framebuffer: "1280x720",
+    },
+];
+
+fn restore_benchmark_display_if_pending(session: &Session) -> Result<()> {
+    let reply = exec_checked_output(
+        session,
+        "query benchmark display mode",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    if parse_display_reply_pending(reply.stdout.trim())?.is_some() {
+        exec_checked(
+            session,
+            "rollback benchmark display mode",
+            &acknowledged_main_command("mister_magik_display_cancel_v1"),
+        )?;
+        wait_launcher_ready(session, Instant::now(), Duration::from_secs(15))?;
+    }
+    Ok(())
+}
+
+fn run_screensaver_benchmark_matrix() -> Result<String> {
+    let session = connect(10)?;
+    let original_reply = exec_checked_output(
+        &session,
+        "query original benchmark display mode",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    let original_mode = parse_display_reply_active(original_reply.stdout.trim())?;
+    if parse_display_reply_pending(original_reply.stdout.trim())?.is_some() {
+        return Err("screensaver benchmark cannot start with a pending display transaction".into());
+    }
+    drop(session);
+
+    let mut output = String::new();
+    let run_result = (|| -> Result<()> {
+        for mode in SCREENSAVER_BENCHMARK_MODES {
+            let session = connect(10)?;
+            let ready = wait_launcher_ready(&session, Instant::now(), Duration::from_secs(15))?;
+            exec_checked(
+                &session,
+                "apply screensaver benchmark display mode",
+                &acknowledged_main_command(&format!(
+                    "mister_magik_display_apply_headless_v1 mode={}",
+                    mode.id
+                )),
+            )?;
+            drop(session);
+
+            let session = connect(10)?;
+            wait_launcher_ready_after(
+                &session,
+                ready.launcher_pid,
+                Instant::now(),
+                Duration::from_secs(15),
+            )?;
+            run_launcher_benchmark(&session, BenchmarkScenario::ScreensaverVelocity, false)?;
+            let trace = remote_read(&session, benchmark_trace_path(false))
+                .ok_or("screensaver benchmark trace is missing")?;
+            output.push_str(&format!(
+                "benchmark_resolution\tmode={}\toutput={}\tframebuffer={}\n",
+                mode.id, mode.output, mode.framebuffer
+            ));
+            output.push_str(&trace);
+            if !trace.ends_with('\n') {
+                output.push('\n');
+            }
+            restore_benchmark_display_if_pending(&session)?;
+        }
+        Ok(())
+    })();
+
+    if let Err(error) = run_result {
+        if let Ok(session) = connect(10) {
+            let _ = restore_benchmark_display_if_pending(&session);
+        }
+        return Err(error);
+    }
+
+    let session = connect(10)?;
+    let restored_reply = exec_checked_output(
+        &session,
+        "verify original benchmark display mode",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    let restored = parse_display_reply_active(restored_reply.stdout.trim())?;
+    if restored != original_mode {
+        return Err(
+            format!("screensaver benchmark restored {restored}, expected {original_mode}").into(),
+        );
+    }
+    Ok(output)
 }
 
 fn action_uses_device(action: &str) -> bool {
@@ -9926,6 +10078,14 @@ H: Handlers=event3 js0"#
         assert!(!repair.contains("rm -f /media/fat/mister-magik/launcher.env"));
         assert!(!repair.contains("rm -f /media/fat/mister-magik-dev/launcher.env"));
         assert!(!repair.contains("rebuild-on-next-boot; rm"));
+    }
+
+    #[test]
+    fn benchmark_prepare_composes_one_valid_safety_command() {
+        let command = benchmark_prepare_command(BenchmarkScenario::ScreensaverVelocity);
+
+        assert!(!command.contains(";;"));
+        assert!(command.contains(benchmark_trace_complete_path(false)));
     }
 
     #[test]

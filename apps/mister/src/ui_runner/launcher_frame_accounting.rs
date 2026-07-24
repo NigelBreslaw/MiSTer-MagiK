@@ -148,6 +148,9 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) preview_cache_state: &'static str,
     pub(super) preview_transition: PreviewTransitionTrace,
     pub(super) composition_status: UiCompositionStatus,
+    pub(super) screensaver_active: bool,
+    pub(super) screensaver_active_cards: usize,
+    pub(super) screensaver_archive_loading: bool,
     pub(super) status_write_due: bool,
     pub(super) status_string_copy_us: u128,
     pub(super) status_string_copy_bytes: usize,
@@ -248,6 +251,9 @@ pub(super) struct LauncherFrameRenderData {
     pub(super) preview_cache_state: &'static str,
     pub(super) preview_transition: PreviewTransitionTrace,
     pub(super) composition_status: UiCompositionStatus,
+    pub(super) screensaver_active: bool,
+    pub(super) screensaver_active_cards: usize,
+    pub(super) screensaver_archive_loading: bool,
 }
 
 pub(super) struct LauncherFrameStatusData {
@@ -346,6 +352,9 @@ impl LauncherFrameSnapshotBuilder {
             preview_cache_state: self.render.preview_cache_state,
             preview_transition: self.render.preview_transition,
             composition_status: self.render.composition_status,
+            screensaver_active: self.render.screensaver_active,
+            screensaver_active_cards: self.render.screensaver_active_cards,
+            screensaver_archive_loading: self.render.screensaver_archive_loading,
             status_write_due: self.status.status_write_due,
             status_string_copy_us: self.status.status_string_copy_us,
             status_string_copy_bytes: self.status.status_string_copy_bytes,
@@ -543,6 +552,9 @@ struct PreviewScrollTraceRow {
     search_index_state: &'static str,
     startup_elapsed_us: u128,
     monotonic_us: u128,
+    screensaver_active: u8,
+    screensaver_active_cards: usize,
+    screensaver_archive_loading: u8,
 }
 
 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
@@ -665,15 +677,20 @@ impl PreviewScrollTraceRow {
             self.status_string_copy_bytes,
             self.runtime_status_write_us,
             self.status_write_duration_us,
-            self.wall_us,
-            self.frame_finish_us,
-            self.post_finish_tail_us
+            self.wall_us
         );
         out.pop();
         let _ = writeln!(
             out,
-            "\t{}\t{}\t{}",
-            self.search_index_state, self.startup_elapsed_us, self.monotonic_us
+            "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            self.frame_finish_us,
+            self.post_finish_tail_us,
+            self.screensaver_active,
+            self.screensaver_active_cards,
+            self.screensaver_archive_loading,
+            self.search_index_state,
+            self.startup_elapsed_us,
+            self.monotonic_us
         );
     }
 }
@@ -798,6 +815,9 @@ fn preview_scroll_trace_row_from_frame(
                 .duration_since(frame.startup_start)
                 .as_micros(),
         ),
+        screensaver_active: u8::from(frame.screensaver_active),
+        screensaver_active_cards: frame.screensaver_active_cards,
+        screensaver_archive_loading: u8::from(frame.screensaver_archive_loading),
     }
 }
 
@@ -806,6 +826,21 @@ impl Drop for PreviewScrollTrace {
     fn drop(&mut self) {
         self.flush_rows();
     }
+}
+
+impl LauncherFrameAccounting {
+    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+    pub(super) fn finish_preview_scroll_trace(&mut self) {
+        if let Some(trace) = self.preview_scroll_trace.as_mut() {
+            trace.flush_rows();
+        }
+        if let Ok(path) = std::env::var("MISTER_PREVIEW_SCROLL_TRACE_COMPLETE") {
+            let _ = std::fs::File::create(path);
+        }
+    }
+
+    #[cfg(not(any(feature = "bench-tools", feature = "diagnostics")))]
+    pub(super) fn finish_preview_scroll_trace(&mut self) {}
 }
 
 #[derive(Clone, Copy, Default)]
@@ -2164,6 +2199,9 @@ mod tests {
             preview_cache_state: "exact",
             preview_transition: PreviewTransitionTrace::default(),
             composition_status: UiCompositionStatus::default(),
+            screensaver_active: false,
+            screensaver_active_cards: 0,
+            screensaver_archive_loading: false,
             status_write_due: false,
             status_string_copy_us: 10,
             status_string_copy_bytes: 128,
@@ -2215,6 +2253,9 @@ mod tests {
                 preview_cache_state: frame.preview_cache_state,
                 preview_transition: frame.preview_transition,
                 composition_status: frame.composition_status.clone(),
+                screensaver_active: frame.screensaver_active,
+                screensaver_active_cards: frame.screensaver_active_cards,
+                screensaver_archive_loading: frame.screensaver_archive_loading,
             },
             pacing: LauncherPacingTrace {
                 vsync_source: frame.vsync_source,
@@ -2620,7 +2661,7 @@ fn open_preview_scroll_trace() -> Option<PreviewScrollTrace> {
                 .ok()?;
             let mut file = BufWriter::with_capacity(64 * 1024, file);
             file.write_all(
-                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\thome_screen\thome_menu_token\thome_selected_token\thome_selected_index\thome_scroll_x\thome_scroll_max\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tdirect_preview_rows\tpresent_bytes\twasted_present_bytes\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\tpreview_fade_wall_us\tpreview_fade_cpu_us\tpreview_fade_pixels\tpreview_fade_rows\tpreview_fade_path\tpreview_fade_alpha_bucket\teffect_label_us\tpre_render_wait_us\tpost_present_wait_us\tpost_frame_tail_us\tvsync_us\tfb_present_us\tcached_present_us\thidden_compose_us\thidden_preview_compose_us\thidden_arcade_compose_us\tdirect_preview_present_us\tarcade_list_present_us\tmain_present_backend\tmain_present_status\tmain_present_buffer\tmain_present_hidden_copy_us\tmain_present_hidden_invalid_bytes\tmain_present_hidden_rect_count\tmain_present_hidden_catchup_bytes\tmain_present_hidden_full_copy\tmain_present_request_us\tmain_present_set_vga_fb_us\tmain_present_wait_us\tmain_present_sequence\tmain_present_flip_count\tmain_present_drop_count\tvsync_source\tvsync_period_us\tvsync_miss_streak\tvsync_stale_hits\tvsync_wait_start_age_us\tvsync_accepted_hit_age_us\tframe_start_phase_us\tpresent_phase_us\thome_pan_present_active\thome_horizontal_input_held\tredraw_pending\twake_reasons_bits\tdirty_y0\tdirty_y1\tstatus_write_due\truntime_status_write_deferred\tframe_tail_slack_us\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\tstatus_write_duration_us\twall_us\tframe_finish_us\tpost_finish_tail_us\tsearch_index_state\tstartup_elapsed_us\tmonotonic_us\n",
+                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\thome_screen\thome_menu_token\thome_selected_token\thome_selected_index\thome_scroll_x\thome_scroll_max\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tdirect_preview_rows\tpresent_bytes\twasted_present_bytes\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\tpreview_fade_wall_us\tpreview_fade_cpu_us\tpreview_fade_pixels\tpreview_fade_rows\tpreview_fade_path\tpreview_fade_alpha_bucket\teffect_label_us\tpre_render_wait_us\tpost_present_wait_us\tpost_frame_tail_us\tvsync_us\tfb_present_us\tcached_present_us\thidden_compose_us\thidden_preview_compose_us\thidden_arcade_compose_us\tdirect_preview_present_us\tarcade_list_present_us\tmain_present_backend\tmain_present_status\tmain_present_buffer\tmain_present_hidden_copy_us\tmain_present_hidden_invalid_bytes\tmain_present_hidden_rect_count\tmain_present_hidden_catchup_bytes\tmain_present_hidden_full_copy\tmain_present_request_us\tmain_present_set_vga_fb_us\tmain_present_wait_us\tmain_present_sequence\tmain_present_flip_count\tmain_present_drop_count\tvsync_source\tvsync_period_us\tvsync_miss_streak\tvsync_stale_hits\tvsync_wait_start_age_us\tvsync_accepted_hit_age_us\tframe_start_phase_us\tpresent_phase_us\thome_pan_present_active\thome_horizontal_input_held\tredraw_pending\twake_reasons_bits\tdirty_y0\tdirty_y1\tstatus_write_due\truntime_status_write_deferred\tframe_tail_slack_us\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\tstatus_write_duration_us\twall_us\tframe_finish_us\tpost_finish_tail_us\tscreensaver_active\tscreensaver_active_cards\tscreensaver_archive_loading\tsearch_index_state\tstartup_elapsed_us\tmonotonic_us\n",
             )
             .map_err(|e| crate::ui_errln!("preview scroll trace: header write failed: {e}"))
             .ok()?;

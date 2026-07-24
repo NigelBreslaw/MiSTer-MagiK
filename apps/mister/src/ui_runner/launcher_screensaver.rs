@@ -336,6 +336,10 @@ impl LauncherScreensaver {
     pub(in crate::ui_runner) fn is_loading_archive(&self) -> bool {
         self.archive_rx.is_some()
     }
+
+    pub(in crate::ui_runner) fn active_card_count(&self) -> usize {
+        self.parade.tiles.iter().filter(|tile| tile.active).count()
+    }
 }
 
 impl Drop for LauncherScreensaver {

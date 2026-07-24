@@ -4604,6 +4604,14 @@ pub(super) fn run_launcher_loop(
                 preview_cache_state: preview.trace_cache_state(),
                 preview_transition: preview_transition_trace,
                 composition_status: composition_status.clone(),
+                screensaver_active: screensaver.active && screensaver_renderer.is_some(),
+                screensaver_active_cards: screensaver_renderer
+                    .as_ref()
+                    .map(LauncherScreensaver::active_card_count)
+                    .unwrap_or(0),
+                screensaver_archive_loading: screensaver_renderer
+                    .as_ref()
+                    .is_some_and(LauncherScreensaver::is_loading_archive),
             },
             pacing: pacing_trace,
             presentation,
@@ -4761,6 +4769,7 @@ pub(super) fn run_launcher_loop(
     // runners). Normal device execution exits here, but the global policy is
     // deliberately restored to its permissive default for lifecycle safety.
     mister_magik_catalog::builder_service::set_background_heavy_work_allowed(true);
+    frame_accounting.finish_preview_scroll_trace();
     let elapsed = run_start.elapsed().as_secs_f64();
     crate::ui_logln!(
         "done: {frames} frames in {elapsed:.1}s = {:.1} fps avg",

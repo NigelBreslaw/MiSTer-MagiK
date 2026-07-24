@@ -21,6 +21,7 @@ pub enum MainSelection {
 pub enum BenchmarkScenario {
     LauncherVelocity,
     FramebufferVelocity,
+    ScreensaverVelocity,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -258,6 +259,7 @@ mod tests {
             DeviceRequest::PrepareBenchmark(BenchmarkScenario::LauncherVelocity),
             DeviceRequest::WarmupBenchmark(BenchmarkScenario::FramebufferVelocity),
             DeviceRequest::CaptureBenchmark(BenchmarkScenario::LauncherVelocity),
+            DeviceRequest::CaptureBenchmark(BenchmarkScenario::ScreensaverVelocity),
             DeviceRequest::RestoreBenchmark,
             DeviceRequest::SnapshotBenchmarkData(ColdBenchmarkScenario::CatalogLifecycle),
             DeviceRequest::EstablishBenchmarkFixture(ColdBenchmarkScenario::PreviewColdStart),
@@ -282,7 +284,7 @@ mod tests {
             DeviceRequest::CaptureFramebuffer,
         ];
         let labels: Vec<_> = requests.iter().map(DeviceRequest::label).collect();
-        assert_eq!(labels.len(), 38);
+        assert_eq!(labels.len(), 39);
         assert!(labels.iter().all(|label| !label.is_empty()));
         assert!(!labels.contains(&"run"));
         assert!(!labels.contains(&"shell"));

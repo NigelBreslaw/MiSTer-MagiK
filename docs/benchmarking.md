@@ -19,6 +19,14 @@ The fixed gates are average FPS ≥ 55, p99 work ≤ 14,500 µs, p99 wall ≤
 trace paths, warmup, duration, and thresholds are policy—not command flags.
 Velocity scenarios, never row jumps, support Arcade performance conclusions.
 
+Screensaver renderer changes select the fixed screensaver-velocity matrix. It
+starts a fresh production screensaver at 1920x1200 (960x600 framebuffer) and
+1280x720 (1280x720 framebuffer), then reports the full active interval, the
+first 180 active frames, and the remaining steady frames. Each provisional
+display transaction is cancelled before the next case and the original display
+mode is verified after the matrix. The standard velocity gates apply to the
+overall and startup intervals; steady results are diagnostic.
+
 ## Cold and catalog scenarios
 
 Catalog, preview/media, and library-persistence changes use:

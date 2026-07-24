@@ -42,12 +42,19 @@ impl Phase {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct BenchmarkResult {
     pub scenario: &'static str,
+    pub resolution: String,
+    pub phase: String,
     pub frames: usize,
     pub average_fps: f64,
     pub p99_work_us: u64,
     pub p99_wall_us: u64,
     pub max_wall_us: u64,
+    pub p99_draw_us: u64,
+    pub p99_compose_us: u64,
+    pub p99_present_us: u64,
     pub present_errors: usize,
+    pub vsync_misses: usize,
+    pub latch_drop_delta: u16,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -149,6 +156,12 @@ pub fn run_workflow(
 }
 
 pub fn infer_scenario(paths: &[PathBuf]) -> AgentResult<BenchmarkScenario> {
+    if paths
+        .iter()
+        .any(|path| path.ends_with("ui_runner/launcher_screensaver.rs"))
+    {
+        return Ok(BenchmarkScenario::ScreensaverVelocity);
+    }
     if paths.iter().any(|path| {
         path.starts_with("mister/platform/runtime/src/framebuffer")
             || path.starts_with("mister/platform/contracts")
@@ -185,7 +198,8 @@ pub fn execute(
         build: BuildSpec::for_recipe(BuildRecipe::RuntimeBenchmark),
         snapshot_created: false,
         trace: None,
-        result: None,
+        results: Vec::new(),
+        evaluation_failure: None,
         device: DeviceClient::default(),
     };
     run_workflow(&mut actions, &mut |phase, percent| {
@@ -196,13 +210,18 @@ pub fn execute(
             Some(percent),
         )?)
     })?;
-    let result = actions.result.ok_or("benchmark produced no result")?;
+    if actions.results.is_empty() {
+        return Err("benchmark produced no result".into());
+    }
     reporter.emit(
         EventKind::Progress,
         "benchmark-result",
-        &serde_json::to_string(&result).map_err(|error| error.to_string())?,
+        &serde_json::to_string(&actions.results).map_err(|error| error.to_string())?,
         Some(100),
     )?;
+    if let Some(failure) = actions.evaluation_failure {
+        return Err(failure.into());
+    }
     Ok(Outcome::Passed)
 }
 
@@ -269,7 +288,8 @@ struct ProcessActions<'a> {
     build: BuildSpec,
     snapshot_created: bool,
     trace: Option<String>,
-    result: Option<BenchmarkResult>,
+    results: Vec<BenchmarkResult>,
+    evaluation_failure: Option<String>,
     device: DeviceClient,
 }
 
@@ -351,17 +371,21 @@ impl BenchmarkActions for ProcessActions<'_> {
                 Ok(())
             }
             Phase::Analyze => {
-                self.result = Some(analyze_trace(
+                self.results = analyze_trace(
                     self.trace.as_deref().ok_or("benchmark trace is missing")?,
                     self.scenario,
-                )?);
+                )?;
                 Ok(())
             }
-            Phase::Evaluate => evaluate(
-                self.result
-                    .as_ref()
-                    .ok_or("benchmark analysis is missing")?,
-            ),
+            Phase::Evaluate => {
+                if self.results.is_empty() {
+                    return Err("benchmark analysis is missing".into());
+                }
+                if let Err(error) = evaluate(&self.results) {
+                    self.evaluation_failure = Some(error.to_string());
+                }
+                Ok(())
+            }
             Phase::Restore => unreachable!("restore has a dedicated action"),
         }
     }
@@ -523,7 +547,89 @@ fn analyze_cold_events(
     Err(format!("required structured event {expected} is missing").into())
 }
 
-fn analyze_trace(text: &str, scenario: BenchmarkScenario) -> AgentResult<BenchmarkResult> {
+#[derive(Clone, Copy)]
+struct TraceSample {
+    wall_us: u64,
+    work_us: u64,
+    draw_us: u64,
+    compose_us: u64,
+    present_us: u64,
+    present_error: bool,
+    vsync_miss: bool,
+    latch_drop_count: u16,
+}
+
+fn analyze_trace(text: &str, scenario: BenchmarkScenario) -> AgentResult<Vec<BenchmarkResult>> {
+    if scenario != BenchmarkScenario::ScreensaverVelocity {
+        let samples = parse_trace_samples(text, false)?;
+        return Ok(vec![summarize_samples(
+            scenario, "active", "overall", &samples,
+        )?]);
+    }
+
+    let mut results = Vec::new();
+    let mut resolution = None;
+    let mut section = String::new();
+    for line in text.lines() {
+        if let Some(marker) = line.strip_prefix("benchmark_resolution\t") {
+            if let Some(previous) = resolution.take() {
+                summarize_screensaver_section(previous, &section, &mut results)?;
+                section.clear();
+            }
+            resolution = marker
+                .split('\t')
+                .find_map(|field| field.strip_prefix("output="))
+                .map(str::to_string);
+        } else if resolution.is_some() {
+            section.push_str(line);
+            section.push('\n');
+        }
+    }
+    if let Some(previous) = resolution {
+        summarize_screensaver_section(previous, &section, &mut results)?;
+    }
+    if results.is_empty() {
+        return Err("screensaver benchmark contains no resolution sections".into());
+    }
+    Ok(results)
+}
+
+fn summarize_screensaver_section(
+    resolution: String,
+    text: &str,
+    results: &mut Vec<BenchmarkResult>,
+) -> AgentResult<()> {
+    let samples = parse_trace_samples(text, true)?;
+    if samples.len() < 300 {
+        return Err(format!(
+            "screensaver benchmark {resolution} contains only {} active frames",
+            samples.len()
+        )
+        .into());
+    }
+    let startup_end = 180.min(samples.len());
+    results.push(summarize_samples(
+        BenchmarkScenario::ScreensaverVelocity,
+        &resolution,
+        "overall",
+        &samples,
+    )?);
+    results.push(summarize_samples(
+        BenchmarkScenario::ScreensaverVelocity,
+        &resolution,
+        "startup-first-180",
+        &samples[..startup_end],
+    )?);
+    results.push(summarize_samples(
+        BenchmarkScenario::ScreensaverVelocity,
+        &resolution,
+        "steady",
+        &samples[startup_end..],
+    )?);
+    Ok(())
+}
+
+fn parse_trace_samples(text: &str, screensaver_only: bool) -> AgentResult<Vec<TraceSample>> {
     let mut lines = text.lines().filter(|line| !line.trim().is_empty());
     let header_line = lines
         .find(|line| line.split('\t').any(|field| field == "wall_us"))
@@ -536,79 +642,151 @@ fn analyze_trace(text: &str, scenario: BenchmarkScenario) -> AgentResult<Benchma
             .ok_or_else(|| format!("benchmark trace is missing {name}"))
     };
     let wall_index = column("wall_us")?;
-    let work_indices: Vec<_> = [
-        "prepare_us",
-        "slint_render_us",
-        "custom_draw_us",
-        "hidden_compose_us",
-        "fb_present_us",
-    ]
-    .iter()
-    .filter_map(|name| header.iter().position(|field| field == name))
-    .collect();
+    let prepare_index = column("prepare_us")?;
+    let draw_index = column("slint_render_us")?;
+    let custom_index = column("custom_draw_us")?;
+    let compose_index = column("hidden_compose_us")?;
+    let present_index = column("fb_present_us")?;
     let status_index = header
         .iter()
         .position(|field| *field == "main_present_status");
-    let mut walls = Vec::new();
-    let mut work = Vec::new();
-    let mut present_errors = 0;
+    let miss_index = header
+        .iter()
+        .position(|field| *field == "vsync_miss_streak");
+    let drop_index = header
+        .iter()
+        .position(|field| *field == "main_present_drop_count");
+    let screensaver_index = header
+        .iter()
+        .position(|field| *field == "screensaver_active");
+    let mut samples = Vec::new();
     for line in lines {
         let fields: Vec<_> = line.split('\t').collect();
+        if screensaver_only
+            && screensaver_index
+                .and_then(|index| fields.get(index))
+                .is_none_or(|value| *value != "1")
+        {
+            continue;
+        }
         let Some(wall) = fields
             .get(wall_index)
             .and_then(|value| value.parse::<u64>().ok())
         else {
             continue;
         };
-        walls.push(wall);
-        work.push(
-            work_indices
-                .iter()
-                .filter_map(|index| fields.get(*index)?.parse::<u64>().ok())
-                .sum(),
-        );
-        if status_index
-            .and_then(|index| fields.get(index))
-            .is_some_and(|status| !matches!(*status, "ok" | "latched" | "presented"))
-        {
-            present_errors += 1;
-        }
+        let value = |index: usize| {
+            fields
+                .get(index)
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or_default()
+        };
+        let draw_us = value(draw_index);
+        let compose_us = value(compose_index);
+        let present_us = value(present_index);
+        samples.push(TraceSample {
+            wall_us: wall,
+            work_us: value(prepare_index)
+                .saturating_add(draw_us)
+                .saturating_add(value(custom_index))
+                .saturating_add(compose_us)
+                .saturating_add(present_us),
+            draw_us,
+            compose_us,
+            present_us,
+            present_error: status_index
+                .and_then(|index| fields.get(index))
+                .is_some_and(|status| !matches!(*status, "ok" | "latched" | "presented")),
+            vsync_miss: miss_index.map(|index| value(index) > 0).unwrap_or(false),
+            latch_drop_count: drop_index
+                .map(|index| value(index) as u16)
+                .unwrap_or_default(),
+        });
     }
-    if walls.len() < 120 {
+    Ok(samples)
+}
+
+fn summarize_samples(
+    scenario: BenchmarkScenario,
+    resolution: &str,
+    phase: &str,
+    samples: &[TraceSample],
+) -> AgentResult<BenchmarkResult> {
+    if samples.len() < 120 {
         return Err(format!(
-            "benchmark trace contains only {} usable frames",
-            walls.len()
+            "benchmark {resolution} {phase} contains only {} usable frames",
+            samples.len()
         )
         .into());
     }
+    let mut walls = samples
+        .iter()
+        .map(|sample| sample.wall_us)
+        .collect::<Vec<_>>();
+    let mut work = samples
+        .iter()
+        .map(|sample| sample.work_us)
+        .collect::<Vec<_>>();
+    let mut draw = samples
+        .iter()
+        .map(|sample| sample.draw_us)
+        .collect::<Vec<_>>();
+    let mut compose = samples
+        .iter()
+        .map(|sample| sample.compose_us)
+        .collect::<Vec<_>>();
+    let mut present = samples
+        .iter()
+        .map(|sample| sample.present_us)
+        .collect::<Vec<_>>();
     let average_wall = walls.iter().sum::<u64>() as f64 / walls.len() as f64;
     Ok(BenchmarkResult {
         scenario: scenario_label(scenario),
+        resolution: resolution.into(),
+        phase: phase.into(),
         frames: walls.len(),
         average_fps: 1_000_000.0 / average_wall,
         p99_work_us: percentile(&mut work, 99),
         p99_wall_us: percentile(&mut walls, 99),
         max_wall_us: walls.iter().copied().max().unwrap_or_default(),
-        present_errors,
+        p99_draw_us: percentile(&mut draw, 99),
+        p99_compose_us: percentile(&mut compose, 99),
+        p99_present_us: percentile(&mut present, 99),
+        present_errors: samples.iter().filter(|sample| sample.present_error).count(),
+        vsync_misses: samples.iter().filter(|sample| sample.vsync_miss).count(),
+        latch_drop_delta: samples
+            .last()
+            .zip(samples.first())
+            .map(|(last, first)| last.latch_drop_count.saturating_sub(first.latch_drop_count))
+            .unwrap_or_default(),
     })
 }
 
-fn evaluate(result: &BenchmarkResult) -> AgentResult<()> {
+fn evaluate(results: &[BenchmarkResult]) -> AgentResult<()> {
     let mut failures = Vec::new();
-    if result.average_fps < 55.0 {
-        failures.push(format!("average_fps={:.1}<55", result.average_fps));
-    }
-    if result.p99_work_us > 14_500 {
-        failures.push(format!("p99_work_us={}>14500", result.p99_work_us));
-    }
-    if result.p99_wall_us > 16_000 {
-        failures.push(format!("p99_wall_us={}>16000", result.p99_wall_us));
-    }
-    if result.max_wall_us > 16_667 {
-        failures.push(format!("max_wall_us={}>16667", result.max_wall_us));
-    }
-    if result.present_errors != 0 {
-        failures.push(format!("present_errors={}", result.present_errors));
+    for result in results.iter().filter(|result| result.phase != "steady") {
+        let label = format!("{} {}", result.resolution, result.phase);
+        if result.average_fps < 55.0 {
+            failures.push(format!("{label} average_fps={:.1}<55", result.average_fps));
+        }
+        if result.p99_work_us > 14_500 {
+            failures.push(format!("{label} p99_work_us={}>14500", result.p99_work_us));
+        }
+        if result.p99_wall_us > 16_000 {
+            failures.push(format!("{label} p99_wall_us={}>16000", result.p99_wall_us));
+        }
+        if result.max_wall_us > 16_667 {
+            failures.push(format!("{label} max_wall_us={}>16667", result.max_wall_us));
+        }
+        if result.present_errors != 0 {
+            failures.push(format!("{label} present_errors={}", result.present_errors));
+        }
+        if result.latch_drop_delta != 0 {
+            failures.push(format!(
+                "{label} latch_drop_delta={}",
+                result.latch_drop_delta
+            ));
+        }
     }
     if failures.is_empty() {
         Ok(())
@@ -630,6 +808,7 @@ fn scenario_label(scenario: BenchmarkScenario) -> &'static str {
     match scenario {
         BenchmarkScenario::LauncherVelocity => "launcher-velocity",
         BenchmarkScenario::FramebufferVelocity => "framebuffer-velocity",
+        BenchmarkScenario::ScreensaverVelocity => "screensaver-velocity",
     }
 }
 
@@ -735,6 +914,13 @@ mod tests {
             infer_scenario(&[PathBuf::from("apps/mister/src/launcher.rs")]).unwrap(),
             BenchmarkScenario::LauncherVelocity
         );
+        assert_eq!(
+            infer_scenario(&[PathBuf::from(
+                "apps/mister/src/ui_runner/launcher_screensaver.rs"
+            )])
+            .unwrap(),
+            BenchmarkScenario::ScreensaverVelocity
+        );
         assert!(infer_scenario(&[PathBuf::from("docs/device.md")]).is_err());
         assert_eq!(
             infer_cold_scenario(&[PathBuf::from("crates/catalog/src/builder.rs")]),
@@ -794,6 +980,34 @@ mod tests {
             evaluate(&analyze_trace(&slow, BenchmarkScenario::LauncherVelocity).unwrap()).is_err()
         );
         assert!(analyze_trace("bad", BenchmarkScenario::LauncherVelocity).is_err());
+    }
+
+    #[test]
+    fn screensaver_analyzer_reports_each_resolution_and_startup_window() {
+        let mut trace = String::new();
+        for (mode, output, framebuffer) in [
+            ("hdmi-1920x1200p60", "1920x1200", "960x600"),
+            ("hdmi-1280x720p60", "1280x720", "1280x720"),
+        ] {
+            trace.push_str(&format!(
+                "benchmark_resolution\tmode={mode}\toutput={output}\tframebuffer={framebuffer}\n"
+            ));
+            trace.push_str("frame\tprepare_us\tslint_render_us\tcustom_draw_us\thidden_compose_us\tfb_present_us\twall_us\tmain_present_status\tvsync_miss_streak\tmain_present_drop_count\tscreensaver_active\n");
+            for frame in 0..360 {
+                trace.push_str(&format!(
+                    "{frame}\t100\t200\t100\t100\t100\t15000\tok\t0\t0\t1\n"
+                ));
+            }
+        }
+
+        let results = analyze_trace(&trace, BenchmarkScenario::ScreensaverVelocity).unwrap();
+
+        assert_eq!(results.len(), 6);
+        assert_eq!(results[0].resolution, "1920x1200");
+        assert_eq!(results[1].phase, "startup-first-180");
+        assert_eq!(results[2].phase, "steady");
+        assert_eq!(results[3].resolution, "1280x720");
+        assert!(evaluate(&results).is_ok());
     }
 
     #[test]
