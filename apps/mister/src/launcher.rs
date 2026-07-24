@@ -6889,6 +6889,37 @@ mod tests {
     }
 
     #[test]
+    fn display_combo_navigates_to_the_last_selectable_mode() {
+        let catalog = multi_system_catalog();
+        let mut nav = LauncherNav::new();
+        let count = mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS.len();
+        assert_eq!(count, 10);
+        nav.screen = Screen::Settings;
+        nav.display_combo_open = true;
+        nav.display_selected = 0;
+        nav.display_highlighted = count - 2;
+
+        let t0 = Instant::now();
+        let down = pad_with(|pad| pad.dpad_down = true);
+        assert!(nav.handle_input(&down, t0, &catalog).is_none());
+        assert_eq!(nav.display_highlighted, count - 1);
+        release(&mut nav, &catalog, t0, 16);
+        assert!(
+            nav.handle_input(&down, t0 + Duration::from_millis(32), &catalog)
+                .is_none()
+        );
+        assert_eq!(nav.display_highlighted, count - 1);
+        release(&mut nav, &catalog, t0, 48);
+
+        let press_a = pad_with(|pad| pad.btn_a = true);
+        let event = nav
+            .handle_input(&press_a, t0 + Duration::from_millis(64), &catalog)
+            .expect("last display mode");
+        assert_eq!(event.action, LauncherAction::ApplyDisplayResolution);
+        assert_eq!(event.path.as_deref(), Some("crt-576p50"));
+    }
+
+    #[test]
     fn display_confirmation_stays_cancellable_while_persistence_is_busy() {
         let catalog = multi_system_catalog();
         let mut nav = LauncherNav::new();

@@ -83,16 +83,6 @@ pub const DISPLAY_RESOLUTIONS: &[DisplayResolution] = &[
         forced_scandoubler: 0,
     },
     DisplayResolution {
-        id: "hdmi-2560x1440p60",
-        label: "2560×1440 (16:9)",
-        output_w: 2560,
-        output_h: 1440,
-        video_mode: Some("14"),
-        direct_video: 0,
-        menu_pal: 0,
-        forced_scandoubler: 0,
-    },
-    DisplayResolution {
         id: "crt-240p60",
         label: "640×240 @ 60 Hz (4:3) — CRT/VGA, 15 kHz",
         output_w: 640,
@@ -222,6 +212,8 @@ mod tests {
 
     #[test]
     fn catalog_has_unique_stable_ids() {
+        assert_eq!(DISPLAY_RESOLUTIONS.len(), 10);
+        assert!(find("hdmi-2560x1440p60").is_none());
         for (index, mode) in DISPLAY_RESOLUTIONS.iter().enumerate() {
             assert!(
                 DISPLAY_RESOLUTIONS[..index]
