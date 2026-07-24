@@ -25,7 +25,7 @@ module tb_mister_magik_vblank_latch;
 
 	wire response_valid;
 	wire [15:0] response_data;
-	wire apply;
+	wire route_apply;
 	wire route_en;
 	wire route_flt;
 	wire [5:0] route_fmt;
@@ -72,7 +72,7 @@ module tb_mister_magik_vblank_latch;
 		.active_lfb_stride(active_lfb_stride),
 		.response_valid(response_valid),
 		.response_data(response_data),
-		.apply(apply),
+		.route_apply(route_apply),
 		.route_en(route_en),
 		.route_flt(route_flt),
 		.route_fmt(route_fmt),
@@ -95,7 +95,7 @@ module tb_mister_magik_vblank_latch;
 	always #5 clk_sys = ~clk_sys;
 
 	always @(posedge clk_sys) begin
-		if(apply) begin
+		if(route_apply) begin
 			apply_count = apply_count + 1;
 			captured_seq = pending_seq;
 			captured_base = route_base;
@@ -239,10 +239,7 @@ module tb_mister_magik_vblank_latch;
 		end
 	endtask
 
-	task automatic raise_vblank_and_wait_for_flip(
-		input [15:0] expected_flip,
-		input integer expected_apply_count
-	);
+	task automatic raise_vblank_and_wait_for_apply(input integer expected_apply_count);
 		integer i;
 		reg found;
 		begin
@@ -252,17 +249,35 @@ module tb_mister_magik_vblank_latch;
 			for(i = 0; i < 8; i = i + 1) begin
 				@(posedge clk_sys);
 				#1;
+				if(apply_count == expected_apply_count) begin
+					found = 1'b1;
+					i = 8;
+				end
+			end
+			if(!found) fail("bounded wait for vblank route apply expired");
+		end
+	endtask
+
+	task automatic lower_vblank_and_wait_for_flip(input [15:0] expected_flip);
+		integer i;
+		reg found;
+		begin
+			@(negedge clk_sys);
+			hdmi_vbl = 1'b0;
+			found = 1'b0;
+			for(i = 0; i < 8; i = i + 1) begin
+				@(posedge clk_sys);
+				#1;
 				if(flip_count == expected_flip) begin
 					found = 1'b1;
 					i = 8;
 				end
 			end
-			if(!found) fail("bounded wait for vblank flip expired");
-			if(apply_count != expected_apply_count) fail("apply pulse count mismatch");
+			if(!found) fail("bounded wait for vblank completion expired");
 		end
 	endtask
 
-	task automatic lower_vblank;
+	task automatic lower_vblank_without_completion;
 		begin
 			@(negedge clk_sys);
 			hdmi_vbl = 1'b0;
@@ -323,24 +338,33 @@ module tb_mister_magik_vblank_latch;
 		idle_cycles(6);
 		if((flip_count != 0) || (apply_count != 0)) fail("route applied without vblank edge");
 
-		raise_vblank_and_wait_for_flip(16'd1, 1);
-		expect16(active_seq, 16'h0010, "active sequence after first flip");
-		if(pending) fail("pending did not clear after flip");
+		raise_vblank_and_wait_for_apply(1);
+		expect16(active_seq, 16'h0000, "route apply must not release ownership");
+		expect16(flip_count, 16'd0, "route apply must not count completion");
+		if(!pending) fail("pending cleared before scaler-safe completion");
 		if(captured_seq !== 16'h0010 || captured_mode !== 8'hEA ||
 		   captured_base !== 32'h12345678 || captured_width !== 12'd960 ||
 		   captured_height !== 12'd540 || captured_hmin !== 12'd11 ||
 		   captured_hmax !== 12'd970 || captured_vmin !== 12'd22 ||
 		   captured_vmax !== 12'd561 || captured_stride !== 14'd1920)
 			fail("route was not captured atomically on apply");
-		requirement_coverage[3] = 1'b1; // LATCH-004
 
-		// Keeping vblank high must not create another apply.
+		// Keeping vblank high must neither reapply nor release the old slot.
 		idle_cycles(5);
-		if((flip_count != 1) || (apply_count != 1)) fail("level or falling vblank applied route");
+		if((flip_count != 0) || (apply_count != 1) || !pending)
+			fail("vblank level completed or reapplied route");
+		lower_vblank_and_wait_for_flip(16'd1);
+		expect16(active_seq, 16'h0010, "active sequence after safe completion");
+		if(pending) fail("pending did not clear after safe completion");
+		requirement_coverage[3] = 1'b1; // LATCH-004
 		requirement_coverage[7] = 1'b1; // LATCH-008
 
 		// A complete replacement while pending wins and accounts one dropped post.
-		// Stage it while vblank remains high, then prove the falling edge is inert.
+		// Stage it after a blanking edge, then prove the falling edge is inert
+		// because no route was applied during that blank.
+		@(negedge clk_sys);
+		hdmi_vbl = 1'b1;
+		idle_cycles(4);
 		send_route(16'h8021, 32'h20001000, 12'd1280, 12'd720,
 		           12'd1, 12'd1280, 12'd2, 12'd721, 14'd2560, 16'h0020);
 		send_route(16'h4022, 32'h30002000, 12'd640, 12'd480,
@@ -349,17 +373,36 @@ module tb_mister_magik_vblank_latch;
 		expect16(drop_count, 16'd1, "replacement drop count");
 		expect16(pending_seq, 16'h0021, "replacement pending sequence");
 		if((flip_count != 1) || (apply_count != 1)) fail("high vblank level applied replacement");
-		lower_vblank();
+		lower_vblank_without_completion();
 		if(!pending || (flip_count != 1) || (apply_count != 1))
 			fail("falling vblank edge applied replacement");
-		raise_vblank_and_wait_for_flip(16'd2, 2);
+		raise_vblank_and_wait_for_apply(2);
+		if(!pending || (flip_count != 1)) fail("replacement released before blanking end");
+		lower_vblank_and_wait_for_flip(16'd2);
 		expect16(active_seq, 16'h0021, "replacement active sequence");
 		if(captured_seq !== 16'h0021 || captured_mode !== 8'h62 ||
 		   captured_base !== 32'h30002000 || captured_width !== 12'd640 ||
 		   captured_height !== 12'd480 || captured_stride !== 14'd1280)
 			fail("replacement route did not win atomically");
 		requirement_coverage[4] = 1'b1; // LATCH-005
-		lower_vblank();
+
+		// A post that replaces an already-applied route must remain pending for
+		// the following frame. Completing the in-flight route cannot release
+		// the replacement or report the wrong active sequence.
+		send_route(16'h8011, 32'h41000000, 12'd640, 12'd576,
+		           12'd0, 12'd639, 12'd0, 12'd575, 14'd1280, 16'h0030);
+		raise_vblank_and_wait_for_apply(3);
+		send_route(16'h8012, 32'h42000000, 12'd640, 12'd576,
+		           12'd0, 12'd639, 12'd0, 12'd575, 14'd1280, 16'h0031);
+		expect16(drop_count, 16'd2, "in-flight replacement drop count");
+		lower_vblank_and_wait_for_flip(16'd3);
+		expect16(active_seq, 16'h0030, "in-flight route completion sequence");
+		expect16(pending_seq, 16'h0031, "queued replacement sequence");
+		if(!pending) fail("in-flight replacement was released prematurely");
+		raise_vblank_and_wait_for_apply(4);
+		lower_vblank_and_wait_for_flip(16'd4);
+		expect16(active_seq, 16'h0031, "queued replacement active sequence");
+		if(pending) fail("queued replacement did not complete");
 
 		// Exact status layout, including externally-owned active route fields.
 		active_lfb_en = 1'b1;
@@ -367,12 +410,12 @@ module tb_mister_magik_vblank_latch;
 		active_lfb_width = 12'd1280;
 		active_lfb_height = 12'd720;
 		active_lfb_stride = 14'd2560;
-		expect_status(4'd0, 16'h0021);
-		expect_status(4'd1, 16'h0021);
+		expect_status(4'd0, 16'h0031);
+		expect_status(4'd1, 16'h0031);
 		expect_status(4'd2, 16'h0001);
-		expect_status(4'd3, 16'd2);
-		expect_status(4'd4, 16'd3);
-		expect_status(4'd5, 16'd1);
+		expect_status(4'd3, 16'd4);
+		expect_status(4'd4, 16'd5);
+		expect_status(4'd5, 16'd2);
 		expect_status(4'd6, 16'hCDEF);
 		expect_status(4'd7, 16'h89AB);
 		expect_status(4'd8, 16'd1280);
@@ -393,14 +436,16 @@ module tb_mister_magik_vblank_latch;
 		expect16(post_count, 16'h0001, "post count after wrapped replacement");
 		expect16(drop_count, 16'h0000, "drop counter wrap");
 		expect16(pending_seq, 16'hFFFF, "maximum pending sequence");
-		raise_vblank_and_wait_for_flip(16'h0000, 3);
+		raise_vblank_and_wait_for_apply(5);
+		expect16(flip_count, 16'hFFFF, "wrapped flip must wait for blanking end");
+		lower_vblank_and_wait_for_flip(16'h0000);
 		expect16(flip_count, 16'h0000, "flip counter wrap");
 		expect16(active_seq, 16'hFFFF, "maximum active sequence");
-		lower_vblank();
 		send_route(16'h0000, 32'h00000000, 12'd0, 12'd0,
 		           12'd0, 12'd0, 12'd0, 12'd0, 14'd0, 16'h0000);
 		expect16(pending_seq, 16'h0000, "sequence wrap to zero");
-		raise_vblank_and_wait_for_flip(16'h0001, 4);
+		raise_vblank_and_wait_for_apply(6);
+		lower_vblank_and_wait_for_flip(16'h0001);
 		expect16(active_seq, 16'h0000, "active sequence wrap");
 		requirement_coverage[6] = 1'b1; // LATCH-007
 
