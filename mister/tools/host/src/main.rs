@@ -2340,9 +2340,10 @@ fn run_crt_screensaver_trial_with(connection: &ConnectionConfig) -> Result<Strin
     let log = exec_checked_output(
         &recovery_session,
         "screensaver trial log",
-        "grep -E 'screensaver_startup_timing|screensaver_scaler|launcher fps|latch_failure_tsv' /tmp/mister-magik-crt-screensaver.log | tail -n 80",
+        "grep -E 'screensaver_startup_timing|screensaver_loader|screensaver_scaler|launcher fps|latch_failure_tsv' /tmp/mister-magik-crt-screensaver.log | tail -n 80",
     )?;
-    if !log.stdout.contains("milestone=first_saver_present") {
+    let rendered_frames = status.get("frames").and_then(Value::as_u64).unwrap_or(0);
+    if rendered_frames == 0 || !log.stdout.contains("screensaver_loader path=") {
         return Err("product screensaver did not reach its first presented frame".into());
     }
     let bytes = fs::read(&usb_video)?;
