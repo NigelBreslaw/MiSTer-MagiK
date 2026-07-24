@@ -21,6 +21,7 @@ module mister_magik_vblank_latch (
 
 	output wire        response_valid,
 	output reg  [15:0] response_data,
+	output wire        prepare,
 	output wire        apply,
 
 	output reg         route_en = 1'b0,
@@ -50,8 +51,10 @@ module mister_magik_vblank_latch (
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
 	reg vbl_sys = 1'b0;
 	reg vbl_old = 1'b0;
-	wire vbl_rise = ~vbl_old & vbl_sys;
-	assign apply = pending && vbl_rise;
+	reg base_prepared = 1'b0;
+	wire vbl_fall = vbl_old & ~vbl_sys;
+	assign prepare = pending && !base_prepared && vbl_fall;
+	assign apply = pending && base_prepared && vbl_fall;
 	assign response_valid =
 		(cmd_start && ((cmd_id == MAGIK_UIO_SET_FBUF_LATCH) ||
 		               (cmd_id == MAGIK_UIO_GET_FBUF_LATCH) ||
@@ -101,10 +104,14 @@ module mister_magik_vblank_latch (
 		vbl_meta <= hdmi_vbl;
 		vbl_sys <= vbl_meta;
 		vbl_old <= vbl_sys;
+		if(prepare) begin
+			base_prepared <= 1'b1;
+		end
 		if(apply) begin
 			active_seq <= pending_seq;
 			flip_count <= flip_count + 1'd1;
 			pending <= 1'b0;
+			base_prepared <= 1'b0;
 		end
 
 		if(cmd_data && (cmd_id == MAGIK_UIO_SET_FBUF_LATCH)) begin
@@ -123,6 +130,7 @@ module mister_magik_vblank_latch (
 				4'd10: begin
 					pending_seq <= data_in;
 					pending <= 1'b1;
+					base_prepared <= 1'b0;
 					post_count <= post_count + 1'd1;
 					if(pending) drop_count <= drop_count + 1'd1;
 				end
