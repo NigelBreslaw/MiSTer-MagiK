@@ -3987,6 +3987,33 @@ mod tests {
     }
 
     #[test]
+    fn hdmi_integer_renderer_does_not_paint_an_offset_shadow() {
+        let background = color565(180, 180, 180);
+        let image = SaverImage {
+            pixels: vec![color565(255, 255, 255); 4 * 3],
+            w: 4,
+            h: 3,
+            stride: 4,
+        };
+        let half_shifted = prepare_half_shifted(&image);
+        let mut dst = vec![background; 10 * 7];
+
+        blit_scaled_subpixel_x(
+            &mut dst,
+            10,
+            7,
+            &image,
+            &half_shifted,
+            &[0; 3],
+            PARADE_SUBPIXEL_ONE,
+            1,
+        );
+
+        assert!(dst[..10].iter().all(|pixel| *pixel == background));
+        assert!(dst[4 * 10..].iter().all(|pixel| *pixel == background));
+    }
+
+    #[test]
     fn parade_card_rim_keeps_the_baked_bevel() {
         let base = color565(120, 120, 120);
         let mut image = SaverImage {

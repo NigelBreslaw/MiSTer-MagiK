@@ -283,7 +283,7 @@ impl DeviceOperations for NativeDevice {
             }
             DeviceRequest::SnapshotBenchmarkRuntime { remote } => {
                 validate_delivery_remote(remote).map_err(device_failure)?;
-                let session = connect(10).map_err(device_failure)?;
+                let session = connect_with(&config.connection, 10).map_err(device_failure)?;
                 exec_checked(
                     &session,
                     "runtime snapshot",
@@ -296,13 +296,13 @@ impl DeviceOperations for NativeDevice {
                 "snapshotted".into()
             }
             DeviceRequest::DeployBenchmarkRuntime { local, remote } => {
-                let session = connect(10).map_err(device_failure)?;
+                let session = connect_with(&config.connection, 10).map_err(device_failure)?;
                 deploy_magik_bin(&session, local, remote).map_err(device_failure)?;
                 "deployed".into()
             }
             DeviceRequest::RollbackBenchmarkRuntime { remote } => {
                 validate_delivery_remote(remote).map_err(device_failure)?;
-                let session = connect(10).map_err(device_failure)?;
+                let session = connect_with(&config.connection, 10).map_err(device_failure)?;
                 exec_checked(
                     &session,
                     "runtime suspend for rollback",
@@ -346,7 +346,7 @@ impl DeviceOperations for NativeDevice {
                 "healthy".into()
             }
             DeviceRequest::PrepareBenchmark(scenario) => {
-                let session = connect(10).map_err(device_failure)?;
+                let session = connect_with(&config.connection, 10).map_err(device_failure)?;
                 exec_checked(
                     &session,
                     "benchmark prepare",
@@ -357,16 +357,16 @@ impl DeviceOperations for NativeDevice {
             }
             DeviceRequest::WarmupBenchmark(scenario) => {
                 if *scenario != BenchmarkScenario::ScreensaverVelocity {
-                    let session = connect(10).map_err(device_failure)?;
+                    let session = connect_with(&config.connection, 10).map_err(device_failure)?;
                     run_launcher_benchmark(&session, *scenario, true).map_err(device_failure)?;
                 }
                 "warmed".into()
             }
             DeviceRequest::CaptureBenchmark(scenario) => {
                 if *scenario == BenchmarkScenario::ScreensaverVelocity {
-                    run_screensaver_benchmark_matrix().map_err(device_failure)?
+                    run_screensaver_benchmark_matrix(&config.connection).map_err(device_failure)?
                 } else {
-                    let session = connect(10).map_err(device_failure)?;
+                    let session = connect_with(&config.connection, 10).map_err(device_failure)?;
                     run_launcher_benchmark(&session, *scenario, false).map_err(device_failure)?;
                     remote_read(&session, benchmark_trace_path(false)).ok_or_else(|| {
                         DeviceFailure::OperationFailed("benchmark trace is missing".into())
@@ -374,7 +374,7 @@ impl DeviceOperations for NativeDevice {
                 }
             }
             DeviceRequest::RestoreBenchmark => {
-                let session = connect(10).map_err(device_failure)?;
+                let session = connect_with(&config.connection, 10).map_err(device_failure)?;
                 launcher_restart(
                     &session,
                     &LauncherRestartOptions {
@@ -3086,11 +3086,15 @@ fn run_launcher_benchmark(
     exec_checked(
         session,
         "benchmark trace wait",
-        &format!(
-            "set -eu; elapsed=0; while [ $elapsed -lt 20 ]; do test -s {trace} && test -e {complete} && exit 0; sleep 1; elapsed=$((elapsed + 1)); done; exit 1"
-        ),
+        &benchmark_trace_wait_command(trace, complete),
     )?;
     Ok(())
+}
+
+fn benchmark_trace_wait_command(trace: &str, complete: &str) -> String {
+    format!(
+        "set -u; elapsed=0; while [ $elapsed -lt 20 ]; do test -s {trace} && test -e {complete} && exit 0; sleep 1; elapsed=$((elapsed + 1)); done; printf 'benchmark_trace_diagnostic\\ttrace='; if test -e {trace}; then wc -l <{trace}; else printf 'missing\\n'; fi; printf 'benchmark_trace_diagnostic\\tcomplete='; if test -e {complete}; then printf 'present\\n'; else printf 'missing\\n'; fi; grep -E 'launcher_bench_scenario|preview_scroll_trace|screensaver_startup|done:|error|failed' /tmp/mister-magik-slint.log 2>/dev/null | tail -n 40 || true; exit 1"
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -3130,8 +3134,8 @@ fn restore_benchmark_display_if_pending(session: &Session) -> Result<()> {
     Ok(())
 }
 
-fn run_screensaver_benchmark_matrix() -> Result<String> {
-    let session = connect(10)?;
+fn run_screensaver_benchmark_matrix(connection: &ConnectionConfig) -> Result<String> {
+    let session = connect_with(connection, 10)?;
     let original_reply = exec_checked_output(
         &session,
         "query original benchmark display mode",
@@ -3146,7 +3150,7 @@ fn run_screensaver_benchmark_matrix() -> Result<String> {
     let mut output = String::new();
     let run_result = (|| -> Result<()> {
         for mode in SCREENSAVER_BENCHMARK_MODES {
-            let session = connect(10)?;
+            let session = connect_with(connection, 10)?;
             let ready = wait_launcher_ready(&session, Instant::now(), Duration::from_secs(15))?;
             exec_checked(
                 &session,
@@ -3158,7 +3162,7 @@ fn run_screensaver_benchmark_matrix() -> Result<String> {
             )?;
             drop(session);
 
-            let session = connect(10)?;
+            let session = connect_with(connection, 10)?;
             wait_launcher_ready_after(
                 &session,
                 ready.launcher_pid,
@@ -3182,13 +3186,13 @@ fn run_screensaver_benchmark_matrix() -> Result<String> {
     })();
 
     if let Err(error) = run_result {
-        if let Ok(session) = connect(10) {
+        if let Ok(session) = connect_with(connection, 10) {
             let _ = restore_benchmark_display_if_pending(&session);
         }
         return Err(error);
     }
 
-    let session = connect(10)?;
+    let session = connect_with(connection, 10)?;
     let restored_reply = exec_checked_output(
         &session,
         "verify original benchmark display mode",
@@ -10724,6 +10728,16 @@ H: Handlers=event3 js0"#
 
         assert!(!command.contains(";;"));
         assert!(command.contains(benchmark_trace_complete_path(false)));
+    }
+
+    #[test]
+    fn benchmark_trace_timeout_preserves_actionable_device_evidence() {
+        let command = benchmark_trace_wait_command("/tmp/trace", "/tmp/complete");
+
+        assert!(command.contains("benchmark_trace_diagnostic"));
+        assert!(command.contains("wc -l"));
+        assert!(command.contains("launcher_bench_scenario"));
+        assert!(command.contains("/tmp/mister-magik-slint.log"));
     }
 
     #[test]
