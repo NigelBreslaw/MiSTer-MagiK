@@ -327,6 +327,8 @@ impl ProcessActions<'_> {
         self.device
             .execute(DeviceRequest::VerifyDevelopmentPlatform)?;
         self.device
+            .execute(DeviceRequest::VerifyHealth(Layout::Development))?;
+        self.device
             .execute(DeviceRequest::SnapshotBenchmarkRuntime {
                 remote: REMOTE_RUNTIME.into(),
             })?;
@@ -446,6 +448,8 @@ impl ProcessColdActions<'_> {
         self.device.execute(DeviceRequest::Discover)?;
         self.device
             .execute(DeviceRequest::VerifyDevelopmentPlatform)?;
+        self.device
+            .execute(DeviceRequest::VerifyHealth(Layout::Development))?;
         self.device
             .execute(DeviceRequest::SnapshotBenchmarkRuntime {
                 remote: REMOTE_RUNTIME.into(),

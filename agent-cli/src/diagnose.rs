@@ -41,6 +41,10 @@ pub struct DeviceFacts {
     pub agent_running: bool,
     pub credentials_ready: bool,
     pub firmware_compatible: bool,
+    #[serde(default)]
+    pub scanout_ready: bool,
+    #[serde(default)]
+    pub latch_ready: bool,
     pub reboot_unstable: bool,
     pub arming_files: u64,
     pub temporary_state: bool,
@@ -58,6 +62,16 @@ pub struct DeviceFacts {
     pub last_crash_report_id: String,
     #[serde(default)]
     pub last_crash_kind: String,
+    #[serde(default)]
+    pub scene: String,
+    #[serde(default)]
+    pub screen: String,
+    #[serde(default)]
+    pub input_enabled: bool,
+    #[serde(default)]
+    pub present_backend: String,
+    #[serde(default)]
+    pub present_status: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -77,6 +91,14 @@ pub struct DiagnosticReport {
     pub last_crash_report_id: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub last_crash_kind: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub scene: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub screen: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub present_backend: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub present_status: String,
 }
 
 fn is_zero(value: &u64) -> bool {
@@ -310,6 +332,8 @@ pub fn correlate(facts: &DeviceFacts, repaired: bool) -> DiagnosticReport {
         Some("Restore the device credential/token, then rerun scripts/agent diagnose.".into())
     } else if !facts.firmware_compatible {
         Some("Install the compatible MiSTer MagiK platform firmware, then rerun diagnosis.".into())
+    } else if !facts.scanout_ready || !facts.latch_ready {
+        Some("Run scripts/agent deliver to restore the coherent development platform, then rerun scripts/agent diagnose.".into())
     } else if !facts.main_running || !facts.launcher_running || !facts.agent_running {
         Some("Restore the missing MiSTer MagiK service through the attended recovery path.".into())
     } else if !facts.launcher_heartbeat_advancing {
@@ -331,6 +355,10 @@ pub fn correlate(facts: &DeviceFacts, repaired: bool) -> DiagnosticReport {
         last_crash_report: facts.last_crash_report.clone(),
         last_crash_report_id: facts.last_crash_report_id.clone(),
         last_crash_kind: facts.last_crash_kind.clone(),
+        scene: facts.scene.clone(),
+        screen: facts.screen.clone(),
+        present_backend: facts.present_backend.clone(),
+        present_status: facts.present_status.clone(),
     }
 }
 
@@ -362,6 +390,8 @@ mod tests {
             agent_running: true,
             credentials_ready: true,
             firmware_compatible: true,
+            scanout_ready: true,
+            latch_ready: true,
             launcher_heartbeat_advancing: true,
             ..DeviceFacts::default()
         }
@@ -418,6 +448,27 @@ mod tests {
                 .next_action
                 .unwrap()
                 .contains("event loop is stalled")
+        );
+    }
+
+    #[test]
+    fn failed_latch_readiness_is_not_reported_healthy() {
+        let report = correlate(
+            &DeviceFacts {
+                latch_ready: false,
+                present_backend: "compatibility-fb0".into(),
+                present_status: "compatibility".into(),
+                ..healthy()
+            },
+            false,
+        );
+        assert_eq!(report.status, "user_action_required");
+        assert_eq!(report.present_backend, "compatibility-fb0");
+        assert!(
+            report
+                .next_action
+                .unwrap()
+                .contains("scripts/agent deliver")
         );
     }
 
