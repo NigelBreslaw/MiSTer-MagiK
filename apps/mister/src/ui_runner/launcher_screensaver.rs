@@ -250,6 +250,17 @@ pub(in crate::ui_runner) struct LauncherScreensaver {
     motion_ticks_fp: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct ScreensaverFrameTrace {
+    pub(super) archive_poll_us: u128,
+    pub(super) card_adopt_us: u128,
+    pub(super) cards_adopted: usize,
+    pub(super) parade_advance_us: u128,
+    pub(super) background_us: u128,
+    pub(super) draw_order_us: u128,
+    pub(super) tile_blit_us: u128,
+}
+
 impl LauncherScreensaver {
     fn loading(
         archive_rx: Receiver<ArchiveLoadResult>,
@@ -269,7 +280,12 @@ impl LauncherScreensaver {
         }
     }
 
-    pub(in crate::ui_runner) fn render(&mut self, dst: &mut [Rgb565Pixel], w: usize, h: usize) {
+    pub(in crate::ui_runner) fn render(
+        &mut self,
+        dst: &mut [Rgb565Pixel],
+        w: usize,
+        h: usize,
+    ) -> ScreensaverFrameTrace {
         let now = Instant::now();
         let next_motion_ticks_fp =
             parade_tick_delta_fp(now.saturating_duration_since(self.motion_started_at)) as u64;
@@ -277,8 +293,10 @@ impl LauncherScreensaver {
             .saturating_sub(self.motion_ticks_fp)
             .min(i64::MAX as u64) as i64;
         self.motion_ticks_fp = next_motion_ticks_fp;
+        let archive_poll_start = Instant::now();
         self.poll_archive(w, h);
-        render_archive_parade(
+        let archive_poll_us = archive_poll_start.elapsed().as_micros();
+        let mut trace = render_archive_parade(
             dst,
             &mut self.parade,
             w,
@@ -286,10 +304,12 @@ impl LauncherScreensaver {
             self.motion_ticks_fp,
             tick_delta_fp,
         );
+        trace.archive_poll_us = archive_poll_us;
         if self.frame > 0 && self.frame % 600 == 0 {
             self.parade.log_scaler_stats();
         }
         self.frame = self.frame.wrapping_add(1);
+        trace
     }
 
     fn poll_archive(&mut self, w: usize, h: usize) {
@@ -2826,9 +2846,12 @@ impl ParadeState {
         images: Option<&[SaverImage]>,
         motion_ticks_fp: u64,
         tick_delta_fp: i64,
-    ) {
+    ) -> (u128, usize, u128) {
         let nominal_frame = motion_ticks_fp / PARADE_TICK_ONE as u64;
-        self.collect_scaled_cards(images);
+        let adopt_start = Instant::now();
+        let cards_adopted = self.collect_scaled_cards(images);
+        let card_adopt_us = adopt_start.elapsed().as_micros();
+        let advance_start = Instant::now();
         let mut exited = Vec::new();
         for tile_idx in 0..self.tiles.len() {
             if self.tiles[tile_idx].active {
@@ -2909,6 +2932,11 @@ impl ParadeState {
             self.layers[layer_idx].active_sum += active;
             self.layers[layer_idx].sample_count += 1;
         }
+        (
+            card_adopt_us,
+            cards_adopted,
+            advance_start.elapsed().as_micros(),
+        )
     }
 
     fn queue_successor(&mut self, tile_idx: usize, images: Option<&[SaverImage]>) {
@@ -2971,11 +2999,13 @@ impl ParadeState {
         }
     }
 
-    fn collect_scaled_cards(&mut self, images: Option<&[SaverImage]>) {
+    fn collect_scaled_cards(&mut self, images: Option<&[SaverImage]>) -> usize {
         let mut failed_tiles = Vec::new();
+        let mut collected = 0;
         loop {
             match self.scale_rx.try_recv() {
                 Ok(result) => {
+                    collected += 1;
                     self.scale_queue_depth = self.scale_queue_depth.saturating_sub(1);
                     match result.card {
                         Ok(card) => {
@@ -3057,6 +3087,7 @@ impl ParadeState {
         for tile_idx in failed_tiles {
             self.queue_successor(tile_idx, images);
         }
+        collected
     }
 
     fn record_prepared_card(&mut self, card: &PreparedParadeCard) {
@@ -3290,7 +3321,7 @@ fn render_parade(
     let motion_ticks_fp = frame.saturating_mul(PARADE_TICK_ONE as u64);
     render_horizontal_starfield(dst, w, h, motion_ticks_fp, state.motion);
     state.ensure_initialized(images, w, h);
-    state.advance(w, h, Some(images), motion_ticks_fp, PARADE_TICK_ONE);
+    let _ = state.advance(w, h, Some(images), motion_ticks_fp, PARADE_TICK_ONE);
     let draw_order = parade_draw_order(state);
     for tile_idx in draw_order {
         let tile = &state.tiles[tile_idx];
@@ -3305,13 +3336,28 @@ fn render_archive_parade(
     h: usize,
     motion_ticks_fp: u64,
     tick_delta_fp: i64,
-) {
+) -> ScreensaverFrameTrace {
+    let background_start = Instant::now();
     render_horizontal_starfield(dst, w, h, motion_ticks_fp, state.motion);
-    state.advance(w, h, None, motion_ticks_fp, tick_delta_fp);
+    let background_us = background_start.elapsed().as_micros();
+    let (card_adopt_us, cards_adopted, parade_advance_us) =
+        state.advance(w, h, None, motion_ticks_fp, tick_delta_fp);
+    let draw_order_start = Instant::now();
     let draw_order = parade_draw_order(state);
+    let draw_order_us = draw_order_start.elapsed().as_micros();
+    let tile_blit_start = Instant::now();
     for tile_idx in draw_order {
         let tile = &state.tiles[tile_idx];
         blit_parade_tile(dst, w, h, state.sampling_profile, tile);
+    }
+    ScreensaverFrameTrace {
+        card_adopt_us,
+        cards_adopted,
+        parade_advance_us,
+        background_us,
+        draw_order_us,
+        tile_blit_us: tile_blit_start.elapsed().as_micros(),
+        ..ScreensaverFrameTrace::default()
     }
 }
 

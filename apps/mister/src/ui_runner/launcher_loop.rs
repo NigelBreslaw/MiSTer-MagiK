@@ -11,6 +11,7 @@ use super::launcher_pacing::{
     FB0_LATE_FRAME_START_HEADROOM_US, FPGA_LATCH_LATE_FRAME_START_HEADROOM_US,
     LauncherFramePacingInput, LauncherFramePacingPolicy, LauncherPacingTrace,
 };
+use super::launcher_screensaver::ScreensaverFrameTrace;
 use super::launcher_worker_intents::{apply_launcher_worker_ui_intent, catalog_scan_message};
 #[cfg(test)]
 use super::launcher_worker_intents::{
@@ -4233,6 +4234,7 @@ pub(super) fn run_launcher_loop(
             screensaver_launcher_frame = None;
         }
         let screensaver_fade_alpha = screensaver.preview_fade_alpha(Instant::now());
+        let mut screensaver_frame_trace = ScreensaverFrameTrace::default();
         if screensaver.active
             && (screensaver_renderer.is_some() || screensaver_fade_alpha.is_some())
             && screensaver_launcher_frame.is_none()
@@ -4243,15 +4245,15 @@ pub(super) fn run_launcher_loop(
             if screensaver.active && screensaver_fade_alpha.is_some_and(|alpha| alpha < 255) {
                 let alpha = screensaver_fade_alpha.expect("checked above");
                 if let Some(renderer) = screensaver_renderer.as_mut() {
-                    Some(
-                        layer_target.render_screensaver_crossfade(
-                            renderer,
-                            screensaver_launcher_frame
-                                .as_deref()
-                                .expect("captured above"),
-                            alpha,
-                        ),
-                    )
+                    let (rect, trace) = layer_target.render_screensaver_crossfade(
+                        renderer,
+                        screensaver_launcher_frame
+                            .as_deref()
+                            .expect("captured above"),
+                        alpha,
+                    );
+                    screensaver_frame_trace = trace;
+                    Some(rect)
                 } else {
                     Some(
                         layer_target.render_screensaver_fade(
@@ -4266,10 +4268,10 @@ pub(super) fn run_launcher_loop(
                 if screensaver_launcher_frame.is_none() {
                     screensaver_launcher_frame = Some(layer_target.snapshot_cached());
                 }
-                Some(
-                    layer_target
-                        .render_screensaver(screensaver_renderer.as_mut().expect("checked above")),
-                )
+                let (rect, trace) = layer_target
+                    .render_screensaver(screensaver_renderer.as_mut().expect("checked above"));
+                screensaver_frame_trace = trace;
+                Some(rect)
             } else if screensaver.active && screensaver_fade_alpha.is_some() {
                 Some(
                     layer_target.render_screensaver_fade(
@@ -4612,6 +4614,7 @@ pub(super) fn run_launcher_loop(
                 screensaver_archive_loading: screensaver_renderer
                     .as_ref()
                     .is_some_and(LauncherScreensaver::is_loading_archive),
+                screensaver_frame_trace,
             },
             pacing: pacing_trace,
             presentation,

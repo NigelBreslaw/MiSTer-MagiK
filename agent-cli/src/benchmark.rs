@@ -52,6 +52,9 @@ pub struct BenchmarkResult {
     pub p99_draw_us: u64,
     pub p99_compose_us: u64,
     pub p99_present_us: u64,
+    pub max_wall_frame: u64,
+    pub max_wall_component: &'static str,
+    pub max_wall_component_us: u64,
     pub present_errors: usize,
     pub vsync_misses: usize,
     pub latch_drop_delta: u16,
@@ -551,11 +554,20 @@ fn analyze_cold_events(
 
 #[derive(Clone, Copy)]
 struct TraceSample {
+    frame: u64,
     wall_us: u64,
     work_us: u64,
+    prepare_us: u64,
     draw_us: u64,
+    custom_us: u64,
     compose_us: u64,
     present_us: u64,
+    screensaver_archive_poll_us: u64,
+    screensaver_card_adopt_us: u64,
+    screensaver_parade_advance_us: u64,
+    screensaver_background_us: u64,
+    screensaver_draw_order_us: u64,
+    screensaver_tile_blit_us: u64,
     present_error: bool,
     vsync_miss: bool,
     latch_drop_count: u16,
@@ -658,6 +670,14 @@ fn parse_trace_samples(text: &str, screensaver_only: bool) -> AgentResult<Vec<Tr
     let drop_index = header
         .iter()
         .position(|field| *field == "main_present_drop_count");
+    let optional_column = |name: &str| header.iter().position(|field| *field == name);
+    let frame_index = optional_column("frame");
+    let archive_poll_index = optional_column("screensaver_archive_poll_us");
+    let card_adopt_index = optional_column("screensaver_card_adopt_us");
+    let parade_advance_index = optional_column("screensaver_parade_advance_us");
+    let background_index = optional_column("screensaver_background_us");
+    let draw_order_index = optional_column("screensaver_draw_order_us");
+    let tile_blit_index = optional_column("screensaver_tile_blit_us");
     let screensaver_index = header
         .iter()
         .position(|field| *field == "screensaver_active");
@@ -684,18 +704,30 @@ fn parse_trace_samples(text: &str, screensaver_only: bool) -> AgentResult<Vec<Tr
                 .unwrap_or_default()
         };
         let draw_us = value(draw_index);
+        let prepare_us = value(prepare_index);
+        let custom_us = value(custom_index);
         let compose_us = value(compose_index);
         let present_us = value(present_index);
+        let optional_value = |index: Option<usize>| index.map(value).unwrap_or_default();
         samples.push(TraceSample {
+            frame: optional_value(frame_index),
             wall_us: wall,
-            work_us: value(prepare_index)
+            work_us: prepare_us
                 .saturating_add(draw_us)
-                .saturating_add(value(custom_index))
+                .saturating_add(custom_us)
                 .saturating_add(compose_us)
                 .saturating_add(present_us),
+            prepare_us,
             draw_us,
+            custom_us,
             compose_us,
             present_us,
+            screensaver_archive_poll_us: optional_value(archive_poll_index),
+            screensaver_card_adopt_us: optional_value(card_adopt_index),
+            screensaver_parade_advance_us: optional_value(parade_advance_index),
+            screensaver_background_us: optional_value(background_index),
+            screensaver_draw_order_us: optional_value(draw_order_index),
+            screensaver_tile_blit_us: optional_value(tile_blit_index),
             present_error: status_index
                 .and_then(|index| fields.get(index))
                 .is_some_and(|status| !matches!(*status, "ok" | "latched" | "presented")),
@@ -742,6 +774,11 @@ fn summarize_samples(
         .map(|sample| sample.present_us)
         .collect::<Vec<_>>();
     let average_wall = walls.iter().sum::<u64>() as f64 / walls.len() as f64;
+    let max_wall_sample = samples
+        .iter()
+        .max_by_key(|sample| sample.wall_us)
+        .ok_or("benchmark has no maximum frame")?;
+    let (max_wall_component, max_wall_component_us) = dominant_max_wall_component(max_wall_sample);
     Ok(BenchmarkResult {
         scenario: scenario_label(scenario),
         resolution: resolution.into(),
@@ -754,6 +791,9 @@ fn summarize_samples(
         p99_draw_us: percentile(&mut draw, 99),
         p99_compose_us: percentile(&mut compose, 99),
         p99_present_us: percentile(&mut present, 99),
+        max_wall_frame: max_wall_sample.frame,
+        max_wall_component,
+        max_wall_component_us,
         present_errors: samples.iter().filter(|sample| sample.present_error).count(),
         vsync_misses: samples.iter().filter(|sample| sample.vsync_miss).count(),
         latch_drop_delta: samples
@@ -762,6 +802,42 @@ fn summarize_samples(
             .map(|(last, first)| last.latch_drop_count.saturating_sub(first.latch_drop_count))
             .unwrap_or_default(),
     })
+}
+
+fn dominant_max_wall_component(sample: &TraceSample) -> (&'static str, u64) {
+    let attributed_draw = sample
+        .screensaver_archive_poll_us
+        .saturating_add(sample.screensaver_card_adopt_us)
+        .saturating_add(sample.screensaver_parade_advance_us)
+        .saturating_add(sample.screensaver_background_us)
+        .saturating_add(sample.screensaver_draw_order_us)
+        .saturating_add(sample.screensaver_tile_blit_us);
+    [
+        ("prepare", sample.prepare_us),
+        (
+            "screensaver-archive-poll",
+            sample.screensaver_archive_poll_us,
+        ),
+        ("screensaver-card-adopt", sample.screensaver_card_adopt_us),
+        (
+            "screensaver-parade-advance",
+            sample.screensaver_parade_advance_us,
+        ),
+        ("screensaver-background", sample.screensaver_background_us),
+        ("screensaver-draw-order", sample.screensaver_draw_order_us),
+        ("screensaver-tile-blit", sample.screensaver_tile_blit_us),
+        (
+            "screensaver-other-draw",
+            sample.draw_us.saturating_sub(attributed_draw),
+        ),
+        ("custom-draw", sample.custom_us),
+        ("compose", sample.compose_us),
+        ("present", sample.present_us),
+        ("pacing", sample.wall_us.saturating_sub(sample.work_us)),
+    ]
+    .into_iter()
+    .max_by_key(|(_, value)| *value)
+    .unwrap_or(("none", 0))
 }
 
 fn evaluate(results: &[BenchmarkResult]) -> AgentResult<()> {
@@ -998,10 +1074,15 @@ mod tests {
             trace.push_str(&format!(
                 "benchmark_resolution\tmode={mode}\toutput={output}\tframebuffer={framebuffer}\n"
             ));
-            trace.push_str("frame\tprepare_us\tslint_render_us\tcustom_draw_us\thidden_compose_us\tfb_present_us\twall_us\tmain_present_status\tvsync_miss_streak\tmain_present_drop_count\tscreensaver_active\n");
+            trace.push_str("frame\tprepare_us\tslint_render_us\tcustom_draw_us\thidden_compose_us\tfb_present_us\twall_us\tmain_present_status\tvsync_miss_streak\tmain_present_drop_count\tscreensaver_active\tscreensaver_archive_poll_us\tscreensaver_card_adopt_us\tscreensaver_parade_advance_us\tscreensaver_background_us\tscreensaver_draw_order_us\tscreensaver_tile_blit_us\n");
             for frame in 0..360 {
+                let (draw_us, wall_us, tile_blit_us) = if frame == 42 {
+                    (13_000, 15_500, 9_000)
+                } else {
+                    (200, 15_000, 50)
+                };
                 trace.push_str(&format!(
-                    "{frame}\t100\t200\t100\t100\t100\t15000\tok\t0\t0\t1\n"
+                    "{frame}\t100\t{draw_us}\t100\t100\t100\t{wall_us}\tok\t0\t0\t1\t10\t10\t10\t50\t10\t{tile_blit_us}\n"
                 ));
             }
         }
@@ -1013,6 +1094,9 @@ mod tests {
         assert_eq!(results[1].phase, "startup-first-180");
         assert_eq!(results[2].phase, "steady");
         assert_eq!(results[3].resolution, "1280x720");
+        assert_eq!(results[0].max_wall_frame, 42);
+        assert_eq!(results[0].max_wall_component, "screensaver-tile-blit");
+        assert_eq!(results[0].max_wall_component_us, 9_000);
         assert!(evaluate(&results).is_ok());
     }
 
