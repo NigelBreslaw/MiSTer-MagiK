@@ -89,6 +89,7 @@ if [[ "$(sha256sum "$KERNEL_SRC/drivers/video/fbdev/MiSTer_fb.c" | awk '{print $
 fi
 
 mkdir -p "$KERNEL_BUILD" "$OUT_DIR"
+RECEIPT="$OUT_DIR/build-receipt.txt"
 if command -v "${CROSS_COMPILE}gcc" >/dev/null 2>&1; then
   COMPILER_IDENTITY="$("${CROSS_COMPILE}gcc" --version | sed -n '1p')"
   IMAGE_DIGEST="local-toolchain"
@@ -102,10 +103,18 @@ else
     echo "cannot resolve immutable OCI digest for $IMAGE" >&2
     exit 1
   fi
-  COMPILER_IDENTITY="container-image:$IMAGE_DIGEST"
+  COMPILER_IDENTITY="$(sed -n 's/^compiler_identity=//p' "$RECEIPT" 2>/dev/null || true)"
+  PROVENANCE_COMPILER="$(sed -n 's/^compiler=//p' "$OUT_DIR/provenance.txt" 2>/dev/null || true)"
+  if [[ -z "$COMPILER_IDENTITY" || "$COMPILER_IDENTITY" != "$PROVENANCE_COMPILER" ]]; then
+    COMPILER_IDENTITY="unverified"
+  fi
 fi
 DOCKERFILE_SHA256="$(sha256sum "$IMAGE_DOCKERFILE" | awk '{print $1}')"
-BUILD_IDENTITY="$(
+compute_build_identity() {
+  local kernel_config_sha256="missing"
+  if [[ -f "$KERNEL_BUILD/.config" ]]; then
+    kernel_config_sha256="$(sha256sum "$KERNEL_BUILD/.config" | awk '{print $1}')"
+  fi
   {
     printf '%s\n' \
       "receipt_version=2" \
@@ -117,7 +126,8 @@ BUILD_IDENTITY="$(
       "$IMAGE" \
       "$IMAGE_DIGEST" \
       "$DOCKERFILE_SHA256" \
-      "$COMPILER_IDENTITY"
+      "$COMPILER_IDENTITY" \
+      "$kernel_config_sha256"
     cd "$ROOT"
     sha256sum \
       mister/platform/kernel/scanout-slots/mister_magik_scanout_slots.c \
@@ -127,11 +137,12 @@ BUILD_IDENTITY="$(
       mister/platform/kernel/scanout-slots/Makefile \
       scripts/build-scanout-slots-module.sh
   } | sha256sum | awk '{print $1}'
-)"
-RECEIPT="$OUT_DIR/build-receipt.txt"
+}
+BUILD_IDENTITY="$(compute_build_identity)"
 if [[ -f "$RECEIPT" ]] &&
    grep -qx "receipt_version=2" "$RECEIPT" &&
    grep -qx "build_identity=$BUILD_IDENTITY" "$RECEIPT" &&
+   grep -Fqx "compiler_identity=$COMPILER_IDENTITY" "$RECEIPT" &&
    (cd "$OUT_DIR" && sha256sum -c SHA256SUMS >/dev/null 2>&1); then
   echo "$OUT_DIR/mister_magik_scanout_slots.ko"
   exit 0
@@ -184,9 +195,6 @@ module_sha256=$module_sha256
 vermagic=$(sed -n 's/^vermagic:[[:space:]]*//p' "$OUT_DIR/modinfo.txt")
 EOF
 (cd "$OUT_DIR" && sha256sum mister_magik_scanout_slots.ko modinfo.txt provenance.txt imports.txt > SHA256SUMS)
-printf 'receipt_version=2\nbuild_identity=%s\nimage_reference=%s\nimage_digest=%s\ndockerfile_sha256=%s\ncompiler_identity=%s\n' \
-  "$BUILD_IDENTITY" "$IMAGE" "$IMAGE_DIGEST" "$DOCKERFILE_SHA256" "$COMPILER_IDENTITY" >"$RECEIPT"
-echo "$OUT_DIR/mister_magik_scanout_slots.ko"
 EOS
 )
 
@@ -196,34 +204,38 @@ if command -v "${CROSS_COMPILE}gcc" >/dev/null 2>&1; then
     OBSERVED_SOURCE_REVISION="$OBSERVED_SOURCE_REVISION" OBSERVED_SOURCE_DIRTY="$OBSERVED_SOURCE_DIRTY" BUILD_IDENTITY="$BUILD_IDENTITY" RECEIPT="$RECEIPT" \
     CROSS_COMPILE="$CROSS_COMPILE" LOCALVERSION="$LOCALVERSION" IMAGE="$IMAGE" IMAGE_DIGEST="$IMAGE_DIGEST" \
     DOCKERFILE_SHA256="$DOCKERFILE_SHA256" COMPILER_IDENTITY="$COMPILER_IDENTITY" bash -lc "$build_commands"
-  exit $?
+else
+  CONTAINER_KERNEL_SRC="/kernel-src"
+  container run --arch arm64 --rm --cpus 8 --memory 8g \
+    --volume "$ROOT:/project" \
+    --volume "$KERNEL_SRC:$CONTAINER_KERNEL_SRC" \
+    --workdir /project \
+    "$IMAGE" bash -lc "
+      set -euo pipefail
+      export KERNEL_SRC='$CONTAINER_KERNEL_SRC'
+      export KERNEL_BUILD='/project/build/scanout-slots-kernel'
+      export MODULE_DIR='/project/mister/platform/kernel/scanout-slots'
+      export OUT_DIR='/project/build/scanout-slots'
+      export CROSS_COMPILE='$CROSS_COMPILE'
+      export LOCALVERSION='$LOCALVERSION'
+      export KERNEL_REVISION='$KERNEL_REVISION'
+      export PINNED_FB_DRIVER_SHA256='$PINNED_FB_DRIVER_SHA256'
+      export PINNED_DT_SHA256='$PINNED_DT_SHA256'
+      export SOURCE_REVISION='$SOURCE_REVISION'
+      export SOURCE_DIRTY='$SOURCE_DIRTY'
+      export OBSERVED_SOURCE_REVISION='$OBSERVED_SOURCE_REVISION'
+      export OBSERVED_SOURCE_DIRTY='$OBSERVED_SOURCE_DIRTY'
+      $build_commands
+    "
 fi
 
-CONTAINER_KERNEL_SRC="/kernel-src"
-container run --arch arm64 --rm --cpus 8 --memory 8g \
-  --volume "$ROOT:/project" \
-  --volume "$KERNEL_SRC:$CONTAINER_KERNEL_SRC" \
-  --workdir /project \
-  "$IMAGE" bash -lc "
-    set -euo pipefail
-    export KERNEL_SRC='$CONTAINER_KERNEL_SRC'
-    export KERNEL_BUILD='/project/build/scanout-slots-kernel'
-    export MODULE_DIR='/project/mister/platform/kernel/scanout-slots'
-    export OUT_DIR='/project/build/scanout-slots'
-    export CROSS_COMPILE='$CROSS_COMPILE'
-    export LOCALVERSION='$LOCALVERSION'
-    export KERNEL_REVISION='$KERNEL_REVISION'
-    export PINNED_FB_DRIVER_SHA256='$PINNED_FB_DRIVER_SHA256'
-    export PINNED_DT_SHA256='$PINNED_DT_SHA256'
-    export SOURCE_REVISION='$SOURCE_REVISION'
-    export SOURCE_DIRTY='$SOURCE_DIRTY'
-    export OBSERVED_SOURCE_REVISION='$OBSERVED_SOURCE_REVISION'
-    export OBSERVED_SOURCE_DIRTY='$OBSERVED_SOURCE_DIRTY'
-    export BUILD_IDENTITY='$BUILD_IDENTITY'
-    export RECEIPT='/project/build/scanout-slots/build-receipt.txt'
-    export IMAGE='$IMAGE'
-    export IMAGE_DIGEST='$IMAGE_DIGEST'
-    export DOCKERFILE_SHA256='$DOCKERFILE_SHA256'
-    export COMPILER_IDENTITY='$COMPILER_IDENTITY'
-    $build_commands
-  "
+COMPILER_IDENTITY="$(sed -n 's/^compiler=//p' "$OUT_DIR/provenance.txt")"
+if [[ -z "$COMPILER_IDENTITY" ]]; then
+  echo "built provenance is missing compiler identity" >&2
+  exit 1
+fi
+BUILD_IDENTITY="$(compute_build_identity)"
+printf 'receipt_version=2\nbuild_identity=%s\nimage_reference=%s\nimage_digest=%s\ndockerfile_sha256=%s\ncompiler_identity=%s\nkernel_config_sha256=%s\n' \
+  "$BUILD_IDENTITY" "$IMAGE" "$IMAGE_DIGEST" "$DOCKERFILE_SHA256" "$COMPILER_IDENTITY" \
+  "$(sha256sum "$KERNEL_BUILD/.config" | awk '{print $1}')" >"$RECEIPT"
+echo "$OUT_DIR/mister_magik_scanout_slots.ko"

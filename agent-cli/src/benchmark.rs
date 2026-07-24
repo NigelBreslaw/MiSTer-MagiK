@@ -310,11 +310,12 @@ impl ProcessActions<'_> {
 
     fn prepare(&mut self) -> AgentResult<()> {
         self.device.execute(DeviceRequest::Discover)?;
-        self.device.execute(DeviceRequest::SnapshotRuntime {
-            remote: REMOTE_RUNTIME.into(),
-        })?;
+        self.device
+            .execute(DeviceRequest::SnapshotBenchmarkRuntime {
+                remote: REMOTE_RUNTIME.into(),
+            })?;
         self.snapshot_created = true;
-        self.device.execute(DeviceRequest::DeployRuntime {
+        self.device.execute(DeviceRequest::DeployBenchmarkRuntime {
             local: self.build.artifact().to_path_buf(),
             remote: REMOTE_RUNTIME.into(),
         })?;
@@ -330,7 +331,7 @@ impl ProcessActions<'_> {
         let mut errors = Vec::new();
         for request in [
             DeviceRequest::RestoreBenchmark,
-            DeviceRequest::RollbackRuntime {
+            DeviceRequest::RollbackBenchmarkRuntime {
                 remote: REMOTE_RUNTIME.into(),
             },
             DeviceRequest::VerifyHealth(Layout::Development),
@@ -427,11 +428,12 @@ impl ProcessColdActions<'_> {
 
     fn snapshot(&mut self) -> AgentResult<()> {
         self.device.execute(DeviceRequest::Discover)?;
-        self.device.execute(DeviceRequest::SnapshotRuntime {
-            remote: REMOTE_RUNTIME.into(),
-        })?;
+        self.device
+            .execute(DeviceRequest::SnapshotBenchmarkRuntime {
+                remote: REMOTE_RUNTIME.into(),
+            })?;
         self.restore_required = true;
-        self.device.execute(DeviceRequest::DeployRuntime {
+        self.device.execute(DeviceRequest::DeployBenchmarkRuntime {
             local: self.build.artifact().to_path_buf(),
             remote: REMOTE_RUNTIME.into(),
         })?;
@@ -447,7 +449,7 @@ impl ProcessColdActions<'_> {
         let mut errors = Vec::new();
         for request in [
             DeviceRequest::RestoreBenchmarkData(self.scenario),
-            DeviceRequest::RollbackRuntime {
+            DeviceRequest::RollbackBenchmarkRuntime {
                 remote: REMOTE_RUNTIME.into(),
             },
             DeviceRequest::VerifyHealth(Layout::Development),

@@ -75,7 +75,7 @@ mod tests {
 
     #[test]
     fn typed_requests_are_forwarded_unchanged() {
-        let request = DeviceRequest::SnapshotRuntime {
+        let request = DeviceRequest::SnapshotBenchmarkRuntime {
             remote: "/media/fat/mister-magik/mister-magik-fb".into(),
         };
         let recorded = Rc::new(RefCell::new(Vec::new()));

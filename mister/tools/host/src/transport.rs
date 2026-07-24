@@ -11,13 +11,6 @@ pub enum Layout {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum MainSelection {
-    Stock,
-    Development,
-    Public,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BenchmarkScenario {
     LauncherVelocity,
     FramebufferVelocity,
@@ -52,50 +45,17 @@ pub enum DeviceRequest {
         stage: PathBuf,
         expected_sha256: String,
     },
-    SnapshotRuntime {
+    SnapshotBenchmarkRuntime {
         remote: String,
     },
-    DeployRuntime {
+    DeployBenchmarkRuntime {
         local: PathBuf,
         remote: String,
     },
-    SnapshotRuntimeBundle {
-        remote: String,
-        manifest: String,
-    },
-    DeployRuntimeBundle {
-        local: PathBuf,
-        remote: String,
-        manifest_local: PathBuf,
-        manifest_remote: String,
-    },
-    RollbackRuntimeBundle {
-        remote: String,
-        manifest: String,
-    },
-    CommitRuntimeBundle {
-        remote: String,
-        manifest: String,
-    },
-    RollbackRuntime {
+    RollbackBenchmarkRuntime {
         remote: String,
     },
-    CommitRuntime {
-        remote: String,
-    },
-    DeployPlatform {
-        stage: PathBuf,
-    },
-    SnapshotPlatform,
-    RollbackPlatform,
-    CommitPlatform,
-    SelectMain(MainSelection),
-    RebootWait,
     VerifyHealth(Layout),
-    SmokeDelivery {
-        layout: Layout,
-        expected_sha256: String,
-    },
     PrepareBenchmark(BenchmarkScenario),
     WarmupBenchmark(BenchmarkScenario),
     CaptureBenchmark(BenchmarkScenario),
@@ -137,22 +97,10 @@ impl DeviceRequest {
             Self::FetchVerifiedDevelopmentManager { .. } => "fetch-verified-development-manager",
             Self::DeliverRuntimeTransaction { .. } => "deliver-runtime-transaction",
             Self::DeliverPlatformTransaction { .. } => "deliver-platform-transaction",
-            Self::SnapshotRuntime { .. } => "snapshot-runtime",
-            Self::DeployRuntime { .. } => "deploy-runtime",
-            Self::SnapshotRuntimeBundle { .. } => "snapshot-runtime-bundle",
-            Self::DeployRuntimeBundle { .. } => "deploy-runtime-bundle",
-            Self::RollbackRuntimeBundle { .. } => "rollback-runtime-bundle",
-            Self::CommitRuntimeBundle { .. } => "commit-runtime-bundle",
-            Self::RollbackRuntime { .. } => "rollback-runtime",
-            Self::CommitRuntime { .. } => "commit-runtime",
-            Self::DeployPlatform { .. } => "deploy-platform",
-            Self::SnapshotPlatform => "snapshot-platform",
-            Self::RollbackPlatform => "rollback-platform",
-            Self::CommitPlatform => "commit-platform",
-            Self::SelectMain(_) => "select-main",
-            Self::RebootWait => "reboot-wait",
+            Self::SnapshotBenchmarkRuntime { .. } => "snapshot-benchmark-runtime",
+            Self::DeployBenchmarkRuntime { .. } => "deploy-benchmark-runtime",
+            Self::RollbackBenchmarkRuntime { .. } => "rollback-benchmark-runtime",
             Self::VerifyHealth(_) => "verify-health",
-            Self::SmokeDelivery { .. } => "smoke-delivery",
             Self::PrepareBenchmark(_) => "prepare-benchmark",
             Self::WarmupBenchmark(_) => "warmup-benchmark",
             Self::CaptureBenchmark(_) => "capture-benchmark",
@@ -251,10 +199,10 @@ mod tests {
             Err(DeviceFailure::Unavailable("offline".into())),
         ]);
         fake.execute(&DeviceRequest::Status).unwrap();
-        assert!(fake.execute(&DeviceRequest::RebootWait).is_err());
+        assert!(fake.execute(&DeviceRequest::CaptureFramebuffer).is_err());
         assert_eq!(
             fake.requests(),
-            &[DeviceRequest::Status, DeviceRequest::RebootWait]
+            &[DeviceRequest::Status, DeviceRequest::CaptureFramebuffer]
         );
     }
 
@@ -280,9 +228,6 @@ mod tests {
                 stage: "s".into(),
                 expected_sha256: "a".repeat(64),
             },
-            DeviceRequest::RollbackPlatform,
-            DeviceRequest::CommitPlatform,
-            DeviceRequest::RebootWait,
             DeviceRequest::VerifyHealth(Layout::Development),
             DeviceRequest::CaptureFramebuffer,
         ]
@@ -298,42 +243,28 @@ mod tests {
             DeviceRequest::Status,
             DeviceRequest::ReadDevelopmentManifest,
             DeviceRequest::VerifyDevelopmentPlatform,
-            DeviceRequest::SnapshotRuntime { remote: "r".into() },
-            DeviceRequest::DeployRuntime {
-                local: "l".into(),
-                remote: "r".into(),
+            DeviceRequest::FetchVerifiedDevelopmentManager {
+                local: "manager".into(),
+                expected_sha256: "a".repeat(64),
             },
-            DeviceRequest::SnapshotRuntimeBundle {
-                remote: "r".into(),
-                manifest: "m".into(),
-            },
-            DeviceRequest::DeployRuntimeBundle {
+            DeviceRequest::DeliverRuntimeTransaction {
                 local: "l".into(),
                 remote: "r".into(),
                 manifest_local: "ml".into(),
                 manifest_remote: "m".into(),
+                expected_sha256: "a".repeat(64),
             },
-            DeviceRequest::RollbackRuntimeBundle {
+            DeviceRequest::DeliverPlatformTransaction {
+                stage: "s".into(),
+                expected_sha256: "a".repeat(64),
+            },
+            DeviceRequest::SnapshotBenchmarkRuntime { remote: "r".into() },
+            DeviceRequest::DeployBenchmarkRuntime {
+                local: "l".into(),
                 remote: "r".into(),
-                manifest: "m".into(),
             },
-            DeviceRequest::CommitRuntimeBundle {
-                remote: "r".into(),
-                manifest: "m".into(),
-            },
-            DeviceRequest::RollbackRuntime { remote: "r".into() },
-            DeviceRequest::CommitRuntime { remote: "r".into() },
-            DeviceRequest::DeployPlatform { stage: "s".into() },
-            DeviceRequest::SnapshotPlatform,
-            DeviceRequest::RollbackPlatform,
-            DeviceRequest::CommitPlatform,
-            DeviceRequest::SelectMain(MainSelection::Stock),
-            DeviceRequest::RebootWait,
+            DeviceRequest::RollbackBenchmarkRuntime { remote: "r".into() },
             DeviceRequest::VerifyHealth(Layout::Public),
-            DeviceRequest::SmokeDelivery {
-                layout: Layout::Development,
-                expected_sha256: "s".into(),
-            },
             DeviceRequest::PrepareBenchmark(BenchmarkScenario::LauncherVelocity),
             DeviceRequest::WarmupBenchmark(BenchmarkScenario::FramebufferVelocity),
             DeviceRequest::CaptureBenchmark(BenchmarkScenario::LauncherVelocity),
@@ -362,7 +293,7 @@ mod tests {
             DeviceRequest::CaptureFramebuffer,
         ];
         let labels: Vec<_> = requests.iter().map(DeviceRequest::label).collect();
-        assert_eq!(labels.len(), 44);
+        assert_eq!(labels.len(), 35);
         assert!(labels.iter().all(|label| !label.is_empty()));
         assert!(!labels.contains(&"run"));
         assert!(!labels.contains(&"shell"));

@@ -72,7 +72,9 @@ impl DeploymentImpact {
 }
 
 pub fn classify(path: &Path) -> Option<Component> {
-    if path
+    if matches!(path.to_str(), Some("Cargo.toml" | "Cargo.lock")) {
+        Some(Component::PlatformContracts)
+    } else if path
         .parent()
         .is_some_and(|parent| parent.as_os_str().is_empty())
         || path.file_name().and_then(|name| name.to_str()) == Some("AGENTS.md")
@@ -87,6 +89,7 @@ pub fn classify(path: &Path) -> Option<Component> {
             "apps/mister/Dockerfile.cross-armv7"
                 | "apps/mister/rust-toolchain.toml"
                 | "apps/mister/Cross.toml"
+                | "scripts/build-scanout-slots-module.sh"
         )
     ) {
         Some(Component::PlatformContracts)
@@ -96,6 +99,8 @@ pub fn classify(path: &Path) -> Option<Component> {
         Some(Component::MisterApp)
     } else if path.starts_with("apps/desktop") {
         Some(Component::Desktop)
+    } else if path.starts_with("crates/mister-ini") {
+        Some(Component::Manager)
     } else if path.starts_with("crates/catalog") {
         Some(Component::Catalog)
     } else if path.starts_with("crates/") {
@@ -165,6 +170,22 @@ mod tests {
                 .unwrap()
                 .deployment_impact(),
             DeploymentImpact::Platform
+        );
+        assert_eq!(
+            classify(Path::new("scripts/build-scanout-slots-module.sh"))
+                .unwrap()
+                .deployment_impact(),
+            DeploymentImpact::Platform
+        );
+        assert_eq!(
+            classify(Path::new("Cargo.lock"))
+                .unwrap()
+                .deployment_impact(),
+            DeploymentImpact::Platform
+        );
+        assert_eq!(
+            classify(Path::new("crates/mister-ini/src/lib.rs")),
+            Some(Component::Manager)
         );
     }
 }

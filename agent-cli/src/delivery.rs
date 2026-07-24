@@ -347,11 +347,7 @@ impl<D: DeviceOperations> ProcessActions<'_, D> {
     }
 
     fn prepare_manager(&mut self) -> AgentResult<PathBuf> {
-        let changed = self
-            .deployment
-            .changed_paths
-            .iter()
-            .any(|path| path.starts_with("mister/tools/manager"));
+        let changed = manager_inputs_changed(&self.deployment.changed_paths);
         if !changed && let Some(expected) = self.installed_manager_sha256.clone() {
             let cache = self
                 .repository
@@ -408,6 +404,22 @@ impl<D: DeviceOperations> ProcessActions<'_, D> {
                 .ok_or("local staging did not record the Main revision")?,
         )
     }
+}
+
+fn manager_inputs_changed(paths: &[PathBuf]) -> bool {
+    paths.iter().any(|path| {
+        path.starts_with("mister/tools/manager")
+            || path.starts_with("crates/mister-ini")
+            || matches!(path.to_str(), Some("Cargo.toml" | "Cargo.lock"))
+            || matches!(
+                path.to_str(),
+                Some(
+                    "apps/mister/Dockerfile.cross-armv7"
+                        | "apps/mister/rust-toolchain.toml"
+                        | "apps/mister/Cross.toml"
+                )
+            )
+    })
 }
 
 fn validate_commit_identity(
@@ -1091,6 +1103,23 @@ mod tests {
                 .to_string()
                 .contains("local_main_branch")
         );
+    }
+
+    #[test]
+    fn manager_rebuilds_for_its_shared_toolchain_inputs() {
+        for path in [
+            "mister/tools/manager/src/main.rs",
+            "crates/mister-ini/src/lib.rs",
+            "apps/mister/Dockerfile.cross-armv7",
+            "apps/mister/rust-toolchain.toml",
+            "apps/mister/Cross.toml",
+            "Cargo.lock",
+        ] {
+            assert!(manager_inputs_changed(&[PathBuf::from(path)]));
+        }
+        assert!(!manager_inputs_changed(&[PathBuf::from(
+            "docs/main-mister-fork.md"
+        )]));
     }
 
     #[test]

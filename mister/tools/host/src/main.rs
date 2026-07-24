@@ -3,7 +3,7 @@
 
 use mister_tool::transport::{
     BenchmarkScenario, ColdBenchmarkScenario, DeviceFailure, DeviceOperations, DeviceRequest,
-    DeviceResponse, Layout, MainSelection,
+    DeviceResponse, Layout,
 };
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
@@ -281,7 +281,7 @@ impl DeviceOperations for NativeDevice {
                 let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 deliver_platform_transaction(&config, stage, expected_sha256)?
             }
-            DeviceRequest::SnapshotRuntime { remote } => {
+            DeviceRequest::SnapshotBenchmarkRuntime { remote } => {
                 validate_delivery_remote(remote).map_err(device_failure)?;
                 let session = connect(10).map_err(device_failure)?;
                 exec_checked(
@@ -295,84 +295,12 @@ impl DeviceOperations for NativeDevice {
                 .map_err(device_failure)?;
                 "snapshotted".into()
             }
-            DeviceRequest::DeployRuntime { local, remote } => {
+            DeviceRequest::DeployBenchmarkRuntime { local, remote } => {
                 let session = connect(10).map_err(device_failure)?;
                 deploy_magik_bin(&session, local, remote).map_err(device_failure)?;
                 "deployed".into()
             }
-            DeviceRequest::SnapshotRuntimeBundle { remote, manifest } => {
-                validate_delivery_remote(remote).map_err(device_failure)?;
-                validate_runtime_manifest_remote(manifest).map_err(device_failure)?;
-                let session = connect(10).map_err(device_failure)?;
-                exec_checked(
-                    &session,
-                    "runtime bundle snapshot",
-                    &format!(
-                        "set -eu; cp -p {0} {0}.delivery-rollback.tmp; mv -f {0}.delivery-rollback.tmp {0}.delivery-rollback; cp -p {1} {1}.delivery-rollback.tmp; mv -f {1}.delivery-rollback.tmp {1}.delivery-rollback; sync",
-                        sh(remote),
-                        sh(manifest)
-                    ),
-                )
-                .map_err(device_failure)?;
-                "snapshotted".into()
-            }
-            DeviceRequest::DeployRuntimeBundle {
-                local,
-                remote,
-                manifest_local,
-                manifest_remote,
-            } => {
-                let session = connect(10).map_err(device_failure)?;
-                deploy_magik_bundle(&session, local, remote, manifest_local, manifest_remote)
-                    .map_err(device_failure)?;
-                "deployed".into()
-            }
-            DeviceRequest::RollbackRuntimeBundle { remote, manifest } => {
-                validate_delivery_remote(remote).map_err(device_failure)?;
-                validate_runtime_manifest_remote(manifest).map_err(device_failure)?;
-                let session = connect(10).map_err(device_failure)?;
-                exec_checked(
-                    &session,
-                    "runtime bundle suspend for rollback",
-                    &acknowledged_main_command("mister_magik_suspend"),
-                )
-                .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?;
-                let restore = exec_checked(
-                    &session,
-                    "runtime bundle rollback",
-                    &format!(
-                        "set -eu; test -f {0}.delivery-rollback; test -f {1}.delivery-rollback; mv -f {0}.delivery-rollback {0}; chmod 755 {0}; mv -f {1}.delivery-rollback {1}; sync",
-                        sh(remote),
-                        sh(manifest)
-                    ),
-                );
-                let resume = exec_checked(
-                    &session,
-                    "runtime bundle resume after rollback",
-                    &acknowledged_main_command("mister_magik_resume"),
-                );
-                restore
-                    .and(resume)
-                    .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?;
-                "rolled-back".into()
-            }
-            DeviceRequest::CommitRuntimeBundle { remote, manifest } => {
-                validate_delivery_remote(remote).map_err(device_failure)?;
-                validate_runtime_manifest_remote(manifest).map_err(device_failure)?;
-                let session = connect(10).map_err(device_failure)?;
-                exec_checked(
-                    &session,
-                    "runtime bundle commit",
-                    &format!(
-                        "rm -f {0}.delivery-rollback {1}.delivery-rollback; sync",
-                        sh(remote),
-                        sh(manifest)
-                    ),
-                )
-                .map_err(device_failure)?;
-                "committed".into()
-            }
-            DeviceRequest::RollbackRuntime { remote } => {
+            DeviceRequest::RollbackBenchmarkRuntime { remote } => {
                 validate_delivery_remote(remote).map_err(device_failure)?;
                 let session = connect(10).map_err(device_failure)?;
                 exec_checked(
@@ -404,66 +332,6 @@ impl DeviceOperations for NativeDevice {
                 .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?;
                 "rolled-back".into()
             }
-            DeviceRequest::CommitRuntime { remote } => {
-                validate_delivery_remote(remote).map_err(device_failure)?;
-                let session = connect(10).map_err(device_failure)?;
-                exec_checked(
-                    &session,
-                    "runtime commit",
-                    &format!("rm -f {}.delivery-rollback; sync", sh(remote)),
-                )
-                .map_err(device_failure)?;
-                "committed".into()
-            }
-            DeviceRequest::DeployPlatform { stage } => {
-                let transaction =
-                    PlatformDeployTransaction::validate(stage).map_err(device_failure)?;
-                let session = connect(10).map_err(device_failure)?;
-                transaction.run(&session).map_err(device_failure)?;
-                "staged".into()
-            }
-            DeviceRequest::SnapshotPlatform => {
-                let session = connect(10).map_err(device_failure)?;
-                exec_checked(&session, "platform snapshot", &platform_snapshot_script())
-                    .map_err(device_failure)?;
-                "snapshotted".into()
-            }
-            DeviceRequest::RollbackPlatform => {
-                let session = connect(10).map_err(device_failure)?;
-                exec_checked(&session, "platform rollback", &platform_rollback_script())
-                    .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?;
-                "rolled-back".into()
-            }
-            DeviceRequest::CommitPlatform => {
-                let session = connect(10).map_err(device_failure)?;
-                exec_checked(&session, "platform commit", &platform_cleanup_script())
-                    .map_err(device_failure)?;
-                "committed".into()
-            }
-            DeviceRequest::SelectMain(selection) => {
-                let value = match selection {
-                    MainSelection::Stock => "MiSTer",
-                    MainSelection::Development => "MiSTer_MagiKDev",
-                    MainSelection::Public => "MiSTer_MagiK",
-                };
-                let session = connect(10).map_err(device_failure)?;
-                edit_remote_ini(&session, IniEdit::SelectMain(value.into()), false)
-                    .map_err(device_failure)?;
-                value.into()
-            }
-            DeviceRequest::RebootWait => {
-                let session = connect(10).map_err(device_failure)?;
-                issue_delivery_reboot(&session).map_err(device_failure)?;
-                drop(session);
-                if !wait_down_with(&config.connection, 40.0)
-                    || wait_up_with(&config.connection, 120.0).map_err(device_failure)? != 0
-                {
-                    return Err(DeviceFailure::Unavailable(
-                        "device did not complete its reboot transition".into(),
-                    ));
-                }
-                "rebooted".into()
-            }
             DeviceRequest::VerifyHealth(layout) => {
                 let label = match layout {
                     Layout::Development => "dev",
@@ -476,31 +344,6 @@ impl DeviceOperations for NativeDevice {
                 exec_checked(&session, "delivery health", &command)
                     .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
                 "healthy".into()
-            }
-            DeviceRequest::SmokeDelivery {
-                layout,
-                expected_sha256,
-            } => {
-                if expected_sha256.len() != 64
-                    || !expected_sha256.chars().all(|ch| ch.is_ascii_hexdigit())
-                {
-                    return Err(DeviceFailure::InvalidRequest(
-                        "expected SHA-256 is invalid".into(),
-                    ));
-                }
-                let label = match layout {
-                    Layout::Development => "dev",
-                    Layout::Public => "public",
-                };
-                let command =
-                    delivery_smoke_command(label, expected_sha256).map_err(device_failure)?;
-                let session = connect(10).map_err(device_failure)?;
-                wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))
-                    .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
-                exec_checked(&session, "delivery smoke", &command)
-                    .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
-                let capture = request_framebuffer_png_at(&config.agent).map_err(device_failure)?;
-                delivery_smoke_capture_detail(&capture).map_err(device_failure)?
             }
             DeviceRequest::PrepareBenchmark(scenario) => {
                 let session = connect(10).map_err(device_failure)?;
@@ -786,11 +629,7 @@ fn fetch_verified_development_manager(
     .map_err(device_failure)?;
     let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v2.manifest")
         .ok_or_else(|| DeviceFailure::ArtifactMismatch("development manifest is missing".into()))?;
-    let manager_fields = manifest
-        .lines()
-        .filter_map(|line| line.strip_prefix("manager_sha256="))
-        .collect::<Vec<_>>();
-    if manager_fields.as_slice() != [expected_sha256] {
+    if !manifest_has_manager(&manifest, expected_sha256) {
         return Err(DeviceFailure::ArtifactMismatch(
             "installed manager identity does not match the requested artifact".into(),
         ));
@@ -798,12 +637,14 @@ fn fetch_verified_development_manager(
     if let Some(parent) = local.parent() {
         fs::create_dir_all(parent).map_err(device_failure)?;
     }
-    get(
+    if let Err(error) = get(
         &session,
         "/media/fat/mister-magik-dev/mister-magik-manager",
         local,
-    )
-    .map_err(device_failure)?;
+    ) {
+        let _ = fs::remove_file(local);
+        return Err(device_failure(error));
+    }
     if file_sha256(local.to_path_buf()).map_err(device_failure)? != expected_sha256 {
         let _ = fs::remove_file(local);
         return Err(DeviceFailure::ArtifactMismatch(
@@ -811,6 +652,13 @@ fn fetch_verified_development_manager(
         ));
     }
     Ok(format!("manager_sha256={expected_sha256}"))
+}
+
+fn manifest_has_manager(manifest: &str, expected_sha256: &str) -> bool {
+    manifest
+        .lines()
+        .filter_map(|line| line.strip_prefix("manager_sha256="))
+        .eq([expected_sha256])
 }
 
 fn delivery_reboot_wait(config: &NativeDeviceConfig) -> std::result::Result<(), DeviceFailure> {
@@ -854,6 +702,157 @@ fn smoke_development_delivery(
     delivery_smoke_capture_detail(&capture).map_err(device_failure)
 }
 
+trait CoherentDeliveryActions {
+    fn snapshot(&mut self) -> std::result::Result<(), DeviceFailure>;
+    fn deploy(&mut self) -> std::result::Result<(), DeviceFailure>;
+    fn activate(&mut self) -> std::result::Result<(), DeviceFailure>;
+    fn reboot(&mut self) -> std::result::Result<(), DeviceFailure>;
+    fn smoke(&mut self) -> std::result::Result<String, DeviceFailure>;
+    fn commit(&mut self) -> std::result::Result<(), DeviceFailure>;
+    fn rollback(&mut self) -> std::result::Result<(), DeviceFailure>;
+    fn health(&mut self) -> std::result::Result<(), DeviceFailure>;
+}
+
+fn run_coherent_delivery(
+    actions: &mut dyn CoherentDeliveryActions,
+    reboots: bool,
+) -> std::result::Result<String, DeviceFailure> {
+    actions.snapshot()?;
+    let delivery = (|| {
+        actions.deploy()?;
+        actions.activate()?;
+        if reboots {
+            actions.reboot()?;
+        }
+        let detail = actions.smoke()?;
+        Ok(detail)
+    })();
+    match delivery {
+        Ok(detail) => actions.commit().map(|()| detail).map_err(|error| {
+            DeviceFailure::RecoveryRequired(format!(
+                "delivery is healthy but commit cleanup failed ({error:?})"
+            ))
+        }),
+        Err(delivery_error) => {
+            let rollback = actions
+                .rollback()
+                .and_then(|()| if reboots { actions.reboot() } else { Ok(()) })
+                .and_then(|()| actions.health());
+            match rollback {
+                Ok(()) => Err(delivery_error),
+                Err(error) => Err(DeviceFailure::RecoveryRequired(format!(
+                    "delivery failed ({delivery_error:?}); rollback failed ({error:?})"
+                ))),
+            }
+        }
+    }
+}
+
+fn restore_and_resume(
+    restore: impl FnOnce() -> std::result::Result<(), DeviceFailure>,
+    resume: impl FnOnce() -> std::result::Result<(), DeviceFailure>,
+) -> std::result::Result<(), DeviceFailure> {
+    let restore = restore();
+    let resume = resume();
+    restore.and(resume)
+}
+
+struct RuntimeDeliveryActions<'a> {
+    config: &'a NativeDeviceConfig,
+    session: &'a Session,
+    local: &'a Path,
+    remote: &'a str,
+    manifest_local: &'a Path,
+    manifest_remote: &'a str,
+    expected_sha256: &'a str,
+}
+
+impl CoherentDeliveryActions for RuntimeDeliveryActions<'_> {
+    fn snapshot(&mut self) -> std::result::Result<(), DeviceFailure> {
+        exec_checked(
+            self.session,
+            "runtime bundle snapshot",
+            &format!(
+                "set -eu; cp -p {0} {0}.delivery-rollback.tmp; mv -f {0}.delivery-rollback.tmp {0}.delivery-rollback; cp -p {1} {1}.delivery-rollback.tmp; mv -f {1}.delivery-rollback.tmp {1}.delivery-rollback; sync",
+                sh(self.remote),
+                sh(self.manifest_remote)
+            ),
+        )
+        .map_err(device_failure)
+    }
+
+    fn deploy(&mut self) -> std::result::Result<(), DeviceFailure> {
+        deploy_magik_bundle(
+            self.session,
+            self.local,
+            self.remote,
+            self.manifest_local,
+            self.manifest_remote,
+        )
+        .map_err(device_failure)
+    }
+
+    fn activate(&mut self) -> std::result::Result<(), DeviceFailure> {
+        Ok(())
+    }
+
+    fn reboot(&mut self) -> std::result::Result<(), DeviceFailure> {
+        delivery_reboot_wait(self.config)
+    }
+
+    fn smoke(&mut self) -> std::result::Result<String, DeviceFailure> {
+        smoke_development_delivery(self.config, self.expected_sha256)
+    }
+
+    fn commit(&mut self) -> std::result::Result<(), DeviceFailure> {
+        exec_checked(
+            self.session,
+            "runtime bundle commit",
+            &format!(
+                "rm -f {0}.delivery-rollback {1}.delivery-rollback; sync",
+                sh(self.remote),
+                sh(self.manifest_remote)
+            ),
+        )
+        .map_err(device_failure)
+    }
+
+    fn rollback(&mut self) -> std::result::Result<(), DeviceFailure> {
+        exec_checked(
+            self.session,
+            "runtime bundle suspend for rollback",
+            &acknowledged_main_command("mister_magik_suspend"),
+        )
+        .map_err(device_failure)?;
+        restore_and_resume(
+            || {
+                exec_checked(
+                    self.session,
+                    "runtime bundle rollback",
+                    &format!(
+                        "set -eu; test -f {0}.delivery-rollback; test -f {1}.delivery-rollback; mv -f {0}.delivery-rollback {0}; chmod 755 {0}; mv -f {1}.delivery-rollback {1}; sync",
+                        sh(self.remote),
+                        sh(self.manifest_remote)
+                    ),
+                )
+                .map_err(device_failure)
+            },
+            || {
+                exec_checked(
+                    self.session,
+                    "runtime bundle resume after rollback",
+                    &acknowledged_main_command("mister_magik_resume"),
+                )
+                .map_err(device_failure)
+            },
+        )
+    }
+
+    fn health(&mut self) -> std::result::Result<(), DeviceFailure> {
+        verify_delivery_health(self.config)
+    }
+}
+
 fn deliver_runtime_transaction(
     config: &NativeDeviceConfig,
     local: &Path,
@@ -866,66 +865,75 @@ fn deliver_runtime_transaction(
     validate_delivery_remote(remote).map_err(device_failure)?;
     validate_runtime_manifest_remote(manifest_remote).map_err(device_failure)?;
     let session = connect_with(&config.connection, 10).map_err(device_failure)?;
-    exec_checked(
-        &session,
-        "runtime bundle snapshot",
-        &format!(
-            "set -eu; cp -p {0} {0}.delivery-rollback.tmp; mv -f {0}.delivery-rollback.tmp {0}.delivery-rollback; cp -p {1} {1}.delivery-rollback.tmp; mv -f {1}.delivery-rollback.tmp {1}.delivery-rollback; sync",
-            sh(remote),
-            sh(manifest_remote)
-        ),
+    run_coherent_delivery(
+        &mut RuntimeDeliveryActions {
+            config,
+            session: &session,
+            local,
+            remote,
+            manifest_local,
+            manifest_remote,
+            expected_sha256,
+        },
+        false,
     )
-    .map_err(device_failure)?;
-    let delivery = deploy_magik_bundle(&session, local, remote, manifest_local, manifest_remote)
+}
+
+struct PlatformDeliveryActions<'a> {
+    config: &'a NativeDeviceConfig,
+    session: &'a Session,
+    transaction: &'a PlatformDeployTransaction,
+    expected_sha256: &'a str,
+}
+
+impl CoherentDeliveryActions for PlatformDeliveryActions<'_> {
+    fn snapshot(&mut self) -> std::result::Result<(), DeviceFailure> {
+        exec_checked(
+            self.session,
+            "platform snapshot",
+            &platform_snapshot_script(),
+        )
         .map_err(device_failure)
-        .and_then(|()| smoke_development_delivery(config, expected_sha256));
-    match delivery {
-        Ok(detail) => {
-            exec_checked(
-                &session,
-                "runtime bundle commit",
-                &format!(
-                    "rm -f {0}.delivery-rollback {1}.delivery-rollback; sync",
-                    sh(remote),
-                    sh(manifest_remote)
-                ),
-            )
-            .map_err(device_failure)?;
-            Ok(detail)
-        }
-        Err(delivery_error) => {
-            let rollback = (|| -> std::result::Result<(), DeviceFailure> {
-                exec_checked(
-                    &session,
-                    "runtime bundle suspend for rollback",
-                    &acknowledged_main_command("mister_magik_suspend"),
-                )
-                .map_err(device_failure)?;
-                exec_checked(
-                    &session,
-                    "runtime bundle rollback",
-                    &format!(
-                        "set -eu; test -f {0}.delivery-rollback; test -f {1}.delivery-rollback; mv -f {0}.delivery-rollback {0}; chmod 755 {0}; mv -f {1}.delivery-rollback {1}; sync",
-                        sh(remote),
-                        sh(manifest_remote)
-                    ),
-                )
-                .map_err(device_failure)?;
-                exec_checked(
-                    &session,
-                    "runtime bundle resume after rollback",
-                    &acknowledged_main_command("mister_magik_resume"),
-                )
-                .map_err(device_failure)?;
-                verify_delivery_health(config)
-            })();
-            match rollback {
-                Ok(()) => Err(delivery_error),
-                Err(error) => Err(DeviceFailure::RecoveryRequired(format!(
-                    "runtime delivery failed ({delivery_error:?}); rollback failed ({error:?})"
-                ))),
-            }
-        }
+    }
+
+    fn deploy(&mut self) -> std::result::Result<(), DeviceFailure> {
+        self.transaction
+            .run(self.session)
+            .map(|_| ())
+            .map_err(device_failure)
+    }
+
+    fn activate(&mut self) -> std::result::Result<(), DeviceFailure> {
+        edit_remote_ini(
+            self.session,
+            IniEdit::SelectMain("MiSTer_MagiKDev".into()),
+            false,
+        )
+        .map_err(device_failure)
+    }
+
+    fn reboot(&mut self) -> std::result::Result<(), DeviceFailure> {
+        delivery_reboot_wait(self.config)
+    }
+
+    fn smoke(&mut self) -> std::result::Result<String, DeviceFailure> {
+        smoke_development_delivery(self.config, self.expected_sha256)
+    }
+
+    fn commit(&mut self) -> std::result::Result<(), DeviceFailure> {
+        let session = connect_with(&self.config.connection, 10).map_err(device_failure)?;
+        exec_checked(&session, "platform commit", &platform_cleanup_script())
+            .map_err(device_failure)
+    }
+
+    fn rollback(&mut self) -> std::result::Result<(), DeviceFailure> {
+        let session = connect_with(&self.config.connection, 10).map_err(device_failure)?;
+        exec_checked(&session, "platform rollback", &platform_rollback_script())
+            .map_err(device_failure)
+    }
+
+    fn health(&mut self) -> std::result::Result<(), DeviceFailure> {
+        verify_delivery_health(self.config)
     }
 }
 
@@ -937,44 +945,15 @@ fn deliver_platform_transaction(
     require_delivery_sha256(expected_sha256)?;
     let transaction = PlatformDeployTransaction::validate(stage).map_err(device_failure)?;
     let session = connect_with(&config.connection, 10).map_err(device_failure)?;
-    exec_checked(&session, "platform snapshot", &platform_snapshot_script())
-        .map_err(device_failure)?;
-    let delivery = transaction
-        .run(&session)
-        .map_err(device_failure)
-        .and_then(|_| {
-            edit_remote_ini(
-                &session,
-                IniEdit::SelectMain("MiSTer_MagiKDev".into()),
-                false,
-            )
-            .map_err(device_failure)
-        })
-        .and_then(|()| delivery_reboot_wait(config))
-        .and_then(|()| smoke_development_delivery(config, expected_sha256));
-    match delivery {
-        Ok(detail) => {
-            let session = connect_with(&config.connection, 10).map_err(device_failure)?;
-            exec_checked(&session, "platform commit", &platform_cleanup_script())
-                .map_err(device_failure)?;
-            Ok(detail)
-        }
-        Err(delivery_error) => {
-            let rollback = (|| -> std::result::Result<(), DeviceFailure> {
-                let session = connect_with(&config.connection, 10).map_err(device_failure)?;
-                exec_checked(&session, "platform rollback", &platform_rollback_script())
-                    .map_err(device_failure)?;
-                delivery_reboot_wait(config)?;
-                verify_delivery_health(config)
-            })();
-            match rollback {
-                Ok(()) => Err(delivery_error),
-                Err(error) => Err(DeviceFailure::RecoveryRequired(format!(
-                    "platform delivery failed ({delivery_error:?}); rollback failed ({error:?})"
-                ))),
-            }
-        }
-    }
+    run_coherent_delivery(
+        &mut PlatformDeliveryActions {
+            config,
+            session: &session,
+            transaction: &transaction,
+            expected_sha256,
+        },
+        true,
+    )
 }
 
 fn device_failure(error: impl std::fmt::Display) -> DeviceFailure {
@@ -9621,6 +9600,173 @@ H: Handlers=event3 js0"#
         ));
         drop(first);
         assert!(DeliveryProcessLock::acquire(&device).is_ok());
+    }
+
+    #[test]
+    fn manager_fetch_requires_one_exact_manifest_identity() {
+        let expected = "a".repeat(64);
+        assert!(manifest_has_manager(
+            &format!("format=manifest\nmanager_sha256={expected}\n"),
+            &expected
+        ));
+        assert!(!manifest_has_manager(
+            &format!("manager_sha256={expected}\nmanager_sha256={expected}\n"),
+            &expected
+        ));
+        assert!(!manifest_has_manager(
+            &format!("manager_sha256={}\n", "b".repeat(64)),
+            &expected
+        ));
+    }
+
+    #[derive(Default)]
+    struct ScriptedCoherentDelivery {
+        events: Vec<&'static str>,
+        fail_at: Option<&'static str>,
+        rollback_fails: bool,
+    }
+
+    impl ScriptedCoherentDelivery {
+        fn step(&mut self, name: &'static str) -> std::result::Result<(), DeviceFailure> {
+            self.events.push(name);
+            if self.fail_at == Some(name) || (name == "rollback" && self.rollback_fails) {
+                Err(DeviceFailure::OperationFailed(name.into()))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    impl CoherentDeliveryActions for ScriptedCoherentDelivery {
+        fn snapshot(&mut self) -> std::result::Result<(), DeviceFailure> {
+            self.step("snapshot")
+        }
+
+        fn deploy(&mut self) -> std::result::Result<(), DeviceFailure> {
+            self.step("deploy")
+        }
+
+        fn activate(&mut self) -> std::result::Result<(), DeviceFailure> {
+            self.step("activate")
+        }
+
+        fn reboot(&mut self) -> std::result::Result<(), DeviceFailure> {
+            self.step("reboot")
+        }
+
+        fn smoke(&mut self) -> std::result::Result<String, DeviceFailure> {
+            self.step("smoke").map(|()| "healthy".into())
+        }
+
+        fn commit(&mut self) -> std::result::Result<(), DeviceFailure> {
+            self.step("commit")
+        }
+
+        fn rollback(&mut self) -> std::result::Result<(), DeviceFailure> {
+            self.step("rollback")
+        }
+
+        fn health(&mut self) -> std::result::Result<(), DeviceFailure> {
+            self.step("health")
+        }
+    }
+
+    #[test]
+    fn coherent_runtime_commits_without_reboot() {
+        let mut actions = ScriptedCoherentDelivery::default();
+        assert_eq!(
+            run_coherent_delivery(&mut actions, false).unwrap(),
+            "healthy"
+        );
+        assert_eq!(
+            actions.events,
+            ["snapshot", "deploy", "activate", "smoke", "commit"]
+        );
+    }
+
+    #[test]
+    fn coherent_platform_reboots_and_commits_after_smoke() {
+        let mut actions = ScriptedCoherentDelivery::default();
+        run_coherent_delivery(&mut actions, true).unwrap();
+        assert_eq!(
+            actions.events,
+            [
+                "snapshot", "deploy", "activate", "reboot", "smoke", "commit"
+            ]
+        );
+    }
+
+    #[test]
+    fn coherent_delivery_rolls_back_and_verifies_health_after_failure() {
+        let mut runtime = ScriptedCoherentDelivery {
+            fail_at: Some("smoke"),
+            ..ScriptedCoherentDelivery::default()
+        };
+        assert!(run_coherent_delivery(&mut runtime, false).is_err());
+        assert_eq!(
+            runtime.events,
+            [
+                "snapshot", "deploy", "activate", "smoke", "rollback", "health"
+            ]
+        );
+
+        let mut platform = ScriptedCoherentDelivery {
+            fail_at: Some("smoke"),
+            ..ScriptedCoherentDelivery::default()
+        };
+        assert!(run_coherent_delivery(&mut platform, true).is_err());
+        assert_eq!(
+            platform.events,
+            [
+                "snapshot", "deploy", "activate", "reboot", "smoke", "rollback", "reboot", "health"
+            ]
+        );
+    }
+
+    #[test]
+    fn coherent_delivery_reports_failed_rollback_as_recovery_required() {
+        let mut actions = ScriptedCoherentDelivery {
+            fail_at: Some("deploy"),
+            rollback_fails: true,
+            ..ScriptedCoherentDelivery::default()
+        };
+        assert!(matches!(
+            run_coherent_delivery(&mut actions, false),
+            Err(DeviceFailure::RecoveryRequired(_))
+        ));
+    }
+
+    #[test]
+    fn coherent_delivery_does_not_rollback_after_commit_cleanup_starts() {
+        let mut actions = ScriptedCoherentDelivery {
+            fail_at: Some("commit"),
+            ..ScriptedCoherentDelivery::default()
+        };
+        assert!(matches!(
+            run_coherent_delivery(&mut actions, false),
+            Err(DeviceFailure::RecoveryRequired(_))
+        ));
+        assert_eq!(
+            actions.events,
+            ["snapshot", "deploy", "activate", "smoke", "commit"]
+        );
+    }
+
+    #[test]
+    fn runtime_rollback_attempts_resume_when_restore_fails() {
+        let events = RefCell::new(Vec::new());
+        let result = restore_and_resume(
+            || {
+                events.borrow_mut().push("restore");
+                Err(DeviceFailure::OperationFailed("restore".into()))
+            },
+            || {
+                events.borrow_mut().push("resume");
+                Ok(())
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(*events.borrow(), ["restore", "resume"]);
     }
 
     #[test]
