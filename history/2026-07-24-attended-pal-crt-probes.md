@@ -260,3 +260,27 @@ The high-contrast probe therefore disproves neither a digital/analog timing
 fault nor a downstream conversion fault. It does prove that the FPGA preroll
 candidate failed acceptance. That experimental timing is not promoted and was
 removed from the active branch by non-destructive revert `10320431`.
+
+## Correction: no Morph HDMI capture was connected
+
+After restoring baseline FPGA commit `10320431`, the operator again clearly
+observed the lower part of a bar persist during `preloaded-bars-slow`. The
+simultaneous probe remained machine-clean: two initial writes, 20 posts/flips,
+zero drops, zero active-buffer writes, zero pending-buffer writes, no final
+pending transaction, and a matching final active route.
+
+The concurrently requested movie
+`mister-magik-morph-bars-baseline-10320431.mov` has SHA-256
+`632c740ba9bf43af7475fc35202115247ca7e9bd873895373efe19fce6a72765`.
+Native AVFoundation decoding found 837 frames over 33.434 seconds, all
+identical generated colour bars. The operator confirmed that nothing was
+connected to the Mac capture input. The label `USB Video` referred only to the
+unconnected macOS capture device; it was not a tap of the Morph4K HDMI output.
+This movie is therefore invalid evidence for the display fault and must not be
+used to localize it.
+
+The established physical path is MiSTer VGA to Morph4K analog input, then
+Morph4K HDMI to the OLED television. The phone recordings and attended OLED
+observations are the only current visual evidence. They establish a
+motion/transition-only horizontal boundary at 50 Hz, but do not yet distinguish
+MiSTer VGA generation, Morph4K analog capture/conversion, or OLED processing.
