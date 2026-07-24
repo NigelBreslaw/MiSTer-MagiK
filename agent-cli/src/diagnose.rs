@@ -91,6 +91,8 @@ pub fn execute(repository: &Path, reporter: &mut Reporter<'_>) -> AgentResult<Ou
         repaired: false,
         geometry_trial: geometry_trial_from_env()?,
         geometry_trial_detail: None,
+        screensaver_trial: screensaver_trial_from_env(),
+        screensaver_trial_detail: None,
     };
     run_workflow(&mut actions, &mut |phase, percent| {
         Ok(reporter.emit(
@@ -103,6 +105,9 @@ pub fn execute(repository: &Path, reporter: &mut Reporter<'_>) -> AgentResult<Ou
     let report = actions.report.ok_or("diagnosis produced no report")?;
     if let Some(detail) = actions.geometry_trial_detail.as_deref() {
         reporter.emit(EventKind::Progress, "geometry-trial", detail, Some(95))?;
+    }
+    if let Some(detail) = actions.screensaver_trial_detail.as_deref() {
+        reporter.emit(EventKind::Progress, "screensaver-trial", detail, Some(95))?;
     }
     reporter.emit(
         if report.next_action.is_some() {
@@ -130,6 +135,8 @@ struct ProcessActions<'a> {
     repaired: bool,
     geometry_trial: Option<[u16; 4]>,
     geometry_trial_detail: Option<String>,
+    screensaver_trial: bool,
+    screensaver_trial_detail: Option<String>,
 }
 
 fn geometry_trial_from_env() -> AgentResult<Option<[u16; 4]>> {
@@ -146,6 +153,13 @@ fn geometry_trial_from_env() -> AgentResult<Option<[u16; 4]>> {
         .try_into()
         .map(Some)
         .map_err(|_| "MISTER_CRT_GEOMETRY_TRIAL_RECT must contain four coordinates".into())
+}
+
+fn screensaver_trial_from_env() -> bool {
+    matches!(
+        std::env::var("MISTER_CRT_SCREENSAVER_TRIAL").as_deref(),
+        Ok("1" | "true")
+    )
 }
 
 impl ProcessActions<'_> {
@@ -186,6 +200,11 @@ impl DiagnoseActions for ProcessActions<'_> {
                         self.device
                             .execute(DeviceRequest::RunCrtGeometryTrial { rectangle })?,
                     );
+                }
+                if self.screensaver_trial {
+                    self.screensaver_trial = false;
+                    self.screensaver_trial_detail =
+                        Some(self.device.execute(DeviceRequest::RunCrtScreensaverTrial)?);
                 }
                 Ok(())
             }
