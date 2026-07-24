@@ -348,10 +348,10 @@ impl ProcessActions<'_> {
         }
         let mut errors = Vec::new();
         for request in [
-            DeviceRequest::RestoreBenchmark,
             DeviceRequest::RollbackBenchmarkRuntime {
                 remote: REMOTE_RUNTIME.into(),
             },
+            DeviceRequest::RestoreBenchmark,
             DeviceRequest::VerifyHealth(Layout::Development),
         ] {
             if let Err(error) = self.device.execute(request) {

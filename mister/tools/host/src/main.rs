@@ -376,18 +376,19 @@ impl DeviceOperations for NativeDevice {
             }
             DeviceRequest::RestoreBenchmark => {
                 let session = connect_with(&config.connection, 10).map_err(device_failure)?;
-                prepare_launcher_env(
+                restore_benchmark_display_if_pending(&session).map_err(device_failure)?;
+                exec_checked(&session, "benchmark restore", &benchmark_restore_command())
+                    .map_err(device_failure)?;
+                launcher_restart(
                     &session,
                     &LauncherRestartOptions {
                         clear_env: true,
                         remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+                        timeout_secs: 45,
                         ..LauncherRestartOptions::default()
                     },
                 )
                 .map_err(device_failure)?;
-                restore_benchmark_display_if_pending(&session).map_err(device_failure)?;
-                exec_checked(&session, "benchmark restore", &benchmark_restore_command())
-                    .map_err(device_failure)?;
                 "restored".into()
             }
             DeviceRequest::SnapshotBenchmarkData(scenario) => {
