@@ -4,7 +4,6 @@
 import { MisterBridge } from "../api.slint";
 
 export component ComboBoxOverlay inherits Rectangle {
-    property <int> first-visible: (MisterBridge.display-highlighted - 2).clamp(0, (MisterBridge.display-options.length - 5).max(0));
     background: #000000c8;
     Rectangle {
         width: 94%;
@@ -17,7 +16,6 @@ export component ComboBoxOverlay inherits Rectangle {
             spacing: 4px;
             Text { text: "Display resolution"; color: #06d6a0; font-size: 16px; horizontal-alignment: center; }
             for option[index] in MisterBridge.display-options : Rectangle {
-                visible: index >= root.first-visible && index < root.first-visible + 5;
                 height: 34px;
                 background: index == MisterBridge.display-highlighted ? #2a2236 : transparent;
                 border-width: index == MisterBridge.display-highlighted ? 2px : 0px;

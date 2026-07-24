@@ -46,15 +46,6 @@ component CrtResolutionRow inherits Rectangle {
 }
 
 export component CrtComboBoxOverlay inherits Rectangle {
-    property <int> visible-count: 7;
-    property <int> first-visible: (MisterBridge.display-highlighted - 3).clamp(
-        0,
-        (MisterBridge.display-options.length - root.visible-count).max(0),
-    );
-    property <bool> more-above: root.first-visible > 0;
-    property <bool> more-below: root.first-visible + root.visible-count
-        < MisterBridge.display-options.length;
-
     background: CrtTheme.background;
 
     VerticalLayout {
@@ -66,16 +57,6 @@ export component CrtComboBoxOverlay inherits Rectangle {
 
         CrtHeader { title: "Resolution"; subtitle: ""; status: ""; }
 
-        Text {
-            height: MisterUi.body-font;
-            text: root.more-above ? "▲" : "";
-            font-family: MisterUi.crt-font-family;
-            color: CrtTheme.text;
-            font-size: MisterUi.body-font;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-        }
-
         Rectangle {
             vertical-stretch: 1;
             background: CrtTheme.background;
@@ -83,24 +64,12 @@ export component CrtComboBoxOverlay inherits Rectangle {
             VerticalLayout {
                 spacing: 0px;
                 for option[index] in MisterBridge.display-options : CrtResolutionRow {
-                    visible: index >= root.first-visible
-                        && index < root.first-visible + root.visible-count;
                     vertical-stretch: 1;
                     label: option;
                     detail: index == MisterBridge.display-selected ? "Selected" : "";
                     focused: index == MisterBridge.display-highlighted;
                 }
             }
-        }
-
-        Text {
-            height: MisterUi.body-font;
-            text: root.more-below ? "▼" : "";
-            font-family: MisterUi.crt-font-family;
-            color: CrtTheme.text;
-            font-size: MisterUi.body-font;
-            horizontal-alignment: center;
-            vertical-alignment: center;
         }
 
         CrtFooter { left-hint: "UP/DOWN Choose   A Apply"; right-hint: "B Cancel"; }
