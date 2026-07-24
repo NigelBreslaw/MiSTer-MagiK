@@ -6,7 +6,7 @@ use crate::device::DeviceClient;
 use crate::error::{AgentError, AgentResult};
 use crate::model::Outcome;
 use crate::progress::{EventKind, Reporter};
-use mister_tool::transport::{DeviceRequest, Layout, MainSelection};
+use mister_tool::transport::{DeviceOperations, DeviceRequest, Layout, MainSelection};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::ffi::OsString;
@@ -25,9 +25,14 @@ pub enum Phase {
     ValidateCommit,
     Connect,
     Reconcile,
-    QualifyArtifact,
+    GithubResolution,
+    RuntimeBuild,
+    MainQualification,
+    KernelQualification,
+    LocalStaging,
+    DatabasePreparation,
     Snapshot,
-    Stage,
+    RemoteInventoryUpload,
     Activate,
     RebootIfNeeded,
     Smoke,
@@ -40,10 +45,15 @@ impl Phase {
             Self::Classify => "classify",
             Self::ValidateCommit => "validate-commit",
             Self::Connect => "connect",
-            Self::Reconcile => "reconcile",
-            Self::QualifyArtifact => "qualify-artifact",
+            Self::Reconcile => "reconciliation",
+            Self::GithubResolution => "github-resolution",
+            Self::RuntimeBuild => "runtime-build",
+            Self::MainQualification => "main-qualification",
+            Self::KernelQualification => "kernel-qualification",
+            Self::LocalStaging => "local-staging",
+            Self::DatabasePreparation => "database-preparation",
             Self::Snapshot => "snapshot",
-            Self::Stage => "stage",
+            Self::RemoteInventoryUpload => "remote-inventory-upload",
             Self::Activate => "activate",
             Self::RebootIfNeeded => "reboot-if-needed",
             Self::Smoke => "smoke",
@@ -54,14 +64,22 @@ impl Phase {
     fn may_have_mutated(self) -> bool {
         matches!(
             self,
-            Self::Snapshot | Self::Stage | Self::Activate | Self::RebootIfNeeded | Self::Smoke
+            Self::Snapshot
+                | Self::RemoteInventoryUpload
+                | Self::Activate
+                | Self::RebootIfNeeded
+                | Self::Smoke
         )
     }
 
     fn starts_mutation(self) -> bool {
         matches!(
             self,
-            Self::Snapshot | Self::Stage | Self::Activate | Self::RebootIfNeeded | Self::Smoke
+            Self::Snapshot
+                | Self::RemoteInventoryUpload
+                | Self::Activate
+                | Self::RebootIfNeeded
+                | Self::Smoke
         )
     }
 }
@@ -75,6 +93,14 @@ pub enum Step {
 pub trait DeliveryActions {
     fn run(&mut self, phase: Phase) -> AgentResult<()>;
     fn compensate(&mut self) -> AgentResult<()>;
+
+    fn should_run(&self, _phase: Phase) -> bool {
+        true
+    }
+
+    fn is_complete(&self) -> bool {
+        false
+    }
 }
 
 pub fn run_transaction(
@@ -86,16 +112,24 @@ pub fn run_transaction(
         (Phase::ValidateCommit, 7),
         (Phase::Connect, 12),
         (Phase::Reconcile, 15),
-        (Phase::QualifyArtifact, 38),
-        (Phase::Snapshot, 46),
-        (Phase::Stage, 56),
-        (Phase::Activate, 68),
-        (Phase::RebootIfNeeded, 78),
-        (Phase::Smoke, 90),
+        (Phase::GithubResolution, 22),
+        (Phase::RuntimeBuild, 32),
+        (Phase::MainQualification, 39),
+        (Phase::KernelQualification, 46),
+        (Phase::LocalStaging, 53),
+        (Phase::DatabasePreparation, 60),
+        (Phase::Snapshot, 67),
+        (Phase::RemoteInventoryUpload, 74),
+        (Phase::Activate, 81),
+        (Phase::RebootIfNeeded, 87),
+        (Phase::Smoke, 94),
         (Phase::Complete, 100),
     ];
     let mut mutation_started = false;
     for (phase, percent) in PHASES {
+        if !actions.should_run(*phase) {
+            continue;
+        }
         if let Err(error) = progress(Step::Action(*phase), *percent) {
             if mutation_started {
                 let _ = progress(Step::Compensation, 95);
@@ -110,7 +144,12 @@ pub fn run_transaction(
             return Err(AgentError::cancelled(error));
         }
         match actions.run(*phase) {
-            Ok(()) => mutation_started |= phase.starts_mutation(),
+            Ok(()) => {
+                mutation_started |= phase.starts_mutation();
+                if actions.is_complete() {
+                    break;
+                }
+            }
             Err(error) if mutation_started || phase.may_have_mutated() => {
                 let _ = progress(Step::Compensation, 95);
                 return match actions.compensate() {
@@ -127,12 +166,34 @@ pub fn run_transaction(
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DeliveryExecution {
+    pub outcome: Outcome,
+    pub decision: DeliveryDecision,
+}
+
 pub fn execute(
     repository: &Path,
     expected_commit: &str,
     local_main: &Path,
     reporter: &mut Reporter<'_>,
-) -> AgentResult<Outcome> {
+) -> AgentResult<DeliveryExecution> {
+    execute_with_device(
+        repository,
+        expected_commit,
+        local_main,
+        reporter,
+        DeviceClient::default(),
+    )
+}
+
+fn execute_with_device<D: DeviceOperations>(
+    repository: &Path,
+    expected_commit: &str,
+    local_main: &Path,
+    reporter: &mut Reporter<'_>,
+    device: DeviceClient<D>,
+) -> AgentResult<DeliveryExecution> {
     let deployment = crate::deploy::plan(repository, Vec::new())?;
     let mut actions = ProcessActions {
         repository,
@@ -140,12 +201,14 @@ pub fn execute(
         expected_commit,
         artifact_sha256: None,
         no_op: false,
+        decision: DeliveryDecision::Platform,
         installed_manifest: String::new(),
+        main_revision: None,
         local_main: local_main.to_path_buf(),
         stage: repository
             .join("build/agent-deploy/stage")
             .join(expected_commit),
-        device: DeviceClient::default(),
+        device,
     };
     run_transaction(&mut actions, &mut |step, percent| match step {
         Step::Action(phase) => Ok(reporter.emit(
@@ -161,10 +224,13 @@ pub fn execute(
             Some(percent),
         )?),
     })?;
-    Ok(if actions.no_op {
-        Outcome::NoOp
-    } else {
-        Outcome::Passed
+    Ok(DeliveryExecution {
+        outcome: if actions.no_op {
+            Outcome::NoOp
+        } else {
+            Outcome::Passed
+        },
+        decision: actions.decision,
     })
 }
 
@@ -185,29 +251,35 @@ pub fn cleanup_workspace(repository: &Path) -> Result<(), String> {
     Ok(())
 }
 
-struct ProcessActions<'a> {
+struct ProcessActions<'a, D = mister_tool::NativeDevice> {
     repository: &'a Path,
     deployment: DeploymentPlan,
     expected_commit: &'a str,
     artifact_sha256: Option<String>,
     no_op: bool,
+    decision: DeliveryDecision,
     installed_manifest: String,
+    main_revision: Option<String>,
     local_main: PathBuf,
     stage: PathBuf,
-    device: DeviceClient,
+    device: DeviceClient<D>,
 }
 
-impl ProcessActions<'_> {
+impl<D: DeviceOperations> ProcessActions<'_, D> {
     fn validate_commit(&self) -> AgentResult<()> {
         let head = crate::git::value(self.repository, &["rev-parse", "HEAD"])?;
         let dirty = !crate::git::value(self.repository, &["status", "--porcelain"])?.is_empty();
         validate_commit_identity(&head, self.expected_commit, dirty, None)
     }
 
-    fn qualify(&mut self) -> AgentResult<()> {
-        if self.no_op {
-            return Ok(());
-        }
+    fn resolve_github(&mut self) -> AgentResult<()> {
+        self.deployment.platform_candidate = Some(
+            crate::platform_ci::resolve_published_repository(self.repository, |_| Ok(()))?,
+        );
+        Ok(())
+    }
+
+    fn build_runtime(&mut self) -> AgentResult<()> {
         if self.deployment.kind == DeploymentKind::Runtime {
             self.device
                 .execute(DeviceRequest::VerifyDevelopmentPlatform)?;
@@ -226,38 +298,56 @@ impl ProcessActions<'_> {
                 self.expected_commit,
             )?;
         }
-        if self.deployment.kind == DeploymentKind::Platform {
-            if self
-                .deployment
-                .changed_paths
-                .iter()
-                .any(|path| path.starts_with("mister/tools/manager"))
-            {
-                crate::build::execute_quiet(
-                    self.repository,
-                    &crate::build::BuildSpec::for_recipe(crate::build::BuildRecipe::ManagerDevice),
-                )?;
-            }
-            let candidate = self
-                .deployment
-                .platform_candidate
-                .as_ref()
-                .ok_or("platform delivery is missing its qualified candidate")?;
-            if self.stage.exists() {
-                fs::remove_dir_all(&self.stage).map_err(|error| error.to_string())?;
-            }
-            fs::create_dir_all(self.stage.join("fpga")).map_err(|error| error.to_string())?;
-            qualify_local_main(self.repository, &self.local_main)?;
-            qualify_local_kernel(self.repository)?;
-            prepare_stage(
+        Ok(())
+    }
+
+    fn qualify_main(&self) -> AgentResult<()> {
+        qualify_local_main(self.repository, &self.local_main)
+    }
+
+    fn qualify_kernel(&self) -> AgentResult<()> {
+        qualify_local_kernel(self.repository)
+    }
+
+    fn prepare_local_stage(&mut self) -> AgentResult<()> {
+        if self
+            .deployment
+            .changed_paths
+            .iter()
+            .any(|path| path.starts_with("mister/tools/manager"))
+        {
+            crate::build::execute_quiet(
                 self.repository,
-                candidate,
-                &self.stage,
-                self.deployment.build.artifact(),
-                Some(&self.local_main),
+                &crate::build::BuildSpec::for_recipe(crate::build::BuildRecipe::ManagerDevice),
             )?;
         }
+        let candidate = self
+            .deployment
+            .platform_candidate
+            .as_ref()
+            .ok_or("platform delivery is missing its qualified candidate")?;
+        if self.stage.exists() {
+            fs::remove_dir_all(&self.stage).map_err(|error| error.to_string())?;
+        }
+        fs::create_dir_all(self.stage.join("fpga")).map_err(|error| error.to_string())?;
+        self.main_revision = Some(prepare_stage_files(
+            self.repository,
+            candidate,
+            &self.stage,
+            self.deployment.build.artifact(),
+            Some(&self.local_main),
+        )?);
         Ok(())
+    }
+
+    fn prepare_databases(&self) -> AgentResult<()> {
+        prepare_stage_databases(
+            self.repository,
+            &self.stage,
+            self.main_revision
+                .as_deref()
+                .ok_or("local staging did not record the Main revision")?,
+        )
     }
 
     fn smoke(&mut self) -> AgentResult<()> {
@@ -294,7 +384,7 @@ fn validate_commit_identity(
     Ok(())
 }
 
-impl DeliveryActions for ProcessActions<'_> {
+impl<D: DeviceOperations> DeliveryActions for ProcessActions<'_, D> {
     fn run(&mut self, phase: Phase) -> AgentResult<()> {
         match phase {
             Phase::Classify => Ok(()),
@@ -312,6 +402,7 @@ impl DeliveryActions for ProcessActions<'_> {
                     &main_revision,
                     self.expected_commit,
                 );
+                self.decision = reconciliation.decision;
                 self.no_op = reconciliation.decision == DeliveryDecision::NoOp;
                 self.installed_manifest = installed;
                 if self.no_op {
@@ -321,15 +412,15 @@ impl DeliveryActions for ProcessActions<'_> {
                     crate::deploy::plan(self.repository, reconciliation.changed_paths)?;
                 if reconciliation.decision == DeliveryDecision::Platform {
                     self.deployment.kind = DeploymentKind::Platform;
-                    self.deployment.platform_candidate = Some(
-                        crate::platform_ci::resolve_published_repository(self.repository, |_| {
-                            Ok(())
-                        })?,
-                    );
                 }
                 Ok(())
             }
-            Phase::QualifyArtifact => self.qualify(),
+            Phase::GithubResolution => self.resolve_github(),
+            Phase::RuntimeBuild => self.build_runtime(),
+            Phase::MainQualification => self.qualify_main(),
+            Phase::KernelQualification => self.qualify_kernel(),
+            Phase::LocalStaging => self.prepare_local_stage(),
+            Phase::DatabasePreparation => self.prepare_databases(),
             Phase::Snapshot => match self.deployment.kind {
                 _ if self.no_op => Ok(()),
                 DeploymentKind::Runtime => self
@@ -344,7 +435,7 @@ impl DeliveryActions for ProcessActions<'_> {
                     .execute(DeviceRequest::SnapshotPlatform)
                     .map(|_| ()),
             },
-            Phase::Stage => match self.deployment.kind {
+            Phase::RemoteInventoryUpload => match self.deployment.kind {
                 _ if self.no_op => Ok(()),
                 DeploymentKind::Runtime => self
                     .device
@@ -395,6 +486,23 @@ impl DeliveryActions for ProcessActions<'_> {
         }
     }
 
+    fn should_run(&self, phase: Phase) -> bool {
+        match phase {
+            Phase::GithubResolution
+            | Phase::MainQualification
+            | Phase::KernelQualification
+            | Phase::LocalStaging
+            | Phase::DatabasePreparation
+            | Phase::Activate
+            | Phase::RebootIfNeeded => self.deployment.kind == DeploymentKind::Platform,
+            _ => true,
+        }
+    }
+
+    fn is_complete(&self) -> bool {
+        self.no_op
+    }
+
     fn compensate(&mut self) -> AgentResult<()> {
         match self.deployment.kind {
             DeploymentKind::Runtime => {
@@ -416,13 +524,13 @@ impl DeliveryActions for ProcessActions<'_> {
     }
 }
 
-fn prepare_stage(
+fn prepare_stage_files(
     repository: &Path,
     candidate: &crate::platform_ci::Candidate,
     stage: &Path,
     gui_artifact: &Path,
     local_main: Option<&Path>,
-) -> AgentResult<()> {
+) -> AgentResult<String> {
     let manifest: Value =
         serde_json::from_slice(&fs::read(&candidate.manifest).map_err(|error| error.to_string())?)
             .map_err(|error| format!("invalid platform candidate manifest: {error}"))?;
@@ -476,6 +584,14 @@ fn prepare_stage(
         repository.join("mister/tools/manager/target/armv7-unknown-linux-gnueabihf/release/mister-magik-manager"),
         stage.join("mister-magik-manager"),
     )?;
+    Ok(main_revision)
+}
+
+fn prepare_stage_databases(
+    repository: &Path,
+    stage: &Path,
+    main_revision: &str,
+) -> AgentResult<()> {
     let databases = stage.join("databases");
     prepare_game_databases(repository, &databases)?;
     for name in [
@@ -500,7 +616,7 @@ fn prepare_stage(
             latch_rbf: stage.join("fpga/menu-magik-vblank-latch.rbf"),
             latch_metadata: stage.join("fpga/menu-magik-vblank-latch.metadata.txt"),
         },
-        &main_revision,
+        main_revision,
         &crate::git::value(repository, &["rev-parse", "HEAD"])?,
         crate::platform_manifest::Layout::Development,
     )
@@ -766,14 +882,19 @@ mod tests {
         }
     }
 
-    const PHASES: [Phase; 11] = [
+    const PHASES: [Phase; 16] = [
         Phase::Classify,
         Phase::ValidateCommit,
         Phase::Connect,
         Phase::Reconcile,
-        Phase::QualifyArtifact,
+        Phase::GithubResolution,
+        Phase::RuntimeBuild,
+        Phase::MainQualification,
+        Phase::KernelQualification,
+        Phase::LocalStaging,
+        Phase::DatabasePreparation,
         Phase::Snapshot,
-        Phase::Stage,
+        Phase::RemoteInventoryUpload,
         Phase::Activate,
         Phase::RebootIfNeeded,
         Phase::Smoke,
@@ -922,5 +1043,122 @@ mod tests {
         assert!(!root.join("build/agent-deploy/stage").exists());
         assert!(cache.join("artifact").is_file());
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn exact_manifest_fake_device_stops_after_reconciliation() {
+        use crate::cli::OutputFormat;
+        use crate::evidence::Evidence;
+        use crate::request::RawRequest;
+        use mister_tool::transport::{DeviceFailure, DeviceResponse};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        struct RecordingDevice {
+            requests: Rc<RefCell<Vec<DeviceRequest>>>,
+            manifest: String,
+        }
+
+        impl DeviceOperations for RecordingDevice {
+            fn execute(
+                &mut self,
+                request: &DeviceRequest,
+            ) -> Result<DeviceResponse, DeviceFailure> {
+                self.requests.borrow_mut().push(request.clone());
+                Ok(DeviceResponse {
+                    operation: request.label(),
+                    detail: if *request == DeviceRequest::ReadDevelopmentManifest {
+                        self.manifest.clone()
+                    } else {
+                        "connected".into()
+                    },
+                })
+            }
+        }
+
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-delivery-no-op-test-{}",
+            std::process::id()
+        ));
+        let repository = root.join("app");
+        let main = root.join("Main_MiSTer");
+        fs::create_dir_all(&repository).unwrap();
+        fs::create_dir_all(&main).unwrap();
+        initialize_git_repository(&repository, "main", "README.md");
+        fs::write(main.join("build-container.sh"), "#!/bin/sh\n").unwrap();
+        initialize_git_repository(&main, "mister-magik", "build-container.sh");
+        let app_revision = crate::git::value(&repository, &["rev-parse", "HEAD"]).unwrap();
+        let main_revision = crate::git::value(&main, &["rev-parse", "HEAD"]).unwrap();
+        let manifest = format!(
+            "format=mister-magik-platform-v2\nmagik_revision={app_revision}\nmain_revision={main_revision}\n"
+        );
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let evidence = Evidence::open_at(&root.join("evidence")).unwrap();
+        let request = RawRequest::capture(["agent-cli", "deliver"].map(std::ffi::OsString::from));
+        evidence.begin_request(&request).unwrap();
+        let mut reporter = Reporter::new(&evidence, OutputFormat::Human, request.id.as_str());
+
+        let execution = execute_with_device(
+            &repository,
+            &app_revision,
+            &main,
+            &mut reporter,
+            DeviceClient::new(RecordingDevice {
+                requests: Rc::clone(&requests),
+                manifest,
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(execution.outcome, Outcome::NoOp);
+        assert_eq!(execution.decision, DeliveryDecision::NoOp);
+        assert_eq!(
+            requests.borrow().as_slice(),
+            &[
+                DeviceRequest::Discover,
+                DeviceRequest::ReadDevelopmentManifest
+            ]
+        );
+        assert!(!repository.join("build").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn initialize_git_repository(repository: &Path, branch: &str, tracked_file: &str) {
+        let status = Command::new("git")
+            .args(["init", "-q", "-b", branch])
+            .current_dir(repository)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        if !repository.join(tracked_file).exists() {
+            fs::write(repository.join(tracked_file), "fixture\n").unwrap();
+        }
+        let stage = format!("a{}", "dd");
+        assert!(
+            Command::new("git")
+                .args([stage.as_str(), tracked_file])
+                .current_dir(repository)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let save = format!("com{}", "mit");
+        assert!(
+            Command::new("git")
+                .args([
+                    "-c",
+                    "user.name=Agent CLI",
+                    "-c",
+                    "user.email=agent@example.invalid",
+                    save.as_str(),
+                    "-q",
+                    "-m",
+                    "fixture",
+                ])
+                .current_dir(repository)
+                .status()
+                .unwrap()
+                .success()
+        );
     }
 }

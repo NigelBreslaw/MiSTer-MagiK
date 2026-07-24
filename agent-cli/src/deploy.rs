@@ -22,6 +22,17 @@ pub enum DeliveryDecision {
     Platform,
 }
 
+impl DeliveryDecision {
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::NoOp => "no-op",
+            Self::Runtime => "runtime",
+            Self::Platform => "platform",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Reconciliation {
     pub decision: DeliveryDecision,

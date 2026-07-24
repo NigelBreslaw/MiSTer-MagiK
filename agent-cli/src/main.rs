@@ -642,9 +642,23 @@ fn deliver(
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<Outcome> {
     let delivery = deliver_inner(evidence, repository, reporter);
+    reporter.emit(
+        EventKind::Progress,
+        "cleanup",
+        "cleaning transient delivery staging",
+        None,
+    )?;
     let cleanup = agent_cli::delivery::cleanup_workspace(repository);
     match (delivery, cleanup) {
-        (Ok(outcome), Ok(())) => Ok(outcome),
+        (Ok(execution), Ok(())) => {
+            reporter.emit(
+                EventKind::Completed,
+                "delivery-decision",
+                execution.decision.label(),
+                Some(100),
+            )?;
+            Ok(execution.outcome)
+        }
         (Ok(_), Err(error)) => Err(error.into()),
         (Err(error), Ok(())) => Err(error),
         (Err(error), Err(cleanup)) => {
@@ -663,7 +677,7 @@ fn deliver_inner(
     _evidence: &Evidence,
     repository: &std::path::Path,
     reporter: &mut Reporter<'_>,
-) -> AgentResult<Outcome> {
+) -> AgentResult<agent_cli::delivery::DeliveryExecution> {
     let dirty = agent_cli::git::value(repository, &["status", "--porcelain"])?;
     if !dirty.is_empty() {
         return Err("dirty_worktree: commit or discard changes before delivery".into());

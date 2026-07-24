@@ -31,9 +31,17 @@ verification of the exact staged tree. Use standalone `verify` when assurance
 is needed without creating a commit.
 Runtime or platform changes then use `scripts/agent deliver`. Delivery uses the
 exact clean local app and Main commits without consulting workflow ownership
-records or requiring publication. Every delivery uses the complete platform transaction
-because the development manifest binds `mister-magik-fb`, Main, the kernel
-module, and the FPGA latch into one coherent set.
+records or requiring publication. Reconciliation reads the installed
+development manifest first and selects `NoOp`, `Runtime`, or `Platform` from
+all paths between its recorded app revision and `HEAD`. `NoOp` stops before
+GitHub, builds, or staging. `Runtime` updates the GUI and manifest as one
+rollback-capable transaction without rebooting. `Platform` retains the complete
+manifest-bound transaction for Main, kernel, FPGA, and contract changes.
+
+Verified component receipts live under `build/agent-cache/` and survive
+delivery cleanup. Main, kernel, published platform artifacts, and game
+databases are reused only when their immutable inputs and artifact hashes still
+match; transient staging remains under `build/agent-deploy/`.
 # Deployment
 
 “Build and deploy” maps to an ordinary Git commit followed by

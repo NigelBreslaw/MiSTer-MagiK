@@ -11,8 +11,9 @@ slint/
 
 `scripts/agent deliver` installs one coherent development platform using
 `../Main_MiSTer`; set `MISTER_MAIN_DIR` when the fork lives elsewhere. The
-platform manifest binds the app, Main, kernel module, and FPGA latch, so none of
-those artifacts is deployed independently.
+platform manifest binds the app, Main, kernel module, and FPGA latch. Runtime
+delivery may replace the app independently only by activating a regenerated
+manifest with the new app hash in the same rollback-capable transaction.
 
 The fork is not a submodule. It has its own history, CI, build wrapper, and
 patch ledger.
@@ -144,16 +145,28 @@ Deploy from this app repo:
 scripts/agent deliver
 ```
 
-Development delivery builds and checks the clean local Main and kernel, reuses
-the verified FPGA artifact from CI, regenerates the manifest, and activates the
-entire set transactionally.
+Development delivery first compares the installed manifest revisions with the
+exact clean local app and Main commits:
+
+- `NoOp` returns after reconciliation when the revisions already match or all
+  accumulated app changes are non-deploying.
+- `Runtime` verifies the installed platform, builds the app, snapshots the old
+  app and manifest, uploads both replacements, activates the manifest last,
+  smoke-tests, and rolls both files back on failure. It does not reboot.
+- `Platform` qualifies and activates the complete Main, app, kernel, FPGA,
+  manager, database-support, and manifest set with reboot and rollback
+  protection.
+
+Component receipts under `build/agent-cache/` bind immutable source, build,
+toolchain, configuration, and artifact identities. Verified Main, kernel,
+published platform, and game-database artifacts are reused across deliveries;
+cleanup removes only disposable `build/agent-deploy/` staging.
 The pinned kernel source defaults to the persistent sibling checkout
 `../Linux-Kernel_MiSTer`; set `MISTER_KERNEL_DIR` when it lives elsewhere.
 
-The transaction uses the exact clean `mister-magik` app branch and local
-`Main_MiSTer` branch, followed by snapshot, activation, reboot, smoke, and
-rollback protection. Neither local commit must be pushed, and Main is never
-copied directly onto the device outside that transaction.
+Each mutating transaction uses the exact clean app commit and local
+`Main_MiSTer` `mister-magik` branch. Neither local commit must be pushed, and
+Main is never copied directly onto the device outside the platform transaction.
 
 Use a non-default fork checkout with the same option:
 

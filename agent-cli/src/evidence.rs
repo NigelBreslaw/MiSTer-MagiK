@@ -123,6 +123,26 @@ pub struct DatabaseReport {
     pub repeated_requests: i64,
     pub previous_p95_request_ms: Option<i64>,
     pub p95_regression_ms: Option<i64>,
+    pub delivery_no_op: DeliveryDecisionMetrics,
+    pub delivery_runtime: DeliveryDecisionMetrics,
+    pub delivery_platform: DeliveryDecisionMetrics,
+    pub delivery_phases: Vec<DeliveryPhaseMetrics>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DeliveryDecisionMetrics {
+    pub requests: i64,
+    pub p50_ms: i64,
+    pub p95_ms: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DeliveryPhaseMetrics {
+    pub phase: String,
+    pub samples: i64,
+    pub total_ms: i64,
+    pub average_ms: i64,
+    pub max_ms: i64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -610,6 +630,76 @@ impl Evidence {
         let cache_misses = scalar(
             "SELECT count(*) FROM commands WHERE request_id IN (SELECT id FROM requests WHERE cohort_id=?1) AND cache_decision='miss'",
         )?;
+        let delivery_metrics = |decision: &str| -> Result<DeliveryDecisionMetrics, String> {
+            let predicate = "r.cohort_id=?1 AND r.parent_request_id IS NULL AND r.intent_json='\"deliver\"' AND r.completed_ms IS NOT NULL AND ((?2='no-op' AND r.outcome='no_op') OR EXISTS (SELECT 1 FROM events e WHERE e.request_id=r.id AND e.phase='delivery-decision' AND e.message=?2))";
+            let requests = self
+                .connection
+                .query_row(
+                    &format!("SELECT count(*) FROM requests r WHERE {predicate}"),
+                    params![cohort_id, decision],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(|error| error.to_string())?;
+            let percentile = |offset_percent: i64| {
+                self.connection
+                    .query_row(
+                        &format!(
+                            "SELECT COALESCE(r.execution_ms,0) FROM requests r WHERE {predicate} ORDER BY COALESCE(r.execution_ms,0) LIMIT 1 OFFSET MAX(0, ((SELECT count(*) FROM requests r WHERE {predicate}) * ?3 + 99) / 100 - 1)"
+                        ),
+                        params![cohort_id, decision, offset_percent],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .optional()
+                    .map(|value| value.unwrap_or(0))
+                    .map_err(|error| error.to_string())
+            };
+            Ok(DeliveryDecisionMetrics {
+                requests,
+                p50_ms: percentile(50)?,
+                p95_ms: percentile(95)?,
+            })
+        };
+        let delivery_phases = {
+            let mut statement = self
+                .connection
+                .prepare(
+                    "WITH ordered AS (
+                        SELECT e.request_id, e.phase, e.elapsed_ms,
+                               LEAD(e.elapsed_ms) OVER (
+                                   PARTITION BY e.request_id ORDER BY e.sequence
+                               ) AS next_elapsed
+                        FROM events e
+                        JOIN requests r ON r.id=e.request_id
+                        WHERE r.cohort_id=?1
+                          AND r.parent_request_id IS NULL
+                          AND r.intent_json='\"deliver\"'
+                    )
+                    SELECT phase,
+                           count(*),
+                           COALESCE(sum(MAX(next_elapsed-elapsed_ms,0)),0),
+                           COALESCE(CAST(round(avg(MAX(next_elapsed-elapsed_ms,0))) AS INTEGER),0),
+                           COALESCE(max(MAX(next_elapsed-elapsed_ms,0)),0)
+                    FROM ordered
+                    WHERE next_elapsed IS NOT NULL
+                      AND phase NOT IN ('request','delivery-decision')
+                    GROUP BY phase
+                    ORDER BY phase",
+                )
+                .map_err(|error| error.to_string())?;
+            let rows = statement
+                .query_map([cohort_id], |row| {
+                    Ok(DeliveryPhaseMetrics {
+                        phase: row.get(0)?,
+                        samples: row.get(1)?,
+                        total_ms: row.get(2)?,
+                        average_ms: row.get(3)?,
+                        max_ms: row.get(4)?,
+                    })
+                })
+                .map_err(|error| error.to_string())?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|error| error.to_string())?
+        };
         Ok(DatabaseReport {
             cohort_id,
             requests: scalar("SELECT count(*) FROM requests WHERE cohort_id=?1")?,
@@ -642,6 +732,10 @@ impl Evidence {
             )?,
             previous_p95_request_ms: previous_p95,
             p95_regression_ms: previous_p95.map(|previous| p95.saturating_sub(previous)),
+            delivery_no_op: delivery_metrics("no-op")?,
+            delivery_runtime: delivery_metrics("runtime")?,
+            delivery_platform: delivery_metrics("platform")?,
+            delivery_phases,
         })
     }
 
@@ -1271,6 +1365,103 @@ mod tests {
             0
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn report_groups_delivery_decisions_and_phase_durations() {
+        let root = temporary_root("delivery-report");
+        let _ = fs::remove_dir_all(&root);
+        let evidence = Evidence::open_at(&root).unwrap();
+        record_delivery_fixture(&evidence, "noop", "no-op", Outcome::NoOp, 120);
+        record_delivery_fixture(&evidence, "runtime", "runtime", Outcome::Passed, 250);
+        record_delivery_fixture(&evidence, "platform", "platform", Outcome::Passed, 900);
+
+        let report = evidence.report().unwrap();
+        assert_eq!(
+            report.delivery_no_op,
+            DeliveryDecisionMetrics {
+                requests: 1,
+                p50_ms: 120,
+                p95_ms: 120,
+            }
+        );
+        assert_eq!(report.delivery_runtime.requests, 1);
+        assert_eq!(report.delivery_runtime.p95_ms, 250);
+        assert_eq!(report.delivery_platform.requests, 1);
+        assert_eq!(report.delivery_platform.p95_ms, 900);
+        assert_eq!(
+            report
+                .delivery_phases
+                .iter()
+                .find(|phase| phase.phase == "reconciliation")
+                .unwrap(),
+            &DeliveryPhaseMetrics {
+                phase: "reconciliation".into(),
+                samples: 3,
+                total_ms: 60,
+                average_ms: 20,
+                max_ms: 20,
+            }
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn record_delivery_fixture(
+        evidence: &Evidence,
+        suffix: &str,
+        decision: &str,
+        outcome: Outcome,
+        execution_ms: i64,
+    ) {
+        let mut request =
+            RawRequest::capture([OsString::from("agent-cli"), OsString::from("deliver")]);
+        request.id.push_str(suffix);
+        evidence.begin_request(&request).unwrap();
+        evidence
+            .record_intent(&request.id, &Intent::Deliver)
+            .unwrap();
+        evidence
+            .record_events(&[
+                ProgressEvent {
+                    v: 1,
+                    kind: EventKind::Progress,
+                    run: request.id.clone(),
+                    seq: 0,
+                    elapsed_ms: 10,
+                    phase: "reconciliation".into(),
+                    message: "delivery reconciliation".into(),
+                    percent: Some(15),
+                },
+                ProgressEvent {
+                    v: 1,
+                    kind: EventKind::Progress,
+                    run: request.id.clone(),
+                    seq: 1,
+                    elapsed_ms: 30,
+                    phase: "cleanup".into(),
+                    message: "cleaning transient delivery staging".into(),
+                    percent: None,
+                },
+                ProgressEvent {
+                    v: 1,
+                    kind: EventKind::Completed,
+                    run: request.id.clone(),
+                    seq: 2,
+                    elapsed_ms: 35,
+                    phase: "delivery-decision".into(),
+                    message: decision.into(),
+                    percent: Some(100),
+                },
+            ])
+            .unwrap();
+        evidence.finish(&request.id, outcome).unwrap();
+        evidence
+            .connection
+            .execute(
+                "UPDATE requests SET execution_ms=?2, parent_request_id=NULL WHERE id=?1",
+                params![request.id, execution_ms],
+            )
+            .unwrap();
     }
 
     #[test]
