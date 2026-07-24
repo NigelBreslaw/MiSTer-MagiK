@@ -3,6 +3,7 @@
 
 use crate::build::BuildSpec;
 use crate::model::{ActionKind, Intent, Operation, Plan, Risk, WorkflowPhase};
+use crate::platform_manifest::{self, Layout};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -163,16 +164,12 @@ pub fn reconcile(
     local_main_revision: &str,
     head: &str,
 ) -> Reconciliation {
-    let fields = installed_manifest
-        .lines()
-        .filter_map(|line| line.split_once('='))
-        .collect::<std::collections::BTreeMap<_, _>>();
-    let installed_magik = fields.get("magik_revision").copied().unwrap_or_default();
-    let installed_main = fields.get("main_revision").copied().unwrap_or_default();
-    let manifest_valid = fields.get("format").copied() == Some("mister-magik-platform-v2")
-        && is_hex(installed_magik, 40)
-        && is_hex(installed_main, 40);
-    if !manifest_valid || installed_main != local_main_revision {
+    let Ok(installed) = platform_manifest::parse_installed(installed_manifest, Layout::Development)
+    else {
+        return conservative_reconciliation();
+    };
+    let installed_magik = installed.magik_revision();
+    if installed.main_revision() != local_main_revision {
         return Reconciliation {
             decision: DeliveryDecision::Platform,
             changed_paths: Vec::new(),
@@ -207,13 +204,12 @@ pub fn reconcile(
         .collect::<Vec<_>>();
     let impact = changed_paths
         .iter()
-        .filter_map(|path| crate::components::classify(path))
-        .map(|component| {
-            if component == crate::components::Component::Manager {
+        .map(|path| match crate::components::classify(path) {
+            Some(crate::components::Component::Manager) => {
                 crate::components::DeploymentImpact::Platform
-            } else {
-                component.deployment_impact()
             }
+            Some(component) => component.deployment_impact(),
+            None => crate::components::DeploymentImpact::Platform,
         })
         .max()
         .unwrap_or(crate::components::DeploymentImpact::None);
@@ -233,10 +229,6 @@ fn conservative_reconciliation() -> Reconciliation {
         decision: DeliveryDecision::Platform,
         changed_paths: Vec::new(),
     }
-}
-
-fn is_hex(value: &str, length: usize) -> bool {
-    value.len() == length && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 pub fn deployment_paths(
@@ -384,6 +376,28 @@ mod tests {
     }
 
     #[test]
+    fn partial_duplicate_extra_and_noncanonical_manifests_are_platform() {
+        let revision = "a".repeat(40);
+        let main = "b".repeat(40);
+        for manifest in [
+            format!(
+                "format=mister-magik-platform-v2\nmagik_revision={revision}\nmain_revision={main}\n"
+            ),
+            format!("{}magik_revision={revision}\n", manifest(&revision, &main)),
+            format!("{}extra=value\n", manifest(&revision, &main)),
+            manifest(&revision, &main).replace(
+                "/media/fat/mister-magik-dev/mister-magik-manager",
+                "/tmp/manager",
+            ),
+        ] {
+            assert_eq!(
+                reconcile(Path::new("."), &manifest, &main, &revision).decision,
+                DeliveryDecision::Platform
+            );
+        }
+    }
+
+    #[test]
     fn accumulated_paths_select_no_op_runtime_and_platform() {
         let root = std::env::temp_dir().join(format!("agent-cli-reconcile-{}", std::process::id()));
         std::fs::create_dir_all(root.join("docs")).unwrap();
@@ -423,7 +437,30 @@ mod tests {
     }
 
     fn manifest(magik: &str, main: &str) -> String {
-        format!("format=mister-magik-platform-v2\nmagik_revision={magik}\nmain_revision={main}\n")
+        let mut values = std::collections::BTreeMap::<String, String>::new();
+        values.insert("format".into(), "mister-magik-platform-v2".to_owned());
+        for (name, path) in Layout::Development.paths() {
+            values.insert(format!("{name}_path"), path.to_owned());
+        }
+        for name in [
+            "main_sha256",
+            "gui_sha256",
+            "manager_sha256",
+            "scanout_module_sha256",
+            "scanout_metadata_sha256",
+            "latch_rbf_sha256",
+            "latch_metadata_sha256",
+            "platform_contract_sha256",
+        ] {
+            values.insert(name.into(), "c".repeat(64));
+        }
+        values.insert("main_revision".into(), main.to_owned());
+        values.insert("magik_revision".into(), magik.to_owned());
+        values.insert("menu_revision".into(), "d".repeat(40));
+        platform_manifest::FIELDS
+            .iter()
+            .map(|field| format!("{field}={}\n", values[*field]))
+            .collect()
     }
 
     fn git(repository: &Path, args: &[&str]) {

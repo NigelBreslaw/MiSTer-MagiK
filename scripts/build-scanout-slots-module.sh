@@ -12,6 +12,7 @@ OUT_DIR="$ROOT/build/scanout-slots"
 CROSS_COMPILE="${CROSS_COMPILE:-arm-linux-gnueabihf-}"
 LOCALVERSION="${LOCALVERSION:--MiSTer}"
 IMAGE="${MISTER_ARM_BUILD_IMAGE:-mister-magik-cross-armv7:ubuntu20-arm64}"
+IMAGE_DOCKERFILE="$ROOT/apps/mister/Dockerfile.cross-armv7"
 PINNED_KERNEL_REVISION="f0fb626acadd07f0718934826b143b6e4c9ce81c"
 PINNED_FB_DRIVER_SHA256="b85ccabd33c3360c60873eb29deb933500b117759c3a3e898637a3e46e25312c"
 PINNED_DT_SHA256="36d7f660df55253a9ba11ebce615f304b91c3d7c99be94173af443574ad28a95"
@@ -88,9 +89,35 @@ if [[ "$(sha256sum "$KERNEL_SRC/drivers/video/fbdev/MiSTer_fb.c" | awk '{print $
 fi
 
 mkdir -p "$KERNEL_BUILD" "$OUT_DIR"
+if command -v "${CROSS_COMPILE}gcc" >/dev/null 2>&1; then
+  COMPILER_IDENTITY="$("${CROSS_COMPILE}gcc" --version | sed -n '1p')"
+  IMAGE_DIGEST="local-toolchain"
+else
+  if ! command -v container >/dev/null 2>&1; then
+    echo "missing cross compiler ${CROSS_COMPILE}gcc and Apple container runtime" >&2
+    exit 1
+  fi
+  IMAGE_DIGEST="$(container image inspect "$IMAGE" | sed -n 's/.*"digest" : "\(sha256:[0-9a-f]*\)".*/\1/p' | sed -n '1p')"
+  if [[ ! "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    echo "cannot resolve immutable OCI digest for $IMAGE" >&2
+    exit 1
+  fi
+  COMPILER_IDENTITY="container-image:$IMAGE_DIGEST"
+fi
+DOCKERFILE_SHA256="$(sha256sum "$IMAGE_DOCKERFILE" | awk '{print $1}')"
 BUILD_IDENTITY="$(
   {
-    printf '%s\n' "$KERNEL_REVISION" "$PINNED_FB_DRIVER_SHA256" "$PINNED_DT_SHA256" "$IMAGE"
+    printf '%s\n' \
+      "receipt_version=2" \
+      "$KERNEL_REVISION" \
+      "$PINNED_FB_DRIVER_SHA256" \
+      "$PINNED_DT_SHA256" \
+      "$CROSS_COMPILE" \
+      "$LOCALVERSION" \
+      "$IMAGE" \
+      "$IMAGE_DIGEST" \
+      "$DOCKERFILE_SHA256" \
+      "$COMPILER_IDENTITY"
     cd "$ROOT"
     sha256sum \
       mister/platform/kernel/scanout-slots/mister_magik_scanout_slots.c \
@@ -103,6 +130,7 @@ BUILD_IDENTITY="$(
 )"
 RECEIPT="$OUT_DIR/build-receipt.txt"
 if [[ -f "$RECEIPT" ]] &&
+   grep -qx "receipt_version=2" "$RECEIPT" &&
    grep -qx "build_identity=$BUILD_IDENTITY" "$RECEIPT" &&
    (cd "$OUT_DIR" && sha256sum -c SHA256SUMS >/dev/null 2>&1); then
   echo "$OUT_DIR/mister_magik_scanout_slots.ko"
@@ -156,7 +184,8 @@ module_sha256=$module_sha256
 vermagic=$(sed -n 's/^vermagic:[[:space:]]*//p' "$OUT_DIR/modinfo.txt")
 EOF
 (cd "$OUT_DIR" && sha256sum mister_magik_scanout_slots.ko modinfo.txt provenance.txt imports.txt > SHA256SUMS)
-printf 'build_identity=%s\n' "$BUILD_IDENTITY" >"$RECEIPT"
+printf 'receipt_version=2\nbuild_identity=%s\nimage_reference=%s\nimage_digest=%s\ndockerfile_sha256=%s\ncompiler_identity=%s\n' \
+  "$BUILD_IDENTITY" "$IMAGE" "$IMAGE_DIGEST" "$DOCKERFILE_SHA256" "$COMPILER_IDENTITY" >"$RECEIPT"
 echo "$OUT_DIR/mister_magik_scanout_slots.ko"
 EOS
 )
@@ -165,13 +194,9 @@ if command -v "${CROSS_COMPILE}gcc" >/dev/null 2>&1; then
   KERNEL_SRC="$KERNEL_SRC" KERNEL_BUILD="$KERNEL_BUILD" MODULE_DIR="$MODULE_DIR" OUT_DIR="$OUT_DIR" KERNEL_REVISION="$KERNEL_REVISION" \
     PINNED_FB_DRIVER_SHA256="$PINNED_FB_DRIVER_SHA256" PINNED_DT_SHA256="$PINNED_DT_SHA256" SOURCE_REVISION="$SOURCE_REVISION" SOURCE_DIRTY="$SOURCE_DIRTY" \
     OBSERVED_SOURCE_REVISION="$OBSERVED_SOURCE_REVISION" OBSERVED_SOURCE_DIRTY="$OBSERVED_SOURCE_DIRTY" BUILD_IDENTITY="$BUILD_IDENTITY" RECEIPT="$RECEIPT" \
-    CROSS_COMPILE="$CROSS_COMPILE" LOCALVERSION="$LOCALVERSION" bash -lc "$build_commands"
+    CROSS_COMPILE="$CROSS_COMPILE" LOCALVERSION="$LOCALVERSION" IMAGE="$IMAGE" IMAGE_DIGEST="$IMAGE_DIGEST" \
+    DOCKERFILE_SHA256="$DOCKERFILE_SHA256" COMPILER_IDENTITY="$COMPILER_IDENTITY" bash -lc "$build_commands"
   exit $?
-fi
-
-if ! command -v container >/dev/null 2>&1; then
-  echo "missing cross compiler ${CROSS_COMPILE}gcc and Apple container runtime" >&2
-  exit 1
 fi
 
 CONTAINER_KERNEL_SRC="/kernel-src"
@@ -196,5 +221,9 @@ container run --arch arm64 --rm --cpus 8 --memory 8g \
     export OBSERVED_SOURCE_DIRTY='$OBSERVED_SOURCE_DIRTY'
     export BUILD_IDENTITY='$BUILD_IDENTITY'
     export RECEIPT='/project/build/scanout-slots/build-receipt.txt'
+    export IMAGE='$IMAGE'
+    export IMAGE_DIGEST='$IMAGE_DIGEST'
+    export DOCKERFILE_SHA256='$DOCKERFILE_SHA256'
+    export COMPILER_IDENTITY='$COMPILER_IDENTITY'
     $build_commands
   "

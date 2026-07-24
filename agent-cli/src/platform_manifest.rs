@@ -9,7 +9,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 const FORMAT: &str = "mister-magik-platform-v2";
-const FIELDS: &[&str] = &[
+pub(crate) const FIELDS: &[&str] = &[
     "format",
     "main_path",
     "gui_path",
@@ -49,7 +49,7 @@ impl Layout {
         }
     }
 
-    fn paths(self) -> [(&'static str, &'static str); 7] {
+    pub(crate) fn paths(self) -> [(&'static str, &'static str); 7] {
         let main = match self {
             Self::Public => "/media/fat/MiSTer_MagiK",
             Self::Development => "/media/fat/MiSTer_MagiKDev",
@@ -118,6 +118,34 @@ pub struct Artifacts {
     pub latch_metadata: PathBuf,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InstalledManifest {
+    values: BTreeMap<String, String>,
+}
+
+impl InstalledManifest {
+    #[must_use]
+    pub fn main_revision(&self) -> &str {
+        &self.values["main_revision"]
+    }
+
+    #[must_use]
+    pub fn magik_revision(&self) -> &str {
+        &self.values["magik_revision"]
+    }
+
+    #[must_use]
+    pub fn manager_sha256(&self) -> &str {
+        &self.values["manager_sha256"]
+    }
+}
+
+pub fn parse_installed(text: &str, layout: Layout) -> AgentResult<InstalledManifest> {
+    let values = parse_text_fields(text, Some(FIELDS), "installed platform manifest")?;
+    validate_manifest_fields(&values, layout)?;
+    Ok(InstalledManifest { values })
+}
+
 impl Artifacts {
     fn values(&self) -> [(&'static str, &Path); 7] {
         [
@@ -182,43 +210,7 @@ pub fn update_runtime(
     magik_revision: &str,
 ) -> AgentResult<()> {
     require_hex("magik_revision", magik_revision, 40)?;
-    let mut values = BTreeMap::new();
-    for line in installed.lines() {
-        let (key, value) = line
-            .split_once('=')
-            .ok_or_else(|| format!("invalid platform manifest line: {line}"))?;
-        if values.insert(key.to_owned(), value.to_owned()).is_some() {
-            return classified("duplicate_platform_manifest_field", key);
-        }
-    }
-    if values.len() != FIELDS.len() || FIELDS.iter().any(|field| !values.contains_key(*field)) {
-        return classified(
-            "platform_manifest_fields",
-            "installed manifest shape is not canonical",
-        );
-    }
-    if values["format"] != FORMAT {
-        return classified("unsupported_platform_manifest", values["format"].clone());
-    }
-    for name in [
-        "main",
-        "gui",
-        "manager",
-        "scanout_module",
-        "scanout_metadata",
-        "latch_rbf",
-        "latch_metadata",
-        "platform_contract",
-    ] {
-        require_hex(
-            &format!("{name}_sha256"),
-            &values[&format!("{name}_sha256")],
-            64,
-        )?;
-    }
-    for name in ["main_revision", "magik_revision", "menu_revision"] {
-        require_hex(name, &values[name], 40)?;
-    }
+    let mut values = parse_installed(installed, Layout::Development)?.values;
     values.insert("gui_sha256".into(), digest(gui)?);
     values.insert("magik_revision".into(), magik_revision.into());
     let text = FIELDS
@@ -236,6 +228,14 @@ pub fn update_runtime(
 
 pub fn verify(manifest: &Path, artifact_root: Option<&Path>, layout: Layout) -> AgentResult<()> {
     let fields = parse_fields(manifest, Some(FIELDS))?;
+    validate_manifest_fields(&fields, layout)?;
+    let Some(root) = artifact_root else {
+        return Ok(());
+    };
+    verify_artifacts(&fields, root, layout)
+}
+
+fn validate_manifest_fields(fields: &BTreeMap<String, String>, layout: Layout) -> AgentResult<()> {
     if fields["format"] != FORMAT {
         return classified("unsupported_platform_manifest", fields["format"].clone());
     }
@@ -257,9 +257,14 @@ pub fn verify(manifest: &Path, artifact_root: Option<&Path>, layout: Layout) -> 
     for name in ["main_revision", "magik_revision", "menu_revision"] {
         require_hex(name, &fields[name], 40)?;
     }
-    let Some(root) = artifact_root else {
-        return Ok(());
-    };
+    Ok(())
+}
+
+fn verify_artifacts(
+    fields: &BTreeMap<String, String>,
+    root: &Path,
+    layout: Layout,
+) -> AgentResult<()> {
     let paths = layout.paths();
     let artifact = |name: &str| -> AgentResult<PathBuf> {
         let device = paths.iter().find(|(field, _)| *field == name).unwrap().1;
@@ -321,6 +326,14 @@ fn validate_metadata(artifacts: &Artifacts) -> AgentResult<(String, String)> {
 fn parse_fields(path: &Path, exact: Option<&[&str]>) -> AgentResult<BTreeMap<String, String>> {
     let text = fs::read_to_string(path)
         .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    parse_text_fields(&text, exact, &path.display().to_string())
+}
+
+fn parse_text_fields(
+    text: &str,
+    exact: Option<&[&str]>,
+    label: &str,
+) -> AgentResult<BTreeMap<String, String>> {
     let mut fields = BTreeMap::new();
     for (index, line) in text.lines().enumerate() {
         if line.is_empty() || line.starts_with('#') {
@@ -328,11 +341,11 @@ fn parse_fields(path: &Path, exact: Option<&[&str]>) -> AgentResult<BTreeMap<Str
         }
         let (key, value) = line
             .split_once('=')
-            .ok_or_else(|| format!("{}:{}: malformed field", path.display(), index + 1))?;
+            .ok_or_else(|| format!("{label}:{}: malformed field", index + 1))?;
         if key.is_empty() || value.is_empty() || fields.insert(key.into(), value.into()).is_some() {
             return classified(
                 "invalid_platform_manifest",
-                format!("{}:{}", path.display(), index + 1),
+                format!("{label}:{}", index + 1),
             );
         }
     }
@@ -389,32 +402,10 @@ fn classified<T>(code: &'static str, detail: impl Into<String>) -> AgentResult<T
 mod tests {
     use super::*;
 
-    #[test]
-    fn layouts_are_closed_and_use_canonical_paths() {
-        assert_eq!(Layout::parse("public").unwrap(), Layout::Public);
-        assert_eq!(Layout::parse("dev").unwrap(), Layout::Development);
-        assert!(Layout::parse("custom").is_err());
-        assert_eq!(Layout::Public.paths()[0].1, "/media/fat/MiSTer_MagiK");
-    }
-
-    #[test]
-    fn identities_require_lowercase_hex() {
-        assert!(require_hex("sha", &"a".repeat(40), 40).is_ok());
-        assert!(require_hex("sha", &"A".repeat(40), 40).is_err());
-        assert!(require_hex("sha", "abc", 40).is_err());
-    }
-
-    #[test]
-    fn runtime_update_changes_only_gui_identity_and_magik_revision() {
-        let root = std::env::temp_dir().join(format!("runtime-manifest-{}", std::process::id()));
-        fs::create_dir_all(&root).unwrap();
-        let gui = root.join("mister-magik-fb");
-        let output = root.join("platform-v2.manifest");
-        fs::write(&gui, b"new-gui").unwrap();
-        let paths = Layout::Development.paths();
+    fn canonical_manifest() -> String {
         let mut values = BTreeMap::new();
         values.insert("format".to_owned(), FORMAT.to_owned());
-        for (name, path) in paths {
+        for (name, path) in Layout::Development.paths() {
             values.insert(format!("{name}_path"), path.into());
         }
         for name in [
@@ -432,10 +423,53 @@ mod tests {
         for name in ["main_revision", "magik_revision", "menu_revision"] {
             values.insert(name.to_owned(), "b".repeat(40));
         }
-        let installed = FIELDS
+        FIELDS
             .iter()
             .map(|field| format!("{field}={}\n", values[*field]))
-            .collect::<String>();
+            .collect()
+    }
+
+    #[test]
+    fn layouts_are_closed_and_use_canonical_paths() {
+        assert_eq!(Layout::parse("public").unwrap(), Layout::Public);
+        assert_eq!(Layout::parse("dev").unwrap(), Layout::Development);
+        assert!(Layout::parse("custom").is_err());
+        assert_eq!(Layout::Public.paths()[0].1, "/media/fat/MiSTer_MagiK");
+    }
+
+    #[test]
+    fn identities_require_lowercase_hex() {
+        assert!(require_hex("sha", &"a".repeat(40), 40).is_ok());
+        assert!(require_hex("sha", &"A".repeat(40), 40).is_err());
+        assert!(require_hex("sha", "abc", 40).is_err());
+    }
+
+    #[test]
+    fn installed_manifest_requires_exact_unique_canonical_fields() {
+        let valid = canonical_manifest();
+        assert!(parse_installed(&valid, Layout::Development).is_ok());
+        for invalid in [
+            valid.lines().skip(1).collect::<Vec<_>>().join("\n"),
+            format!("{valid}format={FORMAT}\n"),
+            format!("{valid}unexpected=value\n"),
+            valid.replace(
+                "/media/fat/mister-magik-dev/mister-magik-manager",
+                "/tmp/manager",
+            ),
+            valid.replacen(&"a".repeat(64), &"A".repeat(64), 1),
+        ] {
+            assert!(parse_installed(&invalid, Layout::Development).is_err());
+        }
+    }
+
+    #[test]
+    fn runtime_update_changes_only_gui_identity_and_magik_revision() {
+        let root = std::env::temp_dir().join(format!("runtime-manifest-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let gui = root.join("mister-magik-fb");
+        let output = root.join("platform-v2.manifest");
+        fs::write(&gui, b"new-gui").unwrap();
+        let installed = canonical_manifest();
 
         update_runtime(&output, &installed, &gui, &"c".repeat(40)).unwrap();
 

@@ -81,6 +81,15 @@ pub fn classify(path: &Path) -> Option<Component> {
         || path.starts_with(".lspi")
     {
         Some(Component::Repository)
+    } else if matches!(
+        path.to_str(),
+        Some(
+            "apps/mister/Dockerfile.cross-armv7"
+                | "apps/mister/rust-toolchain.toml"
+                | "apps/mister/Cross.toml"
+        )
+    ) {
+        Some(Component::PlatformContracts)
     } else if path.starts_with("agent-cli") {
         Some(Component::AgentCli)
     } else if path.starts_with("apps/mister") {
@@ -150,6 +159,12 @@ mod tests {
                 .unwrap()
                 .deployment_impact(),
             DeploymentImpact::Runtime
+        );
+        assert_eq!(
+            classify(Path::new("apps/mister/Dockerfile.cross-armv7"))
+                .unwrap()
+                .deployment_impact(),
+            DeploymentImpact::Platform
         );
     }
 }

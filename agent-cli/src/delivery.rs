@@ -626,10 +626,36 @@ fn qualify_local_main(repository: &Path, main_dir: &Path) -> AgentResult<()> {
     validate_local_main_checkout(main_dir)?;
     let revision = crate::git::value(main_dir, &["rev-parse", "HEAD"])?;
     let binary = main_dir.join("bin/MiSTer");
+    let image = std::env::var("MISTER_MAIN_CONTAINER_IMAGE")
+        .unwrap_or_else(|_| "mister-magik-main-builder:ubuntu20-arm64".into());
+    let dockerfile = main_dir.join(".devcontainer/Dockerfile.apple-container");
+    let dockerfile_sha256 = file_sha256(&dockerfile)?;
+    let source_input_sha256 = digest_identity(&[
+        &revision,
+        &file_sha256(&main_dir.join("build-container.sh"))?,
+        &dockerfile_sha256,
+    ]);
+    let image_digest = container_image_digest(&image).ok();
+    let artifact_sha256 = binary.is_file().then(|| file_sha256(&binary)).transpose()?;
     let receipt = repository
         .join("build/agent-cache/main")
         .join(format!("{revision}.receipt"));
-    if binary.is_file() && receipt_matches(&receipt, &revision, &binary)? {
+    let cache_matches = match (image_digest.as_deref(), artifact_sha256.as_deref()) {
+        (Some(image_digest), Some(artifact_sha256)) => main_receipt_matches(
+            &receipt,
+            &MainReceiptIdentity {
+                revision: &revision,
+                source_input_sha256: &source_input_sha256,
+                artifact_sha256,
+                compiler: "gcc-arm-10.2-2020.11-aarch64-arm-none-linux-gnueabihf",
+                dockerfile_sha256: &dockerfile_sha256,
+                image: &image,
+                image_digest,
+            },
+        )?,
+        _ => false,
+    };
+    if cache_matches {
         return Ok(());
     }
     for (program, args) in [
@@ -645,30 +671,98 @@ fn qualify_local_main(repository: &Path, main_dir: &Path) -> AgentResult<()> {
     if let Some(parent) = receipt.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    fs::write(
-        receipt,
-        format!(
-            "main_revision={revision}\nbinary_sha256={}\n",
-            file_sha256(&binary)?
-        ),
-    )
-    .map_err(|error| error.to_string())?;
+    let image_digest = container_image_digest(&image)?;
+    let artifact_sha256 = file_sha256(&binary)?;
+    let receipt_text = format!(
+        "receipt_version=2\nmain_revision={revision}\nsource_input_sha256={source_input_sha256}\nartifact_sha256={artifact_sha256}\ncompiler=gcc-arm-10.2-2020.11-aarch64-arm-none-linux-gnueabihf\ndockerfile_sha256={dockerfile_sha256}\nimage_reference={image}\nimage_digest={image_digest}\n"
+    );
+    let temporary = receipt.with_extension("receipt.tmp");
+    fs::write(&temporary, receipt_text).map_err(|error| error.to_string())?;
+    fs::rename(temporary, receipt).map_err(|error| error.to_string())?;
     Ok(())
 }
 
-fn receipt_matches(receipt: &Path, revision: &str, artifact: &Path) -> AgentResult<bool> {
+struct MainReceiptIdentity<'a> {
+    revision: &'a str,
+    source_input_sha256: &'a str,
+    artifact_sha256: &'a str,
+    compiler: &'a str,
+    dockerfile_sha256: &'a str,
+    image: &'a str,
+    image_digest: &'a str,
+}
+
+fn main_receipt_matches(receipt: &Path, expected: &MainReceiptIdentity<'_>) -> AgentResult<bool> {
     let text = match fs::read_to_string(receipt) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(error) => return Err(error.to_string().into()),
     };
-    let binary_sha256 = file_sha256(artifact)?;
-    Ok(text
-        .lines()
-        .any(|line| line == format!("main_revision={revision}"))
-        && text
-            .lines()
-            .any(|line| line == format!("binary_sha256={binary_sha256}")))
+    let mut fields = std::collections::BTreeMap::new();
+    for line in text.lines() {
+        let Some((key, value)) = line.split_once('=') else {
+            return Ok(false);
+        };
+        if fields.insert(key, value).is_some() {
+            return Ok(false);
+        }
+    }
+    let expected_fields = [
+        ("receipt_version", "2"),
+        ("main_revision", expected.revision),
+        ("source_input_sha256", expected.source_input_sha256),
+        ("artifact_sha256", expected.artifact_sha256),
+        ("compiler", expected.compiler),
+        ("dockerfile_sha256", expected.dockerfile_sha256),
+        ("image_reference", expected.image),
+        ("image_digest", expected.image_digest),
+    ];
+    Ok(fields.len() == expected_fields.len()
+        && expected_fields
+            .iter()
+            .all(|(key, value)| fields.get(key).copied() == Some(*value)))
+}
+
+fn container_image_digest(image: &str) -> AgentResult<String> {
+    let output = Command::new("container")
+        .args(["image", "inspect", image])
+        .output()
+        .map_err(|error| format!("cannot inspect Apple container image {image}: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "cannot inspect Apple container image {image}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+        .into());
+    }
+    let value: Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("invalid container image metadata: {error}"))?;
+    value
+        .get(0)
+        .and_then(|entry| entry.pointer("/configuration/descriptor/digest"))
+        .and_then(Value::as_str)
+        .filter(|digest| {
+            digest.len() == 71
+                && digest.starts_with("sha256:")
+                && digest[7..]
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        })
+        .map(str::to_owned)
+        .ok_or_else(|| "container image metadata has no canonical OCI digest".into())
+}
+
+fn digest_identity(values: &[&str]) -> String {
+    let mut digest = Sha256::new();
+    for value in values {
+        digest.update(value.as_bytes());
+        digest.update([0]);
+    }
+    digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn file_sha256(path: &Path) -> AgentResult<String> {
@@ -1089,9 +1183,7 @@ mod tests {
         initialize_git_repository(&main, "mister-magik", "build-container.sh");
         let app_revision = crate::git::value(&repository, &["rev-parse", "HEAD"]).unwrap();
         let main_revision = crate::git::value(&main, &["rev-parse", "HEAD"]).unwrap();
-        let manifest = format!(
-            "format=mister-magik-platform-v2\nmagik_revision={app_revision}\nmain_revision={main_revision}\n"
-        );
+        let manifest = canonical_test_manifest(&app_revision, &main_revision);
         let requests = Rc::new(RefCell::new(Vec::new()));
         let evidence = Evidence::open_at(&root.join("evidence")).unwrap();
         let request = RawRequest::capture(["agent-cli", "deliver"].map(std::ffi::OsString::from));
@@ -1160,5 +1252,32 @@ mod tests {
                 .unwrap()
                 .success()
         );
+    }
+
+    fn canonical_test_manifest(magik_revision: &str, main_revision: &str) -> String {
+        let mut fields = std::collections::BTreeMap::<String, String>::new();
+        fields.insert("format".into(), "mister-magik-platform-v2".into());
+        for (name, path) in crate::platform_manifest::Layout::Development.paths() {
+            fields.insert(format!("{name}_path"), path.into());
+        }
+        for name in [
+            "main_sha256",
+            "gui_sha256",
+            "manager_sha256",
+            "scanout_module_sha256",
+            "scanout_metadata_sha256",
+            "latch_rbf_sha256",
+            "latch_metadata_sha256",
+            "platform_contract_sha256",
+        ] {
+            fields.insert(name.into(), "a".repeat(64));
+        }
+        fields.insert("main_revision".into(), main_revision.into());
+        fields.insert("magik_revision".into(), magik_revision.into());
+        fields.insert("menu_revision".into(), "b".repeat(40));
+        crate::platform_manifest::FIELDS
+            .iter()
+            .map(|field| format!("{field}={}\n", fields[*field]))
+            .collect()
     }
 }
