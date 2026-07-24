@@ -178,6 +178,7 @@ pub const UI_SCENES: &[&str] = &[
     #[cfg(mister_experiments)]
     "transition-effects",
     "controller_test",
+    "crt_probe", // Bounded attended slot diagnostics; never a production launcher mode.
     "crt_trial",
     "tear_pattern",
     #[cfg(all(target_os = "linux", target_arch = "arm"))]
@@ -358,6 +359,11 @@ pub fn run_ui(f: &mut Fpga) {
     #[cfg(mister_experiments)]
     if scene == "transition-effects" {
         run_transition_effects_loop(secs, &ui, &mut disp);
+        return;
+    }
+
+    if scene == "crt_probe" {
+        run_crt_probe_loop(secs, &ui, f, &mut display_session);
         return;
     }
 

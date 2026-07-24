@@ -4,7 +4,8 @@
 use super::{
     IniEdit, MenuOutputProfile, RebootMode, Result, acknowledged_main_command, connect,
     crt_trial_run_command, edit_remote_ini, exec, exec_checked, exec_checked_output, issue_reboot,
-    parse_crt_trial_status, remote_write, wait_down, wait_launcher_ready, wait_up,
+    parse_crt_runtime_settings_reply, parse_crt_trial_status, remote_write, wait_down,
+    wait_launcher_ready, wait_up,
 };
 use serde_json::{Value, json};
 use ssh2::Session;
@@ -62,7 +63,14 @@ const CRT_MODES: [CrtMode; 4] = [
 
 #[derive(Debug, Eq, PartialEq)]
 enum QualifyAction {
-    Attended { output: Option<PathBuf> },
+    Attended {
+        output: Option<PathBuf>,
+    },
+    Probe {
+        pattern: String,
+        seconds: u64,
+        output: PathBuf,
+    },
     Restore,
 }
 
@@ -76,12 +84,23 @@ pub(super) fn run(args: &[String]) -> Result<()> {
     match parse_args(args)? {
         QualifyAction::Restore => restore_from_journal(),
         QualifyAction::Attended { output } => run_attended(output),
+        QualifyAction::Probe {
+            pattern,
+            seconds,
+            output,
+        } => run_probe(&pattern, seconds, &output),
     }
 }
 
 fn parse_args(args: &[String]) -> Result<QualifyAction> {
+    if args.first().map(String::as_str) == Some("probe") {
+        return parse_probe_args(args);
+    }
     if args.first().map(String::as_str) != Some("qualify") {
-        return Err("usage: mister crt qualify <--attended [--out DIRECTORY]|--restore>".into());
+        return Err(
+            "usage: mister crt <qualify <--attended [--out DIRECTORY]|--restore>|probe --attended --pattern PATTERN --seconds 20 --out DIRECTORY>"
+                .into(),
+        );
     }
     if args.get(1).map(String::as_str) == Some("--restore") && args.len() == 2 {
         return Ok(QualifyAction::Restore);
@@ -104,6 +123,210 @@ fn parse_args(args: &[String]) -> Result<QualifyAction> {
         }
     }
     Ok(QualifyAction::Attended { output })
+}
+
+fn parse_probe_args(args: &[String]) -> Result<QualifyAction> {
+    if args.get(1).map(String::as_str) != Some("--attended") {
+        return Err("CRT probe requires --attended".into());
+    }
+    let mut pattern = None;
+    let mut seconds = None;
+    let mut output = None;
+    let mut index = 2;
+    while index < args.len() {
+        let value = args
+            .get(index + 1)
+            .ok_or_else(|| format!("{} needs a value", args[index]))?;
+        match args[index].as_str() {
+            "--pattern" => {
+                if pattern.replace(value.clone()).is_some() {
+                    return Err("--pattern may be specified only once".into());
+                }
+            }
+            "--seconds" => {
+                if seconds.replace(value.parse::<u64>()?).is_some() {
+                    return Err("--seconds may be specified only once".into());
+                }
+            }
+            "--out" => {
+                if output.replace(PathBuf::from(value)).is_some() {
+                    return Err("--out may be specified only once".into());
+                }
+            }
+            other => return Err(format!("unsupported CRT probe argument: {other}").into()),
+        }
+        index += 2;
+    }
+    let pattern = pattern.ok_or("CRT probe needs --pattern")?;
+    if !matches!(
+        pattern.as_str(),
+        "fixed-a" | "fixed-b" | "identical-flip" | "slow-ab" | "full-ab" | "motion"
+    ) {
+        return Err(format!("unsupported CRT probe pattern: {pattern}").into());
+    }
+    let seconds = seconds.ok_or("CRT probe needs --seconds 20")?;
+    if seconds != 20 {
+        return Err("CRT probe duration is fixed at 20 seconds".into());
+    }
+    let output = output.ok_or("CRT probe needs --out DIRECTORY")?;
+    Ok(QualifyAction::Probe {
+        pattern,
+        seconds,
+        output,
+    })
+}
+
+fn run_probe(pattern: &str, seconds: u64, output: &Path) -> Result<()> {
+    if !io::stdin().is_terminal() {
+        return Err("CRT probe is attended and requires an interactive terminal".into());
+    }
+    create_new_output_directory(output)?;
+    let session = connect(10)?;
+    ensure_arming_clear(&session)?;
+    ensure_no_existing_transaction(&session)?;
+    let display = exec_checked_output(
+        &session,
+        "CRT probe display transaction preflight",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    if display
+        .stdout
+        .split_ascii_whitespace()
+        .any(|field| field.starts_with("pending=") && field != "pending=none")
+    {
+        return Err("CRT probe refuses a pending display transaction".into());
+    }
+    wait_launcher_ready(&session, Instant::now(), Duration::from_secs(15))?;
+    let settings = exec_checked_output(
+        &session,
+        "resolved CRT mode",
+        &acknowledged_main_command("mister_magik_settings_get_v1"),
+    )?;
+    let runtime_settings = parse_crt_runtime_settings_reply(&settings.stdout)?;
+
+    println!("CRT probe pattern={pattern} duration={seconds}s");
+    println!("{}", probe_observation_prompt(pattern));
+    exec_checked(
+        &session,
+        "CRT probe suspend",
+        &acknowledged_main_command("mister_magik_suspend"),
+    )?;
+    let run = exec_checked(
+        &session,
+        "CRT probe",
+        &crt_probe_run_command(pattern, seconds, &runtime_settings),
+    );
+    if let Err(error) = run {
+        let recovery = exec_checked(
+            &session,
+            "CRT probe compensating resume",
+            &acknowledged_main_command("mister_magik_resume"),
+        );
+        return match recovery {
+            Ok(()) => Err(error),
+            Err(recovery_error) => {
+                Err(format!("{error}; compensating Main resume failed: {recovery_error}").into())
+            }
+        };
+    }
+    wait_launcher_ready(&session, Instant::now(), Duration::from_secs(15))?;
+    let log = exec_checked_output(
+        &session,
+        "CRT probe log",
+        "cat /tmp/mister-magik-crt_probe.log",
+    )?;
+    let status = parse_crt_probe_status(&log.stdout)?;
+    fs::write(output.join("probe.log"), &log.stdout)?;
+    fs::write(output.join("probe-status.txt"), format!("{status}\n"))?;
+    fs::write(
+        output.join("manifest.json"),
+        serde_json::to_vec_pretty(&json!({
+            "schema": "mister-magik-crt-probe-v1",
+            "pattern": pattern,
+            "seconds": seconds,
+            "runtime_settings": runtime_settings,
+            "status": status,
+            "manual_observation_pending": true,
+        }))?,
+    )?;
+    println!("{status}");
+    println!("CRT probe restored launcher; report the physical CRT observation.");
+    Ok(())
+}
+
+fn crt_probe_run_command(pattern: &str, seconds: u64, runtime_settings: &str) -> String {
+    let resume = acknowledged_main_command("mister_magik_resume");
+    format!(
+        "cleanup() {{ trap - EXIT HUP INT TERM; {resume}; }}; trap cleanup EXIT HUP INT TERM; set -eu; test -x /media/fat/mister-magik-dev/mister-magik-fb; MISTER_CRT_PROBE_PATTERN={} MISTER_MAGIK_RUNTIME_SETTINGS_V1={} /media/fat/mister-magik-dev/mister-magik-fb ui crt_probe {seconds} >/tmp/mister-magik-crt_probe.log 2>&1",
+        super::sh(pattern),
+        super::sh(runtime_settings),
+    )
+}
+
+fn probe_observation_prompt(pattern: &str) -> &'static str {
+    match pattern {
+        "fixed-a" => {
+            "Observe whether slot A remains completely stable without ghosting or horizontal displacement."
+        }
+        "fixed-b" => {
+            "Observe whether slot B remains completely stable without ghosting or horizontal displacement."
+        }
+        "identical-flip" => {
+            "Both slots are identical; report any instability caused solely by full-rate base switching."
+        }
+        "slow-ab" => {
+            "Report whether each cyan/magenta transition affects the whole raster or leaves a mismatched lower band."
+        }
+        "full-ab" => {
+            "Report whether top and bottom identity colors agree and whether the 24-pixel displacement affects the whole raster."
+        }
+        "motion" => "Report any lower-band ghost, horizontal step, or top/bottom frame mismatch.",
+        _ => "Observe the physical CRT.",
+    }
+}
+
+fn parse_crt_probe_status(output: &str) -> Result<&str> {
+    let status = output
+        .match_indices("crt_probe_status_v1 ")
+        .map(|(offset, _)| offset)
+        .last()
+        .map(|offset| &output[offset..])
+        .unwrap_or(output)
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .trim();
+    if !status.starts_with("crt_probe_status_v1 schema=1 ") {
+        return Err("CRT probe did not return a typed status response".into());
+    }
+    if status.split_ascii_whitespace().any(|field| field == "ok=0") {
+        return Err(format!("CRT probe reported failure: {status}").into());
+    }
+    for required in [
+        "ok=1",
+        "pattern=",
+        "mode=crt-",
+        "duration_ms=",
+        "slot_a_base=",
+        "slot_b_base=",
+        "writes=",
+        "posts=",
+        "flips=",
+        "drops=0",
+        "final_pending=0",
+        "final_active_matches=1",
+        "unsafe_active_writes=0",
+        "pending_writes=0",
+        "reason=none",
+    ] {
+        if !status
+            .split_ascii_whitespace()
+            .any(|field| field.starts_with(required))
+        {
+            return Err(format!("CRT probe status omitted successful {required}").into());
+        }
+    }
+    Ok(status)
 }
 
 fn run_attended(output: Option<PathBuf>) -> Result<()> {
@@ -560,6 +783,82 @@ mod tests {
             ])
             .is_err()
         );
+    }
+
+    #[test]
+    fn parses_only_bounded_attended_probe_commands() {
+        assert_eq!(
+            parse_args(&[
+                "probe".into(),
+                "--attended".into(),
+                "--pattern".into(),
+                "fixed-a".into(),
+                "--seconds".into(),
+                "20".into(),
+                "--out".into(),
+                "/tmp/probe".into(),
+            ])
+            .unwrap(),
+            QualifyAction::Probe {
+                pattern: "fixed-a".into(),
+                seconds: 20,
+                output: PathBuf::from("/tmp/probe"),
+            }
+        );
+        for invalid in ["unknown", "FIXED-A"] {
+            assert!(
+                parse_args(&[
+                    "probe".into(),
+                    "--attended".into(),
+                    "--pattern".into(),
+                    invalid.into(),
+                    "--seconds".into(),
+                    "20".into(),
+                    "--out".into(),
+                    "/tmp/probe".into(),
+                ])
+                .is_err()
+            );
+        }
+        assert!(
+            parse_args(&[
+                "probe".into(),
+                "--attended".into(),
+                "--pattern".into(),
+                "fixed-a".into(),
+                "--seconds".into(),
+                "21".into(),
+                "--out".into(),
+                "/tmp/probe".into(),
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn probe_command_is_self_restoring_and_does_not_change_display_mode() {
+        let command = crt_probe_run_command("identical-flip", 20, "schema=1&output=crt-576p50");
+
+        assert!(command.contains("trap cleanup EXIT HUP INT TERM"));
+        assert!(command.contains("mister_magik_resume"));
+        assert!(command.contains("MISTER_CRT_PROBE_PATTERN='identical-flip'"));
+        assert!(command.contains(" ui crt_probe 20 "));
+        assert!(!command.contains("display_apply"));
+        assert!(!command.contains("reboot"));
+    }
+
+    #[test]
+    fn probe_status_requires_zero_safety_failures() {
+        let valid = "crt_probe_status_v1 schema=1 ok=1 pattern=fixed-a mode=crt-576p50 duration_ms=20000 slot_a_base=0x227e9000 slot_b_base=0x22fd2000 active_slot=1 writes=2 posts=2 flips=2 drops=0 final_pending=0 final_active_matches=1 unsafe_active_writes=0 pending_writes=0 cadence_misses=0 max_interval_us=20000 max_settle_us=19000 max_copy_us=1000 max_post_us=20000 last_sequence=3 reason=none";
+        assert_eq!(parse_crt_probe_status(valid).unwrap(), valid);
+        assert!(parse_crt_probe_status(&valid.replace("drops=0", "drops=1")).is_err());
+        assert!(
+            parse_crt_probe_status(
+                &valid.replace("unsafe_active_writes=0", "unsafe_active_writes=1")
+            )
+            .is_err()
+        );
+        assert!(parse_crt_probe_status(&valid.replace("ok=1", "ok=0")).is_err());
     }
 
     #[test]

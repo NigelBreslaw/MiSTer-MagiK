@@ -5,7 +5,66 @@ use super::*;
 use std::io;
 
 const CRT_TRIAL_SECS: u64 = 30;
+const CRT_PROBE_SECS: u64 = 20;
 const CRT_LATCH_SETTLE_TIMEOUT: Duration = Duration::from_millis(100);
+const CRT_PROBE_SLOW_PERIOD: Duration = Duration::from_secs(1);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CrtProbePattern {
+    FixedA,
+    FixedB,
+    IdenticalFlip,
+    SlowAb,
+    FullAb,
+    Motion,
+}
+
+impl CrtProbePattern {
+    fn from_env() -> Option<Self> {
+        Self::parse(&std::env::var("MISTER_CRT_PROBE_PATTERN").ok()?)
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "fixed-a" => Some(Self::FixedA),
+            "fixed-b" => Some(Self::FixedB),
+            "identical-flip" => Some(Self::IdenticalFlip),
+            "slow-ab" => Some(Self::SlowAb),
+            "full-ab" => Some(Self::FullAb),
+            "motion" => Some(Self::Motion),
+            _ => None,
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::FixedA => "fixed-a",
+            Self::FixedB => "fixed-b",
+            Self::IdenticalFlip => "identical-flip",
+            Self::SlowAb => "slow-ab",
+            Self::FullAb => "full-ab",
+            Self::Motion => "motion",
+        }
+    }
+
+    const fn flips_continuously(self) -> bool {
+        matches!(self, Self::IdenticalFlip | Self::FullAb | Self::Motion)
+    }
+}
+
+#[derive(Debug, Default)]
+struct CrtProbeTelemetry {
+    writes: u64,
+    posts: u64,
+    unsafe_active_writes: u64,
+    pending_writes: u64,
+    max_settle_us: u64,
+    max_copy_us: u64,
+    max_post_us: u64,
+    cadence: CrtTrialCadence,
+    last_slot: u8,
+    last_sequence: u16,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct CrtTrialCounters {
@@ -248,6 +307,444 @@ pub(super) fn run_crt_trial_loop(
         last_sequence,
         reason
     );
+}
+
+pub(super) fn run_crt_probe_loop(
+    secs: u64,
+    ui: &UiDisplay,
+    hardware: &mut Fpga,
+    display_session: &mut LauncherDisplaySession,
+) {
+    let mode = ui.output_route();
+    let Some(pattern) = CrtProbePattern::from_env() else {
+        crate::ui_errln!(
+            "crt_probe_status_v1 schema=1 ok=0 mode={} reason=invalid-pattern",
+            mode.label()
+        );
+        return;
+    };
+    if secs != CRT_PROBE_SECS || !mode.is_crt() {
+        crate::ui_errln!(
+            "crt_probe_status_v1 schema=1 ok=0 pattern={} mode={} reason=invalid-contract requested_secs={} geometry={}x{}",
+            pattern.label(),
+            mode.label(),
+            secs,
+            ui.fb_w(),
+            ui.fb_h()
+        );
+        return;
+    }
+
+    let initial_status = match wait_for_crt_latch_settle(hardware) {
+        Ok(status) if status.supported() => status,
+        Ok(_) => {
+            crate::ui_errln!(
+                "crt_probe_status_v1 schema=1 ok=0 pattern={} mode={} reason=latch-status-unsupported",
+                pattern.label(),
+                mode.label()
+            );
+            return;
+        }
+        Err(error) => {
+            crate::ui_errln!(
+                "crt_probe_status_v1 schema=1 ok=0 pattern={} mode={} reason=latch-status-read detail={}",
+                pattern.label(),
+                mode.label(),
+                safe_field(&error.to_string())
+            );
+            return;
+        }
+    };
+
+    let width = ui.fb_w();
+    let height = ui.fb_h();
+    let mut buffers = match PluginLatchFrameBuffers::open(width, height) {
+        Ok(buffers) => buffers,
+        Err(failure) => {
+            crate::ui_errln!(
+                "crt_probe_status_v1 schema=1 ok=0 pattern={} mode={} reason=buffer-open stage={} detail={}",
+                pattern.label(),
+                mode.label(),
+                failure.stage.code(),
+                safe_field(&failure.detail)
+            );
+            return;
+        }
+    };
+    let base_a = buffers.base_addr(1);
+    let base_b = buffers.base_addr(2);
+    let route = LauncherFramebufferRoute::for_scan(ui.scan_w(), ui.scan_h(), ui.direct_video());
+    let geometry = crate::fpga::LatchedFbufGeometry::new_for_route(width as u16, route, 0);
+    let before = CrtTrialCounters::from_status(initial_status);
+    let mut sequence = initial_status.active_sequence.wrapping_add(1).max(1);
+    let mut telemetry = CrtProbeTelemetry::default();
+
+    let neutral = render_crt_probe_pattern(width, height, 0, 0, None);
+    let frame_a = match pattern {
+        CrtProbePattern::IdenticalFlip => neutral.clone(),
+        _ => render_crt_probe_pattern(width, height, 1, 0, None),
+    };
+    let frame_b = match pattern {
+        CrtProbePattern::IdenticalFlip => neutral,
+        _ => render_crt_probe_pattern(width, height, 2, 24, None),
+    };
+
+    let preparation = prepare_probe_slots(
+        &mut buffers,
+        [&frame_a, &frame_b],
+        width,
+        height,
+        hardware,
+        display_session,
+        geometry,
+        &mut sequence,
+        &mut telemetry,
+    );
+    let mut failure = preparation.err();
+    let mut active_slot = wait_for_crt_latch_settle(hardware)
+        .ok()
+        .and_then(|status| probe_active_slot(status, base_a, base_b))
+        .unwrap_or(0);
+
+    if failure.is_none() {
+        let target = match pattern {
+            CrtProbePattern::FixedA => 1,
+            CrtProbePattern::FixedB => 2,
+            _ => active_slot,
+        };
+        if target != 0 && target != active_slot {
+            match post_probe_slot(
+                &buffers,
+                target,
+                width,
+                height,
+                hardware,
+                display_session,
+                geometry,
+                &mut sequence,
+                &mut telemetry,
+                mode.nominal_period_us().unwrap_or(20_000),
+            ) {
+                Ok(()) => active_slot = target,
+                Err(error) => failure = Some(error),
+            }
+        }
+    }
+
+    let observation_started = Instant::now();
+    let mut motion_frame = 0u64;
+    let mut next_slow_flip = observation_started + CRT_PROBE_SLOW_PERIOD;
+    while failure.is_none() && observation_started.elapsed() < Duration::from_secs(CRT_PROBE_SECS) {
+        let should_flip = if pattern.flips_continuously() {
+            true
+        } else if pattern == CrtProbePattern::SlowAb && Instant::now() >= next_slow_flip {
+            next_slow_flip += CRT_PROBE_SLOW_PERIOD;
+            true
+        } else {
+            false
+        };
+        if !should_flip {
+            std::thread::sleep(Duration::from_millis(2));
+            continue;
+        }
+        let target = if active_slot == 1 { 2 } else { 1 };
+        if pattern == CrtProbePattern::Motion {
+            let frame = render_crt_probe_pattern(width, height, 0, 0, Some(motion_frame));
+            if let Err(error) = write_probe_slot(
+                &mut buffers,
+                target,
+                &frame,
+                width,
+                hardware,
+                &mut telemetry,
+            ) {
+                failure = Some(error);
+                break;
+            }
+            motion_frame = motion_frame.wrapping_add(1);
+        }
+        match post_probe_slot(
+            &buffers,
+            target,
+            width,
+            height,
+            hardware,
+            display_session,
+            geometry,
+            &mut sequence,
+            &mut telemetry,
+            mode.nominal_period_us().unwrap_or(20_000),
+        ) {
+            Ok(()) => active_slot = target,
+            Err(error) => failure = Some(error),
+        }
+    }
+
+    let final_status = wait_for_crt_latch_settle(hardware);
+    let (counters, final_status, mut failure) =
+        finish_crt_probe(before, telemetry.posts, failure, final_status);
+    let final_pending = final_status.is_some_and(crate::fpga::LatchedFbufStatus::pending);
+    let final_active_matches = final_status.is_some_and(|status| {
+        status.active_base == buffers.base_addr(telemetry.last_slot)
+            && status.active_sequence == telemetry.last_sequence
+    });
+    if failure.is_none() && (!final_active_matches || final_pending) {
+        failure = Some("final-active-route-mismatch".to_string());
+    }
+    if failure.is_none() && telemetry.unsafe_active_writes != 0 {
+        failure = Some("active-buffer-write".to_string());
+    }
+    if failure.is_none() && telemetry.pending_writes != 0 {
+        failure = Some("pending-buffer-write".to_string());
+    }
+    let reason = failure.as_deref().unwrap_or("none");
+    crate::ui_logln!(
+        "crt_probe_status_v1 schema=1 ok={} pattern={} mode={} duration_ms={} slot_a_base=0x{:08x} slot_b_base=0x{:08x} active_slot={} writes={} posts={} flips={} drops={} final_pending={} final_active_matches={} unsafe_active_writes={} pending_writes={} cadence_misses={} max_interval_us={} max_settle_us={} max_copy_us={} max_post_us={} last_sequence={} reason={}",
+        u8::from(failure.is_none()),
+        pattern.label(),
+        mode.label(),
+        observation_started.elapsed().as_millis(),
+        base_a,
+        base_b,
+        active_slot,
+        telemetry.writes,
+        counters.posts,
+        counters.flips,
+        counters.drops,
+        u8::from(final_pending),
+        u8::from(final_active_matches),
+        telemetry.unsafe_active_writes,
+        telemetry.pending_writes,
+        telemetry.cadence.missed_intervals,
+        telemetry.cadence.max_interval_us,
+        telemetry.max_settle_us,
+        telemetry.max_copy_us,
+        telemetry.max_post_us,
+        telemetry.last_sequence,
+        reason
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_probe_slots(
+    buffers: &mut PluginLatchFrameBuffers,
+    frames: [&[Rgb565Pixel]; 2],
+    width: usize,
+    height: usize,
+    hardware: &mut Fpga,
+    display_session: &mut LauncherDisplaySession,
+    geometry: crate::fpga::LatchedFbufGeometry,
+    sequence: &mut u16,
+    telemetry: &mut CrtProbeTelemetry,
+) -> Result<(), String> {
+    let status = wait_for_crt_latch_settle(hardware)
+        .map_err(|error| format!("prepare-status-{}", safe_field(&error.to_string())))?;
+    let active = probe_active_slot(status, buffers.base_addr(1), buffers.base_addr(2));
+    let first = if active == Some(1) { 2 } else { 1 };
+    write_probe_slot(
+        buffers,
+        first,
+        frames[(first - 1) as usize],
+        width,
+        hardware,
+        telemetry,
+    )?;
+    post_probe_slot(
+        buffers,
+        first,
+        width,
+        height,
+        hardware,
+        display_session,
+        geometry,
+        sequence,
+        telemetry,
+        20_000,
+    )?;
+    let second = if first == 1 { 2 } else { 1 };
+    write_probe_slot(
+        buffers,
+        second,
+        frames[(second - 1) as usize],
+        width,
+        hardware,
+        telemetry,
+    )
+}
+
+fn write_probe_slot(
+    buffers: &mut PluginLatchFrameBuffers,
+    slot: u8,
+    frame: &[Rgb565Pixel],
+    width: usize,
+    hardware: &mut Fpga,
+    telemetry: &mut CrtProbeTelemetry,
+) -> Result<(), String> {
+    let status = wait_for_crt_latch_settle(hardware)
+        .map_err(|error| format!("write-status-{}", safe_field(&error.to_string())))?;
+    if status.pending() {
+        telemetry.pending_writes += 1;
+        return Err("pending-buffer-write".to_string());
+    }
+    if status.active_enabled() && status.active_base == buffers.base_addr(slot) {
+        telemetry.unsafe_active_writes += 1;
+        return Err("active-buffer-write".to_string());
+    }
+    let started = Instant::now();
+    let buffer = buffers.buffer_mut(slot);
+    buffer
+        .copy_full_frame(frame, width)
+        .map_err(|error| format!("frame-copy-{}", safe_field(&error.to_string())))?;
+    buffer.publish_writes();
+    telemetry.max_copy_us = telemetry
+        .max_copy_us
+        .max(started.elapsed().as_micros().try_into().unwrap_or(u64::MAX));
+    telemetry.writes += 1;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn post_probe_slot(
+    buffers: &PluginLatchFrameBuffers,
+    slot: u8,
+    width: usize,
+    height: usize,
+    hardware: &mut Fpga,
+    display_session: &mut LauncherDisplaySession,
+    geometry: crate::fpga::LatchedFbufGeometry,
+    sequence: &mut u16,
+    telemetry: &mut CrtProbeTelemetry,
+    nominal_period_us: u64,
+) -> Result<(), String> {
+    let before = wait_for_crt_latch_settle(hardware)
+        .map_err(|error| format!("post-before-{}", safe_field(&error.to_string())))?;
+    if before.pending() {
+        return Err("post-while-pending".to_string());
+    }
+    let posted_sequence = *sequence;
+    *sequence = (*sequence).wrapping_add(1).max(1);
+    let started = Instant::now();
+    let ack = hardware
+        .post_latched_rgb565(
+            posted_sequence,
+            buffers.base_addr(slot),
+            width as u16,
+            height as u16,
+            geometry,
+        )
+        .map_err(|error| format!("latch-post-{}", safe_field(&error.to_string())))?;
+    if ack.0 != crate::fpga::MAGIK_FBUF_LATCH_MAGIC && ack.1 != crate::fpga::MAGIK_FBUF_LATCH_MAGIC
+    {
+        return Err("latch-post-unsupported".to_string());
+    }
+    display_session
+        .arm_latch_route_with_hardware(hardware)
+        .map_err(|error| format!("route-arm-{}", safe_field(&error.to_string())))?;
+    let settle_started = Instant::now();
+    let after = wait_for_crt_latch_settle(hardware)
+        .map_err(|error| format!("post-settle-{}", safe_field(&error.to_string())))?;
+    telemetry.max_settle_us = telemetry.max_settle_us.max(
+        settle_started
+            .elapsed()
+            .as_micros()
+            .try_into()
+            .unwrap_or(u64::MAX),
+    );
+    telemetry.max_post_us = telemetry
+        .max_post_us
+        .max(started.elapsed().as_micros().try_into().unwrap_or(u64::MAX));
+    if after.pending()
+        || after.active_base != buffers.base_addr(slot)
+        || after.active_sequence != posted_sequence
+        || after.active_width != width as u16
+        || after.active_height != height as u16
+        || after.active_stride != geometry.stride_bytes
+    {
+        return Err("post-verification-mismatch".to_string());
+    }
+    telemetry.posts += 1;
+    telemetry.last_slot = slot;
+    telemetry.last_sequence = posted_sequence;
+    telemetry.cadence.record(Instant::now(), nominal_period_us);
+    Ok(())
+}
+
+fn probe_active_slot(
+    status: crate::fpga::LatchedFbufStatus,
+    base_a: u32,
+    base_b: u32,
+) -> Option<u8> {
+    match status.active_base {
+        base if status.active_enabled() && base == base_a => Some(1),
+        base if status.active_enabled() && base == base_b => Some(2),
+        _ => None,
+    }
+}
+
+fn finish_crt_probe(
+    before: CrtTrialCounters,
+    expected_posts: u64,
+    mut failure: Option<String>,
+    final_status: io::Result<crate::fpga::LatchedFbufStatus>,
+) -> (
+    CrtTrialCounters,
+    Option<crate::fpga::LatchedFbufStatus>,
+    Option<String>,
+) {
+    let (counters, final_status, finish_failure) =
+        finish_crt_trial(before, expected_posts, failure.take(), final_status);
+    failure = finish_failure;
+    (counters, final_status, failure)
+}
+
+fn render_crt_probe_pattern(
+    width: usize,
+    height: usize,
+    identity: u8,
+    offset_x: usize,
+    moving_frame: Option<u64>,
+) -> Vec<Rgb565Pixel> {
+    let mut frame = vec![Rgb565Pixel(0x0841); width * height];
+    for y in 0..height {
+        for x in 0..width {
+            let shifted_x = (x + width - offset_x % width) % width;
+            let value = if y % 16 == 0 {
+                0xffff
+            } else if shifted_x % 32 < 2 {
+                0x8410
+            } else if shifted_x % 8 == 0 {
+                0x4208
+            } else {
+                0x0841
+            };
+            frame[y * width + x] = Rgb565Pixel(value);
+        }
+    }
+    let identity_color = match identity {
+        1 => 0x07ff,
+        2 => 0xf81f,
+        _ => 0xffe0,
+    };
+    render_probe_identity_bands(&mut frame, width, height, identity_color);
+    if let Some(frame_number) = moving_frame {
+        let marker_x = ((frame_number.wrapping_mul(5)) % width as u64) as usize;
+        for y in 0..height {
+            for dx in 0..3 {
+                frame[y * width + (marker_x + dx) % width] = Rgb565Pixel(0xffff);
+            }
+        }
+    }
+    frame
+}
+
+fn render_probe_identity_bands(frame: &mut [Rgb565Pixel], width: usize, height: usize, color: u16) {
+    let band_height = 12usize.min(height / 2);
+    for y in 0..band_height {
+        for x in 0..width {
+            frame[y * width + x] = Rgb565Pixel(color);
+            frame[(height - 1 - y) * width + x] = Rgb565Pixel(color);
+        }
+    }
 }
 
 fn wait_for_crt_latch_settle(hardware: &mut Fpga) -> io::Result<crate::fpga::LatchedFbufStatus> {
@@ -589,5 +1086,52 @@ mod tests {
             Err(io::Error::new(io::ErrorKind::TimedOut, "pending")),
         );
         assert_eq!(failure.as_deref(), Some("final-latch-settle-pending"));
+    }
+
+    #[test]
+    fn probe_pattern_names_are_closed_and_typed() {
+        assert_eq!(
+            CrtProbePattern::parse("fixed-a"),
+            Some(CrtProbePattern::FixedA)
+        );
+        assert_eq!(
+            CrtProbePattern::parse("identical-flip"),
+            Some(CrtProbePattern::IdenticalFlip)
+        );
+        assert_eq!(
+            CrtProbePattern::parse("motion"),
+            Some(CrtProbePattern::Motion)
+        );
+        assert_eq!(CrtProbePattern::parse("arbitrary"), None);
+    }
+
+    #[test]
+    fn probe_identity_matches_at_both_raster_edges() {
+        let frame = render_crt_probe_pattern(640, 576, 1, 0, None);
+
+        assert_eq!(&frame[..12 * 640], &frame[(576 - 12) * 640..]);
+        assert!(frame[..12 * 640].iter().all(|pixel| pixel.0 == 0x07ff));
+    }
+
+    #[test]
+    fn ab_probe_has_exact_twenty_four_pixel_ruler_offset() {
+        let frame_a = render_crt_probe_pattern(640, 576, 1, 0, None);
+        let frame_b = render_crt_probe_pattern(640, 576, 2, 24, None);
+        let row = 32;
+
+        assert_eq!(frame_a[row * 640].0, 0x8410);
+        assert_eq!(frame_b[row * 640 + 24].0, 0x8410);
+        assert_ne!(frame_a[row * 640], frame_b[row * 640]);
+    }
+
+    #[test]
+    fn motion_probe_moves_five_pixels_per_frame() {
+        let first = render_crt_probe_pattern(640, 576, 0, 0, Some(3));
+        let second = render_crt_probe_pattern(640, 576, 0, 0, Some(4));
+        let row = 100;
+
+        assert_eq!(first[row * 640 + 15].0, 0xffff);
+        assert_eq!(second[row * 640 + 20].0, 0xffff);
+        assert_ne!(first, second);
     }
 }

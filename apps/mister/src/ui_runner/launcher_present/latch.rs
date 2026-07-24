@@ -72,7 +72,8 @@ pub(in crate::ui_runner) struct PluginLatchFrameBuffers {
 }
 
 impl PluginLatchFrameBuffers {
-    fn open(width: usize, height: usize) -> Result<Self, LatchFailure> {
+    /// Opens both qualified hidden slots for production presentation or bounded diagnostics.
+    pub(in crate::ui_runner) fn open(width: usize, height: usize) -> Result<Self, LatchFailure> {
         let stride_bytes = rgb565_stride_bytes(width);
         let buffer1 = open_hidden_buffer(1, width, height, stride_bytes)?;
         let buffer2 = open_hidden_buffer(2, width, height, stride_bytes)?;
