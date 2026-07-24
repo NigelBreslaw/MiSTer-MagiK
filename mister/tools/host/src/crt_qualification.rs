@@ -173,6 +173,7 @@ fn parse_probe_args(args: &[String]) -> Result<QualifyAction> {
             | "motion-hold3"
             | "motion-slow"
             | "preloaded-ruler-slow"
+            | "preloaded-bars-slow"
     ) {
         return Err(format!("unsupported CRT probe pattern: {pattern}").into());
     }
@@ -313,6 +314,9 @@ fn probe_observation_prompt(pattern: &str) -> &'static str {
         }
         "preloaded-ruler-slow" => {
             "Two ruler positions were preloaded before observation. At each one-second switch, report whether the lower screen briefly remains at the old position."
+        }
+        "preloaded-bars-slow" => {
+            "Preloaded cyan-left and magenta-right bars switch once per second. Report any frame with one bar above a horizontal boundary and the other below it."
         }
         _ => "Observe the physical CRT.",
     }
@@ -816,6 +820,7 @@ mod tests {
             "motion-hold3",
             "motion-slow",
             "preloaded-ruler-slow",
+            "preloaded-bars-slow",
         ] {
             let action = parse_args(&[
                 "probe".into(),

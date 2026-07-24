@@ -24,6 +24,7 @@ enum CrtProbePattern {
     MotionHold3,
     MotionSlow,
     PreloadedRulerSlow,
+    PreloadedBarsSlow,
 }
 
 impl CrtProbePattern {
@@ -46,6 +47,7 @@ impl CrtProbePattern {
             "motion-hold3" => Some(Self::MotionHold3),
             "motion-slow" => Some(Self::MotionSlow),
             "preloaded-ruler-slow" => Some(Self::PreloadedRulerSlow),
+            "preloaded-bars-slow" => Some(Self::PreloadedBarsSlow),
             _ => None,
         }
     }
@@ -65,6 +67,7 @@ impl CrtProbePattern {
             Self::MotionHold3 => "motion-hold3",
             Self::MotionSlow => "motion-slow",
             Self::PreloadedRulerSlow => "preloaded-ruler-slow",
+            Self::PreloadedBarsSlow => "preloaded-bars-slow",
         }
     }
 
@@ -81,7 +84,11 @@ impl CrtProbePattern {
             Self::MotionHold2 => Some(2),
             Self::MotionHold3 => Some(3),
             Self::MotionSlow => Some(50),
-            Self::FixedA | Self::FixedB | Self::SlowAb | Self::PreloadedRulerSlow => None,
+            Self::FixedA
+            | Self::FixedB
+            | Self::SlowAb
+            | Self::PreloadedRulerSlow
+            | Self::PreloadedBarsSlow => None,
         }
     }
 
@@ -426,6 +433,7 @@ pub(super) fn run_crt_probe_loop(
         CrtProbePattern::PreloadedRulerSlow => {
             render_crt_probe_pattern(width, height, 0, 0, Some(0))
         }
+        CrtProbePattern::PreloadedBarsSlow => render_preloaded_bar_pattern(width, height, 1),
         _ => render_crt_probe_pattern(width, height, 1, 0, None),
     };
     let frame_b = match pattern {
@@ -433,6 +441,7 @@ pub(super) fn run_crt_probe_loop(
         CrtProbePattern::PreloadedRulerSlow => {
             render_crt_probe_pattern(width, height, 0, 0, Some(5))
         }
+        CrtProbePattern::PreloadedBarsSlow => render_preloaded_bar_pattern(width, height, 2),
         _ => render_crt_probe_pattern(width, height, 2, 24, None),
     };
 
@@ -487,7 +496,9 @@ pub(super) fn run_crt_probe_loop(
             true
         } else if matches!(
             pattern,
-            CrtProbePattern::SlowAb | CrtProbePattern::PreloadedRulerSlow
+            CrtProbePattern::SlowAb
+                | CrtProbePattern::PreloadedRulerSlow
+                | CrtProbePattern::PreloadedBarsSlow
         ) && Instant::now() >= next_slow_flip
         {
             next_slow_flip += CRT_PROBE_SLOW_PERIOD;
@@ -810,6 +821,23 @@ fn render_probe_identity_bands(frame: &mut [Rgb565Pixel], width: usize, height: 
             frame[(height - 1 - y) * width + x] = Rgb565Pixel(color);
         }
     }
+}
+
+fn render_preloaded_bar_pattern(width: usize, height: usize, identity: u8) -> Vec<Rgb565Pixel> {
+    let mut frame = vec![Rgb565Pixel(0x0000); width * height];
+    let (center_x, color) = if identity == 1 {
+        (width / 4, 0x07ff)
+    } else {
+        (width * 3 / 4, 0xf81f)
+    };
+    let half_width = 12usize.min(width / 8);
+    for y in 0..height {
+        for x in center_x.saturating_sub(half_width)..(center_x + half_width).min(width) {
+            frame[y * width + x] = Rgb565Pixel(color);
+        }
+    }
+    render_probe_identity_bands(&mut frame, width, height, color);
+    frame
 }
 
 fn wait_for_crt_latch_settle(hardware: &mut Fpga) -> io::Result<crate::fpga::LatchedFbufStatus> {
@@ -1257,6 +1285,10 @@ mod tests {
             Some(CrtProbePattern::PreloadedRulerSlow)
         );
         assert_eq!(
+            CrtProbePattern::parse("preloaded-bars-slow"),
+            Some(CrtProbePattern::PreloadedBarsSlow)
+        );
+        assert_eq!(
             CrtProbePattern::parse("full-ab-hold4"),
             Some(CrtProbePattern::FullAbHold4)
         );
@@ -1325,6 +1357,20 @@ mod tests {
         assert_eq!(first[row * 640].0, 0xffff);
         assert_eq!(second[row * 640 + 25].0, 0xffff);
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn preloaded_bars_have_unambiguous_positions_and_identities() {
+        let left = render_preloaded_bar_pattern(640, 576, 1);
+        let right = render_preloaded_bar_pattern(640, 576, 2);
+        let middle_row = 288;
+
+        assert_eq!(left[middle_row * 640 + 160].0, 0x07ff);
+        assert_eq!(left[middle_row * 640 + 480].0, 0x0000);
+        assert_eq!(right[middle_row * 640 + 160].0, 0x0000);
+        assert_eq!(right[middle_row * 640 + 480].0, 0xf81f);
+        assert_eq!(left[0].0, 0x07ff);
+        assert_eq!(right[575 * 640].0, 0xf81f);
     }
 
     #[test]
