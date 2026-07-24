@@ -371,13 +371,13 @@ pub struct ScopeArgs {
 }
 
 impl ScopeArgs {
-    fn into_scope(self, task_id: Option<&str>) -> Scope {
+    fn into_scope(self) -> Scope {
         if self.staged {
             Scope::Staged
         } else if !self.paths.is_empty() {
             Scope::Paths(self.paths)
         } else {
-            Scope::Task(task_id.unwrap_or("").to_owned())
+            Scope::WorkingTree
         }
     }
 }
@@ -414,10 +414,10 @@ impl Cli {
             },
             Some(Command::Plan(scope)) => Intent::Plan {
                 verbose: scope.verbose,
-                scope: scope.into_scope(Some(&task_id)),
+                scope: scope.into_scope(),
             },
             Some(Command::Check(scope)) => Intent::Check {
-                scope: scope.into_scope(Some(&task_id)),
+                scope: scope.into_scope(),
             },
             Some(Command::Runs { failed, recent }) => Intent::ListRuns { failed, recent },
             Some(Command::Run {
@@ -436,7 +436,7 @@ impl Cli {
                 command: DbCommand::PruneLogs,
             }) => Intent::PruneLogs,
             Some(Command::Verify(scope)) => Intent::Verify {
-                scope: scope.into_scope(Some(&task_id)),
+                scope: scope.into_scope(),
             },
             Some(Command::Doctor) => Intent::Doctor,
             Some(Command::Diagnose) => Intent::Diagnose,
@@ -527,12 +527,12 @@ mod tests {
     }
 
     #[test]
-    fn check_defaults_to_task() {
-        let cli = Cli::try_parse_from(["agent-cli", "--task-id", "task-1", "check"]).unwrap();
+    fn check_defaults_to_working_tree() {
+        let cli = Cli::try_parse_from(["agent-cli", "check"]).unwrap();
         assert_eq!(
             cli.into_intent(),
             Intent::Check {
-                scope: Scope::Task("task-1".into())
+                scope: Scope::WorkingTree
             }
         );
     }

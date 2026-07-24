@@ -95,3 +95,95 @@ fn run_git(
 fn normalize(repository: &Path, path: &Path) -> PathBuf {
     path.strip_prefix(repository).unwrap_or(path).to_path_buf()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::evidence::Evidence;
+    use crate::request::RawRequest;
+    use std::fs;
+    use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn git_scopes_distinguish_working_tree_from_index() {
+        let root = std::env::temp_dir().join(format!(
+            "agent-cli-scope-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        for args in [
+            vec!["init", "-q"],
+            vec!["config", "user.name", "Agent"],
+            vec!["config", "user.email", "agent@example.invalid"],
+        ] {
+            assert!(
+                Command::new("git")
+                    .args(args)
+                    .current_dir(&root)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        fs::write(root.join("modified.txt"), "before\n").unwrap();
+        fs::write(root.join("deleted.txt"), "delete me\n").unwrap();
+        assert!(
+            Command::new("git")
+                .args(["add", "."])
+                .current_dir(&root)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .args(["commit", "-qm", "baseline"])
+                .current_dir(&root)
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        fs::write(root.join("modified.txt"), "after\n").unwrap();
+        fs::remove_file(root.join("deleted.txt")).unwrap();
+        fs::write(root.join("untracked.txt"), "new\n").unwrap();
+        assert!(
+            Command::new("git")
+                .args(["add", "modified.txt"])
+                .current_dir(&root)
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        let evidence_root = root.with_extension("evidence");
+        let evidence = Evidence::open_at(&evidence_root).unwrap();
+        let request = RawRequest {
+            id: "scope-test".into(),
+            args: vec!["agent-cli".into(), "check".into()],
+            started_ms: now_ms(),
+            started: Instant::now(),
+        };
+        evidence.begin_request(&request).unwrap();
+
+        assert_eq!(
+            collect(&evidence, &request.id, &root, &Scope::Staged).unwrap(),
+            [PathBuf::from("modified.txt")]
+        );
+        assert_eq!(
+            collect(&evidence, &request.id, &root, &Scope::WorkingTree).unwrap(),
+            [
+                PathBuf::from("deleted.txt"),
+                PathBuf::from("modified.txt"),
+                PathBuf::from("untracked.txt")
+            ]
+        );
+        drop(evidence);
+        fs::remove_dir_all(evidence_root).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+}

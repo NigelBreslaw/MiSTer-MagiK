@@ -360,10 +360,10 @@ fn operation_cache_key(
 ) -> Result<Option<String>, String> {
     match &plan.intent {
         crate::model::Intent::Check {
-            scope: crate::model::Scope::Task(_),
+            scope: crate::model::Scope::WorkingTree | crate::model::Scope::Staged,
         }
         | crate::model::Intent::Verify {
-            scope: crate::model::Scope::Task(_),
+            scope: crate::model::Scope::WorkingTree | crate::model::Scope::Staged,
         } => {}
         _ => return Ok(None),
     }
@@ -1135,7 +1135,7 @@ mod tests {
     }
 
     #[test]
-    fn repository_fingerprint_includes_unchanged_task_dependencies() {
+    fn repository_fingerprint_includes_unchanged_git_scope_dependencies() {
         let (root, cargo) = fake_cargo("#!/bin/sh\nexit 0\n");
         fs::create_dir_all(root.join("fixture")).unwrap();
         fs::write(root.join("fixture/a.rs"), "a").unwrap();
@@ -1162,7 +1162,7 @@ mod tests {
             FingerprintContext::new(&root, std::slice::from_ref(&operation), &changes).unwrap();
         let plan = Plan {
             intent: Intent::Check {
-                scope: Scope::Task("one".into()),
+                scope: Scope::WorkingTree,
             },
             operations: vec![operation.clone()],
             external_requirements: Vec::new(),

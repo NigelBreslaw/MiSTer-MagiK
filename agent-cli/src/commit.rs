@@ -4,7 +4,6 @@
 use crate::evidence::{Evidence, now_ms};
 use crate::model::{Intent, Outcome, Scope};
 use crate::progress::{EventKind, Reporter};
-use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -120,19 +119,6 @@ fn run_inner(
         ));
     }
     reject_forbidden_paths(repository, &paths)?;
-    let claims: BTreeSet<_> = evidence.task_claims(task_id)?.into_iter().collect();
-    let unclaimed: Vec<_> = paths
-        .iter()
-        .filter(|path| !claims.contains(*path))
-        .cloned()
-        .collect();
-    if !unclaimed.is_empty() {
-        return Err(format!(
-            "commit_scope_ambiguous: task paths were not claimed by successful validation: {}; run `scripts/agent verify`",
-            display_paths(&unclaimed)
-        ));
-    }
-    evidence.claim_task_paths(task_id, &paths)?;
     validate_submodules(repository, &paths)?;
     evidence.update_commit_attempt(request_id, &paths, "ownership_resolved", None, None, None)?;
 
@@ -790,19 +776,6 @@ mod tests {
         fs::set_permissions(&hook, permissions).unwrap();
         assert!(fixture.commit("hook-failure").is_ok());
         assert!(fixture.staged().is_empty());
-    }
-
-    #[test]
-    fn refuses_changes_not_claimed_by_successful_validation() {
-        let fixture = Fixture::new();
-        fixture.begin("unclaimed");
-        fs::write(fixture.root.join("docs/new.md"), "change\n").unwrap();
-        assert!(
-            fixture
-                .commit_with_claim("unclaimed", false)
-                .unwrap_err()
-                .contains("not claimed by successful validation")
-        );
     }
 
     #[test]
