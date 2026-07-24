@@ -6881,7 +6881,7 @@ mod tests {
             .handle_input(&press_a, t0 + Duration::from_millis(64), &catalog)
             .expect("new display mode");
         assert_eq!(event.action, LauncherAction::ApplyDisplayResolution);
-        assert_eq!(event.path.as_deref(), Some("hdmi-1280x720p60"));
+        assert_eq!(event.path.as_deref(), Some("hdmi-1366x768p60"));
 
         nav.confirm_action = Some(ConfirmAction::DisplayResolution);
         nav.confirm_selected = 0;
@@ -6897,7 +6897,7 @@ mod tests {
         let catalog = multi_system_catalog();
         let mut nav = LauncherNav::new();
         let count = mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS.len();
-        assert_eq!(count, 10);
+        assert_eq!(count, 9);
         nav.screen = Screen::Settings;
         nav.display_combo_open = true;
         nav.display_selected = 0;

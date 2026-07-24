@@ -21,17 +21,18 @@ pub struct DisplayResolution {
     pub forced_scandoubler: u8,
 }
 
+const AUTOMATIC_DISPLAY_RESOLUTION: DisplayResolution = DisplayResolution {
+    id: "auto",
+    label: "Automatic (HDMI / VGA DAC)",
+    output_w: 0,
+    output_h: 0,
+    video_mode: None,
+    direct_video: 2,
+    menu_pal: 0,
+    forced_scandoubler: 0,
+};
+
 pub const DISPLAY_RESOLUTIONS: &[DisplayResolution] = &[
-    DisplayResolution {
-        id: "auto",
-        label: "Automatic (HDMI / VGA DAC)",
-        output_w: 0,
-        output_h: 0,
-        video_mode: None,
-        direct_video: 2,
-        menu_pal: 0,
-        forced_scandoubler: 0,
-    },
     DisplayResolution {
         id: "hdmi-1280x720p60",
         label: "1280×720 (16:9)",
@@ -84,7 +85,7 @@ pub const DISPLAY_RESOLUTIONS: &[DisplayResolution] = &[
     },
     DisplayResolution {
         id: "crt-240p60",
-        label: "640×240 @ 60 Hz (4:3) — CRT/VGA, 15 kHz",
+        label: "CRT 240p 60hz NTSC",
         output_w: 640,
         output_h: 240,
         video_mode: None,
@@ -93,18 +94,8 @@ pub const DISPLAY_RESOLUTIONS: &[DisplayResolution] = &[
         forced_scandoubler: 0,
     },
     DisplayResolution {
-        id: "crt-288p50",
-        label: "640×288 @ 50 Hz (4:3) — CRT/VGA, 15 kHz",
-        output_w: 640,
-        output_h: 288,
-        video_mode: None,
-        direct_video: 1,
-        menu_pal: 1,
-        forced_scandoubler: 0,
-    },
-    DisplayResolution {
         id: "crt-480p60",
-        label: "640×480 @ 60 Hz (4:3) — CRT/VGA, 31 kHz",
+        label: "CRT 480p 60hz NTSC",
         output_w: 640,
         output_h: 480,
         video_mode: None,
@@ -113,8 +104,18 @@ pub const DISPLAY_RESOLUTIONS: &[DisplayResolution] = &[
         forced_scandoubler: 1,
     },
     DisplayResolution {
+        id: "crt-288p50",
+        label: "CRT 288p 50hz PAL",
+        output_w: 640,
+        output_h: 288,
+        video_mode: None,
+        direct_video: 1,
+        menu_pal: 1,
+        forced_scandoubler: 0,
+    },
+    DisplayResolution {
         id: "crt-576p50",
-        label: "640×576 @ 50 Hz (4:3) — CRT/VGA, 31 kHz",
+        label: "CRT 576p 50hz PAL",
         output_w: 640,
         output_h: 576,
         video_mode: None,
@@ -125,7 +126,11 @@ pub const DISPLAY_RESOLUTIONS: &[DisplayResolution] = &[
 ];
 
 pub fn find(id: &str) -> Option<&'static DisplayResolution> {
-    DISPLAY_RESOLUTIONS.iter().find(|mode| mode.id == id)
+    if id == AUTOMATIC_DISPLAY_RESOLUTION.id {
+        Some(&AUTOMATIC_DISPLAY_RESOLUTION)
+    } else {
+        DISPLAY_RESOLUTIONS.iter().find(|mode| mode.id == id)
+    }
 }
 
 pub fn persist(id: &str) -> io::Result<()> {
@@ -218,16 +223,27 @@ mod tests {
                 .map(|mode| mode.id)
                 .collect::<Vec<_>>(),
             vec![
-                "auto",
                 "hdmi-1280x720p60",
                 "hdmi-1366x768p60",
                 "hdmi-1920x1080p60",
                 "hdmi-1920x1200p60",
                 "hdmi-2048x1536p60",
                 "crt-240p60",
-                "crt-288p50",
                 "crt-480p60",
+                "crt-288p50",
                 "crt-576p50",
+            ]
+        );
+        assert_eq!(
+            DISPLAY_RESOLUTIONS[5..]
+                .iter()
+                .map(|mode| (mode.id, mode.label))
+                .collect::<Vec<_>>(),
+            vec![
+                ("crt-240p60", "CRT 240p 60hz NTSC"),
+                ("crt-480p60", "CRT 480p 60hz NTSC"),
+                ("crt-288p50", "CRT 288p 50hz PAL"),
+                ("crt-576p50", "CRT 576p 50hz PAL"),
             ]
         );
         for (index, mode) in DISPLAY_RESOLUTIONS.iter().enumerate() {
@@ -238,6 +254,8 @@ mod tests {
             );
             assert!(!mode.label.is_empty());
         }
+        assert!(DISPLAY_RESOLUTIONS.iter().all(|mode| mode.id != "auto"));
+        assert_eq!(find("auto"), Some(&AUTOMATIC_DISPLAY_RESOLUTION));
     }
 
     #[test]

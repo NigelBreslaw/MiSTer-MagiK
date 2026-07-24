@@ -12,19 +12,18 @@ export component CrtResolutionComboMockup inherits Window {
     forward-focus: focus-scope;
 
     in-out property <[string]> resolutions: [
-        "Automatic (HDMI / VGA DAC)",
-        "1280×720 (16:9)",
-        "1366×768 (16:9)",
-        "1920×1080 (16:9)",
-        "1920×1200 (16:10)",
-        "2048×1536 (4:3)",
-        "640×240 @ 60 Hz (4:3) — CRT/VGA, 15 kHz",
-        "640×288 @ 50 Hz (4:3) — CRT/VGA, 15 kHz",
-        "640×480 @ 60 Hz (4:3) — CRT/VGA, 31 kHz",
-        "640×576 @ 50 Hz (4:3) — CRT/VGA, 31 kHz",
+        "1280x720 (16:9)",
+        "1366x768 (16:9)",
+        "1920x1080 (16:9)",
+        "1920x1200 (16:10)",
+        "2048x1536 (4:3)",
+        "CRT 240p 60hz NTSC",
+        "CRT 480p 60hz NTSC",
+        "CRT 288p 50hz PAL",
+        "CRT 576p 50hz PAL",
     ];
-    in-out property <int> selected-index: 3;
-    in-out property <int> highlighted-index: 6;
+    in-out property <int> selected-index: 2;
+    in-out property <int> highlighted-index: 5;
     property <length> row-height: 30px;
 
     focus-scope := FocusScope {
