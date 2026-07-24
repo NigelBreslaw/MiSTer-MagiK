@@ -14,7 +14,7 @@ Stable public commands remain directly under `scripts/`. Shared implementation,
 checks, tests, analysis, media, and release helpers are organized according to
 `scripts/README.md`.
 
-Run `scripts/agent check` to inspect task-scoped local prerequisites without
+Run `scripts/agent check` to inspect Git working-tree prerequisites without
 contacting the MiSTer.
 
 ## Rules
@@ -38,5 +38,4 @@ scripts/agent check
 scripts/agent verify
 ```
 
-The task baseline supplies the affected paths. `--paths` is reserved for CI and
-diagnostics.
+Git supplies the affected paths. `--paths` is reserved for CI and diagnostics.

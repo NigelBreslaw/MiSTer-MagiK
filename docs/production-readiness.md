@@ -5,7 +5,8 @@ A release candidate is ready only when its exact commit has passed
 delivery, and an attended release qualification.
 
 ```text
-scripts/agent commit -m "Describe the release candidate"
+git add -- PATH...
+git commit -m "Describe the release candidate"
 scripts/agent deliver
 scripts/agent release qualify
 ```

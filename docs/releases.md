@@ -6,10 +6,10 @@ under `scripts/release/`. Runtime/platform qualification remains in Rust.
 For a release candidate:
 
 ```text
-scripts/agent task begin
 scripts/agent check
 scripts/agent verify
-scripts/agent commit -m "Prepare release"
+git add -- PATH...
+git commit -m "Prepare release"
 scripts/agent deliver
 scripts/agent release qualify
 ```

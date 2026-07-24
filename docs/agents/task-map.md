@@ -23,13 +23,12 @@ validation column explicitly calls for ARM, GUI, or an attended device.
 | FPGA latch | `mister/platform/fpga/menu-vblank-latch/` | `docs/fpga-latch-release.md` | `scripts/agent check` | `scripts/agent verify` reports required GitHub Actions RBF build | Quartus/device signoff | Catalog, documentation |
 
 For dated evidence, search explicitly with `rg --no-ignore history/`. For
-unknown work, begin the task before editing and run `scripts/agent plan` before invoking
-checks.
+unknown work, run `scripts/agent plan` before invoking checks.
 
-The normal feature loop is `scripts/agent task begin`, edit,
-`scripts/agent check`, and `scripts/agent commit -m MESSAGE`. Commit performs
-full verification of the exact staged tree. Use standalone `verify` only when
-assurance is needed without creating a commit.
+The normal feature loop is edit, `scripts/agent check`, explicit
+`git add -- PATH...`, and `git commit -m MESSAGE`. The pre-commit hook performs
+verification of the exact staged tree. Use standalone `verify` when assurance
+is needed without creating a commit.
 Runtime or platform changes then use `scripts/agent deliver`. Delivery uses the
 exact clean local app and Main commits without consulting task records or
 requiring publication. Every delivery uses the complete platform transaction
@@ -37,7 +36,7 @@ because the development manifest binds `mister-magik-fb`, Main, the kernel
 module, and the FPGA latch into one coherent set.
 # Deployment
 
-“Build and deploy” maps to `scripts/agent commit -m MESSAGE` followed by
+“Build and deploy” maps to an ordinary Git commit followed by
 `scripts/agent deliver`. The CLI owns platform qualification and device
 transactions, and records
 progress and evidence. Performance, diagnosis, and attended acceptance use the

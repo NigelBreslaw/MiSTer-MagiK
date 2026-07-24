@@ -23,7 +23,8 @@ Use:
 ```text
 scripts/agent check
 scripts/agent verify
-scripts/agent commit -m "Describe the change"
+git add -- PATH...
+git commit -m "Describe the change"
 scripts/agent deliver
 ```
 

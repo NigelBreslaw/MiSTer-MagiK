@@ -39,7 +39,7 @@ File authority is documented in `docs/agents/file-authority.md`.
   the app once, then verify the endpoint once with `apps/desktop/scripts/mcp-smoke.sh`;
   if the port is unavailable, report that result instead of retrying with a
   different command shape.
-- The task baseline selects compiled UI validation through `scripts/agent`.
+- Git working-tree scope selects compiled UI validation through `scripts/agent`.
 - Desktop tests and coverage intentionally use Slint's software renderer by
   default so they do not trigger `skia-bindings` network fetches in cold or
   sandboxed environments. Use `apps/desktop/scripts/dev-live.sh` for the live Skia

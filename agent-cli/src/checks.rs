@@ -317,9 +317,16 @@ fn check_agent_guidance(repository: &Path) -> Result<(), String> {
         }
     }
     let root = read(repository, "AGENTS.md")?;
-    for command in ["plan", "check", "verify", "commit", "deliver"] {
-        let expected = format!("scripts/agent {command}");
-        if !root.contains(&expected) {
+    for expected in [
+        "scripts/agent plan",
+        "scripts/agent check",
+        "scripts/agent verify",
+        "scripts/agent deliver",
+        "git add --",
+        "git commit -m",
+        "first-attempt sandbox escalation",
+    ] {
+        if !root.contains(expected) {
             return Err(format!("root_workflow_missing: {expected}"));
         }
     }

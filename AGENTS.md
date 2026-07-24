@@ -94,29 +94,26 @@ those trees are part of the task.
 ## Top-Level Commands
 
 ```bash
-scripts/agent task begin
 scripts/agent check
 scripts/agent deliver
 scripts/agent plan
 scripts/agent verify
 scripts/agent-linux-verify --paths mister/tools/host mister/tools/agent
-scripts/agent commit -m "Describe the completed change"
 scripts/agent benchmark
 scripts/agent capture usb-video
 scripts/agent diagnose
 scripts/agent release qualify
+git add -- path/to/file
+git commit -m "Describe the completed change"
 ```
 
-Agents must record a task baseline before editing, then use `check` at meaningful
-iteration boundaries and `commit` to verify the exact staged tree and complete
-host-only work. Batch related edits before checking. Do not rerun `check` after
-every small patch, formatting correction, or immediately obvious follow-up;
-rerun it when a coherent slice is ready, when a failure could have multiple
-causes, or before handing work off.
-Use standalone `verify` only when full assurance is required without committing.
-`--paths` is reserved for CI or diagnostics, and `verify --staged` is the raw
-Git pre-commit interface. Use `scripts/agent db report`, not ad-hoc SQL, for
-workflow evidence analysis. Run
+Use `check` at meaningful iteration boundaries. Batch related edits before
+checking. Do not rerun `check` after every small patch, formatting correction,
+or immediately obvious follow-up; rerun it when a coherent slice is ready, when
+a failure could have multiple causes, or before handing work off. Argument-free
+`check` and `verify` select all working-tree changes. `--paths` is reserved for
+CI or diagnostics, and `verify --staged` is the Git pre-commit interface. Use
+`scripts/agent db report`, not ad-hoc SQL, for workflow evidence analysis. Run
 `agent-linux-verify` on Apple Silicon when Linux-only Rust or Linux-specific
 Clippy behavior is in scope. It runs the normal verification harness inside the
 repository Apple Linux image and caches its Linux Rust toolchain under
@@ -133,14 +130,20 @@ Do not narrate successful operation counts or names: report only that validation
 is running, passed, or failed with the actionable summary. Agents must not
 construct Cargo, test, lint, host-validation, or Apple-container commands
 directly; the harness selects, times, deduplicates, and records them.
-“Build and deploy” means commit first, then `scripts/agent deliver`; do not call
+“Build and deploy” means create the Git commit first, then
+`scripts/agent deliver`; do not call
 implementation scripts or supply deployment feature flags. `deliver` never
 changes Git state or pushes. Development delivery uses the exact clean local
 commits in this repository and the `mister-magik` branch of `Main_MiSTer`;
 publication and CI provenance are release concerns, not development gates.
-`scripts/agent commit` is the only agent-facing staging and commit interface;
-invoke it with first-attempt escalation because it writes `.git`. Do not stage
-or commit with raw Git when the task baseline workflow is available.
+Git's index is the only commit-scope authority. Stage only intentional paths
+with `git add -- PATH...`; never use broad staging when unrelated changes
+exist. Invoke `git add`, `git commit`, and the one-time
+`git config core.hooksPath .githooks` with first-attempt sandbox escalation
+because they write `.git`. Persistent approvals must be limited to the narrow
+`git add` and `git commit` prefixes, never unrestricted `git`. The trusted
+pre-commit hook runs `scripts/agent verify --staged`; a failure leaves the
+index staged for correction. Concurrent agents must use separate worktrees.
 
 ## Rust Semantic Tooling
 
@@ -156,8 +159,8 @@ tooling unavailable.
 
 The LSP integration is navigation-only. Never use LSP formatting, code actions,
 renames, or other write operations. Make edits through the normal repository
-tools, use `scripts/agent check` while iterating, and use `scripts/agent commit`
-to validate the staged tree and complete work.
+tools, use `scripts/agent check` while iterating, and commit through ordinary
+Git so the pre-commit hook validates the staged tree.
 
 ## Universal Hard Rules
 

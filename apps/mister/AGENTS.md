@@ -32,5 +32,5 @@ scripts/agent check
 scripts/agent verify
 ```
 
-The task baseline makes `scripts/agent verify` select the production UI and ARM
-checks required by the changed files.
+Git working-tree scope makes `scripts/agent verify` select the production UI
+and ARM checks required by the changed files.

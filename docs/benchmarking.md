@@ -1,9 +1,9 @@
 # Benchmarking policy
 
 `scripts/agent benchmark` is the only agent-facing performance workflow. It is
-flag-free and selects one canonical scenario from the committed task's changed
-components. It requires an exact clean commit and an artifact receipt for that
-commit.
+flag-free and selects one canonical scenario from the current HEAD commit's
+changed components. It requires an exact clean commit and an artifact receipt
+for that commit.
 
 ## Velocity scenarios
 

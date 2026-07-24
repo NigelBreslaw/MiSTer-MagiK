@@ -14,9 +14,10 @@ Device, ARM-build, deployment, profiling, acceptance, recovery, and scene
 orchestration belongs in Rust. New shell interfaces in those categories are
 rejected by `scripts/checks/check-no-operational-shell-orchestrators.py`.
 
-Normal repository work uses `scripts/agent task begin`, `check`, `verify`, and
-`commit`; committed runtime/platform work then uses `deliver`. Performance and
-diagnosis use the flag-free `benchmark` and `diagnose` commands.
+Normal repository work uses `scripts/agent check`, explicit-path `git add`, and
+ordinary `git commit`; the pre-commit hook runs `verify --staged`. Committed
+runtime/platform work then uses `deliver`. Performance and diagnosis use the
+flag-free `benchmark` and `diagnose` commands.
 
 Linux-only Rust and Clippy diagnostics can be reproduced from Apple Silicon
 with:

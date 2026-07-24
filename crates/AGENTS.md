@@ -8,4 +8,4 @@ crates shared by applications and platform adapters.
 - Wire crates preserve their existing schemas, bounds checks, and error modes.
 - Platform hardware contracts belong under `mister/platform/contracts/`.
 - Use `scripts/agent check` while iterating, then `scripts/agent verify` before
-  completion; the task baseline supplies the affected paths.
+  completion; Git supplies the affected paths.
