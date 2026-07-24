@@ -196,6 +196,10 @@ fn is_root_file(path: &Path) -> bool {
         .is_some_and(|parent| parent.as_os_str().is_empty())
 }
 
+fn is_repository_dot_config(path: &Path) -> bool {
+    crate::components::is_repository_dot_config(path)
+}
+
 fn rbf_external_requirement() -> ExternalRequirement {
     ExternalRequirement {
         id: "github-actions.rbf-build".into(),
@@ -226,11 +230,7 @@ fn add_path_operations(
             "agent guidance changed",
         ));
     }
-    if path.starts_with(".codex")
-        || path.starts_with(".lspi")
-        || path == Path::new("scripts/rust-analyzer")
-        || path == Path::new("apps/mister/rust-toolchain.toml")
-    {
+    if path.starts_with(".codex") || path == Path::new("apps/mister/rust-toolchain.toml") {
         add(cargo(
             "host.doctor-tests",
             "Test host doctor",
@@ -240,10 +240,11 @@ fn add_path_operations(
                 "agent-cli/Cargo.toml",
                 "doctor::tests",
             ],
-            "semantic tooling changed → doctor contract",
+            "host tooling changed → doctor contract",
         ));
     }
     if is_root_file(path)
+        || is_repository_dot_config(path)
         || path.starts_with("LICENSES")
         || path.starts_with("history")
         || path.starts_with("private")
@@ -651,7 +652,7 @@ fn add_script_operations(
         && (path.extension().and_then(|extension| extension.to_str()) == Some("sh")
             || matches!(
                 path.file_name().and_then(|name| name.to_str()),
-                Some("mister" | "rust-analyzer")
+                Some("mister")
             ))
     {
         let id = format!("script.syntax.{}", text.replace(['/', '.'], "-"));
@@ -987,13 +988,8 @@ mod tests {
     }
 
     #[test]
-    fn semantic_tooling_changes_select_doctor_contract() {
-        for path in [
-            ".codex/config.toml",
-            ".lspi/config.toml",
-            "scripts/rust-analyzer",
-            "apps/mister/rust-toolchain.toml",
-        ] {
+    fn host_tooling_changes_select_doctor_contract() {
+        for path in [".codex/config.toml", "apps/mister/rust-toolchain.toml"] {
             let plan = affected_plan(
                 Intent::Check {
                     scope: Scope::Paths(vec![]),
@@ -1011,19 +1007,47 @@ mod tests {
     }
 
     #[test]
-    fn rust_analyzer_wrapper_selects_shell_syntax_check() {
+    fn repository_dot_config_changes_select_diff_check() {
         let plan = affected_plan(
             Intent::Check {
                 scope: Scope::Paths(vec![]),
             },
-            vec!["scripts/rust-analyzer".into()],
+            vec![".obsolete/config.toml".into()],
         )
         .unwrap();
         assert!(
             plan.operations
                 .iter()
-                .any(|operation| { operation.id == "script.syntax.scripts-rust-analyzer" })
+                .any(|operation| operation.id == "repo.diff-check")
         );
+        assert!(
+            plan.operations
+                .iter()
+                .all(|operation| operation.id != "repo.workflow-contract")
+        );
+    }
+
+    #[test]
+    fn workflow_dot_directories_keep_workflow_contract() {
+        for path in [".github/workflows/check.yml", ".githooks/pre-commit"] {
+            let plan = affected_plan(
+                Intent::Check {
+                    scope: Scope::Paths(vec![]),
+                },
+                vec![path.into()],
+            )
+            .unwrap();
+            assert!(
+                plan.operations
+                    .iter()
+                    .any(|operation| operation.id == "repo.workflow-contract")
+            );
+            assert!(
+                plan.operations
+                    .iter()
+                    .all(|operation| operation.id != "repo.diff-check")
+            );
+        }
     }
 
     #[test]

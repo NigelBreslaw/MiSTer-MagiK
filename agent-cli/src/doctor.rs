@@ -12,8 +12,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-const LSPI_VERSION: &str = "0.2.0";
-
 pub fn execute(repository: &Path, reporter: &mut Reporter<'_>) -> AgentResult<Outcome> {
     let mut failures = Vec::new();
     reporter.emit(
@@ -33,7 +31,6 @@ pub fn execute(repository: &Path, reporter: &mut Reporter<'_>) -> AgentResult<Ou
         Some(30),
     )?;
     check_rust(repository, reporter, &mut failures)?;
-    check_lspi(repository, reporter, &mut failures)?;
 
     reporter.emit(
         EventKind::Progress,
@@ -107,7 +104,7 @@ fn check_rust(
         "rustup",
         &["component", "list", "--toolchain", &channel],
     )?;
-    for component in ["rustfmt", "clippy", "rust-analyzer"] {
+    for component in ["rustfmt", "clippy"] {
         if !components
             .lines()
             .any(|line| line.starts_with(component) && line.ends_with("(installed)"))
@@ -116,48 +113,6 @@ fn check_rust(
                 "Rust component {component} is missing for {channel}"
             ));
         }
-    }
-    Ok(())
-}
-
-fn check_lspi(
-    repository: &Path,
-    reporter: &mut Reporter<'_>,
-    failures: &mut Vec<String>,
-) -> AgentResult<()> {
-    let Some(path) = find_command("lspi") else {
-        failures.push(format!("lspi {LSPI_VERSION} is not installed"));
-        return Ok(());
-    };
-    let program = path.to_string_lossy();
-    let version = output(repository, reporter, &program, &["--version"])?;
-    if !version
-        .split_whitespace()
-        .any(|value| value == LSPI_VERSION)
-    {
-        failures.push(format!("lspi {LSPI_VERSION} is required"));
-        return Ok(());
-    }
-    let report = output(
-        repository,
-        reporter,
-        &program,
-        &[
-            "doctor",
-            "--workspace-root",
-            ".",
-            "--config",
-            ".lspi/config.toml",
-            "--json",
-        ],
-    )?;
-    let value: serde_json::Value = serde_json::from_str(&report)
-        .map_err(|error| format!("lspi doctor returned invalid JSON: {error}"))?;
-    if value["failures"]
-        .as_array()
-        .is_none_or(|failures| !failures.is_empty())
-    {
-        failures.push("lspi doctor reported semantic-tooling failures".into());
     }
     Ok(())
 }

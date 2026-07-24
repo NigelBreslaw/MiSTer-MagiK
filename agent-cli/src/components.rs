@@ -80,7 +80,7 @@ pub fn classify(path: &Path) -> Option<Component> {
         || path.file_name().and_then(|name| name.to_str()) == Some("AGENTS.md")
         || path.starts_with("LICENSES")
         || path.starts_with(".codex")
-        || path.starts_with(".lspi")
+        || is_repository_dot_config(path)
     {
         Some(Component::Repository)
     } else if matches!(
@@ -132,6 +132,15 @@ pub fn classify(path: &Path) -> Option<Component> {
     } else {
         None
     }
+}
+
+pub(crate) fn is_repository_dot_config(path: &Path) -> bool {
+    path.iter()
+        .next()
+        .and_then(|component| component.to_str())
+        .is_some_and(|component| {
+            component.starts_with('.') && !matches!(component, ".github" | ".githooks")
+        })
 }
 
 #[cfg(test)]
@@ -186,6 +195,14 @@ mod tests {
         assert_eq!(
             classify(Path::new("crates/mister-ini/src/lib.rs")),
             Some(Component::Manager)
+        );
+        assert_eq!(
+            classify(Path::new(".obsolete/config.toml")),
+            Some(Component::Repository)
+        );
+        assert_eq!(
+            classify(Path::new(".github/workflows/check.yml")),
+            Some(Component::Workflow)
         );
     }
 }

@@ -146,23 +146,6 @@ because they write `.git`. Persistent approvals must be limited to the narrow
 pre-commit hook runs `scripts/agent verify --staged`; a failure leaves the
 index staged for correction. Concurrent agents must use separate worktrees.
 
-## Rust Semantic Tooling
-
-Rust AI tasks require the read-only `lspi` MCP integration backed by the pinned
-rust-analyzer toolchain. Use it for symbols, definitions, implementations,
-references, types, call hierarchy, hover information, and diagnostics. Resolve
-the reported semantic-tooling prerequisites before Rust work if MCP is
-unavailable.
-
-`lspi` tools may be deferred and absent from the initial visible tool list.
-Search the full tool catalog for `mcp__lspi__*` before reporting semantic
-tooling unavailable.
-
-The LSP integration is navigation-only. Never use LSP formatting, code actions,
-renames, or other write operations. Make edits through the normal repository
-tools, use `scripts/agent check` while iterating, and commit through ordinary
-Git so the pre-commit hook validates the staged tree.
-
 ## Universal Hard Rules
 
 - Never set `main=mister-magik-fb`; Slint cannot replace Main video
