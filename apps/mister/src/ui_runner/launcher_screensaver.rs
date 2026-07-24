@@ -3247,11 +3247,27 @@ impl ParadeState {
 }
 
 fn random_seed() -> u64 {
+    if let Some(seed) = std::env::var("MISTER_SCREENSAVER_SEED")
+        .ok()
+        .as_deref()
+        .and_then(parse_screensaver_seed)
+    {
+        return seed;
+    }
     let time = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos() as u64;
     time ^ (std::process::id() as u64).rotate_left(17) ^ 0x9e37_79b9_7f4a_7c15
+}
+
+fn parse_screensaver_seed(value: &str) -> Option<u64> {
+    let value = value.trim();
+    value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+        .map(|digits| u64::from_str_radix(digits, 16).ok())
+        .unwrap_or_else(|| value.parse::<u64>().ok())
 }
 
 fn shuffle<T>(values: &mut [T], rng: &mut u64) {
@@ -4517,5 +4533,14 @@ mod tests {
             Some(ScreensaverMode::PixelGrid)
         );
         assert!(!ScreensaverMode::MEGA.contains(&ScreensaverMode::PixelGrid));
+    }
+
+    #[test]
+    fn benchmark_seed_accepts_decimal_and_hex_without_fallback_guessing() {
+        assert_eq!(parse_screensaver_seed("42"), Some(42));
+        assert_eq!(parse_screensaver_seed(" 0x2a "), Some(42));
+        assert_eq!(parse_screensaver_seed("0X2A"), Some(42));
+        assert_eq!(parse_screensaver_seed(""), None);
+        assert_eq!(parse_screensaver_seed("seed"), None);
     }
 }

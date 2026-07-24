@@ -3123,6 +3123,10 @@ fn benchmark_launcher_restart_options(
     ];
     if scenario == BenchmarkScenario::ScreensaverVelocity {
         env_vars.push(("MISTER_SCREENSAVER_START_ACTIVE".into(), "1".into()));
+        env_vars.push((
+            "MISTER_SCREENSAVER_SEED".into(),
+            "7640891576956012809".into(),
+        ));
         env_vars.push(("MISTER_CATALOG_REFRESH".into(), "off".into()));
     } else {
         env_vars.push(("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()));
@@ -10880,6 +10884,10 @@ H: Handlers=event3 js0"#
                 .env_vars
                 .contains(&("MISTER_CATALOG_REFRESH".into(), "off".into()))
         );
+        assert!(options.env_vars.contains(&(
+            "MISTER_SCREENSAVER_SEED".into(),
+            "7640891576956012809".into()
+        )));
     }
 
     #[test]
