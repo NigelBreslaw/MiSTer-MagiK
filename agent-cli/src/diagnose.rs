@@ -123,6 +123,8 @@ pub fn execute(repository: &Path, reporter: &mut Reporter<'_>) -> AgentResult<Ou
         screensaver_trial_detail: None,
         screensaver_matrix: screensaver_matrix_from_env(),
         screensaver_matrix_detail: None,
+        crash_report: crash_report_from_env(),
+        crash_report_detail: None,
     };
     run_workflow(&mut actions, &mut |phase, percent| {
         Ok(reporter.emit(
@@ -141,6 +143,9 @@ pub fn execute(repository: &Path, reporter: &mut Reporter<'_>) -> AgentResult<Ou
     }
     if let Some(detail) = actions.screensaver_matrix_detail.as_deref() {
         reporter.emit(EventKind::Progress, "screensaver-matrix", detail, Some(95))?;
+    }
+    if let Some(detail) = actions.crash_report_detail.as_deref() {
+        reporter.emit(EventKind::Progress, "crash-report", detail, Some(95))?;
     }
     reporter.emit(
         if report.next_action.is_some() {
@@ -172,6 +177,8 @@ struct ProcessActions<'a> {
     screensaver_trial_detail: Option<String>,
     screensaver_matrix: bool,
     screensaver_matrix_detail: Option<String>,
+    crash_report: bool,
+    crash_report_detail: Option<String>,
 }
 
 fn geometry_trial_from_env() -> AgentResult<Option<[u16; 4]>> {
@@ -200,6 +207,13 @@ fn screensaver_trial_from_env() -> bool {
 fn screensaver_matrix_from_env() -> bool {
     matches!(
         std::env::var("MISTER_CRT_SCREENSAVER_MATRIX").as_deref(),
+        Ok("1" | "true")
+    )
+}
+
+fn crash_report_from_env() -> bool {
+    matches!(
+        std::env::var("MISTER_CRASH_REPORT").as_deref(),
         Ok("1" | "true")
     )
 }
@@ -253,6 +267,13 @@ impl DiagnoseActions for ProcessActions<'_> {
                     self.screensaver_matrix_detail = Some(
                         self.device
                             .execute(DeviceRequest::RunCrtScreensaverMatrix)?,
+                    );
+                }
+                if self.crash_report {
+                    self.crash_report = false;
+                    self.crash_report_detail = Some(
+                        self.device
+                            .execute(DeviceRequest::CollectLatestCrashReport)?,
                     );
                 }
                 Ok(())

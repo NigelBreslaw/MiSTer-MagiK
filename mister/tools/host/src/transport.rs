@@ -78,6 +78,7 @@ pub enum DeviceRequest {
     QualifyReleaseRecovery,
     RestoreReleaseQualification,
     CollectDiagnosticFacts,
+    CollectLatestCrashReport,
     /// Runs one bounded, self-restoring CRT destination-rectangle experiment.
     RunCrtGeometryTrial {
         rectangle: [u16; 4],
@@ -126,6 +127,7 @@ impl DeviceRequest {
             Self::QualifyReleaseRecovery => "qualify-release-recovery",
             Self::RestoreReleaseQualification => "restore-release-qualification",
             Self::CollectDiagnosticFacts => "collect-diagnostic-facts",
+            Self::CollectLatestCrashReport => "collect-latest-crash-report",
             Self::RunCrtGeometryTrial { .. } => "run-crt-geometry-trial",
             Self::RunCrtScreensaverTrial => "run-crt-screensaver-trial",
             Self::RunCrtScreensaverMatrix => "run-crt-screensaver-matrix",
@@ -270,6 +272,7 @@ mod tests {
             DeviceRequest::QualifyReleaseRecovery,
             DeviceRequest::RestoreReleaseQualification,
             DeviceRequest::CollectDiagnosticFacts,
+            DeviceRequest::CollectLatestCrashReport,
             DeviceRequest::RunCrtGeometryTrial {
                 rectangle: [45, 684, 40, 615],
             },
@@ -279,7 +282,7 @@ mod tests {
             DeviceRequest::CaptureFramebuffer,
         ];
         let labels: Vec<_> = requests.iter().map(DeviceRequest::label).collect();
-        assert_eq!(labels.len(), 37);
+        assert_eq!(labels.len(), 38);
         assert!(labels.iter().all(|label| !label.is_empty()));
         assert!(!labels.contains(&"run"));
         assert!(!labels.contains(&"shell"));

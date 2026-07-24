@@ -531,6 +531,38 @@ impl DeviceOperations for NativeDevice {
                 }
                 serde_json::to_string(&facts).map_err(device_failure)?
             }
+            DeviceRequest::CollectLatestCrashReport => {
+                let session = connect(10).map_err(device_failure)?;
+                let main_status = remote_read(&session, MAIN_STATUS_REMOTE)
+                    .ok_or_else(|| DeviceFailure::Unhealthy("Main status is unavailable".into()))?;
+                let main_status: Value =
+                    serde_json::from_str(&main_status).map_err(device_failure)?;
+                let path = main_status
+                    .get("last_crash_report")
+                    .and_then(Value::as_str)
+                    .filter(|path| !path.is_empty())
+                    .ok_or_else(|| {
+                        DeviceFailure::Unhealthy("Main has no recorded crash report".into())
+                    })?;
+                if !is_safe_crash_report_path(path) {
+                    return Err(DeviceFailure::InvalidRequest(format!(
+                        "Main reported an invalid crash-report path: {path}"
+                    )));
+                }
+                let report = remote_read(&session, path).ok_or_else(|| {
+                    DeviceFailure::Unhealthy(format!("Crash report is missing: {path}"))
+                })?;
+                let report: Value = serde_json::from_str(&report).map_err(device_failure)?;
+                if report.get("schema").and_then(Value::as_str)
+                    != Some("mister-magik-crash-report-v1")
+                {
+                    return Err(DeviceFailure::Unhealthy(
+                        "Crash report has an unsupported schema".into(),
+                    ));
+                }
+                serde_json::to_string(&json!({"path": path, "report": report}))
+                    .map_err(device_failure)?
+            }
             DeviceRequest::RunCrtGeometryTrial { rectangle } => {
                 run_crt_geometry_trial_with(&config.connection, *rectangle)
                     .map_err(device_failure)?
@@ -1967,6 +1999,17 @@ fn diagnostic_facts_command() -> String {
         "set -eu; main=false; launcher=false; agent=false; credentials=false; firmware=false; unstable=false; temporary=false; launcher_heartbeat_advancing=false; {{ pidof MiSTer_MagiKDev >/dev/null 2>&1 || pidof MiSTer_MagiK >/dev/null 2>&1; }} && main=true; pidof mister-magik-fb >/dev/null 2>&1 && launcher=true; pidof mister-magik-agent >/dev/null 2>&1 && agent=true; test -s /media/fat/mister-magik-dev/agent.token && credentials=true; {{ grep -q '^mister_magik_scanout_slots ' /proc/modules 2>/dev/null && test -c /dev/mister-magik-scanout-slots; }} && firmware=true; {}; if test -n \"$pid_before\" && test \"$pid_before\" = \"$pid_after\" && test -n \"$sequence_before\" && test -n \"$sequence_after\" && test \"$sequence_after\" -gt \"$sequence_before\"; then launcher_heartbeat_advancing=true; fi; test -e /tmp/mister-magik/reboot-unstable && unstable=true; arming=0; for path in /media/fat/mister-magik/launcher.env /media/fat/mister-magik-dev/launcher.env /tmp/mister-magik/fs-fault-launcher.env /tmp/mister-magik/fs-fault-session /tmp/mister-magik/fs-fault.json /media/fat/mister-magik/rebuild-on-next-boot /media/fat/mister-magik-dev/rebuild-on-next-boot; do test ! -e \"$path\" || arming=$((arming + 1)); done; for path in /tmp/mister-magik/agent-benchmark.tsv /tmp/mister-magik/agent-benchmark-warmup.tsv /tmp/mister-magik/agent-cold-benchmark.out /tmp/mister-magik/stale-launcher-return-state.json; do test ! -e \"$path\" || temporary=true; done; printf '{{\"main_running\":%s,\"launcher_running\":%s,\"agent_running\":%s,\"credentials_ready\":%s,\"firmware_compatible\":%s,\"reboot_unstable\":%s,\"arming_files\":%s,\"temporary_state\":%s,\"launcher_heartbeat_advancing\":%s}}\\n' \"$main\" \"$launcher\" \"$agent\" \"$credentials\" \"$firmware\" \"$unstable\" \"$arming\" \"$temporary\" \"$launcher_heartbeat_advancing\"",
         launcher_heartbeat_sample_command()
     )
+}
+
+fn is_safe_crash_report_path(path: &str) -> bool {
+    [
+        "/media/fat/mister-magik/crashes/report-",
+        "/media/fat/mister-magik-dev/crashes/report-",
+    ]
+    .iter()
+    .any(|prefix| path.starts_with(prefix))
+        && path.ends_with(".json")
+        && !path.contains("..")
 }
 
 fn safe_repair_command() -> String {
@@ -9796,6 +9839,22 @@ H: Handlers=event3 js0"#
         assert!(command.contains("launcher_heartbeat_advancing"));
         assert!(command.contains("pid_before"));
         assert!(command.contains("pid_after"));
+    }
+
+    #[test]
+    fn crash_report_reads_are_confined_to_main_owned_report_files() {
+        assert!(is_safe_crash_report_path(
+            "/media/fat/mister-magik/crashes/report-main-1.json"
+        ));
+        assert!(is_safe_crash_report_path(
+            "/media/fat/mister-magik-dev/crashes/report-main-1.json"
+        ));
+        assert!(!is_safe_crash_report_path(
+            "/media/fat/mister-magik-dev/crashes/latest.json"
+        ));
+        assert!(!is_safe_crash_report_path(
+            "/media/fat/mister-magik-dev/crashes/report-../secret.json"
+        ));
     }
 
     #[test]
