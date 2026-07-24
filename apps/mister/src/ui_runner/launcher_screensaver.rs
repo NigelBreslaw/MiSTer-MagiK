@@ -610,7 +610,9 @@ pub(in crate::ui_runner) fn run_screensaver_loop(
         }
         frame = frame.wrapping_add(1);
     }
-    render_state.parade.collect_scaled_cards(Some(&images));
+    render_state
+        .parade
+        .collect_scaled_cards_with_limit(Some(&images), usize::MAX);
     render_state.parade.log_scaler_stats();
 }
 
@@ -1968,6 +1970,7 @@ const PARADE_COMPACT_LAYER_TARGETS: [usize; 5] = [48, 18, 15, 12, 9];
 // and leaves one slower whole-pixel speed for the star field.
 const PARADE_LAYER_SPEEDS: [usize; 5] = [2, 3, 4, 5, 6];
 const PARADE_REFERENCE_HEIGHT: usize = 540;
+const PARADE_MAX_CARD_ADOPTIONS_PER_FRAME: usize = 1;
 const PARADE_REFERENCE_HZ: u64 = 60;
 const PARADE_TICK_ONE: i64 = 1 << 16;
 const PARADE_MIN_TILE_SPEED: usize = 1;
@@ -3000,9 +3003,17 @@ impl ParadeState {
     }
 
     fn collect_scaled_cards(&mut self, images: Option<&[SaverImage]>) -> usize {
+        self.collect_scaled_cards_with_limit(images, PARADE_MAX_CARD_ADOPTIONS_PER_FRAME)
+    }
+
+    fn collect_scaled_cards_with_limit(
+        &mut self,
+        images: Option<&[SaverImage]>,
+        limit: usize,
+    ) -> usize {
         let mut failed_tiles = Vec::new();
         let mut collected = 0;
-        loop {
+        while collected < limit {
             match self.scale_rx.try_recv() {
                 Ok(result) => {
                     collected += 1;
@@ -3669,6 +3680,63 @@ mod tests {
             PARADE_SPEED_COUNT
         );
         assert_eq!(state.scale_queue_depth, PARADE_SPEED_COUNT);
+    }
+
+    #[test]
+    fn completed_cards_are_adopted_one_per_render_frame() {
+        let mut state = ParadeState::new(0xfeed_beef);
+        let (result_tx, result_rx) = mpsc::channel();
+        state.scale_rx = result_rx;
+        for image_idx in 0..2 {
+            let tile_idx = state.push_empty_streaming_tile(image_idx);
+            state.tiles[tile_idx].pending_image_idx = Some(image_idx);
+            let scaled = SaverImage {
+                pixels: vec![Rgb565Pixel(image_idx as u16 + 1); 16],
+                w: 4,
+                h: 4,
+                stride: 4,
+            };
+            result_tx
+                .send(ParadeScaleResult {
+                    tile_idx,
+                    image_idx,
+                    card: Ok(PreparedParadeCard {
+                        image_idx,
+                        speed: state.tiles[tile_idx].speed,
+                        phase_set: ParadePhaseSet::prepare(
+                            &scaled,
+                            ParadeSamplingProfile::LegacyHalf,
+                        ),
+                        corner_insets: prepare_parade_corner_insets(scaled.w, scaled.h),
+                        scaled,
+                        scale_us: 0,
+                        phase_us: 0,
+                    }),
+                })
+                .unwrap();
+        }
+        state.scale_queue_depth = 2;
+
+        assert_eq!(state.collect_scaled_cards(None), 1);
+        assert_eq!(state.scale_queue_depth, 1);
+        assert_eq!(
+            state
+                .tiles
+                .iter()
+                .filter(|tile| tile.next.is_some())
+                .count(),
+            1
+        );
+        assert_eq!(state.collect_scaled_cards(None), 1);
+        assert_eq!(state.scale_queue_depth, 0);
+        assert_eq!(
+            state
+                .tiles
+                .iter()
+                .filter(|tile| tile.next.is_some())
+                .count(),
+            2
+        );
     }
 
     #[test]
