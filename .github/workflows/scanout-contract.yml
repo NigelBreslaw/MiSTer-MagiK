@@ -32,5 +32,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Install contract tools
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+
       - name: Check cross-language scanout contract
         run: scripts/checks/check-scanout-slots-contract.sh
