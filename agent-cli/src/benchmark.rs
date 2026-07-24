@@ -212,23 +212,26 @@ pub fn execute(
         evaluation_failure: None,
         device: DeviceClient::default(),
     };
-    run_workflow(&mut actions, &mut |phase, percent| {
+    let workflow_result = run_workflow(&mut actions, &mut |phase, percent| {
         Ok(reporter.emit(
             EventKind::Progress,
             phase.label(),
             &format!("benchmark {}", phase.label()),
             Some(percent),
         )?)
-    })?;
+    });
+    if !actions.results.is_empty() {
+        reporter.emit(
+            EventKind::Progress,
+            "benchmark-result",
+            &serde_json::to_string(&actions.results).map_err(|error| error.to_string())?,
+            Some(100),
+        )?;
+    }
+    workflow_result?;
     if actions.results.is_empty() {
         return Err("benchmark produced no result".into());
     }
-    reporter.emit(
-        EventKind::Progress,
-        "benchmark-result",
-        &serde_json::to_string(&actions.results).map_err(|error| error.to_string())?,
-        Some(100),
-    )?;
     if let Some(failure) = actions.evaluation_failure {
         return Err(failure.into());
     }
