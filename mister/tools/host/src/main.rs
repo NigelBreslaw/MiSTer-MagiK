@@ -14,6 +14,7 @@ use ssh2::Session;
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{self, IsTerminal, Read, Write};
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
@@ -151,6 +152,53 @@ pub struct NativeDevice {
     config: Option<NativeDeviceConfig>,
 }
 
+struct DeliveryProcessLock {
+    file: fs::File,
+}
+
+impl DeliveryProcessLock {
+    fn acquire(device_id: &str) -> std::result::Result<Self, DeviceFailure> {
+        let safe_id = device_id
+            .chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() || character == '-' {
+                    character
+                } else {
+                    '_'
+                }
+            })
+            .collect::<String>();
+        let path = std::env::temp_dir().join(format!("mister-magik-delivery-{safe_id}.lock"));
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&path)
+            .map_err(|error| {
+                DeviceFailure::OperationFailed(format!(
+                    "cannot open delivery lock {}: {error}",
+                    path.display()
+                ))
+            })?;
+        let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if result != 0 {
+            return Err(DeviceFailure::Busy(
+                "another delivery process is already running".into(),
+            ));
+        }
+        Ok(Self { file })
+    }
+}
+
+impl Drop for DeliveryProcessLock {
+    fn drop(&mut self) {
+        unsafe {
+            libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
+
 impl NativeDevice {
     fn prepare(&mut self) -> std::result::Result<(), DeviceFailure> {
         if self.config.is_some() {
@@ -204,6 +252,34 @@ impl DeviceOperations for NativeDevice {
                 )
                 .map_err(device_failure)?;
                 "verified".into()
+            }
+            DeviceRequest::FetchVerifiedDevelopmentManager {
+                local,
+                expected_sha256,
+            } => fetch_verified_development_manager(&config, local, expected_sha256)?,
+            DeviceRequest::DeliverRuntimeTransaction {
+                local,
+                remote,
+                manifest_local,
+                manifest_remote,
+                expected_sha256,
+            } => {
+                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
+                deliver_runtime_transaction(
+                    &config,
+                    local,
+                    remote,
+                    manifest_local,
+                    manifest_remote,
+                    expected_sha256,
+                )?
+            }
+            DeviceRequest::DeliverPlatformTransaction {
+                stage,
+                expected_sha256,
+            } => {
+                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
+                deliver_platform_transaction(&config, stage, expected_sha256)?
             }
             DeviceRequest::SnapshotRuntime { remote } => {
                 validate_delivery_remote(remote).map_err(device_failure)?;
@@ -678,6 +754,226 @@ impl DeviceOperations for NativeDevice {
             operation: request.label(),
             detail,
         })
+    }
+}
+
+fn require_delivery_sha256(value: &str) -> std::result::Result<(), DeviceFailure> {
+    if value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        Ok(())
+    } else {
+        Err(DeviceFailure::InvalidRequest(
+            "expected SHA-256 is invalid".into(),
+        ))
+    }
+}
+
+fn fetch_verified_development_manager(
+    config: &NativeDeviceConfig,
+    local: &Path,
+    expected_sha256: &str,
+) -> std::result::Result<String, DeviceFailure> {
+    require_delivery_sha256(expected_sha256)?;
+    let session = connect_with(&config.connection, 10).map_err(device_failure)?;
+    exec_checked(
+        &session,
+        "development platform verify before manager fetch",
+        &installed_platform_verify_command(Layout::Development),
+    )
+    .map_err(device_failure)?;
+    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v2.manifest")
+        .ok_or_else(|| DeviceFailure::ArtifactMismatch("development manifest is missing".into()))?;
+    let manager_fields = manifest
+        .lines()
+        .filter_map(|line| line.strip_prefix("manager_sha256="))
+        .collect::<Vec<_>>();
+    if manager_fields.as_slice() != [expected_sha256] {
+        return Err(DeviceFailure::ArtifactMismatch(
+            "installed manager identity does not match the requested artifact".into(),
+        ));
+    }
+    if let Some(parent) = local.parent() {
+        fs::create_dir_all(parent).map_err(device_failure)?;
+    }
+    get(
+        &session,
+        "/media/fat/mister-magik-dev/mister-magik-manager",
+        local,
+    )
+    .map_err(device_failure)?;
+    if file_sha256(local.to_path_buf()).map_err(device_failure)? != expected_sha256 {
+        let _ = fs::remove_file(local);
+        return Err(DeviceFailure::ArtifactMismatch(
+            "downloaded manager checksum does not match its manifest".into(),
+        ));
+    }
+    Ok(format!("manager_sha256={expected_sha256}"))
+}
+
+fn delivery_reboot_wait(config: &NativeDeviceConfig) -> std::result::Result<(), DeviceFailure> {
+    let session = connect_with(&config.connection, 10).map_err(device_failure)?;
+    issue_delivery_reboot(&session).map_err(device_failure)?;
+    drop(session);
+    if !wait_down_with(&config.connection, 40.0)
+        || wait_up_with(&config.connection, 120.0).map_err(device_failure)? != 0
+    {
+        return Err(DeviceFailure::Unavailable(
+            "device did not complete its reboot transition".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn verify_delivery_health(config: &NativeDeviceConfig) -> std::result::Result<(), DeviceFailure> {
+    let session = connect_with(&config.connection, 10).map_err(device_failure)?;
+    wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))
+        .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
+    exec_checked(
+        &session,
+        "delivery health",
+        &delivery_health_command("dev").map_err(device_failure)?,
+    )
+    .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))
+}
+
+fn smoke_development_delivery(
+    config: &NativeDeviceConfig,
+    expected_sha256: &str,
+) -> std::result::Result<String, DeviceFailure> {
+    require_delivery_sha256(expected_sha256)?;
+    let command = delivery_smoke_command("dev", expected_sha256).map_err(device_failure)?;
+    let session = connect_with(&config.connection, 10).map_err(device_failure)?;
+    wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))
+        .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
+    exec_checked(&session, "delivery smoke", &command)
+        .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
+    let capture = request_framebuffer_png_at(&config.agent).map_err(device_failure)?;
+    delivery_smoke_capture_detail(&capture).map_err(device_failure)
+}
+
+fn deliver_runtime_transaction(
+    config: &NativeDeviceConfig,
+    local: &Path,
+    remote: &str,
+    manifest_local: &Path,
+    manifest_remote: &str,
+    expected_sha256: &str,
+) -> std::result::Result<String, DeviceFailure> {
+    require_delivery_sha256(expected_sha256)?;
+    validate_delivery_remote(remote).map_err(device_failure)?;
+    validate_runtime_manifest_remote(manifest_remote).map_err(device_failure)?;
+    let session = connect_with(&config.connection, 10).map_err(device_failure)?;
+    exec_checked(
+        &session,
+        "runtime bundle snapshot",
+        &format!(
+            "set -eu; cp -p {0} {0}.delivery-rollback.tmp; mv -f {0}.delivery-rollback.tmp {0}.delivery-rollback; cp -p {1} {1}.delivery-rollback.tmp; mv -f {1}.delivery-rollback.tmp {1}.delivery-rollback; sync",
+            sh(remote),
+            sh(manifest_remote)
+        ),
+    )
+    .map_err(device_failure)?;
+    let delivery = deploy_magik_bundle(&session, local, remote, manifest_local, manifest_remote)
+        .map_err(device_failure)
+        .and_then(|()| smoke_development_delivery(config, expected_sha256));
+    match delivery {
+        Ok(detail) => {
+            exec_checked(
+                &session,
+                "runtime bundle commit",
+                &format!(
+                    "rm -f {0}.delivery-rollback {1}.delivery-rollback; sync",
+                    sh(remote),
+                    sh(manifest_remote)
+                ),
+            )
+            .map_err(device_failure)?;
+            Ok(detail)
+        }
+        Err(delivery_error) => {
+            let rollback = (|| -> std::result::Result<(), DeviceFailure> {
+                exec_checked(
+                    &session,
+                    "runtime bundle suspend for rollback",
+                    &acknowledged_main_command("mister_magik_suspend"),
+                )
+                .map_err(device_failure)?;
+                exec_checked(
+                    &session,
+                    "runtime bundle rollback",
+                    &format!(
+                        "set -eu; test -f {0}.delivery-rollback; test -f {1}.delivery-rollback; mv -f {0}.delivery-rollback {0}; chmod 755 {0}; mv -f {1}.delivery-rollback {1}; sync",
+                        sh(remote),
+                        sh(manifest_remote)
+                    ),
+                )
+                .map_err(device_failure)?;
+                exec_checked(
+                    &session,
+                    "runtime bundle resume after rollback",
+                    &acknowledged_main_command("mister_magik_resume"),
+                )
+                .map_err(device_failure)?;
+                verify_delivery_health(config)
+            })();
+            match rollback {
+                Ok(()) => Err(delivery_error),
+                Err(error) => Err(DeviceFailure::RecoveryRequired(format!(
+                    "runtime delivery failed ({delivery_error:?}); rollback failed ({error:?})"
+                ))),
+            }
+        }
+    }
+}
+
+fn deliver_platform_transaction(
+    config: &NativeDeviceConfig,
+    stage: &Path,
+    expected_sha256: &str,
+) -> std::result::Result<String, DeviceFailure> {
+    require_delivery_sha256(expected_sha256)?;
+    let transaction = PlatformDeployTransaction::validate(stage).map_err(device_failure)?;
+    let session = connect_with(&config.connection, 10).map_err(device_failure)?;
+    exec_checked(&session, "platform snapshot", &platform_snapshot_script())
+        .map_err(device_failure)?;
+    let delivery = transaction
+        .run(&session)
+        .map_err(device_failure)
+        .and_then(|_| {
+            edit_remote_ini(
+                &session,
+                IniEdit::SelectMain("MiSTer_MagiKDev".into()),
+                false,
+            )
+            .map_err(device_failure)
+        })
+        .and_then(|()| delivery_reboot_wait(config))
+        .and_then(|()| smoke_development_delivery(config, expected_sha256));
+    match delivery {
+        Ok(detail) => {
+            let session = connect_with(&config.connection, 10).map_err(device_failure)?;
+            exec_checked(&session, "platform commit", &platform_cleanup_script())
+                .map_err(device_failure)?;
+            Ok(detail)
+        }
+        Err(delivery_error) => {
+            let rollback = (|| -> std::result::Result<(), DeviceFailure> {
+                let session = connect_with(&config.connection, 10).map_err(device_failure)?;
+                exec_checked(&session, "platform rollback", &platform_rollback_script())
+                    .map_err(device_failure)?;
+                delivery_reboot_wait(config)?;
+                verify_delivery_health(config)
+            })();
+            match rollback {
+                Ok(()) => Err(delivery_error),
+                Err(error) => Err(DeviceFailure::RecoveryRequired(format!(
+                    "platform delivery failed ({delivery_error:?}); rollback failed ({error:?})"
+                ))),
+            }
+        }
     }
 }
 
@@ -3923,28 +4219,13 @@ impl PlatformDeployTransaction {
 
     fn activation_script(&self, changed: &[&PlatformDeployFile]) -> String {
         let mut verify = String::new();
-        let mut clear_stale = String::new();
-        let mut backup = String::new();
         let mut activate = String::new();
         let mut rollback = String::new();
-        for file in &self.files {
-            clear_stale.push_str(&format!(
-                "rm -f {rollback} {missing}; ",
-                rollback = sh(&format!("{}.rollback", file.remote)),
-                missing = sh(&format!("{}.rollback-missing", file.remote)),
-            ));
-        }
         for file in changed {
             verify.push_str(&format!(
                 "test \"$(sha256sum {} | awk '{{print $1}}')\" = {}; ",
                 sh(&format!("{}.upload", file.remote)),
                 sh(&file.sha256)
-            ));
-            backup.push_str(&format!(
-                "if [ -e {path} ]; then cp -p {path} {backup}; else : > {missing}; fi; ",
-                path = sh(&file.remote),
-                backup = sh(&format!("{}.rollback", file.remote)),
-                missing = sh(&format!("{}.rollback-missing", file.remote))
             ));
             rollback.push_str(&format!(
                 "if [ -e {backup} ]; then mv -f {backup} {path}; elif [ -e {missing} ]; then rm -f {path} {missing}; fi; ",
@@ -3982,7 +4263,7 @@ impl PlatformDeployTransaction {
             chmod.push_str(&format!("chmod 755 {}; ", sh(&file.remote)));
         }
         format!(
-            "set -eu; rm -f /media/fat/MiSTer.ini.platform-rollback; cp -p /media/fat/MiSTer.ini /media/fat/MiSTer.ini.platform-rollback; {verify} {clear_stale} {backup} rollback() {{ {rollback} mv -f /media/fat/MiSTer.ini.platform-rollback /media/fat/MiSTer.ini 2>/dev/null || true; sync; }}; trap rollback EXIT INT TERM; {activate} {chmod} sync; {safety} trap - EXIT INT TERM; sync",
+            "set -eu; test -f /media/fat/MiSTer.ini.platform-rollback; {verify} rollback() {{ {rollback} mv -f /media/fat/MiSTer.ini.platform-rollback /media/fat/MiSTer.ini 2>/dev/null || true; sync; }}; trap rollback EXIT INT TERM; {activate} {chmod} sync; {safety} trap - EXIT INT TERM; sync",
             safety = platform_safety_script(),
         )
     }
@@ -9943,13 +10224,7 @@ H: Handlers=event3 js0"#
         assert!(script.contains("test ! -e /tmp/mister-magik/fs-fault-session"));
         assert!(script.contains("test ! -e /tmp/mister-magik/fs-fault-launcher.env"));
         assert!(script.contains("test ! -e /tmp/mister-magik/fs-fault.json"));
-        let stale_rollback = script
-            .find("rm -f '/media/fat/MiSTer_MagiKDev.rollback'")
-            .unwrap();
-        let fresh_backup = script
-            .find("cp -p '/media/fat/MiSTer_MagiKDev' '/media/fat/MiSTer_MagiKDev.rollback'")
-            .unwrap();
-        assert!(stale_rollback < fresh_backup);
+        assert!(!script.contains("cp -p '/media/fat/MiSTer_MagiKDev'"));
         let cleanup = platform_cleanup_script();
         assert!(
             cleanup.find("fs-fault.json").unwrap()
@@ -9959,6 +10234,16 @@ H: Handlers=event3 js0"#
         let snapshot = platform_snapshot_script();
         assert!(snapshot.contains("trap cleanup EXIT INT TERM"));
         assert!(snapshot.contains("MiSTer_MagiKDev.rollback"));
+        assert!(
+            snapshot
+                .find("rm -f '/media/fat/MiSTer_MagiKDev.rollback'")
+                .unwrap()
+                < snapshot
+                    .find(
+                        "cp -p '/media/fat/MiSTer_MagiKDev' '/media/fat/MiSTer_MagiKDev.rollback'"
+                    )
+                    .unwrap()
+        );
         fs::remove_dir_all(stage).unwrap();
     }
 

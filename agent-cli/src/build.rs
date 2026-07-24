@@ -189,7 +189,7 @@ impl BuildSpec {
                 PathBuf::from(
                     "mister/tools/manager/target/armv7-unknown-linux-gnueabihf/release/mister-magik-manager",
                 ),
-                false,
+                true,
             ),
         };
         let receipt = PathBuf::from(format!("{}.build-receipt.tsv", artifact.display()));

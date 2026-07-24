@@ -89,6 +89,10 @@ mod tests {
     fn every_typed_failure_has_a_stable_classification() {
         let cases = [
             (
+                DeviceFailure::Busy("delivery already running".into()),
+                "device_busy: delivery already running",
+            ),
+            (
                 DeviceFailure::AccessDenied("local network blocked".into()),
                 "device_access_denied: local network blocked",
             ),

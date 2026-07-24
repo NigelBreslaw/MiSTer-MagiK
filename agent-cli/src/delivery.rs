@@ -6,7 +6,7 @@ use crate::device::DeviceClient;
 use crate::error::{AgentError, AgentResult};
 use crate::model::Outcome;
 use crate::progress::{EventKind, Reporter};
-use mister_tool::transport::{DeviceOperations, DeviceRequest, Layout, MainSelection};
+use mister_tool::transport::{DeviceOperations, DeviceRequest};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::ffi::OsString;
@@ -203,6 +203,7 @@ fn execute_with_device<D: DeviceOperations>(
         no_op: false,
         decision: DeliveryDecision::Platform,
         installed_manifest: String::new(),
+        installed_manager_sha256: None,
         main_revision: None,
         local_main: local_main.to_path_buf(),
         stage: repository
@@ -259,6 +260,7 @@ struct ProcessActions<'a, D = mister_tool::NativeDevice> {
     no_op: bool,
     decision: DeliveryDecision,
     installed_manifest: String,
+    installed_manager_sha256: Option<String>,
     main_revision: Option<String>,
     local_main: PathBuf,
     stage: PathBuf,
@@ -310,17 +312,7 @@ impl<D: DeviceOperations> ProcessActions<'_, D> {
     }
 
     fn prepare_local_stage(&mut self) -> AgentResult<()> {
-        if self
-            .deployment
-            .changed_paths
-            .iter()
-            .any(|path| path.starts_with("mister/tools/manager"))
-        {
-            crate::build::execute_quiet(
-                self.repository,
-                &crate::build::BuildSpec::for_recipe(crate::build::BuildRecipe::ManagerDevice),
-            )?;
-        }
+        let manager = self.prepare_manager()?;
         let candidate = self
             .deployment
             .platform_candidate
@@ -336,8 +328,62 @@ impl<D: DeviceOperations> ProcessActions<'_, D> {
             &self.stage,
             self.deployment.build.artifact(),
             Some(&self.local_main),
+            &manager,
         )?);
         Ok(())
+    }
+
+    fn prepare_manager(&mut self) -> AgentResult<PathBuf> {
+        let changed = self
+            .deployment
+            .changed_paths
+            .iter()
+            .any(|path| path.starts_with("mister/tools/manager"));
+        if !changed && let Some(expected) = self.installed_manager_sha256.clone() {
+            let cache = self
+                .repository
+                .join("build/agent-cache/manager")
+                .join(&expected)
+                .join("mister-magik-manager");
+            if cache.is_file() && file_sha256(&cache)? == expected {
+                return Ok(cache);
+            }
+            let temporary = cache.with_extension("download");
+            if self
+                .device
+                .execute(DeviceRequest::FetchVerifiedDevelopmentManager {
+                    local: temporary.clone(),
+                    expected_sha256: expected.clone(),
+                })
+                .is_ok()
+                && temporary.is_file()
+                && file_sha256(&temporary)? == expected
+            {
+                if let Some(parent) = cache.parent() {
+                    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+                }
+                fs::rename(&temporary, &cache).map_err(|error| error.to_string())?;
+                return Ok(cache);
+            }
+            let _ = fs::remove_file(temporary);
+        }
+        let spec = crate::build::BuildSpec::for_recipe(crate::build::BuildRecipe::ManagerDevice);
+        crate::build::execute_quiet(self.repository, &spec)?;
+        let receipt = spec.verify(self.repository)?;
+        if receipt.source_commit != self.expected_commit || receipt.source_dirty {
+            return Err("manager artifact was not built from the exact clean commit".into());
+        }
+        let artifact = self.repository.join(spec.artifact());
+        let cache = self
+            .repository
+            .join("build/agent-cache/manager")
+            .join(&receipt.binary_sha256)
+            .join("mister-magik-manager");
+        if let Some(parent) = cache.parent() {
+            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        copy(artifact, cache.clone())?;
+        Ok(cache)
     }
 
     fn prepare_databases(&self) -> AgentResult<()> {
@@ -348,21 +394,6 @@ impl<D: DeviceOperations> ProcessActions<'_, D> {
                 .as_deref()
                 .ok_or("local staging did not record the Main revision")?,
         )
-    }
-
-    fn smoke(&mut self) -> AgentResult<()> {
-        if self.no_op {
-            return Ok(());
-        }
-        self.device
-            .execute(DeviceRequest::SmokeDelivery {
-                layout: Layout::Development,
-                expected_sha256: self
-                    .artifact_sha256
-                    .clone()
-                    .ok_or("qualified artifact identity is missing")?,
-            })
-            .map(|_| ())
     }
 }
 
@@ -396,6 +427,12 @@ impl<D: DeviceOperations> DeliveryActions for ProcessActions<'_, D> {
                 let installed = self
                     .device
                     .execute(DeviceRequest::ReadDevelopmentManifest)?;
+                self.installed_manager_sha256 = crate::platform_manifest::parse_installed(
+                    &installed,
+                    crate::platform_manifest::Layout::Development,
+                )
+                .ok()
+                .map(|manifest| manifest.manager_sha256().to_owned());
                 let reconciliation = crate::deploy::reconcile(
                     self.repository,
                     &installed,
@@ -421,68 +458,34 @@ impl<D: DeviceOperations> DeliveryActions for ProcessActions<'_, D> {
             Phase::KernelQualification => self.qualify_kernel(),
             Phase::LocalStaging => self.prepare_local_stage(),
             Phase::DatabasePreparation => self.prepare_databases(),
-            Phase::Snapshot => match self.deployment.kind {
-                _ if self.no_op => Ok(()),
-                DeploymentKind::Runtime => self
-                    .device
-                    .execute(DeviceRequest::SnapshotRuntimeBundle {
-                        remote: REMOTE_RUNTIME.into(),
-                        manifest: REMOTE_MANIFEST.into(),
-                    })
-                    .map(|_| ()),
-                DeploymentKind::Platform => self
-                    .device
-                    .execute(DeviceRequest::SnapshotPlatform)
-                    .map(|_| ()),
-            },
+            Phase::Snapshot => Ok(()),
             Phase::RemoteInventoryUpload => match self.deployment.kind {
                 _ if self.no_op => Ok(()),
                 DeploymentKind::Runtime => self
                     .device
-                    .execute(DeviceRequest::DeployRuntimeBundle {
+                    .execute(DeviceRequest::DeliverRuntimeTransaction {
                         local: self.deployment.build.artifact().to_path_buf(),
                         remote: REMOTE_RUNTIME.into(),
                         manifest_local: self.stage.join("platform-v2.manifest"),
                         manifest_remote: REMOTE_MANIFEST.into(),
+                        expected_sha256: self
+                            .artifact_sha256
+                            .clone()
+                            .ok_or("qualified runtime identity is missing")?,
                     })
                     .map(|_| ()),
                 DeploymentKind::Platform => self
                     .device
-                    .execute(DeviceRequest::DeployPlatform {
+                    .execute(DeviceRequest::DeliverPlatformTransaction {
                         stage: self.stage.clone(),
+                        expected_sha256: self
+                            .artifact_sha256
+                            .clone()
+                            .ok_or("qualified runtime identity is missing")?,
                     })
                     .map(|_| ()),
             },
-            Phase::Activate => match self.deployment.kind {
-                _ if self.no_op => Ok(()),
-                DeploymentKind::Runtime => Ok(()),
-                DeploymentKind::Platform => self
-                    .device
-                    .execute(DeviceRequest::SelectMain(MainSelection::Development))
-                    .map(|_| ()),
-            },
-            Phase::RebootIfNeeded => match self.deployment.kind {
-                _ if self.no_op => Ok(()),
-                DeploymentKind::Runtime => Ok(()),
-                DeploymentKind::Platform => {
-                    self.device.execute(DeviceRequest::RebootWait).map(|_| ())
-                }
-            },
-            Phase::Smoke => self.smoke(),
-            Phase::Complete => match self.deployment.kind {
-                _ if self.no_op => Ok(()),
-                DeploymentKind::Runtime => self
-                    .device
-                    .execute(DeviceRequest::CommitRuntimeBundle {
-                        remote: REMOTE_RUNTIME.into(),
-                        manifest: REMOTE_MANIFEST.into(),
-                    })
-                    .map(|_| ()),
-                DeploymentKind::Platform => self
-                    .device
-                    .execute(DeviceRequest::CommitPlatform)
-                    .map(|_| ()),
-            },
+            Phase::Activate | Phase::RebootIfNeeded | Phase::Smoke | Phase::Complete => Ok(()),
         }
     }
 
@@ -504,22 +507,6 @@ impl<D: DeviceOperations> DeliveryActions for ProcessActions<'_, D> {
     }
 
     fn compensate(&mut self) -> AgentResult<()> {
-        match self.deployment.kind {
-            DeploymentKind::Runtime => {
-                self.device.execute(DeviceRequest::RollbackRuntimeBundle {
-                    remote: REMOTE_RUNTIME.into(),
-                    manifest: REMOTE_MANIFEST.into(),
-                })?;
-                self.device
-                    .execute(DeviceRequest::VerifyHealth(Layout::Development))?;
-            }
-            DeploymentKind::Platform => {
-                self.device.execute(DeviceRequest::RollbackPlatform)?;
-                self.device.execute(DeviceRequest::RebootWait)?;
-                self.device
-                    .execute(DeviceRequest::VerifyHealth(Layout::Development))?;
-            }
-        }
         Ok(())
     }
 }
@@ -530,6 +517,7 @@ fn prepare_stage_files(
     stage: &Path,
     gui_artifact: &Path,
     local_main: Option<&Path>,
+    manager: &Path,
 ) -> AgentResult<String> {
     let manifest: Value =
         serde_json::from_slice(&fs::read(&candidate.manifest).map_err(|error| error.to_string())?)
@@ -580,10 +568,7 @@ fn prepare_stage_files(
         candidate_main_revision.to_owned()
     };
     copy(repository.join(gui_artifact), stage.join("mister-magik-fb"))?;
-    copy(
-        repository.join("mister/tools/manager/target/armv7-unknown-linux-gnueabihf/release/mister-magik-manager"),
-        stage.join("mister-magik-manager"),
-    )?;
+    copy(manager.to_path_buf(), stage.join("mister-magik-manager"))?;
     Ok(main_revision)
 }
 

@@ -37,6 +37,21 @@ pub enum DeviceRequest {
     Status,
     ReadDevelopmentManifest,
     VerifyDevelopmentPlatform,
+    FetchVerifiedDevelopmentManager {
+        local: PathBuf,
+        expected_sha256: String,
+    },
+    DeliverRuntimeTransaction {
+        local: PathBuf,
+        remote: String,
+        manifest_local: PathBuf,
+        manifest_remote: String,
+        expected_sha256: String,
+    },
+    DeliverPlatformTransaction {
+        stage: PathBuf,
+        expected_sha256: String,
+    },
     SnapshotRuntime {
         remote: String,
     },
@@ -119,6 +134,9 @@ impl DeviceRequest {
             Self::Status => "status",
             Self::ReadDevelopmentManifest => "read-development-manifest",
             Self::VerifyDevelopmentPlatform => "verify-development-platform",
+            Self::FetchVerifiedDevelopmentManager { .. } => "fetch-verified-development-manager",
+            Self::DeliverRuntimeTransaction { .. } => "deliver-runtime-transaction",
+            Self::DeliverPlatformTransaction { .. } => "deliver-platform-transaction",
             Self::SnapshotRuntime { .. } => "snapshot-runtime",
             Self::DeployRuntime { .. } => "deploy-runtime",
             Self::SnapshotRuntimeBundle { .. } => "snapshot-runtime-bundle",
@@ -170,6 +188,7 @@ pub struct DeviceResponse {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DeviceFailure {
+    Busy(String),
     AccessDenied(String),
     Unavailable(String),
     Authentication(String),
@@ -246,6 +265,21 @@ mod tests {
             DeviceRequest::Status,
             DeviceRequest::ReadDevelopmentManifest,
             DeviceRequest::VerifyDevelopmentPlatform,
+            DeviceRequest::FetchVerifiedDevelopmentManager {
+                local: "manager".into(),
+                expected_sha256: "a".repeat(64),
+            },
+            DeviceRequest::DeliverRuntimeTransaction {
+                local: "l".into(),
+                remote: "r".into(),
+                manifest_local: "ml".into(),
+                manifest_remote: "m".into(),
+                expected_sha256: "a".repeat(64),
+            },
+            DeviceRequest::DeliverPlatformTransaction {
+                stage: "s".into(),
+                expected_sha256: "a".repeat(64),
+            },
             DeviceRequest::RollbackPlatform,
             DeviceRequest::CommitPlatform,
             DeviceRequest::RebootWait,

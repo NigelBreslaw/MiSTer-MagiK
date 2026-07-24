@@ -70,6 +70,7 @@ impl From<&str> for AgentError {
 impl From<DeviceFailure> for AgentError {
     fn from(failure: DeviceFailure) -> Self {
         let (code, detail) = match failure {
+            DeviceFailure::Busy(detail) => ("device_busy", detail),
             DeviceFailure::AccessDenied(detail) => ("device_access_denied", detail),
             DeviceFailure::Unavailable(detail) => ("device_unavailable", detail),
             DeviceFailure::Authentication(detail) => ("authentication_required", detail),
