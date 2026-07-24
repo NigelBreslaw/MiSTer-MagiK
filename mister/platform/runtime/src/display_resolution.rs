@@ -35,7 +35,7 @@ const AUTOMATIC_DISPLAY_RESOLUTION: DisplayResolution = DisplayResolution {
 pub const DISPLAY_RESOLUTIONS: &[DisplayResolution] = &[
     DisplayResolution {
         id: "hdmi-1280x720p60",
-        label: "1280×720 (16:9)",
+        label: "1280x720 (16:9)",
         output_w: 1280,
         output_h: 720,
         video_mode: Some("0"),
@@ -45,7 +45,7 @@ pub const DISPLAY_RESOLUTIONS: &[DisplayResolution] = &[
     },
     DisplayResolution {
         id: "hdmi-1366x768p60",
-        label: "1366×768 (16:9)",
+        label: "1366x768 (16:9)",
         output_w: 1366,
         output_h: 768,
         video_mode: Some("10"),
@@ -55,7 +55,7 @@ pub const DISPLAY_RESOLUTIONS: &[DisplayResolution] = &[
     },
     DisplayResolution {
         id: "hdmi-1920x1080p60",
-        label: "1920×1080 (16:9)",
+        label: "1920x1080 (16:9)",
         output_w: 1920,
         output_h: 1080,
         video_mode: Some("8"),
@@ -65,7 +65,7 @@ pub const DISPLAY_RESOLUTIONS: &[DisplayResolution] = &[
     },
     DisplayResolution {
         id: "hdmi-1920x1200p60",
-        label: "1920×1200 (16:10)",
+        label: "1920x1200 (16:10)",
         output_w: 1920,
         output_h: 1200,
         video_mode: Some("1920,1200,60"),
@@ -75,7 +75,7 @@ pub const DISPLAY_RESOLUTIONS: &[DisplayResolution] = &[
     },
     DisplayResolution {
         id: "hdmi-2048x1536p60",
-        label: "2048×1536 (4:3)",
+        label: "2048x1536 (4:3)",
         output_w: 2048,
         output_h: 1536,
         video_mode: Some("13"),
