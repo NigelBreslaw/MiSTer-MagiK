@@ -4308,9 +4308,11 @@ impl PlatformDeployTransaction {
         let mut rollback = String::new();
         for file in changed {
             verify.push_str(&format!(
-                "test \"$(sha256sum {} | awk '{{print $1}}')\" = {}; ",
+                "actual=$(sha256sum {} | awk '{{print $1}}'); if test \"$actual\" != {}; then printf 'platform upload hash mismatch: {} expected={} actual=%s\\n' \"$actual\" >&2; exit 1; fi; ",
                 sh(&format!("{}.upload", file.remote)),
-                sh(&file.sha256)
+                sh(&file.sha256),
+                sh(&file.remote),
+                sh(&file.sha256),
             ));
             rollback.push_str(&format!(
                 "if [ -e {backup} ]; then mv -f {backup} {path}; elif [ -e {missing} ]; then rm -f {path} {missing}; fi; ",
@@ -4349,8 +4351,9 @@ impl PlatformDeployTransaction {
         }
         let safety = platform_safety_script();
         let finish = shell_sequence([safety.as_str(), "trap - EXIT INT TERM", "sync"]);
+        let require_snapshot = "if ! test -f /media/fat/MiSTer.ini.platform-rollback; then printf 'platform snapshot missing: /media/fat/MiSTer.ini.platform-rollback\\n' >&2; exit 1; fi";
         format!(
-            "set -eu; test -f /media/fat/MiSTer.ini.platform-rollback; {verify} rollback() {{ {rollback} mv -f /media/fat/MiSTer.ini.platform-rollback /media/fat/MiSTer.ini 2>/dev/null || true; sync; }}; trap rollback EXIT INT TERM; {activate} {chmod} sync; {finish}"
+            "set -eu; {safety}; {require_snapshot}; {verify} rollback() {{ {rollback} mv -f /media/fat/MiSTer.ini.platform-rollback /media/fat/MiSTer.ini 2>/dev/null || true; sync; }}; trap rollback EXIT INT TERM; {activate} {chmod} sync; {finish}"
         )
     }
 }
@@ -4380,6 +4383,7 @@ fn platform_rollback_script() -> String {
 }
 
 fn platform_snapshot_script() -> String {
+    let safety = platform_safety_script();
     let mut cleanup = String::from("rm -f /media/fat/MiSTer.ini.platform-rollback; ");
     let mut snapshot = String::new();
     for (_, remote) in PLATFORM_DEPLOY_FILES {
@@ -4396,7 +4400,7 @@ fn platform_snapshot_script() -> String {
         ));
     }
     format!(
-        "set -eu; cleanup() {{ {cleanup} }}; cleanup; trap cleanup EXIT INT TERM; cp -p /media/fat/MiSTer.ini /media/fat/MiSTer.ini.platform-rollback; {snapshot} sync; trap - EXIT INT TERM"
+        "set -eu; {safety}; cleanup() {{ {cleanup} }}; cleanup; trap cleanup EXIT INT TERM; cp -p /media/fat/MiSTer.ini /media/fat/MiSTer.ini.platform-rollback; {snapshot} sync; trap - EXIT INT TERM"
     )
 }
 
@@ -4415,15 +4419,7 @@ fn platform_cleanup_script() -> String {
 }
 
 fn platform_safety_script() -> String {
-    shell_sequence([
-        "test ! -e /media/fat/mister-magik/launcher.env",
-        "test ! -e /media/fat/mister-magik-dev/launcher.env",
-        "test ! -e /tmp/mister-magik/fs-fault-launcher.env",
-        "test ! -e /tmp/mister-magik/fs-fault-session",
-        "test ! -e /tmp/mister-magik/fs-fault.json",
-        "test ! -e /media/fat/mister-magik/rebuild-on-next-boot",
-        "test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
-    ])
+    "for path in /media/fat/mister-magik/launcher.env /media/fat/mister-magik-dev/launcher.env /tmp/mister-magik/fs-fault-launcher.env /tmp/mister-magik/fs-fault-session /tmp/mister-magik/fs-fault.json /media/fat/mister-magik/rebuild-on-next-boot /media/fat/mister-magik-dev/rebuild-on-next-boot; do if test -e \"$path\"; then printf 'platform safety blocked: %s\\n' \"$path\" >&2; exit 1; fi; done".into()
 }
 
 fn shell_sequence<I, S>(commands: I) -> String
@@ -10553,9 +10549,14 @@ H: Handlers=event3 js0"#
             .unwrap();
         assert!(manifest > gui);
         assert!(script.contains("trap rollback EXIT INT TERM"));
-        assert!(script.contains("test ! -e /tmp/mister-magik/fs-fault-session"));
-        assert!(script.contains("test ! -e /tmp/mister-magik/fs-fault-launcher.env"));
-        assert!(script.contains("test ! -e /tmp/mister-magik/fs-fault.json"));
+        assert!(script.contains("platform safety blocked: %s"));
+        assert!(script.contains("/tmp/mister-magik/fs-fault-session"));
+        assert!(script.contains("/tmp/mister-magik/fs-fault-launcher.env"));
+        assert!(script.contains("/tmp/mister-magik/fs-fault.json"));
+        assert!(script.contains("platform upload hash mismatch:"));
+        assert!(
+            script.contains("platform snapshot missing: /media/fat/MiSTer.ini.platform-rollback")
+        );
         assert!(!script.contains("cp -p '/media/fat/MiSTer_MagiKDev'"));
         let cleanup = platform_cleanup_script();
         assert!(
@@ -10565,6 +10566,9 @@ H: Handlers=event3 js0"#
         assert!(platform_rollback_script().contains("MiSTer.ini.platform-rollback"));
         let snapshot = platform_snapshot_script();
         assert!(snapshot.contains("trap cleanup EXIT INT TERM"));
+        assert!(
+            snapshot.find("platform safety blocked").unwrap() < snapshot.find("cleanup()").unwrap()
+        );
         assert!(snapshot.contains("MiSTer_MagiKDev.rollback"));
         assert!(
             snapshot
