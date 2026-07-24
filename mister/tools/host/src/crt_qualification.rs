@@ -172,6 +172,7 @@ fn parse_probe_args(args: &[String]) -> Result<QualifyAction> {
             | "motion-hold2"
             | "motion-hold3"
             | "motion-slow"
+            | "motion-color"
             | "preloaded-ruler-slow"
             | "preloaded-bars-slow"
     ) {
@@ -311,6 +312,9 @@ fn probe_observation_prompt(pattern: &str) -> &'static str {
         }
         "motion-slow" => {
             "The bright ruler steps once per second. At each step, report whether the lower screen briefly shows the old position, and whether it then becomes stable."
+        }
+        "motion-color" => {
+            "A bar moves 12 pixels every raster and cycles red, cyan, yellow, blue, magenta, green. Report the current top/bottom band color and any remnant color."
         }
         "preloaded-ruler-slow" => {
             "Two ruler positions were preloaded before observation. At each one-second switch, report whether the lower screen briefly remains at the old position."
@@ -819,6 +823,7 @@ mod tests {
             "motion-hold2",
             "motion-hold3",
             "motion-slow",
+            "motion-color",
             "preloaded-ruler-slow",
             "preloaded-bars-slow",
         ] {

@@ -23,6 +23,7 @@ enum CrtProbePattern {
     MotionHold2,
     MotionHold3,
     MotionSlow,
+    MotionColor,
     PreloadedRulerSlow,
     PreloadedBarsSlow,
 }
@@ -46,6 +47,7 @@ impl CrtProbePattern {
             "motion-hold2" => Some(Self::MotionHold2),
             "motion-hold3" => Some(Self::MotionHold3),
             "motion-slow" => Some(Self::MotionSlow),
+            "motion-color" => Some(Self::MotionColor),
             "preloaded-ruler-slow" => Some(Self::PreloadedRulerSlow),
             "preloaded-bars-slow" => Some(Self::PreloadedBarsSlow),
             _ => None,
@@ -66,6 +68,7 @@ impl CrtProbePattern {
             Self::MotionHold2 => "motion-hold2",
             Self::MotionHold3 => "motion-hold3",
             Self::MotionSlow => "motion-slow",
+            Self::MotionColor => "motion-color",
             Self::PreloadedRulerSlow => "preloaded-ruler-slow",
             Self::PreloadedBarsSlow => "preloaded-bars-slow",
         }
@@ -77,7 +80,7 @@ impl CrtProbePattern {
 
     const fn continuous_hold_rasters(self) -> Option<u64> {
         match self {
-            Self::IdenticalFlip | Self::FullAb | Self::Motion => Some(1),
+            Self::IdenticalFlip | Self::FullAb | Self::Motion | Self::MotionColor => Some(1),
             Self::FullAbHold2 => Some(2),
             Self::FullAbHold3 => Some(3),
             Self::FullAbHold4 => Some(4),
@@ -95,7 +98,11 @@ impl CrtProbePattern {
     const fn is_motion(self) -> bool {
         matches!(
             self,
-            Self::Motion | Self::MotionHold2 | Self::MotionHold3 | Self::MotionSlow
+            Self::Motion
+                | Self::MotionHold2
+                | Self::MotionHold3
+                | Self::MotionSlow
+                | Self::MotionColor
         )
     }
 }
@@ -434,6 +441,7 @@ pub(super) fn run_crt_probe_loop(
             render_crt_probe_pattern(width, height, 0, 0, Some(0))
         }
         CrtProbePattern::PreloadedBarsSlow => render_preloaded_bar_pattern(width, height, 1),
+        CrtProbePattern::MotionColor => render_colored_motion_pattern(width, height, 0),
         _ => render_crt_probe_pattern(width, height, 1, 0, None),
     };
     let frame_b = match pattern {
@@ -442,6 +450,7 @@ pub(super) fn run_crt_probe_loop(
             render_crt_probe_pattern(width, height, 0, 0, Some(5))
         }
         CrtProbePattern::PreloadedBarsSlow => render_preloaded_bar_pattern(width, height, 2),
+        CrtProbePattern::MotionColor => render_colored_motion_pattern(width, height, 0),
         _ => render_crt_probe_pattern(width, height, 2, 24, None),
     };
 
@@ -488,7 +497,7 @@ pub(super) fn run_crt_probe_loop(
     }
 
     let observation_started = Instant::now();
-    let mut motion_frame = 0u64;
+    let mut motion_frame = u64::from(pattern == CrtProbePattern::MotionColor);
     let mut raster_index = 0u64;
     let mut next_slow_flip = observation_started + CRT_PROBE_SLOW_PERIOD;
     while failure.is_none() && observation_started.elapsed() < Duration::from_secs(CRT_PROBE_SECS) {
@@ -517,7 +526,11 @@ pub(super) fn run_crt_probe_loop(
         );
         raster_index = raster_index.wrapping_add(1);
         if pattern.is_motion() && target != active_slot {
-            let frame = render_crt_probe_pattern(width, height, 0, 0, Some(motion_frame));
+            let frame = if pattern == CrtProbePattern::MotionColor {
+                render_colored_motion_pattern(width, height, motion_frame)
+            } else {
+                render_crt_probe_pattern(width, height, 0, 0, Some(motion_frame))
+            };
             if let Err(error) = write_probe_slot(
                 &mut buffers,
                 target,
@@ -833,6 +846,29 @@ fn render_preloaded_bar_pattern(width: usize, height: usize, identity: u8) -> Ve
     let half_width = 12usize.min(width / 8);
     for y in 0..height {
         for x in center_x.saturating_sub(half_width)..(center_x + half_width).min(width) {
+            frame[y * width + x] = Rgb565Pixel(color);
+        }
+    }
+    render_probe_identity_bands(&mut frame, width, height, color);
+    frame
+}
+
+fn render_colored_motion_pattern(
+    width: usize,
+    height: usize,
+    frame_number: u64,
+) -> Vec<Rgb565Pixel> {
+    const COLORS: [u16; 6] = [0xf800, 0x07ff, 0xffe0, 0x001f, 0xf81f, 0x07e0];
+    const STEP: usize = 12;
+    const BAR_WIDTH: usize = 24;
+
+    let mut frame = vec![Rgb565Pixel(0x0000); width * height];
+    let color = COLORS[frame_number as usize % COLORS.len()];
+    let usable_width = width.saturating_sub(BAR_WIDTH).max(1);
+    let left = (frame_number as usize).wrapping_mul(STEP) % usable_width;
+    let right = (left + BAR_WIDTH).min(width);
+    for y in 0..height {
+        for x in left..right {
             frame[y * width + x] = Rgb565Pixel(color);
         }
     }
@@ -1281,6 +1317,10 @@ mod tests {
             Some(CrtProbePattern::MotionSlow)
         );
         assert_eq!(
+            CrtProbePattern::parse("motion-color"),
+            Some(CrtProbePattern::MotionColor)
+        );
+        assert_eq!(
             CrtProbePattern::parse("preloaded-ruler-slow"),
             Some(CrtProbePattern::PreloadedRulerSlow)
         );
@@ -1346,6 +1386,22 @@ mod tests {
         assert_eq!(first[row * 640 + 15].0, 0xffff);
         assert_eq!(second[row * 640 + 20].0, 0xffff);
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn colored_motion_probe_encodes_frame_age_in_position_and_color() {
+        let first = render_colored_motion_pattern(640, 576, 0);
+        let second = render_colored_motion_pattern(640, 576, 1);
+        let fourth = render_colored_motion_pattern(640, 576, 3);
+        let middle_row = 288;
+
+        assert_eq!(first[middle_row * 640].0, 0xf800);
+        assert_eq!(second[middle_row * 640 + 12].0, 0x07ff);
+        assert_eq!(fourth[middle_row * 640 + 36].0, 0x001f);
+        assert_eq!(second[0].0, 0x07ff);
+        assert_eq!(second[575 * 640].0, 0x07ff);
+        assert_ne!(first, second);
+        assert_ne!(second, fourth);
     }
 
     #[test]
