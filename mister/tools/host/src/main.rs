@@ -509,7 +509,27 @@ impl DeviceOperations for NativeDevice {
                 if let Some(message) = exec_failure_message("diagnostic facts", &output) {
                     return Err(device_failure(message));
                 }
-                output.stdout.trim().into()
+                let mut facts: Value =
+                    serde_json::from_str(output.stdout.trim()).map_err(device_failure)?;
+                if let Some(main_status) = remote_read(&session, MAIN_STATUS_REMOTE)
+                    .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+                    && let (Some(facts), Some(main)) =
+                        (facts.as_object_mut(), main_status.as_object())
+                {
+                    for key in [
+                        "launcher_state",
+                        "crash_count",
+                        "last_crash_reason",
+                        "last_crash_report",
+                        "last_crash_report_id",
+                        "last_crash_kind",
+                    ] {
+                        if let Some(value) = main.get(key) {
+                            facts.insert(key.to_owned(), value.clone());
+                        }
+                    }
+                }
+                serde_json::to_string(&facts).map_err(device_failure)?
             }
             DeviceRequest::RunCrtGeometryTrial { rectangle } => {
                 run_crt_geometry_trial_with(&config.connection, *rectangle)

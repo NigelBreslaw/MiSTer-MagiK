@@ -46,6 +46,18 @@ pub struct DeviceFacts {
     pub temporary_state: bool,
     #[serde(default)]
     pub launcher_heartbeat_advancing: bool,
+    #[serde(default)]
+    pub launcher_state: String,
+    #[serde(default)]
+    pub crash_count: u64,
+    #[serde(default)]
+    pub last_crash_reason: String,
+    #[serde(default)]
+    pub last_crash_report: String,
+    #[serde(default)]
+    pub last_crash_report_id: String,
+    #[serde(default)]
+    pub last_crash_kind: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -53,6 +65,22 @@ pub struct DiagnosticReport {
     pub status: &'static str,
     pub repaired_temporary_state: bool,
     pub next_action: Option<String>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub launcher_state: String,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub crash_count: u64,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub last_crash_reason: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub last_crash_report: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub last_crash_report_id: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub last_crash_kind: String,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 pub trait DiagnoseActions {
@@ -276,6 +304,12 @@ pub fn correlate(facts: &DeviceFacts, repaired: bool) -> DiagnosticReport {
         },
         repaired_temporary_state: repaired,
         next_action,
+        launcher_state: facts.launcher_state.clone(),
+        crash_count: facts.crash_count,
+        last_crash_reason: facts.last_crash_reason.clone(),
+        last_crash_report: facts.last_crash_report.clone(),
+        last_crash_report_id: facts.last_crash_report_id.clone(),
+        last_crash_kind: facts.last_crash_kind.clone(),
     }
 }
 
@@ -364,6 +398,28 @@ mod tests {
                 .unwrap()
                 .contains("event loop is stalled")
         );
+    }
+
+    #[test]
+    fn crash_metadata_is_preserved_in_the_diagnostic_report() {
+        let report = correlate(
+            &DeviceFacts {
+                launcher_running: false,
+                launcher_state: "LauncherCrashed".into(),
+                crash_count: 2,
+                last_crash_reason: "exit=1".into(),
+                last_crash_report: "/media/fat/mister-magik-dev/crashes/report-2.json".into(),
+                last_crash_report_id: "report-2".into(),
+                last_crash_kind: "unexpected-child-exit".into(),
+                ..healthy()
+            },
+            false,
+        );
+
+        assert_eq!(report.launcher_state, "LauncherCrashed");
+        assert_eq!(report.crash_count, 2);
+        assert_eq!(report.last_crash_report_id, "report-2");
+        assert_eq!(report.last_crash_kind, "unexpected-child-exit");
     }
 
     #[test]
