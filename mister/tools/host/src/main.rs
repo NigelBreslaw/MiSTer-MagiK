@@ -251,7 +251,7 @@ impl DeviceOperations for NativeDevice {
                     "development platform verify",
                     &installed_platform_verify_command(Layout::Development),
                 )
-                .map_err(device_failure)?;
+                .map_err(|error| DeviceFailure::ArtifactMismatch(error.to_string()))?;
                 "verified".into()
             }
             DeviceRequest::FetchVerifiedDevelopmentManager {

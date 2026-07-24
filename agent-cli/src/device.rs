@@ -23,10 +23,16 @@ impl<D: DeviceOperations> DeviceClient<D> {
     }
 
     pub fn execute(&mut self, request: DeviceRequest) -> AgentResult<String> {
-        self.device
-            .execute(&request)
+        self.execute_typed(request)
             .map(|response| response.detail)
             .map_err(AgentError::from)
+    }
+
+    pub fn execute_typed(
+        &mut self,
+        request: DeviceRequest,
+    ) -> Result<mister_tool::transport::DeviceResponse, mister_tool::transport::DeviceFailure> {
+        self.device.execute(&request)
     }
 }
 

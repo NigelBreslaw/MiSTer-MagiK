@@ -321,6 +321,8 @@ impl ProcessActions<'_> {
     fn prepare(&mut self) -> AgentResult<()> {
         self.device.execute(DeviceRequest::Discover)?;
         self.device
+            .execute(DeviceRequest::VerifyDevelopmentPlatform)?;
+        self.device
             .execute(DeviceRequest::SnapshotBenchmarkRuntime {
                 remote: REMOTE_RUNTIME.into(),
             })?;
@@ -438,6 +440,8 @@ impl ProcessColdActions<'_> {
 
     fn snapshot(&mut self) -> AgentResult<()> {
         self.device.execute(DeviceRequest::Discover)?;
+        self.device
+            .execute(DeviceRequest::VerifyDevelopmentPlatform)?;
         self.device
             .execute(DeviceRequest::SnapshotBenchmarkRuntime {
                 remote: REMOTE_RUNTIME.into(),

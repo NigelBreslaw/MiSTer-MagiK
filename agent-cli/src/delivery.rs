@@ -440,6 +440,17 @@ fn validate_commit_identity(
     Ok(())
 }
 
+fn reconciled_delivery_decision(
+    decision: DeliveryDecision,
+    installed_platform_verified: bool,
+) -> DeliveryDecision {
+    if installed_platform_verified {
+        decision
+    } else {
+        DeliveryDecision::Platform
+    }
+}
+
 impl<D: DeviceOperations> DeliveryActions for ProcessActions<'_, D> {
     fn run(&mut self, phase: Phase) -> AgentResult<()> {
         match phase {
@@ -452,6 +463,14 @@ impl<D: DeviceOperations> DeliveryActions for ProcessActions<'_, D> {
                 let installed = self
                     .device
                     .execute(DeviceRequest::ReadDevelopmentManifest)?;
+                let installed_platform_verified = match self
+                    .device
+                    .execute_typed(DeviceRequest::VerifyDevelopmentPlatform)
+                {
+                    Ok(_) => true,
+                    Err(mister_tool::transport::DeviceFailure::ArtifactMismatch(_)) => false,
+                    Err(error) => return Err(error.into()),
+                };
                 self.installed_manager_sha256 = crate::platform_manifest::parse_installed(
                     &installed,
                     crate::platform_manifest::Layout::Development,
@@ -464,15 +483,18 @@ impl<D: DeviceOperations> DeliveryActions for ProcessActions<'_, D> {
                     &main_revision,
                     self.expected_commit,
                 );
-                self.decision = reconciliation.decision;
-                self.no_op = reconciliation.decision == DeliveryDecision::NoOp;
+                self.decision = reconciled_delivery_decision(
+                    reconciliation.decision,
+                    installed_platform_verified,
+                );
+                self.no_op = self.decision == DeliveryDecision::NoOp;
                 self.installed_manifest = installed;
                 if self.no_op {
                     return Ok(());
                 }
                 self.deployment =
                     crate::deploy::plan(self.repository, reconciliation.changed_paths)?;
-                if reconciliation.decision == DeliveryDecision::Platform {
+                if self.decision == DeliveryDecision::Platform {
                     self.deployment.kind = DeploymentKind::Platform;
                 }
                 Ok(())
@@ -1231,6 +1253,22 @@ mod tests {
     }
 
     #[test]
+    fn failed_installed_platform_verification_forces_platform_delivery() {
+        assert_eq!(
+            reconciled_delivery_decision(DeliveryDecision::NoOp, false),
+            DeliveryDecision::Platform
+        );
+        assert_eq!(
+            reconciled_delivery_decision(DeliveryDecision::Runtime, false),
+            DeliveryDecision::Platform
+        );
+        assert_eq!(
+            reconciled_delivery_decision(DeliveryDecision::NoOp, true),
+            DeliveryDecision::NoOp
+        );
+    }
+
+    #[test]
     fn deterministic_platform_uses_one_transaction_request() {
         let requests = Rc::new(RefCell::new(Vec::new()));
         let mut actions = scenario_actions(
@@ -1337,7 +1375,8 @@ mod tests {
             requests.borrow().as_slice(),
             &[
                 DeviceRequest::Discover,
-                DeviceRequest::ReadDevelopmentManifest
+                DeviceRequest::ReadDevelopmentManifest,
+                DeviceRequest::VerifyDevelopmentPlatform
             ]
         );
         assert!(!repository.join("build").exists());

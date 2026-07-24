@@ -3,7 +3,9 @@
 `scripts/agent benchmark` is the only agent-facing performance workflow. It is
 flag-free and selects one canonical scenario from the current HEAD commit's
 changed components. It requires an exact clean commit and an artifact receipt
-for that commit.
+for that commit. Before deploying the temporary runtime, it verifies the
+installed development manifest and every bound Main, scanout, and latch
+artifact; an incoherent platform is not measured.
 
 ## Velocity scenarios
 
