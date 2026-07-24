@@ -158,3 +158,63 @@ base changes are not visibly corrupt; sustained frame-by-frame change is
 required. The next candidate must therefore distinguish scaler fetch/pipeline
 history under continuous alternation from an analog CRT-only 50 Hz temporal or
 sync effect.
+
+## Human-readable transition isolation
+
+Later probes replaced the difficult-to-score A/B grids with a bright moving
+ruler and then with high-contrast preloaded bars. These results supersede the
+earlier conclusion that isolated base changes are clean.
+
+Provenance for the decisive high-contrast run:
+
+- Delivered application source revision:
+  `dffa74d2dd5b81e5ca19229f3241c853abdf0b14`
+- Local delivered application binary SHA-256:
+  `e80e1bc8ba9d37c69379443e00dde3eccdf978eabbe72cf4d2b3da886c17dfa9`
+- Main source revision:
+  `d359f79fad3682cb0942060163caedd0b2ccc02e`
+- Local Main binary SHA-256:
+  `8b94ab4ade27e415b6bd2450210a33c863b15f9beddc93df61c2a1ce76fdbdc5`
+- Local delivery-input latch RBF SHA-256:
+  `b1a7e0c804b6b6f38b52b3dc425d59ceca906bcbdcd041a0ccfb50dbae7663ff`
+- RBF source revision:
+  `3c3634c0105d78f27aeba66b38966c50dbc42c9b`
+
+The moving ruler remained visibly faulty when held for two rasters (25.2
+updates/s) and three rasters (16.8 updates/s). A ruler moving only once per
+second still intermittently left its lower section at the old position. All
+three runs had matching final routes, zero latch drops, zero active-buffer
+writes, and zero pending-buffer writes. Their manifest hashes were:
+
+- `motion-hold2`:
+  `a450bc0fb4ea6527b55114eb7acfbc665e2adc84774f0c8d3dce66b2a36a89f9`
+- `motion-hold3`:
+  `814629f3f71a8f39f0e4a6c4e6d3b1f5a98591cefdaccecef6cd558b3408af07`
+- `motion-slow`:
+  `659dfcc614f8e45549548b7448c948075886c05dab43798a1f67786bca77daee`
+- repeated `motion-slow`:
+  `bf491f3ff80d7643fde9f3050ec0181d9e594ce29c64e1effd744d221976082f`
+
+The decisive `preloaded-bars-slow` probe wrote a cyan-left frame and a
+magenta-right frame once before observation, then switched only the framebuffer
+base once per second. It performed no framebuffer writes during observation.
+The operator clearly observed the bottom of the old bar being left behind
+during a transition. Machine telemetry reported two writes, 20 posts/flips,
+zero drops, zero active-buffer writes, zero pending-buffer writes, no pending
+final transaction, and a matching final active route.
+
+- Manifest SHA-256:
+  `9ef6d2062bb88fc68e6b41dc85b17bd73b5719df7c775aad94e856adaddd9119`
+- Status SHA-256:
+  `1d924354b327184b83c1d93d97273a9ee181a8d647e69fc1dadcafbadf6a2ab5`
+- Log SHA-256:
+  `34f4c1ebece5e180c126d87a3dfe55cdffa5991168867c40e5bcb183f0f7eb7f`
+
+This proves that the visible PAL fault is a mixed-base scanout transition. It
+does not require rendering, recent framebuffer writes, full-rate alternation,
+or a software cadence miss. The VGA framebuffer route consumes the scaler
+output, so native VGA sync is not an independent fetch boundary. The remaining
+fault boundary is inside the scaler path: `LFB_BASE` changes in `clk_sys`, while
+`ascal` copies and consumes the base in its Avalon fetch domain at scaler VS
+falling. The next FPGA experiment must make that fetch-domain base selection
+atomic and acknowledge completion only after that event.
