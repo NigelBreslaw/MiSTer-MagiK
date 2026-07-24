@@ -25,12 +25,7 @@ export component CrtResolutionComboMockup inherits Window {
     ];
     in-out property <int> selected-index: 3;
     in-out property <int> highlighted-index: 6;
-    property <int> visible-count: 7;
-    property <int> first-visible: (highlighted-index - 3).clamp(
-        0,
-        (resolutions.length - visible-count).max(0),
-    );
-    property <length> row-height: 40px;
+    property <length> row-height: 30px;
 
     focus-scope := FocusScope {
         key-pressed(event) => {
@@ -78,33 +73,20 @@ export component CrtResolutionComboMockup inherits Window {
                 background: #756bd4;
             }
 
-            Text {
+            list-viewport := Rectangle {
                 x: 24px;
                 y: 72px;
                 width: parent.width - 48px;
-                height: 24px;
-                text: first-visible > 0 ? "▲" : "";
-                color: #8b94f8;
-                font-size: 16px;
-                vertical-alignment: center;
-            }
-
-            list-viewport := Rectangle {
-                x: 24px;
-                y: 96px;
-                width: parent.width - 64px;
-                height: root.visible-count * root.row-height;
+                height: root.resolutions.length * root.row-height;
                 background: #06122b;
                 border-width: 2px;
                 border-color: #5e59aa;
                 clip: true;
 
                 for resolution[index] in root.resolutions : Rectangle {
-                    y: (index - root.first-visible) * root.row-height;
+                    y: index * root.row-height;
                     width: parent.width;
                     height: root.row-height;
-                    visible: index >= root.first-visible
-                        && index < root.first-visible + root.visible-count;
                     background: index == root.highlighted-index ? #40e5e7 : #06122b;
                     border-width: 1px;
                     border-color: index == root.highlighted-index ? #40e5e7 : #5e59aa;
@@ -141,33 +123,6 @@ export component CrtResolutionComboMockup inherits Window {
                         vertical-alignment: center;
                     }
                 }
-            }
-
-            Rectangle {
-                x: parent.width - 32px;
-                y: list-viewport.y;
-                width: 8px;
-                height: list-viewport.height;
-                background: #17143d;
-
-                Rectangle {
-                    y: root.first-visible * (parent.height - self.height)
-                        / (root.resolutions.length - root.visible-count);
-                    width: parent.width;
-                    height: parent.height * root.visible-count / root.resolutions.length;
-                    background: #8b94f8;
-                }
-            }
-
-            Text {
-                x: 24px;
-                y: 376px;
-                width: parent.width - 48px;
-                height: 24px;
-                text: first-visible + visible-count < resolutions.length ? "▼" : "";
-                color: #8b94f8;
-                font-size: 16px;
-                vertical-alignment: center;
             }
 
             Rectangle {
