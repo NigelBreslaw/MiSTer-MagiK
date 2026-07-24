@@ -516,7 +516,8 @@ impl DeviceOperations for NativeDevice {
                     .map_err(device_failure)?
             }
             DeviceRequest::RunCrtScreensaverTrial => {
-                run_crt_screensaver_trial_with(&config.connection).map_err(device_failure)?
+                run_crt_screensaver_trial_with(&config.connection, 30, 10)
+                    .map_err(device_failure)?
             }
             DeviceRequest::RunCrtScreensaverMatrix => {
                 run_crt_screensaver_matrix_with(&config.connection).map_err(device_failure)?
@@ -2255,15 +2256,22 @@ fn crt_geometry_capture_path(temporary_directory: &Path, timestamp_ms: u128) -> 
     temporary_directory.join(format!("mister-magik-crt-geometry-{timestamp_ms}.jpg"))
 }
 
-fn crt_screensaver_trial_run_command(runtime_settings: &str) -> String {
+fn crt_screensaver_trial_run_command(runtime_settings: &str, duration_secs: u64) -> String {
     let resume = acknowledged_main_command("mister_magik_resume");
     format!(
-        "cleanup() {{ trap - EXIT HUP INT TERM; rm -f /tmp/mister-magik/realtime-frame-analytics; {resume}; }}; trap cleanup EXIT HUP INT TERM; set -eu; test -x /media/fat/mister-magik-dev/mister-magik-fb; mkdir -p /tmp/mister-magik; printf 'wall\\n' >/tmp/mister-magik/realtime-frame-analytics; run_rc=0; MISTER_MAGIK_RUNTIME_SETTINGS_V1={} MISTER_SCREENSAVER_START_ACTIVE=1 /media/fat/mister-magik-dev/mister-magik-fb ui launcher 30 >/tmp/mister-magik-crt-screensaver.log 2>&1 || run_rc=$?; cp /tmp/mister-magik/status.json /tmp/mister-magik/crt-screensaver-status.json; test \"$run_rc\" -eq 0",
+        "cleanup() {{ trap - EXIT HUP INT TERM; rm -f /tmp/mister-magik/realtime-frame-analytics; {resume}; }}; trap cleanup EXIT HUP INT TERM; set -eu; test -x /media/fat/mister-magik-dev/mister-magik-fb; mkdir -p /tmp/mister-magik; printf 'wall\\n' >/tmp/mister-magik/realtime-frame-analytics; run_rc=0; MISTER_MAGIK_RUNTIME_SETTINGS_V1={} MISTER_SCREENSAVER_START_ACTIVE=1 /media/fat/mister-magik-dev/mister-magik-fb ui launcher {duration_secs} >/tmp/mister-magik-crt-screensaver.log 2>&1 || run_rc=$?; cp /tmp/mister-magik/status.json /tmp/mister-magik/crt-screensaver-status.json; test \"$run_rc\" -eq 0",
         sh(runtime_settings),
     )
 }
 
-fn run_crt_screensaver_trial_with(connection: &ConnectionConfig) -> Result<String> {
+fn run_crt_screensaver_trial_with(
+    connection: &ConnectionConfig,
+    duration_secs: u64,
+    capture_delay_secs: u64,
+) -> Result<String> {
+    if duration_secs == 0 || capture_delay_secs == 0 || capture_delay_secs >= duration_secs {
+        return Err("screensaver trial timing must satisfy 0 < capture delay < duration".into());
+    }
     // The remote trial trap removes its analytics lease and resumes Main after
     // success, failure, or disconnect.
     let settings_session = connect_with(connection, 10)?;
@@ -2302,7 +2310,7 @@ fn run_crt_screensaver_trial_with(connection: &ConnectionConfig) -> Result<Strin
         let result = exec_checked(
             &session,
             "screensaver trial",
-            &crt_screensaver_trial_run_command(&runtime_settings_for_trial),
+            &crt_screensaver_trial_run_command(&runtime_settings_for_trial, duration_secs),
         );
         if let Err(error) = result {
             let recovery = connect_with(&trial_connection, 10).and_then(|recovery| {
@@ -2324,7 +2332,7 @@ fn run_crt_screensaver_trial_with(connection: &ConnectionConfig) -> Result<Strin
     ready_rx
         .recv_timeout(Duration::from_secs(10))
         .map_err(|_| "screensaver trial did not start")?;
-    std::thread::sleep(Duration::from_secs(10));
+    std::thread::sleep(Duration::from_secs(capture_delay_secs));
     let capture = crt_qualification::capture_usb_video_frame(&usb_video);
     let trial_result = trial
         .join()
@@ -2401,7 +2409,8 @@ fn run_crt_screensaver_matrix_with(connection: &ConnectionConfig) -> Result<Stri
             .launcher_pid;
             drop(session);
 
-            let detail: Value = serde_json::from_str(&run_crt_screensaver_trial_with(connection)?)?;
+            let detail: Value =
+                serde_json::from_str(&run_crt_screensaver_trial_with(connection, 8, 4)?)?;
             current_pid = detail
                 .get("launcher_pid")
                 .and_then(Value::as_i64)
@@ -8284,7 +8293,7 @@ video_mode=14
 
     #[test]
     fn crt_screensaver_trial_is_bounded_self_restoring_and_uses_the_product_launcher() {
-        let command = crt_screensaver_trial_run_command("schema=1&output=crt-576p50");
+        let command = crt_screensaver_trial_run_command("schema=1&output=crt-576p50", 30);
 
         assert!(command.contains("MISTER_SCREENSAVER_START_ACTIVE=1"));
         assert!(command.contains(" ui launcher 30 "));
@@ -8292,6 +8301,14 @@ video_mode=14
         assert!(command.contains("rm -f /tmp/mister-magik/realtime-frame-analytics"));
         assert!(command.contains("crt-screensaver-status.json"));
         assert!(!command.contains("MiSTer.ini"));
+    }
+
+    #[test]
+    fn crt_screensaver_matrix_trial_fits_inside_the_headless_transaction_window() {
+        let command = crt_screensaver_trial_run_command("schema=1&output=crt-240p60", 8);
+
+        assert!(command.contains(" ui launcher 8 "));
+        assert!(!command.contains(" ui launcher 30 "));
     }
 
     #[test]
