@@ -16,6 +16,9 @@ enum CrtProbePattern {
     IdenticalFlip,
     SlowAb,
     FullAb,
+    FullAbHold2,
+    FullAbHold3,
+    FullAbHold4,
     Motion,
 }
 
@@ -31,6 +34,9 @@ impl CrtProbePattern {
             "identical-flip" => Some(Self::IdenticalFlip),
             "slow-ab" => Some(Self::SlowAb),
             "full-ab" => Some(Self::FullAb),
+            "full-ab-hold2" => Some(Self::FullAbHold2),
+            "full-ab-hold3" => Some(Self::FullAbHold3),
+            "full-ab-hold4" => Some(Self::FullAbHold4),
             "motion" => Some(Self::Motion),
             _ => None,
         }
@@ -43,12 +49,25 @@ impl CrtProbePattern {
             Self::IdenticalFlip => "identical-flip",
             Self::SlowAb => "slow-ab",
             Self::FullAb => "full-ab",
+            Self::FullAbHold2 => "full-ab-hold2",
+            Self::FullAbHold3 => "full-ab-hold3",
+            Self::FullAbHold4 => "full-ab-hold4",
             Self::Motion => "motion",
         }
     }
 
     const fn flips_continuously(self) -> bool {
-        matches!(self, Self::IdenticalFlip | Self::FullAb | Self::Motion)
+        self.continuous_hold_rasters().is_some()
+    }
+
+    const fn continuous_hold_rasters(self) -> Option<u64> {
+        match self {
+            Self::IdenticalFlip | Self::FullAb | Self::Motion => Some(1),
+            Self::FullAbHold2 => Some(2),
+            Self::FullAbHold3 => Some(3),
+            Self::FullAbHold4 => Some(4),
+            Self::FixedA | Self::FixedB | Self::SlowAb => None,
+        }
     }
 }
 
@@ -433,6 +452,7 @@ pub(super) fn run_crt_probe_loop(
 
     let observation_started = Instant::now();
     let mut motion_frame = 0u64;
+    let mut raster_index = 0u64;
     let mut next_slow_flip = observation_started + CRT_PROBE_SLOW_PERIOD;
     while failure.is_none() && observation_started.elapsed() < Duration::from_secs(CRT_PROBE_SECS) {
         let should_flip = if pattern.flips_continuously() {
@@ -447,7 +467,12 @@ pub(super) fn run_crt_probe_loop(
             std::thread::sleep(Duration::from_millis(2));
             continue;
         }
-        let target = if active_slot == 1 { 2 } else { 1 };
+        let target = probe_target_slot(
+            active_slot,
+            pattern.continuous_hold_rasters().unwrap_or(1),
+            raster_index,
+        );
+        raster_index = raster_index.wrapping_add(1);
         if pattern == CrtProbePattern::Motion {
             let frame = render_crt_probe_pattern(width, height, 0, 0, Some(motion_frame));
             if let Err(error) = write_probe_slot(
@@ -523,6 +548,14 @@ pub(super) fn run_crt_probe_loop(
         telemetry.last_sequence,
         reason
     );
+}
+
+fn probe_target_slot(active_slot: u8, hold_rasters: u64, raster_index: u64) -> u8 {
+    if (raster_index + 1).is_multiple_of(hold_rasters) {
+        if active_slot == 1 { 2 } else { 1 }
+    } else {
+        active_slot
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1179,7 +1212,34 @@ mod tests {
             CrtProbePattern::parse("motion"),
             Some(CrtProbePattern::Motion)
         );
+        assert_eq!(
+            CrtProbePattern::parse("full-ab-hold4"),
+            Some(CrtProbePattern::FullAbHold4)
+        );
         assert_eq!(CrtProbePattern::parse("arbitrary"), None);
+    }
+
+    #[test]
+    fn rate_sweep_holds_each_ab_slot_for_the_requested_rasters() {
+        for hold_rasters in 1..=4 {
+            let mut active_slot = 1;
+            let observed = (0..8)
+                .map(|raster_index| {
+                    active_slot = probe_target_slot(active_slot, hold_rasters, raster_index);
+                    active_slot
+                })
+                .collect::<Vec<_>>();
+            let expected = (0..8)
+                .map(|raster_index| {
+                    if ((raster_index + 1) / hold_rasters).is_multiple_of(2) {
+                        1
+                    } else {
+                        2
+                    }
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(observed, expected, "hold_rasters={hold_rasters}");
+        }
     }
 
     #[test]

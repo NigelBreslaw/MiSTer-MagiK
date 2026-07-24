@@ -160,7 +160,15 @@ fn parse_probe_args(args: &[String]) -> Result<QualifyAction> {
     let pattern = pattern.ok_or("CRT probe needs --pattern")?;
     if !matches!(
         pattern.as_str(),
-        "fixed-a" | "fixed-b" | "identical-flip" | "slow-ab" | "full-ab" | "motion"
+        "fixed-a"
+            | "fixed-b"
+            | "identical-flip"
+            | "slow-ab"
+            | "full-ab"
+            | "full-ab-hold2"
+            | "full-ab-hold3"
+            | "full-ab-hold4"
+            | "motion"
     ) {
         return Err(format!("unsupported CRT probe pattern: {pattern}").into());
     }
@@ -279,6 +287,15 @@ fn probe_observation_prompt(pattern: &str) -> &'static str {
         }
         "full-ab" => {
             "Report whether top and bottom identity colors agree and whether the 24-pixel displacement affects the whole raster."
+        }
+        "full-ab-hold2" => {
+            "Each A/B grid is held for two rasters; report whether the lower-band displacement remains continuous, becomes transition-only, or disappears."
+        }
+        "full-ab-hold3" => {
+            "Each A/B grid is held for three rasters; report whether the lower-band displacement remains continuous, becomes transition-only, or disappears."
+        }
+        "full-ab-hold4" => {
+            "Each A/B grid is held for four rasters; report whether the lower-band displacement remains continuous, becomes transition-only, or disappears."
         }
         "motion" => "Report any lower-band ghost, horizontal step, or top/bottom frame mismatch.",
         _ => "Observe the physical CRT.",
@@ -763,6 +780,21 @@ mod tests {
                 output: Some(PathBuf::from("/tmp/evidence"))
             }
         );
+        for pattern in ["full-ab-hold2", "full-ab-hold3", "full-ab-hold4"] {
+            assert!(
+                parse_args(&[
+                    "probe".into(),
+                    "--attended".into(),
+                    "--pattern".into(),
+                    pattern.into(),
+                    "--seconds".into(),
+                    "20".into(),
+                    "--out".into(),
+                    "/tmp/probe".into(),
+                ])
+                .is_ok()
+            );
+        }
         assert_eq!(
             parse_args(&["qualify".into(), "--restore".into()]).unwrap(),
             QualifyAction::Restore
