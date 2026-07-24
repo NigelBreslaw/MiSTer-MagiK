@@ -89,8 +89,6 @@ def main() -> None:
             "mister_magik_vblank_latch magik_vblank_latch",
             ".cmd_start(io_uio && io_strobe && !has_cmd)",
             ".cmd_data(io_uio && io_strobe && has_cmd)",
-            "if(magik_lfb_prepare)",
-            "LFB_BASE <= magik_lfb_base;",
             "if(magik_lfb_apply)",
             "if(magik_response_valid) io_dout_sys <= magik_response_data;",
         )

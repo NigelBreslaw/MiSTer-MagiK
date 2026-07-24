@@ -2,7 +2,7 @@ diff --git a/sys/sys_top.v b/sys/sys_top.v
 index a416879..7d2ac3f 100644
 --- a/sys/sys_top.v
 +++ b/sys/sys_top.v
-@@ -351,15 +351,91 @@ reg [12:0] arc2x = 0;
+@@ -351,15 +351,86 @@ reg [12:0] arc2x = 0;
  reg [12:0] arc2y = 0;
  reg [15:0] io_dout_sys;
  
@@ -12,7 +12,6 @@ index a416879..7d2ac3f 100644
 +
 +wire        magik_response_valid;
 +wire [15:0] magik_response_data;
-+wire        magik_lfb_prepare;
 +wire        magik_lfb_apply;
 +wire        magik_lfb_en;
 +wire        magik_lfb_flt;
@@ -48,7 +47,6 @@ index a416879..7d2ac3f 100644
 +	.active_lfb_stride(LFB_STRIDE),
 +	.response_valid(magik_response_valid),
 +	.response_data(magik_response_data),
-+	.prepare(magik_lfb_prepare),
 +	.apply(magik_lfb_apply),
 +	.route_en(magik_lfb_en),
 +	.route_flt(magik_lfb_flt),
@@ -78,9 +76,6 @@ index a416879..7d2ac3f 100644
  	reg  [7:0] fb_crc;
  	reg  [1:0] sl_r;
  
-+	if(magik_lfb_prepare) begin
-+		LFB_BASE <= magik_lfb_base;
-+	end
 +	if(magik_lfb_apply) begin
 +		LFB_EN     <= magik_lfb_en;
 +		LFB_FLT    <= magik_lfb_flt;
@@ -97,7 +92,7 @@ index a416879..7d2ac3f 100644
  	coef_wr <= 0;
  	sl_r <= FB_EN ? 2'b00 : scanlines;
  
-@@ -407,6 +483,7 @@ always@(posedge clk_sys) begin
+@@ -407,6 +478,7 @@ always@(posedge clk_sys) begin
  			if(io_din[7:0] == 'h40) io_dout_sys <= fb_crc;
  `endif
  			if(io_din[7:0] == 'h42) io_dout_sys <= {1'b1, frame_cnt};
@@ -105,7 +100,7 @@ index a416879..7d2ac3f 100644
  			if(io_din[7:0] == 'h44) io_dout_sys <= 1;
  		end
  		else begin
-@@ -462,6 +539,7 @@ always@(posedge clk_sys) begin
+@@ -462,6 +534,7 @@ always@(posedge clk_sys) begin
  					9: LFB_STRIDE      <= io_din[13:0];
  				endcase
  			end
