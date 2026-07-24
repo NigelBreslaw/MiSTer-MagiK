@@ -134,19 +134,7 @@ fn resolve_task_intent(
             message,
         },
         Intent::Deliver => Intent::Deliver,
-        Intent::Benchmark { task_id } => Intent::Benchmark {
-            task_id: if task_id.is_empty() {
-                evidence
-                    .latest_committed_task(repository)?
-                    .map(|(task_id, _)| task_id)
-                    .ok_or("nothing_to_benchmark: commit the verified task first")?
-            } else {
-                evidence
-                    .latest_committed_task_for_session(repository, &task_id)?
-                    .map(|(task_id, _)| task_id)
-                    .ok_or("nothing_to_benchmark: commit the verified task first")?
-            },
-        },
+        Intent::Benchmark => Intent::Benchmark,
         Intent::Plan {
             scope: agent_cli::model::Scope::Task(task_id),
             verbose,
@@ -218,19 +206,13 @@ fn dispatch(
             return Ok(outcome);
         }
         Intent::Deliver => return deliver(evidence, repository, reporter),
-        Intent::Benchmark { task_id } => {
-            let committed = evidence
-                .latest_committed_scope(repository)?
-                .filter(|committed| committed.task_id == *task_id)
-                .ok_or(
-                    "unverified_commit: use `scripts/agent commit -m MESSAGE` before benchmarking",
-                )?;
-            return agent_cli::benchmark::execute(
-                repository,
-                &committed.paths,
-                &committed.commit_sha,
-                reporter,
-            );
+        Intent::Benchmark => {
+            if !agent_cli::git::value(repository, &["status", "--porcelain"])?.is_empty() {
+                return Err("dirty_worktree: commit changes before benchmarking".into());
+            }
+            let commit = agent_cli::git::value(repository, &["rev-parse", "HEAD"])?;
+            let paths = agent_cli::git::head_changed_paths(repository)?;
+            return agent_cli::benchmark::execute(repository, &paths, &commit, reporter);
         }
         Intent::CaptureUsbVideo {
             output: destination,

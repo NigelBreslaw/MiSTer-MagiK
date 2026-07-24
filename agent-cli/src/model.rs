@@ -108,9 +108,7 @@ pub enum Intent {
     Doctor,
     Diagnose,
     Deliver,
-    Benchmark {
-        task_id: String,
-    },
+    Benchmark,
     CaptureUsbVideo {
         output: Option<PathBuf>,
         seconds: Option<u64>,

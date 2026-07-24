@@ -441,7 +441,7 @@ impl Cli {
             Some(Command::Doctor) => Intent::Doctor,
             Some(Command::Diagnose) => Intent::Diagnose,
             Some(Command::Deliver) => Intent::Deliver,
-            Some(Command::Benchmark) => Intent::Benchmark { task_id },
+            Some(Command::Benchmark) => Intent::Benchmark,
             Some(Command::Capture {
                 command: CaptureCommand::UsbVideo { output, seconds },
             }) => Intent::CaptureUsbVideo { output, seconds },
@@ -595,14 +595,9 @@ mod tests {
     }
 
     #[test]
-    fn benchmark_is_flag_free_and_task_scoped() {
-        let cli = Cli::try_parse_from(["agent-cli", "--task-id", "task-1", "benchmark"]).unwrap();
-        assert_eq!(
-            cli.into_intent(),
-            Intent::Benchmark {
-                task_id: "task-1".into()
-            }
-        );
+    fn benchmark_is_flag_free_and_task_independent() {
+        let cli = Cli::try_parse_from(["agent-cli", "benchmark"]).unwrap();
+        assert_eq!(cli.into_intent(), Intent::Benchmark);
         assert!(Cli::try_parse_from(["agent-cli", "benchmark", "--duration", "10"]).is_err());
     }
 
