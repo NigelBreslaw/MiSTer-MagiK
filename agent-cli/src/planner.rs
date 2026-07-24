@@ -414,16 +414,19 @@ fn add_path_operations(
                 )
             ))
     {
-        add(cargo_format(
-            "app.format",
-            "Check MiSTer app formatting",
-            &[
-                "fmt",
-                "--manifest-path",
-                "apps/mister/Cargo.toml",
-                "--check",
-            ],
-            "MiSTer app source → formatter",
+        add(with_inputs(
+            cargo_format(
+                "app.format",
+                "Check MiSTer app formatting",
+                &[
+                    "fmt",
+                    "--manifest-path",
+                    "apps/mister/Cargo.toml",
+                    "--check",
+                ],
+                "MiSTer app source → formatter",
+            ),
+            &["apps/mister"],
         ));
         if path.starts_with("apps/mister/src/ui_runner") {
             add(cargo(
@@ -882,6 +885,24 @@ mod tests {
                 .args
                 .contains(&"launcher_catalog_session::tests".into())
         );
+    }
+
+    #[test]
+    fn app_format_cache_covers_the_complete_formatted_crate() {
+        let plan = affected_plan(
+            Intent::Check {
+                scope: Scope::Paths(vec![]),
+            },
+            vec!["apps/mister/src/ui_runner/crt_trial_loop.rs".into()],
+        )
+        .unwrap();
+        let format = plan
+            .operations
+            .iter()
+            .find(|operation| operation.id == "app.format")
+            .unwrap();
+
+        assert_eq!(format.inputs, ["apps/mister"]);
     }
 
     #[test]
