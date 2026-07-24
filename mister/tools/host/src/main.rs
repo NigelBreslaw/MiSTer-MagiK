@@ -365,7 +365,7 @@ impl DeviceOperations for NativeDevice {
             }
             DeviceRequest::CaptureBenchmark(scenario) => {
                 if *scenario == BenchmarkScenario::ScreensaverVelocity {
-                    run_screensaver_benchmark_matrix(&config.connection).map_err(device_failure)?
+                    run_screensaver_boot_benchmark(&config.connection).map_err(device_failure)?
                 } else {
                     let session = connect_with(&config.connection, 10).map_err(device_failure)?;
                     run_launcher_benchmark(&session, *scenario, false).map_err(device_failure)?;
@@ -3094,7 +3094,7 @@ fn wait_benchmark_trace(
             trace,
             complete,
             if scenario == BenchmarkScenario::ScreensaverVelocity && !warmup {
-                45
+                120
             } else {
                 20
             },
@@ -3151,7 +3151,6 @@ fn benchmark_launcher_restart_options(
             "MISTER_SCREENSAVER_SEED".into(),
             "7640891576956012809".into(),
         ));
-        env_vars.push(("MISTER_CATALOG_REFRESH".into(), "off".into()));
     } else {
         env_vars.push(("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()));
         env_vars.push(("MISTER_LAUNCHER_START_SYSTEM".into(), "arcade".into()));
@@ -3204,15 +3203,39 @@ fn restore_benchmark_display_if_pending(session: &Session) -> Result<()> {
     Ok(())
 }
 
-fn run_screensaver_benchmark_matrix(connection: &ConnectionConfig) -> Result<String> {
+fn wait_for_supervised_benchmark_reboot(connection: &ConnectionConfig) -> Result<()> {
+    if !wait_down_with(connection, 40.0) {
+        return Err("screensaver benchmark did not observe the supervised reboot".into());
+    }
+    if wait_up_with(connection, 120.0)? != 0 {
+        return Err("screensaver benchmark device did not return after reboot".into());
+    }
     let session = connect_with(connection, 10)?;
-    let original_reply = exec_checked_output(
+    wait_launcher_ready(&session, Instant::now(), Duration::from_secs(60))?;
+    Ok(())
+}
+
+fn clear_screensaver_benchmark_env(connection: &ConnectionConfig) -> Result<()> {
+    let session = connect_with(connection, 10)?;
+    prepare_launcher_env(
         &session,
-        "query original benchmark display mode",
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    Ok(())
+}
+
+fn run_screensaver_boot_benchmark(connection: &ConnectionConfig) -> Result<String> {
+    let session = connect_with(connection, 10)?;
+    let display_reply = exec_checked_output(
+        &session,
+        "query benchmark display mode",
         &acknowledged_main_command("mister_magik_display_get_v1"),
     )?;
-    let original_mode = parse_display_reply_active(original_reply.stdout.trim())?;
-    if parse_display_reply_pending(original_reply.stdout.trim())?.is_some() {
+    if parse_display_reply_pending(display_reply.stdout.trim())?.is_some() {
         return Err("screensaver benchmark cannot start with a pending display transaction".into());
     }
     drop(session);
@@ -3221,29 +3244,30 @@ fn run_screensaver_benchmark_matrix(connection: &ConnectionConfig) -> Result<Str
     let run_result = (|| -> Result<()> {
         for mode in SCREENSAVER_BENCHMARK_MODES {
             let session = connect_with(connection, 10)?;
-            let ready = wait_launcher_ready(&session, Instant::now(), Duration::from_secs(15))?;
             reset_benchmark_trace(&session, false)?;
             prepare_launcher_env(
                 &session,
                 &benchmark_launcher_restart_options(BenchmarkScenario::ScreensaverVelocity, false),
             )?;
-            exec_checked(
-                &session,
-                "apply screensaver benchmark display mode",
-                &acknowledged_main_command(&format!(
-                    "mister_magik_display_apply_headless_v1 mode={}",
-                    mode.id
-                )),
-            )?;
+            edit_remote_ini(&session, IniEdit::MenuMode("0".into()), false)?;
+            issue_reboot(&session, RebootMode::Supervised)?;
             drop(session);
+            wait_for_supervised_benchmark_reboot(connection)?;
 
             let session = connect_with(connection, 10)?;
-            wait_launcher_ready_after(
+            let active_reply = exec_checked_output(
                 &session,
-                ready.launcher_pid,
-                Instant::now(),
-                Duration::from_secs(15),
+                "verify screensaver benchmark boot display mode",
+                &acknowledged_main_command("mister_magik_display_get_v1"),
             )?;
+            let active = parse_display_reply_active(active_reply.stdout.trim())?;
+            if active != mode.id {
+                return Err(format!(
+                    "screensaver benchmark booted {active}, expected {}",
+                    mode.id
+                )
+                .into());
+            }
             wait_benchmark_trace(&session, BenchmarkScenario::ScreensaverVelocity, false)?;
             let trace = remote_read(&session, benchmark_trace_path(false))
                 .ok_or("screensaver benchmark trace is missing")?;
@@ -3255,46 +3279,20 @@ fn run_screensaver_benchmark_matrix(connection: &ConnectionConfig) -> Result<Str
             if !trace.ends_with('\n') {
                 output.push('\n');
             }
-            prepare_launcher_env(
-                &session,
-                &LauncherRestartOptions {
-                    clear_env: true,
-                    remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
-                    ..LauncherRestartOptions::default()
-                },
-            )?;
-            restore_benchmark_display_if_pending(&session)?;
         }
         Ok(())
     })();
 
+    let clear_result = clear_screensaver_benchmark_env(connection);
     if let Err(error) = run_result {
-        if let Ok(session) = connect_with(connection, 10) {
-            let _ = prepare_launcher_env(
-                &session,
-                &LauncherRestartOptions {
-                    clear_env: true,
-                    remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
-                    ..LauncherRestartOptions::default()
-                },
-            );
-            let _ = restore_benchmark_display_if_pending(&session);
-        }
-        return Err(error);
+        return match clear_result {
+            Ok(()) => Err(error),
+            Err(clear_error) => {
+                Err(format!("{error}; benchmark environment cleanup failed: {clear_error}").into())
+            }
+        };
     }
-
-    let session = connect_with(connection, 10)?;
-    let restored_reply = exec_checked_output(
-        &session,
-        "verify original benchmark display mode",
-        &acknowledged_main_command("mister_magik_display_get_v1"),
-    )?;
-    let restored = parse_display_reply_active(restored_reply.stdout.trim())?;
-    if restored != original_mode {
-        return Err(
-            format!("screensaver benchmark restored {restored}, expected {original_mode}").into(),
-        );
-    }
+    clear_result?;
     Ok(output)
 }
 
@@ -10881,10 +10879,10 @@ H: Handlers=event3 js0"#
 
     #[test]
     fn benchmark_trace_timeout_preserves_actionable_device_evidence() {
-        let command = benchmark_trace_wait_command("/tmp/trace", "/tmp/complete", 45);
+        let command = benchmark_trace_wait_command("/tmp/trace", "/tmp/complete", 120);
 
         assert!(command.contains("benchmark_trace_diagnostic"));
-        assert!(command.contains("$elapsed -lt 45"));
+        assert!(command.contains("$elapsed -lt 120"));
         assert!(command.contains("wc -l"));
         assert!(command.contains("launcher_bench_scenario"));
         assert!(command.contains("/tmp/mister-magik-slint.log"));
@@ -10922,9 +10920,10 @@ H: Handlers=event3 js0"#
             "1".into()
         )));
         assert!(
-            options
+            !options
                 .env_vars
-                .contains(&("MISTER_CATALOG_REFRESH".into(), "off".into()))
+                .iter()
+                .any(|(key, _)| key == "MISTER_CATALOG_REFRESH")
         );
         assert!(options.env_vars.contains(&(
             "MISTER_SCREENSAVER_SEED".into(),

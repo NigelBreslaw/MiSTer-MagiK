@@ -22,14 +22,16 @@ are policy—not command flags. Velocity scenarios, never row jumps, support
 Arcade performance conclusions.
 
 Screensaver renderer changes select the fixed screensaver-velocity scenario at
-1280x720 output and framebuffer resolution. A fresh launcher starts on Home,
+1280x720 output and framebuffer resolution. It selects the 720p boot mode
+through the typed INI mutator and performs one supervised reboot. The freshly
+booted launcher starts on Home,
 uses production controller input to open Settings and activate Show
-Screensaver, then traces 30 seconds from activation. Catalog refresh remains
-disabled so unrelated catalog construction cannot contaminate the result. The
-scenario reports the full active interval, the first 180 active frames, and the
-remaining steady frames. Its provisional display transaction is cancelled and
-the original display mode is verified afterward. The standard velocity gates
-apply to the overall and startup intervals; steady results are diagnostic.
+Screensaver, then traces 30 seconds from activation. The normal catalog
+lifecycle remains enabled to reproduce a real boot. The scenario reports the
+full active interval, the first 180 active frames, and the remaining steady
+frames. The device remains in 1280x720 afterward; only the temporary benchmark
+launcher environment is cleared. The standard velocity gates apply to the
+overall and startup intervals; steady results are diagnostic.
 
 ## Cold and catalog scenarios
 
