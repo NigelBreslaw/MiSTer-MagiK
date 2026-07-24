@@ -14,9 +14,10 @@ scripts/agent deliver
 scripts/agent release qualify
 ```
 
-Development delivery uses clean local commits and never pushes automatically.
-Published commit and CI provenance are checked by release qualification and
-artifact publication, not by `deliver`.
+Development delivery builds the app from its clean local commit and never
+pushes automatically. Main, the scanout kernel module, and the latch RBF come
+from the latest qualified GitHub platform release, with its verified
+tag-addressed archive reused across deliveries.
 
 The attended qualification is fixed and flag-free. It checks runtime, catalog,
 input/handoff/return, display, recovery capability, and restoration. Rollback is

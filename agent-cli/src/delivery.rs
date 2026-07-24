@@ -9,7 +9,6 @@ use crate::progress::{EventKind, Reporter};
 use mister_tool::transport::{DeviceOperations, DeviceRequest};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -27,8 +26,6 @@ pub enum Phase {
     Reconcile,
     GithubResolution,
     RuntimeBuild,
-    MainQualification,
-    KernelQualification,
     ManagerQualification,
     LocalStaging,
     DatabasePreparation,
@@ -49,8 +46,6 @@ impl Phase {
             Self::Reconcile => "reconciliation",
             Self::GithubResolution => "github-resolution",
             Self::RuntimeBuild => "runtime-build",
-            Self::MainQualification => "main-qualification",
-            Self::KernelQualification => "kernel-qualification",
             Self::ManagerQualification => "manager-qualification",
             Self::LocalStaging => "local-staging",
             Self::DatabasePreparation => "database-preparation",
@@ -116,8 +111,6 @@ pub fn run_transaction(
         (Phase::Reconcile, 15),
         (Phase::GithubResolution, 22),
         (Phase::RuntimeBuild, 32),
-        (Phase::MainQualification, 39),
-        (Phase::KernelQualification, 46),
         (Phase::ManagerQualification, 50),
         (Phase::LocalStaging, 55),
         (Phase::DatabasePreparation, 62),
@@ -178,13 +171,11 @@ pub struct DeliveryExecution {
 pub fn execute(
     repository: &Path,
     expected_commit: &str,
-    local_main: &Path,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<DeliveryExecution> {
     execute_with_device(
         repository,
         expected_commit,
-        local_main,
         reporter,
         DeviceClient::default(),
     )
@@ -193,7 +184,6 @@ pub fn execute(
 fn execute_with_device<D: DeviceOperations>(
     repository: &Path,
     expected_commit: &str,
-    local_main: &Path,
     reporter: &mut Reporter<'_>,
     device: DeviceClient<D>,
 ) -> AgentResult<DeliveryExecution> {
@@ -209,7 +199,6 @@ fn execute_with_device<D: DeviceOperations>(
         installed_manager_sha256: None,
         manager_artifact: None,
         main_revision: None,
-        local_main: local_main.to_path_buf(),
         stage: repository
             .join("build/agent-deploy/stage")
             .join(expected_commit),
@@ -267,7 +256,6 @@ struct ProcessActions<'a, D = mister_tool::NativeDevice> {
     installed_manager_sha256: Option<String>,
     manager_artifact: Option<PathBuf>,
     main_revision: Option<String>,
-    local_main: PathBuf,
     stage: PathBuf,
     device: DeviceClient<D>,
 }
@@ -308,14 +296,6 @@ impl<D: DeviceOperations> ProcessActions<'_, D> {
         Ok(())
     }
 
-    fn qualify_main(&self) -> AgentResult<()> {
-        qualify_local_main(self.repository, &self.local_main)
-    }
-
-    fn qualify_kernel(&self) -> AgentResult<()> {
-        qualify_local_kernel(self.repository)
-    }
-
     fn prepare_local_stage(&mut self) -> AgentResult<()> {
         let manager = self
             .manager_artifact
@@ -335,7 +315,6 @@ impl<D: DeviceOperations> ProcessActions<'_, D> {
             candidate,
             &self.stage,
             self.deployment.build.artifact(),
-            Some(&self.local_main),
             &manager,
         )?);
         Ok(())
@@ -458,8 +437,6 @@ impl<D: DeviceOperations> DeliveryActions for ProcessActions<'_, D> {
             Phase::ValidateCommit => self.validate_commit(),
             Phase::Connect => self.device.execute(DeviceRequest::Discover).map(|_| ()),
             Phase::Reconcile => {
-                validate_local_main_checkout(&self.local_main)?;
-                let main_revision = crate::git::value(&self.local_main, &["rev-parse", "HEAD"])?;
                 let installed = self
                     .device
                     .execute(DeviceRequest::ReadDevelopmentManifest)?;
@@ -477,12 +454,8 @@ impl<D: DeviceOperations> DeliveryActions for ProcessActions<'_, D> {
                 )
                 .ok()
                 .map(|manifest| manifest.manager_sha256().to_owned());
-                let reconciliation = crate::deploy::reconcile(
-                    self.repository,
-                    &installed,
-                    &main_revision,
-                    self.expected_commit,
-                );
+                let reconciliation =
+                    crate::deploy::reconcile(self.repository, &installed, self.expected_commit);
                 self.decision = reconciled_delivery_decision(
                     reconciliation.decision,
                     installed_platform_verified,
@@ -501,8 +474,6 @@ impl<D: DeviceOperations> DeliveryActions for ProcessActions<'_, D> {
             }
             Phase::GithubResolution => self.resolve_github(),
             Phase::RuntimeBuild => self.build_runtime(),
-            Phase::MainQualification => self.qualify_main(),
-            Phase::KernelQualification => self.qualify_kernel(),
             Phase::ManagerQualification => self.qualify_manager(),
             Phase::LocalStaging => self.prepare_local_stage(),
             Phase::DatabasePreparation => self.prepare_databases(),
@@ -540,8 +511,6 @@ impl<D: DeviceOperations> DeliveryActions for ProcessActions<'_, D> {
     fn should_run(&self, phase: Phase) -> bool {
         match phase {
             Phase::GithubResolution
-            | Phase::MainQualification
-            | Phase::KernelQualification
             | Phase::ManagerQualification
             | Phase::LocalStaging
             | Phase::DatabasePreparation
@@ -565,7 +534,6 @@ fn prepare_stage_files(
     candidate: &crate::platform_ci::Candidate,
     stage: &Path,
     gui_artifact: &Path,
-    local_main: Option<&Path>,
     manager: &Path,
 ) -> AgentResult<String> {
     let manifest: Value =
@@ -586,7 +554,23 @@ fn prepare_stage_files(
             extracted.display().to_string(),
         ],
     )?;
+    stage_published_platform_components(&extracted, stage)?;
+    copy(repository.join(gui_artifact), stage.join("mister-magik-fb"))?;
+    copy(manager.to_path_buf(), stage.join("mister-magik-manager"))?;
+    Ok(candidate_main_revision.to_owned())
+}
+
+fn stage_published_platform_components(extracted: &Path, stage: &Path) -> AgentResult<()> {
     for (from, to) in [
+        ("main/MiSTer_MagiK", "MiSTer_MagiKDev"),
+        (
+            "scanout/mister_magik_scanout_slots.ko",
+            "mister_magik_scanout_slots.ko",
+        ),
+        (
+            "scanout/provenance.txt",
+            "mister_magik_scanout_slots.metadata.txt",
+        ),
         (
             "fpga/patched/menu-magik-vblank-latch.rbf",
             "fpga/menu-magik-vblank-latch.rbf",
@@ -598,27 +582,7 @@ fn prepare_stage_files(
     ] {
         copy(extracted.join(from), stage.join(to))?;
     }
-    copy(
-        repository.join("build/scanout-slots/mister_magik_scanout_slots.ko"),
-        stage.join("mister_magik_scanout_slots.ko"),
-    )?;
-    copy(
-        repository.join("build/scanout-slots/provenance.txt"),
-        stage.join("mister_magik_scanout_slots.metadata.txt"),
-    )?;
-    let main_revision = if let Some(main_dir) = local_main {
-        copy(main_dir.join("bin/MiSTer"), stage.join("MiSTer_MagiKDev"))?;
-        crate::git::value(main_dir, &["rev-parse", "HEAD"])?
-    } else {
-        copy(
-            extracted.join("main/MiSTer_MagiK"),
-            stage.join("MiSTer_MagiKDev"),
-        )?;
-        candidate_main_revision.to_owned()
-    };
-    copy(repository.join(gui_artifact), stage.join("mister-magik-fb"))?;
-    copy(manager.to_path_buf(), stage.join("mister-magik-manager"))?;
-    Ok(main_revision)
+    Ok(())
 }
 
 fn prepare_stage_databases(
@@ -656,213 +620,12 @@ fn prepare_stage_databases(
     )
 }
 
-fn qualify_local_main(repository: &Path, main_dir: &Path) -> AgentResult<()> {
-    validate_local_main_checkout(main_dir)?;
-    let revision = crate::git::value(main_dir, &["rev-parse", "HEAD"])?;
-    let binary = main_dir.join("bin/MiSTer");
-    let image = std::env::var("MISTER_MAIN_CONTAINER_IMAGE")
-        .unwrap_or_else(|_| "mister-magik-main-builder:ubuntu20-arm64".into());
-    let dockerfile = main_dir.join(".devcontainer/Dockerfile.apple-container");
-    let dockerfile_sha256 = file_sha256(&dockerfile)?;
-    let source_input_sha256 = digest_identity(&[
-        &revision,
-        &file_sha256(&main_dir.join("build-container.sh"))?,
-        &dockerfile_sha256,
-    ]);
-    let image_digest = container_image_digest(&image).ok();
-    let artifact_sha256 = binary.is_file().then(|| file_sha256(&binary)).transpose()?;
-    let receipt = repository
-        .join("build/agent-cache/main")
-        .join(format!("{revision}.receipt"));
-    let cache_matches = match (image_digest.as_deref(), artifact_sha256.as_deref()) {
-        (Some(image_digest), Some(artifact_sha256)) => main_receipt_matches(
-            &receipt,
-            &MainReceiptIdentity {
-                revision: &revision,
-                source_input_sha256: &source_input_sha256,
-                artifact_sha256,
-                compiler: "gcc-arm-10.2-2020.11-aarch64-arm-none-linux-gnueabihf",
-                dockerfile_sha256: &dockerfile_sha256,
-                image: &image,
-                image_digest,
-            },
-        )?,
-        _ => false,
-    };
-    if cache_matches {
-        return Ok(());
-    }
-    for (program, args) in [
-        ("./build-container.sh", Vec::<String>::new()),
-        ("scripts/test-magik-state.sh", Vec::<String>::new()),
-        ("scripts/check-magik-patch-surface.sh", Vec::<String>::new()),
-    ] {
-        run_bounded(main_dir, program, &args)?;
-    }
-    if !main_dir.join("bin/MiSTer").is_file() {
-        return Err("local_main_build: bin/MiSTer was not produced".into());
-    }
-    if let Some(parent) = receipt.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    let image_digest = container_image_digest(&image)?;
-    let artifact_sha256 = file_sha256(&binary)?;
-    let receipt_text = format!(
-        "receipt_version=2\nmain_revision={revision}\nsource_input_sha256={source_input_sha256}\nartifact_sha256={artifact_sha256}\ncompiler=gcc-arm-10.2-2020.11-aarch64-arm-none-linux-gnueabihf\ndockerfile_sha256={dockerfile_sha256}\nimage_reference={image}\nimage_digest={image_digest}\n"
-    );
-    let temporary = receipt.with_extension("receipt.tmp");
-    fs::write(&temporary, receipt_text).map_err(|error| error.to_string())?;
-    fs::rename(temporary, receipt).map_err(|error| error.to_string())?;
-    Ok(())
-}
-
-struct MainReceiptIdentity<'a> {
-    revision: &'a str,
-    source_input_sha256: &'a str,
-    artifact_sha256: &'a str,
-    compiler: &'a str,
-    dockerfile_sha256: &'a str,
-    image: &'a str,
-    image_digest: &'a str,
-}
-
-fn main_receipt_matches(receipt: &Path, expected: &MainReceiptIdentity<'_>) -> AgentResult<bool> {
-    let text = match fs::read_to_string(receipt) {
-        Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(error) => return Err(error.to_string().into()),
-    };
-    let mut fields = std::collections::BTreeMap::new();
-    for line in text.lines() {
-        let Some((key, value)) = line.split_once('=') else {
-            return Ok(false);
-        };
-        if fields.insert(key, value).is_some() {
-            return Ok(false);
-        }
-    }
-    let expected_fields = [
-        ("receipt_version", "2"),
-        ("main_revision", expected.revision),
-        ("source_input_sha256", expected.source_input_sha256),
-        ("artifact_sha256", expected.artifact_sha256),
-        ("compiler", expected.compiler),
-        ("dockerfile_sha256", expected.dockerfile_sha256),
-        ("image_reference", expected.image),
-        ("image_digest", expected.image_digest),
-    ];
-    Ok(fields.len() == expected_fields.len()
-        && expected_fields
-            .iter()
-            .all(|(key, value)| fields.get(key).copied() == Some(*value)))
-}
-
-fn container_image_digest(image: &str) -> AgentResult<String> {
-    let output = Command::new("container")
-        .args(["image", "inspect", image])
-        .output()
-        .map_err(|error| format!("cannot inspect Apple container image {image}: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "cannot inspect Apple container image {image}: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )
-        .into());
-    }
-    let value: Value = serde_json::from_slice(&output.stdout)
-        .map_err(|error| format!("invalid container image metadata: {error}"))?;
-    value
-        .get(0)
-        .and_then(|entry| entry.pointer("/configuration/descriptor/digest"))
-        .and_then(Value::as_str)
-        .filter(|digest| {
-            digest.len() == 71
-                && digest.starts_with("sha256:")
-                && digest[7..]
-                    .bytes()
-                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-        })
-        .map(str::to_owned)
-        .ok_or_else(|| "container image metadata has no canonical OCI digest".into())
-}
-
-fn digest_identity(values: &[&str]) -> String {
-    let mut digest = Sha256::new();
-    for value in values {
-        digest.update(value.as_bytes());
-        digest.update([0]);
-    }
-    digest
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
-}
-
 fn file_sha256(path: &Path) -> AgentResult<String> {
     let bytes = fs::read(path).map_err(|error| error.to_string())?;
     Ok(Sha256::digest(bytes)
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect())
-}
-
-fn validate_local_main_checkout(main_dir: &Path) -> AgentResult<()> {
-    if !main_dir.join("build-container.sh").is_file() {
-        return Err(format!(
-            "local_main_missing: {} does not contain build-container.sh",
-            main_dir.display()
-        )
-        .into());
-    }
-    let dirty = !crate::git::value(main_dir, &["status", "--porcelain"])?.is_empty();
-    let branch = crate::git::value(main_dir, &["branch", "--show-current"])?;
-    validate_local_main_identity(dirty, &branch)?;
-    Ok(())
-}
-
-fn qualify_local_kernel(repository: &Path) -> AgentResult<()> {
-    let kernel_source = kernel_source_directory(repository, std::env::var_os("MISTER_KERNEL_DIR"));
-    if !kernel_source.is_dir() {
-        return Err(format!(
-            "local_kernel_missing: {} does not contain the pinned Linux-Kernel_MiSTer checkout; set MISTER_KERNEL_DIR to override it",
-            kernel_source.display()
-        )
-        .into());
-    }
-    run_bounded_with_env(
-        repository,
-        "scripts/build-scanout-slots-module.sh",
-        &Vec::<String>::new(),
-        &[("KERNEL_SRC", kernel_source.as_os_str().to_os_string())],
-    )?;
-    for artifact in [
-        "build/scanout-slots/mister_magik_scanout_slots.ko",
-        "build/scanout-slots/provenance.txt",
-    ] {
-        if !repository.join(artifact).is_file() {
-            return Err(format!("local_kernel_build: {artifact} was not produced").into());
-        }
-    }
-    Ok(())
-}
-
-fn kernel_source_directory(repository: &Path, configured: Option<OsString>) -> PathBuf {
-    configured
-        .map(PathBuf::from)
-        .unwrap_or_else(|| repository.join("../Linux-Kernel_MiSTer"))
-}
-
-fn validate_local_main_identity(dirty: bool, branch: &str) -> AgentResult<()> {
-    if dirty {
-        return Err(
-            "local_main_dirty: commit or discard Main_MiSTer changes before delivery".into(),
-        );
-    }
-    if branch != "mister-magik" {
-        return Err(format!("local_main_branch: expected mister-magik, found {branch}").into());
-    }
-    Ok(())
 }
 
 fn copy(from: PathBuf, to: PathBuf) -> AgentResult<()> {
@@ -952,18 +715,8 @@ fn extract_game_databases(repository: &Path, release: &Path, output: &Path) -> A
 }
 
 fn run_bounded(repository: &Path, program: &str, args: &[String]) -> AgentResult<()> {
-    run_bounded_with_env(repository, program, args, &[])
-}
-
-fn run_bounded_with_env(
-    repository: &Path,
-    program: &str,
-    args: &[String],
-    environment: &[(&str, OsString)],
-) -> AgentResult<()> {
     let mut child = Command::new(program)
         .args(args)
-        .envs(environment.iter().cloned())
         .current_dir(repository)
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
@@ -1025,15 +778,13 @@ mod tests {
         }
     }
 
-    const PHASES: [Phase; 17] = [
+    const PHASES: [Phase; 15] = [
         Phase::Classify,
         Phase::ValidateCommit,
         Phase::Connect,
         Phase::Reconcile,
         Phase::GithubResolution,
         Phase::RuntimeBuild,
-        Phase::MainQualification,
-        Phase::KernelQualification,
         Phase::ManagerQualification,
         Phase::LocalStaging,
         Phase::DatabasePreparation,
@@ -1111,23 +862,6 @@ mod tests {
     }
 
     #[test]
-    fn local_main_requires_only_clean_mister_magik_branch() {
-        assert!(validate_local_main_identity(false, "mister-magik").is_ok());
-        assert!(
-            validate_local_main_identity(true, "mister-magik")
-                .unwrap_err()
-                .to_string()
-                .contains("local_main_dirty")
-        );
-        assert!(
-            validate_local_main_identity(false, "feature")
-                .unwrap_err()
-                .to_string()
-                .contains("local_main_branch")
-        );
-    }
-
-    #[test]
     fn manager_rebuilds_for_its_shared_toolchain_inputs() {
         for path in [
             "mister/tools/manager/src/main.rs",
@@ -1145,16 +879,62 @@ mod tests {
     }
 
     #[test]
-    fn kernel_source_defaults_next_to_the_repository_and_accepts_an_override() {
-        let repository = Path::new("/work/mister-slint");
+    fn published_platform_components_are_staged_as_one_bundle() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-published-platform-stage-{}",
+            std::process::id()
+        ));
+        let extracted = root.join("candidate");
+        let stage = root.join("stage");
+        fs::create_dir_all(extracted.join("main")).unwrap();
+        fs::create_dir_all(extracted.join("scanout")).unwrap();
+        fs::create_dir_all(extracted.join("fpga/patched")).unwrap();
+        fs::create_dir_all(stage.join("fpga")).unwrap();
+        fs::write(extracted.join("main/MiSTer_MagiK"), b"github-main").unwrap();
+        fs::write(
+            extracted.join("scanout/mister_magik_scanout_slots.ko"),
+            b"github-kernel",
+        )
+        .unwrap();
+        fs::write(
+            extracted.join("scanout/provenance.txt"),
+            b"github-kernel-metadata",
+        )
+        .unwrap();
+        fs::write(
+            extracted.join("fpga/patched/menu-magik-vblank-latch.rbf"),
+            b"github-rbf",
+        )
+        .unwrap();
+        fs::write(
+            extracted.join("fpga/patched/menu-magik-vblank-latch.metadata.txt"),
+            b"github-rbf-metadata",
+        )
+        .unwrap();
+
+        stage_published_platform_components(&extracted, &stage).unwrap();
+
         assert_eq!(
-            kernel_source_directory(repository, None),
-            PathBuf::from("/work/mister-slint/../Linux-Kernel_MiSTer")
+            fs::read(stage.join("MiSTer_MagiKDev")).unwrap(),
+            b"github-main"
         );
         assert_eq!(
-            kernel_source_directory(repository, Some(OsString::from("/srv/mister-kernel"))),
-            PathBuf::from("/srv/mister-kernel")
+            fs::read(stage.join("mister_magik_scanout_slots.ko")).unwrap(),
+            b"github-kernel"
         );
+        assert_eq!(
+            fs::read(stage.join("mister_magik_scanout_slots.metadata.txt")).unwrap(),
+            b"github-kernel-metadata"
+        );
+        assert_eq!(
+            fs::read(stage.join("fpga/menu-magik-vblank-latch.rbf")).unwrap(),
+            b"github-rbf"
+        );
+        assert_eq!(
+            fs::read(stage.join("fpga/menu-magik-vblank-latch.metadata.txt")).unwrap(),
+            b"github-rbf-metadata"
+        );
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1203,38 +983,6 @@ mod tests {
 
         assert!(!root.join("build/agent-deploy/stage").exists());
         assert!(cache.join("artifact").is_file());
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn main_receipt_requires_every_versioned_identity_and_exact_artifact() {
-        let root = std::env::temp_dir().join(format!(
-            "mister-magik-main-receipt-test-{}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&root).unwrap();
-        let receipt = root.join("main.receipt");
-        let expected = MainReceiptIdentity {
-            revision: "a",
-            source_input_sha256: "b",
-            artifact_sha256: "c",
-            compiler: "d",
-            dockerfile_sha256: "e",
-            image: "f",
-            image_digest: "g",
-        };
-        let valid = "receipt_version=2\nmain_revision=a\nsource_input_sha256=b\nartifact_sha256=c\ncompiler=d\ndockerfile_sha256=e\nimage_reference=f\nimage_digest=g\n";
-        fs::write(&receipt, valid).unwrap();
-        assert!(main_receipt_matches(&receipt, &expected).unwrap());
-        for invalid in [
-            valid.replace("receipt_version=2\n", ""),
-            valid.replace("artifact_sha256=c", "artifact_sha256=tampered"),
-            valid.replace("image_digest=g", "image_digest=other"),
-            format!("{valid}extra=value\n"),
-        ] {
-            fs::write(&receipt, invalid).unwrap();
-            assert!(!main_receipt_matches(&receipt, &expected).unwrap());
-        }
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1303,7 +1051,6 @@ mod tests {
             installed_manager_sha256: None,
             manager_artifact: None,
             main_revision: None,
-            local_main: PathBuf::new(),
             stage: PathBuf::from("stage"),
             device,
         }
@@ -1342,14 +1089,10 @@ mod tests {
             std::process::id()
         ));
         let repository = root.join("app");
-        let main = root.join("Main_MiSTer");
         fs::create_dir_all(&repository).unwrap();
-        fs::create_dir_all(&main).unwrap();
         initialize_git_repository(&repository, "main", "README.md");
-        fs::write(main.join("build-container.sh"), "#!/bin/sh\n").unwrap();
-        initialize_git_repository(&main, "mister-magik", "build-container.sh");
         let app_revision = crate::git::value(&repository, &["rev-parse", "HEAD"]).unwrap();
-        let main_revision = crate::git::value(&main, &["rev-parse", "HEAD"]).unwrap();
+        let main_revision = "b".repeat(40);
         let manifest = canonical_test_manifest(&app_revision, &main_revision);
         let requests = Rc::new(RefCell::new(Vec::new()));
         let evidence = Evidence::open_at(&root.join("evidence")).unwrap();
@@ -1360,7 +1103,6 @@ mod tests {
         let execution = execute_with_device(
             &repository,
             &app_revision,
-            &main,
             &mut reporter,
             DeviceClient::new(RecordingDevice {
                 requests: Rc::clone(&requests),

@@ -9,11 +9,13 @@ slint/
   Main_MiSTer/         # real GitHub fork of MiSTer-devel/Main_MiSTer
 ```
 
-`scripts/agent deliver` installs one coherent development platform using
-`../Main_MiSTer`; set `MISTER_MAIN_DIR` when the fork lives elsewhere. The
-platform manifest binds the app, Main, kernel module, and FPGA latch. Runtime
-delivery may replace the app independently only by activating a regenerated
-manifest with the new app hash in the same rollback-capable transaction.
+`scripts/agent deliver` installs one coherent development platform. Main, the
+scanout kernel module, and the FPGA latch come from the same latest qualified
+GitHub platform release; the tag-addressed verified archive is reused while
+that release remains latest. The platform manifest binds those components to
+the app. Runtime delivery may replace the app independently only by activating
+a regenerated manifest with the new app hash in the same rollback-capable
+transaction.
 
 The fork is not a submodule. It has its own history, CI, build wrapper, and
 patch ledger.
@@ -145,8 +147,8 @@ Deploy from this app repo:
 scripts/agent deliver
 ```
 
-Development delivery first compares the installed manifest revisions with the
-exact clean local app and Main commits:
+Development delivery first compares the installed manifest with the exact clean
+local app commit:
 
 The installed manifest is accepted only when it contains the exact canonical
 field set once, uses the fixed paths for its layout, has lowercase hashes, and
@@ -163,38 +165,31 @@ noncanonical manifests select `Platform`.
   manager, database-support, and manifest set with reboot and rollback
   protection inside one typed host transaction.
 
-Component receipts under `build/agent-cache/` bind immutable source, build,
-toolchain, compiler, Dockerfile, OCI image, configuration, and artifact
-identities. Old receipt versions are cache misses. Verified Main, kernel,
-published platform, and game-database artifacts are reused across deliveries;
-cleanup removes only disposable `build/agent-deploy/` staging.
+Component receipts and release archives under `build/agent-cache/` bind
+immutable source, build, toolchain, compiler, Dockerfile, OCI image,
+configuration, and artifact identities. Old receipt versions are cache misses.
+The complete published platform archive and game-database artifacts are reused
+across deliveries; cleanup removes only disposable `build/agent-deploy/`
+staging.
 An unchanged manager is fetched only through the typed host API after the
 installed manifest and remote checksum have been verified, then cached by
 SHA-256. Changed manager inputs or failed installed verification use a strict
 local build receipt instead.
-The pinned kernel source defaults to the persistent sibling checkout
-`../Linux-Kernel_MiSTer`; set `MISTER_KERNEL_DIR` when it lives elsewhere.
 
-Each mutating transaction uses the exact clean app commit and local
-`Main_MiSTer` `mister-magik` branch. Neither local commit must be pushed, and
-Main is never copied directly onto the device outside the platform transaction.
+Each mutating transaction uses the exact clean app commit. Platform transactions
+stage Main, kernel, and RBF only from the one verified GitHub bundle; none can
+be replaced by a local build. Main is never copied directly onto the device
+outside the platform transaction.
 The host serializes a transaction with a nonblocking process-owned OS lock.
 The lock is released automatically when the process exits, including abnormal
 exit, and creates no persistent device lease or expiry/recovery state.
 
-Use a non-default fork checkout with the same option:
-
-```bash
-export MISTER_MAIN_DIR=/path/to/Main_MiSTer
-scripts/agent deliver
-```
-
 The development script deploys:
 
 - `apps/mister` to `/media/fat/mister-magik-dev/mister-magik-fb`
-- `$MISTER_MAIN_DIR/bin/MiSTer` to `/media/fat/MiSTer_MagiKDev`
-- the qualified scanout module and metadata to `/media/fat/mister-magik-dev/`
-- the qualified Menu latch RBF and metadata to `/media/fat/mister-magik-dev/fpga/`
+- the bundle Main to `/media/fat/MiSTer_MagiKDev`
+- the bundle scanout module and metadata to `/media/fat/mister-magik-dev/`
+- the bundle Menu latch RBF and metadata to `/media/fat/mister-magik-dev/fpga/`
 - the complete platform contract to `/media/fat/mister-magik-dev/platform-v2.manifest`
 
 The transaction selects the development Main only after the complete manifest
@@ -217,8 +212,8 @@ Do not stack branches.
    components. Approve immutable publication only after candidate verification.
 5. Application publication consumes Main from the highest v0.2 platform bundle;
    only a legacy v0.1 bundle invokes the temporary source-build fallback.
-6. Deploy from `mister-slint` with the fork checkout available at
-   `../Main_MiSTer` or `MISTER_MAIN_DIR`.
+6. Deploy from `mister-slint`; delivery resolves and reuses the latest published
+   platform bundle.
 7. Record device smoke results in the fork `MAGIK_PATCHSET.md`.
 
 ## Historical Notes

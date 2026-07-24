@@ -30,12 +30,14 @@ The normal feature loop is edit, `scripts/agent check`, explicit
 verification of the exact staged tree. Use standalone `verify` when assurance
 is needed without creating a commit.
 Runtime or platform changes then use `scripts/agent deliver`. Delivery uses the
-exact clean local app and Main commits without consulting workflow ownership
-records or requiring publication. Reconciliation reads and verifies the
-installed development manifest first, then selects `NoOp`, `Runtime`, or
-`Platform` from all paths between its recorded app revision and `HEAD`. An
-installed artifact mismatch forces a complete `Platform` repair. `NoOp` stops
-before GitHub, builds, or staging. `Runtime` updates the GUI and manifest as one
+exact clean local app commit. Platform delivery resolves the latest qualified
+GitHub platform release and stages its Main, scanout kernel module, and latch
+RBF together. The verified archive is cached by release tag and reused until
+the latest tag changes. Reconciliation reads and verifies the installed
+development manifest first, then selects `NoOp`, `Runtime`, or `Platform` from
+all paths between its recorded app revision and `HEAD`. An installed artifact
+mismatch forces a complete `Platform` repair. `NoOp` stops before GitHub,
+builds, or staging. `Runtime` updates the GUI and manifest as one
 rollback-capable transaction without rebooting. `Platform` retains the complete
 manifest-bound transaction for Main, kernel, FPGA, and contract changes.
 Runtime and platform mutation each execute as one typed host transaction from
@@ -43,10 +45,10 @@ snapshot through health verification and commit or rollback. A nonblocking,
 process-owned host lock prevents concurrent delivery and cannot leave stale
 device state. There is no persistent delivery lease.
 
-Verified component receipts live under `build/agent-cache/` and survive
-delivery cleanup. Main, kernel, published platform artifacts, and game
-databases are reused only when their immutable inputs and artifact hashes still
-match. An unchanged manager is verified against the installed canonical
+Verified component receipts and release archives live under
+`build/agent-cache/` and survive delivery cleanup. Published platform bundles
+and game databases are reused only when their immutable inputs and artifact
+hashes still match. An unchanged manager is verified against the installed canonical
 manifest, fetched through the typed host transport, and cached by SHA-256;
 otherwise it is rebuilt under a strict receipt. Transient staging remains under
 `build/agent-deploy/`.

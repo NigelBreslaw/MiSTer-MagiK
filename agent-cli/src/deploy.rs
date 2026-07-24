@@ -158,23 +158,12 @@ pub fn plan(repository: &Path, mut paths: Vec<PathBuf>) -> Result<DeploymentPlan
     })
 }
 
-pub fn reconcile(
-    repository: &Path,
-    installed_manifest: &str,
-    local_main_revision: &str,
-    head: &str,
-) -> Reconciliation {
+pub fn reconcile(repository: &Path, installed_manifest: &str, head: &str) -> Reconciliation {
     let Ok(installed) = platform_manifest::parse_installed(installed_manifest, Layout::Development)
     else {
         return conservative_reconciliation();
     };
     let installed_magik = installed.magik_revision();
-    if installed.main_revision() != local_main_revision {
-        return Reconciliation {
-            decision: DeliveryDecision::Platform,
-            changed_paths: Vec::new(),
-        };
-    }
     if installed_magik == head {
         return Reconciliation {
             decision: DeliveryDecision::NoOp,
@@ -350,27 +339,16 @@ mod tests {
         let main = "b".repeat(40);
         let manifest = manifest(&revision, &main);
         assert_eq!(
-            reconcile(Path::new("."), &manifest, &main, &revision).decision,
+            reconcile(Path::new("."), &manifest, &revision).decision,
             DeliveryDecision::NoOp
         );
     }
 
     #[test]
-    fn invalid_manifest_or_changed_main_is_conservatively_platform() {
+    fn invalid_manifest_is_conservatively_platform() {
         let revision = "a".repeat(40);
-        let main = "b".repeat(40);
         assert_eq!(
-            reconcile(Path::new("."), "invalid", &main, &revision).decision,
-            DeliveryDecision::Platform
-        );
-        assert_eq!(
-            reconcile(
-                Path::new("."),
-                &manifest(&revision, &main),
-                &"c".repeat(40),
-                &revision
-            )
-            .decision,
+            reconcile(Path::new("."), "invalid", &revision).decision,
             DeliveryDecision::Platform
         );
     }
@@ -391,7 +369,7 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                reconcile(Path::new("."), &manifest, &main, &revision).decision,
+                reconcile(Path::new("."), &manifest, &revision).decision,
                 DeliveryDecision::Platform
             );
         }
@@ -414,7 +392,7 @@ mod tests {
         commit_all(&root, "docs");
         let docs_head = git_value(&root, &["rev-parse", "HEAD"]);
         assert_eq!(
-            reconcile(&root, &installed_manifest, &main, &docs_head).decision,
+            reconcile(&root, &installed_manifest, &docs_head).decision,
             DeliveryDecision::NoOp
         );
 
@@ -422,7 +400,7 @@ mod tests {
         commit_all(&root, "runtime");
         let runtime_head = git_value(&root, &["rev-parse", "HEAD"]);
         assert_eq!(
-            reconcile(&root, &installed_manifest, &main, &runtime_head).decision,
+            reconcile(&root, &installed_manifest, &runtime_head).decision,
             DeliveryDecision::Runtime
         );
 
@@ -430,7 +408,7 @@ mod tests {
         commit_all(&root, "kernel");
         let platform_head = git_value(&root, &["rev-parse", "HEAD"]);
         assert_eq!(
-            reconcile(&root, &installed_manifest, &main, &platform_head).decision,
+            reconcile(&root, &installed_manifest, &platform_head).decision,
             DeliveryDecision::Platform
         );
         let _ = std::fs::remove_dir_all(root);

@@ -133,9 +133,10 @@ directly; the harness selects, times, deduplicates, and records them.
 “Build and deploy” means create the Git commit first, then
 `scripts/agent deliver`; do not call
 implementation scripts or supply deployment feature flags. `deliver` never
-changes Git state or pushes. Development delivery uses the exact clean local
-commits in this repository and the `mister-magik` branch of `Main_MiSTer`;
-publication and CI provenance are release concerns, not development gates.
+changes Git state or pushes. Development delivery builds the app runtime from
+the exact clean local commit. Main, the scanout kernel module, and the latch RBF
+must come together from the latest qualified GitHub platform release; reuse the
+verified tag-addressed cache instead of downloading an unchanged release.
 Git's index is the only commit-scope authority. Stage only intentional paths
 with `git add -- PATH...`; never use broad staging when unrelated changes
 exist. Invoke `git add`, `git commit`, and the one-time

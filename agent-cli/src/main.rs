@@ -683,14 +683,7 @@ fn deliver_inner(
         return Err("dirty_worktree: commit or discard changes before delivery".into());
     }
     let sha = agent_cli::git::value(repository, &["rev-parse", "HEAD"])?;
-    let local_main = local_main_directory(repository);
-    agent_cli::delivery::execute(repository, &sha, &local_main, reporter)
-}
-
-fn local_main_directory(repository: &Path) -> std::path::PathBuf {
-    std::env::var_os("MISTER_MAIN_DIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| repository.join("../Main_MiSTer"))
+    agent_cli::delivery::execute(repository, &sha, reporter)
 }
 
 fn fatal(message: &str) -> ! {
