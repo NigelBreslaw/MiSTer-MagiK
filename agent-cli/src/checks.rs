@@ -175,6 +175,7 @@ fn check_ci_cache(repository: &Path) -> Result<(), String> {
             "steps.cache-id.outputs.cargo_host",
             "steps.cache-id.outputs.cross_abi",
             "ci-cache-identity.py",
+            "rustup default \"$toolchain\"",
         ],
         &[
             "target-host-",
