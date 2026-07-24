@@ -23,6 +23,7 @@ enum CrtProbePattern {
     MotionHold2,
     MotionHold3,
     MotionSlow,
+    PreloadedRulerSlow,
 }
 
 impl CrtProbePattern {
@@ -44,6 +45,7 @@ impl CrtProbePattern {
             "motion-hold2" => Some(Self::MotionHold2),
             "motion-hold3" => Some(Self::MotionHold3),
             "motion-slow" => Some(Self::MotionSlow),
+            "preloaded-ruler-slow" => Some(Self::PreloadedRulerSlow),
             _ => None,
         }
     }
@@ -62,6 +64,7 @@ impl CrtProbePattern {
             Self::MotionHold2 => "motion-hold2",
             Self::MotionHold3 => "motion-hold3",
             Self::MotionSlow => "motion-slow",
+            Self::PreloadedRulerSlow => "preloaded-ruler-slow",
         }
     }
 
@@ -78,7 +81,7 @@ impl CrtProbePattern {
             Self::MotionHold2 => Some(2),
             Self::MotionHold3 => Some(3),
             Self::MotionSlow => Some(50),
-            Self::FixedA | Self::FixedB | Self::SlowAb => None,
+            Self::FixedA | Self::FixedB | Self::SlowAb | Self::PreloadedRulerSlow => None,
         }
     }
 
@@ -420,10 +423,16 @@ pub(super) fn run_crt_probe_loop(
     let neutral = render_crt_probe_pattern(width, height, 0, 0, None);
     let frame_a = match pattern {
         CrtProbePattern::IdenticalFlip => neutral.clone(),
+        CrtProbePattern::PreloadedRulerSlow => {
+            render_crt_probe_pattern(width, height, 0, 0, Some(0))
+        }
         _ => render_crt_probe_pattern(width, height, 1, 0, None),
     };
     let frame_b = match pattern {
         CrtProbePattern::IdenticalFlip => neutral,
+        CrtProbePattern::PreloadedRulerSlow => {
+            render_crt_probe_pattern(width, height, 0, 0, Some(5))
+        }
         _ => render_crt_probe_pattern(width, height, 2, 24, None),
     };
 
@@ -476,7 +485,11 @@ pub(super) fn run_crt_probe_loop(
     while failure.is_none() && observation_started.elapsed() < Duration::from_secs(CRT_PROBE_SECS) {
         let should_flip = if pattern.flips_continuously() {
             true
-        } else if pattern == CrtProbePattern::SlowAb && Instant::now() >= next_slow_flip {
+        } else if matches!(
+            pattern,
+            CrtProbePattern::SlowAb | CrtProbePattern::PreloadedRulerSlow
+        ) && Instant::now() >= next_slow_flip
+        {
             next_slow_flip += CRT_PROBE_SLOW_PERIOD;
             true
         } else {
@@ -1240,6 +1253,10 @@ mod tests {
             Some(CrtProbePattern::MotionSlow)
         );
         assert_eq!(
+            CrtProbePattern::parse("preloaded-ruler-slow"),
+            Some(CrtProbePattern::PreloadedRulerSlow)
+        );
+        assert_eq!(
             CrtProbePattern::parse("full-ab-hold4"),
             Some(CrtProbePattern::FullAbHold4)
         );
@@ -1296,6 +1313,17 @@ mod tests {
 
         assert_eq!(first[row * 640 + 15].0, 0xffff);
         assert_eq!(second[row * 640 + 20].0, 0xffff);
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn preloaded_ruler_positions_are_twenty_five_pixels_apart() {
+        let first = render_crt_probe_pattern(640, 576, 0, 0, Some(0));
+        let second = render_crt_probe_pattern(640, 576, 0, 0, Some(5));
+        let row = 100;
+
+        assert_eq!(first[row * 640].0, 0xffff);
+        assert_eq!(second[row * 640 + 25].0, 0xffff);
         assert_ne!(first, second);
     }
 
