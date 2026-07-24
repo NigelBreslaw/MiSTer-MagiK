@@ -169,6 +169,8 @@ fn parse_probe_args(args: &[String]) -> Result<QualifyAction> {
             | "full-ab-hold3"
             | "full-ab-hold4"
             | "motion"
+            | "motion-hold2"
+            | "motion-hold3"
     ) {
         return Err(format!("unsupported CRT probe pattern: {pattern}").into());
     }
@@ -298,6 +300,12 @@ fn probe_observation_prompt(pattern: &str) -> &'static str {
             "Each A/B grid is held for four rasters; report whether the lower-band displacement remains continuous, becomes transition-only, or disappears."
         }
         "motion" => "Report any lower-band ghost, horizontal step, or top/bottom frame mismatch.",
+        "motion-hold2" => {
+            "The bright ruler advances every two rasters. Report only whether you see the obvious lower-screen ghost or horizontal break."
+        }
+        "motion-hold3" => {
+            "The bright ruler advances every three rasters. Report only whether you see the obvious lower-screen ghost or horizontal break."
+        }
         _ => "Observe the physical CRT.",
     }
 }
@@ -793,6 +801,27 @@ mod tests {
                     "/tmp/probe".into(),
                 ])
                 .is_ok()
+            );
+        }
+        for pattern in ["motion-hold2", "motion-hold3"] {
+            let action = parse_args(&[
+                "probe".into(),
+                "--attended".into(),
+                "--pattern".into(),
+                pattern.into(),
+                "--seconds".into(),
+                "20".into(),
+                "--out".into(),
+                format!("/tmp/{pattern}"),
+            ])
+            .unwrap();
+            assert_eq!(
+                action,
+                QualifyAction::Probe {
+                    pattern: pattern.into(),
+                    seconds: 20,
+                    output: PathBuf::from(format!("/tmp/{pattern}")),
+                }
             );
         }
         assert_eq!(

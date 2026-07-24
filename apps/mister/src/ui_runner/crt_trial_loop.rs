@@ -20,6 +20,8 @@ enum CrtProbePattern {
     FullAbHold3,
     FullAbHold4,
     Motion,
+    MotionHold2,
+    MotionHold3,
 }
 
 impl CrtProbePattern {
@@ -38,6 +40,8 @@ impl CrtProbePattern {
             "full-ab-hold3" => Some(Self::FullAbHold3),
             "full-ab-hold4" => Some(Self::FullAbHold4),
             "motion" => Some(Self::Motion),
+            "motion-hold2" => Some(Self::MotionHold2),
+            "motion-hold3" => Some(Self::MotionHold3),
             _ => None,
         }
     }
@@ -53,6 +57,8 @@ impl CrtProbePattern {
             Self::FullAbHold3 => "full-ab-hold3",
             Self::FullAbHold4 => "full-ab-hold4",
             Self::Motion => "motion",
+            Self::MotionHold2 => "motion-hold2",
+            Self::MotionHold3 => "motion-hold3",
         }
     }
 
@@ -66,8 +72,14 @@ impl CrtProbePattern {
             Self::FullAbHold2 => Some(2),
             Self::FullAbHold3 => Some(3),
             Self::FullAbHold4 => Some(4),
+            Self::MotionHold2 => Some(2),
+            Self::MotionHold3 => Some(3),
             Self::FixedA | Self::FixedB | Self::SlowAb => None,
         }
+    }
+
+    const fn is_motion(self) -> bool {
+        matches!(self, Self::Motion | Self::MotionHold2 | Self::MotionHold3)
     }
 }
 
@@ -473,7 +485,7 @@ pub(super) fn run_crt_probe_loop(
             raster_index,
         );
         raster_index = raster_index.wrapping_add(1);
-        if pattern == CrtProbePattern::Motion {
+        if pattern.is_motion() && target != active_slot {
             let frame = render_crt_probe_pattern(width, height, 0, 0, Some(motion_frame));
             if let Err(error) = write_probe_slot(
                 &mut buffers,
@@ -1213,6 +1225,10 @@ mod tests {
             Some(CrtProbePattern::Motion)
         );
         assert_eq!(
+            CrtProbePattern::parse("motion-hold2"),
+            Some(CrtProbePattern::MotionHold2)
+        );
+        assert_eq!(
             CrtProbePattern::parse("full-ab-hold4"),
             Some(CrtProbePattern::FullAbHold4)
         );
@@ -1270,5 +1286,21 @@ mod tests {
         assert_eq!(first[row * 640 + 15].0, 0xffff);
         assert_eq!(second[row * 640 + 20].0, 0xffff);
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn motion_rate_sweep_updates_only_when_the_displayed_slot_changes() {
+        for (hold_rasters, expected_updates) in [(1, 8), (2, 4), (3, 2)] {
+            let mut active_slot = 1;
+            let mut updates = 0;
+            for raster_index in 0..8 {
+                let target = probe_target_slot(active_slot, hold_rasters, raster_index);
+                if target != active_slot {
+                    updates += 1;
+                }
+                active_slot = target;
+            }
+            assert_eq!(updates, expected_updates, "hold_rasters={hold_rasters}");
+        }
     }
 }
