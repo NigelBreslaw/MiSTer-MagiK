@@ -50,7 +50,7 @@ launcher.
 Display resolution changes are Main-owned provisional transactions. Main
 suspends Slint, applies the selected HDMI or CRT/VGA timing, exports the
 authoritative configured mode to the replacement launcher, and restarts it with
-a ten-second confirmation deadline. `MiSTer.ini` remains
+a twenty-second confirmation deadline. `MiSTer.ini` remains
 unchanged until confirmation; cancellation, timeout, launcher failure, or
 power loss therefore returns to the last persisted working mode.
 Confirmation persistence runs in a supervised child while Main continues
