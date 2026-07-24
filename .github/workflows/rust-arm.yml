@@ -171,7 +171,7 @@ jobs:
         with:
           name: cargo-timings-release
           path: apps/mister/target/cargo-timings/*.html
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
 
       - name: Check ARM shared libraries

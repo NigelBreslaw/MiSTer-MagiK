@@ -596,7 +596,7 @@ impl<'a> ProcessBuildActions<'a> {
                 "PATH=/rust/bin:$PATH cargo \"$@\"",
                 "sh",
             ])
-            .args(cargo_args(self.spec));
+            .args(cargo_args(self.spec, requested_cargo_timings()));
         run_bounded(&mut command, BUILD_DEADLINE)
     }
 
@@ -616,7 +616,7 @@ impl<'a> ProcessBuildActions<'a> {
             .env("MISTER_MAGIK_BUILD_NUMBER", build_number)
             .env("MISTER_MAGIK_VERSION", version)
             .env("MISTER_MAGIK_BUILD_TIME", build_time)
-            .args(cargo_args(self.spec));
+            .args(cargo_args(self.spec, requested_cargo_timings()));
         configure_cross_environment(&mut command, self.repository)?;
         if self.spec.target == BuildTarget::Runtime && self.spec.mode != BuildMode::CheckLibrary {
             command.envs(ffmpeg_cross_env(self.repository));
@@ -970,12 +970,24 @@ fn prepare_container(repository: &Path, target_dir: &Path) -> AgentResult<()> {
     Ok(())
 }
 
-fn cargo_args(spec: &BuildSpec) -> Vec<OsString> {
+fn requested_cargo_timings() -> bool {
+    let value = std::env::var("MISTER_CARGO_TIMINGS").ok();
+    cargo_timings_enabled(value.as_deref())
+}
+
+fn cargo_timings_enabled(value: Option<&str>) -> bool {
+    value != Some("0")
+}
+
+fn cargo_args(spec: &BuildSpec, timings: bool) -> Vec<OsString> {
     let mut args: Vec<OsString> = vec![match spec.mode {
         BuildMode::Build => "build".into(),
         BuildMode::Check | BuildMode::CheckLibrary => "check".into(),
     }];
     args.extend(["--target".into(), TARGET.into(), "--locked".into()]);
+    if timings {
+        args.push("--timings".into());
+    }
     if spec.mode == BuildMode::Build {
         args.extend(["--profile".into(), spec.profile.into()]);
     }
@@ -1166,6 +1178,25 @@ mod tests {
             OsString::from("/checkout/apps/mister/target/ffmpeg-minimal/armv7/dist/lib/pkgconfig")
         )));
         assert!(environment.contains(&("PKG_CONFIG_ALLOW_CROSS", OsString::from("1"))));
+    }
+
+    #[test]
+    fn cargo_timings_default_on_and_follow_the_explicit_switch() {
+        assert!(cargo_timings_enabled(None));
+        assert!(cargo_timings_enabled(Some("1")));
+        assert!(!cargo_timings_enabled(Some("0")));
+
+        let spec = BuildSpec::for_recipe(BuildRecipe::RuntimeFast);
+        assert!(
+            cargo_args(&spec, true)
+                .iter()
+                .any(|argument| argument == "--timings")
+        );
+        assert!(
+            cargo_args(&spec, false)
+                .iter()
+                .all(|argument| argument != "--timings")
+        );
     }
 
     #[test]
