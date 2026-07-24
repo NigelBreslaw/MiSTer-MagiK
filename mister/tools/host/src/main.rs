@@ -3067,7 +3067,7 @@ fn run_launcher_benchmark(
     let options = benchmark_launcher_restart_options(scenario, warmup);
     reset_benchmark_trace(session, warmup)?;
     launcher_restart(session, &options)?;
-    wait_benchmark_trace(session, warmup)
+    wait_benchmark_trace(session, scenario, warmup)
 }
 
 fn reset_benchmark_trace(session: &Session, warmup: bool) -> Result<()> {
@@ -3080,13 +3080,25 @@ fn reset_benchmark_trace(session: &Session, warmup: bool) -> Result<()> {
     )
 }
 
-fn wait_benchmark_trace(session: &Session, warmup: bool) -> Result<()> {
+fn wait_benchmark_trace(
+    session: &Session,
+    scenario: BenchmarkScenario,
+    warmup: bool,
+) -> Result<()> {
     let trace = benchmark_trace_path(warmup);
     let complete = benchmark_trace_complete_path(warmup);
     exec_checked(
         session,
         "benchmark trace wait",
-        &benchmark_trace_wait_command(trace, complete),
+        &benchmark_trace_wait_command(
+            trace,
+            complete,
+            if scenario == BenchmarkScenario::ScreensaverVelocity && !warmup {
+                45
+            } else {
+                20
+            },
+        ),
     )
 }
 
@@ -3099,14 +3111,14 @@ fn benchmark_launcher_restart_options(
     let seconds = if warmup {
         "2"
     } else if scenario == BenchmarkScenario::ScreensaverVelocity {
-        "10"
+        "30"
     } else {
         "8"
     };
     let scenario_value = match scenario {
         BenchmarkScenario::LauncherVelocity => "velocity-scroll",
         BenchmarkScenario::FramebufferVelocity => "dirty-band",
-        BenchmarkScenario::ScreensaverVelocity => "screensaver-startup",
+        BenchmarkScenario::ScreensaverVelocity => "screensaver-show",
     };
     let mut env_vars = vec![
         (
@@ -3122,7 +3134,19 @@ fn benchmark_launcher_restart_options(
         ("MISTER_PREVIEW_SCROLL_EXIT_AFTER_TRACE".into(), "1".into()),
     ];
     if scenario == BenchmarkScenario::ScreensaverVelocity {
-        env_vars.push(("MISTER_SCREENSAVER_START_ACTIVE".into(), "1".into()));
+        env_vars.push(("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()));
+        env_vars.push((
+            "MISTER_LAUNCHER_INPUT_SCRIPT".into(),
+            "up,a,down,a,down,down,a".into(),
+        ));
+        env_vars.push((
+            "MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES".into(),
+            "12".into(),
+        ));
+        env_vars.push((
+            "MISTER_LAUNCHER_BENCH_AFTER_INPUT_SCRIPT".into(),
+            "1".into(),
+        ));
         env_vars.push((
             "MISTER_SCREENSAVER_SEED".into(),
             "7640891576956012809".into(),
@@ -3134,15 +3158,19 @@ fn benchmark_launcher_restart_options(
     }
     LauncherRestartOptions {
         env_vars,
-        timeout_secs: 30,
+        timeout_secs: if scenario == BenchmarkScenario::ScreensaverVelocity {
+            45
+        } else {
+            30
+        },
         remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
         ..LauncherRestartOptions::default()
     }
 }
 
-fn benchmark_trace_wait_command(trace: &str, complete: &str) -> String {
+fn benchmark_trace_wait_command(trace: &str, complete: &str, timeout_secs: u64) -> String {
     format!(
-        "set -u; elapsed=0; while [ $elapsed -lt 20 ]; do test -s {trace} && test -e {complete} && exit 0; sleep 1; elapsed=$((elapsed + 1)); done; printf 'benchmark_trace_diagnostic\\ttrace='; if test -e {trace}; then wc -l <{trace}; else printf 'missing\\n'; fi; printf 'benchmark_trace_diagnostic\\tcomplete='; if test -e {complete}; then printf 'present\\n'; else printf 'missing\\n'; fi; grep -E 'launcher_bench_scenario|preview_scroll_trace|screensaver_startup|done:|error|failed' /tmp/mister-magik-slint.log 2>/dev/null | tail -n 40 || true; exit 1"
+        "set -u; elapsed=0; while [ $elapsed -lt {timeout_secs} ]; do test -s {trace} && test -e {complete} && exit 0; sleep 1; elapsed=$((elapsed + 1)); done; printf 'benchmark_trace_diagnostic\\ttrace='; if test -e {trace}; then wc -l <{trace}; else printf 'missing\\n'; fi; printf 'benchmark_trace_diagnostic\\tcomplete='; if test -e {complete}; then printf 'present\\n'; else printf 'missing\\n'; fi; grep -E 'launcher_bench_scenario|launcher_input_script|screensaver_startup|preview_scroll_trace|done:|error|failed' /tmp/mister-magik-slint.log 2>/dev/null | tail -n 40 || true; exit 1"
     )
 }
 
@@ -3153,18 +3181,11 @@ struct ScreensaverBenchmarkMode {
     framebuffer: &'static str,
 }
 
-const SCREENSAVER_BENCHMARK_MODES: [ScreensaverBenchmarkMode; 2] = [
-    ScreensaverBenchmarkMode {
-        id: "hdmi-1920x1200p60",
-        output: "1920x1200",
-        framebuffer: "960x600",
-    },
-    ScreensaverBenchmarkMode {
-        id: "hdmi-1280x720p60",
-        output: "1280x720",
-        framebuffer: "1280x720",
-    },
-];
+const SCREENSAVER_BENCHMARK_MODES: [ScreensaverBenchmarkMode; 1] = [ScreensaverBenchmarkMode {
+    id: "hdmi-1280x720p60",
+    output: "1280x720",
+    framebuffer: "1280x720",
+}];
 
 fn restore_benchmark_display_if_pending(session: &Session) -> Result<()> {
     let reply = exec_checked_output(
@@ -3223,7 +3244,7 @@ fn run_screensaver_benchmark_matrix(connection: &ConnectionConfig) -> Result<Str
                 Instant::now(),
                 Duration::from_secs(15),
             )?;
-            wait_benchmark_trace(&session, false)?;
+            wait_benchmark_trace(&session, BenchmarkScenario::ScreensaverVelocity, false)?;
             let trace = remote_read(&session, benchmark_trace_path(false))
                 .ok_or("screensaver benchmark trace is missing")?;
             output.push_str(&format!(
@@ -10860,25 +10881,46 @@ H: Handlers=event3 js0"#
 
     #[test]
     fn benchmark_trace_timeout_preserves_actionable_device_evidence() {
-        let command = benchmark_trace_wait_command("/tmp/trace", "/tmp/complete");
+        let command = benchmark_trace_wait_command("/tmp/trace", "/tmp/complete", 45);
 
         assert!(command.contains("benchmark_trace_diagnostic"));
+        assert!(command.contains("$elapsed -lt 45"));
         assert!(command.contains("wc -l"));
         assert!(command.contains("launcher_bench_scenario"));
         assert!(command.contains("/tmp/mister-magik-slint.log"));
     }
 
     #[test]
-    fn screensaver_benchmark_uses_development_env_without_catalog_refresh() {
+    fn screensaver_benchmark_navigates_from_home_and_runs_for_thirty_seconds() {
         let options =
             benchmark_launcher_restart_options(BenchmarkScenario::ScreensaverVelocity, false);
 
         assert_eq!(options.remote_env, DEVELOPMENT_LAUNCHER_ENV_REMOTE);
+        assert_eq!(options.timeout_secs, 45);
         assert!(
             options
                 .env_vars
-                .contains(&("MISTER_SCREENSAVER_START_ACTIVE".into(), "1".into()))
+                .contains(&("MISTER_PREVIEW_SCROLL_TRACE_SECS".into(), "30".into()))
         );
+        assert!(
+            !options
+                .env_vars
+                .iter()
+                .any(|(key, _)| key == "MISTER_SCREENSAVER_START_ACTIVE")
+        );
+        assert!(
+            options
+                .env_vars
+                .contains(&("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()))
+        );
+        assert!(options.env_vars.contains(&(
+            "MISTER_LAUNCHER_INPUT_SCRIPT".into(),
+            "up,a,down,a,down,down,a".into()
+        )));
+        assert!(options.env_vars.contains(&(
+            "MISTER_LAUNCHER_BENCH_AFTER_INPUT_SCRIPT".into(),
+            "1".into()
+        )));
         assert!(
             options
                 .env_vars
@@ -10888,6 +10930,14 @@ H: Handlers=event3 js0"#
             "MISTER_SCREENSAVER_SEED".into(),
             "7640891576956012809".into()
         )));
+    }
+
+    #[test]
+    fn screensaver_benchmark_owns_only_the_1280_by_720_mode() {
+        assert_eq!(SCREENSAVER_BENCHMARK_MODES.len(), 1);
+        assert_eq!(SCREENSAVER_BENCHMARK_MODES[0].id, "hdmi-1280x720p60");
+        assert_eq!(SCREENSAVER_BENCHMARK_MODES[0].output, "1280x720");
+        assert_eq!(SCREENSAVER_BENCHMARK_MODES[0].framebuffer, "1280x720");
     }
 
     #[test]

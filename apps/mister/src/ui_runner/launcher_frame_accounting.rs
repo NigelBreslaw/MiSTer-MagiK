@@ -860,6 +860,11 @@ impl Drop for PreviewScrollTrace {
 }
 
 impl LauncherFrameAccounting {
+    pub(super) fn close_preview_scroll_trace_for_restart(&mut self) {
+        #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+        self.close_preview_scroll_trace();
+    }
+
     #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
     pub(super) fn finish_preview_scroll_trace(&mut self) {
         if let Some(trace) = self.preview_scroll_trace.as_mut() {

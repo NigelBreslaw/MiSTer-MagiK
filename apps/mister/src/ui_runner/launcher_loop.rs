@@ -2905,13 +2905,19 @@ pub(super) fn run_launcher_loop(
         }
 
         if let Some(scenario) = launcher_bench_scenario {
+            let after_input_script_ready = match scenario {
+                LauncherBenchScenario::ScreensaverShow => screensaver.active,
+                _ => {
+                    nav.screen == Screen::Arcade && arcade_navigation_ready(catalog_ready, &catalog)
+                }
+            };
             if launcher_bench_after_input_script
                 && !launcher_bench_active
                 && !launcher_input_script.active()
-                && nav.screen == Screen::Arcade
-                && arcade_navigation_ready(catalog_ready, &catalog)
+                && after_input_script_ready
             {
                 run_start = Instant::now();
+                frame_accounting.close_preview_scroll_trace_for_restart();
                 frame_accounting =
                     LauncherFrameAccounting::new(run_start, ui.output_route().label());
                 launcher_bench_active = true;
@@ -6957,6 +6963,31 @@ mod tests {
         assert!(!down.dpad_left);
         assert!(down.dpad_down);
         assert!(!down.dpad_right);
+    }
+
+    #[test]
+    fn screensaver_show_benchmark_script_uses_production_navigation() {
+        let start = Instant::now();
+        let catalog = empty_arcade_catalog("/tmp");
+        let mut nav = LauncherNav::new();
+        let mut driver = LauncherInputScriptDriver::from_script("up,a,down,a,down,down,a", start);
+        driver.wait_frames = 0;
+        let mut action = None;
+        let mut frame = 0;
+
+        while driver.active() {
+            let input = driver.input_for().unwrap_or_default();
+            if let Some(event) =
+                nav.handle_input(&input, start + Duration::from_millis(frame * 17), &catalog)
+            {
+                action = Some(event.action);
+            }
+            frame += 1;
+        }
+
+        assert_eq!(nav.screen, Screen::Screensaver);
+        assert_eq!(nav.screensaver_selected, 2);
+        assert_eq!(action, Some(LauncherAction::PreviewScreensaver));
     }
 
     #[test]

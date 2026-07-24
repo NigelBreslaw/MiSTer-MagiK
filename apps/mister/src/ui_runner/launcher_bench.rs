@@ -18,7 +18,7 @@ pub(super) enum LauncherBenchScenario {
     PreviewStepHold,
     ModelSync,
     LaunchHandoff,
-    ScreensaverStartup,
+    ScreensaverShow,
 }
 
 impl LauncherBenchScenario {
@@ -52,7 +52,7 @@ impl LauncherBenchScenario {
                 }
                 "model-sync" | "model_sync" => Some(Self::ModelSync),
                 "launch-handoff" | "launch_handoff" => Some(Self::LaunchHandoff),
-                "screensaver-startup" | "screensaver_startup" => Some(Self::ScreensaverStartup),
+                "screensaver-show" | "screensaver_show" => Some(Self::ScreensaverShow),
                 _ => None,
             }
         }
@@ -72,13 +72,13 @@ impl LauncherBenchScenario {
             Self::PreviewStepHold => "preview-step-hold",
             Self::ModelSync => "model-sync",
             Self::LaunchHandoff => "launch-handoff",
-            Self::ScreensaverStartup => "screensaver-startup",
+            Self::ScreensaverShow => "screensaver-show",
         }
     }
 
     pub(super) fn period(self) -> Duration {
         match self {
-            Self::Idle | Self::PreviewIdle | Self::LaunchHandoff | Self::ScreensaverStartup => {
+            Self::Idle | Self::PreviewIdle | Self::LaunchHandoff | Self::ScreensaverShow => {
                 Duration::MAX
             }
             Self::HomeNav => Duration::from_millis(300),
@@ -239,7 +239,7 @@ pub(super) fn launcher_bench_step(
         LauncherBenchScenario::Idle
         | LauncherBenchScenario::PreviewIdle
         | LauncherBenchScenario::LaunchHandoff
-        | LauncherBenchScenario::ScreensaverStartup => false,
+        | LauncherBenchScenario::ScreensaverShow => false,
         LauncherBenchScenario::HomeNav => {
             let count = nav.current_menu_count();
             if count == 0 {

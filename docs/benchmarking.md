@@ -21,13 +21,15 @@ must all remain zero. Scenario, trace paths, warmup, duration, and thresholds
 are policy—not command flags. Velocity scenarios, never row jumps, support
 Arcade performance conclusions.
 
-Screensaver renderer changes select the fixed screensaver-velocity matrix. It
-starts a fresh production screensaver at 1920x1200 (960x600 framebuffer) and
-1280x720 (1280x720 framebuffer), then reports the full active interval, the
-first 180 active frames, and the remaining steady frames. Each provisional
-display transaction is cancelled before the next case and the original display
-mode is verified after the matrix. The standard velocity gates apply to the
-overall and startup intervals; steady results are diagnostic.
+Screensaver renderer changes select the fixed screensaver-velocity scenario at
+1280x720 output and framebuffer resolution. A fresh launcher starts on Home,
+uses production controller input to open Settings and activate Show
+Screensaver, then traces 30 seconds from activation. Catalog refresh remains
+disabled so unrelated catalog construction cannot contaminate the result. The
+scenario reports the full active interval, the first 180 active frames, and the
+remaining steady frames. Its provisional display transaction is cancelled and
+the original display mode is verified afterward. The standard velocity gates
+apply to the overall and startup intervals; steady results are diagnostic.
 
 ## Cold and catalog scenarios
 
