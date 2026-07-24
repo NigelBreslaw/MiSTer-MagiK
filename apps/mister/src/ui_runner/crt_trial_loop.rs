@@ -129,8 +129,15 @@ pub(super) fn run_crt_trial_loop(
     let mut unsafe_active_writes = 0u64;
     let mut pending_writes = 0u64;
     let mut alternation_misses = 0u64;
+    let mut max_settle_us = 0u64;
+    let mut max_render_us = 0u64;
+    let mut max_copy_us = 0u128;
+    let mut max_status_us = 0u64;
+    let mut post_status_retry_frames = 0u64;
+    let mut max_post_status_reads = 0u8;
     while started.elapsed() < Duration::from_secs(CRT_TRIAL_SECS) {
         if frames > 0 {
+            let settle_started = Instant::now();
             match wait_for_crt_latch_settle(hardware) {
                 Ok(status) => settled_status = status,
                 Err(error) => {
@@ -138,8 +145,23 @@ pub(super) fn run_crt_trial_loop(
                     break;
                 }
             }
+            max_settle_us = max_settle_us.max(
+                settle_started
+                    .elapsed()
+                    .as_micros()
+                    .try_into()
+                    .unwrap_or(u64::MAX),
+            );
         }
+        let render_started = Instant::now();
         render_crt_trial_frame(&mut frame, width, height, frames, content_bounds);
+        max_render_us = max_render_us.max(
+            render_started
+                .elapsed()
+                .as_micros()
+                .try_into()
+                .unwrap_or(u64::MAX),
+        );
         let plan = LauncherFramePlan::new(full_damage, None, None, None, None);
         let stats = match presenter.present_cached_full_frame(
             CachedFrameView::new(&frame, width, height),
@@ -154,6 +176,10 @@ pub(super) fn run_crt_trial_loop(
                 break;
             }
         };
+        max_copy_us = max_copy_us.max(stats.copy_us);
+        max_status_us = max_status_us.max(stats.status_us);
+        max_post_status_reads = max_post_status_reads.max(stats.post_status_reads);
+        post_status_retry_frames += u64::from(stats.post_status_reads > 1);
         let selected_base = presenter.buffer_base_addr(stats.buffer_index);
         if settled_status.active_enabled() && settled_status.active_base == selected_base {
             unsafe_active_writes += 1;
@@ -197,7 +223,7 @@ pub(super) fn run_crt_trial_loop(
         "none"
     });
     crate::ui_logln!(
-        "crt_trial_status_v3 schema=3 ok={} mode={} duration_ms={} frames={} flips={} posts={} drops={} final_pending={} final_active_matches={} unsafe_active_writes={} pending_writes={} alternation_misses={} cadence_misses={} max_interval_us={} last_buffer={} last_sequence={} reason={}",
+        "crt_trial_status_v3 schema=3 ok={} mode={} duration_ms={} frames={} flips={} posts={} drops={} final_pending={} final_active_matches={} unsafe_active_writes={} pending_writes={} alternation_misses={} cadence_misses={} max_interval_us={} max_settle_us={} max_render_us={} max_copy_us={} max_status_us={} post_status_retry_frames={} max_post_status_reads={} last_buffer={} last_sequence={} reason={}",
         u8::from(failure.is_none() && frames > 0 && counters.flips > 0),
         mode.label(),
         started.elapsed().as_millis(),
@@ -212,6 +238,12 @@ pub(super) fn run_crt_trial_loop(
         alternation_misses,
         cadence.missed_intervals,
         cadence.max_interval_us,
+        max_settle_us,
+        max_render_us,
+        max_copy_us,
+        max_status_us,
+        post_status_retry_frames,
+        max_post_status_reads,
         last_buffer.unwrap_or(0),
         last_sequence,
         reason

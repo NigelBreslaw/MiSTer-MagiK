@@ -2336,6 +2336,12 @@ fn parse_crt_trial_status(output: &str) -> Result<&str> {
             "alternation_misses=",
             "cadence_misses=",
             "max_interval_us=",
+            "max_settle_us=",
+            "max_render_us=",
+            "max_copy_us=",
+            "max_status_us=",
+            "post_status_retry_frames=",
+            "max_post_status_reads=",
             "last_buffer=",
             "last_sequence=",
         ] {
@@ -8051,7 +8057,7 @@ video_mode=14
     fn crt_trial_status_requires_successful_shared_latch_publication() {
         let valid = "crt_trial_status_v2 schema=2 ok=1 mode=crt-288p50 duration_ms=30001 frames=1500 flips=1500 reason=none\n";
         assert_eq!(parse_crt_trial_status(valid).unwrap(), valid.trim());
-        let diagnostic = "crt_trial_status_v3 schema=3 ok=1 mode=crt-576p50 duration_ms=30001 frames=1513 flips=1513 posts=1513 drops=0 final_pending=0 final_active_matches=1 unsafe_active_writes=0 pending_writes=0 alternation_misses=0 cadence_misses=0 max_interval_us=20500 last_buffer=1 last_sequence=1513 reason=none\n";
+        let diagnostic = "crt_trial_status_v3 schema=3 ok=1 mode=crt-576p50 duration_ms=30001 frames=1513 flips=1513 posts=1513 drops=0 final_pending=0 final_active_matches=1 unsafe_active_writes=0 pending_writes=0 alternation_misses=0 cadence_misses=0 max_interval_us=20500 max_settle_us=18000 max_render_us=1000 max_copy_us=500 max_status_us=200 post_status_retry_frames=1 max_post_status_reads=2 last_buffer=1 last_sequence=1513 reason=none\n";
         assert_eq!(
             parse_crt_trial_status(diagnostic).unwrap(),
             diagnostic.trim()

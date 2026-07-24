@@ -236,6 +236,8 @@ pub(in crate::ui_runner) struct FpgaVblankLatchHiddenPresentStats {
     pub(in crate::ui_runner) set_supported: bool,
     pub(in crate::ui_runner) status_supported: bool,
     pub(in crate::ui_runner) posted_sequence: u16,
+    /// Includes the initial observation; values above one recovered a transient gap.
+    pub(in crate::ui_runner) post_status_reads: u8,
     pub(in crate::ui_runner) flip_count: u16,
     pub(in crate::ui_runner) drop_count: u16,
 }
@@ -478,17 +480,18 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         let set_supported = ack.0 == crate::fpga::MAGIK_FBUF_LATCH_MAGIC
             || ack.1 == crate::fpga::MAGIK_FBUF_LATCH_MAGIC;
 
-        let (after_status, post_status_us) = match read_post_status(hardware, sequence) {
-            Ok(result) => result,
-            Err(e) => {
-                self.latch_state.mark_attempt_failed(buffer_index);
-                return Err(LatchFailure::runtime(
-                    LatchFailureStage::FpgaStatus,
-                    LatchFailureReason::FpgaTransportFailed,
-                    e.to_string(),
-                ));
-            }
-        };
+        let (after_status, post_status_us, post_status_reads) =
+            match read_post_status(hardware, sequence) {
+                Ok(result) => result,
+                Err(e) => {
+                    self.latch_state.mark_attempt_failed(buffer_index);
+                    return Err(LatchFailure::runtime(
+                        LatchFailureStage::FpgaStatus,
+                        LatchFailureReason::FpgaTransportFailed,
+                        e.to_string(),
+                    ));
+                }
+            };
         status_us = status_us.saturating_add(post_status_us);
         let status_supported = after_status.supported();
         let flip_count = after_status.flip_count;
@@ -545,6 +548,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             set_supported,
             status_supported,
             posted_sequence: sequence,
+            post_status_reads,
             flip_count,
             drop_count,
         })
@@ -675,8 +679,9 @@ enum LatchStatusSyncError {
 fn read_post_status(
     hardware: &mut impl LatchHardware,
     sequence: u16,
-) -> io::Result<(crate::fpga::LatchedFbufStatus, u64)> {
+) -> io::Result<(crate::fpga::LatchedFbufStatus, u64, u8)> {
     let started = Instant::now();
+    let mut reads = 1u8;
     let mut status = hardware.read_latched_status()?;
     for _ in 1..POST_OBSERVATION_MAX_READS {
         if !status.supported() || posted_sequence_observed(status, sequence) {
@@ -684,10 +689,12 @@ fn read_post_status(
         }
         std::thread::yield_now();
         status = hardware.read_latched_status()?;
+        reads += 1;
     }
     Ok((
         status,
         started.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
+        reads,
     ))
 }
 
