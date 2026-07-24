@@ -867,8 +867,6 @@ fn blit_scaled_subpixel_x(
 ) {
     let x = x_fp.div_euclid(PARADE_SUBPIXEL_ONE) as isize;
     let fraction = x_fp.rem_euclid(PARADE_SUBPIXEL_ONE) as u8;
-    let shadow_x = if fraction < 128 { x } else { x + 1 };
-    blit_rounded_shadow(dst, screen_w, screen_h, image, corner_insets, shadow_x, y);
     if fraction == 0 {
         blit_rounded_card(dst, screen_w, screen_h, image, corner_insets, x, y);
         return;
@@ -951,15 +949,6 @@ fn blit_scaled_crt_sixteenth_x(
 ) {
     let quantized = quantize_crt_phase(x_fp);
     if quantized.phase == 0 {
-        blit_rounded_shadow(
-            dst,
-            screen_w,
-            screen_h,
-            image,
-            corner_insets,
-            quantized.x,
-            y,
-        );
         blit_rounded_card(
             dst,
             screen_w,
@@ -987,16 +976,6 @@ fn blit_scaled_crt_sixteenth_x(
         return;
     };
     let phase_alpha = (quantized.phase * CRT_PHASE_STEP) as u8;
-    blit_rounded_shadow_fractional(
-        dst,
-        screen_w,
-        screen_h,
-        image,
-        corner_insets,
-        quantized.x,
-        y,
-        phase_alpha,
-    );
     blit_rounded_card_fractional(
         dst,
         screen_w,
@@ -1008,91 +987,6 @@ fn blit_scaled_crt_sixteenth_x(
         y,
         phase_alpha,
     );
-}
-
-fn blit_rounded_shadow_fractional(
-    dst: &mut [Rgb565Pixel],
-    screen_w: usize,
-    screen_h: usize,
-    image: &SaverImage,
-    corner_insets: &[u8],
-    x: isize,
-    y: isize,
-    phase_alpha: u8,
-) {
-    const OFFSET: isize = 2;
-    let shadow = color565(0, 0, 4);
-    for shadow_y in 0..image.h {
-        let dst_y = y + shadow_y as isize + OFFSET;
-        if dst_y < 0 || dst_y >= screen_h as isize {
-            continue;
-        }
-        let shadow_inset = corner_insets.get(shadow_y).copied().unwrap_or(0) as isize;
-        let shadow_x0 = x + OFFSET + shadow_inset;
-        let shadow_x1 = x + OFFSET + image.w as isize - shadow_inset;
-        let card_y = shadow_y as isize + OFFSET;
-        if card_y >= image.h as isize {
-            blend_fractional_span(
-                dst,
-                screen_w,
-                dst_y,
-                shadow_x0,
-                shadow_x1,
-                shadow,
-                112,
-                phase_alpha,
-            );
-            continue;
-        }
-        let card_inset = corner_insets.get(card_y as usize).copied().unwrap_or(0) as isize;
-        let card_x0 = x + card_inset;
-        let card_x1 = x + image.w as isize - card_inset;
-        blend_fractional_span(
-            dst,
-            screen_w,
-            dst_y,
-            shadow_x0,
-            shadow_x1.min(card_x0),
-            shadow,
-            112,
-            phase_alpha,
-        );
-        blend_fractional_span(
-            dst,
-            screen_w,
-            dst_y,
-            shadow_x0.max(card_x1),
-            shadow_x1,
-            shadow,
-            112,
-            phase_alpha,
-        );
-    }
-}
-
-fn blend_fractional_span(
-    dst: &mut [Rgb565Pixel],
-    screen_w: usize,
-    y: isize,
-    x0: isize,
-    x1: isize,
-    color: Rgb565Pixel,
-    alpha: u8,
-    phase_alpha: u8,
-) {
-    if x1 <= x0 {
-        return;
-    }
-    let row = y as usize * screen_w;
-    if x0 >= 0 && x0 < screen_w as isize {
-        let edge_alpha = (u16::from(alpha) * u16::from(255 - phase_alpha) / 255) as u8;
-        dst[row + x0 as usize] = blend_565(dst[row + x0 as usize], color, edge_alpha);
-    }
-    blend_shadow_span(dst, screen_w, y, x0 + 1, x1, color, alpha);
-    if x1 >= 0 && x1 < screen_w as isize {
-        let edge_alpha = (u16::from(alpha) * u16::from(phase_alpha) / 255) as u8;
-        dst[row + x1 as usize] = blend_565(dst[row + x1 as usize], color, edge_alpha);
-    }
 }
 
 fn blit_rounded_card_fractional(
@@ -1144,74 +1038,6 @@ fn blit_rounded_card_fractional(
                 phase_alpha,
             );
         }
-    }
-}
-
-fn blit_rounded_shadow(
-    dst: &mut [Rgb565Pixel],
-    screen_w: usize,
-    screen_h: usize,
-    image: &SaverImage,
-    corner_insets: &[u8],
-    x: isize,
-    y: isize,
-) {
-    const OFFSET: isize = 2;
-    let shadow = color565(0, 0, 4);
-    for shadow_y in 0..image.h {
-        let dst_y = y + shadow_y as isize + OFFSET;
-        if dst_y < 0 || dst_y >= screen_h as isize {
-            continue;
-        }
-        let shadow_inset = corner_insets.get(shadow_y).copied().unwrap_or(0) as isize;
-        let shadow_x0 = x + OFFSET + shadow_inset;
-        let shadow_x1 = x + OFFSET + image.w as isize - shadow_inset;
-        let card_y = shadow_y as isize + OFFSET;
-        if card_y >= image.h as isize {
-            blend_shadow_span(dst, screen_w, dst_y, shadow_x0, shadow_x1, shadow, 112);
-            continue;
-        }
-        let card_inset = corner_insets.get(card_y as usize).copied().unwrap_or(0) as isize;
-        let card_x0 = x + card_inset;
-        let card_x1 = x + image.w as isize - card_inset;
-        blend_shadow_span(
-            dst,
-            screen_w,
-            dst_y,
-            shadow_x0,
-            shadow_x1.min(card_x0),
-            shadow,
-            112,
-        );
-        blend_shadow_span(
-            dst,
-            screen_w,
-            dst_y,
-            shadow_x0.max(card_x1),
-            shadow_x1,
-            shadow,
-            112,
-        );
-    }
-}
-
-fn blend_shadow_span(
-    dst: &mut [Rgb565Pixel],
-    screen_w: usize,
-    y: isize,
-    x0: isize,
-    x1: isize,
-    color: Rgb565Pixel,
-    alpha: u8,
-) {
-    let x0 = x0.clamp(0, screen_w as isize) as usize;
-    let x1 = x1.clamp(0, screen_w as isize) as usize;
-    if x1 <= x0 {
-        return;
-    }
-    let row = y as usize * screen_w;
-    for pixel in &mut dst[row + x0..row + x1] {
-        *pixel = blend_565(*pixel, color, alpha);
     }
 }
 
@@ -4083,7 +3909,7 @@ mod tests {
     }
 
     #[test]
-    fn crt_fractional_renderer_respects_corner_insets_and_phases_the_shadow() {
+    fn crt_fractional_renderer_respects_corner_insets_without_painting_outside_the_card() {
         let white = color565(255, 255, 255);
         let background = color565(180, 180, 180);
         let scaled = SaverImage {
@@ -4122,24 +3948,55 @@ mod tests {
         assert_ne!(fractional[2], white);
         assert_ne!(fractional[2 * 10 + 3], integer[2 * 10 + 3]);
         assert_ne!(fractional[2 * 10 + 7], integer[2 * 10 + 7]);
+        assert!(
+            fractional[3 * 10..]
+                .iter()
+                .all(|pixel| *pixel == background)
+        );
     }
 
     #[test]
-    fn crt_fractional_shadow_skips_pixels_fully_occluded_by_the_card() {
+    fn hdmi_fractional_renderer_does_not_paint_an_offset_shadow() {
         let background = color565(180, 180, 180);
         let image = SaverImage {
-            pixels: vec![color565(255, 255, 255); 8 * 6],
+            pixels: vec![color565(255, 255, 255); 4 * 3],
+            w: 4,
+            h: 3,
+            stride: 4,
+        };
+        let half_shifted = prepare_half_shifted(&image);
+        let mut dst = vec![background; 10 * 7];
+
+        blit_scaled_subpixel_x(
+            &mut dst,
+            10,
+            7,
+            &image,
+            &half_shifted,
+            &[0; 3],
+            PARADE_SUBPIXEL_ONE + PARADE_SUBPIXEL_ONE / 2,
+            1,
+        );
+
+        assert!(dst[..10].iter().all(|pixel| *pixel == background));
+        assert!(dst[4 * 10..].iter().all(|pixel| *pixel == background));
+    }
+
+    #[test]
+    fn parade_card_rim_keeps_the_baked_bevel() {
+        let base = color565(120, 120, 120);
+        let mut image = SaverImage {
+            pixels: vec![base; 8 * 6],
             w: 8,
             h: 6,
             stride: 8,
         };
-        let mut dst = vec![background; 14 * 10];
 
-        blit_rounded_shadow_fractional(&mut dst, 14, 10, &image, &[0; 6], 1, 0, 128);
+        rim_parade_card(&mut image, &[0; 6]);
 
-        assert_eq!(dst[2 * 14 + 4], background);
-        assert_ne!(dst[2 * 14 + 10], background);
-        assert_ne!(dst[7 * 14 + 4], background);
+        assert_ne!(image.pixels[0], base);
+        assert_ne!(image.pixels[7], base);
+        assert_ne!(image.pixels[5 * 8 + 3], base);
     }
 
     #[test]
