@@ -24,9 +24,10 @@ index. Workflow evidence analysis uses the hidden typed
 `scripts/agent release qualify` is an attended operator command. Hidden typed
 build intents exist for CI compatibility, not as a public flag matrix. Commit
 creation belongs to Git; `agent-cli` never stages, commits, or pushes.
-`deliver` uses the exact clean local app commit and clean local `Main_MiSTer`
-`mister-magik` commit as its source authority, whether or not either commit is
-published.
+`deliver` uses the exact clean local app commit for the app and manager. Main,
+the scanout kernel plugin, and the latch RBF come only from the latest
+published GitHub platform release. The tag-addressed cache is reused when it
+still verifies against the latest release.
 
 The launcher builds and runs `agent-cli` with Cargo's release profile. Explicit
 manifest, target-directory, and binary overrides remain available for tests and

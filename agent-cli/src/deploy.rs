@@ -106,6 +106,7 @@ impl DeploymentPlan {
                 format!("ci_run_id={}", candidate.run_id),
                 format!("ci_head_sha={}", candidate.head_sha),
                 format!("ci_head_branch={}", candidate.head_branch),
+                format!("platform_cache_reused={}", candidate.reused),
                 format!("bundle_id={}", candidate.bundle_id),
                 format!("main_identity={}", candidate.main_identity),
                 format!("fpga_identity={}", candidate.fpga_identity),
@@ -113,6 +114,9 @@ impl DeploymentPlan {
                 format!("ci_archive={}", candidate.archive.display()),
                 format!("ci_manifest={}", candidate.manifest.display()),
             ]);
+            if let Some(tag) = &candidate.release_tag {
+                inputs.push(format!("platform_release_tag={tag}"));
+            }
         }
         Plan {
             intent,

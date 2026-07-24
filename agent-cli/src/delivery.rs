@@ -8,14 +8,11 @@ use crate::model::Outcome;
 use crate::progress::{EventKind, Reporter};
 use mister_tool::transport::{DeviceOperations, DeviceRequest};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-const REMOTE_RUNTIME: &str = "/media/fat/mister-magik-dev/mister-magik-fb";
-const REMOTE_MANIFEST: &str = "/media/fat/mister-magik-dev/platform-v2.manifest";
 const PREPARE_DEADLINE: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -196,10 +193,7 @@ fn execute_with_device<D: DeviceOperations>(
         deployment,
         expected_commit,
         artifact_sha256: None,
-        no_op: false,
         decision: DeliveryDecision::Platform,
-        installed_manifest: String::new(),
-        installed_manager_sha256: None,
         manager_artifact: None,
         main_revision: None,
         stage: repository
@@ -221,12 +215,22 @@ fn execute_with_device<D: DeviceOperations>(
             Some(percent),
         )?),
     })?;
-    Ok(DeliveryExecution {
-        outcome: if actions.no_op {
-            Outcome::NoOp
+    if let Some(candidate) = actions.deployment.platform_candidate.as_ref() {
+        let release = candidate.release_tag.as_deref().unwrap_or("candidate");
+        let cache = if candidate.reused {
+            "reused-cache"
         } else {
-            Outcome::Passed
-        },
+            "downloaded"
+        };
+        reporter.emit(
+            EventKind::Progress,
+            "platform-release",
+            &format!("platform {release} {cache} bundle={}", candidate.bundle_id),
+            Some(100),
+        )?;
+    }
+    Ok(DeliveryExecution {
+        outcome: Outcome::Passed,
         decision: actions.decision,
     })
 }
@@ -253,10 +257,7 @@ struct ProcessActions<'a, D = mister_tool::NativeDevice> {
     deployment: DeploymentPlan,
     expected_commit: &'a str,
     artifact_sha256: Option<String>,
-    no_op: bool,
     decision: DeliveryDecision,
-    installed_manifest: String,
-    installed_manager_sha256: Option<String>,
     manager_artifact: Option<PathBuf>,
     main_revision: Option<String>,
     stage: PathBuf,
@@ -281,24 +282,12 @@ impl<D: DeviceOperations> ProcessActions<'_, D> {
     }
 
     fn build_runtime(&mut self) -> AgentResult<()> {
-        if self.deployment.kind == DeploymentKind::Runtime {
-            self.device
-                .execute(DeviceRequest::VerifyDevelopmentPlatform)?;
-        }
         crate::build::execute_quiet(self.repository, &self.deployment.build)?;
         let receipt = self.deployment.build.verify(self.repository)?;
         if receipt.source_commit != self.expected_commit || receipt.source_dirty {
             return Err("runtime artifact was not built from the exact clean commit".into());
         }
         self.artifact_sha256 = Some(receipt.binary_sha256);
-        if self.deployment.kind == DeploymentKind::Runtime {
-            crate::platform_manifest::update_runtime(
-                &self.stage.join("platform-v2.manifest"),
-                &self.installed_manifest,
-                &self.repository.join(self.deployment.build.artifact()),
-                self.expected_commit,
-            )?;
-        }
         Ok(())
     }
 
@@ -332,35 +321,6 @@ impl<D: DeviceOperations> ProcessActions<'_, D> {
     }
 
     fn prepare_manager(&mut self) -> AgentResult<PathBuf> {
-        let changed = manager_inputs_changed(&self.deployment.changed_paths);
-        if !changed && let Some(expected) = self.installed_manager_sha256.clone() {
-            let cache = self
-                .repository
-                .join("build/agent-cache/manager")
-                .join(&expected)
-                .join("mister-magik-manager");
-            if cache.is_file() && file_sha256(&cache)? == expected {
-                return Ok(cache);
-            }
-            let temporary = cache.with_extension("download");
-            if self
-                .device
-                .execute(DeviceRequest::FetchVerifiedDevelopmentManager {
-                    local: temporary.clone(),
-                    expected_sha256: expected.clone(),
-                })
-                .is_ok()
-                && temporary.is_file()
-                && file_sha256(&temporary)? == expected
-            {
-                if let Some(parent) = cache.parent() {
-                    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-                }
-                fs::rename(&temporary, &cache).map_err(|error| error.to_string())?;
-                return Ok(cache);
-            }
-            let _ = fs::remove_file(temporary);
-        }
         let spec = crate::build::BuildSpec::for_recipe(crate::build::BuildRecipe::ManagerDevice);
         crate::build::execute_quiet(self.repository, &spec)?;
         let receipt = spec.verify(self.repository)?;
@@ -391,22 +351,6 @@ impl<D: DeviceOperations> ProcessActions<'_, D> {
     }
 }
 
-fn manager_inputs_changed(paths: &[PathBuf]) -> bool {
-    paths.iter().any(|path| {
-        path.starts_with("mister/tools/manager")
-            || path.starts_with("crates/mister-ini")
-            || matches!(path.to_str(), Some("Cargo.toml" | "Cargo.lock"))
-            || matches!(
-                path.to_str(),
-                Some(
-                    "apps/mister/Dockerfile.cross-armv7"
-                        | "apps/mister/rust-toolchain.toml"
-                        | "apps/mister/Cross.toml"
-                )
-            )
-    })
-}
-
 fn validate_commit_identity(
     head: &str,
     expected: &str,
@@ -425,60 +369,6 @@ fn validate_commit_identity(
     Ok(())
 }
 
-fn reconciled_delivery_decision(
-    decision: DeliveryDecision,
-    installed_platform_verified: bool,
-) -> DeliveryDecision {
-    if installed_platform_verified {
-        decision
-    } else {
-        DeliveryDecision::Platform
-    }
-}
-
-fn published_platform_matches_installed(
-    installed: &crate::platform_manifest::InstalledManifest,
-    candidate_manifest: &Path,
-) -> AgentResult<bool> {
-    let published: Value =
-        serde_json::from_slice(&fs::read(candidate_manifest).map_err(|error| error.to_string())?)
-            .map_err(|error| format!("invalid platform candidate manifest: {error}"))?;
-    let published_main_revision = published
-        .pointer("/components/main/head_sha")
-        .and_then(Value::as_str)
-        .ok_or("platform candidate is missing Main revision")?;
-    let expected = [
-        ("main/MiSTer_MagiK", installed.main_sha256()),
-        (
-            "scanout/mister_magik_scanout_slots.ko",
-            installed.scanout_module_sha256(),
-        ),
-        (
-            "scanout/provenance.txt",
-            installed.scanout_metadata_sha256(),
-        ),
-        (
-            "fpga/patched/menu-magik-vblank-latch.rbf",
-            installed.latch_rbf_sha256(),
-        ),
-        (
-            "fpga/patched/menu-magik-vblank-latch.metadata.txt",
-            installed.latch_metadata_sha256(),
-        ),
-    ];
-    let files = published
-        .get("files")
-        .and_then(Value::as_array)
-        .ok_or("platform candidate is missing its file inventory")?;
-    let hashes_match = expected.iter().all(|(path, installed_sha256)| {
-        files.iter().any(|file| {
-            file.get("path").and_then(Value::as_str) == Some(path)
-                && file.get("sha256").and_then(Value::as_str) == Some(*installed_sha256)
-        })
-    });
-    Ok(hashes_match && published_main_revision == installed.main_revision())
-}
-
 impl<D: DeviceOperations> DeliveryActions for ProcessActions<'_, D> {
     fn run(&mut self, phase: Phase) -> AgentResult<()> {
         match phase {
@@ -487,55 +377,11 @@ impl<D: DeviceOperations> DeliveryActions for ProcessActions<'_, D> {
             Phase::Connect => self.device.execute(DeviceRequest::Discover).map(|_| ()),
             Phase::GithubResolution => self.resolve_github(),
             Phase::Reconcile => {
-                let installed = self
-                    .device
-                    .execute(DeviceRequest::ReadDevelopmentManifest)?;
-                let installed_platform_verified = match self
-                    .device
-                    .execute_typed(DeviceRequest::VerifyDevelopmentPlatform)
-                {
-                    Ok(_) => true,
-                    Err(mister_tool::transport::DeviceFailure::ArtifactMismatch(_)) => false,
-                    Err(error) => return Err(error.into()),
-                };
-                let parsed_installed = crate::platform_manifest::parse_installed(
-                    &installed,
-                    crate::platform_manifest::Layout::Development,
-                );
-                self.installed_manager_sha256 = parsed_installed
-                    .as_ref()
-                    .ok()
-                    .map(|manifest| manifest.manager_sha256().to_owned());
-                let installed_matches_published = match parsed_installed {
-                    Ok(manifest) => published_platform_matches_installed(
-                        &manifest,
-                        &self
-                            .deployment
-                            .platform_candidate
-                            .as_ref()
-                            .ok_or("GitHub resolution did not produce a platform candidate")?
-                            .manifest,
-                    )?,
-                    Err(_) => false,
-                };
-                let reconciliation =
-                    crate::deploy::reconcile(self.repository, &installed, self.expected_commit);
-                self.decision = reconciled_delivery_decision(
-                    reconciliation.decision,
-                    installed_platform_verified && installed_matches_published,
-                );
-                self.no_op = self.decision == DeliveryDecision::NoOp;
-                self.installed_manifest = installed;
-                if self.no_op {
-                    return Ok(());
-                }
                 let platform_candidate = self.deployment.platform_candidate.take();
-                self.deployment =
-                    crate::deploy::plan(self.repository, reconciliation.changed_paths)?;
+                self.deployment = crate::deploy::plan(self.repository, Vec::new())?;
                 self.deployment.platform_candidate = platform_candidate;
-                if self.decision == DeliveryDecision::Platform {
-                    self.deployment.kind = DeploymentKind::Platform;
-                }
+                self.deployment.kind = DeploymentKind::Platform;
+                self.decision = DeliveryDecision::Platform;
                 Ok(())
             }
             Phase::RuntimeBuild => self.build_runtime(),
@@ -543,32 +389,16 @@ impl<D: DeviceOperations> DeliveryActions for ProcessActions<'_, D> {
             Phase::LocalStaging => self.prepare_local_stage(),
             Phase::DatabasePreparation => self.prepare_databases(),
             Phase::Snapshot => Ok(()),
-            Phase::RemoteInventoryUpload => match self.deployment.kind {
-                _ if self.no_op => Ok(()),
-                DeploymentKind::Runtime => self
-                    .device
-                    .execute(DeviceRequest::DeliverRuntimeTransaction {
-                        local: self.deployment.build.artifact().to_path_buf(),
-                        remote: REMOTE_RUNTIME.into(),
-                        manifest_local: self.stage.join("platform-v2.manifest"),
-                        manifest_remote: REMOTE_MANIFEST.into(),
-                        expected_sha256: self
-                            .artifact_sha256
-                            .clone()
-                            .ok_or("qualified runtime identity is missing")?,
-                    })
-                    .map(|_| ()),
-                DeploymentKind::Platform => self
-                    .device
-                    .execute(DeviceRequest::DeliverPlatformTransaction {
-                        stage: self.stage.clone(),
-                        expected_sha256: self
-                            .artifact_sha256
-                            .clone()
-                            .ok_or("qualified runtime identity is missing")?,
-                    })
-                    .map(|_| ()),
-            },
+            Phase::RemoteInventoryUpload => self
+                .device
+                .execute(DeviceRequest::DeliverPlatformTransaction {
+                    stage: self.stage.clone(),
+                    expected_sha256: self
+                        .artifact_sha256
+                        .clone()
+                        .ok_or("qualified runtime identity is missing")?,
+                })
+                .map(|_| ()),
             Phase::Activate | Phase::RebootIfNeeded | Phase::Smoke | Phase::Complete => Ok(()),
         }
     }
@@ -579,13 +409,13 @@ impl<D: DeviceOperations> DeliveryActions for ProcessActions<'_, D> {
             | Phase::LocalStaging
             | Phase::DatabasePreparation
             | Phase::Activate
-            | Phase::RebootIfNeeded => self.deployment.kind == DeploymentKind::Platform,
+            | Phase::RebootIfNeeded => true,
             _ => true,
         }
     }
 
     fn is_complete(&self) -> bool {
-        self.no_op
+        false
     }
 
     fn compensate(&mut self) -> AgentResult<()> {
@@ -601,8 +431,7 @@ fn prepare_stage_files(
     manager: &Path,
 ) -> AgentResult<String> {
     let manifest: Value =
-        serde_json::from_slice(&fs::read(&candidate.manifest).map_err(|error| error.to_string())?)
-            .map_err(|error| format!("invalid platform candidate manifest: {error}"))?;
+        crate::platform_bundle::verify(&candidate.archive, Some(&candidate.manifest), None)?;
     let candidate_main_revision = manifest
         .pointer("/components/main/head_sha")
         .and_then(Value::as_str)
@@ -682,14 +511,6 @@ fn prepare_stage_databases(
         &crate::git::value(repository, &["rev-parse", "HEAD"])?,
         crate::platform_manifest::Layout::Development,
     )
-}
-
-fn file_sha256(path: &Path) -> AgentResult<String> {
-    let bytes = fs::read(path).map_err(|error| error.to_string())?;
-    Ok(Sha256::digest(bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect())
 }
 
 fn copy(from: PathBuf, to: PathBuf) -> AgentResult<()> {
@@ -926,23 +747,6 @@ mod tests {
     }
 
     #[test]
-    fn manager_rebuilds_for_its_shared_toolchain_inputs() {
-        for path in [
-            "mister/tools/manager/src/main.rs",
-            "crates/mister-ini/src/lib.rs",
-            "apps/mister/Dockerfile.cross-armv7",
-            "apps/mister/rust-toolchain.toml",
-            "apps/mister/Cross.toml",
-            "Cargo.lock",
-        ] {
-            assert!(manager_inputs_changed(&[PathBuf::from(path)]));
-        }
-        assert!(!manager_inputs_changed(&[PathBuf::from(
-            "docs/main-mister-fork.md"
-        )]));
-    }
-
-    #[test]
     fn published_platform_components_are_staged_as_one_bundle() {
         let root = std::env::temp_dir().join(format!(
             "mister-magik-published-platform-stage-{}",
@@ -1051,7 +855,7 @@ mod tests {
     }
 
     #[test]
-    fn deterministic_runtime_uses_one_transaction_without_reboot() {
+    fn deliver_never_uses_runtime_transaction() {
         let requests = Rc::new(RefCell::new(Vec::new()));
         let mut actions = scenario_actions(
             DeploymentKind::Runtime,
@@ -1060,24 +864,8 @@ mod tests {
         actions.run(Phase::RemoteInventoryUpload).unwrap();
         assert!(matches!(
             requests.borrow().as_slice(),
-            [DeviceRequest::DeliverRuntimeTransaction { .. }]
+            [DeviceRequest::DeliverPlatformTransaction { .. }]
         ));
-    }
-
-    #[test]
-    fn failed_installed_platform_verification_forces_platform_delivery() {
-        assert_eq!(
-            reconciled_delivery_decision(DeliveryDecision::NoOp, false),
-            DeliveryDecision::Platform
-        );
-        assert_eq!(
-            reconciled_delivery_decision(DeliveryDecision::Runtime, false),
-            DeliveryDecision::Platform
-        );
-        assert_eq!(
-            reconciled_delivery_decision(DeliveryDecision::NoOp, true),
-            DeliveryDecision::NoOp
-        );
     }
 
     #[test]
@@ -1105,210 +893,11 @@ mod tests {
             deployment,
             expected_commit: "revision",
             artifact_sha256: Some("a".repeat(64)),
-            no_op: false,
-            decision: if kind == DeploymentKind::Runtime {
-                DeliveryDecision::Runtime
-            } else {
-                DeliveryDecision::Platform
-            },
-            installed_manifest: String::new(),
-            installed_manager_sha256: None,
+            decision: DeliveryDecision::Platform,
             manager_artifact: None,
             main_revision: None,
             stage: PathBuf::from("stage"),
             device,
         }
-    }
-
-    #[test]
-    fn exact_manifest_fake_device_stops_after_reconciliation() {
-        use crate::cli::OutputFormat;
-        use crate::evidence::Evidence;
-        use crate::request::RawRequest;
-
-        struct RecordingDevice {
-            requests: Rc<RefCell<Vec<DeviceRequest>>>,
-            manifest: String,
-        }
-
-        impl DeviceOperations for RecordingDevice {
-            fn execute(
-                &mut self,
-                request: &DeviceRequest,
-            ) -> Result<DeviceResponse, DeviceFailure> {
-                self.requests.borrow_mut().push(request.clone());
-                Ok(DeviceResponse {
-                    operation: request.label(),
-                    detail: if *request == DeviceRequest::ReadDevelopmentManifest {
-                        self.manifest.clone()
-                    } else {
-                        "connected".into()
-                    },
-                })
-            }
-        }
-
-        let root = std::env::temp_dir().join(format!(
-            "mister-magik-delivery-no-op-test-{}",
-            std::process::id()
-        ));
-        let repository = root.join("app");
-        fs::create_dir_all(&repository).unwrap();
-        initialize_git_repository(&repository, "main", "README.md");
-        let app_revision = crate::git::value(&repository, &["rev-parse", "HEAD"]).unwrap();
-        let main_revision = "b".repeat(40);
-        let manifest = canonical_test_manifest(&app_revision, &main_revision);
-        let candidate_manifest = root.join("platform-bundle-v0.2.json");
-        fs::write(
-            &candidate_manifest,
-            canonical_candidate_manifest(&main_revision),
-        )
-        .unwrap();
-        let candidate = crate::platform_ci::Candidate {
-            run_id: 1,
-            head_sha: app_revision.clone(),
-            archive: root.join("platform.zip"),
-            manifest: candidate_manifest,
-            reused: true,
-            head_branch: "main".into(),
-            bundle_id: "c".repeat(64),
-            main_identity: "d".repeat(64),
-            fpga_identity: "e".repeat(64),
-            kernel_identity: "f".repeat(64),
-        };
-        let requests = Rc::new(RefCell::new(Vec::new()));
-        let evidence = Evidence::open_at(&root.join("evidence")).unwrap();
-        let request = RawRequest::capture(["agent-cli", "deliver"].map(std::ffi::OsString::from));
-        evidence.begin_request(&request).unwrap();
-        let mut reporter = Reporter::new(&evidence, OutputFormat::Human, request.id.as_str());
-
-        let execution = execute_with_device(
-            &repository,
-            &app_revision,
-            Some(candidate),
-            &mut reporter,
-            DeviceClient::new(RecordingDevice {
-                requests: Rc::clone(&requests),
-                manifest,
-            }),
-        )
-        .unwrap();
-
-        assert_eq!(execution.outcome, Outcome::NoOp);
-        assert_eq!(execution.decision, DeliveryDecision::NoOp);
-        assert_eq!(
-            requests.borrow().as_slice(),
-            &[
-                DeviceRequest::Discover,
-                DeviceRequest::ReadDevelopmentManifest,
-                DeviceRequest::VerifyDevelopmentPlatform
-            ]
-        );
-        assert!(!repository.join("build").exists());
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn installed_platform_must_match_every_published_platform_artifact() {
-        let main_revision = "b".repeat(40);
-        let installed = crate::platform_manifest::parse_installed(
-            &canonical_test_manifest(&"a".repeat(40), &main_revision),
-            crate::platform_manifest::Layout::Development,
-        )
-        .unwrap();
-        let root = std::env::temp_dir().join(format!(
-            "mister-magik-published-platform-match-{}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&root).unwrap();
-        let candidate = root.join("platform-bundle-v0.2.json");
-        fs::write(&candidate, canonical_candidate_manifest(&main_revision)).unwrap();
-        assert!(published_platform_matches_installed(&installed, &candidate).unwrap());
-
-        fs::write(&candidate, canonical_candidate_manifest(&"c".repeat(40))).unwrap();
-        assert!(!published_platform_matches_installed(&installed, &candidate).unwrap());
-        let _ = fs::remove_dir_all(root);
-    }
-
-    fn initialize_git_repository(repository: &Path, branch: &str, tracked_file: &str) {
-        let status = Command::new("git")
-            .args(["init", "-q", "-b", branch])
-            .current_dir(repository)
-            .status()
-            .unwrap();
-        assert!(status.success());
-        if !repository.join(tracked_file).exists() {
-            fs::write(repository.join(tracked_file), "fixture\n").unwrap();
-        }
-        let stage = format!("a{}", "dd");
-        assert!(
-            Command::new("git")
-                .args([stage.as_str(), tracked_file])
-                .current_dir(repository)
-                .status()
-                .unwrap()
-                .success()
-        );
-        let save = format!("com{}", "mit");
-        assert!(
-            Command::new("git")
-                .args([
-                    "-c",
-                    "user.name=Agent CLI",
-                    "-c",
-                    "user.email=agent@example.invalid",
-                    save.as_str(),
-                    "-q",
-                    "-m",
-                    "fixture",
-                ])
-                .current_dir(repository)
-                .status()
-                .unwrap()
-                .success()
-        );
-    }
-
-    fn canonical_test_manifest(magik_revision: &str, main_revision: &str) -> String {
-        let mut fields = std::collections::BTreeMap::<String, String>::new();
-        fields.insert("format".into(), "mister-magik-platform-v2".into());
-        for (name, path) in crate::platform_manifest::Layout::Development.paths() {
-            fields.insert(format!("{name}_path"), path.into());
-        }
-        for name in [
-            "main_sha256",
-            "gui_sha256",
-            "manager_sha256",
-            "scanout_module_sha256",
-            "scanout_metadata_sha256",
-            "latch_rbf_sha256",
-            "latch_metadata_sha256",
-            "platform_contract_sha256",
-        ] {
-            fields.insert(name.into(), "a".repeat(64));
-        }
-        fields.insert("main_revision".into(), main_revision.into());
-        fields.insert("magik_revision".into(), magik_revision.into());
-        fields.insert("menu_revision".into(), "b".repeat(40));
-        crate::platform_manifest::FIELDS
-            .iter()
-            .map(|field| format!("{field}={}\n", fields[*field]))
-            .collect()
-    }
-
-    fn canonical_candidate_manifest(main_revision: &str) -> String {
-        let files = [
-            "main/MiSTer_MagiK",
-            "scanout/mister_magik_scanout_slots.ko",
-            "scanout/provenance.txt",
-            "fpga/patched/menu-magik-vblank-latch.rbf",
-            "fpga/patched/menu-magik-vblank-latch.metadata.txt",
-        ]
-        .map(|path| serde_json::json!({"path":path,"sha256":"a".repeat(64)}));
-        serde_json::to_string(&serde_json::json!({
-            "components":{"main":{"head_sha":main_revision}},
-            "files":files,
-        }))
-        .unwrap()
     }
 }

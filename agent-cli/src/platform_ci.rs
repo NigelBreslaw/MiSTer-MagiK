@@ -25,6 +25,7 @@ pub struct Candidate {
     pub archive: PathBuf,
     pub manifest: PathBuf,
     pub reused: bool,
+    pub release_tag: Option<String>,
     pub head_branch: String,
     pub bundle_id: String,
     pub main_identity: String,
@@ -252,6 +253,7 @@ fn download_and_verify(
         archive,
         manifest,
         reused,
+        release_tag: None,
         head_branch: head_branch.into(),
         bundle_id: required_manifest_value(payload.bundle_id, "bundle_id", "platform candidate")?,
         main_identity: required_manifest_value(
@@ -381,26 +383,19 @@ pub fn resolve_published_repository(
     repository: &Path,
     mut progress: impl FnMut(&str) -> Result<(), String>,
 ) -> Result<Candidate, String> {
-    let owner = command_text(
-        repository,
-        "gh",
-        &[
-            "repo",
-            "view",
-            "--json",
-            "nameWithOwner",
-            "--jq",
-            ".nameWithOwner",
-        ],
-    )?;
+    let owner = std::env::var("MISTER_MAGIK_GITHUB_REPOSITORY")
+        .unwrap_or_else(|_| "NigelBreslaw/MiSTer-MagiK".into());
     let branch = command_text(repository, "git", &["branch", "--show-current"])?;
     let head_sha = command_text(repository, "git", &["rev-parse", "HEAD"])?;
+    progress("checking latest qualified platform release")?;
     let rows = published_releases(repository, &owner)?;
     let tag = latest_platform_release(&rows)
         .ok_or("no published numbered platform release is available")?;
     let cache_root = repository.join("build/agent-cache/release-cache/platform");
     let destination = cache_root.join(&tag);
-    if let Ok(candidate) = published_candidate(repository, &destination, &branch, &head_sha, true) {
+    if let Ok(candidate) =
+        published_candidate(repository, &destination, &branch, &head_sha, &tag, true)
+    {
         progress("reusing cached qualified platform components")?;
         return Ok(candidate);
     }
@@ -440,14 +435,14 @@ pub fn resolve_published_repository(
         let _ = std::fs::remove_dir_all(&temporary);
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
     }
-    let mut candidate = match published_candidate(repository, &temporary, &branch, &head_sha, false)
-    {
-        Ok(candidate) => candidate,
-        Err(error) => {
-            let _ = std::fs::remove_dir_all(&temporary);
-            return Err(error);
-        }
-    };
+    let mut candidate =
+        match published_candidate(repository, &temporary, &branch, &head_sha, &tag, false) {
+            Ok(candidate) => candidate,
+            Err(error) => {
+                let _ = std::fs::remove_dir_all(&temporary);
+                return Err(error);
+            }
+        };
     if let Err(error) = std::fs::rename(&temporary, &destination) {
         let _ = std::fs::remove_dir_all(&temporary);
         return Err(format!("cannot publish platform cache: {error}"));
@@ -501,6 +496,7 @@ fn published_candidate(
     destination: &Path,
     branch: &str,
     head_sha: &str,
+    tag: &str,
     reused: bool,
 ) -> Result<Candidate, String> {
     let archive = find_named(destination, "mister-magik-platform-", ".zip")?;
@@ -515,6 +511,7 @@ fn published_candidate(
         archive,
         manifest,
         reused,
+        release_tag: Some(tag.into()),
         head_branch: branch.into(),
         bundle_id: required_manifest_value(payload.bundle_id, "bundle_id", "published platform")?,
         main_identity: required_manifest_value(
