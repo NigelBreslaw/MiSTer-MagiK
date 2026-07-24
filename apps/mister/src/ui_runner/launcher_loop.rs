@@ -2308,7 +2308,8 @@ pub(super) fn run_launcher_loop(
             nav.display_confirm_remaining = if loop_start >= deadline {
                 0
             } else {
-                ((deadline - loop_start).as_millis().div_ceil(1000) as u8).min(10)
+                ((deadline - loop_start).as_millis().div_ceil(1000) as u8)
+                    .min(launcher::DISPLAY_CONFIRM_SECONDS)
             };
         }
         while let Ok(result) = display_confirm_rx.try_recv() {
@@ -7772,7 +7773,7 @@ mod tests {
         let state = launcher::DisplayCommandState {
             active: "hdmi-1920x1080p60".to_string(),
             pending: Some("hdmi-1280x720p60".to_string()),
-            remaining: 10,
+            remaining: launcher::DISPLAY_CONFIRM_SECONDS,
             phase: launcher::DisplayTransactionPhase::Provisional,
             error: None,
             return_to_settings: false,
@@ -7785,8 +7786,14 @@ mod tests {
             ui_nav.confirm_action,
             Some(launcher::ConfirmAction::DisplayResolution)
         );
-        assert_eq!(ui_nav.display_confirm_remaining, 10);
-        assert_eq!(deadline, Some(now + Duration::from_secs(10)));
+        assert_eq!(
+            ui_nav.display_confirm_remaining,
+            launcher::DISPLAY_CONFIRM_SECONDS
+        );
+        assert_eq!(
+            deadline,
+            Some(now + Duration::from_secs(u64::from(launcher::DISPLAY_CONFIRM_SECONDS)))
+        );
 
         let mut headless_nav = LauncherNav::new();
         assert_eq!(

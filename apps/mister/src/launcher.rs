@@ -63,6 +63,7 @@ const ARCADE_TURBO_REPRESS_WINDOW: Duration = Duration::from_millis(350);
 const FIFO_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 const FIFO_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 const MISTER_START_TIMEOUT: Duration = Duration::from_secs(15);
+pub const DISPLAY_CONFIRM_SECONDS: u8 = 20;
 pub const LAUNCH_RETURN_STATE_PATH: &str = "/tmp/mister-magik/launcher-return-state.json";
 const LAUNCH_RETURN_STATE_SCHEMA: u32 = 3;
 const SETTINGS_MAX_SELECTED: usize = 4;
@@ -3759,7 +3760,10 @@ fn parse_display_state_response(response: &str) -> Result<DisplayCommandState, S
             pending = (value != "none").then(|| value.to_owned());
         }
         if let Some(value) = field.strip_prefix("remaining=") {
-            remaining = value.parse::<u8>().unwrap_or(0).min(10);
+            remaining = value
+                .parse::<u8>()
+                .unwrap_or(0)
+                .min(DISPLAY_CONFIRM_SECONDS);
         }
         if let Some(value) = field.strip_prefix("phase=") {
             phase = match value {
@@ -6943,12 +6947,12 @@ mod tests {
     #[test]
     fn display_state_reply_requires_schema_and_known_pending_mode() {
         let state = parse_display_state_response(
-            "ok DisplayV1 schema=1 active=custom pending=crt-240p60 remaining=12 phase=failed error=persist-failed return=settings",
+            "ok DisplayV1 schema=1 active=custom pending=crt-240p60 remaining=22 phase=failed error=persist-failed return=settings",
         )
         .unwrap();
         assert_eq!(state.active, "custom");
         assert_eq!(state.pending.as_deref(), Some("crt-240p60"));
-        assert_eq!(state.remaining, 10);
+        assert_eq!(state.remaining, DISPLAY_CONFIRM_SECONDS);
         assert_eq!(state.phase, DisplayTransactionPhase::Failed);
         assert_eq!(state.error.as_deref(), Some("persist-failed"));
         assert!(state.return_to_settings);
