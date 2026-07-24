@@ -2280,11 +2280,21 @@ pub(super) fn run_launcher_loop(
             start
         };
     launcher_bench_next_step = run_start;
-    let mut preview_scroll_exit_at = preview_scroll_exit_after_trace_deadline(run_start);
+    // Post-navigation benchmarks do not begin until their target UI state is
+    // active. A boot-time deadline would otherwise accept an inactive trace.
+    let mut preview_scroll_exit_at = if launcher_bench_after_input_script {
+        None
+    } else {
+        preview_scroll_exit_after_trace_deadline(run_start)
+    };
     let mut first_render_logged = false;
     let mut first_vsync_logged = false;
     let mut first_launcher_frame_logged = false;
     let mut frame_accounting = LauncherFrameAccounting::new(run_start, ui.output_route().label());
+    if launcher_bench_after_input_script {
+        // Activation below replaces accounting and opens the measured trace.
+        frame_accounting.close_preview_scroll_trace_for_restart();
+    }
     let mut arcade_entry_latency = ArcadeEntryLatencyTracker::from_env();
     let mut memory_guard = crate::memory_pressure::MemoryPressureGuard::from_env();
     let catalog_contention_quiet_previews = matches!(
