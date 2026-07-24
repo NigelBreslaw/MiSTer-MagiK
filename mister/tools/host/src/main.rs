@@ -2218,6 +2218,14 @@ fn run_crt_geometry_trial_with(
     let trial_result = trial.join().map_err(|_| "geometry trial worker panicked")?;
     trial_result.map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
     capture?;
+    let recovery_session = connect_with(connection, 10)?;
+    let ready = wait_launcher_ready(&recovery_session, Instant::now(), Duration::from_secs(15))?;
+    let trial_status = exec_checked_output(
+        &recovery_session,
+        "geometry trial status",
+        "sed -n '/^crt_trial_status_v2 /p' /tmp/mister-magik-crt_trial.log | tail -n 1",
+    )?;
+    let trial_status = parse_crt_trial_status(&trial_status.stdout)?;
     let content_bounds = runtime_settings
         .contains("output=crt-576p50")
         .then_some([rectangle[0], rectangle[1]]);
@@ -2231,6 +2239,8 @@ fn run_crt_geometry_trial_with(
         "destination_rectangle": destination_rectangle,
         "content_bounds": content_bounds,
         "usb_video": output,
+        "trial_status": trial_status,
+        "launcher_pid": ready.launcher_pid,
     })
     .to_string())
 }
