@@ -175,6 +175,65 @@ pub fn generate(
     verify(output, None, layout)
 }
 
+pub fn update_runtime(
+    output: &Path,
+    installed: &str,
+    gui: &Path,
+    magik_revision: &str,
+) -> AgentResult<()> {
+    require_hex("magik_revision", magik_revision, 40)?;
+    let mut values = BTreeMap::new();
+    for line in installed.lines() {
+        let (key, value) = line
+            .split_once('=')
+            .ok_or_else(|| format!("invalid platform manifest line: {line}"))?;
+        if values.insert(key.to_owned(), value.to_owned()).is_some() {
+            return classified("duplicate_platform_manifest_field", key);
+        }
+    }
+    if values.len() != FIELDS.len() || FIELDS.iter().any(|field| !values.contains_key(*field)) {
+        return classified(
+            "platform_manifest_fields",
+            "installed manifest shape is not canonical",
+        );
+    }
+    if values["format"] != FORMAT {
+        return classified("unsupported_platform_manifest", values["format"].clone());
+    }
+    for name in [
+        "main",
+        "gui",
+        "manager",
+        "scanout_module",
+        "scanout_metadata",
+        "latch_rbf",
+        "latch_metadata",
+        "platform_contract",
+    ] {
+        require_hex(
+            &format!("{name}_sha256"),
+            &values[&format!("{name}_sha256")],
+            64,
+        )?;
+    }
+    for name in ["main_revision", "magik_revision", "menu_revision"] {
+        require_hex(name, &values[name], 40)?;
+    }
+    values.insert("gui_sha256".into(), digest(gui)?);
+    values.insert("magik_revision".into(), magik_revision.into());
+    let text = FIELDS
+        .iter()
+        .map(|field| format!("{field}={}\n", values[*field]))
+        .collect::<String>();
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
+    }
+    fs::write(output, text)
+        .map_err(|error| format!("cannot write {}: {error}", output.display()))?;
+    verify(output, None, Layout::Development)
+}
+
 pub fn verify(manifest: &Path, artifact_root: Option<&Path>, layout: Layout) -> AgentResult<()> {
     let fields = parse_fields(manifest, Some(FIELDS))?;
     if fields["format"] != FORMAT {
@@ -343,5 +402,47 @@ mod tests {
         assert!(require_hex("sha", &"a".repeat(40), 40).is_ok());
         assert!(require_hex("sha", &"A".repeat(40), 40).is_err());
         assert!(require_hex("sha", "abc", 40).is_err());
+    }
+
+    #[test]
+    fn runtime_update_changes_only_gui_identity_and_magik_revision() {
+        let root = std::env::temp_dir().join(format!("runtime-manifest-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let gui = root.join("mister-magik-fb");
+        let output = root.join("platform-v2.manifest");
+        fs::write(&gui, b"new-gui").unwrap();
+        let paths = Layout::Development.paths();
+        let mut values = BTreeMap::new();
+        values.insert("format".to_owned(), FORMAT.to_owned());
+        for (name, path) in paths {
+            values.insert(format!("{name}_path"), path.into());
+        }
+        for name in [
+            "main",
+            "gui",
+            "manager",
+            "scanout_module",
+            "scanout_metadata",
+            "latch_rbf",
+            "latch_metadata",
+            "platform_contract",
+        ] {
+            values.insert(format!("{name}_sha256"), "a".repeat(64));
+        }
+        for name in ["main_revision", "magik_revision", "menu_revision"] {
+            values.insert(name.to_owned(), "b".repeat(40));
+        }
+        let installed = FIELDS
+            .iter()
+            .map(|field| format!("{field}={}\n", values[*field]))
+            .collect::<String>();
+
+        update_runtime(&output, &installed, &gui, &"c".repeat(40)).unwrap();
+
+        let updated = parse_fields(&output, Some(FIELDS)).unwrap();
+        assert_eq!(updated["magik_revision"], "c".repeat(40));
+        assert_eq!(updated["gui_sha256"], digest(&gui).unwrap());
+        assert_eq!(updated["main_sha256"], "a".repeat(64));
+        let _ = fs::remove_dir_all(root);
     }
 }

@@ -398,7 +398,7 @@ pub fn resolve_published_repository(
     let rows = published_releases(repository, &owner)?;
     let tag = latest_platform_release(&rows)
         .ok_or("no published numbered platform release is available")?;
-    let cache_root = repository.join("build/agent-deploy/release-cache/platform");
+    let cache_root = repository.join("build/agent-cache/release-cache/platform");
     let destination = cache_root.join(&tag);
     if let Ok(candidate) = published_candidate(repository, &destination, &branch, &head_sha, true) {
         progress("reusing cached qualified platform components")?;

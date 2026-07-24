@@ -197,7 +197,13 @@ pub fn reconcile(
     let impact = changed_paths
         .iter()
         .filter_map(|path| crate::components::classify(path))
-        .map(crate::components::Component::deployment_impact)
+        .map(|component| {
+            if component == crate::components::Component::Manager {
+                crate::components::DeploymentImpact::Platform
+            } else {
+                component.deployment_impact()
+            }
+        })
         .max()
         .unwrap_or(crate::components::DeploymentImpact::None);
     let decision = match impact {

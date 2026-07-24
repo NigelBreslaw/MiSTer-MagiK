@@ -195,6 +195,16 @@ impl DeviceOperations for NativeDevice {
                 remote_read(&session, "/media/fat/mister-magik-dev/platform-v2.manifest")
                     .unwrap_or_default()
             }
+            DeviceRequest::VerifyDevelopmentPlatform => {
+                let session = connect(10).map_err(device_failure)?;
+                exec_checked(
+                    &session,
+                    "development platform verify",
+                    &installed_platform_verify_command(Layout::Development),
+                )
+                .map_err(device_failure)?;
+                "verified".into()
+            }
             DeviceRequest::SnapshotRuntime { remote } => {
                 validate_delivery_remote(remote).map_err(device_failure)?;
                 let session = connect(10).map_err(device_failure)?;
@@ -213,6 +223,78 @@ impl DeviceOperations for NativeDevice {
                 let session = connect(10).map_err(device_failure)?;
                 deploy_magik_bin(&session, local, remote).map_err(device_failure)?;
                 "deployed".into()
+            }
+            DeviceRequest::SnapshotRuntimeBundle { remote, manifest } => {
+                validate_delivery_remote(remote).map_err(device_failure)?;
+                validate_runtime_manifest_remote(manifest).map_err(device_failure)?;
+                let session = connect(10).map_err(device_failure)?;
+                exec_checked(
+                    &session,
+                    "runtime bundle snapshot",
+                    &format!(
+                        "set -eu; cp -p {0} {0}.delivery-rollback.tmp; mv -f {0}.delivery-rollback.tmp {0}.delivery-rollback; cp -p {1} {1}.delivery-rollback.tmp; mv -f {1}.delivery-rollback.tmp {1}.delivery-rollback; sync",
+                        sh(remote),
+                        sh(manifest)
+                    ),
+                )
+                .map_err(device_failure)?;
+                "snapshotted".into()
+            }
+            DeviceRequest::DeployRuntimeBundle {
+                local,
+                remote,
+                manifest_local,
+                manifest_remote,
+            } => {
+                let session = connect(10).map_err(device_failure)?;
+                deploy_magik_bundle(&session, local, remote, manifest_local, manifest_remote)
+                    .map_err(device_failure)?;
+                "deployed".into()
+            }
+            DeviceRequest::RollbackRuntimeBundle { remote, manifest } => {
+                validate_delivery_remote(remote).map_err(device_failure)?;
+                validate_runtime_manifest_remote(manifest).map_err(device_failure)?;
+                let session = connect(10).map_err(device_failure)?;
+                exec_checked(
+                    &session,
+                    "runtime bundle suspend for rollback",
+                    &acknowledged_main_command("mister_magik_suspend"),
+                )
+                .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?;
+                let restore = exec_checked(
+                    &session,
+                    "runtime bundle rollback",
+                    &format!(
+                        "set -eu; test -f {0}.delivery-rollback; test -f {1}.delivery-rollback; mv -f {0}.delivery-rollback {0}; chmod 755 {0}; mv -f {1}.delivery-rollback {1}; sync",
+                        sh(remote),
+                        sh(manifest)
+                    ),
+                );
+                let resume = exec_checked(
+                    &session,
+                    "runtime bundle resume after rollback",
+                    &acknowledged_main_command("mister_magik_resume"),
+                );
+                restore
+                    .and(resume)
+                    .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?;
+                "rolled-back".into()
+            }
+            DeviceRequest::CommitRuntimeBundle { remote, manifest } => {
+                validate_delivery_remote(remote).map_err(device_failure)?;
+                validate_runtime_manifest_remote(manifest).map_err(device_failure)?;
+                let session = connect(10).map_err(device_failure)?;
+                exec_checked(
+                    &session,
+                    "runtime bundle commit",
+                    &format!(
+                        "rm -f {0}.delivery-rollback {1}.delivery-rollback; sync",
+                        sh(remote),
+                        sh(manifest)
+                    ),
+                )
+                .map_err(device_failure)?;
+                "committed".into()
             }
             DeviceRequest::RollbackRuntime { remote } => {
                 validate_delivery_remote(remote).map_err(device_failure)?;
@@ -1756,6 +1838,14 @@ fn validate_delivery_remote(remote: &str) -> Result<()> {
         Ok(())
     } else {
         Err(format!("unsupported delivery remote: {remote}").into())
+    }
+}
+
+fn validate_runtime_manifest_remote(remote: &str) -> Result<()> {
+    if remote == "/media/fat/mister-magik-dev/platform-v2.manifest" {
+        Ok(())
+    } else {
+        Err(format!("unsupported runtime manifest remote: {remote}").into())
     }
 }
 
@@ -3604,6 +3694,23 @@ fn deploy_magik_bin(sess: &Session, local: &Path, remote: &str) -> Result<()> {
     Ok(())
 }
 
+fn deploy_magik_bundle(
+    sess: &Session,
+    local: &Path,
+    remote: &str,
+    manifest_local: &Path,
+    manifest_remote: &str,
+) -> Result<()> {
+    let total_t = Instant::now();
+    let validate_t = Instant::now();
+    let transaction =
+        MagikDeployTransaction::validate_bundle(local, remote, manifest_local, manifest_remote)?;
+    let validate_ms = validate_t.elapsed().as_millis();
+    let report = transaction.run_ssh(sess, validate_ms, total_t)?;
+    report.print();
+    Ok(())
+}
+
 const PLATFORM_DEPLOY_FILES: &[(&str, &str)] = &[
     (
         "mister-magik-fb",
@@ -3729,9 +3836,6 @@ impl PlatformDeployTransaction {
         remote
             .exec("mkdir -p /media/fat/mister-magik-dev/fpga /media/fat/mister-magik-dev/snapshots")
             .and_then(|output| checked_deploy_output("platform prepare", output))?;
-        remote.exec(
-            "set -e; stamp=$(date +%Y%m%d-%H%M%S 2>/dev/null || echo unknown); snapshot=/media/fat/mister-magik-dev/snapshots/$stamp-agent-deploy; mkdir -p \"$snapshot\"; cp /etc/inittab \"$snapshot/inittab\" 2>/dev/null || true; cp /media/fat/MiSTer.ini \"$snapshot/MiSTer.ini\" 2>/dev/null || true; cp /media/fat/mister-magik-dev/platform-v2.manifest \"$snapshot/platform-v2.manifest\" 2>/dev/null || true",
-        ).and_then(|output| checked_deploy_output("platform snapshot", output))?;
         for file in &changed {
             remote.put(&file.local, &format!("{}.upload", file.remote))?;
         }
@@ -3753,6 +3857,23 @@ impl PlatformDeployTransaction {
     fn inventory_command(&self) -> String {
         let mut command = String::from("set -eu; ");
         for file in &self.files {
+            if let Some(name) = file
+                .local
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| {
+                    matches!(
+                        *name,
+                        "mame.sqlite3" | "hbmame.sqlite3" | "game-databases-manifest.json"
+                    )
+                })
+            {
+                command.push_str(&format!(
+                    "sum=$(awk '$2 == \"{name}\" {{print $1}}' /media/fat/mister-magik-dev/game-databases-SHA256SUMS 2>/dev/null || true); if test -n \"$sum\"; then printf '%s  {path}\\n' \"$sum\"; else printf 'missing  {path}\\n'; fi; ",
+                    path = file.remote,
+                ));
+                continue;
+            }
             command.push_str(&format!(
                 "if test -f {path}; then sha256sum {path}; else printf 'missing  %s\\n' {path}; fi; ",
                 path = sh(&file.remote),
@@ -3967,6 +4088,14 @@ struct MagikDeployTransaction {
     upload: String,
     lock: String,
     local_bytes: u64,
+    manifest: Option<ManifestDeploy>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ManifestDeploy {
+    local: PathBuf,
+    remote: String,
+    upload: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4003,7 +4132,28 @@ impl MagikDeployTransaction {
             lock: format!("{remote_dir}/deploy.lock"),
             remote_dir,
             local_bytes,
+            manifest: None,
         })
+    }
+
+    fn validate_bundle(
+        local: &Path,
+        remote: &str,
+        manifest_local: &Path,
+        manifest_remote: &str,
+    ) -> Result<Self> {
+        let mut transaction = Self::validate(local, remote)?;
+        if manifest_remote != "/media/fat/mister-magik-dev/platform-v2.manifest"
+            || !manifest_local.is_file()
+        {
+            return Err("unsupported runtime bundle manifest".into());
+        }
+        transaction.manifest = Some(ManifestDeploy {
+            local: manifest_local.to_path_buf(),
+            remote: manifest_remote.into(),
+            upload: format!("{manifest_remote}.upload"),
+        });
+        Ok(transaction)
     }
 
     fn run_ssh(
@@ -4038,6 +4188,9 @@ impl MagikDeployTransaction {
 
             let upload_t = Instant::now();
             remote.put(&self.local, &self.upload)?;
+            if let Some(manifest) = &self.manifest {
+                remote.put(&manifest.local, &manifest.upload)?;
+            }
             let upload_ms = upload_t.elapsed().as_millis();
 
             let swap_ms = self.swap_upload(remote)?;
@@ -4091,10 +4244,17 @@ impl MagikDeployTransaction {
 
     fn swap_upload<R: DeployRemote>(&self, remote: &R) -> Result<u128> {
         let start = Instant::now();
+        let manifest_swap = self.manifest.as_ref().map_or_else(String::new, |manifest| {
+            format!("; mv {} {}", sh(&manifest.upload), sh(&manifest.remote))
+        });
         self.exec_phase(
             remote,
             "swap",
-            &format!("mv {} {}", sh(&self.upload), sh(&self.remote)),
+            &format!(
+                "mv {} {}{manifest_swap}",
+                sh(&self.upload),
+                sh(&self.remote)
+            ),
         )?;
         Ok(start.elapsed().as_millis())
     }
@@ -4128,10 +4288,18 @@ impl MagikDeployTransaction {
 
     fn cleanup<R: DeployRemote>(&self, remote: &R) -> Result<u128> {
         let start = Instant::now();
+        let manifest_upload = self
+            .manifest
+            .as_ref()
+            .map_or_else(String::new, |manifest| format!(" {}", sh(&manifest.upload)));
         self.exec_phase(
             remote,
             "cleanup",
-            &format!("rm -f {} {}", sh(&self.upload), sh(&self.lock)),
+            &format!(
+                "rm -f {} {}{manifest_upload}",
+                sh(&self.upload),
+                sh(&self.lock)
+            ),
         )?;
         Ok(start.elapsed().as_millis())
     }
@@ -9217,6 +9385,33 @@ H: Handlers=event3 js0"#
         assert!(events[5].starts_with("rm -f "));
         assert!(events[6].contains("mister_magik_resume"));
         let _ = fs::remove_file(local);
+    }
+
+    #[test]
+    fn runtime_bundle_uploads_both_files_and_activates_manifest_last() {
+        let local = temp_path("deploy-bundle-bin");
+        let manifest = temp_path("deploy-bundle-manifest");
+        fs::write(&local, b"abc").unwrap();
+        fs::write(&manifest, b"manifest").unwrap();
+        let tx = MagikDeployTransaction::validate_bundle(
+            &local,
+            "/media/fat/mister-magik-dev/mister-magik-fb",
+            &manifest,
+            "/media/fat/mister-magik-dev/platform-v2.manifest",
+        )
+        .unwrap();
+        let remote = scripted_deploy_remote(3);
+
+        tx.run_with(&remote, 0, Instant::now()).unwrap();
+        let events = remote.events();
+        assert!(events[2].ends_with("mister-magik-fb.upload"));
+        assert!(events[3].ends_with("platform-v2.manifest.upload"));
+        assert!(
+            events[4].find("mister-magik-fb.upload").unwrap()
+                < events[4].find("platform-v2.manifest.upload").unwrap()
+        );
+        let _ = fs::remove_file(local);
+        let _ = fs::remove_file(manifest);
     }
 
     #[test]

@@ -6,11 +6,17 @@ FROM ubuntu:20.04
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         ca-certificates \
+        bc \
+        bison \
+        flex \
         gcc \
         g++-arm-linux-gnueabihf \
+        kmod \
         libc6-dev \
         libclang1-10 \
         libclang-common-10-dev \
+        libelf-dev \
+        libssl-dev \
         make \
         pkg-config \
     && rm -rf /var/lib/apt/lists/*

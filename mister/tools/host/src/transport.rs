@@ -36,12 +36,31 @@ pub enum DeviceRequest {
     Discover,
     Status,
     ReadDevelopmentManifest,
+    VerifyDevelopmentPlatform,
     SnapshotRuntime {
         remote: String,
     },
     DeployRuntime {
         local: PathBuf,
         remote: String,
+    },
+    SnapshotRuntimeBundle {
+        remote: String,
+        manifest: String,
+    },
+    DeployRuntimeBundle {
+        local: PathBuf,
+        remote: String,
+        manifest_local: PathBuf,
+        manifest_remote: String,
+    },
+    RollbackRuntimeBundle {
+        remote: String,
+        manifest: String,
+    },
+    CommitRuntimeBundle {
+        remote: String,
+        manifest: String,
     },
     RollbackRuntime {
         remote: String,
@@ -99,8 +118,13 @@ impl DeviceRequest {
             Self::Discover => "discover",
             Self::Status => "status",
             Self::ReadDevelopmentManifest => "read-development-manifest",
+            Self::VerifyDevelopmentPlatform => "verify-development-platform",
             Self::SnapshotRuntime { .. } => "snapshot-runtime",
             Self::DeployRuntime { .. } => "deploy-runtime",
+            Self::SnapshotRuntimeBundle { .. } => "snapshot-runtime-bundle",
+            Self::DeployRuntimeBundle { .. } => "deploy-runtime-bundle",
+            Self::RollbackRuntimeBundle { .. } => "rollback-runtime-bundle",
+            Self::CommitRuntimeBundle { .. } => "commit-runtime-bundle",
             Self::RollbackRuntime { .. } => "rollback-runtime",
             Self::CommitRuntime { .. } => "commit-runtime",
             Self::DeployPlatform { .. } => "deploy-platform",
@@ -221,6 +245,7 @@ mod tests {
             DeviceRequest::Discover,
             DeviceRequest::Status,
             DeviceRequest::ReadDevelopmentManifest,
+            DeviceRequest::VerifyDevelopmentPlatform,
             DeviceRequest::RollbackPlatform,
             DeviceRequest::CommitPlatform,
             DeviceRequest::RebootWait,
@@ -238,10 +263,29 @@ mod tests {
             DeviceRequest::Discover,
             DeviceRequest::Status,
             DeviceRequest::ReadDevelopmentManifest,
+            DeviceRequest::VerifyDevelopmentPlatform,
             DeviceRequest::SnapshotRuntime { remote: "r".into() },
             DeviceRequest::DeployRuntime {
                 local: "l".into(),
                 remote: "r".into(),
+            },
+            DeviceRequest::SnapshotRuntimeBundle {
+                remote: "r".into(),
+                manifest: "m".into(),
+            },
+            DeviceRequest::DeployRuntimeBundle {
+                local: "l".into(),
+                remote: "r".into(),
+                manifest_local: "ml".into(),
+                manifest_remote: "m".into(),
+            },
+            DeviceRequest::RollbackRuntimeBundle {
+                remote: "r".into(),
+                manifest: "m".into(),
+            },
+            DeviceRequest::CommitRuntimeBundle {
+                remote: "r".into(),
+                manifest: "m".into(),
             },
             DeviceRequest::RollbackRuntime { remote: "r".into() },
             DeviceRequest::CommitRuntime { remote: "r".into() },
@@ -284,7 +328,7 @@ mod tests {
             DeviceRequest::CaptureFramebuffer,
         ];
         let labels: Vec<_> = requests.iter().map(DeviceRequest::label).collect();
-        assert_eq!(labels.len(), 39);
+        assert_eq!(labels.len(), 44);
         assert!(labels.iter().all(|label| !label.is_empty()));
         assert!(!labels.contains(&"run"));
         assert!(!labels.contains(&"shell"));

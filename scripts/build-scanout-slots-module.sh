@@ -15,8 +15,12 @@ IMAGE="${MISTER_ARM_BUILD_IMAGE:-mister-magik-cross-armv7:ubuntu20-arm64}"
 PINNED_KERNEL_REVISION="f0fb626acadd07f0718934826b143b6e4c9ce81c"
 PINNED_FB_DRIVER_SHA256="b85ccabd33c3360c60873eb29deb933500b117759c3a3e898637a3e46e25312c"
 PINNED_DT_SHA256="36d7f660df55253a9ba11ebce615f304b91c3d7c99be94173af443574ad28a95"
-OBSERVED_SOURCE_REVISION="$(git -c safe.directory="$ROOT" -C "$ROOT" rev-parse --verify 'HEAD^{commit}')"
-if [[ -z "$(git -c safe.directory="$ROOT" -C "$ROOT" status --porcelain --untracked-files=all)" ]]; then
+MODULE_INPUTS=(
+  mister/platform/kernel/scanout-slots
+  scripts/build-scanout-slots-module.sh
+)
+OBSERVED_SOURCE_REVISION="$(git -c safe.directory="$ROOT" -C "$ROOT" log -1 --format=%H -- "${MODULE_INPUTS[@]}")"
+if [[ -z "$(git -c safe.directory="$ROOT" -C "$ROOT" status --porcelain --untracked-files=all -- "${MODULE_INPUTS[@]}")" ]]; then
   OBSERVED_SOURCE_DIRTY=0
 else
   OBSERVED_SOURCE_DIRTY=1
@@ -84,6 +88,26 @@ if [[ "$(sha256sum "$KERNEL_SRC/drivers/video/fbdev/MiSTer_fb.c" | awk '{print $
 fi
 
 mkdir -p "$KERNEL_BUILD" "$OUT_DIR"
+BUILD_IDENTITY="$(
+  {
+    printf '%s\n' "$KERNEL_REVISION" "$PINNED_FB_DRIVER_SHA256" "$PINNED_DT_SHA256" "$IMAGE"
+    cd "$ROOT"
+    sha256sum \
+      mister/platform/kernel/scanout-slots/mister_magik_scanout_slots.c \
+      mister/platform/kernel/scanout-slots/mister_magik_scanout_slots_uapi.h \
+      mister/platform/kernel/scanout-slots/mister_magik_scanout_platform.h \
+      mister/platform/kernel/scanout-slots/mister_magik_scanout_policy.h \
+      mister/platform/kernel/scanout-slots/Makefile \
+      scripts/build-scanout-slots-module.sh
+  } | sha256sum | awk '{print $1}'
+)"
+RECEIPT="$OUT_DIR/build-receipt.txt"
+if [[ -f "$RECEIPT" ]] &&
+   grep -qx "build_identity=$BUILD_IDENTITY" "$RECEIPT" &&
+   (cd "$OUT_DIR" && sha256sum -c SHA256SUMS >/dev/null 2>&1); then
+  echo "$OUT_DIR/mister_magik_scanout_slots.ko"
+  exit 0
+fi
 
 build_commands=$(cat <<'EOS'
 set -euo pipefail
@@ -132,6 +156,7 @@ module_sha256=$module_sha256
 vermagic=$(sed -n 's/^vermagic:[[:space:]]*//p' "$OUT_DIR/modinfo.txt")
 EOF
 (cd "$OUT_DIR" && sha256sum mister_magik_scanout_slots.ko modinfo.txt provenance.txt imports.txt > SHA256SUMS)
+printf 'build_identity=%s\n' "$BUILD_IDENTITY" >"$RECEIPT"
 echo "$OUT_DIR/mister_magik_scanout_slots.ko"
 EOS
 )
@@ -139,7 +164,7 @@ EOS
 if command -v "${CROSS_COMPILE}gcc" >/dev/null 2>&1; then
   KERNEL_SRC="$KERNEL_SRC" KERNEL_BUILD="$KERNEL_BUILD" MODULE_DIR="$MODULE_DIR" OUT_DIR="$OUT_DIR" KERNEL_REVISION="$KERNEL_REVISION" \
     PINNED_FB_DRIVER_SHA256="$PINNED_FB_DRIVER_SHA256" PINNED_DT_SHA256="$PINNED_DT_SHA256" SOURCE_REVISION="$SOURCE_REVISION" SOURCE_DIRTY="$SOURCE_DIRTY" \
-    OBSERVED_SOURCE_REVISION="$OBSERVED_SOURCE_REVISION" OBSERVED_SOURCE_DIRTY="$OBSERVED_SOURCE_DIRTY" \
+    OBSERVED_SOURCE_REVISION="$OBSERVED_SOURCE_REVISION" OBSERVED_SOURCE_DIRTY="$OBSERVED_SOURCE_DIRTY" BUILD_IDENTITY="$BUILD_IDENTITY" RECEIPT="$RECEIPT" \
     CROSS_COMPILE="$CROSS_COMPILE" LOCALVERSION="$LOCALVERSION" bash -lc "$build_commands"
   exit $?
 fi
@@ -156,10 +181,6 @@ container run --arch arm64 --rm --cpus 8 --memory 8g \
   --workdir /project \
   "$IMAGE" bash -lc "
     set -euo pipefail
-    if command -v apt-get >/dev/null 2>&1; then
-      apt-get update >/dev/null
-      DEBIAN_FRONTEND=noninteractive apt-get install -y flex bison bc libssl-dev libelf-dev kmod >/dev/null
-    fi
     export KERNEL_SRC='$CONTAINER_KERNEL_SRC'
     export KERNEL_BUILD='/project/build/scanout-slots-kernel'
     export MODULE_DIR='/project/mister/platform/kernel/scanout-slots'
@@ -173,5 +194,7 @@ container run --arch arm64 --rm --cpus 8 --memory 8g \
     export SOURCE_DIRTY='$SOURCE_DIRTY'
     export OBSERVED_SOURCE_REVISION='$OBSERVED_SOURCE_REVISION'
     export OBSERVED_SOURCE_DIRTY='$OBSERVED_SOURCE_DIRTY'
+    export BUILD_IDENTITY='$BUILD_IDENTITY'
+    export RECEIPT='/project/build/scanout-slots/build-receipt.txt'
     $build_commands
   "

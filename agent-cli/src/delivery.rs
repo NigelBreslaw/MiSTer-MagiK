@@ -8,6 +8,7 @@ use crate::model::Outcome;
 use crate::progress::{EventKind, Reporter};
 use mister_tool::transport::{DeviceRequest, Layout, MainSelection};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -15,6 +16,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 const REMOTE_RUNTIME: &str = "/media/fat/mister-magik-dev/mister-magik-fb";
+const REMOTE_MANIFEST: &str = "/media/fat/mister-magik-dev/platform-v2.manifest";
 const PREPARE_DEADLINE: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -138,6 +140,7 @@ pub fn execute(
         expected_commit,
         artifact_sha256: None,
         no_op: false,
+        installed_manifest: String::new(),
         local_main: local_main.to_path_buf(),
         stage: repository
             .join("build/agent-deploy/stage")
@@ -167,11 +170,15 @@ pub fn execute(
 
 pub fn cleanup_workspace(repository: &Path) -> Result<(), String> {
     let workspace = repository.join("build/agent-deploy");
-    if workspace.exists() {
-        fs::remove_dir_all(&workspace).map_err(|error| {
+    for transient in ["stage", "platform"] {
+        let path = workspace.join(transient);
+        if !path.exists() {
+            continue;
+        }
+        fs::remove_dir_all(&path).map_err(|error| {
             format!(
                 "cannot clear delivery workspace {}: {error}",
-                workspace.display()
+                path.display()
             )
         })?;
     }
@@ -184,6 +191,7 @@ struct ProcessActions<'a> {
     expected_commit: &'a str,
     artifact_sha256: Option<String>,
     no_op: bool,
+    installed_manifest: String,
     local_main: PathBuf,
     stage: PathBuf,
     device: DeviceClient,
@@ -200,13 +208,36 @@ impl ProcessActions<'_> {
         if self.no_op {
             return Ok(());
         }
+        if self.deployment.kind == DeploymentKind::Runtime {
+            self.device
+                .execute(DeviceRequest::VerifyDevelopmentPlatform)?;
+        }
         crate::build::execute_quiet(self.repository, &self.deployment.build)?;
         let receipt = self.deployment.build.verify(self.repository)?;
         if receipt.source_commit != self.expected_commit || receipt.source_dirty {
             return Err("runtime artifact was not built from the exact clean commit".into());
         }
         self.artifact_sha256 = Some(receipt.binary_sha256);
+        if self.deployment.kind == DeploymentKind::Runtime {
+            crate::platform_manifest::update_runtime(
+                &self.stage.join("platform-v2.manifest"),
+                &self.installed_manifest,
+                &self.repository.join(self.deployment.build.artifact()),
+                self.expected_commit,
+            )?;
+        }
         if self.deployment.kind == DeploymentKind::Platform {
+            if self
+                .deployment
+                .changed_paths
+                .iter()
+                .any(|path| path.starts_with("mister/tools/manager"))
+            {
+                crate::build::execute_quiet(
+                    self.repository,
+                    &crate::build::BuildSpec::for_recipe(crate::build::BuildRecipe::ManagerDevice),
+                )?;
+            }
             let candidate = self
                 .deployment
                 .platform_candidate
@@ -216,7 +247,7 @@ impl ProcessActions<'_> {
                 fs::remove_dir_all(&self.stage).map_err(|error| error.to_string())?;
             }
             fs::create_dir_all(self.stage.join("fpga")).map_err(|error| error.to_string())?;
-            qualify_local_main(&self.local_main)?;
+            qualify_local_main(self.repository, &self.local_main)?;
             qualify_local_kernel(self.repository)?;
             prepare_stage(
                 self.repository,
@@ -282,6 +313,7 @@ impl DeliveryActions for ProcessActions<'_> {
                     self.expected_commit,
                 );
                 self.no_op = reconciliation.decision == DeliveryDecision::NoOp;
+                self.installed_manifest = installed;
                 if self.no_op {
                     return Ok(());
                 }
@@ -302,8 +334,9 @@ impl DeliveryActions for ProcessActions<'_> {
                 _ if self.no_op => Ok(()),
                 DeploymentKind::Runtime => self
                     .device
-                    .execute(DeviceRequest::SnapshotRuntime {
+                    .execute(DeviceRequest::SnapshotRuntimeBundle {
                         remote: REMOTE_RUNTIME.into(),
+                        manifest: REMOTE_MANIFEST.into(),
                     })
                     .map(|_| ()),
                 DeploymentKind::Platform => self
@@ -315,9 +348,11 @@ impl DeliveryActions for ProcessActions<'_> {
                 _ if self.no_op => Ok(()),
                 DeploymentKind::Runtime => self
                     .device
-                    .execute(DeviceRequest::DeployRuntime {
+                    .execute(DeviceRequest::DeployRuntimeBundle {
                         local: self.deployment.build.artifact().to_path_buf(),
                         remote: REMOTE_RUNTIME.into(),
+                        manifest_local: self.stage.join("platform-v2.manifest"),
+                        manifest_remote: REMOTE_MANIFEST.into(),
                     })
                     .map(|_| ()),
                 DeploymentKind::Platform => self
@@ -347,8 +382,9 @@ impl DeliveryActions for ProcessActions<'_> {
                 _ if self.no_op => Ok(()),
                 DeploymentKind::Runtime => self
                     .device
-                    .execute(DeviceRequest::CommitRuntime {
+                    .execute(DeviceRequest::CommitRuntimeBundle {
                         remote: REMOTE_RUNTIME.into(),
+                        manifest: REMOTE_MANIFEST.into(),
                     })
                     .map(|_| ()),
                 DeploymentKind::Platform => self
@@ -362,8 +398,9 @@ impl DeliveryActions for ProcessActions<'_> {
     fn compensate(&mut self) -> AgentResult<()> {
         match self.deployment.kind {
             DeploymentKind::Runtime => {
-                self.device.execute(DeviceRequest::RollbackRuntime {
+                self.device.execute(DeviceRequest::RollbackRuntimeBundle {
                     remote: REMOTE_RUNTIME.into(),
+                    manifest: REMOTE_MANIFEST.into(),
                 })?;
                 self.device
                     .execute(DeviceRequest::VerifyHealth(Layout::Development))?;
@@ -469,8 +506,16 @@ fn prepare_stage(
     )
 }
 
-fn qualify_local_main(main_dir: &Path) -> AgentResult<()> {
+fn qualify_local_main(repository: &Path, main_dir: &Path) -> AgentResult<()> {
     validate_local_main_checkout(main_dir)?;
+    let revision = crate::git::value(main_dir, &["rev-parse", "HEAD"])?;
+    let binary = main_dir.join("bin/MiSTer");
+    let receipt = repository
+        .join("build/agent-cache/main")
+        .join(format!("{revision}.receipt"));
+    if binary.is_file() && receipt_matches(&receipt, &revision, &binary)? {
+        return Ok(());
+    }
     for (program, args) in [
         ("./build-container.sh", Vec::<String>::new()),
         ("scripts/test-magik-state.sh", Vec::<String>::new()),
@@ -481,7 +526,41 @@ fn qualify_local_main(main_dir: &Path) -> AgentResult<()> {
     if !main_dir.join("bin/MiSTer").is_file() {
         return Err("local_main_build: bin/MiSTer was not produced".into());
     }
+    if let Some(parent) = receipt.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    fs::write(
+        receipt,
+        format!(
+            "main_revision={revision}\nbinary_sha256={}\n",
+            file_sha256(&binary)?
+        ),
+    )
+    .map_err(|error| error.to_string())?;
     Ok(())
+}
+
+fn receipt_matches(receipt: &Path, revision: &str, artifact: &Path) -> AgentResult<bool> {
+    let text = match fs::read_to_string(receipt) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.to_string().into()),
+    };
+    let binary_sha256 = file_sha256(artifact)?;
+    Ok(text
+        .lines()
+        .any(|line| line == format!("main_revision={revision}"))
+        && text
+            .lines()
+            .any(|line| line == format!("binary_sha256={binary_sha256}")))
+}
+
+fn file_sha256(path: &Path) -> AgentResult<String> {
+    let bytes = fs::read(path).map_err(|error| error.to_string())?;
+    Ok(Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
 
 fn validate_local_main_checkout(main_dir: &Path) -> AgentResult<()> {
@@ -550,7 +629,7 @@ fn copy(from: PathBuf, to: PathBuf) -> AgentResult<()> {
 
 fn prepare_game_databases(repository: &Path, output: &Path) -> AgentResult<()> {
     let (owner, tag, version) = crate::platform_ci::latest_game_database_release(repository)?;
-    let cache_root = repository.join("build/agent-deploy/release-cache/game-databases");
+    let cache_root = repository.join("build/agent-cache/release-cache/game-databases");
     let cached = cache_root.join(&tag);
     if reuse_verified_cache(&cached, output, || {
         extract_game_databases(repository, &cached, output)
@@ -826,7 +905,7 @@ mod tests {
     }
 
     #[test]
-    fn delivery_workspace_is_removed_after_use() {
+    fn delivery_cleanup_removes_transient_stage_and_preserves_cache() {
         let root = std::env::temp_dir().join(format!(
             "mister-magik-delivery-workspace-test-{}",
             std::process::id()
@@ -834,10 +913,14 @@ mod tests {
         let workspace = root.join("build/agent-deploy/stage/commit");
         fs::create_dir_all(&workspace).unwrap();
         fs::write(workspace.join("artifact"), b"generated").unwrap();
+        let cache = root.join("build/agent-cache/release-cache/platform/tag");
+        fs::create_dir_all(&cache).unwrap();
+        fs::write(cache.join("artifact"), b"cached").unwrap();
 
         cleanup_workspace(&root).unwrap();
 
-        assert!(!root.join("build/agent-deploy").exists());
+        assert!(!root.join("build/agent-deploy/stage").exists());
+        assert!(cache.join("artifact").is_file());
         let _ = fs::remove_dir_all(root);
     }
 }
