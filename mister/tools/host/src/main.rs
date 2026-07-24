@@ -2427,6 +2427,7 @@ fn safe_repair_command() -> String {
     shell_sequence([
         "set -eu",
         "rm -f /tmp/mister-magik/agent-benchmark.tsv /tmp/mister-magik/agent-benchmark-warmup.tsv /tmp/mister-magik/agent-cold-benchmark.out /tmp/mister-magik/stale-launcher-return-state.json",
+        release_arming_cleanup_command(),
         safety.as_str(),
     ])
 }
@@ -10891,9 +10892,9 @@ H: Handlers=event3 js0"#
         assert!(facts.contains("arming_files"));
         let repair = safe_repair_command();
         assert!(repair.contains("agent-benchmark.tsv"));
-        assert!(!repair.contains("rm -f /media/fat/mister-magik/launcher.env"));
-        assert!(!repair.contains("rm -f /media/fat/mister-magik-dev/launcher.env"));
-        assert!(!repair.contains("rebuild-on-next-boot; rm"));
+        assert!(repair.contains("rm -f /media/fat/mister-magik/launcher.env"));
+        assert!(repair.contains("/media/fat/mister-magik-dev/launcher.env"));
+        assert!(repair.contains("/media/fat/mister-magik-dev/rebuild-on-next-boot"));
     }
 
     #[test]
