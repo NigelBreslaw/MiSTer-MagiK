@@ -22,6 +22,7 @@ enum CrtProbePattern {
     Motion,
     MotionHold2,
     MotionHold3,
+    MotionSlow,
 }
 
 impl CrtProbePattern {
@@ -42,6 +43,7 @@ impl CrtProbePattern {
             "motion" => Some(Self::Motion),
             "motion-hold2" => Some(Self::MotionHold2),
             "motion-hold3" => Some(Self::MotionHold3),
+            "motion-slow" => Some(Self::MotionSlow),
             _ => None,
         }
     }
@@ -59,6 +61,7 @@ impl CrtProbePattern {
             Self::Motion => "motion",
             Self::MotionHold2 => "motion-hold2",
             Self::MotionHold3 => "motion-hold3",
+            Self::MotionSlow => "motion-slow",
         }
     }
 
@@ -74,12 +77,16 @@ impl CrtProbePattern {
             Self::FullAbHold4 => Some(4),
             Self::MotionHold2 => Some(2),
             Self::MotionHold3 => Some(3),
+            Self::MotionSlow => Some(50),
             Self::FixedA | Self::FixedB | Self::SlowAb => None,
         }
     }
 
     const fn is_motion(self) -> bool {
-        matches!(self, Self::Motion | Self::MotionHold2 | Self::MotionHold3)
+        matches!(
+            self,
+            Self::Motion | Self::MotionHold2 | Self::MotionHold3 | Self::MotionSlow
+        )
     }
 }
 
@@ -1229,6 +1236,10 @@ mod tests {
             Some(CrtProbePattern::MotionHold2)
         );
         assert_eq!(
+            CrtProbePattern::parse("motion-slow"),
+            Some(CrtProbePattern::MotionSlow)
+        );
+        assert_eq!(
             CrtProbePattern::parse("full-ab-hold4"),
             Some(CrtProbePattern::FullAbHold4)
         );
@@ -1290,10 +1301,12 @@ mod tests {
 
     #[test]
     fn motion_rate_sweep_updates_only_when_the_displayed_slot_changes() {
-        for (hold_rasters, expected_updates) in [(1, 8), (2, 4), (3, 2)] {
+        for (hold_rasters, raster_count, expected_updates) in
+            [(1, 8, 8), (2, 8, 4), (3, 8, 2), (50, 100, 2)]
+        {
             let mut active_slot = 1;
             let mut updates = 0;
-            for raster_index in 0..8 {
+            for raster_index in 0..raster_count {
                 let target = probe_target_slot(active_slot, hold_rasters, raster_index);
                 if target != active_slot {
                     updates += 1;
