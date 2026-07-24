@@ -165,7 +165,7 @@ pub fn run_workflow(
 }
 
 pub fn infer_scenario(paths: &[PathBuf]) -> AgentResult<BenchmarkScenario> {
-    // The screensaver benchmark spans launcher rendering, benchmark analysis, and host boot orchestration.
+    // The screensaver benchmark spans launcher rendering, benchmark analysis, and host boot orchestration paths.
     if paths.iter().any(|path| {
         path.ends_with("ui_runner/launcher_screensaver.rs")
             || path == Path::new("agent-cli/src/benchmark.rs")
