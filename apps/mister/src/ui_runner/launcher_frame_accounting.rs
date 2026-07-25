@@ -75,6 +75,7 @@ pub(super) struct LauncherFrameAccounting {
     latch_failure_stage: String,
     latch_failure_reason: String,
     latch_failure_detail: String,
+    compatibility_prompt_visible: bool,
     last_present_buffer: u8,
     last_latch_publish_us: u64,
     last_latch_sequence: u16,
@@ -1061,6 +1062,7 @@ impl LauncherFrameAccounting {
             latch_failure_stage: String::new(),
             latch_failure_reason: String::new(),
             latch_failure_detail: String::new(),
+            compatibility_prompt_visible: false,
             last_present_buffer: 0,
             last_latch_publish_us: 0,
             last_latch_sequence: 0,
@@ -1087,6 +1089,10 @@ impl LauncherFrameAccounting {
         self.latch_failure_stage = failure.stage.code().to_string();
         self.latch_failure_reason = failure.reason_code().to_string();
         self.latch_failure_detail.clone_from(&failure.detail);
+    }
+
+    pub(super) fn set_compatibility_prompt_visible(&mut self, visible: bool) {
+        self.compatibility_prompt_visible = visible;
     }
 
     pub(super) fn preview_scroll_trace_enabled(&self) -> bool {
@@ -2084,6 +2090,7 @@ impl LauncherFrameAccounting {
             latch_failure_stage: &self.latch_failure_stage,
             latch_failure_reason: &self.latch_failure_reason,
             latch_failure_detail: &self.latch_failure_detail,
+            compatibility_prompt_visible: self.compatibility_prompt_visible,
             present_buffer: self.last_present_buffer,
             latch_publish_us: self.last_latch_publish_us,
             latch_sequence: self.last_latch_sequence,

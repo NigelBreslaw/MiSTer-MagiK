@@ -1957,6 +1957,7 @@ pub(super) fn run_launcher_loop(
     let mut library_changed_dialog_test = LibraryChangedDialogTestDriver::from_env(start);
     let mut launcher_input_script = LauncherInputScriptDriver::from_env(start);
     let mut catalog_recovery_prev = PadState::default();
+    let mut compatibility_prev = PadState::default();
     let sqlite_path = mister_magik_catalog::catalog_state::default_path();
     let capsule_seed_ready = catalog_ready;
     let sharded_seed = (!capsule_seed_ready)
@@ -2379,16 +2380,57 @@ pub(super) fn run_launcher_loop(
         apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
         sync_startup_visibility(&app, &lifecycle);
         scheduler.record_loading_frame(loop_start);
-        let compatibility_active = launcher_presenter.compatibility_failure().is_some();
-        let launching =
-            scheduler.launch_is_active() || !loading_title.is_empty() || compatibility_active;
+        let compatibility_prompt_visible = launcher_presenter.compatibility_prompt_visible();
+        frame_accounting.set_compatibility_prompt_visible(compatibility_prompt_visible);
+        let launching = scheduler.launch_is_active()
+            || !loading_title.is_empty()
+            || compatibility_prompt_visible;
         let setup_active = setup.is_active();
         let mut light_bridge_dirty = false;
-        let mut pad_changed_for_input = if !launching && lifecycle.startup_input_enabled() {
-            Some(pad.poll_with_debug_labels(setup_active))
+        let mut pad_changed_for_input =
+            if compatibility_prompt_visible || (!launching && lifecycle.startup_input_enabled()) {
+                Some(pad.poll_with_debug_labels(setup_active))
+            } else {
+                None
+            };
+        if compatibility_prompt_visible {
+            let state = pad.state().clone();
+            let retry = state.btn_a && !compatibility_prev.btn_a;
+            let continue_compatibility = state.btn_b && !compatibility_prev.btn_b;
+            compatibility_prev = state;
+            if retry {
+                let recovered = launcher_presenter.retry_latch(ui);
+                let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+                bridge.set_compatibility_visible(!recovered);
+                if let Some(failure) = launcher_presenter.compatibility_failure() {
+                    frame_accounting.record_latch_failure(failure);
+                    bridge.set_compatibility_reason(failure.reason_code().into());
+                    bridge.set_compatibility_detail(failure.detail.as_str().into());
+                }
+                frame_accounting.set_compatibility_prompt_visible(!recovered);
+                runtime_status::event(
+                    "latch_compatibility_retry",
+                    if recovered {
+                        "recovered=1"
+                    } else {
+                        "recovered=0"
+                    },
+                );
+                request_launcher_redraw!();
+                continue;
+            }
+            if continue_compatibility {
+                launcher_presenter.continue_in_compatibility();
+                app.global::<slint_ui::launcher::MisterBridge>()
+                    .set_compatibility_visible(false);
+                frame_accounting.set_compatibility_prompt_visible(false);
+                runtime_status::event("latch_compatibility_continue", "renderer=fb0");
+                request_launcher_redraw!();
+                continue;
+            }
         } else {
-            None
-        };
+            compatibility_prev = PadState::default();
+        }
         if let Some(sample) = memory_guard.tick(loop_start) {
             if sample.changed {
                 runtime_status::event(
@@ -2926,6 +2968,7 @@ pub(super) fn run_launcher_loop(
         }
 
         if let Some(scenario) = launcher_bench_scenario {
+            let compatibility_active = launcher_presenter.compatibility_failure().is_some();
             let after_input_script_ready = match scenario {
                 LauncherBenchScenario::ScreensaverShow => screensaver.active,
                 _ => {
@@ -4521,7 +4564,7 @@ pub(super) fn run_launcher_loop(
         if let Some(failure) = launcher_presenter.compatibility_failure() {
             frame_accounting.record_latch_failure(failure);
             let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-            bridge.set_compatibility_visible(true);
+            bridge.set_compatibility_visible(launcher_presenter.compatibility_prompt_visible());
             bridge.set_compatibility_reason(failure.reason_code().into());
             bridge.set_compatibility_detail(failure.detail.as_str().into());
             request_launcher_redraw!();

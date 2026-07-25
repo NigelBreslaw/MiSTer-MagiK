@@ -63,6 +63,7 @@ launcher_status_types! {
         latch_sequence: u16,
         latch_flip_count: u16,
         latch_drop_count: u16,
+        compatibility_prompt_visible: bool,
         catalog_ready: bool,
         catalog_games: usize,
         catalog_systems: usize,
@@ -553,6 +554,10 @@ fn launcher_status_value(
     insert!("latch_failure_stage", status.latch_failure_stage);
     insert!("latch_failure_reason", status.latch_failure_reason);
     insert!("latch_failure_detail", status.latch_failure_detail);
+    insert!(
+        "compatibility_prompt_visible",
+        status.compatibility_prompt_visible
+    );
     insert!("present_buffer", status.present_buffer);
     insert!("latch_publish_us", status.latch_publish_us);
     insert!("latch_sequence", status.latch_sequence);
@@ -991,6 +996,7 @@ mod tests {
                 latch_sequence: 41,
                 latch_flip_count: 40,
                 latch_drop_count: 0,
+                compatibility_prompt_visible: true,
                 catalog_ready: true,
                 catalog_games: 9014,
                 catalog_systems: 13,
@@ -1231,6 +1237,7 @@ mod tests {
         assert_eq!(value["present_backend"], "fpga-vblank-latch-hidden");
         assert_eq!(value["latch_failure_state"], "runtime-fault");
         assert_eq!(value["latch_failure_reason"], "posted-sequence-unverified");
+        assert_eq!(value["compatibility_prompt_visible"], true);
         assert_eq!(value["latch_publish_us"], 3);
         assert_eq!(value["latch_sequence"], 41);
         assert_eq!(value["latch_flip_count"], 40);
@@ -1341,6 +1348,7 @@ mod tests {
             latch_sequence: 7,
             latch_flip_count: 6,
             latch_drop_count: 0,
+            compatibility_prompt_visible: false,
             catalog_ready: false,
             catalog_games: 12,
             catalog_systems: 2,

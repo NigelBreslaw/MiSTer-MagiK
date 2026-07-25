@@ -19,6 +19,7 @@ enum LauncherPresenterState<L> {
         failure: LatchFailure,
         screen_ready: bool,
         route_active: bool,
+        prompt_visible: bool,
     },
 }
 
@@ -98,6 +99,7 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
                             failure,
                             screen_ready: false,
                             route_active: false,
+                            prompt_visible: true,
                         }
                     }
                 }
@@ -142,6 +144,17 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
         self.transition_latch_failure(failure);
     }
 
+    pub(in crate::ui_runner) fn retry_latch(&mut self, ui: &UiDisplay) -> bool {
+        if !self.compatibility_prompt_visible() {
+            return false;
+        }
+        let result = FpgaVblankLatchHiddenPresenter::open(ui);
+        if let Err(failure) = &result {
+            persist_latch_failure(failure);
+        }
+        self.apply_retry_result(result)
+    }
+
     pub(in crate::ui_runner) fn publish_stream_refinement_if_due(&self) -> bool {
         match &self.state {
             LauncherPresenterState::Latch(latch) => latch.publish_requested_full_snapshot(),
@@ -180,6 +193,25 @@ impl<L> LauncherPresenter<L> {
         }
     }
 
+    pub(in crate::ui_runner) fn compatibility_prompt_visible(&self) -> bool {
+        matches!(
+            self.state,
+            LauncherPresenterState::Compatibility {
+                prompt_visible: true,
+                ..
+            }
+        )
+    }
+
+    pub(in crate::ui_runner) fn continue_in_compatibility(&mut self) -> bool {
+        let LauncherPresenterState::Compatibility { prompt_visible, .. } = &mut self.state else {
+            return false;
+        };
+        let changed = *prompt_visible;
+        *prompt_visible = false;
+        changed
+    }
+
     pub(in crate::ui_runner) fn compatibility_transitions(&self) -> u64 {
         self.compatibility_transitions
     }
@@ -207,7 +239,21 @@ impl<L> LauncherPresenter<L> {
             failure: latch_error,
             screen_ready: true,
             route_active: false,
+            prompt_visible: true,
         };
+    }
+
+    fn apply_retry_result(&mut self, result: Result<L, LatchFailure>) -> bool {
+        match result {
+            Ok(latch) => {
+                self.state = LauncherPresenterState::Latch(latch);
+                true
+            }
+            Err(failure) => {
+                self.transition_latch_failure(failure);
+                false
+            }
+        }
     }
 
     fn present_with<A>(&mut self, frame: LauncherFramePlan, adapters: &mut A) -> A::Output
@@ -798,6 +844,7 @@ mod tests {
             ),
             screen_ready: false,
             route_active: false,
+            prompt_visible: true,
         });
         let mut adapters = FakeAdapters::succeeding();
 
@@ -871,6 +918,7 @@ mod tests {
             ),
             screen_ready: true,
             route_active: false,
+            prompt_visible: true,
         });
         let mut failed_route = FakeAdapters::succeeding();
         failed_route.route_active = false;
@@ -884,6 +932,59 @@ mod tests {
         let mut stable_route = FakeAdapters::succeeding();
         presenter.present_with(frame(), &mut stable_route);
         assert_eq!(stable_route.route_activation_requests, [false]);
+    }
+
+    #[test]
+    fn compatibility_continue_hides_prompt_without_discarding_failure() {
+        let mut presenter = presenter(LauncherPresenterState::Compatibility {
+            failure: LatchFailure::runtime(
+                mister_magik_fb::latch_readiness::LatchFailureStage::LatchPost,
+                mister_magik_fb::latch_readiness::LatchFailureReason::LatchPostFailed,
+                "failed latch",
+            ),
+            screen_ready: true,
+            route_active: true,
+            prompt_visible: true,
+        });
+
+        assert!(presenter.continue_in_compatibility());
+        assert!(!presenter.compatibility_prompt_visible());
+        assert!(presenter.compatibility_failure().is_some());
+        assert!(!presenter.continue_in_compatibility());
+    }
+
+    #[test]
+    fn compatibility_retry_can_fail_repeatedly_then_restore_latch() {
+        let mut presenter = presenter(LauncherPresenterState::Compatibility {
+            failure: LatchFailure::runtime(
+                mister_magik_fb::latch_readiness::LatchFailureStage::LatchPost,
+                mister_magik_fb::latch_readiness::LatchFailureReason::LatchPostFailed,
+                "first failure",
+            ),
+            screen_ready: true,
+            route_active: true,
+            prompt_visible: true,
+        });
+        let retry_failure = || {
+            LatchFailure::runtime(
+                mister_magik_fb::latch_readiness::LatchFailureStage::PostVerification,
+                mister_magik_fb::latch_readiness::LatchFailureReason::PostedSequenceUnverified,
+                "retry failed",
+            )
+        };
+
+        assert!(!presenter.apply_retry_result(Err(retry_failure())));
+        assert!(!presenter.apply_retry_result(Err(retry_failure())));
+        assert!(presenter.compatibility_prompt_visible());
+        assert_eq!(presenter.compatibility_transitions(), 2);
+
+        assert!(presenter.apply_retry_result(Ok(FakeLatch)));
+        assert!(!presenter.compatibility_prompt_visible());
+        assert!(presenter.compatibility_failure().is_none());
+        assert_eq!(
+            presenter.pacing_backend(),
+            LauncherPresentBackend::FpgaVblankLatchHidden
+        );
     }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
