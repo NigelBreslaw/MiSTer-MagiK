@@ -326,6 +326,7 @@ fn dispatch_pre_fpga(cmd: &str, args: &[String]) {
         "toggle-simple-joystick-setting" => run_toggle_simple_joystick_setting(),
         "display-persist" => run_display_persist(args),
         "reset-delete-screenshot-packs" => run_reset_delete_screenshot_packs(args),
+        "benchmark-capabilities" => print_benchmark_capabilities(),
         #[cfg(feature = "bench-tools")]
         "media-bench-download" => media_bench_download::run(),
         #[cfg(feature = "bench-tools")]
@@ -361,6 +362,16 @@ fn dispatch_pre_fpga(cmd: &str, args: &[String]) {
         "transition-effects" => ui_runner::print_transition_effects(),
         other => unknown_command(other),
     }
+}
+
+fn print_benchmark_capabilities() {
+    crate::ui_logln!(
+        "{}",
+        serde_json::json!({
+            "schema": "mister-magik-benchmark-capabilities-v1",
+            "screensaver-pprof-v1": cfg!(feature = "profile"),
+        })
+    );
 }
 
 fn run_catalog_v3_inspect() {

@@ -7,6 +7,78 @@
 //! Build with `scripts/agent build runtime-profile`, run with `MISTER_PPROF=1`, pull the SVG
 //! and/or folded stack output.
 
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::time::Duration;
+
+const SCREENSAVER_TRIGGER: &str = "screensaver";
+const DEFAULT_SCREENSAVER_PROFILE_SECS: u64 = 30;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+enum ScreensaverProfileState {
+    Disabled,
+    Waiting,
+    Active,
+    Complete,
+    Failed,
+}
+
+impl ScreensaverProfileState {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Waiting => "waiting",
+            Self::Active => "active",
+            Self::Complete => "complete",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+static SCREENSAVER_PROFILE_STATE: AtomicU8 = AtomicU8::new(ScreensaverProfileState::Disabled as u8);
+
+fn set_screensaver_profile_state(state: ScreensaverProfileState) {
+    SCREENSAVER_PROFILE_STATE.store(state as u8, Ordering::Relaxed);
+}
+
+pub fn screensaver_profile_state() -> &'static str {
+    match SCREENSAVER_PROFILE_STATE.load(Ordering::Relaxed) {
+        value if value == ScreensaverProfileState::Waiting as u8 => {
+            ScreensaverProfileState::Waiting.label()
+        }
+        value if value == ScreensaverProfileState::Active as u8 => {
+            ScreensaverProfileState::Active.label()
+        }
+        value if value == ScreensaverProfileState::Complete as u8 => {
+            ScreensaverProfileState::Complete.label()
+        }
+        value if value == ScreensaverProfileState::Failed as u8 => {
+            ScreensaverProfileState::Failed.label()
+        }
+        _ => ScreensaverProfileState::Disabled.label(),
+    }
+}
+
+fn screensaver_profile_requested() -> bool {
+    std::env::var("MISTER_PPROF").ok().as_deref() == Some("1")
+        && std::env::var("MISTER_PPROF_TRIGGER").ok().as_deref() == Some(SCREENSAVER_TRIGGER)
+}
+
+fn screensaver_profile_duration() -> Duration {
+    screensaver_profile_duration_from_value(
+        std::env::var("MISTER_PPROF_DURATION_SECS").ok().as_deref(),
+    )
+}
+
+fn screensaver_profile_duration_from_value(value: Option<&str>) -> Duration {
+    Duration::from_secs(
+        value
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(DEFAULT_SCREENSAVER_PROFILE_SECS)
+            .clamp(1, 300),
+    )
+}
+
 #[derive(Debug, Clone)]
 pub struct CpuProfileSummary {
     pub sample_stacks: usize,
@@ -19,7 +91,13 @@ pub struct CpuProfileSummary {
 
 #[cfg(feature = "profile")]
 mod imp {
-    use super::CpuProfileSummary;
+    use super::{
+        CpuProfileSummary, ScreensaverProfileState, screensaver_profile_duration,
+        screensaver_profile_requested, set_screensaver_profile_state,
+    };
+    use serde_json::json;
+    use std::fs;
+    use std::time::{Duration, Instant};
 
     pub struct CpuProfiler {
         guard: pprof::ProfilerGuard<'static>,
@@ -32,6 +110,13 @@ mod imp {
         if std::env::var("MISTER_PPROF").ok().as_deref() != Some("1") {
             return None;
         }
+        if screensaver_profile_requested() {
+            return None;
+        }
+        start_enabled()
+    }
+
+    fn start_enabled() -> Option<CpuProfiler> {
         let hz = std::env::var("MISTER_PPROF_HZ")
             .ok()
             .and_then(|s| s.parse().ok())
@@ -141,14 +226,128 @@ mod imp {
         crate::ui_logln!("cpu_profile: wrote folded stacks to {path} ({bytes} bytes)");
         Ok(bytes)
     }
+
+    enum State {
+        Disabled,
+        Waiting,
+        Active {
+            profiler: CpuProfiler,
+            started: Instant,
+        },
+        Complete,
+        Failed,
+    }
+
+    pub struct ScreensaverProfiler {
+        state: State,
+        duration: Duration,
+        complete_path: Option<String>,
+    }
+
+    impl ScreensaverProfiler {
+        pub fn from_env() -> Self {
+            let requested = screensaver_profile_requested();
+            let state = if requested {
+                set_screensaver_profile_state(ScreensaverProfileState::Waiting);
+                State::Waiting
+            } else {
+                set_screensaver_profile_state(ScreensaverProfileState::Disabled);
+                State::Disabled
+            };
+            Self {
+                state,
+                duration: screensaver_profile_duration(),
+                complete_path: std::env::var("MISTER_PPROF_COMPLETE").ok(),
+            }
+        }
+
+        pub fn begin(&mut self) {
+            if !matches!(self.state, State::Waiting) {
+                return;
+            }
+            match start_enabled() {
+                Some(profiler) => {
+                    self.state = State::Active {
+                        profiler,
+                        started: Instant::now(),
+                    };
+                    set_screensaver_profile_state(ScreensaverProfileState::Active);
+                }
+                None => {
+                    self.fail("profiler-start-failed");
+                }
+            }
+        }
+
+        pub fn poll(&mut self) {
+            let elapsed = match &self.state {
+                State::Active { started, .. } => started.elapsed(),
+                _ => return,
+            };
+            if elapsed < self.duration {
+                return;
+            }
+            let state = std::mem::replace(&mut self.state, State::Failed);
+            let State::Active { profiler, .. } = state else {
+                return;
+            };
+            match finish(Some(profiler)) {
+                Ok(Some(summary)) => {
+                    let metadata = json!({
+                        "schema": "mister-magik-screensaver-pprof-v1",
+                        "state": "complete",
+                        "duration_secs": summary.duration_secs,
+                        "hz": summary.hz,
+                        "sample_stacks": summary.sample_stacks,
+                        "sample_hits": summary.sample_hits,
+                        "out_path": summary.out_path,
+                        "bytes": summary.bytes,
+                    });
+                    if let Err(error) = self.write_completion(&metadata.to_string()) {
+                        self.fail(&format!("completion-write-failed:{error}"));
+                        return;
+                    }
+                    self.state = State::Complete;
+                    set_screensaver_profile_state(ScreensaverProfileState::Complete);
+                }
+                Ok(None) => self.fail("profiler-produced-no-summary"),
+                Err(error) => self.fail(&error),
+            }
+        }
+
+        fn fail(&mut self, error: &str) {
+            let metadata = json!({
+                "schema": "mister-magik-screensaver-pprof-v1",
+                "state": "failed",
+                "error": error,
+            });
+            let _ = self.write_completion(&metadata.to_string());
+            self.state = State::Failed;
+            set_screensaver_profile_state(ScreensaverProfileState::Failed);
+            crate::ui_errln!("screensaver cpu profile failed: {error}");
+        }
+
+        fn write_completion(&self, text: &str) -> Result<(), String> {
+            let Some(path) = self.complete_path.as_deref() else {
+                return Err("MISTER_PPROF_COMPLETE is missing".into());
+            };
+            if let Some(parent) = std::path::Path::new(path).parent() {
+                fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            }
+            fs::write(path, format!("{text}\n")).map_err(|error| error.to_string())
+        }
+    }
 }
 
 #[cfg(feature = "profile")]
-pub use imp::{finish, start};
+pub use imp::{ScreensaverProfiler, finish, start};
 
 #[cfg(not(feature = "profile"))]
 mod stub {
-    use super::CpuProfileSummary;
+    use super::{
+        CpuProfileSummary, ScreensaverProfileState, screensaver_profile_requested,
+        set_screensaver_profile_state,
+    };
 
     pub struct CpuProfiler;
 
@@ -165,7 +364,45 @@ mod stub {
     pub fn finish(_: Option<CpuProfiler>) -> Result<Option<CpuProfileSummary>, String> {
         Ok(None)
     }
+
+    pub struct ScreensaverProfiler;
+
+    impl ScreensaverProfiler {
+        pub fn from_env() -> Self {
+            set_screensaver_profile_state(if screensaver_profile_requested() {
+                ScreensaverProfileState::Failed
+            } else {
+                ScreensaverProfileState::Disabled
+            });
+            Self
+        }
+
+        pub fn begin(&mut self) {}
+
+        pub fn poll(&mut self) {}
+    }
 }
 
 #[cfg(not(feature = "profile"))]
-pub use stub::{finish, start};
+pub use stub::{ScreensaverProfiler, finish, start};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn screensaver_profile_duration_is_bounded() {
+        assert_eq!(
+            screensaver_profile_duration_from_value(Some("0")),
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            screensaver_profile_duration_from_value(Some("999")),
+            Duration::from_secs(300)
+        );
+        assert_eq!(
+            screensaver_profile_duration_from_value(None),
+            Duration::from_secs(30)
+        );
+    }
+}

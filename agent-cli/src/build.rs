@@ -119,7 +119,7 @@ impl BuildSpec {
                 BuildTarget::Runtime,
                 BuildMode::Build,
                 "release-device",
-                vec!["ui"],
+                vec!["ui", "profile"],
                 scope,
                 runtime_artifact("release-device"),
                 true,
@@ -538,7 +538,7 @@ impl<'a> ProcessBuildActions<'a> {
         let rust_toolchain =
             home_dir()?.join(".rustup/toolchains/stable-aarch64-unknown-linux-gnu");
         let (build_number, version, build_time) = build_metadata(self.repository)?;
-        let rustflags = if self.spec.profile == "release-device-profile" {
+        let rustflags = if self.spec.features.contains(&"profile") {
             "-D warnings -C target-cpu=cortex-a9 -C force-frame-pointers=yes"
         } else {
             "-D warnings -C target-cpu=cortex-a9"
@@ -602,7 +602,7 @@ impl<'a> ProcessBuildActions<'a> {
 
     fn compile_with_cross(&self) -> AgentResult<()> {
         let (build_number, version, build_time) = build_metadata(self.repository)?;
-        let rustflags = if self.spec.profile == "release-device-profile" {
+        let rustflags = if self.spec.features.contains(&"profile") {
             "-D warnings -C target-cpu=cortex-a9 -C force-frame-pointers=yes"
         } else {
             "-D warnings -C target-cpu=cortex-a9"
@@ -1138,7 +1138,7 @@ mod tests {
     fn runtime_and_validation_intents_infer_fixed_identity() {
         let runtime = BuildSpec::for_recipe(BuildRecipe::RuntimeDevice(UiScope::All));
         assert_eq!(runtime.profile, "release-device");
-        assert_eq!(runtime.features, ["ui"]);
+        assert_eq!(runtime.features, ["ui", "profile"]);
         assert_eq!(runtime.ui_scope, UiScope::All);
         let launcher = BuildSpec::for_recipe(BuildRecipe::ValidateLauncher);
         assert_eq!(launcher.mode, BuildMode::Check);

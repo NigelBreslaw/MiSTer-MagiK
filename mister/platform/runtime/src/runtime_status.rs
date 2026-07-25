@@ -43,6 +43,9 @@ pub struct LauncherStatus<'a> {
     pub catalog_games: usize,
     pub catalog_systems: usize,
     pub catalog_refresh_done: bool,
+    pub catalog_refresh_policy: &'a str,
+    pub catalog_worker_enabled: bool,
+    pub screensaver_profile_state: &'a str,
     pub catalog_scan_visible: bool,
     pub catalog_scan_message: &'a str,
     pub catalog_scan_title: &'a str,
@@ -279,6 +282,12 @@ fn launcher_status_value(status: LauncherStatus<'_>, ts_unix_ms: u128, pid: u32)
     insert!("catalog_games", status.catalog_games);
     insert!("catalog_systems", status.catalog_systems);
     insert!("catalog_refresh_done", status.catalog_refresh_done);
+    insert!("catalog_refresh_policy", status.catalog_refresh_policy);
+    insert!("catalog_worker_enabled", status.catalog_worker_enabled);
+    insert!(
+        "screensaver_profile_state",
+        status.screensaver_profile_state
+    );
     insert!("catalog_scan_visible", status.catalog_scan_visible);
     insert!("catalog_scan_message", status.catalog_scan_message);
     insert!("catalog_scan_title", status.catalog_scan_title);
@@ -645,6 +654,9 @@ mod tests {
                 catalog_games: 9014,
                 catalog_systems: 13,
                 catalog_refresh_done: false,
+                catalog_refresh_policy: "off",
+                catalog_worker_enabled: false,
+                screensaver_profile_state: "active",
                 catalog_scan_visible: false,
                 catalog_scan_message: "Scanning for games",
                 catalog_scan_title: "",
@@ -950,6 +962,9 @@ mod tests {
             catalog_games: 12,
             catalog_systems: 2,
             catalog_refresh_done: true,
+            catalog_refresh_policy: "default",
+            catalog_worker_enabled: true,
+            screensaver_profile_state: "disabled",
             catalog_scan_visible: true,
             catalog_scan_message: "Updating Library",
             catalog_scan_title: "Indexing library",

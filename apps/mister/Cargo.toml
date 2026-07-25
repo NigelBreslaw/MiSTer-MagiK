@@ -83,6 +83,9 @@ panic = "abort"
 inherits = "release"
 lto = "fat"
 codegen-units = 2
+# Retain function symbols for dormant on-device pprof while dropping bulky
+# line-level debug sections.
+strip = "debuginfo"
 
 [profile.release-device-profile]
 # Profiling build: symbols + frame pointers for pprof flamegraphs on device.

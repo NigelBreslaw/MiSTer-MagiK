@@ -1905,6 +1905,7 @@ pub(super) fn run_launcher_loop(
     let mut arcade_drawer_view_cache = ArcadeDrawerViewCache::default();
     let mut composition = UiCompositionController::new();
     let cpu = cpu_profile::start();
+    let mut screensaver_cpu_profile = cpu_profile::ScreensaverProfiler::from_env();
     let mut bridge_models = LauncherBridgeModels::default();
     let mut catalog_version = 0usize;
     let arcade_root = std::env::var("MISTER_ARCADE_ROOT")
@@ -2308,6 +2309,7 @@ pub(super) fn run_launcher_loop(
     while (secs == 0 || run_start.elapsed().as_secs() < secs)
         && preview_scroll_exit_at.is_none_or(|deadline| Instant::now() < deadline)
     {
+        screensaver_cpu_profile.poll();
         if catalog_publication_test.wait_for_first_frame_release(Instant::now(), start) {
             std::thread::sleep(Duration::from_millis(16));
             continue;
@@ -3477,6 +3479,7 @@ pub(super) fn run_launcher_loop(
                             LauncherAction::PreviewScreensaver => {
                                 if !screensaver.preview_active {
                                     screensaver.preview(frame_now);
+                                    screensaver_cpu_profile.begin();
                                     screensaver_show_started = Some(frame_now);
                                     screensaver_first_render_logged = false;
                                     screensaver_first_present_logged = false;
