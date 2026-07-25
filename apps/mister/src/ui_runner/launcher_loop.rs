@@ -8,8 +8,8 @@ use super::launcher_frame_accounting::{
     LauncherFrameSnapshotBuilder, LauncherFrameStatusData, LauncherFrameTiming,
 };
 use super::launcher_pacing::{
-    FB0_LATE_FRAME_START_HEADROOM_US, FPGA_LATCH_LATE_FRAME_START_HEADROOM_US,
-    LauncherFramePacingInput, LauncherFramePacingPolicy, LauncherPacingTrace,
+    FB0_LATE_FRAME_START_HEADROOM_US, LauncherFramePacingInput, LauncherFramePacingPolicy,
+    LauncherPacingTrace, LauncherPhaseAlignment,
 };
 use super::launcher_screensaver::ScreensaverFrameTrace;
 use super::launcher_worker_intents::{apply_launcher_worker_ui_intent, catalog_scan_message};
@@ -1858,6 +1858,7 @@ pub(super) fn run_launcher_loop(
         .map(VsyncPacer::from_env_with_default_period)
         .unwrap_or_else(VsyncPacer::from_env);
     let pacing_policy = LauncherFramePacingPolicy::default();
+    let mut phase_alignment = LauncherPhaseAlignment::default();
     let present_timing = PresentTiming::from_env();
     if preview_route.allows_preview_work()
         && launcher_bench_scenario.is_some()
@@ -4174,7 +4175,7 @@ pub(super) fn run_launcher_loop(
             home_horizontal_input_held,
         );
         let late_frame_start_headroom_us = if latch_backend_active {
-            FPGA_LATCH_LATE_FRAME_START_HEADROOM_US
+            phase_alignment.required_headroom_us()
         } else {
             FB0_LATE_FRAME_START_HEADROOM_US
         };
@@ -4505,6 +4506,15 @@ pub(super) fn run_launcher_loop(
             cpu_t4,
             pacing_trace,
         } = present_cycle;
+        if presentation.main_present_backend.is_latch() {
+            phase_alignment.observe(
+                frame_t4
+                    .saturating_duration_since(frame_t0)
+                    .as_micros()
+                    .try_into()
+                    .unwrap_or(u64::MAX),
+            );
+        }
         if let Some(failure) = launcher_presenter.compatibility_failure() {
             let bridge = app.global::<slint_ui::launcher::MisterBridge>();
             bridge.set_compatibility_visible(true);

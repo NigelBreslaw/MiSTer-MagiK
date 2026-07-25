@@ -31,6 +31,44 @@ pub(super) struct LauncherPacingTrace {
 
 pub(super) const FB0_LATE_FRAME_START_HEADROOM_US: u64 = 6_000;
 pub(super) const FPGA_LATCH_LATE_FRAME_START_HEADROOM_US: u64 = 12_000;
+const LATCH_PHASE_MIN_HEADROOM_US: u64 = 8_000;
+const LATCH_PHASE_MAX_HEADROOM_US: u64 = 14_000;
+const LATCH_PHASE_SAFETY_US: u64 = 750;
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct LauncherPhaseAlignment {
+    estimated_work_us: u64,
+}
+
+impl Default for LauncherPhaseAlignment {
+    fn default() -> Self {
+        Self {
+            estimated_work_us: FPGA_LATCH_LATE_FRAME_START_HEADROOM_US
+                .saturating_sub(LATCH_PHASE_SAFETY_US),
+        }
+    }
+}
+
+impl LauncherPhaseAlignment {
+    pub(super) fn observe(&mut self, work_us: u64) {
+        let bounded = work_us.clamp(
+            LATCH_PHASE_MIN_HEADROOM_US.saturating_sub(LATCH_PHASE_SAFETY_US),
+            LATCH_PHASE_MAX_HEADROOM_US.saturating_sub(LATCH_PHASE_SAFETY_US),
+        );
+        self.estimated_work_us = self
+            .estimated_work_us
+            .saturating_mul(7)
+            .saturating_add(bounded)
+            / 8;
+    }
+
+    #[must_use]
+    pub(super) fn required_headroom_us(self) -> u64 {
+        self.estimated_work_us
+            .saturating_add(LATCH_PHASE_SAFETY_US)
+            .clamp(LATCH_PHASE_MIN_HEADROOM_US, LATCH_PHASE_MAX_HEADROOM_US)
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct LauncherFramePacingPolicy;
@@ -170,6 +208,27 @@ mod tests {
             16_667,
             FB0_LATE_FRAME_START_HEADROOM_US
         ));
+    }
+
+    #[test]
+    fn latch_phase_alignment_tracks_work_with_bounded_headroom() {
+        let mut alignment = LauncherPhaseAlignment::default();
+        assert_eq!(
+            alignment.required_headroom_us(),
+            FPGA_LATCH_LATE_FRAME_START_HEADROOM_US
+        );
+        for _ in 0..32 {
+            alignment.observe(9_000);
+        }
+        assert!(alignment.required_headroom_us() < FPGA_LATCH_LATE_FRAME_START_HEADROOM_US);
+        assert!(alignment.required_headroom_us() >= LATCH_PHASE_MIN_HEADROOM_US);
+        for _ in 0..32 {
+            alignment.observe(30_000);
+        }
+        assert_eq!(
+            alignment.required_headroom_us(),
+            LATCH_PHASE_MAX_HEADROOM_US
+        );
     }
 
     fn test_pace(source: VsyncPaceSource, hit_at: Option<Instant>) -> VsyncPace {
