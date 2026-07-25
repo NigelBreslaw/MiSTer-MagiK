@@ -2939,11 +2939,13 @@ fn profile_installed_screensaver(config: &NativeDeviceConfig, output_dir: &Path)
         ))
     })();
     let launcher_cleanup = restore_installed_screensaver_profile(config);
-    let final_verification = if let Some(expected_ini) = benchmark_ini.as_deref() {
-        verify_retained_benchmark_state(config, benchmark_mode, expected_ini, &boot_id, &manifest)
-    } else {
-        cancel_pending_benchmark_display_mode(config).map(|()| String::new())
-    };
+    let final_verification = finalize_benchmark_state(
+        config,
+        benchmark_mode,
+        benchmark_ini.as_deref(),
+        &boot_id,
+        &manifest,
+    );
     let cleanup_result =
         combine_benchmark_cleanup(launcher_cleanup, final_verification.map(|_| ()));
     let (summaries, framebuffer_size, framebuffer_bits_per_pixel, output_route) =
@@ -3070,32 +3072,45 @@ fn cancel_pending_benchmark_display_mode(config: &NativeDeviceConfig) -> Result<
     Ok(())
 }
 
-fn verify_retained_benchmark_state(
+fn finalize_benchmark_state(
     config: &NativeDeviceConfig,
     benchmark_mode: DisplayMatrixMode,
-    expected_ini: &str,
+    expected_ini: Option<&str>,
     expected_boot_id: &str,
     expected_manifest: &str,
 ) -> Result<String> {
-    let session = connect_with(&config.connection, 10)?;
+    let mut session = connect_with(&config.connection, 10)?;
     wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))?;
-    let state = exec_checked_output(
+    let mut state = exec_checked_output(
         &session,
         "verify retained benchmark display mode",
         &acknowledged_main_command("mister_magik_display_get_v1"),
     )?;
     if parse_display_reply_pending(state.stdout.trim())?.is_some() {
-        return Err("screensaver benchmark left a pending display transaction".into());
+        drop(session);
+        cancel_pending_benchmark_display_mode(config)?;
+        session = connect_with(&config.connection, 10)?;
+        wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))?;
+        state = exec_checked_output(
+            &session,
+            "verify cancelled benchmark display transaction",
+            &acknowledged_main_command("mister_magik_display_get_v1"),
+        )?;
+        if parse_display_reply_pending(state.stdout.trim())?.is_some() {
+            return Err("screensaver benchmark left a pending display transaction".into());
+        }
     }
     let active = parse_display_reply_active(state.stdout.trim())?;
-    if active != benchmark_mode.id {
+    if expected_ini.is_some() && active != benchmark_mode.id {
         return Err(format!(
             "screensaver benchmark ended in {active}, expected {}",
             benchmark_mode.id
         )
         .into());
     }
-    validate_live_display_mode(&session, benchmark_mode)?;
+    if active == benchmark_mode.id {
+        validate_live_display_mode(&session, benchmark_mode)?;
+    }
     let final_boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
         .ok_or("device boot id is unavailable after benchmark")?;
     if final_boot_id.trim() != expected_boot_id {
@@ -3106,9 +3121,16 @@ fn verify_retained_benchmark_state(
     if final_manifest != expected_manifest {
         return Err("installed platform manifest changed during benchmark".into());
     }
+    exec_checked(
+        &session,
+        "post-benchmark platform fingerprints",
+        &installed_platform_verify_command(Layout::Development),
+    )?;
     let final_ini =
         remote_read(&session, "/media/fat/MiSTer.ini").ok_or("MiSTer.ini is unavailable")?;
-    if final_ini != expected_ini {
+    if let Some(expected_ini) = expected_ini
+        && final_ini != expected_ini
+    {
         return Err("MiSTer.ini changed after the confirmed 720p benchmark baseline".into());
     }
     exec_checked(
@@ -3288,7 +3310,7 @@ fn restore_installed_screensaver_profile(config: &NativeDeviceConfig) -> Result<
         &session,
         "screensaver benchmark final cleanup",
         &format!(
-            "{cleanup}; test ! -e {env}; test ! -e /tmp/mister-magik/realtime-frame-analytics; test ! -e {profiles}",
+            "{cleanup}; test ! -e {env}; test ! -e {profiles}; for delay in 1 1 1; do rm -f /tmp/mister-magik/realtime-frame-analytics; sleep \"$delay\"; done; test ! -e /tmp/mister-magik/realtime-frame-analytics",
             env = sh(DEVELOPMENT_LAUNCHER_ENV_REMOTE),
             profiles = sh(SCREENSAVER_PROFILE_REMOTE_DIR)
         ),
@@ -3397,6 +3419,7 @@ fn summarize_screensaver_telemetry(
         let frame = frames
             .get(&frame_id)
             .ok_or_else(|| format!("screensaver profile run {run} is missing frame {frame_id}"))?;
+        validate_screensaver_frame_evidence(run, frame_id, frame)?;
         if frame.get("screensaver_active").and_then(Value::as_bool) != Some(true) {
             return Err(format!(
                 "screensaver profile run {run} frame {frame_id} is not an active screensaver frame"
@@ -3414,22 +3437,11 @@ fn summarize_screensaver_telemetry(
     let (startup, steady) = screensaver_frames.split_at(SCREENSAVER_STARTUP_WARMUP_FRAMES);
     let mut wall = steady
         .iter()
-        .filter_map(|frame| frame.get("wall_us").and_then(Value::as_u64))
+        .map(|frame| frame_u64(frame, "wall_us"))
         .collect::<Vec<_>>();
     let mut work = steady
         .iter()
-        .map(|frame| {
-            [
-                "prepare_us",
-                "render_us",
-                "custom_draw_us",
-                "present_us",
-                "runtime_status_write_us",
-            ]
-            .iter()
-            .filter_map(|key| frame.get(*key).and_then(Value::as_u64))
-            .sum::<u64>()
-        })
+        .map(|frame| frame_work_us(frame))
         .collect::<Vec<_>>();
     let refresh_period_us = steady
         .iter()
@@ -3461,6 +3473,26 @@ fn summarize_screensaver_telemetry(
                 "kind": "sequence-gap",
                 "previous": previous_sequence,
                 "actual": current_sequence,
+            }));
+        }
+        if frame_u16(current, "main_present_active_sequence") != current_sequence
+            || current.get("main_present_pending").and_then(Value::as_bool) != Some(false)
+        {
+            presentation_failures.push(json!({
+                "frame": frame_id,
+                "kind": "latch-not-complete",
+                "posted": current_sequence,
+                "active": frame_u16(current, "main_present_active_sequence"),
+                "pending": current.get("main_present_pending").cloned().unwrap_or(Value::Null),
+            }));
+        }
+        let flip_delta = frame_u16(current, "main_present_flip_count")
+            .wrapping_sub(frame_u16(previous, "main_present_flip_count"));
+        if flip_delta != 1 {
+            presentation_failures.push(json!({
+                "frame": frame_id,
+                "kind": "latch-flip-count",
+                "delta": flip_delta,
             }));
         }
         let drop_delta = frame_u16(current, "main_present_drop_count")
@@ -3533,6 +3565,7 @@ fn summarize_screensaver_telemetry(
                 "prepare_us": frame_u64(frame, "prepare_us"),
                 "render_us": frame_u64(frame, "render_us"),
                 "present_us": frame_u64(frame, "present_us"),
+                "work_us": frame_work_us(frame),
                 "process_cpu_us": frame_u64(frame, "process_cpu_us"),
                 "runtime_status_write_us": frame_u64(frame, "runtime_status_write_us"),
                 "clock_update_us": frame_u64(frame, "clock_update_us"),
@@ -3549,16 +3582,23 @@ fn summarize_screensaver_telemetry(
         .filter(|duration| *duration > 0.0)
         .ok_or_else(|| format!("screensaver profile run {run} has no valid duration"))?;
     let average_fps = steady.len() as f64 / profile_duration_secs;
-    let periodic = periodic_frame_signal(steady, refresh_period_us);
-    let raster = raster_cadence_summary(steady);
-    let maintenance = json!({
-        "clock_update": maintenance_cohort(steady, "clock_update_due", "clock_update_us"),
-        "runtime_status_write": maintenance_cohort(
-            steady,
-            "status_write_due",
-            "runtime_status_write_us",
-        ),
+    let work_signal = steady
+        .iter()
+        .map(|frame| frame_work_us(frame) as f64)
+        .collect::<Vec<_>>();
+    let interval_signal = steady
+        .windows(2)
+        .map(|pair| {
+            frame_u64(pair[1], "completion_monotonic_us")
+                .saturating_sub(frame_u64(pair[0], "completion_monotonic_us")) as f64
+        })
+        .collect::<Vec<_>>();
+    let periodic = json!({
+        "work": periodic_signal(&work_signal, refresh_period_us),
+        "presentation_interval": periodic_signal(&interval_signal, refresh_period_us),
     });
+    let raster = raster_cadence_summary(steady);
+    let maintenance = maintenance_cohorts(steady);
     let phase_means = json!({
         "prepare_us": mean_frame_field(steady, "prepare_us"),
         "render_us": mean_frame_field(steady, "render_us"),
@@ -3567,7 +3607,7 @@ fn summarize_screensaver_telemetry(
         "cpu_render_us": mean_frame_field(steady, "cpu_render_us"),
         "cpu_custom_draw_us": mean_frame_field(steady, "cpu_custom_draw_us"),
         "cpu_vsync_us": mean_frame_field(steady, "cpu_vsync_us"),
-        "cpu_present_us": mean_frame_field(steady, "cpu_present_us"),
+        "cpu_frame_tail_us": mean_frame_field(steady, "cpu_frame_tail_us"),
         "process_cpu_us": mean_frame_field(steady, "process_cpu_us"),
     });
     let present_errors = presentation_failures
@@ -3625,25 +3665,114 @@ fn frame_u16(frame: &Value, key: &str) -> u16 {
 }
 
 fn presentation_sequence_is_contiguous(previous: u16, current: u16) -> bool {
-    current == previous.wrapping_add(1)
+    current
+        == if previous == u16::MAX {
+            1
+        } else {
+            previous + 1
+        }
 }
 
-fn periodic_frame_signal(frames: &[&Value], refresh_period_us: u64) -> Value {
+fn frame_work_us(frame: &Value) -> u64 {
+    [
+        "prepare_us",
+        "render_us",
+        "custom_draw_us",
+        "present_us",
+        "runtime_status_write_us",
+    ]
+    .iter()
+    .map(|key| frame_u64(frame, key))
+    .sum()
+}
+
+fn validate_screensaver_frame_evidence(run: usize, frame_id: u64, frame: &Value) -> Result<()> {
+    const U64_FIELDS: &[&str] = &[
+        "frame",
+        "wall_us",
+        "prepare_us",
+        "render_us",
+        "custom_draw_us",
+        "present_us",
+        "cpu_prepare_us",
+        "cpu_render_us",
+        "cpu_custom_draw_us",
+        "cpu_vsync_us",
+        "cpu_frame_tail_us",
+        "process_cpu_us",
+        "completion_monotonic_us",
+        "vsync_period_us",
+        "vsync_miss_streak",
+        "vsync_stale_hits",
+        "vsync_wait_start_age_us",
+        "vsync_accepted_hit_age_us",
+        "main_present_sequence",
+        "main_present_active_sequence",
+        "main_present_flip_count",
+        "main_present_drop_count",
+        "runtime_status_write_us",
+        "clock_update_us",
+        "screensaver_archive_poll_us",
+        "screensaver_card_adopt_us",
+        "screensaver_parade_advance_us",
+        "screensaver_background_us",
+        "screensaver_draw_order_us",
+        "screensaver_tile_blit_us",
+        "screensaver_raster_held_cards",
+        "screensaver_raster_moved_cards",
+        "screensaver_raster_hold_layer_mask",
+        "screensaver_raster_visible_layer_mask",
+    ];
+    const BOOL_FIELDS: &[&str] = &[
+        "screensaver_active",
+        "main_present_pending",
+        "status_write_due",
+        "clock_update_due",
+    ];
+    const STRING_FIELDS: &[&str] = &[
+        "vsync_source",
+        "main_present_status",
+        "screensaver_sampling_profile",
+    ];
+    for key in U64_FIELDS {
+        if frame.get(*key).and_then(Value::as_u64).is_none() {
+            return Err(format!(
+                "screensaver profile run {run} frame {frame_id} has invalid {key} evidence"
+            )
+            .into());
+        }
+    }
+    for key in BOOL_FIELDS {
+        if frame.get(*key).and_then(Value::as_bool).is_none() {
+            return Err(format!(
+                "screensaver profile run {run} frame {frame_id} has invalid {key} evidence"
+            )
+            .into());
+        }
+    }
+    for key in STRING_FIELDS {
+        if frame.get(*key).and_then(Value::as_str).is_none() {
+            return Err(format!(
+                "screensaver profile run {run} frame {frame_id} has invalid {key} evidence"
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+fn periodic_signal(values: &[f64], refresh_period_us: u64) -> Value {
     const RADIUS: usize = 60;
-    if frames.len() < RADIUS * 2 + 2 {
+    if values.len() < RADIUS * 2 + 2 {
         return Value::Null;
     }
-    let wall = frames
-        .iter()
-        .map(|frame| frame_u64(frame, "wall_us") as f64)
-        .collect::<Vec<_>>();
-    let residual = wall
+    let residual = values
         .iter()
         .enumerate()
         .map(|(index, value)| {
             let start = index.saturating_sub(RADIUS);
-            let end = (index + RADIUS + 1).min(wall.len());
-            let mean = wall[start..end].iter().sum::<f64>() / (end - start) as f64;
+            let end = (index + RADIUS + 1).min(values.len());
+            let mean = values[start..end].iter().sum::<f64>() / (end - start) as f64;
             value - mean
         })
         .collect::<Vec<_>>();
@@ -3686,33 +3815,65 @@ fn fourier_amplitude(values: &[f64], period: f64) -> f64 {
     2.0 * real.hypot(imaginary) / values.len() as f64
 }
 
-fn maintenance_cohort(frames: &[&Value], due_key: &str, cost_key: &str) -> Value {
-    let mut tagged_wall = Vec::new();
-    let mut tagged_cost = Vec::new();
-    let mut ordinary_wall = Vec::new();
-    for frame in frames {
-        if frame.get(due_key).and_then(Value::as_bool).unwrap_or(false) {
-            tagged_wall.push(frame_u64(frame, "wall_us"));
-            tagged_cost.push(frame_u64(frame, cost_key));
-        } else {
-            ordinary_wall.push(frame_u64(frame, "wall_us"));
+fn maintenance_cohorts(frames: &[&Value]) -> Value {
+    let cohort = |clock: bool, status: bool| {
+        let selected = frames
+            .iter()
+            .filter(|frame| {
+                frame.get("clock_update_due").and_then(Value::as_bool) == Some(clock)
+                    && frame.get("status_write_due").and_then(Value::as_bool) == Some(status)
+            })
+            .copied()
+            .collect::<Vec<_>>();
+        json!({
+            "frames": selected.len(),
+            "mean_wall_us": mean_frame_field(&selected, "wall_us"),
+            "mean_work_us": if selected.is_empty() {
+                0.0
+            } else {
+                selected.iter().map(|frame| frame_work_us(frame) as f64).sum::<f64>()
+                    / selected.len() as f64
+            },
+            "mean_clock_cost_us": mean_frame_field(&selected, "clock_update_us"),
+            "mean_status_cost_us": mean_frame_field(&selected, "runtime_status_write_us"),
+        })
+    };
+    let matched_delta = |due_key: &str| {
+        let mut deltas = Vec::new();
+        for index in 1..frames.len().saturating_sub(1) {
+            if frames[index].get(due_key).and_then(Value::as_bool) != Some(true) {
+                continue;
+            }
+            let before = frames[index - 1];
+            let after = frames[index + 1];
+            if before.get(due_key).and_then(Value::as_bool) == Some(false)
+                && after.get(due_key).and_then(Value::as_bool) == Some(false)
+            {
+                let baseline = (frame_work_us(before) + frame_work_us(after)) as f64 / 2.0;
+                deltas.push(frame_work_us(frames[index]) as f64 - baseline);
+            }
         }
-    }
-    let tagged_mean = mean_u64(&tagged_wall);
-    let ordinary_mean = mean_u64(&ordinary_wall);
+        json!({
+            "matched_frames": deltas.len(),
+            "mean_work_delta_us": if deltas.is_empty() {
+                0.0
+            } else {
+                deltas.iter().sum::<f64>() / deltas.len() as f64
+            },
+        })
+    };
     json!({
-        "frames": tagged_wall.len(),
-        "mean_wall_us": tagged_mean,
-        "mean_cost_us": mean_u64(&tagged_cost),
-        "mean_wall_delta_us": tagged_mean - ordinary_mean,
+        "cohorts": {
+            "neither": cohort(false, false),
+            "clock_only": cohort(true, false),
+            "status_only": cohort(false, true),
+            "both": cohort(true, true),
+        },
+        "matched_neighbors": {
+            "clock_update": matched_delta("clock_update_due"),
+            "runtime_status_write": matched_delta("status_write_due"),
+        },
     })
-}
-
-fn mean_u64(values: &[u64]) -> f64 {
-    if values.is_empty() {
-        return 0.0;
-    }
-    values.iter().map(|value| *value as f64).sum::<f64>() / values.len() as f64
 }
 
 fn mean_frame_field(frames: &[&Value], key: &str) -> f64 {
@@ -3731,6 +3892,7 @@ fn raster_cadence_summary(frames: &[&Value]) -> Value {
     let mut held_cards = 0_u64;
     let mut moved_cards = 0_u64;
     let mut layer_held_frames = [0_u64; 5];
+    let mut layer_visible_frames = [0_u64; 5];
     let mut profiles = std::collections::BTreeSet::new();
     for frame in frames {
         let held = frame_u64(frame, "screensaver_raster_held_cards");
@@ -3738,8 +3900,10 @@ fn raster_cadence_summary(frames: &[&Value]) -> Value {
         held_cards += held;
         moved_cards += frame_u64(frame, "screensaver_raster_moved_cards");
         let mask = frame_u64(frame, "screensaver_raster_hold_layer_mask") as u8;
-        for (layer, count) in layer_held_frames.iter_mut().enumerate() {
-            *count += u64::from(mask & (1 << layer) != 0);
+        let visible_mask = frame_u64(frame, "screensaver_raster_visible_layer_mask") as u8;
+        for layer in 0..layer_held_frames.len() {
+            layer_held_frames[layer] += u64::from(mask & (1 << layer) != 0);
+            layer_visible_frames[layer] += u64::from(visible_mask & (1 << layer) != 0);
         }
         if let Some(profile) = frame
             .get("screensaver_sampling_profile")
@@ -3754,6 +3918,14 @@ fn raster_cadence_summary(frames: &[&Value]) -> Value {
         "held_card_events": held_cards,
         "moved_card_events": moved_cards,
         "layer_held_frames": layer_held_frames,
+        "layer_visible_frames": layer_visible_frames,
+        "layer_hold_rates": std::array::from_fn::<_, 5, _>(|layer| {
+            if layer_visible_frames[layer] == 0 {
+                0.0
+            } else {
+                layer_held_frames[layer] as f64 / layer_visible_frames[layer] as f64
+            }
+        }),
     })
 }
 
@@ -3815,73 +3987,88 @@ fn screensaver_benchmark_report(summary: &Value) -> Result<String> {
     for run in runs {
         let run_id = frame_u64(run, "run");
         writeln!(report, "\n## Run {run_id}\n")?;
-        if let Some(periodic) = run.get("periodic_timing").filter(|value| !value.is_null()) {
-            writeln!(
-                report,
-                "Strongest 45-75 frame timing component: {:.3} Hz at {:.3} ms amplitude ({:.3} ms peak-to-peak).\n",
-                periodic
-                    .get("frequency_hz")
-                    .and_then(Value::as_f64)
-                    .unwrap_or(0.0),
-                periodic
-                    .get("amplitude_us")
-                    .and_then(Value::as_f64)
-                    .unwrap_or(0.0)
-                    / 1_000.0,
-                periodic
-                    .get("peak_to_peak_us")
-                    .and_then(Value::as_f64)
-                    .unwrap_or(0.0)
-                    / 1_000.0,
-            )?;
+        for (label, pointer) in [
+            ("work", "/periodic_timing/work"),
+            (
+                "presentation interval",
+                "/periodic_timing/presentation_interval",
+            ),
+        ] {
+            if let Some(periodic) = run.pointer(pointer).filter(|value| !value.is_null()) {
+                writeln!(
+                    report,
+                    "Strongest 45-75 frame {label} component: {:.2} frames ({:.3} Hz), {:.3} ms amplitude; harmonics {:.3}/{:.3} ms.\n",
+                    periodic
+                        .get("period_frames")
+                        .and_then(Value::as_f64)
+                        .unwrap_or(0.0),
+                    periodic
+                        .get("frequency_hz")
+                        .and_then(Value::as_f64)
+                        .unwrap_or(0.0),
+                    periodic
+                        .get("amplitude_us")
+                        .and_then(Value::as_f64)
+                        .unwrap_or(0.0)
+                        / 1_000.0,
+                    periodic
+                        .get("second_harmonic_amplitude_us")
+                        .and_then(Value::as_f64)
+                        .unwrap_or(0.0)
+                        / 1_000.0,
+                    periodic
+                        .get("third_harmonic_amplitude_us")
+                        .and_then(Value::as_f64)
+                        .unwrap_or(0.0)
+                        / 1_000.0,
+                )?;
+            }
         }
         writeln!(
             report,
-            "Raster holds: {} frames, {} held-card events. Layer hold-frame counts: `{}`.\n",
+            "Visible raster holds: {} frames, {} held-card events, {} moved-card events. Per-layer held/visible/rate: `{}` / `{}` / `{}`. Sampling: `{}`.\n",
             run.pointer("/raster_cadence/held_frames")
                 .and_then(Value::as_u64)
                 .unwrap_or(0),
             run.pointer("/raster_cadence/held_card_events")
                 .and_then(Value::as_u64)
                 .unwrap_or(0),
+            run.pointer("/raster_cadence/moved_card_events")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
             run.pointer("/raster_cadence/layer_held_frames")
+                .cloned()
+                .unwrap_or(Value::Null),
+            run.pointer("/raster_cadence/layer_visible_frames")
+                .cloned()
+                .unwrap_or(Value::Null),
+            run.pointer("/raster_cadence/layer_hold_rates")
+                .cloned()
+                .unwrap_or(Value::Null),
+            run.pointer("/raster_cadence/sampling_profiles")
                 .cloned()
                 .unwrap_or(Value::Null),
         )?;
         writeln!(
             report,
-            "Clock-update frames: {}, mean wall delta {:.3} ms. Status-write frames: {}, mean wall delta {:.3} ms.\n",
-            run.pointer("/maintenance/clock_update/frames")
-                .and_then(Value::as_u64)
-                .unwrap_or(0),
-            run.pointer("/maintenance/clock_update/mean_wall_delta_us")
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0)
-                / 1_000.0,
-            run.pointer("/maintenance/runtime_status_write/frames")
-                .and_then(Value::as_u64)
-                .unwrap_or(0),
-            run.pointer("/maintenance/runtime_status_write/mean_wall_delta_us")
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0)
-                / 1_000.0,
+            "Maintenance cohorts (neither/clock/status/both): `{}`. Neighbor-matched work deltas: `{}`.\n",
+            run.pointer("/maintenance/cohorts")
+                .cloned()
+                .unwrap_or(Value::Null),
+            run.pointer("/maintenance/matched_neighbors")
+                .cloned()
+                .unwrap_or(Value::Null),
         )?;
         writeln!(
             report,
-            "Mean phases: render {:.3} ms, present {:.3} ms, process CPU {:.3} ms.\n",
-            run.pointer("/phase_means/render_us")
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0)
-                / 1_000.0,
-            run.pointer("/phase_means/present_us")
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0)
-                / 1_000.0,
-            run.pointer("/phase_means/process_cpu_us")
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0)
-                / 1_000.0,
+            "Mean wall phases and complete CPU attribution: `{}`.\n",
+            run.get("phase_means").cloned().unwrap_or(Value::Null),
         )?;
+        let failures = run
+            .pointer("/steady_state/presentation_failures")
+            .cloned()
+            .unwrap_or_else(|| json!([]));
+        writeln!(report, "Presentation failures: `{failures}`.\n")?;
         let outliers = run
             .get("outliers")
             .and_then(Value::as_array)
@@ -3891,15 +4078,16 @@ fn screensaver_benchmark_report(summary: &Value) -> Result<String> {
         if !outliers.is_empty() {
             writeln!(
                 report,
-                "| Frame | Wall | Render | Present | Process CPU | Status write | Clock update |"
+                "| Frame | Wall | Work | Render | Present | Process CPU | Status write | Clock update |"
             )?;
-            writeln!(report, "|---:|---:|---:|---:|---:|---:|---:|")?;
+            writeln!(report, "|---:|---:|---:|---:|---:|---:|---:|---:|")?;
             for frame in outliers {
                 writeln!(
                     report,
-                    "| {} | {} us | {} us | {} us | {} us | {} us | {} us |",
+                    "| {} | {} us | {} us | {} us | {} us | {} us | {} us | {} us |",
                     frame_u64(frame, "frame"),
                     frame_u64(frame, "wall_us"),
+                    frame_u64(frame, "work_us"),
                     frame_u64(frame, "render_us"),
                     frame_u64(frame, "present_us"),
                     frame_u64(frame, "process_cpu_us"),
@@ -11591,16 +11779,40 @@ H: Handlers=event3 js0"#
                 "render_us": 5_000,
                 "custom_draw_us": 1_000,
                 "present_us": 500,
+                "cpu_prepare_us": 100,
+                "cpu_render_us": 500,
+                "cpu_custom_draw_us": 100,
+                "cpu_vsync_us": 10,
+                "cpu_frame_tail_us": 20,
+                "process_cpu_us": 730,
+                "completion_monotonic_us": id * 16_667,
                 "vsync_period_us": 16_667,
                 "vsync_miss_streak": 0,
+                "vsync_stale_hits": 0,
+                "vsync_wait_start_age_us": 0,
+                "vsync_accepted_hit_age_us": 0,
                 "vsync_source": "vsync",
                 "main_present_status": "ok",
                 "main_present_sequence": id,
+                "main_present_active_sequence": id,
+                "main_present_pending": false,
+                "main_present_flip_count": id + 10,
                 "main_present_drop_count": 2,
+                "status_write_due": false,
+                "runtime_status_write_us": 0,
+                "clock_update_due": false,
+                "clock_update_us": 0,
                 "screensaver_sampling_profile": "legacy-half",
+                "screensaver_archive_poll_us": 0,
+                "screensaver_card_adopt_us": 0,
+                "screensaver_parade_advance_us": 100,
+                "screensaver_background_us": 100,
+                "screensaver_draw_order_us": 100,
+                "screensaver_tile_blit_us": 4_000,
                 "screensaver_raster_held_cards": u64::from(id == 4),
                 "screensaver_raster_moved_cards": 4,
-                "screensaver_raster_hold_layer_mask": u64::from(id == 4)
+                "screensaver_raster_hold_layer_mask": u64::from(id == 4),
+                "screensaver_raster_visible_layer_mask": 31
             })
         };
         let telemetry = [json!({
@@ -11646,6 +11858,15 @@ H: Handlers=event3 js0"#
         assert_eq!(summary["steady_state"]["presentation_failures"], json!([]));
         assert_eq!(summary["latch_drop_delta"], 0);
         assert_eq!(summary["raster_cadence"]["held_frames"], 1);
+        let report = screensaver_benchmark_report(&json!({
+            "manifest": {"magik_revision": "test-revision"},
+            "display": {"final_mode": "hdmi-1280x720p60"},
+            "runs": [summary.clone()],
+        }))
+        .unwrap();
+        assert!(report.contains("Presentation failures"));
+        assert!(report.contains("Visible raster holds"));
+        assert!(report.contains("complete CPU attribution"));
         assert!(
             summarize_screensaver_telemetry(
                 1,
@@ -11679,15 +11900,13 @@ H: Handlers=event3 js0"#
 
     #[test]
     fn periodic_timing_analysis_recovers_a_sixty_frame_signal() {
-        let frames = (0..1_800)
+        let values = (0..1_800)
             .map(|frame| {
                 let phase = std::f64::consts::TAU * frame as f64 / 60.0;
-                let wall_us = (12_000.0 + 500.0 * phase.sin()).round() as u64;
-                json!({"wall_us": wall_us})
+                12_000.0 + 500.0 * phase.sin()
             })
             .collect::<Vec<_>>();
-        let refs = frames.iter().collect::<Vec<_>>();
-        let signal = periodic_frame_signal(&refs, 16_667);
+        let signal = periodic_signal(&values, 16_667);
         let period = signal["period_frames"].as_f64().unwrap();
         let amplitude = signal["amplitude_us"].as_f64().unwrap();
         assert!((period - 60.0).abs() <= 0.25);
@@ -11697,7 +11916,8 @@ H: Handlers=event3 js0"#
     #[test]
     fn presentation_sequence_continuity_accepts_u16_wrap_only() {
         assert!(presentation_sequence_is_contiguous(41, 42));
-        assert!(presentation_sequence_is_contiguous(u16::MAX, 0));
+        assert!(presentation_sequence_is_contiguous(u16::MAX, 1));
+        assert!(!presentation_sequence_is_contiguous(u16::MAX, 0));
         assert!(!presentation_sequence_is_contiguous(41, 43));
         assert!(!presentation_sequence_is_contiguous(41, 41));
     }

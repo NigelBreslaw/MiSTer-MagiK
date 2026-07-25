@@ -131,6 +131,8 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) main_present_set_vga_fb_us: u128,
     pub(super) main_present_wait_us: u64,
     pub(super) main_present_sequence: u16,
+    pub(super) main_present_active_sequence: u16,
+    pub(super) main_present_pending: bool,
     pub(super) main_present_flip_count: u16,
     pub(super) main_present_drop_count: u16,
     pub(super) vsync_source: Option<VsyncPaceSource>,
@@ -337,6 +339,8 @@ impl LauncherFrameSnapshotBuilder {
             main_present_set_vga_fb_us: self.presentation.main_present_set_vga_fb_us,
             main_present_wait_us: self.presentation.main_present_wait_us,
             main_present_sequence: self.presentation.main_present_sequence,
+            main_present_active_sequence: self.presentation.main_present_sequence,
+            main_present_pending: false,
             main_present_flip_count: self.presentation.main_present_flip_count,
             main_present_drop_count: self.presentation.main_present_drop_count,
             vsync_source: self.pacing.vsync_source,
@@ -1644,11 +1648,19 @@ impl LauncherFrameAccounting {
                     frame.cpu_custom_draw_done,
                 ),
                 cpu_vsync_us: cpu_delta(frame.cpu_custom_draw_done, frame.cpu_t3),
-                cpu_present_us: cpu_delta(frame.cpu_t3, frame.cpu_t4),
+                cpu_frame_tail_us: cpu_delta(frame.cpu_t3, frame.cpu_t4),
                 process_cpu_us: frame
                     .cpu_t4
                     .process_us
                     .saturating_sub(frame.cpu_loop_start.process_us),
+                completion_monotonic_us: frame.startup_monotonic_us.saturating_add(
+                    u128_to_u64_saturating(
+                        frame
+                            .frame_t4
+                            .saturating_duration_since(frame.startup_start)
+                            .as_micros(),
+                    ),
+                ),
                 vsync_source: vsync_source_label(frame.vsync_source),
                 vsync_period_us: frame.vsync_period_us,
                 vsync_miss_streak: frame.vsync_miss_streak,
@@ -1657,6 +1669,8 @@ impl LauncherFrameAccounting {
                 vsync_accepted_hit_age_us: frame.vsync_accepted_hit_age_us,
                 main_present_status: frame.main_present_status.trace_label(),
                 main_present_sequence: frame.main_present_sequence,
+                main_present_active_sequence: frame.main_present_active_sequence,
+                main_present_pending: frame.main_present_pending,
                 main_present_flip_count: frame.main_present_flip_count,
                 main_present_drop_count: frame.main_present_drop_count,
                 status_write_due: frame.status_write_due,
@@ -1691,6 +1705,9 @@ impl LauncherFrameAccounting {
                 screensaver_raster_hold_layer_mask: frame
                     .screensaver_frame_trace
                     .raster_hold_layer_mask,
+                screensaver_raster_visible_layer_mask: frame
+                    .screensaver_frame_trace
+                    .raster_visible_layer_mask,
             });
     }
 
@@ -2281,6 +2298,8 @@ mod tests {
             main_present_set_vga_fb_us: 0,
             main_present_wait_us: 0,
             main_present_sequence: 0,
+            main_present_active_sequence: 0,
+            main_present_pending: false,
             main_present_flip_count: 0,
             main_present_drop_count: 0,
             vsync_source: Some(VsyncPaceSource::Timeout),
@@ -2659,6 +2678,7 @@ mod tests {
         frame.main_present_backend = LauncherPresentBackend::FpgaVblankLatchHidden;
         frame.main_present_status = LauncherPresentStatus::Ok;
         frame.main_present_sequence = 65_535;
+        frame.main_present_active_sequence = 65_535;
         frame.main_present_flip_count = 42;
         frame.vsync_source = Some(VsyncPaceSource::Vsync);
         frame.vsync_us_override = Some(4_000);
@@ -2670,6 +2690,7 @@ mod tests {
         frame.screensaver_frame_trace.raster_held_cards = 2;
         frame.screensaver_frame_trace.raster_moved_cards = 8;
         frame.screensaver_frame_trace.raster_hold_layer_mask = 1;
+        frame.screensaver_frame_trace.raster_visible_layer_mask = 3;
 
         accounting.accumulate_frame_budget(&frame, 321);
 
@@ -2683,12 +2704,15 @@ mod tests {
         assert_eq!(recent.present_us, 3_000);
         assert_eq!(recent.vsync_source, "vsync");
         assert_eq!(recent.main_present_sequence, 65_535);
+        assert_eq!(recent.main_present_active_sequence, 65_535);
+        assert!(!recent.main_present_pending);
         assert_eq!(recent.main_present_status, "ok");
         assert_eq!(recent.runtime_status_write_us, 321);
         assert_eq!(recent.clock_update_us, 45);
         assert_eq!(recent.screensaver_sampling_profile, "legacy-half");
         assert_eq!(recent.screensaver_raster_held_cards, 2);
         assert_eq!(recent.screensaver_raster_hold_layer_mask, 1);
+        assert_eq!(recent.screensaver_raster_visible_layer_mask, 3);
     }
 
     #[test]

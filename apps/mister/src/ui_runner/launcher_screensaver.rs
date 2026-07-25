@@ -265,6 +265,7 @@ pub(super) struct ScreensaverFrameTrace {
     pub(super) raster_held_cards: usize,
     pub(super) raster_moved_cards: usize,
     pub(super) raster_hold_layer_mask: u8,
+    pub(super) raster_visible_layer_mask: u8,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -272,9 +273,6 @@ struct ParadeAdvanceTrace {
     card_adopt_us: u128,
     cards_adopted: usize,
     parade_advance_us: u128,
-    raster_held_cards: usize,
-    raster_moved_cards: usize,
-    raster_hold_layer_mask: u8,
 }
 
 impl LauncherScreensaver {
@@ -2344,6 +2342,8 @@ struct ParadeTile {
     phase_set: ParadePhaseSet,
     corner_insets: Vec<u8>,
     active: bool,
+    raster_held_this_frame: bool,
+    raster_moved_this_frame: bool,
     next: Option<PreparedParadeCard>,
     pending_image_idx: Option<usize>,
 }
@@ -2620,6 +2620,8 @@ impl ParadeState {
                     phase_set: card.phase_set,
                     corner_insets: card.corner_insets,
                     active,
+                    raster_held_this_frame: false,
+                    raster_moved_this_frame: false,
                     next: None,
                     pending_image_idx: None,
                 });
@@ -2698,6 +2700,8 @@ impl ParadeState {
             phase_set,
             corner_insets: Vec::new(),
             active: false,
+            raster_held_this_frame: false,
+            raster_moved_this_frame: false,
             next: None,
             pending_image_idx: None,
         });
@@ -2822,6 +2826,8 @@ impl ParadeState {
                     phase_set,
                     corner_insets,
                     active,
+                    raster_held_this_frame: false,
+                    raster_moved_this_frame: false,
                     next: None,
                     pending_image_idx: None,
                 });
@@ -2878,13 +2884,12 @@ impl ParadeState {
         let card_adopt_us = adopt_start.elapsed().as_micros();
         let advance_start = Instant::now();
         let mut exited = Vec::new();
-        let mut raster_held_cards = 0;
-        let mut raster_moved_cards = 0;
-        let mut raster_hold_layer_mask = 0_u8;
         let sampling_profile = self.sampling_profile;
         for tile_idx in 0..self.tiles.len() {
             if self.tiles[tile_idx].active {
                 let tile = &mut self.tiles[tile_idx];
+                tile.raster_held_this_frame = false;
+                tile.raster_moved_this_frame = false;
                 let previous_x_fp = tile.x_fp;
                 let previous_raster_phase = parade_raster_phase_key(sampling_profile, tile.x_fp);
                 let motion = tile
@@ -2896,13 +2901,9 @@ impl ParadeState {
                 if tile.x_fp != previous_x_fp {
                     let raster_phase = parade_raster_phase_key(sampling_profile, tile.x_fp);
                     if raster_phase == previous_raster_phase {
-                        raster_held_cards += 1;
-                        let layer_idx = tile.layer.saturating_sub(PARADE_MIN_TILE_SPEED);
-                        if layer_idx < u8::BITS as usize {
-                            raster_hold_layer_mask |= 1_u8 << layer_idx;
-                        }
+                        tile.raster_held_this_frame = true;
                     } else {
-                        raster_moved_cards += 1;
+                        tile.raster_moved_this_frame = true;
                     }
                 }
                 if self.tiles[tile_idx].x() >= screen_w as isize {
@@ -2979,9 +2980,6 @@ impl ParadeState {
             card_adopt_us,
             cards_adopted,
             parade_advance_us: advance_start.elapsed().as_micros(),
-            raster_held_cards,
-            raster_moved_cards,
-            raster_hold_layer_mask,
         }
     }
 
@@ -3543,6 +3541,22 @@ fn render_archive_parade(
     prepare_parade_draw_order(state);
     let cards_culled = prepare_parade_visible_draw_order(state, w, h);
     let draw_order_us = draw_order_start.elapsed().as_micros();
+    let mut raster_held_cards = 0;
+    let mut raster_moved_cards = 0;
+    let mut raster_hold_layer_mask = 0_u8;
+    let mut raster_visible_layer_mask = 0_u8;
+    for &tile_idx in &state.visible_draw_order {
+        let tile = &state.tiles[tile_idx];
+        let layer_idx = tile.layer.saturating_sub(PARADE_MIN_TILE_SPEED);
+        if layer_idx < u8::BITS as usize {
+            raster_visible_layer_mask |= 1_u8 << layer_idx;
+            if tile.raster_held_this_frame {
+                raster_hold_layer_mask |= 1_u8 << layer_idx;
+            }
+        }
+        raster_held_cards += usize::from(tile.raster_held_this_frame);
+        raster_moved_cards += usize::from(tile.raster_moved_this_frame);
+    }
     let tile_blit_start = Instant::now();
     for &tile_idx in &state.visible_draw_order {
         let tile = &state.tiles[tile_idx];
@@ -3558,9 +3572,10 @@ fn render_archive_parade(
         cards_drawn: state.visible_draw_order.len(),
         cards_culled,
         sampling_profile: state.sampling_profile.label(),
-        raster_held_cards: advance.raster_held_cards,
-        raster_moved_cards: advance.raster_moved_cards,
-        raster_hold_layer_mask: advance.raster_hold_layer_mask,
+        raster_held_cards,
+        raster_moved_cards,
+        raster_hold_layer_mask,
+        raster_visible_layer_mask,
         ..ScreensaverFrameTrace::default()
     }
 }
@@ -3841,6 +3856,8 @@ mod tests {
             phase_set,
             corner_insets,
             active: true,
+            raster_held_this_frame: false,
+            raster_moved_this_frame: false,
             next: None,
             pending_image_idx: None,
         }
@@ -4265,6 +4282,8 @@ mod tests {
             scaled,
             phase_set,
             active: true,
+            raster_held_this_frame: false,
+            raster_moved_this_frame: false,
             next: None,
             pending_image_idx: None,
         };
@@ -4594,6 +4613,8 @@ mod tests {
             phase_set,
             corner_insets,
             active: true,
+            raster_held_this_frame: false,
+            raster_moved_this_frame: false,
             next: None,
             pending_image_idx: None,
         });
@@ -4783,6 +4804,8 @@ mod tests {
                 phase_set: slow_phase_set,
                 corner_insets: slow_corner_insets,
                 active: true,
+                raster_held_this_frame: false,
+                raster_moved_this_frame: false,
                 next: None,
                 pending_image_idx: None,
             },
@@ -4798,6 +4821,8 @@ mod tests {
                 phase_set: fast_phase_set,
                 corner_insets: fast_corner_insets,
                 active: true,
+                raster_held_this_frame: false,
+                raster_moved_this_frame: false,
                 next: None,
                 pending_image_idx: None,
             },

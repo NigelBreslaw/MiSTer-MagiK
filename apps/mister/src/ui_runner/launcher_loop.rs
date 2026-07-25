@@ -4734,6 +4734,18 @@ pub(super) fn run_launcher_loop(
             presented_frame.vsync_stale_hits = wait_trace.vsync_stale_hits;
             presented_frame.vsync_wait_start_age_us = wait_trace.vsync_wait_start_age_us;
             presented_frame.vsync_accepted_hit_age_us = wait_trace.vsync_accepted_hit_age_us;
+            match f.read_magik_latched_fbuf_status() {
+                Ok(status) if status.supported() => {
+                    presented_frame.main_present_active_sequence = status.active_sequence;
+                    presented_frame.main_present_pending = status.pending();
+                    presented_frame.main_present_flip_count = status.flip_count;
+                    presented_frame.main_present_drop_count = status.drop_count;
+                }
+                Ok(_) | Err(_) => {
+                    presented_frame.main_present_active_sequence = 0;
+                    presented_frame.main_present_pending = true;
+                }
+            }
             frame_accounting.record_finished_frame(
                 &presented_frame,
                 start,

@@ -139,8 +139,9 @@ pub struct FrameBudgetRecentFrame {
     pub cpu_render_us: u64,
     pub cpu_custom_draw_us: u64,
     pub cpu_vsync_us: u64,
-    pub cpu_present_us: u64,
+    pub cpu_frame_tail_us: u64,
     pub process_cpu_us: u64,
+    pub completion_monotonic_us: u64,
     pub vsync_source: &'static str,
     pub vsync_period_us: u64,
     pub vsync_miss_streak: u32,
@@ -149,6 +150,8 @@ pub struct FrameBudgetRecentFrame {
     pub vsync_accepted_hit_age_us: u64,
     pub main_present_status: &'static str,
     pub main_present_sequence: u16,
+    pub main_present_active_sequence: u16,
+    pub main_present_pending: bool,
     pub main_present_flip_count: u16,
     pub main_present_drop_count: u16,
     pub status_write_due: bool,
@@ -165,6 +168,7 @@ pub struct FrameBudgetRecentFrame {
     pub screensaver_raster_held_cards: u64,
     pub screensaver_raster_moved_cards: u64,
     pub screensaver_raster_hold_layer_mask: u8,
+    pub screensaver_raster_visible_layer_mask: u8,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -432,46 +436,79 @@ fn frame_budget_status_value(status: &FrameBudgetStatus) -> Value {
 }
 
 fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
-    json!({
-        "frame": frame.frame,
-        "screensaver_active": frame.screensaver_active,
-        "wall_us": frame.wall_us,
-        "prepare_us": frame.prepare_us,
-        "render_us": frame.render_us,
-        "custom_draw_us": frame.custom_draw_us,
-        "vsync_us": frame.vsync_us,
-        "present_us": frame.present_us,
-        "cpu_prepare_us": frame.cpu_prepare_us,
-        "cpu_render_us": frame.cpu_render_us,
-        "cpu_custom_draw_us": frame.cpu_custom_draw_us,
-        "cpu_vsync_us": frame.cpu_vsync_us,
-        "cpu_present_us": frame.cpu_present_us,
-        "process_cpu_us": frame.process_cpu_us,
-        "vsync_source": frame.vsync_source,
-        "vsync_period_us": frame.vsync_period_us,
-        "vsync_miss_streak": frame.vsync_miss_streak,
-        "vsync_stale_hits": frame.vsync_stale_hits,
-        "vsync_wait_start_age_us": frame.vsync_wait_start_age_us,
-        "vsync_accepted_hit_age_us": frame.vsync_accepted_hit_age_us,
-        "main_present_status": frame.main_present_status,
-        "main_present_sequence": frame.main_present_sequence,
-        "main_present_flip_count": frame.main_present_flip_count,
-        "main_present_drop_count": frame.main_present_drop_count,
-        "status_write_due": frame.status_write_due,
-        "runtime_status_write_us": frame.runtime_status_write_us,
-        "clock_update_due": frame.clock_update_due,
-        "clock_update_us": frame.clock_update_us,
-        "screensaver_sampling_profile": frame.screensaver_sampling_profile,
-        "screensaver_archive_poll_us": frame.screensaver_archive_poll_us,
-        "screensaver_card_adopt_us": frame.screensaver_card_adopt_us,
-        "screensaver_parade_advance_us": frame.screensaver_parade_advance_us,
-        "screensaver_background_us": frame.screensaver_background_us,
-        "screensaver_draw_order_us": frame.screensaver_draw_order_us,
-        "screensaver_tile_blit_us": frame.screensaver_tile_blit_us,
-        "screensaver_raster_held_cards": frame.screensaver_raster_held_cards,
-        "screensaver_raster_moved_cards": frame.screensaver_raster_moved_cards,
-        "screensaver_raster_hold_layer_mask": frame.screensaver_raster_hold_layer_mask,
-    })
+    let mut object = serde_json::Map::new();
+    macro_rules! field {
+        ($name:literal, $value:expr) => {
+            object.insert($name.into(), json!($value));
+        };
+    }
+    field!("frame", frame.frame);
+    field!("screensaver_active", frame.screensaver_active);
+    field!("wall_us", frame.wall_us);
+    field!("prepare_us", frame.prepare_us);
+    field!("render_us", frame.render_us);
+    field!("custom_draw_us", frame.custom_draw_us);
+    field!("vsync_us", frame.vsync_us);
+    field!("present_us", frame.present_us);
+    field!("cpu_prepare_us", frame.cpu_prepare_us);
+    field!("cpu_render_us", frame.cpu_render_us);
+    field!("cpu_custom_draw_us", frame.cpu_custom_draw_us);
+    field!("cpu_vsync_us", frame.cpu_vsync_us);
+    field!("cpu_frame_tail_us", frame.cpu_frame_tail_us);
+    field!("process_cpu_us", frame.process_cpu_us);
+    field!("completion_monotonic_us", frame.completion_monotonic_us);
+    field!("vsync_source", frame.vsync_source);
+    field!("vsync_period_us", frame.vsync_period_us);
+    field!("vsync_miss_streak", frame.vsync_miss_streak);
+    field!("vsync_stale_hits", frame.vsync_stale_hits);
+    field!("vsync_wait_start_age_us", frame.vsync_wait_start_age_us);
+    field!("vsync_accepted_hit_age_us", frame.vsync_accepted_hit_age_us);
+    field!("main_present_status", frame.main_present_status);
+    field!("main_present_sequence", frame.main_present_sequence);
+    field!(
+        "main_present_active_sequence",
+        frame.main_present_active_sequence
+    );
+    field!("main_present_pending", frame.main_present_pending);
+    field!("main_present_flip_count", frame.main_present_flip_count);
+    field!("main_present_drop_count", frame.main_present_drop_count);
+    field!("status_write_due", frame.status_write_due);
+    field!("runtime_status_write_us", frame.runtime_status_write_us);
+    field!("clock_update_due", frame.clock_update_due);
+    field!("clock_update_us", frame.clock_update_us);
+    field!(
+        "screensaver_sampling_profile",
+        frame.screensaver_sampling_profile
+    );
+    field!(
+        "screensaver_archive_poll_us",
+        frame.screensaver_archive_poll_us
+    );
+    field!("screensaver_card_adopt_us", frame.screensaver_card_adopt_us);
+    field!(
+        "screensaver_parade_advance_us",
+        frame.screensaver_parade_advance_us
+    );
+    field!("screensaver_background_us", frame.screensaver_background_us);
+    field!("screensaver_draw_order_us", frame.screensaver_draw_order_us);
+    field!("screensaver_tile_blit_us", frame.screensaver_tile_blit_us);
+    field!(
+        "screensaver_raster_held_cards",
+        frame.screensaver_raster_held_cards
+    );
+    field!(
+        "screensaver_raster_moved_cards",
+        frame.screensaver_raster_moved_cards
+    );
+    field!(
+        "screensaver_raster_hold_layer_mask",
+        frame.screensaver_raster_hold_layer_mask
+    );
+    field!(
+        "screensaver_raster_visible_layer_mask",
+        frame.screensaver_raster_visible_layer_mask
+    );
+    Value::Object(object)
 }
 
 fn frame_budget_slow_frame_value(frame: &FrameBudgetSlowFrame) -> Value {
@@ -787,13 +824,15 @@ mod tests {
                         cpu_render_us: 20,
                         cpu_custom_draw_us: 30,
                         cpu_vsync_us: 1,
-                        cpu_present_us: 5,
+                        cpu_frame_tail_us: 5,
                         process_cpu_us: 75,
+                        completion_monotonic_us: 123_456,
                         vsync_source: "vsync",
                         vsync_period_us: 16_667,
                         vsync_miss_streak: 1,
                         main_present_status: "ok",
                         main_present_sequence: 17,
+                        main_present_active_sequence: 17,
                         main_present_flip_count: 18,
                         status_write_due: true,
                         runtime_status_write_us: 321,
@@ -803,6 +842,7 @@ mod tests {
                         screensaver_raster_held_cards: 2,
                         screensaver_raster_moved_cards: 8,
                         screensaver_raster_hold_layer_mask: 1,
+                        screensaver_raster_visible_layer_mask: 3,
                         ..FrameBudgetRecentFrame::default()
                     }],
                     slow_frames: vec![FrameBudgetSlowFrame {
