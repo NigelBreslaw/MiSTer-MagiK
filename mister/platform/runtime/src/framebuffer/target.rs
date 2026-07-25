@@ -594,6 +594,18 @@ impl UiFrameTarget {
         CachedFrameView::new(&self.cached, self.cached_stride, height)
     }
 
+    pub fn swap_cached_565(
+        &mut self,
+        replacement: &mut Vec<Rgb565Pixel>,
+        stride_pixels: usize,
+    ) -> bool {
+        if stride_pixels != self.cached_stride || replacement.len() != self.cached.len() {
+            return false;
+        }
+        std::mem::swap(&mut self.cached, replacement);
+        true
+    }
+
     pub fn direct_preview_view(&self) -> Option<DirectPreviewView<'_>> {
         self.direct_preview_rect.map(|rect| DirectPreviewView {
             pixels: &self.direct_preview,
@@ -728,6 +740,29 @@ mod tests {
         assert_eq!(preview.pixels(), &[Rgb565Pixel(7); 8]);
         assert!(preview.region(rect(3, 1, 5, 2)).is_some());
         assert!(preview.region(rect(1, 1, 5, 2)).is_none());
+    }
+
+    #[test]
+    fn cached_buffer_swap_preserves_allocations_and_rejects_wrong_geometry() {
+        let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(6, 4));
+        target.cached_565_mut().fill(Rgb565Pixel(0x1111));
+        let original_ptr = target.cached_565().as_ptr();
+        let mut replacement = vec![Rgb565Pixel(0x2222); 24];
+        let replacement_ptr = replacement.as_ptr();
+
+        assert!(target.swap_cached_565(&mut replacement, 6));
+        assert_eq!(target.cached_565().as_ptr(), replacement_ptr);
+        assert_eq!(replacement.as_ptr(), original_ptr);
+        assert!(target.cached_565().iter().all(|pixel| pixel.0 == 0x2222));
+        assert!(replacement.iter().all(|pixel| pixel.0 == 0x1111));
+
+        let cached_ptr = target.cached_565().as_ptr();
+        let mut wrong_len = vec![Rgb565Pixel(0); 23];
+        assert!(!target.swap_cached_565(&mut wrong_len, 6));
+        assert_eq!(target.cached_565().as_ptr(), cached_ptr);
+        let mut wrong_stride = vec![Rgb565Pixel(0); 24];
+        assert!(!target.swap_cached_565(&mut wrong_stride, 5));
+        assert_eq!(target.cached_565().as_ptr(), cached_ptr);
     }
 
     #[test]
