@@ -434,10 +434,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         })?;
         let buffer_index = plan.slot_index;
         let invalid_bytes = self.latch_state.restore_bytes_for_slot(buffer_index);
-        let mut tile_span_count = 0u32;
-        plan.restore_tiles
-            .for_each_span(|_| tile_span_count = tile_span_count.saturating_add(1));
-        let rect_count = (plan.restore_rects.len() as u32).saturating_add(tile_span_count);
+        let rect_count = plan.restore_rects.len() as u32;
         // Damage remains in composition coordinates; analytics report the
         // destination rows that the native scanout copy actually touched.
         let vertical_transform =
@@ -453,7 +450,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                     error,
                 )
             })?;
-        let mut copied_rows = plan
+        let copied_rows = plan
             .restore_rects
             .iter()
             .filter_map(|rect| {
@@ -468,24 +465,8 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             })
             .map(|rect| rect.rows() as u32)
             .sum::<u32>();
-        plan.restore_tiles.for_each_span(|rect| {
-            if let Some(rect) = vertical_transform.destination_rect_for_source(
-                mister_magik_fb::framebuffer::vertical_scale::VerticalRect {
-                    x0: rect.x0,
-                    y0: rect.y0,
-                    x1: rect.x1,
-                    y1: rect.y1,
-                },
-            ) {
-                copied_rows = copied_rows.saturating_add(rect.rows() as u32);
-            }
-        });
-        let full_copy = rect_list_contains(plan.restore_rects, self.full_rect())
-            || plan.restore_tiles.covers_full_frame();
-        let catchup_bytes = plan
-            .restore_rects
-            .total_rgb565_bytes()
-            .saturating_add(plan.restore_tiles.total_rgb565_bytes());
+        let full_copy = rect_list_contains(plan.restore_rects, self.full_rect());
+        let catchup_bytes = plan.restore_rects.total_rgb565_bytes();
         let base_addr = self.buffers.base_addr(buffer_index);
         let buffer = self.buffers.buffer_mut(buffer_index);
         let copy_start = Instant::now();
@@ -508,29 +489,6 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                     ));
                 }
             }
-        }
-        let mut tile_copy_error = None;
-        plan.restore_tiles.for_each_span(|rect| {
-            if tile_copy_error.is_some() {
-                return;
-            }
-            match B::copy_rect(buffer, cached, rect) {
-                Ok(result) => {
-                    copied_bytes = copied_bytes.saturating_add(result.bytes);
-                    if result.path != LatchCopyPath::IdentityFull {
-                        copy_path = result.path;
-                    }
-                }
-                Err(error) => tile_copy_error = Some(error),
-            }
-        });
-        if let Some(error) = tile_copy_error {
-            self.latch_state.mark_attempt_failed(buffer_index);
-            return Err(LatchFailure::runtime(
-                LatchFailureStage::FrameCopy,
-                LatchFailureReason::FrameCopyFailed,
-                error,
-            ));
         }
         let copy_us = copy_start.elapsed().as_micros();
         if let Err(e) = apply_overlays(buffer, plan) {

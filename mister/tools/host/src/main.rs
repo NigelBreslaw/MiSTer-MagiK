@@ -3867,7 +3867,6 @@ fn summarize_screensaver_telemetry(
         "presentation_interval": periodic_signal(&interval_signal, refresh_period_us),
     });
     let raster = raster_cadence_summary(steady);
-    let damage_work = screensaver_damage_work_summary(steady);
     let maintenance = maintenance_cohorts(steady);
     let status_publishing = status_publishing_summary(steady, &active);
     let presentation_paths = steady
@@ -3945,7 +3944,6 @@ fn summarize_screensaver_telemetry(
         "outliers": outliers,
         "periodic_timing": periodic,
         "raster_cadence": raster,
-        "damage_work": damage_work,
         "status_publishing": status_publishing,
         "main_present_copy_paths": presentation_paths,
         "phase_bank_resident_bytes": phase_bank_bytes,
@@ -4293,10 +4291,6 @@ fn validate_screensaver_frame_evidence(run: usize, frame_id: u64, frame: &Value)
         "screensaver_raster_moved_cards",
         "screensaver_raster_hold_layer_mask",
         "screensaver_raster_visible_layer_mask",
-        "screensaver_damage_tile_count",
-        "screensaver_background_restore_bytes",
-        "screensaver_cards_redrawn",
-        "screensaver_cards_skipped",
     ];
     const BOOL_FIELDS: &[&str] = &[
         "screensaver_active",
@@ -4508,27 +4502,6 @@ fn raster_cadence_summary(frames: &[&Value]) -> Value {
     })
 }
 
-fn screensaver_damage_work_summary(frames: &[&Value]) -> Value {
-    fn field_summary(frames: &[&Value], key: &str) -> Value {
-        let mut values = frames
-            .iter()
-            .map(|frame| frame_u64(frame, key))
-            .collect::<Vec<_>>();
-        values.sort_unstable();
-        json!({
-            "mean": mean_u64(&values),
-            "p99": percentile_99(&values),
-            "max": values.last().copied().unwrap_or(0),
-        })
-    }
-    json!({
-        "dirty_tiles": field_summary(frames, "screensaver_damage_tile_count"),
-        "background_restore_bytes": field_summary(frames, "screensaver_background_restore_bytes"),
-        "cards_redrawn": field_summary(frames, "screensaver_cards_redrawn"),
-        "cards_skipped": field_summary(frames, "screensaver_cards_skipped"),
-    })
-}
-
 fn screensaver_benchmark_report(summary: &Value) -> Result<String> {
     use std::fmt::Write as _;
 
@@ -4679,11 +4652,6 @@ fn screensaver_benchmark_report(summary: &Value) -> Result<String> {
             run.pointer("/raster_cadence/sampling_profiles")
                 .cloned()
                 .unwrap_or(Value::Null),
-        )?;
-        writeln!(
-            report,
-            "Damage-driven composition work: `{}`.\n",
-            run.get("damage_work").cloned().unwrap_or(Value::Null),
         )?;
         writeln!(
             report,
@@ -12633,10 +12601,6 @@ H: Handlers=event3 js0"#
                 "screensaver_raster_hold_layer_mask": u64::from(id == 4),
                 "screensaver_raster_visible_layer_mask": 31
             });
-            frame["screensaver_damage_tile_count"] = json!(40);
-            frame["screensaver_background_restore_bytes"] = json!(81_920);
-            frame["screensaver_cards_redrawn"] = json!(12);
-            frame["screensaver_cards_skipped"] = json!(48);
             frame["status_publish_mode"] = json!("async");
             frame["status_enqueue_us"] = json!(0);
             frame["status_worker_write_us"] = json!(24_000);
@@ -12695,7 +12659,6 @@ H: Handlers=event3 js0"#
         assert_eq!(summary["steady_state"]["presentation_failures"], json!([]));
         assert_eq!(summary["latch_drop_delta"], 0);
         assert_eq!(summary["raster_cadence"]["held_frames"], 1);
-        assert_eq!(summary["damage_work"]["dirty_tiles"]["mean"], 40.0);
         let report = screensaver_benchmark_report(&json!({
             "manifest": {"magik_revision": "test-revision"},
             "display": {"final_mode": "hdmi-1280x720p60"},
@@ -12704,7 +12667,6 @@ H: Handlers=event3 js0"#
         .unwrap();
         assert!(report.contains("Presentation failures"));
         assert!(report.contains("Visible raster holds"));
-        assert!(report.contains("Damage-driven composition work"));
         assert!(report.contains("complete CPU attribution"));
         assert!(
             summarize_screensaver_telemetry(

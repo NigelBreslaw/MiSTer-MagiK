@@ -268,10 +268,6 @@ pub(super) struct ScreensaverFrameTrace {
     pub(super) raster_visible_layer_mask: u8,
     pub(super) sixteenth_phase_layer_mask: u8,
     pub(super) phase_bank_resident_bytes: usize,
-    pub(super) damage_tiles: DamageTileMap,
-    pub(super) damage_tile_count: usize,
-    pub(super) background_restore_bytes: usize,
-    pub(super) cards_skipped: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -379,10 +375,6 @@ impl LauncherScreensaver {
 
     pub(in crate::ui_runner) fn active_card_count(&self) -> usize {
         self.parade.tiles.iter().filter(|tile| tile.active).count()
-    }
-
-    pub(in crate::ui_runner) fn invalidate_composition(&mut self, w: usize, h: usize) {
-        self.parade.damage_tiles = DamageTileMap::full(w, h);
     }
 }
 
@@ -1478,6 +1470,16 @@ fn render_starfield(dst: &mut [Rgb565Pixel], w: usize, h: usize, frame: u64) {
     }
 }
 
+fn render_parade_background(
+    dst: &mut [Rgb565Pixel],
+    _w: usize,
+    _h: usize,
+    _motion_ticks_fp: u64,
+    _motion: ParadeMotion,
+) {
+    clear(dst, color565(0, 0, 10));
+}
+
 fn render_starfield_cabinets(
     dst: &mut [Rgb565Pixel],
     state: &mut ScreensaverRenderState,
@@ -2371,11 +2373,6 @@ struct ParadeState {
     draw_order: Vec<usize>,
     visible_draw_order: Vec<usize>,
     depth_coverage: Vec<DirtyRect>,
-    background_pixels: Vec<Rgb565Pixel>,
-    previous_card_bounds: Vec<Option<DirtyRect>>,
-    current_card_bounds: Vec<Option<DirtyRect>>,
-    redraw_cards: Vec<bool>,
-    damage_tiles: DamageTileMap,
     deck: Vec<usize>,
     cursor: usize,
     rng: u64,
@@ -2499,11 +2496,6 @@ impl ParadeState {
             draw_order: Vec::with_capacity(PARADE_WIDE_LAYER_TARGETS.iter().sum()),
             visible_draw_order: Vec::with_capacity(PARADE_WIDE_LAYER_TARGETS.iter().sum()),
             depth_coverage: Vec::with_capacity(PARADE_WIDE_LAYER_TARGETS.iter().sum()),
-            background_pixels: Vec::new(),
-            previous_card_bounds: Vec::with_capacity(PARADE_WIDE_LAYER_TARGETS.iter().sum()),
-            current_card_bounds: Vec::with_capacity(PARADE_WIDE_LAYER_TARGETS.iter().sum()),
-            redraw_cards: Vec::with_capacity(PARADE_WIDE_LAYER_TARGETS.iter().sum()),
-            damage_tiles: DamageTileMap::default(),
             deck: Vec::new(),
             cursor: 0,
             rng: seed,
@@ -3170,13 +3162,6 @@ impl ParadeState {
     }
 
     fn set_geometry(&mut self, screen_w: usize, screen_h: usize) {
-        if self.screen_w != screen_w || self.screen_h != screen_h {
-            self.background_pixels.clear();
-            self.previous_card_bounds.clear();
-            self.current_card_bounds.clear();
-            self.redraw_cards.clear();
-            self.damage_tiles = DamageTileMap::full(screen_w, screen_h);
-        }
         self.screen_w = screen_w;
         self.screen_h = screen_h;
         self.layer_targets = parade_layer_targets(screen_w, screen_h);
@@ -3522,7 +3507,7 @@ fn render_parade(
     frame: u64,
 ) {
     let motion_ticks_fp = frame.saturating_mul(PARADE_TICK_ONE as u64);
-    clear(dst, color565(0, 0, 10));
+    render_parade_background(dst, w, h, motion_ticks_fp, state.motion);
     state.ensure_initialized(images, w, h);
     let _ = state.advance(w, h, Some(images), motion_ticks_fp, PARADE_TICK_ONE);
     prepare_parade_draw_order(state);
@@ -3548,13 +3533,12 @@ fn render_archive_parade(
     tick_delta_fp: i64,
 ) -> ScreensaverFrameTrace {
     let background_start = Instant::now();
-    prepare_parade_background(state, w, h);
+    render_parade_background(dst, w, h, motion_ticks_fp, state.motion);
     let background_us = background_start.elapsed().as_micros();
     let advance = state.advance(w, h, None, motion_ticks_fp, tick_delta_fp);
     let draw_order_start = Instant::now();
     prepare_parade_draw_order(state);
     let cards_culled = prepare_parade_visible_draw_order(state, w, h);
-    prepare_parade_damage(state, w, h);
     let draw_order_us = draw_order_start.elapsed().as_micros();
     let mut raster_held_cards = 0;
     let mut raster_moved_cards = 0;
@@ -3573,14 +3557,7 @@ fn render_archive_parade(
         raster_moved_cards += usize::from(tile.raster_moved_this_frame);
     }
     let tile_blit_start = Instant::now();
-    let damage_tiles = state.damage_tiles;
-    let background_restore_bytes = damage_tiles.total_rgb565_bytes();
-    restore_parade_background_damage(dst, &state.background_pixels, w, damage_tiles);
-    let mut cards_drawn = 0usize;
     for &tile_idx in &state.visible_draw_order {
-        if !state.redraw_cards.get(tile_idx).copied().unwrap_or(false) {
-            continue;
-        }
         let tile = &state.tiles[tile_idx];
         blit_parade_tile(
             dst,
@@ -3589,13 +3566,7 @@ fn render_archive_parade(
             state.sampling_profile.for_layer(tile.layer),
             tile,
         );
-        cards_drawn += 1;
     }
-    std::mem::swap(
-        &mut state.previous_card_bounds,
-        &mut state.current_card_bounds,
-    );
-    state.damage_tiles = DamageTileMap::empty(w, h);
     ScreensaverFrameTrace {
         card_adopt_us: advance.card_adopt_us,
         cards_adopted: advance.cards_adopted,
@@ -3603,7 +3574,7 @@ fn render_archive_parade(
         background_us,
         draw_order_us,
         tile_blit_us: tile_blit_start.elapsed().as_micros(),
-        cards_drawn,
+        cards_drawn: state.visible_draw_order.len(),
         cards_culled,
         sampling_profile: state.sampling_profile.layer_evidence(),
         raster_held_cards,
@@ -3612,97 +3583,8 @@ fn render_archive_parade(
         raster_visible_layer_mask,
         sixteenth_phase_layer_mask: state.sampling_profile.sixteenth_layer_mask(),
         phase_bank_resident_bytes: state.phase_bank_resident_bytes(),
-        damage_tiles,
-        damage_tile_count: damage_tiles.tile_count(),
-        background_restore_bytes,
-        cards_skipped: state.visible_draw_order.len().saturating_sub(cards_drawn),
         ..ScreensaverFrameTrace::default()
     }
-}
-
-fn prepare_parade_background(state: &mut ParadeState, w: usize, h: usize) {
-    state.set_geometry(w, h);
-    let navy = color565(0, 0, 10);
-    let mut damage = state.damage_tiles;
-    state.damage_tiles = DamageTileMap::empty(w, h);
-    if state.background_pixels.len() != w.saturating_mul(h) {
-        state.background_pixels.resize(w.saturating_mul(h), navy);
-        state.background_pixels.fill(navy);
-        damage = DamageTileMap::full(w, h);
-    }
-    state.damage_tiles = damage;
-}
-
-fn prepare_parade_damage(state: &mut ParadeState, w: usize, h: usize) {
-    state.current_card_bounds.clear();
-    state.current_card_bounds.resize(state.tiles.len(), None);
-    state.redraw_cards.clear();
-    state.redraw_cards.resize(state.tiles.len(), false);
-    for &tile_idx in &state.visible_draw_order {
-        let tile = &state.tiles[tile_idx];
-        let bounds =
-            parade_tile_draw_bounds(tile, state.sampling_profile.for_layer(tile.layer), w, h);
-        state.current_card_bounds[tile_idx] = bounds;
-        if tile.raster_moved_this_frame {
-            if let Some(bounds) = bounds {
-                state.damage_tiles.mark_rect(bounds);
-            }
-        }
-    }
-
-    for tile_idx in 0..state
-        .previous_card_bounds
-        .len()
-        .max(state.current_card_bounds.len())
-    {
-        let previous = state.previous_card_bounds.get(tile_idx).copied().flatten();
-        let current = state.current_card_bounds.get(tile_idx).copied().flatten();
-        if previous != current {
-            if let Some(bounds) = previous {
-                state.damage_tiles.mark_rect(bounds);
-            }
-            if let Some(bounds) = current {
-                state.damage_tiles.mark_rect(bounds);
-            }
-        }
-    }
-
-    loop {
-        let before = state.damage_tiles.tile_count();
-        for &tile_idx in &state.visible_draw_order {
-            if state.redraw_cards[tile_idx] {
-                continue;
-            }
-            let Some(bounds) = state.current_card_bounds[tile_idx] else {
-                continue;
-            };
-            if state.damage_tiles.intersects(bounds) {
-                state.redraw_cards[tile_idx] = true;
-                state.damage_tiles.mark_rect(bounds);
-            }
-        }
-        if state.damage_tiles.tile_count() == before {
-            break;
-        }
-    }
-}
-
-fn restore_parade_background_damage(
-    dst: &mut [Rgb565Pixel],
-    background: &[Rgb565Pixel],
-    width: usize,
-    damage: DamageTileMap,
-) {
-    if dst.len() != background.len() || width == 0 {
-        return;
-    }
-    damage.for_each_span(|rect| {
-        for y in rect.y0..rect.y1 {
-            let start = y * width + rect.x0;
-            let end = y * width + rect.x1;
-            dst[start..end].copy_from_slice(&background[start..end]);
-        }
-    });
 }
 
 fn render_marquee(dst: &mut [Rgb565Pixel], w: usize, h: usize, images: &[SaverImage], frame: u64) {
@@ -4027,69 +3909,6 @@ mod tests {
             std::thread::sleep(Duration::from_millis(1));
         }
         panic!("screensaver scale worker did not prepare initial successors");
-    }
-
-    #[test]
-    fn damage_composition_matches_full_recomposition() {
-        let width = 192;
-        let height = 128;
-        let mut state = ParadeState::new(0xfeed_beef);
-        state.set_geometry(width, height);
-        state.tiles = vec![
-            solid_parade_tile(
-                color565(220, 40, 40),
-                50,
-                40,
-                10 * PARADE_SUBPIXEL_ONE,
-                18,
-                1,
-                ParadeSamplingProfile::LegacyHalf,
-            ),
-            solid_parade_tile(
-                color565(40, 220, 40),
-                44,
-                52,
-                34 * PARADE_SUBPIXEL_ONE,
-                24,
-                3,
-                ParadeSamplingProfile::LegacyHalf,
-            ),
-            solid_parade_tile(
-                color565(40, 40, 220),
-                36,
-                30,
-                92 * PARADE_SUBPIXEL_ONE,
-                70,
-                5,
-                ParadeSamplingProfile::LegacyHalf,
-            ),
-        ];
-        let mut incremental = vec![Rgb565Pixel(0xffff); width * height];
-
-        for frame in 0..120_u64 {
-            let motion_ticks = frame * PARADE_TICK_ONE as u64;
-            render_archive_parade(
-                &mut incremental,
-                &mut state,
-                width,
-                height,
-                motion_ticks,
-                PARADE_TICK_ONE,
-            );
-            let mut reference = state.background_pixels.clone();
-            render_parade_order(
-                &mut reference,
-                &state,
-                &state.visible_draw_order,
-                width,
-                height,
-            );
-            assert_eq!(incremental, reference, "frame {frame}");
-            assert!(
-                state.damage_tiles.is_empty(),
-                "frame {frame} retained damage"
-            );
-        }
     }
 
     #[test]
