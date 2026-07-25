@@ -626,8 +626,191 @@ fn smoke_development_delivery(
         .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
     exec_checked(&session, "delivery smoke", &command)
         .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
-    let capture = request_framebuffer_png_at(&config.agent).map_err(device_failure)?;
-    delivery_smoke_capture_detail(&capture).map_err(device_failure)
+    let status = read_launcher_status(&session).map_err(device_failure)?;
+    let evidence = remote_read(&session, LATCH_FAILURE_REMOTE)
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+    match validate_delivery_present_state(&status, evidence.as_ref()).map_err(device_failure)? {
+        DeliveryPresentState::Latch => {
+            exec_checked(
+                &session,
+                "delivery latch health",
+                &delivery_health_command("dev").map_err(device_failure)?,
+            )
+            .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
+            let capture = request_framebuffer_png_at(&config.agent).map_err(device_failure)?;
+            delivery_smoke_capture_detail(&capture).map_err(device_failure)
+        }
+        DeliveryPresentState::Compatibility => Ok(
+            "artifact=verified process=healthy module=degraded latch=compatibility screen=recognized input=ready scanout=rgb565 capture=deferred-to-compatibility evidence=preserved arming=clear"
+                .to_string(),
+        ),
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DeliveryPresentState {
+    Latch,
+    Compatibility,
+}
+
+fn validate_delivery_present_state(
+    status: &Value,
+    latch_failure: Option<&Value>,
+) -> Result<DeliveryPresentState> {
+    let field = |name: &str| {
+        status
+            .get(name)
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("delivery status is missing {name}"))
+    };
+    let screen = field("screen")?;
+    let effective_view = field("effective_view")?;
+    let return_screen = field("return_screen")?;
+    let present_backend = field("present_backend")?;
+    let present_status = field("present_status")?;
+    let launch_state = field("launch_state")?;
+    if field("scene")? != "launcher" {
+        return Err("delivery status is not the launcher scene".into());
+    }
+    let input_enabled = status
+        .get("input_enabled")
+        .and_then(Value::as_bool)
+        .ok_or("delivery status is missing input_enabled")?;
+    let compatibility_prompt_visible = status
+        .get("compatibility_prompt_visible")
+        .and_then(Value::as_bool)
+        .ok_or("delivery status is missing compatibility_prompt_visible")?;
+    if screen != effective_view {
+        return Err(format!(
+            "delivery status view mismatch screen={screen} effective_view={effective_view}"
+        )
+        .into());
+    }
+    if !matches!(
+        return_screen,
+        "home"
+            | "controller"
+            | "arcade"
+            | "settings"
+            | "about"
+            | "licenses"
+            | "info"
+            | "screensaver-settings"
+    ) {
+        return Err(format!("delivery status has invalid return_screen={return_screen}").into());
+    }
+    if !matches!(
+        effective_view,
+        "home"
+            | "controller"
+            | "arcade"
+            | "settings"
+            | "about"
+            | "licenses"
+            | "info"
+            | "screensaver-settings"
+            | "screensaver"
+            | "compatibility"
+            | "launching"
+    ) {
+        return Err(format!("delivery status has invalid effective_view={effective_view}").into());
+    }
+    if launch_state != "idle" {
+        return Err(
+            format!("delivery status is not interactive launch_state={launch_state}").into(),
+        );
+    }
+    match (present_backend, present_status) {
+        ("fpga-vblank-latch-hidden", "ok") => {
+            if effective_view == "compatibility" {
+                return Err("latch backend cannot expose the compatibility view".into());
+            }
+            if !input_enabled {
+                return Err("latch delivery input is not enabled".into());
+            }
+            Ok(DeliveryPresentState::Latch)
+        }
+        ("compatibility-fb0", "compatibility") => {
+            let recovery_state = validate_terminal_compatibility_evidence(
+                latch_failure.ok_or("compatibility delivery is missing latch failure evidence")?,
+            )?;
+            match recovery_state {
+                "compatibility-prompt"
+                    if effective_view == "compatibility" && compatibility_prompt_visible => {}
+                "continued-compatibility"
+                    if effective_view != "compatibility"
+                        && !compatibility_prompt_visible
+                        && input_enabled => {}
+                _ => {
+                    return Err(format!(
+                        "compatibility delivery interaction is inconsistent recovery_state={recovery_state} effective_view={effective_view} prompt_visible={compatibility_prompt_visible} input_enabled={input_enabled}"
+                    )
+                    .into());
+                }
+            }
+            Ok(DeliveryPresentState::Compatibility)
+        }
+        _ => Err(format!(
+            "delivery status has unsupported presenter backend={present_backend} status={present_status}"
+        )
+        .into()),
+    }
+}
+
+fn validate_terminal_compatibility_evidence(evidence: &Value) -> Result<&str> {
+    if evidence.get("schema").and_then(Value::as_str) != Some("mister-magik-latch-failure-v2") {
+        return Err("compatibility delivery has unsupported latch evidence schema".into());
+    }
+    for field in [
+        "state",
+        "stage",
+        "reason",
+        "detail",
+        "latest_state",
+        "latest_stage",
+        "latest_reason",
+        "latest_detail",
+        "latest_result",
+        "recovery_state",
+    ] {
+        if evidence
+            .get(field)
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+        {
+            return Err(format!("compatibility delivery evidence is missing {field}").into());
+        }
+    }
+    let recovery_state = evidence["recovery_state"].as_str().unwrap_or_default();
+    if !matches!(
+        recovery_state,
+        "compatibility-prompt" | "continued-compatibility"
+    ) {
+        return Err(format!(
+            "compatibility delivery recovery is not terminal state={recovery_state}"
+        )
+        .into());
+    }
+    let latest_result = evidence["latest_result"].as_str().unwrap_or_default();
+    if !matches!(latest_result, "not-attempted" | "failure") {
+        return Err(format!(
+            "compatibility delivery has inconsistent latest_result={latest_result}"
+        )
+        .into());
+    }
+    let attempt_count = evidence
+        .get("attempt_count")
+        .and_then(Value::as_u64)
+        .ok_or("compatibility delivery evidence is missing attempt_count")?;
+    if (latest_result == "not-attempted" && attempt_count != 0)
+        || (latest_result == "failure" && attempt_count == 0)
+    {
+        return Err(format!(
+            "compatibility delivery has inconsistent retry evidence latest_result={latest_result} attempt_count={attempt_count}"
+        )
+        .into());
+    }
+    Ok(recovery_state)
 }
 
 trait CoherentDeliveryActions {
@@ -2083,7 +2266,7 @@ fn delivery_smoke_command(layout: &str, expected_sha256: &str) -> Result<String>
         _ => return Err(format!("unsupported delivery layout: {layout}").into()),
     };
     Ok(format!(
-        "set -eu; test \"$(sha256sum {directory}/mister-magik-fb | awk '{{print $1}}')\" = '{expected_sha256}'; pidof {main} >/dev/null; pidof mister-magik-fb >/dev/null; {}; test -n \"$pid_before\"; test \"$pid_before\" = \"$pid_after\"; test -n \"$sequence_before\"; test -n \"$sequence_after\"; test \"$sequence_after\" -gt \"$sequence_before\"; grep -q '^mister_magik_scanout_slots ' /proc/modules; test -c /dev/mister-magik-scanout-slots; report=$({directory}/mister-magik-fb latch-readiness-report); printf '%s\\n' \"$report\" | grep -Eq 'latch_readiness_tsv[[:space:]]+valid=1[[:space:]]+state=ready'; grep -Eq '\"scene\"[[:space:]]*:[[:space:]]*\"launcher\"' \"$status\"; grep -Eq '\"screen\"[[:space:]]*:[[:space:]]*\"(home|arcade|settings|systems)\"' \"$status\"; grep -Eq '\"input_enabled\"[[:space:]]*:[[:space:]]*true' \"$status\"; test \"$(cat /sys/class/graphics/fb0/bits_per_pixel)\" = 16; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /tmp/mister-magik/realtime-frame-analytics; test ! -e /tmp/mister-magik/screensaver-profile",
+        "set -eu; test \"$(sha256sum {directory}/mister-magik-fb | awk '{{print $1}}')\" = '{expected_sha256}'; pidof {main} >/dev/null; pidof mister-magik-fb >/dev/null; {}; test -n \"$pid_before\"; test \"$pid_before\" = \"$pid_after\"; test -n \"$sequence_before\"; test -n \"$sequence_after\"; test \"$sequence_after\" -gt \"$sequence_before\"; grep -Eq '\"scene\"[[:space:]]*:[[:space:]]*\"launcher\"' \"$status\"; grep -Eq '\"effective_view\"[[:space:]]*:[[:space:]]*\"[^\"]+\"' \"$status\"; grep -Eq '\"return_screen\"[[:space:]]*:[[:space:]]*\"[^\"]+\"' \"$status\"; test \"$(cat /sys/class/graphics/fb0/bits_per_pixel)\" = 16; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /tmp/mister-magik/realtime-frame-analytics; test ! -e /tmp/mister-magik/screensaver-profile",
         launcher_heartbeat_sample_command()
     ))
 }
@@ -11650,6 +11833,135 @@ H: Handlers=event3 js0"#
         assert!(summary.len() < 256);
     }
 
+    fn delivery_status(
+        effective_view: &str,
+        return_screen: &str,
+        backend: &str,
+        present_status: &str,
+    ) -> Value {
+        json!({
+            "scene": "launcher",
+            "screen": effective_view,
+            "effective_view": effective_view,
+            "return_screen": return_screen,
+            "present_backend": backend,
+            "present_status": present_status,
+            "launch_state": "idle",
+            "input_enabled": true,
+            "compatibility_prompt_visible": effective_view == "compatibility"
+        })
+    }
+
+    fn terminal_compatibility_evidence() -> Value {
+        json!({
+            "schema": "mister-magik-latch-failure-v2",
+            "state": "runtime-fault",
+            "stage": "latch-post",
+            "reason": "latch-post-failed",
+            "detail": "first failure",
+            "latest_state": "runtime-fault",
+            "latest_stage": "post-verification",
+            "latest_reason": "posted-sequence-unverified",
+            "latest_detail": "retry failure",
+            "attempt_count": 1,
+            "latest_result": "failure",
+            "recovery_state": "compatibility-prompt"
+        })
+    }
+
+    #[test]
+    fn delivery_accepts_latch_or_terminal_evidenced_compatibility() {
+        let latch = delivery_status(
+            "screensaver",
+            "screensaver-settings",
+            "fpga-vblank-latch-hidden",
+            "ok",
+        );
+        assert_eq!(
+            validate_delivery_present_state(&latch, None).unwrap(),
+            DeliveryPresentState::Latch
+        );
+
+        let mut compatibility = delivery_status(
+            "compatibility",
+            "settings",
+            "compatibility-fb0",
+            "compatibility",
+        );
+        compatibility["input_enabled"] = json!(false);
+        assert_eq!(
+            validate_delivery_present_state(
+                &compatibility,
+                Some(&terminal_compatibility_evidence())
+            )
+            .unwrap(),
+            DeliveryPresentState::Compatibility
+        );
+
+        let continued =
+            delivery_status("settings", "settings", "compatibility-fb0", "compatibility");
+        let mut continued_evidence = terminal_compatibility_evidence();
+        continued_evidence["recovery_state"] = json!("continued-compatibility");
+        assert_eq!(
+            validate_delivery_present_state(&continued, Some(&continued_evidence)).unwrap(),
+            DeliveryPresentState::Compatibility
+        );
+    }
+
+    #[test]
+    fn delivery_rejects_split_view_state_and_nonterminal_recovery() {
+        let mut split =
+            delivery_status("screensaver", "settings", "fpga-vblank-latch-hidden", "ok");
+        split["screen"] = json!("settings");
+        assert!(
+            validate_delivery_present_state(&split, None)
+                .unwrap_err()
+                .to_string()
+                .contains("view mismatch")
+        );
+
+        let compatibility = delivery_status(
+            "compatibility",
+            "settings",
+            "compatibility-fb0",
+            "compatibility",
+        );
+        let mut evidence = terminal_compatibility_evidence();
+        evidence["recovery_state"] = json!("automatic-retry");
+        assert!(
+            validate_delivery_present_state(&compatibility, Some(&evidence))
+                .unwrap_err()
+                .to_string()
+                .contains("not terminal")
+        );
+    }
+
+    #[test]
+    fn delivery_rejects_active_launch_and_unexplained_fallback() {
+        let mut launching =
+            delivery_status("launching", "arcade", "fpga-vblank-latch-hidden", "ok");
+        launching["launch_state"] = json!("launching");
+        assert!(
+            validate_delivery_present_state(&launching, None)
+                .unwrap_err()
+                .to_string()
+                .contains("not interactive")
+        );
+
+        let compatibility = delivery_status(
+            "compatibility",
+            "settings",
+            "compatibility-fb0",
+            "compatibility",
+        );
+        assert!(
+            validate_delivery_present_state(&compatibility, None)
+                .unwrap_err()
+                .to_string()
+                .contains("missing latch failure evidence")
+        );
+    }
+
     #[test]
     fn capture_contract_rejects_stale_missing_metadata() {
         let stale = json!({
@@ -12037,17 +12349,15 @@ H: Handlers=event3 js0"#
     }
 
     #[test]
-    fn delivery_smoke_owns_every_fixed_safety_check() {
+    fn delivery_smoke_keeps_unconditional_safety_checks_outside_presenter_policy() {
         let command = delivery_smoke_command("dev", &"a".repeat(64)).unwrap();
         for required in [
             "sha256sum",
             "pidof MiSTer_MagiKDev",
             "pidof mister-magik-fb",
-            "mister_magik_scanout_slots",
-            "latch-readiness-report",
             "\"scene\"",
-            "\"screen\"",
-            "\"input_enabled\"",
+            "\"effective_view\"",
+            "\"return_screen\"",
             "status_sequence",
             "pid_before",
             "pid_after",
@@ -12062,6 +12372,11 @@ H: Handlers=event3 js0"#
             );
         }
         assert!(command.contains("test \"$sequence_after\" -gt \"$sequence_before\""));
+        assert!(!command.contains("latch-readiness-report"));
+        assert!(!command.contains("mister_magik_scanout_slots"));
+        let latch_health = delivery_health_command("dev").unwrap();
+        assert!(latch_health.contains("latch-readiness-report"));
+        assert!(latch_health.contains("mister_magik_scanout_slots"));
         assert!(validate_delivery_remote("/tmp/not-owned").is_err());
     }
 
