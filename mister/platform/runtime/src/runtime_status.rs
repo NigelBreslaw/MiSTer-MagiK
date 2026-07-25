@@ -311,6 +311,9 @@ impl RuntimeStatusPublisher {
         let worker = thread::Builder::new()
             .name("runtime-status".into())
             .spawn(move || {
+                mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
+                    mister_magik_catalog::runtime_thread::RuntimeThreadRole::RuntimeStatus,
+                );
                 loop {
                     let status = {
                         let mut state = worker_slot

@@ -19,6 +19,7 @@ pub enum RuntimeThreadRole {
     MediaDownload,
     MediaIndex,
     FramebufferStream,
+    RuntimeStatus,
     VideoDecode,
     VideoAudio,
     ScreensaverLoader,
@@ -40,6 +41,7 @@ impl RuntimeThreadRole {
             Self::MediaDownload => "media-download",
             Self::MediaIndex => "media-index",
             Self::FramebufferStream => "framebuffer-stream",
+            Self::RuntimeStatus => "runtime-status",
             Self::VideoDecode => "video-decode",
             Self::VideoAudio => "video-audio",
             Self::ScreensaverLoader => "screensaver-loader",
@@ -49,7 +51,7 @@ impl RuntimeThreadRole {
 
     pub fn default_policy(self) -> RuntimeThreadPolicy {
         match self {
-            Self::LauncherUi => RuntimeThreadPolicy::new(-10, ThreadAffinity::Inherit),
+            Self::LauncherUi => RuntimeThreadPolicy::new(-10, ThreadAffinity::Cpu1),
             Self::CatalogWorker => RuntimeThreadPolicy::new(5, ThreadAffinity::Cpu0),
             // Initial index construction is part of making a newly published
             // catalog fully usable. Give it both A9 cores until the P4
@@ -64,7 +66,9 @@ impl RuntimeThreadRole {
             Self::MediaWorker | Self::MediaIndex => {
                 RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0)
             }
-            Self::FramebufferStream => RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0),
+            Self::FramebufferStream | Self::RuntimeStatus => {
+                RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0)
+            }
             // Download starts only after it has joined the cooperative work
             // coordinator.  It may then use both online Cortex-A9 cores while
             // yielding at bounded stream-copy units for selected previews.
@@ -96,6 +100,7 @@ pub enum ThreadAffinity {
     Inherit,
     AllOnline,
     Cpu0,
+    Cpu1,
 }
 
 impl ThreadAffinity {
@@ -104,6 +109,7 @@ impl ThreadAffinity {
             Self::Inherit => "inherit",
             Self::AllOnline => "all-online",
             Self::Cpu0 => "cpu0",
+            Self::Cpu1 => "cpu1",
         }
     }
 }
@@ -185,7 +191,7 @@ fn apply_nice(_nice: i32) -> &'static str {
 fn apply_affinity(affinity: ThreadAffinity) -> &'static str {
     match affinity {
         ThreadAffinity::Inherit => "skipped",
-        ThreadAffinity::AllOnline | ThreadAffinity::Cpu0 => {
+        ThreadAffinity::AllOnline | ThreadAffinity::Cpu0 | ThreadAffinity::Cpu1 => {
             // SAFETY: cpu_set_t is a plain C bitset. sched_setaffinity with pid
             // 0 targets the current thread on Linux; failure is non-fatal.
             unsafe {
@@ -194,6 +200,7 @@ fn apply_affinity(affinity: ThreadAffinity) -> &'static str {
                 let cpus = match affinity {
                     ThreadAffinity::AllOnline => online_cpu_indices(libc::CPU_SETSIZE as usize),
                     ThreadAffinity::Cpu0 => vec![0],
+                    ThreadAffinity::Cpu1 => vec![1],
                     ThreadAffinity::Inherit => unreachable!(),
                 };
                 for cpu in cpus {
@@ -359,7 +366,7 @@ mod tests {
     fn launcher_ui_runs_above_default_interactive_priority() {
         assert_eq!(
             RuntimeThreadRole::LauncherUi.default_policy(),
-            RuntimeThreadPolicy::new(-10, ThreadAffinity::Inherit)
+            RuntimeThreadPolicy::new(-10, ThreadAffinity::Cpu1)
         );
     }
 
@@ -371,6 +378,7 @@ mod tests {
             RuntimeThreadRole::MediaWorker,
             RuntimeThreadRole::MediaIndex,
             RuntimeThreadRole::FramebufferStream,
+            RuntimeThreadRole::RuntimeStatus,
             RuntimeThreadRole::ScreensaverLoader,
             RuntimeThreadRole::ScreensaverScaler,
         ] {
@@ -403,7 +411,7 @@ mod tests {
     #[test]
     fn every_role_has_the_expected_production_policy() {
         let expected = [
-            (RuntimeThreadRole::LauncherUi, -10, ThreadAffinity::Inherit),
+            (RuntimeThreadRole::LauncherUi, -10, ThreadAffinity::Cpu1),
             (RuntimeThreadRole::CatalogWorker, 5, ThreadAffinity::Cpu0),
             (
                 RuntimeThreadRole::CatalogForeground,
@@ -434,6 +442,7 @@ mod tests {
                 10,
                 ThreadAffinity::Cpu0,
             ),
+            (RuntimeThreadRole::RuntimeStatus, 10, ThreadAffinity::Cpu0),
             (RuntimeThreadRole::VideoDecode, 5, ThreadAffinity::Inherit),
             (RuntimeThreadRole::VideoAudio, 5, ThreadAffinity::Inherit),
             (
