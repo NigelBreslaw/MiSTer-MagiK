@@ -4954,7 +4954,10 @@ pub(super) fn run_launcher_loop(
             pacing_trace,
         } = present_cycle;
         if direct_hidden_present_mode
-            && presentation.main_present_backend != LauncherPresentBackend::FpgaVblankLatchHidden
+            && !matches!(
+                presentation.main_present_backend,
+                LauncherPresentBackend::None | LauncherPresentBackend::FpgaVblankLatchHidden
+            )
         {
             screensaver.fail_current_activation(Instant::now());
             if let Some(pipeline) = screensaver_direct_pipeline.take() {

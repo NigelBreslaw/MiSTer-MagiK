@@ -578,12 +578,8 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
         let arcade_list_renderer = &mut *self.targets.arcade_list_renderer;
         if self.direct_hidden_mode {
             let Some(completed) = self.completed_hidden_frame.take() else {
-                let mut presentation = empty_present_result();
-                presentation.main_present_backend = LauncherPresentBackend::FpgaVblankLatchHidden;
-                presentation.main_present_status = LauncherPresentStatus::Ok;
-                presentation.main_present_copy_path = LatchCopyPath::ExternalDirect.label();
                 return Ok(LauncherPresentCycle {
-                    presentation,
+                    presentation: direct_hidden_waiting_present_result(),
                     frame_t3,
                     frame_t4: Instant::now(),
                     cpu_t3,
@@ -813,6 +809,10 @@ fn compatibility_present_result() -> LauncherPresentResult {
     result
 }
 
+fn direct_hidden_waiting_present_result() -> LauncherPresentResult {
+    empty_present_result()
+}
+
 fn latch_present_result(
     stats: FpgaVblankLatchHiddenPresentStats,
     hidden_preview_compose_us: u128,
@@ -910,6 +910,15 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    #[test]
+    fn unfinished_direct_frame_does_not_claim_a_latch_post() {
+        let result = direct_hidden_waiting_present_result();
+        assert_eq!(result.main_present_backend, LauncherPresentBackend::None);
+        assert_eq!(result.main_present_status, LauncherPresentStatus::None);
+        assert_eq!(result.main_present_sequence, 0);
+        assert_eq!(result.main_present_copy_path, "none");
+    }
 
     #[derive(Debug)]
     struct FakeLatch;
