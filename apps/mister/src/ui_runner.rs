@@ -98,6 +98,7 @@ mod launcher_pacing;
 mod launcher_present;
 mod launcher_scheduler;
 mod launcher_screensaver;
+mod launcher_screensaver_pipeline;
 mod launcher_worker_intents;
 mod media_worker;
 mod raw565_preview_renderer;

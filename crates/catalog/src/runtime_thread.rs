@@ -22,6 +22,7 @@ pub enum RuntimeThreadRole {
     RuntimeStatus,
     VideoDecode,
     VideoAudio,
+    ScreensaverRenderer,
     ScreensaverLoader,
     ScreensaverScaler,
 }
@@ -44,6 +45,7 @@ impl RuntimeThreadRole {
             Self::RuntimeStatus => "runtime-status",
             Self::VideoDecode => "video-decode",
             Self::VideoAudio => "video-audio",
+            Self::ScreensaverRenderer => "screensaver-renderer",
             Self::ScreensaverLoader => "screensaver-loader",
             Self::ScreensaverScaler => "screensaver-scaler",
         }
@@ -76,6 +78,7 @@ impl RuntimeThreadRole {
             Self::VideoDecode | Self::VideoAudio => {
                 RuntimeThreadPolicy::new(5, ThreadAffinity::Inherit)
             }
+            Self::ScreensaverRenderer => RuntimeThreadPolicy::new(-5, ThreadAffinity::Cpu0),
             Self::ScreensaverLoader | Self::ScreensaverScaler => {
                 RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0)
             }
@@ -379,11 +382,16 @@ mod tests {
             RuntimeThreadRole::MediaIndex,
             RuntimeThreadRole::FramebufferStream,
             RuntimeThreadRole::RuntimeStatus,
+            RuntimeThreadRole::ScreensaverRenderer,
             RuntimeThreadRole::ScreensaverLoader,
             RuntimeThreadRole::ScreensaverScaler,
         ] {
             assert_eq!(role.default_policy().affinity, ThreadAffinity::Cpu0);
-            assert!(role.default_policy().nice >= 5);
+            if role == RuntimeThreadRole::ScreensaverRenderer {
+                assert_eq!(role.default_policy().nice, -5);
+            } else {
+                assert!(role.default_policy().nice >= 5);
+            }
         }
     }
 
@@ -445,6 +453,11 @@ mod tests {
             (RuntimeThreadRole::RuntimeStatus, 10, ThreadAffinity::Cpu0),
             (RuntimeThreadRole::VideoDecode, 5, ThreadAffinity::Inherit),
             (RuntimeThreadRole::VideoAudio, 5, ThreadAffinity::Inherit),
+            (
+                RuntimeThreadRole::ScreensaverRenderer,
+                -5,
+                ThreadAffinity::Cpu0,
+            ),
             (
                 RuntimeThreadRole::ScreensaverLoader,
                 10,

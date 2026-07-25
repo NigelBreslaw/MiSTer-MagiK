@@ -303,8 +303,22 @@ impl LauncherScreensaver {
         h: usize,
     ) -> ScreensaverFrameTrace {
         let now = Instant::now();
-        let next_motion_ticks_fp =
-            parade_tick_delta_fp(now.saturating_duration_since(self.motion_started_at)) as u64;
+        self.render_at(
+            dst,
+            w,
+            h,
+            now.saturating_duration_since(self.motion_started_at),
+        )
+    }
+
+    pub(in crate::ui_runner) fn render_at(
+        &mut self,
+        dst: &mut [Rgb565Pixel],
+        w: usize,
+        h: usize,
+        elapsed: Duration,
+    ) -> ScreensaverFrameTrace {
+        let next_motion_ticks_fp = (parade_tick_delta_fp(elapsed) as u64).max(self.motion_ticks_fp);
         let tick_delta_fp = next_motion_ticks_fp
             .saturating_sub(self.motion_ticks_fp)
             .min(i64::MAX as u64) as i64;
