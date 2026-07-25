@@ -1111,6 +1111,19 @@ fn latch_late_start_wait_enabled(latch_backend_active: bool, home_motion_active:
     !(latch_backend_active && home_motion_active)
 }
 
+fn retain_or_defer_screensaver_buffer(
+    launcher_frame: &mut Option<Vec<Rgb565Pixel>>,
+    recycle_after_present: &mut Option<Vec<Rgb565Pixel>>,
+    displaced: Vec<Rgb565Pixel>,
+) {
+    if launcher_frame.is_none() {
+        *launcher_frame = Some(displaced);
+    } else {
+        debug_assert!(recycle_after_present.is_none());
+        *recycle_after_present = Some(displaced);
+    }
+}
+
 fn home_repeat_benchmark_active(scenario: Option<LauncherBenchScenario>) -> bool {
     scenario == Some(LauncherBenchScenario::HomeRepeatHold)
 }
@@ -4481,6 +4494,7 @@ pub(super) fn run_launcher_loop(
         let screensaver_fade_alpha = screensaver.preview_fade_alpha(Instant::now());
         let mut screensaver_frame_trace = ScreensaverFrameTrace::default();
         let mut accepted_screensaver_frame = false;
+        let mut screensaver_buffer_to_recycle_after_present = None;
         if screensaver.active {
             if let Some(frame) = screensaver_pipeline
                 .as_ref()
@@ -4488,11 +4502,11 @@ pub(super) fn run_launcher_loop(
             {
                 let mut pixels = frame.pixels;
                 if layer_target.swap_cached(&mut pixels) {
-                    if screensaver_launcher_frame.is_none() {
-                        screensaver_launcher_frame = Some(pixels);
-                    } else if let Some(pipeline) = screensaver_pipeline.as_ref() {
-                        let _ = pipeline.recycle(pixels);
-                    }
+                    retain_or_defer_screensaver_buffer(
+                        &mut screensaver_launcher_frame,
+                        &mut screensaver_buffer_to_recycle_after_present,
+                        pixels,
+                    );
                     screensaver_frame_trace = frame.trace;
                     screensaver_render_sequence = frame.sequence;
                     screensaver_frame_trace.render_ahead_sequence = frame.sequence;
@@ -4758,6 +4772,11 @@ pub(super) fn run_launcher_loop(
             cpu_t4,
             pacing_trace,
         } = present_cycle;
+        if let Some(pixels) = screensaver_buffer_to_recycle_after_present.take()
+            && let Some(pipeline) = screensaver_pipeline.as_ref()
+        {
+            let _ = pipeline.recycle(pixels);
+        }
         if presentation.main_present_backend.is_latch() {
             phase_alignment.observe(
                 frame_t4
@@ -6238,6 +6257,31 @@ fn apply_home_selected_from_env(nav: &mut LauncherNav, catalog: &ArcadeCatalog, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn screensaver_retains_launcher_then_defers_recycling_until_after_present() {
+        let mut launcher_frame = None;
+        let mut recycle_after_present = None;
+
+        retain_or_defer_screensaver_buffer(
+            &mut launcher_frame,
+            &mut recycle_after_present,
+            vec![Rgb565Pixel(1)],
+        );
+        assert_eq!(launcher_frame.as_deref(), Some(&[Rgb565Pixel(1)][..]));
+        assert!(recycle_after_present.is_none());
+
+        retain_or_defer_screensaver_buffer(
+            &mut launcher_frame,
+            &mut recycle_after_present,
+            vec![Rgb565Pixel(2)],
+        );
+        assert_eq!(launcher_frame.as_deref(), Some(&[Rgb565Pixel(1)][..]));
+        assert_eq!(
+            recycle_after_present.as_deref(),
+            Some(&[Rgb565Pixel(2)][..])
+        );
+    }
     use crate::test_support::{arcade_catalog, arcade_game, arcade_system};
     #[cfg(mister_experiments)]
     use crate::ui_effect_bench::{EffectFill, EffectTarget};
