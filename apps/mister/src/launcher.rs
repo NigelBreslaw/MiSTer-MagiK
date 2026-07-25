@@ -4129,6 +4129,12 @@ pub fn launch_in_progress() -> bool {
     LAUNCH_STATE.load(Ordering::Acquire) == LAUNCH_SENT
 }
 
+#[allow(dead_code)]
+#[doc(hidden)]
+pub fn mark_launch_sent_for_test() {
+    LAUNCH_STATE.store(LAUNCH_SENT, Ordering::Release);
+}
+
 /// Main is running an arcade core (argv contains `.rbf`, not `menu.rbf`).
 pub fn mister_running_arcade_core() -> bool {
     let output = Command::new("sh")

@@ -566,8 +566,9 @@ impl LauncherScheduler {
         self.launch_handoff.visible_loading_title(fallback)
     }
 
-    pub(super) fn launch_is_active(&self) -> bool {
-        self.launch_handoff.is_active()
+    pub(super) fn recover_stale_launch_transport(&mut self, lifecycle_launch_active: bool) -> bool {
+        self.launch_handoff
+            .recover_stale_transport(lifecycle_launch_active)
     }
 
     pub(super) fn has_pending_launch(&self) -> bool {

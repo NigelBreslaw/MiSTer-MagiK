@@ -71,6 +71,7 @@ pub(super) struct LauncherFrameAccounting {
     last_vsync_period_us: u64,
     last_present_backend: &'static str,
     last_present_status: &'static str,
+    effective_view: &'static str,
     latch_failure_state: String,
     latch_failure_stage: String,
     latch_failure_reason: String,
@@ -1058,6 +1059,7 @@ impl LauncherFrameAccounting {
             last_vsync_period_us: 0,
             last_present_backend: "none",
             last_present_status: "none",
+            effective_view: "home",
             latch_failure_state: String::new(),
             latch_failure_stage: String::new(),
             latch_failure_reason: String::new(),
@@ -1085,6 +1087,9 @@ impl LauncherFrameAccounting {
     }
 
     pub(super) fn record_latch_failure(&mut self, failure: &LatchFailure) {
+        if !self.latch_failure_state.is_empty() {
+            return;
+        }
         self.latch_failure_state = failure.state.code().to_string();
         self.latch_failure_stage = failure.stage.code().to_string();
         self.latch_failure_reason = failure.reason_code().to_string();
@@ -1093,6 +1098,10 @@ impl LauncherFrameAccounting {
 
     pub(super) fn set_compatibility_prompt_visible(&mut self, visible: bool) {
         self.compatibility_prompt_visible = visible;
+    }
+
+    pub(super) fn set_effective_view(&mut self, effective_view: &'static str) {
+        self.effective_view = effective_view;
     }
 
     pub(super) fn preview_scroll_trace_enabled(&self) -> bool {
@@ -2067,7 +2076,9 @@ impl LauncherFrameAccounting {
         let screensaver_profile_state = cpu_profile::screensaver_profile_state();
         let status_submitted = self.runtime_status_publisher.submit(LauncherStatus {
             scene: "launcher",
-            screen: screen_label(nav.screen),
+            screen: self.effective_view,
+            effective_view: self.effective_view,
+            return_screen: screen_label(nav.screen),
             output_route: self.output_route,
             frames,
             idle,

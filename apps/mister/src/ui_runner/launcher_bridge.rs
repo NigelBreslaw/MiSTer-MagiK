@@ -32,6 +32,7 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     bridge.set_startup_visible(true);
     bridge.set_screen_mode(0);
+    bridge.set_effective_view("home".into());
     bridge.set_build_label(build_label().into());
     bridge.set_present_mode_label("Mode=/dev/fb0".into());
     bridge.set_info_kernel_version(kernel_version().into());

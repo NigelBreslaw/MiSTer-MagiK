@@ -23,9 +23,23 @@ enum LauncherPresenterState<L> {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LatchAutoRetryState {
+    Disabled,
+    AwaitingSafeFrame,
+    Ready,
+    InProgress,
+}
+
 pub(in crate::ui_runner) struct LauncherPresenter<L = FpgaVblankLatchHiddenPresenter> {
     state: LauncherPresenterState<L>,
     compatibility_transitions: u64,
+    first_failure: Option<LatchFailure>,
+    latest_failure: Option<LatchFailure>,
+    retry_attempts: u8,
+    auto_retry: LatchAutoRetryState,
+    latest_retry_result: &'static str,
+    recovery_state: &'static str,
 }
 
 pub(in crate::ui_runner) struct LauncherPresentFrame {
@@ -82,12 +96,23 @@ struct Fb0AdapterOutput<T> {
 
 impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
     pub(in crate::ui_runner) fn new(ui: &UiDisplay) -> Self {
+        let mut first_failure = None;
+        let mut latest_failure = None;
+        let mut auto_retry = LatchAutoRetryState::Disabled;
+        let mut recovery_state = "not-needed";
         let state = match launcher_present_backend() {
             LauncherPresentBackend::FpgaVblankLatchHidden => {
                 match FpgaVblankLatchHiddenPresenter::open(ui) {
                     Ok(presenter) => LauncherPresenterState::Latch(presenter),
                     Err(failure) => {
-                        persist_latch_failure(&failure);
+                        first_failure = Some(failure.clone());
+                        latest_failure = Some(failure.clone());
+                        if failure.is_transient_runtime_failure() {
+                            auto_retry = LatchAutoRetryState::AwaitingSafeFrame;
+                            recovery_state = "awaiting-safe-frame";
+                        } else {
+                            recovery_state = "compatibility-prompt";
+                        }
                         crate::ui_errln!(
                             "latch_failure_tsv\tvalid=0\tstate={}\tstage={}\treason={}\taction=compatibility-screen\tdetail={}",
                             failure.state.code(),
@@ -99,7 +124,7 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
                             failure,
                             screen_ready: false,
                             route_active: false,
-                            prompt_visible: true,
+                            prompt_visible: auto_retry == LatchAutoRetryState::Disabled,
                         }
                     }
                 }
@@ -112,10 +137,18 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
             state,
             LauncherPresenterState::Compatibility { .. }
         ));
-        Self {
+        let presenter = Self {
             state,
             compatibility_transitions,
-        }
+            first_failure,
+            latest_failure,
+            retry_attempts: 0,
+            auto_retry,
+            latest_retry_result: "not-attempted",
+            recovery_state,
+        };
+        presenter.persist_recovery_evidence();
+        presenter
     }
 
     pub(in crate::ui_runner) fn present(
@@ -140,7 +173,6 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
     }
 
     pub(in crate::ui_runner) fn fail_latch_completion(&mut self, failure: LatchFailure) {
-        persist_latch_failure(&failure);
         self.transition_latch_failure(failure);
     }
 
@@ -148,11 +180,20 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
         if !self.compatibility_prompt_visible() {
             return false;
         }
+        self.retry_attempts = self.retry_attempts.saturating_add(1);
+        self.latest_retry_result = "in-progress";
+        self.recovery_state = "manual-retry";
         let result = FpgaVblankLatchHiddenPresenter::open(ui);
-        if let Err(failure) = &result {
-            persist_latch_failure(failure);
+        self.apply_retry_result(result, false)
+    }
+
+    pub(in crate::ui_runner) fn retry_latch_automatically(&mut self, ui: &UiDisplay) -> bool {
+        if !self.begin_automatic_retry() {
+            return false;
         }
-        self.apply_retry_result(result)
+        let result = FpgaVblankLatchHiddenPresenter::open(ui);
+        self.apply_retry_result(result, true);
+        true
     }
 
     pub(in crate::ui_runner) fn publish_stream_refinement_if_due(&self) -> bool {
@@ -203,12 +244,23 @@ impl<L> LauncherPresenter<L> {
         )
     }
 
+    pub(in crate::ui_runner) fn compatibility_blocks_app(&self) -> bool {
+        matches!(self.state, LauncherPresenterState::Compatibility { .. })
+            && (self.compatibility_prompt_visible()
+                || self.auto_retry != LatchAutoRetryState::Disabled)
+    }
+
     pub(in crate::ui_runner) fn continue_in_compatibility(&mut self) -> bool {
         let LauncherPresenterState::Compatibility { prompt_visible, .. } = &mut self.state else {
             return false;
         };
         let changed = *prompt_visible;
         *prompt_visible = false;
+        if changed {
+            self.auto_retry = LatchAutoRetryState::Disabled;
+            self.recovery_state = "continued-compatibility";
+            self.persist_recovery_evidence();
+        }
         changed
     }
 
@@ -234,26 +286,87 @@ impl<L> LauncherPresenter<L> {
                 latch_error.detail
             ),
         );
+        if self.first_failure.is_none() {
+            self.first_failure = Some(latch_error.clone());
+        }
+        self.latest_failure = Some(latch_error.clone());
+        let automatic_retry =
+            self.retry_attempts == 0 && latch_error.is_transient_runtime_failure();
+        self.auto_retry = if automatic_retry {
+            LatchAutoRetryState::AwaitingSafeFrame
+        } else {
+            LatchAutoRetryState::Disabled
+        };
+        self.recovery_state = if automatic_retry {
+            "awaiting-safe-frame"
+        } else {
+            "compatibility-prompt"
+        };
         self.compatibility_transitions = self.compatibility_transitions.saturating_add(1);
         self.state = LauncherPresenterState::Compatibility {
             failure: latch_error,
-            screen_ready: true,
+            screen_ready: false,
             route_active: false,
-            prompt_visible: true,
+            prompt_visible: !automatic_retry,
         };
+        self.persist_recovery_evidence();
     }
 
-    fn apply_retry_result(&mut self, result: Result<L, LatchFailure>) -> bool {
+    fn begin_automatic_retry(&mut self) -> bool {
+        if self.auto_retry != LatchAutoRetryState::Ready || self.retry_attempts != 0 {
+            return false;
+        }
+        self.retry_attempts = 1;
+        self.auto_retry = LatchAutoRetryState::InProgress;
+        self.latest_retry_result = "in-progress";
+        self.recovery_state = "automatic-retry";
+        self.persist_recovery_evidence();
+        true
+    }
+
+    fn apply_retry_result(&mut self, result: Result<L, LatchFailure>, automatic: bool) -> bool {
         match result {
             Ok(latch) => {
                 self.state = LauncherPresenterState::Latch(latch);
+                self.auto_retry = LatchAutoRetryState::Disabled;
+                self.latest_retry_result = "success";
+                self.recovery_state = if automatic {
+                    "recovered-automatically"
+                } else {
+                    "recovered-manually"
+                };
+                self.persist_recovery_evidence();
                 true
             }
             Err(failure) => {
+                if self.retry_attempts > 0 {
+                    self.latest_retry_result = "failure";
+                }
                 self.transition_latch_failure(failure);
                 false
             }
         }
+    }
+
+    fn mark_safe_frame_complete(&mut self) {
+        if self.auto_retry == LatchAutoRetryState::AwaitingSafeFrame {
+            self.auto_retry = LatchAutoRetryState::Ready;
+            self.recovery_state = "safe-frame-complete";
+            self.persist_recovery_evidence();
+        }
+    }
+
+    fn persist_recovery_evidence(&self) {
+        let (Some(first), Some(latest)) = (&self.first_failure, &self.latest_failure) else {
+            return;
+        };
+        persist_latch_failure(
+            first,
+            latest,
+            self.retry_attempts,
+            self.latest_retry_result,
+            self.recovery_state,
+        );
     }
 
     fn present_with<A>(&mut self, frame: LauncherFramePlan, adapters: &mut A) -> A::Output
@@ -275,6 +388,7 @@ impl<L> LauncherPresenter<L> {
                     *screen_ready = true;
                     let result = adapters.present_compatibility_black();
                     *route_active = result.route_active;
+                    self.mark_safe_frame_complete();
                     return result.output;
                 }
                 let result = adapters.present_fb0(
@@ -293,15 +407,34 @@ impl<L> LauncherPresenter<L> {
 
         self.transition_latch_failure(latch_error);
         let result = adapters.present_compatibility_black();
-        if let LauncherPresenterState::Compatibility { route_active, .. } = &mut self.state {
+        if let LauncherPresenterState::Compatibility {
+            screen_ready,
+            route_active,
+            ..
+        } = &mut self.state
+        {
+            *screen_ready = true;
             *route_active = result.route_active;
         }
+        self.mark_safe_frame_complete();
         result.output
     }
 }
 
-fn persist_latch_failure(failure: &LatchFailure) {
-    let evidence = mister_magik_fb::latch_readiness::LatchFailureEvidence::from(failure);
+fn persist_latch_failure(
+    first: &LatchFailure,
+    latest: &LatchFailure,
+    retry_attempts: u8,
+    latest_retry_result: &str,
+    recovery_state: &str,
+) {
+    let evidence = mister_magik_fb::latch_readiness::LatchFailureEvidence::for_recovery(
+        first,
+        latest,
+        retry_attempts,
+        latest_retry_result,
+        recovery_state,
+    );
     if let Err(error) =
         evidence.write_atomic(mister_magik_fb::latch_readiness::RUNTIME_FAILURE_PATH)
     {
@@ -405,37 +538,32 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
         let layer_target = self.targets.layer_target;
         let hardware = &mut *self.targets.hardware;
         let arcade_list_renderer = &mut *self.targets.arcade_list_renderer;
-        let stats = latch
-            .present_cached_full_frame(
-                layer_target.cached_frame_view(),
-                frame,
-                hardware,
-                self.display,
-                |hidden, plan| {
-                    preview_redraw_rect = plan.preview_redraw;
-                    arcade_redraw_update = plan.arcade_redraw;
-                    if let Some(rect) = plan.preview_redraw {
-                        let started = Instant::now();
-                        direct_preview_rows =
-                            layer_target.copy_direct_preview_rect_to_hidden(hidden, rect);
-                        hidden_preview_compose_us = started.elapsed().as_micros();
-                    }
-                    if let Some(update) = plan.arcade_redraw {
-                        let started = Instant::now();
-                        arcade_stats = layer_target.copy_arcade_list_update_to_hidden(
-                            hidden,
-                            arcade_list_renderer,
-                            update,
-                        );
-                        hidden_arcade_compose_us = started.elapsed().as_micros();
-                    }
-                    Ok(())
-                },
-            )
-            .map_err(|failure| {
-                persist_latch_failure(&failure);
-                failure
-            })?;
+        let stats = latch.present_cached_full_frame(
+            layer_target.cached_frame_view(),
+            frame,
+            hardware,
+            self.display,
+            |hidden, plan| {
+                preview_redraw_rect = plan.preview_redraw;
+                arcade_redraw_update = plan.arcade_redraw;
+                if let Some(rect) = plan.preview_redraw {
+                    let started = Instant::now();
+                    direct_preview_rows =
+                        layer_target.copy_direct_preview_rect_to_hidden(hidden, rect);
+                    hidden_preview_compose_us = started.elapsed().as_micros();
+                }
+                if let Some(update) = plan.arcade_redraw {
+                    let started = Instant::now();
+                    arcade_stats = layer_target.copy_arcade_list_update_to_hidden(
+                        hidden,
+                        arcade_list_renderer,
+                        update,
+                    );
+                    hidden_arcade_compose_us = started.elapsed().as_micros();
+                }
+                Ok(())
+            },
+        )?;
         if let Some(scale) =
             mister_magik_fb::framebuffer::stream::configured_latch_scale(self.stream_motion_active)
         {
@@ -798,9 +926,19 @@ mod tests {
     }
 
     fn presenter(state: LauncherPresenterState<FakeLatch>) -> LauncherPresenter<FakeLatch> {
+        let failure = match &state {
+            LauncherPresenterState::Compatibility { failure, .. } => Some(failure.clone()),
+            LauncherPresenterState::ExplicitFb0 | LauncherPresenterState::Latch(_) => None,
+        };
         LauncherPresenter {
             state,
             compatibility_transitions: 0,
+            first_failure: failure.clone(),
+            latest_failure: failure,
+            retry_attempts: 0,
+            auto_retry: LatchAutoRetryState::Disabled,
+            latest_retry_result: "not-attempted",
+            recovery_state: "compatibility-prompt",
         }
     }
 
@@ -973,18 +1111,117 @@ mod tests {
             )
         };
 
-        assert!(!presenter.apply_retry_result(Err(retry_failure())));
-        assert!(!presenter.apply_retry_result(Err(retry_failure())));
+        presenter.retry_attempts = 1;
+        assert!(!presenter.apply_retry_result(Err(retry_failure()), false));
+        presenter.retry_attempts = 2;
+        assert!(!presenter.apply_retry_result(Err(retry_failure()), false));
         assert!(presenter.compatibility_prompt_visible());
         assert_eq!(presenter.compatibility_transitions(), 2);
 
-        assert!(presenter.apply_retry_result(Ok(FakeLatch)));
+        assert!(presenter.apply_retry_result(Ok(FakeLatch), false));
         assert!(!presenter.compatibility_prompt_visible());
         assert!(presenter.compatibility_failure().is_none());
         assert_eq!(
             presenter.pacing_backend(),
             LauncherPresentBackend::FpgaVblankLatchHidden
         );
+    }
+
+    #[test]
+    fn transient_failure_waits_for_safe_frame_then_retries_once() {
+        let mut presenter = presenter(LauncherPresenterState::Latch(FakeLatch));
+        let mut adapters = FakeAdapters::failing();
+
+        assert_eq!(presenter.present_with(frame(), &mut adapters), 3);
+        assert_eq!(adapters.events, [Event::Latch, Event::CompatibilityBlack]);
+        assert_eq!(presenter.auto_retry, LatchAutoRetryState::Ready);
+        assert_eq!(presenter.retry_attempts, 0);
+
+        assert!(presenter.begin_automatic_retry());
+        assert!(presenter.apply_retry_result(Ok(FakeLatch), true));
+        assert_eq!(presenter.retry_attempts, 1);
+        assert_eq!(presenter.recovery_state, "recovered-automatically");
+        assert!(!presenter.begin_automatic_retry());
+        assert_eq!(
+            presenter.pacing_backend(),
+            LauncherPresentBackend::FpgaVblankLatchHidden
+        );
+    }
+
+    #[test]
+    fn failed_automatic_retry_preserves_origin_and_shows_prompt() {
+        let mut presenter = presenter(LauncherPresenterState::Latch(FakeLatch));
+        let mut adapters = FakeAdapters::failing();
+        presenter.present_with(frame(), &mut adapters);
+        let retry_failure = LatchFailure::runtime(
+            mister_magik_fb::latch_readiness::LatchFailureStage::PostVerification,
+            mister_magik_fb::latch_readiness::LatchFailureReason::PostedSequenceUnverified,
+            "retry failed",
+        );
+
+        assert!(presenter.begin_automatic_retry());
+        assert!(!presenter.apply_retry_result(Err(retry_failure), true));
+        assert_eq!(
+            presenter.first_failure.as_ref().unwrap().detail,
+            "failed latch"
+        );
+        assert_eq!(
+            presenter.latest_failure.as_ref().unwrap().detail,
+            "retry failed"
+        );
+        assert_eq!(presenter.retry_attempts, 1);
+        assert!(presenter.compatibility_prompt_visible());
+        assert_eq!(presenter.auto_retry, LatchAutoRetryState::Disabled);
+        assert!(!presenter.begin_automatic_retry());
+    }
+
+    #[test]
+    fn deterministic_and_platform_failures_do_not_auto_retry() {
+        for failure in [
+            LatchFailure::runtime(
+                mister_magik_fb::latch_readiness::LatchFailureStage::FrameCopy,
+                mister_magik_fb::latch_readiness::LatchFailureReason::FrameCopyFailed,
+                "copy failed",
+            ),
+            LatchFailure::incompatible(
+                mister_magik_fb::latch_readiness::LatchFailureStage::ModuleLayout,
+                mister_magik_fb::latch_readiness::LatchFailureReason::ScanoutLayoutMismatch,
+                "layout mismatch",
+            ),
+        ] {
+            let mut presenter = presenter(LauncherPresenterState::Latch(FakeLatch));
+            presenter.transition_latch_failure(failure);
+            assert!(presenter.compatibility_prompt_visible());
+            assert_eq!(presenter.auto_retry, LatchAutoRetryState::Disabled);
+            assert!(!presenter.begin_automatic_retry());
+        }
+    }
+
+    #[test]
+    fn manual_retry_failure_cannot_start_automatic_loop() {
+        let mut presenter = presenter(LauncherPresenterState::Compatibility {
+            failure: LatchFailure::runtime(
+                mister_magik_fb::latch_readiness::LatchFailureStage::LatchPost,
+                mister_magik_fb::latch_readiness::LatchFailureReason::LatchPostFailed,
+                "origin",
+            ),
+            screen_ready: true,
+            route_active: true,
+            prompt_visible: true,
+        });
+        presenter.retry_attempts = 1;
+
+        assert!(!presenter.apply_retry_result(
+            Err(LatchFailure::runtime(
+                mister_magik_fb::latch_readiness::LatchFailureStage::RouteArm,
+                mister_magik_fb::latch_readiness::LatchFailureReason::RouteArmFailed,
+                "manual retry failed",
+            )),
+            false,
+        ));
+        assert!(presenter.compatibility_prompt_visible());
+        assert_eq!(presenter.auto_retry, LatchAutoRetryState::Disabled);
+        assert!(!presenter.begin_automatic_retry());
     }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]

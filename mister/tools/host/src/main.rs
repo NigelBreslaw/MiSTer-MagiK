@@ -399,6 +399,8 @@ impl DeviceOperations for NativeDevice {
                     for key in [
                         "scene",
                         "screen",
+                        "effective_view",
+                        "return_screen",
                         "input_enabled",
                         "present_backend",
                         "present_status",
@@ -423,6 +425,13 @@ impl DeviceOperations for NativeDevice {
                         ("latch_failure_stage", "stage"),
                         ("latch_failure_reason", "reason"),
                         ("latch_failure_detail", "detail"),
+                        ("latch_latest_state", "latest_state"),
+                        ("latch_latest_stage", "latest_stage"),
+                        ("latch_latest_reason", "latest_reason"),
+                        ("latch_latest_detail", "latest_detail"),
+                        ("latch_recovery_attempt_count", "attempt_count"),
+                        ("latch_latest_retry_result", "latest_result"),
+                        ("latch_recovery_state", "recovery_state"),
                     ] {
                         if let Some(value) = failure.get(failure_key) {
                             facts.insert(fact_key.to_owned(), value.clone());

@@ -97,6 +97,8 @@ launcher_status_types! {
     strings {
         scene,
         screen,
+        effective_view,
+        return_screen,
         output_route,
         vsync_source,
         present_backend,
@@ -532,6 +534,8 @@ fn launcher_status_value(
     insert!("mode", "ui");
     insert!("scene", status.scene);
     insert!("screen", status.screen);
+    insert!("effective_view", status.effective_view);
+    insert!("return_screen", status.return_screen);
     insert!("output_route", status.output_route);
     insert!("frames", status.frames);
     insert!("idle", status.idle);
@@ -969,6 +973,8 @@ mod tests {
             LauncherStatus {
                 scene: "launcher",
                 screen: "home",
+                effective_view: "home",
+                return_screen: "home",
                 output_route: "crt-576p50",
                 frames: 42,
                 idle: true,
@@ -1321,6 +1327,8 @@ mod tests {
         LauncherStatus {
             scene: "launcher",
             screen,
+            effective_view: screen,
+            return_screen: screen,
             output_route: "crt-288p50",
             frames: 7,
             idle: false,

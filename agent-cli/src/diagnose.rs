@@ -67,6 +67,10 @@ pub struct DeviceFacts {
     #[serde(default)]
     pub screen: String,
     #[serde(default)]
+    pub effective_view: String,
+    #[serde(default)]
+    pub return_screen: String,
+    #[serde(default)]
     pub input_enabled: bool,
     #[serde(default)]
     pub present_backend: String,
@@ -80,6 +84,20 @@ pub struct DeviceFacts {
     pub latch_failure_reason: String,
     #[serde(default)]
     pub latch_failure_detail: String,
+    #[serde(default)]
+    pub latch_latest_state: String,
+    #[serde(default)]
+    pub latch_latest_stage: String,
+    #[serde(default)]
+    pub latch_latest_reason: String,
+    #[serde(default)]
+    pub latch_latest_detail: String,
+    #[serde(default)]
+    pub latch_recovery_attempt_count: u8,
+    #[serde(default)]
+    pub latch_latest_retry_result: String,
+    #[serde(default)]
+    pub latch_recovery_state: String,
     #[serde(default)]
     pub compatibility_prompt_visible: bool,
     #[serde(default)]
@@ -112,6 +130,10 @@ pub struct DiagnosticReport {
     #[serde(skip_serializing_if = "String::is_empty")]
     pub screen: String,
     #[serde(skip_serializing_if = "String::is_empty")]
+    pub effective_view: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub return_screen: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub present_backend: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub present_status: String,
@@ -123,6 +145,20 @@ pub struct DiagnosticReport {
     pub latch_failure_reason: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub latch_failure_detail: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub latch_latest_state: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub latch_latest_stage: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub latch_latest_reason: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub latch_latest_detail: String,
+    #[serde(skip_serializing_if = "is_zero_u8")]
+    pub latch_recovery_attempt_count: u8,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub latch_latest_retry_result: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub latch_recovery_state: String,
     pub compatibility_prompt_visible: bool,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub capture_source: String,
@@ -132,6 +168,10 @@ pub struct DiagnosticReport {
 }
 
 fn is_zero(value: &u64) -> bool {
+    *value == 0
+}
+
+fn is_zero_u8(value: &u8) -> bool {
     *value == 0
 }
 
@@ -395,12 +435,21 @@ pub fn correlate(facts: &DeviceFacts, repaired: bool) -> DiagnosticReport {
         last_crash_kind: facts.last_crash_kind.clone(),
         scene: facts.scene.clone(),
         screen: facts.screen.clone(),
+        effective_view: facts.effective_view.clone(),
+        return_screen: facts.return_screen.clone(),
         present_backend: facts.present_backend.clone(),
         present_status: facts.present_status.clone(),
         latch_failure_state: facts.latch_failure_state.clone(),
         latch_failure_stage: facts.latch_failure_stage.clone(),
         latch_failure_reason: facts.latch_failure_reason.clone(),
         latch_failure_detail: facts.latch_failure_detail.clone(),
+        latch_latest_state: facts.latch_latest_state.clone(),
+        latch_latest_stage: facts.latch_latest_stage.clone(),
+        latch_latest_reason: facts.latch_latest_reason.clone(),
+        latch_latest_detail: facts.latch_latest_detail.clone(),
+        latch_recovery_attempt_count: facts.latch_recovery_attempt_count,
+        latch_latest_retry_result: facts.latch_latest_retry_result.clone(),
+        latch_recovery_state: facts.latch_recovery_state.clone(),
         compatibility_prompt_visible: facts.compatibility_prompt_visible,
         capture_source: facts.capture_source.clone(),
         capture_authoritative_scanout: facts.capture_authoritative_scanout,

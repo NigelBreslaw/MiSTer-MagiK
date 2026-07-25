@@ -242,6 +242,19 @@ impl LaunchHandoffSession {
         launcher::launch_in_progress() || !self.loading_title.is_empty()
     }
 
+    pub(super) fn recover_stale_transport(&mut self, lifecycle_launch_active: bool) -> bool {
+        if lifecycle_launch_active || self.pending.is_some() || self.staged.is_some() {
+            return false;
+        }
+        let stale = launcher::launch_in_progress() || !self.loading_title.is_empty();
+        if stale {
+            launcher::reset_launch();
+            self.loading_title.clear();
+            self.spawned_mister = false;
+        }
+        stale
+    }
+
     pub(super) fn has_pending_launch(&self) -> bool {
         self.pending.is_some()
     }
@@ -690,6 +703,21 @@ mod tests {
         assert!(session.is_active());
         assert_eq!(session.runtime_action(Instant::now()), None);
         assert!(!Path::new(launcher::LAUNCH_RETURN_STATE_PATH).exists());
+    }
+
+    #[test]
+    fn idle_lifecycle_repairs_stale_launch_sent_without_pending_handoff() {
+        let _guard = lock_launch_handoff_tests();
+        launcher::reset_launch();
+        launcher::mark_launch_sent_for_test();
+        let mut session = LaunchHandoffSession::with_worker_for_test(pending_worker, false);
+
+        assert_eq!(session.loading_title(), "");
+        assert!(!session.has_pending_launch());
+        assert!(session.recover_stale_transport(false));
+        assert!(!launcher::launch_in_progress());
+        assert!(!session.is_active());
+        assert!(!session.recover_stale_transport(false));
     }
 
     #[test]

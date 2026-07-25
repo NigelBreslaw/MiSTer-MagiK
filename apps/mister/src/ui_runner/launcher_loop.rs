@@ -1559,6 +1559,74 @@ fn sqlite_file_has_valid_header(path: &Path) -> bool {
     file.read_exact(&mut header).is_ok() && &header == SQLITE_HEADER
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum EffectiveLauncherView {
+    Compatibility,
+    Launching,
+    Screensaver,
+    Navigation(Screen),
+}
+
+impl EffectiveLauncherView {
+    fn resolve(
+        lifecycle: &LauncherLifecycle,
+        screensaver_active: bool,
+        compatibility_active: bool,
+        return_screen: Screen,
+    ) -> Self {
+        Self::resolve_state(
+            lifecycle.state(),
+            screensaver_active,
+            compatibility_active,
+            return_screen,
+        )
+    }
+
+    fn resolve_state(
+        lifecycle: &LauncherLifecycleState,
+        screensaver_active: bool,
+        compatibility_active: bool,
+        return_screen: Screen,
+    ) -> Self {
+        if compatibility_active {
+            Self::Compatibility
+        } else if matches!(
+            lifecycle,
+            LauncherLifecycleState::Launching { .. } | LauncherLifecycleState::Handoff { .. }
+        ) {
+            Self::Launching
+        } else if screensaver_active {
+            Self::Screensaver
+        } else {
+            Self::Navigation(return_screen)
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Compatibility => "compatibility",
+            Self::Launching => "launching",
+            Self::Screensaver => "screensaver",
+            Self::Navigation(screen) => screen_label(screen),
+        }
+    }
+
+    const fn launch_active(self) -> bool {
+        matches!(self, Self::Launching)
+    }
+
+    const fn accepts_application_input(self) -> bool {
+        matches!(self, Self::Screensaver | Self::Navigation(_))
+    }
+
+    pub(super) const fn return_screen(self) -> Option<Screen> {
+        match self {
+            Self::Navigation(screen) => Some(screen),
+            Self::Compatibility | Self::Launching | Self::Screensaver => None,
+        }
+    }
+}
+
 #[derive(Debug)]
 struct ScreensaverControl {
     last_activity: Instant,
@@ -1610,6 +1678,18 @@ impl ScreensaverControl {
         self.waiting_for_input_release = true;
         self.last_activity = now;
         self.preview_fade_started = Some(now);
+    }
+
+    fn cancel_for_exclusive_view(&mut self, now: Instant) -> bool {
+        let was_active = self.active || self.start_when_ready;
+        self.restore_full_frame |= self.active;
+        self.active = false;
+        self.start_when_ready = false;
+        self.preview_active = false;
+        self.waiting_for_input_release = false;
+        self.preview_fade_started = None;
+        self.last_activity = now;
+        was_active
     }
 
     /// Returns true when this input frame is consumed by screensaver control.
@@ -2380,19 +2460,55 @@ pub(super) fn run_launcher_loop(
         apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
         sync_startup_visibility(&app, &lifecycle);
         scheduler.record_loading_frame(loop_start);
+        if launcher_presenter.retry_latch_automatically(ui) {
+            runtime_status::event(
+                "launcher_latch_recovery",
+                "action=automatic-retry attempt=1",
+            );
+            request_launcher_redraw!();
+        }
         let compatibility_prompt_visible = launcher_presenter.compatibility_prompt_visible();
+        let compatibility_blocks_app = launcher_presenter.compatibility_blocks_app();
         frame_accounting.set_compatibility_prompt_visible(compatibility_prompt_visible);
-        let launching = scheduler.launch_is_active()
-            || !loading_title.is_empty()
-            || compatibility_prompt_visible;
+        let lifecycle_launch_active = matches!(
+            lifecycle.state(),
+            LauncherLifecycleState::Launching { .. } | LauncherLifecycleState::Handoff { .. }
+        );
+        if scheduler.recover_stale_launch_transport(lifecycle_launch_active) {
+            runtime_status::event(
+                "launcher_state_invariant_recovered",
+                "kind=stale-launch-transport lifecycle=interactive",
+            );
+        }
+        if (lifecycle_launch_active || compatibility_blocks_app)
+            && screensaver.cancel_for_exclusive_view(loop_start)
+        {
+            runtime_status::event(
+                "launcher_state_invariant_recovered",
+                if lifecycle_launch_active {
+                    "kind=screensaver-during-launch action=cancel-screensaver"
+                } else {
+                    "kind=screensaver-under-compatibility action=cancel-screensaver"
+                },
+            );
+            request_launcher_redraw!();
+        }
+        let mut effective_view = EffectiveLauncherView::resolve(
+            &lifecycle,
+            screensaver.active,
+            compatibility_blocks_app,
+            nav.screen,
+        );
+        let mut launching = effective_view.launch_active();
         let setup_active = setup.is_active();
         let mut light_bridge_dirty = false;
-        let mut pad_changed_for_input =
-            if compatibility_prompt_visible || (!launching && lifecycle.startup_input_enabled()) {
-                Some(pad.poll_with_debug_labels(setup_active))
-            } else {
-                None
-            };
+        let mut pad_changed_for_input = if compatibility_prompt_visible
+            || (effective_view.accepts_application_input() && lifecycle.startup_input_enabled())
+        {
+            Some(pad.poll_with_debug_labels(setup_active))
+        } else {
+            None
+        };
         if compatibility_prompt_visible {
             let state = pad.state().clone();
             let retry = state.btn_a && !compatibility_prev.btn_a;
@@ -3069,8 +3185,20 @@ pub(super) fn run_launcher_loop(
         if !restore_before && screensaver.restore_full_frame {
             request_launcher_redraw!();
         }
+        effective_view = EffectiveLauncherView::resolve(
+            &lifecycle,
+            screensaver.active,
+            compatibility_blocks_app,
+            nav.screen,
+        );
+        launching = effective_view.launch_active();
+        frame_accounting.set_effective_view(effective_view.label());
+        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+        if bridge.get_effective_view().as_str() != effective_view.label() {
+            bridge.set_effective_view(effective_view.label().into());
+        }
 
-        if !launching && lifecycle.startup_input_enabled() {
+        if effective_view.accepts_application_input() && lifecycle.startup_input_enabled() {
             let pad_changed = pad_changed_for_input
                 .take()
                 .unwrap_or_else(|| pad.poll_with_debug_labels(setup_active));
@@ -3551,9 +3679,6 @@ pub(super) fn run_launcher_loop(
                             let Some(mra) = event.path else {
                                 continue;
                             };
-                            if scheduler.launch_is_active() {
-                                continue;
-                            }
                             let lifecycle_step = lifecycle.handle(
                                 LauncherLifecycleInput::LaunchRequested {
                                     launch_ref: mra.clone(),
@@ -3990,6 +4115,22 @@ pub(super) fn run_launcher_loop(
         sync_startup_visibility(&app, &lifecycle);
         let startup_reveal_ready =
             lifecycle.startup_status().state == StartupRevealState::RevealLauncher;
+        effective_view = EffectiveLauncherView::resolve(
+            &lifecycle,
+            screensaver.active,
+            launcher_presenter.compatibility_blocks_app(),
+            nav.screen,
+        );
+        if effective_view.launch_active() && screensaver.cancel_for_exclusive_view(Instant::now()) {
+            effective_view = EffectiveLauncherView::Launching;
+            request_launcher_redraw!();
+        }
+        launching = effective_view.launch_active();
+        frame_accounting.set_effective_view(effective_view.label());
+        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+        if bridge.get_effective_view().as_str() != effective_view.label() {
+            bridge.set_effective_view(effective_view.label().into());
+        }
         let mut full_frame_present = display_session
             .should_present_full_frame(launching, route_action)
             || startup_reveal_ready;
@@ -4005,8 +4146,7 @@ pub(super) fn run_launcher_loop(
         let preview_frame_status = preview.raw_frame_status();
         let preview_cache_state_before_composition = preview.trace_cache_state();
         let composition_decision = composition.tick(UiCompositionInput {
-            screen: nav.screen,
-            screensaver_active: screensaver.active,
+            effective_view,
             confirm_visible,
             fullscreen_overlay_visible: catalog_scan_visible,
             arcade_ready: active_arcade_games_available,
@@ -4814,7 +4954,9 @@ pub(super) fn run_launcher_loop(
                     if let Some(failure) = launcher_presenter.compatibility_failure() {
                         frame_accounting.record_latch_failure(failure);
                         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                        bridge.set_compatibility_visible(true);
+                        bridge.set_compatibility_visible(
+                            launcher_presenter.compatibility_prompt_visible(),
+                        );
                         bridge.set_compatibility_reason(failure.reason_code().into());
                         bridge.set_compatibility_detail(failure.detail.as_str().into());
                     }
@@ -6102,8 +6244,7 @@ mod tests {
     fn full_present_during_crt_arcade_keeps_same_frame_list_repaint_ownership() {
         let mut composition = UiCompositionController::new();
         let input = UiCompositionInput {
-            screen: Screen::Arcade,
-            screensaver_active: false,
+            effective_view: EffectiveLauncherView::Navigation(Screen::Arcade),
             confirm_visible: false,
             fullscreen_overlay_visible: false,
             arcade_ready: true,
@@ -8004,6 +8145,52 @@ mod tests {
         assert!(saver.take_restore_full_frame());
         assert!(!saver.take_restore_full_frame());
         assert!(!saver.handle_input(start + Duration::from_secs(2), true, true));
+    }
+
+    #[test]
+    fn idle_screensaver_view_always_routes_activity_to_dismissal() {
+        let start = Instant::now();
+        let mut saver = ScreensaverControl::new(start, false);
+        saver.update(
+            start + Duration::from_secs(301),
+            true,
+            Duration::from_secs(300),
+            false,
+        );
+        let view = EffectiveLauncherView::resolve_state(
+            &LauncherLifecycleState::Idle,
+            saver.active,
+            false,
+            Screen::Settings,
+        );
+
+        assert_eq!(view, EffectiveLauncherView::Screensaver);
+        assert!(view.accepts_application_input());
+        assert!(saver.handle_input(start + Duration::from_secs(302), true, true));
+        assert!(!saver.active);
+        assert!(saver.take_restore_full_frame());
+    }
+
+    #[test]
+    fn genuine_launch_wins_over_screensaver_and_releases_its_resources() {
+        let start = Instant::now();
+        let mut saver = ScreensaverControl::new(start, true);
+        saver.update(start, true, Duration::from_secs(300), false);
+        assert!(saver.active);
+
+        let launch_state = LauncherLifecycleState::Launching {
+            phase: LaunchingPhase::HandoffPending,
+        };
+        let view = EffectiveLauncherView::resolve_state(
+            &launch_state,
+            saver.active,
+            false,
+            Screen::Arcade,
+        );
+        assert_eq!(view, EffectiveLauncherView::Launching);
+        assert!(saver.cancel_for_exclusive_view(start + Duration::from_millis(1)));
+        assert!(!saver.active);
+        assert!(saver.take_restore_full_frame());
     }
 
     #[test]

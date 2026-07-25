@@ -151,6 +151,19 @@ impl LatchFailure {
             LatchFailureReason::PostedSequenceUnverified => "posted-sequence-unverified",
         }
     }
+
+    pub const fn is_transient_runtime_failure(&self) -> bool {
+        matches!(self.state, LatchReadinessState::RuntimeFault)
+            && matches!(
+                self.reason,
+                LatchFailureReason::FpgaTransportFailed
+                    | LatchFailureReason::NoWritableHiddenBuffer
+                    | LatchFailureReason::LatchPostFailed
+                    | LatchFailureReason::RouteArmFailed
+                    | LatchFailureReason::ActiveGeometryMismatch
+                    | LatchFailureReason::PostedSequenceUnverified
+            )
+    }
 }
 
 impl std::fmt::Display for LatchFailure {
@@ -168,6 +181,20 @@ pub struct LatchFailureEvidence {
     pub stage: String,
     pub reason: String,
     pub detail: String,
+    #[serde(default)]
+    pub latest_state: String,
+    #[serde(default)]
+    pub latest_stage: String,
+    #[serde(default)]
+    pub latest_reason: String,
+    #[serde(default)]
+    pub latest_detail: String,
+    #[serde(default)]
+    pub attempt_count: u8,
+    #[serde(default)]
+    pub latest_result: String,
+    #[serde(default)]
+    pub recovery_state: String,
 }
 
 impl From<&LatchFailure> for LatchFailureEvidence {
@@ -178,11 +205,41 @@ impl From<&LatchFailure> for LatchFailureEvidence {
             stage: failure.stage.code().to_string(),
             reason: failure.reason_code().to_string(),
             detail: failure.detail.clone(),
+            latest_state: failure.state.code().to_string(),
+            latest_stage: failure.stage.code().to_string(),
+            latest_reason: failure.reason_code().to_string(),
+            latest_detail: failure.detail.clone(),
+            attempt_count: 0,
+            latest_result: "not-attempted".to_string(),
+            recovery_state: "compatibility-prompt".to_string(),
         }
     }
 }
 
 impl LatchFailureEvidence {
+    pub fn for_recovery(
+        first: &LatchFailure,
+        latest: &LatchFailure,
+        attempt_count: u8,
+        latest_result: impl Into<String>,
+        recovery_state: impl Into<String>,
+    ) -> Self {
+        Self {
+            schema: "mister-magik-latch-failure-v2",
+            state: first.state.code().to_string(),
+            stage: first.stage.code().to_string(),
+            reason: first.reason_code().to_string(),
+            detail: first.detail.clone(),
+            latest_state: latest.state.code().to_string(),
+            latest_stage: latest.stage.code().to_string(),
+            latest_reason: latest.reason_code().to_string(),
+            latest_detail: latest.detail.clone(),
+            attempt_count,
+            latest_result: latest_result.into(),
+            recovery_state: recovery_state.into(),
+        }
+    }
+
     pub fn write_atomic(&self, path: impl AsRef<Path>) -> io::Result<()> {
         write_json_atomic(self, path)
     }

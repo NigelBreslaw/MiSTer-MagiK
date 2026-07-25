@@ -51,8 +51,7 @@ impl Default for UiCompositionStatus {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct UiCompositionInput {
-    pub(super) screen: Screen,
-    pub(super) screensaver_active: bool,
+    pub(super) effective_view: EffectiveLauncherView,
     pub(super) confirm_visible: bool,
     pub(super) fullscreen_overlay_visible: bool,
     pub(super) arcade_ready: bool,
@@ -182,17 +181,17 @@ struct CompositionInvariant {
 }
 
 fn requested_state(input: UiCompositionInput) -> UiCompositionState {
-    if input.screensaver_active {
+    if input.effective_view == EffectiveLauncherView::Screensaver {
         UiCompositionState::Screensaver
     } else if input.fullscreen_overlay_visible {
         UiCompositionState::ModalFullSlint
     } else if input.confirm_visible {
-        if input.screen == Screen::Arcade && input.arcade_ready {
+        if input.effective_view.return_screen() == Some(Screen::Arcade) && input.arcade_ready {
             UiCompositionState::ModalOverArcade
         } else {
             UiCompositionState::ModalFullSlint
         }
-    } else if input.screen == Screen::Arcade && input.arcade_ready {
+    } else if input.effective_view.return_screen() == Some(Screen::Arcade) && input.arcade_ready {
         UiCompositionState::MixedArcade
     } else {
         UiCompositionState::FullSlint
@@ -210,7 +209,7 @@ fn composition_invariant(
         });
     }
 
-    let direct_requested = !input.screensaver_active
+    let direct_requested = input.effective_view != EffectiveLauncherView::Screensaver
         && !input.fullscreen_overlay_visible
         && (input.wants_arcade_list || input.wants_preview);
     if direct_requested && !requested_state.allows_direct_layers() {
@@ -241,8 +240,7 @@ mod tests {
 
     fn input(screen: Screen) -> UiCompositionInput {
         UiCompositionInput {
-            screen,
-            screensaver_active: false,
+            effective_view: EffectiveLauncherView::Navigation(screen),
             confirm_visible: false,
             fullscreen_overlay_visible: false,
             arcade_ready: screen == Screen::Arcade,
@@ -304,7 +302,7 @@ mod tests {
         });
 
         let decision = controller.tick(UiCompositionInput {
-            screensaver_active: true,
+            effective_view: EffectiveLauncherView::Screensaver,
             wants_arcade_list: true,
             wants_preview: true,
             ..input(Screen::Arcade)
@@ -317,7 +315,7 @@ mod tests {
         assert!(decision.clear_direct_layers);
 
         let steady = controller.tick(UiCompositionInput {
-            screensaver_active: true,
+            effective_view: EffectiveLauncherView::Screensaver,
             wants_arcade_list: true,
             wants_preview: true,
             ..input(Screen::Arcade)
@@ -334,7 +332,7 @@ mod tests {
         let mut controller = UiCompositionController::new();
 
         let decision = controller.tick(UiCompositionInput {
-            screensaver_active: true,
+            effective_view: EffectiveLauncherView::Screensaver,
             ..input(Screen::Home)
         });
 
