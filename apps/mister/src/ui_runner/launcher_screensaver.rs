@@ -1983,8 +1983,8 @@ fn render_scanner(
     }
 }
 
-const PARADE_WIDE_LAYER_TARGETS: [usize; 5] = [64, 24, 20, 16, 12];
-const PARADE_COMPACT_LAYER_TARGETS: [usize; 5] = [48, 18, 15, 12, 9];
+const PARADE_WIDE_LAYER_TARGETS: [usize; 5] = [63, 23, 19, 15, 11];
+const PARADE_COMPACT_LAYER_TARGETS: [usize; 5] = [47, 17, 14, 11, 8];
 // Whole-pixel comparison mode needs every depth layer to move each 60 Hz frame
 // and leaves one slower whole-pixel speed for the star field.
 const PARADE_LAYER_SPEEDS: [usize; 5] = [2, 3, 4, 5, 6];
