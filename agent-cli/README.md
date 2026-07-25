@@ -29,6 +29,11 @@ the scanout kernel plugin, and the latch RBF come only from the latest
 published GitHub platform release. The tag-addressed cache is reused when it
 still verifies against the latest release.
 
+`benchmark` profiles the already-installed development app in place. It runs
+the real Settings screensaver action twice with catalog refresh disabled, then
+restores and verifies the ordinary launcher. It never builds or deploys a
+temporary runtime.
+
 The launcher builds and runs `agent-cli` with Cargo's release profile. Explicit
 manifest, target-directory, and binary overrides remain available for tests and
 specialized host environments.

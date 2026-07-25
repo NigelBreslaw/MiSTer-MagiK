@@ -111,12 +111,7 @@ fn dispatch(
     match intent {
         Intent::Deliver => return deliver(evidence, repository, reporter),
         Intent::Benchmark => {
-            if !agent_cli::git::value(repository, &["status", "--porcelain"])?.is_empty() {
-                return Err("dirty_worktree: commit changes before benchmarking".into());
-            }
-            let commit = agent_cli::git::value(repository, &["rev-parse", "HEAD"])?;
-            let paths = agent_cli::git::head_changed_paths(repository)?;
-            return agent_cli::benchmark::execute(repository, &paths, &commit, reporter);
+            return agent_cli::benchmark::execute(repository, reporter);
         }
         Intent::CaptureUsbVideo {
             output: destination,

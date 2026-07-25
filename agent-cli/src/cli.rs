@@ -505,7 +505,7 @@ mod tests {
     }
 
     #[test]
-    fn benchmark_is_flag_free_and_uses_git_identity() {
+    fn benchmark_is_flag_free() {
         let cli = Cli::try_parse_from(["agent-cli", "benchmark"]).unwrap();
         assert_eq!(cli.into_intent(), Intent::Benchmark);
         assert!(Cli::try_parse_from(["agent-cli", "benchmark", "--duration", "10"]).is_err());

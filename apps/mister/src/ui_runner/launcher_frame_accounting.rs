@@ -1610,6 +1610,7 @@ impl LauncherFrameAccounting {
         self.frame_analytics_samples
             .push_back(runtime_status::FrameBudgetRecentFrame {
                 frame: frame.frames,
+                screensaver_active: frame.screensaver_active,
                 wall_us,
                 prepare_us,
                 render_us,
@@ -1629,6 +1630,7 @@ impl LauncherFrameAccounting {
                     .process_us
                     .saturating_sub(frame.cpu_loop_start.process_us),
                 vsync_source: vsync_source_label(frame.vsync_source),
+                vsync_period_us: frame.vsync_period_us,
                 vsync_miss_streak: frame.vsync_miss_streak,
             });
     }

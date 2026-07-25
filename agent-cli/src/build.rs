@@ -52,7 +52,6 @@ pub enum BuildCommand {
 pub enum BuildRecipe {
     RuntimeDevice(UiScope),
     RuntimeFast,
-    RuntimeBenchmark,
     RuntimeProfile,
     ValidateLauncher,
     ValidateLibrary,
@@ -131,15 +130,6 @@ impl BuildSpec {
                 vec!["ui"],
                 UiScope::All,
                 runtime_artifact("release"),
-                true,
-            ),
-            BuildRecipe::RuntimeBenchmark => (
-                BuildTarget::Runtime,
-                BuildMode::Build,
-                "release-device",
-                vec!["ui", "bench-tools"],
-                UiScope::All,
-                runtime_artifact("release-device"),
                 true,
             ),
             BuildRecipe::RuntimeProfile => (

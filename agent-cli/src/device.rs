@@ -81,8 +81,8 @@ mod tests {
 
     #[test]
     fn typed_requests_are_forwarded_unchanged() {
-        let request = DeviceRequest::SnapshotBenchmarkRuntime {
-            remote: "/media/fat/mister-magik/mister-magik-fb".into(),
+        let request = DeviceRequest::ProfileInstalledScreensaver {
+            output_dir: "/tmp/screensaver-profile".into(),
         };
         let recorded = Rc::new(RefCell::new(Vec::new()));
         let mut client = DeviceClient::new(RecordingDevice(Rc::clone(&recorded)));
