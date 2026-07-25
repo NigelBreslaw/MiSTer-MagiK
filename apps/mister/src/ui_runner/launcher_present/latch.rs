@@ -10,6 +10,14 @@ use std::io;
 const TRANSIENT_PENDING_SETTLE_TIMEOUT: Duration = Duration::from_millis(100);
 const POST_OBSERVATION_MAX_READS: usize = 3;
 
+#[derive(Debug)]
+pub(in crate::ui_runner) struct LatchCompletion {
+    pub(in crate::ui_runner) status: crate::fpga::LatchedFbufStatus,
+    pub(in crate::ui_runner) poll_count: u16,
+    pub(in crate::ui_runner) wall_us: u64,
+    pub(in crate::ui_runner) cpu_us: u64,
+}
+
 pub(in crate::ui_runner) trait LatchHardware: LauncherDisplayHardware {
     fn read_latch_capabilities(
         &mut self,
@@ -753,6 +761,108 @@ fn posted_sequence_observed(status: crate::fpga::LatchedFbufStatus, sequence: u1
     status.active_sequence == sequence || (status.pending() && status.pending_sequence == sequence)
 }
 
+pub(in crate::ui_runner) fn wait_for_latch_completion(
+    hardware: &mut impl LatchHardware,
+    posted_sequence: u16,
+    timeout: Duration,
+) -> Result<LatchCompletion, LatchFailure> {
+    wait_for_latch_completion_with(
+        || hardware.read_latched_status(),
+        posted_sequence,
+        timeout,
+        std::thread::yield_now,
+    )
+}
+
+fn wait_for_latch_completion_with(
+    mut read_status: impl FnMut() -> io::Result<crate::fpga::LatchedFbufStatus>,
+    posted_sequence: u16,
+    timeout: Duration,
+    mut yield_wait: impl FnMut(),
+) -> Result<LatchCompletion, LatchFailure> {
+    let started = Instant::now();
+    let cpu_started = thread_cpu_us();
+    let mut poll_count = 0u16;
+    let mut post_observed = false;
+    loop {
+        let status = read_status().map_err(|error| {
+            LatchFailure::runtime(
+                LatchFailureStage::PostVerification,
+                LatchFailureReason::FpgaTransportFailed,
+                error.to_string(),
+            )
+        })?;
+        poll_count = poll_count.saturating_add(1);
+        if !status.supported() {
+            return Err(LatchFailure::incompatible(
+                LatchFailureStage::PostVerification,
+                LatchFailureReason::FpgaStatusUnsupported,
+                "latch completion status is unsupported",
+            ));
+        }
+        if !status.pending() && status.active_sequence == posted_sequence {
+            return Ok(LatchCompletion {
+                status,
+                poll_count,
+                wall_us: started.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
+                cpu_us: elapsed_thread_cpu_us(cpu_started),
+            });
+        }
+        post_observed |= status.pending() && status.pending_sequence == posted_sequence;
+        if post_observed && !status.pending() && status.active_sequence != posted_sequence {
+            return Err(LatchFailure::runtime(
+                LatchFailureStage::PostVerification,
+                LatchFailureReason::PostedSequenceUnverified,
+                format!(
+                    "posted sequence {posted_sequence} was superseded by active sequence {}",
+                    status.active_sequence
+                ),
+            ));
+        }
+        if started.elapsed() >= timeout {
+            return Err(LatchFailure::runtime(
+                LatchFailureStage::PostVerification,
+                LatchFailureReason::PostedSequenceUnverified,
+                format!(
+                    "latch completion timed out posted={posted_sequence} observed={} active={} pending={} pending_sequence={} polls={poll_count}",
+                    u8::from(post_observed),
+                    status.active_sequence,
+                    u8::from(status.pending()),
+                    status.pending_sequence,
+                ),
+            ));
+        }
+        yield_wait();
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn thread_cpu_us() -> Option<u64> {
+    let mut time = std::mem::MaybeUninit::<libc::timespec>::uninit();
+    let rc = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, time.as_mut_ptr()) };
+    if rc != 0 {
+        return None;
+    }
+    let time = unsafe { time.assume_init() };
+    Some(
+        u64::try_from(time.tv_sec)
+            .unwrap_or(0)
+            .saturating_mul(1_000_000)
+            .saturating_add(u64::try_from(time.tv_nsec).unwrap_or(0) / 1_000),
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+fn thread_cpu_us() -> Option<u64> {
+    None
+}
+
+fn elapsed_thread_cpu_us(start: Option<u64>) -> u64 {
+    start
+        .and_then(|start| thread_cpu_us().map(|end| end.saturating_sub(start)))
+        .unwrap_or(0)
+}
+
 fn classify_latch_status(
     status: crate::fpga::LatchedFbufStatus,
     base1: u32,
@@ -1341,5 +1451,68 @@ mod tests {
         assert_eq!(stats.buffer_index, 1);
         assert_eq!(hardware.post_bases, [BASE1, BASE1]);
         assert_eq!(hardware.read_count, 3);
+    }
+
+    #[test]
+    fn completion_wait_accepts_immediate_and_wrapped_sequences() {
+        for sequence in [17, u16::MAX] {
+            let mut settled = status(BASE1, 0x0001);
+            settled.active_sequence = sequence;
+            settled.pending_sequence = 0;
+            let completion =
+                wait_for_latch_completion_with(|| Ok(settled), sequence, Duration::ZERO, || {})
+                    .unwrap();
+            assert_eq!(completion.status.active_sequence, sequence);
+            assert_eq!(completion.poll_count, 1);
+        }
+    }
+
+    #[test]
+    fn completion_wait_handles_early_vsync_pending_then_active() {
+        let mut pending = status(BASE1, 0x0001 | 0x0004);
+        pending.active_sequence = 41;
+        pending.pending_sequence = 42;
+        let mut settled = status(BASE2, 0x0001);
+        settled.active_sequence = 42;
+        settled.pending_sequence = 0;
+        let mut statuses = vec![pending, settled].into_iter();
+
+        let completion = wait_for_latch_completion_with(
+            || Ok(statuses.next().unwrap()),
+            42,
+            Duration::from_millis(1),
+            || {},
+        )
+        .unwrap();
+
+        assert_eq!(completion.status.active_sequence, 42);
+        assert_eq!(completion.poll_count, 2);
+    }
+
+    #[test]
+    fn completion_wait_rejects_timeout_unsupported_and_transport_failure() {
+        let stale = status(BASE1, 0x0001);
+        let timeout =
+            wait_for_latch_completion_with(|| Ok(stale), 99, Duration::ZERO, || {}).unwrap_err();
+        assert_eq!(timeout.reason, LatchFailureReason::PostedSequenceUnverified);
+
+        let mut unsupported = stale;
+        unsupported.magic_hi = 0;
+        let unsupported =
+            wait_for_latch_completion_with(|| Ok(unsupported), 99, Duration::ZERO, || {})
+                .unwrap_err();
+        assert_eq!(
+            unsupported.reason,
+            LatchFailureReason::FpgaStatusUnsupported
+        );
+
+        let transport = wait_for_latch_completion_with(
+            || Err(io::Error::other("read failed")),
+            99,
+            Duration::ZERO,
+            || {},
+        )
+        .unwrap_err();
+        assert_eq!(transport.reason, LatchFailureReason::FpgaTransportFailed);
     }
 }

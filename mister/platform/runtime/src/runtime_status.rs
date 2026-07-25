@@ -186,6 +186,9 @@ pub struct FrameBudgetRecentFrame {
     pub main_present_sequence: u16,
     pub main_present_active_sequence: u16,
     pub main_present_pending: bool,
+    pub main_present_completion_poll_count: u16,
+    pub main_present_completion_poll_wall_us: u64,
+    pub main_present_completion_poll_cpu_us: u64,
     pub main_present_flip_count: u16,
     pub main_present_drop_count: u16,
     pub status_write_due: bool,
@@ -711,6 +714,18 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
         frame.main_present_active_sequence
     );
     field!("main_present_pending", frame.main_present_pending);
+    field!(
+        "main_present_completion_poll_count",
+        frame.main_present_completion_poll_count
+    );
+    field!(
+        "main_present_completion_poll_wall_us",
+        frame.main_present_completion_poll_wall_us
+    );
+    field!(
+        "main_present_completion_poll_cpu_us",
+        frame.main_present_completion_poll_cpu_us
+    );
     field!("main_present_flip_count", frame.main_present_flip_count);
     field!("main_present_drop_count", frame.main_present_drop_count);
     field!("status_write_due", frame.status_write_due);

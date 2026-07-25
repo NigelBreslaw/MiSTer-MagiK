@@ -175,6 +175,35 @@ impl<L> LauncherPresenter<L> {
         self.compatibility_transitions
     }
 
+    pub(in crate::ui_runner) fn fail_latch_completion(&mut self, failure: LatchFailure) {
+        self.transition_latch_failure(failure);
+    }
+
+    fn transition_latch_failure(&mut self, latch_error: LatchFailure) {
+        crate::ui_errln!(
+            "latch_failure_tsv\tvalid=0\tstate={}\tstage={}\treason={}\taction=compatibility-screen\tdetail={}",
+            latch_error.state.code(),
+            latch_error.stage.code(),
+            latch_error.reason_code(),
+            latch_error.detail.replace(['\t', '\n', '\r'], " ")
+        );
+        boot_analytics::event(
+            "fpga_vblank_latch_compatibility",
+            format!(
+                "state={:?} stage={:?} reason={} detail={}",
+                latch_error.state,
+                latch_error.stage,
+                latch_error.reason_code(),
+                latch_error.detail
+            ),
+        );
+        self.compatibility_transitions = self.compatibility_transitions.saturating_add(1);
+        self.state = LauncherPresenterState::Compatibility {
+            failure: latch_error,
+            screen_ready: true,
+        };
+    }
+
     fn present_with<A>(&mut self, frame: LauncherFramePlan, adapters: &mut A) -> A::Output
     where
         A: PresentationAdapters<L>,
@@ -200,28 +229,7 @@ impl<L> LauncherPresenter<L> {
             },
         };
 
-        crate::ui_errln!(
-            "latch_failure_tsv\tvalid=0\tstate={}\tstage={}\treason={}\taction=compatibility-screen\tdetail={}",
-            latch_error.state.code(),
-            latch_error.stage.code(),
-            latch_error.reason_code(),
-            latch_error.detail.replace(['\t', '\n', '\r'], " ")
-        );
-        boot_analytics::event(
-            "fpga_vblank_latch_compatibility",
-            format!(
-                "state={:?} stage={:?} reason={} detail={}",
-                latch_error.state,
-                latch_error.stage,
-                latch_error.reason_code(),
-                latch_error.detail
-            ),
-        );
-        self.compatibility_transitions = self.compatibility_transitions.saturating_add(1);
-        self.state = LauncherPresenterState::Compatibility {
-            failure: latch_error,
-            screen_ready: true,
-        };
+        self.transition_latch_failure(latch_error);
         adapters.present_compatibility_black()
     }
 }

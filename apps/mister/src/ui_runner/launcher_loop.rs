@@ -4716,6 +4716,13 @@ pub(super) fn run_launcher_loop(
             // pacing boundary for the next frame.
             let wait_start = Instant::now();
             let pace = pacer.wait();
+            let completion_timeout = Duration::from_micros(pacer.period_us().saturating_mul(3) / 2);
+            let completion_remaining = completion_timeout.saturating_sub(wait_start.elapsed());
+            let completion = wait_for_latch_completion(
+                f,
+                presented_frame.main_present_sequence,
+                completion_remaining,
+            );
             let wait_done = Instant::now();
             let post_wait_us = wait_done.saturating_duration_since(wait_start).as_micros();
             let wait_trace = LauncherPacingTrace::from_pace_with_present_phase(
@@ -4734,14 +4741,25 @@ pub(super) fn run_launcher_loop(
             presented_frame.vsync_stale_hits = wait_trace.vsync_stale_hits;
             presented_frame.vsync_wait_start_age_us = wait_trace.vsync_wait_start_age_us;
             presented_frame.vsync_accepted_hit_age_us = wait_trace.vsync_accepted_hit_age_us;
-            match f.read_magik_latched_fbuf_status() {
-                Ok(status) if status.supported() => {
+            match completion {
+                Ok(completion) => {
+                    let status = completion.status;
                     presented_frame.main_present_active_sequence = status.active_sequence;
                     presented_frame.main_present_pending = status.pending();
                     presented_frame.main_present_flip_count = status.flip_count;
                     presented_frame.main_present_drop_count = status.drop_count;
+                    presented_frame.main_present_completion_poll_count = completion.poll_count;
+                    presented_frame.main_present_completion_poll_wall_us = completion.wall_us;
+                    presented_frame.main_present_completion_poll_cpu_us = completion.cpu_us;
                 }
-                Ok(_) | Err(_) => {
+                Err(failure) => {
+                    launcher_presenter.fail_latch_completion(failure);
+                    if let Some(failure) = launcher_presenter.compatibility_failure() {
+                        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+                        bridge.set_compatibility_visible(true);
+                        bridge.set_compatibility_reason(failure.reason_code().into());
+                        bridge.set_compatibility_detail(failure.detail.as_str().into());
+                    }
                     presented_frame.main_present_active_sequence = 0;
                     presented_frame.main_present_pending = true;
                 }
