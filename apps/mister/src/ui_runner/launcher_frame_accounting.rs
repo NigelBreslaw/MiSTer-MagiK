@@ -156,6 +156,8 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) status_write_due: bool,
     pub(super) status_string_copy_us: u128,
     pub(super) status_string_copy_bytes: usize,
+    pub(super) clock_update_due: bool,
+    pub(super) clock_update_us: u128,
     pub(super) cpu_loop_start: FrameAnalyticsCpuStamp,
     pub(super) cpu_t0: FrameAnalyticsCpuStamp,
     pub(super) cpu_t1: FrameAnalyticsCpuStamp,
@@ -263,6 +265,8 @@ pub(super) struct LauncherFrameStatusData {
     pub(super) status_write_due: bool,
     pub(super) status_string_copy_us: u128,
     pub(super) status_string_copy_bytes: usize,
+    pub(super) clock_update_due: bool,
+    pub(super) clock_update_us: u128,
 }
 
 pub(super) struct LauncherFrameCpuTrace {
@@ -276,15 +280,11 @@ pub(super) struct LauncherFrameCpuTrace {
     pub(super) t4: FrameAnalyticsCpuStamp,
 }
 
-#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
 pub(super) struct LauncherFrameFinishTraceTiming {
-    runtime_status_write_us: u128,
+    pub(super) runtime_status_write_us: u128,
     runtime_status_write_deferred: bool,
     frame_finish_us: u128,
 }
-
-#[cfg(not(any(feature = "bench-tools", feature = "diagnostics")))]
-pub(super) struct LauncherFrameFinishTraceTiming;
 
 impl LauncherFrameSnapshotBuilder {
     pub(super) fn build(self) -> LauncherPresentedFrame {
@@ -362,6 +362,8 @@ impl LauncherFrameSnapshotBuilder {
             status_write_due: self.status.status_write_due,
             status_string_copy_us: self.status.status_string_copy_us,
             status_string_copy_bytes: self.status.status_string_copy_bytes,
+            clock_update_due: self.status.clock_update_due,
+            clock_update_us: self.status.clock_update_us,
             cpu_loop_start: self.cpu.loop_start,
             cpu_t0: self.cpu.t0,
             cpu_t1: self.cpu.t1,
@@ -1115,8 +1117,6 @@ impl LauncherFrameAccounting {
     ) {
         let timing = self.finish_frame_before_trace(
             &frame,
-            start,
-            disp,
             nav,
             pad,
             catalog,
@@ -1144,6 +1144,13 @@ impl LauncherFrameAccounting {
             last_route_reassert_error,
             startup_status,
         );
+        self.record_finished_frame(
+            &frame,
+            start,
+            disp,
+            catalog_ready,
+            timing.runtime_status_write_us,
+        );
         self.write_finished_frame_trace(&frame, timing, defer_preview_trace_flush);
     }
 
@@ -1151,8 +1158,6 @@ impl LauncherFrameAccounting {
     pub(super) fn finish_frame_before_trace(
         &mut self,
         frame: &LauncherPresentedFrame,
-        start: Instant,
-        disp: &mut MappedRgb565Framebuffer,
         nav: &LauncherNav,
         pad: &PadPool,
         catalog: &ArcadeCatalog,
@@ -1180,34 +1185,13 @@ impl LauncherFrameAccounting {
         last_route_reassert_error: &str,
         startup_status: StartupRevealStatus,
     ) -> LauncherFrameFinishTraceTiming {
-        #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
         let frame_finish_start = Instant::now();
         let runtime_status_write_deferred = should_defer_runtime_status_write(frame);
         let status_write_now = frame.status_write_due && !runtime_status_write_deferred;
         if status_write_now {
             self.refresh_frame_analytics_mode();
         }
-        self.record_first_copy(&frame, disp);
-        self.accumulate_fps(&frame);
-        self.accumulate_frame_budget(&frame);
-        self.last_vsync_source = vsync_source_label(frame.vsync_source);
-        self.last_vsync_period_us = frame.vsync_period_us;
-        self.last_present_backend = frame.main_present_backend.trace_label();
-        self.last_present_status = frame.main_present_status.trace_label();
-        self.last_present_buffer = frame.main_present_buffer;
-        self.last_latch_publish_us = u128_to_u64_saturating(frame.main_present_hidden_publish_us);
-        self.last_latch_sequence = frame.main_present_sequence;
-        self.last_latch_flip_count = frame.main_present_flip_count;
-        self.last_latch_drop_count = frame.main_present_drop_count;
-        self.record_stable_samples(frame.frames, disp);
-        self.last_rendered_frame_at = frame.frame_t4;
-        self.idle_loops_since_status = 0;
-        #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-        self.record_boot_frame_profile(&frame, disp);
-        self.record_first_frame(&frame, start, catalog_ready);
-        #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-        let runtime_status_write_start =
-            (status_write_now && self.preview_scroll_trace.is_some()).then(Instant::now);
+        let runtime_status_write_start = status_write_now.then(Instant::now);
         self.write_runtime_status(
             status_write_now,
             frame.frames,
@@ -1246,20 +1230,43 @@ impl LauncherFrameAccounting {
             startup_status,
             None,
         );
-        #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-        {
-            let runtime_status_write_us = runtime_status_write_start
-                .map(|start| start.elapsed().as_micros())
-                .unwrap_or(0);
-            let frame_finish_us = frame_finish_start.elapsed().as_micros();
-            LauncherFrameFinishTraceTiming {
-                runtime_status_write_us,
-                runtime_status_write_deferred,
-                frame_finish_us,
-            }
+        let runtime_status_write_us = runtime_status_write_start
+            .map(|start| start.elapsed().as_micros())
+            .unwrap_or(0);
+        let frame_finish_us = frame_finish_start.elapsed().as_micros();
+        LauncherFrameFinishTraceTiming {
+            runtime_status_write_us,
+            runtime_status_write_deferred,
+            frame_finish_us,
         }
-        #[cfg(not(any(feature = "bench-tools", feature = "diagnostics")))]
-        LauncherFrameFinishTraceTiming
+    }
+
+    pub(super) fn record_finished_frame(
+        &mut self,
+        frame: &LauncherPresentedFrame,
+        start: Instant,
+        disp: &mut MappedRgb565Framebuffer,
+        catalog_ready: bool,
+        runtime_status_write_us: u128,
+    ) {
+        self.record_first_copy(frame, disp);
+        self.accumulate_fps(frame);
+        self.accumulate_frame_budget(frame, runtime_status_write_us);
+        self.last_vsync_source = vsync_source_label(frame.vsync_source);
+        self.last_vsync_period_us = frame.vsync_period_us;
+        self.last_present_backend = frame.main_present_backend.trace_label();
+        self.last_present_status = frame.main_present_status.trace_label();
+        self.last_present_buffer = frame.main_present_buffer;
+        self.last_latch_publish_us = u128_to_u64_saturating(frame.main_present_hidden_publish_us);
+        self.last_latch_sequence = frame.main_present_sequence;
+        self.last_latch_flip_count = frame.main_present_flip_count;
+        self.last_latch_drop_count = frame.main_present_drop_count;
+        self.record_stable_samples(frame.frames, disp);
+        self.last_rendered_frame_at = frame.frame_t4;
+        self.idle_loops_since_status = 0;
+        #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+        self.record_boot_frame_profile(frame, disp);
+        self.record_first_frame(frame, start, catalog_ready);
     }
 
     pub(super) fn write_finished_frame_trace(
@@ -1548,15 +1555,26 @@ impl LauncherFrameAccounting {
         }
     }
 
-    fn accumulate_frame_budget(&mut self, frame: &LauncherPresentedFrame) {
+    fn accumulate_frame_budget(
+        &mut self,
+        frame: &LauncherPresentedFrame,
+        runtime_status_write_us: u128,
+    ) {
         let wall_us = u128_to_u64_saturating((frame.frame_t4 - frame.loop_start).as_micros());
         let prepare_us = u128_to_u64_saturating(frame.prepare_us);
         let render_us = u128_to_u64_saturating((frame.frame_t2 - frame.frame_t1).as_micros());
         let custom_draw_us =
             u128_to_u64_saturating((frame.custom_draw_done - frame.custom_draw_start).as_micros());
-        let vsync_us =
-            u128_to_u64_saturating((frame.frame_t3 - frame.custom_draw_done).as_micros());
-        let present_us = u128_to_u64_saturating((frame.frame_t4 - frame.frame_t3).as_micros());
+        let vsync_us = u128_to_u64_saturating(
+            frame
+                .vsync_us_override
+                .unwrap_or_else(|| (frame.frame_t3 - frame.custom_draw_done).as_micros()),
+        );
+        let present_us = u128_to_u64_saturating(
+            frame
+                .fb_present_us_override
+                .unwrap_or_else(|| (frame.frame_t4 - frame.frame_t3).as_micros()),
+        );
         let sample = FrameBudgetSample {
             frame: frame.frames,
             wall_us,
@@ -1590,6 +1608,7 @@ impl LauncherFrameAccounting {
                 custom_draw_us,
                 vsync_us,
                 present_us,
+                runtime_status_write_us,
             );
         }
     }
@@ -1603,6 +1622,7 @@ impl LauncherFrameAccounting {
         custom_draw_us: u64,
         vsync_us: u64,
         present_us: u64,
+        runtime_status_write_us: u128,
     ) {
         if self.frame_analytics_samples.len() == FRAME_ANALYTICS_SAMPLE_CAP {
             self.frame_analytics_samples.pop_front();
@@ -1632,6 +1652,45 @@ impl LauncherFrameAccounting {
                 vsync_source: vsync_source_label(frame.vsync_source),
                 vsync_period_us: frame.vsync_period_us,
                 vsync_miss_streak: frame.vsync_miss_streak,
+                vsync_stale_hits: frame.vsync_stale_hits,
+                vsync_wait_start_age_us: frame.vsync_wait_start_age_us,
+                vsync_accepted_hit_age_us: frame.vsync_accepted_hit_age_us,
+                main_present_status: frame.main_present_status.trace_label(),
+                main_present_sequence: frame.main_present_sequence,
+                main_present_flip_count: frame.main_present_flip_count,
+                main_present_drop_count: frame.main_present_drop_count,
+                status_write_due: frame.status_write_due,
+                runtime_status_write_us: u128_to_u64_saturating(runtime_status_write_us),
+                clock_update_due: frame.clock_update_due,
+                clock_update_us: u128_to_u64_saturating(frame.clock_update_us),
+                screensaver_sampling_profile: frame.screensaver_frame_trace.sampling_profile,
+                screensaver_archive_poll_us: u128_to_u64_saturating(
+                    frame.screensaver_frame_trace.archive_poll_us,
+                ),
+                screensaver_card_adopt_us: u128_to_u64_saturating(
+                    frame.screensaver_frame_trace.card_adopt_us,
+                ),
+                screensaver_parade_advance_us: u128_to_u64_saturating(
+                    frame.screensaver_frame_trace.parade_advance_us,
+                ),
+                screensaver_background_us: u128_to_u64_saturating(
+                    frame.screensaver_frame_trace.background_us,
+                ),
+                screensaver_draw_order_us: u128_to_u64_saturating(
+                    frame.screensaver_frame_trace.draw_order_us,
+                ),
+                screensaver_tile_blit_us: u128_to_u64_saturating(
+                    frame.screensaver_frame_trace.tile_blit_us,
+                ),
+                screensaver_raster_held_cards: usize_to_u64_saturating(
+                    frame.screensaver_frame_trace.raster_held_cards,
+                ),
+                screensaver_raster_moved_cards: usize_to_u64_saturating(
+                    frame.screensaver_frame_trace.raster_moved_cards,
+                ),
+                screensaver_raster_hold_layer_mask: frame
+                    .screensaver_frame_trace
+                    .raster_hold_layer_mask,
             });
     }
 
@@ -2247,6 +2306,8 @@ mod tests {
             status_write_due: false,
             status_string_copy_us: 10,
             status_string_copy_bytes: 128,
+            clock_update_due: false,
+            clock_update_us: 0,
             cpu_loop_start: FrameAnalyticsCpuStamp::default(),
             cpu_t0: FrameAnalyticsCpuStamp::default(),
             cpu_t1: FrameAnalyticsCpuStamp::default(),
@@ -2344,6 +2405,8 @@ mod tests {
                 status_write_due: frame.status_write_due,
                 status_string_copy_us: frame.status_string_copy_us,
                 status_string_copy_bytes: frame.status_string_copy_bytes,
+                clock_update_due: frame.clock_update_due,
+                clock_update_us: frame.clock_update_us,
             },
             cpu: LauncherFrameCpuTrace {
                 loop_start: frame.cpu_loop_start,
@@ -2587,6 +2650,48 @@ mod tests {
     }
 
     #[test]
+    fn completed_latch_frames_preserve_pacing_and_maintenance_evidence() {
+        let start = Instant::now();
+        let mut accounting = LauncherFrameAccounting::new(start, "hdmi");
+        accounting.frame_analytics_mode = FrameAnalyticsMode::Process;
+        let mut frame = presented_frame(49, start, 16_667);
+        frame.screensaver_active = true;
+        frame.main_present_backend = LauncherPresentBackend::FpgaVblankLatchHidden;
+        frame.main_present_status = LauncherPresentStatus::Ok;
+        frame.main_present_sequence = 65_535;
+        frame.main_present_flip_count = 42;
+        frame.vsync_source = Some(VsyncPaceSource::Vsync);
+        frame.vsync_us_override = Some(4_000);
+        frame.fb_present_us_override = Some(3_000);
+        frame.status_write_due = true;
+        frame.clock_update_due = true;
+        frame.clock_update_us = 45;
+        frame.screensaver_frame_trace.sampling_profile = "legacy-half";
+        frame.screensaver_frame_trace.raster_held_cards = 2;
+        frame.screensaver_frame_trace.raster_moved_cards = 8;
+        frame.screensaver_frame_trace.raster_hold_layer_mask = 1;
+
+        accounting.accumulate_frame_budget(&frame, 321);
+
+        let status = accounting.current_frame_budget_status();
+        let recent = status
+            .recent_frames
+            .first()
+            .expect("completed frame sample");
+        assert_eq!(recent.wall_us, 16_667);
+        assert_eq!(recent.vsync_us, 4_000);
+        assert_eq!(recent.present_us, 3_000);
+        assert_eq!(recent.vsync_source, "vsync");
+        assert_eq!(recent.main_present_sequence, 65_535);
+        assert_eq!(recent.main_present_status, "ok");
+        assert_eq!(recent.runtime_status_write_us, 321);
+        assert_eq!(recent.clock_update_us, 45);
+        assert_eq!(recent.screensaver_sampling_profile, "legacy-half");
+        assert_eq!(recent.screensaver_raster_held_cards, 2);
+        assert_eq!(recent.screensaver_raster_hold_layer_mask, 1);
+    }
+
+    #[test]
     fn frame_budget_accumulator_counts_thresholds_and_phases() {
         let mut acc = FrameBudgetAccumulator::default();
         acc.record(sample(1, 16_000));
@@ -2637,11 +2742,10 @@ mod tests {
         let start = Instant::now();
         let mut accounting = LauncherFrameAccounting::new(start, "crt-576p50");
         for frame in 0..40 {
-            accounting.accumulate_frame_budget(&presented_frame(
-                frame,
-                start + Duration::from_micros(frame * 25_000),
-                22_000,
-            ));
+            accounting.accumulate_frame_budget(
+                &presented_frame(frame, start + Duration::from_micros(frame * 25_000), 22_000),
+                0,
+            );
         }
 
         let status = accounting.current_frame_budget_status();
@@ -2674,7 +2778,7 @@ mod tests {
     fn near_drop_frame_samples_are_retained_before_budget_miss() {
         let start = Instant::now();
         let mut accounting = LauncherFrameAccounting::new(start, "crt-576p50");
-        accounting.accumulate_frame_budget(&presented_frame(7, start, FRAME_NEAR_DROP_US));
+        accounting.accumulate_frame_budget(&presented_frame(7, start, FRAME_NEAR_DROP_US), 0);
 
         let status = accounting.current_frame_budget_status();
         assert_eq!(status.slow_frames.len(), 1);

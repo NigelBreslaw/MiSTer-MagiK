@@ -2309,7 +2309,7 @@ pub(super) fn run_launcher_loop(
     while (secs == 0 || run_start.elapsed().as_secs() < secs)
         && preview_scroll_exit_at.is_none_or(|deadline| Instant::now() < deadline)
     {
-        screensaver_cpu_profile.poll();
+        screensaver_cpu_profile.poll(frames);
         if catalog_publication_test.wait_for_first_frame_release(Instant::now(), start) {
             std::thread::sleep(Duration::from_millis(16));
             continue;
@@ -2428,7 +2428,9 @@ pub(super) fn run_launcher_loop(
         let defer_selected_preview =
             catalog_contention_quiet_previews && preview.trace_cache_state() == "exact";
         let mut preview_scheduled_this_loop = false;
-        if last_clock_update.elapsed() >= Duration::from_secs(1) {
+        let clock_update_due = last_clock_update.elapsed() >= Duration::from_secs(1);
+        let clock_update_start = clock_update_due.then(Instant::now);
+        if clock_update_due {
             let clock_text = launcher_clock_text();
             if dirty_opt {
                 if clock_text != last_clock_text {
@@ -2445,6 +2447,9 @@ pub(super) fn run_launcher_loop(
             }
             last_clock_update = Instant::now();
         }
+        let clock_update_us = clock_update_start
+            .map(|started| started.elapsed().as_micros())
+            .unwrap_or(0);
         if let Some(available) = update_check.try_recv() {
             if available {
                 let bridge = app.global::<slint_ui::launcher::MisterBridge>();
@@ -3479,7 +3484,9 @@ pub(super) fn run_launcher_loop(
                             LauncherAction::PreviewScreensaver => {
                                 if !screensaver.preview_active {
                                     screensaver.preview(frame_now);
-                                    screensaver_cpu_profile.begin();
+                                    // This branch continues before the frame counter advances, so
+                                    // the next rendered screensaver frame keeps this frame ID.
+                                    screensaver_cpu_profile.begin(frames);
                                     screensaver_show_started = Some(frame_now);
                                     screensaver_first_render_logged = false;
                                     screensaver_first_present_logged = false;
@@ -4641,6 +4648,8 @@ pub(super) fn run_launcher_loop(
                 status_write_due,
                 status_string_copy_us,
                 status_string_copy_bytes,
+                clock_update_due,
+                clock_update_us,
             },
             cpu: LauncherFrameCpuTrace {
                 loop_start: cpu_loop_start,
@@ -4657,8 +4666,6 @@ pub(super) fn run_launcher_loop(
         if latch_trace_flush_deferred {
             let finish_timing = frame_accounting.finish_frame_before_trace(
                 &presented_frame,
-                start,
-                disp,
                 &nav,
                 &pad,
                 &catalog,
@@ -4727,6 +4734,13 @@ pub(super) fn run_launcher_loop(
             presented_frame.vsync_stale_hits = wait_trace.vsync_stale_hits;
             presented_frame.vsync_wait_start_age_us = wait_trace.vsync_wait_start_age_us;
             presented_frame.vsync_accepted_hit_age_us = wait_trace.vsync_accepted_hit_age_us;
+            frame_accounting.record_finished_frame(
+                &presented_frame,
+                start,
+                disp,
+                catalog_ready,
+                finish_timing.runtime_status_write_us,
+            );
             frame_accounting.write_finished_frame_trace(
                 &presented_frame,
                 finish_timing,

@@ -370,6 +370,7 @@ fn print_benchmark_capabilities() {
         serde_json::json!({
             "schema": "mister-magik-benchmark-capabilities-v1",
             "screensaver-pprof-v1": cfg!(feature = "profile"),
+            "screensaver-frame-evidence-v2": cfg!(feature = "profile"),
         })
     );
 }

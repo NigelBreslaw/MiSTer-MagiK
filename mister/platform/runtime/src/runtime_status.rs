@@ -144,6 +144,27 @@ pub struct FrameBudgetRecentFrame {
     pub vsync_source: &'static str,
     pub vsync_period_us: u64,
     pub vsync_miss_streak: u32,
+    pub vsync_stale_hits: u32,
+    pub vsync_wait_start_age_us: u64,
+    pub vsync_accepted_hit_age_us: u64,
+    pub main_present_status: &'static str,
+    pub main_present_sequence: u16,
+    pub main_present_flip_count: u16,
+    pub main_present_drop_count: u16,
+    pub status_write_due: bool,
+    pub runtime_status_write_us: u64,
+    pub clock_update_due: bool,
+    pub clock_update_us: u64,
+    pub screensaver_sampling_profile: &'static str,
+    pub screensaver_archive_poll_us: u64,
+    pub screensaver_card_adopt_us: u64,
+    pub screensaver_parade_advance_us: u64,
+    pub screensaver_background_us: u64,
+    pub screensaver_draw_order_us: u64,
+    pub screensaver_tile_blit_us: u64,
+    pub screensaver_raster_held_cards: u64,
+    pub screensaver_raster_moved_cards: u64,
+    pub screensaver_raster_hold_layer_mask: u8,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -429,6 +450,27 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
         "vsync_source": frame.vsync_source,
         "vsync_period_us": frame.vsync_period_us,
         "vsync_miss_streak": frame.vsync_miss_streak,
+        "vsync_stale_hits": frame.vsync_stale_hits,
+        "vsync_wait_start_age_us": frame.vsync_wait_start_age_us,
+        "vsync_accepted_hit_age_us": frame.vsync_accepted_hit_age_us,
+        "main_present_status": frame.main_present_status,
+        "main_present_sequence": frame.main_present_sequence,
+        "main_present_flip_count": frame.main_present_flip_count,
+        "main_present_drop_count": frame.main_present_drop_count,
+        "status_write_due": frame.status_write_due,
+        "runtime_status_write_us": frame.runtime_status_write_us,
+        "clock_update_due": frame.clock_update_due,
+        "clock_update_us": frame.clock_update_us,
+        "screensaver_sampling_profile": frame.screensaver_sampling_profile,
+        "screensaver_archive_poll_us": frame.screensaver_archive_poll_us,
+        "screensaver_card_adopt_us": frame.screensaver_card_adopt_us,
+        "screensaver_parade_advance_us": frame.screensaver_parade_advance_us,
+        "screensaver_background_us": frame.screensaver_background_us,
+        "screensaver_draw_order_us": frame.screensaver_draw_order_us,
+        "screensaver_tile_blit_us": frame.screensaver_tile_blit_us,
+        "screensaver_raster_held_cards": frame.screensaver_raster_held_cards,
+        "screensaver_raster_moved_cards": frame.screensaver_raster_moved_cards,
+        "screensaver_raster_hold_layer_mask": frame.screensaver_raster_hold_layer_mask,
     })
 }
 
@@ -750,6 +792,18 @@ mod tests {
                         vsync_source: "vsync",
                         vsync_period_us: 16_667,
                         vsync_miss_streak: 1,
+                        main_present_status: "ok",
+                        main_present_sequence: 17,
+                        main_present_flip_count: 18,
+                        status_write_due: true,
+                        runtime_status_write_us: 321,
+                        clock_update_due: true,
+                        clock_update_us: 45,
+                        screensaver_sampling_profile: "legacy-half",
+                        screensaver_raster_held_cards: 2,
+                        screensaver_raster_moved_cards: 8,
+                        screensaver_raster_hold_layer_mask: 1,
+                        ..FrameBudgetRecentFrame::default()
                     }],
                     slow_frames: vec![FrameBudgetSlowFrame {
                         frame: 41,
@@ -822,6 +876,18 @@ mod tests {
         assert_eq!(
             value["frame_budget"]["recent_frames"][0]["process_cpu_us"],
             75
+        );
+        assert_eq!(
+            value["frame_budget"]["recent_frames"][0]["main_present_sequence"],
+            17
+        );
+        assert_eq!(
+            value["frame_budget"]["recent_frames"][0]["runtime_status_write_us"],
+            321
+        );
+        assert_eq!(
+            value["frame_budget"]["recent_frames"][0]["screensaver_raster_held_cards"],
+            2
         );
         assert_eq!(value["frame_budget"]["slow_frames"][0]["frame"], 41);
         assert_eq!(value["frame_budget"]["slow_frames"][0]["severity"], "drop");

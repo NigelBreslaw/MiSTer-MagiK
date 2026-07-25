@@ -261,6 +261,20 @@ pub(super) struct ScreensaverFrameTrace {
     pub(super) tile_blit_us: u128,
     pub(super) cards_drawn: usize,
     pub(super) cards_culled: usize,
+    pub(super) sampling_profile: &'static str,
+    pub(super) raster_held_cards: usize,
+    pub(super) raster_moved_cards: usize,
+    pub(super) raster_hold_layer_mask: u8,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct ParadeAdvanceTrace {
+    card_adopt_us: u128,
+    cards_adopted: usize,
+    parade_advance_us: u128,
+    raster_held_cards: usize,
+    raster_moved_cards: usize,
+    raster_hold_layer_mask: u8,
 }
 
 impl LauncherScreensaver {
@@ -2857,22 +2871,40 @@ impl ParadeState {
         images: Option<&[SaverImage]>,
         motion_ticks_fp: u64,
         tick_delta_fp: i64,
-    ) -> (u128, usize, u128) {
+    ) -> ParadeAdvanceTrace {
         let nominal_frame = motion_ticks_fp / PARADE_TICK_ONE as u64;
         let adopt_start = Instant::now();
         let cards_adopted = self.collect_scaled_cards(images);
         let card_adopt_us = adopt_start.elapsed().as_micros();
         let advance_start = Instant::now();
         let mut exited = Vec::new();
+        let mut raster_held_cards = 0;
+        let mut raster_moved_cards = 0;
+        let mut raster_hold_layer_mask = 0_u8;
+        let sampling_profile = self.sampling_profile;
         for tile_idx in 0..self.tiles.len() {
             if self.tiles[tile_idx].active {
                 let tile = &mut self.tiles[tile_idx];
+                let previous_x_fp = tile.x_fp;
+                let previous_raster_phase = parade_raster_phase_key(sampling_profile, tile.x_fp);
                 let motion = tile
                     .velocity_fp
                     .saturating_mul(tick_delta_fp)
                     .saturating_add(tile.velocity_remainder);
                 tile.x_fp = tile.x_fp.saturating_add(motion / PARADE_TICK_ONE);
                 tile.velocity_remainder = motion % PARADE_TICK_ONE;
+                if tile.x_fp != previous_x_fp {
+                    let raster_phase = parade_raster_phase_key(sampling_profile, tile.x_fp);
+                    if raster_phase == previous_raster_phase {
+                        raster_held_cards += 1;
+                        let layer_idx = tile.layer.saturating_sub(PARADE_MIN_TILE_SPEED);
+                        if layer_idx < u8::BITS as usize {
+                            raster_hold_layer_mask |= 1_u8 << layer_idx;
+                        }
+                    } else {
+                        raster_moved_cards += 1;
+                    }
+                }
                 if self.tiles[tile_idx].x() >= screen_w as isize {
                     self.tiles[tile_idx].active = false;
                     exited.push(tile_idx);
@@ -2943,11 +2975,14 @@ impl ParadeState {
             self.layers[layer_idx].active_sum += active;
             self.layers[layer_idx].sample_count += 1;
         }
-        (
+        ParadeAdvanceTrace {
             card_adopt_us,
             cards_adopted,
-            advance_start.elapsed().as_micros(),
-        )
+            parade_advance_us: advance_start.elapsed().as_micros(),
+            raster_held_cards,
+            raster_moved_cards,
+            raster_hold_layer_mask,
+        }
     }
 
     fn queue_successor(&mut self, tile_idx: usize, images: Option<&[SaverImage]>) {
@@ -3358,6 +3393,23 @@ fn parade_tile_origin_and_fractional_width(
     }
 }
 
+fn parade_raster_phase_key(sampling_profile: ParadeSamplingProfile, x_fp: i64) -> i64 {
+    let x = x_fp.div_euclid(PARADE_SUBPIXEL_ONE);
+    let fraction = x_fp.rem_euclid(PARADE_SUBPIXEL_ONE);
+    match sampling_profile {
+        ParadeSamplingProfile::LegacyHalf => match fraction {
+            0 => x * CRT_PHASE_COUNT as i64,
+            128 => x * CRT_PHASE_COUNT as i64 + CRT_PHASE_COUNT as i64 / 2,
+            fraction if fraction < 128 => x * CRT_PHASE_COUNT as i64,
+            _ => (x + 1) * CRT_PHASE_COUNT as i64,
+        },
+        ParadeSamplingProfile::CrtSixteenth => {
+            let phase = quantize_crt_phase(x_fp);
+            phase.x as i64 * CRT_PHASE_COUNT as i64 + phase.phase as i64
+        }
+    }
+}
+
 fn parade_tile_draw_bounds(
     tile: &ParadeTile,
     sampling_profile: ParadeSamplingProfile,
@@ -3486,8 +3538,7 @@ fn render_archive_parade(
     let background_start = Instant::now();
     render_horizontal_starfield(dst, w, h, motion_ticks_fp, state.motion);
     let background_us = background_start.elapsed().as_micros();
-    let (card_adopt_us, cards_adopted, parade_advance_us) =
-        state.advance(w, h, None, motion_ticks_fp, tick_delta_fp);
+    let advance = state.advance(w, h, None, motion_ticks_fp, tick_delta_fp);
     let draw_order_start = Instant::now();
     prepare_parade_draw_order(state);
     let cards_culled = prepare_parade_visible_draw_order(state, w, h);
@@ -3498,14 +3549,18 @@ fn render_archive_parade(
         blit_parade_tile(dst, w, h, state.sampling_profile, tile);
     }
     ScreensaverFrameTrace {
-        card_adopt_us,
-        cards_adopted,
-        parade_advance_us,
+        card_adopt_us: advance.card_adopt_us,
+        cards_adopted: advance.cards_adopted,
+        parade_advance_us: advance.parade_advance_us,
         background_us,
         draw_order_us,
         tile_blit_us: tile_blit_start.elapsed().as_micros(),
         cards_drawn: state.visible_draw_order.len(),
         cards_culled,
+        sampling_profile: state.sampling_profile.label(),
+        raster_held_cards: advance.raster_held_cards,
+        raster_moved_cards: advance.raster_moved_cards,
+        raster_hold_layer_mask: advance.raster_hold_layer_mask,
         ..ScreensaverFrameTrace::default()
     }
 }
@@ -4091,6 +4146,22 @@ mod tests {
             ParadeSamplingProfile::for_crt_output(true),
             ParadeSamplingProfile::CrtSixteenth
         );
+    }
+
+    #[test]
+    fn legacy_half_reports_the_known_720p_slow_layer_holds() {
+        let velocity_fp = ParadeMotion::Subpixel.card_velocity_fp(0, 720);
+        assert_eq!(velocity_fp, 171);
+        let mut x_fp = 0;
+        let mut previous = parade_raster_phase_key(ParadeSamplingProfile::LegacyHalf, x_fp);
+        let mut held = 0;
+        for _ in 0..60 {
+            x_fp += velocity_fp;
+            let current = parade_raster_phase_key(ParadeSamplingProfile::LegacyHalf, x_fp);
+            held += usize::from(current == previous);
+            previous = current;
+        }
+        assert_eq!(held, 20);
     }
 
     #[test]

@@ -79,6 +79,10 @@ fn screensaver_profile_duration_from_value(value: Option<&str>) -> Duration {
     )
 }
 
+fn screensaver_profile_frame_bounds(first_frame: u64, next_frame: u64) -> (u64, u64) {
+    (first_frame, next_frame.saturating_sub(1).max(first_frame))
+}
+
 #[derive(Debug, Clone)]
 pub struct CpuProfileSummary {
     pub sample_stacks: usize,
@@ -93,7 +97,8 @@ pub struct CpuProfileSummary {
 mod imp {
     use super::{
         CpuProfileSummary, ScreensaverProfileState, screensaver_profile_duration,
-        screensaver_profile_requested, set_screensaver_profile_state,
+        screensaver_profile_frame_bounds, screensaver_profile_requested,
+        set_screensaver_profile_state,
     };
     use serde_json::json;
     use std::fs;
@@ -233,6 +238,7 @@ mod imp {
         Active {
             profiler: CpuProfiler,
             started: Instant,
+            first_frame: u64,
         },
         Complete,
         Failed,
@@ -261,7 +267,7 @@ mod imp {
             }
         }
 
-        pub fn begin(&mut self) {
+        pub fn begin(&mut self, first_frame: u64) {
             if !matches!(self.state, State::Waiting) {
                 return;
             }
@@ -270,6 +276,7 @@ mod imp {
                     self.state = State::Active {
                         profiler,
                         started: Instant::now(),
+                        first_frame,
                     };
                     set_screensaver_profile_state(ScreensaverProfileState::Active);
                 }
@@ -279,7 +286,7 @@ mod imp {
             }
         }
 
-        pub fn poll(&mut self) {
+        pub fn poll(&mut self, next_frame: u64) {
             let elapsed = match &self.state {
                 State::Active { started, .. } => started.elapsed(),
                 _ => return,
@@ -288,9 +295,16 @@ mod imp {
                 return;
             }
             let state = std::mem::replace(&mut self.state, State::Failed);
-            let State::Active { profiler, .. } = state else {
+            let State::Active {
+                profiler,
+                first_frame,
+                ..
+            } = state
+            else {
                 return;
             };
+            let (first_frame, last_frame) =
+                screensaver_profile_frame_bounds(first_frame, next_frame);
             match finish(Some(profiler)) {
                 Ok(Some(summary)) => {
                     let metadata = json!({
@@ -302,6 +316,8 @@ mod imp {
                         "sample_hits": summary.sample_hits,
                         "out_path": summary.out_path,
                         "bytes": summary.bytes,
+                        "first_frame": first_frame,
+                        "last_frame": last_frame,
                     });
                     if let Err(error) = self.write_completion(&metadata.to_string()) {
                         self.fail(&format!("completion-write-failed:{error}"));
@@ -377,9 +393,9 @@ mod stub {
             Self
         }
 
-        pub fn begin(&mut self) {}
+        pub fn begin(&mut self, _first_frame: u64) {}
 
-        pub fn poll(&mut self) {}
+        pub fn poll(&mut self, _next_frame: u64) {}
     }
 }
 
@@ -404,5 +420,11 @@ mod tests {
             screensaver_profile_duration_from_value(None),
             Duration::from_secs(30)
         );
+    }
+
+    #[test]
+    fn screensaver_profile_frame_bounds_are_inclusive() {
+        assert_eq!(screensaver_profile_frame_bounds(475, 2_240), (475, 2_239));
+        assert_eq!(screensaver_profile_frame_bounds(475, 475), (475, 475));
     }
 }
