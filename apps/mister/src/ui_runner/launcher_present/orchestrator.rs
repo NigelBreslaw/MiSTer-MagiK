@@ -23,6 +23,10 @@ enum LauncherPresenterState<L> {
     },
 }
 
+fn presenter_state_uses_latch<L>(state: &LauncherPresenterState<L>) -> bool {
+    matches!(state, LauncherPresenterState::Latch(_))
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum LatchAutoRetryState {
     Disabled,
@@ -210,6 +214,9 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
     }
 
     pub(in crate::ui_runner) fn direct_hidden_slots_available(&self, ui: &UiDisplay) -> bool {
+        if !presenter_state_uses_latch(&self.state) {
+            return false;
+        }
         matches!(
             &self.state,
             LauncherPresenterState::Latch(latch)
@@ -918,6 +925,28 @@ mod tests {
         assert_eq!(result.main_present_status, LauncherPresentStatus::None);
         assert_eq!(result.main_present_sequence, 0);
         assert_eq!(result.main_present_copy_path, "none");
+    }
+
+    #[test]
+    fn direct_hidden_slots_are_unavailable_on_fb0_and_compatibility_routes() {
+        assert!(!presenter_state_uses_latch::<FakeLatch>(
+            &LauncherPresenterState::ExplicitFb0
+        ));
+        assert!(!presenter_state_uses_latch::<FakeLatch>(
+            &LauncherPresenterState::Compatibility {
+                failure: LatchFailure::runtime(
+                    mister_magik_fb::latch_readiness::LatchFailureStage::LatchPost,
+                    mister_magik_fb::latch_readiness::LatchFailureReason::LatchPostFailed,
+                    "failed latch",
+                ),
+                screen_ready: true,
+                route_active: true,
+                prompt_visible: false,
+            }
+        ));
+        assert!(presenter_state_uses_latch(&LauncherPresenterState::Latch(
+            FakeLatch
+        )));
     }
 
     #[derive(Debug)]

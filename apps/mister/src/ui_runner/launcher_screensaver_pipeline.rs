@@ -15,6 +15,37 @@ const RENDER_AHEAD_READY_CAPACITY: usize = 2;
 const RENDER_AHEAD_IDLE_WAIT: Duration = Duration::from_millis(2);
 const RENDER_AHEAD_FULL_WAIT: Duration = Duration::from_micros(250);
 
+fn allocate_render_ahead_buffer(width: usize, height: usize) -> Vec<Rgb565Pixel> {
+    vec![Rgb565Pixel(0); width.saturating_mul(height)]
+}
+
+trait DirectRenderTarget {
+    fn pixels_mut(&mut self) -> &mut [Rgb565Pixel];
+    fn publish_writes(&mut self);
+}
+
+impl DirectRenderTarget for ScanoutSlotsRgb565Framebuffer {
+    fn pixels_mut(&mut self) -> &mut [Rgb565Pixel] {
+        ScanoutSlotsRgb565Framebuffer::pixels_mut(self)
+    }
+
+    fn publish_writes(&mut self) {
+        ScanoutSlotsRgb565Framebuffer::publish_writes(self);
+    }
+}
+
+fn render_and_publish_direct_target<T>(
+    target: &mut T,
+    render: impl FnOnce(&mut [Rgb565Pixel]) -> ScreensaverFrameTrace,
+) -> ScreensaverFrameTrace
+where
+    T: DirectRenderTarget,
+{
+    let trace = render(target.pixels_mut());
+    target.publish_writes();
+    trace
+}
+
 pub(crate) struct RenderedScreensaverFrame {
     pub(crate) pixels: Vec<Rgb565Pixel>,
     pub(crate) sequence: u64,
@@ -94,7 +125,7 @@ impl ScreensaverRenderAhead {
                 for _ in 0..RENDER_AHEAD_BUFFER_COUNT {
                     if worker_cancelled.load(Ordering::Acquire)
                         || worker_free_tx
-                            .send(vec![Rgb565Pixel(0); width.saturating_mul(height)])
+                            .send(allocate_render_ahead_buffer(width, height))
                             .is_err()
                     {
                         return;
@@ -228,7 +259,7 @@ impl ScreensaverDirectRenderAhead {
                     mister_magik_catalog::runtime_thread::RuntimeThreadRole::ScreensaverRenderer,
                 );
                 let launcher_snapshot = if snapshot_requested {
-                    let snapshot = vec![Rgb565Pixel(0); width.saturating_mul(height)];
+                    let snapshot = allocate_render_ahead_buffer(width, height);
                     if snapshot_allocated_tx.send(snapshot).is_err() {
                         return;
                     }
@@ -411,19 +442,17 @@ fn run_direct_render_ahead_worker(
         };
         let wall_started = Instant::now();
         let cpu_started = thread_cpu_us();
-        let trace = renderer.render_at(
-            target.pixels_mut(),
-            width,
-            height,
-            Duration::from_micros(elapsed_us),
-        );
-        if let (Some(snapshot), Some(started)) = (&launcher_snapshot, fade_started) {
-            let alpha = (started.elapsed().as_micros().min(200_000) * 255 / 200_000) as u8;
-            if alpha < 255 {
-                blend_rgb565_frame(target.pixels_mut(), snapshot, alpha);
+        let trace = render_and_publish_direct_target(target, |pixels| {
+            let trace =
+                renderer.render_at(pixels, width, height, Duration::from_micros(elapsed_us));
+            if let (Some(snapshot), Some(started)) = (&launcher_snapshot, fade_started) {
+                let alpha = (started.elapsed().as_micros().min(200_000) * 255 / 200_000) as u8;
+                if alpha < 255 {
+                    blend_rgb565_frame(pixels, snapshot, alpha);
+                }
             }
-        }
-        target.publish_writes();
+            trace
+        });
         let frame = RenderedDirectScreensaverFrame {
             completed: CompletedHiddenFrame { grant },
             sequence,
@@ -608,6 +637,44 @@ mod tests {
     use super::*;
     use crate::ui_runner::launcher_screensaver::LauncherScreensaverLoader;
 
+    fn rendered_frame(sequence: u64) -> RenderedScreensaverFrame {
+        RenderedScreensaverFrame {
+            pixels: vec![Rgb565Pixel(sequence as u16)],
+            sequence,
+            completed_at: Instant::now(),
+            render_wall_us: 0,
+            render_cpu_us: 0,
+            active_cards: 0,
+            archive_loading: false,
+            has_rendered_card: false,
+            superseded_frames: 0,
+            trace: ScreensaverFrameTrace::default(),
+        }
+    }
+
+    fn direct_frame(sequence: u64) -> RenderedDirectScreensaverFrame {
+        RenderedDirectScreensaverFrame {
+            completed: CompletedHiddenFrame {
+                grant: HiddenSlotRenderGrant {
+                    slot_index: 1,
+                    generation: sequence,
+                    width: 64,
+                    height: 48,
+                    stride_pixels: 64,
+                },
+            },
+            sequence,
+            completed_at: Instant::now(),
+            render_wall_us: 0,
+            render_cpu_us: 0,
+            active_cards: 0,
+            archive_loading: false,
+            has_rendered_card: false,
+            superseded_frames: 0,
+            trace: ScreensaverFrameTrace::default(),
+        }
+    }
+
     #[test]
     fn render_ahead_sequences_recycle_and_cancel_without_blocking() {
         let loader = LauncherScreensaverLoader::start(64, 48, None, false);
@@ -641,6 +708,34 @@ mod tests {
     }
 
     #[test]
+    fn render_ahead_supports_repeated_enter_and_exit() {
+        for _ in 0..2 {
+            let renderer = LauncherScreensaverLoader::start(32, 24, None, false)
+                .try_ready()
+                .expect("renderer is handed off immediately");
+            let mut pipeline = ScreensaverRenderAhead::start(renderer, 32, 24, 16_667);
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let mut saw_frame = false;
+            while Instant::now() < deadline {
+                match pipeline.try_next() {
+                    RenderAheadPoll::Frame(_) => {
+                        saw_frame = true;
+                        break;
+                    }
+                    RenderAheadPoll::Empty => std::thread::yield_now(),
+                    RenderAheadPoll::Disconnected => break,
+                }
+            }
+            assert!(saw_frame);
+            pipeline.cancel();
+            while !pipeline.poll_stopped() && Instant::now() < deadline {
+                std::thread::yield_now();
+            }
+            assert!(pipeline.poll_stopped());
+        }
+    }
+
+    #[test]
     fn render_motion_tick_skips_obsolete_display_periods() {
         assert_eq!(next_render_motion_tick(0, 0), 1);
         assert_eq!(next_render_motion_tick(3, 1), 4);
@@ -652,6 +747,113 @@ mod tests {
         let stopped = Arc::new(AtomicBool::new(false));
         drop(RenderAheadCompletionGuard(Arc::clone(&stopped)));
         assert!(stopped.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn completion_guard_marks_an_actually_panicked_worker_stopped() {
+        let stopped = Arc::new(AtomicBool::new(false));
+        let worker_stopped = Arc::clone(&stopped);
+        let join = std::thread::spawn(move || {
+            let _completion = RenderAheadCompletionGuard(worker_stopped);
+            panic!("test worker panic");
+        });
+
+        assert!(join.join().is_err());
+        assert!(stopped.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn worker_allocates_zeroed_exact_geometry_buffers() {
+        let pixels = allocate_render_ahead_buffer(64, 48);
+        assert_eq!(pixels.len(), 64 * 48);
+        assert!(pixels.iter().all(|pixel| *pixel == Rgb565Pixel(0)));
+    }
+
+    #[test]
+    fn ready_channels_distinguish_disconnect_and_cancel_while_full() {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let ready_depth = Arc::new(AtomicUsize::new(0));
+        let (disconnected_tx, disconnected_rx) = sync_channel(1);
+        drop(disconnected_rx);
+        assert!(!send_ready_frame(
+            rendered_frame(1),
+            &disconnected_tx,
+            &cancelled,
+            &ready_depth
+        ));
+        assert_eq!(ready_depth.load(Ordering::Acquire), 0);
+
+        let (full_tx, full_rx) = sync_channel(1);
+        full_tx.send(rendered_frame(1)).unwrap();
+        let worker_cancelled = Arc::clone(&cancelled);
+        let worker_depth = Arc::clone(&ready_depth);
+        let (started_tx, started_rx) = sync_channel(0);
+        let worker = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            send_ready_frame(
+                rendered_frame(2),
+                &full_tx,
+                &worker_cancelled,
+                &worker_depth,
+            )
+        });
+        started_rx.recv().unwrap();
+        cancelled.store(true, Ordering::Release);
+        assert!(!worker.join().unwrap());
+        assert_eq!(ready_depth.load(Ordering::Acquire), 0);
+        drop(full_rx);
+    }
+
+    #[test]
+    fn direct_ready_channel_stops_on_disconnect_and_cancellation() {
+        let cancelled = AtomicBool::new(false);
+        let (disconnected_tx, disconnected_rx) = sync_channel(1);
+        drop(disconnected_rx);
+        assert!(!send_direct_ready_frame(
+            direct_frame(1),
+            &disconnected_tx,
+            &cancelled
+        ));
+
+        let (ready_tx, _ready_rx) = sync_channel(1);
+        ready_tx.send(direct_frame(1)).unwrap();
+        cancelled.store(true, Ordering::Release);
+        assert!(!send_direct_ready_frame(
+            direct_frame(2),
+            &ready_tx,
+            &cancelled
+        ));
+    }
+
+    #[test]
+    fn direct_target_is_published_before_completion_can_be_built() {
+        struct FakeDirectTarget {
+            pixels: [Rgb565Pixel; 1],
+            events: Vec<&'static str>,
+        }
+
+        impl DirectRenderTarget for FakeDirectTarget {
+            fn pixels_mut(&mut self) -> &mut [Rgb565Pixel] {
+                self.events.push("render");
+                &mut self.pixels
+            }
+
+            fn publish_writes(&mut self) {
+                self.events.push("publish");
+            }
+        }
+
+        let mut target = FakeDirectTarget {
+            pixels: [Rgb565Pixel(0)],
+            events: Vec::new(),
+        };
+        render_and_publish_direct_target(&mut target, |pixels| {
+            pixels[0] = Rgb565Pixel(0x5aa5);
+            ScreensaverFrameTrace::default()
+        });
+
+        assert_eq!(target.events, ["render", "publish"]);
+        assert_eq!(target.pixels, [Rgb565Pixel(0x5aa5)]);
     }
 
     #[test]

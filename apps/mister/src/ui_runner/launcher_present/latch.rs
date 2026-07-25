@@ -1492,6 +1492,94 @@ mod tests {
     }
 
     #[test]
+    fn external_hidden_completion_rejects_a_slot_that_became_active_or_pending() {
+        for status_before_post in [status(BASE2, 0x0001), status(BASE1, 0x0001 | 0x0004)] {
+            let mut presenter = presenter();
+            let mut hardware = FakeHardware {
+                statuses: vec![Ok(status(BASE1, 0x0001)), Ok(status_before_post)],
+                ..FakeHardware::default()
+            };
+            let mut display = display_session();
+            let grant = presenter
+                .try_issue_hidden_slot_render_grant(&mut hardware, &mut display)
+                .unwrap()
+                .expect("inactive slot grant");
+
+            let failure = presenter
+                .present_completed_hidden_frame(
+                    CompletedHiddenFrame { grant },
+                    &mut hardware,
+                    &mut display,
+                )
+                .unwrap_err();
+
+            assert_eq!(failure.reason_code(), "no-writable-hidden-buffer");
+            assert!(hardware.post_bases.is_empty());
+        }
+    }
+
+    #[test]
+    fn external_hidden_invalidation_rejects_stale_completion_tokens() {
+        let mut presenter = presenter();
+        let mut hardware = FakeHardware {
+            statuses: vec![Ok(status(BASE1, 0x0001))],
+            ..FakeHardware::default()
+        };
+        let mut display = display_session();
+        let grant = presenter
+            .try_issue_hidden_slot_render_grant(&mut hardware, &mut display)
+            .unwrap()
+            .expect("inactive slot grant");
+
+        presenter.invalidate_external_mode();
+        let failure = presenter
+            .present_completed_hidden_frame(
+                CompletedHiddenFrame { grant },
+                &mut hardware,
+                &mut display,
+            )
+            .unwrap_err();
+
+        assert_eq!(failure.reason_code(), "posted-sequence-unverified");
+        assert!(hardware.post_bases.is_empty());
+    }
+
+    #[test]
+    fn external_hidden_completion_becomes_the_committed_capture_view() {
+        let mut presenter = presenter();
+        let mut hardware = FakeHardware {
+            statuses: vec![
+                Ok(status(BASE1, 0x0001)),
+                Ok(status(BASE1, 0x0001)),
+                Ok(status(BASE2, 0x0001)),
+            ],
+            ..FakeHardware::default()
+        };
+        let mut display = display_session();
+        let grant = presenter
+            .try_issue_hidden_slot_render_grant(&mut hardware, &mut display)
+            .unwrap()
+            .expect("inactive slot grant");
+        presenter.buffers.buffer_mut(grant.slot_index).pixels[0] = Rgb565Pixel(0x5aa5);
+        FakeBuffers::publish_writes(presenter.buffers.buffer_mut(grant.slot_index));
+
+        let stats = presenter
+            .present_completed_hidden_frame(
+                CompletedHiddenFrame { grant },
+                &mut hardware,
+                &mut display,
+            )
+            .unwrap();
+
+        assert_eq!(
+            presenter.committed_frame_view(stats.buffer_index).pixels[0],
+            Rgb565Pixel(0x5aa5)
+        );
+        assert_eq!(stats.copy_path, LatchCopyPath::ExternalDirect);
+        assert_eq!(stats.copied_bytes, 0);
+    }
+
+    #[test]
     fn committed_frame_view_contains_final_overlay_pixels() {
         let mut presenter = presenter();
         let mut hardware = FakeHardware {
