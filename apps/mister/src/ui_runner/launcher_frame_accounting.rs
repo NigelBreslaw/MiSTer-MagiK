@@ -2360,6 +2360,36 @@ mod tests {
             fresh_frame_analytics_mode(FrameAnalyticsMode::Process, false, Ok("process\n")),
             FrameAnalyticsMode::Off
         );
+        assert_eq!(
+            fresh_frame_analytics_mode(
+                FrameAnalyticsMode::Thread,
+                false,
+                Err(&std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "lease removed"
+                ))
+            ),
+            FrameAnalyticsMode::Off
+        );
+    }
+
+    #[test]
+    fn analytics_lease_mode_survives_consecutive_status_intervals() {
+        let first = fresh_frame_analytics_mode(FrameAnalyticsMode::Off, true, Ok("process\n"));
+        let second = fresh_frame_analytics_mode(first, true, Ok("process\n"));
+        let transient = fresh_frame_analytics_mode(
+            second,
+            true,
+            Err(&std::io::Error::other("replacement temporarily unreadable")),
+        );
+
+        assert_eq!(first, FrameAnalyticsMode::Process);
+        assert_eq!(second, FrameAnalyticsMode::Process);
+        assert_eq!(transient, FrameAnalyticsMode::Process);
+        assert_eq!(
+            fresh_frame_analytics_mode(transient, true, Ok("off\n")),
+            FrameAnalyticsMode::Off
+        );
     }
 
     fn sample(frame: u64, wall_us: u64) -> FrameBudgetSample {

@@ -3315,13 +3315,17 @@ fn profile_installed_screensaver(config: &NativeDeviceConfig, output_dir: &Path)
         "runs": summaries,
         "output_dir": output_dir,
     });
+    persist_and_qualify_screensaver_benchmark(output_dir, &summary)
+}
+
+fn persist_and_qualify_screensaver_benchmark(output_dir: &Path, summary: &Value) -> Result<String> {
     fs::write(
         output_dir.join("summary.json"),
-        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+        format!("{}\n", serde_json::to_string_pretty(summary)?),
     )?;
     fs::write(
         output_dir.join("report.md"),
-        screensaver_benchmark_report(&summary)?,
+        screensaver_benchmark_report(summary)?,
     )?;
     let qualification_failures = summary
         .get("runs")
@@ -13079,6 +13083,32 @@ H: Handlers=event3 js0"#
                 .iter()
                 .any(|failure| failure["kind"] == "render-ahead-reuse")
         );
+        let mut starved = summary.clone();
+        starved["render_ahead"]["starvation_count"] = json!(1);
+        assert!(
+            screensaver_qualification_failures(&starved)
+                .iter()
+                .any(|failure| failure["kind"] == "render-ahead-starvation")
+        );
+        let mut sequence_gap = summary.clone();
+        sequence_gap["steady_state"]["presentation_failures"] = json!([{
+            "kind": "render-sequence-gap",
+            "frame": 5,
+            "previous": 3,
+            "current": 5
+        }]);
+        assert!(
+            screensaver_qualification_failures(&sequence_gap)
+                .iter()
+                .any(|failure| failure["kind"] == "presentation-failures")
+        );
+        let mut slow_worker = summary.clone();
+        slow_worker["populated_window"]["render_ahead"]["render_wall_us"]["p99"] = json!(16_668);
+        assert!(
+            screensaver_qualification_failures(&slow_worker)
+                .iter()
+                .any(|failure| failure["kind"] == "worker-p99-over-refresh-period")
+        );
         assert!(
             summarize_screensaver_telemetry(
                 1,
@@ -13108,6 +13138,47 @@ H: Handlers=event3 js0"#
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn failed_screensaver_qualification_retains_summary_and_report() {
+        let output_dir = std::env::temp_dir().join(format!(
+            "mister-magik-failed-screensaver-qualification-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&output_dir).unwrap();
+        let summary = json!({
+            "manifest": {"magik_revision": "test-revision"},
+            "display": {"final_mode": "hdmi-1280x720p60"},
+            "runs": [{
+                "run": 1,
+                "qualification": {
+                    "qualified": false,
+                    "failures": [{"kind": "render-ahead-starvation", "count": 1}]
+                }
+            }]
+        });
+
+        let error = persist_and_qualify_screensaver_benchmark(&output_dir, &summary)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("evidence retained"));
+        assert_eq!(
+            serde_json::from_str::<Value>(
+                &fs::read_to_string(output_dir.join("summary.json")).unwrap()
+            )
+            .unwrap(),
+            summary
+        );
+        assert!(
+            fs::read_to_string(output_dir.join("report.md"))
+                .unwrap()
+                .contains("Qualification")
+        );
+        fs::remove_file(output_dir.join("summary.json")).unwrap();
+        fs::remove_file(output_dir.join("report.md")).unwrap();
+        fs::remove_dir(output_dir).unwrap();
     }
 
     #[test]
