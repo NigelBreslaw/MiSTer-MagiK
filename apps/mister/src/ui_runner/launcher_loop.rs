@@ -3719,9 +3719,6 @@ pub(super) fn run_launcher_loop(
                             LauncherAction::PreviewScreensaver => {
                                 if !screensaver.preview_active {
                                     screensaver.preview(frame_now);
-                                    // This branch continues before the frame counter advances, so
-                                    // the next rendered screensaver frame keeps this frame ID.
-                                    screensaver_cpu_profile.begin(frames);
                                     screensaver_show_started = Some(frame_now);
                                     screensaver_first_render_logged = false;
                                     screensaver_first_present_logged = false;
@@ -5040,6 +5037,9 @@ pub(super) fn run_launcher_loop(
             presentation.main_present_copy_path,
         );
         if screensaver_frame_presented {
+            // Profile only completed screensaver output. Starting when Preview is pressed
+            // includes loader/render-worker startup frames that have no presentation evidence.
+            screensaver_cpu_profile.begin(frames.saturating_add(1));
             if screensaver.active
                 && screensaver_first_render_logged
                 && !screensaver_first_present_logged
