@@ -238,6 +238,7 @@ pub(super) struct LauncherPresentResult {
     pub(super) main_present_hidden_rect_count: u32,
     pub(super) main_present_hidden_catchup_bytes: usize,
     pub(super) main_present_hidden_full_copy: bool,
+    pub(super) main_present_copy_path: &'static str,
     pub(super) main_present_request_us: u128,
     pub(super) main_present_set_vga_fb_us: u128,
     pub(super) main_present_wait_us: u64,

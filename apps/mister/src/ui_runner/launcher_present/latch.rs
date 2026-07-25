@@ -60,8 +60,31 @@ pub(in crate::ui_runner) trait LatchFrameBuffers {
         buffer: &mut Self::Buffer,
         cached: CachedFrameView<'_>,
         rect: DirtyRect,
-    ) -> Result<usize, String>;
+    ) -> Result<LatchCopyResult, String>;
     fn publish_writes(buffer: &mut Self::Buffer);
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::ui_runner) enum LatchCopyPath {
+    IdentityFull,
+    VerticalFull,
+    VerticalPartial,
+}
+
+impl LatchCopyPath {
+    pub(in crate::ui_runner) const fn label(self) -> &'static str {
+        match self {
+            Self::IdentityFull => "identity-full",
+            Self::VerticalFull => "vertical-full",
+            Self::VerticalPartial => "vertical-partial",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::ui_runner) struct LatchCopyResult {
+    bytes: usize,
+    path: LatchCopyPath,
 }
 
 pub(in crate::ui_runner) struct PluginLatchFrameBuffers {
@@ -125,7 +148,18 @@ impl LatchFrameBuffers for PluginLatchFrameBuffers {
         buffer: &mut Self::Buffer,
         cached: CachedFrameView<'_>,
         rect: DirtyRect,
-    ) -> Result<usize, String> {
+    ) -> Result<LatchCopyResult, String> {
+        let full_source =
+            rect.x0 == 0 && rect.y0 == 0 && rect.x1 == cached.width() && rect.y1 == cached.height();
+        if full_source && cached.width() == buffer.width() && cached.height() == buffer.height() {
+            return buffer
+                .copy_full_frame(cached.pixels(), cached.stride())
+                .map(|bytes| LatchCopyResult {
+                    bytes,
+                    path: LatchCopyPath::IdentityFull,
+                })
+                .map_err(|e| e.to_string());
+        }
         buffer
             .copy_vertical_rect(
                 VerticalRgb565FrameView {
@@ -136,6 +170,14 @@ impl LatchFrameBuffers for PluginLatchFrameBuffers {
                 },
                 rect,
             )
+            .map(|bytes| LatchCopyResult {
+                bytes,
+                path: if full_source {
+                    LatchCopyPath::VerticalFull
+                } else {
+                    LatchCopyPath::VerticalPartial
+                },
+            })
             .map_err(|e| e.to_string())
     }
 
@@ -227,6 +269,7 @@ pub(in crate::ui_runner) struct FpgaVblankLatchHiddenPresentStats {
     pub(in crate::ui_runner) rect_count: u32,
     pub(in crate::ui_runner) catchup_bytes: usize,
     pub(in crate::ui_runner) full_copy: bool,
+    pub(in crate::ui_runner) copy_path: LatchCopyPath,
     pub(in crate::ui_runner) buffer_index: u8,
     pub(in crate::ui_runner) copied_rows: u32,
     pub(in crate::ui_runner) copy_us: u128,
@@ -420,9 +463,15 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         let buffer = self.buffers.buffer_mut(buffer_index);
         let copy_start = Instant::now();
         let mut copied_bytes = 0usize;
+        let mut copy_path = LatchCopyPath::IdentityFull;
         for rect in plan.restore_rects.iter() {
             match B::copy_rect(buffer, cached, rect) {
-                Ok(bytes) => copied_bytes = copied_bytes.saturating_add(bytes),
+                Ok(result) => {
+                    copied_bytes = copied_bytes.saturating_add(result.bytes);
+                    if result.path != LatchCopyPath::IdentityFull {
+                        copy_path = result.path;
+                    }
+                }
                 Err(e) => {
                     self.latch_state.mark_attempt_failed(buffer_index);
                     return Err(LatchFailure::runtime(
@@ -539,6 +588,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             rect_count,
             catchup_bytes,
             full_copy,
+            copy_path,
             buffer_index,
             copied_rows,
             copy_us,
@@ -861,7 +911,7 @@ mod tests {
             buffer: &mut Self::Buffer,
             cached: CachedFrameView<'_>,
             rect: DirtyRect,
-        ) -> Result<usize, String> {
+        ) -> Result<LatchCopyResult, String> {
             buffer.events.borrow_mut().push(TestEvent::Copy);
             buffer.copy_count += 1;
             for y in rect.y0..rect.y1 {
@@ -869,7 +919,18 @@ mod tests {
                 let end = y * WIDTH + rect.x1;
                 buffer.pixels[start..end].copy_from_slice(&cached.pixels()[start..end]);
             }
-            Ok(rect.width() * rect.rows() as usize * 2)
+            Ok(LatchCopyResult {
+                bytes: rect.width() * rect.rows() as usize * 2,
+                path: if rect.x0 == 0
+                    && rect.y0 == 0
+                    && rect.x1 == cached.width()
+                    && rect.y1 == cached.height()
+                {
+                    LatchCopyPath::IdentityFull
+                } else {
+                    LatchCopyPath::VerticalPartial
+                },
+            })
         }
 
         fn publish_writes(buffer: &mut Self::Buffer) {

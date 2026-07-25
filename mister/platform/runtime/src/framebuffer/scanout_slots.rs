@@ -185,7 +185,17 @@ impl ScanoutSlotsRgb565Framebuffer {
         let stride_pixels = self.stride_pixels;
         let dst = self.buffer_mut();
         copy_full_frame_pixels(dst, stride_pixels, src, src_stride_pixels, width, height);
-        Ok(stride_pixels * height * std::mem::size_of::<Rgb565Pixel>())
+        Ok(width * height * std::mem::size_of::<Rgb565Pixel>())
+    }
+
+    #[must_use]
+    pub const fn width(&self) -> usize {
+        self.width
+    }
+
+    #[must_use]
+    pub const fn height(&self) -> usize {
+        self.height
     }
 
     pub fn copy_rect(

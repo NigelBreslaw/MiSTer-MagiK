@@ -37,6 +37,7 @@ mister-magik-framebuffer-stream = { path = "../../crates/framebuffer-stream" }
 mister-magik-scanout-contract = { path = "../../mister/platform/contracts/scanout" }
 mister-magik-media-contract = { path = "../../crates/media-contract" }
 mister-magik-latch-contract = { path = "../../mister/platform/contracts/latch" }
+# The runtime owns scanout-slot copy fast paths and their geometry fallbacks.
 mister-magik-mister-runtime = { path = "../../mister/platform/runtime", default-features = false }
 # No "std" feature on purpose: that pulls system font loading (fontconfig), which
 # we don't have/want on the MiSTer. Instead we embed a font for the software

@@ -182,6 +182,7 @@ pub struct FrameBudgetRecentFrame {
     pub vsync_wait_start_age_us: u64,
     pub vsync_accepted_hit_age_us: u64,
     pub main_present_status: &'static str,
+    pub main_present_copy_path: &'static str,
     pub main_present_sequence: u16,
     pub main_present_active_sequence: u16,
     pub main_present_pending: bool,
@@ -703,6 +704,7 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
     field!("vsync_wait_start_age_us", frame.vsync_wait_start_age_us);
     field!("vsync_accepted_hit_age_us", frame.vsync_accepted_hit_age_us);
     field!("main_present_status", frame.main_present_status);
+    field!("main_present_copy_path", frame.main_present_copy_path);
     field!("main_present_sequence", frame.main_present_sequence);
     field!(
         "main_present_active_sequence",
