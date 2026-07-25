@@ -204,6 +204,8 @@ impl ScreensaverDirectRenderAhead {
         width: usize,
         height: usize,
         period_us: u64,
+        launcher_snapshot: Option<Vec<Rgb565Pixel>>,
+        fade_started: Option<Instant>,
     ) -> Self {
         let (grant_tx, grant_rx) = sync_channel(1);
         let (ready_tx, ready_rx) = sync_channel(1);
@@ -226,6 +228,8 @@ impl ScreensaverDirectRenderAhead {
                     renderer,
                     width,
                     height,
+                    launcher_snapshot,
+                    fade_started,
                     grant_rx,
                     ready_tx,
                     &worker_period_us,
@@ -309,6 +313,8 @@ fn run_direct_render_ahead_worker(
     mut renderer: LauncherScreensaver,
     width: usize,
     height: usize,
+    launcher_snapshot: Option<Vec<Rgb565Pixel>>,
+    fade_started: Option<Instant>,
     grant_rx: Receiver<HiddenSlotRenderGrant>,
     ready_tx: SyncSender<RenderedDirectScreensaverFrame>,
     period_us: &AtomicU64,
@@ -376,6 +382,12 @@ fn run_direct_render_ahead_worker(
             height,
             Duration::from_micros(elapsed_us),
         );
+        if let (Some(snapshot), Some(started)) = (&launcher_snapshot, fade_started) {
+            let alpha = (started.elapsed().as_micros().min(200_000) * 255 / 200_000) as u8;
+            if alpha < 255 {
+                blend_rgb565_frame(target.pixels_mut(), snapshot, alpha);
+            }
+        }
         target.publish_writes();
         let frame = RenderedDirectScreensaverFrame {
             completed: CompletedHiddenFrame { grant },
@@ -398,6 +410,19 @@ fn run_direct_render_ahead_worker(
         }
     }
     Ok(())
+}
+
+fn blend_rgb565_frame(target: &mut [Rgb565Pixel], launcher: &[Rgb565Pixel], alpha: u8) {
+    let inverse = u32::from(255 - alpha);
+    let alpha = u32::from(alpha);
+    for (target, launcher) in target.iter_mut().zip(launcher) {
+        let saver = u32::from(target.0);
+        let base = u32::from(launcher.0);
+        let red = (((base >> 11) & 0x1f) * inverse + ((saver >> 11) & 0x1f) * alpha + 127) / 255;
+        let green = (((base >> 5) & 0x3f) * inverse + ((saver >> 5) & 0x3f) * alpha + 127) / 255;
+        let blue = ((base & 0x1f) * inverse + (saver & 0x1f) * alpha + 127) / 255;
+        target.0 = ((red << 11) | (green << 5) | blue) as u16;
+    }
 }
 
 fn send_direct_ready_frame(
@@ -592,5 +617,17 @@ mod tests {
         let stopped = Arc::new(AtomicBool::new(false));
         drop(RenderAheadCompletionGuard(Arc::clone(&stopped)));
         assert!(stopped.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn direct_preview_blend_preserves_both_endpoints() {
+        let launcher = [Rgb565Pixel(0x001f)];
+        let mut target = [Rgb565Pixel(0xf800)];
+        blend_rgb565_frame(&mut target, &launcher, 0);
+        assert_eq!(target, launcher);
+
+        target[0] = Rgb565Pixel(0xf800);
+        blend_rgb565_frame(&mut target, &launcher, 255);
+        assert_eq!(target, [Rgb565Pixel(0xf800)]);
     }
 }

@@ -4505,13 +4505,17 @@ pub(super) fn run_launcher_loop(
                         started.elapsed().as_micros()
                     );
                 }
-                if launcher_presenter.direct_hidden_slots_available(ui) && !screensaver.is_preview()
-                {
+                if launcher_presenter.direct_hidden_slots_available(ui) {
+                    let launcher_snapshot = screensaver
+                        .is_preview()
+                        .then(|| layer_target.cached_frame_view().pixels().to_vec());
                     screensaver_direct_pipeline = Some(ScreensaverDirectRenderAhead::start(
                         ready,
                         ui.render_w(),
                         ui.render_h(),
                         pacer.period_us(),
+                        launcher_snapshot,
+                        screensaver.preview_fade_started,
                     ));
                 } else {
                     screensaver_pipeline = Some(ScreensaverRenderAhead::start(
@@ -4720,7 +4724,15 @@ pub(super) fn run_launcher_loop(
             && !retiring_screensaver_pipelines.is_empty())
             || (screensaver_direct_pipeline.is_none() && !retiring_direct_pipelines.is_empty());
         let this_rect = if screensaver.active && screensaver_frame_visible {
-            if accepted_screensaver_frame && screensaver_fade_alpha.is_some_and(|alpha| alpha < 255)
+            if screensaver_direct_pipeline.is_some() {
+                Some(DirtyRect {
+                    x0: 0,
+                    y0: 0,
+                    x1: ui.render_w(),
+                    y1: ui.render_h(),
+                })
+            } else if accepted_screensaver_frame
+                && screensaver_fade_alpha.is_some_and(|alpha| alpha < 255)
             {
                 Some(
                     layer_target.blend_screensaver_crossfade(
