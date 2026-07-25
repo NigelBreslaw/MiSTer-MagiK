@@ -6353,8 +6353,20 @@ fn validate_capture_contract_schema(result: &Value, expected_schema: &str) -> Re
         .and_then(|value| value.get("kind"))
         .and_then(Value::as_str)
         .ok_or("agent framebuffer capture response missing capture_source.kind")?;
-    if source != source_kind || !matches!(source, "fb0" | "fpga-latched-scanout-slots") {
+    if source != source_kind
+        || !matches!(
+            source,
+            "fb0" | "producer-composition" | "fpga-latched-scanout-slots"
+        )
+    {
         return Err(format!("agent framebuffer capture returned invalid source {source:?}").into());
+    }
+    let authoritative_scanout = result
+        .get("authoritative_scanout")
+        .and_then(Value::as_bool)
+        .ok_or("agent framebuffer capture response missing authoritative_scanout")?;
+    if authoritative_scanout != (source == "fpga-latched-scanout-slots") {
+        return Err("agent framebuffer capture returned inconsistent scanout authority".into());
     }
     result
         .get("content_nonzero_bytes")
@@ -6379,13 +6391,25 @@ fn validate_capture_contract_schema(result: &Value, expected_schema: &str) -> Re
                 .into());
             }
         }
+    } else if source == "producer-composition" {
+        let metadata = result.get("capture_source").unwrap_or(&Value::Null);
+        for field in ["sequence", "authoritative_error"] {
+            if metadata.get(field).is_none() {
+                return Err(format!(
+                    "agent framebuffer capture response missing producer field {field}"
+                )
+                .into());
+            }
+        }
     }
     Ok(())
 }
 
 fn validate_visible_launcher_capture(capture: &PngCapture) -> Result<()> {
     let result = &capture.result;
-    if capture_source_label(result)? != "fpga-latched-scanout-slots" {
+    if capture_source_label(result)? != "fpga-latched-scanout-slots"
+        || result.get("authoritative_scanout").and_then(Value::as_bool) != Some(true)
+    {
         return Err(format!(
             "launcher capture used non-authoritative source {}",
             capture_source_label(result)?
@@ -11542,6 +11566,7 @@ H: Handlers=event3 js0"#
                     "region_index": 0,
                     "region_name": "hidden-slot-1"
                 },
+                "authoritative_scanout": true,
                 "width": 640,
                 "height": 480,
                 "stride": 1280,
@@ -11582,11 +11607,36 @@ H: Handlers=event3 js0"#
     }
 
     #[test]
+    fn capture_contract_accepts_diagnostic_producer_composition() {
+        let result = json!({
+            "schema": "mister-magik-framebuffer-capture-v2",
+            "source": "producer-composition",
+            "capture_source": {
+                "kind": "producer-composition",
+                "sequence": 17,
+                "authoritative_error": "active base is not a hidden slot"
+            },
+            "authoritative_scanout": false,
+            "content_nonzero_bytes": 100,
+            "content_varied": true
+        });
+
+        validate_capture_contract(&result).unwrap();
+        let capture = PngCapture {
+            result,
+            png: vec![],
+            elapsed_ms: 0,
+        };
+        assert!(validate_visible_launcher_capture(&capture).is_err());
+    }
+
+    #[test]
     fn launcher_smoke_rejects_fallback_and_blank_authoritative_capture() {
         let mut result = json!({
             "schema": "mister-magik-framebuffer-capture-v2",
             "source": "fb0",
             "capture_source": {"kind": "fb0"},
+            "authoritative_scanout": false,
             "width": 640,
             "height": 480,
             "stride": 1280,
@@ -11609,6 +11659,7 @@ H: Handlers=event3 js0"#
             "region_index": 0,
             "region_name": "hidden-slot-1"
         });
+        result["authoritative_scanout"] = json!(true);
         result["content_nonzero_bytes"] = json!(0);
         result["content_varied"] = json!(false);
         let capture = PngCapture {

@@ -6,11 +6,21 @@ use std::env;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn select_framebuffer_capture<T>(
     scanout_slots_present: bool,
+    compatibility_mode: bool,
     read_latched: impl FnOnce() -> Result<T, String>,
+    read_producer: impl FnOnce(&str) -> Result<T, String>,
     read_fb0: impl FnOnce() -> Result<T, String>,
 ) -> Result<T, String> {
     if scanout_slots_present {
-        read_latched().map_err(|error| format!("authoritative scanout capture failed: {error}"))
+        match read_latched() {
+            Ok(capture) => Ok(capture),
+            Err(error) if compatibility_mode => read_producer(&error).map_err(|producer_error| {
+                format!(
+                    "authoritative scanout capture failed: {error}; producer composition capture failed: {producer_error}"
+                )
+            }),
+            Err(error) => Err(format!("authoritative scanout capture failed: {error}")),
+        }
     } else {
         read_fb0()
     }
@@ -877,7 +887,10 @@ mod linux {
     };
     use flate2::{Compression, write::ZlibEncoder};
     use libc::{c_ulong, ioctl};
-    use mister_magik_framebuffer_stream::SCHEMA as FRAMEBUFFER_STREAM_SCHEMA;
+    use mister_magik_framebuffer_stream::{
+        FLAG_LZ4_SIZE_PREPENDED, FrameKind, MAX_FRAME_SURFACE_BYTES,
+        SCHEMA as FRAMEBUFFER_STREAM_SCHEMA, read_frame,
+    };
     use serde_json::{Value, json};
     use sha2::{Digest, Sha256};
     use std::collections::{HashMap, VecDeque};
@@ -2396,6 +2409,10 @@ mod linux {
 
     enum FramebufferCaptureSource {
         Fb0,
+        ProducerComposition {
+            sequence: u64,
+            authoritative_error: String,
+        },
         FpgaLatchedScanoutSlots {
             active_base: u32,
             active_sequence: u16,
@@ -2413,13 +2430,26 @@ mod linux {
         fn label(&self) -> &'static str {
             match self {
                 Self::Fb0 => "fb0",
+                Self::ProducerComposition { .. } => "producer-composition",
                 Self::FpgaLatchedScanoutSlots { .. } => "fpga-latched-scanout-slots",
             }
+        }
+
+        fn authoritative_scanout(&self) -> bool {
+            matches!(self, Self::FpgaLatchedScanoutSlots { .. })
         }
 
         fn json(&self) -> Value {
             match self {
                 Self::Fb0 => json!({"kind": self.label()}),
+                Self::ProducerComposition {
+                    sequence,
+                    authoritative_error,
+                } => json!({
+                    "kind": self.label(),
+                    "sequence": sequence,
+                    "authoritative_error": authoritative_error,
+                }),
                 Self::FpgaLatchedScanoutSlots {
                     active_base,
                     active_sequence,
@@ -2472,6 +2502,7 @@ mod linux {
             "schema": "mister-magik-framebuffer-capture-v2",
             "source": source_label,
             "capture_source": source_json,
+            "authoritative_scanout": source.authoritative_scanout(),
             "width": geometry.width,
             "height": geometry.height,
             "stride": geometry.stride,
@@ -2522,9 +2553,78 @@ mod linux {
     fn read_framebuffer_capture() -> Result<FramebufferRead, String> {
         select_framebuffer_capture(
             Path::new(SCANOUT_SLOTS_DEVICE).exists(),
+            launcher_in_compatibility_mode(),
             read_fpga_latched_scanout_slots_capture,
+            read_producer_composition_capture,
             read_fb0_capture,
         )
+    }
+
+    fn launcher_in_compatibility_mode() -> bool {
+        let status = read_json_value("/tmp/mister-magik/status.json");
+        status.get("present_backend").and_then(Value::as_str) == Some("compatibility-fb0")
+            || status.get("present_status").and_then(Value::as_str) == Some("compatibility")
+    }
+
+    fn read_producer_composition_capture(
+        authoritative_error: &str,
+    ) -> Result<FramebufferRead, String> {
+        let mut stream = TcpStream::connect(("127.0.0.1", FRAMEBUFFER_PRODUCER_PORT))
+            .map_err(|error| format!("connect producer stream: {error}"))?;
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err("producer stream timed out before keyframe".to_string());
+            }
+            stream
+                .set_read_timeout(Some(remaining))
+                .map_err(|error| format!("set producer stream timeout: {error}"))?;
+            let (header, payload) =
+                read_frame(&mut stream).map_err(|error| format!("read producer frame: {error}"))?;
+            match header.kind {
+                FrameKind::Heartbeat | FrameKind::Hello | FrameKind::RectDelta => continue,
+                FrameKind::End => return Err("producer stream ended before keyframe".to_string()),
+                FrameKind::Error => {
+                    return Err("producer stream reported an error before keyframe".to_string());
+                }
+                FrameKind::Keyframe => {
+                    if header.flags != FLAG_LZ4_SIZE_PREPENDED {
+                        return Err(format!(
+                            "producer keyframe has unsupported flags 0x{:04x}",
+                            header.flags
+                        ));
+                    }
+                    let expected = usize::try_from(header.raw_bytes)
+                        .map_err(|_| "producer keyframe raw size overflow".to_string())?;
+                    let raw = mister_magik_agent_protocol::decompress_size_prepended_exact(
+                        &payload,
+                        expected,
+                        MAX_FRAME_SURFACE_BYTES,
+                    )?;
+                    let width = usize::try_from(header.geometry.width)
+                        .map_err(|_| "producer keyframe width overflow".to_string())?;
+                    let height = usize::try_from(header.geometry.height)
+                        .map_err(|_| "producer keyframe height overflow".to_string())?;
+                    let stride = width
+                        .checked_mul(2)
+                        .ok_or_else(|| "producer keyframe stride overflow".to_string())?;
+                    return Ok(FramebufferRead {
+                        raw,
+                        geometry: FramebufferGeometry {
+                            width,
+                            height,
+                            stride,
+                            bpp: 16,
+                        },
+                        source: FramebufferCaptureSource::ProducerComposition {
+                            sequence: header.sequence,
+                            authoritative_error: authoritative_error.to_string(),
+                        },
+                    });
+                }
+            }
+        }
     }
 
     fn read_fb0_capture() -> Result<FramebufferRead, String> {
@@ -2854,6 +2954,7 @@ mod linux {
         let raw = capture.raw;
         let source_json = capture.source.json();
         let source_label = capture.source.label();
+        let authoritative_scanout = capture.source.authoritative_scanout();
         let (content_nonzero_bytes, content_varied) = framebuffer_content_stats(&raw, geometry);
         let geometry_us = 0;
         let lz4_t = Instant::now();
@@ -2870,6 +2971,7 @@ mod linux {
                 "boot_id": boot_id,
                 "source": source_label,
                 "capture_source": source_json,
+                "authoritative_scanout": authoritative_scanout,
                 "width": geometry.width,
                 "height": geometry.height,
                 "stride": geometry.stride,
@@ -3973,7 +4075,9 @@ mod tests {
         let mut fb0_reads = 0;
         let error = select_framebuffer_capture(
             true,
+            false,
             || Err::<u8, _>("latch unavailable".to_string()),
+            |_| Ok(2),
             || {
                 fb0_reads += 1;
                 Ok(1)
@@ -3987,10 +4091,44 @@ mod tests {
     }
 
     #[test]
+    fn compatibility_capture_falls_back_to_producer_and_preserves_authoritative_error() {
+        let value = select_framebuffer_capture(
+            true,
+            true,
+            || Err::<String, _>("active base is not a hidden slot".to_string()),
+            |error| Ok(format!("producer:{error}")),
+            || Err("must not read fb0".to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            value,
+            "producer:active base is not a hidden slot".to_string()
+        );
+    }
+
+    #[test]
+    fn compatibility_capture_reports_both_failures_when_producer_is_unavailable() {
+        let error = select_framebuffer_capture(
+            true,
+            true,
+            || Err::<u8, _>("active base is not a hidden slot".to_string()),
+            |_| Err("stream unavailable".to_string()),
+            || Ok(1),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("active base is not a hidden slot"));
+        assert!(error.contains("stream unavailable"));
+    }
+
+    #[test]
     fn fb0_capture_remains_available_without_scanout_slots() {
         let value = select_framebuffer_capture(
             false,
+            false,
             || Err::<u8, _>("must not read latch".to_string()),
+            |_| Err("must not read producer".to_string()),
             || Ok(7),
         )
         .unwrap();
