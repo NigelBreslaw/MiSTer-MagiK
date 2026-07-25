@@ -232,3 +232,38 @@ fn elapsed_thread_cpu_us(start: Option<u64>) -> u64 {
         .and_then(|start| thread_cpu_us().map(|end| end.saturating_sub(start)))
         .unwrap_or(0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui_runner::launcher_screensaver::LauncherScreensaverLoader;
+
+    #[test]
+    fn render_ahead_sequences_recycle_and_cancel_without_blocking() {
+        let loader = LauncherScreensaverLoader::start(64, 48, None, false);
+        let renderer = loader
+            .try_ready()
+            .expect("renderer is handed off immediately");
+        let mut pipeline = ScreensaverRenderAhead::start(renderer, 64, 48, 20_000);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut sequences = Vec::new();
+        while sequences.len() < 4 && Instant::now() < deadline {
+            if let Some(frame) = pipeline.try_next() {
+                sequences.push(frame.sequence);
+                assert_eq!(frame.pixels.len(), 64 * 48);
+                assert!(pipeline.ready_depth() <= RENDER_AHEAD_READY_CAPACITY);
+                assert!(pipeline.recycle(frame.pixels));
+            } else {
+                std::thread::yield_now();
+            }
+        }
+
+        assert_eq!(sequences, vec![1, 2, 3, 4]);
+        pipeline.update_period_us(16_667);
+        pipeline.cancel();
+        while !pipeline.poll_stopped() && Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert!(pipeline.poll_stopped());
+    }
+}
