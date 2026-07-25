@@ -4,7 +4,9 @@
 use serde_json::{Value, json};
 
 pub const PORT: u16 = 7498;
-pub const AGENT_VERSION: u64 = 4;
+// Version 5 makes authoritative_scanout and capture_source mandatory parts of
+// framebuffer-capture-v2 so bootstrap cannot accept the older partial schema.
+pub const AGENT_VERSION: u64 = 5;
 pub const PROTOCOL_VERSION: u64 = 2;
 pub const FRAMEBUFFER_CAPTURE_CAPABILITY: &str = "framebuffer-capture-v2";
 pub const MAX_BINARY_PAYLOAD_BYTES: u64 = 512 * 1024 * 1024;
