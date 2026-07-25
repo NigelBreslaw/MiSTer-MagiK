@@ -3066,6 +3066,9 @@ fn parse_crt_trial_status(output: &str) -> Result<&str> {
 
 const SCREENSAVER_PROFILE_REMOTE_DIR: &str = "/tmp/mister-magik/screensaver-profile";
 const SCREENSAVER_STARTUP_WARMUP_FRAMES: usize = 3;
+const SCREENSAVER_PROFILE_DURATION_SECS: u64 = 45;
+const SCREENSAVER_PROFILE_TIMEOUT_SECS: u64 = SCREENSAVER_PROFILE_DURATION_SECS + 20;
+const SCREENSAVER_POPULATED_WINDOW_SECS: u64 = 15;
 
 fn last_json_line(output: &str) -> Option<Value> {
     output
@@ -3444,7 +3447,10 @@ fn profile_installed_screensaver_run(
                 ),
                 ("MISTER_PPROF".into(), "1".into()),
                 ("MISTER_PPROF_TRIGGER".into(), "screensaver".into()),
-                ("MISTER_PPROF_DURATION_SECS".into(), "30".into()),
+                (
+                    "MISTER_PPROF_DURATION_SECS".into(),
+                    SCREENSAVER_PROFILE_DURATION_SECS.to_string(),
+                ),
                 ("MISTER_PPROF_HZ".into(), "99".into()),
                 ("MISTER_PPROF_OUT".into(), remote_svg.clone()),
                 ("MISTER_PPROF_FOLDED_OUT".into(), remote_folded.clone()),
@@ -3457,8 +3463,10 @@ fn profile_installed_screensaver_run(
     )?;
     drop(session);
 
-    let telemetry =
-        agent_telemetry_until_screensaver_profile_complete(&config.agent, Duration::from_secs(50))?;
+    let telemetry = agent_telemetry_until_screensaver_profile_complete(
+        &config.agent,
+        Duration::from_secs(SCREENSAVER_PROFILE_TIMEOUT_SECS),
+    )?;
     let session = connect_with(&config.connection, 10)?;
     let metadata = remote_read(&session, &remote_complete)
         .ok_or("screensaver profile completion metadata is missing")?;
@@ -3893,6 +3901,7 @@ fn summarize_screensaver_telemetry(
         "cpu_frame_tail_us": mean_frame_field(steady, "cpu_frame_tail_us"),
         "process_cpu_us": mean_frame_field(steady, "process_cpu_us"),
     });
+    let populated_window = populated_screensaver_window(steady, refresh_period_us);
     let present_errors = presentation_failures
         .iter()
         .filter(|failure| failure.get("kind").and_then(Value::as_str) == Some("present-status"))
@@ -3944,8 +3953,62 @@ fn summarize_screensaver_telemetry(
         },
         "maintenance": maintenance,
         "phase_means": phase_means,
+        "populated_window": populated_window,
         "profile": metadata,
     }))
+}
+
+fn populated_screensaver_window(frames: &[&Value], refresh_period_us: u64) -> Value {
+    let last_completion_us = frames
+        .last()
+        .map(|frame| frame_u64(frame, "completion_monotonic_us"))
+        .unwrap_or(0);
+    let cutoff_us =
+        last_completion_us.saturating_sub(SCREENSAVER_POPULATED_WINDOW_SECS * 1_000_000);
+    let populated = frames
+        .iter()
+        .copied()
+        .filter(|frame| frame_u64(frame, "completion_monotonic_us") >= cutoff_us)
+        .collect::<Vec<_>>();
+    let mut wall = populated
+        .iter()
+        .map(|frame| frame_u64(frame, "wall_us"))
+        .collect::<Vec<_>>();
+    let mut work = populated
+        .iter()
+        .map(|frame| frame_work_us(frame))
+        .collect::<Vec<_>>();
+    wall.sort_unstable();
+    work.sort_unstable();
+    let measured_duration_us = populated
+        .first()
+        .zip(populated.last())
+        .map(|(first, last)| {
+            frame_u64(last, "completion_monotonic_us")
+                .saturating_sub(frame_u64(first, "completion_monotonic_us"))
+                .saturating_add(refresh_period_us)
+        })
+        .unwrap_or(0);
+    json!({
+        "target_duration_secs": SCREENSAVER_POPULATED_WINDOW_SECS,
+        "frames": populated.len(),
+        "measured_duration_us": measured_duration_us,
+        "average_fps": if measured_duration_us == 0 {
+            0.0
+        } else {
+            populated.len() as f64 * 1_000_000.0 / measured_duration_us as f64
+        },
+        "p99_wall_us": percentile_99(&wall),
+        "max_wall_us": wall.last().copied().unwrap_or(0),
+        "p99_work_us": percentile_99(&work),
+        "phase_means": {
+            "prepare_us": mean_frame_field(&populated, "prepare_us"),
+            "render_us": mean_frame_field(&populated, "render_us"),
+            "present_us": mean_frame_field(&populated, "present_us"),
+            "cpu_custom_draw_us": mean_frame_field(&populated, "cpu_custom_draw_us"),
+            "process_cpu_us": mean_frame_field(&populated, "process_cpu_us"),
+        },
+    })
 }
 
 fn frame_u64(frame: &Value, key: &str) -> u64 {
@@ -4546,6 +4609,12 @@ fn screensaver_benchmark_report(summary: &Value) -> Result<String> {
             run.pointer("/steady_state/physical_refresh")
                 .cloned()
                 .unwrap_or(Value::Null),
+        )?;
+        writeln!(
+            report,
+            "Populated final {} seconds: `{}`.\n",
+            SCREENSAVER_POPULATED_WINDOW_SECS,
+            run.get("populated_window").cloned().unwrap_or(Value::Null),
         )?;
         writeln!(
             report,

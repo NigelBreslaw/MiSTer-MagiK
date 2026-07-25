@@ -16,7 +16,7 @@ Verify installed platform and health
 -> transactionally select 1280x720 HDMI and verify a 1280x720 RGB565 framebuffer
 -> start the ordinary launcher with a one-shot environment
 -> navigate Home -> Settings -> Show Screensaver
--> profile and stream telemetry for 30 seconds
+-> profile and stream telemetry for 45 seconds
 -> restore the ordinary launcher
 -> retain the confirmed 1280x720 HDMI mode
 -> verify platform identity and health
@@ -54,6 +54,10 @@ This distinction is intentional. Do not tighten startup timing because of a
 slow first render, asset loading, allocation, profiler startup, or other
 one-time activation work. The benchmark exists to prove that an already
 running screensaver does not drop frames.
+
+The complete 45-second run remains the correctness gate. Performance comparisons
+also report the final 15 seconds separately, after the parade has had roughly
+30 seconds to reach its populated state.
 
 ## Restoration
 
