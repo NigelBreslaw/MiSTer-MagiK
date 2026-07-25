@@ -1495,12 +1495,63 @@ fn render_starfield(dst: &mut [Rgb565Pixel], w: usize, h: usize, frame: u64) {
 
 fn render_parade_background(
     dst: &mut [Rgb565Pixel],
-    _w: usize,
-    _h: usize,
-    _motion_ticks_fp: u64,
+    w: usize,
+    h: usize,
+    motion_ticks_fp: u64,
     _motion: ParadeMotion,
 ) {
     clear(dst, color565(0, 0, 10));
+    for i in 0..210usize {
+        let layer = i & 3;
+        let (x, fraction) = horizontal_star_position(i, w, h, motion_ticks_fp);
+        let y = (i.wrapping_mul(83).wrapping_add(i.wrapping_mul(i) * 7)) % h;
+        let brightness = [70, 110, 170, 235][layer];
+        let color = color565(brightness / 2, brightness, 255);
+        let row = y * w;
+        dst[row + x] = blend_565(dst[row + x], color, 255 - fraction);
+        if fraction > 0 {
+            let next_x = (x + 1) % w;
+            dst[row + next_x] = blend_565(dst[row + next_x], color, fraction);
+        }
+    }
+}
+
+fn horizontal_star_x(star: usize, width: usize, frame: u64) -> usize {
+    horizontal_star_position(
+        star,
+        width,
+        PARADE_REFERENCE_HEIGHT,
+        frame.saturating_mul(PARADE_TICK_ONE as u64),
+    )
+    .0
+}
+
+fn horizontal_star_position(
+    star: usize,
+    width: usize,
+    screen_h: usize,
+    motion_ticks_fp: u64,
+) -> (usize, u8) {
+    const STAR_SPEED_DENOMINATOR: u64 = 16;
+    const SUBPIXEL_ONE: u64 = 256;
+    let speed_numerator = PARADE_MIN_TILE_SPEED as u64 * ((star & 3) + 1) as u64;
+    let start_x = (star
+        .wrapping_mul(197)
+        .wrapping_add(star.wrapping_mul(star) * 13))
+        % width;
+    let scaled_ticks_fp = motion_ticks_fp
+        .saturating_mul(screen_h as u64)
+        .saturating_add((PARADE_REFERENCE_HEIGHT / 2) as u64)
+        / PARADE_REFERENCE_HEIGHT as u64;
+    let travel = scaled_ticks_fp
+        .saturating_mul(speed_numerator)
+        .saturating_mul(SUBPIXEL_ONE)
+        / (STAR_SPEED_DENOMINATOR * PARADE_TICK_ONE as u64);
+    let position = (start_x as u64 * SUBPIXEL_ONE + travel) % (width as u64 * SUBPIXEL_ONE);
+    (
+        (position / SUBPIXEL_ONE) as usize,
+        (position % SUBPIXEL_ONE) as u8,
+    )
 }
 
 fn render_starfield_cabinets(
@@ -4148,6 +4199,44 @@ mod tests {
     }
 
     #[test]
+    fn parade_starfield_moves_horizontally_in_depth_bands() {
+        let width = 960;
+        for star in 0..4 {
+            let x0 = horizontal_star_x(star, width, 0);
+            let x1 = horizontal_star_x(star, width, 16);
+            assert_eq!(
+                (x1 + width - x0) % width,
+                PARADE_MIN_TILE_SPEED * (star + 1)
+            );
+        }
+    }
+
+    #[test]
+    fn fastest_star_layer_is_half_the_slowest_card_speed() {
+        let width = 960;
+        let x0 = horizontal_star_x(3, width, 0);
+        let x1 = horizontal_star_x(3, width, 16);
+        let star_travel = (x1 + width - x0) % width;
+        let slowest_card_travel = PARADE_MIN_TILE_SPEED * 16 / 2;
+        assert_eq!(star_travel * 2, slowest_card_travel);
+    }
+
+    #[test]
+    fn slowest_star_has_a_new_subpixel_phase_every_frame() {
+        let (_, fraction0) = horizontal_star_position(0, 960, PARADE_REFERENCE_HEIGHT, 0);
+        for frame in 1..16 {
+            let (_, fraction) = horizontal_star_position(
+                0,
+                960,
+                PARADE_REFERENCE_HEIGHT,
+                frame * PARADE_TICK_ONE as u64,
+            );
+            assert_ne!(fraction, fraction0);
+            assert_eq!(fraction, frame as u8 * 16);
+        }
+    }
+
+    #[test]
     fn sampling_profile_is_selected_only_by_the_output_route() {
         assert_eq!(
             ParadeSamplingProfile::for_crt_output(false),
@@ -4508,6 +4597,13 @@ mod tests {
             let at_50_hz = one_second_card_travel(50, height);
             let at_60_hz = one_second_card_travel(60, height);
             assert_eq!(at_50_hz, at_60_hz, "card travel differs at {height}p");
+
+            let star_at_50_hz = horizontal_star_position(3, 4_096, height, at_50_hz.2);
+            let star_at_60_hz = horizontal_star_position(3, 4_096, height, at_60_hz.2);
+            assert_eq!(
+                star_at_50_hz, star_at_60_hz,
+                "star travel differs at {height}p"
+            );
         }
     }
 
