@@ -5036,14 +5036,11 @@ pub(super) fn run_launcher_loop(
             presentation.main_present_status,
             presentation.main_present_copy_path,
         );
-        if screensaver_frame_presented {
+        if screensaver.active && screensaver_frame_presented {
             // Profile only completed screensaver output. Starting when Preview is pressed
             // includes loader/render-worker startup frames that have no presentation evidence.
             screensaver_cpu_profile.begin(frames.saturating_add(1));
-            if screensaver.active
-                && screensaver_first_render_logged
-                && !screensaver_first_present_logged
-            {
+            if screensaver_first_render_logged && !screensaver_first_present_logged {
                 screensaver_first_present_logged = true;
                 if let Some(started) = screensaver_show_started {
                     crate::ui_logln!(
@@ -5052,10 +5049,7 @@ pub(super) fn run_launcher_loop(
                     );
                 }
             }
-            if screensaver.active
-                && !screensaver_first_card_present_logged
-                && screensaver_has_rendered_card
-            {
+            if !screensaver_first_card_present_logged && screensaver_has_rendered_card {
                 screensaver_first_card_present_logged = true;
                 if let Some(started) = screensaver_show_started {
                     crate::ui_logln!(
