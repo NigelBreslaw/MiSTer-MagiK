@@ -50,6 +50,8 @@ pub(in crate::ui_runner) struct LauncherPresentFrame {
     pub(in crate::ui_runner) pre_render_pace: Option<(VsyncPace, Instant, u128)>,
     pub(in crate::ui_runner) frame_analytics_mode: FrameAnalyticsMode,
     pub(in crate::ui_runner) stream_motion_active: bool,
+    pub(in crate::ui_runner) direct_hidden_mode: bool,
+    pub(in crate::ui_runner) completed_hidden_frame: Option<CompletedHiddenFrame>,
 }
 
 pub(in crate::ui_runner) struct LauncherPresentTargets<'a, 'target> {
@@ -165,6 +167,8 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
             pre_render_pace: frame.pre_render_pace,
             frame_analytics_mode: frame.frame_analytics_mode,
             stream_motion_active: frame.stream_motion_active,
+            direct_hidden_mode: frame.direct_hidden_mode,
+            completed_hidden_frame: frame.completed_hidden_frame,
         };
         if !frame.startup_can_present {
             return adapters.present_suppressed();
@@ -202,6 +206,38 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
             LauncherPresenterState::ExplicitFb0 | LauncherPresenterState::Compatibility { .. } => {
                 false
             }
+        }
+    }
+
+    pub(in crate::ui_runner) fn direct_hidden_slots_available(&self, ui: &UiDisplay) -> bool {
+        matches!(
+            &self.state,
+            LauncherPresenterState::Latch(latch)
+                if latch.exact_identity_geometry()
+                    && ui.render_w() == usize::from(ui.scan_w())
+                    && ui.render_h() == usize::from(ui.scan_h())
+                    && !ui.output_route().is_crt()
+        )
+    }
+
+    pub(in crate::ui_runner) fn try_issue_hidden_slot_render_grant(
+        &mut self,
+        hardware: &mut Fpga,
+        display: &mut LauncherDisplaySession,
+    ) -> Result<Option<HiddenSlotRenderGrant>, LatchFailure> {
+        match &mut self.state {
+            LauncherPresenterState::Latch(latch) => {
+                latch.try_issue_hidden_slot_render_grant(hardware, display)
+            }
+            LauncherPresenterState::ExplicitFb0 | LauncherPresenterState::Compatibility { .. } => {
+                Ok(None)
+            }
+        }
+    }
+
+    pub(in crate::ui_runner) fn invalidate_external_hidden_mode(&mut self) {
+        if let LauncherPresenterState::Latch(latch) = &mut self.state {
+            latch.invalidate_external_mode();
         }
     }
 }
@@ -450,6 +486,8 @@ struct LivePresentationAdapters<'a, 'target> {
     pre_render_pace: Option<(VsyncPace, Instant, u128)>,
     frame_analytics_mode: FrameAnalyticsMode,
     stream_motion_active: bool,
+    direct_hidden_mode: bool,
+    completed_hidden_frame: Option<CompletedHiddenFrame>,
 }
 
 fn run_fb0_transaction<T>(
@@ -538,6 +576,50 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
         let layer_target = self.targets.layer_target;
         let hardware = &mut *self.targets.hardware;
         let arcade_list_renderer = &mut *self.targets.arcade_list_renderer;
+        if self.direct_hidden_mode {
+            let Some(completed) = self.completed_hidden_frame.take() else {
+                let mut presentation = empty_present_result();
+                presentation.main_present_backend = LauncherPresentBackend::FpgaVblankLatchHidden;
+                presentation.main_present_status = LauncherPresentStatus::Ok;
+                presentation.main_present_copy_path = LatchCopyPath::ExternalDirect.label();
+                return Ok(LauncherPresentCycle {
+                    presentation,
+                    frame_t3,
+                    frame_t4: Instant::now(),
+                    cpu_t3,
+                    cpu_t4: FrameAnalyticsCpuStamp::capture(self.frame_analytics_mode),
+                    pacing_trace: LauncherPacingTrace::from_pace_with_present_phase(
+                        None,
+                        self.frame_start_phase_us,
+                        self.targets.pacer.period_us(),
+                        present_phase_us,
+                    ),
+                });
+            };
+            let stats = latch.present_completed_hidden_frame(completed, hardware, self.display)?;
+            if let Some(scale) = mister_magik_fb::framebuffer::stream::configured_latch_scale(
+                self.stream_motion_active,
+            ) {
+                let frame_view = latch.committed_frame_view(stats.buffer_index);
+                let _ =
+                    mister_magik_fb::framebuffer::stream::publish_latch_snapshot(frame_view, scale);
+            }
+            let presentation =
+                latch_present_result(stats, 0, 0, 0, PresentCopyStats::default(), None, None);
+            return Ok(LauncherPresentCycle {
+                presentation,
+                frame_t3,
+                frame_t4: Instant::now(),
+                cpu_t3,
+                cpu_t4: FrameAnalyticsCpuStamp::capture(self.frame_analytics_mode),
+                pacing_trace: LauncherPacingTrace::from_pace_with_present_phase(
+                    None,
+                    self.frame_start_phase_us,
+                    self.targets.pacer.period_us(),
+                    present_phase_us,
+                ),
+            });
+        }
         let stats = latch.present_cached_full_frame(
             layer_target.cached_frame_view(),
             frame,

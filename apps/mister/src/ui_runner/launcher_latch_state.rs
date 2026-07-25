@@ -232,6 +232,14 @@ impl TwoBufferLatchState {
         bytes
     }
 
+    pub(super) fn writable_slot_index(&self) -> Option<u8> {
+        self.select_writable_slot()
+    }
+
+    pub(super) fn slot_is_writable(&self, slot_index: u8) -> bool {
+        self.slot(slot_index).hardware == LatchSlotHardwareState::Writable
+    }
+
     fn select_writable_slot(&self) -> Option<u8> {
         if self.slot(self.next_slot_index).hardware == LatchSlotHardwareState::Writable {
             return Some(self.next_slot_index);

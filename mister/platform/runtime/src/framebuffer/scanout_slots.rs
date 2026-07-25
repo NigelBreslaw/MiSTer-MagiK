@@ -348,6 +348,10 @@ impl ScanoutSlotsRgb565Framebuffer {
         }
     }
 
+    pub fn pixels_mut(&mut self) -> &mut [Rgb565Pixel] {
+        self.buffer_mut()
+    }
+
     pub fn stride_pixels(&self) -> usize {
         self.stride_pixels
     }

@@ -1699,6 +1699,10 @@ impl ScreensaverControl {
         self.reactivation_suppressed = false;
     }
 
+    fn is_preview(&self) -> bool {
+        self.preview_active
+    }
+
     fn cancel_for_exclusive_view(&mut self, now: Instant) -> bool {
         let was_active = self.active || self.start_when_ready;
         self.restore_full_frame |= self.active;
@@ -1793,6 +1797,10 @@ pub(super) fn run_launcher_loop(
     let mut screensaver = ScreensaverControl::new(Instant::now(), screensaver_start_active);
     let mut screensaver_pipeline: Option<ScreensaverRenderAhead> = None;
     let mut retiring_screensaver_pipelines: Vec<ScreensaverRenderAhead> = Vec::new();
+    let mut screensaver_direct_pipeline: Option<ScreensaverDirectRenderAhead> = None;
+    let mut retiring_direct_pipelines: Vec<ScreensaverDirectRenderAhead> = Vec::new();
+    let mut direct_hidden_exit_pending = false;
+    let mut direct_hidden_grant_outstanding = false;
     let mut screensaver_loader: Option<LauncherScreensaverLoader> = None;
     let mut screensaver_launcher_frame: Option<Vec<Rgb565Pixel>> = None;
     let mut screensaver_frame_visible = false;
@@ -4437,6 +4445,14 @@ pub(super) fn run_launcher_loop(
         let cpu_t1 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let frame_t1 = Instant::now();
         retiring_screensaver_pipelines.retain_mut(|pipeline| !pipeline.poll_stopped());
+        retiring_direct_pipelines.retain_mut(|pipeline| !pipeline.poll_stopped());
+        if direct_hidden_exit_pending && retiring_direct_pipelines.is_empty() {
+            launcher_presenter.invalidate_external_hidden_mode();
+            direct_hidden_exit_pending = false;
+            direct_hidden_grant_outstanding = false;
+            full_frame_present = true;
+            window.request_redraw();
+        }
         if screensaver.take_restore_full_frame() {
             if let Some(mut snapshot) = screensaver_launcher_frame.take() {
                 if !layer_target.swap_cached(&mut snapshot) {
@@ -4451,6 +4467,11 @@ pub(super) fn run_launcher_loop(
                 pipeline.cancel();
                 retiring_screensaver_pipelines.push(pipeline);
             }
+            if let Some(pipeline) = screensaver_direct_pipeline.take() {
+                pipeline.cancel();
+                retiring_direct_pipelines.push(pipeline);
+                direct_hidden_exit_pending = true;
+            }
             screensaver_frame_visible = false;
             screensaver_active_cards = 0;
             screensaver_archive_loading = false;
@@ -4458,7 +4479,10 @@ pub(super) fn run_launcher_loop(
             window.request_redraw();
             full_frame_present = true;
         }
-        if screensaver.active && screensaver_pipeline.is_none() {
+        if screensaver.active
+            && screensaver_pipeline.is_none()
+            && screensaver_direct_pipeline.is_none()
+        {
             if screensaver_loader.is_none() {
                 if let Some(started) = screensaver_show_started {
                     crate::ui_logln!(
@@ -4481,12 +4505,22 @@ pub(super) fn run_launcher_loop(
                         started.elapsed().as_micros()
                     );
                 }
-                screensaver_pipeline = Some(ScreensaverRenderAhead::start(
-                    ready,
-                    ui.render_w(),
-                    ui.render_h(),
-                    pacer.period_us(),
-                ));
+                if launcher_presenter.direct_hidden_slots_available(ui) && !screensaver.is_preview()
+                {
+                    screensaver_direct_pipeline = Some(ScreensaverDirectRenderAhead::start(
+                        ready,
+                        ui.render_w(),
+                        ui.render_h(),
+                        pacer.period_us(),
+                    ));
+                } else {
+                    screensaver_pipeline = Some(ScreensaverRenderAhead::start(
+                        ready,
+                        ui.render_w(),
+                        ui.render_h(),
+                        pacer.period_us(),
+                    ));
+                }
                 screensaver_render_sequence = 0;
                 screensaver_starvation_count = 0;
                 screensaver_superseded_frames = 0;
@@ -4497,11 +4531,19 @@ pub(super) fn run_launcher_loop(
         if let Some(pipeline) = screensaver_pipeline.as_ref() {
             pipeline.update_period_us(pacer.period_us());
         }
+        if let Some(pipeline) = screensaver_direct_pipeline.as_ref() {
+            pipeline.update_period_us(pacer.period_us());
+        }
         if !screensaver.active {
             screensaver_loader = None;
             if let Some(pipeline) = screensaver_pipeline.take() {
                 pipeline.cancel();
                 retiring_screensaver_pipelines.push(pipeline);
+            }
+            if let Some(pipeline) = screensaver_direct_pipeline.take() {
+                pipeline.cancel();
+                retiring_direct_pipelines.push(pipeline);
+                direct_hidden_exit_pending = true;
             }
             screensaver_launcher_frame = None;
             screensaver_frame_visible = false;
@@ -4513,7 +4555,81 @@ pub(super) fn run_launcher_loop(
         let mut screensaver_frame_trace = ScreensaverFrameTrace::default();
         let mut accepted_screensaver_frame = false;
         let mut screensaver_buffer_to_recycle_after_present = None;
-        if screensaver.active {
+        let mut completed_hidden_frame_for_present = None;
+        if screensaver.active && screensaver_direct_pipeline.is_some() {
+            let grant_result =
+                launcher_presenter.try_issue_hidden_slot_render_grant(f, display_session);
+            match grant_result {
+                Ok(Some(grant)) => {
+                    if !screensaver_direct_pipeline
+                        .as_ref()
+                        .is_some_and(|pipeline| pipeline.submit_grant(grant))
+                    {
+                        crate::ui_errln!("screensaver: direct hidden grant channel disconnected");
+                    } else {
+                        direct_hidden_grant_outstanding = true;
+                    }
+                }
+                Ok(None) => {}
+                Err(failure) => {
+                    launcher_presenter.fail_latch_completion(failure);
+                    screensaver.fail_current_activation(Instant::now());
+                    if let Some(pipeline) = screensaver_direct_pipeline.take() {
+                        pipeline.cancel();
+                        retiring_direct_pipelines.push(pipeline);
+                        direct_hidden_exit_pending = true;
+                    }
+                    screensaver_frame_visible = false;
+                }
+            }
+            let deadline = if direct_hidden_grant_outstanding {
+                frame_t0 + Duration::from_micros(pacer.period_us().saturating_sub(750).max(1))
+            } else {
+                Instant::now()
+            };
+            let direct_poll = screensaver_direct_pipeline
+                .as_ref()
+                .map(|pipeline| pipeline.try_next_until(deadline))
+                .unwrap_or(DirectRenderAheadPoll::Empty);
+            match direct_poll {
+                DirectRenderAheadPoll::Frame(frame) => {
+                    direct_hidden_grant_outstanding = false;
+                    completed_hidden_frame_for_present = Some(frame.completed);
+                    screensaver_frame_trace = frame.trace;
+                    screensaver_render_sequence = frame.sequence;
+                    screensaver_superseded_frames = frame.superseded_frames;
+                    screensaver_frame_trace.render_ahead_sequence = frame.sequence;
+                    screensaver_frame_trace.render_ahead_queue_depth = 0;
+                    screensaver_frame_trace.render_ahead_frame_age_us = frame
+                        .completed_at
+                        .elapsed()
+                        .as_micros()
+                        .try_into()
+                        .unwrap_or(u64::MAX);
+                    screensaver_frame_trace.render_ahead_render_wall_us = frame.render_wall_us;
+                    screensaver_frame_trace.render_ahead_render_cpu_us = frame.render_cpu_us;
+                    screensaver_active_cards = frame.active_cards;
+                    screensaver_archive_loading = frame.archive_loading;
+                    screensaver_has_rendered_card = frame.has_rendered_card;
+                    screensaver_frame_visible = true;
+                    accepted_screensaver_frame = true;
+                }
+                DirectRenderAheadPoll::Empty => {}
+                DirectRenderAheadPoll::Disconnected => {
+                    crate::ui_errln!(
+                        "screensaver: direct hidden pipeline disconnected; restoring launcher"
+                    );
+                    screensaver.fail_current_activation(Instant::now());
+                    if let Some(pipeline) = screensaver_direct_pipeline.take() {
+                        pipeline.cancel();
+                        retiring_direct_pipelines.push(pipeline);
+                        direct_hidden_exit_pending = true;
+                    }
+                    screensaver_frame_visible = false;
+                    window.request_redraw();
+                }
+            }
+        } else if screensaver.active {
             let render_ahead_poll = screensaver_pipeline
                 .as_ref()
                 .map(ScreensaverRenderAhead::try_next)
@@ -4600,8 +4716,9 @@ pub(super) fn run_launcher_loop(
         screensaver_frame_trace.render_ahead_starvation_count = screensaver_starvation_count;
         screensaver_frame_trace.render_ahead_superseded_frames = screensaver_superseded_frames;
         screensaver_frame_trace.render_ahead_reused_frames = screensaver_reused_frames;
-        screensaver_frame_trace.render_ahead_cancelled =
-            screensaver_pipeline.is_none() && !retiring_screensaver_pipelines.is_empty();
+        screensaver_frame_trace.render_ahead_cancelled = (screensaver_pipeline.is_none()
+            && !retiring_screensaver_pipelines.is_empty())
+            || (screensaver_direct_pipeline.is_none() && !retiring_direct_pipelines.is_empty());
         let this_rect = if screensaver.active && screensaver_frame_visible {
             if accepted_screensaver_frame && screensaver_fade_alpha.is_some_and(|alpha| alpha < 255)
             {
@@ -4792,6 +4909,8 @@ pub(super) fn run_launcher_loop(
         );
         let startup_can_present = lifecycle.startup_can_present_frame();
         let stream_motion_active = stream_motion_before_render || preview_transition_trace.active;
+        let direct_hidden_present_mode =
+            screensaver_direct_pipeline.is_some() || direct_hidden_exit_pending;
         let present_cycle = launcher_presenter.present(
             LauncherPresentFrame {
                 plan: frame_plan,
@@ -4801,6 +4920,8 @@ pub(super) fn run_launcher_loop(
                 pre_render_pace,
                 frame_analytics_mode,
                 stream_motion_active,
+                direct_hidden_mode: direct_hidden_present_mode,
+                completed_hidden_frame: completed_hidden_frame_for_present,
             },
             LauncherPresentTargets {
                 layer_target: &layer_target,
@@ -4820,9 +4941,27 @@ pub(super) fn run_launcher_loop(
             cpu_t4,
             pacing_trace,
         } = present_cycle;
+        if direct_hidden_present_mode
+            && presentation.main_present_backend != LauncherPresentBackend::FpgaVblankLatchHidden
+        {
+            screensaver.fail_current_activation(Instant::now());
+            if let Some(pipeline) = screensaver_direct_pipeline.take() {
+                pipeline.cancel();
+                retiring_direct_pipelines.push(pipeline);
+                direct_hidden_exit_pending = true;
+            }
+            screensaver_frame_visible = false;
+            window.request_redraw();
+        }
         if screensaver.active
             && screensaver_frame_visible
             && let Some(pipeline) = screensaver_pipeline.as_ref()
+        {
+            pipeline.note_presented_period();
+        }
+        if screensaver.active
+            && screensaver_frame_visible
+            && let Some(pipeline) = screensaver_direct_pipeline.as_ref()
         {
             pipeline.note_presented_period();
         }

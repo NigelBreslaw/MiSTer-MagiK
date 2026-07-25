@@ -3917,6 +3917,10 @@ fn summarize_screensaver_telemetry(
         .iter()
         .filter_map(|frame| frame.get("main_present_copy_path").and_then(Value::as_str))
         .collect::<std::collections::BTreeSet<_>>();
+    let steady_present_bytes = steady
+        .iter()
+        .map(|frame| frame_u64(frame, "present_bytes"))
+        .collect::<Vec<_>>();
     let phase_bank_bytes = steady
         .iter()
         .filter_map(|frame| {
@@ -4010,6 +4014,10 @@ fn summarize_screensaver_telemetry(
         "render_ahead": render_ahead,
         "status_publishing": status_publishing,
         "main_present_copy_paths": presentation_paths,
+        "steady_state_present_bytes": {
+            "total": steady_present_bytes.iter().sum::<u64>(),
+            "max": steady_present_bytes.iter().copied().max().unwrap_or(0),
+        },
         "phase_bank_resident_bytes": phase_bank_bytes,
         "launcher_rss": {
             "mean_kb": mean_u64(&launcher_rss_kb),
@@ -4727,6 +4735,32 @@ fn screensaver_qualification_failures(run: &Value) -> Vec<Value> {
             "worker_p99_us": worker_p99_us,
             "refresh_period_us": refresh_period_us,
         }));
+    }
+    let copy_paths = run
+        .get("main_present_copy_paths")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if copy_paths
+        .iter()
+        .any(|path| path.as_str() == Some("external-direct"))
+    {
+        if copy_paths.len() != 1 {
+            failures.push(json!({
+                "kind": "direct-copy-path-mixed",
+                "paths": copy_paths,
+            }));
+        }
+        let max_present_bytes = run
+            .pointer("/steady_state_present_bytes/max")
+            .and_then(Value::as_u64)
+            .unwrap_or(u64::MAX);
+        if max_present_bytes != 0 {
+            failures.push(json!({
+                "kind": "direct-hidden-copy-bytes",
+                "max": max_present_bytes,
+            }));
+        }
     }
     failures
 }

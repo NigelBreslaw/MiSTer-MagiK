@@ -34,6 +34,25 @@ pub(crate) enum RenderAheadPoll {
     Disconnected,
 }
 
+pub(crate) struct RenderedDirectScreensaverFrame {
+    pub(crate) completed: CompletedHiddenFrame,
+    pub(crate) sequence: u64,
+    pub(crate) completed_at: Instant,
+    pub(crate) render_wall_us: u64,
+    pub(crate) render_cpu_us: u64,
+    pub(crate) active_cards: usize,
+    pub(crate) archive_loading: bool,
+    pub(crate) has_rendered_card: bool,
+    pub(crate) superseded_frames: u64,
+    pub(crate) trace: ScreensaverFrameTrace,
+}
+
+pub(crate) enum DirectRenderAheadPoll {
+    Frame(RenderedDirectScreensaverFrame),
+    Empty,
+    Disconnected,
+}
+
 pub(crate) struct ScreensaverRenderAhead {
     ready_rx: Receiver<RenderedScreensaverFrame>,
     free_tx: SyncSender<Vec<Rgb565Pixel>>,
@@ -165,6 +184,238 @@ impl Drop for ScreensaverRenderAhead {
             if let Some(join) = self.join.take() {
                 let _ = join.join();
             }
+        }
+    }
+}
+
+pub(crate) struct ScreensaverDirectRenderAhead {
+    grant_tx: SyncSender<HiddenSlotRenderGrant>,
+    ready_rx: Receiver<RenderedDirectScreensaverFrame>,
+    period_us: Arc<AtomicU64>,
+    presentation_tick: Arc<AtomicU64>,
+    cancelled: Arc<AtomicBool>,
+    stopped: Arc<AtomicBool>,
+    join: Option<JoinHandle<()>>,
+}
+
+impl ScreensaverDirectRenderAhead {
+    pub(crate) fn start(
+        renderer: LauncherScreensaver,
+        width: usize,
+        height: usize,
+        period_us: u64,
+    ) -> Self {
+        let (grant_tx, grant_rx) = sync_channel(1);
+        let (ready_tx, ready_rx) = sync_channel(1);
+        let period_us = Arc::new(AtomicU64::new(period_us.max(1)));
+        let presentation_tick = Arc::new(AtomicU64::new(0));
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let stopped = Arc::new(AtomicBool::new(false));
+        let worker_period_us = Arc::clone(&period_us);
+        let worker_presentation_tick = Arc::clone(&presentation_tick);
+        let worker_cancelled = Arc::clone(&cancelled);
+        let worker_stopped = Arc::clone(&stopped);
+        let join = std::thread::Builder::new()
+            .name("screensaver-render".into())
+            .spawn(move || {
+                let _completion = RenderAheadCompletionGuard(worker_stopped);
+                mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
+                    mister_magik_catalog::runtime_thread::RuntimeThreadRole::ScreensaverRenderer,
+                );
+                if let Err(error) = run_direct_render_ahead_worker(
+                    renderer,
+                    width,
+                    height,
+                    grant_rx,
+                    ready_tx,
+                    &worker_period_us,
+                    &worker_presentation_tick,
+                    &worker_cancelled,
+                ) {
+                    crate::ui_errln!("screensaver: direct hidden worker failed: {error}");
+                }
+            })
+            .expect("spawn direct hidden screensaver worker");
+        Self {
+            grant_tx,
+            ready_rx,
+            period_us,
+            presentation_tick,
+            cancelled,
+            stopped,
+            join: Some(join),
+        }
+    }
+
+    pub(crate) fn update_period_us(&self, period_us: u64) {
+        self.period_us.store(period_us.max(1), Ordering::Relaxed);
+    }
+
+    pub(crate) fn submit_grant(&self, grant: HiddenSlotRenderGrant) -> bool {
+        self.grant_tx.try_send(grant).is_ok()
+    }
+
+    pub(crate) fn try_next_until(&self, deadline: Instant) -> DirectRenderAheadPoll {
+        match self.ready_rx.try_recv() {
+            Ok(frame) => return DirectRenderAheadPoll::Frame(frame),
+            Err(TryRecvError::Disconnected) => return DirectRenderAheadPoll::Disconnected,
+            Err(TryRecvError::Empty) => {}
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return DirectRenderAheadPoll::Empty;
+        }
+        match self.ready_rx.recv_timeout(remaining) {
+            Ok(frame) => DirectRenderAheadPoll::Frame(frame),
+            Err(RecvTimeoutError::Timeout) => DirectRenderAheadPoll::Empty,
+            Err(RecvTimeoutError::Disconnected) => DirectRenderAheadPoll::Disconnected,
+        }
+    }
+
+    pub(crate) fn note_presented_period(&self) {
+        self.presentation_tick.fetch_add(1, Ordering::AcqRel);
+    }
+
+    pub(crate) fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn poll_stopped(&mut self) -> bool {
+        if !self.stopped.load(Ordering::Acquire)
+            && !self.join.as_ref().is_some_and(JoinHandle::is_finished)
+        {
+            return false;
+        }
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+        true
+    }
+}
+
+impl Drop for ScreensaverDirectRenderAhead {
+    fn drop(&mut self) {
+        self.cancel();
+        if self.stopped.load(Ordering::Acquire) {
+            if let Some(join) = self.join.take() {
+                let _ = join.join();
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_direct_render_ahead_worker(
+    mut renderer: LauncherScreensaver,
+    width: usize,
+    height: usize,
+    grant_rx: Receiver<HiddenSlotRenderGrant>,
+    ready_tx: SyncSender<RenderedDirectScreensaverFrame>,
+    period_us: &AtomicU64,
+    presentation_tick: &AtomicU64,
+    cancelled: &AtomicBool,
+) -> Result<(), String> {
+    let stride_bytes = rgb565_stride_bytes(width);
+    let mut slot1 = ScanoutSlotsRgb565Framebuffer::open(
+        HiddenRgb565BufferIndex::new(1).map_err(|error| error.to_string())?,
+        width,
+        height,
+        stride_bytes,
+    )
+    .map_err(|error| error.to_string())?;
+    let mut slot2 = ScanoutSlotsRgb565Framebuffer::open(
+        HiddenRgb565BufferIndex::new(2).map_err(|error| error.to_string())?,
+        width,
+        height,
+        stride_bytes,
+    )
+    .map_err(|error| error.to_string())?;
+    let mut sequence = 0u64;
+    let mut elapsed_us = 0u64;
+    let mut motion_tick = 0u64;
+    let mut superseded_frames = 0u64;
+    while !cancelled.load(Ordering::Acquire) {
+        let grant = match grant_rx.recv_timeout(RENDER_AHEAD_IDLE_WAIT) {
+            Ok(grant) => grant,
+            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Disconnected) => break,
+        };
+        if cancelled.load(Ordering::Acquire) {
+            break;
+        }
+        if grant.width != width
+            || grant.height != height
+            || grant.stride_pixels != width
+            || !matches!(grant.slot_index, 1 | 2)
+        {
+            return Err(format!("invalid direct render grant: {grant:?}"));
+        }
+        let next_motion_tick =
+            next_render_motion_tick(motion_tick, presentation_tick.load(Ordering::Acquire));
+        superseded_frames = superseded_frames
+            .saturating_add(next_motion_tick.saturating_sub(motion_tick.saturating_add(1)));
+        let advanced_ticks = next_motion_tick.saturating_sub(motion_tick);
+        motion_tick = next_motion_tick;
+        elapsed_us = elapsed_us.saturating_add(
+            period_us
+                .load(Ordering::Relaxed)
+                .max(1)
+                .saturating_mul(advanced_ticks),
+        );
+        sequence = sequence.wrapping_add(1);
+        let target = if grant.slot_index == 1 {
+            &mut slot1
+        } else {
+            &mut slot2
+        };
+        let wall_started = Instant::now();
+        let cpu_started = thread_cpu_us();
+        let trace = renderer.render_at(
+            target.pixels_mut(),
+            width,
+            height,
+            Duration::from_micros(elapsed_us),
+        );
+        target.publish_writes();
+        let frame = RenderedDirectScreensaverFrame {
+            completed: CompletedHiddenFrame { grant },
+            sequence,
+            completed_at: Instant::now(),
+            render_wall_us: wall_started
+                .elapsed()
+                .as_micros()
+                .try_into()
+                .unwrap_or(u64::MAX),
+            render_cpu_us: elapsed_thread_cpu_us(cpu_started),
+            active_cards: renderer.active_card_count(),
+            archive_loading: renderer.is_loading_archive(),
+            has_rendered_card: renderer.has_rendered_card(),
+            superseded_frames,
+            trace,
+        };
+        if !send_direct_ready_frame(frame, &ready_tx, cancelled) {
+            break;
+        }
+    }
+    Ok(())
+}
+
+fn send_direct_ready_frame(
+    mut frame: RenderedDirectScreensaverFrame,
+    ready_tx: &SyncSender<RenderedDirectScreensaverFrame>,
+    cancelled: &AtomicBool,
+) -> bool {
+    loop {
+        if cancelled.load(Ordering::Acquire) {
+            return false;
+        }
+        match ready_tx.try_send(frame) {
+            Ok(()) => return true,
+            Err(TrySendError::Full(returned)) => {
+                frame = returned;
+                std::thread::park_timeout(RENDER_AHEAD_FULL_WAIT);
+            }
+            Err(TrySendError::Disconnected(_)) => return false,
         }
     }
 }

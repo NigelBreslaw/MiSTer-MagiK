@@ -77,6 +77,7 @@ pub(in crate::ui_runner) enum LatchCopyPath {
     IdentityFull,
     VerticalFull,
     VerticalPartial,
+    ExternalDirect,
 }
 
 impl LatchCopyPath {
@@ -85,8 +86,23 @@ impl LatchCopyPath {
             Self::IdentityFull => "identity-full",
             Self::VerticalFull => "vertical-full",
             Self::VerticalPartial => "vertical-partial",
+            Self::ExternalDirect => "external-direct",
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct HiddenSlotRenderGrant {
+    pub(crate) slot_index: u8,
+    pub(crate) generation: u64,
+    pub(crate) width: usize,
+    pub(crate) height: usize,
+    pub(crate) stride_pixels: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CompletedHiddenFrame {
+    pub(crate) grant: HiddenSlotRenderGrant,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -268,6 +284,8 @@ pub(in crate::ui_runner) struct FpgaVblankLatchHiddenPresenter<B = PluginLatchFr
     capabilities_verified: bool,
     last_committed_buffer: Option<u8>,
     latch_state: TwoBufferLatchState,
+    direct_generation: u64,
+    outstanding_direct_grant: Option<HiddenSlotRenderGrant>,
 }
 
 #[derive(Debug)]
@@ -337,7 +355,217 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             capabilities_verified: false,
             last_committed_buffer: None,
             latch_state: TwoBufferLatchState::new(render_width, render_height),
+            direct_generation: 0,
+            outstanding_direct_grant: None,
         }
+    }
+
+    pub(in crate::ui_runner) fn exact_identity_geometry(&self) -> bool {
+        self.width == self.render_width && self.height == self.render_height
+    }
+
+    pub(in crate::ui_runner) fn try_issue_hidden_slot_render_grant<H: LatchHardware>(
+        &mut self,
+        hardware: &mut H,
+        display_session: &mut LauncherDisplaySession,
+    ) -> Result<Option<HiddenSlotRenderGrant>, LatchFailure> {
+        if self.disabled
+            || !self.exact_identity_geometry()
+            || self.outstanding_direct_grant.is_some()
+        {
+            return Ok(None);
+        }
+        self.verify_capabilities(hardware)?;
+        let status = hardware.read_latched_status().map_err(|error| {
+            LatchFailure::runtime(
+                LatchFailureStage::FpgaStatus,
+                LatchFailureReason::FpgaTransportFailed,
+                error.to_string(),
+            )
+        })?;
+        self.sync_latch_state_from_status(status, display_session)?;
+        if status.pending() {
+            return Ok(None);
+        }
+        let Some(slot_index) = self.latch_state.writable_slot_index() else {
+            return Ok(None);
+        };
+        self.direct_generation = self.direct_generation.wrapping_add(1).max(1);
+        let grant = HiddenSlotRenderGrant {
+            slot_index,
+            generation: self.direct_generation,
+            width: self.width,
+            height: self.height,
+            stride_pixels: self.width,
+        };
+        self.outstanding_direct_grant = Some(grant);
+        Ok(Some(grant))
+    }
+
+    pub(in crate::ui_runner) fn present_completed_hidden_frame<H: LatchHardware>(
+        &mut self,
+        completed: CompletedHiddenFrame,
+        hardware: &mut H,
+        display_session: &mut LauncherDisplaySession,
+    ) -> Result<FpgaVblankLatchHiddenPresentStats, LatchFailure> {
+        let grant = completed.grant;
+        if self.outstanding_direct_grant != Some(grant) {
+            return Err(LatchFailure::runtime(
+                LatchFailureStage::PostVerification,
+                LatchFailureReason::PostedSequenceUnverified,
+                format!(
+                    "stale external hidden frame slot={} generation={} expected={:?}",
+                    grant.slot_index, grant.generation, self.outstanding_direct_grant
+                ),
+            ));
+        }
+        let status_started = Instant::now();
+        let before_status = hardware.read_latched_status().map_err(|error| {
+            LatchFailure::runtime(
+                LatchFailureStage::FpgaStatus,
+                LatchFailureReason::FpgaTransportFailed,
+                error.to_string(),
+            )
+        })?;
+        self.sync_latch_state_from_status(before_status, display_session)?;
+        if before_status.pending() || !self.latch_state.slot_is_writable(grant.slot_index) {
+            return Err(LatchFailure::runtime(
+                LatchFailureStage::PostVerification,
+                LatchFailureReason::NoWritableHiddenBuffer,
+                format!(
+                    "external slot {} became active or pending before post",
+                    grant.slot_index
+                ),
+            ));
+        }
+        let mut status_us = status_started.elapsed().as_micros() as u64;
+        let sequence = self.sequence;
+        self.sequence = self.sequence.wrapping_add(1).max(1);
+        let post_start = Instant::now();
+        let ack = hardware
+            .post_latched_rgb565(
+                sequence,
+                self.buffers.base_addr(grant.slot_index),
+                self.width as u16,
+                self.height as u16,
+                self.latch_geometry,
+            )
+            .map_err(|error| {
+                LatchFailure::runtime(
+                    LatchFailureStage::LatchPost,
+                    LatchFailureReason::LatchPostFailed,
+                    error.to_string(),
+                )
+            })?;
+        let post_us = post_start.elapsed().as_micros();
+        let set_vga_fb_us = display_session
+            .arm_latch_route_with_hardware(hardware)
+            .map_err(|error| {
+                LatchFailure::runtime(
+                    LatchFailureStage::RouteArm,
+                    LatchFailureReason::RouteArmFailed,
+                    error.to_string(),
+                )
+            })?;
+        let (after_status, post_status_us, post_status_reads) =
+            read_post_status(hardware, sequence).map_err(|error| {
+                LatchFailure::runtime(
+                    LatchFailureStage::FpgaStatus,
+                    LatchFailureReason::FpgaTransportFailed,
+                    error.to_string(),
+                )
+            })?;
+        status_us = status_us.saturating_add(post_status_us);
+        let set_supported = ack.0 == crate::fpga::MAGIK_FBUF_LATCH_MAGIC
+            || ack.1 == crate::fpga::MAGIK_FBUF_LATCH_MAGIC;
+        if !set_supported
+            || !after_status.supported()
+            || !posted_sequence_observed(after_status, sequence)
+        {
+            return Err(LatchFailure::runtime(
+                LatchFailureStage::PostVerification,
+                LatchFailureReason::PostedSequenceUnverified,
+                format!(
+                    "external posted={} active={} pending={} pending_sequence={}",
+                    sequence,
+                    after_status.active_sequence,
+                    u8::from(after_status.pending()),
+                    after_status.pending_sequence
+                ),
+            ));
+        }
+        self.outstanding_direct_grant = None;
+        self.last_committed_buffer = Some(grant.slot_index);
+        self.latch_state.invalidate_all();
+        self.hidden_active_verified = true;
+        Ok(FpgaVblankLatchHiddenPresentStats {
+            copied_bytes: 0,
+            invalid_bytes: 0,
+            rect_count: 0,
+            catchup_bytes: 0,
+            full_copy: false,
+            copy_path: LatchCopyPath::ExternalDirect,
+            buffer_index: grant.slot_index,
+            copied_rows: 0,
+            copy_us: 0,
+            publish_us: 0,
+            post_us,
+            set_vga_fb_us,
+            status_us,
+            set_supported,
+            status_supported: after_status.supported(),
+            posted_sequence: sequence,
+            post_status_reads,
+            flip_count: after_status.flip_count,
+            drop_count: after_status.drop_count,
+        })
+    }
+
+    pub(in crate::ui_runner) fn invalidate_external_mode(&mut self) {
+        self.direct_generation = self.direct_generation.wrapping_add(1).max(1);
+        self.outstanding_direct_grant = None;
+        self.last_committed_buffer = None;
+        self.latch_state.invalidate_all();
+    }
+
+    fn verify_capabilities<H: LatchHardware>(
+        &mut self,
+        hardware: &mut H,
+    ) -> Result<(), LatchFailure> {
+        if self.capabilities_verified {
+            return Ok(());
+        }
+        let (magic_hi, magic_lo, capabilities) =
+            hardware.read_latch_capabilities().map_err(|error| {
+                LatchFailure::runtime(
+                    LatchFailureStage::FpgaCapabilities,
+                    LatchFailureReason::FpgaTransportFailed,
+                    error.to_string(),
+                )
+            })?;
+        let supported = magic_hi == crate::fpga::MAGIK_FBUF_CAPS_MAGIC
+            || magic_lo == crate::fpga::MAGIK_FBUF_CAPS_MAGIC;
+        if !supported || !capabilities.production_ready() {
+            self.disabled = true;
+            return Err(LatchFailure::incompatible(
+                LatchFailureStage::FpgaCapabilities,
+                if supported {
+                    LatchFailureReason::FpgaCapabilitiesInsufficient
+                } else {
+                    LatchFailureReason::FpgaProtocolUnsupported
+                },
+                format!(
+                    "magic=0x{magic_hi:04x}/0x{magic_lo:04x} protocol={} flags=0x{:04x} max={}x{} stride={}",
+                    capabilities.protocol_version,
+                    capabilities.flags,
+                    capabilities.max_width,
+                    capabilities.max_height,
+                    capabilities.max_stride_bytes
+                ),
+            ));
+        }
+        self.capabilities_verified = true;
+        Ok(())
     }
 
     pub(in crate::ui_runner) fn present_cached_full_frame<H, F>(
@@ -360,38 +588,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             ));
         }
 
-        if !self.capabilities_verified {
-            let (magic_hi, magic_lo, capabilities) =
-                hardware.read_latch_capabilities().map_err(|error| {
-                    LatchFailure::runtime(
-                        LatchFailureStage::FpgaCapabilities,
-                        LatchFailureReason::FpgaTransportFailed,
-                        error.to_string(),
-                    )
-                })?;
-            let supported = magic_hi == crate::fpga::MAGIK_FBUF_CAPS_MAGIC
-                || magic_lo == crate::fpga::MAGIK_FBUF_CAPS_MAGIC;
-            if !supported || !capabilities.production_ready() {
-                self.disabled = true;
-                return Err(LatchFailure::incompatible(
-                    LatchFailureStage::FpgaCapabilities,
-                    if supported {
-                        LatchFailureReason::FpgaCapabilitiesInsufficient
-                    } else {
-                        LatchFailureReason::FpgaProtocolUnsupported
-                    },
-                    format!(
-                        "magic=0x{magic_hi:04x}/0x{magic_lo:04x} protocol={} flags=0x{:04x} max={}x{} stride={}",
-                        capabilities.protocol_version,
-                        capabilities.flags,
-                        capabilities.max_width,
-                        capabilities.max_height,
-                        capabilities.max_stride_bytes
-                    ),
-                ));
-            }
-            self.capabilities_verified = true;
-        }
+        self.verify_capabilities(hardware)?;
 
         let status_start = Instant::now();
         let mut before_status = hardware.read_latched_status().map_err(|e| {
@@ -1229,6 +1426,68 @@ mod tests {
                 TestEvent::ArmRoute,
                 TestEvent::ReadStatus,
             ]
+        );
+    }
+
+    #[test]
+    fn external_hidden_grant_is_exclusive_and_posts_without_copying() {
+        let mut presenter = presenter();
+        let mut hardware = FakeHardware {
+            statuses: vec![
+                Ok(status(BASE1, 0x0001)),
+                Ok(status(BASE1, 0x0001)),
+                Ok(status(BASE2, 0x0001)),
+            ],
+            ..FakeHardware::default()
+        };
+        let mut display = display_session();
+
+        let grant = presenter
+            .try_issue_hidden_slot_render_grant(&mut hardware, &mut display)
+            .unwrap()
+            .expect("inactive slot grant");
+        assert_eq!(grant.slot_index, 2);
+        assert!(
+            presenter
+                .try_issue_hidden_slot_render_grant(&mut hardware, &mut display)
+                .unwrap()
+                .is_none()
+        );
+
+        let stats = presenter
+            .present_completed_hidden_frame(
+                CompletedHiddenFrame { grant },
+                &mut hardware,
+                &mut display,
+            )
+            .unwrap();
+        assert_eq!(stats.copy_path, LatchCopyPath::ExternalDirect);
+        assert_eq!(stats.copied_bytes, 0);
+        assert_eq!(hardware.post_bases, vec![BASE2]);
+        assert!(
+            presenter
+                .present_completed_hidden_frame(
+                    CompletedHiddenFrame { grant },
+                    &mut hardware,
+                    &mut display,
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn external_hidden_grant_rejects_pending_hardware() {
+        let mut presenter = presenter();
+        let mut hardware = FakeHardware {
+            statuses: vec![Ok(status(BASE1, 0x0001 | 0x0004))],
+            ..FakeHardware::default()
+        };
+        let mut display = display_session();
+        assert!(
+            presenter
+                .try_issue_hidden_slot_render_grant(&mut hardware, &mut display)
+                .unwrap()
+                .is_none()
         );
     }
 
