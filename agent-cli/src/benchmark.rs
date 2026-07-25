@@ -110,6 +110,17 @@ fn evaluate_run(run: &Value) -> AgentResult<()> {
     let drops = u64_field(run, "latch_drop_delta", u64::MAX);
     let misses = u64_field(steady, "vsync_misses", u64::MAX);
     let errors = u64_field(run, "present_errors", u64::MAX);
+    let status = run
+        .get("status_publishing")
+        .ok_or_else(|| format!("screensaver profile run {id} has no status publishing evidence"))?;
+    let status_mode = status
+        .get("mode")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let status_enqueue_p99 = u64_field(status, "enqueue_p99_us", u64::MAX);
+    let status_worker_errors = u64_field(status, "worker_errors", u64::MAX);
+    let status_submitted = u64_field(status, "final_submitted_sequence", 0);
+    let status_written = u64_field(status, "final_written_sequence", 0);
     if unique_fps < refresh_hz - 0.1
         || repeats != 0
         || long_gaps != 0
@@ -118,9 +129,14 @@ fn evaluate_run(run: &Value) -> AgentResult<()> {
         || drops != 0
         || misses != 0
         || errors != 0
+        || status_mode != "async"
+        || status_enqueue_p99 >= 250
+        || status_worker_errors != 0
+        || status_submitted == 0
+        || status_written != status_submitted
     {
         return Err(format!(
-            "screensaver profile run {id} failed after warm-up: frames={frames} unique_fps={unique_fps:.2}/{refresh_hz:.2} repeated_refreshes={repeats} long_completion_gaps={long_gaps} presentation_failures={presentation_failures} timing_overruns={over_budget} p99_work_us={p99_work} p99_wall_us={p99_wall} max_wall_us={max_wall} refresh_period_us={refresh} latch_drops={drops} vsync_misses={misses} present_errors={errors}"
+            "screensaver profile run {id} failed after warm-up: frames={frames} unique_fps={unique_fps:.2}/{refresh_hz:.2} repeated_refreshes={repeats} long_completion_gaps={long_gaps} presentation_failures={presentation_failures} timing_overruns={over_budget} p99_work_us={p99_work} p99_wall_us={p99_wall} max_wall_us={max_wall} refresh_period_us={refresh} latch_drops={drops} vsync_misses={misses} present_errors={errors} status_mode={status_mode} status_enqueue_p99_us={status_enqueue_p99} status_worker_errors={status_worker_errors} status_sequences={status_submitted}/{status_written}"
         )
         .into());
     }
@@ -161,6 +177,13 @@ mod tests {
             },
             "latch_drop_delta": 0,
             "present_errors": 0,
+            "status_publishing": {
+                "mode": "async",
+                "enqueue_p99_us": 100,
+                "worker_errors": 0,
+                "final_submitted_sequence": 31,
+                "final_written_sequence": 31
+            },
         })
     }
 
@@ -195,5 +218,8 @@ mod tests {
         long_gap["steady_state"]["physical_refresh"]["long_completion_intervals"] =
             json!([{"frame": 42, "interval_us": 33_334}]);
         assert!(evaluate_run(&long_gap).is_err());
+        let mut blocking_status = passing_run(1);
+        blocking_status["status_publishing"]["enqueue_p99_us"] = json!(250);
+        assert!(evaluate_run(&blocking_status).is_err());
     }
 }

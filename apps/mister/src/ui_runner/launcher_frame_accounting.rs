@@ -50,8 +50,10 @@ pub(super) struct LauncherFrameAccounting {
     last_preview_trace_finish_done: Option<Instant>,
     #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
     boot_frame_profile: Option<boot_analytics::LauncherFrameWriter>,
+    runtime_status_publisher: runtime_status::RuntimeStatusPublisher,
     last_status_write: Instant,
     status_sequence: u64,
+    profile_completion_submitted: bool,
     first_copy_logged: bool,
     first_frame_logged: bool,
     first_visible_copy_done: bool,
@@ -1022,8 +1024,10 @@ impl LauncherFrameAccounting {
             last_preview_trace_finish_done: None,
             #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
             boot_frame_profile: boot_analytics::LauncherFrameWriter::from_env(),
+            runtime_status_publisher: runtime_status::RuntimeStatusPublisher::new(),
             last_status_write: Instant::now() - Duration::from_secs(2),
             status_sequence: 0,
+            profile_completion_submitted: false,
             first_copy_logged: false,
             first_frame_logged: false,
             first_visible_copy_done: false,
@@ -1075,6 +1079,8 @@ impl LauncherFrameAccounting {
 
     pub(super) fn status_write_due(&self) -> bool {
         self.last_status_write.elapsed() >= Duration::from_secs(1)
+            || (!self.profile_completion_submitted
+                && cpu_profile::screensaver_profile_state() == "complete")
     }
 
     pub(super) fn frame_analytics_mode(&self) -> FrameAnalyticsMode {
@@ -1628,6 +1634,7 @@ impl LauncherFrameAccounting {
         present_us: u64,
         runtime_status_write_us: u128,
     ) {
+        let publisher = self.runtime_status_publisher.metrics();
         if self.frame_analytics_samples.len() == FRAME_ANALYTICS_SAMPLE_CAP {
             self.frame_analytics_samples.pop_front();
         }
@@ -1675,6 +1682,13 @@ impl LauncherFrameAccounting {
                 main_present_drop_count: frame.main_present_drop_count,
                 status_write_due: frame.status_write_due,
                 runtime_status_write_us: u128_to_u64_saturating(runtime_status_write_us),
+                status_publish_mode: "async",
+                status_enqueue_us: u128_to_u64_saturating(runtime_status_write_us),
+                status_worker_write_us: publisher.last_worker_duration_us,
+                status_replaced_count: publisher.replaced_count,
+                status_submitted_sequence: publisher.submitted_sequence,
+                status_written_sequence: publisher.written_sequence,
+                status_worker_errors: publisher.worker_errors,
                 clock_update_due: frame.clock_update_due,
                 clock_update_us: u128_to_u64_saturating(frame.clock_update_us),
                 screensaver_sampling_profile: frame.screensaver_frame_trace.sampling_profile,
@@ -1986,7 +2000,8 @@ impl LauncherFrameAccounting {
             self.current_frame_budget_status()
         };
         self.status_sequence = self.status_sequence.saturating_add(1);
-        runtime_status::write_launcher_status(LauncherStatus {
+        let screensaver_profile_state = cpu_profile::screensaver_profile_state();
+        let status_submitted = self.runtime_status_publisher.submit(LauncherStatus {
             scene: "launcher",
             screen: screen_label(nav.screen),
             output_route: self.output_route,
@@ -2018,7 +2033,7 @@ impl LauncherFrameAccounting {
             catalog_refresh_done,
             catalog_refresh_policy: catalog_refresh_policy().label(),
             catalog_worker_enabled: catalog_refresh_policy().worker_enabled(),
-            screensaver_profile_state: cpu_profile::screensaver_profile_state(),
+            screensaver_profile_state,
             catalog_scan_visible,
             catalog_scan_message,
             catalog_scan_title,
@@ -2081,6 +2096,9 @@ impl LauncherFrameAccounting {
             input_enabled_ms: startup_status.input_enabled_ms,
             frame_budget: frame_budget.clone(),
         });
+        if screensaver_profile_state == "complete" && status_submitted {
+            self.profile_completion_submitted = true;
+        }
         if !idle {
             self.last_frame_budget_status = frame_budget;
             self.frame_budget_window = FrameBudgetAccumulator::default();

@@ -3603,7 +3603,7 @@ fn summarize_screensaver_telemetry(
     });
     let raster = raster_cadence_summary(steady);
     let maintenance = maintenance_cohorts(steady);
-    let status_publishing = status_publishing_summary(steady);
+    let status_publishing = status_publishing_summary(steady, &active);
     let presentation_paths = steady
         .iter()
         .filter_map(|frame| frame.get("main_present_copy_path").and_then(Value::as_str))
@@ -3822,10 +3822,17 @@ fn frame_work_us(frame: &Value) -> u64 {
     .sum()
 }
 
-fn status_publishing_summary(frames: &[&Value]) -> Value {
+fn status_publishing_summary(frames: &[&Value], samples: &[&Value]) -> Value {
     let mode = frames
         .iter()
         .find_map(|frame| frame.get("status_publish_mode").and_then(Value::as_str))
+        .or_else(|| {
+            samples.iter().find_map(|sample| {
+                sample
+                    .pointer("/launcher/status_publish_mode")
+                    .and_then(Value::as_str)
+            })
+        })
         .unwrap_or("sync");
     let mut enqueue = frames
         .iter()
@@ -3847,19 +3854,40 @@ fn status_publishing_summary(frames: &[&Value]) -> Value {
         "enqueue_p99_us": percentile_99(&enqueue),
         "worker_write_p99_us": percentile_99(&worker),
         "synchronous_write_p99_us": percentile_99(&synchronous),
-        "replacement_count": frames
+        "replacement_count": samples
             .iter()
-            .filter_map(|frame| frame.get("status_replaced_count").and_then(Value::as_u64))
+            .filter_map(|sample| {
+                sample
+                    .pointer("/launcher/status_replaced_count")
+                    .and_then(Value::as_u64)
+            })
             .max()
             .unwrap_or(0),
-        "final_submitted_sequence": frames
+        "final_submitted_sequence": samples
             .iter()
-            .filter_map(|frame| frame.get("status_submitted_sequence").and_then(Value::as_u64))
+            .filter_map(|sample| {
+                sample
+                    .pointer("/launcher/status_submitted_sequence")
+                    .and_then(Value::as_u64)
+            })
             .max()
             .unwrap_or(0),
-        "final_written_sequence": frames
+        "final_written_sequence": samples
             .iter()
-            .filter_map(|frame| frame.get("status_written_sequence").and_then(Value::as_u64))
+            .filter_map(|sample| {
+                sample
+                    .pointer("/launcher/status_written_sequence")
+                    .and_then(Value::as_u64)
+            })
+            .max()
+            .unwrap_or(0),
+        "worker_errors": samples
+            .iter()
+            .filter_map(|sample| {
+                sample
+                    .pointer("/launcher/status_worker_errors")
+                    .and_then(Value::as_u64)
+            })
             .max()
             .unwrap_or(0),
     })
@@ -3890,6 +3918,12 @@ fn validate_screensaver_frame_evidence(run: usize, frame_id: u64, frame: &Value)
         "main_present_flip_count",
         "main_present_drop_count",
         "runtime_status_write_us",
+        "status_enqueue_us",
+        "status_worker_write_us",
+        "status_replaced_count",
+        "status_submitted_sequence",
+        "status_written_sequence",
+        "status_worker_errors",
         "clock_update_us",
         "screensaver_archive_poll_us",
         "screensaver_card_adopt_us",
@@ -3912,6 +3946,7 @@ fn validate_screensaver_frame_evidence(run: usize, frame_id: u64, frame: &Value)
         "vsync_source",
         "main_present_status",
         "screensaver_sampling_profile",
+        "status_publish_mode",
     ];
     for key in U64_FIELDS {
         if frame.get(*key).and_then(Value::as_u64).is_none() {
@@ -11978,7 +12013,7 @@ H: Handlers=event3 js0"#
     #[test]
     fn installed_screensaver_summary_requires_catalog_off_and_production_present() {
         let frame = |id: u64, wall_us: u64| {
-            json!({
+            let mut frame = json!({
                 "frame": id,
                 "screensaver_active": true,
                 "wall_us": wall_us,
@@ -12020,11 +12055,25 @@ H: Handlers=event3 js0"#
                 "screensaver_raster_moved_cards": 4,
                 "screensaver_raster_hold_layer_mask": u64::from(id == 4),
                 "screensaver_raster_visible_layer_mask": 31
-            })
+            });
+            frame["status_publish_mode"] = json!("async");
+            frame["status_enqueue_us"] = json!(0);
+            frame["status_worker_write_us"] = json!(24_000);
+            frame["status_replaced_count"] = json!(0);
+            frame["status_submitted_sequence"] = json!(id);
+            frame["status_written_sequence"] = json!(id);
+            frame["status_worker_errors"] = json!(0);
+            frame
         };
         let telemetry = [json!({
             "launcher": {
                 "screensaver_profile_state": "active",
+                "status_publish_mode": "async",
+                "status_submitted_sequence": 9,
+                "status_written_sequence": 9,
+                "status_replaced_count": 0,
+                "status_worker_write_us": 24_000,
+                "status_worker_errors": 0,
                 "catalog_refresh_policy": "off",
                 "catalog_worker_enabled": false,
                 "present_backend": "fpga-vblank-latch-hidden",

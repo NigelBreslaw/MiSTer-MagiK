@@ -1579,6 +1579,12 @@ mod linux {
                 "launcher": {
                     "status_current": slint_current,
                     "status_sequence": slint_status.get("status_sequence").cloned().unwrap_or(Value::Null),
+                    "status_publish_mode": slint_status.get("status_publish_mode").cloned().unwrap_or(Value::Null),
+                    "status_submitted_sequence": slint_status.get("status_submitted_sequence").cloned().unwrap_or(Value::Null),
+                    "status_written_sequence": slint_status.get("status_written_sequence").cloned().unwrap_or(Value::Null),
+                    "status_replaced_count": slint_status.get("status_replaced_count").cloned().unwrap_or(Value::Null),
+                    "status_worker_write_us": slint_status.get("status_worker_write_us").cloned().unwrap_or(Value::Null),
+                    "status_worker_errors": slint_status.get("status_worker_errors").cloned().unwrap_or(Value::Null),
                     "idle": slint_status.get("idle").cloned().unwrap_or(Value::Null),
                     "screen": slint_status.get("screen").cloned().unwrap_or(Value::Null),
                     "composition_state": slint_status.get("composition_state").cloned().unwrap_or(Value::Null),

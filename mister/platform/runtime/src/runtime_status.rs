@@ -6,93 +6,126 @@
 use serde_json::{Value, json};
 use std::fs::{OpenOptions, create_dir_all};
 use std::io::Write;
-use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex, TryLockError};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const DIR: &str = "/tmp/mister-magik";
 const STATUS_PATH: &str = "/tmp/mister-magik/status.json";
 const EVENTS_PATH: &str = "/tmp/mister-magik/events.jsonl";
 
-pub struct LauncherStatus<'a> {
-    pub scene: &'a str,
-    pub screen: &'a str,
-    pub output_route: &'a str,
-    pub frames: u64,
-    pub idle: bool,
-    pub idle_loops: u64,
-    pub status_sequence: u64,
-    pub fps_estimate: f64,
-    pub rolling_fps: f64,
-    pub rolling_prepare_us: u64,
-    pub rolling_render_us: u64,
-    pub rolling_custom_draw_us: u64,
-    pub rolling_vsync_us: u64,
-    pub rolling_present_us: u64,
-    pub rolling_rows: u64,
-    pub last_frame_ms_ago: u64,
-    pub vsync_source: &'a str,
-    pub vsync_period_us: u64,
-    pub present_backend: &'a str,
-    pub present_status: &'a str,
-    pub present_buffer: u8,
-    pub latch_publish_us: u64,
-    pub latch_sequence: u16,
-    pub latch_flip_count: u16,
-    pub latch_drop_count: u16,
-    pub catalog_ready: bool,
-    pub catalog_games: usize,
-    pub catalog_systems: usize,
-    pub catalog_refresh_done: bool,
-    pub catalog_refresh_policy: &'a str,
-    pub catalog_worker_enabled: bool,
-    pub screensaver_profile_state: &'a str,
-    pub catalog_scan_visible: bool,
-    pub catalog_scan_message: &'a str,
-    pub catalog_scan_title: &'a str,
-    pub catalog_scan_detail: &'a str,
-    pub catalog_scan_percent: i32,
-    pub catalog_background_scan_visible: bool,
-    pub confirm_visible: bool,
-    pub confirm_title: &'a str,
-    pub confirm_selected: i32,
-    pub confirm_left_label: &'a str,
-    pub confirm_right_label: &'a str,
-    pub arcade_selected: usize,
-    pub arcade_visual_index: f32,
-    pub arcade_drawer_open: bool,
-    pub arcade_drawer_level: &'a str,
-    pub arcade_drawer_selected: usize,
-    pub arcade_drawer_requested_hash: u64,
-    pub arcade_drawer_rendered_hash: u64,
-    pub preview_cache_state: &'a str,
-    pub preview_transition_effect: &'a str,
-    pub preview_transition_progress: f32,
-    pub composition_state: &'a str,
-    pub composition_recovery_count: u64,
-    pub last_composition_invariant_kind: &'a str,
-    pub last_composition_invariant_detail: &'a str,
-    pub bench_scenario: &'a str,
-    pub start_screen: &'a str,
-    pub lock_screen: &'a str,
-    pub route_reassert_count: u64,
-    pub last_route_reassert_frame: u64,
-    pub last_route_reassert_ok: bool,
-    pub last_route_reassert_error: &'a str,
-    pub launch_state: &'a str,
-    pub loading_title: &'a str,
-    pub input_pad_count: usize,
-    pub active_pad_index: usize,
-    pub active_pad_name: &'a str,
-    pub active_pad_path: &'a str,
-    pub last_raw_event: &'a str,
-    pub last_input_ms_ago: u64,
-    pub startup_mode: &'a str,
-    pub startup_reveal_state: &'a str,
-    pub revealed: bool,
-    pub input_enabled: bool,
-    pub reveal_ms: u64,
-    pub input_enabled_ms: u64,
-    pub frame_budget: FrameBudgetStatus,
+macro_rules! launcher_status_types {
+    (
+        values { $( $value:ident : $value_ty:ty ),* $(,)? }
+        strings { $( $string:ident ),* $(,)? }
+    ) => {
+        pub struct LauncherStatus<'a> {
+            $( pub $value: $value_ty, )*
+            $( pub $string: &'a str, )*
+        }
+
+        struct OwnedLauncherStatus {
+            $( $value: $value_ty, )*
+            $( $string: String, )*
+        }
+
+        impl From<LauncherStatus<'_>> for OwnedLauncherStatus {
+            fn from(status: LauncherStatus<'_>) -> Self {
+                Self {
+                    $( $value: status.$value, )*
+                    $( $string: status.$string.to_owned(), )*
+                }
+            }
+        }
+    };
+}
+
+launcher_status_types! {
+    values {
+        frames: u64,
+        idle: bool,
+        idle_loops: u64,
+        status_sequence: u64,
+        fps_estimate: f64,
+        rolling_fps: f64,
+        rolling_prepare_us: u64,
+        rolling_render_us: u64,
+        rolling_custom_draw_us: u64,
+        rolling_vsync_us: u64,
+        rolling_present_us: u64,
+        rolling_rows: u64,
+        last_frame_ms_ago: u64,
+        vsync_period_us: u64,
+        present_buffer: u8,
+        latch_publish_us: u64,
+        latch_sequence: u16,
+        latch_flip_count: u16,
+        latch_drop_count: u16,
+        catalog_ready: bool,
+        catalog_games: usize,
+        catalog_systems: usize,
+        catalog_refresh_done: bool,
+        catalog_worker_enabled: bool,
+        catalog_scan_visible: bool,
+        catalog_scan_percent: i32,
+        catalog_background_scan_visible: bool,
+        confirm_visible: bool,
+        confirm_selected: i32,
+        arcade_selected: usize,
+        arcade_visual_index: f32,
+        arcade_drawer_open: bool,
+        arcade_drawer_selected: usize,
+        arcade_drawer_requested_hash: u64,
+        arcade_drawer_rendered_hash: u64,
+        preview_transition_progress: f32,
+        composition_recovery_count: u64,
+        route_reassert_count: u64,
+        last_route_reassert_frame: u64,
+        last_route_reassert_ok: bool,
+        input_pad_count: usize,
+        active_pad_index: usize,
+        last_input_ms_ago: u64,
+        revealed: bool,
+        input_enabled: bool,
+        reveal_ms: u64,
+        input_enabled_ms: u64,
+        frame_budget: FrameBudgetStatus,
+    }
+    strings {
+        scene,
+        screen,
+        output_route,
+        vsync_source,
+        present_backend,
+        present_status,
+        catalog_refresh_policy,
+        screensaver_profile_state,
+        catalog_scan_message,
+        catalog_scan_title,
+        catalog_scan_detail,
+        confirm_title,
+        confirm_left_label,
+        confirm_right_label,
+        arcade_drawer_level,
+        preview_cache_state,
+        preview_transition_effect,
+        composition_state,
+        last_composition_invariant_kind,
+        last_composition_invariant_detail,
+        bench_scenario,
+        start_screen,
+        lock_screen,
+        last_route_reassert_error,
+        launch_state,
+        loading_title,
+        active_pad_name,
+        active_pad_path,
+        last_raw_event,
+        startup_mode,
+        startup_reveal_state,
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -156,6 +189,13 @@ pub struct FrameBudgetRecentFrame {
     pub main_present_drop_count: u16,
     pub status_write_due: bool,
     pub runtime_status_write_us: u64,
+    pub status_publish_mode: &'static str,
+    pub status_enqueue_us: u64,
+    pub status_worker_write_us: u64,
+    pub status_replaced_count: u64,
+    pub status_submitted_sequence: u64,
+    pub status_written_sequence: u64,
+    pub status_worker_errors: u64,
     pub clock_update_due: bool,
     pub clock_update_us: u64,
     pub screensaver_sampling_profile: &'static str,
@@ -222,6 +262,154 @@ pub struct FrameBudgetSlowFrame {
     pub present_phase_us: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RuntimeStatusPublisherMetrics {
+    pub submitted_sequence: u64,
+    pub written_sequence: u64,
+    pub replaced_count: u64,
+    pub last_worker_duration_us: u64,
+    pub worker_errors: u64,
+}
+
+#[derive(Default)]
+struct RuntimeStatusPublisherCounters {
+    submitted_sequence: AtomicU64,
+    written_sequence: AtomicU64,
+    replaced_count: AtomicU64,
+    last_worker_duration_us: AtomicU64,
+    worker_errors: AtomicU64,
+}
+
+pub struct RuntimeStatusPublisher {
+    slot: Arc<RuntimeStatusSlot>,
+    worker: Option<thread::JoinHandle<()>>,
+    counters: Arc<RuntimeStatusPublisherCounters>,
+}
+
+#[derive(Default)]
+struct RuntimeStatusSlotState {
+    pending: Option<OwnedLauncherStatus>,
+    shutdown: bool,
+}
+
+#[derive(Default)]
+struct RuntimeStatusSlot {
+    state: Mutex<RuntimeStatusSlotState>,
+    ready: Condvar,
+}
+
+impl RuntimeStatusPublisher {
+    pub fn new() -> Self {
+        Self::spawn(PathBuf::from(STATUS_PATH), Duration::ZERO)
+    }
+
+    fn spawn(path: PathBuf, worker_delay: Duration) -> Self {
+        let slot = Arc::new(RuntimeStatusSlot::default());
+        let worker_slot = Arc::clone(&slot);
+        let counters = Arc::new(RuntimeStatusPublisherCounters::default());
+        let worker_counters = Arc::clone(&counters);
+        let worker = thread::Builder::new()
+            .name("runtime-status".into())
+            .spawn(move || {
+                loop {
+                    let status = {
+                        let mut state = worker_slot
+                            .state
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        while state.pending.is_none() && !state.shutdown {
+                            state = worker_slot
+                                .ready
+                                .wait(state)
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        }
+                        match state.pending.take() {
+                            Some(status) => status,
+                            None if state.shutdown => break,
+                            None => continue,
+                        }
+                    };
+                    if !worker_delay.is_zero() {
+                        thread::sleep(worker_delay);
+                    }
+                    write_owned_launcher_status(&path, status, &worker_counters);
+                }
+            })
+            .ok();
+        if worker.is_none() {
+            counters.worker_errors.fetch_add(1, Ordering::Relaxed);
+        }
+        Self {
+            slot,
+            worker,
+            counters,
+        }
+    }
+
+    pub fn submit(&self, status: LauncherStatus<'_>) -> bool {
+        let sequence = status.status_sequence;
+        let snapshot = OwnedLauncherStatus::from(status);
+        let mut state = match self.slot.state.try_lock() {
+            Ok(state) => state,
+            Err(TryLockError::WouldBlock) => return false,
+            Err(TryLockError::Poisoned(error)) => error.into_inner(),
+        };
+        if state.shutdown {
+            return false;
+        }
+        if state.pending.replace(snapshot).is_some() {
+            self.counters.replaced_count.fetch_add(1, Ordering::Relaxed);
+        }
+        self.counters
+            .submitted_sequence
+            .fetch_max(sequence, Ordering::Release);
+        drop(state);
+        self.slot.ready.notify_one();
+        true
+    }
+
+    pub fn metrics(&self) -> RuntimeStatusPublisherMetrics {
+        RuntimeStatusPublisherMetrics {
+            submitted_sequence: self.counters.submitted_sequence.load(Ordering::Acquire),
+            written_sequence: self.counters.written_sequence.load(Ordering::Acquire),
+            replaced_count: self.counters.replaced_count.load(Ordering::Relaxed),
+            last_worker_duration_us: self
+                .counters
+                .last_worker_duration_us
+                .load(Ordering::Relaxed),
+            worker_errors: self.counters.worker_errors.load(Ordering::Relaxed),
+        }
+    }
+
+    #[cfg(test)]
+    fn new_for_test(path: PathBuf, worker_delay: Duration) -> Self {
+        Self::spawn(path, worker_delay)
+    }
+}
+
+impl Default for RuntimeStatusPublisher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for RuntimeStatusPublisher {
+    fn drop(&mut self) {
+        {
+            let mut state = self
+                .slot
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state.shutdown = true;
+        }
+        self.slot.ready.notify_one();
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
 pub fn event(name: &str, detail: impl std::fmt::Display) {
     let _ = create_dir_all(DIR);
     let row = event_value(
@@ -240,12 +428,55 @@ fn append_event_row(path: &Path, row: &Value) {
     }
 }
 
-pub fn write_launcher_status(status: LauncherStatus<'_>) {
-    let _ = create_dir_all(DIR);
-    let value = launcher_status_value(status, unix_ms(), std::process::id());
-    let tmp = format!("{STATUS_PATH}.tmp");
-    if std::fs::write(&tmp, format!("{value}\n")).is_ok() {
-        let _ = std::fs::rename(tmp, STATUS_PATH);
+fn write_owned_launcher_status(
+    path: &Path,
+    status: OwnedLauncherStatus,
+    counters: &RuntimeStatusPublisherCounters,
+) {
+    let started = Instant::now();
+    let sequence = status.status_sequence;
+    let mut value = launcher_status_value(status, unix_ms(), std::process::id());
+    if let Some(map) = value.as_object_mut() {
+        map.insert("status_publish_mode".into(), json!("async"));
+        map.insert(
+            "status_submitted_sequence".into(),
+            json!(
+                counters
+                    .submitted_sequence
+                    .load(Ordering::Acquire)
+                    .max(sequence)
+            ),
+        );
+        map.insert("status_written_sequence".into(), json!(sequence));
+        map.insert(
+            "status_replaced_count".into(),
+            json!(counters.replaced_count.load(Ordering::Relaxed)),
+        );
+        map.insert(
+            "status_worker_write_us".into(),
+            json!(counters.last_worker_duration_us.load(Ordering::Relaxed)),
+        );
+        map.insert(
+            "status_worker_errors".into(),
+            json!(counters.worker_errors.load(Ordering::Relaxed)),
+        );
+    }
+    let result = (|| -> std::io::Result<()> {
+        if let Some(parent) = path.parent() {
+            create_dir_all(parent)?;
+        }
+        let tmp = PathBuf::from(format!("{}.tmp", path.display()));
+        std::fs::write(&tmp, format!("{value}\n"))?;
+        std::fs::rename(tmp, path)
+    })();
+    let duration_us = started.elapsed().as_micros().min(u64::MAX as u128) as u64;
+    counters
+        .last_worker_duration_us
+        .store(duration_us, Ordering::Relaxed);
+    if result.is_ok() {
+        counters.written_sequence.store(sequence, Ordering::Release);
+    } else {
+        counters.worker_errors.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -268,7 +499,12 @@ fn boot_ms() -> u64 {
         .unwrap_or(0)
 }
 
-fn launcher_status_value(status: LauncherStatus<'_>, ts_unix_ms: u128, pid: u32) -> Value {
+fn launcher_status_value(
+    status: impl Into<OwnedLauncherStatus>,
+    ts_unix_ms: u128,
+    pid: u32,
+) -> Value {
+    let status = status.into();
     let mut map = serde_json::Map::new();
     macro_rules! insert {
         ($key:literal, $value:expr) => {
@@ -474,6 +710,13 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
     field!("main_present_drop_count", frame.main_present_drop_count);
     field!("status_write_due", frame.status_write_due);
     field!("runtime_status_write_us", frame.runtime_status_write_us);
+    field!("status_publish_mode", frame.status_publish_mode);
+    field!("status_enqueue_us", frame.status_enqueue_us);
+    field!("status_worker_write_us", frame.status_worker_write_us);
+    field!("status_replaced_count", frame.status_replaced_count);
+    field!("status_submitted_sequence", frame.status_submitted_sequence);
+    field!("status_written_sequence", frame.status_written_sequence);
+    field!("status_worker_errors", frame.status_worker_errors);
     field!("clock_update_due", frame.clock_update_due);
     field!("clock_update_us", frame.clock_update_us);
     field!(
@@ -664,33 +907,6 @@ mod tests {
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         format!("{prefix}-{nanos}")
-    }
-
-    struct FileRestore {
-        path: &'static str,
-        original: Option<Vec<u8>>,
-    }
-
-    impl FileRestore {
-        fn capture(path: &'static str) -> Self {
-            Self {
-                path,
-                original: fs::read(path).ok(),
-            }
-        }
-    }
-
-    impl Drop for FileRestore {
-        fn drop(&mut self) {
-            match &self.original {
-                Some(bytes) => {
-                    let _ = fs::write(self.path, bytes);
-                }
-                None => {
-                    let _ = fs::remove_file(self.path);
-                }
-            }
-        }
     }
 
     #[test]
@@ -1046,20 +1262,19 @@ mod tests {
         assert!(row["pid"].as_i64().is_some());
     }
 
-    #[test]
-    fn write_launcher_status_replaces_status_file_atomically() {
-        let _restore = FileRestore::capture(STATUS_PATH);
-        let _ = fs::remove_file(STATUS_PATH);
-        let _ = fs::remove_file(format!("{STATUS_PATH}.tmp"));
-
-        write_launcher_status(LauncherStatus {
+    fn publisher_status(
+        status_sequence: u64,
+        screen: &'static str,
+        screensaver_profile_state: &'static str,
+    ) -> LauncherStatus<'static> {
+        LauncherStatus {
             scene: "launcher",
-            screen: "arcade",
+            screen,
             output_route: "crt-288p50",
             frames: 7,
             idle: false,
             idle_loops: 0,
-            status_sequence: 1,
+            status_sequence,
             fps_estimate: 60.04,
             rolling_fps: 59.9,
             rolling_prepare_us: 11,
@@ -1084,7 +1299,7 @@ mod tests {
             catalog_refresh_done: true,
             catalog_refresh_policy: "default",
             catalog_worker_enabled: true,
-            screensaver_profile_state: "disabled",
+            screensaver_profile_state,
             catalog_scan_visible: true,
             catalog_scan_message: "Updating Library",
             catalog_scan_title: "Indexing library",
@@ -1132,9 +1347,18 @@ mod tests {
             reveal_ms: 0,
             input_enabled_ms: 0,
             frame_budget: FrameBudgetStatus::default(),
-        });
+        }
+    }
 
-        let text = fs::read_to_string(STATUS_PATH).expect("status json should be written");
+    #[test]
+    fn runtime_status_publisher_replaces_status_file_atomically() {
+        let path = std::env::temp_dir().join(unique_name("runtime-status.json"));
+        let publisher = RuntimeStatusPublisher::new_for_test(path.clone(), Duration::ZERO);
+        publisher.submit(publisher_status(1, "arcade", "disabled"));
+        drop(publisher);
+
+        let text = fs::read_to_string(&path).expect("status json should be written");
+        let _ = fs::remove_file(&path);
         let value: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(value["schema"], "mister-magik-slint-status-v1");
         assert_eq!(value["screen"], "arcade");
@@ -1151,6 +1375,79 @@ mod tests {
         assert_eq!(value["confirm_visible"], false);
         assert_eq!(value["loading_title"], "1942");
         assert_eq!(value["frame_budget"]["frames_total"], 0);
-        assert!(!std::path::Path::new(&format!("{STATUS_PATH}.tmp")).exists());
+        assert!(!std::path::Path::new(&format!("{}.tmp", path.display())).exists());
+    }
+
+    fn wait_for_publisher(
+        publisher: &RuntimeStatusPublisher,
+        predicate: impl Fn(RuntimeStatusPublisherMetrics) -> bool,
+    ) -> RuntimeStatusPublisherMetrics {
+        let started = Instant::now();
+        loop {
+            let metrics = publisher.metrics();
+            if predicate(metrics) || started.elapsed() > Duration::from_secs(2) {
+                return metrics;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn runtime_status_publisher_coalesces_stale_snapshots_behind_slow_worker() {
+        let path = std::env::temp_dir().join(unique_name("runtime-status-coalesce.json"));
+        let publisher =
+            RuntimeStatusPublisher::new_for_test(path.clone(), Duration::from_millis(50));
+        publisher.submit(publisher_status(1, "home", "active"));
+        publisher.submit(publisher_status(2, "settings", "active"));
+        publisher.submit(publisher_status(3, "arcade", "complete"));
+        let metrics = wait_for_publisher(&publisher, |metrics| metrics.written_sequence == 3);
+        assert_eq!(metrics.submitted_sequence, 3);
+        assert_eq!(metrics.written_sequence, 3);
+        assert!(metrics.replaced_count >= 1);
+        drop(publisher);
+        let value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let _ = fs::remove_file(path);
+        assert_eq!(value["status_sequence"], 3);
+        assert_eq!(value["screen"], "arcade");
+        assert_eq!(value["screensaver_profile_state"], "complete");
+    }
+
+    #[test]
+    fn runtime_status_publisher_reports_write_failure() {
+        let path = std::env::temp_dir().join(unique_name("runtime-status-failure"));
+        fs::create_dir_all(&path).unwrap();
+        let publisher = RuntimeStatusPublisher::new_for_test(path.clone(), Duration::ZERO);
+        publisher.submit(publisher_status(4, "home", "active"));
+        let metrics = wait_for_publisher(&publisher, |metrics| metrics.worker_errors > 0);
+        assert_eq!(metrics.written_sequence, 0);
+        assert!(metrics.worker_errors > 0);
+        drop(publisher);
+        let _ = fs::remove_dir_all(path);
+    }
+
+    #[test]
+    fn runtime_status_publisher_drop_flushes_final_completion_and_joins() {
+        let path = std::env::temp_dir().join(unique_name("runtime-status-final.json"));
+        let publisher =
+            RuntimeStatusPublisher::new_for_test(path.clone(), Duration::from_millis(20));
+        publisher.submit(publisher_status(9, "settings", "complete"));
+        drop(publisher);
+        let value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let _ = fs::remove_file(path);
+        assert_eq!(value["status_sequence"], 9);
+        assert_eq!(value["status_written_sequence"], 9);
+        assert_eq!(value["screensaver_profile_state"], "complete");
+    }
+
+    #[test]
+    fn runtime_status_submission_never_waits_for_worker_serialization() {
+        let path = std::env::temp_dir().join(unique_name("runtime-status-submit.json"));
+        let publisher =
+            RuntimeStatusPublisher::new_for_test(path.clone(), Duration::from_millis(100));
+        let started = Instant::now();
+        publisher.submit(publisher_status(1, "home", "active"));
+        assert!(started.elapsed() < Duration::from_millis(50));
+        drop(publisher);
+        let _ = fs::remove_file(path);
     }
 }

@@ -525,7 +525,6 @@ pub(crate) fn agent_telemetry_until_screensaver_profile_complete(
     parse_agent_response_line(line, started)?;
 
     let mut samples = Vec::new();
-    let mut complete_status_sequence = None;
     while started.elapsed() < timeout {
         if crate::screensaver_profile_interrupted() {
             return Err("screensaver benchmark interrupted".into());
@@ -542,15 +541,14 @@ pub(crate) fn agent_telemetry_until_screensaver_profile_complete(
                 let status_sequence = sample
                     .pointer("/launcher/status_sequence")
                     .and_then(Value::as_u64);
+                let written_sequence = sample
+                    .pointer("/launcher/status_written_sequence")
+                    .and_then(Value::as_u64);
                 samples.push(sample);
                 match state.as_deref() {
                     Some("complete") => {
-                        if let Some(first_complete) = complete_status_sequence {
-                            if status_sequence.is_some_and(|sequence| sequence > first_complete) {
-                                return Ok(samples);
-                            }
-                        } else if let Some(sequence) = status_sequence {
-                            complete_status_sequence = Some(sequence);
+                        if status_sequence.is_some() && status_sequence == written_sequence {
+                            return Ok(samples);
                         }
                     }
                     Some("failed") => {
