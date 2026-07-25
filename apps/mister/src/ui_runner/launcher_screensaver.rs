@@ -266,6 +266,8 @@ pub(super) struct ScreensaverFrameTrace {
     pub(super) raster_moved_cards: usize,
     pub(super) raster_hold_layer_mask: u8,
     pub(super) raster_visible_layer_mask: u8,
+    pub(super) sixteenth_phase_layer_mask: u8,
+    pub(super) phase_bank_resident_bytes: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -2015,6 +2017,30 @@ impl ParadeSamplingProfile {
             Self::CrtSixteenth => "crt-16",
         }
     }
+
+    const fn for_layer(self, layer: usize) -> Self {
+        if matches!(self, Self::CrtSixteenth) || layer == PARADE_MIN_TILE_SPEED {
+            Self::CrtSixteenth
+        } else {
+            Self::LegacyHalf
+        }
+    }
+
+    const fn sixteenth_layer_mask(self) -> u8 {
+        if matches!(self, Self::CrtSixteenth) {
+            (1_u8 << PARADE_SPEED_COUNT) - 1
+        } else {
+            1
+        }
+    }
+
+    const fn layer_evidence(self) -> &'static str {
+        if matches!(self, Self::CrtSixteenth) {
+            "1:crt-16,2:crt-16,3:crt-16,4:crt-16,5:crt-16"
+        } else {
+            "1:crt-16,2:legacy-half,3:legacy-half,4:legacy-half,5:legacy-half"
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2377,6 +2403,7 @@ struct ParadeScaleJob {
     tile_idx: usize,
     image_idx: usize,
     speed: usize,
+    sampling_profile: ParadeSamplingProfile,
     screen_h: usize,
     source: ParadeScaleSource,
 }
@@ -2490,7 +2517,7 @@ impl ParadeState {
                         let (scaled, corner_insets) =
                             prepare_parade_scaled(&source, job.speed, job.screen_h);
                         let phase_started = Instant::now();
-                        let phase_set = ParadePhaseSet::prepare(&scaled, sampling_profile);
+                        let phase_set = ParadePhaseSet::prepare(&scaled, job.sampling_profile);
                         let phase_us = phase_started.elapsed().as_micros();
                         PreparedParadeCard {
                             image_idx: job.image_idx,
@@ -2687,7 +2714,7 @@ impl ParadeState {
             h: 0,
             stride: 0,
         };
-        let phase_set = ParadePhaseSet::prepare(&scaled, self.sampling_profile);
+        let phase_set = ParadePhaseSet::prepare(&scaled, self.sampling_profile.for_layer(speed));
         self.tiles.push(ParadeTile {
             x_fp: 0,
             y: 0,
@@ -2725,6 +2752,7 @@ impl ParadeState {
                     tile_idx,
                     image_idx,
                     speed,
+                    sampling_profile: self.sampling_profile.for_layer(speed),
                     screen_h: self.screen_h,
                     source: ParadeScaleSource::ArchiveIndex(image_idx),
                 })
@@ -2806,7 +2834,7 @@ impl ParadeState {
                     break;
                 };
                 let (scaled, corner_insets) = self.scale_image(&images[image_idx], speed);
-                let phase_set = self.prepare_phase_set(&scaled);
+                let phase_set = self.prepare_phase_set(&scaled, speed);
                 let frames_until_exit = phase + rank as u64 * interval_frames;
                 let x_fp = w as i64 * PARADE_SUBPIXEL_ONE - frames_until_exit as i64 * velocity_fp;
                 let x = x_fp.div_euclid(PARADE_SUBPIXEL_ONE) as isize;
@@ -2888,10 +2916,12 @@ impl ParadeState {
         for tile_idx in 0..self.tiles.len() {
             if self.tiles[tile_idx].active {
                 let tile = &mut self.tiles[tile_idx];
+                let tile_sampling_profile = sampling_profile.for_layer(tile.layer);
                 tile.raster_held_this_frame = false;
                 tile.raster_moved_this_frame = false;
                 let previous_x_fp = tile.x_fp;
-                let previous_raster_phase = parade_raster_phase_key(sampling_profile, tile.x_fp);
+                let previous_raster_phase =
+                    parade_raster_phase_key(tile_sampling_profile, tile.x_fp);
                 let motion = tile
                     .velocity_fp
                     .saturating_mul(tick_delta_fp)
@@ -2899,7 +2929,7 @@ impl ParadeState {
                 tile.x_fp = tile.x_fp.saturating_add(motion / PARADE_TICK_ONE);
                 tile.velocity_remainder = motion % PARADE_TICK_ONE;
                 if tile.x_fp != previous_x_fp {
-                    let raster_phase = parade_raster_phase_key(sampling_profile, tile.x_fp);
+                    let raster_phase = parade_raster_phase_key(tile_sampling_profile, tile.x_fp);
                     if raster_phase == previous_raster_phase {
                         tile.raster_held_this_frame = true;
                     } else {
@@ -2998,7 +3028,7 @@ impl ParadeState {
         if !self.scale_worker_connected {
             if let Some(images) = images {
                 let (scaled, corner_insets) = self.scale_image(&images[image_idx], speed);
-                let phase_set = self.prepare_phase_set(&scaled);
+                let phase_set = self.prepare_phase_set(&scaled, speed);
                 let card = PreparedParadeCard {
                     image_idx,
                     speed,
@@ -3027,6 +3057,7 @@ impl ParadeState {
                 tile_idx,
                 image_idx,
                 speed,
+                sampling_profile: self.sampling_profile.for_layer(speed),
                 screen_h: self.screen_h,
                 source,
             })
@@ -3117,7 +3148,7 @@ impl ParadeState {
                     continue;
                 };
                 let (scaled, corner_insets) = self.scale_image(&images[image_idx], speed);
-                let phase_set = self.prepare_phase_set(&scaled);
+                let phase_set = self.prepare_phase_set(&scaled, speed);
                 self.tiles[tile_idx].pending_image_idx = None;
                 let card = PreparedParadeCard {
                     image_idx,
@@ -3165,9 +3196,9 @@ impl ParadeState {
         prepared
     }
 
-    fn prepare_phase_set(&mut self, image: &SaverImage) -> ParadePhaseSet {
+    fn prepare_phase_set(&mut self, image: &SaverImage, layer: usize) -> ParadePhaseSet {
         let started = Instant::now();
-        let phases = ParadePhaseSet::prepare(image, self.sampling_profile);
+        let phases = ParadePhaseSet::prepare(image, self.sampling_profile.for_layer(layer));
         let elapsed_us = started.elapsed().as_micros();
         self.phase_count += 1;
         self.phase_total_us += elapsed_us;
@@ -3234,15 +3265,14 @@ impl ParadeState {
     fn log_scaler_stats(&self) {
         let average_us = self.scale_total_us / self.scale_count.max(1) as u128;
         let phase_average_us = self.phase_total_us / self.phase_count.max(1) as u128;
-        let phase_cache_bytes = self
+        let phase_cache_bytes = self.phase_bank_resident_bytes();
+        let image_cache_bytes = self
             .tiles
             .iter()
             .map(|tile| {
                 tile.scaled.pixels.len() * std::mem::size_of::<Rgb565Pixel>()
-                    + tile.phase_set.resident_bytes()
                     + tile.next.as_ref().map_or(0, |next| {
                         next.scaled.pixels.len() * std::mem::size_of::<Rgb565Pixel>()
-                            + next.phase_set.resident_bytes()
                     })
             })
             .sum::<usize>();
@@ -3260,7 +3290,7 @@ impl ParadeState {
             self.scale_queue_max,
             self.layer_targets.iter().sum::<usize>(),
             self.scale_worker_connected,
-            phase_cache_bytes
+            phase_cache_bytes + image_cache_bytes
         );
         if self.archive_backed {
             crate::ui_logln!(
@@ -3291,6 +3321,19 @@ impl ParadeState {
                 average_active
             );
         }
+    }
+
+    fn phase_bank_resident_bytes(&self) -> usize {
+        self.tiles
+            .iter()
+            .map(|tile| {
+                tile.phase_set.resident_bytes()
+                    + tile
+                        .next
+                        .as_ref()
+                        .map_or(0, |next| next.phase_set.resident_bytes())
+            })
+            .sum()
     }
 
     fn random_below(&mut self, upper: usize) -> usize {
@@ -3450,8 +3493,9 @@ fn prepare_parade_visible_draw_order(
     let mut culled = 0;
     for &tile_idx in state.draw_order.iter().rev() {
         let tile = &state.tiles[tile_idx];
+        let tile_sampling_profile = state.sampling_profile.for_layer(tile.layer);
         let Some(draw_bounds) =
-            parade_tile_draw_bounds(tile, state.sampling_profile, screen_w, screen_h)
+            parade_tile_draw_bounds(tile, tile_sampling_profile, screen_w, screen_h)
         else {
             continue;
         };
@@ -3465,7 +3509,7 @@ fn prepare_parade_visible_draw_order(
         }
         state.visible_draw_order.push(tile_idx);
         if let Some(opaque_bounds) =
-            parade_tile_opaque_bounds(tile, state.sampling_profile, screen_w, screen_h)
+            parade_tile_opaque_bounds(tile, tile_sampling_profile, screen_w, screen_h)
         {
             state.depth_coverage.push(opaque_bounds);
         }
@@ -3521,7 +3565,13 @@ fn render_parade(
     prepare_parade_visible_draw_order(state, w, h);
     for &tile_idx in &state.visible_draw_order {
         let tile = &state.tiles[tile_idx];
-        blit_parade_tile(dst, w, h, state.sampling_profile, tile);
+        blit_parade_tile(
+            dst,
+            w,
+            h,
+            state.sampling_profile.for_layer(tile.layer),
+            tile,
+        );
     }
 }
 
@@ -3560,7 +3610,13 @@ fn render_archive_parade(
     let tile_blit_start = Instant::now();
     for &tile_idx in &state.visible_draw_order {
         let tile = &state.tiles[tile_idx];
-        blit_parade_tile(dst, w, h, state.sampling_profile, tile);
+        blit_parade_tile(
+            dst,
+            w,
+            h,
+            state.sampling_profile.for_layer(tile.layer),
+            tile,
+        );
     }
     ScreensaverFrameTrace {
         card_adopt_us: advance.card_adopt_us,
@@ -3571,11 +3627,13 @@ fn render_archive_parade(
         tile_blit_us: tile_blit_start.elapsed().as_micros(),
         cards_drawn: state.visible_draw_order.len(),
         cards_culled,
-        sampling_profile: state.sampling_profile.label(),
+        sampling_profile: state.sampling_profile.layer_evidence(),
         raster_held_cards,
         raster_moved_cards,
         raster_hold_layer_mask,
         raster_visible_layer_mask,
+        sixteenth_phase_layer_mask: state.sampling_profile.sixteenth_layer_mask(),
+        phase_bank_resident_bytes: state.phase_bank_resident_bytes(),
         ..ScreensaverFrameTrace::default()
     }
 }
@@ -3875,7 +3933,9 @@ mod tests {
                 dst,
                 width,
                 height,
-                state.sampling_profile,
+                state
+                    .sampling_profile
+                    .for_layer(state.tiles[tile_idx].layer),
                 &state.tiles[tile_idx],
             );
         }
@@ -4163,6 +4223,23 @@ mod tests {
             ParadeSamplingProfile::for_crt_output(true),
             ParadeSamplingProfile::CrtSixteenth
         );
+        assert_eq!(
+            ParadeSamplingProfile::LegacyHalf.for_layer(1),
+            ParadeSamplingProfile::CrtSixteenth
+        );
+        assert_eq!(
+            ParadeSamplingProfile::LegacyHalf.for_layer(2),
+            ParadeSamplingProfile::LegacyHalf
+        );
+        assert_eq!(
+            ParadeSamplingProfile::CrtSixteenth.for_layer(5),
+            ParadeSamplingProfile::CrtSixteenth
+        );
+        assert_eq!(ParadeSamplingProfile::LegacyHalf.sixteenth_layer_mask(), 1);
+        assert_eq!(
+            ParadeSamplingProfile::CrtSixteenth.sixteenth_layer_mask(),
+            0b1_1111
+        );
     }
 
     #[test]
@@ -4179,6 +4256,20 @@ mod tests {
             previous = current;
         }
         assert_eq!(held, 20);
+    }
+
+    #[test]
+    fn sixteenth_phases_move_the_720p_slow_layer_every_frame() {
+        let velocity_fp = ParadeMotion::Subpixel.card_velocity_fp(0, 720);
+        let profile = ParadeSamplingProfile::LegacyHalf.for_layer(PARADE_MIN_TILE_SPEED);
+        let mut x_fp = 0;
+        let mut previous = parade_raster_phase_key(profile, x_fp);
+        for _ in 0..60 {
+            x_fp += velocity_fp;
+            let current = parade_raster_phase_key(profile, x_fp);
+            assert_ne!(current, previous);
+            previous = current;
+        }
     }
 
     #[test]

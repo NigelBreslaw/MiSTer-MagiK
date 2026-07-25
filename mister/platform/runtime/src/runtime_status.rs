@@ -213,6 +213,8 @@ pub struct FrameBudgetRecentFrame {
     pub screensaver_raster_moved_cards: u64,
     pub screensaver_raster_hold_layer_mask: u8,
     pub screensaver_raster_visible_layer_mask: u8,
+    pub screensaver_sixteenth_phase_layer_mask: u8,
+    pub screensaver_phase_bank_bytes: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -770,6 +772,14 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
     field!(
         "screensaver_raster_visible_layer_mask",
         frame.screensaver_raster_visible_layer_mask
+    );
+    field!(
+        "screensaver_sixteenth_phase_layer_mask",
+        frame.screensaver_sixteenth_phase_layer_mask
+    );
+    field!(
+        "screensaver_phase_bank_bytes",
+        frame.screensaver_phase_bank_bytes
     );
     Value::Object(object)
 }
