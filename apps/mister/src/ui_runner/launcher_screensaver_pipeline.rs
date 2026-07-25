@@ -192,16 +192,18 @@ fn send_ready_frame(
         if cancelled.load(Ordering::Acquire) {
             return false;
         }
+        ready_depth.fetch_add(1, Ordering::AcqRel);
         match ready_tx.try_send(frame) {
-            Ok(()) => {
-                ready_depth.fetch_add(1, Ordering::AcqRel);
-                return true;
-            }
+            Ok(()) => return true,
             Err(TrySendError::Full(returned)) => {
+                ready_depth.fetch_sub(1, Ordering::AcqRel);
                 frame = returned;
                 std::thread::yield_now();
             }
-            Err(TrySendError::Disconnected(_)) => return false,
+            Err(TrySendError::Disconnected(_)) => {
+                ready_depth.fetch_sub(1, Ordering::AcqRel);
+                return false;
+            }
         }
     }
 }
