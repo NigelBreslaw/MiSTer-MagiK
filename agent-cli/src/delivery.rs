@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::deploy::{DeliveryDecision, DeploymentKind, DeploymentPlan};
+use crate::deploy::{DeliveryDecision, DeploymentPlan};
 use crate::device::DeviceClient;
 use crate::error::{AgentError, AgentResult};
 use crate::model::Outcome;
@@ -105,8 +105,8 @@ pub fn run_transaction(
         (Phase::Classify, 2),
         (Phase::ValidateCommit, 7),
         (Phase::Connect, 12),
-        (Phase::GithubResolution, 15),
-        (Phase::Reconcile, 22),
+        (Phase::Reconcile, 15),
+        (Phase::GithubResolution, 22),
         (Phase::RuntimeBuild, 32),
         (Phase::ManagerQualification, 50),
         (Phase::LocalStaging, 55),
@@ -196,6 +196,7 @@ fn execute_with_device<D: DeviceOperations>(
         decision: DeliveryDecision::Platform,
         manager_artifact: None,
         main_revision: None,
+        installed_manifest: None,
         stage: repository
             .join("build/agent-deploy/stage")
             .join(expected_commit),
@@ -260,6 +261,7 @@ struct ProcessActions<'a, D = mister_tool::NativeDevice> {
     decision: DeliveryDecision,
     manager_artifact: Option<PathBuf>,
     main_revision: Option<String>,
+    installed_manifest: Option<String>,
     stage: PathBuf,
     device: DeviceClient<D>,
 }
@@ -313,6 +315,17 @@ impl<D: DeviceOperations> ProcessActions<'_, D> {
             &manager,
         )?);
         Ok(())
+    }
+
+    fn prepare_runtime_manifest(&self) -> AgentResult<()> {
+        crate::platform_manifest::update_runtime(
+            &self.stage.join("platform-v2.manifest"),
+            self.installed_manifest
+                .as_deref()
+                .ok_or("runtime delivery is missing the installed platform manifest")?,
+            &self.repository.join(self.deployment.build.artifact()),
+            self.expected_commit,
+        )
     }
 
     fn qualify_manager(&mut self) -> AgentResult<()> {
@@ -377,45 +390,72 @@ impl<D: DeviceOperations> DeliveryActions for ProcessActions<'_, D> {
             Phase::Connect => self.device.execute(DeviceRequest::Discover).map(|_| ()),
             Phase::GithubResolution => self.resolve_github(),
             Phase::Reconcile => {
+                let installed_manifest = self
+                    .device
+                    .execute(DeviceRequest::ReadDevelopmentManifest)?;
+                let reconciliation = crate::deploy::reconcile(
+                    self.repository,
+                    &installed_manifest,
+                    self.expected_commit,
+                );
                 let platform_candidate = self.deployment.platform_candidate.take();
-                self.deployment = crate::deploy::plan(self.repository, Vec::new())?;
+                self.deployment =
+                    crate::deploy::plan(self.repository, reconciliation.changed_paths)?;
                 self.deployment.platform_candidate = platform_candidate;
-                self.deployment.kind = DeploymentKind::Platform;
-                self.decision = DeliveryDecision::Platform;
+                self.decision = reconciliation.decision;
+                self.installed_manifest = Some(installed_manifest);
                 Ok(())
             }
             Phase::RuntimeBuild => self.build_runtime(),
             Phase::ManagerQualification => self.qualify_manager(),
-            Phase::LocalStaging => self.prepare_local_stage(),
+            Phase::LocalStaging => match self.decision {
+                DeliveryDecision::Runtime => self.prepare_runtime_manifest(),
+                DeliveryDecision::Platform => self.prepare_local_stage(),
+                DeliveryDecision::NoOp => Ok(()),
+            },
             Phase::DatabasePreparation => self.prepare_databases(),
             Phase::Snapshot => Ok(()),
-            Phase::RemoteInventoryUpload => self
-                .device
-                .execute(DeviceRequest::DeliverPlatformTransaction {
-                    stage: self.stage.clone(),
-                    expected_sha256: self
-                        .artifact_sha256
-                        .clone()
-                        .ok_or("qualified runtime identity is missing")?,
-                })
-                .map(|_| ()),
+            Phase::RemoteInventoryUpload => {
+                let expected_sha256 = self
+                    .artifact_sha256
+                    .clone()
+                    .ok_or("qualified runtime identity is missing")?;
+                let request = match self.decision {
+                    DeliveryDecision::Runtime => DeviceRequest::DeliverRuntimeTransaction {
+                        local: self.repository.join(self.deployment.build.artifact()),
+                        remote: "/media/fat/mister-magik-dev/mister-magik-fb".into(),
+                        manifest_local: self.stage.join("platform-v2.manifest"),
+                        manifest_remote: "/media/fat/mister-magik-dev/platform-v2.manifest".into(),
+                        expected_sha256,
+                    },
+                    DeliveryDecision::Platform => DeviceRequest::DeliverPlatformTransaction {
+                        stage: self.stage.clone(),
+                        expected_sha256,
+                    },
+                    DeliveryDecision::NoOp => return Ok(()),
+                };
+                self.device.execute(request).map(|_| ())
+            }
             Phase::Activate | Phase::RebootIfNeeded | Phase::Smoke | Phase::Complete => Ok(()),
         }
     }
 
     fn should_run(&self, phase: Phase) -> bool {
         match phase {
-            Phase::ManagerQualification
+            Phase::GithubResolution | Phase::ManagerQualification | Phase::DatabasePreparation => {
+                self.decision == DeliveryDecision::Platform
+            }
+            Phase::RuntimeBuild
             | Phase::LocalStaging
-            | Phase::DatabasePreparation
-            | Phase::Activate
-            | Phase::RebootIfNeeded => true,
+            | Phase::Snapshot
+            | Phase::RemoteInventoryUpload => self.decision != DeliveryDecision::NoOp,
+            Phase::Activate | Phase::RebootIfNeeded | Phase::Smoke => false,
             _ => true,
         }
     }
 
     fn is_complete(&self) -> bool {
-        false
+        self.decision == DeliveryDecision::NoOp
     }
 
     fn compensate(&mut self) -> AgentResult<()> {
@@ -667,8 +707,8 @@ mod tests {
         Phase::Classify,
         Phase::ValidateCommit,
         Phase::Connect,
-        Phase::GithubResolution,
         Phase::Reconcile,
+        Phase::GithubResolution,
         Phase::RuntimeBuild,
         Phase::ManagerQualification,
         Phase::LocalStaging,
@@ -855,16 +895,16 @@ mod tests {
     }
 
     #[test]
-    fn deliver_never_uses_runtime_transaction() {
+    fn runtime_delivery_uses_no_reboot_transaction() {
         let requests = Rc::new(RefCell::new(Vec::new()));
         let mut actions = scenario_actions(
-            DeploymentKind::Runtime,
+            crate::deploy::DeploymentKind::Runtime,
             DeviceClient::new(RequestRecorder(Rc::clone(&requests))),
         );
         actions.run(Phase::RemoteInventoryUpload).unwrap();
         assert!(matches!(
             requests.borrow().as_slice(),
-            [DeviceRequest::DeliverPlatformTransaction { .. }]
+            [DeviceRequest::DeliverRuntimeTransaction { .. }]
         ));
     }
 
@@ -872,7 +912,7 @@ mod tests {
     fn deterministic_platform_uses_one_transaction_request() {
         let requests = Rc::new(RefCell::new(Vec::new()));
         let mut actions = scenario_actions(
-            DeploymentKind::Platform,
+            crate::deploy::DeploymentKind::Platform,
             DeviceClient::new(RequestRecorder(Rc::clone(&requests))),
         );
         actions.run(Phase::RemoteInventoryUpload).unwrap();
@@ -883,19 +923,24 @@ mod tests {
     }
 
     fn scenario_actions(
-        kind: DeploymentKind,
+        kind: crate::deploy::DeploymentKind,
         device: DeviceClient<RequestRecorder>,
     ) -> ProcessActions<'static, RequestRecorder> {
         let mut deployment = crate::deploy::plan(Path::new("."), Vec::new()).unwrap();
         deployment.kind = kind;
+        let decision = match kind {
+            crate::deploy::DeploymentKind::Runtime => DeliveryDecision::Runtime,
+            crate::deploy::DeploymentKind::Platform => DeliveryDecision::Platform,
+        };
         ProcessActions {
             repository: Path::new("."),
             deployment,
             expected_commit: "revision",
             artifact_sha256: Some("a".repeat(64)),
-            decision: DeliveryDecision::Platform,
+            decision,
             manager_artifact: None,
             main_revision: None,
+            installed_manifest: None,
             stage: PathBuf::from("stage"),
             device,
         }
