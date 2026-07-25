@@ -3859,7 +3859,6 @@ fn summarize_screensaver_telemetry(
         "presentation_interval": periodic_signal(&interval_signal, refresh_period_us),
     });
     let raster = raster_cadence_summary(steady);
-    let card_coverage = card_coverage_summary(steady);
     let maintenance = maintenance_cohorts(steady);
     let status_publishing = status_publishing_summary(steady, &active);
     let presentation_paths = steady
@@ -3936,7 +3935,6 @@ fn summarize_screensaver_telemetry(
         "outliers": outliers,
         "periodic_timing": periodic,
         "raster_cadence": raster,
-        "card_coverage": card_coverage,
         "status_publishing": status_publishing,
         "main_present_copy_paths": presentation_paths,
         "phase_bank_resident_bytes": phase_bank_bytes,
@@ -4230,9 +4228,6 @@ fn validate_screensaver_frame_evidence(run: usize, frame_id: u64, frame: &Value)
         "screensaver_raster_moved_cards",
         "screensaver_raster_hold_layer_mask",
         "screensaver_raster_visible_layer_mask",
-        "screensaver_card_coverage_pixels",
-        "screensaver_card_damage_pixels",
-        "screensaver_screen_pixels",
     ];
     const BOOL_FIELDS: &[&str] = &[
         "screensaver_active",
@@ -4444,43 +4439,6 @@ fn raster_cadence_summary(frames: &[&Value]) -> Value {
     })
 }
 
-fn card_coverage_summary(frames: &[&Value]) -> Value {
-    fn percentages(frames: &[&Value], key: &str) -> Vec<f64> {
-        frames
-            .iter()
-            .filter_map(|frame| {
-                let screen_pixels = frame_u64(frame, "screensaver_screen_pixels");
-                (screen_pixels > 0)
-                    .then(|| frame_u64(frame, key) as f64 * 100.0 / screen_pixels as f64)
-            })
-            .collect()
-    }
-    fn distribution(mut values: Vec<f64>) -> Value {
-        if values.is_empty() {
-            return json!({
-                "frames": 0,
-                "mean_pct": 0.0,
-                "median_pct": 0.0,
-                "p95_pct": 0.0,
-                "max_pct": 0.0,
-            });
-        }
-        values.sort_by(f64::total_cmp);
-        let percentile = |pct: usize| values[(values.len() * pct).div_ceil(100).saturating_sub(1)];
-        json!({
-            "frames": values.len(),
-            "mean_pct": values.iter().sum::<f64>() / values.len() as f64,
-            "median_pct": percentile(50),
-            "p95_pct": percentile(95),
-            "max_pct": values.last().copied().unwrap_or(0.0),
-        })
-    }
-    json!({
-        "card_rectangles": distribution(percentages(frames, "screensaver_card_coverage_pixels")),
-        "two_frame_damage": distribution(percentages(frames, "screensaver_card_damage_pixels")),
-    })
-}
-
 fn screensaver_benchmark_report(summary: &Value) -> Result<String> {
     use std::fmt::Write as _;
 
@@ -4625,34 +4583,6 @@ fn screensaver_benchmark_report(summary: &Value) -> Result<String> {
             run.pointer("/raster_cadence/sampling_profiles")
                 .cloned()
                 .unwrap_or(Value::Null),
-        )?;
-        writeln!(
-            report,
-            "Card rectangle coverage (mean/median/P95/max): {:.2}% / {:.2}% / {:.2}% / {:.2}%. Two-frame movement damage: {:.2}% / {:.2}% / {:.2}% / {:.2}%.\n",
-            run.pointer("/card_coverage/card_rectangles/mean_pct")
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0),
-            run.pointer("/card_coverage/card_rectangles/median_pct")
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0),
-            run.pointer("/card_coverage/card_rectangles/p95_pct")
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0),
-            run.pointer("/card_coverage/card_rectangles/max_pct")
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0),
-            run.pointer("/card_coverage/two_frame_damage/mean_pct")
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0),
-            run.pointer("/card_coverage/two_frame_damage/median_pct")
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0),
-            run.pointer("/card_coverage/two_frame_damage/p95_pct")
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0),
-            run.pointer("/card_coverage/two_frame_damage/max_pct")
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0),
         )?;
         writeln!(
             report,
@@ -12602,9 +12532,6 @@ H: Handlers=event3 js0"#
                 "screensaver_raster_hold_layer_mask": u64::from(id == 4),
                 "screensaver_raster_visible_layer_mask": 31
             });
-            frame["screensaver_card_coverage_pixels"] = json!(230_400);
-            frame["screensaver_card_damage_pixels"] = json!(276_480);
-            frame["screensaver_screen_pixels"] = json!(921_600);
             frame["status_publish_mode"] = json!("async");
             frame["status_enqueue_us"] = json!(0);
             frame["status_worker_write_us"] = json!(24_000);
@@ -12663,14 +12590,6 @@ H: Handlers=event3 js0"#
         assert_eq!(summary["steady_state"]["presentation_failures"], json!([]));
         assert_eq!(summary["latch_drop_delta"], 0);
         assert_eq!(summary["raster_cadence"]["held_frames"], 1);
-        assert_eq!(
-            summary["card_coverage"]["card_rectangles"]["mean_pct"],
-            25.0
-        );
-        assert_eq!(
-            summary["card_coverage"]["two_frame_damage"]["mean_pct"],
-            30.0
-        );
         let report = screensaver_benchmark_report(&json!({
             "manifest": {"magik_revision": "test-revision"},
             "display": {"final_mode": "hdmi-1280x720p60"},
@@ -12679,7 +12598,6 @@ H: Handlers=event3 js0"#
         .unwrap();
         assert!(report.contains("Presentation failures"));
         assert!(report.contains("Visible raster holds"));
-        assert!(report.contains("Card rectangle coverage"));
         assert!(report.contains("complete CPU attribution"));
         assert!(
             summarize_screensaver_telemetry(

@@ -1770,15 +1770,6 @@ impl LauncherFrameAccounting {
                 screensaver_phase_bank_bytes: usize_to_u64_saturating(
                     frame.screensaver_frame_trace.phase_bank_resident_bytes,
                 ),
-                screensaver_card_coverage_pixels: usize_to_u64_saturating(
-                    frame.screensaver_frame_trace.card_coverage_pixels,
-                ),
-                screensaver_card_damage_pixels: usize_to_u64_saturating(
-                    frame.screensaver_frame_trace.card_damage_pixels,
-                ),
-                screensaver_screen_pixels: usize_to_u64_saturating(
-                    frame.screensaver_frame_trace.screen_pixels,
-                ),
             });
     }
 
