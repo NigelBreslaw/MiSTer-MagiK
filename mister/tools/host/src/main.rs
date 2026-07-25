@@ -4295,7 +4295,6 @@ fn validate_screensaver_frame_evidence(run: usize, frame_id: u64, frame: &Value)
         "screensaver_raster_visible_layer_mask",
         "screensaver_damage_tile_count",
         "screensaver_background_restore_bytes",
-        "screensaver_star_pixels_touched",
         "screensaver_cards_redrawn",
         "screensaver_cards_skipped",
     ];
@@ -4525,7 +4524,6 @@ fn screensaver_damage_work_summary(frames: &[&Value]) -> Value {
     json!({
         "dirty_tiles": field_summary(frames, "screensaver_damage_tile_count"),
         "background_restore_bytes": field_summary(frames, "screensaver_background_restore_bytes"),
-        "star_pixels_touched": field_summary(frames, "screensaver_star_pixels_touched"),
         "cards_redrawn": field_summary(frames, "screensaver_cards_redrawn"),
         "cards_skipped": field_summary(frames, "screensaver_cards_skipped"),
     })
@@ -12637,7 +12635,6 @@ H: Handlers=event3 js0"#
             });
             frame["screensaver_damage_tile_count"] = json!(40);
             frame["screensaver_background_restore_bytes"] = json!(81_920);
-            frame["screensaver_star_pixels_touched"] = json!(840);
             frame["screensaver_cards_redrawn"] = json!(12);
             frame["screensaver_cards_skipped"] = json!(48);
             frame["status_publish_mode"] = json!("async");

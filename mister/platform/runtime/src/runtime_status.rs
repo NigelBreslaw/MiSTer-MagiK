@@ -224,7 +224,6 @@ pub struct FrameBudgetRecentFrame {
     pub screensaver_phase_bank_bytes: u64,
     pub screensaver_damage_tile_count: u64,
     pub screensaver_background_restore_bytes: u64,
-    pub screensaver_star_pixels_touched: u64,
     pub screensaver_cards_redrawn: u64,
     pub screensaver_cards_skipped: u64,
 }
@@ -810,10 +809,6 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
     field!(
         "screensaver_background_restore_bytes",
         frame.screensaver_background_restore_bytes
-    );
-    field!(
-        "screensaver_star_pixels_touched",
-        frame.screensaver_star_pixels_touched
     );
     field!("screensaver_cards_redrawn", frame.screensaver_cards_redrawn);
     field!("screensaver_cards_skipped", frame.screensaver_cards_skipped);

@@ -1776,9 +1776,6 @@ impl LauncherFrameAccounting {
                 screensaver_background_restore_bytes: usize_to_u64_saturating(
                     frame.screensaver_frame_trace.background_restore_bytes,
                 ),
-                screensaver_star_pixels_touched: usize_to_u64_saturating(
-                    frame.screensaver_frame_trace.star_pixels_touched,
-                ),
                 screensaver_cards_redrawn: usize_to_u64_saturating(
                     frame.screensaver_frame_trace.cards_drawn,
                 ),

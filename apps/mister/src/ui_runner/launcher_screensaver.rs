@@ -271,7 +271,6 @@ pub(super) struct ScreensaverFrameTrace {
     pub(super) damage_tiles: DamageTileMap,
     pub(super) damage_tile_count: usize,
     pub(super) background_restore_bytes: usize,
-    pub(super) star_pixels_touched: usize,
     pub(super) cards_skipped: usize,
 }
 
@@ -1479,67 +1478,6 @@ fn render_starfield(dst: &mut [Rgb565Pixel], w: usize, h: usize, frame: u64) {
     }
 }
 
-fn render_horizontal_starfield(
-    dst: &mut [Rgb565Pixel],
-    w: usize,
-    h: usize,
-    motion_ticks_fp: u64,
-    _motion: ParadeMotion,
-) {
-    clear(dst, color565(0, 0, 10));
-    for i in 0..210usize {
-        let layer = i & 3;
-        let (x, fraction) = horizontal_star_position(i, w, h, motion_ticks_fp);
-        let y = (i.wrapping_mul(83).wrapping_add(i.wrapping_mul(i) * 7)) % h;
-        let brightness = [70, 110, 170, 235][layer];
-        let color = color565(brightness / 2, brightness, 255);
-        let row = y * w;
-        dst[row + x] = blend_565(dst[row + x], color, 255 - fraction);
-        if fraction > 0 {
-            let next_x = (x + 1) % w;
-            dst[row + next_x] = blend_565(dst[row + next_x], color, fraction);
-        }
-    }
-}
-
-fn horizontal_star_x(star: usize, width: usize, frame: u64) -> usize {
-    horizontal_star_position(
-        star,
-        width,
-        PARADE_REFERENCE_HEIGHT,
-        frame.saturating_mul(PARADE_TICK_ONE as u64),
-    )
-    .0
-}
-
-fn horizontal_star_position(
-    star: usize,
-    width: usize,
-    screen_h: usize,
-    motion_ticks_fp: u64,
-) -> (usize, u8) {
-    const STAR_SPEED_DENOMINATOR: u64 = 16;
-    const SUBPIXEL_ONE: u64 = 256;
-    let speed_numerator = PARADE_MIN_TILE_SPEED as u64 * ((star & 3) + 1) as u64;
-    let start_x = (star
-        .wrapping_mul(197)
-        .wrapping_add(star.wrapping_mul(star) * 13))
-        % width;
-    let scaled_ticks_fp = motion_ticks_fp
-        .saturating_mul(screen_h as u64)
-        .saturating_add((PARADE_REFERENCE_HEIGHT / 2) as u64)
-        / PARADE_REFERENCE_HEIGHT as u64;
-    let travel = scaled_ticks_fp
-        .saturating_mul(speed_numerator)
-        .saturating_mul(SUBPIXEL_ONE)
-        / (STAR_SPEED_DENOMINATOR * PARADE_TICK_ONE as u64);
-    let position = (start_x as u64 * SUBPIXEL_ONE + travel) % (width as u64 * SUBPIXEL_ONE);
-    (
-        (position / SUBPIXEL_ONE) as usize,
-        (position % SUBPIXEL_ONE) as u8,
-    )
-}
-
 fn render_starfield_cabinets(
     dst: &mut [Rgb565Pixel],
     state: &mut ScreensaverRenderState,
@@ -2428,19 +2366,12 @@ struct ParadeScaleResult {
     card: Result<PreparedParadeCard, String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ParadeStarPixel {
-    index: usize,
-}
-
 struct ParadeState {
     tiles: Vec<ParadeTile>,
     draw_order: Vec<usize>,
     visible_draw_order: Vec<usize>,
     depth_coverage: Vec<DirtyRect>,
     background_pixels: Vec<Rgb565Pixel>,
-    previous_star_pixels: Vec<ParadeStarPixel>,
-    current_star_pixels: Vec<ParadeStarPixel>,
     previous_card_bounds: Vec<Option<DirtyRect>>,
     current_card_bounds: Vec<Option<DirtyRect>>,
     redraw_cards: Vec<bool>,
@@ -2569,8 +2500,6 @@ impl ParadeState {
             visible_draw_order: Vec::with_capacity(PARADE_WIDE_LAYER_TARGETS.iter().sum()),
             depth_coverage: Vec::with_capacity(PARADE_WIDE_LAYER_TARGETS.iter().sum()),
             background_pixels: Vec::new(),
-            previous_star_pixels: Vec::with_capacity(420),
-            current_star_pixels: Vec::with_capacity(420),
             previous_card_bounds: Vec::with_capacity(PARADE_WIDE_LAYER_TARGETS.iter().sum()),
             current_card_bounds: Vec::with_capacity(PARADE_WIDE_LAYER_TARGETS.iter().sum()),
             redraw_cards: Vec::with_capacity(PARADE_WIDE_LAYER_TARGETS.iter().sum()),
@@ -3243,8 +3172,6 @@ impl ParadeState {
     fn set_geometry(&mut self, screen_w: usize, screen_h: usize) {
         if self.screen_w != screen_w || self.screen_h != screen_h {
             self.background_pixels.clear();
-            self.previous_star_pixels.clear();
-            self.current_star_pixels.clear();
             self.previous_card_bounds.clear();
             self.current_card_bounds.clear();
             self.redraw_cards.clear();
@@ -3595,7 +3522,7 @@ fn render_parade(
     frame: u64,
 ) {
     let motion_ticks_fp = frame.saturating_mul(PARADE_TICK_ONE as u64);
-    render_horizontal_starfield(dst, w, h, motion_ticks_fp, state.motion);
+    clear(dst, color565(0, 0, 10));
     state.ensure_initialized(images, w, h);
     let _ = state.advance(w, h, Some(images), motion_ticks_fp, PARADE_TICK_ONE);
     prepare_parade_draw_order(state);
@@ -3621,7 +3548,7 @@ fn render_archive_parade(
     tick_delta_fp: i64,
 ) -> ScreensaverFrameTrace {
     let background_start = Instant::now();
-    let star_pixels_touched = update_parade_background(state, w, h, motion_ticks_fp);
+    prepare_parade_background(state, w, h);
     let background_us = background_start.elapsed().as_micros();
     let advance = state.advance(w, h, None, motion_ticks_fp, tick_delta_fp);
     let draw_order_start = Instant::now();
@@ -3688,18 +3615,12 @@ fn render_archive_parade(
         damage_tiles,
         damage_tile_count: damage_tiles.tile_count(),
         background_restore_bytes,
-        star_pixels_touched,
         cards_skipped: state.visible_draw_order.len().saturating_sub(cards_drawn),
         ..ScreensaverFrameTrace::default()
     }
 }
 
-fn update_parade_background(
-    state: &mut ParadeState,
-    w: usize,
-    h: usize,
-    motion_ticks_fp: u64,
-) -> usize {
+fn prepare_parade_background(state: &mut ParadeState, w: usize, h: usize) {
     state.set_geometry(w, h);
     let navy = color565(0, 0, 10);
     let mut damage = state.damage_tiles;
@@ -3707,53 +3628,9 @@ fn update_parade_background(
     if state.background_pixels.len() != w.saturating_mul(h) {
         state.background_pixels.resize(w.saturating_mul(h), navy);
         state.background_pixels.fill(navy);
-        state.previous_star_pixels.clear();
         damage = DamageTileMap::full(w, h);
     }
-    if w == 0 || h == 0 {
-        state.damage_tiles = damage;
-        return 0;
-    }
-
-    let mut touched = 0usize;
-    for star in &state.previous_star_pixels {
-        if let Some(pixel) = state.background_pixels.get_mut(star.index) {
-            *pixel = navy;
-            damage.mark_pixel(star.index % w, star.index / w);
-            touched += 1;
-        }
-    }
-    state.current_star_pixels.clear();
-    for i in 0..210usize {
-        let layer = i & 3;
-        let (x, fraction) = horizontal_star_position(i, w, h, motion_ticks_fp);
-        let y = (i.wrapping_mul(83).wrapping_add(i.wrapping_mul(i) * 7)) % h;
-        let brightness = [70, 110, 170, 235][layer];
-        let color = color565(brightness / 2, brightness, 255);
-        let index = y * w + x;
-        state.background_pixels[index] =
-            blend_565(state.background_pixels[index], color, 255 - fraction);
-        state.current_star_pixels.push(ParadeStarPixel { index });
-        damage.mark_pixel(x, y);
-        touched += 1;
-        if fraction > 0 {
-            let next_x = (x + 1) % w;
-            let next_index = y * w + next_x;
-            state.background_pixels[next_index] =
-                blend_565(state.background_pixels[next_index], color, fraction);
-            state
-                .current_star_pixels
-                .push(ParadeStarPixel { index: next_index });
-            damage.mark_pixel(next_x, y);
-            touched += 1;
-        }
-    }
-    std::mem::swap(
-        &mut state.previous_star_pixels,
-        &mut state.current_star_pixels,
-    );
     state.damage_tiles = damage;
-    touched
 }
 
 fn prepare_parade_damage(state: &mut ParadeState, w: usize, h: usize) {
@@ -4429,44 +4306,6 @@ mod tests {
     }
 
     #[test]
-    fn parade_starfield_moves_horizontally_in_depth_bands() {
-        let width = 960;
-        for star in 0..4 {
-            let x0 = horizontal_star_x(star, width, 0);
-            let x1 = horizontal_star_x(star, width, 16);
-            assert_eq!(
-                (x1 + width - x0) % width,
-                PARADE_MIN_TILE_SPEED * (star + 1)
-            );
-        }
-    }
-
-    #[test]
-    fn fastest_star_layer_is_half_the_slowest_card_speed() {
-        let width = 960;
-        let x0 = horizontal_star_x(3, width, 0);
-        let x1 = horizontal_star_x(3, width, 16);
-        let star_travel = (x1 + width - x0) % width;
-        let slowest_card_travel = PARADE_MIN_TILE_SPEED * 16 / 2;
-        assert_eq!(star_travel * 2, slowest_card_travel);
-    }
-
-    #[test]
-    fn slowest_star_has_a_new_subpixel_phase_every_frame() {
-        let (_, fraction0) = horizontal_star_position(0, 960, PARADE_REFERENCE_HEIGHT, 0);
-        for frame in 1..16 {
-            let (_, fraction) = horizontal_star_position(
-                0,
-                960,
-                PARADE_REFERENCE_HEIGHT,
-                frame * PARADE_TICK_ONE as u64,
-            );
-            assert_ne!(fraction, fraction0);
-            assert_eq!(fraction, frame as u8 * 16);
-        }
-    }
-
-    #[test]
     fn sampling_profile_is_selected_only_by_the_output_route() {
         assert_eq!(
             ParadeSamplingProfile::for_crt_output(false),
@@ -4827,25 +4666,7 @@ mod tests {
             let at_50_hz = one_second_card_travel(50, height);
             let at_60_hz = one_second_card_travel(60, height);
             assert_eq!(at_50_hz, at_60_hz, "card travel differs at {height}p");
-
-            let star_at_50_hz = horizontal_star_position(3, 4_096, height, at_50_hz.2);
-            let star_at_60_hz = horizontal_star_position(3, 4_096, height, at_60_hz.2);
-            assert_eq!(
-                star_at_50_hz, star_at_60_hz,
-                "star travel differs at {height}p"
-            );
         }
-    }
-
-    #[test]
-    fn stars_remain_slower_than_the_slowest_subpixel_card_layer() {
-        let x0 = horizontal_star_x(3, 960, 0);
-        let x1 = horizontal_star_x(3, 960, 16);
-        let fastest_star_travel = (x1 + 960 - x0) % 960;
-        let slowest_card_travel =
-            ParadeMotion::Subpixel.card_velocity_fp(0, PARADE_REFERENCE_HEIGHT) as usize * 16
-                / PARADE_SUBPIXEL_ONE as usize;
-        assert!(fastest_star_travel < slowest_card_travel);
     }
 
     #[test]
