@@ -72,6 +72,22 @@ pub struct DeviceFacts {
     pub present_backend: String,
     #[serde(default)]
     pub present_status: String,
+    #[serde(default)]
+    pub latch_failure_state: String,
+    #[serde(default)]
+    pub latch_failure_stage: String,
+    #[serde(default)]
+    pub latch_failure_reason: String,
+    #[serde(default)]
+    pub latch_failure_detail: String,
+    #[serde(default)]
+    pub compatibility_prompt_visible: bool,
+    #[serde(default)]
+    pub capture_source: String,
+    #[serde(default)]
+    pub capture_authoritative_scanout: bool,
+    #[serde(default)]
+    pub capture_error: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -99,6 +115,20 @@ pub struct DiagnosticReport {
     pub present_backend: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub present_status: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub latch_failure_state: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub latch_failure_stage: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub latch_failure_reason: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub latch_failure_detail: String,
+    pub compatibility_prompt_visible: bool,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub capture_source: String,
+    pub capture_authoritative_scanout: bool,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub capture_error: String,
 }
 
 fn is_zero(value: &u64) -> bool {
@@ -334,6 +364,14 @@ pub fn correlate(facts: &DeviceFacts, repaired: bool) -> DiagnosticReport {
         Some("Install the compatible MiSTer MagiK platform firmware, then rerun diagnosis.".into())
     } else if !facts.scanout_ready || !facts.latch_ready {
         Some("Run scripts/agent deliver to restore the coherent development platform, then rerun scripts/agent diagnose.".into())
+    } else if facts.present_backend == "compatibility-fb0"
+        || facts.present_status == "compatibility"
+    {
+        Some(if facts.latch_failure_state == "platform-incompatible" {
+            "Run scripts/agent deliver to restore the coherent development platform, then rerun scripts/agent diagnose.".into()
+        } else {
+            "Use A: Retry latch or B: Continue in compatibility mode on the device, then rerun scripts/agent diagnose.".into()
+        })
     } else if !facts.main_running || !facts.launcher_running || !facts.agent_running {
         Some("Restore the missing MiSTer MagiK service through the attended recovery path.".into())
     } else if !facts.launcher_heartbeat_advancing {
@@ -359,6 +397,14 @@ pub fn correlate(facts: &DeviceFacts, repaired: bool) -> DiagnosticReport {
         screen: facts.screen.clone(),
         present_backend: facts.present_backend.clone(),
         present_status: facts.present_status.clone(),
+        latch_failure_state: facts.latch_failure_state.clone(),
+        latch_failure_stage: facts.latch_failure_stage.clone(),
+        latch_failure_reason: facts.latch_failure_reason.clone(),
+        latch_failure_detail: facts.latch_failure_detail.clone(),
+        compatibility_prompt_visible: facts.compatibility_prompt_visible,
+        capture_source: facts.capture_source.clone(),
+        capture_authoritative_scanout: facts.capture_authoritative_scanout,
+        capture_error: facts.capture_error.clone(),
     }
 }
 
@@ -464,6 +510,51 @@ mod tests {
         );
         assert_eq!(report.status, "user_action_required");
         assert_eq!(report.present_backend, "compatibility-fb0");
+        assert!(
+            report
+                .next_action
+                .unwrap()
+                .contains("scripts/agent deliver")
+        );
+    }
+
+    #[test]
+    fn compatibility_presentation_fails_closed_with_preserved_evidence() {
+        let report = correlate(
+            &DeviceFacts {
+                present_backend: "compatibility-fb0".into(),
+                present_status: "compatibility".into(),
+                latch_failure_state: "runtime-fault".into(),
+                latch_failure_stage: "post-verification".into(),
+                latch_failure_reason: "posted-sequence-unverified".into(),
+                latch_failure_detail: "posted sequence 219 was not observed active".into(),
+                compatibility_prompt_visible: true,
+                capture_source: "producer-composition".into(),
+                capture_authoritative_scanout: false,
+                ..healthy()
+            },
+            false,
+        );
+
+        assert_eq!(report.status, "user_action_required");
+        assert_eq!(report.latch_failure_reason, "posted-sequence-unverified");
+        assert_eq!(report.capture_source, "producer-composition");
+        assert!(!report.capture_authoritative_scanout);
+        assert!(report.next_action.unwrap().contains("A: Retry latch"));
+    }
+
+    #[test]
+    fn compatibility_platform_failure_recommends_delivery() {
+        let report = correlate(
+            &DeviceFacts {
+                present_status: "compatibility".into(),
+                latch_failure_state: "platform-incompatible".into(),
+                ..healthy()
+            },
+            false,
+        );
+
+        assert_eq!(report.status, "user_action_required");
         assert!(
             report
                 .next_action

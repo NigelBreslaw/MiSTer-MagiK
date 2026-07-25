@@ -56,6 +56,7 @@ const DEFAULT_LAUNCHER_ENV_REMOTE: &str = "/media/fat/mister-magik/launcher.env"
 const DEVELOPMENT_LAUNCHER_ENV_REMOTE: &str = "/media/fat/mister-magik-dev/launcher.env";
 const MAIN_STATUS_REMOTE: &str = "/tmp/mister-magik/main-status.json";
 const SLINT_STATUS_REMOTE: &str = "/tmp/mister-magik/status.json";
+const LATCH_FAILURE_REMOTE: &str = "/tmp/mister-magik/latch-failure.json";
 const RESOLVED_DEVICE_CHILD: &str = "MISTER_MAGIK_RESOLVED_DEVICE_CHILD";
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -401,9 +402,57 @@ impl DeviceOperations for NativeDevice {
                         "input_enabled",
                         "present_backend",
                         "present_status",
+                        "latch_failure_state",
+                        "latch_failure_stage",
+                        "latch_failure_reason",
+                        "latch_failure_detail",
+                        "compatibility_prompt_visible",
                     ] {
                         if let Some(value) = slint.get(key) {
                             facts.insert(key.to_owned(), value.clone());
+                        }
+                    }
+                }
+                if let Some(latch_failure) = remote_read(&session, LATCH_FAILURE_REMOTE)
+                    .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+                    && let (Some(facts), Some(failure)) =
+                        (facts.as_object_mut(), latch_failure.as_object())
+                {
+                    for (fact_key, failure_key) in [
+                        ("latch_failure_state", "state"),
+                        ("latch_failure_stage", "stage"),
+                        ("latch_failure_reason", "reason"),
+                        ("latch_failure_detail", "detail"),
+                    ] {
+                        if let Some(value) = failure.get(failure_key) {
+                            facts.insert(fact_key.to_owned(), value.clone());
+                        }
+                    }
+                }
+                if let Some(facts) = facts.as_object_mut() {
+                    match request_framebuffer_png_at(&config.agent) {
+                        Ok(capture) => {
+                            facts.insert(
+                                "capture_source".into(),
+                                Value::String(
+                                    capture_source_label(&capture.result)
+                                        .map_err(device_failure)?
+                                        .to_owned(),
+                                ),
+                            );
+                            facts.insert(
+                                "capture_authoritative_scanout".into(),
+                                Value::Bool(
+                                    capture
+                                        .result
+                                        .get("authoritative_scanout")
+                                        .and_then(Value::as_bool)
+                                        .unwrap_or(false),
+                                ),
+                            );
+                        }
+                        Err(error) => {
+                            facts.insert("capture_error".into(), Value::String(error.to_string()));
                         }
                     }
                 }
