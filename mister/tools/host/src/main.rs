@@ -3018,7 +3018,7 @@ fn apply_confirmed_benchmark_display_mode(
     let active = parse_display_reply_active(current.stdout.trim())?;
     let ready = wait_launcher_ready(&session, Instant::now(), Duration::from_secs(15))?;
     if active == mode.id {
-        validate_live_display_mode(&session, mode)?;
+        validate_benchmark_display_geometry(&session)?;
         return Ok(());
     }
     exec_checked(
@@ -3109,7 +3109,7 @@ fn finalize_benchmark_state(
         .into());
     }
     if active == benchmark_mode.id {
-        validate_live_display_mode(&session, benchmark_mode)?;
+        validate_benchmark_display_geometry(&session)?;
     }
     let final_boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
         .ok_or("device boot id is unavailable after benchmark")?;
@@ -3139,6 +3139,22 @@ fn finalize_benchmark_state(
         &delivery_health_command("dev")?,
     )?;
     Ok(encode_hex(&Sha256::digest(final_ini.as_bytes())))
+}
+
+fn validate_benchmark_display_geometry(session: &Session) -> Result<()> {
+    let framebuffer = remote_read(session, "/sys/class/graphics/fb0/virtual_size")
+        .ok_or("device framebuffer size is unavailable")?;
+    let bits_per_pixel = remote_read(session, "/sys/class/graphics/fb0/bits_per_pixel")
+        .ok_or("device framebuffer depth is unavailable")?;
+    if framebuffer.trim().replace(',', "x") != "1280x720" || bits_per_pixel.trim() != "16" {
+        return Err(format!(
+            "screensaver benchmark display is {} at {} bpp, expected 1280x720 at 16 bpp",
+            framebuffer.trim().replace(',', "x"),
+            bits_per_pixel.trim()
+        )
+        .into());
+    }
+    Ok(())
 }
 
 fn combine_benchmark_cleanup(first: Result<()>, second: Result<()>) -> Result<()> {
