@@ -222,6 +222,15 @@ pub struct FrameBudgetRecentFrame {
     pub screensaver_raster_visible_layer_mask: u8,
     pub screensaver_sixteenth_phase_layer_mask: u8,
     pub screensaver_phase_bank_bytes: u64,
+    pub screensaver_render_ahead_sequence: u64,
+    pub screensaver_render_ahead_queue_depth: u64,
+    pub screensaver_render_ahead_frame_age_us: u64,
+    pub screensaver_render_ahead_render_wall_us: u64,
+    pub screensaver_render_ahead_render_cpu_us: u64,
+    pub screensaver_render_ahead_starvation_count: u64,
+    pub screensaver_render_ahead_superseded_frames: u64,
+    pub screensaver_render_ahead_reused_frames: u64,
+    pub screensaver_render_ahead_cancelled: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -797,6 +806,42 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
     field!(
         "screensaver_phase_bank_bytes",
         frame.screensaver_phase_bank_bytes
+    );
+    field!(
+        "screensaver_render_ahead_sequence",
+        frame.screensaver_render_ahead_sequence
+    );
+    field!(
+        "screensaver_render_ahead_queue_depth",
+        frame.screensaver_render_ahead_queue_depth
+    );
+    field!(
+        "screensaver_render_ahead_frame_age_us",
+        frame.screensaver_render_ahead_frame_age_us
+    );
+    field!(
+        "screensaver_render_ahead_render_wall_us",
+        frame.screensaver_render_ahead_render_wall_us
+    );
+    field!(
+        "screensaver_render_ahead_render_cpu_us",
+        frame.screensaver_render_ahead_render_cpu_us
+    );
+    field!(
+        "screensaver_render_ahead_starvation_count",
+        frame.screensaver_render_ahead_starvation_count
+    );
+    field!(
+        "screensaver_render_ahead_superseded_frames",
+        frame.screensaver_render_ahead_superseded_frames
+    );
+    field!(
+        "screensaver_render_ahead_reused_frames",
+        frame.screensaver_render_ahead_reused_frames
+    );
+    field!(
+        "screensaver_render_ahead_cancelled",
+        frame.screensaver_render_ahead_cancelled
     );
     Value::Object(object)
 }

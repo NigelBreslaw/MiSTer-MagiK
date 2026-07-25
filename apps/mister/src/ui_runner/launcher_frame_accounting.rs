@@ -1770,6 +1770,33 @@ impl LauncherFrameAccounting {
                 screensaver_phase_bank_bytes: usize_to_u64_saturating(
                     frame.screensaver_frame_trace.phase_bank_resident_bytes,
                 ),
+                screensaver_render_ahead_sequence: frame
+                    .screensaver_frame_trace
+                    .render_ahead_sequence,
+                screensaver_render_ahead_queue_depth: usize_to_u64_saturating(
+                    frame.screensaver_frame_trace.render_ahead_queue_depth,
+                ),
+                screensaver_render_ahead_frame_age_us: frame
+                    .screensaver_frame_trace
+                    .render_ahead_frame_age_us,
+                screensaver_render_ahead_render_wall_us: frame
+                    .screensaver_frame_trace
+                    .render_ahead_render_wall_us,
+                screensaver_render_ahead_render_cpu_us: frame
+                    .screensaver_frame_trace
+                    .render_ahead_render_cpu_us,
+                screensaver_render_ahead_starvation_count: frame
+                    .screensaver_frame_trace
+                    .render_ahead_starvation_count,
+                screensaver_render_ahead_superseded_frames: frame
+                    .screensaver_frame_trace
+                    .render_ahead_superseded_frames,
+                screensaver_render_ahead_reused_frames: frame
+                    .screensaver_frame_trace
+                    .render_ahead_reused_frames,
+                screensaver_render_ahead_cancelled: frame
+                    .screensaver_frame_trace
+                    .render_ahead_cancelled,
             });
     }
 

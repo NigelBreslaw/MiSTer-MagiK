@@ -268,6 +268,15 @@ pub(super) struct ScreensaverFrameTrace {
     pub(super) raster_visible_layer_mask: u8,
     pub(super) sixteenth_phase_layer_mask: u8,
     pub(super) phase_bank_resident_bytes: usize,
+    pub(super) render_ahead_sequence: u64,
+    pub(super) render_ahead_queue_depth: usize,
+    pub(super) render_ahead_frame_age_us: u64,
+    pub(super) render_ahead_render_wall_us: u64,
+    pub(super) render_ahead_render_cpu_us: u64,
+    pub(super) render_ahead_starvation_count: u64,
+    pub(super) render_ahead_superseded_frames: u64,
+    pub(super) render_ahead_reused_frames: u64,
+    pub(super) render_ahead_cancelled: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default)]

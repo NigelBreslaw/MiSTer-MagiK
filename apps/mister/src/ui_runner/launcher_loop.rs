@@ -1768,6 +1768,10 @@ pub(super) fn run_launcher_loop(
     let mut screensaver_active_cards = 0usize;
     let mut screensaver_archive_loading = false;
     let mut screensaver_has_rendered_card = false;
+    let mut screensaver_render_sequence = 0u64;
+    let mut screensaver_starvation_count = 0u64;
+    let mut screensaver_superseded_frames = 0u64;
+    let mut screensaver_reused_frames = 0u64;
     let mut screensaver_show_started: Option<Instant> = None;
     let mut screensaver_first_render_logged = false;
     let mut screensaver_first_present_logged = false;
@@ -4452,6 +4456,10 @@ pub(super) fn run_launcher_loop(
                     ui.render_h(),
                     pacer.period_us(),
                 ));
+                screensaver_render_sequence = 0;
+                screensaver_starvation_count = 0;
+                screensaver_superseded_frames = 0;
+                screensaver_reused_frames = 0;
                 screensaver_loader = None;
             }
         }
@@ -4486,6 +4494,20 @@ pub(super) fn run_launcher_loop(
                         let _ = pipeline.recycle(pixels);
                     }
                     screensaver_frame_trace = frame.trace;
+                    screensaver_render_sequence = frame.sequence;
+                    screensaver_frame_trace.render_ahead_sequence = frame.sequence;
+                    screensaver_frame_trace.render_ahead_queue_depth = screensaver_pipeline
+                        .as_ref()
+                        .map(ScreensaverRenderAhead::ready_depth)
+                        .unwrap_or(0);
+                    screensaver_frame_trace.render_ahead_frame_age_us = frame
+                        .completed_at
+                        .elapsed()
+                        .as_micros()
+                        .try_into()
+                        .unwrap_or(u64::MAX);
+                    screensaver_frame_trace.render_ahead_render_wall_us = frame.render_wall_us;
+                    screensaver_frame_trace.render_ahead_render_cpu_us = frame.render_cpu_us;
                     screensaver_active_cards = frame.active_cards;
                     screensaver_archive_loading = frame.archive_loading;
                     screensaver_has_rendered_card = frame.has_rendered_card;
@@ -4504,6 +4526,20 @@ pub(super) fn run_launcher_loop(
                 }
             }
         }
+        if screensaver.active && screensaver_frame_visible && !accepted_screensaver_frame {
+            screensaver_starvation_count = screensaver_starvation_count.saturating_add(1);
+            screensaver_reused_frames = screensaver_reused_frames.saturating_add(1);
+        }
+        screensaver_frame_trace.render_ahead_sequence = screensaver_render_sequence;
+        screensaver_frame_trace.render_ahead_queue_depth = screensaver_pipeline
+            .as_ref()
+            .map(ScreensaverRenderAhead::ready_depth)
+            .unwrap_or(0);
+        screensaver_frame_trace.render_ahead_starvation_count = screensaver_starvation_count;
+        screensaver_frame_trace.render_ahead_superseded_frames = screensaver_superseded_frames;
+        screensaver_frame_trace.render_ahead_reused_frames = screensaver_reused_frames;
+        screensaver_frame_trace.render_ahead_cancelled =
+            screensaver_pipeline.is_none() && !retiring_screensaver_pipelines.is_empty();
         let this_rect = if screensaver.active && screensaver_frame_visible {
             if accepted_screensaver_frame && screensaver_fade_alpha.is_some_and(|alpha| alpha < 255)
             {

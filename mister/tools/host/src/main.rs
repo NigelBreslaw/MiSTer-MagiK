@@ -3867,6 +3867,7 @@ fn summarize_screensaver_telemetry(
         "presentation_interval": periodic_signal(&interval_signal, refresh_period_us),
     });
     let raster = raster_cadence_summary(steady);
+    let render_ahead = screensaver_render_ahead_summary(steady);
     let maintenance = maintenance_cohorts(steady);
     let status_publishing = status_publishing_summary(steady, &active);
     let presentation_paths = steady
@@ -3944,6 +3945,7 @@ fn summarize_screensaver_telemetry(
         "outliers": outliers,
         "periodic_timing": periodic,
         "raster_cadence": raster,
+        "render_ahead": render_ahead,
         "status_publishing": status_publishing,
         "main_present_copy_paths": presentation_paths,
         "phase_bank_resident_bytes": phase_bank_bytes,
@@ -4291,12 +4293,21 @@ fn validate_screensaver_frame_evidence(run: usize, frame_id: u64, frame: &Value)
         "screensaver_raster_moved_cards",
         "screensaver_raster_hold_layer_mask",
         "screensaver_raster_visible_layer_mask",
+        "screensaver_render_ahead_sequence",
+        "screensaver_render_ahead_queue_depth",
+        "screensaver_render_ahead_frame_age_us",
+        "screensaver_render_ahead_render_wall_us",
+        "screensaver_render_ahead_render_cpu_us",
+        "screensaver_render_ahead_starvation_count",
+        "screensaver_render_ahead_superseded_frames",
+        "screensaver_render_ahead_reused_frames",
     ];
     const BOOL_FIELDS: &[&str] = &[
         "screensaver_active",
         "main_present_pending",
         "status_write_due",
         "clock_update_due",
+        "screensaver_render_ahead_cancelled",
     ];
     const STRING_FIELDS: &[&str] = &[
         "vsync_source",
@@ -4502,6 +4513,35 @@ fn raster_cadence_summary(frames: &[&Value]) -> Value {
     })
 }
 
+fn screensaver_render_ahead_summary(frames: &[&Value]) -> Value {
+    let values = |key: &str| {
+        frames
+            .iter()
+            .map(|frame| frame_u64(frame, key))
+            .collect::<Vec<_>>()
+    };
+    let summary = |key: &str| {
+        let mut samples = values(key);
+        samples.sort_unstable();
+        json!({
+            "mean": mean_u64(&samples),
+            "p99": percentile_99(&samples),
+            "max": samples.last().copied().unwrap_or(0),
+        })
+    };
+    json!({
+        "queue_depth": summary("screensaver_render_ahead_queue_depth"),
+        "frame_age_us": summary("screensaver_render_ahead_frame_age_us"),
+        "render_wall_us": summary("screensaver_render_ahead_render_wall_us"),
+        "render_cpu_us": summary("screensaver_render_ahead_render_cpu_us"),
+        "final_sequence": frames.last().map(|frame| frame_u64(frame, "screensaver_render_ahead_sequence")).unwrap_or(0),
+        "starvation_count": frames.last().map(|frame| frame_u64(frame, "screensaver_render_ahead_starvation_count")).unwrap_or(0),
+        "superseded_frames": frames.last().map(|frame| frame_u64(frame, "screensaver_render_ahead_superseded_frames")).unwrap_or(0),
+        "reused_frames": frames.last().map(|frame| frame_u64(frame, "screensaver_render_ahead_reused_frames")).unwrap_or(0),
+        "cancelled_frames": frames.iter().filter(|frame| frame.get("screensaver_render_ahead_cancelled").and_then(Value::as_bool) == Some(true)).count(),
+    })
+}
+
 fn screensaver_benchmark_report(summary: &Value) -> Result<String> {
     use std::fmt::Write as _;
 
@@ -4667,6 +4707,11 @@ fn screensaver_benchmark_report(summary: &Value) -> Result<String> {
             report,
             "Mean wall phases and complete CPU attribution: `{}`.\n",
             run.get("phase_means").cloned().unwrap_or(Value::Null),
+        )?;
+        writeln!(
+            report,
+            "Render-ahead pipeline: `{}`.\n",
+            run.get("render_ahead").cloned().unwrap_or(Value::Null),
         )?;
         let failures = run
             .pointer("/steady_state/presentation_failures")
@@ -12601,6 +12646,15 @@ H: Handlers=event3 js0"#
                 "screensaver_raster_hold_layer_mask": u64::from(id == 4),
                 "screensaver_raster_visible_layer_mask": 31
             });
+            frame["screensaver_render_ahead_sequence"] = json!(id);
+            frame["screensaver_render_ahead_queue_depth"] = json!(1);
+            frame["screensaver_render_ahead_frame_age_us"] = json!(400);
+            frame["screensaver_render_ahead_render_wall_us"] = json!(4_500);
+            frame["screensaver_render_ahead_render_cpu_us"] = json!(4_300);
+            frame["screensaver_render_ahead_starvation_count"] = json!(0);
+            frame["screensaver_render_ahead_superseded_frames"] = json!(0);
+            frame["screensaver_render_ahead_reused_frames"] = json!(0);
+            frame["screensaver_render_ahead_cancelled"] = json!(false);
             frame["status_publish_mode"] = json!("async");
             frame["status_enqueue_us"] = json!(0);
             frame["status_worker_write_us"] = json!(24_000);
@@ -12659,6 +12713,7 @@ H: Handlers=event3 js0"#
         assert_eq!(summary["steady_state"]["presentation_failures"], json!([]));
         assert_eq!(summary["latch_drop_delta"], 0);
         assert_eq!(summary["raster_cadence"]["held_frames"], 1);
+        assert_eq!(summary["render_ahead"]["starvation_count"], 0);
         let report = screensaver_benchmark_report(&json!({
             "manifest": {"magik_revision": "test-revision"},
             "display": {"final_mode": "hdmi-1280x720p60"},
@@ -12667,6 +12722,7 @@ H: Handlers=event3 js0"#
         .unwrap();
         assert!(report.contains("Presentation failures"));
         assert!(report.contains("Visible raster holds"));
+        assert!(report.contains("Render-ahead pipeline"));
         assert!(report.contains("complete CPU attribution"));
         assert!(
             summarize_screensaver_telemetry(
