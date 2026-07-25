@@ -7,7 +7,6 @@ use super::launcher_compositor::{
 use super::launcher_pacing::LauncherPacingTrace;
 use super::launcher_screensaver::ScreensaverFrameTrace;
 use super::*;
-use std::collections::VecDeque;
 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
 use std::fmt::Write as _;
 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
@@ -80,8 +79,8 @@ pub(super) struct LauncherFrameAccounting {
     frame_budget_window: FrameBudgetAccumulator,
     last_frame_budget_status: runtime_status::FrameBudgetStatus,
     frame_analytics_mode: FrameAnalyticsMode,
-    frame_analytics_samples: VecDeque<runtime_status::FrameBudgetRecentFrame>,
-    slow_frame_samples: VecDeque<runtime_status::FrameBudgetSlowFrame>,
+    frame_analytics_samples: Vec<runtime_status::FrameBudgetRecentFrame>,
+    slow_frame_samples: Vec<runtime_status::FrameBudgetSlowFrame>,
 }
 
 pub(super) struct LauncherPresentedFrame {
@@ -1057,8 +1056,8 @@ impl LauncherFrameAccounting {
                 ..runtime_status::FrameBudgetStatus::default()
             },
             frame_analytics_mode: FrameAnalyticsMode::Off,
-            frame_analytics_samples: VecDeque::with_capacity(FRAME_ANALYTICS_SAMPLE_CAP),
-            slow_frame_samples: VecDeque::with_capacity(FRAME_SLOW_SAMPLE_CAP),
+            frame_analytics_samples: Vec::with_capacity(FRAME_ANALYTICS_SAMPLE_CAP),
+            slow_frame_samples: Vec::with_capacity(FRAME_SLOW_SAMPLE_CAP),
         }
     }
 
@@ -1636,10 +1635,10 @@ impl LauncherFrameAccounting {
     ) {
         let publisher = self.runtime_status_publisher.metrics();
         if self.frame_analytics_samples.len() == FRAME_ANALYTICS_SAMPLE_CAP {
-            self.frame_analytics_samples.pop_front();
+            self.frame_analytics_samples.remove(0);
         }
         self.frame_analytics_samples
-            .push_back(runtime_status::FrameBudgetRecentFrame {
+            .push(runtime_status::FrameBudgetRecentFrame {
                 frame: frame.frames,
                 screensaver_active: frame.screensaver_active,
                 wall_us,
@@ -1736,7 +1735,7 @@ impl LauncherFrameAccounting {
         present_us: u64,
     ) {
         if self.slow_frame_samples.len() == FRAME_SLOW_SAMPLE_CAP {
-            self.slow_frame_samples.pop_front();
+            self.slow_frame_samples.remove(0);
         }
         let (dirty_y0, dirty_y1) = frame
             .dirty_rect
@@ -1748,7 +1747,7 @@ impl LauncherFrameAccounting {
             })
             .unwrap_or((0, 0));
         self.slow_frame_samples
-            .push_back(runtime_status::FrameBudgetSlowFrame {
+            .push(runtime_status::FrameBudgetSlowFrame {
                 frame: frame.frames,
                 severity: if wall_us > FRAME_BUDGET_US {
                     "drop"
@@ -1816,6 +1815,29 @@ impl LauncherFrameAccounting {
     }
 
     fn current_frame_budget_status(&self) -> runtime_status::FrameBudgetStatus {
+        self.frame_budget_status_with_samples(
+            self.frame_analytics_samples.clone(),
+            self.slow_frame_samples.clone(),
+        )
+    }
+
+    fn take_frame_budget_status(&mut self) -> runtime_status::FrameBudgetStatus {
+        let recent_frames = std::mem::replace(
+            &mut self.frame_analytics_samples,
+            Vec::with_capacity(FRAME_ANALYTICS_SAMPLE_CAP),
+        );
+        let slow_frames = std::mem::replace(
+            &mut self.slow_frame_samples,
+            Vec::with_capacity(FRAME_SLOW_SAMPLE_CAP),
+        );
+        self.frame_budget_status_with_samples(recent_frames, slow_frames)
+    }
+
+    fn frame_budget_status_with_samples(
+        &self,
+        recent_frames: Vec<runtime_status::FrameBudgetRecentFrame>,
+        slow_frames: Vec<runtime_status::FrameBudgetSlowFrame>,
+    ) -> runtime_status::FrameBudgetStatus {
         let total = self.frame_budget_total;
         let window = self.frame_budget_window;
         runtime_status::FrameBudgetStatus {
@@ -1846,8 +1868,8 @@ impl LauncherFrameAccounting {
             ),
             window_vsync_us: FrameBudgetAccumulator::avg_us(window.vsync_us, window.frames),
             window_present_us: FrameBudgetAccumulator::avg_us(window.present_us, window.frames),
-            recent_frames: self.frame_analytics_samples.iter().copied().collect(),
-            slow_frames: self.slow_frame_samples.iter().copied().collect(),
+            recent_frames,
+            slow_frames,
         }
     }
 
@@ -1994,10 +2016,12 @@ impl LauncherFrameAccounting {
             self.last_rolling_present_us
         };
         let rolling_rows = if idle { 0 } else { self.last_rolling_rows };
+        let last_frame_budget_status =
+            (!idle).then(|| self.frame_budget_status_with_samples(Vec::new(), Vec::new()));
         let frame_budget = if idle {
             self.last_frame_budget_status.clone()
         } else {
-            self.current_frame_budget_status()
+            self.take_frame_budget_status()
         };
         self.status_sequence = self.status_sequence.saturating_add(1);
         let screensaver_profile_state = cpu_profile::screensaver_profile_state();
@@ -2094,16 +2118,16 @@ impl LauncherFrameAccounting {
             input_enabled: startup_status.input_enabled,
             reveal_ms: startup_status.reveal_ms,
             input_enabled_ms: startup_status.input_enabled_ms,
-            frame_budget: frame_budget.clone(),
+            frame_budget,
         });
         if screensaver_profile_state == "complete" && status_submitted {
             self.profile_completion_submitted = true;
         }
         if !idle {
-            self.last_frame_budget_status = frame_budget;
+            self.last_frame_budget_status =
+                last_frame_budget_status.expect("rendered status has a cached summary");
             self.frame_budget_window = FrameBudgetAccumulator::default();
         }
-        self.frame_analytics_samples.clear();
         self.last_status_write = Instant::now();
         if idle {
             self.idle_loops_since_status = 0;
