@@ -877,6 +877,7 @@ impl LauncherWakeReasons {
     const COMPOSITION_CLEARS_DIRECT_LAYERS: Self = Self(1 << 22);
     const HOME_HORIZONTAL_INPUT_HELD: Self = Self(1 << 23);
     const FB0_ROUTE_RECOVERY_PENDING: Self = Self(1 << 24);
+    const DIRECT_HIDDEN_EXIT_PENDING: Self = Self(1 << 25);
 
     #[inline]
     fn insert_if(&mut self, reason: Self, active: bool) {
@@ -908,6 +909,22 @@ impl LauncherRenderIntent {
     fn can_sleep(self) -> bool {
         self.first_visible_copy_done && self.startup_input_enabled && self.wake_reasons.is_empty()
     }
+}
+
+fn launcher_presentation_recovery_wake_reasons(
+    presenter_needs_frame: bool,
+    direct_hidden_exit_pending: bool,
+) -> LauncherWakeReasons {
+    let mut reasons = LauncherWakeReasons::default();
+    reasons.insert_if(
+        LauncherWakeReasons::FB0_ROUTE_RECOVERY_PENDING,
+        presenter_needs_frame,
+    );
+    reasons.insert_if(
+        LauncherWakeReasons::DIRECT_HIDDEN_EXIT_PENDING,
+        direct_hidden_exit_pending,
+    );
+    reasons
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -4339,10 +4356,11 @@ pub(super) fn run_launcher_loop(
             LauncherWakeReasons::COMPOSITION_CLEARS_DIRECT_LAYERS,
             composition_decision.clear_direct_layers,
         );
-        wake_reasons.insert_if(
-            LauncherWakeReasons::FB0_ROUTE_RECOVERY_PENDING,
-            launcher_presenter.needs_frame(),
-        );
+        wake_reasons = wake_reasons
+            | launcher_presentation_recovery_wake_reasons(
+                launcher_presenter.needs_frame(),
+                direct_hidden_exit_pending,
+            );
         let render_intent = LauncherRenderIntent {
             first_visible_copy_done: frame_accounting.first_visible_copy_done(),
             startup_input_enabled: startup_status.input_enabled,
@@ -7771,6 +7789,7 @@ mod tests {
             LauncherWakeReasons::COMPOSITION_FORCES_FULL_PRESENT,
             LauncherWakeReasons::COMPOSITION_CLEARS_DIRECT_LAYERS,
             LauncherWakeReasons::FB0_ROUTE_RECOVERY_PENDING,
+            LauncherWakeReasons::DIRECT_HIDDEN_EXIT_PENDING,
         ] {
             assert!(
                 !LauncherRenderIntent {
@@ -7797,6 +7816,28 @@ mod tests {
             LauncherWakeReasons::LAUNCHING | LauncherWakeReasons::PREVIEW_DIRTY
         );
         assert!(!reasons.is_empty());
+    }
+
+    #[test]
+    pub(super) fn direct_hidden_exit_keeps_launcher_awake_until_restoration_can_run() {
+        let sleeping_intent = |wake_reasons| LauncherRenderIntent {
+            first_visible_copy_done: true,
+            startup_input_enabled: true,
+            wake_reasons,
+        };
+
+        assert!(
+            sleeping_intent(launcher_presentation_recovery_wake_reasons(false, false)).can_sleep()
+        );
+        assert!(
+            !sleeping_intent(launcher_presentation_recovery_wake_reasons(false, true)).can_sleep()
+        );
+        assert!(
+            !sleeping_intent(launcher_presentation_recovery_wake_reasons(true, true)).can_sleep()
+        );
+        assert!(
+            sleeping_intent(launcher_presentation_recovery_wake_reasons(false, false)).can_sleep()
+        );
     }
 
     #[test]
