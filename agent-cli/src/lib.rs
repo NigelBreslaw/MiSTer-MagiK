@@ -19,6 +19,7 @@ pub mod evidence;
 pub mod executor;
 pub mod game_databases;
 pub mod git;
+pub mod hooks;
 pub mod model;
 pub mod planner;
 pub mod platform_bundle;

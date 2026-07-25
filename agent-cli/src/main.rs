@@ -11,7 +11,7 @@ use agent_cli::progress::{EventKind, Reporter};
 use agent_cli::request::RawRequest;
 use agent_cli::scope;
 use clap::Parser;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 
 fn main() {
@@ -109,6 +109,59 @@ fn dispatch(
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<Outcome> {
     match intent {
+        Intent::PreCommit => {
+            let paths = scope::collect(
+                evidence,
+                request_id,
+                repository,
+                &agent_cli::model::Scope::Staged,
+            )?;
+            let plan = planner::pre_commit_plan_at(repository, paths.clone())?;
+            evidence.record_plan(request_id, &plan)?;
+            reporter.emit(
+                EventKind::Progress,
+                "pre-commit",
+                &format!("{} fast checks planned", plan.operations.len()),
+                Some(0),
+            )?;
+            return Ok(executor::execute_with_changes(
+                evidence, request_id, repository, &plan, &paths, reporter,
+            )?);
+        }
+        Intent::PrePush { remote } => {
+            let mut updates = String::new();
+            std::io::stdin()
+                .read_to_string(&mut updates)
+                .map_err(|error| format!("pre_push_input_failed: {error}"))?;
+            let paths = agent_cli::hooks::pre_push_paths(repository, remote, &updates)?;
+            if paths.is_empty() {
+                reporter.emit(
+                    EventKind::Progress,
+                    "pre-push",
+                    "No branch updates require verification",
+                    Some(100),
+                )?;
+                return Ok(Outcome::NoOp);
+            }
+            let plan = planner::affected_plan_at(repository, intent.clone(), paths.clone())?;
+            evidence.record_plan(request_id, &plan)?;
+            reporter.emit(
+                EventKind::Progress,
+                "pre-push",
+                &format!("{} full checks planned", plan.operations.len()),
+                Some(0),
+            )?;
+            let outcome = executor::execute_with_changes(
+                evidence, request_id, repository, &plan, &paths, reporter,
+            )?;
+            if !plan.external_requirements.is_empty() {
+                for requirement in &plan.external_requirements {
+                    reporter.emit(EventKind::Warning, "external", &requirement.message, None)?;
+                }
+                return Ok(Outcome::ExternalRequired);
+            }
+            return Ok(outcome);
+        }
         Intent::Deliver => return deliver(evidence, repository, reporter),
         Intent::Benchmark => {
             return agent_cli::benchmark::execute(repository, reporter);

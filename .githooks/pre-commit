@@ -2,31 +2,13 @@
 # Copyright (C) 2026 Nigel Breslaw
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-# Run only checks affected by staged paths. Complete assurance remains in CI.
+# Keep commits responsive. Full verification runs at pre-push and in CI.
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
-expected_name="Nigel Breslaw"
-expected_email="nigel.breslaw@gmail.com"
-actual_name="$(git config --get user.name || true)"
-actual_email="$(git config --get user.email || true)"
-if [ "$actual_name" != "$expected_name" ] || [ "$actual_email" != "$expected_email" ]; then
-  printf 'error: this repository requires Git identity %s <%s>; got %s <%s>\n' \
-    "$expected_name" "$expected_email" "$actual_name" "$actual_email" >&2
-  exit 1
-fi
-
-set +e
-"$ROOT/scripts/agent" verify --staged
-status=$?
-set -e
-
-# Exit 3 means every available local check passed but a CI-only assurance
-# requirement remains (for example, building the RBF). That requirement must
-# not make an otherwise verified platform commit impossible to create.
-if [ "$status" -eq 3 ]; then
-  exit 0
-fi
-exit "$status"
+exec python3 "$ROOT/scripts/checks/run-with-deadline.py" \
+  --seconds 10 \
+  --label "pre-commit validation" \
+  -- "$ROOT/scripts/agent" pre-commit

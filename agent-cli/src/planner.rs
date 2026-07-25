@@ -13,6 +13,17 @@ enum Depth {
     Verify,
 }
 
+const MISTER_APP_COMPILED_INPUTS: &[&str] = &[
+    "apps/mister",
+    "crates/catalog",
+    "crates/framebuffer-stream",
+    "crates/magik-core",
+    "crates/media-contract",
+    "mister/platform/contracts/latch",
+    "mister/platform/contracts/scanout",
+    "mister/platform/runtime",
+];
+
 pub fn affected_plan(intent: Intent, paths: Vec<PathBuf>) -> Result<Plan, String> {
     let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -25,7 +36,7 @@ pub fn affected_plan_at(
     intent: Intent,
     paths: Vec<PathBuf>,
 ) -> Result<Plan, String> {
-    let depth = if matches!(intent, Intent::Verify { .. }) {
+    let depth = if matches!(intent, Intent::Verify { .. } | Intent::PrePush { .. }) {
         Depth::Verify
     } else {
         Depth::Check
@@ -43,12 +54,27 @@ pub fn affected_plan_at(
         ));
     }
     let mut operations = BTreeMap::new();
+    let mut operation_conflicts = Vec::new();
     let mut external_requirements = Vec::new();
     for path in &paths {
-        add_path_operations(repository, path, depth, &mut operations);
+        add_path_operations(
+            repository,
+            path,
+            depth,
+            &mut operations,
+            &mut operation_conflicts,
+        );
         if path.starts_with("mister/platform/fpga") {
             external_requirements.push(rbf_external_requirement());
         }
+    }
+    if !operation_conflicts.is_empty() {
+        operation_conflicts.sort();
+        operation_conflicts.dedup();
+        return Err(format!(
+            "conflicting operation definitions: {}",
+            operation_conflicts.join(", ")
+        ));
     }
     if matches!(
         &intent,
@@ -83,6 +109,72 @@ pub fn affected_plan_at(
         operations,
         external_requirements,
     })
+}
+
+pub fn pre_commit_plan_at(repository: &Path, paths: Vec<PathBuf>) -> Result<Plan, String> {
+    let mut affected = affected_plan_at(
+        repository,
+        Intent::Check {
+            scope: crate::model::Scope::Paths(paths.clone()),
+        },
+        paths.clone(),
+    )?;
+    affected
+        .operations
+        .retain(|operation| operation.id.ends_with(".format"));
+    for path in &paths {
+        let absolute = repository.join(path);
+        let Ok(text) = std::fs::read_to_string(&absolute) else {
+            continue;
+        };
+        let shell = text
+            .lines()
+            .next()
+            .is_some_and(|line| line == "#!/bin/bash" || line == "#!/usr/bin/env bash");
+        if !shell {
+            continue;
+        }
+        let display = path.display().to_string();
+        affected.operations.push(op_owned(
+            &format!(
+                "pre-commit.shell-syntax.{}",
+                display.replace(['/', '.'], "-")
+            ),
+            &format!("Check {} syntax", path.display()),
+            "bash",
+            vec!["-n".into(), display],
+            "pre-commit validates affected shell syntax",
+        ));
+    }
+    let inputs: Vec<String> = paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect();
+    let mut identity = builtin(
+        "git.identity",
+        "Check Git identity",
+        BuiltinOperation::GitIdentity,
+        "pre-commit requires the repository identity",
+    );
+    identity.inputs.clone_from(&inputs);
+    let mut policy = builtin(
+        "git.staged-policy",
+        "Check staged Git policy",
+        BuiltinOperation::StagedGitPolicy,
+        "pre-commit protects forbidden and unpublished staged content",
+    );
+    policy.inputs.clone_from(&inputs);
+    let mut whitespace = staged_diff_check();
+    whitespace.inputs = inputs;
+    affected.operations.extend([identity, policy, whitespace]);
+    affected.operations.sort_by(|left, right| {
+        left.workflow_phase()
+            .cmp(&right.workflow_phase())
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    affected.intent = Intent::PreCommit;
+    affected.external_requirements.clear();
+    Ok(affected)
 }
 
 fn combine_arm_validation(mut operations: Vec<Operation>) -> Vec<Operation> {
@@ -212,13 +304,14 @@ fn add_path_operations(
     path: &Path,
     depth: Depth,
     out: &mut BTreeMap<String, Operation>,
+    conflicts: &mut Vec<String>,
 ) {
     let default_input = path.display().to_string();
     let mut add = |mut operation: Operation| {
         if operation.inputs.is_empty() {
             operation.inputs.push(default_input.clone());
         }
-        out.entry(operation.id.clone()).or_insert(operation);
+        merge_operation(out, operation, conflicts);
     };
     if path.file_name().and_then(|name| name.to_str()) == Some("AGENTS.md")
         || path.starts_with("docs/agents")
@@ -449,83 +542,101 @@ fn add_path_operations(
             &["apps/mister"],
         ));
         if path.starts_with("apps/mister/src/ui_runner") {
-            add(cargo(
-                "app.ui-tests",
-                "Test launcher binary logic",
-                &[
-                    "test",
-                    "--manifest-path",
-                    "apps/mister/Cargo.toml",
-                    "--bin",
-                    "mister-magik-fb",
-                    "--no-default-features",
-                    "--features",
-                    "ui",
-                    "launcher_catalog_session::tests",
-                ],
-                "launcher session source → focused UI binary tests",
+            add(with_inputs(
+                cargo(
+                    "app.ui-tests",
+                    "Test launcher binary logic",
+                    &[
+                        "test",
+                        "--manifest-path",
+                        "apps/mister/Cargo.toml",
+                        "--bin",
+                        "mister-magik-fb",
+                        "--no-default-features",
+                        "--features",
+                        "ui",
+                        "launcher_catalog_session::tests",
+                    ],
+                    "launcher session source → focused UI binary tests",
+                ),
+                MISTER_APP_COMPILED_INPUTS,
             ));
         } else {
-            add(cargo(
-                "app.tests",
-                "Test MiSTer host logic",
-                &[
-                    "test",
-                    "--manifest-path",
-                    "apps/mister/Cargo.toml",
-                    "--lib",
-                    "--no-default-features",
-                ],
-                "MiSTer app source → host tests",
+            add(with_inputs(
+                cargo(
+                    "app.tests",
+                    "Test MiSTer host logic",
+                    &[
+                        "test",
+                        "--manifest-path",
+                        "apps/mister/Cargo.toml",
+                        "--lib",
+                        "--no-default-features",
+                    ],
+                    "MiSTer app source → host tests",
+                ),
+                MISTER_APP_COMPILED_INPUTS,
             ));
         }
         if depth == Depth::Verify {
-            add(cargo(
-                "app.clippy",
-                "Lint MiSTer host logic",
-                &[
-                    "clippy",
-                    "--manifest-path",
-                    "apps/mister/Cargo.toml",
-                    "--lib",
-                    "--no-default-features",
-                    "--",
-                    "-D",
-                    "warnings",
-                ],
-                "MiSTer app source → clippy",
+            add(with_inputs(
+                cargo(
+                    "app.clippy",
+                    "Lint MiSTer host logic",
+                    &[
+                        "clippy",
+                        "--manifest-path",
+                        "apps/mister/Cargo.toml",
+                        "--lib",
+                        "--no-default-features",
+                        "--",
+                        "-D",
+                        "warnings",
+                    ],
+                    "MiSTer app source → clippy",
+                ),
+                MISTER_APP_COMPILED_INPUTS,
             ));
-            add(cargo(
-                "app.ui-check",
-                "Check production UI",
-                &[
-                    "check",
-                    "--manifest-path",
-                    "apps/mister/Cargo.toml",
-                    "--bin",
-                    "mister-magik-fb",
-                    "--no-default-features",
-                    "--features",
-                    "ui",
-                ],
-                "MiSTer app source → production UI check",
+            add(with_inputs(
+                cargo(
+                    "app.ui-check",
+                    "Check production UI",
+                    &[
+                        "check",
+                        "--manifest-path",
+                        "apps/mister/Cargo.toml",
+                        "--bin",
+                        "mister-magik-fb",
+                        "--no-default-features",
+                        "--features",
+                        "ui",
+                    ],
+                    "MiSTer app source → production UI check",
+                ),
+                MISTER_APP_COMPILED_INPUTS,
             ));
             if path.starts_with("apps/mister/ui") || path.starts_with("apps/mister/src/ui_runner") {
-                add(apple_container(op(
-                    "arm.check-launcher",
-                    "Check launcher in Apple container",
-                    "scripts/agent",
-                    &["build", "validate-launcher"],
-                    "launcher source → ARM validation",
-                )));
+                add(with_inputs(
+                    apple_container(op(
+                        "arm.check-launcher",
+                        "Check launcher in Apple container",
+                        "scripts/agent",
+                        &["build", "validate-launcher"],
+                        "launcher source → ARM validation",
+                    )),
+                    MISTER_APP_COMPILED_INPUTS,
+                ));
             } else {
-                add(apple_container(op(
-                    "arm.check-lib",
-                    "Check library in Apple container",
-                    "scripts/agent",
-                    &["build", "validate-library"],
-                    "MiSTer source → ARM validation",
-                )));
+                add(with_inputs(
+                    apple_container(op(
+                        "arm.check-lib",
+                        "Check library in Apple container",
+                        "scripts/agent",
+                        &["build", "validate-library"],
+                        "MiSTer source → ARM validation",
+                    )),
+                    MISTER_APP_COMPILED_INPUTS,
+                ));
             }
         }
     }
@@ -635,6 +746,40 @@ fn add_path_operations(
     add_crate(path, "mister/tools/manager", "mister-manager", depth, out);
 }
 
+fn merge_operation(
+    out: &mut BTreeMap<String, Operation>,
+    mut operation: Operation,
+    conflicts: &mut Vec<String>,
+) {
+    match out.entry(operation.id.clone()) {
+        std::collections::btree_map::Entry::Vacant(entry) => {
+            entry.insert(operation);
+        }
+        std::collections::btree_map::Entry::Occupied(mut entry) => {
+            let existing = entry.get_mut();
+            if existing.title != operation.title
+                || existing.risk != operation.risk
+                || existing.action != operation.action
+                || existing.phase != operation.phase
+                || existing.program != operation.program
+                || existing.args != operation.args
+                || existing.failure_hint != operation.failure_hint
+                || existing.builtin != operation.builtin
+            {
+                conflicts.push(operation.id);
+                return;
+            }
+            existing.inputs.append(&mut operation.inputs);
+            existing.inputs.sort();
+            existing.inputs.dedup();
+            if !existing.reason.contains(&operation.reason) {
+                existing.reason.push_str("; ");
+                existing.reason.push_str(&operation.reason);
+            }
+        }
+    }
+}
+
 fn add_script_operations(
     repository: &Path,
     path: &Path,
@@ -652,7 +797,7 @@ fn add_script_operations(
         && (path.extension().and_then(|extension| extension.to_str()) == Some("sh")
             || matches!(
                 path.file_name().and_then(|name| name.to_str()),
-                Some("mister")
+                Some("agent" | "mister")
             ))
     {
         let id = format!("script.syntax.{}", text.replace(['/', '.'], "-"));
@@ -786,6 +931,22 @@ fn diff_check() -> Operation {
         args: vec!["diff".into(), "--check".into()],
         reason: "all patches require whitespace validation".into(),
         failure_hint: "inspect with scripts/agent run show RUN_ID".into(),
+        inputs: Vec::new(),
+        builtin: None,
+    }
+}
+
+fn staged_diff_check() -> Operation {
+    Operation {
+        id: "git.staged-diff-check".into(),
+        title: "Check staged patch whitespace".into(),
+        risk: Risk::ReadOnly,
+        action: ActionKind::Git,
+        phase: WorkflowPhase::Cheap,
+        program: "git".into(),
+        args: vec!["diff".into(), "--cached".into(), "--check".into()],
+        reason: "pre-commit requires whitespace-clean staged content".into(),
+        failure_hint: "inspect the staged patch with git diff --cached".into(),
         inputs: Vec::new(),
         builtin: None,
     }
@@ -1140,6 +1301,82 @@ mod tests {
         assert_eq!(arm.program, "scripts/agent");
         assert_eq!(arm.args, ["build", "validate-launcher"]);
         assert_eq!(arm.risk, Risk::LocalWrite);
+        assert_eq!(arm.inputs, MISTER_APP_COMPILED_INPUTS);
+    }
+
+    #[test]
+    fn compiled_app_checks_fingerprint_all_local_dependency_roots() {
+        let plan = affected_plan(
+            Intent::Verify {
+                scope: Scope::Paths(vec![]),
+            },
+            vec![
+                "apps/mister/src/ui_runner/launcher_frame_accounting.rs".into(),
+                "apps/mister/src/ui_runner/launcher_loop.rs".into(),
+                "apps/mister/ui/components/overlays.slint".into(),
+            ],
+        )
+        .unwrap();
+        for id in [
+            "app.clippy",
+            "app.tests",
+            "app.ui-check",
+            "app.ui-tests",
+            "arm.check-launcher",
+        ] {
+            let operation = plan
+                .operations
+                .iter()
+                .find(|operation| operation.id == id)
+                .unwrap_or_else(|| panic!("missing {id}"));
+            assert_eq!(operation.inputs, MISTER_APP_COMPILED_INPUTS, "{id}");
+        }
+    }
+
+    #[test]
+    fn pre_commit_plan_contains_only_policy_format_and_syntax_checks() {
+        let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("repository root");
+        let plan = pre_commit_plan_at(
+            repository,
+            vec![
+                "apps/mister/src/ui_runner/launcher_loop.rs".into(),
+                "scripts/agent".into(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(plan.intent, Intent::PreCommit);
+        assert!(plan.external_requirements.is_empty());
+        assert!(plan.operations.iter().any(|operation| {
+            operation.id == "git.staged-diff-check"
+                && operation.args == ["diff", "--cached", "--check"]
+        }));
+        assert!(
+            plan.operations
+                .iter()
+                .any(|operation| operation.id == "app.format")
+        );
+        assert!(
+            plan.operations
+                .iter()
+                .any(|operation| operation.id == "pre-commit.shell-syntax.scripts-agent")
+        );
+        assert!(plan.operations.iter().all(|operation| {
+            operation.builtin.is_some()
+                || operation.id.ends_with(".format")
+                || operation.id.starts_with("pre-commit.shell-syntax.")
+                || operation.id == "git.staged-diff-check"
+        }));
+        assert!(plan.operations.iter().all(|operation| {
+            operation.action != ActionKind::AppleContainer
+                && !operation.args.iter().any(|arg| {
+                    matches!(
+                        arg.as_str(),
+                        "check" | "clippy" | "test" | "validate-launcher" | "validate-runtime"
+                    )
+                })
+        }));
     }
 
     #[test]
@@ -1175,6 +1412,26 @@ mod tests {
         assert_eq!(normalized[0].inputs, ["one", "two"]);
         assert!(normalized[0].reason.contains("first reason"));
         assert!(normalized[0].reason.contains("second reason"));
+    }
+
+    #[test]
+    fn duplicate_operation_ids_merge_inputs_and_reject_conflicts() {
+        let mut operations = BTreeMap::new();
+        let mut conflicts = Vec::new();
+        let mut first = cargo("same", "Same", &["check"], "first reason");
+        first.inputs = vec!["one".into()];
+        merge_operation(&mut operations, first, &mut conflicts);
+        let mut second = cargo("same", "Same", &["check"], "second reason");
+        second.inputs = vec!["two".into(), "one".into()];
+        merge_operation(&mut operations, second, &mut conflicts);
+        assert!(conflicts.is_empty());
+        assert_eq!(operations["same"].inputs, ["one", "two"]);
+        assert!(operations["same"].reason.contains("first reason"));
+        assert!(operations["same"].reason.contains("second reason"));
+
+        let conflicting = cargo("same", "Same", &["test"], "conflicting reason");
+        merge_operation(&mut operations, conflicting, &mut conflicts);
+        assert_eq!(conflicts, ["same"]);
     }
 
     #[test]

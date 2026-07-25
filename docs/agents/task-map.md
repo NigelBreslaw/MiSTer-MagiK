@@ -26,8 +26,10 @@ unknown work, run `scripts/agent plan` before invoking checks.
 
 The normal feature loop is edit, `scripts/agent check`, explicit
 `git add -- PATH...`, and `git commit -m MESSAGE`. The pre-commit hook performs
-verification of the exact staged tree. Use standalone `verify` when assurance
-is needed without creating a commit.
+the fail-closed ten-second policy, whitespace, syntax, and formatting gate.
+The pre-push hook performs full affected verification of a clean `HEAD`; CI
+remains authoritative. Use standalone `verify` when full assurance is needed
+without pushing.
 Runtime or platform changes then use `scripts/agent deliver`. Delivery uses the
 exact clean local app commit. Platform delivery resolves the latest qualified
 GitHub platform release and stages its Main, scanout kernel module, and latch

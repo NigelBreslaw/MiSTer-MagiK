@@ -15,6 +15,8 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+const VALIDATION_CACHE_SCHEMA: &str = "planner-schema-3";
+
 pub fn execute(
     evidence: &Evidence,
     request_id: &str,
@@ -39,9 +41,15 @@ pub fn execute_with_changes(
     }
     let command = match plan.intent {
         crate::model::Intent::Verify { .. } => "verify",
+        crate::model::Intent::PreCommit => "pre-commit",
+        crate::model::Intent::PrePush { .. } => "pre-push",
         _ => "check",
     };
-    let fingerprints = FingerprintContext::new(repository, &plan.operations, changes)?;
+    let fingerprints = if matches!(plan.intent, crate::model::Intent::PreCommit) {
+        FingerprintContext::empty()
+    } else {
+        FingerprintContext::new(repository, &plan.operations, changes)?
+    };
     let mut machine = Machine::default();
     let mut index = 0;
     while index < plan.operations.len() {
@@ -349,20 +357,36 @@ fn operation_cache_key(
     operation: &Operation,
     fingerprints: &FingerprintContext,
 ) -> Result<Option<String>, String> {
+    operation_cache_key_with_schema(plan, operation, fingerprints, VALIDATION_CACHE_SCHEMA)
+}
+
+fn operation_cache_key_with_schema(
+    plan: &Plan,
+    operation: &Operation,
+    fingerprints: &FingerprintContext,
+    schema: &str,
+) -> Result<Option<String>, String> {
     match &plan.intent {
         crate::model::Intent::Check {
-            scope: crate::model::Scope::WorkingTree | crate::model::Scope::Staged,
+            scope:
+                crate::model::Scope::WorkingTree
+                | crate::model::Scope::Staged
+                | crate::model::Scope::Paths(_),
         }
         | crate::model::Intent::Verify {
-            scope: crate::model::Scope::WorkingTree | crate::model::Scope::Staged,
-        } => {}
+            scope:
+                crate::model::Scope::WorkingTree
+                | crate::model::Scope::Staged
+                | crate::model::Scope::Paths(_),
+        }
+        | crate::model::Intent::PrePush { .. } => {}
         _ => return Ok(None),
     }
     if !is_cacheable(operation) || operation.inputs.is_empty() {
         return Ok(None);
     }
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    "planner-schema-2".hash(&mut hasher);
+    schema.hash(&mut hasher);
     operation.id.hash(&mut hasher);
     operation.program.hash(&mut hasher);
     operation.args.hash(&mut hasher);
@@ -401,6 +425,14 @@ struct FingerprintContext {
 }
 
 impl FingerprintContext {
+    fn empty() -> Self {
+        Self {
+            toolchain: Vec::new(),
+            environment: Vec::new(),
+            files: BTreeMap::new(),
+        }
+    }
+
     fn new(
         repository: &Path,
         operations: &[Operation],
@@ -1163,6 +1195,71 @@ mod tests {
         let second =
             FingerprintContext::new(&root, std::slice::from_ref(&operation), &changes).unwrap();
         let second_key = operation_cache_key(&plan, &operation, &second).unwrap();
+        assert_ne!(first_key, second_key);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn explicit_path_cache_rekeys_when_launcher_rust_changes() {
+        let (root, cargo) = fake_cargo("#!/bin/sh\nexit 0\n");
+        fs::create_dir_all(root.join("apps/mister/src/ui_runner")).unwrap();
+        fs::create_dir_all(root.join("apps/mister/ui")).unwrap();
+        fs::write(
+            root.join("apps/mister/src/ui_runner/launcher_loop.rs"),
+            "let compatibility_active = true;\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("apps/mister/ui/launcher.slint"),
+            "export component Launcher {}\n",
+        )
+        .unwrap();
+        for args in [
+            vec!["init", "-q"],
+            vec!["config", "user.name", "Agent"],
+            vec!["config", "user.email", "agent@example.invalid"],
+            vec!["add", "."],
+            vec!["commit", "-qm", "fixture"],
+        ] {
+            assert!(
+                Command::new("git")
+                    .args(args)
+                    .current_dir(&root)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        let mut operation = test_operation(&cargo);
+        operation.inputs = vec!["apps/mister".into()];
+        let changes = vec![PathBuf::from("apps/mister/ui/launcher.slint")];
+        let plan = Plan {
+            intent: Intent::Check {
+                scope: Scope::Paths(changes.clone()),
+            },
+            operations: vec![operation.clone()],
+            external_requirements: Vec::new(),
+        };
+        let first =
+            FingerprintContext::new(&root, std::slice::from_ref(&operation), &changes).unwrap();
+        let first_key = operation_cache_key(&plan, &operation, &first)
+            .unwrap()
+            .expect("explicit path checks are cacheable");
+        let old_schema_key =
+            operation_cache_key_with_schema(&plan, &operation, &first, "planner-schema-2")
+                .unwrap()
+                .expect("old explicit path key");
+        assert_ne!(first_key, old_schema_key);
+        fs::write(
+            root.join("apps/mister/src/ui_runner/launcher_loop.rs"),
+            "let compatibility_prompt_visible = true;\n",
+        )
+        .unwrap();
+        let second =
+            FingerprintContext::new(&root, std::slice::from_ref(&operation), &changes).unwrap();
+        let second_key = operation_cache_key(&plan, &operation, &second)
+            .unwrap()
+            .expect("explicit path checks are cacheable");
         assert_ne!(first_key, second_key);
         fs::remove_dir_all(root).unwrap();
     }

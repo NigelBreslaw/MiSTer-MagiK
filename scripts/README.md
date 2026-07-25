@@ -15,9 +15,11 @@ orchestration belongs in Rust. New shell interfaces in those categories are
 rejected by `scripts/checks/check-no-operational-shell-orchestrators.py`.
 
 Normal repository work uses `scripts/agent check`, explicit-path `git add`, and
-ordinary `git commit`; the pre-commit hook runs `verify --staged`. Committed
-runtime/platform work then uses `deliver`. Performance and diagnosis use the
-flag-free `benchmark` and `diagnose` commands.
+ordinary `git commit`; the pre-commit hook runs the bounded fast gate.
+The pre-push hook performs full affected verification before committed work
+reaches the remote. Committed runtime/platform work then uses `deliver`.
+Performance and diagnosis use the flag-free `benchmark` and `diagnose`
+commands.
 
 Linux-only Rust and Clippy diagnostics can be reproduced from Apple Silicon
 with:

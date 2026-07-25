@@ -25,6 +25,7 @@ pub fn execute(
 pub fn label(operation: BuiltinOperation) -> &'static str {
     match operation {
         BuiltinOperation::AgentGuidance => "agent guidance",
+        BuiltinOperation::GitIdentity => "Git identity",
         BuiltinOperation::StagedGitPolicy => "staged Git policy",
         BuiltinOperation::LicenseHeaders => "license headers",
         BuiltinOperation::ShellOwnership => "shell ownership",
@@ -38,6 +39,7 @@ pub fn label(operation: BuiltinOperation) -> &'static str {
 pub fn run(operation: BuiltinOperation, repository: &Path) -> Result<(), String> {
     match operation {
         BuiltinOperation::AgentGuidance => check_agent_guidance(repository),
+        BuiltinOperation::GitIdentity => check_git_identity(repository),
         BuiltinOperation::StagedGitPolicy => check_staged_git_policy(repository),
         BuiltinOperation::LicenseHeaders => check_license_headers(repository),
         BuiltinOperation::ShellOwnership => check_shell_ownership(repository),
@@ -45,6 +47,22 @@ pub fn run(operation: BuiltinOperation, repository: &Path) -> Result<(), String>
         BuiltinOperation::KernelWorkflow => check_kernel_workflow(repository),
         BuiltinOperation::PlatformWorkflow => check_platform_workflow(repository),
         BuiltinOperation::CiCache => check_ci_cache(repository),
+    }
+}
+
+fn check_git_identity(repository: &Path) -> Result<(), String> {
+    const EXPECTED_NAME: &str = "Nigel Breslaw";
+    const EXPECTED_EMAIL: &str = "nigel.breslaw@gmail.com";
+    let actual_name =
+        crate::git::value(repository, &["config", "--get", "user.name"]).unwrap_or_default();
+    let actual_email =
+        crate::git::value(repository, &["config", "--get", "user.email"]).unwrap_or_default();
+    if actual_name == EXPECTED_NAME && actual_email == EXPECTED_EMAIL {
+        Ok(())
+    } else {
+        Err(format!(
+            "git_identity_mismatch: expected {EXPECTED_NAME} <{EXPECTED_EMAIL}>; got {actual_name} <{actual_email}>"
+        ))
     }
 }
 
@@ -759,6 +777,55 @@ mod tests {
         assert_eq!(
             check_staged_git_policy(&root).unwrap_err(),
             "staged_git_forbidden: .env"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn git_identity_check_accepts_only_the_repository_identity() {
+        let root = std::env::temp_dir().join(format!(
+            "agent-cli-git-identity-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        assert!(
+            Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(&root)
+                .status()
+                .unwrap()
+                .success()
+        );
+        for (key, value) in [
+            ("user.name", "Nigel Breslaw"),
+            ("user.email", "nigel.breslaw@gmail.com"),
+        ] {
+            assert!(
+                Command::new("git")
+                    .args(["config", key, value])
+                    .current_dir(&root)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        assert!(check_git_identity(&root).is_ok());
+        assert!(
+            Command::new("git")
+                .args(["config", "user.email", "wrong@example.invalid"])
+                .current_dir(&root)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            check_git_identity(&root)
+                .unwrap_err()
+                .contains("git_identity_mismatch")
         );
         fs::remove_dir_all(root).unwrap();
     }

@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+exec "$ROOT/scripts/agent" pre-push --remote "$1"

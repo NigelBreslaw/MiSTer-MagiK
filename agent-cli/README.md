@@ -17,8 +17,10 @@ scripts/agent diagnose
 
 The normal AI loop is edit, `check` as needed, stage intentional paths with
 ordinary Git, then commit. Argument-free validation uses all working-tree
-changes. The Git pre-commit hook runs `verify --staged` against exactly the
-index. Workflow evidence analysis uses the hidden typed
+changes. The Git pre-commit hook runs the fail-closed, ten-second
+`pre-commit` fast gate against the index. The pre-push hook runs full affected
+verification for the exact branch commit, while CI remains authoritative.
+Workflow evidence analysis uses the hidden typed
 `scripts/agent db report` command rather than direct SQL.
 
 `scripts/agent release qualify` is an attended operator command. Hidden typed

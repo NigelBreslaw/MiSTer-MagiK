@@ -33,6 +33,11 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    PreCommit,
+    PrePush {
+        #[arg(long)]
+        remote: String,
+    },
     Plan(ScopeArgs),
     Check(ScopeArgs),
     #[command(hide = true)]
@@ -364,6 +369,8 @@ impl Cli {
     pub fn into_intent(self) -> Intent {
         match self.command {
             None => unreachable!("clap requires a workflow command"),
+            Some(Command::PreCommit) => Intent::PreCommit,
+            Some(Command::PrePush { remote }) => Intent::PrePush { remote },
             Some(Command::Plan(scope)) => Intent::Plan {
                 verbose: scope.verbose,
                 scope: scope.into_scope(),
@@ -581,6 +588,25 @@ mod tests {
             Intent::Diagnose
         );
         assert!(Cli::try_parse_from(["agent-cli", "diagnose", "--repair-all"]).is_err());
+    }
+
+    #[test]
+    fn git_hook_commands_have_closed_interfaces() {
+        assert_eq!(
+            Cli::try_parse_from(["agent-cli", "pre-commit"])
+                .unwrap()
+                .into_intent(),
+            Intent::PreCommit
+        );
+        assert_eq!(
+            Cli::try_parse_from(["agent-cli", "pre-push", "--remote", "origin"])
+                .unwrap()
+                .into_intent(),
+            Intent::PrePush {
+                remote: "origin".into()
+            }
+        );
+        assert!(Cli::try_parse_from(["agent-cli", "pre-push"]).is_err());
     }
 
     #[test]

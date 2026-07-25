@@ -116,7 +116,8 @@ checking. Do not rerun `check` after every small patch, formatting correction,
 or immediately obvious follow-up; rerun it when a coherent slice is ready, when
 a failure could have multiple causes, or before handing work off. Argument-free
 `check` and `verify` select all working-tree changes. `--paths` is reserved for
-CI or diagnostics, and `verify --staged` is the Git pre-commit interface. Use
+CI or diagnostics. `pre-commit` is the index-only fast hook interface, and
+`pre-push` is the full local assurance interface. Use
 `scripts/agent db report`, not ad-hoc SQL, for workflow evidence analysis. Run
 `agent-linux-verify` on Apple Silicon when Linux-only Rust or Linux-specific
 Clippy behavior is in scope. It runs the normal verification harness inside the
@@ -147,8 +148,10 @@ exist. Invoke `git add`, `git commit`, and the one-time
 `git config core.hooksPath .githooks` with first-attempt sandbox escalation
 because they write `.git`. Persistent approvals must be limited to the narrow
 `git add` and `git commit` prefixes, never unrestricted `git`. The trusted
-pre-commit hook runs `scripts/agent verify --staged`; a failure leaves the
-index staged for correction. Concurrent agents must use separate worktrees.
+pre-commit hook runs the bounded `scripts/agent pre-commit` fast gate; a
+failure leaves the index staged for correction. The pre-push hook runs full
+affected verification before branch updates reach the remote. Concurrent
+agents must use separate worktrees.
 
 ## Universal Hard Rules
 
