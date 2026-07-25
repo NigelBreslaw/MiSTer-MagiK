@@ -33,7 +33,6 @@ pub enum DeviceRequest {
     },
     ProfileInstalledScreensaver {
         output_dir: PathBuf,
-        display_mode: String,
     },
     VerifyHealth(Layout),
     BeginReleaseQualification,
@@ -220,7 +219,6 @@ mod tests {
             },
             DeviceRequest::ProfileInstalledScreensaver {
                 output_dir: "profiles".into(),
-                display_mode: "hdmi-1280x720p60".into(),
             },
             DeviceRequest::VerifyHealth(Layout::Public),
             DeviceRequest::BeginReleaseQualification,

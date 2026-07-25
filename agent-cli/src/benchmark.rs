@@ -10,8 +10,6 @@ use serde_json::{Value, json};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const BENCHMARK_DISPLAY_MODE: &str = "hdmi-1280x720p60";
-
 pub fn execute(repository: &Path, reporter: &mut Reporter<'_>) -> AgentResult<Outcome> {
     let mut device = DeviceClient::default();
     reporter.emit(
@@ -40,7 +38,6 @@ pub fn execute(repository: &Path, reporter: &mut Reporter<'_>) -> AgentResult<Ou
     )?;
     let detail = device.execute(DeviceRequest::ProfileInstalledScreensaver {
         output_dir: output_dir.clone(),
-        display_mode: BENCHMARK_DISPLAY_MODE.into(),
     })?;
     let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
     device.execute(DeviceRequest::VerifyHealth(Layout::Development))?;
@@ -92,12 +89,23 @@ fn evaluate_run(run: &Value) -> AgentResult<()> {
     let max_wall = u64_field(steady, "max_wall_us", u64::MAX);
     let refresh = u64_field(steady, "refresh_period_us", 16_667);
     let over_budget = u64_field(steady, "over_budget_frames", u64::MAX);
+    let presentation_failures = steady
+        .get("presentation_failures")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(usize::MAX);
     let drops = u64_field(run, "latch_drop_delta", u64::MAX);
     let misses = u64_field(steady, "vsync_misses", u64::MAX);
     let errors = u64_field(run, "present_errors", u64::MAX);
-    if fps < 55.0 || frames == 0 || over_budget != 0 || drops != 0 || misses != 0 || errors != 0 {
+    if fps < 55.0
+        || frames == 0
+        || presentation_failures != 0
+        || drops != 0
+        || misses != 0
+        || errors != 0
+    {
         return Err(format!(
-            "screensaver profile run {id} failed after warm-up: frames={frames} fps={fps:.1} over_budget_frames={over_budget} p99_work_us={p99_work} p99_wall_us={p99_wall} max_wall_us={max_wall} refresh_period_us={refresh} latch_drops={drops} vsync_misses={misses} present_errors={errors}"
+            "screensaver profile run {id} failed after warm-up: frames={frames} fps={fps:.1} presentation_failures={presentation_failures} timing_overruns={over_budget} p99_work_us={p99_work} p99_wall_us={p99_wall} max_wall_us={max_wall} refresh_period_us={refresh} latch_drops={drops} vsync_misses={misses} present_errors={errors}"
         )
         .into());
     }
@@ -127,7 +135,8 @@ mod tests {
                 "max_wall_us": 16_667,
                 "refresh_period_us": 16_667,
                 "over_budget_frames": 0,
-                "vsync_misses": 0
+                "vsync_misses": 0,
+                "presentation_failures": []
             },
             "latch_drop_delta": 0,
             "present_errors": 0,
@@ -151,8 +160,12 @@ mod tests {
         let mut late_start = passing_run(1);
         late_start["startup"]["max_wall_us"] = json!(5_000_000);
         assert!(evaluate_run(&late_start).is_ok());
-        let mut steady_drop = passing_run(1);
-        steady_drop["steady_state"]["over_budget_frames"] = json!(1);
-        assert!(evaluate_run(&steady_drop).is_err());
+        let mut timing_overrun = passing_run(1);
+        timing_overrun["steady_state"]["over_budget_frames"] = json!(1);
+        assert!(evaluate_run(&timing_overrun).is_ok());
+        let mut presentation_failure = passing_run(1);
+        presentation_failure["steady_state"]["presentation_failures"] =
+            json!([{"frame": 42, "kind": "sequence-gap"}]);
+        assert!(evaluate_run(&presentation_failure).is_err());
     }
 }

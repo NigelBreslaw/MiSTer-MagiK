@@ -282,13 +282,9 @@ impl DeviceOperations for NativeDevice {
                 let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 deliver_platform_transaction(&config, stage, expected_sha256)?
             }
-            DeviceRequest::ProfileInstalledScreensaver {
-                output_dir,
-                display_mode,
-            } => {
+            DeviceRequest::ProfileInstalledScreensaver { output_dir } => {
                 let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
-                profile_installed_screensaver(&config, output_dir, display_mode)
-                    .map_err(device_failure)?
+                profile_installed_screensaver(&config, output_dir).map_err(device_failure)?
             }
             DeviceRequest::VerifyHealth(layout) => {
                 let label = match layout {
@@ -2837,19 +2833,13 @@ fn last_json_line(output: &str) -> Option<Value> {
         .find_map(|line| serde_json::from_str::<Value>(line.trim()).ok())
 }
 
-fn profile_installed_screensaver(
-    config: &NativeDeviceConfig,
-    output_dir: &Path,
-    display_mode: &str,
-) -> Result<String> {
+fn profile_installed_screensaver(config: &NativeDeviceConfig, output_dir: &Path) -> Result<String> {
+    const DISPLAY_MODE: &str = "hdmi-1280x720p60";
     let benchmark_mode = DISPLAY_MATRIX_MODES
         .iter()
-        .find(|mode| mode.id == display_mode)
+        .find(|mode| mode.id == DISPLAY_MODE)
         .copied()
-        .ok_or_else(|| format!("unsupported screensaver benchmark display mode: {display_mode}"))?;
-    if benchmark_mode.id != "hdmi-1280x720p60" {
-        return Err("screensaver benchmark requires hdmi-1280x720p60".into());
-    }
+        .ok_or("screensaver benchmark display mode is unavailable")?;
     let session = connect_with(&config.connection, 10)?;
     let capability = exec_checked_output(
         &session,
@@ -2864,6 +2854,13 @@ fn profile_installed_screensaver(
         != Some(true)
     {
         return Err("installed app does not support screensaver-pprof-v1".into());
+    }
+    if capability
+        .get("screensaver-frame-evidence-v2")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Err("installed app does not support screensaver-frame-evidence-v2".into());
     }
     let initial_status = read_launcher_status(&session)?;
     if initial_status.get("catalog_ready").and_then(Value::as_bool) != Some(true)
@@ -2883,6 +2880,7 @@ fn profile_installed_screensaver(
         .to_string();
     let original_ini =
         remote_read(&session, "/media/fat/MiSTer.ini").ok_or("MiSTer.ini is unavailable")?;
+    let original_ini_sha256 = encode_hex(&Sha256::digest(original_ini.as_bytes()));
     let original_reply = exec_checked_output(
         &session,
         "query original benchmark display mode",
@@ -2895,10 +2893,15 @@ fn profile_installed_screensaver(
     fs::create_dir_all(output_dir)?;
     drop(session);
     let _signal_guard = ScreensaverProfileSignalGuard::install();
+    let mut benchmark_ini = None;
 
     let run_result = (|| -> Result<(Vec<Value>, String, String, String)> {
         apply_confirmed_benchmark_display_mode(config, benchmark_mode)?;
         let session = connect_with(&config.connection, 10)?;
+        benchmark_ini = Some(
+            remote_read(&session, "/media/fat/MiSTer.ini")
+                .ok_or("MiSTer.ini is unavailable after selecting benchmark mode")?,
+        );
         let target_status = read_launcher_status(&session)?;
         let framebuffer_size = remote_read(&session, "/sys/class/graphics/fb0/virtual_size")
             .ok_or("device framebuffer size is unavailable")?
@@ -2935,53 +2938,38 @@ fn profile_installed_screensaver(
             output_route,
         ))
     })();
-    let launcher_restore = restore_installed_screensaver_profile(config);
-    let display_restore = restore_benchmark_display_mode(config, &original_mode);
-    let restore_result = combine_benchmark_cleanup(launcher_restore, display_restore);
+    let launcher_cleanup = restore_installed_screensaver_profile(config);
+    let final_verification = if let Some(expected_ini) = benchmark_ini.as_deref() {
+        verify_retained_benchmark_state(config, benchmark_mode, expected_ini, &boot_id, &manifest)
+    } else {
+        cancel_pending_benchmark_display_mode(config).map(|()| String::new())
+    };
+    let cleanup_result =
+        combine_benchmark_cleanup(launcher_cleanup, final_verification.map(|_| ()));
     let (summaries, framebuffer_size, framebuffer_bits_per_pixel, output_route) =
-        match (run_result, restore_result) {
+        match (run_result, cleanup_result) {
             (Ok(result), Ok(())) => result,
             (Err(error), Ok(())) => return Err(error),
             (Ok(_), Err(error)) => {
-                return Err(format!("screensaver benchmark restore failed: {error}").into());
+                return Err(format!("screensaver benchmark cleanup failed: {error}").into());
             }
-            (Err(run_error), Err(restore_error)) => {
+            (Err(run_error), Err(cleanup_error)) => {
                 return Err(format!(
-                    "{run_error}; screensaver benchmark restore failed: {restore_error}"
+                    "{run_error}; screensaver benchmark cleanup failed: {cleanup_error}"
                 )
                 .into());
             }
         };
-
-    let session = connect_with(&config.connection, 10)?;
-    let final_boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
-        .ok_or("device boot id is unavailable after benchmark")?
-        .trim()
-        .to_string();
-    if final_boot_id != boot_id {
-        return Err("device rebooted during the in-place screensaver benchmark".into());
-    }
-    let final_manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v2.manifest")
-        .ok_or("development platform manifest is missing after benchmark")?;
-    if final_manifest != manifest {
-        return Err("installed platform manifest changed during benchmark".into());
-    }
-    let final_ini =
-        remote_read(&session, "/media/fat/MiSTer.ini").ok_or("MiSTer.ini is unavailable")?;
-    if final_ini != original_ini {
-        return Err("MiSTer.ini was not restored byte-for-byte after benchmark".into());
-    }
-    exec_checked(
-        &session,
-        "post-benchmark delivery health",
-        &delivery_health_command("dev")?,
-    )?;
+    let benchmark_ini = benchmark_ini.ok_or("benchmark mode INI evidence is unavailable")?;
+    let benchmark_ini_sha256 = encode_hex(&Sha256::digest(benchmark_ini.as_bytes()));
     let summary = json!({
-        "schema": "mister-magik-installed-screensaver-benchmark-v2",
+        "schema": "mister-magik-installed-screensaver-benchmark-v3",
         "benchmark_contract": {
             "startup_warmup_frames": SCREENSAVER_STARTUP_WARMUP_FRAMES,
             "startup_frames_are_informational": true,
-            "steady_state_requires_zero_over_budget_frames": true,
+            "steady_state_requires_contiguous_presentations": true,
+            "wall_overruns_are_informational": true,
+            "retains_benchmark_display": true,
             "rationale": "screensaver activation may be late without being visible; once running it must not drop a frame",
         },
         "boot_id": boot_id,
@@ -2989,9 +2977,14 @@ fn profile_installed_screensaver(
         "display": {
             "benchmark_mode": benchmark_mode.id,
             "original_mode": original_mode,
+            "final_mode": benchmark_mode.id,
+            "retained": true,
             "output_route": output_route,
             "framebuffer": framebuffer_size,
             "bits_per_pixel": framebuffer_bits_per_pixel,
+            "original_ini_sha256": original_ini_sha256,
+            "benchmark_ini_sha256": benchmark_ini_sha256,
+            "final_ini_sha256": benchmark_ini_sha256,
         },
         "runs": summaries,
         "output_dir": output_dir,
@@ -2999,6 +2992,10 @@ fn profile_installed_screensaver(
     fs::write(
         output_dir.join("summary.json"),
         format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    fs::write(
+        output_dir.join("report.md"),
+        screensaver_benchmark_report(&summary)?,
     )?;
     serde_json::to_string(&summary).map_err(Into::into)
 }
@@ -3047,12 +3044,12 @@ fn apply_confirmed_benchmark_display_mode(
     wait_display_transaction_idle(&session, Duration::from_secs(15))
 }
 
-fn restore_benchmark_display_mode(config: &NativeDeviceConfig, original_mode: &str) -> Result<()> {
+fn cancel_pending_benchmark_display_mode(config: &NativeDeviceConfig) -> Result<()> {
     let session = connect_with(&config.connection, 10)?;
     let ready = wait_launcher_ready(&session, Instant::now(), Duration::from_secs(15))?;
     let state = exec_checked_output(
         &session,
-        "query benchmark display mode for restore",
+        "query incomplete benchmark display mode",
         &acknowledged_main_command("mister_magik_display_get_v1"),
     )?;
     if parse_display_reply_pending(state.stdout.trim())?.is_some() {
@@ -3069,62 +3066,57 @@ fn restore_benchmark_display_mode(config: &NativeDeviceConfig, original_mode: &s
             Instant::now(),
             Duration::from_secs(15),
         )?;
-        drop(session);
-    } else {
-        drop(session);
     }
+    Ok(())
+}
 
+fn verify_retained_benchmark_state(
+    config: &NativeDeviceConfig,
+    benchmark_mode: DisplayMatrixMode,
+    expected_ini: &str,
+    expected_boot_id: &str,
+    expected_manifest: &str,
+) -> Result<String> {
     let session = connect_with(&config.connection, 10)?;
+    wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))?;
     let state = exec_checked_output(
         &session,
-        "verify benchmark display mode before restore",
+        "verify retained benchmark display mode",
         &acknowledged_main_command("mister_magik_display_get_v1"),
     )?;
-    if parse_display_reply_active(state.stdout.trim())? == original_mode {
-        return Ok(());
+    if parse_display_reply_pending(state.stdout.trim())?.is_some() {
+        return Err("screensaver benchmark left a pending display transaction".into());
     }
-    let ready = wait_launcher_ready(&session, Instant::now(), Duration::from_secs(15))?;
-    exec_checked(
-        &session,
-        "apply original benchmark display mode",
-        &acknowledged_main_command(&format!(
-            "mister_magik_display_apply_headless_v1 mode={original_mode}"
-        )),
-    )?;
-    drop(session);
-    let session = connect_with(&config.connection, 10)?;
-    wait_launcher_ready_after(
-        &session,
-        ready.launcher_pid,
-        Instant::now(),
-        Duration::from_secs(15),
-    )?;
-    if let Some(mode) = DISPLAY_MATRIX_MODES
-        .iter()
-        .find(|mode| mode.id == original_mode)
-        .copied()
-    {
-        validate_live_display_mode(&session, mode)?;
-    }
-    exec_checked(
-        &session,
-        "confirm original benchmark display mode",
-        &acknowledged_main_command("mister_magik_display_confirm_v1"),
-    )?;
-    wait_display_transaction_idle(&session, Duration::from_secs(15))?;
-    let restored = exec_checked_output(
-        &session,
-        "verify restored benchmark display mode",
-        &acknowledged_main_command("mister_magik_display_get_v1"),
-    )?;
-    let active = parse_display_reply_active(restored.stdout.trim())?;
-    if active != original_mode {
+    let active = parse_display_reply_active(state.stdout.trim())?;
+    if active != benchmark_mode.id {
         return Err(format!(
-            "screensaver benchmark restored display mode {active}, expected {original_mode}"
+            "screensaver benchmark ended in {active}, expected {}",
+            benchmark_mode.id
         )
         .into());
     }
-    Ok(())
+    validate_live_display_mode(&session, benchmark_mode)?;
+    let final_boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable after benchmark")?;
+    if final_boot_id.trim() != expected_boot_id {
+        return Err("device rebooted during the in-place screensaver benchmark".into());
+    }
+    let final_manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v2.manifest")
+        .ok_or("development platform manifest is missing after benchmark")?;
+    if final_manifest != expected_manifest {
+        return Err("installed platform manifest changed during benchmark".into());
+    }
+    let final_ini =
+        remote_read(&session, "/media/fat/MiSTer.ini").ok_or("MiSTer.ini is unavailable")?;
+    if final_ini != expected_ini {
+        return Err("MiSTer.ini changed after the confirmed 720p benchmark baseline".into());
+    }
+    exec_checked(
+        &session,
+        "post-benchmark delivery health",
+        &delivery_health_command("dev")?,
+    )?;
+    Ok(encode_hex(&Sha256::digest(final_ini.as_bytes())))
 }
 
 fn combine_benchmark_cleanup(first: Result<()>, second: Result<()>) -> Result<()> {
@@ -3132,7 +3124,7 @@ fn combine_benchmark_cleanup(first: Result<()>, second: Result<()>) -> Result<()
         (Ok(()), Ok(())) => Ok(()),
         (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
         (Err(first), Err(second)) => {
-            Err(format!("{first}; display restore failed: {second}").into())
+            Err(format!("{first}; final-state verification failed: {second}").into())
         }
     }
 }
@@ -3391,13 +3383,28 @@ fn summarize_screensaver_telemetry(
             }
         }
     }
-    if frames.is_empty() {
-        return Err(format!("screensaver profile run {run} has no frame telemetry").into());
+    let first_frame = metadata
+        .get("first_frame")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| format!("screensaver profile run {run} has no first frame"))?;
+    let last_frame = metadata
+        .get("last_frame")
+        .and_then(Value::as_u64)
+        .filter(|last| *last >= first_frame)
+        .ok_or_else(|| format!("screensaver profile run {run} has no valid last frame"))?;
+    let mut screensaver_frames = Vec::new();
+    for frame_id in first_frame..=last_frame {
+        let frame = frames
+            .get(&frame_id)
+            .ok_or_else(|| format!("screensaver profile run {run} is missing frame {frame_id}"))?;
+        if frame.get("screensaver_active").and_then(Value::as_bool) != Some(true) {
+            return Err(format!(
+                "screensaver profile run {run} frame {frame_id} is not an active screensaver frame"
+            )
+            .into());
+        }
+        screensaver_frames.push(frame);
     }
-    let screensaver_frames = frames
-        .values()
-        .filter(|frame| frame.get("screensaver_active").and_then(Value::as_bool) == Some(true))
-        .collect::<Vec<_>>();
     if screensaver_frames.len() <= SCREENSAVER_STARTUP_WARMUP_FRAMES {
         return Err(format!(
             "screensaver profile run {run} has no steady-state screensaver frame telemetry"
@@ -3412,10 +3419,16 @@ fn summarize_screensaver_telemetry(
     let mut work = steady
         .iter()
         .map(|frame| {
-            ["prepare_us", "render_us", "custom_draw_us", "present_us"]
-                .iter()
-                .filter_map(|key| frame.get(*key).and_then(Value::as_u64))
-                .sum::<u64>()
+            [
+                "prepare_us",
+                "render_us",
+                "custom_draw_us",
+                "present_us",
+                "runtime_status_write_us",
+            ]
+            .iter()
+            .filter_map(|key| frame.get(*key).and_then(Value::as_u64))
+            .sum::<u64>()
         })
         .collect::<Vec<_>>();
     let refresh_period_us = steady
@@ -3433,6 +3446,58 @@ fn summarize_screensaver_telemetry(
                 > 0
         })
         .count();
+    let mut presentation_failures = Vec::new();
+    for pair_index in SCREENSAVER_STARTUP_WARMUP_FRAMES.saturating_sub(1)
+        ..screensaver_frames.len().saturating_sub(1)
+    {
+        let previous = screensaver_frames[pair_index];
+        let current = screensaver_frames[pair_index + 1];
+        let frame_id = current.get("frame").and_then(Value::as_u64).unwrap_or(0);
+        let previous_sequence = frame_u16(previous, "main_present_sequence");
+        let current_sequence = frame_u16(current, "main_present_sequence");
+        if !presentation_sequence_is_contiguous(previous_sequence, current_sequence) {
+            presentation_failures.push(json!({
+                "frame": frame_id,
+                "kind": "sequence-gap",
+                "previous": previous_sequence,
+                "actual": current_sequence,
+            }));
+        }
+        let drop_delta = frame_u16(current, "main_present_drop_count")
+            .wrapping_sub(frame_u16(previous, "main_present_drop_count"));
+        if drop_delta > 0 {
+            presentation_failures.push(json!({
+                "frame": frame_id,
+                "kind": "latch-drop",
+                "delta": drop_delta,
+            }));
+        }
+        if current.get("main_present_status").and_then(Value::as_str) != Some("ok") {
+            presentation_failures.push(json!({
+                "frame": frame_id,
+                "kind": "present-status",
+                "status": current.get("main_present_status").cloned().unwrap_or(Value::Null),
+            }));
+        }
+        if current
+            .get("vsync_miss_streak")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            > 0
+        {
+            presentation_failures.push(json!({
+                "frame": frame_id,
+                "kind": "vsync-miss",
+            }));
+        }
+        if current.get("vsync_source").and_then(Value::as_str) != Some("vsync") {
+            presentation_failures.push(json!({
+                "frame": frame_id,
+                "kind": "vsync-source",
+                "source": current.get("vsync_source").cloned().unwrap_or(Value::Null),
+            }));
+        }
+    }
     let over_budget_frames = steady
         .iter()
         .filter(|frame| {
@@ -3458,16 +3523,24 @@ fn summarize_screensaver_telemetry(
                 > refresh_period_us
         })
         .count();
-    let first_present_errors = active
-        .first()
-        .and_then(|sample| sample.pointer("/launcher/frame_budget/error_total"))
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let last_present_errors = active
-        .last()
-        .and_then(|sample| sample.pointer("/launcher/frame_budget/error_total"))
-        .and_then(Value::as_u64)
-        .unwrap_or(first_present_errors);
+    let outliers = steady
+        .iter()
+        .filter(|frame| frame_u64(frame, "wall_us") > refresh_period_us)
+        .map(|frame| {
+            json!({
+                "frame": frame_u64(frame, "frame"),
+                "wall_us": frame_u64(frame, "wall_us"),
+                "prepare_us": frame_u64(frame, "prepare_us"),
+                "render_us": frame_u64(frame, "render_us"),
+                "present_us": frame_u64(frame, "present_us"),
+                "process_cpu_us": frame_u64(frame, "process_cpu_us"),
+                "runtime_status_write_us": frame_u64(frame, "runtime_status_write_us"),
+                "clock_update_us": frame_u64(frame, "clock_update_us"),
+                "status_write_due": frame.get("status_write_due").and_then(Value::as_bool).unwrap_or(false),
+                "clock_update_due": frame.get("clock_update_due").and_then(Value::as_bool).unwrap_or(false),
+            })
+        })
+        .collect::<Vec<_>>();
     wall.sort_unstable();
     work.sort_unstable();
     let profile_duration_secs = metadata
@@ -3476,20 +3549,45 @@ fn summarize_screensaver_telemetry(
         .filter(|duration| *duration > 0.0)
         .ok_or_else(|| format!("screensaver profile run {run} has no valid duration"))?;
     let average_fps = steady.len() as f64 / profile_duration_secs;
-    let first_drop = active
-        .first()
-        .and_then(|sample| sample.pointer("/launcher/latch_drop_count"))
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let last_drop = active
-        .last()
-        .and_then(|sample| sample.pointer("/launcher/latch_drop_count"))
-        .and_then(Value::as_u64)
-        .unwrap_or(first_drop);
+    let periodic = periodic_frame_signal(steady, refresh_period_us);
+    let raster = raster_cadence_summary(steady);
+    let maintenance = json!({
+        "clock_update": maintenance_cohort(steady, "clock_update_due", "clock_update_us"),
+        "runtime_status_write": maintenance_cohort(
+            steady,
+            "status_write_due",
+            "runtime_status_write_us",
+        ),
+    });
+    let phase_means = json!({
+        "prepare_us": mean_frame_field(steady, "prepare_us"),
+        "render_us": mean_frame_field(steady, "render_us"),
+        "present_us": mean_frame_field(steady, "present_us"),
+        "cpu_prepare_us": mean_frame_field(steady, "cpu_prepare_us"),
+        "cpu_render_us": mean_frame_field(steady, "cpu_render_us"),
+        "cpu_custom_draw_us": mean_frame_field(steady, "cpu_custom_draw_us"),
+        "cpu_vsync_us": mean_frame_field(steady, "cpu_vsync_us"),
+        "cpu_present_us": mean_frame_field(steady, "cpu_present_us"),
+        "process_cpu_us": mean_frame_field(steady, "process_cpu_us"),
+    });
+    let present_errors = presentation_failures
+        .iter()
+        .filter(|failure| failure.get("kind").and_then(Value::as_str) == Some("present-status"))
+        .count();
+    let latch_drop_delta = presentation_failures
+        .iter()
+        .filter(|failure| failure.get("kind").and_then(Value::as_str) == Some("latch-drop"))
+        .map(|failure| failure.get("delta").and_then(Value::as_u64).unwrap_or(0))
+        .sum::<u64>();
     Ok(json!({
         "run": run,
         "captured_frames": frames.len(),
         "screensaver_frames": screensaver_frames.len(),
+        "measurement_window": {
+            "first_frame": first_frame,
+            "last_frame": last_frame,
+            "frames": screensaver_frames.len(),
+        },
         "startup": {
             "ignored_frames": startup.len(),
             "max_wall_us": startup_max_wall_us,
@@ -3505,11 +3603,313 @@ fn summarize_screensaver_telemetry(
             "refresh_period_us": refresh_period_us,
             "over_budget_frames": over_budget_frames,
             "vsync_misses": vsync_misses,
+            "presentation_failures": presentation_failures,
         },
-        "present_errors": last_present_errors.saturating_sub(first_present_errors),
-        "latch_drop_delta": last_drop.saturating_sub(first_drop),
+        "present_errors": present_errors,
+        "latch_drop_delta": latch_drop_delta,
+        "outliers": outliers,
+        "periodic_timing": periodic,
+        "raster_cadence": raster,
+        "maintenance": maintenance,
+        "phase_means": phase_means,
         "profile": metadata,
     }))
+}
+
+fn frame_u64(frame: &Value, key: &str) -> u64 {
+    frame.get(key).and_then(Value::as_u64).unwrap_or(0)
+}
+
+fn frame_u16(frame: &Value, key: &str) -> u16 {
+    u16::try_from(frame_u64(frame, key)).unwrap_or(0)
+}
+
+fn presentation_sequence_is_contiguous(previous: u16, current: u16) -> bool {
+    current == previous.wrapping_add(1)
+}
+
+fn periodic_frame_signal(frames: &[&Value], refresh_period_us: u64) -> Value {
+    const RADIUS: usize = 60;
+    if frames.len() < RADIUS * 2 + 2 {
+        return Value::Null;
+    }
+    let wall = frames
+        .iter()
+        .map(|frame| frame_u64(frame, "wall_us") as f64)
+        .collect::<Vec<_>>();
+    let residual = wall
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let start = index.saturating_sub(RADIUS);
+            let end = (index + RADIUS + 1).min(wall.len());
+            let mean = wall[start..end].iter().sum::<f64>() / (end - start) as f64;
+            value - mean
+        })
+        .collect::<Vec<_>>();
+    let mut best_period = 45.0_f64;
+    let mut best_amplitude = 0.0_f64;
+    for step in 0..=120 {
+        let period = 45.0 + step as f64 * 0.25;
+        let amplitude = fourier_amplitude(&residual, period);
+        if amplitude > best_amplitude {
+            best_period = period;
+            best_amplitude = amplitude;
+        }
+    }
+    let refresh_hz = 1_000_000.0 / refresh_period_us.max(1) as f64;
+    json!({
+        "detrend_window_frames": RADIUS * 2 + 1,
+        "scan_min_period_frames": 45.0,
+        "scan_max_period_frames": 75.0,
+        "period_frames": best_period,
+        "frequency_hz": refresh_hz / best_period,
+        "amplitude_us": best_amplitude,
+        "peak_to_peak_us": best_amplitude * 2.0,
+        "second_harmonic_amplitude_us": fourier_amplitude(&residual, best_period / 2.0),
+        "third_harmonic_amplitude_us": fourier_amplitude(&residual, best_period / 3.0),
+    })
+}
+
+fn fourier_amplitude(values: &[f64], period: f64) -> f64 {
+    if values.is_empty() || period <= 0.0 {
+        return 0.0;
+    }
+    let (real, imaginary) =
+        values
+            .iter()
+            .enumerate()
+            .fold((0.0, 0.0), |(real, imaginary), (index, value)| {
+                let angle = std::f64::consts::TAU * index as f64 / period;
+                (real + value * angle.cos(), imaginary - value * angle.sin())
+            });
+    2.0 * real.hypot(imaginary) / values.len() as f64
+}
+
+fn maintenance_cohort(frames: &[&Value], due_key: &str, cost_key: &str) -> Value {
+    let mut tagged_wall = Vec::new();
+    let mut tagged_cost = Vec::new();
+    let mut ordinary_wall = Vec::new();
+    for frame in frames {
+        if frame.get(due_key).and_then(Value::as_bool).unwrap_or(false) {
+            tagged_wall.push(frame_u64(frame, "wall_us"));
+            tagged_cost.push(frame_u64(frame, cost_key));
+        } else {
+            ordinary_wall.push(frame_u64(frame, "wall_us"));
+        }
+    }
+    let tagged_mean = mean_u64(&tagged_wall);
+    let ordinary_mean = mean_u64(&ordinary_wall);
+    json!({
+        "frames": tagged_wall.len(),
+        "mean_wall_us": tagged_mean,
+        "mean_cost_us": mean_u64(&tagged_cost),
+        "mean_wall_delta_us": tagged_mean - ordinary_mean,
+    })
+}
+
+fn mean_u64(values: &[u64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    values.iter().map(|value| *value as f64).sum::<f64>() / values.len() as f64
+}
+
+fn mean_frame_field(frames: &[&Value], key: &str) -> f64 {
+    if frames.is_empty() {
+        return 0.0;
+    }
+    frames
+        .iter()
+        .map(|frame| frame_u64(frame, key) as f64)
+        .sum::<f64>()
+        / frames.len() as f64
+}
+
+fn raster_cadence_summary(frames: &[&Value]) -> Value {
+    let mut held_frames = 0_u64;
+    let mut held_cards = 0_u64;
+    let mut moved_cards = 0_u64;
+    let mut layer_held_frames = [0_u64; 5];
+    let mut profiles = std::collections::BTreeSet::new();
+    for frame in frames {
+        let held = frame_u64(frame, "screensaver_raster_held_cards");
+        held_frames += u64::from(held > 0);
+        held_cards += held;
+        moved_cards += frame_u64(frame, "screensaver_raster_moved_cards");
+        let mask = frame_u64(frame, "screensaver_raster_hold_layer_mask") as u8;
+        for (layer, count) in layer_held_frames.iter_mut().enumerate() {
+            *count += u64::from(mask & (1 << layer) != 0);
+        }
+        if let Some(profile) = frame
+            .get("screensaver_sampling_profile")
+            .and_then(Value::as_str)
+        {
+            profiles.insert(profile);
+        }
+    }
+    json!({
+        "sampling_profiles": profiles,
+        "held_frames": held_frames,
+        "held_card_events": held_cards,
+        "moved_card_events": moved_cards,
+        "layer_held_frames": layer_held_frames,
+    })
+}
+
+fn screensaver_benchmark_report(summary: &Value) -> Result<String> {
+    use std::fmt::Write as _;
+
+    let mut report = String::new();
+    writeln!(report, "# 720p Screensaver Benchmark\n")?;
+    writeln!(
+        report,
+        "Installed revision: `{}`  ",
+        summary
+            .pointer("/manifest/magik_revision")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+    )?;
+    writeln!(
+        report,
+        "Display: `{}` (retained)\n",
+        summary
+            .pointer("/display/final_mode")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+    )?;
+    writeln!(
+        report,
+        "| Run | Profile frames | FPS | Timing overruns | Presentation failures | P99 work | Max wall |"
+    )?;
+    writeln!(report, "|---:|---:|---:|---:|---:|---:|---:|")?;
+    let runs = summary
+        .get("runs")
+        .and_then(Value::as_array)
+        .ok_or("benchmark report has no runs")?;
+    for run in runs {
+        writeln!(
+            report,
+            "| {} | {} | {:.2} | {} | {} | {} us | {} us |",
+            frame_u64(run, "run"),
+            run.pointer("/measurement_window/frames")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            run.pointer("/steady_state/average_fps")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0),
+            run.pointer("/steady_state/over_budget_frames")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            run.pointer("/steady_state/presentation_failures")
+                .and_then(Value::as_array)
+                .map_or(0, Vec::len),
+            run.pointer("/steady_state/p99_work_us")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            run.pointer("/steady_state/max_wall_us")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+        )?;
+    }
+    for run in runs {
+        let run_id = frame_u64(run, "run");
+        writeln!(report, "\n## Run {run_id}\n")?;
+        if let Some(periodic) = run.get("periodic_timing").filter(|value| !value.is_null()) {
+            writeln!(
+                report,
+                "Strongest 45-75 frame timing component: {:.3} Hz at {:.3} ms amplitude ({:.3} ms peak-to-peak).\n",
+                periodic
+                    .get("frequency_hz")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0),
+                periodic
+                    .get("amplitude_us")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0)
+                    / 1_000.0,
+                periodic
+                    .get("peak_to_peak_us")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0)
+                    / 1_000.0,
+            )?;
+        }
+        writeln!(
+            report,
+            "Raster holds: {} frames, {} held-card events. Layer hold-frame counts: `{}`.\n",
+            run.pointer("/raster_cadence/held_frames")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            run.pointer("/raster_cadence/held_card_events")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            run.pointer("/raster_cadence/layer_held_frames")
+                .cloned()
+                .unwrap_or(Value::Null),
+        )?;
+        writeln!(
+            report,
+            "Clock-update frames: {}, mean wall delta {:.3} ms. Status-write frames: {}, mean wall delta {:.3} ms.\n",
+            run.pointer("/maintenance/clock_update/frames")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            run.pointer("/maintenance/clock_update/mean_wall_delta_us")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0)
+                / 1_000.0,
+            run.pointer("/maintenance/runtime_status_write/frames")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            run.pointer("/maintenance/runtime_status_write/mean_wall_delta_us")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0)
+                / 1_000.0,
+        )?;
+        writeln!(
+            report,
+            "Mean phases: render {:.3} ms, present {:.3} ms, process CPU {:.3} ms.\n",
+            run.pointer("/phase_means/render_us")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0)
+                / 1_000.0,
+            run.pointer("/phase_means/present_us")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0)
+                / 1_000.0,
+            run.pointer("/phase_means/process_cpu_us")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0)
+                / 1_000.0,
+        )?;
+        let outliers = run
+            .get("outliers")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        writeln!(report, "Timing outliers: {}.\n", outliers.len())?;
+        if !outliers.is_empty() {
+            writeln!(
+                report,
+                "| Frame | Wall | Render | Present | Process CPU | Status write | Clock update |"
+            )?;
+            writeln!(report, "|---:|---:|---:|---:|---:|---:|---:|")?;
+            for frame in outliers {
+                writeln!(
+                    report,
+                    "| {} | {} us | {} us | {} us | {} us | {} us | {} us |",
+                    frame_u64(frame, "frame"),
+                    frame_u64(frame, "wall_us"),
+                    frame_u64(frame, "render_us"),
+                    frame_u64(frame, "present_us"),
+                    frame_u64(frame, "process_cpu_us"),
+                    frame_u64(frame, "runtime_status_write_us"),
+                    frame_u64(frame, "clock_update_us"),
+                )?;
+            }
+        }
+    }
+    Ok(report)
 }
 
 fn percentile_99(values: &[u64]) -> u64 {
@@ -11192,7 +11592,15 @@ H: Handlers=event3 js0"#
                 "custom_draw_us": 1_000,
                 "present_us": 500,
                 "vsync_period_us": 16_667,
-                "vsync_miss_streak": 0
+                "vsync_miss_streak": 0,
+                "vsync_source": "vsync",
+                "main_present_status": "ok",
+                "main_present_sequence": id,
+                "main_present_drop_count": 2,
+                "screensaver_sampling_profile": "legacy-half",
+                "screensaver_raster_held_cards": u64::from(id == 4),
+                "screensaver_raster_moved_cards": 4,
+                "screensaver_raster_hold_layer_mask": u64::from(id == 4)
             })
         };
         let telemetry = [json!({
@@ -11210,7 +11618,8 @@ H: Handlers=event3 js0"#
                         frame(2, 40_000),
                         frame(3, 20_000),
                         frame(4, 16_000),
-                        frame(5, 16_667)
+                        frame(5, 16_667),
+                        frame(6, 99_000)
                     ]
                 }
             }
@@ -11218,16 +11627,38 @@ H: Handlers=event3 js0"#
         let summary = summarize_screensaver_telemetry(
             1,
             &telemetry,
-            json!({"state": "complete", "duration_secs": 1.0}),
+            json!({
+                "state": "complete",
+                "duration_secs": 1.0,
+                "first_frame": 1,
+                "last_frame": 5
+            }),
         )
         .unwrap();
         assert_eq!(summary["startup"]["ignored_frames"], 3);
+        assert_eq!(summary["captured_frames"], 6);
+        assert_eq!(summary["measurement_window"]["last_frame"], 5);
         assert_eq!(summary["startup"]["max_wall_us"], 500_000);
         assert_eq!(summary["startup"]["over_budget_frames"], 3);
         assert_eq!(summary["steady_state"]["frames"], 2);
         assert_eq!(summary["steady_state"]["average_fps"], 2.0);
         assert_eq!(summary["steady_state"]["over_budget_frames"], 0);
+        assert_eq!(summary["steady_state"]["presentation_failures"], json!([]));
         assert_eq!(summary["latch_drop_delta"], 0);
+        assert_eq!(summary["raster_cadence"]["held_frames"], 1);
+        assert!(
+            summarize_screensaver_telemetry(
+                1,
+                &telemetry,
+                json!({
+                    "state": "complete",
+                    "duration_secs": 1.0,
+                    "first_frame": 1,
+                    "last_frame": 7
+                })
+            )
+            .is_err()
+        );
 
         let mut invalid = telemetry[0].clone();
         invalid["launcher"]["catalog_refresh_policy"] = json!("auto");
@@ -11235,21 +11666,52 @@ H: Handlers=event3 js0"#
             summarize_screensaver_telemetry(
                 1,
                 &[invalid],
-                json!({"state": "complete", "duration_secs": 1.0})
+                json!({
+                    "state": "complete",
+                    "duration_secs": 1.0,
+                    "first_frame": 1,
+                    "last_frame": 5
+                })
             )
             .is_err()
         );
     }
 
     #[test]
+    fn periodic_timing_analysis_recovers_a_sixty_frame_signal() {
+        let frames = (0..1_800)
+            .map(|frame| {
+                let phase = std::f64::consts::TAU * frame as f64 / 60.0;
+                let wall_us = (12_000.0 + 500.0 * phase.sin()).round() as u64;
+                json!({"wall_us": wall_us})
+            })
+            .collect::<Vec<_>>();
+        let refs = frames.iter().collect::<Vec<_>>();
+        let signal = periodic_frame_signal(&refs, 16_667);
+        let period = signal["period_frames"].as_f64().unwrap();
+        let amplitude = signal["amplitude_us"].as_f64().unwrap();
+        assert!((period - 60.0).abs() <= 0.25);
+        assert!(amplitude > 450.0);
+    }
+
+    #[test]
+    fn presentation_sequence_continuity_accepts_u16_wrap_only() {
+        assert!(presentation_sequence_is_contiguous(41, 42));
+        assert!(presentation_sequence_is_contiguous(u16::MAX, 0));
+        assert!(!presentation_sequence_is_contiguous(41, 43));
+        assert!(!presentation_sequence_is_contiguous(41, 41));
+    }
+
+    #[test]
     fn installed_benchmark_capability_accepts_the_runtime_log_prefix() {
         let capability = last_json_line(
             "mister-magik-fb [benchmark-capabilities] (arch=arm)\n\
-             {\"screensaver-pprof-v1\":true}\n",
+             {\"screensaver-pprof-v1\":true,\"screensaver-frame-evidence-v2\":true}\n",
         )
         .unwrap();
 
         assert_eq!(capability["screensaver-pprof-v1"], true);
+        assert_eq!(capability["screensaver-frame-evidence-v2"], true);
         assert!(last_json_line("no structured report").is_none());
     }
 

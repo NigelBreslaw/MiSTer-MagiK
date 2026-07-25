@@ -19,15 +19,14 @@ Verify installed platform and health
 -> profile and stream telemetry for 30 seconds
 -> restore the ordinary launcher
 -> repeat in a fresh launcher process
--> restore the original display mode and exact MiSTer.ini contents
+-> retain the confirmed 1280x720 HDMI mode
 -> verify platform identity and health
 ```
 
-The benchmark temporarily confirms `hdmi-1280x720p60` so the mode remains
-active for both 30-second profiles. It records the original mode and original
-`MiSTer.ini`, then restores the mode through Main's typed display transaction.
-Byte-for-byte INI restoration is mandatory. Display restoration runs after
-every outcome and is independent of launcher/profile cleanup.
+The benchmark confirms `hdmi-1280x720p60` and intentionally leaves that mode
+active after both profiles. It records the original mode and INI hash, then
+uses the confirmed 720p INI as the final-state baseline. Launcher/profile
+cleanup remains mandatory and independent of the retained display mode.
 
 The one-shot launcher environment sets `MISTER_CATALOG_REFRESH=off`. The
 launcher must report both the disabled refresh policy and an inactive catalog
@@ -43,11 +42,11 @@ screensaver may take several frames to become visible without creating a
 user-visible defect.
 
 Steady state begins on the fourth active screensaver frame. Every steady-state
-frame must finish within the measured refresh period; a single over-budget
-frame fails the run. Average steady-state FPS must be at least 55 so a stalled
-or incomplete capture cannot pass. P99 and maximum timings remain evidence,
-not independent gates. Presentation errors, latch drops, and steady-state
-vsync misses must remain zero.
+frame must advance the completed latch presentation sequence exactly once.
+Presentation errors, latch drops, and final pacing misses must remain zero.
+Average steady-state FPS must be at least 55 so a stalled or incomplete capture
+cannot pass. Wall-time overruns, P99, and maximum timings remain evidence; they
+are not treated as proof of a visible dropped presentation.
 
 This distinction is intentional. Do not tighten startup timing because of a
 slow first render, asset loading, allocation, profiler startup, or other
@@ -59,15 +58,18 @@ running screensaver does not drop frames.
 Restoration removes the launcher environment, frame-analytics lease, and
 temporary remote profile files, then restarts the ordinary launcher. The
 workflow fails separately when performance is outside its gates or restoration
-cannot prove a clean, healthy device. The original display mode and exact
-`MiSTer.ini` contents, device boot ID, and installed manifest must be unchanged.
+cannot prove a clean, healthy device. The confirmed 720p mode and its exact
+`MiSTer.ini` contents, device boot ID, and installed manifest must be unchanged
+after profiling.
 
 ## Evidence
 
-Both SVG flamegraphs, folded stacks, profile metadata, telemetry streams, and a
-`summary.json` are written under
+Both SVG flamegraphs, folded stacks, profile metadata, telemetry streams,
+`summary.json`, and `report.md` are written under
 `build/agent-benchmarks/screensaver/<timestamp>/`. Evidence records the
 installed revision, display route and framebuffer geometry, and GUI, Main,
-scanout-module, and latch-RBF hashes. Pure offline report generators under
+scanout-module, and latch-RBF hashes. The report includes presentation
+continuity, timing outliers, CPU phases, periodic timing, one-second
+maintenance cohorts, and raster-position holds. Pure offline report generators under
 `scripts/bench/` may analyze existing data; they must not contact or mutate a
 MiSTer.
