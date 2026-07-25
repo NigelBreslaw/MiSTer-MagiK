@@ -268,6 +268,9 @@ pub(super) struct ScreensaverFrameTrace {
     pub(super) raster_visible_layer_mask: u8,
     pub(super) sixteenth_phase_layer_mask: u8,
     pub(super) phase_bank_resident_bytes: usize,
+    pub(super) card_coverage_pixels: usize,
+    pub(super) card_damage_pixels: usize,
+    pub(super) screen_pixels: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -2424,6 +2427,12 @@ struct ParadeState {
     draw_order: Vec<usize>,
     visible_draw_order: Vec<usize>,
     depth_coverage: Vec<DirtyRect>,
+    current_card_bounds: Vec<DirtyRect>,
+    current_card_bounds_by_tile: Vec<Option<DirtyRect>>,
+    previous_card_bounds_by_tile: Vec<Option<DirtyRect>>,
+    damage_card_bounds: Vec<DirtyRect>,
+    coverage_x_edges: Vec<usize>,
+    coverage_y_intervals: Vec<(usize, usize)>,
     deck: Vec<usize>,
     cursor: usize,
     rng: u64,
@@ -2547,6 +2556,18 @@ impl ParadeState {
             draw_order: Vec::with_capacity(PARADE_WIDE_LAYER_TARGETS.iter().sum()),
             visible_draw_order: Vec::with_capacity(PARADE_WIDE_LAYER_TARGETS.iter().sum()),
             depth_coverage: Vec::with_capacity(PARADE_WIDE_LAYER_TARGETS.iter().sum()),
+            current_card_bounds: Vec::with_capacity(PARADE_WIDE_LAYER_TARGETS.iter().sum()),
+            current_card_bounds_by_tile: Vec::with_capacity(PARADE_WIDE_LAYER_TARGETS.iter().sum()),
+            previous_card_bounds_by_tile: Vec::with_capacity(
+                PARADE_WIDE_LAYER_TARGETS.iter().sum(),
+            ),
+            damage_card_bounds: Vec::with_capacity(
+                PARADE_WIDE_LAYER_TARGETS.iter().sum::<usize>() * 2,
+            ),
+            coverage_x_edges: Vec::with_capacity(
+                PARADE_WIDE_LAYER_TARGETS.iter().sum::<usize>() * 2,
+            ),
+            coverage_y_intervals: Vec::with_capacity(PARADE_WIDE_LAYER_TARGETS.iter().sum()),
             deck: Vec::new(),
             cursor: 0,
             rng: seed,
@@ -3213,6 +3234,9 @@ impl ParadeState {
     }
 
     fn set_geometry(&mut self, screen_w: usize, screen_h: usize) {
+        if self.screen_w != screen_w || self.screen_h != screen_h {
+            self.previous_card_bounds_by_tile.clear();
+        }
         self.screen_w = screen_w;
         self.screen_h = screen_h;
         self.layer_targets = parade_layer_targets(screen_w, screen_h);
@@ -3518,6 +3542,113 @@ fn prepare_parade_visible_draw_order(
     culled
 }
 
+fn rectangle_union_area(
+    rects: &[DirtyRect],
+    x_edges: &mut Vec<usize>,
+    y_intervals: &mut Vec<(usize, usize)>,
+) -> usize {
+    x_edges.clear();
+    for rect in rects {
+        x_edges.extend([rect.x0, rect.x1]);
+    }
+    x_edges.sort_unstable();
+    x_edges.dedup();
+
+    let mut area = 0_usize;
+    for x_pair in x_edges.windows(2) {
+        let x0 = x_pair[0];
+        let x1 = x_pair[1];
+        if x1 <= x0 {
+            continue;
+        }
+        y_intervals.clear();
+        y_intervals.extend(
+            rects
+                .iter()
+                .filter(|rect| rect.x0 < x1 && rect.x1 > x0)
+                .map(|rect| (rect.y0, rect.y1)),
+        );
+        y_intervals.sort_unstable();
+        let mut covered_y = 0_usize;
+        let mut active: Option<(usize, usize)> = None;
+        for &(y0, y1) in y_intervals.iter() {
+            match active {
+                Some((start, end)) if y0 <= end => active = Some((start, end.max(y1))),
+                Some((start, end)) => {
+                    covered_y = covered_y.saturating_add(end.saturating_sub(start));
+                    active = Some((y0, y1));
+                }
+                None => active = Some((y0, y1)),
+            }
+        }
+        if let Some((start, end)) = active {
+            covered_y = covered_y.saturating_add(end.saturating_sub(start));
+        }
+        area = area.saturating_add((x1 - x0).saturating_mul(covered_y));
+    }
+    area
+}
+
+fn append_changed_card_damage(
+    previous: &[Option<DirtyRect>],
+    current: &[Option<DirtyRect>],
+    damage: &mut Vec<DirtyRect>,
+) {
+    damage.clear();
+    for tile_idx in 0..previous.len().max(current.len()) {
+        let previous = previous.get(tile_idx).copied().flatten();
+        let current = current.get(tile_idx).copied().flatten();
+        if previous != current {
+            damage.extend(previous);
+            damage.extend(current);
+        }
+    }
+}
+
+fn measure_parade_card_coverage(
+    state: &mut ParadeState,
+    screen_w: usize,
+    screen_h: usize,
+) -> (usize, usize) {
+    state.current_card_bounds.clear();
+    state.current_card_bounds_by_tile.clear();
+    state
+        .current_card_bounds_by_tile
+        .resize(state.tiles.len(), None);
+    for &tile_idx in &state.visible_draw_order {
+        let tile = &state.tiles[tile_idx];
+        if let Some(bounds) = parade_tile_draw_bounds(
+            tile,
+            state.sampling_profile.for_layer(tile.layer),
+            screen_w,
+            screen_h,
+        ) {
+            state.current_card_bounds.push(bounds);
+            state.current_card_bounds_by_tile[tile_idx] = Some(bounds);
+        }
+    }
+    let coverage = rectangle_union_area(
+        &state.current_card_bounds,
+        &mut state.coverage_x_edges,
+        &mut state.coverage_y_intervals,
+    );
+    append_changed_card_damage(
+        &state.previous_card_bounds_by_tile,
+        &state.current_card_bounds_by_tile,
+        &mut state.damage_card_bounds,
+    );
+    let damage = rectangle_union_area(
+        &state.damage_card_bounds,
+        &mut state.coverage_x_edges,
+        &mut state.coverage_y_intervals,
+    );
+    state.previous_card_bounds_by_tile.clear();
+    state
+        .previous_card_bounds_by_tile
+        .extend_from_slice(&state.current_card_bounds_by_tile);
+    (coverage, damage)
+}
+
 fn blit_parade_tile(
     dst: &mut [Rgb565Pixel],
     w: usize,
@@ -3590,6 +3721,7 @@ fn render_archive_parade(
     let draw_order_start = Instant::now();
     prepare_parade_draw_order(state);
     let cards_culled = prepare_parade_visible_draw_order(state, w, h);
+    let (card_coverage_pixels, card_damage_pixels) = measure_parade_card_coverage(state, w, h);
     let draw_order_us = draw_order_start.elapsed().as_micros();
     let mut raster_held_cards = 0;
     let mut raster_moved_cards = 0;
@@ -3634,6 +3766,9 @@ fn render_archive_parade(
         raster_visible_layer_mask,
         sixteenth_phase_layer_mask: state.sampling_profile.sixteenth_layer_mask(),
         phase_bank_resident_bytes: state.phase_bank_resident_bytes(),
+        card_coverage_pixels,
+        card_damage_pixels,
+        screen_pixels: w.saturating_mul(h),
         ..ScreensaverFrameTrace::default()
     }
 }
@@ -3846,6 +3981,62 @@ fn render_color_clash(
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn rectangle_union_area_counts_overlap_once() {
+        let rects = [
+            DirtyRect {
+                x0: 0,
+                y0: 0,
+                x1: 10,
+                y1: 10,
+            },
+            DirtyRect {
+                x0: 5,
+                y0: 5,
+                x1: 15,
+                y1: 15,
+            },
+        ];
+        let mut x_edges = Vec::new();
+        let mut y_intervals = Vec::new();
+
+        assert_eq!(
+            rectangle_union_area(&rects, &mut x_edges, &mut y_intervals),
+            175
+        );
+    }
+
+    #[test]
+    fn card_damage_excludes_unchanged_rectangles() {
+        let held = DirtyRect {
+            x0: 0,
+            y0: 0,
+            x1: 10,
+            y1: 10,
+        };
+        let old = DirtyRect {
+            x0: 20,
+            y0: 0,
+            x1: 30,
+            y1: 10,
+        };
+        let moved = DirtyRect {
+            x0: 21,
+            y0: 0,
+            x1: 31,
+            y1: 10,
+        };
+        let mut damage = Vec::new();
+
+        append_changed_card_damage(
+            &[Some(held), Some(old)],
+            &[Some(held), Some(moved)],
+            &mut damage,
+        );
+
+        assert_eq!(damage, vec![old, moved]);
+    }
 
     #[test]
     fn screensaver_archive_path_uses_public_layout_by_default() {

@@ -222,6 +222,9 @@ pub struct FrameBudgetRecentFrame {
     pub screensaver_raster_visible_layer_mask: u8,
     pub screensaver_sixteenth_phase_layer_mask: u8,
     pub screensaver_phase_bank_bytes: u64,
+    pub screensaver_card_coverage_pixels: u64,
+    pub screensaver_card_damage_pixels: u64,
+    pub screensaver_screen_pixels: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -798,6 +801,15 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
         "screensaver_phase_bank_bytes",
         frame.screensaver_phase_bank_bytes
     );
+    field!(
+        "screensaver_card_coverage_pixels",
+        frame.screensaver_card_coverage_pixels
+    );
+    field!(
+        "screensaver_card_damage_pixels",
+        frame.screensaver_card_damage_pixels
+    );
+    field!("screensaver_screen_pixels", frame.screensaver_screen_pixels);
     Value::Object(object)
 }
 
@@ -1113,6 +1125,9 @@ mod tests {
                         screensaver_raster_moved_cards: 8,
                         screensaver_raster_hold_layer_mask: 1,
                         screensaver_raster_visible_layer_mask: 3,
+                        screensaver_card_coverage_pixels: 230_400,
+                        screensaver_card_damage_pixels: 276_480,
+                        screensaver_screen_pixels: 921_600,
                         ..FrameBudgetRecentFrame::default()
                     }],
                     slow_frames: vec![FrameBudgetSlowFrame {
@@ -1198,6 +1213,10 @@ mod tests {
         assert_eq!(
             value["frame_budget"]["recent_frames"][0]["screensaver_raster_held_cards"],
             2
+        );
+        assert_eq!(
+            value["frame_budget"]["recent_frames"][0]["screensaver_card_coverage_pixels"],
+            230_400
         );
         assert_eq!(value["frame_budget"]["slow_frames"][0]["frame"], 41);
         assert_eq!(value["frame_budget"]["slow_frames"][0]["severity"], "drop");
