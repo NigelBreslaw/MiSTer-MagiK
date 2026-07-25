@@ -622,29 +622,73 @@ fn smoke_development_delivery(
     require_delivery_sha256(expected_sha256)?;
     let command = delivery_smoke_command("dev", expected_sha256).map_err(device_failure)?;
     let session = connect_with(&config.connection, 10).map_err(device_failure)?;
-    wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))
-        .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
-    exec_checked(&session, "delivery smoke", &command)
-        .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
-    let status = read_launcher_status(&session).map_err(device_failure)?;
-    let evidence = remote_read(&session, LATCH_FAILURE_REMOTE)
-        .and_then(|text| serde_json::from_str::<Value>(&text).ok());
-    match validate_delivery_present_state(&status, evidence.as_ref()).map_err(device_failure)? {
-        DeliveryPresentState::Latch => {
-            exec_checked(
-                &session,
-                "delivery latch health",
-                &delivery_health_command("dev").map_err(device_failure)?,
-            )
-            .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
-            let capture = request_framebuffer_png_at(&config.agent).map_err(device_failure)?;
-            delivery_smoke_capture_detail(&capture).map_err(device_failure)
-        }
-        DeliveryPresentState::Compatibility => Ok(
-            "artifact=verified process=healthy module=degraded latch=compatibility screen=recognized input=ready scanout=rgb565 capture=deferred-to-compatibility evidence=preserved arming=clear"
-                .to_string(),
-        ),
+    if let Err(error) = wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45)) {
+        return Err(delivery_smoke_failure(&session, &error.to_string()));
     }
+    let smoke = (|| -> Result<String> {
+        exec_checked(&session, "delivery smoke", &command)?;
+        let status = read_launcher_status(&session)?;
+        let evidence = remote_read(&session, LATCH_FAILURE_REMOTE)
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+        match validate_delivery_present_state(&status, evidence.as_ref())? {
+            DeliveryPresentState::Latch => {
+                exec_checked(
+                    &session,
+                    "delivery latch health",
+                    &delivery_health_command("dev")?,
+                )?;
+                let capture = request_framebuffer_png_at(&config.agent)?;
+                delivery_smoke_capture_detail(&capture)
+            }
+            DeliveryPresentState::Compatibility => Ok(
+                "artifact=verified process=healthy module=degraded latch=compatibility screen=recognized input=ready scanout=rgb565 capture=deferred-to-compatibility evidence=preserved arming=clear"
+                    .to_string(),
+            ),
+        }
+    })();
+    smoke.map_err(|error| delivery_smoke_failure(&session, &error.to_string()))
+}
+
+fn delivery_smoke_failure(session: &Session, error: &str) -> DeviceFailure {
+    let evidence = retain_delivery_smoke_failure_evidence(session, error)
+        .map(|path| format!("; evidence={}", path.display()))
+        .unwrap_or_else(|capture_error| format!("; evidence_capture_failed={capture_error}"));
+    DeviceFailure::Unhealthy(format!("{error}{evidence}"))
+}
+
+fn retain_delivery_smoke_failure_evidence(session: &Session, failure: &str) -> Result<PathBuf> {
+    let output_dir = PathBuf::from("build/delivery-smoke-failures").join(timestamp());
+    fs::create_dir_all(&output_dir)?;
+    let processes = exec(session, "ps w", true)
+        .map(|output| {
+            json!({
+                "rc": output.rc,
+                "stdout": output.stdout,
+                "stderr": output.stderr,
+            })
+        })
+        .unwrap_or_else(|error| json!({"error": error.to_string()}));
+    let bundle = json!({
+        "schema": "mister-magik-delivery-smoke-failure-v1",
+        "failure": failure,
+        "captured_unix_ms": SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+        "status": remote_read(session, SLINT_STATUS_REMOTE),
+        "main_status": remote_read(session, MAIN_STATUS_REMOTE),
+        "latch_failure": remote_read(session, LATCH_FAILURE_REMOTE),
+        "slint_log_tail": tail_remote(session, "/tmp/mister-magik-slint.log", 160)
+            .map(|lines| lines.join("\n")),
+        "main_log_tail": tail_remote(session, "/tmp/mister-magik-main.log", 120)
+            .map(|lines| lines.join("\n")),
+        "processes": processes,
+    });
+    fs::write(
+        output_dir.join("evidence.json"),
+        serde_json::to_vec_pretty(&bundle)?,
+    )?;
+    Ok(fs::canonicalize(&output_dir).unwrap_or(output_dir))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2266,9 +2310,13 @@ fn delivery_smoke_command(layout: &str, expected_sha256: &str) -> Result<String>
         _ => return Err(format!("unsupported delivery layout: {layout}").into()),
     };
     Ok(format!(
-        "set -eu; test \"$(sha256sum {directory}/mister-magik-fb | awk '{{print $1}}')\" = '{expected_sha256}'; pidof {main} >/dev/null; pidof mister-magik-fb >/dev/null; {}; test -n \"$pid_before\"; test \"$pid_before\" = \"$pid_after\"; test -n \"$sequence_before\"; test -n \"$sequence_after\"; test \"$sequence_after\" -gt \"$sequence_before\"; grep -Eq '\"scene\"[[:space:]]*:[[:space:]]*\"launcher\"' \"$status\"; grep -Eq '\"effective_view\"[[:space:]]*:[[:space:]]*\"[^\"]+\"' \"$status\"; grep -Eq '\"return_screen\"[[:space:]]*:[[:space:]]*\"[^\"]+\"' \"$status\"; test \"$(cat /sys/class/graphics/fb0/bits_per_pixel)\" = 16; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /tmp/mister-magik/realtime-frame-analytics; test ! -e /tmp/mister-magik/screensaver-profile",
-        launcher_heartbeat_sample_command()
+        "set -eu; smoke_check=initializing; status=/tmp/mister-magik/status.json; pid_before=; pid_after=; sequence_before=; sequence_after=; heartbeat_attempts=0; trap 'rc=$?; if test \"$rc\" -ne 0; then printf \"delivery_smoke_failure_tsv\\tcheck=%s\\trc=%s\\tpid_before=%s\\tpid_after=%s\\tsequence_before=%s\\tsequence_after=%s\\tattempts=%s\\n\" \"$smoke_check\" \"$rc\" \"$pid_before\" \"$pid_after\" \"$sequence_before\" \"$sequence_after\" \"$heartbeat_attempts\" >&2; fi' EXIT; smoke_check=artifact-sha256; test \"$(sha256sum {directory}/mister-magik-fb | awk '{{print $1}}')\" = '{expected_sha256}'; smoke_check=main-process; pidof {main} >/dev/null; smoke_check=launcher-process; pidof mister-magik-fb >/dev/null; {}; smoke_check=heartbeat-initial-pid; test -n \"$pid_before\"; smoke_check=heartbeat-initial-sequence; test -n \"$sequence_before\"; smoke_check=heartbeat-advance; while test \"$heartbeat_attempts\" -lt 10; do sleep 1; heartbeat_attempts=$((heartbeat_attempts+1)); candidate_pid=$(sed -n 's/.*\"pid\":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' \"$status\"); candidate_sequence=$(sed -n 's/.*\"status_sequence\":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' \"$status\"); if test -z \"$candidate_pid\" || test -z \"$candidate_sequence\"; then continue; fi; pid_after=$candidate_pid; sequence_after=$candidate_sequence; if test \"$pid_after\" != \"$pid_before\"; then smoke_check=launcher-pid-stable; false; fi; if test \"$sequence_after\" -gt \"$sequence_before\"; then break; fi; done; smoke_check=heartbeat-final-pid; test -n \"$pid_after\"; smoke_check=heartbeat-final-sequence; test -n \"$sequence_after\"; smoke_check=heartbeat-advance; test \"$sequence_after\" -gt \"$sequence_before\"; smoke_check=launcher-scene; grep -Eq '\"scene\"[[:space:]]*:[[:space:]]*\"launcher\"' \"$status\"; smoke_check=effective-view; grep -Eq '\"effective_view\"[[:space:]]*:[[:space:]]*\"[^\"]+\"' \"$status\"; smoke_check=return-screen; grep -Eq '\"return_screen\"[[:space:]]*:[[:space:]]*\"[^\"]+\"' \"$status\"; smoke_check=rgb565; test \"$(cat /sys/class/graphics/fb0/bits_per_pixel)\" = 16; smoke_check=production-launcher-env-clear; test ! -e /media/fat/mister-magik/launcher.env; smoke_check=development-launcher-env-clear; test ! -e /media/fat/mister-magik-dev/launcher.env; smoke_check=production-rebuild-clear; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; smoke_check=development-rebuild-clear; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot; smoke_check=fault-launcher-env-clear; test ! -e /tmp/mister-magik/fs-fault-launcher.env; smoke_check=fault-session-clear; test ! -e /tmp/mister-magik/fs-fault-session; smoke_check=fault-json-clear; test ! -e /tmp/mister-magik/fs-fault.json; smoke_check=analytics-lease-clear; test ! -e /tmp/mister-magik/realtime-frame-analytics; smoke_check=screensaver-profile-clear; test ! -e /tmp/mister-magik/screensaver-profile; smoke_check=complete; trap - EXIT; printf 'delivery_smoke_tsv\\tvalid=1\\tpid=%s\\tsequence_before=%s\\tsequence_after=%s\\tattempts=%s\\n' \"$pid_after\" \"$sequence_before\" \"$sequence_after\" \"$heartbeat_attempts\"",
+        launcher_heartbeat_initial_sample_command()
     ))
+}
+
+fn launcher_heartbeat_initial_sample_command() -> &'static str {
+    "pid_before=$(sed -n 's/.*\"pid\":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' \"$status\"); sequence_before=$(sed -n 's/.*\"status_sequence\":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' \"$status\")"
 }
 
 fn launcher_heartbeat_sample_command() -> &'static str {
@@ -12719,6 +12767,10 @@ H: Handlers=event3 js0"#
             );
         }
         assert!(command.contains("test \"$sequence_after\" -gt \"$sequence_before\""));
+        assert!(command.contains("delivery_smoke_failure_tsv"));
+        assert!(command.contains("heartbeat_attempts\" -lt 10"));
+        assert!(command.contains("smoke_check=launcher-pid-stable"));
+        assert!(!command.contains("sleep 2"));
         assert!(!command.contains("latch-readiness-report"));
         assert!(!command.contains("mister_magik_scanout_slots"));
         let latch_health = delivery_health_command("dev").unwrap();
