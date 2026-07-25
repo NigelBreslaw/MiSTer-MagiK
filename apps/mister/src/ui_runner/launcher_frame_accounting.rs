@@ -406,12 +406,13 @@ pub(super) enum FrameAnalyticsMode {
 }
 
 impl FrameAnalyticsMode {
-    fn from_lease_text(text: &str) -> Self {
+    fn from_lease_text(text: &str) -> Option<Self> {
         match text.trim() {
-            "wall" => Self::Wall,
-            "thread" => Self::Thread,
-            "process" | "1" | "true" => Self::Process,
-            _ => Self::Off,
+            "off" => Some(Self::Off),
+            "wall" => Some(Self::Wall),
+            "thread" => Some(Self::Thread),
+            "process" | "1" | "true" => Some(Self::Process),
+            _ => None,
         }
     }
 
@@ -426,6 +427,20 @@ impl FrameAnalyticsMode {
     fn records_process_cpu(self) -> bool {
         matches!(self, Self::Process)
     }
+}
+
+fn fresh_frame_analytics_mode(
+    previous: FrameAnalyticsMode,
+    lease_is_fresh: bool,
+    lease_text: Result<&str, &std::io::Error>,
+) -> FrameAnalyticsMode {
+    if !lease_is_fresh {
+        return FrameAnalyticsMode::Off;
+    }
+    lease_text
+        .ok()
+        .and_then(FrameAnalyticsMode::from_lease_text)
+        .unwrap_or(previous)
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -1341,20 +1356,15 @@ impl LauncherFrameAccounting {
     }
 
     fn refresh_frame_analytics_mode(&mut self) {
-        let mode = std::fs::metadata(FRAME_ANALYTICS_LEASE_PATH)
-            .and_then(|metadata| {
-                let age = metadata
-                    .modified()?
-                    .elapsed()
-                    .unwrap_or(FRAME_ANALYTICS_LEASE_MAX_AGE);
-                if age <= FRAME_ANALYTICS_LEASE_MAX_AGE {
-                    std::fs::read_to_string(FRAME_ANALYTICS_LEASE_PATH)
-                } else {
-                    Ok(String::new())
-                }
-            })
-            .map(|text| FrameAnalyticsMode::from_lease_text(&text))
-            .unwrap_or(FrameAnalyticsMode::Off);
+        let mode = fresh_frame_analytics_mode(
+            self.frame_analytics_mode,
+            std::fs::metadata(FRAME_ANALYTICS_LEASE_PATH)
+                .and_then(|metadata| metadata.modified())
+                .ok()
+                .and_then(|modified| modified.elapsed().ok())
+                .is_some_and(|age| age <= FRAME_ANALYTICS_LEASE_MAX_AGE),
+            std::fs::read_to_string(FRAME_ANALYTICS_LEASE_PATH).as_deref(),
+        );
         if mode != self.frame_analytics_mode {
             self.frame_analytics_mode = mode;
             self.frame_analytics_samples.clear();
@@ -2326,6 +2336,31 @@ fn usize_to_u32_saturating(value: usize) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fresh_analytics_lease_keeps_previous_mode_during_transient_read_failure() {
+        let error = std::io::Error::other("transient empty replacement");
+        assert_eq!(
+            fresh_frame_analytics_mode(FrameAnalyticsMode::Process, true, Err(&error)),
+            FrameAnalyticsMode::Process
+        );
+        assert_eq!(
+            fresh_frame_analytics_mode(FrameAnalyticsMode::Thread, true, Ok("")),
+            FrameAnalyticsMode::Thread
+        );
+        assert_eq!(
+            fresh_frame_analytics_mode(FrameAnalyticsMode::Thread, true, Ok("off\n")),
+            FrameAnalyticsMode::Off
+        );
+    }
+
+    #[test]
+    fn missing_or_expired_analytics_lease_disables_sampling() {
+        assert_eq!(
+            fresh_frame_analytics_mode(FrameAnalyticsMode::Process, false, Ok("process\n")),
+            FrameAnalyticsMode::Off
+        );
+    }
 
     fn sample(frame: u64, wall_us: u64) -> FrameBudgetSample {
         FrameBudgetSample {

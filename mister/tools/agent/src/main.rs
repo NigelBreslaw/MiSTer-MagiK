@@ -902,7 +902,7 @@ mod linux {
     use std::os::fd::AsRawFd;
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::{Arc, Mutex, OnceLock};
     use std::thread;
     use std::time::{Duration, Instant};
@@ -926,6 +926,7 @@ mod linux {
     const LOG: &str = "/tmp/mister-magik-agent.log";
     const PLOG: &str = "/media/fat/mister-magik-dev/bootlogs/agent.log";
     const FRAME_ANALYTICS_LEASE_PATH: &str = "/tmp/mister-magik/realtime-frame-analytics";
+    static FRAME_ANALYTICS_LEASE_GENERATION: AtomicU64 = AtomicU64::new(0);
     static FRAMEBUFFER_STREAM_ACTIVE: AtomicBool = AtomicBool::new(false);
     static MAGIK_OPERATION_RESULTS: OnceLock<Mutex<HashMap<String, Value>>> = OnceLock::new();
     const BOOTLOG_DIR: &str = "/media/fat/mister-magik-dev/bootlogs";
@@ -1453,10 +1454,21 @@ mod linux {
             clear_frame_analytics_lease();
             return;
         }
-        if let Some(parent) = std::path::Path::new(FRAME_ANALYTICS_LEASE_PATH).parent() {
+        let generation = FRAME_ANALYTICS_LEASE_GENERATION.fetch_add(1, Ordering::Relaxed);
+        refresh_frame_analytics_lease_at(Path::new(FRAME_ANALYTICS_LEASE_PATH), mode, generation);
+    }
+
+    pub(super) fn refresh_frame_analytics_lease_at(path: &Path, mode: &str, generation: u64) {
+        if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent);
         }
-        let _ = fs::write(FRAME_ANALYTICS_LEASE_PATH, format!("{mode}\n"));
+        let temp = path.with_extension(format!("lease-{}-{generation}", std::process::id()));
+        let published = fs::write(&temp, format!("{mode}\n"))
+            .and_then(|()| fs::rename(&temp, path))
+            .is_ok();
+        if !published {
+            let _ = fs::remove_file(temp);
+        }
     }
 
     fn clear_frame_analytics_lease() {
@@ -4069,6 +4081,26 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn analytics_lease_refresh_replaces_complete_content_atomically() {
+        let root =
+            std::env::temp_dir().join(format!("mister-magik-agent-lease-{}", std::process::id()));
+        let path = root.join("realtime-frame-analytics");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(&path, "wall\n").unwrap();
+
+        linux::refresh_frame_analytics_lease_at(&path, "process", 7);
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "process\n");
+        assert_eq!(
+            std::fs::read_dir(&root).unwrap().count(),
+            1,
+            "temporary lease file was not renamed away"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn authoritative_capture_failure_never_falls_back_when_slots_exist() {

@@ -3243,6 +3243,25 @@ fn profile_installed_screensaver(config: &NativeDeviceConfig, output_dir: &Path)
         output_dir.join("report.md"),
         screensaver_benchmark_report(&summary)?,
     )?;
+    let qualification_failures = summary
+        .get("runs")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|run| {
+            let failures = run
+                .pointer("/qualification/failures")
+                .and_then(Value::as_array)?;
+            (!failures.is_empty()).then_some(failures.len())
+        })
+        .sum::<usize>();
+    if qualification_failures > 0 {
+        return Err(format!(
+            "screensaver benchmark failed {qualification_failures} qualification gate(s); evidence retained at {}",
+            output_dir.display()
+        )
+        .into());
+    }
     serde_json::to_string(&summary).map_err(Into::into)
 }
 
@@ -3501,7 +3520,21 @@ fn profile_installed_screensaver_run(
         output_dir.join(format!("run-{run}-telemetry.jsonl")),
         format!("{telemetry_text}\n"),
     )?;
-    summarize_screensaver_telemetry(run, &telemetry, metadata_value)
+    match summarize_screensaver_telemetry(run, &telemetry, metadata_value.clone()) {
+        Ok(summary) => Ok(summary),
+        Err(error) => Ok(json!({
+            "run": run,
+            "captured_frames": telemetry.len(),
+            "profile": metadata_value,
+            "qualification": {
+                "qualified": false,
+                "failures": [{
+                    "kind": "missing-evidence",
+                    "detail": error.to_string(),
+                }],
+            },
+        })),
+    }
 }
 
 fn restart_launcher_with_one_shot_env(
@@ -3797,6 +3830,16 @@ fn summarize_screensaver_telemetry(
                 "source": current.get("vsync_source").cloned().unwrap_or(Value::Null),
             }));
         }
+        let previous_render_sequence = frame_u64(previous, "screensaver_render_ahead_sequence");
+        let current_render_sequence = frame_u64(current, "screensaver_render_ahead_sequence");
+        if current_render_sequence != previous_render_sequence.saturating_add(1) {
+            presentation_failures.push(json!({
+                "frame": frame_id,
+                "kind": "render-sequence-gap",
+                "previous": previous_render_sequence,
+                "actual": current_render_sequence,
+            }));
+        }
     }
     let over_budget_frames = steady
         .iter()
@@ -3903,6 +3946,25 @@ fn summarize_screensaver_telemetry(
         "process_cpu_us": mean_frame_field(steady, "process_cpu_us"),
     });
     let populated_window = populated_screensaver_window(steady, refresh_period_us);
+    let device_cpu_samples = active
+        .iter()
+        .filter_map(|sample| {
+            sample
+                .pointer("/cpu/combined_busy_pct")
+                .and_then(Value::as_f64)
+        })
+        .collect::<Vec<_>>();
+    let core_cpu_samples = |id: u64| {
+        active
+            .iter()
+            .filter_map(|sample| sample.pointer("/cpu/cores").and_then(Value::as_array))
+            .flatten()
+            .filter(|core| core.get("id").and_then(Value::as_u64) == Some(id))
+            .filter_map(|core| core.get("busy_pct").and_then(Value::as_f64))
+            .collect::<Vec<_>>()
+    };
+    let core0_cpu_samples = core_cpu_samples(0);
+    let core1_cpu_samples = core_cpu_samples(1);
     let present_errors = presentation_failures
         .iter()
         .filter(|failure| failure.get("kind").and_then(Value::as_str) == Some("present-status"))
@@ -3912,7 +3974,7 @@ fn summarize_screensaver_telemetry(
         .filter(|failure| failure.get("kind").and_then(Value::as_str) == Some("latch-drop"))
         .map(|failure| failure.get("delta").and_then(Value::as_u64).unwrap_or(0))
         .sum::<u64>();
-    Ok(json!({
+    let mut result = json!({
         "run": run,
         "captured_frames": frames.len(),
         "screensaver_frames": screensaver_frames.len(),
@@ -3956,8 +4018,26 @@ fn summarize_screensaver_telemetry(
         "maintenance": maintenance,
         "phase_means": phase_means,
         "populated_window": populated_window,
+        "cpu_utilization": {
+            "launcher_process_pct_of_one_core": mean_frame_field(steady, "process_cpu_us")
+                * 100.0 / refresh_period_us as f64,
+            "renderer_pct_of_one_core": mean_frame_field(
+                steady,
+                "screensaver_render_ahead_render_cpu_us"
+            ) * 100.0 / refresh_period_us as f64,
+            "instrumented_device_combined_busy_pct": mean_f64(&device_cpu_samples),
+            "instrumented_device_core0_busy_pct": mean_f64(&core0_cpu_samples),
+            "instrumented_device_core1_busy_pct": mean_f64(&core1_cpu_samples),
+            "device_scope": "includes Main, launcher, profiler, telemetry agent, kernel, and other processes",
+        },
         "profile": metadata,
-    }))
+    });
+    let qualification_failures = screensaver_qualification_failures(&result);
+    result["qualification"] = json!({
+        "qualified": qualification_failures.is_empty(),
+        "failures": qualification_failures,
+    });
+    Ok(result)
 }
 
 fn populated_screensaver_window(frames: &[&Value], refresh_period_us: u64) -> Value {
@@ -4010,6 +4090,17 @@ fn populated_screensaver_window(frames: &[&Value], refresh_period_us: u64) -> Va
             "cpu_custom_draw_us": mean_frame_field(&populated, "cpu_custom_draw_us"),
             "process_cpu_us": mean_frame_field(&populated, "process_cpu_us"),
         },
+        "render_ahead": screensaver_render_ahead_summary(&populated),
+        "cpu_utilization": {
+            "launcher_process_pct_of_one_core": mean_frame_field(
+                &populated,
+                "process_cpu_us"
+            ) * 100.0 / refresh_period_us as f64,
+            "renderer_pct_of_one_core": mean_frame_field(
+                &populated,
+                "screensaver_render_ahead_render_cpu_us"
+            ) * 100.0 / refresh_period_us as f64,
+        },
     })
 }
 
@@ -4047,6 +4138,14 @@ fn mean_u64(values: &[u64]) -> f64 {
         0.0
     } else {
         values.iter().map(|value| *value as f64).sum::<f64>() / values.len() as f64
+    }
+}
+
+fn mean_f64(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        0.0
+    } else {
+        values.iter().sum::<f64>() / values.len() as f64
     }
 }
 
@@ -4529,17 +4628,106 @@ fn screensaver_render_ahead_summary(frames: &[&Value]) -> Value {
             "max": samples.last().copied().unwrap_or(0),
         })
     };
+    let counter_delta = |key: &str| {
+        frames
+            .last()
+            .map(|frame| frame_u64(frame, key))
+            .unwrap_or(0)
+            .saturating_sub(
+                frames
+                    .first()
+                    .map(|frame| frame_u64(frame, key))
+                    .unwrap_or(0),
+            )
+    };
     json!({
         "queue_depth": summary("screensaver_render_ahead_queue_depth"),
         "frame_age_us": summary("screensaver_render_ahead_frame_age_us"),
         "render_wall_us": summary("screensaver_render_ahead_render_wall_us"),
         "render_cpu_us": summary("screensaver_render_ahead_render_cpu_us"),
         "final_sequence": frames.last().map(|frame| frame_u64(frame, "screensaver_render_ahead_sequence")).unwrap_or(0),
-        "starvation_count": frames.last().map(|frame| frame_u64(frame, "screensaver_render_ahead_starvation_count")).unwrap_or(0),
-        "superseded_frames": frames.last().map(|frame| frame_u64(frame, "screensaver_render_ahead_superseded_frames")).unwrap_or(0),
-        "reused_frames": frames.last().map(|frame| frame_u64(frame, "screensaver_render_ahead_reused_frames")).unwrap_or(0),
+        "starvation_count": counter_delta("screensaver_render_ahead_starvation_count"),
+        "reused_frames": counter_delta("screensaver_render_ahead_reused_frames"),
         "cancelled_frames": frames.iter().filter(|frame| frame.get("screensaver_render_ahead_cancelled").and_then(Value::as_bool) == Some(true)).count(),
     })
+}
+
+fn screensaver_qualification_failures(run: &Value) -> Vec<Value> {
+    let mut failures = Vec::new();
+    let presentation_failures = run
+        .pointer("/steady_state/presentation_failures")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    if presentation_failures > 0 {
+        failures.push(json!({
+            "kind": "presentation-failures",
+            "count": presentation_failures,
+        }));
+    }
+    let repeated_refreshes = run
+        .pointer("/steady_state/physical_refresh/repeated_refreshes")
+        .and_then(Value::as_u64)
+        .unwrap_or(u64::MAX);
+    if repeated_refreshes > 0 {
+        failures.push(json!({
+            "kind": "repeated-refreshes",
+            "count": repeated_refreshes,
+        }));
+    }
+    let long_completion_intervals = run
+        .pointer("/steady_state/physical_refresh/long_completion_intervals")
+        .and_then(Value::as_array)
+        .map_or(usize::MAX, Vec::len);
+    if long_completion_intervals > 0 {
+        failures.push(json!({
+            "kind": "long-completion-intervals",
+            "count": long_completion_intervals,
+        }));
+    }
+    for (kind, pointer) in [
+        ("render-ahead-starvation", "/render_ahead/starvation_count"),
+        ("render-ahead-reuse", "/render_ahead/reused_frames"),
+    ] {
+        let count = run
+            .pointer(pointer)
+            .and_then(Value::as_u64)
+            .unwrap_or(u64::MAX);
+        if count > 0 {
+            failures.push(json!({"kind": kind, "count": count}));
+        }
+    }
+    let unique_fps = run
+        .pointer("/steady_state/physical_refresh/unique_fps")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let refresh_hz = run
+        .pointer("/steady_state/physical_refresh/refresh_hz")
+        .and_then(Value::as_f64)
+        .unwrap_or(f64::INFINITY);
+    if unique_fps + 0.1 < refresh_hz {
+        failures.push(json!({
+            "kind": "unique-fps-below-refresh",
+            "unique_fps": unique_fps,
+            "refresh_hz": refresh_hz,
+            "tolerance_fps": 0.1,
+        }));
+    }
+    let worker_p99_us = run
+        .pointer("/populated_window/render_ahead/render_wall_us/p99")
+        .and_then(Value::as_u64)
+        .unwrap_or(u64::MAX);
+    let refresh_period_us = run
+        .pointer("/steady_state/refresh_period_us")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if worker_p99_us > refresh_period_us {
+        failures.push(json!({
+            "kind": "worker-p99-over-refresh-period",
+            "worker_p99_us": worker_p99_us,
+            "refresh_period_us": refresh_period_us,
+        }));
+    }
+    failures
 }
 
 fn screensaver_benchmark_report(summary: &Value) -> Result<String> {
@@ -4705,13 +4893,23 @@ fn screensaver_benchmark_report(summary: &Value) -> Result<String> {
         )?;
         writeln!(
             report,
-            "Mean wall phases and complete CPU attribution: `{}`.\n",
+            "Mean wall phases and process CPU samples: `{}`.\n",
             run.get("phase_means").cloned().unwrap_or(Value::Null),
+        )?;
+        writeln!(
+            report,
+            "Normalized CPU utilization: `{}`.\n",
+            run.get("cpu_utilization").cloned().unwrap_or(Value::Null),
         )?;
         writeln!(
             report,
             "Render-ahead pipeline: `{}`.\n",
             run.get("render_ahead").cloned().unwrap_or(Value::Null),
+        )?;
+        writeln!(
+            report,
+            "Qualification: `{}`.\n",
+            run.get("qualification").cloned().unwrap_or(Value::Null),
         )?;
         let failures = run
             .pointer("/steady_state/presentation_failures")
@@ -12714,6 +12912,12 @@ H: Handlers=event3 js0"#
         assert_eq!(summary["latch_drop_delta"], 0);
         assert_eq!(summary["raster_cadence"]["held_frames"], 1);
         assert_eq!(summary["render_ahead"]["starvation_count"], 0);
+        assert_eq!(summary["qualification"]["qualified"], true);
+        let populated_cpu =
+            summary["populated_window"]["cpu_utilization"]["launcher_process_pct_of_one_core"]
+                .as_f64()
+                .unwrap();
+        assert!((populated_cpu - 4.38).abs() < 0.01);
         let report = screensaver_benchmark_report(&json!({
             "manifest": {"magik_revision": "test-revision"},
             "display": {"final_mode": "hdmi-1280x720p60"},
@@ -12723,7 +12927,22 @@ H: Handlers=event3 js0"#
         assert!(report.contains("Presentation failures"));
         assert!(report.contains("Visible raster holds"));
         assert!(report.contains("Render-ahead pipeline"));
-        assert!(report.contains("complete CPU attribution"));
+        assert!(report.contains("Normalized CPU utilization"));
+        assert!(report.contains("Qualification"));
+        let mut repeated = summary.clone();
+        repeated["steady_state"]["physical_refresh"]["repeated_refreshes"] = json!(1);
+        assert!(
+            screensaver_qualification_failures(&repeated)
+                .iter()
+                .any(|failure| failure["kind"] == "repeated-refreshes")
+        );
+        let mut reused = summary.clone();
+        reused["render_ahead"]["reused_frames"] = json!(1);
+        assert!(
+            screensaver_qualification_failures(&reused)
+                .iter()
+                .any(|failure| failure["kind"] == "render-ahead-reuse")
+        );
         assert!(
             summarize_screensaver_telemetry(
                 1,
