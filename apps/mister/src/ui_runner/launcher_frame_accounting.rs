@@ -1770,6 +1770,21 @@ impl LauncherFrameAccounting {
                 screensaver_phase_bank_bytes: usize_to_u64_saturating(
                     frame.screensaver_frame_trace.phase_bank_resident_bytes,
                 ),
+                screensaver_damage_tile_count: usize_to_u64_saturating(
+                    frame.screensaver_frame_trace.damage_tile_count,
+                ),
+                screensaver_background_restore_bytes: usize_to_u64_saturating(
+                    frame.screensaver_frame_trace.background_restore_bytes,
+                ),
+                screensaver_star_pixels_touched: usize_to_u64_saturating(
+                    frame.screensaver_frame_trace.star_pixels_touched,
+                ),
+                screensaver_cards_redrawn: usize_to_u64_saturating(
+                    frame.screensaver_frame_trace.cards_drawn,
+                ),
+                screensaver_cards_skipped: usize_to_u64_saturating(
+                    frame.screensaver_frame_trace.cards_skipped,
+                ),
             });
     }
 

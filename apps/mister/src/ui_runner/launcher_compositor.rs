@@ -113,6 +113,7 @@ impl<'a> LayerTarget<'a> {
         launcher_frame: &[Rgb565Pixel],
         alpha: u8,
     ) -> (DirtyRect, ScreensaverFrameTrace) {
+        saver.invalidate_composition(self.ui.render_w(), self.ui.render_h());
         let trace = saver.render(
             self.target.cached_565_mut(),
             self.ui.render_w(),
@@ -124,6 +125,7 @@ impl<'a> LayerTarget<'a> {
                 *pixel = blend_565(*source, *pixel, alpha);
             }
         }
+        saver.invalidate_composition(self.ui.render_w(), self.ui.render_h());
         (
             DirtyRect {
                 x0: 0,

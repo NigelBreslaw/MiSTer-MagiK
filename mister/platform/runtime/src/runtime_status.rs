@@ -222,6 +222,11 @@ pub struct FrameBudgetRecentFrame {
     pub screensaver_raster_visible_layer_mask: u8,
     pub screensaver_sixteenth_phase_layer_mask: u8,
     pub screensaver_phase_bank_bytes: u64,
+    pub screensaver_damage_tile_count: u64,
+    pub screensaver_background_restore_bytes: u64,
+    pub screensaver_star_pixels_touched: u64,
+    pub screensaver_cards_redrawn: u64,
+    pub screensaver_cards_skipped: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -798,6 +803,20 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
         "screensaver_phase_bank_bytes",
         frame.screensaver_phase_bank_bytes
     );
+    field!(
+        "screensaver_damage_tile_count",
+        frame.screensaver_damage_tile_count
+    );
+    field!(
+        "screensaver_background_restore_bytes",
+        frame.screensaver_background_restore_bytes
+    );
+    field!(
+        "screensaver_star_pixels_touched",
+        frame.screensaver_star_pixels_touched
+    );
+    field!("screensaver_cards_redrawn", frame.screensaver_cards_redrawn);
+    field!("screensaver_cards_skipped", frame.screensaver_cards_skipped);
     Value::Object(object)
 }
 

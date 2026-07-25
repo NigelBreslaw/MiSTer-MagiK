@@ -269,6 +269,10 @@ pub(super) struct ScreensaverFrameTrace {
     pub(super) sixteenth_phase_layer_mask: u8,
     pub(super) phase_bank_resident_bytes: usize,
     pub(super) damage_tiles: DamageTileMap,
+    pub(super) damage_tile_count: usize,
+    pub(super) background_restore_bytes: usize,
+    pub(super) star_pixels_touched: usize,
+    pub(super) cards_skipped: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -376,6 +380,10 @@ impl LauncherScreensaver {
 
     pub(in crate::ui_runner) fn active_card_count(&self) -> usize {
         self.parade.tiles.iter().filter(|tile| tile.active).count()
+    }
+
+    pub(in crate::ui_runner) fn invalidate_composition(&mut self, w: usize, h: usize) {
+        self.parade.damage_tiles = DamageTileMap::full(w, h);
     }
 }
 
@@ -2423,7 +2431,6 @@ struct ParadeScaleResult {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ParadeStarPixel {
     index: usize,
-    pixel: Rgb565Pixel,
 }
 
 struct ParadeState {
@@ -3614,12 +3621,13 @@ fn render_archive_parade(
     tick_delta_fp: i64,
 ) -> ScreensaverFrameTrace {
     let background_start = Instant::now();
-    render_horizontal_starfield(dst, w, h, motion_ticks_fp, state.motion);
+    let star_pixels_touched = update_parade_background(state, w, h, motion_ticks_fp);
     let background_us = background_start.elapsed().as_micros();
     let advance = state.advance(w, h, None, motion_ticks_fp, tick_delta_fp);
     let draw_order_start = Instant::now();
     prepare_parade_draw_order(state);
     let cards_culled = prepare_parade_visible_draw_order(state, w, h);
+    prepare_parade_damage(state, w, h);
     let draw_order_us = draw_order_start.elapsed().as_micros();
     let mut raster_held_cards = 0;
     let mut raster_moved_cards = 0;
@@ -3638,7 +3646,14 @@ fn render_archive_parade(
         raster_moved_cards += usize::from(tile.raster_moved_this_frame);
     }
     let tile_blit_start = Instant::now();
+    let damage_tiles = state.damage_tiles;
+    let background_restore_bytes = damage_tiles.total_rgb565_bytes();
+    restore_parade_background_damage(dst, &state.background_pixels, w, damage_tiles);
+    let mut cards_drawn = 0usize;
     for &tile_idx in &state.visible_draw_order {
+        if !state.redraw_cards.get(tile_idx).copied().unwrap_or(false) {
+            continue;
+        }
         let tile = &state.tiles[tile_idx];
         blit_parade_tile(
             dst,
@@ -3647,7 +3662,12 @@ fn render_archive_parade(
             state.sampling_profile.for_layer(tile.layer),
             tile,
         );
+        cards_drawn += 1;
     }
+    std::mem::swap(
+        &mut state.previous_card_bounds,
+        &mut state.current_card_bounds,
+    );
     ScreensaverFrameTrace {
         card_adopt_us: advance.card_adopt_us,
         cards_adopted: advance.cards_adopted,
@@ -3655,7 +3675,7 @@ fn render_archive_parade(
         background_us,
         draw_order_us,
         tile_blit_us: tile_blit_start.elapsed().as_micros(),
-        cards_drawn: state.visible_draw_order.len(),
+        cards_drawn,
         cards_culled,
         sampling_profile: state.sampling_profile.layer_evidence(),
         raster_held_cards,
@@ -3664,8 +3684,141 @@ fn render_archive_parade(
         raster_visible_layer_mask,
         sixteenth_phase_layer_mask: state.sampling_profile.sixteenth_layer_mask(),
         phase_bank_resident_bytes: state.phase_bank_resident_bytes(),
+        damage_tiles,
+        damage_tile_count: damage_tiles.tile_count(),
+        background_restore_bytes,
+        star_pixels_touched,
+        cards_skipped: state.visible_draw_order.len().saturating_sub(cards_drawn),
         ..ScreensaverFrameTrace::default()
     }
+}
+
+fn update_parade_background(
+    state: &mut ParadeState,
+    w: usize,
+    h: usize,
+    motion_ticks_fp: u64,
+) -> usize {
+    state.set_geometry(w, h);
+    let navy = color565(0, 0, 10);
+    let mut damage = state.damage_tiles;
+    state.damage_tiles = DamageTileMap::empty(w, h);
+    if state.background_pixels.len() != w.saturating_mul(h) {
+        state.background_pixels.resize(w.saturating_mul(h), navy);
+        state.background_pixels.fill(navy);
+        state.previous_star_pixels.clear();
+        damage = DamageTileMap::full(w, h);
+    }
+    if w == 0 || h == 0 {
+        state.damage_tiles = damage;
+        return 0;
+    }
+
+    let mut touched = 0usize;
+    for star in &state.previous_star_pixels {
+        if let Some(pixel) = state.background_pixels.get_mut(star.index) {
+            *pixel = navy;
+            damage.mark_pixel(star.index % w, star.index / w);
+            touched += 1;
+        }
+    }
+    state.current_star_pixels.clear();
+    for i in 0..210usize {
+        let layer = i & 3;
+        let (x, fraction) = horizontal_star_position(i, w, h, motion_ticks_fp);
+        let y = (i.wrapping_mul(83).wrapping_add(i.wrapping_mul(i) * 7)) % h;
+        let brightness = [70, 110, 170, 235][layer];
+        let color = color565(brightness / 2, brightness, 255);
+        let index = y * w + x;
+        state.background_pixels[index] =
+            blend_565(state.background_pixels[index], color, 255 - fraction);
+        state.current_star_pixels.push(ParadeStarPixel { index });
+        damage.mark_pixel(x, y);
+        touched += 1;
+        if fraction > 0 {
+            let next_x = (x + 1) % w;
+            let next_index = y * w + next_x;
+            state.background_pixels[next_index] =
+                blend_565(state.background_pixels[next_index], color, fraction);
+            state
+                .current_star_pixels
+                .push(ParadeStarPixel { index: next_index });
+            damage.mark_pixel(next_x, y);
+            touched += 1;
+        }
+    }
+    std::mem::swap(
+        &mut state.previous_star_pixels,
+        &mut state.current_star_pixels,
+    );
+    state.damage_tiles = damage;
+    touched
+}
+
+fn prepare_parade_damage(state: &mut ParadeState, w: usize, h: usize) {
+    state.current_card_bounds.clear();
+    state.current_card_bounds.resize(state.tiles.len(), None);
+    state.redraw_cards.clear();
+    state.redraw_cards.resize(state.tiles.len(), false);
+    for &tile_idx in &state.visible_draw_order {
+        let tile = &state.tiles[tile_idx];
+        state.current_card_bounds[tile_idx] =
+            parade_tile_draw_bounds(tile, state.sampling_profile.for_layer(tile.layer), w, h);
+    }
+
+    for tile_idx in 0..state
+        .previous_card_bounds
+        .len()
+        .max(state.current_card_bounds.len())
+    {
+        let previous = state.previous_card_bounds.get(tile_idx).copied().flatten();
+        let current = state.current_card_bounds.get(tile_idx).copied().flatten();
+        if previous != current {
+            if let Some(bounds) = previous {
+                state.damage_tiles.mark_rect(bounds);
+            }
+            if let Some(bounds) = current {
+                state.damage_tiles.mark_rect(bounds);
+            }
+        }
+    }
+
+    loop {
+        let before = state.damage_tiles.tile_count();
+        for &tile_idx in &state.visible_draw_order {
+            if state.redraw_cards[tile_idx] {
+                continue;
+            }
+            let Some(bounds) = state.current_card_bounds[tile_idx] else {
+                continue;
+            };
+            if state.damage_tiles.intersects(bounds) {
+                state.redraw_cards[tile_idx] = true;
+                state.damage_tiles.mark_rect(bounds);
+            }
+        }
+        if state.damage_tiles.tile_count() == before {
+            break;
+        }
+    }
+}
+
+fn restore_parade_background_damage(
+    dst: &mut [Rgb565Pixel],
+    background: &[Rgb565Pixel],
+    width: usize,
+    damage: DamageTileMap,
+) {
+    if dst.len() != background.len() || width == 0 {
+        return;
+    }
+    damage.for_each_span(|rect| {
+        for y in rect.y0..rect.y1 {
+            let start = y * width + rect.x0;
+            let end = y * width + rect.x1;
+            dst[start..end].copy_from_slice(&background[start..end]);
+        }
+    });
 }
 
 fn render_marquee(dst: &mut [Rgb565Pixel], w: usize, h: usize, images: &[SaverImage], frame: u64) {
@@ -3990,6 +4143,65 @@ mod tests {
             std::thread::sleep(Duration::from_millis(1));
         }
         panic!("screensaver scale worker did not prepare initial successors");
+    }
+
+    #[test]
+    fn damage_composition_matches_full_recomposition() {
+        let width = 192;
+        let height = 128;
+        let mut state = ParadeState::new(0xfeed_beef);
+        state.set_geometry(width, height);
+        state.tiles = vec![
+            solid_parade_tile(
+                color565(220, 40, 40),
+                50,
+                40,
+                10 * PARADE_SUBPIXEL_ONE,
+                18,
+                1,
+                ParadeSamplingProfile::LegacyHalf,
+            ),
+            solid_parade_tile(
+                color565(40, 220, 40),
+                44,
+                52,
+                34 * PARADE_SUBPIXEL_ONE,
+                24,
+                3,
+                ParadeSamplingProfile::LegacyHalf,
+            ),
+            solid_parade_tile(
+                color565(40, 40, 220),
+                36,
+                30,
+                92 * PARADE_SUBPIXEL_ONE,
+                70,
+                5,
+                ParadeSamplingProfile::LegacyHalf,
+            ),
+        ];
+        let mut incremental = vec![Rgb565Pixel(0xffff); width * height];
+
+        for frame in 0..120_u64 {
+            let motion_ticks = frame * PARADE_TICK_ONE as u64;
+            render_archive_parade(
+                &mut incremental,
+                &mut state,
+                width,
+                height,
+                motion_ticks,
+                PARADE_TICK_ONE,
+            );
+            let mut reference = state.background_pixels.clone();
+            render_parade_order(
+                &mut reference,
+                &state,
+                &state.visible_draw_order,
+                width,
+                height,
+            );
+            assert_eq!(incremental, reference, "frame {frame}");
+        }
     }
 
     #[test]
