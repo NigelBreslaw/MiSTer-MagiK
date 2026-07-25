@@ -927,6 +927,20 @@ fn launcher_presentation_recovery_wake_reasons(
     reasons
 }
 
+fn screensaver_pipeline_start_allowed(
+    screensaver_active: bool,
+    ram_pipeline_active: bool,
+    direct_pipeline_active: bool,
+    direct_hidden_exit_pending: bool,
+    retiring_direct_pipeline_count: usize,
+) -> bool {
+    screensaver_active
+        && !ram_pipeline_active
+        && !direct_pipeline_active
+        && !direct_hidden_exit_pending
+        && retiring_direct_pipeline_count == 0
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LauncherBridgeSyncPlan {
     None,
@@ -4506,10 +4520,13 @@ pub(super) fn run_launcher_loop(
             window.request_redraw();
             full_frame_present = true;
         }
-        if screensaver.active
-            && screensaver_pipeline.is_none()
-            && screensaver_direct_pipeline.is_none()
-        {
+        if screensaver_pipeline_start_allowed(
+            screensaver.active,
+            screensaver_pipeline.is_some(),
+            screensaver_direct_pipeline.is_some(),
+            direct_hidden_exit_pending,
+            retiring_direct_pipelines.len(),
+        ) {
             if screensaver_loader.is_none() {
                 if let Some(started) = screensaver_show_started {
                     crate::ui_logln!(
@@ -7838,6 +7855,25 @@ mod tests {
         assert!(
             sleeping_intent(launcher_presentation_recovery_wake_reasons(false, false)).can_sleep()
         );
+    }
+
+    #[test]
+    pub(super) fn direct_hidden_worker_retirement_blocks_screensaver_reentry() {
+        assert!(screensaver_pipeline_start_allowed(
+            true, false, false, false, 0
+        ));
+        assert!(!screensaver_pipeline_start_allowed(
+            true, false, false, true, 1
+        ));
+        assert!(!screensaver_pipeline_start_allowed(
+            true, false, false, false, 1
+        ));
+        assert!(!screensaver_pipeline_start_allowed(
+            true, false, true, false, 0
+        ));
+        assert!(!screensaver_pipeline_start_allowed(
+            false, false, false, false, 0
+        ));
     }
 
     #[test]
