@@ -4603,6 +4603,7 @@ pub(super) fn run_launcher_loop(
         let screensaver_tile_damage = if screensaver.active
             && screensaver_renderer.is_some()
             && screensaver_fade_alpha.is_none()
+            && !full_frame_present
         {
             screensaver_frame_trace.damage_tiles
         } else {

@@ -3668,6 +3668,7 @@ fn render_archive_parade(
         &mut state.previous_card_bounds,
         &mut state.current_card_bounds,
     );
+    state.damage_tiles = DamageTileMap::empty(w, h);
     ScreensaverFrameTrace {
         card_adopt_us: advance.card_adopt_us,
         cards_adopted: advance.cards_adopted,
@@ -3762,8 +3763,14 @@ fn prepare_parade_damage(state: &mut ParadeState, w: usize, h: usize) {
     state.redraw_cards.resize(state.tiles.len(), false);
     for &tile_idx in &state.visible_draw_order {
         let tile = &state.tiles[tile_idx];
-        state.current_card_bounds[tile_idx] =
+        let bounds =
             parade_tile_draw_bounds(tile, state.sampling_profile.for_layer(tile.layer), w, h);
+        state.current_card_bounds[tile_idx] = bounds;
+        if tile.raster_moved_this_frame {
+            if let Some(bounds) = bounds {
+                state.damage_tiles.mark_rect(bounds);
+            }
+        }
     }
 
     for tile_idx in 0..state
@@ -4201,6 +4208,10 @@ mod tests {
                 height,
             );
             assert_eq!(incremental, reference, "frame {frame}");
+            assert!(
+                state.damage_tiles.is_empty(),
+                "frame {frame} retained damage"
+            );
         }
     }
 
