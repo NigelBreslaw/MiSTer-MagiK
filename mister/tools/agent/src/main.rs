@@ -1381,12 +1381,20 @@ mod linux {
             .and_then(Value::as_str)
             .map(normalize_frame_analytics_mode)
             .unwrap_or("process");
+        let cadence = Duration::from_millis(
+            parsed
+                .pointer("/args/cadence_ms")
+                .and_then(Value::as_u64)
+                .unwrap_or(1_000)
+                .clamp(100, 1_000),
+        );
         append_log_line(format!(
-            "device_telemetry_stream_v1_start analytics_mode={analytics_mode}"
+            "device_telemetry_stream_v1_start analytics_mode={analytics_mode} cadence_ms={}",
+            cadence.as_millis()
         ));
         let result = json!({
             "schema": "mister-magik-device-telemetry-stream-v1",
-            "cadence_ms": 1000,
+            "cadence_ms": cadence.as_millis(),
             "encoding": "jsonl",
         });
         let _ = stream.set_nodelay(true);
@@ -1409,8 +1417,8 @@ mod linux {
             }
             seq = seq.saturating_add(1);
             let elapsed = sample_started.elapsed();
-            if elapsed < Duration::from_secs(1) {
-                thread::sleep(Duration::from_secs(1) - elapsed);
+            if elapsed < cadence {
+                thread::sleep(cadence - elapsed);
             }
         }
         clear_frame_analytics_lease();

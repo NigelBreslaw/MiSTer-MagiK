@@ -511,7 +511,7 @@ pub(crate) fn agent_telemetry_until_screensaver_profile_complete(
         &endpoint.token,
         1,
         "device_telemetry_stream_v1",
-        json!({"analytics_mode": "process"}),
+        json!({"analytics_mode": "process", "cadence_ms": 250}),
     );
     let started = Instant::now();
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(3))?;
