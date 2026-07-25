@@ -5,12 +5,15 @@ use super::launcher_screensaver::{LauncherScreensaver, ScreensaverFrameTrace};
 use super::*;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError, sync_channel};
+use std::sync::mpsc::{
+    Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError, sync_channel,
+};
 use std::thread::JoinHandle;
 
 const RENDER_AHEAD_BUFFER_COUNT: usize = 3;
 const RENDER_AHEAD_READY_CAPACITY: usize = 2;
 const RENDER_AHEAD_IDLE_WAIT: Duration = Duration::from_millis(2);
+const RENDER_AHEAD_FULL_WAIT: Duration = Duration::from_micros(250);
 
 pub(crate) struct RenderedScreensaverFrame {
     pub(crate) pixels: Vec<Rgb565Pixel>,
@@ -21,13 +24,21 @@ pub(crate) struct RenderedScreensaverFrame {
     pub(crate) active_cards: usize,
     pub(crate) archive_loading: bool,
     pub(crate) has_rendered_card: bool,
+    pub(crate) superseded_frames: u64,
     pub(crate) trace: ScreensaverFrameTrace,
+}
+
+pub(crate) enum RenderAheadPoll {
+    Frame(RenderedScreensaverFrame),
+    Empty,
+    Disconnected,
 }
 
 pub(crate) struct ScreensaverRenderAhead {
     ready_rx: Receiver<RenderedScreensaverFrame>,
     free_tx: SyncSender<Vec<Rgb565Pixel>>,
     period_us: Arc<AtomicU64>,
+    presentation_tick: Arc<AtomicU64>,
     cancelled: Arc<AtomicBool>,
     ready_depth: Arc<AtomicUsize>,
     stopped: Arc<AtomicBool>,
@@ -43,25 +54,33 @@ impl ScreensaverRenderAhead {
     ) -> Self {
         let (free_tx, free_rx) = sync_channel(RENDER_AHEAD_BUFFER_COUNT);
         let (ready_tx, ready_rx) = sync_channel(RENDER_AHEAD_READY_CAPACITY);
-        for _ in 0..RENDER_AHEAD_BUFFER_COUNT {
-            free_tx
-                .send(vec![Rgb565Pixel(0); width.saturating_mul(height)])
-                .expect("seed screensaver render-ahead pool");
-        }
         let period_us = Arc::new(AtomicU64::new(period_us.max(1)));
+        let presentation_tick = Arc::new(AtomicU64::new(0));
         let cancelled = Arc::new(AtomicBool::new(false));
         let ready_depth = Arc::new(AtomicUsize::new(0));
         let stopped = Arc::new(AtomicBool::new(false));
         let worker_period_us = Arc::clone(&period_us);
+        let worker_presentation_tick = Arc::clone(&presentation_tick);
         let worker_cancelled = Arc::clone(&cancelled);
         let worker_ready_depth = Arc::clone(&ready_depth);
         let worker_stopped = Arc::clone(&stopped);
+        let worker_free_tx = free_tx.clone();
         let join = std::thread::Builder::new()
             .name("screensaver-render".into())
             .spawn(move || {
+                let _completion = RenderAheadCompletionGuard(worker_stopped);
                 mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
                     mister_magik_catalog::runtime_thread::RuntimeThreadRole::ScreensaverRenderer,
                 );
+                for _ in 0..RENDER_AHEAD_BUFFER_COUNT {
+                    if worker_cancelled.load(Ordering::Acquire)
+                        || worker_free_tx
+                            .send(vec![Rgb565Pixel(0); width.saturating_mul(height)])
+                            .is_err()
+                    {
+                        return;
+                    }
+                }
                 run_render_ahead_worker(
                     renderer,
                     width,
@@ -69,16 +88,17 @@ impl ScreensaverRenderAhead {
                     free_rx,
                     ready_tx,
                     &worker_period_us,
+                    &worker_presentation_tick,
                     &worker_cancelled,
                     &worker_ready_depth,
                 );
-                worker_stopped.store(true, Ordering::Release);
             })
             .expect("spawn screensaver render-ahead worker");
         Self {
             ready_rx,
             free_tx,
             period_us,
+            presentation_tick,
             cancelled,
             ready_depth,
             stopped,
@@ -90,13 +110,18 @@ impl ScreensaverRenderAhead {
         self.period_us.store(period_us.max(1), Ordering::Relaxed);
     }
 
-    pub(crate) fn try_next(&self) -> Option<RenderedScreensaverFrame> {
+    pub(crate) fn note_presented_period(&self) {
+        self.presentation_tick.fetch_add(1, Ordering::AcqRel);
+    }
+
+    pub(crate) fn try_next(&self) -> RenderAheadPoll {
         match self.ready_rx.try_recv() {
             Ok(frame) => {
                 self.ready_depth.fetch_sub(1, Ordering::AcqRel);
-                Some(frame)
+                RenderAheadPoll::Frame(frame)
             }
-            Err(TryRecvError::Empty | TryRecvError::Disconnected) => None,
+            Err(TryRecvError::Empty) => RenderAheadPoll::Empty,
+            Err(TryRecvError::Disconnected) => RenderAheadPoll::Disconnected,
         }
     }
 
@@ -113,13 +138,23 @@ impl ScreensaverRenderAhead {
     }
 
     pub(crate) fn poll_stopped(&mut self) -> bool {
-        if !self.stopped.load(Ordering::Acquire) {
+        if !self.stopped.load(Ordering::Acquire)
+            && !self.join.as_ref().is_some_and(JoinHandle::is_finished)
+        {
             return false;
         }
         if let Some(join) = self.join.take() {
             let _ = join.join();
         }
         true
+    }
+}
+
+struct RenderAheadCompletionGuard(Arc<AtomicBool>);
+
+impl Drop for RenderAheadCompletionGuard {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
     }
 }
 
@@ -141,18 +176,33 @@ fn run_render_ahead_worker(
     free_rx: Receiver<Vec<Rgb565Pixel>>,
     ready_tx: SyncSender<RenderedScreensaverFrame>,
     period_us: &AtomicU64,
+    presentation_tick: &AtomicU64,
     cancelled: &AtomicBool,
     ready_depth: &AtomicUsize,
 ) {
     let mut sequence = 0u64;
     let mut elapsed_us = 0u64;
+    let mut motion_tick = 0u64;
+    let mut superseded_frames = 0u64;
     while !cancelled.load(Ordering::Acquire) {
         let mut pixels = match free_rx.recv_timeout(RENDER_AHEAD_IDLE_WAIT) {
             Ok(pixels) => pixels,
-            Err(_) => continue,
+            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Disconnected) => break,
         };
         sequence = sequence.wrapping_add(1);
-        elapsed_us = elapsed_us.saturating_add(period_us.load(Ordering::Relaxed).max(1));
+        let next_motion_tick =
+            next_render_motion_tick(motion_tick, presentation_tick.load(Ordering::Acquire));
+        superseded_frames = superseded_frames
+            .saturating_add(next_motion_tick.saturating_sub(motion_tick.saturating_add(1)));
+        let advanced_ticks = next_motion_tick.saturating_sub(motion_tick);
+        motion_tick = next_motion_tick;
+        elapsed_us = elapsed_us.saturating_add(
+            period_us
+                .load(Ordering::Relaxed)
+                .max(1)
+                .saturating_mul(advanced_ticks),
+        );
         let wall_started = Instant::now();
         let cpu_started = thread_cpu_us();
         let trace = renderer.render_at(
@@ -174,6 +224,7 @@ fn run_render_ahead_worker(
             active_cards: renderer.active_card_count(),
             archive_loading: renderer.is_loading_archive(),
             has_rendered_card: renderer.has_rendered_card(),
+            superseded_frames,
             trace,
         };
         if !send_ready_frame(frame, &ready_tx, cancelled, ready_depth) {
@@ -198,7 +249,7 @@ fn send_ready_frame(
             Err(TrySendError::Full(returned)) => {
                 ready_depth.fetch_sub(1, Ordering::AcqRel);
                 frame = returned;
-                std::thread::yield_now();
+                std::thread::park_timeout(RENDER_AHEAD_FULL_WAIT);
             }
             Err(TrySendError::Disconnected(_)) => {
                 ready_depth.fetch_sub(1, Ordering::AcqRel);
@@ -206,6 +257,12 @@ fn send_ready_frame(
             }
         }
     }
+}
+
+fn next_render_motion_tick(last_rendered_tick: u64, presented_periods: u64) -> u64 {
+    last_rendered_tick
+        .saturating_add(1)
+        .max(presented_periods.saturating_add(1))
 }
 
 #[cfg(target_os = "linux")]
@@ -250,13 +307,16 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(2);
         let mut sequences = Vec::new();
         while sequences.len() < 4 && Instant::now() < deadline {
-            if let Some(frame) = pipeline.try_next() {
-                sequences.push(frame.sequence);
-                assert_eq!(frame.pixels.len(), 64 * 48);
-                assert!(pipeline.ready_depth() <= RENDER_AHEAD_READY_CAPACITY);
-                assert!(pipeline.recycle(frame.pixels));
-            } else {
-                std::thread::yield_now();
+            match pipeline.try_next() {
+                RenderAheadPoll::Frame(frame) => {
+                    sequences.push(frame.sequence);
+                    assert_eq!(frame.pixels.len(), 64 * 48);
+                    assert!(pipeline.ready_depth() <= RENDER_AHEAD_READY_CAPACITY);
+                    pipeline.note_presented_period();
+                    assert!(pipeline.recycle(frame.pixels));
+                }
+                RenderAheadPoll::Empty => std::thread::yield_now(),
+                RenderAheadPoll::Disconnected => panic!("worker disconnected before cancellation"),
             }
         }
 
@@ -267,5 +327,19 @@ mod tests {
             std::thread::yield_now();
         }
         assert!(pipeline.poll_stopped());
+    }
+
+    #[test]
+    fn render_motion_tick_skips_obsolete_display_periods() {
+        assert_eq!(next_render_motion_tick(0, 0), 1);
+        assert_eq!(next_render_motion_tick(3, 1), 4);
+        assert_eq!(next_render_motion_tick(3, 6), 7);
+    }
+
+    #[test]
+    fn completion_guard_marks_worker_stopped_during_unwind() {
+        let stopped = Arc::new(AtomicBool::new(false));
+        drop(RenderAheadCompletionGuard(Arc::clone(&stopped)));
+        assert!(stopped.load(Ordering::Acquire));
     }
 }

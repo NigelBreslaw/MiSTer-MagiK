@@ -4647,6 +4647,7 @@ fn screensaver_render_ahead_summary(frames: &[&Value]) -> Value {
         "render_cpu_us": summary("screensaver_render_ahead_render_cpu_us"),
         "final_sequence": frames.last().map(|frame| frame_u64(frame, "screensaver_render_ahead_sequence")).unwrap_or(0),
         "starvation_count": counter_delta("screensaver_render_ahead_starvation_count"),
+        "superseded_frames": counter_delta("screensaver_render_ahead_superseded_frames"),
         "reused_frames": counter_delta("screensaver_render_ahead_reused_frames"),
         "cancelled_frames": frames.iter().filter(|frame| frame.get("screensaver_render_ahead_cancelled").and_then(Value::as_bool) == Some(true)).count(),
     })

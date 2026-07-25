@@ -135,7 +135,7 @@ use launcher_loop::*;
 use launcher_present::*;
 use launcher_scheduler::*;
 use launcher_screensaver::{LauncherScreensaver, LauncherScreensaverLoader};
-use launcher_screensaver_pipeline::ScreensaverRenderAhead;
+use launcher_screensaver_pipeline::{RenderAheadPoll, ScreensaverRenderAhead};
 use media_worker::*;
 use raw565_preview_renderer::*;
 use screenshot_media_update_session::*;

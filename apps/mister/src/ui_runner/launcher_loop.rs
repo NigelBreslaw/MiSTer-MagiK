@@ -1649,6 +1649,7 @@ struct ScreensaverControl {
     waiting_for_input_release: bool,
     restore_full_frame: bool,
     preview_fade_started: Option<Instant>,
+    reactivation_suppressed: bool,
 }
 
 impl ScreensaverControl {
@@ -1661,6 +1662,7 @@ impl ScreensaverControl {
             waiting_for_input_release: false,
             restore_full_frame: false,
             preview_fade_started: None,
+            reactivation_suppressed: false,
         }
     }
 
@@ -1679,7 +1681,10 @@ impl ScreensaverControl {
             self.last_activity = now;
             self.active = false;
             self.preview_fade_started = None;
-        } else if enabled && now.saturating_duration_since(self.last_activity) >= delay {
+        } else if enabled
+            && !self.reactivation_suppressed
+            && now.saturating_duration_since(self.last_activity) >= delay
+        {
             self.active = true;
             self.waiting_for_input_release = false;
         }
@@ -1691,6 +1696,7 @@ impl ScreensaverControl {
         self.waiting_for_input_release = true;
         self.last_activity = now;
         self.preview_fade_started = Some(now);
+        self.reactivation_suppressed = false;
     }
 
     fn cancel_for_exclusive_view(&mut self, now: Instant) -> bool {
@@ -1723,8 +1729,20 @@ impl ScreensaverControl {
         }
         if user_activity {
             self.last_activity = now;
+            self.reactivation_suppressed = false;
         }
         false
+    }
+
+    fn fail_current_activation(&mut self, now: Instant) {
+        self.restore_full_frame |= self.active;
+        self.active = false;
+        self.start_when_ready = false;
+        self.preview_active = false;
+        self.waiting_for_input_release = false;
+        self.preview_fade_started = None;
+        self.reactivation_suppressed = true;
+        self.last_activity = now;
     }
 
     fn take_restore_full_frame(&mut self) -> bool {
@@ -4496,47 +4514,77 @@ pub(super) fn run_launcher_loop(
         let mut accepted_screensaver_frame = false;
         let mut screensaver_buffer_to_recycle_after_present = None;
         if screensaver.active {
-            if let Some(frame) = screensaver_pipeline
+            let render_ahead_poll = screensaver_pipeline
                 .as_ref()
-                .and_then(ScreensaverRenderAhead::try_next)
-            {
-                let mut pixels = frame.pixels;
-                if layer_target.swap_cached(&mut pixels) {
-                    retain_or_defer_screensaver_buffer(
-                        &mut screensaver_launcher_frame,
-                        &mut screensaver_buffer_to_recycle_after_present,
-                        pixels,
-                    );
-                    screensaver_frame_trace = frame.trace;
-                    screensaver_render_sequence = frame.sequence;
-                    screensaver_frame_trace.render_ahead_sequence = frame.sequence;
-                    screensaver_frame_trace.render_ahead_queue_depth = screensaver_pipeline
-                        .as_ref()
-                        .map(ScreensaverRenderAhead::ready_depth)
-                        .unwrap_or(0);
-                    screensaver_frame_trace.render_ahead_frame_age_us = frame
-                        .completed_at
-                        .elapsed()
-                        .as_micros()
-                        .try_into()
-                        .unwrap_or(u64::MAX);
-                    screensaver_frame_trace.render_ahead_render_wall_us = frame.render_wall_us;
-                    screensaver_frame_trace.render_ahead_render_cpu_us = frame.render_cpu_us;
-                    screensaver_active_cards = frame.active_cards;
-                    screensaver_archive_loading = frame.archive_loading;
-                    screensaver_has_rendered_card = frame.has_rendered_card;
-                    screensaver_frame_visible = true;
-                    accepted_screensaver_frame = true;
-                } else {
-                    crate::ui_errln!(
-                        "screensaver: render-ahead frame geometry mismatch sequence={} pixels={} cached={}",
-                        frame.sequence,
-                        pixels.len(),
-                        layer_target.cached_frame_view().pixels().len()
-                    );
-                    if let Some(pipeline) = screensaver_pipeline.as_ref() {
-                        let _ = pipeline.recycle(pixels);
+                .map(ScreensaverRenderAhead::try_next)
+                .unwrap_or(RenderAheadPoll::Empty);
+            match render_ahead_poll {
+                RenderAheadPoll::Frame(frame) => {
+                    let mut pixels = frame.pixels;
+                    if layer_target.swap_cached(&mut pixels) {
+                        retain_or_defer_screensaver_buffer(
+                            &mut screensaver_launcher_frame,
+                            &mut screensaver_buffer_to_recycle_after_present,
+                            pixels,
+                        );
+                        screensaver_frame_trace = frame.trace;
+                        screensaver_render_sequence = frame.sequence;
+                        screensaver_superseded_frames = frame.superseded_frames;
+                        screensaver_frame_trace.render_ahead_sequence = frame.sequence;
+                        screensaver_frame_trace.render_ahead_queue_depth = screensaver_pipeline
+                            .as_ref()
+                            .map(ScreensaverRenderAhead::ready_depth)
+                            .unwrap_or(0);
+                        screensaver_frame_trace.render_ahead_frame_age_us = frame
+                            .completed_at
+                            .elapsed()
+                            .as_micros()
+                            .try_into()
+                            .unwrap_or(u64::MAX);
+                        screensaver_frame_trace.render_ahead_render_wall_us = frame.render_wall_us;
+                        screensaver_frame_trace.render_ahead_render_cpu_us = frame.render_cpu_us;
+                        screensaver_active_cards = frame.active_cards;
+                        screensaver_archive_loading = frame.archive_loading;
+                        screensaver_has_rendered_card = frame.has_rendered_card;
+                        screensaver_frame_visible = true;
+                        accepted_screensaver_frame = true;
+                    } else {
+                        crate::ui_errln!(
+                            "screensaver: render-ahead frame geometry mismatch sequence={} pixels={} cached={}",
+                            frame.sequence,
+                            pixels.len(),
+                            layer_target.cached_frame_view().pixels().len()
+                        );
+                        if let Some(pipeline) = screensaver_pipeline.as_ref() {
+                            let _ = pipeline.recycle(pixels);
+                        }
                     }
+                }
+                RenderAheadPoll::Empty => {}
+                RenderAheadPoll::Disconnected => {
+                    crate::ui_errln!(
+                        "screensaver: render-ahead pipeline disconnected; suppressing reactivation until fresh user activity"
+                    );
+                    screensaver.fail_current_activation(Instant::now());
+                    if let Some(mut snapshot) = screensaver_launcher_frame.take()
+                        && !layer_target.swap_cached(&mut snapshot)
+                    {
+                        crate::ui_errln!(
+                            "screensaver: launcher frame restore size mismatch after pipeline disconnect snapshot={} cached={}",
+                            snapshot.len(),
+                            layer_target.cached_frame_view().pixels().len()
+                        );
+                    }
+                    if let Some(pipeline) = screensaver_pipeline.take() {
+                        pipeline.cancel();
+                        retiring_screensaver_pipelines.push(pipeline);
+                    }
+                    screensaver_frame_visible = false;
+                    screensaver_active_cards = 0;
+                    screensaver_archive_loading = false;
+                    screensaver_has_rendered_card = false;
+                    window.request_redraw();
+                    full_frame_present = true;
                 }
             }
         }
@@ -4772,6 +4820,12 @@ pub(super) fn run_launcher_loop(
             cpu_t4,
             pacing_trace,
         } = present_cycle;
+        if screensaver.active
+            && screensaver_frame_visible
+            && let Some(pipeline) = screensaver_pipeline.as_ref()
+        {
+            pipeline.note_presented_period();
+        }
         if let Some(pixels) = screensaver_buffer_to_recycle_after_present.take()
             && let Some(pipeline) = screensaver_pipeline.as_ref()
         {
@@ -8309,6 +8363,23 @@ mod tests {
         );
         assert!(!saver.active);
         saver.preview(start + Duration::from_secs(601));
+        assert!(saver.active);
+    }
+
+    #[test]
+    fn failed_screensaver_waits_for_fresh_activity_before_reactivation() {
+        let start = Instant::now();
+        let delay = Duration::from_secs(300);
+        let mut saver = ScreensaverControl::new(start, false);
+        saver.update(start + delay, true, delay, false);
+        assert!(saver.active);
+
+        saver.fail_current_activation(start + delay);
+        saver.update(start + delay + delay, true, delay, false);
+        assert!(!saver.active);
+
+        saver.handle_input(start + delay + delay, false, true);
+        saver.update(start + delay + delay + delay, true, delay, false);
         assert!(saver.active);
     }
 }
