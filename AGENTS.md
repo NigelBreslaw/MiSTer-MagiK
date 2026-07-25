@@ -69,6 +69,10 @@ those trees are part of the task.
 
 - Preserve user changes. Never reset, checkout, clean, or overwrite unrelated
   work.
+- Never amend commits on `main` after they have been pushed. Once history is
+  published, add a new commit instead. Rewriting pushed branch history, including
+  force-push or amend-and-force-push, requires an explicit user request and a
+  clear statement of the remote state being replaced.
 - Never use the Codex GitHub plugin for repository, issue, PR, or Actions work.
   Use `gh`.
 - Agents use `scripts/agent deliver`, `benchmark`, or `diagnose` for device
