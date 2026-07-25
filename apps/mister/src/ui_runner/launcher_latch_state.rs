@@ -86,6 +86,13 @@ impl DamageTileMap {
         self.full_fallback
     }
 
+    pub(super) fn covers_full_frame(self) -> bool {
+        self.full_fallback
+            || (self.columns > 0
+                && self.rows > 0
+                && self.tile_count() == self.columns as usize * self.rows as usize)
+    }
+
     pub(super) fn mark_pixel(&mut self, x: usize, y: usize) {
         self.mark_rect(DirtyRect {
             x0: x,
@@ -120,6 +127,9 @@ impl DamageTileMap {
     }
 
     pub(super) fn union_with(&mut self, other: Self) {
+        if other.is_empty() {
+            return;
+        }
         if self.geometry() != other.geometry() || other.full_fallback {
             self.full_fallback = true;
             return;
@@ -257,6 +267,7 @@ impl DirectLayerState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct LatchSlotCoherency {
     base_invalid: DirtyRectList,
+    tile_invalid: DamageTileMap,
     preview_present: Option<DirectLayerState>,
     arcade_present: Option<DirectLayerState>,
     hardware: LatchSlotHardwareState,
@@ -265,6 +276,7 @@ struct LatchSlotCoherency {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct LauncherFramePlan {
     cached_damage: DirtyRectList,
+    tile_damage: DamageTileMap,
     preview_desired: Option<DirectLayerState>,
     preview_dirty: Option<DirtyRect>,
     arcade_desired: Option<DirectLayerState>,
@@ -281,6 +293,7 @@ impl LauncherFramePlan {
     ) -> Self {
         Self {
             cached_damage,
+            tile_damage: DamageTileMap::default(),
             preview_desired,
             preview_dirty,
             arcade_desired,
@@ -290,6 +303,11 @@ impl LauncherFramePlan {
 
     pub(super) fn cached_damage(self) -> DirtyRectList {
         self.cached_damage
+    }
+
+    pub(super) fn with_tile_damage(mut self, tile_damage: DamageTileMap) -> Self {
+        self.tile_damage = tile_damage;
+        self
     }
 
     pub(super) fn preview_dirty(self) -> Option<DirtyRect> {
@@ -303,6 +321,7 @@ impl LauncherFramePlan {
     pub(super) fn for_fb0_recovery(self, full_rect: DirtyRect) -> Self {
         Self {
             cached_damage: DirtyRectList::from_one(full_rect),
+            tile_damage: DamageTileMap::empty(full_rect.width(), full_rect.rows() as usize),
             preview_dirty: self.preview_desired.map(|layer| layer.rect),
             arcade_dirty: self
                 .arcade_desired
@@ -335,9 +354,11 @@ impl LauncherFramePlan {
 pub(super) struct LatchPresentPlan {
     pub(super) slot_index: u8,
     pub(super) restore_rects: DirtyRectList,
+    pub(super) restore_tiles: DamageTileMap,
     pub(super) preview_redraw: Option<DirtyRect>,
     pub(super) arcade_redraw: Option<ArcadeListUpdate>,
     cached_damage: DirtyRectList,
+    cached_tile_damage: DamageTileMap,
     preview_after: Option<DirectLayerState>,
     arcade_after: Option<DirectLayerState>,
 }
@@ -362,12 +383,14 @@ impl TwoBufferLatchState {
             slots: [
                 LatchSlotCoherency {
                     base_invalid: full_invalid,
+                    tile_invalid: DamageTileMap::empty(width, height),
                     preview_present: None,
                     arcade_present: None,
                     hardware: LatchSlotHardwareState::Unknown,
                 },
                 LatchSlotCoherency {
                     base_invalid: full_invalid,
+                    tile_invalid: DamageTileMap::empty(width, height),
                     preview_present: None,
                     arcade_present: None,
                     hardware: LatchSlotHardwareState::Unknown,
@@ -381,6 +404,8 @@ impl TwoBufferLatchState {
     pub(super) fn invalidate_all(&mut self) {
         for slot in &mut self.slots {
             slot.base_invalid = DirtyRectList::from_one(self.full_rect);
+            slot.tile_invalid =
+                DamageTileMap::empty(self.full_rect.width(), self.full_rect.rows() as usize);
             slot.preview_present = None;
             slot.arcade_present = None;
             slot.hardware = LatchSlotHardwareState::Unknown;
@@ -421,6 +446,7 @@ impl TwoBufferLatchState {
 
         let selected = self.slot_mut(slot_index);
         selected.base_invalid.clear();
+        selected.tile_invalid.clear();
         selected.preview_present = plan.preview_after;
         selected.arcade_present = plan.arcade_after;
         selected.hardware = LatchSlotHardwareState::Unknown;
@@ -428,6 +454,9 @@ impl TwoBufferLatchState {
         self.slot_mut(other_index)
             .base_invalid
             .extend_from(&plan.cached_damage);
+        self.slot_mut(other_index)
+            .tile_invalid
+            .union_with(plan.cached_tile_damage);
         self.next_slot_index = other_index;
     }
 
@@ -435,6 +464,7 @@ impl TwoBufferLatchState {
         let full_rect = self.full_rect;
         let slot = self.slot_mut(slot_index);
         slot.base_invalid = DirtyRectList::from_one(full_rect);
+        slot.tile_invalid = DamageTileMap::empty(full_rect.width(), full_rect.rows() as usize);
         slot.preview_present = None;
         slot.arcade_present = None;
         slot.hardware = LatchSlotHardwareState::Unknown;
@@ -443,6 +473,7 @@ impl TwoBufferLatchState {
     pub(super) fn restore_bytes_for_slot(&self, slot_index: u8) -> usize {
         let slot = self.slot(slot_index);
         let mut bytes = slot.base_invalid.total_rgb565_bytes();
+        bytes = bytes.saturating_add(slot.tile_invalid.total_rgb565_bytes());
         if let Some(preview) = slot.preview_present {
             bytes = bytes.saturating_add(rect_bytes(preview.rect));
         }
@@ -469,6 +500,12 @@ impl TwoBufferLatchState {
         let mut restore_rects = DirtyRectList::new();
         extend_without_covered_rects(&mut restore_rects, &slot.base_invalid);
         extend_without_covered_rects(&mut restore_rects, &input.cached_damage);
+        let mut restore_tiles = slot.tile_invalid;
+        restore_tiles.union_with(input.tile_damage);
+        if restore_tiles.covers_full_frame() {
+            push_without_covered_rect(&mut restore_rects, self.full_rect);
+            restore_tiles.clear();
+        }
 
         let restore_preview =
             direct_layer_needs_restore(slot.preview_present, input.preview_desired);
@@ -485,9 +522,15 @@ impl TwoBufferLatchState {
         }
 
         let preview_intersects_restore =
-            layer_intersects_restore(input.preview_desired, &restore_rects);
+            layer_intersects_restore(input.preview_desired, &restore_rects)
+                || input
+                    .preview_desired
+                    .is_some_and(|layer| restore_tiles.intersects(layer.rect));
         let arcade_intersects_restore =
-            layer_intersects_restore(input.arcade_desired, &restore_rects);
+            layer_intersects_restore(input.arcade_desired, &restore_rects)
+                || input
+                    .arcade_desired
+                    .is_some_and(|layer| restore_tiles.intersects(layer.rect));
 
         let preview_redraw = direct_layer_redraw_rect(
             slot.preview_present,
@@ -509,9 +552,11 @@ impl TwoBufferLatchState {
         LatchPresentPlan {
             slot_index,
             restore_rects,
+            restore_tiles,
             preview_redraw,
             arcade_redraw,
             cached_damage: input.cached_damage,
+            cached_tile_damage: input.tile_damage,
             preview_after: input.preview_desired,
             arcade_after: input.arcade_desired,
         }
@@ -665,6 +710,44 @@ mod tests {
         assert!(first.is_full_fallback());
         assert!(first.intersects(rect(100, 100, 101, 101)));
         assert_eq!(first.total_rgb565_bytes(), 1280 * 720 * 2);
+    }
+
+    #[test]
+    fn latch_slots_accumulate_tile_damage_since_their_last_post() {
+        let width = 64;
+        let height = 64;
+        let full = rect(0, 0, width, height);
+        let mut state = TwoBufferLatchState::new(width, height);
+
+        all_writable(&mut state);
+        let first = state
+            .plan_next(input(Some(full), None, None, None, None))
+            .expect("first slot");
+        state.mark_post_success(first);
+        all_writable(&mut state);
+        let second = state
+            .plan_next(input(None, None, None, None, None))
+            .expect("second slot");
+        state.mark_post_success(second);
+
+        let mut first_damage = DamageTileMap::empty(width, height);
+        first_damage.mark_pixel(1, 1);
+        all_writable(&mut state);
+        let third = state
+            .plan_next(input(None, None, None, None, None).with_tile_damage(first_damage))
+            .expect("reused first slot");
+        assert!(third.restore_tiles.intersects(rect(1, 1, 2, 2)));
+        state.mark_post_success(third);
+
+        let mut second_damage = DamageTileMap::empty(width, height);
+        second_damage.mark_pixel(63, 63);
+        all_writable(&mut state);
+        let fourth = state
+            .plan_next(input(None, None, None, None, None).with_tile_damage(second_damage))
+            .expect("reused second slot");
+        assert!(fourth.restore_tiles.intersects(rect(1, 1, 2, 2)));
+        assert!(fourth.restore_tiles.intersects(rect(63, 63, 64, 64)));
+        assert_eq!(fourth.restore_tiles.tile_count(), 2);
     }
 
     fn layer(rect: DirtyRect, version: u64) -> DirectLayerState {

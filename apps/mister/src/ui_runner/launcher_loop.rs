@@ -4600,8 +4600,18 @@ pub(super) fn run_launcher_loop(
             x1: ui.render_w(),
             y1: ui.render_h(),
         };
+        let screensaver_tile_damage = if screensaver.active
+            && screensaver_renderer.is_some()
+            && screensaver_fade_alpha.is_none()
+        {
+            screensaver_frame_trace.damage_tiles
+        } else {
+            DamageTileMap::default()
+        };
         let base_damage = if full_frame_present {
             Some(full_rect)
+        } else if !screensaver_tile_damage.is_empty() {
+            None
         } else {
             this_rect
         };
@@ -4661,7 +4671,8 @@ pub(super) fn run_launcher_loop(
             raw_preview_direct_rect,
             arcade_desired,
             if crt_layout { None } else { arcade_list_rect },
-        );
+        )
+        .with_tile_damage(screensaver_tile_damage);
         let startup_can_present = lifecycle.startup_can_present_frame();
         let stream_motion_active = stream_motion_before_render || preview_transition_trace.active;
         let present_cycle = launcher_presenter.present(
