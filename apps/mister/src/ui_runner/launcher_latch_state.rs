@@ -4,6 +4,226 @@
 use super::{ArcadeListUpdate, arcade_update_dirty_rect};
 use mister_magik_fb::framebuffer::target::{DirtyRect, DirtyRectList, subtract_dirty_rects};
 
+pub(super) const DAMAGE_TILE_SIZE: usize = 32;
+const DAMAGE_MAX_WIDTH: usize = 1280;
+const DAMAGE_MAX_HEIGHT: usize = 720;
+const DAMAGE_MAX_COLUMNS: usize = DAMAGE_MAX_WIDTH.div_ceil(DAMAGE_TILE_SIZE);
+const DAMAGE_MAX_ROWS: usize = DAMAGE_MAX_HEIGHT.div_ceil(DAMAGE_TILE_SIZE);
+const DAMAGE_MAX_TILES: usize = DAMAGE_MAX_COLUMNS * DAMAGE_MAX_ROWS;
+const DAMAGE_WORDS: usize = DAMAGE_MAX_TILES.div_ceil(u64::BITS as usize);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct DamageTileMap {
+    bits: [u64; DAMAGE_WORDS],
+    width: u16,
+    height: u16,
+    columns: u8,
+    rows: u8,
+    full_fallback: bool,
+}
+
+impl Default for DamageTileMap {
+    fn default() -> Self {
+        Self {
+            bits: [0; DAMAGE_WORDS],
+            width: 0,
+            height: 0,
+            columns: 0,
+            rows: 0,
+            full_fallback: false,
+        }
+    }
+}
+
+impl DamageTileMap {
+    pub(super) fn empty(width: usize, height: usize) -> Self {
+        let columns = width.div_ceil(DAMAGE_TILE_SIZE);
+        let rows = height.div_ceil(DAMAGE_TILE_SIZE);
+        if width == 0
+            || height == 0
+            || width > DAMAGE_MAX_WIDTH
+            || height > DAMAGE_MAX_HEIGHT
+            || columns > DAMAGE_MAX_COLUMNS
+            || rows > DAMAGE_MAX_ROWS
+        {
+            return Self {
+                width: u16::try_from(width).unwrap_or(u16::MAX),
+                height: u16::try_from(height).unwrap_or(u16::MAX),
+                full_fallback: true,
+                ..Self::default()
+            };
+        }
+        Self {
+            width: width as u16,
+            height: height as u16,
+            columns: columns as u8,
+            rows: rows as u8,
+            ..Self::default()
+        }
+    }
+
+    pub(super) fn full(width: usize, height: usize) -> Self {
+        let mut map = Self::empty(width, height);
+        map.mark_rect(DirtyRect {
+            x0: 0,
+            y0: 0,
+            x1: width,
+            y1: height,
+        });
+        map
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.bits.fill(0);
+        self.full_fallback = false;
+    }
+
+    pub(super) fn is_empty(self) -> bool {
+        !self.full_fallback && self.bits.iter().all(|word| *word == 0)
+    }
+
+    pub(super) fn is_full_fallback(self) -> bool {
+        self.full_fallback
+    }
+
+    pub(super) fn mark_pixel(&mut self, x: usize, y: usize) {
+        self.mark_rect(DirtyRect {
+            x0: x,
+            y0: y,
+            x1: x.saturating_add(1),
+            y1: y.saturating_add(1),
+        });
+    }
+
+    pub(super) fn mark_rect(&mut self, rect: DirtyRect) {
+        if self.full_fallback {
+            return;
+        }
+        let width = self.width as usize;
+        let height = self.height as usize;
+        let x0 = rect.x0.min(width);
+        let y0 = rect.y0.min(height);
+        let x1 = rect.x1.min(width);
+        let y1 = rect.y1.min(height);
+        if x0 >= x1 || y0 >= y1 {
+            return;
+        }
+        let first_column = x0 / DAMAGE_TILE_SIZE;
+        let last_column = (x1 - 1) / DAMAGE_TILE_SIZE;
+        let first_row = y0 / DAMAGE_TILE_SIZE;
+        let last_row = (y1 - 1) / DAMAGE_TILE_SIZE;
+        for row in first_row..=last_row {
+            for column in first_column..=last_column {
+                self.set_tile(column, row);
+            }
+        }
+    }
+
+    pub(super) fn union_with(&mut self, other: Self) {
+        if self.geometry() != other.geometry() || other.full_fallback {
+            self.full_fallback = true;
+            return;
+        }
+        for (target, source) in self.bits.iter_mut().zip(other.bits) {
+            *target |= source;
+        }
+    }
+
+    pub(super) fn intersects(self, rect: DirtyRect) -> bool {
+        if self.full_fallback {
+            return true;
+        }
+        let width = self.width as usize;
+        let height = self.height as usize;
+        let x0 = rect.x0.min(width);
+        let y0 = rect.y0.min(height);
+        let x1 = rect.x1.min(width);
+        let y1 = rect.y1.min(height);
+        if x0 >= x1 || y0 >= y1 {
+            return false;
+        }
+        for row in y0 / DAMAGE_TILE_SIZE..=(y1 - 1) / DAMAGE_TILE_SIZE {
+            for column in x0 / DAMAGE_TILE_SIZE..=(x1 - 1) / DAMAGE_TILE_SIZE {
+                if self.tile_is_set(column, row) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    pub(super) fn tile_count(self) -> usize {
+        if self.full_fallback {
+            return (self.columns as usize).saturating_mul(self.rows as usize);
+        }
+        self.bits
+            .iter()
+            .map(|word| word.count_ones() as usize)
+            .sum()
+    }
+
+    pub(super) fn total_rgb565_bytes(self) -> usize {
+        let mut bytes = 0usize;
+        self.for_each_span(|rect| {
+            bytes = bytes.saturating_add(
+                rect.width()
+                    .saturating_mul(rect.rows() as usize)
+                    .saturating_mul(2),
+            );
+        });
+        bytes
+    }
+
+    pub(super) fn for_each_span(self, mut visit: impl FnMut(DirtyRect)) {
+        let width = self.width as usize;
+        let height = self.height as usize;
+        if self.full_fallback {
+            if width > 0 && height > 0 {
+                visit(DirtyRect {
+                    x0: 0,
+                    y0: 0,
+                    x1: width,
+                    y1: height,
+                });
+            }
+            return;
+        }
+        for row in 0..self.rows as usize {
+            let mut column = 0usize;
+            while column < self.columns as usize {
+                if !self.tile_is_set(column, row) {
+                    column += 1;
+                    continue;
+                }
+                let first = column;
+                while column < self.columns as usize && self.tile_is_set(column, row) {
+                    column += 1;
+                }
+                visit(DirtyRect {
+                    x0: first * DAMAGE_TILE_SIZE,
+                    y0: row * DAMAGE_TILE_SIZE,
+                    x1: (column * DAMAGE_TILE_SIZE).min(width),
+                    y1: ((row + 1) * DAMAGE_TILE_SIZE).min(height),
+                });
+            }
+        }
+    }
+
+    fn geometry(self) -> (u16, u16, u8, u8) {
+        (self.width, self.height, self.columns, self.rows)
+    }
+
+    fn set_tile(&mut self, column: usize, row: usize) {
+        let index = row * DAMAGE_MAX_COLUMNS + column;
+        self.bits[index / u64::BITS as usize] |= 1 << (index % u64::BITS as usize);
+    }
+
+    fn tile_is_set(self, column: usize, row: usize) -> bool {
+        let index = row * DAMAGE_MAX_COLUMNS + column;
+        self.bits[index / u64::BITS as usize] & (1 << (index % u64::BITS as usize)) != 0
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum LatchSlotHardwareState {
     Unknown,
@@ -416,6 +636,35 @@ mod tests {
 
     fn rect(x0: usize, y0: usize, x1: usize, y1: usize) -> DirtyRect {
         DirtyRect { x0, y0, x1, y1 }
+    }
+
+    #[test]
+    fn damage_tiles_clip_edges_and_merge_horizontal_spans() {
+        let mut damage = DamageTileMap::empty(65, 33);
+        damage.mark_rect(rect(31, 0, 65, 2));
+        damage.mark_pixel(64, 32);
+        let mut spans = Vec::new();
+        damage.for_each_span(|span| spans.push(span));
+
+        assert_eq!(damage.tile_count(), 4);
+        assert_eq!(spans, vec![rect(0, 0, 65, 32), rect(64, 32, 65, 33)]);
+        assert!(damage.intersects(rect(32, 1, 33, 2)));
+        assert!(!damage.intersects(rect(0, 32, 32, 33)));
+    }
+
+    #[test]
+    fn damage_tiles_union_and_full_fallback_are_conservative() {
+        let mut first = DamageTileMap::empty(1280, 720);
+        first.mark_pixel(1, 1);
+        let mut second = DamageTileMap::empty(1280, 720);
+        second.mark_pixel(1279, 719);
+        first.union_with(second);
+        assert_eq!(first.tile_count(), 2);
+
+        first.union_with(DamageTileMap::empty(1281, 720));
+        assert!(first.is_full_fallback());
+        assert!(first.intersects(rect(100, 100, 101, 101)));
+        assert_eq!(first.total_rgb565_bytes(), 1280 * 720 * 2);
     }
 
     fn layer(rect: DirtyRect, version: u64) -> DirectLayerState {

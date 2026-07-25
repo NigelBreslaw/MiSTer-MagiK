@@ -268,6 +268,7 @@ pub(super) struct ScreensaverFrameTrace {
     pub(super) raster_visible_layer_mask: u8,
     pub(super) sixteenth_phase_layer_mask: u8,
     pub(super) phase_bank_resident_bytes: usize,
+    pub(super) damage_tiles: DamageTileMap,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -2419,11 +2420,24 @@ struct ParadeScaleResult {
     card: Result<PreparedParadeCard, String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ParadeStarPixel {
+    index: usize,
+    pixel: Rgb565Pixel,
+}
+
 struct ParadeState {
     tiles: Vec<ParadeTile>,
     draw_order: Vec<usize>,
     visible_draw_order: Vec<usize>,
     depth_coverage: Vec<DirtyRect>,
+    background_pixels: Vec<Rgb565Pixel>,
+    previous_star_pixels: Vec<ParadeStarPixel>,
+    current_star_pixels: Vec<ParadeStarPixel>,
+    previous_card_bounds: Vec<Option<DirtyRect>>,
+    current_card_bounds: Vec<Option<DirtyRect>>,
+    redraw_cards: Vec<bool>,
+    damage_tiles: DamageTileMap,
     deck: Vec<usize>,
     cursor: usize,
     rng: u64,
@@ -2547,6 +2561,13 @@ impl ParadeState {
             draw_order: Vec::with_capacity(PARADE_WIDE_LAYER_TARGETS.iter().sum()),
             visible_draw_order: Vec::with_capacity(PARADE_WIDE_LAYER_TARGETS.iter().sum()),
             depth_coverage: Vec::with_capacity(PARADE_WIDE_LAYER_TARGETS.iter().sum()),
+            background_pixels: Vec::new(),
+            previous_star_pixels: Vec::with_capacity(420),
+            current_star_pixels: Vec::with_capacity(420),
+            previous_card_bounds: Vec::with_capacity(PARADE_WIDE_LAYER_TARGETS.iter().sum()),
+            current_card_bounds: Vec::with_capacity(PARADE_WIDE_LAYER_TARGETS.iter().sum()),
+            redraw_cards: Vec::with_capacity(PARADE_WIDE_LAYER_TARGETS.iter().sum()),
+            damage_tiles: DamageTileMap::default(),
             deck: Vec::new(),
             cursor: 0,
             rng: seed,
@@ -3213,6 +3234,15 @@ impl ParadeState {
     }
 
     fn set_geometry(&mut self, screen_w: usize, screen_h: usize) {
+        if self.screen_w != screen_w || self.screen_h != screen_h {
+            self.background_pixels.clear();
+            self.previous_star_pixels.clear();
+            self.current_star_pixels.clear();
+            self.previous_card_bounds.clear();
+            self.current_card_bounds.clear();
+            self.redraw_cards.clear();
+            self.damage_tiles = DamageTileMap::full(screen_w, screen_h);
+        }
         self.screen_w = screen_w;
         self.screen_h = screen_h;
         self.layer_targets = parade_layer_targets(screen_w, screen_h);
