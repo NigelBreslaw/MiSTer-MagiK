@@ -627,10 +627,8 @@ fn smoke_development_delivery(
     }
     let smoke = (|| -> Result<String> {
         exec_checked(&session, "delivery smoke", &command)?;
-        let status = read_launcher_status(&session)?;
-        let evidence = remote_read(&session, LATCH_FAILURE_REMOTE)
-            .and_then(|text| serde_json::from_str::<Value>(&text).ok());
-        match validate_delivery_present_state(&status, evidence.as_ref())? {
+        let (_, _, present_state) = wait_delivery_present_state(&session, Duration::from_secs(10))?;
+        match present_state {
             DeliveryPresentState::Latch => {
                 exec_checked(
                     &session,
@@ -654,6 +652,40 @@ fn delivery_smoke_failure(session: &Session, error: &str) -> DeviceFailure {
         .map(|path| format!("; evidence={}", path.display()))
         .unwrap_or_else(|capture_error| format!("; evidence_capture_failed={capture_error}"));
     DeviceFailure::Unhealthy(format!("{error}{evidence}"))
+}
+
+fn wait_delivery_present_state(
+    session: &Session,
+    timeout: Duration,
+) -> Result<(Value, Option<Value>, DeliveryPresentState)> {
+    let started = Instant::now();
+    let mut attempts = 0_u32;
+    loop {
+        attempts = attempts.saturating_add(1);
+        let status = read_launcher_status(session)?;
+        let evidence = remote_read(session, LATCH_FAILURE_REMOTE)
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+        match validate_delivery_present_state(&status, evidence.as_ref()) {
+            Ok(present_state) => return Ok((status, evidence, present_state)),
+            Err(_) if delivery_status_waiting_for_input(&status) && started.elapsed() < timeout => {
+                thread::sleep(Duration::from_millis(100));
+            }
+            Err(error) => {
+                return Err(format!(
+                    "{error}; present readiness attempts={attempts} elapsed_ms={}",
+                    started.elapsed().as_millis()
+                )
+                .into());
+            }
+        }
+    }
+}
+
+fn delivery_status_waiting_for_input(status: &Value) -> bool {
+    status.get("scene").and_then(Value::as_str) == Some("launcher")
+        && status.get("present_backend").and_then(Value::as_str) == Some("fpga-vblank-latch-hidden")
+        && status.get("present_status").and_then(Value::as_str) == Some("ok")
+        && status.get("input_enabled").and_then(Value::as_bool) == Some(false)
 }
 
 fn retain_delivery_smoke_failure_evidence(session: &Session, failure: &str) -> Result<PathBuf> {
@@ -12777,6 +12809,23 @@ H: Handlers=event3 js0"#
         assert!(latch_health.contains("latch-readiness-report"));
         assert!(latch_health.contains("mister_magik_scanout_slots"));
         assert!(validate_delivery_remote("/tmp/not-owned").is_err());
+    }
+
+    #[test]
+    fn delivery_smoke_retries_only_healthy_latch_startup_input() {
+        let mut status = json!({
+            "scene": "launcher",
+            "present_backend": "fpga-vblank-latch-hidden",
+            "present_status": "ok",
+            "input_enabled": false,
+        });
+        assert!(delivery_status_waiting_for_input(&status));
+
+        status["input_enabled"] = json!(true);
+        assert!(!delivery_status_waiting_for_input(&status));
+        status["input_enabled"] = json!(false);
+        status["present_status"] = json!("compatibility");
+        assert!(!delivery_status_waiting_for_input(&status));
     }
 
     #[test]
