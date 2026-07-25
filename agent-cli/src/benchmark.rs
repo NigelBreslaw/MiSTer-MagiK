@@ -79,10 +79,23 @@ fn evaluate_run(run: &Value) -> AgentResult<()> {
     let steady = run
         .get("steady_state")
         .ok_or_else(|| format!("screensaver profile run {id} has no steady-state evidence"))?;
-    let fps = steady
-        .get("average_fps")
+    let physical = steady
+        .get("physical_refresh")
+        .ok_or_else(|| format!("screensaver profile run {id} has no physical refresh evidence"))?;
+    let unique_fps = physical
+        .get("unique_fps")
         .and_then(Value::as_f64)
         .unwrap_or(0.0);
+    let refresh_hz = physical
+        .get("refresh_hz")
+        .and_then(Value::as_f64)
+        .unwrap_or(f64::INFINITY);
+    let repeats = u64_field(physical, "repeated_refreshes", u64::MAX);
+    let long_gaps = physical
+        .get("long_completion_intervals")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(usize::MAX);
     let frames = u64_field(steady, "frames", 0);
     let p99_work = u64_field(steady, "p99_work_us", u64::MAX);
     let p99_wall = u64_field(steady, "p99_wall_us", u64::MAX);
@@ -97,7 +110,9 @@ fn evaluate_run(run: &Value) -> AgentResult<()> {
     let drops = u64_field(run, "latch_drop_delta", u64::MAX);
     let misses = u64_field(steady, "vsync_misses", u64::MAX);
     let errors = u64_field(run, "present_errors", u64::MAX);
-    if fps < 55.0
+    if unique_fps < refresh_hz - 0.1
+        || repeats != 0
+        || long_gaps != 0
         || frames == 0
         || presentation_failures != 0
         || drops != 0
@@ -105,7 +120,7 @@ fn evaluate_run(run: &Value) -> AgentResult<()> {
         || errors != 0
     {
         return Err(format!(
-            "screensaver profile run {id} failed after warm-up: frames={frames} fps={fps:.1} presentation_failures={presentation_failures} timing_overruns={over_budget} p99_work_us={p99_work} p99_wall_us={p99_wall} max_wall_us={max_wall} refresh_period_us={refresh} latch_drops={drops} vsync_misses={misses} present_errors={errors}"
+            "screensaver profile run {id} failed after warm-up: frames={frames} unique_fps={unique_fps:.2}/{refresh_hz:.2} repeated_refreshes={repeats} long_completion_gaps={long_gaps} presentation_failures={presentation_failures} timing_overruns={over_budget} p99_work_us={p99_work} p99_wall_us={p99_wall} max_wall_us={max_wall} refresh_period_us={refresh} latch_drops={drops} vsync_misses={misses} present_errors={errors}"
         )
         .into());
     }
@@ -136,7 +151,13 @@ mod tests {
                 "refresh_period_us": 16_667,
                 "over_budget_frames": 0,
                 "vsync_misses": 0,
-                "presentation_failures": []
+                "presentation_failures": [],
+                "physical_refresh": {
+                    "refresh_hz": 60.0,
+                    "unique_fps": 60.0,
+                    "repeated_refreshes": 0,
+                    "long_completion_intervals": []
+                }
             },
             "latch_drop_delta": 0,
             "present_errors": 0,
@@ -152,7 +173,7 @@ mod tests {
     #[test]
     fn installed_screensaver_rejects_performance_or_platform_errors() {
         let mut slow = passing_run(1);
-        slow["steady_state"]["average_fps"] = json!(40.0);
+        slow["steady_state"]["physical_refresh"]["unique_fps"] = json!(40.0);
         assert!(evaluate_run(&slow).is_err());
         let mut dropped = passing_run(1);
         dropped["latch_drop_delta"] = json!(1);
@@ -167,5 +188,12 @@ mod tests {
         presentation_failure["steady_state"]["presentation_failures"] =
             json!([{"frame": 42, "kind": "sequence-gap"}]);
         assert!(evaluate_run(&presentation_failure).is_err());
+        let mut repeated = passing_run(1);
+        repeated["steady_state"]["physical_refresh"]["repeated_refreshes"] = json!(1);
+        assert!(evaluate_run(&repeated).is_err());
+        let mut long_gap = passing_run(1);
+        long_gap["steady_state"]["physical_refresh"]["long_completion_intervals"] =
+            json!([{"frame": 42, "interval_us": 33_334}]);
+        assert!(evaluate_run(&long_gap).is_err());
     }
 }

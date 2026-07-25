@@ -2856,11 +2856,11 @@ fn profile_installed_screensaver(config: &NativeDeviceConfig, output_dir: &Path)
         return Err("installed app does not support screensaver-pprof-v1".into());
     }
     if capability
-        .get("screensaver-frame-evidence-v2")
+        .get("screensaver-frame-evidence-v3")
         .and_then(Value::as_bool)
         != Some(true)
     {
-        return Err("installed app does not support screensaver-frame-evidence-v2".into());
+        return Err("installed app does not support screensaver-frame-evidence-v3".into());
     }
     let initial_status = read_launcher_status(&session)?;
     if initial_status.get("catalog_ready").and_then(Value::as_bool) != Some(true)
@@ -2965,14 +2965,14 @@ fn profile_installed_screensaver(config: &NativeDeviceConfig, output_dir: &Path)
     let benchmark_ini = benchmark_ini.ok_or("benchmark mode INI evidence is unavailable")?;
     let benchmark_ini_sha256 = encode_hex(&Sha256::digest(benchmark_ini.as_bytes()));
     let summary = json!({
-        "schema": "mister-magik-installed-screensaver-benchmark-v3",
+        "schema": "mister-magik-installed-screensaver-benchmark-v4",
         "benchmark_contract": {
             "startup_warmup_frames": SCREENSAVER_STARTUP_WARMUP_FRAMES,
             "startup_frames_are_informational": true,
-            "steady_state_requires_contiguous_presentations": true,
+            "steady_state_requires_every_physical_refresh": true,
             "wall_overruns_are_informational": true,
             "retains_benchmark_display": true,
-            "rationale": "screensaver activation may be late without being visible; once running it must not drop a frame",
+            "rationale": "screensaver activation may be late without being visible; once running every physical refresh must latch one unique frame",
         },
         "boot_id": boot_id,
         "manifest": parse_manifest_evidence(&manifest),
@@ -3443,11 +3443,14 @@ fn summarize_screensaver_telemetry(
         .iter()
         .map(|frame| frame_work_us(frame))
         .collect::<Vec<_>>();
-    let refresh_period_us = steady
+    let mut refresh_periods = steady
         .iter()
         .filter_map(|frame| frame.get("vsync_period_us").and_then(Value::as_u64))
-        .find(|value| *value > 0)
-        .unwrap_or(16_667);
+        .filter(|value| *value > 0)
+        .collect::<Vec<_>>();
+    refresh_periods.sort_unstable();
+    let refresh_period_us = median_u64(&refresh_periods)
+        .ok_or_else(|| format!("screensaver profile run {run} has no refresh period evidence"))?;
     let vsync_misses = steady
         .iter()
         .filter(|frame| {
@@ -3581,7 +3584,8 @@ fn summarize_screensaver_telemetry(
         .and_then(Value::as_f64)
         .filter(|duration| *duration > 0.0)
         .ok_or_else(|| format!("screensaver profile run {run} has no valid duration"))?;
-    let average_fps = steady.len() as f64 / profile_duration_secs;
+    let submitted_fps = steady.len() as f64 / profile_duration_secs;
+    let physical_refresh = physical_refresh_summary(run, steady, refresh_period_us)?;
     let work_signal = steady
         .iter()
         .map(|frame| frame_work_us(frame) as f64)
@@ -3599,6 +3603,28 @@ fn summarize_screensaver_telemetry(
     });
     let raster = raster_cadence_summary(steady);
     let maintenance = maintenance_cohorts(steady);
+    let status_publishing = status_publishing_summary(steady);
+    let presentation_paths = steady
+        .iter()
+        .filter_map(|frame| frame.get("main_present_copy_path").and_then(Value::as_str))
+        .collect::<std::collections::BTreeSet<_>>();
+    let phase_bank_bytes = steady
+        .iter()
+        .filter_map(|frame| {
+            frame
+                .get("screensaver_phase_bank_bytes")
+                .and_then(Value::as_u64)
+        })
+        .max()
+        .unwrap_or(0);
+    let launcher_rss_kb = active
+        .iter()
+        .filter_map(|sample| {
+            sample
+                .pointer("/processes/mister-magik-fb/rss_kb")
+                .and_then(Value::as_u64)
+        })
+        .collect::<Vec<_>>();
     let phase_means = json!({
         "prepare_us": mean_frame_field(steady, "prepare_us"),
         "render_us": mean_frame_field(steady, "render_us"),
@@ -3636,7 +3662,8 @@ fn summarize_screensaver_telemetry(
         },
         "steady_state": {
             "frames": steady.len(),
-            "average_fps": average_fps,
+            "submitted_fps": submitted_fps,
+            "average_fps": submitted_fps,
             "p99_wall_us": percentile_99(&wall),
             "max_wall_us": wall.last().copied().unwrap_or(0),
             "p99_work_us": percentile_99(&work),
@@ -3644,12 +3671,20 @@ fn summarize_screensaver_telemetry(
             "over_budget_frames": over_budget_frames,
             "vsync_misses": vsync_misses,
             "presentation_failures": presentation_failures,
+            "physical_refresh": physical_refresh,
         },
         "present_errors": present_errors,
         "latch_drop_delta": latch_drop_delta,
         "outliers": outliers,
         "periodic_timing": periodic,
         "raster_cadence": raster,
+        "status_publishing": status_publishing,
+        "main_present_copy_paths": presentation_paths,
+        "phase_bank_resident_bytes": phase_bank_bytes,
+        "launcher_rss": {
+            "mean_kb": mean_u64(&launcher_rss_kb),
+            "max_kb": launcher_rss_kb.iter().copied().max().unwrap_or(0),
+        },
         "maintenance": maintenance,
         "phase_means": phase_means,
         "profile": metadata,
@@ -3673,6 +3708,107 @@ fn presentation_sequence_is_contiguous(previous: u16, current: u16) -> bool {
         }
 }
 
+fn median_u64(values: &[u64]) -> Option<u64> {
+    if values.is_empty() {
+        return None;
+    }
+    let middle = values.len() / 2;
+    Some(if values.len().is_multiple_of(2) {
+        values[middle - 1].saturating_add(values[middle]) / 2
+    } else {
+        values[middle]
+    })
+}
+
+fn mean_u64(values: &[u64]) -> f64 {
+    if values.is_empty() {
+        0.0
+    } else {
+        values.iter().map(|value| *value as f64).sum::<f64>() / values.len() as f64
+    }
+}
+
+fn physical_refresh_summary(
+    run: usize,
+    frames: &[&Value],
+    refresh_period_us: u64,
+) -> Result<Value> {
+    if frames.len() < 2 {
+        return Err(format!(
+            "screensaver profile run {run} has insufficient physical refresh evidence"
+        )
+        .into());
+    }
+    let completions = frames
+        .iter()
+        .map(|frame| {
+            frame
+                .get("completion_monotonic_us")
+                .and_then(Value::as_u64)
+                .filter(|value| *value > 0)
+                .ok_or_else(|| {
+                    format!(
+                        "screensaver profile run {run} frame {} has no completion timestamp",
+                        frame_u64(frame, "frame")
+                    )
+                })
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let elapsed_us = completions
+        .last()
+        .copied()
+        .unwrap_or(0)
+        .checked_sub(completions[0])
+        .filter(|elapsed| *elapsed > 0)
+        .ok_or_else(|| {
+            format!("screensaver profile run {run} has non-increasing completion timestamps")
+        })?;
+    let intervals = completions
+        .windows(2)
+        .enumerate()
+        .map(|(index, pair)| {
+            pair[1]
+                .checked_sub(pair[0])
+                .map(|interval| (frame_u64(frames[index + 1], "frame"), interval))
+        })
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| {
+            format!("screensaver profile run {run} has non-monotonic completion timestamps")
+        })?;
+    let unique_latch_flips = frames
+        .windows(2)
+        .map(|pair| {
+            frame_u16(pair[1], "main_present_flip_count")
+                .wrapping_sub(frame_u16(pair[0], "main_present_flip_count")) as u64
+        })
+        .sum::<u64>();
+    let expected_refresh_intervals =
+        ((elapsed_us as f64 / refresh_period_us as f64).round() as u64).max(1);
+    let repeated_refreshes = expected_refresh_intervals.saturating_sub(unique_latch_flips);
+    let completion_gap_limit_us = refresh_period_us.saturating_mul(3) / 2;
+    let long_completion_intervals = intervals
+        .iter()
+        .filter(|(_, interval)| *interval > completion_gap_limit_us)
+        .map(|(frame, interval)| json!({"frame": frame, "interval_us": interval}))
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "refresh_period_us": refresh_period_us,
+        "refresh_hz": 1_000_000.0 / refresh_period_us as f64,
+        "elapsed_us": elapsed_us,
+        "expected_refresh_intervals": expected_refresh_intervals,
+        "unique_latch_flips": unique_latch_flips,
+        "repeated_refreshes": repeated_refreshes,
+        "unique_fps": unique_latch_flips as f64 * 1_000_000.0 / elapsed_us as f64,
+        "max_completion_interval_us": intervals
+            .iter()
+            .map(|(_, interval)| *interval)
+            .max()
+            .unwrap_or(0),
+        "completion_gap_limit_us": completion_gap_limit_us,
+        "long_completion_intervals": long_completion_intervals,
+    }))
+}
+
 fn frame_work_us(frame: &Value) -> u64 {
     [
         "prepare_us",
@@ -3684,6 +3820,49 @@ fn frame_work_us(frame: &Value) -> u64 {
     .iter()
     .map(|key| frame_u64(frame, key))
     .sum()
+}
+
+fn status_publishing_summary(frames: &[&Value]) -> Value {
+    let mode = frames
+        .iter()
+        .find_map(|frame| frame.get("status_publish_mode").and_then(Value::as_str))
+        .unwrap_or("sync");
+    let mut enqueue = frames
+        .iter()
+        .map(|frame| frame_u64(frame, "status_enqueue_us"))
+        .collect::<Vec<_>>();
+    let mut worker = frames
+        .iter()
+        .map(|frame| frame_u64(frame, "status_worker_write_us"))
+        .collect::<Vec<_>>();
+    let mut synchronous = frames
+        .iter()
+        .map(|frame| frame_u64(frame, "runtime_status_write_us"))
+        .collect::<Vec<_>>();
+    enqueue.sort_unstable();
+    worker.sort_unstable();
+    synchronous.sort_unstable();
+    json!({
+        "mode": mode,
+        "enqueue_p99_us": percentile_99(&enqueue),
+        "worker_write_p99_us": percentile_99(&worker),
+        "synchronous_write_p99_us": percentile_99(&synchronous),
+        "replacement_count": frames
+            .iter()
+            .filter_map(|frame| frame.get("status_replaced_count").and_then(Value::as_u64))
+            .max()
+            .unwrap_or(0),
+        "final_submitted_sequence": frames
+            .iter()
+            .filter_map(|frame| frame.get("status_submitted_sequence").and_then(Value::as_u64))
+            .max()
+            .unwrap_or(0),
+        "final_written_sequence": frames
+            .iter()
+            .filter_map(|frame| frame.get("status_written_sequence").and_then(Value::as_u64))
+            .max()
+            .unwrap_or(0),
+    })
 }
 
 fn validate_screensaver_frame_evidence(run: usize, frame_id: u64, frame: &Value) -> Result<()> {
@@ -3914,6 +4093,9 @@ fn raster_cadence_summary(frames: &[&Value]) -> Value {
     }
     json!({
         "sampling_profiles": profiles,
+        "layer_sampling_profiles": std::array::from_fn::<_, 5, _>(|_| {
+            profiles.iter().next().copied().unwrap_or("unknown")
+        }),
         "held_frames": held_frames,
         "held_card_events": held_cards,
         "moved_card_events": moved_cards,
@@ -3952,9 +4134,9 @@ fn screensaver_benchmark_report(summary: &Value) -> Result<String> {
     )?;
     writeln!(
         report,
-        "| Run | Profile frames | FPS | Timing overruns | Presentation failures | P99 work | Max wall |"
+        "| Run | Profile frames | Submitted FPS | Unique FPS | Repeats | Long gaps | Presentation failures | P99 work | Max wall |"
     )?;
-    writeln!(report, "|---:|---:|---:|---:|---:|---:|---:|")?;
+    writeln!(report, "|---:|---:|---:|---:|---:|---:|---:|---:|---:|")?;
     let runs = summary
         .get("runs")
         .and_then(Value::as_array)
@@ -3962,17 +4144,23 @@ fn screensaver_benchmark_report(summary: &Value) -> Result<String> {
     for run in runs {
         writeln!(
             report,
-            "| {} | {} | {:.2} | {} | {} | {} us | {} us |",
+            "| {} | {} | {:.2} | {:.2} | {} | {} | {} | {} us | {} us |",
             frame_u64(run, "run"),
             run.pointer("/measurement_window/frames")
                 .and_then(Value::as_u64)
                 .unwrap_or(0),
-            run.pointer("/steady_state/average_fps")
+            run.pointer("/steady_state/submitted_fps")
                 .and_then(Value::as_f64)
                 .unwrap_or(0.0),
-            run.pointer("/steady_state/over_budget_frames")
+            run.pointer("/steady_state/physical_refresh/unique_fps")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0),
+            run.pointer("/steady_state/physical_refresh/repeated_refreshes")
                 .and_then(Value::as_u64)
                 .unwrap_or(0),
+            run.pointer("/steady_state/physical_refresh/long_completion_intervals")
+                .and_then(Value::as_array)
+                .map_or(0, Vec::len),
             run.pointer("/steady_state/presentation_failures")
                 .and_then(Value::as_array)
                 .map_or(0, Vec::len),
@@ -4024,6 +4212,25 @@ fn screensaver_benchmark_report(summary: &Value) -> Result<String> {
                 )?;
             }
         }
+        writeln!(
+            report,
+            "Physical latch completion: `{}`.\n",
+            run.pointer("/steady_state/physical_refresh")
+                .cloned()
+                .unwrap_or(Value::Null),
+        )?;
+        writeln!(
+            report,
+            "Status publishing: `{}`. Main present copy paths: `{}`. Phase-bank resident bytes: `{}`. Launcher RSS: `{}`.\n",
+            run.get("status_publishing").cloned().unwrap_or(Value::Null),
+            run.get("main_present_copy_paths")
+                .cloned()
+                .unwrap_or(Value::Null),
+            run.get("phase_bank_resident_bytes")
+                .cloned()
+                .unwrap_or(Value::Null),
+            run.get("launcher_rss").cloned().unwrap_or(Value::Null),
+        )?;
         writeln!(
             report,
             "Visible raster holds: {} frames, {} held-card events, {} moved-card events. Per-layer held/visible/rate: `{}` / `{}` / `{}`. Sampling: `{}`.\n",
@@ -11922,16 +12129,96 @@ H: Handlers=event3 js0"#
         assert!(!presentation_sequence_is_contiguous(41, 41));
     }
 
+    fn physical_frame(frame: u64, completion_us: u64, flip_count: u16) -> Value {
+        json!({
+            "frame": frame,
+            "completion_monotonic_us": completion_us,
+            "main_present_flip_count": flip_count,
+        })
+    }
+
+    fn physical_summary(frames: &[Value], period_us: u64) -> Result<Value> {
+        let references = frames.iter().collect::<Vec<_>>();
+        physical_refresh_summary(1, &references, period_us)
+    }
+
+    #[test]
+    fn physical_refresh_summary_detects_repeats_despite_contiguous_submissions() {
+        let frames = [
+            physical_frame(100, 1_000_000, 100),
+            physical_frame(101, 1_016_667, 101),
+            physical_frame(102, 1_050_001, 102),
+        ];
+        let summary = physical_summary(&frames, 16_667).unwrap();
+        assert_eq!(summary["expected_refresh_intervals"], 3);
+        assert_eq!(summary["unique_latch_flips"], 2);
+        assert_eq!(summary["repeated_refreshes"], 1);
+        assert_eq!(
+            summary["long_completion_intervals"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn physical_refresh_summary_accepts_exact_sixty_hz_and_counter_wrap() {
+        let frames = [
+            physical_frame(1, 1_000_000, u16::MAX - 1),
+            physical_frame(2, 1_016_667, u16::MAX),
+            physical_frame(3, 1_033_334, 0),
+            physical_frame(4, 1_050_001, 1),
+        ];
+        let summary = physical_summary(&frames, 16_667).unwrap();
+        assert_eq!(summary["expected_refresh_intervals"], 3);
+        assert_eq!(summary["unique_latch_flips"], 3);
+        assert_eq!(summary["repeated_refreshes"], 0);
+        assert_eq!(summary["long_completion_intervals"], json!([]));
+    }
+
+    #[test]
+    fn physical_refresh_summary_rejects_missing_timestamps() {
+        let frames = [physical_frame(1, 1_000_000, 1), physical_frame(2, 0, 2)];
+        assert!(physical_summary(&frames, 16_667).is_err());
+    }
+
+    #[test]
+    fn physical_refresh_summary_records_long_intervals() {
+        let frames = [
+            physical_frame(1, 1_000_000, 1),
+            physical_frame(2, 1_025_001, 2),
+        ];
+        let summary = physical_summary(&frames, 16_667).unwrap();
+        assert_eq!(
+            summary["long_completion_intervals"],
+            json!([{"frame": 2, "interval_us": 25_001}])
+        );
+    }
+
+    #[test]
+    fn physical_refresh_summary_exposes_pending_zero_then_two_flip_pattern() {
+        let frames = [
+            physical_frame(953, 1_000_000, 3416),
+            physical_frame(954, 1_016_667, 3416),
+            physical_frame(955, 1_050_001, 3418),
+        ];
+        let summary = physical_summary(&frames, 16_667).unwrap();
+        assert_eq!(summary["expected_refresh_intervals"], 3);
+        assert_eq!(summary["unique_latch_flips"], 2);
+        assert_eq!(summary["repeated_refreshes"], 1);
+    }
+
     #[test]
     fn installed_benchmark_capability_accepts_the_runtime_log_prefix() {
         let capability = last_json_line(
             "mister-magik-fb [benchmark-capabilities] (arch=arm)\n\
-             {\"screensaver-pprof-v1\":true,\"screensaver-frame-evidence-v2\":true}\n",
+             {\"screensaver-pprof-v1\":true,\"screensaver-frame-evidence-v3\":true}\n",
         )
         .unwrap();
 
         assert_eq!(capability["screensaver-pprof-v1"], true);
-        assert_eq!(capability["screensaver-frame-evidence-v2"], true);
+        assert_eq!(capability["screensaver-frame-evidence-v3"], true);
         assert!(last_json_line("no structured report").is_none());
     }
 

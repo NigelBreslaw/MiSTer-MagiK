@@ -41,12 +41,15 @@ timings are recorded as startup evidence but never fail the benchmark. A
 screensaver may take several frames to become visible without creating a
 user-visible defect.
 
-Steady state begins on the fourth active screensaver frame. Every steady-state
-frame must advance the completed latch presentation sequence exactly once.
-Presentation errors, latch drops, and final pacing misses must remain zero.
-Average steady-state FPS must be at least 55 so a stalled or incomplete capture
-cannot pass. Wall-time overruns, P99, and maximum timings remain evidence; they
-are not treated as proof of a visible dropped presentation.
+Steady state begins on the fourth active screensaver frame. The benchmark uses
+the median nonzero measured refresh period and completion timestamps to count
+the physical refresh intervals in that window. Wrapping latch flip-counter
+deltas count unique presentations. Unique presentation FPS must remain within
+0.1 FPS of the measured refresh rate, with no repeated refresh, completion gap
+over 1.5 refresh periods, incomplete latch, sequence mismatch, non-unit flip,
+presentation error, latch drop, or final pacing miss. Submitted FPS, wall-time
+overruns, P99, and maximum timings remain diagnostic evidence; contiguous
+submitted sequences alone do not prove unique physical refreshes.
 
 This distinction is intentional. Do not tighten startup timing because of a
 slow first render, asset loading, allocation, profiler startup, or other
