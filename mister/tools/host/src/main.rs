@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use mister_tool::transport::{
-    BenchmarkScenario, ColdBenchmarkScenario, DeviceFailure, DeviceOperations, DeviceRequest,
-    DeviceResponse, Layout,
+    DeviceFailure, DeviceOperations, DeviceRequest, DeviceResponse, Layout,
 };
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
@@ -28,7 +27,8 @@ mod remote;
 
 use agent_client::{
     AGENT_PORT, AgentEndpoint, agent_binary_request_bounded, agent_request, agent_request_at,
-    agent_request_with_liveness, agent_stream_request_reader, agent_token, agent_token_for_device,
+    agent_request_with_liveness, agent_stream_request_reader,
+    agent_telemetry_until_screensaver_profile_complete, agent_token, agent_token_for_device,
     bootstrap_agent, bootstrap_agent_with, verify_agent_deploy_result,
 };
 use remote::{
@@ -282,56 +282,13 @@ impl DeviceOperations for NativeDevice {
                 let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 deliver_platform_transaction(&config, stage, expected_sha256)?
             }
-            DeviceRequest::SnapshotBenchmarkRuntime { remote } => {
-                validate_delivery_remote(remote).map_err(device_failure)?;
-                let session = connect_with(&config.connection, 10).map_err(device_failure)?;
-                exec_checked(
-                    &session,
-                    "runtime snapshot",
-                    &format!(
-                        "set -eu; rm -f {0}.delivery-rollback.tmp; cp -p {0} {0}.delivery-rollback.tmp; mv -f {0}.delivery-rollback.tmp {0}.delivery-rollback; sync",
-                        sh(remote)
-                    ),
-                )
-                .map_err(device_failure)?;
-                "snapshotted".into()
-            }
-            DeviceRequest::DeployBenchmarkRuntime { local, remote } => {
-                let session = connect_with(&config.connection, 10).map_err(device_failure)?;
-                deploy_magik_bin(&session, local, remote).map_err(device_failure)?;
-                "deployed".into()
-            }
-            DeviceRequest::RollbackBenchmarkRuntime { remote } => {
-                validate_delivery_remote(remote).map_err(device_failure)?;
-                let session = connect_with(&config.connection, 10).map_err(device_failure)?;
-                exec_checked(
-                    &session,
-                    "runtime suspend for rollback",
-                    &acknowledged_main_command("mister_magik_suspend"),
-                )
-                .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?;
-                if let Err(error) = exec_checked(
-                    &session,
-                    "runtime rollback",
-                    &format!(
-                        "set -eu; test -f {0}.delivery-rollback; mv -f {0}.delivery-rollback {0}; chmod 755 {0}; sync",
-                        sh(remote)
-                    ),
-                ) {
-                    let _ = exec_checked(
-                        &session,
-                        "runtime resume after failed rollback",
-                        &acknowledged_main_command("mister_magik_resume"),
-                    );
-                    return Err(DeviceFailure::RecoveryRequired(error.to_string()));
-                }
-                exec_checked(
-                    &session,
-                    "runtime resume after rollback",
-                    &acknowledged_main_command("mister_magik_resume"),
-                )
-                .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?;
-                "rolled-back".into()
+            DeviceRequest::ProfileInstalledScreensaver {
+                output_dir,
+                display_mode,
+            } => {
+                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
+                profile_installed_screensaver(&config, output_dir, display_mode)
+                    .map_err(device_failure)?
             }
             DeviceRequest::VerifyHealth(layout) => {
                 let label = match layout {
@@ -345,109 +302,6 @@ impl DeviceOperations for NativeDevice {
                 exec_checked(&session, "delivery health", &command)
                     .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
                 "healthy".into()
-            }
-            DeviceRequest::PrepareBenchmark(scenario) => {
-                let session = connect_with(&config.connection, 10).map_err(device_failure)?;
-                exec_checked(
-                    &session,
-                    "benchmark prepare",
-                    &benchmark_prepare_command(*scenario),
-                )
-                .map_err(device_failure)?;
-                benchmark_scenario_label(*scenario).into()
-            }
-            DeviceRequest::WarmupBenchmark(scenario) => {
-                if *scenario != BenchmarkScenario::ScreensaverVelocity {
-                    let session = connect_with(&config.connection, 10).map_err(device_failure)?;
-                    run_launcher_benchmark(&session, *scenario, true).map_err(device_failure)?;
-                }
-                "warmed".into()
-            }
-            DeviceRequest::CaptureBenchmark(scenario) => {
-                if *scenario == BenchmarkScenario::ScreensaverVelocity {
-                    run_screensaver_boot_benchmark(&config.connection).map_err(device_failure)?
-                } else {
-                    let session = connect_with(&config.connection, 10).map_err(device_failure)?;
-                    run_launcher_benchmark(&session, *scenario, false).map_err(device_failure)?;
-                    remote_read(&session, benchmark_trace_path(false)).ok_or_else(|| {
-                        DeviceFailure::OperationFailed("benchmark trace is missing".into())
-                    })?
-                }
-            }
-            DeviceRequest::RestoreBenchmark => {
-                let session = connect_with(&config.connection, 10).map_err(device_failure)?;
-                restore_benchmark_display_if_pending(&session).map_err(device_failure)?;
-                exec_checked(&session, "benchmark restore", &benchmark_restore_command())
-                    .map_err(device_failure)?;
-                launcher_restart(
-                    &session,
-                    &LauncherRestartOptions {
-                        clear_env: true,
-                        remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
-                        timeout_secs: 45,
-                        ..LauncherRestartOptions::default()
-                    },
-                )
-                .map_err(device_failure)?;
-                "restored".into()
-            }
-            DeviceRequest::SnapshotBenchmarkData(scenario) => {
-                let session = connect(10).map_err(device_failure)?;
-                exec_checked(
-                    &session,
-                    "cold benchmark suspend",
-                    &acknowledged_main_command("mister_magik_suspend"),
-                )
-                .map_err(device_failure)?;
-                exec_checked(
-                    &session,
-                    "cold benchmark snapshot",
-                    &cold_benchmark_snapshot_command(*scenario),
-                )
-                .map_err(device_failure)?;
-                cold_benchmark_scenario_label(*scenario).into()
-            }
-            DeviceRequest::EstablishBenchmarkFixture(scenario) => {
-                let session = connect(10).map_err(device_failure)?;
-                exec_checked(
-                    &session,
-                    "cold benchmark fixture",
-                    &cold_benchmark_fixture_command(*scenario),
-                )
-                .map_err(device_failure)?;
-                "fixture-ready".into()
-            }
-            DeviceRequest::ExecuteColdBenchmark(scenario) => {
-                let session = connect(10).map_err(device_failure)?;
-                exec_checked(
-                    &session,
-                    "cold benchmark execute",
-                    &cold_benchmark_execute_command(*scenario),
-                )
-                .map_err(device_failure)?;
-                "executed".into()
-            }
-            DeviceRequest::CollectBenchmarkEvents(scenario) => {
-                let session = connect(10).map_err(device_failure)?;
-                remote_read(&session, cold_benchmark_events_path(*scenario)).ok_or_else(|| {
-                    DeviceFailure::OperationFailed("cold benchmark events are missing".into())
-                })?
-            }
-            DeviceRequest::RestoreBenchmarkData(scenario) => {
-                let session = connect(10).map_err(device_failure)?;
-                exec_checked(
-                    &session,
-                    "cold benchmark restore",
-                    &cold_benchmark_restore_command(*scenario),
-                )
-                .map_err(device_failure)?;
-                exec_checked(
-                    &session,
-                    "cold benchmark resume",
-                    &acknowledged_main_command("mister_magik_resume"),
-                )
-                .map_err(device_failure)?;
-                "restored".into()
             }
             DeviceRequest::BeginReleaseQualification => {
                 let session = connect(10).map_err(device_failure)?;
@@ -1380,6 +1234,8 @@ const DISPLAY_MATRIX_MODES: &[DisplayMatrixMode] = &[
 
 static DISPLAY_MATRIX_INTERRUPTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+static SCREENSAVER_PROFILE_INTERRUPTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 #[derive(Clone, Copy)]
 struct DisplayMatrixEvidence {
@@ -1389,6 +1245,41 @@ struct DisplayMatrixEvidence {
 
 extern "C" fn display_matrix_interrupt_handler(_: libc::c_int) {
     DISPLAY_MATRIX_INTERRUPTED.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+extern "C" fn screensaver_profile_interrupt_handler(_: libc::c_int) {
+    SCREENSAVER_PROFILE_INTERRUPTED.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+pub(crate) fn screensaver_profile_interrupted() -> bool {
+    SCREENSAVER_PROFILE_INTERRUPTED.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+struct ScreensaverProfileSignalGuard([(libc::c_int, libc::sighandler_t); 3]);
+
+impl ScreensaverProfileSignalGuard {
+    fn install() -> Self {
+        SCREENSAVER_PROFILE_INTERRUPTED.store(false, std::sync::atomic::Ordering::SeqCst);
+        Self([libc::SIGHUP, libc::SIGINT, libc::SIGTERM].map(|signal| {
+            let previous = unsafe {
+                libc::signal(
+                    signal,
+                    screensaver_profile_interrupt_handler as *const () as libc::sighandler_t,
+                )
+            };
+            (signal, previous)
+        }))
+    }
+}
+
+impl Drop for ScreensaverProfileSignalGuard {
+    fn drop(&mut self) {
+        for (signal, previous) in self.0 {
+            unsafe {
+                libc::signal(signal, previous);
+            }
+        }
+    }
 }
 
 struct SignalHandlerGuard(libc::sighandler_t);
@@ -2138,98 +2029,13 @@ fn delivery_smoke_command(layout: &str, expected_sha256: &str) -> Result<String>
         _ => return Err(format!("unsupported delivery layout: {layout}").into()),
     };
     Ok(format!(
-        "set -eu; test \"$(sha256sum {directory}/mister-magik-fb | awk '{{print $1}}')\" = '{expected_sha256}'; pidof {main} >/dev/null; pidof mister-magik-fb >/dev/null; {}; test -n \"$pid_before\"; test \"$pid_before\" = \"$pid_after\"; test -n \"$sequence_before\"; test -n \"$sequence_after\"; test \"$sequence_after\" -gt \"$sequence_before\"; grep -q '^mister_magik_scanout_slots ' /proc/modules; test -c /dev/mister-magik-scanout-slots; report=$({directory}/mister-magik-fb latch-readiness-report); printf '%s\\n' \"$report\" | grep -Eq 'latch_readiness_tsv[[:space:]]+valid=1[[:space:]]+state=ready'; grep -Eq '\"scene\"[[:space:]]*:[[:space:]]*\"launcher\"' \"$status\"; grep -Eq '\"screen\"[[:space:]]*:[[:space:]]*\"(home|arcade|settings|systems)\"' \"$status\"; grep -Eq '\"input_enabled\"[[:space:]]*:[[:space:]]*true' \"$status\"; test \"$(cat /sys/class/graphics/fb0/bits_per_pixel)\" = 16; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json",
+        "set -eu; test \"$(sha256sum {directory}/mister-magik-fb | awk '{{print $1}}')\" = '{expected_sha256}'; pidof {main} >/dev/null; pidof mister-magik-fb >/dev/null; {}; test -n \"$pid_before\"; test \"$pid_before\" = \"$pid_after\"; test -n \"$sequence_before\"; test -n \"$sequence_after\"; test \"$sequence_after\" -gt \"$sequence_before\"; grep -q '^mister_magik_scanout_slots ' /proc/modules; test -c /dev/mister-magik-scanout-slots; report=$({directory}/mister-magik-fb latch-readiness-report); printf '%s\\n' \"$report\" | grep -Eq 'latch_readiness_tsv[[:space:]]+valid=1[[:space:]]+state=ready'; grep -Eq '\"scene\"[[:space:]]*:[[:space:]]*\"launcher\"' \"$status\"; grep -Eq '\"screen\"[[:space:]]*:[[:space:]]*\"(home|arcade|settings|systems)\"' \"$status\"; grep -Eq '\"input_enabled\"[[:space:]]*:[[:space:]]*true' \"$status\"; test \"$(cat /sys/class/graphics/fb0/bits_per_pixel)\" = 16; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /tmp/mister-magik/realtime-frame-analytics; test ! -e /tmp/mister-magik/screensaver-profile",
         launcher_heartbeat_sample_command()
     ))
 }
 
 fn launcher_heartbeat_sample_command() -> &'static str {
     "status=/tmp/mister-magik/status.json; pid_before=$(sed -n 's/.*\"pid\":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' \"$status\"); sequence_before=$(sed -n 's/.*\"status_sequence\":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' \"$status\"); sleep 2; pid_after=$(sed -n 's/.*\"pid\":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' \"$status\"); sequence_after=$(sed -n 's/.*\"status_sequence\":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' \"$status\")"
-}
-
-fn benchmark_scenario_label(scenario: BenchmarkScenario) -> &'static str {
-    match scenario {
-        BenchmarkScenario::LauncherVelocity => "launcher-velocity",
-        BenchmarkScenario::FramebufferVelocity => "framebuffer-velocity",
-        BenchmarkScenario::ScreensaverVelocity => "screensaver-velocity",
-    }
-}
-
-fn cold_benchmark_scenario_label(scenario: ColdBenchmarkScenario) -> &'static str {
-    match scenario {
-        ColdBenchmarkScenario::CatalogLifecycle => "catalog-lifecycle",
-        ColdBenchmarkScenario::PreviewColdStart => "preview-cold-start",
-        ColdBenchmarkScenario::LibraryPersistence => "library-persistence",
-    }
-}
-
-fn cold_benchmark_events_path(scenario: ColdBenchmarkScenario) -> &'static str {
-    match scenario {
-        ColdBenchmarkScenario::CatalogLifecycle => {
-            "/tmp/mister-magik/agent-catalog-lifecycle.jsonl"
-        }
-        ColdBenchmarkScenario::PreviewColdStart => {
-            "/tmp/mister-magik/agent-preview-cold-start.jsonl"
-        }
-        ColdBenchmarkScenario::LibraryPersistence => {
-            "/tmp/mister-magik/agent-library-persistence.jsonl"
-        }
-    }
-}
-
-fn cold_benchmark_snapshot_command(_scenario: ColdBenchmarkScenario) -> String {
-    let safety = platform_safety_script();
-    shell_sequence([
-        "set -eu",
-        safety.as_str(),
-        "root=/media/fat/mister-magik-dev; snap=/tmp/mister-magik/agent-benchmark-data; rm -rf \"$snap\"; mkdir -p \"$snap\"; for name in catalog-v3 library.sqlite3 arcade-bootstrap.nav.lz4b; do if test -e \"$root/$name\"; then cp -a \"$root/$name\" \"$snap/$name\"; touch \"$snap/$name.present\"; fi; done",
-    ])
-}
-
-fn cold_benchmark_fixture_command(scenario: ColdBenchmarkScenario) -> String {
-    let mutation = match scenario {
-        ColdBenchmarkScenario::CatalogLifecycle => "rm -rf \"$root/catalog-v3\"",
-        ColdBenchmarkScenario::PreviewColdStart => {
-            "rm -f /tmp/mister-magik/preview-* /tmp/mister-magik-slint.log"
-        }
-        ColdBenchmarkScenario::LibraryPersistence => "rm -f \"$root/library.sqlite3\"",
-    };
-    let safety = platform_safety_script();
-    let fixture = format!(
-        "root=/media/fat/mister-magik-dev; test -d /tmp/mister-magik/agent-benchmark-data; {mutation}; rm -f {}",
-        cold_benchmark_events_path(scenario)
-    );
-    shell_sequence(["set -eu", safety.as_str(), fixture.as_str()])
-}
-
-fn cold_benchmark_execute_command(scenario: ColdBenchmarkScenario) -> String {
-    let (command, event) = match scenario {
-        ColdBenchmarkScenario::CatalogLifecycle => (
-            "/media/fat/mister-magik-dev/mister-magik-fb library-refresh",
-            "catalog_lifecycle_complete",
-        ),
-        ColdBenchmarkScenario::PreviewColdStart => (
-            "/media/fat/mister-magik-dev/mister-magik-fb preview-index-refresh-bench agent-cold",
-            "preview_cold_start_complete",
-        ),
-        ColdBenchmarkScenario::LibraryPersistence => (
-            "/media/fat/mister-magik-dev/mister-magik-fb library-refresh",
-            "library_persistence_complete",
-        ),
-    };
-    format!(
-        "set -eu; start=$(date +%s); {command} >/tmp/mister-magik/agent-cold-benchmark.out 2>&1; end=$(date +%s); elapsed_ms=$(((end-start)*1000)); printf '{{\"event\":\"{event}\",\"elapsed_ms\":%s,\"status\":\"ok\"}}\\n' \"$elapsed_ms\" >{}",
-        cold_benchmark_events_path(scenario)
-    )
-}
-
-fn cold_benchmark_restore_command(scenario: ColdBenchmarkScenario) -> String {
-    let restore = format!(
-        "root=/media/fat/mister-magik-dev; snap=/tmp/mister-magik/agent-benchmark-data; test -d \"$snap\"; rm -rf \"$root/catalog-v3\"; rm -f \"$root/library.sqlite3\" \"$root/arcade-bootstrap.nav.lz4b\"; for name in catalog-v3 library.sqlite3 arcade-bootstrap.nav.lz4b; do if test -e \"$snap/$name.present\"; then mv \"$snap/$name\" \"$root/$name\"; fi; done; rm -rf \"$snap\"; rm -f {} /tmp/mister-magik/agent-cold-benchmark.out",
-        cold_benchmark_events_path(scenario)
-    );
-    let safety = platform_safety_script();
-    shell_sequence(["set -eu", restore.as_str(), safety.as_str()])
 }
 
 const RELEASE_TOKEN: &str = "/tmp/mister-magik/release-qualification-session";
@@ -2398,7 +2204,7 @@ fn release_restore_command() -> String {
 
 fn diagnostic_facts_command() -> String {
     format!(
-        "set -eu; main=false; launcher=false; agent=false; credentials=false; scanout=false; firmware=false; latch=false; unstable=false; temporary=false; launcher_heartbeat_advancing=false; {{ pidof MiSTer_MagiKDev >/dev/null 2>&1 || pidof MiSTer_MagiK >/dev/null 2>&1; }} && main=true; pidof mister-magik-fb >/dev/null 2>&1 && launcher=true; pidof mister-magik-agent >/dev/null 2>&1 && agent=true; test -s /media/fat/mister-magik-dev/agent.token && credentials=true; {{ grep -q '^mister_magik_scanout_slots ' /proc/modules 2>/dev/null && test -c /dev/mister-magik-scanout-slots; }} && scanout=true; \"$scanout\" && firmware=true; if pidof MiSTer_MagiKDev >/dev/null 2>&1; then root=/media/fat/mister-magik-dev; else root=/media/fat/mister-magik; fi; if test -x \"$root/mister-magik-fb\"; then latch_report=$(\"$root/mister-magik-fb\" latch-readiness-report 2>/dev/null || true); printf '%s\\n' \"$latch_report\" | grep -Eq 'latch_readiness_tsv[[:space:]]+valid=1[[:space:]]+state=ready' && latch=true; fi; {}; if test -n \"$pid_before\" && test \"$pid_before\" = \"$pid_after\" && test -n \"$sequence_before\" && test -n \"$sequence_after\" && test \"$sequence_after\" -gt \"$sequence_before\"; then launcher_heartbeat_advancing=true; fi; test -e /tmp/mister-magik/reboot-unstable && unstable=true; arming=0; for path in /media/fat/mister-magik/launcher.env /media/fat/mister-magik-dev/launcher.env /tmp/mister-magik/fs-fault-launcher.env /tmp/mister-magik/fs-fault-session /tmp/mister-magik/fs-fault.json /media/fat/mister-magik/rebuild-on-next-boot /media/fat/mister-magik-dev/rebuild-on-next-boot; do test ! -e \"$path\" || arming=$((arming + 1)); done; for path in /tmp/mister-magik/agent-benchmark.tsv /tmp/mister-magik/agent-benchmark-warmup.tsv /tmp/mister-magik/agent-cold-benchmark.out /tmp/mister-magik/stale-launcher-return-state.json; do test ! -e \"$path\" || temporary=true; done; printf '{{\"main_running\":%s,\"launcher_running\":%s,\"agent_running\":%s,\"credentials_ready\":%s,\"firmware_compatible\":%s,\"scanout_ready\":%s,\"latch_ready\":%s,\"reboot_unstable\":%s,\"arming_files\":%s,\"temporary_state\":%s,\"launcher_heartbeat_advancing\":%s}}\\n' \"$main\" \"$launcher\" \"$agent\" \"$credentials\" \"$firmware\" \"$scanout\" \"$latch\" \"$unstable\" \"$arming\" \"$temporary\" \"$launcher_heartbeat_advancing\"",
+        "set -eu; main=false; launcher=false; agent=false; credentials=false; scanout=false; firmware=false; latch=false; unstable=false; temporary=false; launcher_heartbeat_advancing=false; {{ pidof MiSTer_MagiKDev >/dev/null 2>&1 || pidof MiSTer_MagiK >/dev/null 2>&1; }} && main=true; pidof mister-magik-fb >/dev/null 2>&1 && launcher=true; pidof mister-magik-agent >/dev/null 2>&1 && agent=true; test -s /media/fat/mister-magik-dev/agent.token && credentials=true; {{ grep -q '^mister_magik_scanout_slots ' /proc/modules 2>/dev/null && test -c /dev/mister-magik-scanout-slots; }} && scanout=true; \"$scanout\" && firmware=true; if pidof MiSTer_MagiKDev >/dev/null 2>&1; then root=/media/fat/mister-magik-dev; else root=/media/fat/mister-magik; fi; if test -x \"$root/mister-magik-fb\"; then latch_report=$(\"$root/mister-magik-fb\" latch-readiness-report 2>/dev/null || true); printf '%s\\n' \"$latch_report\" | grep -Eq 'latch_readiness_tsv[[:space:]]+valid=1[[:space:]]+state=ready' && latch=true; fi; {}; if test -n \"$pid_before\" && test \"$pid_before\" = \"$pid_after\" && test -n \"$sequence_before\" && test -n \"$sequence_after\" && test \"$sequence_after\" -gt \"$sequence_before\"; then launcher_heartbeat_advancing=true; fi; test -e /tmp/mister-magik/reboot-unstable && unstable=true; arming=0; for path in /media/fat/mister-magik/launcher.env /media/fat/mister-magik-dev/launcher.env /tmp/mister-magik/fs-fault-launcher.env /tmp/mister-magik/fs-fault-session /tmp/mister-magik/fs-fault.json /media/fat/mister-magik/rebuild-on-next-boot /media/fat/mister-magik-dev/rebuild-on-next-boot; do test ! -e \"$path\" || arming=$((arming + 1)); done; for path in /tmp/mister-magik/agent-benchmark.tsv /tmp/mister-magik/agent-benchmark-warmup.tsv /tmp/mister-magik/agent-cold-benchmark.out /tmp/mister-magik/stale-launcher-return-state.json /tmp/mister-magik/realtime-frame-analytics /tmp/mister-magik/screensaver-profile; do test ! -e \"$path\" || temporary=true; done; printf '{{\"main_running\":%s,\"launcher_running\":%s,\"agent_running\":%s,\"credentials_ready\":%s,\"firmware_compatible\":%s,\"scanout_ready\":%s,\"latch_ready\":%s,\"reboot_unstable\":%s,\"arming_files\":%s,\"temporary_state\":%s,\"launcher_heartbeat_advancing\":%s}}\\n' \"$main\" \"$launcher\" \"$agent\" \"$credentials\" \"$firmware\" \"$scanout\" \"$latch\" \"$unstable\" \"$arming\" \"$temporary\" \"$launcher_heartbeat_advancing\"",
         launcher_heartbeat_sample_command()
     )
 }
@@ -2418,7 +2224,8 @@ fn safe_repair_command() -> String {
     let safety = platform_safety_script();
     shell_sequence([
         "set -eu",
-        "rm -f /tmp/mister-magik/agent-benchmark.tsv /tmp/mister-magik/agent-benchmark-warmup.tsv /tmp/mister-magik/agent-cold-benchmark.out /tmp/mister-magik/stale-launcher-return-state.json",
+        "rm -f /tmp/mister-magik/agent-benchmark.tsv /tmp/mister-magik/agent-benchmark-warmup.tsv /tmp/mister-magik/agent-cold-benchmark.out /tmp/mister-magik/stale-launcher-return-state.json /tmp/mister-magik/realtime-frame-analytics",
+        "rm -rf /tmp/mister-magik/screensaver-profile",
         release_arming_cleanup_command(),
         safety.as_str(),
     ])
@@ -3020,286 +2827,696 @@ fn parse_crt_trial_status(output: &str) -> Result<&str> {
     Ok(status)
 }
 
-fn benchmark_trace_path(warmup: bool) -> &'static str {
-    if warmup {
-        "/tmp/mister-magik/agent-benchmark-warmup.tsv"
-    } else {
-        "/tmp/mister-magik/agent-benchmark.tsv"
+const SCREENSAVER_PROFILE_REMOTE_DIR: &str = "/tmp/mister-magik/screensaver-profile";
+const SCREENSAVER_STARTUP_WARMUP_FRAMES: usize = 3;
+
+fn last_json_line(output: &str) -> Option<Value> {
+    output
+        .lines()
+        .rev()
+        .find_map(|line| serde_json::from_str::<Value>(line.trim()).ok())
+}
+
+fn profile_installed_screensaver(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+    display_mode: &str,
+) -> Result<String> {
+    let benchmark_mode = DISPLAY_MATRIX_MODES
+        .iter()
+        .find(|mode| mode.id == display_mode)
+        .copied()
+        .ok_or_else(|| format!("unsupported screensaver benchmark display mode: {display_mode}"))?;
+    if benchmark_mode.id != "hdmi-1280x720p60" {
+        return Err("screensaver benchmark requires hdmi-1280x720p60".into());
     }
-}
-
-fn benchmark_trace_complete_path(warmup: bool) -> &'static str {
-    if warmup {
-        "/tmp/mister-magik/agent-benchmark-warmup.complete"
-    } else {
-        "/tmp/mister-magik/agent-benchmark.complete"
+    let session = connect_with(&config.connection, 10)?;
+    let capability = exec_checked_output(
+        &session,
+        "installed benchmark capability",
+        "/media/fat/mister-magik-dev/mister-magik-fb benchmark-capabilities",
+    )?;
+    let capability = last_json_line(&capability.stdout)
+        .ok_or("installed benchmark capability output contains no JSON report")?;
+    if capability
+        .get("screensaver-pprof-v1")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Err("installed app does not support screensaver-pprof-v1".into());
     }
-}
+    let initial_status = read_launcher_status(&session)?;
+    if initial_status.get("catalog_ready").and_then(Value::as_bool) != Some(true)
+        || initial_status
+            .get("catalog_games")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            == 0
+    {
+        return Err("screensaver benchmark requires an existing usable cached catalog".into());
+    }
+    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v2.manifest")
+        .ok_or("development platform manifest is missing")?;
+    let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable")?
+        .trim()
+        .to_string();
+    let original_ini =
+        remote_read(&session, "/media/fat/MiSTer.ini").ok_or("MiSTer.ini is unavailable")?;
+    let original_reply = exec_checked_output(
+        &session,
+        "query original benchmark display mode",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    let original_mode = parse_display_reply_active(original_reply.stdout.trim())?;
+    if parse_display_reply_pending(original_reply.stdout.trim())?.is_some() {
+        return Err("screensaver benchmark cannot start during a display transaction".into());
+    }
+    fs::create_dir_all(output_dir)?;
+    drop(session);
+    let _signal_guard = ScreensaverProfileSignalGuard::install();
 
-fn benchmark_prepare_command(_scenario: BenchmarkScenario) -> String {
-    let safety = platform_safety_script();
-    let reset = format!(
-        "rm -f {} {} {} {}",
-        benchmark_trace_path(true),
-        benchmark_trace_path(false),
-        benchmark_trace_complete_path(true),
-        benchmark_trace_complete_path(false)
-    );
-    shell_sequence([
-        "set -eu",
-        safety.as_str(),
-        reset.as_str(),
-        "mkdir -p /tmp/mister-magik",
-    ])
-}
+    let run_result = (|| -> Result<(Vec<Value>, String, String, String)> {
+        apply_confirmed_benchmark_display_mode(config, benchmark_mode)?;
+        let session = connect_with(&config.connection, 10)?;
+        let target_status = read_launcher_status(&session)?;
+        let framebuffer_size = remote_read(&session, "/sys/class/graphics/fb0/virtual_size")
+            .ok_or("device framebuffer size is unavailable")?
+            .trim()
+            .replace(',', "x");
+        let framebuffer_bits_per_pixel =
+            remote_read(&session, "/sys/class/graphics/fb0/bits_per_pixel")
+                .ok_or("device framebuffer depth is unavailable")?
+                .trim()
+                .to_string();
+        let output_route = target_status
+            .get("output_route")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+        if framebuffer_size != "1280x720" || framebuffer_bits_per_pixel != "16" {
+            return Err(format!(
+                "screensaver benchmark display is {framebuffer_size} at {framebuffer_bits_per_pixel} bpp, expected 1280x720 at 16 bpp"
+            )
+            .into());
+        }
+        drop(session);
+        let mut summaries = Vec::new();
+        for run in 1..=2 {
+            if screensaver_profile_interrupted() {
+                return Err("screensaver benchmark interrupted".into());
+            }
+            summaries.push(profile_installed_screensaver_run(config, output_dir, run)?);
+        }
+        Ok((
+            summaries,
+            framebuffer_size,
+            framebuffer_bits_per_pixel,
+            output_route,
+        ))
+    })();
+    let launcher_restore = restore_installed_screensaver_profile(config);
+    let display_restore = restore_benchmark_display_mode(config, &original_mode);
+    let restore_result = combine_benchmark_cleanup(launcher_restore, display_restore);
+    let (summaries, framebuffer_size, framebuffer_bits_per_pixel, output_route) =
+        match (run_result, restore_result) {
+            (Ok(result), Ok(())) => result,
+            (Err(error), Ok(())) => return Err(error),
+            (Ok(_), Err(error)) => {
+                return Err(format!("screensaver benchmark restore failed: {error}").into());
+            }
+            (Err(run_error), Err(restore_error)) => {
+                return Err(format!(
+                    "{run_error}; screensaver benchmark restore failed: {restore_error}"
+                )
+                .into());
+            }
+        };
 
-fn benchmark_restore_command() -> String {
-    let cleanup = format!(
-        "rm -f {} {} {} {}",
-        benchmark_trace_path(true),
-        benchmark_trace_path(false),
-        benchmark_trace_complete_path(true),
-        benchmark_trace_complete_path(false)
-    );
-    let safety = platform_safety_script();
-    shell_sequence(["set -eu", cleanup.as_str(), safety.as_str()])
-}
-
-fn run_launcher_benchmark(
-    session: &Session,
-    scenario: BenchmarkScenario,
-    warmup: bool,
-) -> Result<()> {
-    let options = benchmark_launcher_restart_options(scenario, warmup);
-    reset_benchmark_trace(session, warmup)?;
-    launcher_restart(session, &options)?;
-    wait_benchmark_trace(session, scenario, warmup)
-}
-
-fn reset_benchmark_trace(session: &Session, warmup: bool) -> Result<()> {
-    let trace = benchmark_trace_path(warmup);
-    let complete = benchmark_trace_complete_path(warmup);
+    let session = connect_with(&config.connection, 10)?;
+    let final_boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable after benchmark")?
+        .trim()
+        .to_string();
+    if final_boot_id != boot_id {
+        return Err("device rebooted during the in-place screensaver benchmark".into());
+    }
+    let final_manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v2.manifest")
+        .ok_or("development platform manifest is missing after benchmark")?;
+    if final_manifest != manifest {
+        return Err("installed platform manifest changed during benchmark".into());
+    }
+    let final_ini =
+        remote_read(&session, "/media/fat/MiSTer.ini").ok_or("MiSTer.ini is unavailable")?;
+    if final_ini != original_ini {
+        return Err("MiSTer.ini was not restored byte-for-byte after benchmark".into());
+    }
     exec_checked(
-        session,
-        "reset benchmark trace",
-        &format!("rm -f {trace} {complete}"),
-    )
-}
-
-fn wait_benchmark_trace(
-    session: &Session,
-    scenario: BenchmarkScenario,
-    warmup: bool,
-) -> Result<()> {
-    let trace = benchmark_trace_path(warmup);
-    let complete = benchmark_trace_complete_path(warmup);
-    exec_checked(
-        session,
-        "benchmark trace wait",
-        &benchmark_trace_wait_command(
-            trace,
-            complete,
-            if scenario == BenchmarkScenario::ScreensaverVelocity && !warmup {
-                120
-            } else {
-                20
-            },
-        ),
-    )
-}
-
-fn benchmark_launcher_restart_options(
-    scenario: BenchmarkScenario,
-    warmup: bool,
-) -> LauncherRestartOptions {
-    let trace = benchmark_trace_path(warmup);
-    let complete = benchmark_trace_complete_path(warmup);
-    let seconds = if warmup {
-        "2"
-    } else if scenario == BenchmarkScenario::ScreensaverVelocity {
-        "30"
-    } else {
-        "8"
-    };
-    let scenario_value = match scenario {
-        BenchmarkScenario::LauncherVelocity => "velocity-scroll",
-        BenchmarkScenario::FramebufferVelocity => "dirty-band",
-        BenchmarkScenario::ScreensaverVelocity => "screensaver-show",
-    };
-    let mut env_vars = vec![
-        (
-            "MISTER_LAUNCHER_BENCH_SCENARIO".into(),
-            scenario_value.into(),
-        ),
-        ("MISTER_PREVIEW_SCROLL_TRACE_SECS".into(), seconds.into()),
-        ("MISTER_PREVIEW_SCROLL_TRACE".into(), trace.into()),
-        (
-            "MISTER_PREVIEW_SCROLL_TRACE_COMPLETE".into(),
-            complete.into(),
-        ),
-        ("MISTER_PREVIEW_SCROLL_EXIT_AFTER_TRACE".into(), "1".into()),
-    ];
-    if scenario == BenchmarkScenario::ScreensaverVelocity {
-        env_vars.push(("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()));
-        env_vars.push((
-            "MISTER_LAUNCHER_INPUT_SCRIPT".into(),
-            "up,a,down,a,down,down,a".into(),
-        ));
-        env_vars.push((
-            "MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES".into(),
-            "12".into(),
-        ));
-        env_vars.push((
-            "MISTER_LAUNCHER_BENCH_AFTER_INPUT_SCRIPT".into(),
-            "1".into(),
-        ));
-        env_vars.push((
-            "MISTER_SCREENSAVER_SEED".into(),
-            "7640891576956012809".into(),
-        ));
-    } else {
-        env_vars.push(("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()));
-        env_vars.push(("MISTER_LAUNCHER_START_SYSTEM".into(), "arcade".into()));
-    }
-    LauncherRestartOptions {
-        env_vars,
-        timeout_secs: if scenario == BenchmarkScenario::ScreensaverVelocity {
-            45
-        } else {
-            30
+        &session,
+        "post-benchmark delivery health",
+        &delivery_health_command("dev")?,
+    )?;
+    let summary = json!({
+        "schema": "mister-magik-installed-screensaver-benchmark-v2",
+        "benchmark_contract": {
+            "startup_warmup_frames": SCREENSAVER_STARTUP_WARMUP_FRAMES,
+            "startup_frames_are_informational": true,
+            "steady_state_requires_zero_over_budget_frames": true,
+            "rationale": "screensaver activation may be late without being visible; once running it must not drop a frame",
         },
-        remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
-        ..LauncherRestartOptions::default()
-    }
+        "boot_id": boot_id,
+        "manifest": parse_manifest_evidence(&manifest),
+        "display": {
+            "benchmark_mode": benchmark_mode.id,
+            "original_mode": original_mode,
+            "output_route": output_route,
+            "framebuffer": framebuffer_size,
+            "bits_per_pixel": framebuffer_bits_per_pixel,
+        },
+        "runs": summaries,
+        "output_dir": output_dir,
+    });
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
 }
 
-fn benchmark_trace_wait_command(trace: &str, complete: &str, timeout_secs: u64) -> String {
-    format!(
-        "set -u; elapsed=0; while [ $elapsed -lt {timeout_secs} ]; do test -s {trace} && test -e {complete} && exit 0; sleep 1; elapsed=$((elapsed + 1)); done; printf 'benchmark_trace_diagnostic\\ttrace='; if test -e {trace}; then wc -l <{trace}; else printf 'missing\\n'; fi; printf 'benchmark_trace_diagnostic\\tcomplete='; if test -e {complete}; then printf 'present\\n'; else printf 'missing\\n'; fi; grep -E 'latch_readiness_tsv|latch_startup_tsv|launcher_bench_scenario|launcher_input_script|screensaver_startup|preview_scroll_trace|Text file busy|stream producer|done:|error|failed' /tmp/mister-magik-slint.log 2>/dev/null | tail -n 40 || true; exit 1"
-    )
-}
-
-#[derive(Clone, Copy)]
-struct ScreensaverBenchmarkMode {
-    id: &'static str,
-    output: &'static str,
-    framebuffer: &'static str,
-}
-
-const SCREENSAVER_BENCHMARK_MODES: [ScreensaverBenchmarkMode; 1] = [ScreensaverBenchmarkMode {
-    id: "hdmi-1280x720p60",
-    output: "1280x720",
-    framebuffer: "1280x720",
-}];
-
-fn restore_benchmark_display_if_pending(session: &Session) -> Result<()> {
-    let reply = exec_checked_output(
-        session,
+fn apply_confirmed_benchmark_display_mode(
+    config: &NativeDeviceConfig,
+    mode: DisplayMatrixMode,
+) -> Result<()> {
+    let session = connect_with(&config.connection, 10)?;
+    let current = exec_checked_output(
+        &session,
         "query benchmark display mode",
         &acknowledged_main_command("mister_magik_display_get_v1"),
     )?;
-    if parse_display_reply_pending(reply.stdout.trim())?.is_some() {
+    if parse_display_reply_pending(current.stdout.trim())?.is_some() {
+        return Err("screensaver benchmark display transaction is already pending".into());
+    }
+    let active = parse_display_reply_active(current.stdout.trim())?;
+    let ready = wait_launcher_ready(&session, Instant::now(), Duration::from_secs(15))?;
+    if active == mode.id {
+        validate_live_display_mode(&session, mode)?;
+        return Ok(());
+    }
+    exec_checked(
+        &session,
+        "apply benchmark display mode",
+        &acknowledged_main_command(&format!(
+            "mister_magik_display_apply_headless_v1 mode={}",
+            mode.id
+        )),
+    )?;
+    drop(session);
+    let session = connect_with(&config.connection, 10)?;
+    wait_launcher_ready_after(
+        &session,
+        ready.launcher_pid,
+        Instant::now(),
+        Duration::from_secs(15),
+    )?;
+    validate_live_display_mode(&session, mode)?;
+    exec_checked(
+        &session,
+        "confirm benchmark display mode",
+        &acknowledged_main_command("mister_magik_display_confirm_v1"),
+    )?;
+    wait_display_transaction_idle(&session, Duration::from_secs(15))
+}
+
+fn restore_benchmark_display_mode(config: &NativeDeviceConfig, original_mode: &str) -> Result<()> {
+    let session = connect_with(&config.connection, 10)?;
+    let ready = wait_launcher_ready(&session, Instant::now(), Duration::from_secs(15))?;
+    let state = exec_checked_output(
+        &session,
+        "query benchmark display mode for restore",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    if parse_display_reply_pending(state.stdout.trim())?.is_some() {
         exec_checked(
-            session,
-            "rollback benchmark display mode",
+            &session,
+            "cancel pending benchmark display mode",
             &acknowledged_main_command("mister_magik_display_cancel_v1"),
         )?;
-        wait_launcher_ready(session, Instant::now(), Duration::from_secs(15))?;
+        drop(session);
+        let session = connect_with(&config.connection, 10)?;
+        wait_launcher_ready_after(
+            &session,
+            ready.launcher_pid,
+            Instant::now(),
+            Duration::from_secs(15),
+        )?;
+        drop(session);
+    } else {
+        drop(session);
     }
-    Ok(())
-}
 
-fn wait_for_benchmark_reboot(connection: &ConnectionConfig) -> Result<()> {
-    if !wait_down_with(connection, 40.0) {
-        return Err("screensaver benchmark did not observe the device reboot".into());
-    }
-    if wait_up_with(connection, 120.0)? != 0 {
-        return Err("screensaver benchmark device did not return after reboot".into());
-    }
-    let session = connect_with(connection, 10)?;
-    wait_launcher_ready(&session, Instant::now(), Duration::from_secs(60))?;
-    Ok(())
-}
-
-fn clear_screensaver_benchmark_env(connection: &ConnectionConfig) -> Result<()> {
-    let session = connect_with(connection, 10)?;
-    prepare_launcher_env(
+    let session = connect_with(&config.connection, 10)?;
+    let state = exec_checked_output(
         &session,
-        &LauncherRestartOptions {
-            clear_env: true,
+        "verify benchmark display mode before restore",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    if parse_display_reply_active(state.stdout.trim())? == original_mode {
+        return Ok(());
+    }
+    let ready = wait_launcher_ready(&session, Instant::now(), Duration::from_secs(15))?;
+    exec_checked(
+        &session,
+        "apply original benchmark display mode",
+        &acknowledged_main_command(&format!(
+            "mister_magik_display_apply_headless_v1 mode={original_mode}"
+        )),
+    )?;
+    drop(session);
+    let session = connect_with(&config.connection, 10)?;
+    wait_launcher_ready_after(
+        &session,
+        ready.launcher_pid,
+        Instant::now(),
+        Duration::from_secs(15),
+    )?;
+    if let Some(mode) = DISPLAY_MATRIX_MODES
+        .iter()
+        .find(|mode| mode.id == original_mode)
+        .copied()
+    {
+        validate_live_display_mode(&session, mode)?;
+    }
+    exec_checked(
+        &session,
+        "confirm original benchmark display mode",
+        &acknowledged_main_command("mister_magik_display_confirm_v1"),
+    )?;
+    wait_display_transaction_idle(&session, Duration::from_secs(15))?;
+    let restored = exec_checked_output(
+        &session,
+        "verify restored benchmark display mode",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    let active = parse_display_reply_active(restored.stdout.trim())?;
+    if active != original_mode {
+        return Err(format!(
+            "screensaver benchmark restored display mode {active}, expected {original_mode}"
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn combine_benchmark_cleanup(first: Result<()>, second: Result<()>) -> Result<()> {
+    match (first, second) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+        (Err(first), Err(second)) => {
+            Err(format!("{first}; display restore failed: {second}").into())
+        }
+    }
+}
+
+fn profile_installed_screensaver_run(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+    run: usize,
+) -> Result<Value> {
+    let remote_svg = format!("{SCREENSAVER_PROFILE_REMOTE_DIR}/run-{run}.svg");
+    let remote_folded = format!("{SCREENSAVER_PROFILE_REMOTE_DIR}/run-{run}.folded");
+    let remote_complete = format!("{SCREENSAVER_PROFILE_REMOTE_DIR}/run-{run}.json");
+    let session = connect_with(&config.connection, 10)?;
+    exec_checked(
+        &session,
+        "reset screensaver profile artifacts",
+        &format!(
+            "set -eu; mkdir -p {0}; rm -f {1} {2} {3}",
+            sh(SCREENSAVER_PROFILE_REMOTE_DIR),
+            sh(&remote_svg),
+            sh(&remote_folded),
+            sh(&remote_complete)
+        ),
+    )?;
+    restart_launcher_with_one_shot_env(
+        &session,
+        LauncherRestartOptions {
+            env_vars: vec![
+                ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+                ("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()),
+                (
+                    "MISTER_LAUNCHER_INPUT_SCRIPT".into(),
+                    "up,a,down,a,down,down,a".into(),
+                ),
+                (
+                    "MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES".into(),
+                    "60".into(),
+                ),
+                ("MISTER_PPROF".into(), "1".into()),
+                ("MISTER_PPROF_TRIGGER".into(), "screensaver".into()),
+                ("MISTER_PPROF_DURATION_SECS".into(), "30".into()),
+                ("MISTER_PPROF_HZ".into(), "99".into()),
+                ("MISTER_PPROF_OUT".into(), remote_svg.clone()),
+                ("MISTER_PPROF_FOLDED_OUT".into(), remote_folded.clone()),
+                ("MISTER_PPROF_COMPLETE".into(), remote_complete.clone()),
+            ],
+            timeout_secs: 45,
             remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
             ..LauncherRestartOptions::default()
         },
     )?;
-    Ok(())
-}
-
-fn run_screensaver_boot_benchmark(connection: &ConnectionConfig) -> Result<String> {
-    let session = connect_with(connection, 10)?;
-    let display_reply = exec_checked_output(
-        &session,
-        "query benchmark display mode",
-        &acknowledged_main_command("mister_magik_display_get_v1"),
-    )?;
-    if parse_display_reply_pending(display_reply.stdout.trim())?.is_some() {
-        return Err("screensaver benchmark cannot start with a pending display transaction".into());
-    }
     drop(session);
 
-    let mut output = String::new();
-    let run_result = (|| -> Result<()> {
-        for mode in SCREENSAVER_BENCHMARK_MODES {
-            let session = connect_with(connection, 10)?;
-            reset_benchmark_trace(&session, false)?;
-            prepare_launcher_env(
-                &session,
-                &benchmark_launcher_restart_options(BenchmarkScenario::ScreensaverVelocity, false),
-            )?;
-            edit_remote_ini(&session, IniEdit::MenuMode("0".into()), false)?;
-            issue_reboot(&session, RebootMode::Raw)?;
-            drop(session);
-            wait_for_benchmark_reboot(connection)?;
+    let telemetry =
+        agent_telemetry_until_screensaver_profile_complete(&config.agent, Duration::from_secs(50))?;
+    let session = connect_with(&config.connection, 10)?;
+    let metadata = remote_read(&session, &remote_complete)
+        .ok_or("screensaver profile completion metadata is missing")?;
+    let metadata_value: Value = serde_json::from_str(metadata.trim())?;
+    if metadata_value.get("state").and_then(Value::as_str) != Some("complete")
+        || metadata_value
+            .get("sample_hits")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            <= 0
+    {
+        return Err(format!("screensaver profile run {run} produced no CPU samples").into());
+    }
+    let svg = remote_read(&session, &remote_svg)
+        .filter(|text| !text.is_empty())
+        .ok_or("screensaver profile SVG is missing")?;
+    let folded = remote_read(&session, &remote_folded)
+        .filter(|text| !text.is_empty())
+        .ok_or("screensaver profile folded stacks are missing")?;
+    fs::write(output_dir.join(format!("run-{run}.svg")), svg)?;
+    fs::write(output_dir.join(format!("run-{run}.folded")), folded)?;
+    fs::write(
+        output_dir.join(format!("run-{run}-profile.json")),
+        format!("{}\n", serde_json::to_string_pretty(&metadata_value)?),
+    )?;
+    let telemetry_text = telemetry
+        .iter()
+        .map(serde_json::to_string)
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .join("\n");
+    fs::write(
+        output_dir.join(format!("run-{run}-telemetry.jsonl")),
+        format!("{telemetry_text}\n"),
+    )?;
+    summarize_screensaver_telemetry(run, &telemetry, metadata_value)
+}
 
-            let session = connect_with(connection, 10)?;
-            let active_reply = exec_checked_output(
-                &session,
-                "verify screensaver benchmark boot display mode",
-                &acknowledged_main_command("mister_magik_display_get_v1"),
-            )?;
-            let active = parse_display_reply_active(active_reply.stdout.trim())?;
-            if active != mode.id {
-                return Err(format!(
-                    "screensaver benchmark booted {active}, expected {}",
-                    mode.id
-                )
-                .into());
-            }
-            wait_benchmark_trace(&session, BenchmarkScenario::ScreensaverVelocity, false)?;
-            let trace = remote_read(&session, benchmark_trace_path(false))
-                .ok_or("screensaver benchmark trace is missing")?;
-            output.push_str(&format!(
-                "benchmark_resolution\tmode={}\toutput={}\tframebuffer={}\n",
-                mode.id, mode.output, mode.framebuffer
-            ));
-            output.push_str(&trace);
-            if !trace.ends_with('\n') {
-                output.push('\n');
+fn restart_launcher_with_one_shot_env(
+    session: &Session,
+    options: LauncherRestartOptions,
+) -> Result<()> {
+    if options.clear_env || options.env_vars.is_empty() {
+        return Err("one-shot launcher restart requires environment variables".into());
+    }
+    let parent = remote_parent_dir(&options.remote_env)?;
+    let out = exec(session, &create_dir_command(parent), true)?;
+    if let Some(error) = exec_failure_message("create one-shot launcher env parent", &out) {
+        return Err(error.into());
+    }
+    put_bytes(
+        session,
+        &options.remote_env,
+        one_shot_launcher_env_text(&options.env_vars, &options.remote_env).as_bytes(),
+    )?;
+    let started = Instant::now();
+    let restart_result = issue_launcher_restart(session).and_then(|()| {
+        wait_launcher_ready(session, started, Duration::from_secs(options.timeout_secs)).map(|_| ())
+    });
+    let clear_result = prepare_launcher_env(
+        session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: options.remote_env.clone(),
+            ..LauncherRestartOptions::default()
+        },
+    );
+    match (restart_result, clear_result) {
+        (Ok(()), Ok(_)) => Ok(()),
+        (Err(error), Ok(_)) => Err(error),
+        (Ok(()), Err(error)) => {
+            Err(format!("one-shot launcher env cleanup failed: {error}").into())
+        }
+        (Err(restart_error), Err(clear_error)) => Err(format!(
+            "{restart_error}; one-shot launcher env cleanup failed: {clear_error}"
+        )
+        .into()),
+    }
+}
+
+fn one_shot_launcher_env_text(vars: &[(String, String)], remote_env: &str) -> String {
+    let mut text = launcher_env_text(vars);
+    text.push_str("rm -f ");
+    text.push_str(&shell_export_quote(remote_env));
+    text.push('\n');
+    text
+}
+
+fn restore_installed_screensaver_profile(config: &NativeDeviceConfig) -> Result<()> {
+    let session = connect_with(&config.connection, 10)?;
+    let cleanup = format!(
+        "set -eu; rm -f {env} /tmp/mister-magik/realtime-frame-analytics; rm -rf {profiles}",
+        env = sh(DEVELOPMENT_LAUNCHER_ENV_REMOTE),
+        profiles = sh(SCREENSAVER_PROFILE_REMOTE_DIR)
+    );
+    let cleanup_result = exec_checked(&session, "screensaver benchmark cleanup", &cleanup);
+    let restart_result = launcher_restart(
+        &session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            timeout_secs: 45,
+            ..LauncherRestartOptions::default()
+        },
+    );
+    let final_cleanup_result = exec_checked(
+        &session,
+        "screensaver benchmark final cleanup",
+        &format!(
+            "{cleanup}; test ! -e {env}; test ! -e /tmp/mister-magik/realtime-frame-analytics; test ! -e {profiles}",
+            env = sh(DEVELOPMENT_LAUNCHER_ENV_REMOTE),
+            profiles = sh(SCREENSAVER_PROFILE_REMOTE_DIR)
+        ),
+    );
+    cleanup_result?;
+    restart_result?;
+    final_cleanup_result
+}
+
+fn read_launcher_status(session: &Session) -> Result<Value> {
+    let text = remote_read(session, SLINT_STATUS_REMOTE).ok_or("launcher status is missing")?;
+    serde_json::from_str(&text).map_err(Into::into)
+}
+
+fn parse_manifest_evidence(manifest: &str) -> Value {
+    let values = manifest
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .filter(|(key, _)| {
+            matches!(
+                *key,
+                "magik_revision"
+                    | "gui_sha256"
+                    | "main_sha256"
+                    | "scanout_module_sha256"
+                    | "latch_rbf_sha256"
+            )
+        })
+        .map(|(key, value)| (key.to_string(), Value::String(value.to_string())))
+        .collect();
+    Value::Object(values)
+}
+
+fn summarize_screensaver_telemetry(
+    run: usize,
+    telemetry: &[Value],
+    metadata: Value,
+) -> Result<Value> {
+    let active = telemetry
+        .iter()
+        .filter(|sample| {
+            matches!(
+                sample
+                    .pointer("/launcher/screensaver_profile_state")
+                    .and_then(Value::as_str),
+                Some("active" | "complete")
+            )
+        })
+        .collect::<Vec<_>>();
+    if active.is_empty() {
+        return Err(format!("screensaver profile run {run} has no active telemetry").into());
+    }
+    if active.iter().any(|sample| {
+        sample
+            .pointer("/launcher/catalog_refresh_policy")
+            .and_then(Value::as_str)
+            != Some("off")
+            || sample
+                .pointer("/launcher/catalog_worker_enabled")
+                .and_then(Value::as_bool)
+                != Some(false)
+    }) {
+        return Err(
+            format!("screensaver profile run {run} did not disable catalog refresh").into(),
+        );
+    }
+    if active.iter().any(|sample| {
+        sample
+            .pointer("/launcher/present_backend")
+            .and_then(Value::as_str)
+            != Some("fpga-vblank-latch-hidden")
+            || sample
+                .pointer("/launcher/present_status")
+                .and_then(Value::as_str)
+                != Some("ok")
+    }) {
+        return Err(
+            format!("screensaver profile run {run} left the production present path").into(),
+        );
+    }
+
+    let mut frames = std::collections::BTreeMap::new();
+    for sample in &active {
+        if let Some(recent) = sample
+            .pointer("/launcher/frame_budget/recent_frames")
+            .and_then(Value::as_array)
+        {
+            for frame in recent {
+                if let Some(id) = frame.get("frame").and_then(Value::as_u64) {
+                    frames.insert(id, frame.clone());
+                }
             }
         }
-        Ok(())
-    })();
-
-    let clear_result = clear_screensaver_benchmark_env(connection);
-    if let Err(error) = run_result {
-        return match clear_result {
-            Ok(()) => Err(error),
-            Err(clear_error) => {
-                Err(format!("{error}; benchmark environment cleanup failed: {clear_error}").into())
-            }
-        };
     }
-    clear_result?;
-    Ok(output)
+    if frames.is_empty() {
+        return Err(format!("screensaver profile run {run} has no frame telemetry").into());
+    }
+    let screensaver_frames = frames
+        .values()
+        .filter(|frame| frame.get("screensaver_active").and_then(Value::as_bool) == Some(true))
+        .collect::<Vec<_>>();
+    if screensaver_frames.len() <= SCREENSAVER_STARTUP_WARMUP_FRAMES {
+        return Err(format!(
+            "screensaver profile run {run} has no steady-state screensaver frame telemetry"
+        )
+        .into());
+    }
+    let (startup, steady) = screensaver_frames.split_at(SCREENSAVER_STARTUP_WARMUP_FRAMES);
+    let mut wall = steady
+        .iter()
+        .filter_map(|frame| frame.get("wall_us").and_then(Value::as_u64))
+        .collect::<Vec<_>>();
+    let mut work = steady
+        .iter()
+        .map(|frame| {
+            ["prepare_us", "render_us", "custom_draw_us", "present_us"]
+                .iter()
+                .filter_map(|key| frame.get(*key).and_then(Value::as_u64))
+                .sum::<u64>()
+        })
+        .collect::<Vec<_>>();
+    let refresh_period_us = steady
+        .iter()
+        .filter_map(|frame| frame.get("vsync_period_us").and_then(Value::as_u64))
+        .find(|value| *value > 0)
+        .unwrap_or(16_667);
+    let vsync_misses = steady
+        .iter()
+        .filter(|frame| {
+            frame
+                .get("vsync_miss_streak")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                > 0
+        })
+        .count();
+    let over_budget_frames = steady
+        .iter()
+        .filter(|frame| {
+            frame
+                .get("wall_us")
+                .and_then(Value::as_u64)
+                .unwrap_or(u64::MAX)
+                > refresh_period_us
+        })
+        .count();
+    let startup_max_wall_us = startup
+        .iter()
+        .filter_map(|frame| frame.get("wall_us").and_then(Value::as_u64))
+        .max()
+        .unwrap_or(0);
+    let startup_over_budget_frames = startup
+        .iter()
+        .filter(|frame| {
+            frame
+                .get("wall_us")
+                .and_then(Value::as_u64)
+                .unwrap_or(u64::MAX)
+                > refresh_period_us
+        })
+        .count();
+    let first_present_errors = active
+        .first()
+        .and_then(|sample| sample.pointer("/launcher/frame_budget/error_total"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let last_present_errors = active
+        .last()
+        .and_then(|sample| sample.pointer("/launcher/frame_budget/error_total"))
+        .and_then(Value::as_u64)
+        .unwrap_or(first_present_errors);
+    wall.sort_unstable();
+    work.sort_unstable();
+    let profile_duration_secs = metadata
+        .get("duration_secs")
+        .and_then(Value::as_f64)
+        .filter(|duration| *duration > 0.0)
+        .ok_or_else(|| format!("screensaver profile run {run} has no valid duration"))?;
+    let average_fps = steady.len() as f64 / profile_duration_secs;
+    let first_drop = active
+        .first()
+        .and_then(|sample| sample.pointer("/launcher/latch_drop_count"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let last_drop = active
+        .last()
+        .and_then(|sample| sample.pointer("/launcher/latch_drop_count"))
+        .and_then(Value::as_u64)
+        .unwrap_or(first_drop);
+    Ok(json!({
+        "run": run,
+        "captured_frames": frames.len(),
+        "screensaver_frames": screensaver_frames.len(),
+        "startup": {
+            "ignored_frames": startup.len(),
+            "max_wall_us": startup_max_wall_us,
+            "over_budget_frames": startup_over_budget_frames,
+            "gated": false,
+        },
+        "steady_state": {
+            "frames": steady.len(),
+            "average_fps": average_fps,
+            "p99_wall_us": percentile_99(&wall),
+            "max_wall_us": wall.last().copied().unwrap_or(0),
+            "p99_work_us": percentile_99(&work),
+            "refresh_period_us": refresh_period_us,
+            "over_budget_frames": over_budget_frames,
+            "vsync_misses": vsync_misses,
+        },
+        "present_errors": last_present_errors.saturating_sub(first_present_errors),
+        "latch_drop_delta": last_drop.saturating_sub(first_drop),
+        "profile": metadata,
+    }))
+}
+
+fn percentile_99(values: &[u64]) -> u64 {
+    if values.is_empty() {
+        return 0;
+    }
+    values[(values.len() * 99).div_ceil(100).saturating_sub(1)]
 }
 
 fn action_uses_device(action: &str) -> bool {
@@ -9270,6 +9487,17 @@ video_mode=14
     }
 
     #[test]
+    fn one_shot_launcher_env_removes_itself_after_being_sourced() {
+        let text = one_shot_launcher_env_text(
+            &[("MISTER_CATALOG_REFRESH".into(), "off".into())],
+            DEVELOPMENT_LAUNCHER_ENV_REMOTE,
+        );
+
+        assert!(text.contains("export MISTER_CATALOG_REFRESH='off'"));
+        assert!(text.ends_with("rm -f '/media/fat/mister-magik-dev/launcher.env'\n"));
+    }
+
+    #[test]
     fn library_db_query_preserves_statement_for_remote_read_only_validation() {
         let args = vec![
             "--path".to_string(),
@@ -10939,34 +11167,11 @@ H: Handlers=event3 js0"#
         assert!(facts.contains("arming_files"));
         let repair = safe_repair_command();
         assert!(repair.contains("agent-benchmark.tsv"));
+        assert!(repair.contains("realtime-frame-analytics"));
+        assert!(repair.contains("screensaver-profile"));
         assert!(repair.contains("rm -f /media/fat/mister-magik/launcher.env"));
         assert!(repair.contains("/media/fat/mister-magik-dev/launcher.env"));
         assert!(repair.contains("/media/fat/mister-magik-dev/rebuild-on-next-boot"));
-    }
-
-    #[test]
-    fn benchmark_prepare_composes_one_valid_safety_command() {
-        assert!(!platform_safety_script().trim_end().ends_with(';'));
-        for command in [
-            benchmark_prepare_command(BenchmarkScenario::ScreensaverVelocity),
-            benchmark_restore_command(),
-        ] {
-            assert!(!command.contains(";;"));
-            let syntax = Command::new("sh")
-                .args(["-n", "-c"])
-                .arg(&command)
-                .output()
-                .unwrap();
-            assert!(
-                syntax.status.success(),
-                "generated command failed shell parsing: {}",
-                String::from_utf8_lossy(&syntax.stderr)
-            );
-        }
-        assert!(
-            benchmark_prepare_command(BenchmarkScenario::ScreensaverVelocity)
-                .contains(benchmark_trace_complete_path(false))
-        );
     }
 
     #[test]
@@ -10976,81 +11181,76 @@ H: Handlers=event3 js0"#
     }
 
     #[test]
-    fn benchmark_trace_timeout_preserves_actionable_device_evidence() {
-        let command = benchmark_trace_wait_command("/tmp/trace", "/tmp/complete", 120);
+    fn installed_screensaver_summary_requires_catalog_off_and_production_present() {
+        let frame = |id: u64, wall_us: u64| {
+            json!({
+                "frame": id,
+                "screensaver_active": true,
+                "wall_us": wall_us,
+                "prepare_us": 1_000,
+                "render_us": 5_000,
+                "custom_draw_us": 1_000,
+                "present_us": 500,
+                "vsync_period_us": 16_667,
+                "vsync_miss_streak": 0
+            })
+        };
+        let telemetry = [json!({
+            "launcher": {
+                "screensaver_profile_state": "active",
+                "catalog_refresh_policy": "off",
+                "catalog_worker_enabled": false,
+                "present_backend": "fpga-vblank-latch-hidden",
+                "present_status": "ok",
+                "latch_drop_count": 2,
+                "frame_budget": {
+                    "error_total": 0,
+                    "recent_frames": [
+                        frame(1, 500_000),
+                        frame(2, 40_000),
+                        frame(3, 20_000),
+                        frame(4, 16_000),
+                        frame(5, 16_667)
+                    ]
+                }
+            }
+        })];
+        let summary = summarize_screensaver_telemetry(
+            1,
+            &telemetry,
+            json!({"state": "complete", "duration_secs": 1.0}),
+        )
+        .unwrap();
+        assert_eq!(summary["startup"]["ignored_frames"], 3);
+        assert_eq!(summary["startup"]["max_wall_us"], 500_000);
+        assert_eq!(summary["startup"]["over_budget_frames"], 3);
+        assert_eq!(summary["steady_state"]["frames"], 2);
+        assert_eq!(summary["steady_state"]["average_fps"], 2.0);
+        assert_eq!(summary["steady_state"]["over_budget_frames"], 0);
+        assert_eq!(summary["latch_drop_delta"], 0);
 
-        assert!(command.contains("benchmark_trace_diagnostic"));
-        assert!(command.contains("$elapsed -lt 120"));
-        assert!(command.contains("wc -l"));
-        assert!(command.contains("latch_readiness_tsv"));
-        assert!(command.contains("latch_startup_tsv"));
-        assert!(command.contains("launcher_bench_scenario"));
-        assert!(command.contains("/tmp/mister-magik-slint.log"));
+        let mut invalid = telemetry[0].clone();
+        invalid["launcher"]["catalog_refresh_policy"] = json!("auto");
+        assert!(
+            summarize_screensaver_telemetry(
+                1,
+                &[invalid],
+                json!({"state": "complete", "duration_secs": 1.0})
+            )
+            .is_err()
+        );
     }
 
     #[test]
-    fn screensaver_benchmark_navigates_from_home_and_runs_for_thirty_seconds() {
-        let options =
-            benchmark_launcher_restart_options(BenchmarkScenario::ScreensaverVelocity, false);
+    fn installed_benchmark_capability_accepts_the_runtime_log_prefix() {
+        let capability = last_json_line(
+            "mister-magik-fb [benchmark-capabilities] (arch=arm)\n\
+             {\"screensaver-pprof-v1\":true}\n",
+        )
+        .unwrap();
 
-        assert_eq!(options.remote_env, DEVELOPMENT_LAUNCHER_ENV_REMOTE);
-        assert_eq!(options.timeout_secs, 45);
-        assert!(
-            options
-                .env_vars
-                .contains(&("MISTER_PREVIEW_SCROLL_TRACE_SECS".into(), "30".into()))
-        );
-        assert!(
-            !options
-                .env_vars
-                .iter()
-                .any(|(key, _)| key == "MISTER_SCREENSAVER_START_ACTIVE")
-        );
-        assert!(
-            options
-                .env_vars
-                .contains(&("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()))
-        );
-        assert!(options.env_vars.contains(&(
-            "MISTER_LAUNCHER_INPUT_SCRIPT".into(),
-            "up,a,down,a,down,down,a".into()
-        )));
-        assert!(options.env_vars.contains(&(
-            "MISTER_LAUNCHER_BENCH_AFTER_INPUT_SCRIPT".into(),
-            "1".into()
-        )));
-        assert!(
-            !options
-                .env_vars
-                .iter()
-                .any(|(key, _)| key == "MISTER_CATALOG_REFRESH")
-        );
-        assert!(options.env_vars.contains(&(
-            "MISTER_SCREENSAVER_SEED".into(),
-            "7640891576956012809".into()
-        )));
-    }
-
-    #[test]
-    fn screensaver_benchmark_owns_only_the_1280_by_720_mode() {
-        assert_eq!(SCREENSAVER_BENCHMARK_MODES.len(), 1);
-        assert_eq!(SCREENSAVER_BENCHMARK_MODES[0].id, "hdmi-1280x720p60");
-        assert_eq!(SCREENSAVER_BENCHMARK_MODES[0].output, "1280x720");
-        assert_eq!(SCREENSAVER_BENCHMARK_MODES[0].framebuffer, "1280x720");
-    }
-
-    #[test]
-    fn launcher_velocity_benchmark_keeps_catalog_refresh_enabled() {
-        let options =
-            benchmark_launcher_restart_options(BenchmarkScenario::LauncherVelocity, false);
-
-        assert_eq!(options.remote_env, DEVELOPMENT_LAUNCHER_ENV_REMOTE);
-        assert!(
-            !options
-                .env_vars
-                .iter()
-                .any(|(key, _)| key == "MISTER_CATALOG_REFRESH")
-        );
+        assert_eq!(capability["screensaver-pprof-v1"], true);
+        assert!(last_json_line("no structured report").is_none());
     }
 
     #[test]

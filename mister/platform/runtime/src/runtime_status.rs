@@ -128,6 +128,7 @@ pub struct FrameBudgetStatus {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FrameBudgetRecentFrame {
     pub frame: u64,
+    pub screensaver_active: bool,
     pub wall_us: u64,
     pub prepare_us: u64,
     pub render_us: u64,
@@ -141,6 +142,7 @@ pub struct FrameBudgetRecentFrame {
     pub cpu_present_us: u64,
     pub process_cpu_us: u64,
     pub vsync_source: &'static str,
+    pub vsync_period_us: u64,
     pub vsync_miss_streak: u32,
 }
 
@@ -411,6 +413,7 @@ fn frame_budget_status_value(status: &FrameBudgetStatus) -> Value {
 fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
     json!({
         "frame": frame.frame,
+        "screensaver_active": frame.screensaver_active,
         "wall_us": frame.wall_us,
         "prepare_us": frame.prepare_us,
         "render_us": frame.render_us,
@@ -424,6 +427,7 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
         "cpu_present_us": frame.cpu_present_us,
         "process_cpu_us": frame.process_cpu_us,
         "vsync_source": frame.vsync_source,
+        "vsync_period_us": frame.vsync_period_us,
         "vsync_miss_streak": frame.vsync_miss_streak,
     })
 }
@@ -730,6 +734,7 @@ mod tests {
                     window_present_us: 900,
                     recent_frames: vec![FrameBudgetRecentFrame {
                         frame: 42,
+                        screensaver_active: true,
                         wall_us: 18_000,
                         prepare_us: 100,
                         render_us: 2_000,
@@ -743,6 +748,7 @@ mod tests {
                         cpu_present_us: 5,
                         process_cpu_us: 75,
                         vsync_source: "vsync",
+                        vsync_period_us: 16_667,
                         vsync_miss_streak: 1,
                     }],
                     slow_frames: vec![FrameBudgetSlowFrame {
@@ -805,6 +811,14 @@ mod tests {
         assert_eq!(value["frame_budget"]["over_budget_total"], 2);
         assert_eq!(value["frame_budget"]["window_present_us"], 900);
         assert_eq!(value["frame_budget"]["recent_frames"][0]["frame"], 42);
+        assert_eq!(
+            value["frame_budget"]["recent_frames"][0]["screensaver_active"],
+            true
+        );
+        assert_eq!(
+            value["frame_budget"]["recent_frames"][0]["vsync_period_us"],
+            16_667
+        );
         assert_eq!(
             value["frame_budget"]["recent_frames"][0]["process_cpu_us"],
             75

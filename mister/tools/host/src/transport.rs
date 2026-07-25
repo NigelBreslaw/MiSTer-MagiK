@@ -10,20 +10,6 @@ pub enum Layout {
     Public,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BenchmarkScenario {
-    LauncherVelocity,
-    FramebufferVelocity,
-    ScreensaverVelocity,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ColdBenchmarkScenario {
-    CatalogLifecycle,
-    PreviewColdStart,
-    LibraryPersistence,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DeviceRequest {
     Discover,
@@ -45,26 +31,11 @@ pub enum DeviceRequest {
         stage: PathBuf,
         expected_sha256: String,
     },
-    SnapshotBenchmarkRuntime {
-        remote: String,
-    },
-    DeployBenchmarkRuntime {
-        local: PathBuf,
-        remote: String,
-    },
-    RollbackBenchmarkRuntime {
-        remote: String,
+    ProfileInstalledScreensaver {
+        output_dir: PathBuf,
+        display_mode: String,
     },
     VerifyHealth(Layout),
-    PrepareBenchmark(BenchmarkScenario),
-    WarmupBenchmark(BenchmarkScenario),
-    CaptureBenchmark(BenchmarkScenario),
-    RestoreBenchmark,
-    SnapshotBenchmarkData(ColdBenchmarkScenario),
-    EstablishBenchmarkFixture(ColdBenchmarkScenario),
-    ExecuteColdBenchmark(ColdBenchmarkScenario),
-    CollectBenchmarkEvents(ColdBenchmarkScenario),
-    RestoreBenchmarkData(ColdBenchmarkScenario),
     BeginReleaseQualification,
     QualifyReleaseRuntime,
     QualifyReleaseCatalog,
@@ -97,19 +68,8 @@ impl DeviceRequest {
             Self::FetchVerifiedDevelopmentManager { .. } => "fetch-verified-development-manager",
             Self::DeliverRuntimeTransaction { .. } => "deliver-runtime-transaction",
             Self::DeliverPlatformTransaction { .. } => "deliver-platform-transaction",
-            Self::SnapshotBenchmarkRuntime { .. } => "snapshot-benchmark-runtime",
-            Self::DeployBenchmarkRuntime { .. } => "deploy-benchmark-runtime",
-            Self::RollbackBenchmarkRuntime { .. } => "rollback-benchmark-runtime",
+            Self::ProfileInstalledScreensaver { .. } => "profile-installed-screensaver",
             Self::VerifyHealth(_) => "verify-health",
-            Self::PrepareBenchmark(_) => "prepare-benchmark",
-            Self::WarmupBenchmark(_) => "warmup-benchmark",
-            Self::CaptureBenchmark(_) => "capture-benchmark",
-            Self::RestoreBenchmark => "restore-benchmark",
-            Self::SnapshotBenchmarkData(_) => "snapshot-benchmark-data",
-            Self::EstablishBenchmarkFixture(_) => "establish-benchmark-fixture",
-            Self::ExecuteColdBenchmark(_) => "execute-cold-benchmark",
-            Self::CollectBenchmarkEvents(_) => "collect-benchmark-events",
-            Self::RestoreBenchmarkData(_) => "restore-benchmark-data",
             Self::BeginReleaseQualification => "begin-release-qualification",
             Self::QualifyReleaseRuntime => "qualify-release-runtime",
             Self::QualifyReleaseCatalog => "qualify-release-catalog",
@@ -258,23 +218,11 @@ mod tests {
                 stage: "s".into(),
                 expected_sha256: "a".repeat(64),
             },
-            DeviceRequest::SnapshotBenchmarkRuntime { remote: "r".into() },
-            DeviceRequest::DeployBenchmarkRuntime {
-                local: "l".into(),
-                remote: "r".into(),
+            DeviceRequest::ProfileInstalledScreensaver {
+                output_dir: "profiles".into(),
+                display_mode: "hdmi-1280x720p60".into(),
             },
-            DeviceRequest::RollbackBenchmarkRuntime { remote: "r".into() },
             DeviceRequest::VerifyHealth(Layout::Public),
-            DeviceRequest::PrepareBenchmark(BenchmarkScenario::LauncherVelocity),
-            DeviceRequest::WarmupBenchmark(BenchmarkScenario::FramebufferVelocity),
-            DeviceRequest::CaptureBenchmark(BenchmarkScenario::LauncherVelocity),
-            DeviceRequest::CaptureBenchmark(BenchmarkScenario::ScreensaverVelocity),
-            DeviceRequest::RestoreBenchmark,
-            DeviceRequest::SnapshotBenchmarkData(ColdBenchmarkScenario::CatalogLifecycle),
-            DeviceRequest::EstablishBenchmarkFixture(ColdBenchmarkScenario::PreviewColdStart),
-            DeviceRequest::ExecuteColdBenchmark(ColdBenchmarkScenario::LibraryPersistence),
-            DeviceRequest::CollectBenchmarkEvents(ColdBenchmarkScenario::CatalogLifecycle),
-            DeviceRequest::RestoreBenchmarkData(ColdBenchmarkScenario::PreviewColdStart),
             DeviceRequest::BeginReleaseQualification,
             DeviceRequest::QualifyReleaseRuntime,
             DeviceRequest::QualifyReleaseCatalog,
@@ -293,8 +241,16 @@ mod tests {
             DeviceRequest::CaptureFramebuffer,
         ];
         let labels: Vec<_> = requests.iter().map(DeviceRequest::label).collect();
-        assert_eq!(labels.len(), 35);
+        assert_eq!(labels.len(), 23);
         assert!(labels.iter().all(|label| !label.is_empty()));
+        assert_eq!(
+            labels
+                .iter()
+                .filter(|label| label.contains("benchmark") || label.contains("profile"))
+                .copied()
+                .collect::<Vec<_>>(),
+            ["profile-installed-screensaver"]
+        );
         assert!(!labels.contains(&"run"));
         assert!(!labels.contains(&"shell"));
     }
