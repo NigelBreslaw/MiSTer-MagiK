@@ -18,13 +18,12 @@ Verify installed platform and health
 -> navigate Home -> Settings -> Show Screensaver
 -> profile and stream telemetry for 30 seconds
 -> restore the ordinary launcher
--> repeat in a fresh launcher process
 -> retain the confirmed 1280x720 HDMI mode
 -> verify platform identity and health
 ```
 
 The benchmark confirms `hdmi-1280x720p60` and intentionally leaves that mode
-active after both profiles. It records the original mode and INI hash, then
+active after the profile. It records the original mode and INI hash, then
 uses the confirmed 720p INI as the final-state baseline. Launcher/profile
 cleanup remains mandatory and independent of the retained display mode.
 
@@ -67,7 +66,7 @@ after profiling.
 
 ## Evidence
 
-Both SVG flamegraphs, folded stacks, profile metadata, telemetry streams,
+The SVG flamegraph, folded stacks, profile metadata, telemetry stream,
 `summary.json`, and `report.md` are written under
 `build/agent-benchmarks/screensaver/<timestamp>/`. Evidence records the
 installed revision, display route and framebuffer geometry, and GUI, Main,

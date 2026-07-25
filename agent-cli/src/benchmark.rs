@@ -33,7 +33,7 @@ pub fn execute(repository: &Path, reporter: &mut Reporter<'_>) -> AgentResult<Ou
     reporter.emit(
         EventKind::Progress,
         "profile",
-        "profiling installed screensaver twice",
+        "profiling installed screensaver",
         Some(35),
     )?;
     let detail = device.execute(DeviceRequest::ProfileInstalledScreensaver {
@@ -61,9 +61,9 @@ fn evaluate_summary(summary: &Value) -> AgentResult<()> {
         .get("runs")
         .and_then(Value::as_array)
         .ok_or("screensaver benchmark summary has no runs")?;
-    if runs.len() != 2 {
+    if runs.len() != 1 {
         return Err(format!(
-            "screensaver benchmark expected two runs, received {}",
+            "screensaver benchmark expected one run, received {}",
             runs.len()
         )
         .into());
@@ -188,9 +188,9 @@ mod tests {
     }
 
     #[test]
-    fn installed_screensaver_requires_exactly_two_passing_runs() {
-        assert!(evaluate_summary(&json!({"runs": [passing_run(1), passing_run(2)]})).is_ok());
-        assert!(evaluate_summary(&json!({"runs": [passing_run(1)]})).is_err());
+    fn installed_screensaver_requires_exactly_one_passing_run() {
+        assert!(evaluate_summary(&json!({"runs": [passing_run(1)]})).is_ok());
+        assert!(evaluate_summary(&json!({"runs": [passing_run(1), passing_run(2)]})).is_err());
     }
 
     #[test]

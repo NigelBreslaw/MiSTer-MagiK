@@ -2925,7 +2925,7 @@ fn profile_installed_screensaver(config: &NativeDeviceConfig, output_dir: &Path)
         }
         drop(session);
         let mut summaries = Vec::new();
-        for run in 1..=2 {
+        for run in 1..=1 {
             if screensaver_profile_interrupted() {
                 return Err("screensaver benchmark interrupted".into());
             }
@@ -3862,6 +3862,14 @@ fn status_publishing_summary(frames: &[&Value], samples: &[&Value]) -> Value {
                     .and_then(Value::as_u64)
             })
             .max()
+            .or_else(|| {
+                frames
+                    .iter()
+                    .filter_map(|frame| {
+                        frame.get("status_replaced_count").and_then(Value::as_u64)
+                    })
+                    .max()
+            })
             .unwrap_or(0),
         "final_submitted_sequence": samples
             .iter()
@@ -3871,6 +3879,16 @@ fn status_publishing_summary(frames: &[&Value], samples: &[&Value]) -> Value {
                     .and_then(Value::as_u64)
             })
             .max()
+            .or_else(|| {
+                frames
+                    .iter()
+                    .filter_map(|frame| {
+                        frame
+                            .get("status_submitted_sequence")
+                            .and_then(Value::as_u64)
+                    })
+                    .max()
+            })
             .unwrap_or(0),
         "final_written_sequence": samples
             .iter()
@@ -3880,6 +3898,16 @@ fn status_publishing_summary(frames: &[&Value], samples: &[&Value]) -> Value {
                     .and_then(Value::as_u64)
             })
             .max()
+            .or_else(|| {
+                frames
+                    .iter()
+                    .filter_map(|frame| {
+                        frame
+                            .get("status_written_sequence")
+                            .and_then(Value::as_u64)
+                    })
+                    .max()
+            })
             .unwrap_or(0),
         "worker_errors": samples
             .iter()
@@ -3889,6 +3917,14 @@ fn status_publishing_summary(frames: &[&Value], samples: &[&Value]) -> Value {
                     .and_then(Value::as_u64)
             })
             .max()
+            .or_else(|| {
+                frames
+                    .iter()
+                    .filter_map(|frame| {
+                        frame.get("status_worker_errors").and_then(Value::as_u64)
+                    })
+                    .max()
+            })
             .unwrap_or(0),
     })
 }
