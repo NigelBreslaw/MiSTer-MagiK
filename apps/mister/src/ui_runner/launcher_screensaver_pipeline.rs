@@ -204,11 +204,14 @@ impl ScreensaverDirectRenderAhead {
         width: usize,
         height: usize,
         period_us: u64,
-        launcher_snapshot: Option<Vec<Rgb565Pixel>>,
+        launcher_snapshot_source: Option<&[Rgb565Pixel]>,
         fade_started: Option<Instant>,
     ) -> Self {
         let (grant_tx, grant_rx) = sync_channel(1);
         let (ready_tx, ready_rx) = sync_channel(1);
+        let (snapshot_allocated_tx, snapshot_allocated_rx) = sync_channel(1);
+        let (snapshot_initialized_tx, snapshot_initialized_rx) = sync_channel(1);
+        let snapshot_requested = launcher_snapshot_source.is_some();
         let period_us = Arc::new(AtomicU64::new(period_us.max(1)));
         let presentation_tick = Arc::new(AtomicU64::new(0));
         let cancelled = Arc::new(AtomicBool::new(false));
@@ -224,6 +227,18 @@ impl ScreensaverDirectRenderAhead {
                 mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
                     mister_magik_catalog::runtime_thread::RuntimeThreadRole::ScreensaverRenderer,
                 );
+                let launcher_snapshot = if snapshot_requested {
+                    let snapshot = vec![Rgb565Pixel(0); width.saturating_mul(height)];
+                    if snapshot_allocated_tx.send(snapshot).is_err() {
+                        return;
+                    }
+                    match snapshot_initialized_rx.recv() {
+                        Ok(snapshot) => Some(snapshot),
+                        Err(_) => return,
+                    }
+                } else {
+                    None
+                };
                 if let Err(error) = run_direct_render_ahead_worker(
                     renderer,
                     width,
@@ -240,6 +255,26 @@ impl ScreensaverDirectRenderAhead {
                 }
             })
             .expect("spawn direct hidden screensaver worker");
+        if let Some(source) = launcher_snapshot_source {
+            match snapshot_allocated_rx.recv() {
+                Ok(mut snapshot) if snapshot.len() == source.len() => {
+                    snapshot.copy_from_slice(source);
+                    let _ = snapshot_initialized_tx.send(snapshot);
+                }
+                Ok(snapshot) => {
+                    crate::ui_errln!(
+                        "screensaver: direct preview snapshot geometry mismatch allocated={} source={}",
+                        snapshot.len(),
+                        source.len()
+                    );
+                }
+                Err(_) => {
+                    crate::ui_errln!(
+                        "screensaver: direct preview worker stopped before snapshot allocation"
+                    );
+                }
+            }
+        }
         Self {
             grant_tx,
             ready_rx,

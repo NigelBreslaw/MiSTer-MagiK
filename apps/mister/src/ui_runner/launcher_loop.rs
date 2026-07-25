@@ -1124,6 +1124,18 @@ fn retain_or_defer_screensaver_buffer(
     }
 }
 
+fn screensaver_frame_was_presented(
+    copied_rows: u32,
+    accepted_screensaver_frame: bool,
+    status: LauncherPresentStatus,
+    copy_path: &str,
+) -> bool {
+    copied_rows > 0
+        || (accepted_screensaver_frame
+            && status == LauncherPresentStatus::Ok
+            && copy_path == LatchCopyPath::ExternalDirect.label())
+}
+
 fn home_repeat_benchmark_active(scenario: Option<LauncherBenchScenario>) -> bool {
     scenario == Some(LauncherBenchScenario::HomeRepeatHold)
 }
@@ -4506,9 +4518,10 @@ pub(super) fn run_launcher_loop(
                     );
                 }
                 if launcher_presenter.direct_hidden_slots_available(ui) {
+                    let launcher_snapshot_view = layer_target.cached_frame_view();
                     let launcher_snapshot = screensaver
                         .is_preview()
-                        .then(|| layer_target.cached_frame_view().pixels().to_vec());
+                        .then(|| launcher_snapshot_view.pixels());
                     screensaver_direct_pipeline = Some(ScreensaverDirectRenderAhead::start(
                         ready,
                         ui.render_w(),
@@ -5020,7 +5033,13 @@ pub(super) fn run_launcher_loop(
             first_vsync_logged = true;
             boot_analytics::event("first_vsync", format!("frame={frames}"));
         }
-        if presentation.copied_rows > 0 {
+        let screensaver_frame_presented = screensaver_frame_was_presented(
+            presentation.copied_rows,
+            accepted_screensaver_frame,
+            presentation.main_present_status,
+            presentation.main_present_copy_path,
+        );
+        if screensaver_frame_presented {
             if screensaver.active
                 && screensaver_first_render_logged
                 && !screensaver_first_present_logged
@@ -5120,7 +5139,8 @@ pub(super) fn run_launcher_loop(
                 preview_cache_state: preview.trace_cache_state(),
                 preview_transition: preview_transition_trace,
                 composition_status: composition_status.clone(),
-                screensaver_active: screensaver.active && screensaver_pipeline.is_some(),
+                screensaver_active: screensaver.active
+                    && (screensaver_pipeline.is_some() || screensaver_direct_pipeline.is_some()),
                 screensaver_active_cards,
                 screensaver_archive_loading,
                 screensaver_frame_trace,
@@ -6490,6 +6510,23 @@ mod tests {
             Some(&[Rgb565Pixel(2)][..])
         );
     }
+
+    #[test]
+    fn external_direct_frame_counts_as_presented_without_copy_rows() {
+        assert!(screensaver_frame_was_presented(
+            0,
+            true,
+            LauncherPresentStatus::Ok,
+            LatchCopyPath::ExternalDirect.label(),
+        ));
+        assert!(!screensaver_frame_was_presented(
+            0,
+            false,
+            LauncherPresentStatus::Ok,
+            LatchCopyPath::ExternalDirect.label(),
+        ));
+    }
+
     use crate::test_support::{arcade_catalog, arcade_game, arcade_system};
     #[cfg(mister_experiments)]
     use crate::ui_effect_bench::{EffectFill, EffectTarget};
