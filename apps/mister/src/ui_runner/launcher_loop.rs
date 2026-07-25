@@ -1124,7 +1124,7 @@ fn retain_or_defer_screensaver_buffer(
     }
 }
 
-fn screensaver_frame_was_presented(
+fn visible_frame_was_presented(
     copied_rows: u32,
     accepted_screensaver_frame: bool,
     status: LauncherPresentStatus,
@@ -5030,13 +5030,13 @@ pub(super) fn run_launcher_loop(
             first_vsync_logged = true;
             boot_analytics::event("first_vsync", format!("frame={frames}"));
         }
-        let screensaver_frame_presented = screensaver_frame_was_presented(
+        let visible_frame_presented = visible_frame_was_presented(
             presentation.copied_rows,
             accepted_screensaver_frame,
             presentation.main_present_status,
             presentation.main_present_copy_path,
         );
-        if screensaver.active && screensaver_frame_presented {
+        if screensaver.active && visible_frame_presented {
             // Profile only completed screensaver output. Starting when Preview is pressed
             // includes loader/render-worker startup frames that have no presentation evidence.
             screensaver_cpu_profile.begin(frames.saturating_add(1));
@@ -5058,6 +5058,8 @@ pub(super) fn run_launcher_loop(
                     );
                 }
             }
+        }
+        if visible_frame_presented {
             if !first_launcher_frame_logged
                 && lifecycle.startup_status().state == StartupRevealState::RevealLauncher
             {
@@ -6506,14 +6508,20 @@ mod tests {
     }
 
     #[test]
-    fn external_direct_frame_counts_as_presented_without_copy_rows() {
-        assert!(screensaver_frame_was_presented(
+    fn copied_and_external_direct_frames_count_as_visible_presentations() {
+        assert!(visible_frame_was_presented(
+            720,
+            false,
+            LauncherPresentStatus::Ok,
+            LatchCopyPath::IdentityFull.label(),
+        ));
+        assert!(visible_frame_was_presented(
             0,
             true,
             LauncherPresentStatus::Ok,
             LatchCopyPath::ExternalDirect.label(),
         ));
-        assert!(!screensaver_frame_was_presented(
+        assert!(!visible_frame_was_presented(
             0,
             false,
             LauncherPresentStatus::Ok,
