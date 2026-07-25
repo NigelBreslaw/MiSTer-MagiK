@@ -809,22 +809,12 @@ fn wait_for_latch_completion_with(
             });
         }
         post_observed |= status.pending() && status.pending_sequence == posted_sequence;
-        if post_observed && !status.pending() && status.active_sequence != posted_sequence {
-            return Err(LatchFailure::runtime(
-                LatchFailureStage::PostVerification,
-                LatchFailureReason::PostedSequenceUnverified,
-                format!(
-                    "posted sequence {posted_sequence} was superseded by active sequence {}",
-                    status.active_sequence
-                ),
-            ));
-        }
         if started.elapsed() >= timeout {
             return Err(LatchFailure::runtime(
                 LatchFailureStage::PostVerification,
                 LatchFailureReason::PostedSequenceUnverified,
                 format!(
-                    "latch completion timed out posted={posted_sequence} observed={} active={} pending={} pending_sequence={} polls={poll_count}",
+                    "latch completion timed out posted={posted_sequence} pending_observed={} final_active={} final_pending={} final_pending_sequence={} polls={poll_count}",
                     u8::from(post_observed),
                     status.active_sequence,
                     u8::from(status.pending()),
@@ -1487,6 +1477,31 @@ mod tests {
 
         assert_eq!(completion.status.active_sequence, 42);
         assert_eq!(completion.poll_count, 2);
+    }
+
+    #[test]
+    fn completion_wait_tolerates_transient_cleared_pending_before_active_advances() {
+        let mut pending = status(BASE1, 0x0001 | 0x0004);
+        pending.active_sequence = 218;
+        pending.pending_sequence = 219;
+        let mut transient = status(BASE1, 0x0001);
+        transient.active_sequence = 218;
+        transient.pending_sequence = 0;
+        let mut settled = status(BASE2, 0x0001);
+        settled.active_sequence = 219;
+        settled.pending_sequence = 0;
+        let mut statuses = vec![pending, transient, settled].into_iter();
+
+        let completion = wait_for_latch_completion_with(
+            || Ok(statuses.next().unwrap()),
+            219,
+            Duration::from_millis(1),
+            || {},
+        )
+        .unwrap();
+
+        assert_eq!(completion.status.active_sequence, 219);
+        assert_eq!(completion.poll_count, 3);
     }
 
     #[test]
