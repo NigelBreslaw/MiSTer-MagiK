@@ -9,6 +9,7 @@ use std::io::{self, Write};
 use std::path::Path;
 
 pub const REPORT_PATH: &str = "/tmp/mister-magik/latch-readiness.json";
+pub const RUNTIME_FAILURE_PATH: &str = "/tmp/mister-magik/latch-failure.json";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -161,6 +162,33 @@ impl std::fmt::Display for LatchFailure {
 impl std::error::Error for LatchFailure {}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LatchFailureEvidence {
+    pub schema: &'static str,
+    pub state: String,
+    pub stage: String,
+    pub reason: String,
+    pub detail: String,
+}
+
+impl From<&LatchFailure> for LatchFailureEvidence {
+    fn from(failure: &LatchFailure) -> Self {
+        Self {
+            schema: "mister-magik-latch-failure-v1",
+            state: failure.state.code().to_string(),
+            stage: failure.stage.code().to_string(),
+            reason: failure.reason_code().to_string(),
+            detail: failure.detail.clone(),
+        }
+    }
+}
+
+impl LatchFailureEvidence {
+    pub fn write_atomic(&self, path: impl AsRef<Path>) -> io::Result<()> {
+        write_json_atomic(self, path)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct LatchReadinessReport {
     pub schema: &'static str,
     pub state: LatchReadinessState,
@@ -210,22 +238,26 @@ impl LatchReadinessReport {
     }
 
     pub fn write_atomic(&self, path: impl AsRef<Path>) -> io::Result<()> {
-        let path = path.as_ref();
-        if let Some(parent) = path.parent() {
-            create_dir_all(parent)?;
-        }
-        let temporary = path.with_extension(format!("json.tmp.{}", std::process::id()));
-        let mut output = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&temporary)?;
-        serde_json::to_writer(&mut output, self).map_err(io::Error::other)?;
-        output.write_all(b"\n")?;
-        output.sync_all()?;
-        drop(output);
-        rename(temporary, path)
+        write_json_atomic(self, path)
     }
+}
+
+fn write_json_atomic(value: &impl Serialize, path: impl AsRef<Path>) -> io::Result<()> {
+    let path = path.as_ref();
+    if let Some(parent) = path.parent() {
+        create_dir_all(parent)?;
+    }
+    let temporary = path.with_extension(format!("json.tmp.{}", std::process::id()));
+    let mut output = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&temporary)?;
+    serde_json::to_writer(&mut output, value).map_err(io::Error::other)?;
+    output.write_all(b"\n")?;
+    output.sync_all()?;
+    drop(output);
+    rename(temporary, path)
 }
 
 #[cfg(test)]
@@ -406,6 +438,41 @@ mod tests {
         assert!(
             !root
                 .join(format!("nested/readiness.json.tmp.{}", std::process::id()))
+                .exists()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn runtime_failure_evidence_publishes_stable_codes_atomically() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-latch-failure-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = root.join("nested/failure.json");
+        let failure = LatchFailure::runtime(
+            LatchFailureStage::PostVerification,
+            LatchFailureReason::PostedSequenceUnverified,
+            "posted=219 final_active=218",
+        );
+
+        LatchFailureEvidence::from(&failure)
+            .write_atomic(&path)
+            .unwrap();
+
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(persisted["schema"], "mister-magik-latch-failure-v1");
+        assert_eq!(persisted["state"], "runtime-fault");
+        assert_eq!(persisted["stage"], "post-verification");
+        assert_eq!(persisted["reason"], "posted-sequence-unverified");
+        assert_eq!(persisted["detail"], "posted=219 final_active=218");
+        assert!(
+            !root
+                .join(format!("nested/failure.json.tmp.{}", std::process::id()))
                 .exists()
         );
         fs::remove_dir_all(root).unwrap();

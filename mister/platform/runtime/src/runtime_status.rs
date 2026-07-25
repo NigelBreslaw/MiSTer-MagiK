@@ -100,6 +100,10 @@ launcher_status_types! {
         vsync_source,
         present_backend,
         present_status,
+        latch_failure_state,
+        latch_failure_stage,
+        latch_failure_reason,
+        latch_failure_detail,
         catalog_refresh_policy,
         screensaver_profile_state,
         catalog_scan_message,
@@ -545,6 +549,10 @@ fn launcher_status_value(
     insert!("vsync_period_us", status.vsync_period_us);
     insert!("present_backend", status.present_backend);
     insert!("present_status", status.present_status);
+    insert!("latch_failure_state", status.latch_failure_state);
+    insert!("latch_failure_stage", status.latch_failure_stage);
+    insert!("latch_failure_reason", status.latch_failure_reason);
+    insert!("latch_failure_detail", status.latch_failure_detail);
     insert!("present_buffer", status.present_buffer);
     insert!("latch_publish_us", status.latch_publish_us);
     insert!("latch_sequence", status.latch_sequence);
@@ -974,6 +982,10 @@ mod tests {
                 vsync_period_us: 19_829,
                 present_backend: "fpga-vblank-latch-hidden",
                 present_status: "ok",
+                latch_failure_state: "runtime-fault",
+                latch_failure_stage: "post-verification",
+                latch_failure_reason: "posted-sequence-unverified",
+                latch_failure_detail: "posted=219 final_active=218",
                 present_buffer: 2,
                 latch_publish_us: 3,
                 latch_sequence: 41,
@@ -1217,6 +1229,8 @@ mod tests {
         assert_eq!(value["output_route"], "crt-576p50");
         assert_eq!(value["vsync_period_us"], 19_829);
         assert_eq!(value["present_backend"], "fpga-vblank-latch-hidden");
+        assert_eq!(value["latch_failure_state"], "runtime-fault");
+        assert_eq!(value["latch_failure_reason"], "posted-sequence-unverified");
         assert_eq!(value["latch_publish_us"], 3);
         assert_eq!(value["latch_sequence"], 41);
         assert_eq!(value["latch_flip_count"], 40);
@@ -1318,6 +1332,10 @@ mod tests {
             vsync_period_us: 19_830,
             present_backend: "fpga-vblank-latch-hidden",
             present_status: "ok",
+            latch_failure_state: "",
+            latch_failure_stage: "",
+            latch_failure_reason: "",
+            latch_failure_detail: "",
             present_buffer: 1,
             latch_publish_us: 4,
             latch_sequence: 7,

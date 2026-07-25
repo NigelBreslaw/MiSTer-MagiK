@@ -7,6 +7,7 @@ use super::launcher_compositor::{
 use super::launcher_pacing::LauncherPacingTrace;
 use super::launcher_screensaver::ScreensaverFrameTrace;
 use super::*;
+use mister_magik_fb::latch_readiness::LatchFailure;
 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
 use std::fmt::Write as _;
 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
@@ -70,6 +71,10 @@ pub(super) struct LauncherFrameAccounting {
     last_vsync_period_us: u64,
     last_present_backend: &'static str,
     last_present_status: &'static str,
+    latch_failure_state: String,
+    latch_failure_stage: String,
+    latch_failure_reason: String,
+    latch_failure_detail: String,
     last_present_buffer: u8,
     last_latch_publish_us: u64,
     last_latch_sequence: u16,
@@ -1052,6 +1057,10 @@ impl LauncherFrameAccounting {
             last_vsync_period_us: 0,
             last_present_backend: "none",
             last_present_status: "none",
+            latch_failure_state: String::new(),
+            latch_failure_stage: String::new(),
+            latch_failure_reason: String::new(),
+            latch_failure_detail: String::new(),
             last_present_buffer: 0,
             last_latch_publish_us: 0,
             last_latch_sequence: 0,
@@ -1071,6 +1080,13 @@ impl LauncherFrameAccounting {
 
     pub(super) fn first_visible_copy_done(&self) -> bool {
         self.first_visible_copy_done
+    }
+
+    pub(super) fn record_latch_failure(&mut self, failure: &LatchFailure) {
+        self.latch_failure_state = failure.state.code().to_string();
+        self.latch_failure_stage = failure.stage.code().to_string();
+        self.latch_failure_reason = failure.reason_code().to_string();
+        self.latch_failure_detail.clone_from(&failure.detail);
     }
 
     pub(super) fn preview_scroll_trace_enabled(&self) -> bool {
@@ -2064,6 +2080,10 @@ impl LauncherFrameAccounting {
             vsync_period_us: self.last_vsync_period_us,
             present_backend: self.last_present_backend,
             present_status: self.last_present_status,
+            latch_failure_state: &self.latch_failure_state,
+            latch_failure_stage: &self.latch_failure_stage,
+            latch_failure_reason: &self.latch_failure_reason,
+            latch_failure_detail: &self.latch_failure_detail,
             present_buffer: self.last_present_buffer,
             latch_publish_us: self.last_latch_publish_us,
             latch_sequence: self.last_latch_sequence,

@@ -2293,6 +2293,9 @@ pub(super) fn run_launcher_loop(
     let mut first_vsync_logged = false;
     let mut first_launcher_frame_logged = false;
     let mut frame_accounting = LauncherFrameAccounting::new(run_start, ui.output_route().label());
+    if let Some(failure) = launcher_presenter.compatibility_failure() {
+        frame_accounting.record_latch_failure(failure);
+    }
     if launcher_bench_after_input_script {
         // Activation below replaces accounting and opens the measured trace.
         frame_accounting.close_preview_scroll_trace_for_restart();
@@ -4516,6 +4519,7 @@ pub(super) fn run_launcher_loop(
             );
         }
         if let Some(failure) = launcher_presenter.compatibility_failure() {
+            frame_accounting.record_latch_failure(failure);
             let bridge = app.global::<slint_ui::launcher::MisterBridge>();
             bridge.set_compatibility_visible(true);
             bridge.set_compatibility_reason(failure.reason_code().into());
@@ -4765,6 +4769,7 @@ pub(super) fn run_launcher_loop(
                 Err(failure) => {
                     launcher_presenter.fail_latch_completion(failure);
                     if let Some(failure) = launcher_presenter.compatibility_failure() {
+                        frame_accounting.record_latch_failure(failure);
                         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
                         bridge.set_compatibility_visible(true);
                         bridge.set_compatibility_reason(failure.reason_code().into());
