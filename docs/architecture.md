@@ -655,6 +655,7 @@ Current rules:
 Relevant docs:
 
 - `docs/console-media-identity.md`
+- `docs/media-download-security.md`
 - `history/2026-6-13/arcade-screenshot-cache-workflow.md`
 - `history/2026-6-13/preview-zstd-archive-bench.md`
 - `history/2026-6-14/library-scanner-preview-archive-pruning.md`
