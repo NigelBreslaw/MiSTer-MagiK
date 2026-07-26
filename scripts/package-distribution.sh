@@ -217,8 +217,8 @@ receipt_field() {
   local key="$1"
   awk -F '\t' -v key="$key" 'NR == 1 { for (i = 2; i <= NF; i++) { if ($i ~ ("^" key "=")) { sub("^[^=]*=", "", $i); print $i; exit } } }' "$BIN_RECEIPT"
 }
-if [[ "$BIN_FEATURES" != "ui" ]]; then
-  echo "ERROR: production distribution requires the video-capable ui build; got ${BIN_FEATURES:-missing}." >&2
+if [[ "$BIN_FEATURES" != "ui,profile" ]]; then
+  echo "ERROR: production distribution requires the canonical ui,profile build; got ${BIN_FEATURES:-missing}." >&2
   exit 1
 fi
 if [[ ! -f "$BIN_RECEIPT" || "$(receipt_field build_number)" != "$BUILD_NUMBER" || "$(receipt_field version)" != "$VERSION" ]]; then
