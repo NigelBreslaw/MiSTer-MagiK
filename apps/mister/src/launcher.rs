@@ -3490,7 +3490,7 @@ pub fn apply_launch_return_state(
         nav.arcade_search.query = state.filter_value.clone().unwrap_or_default();
         nav.collection_search_queries
             .insert(collection_id.clone(), nav.arcade_search.query.clone());
-        nav.ensure_arcade_search_results(catalog, &collection_id);
+        nav.refresh_arcade_search_results(catalog, &collection_id);
     }
     let (game_index, game_count) = {
         let games = nav.active_arcade_game_view(catalog, &collection_id);
