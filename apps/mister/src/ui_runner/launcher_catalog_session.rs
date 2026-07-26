@@ -243,8 +243,11 @@ impl LauncherCatalogSession {
             }
             CatalogWorkerMessage::LoadFailed { error } => {
                 let has_stale_catalog = context.catalog_ready && !context.catalog_partial;
-                let mode = CatalogRecoveryMode::LoadFailure {
-                    transient: catalog_failure_is_transient(&error),
+                let transient = catalog_failure_is_transient(&error);
+                let mode = if catalog_failure_is_format_upgrade(&error) {
+                    CatalogRecoveryMode::UpgradeRequired
+                } else {
+                    CatalogRecoveryMode::LoadFailure { transient }
                 };
                 self.refresh_done = true;
                 self.foreground_update = false;
@@ -266,10 +269,10 @@ impl LauncherCatalogSession {
                     effects.push(CatalogSessionEffect::DiscardPartialCatalog);
                 }
                 effects.push(CatalogSessionEffect::Lifecycle(
-                    LauncherLifecycleInput::CatalogLoadFailed {
-                        transient: catalog_failure_is_transient(&error),
+                    LauncherLifecycleInput::CatalogRecoveryRequired {
                         error,
                         has_stale_catalog,
+                        mode,
                     },
                 ));
             }
@@ -679,6 +682,17 @@ fn catalog_failure_is_transient(error: &str) -> bool {
     ]
     .iter()
     .any(|needle| error.contains(needle))
+}
+
+fn catalog_failure_is_format_upgrade(error: &str) -> bool {
+    let (expected, actual) = crate::catalog_failure_report::schema_versions(error);
+    match (
+        expected.and_then(|value| value.parse::<u64>().ok()),
+        actual.and_then(|value| value.parse::<u64>().ok()),
+    ) {
+        (Some(expected), Some(actual)) => actual < expected,
+        _ => false,
+    }
 }
 
 pub(super) fn consume_library_rebuild_marker(worker_enabled: bool, start: Instant) -> bool {
@@ -1954,14 +1968,26 @@ mod tests {
         for effect in effects.into_effects() {
             match effect {
                 CatalogSessionEffect::DiscardPartialCatalog => discarded = true,
-                CatalogSessionEffect::Lifecycle(LauncherLifecycleInput::CatalogLoadFailed {
-                    has_stale_catalog,
-                    ..
-                }) => stale = Some(has_stale_catalog),
+                CatalogSessionEffect::Lifecycle(
+                    LauncherLifecycleInput::CatalogRecoveryRequired {
+                        has_stale_catalog, ..
+                    },
+                ) => stale = Some(has_stale_catalog),
                 _ => {}
             }
         }
         assert!(discarded);
         assert_eq!(stale, Some(false));
+    }
+
+    #[test]
+    fn older_shard_schema_is_classified_as_a_format_upgrade() {
+        assert!(catalog_failure_is_format_upgrade(
+            "unsupported shard schema version for snes generation 1: expected 3, found 2"
+        ));
+        assert!(!catalog_failure_is_format_upgrade(
+            "unsupported shard schema version for snes generation 1: expected 3, found 4"
+        ));
+        assert!(!catalog_failure_is_format_upgrade("disk full"));
     }
 }

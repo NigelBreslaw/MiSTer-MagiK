@@ -9,6 +9,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, Sender};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -21,6 +22,7 @@ const LATEST_FILE: &str = "latest.json";
 
 static REPORT_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static REPORTED_FAILURES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+static REPORT_WRITER: OnceLock<Option<Sender<(PathBuf, CatalogFailureReport)>>> = OnceLock::new();
 
 #[derive(Clone, Debug)]
 pub struct CatalogFailureReport {
@@ -68,17 +70,43 @@ pub fn enqueue(report: CatalogFailureReport) -> PathBuf {
     if !inserted {
         return latest;
     }
-    let dir = report_dir();
-    let _ = std::thread::Builder::new()
-        .name("catalog-failure-report".to_string())
-        .spawn(move || {
-            if let Err(error) = write_report(&dir, report) {
-                let _ = crate::fallible_log::stderr_line(format_args!(
-                    "catalog failure report write failed: {error}"
-                ));
-            }
-        });
+    if let Some(writer) = report_writer()
+        && let Err(error) = writer.send((report_dir(), report))
+    {
+        log_report_error(format_args!("catalog failure report queue failed: {error}"));
+    }
     latest
+}
+
+fn report_writer() -> Option<&'static Sender<(PathBuf, CatalogFailureReport)>> {
+    REPORT_WRITER
+        .get_or_init(|| {
+            let (sender, receiver) = mpsc::channel::<(PathBuf, CatalogFailureReport)>();
+            match std::thread::Builder::new()
+                .name("catalog-failure-report".to_string())
+                .spawn(move || {
+                    while let Ok((dir, report)) = receiver.recv() {
+                        if let Err(error) = write_report(&dir, report) {
+                            log_report_error(format_args!(
+                                "catalog failure report write failed: {error}"
+                            ));
+                        }
+                    }
+                }) {
+                Ok(_) => Some(sender),
+                Err(error) => {
+                    log_report_error(format_args!(
+                        "catalog failure report worker failed to start: {error}"
+                    ));
+                    None
+                }
+            }
+        })
+        .as_ref()
+}
+
+fn log_report_error(arguments: std::fmt::Arguments<'_>) {
+    let _ = crate::fallible_log::stderr_line(arguments);
 }
 
 fn report_dir() -> PathBuf {

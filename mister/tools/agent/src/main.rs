@@ -3851,10 +3851,16 @@ mod linux {
             .pop()
             .map(|(path, report)| json!({"path": path, "report": report}))
             .unwrap_or(Value::Null);
-        let recent = CATALOG_FAILURE_DIRS
+        let mut recent_paths = CATALOG_FAILURE_DIRS
             .iter()
             .flat_map(|dir| recent_catalog_failure_paths(Path::new(dir), 5))
-            .take(5)
+            .collect::<Vec<_>>();
+        recent_paths.sort_by(|left, right| left.file_name().cmp(&right.file_name()));
+        recent_paths.dedup();
+        recent_paths.reverse();
+        recent_paths.truncate(5);
+        let recent = recent_paths
+            .into_iter()
             .map(|path| {
                 let report = read_json_value(path.to_string_lossy().as_ref());
                 json!({

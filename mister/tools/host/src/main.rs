@@ -8343,11 +8343,14 @@ fn ssh_catalog_failure_reports_json(sess: &Session) -> Value {
         .pop()
         .map(|(path, report)| json!({"path": path, "report": report}))
         .unwrap_or(Value::Null);
-    let recent = dirs
+    let mut recent = dirs
         .iter()
         .flat_map(|dir| remote_catalog_failure_paths(sess, dir, 5))
-        .take(5)
         .collect::<Vec<_>>();
+    recent.sort_by(|left, right| left.rsplit('/').next().cmp(&right.rsplit('/').next()));
+    recent.dedup();
+    recent.reverse();
+    recent.truncate(5);
     json!({
         "latest": latest,
         "recent_paths": recent,

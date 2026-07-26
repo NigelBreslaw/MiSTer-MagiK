@@ -140,7 +140,7 @@ impl CatalogRecoveryMode {
             (Self::InputsChanged | Self::UpgradeRequired, true, CatalogRecoveryChoice::Left) => {
                 CatalogRecoveryAction::Continue
             }
-            (Self::InputsChanged | Self::UpgradeRequired, _, CatalogRecoveryChoice::Right) => {
+            (Self::InputsChanged | Self::UpgradeRequired, true, CatalogRecoveryChoice::Right) => {
                 CatalogRecoveryAction::AtomicRebuild
             }
             (
@@ -2382,6 +2382,31 @@ mod tests {
                 .as_slice()
                 .iter()
                 .any(|effect| matches!(effect, LauncherEffect::ExitToMister))
+        );
+    }
+
+    #[test]
+    fn upgrade_without_a_usable_catalog_offers_only_exit_or_full_rebuild() {
+        let (mut lifecycle, mut effects) = idle_lifecycle();
+        lifecycle.handle(
+            LauncherLifecycleInput::CatalogRecoveryRequired {
+                error: "unsupported shard schema: expected 3, found 2".to_string(),
+                has_stale_catalog: false,
+                mode: CatalogRecoveryMode::UpgradeRequired,
+            },
+            &mut effects,
+        );
+        let dialog = lifecycle.view().catalog_recovery_dialog().unwrap();
+        assert_eq!(dialog.left_label, "Exit to MiSTer");
+        assert_eq!(dialog.right_label, "Full rebuild");
+        effects.clear();
+        lifecycle.handle(LauncherLifecycleInput::CatalogRecoveryRight, &mut effects);
+        lifecycle.handle(LauncherLifecycleInput::CatalogRecoveryConfirm, &mut effects);
+        assert!(
+            effects
+                .as_slice()
+                .iter()
+                .any(|effect| matches!(effect, LauncherEffect::StartFreshCatalogBuild { .. }))
         );
     }
 

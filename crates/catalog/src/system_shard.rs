@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Schema-v1 per-system SQLite and bounded navigation artifacts.
+//! Schema-v3 per-system SQLite and bounded navigation artifacts.
 
 use crate::catalog_classify::SystemId;
 use crate::sharded_catalog::{NAVIGATION_SCHEMA_VERSION, SHARD_SCHEMA_VERSION};
