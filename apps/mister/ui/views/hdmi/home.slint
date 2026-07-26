@@ -1,15 +1,13 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { MisterUi } from "../../mister_window.slint";
 import { MisterBridge } from "../../api.slint";
 import { LauncherTile, SettingsButton } from "../../components/launcher_chrome.slint";
 
 export component HomeGrid inherits Rectangle {
-    property <int> s: MisterUi.scale;
     property <bool> root-menu: MisterBridge.menu-breadcrumb == "";
-    property <length> narrow-tile-width: 191px * s;
-    property <length> tile-gap: 16px * s;
+    property <length> narrow-tile-width: 191px;
+    property <length> tile-gap: 16px;
     property <length> tile-width: root-menu
         ? (system-viewport.width - 3 * tile-gap) / 4
         : narrow-tile-width;
@@ -18,26 +16,26 @@ export component HomeGrid inherits Rectangle {
         : MisterBridge.menu-items.length;
     property <length> content-width: layout-item-count * tile-width
         + Math.max(0, layout-item-count - 1) * tile-gap;
-    property <length> scroll-x: MisterBridge.home-scroll-x * 1px * s;
+    property <length> scroll-x: MisterBridge.home-scroll-x * 1px;
     property <int> first-visible-index: floor(scroll-x / tile-pitch);
 
     background: transparent;
 
     HorizontalLayout {
         VerticalLayout {
-            padding: 18px * s;
-            spacing: 14px * s;
+            padding: 18px;
+            spacing: 14px;
 
             Rectangle {
-                height: 42px * s;
+                height: 42px;
                 background: #172131;
                 border-width: 1px;
                 border-color: #52647d;
 
                 HorizontalLayout {
-                    padding-left: 14px * s;
-                    padding-right: 10px * s;
-                    spacing: 12px * s;
+                    padding-left: 14px;
+                    padding-right: 10px;
+                    spacing: 12px;
                     cross-axis-alignment: center;
 
                     Rectangle {
@@ -45,14 +43,14 @@ export component HomeGrid inherits Rectangle {
                         background: transparent;
 
                         VerticalLayout {
-                            spacing: 2px * s;
+                            spacing: 2px;
                             alignment: center;
 
                             Text {
                                 width: 100%;
                                 text: MisterBridge.menu-title;
                                 color: #d7eef8;
-                                font-size: 16px * s;
+                                font-size: 16px;
                                 vertical-alignment: center;
                                 overflow: elide;
                             }
@@ -62,7 +60,7 @@ export component HomeGrid inherits Rectangle {
                                 width: 100%;
                                 text: MisterBridge.dev-mode ? "DEV MODE" : "Update Available";
                                 color: MisterBridge.dev-mode ? #ffb347 : #06d6a0;
-                                font-size: 8px * s;
+                                font-size: 8px;
                                 vertical-alignment: center;
                                 overflow: elide;
                             }
@@ -71,7 +69,7 @@ export component HomeGrid inherits Rectangle {
                                 width: 100%;
                                 text: MisterBridge.menu-breadcrumb;
                                 color: #8ca4b5;
-                                font-size: 8px * s;
+                                font-size: 8px;
                                 vertical-alignment: center;
                                 overflow: elide;
                             }
@@ -81,14 +79,14 @@ export component HomeGrid inherits Rectangle {
                     Text {
                         text: MisterBridge.clock-text;
                         color: #d7eef8;
-                        font-size: 16px * s;
+                        font-size: 16px;
                         horizontal-alignment: right;
                         vertical-alignment: center;
                     }
 
                     SettingsButton {
-                        width: 34px * s;
-                        height: 34px * s;
+                        width: 34px;
+                        height: 34px;
                         focused: MisterBridge.settings-focused;
                     }
                 }
@@ -131,4 +129,3 @@ export component HomeGrid inherits Rectangle {
         }
     }
 }
-

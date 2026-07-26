@@ -1,7 +1,6 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { MisterUi } from "../mister_window.slint";
 import { MenuItemStatus } from "../launcher_menu.slint";
 
 component ScanningSubtitle inherits VerticalLayout {
@@ -140,25 +139,24 @@ export component SettingsButton inherits Rectangle {
 }
 
 export component OsdSideLabel inherits Rectangle {
-    property <int> s: MisterUi.scale;
 
-    width: 56px * s;
+    width: 56px;
     height: 100%;
     background: #101420;
     border-width: 1px;
     border-color: #52647d;
 
     VerticalLayout {
-        padding-top: 26px * s;
-        padding-bottom: 26px * s;
-        spacing: 10px * s;
+        padding-top: 26px;
+        padding-bottom: 26px;
+        spacing: 10px;
         alignment: center;
 
-        Text { text: "M"; color: #d7eef8; font-size: 16px * s; horizontal-alignment: center; }
-        Text { text: "I"; color: #d7eef8; font-size: 16px * s; horizontal-alignment: center; }
-        Text { text: "S"; color: #d7eef8; font-size: 16px * s; horizontal-alignment: center; }
-        Text { text: "T"; color: #d7eef8; font-size: 16px * s; horizontal-alignment: center; }
-        Text { text: "E"; color: #d7eef8; font-size: 16px * s; horizontal-alignment: center; }
-        Text { text: "R"; color: #d7eef8; font-size: 16px * s; horizontal-alignment: center; }
+        Text { text: "M"; color: #d7eef8; font-size: 16px; horizontal-alignment: center; }
+        Text { text: "I"; color: #d7eef8; font-size: 16px; horizontal-alignment: center; }
+        Text { text: "S"; color: #d7eef8; font-size: 16px; horizontal-alignment: center; }
+        Text { text: "T"; color: #d7eef8; font-size: 16px; horizontal-alignment: center; }
+        Text { text: "E"; color: #d7eef8; font-size: 16px; horizontal-alignment: center; }
+        Text { text: "R"; color: #d7eef8; font-size: 16px; horizontal-alignment: center; }
     }
 }

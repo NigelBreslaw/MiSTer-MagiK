@@ -6,7 +6,7 @@
 
 use crate::display_config::DisplayConfig;
 use crate::fpga::Fpga;
-use crate::ui_display::{SLINT_UI_SCALE, UiDisplay};
+use crate::ui_display::UiDisplay;
 use crate::ui_runner::ui_platform::{AnimationClock, MisterPlatform, update_slint_animations};
 use crate::vt::VtGraphicsGuard;
 use mister_magik_fb::experiments::effects::framebuffer_effects::{
@@ -331,7 +331,6 @@ pub fn run_effect_bench(f: &mut Fpga) {
         .expect("set_platform");
         let app = slint_ui::effect_hud::EffectHud::new().expect("EffectHud");
         let mister_ui = app.global::<slint_ui::effect_hud::MisterUi>();
-        mister_ui.set_scale(SLINT_UI_SCALE);
         mister_ui.set_window_width(target.render_w as i32);
         mister_ui.set_window_height(target.render_h as i32);
         window.set_size(PhysicalSize::new(

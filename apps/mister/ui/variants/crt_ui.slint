@@ -56,9 +56,8 @@ export component CrtLauncherUi inherits Rectangle {
             setup-kind-label: MisterBridge.setup-kind-label;
         }
         if !MisterBridge.catalog-scan-visible && MisterBridge.media-pack-progresses.length > 0 : MediaProgressPopup {
-            s: MisterUi.scale;
         }
-        if MisterBridge.catalog-scan-visible : CatalogScanPopup { s: MisterUi.scale; }
+        if MisterBridge.catalog-scan-visible : CatalogScanPopup { }
         if MisterBridge.confirm-visible : ConfirmDialog { }
         if MisterBridge.display-combo-open : CrtComboBoxOverlay { }
         if MisterBridge.loading-message != "" : LoadingOverlay { }

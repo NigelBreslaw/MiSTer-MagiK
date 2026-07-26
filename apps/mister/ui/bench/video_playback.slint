@@ -11,58 +11,57 @@ export component VideoPlayback inherits MisterWindow {
 
     in-out property <image> frame;
 
-    property <int> s: MisterUi.scale;
 
     Rectangle {
         x: 0px;
         y: 0px;
-        width: 704px * s;
+        width: 704px;
         height: parent.height;
         background: #05070a;
     }
 
     Image {
-        x: 40px * s;
-        y: 30px * s;
-        width: 640px * s;
-        height: 480px * s;
+        x: 40px;
+        y: 30px;
+        width: 640px;
+        height: 480px;
         source: root.frame;
         image-fit: contain;
     }
 
     Rectangle {
-        x: 704px * s;
-        y: 72px * s;
-        width: 216px * s;
-        height: 396px * s;
+        x: 704px;
+        y: 72px;
+        width: 216px;
+        height: 396px;
         background: #121722;
-        border-radius: 6px * s;
+        border-radius: 6px;
     }
 
     Text {
-        x: 724px * s;
-        y: 104px * s;
+        x: 724px;
+        y: 104px;
         text: "bench:";
-        font-size: 12px * s;
+        font-size: 12px;
         color: #8fb6ff;
     }
 
     Text {
-        x: 724px * s;
-        y: 136px * s;
-        width: 176px * s;
+        x: 724px;
+        y: 136px;
+        width: 176px;
         text: "video_playback";
-        font-size: 16px * s;
+        font-size: 16px;
         color: #f2f6ff;
         wrap: word-wrap;
     }
 
     Text {
-        x: 724px * s;
-        y: 210px * s;
-        width: 172px * s;
+        x: 724px;
+        y: 210px;
+        width: 172px;
         text: "H.264/AAC MP4 snaps";
-        font-size: 12px * s;
+        font-size: 12px;
         color: #b7c1d6;
         wrap: word-wrap;
     }

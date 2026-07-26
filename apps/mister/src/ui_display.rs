@@ -3,12 +3,9 @@
 
 //! Menu-output framebuffer vs Slint render buffer.
 //!
-//! Slint layouts stay at **`MisterUi.scale = 1`**. The launcher chooses a
-//! framebuffer from MiSTer.ini's Menu output mode and lets the MiSTer FPGA scale
-//! it to the final HDMI/direct-video rectangle.
-
-/// Slint global — always 1; layout math uses base units only.
-pub const SLINT_UI_SCALE: i32 = 1;
+//! Slint layouts use framebuffer pixels directly. The launcher chooses a
+//! framebuffer from MiSTer.ini's Menu output mode and lets the MiSTer FPGA
+//! scale it to the final HDMI/direct-video rectangle.
 
 const MISTER_INI_PATH: &str = "/media/fat/MiSTer.ini";
 pub const DEFAULT_OUTPUT_W: u16 = 1920;
@@ -742,7 +739,7 @@ impl UiDisplay {
 
     pub fn log_line(&self) -> String {
         format!(
-            "slint-scale={SLINT_UI_SCALE} render={}x{} fb={}x{} output={}x{} scan={}x{} direct_video={}",
+            "render={}x{} fb={}x{} output={}x{} scan={}x{} direct_video={}",
             self.render_w(),
             self.render_h(),
             self.fb_w,

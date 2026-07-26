@@ -49,9 +49,7 @@ use crate::screenshot_transitions::{
     PreviewTransitionTrace,
 };
 use crate::setup_nav::{SetupAction, SetupNav, SetupPhase};
-use crate::ui_display::{
-    CrtUiMetrics, RuntimeDisplayGeometry, SLINT_UI_SCALE, UiDisplay, UiDisplayPlan,
-};
+use crate::ui_display::{CrtUiMetrics, RuntimeDisplayGeometry, UiDisplay, UiDisplayPlan};
 #[cfg(mister_experiments)]
 use mister_magik_fb::experiments::effects::framebuffer_effects::{
     EFFECT_SIZES, EffectKind, EffectSize,
@@ -213,7 +211,7 @@ fn normalize_scene(s: &str) -> String {
 
 #[cfg_attr(not(mister_bench_scenes), allow(dead_code))]
 pub fn print_scenes() {
-    crate::ui_logln!("Slint UI scenes (runtime framebuffer sized, ui-scale {SLINT_UI_SCALE}):");
+    crate::ui_logln!("Slint UI scenes (runtime framebuffer sized):");
     for s in UI_SCENES {
         crate::ui_logln!("  {s}");
     }
@@ -273,7 +271,6 @@ macro_rules! with_scene_app {
             format!("scene_type={} ok=1", stringify!($module::$ty)),
         );
         let mister_ui = $app.global::<slint_ui::$module::MisterUi>();
-        mister_ui.set_scale(SLINT_UI_SCALE);
         mister_ui.set_window_width($ui.render_w() as i32);
         mister_ui.set_window_height($ui.render_h() as i32);
         mister_ui.set_crt_layout($ui.output_route().is_crt());

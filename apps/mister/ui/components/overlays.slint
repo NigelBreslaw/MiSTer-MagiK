@@ -8,7 +8,6 @@ import { CrtTheme } from "crt_ui.slint";
 import { ScreenshotPackProgressRow } from "progress.slint";
 
 export component CompatibilityScreen inherits Rectangle {
-    property <int> s: MisterUi.scale;
 
     background: CrtTheme.background;
 
@@ -50,18 +49,17 @@ export component CompatibilityScreen inherits Rectangle {
 }
 
 export component CatalogScanPopup inherits Rectangle {
-    in property <int> s;
-    property <length> scan-osd-width: MisterUi.compact-layout ? 0px : 56px * s;
-    property <length> scan-horizontal-padding: MisterUi.compact-layout ? MisterUi.grid : 70px * s;
+    property <length> scan-osd-width: MisterUi.compact-layout ? 0px : 56px;
+    property <length> scan-horizontal-padding: MisterUi.compact-layout ? MisterUi.grid : 70px;
     property <length> scan-column-width: root.width > scan-osd-width
         ? root.width - scan-osd-width
         : 0px;
     property <length> scan-content-width: scan-column-width > scan-horizontal-padding * 2
         ? scan-column-width - scan-horizontal-padding * 2
         : 0px;
-    property <length> scan-progress-width: scan-content-width < 560px * s
+    property <length> scan-progress-width: scan-content-width < 560px
         ? scan-content-width
-        : 560px * s;
+        : 560px;
 
     background: CrtTheme.background;
 
@@ -72,9 +70,9 @@ export component CatalogScanPopup inherits Rectangle {
             horizontal-stretch: 1;
             padding-left: root.scan-horizontal-padding;
             padding-right: root.scan-horizontal-padding;
-            padding-top: MisterUi.compact-layout ? MisterUi.grid : 82px * s;
-            padding-bottom: MisterUi.compact-layout ? MisterUi.grid : 76px * s;
-            spacing: MisterUi.compact-layout ? MisterUi.grid : 18px * s;
+            padding-top: MisterUi.compact-layout ? MisterUi.grid : 82px;
+            padding-bottom: MisterUi.compact-layout ? MisterUi.grid : 76px;
+            spacing: MisterUi.compact-layout ? MisterUi.grid : 18px;
             alignment: center;
             cross-axis-alignment: center;
 
@@ -116,17 +114,16 @@ export component CatalogScanPopup inherits Rectangle {
 
             if MisterBridge.media-pack-progresses.length > 0 : VerticalLayout {
                 width: root.scan-progress-width;
-                spacing: 5px * s;
+                spacing: 5px;
 
                 Text {
                     text: MisterBridge.media-pack-summary;
                     color: #d7eef8;
-                    font-size: 6px * s;
+                    font-size: 6px;
                     horizontal-alignment: center;
                 }
 
                 for pack in MisterBridge.media-pack-progresses: ScreenshotPackProgressRow {
-                    s: root.s;
                     pack: pack;
                 }
             }
@@ -137,10 +134,9 @@ export component CatalogScanPopup inherits Rectangle {
 }
 
 export component MediaProgressPopup inherits Rectangle {
-    in property <int> s;
 
-    width: min(560px * s, MisterUi.window-width * 1px - 16px);
-    height: min(100px * s, MisterUi.window-height * 1px - 16px);
+    width: min(560px, MisterUi.window-width * 1px - 16px);
+    height: min(100px, MisterUi.window-height * 1px - 16px);
     x: MisterUi.window-width * 1px / 2 - self.width / 2;
     y: MisterUi.window-height * 1px - self.height - MisterUi.grid;
     background: CrtTheme.panel;
@@ -149,52 +145,49 @@ export component MediaProgressPopup inherits Rectangle {
     clip: true;
 
     VerticalLayout {
-        padding-left: 12px * root.s;
-        padding-right: 12px * root.s;
-        padding-top: 8px * root.s;
-        padding-bottom: 8px * root.s;
-        spacing: 5px * root.s;
+        padding-left: 12px;
+        padding-right: 12px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        spacing: 5px;
 
         Text {
             text: MisterBridge.media-pack-summary;
             color: #d7eef8;
-            font-size: 6px * root.s;
+            font-size: 6px;
             horizontal-alignment: center;
         }
 
         for pack in MisterBridge.media-pack-progresses: ScreenshotPackProgressRow {
-            s: root.s;
             pack: pack;
         }
     }
 }
 
 export component StartupSplash inherits Rectangle {
-    property <int> s: MisterUi.scale;
 
     background: #1a1424;
 
     VerticalLayout {
         alignment: center;
-        spacing: 12px * s;
+        spacing: 12px;
 
         Text {
             text: "MiSTer MagiK";
             color: #e8e0f0;
-            font-size: 28px * s;
+            font-size: 28px;
             horizontal-alignment: center;
         }
     }
 }
 
 export component BackgroundScanBadge inherits Rectangle {
-    property <int> s: MisterUi.scale;
     property <bool> dot-visible: Math.mod(floor(animation-tick() / 1ms / 500), 2) == 0;
 
     width: t.width + 20px;
-    height: 28px * s;
-    x: MisterUi.window-width * 1px - self.width - 18px * s;
-    y: MisterUi.window-height * 1px - self.height - 16px * s;
+    height: 28px;
+    x: MisterUi.window-width * 1px - self.width - 18px;
+    y: MisterUi.window-height * 1px - self.height - 16px;
     background: #101420;
     border-width: 1px;
     border-color: #52647d;
@@ -206,14 +199,14 @@ export component BackgroundScanBadge inherits Rectangle {
         Text {
             text: "Building library";
             color: #d7eef8;
-            font-size: 8px * root.s;
+            font-size: 8px;
             horizontal-alignment: center;
             vertical-alignment: center;
         }
         Text {
             text: ".";
             color: root.dot-visible ? #d7eef8 : transparent;
-            font-size: 8px * root.s;
+            font-size: 8px;
             horizontal-alignment: center;
             vertical-alignment: center;
         }

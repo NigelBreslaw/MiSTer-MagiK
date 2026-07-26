@@ -997,11 +997,10 @@ fn update_home_pan_present_window(
 }
 
 fn home_pan_present_rect(ui: &UiDisplay) -> DirtyRect {
-    let scale = SLINT_UI_SCALE.max(1) as usize;
-    let x0 = HOME_LAYOUT_PADDING * scale;
-    let y0 = (HOME_LAYOUT_PADDING + HOME_HEADER_H + HOME_LAYOUT_SPACING) * scale;
-    let x1 = ui.render_w().saturating_sub(HOME_LAYOUT_PADDING * scale);
-    let y1 = ui.render_h().saturating_sub(HOME_LAYOUT_PADDING * scale);
+    let x0 = HOME_LAYOUT_PADDING;
+    let y0 = HOME_LAYOUT_PADDING + HOME_HEADER_H + HOME_LAYOUT_SPACING;
+    let x1 = ui.render_w().saturating_sub(HOME_LAYOUT_PADDING);
+    let y1 = ui.render_h().saturating_sub(HOME_LAYOUT_PADDING);
     DirtyRect {
         x0: x0.min(ui.render_w()),
         y0: y0.min(ui.render_h()),
