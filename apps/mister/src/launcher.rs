@@ -213,6 +213,15 @@ impl LaunchError {
         }
     }
 
+    #[cfg(feature = "ui")]
+    pub fn internal(message: impl Into<String>) -> Self {
+        Self {
+            kind: LaunchFailureKind::Internal,
+            message: message.into(),
+            spawned_mister: false,
+        }
+    }
+
     pub fn kind(&self) -> LaunchFailureKind {
         self.kind
     }

@@ -368,10 +368,16 @@ impl LaunchHandoffSession {
         &mut self,
         result_received: Instant,
     ) -> Option<LaunchHandoffCompletion> {
-        let worker_result = self
-            .pending
-            .as_ref()
-            .and_then(|pending| pending.rx.try_recv().ok())?;
+        let worker_result = match self.pending.as_ref()?.rx.try_recv() {
+            Ok(result) => result,
+            Err(mpsc::TryRecvError::Empty) => return None,
+            Err(mpsc::TryRecvError::Disconnected) => LaunchWorkerResult {
+                result: Err(launcher::LaunchError::internal(
+                    "launch worker disconnected before reporting a result",
+                )),
+                bench: None,
+            },
+        };
         let pending = self.pending.take().expect("pending launch result");
         match worker_result.result {
             Ok(spawned) => {
@@ -573,6 +579,11 @@ mod tests {
         rx
     }
 
+    fn disconnected_worker(_request: LaunchWorkerRequest) -> mpsc::Receiver<LaunchWorkerResult> {
+        let (_tx, rx) = mpsc::channel();
+        rx
+    }
+
     fn missing_target_failure_worker(
         _request: LaunchWorkerRequest,
     ) -> mpsc::Receiver<LaunchWorkerResult> {
@@ -669,6 +680,35 @@ mod tests {
         assert!(session.has_pending_launch());
         assert_eq!(session.loading_title(), "Loading 1942…");
         assert!(!Path::new(launcher::LAUNCH_RETURN_STATE_PATH).exists());
+    }
+
+    #[test]
+    fn disconnected_launch_worker_finishes_as_an_internal_failure() {
+        let _guard = lock_launch_handoff_tests();
+        launcher::remove_launch_return_state();
+        let mut session = LaunchHandoffSession::with_worker_for_test(disconnected_worker, false);
+        let nav = LauncherNav::new();
+        let catalog = one_game_catalog();
+
+        assert!(session.begin_launch(
+            &nav,
+            &catalog,
+            None,
+            "/media/fat/_Arcade/1942.mra",
+            Instant::now(),
+        ));
+        session.complete_loading_frame(Instant::now());
+
+        let completion = session
+            .poll_completion(Instant::now())
+            .expect("disconnected worker should complete");
+        let LaunchHandoffCompletion::Failure { error, .. } = completion else {
+            panic!("disconnected worker should fail");
+        };
+        assert_eq!(error.kind(), launcher::LaunchFailureKind::Internal);
+        assert!(error.to_string().contains("worker disconnected"));
+        assert!(!session.has_pending_launch());
+        assert!(session.loading_title().is_empty());
     }
 
     #[test]
