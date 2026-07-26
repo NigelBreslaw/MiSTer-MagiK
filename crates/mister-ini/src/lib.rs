@@ -307,7 +307,7 @@ mod tests {
     }
 
     #[test]
-    fn install_is_idempotent_and_deduplicates_every_owned_key() {
+    fn install_is_idempotent_and_only_deduplicates_main() {
         let input = b"[MiSTer]\nmain=MiSTer\nmain=Other\n[Menu]\ndirect_video=9\ndirect_video=8\nmenu_pal=9\nforced_scandoubler=9\ncustom=keep\n";
         let mut once = Document::parse(input).unwrap();
         apply_install(&mut once);
@@ -447,7 +447,7 @@ mod tests {
 
     #[test]
     fn generated_installs_preserve_unrelated_lines_and_converge() {
-        for seed in 0..128 {
+        for seed in 0_usize..128 {
             let mut input = String::from("[MiSTer]\n");
             for duplicate in 0..=(seed % 11) {
                 input.push_str(&format!("main=value-{seed}-{duplicate} ; context\n"));
@@ -457,6 +457,8 @@ mod tests {
                 input.push_str(&format!("direct_video={duplicate} ; video-context\n"));
             }
             input.push_str(&format!("user_seed_{seed}=keep-{seed}\n"));
+            let menu_offset = input.find("[Menu]").unwrap();
+            let expected_menu_tail = input.as_bytes()[menu_offset..].to_vec();
 
             let mut once = Document::parse(input.as_bytes()).unwrap();
             apply_install(&mut once);
@@ -466,7 +468,12 @@ mod tests {
 
             assert_eq!(twice.render(), rendered);
             assert_eq!(twice.active_count("MiSTer", "main"), 1);
-            assert_eq!(twice.active_count("Menu", "direct_video"), 1);
+            assert_eq!(twice.active_count("Menu", "direct_video"), seed % 17 + 1);
+            let rendered_menu_offset = rendered
+                .windows(b"[Menu]".len())
+                .position(|window| window == b"[Menu]")
+                .unwrap();
+            assert_eq!(&rendered[rendered_menu_offset..], expected_menu_tail);
             assert_eq!(
                 twice.effective_value("MiSTer", "main").as_deref(),
                 Some("MiSTer_MagiK")
