@@ -2510,6 +2510,11 @@ impl LauncherNav {
         }
     }
 
+    #[must_use]
+    pub fn arcade_search_result_count(&self) -> usize {
+        self.arcade_search.results.len()
+    }
+
     pub fn active_arcade_game_view<'a>(
         &'a self,
         catalog: &'a ArcadeCatalog,

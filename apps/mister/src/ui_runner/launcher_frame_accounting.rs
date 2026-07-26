@@ -2185,7 +2185,7 @@ impl LauncherFrameAccounting {
                 crate::launcher::ArcadeSearchStatus::Failed => "failed",
             },
             arcade_search_query: &nav.arcade_search.query,
-            arcade_search_results: nav.arcade_search.results.len(),
+            arcade_search_results: nav.arcade_search_result_count(),
             preview_cache_state,
             preview_transition_effect,
             preview_transition_progress,
