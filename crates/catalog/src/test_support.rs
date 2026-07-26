@@ -208,16 +208,30 @@ pub(crate) fn write_stored_zip(path: &Path, entries: &[(&str, &[u8])]) {
     write_stored_zip_with_central_metadata(path, entries, &[], &[]);
 }
 
+pub(crate) fn write_stored_zip64_member(path: &Path, name: &str, data: &[u8]) {
+    write_stored_zip_fixture(path, &[(name, data)], &[], &[], true);
+}
+
 pub(crate) fn write_stored_zip_with_central_metadata(
     path: &Path,
     entries: &[(&str, &[u8])],
     central_extra: &[u8],
     central_comment: &[u8],
 ) {
+    write_stored_zip_fixture(path, entries, central_extra, central_comment, false);
+}
+
+fn write_stored_zip_fixture(
+    path: &Path,
+    entries: &[(&str, &[u8])],
+    central_extra: &[u8],
+    central_comment: &[u8],
+    zip64_members: bool,
+) {
     let mut out = Vec::new();
     let mut central = Vec::new();
     for (name, data) in entries {
-        let local_offset = out.len() as u32;
+        let local_offset = out.len() as u64;
         push_u32(&mut out, 0x0403_4b50);
         push_u16(&mut out, 20);
         push_u16(&mut out, 0);
@@ -233,24 +247,54 @@ pub(crate) fn write_stored_zip_with_central_metadata(
         out.extend_from_slice(data);
 
         push_u32(&mut central, 0x0201_4b50);
-        push_u16(&mut central, 20);
-        push_u16(&mut central, 20);
+        push_u16(&mut central, if zip64_members { 45 } else { 20 });
+        push_u16(&mut central, if zip64_members { 45 } else { 20 });
         push_u16(&mut central, 0);
         push_u16(&mut central, 0);
         push_u16(&mut central, 0);
         push_u16(&mut central, 0);
         push_u32(&mut central, 0);
-        push_u32(&mut central, data.len() as u32);
-        push_u32(&mut central, data.len() as u32);
+        push_u32(
+            &mut central,
+            if zip64_members {
+                u32::MAX
+            } else {
+                data.len() as u32
+            },
+        );
+        push_u32(
+            &mut central,
+            if zip64_members {
+                u32::MAX
+            } else {
+                data.len() as u32
+            },
+        );
         push_u16(&mut central, name.len() as u16);
-        push_u16(&mut central, central_extra.len() as u16);
+        let mut entry_extra = Vec::new();
+        if zip64_members {
+            push_u16(&mut entry_extra, 0x0001);
+            push_u16(&mut entry_extra, 24);
+            push_u64(&mut entry_extra, data.len() as u64);
+            push_u64(&mut entry_extra, data.len() as u64);
+            push_u64(&mut entry_extra, local_offset);
+        }
+        entry_extra.extend_from_slice(central_extra);
+        push_u16(&mut central, entry_extra.len() as u16);
         push_u16(&mut central, central_comment.len() as u16);
         push_u16(&mut central, 0);
         push_u16(&mut central, 0);
         push_u32(&mut central, 0);
-        push_u32(&mut central, local_offset);
+        push_u32(
+            &mut central,
+            if zip64_members {
+                u32::MAX
+            } else {
+                local_offset as u32
+            },
+        );
         central.extend_from_slice(name.as_bytes());
-        central.extend_from_slice(central_extra);
+        central.extend_from_slice(&entry_extra);
         central.extend_from_slice(central_comment);
     }
     let central_offset = out.len() as u32;

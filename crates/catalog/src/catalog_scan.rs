@@ -1260,12 +1260,12 @@ fn scan_zip_central_directory_entries(
         scanned += 1;
         let compression_method = library_db::le_u16(&header[10..12]);
         let crc32 = library_db::le_u32(&header[16..20]);
-        let compressed = library_db::le_u32(&header[20..24]) as u64;
-        let uncompressed = library_db::le_u32(&header[24..28]) as u64;
+        let compressed_32 = library_db::le_u32(&header[20..24]);
+        let uncompressed_32 = library_db::le_u32(&header[24..28]);
         let name_len = library_db::le_u16(&header[28..30]) as u64;
         let extra_len = library_db::le_u16(&header[30..32]) as u64;
         let comment_len = library_db::le_u16(&header[32..34]) as u64;
-        let local_header_offset = library_db::le_u32(&header[42..46]) as u64;
+        let local_header_offset_32 = library_db::le_u32(&header[42..46]);
         let trailing_len = extra_len + comment_len;
         if name_len + trailing_len > remaining {
             return Err("zip entry name outside central directory".to_string());
@@ -1275,11 +1275,22 @@ fn scan_zip_central_directory_entries(
             .read_exact(&mut name_buf)
             .map_err(|e| format!("read zip entry name: {e}"))?;
         remaining -= name_len;
-        if trailing_len > 0 {
-            discard_zip_bytes(&mut central_directory, trailing_len)
-                .map_err(|e| format!("skip zip entry metadata: {e}"))?;
-            remaining -= trailing_len;
+        let mut extra = vec![0u8; extra_len as usize];
+        central_directory
+            .read_exact(&mut extra)
+            .map_err(|e| format!("read zip entry extra data: {e}"))?;
+        remaining -= extra_len;
+        if comment_len > 0 {
+            discard_zip_bytes(&mut central_directory, comment_len)
+                .map_err(|e| format!("skip zip entry comment: {e}"))?;
+            remaining -= comment_len;
         }
+        let (compressed, uncompressed, local_header_offset) = decode_zip64_member_metadata(
+            compressed_32,
+            uncompressed_32,
+            local_header_offset_32,
+            &extra,
+        )?;
         let name = String::from_utf8_lossy(&name_buf).into_owned();
         if !name.ends_with('/')
             && !should_ignore_path(Path::new(&name))
@@ -1311,6 +1322,66 @@ fn scan_zip_central_directory_entries(
         }
     }
     Ok(entries)
+}
+
+fn decode_zip64_member_metadata(
+    compressed: u32,
+    uncompressed: u32,
+    local_header_offset: u32,
+    extra: &[u8],
+) -> Result<(u64, u64, u64), String> {
+    if compressed != u32::MAX && uncompressed != u32::MAX && local_header_offset != u32::MAX {
+        return Ok((
+            compressed as u64,
+            uncompressed as u64,
+            local_header_offset as u64,
+        ));
+    }
+
+    let mut cursor = 0usize;
+    while cursor < extra.len() {
+        if extra.len() - cursor < 4 {
+            return Err("truncated zip extra field header".to_string());
+        }
+        let field_id = library_db::le_u16(&extra[cursor..cursor + 2]);
+        let field_len = library_db::le_u16(&extra[cursor + 2..cursor + 4]) as usize;
+        cursor += 4;
+        let end = cursor
+            .checked_add(field_len)
+            .filter(|end| *end <= extra.len())
+            .ok_or_else(|| "zip extra field outside entry metadata".to_string())?;
+        if field_id == 0x0001 {
+            let field = &extra[cursor..end];
+            let mut field_cursor = 0usize;
+            let mut next_u64 = || {
+                let value_end = field_cursor
+                    .checked_add(8)
+                    .filter(|value_end| *value_end <= field.len())
+                    .ok_or_else(|| "truncated ZIP64 member metadata".to_string())?;
+                let value = library_db::le_u64(&field[field_cursor..value_end]);
+                field_cursor = value_end;
+                Ok::<u64, String>(value)
+            };
+            let uncompressed = if uncompressed == u32::MAX {
+                next_u64()?
+            } else {
+                uncompressed as u64
+            };
+            let compressed = if compressed == u32::MAX {
+                next_u64()?
+            } else {
+                compressed as u64
+            };
+            let local_header_offset = if local_header_offset == u32::MAX {
+                next_u64()?
+            } else {
+                local_header_offset as u64
+            };
+            return Ok((compressed, uncompressed, local_header_offset));
+        }
+        cursor = end;
+    }
+    Err("missing ZIP64 member metadata".to_string())
 }
 
 fn discard_zip_bytes(reader: &mut impl Read, mut len: u64) -> Result<(), std::io::Error> {
@@ -1915,6 +1986,36 @@ mod tests {
             entries[0].entry_path,
             "World A-Z/Neo Bomberman (neobombe).neo"
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn zip_central_directory_decodes_zip64_member_metadata() {
+        let root = unique_temp_dir("zip64-member");
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let zip_path = root.join("games.zip");
+        write_stored_zip64_member(&zip_path, "World A-Z/Neo Bomberman (neobombe).neo", b"neo");
+        let meta = std::fs::metadata(&zip_path).expect("stat zip");
+        let file = FoundFile {
+            path: zip_path.clone(),
+            ext: "zip".to_string(),
+            size: meta.len(),
+            mtime_secs: mtime_secs(&meta),
+        };
+        let profiles = launch_profiles::builtin_profiles();
+        let profile = profiles
+            .iter()
+            .find(|profile| profile.id == "neogeo")
+            .expect("neogeo profile");
+
+        let entries = scan_zip_central_directory(&file, profile).expect("scan zip");
+        let member = crate::archive_member::decode_archive_member_ref(&entries[0].launch_ref)
+            .expect("decode launch ref")
+            .expect("archive member");
+
+        assert_eq!(member.compressed_size, 3);
+        assert_eq!(member.uncompressed_size, 3);
+        assert_eq!(member.local_header_offset, 0);
         let _ = std::fs::remove_dir_all(root);
     }
 
