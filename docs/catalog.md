@@ -51,7 +51,7 @@ Readers choose the newest completely valid slot. Partially written generations
 are unreachable.
 
 `catalog.binding.json` binds the active registry generation and the
-`rich-game-v1` projection contract to the canonical fingerprint in
+`rich-game-v2` projection contract to the canonical fingerprint in
 `state/catalog-state.sqlite3`. Publication writes shards, the manifest, and the
 binding before replacing catalog state. An interruption may cause a conservative
 rebuild, but cannot make incomplete artifacts authoritative.
@@ -209,6 +209,65 @@ not a release blocker; selection correctness and UI responsiveness are gates.
 Publication is manifest-last and failure-atomic. Garbage collection may remove
 only artifacts not referenced by the active or retained previous generation.
 
+## Compatibility And Recovery
+
+The projection contract and shard schema identify generated catalog formats,
+not user content. A valid `rich-game-v1` binding or schema-two shard is an
+upgrade requirement, not corruption. Reconciliation rebuilds every affected
+system into schema-three, `rich-game-v2` immutable artifacts even when its game
+fingerprint is unchanged. Incompatible resumable build journals are discarded.
+The previous manifest remains authoritative unless every replacement shard,
+the new manifest, binding, scanner cache, and catalog state validate and publish
+successfully.
+
+An atomic rebuild retains the usable catalog while replacements are built and
+switches authority with the normal manifest-last publication. A full rebuild is
+an explicit recovery action that removes only generated catalog artifacts and
+then constructs them again. Neither action removes ROMs, MRA files, screenshots,
+preview media, or media packs.
+
+Catalog decisions use one lifecycle-owned dialog after the scan overlay has
+been cleared:
+
+| Situation | Left/default | Right | B/Home |
+| --- | --- | --- | --- |
+| Format upgrade with usable catalog | Continue | Rebuild atomically | Continue |
+| Rebuild or persistence failure with usable catalog | Continue | Full rebuild | Continue |
+| Transient failure without a catalog | Retry | Full rebuild | Exit to MiSTer |
+| Corrupt or deterministic failure without a catalog | Exit to MiSTer | Full rebuild | Exit to MiSTer |
+
+Continuing preserves resident/bootstrap Arcade entries and any other already
+available systems. A lazy-load failure marks only that system unavailable and
+does not block the launcher. Deterministic schema mismatches do not offer Retry.
+
+## Catalog Failure Reports
+
+Catalog failures queue an atomic, bounded report under the active installation:
+
+```text
+diagnostics/catalog/latest.json
+diagnostics/catalog/report-catalog-<timestamp>.json
+```
+
+`latest.json` uses schema `mister-magik-catalog-failure-v1`; reports are limited
+to 64 KiB and the five newest timestamped reports are retained. They include
+build identity, a stable failure code, operation and stage, schema or projection
+expectations, affected system and generation, usable catalog counts, offered
+recovery actions, and bounded catalog event history. Report-write failure never
+blocks recovery. The volatile `status.json` also exposes the current structured
+`catalog_failure`, and `events.jsonl` records stable failure and recovery events.
+
+For a sendable support bundle, run the typed host command:
+
+```text
+mister agent diagnostics --out PATH
+```
+
+Agent and SSH-fallback collection probe both public and development
+installations and place the most recent report in the bundle as
+`catalog-failure-latest.json`. A screen capture may clarify what the user saw,
+but is not required to identify the catalog failure.
+
 ## Launch Return
 
 Before handing a game to Main, the launcher writes a bounded return capsule for
@@ -321,13 +380,32 @@ structured event evaluation, catalog contention, and unconditional restoration.
 The scenario is selected from changed components and has no duration, label,
 skip-build, or fixture flags.
 
+## Deferred Alpha Qualification
+
+Implementation and local validation do not publish or deploy an alpha. After a
+separately authorized alpha publication, qualify the existing alpha-channel
+device while preserving its schema-two, `rich-game-v1` catalog:
+
+1. Install the published alpha through the normal downloader path and confirm
+   that the format-upgrade dialog appears before rebuilding.
+2. Choose Continue and launch a resident Arcade game.
+3. Return to the launcher, choose the atomic rebuild, and verify schema-three,
+   `rich-game-v2` artifacts and a newly published durable generation.
+4. Reboot and verify that the rebuilt catalog remains authoritative and games
+   still launch.
+5. Collect `mister agent diagnostics --out PATH` and confirm the bundle contains
+   `catalog-failure-latest.json` when a catalog failure was recorded.
+
+This qualification does not require reset-fault testing and does not change the
+device downloader INI or release channel.
+
 ## Ownership
 
 - `catalog_config.rs`: roots and environment overrides.
 - `catalog_state.rs`: schema-one stamp/checkpoint state.
 - `scanner_cache.rs`: schema-one scanner cache.
 - `shard_registry.rs`: schema-one manifests and artifact validation.
-- `system_shard.rs`: schema-two per-system SQLite and schema-one mini-nav artifacts.
+- `system_shard.rs`: schema-three per-system SQLite and schema-one mini-nav artifacts.
 - `production_sharded_projection.rs`: production reconciliation, binding, and
   publication.
 - `lazy_sharded_reader.rs`: registry-first and per-system reads.
