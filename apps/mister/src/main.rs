@@ -72,6 +72,7 @@ mod arcade_list_renderer;
 mod artifact_publish;
 mod bitmap_text;
 use mister_magik_mister_runtime::boot_analytics;
+mod catalog_failure_report;
 mod cpu_profile;
 mod display_config;
 #[cfg(mister_experiments)]
