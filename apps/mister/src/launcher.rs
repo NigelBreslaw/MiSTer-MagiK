@@ -857,7 +857,7 @@ pub enum ArcadeSearchStatus {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArcadeSearchRequest {
     pub request_id: u64,
-    pub catalog_version: u64,
+    pub catalog_version: usize,
     pub collection_id: String,
     pub system_ids: Vec<String>,
     pub query: String,
@@ -3067,7 +3067,7 @@ impl LauncherNav {
     pub fn take_arcade_search_request(
         &mut self,
         catalog: &ArcadeCatalog,
-        catalog_version: u64,
+        catalog_version: usize,
     ) -> Option<ArcadeSearchRequest> {
         if !self.arcade_search.request_pending || self.arcade_search.query.is_empty() {
             return None;
