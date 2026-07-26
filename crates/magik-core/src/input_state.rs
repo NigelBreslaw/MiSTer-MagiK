@@ -43,6 +43,8 @@ pub struct PadState {
     pub left_y: f32,
     pub right_x: f32,
     pub right_y: f32,
+    #[doc(hidden)]
+    pub generic_direction_axes: [i16; 8],
     pub last_raw_event: Option<PadRawEvent>,
     pub last_raw: String,
     /// Human-readable list of everything currently held.
@@ -148,30 +150,22 @@ impl PadState {
         label
     }
 
-    fn apply_hat_x(&mut self, v: f32) {
-        if v < 0.0 {
-            self.dpad_left = true;
-            self.dpad_right = false;
-        } else if v > 0.0 {
-            self.dpad_right = true;
-            self.dpad_left = false;
-        } else {
-            self.dpad_left = false;
-            self.dpad_right = false;
-        }
-    }
-
-    fn apply_hat_y(&mut self, v: f32) {
-        if v < 0.0 {
-            self.dpad_up = true;
-            self.dpad_down = false;
-        } else if v > 0.0 {
-            self.dpad_down = true;
-            self.dpad_up = false;
-        } else {
-            self.dpad_up = false;
-            self.dpad_down = false;
-        }
+    fn record_generic_direction_axis(&mut self, axis: u8, value: i16) {
+        self.generic_direction_axes[axis as usize] = value;
+        let held = |axis: usize, positive: bool| {
+            let value = self.generic_direction_axes[axis];
+            if axis >= 6 {
+                if positive { value > 0 } else { value < 0 }
+            } else if positive {
+                value as f32 > STICK_DEADZONE
+            } else {
+                (value as f32) < -STICK_DEADZONE
+            }
+        };
+        self.dpad_left = [0, 4, 6].into_iter().any(|axis| held(axis, false));
+        self.dpad_right = [0, 4, 6].into_iter().any(|axis| held(axis, true));
+        self.dpad_up = [1, 5, 7].into_iter().any(|axis| held(axis, false));
+        self.dpad_down = [1, 5, 7].into_iter().any(|axis| held(axis, true));
     }
 }
 
@@ -458,11 +452,11 @@ impl InputProfile {
                 match event.number {
                     0 => {
                         state.left_x = normalize_stick(v);
-                        state.apply_dpad_x(v, "Stick X");
+                        state.record_generic_direction_axis(event.number, event.value);
                     }
                     1 => {
                         state.left_y = normalize_stick(v);
-                        state.apply_dpad_y(v, "Stick Y");
+                        state.record_generic_direction_axis(event.number, event.value);
                     }
                     2 => {
                         state.right_x = normalize_stick(v);
@@ -471,16 +465,16 @@ impl InputProfile {
                         state.right_y = normalize_stick(v);
                     }
                     4 => {
-                        state.apply_dpad_x(v, "D-pad X");
+                        state.record_generic_direction_axis(event.number, event.value);
                     }
                     5 => {
-                        state.apply_dpad_y(v, "D-pad Y");
+                        state.record_generic_direction_axis(event.number, event.value);
                     }
                     6 => {
-                        state.apply_hat_x(v);
+                        state.record_generic_direction_axis(event.number, event.value);
                     }
                     7 => {
-                        state.apply_hat_y(v);
+                        state.record_generic_direction_axis(event.number, event.value);
                     }
                     _ => {
                         state.set_debug_event_label(debug_labels, || {
@@ -611,6 +605,25 @@ mod tests {
         assert_eq!(state.last_event_label, "axis 0 = -32767");
         assert!(state.pressed_now.contains("D-Left"));
         assert!(state.pressed_now.contains("Left stick"));
+    }
+
+    #[test]
+    fn generic_direction_sources_do_not_release_each_other() {
+        let mut state = PadState::default();
+        let profile = InputProfile::generic();
+
+        profile.apply_js_event(&mut state, js_axis(0, 32767), false);
+        profile.apply_js_event(&mut state, js_axis(4, 32767), false);
+        profile.apply_js_event(&mut state, js_axis(4, 0), false);
+        assert!(state.dpad_right);
+
+        profile.apply_js_event(&mut state, js_axis(6, -32767), false);
+        assert!(state.dpad_left);
+        assert!(state.dpad_right);
+
+        profile.apply_js_event(&mut state, js_axis(0, 0), false);
+        assert!(!state.dpad_right);
+        assert!(state.dpad_left);
     }
 
     #[test]
