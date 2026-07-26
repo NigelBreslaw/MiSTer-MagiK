@@ -719,14 +719,32 @@ mod tests {
         publish_production_projection(&root, &catalog, limits()).unwrap();
         let before = read_latest_manifest(&root, limits()).unwrap();
         for system in &before.systems {
-            let connection =
-                rusqlite::Connection::open(root.join(&system.active.sqlite_path)).unwrap();
+            let sqlite_path = root.join(&system.active.sqlite_path);
+            let connection = rusqlite::Connection::open(&sqlite_path).unwrap();
             connection
                 .execute(
                     "UPDATE shard_meta SET value=?1 WHERE key='schema_version'",
                     [crate::sharded_catalog::SHARD_SCHEMA_VERSION - 1],
                 )
                 .unwrap();
+            drop(connection);
+
+            let mut hash = 0xcbf2_9ce4_8422_2325u64;
+            for byte in fs::read(&sqlite_path).unwrap() {
+                hash ^= u64::from(byte);
+                hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+            let manifest_path = root.join("registry/manifest-a.json");
+            let mut manifest: serde_json::Value =
+                serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+            let stored_system = manifest["systems"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|stored| stored["system_id"] == system.system_id.as_str())
+                .unwrap();
+            stored_system["active"]["sqlite_hash"] = format!("{hash:016x}").into();
+            fs::write(manifest_path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
         }
 
         let outcome = publish_production_projection(&root, &catalog, limits()).unwrap();
