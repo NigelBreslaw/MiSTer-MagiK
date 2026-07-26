@@ -163,8 +163,8 @@ fn dispatch(
             return Ok(outcome);
         }
         Intent::Deliver => return deliver(evidence, repository, reporter),
-        Intent::Benchmark => {
-            return agent_cli::benchmark::execute(repository, reporter);
+        Intent::Benchmark { scenario } => {
+            return agent_cli::benchmark::execute(repository, *scenario, reporter);
         }
         Intent::CaptureUsbVideo {
             output: destination,

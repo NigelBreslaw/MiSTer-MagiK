@@ -289,6 +289,10 @@ impl DeviceOperations for NativeDevice {
                 let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 profile_installed_screensaver(&config, output_dir).map_err(device_failure)?
             }
+            DeviceRequest::ProfileInstalledCatalogLifecycle { output_dir } => {
+                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
+                profile_installed_catalog_lifecycle(&config, output_dir).map_err(device_failure)?
+            }
             DeviceRequest::VerifyHealth(layout) => {
                 let label = match layout {
                     Layout::Development => "dev",
@@ -3137,6 +3141,7 @@ fn parse_crt_trial_status(output: &str) -> Result<&str> {
 }
 
 const SCREENSAVER_PROFILE_REMOTE_DIR: &str = "/tmp/mister-magik/screensaver-profile";
+const CATALOG_LIFECYCLE_REMOTE_DIR: &str = "/tmp/mister-magik/catalog-lifecycle-benchmark";
 const SCREENSAVER_STARTUP_WARMUP_FRAMES: usize = 3;
 const SCREENSAVER_PROFILE_DURATION_SECS: u64 = 45;
 const SCREENSAVER_PROFILE_TIMEOUT_SECS: u64 = SCREENSAVER_PROFILE_DURATION_SECS + 20;
@@ -3147,6 +3152,255 @@ fn last_json_line(output: &str) -> Option<Value> {
         .lines()
         .rev()
         .find_map(|line| serde_json::from_str::<Value>(line.trim()).ok())
+}
+
+fn profile_installed_catalog_lifecycle(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    let session = connect_with(&config.connection, 10)?;
+    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v2.manifest")
+        .ok_or("development platform manifest is missing")?;
+    let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable")?
+        .trim()
+        .to_string();
+    fs::create_dir_all(output_dir)?;
+
+    exec_checked(
+        &session,
+        "catalog lifecycle launcher suspend",
+        &acknowledged_main_command("mister_magik_suspend"),
+    )?;
+
+    let mut refresh_log = String::new();
+    let mut inspect_log = String::new();
+    let run_result = (|| -> Result<Value> {
+        exec_checked(
+            &session,
+            "catalog lifecycle isolated fixture",
+            &catalog_lifecycle_prepare_command(),
+        )?;
+        let refresh_started = Instant::now();
+        let refresh = exec(
+            &session,
+            &catalog_lifecycle_runtime_command("library-refresh"),
+            true,
+        )?;
+        refresh_log.push_str(&refresh.stdout);
+        refresh_log.push_str(&refresh.stderr);
+        if let Some(error) = exec_failure_message("catalog lifecycle refresh", &refresh) {
+            return Err(error.into());
+        }
+        let refresh_ms = refresh_started.elapsed().as_millis() as u64;
+
+        let inspect_started = Instant::now();
+        let inspect = exec(
+            &session,
+            &catalog_lifecycle_runtime_command("catalog-v3-inspect"),
+            true,
+        )?;
+        inspect_log.push_str(&inspect.stdout);
+        inspect_log.push_str(&inspect.stderr);
+        if let Some(error) = exec_failure_message("catalog lifecycle inspect", &inspect) {
+            return Err(error.into());
+        }
+        let catalog = parse_catalog_lifecycle_inspect(&inspect.stdout)?;
+        let inspect_ms = inspect_started.elapsed().as_millis() as u64;
+        Ok(json!({
+            "schema": "mister-magik-installed-benchmark-v1",
+            "scenario": "catalog-lifecycle",
+            "elapsed_ms": refresh_ms,
+            "timing": {
+                "refresh_ms": refresh_ms,
+                "inspect_ms": inspect_ms,
+            },
+            "catalog": catalog,
+            "manifest": parse_manifest_evidence(&manifest),
+            "boot_id": boot_id,
+            "isolation": {
+                "remote_root": CATALOG_LIFECYCLE_REMOTE_DIR,
+                "production_paths_redirected": true,
+            },
+            "output_dir": output_dir,
+        }))
+    })();
+
+    let evidence_result = (|| -> Result<()> {
+        fs::write(output_dir.join("library-refresh.log"), &refresh_log)?;
+        fs::write(output_dir.join("catalog-inspect.tsv"), &inspect_log)?;
+        Ok(())
+    })();
+
+    let cleanup_result = exec_checked(
+        &session,
+        "catalog lifecycle isolated cleanup",
+        &catalog_lifecycle_cleanup_command(),
+    );
+    let resume_result = exec_checked(
+        &session,
+        "catalog lifecycle launcher resume",
+        &acknowledged_main_command("mister_magik_resume"),
+    );
+    let restore_result = combine_catalog_lifecycle_restore(cleanup_result, resume_result);
+    let summary = match (run_result, evidence_result, restore_result) {
+        (Ok(summary), Ok(()), Ok(())) => summary,
+        (Err(error), _, Ok(())) => return Err(error),
+        (Ok(_), Err(error), Ok(())) => return Err(error),
+        (Ok(_), _, Err(error)) => {
+            return Err(format!("catalog lifecycle benchmark restore failed: {error}").into());
+        }
+        (Err(run_error), _, Err(restore_error)) => {
+            return Err(format!(
+                "{run_error}; catalog lifecycle benchmark restore failed: {restore_error}"
+            )
+            .into());
+        }
+    };
+
+    drop(session);
+    let session = connect_with(&config.connection, 10)?;
+    let final_boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable after catalog lifecycle benchmark")?;
+    if final_boot_id.trim() != boot_id {
+        return Err("device rebooted during the catalog lifecycle benchmark".into());
+    }
+    let final_manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v2.manifest")
+        .ok_or("development platform manifest is missing after catalog lifecycle benchmark")?;
+    if final_manifest != manifest {
+        return Err(
+            "installed platform manifest changed during catalog lifecycle benchmark".into(),
+        );
+    }
+
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    fs::write(
+        output_dir.join("report.md"),
+        catalog_lifecycle_report(&summary)?,
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn catalog_lifecycle_prepare_command() -> String {
+    format!(
+        "set -eu; root={root}; rm -rf \"$root\"; mkdir -p \"$root\"; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
+        root = sh(CATALOG_LIFECYCLE_REMOTE_DIR),
+    )
+}
+
+fn catalog_lifecycle_runtime_command(subcommand: &str) -> String {
+    let root = CATALOG_LIFECYCLE_REMOTE_DIR;
+    format!(
+        "env MISTER_SHARDED_CATALOG_DIR={catalog} MISTER_LIBRARY_SQLITE={library} MISTER_ARCADE_BOOTSTRAP_INDEX={bootstrap} MISTER_LIBRARY_REFRESH_LOCK={refresh_lock} MISTER_CATALOG_BUILDER_LOCK={builder_lock} MISTER_CATALOG_READY_SNAPSHOT={ready_snapshot} MISTER_MAGIK_FOREGROUND_LIBRARY_REFRESH=1 /media/fat/mister-magik-dev/mister-magik-fb {subcommand}",
+        catalog = sh(&format!("{root}/catalog-v3")),
+        library = sh(&format!("{root}/library.sqlite3")),
+        bootstrap = sh(&format!("{root}/arcade-bootstrap.nav.lz4b")),
+        refresh_lock = sh(&format!("{root}/library-refresh.lock")),
+        builder_lock = sh(&format!("{root}/catalog-builder.lock")),
+        ready_snapshot = sh(&format!("{root}/catalog-ready.snapshot")),
+    )
+}
+
+fn catalog_lifecycle_cleanup_command() -> String {
+    format!(
+        "set -eu; rm -rf {root}; test ! -e {root}",
+        root = sh(CATALOG_LIFECYCLE_REMOTE_DIR),
+    )
+}
+
+fn combine_catalog_lifecycle_restore(cleanup: Result<()>, resume: Result<()>) -> Result<()> {
+    match (cleanup, resume) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(error)) => Err(error),
+        (Err(cleanup), Err(resume)) => {
+            Err(format!("{cleanup}; launcher resume failed: {resume}").into())
+        }
+    }
+}
+
+fn parse_catalog_lifecycle_inspect(output: &str) -> Result<Value> {
+    let mut valid = false;
+    let mut generation = None;
+    let mut total_games = None;
+    let mut systems = Vec::new();
+    for line in output.lines() {
+        let mut fields = line.split('\t');
+        match fields.next() {
+            Some("catalog_v3_summary_tsv") => {
+                let values = fields
+                    .filter_map(|field| field.split_once('='))
+                    .collect::<std::collections::BTreeMap<_, _>>();
+                valid = values.get("valid").copied() == Some("1");
+                generation = values
+                    .get("generation")
+                    .and_then(|value| value.parse::<u64>().ok());
+                total_games = values
+                    .get("total_games")
+                    .and_then(|value| value.parse::<u64>().ok());
+            }
+            Some("catalog_v3_system_tsv") => {
+                let values = fields
+                    .filter_map(|field| field.split_once('='))
+                    .collect::<std::collections::BTreeMap<_, _>>();
+                let system = values
+                    .get("system")
+                    .ok_or("catalog lifecycle system row has no system")?;
+                let games = values
+                    .get("registry_games")
+                    .ok_or("catalog lifecycle system row has no game count")?
+                    .parse::<u64>()?;
+                systems.push(json!({
+                    "system": system,
+                    "games": games,
+                    "role": values.get("role").copied().unwrap_or("unknown"),
+                }));
+            }
+            _ => {}
+        }
+    }
+    if !valid {
+        return Err("catalog lifecycle inspection did not report valid=1".into());
+    }
+    Ok(json!({
+        "valid": true,
+        "generation": generation.ok_or("catalog lifecycle inspection has no generation")?,
+        "total_games": total_games.ok_or("catalog lifecycle inspection has no total game count")?,
+        "systems": systems,
+    }))
+}
+
+fn catalog_lifecycle_report(summary: &Value) -> Result<String> {
+    let elapsed_ms = summary
+        .get("elapsed_ms")
+        .and_then(Value::as_u64)
+        .ok_or("catalog lifecycle summary has no elapsed time")?;
+    let total_games = summary
+        .pointer("/catalog/total_games")
+        .and_then(Value::as_u64)
+        .ok_or("catalog lifecycle summary has no total game count")?;
+    let systems = summary
+        .pointer("/catalog/systems")
+        .and_then(Value::as_array)
+        .ok_or("catalog lifecycle summary has no systems")?;
+    let mut report = format!(
+        "# Catalog Lifecycle Benchmark\n\n- Result: passed\n- Elapsed: {elapsed_ms} ms\n- Total games: {total_games}\n- Systems: {}\n\n## Systems\n\n",
+        systems.len()
+    );
+    for system in systems {
+        report.push_str(&format!(
+            "- {}: {} games\n",
+            system
+                .get("system")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown"),
+            system.get("games").and_then(Value::as_u64).unwrap_or(0)
+        ));
+    }
+    Ok(report)
 }
 
 fn profile_installed_screensaver(config: &NativeDeviceConfig, output_dir: &Path) -> Result<String> {
@@ -12958,6 +13212,49 @@ H: Handlers=event3 js0"#
         assert_eq!(capability["screensaver-pprof-v1"], true);
         assert_eq!(capability["screensaver-frame-evidence-v3"], true);
         assert!(last_json_line("no structured report").is_none());
+    }
+
+    #[test]
+    fn catalog_lifecycle_runtime_is_fully_isolated_from_production_data() {
+        let refresh = catalog_lifecycle_runtime_command("library-refresh");
+        assert!(refresh.contains("MISTER_SHARDED_CATALOG_DIR="));
+        assert!(refresh.contains("MISTER_LIBRARY_SQLITE="));
+        assert!(refresh.contains("MISTER_ARCADE_BOOTSTRAP_INDEX="));
+        assert!(refresh.contains(CATALOG_LIFECYCLE_REMOTE_DIR));
+        assert!(
+            !refresh
+                .contains("MISTER_SHARDED_CATALOG_DIR='/media/fat/mister-magik-dev/catalog-v3'")
+        );
+        assert!(catalog_lifecycle_cleanup_command().contains(CATALOG_LIFECYCLE_REMOTE_DIR));
+    }
+
+    #[test]
+    fn catalog_lifecycle_inspection_preserves_per_system_counts() {
+        let parsed = parse_catalog_lifecycle_inspect(
+            "catalog_v3_summary_tsv\tvalid=1\tschema=1\tgeneration=7\tsystems=2\ttotal_games=44\n\
+             catalog_v3_system_tsv\tsystem=atari2600\trole=console\tgeneration=7\tregistry_games=3\tshard_games=3\n\
+             catalog_v3_system_tsv\tsystem=arcade\trole=arcade\tgeneration=7\tregistry_games=41\tshard_games=41\n",
+        )
+        .unwrap();
+        assert_eq!(parsed["valid"], true);
+        assert_eq!(parsed["generation"], 7);
+        assert_eq!(parsed["total_games"], 44);
+        assert_eq!(parsed["systems"][0]["system"], "atari2600");
+        assert_eq!(parsed["systems"][0]["games"], 3);
+    }
+
+    #[test]
+    fn catalog_lifecycle_inspection_rejects_invalid_or_incomplete_output() {
+        assert!(
+            parse_catalog_lifecycle_inspect(
+                "catalog_v3_summary_tsv\tvalid=0\tgeneration=7\ttotal_games=44"
+            )
+            .is_err()
+        );
+        assert!(
+            parse_catalog_lifecycle_inspect("catalog_v3_summary_tsv\tvalid=1\tgeneration=7")
+                .is_err()
+        );
     }
 
     #[test]

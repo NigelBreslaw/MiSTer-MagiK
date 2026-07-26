@@ -3,33 +3,77 @@
 
 use crate::device::DeviceClient;
 use crate::error::AgentResult;
-use crate::model::Outcome;
+use crate::model::{BenchmarkScenario, Outcome};
 use crate::progress::{EventKind, Reporter};
-use mister_tool::transport::{DeviceRequest, Layout};
+use mister_tool::transport::{DeviceRequest, Layout as DeviceLayout};
 use serde_json::{Value, json};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub fn execute(repository: &Path, reporter: &mut Reporter<'_>) -> AgentResult<Outcome> {
+pub fn execute(
+    repository: &Path,
+    scenario: BenchmarkScenario,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    require_clean_installed_commit(repository, scenario, reporter)
+}
+
+fn require_clean_installed_commit(
+    repository: &Path,
+    scenario: BenchmarkScenario,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    let head = crate::git::value(repository, &["rev-parse", "HEAD"])?;
+    if !crate::git::value(repository, &["status", "--porcelain"])?.is_empty() {
+        return Err("benchmark requires a clean exact-commit worktree".into());
+    }
     let mut device = DeviceClient::default();
     reporter.emit(
         EventKind::Progress,
         "preflight",
-        "benchmark installed screensaver preflight",
+        &format!("benchmark {} installed-runtime preflight", scenario.label()),
         Some(10),
     )?;
     device.execute(DeviceRequest::Discover)?;
     device.execute(DeviceRequest::VerifyDevelopmentPlatform)?;
-    device.execute(DeviceRequest::VerifyHealth(Layout::Development))?;
+    device.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))?;
     let manifest = device.execute(DeviceRequest::ReadDevelopmentManifest)?;
+    let installed = crate::platform_manifest::parse_installed(
+        &manifest,
+        crate::platform_manifest::Layout::Development,
+    )?;
+    if installed.magik_revision() != head {
+        return Err(format!(
+            "benchmark installed revision {} does not match clean local commit {head}; run scripts/agent deliver first",
+            installed.magik_revision()
+        )
+        .into());
+    }
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| error.to_string())?
         .as_secs();
     let output_dir = repository
-        .join("build/agent-benchmarks/screensaver")
+        .join("build/agent-benchmarks")
+        .join(scenario.label())
         .join(timestamp.to_string());
 
+    match scenario {
+        BenchmarkScenario::Screensaver => {
+            execute_screensaver(&mut device, manifest, output_dir, reporter)
+        }
+        BenchmarkScenario::CatalogLifecycle => {
+            execute_catalog_lifecycle(&mut device, manifest, output_dir, reporter)
+        }
+    }
+}
+
+fn execute_screensaver(
+    device: &mut DeviceClient,
+    manifest: String,
+    output_dir: std::path::PathBuf,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
     reporter.emit(
         EventKind::Progress,
         "profile",
@@ -40,7 +84,7 @@ pub fn execute(repository: &Path, reporter: &mut Reporter<'_>) -> AgentResult<Ou
         output_dir: output_dir.clone(),
     })?;
     let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
-    device.execute(DeviceRequest::VerifyHealth(Layout::Development))?;
+    device.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))?;
     evaluate_summary(&summary)?;
     reporter.emit(
         EventKind::Progress,
@@ -54,6 +98,55 @@ pub fn execute(repository: &Path, reporter: &mut Reporter<'_>) -> AgentResult<Ou
         Some(100),
     )?;
     Ok(Outcome::Passed)
+}
+
+fn execute_catalog_lifecycle(
+    device: &mut DeviceClient,
+    manifest: String,
+    output_dir: std::path::PathBuf,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    reporter.emit(
+        EventKind::Progress,
+        "profile",
+        "profiling isolated catalog lifecycle",
+        Some(35),
+    )?;
+    let detail = device.execute(DeviceRequest::ProfileInstalledCatalogLifecycle {
+        output_dir: output_dir.clone(),
+    })?;
+    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+    device.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))?;
+    evaluate_catalog_lifecycle_summary(&summary)?;
+    reporter.emit(
+        EventKind::Progress,
+        "benchmark-result",
+        &serde_json::to_string(&json!({
+            "installed_manifest": manifest,
+            "summary": summary,
+            "output_dir": output_dir,
+        }))
+        .map_err(|error| error.to_string())?,
+        Some(100),
+    )?;
+    Ok(Outcome::Passed)
+}
+
+fn evaluate_catalog_lifecycle_summary(summary: &Value) -> AgentResult<()> {
+    if summary.get("scenario").and_then(Value::as_str) != Some("catalog-lifecycle") {
+        return Err("catalog lifecycle benchmark summary has the wrong scenario".into());
+    }
+    if summary.pointer("/catalog/valid").and_then(Value::as_bool) != Some(true) {
+        return Err("catalog lifecycle benchmark did not produce a valid catalog".into());
+    }
+    let systems = summary
+        .pointer("/catalog/systems")
+        .and_then(Value::as_array)
+        .ok_or("catalog lifecycle benchmark summary has no systems")?;
+    if systems.is_empty() {
+        return Err("catalog lifecycle benchmark produced no systems".into());
+    }
+    Ok(())
 }
 
 fn evaluate_summary(summary: &Value) -> AgentResult<()> {
@@ -221,5 +314,25 @@ mod tests {
         let mut blocking_status = passing_run(1);
         blocking_status["status_publishing"]["enqueue_p99_us"] = json!(250);
         assert!(evaluate_run(&blocking_status).is_err());
+    }
+
+    #[test]
+    fn catalog_lifecycle_requires_a_valid_nonempty_catalog() {
+        let passing = json!({
+            "scenario": "catalog-lifecycle",
+            "catalog": {
+                "valid": true,
+                "systems": [{"system": "atari2600", "games": 2}]
+            }
+        });
+        assert!(evaluate_catalog_lifecycle_summary(&passing).is_ok());
+
+        let mut invalid = passing.clone();
+        invalid["catalog"]["valid"] = json!(false);
+        assert!(evaluate_catalog_lifecycle_summary(&invalid).is_err());
+
+        let mut empty = passing;
+        empty["catalog"]["systems"] = json!([]);
+        assert!(evaluate_catalog_lifecycle_summary(&empty).is_err());
     }
 }

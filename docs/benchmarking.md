@@ -1,10 +1,43 @@
 # Benchmarking policy
 
-`scripts/agent benchmark` is the only agent-facing performance workflow. It is
-flag-free and profiles the screensaver inside the installed development app.
-It never builds, deploys, replaces platform files, or reboots the MiSTer. The
-installed platform manifest and its hashes are the benchmark identity,
-regardless of the local Git HEAD.
+`scripts/agent benchmark [SCENARIO]` is the only agent-facing performance
+workflow. Scenarios are a closed typed registry rather than a flag matrix. It
+never builds, deploys, replaces platform files, or reboots the MiSTer. The
+installed platform manifest and its hashes are the benchmark identity, and its
+MagiK revision must match the clean local Git HEAD.
+
+Supported scenarios:
+
+- `screensaver` (the default)
+- `catalog-lifecycle`
+
+New benchmarks must add a named registry entry and a fixed typed device
+request. They may not expose arbitrary commands, duration knobs, remote paths,
+or generic environment overrides.
+
+## Catalog lifecycle
+
+```text
+Verify installed platform, health, and exact clean revision
+-> suspend the ordinary launcher through Main
+-> create a fixed isolated /tmp catalog root
+-> build the full catalog from installed read-only media and core inputs
+-> inspect the registry and every system shard
+-> record elapsed time and per-system game counts
+-> remove the isolated fixture
+-> resume the ordinary launcher
+-> verify platform identity and health
+```
+
+The scenario redirects the sharded catalog, library database, arcade bootstrap
+index, ready snapshot, and builder/refresh locks beneath
+`/tmp/mister-magik/catalog-lifecycle-benchmark`. Production catalog and library
+artifacts are never renamed, deleted, or overwritten. Cleanup and launcher
+resume run after every post-suspend success or failure.
+
+Evidence is written under
+`build/agent-benchmarks/catalog-lifecycle/<timestamp>/` as the refresh log,
+catalog inspection TSV, structured summary, and Markdown report.
 
 ## Installed screensaver profile
 

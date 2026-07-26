@@ -34,6 +34,9 @@ pub enum DeviceRequest {
     ProfileInstalledScreensaver {
         output_dir: PathBuf,
     },
+    ProfileInstalledCatalogLifecycle {
+        output_dir: PathBuf,
+    },
     VerifyHealth(Layout),
     BeginReleaseQualification,
     QualifyReleaseRuntime,
@@ -68,6 +71,7 @@ impl DeviceRequest {
             Self::DeliverRuntimeTransaction { .. } => "deliver-runtime-transaction",
             Self::DeliverPlatformTransaction { .. } => "deliver-platform-transaction",
             Self::ProfileInstalledScreensaver { .. } => "profile-installed-screensaver",
+            Self::ProfileInstalledCatalogLifecycle { .. } => "profile-installed-catalog-lifecycle",
             Self::VerifyHealth(_) => "verify-health",
             Self::BeginReleaseQualification => "begin-release-qualification",
             Self::QualifyReleaseRuntime => "qualify-release-runtime",
@@ -220,6 +224,9 @@ mod tests {
             DeviceRequest::ProfileInstalledScreensaver {
                 output_dir: "profiles".into(),
             },
+            DeviceRequest::ProfileInstalledCatalogLifecycle {
+                output_dir: "catalog-profile".into(),
+            },
             DeviceRequest::VerifyHealth(Layout::Public),
             DeviceRequest::BeginReleaseQualification,
             DeviceRequest::QualifyReleaseRuntime,
@@ -239,7 +246,7 @@ mod tests {
             DeviceRequest::CaptureFramebuffer,
         ];
         let labels: Vec<_> = requests.iter().map(DeviceRequest::label).collect();
-        assert_eq!(labels.len(), 23);
+        assert_eq!(labels.len(), 24);
         assert!(labels.iter().all(|label| !label.is_empty()));
         assert_eq!(
             labels
@@ -247,7 +254,10 @@ mod tests {
                 .filter(|label| label.contains("benchmark") || label.contains("profile"))
                 .copied()
                 .collect::<Vec<_>>(),
-            ["profile-installed-screensaver"]
+            [
+                "profile-installed-screensaver",
+                "profile-installed-catalog-lifecycle"
+            ]
         );
         assert!(!labels.contains(&"run"));
         assert!(!labels.contains(&"shell"));

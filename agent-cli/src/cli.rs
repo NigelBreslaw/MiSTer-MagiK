@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::build::BuildCommand;
-use crate::model::{Intent, Scope};
+use crate::model::{BenchmarkScenario, Intent, Scope};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
@@ -62,7 +62,10 @@ pub enum Command {
     Doctor,
     Diagnose,
     Deliver,
-    Benchmark,
+    Benchmark {
+        #[arg(value_enum, default_value_t)]
+        scenario: BenchmarkScenario,
+    },
     Capture {
         #[command(subcommand)]
         command: CaptureCommand,
@@ -400,7 +403,7 @@ impl Cli {
             Some(Command::Doctor) => Intent::Doctor,
             Some(Command::Diagnose) => Intent::Diagnose,
             Some(Command::Deliver) => Intent::Deliver,
-            Some(Command::Benchmark) => Intent::Benchmark,
+            Some(Command::Benchmark { scenario }) => Intent::Benchmark { scenario },
             Some(Command::Capture {
                 command: CaptureCommand::UsbVideo { output, seconds },
             }) => Intent::CaptureUsbVideo { output, seconds },
@@ -512,10 +515,24 @@ mod tests {
     }
 
     #[test]
-    fn benchmark_is_flag_free() {
+    fn benchmark_defaults_to_screensaver_and_accepts_typed_scenarios() {
         let cli = Cli::try_parse_from(["agent-cli", "benchmark"]).unwrap();
-        assert_eq!(cli.into_intent(), Intent::Benchmark);
+        assert_eq!(
+            cli.into_intent(),
+            Intent::Benchmark {
+                scenario: BenchmarkScenario::Screensaver
+            }
+        );
+        assert_eq!(
+            Cli::try_parse_from(["agent-cli", "benchmark", "catalog-lifecycle"])
+                .unwrap()
+                .into_intent(),
+            Intent::Benchmark {
+                scenario: BenchmarkScenario::CatalogLifecycle
+            }
+        );
         assert!(Cli::try_parse_from(["agent-cli", "benchmark", "--duration", "10"]).is_err());
+        assert!(Cli::try_parse_from(["agent-cli", "benchmark", "unknown"]).is_err());
     }
 
     #[test]

@@ -12,6 +12,7 @@ scripts/agent check
 scripts/agent verify
 scripts/agent deliver
 scripts/agent benchmark
+scripts/agent benchmark catalog-lifecycle
 scripts/agent diagnose
 ```
 
@@ -31,10 +32,13 @@ the scanout kernel plugin, and the latch RBF come only from the latest
 published GitHub platform release. The tag-addressed cache is reused when it
 still verifies against the latest release.
 
-`benchmark` profiles the already-installed development app in place. It runs
-the real Settings screensaver action twice with catalog refresh disabled, then
-restores and verifies the ordinary launcher. It never builds or deploys a
-temporary runtime.
+`benchmark` profiles the already-installed development app in place. With no
+scenario it runs the screensaver benchmark. A positional scenario selects
+another registered typed workflow; `catalog-lifecycle` performs an isolated
+full catalog build under `/tmp`, validates every generated shard, then removes
+the fixture and restores the ordinary launcher. Benchmarks never build or
+deploy a temporary runtime, and require the installed revision to match the
+clean local commit.
 
 The launcher builds and runs `agent-cli` with Cargo's release profile. Explicit
 manifest, target-directory, and binary overrides remain available for tests and

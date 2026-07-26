@@ -4,6 +4,24 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum BenchmarkScenario {
+    #[default]
+    Screensaver,
+    CatalogLifecycle,
+}
+
+impl BenchmarkScenario {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Screensaver => "screensaver",
+            Self::CatalogLifecycle => "catalog-lifecycle",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Risk {
@@ -99,7 +117,9 @@ pub enum Intent {
     Doctor,
     Diagnose,
     Deliver,
-    Benchmark,
+    Benchmark {
+        scenario: BenchmarkScenario,
+    },
     CaptureUsbVideo {
         output: Option<PathBuf>,
         seconds: Option<u64>,
