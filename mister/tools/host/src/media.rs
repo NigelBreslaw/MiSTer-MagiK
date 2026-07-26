@@ -500,6 +500,16 @@ fn parse_manifest(value: &Value, manifest_url: &str) -> Result<MediaManifest> {
                 .and_then(Value::as_str)
                 .map(str::to_string),
         };
+        if identity.decoded_bytes == 0 {
+            return Err(format!("pack {system} has zero bytes").into());
+        }
+        if identity.decoded_bytes > mister_magik_media_contract::MAX_MEDIA_PACK_BYTES {
+            return Err(format!(
+                "pack {system} exceeds {} bytes",
+                mister_magik_media_contract::MAX_MEDIA_PACK_BYTES
+            )
+            .into());
+        }
         mister_magik_media_contract::Sha256::parse(&identity.decoded_sha256)
             .map_err(|error| format!("pack {system} {error}"))?;
         if matches!(
@@ -864,6 +874,13 @@ fn parse_index(system: &str, identity: &MediaVariant, value: &Value) -> Result<M
     if index.bytes == 0 {
         return Err(format!("pack {system} index has zero bytes").into());
     }
+    if index.bytes > mister_magik_media_contract::MAX_MEDIA_INDEX_BYTES {
+        return Err(format!(
+            "pack {system} index exceeds {} bytes",
+            mister_magik_media_contract::MAX_MEDIA_INDEX_BYTES
+        )
+        .into());
+    }
     if !index.object.ends_with(".mmlz4b.idx") {
         return Err(format!("pack {system} index object must end with .mmlz4b.idx").into());
     }
@@ -1062,6 +1079,8 @@ stamp="$$-$(awk '{ printf "%d", $1 * 1000 }' /proc/uptime)"
 encoded="$work_dir/$system.$variant.$stamp.encoded"
 decoded="$work_dir/$system.$variant.$stamp.decoded"
 headers="$work_dir/$system.$variant.$stamp.headers"
+body_pipe="$work_dir/$system.$variant.$stamp.body-pipe"
+decode_pipe="$work_dir/$system.$variant.$stamp.decode-pipe"
 final_tmp="$asset_dir/.$system-screenshots.$stamp.tmp"
 result="downloaded"
 content_encoding="identity"
@@ -1093,7 +1112,7 @@ mbps() {
 }
 
 cleanup() {
-  rm -f "$encoded" "$decoded" "$headers" "$final_tmp"
+  rm -f "$encoded" "$decoded" "$headers" "$body_pipe" "$decode_pipe" "$final_tmp"
 }
 
 finish() {
@@ -1121,14 +1140,34 @@ if ! command -v sha256sum >/dev/null 2>&1; then
 fi
 
 t="$(ms_now)"
-if echo "$url" | grep -q '^https://' && [ -f /etc/ssl/certs/cacert.pem ]; then
-  curl --fail --silent --show-error --cacert /etc/ssl/certs/cacert.pem \
-    -H "Accept-Encoding: $accept_encoding" -D "$headers" -o "$encoded" "$url"
-else
-  curl --fail --silent --show-error \
-    -H "Accept-Encoding: $accept_encoding" -D "$headers" -o "$encoded" "$url"
+download_limit=134217728
+if [ "$accept_encoding" = "identity" ] && [ "$expected_bytes" -lt "$download_limit" ]; then
+  download_limit="$expected_bytes"
 fi
+rm -f "$body_pipe"
+if ! mkfifo "$body_pipe"; then
+  result="download-pipe-failed"
+  finish
+fi
+if echo "$url" | grep -q '^https://' && [ -f /etc/ssl/certs/cacert.pem ]; then
+  curl --fail --silent --show-error --proto '=http,https' \
+    --connect-timeout 10 --max-time 1200 --max-filesize "$download_limit" \
+    --cacert /etc/ssl/certs/cacert.pem \
+    -H "Accept-Encoding: $accept_encoding" -D "$headers" -o "$body_pipe" "$url" &
+else
+  curl --fail --silent --show-error --proto '=http,https' \
+    --connect-timeout 10 --max-time 1200 --max-filesize "$download_limit" \
+    -H "Accept-Encoding: $accept_encoding" -D "$headers" -o "$body_pipe" "$url" &
+fi
+curl_pid=$!
+exec 3<"$body_pipe"
+head -c "$download_limit" <&3 > "$encoded"
+head_rc=$?
+extra_bytes="$(dd bs=1 count=1 <&3 2>/dev/null | wc -c)"
+exec 3<&-
+wait "$curl_pid"
 rc=$?
+rm -f "$body_pipe"
 download_ms="$(elapsed "$t")"
 content_encoding="$(grep -i '^[[:space:]]*Content-Encoding:' "$headers" 2>/dev/null | tail -n 1 | sed 's/.*:[[:space:]]*//' | tr -d '\r')"
 cf_cache_status="$(grep -i '^[[:space:]]*cf-cache-status:' "$headers" 2>/dev/null | tail -n 1 | sed 's/.*:[[:space:]]*//' | tr -d '\r')"
@@ -1136,25 +1175,36 @@ etag="$(grep -i '^[[:space:]]*etag:' "$headers" 2>/dev/null | tail -n 1 | sed 's
 if [ -z "$content_encoding" ]; then
   content_encoding="identity"
 fi
+if [ "$head_rc" -ne 0 ]; then
+  result="download-bound-failed-$head_rc"
+  finish
+fi
+if [ "$extra_bytes" -ne 0 ]; then
+  result="download-size-limit"
+  finish
+fi
 if [ "$rc" -ne 0 ]; then
   result="download-failed-$rc"
   finish
 fi
+encoded_bytes="$(wc -c < "$encoded")"
 
 t="$(ms_now)"
+rm -f "$decode_pipe"
+if ! mkfifo "$decode_pipe"; then
+  result="decode-pipe-failed"
+  finish
+fi
 case "$content_encoding" in
   identity|none)
-    cp "$encoded" "$decoded"
-    rc=$?
+    cat "$encoded" > "$decode_pipe" &
     ;;
   gzip|x-gzip)
-    gzip -dc "$encoded" > "$decoded"
-    rc=$?
+    gzip -dc "$encoded" > "$decode_pipe" &
     ;;
   br)
     if command -v brotli >/dev/null 2>&1; then
-      brotli -d -c "$encoded" > "$decoded"
-      rc=$?
+      brotli -d -c "$encoded" > "$decode_pipe" &
     else
       rc=127
       result="decode-unavailable-br"
@@ -1300,6 +1350,43 @@ mod tests {
     use super::*;
 
     #[test]
+    fn manifest_curl_is_https_only_and_bounded() {
+        let mut command = Command::new("curl");
+        add_manifest_curl_args(
+            &mut command,
+            "https://assets.example/manifest.json",
+            mister_magik_media_contract::MAX_MANIFEST_BYTES,
+        );
+        let text = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        assert!(text.contains("--proto =https"));
+        assert!(text.contains("--proto-redir =https"));
+        assert!(text.contains("--connect-timeout 10"));
+        assert!(text.contains("--max-time 15"));
+        assert!(text.contains("--max-filesize 262144"));
+    }
+
+    #[test]
+    fn remote_download_script_bounds_http_and_decoded_streams() {
+        let script = remote_script();
+
+        assert!(script.contains("--proto '=http,https'"));
+        assert!(script.contains("--connect-timeout 10 --max-time 1200"));
+        assert!(script.contains("--max-filesize \"$download_limit\""));
+        assert!(script.contains("mkfifo \"$body_pipe\""));
+        assert!(script.contains("head -c \"$download_limit\" <&3 > \"$encoded\""));
+        assert!(script.contains("head -c \"$expected_bytes\" <&3 > \"$decoded\""));
+        assert!(script.contains("dd bs=1 count=1 <&3"));
+        assert!(script.contains(
+            "rm -f \"$encoded\" \"$decoded\" \"$headers\" \"$body_pipe\" \"$decode_pipe\" \"$final_tmp\""
+        ));
+    }
+
+    #[test]
     fn parses_phase_one_manifest_shape() {
         let value = json!({
             "schema_version": 1,
@@ -1417,6 +1504,50 @@ mod tests {
         assert_eq!(
             manifest_url_for_index(&manifest, &manifest.packs[0]).as_deref(),
             Some(expected_index_url.as_str())
+        );
+    }
+
+    #[test]
+    fn host_manifest_size_limits_accept_boundaries_and_reject_one_byte_over() {
+        let sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let mut value = json!({
+            "schema": 1,
+            "generated_at": "2026-07-27T00:00:00Z",
+            "packs": [{
+                "id": "arcade",
+                "object": format!("mister-magik/v1/packs/arcade/screenshots/320x320/v1/{sha}.mmlz4b"),
+                "bytes": mister_magik_media_contract::MAX_MEDIA_PACK_BYTES,
+                "sha256": sha,
+                "codec": "mmlz4b",
+                "index": {
+                    "object": format!("mister-magik/v1/packs/arcade/screenshots/320x320/v1/{sha}.mmlz4b.idx"),
+                    "bytes": mister_magik_media_contract::MAX_MEDIA_INDEX_BYTES,
+                    "sha256": sha,
+                    "codec": "mmlz4b-index-v2",
+                    "archive_bytes": mister_magik_media_contract::MAX_MEDIA_PACK_BYTES,
+                    "archive_sha256": sha
+                }
+            }]
+        });
+        let url = "https://assets.mistermagik.com/mister-magik/v1/manifest.json";
+        assert!(parse_manifest(&value, url).is_ok());
+
+        value["packs"][0]["bytes"] = json!(mister_magik_media_contract::MAX_MEDIA_PACK_BYTES + 1);
+        assert!(
+            parse_manifest(&value, url)
+                .unwrap_err()
+                .to_string()
+                .contains("exceeds")
+        );
+
+        value["packs"][0]["bytes"] = json!(mister_magik_media_contract::MAX_MEDIA_PACK_BYTES);
+        value["packs"][0]["index"]["bytes"] =
+            json!(mister_magik_media_contract::MAX_MEDIA_INDEX_BYTES + 1);
+        assert!(
+            parse_manifest(&value, url)
+                .unwrap_err()
+                .to_string()
+                .contains("exceeds")
         );
     }
 

@@ -12,11 +12,12 @@ use mister_magik_fb::media_update::{
     DEFAULT_ASSET_DIR, DEFAULT_IMAGE_SIZE, DEFAULT_MANIFEST_URL, MediaPack, MediaVariant,
     parse_manifest_json, size_qualified_pack_path, state_path, valid_image_size,
 };
+use mister_magik_media_contract::{MEDIA_CONNECT_TIMEOUT_SECS, MEDIA_TRANSFER_TIMEOUT_SECS};
 use serde_json::Value;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const HEADER: &str = "screenshot_download_bench_tsv\tlabel\tsystem\tvariant\tencoded_bytes\tdecoded_bytes\tdownload_ms\tdecompress_ms\tsave_ms\tverify_ms\ttotal_ms\twire_mbps\tdecoded_mbps\tetag\tcontent_encoding\tcf_cache_status\tresult";
@@ -366,17 +367,19 @@ fn run_staged_download_publish(
     label: &str,
     row: &mut BenchRow,
 ) -> Result<HttpMetadata, String> {
-    let download_started = Instant::now();
-    let metadata = download_to_path(&variant.url, encoded)?;
-    row.download_ms = elapsed_ms(download_started.elapsed());
+    let headers_path = encoded.with_extension("headers");
+    let stream = stream_fat_download_to_publish_temp(variant, encoded, &headers_path);
+    let _ = fs::remove_file(&headers_path);
+    let stream = stream?;
+    let metadata = stream.metadata;
+    row.download_ms = stream.download_ms;
+    row.verify_ms = stream.verify_ms;
     row.etag = metadata.etag.clone();
     row.content_encoding = metadata.content_encoding.clone();
     row.cf_cache_status = metadata.cf_cache_status.clone();
-    row.encoded_bytes = file_len(encoded)?;
+    row.encoded_bytes = stream.bytes;
 
-    let verify_started = Instant::now();
-    verify_file(encoded, variant.bytes, &variant.sha256)?;
-    row.verify_ms += elapsed_ms(verify_started.elapsed());
+    verify_downloaded_bytes(stream.bytes, &stream.sha256, variant.bytes, &variant.sha256)?;
 
     row.decompress_ms = 0;
     row.decoded_bytes = file_len(encoded)?;
@@ -482,7 +485,7 @@ fn stream_fat_download_to_publish_temp(
     headers_path: &Path,
 ) -> Result<StreamDownloadResult, String> {
     let mut curl = Command::new("curl");
-    add_curl_download_args(&mut curl, &variant.url, Some(headers_path), false);
+    add_curl_download_args(&mut curl, &variant.url, Some(headers_path), variant.bytes);
     let mut curl = curl
         .arg("-o")
         .arg("-")
@@ -491,45 +494,76 @@ fn stream_fat_download_to_publish_temp(
         .stderr(Stdio::null())
         .spawn()
         .map_err(|e| format!("spawn curl: {e}"))?;
-    let mut sha = Command::new("sha256sum")
+    let mut sha = match Command::new("sha256sum")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("spawn sha256sum: {e}"))?;
-    let mut output =
-        File::create(temp_path).map_err(|e| format!("create {}: {e}", temp_path.display()))?;
-    let mut input = curl
-        .stdout
-        .take()
-        .ok_or_else(|| "missing curl stdout pipe".to_string())?;
-    let mut sha_stdin = sha
-        .stdin
-        .take()
-        .ok_or_else(|| "missing sha256sum stdin pipe".to_string())?;
+    {
+        Ok(sha) => sha,
+        Err(error) => {
+            terminate_and_reap(&mut curl);
+            return Err(format!("spawn sha256sum: {error}"));
+        }
+    };
+    let mut output = match File::create(temp_path) {
+        Ok(output) => output,
+        Err(error) => {
+            terminate_and_reap(&mut curl);
+            drop(sha.stdin.take());
+            let _ = sha.wait();
+            return Err(format!("create {}: {error}", temp_path.display()));
+        }
+    };
+    let mut input = match curl.stdout.take() {
+        Some(input) => input,
+        None => {
+            terminate_and_reap(&mut curl);
+            drop(sha.stdin.take());
+            let _ = sha.wait();
+            return Err("missing curl stdout pipe".to_string());
+        }
+    };
+    let mut sha_stdin = match sha.stdin.take() {
+        Some(stdin) => stdin,
+        None => {
+            terminate_and_reap(&mut curl);
+            let _ = sha.wait();
+            return Err("missing sha256sum stdin pipe".to_string());
+        }
+    };
     let started = Instant::now();
     let mut bytes = 0u64;
     let mut buffer = vec![0u8; 256 * 1024];
-    loop {
-        let read = input
-            .read(&mut buffer)
-            .map_err(|e| format!("read curl stdout: {e}"))?;
-        if read == 0 {
-            break;
+    let transfer_result = (|| {
+        loop {
+            let read = input
+                .read(&mut buffer)
+                .map_err(|e| format!("read curl stdout: {e}"))?;
+            if read == 0 {
+                break;
+            }
+            bytes = crate::media_http::write_bounded_stream_chunk(
+                &mut output,
+                &mut sha_stdin,
+                &buffer[..read],
+                bytes,
+                variant.bytes,
+                "benchmark pack",
+            )?;
         }
         output
-            .write_all(&buffer[..read])
-            .map_err(|e| format!("write streamed pack {}: {e}", temp_path.display()))?;
-        sha_stdin
-            .write_all(&buffer[..read])
-            .map_err(|e| format!("write sha256sum stdin: {e}"))?;
-        bytes += read as u64;
-    }
+            .flush()
+            .map_err(|e| format!("flush streamed pack {}: {e}", temp_path.display()))
+    })();
     drop(sha_stdin);
-    output
-        .flush()
-        .map_err(|e| format!("flush streamed pack {}: {e}", temp_path.display()))?;
+    drop(output);
+    drop(input);
+    if transfer_result.is_err() {
+        let _ = curl.kill();
+    }
     let download_ms = elapsed_ms(started.elapsed());
     let curl_status = curl.wait().map_err(|e| format!("wait curl: {e}"))?;
+    transfer_result?;
     if !curl_status.success() {
         return Err(format!("download-failed-{curl_status}"));
     }
@@ -550,6 +584,11 @@ fn stream_fat_download_to_publish_temp(
         download_ms,
         verify_ms,
     })
+}
+
+fn terminate_and_reap(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 fn parse_sha256_output(output: &[u8]) -> Result<String, String> {
@@ -611,45 +650,28 @@ fn install_verified_streamed_temp(
     })
 }
 
-fn download_to_path(url: &str, path: &Path) -> Result<HttpMetadata, String> {
-    let headers_path = path.with_extension("headers");
-    let mut curl = Command::new("curl");
-    add_curl_download_args(&mut curl, url, Some(&headers_path), false);
-    let output = curl
-        .arg("-o")
-        .arg(path)
-        .arg(url)
-        .output()
-        .map_err(|e| format!("spawn curl: {e}"))?;
-    let header_text = fs::read_to_string(&headers_path).unwrap_or_default();
-    let _ = fs::remove_file(&headers_path);
-    if !output.status.success() {
-        return Err(format!(
-            "download-failed-{}:{}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    Ok(parse_http_headers(&header_text))
-}
-
 fn add_curl_download_args(
     command: &mut Command,
     url: &str,
     headers_path: Option<&Path>,
-    follow: bool,
+    max_bytes: u64,
 ) {
     command
         .arg("--fail")
         .arg("--silent")
         .arg("--show-error")
+        .arg("--proto")
+        .arg("=http,https")
+        .arg("--connect-timeout")
+        .arg(MEDIA_CONNECT_TIMEOUT_SECS.to_string())
+        .arg("--max-time")
+        .arg(MEDIA_TRANSFER_TIMEOUT_SECS.to_string())
+        .arg("--max-filesize")
+        .arg(max_bytes.to_string())
         .arg("--header")
         .arg("Accept-Encoding: identity");
     if let Some(headers_path) = headers_path {
         command.arg("-D").arg(headers_path);
-    }
-    if follow {
-        command.arg("--location");
     }
     if url.starts_with("https://") && Path::new("/etc/ssl/certs/cacert.pem").is_file() {
         command.arg("--cacert").arg("/etc/ssl/certs/cacert.pem");
@@ -996,6 +1018,27 @@ mod tests {
             sha256: "abcd".to_string(),
             url: "https://assets.example.test/packs/neogeo.mmlz4b".to_string(),
         }
+    }
+
+    #[test]
+    fn benchmark_object_curl_is_http_capable_and_bounded() {
+        let mut command = Command::new("curl");
+        add_curl_download_args(
+            &mut command,
+            "http://assets.example/pack.mmlz4b",
+            Some(Path::new("/tmp/headers")),
+            321,
+        );
+        let text = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        assert!(text.contains("--proto =http,https"));
+        assert!(text.contains("--connect-timeout 10"));
+        assert!(text.contains("--max-time 1200"));
+        assert!(text.contains("--max-filesize 321"));
     }
 
     #[test]

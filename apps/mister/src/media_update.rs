@@ -16,7 +16,8 @@ use mister_magik_catalog::media_identity::{
     valid_screenshot_image_size,
 };
 pub use mister_magik_media_contract::{
-    MediaIndex, MediaManifest, MediaPack, MediaVariant, PackIdentity,
+    MAX_MEDIA_INDEX_BYTES, MAX_MEDIA_PACK_BYTES, MediaIndex, MediaManifest, MediaPack,
+    MediaVariant, PackIdentity,
 };
 
 pub const DEFAULT_MANIFEST_URL: &str = mister_magik_media_contract::DEFAULT_MANIFEST_URL;
@@ -239,6 +240,12 @@ fn variant_with_url(mut value: MediaVariant, origin: &str) -> Result<MediaVarian
     if value.bytes == 0 {
         return Err(format!("media object {} has zero bytes", value.object));
     }
+    if value.bytes > MAX_MEDIA_PACK_BYTES {
+        return Err(format!(
+            "media object {} exceeds {MAX_MEDIA_PACK_BYTES} bytes",
+            value.object
+        ));
+    }
     value.url = media_object_url(origin, &value.object);
     Ok(value)
 }
@@ -250,6 +257,12 @@ fn index_with_url(mut value: MediaIndex, origin: &str) -> Result<MediaIndex, Str
     validate_sha256(&value.archive_sha256)?;
     if value.bytes == 0 {
         return Err(format!("media index {} has zero bytes", value.object));
+    }
+    if value.bytes > MAX_MEDIA_INDEX_BYTES {
+        return Err(format!(
+            "media index {} exceeds {MAX_MEDIA_INDEX_BYTES} bytes",
+            value.object
+        ));
     }
     if value.archive_bytes == 0 {
         return Err(format!(
@@ -542,6 +555,34 @@ mod tests {
             format!(
                 "http://assets.mistermagik.com/mister-magik/v1/packs/arcade/screenshots/320x320/2026.06.22/{IDX_SHA}.mmlz4b.idx"
             )
+        );
+    }
+
+    #[test]
+    fn pack_size_limit_accepts_boundary_and_rejects_one_byte_over() {
+        let mut value: Value = serde_json::from_str(&raw_manifest("")).unwrap();
+        value["packs"][0]["bytes"] = Value::from(MAX_MEDIA_PACK_BYTES);
+        assert!(parse_manifest_value(DEFAULT_MANIFEST_URL, &value).is_ok());
+
+        value["packs"][0]["bytes"] = Value::from(MAX_MEDIA_PACK_BYTES + 1);
+        assert!(
+            parse_manifest_value(DEFAULT_MANIFEST_URL, &value)
+                .unwrap_err()
+                .contains("exceeds")
+        );
+    }
+
+    #[test]
+    fn index_size_limit_accepts_boundary_and_rejects_one_byte_over() {
+        let mut value: Value = serde_json::from_str(&indexed_manifest()).unwrap();
+        value["packs"][0]["index"]["bytes"] = Value::from(MAX_MEDIA_INDEX_BYTES);
+        assert!(parse_manifest_value(DEFAULT_MANIFEST_URL, &value).is_ok());
+
+        value["packs"][0]["index"]["bytes"] = Value::from(MAX_MEDIA_INDEX_BYTES + 1);
+        assert!(
+            parse_manifest_value(DEFAULT_MANIFEST_URL, &value)
+                .unwrap_err()
+                .contains("exceeds")
         );
     }
 

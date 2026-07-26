@@ -17,6 +17,7 @@ use mister_magik_fb::media_update::{
     MediaPack, MediaUpdatePolicy, MediaVariant, index_path_for_pack_path, pack_status_from_state,
     parse_manifest_json, size_qualified_pack_path, state_path, valid_image_size,
 };
+use mister_magik_media_contract::{MEDIA_CONNECT_TIMEOUT_SECS, MEDIA_TRANSFER_TIMEOUT_SECS};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::{self, File, OpenOptions};
@@ -988,7 +989,7 @@ fn stream_media_object_to_path(
     let mut sha = spawn_sha256_stdin()?;
     let started = Instant::now();
     let mut curl = Command::new("curl");
-    add_curl_download_args(&mut curl, url, headers_path, false);
+    add_curl_download_args(&mut curl, url, headers_path, expected_bytes);
     let mut child = match curl.stdout(Stdio::piped()).stderr(Stdio::null()).spawn() {
         Ok(child) => child,
         Err(error) => {
@@ -997,14 +998,23 @@ fn stream_media_object_to_path(
             return Err(format!("spawn curl: {error}"));
         }
     };
-    let mut input = child
-        .stdout
-        .take()
-        .ok_or_else(|| "missing curl stdout pipe".to_string())?;
-    let mut sha_stdin = sha
-        .stdin
-        .take()
-        .ok_or_else(|| "missing sha256 stdin pipe".to_string())?;
+    let mut input = match child.stdout.take() {
+        Some(input) => input,
+        None => {
+            terminate_and_reap(&mut child);
+            drop(sha.stdin.take());
+            let _ = sha.wait();
+            return Err("missing curl stdout pipe".to_string());
+        }
+    };
+    let mut sha_stdin = match sha.stdin.take() {
+        Some(stdin) => stdin,
+        None => {
+            terminate_and_reap(&mut child);
+            let _ = sha.wait();
+            return Err("missing sha256 stdin pipe".to_string());
+        }
+    };
     let mut buffer = vec![0u8; crate::media_pack_save::PROGRESS_COPY_CHUNK_BYTES];
     let mut bytes = 0u64;
     let mut last_emit = Instant::now() - Duration::from_secs(1);
@@ -1016,16 +1026,14 @@ fn stream_media_object_to_path(
             if read == 0 {
                 break;
             }
-            output.write_all(&buffer[..read]).map_err(|e| {
-                format!(
-                    "write streamed {object_label} {}: {e}",
-                    output_path.display()
-                )
-            })?;
-            sha_stdin
-                .write_all(&buffer[..read])
-                .map_err(|e| format!("write sha256 stdin: {e}"))?;
-            bytes += read as u64;
+            bytes = crate::media_http::write_bounded_stream_chunk(
+                &mut output,
+                &mut sha_stdin,
+                &buffer[..read],
+                bytes,
+                expected_bytes,
+                object_label,
+            )?;
             if emit_progress
                 && (last_emit.elapsed() >= Duration::from_millis(250) || bytes >= expected_bytes)
             {
@@ -1053,6 +1061,10 @@ fn stream_media_object_to_path(
     })();
     drop(sha_stdin);
     drop(output);
+    drop(input);
+    if transfer_result.is_err() {
+        let _ = child.kill();
+    }
     let status = child.wait().map_err(|e| format!("wait curl: {e}"))?;
     let sha_output = sha
         .wait_with_output()
@@ -1087,6 +1099,11 @@ fn stream_media_object_to_path(
         },
         parse_http_headers(&header_text, url, "response"),
     ))
+}
+
+fn terminate_and_reap(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 fn mbps(bytes: u64, elapsed: Duration) -> f64 {
@@ -1445,20 +1462,25 @@ fn fetch_manifest_text(manifest_url: &str) -> Result<(String, HttpCacheMetadata)
     ))
 }
 
-fn add_curl_download_args(command: &mut Command, url: &str, headers_path: &Path, follow: bool) {
+fn add_curl_download_args(command: &mut Command, url: &str, headers_path: &Path, max_bytes: u64) {
     command
         .arg("--fail")
         .arg("--silent")
         .arg("--show-error")
+        .arg("--proto")
+        .arg("=http,https")
+        .arg("--connect-timeout")
+        .arg(MEDIA_CONNECT_TIMEOUT_SECS.to_string())
+        .arg("--max-time")
+        .arg(MEDIA_TRANSFER_TIMEOUT_SECS.to_string())
+        .arg("--max-filesize")
+        .arg(max_bytes.to_string())
         .arg("--header")
         .arg("Accept-Encoding: identity")
         .arg("-D")
         .arg(headers_path)
         .arg("-o")
         .arg("-");
-    if follow {
-        command.arg("--location");
-    }
     if url.starts_with("https://") && Path::new("/etc/ssl/certs/cacert.pem").is_file() {
         command.arg("--cacert").arg("/etc/ssl/certs/cacert.pem");
     }
@@ -2067,6 +2089,28 @@ mod tests {
     #[test]
     fn mbps_uses_wire_megabits_per_second() {
         assert_eq!(mbps(1_000_000, Duration::from_millis(1000)), 8.0);
+    }
+
+    #[test]
+    fn media_object_curl_is_http_capable_and_bounded() {
+        let mut command = Command::new("curl");
+        add_curl_download_args(
+            &mut command,
+            "http://assets.example/pack.mmlz4b",
+            Path::new("/tmp/headers"),
+            123,
+        );
+        let text = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        assert!(text.contains("--proto =http,https"));
+        assert!(text.contains("--connect-timeout 10"));
+        assert!(text.contains("--max-time 1200"));
+        assert!(text.contains("--max-filesize 123"));
+        assert!(text.contains("http://assets.example/pack.mmlz4b"));
     }
 
     #[test]

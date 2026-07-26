@@ -6,7 +6,7 @@ use mister_magik_media_contract::{
     validate_https_manifest_url, verify_manifest_signature,
 };
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -33,6 +33,30 @@ pub(crate) fn fetch_signed_manifest(url: &str) -> Result<SignedManifestFetch, St
         bytes: manifest.bytes,
         headers: manifest.headers,
     })
+}
+
+pub(crate) fn write_bounded_stream_chunk(
+    output: &mut impl Write,
+    hash: &mut impl Write,
+    chunk: &[u8],
+    bytes: u64,
+    expected_bytes: u64,
+    object_label: &str,
+) -> Result<u64, String> {
+    let remaining = expected_bytes.saturating_sub(bytes);
+    let allowed = remaining.min(chunk.len() as u64) as usize;
+    output
+        .write_all(&chunk[..allowed])
+        .map_err(|error| format!("write streamed {object_label}: {error}"))?;
+    hash.write_all(&chunk[..allowed])
+        .map_err(|error| format!("write {object_label} hash stream: {error}"))?;
+    let written = bytes.saturating_add(allowed as u64);
+    if allowed != chunk.len() {
+        return Err(format!(
+            "{object_label} exceeds declared size expected={expected_bytes}"
+        ));
+    }
+    Ok(written)
 }
 
 struct HttpsFetch {
@@ -159,5 +183,22 @@ mod tests {
         assert!(text.contains("--connect-timeout 10"));
         assert!(text.contains("--max-time 15"));
         assert!(text.contains("--max-filesize 262144"));
+    }
+
+    #[test]
+    fn bounded_stream_chunk_accepts_exact_size_and_stops_before_overrun() {
+        let mut output = Vec::new();
+        let mut hash = Vec::new();
+        let bytes =
+            write_bounded_stream_chunk(&mut output, &mut hash, b"exact", 0, 5, "pack").unwrap();
+        assert_eq!(bytes, 5);
+        assert_eq!(output, b"exact");
+        assert_eq!(hash, b"exact");
+
+        let error = write_bounded_stream_chunk(&mut output, &mut hash, b"more", bytes, 5, "pack")
+            .unwrap_err();
+        assert!(error.contains("exceeds declared size"));
+        assert_eq!(output, b"exact");
+        assert_eq!(hash, b"exact");
     }
 }
