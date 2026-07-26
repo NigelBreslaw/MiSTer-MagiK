@@ -2437,6 +2437,7 @@ pub(super) fn run_launcher_loop(
             &nav,
             &catalog,
             &preview,
+            start,
         );
     }
     let _ = lifecycle.after_boot_splash_presented(startup_catalog_state, &mut lifecycle_effects);
@@ -5707,6 +5708,7 @@ fn emit_return_context_restored(
     nav: &LauncherNav,
     catalog: &ArcadeCatalog,
     preview: &PreviewState,
+    restored_at: Instant,
 ) {
     if lifecycle.startup_status().mode != StartupMode::ReturnFromGame {
         return;
@@ -5727,6 +5729,7 @@ fn emit_return_context_restored(
             game_index: nav.arcade.selected,
             visual_index: nav.arcade.visual_index,
             preview_expected: selected_arcade_game_has_preview(nav, catalog),
+            restored_at,
         },
         effects,
     );
@@ -5919,10 +5922,8 @@ fn apply_catalog_session_effects(
                         nav,
                         catalog,
                         preview,
+                        now,
                     );
-                    // The preview hold is measured from return startup. If
-                    // navigation hydration already consumed that budget,
-                    // transition to reveal in this same worker-message turn.
                     lifecycle.tick_startup_reveal(now, true, lifecycle_effects);
                 }
                 lifecycle.handle(
@@ -6004,6 +6005,7 @@ fn apply_catalog_session_effects(
                         nav,
                         catalog,
                         preview,
+                        now,
                     );
                     lifecycle.tick_startup_reveal(now, true, lifecycle_effects);
                 }

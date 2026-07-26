@@ -288,6 +288,7 @@ pub(super) enum LauncherLifecycleInput {
         game_index: usize,
         visual_index: f32,
         preview_expected: bool,
+        restored_at: Instant,
     },
     StartupReturnPreviewReady {
         preview_state: &'static str,
@@ -405,6 +406,7 @@ pub(super) struct LauncherLifecycle {
     startup_mode: StartupMode,
     startup_reveal_state: StartupRevealState,
     startup_started_at: Instant,
+    return_preview_wait_started_at: Option<Instant>,
     startup_revealed_at: Option<Instant>,
     startup_input_enabled_at: Option<Instant>,
     catalog_root: String,
@@ -423,6 +425,7 @@ impl LauncherLifecycle {
             startup_mode: StartupMode::WarmCatalog,
             startup_reveal_state: StartupRevealState::HoldBlack,
             startup_started_at: now,
+            return_preview_wait_started_at: None,
             startup_revealed_at: None,
             startup_input_enabled_at: None,
             catalog_root: arcade_catalog::DEFAULT_ARCADE_ROOT.to_string(),
@@ -441,6 +444,7 @@ impl LauncherLifecycle {
     ) {
         self.startup_mode = mode;
         self.startup_started_at = now;
+        self.return_preview_wait_started_at = None;
         self.startup_revealed_at = None;
         self.startup_input_enabled_at = None;
         self.startup_reveal_state = match mode {
@@ -500,10 +504,14 @@ impl LauncherLifecycle {
             StartupRevealState::HoldBlack if catalog_ready => {
                 self.mark_reveal_ready("preview_state=not_required", out);
             }
-            StartupRevealState::WaitRelevantPreview
-                if startup_elapsed >= Self::RETURN_PREVIEW_HOLD_TIMEOUT =>
-            {
-                self.mark_reveal_ready("preview_state=timeout", out);
+            StartupRevealState::WaitRelevantPreview => {
+                let preview_elapsed = self
+                    .return_preview_wait_started_at
+                    .map(|started_at| now.saturating_duration_since(started_at))
+                    .unwrap_or_default();
+                if preview_elapsed >= Self::RETURN_PREVIEW_HOLD_TIMEOUT {
+                    self.mark_reveal_ready("preview_state=timeout", out);
+                }
             }
             _ => {}
         }
@@ -682,6 +690,7 @@ impl LauncherLifecycle {
                 game_index,
                 visual_index,
                 preview_expected,
+                restored_at,
             } => {
                 self.startup_reveal_state = StartupRevealState::RestoreContext;
                 out.startup_event("startup_restore_context", "mode=return_from_game");
@@ -693,6 +702,7 @@ impl LauncherLifecycle {
                 );
                 if *preview_expected {
                     self.startup_reveal_state = StartupRevealState::WaitRelevantPreview;
+                    self.return_preview_wait_started_at = Some(*restored_at);
                 } else {
                     self.mark_reveal_ready("preview_state=not_required", out);
                 }
@@ -1269,6 +1279,7 @@ mod tests {
                 game_index: 17,
                 visual_index: 17.0,
                 preview_expected: true,
+                restored_at: now,
             },
             &mut effects,
         );
@@ -1323,6 +1334,7 @@ mod tests {
                 game_index: 0,
                 visual_index: 0.0,
                 preview_expected: false,
+                restored_at: now,
             },
             &mut effects,
         );
@@ -1355,6 +1367,7 @@ mod tests {
                 game_index: 144,
                 visual_index: 144.0,
                 preview_expected: true,
+                restored_at: now,
             },
             &mut effects,
         );
@@ -1383,6 +1396,50 @@ mod tests {
         );
         assert!(lifecycle.startup_can_present_frame());
         assert!(effect_names(&effects).contains(&"launcher_reveal_ready"));
+    }
+
+    #[test]
+    fn return_preview_timeout_starts_after_context_restoration() {
+        let now = Instant::now();
+        let restored_at = now + Duration::from_secs(1);
+        let mut lifecycle = lifecycle();
+        let mut effects = LifecycleEffects::new();
+
+        lifecycle.begin_startup_reveal(StartupMode::ReturnFromGame, now, &mut effects);
+        lifecycle.handle(
+            LauncherLifecycleInput::StartupReturnContextRestored {
+                screen: "arcade",
+                system_id: "neogeo".to_string(),
+                filter: "all".to_string(),
+                game_path: "/media/fat/_Arcade/Metal Slug.mra".to_string(),
+                game_index: 144,
+                visual_index: 144.0,
+                preview_expected: true,
+                restored_at,
+            },
+            &mut effects,
+        );
+        effects.clear();
+
+        lifecycle.tick_startup_reveal(
+            restored_at + LauncherLifecycle::RETURN_PREVIEW_HOLD_TIMEOUT - Duration::from_millis(1),
+            true,
+            &mut effects,
+        );
+        assert_eq!(
+            lifecycle.startup_status().state,
+            StartupRevealState::WaitRelevantPreview
+        );
+
+        lifecycle.tick_startup_reveal(
+            restored_at + LauncherLifecycle::RETURN_PREVIEW_HOLD_TIMEOUT,
+            true,
+            &mut effects,
+        );
+        assert_eq!(
+            lifecycle.startup_status().state,
+            StartupRevealState::RevealLauncher
+        );
     }
 
     #[test]
