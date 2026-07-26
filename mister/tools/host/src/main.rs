@@ -3198,12 +3198,11 @@ fn profile_installed_search(config: &NativeDeviceConfig, output_dir: &Path) -> R
 }
 
 fn search_benchmark_waits_for_catalog(output: &ExecOutput) -> bool {
-    output.stderr.contains("no such table: game_search_fts")
-        || output.stderr.contains("no valid manifest slot")
-        || output.stderr.contains("search system arcade is absent")
-        || output
-            .stderr
-            .contains("unsupported persisted search schema version")
+    let contains = |needle| output.stdout.contains(needle) || output.stderr.contains(needle);
+    contains("no such table: game_search_fts")
+        || contains("no valid manifest slot")
+        || contains("search system arcade is absent")
+        || contains("unsupported persisted search schema version")
 }
 
 fn profile_installed_catalog_lifecycle(
@@ -13303,8 +13302,8 @@ H: Handlers=event3 js0"#
         };
         let unpublished = ExecOutput {
             rc: 1,
-            stdout: String::new(),
-            stderr: "search benchmark failed: read-manifest: no valid manifest slot".to_string(),
+            stdout: "search benchmark failed: read-manifest: no valid manifest slot".to_string(),
+            stderr: String::new(),
         };
 
         assert!(search_benchmark_waits_for_catalog(&pending));
