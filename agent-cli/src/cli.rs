@@ -39,7 +39,6 @@ pub enum Command {
         remote: String,
     },
     Plan(ScopeArgs),
-    Check(ScopeArgs),
     #[command(hide = true)]
     Runs {
         #[arg(long)]
@@ -57,7 +56,6 @@ pub enum Command {
         #[command(subcommand)]
         command: DbCommand,
     },
-    Verify(ScopeArgs),
     #[command(hide = true)]
     Doctor,
     Diagnose,
@@ -88,6 +86,7 @@ pub enum Command {
 
 #[derive(Debug, Subcommand)]
 pub enum CiCommand {
+    HostAssurance(ScopeArgs),
     PlatformCandidates {
         artifacts: PathBuf,
         name: String,
@@ -378,9 +377,6 @@ impl Cli {
                 verbose: scope.verbose,
                 scope: scope.into_scope(),
             },
-            Some(Command::Check(scope)) => Intent::Check {
-                scope: scope.into_scope(),
-            },
             Some(Command::Runs { failed, recent }) => Intent::ListRuns { failed, recent },
             Some(Command::Run {
                 command: RunCommand::Show { run_id },
@@ -397,9 +393,6 @@ impl Cli {
             Some(Command::Db {
                 command: DbCommand::PruneLogs,
             }) => Intent::PruneLogs,
-            Some(Command::Verify(scope)) => Intent::Verify {
-                scope: scope.into_scope(),
-            },
             Some(Command::Doctor) => Intent::Doctor,
             Some(Command::Diagnose) => Intent::Diagnose,
             Some(Command::Deliver) => Intent::Deliver,
@@ -412,6 +405,9 @@ impl Cli {
             }) => Intent::ReleaseQualify,
             Some(Command::Build { intent }) => Intent::Build { intent },
             Some(Command::Ci { command }) => match *command {
+                CiCommand::HostAssurance(scope) => Intent::CiHostAssurance {
+                    scope: scope.into_scope(),
+                },
                 CiCommand::PlatformCandidates { artifacts, name } => {
                     Intent::CiPlatformCandidates { artifacts, name }
                 }
@@ -481,12 +477,19 @@ mod tests {
     }
 
     #[test]
-    fn check_defaults_to_working_tree() {
-        let cli = Cli::try_parse_from(["agent-cli", "check"]).unwrap();
+    fn retired_validation_commands_are_rejected() {
+        assert!(Cli::try_parse_from(["agent-cli", "check"]).is_err());
+        assert!(Cli::try_parse_from(["agent-cli", "verify"]).is_err());
+    }
+
+    #[test]
+    fn hidden_ci_assurance_preserves_explicit_paths() {
+        let cli = Cli::try_parse_from(["agent-cli", "ci", "host-assurance", "--paths", "a", "b"])
+            .unwrap();
         assert_eq!(
             cli.into_intent(),
-            Intent::Check {
-                scope: Scope::WorkingTree
+            Intent::CiHostAssurance {
+                scope: Scope::Paths(vec![PathBuf::from("a"), PathBuf::from("b")])
             }
         );
     }

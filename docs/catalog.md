@@ -247,11 +247,15 @@ The builder and projection machinery live in `crates/catalog` and run
 without the UI:
 
 ```text
-scripts/agent check
-scripts/agent verify
+$magik-rust-lsp
+git add -- PATH...
+git commit -m "Describe the catalog change"
+git push
 scripts/agent benchmark
 ```
 
+The analyzer supplies package-scoped Rust diagnostics during editing. Pre-push
+and CI run the standalone suite and consumer assurance.
 The standalone suite covers registry atomicity, shard integrity, lazy reads,
 incremental reconciliation, scan checkpoints, first-visible bootstrap, and
 pause/resume behavior.

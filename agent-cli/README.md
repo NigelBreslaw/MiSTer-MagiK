@@ -8,24 +8,24 @@ The AI-facing commands are:
 
 ```text
 scripts/agent plan
-scripts/agent check
-scripts/agent verify
 scripts/agent deliver
 scripts/agent benchmark
 scripts/agent benchmark catalog-lifecycle
 scripts/agent diagnose
 ```
 
-The normal AI loop is edit, `check` as needed, stage intentional paths with
-ordinary Git, then commit. Argument-free validation uses all working-tree
-changes. The Git pre-commit hook runs the fail-closed, ten-second
-`pre-commit` fast gate against the index. The pre-push hook runs full affected
-verification for the exact branch commit, while CI remains authoritative.
+The normal AI loop is edit with bounded Rust analyzer diagnostics where
+applicable, stage intentional paths with ordinary Git, commit, and push.
+`scripts/agent plan` previews the full affected assurance plan without executing
+it. The Git pre-commit hook runs the fail-closed, ten-second fast gate against
+the index. The pre-push hook runs full affected assurance for the exact branch
+commit, while CI remains authoritative.
 Workflow evidence analysis uses the hidden typed
 `scripts/agent db report` command rather than direct SQL.
 
 `scripts/agent release qualify` is an attended operator command. Hidden typed
-build intents exist for CI compatibility, not as a public flag matrix. Commit
+build and host-assurance intents exist for CI and release tooling, not as a
+public flag matrix. Commit
 creation belongs to Git; `agent-cli` never stages, commits, or pushes.
 `deliver` uses the exact clean local app commit for the app and manager. Main,
 the scanout kernel plugin, and the latch RBF come only from the latest

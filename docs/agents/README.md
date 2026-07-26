@@ -2,7 +2,8 @@
 
 Use these documents to reduce repository-wide exploration:
 
-- [`task-map.md`](task-map.md) — where to start and how to verify common work.
+- [`task-map.md`](task-map.md) — where to start and which assurance boundary
+  owns common work.
 - [`file-authority.md`](file-authority.md) — whether a file is hand-edited,
   generated, private, or device-owned.
 

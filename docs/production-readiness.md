@@ -1,8 +1,8 @@
 # Production readiness
 
-A release candidate is ready only when its exact commit has passed
-`scripts/agent verify`, platform CI qualification where selected, transactional
-delivery, and an attended release qualification.
+A release candidate is ready only when its exact commit has passed pre-push and
+CI assurance, platform qualification where selected, transactional delivery,
+and an attended release qualification.
 
 ```text
 git add -- PATH...

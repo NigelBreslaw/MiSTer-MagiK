@@ -43,6 +43,7 @@ pub fn execute_with_changes(
         crate::model::Intent::Verify { .. } => "verify",
         crate::model::Intent::PreCommit => "pre-commit",
         crate::model::Intent::PrePush { .. } => "pre-push",
+        crate::model::Intent::CiHostAssurance { .. } => "ci host-assurance",
         _ => "check",
     };
     let fingerprints = if matches!(plan.intent, crate::model::Intent::PreCommit) {
@@ -379,6 +380,7 @@ fn operation_cache_key_with_schema(
                 | crate::model::Scope::Staged
                 | crate::model::Scope::Paths(_),
         }
+        | crate::model::Intent::CiHostAssurance { .. }
         | crate::model::Intent::PrePush { .. } => {}
         _ => return Ok(None),
     }
@@ -925,7 +927,13 @@ mod tests {
         let evidence = Evidence::open_at(&state).unwrap();
         let request = RawRequest {
             id: "test-run".into(),
-            args: vec!["agent-cli".into(), "check".into()],
+            args: vec![
+                "agent-cli".into(),
+                "ci".into(),
+                "host-assurance".into(),
+                "--paths".into(),
+                "fixture.rs".into(),
+            ],
             started_ms: now_ms(),
             started: Instant::now(),
         };
@@ -933,14 +941,14 @@ mod tests {
         evidence
             .record_intent(
                 &request.id,
-                &Intent::Check {
-                    scope: Scope::WorkingTree,
+                &Intent::CiHostAssurance {
+                    scope: Scope::Paths(vec!["fixture.rs".into()]),
                 },
             )
             .unwrap();
         let plan = Plan {
-            intent: Intent::Check {
-                scope: Scope::WorkingTree,
+            intent: Intent::CiHostAssurance {
+                scope: Scope::Paths(vec!["fixture.rs".into()]),
             },
             operations: vec![test_operation(&cargo)],
             external_requirements: Vec::new(),
@@ -1061,7 +1069,9 @@ mod tests {
         let (result, detail, _) = execute_fake_cargo(script);
         let error = result.unwrap_err();
         assert!(error.contains("error: network_required"));
-        assert!(error.contains("rerun with network access: scripts/agent check"));
+        assert!(error.contains(
+            "rerun with network access: scripts/agent ci host-assurance --paths fixture.rs"
+        ));
         assert_eq!(detail.commands.len(), 2);
     }
 

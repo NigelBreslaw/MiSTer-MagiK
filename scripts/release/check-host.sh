@@ -19,7 +19,7 @@ if [[ $# -gt 0 ]]; then
   exit 2
 fi
 
-scripts/agent verify --paths \
+scripts/agent ci host-assurance --paths \
   agent-cli/src/main.rs \
   crates/catalog/src/lib.rs \
   crates/magik-core/src/lib.rs \

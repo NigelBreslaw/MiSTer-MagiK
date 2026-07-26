@@ -14,7 +14,7 @@ Stable public commands remain directly under `scripts/`. Shared implementation,
 checks, tests, analysis, media, and release helpers are organized according to
 `scripts/README.md`.
 
-Run `scripts/agent check` to inspect Git working-tree prerequisites without
+Use `scripts/agent plan` to preview affected assurance without executing it or
 contacting the MiSTer.
 
 ## Rules
@@ -30,12 +30,9 @@ contacting the MiSTer.
 - Generated output belongs under ignored `build/`, `dist/`, or a temporary
   directory unless explicitly curated evidence.
 
-## Checks
+## Assurance
 
-```bash
-bash -n scripts/NAME.sh
-scripts/agent check
-scripts/agent verify
-```
-
-Git supplies the affected paths. `--paths` is reserved for CI and diagnostics.
+Stage intentional script changes and commit them normally. Pre-commit performs
+bounded shell syntax, whitespace, and policy checks. Pre-push and CI run the
+affected script contracts, packaging fixtures, and other full assurance. Agents
+do not construct those checks directly.

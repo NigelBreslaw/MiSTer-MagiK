@@ -14,21 +14,14 @@ Device, ARM-build, deployment, profiling, acceptance, recovery, and scene
 orchestration belongs in Rust. New shell interfaces in those categories are
 rejected by `scripts/checks/check-no-operational-shell-orchestrators.py`.
 
-Normal repository work uses `scripts/agent check`, explicit-path `git add`, and
-ordinary `git commit`; the pre-commit hook runs the bounded fast gate.
-The pre-push hook performs full affected verification before committed work
-reaches the remote. Committed runtime/platform work then uses `deliver`.
+Normal repository work uses bounded Rust analyzer diagnostics where applicable,
+explicit-path `git add`, ordinary `git commit`, and `git push`; the pre-commit
+hook runs the bounded fast gate. The pre-push hook performs full affected
+assurance before committed work reaches the remote. Committed runtime/platform
+work then uses `deliver`.
 Performance and diagnosis use the flag-free `benchmark` and `diagnose`
 commands.
 
-Linux-only Rust and Clippy diagnostics can be reproduced from Apple Silicon
-with:
-
-```bash
-scripts/agent-linux-verify --paths mister/tools/host mister/tools/agent
-```
-
-The command runs the normal verification harness inside the repository Apple
-Linux image. Its Rust 1.97.1, Clippy, Rustfmt, Cargo, and target caches live
-under `/private/tmp/mister-magik-linux-verify` by default. Apple container
-execution requires first-attempt escalation.
+Native Linux CI owns Linux-specific Rust and Clippy assurance. Local planning
+with `scripts/agent plan` shows the full affected operations without executing
+them.

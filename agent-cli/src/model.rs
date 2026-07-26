@@ -128,6 +128,9 @@ pub enum Intent {
     Build {
         intent: crate::build::BuildCommand,
     },
+    CiHostAssurance {
+        scope: Scope,
+    },
     CiPlatformCandidates {
         artifacts: PathBuf,
         name: String,
@@ -171,9 +174,10 @@ impl Intent {
     #[must_use]
     pub const fn risk(&self) -> Risk {
         match self {
-            Self::Verify { .. } | Self::PrePush { .. } | Self::CaptureUsbVideo { .. } => {
-                Risk::LocalWrite
-            }
+            Self::Verify { .. }
+            | Self::PrePush { .. }
+            | Self::CiHostAssurance { .. }
+            | Self::CaptureUsbVideo { .. } => Risk::LocalWrite,
             Self::ReleaseQualify | Self::DatabaseRotate => Risk::Destructive,
             Self::Deliver { .. } | Self::Benchmark { .. } | Self::Diagnose => Risk::DeviceWrite,
             Self::Build { .. } => Risk::LocalWrite,

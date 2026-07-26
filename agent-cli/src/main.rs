@@ -554,8 +554,7 @@ fn dispatch(
         Intent::Plan {
             scope: selected, ..
         }
-        | Intent::Check { scope: selected }
-        | Intent::Verify { scope: selected } => {
+        | Intent::CiHostAssurance { scope: selected } => {
             let paths = scope::collect(evidence, request_id, repository, selected)?;
             let claimed_paths = paths.clone();
             let plan = planner::affected_plan_at(repository, intent.clone(), paths)?;
@@ -565,10 +564,8 @@ fn dispatch(
             } else {
                 format!("{} checks planned", plan.operations.len())
             };
-            let phase = if matches!(intent, Intent::Verify { .. }) {
-                "verify"
-            } else if matches!(intent, Intent::Check { .. }) {
-                "check"
+            let phase = if matches!(intent, Intent::CiHostAssurance { .. }) {
+                "ci-assurance"
             } else {
                 "plan"
             };
@@ -619,6 +616,9 @@ fn dispatch(
                 return Ok(Outcome::ExternalRequired);
             }
             return Ok(outcome);
+        }
+        Intent::Check { .. } | Intent::Verify { .. } => {
+            return Err("retired_validation_intent: use Rust analyzer, pre-push, or CI".into());
         }
         Intent::Doctor => {
             return agent_cli::doctor::execute(repository, reporter);

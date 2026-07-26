@@ -7,5 +7,6 @@ crates shared by applications and platform adapters.
   installed-layout knowledge.
 - Wire crates preserve their existing schemas, bounds checks, and error modes.
 - Platform hardware contracts belong under `mister/platform/contracts/`.
-- Use `scripts/agent check` while iterating, then `scripts/agent verify` before
-  completion; Git supplies the affected paths.
+- Use `$magik-rust-lsp` for Rust navigation and diagnostics while editing.
+  Pre-commit checks staged formatting; pre-push and CI run affected tests,
+  feature combinations, and full Clippy assurance.

@@ -21,13 +21,16 @@ delivery reject mismatched or dirty receipts.
 Use:
 
 ```text
-scripts/agent check
-scripts/agent verify
+$magik-rust-lsp
 git add -- PATH...
 git commit -m "Describe the change"
+git push
 scripts/agent deliver
 ```
 
+The analyzer provides bounded Rust diagnostics while editing. Pre-commit checks
+cheap commit safety; pre-push and CI own builds, tests, feature matrices, and
+platform assurance.
 `deliver` owns build scope, artifact qualification, transport, activation,
 rollback, and smoke verification. Human-only fixed scene operation is available
 through `mister scene`; it is separate from building and deployment.

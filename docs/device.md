@@ -8,9 +8,10 @@ Public installation and removal are handled by the dedicated Rust
 `mister-magik-manager`; see [installer.md](installer.md). The Scripts-menu shell
 file is only a fail-closed, hash-verifying bootstrap.
 
-Build or refresh the host tool through `scripts/agent check`, then use the binary
-produced at `mister/tools/host/target/debug/mister`. Protocol and host-tool
-changes make the harness rebuild that runnable binary before device access.
+Push the committed host-tool change through pre-push assurance, then use the
+binary produced at `mister/tools/host/target/debug/mister`. Protocol and
+host-tool changes make the assurance harness rebuild that runnable binary before
+device access.
 Common attended commands are:
 
 ```text

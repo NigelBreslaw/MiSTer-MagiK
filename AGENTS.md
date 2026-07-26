@@ -98,11 +98,8 @@ those trees are part of the task.
 ## Top-Level Commands
 
 ```bash
-scripts/agent check
-scripts/agent deliver
 scripts/agent plan
-scripts/agent verify
-scripts/agent-linux-verify --paths mister/tools/host mister/tools/agent
+scripts/agent deliver
 scripts/agent benchmark
 scripts/agent capture usb-video
 scripts/agent diagnose
@@ -111,18 +108,15 @@ git add -- path/to/file
 git commit -m "Describe the completed change"
 ```
 
-Use `check` at meaningful iteration boundaries. Batch related edits before
-checking. Do not rerun `check` after every small patch, formatting correction,
-or immediately obvious follow-up; rerun it when a coherent slice is ready, when
-a failure could have multiple causes, or before handing work off. Argument-free
-`check` and `verify` select all working-tree changes. `--paths` is reserved for
-CI or diagnostics. `pre-commit` is the index-only fast hook interface, and
-`pre-push` is the full local assurance interface. Use
-`scripts/agent db report`, not ad-hoc SQL, for workflow evidence analysis. Run
-`agent-linux-verify` on Apple Silicon when Linux-only Rust or Linux-specific
-Clippy behavior is in scope. It runs the normal verification harness inside the
-repository Apple Linux image and caches its Linux Rust toolchain under
-`/private/tmp`; invoke it with first-attempt escalation.
+For Rust or Cargo work, use the repo-scoped `$magik-rust-lsp` skill for
+semantic navigation and package-scoped Clippy diagnostics. Refresh diagnostics
+after a coherent edit batch, not after every small patch. Do not construct
+Cargo, test, lint, host-assurance, or Apple-container commands directly.
+`scripts/agent plan` previews the full assurance selected for working-tree or
+explicit paths without executing it. The pre-commit hook is the index-only fast
+gate, the pre-push hook is the full affected local assurance interface, and
+native Linux CI owns Linux-specific Rust and Clippy behavior. Use
+`scripts/agent db report`, not ad-hoc SQL, for workflow evidence analysis.
 `deliver` only when the committed change has runtime or platform impact.
 `release qualify` is an attended operator gate; run it only when explicitly
 requested.
@@ -133,8 +127,8 @@ writes a bounded 1920x1080 QuickTime movie for 1–60 seconds. Both modes print 
 Markdown artifact link and refuse to overwrite explicit output paths.
 Do not narrate successful operation counts or names: report only that validation
 is running, passed, or failed with the actionable summary. Agents must not
-construct Cargo, test, lint, host-validation, or Apple-container commands
-directly; the harness selects, times, deduplicates, and records them.
+construct hook or CI assurance commands directly; those boundaries select,
+time, deduplicate, and record their operations.
 “Build and deploy” means create the Git commit first, then
 `scripts/agent deliver`; do not call
 implementation scripts or supply deployment feature flags. `deliver` never

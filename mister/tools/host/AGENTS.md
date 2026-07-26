@@ -23,12 +23,9 @@ transport lives in `remote.rs` and `agent_client.rs`.
 - Never weaken reboot-loop cleanup or timeout policy.
 - Test parsing, command construction, and safety policy without a device.
 
-## Checks
+## Assurance
 
-```bash
-scripts/agent check
-scripts/agent verify
-```
-
-These checks are host-only. Running the tool against the MiSTer requires
+Use `$magik-rust-lsp` for Rust navigation and diagnostics. Pre-commit checks
+staged formatting; pre-push and CI build and test the runnable host binary and
+run full Clippy assurance. Running the tool against the MiSTer requires
 first-attempt escalation.

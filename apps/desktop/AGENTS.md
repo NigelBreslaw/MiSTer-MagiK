@@ -70,15 +70,12 @@ File authority is documented in `docs/agents/file-authority.md`.
 - Keep file rows lightweight: store an icon key in state and resolve it to a
   cached image at the UI boundary.
 
-## Validation
+## Assurance
 
-Run the focused checks before committing desktop UI work:
-
-```bash
-scripts/agent plan
-scripts/agent check
-scripts/agent verify
-```
+Use `$magik-rust-lsp` for desktop Rust and the Slint MCP for UI behavior while
+editing. Pre-commit checks staged formatting and policy. Pre-push runs desktop
+tests and compiled-UI assurance; CI remains authoritative for its configured
+host groups. `scripts/agent plan` previews the affected assurance.
 
 If you change the vendored Primer package, also run the relevant check there,
 usually:

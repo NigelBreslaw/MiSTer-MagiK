@@ -36,10 +36,10 @@ pub fn affected_plan_at(
     intent: Intent,
     paths: Vec<PathBuf>,
 ) -> Result<Plan, String> {
-    let depth = if matches!(intent, Intent::Verify { .. } | Intent::PrePush { .. }) {
-        Depth::Verify
-    } else {
+    let depth = if matches!(intent, Intent::Check { .. }) {
         Depth::Check
+    } else {
+        Depth::Verify
     };
     let paths: BTreeSet<_> = paths.into_iter().collect();
     let unclassified: Vec<_> = paths
@@ -114,8 +114,9 @@ pub fn affected_plan_at(
 pub fn pre_commit_plan_at(repository: &Path, paths: Vec<PathBuf>) -> Result<Plan, String> {
     let mut affected = affected_plan_at(
         repository,
-        Intent::Check {
+        Intent::Plan {
             scope: crate::model::Scope::Paths(paths.clone()),
+            verbose: false,
         },
         paths.clone(),
     )?;
@@ -1104,6 +1105,41 @@ mod tests {
         )
         .unwrap();
         assert!(check.operations.len() < verify.operations.len());
+    }
+
+    #[test]
+    fn plan_pre_push_and_ci_assurance_share_the_full_plan() {
+        let paths = vec!["crates/catalog/src/lib.rs".into()];
+        let planned = affected_plan(
+            Intent::Plan {
+                scope: Scope::Paths(paths.clone()),
+                verbose: false,
+            },
+            paths.clone(),
+        )
+        .unwrap();
+        let pre_push = affected_plan(
+            Intent::PrePush {
+                remote: "origin".into(),
+            },
+            paths.clone(),
+        )
+        .unwrap();
+        let ci = affected_plan(
+            Intent::CiHostAssurance {
+                scope: Scope::Paths(paths.clone()),
+            },
+            paths,
+        )
+        .unwrap();
+
+        assert_eq!(planned.operations, pre_push.operations);
+        assert_eq!(planned.operations, ci.operations);
+        assert_eq!(
+            planned.external_requirements,
+            pre_push.external_requirements
+        );
+        assert_eq!(planned.external_requirements, ci.external_requirements);
     }
 
     #[test]

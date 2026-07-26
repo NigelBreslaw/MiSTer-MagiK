@@ -71,7 +71,7 @@ jobs:
             cargo-host-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-id.outputs.rust_abi }}-
 
       - name: Full host validation (${{ matrix.group }})
-        run: scripts/agent verify --paths ${{ matrix.paths }}
+        run: scripts/agent ci host-assurance --paths ${{ matrix.paths }}
 
   host-dev:
     name: host-dev

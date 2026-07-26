@@ -1,35 +1,36 @@
 # Task routing map
 
-Start with the narrowest matching row. `Full check` is host-only unless the
-validation column explicitly calls for ARM, GUI, or an attended device.
+Start with the narrowest matching row. Rust edit-time feedback uses the
+`$magik-rust-lsp` skill. Full automated assurance runs when pushing and in CI;
+the extra-assurance column identifies attended or specialized work beyond it.
 
-| Task | Start here | Canonical docs | Fast check | Full check | Extra validation | Normally irrelevant |
+| Task | Start here | Canonical docs | Edit-time feedback | Automated assurance | Extra assurance | Normally irrelevant |
 |---|---|---|---|---|---|---|
-| Launcher navigation | `apps/mister/src/launcher.rs` | `docs/architecture.md` | `scripts/agent check` | `scripts/agent verify` | UI/device only for visual or controller behavior | `history/`, `apps/desktop/`, `kernel/` |
-| Launcher lifecycle | `apps/mister/src/ui_runner/launcher_lifecycle.rs` | `docs/architecture.md` | `scripts/agent check` | `scripts/agent verify` | ARM validation is selected automatically; attended device only for handoff/recovery | `documentation/`, `fpga/` unless display-related |
-| Catalog and discovery | `crates/catalog/src/` | `docs/catalog.md` | `scripts/agent check` | `scripts/agent verify` | `scripts/agent benchmark` for real-library behavior | `apps/desktop/vendor/`, `history/` |
-| Framebuffer/presentation | `mister/platform/runtime/src/framebuffer/` | `docs/architecture.md`, `docs/device.md` | `scripts/agent check` | `scripts/agent verify` | ARM and attended HDMI proof for scan-out claims | `documentation/`, catalog media |
-| Input/controllers | `crates/magik-core/src/input_state.rs`, `apps/mister/src/input.rs` | `docs/device.md` | `scripts/agent check` | `scripts/agent verify` | Attended controller test for Linux mappings | `apps/desktop/`, MiSTer platform rendering |
-| Media/previews | `apps/mister/src/media_update.rs`, `crates/catalog/src/preview_worker.rs` | `docs/catalog.md` | `scripts/agent check` | `scripts/agent verify` | Use private submodule tools for generated packs | `reference/`, raw device cache directories |
-| Slint UI | `apps/mister/ui/launcher.slint` | `apps/mister/BUILD.md` | `scripts/agent check` | `scripts/agent verify` | ARM validation is selected automatically; visual validation for layout | `history/`, host tooling |
-| Host MiSTer tool | `mister/tools/host/src/main.rs` | `docs/device.md` | `scripts/agent check` | `scripts/agent verify` | No device unless command execution is under test | `apps/desktop/`, `fpga/` |
-| MagiK agent | `mister/tools/agent/src/main.rs` | `docs/magik-agent.md` | `scripts/agent check` | `scripts/agent verify`; Linux-specific: `scripts/agent-linux-verify --paths mister/tools/host mister/tools/agent` | ARM/device for Linux-only operations | `documentation/`, launcher UI |
-| Installer manager | `mister/tools/manager/src/main.rs` | `docs/installer.md` | `scripts/agent check` | `scripts/agent verify` | ARM/device only after host fixtures pass | launcher rendering, catalog policy |
-| Desktop UI | `apps/desktop/src/main.rs`, `apps/desktop/ui/main.slint` | `apps/desktop/AGENTS.md` | `scripts/agent check` | `scripts/agent verify` | Slint MCP visual check for UI changes | MiSTer kernel/FPGA and device launcher internals |
-| Documentation | `documentation/src/content/docs/` | `documentation/src/content/docs/contributing/` | `scripts/agent check` | `scripts/agent verify` | None | Rust targets, device |
-| Packaging/releases | `scripts/package-distribution.sh` | `docs/releases.md` | `scripts/agent check` | `scripts/agent verify`; operator gate: `scripts/agent release qualify` | Release workflow only after host checks | UI runtime internals |
-| Kernel scanout | `mister/platform/kernel/scanout-slots/` | `docs/kernel-scanout-plugin-assurance.md` | `scripts/agent check` | `scripts/agent verify` | Kernel build and attended device qualification | Catalog, desktop |
-| FPGA latch | `mister/platform/fpga/menu-vblank-latch/` | `docs/fpga-latch-release.md` | `scripts/agent check` | `scripts/agent verify` reports required GitHub Actions RBF build | Quartus/device signoff | Catalog, documentation |
+| Launcher navigation | `apps/mister/src/launcher.rs` | `docs/architecture.md` | `$magik-rust-lsp` | Pre-push and CI | UI/device only for visual or controller behavior | `history/`, `apps/desktop/`, `kernel/` |
+| Launcher lifecycle | `apps/mister/src/ui_runner/launcher_lifecycle.rs` | `docs/architecture.md` | `$magik-rust-lsp` | Pre-push and CI select ARM validation | Attended device only for handoff/recovery | `documentation/`, `fpga/` unless display-related |
+| Catalog and discovery | `crates/catalog/src/` | `docs/catalog.md` | `$magik-rust-lsp` | Pre-push and CI | `scripts/agent benchmark` for real-library behavior | `apps/desktop/vendor/`, `history/` |
+| Framebuffer/presentation | `mister/platform/runtime/src/framebuffer/` | `docs/architecture.md`, `docs/device.md` | `$magik-rust-lsp` | Pre-push and CI select ARM validation | Attended HDMI proof for scan-out claims | `documentation/`, catalog media |
+| Input/controllers | `crates/magik-core/src/input_state.rs`, `apps/mister/src/input.rs` | `docs/device.md` | `$magik-rust-lsp` | Pre-push and CI | Attended controller test for Linux mappings | `apps/desktop/`, MiSTer platform rendering |
+| Media/previews | `apps/mister/src/media_update.rs`, `crates/catalog/src/preview_worker.rs` | `docs/catalog.md` | `$magik-rust-lsp` | Pre-push and CI | Use private submodule tools for generated packs | `reference/`, raw device cache directories |
+| Slint UI | `apps/mister/ui/launcher.slint` | `apps/mister/BUILD.md` | Slint MCP | Pre-push and CI select compiled UI/ARM checks | Visual validation for layout | `history/`, host tooling |
+| Host MiSTer tool | `mister/tools/host/src/main.rs` | `docs/device.md` | `$magik-rust-lsp` | Pre-push and native Linux CI | No device unless command execution is under test | `apps/desktop/`, `fpga/` |
+| MagiK agent | `mister/tools/agent/src/main.rs` | `docs/magik-agent.md` | `$magik-rust-lsp` | Pre-push and native Linux CI | ARM/device for Linux-only operations | `documentation/`, launcher UI |
+| Installer manager | `mister/tools/manager/src/main.rs` | `docs/installer.md` | `$magik-rust-lsp` | Pre-push and CI | ARM/device only after host fixtures pass | launcher rendering, catalog policy |
+| Desktop UI | `apps/desktop/src/main.rs`, `apps/desktop/ui/main.slint` | `apps/desktop/AGENTS.md` | Rust analyzer and Slint MCP as applicable | Pre-push and macOS CI | Visual check for UI changes | MiSTer kernel/FPGA and device launcher internals |
+| Documentation | `documentation/src/content/docs/` | `documentation/src/content/docs/contributing/` | None | Pre-commit, pre-push, and CI | None | Rust targets, device |
+| Packaging/releases | `scripts/package-distribution.sh` | `docs/releases.md` | None | Pre-commit, pre-push, and CI | Operator gate: `scripts/agent release qualify` | UI runtime internals |
+| Kernel scanout | `mister/platform/kernel/scanout-slots/` | `docs/kernel-scanout-plugin-assurance.md` | None | Pre-push and CI | Kernel build and attended device qualification | Catalog, desktop |
+| FPGA latch | `mister/platform/fpga/menu-vblank-latch/` | `docs/fpga-latch-release.md` | None | Pre-push and GitHub Actions RBF build | Quartus/device signoff | Catalog, documentation |
 
 For dated evidence, search explicitly with `rg --no-ignore history/`. For
-unknown work, run `scripts/agent plan` before invoking checks.
+unknown work, run `scripts/agent plan` to preview the full affected assurance
+plan.
 
-The normal feature loop is edit, `scripts/agent check`, explicit
-`git add -- PATH...`, and `git commit -m MESSAGE`. The pre-commit hook performs
-the fail-closed ten-second policy, whitespace, syntax, and formatting gate.
-The pre-push hook performs full affected verification of a clean `HEAD`; CI
-remains authoritative. Use standalone `verify` when full assurance is needed
-without pushing.
+The normal feature loop is edit with bounded analyzer feedback where applicable,
+explicit `git add -- PATH...`, `git commit -m MESSAGE`, and `git push`. The
+pre-commit hook performs the fail-closed ten-second policy, whitespace, syntax,
+and formatting gate. The pre-push hook performs full affected assurance of a
+clean `HEAD`; CI remains authoritative.
 Runtime or platform changes then use `scripts/agent deliver`. Delivery uses the
 exact clean local app commit. Platform delivery resolves the latest qualified
 GitHub platform release and stages its Main, scanout kernel module, and latch

@@ -6,14 +6,15 @@ under `scripts/release/`. Runtime/platform qualification remains in Rust.
 For a release candidate:
 
 ```text
-scripts/agent check
-scripts/agent verify
 git add -- PATH...
 git commit -m "Prepare release"
+git push
 scripts/agent deliver
 scripts/agent release qualify
 ```
 
+The pre-push hook and CI must pass for the exact release commit before delivery
+and attended qualification.
 Development delivery builds the app from its clean local commit and never
 pushes automatically. Main, the scanout kernel module, and the latch RBF come
 from the latest qualified GitHub platform release, with its verified

@@ -19,12 +19,9 @@ the scanout contract is in `scanout_slots_contract.rs`.
   `/dev/fb0`.
 - OS access stays isolated from request validation where practical.
 
-## Checks
+## Assurance
 
-```bash
-scripts/agent check
-scripts/agent verify
-```
-
-Building/deploying the ARM agent and all device communication require
-first-attempt escalation.
+Use `$magik-rust-lsp` for Rust navigation and diagnostics. Pre-commit checks
+staged formatting; pre-push and native Linux CI own tests, full Clippy, and ARM
+assurance. Building/deploying the ARM agent and all device communication
+require first-attempt escalation.

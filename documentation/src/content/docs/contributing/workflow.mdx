@@ -7,16 +7,16 @@ sidebar:
 
 Work in small, focused changes and preserve unrelated user work. The repository may already contain local edits, generated outputs, or private submodule state.
 
-Useful host validation commands:
+Preview the full affected assurance plan without executing it:
 
 ```bash
 scripts/agent plan --working-tree
-scripts/agent check --working-tree
-scripts/agent verify --working-tree
-scripts/agent check --paths apps/mister
-scripts/agent verify --paths apps/mister
-scripts/agent verify --paths mister/tools/host
 ```
+
+During Rust work, AI agents use the repository's bounded, lazy Rust analyzer
+integration. Stage intentional paths and commit normally; pre-commit provides
+the fast format, whitespace, policy, and shell-syntax gate. Pre-push and CI run
+the full affected tests, builds, feature matrices, and policy checks.
 
 For documentation work in this site:
 

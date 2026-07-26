@@ -24,13 +24,10 @@ production UI. Read `BUILD.md`, `docs/architecture.md`, and `docs/catalog.md`.
 - RGB565, cached-RAM rendering, and Main-mediated handoff are production rules.
 - Experiments stay behind their existing features and are not production proof.
 
-## Checks
+## Assurance
 
-```bash
-scripts/agent plan
-scripts/agent check
-scripts/agent verify
-```
-
-Git working-tree scope makes `scripts/agent verify` select the production UI
-and ARM checks required by the changed files.
+Use `$magik-rust-lsp` for Rust navigation and diagnostics while editing, and
+the Slint MCP for UI behavior. The pre-commit hook checks staged formatting and
+policy; pre-push and CI select the production UI, tests, Clippy, and ARM
+assurance required by the changed files. `scripts/agent plan` previews that
+full affected plan without executing it.

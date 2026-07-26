@@ -320,7 +320,7 @@ fn validate_protocol_source_identity(source: &str) -> Result<()> {
     let source_identity = (source_agent, source_protocol);
     if source_identity != cli_identity {
         return Err(format!(
-            "mister CLI is stale relative to agent protocol source (cli={}.{}, source={}.{}); run scripts/agent check before agent bootstrap",
+            "mister CLI is stale relative to agent protocol source (cli={}.{}, source={}.{}); commit and push the protocol change so pre-push assurance rebuilds the host tool",
             cli_identity.0, cli_identity.1, source_identity.0, source_identity.1
         )
         .into());

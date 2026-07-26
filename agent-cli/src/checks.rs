@@ -300,6 +300,7 @@ fn check_ci_cache(repository: &Path) -> Result<(), String> {
             "steps.cache-id.outputs.cross_abi",
             "ci-cache-identity.py",
             "rustup default \"$toolchain\"",
+            "scripts/agent ci host-assurance --paths ${{ matrix.paths }}",
             "name: cargo-timings-release",
             "if-no-files-found: error",
         ],
@@ -307,6 +308,7 @@ fn check_ci_cache(repository: &Path) -> Result<(), String> {
             "target-host-",
             "Cache host build outputs",
             "scripts/agent verify --paths desktop",
+            "scripts/agent check",
         ],
     )?;
     let distribution = read(repository, ".github/workflows/distribution.yml")?;
@@ -424,6 +426,9 @@ fn check_agent_guidance(repository: &Path) -> Result<(), String> {
     for path in guidance {
         let text = read(repository, path)?;
         for forbidden in [
+            "scripts/agent check",
+            "scripts/agent verify",
+            "agent-linux-verify",
             "scripts/validate",
             "scripts/dev-rust",
             "scripts/doctor",
@@ -443,8 +448,9 @@ fn check_agent_guidance(repository: &Path) -> Result<(), String> {
     let root = read(repository, "AGENTS.md")?;
     for expected in [
         "scripts/agent plan",
-        "scripts/agent check",
-        "scripts/agent verify",
+        "$magik-rust-lsp",
+        "pre-push hook",
+        "native Linux CI",
         "scripts/agent deliver",
         "git add --",
         "git commit -m",
@@ -454,7 +460,38 @@ fn check_agent_guidance(repository: &Path) -> Result<(), String> {
             return Err(format!("root_workflow_missing: {expected}"));
         }
     }
-    Ok(())
+    check_retired_validation_call_sites(repository)
+}
+
+fn check_retired_validation_call_sites(repository: &Path) -> Result<(), String> {
+    let output = Command::new("git")
+        .args([
+            "grep",
+            "-n",
+            "-I",
+            "-e",
+            "scripts/agent check",
+            "-e",
+            "scripts/agent verify",
+            "-e",
+            "agent-linux-verify",
+            "--",
+            ".",
+            ":(exclude)history/**",
+            ":(exclude)reference/**",
+            ":(exclude)agent-cli/src/checks.rs",
+        ])
+        .current_dir(repository)
+        .output()
+        .map_err(|error| error.to_string())?;
+    match output.status.code() {
+        Some(1) => Ok(()),
+        Some(0) => Err(format!(
+            "retired_validation_interface: {}",
+            String::from_utf8_lossy(&output.stdout).trim()
+        )),
+        _ => Err(String::from_utf8_lossy(&output.stderr).trim().to_owned()),
+    }
 }
 
 fn check_license_headers(repository: &Path) -> Result<(), String> {
