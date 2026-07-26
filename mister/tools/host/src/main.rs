@@ -3161,17 +3161,30 @@ fn last_json_line(output: &str) -> Option<Value> {
 fn profile_installed_search(config: &NativeDeviceConfig, output_dir: &Path) -> Result<String> {
     let session = connect_with(&config.connection, 10)?;
     fs::create_dir_all(output_dir)?;
-    let output = exec(
-        &session,
-        "/media/fat/mister-magik-dev/mister-magik-fb search-bench",
-        true,
-    )?;
-    let mut log = output.stdout.clone();
-    log.push_str(&output.stderr);
+    let started = Instant::now();
+    let mut log = String::new();
+    let output = loop {
+        let output = exec(
+            &session,
+            "/media/fat/mister-magik-dev/mister-magik-fb search-bench",
+            true,
+        )?;
+        log.push_str(&output.stdout);
+        log.push_str(&output.stderr);
+        if exec_failure_message("installed search benchmark", &output).is_none() {
+            break output;
+        }
+        if !search_benchmark_waits_for_catalog(&output)
+            || started.elapsed() >= Duration::from_secs(180)
+        {
+            fs::write(output_dir.join("search-bench.log"), &log)?;
+            return Err(exec_failure_message("installed search benchmark", &output)
+                .expect("failed search benchmark checked above")
+                .into());
+        }
+        thread::sleep(Duration::from_secs(1));
+    };
     fs::write(output_dir.join("search-bench.log"), &log)?;
-    if let Some(error) = exec_failure_message("installed search benchmark", &output) {
-        return Err(error.into());
-    }
     let summary =
         last_json_line(&output.stdout).ok_or("installed search benchmark returned no JSON")?;
     if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-search-benchmark-v1") {
@@ -3182,6 +3195,13 @@ fn profile_installed_search(config: &NativeDeviceConfig, output_dir: &Path) -> R
         format!("{}\n", serde_json::to_string_pretty(&summary)?),
     )?;
     serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn search_benchmark_waits_for_catalog(output: &ExecOutput) -> bool {
+    output.stderr.contains("no such table: game_search_fts")
+        || output
+            .stderr
+            .contains("unsupported persisted search schema version")
 }
 
 fn profile_installed_catalog_lifecycle(
@@ -13265,6 +13285,23 @@ H: Handlers=event3 js0"#
         assert_eq!(capability["screensaver-pprof-v1"], true);
         assert_eq!(capability["screensaver-frame-evidence-v3"], true);
         assert!(last_json_line("no structured report").is_none());
+    }
+
+    #[test]
+    fn installed_search_waits_only_for_catalog_schema_publication() {
+        let pending = ExecOutput {
+            rc: 1,
+            stdout: String::new(),
+            stderr: "search benchmark failed: no such table: game_search_fts".to_string(),
+        };
+        let unrelated = ExecOutput {
+            rc: 1,
+            stdout: String::new(),
+            stderr: "search benchmark failed: disk I/O error".to_string(),
+        };
+
+        assert!(search_benchmark_waits_for_catalog(&pending));
+        assert!(!search_benchmark_waits_for_catalog(&unrelated));
     }
 
     #[test]
