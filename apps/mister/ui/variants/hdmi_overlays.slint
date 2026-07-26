@@ -22,14 +22,14 @@ export component CompatibilityScreen inherits Rectangle {
         Text {
             text: "MiSTer MagiK compatibility check failed";
             color: #ff5d73;
-            font-size: 18px * root.s;
+            font-size: 16px * root.s;
             horizontal-alignment: center;
         }
 
         Text {
             text: MisterBridge.compatibility-reason;
             color: #ffd166;
-            font-size: 11px * root.s;
+            font-size: 8px * root.s;
             horizontal-alignment: center;
         }
 
@@ -44,7 +44,7 @@ export component CompatibilityScreen inherits Rectangle {
         Text {
             text: "A: Retry latch    B: Continue using compatibility mode";
             color: #9080a8;
-            font-size: 7px * root.s;
+            font-size: 8px * root.s;
             horizontal-alignment: center;
             wrap: word-wrap;
         }
@@ -86,7 +86,7 @@ export component CatalogScanPopup inherits Rectangle {
                 width: root.scan-content-width;
                 text: "MiSTer MagiK";
                 color: #06d6a0;
-                font-size: 20px * s;
+                font-size: 24px * s;
                 horizontal-alignment: center;
             }
 
@@ -103,7 +103,7 @@ export component CatalogScanPopup inherits Rectangle {
                 width: root.scan-content-width;
                 text: MisterBridge.catalog-scan-title;
                 color: #d7eef8;
-                font-size: 10px * s;
+                font-size: 8px * s;
                 horizontal-alignment: center;
             }
 
@@ -123,7 +123,7 @@ export component CatalogScanPopup inherits Rectangle {
                 Text {
                     text: MisterBridge.media-pack-summary;
                     color: #d7eef8;
-                    font-size: 6px * s;
+                    font-size: 8px * s;
                     horizontal-alignment: center;
                 }
 
@@ -160,7 +160,7 @@ export component MediaProgressPopup inherits Rectangle {
         Text {
             text: MisterBridge.media-pack-summary;
             color: #d7eef8;
-            font-size: 6px * root.s;
+            font-size: 8px * root.s;
             horizontal-alignment: center;
         }
 
@@ -183,7 +183,7 @@ export component StartupSplash inherits Rectangle {
         Text {
             text: "MiSTer MagiK";
             color: #e8e0f0;
-            font-size: 28px * s;
+            font-size: 24px * s;
             horizontal-alignment: center;
         }
     }
@@ -298,7 +298,7 @@ export component ConfirmDialog inherits Rectangle {
             Text {
                 text: MisterBridge.confirm-title;
                 color: #06d6a0;
-                font-size: 10px;
+                font-size: 8px;
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }
@@ -306,7 +306,7 @@ export component ConfirmDialog inherits Rectangle {
             Text {
                 text: MisterBridge.confirm-message;
                 color: #e8e0f0;
-                font-size: 7px;
+                font-size: 8px;
                 horizontal-alignment: center;
                 vertical-alignment: center;
                 wrap: word-wrap;
