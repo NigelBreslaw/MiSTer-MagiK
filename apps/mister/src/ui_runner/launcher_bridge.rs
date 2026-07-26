@@ -480,29 +480,24 @@ fn sync_launcher_confirm_bridge(
             set_confirm_selected,
             dialog.selected.selected_index()
         );
-        set_bridge_string_if_changed!(
-            bridge,
-            get_confirm_title,
-            set_confirm_title,
-            "Library failed to load."
-        );
+        set_bridge_string_if_changed!(bridge, get_confirm_title, set_confirm_title, dialog.title);
         set_bridge_string_if_changed!(
             bridge,
             get_confirm_message,
             set_confirm_message,
-            dialog.error.as_str()
+            dialog.message.as_str()
         );
         set_bridge_string_if_changed!(
             bridge,
             get_confirm_left_label,
             set_confirm_left_label,
-            "Retry"
+            dialog.left_label
         );
         set_bridge_string_if_changed!(
             bridge,
             get_confirm_right_label,
             set_confirm_right_label,
-            "Rebuild"
+            dialog.right_label
         );
         return;
     }
@@ -1713,21 +1708,21 @@ mod tests {
             StartupCatalogState::LoadFailed {
                 error: "database disk image is malformed".to_string(),
                 has_stale_catalog: false,
+                transient: false,
             },
             &mut effects,
         );
         sync_launcher_confirm_bridge(&bridge, &nav, &lifecycle);
         assert!(bridge.get_confirm_visible());
-        assert_eq!(
-            bridge.get_confirm_title().as_str(),
-            "Library failed to load."
+        assert_eq!(bridge.get_confirm_title().as_str(), "Catalog unavailable");
+        assert!(
+            bridge
+                .get_confirm_message()
+                .as_str()
+                .contains("database disk image is malformed")
         );
-        assert_eq!(
-            bridge.get_confirm_message().as_str(),
-            "database disk image is malformed"
-        );
-        assert_eq!(bridge.get_confirm_left_label().as_str(), "Retry");
-        assert_eq!(bridge.get_confirm_right_label().as_str(), "Rebuild");
+        assert_eq!(bridge.get_confirm_left_label().as_str(), "Exit to MiSTer");
+        assert_eq!(bridge.get_confirm_right_label().as_str(), "Full rebuild");
         assert_eq!(bridge.get_confirm_selected(), 0);
     }
 

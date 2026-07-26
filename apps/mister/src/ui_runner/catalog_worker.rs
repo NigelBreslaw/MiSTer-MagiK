@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::*;
-use mister_magik_catalog::builder_protocol::{BuilderSummary, CatalogBuilderEvent};
+use mister_magik_catalog::builder_protocol::{
+    BuilderSummary, CatalogBuilderEvent, CatalogChangeReason,
+};
 use mister_magik_catalog::builder_service::{self, BuilderOperation};
 use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
 use mister_magik_catalog::{
@@ -786,6 +788,7 @@ pub(super) fn start_library_catalog_worker(
                                         detail:
                                             "Catalog summary unavailable; rebuild required."
                                                 .to_string(),
+                                        reason: CatalogChangeReason::RepairRequired,
                                     });
                                     return;
                                 }
@@ -796,6 +799,7 @@ pub(super) fn start_library_catalog_worker(
                                 "Catalog inputs changed; rebuild required. {}",
                                 check.drift.detail
                             ),
+                            reason: CatalogChangeReason::InputsChanged,
                         });
                         return;
                     }
@@ -806,6 +810,7 @@ pub(super) fn start_library_catalog_worker(
                         });
                         let _ = tx.send(CatalogWorkerMessage::Changed {
                             detail: "Catalog stamp check failed; rebuild required.".to_string(),
+                            reason: CatalogChangeReason::RepairRequired,
                         });
                         return;
                     }
@@ -951,8 +956,11 @@ fn handle_embedded_builder_event(
                 summary: refresh_summary(summary),
             });
         }
-        CatalogBuilderEvent::Changed { detail, .. } => {
-            let _ = tx.send(CatalogWorkerMessage::Changed { detail });
+        CatalogBuilderEvent::Changed { detail, reason, .. } => {
+            let _ = tx.send(CatalogWorkerMessage::Changed {
+                detail,
+                reason: reason.unwrap_or(CatalogChangeReason::RepairRequired),
+            });
         }
         CatalogBuilderEvent::Failure { stage, error, .. } => {
             state.terminal_seen = true;
@@ -1195,6 +1203,7 @@ pub(super) enum CatalogWorkerMessage {
     },
     Changed {
         detail: String,
+        reason: CatalogChangeReason,
     },
     Done,
 }
@@ -2025,11 +2034,11 @@ mod tests {
         emit(CatalogBuilderEvent::Changed {
             protocol,
             detail: "changed".into(),
-            reason: None,
+            reason: Some(CatalogChangeReason::InputsChanged),
         });
         assert!(matches!(
             rx.recv().unwrap(),
-            CatalogWorkerMessage::Changed { detail } if detail == "changed"
+            CatalogWorkerMessage::Changed { detail, .. } if detail == "changed"
         ));
         emit(CatalogBuilderEvent::Done { protocol });
         assert!(matches!(rx.recv().unwrap(), CatalogWorkerMessage::Done));

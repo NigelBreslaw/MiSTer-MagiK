@@ -3,8 +3,7 @@
 
 use super::launcher_worker_intents::{
     CatalogCounterPhase, CatalogProgressUiIntent, CatalogWorkerUiContext, LauncherWorkerUiIntent,
-    cached_catalog_validation_intent, catalog_persistence_failed_intent,
-    catalog_rebuild_started_intent, parse_games_found_detail,
+    cached_catalog_validation_intent, catalog_rebuild_started_intent, parse_games_found_detail,
 };
 use super::*;
 
@@ -252,6 +251,7 @@ impl LauncherCatalogSession {
                 }
                 effects.push(CatalogSessionEffect::Lifecycle(
                     LauncherLifecycleInput::CatalogLoadFailed {
+                        transient: catalog_failure_is_transient(&error),
                         error,
                         has_stale_catalog: context.catalog_ready && !context.catalog_partial,
                     },
@@ -366,13 +366,22 @@ impl LauncherCatalogSession {
                 effects.ui(LauncherWorkerUiIntent::HideCatalogBackgroundScan);
             }
             CatalogWorkerMessage::PersistenceFailed { error } => {
+                let transient = catalog_failure_is_transient(&error);
                 self.refresh_done = true;
                 self.foreground_update = false;
                 self.refresh_failed = true;
                 effects.push(CatalogSessionEffect::FinishMediaWorker);
                 effects.push(CatalogSessionEffect::CatalogValidationFinished);
+                effects.push(CatalogSessionEffect::CatalogBuildFinished);
                 effects.event("library_db_save_failed", error.clone());
-                effects.ui(catalog_persistence_failed_intent(error));
+                effects.ui(LauncherWorkerUiIntent::ClearCatalogScan);
+                effects.push(CatalogSessionEffect::Lifecycle(
+                    LauncherLifecycleInput::CatalogRecoveryRequired {
+                        error,
+                        has_stale_catalog: context.catalog_ready && !context.catalog_partial,
+                        mode: CatalogRecoveryMode::PersistenceFailure { transient },
+                    },
+                ));
                 self.games_found_counter.reset();
             }
             CatalogWorkerMessage::Unchanged { summary } => {
@@ -390,15 +399,30 @@ impl LauncherCatalogSession {
                 effects.ui(LauncherWorkerUiIntent::ClearCatalogScan);
                 self.games_found_counter.reset();
             }
-            CatalogWorkerMessage::Changed { detail } => {
+            CatalogWorkerMessage::Changed { detail, reason } => {
                 self.refresh_done = true;
                 self.foreground_update = false;
                 self.refresh_failed = false;
                 effects.push(CatalogSessionEffect::FinishMediaWorker);
                 effects.push(CatalogSessionEffect::CatalogValidationFinished);
-                effects.event("library_changed_detected", detail);
-                effects.push(CatalogSessionEffect::Confirm(
-                    launcher::ConfirmAction::LibraryChanged,
+                effects.event("library_changed_detected", detail.clone());
+                let mode = match reason {
+                    mister_magik_catalog::builder_protocol::CatalogChangeReason::InputsChanged => {
+                        CatalogRecoveryMode::InputsChanged
+                    }
+                    mister_magik_catalog::builder_protocol::CatalogChangeReason::ProjectionUpgrade {
+                        ..
+                    } => CatalogRecoveryMode::UpgradeRequired,
+                    mister_magik_catalog::builder_protocol::CatalogChangeReason::RepairRequired => {
+                        CatalogRecoveryMode::RepairRequired
+                    }
+                };
+                effects.push(CatalogSessionEffect::Lifecycle(
+                    LauncherLifecycleInput::CatalogRecoveryRequired {
+                        error: detail,
+                        has_stale_catalog: context.catalog_ready && !context.catalog_partial,
+                        mode,
+                    },
                 ));
                 effects.ui(LauncherWorkerUiIntent::ClearCatalogScan);
                 self.games_found_counter.reset();
@@ -570,8 +594,12 @@ impl LauncherCatalogSession {
                 self.foreground_update = false;
                 effects.ui(LauncherWorkerUiIntent::ClearCatalogScan);
                 self.games_found_counter.reset();
-                effects.push(CatalogSessionEffect::Confirm(
-                    launcher::ConfirmAction::LibraryUpdateFailed,
+                effects.push(CatalogSessionEffect::Lifecycle(
+                    LauncherLifecycleInput::CatalogRecoveryRequired {
+                        error: "The catalog update did not complete.".to_string(),
+                        has_stale_catalog: true,
+                        mode: CatalogRecoveryMode::PersistenceFailure { transient: false },
+                    },
                 ));
                 effects.event(
                     "library_rebuild_fallback_catalog_ready",
@@ -600,6 +628,21 @@ impl LauncherCatalogSession {
         self.bootstrap_counter_sustained_climb_logged = false;
         self.full_scan_counter_climb_logged = false;
     }
+}
+
+fn catalog_failure_is_transient(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    ![
+        "unsupported",
+        "schema",
+        "corrupt",
+        "checksum",
+        "identity",
+        "exceeds configured",
+        "does not match",
+    ]
+    .iter()
+    .any(|needle| error.contains(needle))
 }
 
 pub(super) fn consume_library_rebuild_marker(worker_enabled: bool, start: Instant) -> bool {
@@ -1352,7 +1395,7 @@ mod tests {
             now,
         );
 
-        assert_eq!(effect_names(effects), vec!["ui", "confirm", "event"]);
+        assert_eq!(effect_names(effects), vec!["ui", "lifecycle", "event"]);
         assert!(session.refresh_done());
         assert!(!session.foreground_update());
     }
@@ -1396,7 +1439,7 @@ mod tests {
             now,
         );
 
-        assert_eq!(effect_names(effects), vec!["ui", "confirm", "event"]);
+        assert_eq!(effect_names(effects), vec!["ui", "lifecycle", "event"]);
         assert!(session.refresh_done());
         assert!(!session.foreground_update());
     }
@@ -1419,9 +1462,15 @@ mod tests {
 
         assert_eq!(
             effects,
-            vec!["finish-media", "catalog-validation-finished", "event", "ui"]
+            vec![
+                "finish-media",
+                "catalog-validation-finished",
+                "event",
+                "ui",
+                "lifecycle"
+            ]
         );
-        assert_eq!(ui_effects, vec!["catalog-scan"]);
+        assert_eq!(ui_effects, vec!["clear-catalog-scan"]);
         assert!(session.refresh_done());
         assert!(!session.foreground_update());
         assert!(session.refresh_failed);
@@ -1456,7 +1505,7 @@ mod tests {
         );
         assert!(!session.refresh_done());
 
-        let statuses = catalog_scan_statuses(session.handle_worker_message(
+        let (effects, ui_effects) = effect_and_ui_names(session.handle_worker_message(
             CatalogWorkerMessageContext {
                 catalog_ready: true,
                 catalog_partial: false,
@@ -1469,14 +1518,8 @@ mod tests {
             now,
         ));
 
-        assert_eq!(statuses.len(), 1);
-        assert!(statuses[0].visible());
-        assert!(!statuses[0].background_visible());
-        assert_eq!(statuses[0].title(), "Library load failed");
-        assert_eq!(
-            statuses[0].detail(),
-            "insert profile: UNIQUE constraint failed"
-        );
+        assert!(effects.contains(&"lifecycle"));
+        assert_eq!(ui_effects, vec!["clear-catalog-scan"]);
         assert!(session.refresh_done());
         assert!(session.refresh_failed);
     }
@@ -1520,9 +1563,15 @@ mod tests {
 
         assert_eq!(
             effects,
-            vec!["finish-media", "catalog-validation-finished", "event", "ui"]
+            vec![
+                "finish-media",
+                "catalog-validation-finished",
+                "event",
+                "ui",
+                "lifecycle"
+            ]
         );
-        assert_eq!(ui_effects, vec!["catalog-scan"]);
+        assert_eq!(ui_effects, vec!["clear-catalog-scan"]);
         assert!(session.refresh_done());
         assert!(!session.foreground_update());
         assert!(session.refresh_failed);
@@ -1540,6 +1589,7 @@ mod tests {
             },
             CatalogWorkerMessage::Changed {
                 detail: "Catalog stamp changed; rebuild required.".to_string(),
+                reason: mister_magik_catalog::builder_protocol::CatalogChangeReason::InputsChanged,
             },
             Instant::now(),
         );
@@ -1550,7 +1600,7 @@ mod tests {
                 "finish-media",
                 "catalog-validation-finished",
                 "event",
-                "confirm",
+                "lifecycle",
                 "ui"
             ]
         );

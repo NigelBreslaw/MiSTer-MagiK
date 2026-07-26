@@ -3414,6 +3414,10 @@ pub(super) fn run_launcher_loop(
                             Some(LauncherLifecycleInput::CatalogRecoveryRight)
                         } else if nav_state.btn_a && !recovery_prev.btn_a {
                             Some(LauncherLifecycleInput::CatalogRecoveryConfirm)
+                        } else if (nav_state.btn_b && !recovery_prev.btn_b)
+                            || (nav_state.btn_home && !recovery_prev.btn_home)
+                        {
+                            Some(LauncherLifecycleInput::CatalogRecoveryCancel)
                         } else {
                             None
                         };
@@ -5810,6 +5814,15 @@ fn apply_lifecycle_effects(
                     CatalogExecutionMode::ForegroundExclusive,
                 );
             }
+            LauncherEffect::StartCatalogRebuild { root } => {
+                print_startup_event(start, "catalog_rebuild_started", &root);
+                scheduler.start_catalog_worker(
+                    root,
+                    CatalogWorkerRequest::ForceBuild,
+                    CatalogWorkerInitialCache::AlreadyLoadedReady,
+                    CatalogExecutionMode::ForegroundExclusive,
+                );
+            }
             LauncherEffect::StartFreshCatalogBuild { root } => {
                 print_startup_event(start, "catalog_fresh_build_started", &root);
                 scheduler.start_catalog_worker(
@@ -5818,6 +5831,15 @@ fn apply_lifecycle_effects(
                     CatalogWorkerInitialCache::AlreadyProbedMissing,
                     CatalogExecutionMode::ForegroundExclusive,
                 );
+            }
+            LauncherEffect::ExitToMister => {
+                print_startup_event(start, "catalog_recovery_exit_requested", "target=mister");
+                match launcher::exit_to_mister() {
+                    Ok(()) => std::process::exit(0),
+                    Err(error) => {
+                        crate::ui_errln!("catalog recovery exit to MiSTer failed: {error}");
+                    }
+                }
             }
         }
     }
