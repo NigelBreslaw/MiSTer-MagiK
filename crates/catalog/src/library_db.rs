@@ -2307,9 +2307,10 @@ pub(crate) fn find_eocd(buf: &[u8]) -> Option<usize> {
     if buf.len() < 22 {
         return None;
     }
-    (0..=buf.len() - 22)
-        .rev()
-        .find(|&idx| buf[idx..idx + 4] == [0x50, 0x4b, 0x05, 0x06])
+    (0..=buf.len() - 22).rev().find(|&idx| {
+        buf[idx..idx + 4] == [0x50, 0x4b, 0x05, 0x06]
+            && idx + 22 + le_u16(&buf[idx + 20..idx + 22]) as usize == buf.len()
+    })
 }
 
 pub(crate) fn le_u16(bytes: &[u8]) -> u16 {
@@ -2367,6 +2368,16 @@ mod tests {
         write_sqlite_scan_with_mame_and_hbmame, write_sqlite_scan_with_mame_and_preview_pack,
     };
     use crate::test_support::*;
+
+    #[test]
+    fn find_eocd_ignores_signature_inside_zip_comment() {
+        let mut archive = vec![0u8; 52];
+        archive[..4].copy_from_slice(&[0x50, 0x4b, 0x05, 0x06]);
+        archive[20..22].copy_from_slice(&30u16.to_le_bytes());
+        archive[26..30].copy_from_slice(&[0x50, 0x4b, 0x05, 0x06]);
+
+        assert_eq!(find_eocd(&archive), Some(0));
+    }
 
     #[derive(Debug, PartialEq, Eq)]
     struct CatalogGameSnapshot {
