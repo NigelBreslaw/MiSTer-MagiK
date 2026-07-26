@@ -1173,6 +1173,14 @@ pub(super) enum CatalogWorkerMessage {
         source: CatalogSource,
         timing: mister_magik_catalog::arcade_catalog::ArcadeTextIndexBuildTiming,
     },
+    SearchQueryReady {
+        request: launcher::ArcadeSearchRequest,
+        result: mister_magik_catalog::persisted_search::PersistedCollectionSearchResult,
+    },
+    SearchQueryFailed {
+        request: launcher::ArcadeSearchRequest,
+        error: String,
+    },
     HydrationDoneNeedsValidation {
         root: String,
     },

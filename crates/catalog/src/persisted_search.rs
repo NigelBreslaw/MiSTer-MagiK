@@ -4,6 +4,7 @@
 //! Persisted FTS5 game search and autocomplete stored inside system shards.
 
 use rusqlite::{Connection, OpenFlags};
+use std::cmp::Ordering;
 use std::error::Error;
 use std::fmt;
 use std::path::Path;
@@ -39,6 +40,82 @@ pub struct PersistedSearchResult {
     pub matches: Vec<PersistedSearchMatch>,
     pub autocomplete: Option<PersistedAutocompleteCandidate>,
     pub timing: PersistedSearchTiming,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PersistedCollectionMatch {
+    pub system_id: String,
+    pub ordinal: usize,
+    pub rank: f64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PersistedCollectionSearchResult {
+    pub matches: Vec<PersistedCollectionMatch>,
+    pub autocomplete: Option<PersistedAutocompleteCandidate>,
+    pub timing: PersistedSearchTiming,
+}
+
+pub fn search_system_shards(
+    storage_root: &Path,
+    system_ids: &[String],
+    query: &str,
+    limits: crate::shard_registry::RegistryLimits,
+) -> Result<PersistedCollectionSearchResult, PersistedSearchError> {
+    let manifest = crate::shard_registry::read_latest_manifest_lazy(storage_root, limits)
+        .map_err(|error| PersistedSearchError::with("open catalog manifest", error))?;
+    let mut result = PersistedCollectionSearchResult::default();
+    for system_id in system_ids {
+        let system = manifest
+            .systems
+            .iter()
+            .find(|system| system.system_id.as_str() == system_id)
+            .ok_or_else(|| {
+                PersistedSearchError::new(format!(
+                    "search system {system_id} is absent from the manifest"
+                ))
+            })?;
+        let shard = search_system_shard(&storage_root.join(&system.active.sqlite_path), query)?;
+        result.matches.extend(
+            shard
+                .matches
+                .into_iter()
+                .map(|entry| PersistedCollectionMatch {
+                    system_id: system_id.clone(),
+                    ordinal: entry.ordinal,
+                    rank: entry.rank,
+                }),
+        );
+        if let Some(candidate) = shard.autocomplete {
+            let replace = result.autocomplete.as_ref().is_none_or(|current| {
+                autocomplete_candidate_order(&candidate, current) == Ordering::Greater
+            });
+            if replace {
+                result.autocomplete = Some(candidate);
+            }
+        }
+        result.timing.rust_prepare_us = result
+            .timing
+            .rust_prepare_us
+            .saturating_add(shard.timing.rust_prepare_us);
+        result.timing.sqlite_us = result
+            .timing
+            .sqlite_us
+            .saturating_add(shard.timing.sqlite_us);
+        result.timing.rust_finalize_us = result
+            .timing
+            .rust_finalize_us
+            .saturating_add(shard.timing.rust_finalize_us);
+        result.timing.total_us = result.timing.total_us.saturating_add(shard.timing.total_us);
+    }
+    result.matches.sort_by(|left, right| {
+        left.rank
+            .partial_cmp(&right.rank)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| left.system_id.cmp(&right.system_id))
+            .then_with(|| left.ordinal.cmp(&right.ordinal))
+    });
+    Ok(result)
 }
 
 pub fn search_system_shard(
@@ -391,6 +468,16 @@ fn is_noisy_autocomplete_word(word: &str) -> bool {
 
 fn elapsed_us(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX)
+}
+
+fn autocomplete_candidate_order(
+    left: &PersistedAutocompleteCandidate,
+    right: &PersistedAutocompleteCandidate,
+) -> Ordering {
+    left.source_rank
+        .cmp(&right.source_rank)
+        .then_with(|| left.score.cmp(&right.score))
+        .then_with(|| right.word.cmp(&left.word))
 }
 
 #[derive(Debug)]

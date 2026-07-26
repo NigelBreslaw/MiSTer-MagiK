@@ -2743,6 +2743,9 @@ pub(super) fn run_launcher_loop(
             catalog_background_allowed,
         );
         scheduler.set_search_index_allowed(catalog_background_allowed);
+        if let Some(request) = nav.take_arcade_search_request(&catalog, catalog_version) {
+            scheduler.request_arcade_search(request);
+        }
         if catalog_ready && nav.screen == Screen::Home {
             for (index, system_id) in nav.collection_prefetch_order().into_iter().enumerate() {
                 if collection_has_resident_rows(&catalog, &system_id) {
@@ -6011,6 +6014,44 @@ fn apply_catalog_session_effects(
                 if let Some(system_id) = active_system(catalog, nav).map(|system| system.id.clone())
                 {
                     nav.refresh_arcade_search_if_active(catalog, &system_id);
+                    *full_bridge_dirty = true;
+                }
+            }
+            CatalogSessionEffect::ApplySearchResult { request, result } => {
+                if request.catalog_version == *catalog_version {
+                    let timing = result.timing;
+                    if nav.apply_arcade_search_result(catalog, &request, result) {
+                        print_startup_event(
+                            start,
+                            "arcade_search_query_ready",
+                            format!(
+                                "request={} collection={} rust_prepare_us={} sqlite_us={} rust_finalize_us={} total_us={}",
+                                request.request_id,
+                                request.collection_id,
+                                timing.rust_prepare_us,
+                                timing.sqlite_us,
+                                timing.rust_finalize_us,
+                                timing.total_us
+                            ),
+                        );
+                        *full_bridge_dirty = true;
+                    }
+                }
+            }
+            CatalogSessionEffect::FailSearchRequest { request, error } => {
+                if request.catalog_version == *catalog_version
+                    && nav.fail_arcade_search_request(&request)
+                {
+                    print_startup_event(
+                        start,
+                        "arcade_search_query_failed",
+                        format!(
+                            "request={} collection={} error={}",
+                            request.request_id,
+                            request.collection_id,
+                            error.replace('\t', " ")
+                        ),
+                    );
                     *full_bridge_dirty = true;
                 }
             }

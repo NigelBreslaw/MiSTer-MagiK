@@ -845,6 +845,15 @@ pub enum ArcadeSearchPane {
     Results,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ArcadeSearchRequest {
+    pub request_id: u64,
+    pub catalog_version: u64,
+    pub collection_id: String,
+    pub system_ids: Vec<String>,
+    pub query: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct ArcadeSearchState {
     pub query: String,
@@ -857,6 +866,8 @@ pub struct ArcadeSearchState {
     result_query: String,
     suggestion_system_id: String,
     suggestion_query: String,
+    request_id: u64,
+    request_pending: bool,
 }
 
 impl Default for ArcadeSearchState {
@@ -878,6 +889,8 @@ impl ArcadeSearchState {
             result_query: String::new(),
             suggestion_system_id: String::new(),
             suggestion_query: String::new(),
+            request_id: 0,
+            request_pending: false,
         }
     }
 
@@ -2977,6 +2990,8 @@ impl LauncherNav {
         self.arcade_search.suggestion_system_id = system_id.to_string();
         self.arcade_search.suggestion_query.clear();
         self.arcade_search.preparing = false;
+        self.arcade_search.request_pending = false;
+        self.arcade_search.request_id = self.arcade_search.request_id.wrapping_add(1);
         self.arcade_search.pane = ArcadeSearchPane::Keyboard;
     }
 
@@ -2989,15 +3004,7 @@ impl LauncherNav {
         }
         let Some(results) = catalog.try_search_game_indexes(system_id, &self.arcade_search.query)
         else {
-            self.arcade_search.results.clear();
-            self.arcade_search.suggestion.clear();
-            self.arcade_search.result_system_id = system_id.to_string();
-            self.arcade_search.result_query = self.arcade_search.query.clone();
-            self.arcade_search.suggestion_system_id = system_id.to_string();
-            self.arcade_search.suggestion_query = self.arcade_search.query.clone();
-            self.arcade_search.preparing = true;
-            self.arcade_search.pane = ArcadeSearchPane::Keyboard;
-            self.arcade.reset();
+            self.queue_arcade_search_request(system_id);
             return;
         };
         let Some(suggestion) =
@@ -3021,6 +3028,7 @@ impl LauncherNav {
         self.arcade_search.result_query = self.arcade_search.query.clone();
         self.arcade_search.suggestion_system_id = system_id.to_string();
         self.arcade_search.suggestion_query = self.arcade_search.query.clone();
+        self.arcade_search.request_pending = false;
         let count = self.arcade_search.results.len();
         if count == 0 {
             self.arcade.reset();
@@ -3031,6 +3039,92 @@ impl LauncherNav {
         } else {
             self.arcade.snap_to_selected();
         }
+    }
+
+    fn queue_arcade_search_request(&mut self, system_id: &str) {
+        self.arcade_search.results.clear();
+        self.arcade_search.suggestion.clear();
+        self.arcade_search.result_system_id = system_id.to_string();
+        self.arcade_search.result_query = self.arcade_search.query.clone();
+        self.arcade_search.suggestion_system_id = system_id.to_string();
+        self.arcade_search.suggestion_query = self.arcade_search.query.clone();
+        self.arcade_search.preparing = true;
+        self.arcade_search.request_id = self.arcade_search.request_id.wrapping_add(1);
+        self.arcade_search.request_pending = true;
+        self.arcade_search.pane = ArcadeSearchPane::Keyboard;
+        self.arcade.reset();
+    }
+
+    pub fn take_arcade_search_request(
+        &mut self,
+        catalog: &ArcadeCatalog,
+        catalog_version: u64,
+    ) -> Option<ArcadeSearchRequest> {
+        if !self.arcade_search.request_pending || self.arcade_search.query.is_empty() {
+            return None;
+        }
+        self.arcade_search.request_pending = false;
+        let collection_id = self.arcade_search.result_system_id.clone();
+        Some(ArcadeSearchRequest {
+            request_id: self.arcade_search.request_id,
+            catalog_version,
+            system_ids: catalog.search_source_system_ids(&collection_id),
+            collection_id,
+            query: self.arcade_search.query.clone(),
+        })
+    }
+
+    pub fn apply_arcade_search_result(
+        &mut self,
+        catalog: &ArcadeCatalog,
+        request: &ArcadeSearchRequest,
+        result: mister_magik_catalog::persisted_search::PersistedCollectionSearchResult,
+    ) -> bool {
+        if request.request_id != self.arcade_search.request_id
+            || request.collection_id != self.arcade_search.result_system_id
+            || request.query != self.arcade_search.query
+        {
+            return false;
+        }
+        self.arcade_search.results = result
+            .matches
+            .into_iter()
+            .filter_map(|entry| {
+                catalog.resolve_system_game_ordinal(&entry.system_id, entry.ordinal)
+            })
+            .collect();
+        self.arcade_search.suggestion = result
+            .autocomplete
+            .map(|candidate| candidate.word)
+            .unwrap_or_default();
+        self.arcade_search.preparing = false;
+        self.arcade_search.request_pending = false;
+        let count = self.arcade_search.results.len();
+        if count == 0 {
+            self.arcade.reset();
+            self.arcade_search.pane = ArcadeSearchPane::Keyboard;
+        } else if self.arcade.selected >= count {
+            self.arcade.selected = count - 1;
+            self.arcade.snap_to_selected();
+        } else {
+            self.arcade.snap_to_selected();
+        }
+        true
+    }
+
+    pub fn fail_arcade_search_request(&mut self, request: &ArcadeSearchRequest) -> bool {
+        if request.request_id != self.arcade_search.request_id
+            || request.collection_id != self.arcade_search.result_system_id
+            || request.query != self.arcade_search.query
+        {
+            return false;
+        }
+        self.arcade_search.results.clear();
+        self.arcade_search.suggestion.clear();
+        self.arcade_search.preparing = false;
+        self.arcade_search.request_pending = false;
+        self.arcade.reset();
+        true
     }
 
     pub fn refresh_arcade_search_if_active(&mut self, catalog: &ArcadeCatalog, system_id: &str) {

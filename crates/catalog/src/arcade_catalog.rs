@@ -11,7 +11,7 @@ use crate::catalog_navigation::CatalogNavigationProjection;
 use crate::library_db::{AMIGAVISION_GAME_LAUNCH_PREFIX, AMIGAVISION_LAUNCHER_REF};
 use crate::prepared_collections::PreparedCollectionId;
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -626,6 +626,22 @@ impl ArcadeCatalog {
 
     pub fn system_game_view(&self, system_id: &str) -> ArcadeGameView<'_> {
         ArcadeGameView::indexed(&self.games, self.system_game_indexes(system_id))
+    }
+
+    pub fn search_source_system_ids(&self, collection_id: &str) -> Vec<String> {
+        let mut seen = HashSet::new();
+        self.system_game_indexes(collection_id)
+            .iter()
+            .filter_map(|index| self.games.get(*index))
+            .filter_map(|game| {
+                let system_id = game.system_id.to_string();
+                seen.insert(system_id.clone()).then_some(system_id)
+            })
+            .collect()
+    }
+
+    pub fn resolve_system_game_ordinal(&self, system_id: &str, ordinal: usize) -> Option<usize> {
+        self.system_game_indexes(system_id).get(ordinal).copied()
     }
 
     pub fn search_game_indexes(&self, system_id: &str, query: &str) -> Vec<usize> {

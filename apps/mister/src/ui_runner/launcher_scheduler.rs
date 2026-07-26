@@ -91,6 +91,11 @@ enum SearchIndexJobState {
     Running(mpsc::Receiver<CatalogWorkerMessage>),
 }
 
+enum SearchQueryJobState {
+    Idle,
+    Running(mpsc::Receiver<CatalogWorkerMessage>),
+}
+
 enum SystemShardJobState {
     Idle,
     Running {
@@ -125,6 +130,8 @@ pub(super) struct LauncherScheduler {
     search_index: SearchIndexJobState,
     search_index_generation: Arc<AtomicUsize>,
     search_index_allowed: Arc<AtomicBool>,
+    search_query: SearchQueryJobState,
+    pending_search_query: Option<launcher::ArcadeSearchRequest>,
     system_shard: SystemShardJobState,
     system_shard_attempted: BTreeSet<String>,
     system_shard_queue: VecDeque<SystemShardRequest>,
@@ -140,6 +147,8 @@ impl LauncherScheduler {
             search_index: SearchIndexJobState::Idle,
             search_index_generation: Arc::new(AtomicUsize::new(0)),
             search_index_allowed: Arc::new(AtomicBool::new(false)),
+            search_query: SearchQueryJobState::Idle,
+            pending_search_query: None,
             system_shard: SystemShardJobState::Idle,
             system_shard_attempted: BTreeSet::new(),
             system_shard_queue: VecDeque::new(),
@@ -156,6 +165,7 @@ impl LauncherScheduler {
     pub(super) fn catalog_messages_running(&self) -> bool {
         self.catalog_worker_running()
             || matches!(self.search_index, SearchIndexJobState::Running(_))
+            || matches!(self.search_query, SearchQueryJobState::Running(_))
             || matches!(self.system_shard, SystemShardJobState::Running { .. })
     }
 
@@ -339,6 +349,53 @@ impl LauncherScheduler {
         self.search_index_allowed.store(allowed, Ordering::Release);
     }
 
+    pub(super) fn request_arcade_search(&mut self, request: launcher::ArcadeSearchRequest) {
+        self.pending_search_query = Some(request);
+        self.start_next_arcade_search();
+    }
+
+    fn start_next_arcade_search(&mut self) {
+        if matches!(self.search_query, SearchQueryJobState::Running(_)) {
+            return;
+        }
+        let Some(request) = self.pending_search_query.take() else {
+            return;
+        };
+        let worker_request = request.clone();
+        let (tx, rx) = mpsc::channel();
+        self.search_query = SearchQueryJobState::Running(rx);
+        if std::thread::Builder::new()
+            .name("catalog-search-query".to_string())
+            .spawn(move || {
+                mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
+                    mister_magik_catalog::runtime_thread::RuntimeThreadRole::CatalogWorker,
+                );
+                let storage = mister_magik_catalog::catalog_config::default_sharded_catalog_path();
+                let message = match mister_magik_catalog::persisted_search::search_system_shards(
+                    &storage,
+                    &worker_request.system_ids,
+                    &worker_request.query,
+                    mister_magik_catalog::production_sharded_projection::production_registry_limits(
+                    ),
+                ) {
+                    Ok(result) => CatalogWorkerMessage::SearchQueryReady {
+                        request: worker_request,
+                        result,
+                    },
+                    Err(error) => CatalogWorkerMessage::SearchQueryFailed {
+                        request: worker_request,
+                        error: error.to_string(),
+                    },
+                };
+                let _ = tx.send(message);
+            })
+            .is_err()
+        {
+            self.search_query = SearchQueryJobState::Idle;
+            self.start_next_arcade_search();
+        }
+    }
+
     /// This is entered by the catalog session only after persistence (when
     /// required) and the launcher's interaction-aware idle gate. Starting a
     /// new generation cancels any stale index job at its next cooperative
@@ -445,6 +502,33 @@ impl LauncherScheduler {
         }
         if search_disconnected {
             self.search_index = SearchIndexJobState::Idle;
+        }
+        let mut search_query_terminal = false;
+        if let SearchQueryJobState::Running(rx) = &self.search_query {
+            while out.events.len() < CATALOG_MESSAGES_PER_FRAME {
+                match rx.try_recv() {
+                    Ok(message) => {
+                        search_query_terminal = matches!(
+                            message,
+                            CatalogWorkerMessage::SearchQueryReady { .. }
+                                | CatalogWorkerMessage::SearchQueryFailed { .. }
+                        );
+                        out.push(message);
+                        if search_query_terminal {
+                            break;
+                        }
+                    }
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        search_query_terminal = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if search_query_terminal {
+            self.search_query = SearchQueryJobState::Idle;
+            self.start_next_arcade_search();
         }
         let mut shard_terminal = false;
         if let SystemShardJobState::Running {

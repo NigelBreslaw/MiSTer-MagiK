@@ -54,6 +54,14 @@ pub(super) enum CatalogSessionEffect {
         source: CatalogSource,
         timing: mister_magik_catalog::arcade_catalog::ArcadeTextIndexBuildTiming,
     },
+    ApplySearchResult {
+        request: launcher::ArcadeSearchRequest,
+        result: mister_magik_catalog::persisted_search::PersistedCollectionSearchResult,
+    },
+    FailSearchRequest {
+        request: launcher::ArcadeSearchRequest,
+        error: String,
+    },
     SyncCatalogBridge,
     CatalogBuildStarted,
     CatalogSystemDiscovered {
@@ -363,6 +371,12 @@ impl LauncherCatalogSession {
                     source,
                     timing,
                 });
+            }
+            CatalogWorkerMessage::SearchQueryReady { request, result } => {
+                effects.push(CatalogSessionEffect::ApplySearchResult { request, result });
+            }
+            CatalogWorkerMessage::SearchQueryFailed { request, error } => {
+                effects.push(CatalogSessionEffect::FailSearchRequest { request, error });
             }
             CatalogWorkerMessage::HydrationDoneNeedsValidation { root } => {
                 self.refresh_done = false;
