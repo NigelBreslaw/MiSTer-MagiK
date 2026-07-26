@@ -295,7 +295,9 @@ fn safety_confirmation(paths: &Paths, message: &str, operation: &str) -> Result<
 
 fn choose_output_mode(paths: &Paths) -> Result<OutputMode> {
     if let Ok(saved) = fs::read_to_string(&paths.output_mode) {
-        return Ok(OutputMode::parse(saved.trim())?);
+        let mode = OutputMode::parse(saved.trim())?;
+        confirm_31khz(paths, mode)?;
+        return Ok(mode);
     }
     if paths.test_mode() {
         let mode = OutputMode::parse(
@@ -1026,6 +1028,26 @@ mod tests {
 
         let unavailable = InputDecoder::default();
         assert_eq!(unavailable.finish(), None);
+    }
+
+    #[test]
+    fn saved_31khz_mode_still_requires_explicit_confirmation() {
+        let root = env::temp_dir().join(format!("mister-manager-saved-31khz-{}", process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let paths = fixture_paths(&root);
+        fs::write(&paths.output_mode, b"crt-480p60\n").unwrap();
+
+        let error = choose_output_mode(&paths).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("31 kHz CRT mode was not explicitly confirmed")
+        );
+        fs::write(&paths.output_mode, b"crt-240p60\n").unwrap();
+        assert_eq!(choose_output_mode(&paths).unwrap(), OutputMode::Crt240p60);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
