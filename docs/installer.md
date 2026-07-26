@@ -21,8 +21,10 @@ never silently discarded. Restore changes only that Main assignment and does
 not replace the live file with the backup.
 
 Installation and full uninstall require an explicit Down event from the
-keyboard or joystick. A/Enter may confirm a normal reboot, but it cannot approve
-those safety boundaries.
+keyboard or joystick. Successful installation reboots automatically after all
+validation and boot-file replacement complete. A/Enter may confirm a normal
+reboot after restore or uninstall, but it cannot approve those safety
+boundaries.
 
 If the Scripts entrypoint reports a missing or corrupt manager, do not edit
 `MiSTer.ini` or `inittab` by hand. Re-run Downloader or reinstall the complete

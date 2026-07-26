@@ -308,8 +308,8 @@ fn install(paths: &Paths) -> Result<()> {
     replace_transaction(paths, &files, &mut NoWriteFaults, || {
         validate_install(paths)
     })?;
-    println!("MiSTer MagiK: installed. Reboot to start MiSTer MagiK.");
-    offer_reboot(paths)
+    println!("MiSTer MagiK: installed. Rebooting to start MiSTer MagiK.");
+    reboot_now(paths)
 }
 
 fn restore(paths: &Paths) -> Result<()> {
@@ -899,6 +899,10 @@ fn offer_reboot(paths: &Paths) -> Result<()> {
         println!("MiSTer MagiK: reboot skipped.");
         return Ok(());
     }
+    reboot_now(paths)
+}
+
+fn reboot_now(paths: &Paths) -> Result<()> {
     if paths.test_mode() {
         println!("MiSTer MagiK: TEST: normal reboot requested.");
         return Ok(());

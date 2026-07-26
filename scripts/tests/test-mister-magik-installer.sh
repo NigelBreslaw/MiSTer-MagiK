@@ -119,7 +119,8 @@ chmod 755 "$APP/mister-magik-manager"
 
 # Keyboard/joystick Down confirms installation and the Main duplicate is canonicalized.
 MISTER_MAGIK_TEST_KEYS=down run_manager install >"$TMP/install.log"
-grep -q 'installed. Reboot to start MiSTer MagiK' "$TMP/install.log"
+grep -q 'installed. Rebooting to start MiSTer MagiK' "$TMP/install.log"
+grep -q 'TEST: normal reboot requested' "$TMP/install.log"
 if grep -q 'Choose launcher output' "$TMP/install.log"; then
   echo "installer unexpectedly prompted for an output mode" >&2
   exit 1
