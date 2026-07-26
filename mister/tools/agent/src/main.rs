@@ -902,7 +902,7 @@ mod linux {
     use std::os::fd::AsRawFd;
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex, OnceLock};
     use std::thread;
     use std::time::{Duration, Instant};
@@ -923,11 +923,16 @@ mod linux {
     const FPGA_BIT31: u32 = 0x8000_0000;
     const FPGA_SPIN_LIMIT: u32 = 2_000_000;
     const CONTROL_AUTH_DISABLED: bool = false;
+    const MAX_ACTIVE_CONTROL_CLIENTS: usize = 16;
+    pub(super) const MAX_CONTROL_REQUEST_BYTES: usize = 64 * 1024;
+    const CONTROL_REQUEST_DEADLINE: Duration = Duration::from_secs(10);
     const LOG: &str = "/tmp/mister-magik-agent.log";
     const PLOG: &str = "/media/fat/mister-magik-dev/bootlogs/agent.log";
     const FRAME_ANALYTICS_LEASE_PATH: &str = "/tmp/mister-magik/realtime-frame-analytics";
     static FRAME_ANALYTICS_LEASE_GENERATION: AtomicU64 = AtomicU64::new(0);
     static FRAMEBUFFER_STREAM_ACTIVE: AtomicBool = AtomicBool::new(false);
+    static ACTIVE_CONTROL_CLIENTS: ActiveControlClients =
+        ActiveControlClients::new(MAX_ACTIVE_CONTROL_CLIENTS);
     static MAGIK_OPERATION_RESULTS: OnceLock<Mutex<HashMap<String, Value>>> = OnceLock::new();
     const BOOTLOG_DIR: &str = "/media/fat/mister-magik-dev/bootlogs";
     const SEQ: &str = "/media/fat/mister-magik-dev/bootlogs/agent.seq";
@@ -942,6 +947,48 @@ mod linux {
 
     static LOG_RING: OnceLock<SharedLogRing> = OnceLock::new();
     static TIMELINE: OnceLock<SharedTimeline> = OnceLock::new();
+
+    pub(super) struct ActiveControlClients {
+        active: AtomicUsize,
+        limit: usize,
+    }
+
+    impl ActiveControlClients {
+        pub(super) const fn new(limit: usize) -> Self {
+            Self {
+                active: AtomicUsize::new(0),
+                limit,
+            }
+        }
+
+        pub(super) fn claim(&self) -> Option<ActiveControlClient<'_>> {
+            let mut active = self.active.load(Ordering::SeqCst);
+            loop {
+                if active >= self.limit {
+                    return None;
+                }
+                match self.active.compare_exchange_weak(
+                    active,
+                    active + 1,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                ) {
+                    Ok(_) => return Some(ActiveControlClient { clients: self }),
+                    Err(current) => active = current,
+                }
+            }
+        }
+    }
+
+    pub(super) struct ActiveControlClient<'a> {
+        clients: &'a ActiveControlClients,
+    }
+
+    impl Drop for ActiveControlClient<'_> {
+        fn drop(&mut self) {
+            self.clients.active.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
 
     pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         match args.first().map(String::as_str).unwrap_or("net-boot") {
@@ -1201,9 +1248,18 @@ mod linux {
 
             for stream in listener.incoming() {
                 match stream {
-                    Ok(stream) => {
+                    Ok(mut stream) => {
+                        let Some(client_guard) = ACTIVE_CONTROL_CLIENTS.claim() else {
+                            let _ = writeln!(
+                                stream,
+                                "{}",
+                                response(None, false, None, Some("agent is busy"))
+                            );
+                            continue;
+                        };
                         let token = Arc::clone(&token);
                         thread::spawn(move || {
+                            let _client_guard = client_guard;
                             handle_control_client(stream, token, boot_id, started)
                         });
                     }
@@ -1236,11 +1292,12 @@ mod linux {
                 return;
             }
         };
-        let mut line = String::new();
-        let read_result = reader.read_line(&mut line);
+        let read_result = read_control_request(&mut reader, |remaining| {
+            stream.set_read_timeout(Some(remaining))
+        });
         let response = match read_result {
-            Ok(0) => response(None, false, None, Some("empty request")),
-            Ok(_) => {
+            Ok(line) if line.is_empty() => response(None, false, None, Some("empty request")),
+            Ok(line) => {
                 if maybe_handle_framebuffer_stream_v1(&line, &token, &mut stream) {
                     return;
                 }
@@ -1268,6 +1325,44 @@ mod linux {
             Err(err) => response(None, false, None, Some(&format!("read error: {err}"))),
         };
         let _ = writeln!(stream, "{response}");
+    }
+
+    pub(super) fn read_control_request(
+        reader: &mut impl BufRead,
+        mut prepare_read: impl FnMut(Duration) -> io::Result<()>,
+    ) -> io::Result<String> {
+        let deadline = Instant::now() + CONTROL_REQUEST_DEADLINE;
+        let mut bytes = Vec::new();
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "control request header deadline exceeded",
+                ));
+            }
+            prepare_read(remaining)?;
+            let available = reader.fill_buf()?;
+            if available.is_empty() {
+                break;
+            }
+            let take = available
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .map_or(available.len(), |index| index + 1);
+            if bytes.len().saturating_add(take) > MAX_CONTROL_REQUEST_BYTES {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "control request header exceeds 64 KiB",
+                ));
+            }
+            bytes.extend_from_slice(&available[..take]);
+            reader.consume(take);
+            if bytes.last() == Some(&b'\n') {
+                break;
+            }
+        }
+        String::from_utf8(bytes).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
     }
 
     struct ActiveFramebufferStream;
@@ -4081,6 +4176,39 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    use std::io::{BufReader, Cursor, Read};
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn control_request_rejects_oversized_headers_without_consuming_payload() {
+        let oversized = vec![b'x'; linux::MAX_CONTROL_REQUEST_BYTES + 1];
+        let error =
+            linux::read_control_request(&mut BufReader::new(Cursor::new(oversized)), |_| Ok(()))
+                .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+
+        let mut reader = BufReader::new(Cursor::new(b"{}\npayload".to_vec()));
+        assert_eq!(
+            linux::read_control_request(&mut reader, |_| Ok(())).unwrap(),
+            "{}\n"
+        );
+        let mut payload = Vec::new();
+        reader.read_to_end(&mut payload).unwrap();
+        assert_eq!(payload, b"payload");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn control_client_admission_is_bounded_and_reopens_after_drop() {
+        let clients = linux::ActiveControlClients::new(2);
+        let first = clients.claim().expect("first client");
+        let second = clients.claim().expect("second client");
+        assert!(clients.claim().is_none());
+        drop(first);
+        assert!(clients.claim().is_some());
+        drop(second);
+    }
 
     #[cfg(target_os = "linux")]
     #[test]
