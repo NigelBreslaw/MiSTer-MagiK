@@ -1747,7 +1747,7 @@ pub(crate) fn parse_library_database_snapshot_lz4(
     let remote_path = string_at(value, "/remote_path")
         .ok_or_else(|| AgentError::Protocol("missing library snapshot remote_path".to_string()))?
         .to_string();
-    if remote_path != "/media/fat/mister-magik/library.sqlite3" {
+    if remote_path != "/media/fat/mister-magik-dev/library.sqlite3" {
         return Err(AgentError::Protocol(
             "library snapshot remote_path is not allowlisted".to_string(),
         ));
@@ -2789,7 +2789,7 @@ tiny"#
         let snapshot = parse_library_database_snapshot_lz4(
             &json!({
                 "schema": "mister-magik-library-db-snapshot-v1",
-                "remote_path": "/media/fat/mister-magik/library.sqlite3",
+                "remote_path": "/media/fat/mister-magik-dev/library.sqlite3",
                 "raw_bytes": bytes.len(),
                 "payload_bytes": payload.len(),
                 "encoding": "lz4-block",
@@ -2802,7 +2802,7 @@ tiny"#
 
         assert_eq!(
             snapshot.remote_path,
-            "/media/fat/mister-magik/library.sqlite3"
+            "/media/fat/mister-magik-dev/library.sqlite3"
         );
         assert_eq!(snapshot.bytes, bytes);
         assert_eq!(snapshot.raw_bytes, bytes.len() as u64);
@@ -2812,13 +2812,37 @@ tiny"#
     }
 
     #[test]
+    fn parse_library_snapshot_accepts_development_agent_path() {
+        let bytes = b"sqlite bytes";
+        let payload = lz4_flex::block::compress(bytes);
+        let snapshot = parse_library_database_snapshot_lz4(
+            &json!({
+                "schema": "mister-magik-library-db-snapshot-v1",
+                "remote_path": "/media/fat/mister-magik-dev/library.sqlite3",
+                "raw_bytes": bytes.len(),
+                "payload_bytes": payload.len(),
+                "encoding": "lz4-block",
+                "checksum": fnv64_hex(bytes),
+                "mtime_unix_ms": 1234
+            }),
+            &payload,
+        )
+        .expect("development Library snapshot should parse");
+
+        assert_eq!(
+            snapshot.remote_path,
+            "/media/fat/mister-magik-dev/library.sqlite3"
+        );
+    }
+
+    #[test]
     fn parse_library_snapshot_rejects_bad_checksum_and_path() {
         let bytes = b"sqlite bytes";
         let payload = lz4_flex::block::compress(bytes);
         let bad_checksum = parse_library_database_snapshot_lz4(
             &json!({
                 "schema": "mister-magik-library-db-snapshot-v1",
-                "remote_path": "/media/fat/mister-magik/library.sqlite3",
+                "remote_path": "/media/fat/mister-magik-dev/library.sqlite3",
                 "raw_bytes": bytes.len(),
                 "payload_bytes": payload.len(),
                 "encoding": "lz4-block",
@@ -2846,6 +2870,22 @@ tiny"#
         assert!(
             matches!(bad_path, AgentError::Protocol(message) if message.contains("allowlisted"))
         );
+
+        let production_path = parse_library_database_snapshot_lz4(
+            &json!({
+                "schema": "mister-magik-library-db-snapshot-v1",
+                "remote_path": "/media/fat/mister-magik/library.sqlite3",
+                "raw_bytes": bytes.len(),
+                "payload_bytes": payload.len(),
+                "encoding": "lz4-block",
+                "checksum": fnv64_hex(bytes)
+            }),
+            &payload,
+        )
+        .expect_err("production path should fail");
+        assert!(
+            matches!(production_path, AgentError::Protocol(message) if message.contains("allowlisted"))
+        );
     }
 
     #[test]
@@ -2854,7 +2894,7 @@ tiny"#
         let err = parse_library_database_snapshot_lz4(
             &json!({
                 "schema": "mister-magik-library-db-snapshot-v1",
-                "remote_path": "/media/fat/mister-magik/library.sqlite3",
+                "remote_path": "/media/fat/mister-magik-dev/library.sqlite3",
                 "raw_bytes": MAX_AGENT_BINARY_PAYLOAD_BYTES + 1,
                 "payload_bytes": payload.len(),
                 "encoding": "lz4-block",
