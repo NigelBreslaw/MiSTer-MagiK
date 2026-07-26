@@ -325,7 +325,7 @@ fn prepare_resume_scan(
         taxonomy_version: crate::catalog_classify::SYSTEM_TAXONOMY_VERSION.to_string(),
         namespace_backend: std::env::var("MISTER_NAMESPACE_BACKEND")
             .unwrap_or_else(|_| "default".to_string()),
-        projection_contract: crate::sharded_catalog::MANIFEST_SCHEMA_VERSION.to_string(),
+        projection_contract: crate::sharded_catalog::PRODUCTION_PROJECTION_CONTRACT.to_string(),
     };
     let path = crate::catalog_config::default_build_progress_path();
     let (journal, status) = match crate::build_progress::BuildProgressJournal::open_or_create(

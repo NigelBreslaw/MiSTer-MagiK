@@ -3,7 +3,8 @@
 
 use crate::arcade_catalog::ArcadeCatalog;
 use crate::builder_protocol::{
-    BuilderSummary, CATALOG_BUILDER_PROTOCOL_VERSION, CatalogBuilderEvent,
+    BuilderSummary, CATALOG_BUILDER_PROTOCOL_VERSION, CatalogBuilderEvent, CatalogChangeReason,
+    CatalogFailureCode, CatalogFailureDiagnostic,
 };
 use crate::catalog_build_record;
 use crate::catalog_navigation::write_catalog_navigation_snapshot_with_timing;
@@ -111,7 +112,10 @@ struct StageOutput<T> {
 #[derive(Clone, Debug)]
 enum CheckDecision {
     Unchanged(BuilderSummary),
-    Changed(String),
+    Changed {
+        detail: String,
+        reason: CatalogChangeReason,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -211,8 +215,12 @@ fn run_with_backend<B: BuilderBackend>(
             CheckDecision::Unchanged(summary) => {
                 emit(CatalogBuilderEvent::Unchanged { protocol, summary });
             }
-            CheckDecision::Changed(detail) => {
-                emit(CatalogBuilderEvent::Changed { protocol, detail });
+            CheckDecision::Changed { detail, reason } => {
+                emit(CatalogBuilderEvent::Changed {
+                    protocol,
+                    detail,
+                    reason: Some(reason),
+                });
             }
         }
         emit(CatalogBuilderEvent::Done { protocol });
@@ -516,25 +524,57 @@ struct SystemBuilderBackend {
     arcade_bootstrap_scan: Option<library_db::LibraryRamScanArtifact>,
 }
 
-fn repair_v3_after_unchanged_check(catalog_fingerprint: &str) -> String {
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ProductionRepairStatus {
+    Current,
+    UpgradeRequired { installed: String, required: String },
+    RepairRequired,
+}
+
+impl ProductionRepairStatus {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Current => "current",
+            Self::UpgradeRequired { .. } => "upgrade-required",
+            Self::RepairRequired => "rebuild-required",
+        }
+    }
+}
+
+fn repair_v3_after_unchanged_check(catalog_fingerprint: &str) -> ProductionRepairStatus {
     let started = Instant::now();
     let storage = crate::catalog_config::default_sharded_catalog_path();
     let limits = crate::production_sharded_projection::production_registry_limits();
     let generation = crate::shard_registry::read_latest_manifest_lazy(&storage, limits)
         .ok()
         .map(|manifest| manifest.generation);
-    if let Some(generation) = generation
-        && crate::production_sharded_projection::validate_production_binding(&storage, generation)
-            .is_ok()
-    {
-        return "current".to_string();
+    if let Some(generation) = generation {
+        match crate::production_sharded_projection::inspect_production_binding(&storage, generation)
+        {
+            Ok(crate::production_sharded_projection::ProductionBindingStatus::Current {
+                ..
+            }) => return ProductionRepairStatus::Current,
+            Ok(
+                crate::production_sharded_projection::ProductionBindingStatus::UpgradeRequired {
+                    installed,
+                    required,
+                    ..
+                },
+            ) => {
+                return ProductionRepairStatus::UpgradeRequired {
+                    installed,
+                    required,
+                };
+            }
+            Err(_) => {}
+        }
     }
     crate::catalog_errln!(
         "catalog_v3_repair_tsv\tstatus=rebuild-required\tfingerprint={}\telapsed_us={}",
         catalog_fingerprint,
         started.elapsed().as_micros()
     );
-    "rebuild-required".to_string()
+    ProductionRepairStatus::RepairRequired
 }
 
 /// Remove the complete production catalog so the next launch performs a clean
@@ -604,7 +644,7 @@ impl BuilderBackend for SystemBuilderBackend {
         let v3_repair = if check.unchanged {
             repair_v3_after_unchanged_check(&check.current_fingerprint)
         } else {
-            "skipped-changed".to_string()
+            ProductionRepairStatus::RepairRequired
         };
         let timing_detail = format!(
             "unchanged={} check_us={} compute_us={} open_us={} read_us={} checkpoint_read_us={} compare_us={} checkpoint_compare_us={} stored={} current={} stored_checkpoint={} current_checkpoint={} stored_lines={} current_lines={} stored_checkpoint_lines={} current_checkpoint_lines={} drift_detail={} v3_repair={}",
@@ -628,25 +668,41 @@ impl BuilderBackend for SystemBuilderBackend {
             check.stored_checkpoint_lines,
             check.current_checkpoint_lines,
             check.drift.detail,
-            v3_repair,
+            v3_repair.label(),
         );
         let decision = if check.unchanged {
-            if v3_repair == "current" {
-                CheckDecision::Unchanged(BuilderSummary::from(
+            match v3_repair {
+                ProductionRepairStatus::Current => CheckDecision::Unchanged(BuilderSummary::from(
                     library_db::default_sharded_cached_summary(check.check_us)
                         .map_err(|error| StageFailure::new("summary", error))?,
-                ))
-            } else {
-                CheckDecision::Changed(
-                    "Catalog sources are unchanged, but the V3 generation is incomplete; rebuild required."
-                        .to_string(),
-                )
+                )),
+                ProductionRepairStatus::UpgradeRequired {
+                    installed,
+                    required,
+                } => CheckDecision::Changed {
+                    detail: format!(
+                        "Catalog format update required: installed {installed}, required {required}."
+                    ),
+                    reason: CatalogChangeReason::ProjectionUpgrade {
+                        installed,
+                        required,
+                    },
+                },
+                ProductionRepairStatus::RepairRequired => CheckDecision::Changed {
+                    detail:
+                        "Catalog sources are unchanged, but the V3 generation is incomplete; rebuild required."
+                            .to_string(),
+                    reason: CatalogChangeReason::RepairRequired,
+                },
             }
         } else {
-            CheckDecision::Changed(format!(
-                "Catalog inputs changed; rebuild required. {}",
-                check.drift.detail
-            ))
+            CheckDecision::Changed {
+                detail: format!(
+                    "Catalog inputs changed; rebuild required. {}",
+                    check.drift.detail
+                ),
+                reason: CatalogChangeReason::InputsChanged,
+            }
         };
         Ok(CheckOutput {
             timing_detail,
@@ -1224,6 +1280,10 @@ fn fail(
         protocol,
         stage: stage.into(),
         error: error.clone(),
+        diagnostic: Some(CatalogFailureDiagnostic {
+            code: CatalogFailureCode::Unknown,
+            ..CatalogFailureDiagnostic::default()
+        }),
     });
     error
 }
@@ -1358,7 +1418,10 @@ mod tests {
             let decision = if self.check_unchanged {
                 CheckDecision::Unchanged(BuilderSummary::default())
             } else {
-                CheckDecision::Changed("fixture changed".into())
+                CheckDecision::Changed {
+                    detail: "fixture changed".into(),
+                    reason: CatalogChangeReason::InputsChanged,
+                }
             };
             Ok(CheckOutput {
                 timing_detail: "fixture timing".into(),

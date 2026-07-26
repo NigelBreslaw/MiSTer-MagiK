@@ -2025,6 +2025,7 @@ mod tests {
         emit(CatalogBuilderEvent::Changed {
             protocol,
             detail: "changed".into(),
+            reason: None,
         });
         assert!(matches!(
             rx.recv().unwrap(),
@@ -2056,6 +2057,7 @@ mod tests {
                 protocol,
                 stage: "lock".into(),
                 error: "busy".into(),
+                diagnostic: None,
             },
             &tx,
             &mut CatalogProgressCoalescer::default(),
@@ -2109,6 +2111,7 @@ mod tests {
                     protocol,
                     stage: "persist".into(),
                     error: "disk full".into(),
+                    diagnostic: None,
                 },
             ] {
                 handle_embedded_builder_event(

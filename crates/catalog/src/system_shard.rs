@@ -344,16 +344,22 @@ pub fn open_system_shard(
         .map_err(|error| SystemShardError::with("set shard query-only", error))?;
     let schema_version = meta_u64(&connection, "schema_version")?;
     if schema_version != u64::from(SHARD_SCHEMA_VERSION) {
-        return Err(SystemShardError::new(
-            "read",
-            "unsupported shard schema version",
+        return Err(SystemShardError::unsupported_schema(
+            "shard",
+            u64::from(SHARD_SCHEMA_VERSION),
+            schema_version,
+            expected_system_id,
+            expected_generation,
         ));
     }
     let navigation_schema = meta_u64(&connection, "navigation_schema_version")?;
     if navigation_schema != u64::from(NAVIGATION_SCHEMA_VERSION) {
-        return Err(SystemShardError::new(
-            "read",
-            "unsupported navigation schema version",
+        return Err(SystemShardError::unsupported_schema(
+            "navigation",
+            u64::from(NAVIGATION_SCHEMA_VERSION),
+            navigation_schema,
+            expected_system_id,
+            expected_generation,
         ));
     }
     let system_id = SystemId::parse(&meta_text(&connection, "system_id")?)
@@ -743,9 +749,22 @@ fn create_parent(path: &Path) -> Result<(), SystemShardError> {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SystemShardErrorKind {
+    Other,
+    UnsupportedSchema {
+        component: &'static str,
+        expected: u64,
+        actual: u64,
+        system_id: String,
+        generation: u64,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SystemShardError {
     stage: &'static str,
     message: String,
+    kind: SystemShardErrorKind,
 }
 
 impl SystemShardError {
@@ -753,6 +772,29 @@ impl SystemShardError {
         Self {
             stage,
             message: message.into(),
+            kind: SystemShardErrorKind::Other,
+        }
+    }
+
+    fn unsupported_schema(
+        component: &'static str,
+        expected: u64,
+        actual: u64,
+        system_id: &SystemId,
+        generation: u64,
+    ) -> Self {
+        Self {
+            stage: "read",
+            message: format!(
+                "unsupported {component} schema version for {system_id} generation {generation}: expected {expected}, found {actual}"
+            ),
+            kind: SystemShardErrorKind::UnsupportedSchema {
+                component,
+                expected,
+                actual,
+                system_id: system_id.as_str().to_string(),
+                generation,
+            },
         }
     }
 
@@ -766,6 +808,21 @@ impl SystemShardError {
 
     pub fn message(&self) -> &str {
         &self.message
+    }
+
+    pub fn kind(&self) -> &SystemShardErrorKind {
+        &self.kind
+    }
+
+    pub fn is_older_schema(&self) -> bool {
+        matches!(
+            self.kind,
+            SystemShardErrorKind::UnsupportedSchema {
+                expected,
+                actual,
+                ..
+            } if actual < expected
+        )
     }
 }
 
@@ -856,7 +913,11 @@ mod tests {
             open_system_shard(&sqlite, &navigation, &data.system_id, 1, limits())
                 .unwrap_err()
                 .message(),
-            "unsupported shard schema version"
+            format!(
+                "unsupported shard schema version for snes generation 1: expected {}, found {}",
+                SHARD_SCHEMA_VERSION,
+                SHARD_SCHEMA_VERSION + 1
+            )
         );
         fs::remove_dir_all(root).unwrap();
     }

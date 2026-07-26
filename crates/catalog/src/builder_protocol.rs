@@ -9,6 +9,40 @@ pub const CATALOG_BUILDER_PROTOCOL_VERSION: u32 = 1;
 pub const DEFAULT_CATALOG_BUILDER_LOCK_PATH: &str = "/tmp/mister-magik/catalog-builder.lock";
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CatalogChangeReason {
+    InputsChanged,
+    ProjectionUpgrade { installed: String, required: String },
+    RepairRequired,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CatalogFailureCode {
+    UnsupportedSchema,
+    CorruptCatalog,
+    Io,
+    ResourceLimit,
+    #[default]
+    Unknown,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+pub struct CatalogFailureDiagnostic {
+    pub code: CatalogFailureCode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actual: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum CatalogBuilderEvent {
     Handshake {
@@ -54,11 +88,15 @@ pub enum CatalogBuilderEvent {
     Changed {
         protocol: u32,
         detail: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<CatalogChangeReason>,
     },
     Failure {
         protocol: u32,
         stage: String,
         error: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        diagnostic: Option<CatalogFailureDiagnostic>,
     },
     Done {
         protocol: u32,
@@ -201,6 +239,28 @@ mod tests {
         assert!(matches!(
             decoded.last(),
             Some(CatalogBuilderEvent::CatalogReady { .. })
+        ));
+    }
+
+    #[test]
+    fn protocol_accepts_previous_changed_and_failure_shapes() {
+        let changed: CatalogBuilderEvent =
+            serde_json::from_str(r#"{"event":"changed","protocol":1,"detail":"changed"}"#).unwrap();
+        assert!(matches!(
+            changed,
+            CatalogBuilderEvent::Changed { reason: None, .. }
+        ));
+
+        let failure: CatalogBuilderEvent = serde_json::from_str(
+            r#"{"event":"failure","protocol":1,"stage":"persist","error":"full"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            failure,
+            CatalogBuilderEvent::Failure {
+                diagnostic: None,
+                ..
+            }
         ));
     }
 }

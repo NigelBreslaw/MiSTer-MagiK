@@ -25,7 +25,7 @@ use std::path::Path;
 use std::time::Instant;
 
 const BINDING_SCHEMA_VERSION: u32 = 1;
-const PROJECTION_CONTRACT: &str = "rich-game-v1";
+pub use crate::sharded_catalog::PRODUCTION_PROJECTION_CONTRACT;
 const BINDING_FILE: &str = "catalog.binding.json";
 const MAX_BINDING_BYTES: u64 = 4096;
 
@@ -35,6 +35,18 @@ struct CatalogBinding {
     projection_contract: String,
     manifest_generation: u64,
     catalog_fingerprint: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ProductionBindingStatus {
+    Current {
+        fingerprint: String,
+    },
+    UpgradeRequired {
+        fingerprint: String,
+        installed: String,
+        required: String,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -150,7 +162,7 @@ pub fn reconcile_production_preview_availability(
         storage_root,
         &CatalogBinding {
             schema_version: BINDING_SCHEMA_VERSION,
-            projection_contract: PROJECTION_CONTRACT.to_string(),
+            projection_contract: PRODUCTION_PROJECTION_CONTRACT.to_string(),
             manifest_generation: next_generation,
             catalog_fingerprint: fingerprint,
         },
@@ -332,14 +344,30 @@ fn published_system_matches(
     {
         return Ok(false);
     }
-    let loaded = open_system_shard(
+    let loaded = match open_system_shard(
         &storage_root.join(&published.active.sqlite_path),
         &storage_root.join(&published.active.navigation_path),
         &published.system_id,
         published.active.generation,
         limits.shard,
-    )
-    .map_err(|error| ReconciliationError::new("projection-compare", error.to_string()))?;
+    ) {
+        Ok(loaded) => loaded,
+        Err(error) if error.is_older_schema() => {
+            crate::catalog_logln!(
+                "catalog_system_rebuild_required_tsv\treason=schema-upgrade\tsystem={}\tgeneration={}\tdetail={}",
+                published.system_id,
+                published.active.generation,
+                error.to_string().replace(['\t', '\n'], " ")
+            );
+            return Ok(false);
+        }
+        Err(error) => {
+            return Err(ReconciliationError::new(
+                "projection-compare",
+                error.to_string(),
+            ));
+        }
+    };
     Ok(loaded.games == candidate.games
         && candidate
             .projection_stats
@@ -357,7 +385,7 @@ pub fn publish_bound_production_projection(
         storage_root,
         &CatalogBinding {
             schema_version: BINDING_SCHEMA_VERSION,
-            projection_contract: PROJECTION_CONTRACT.to_string(),
+            projection_contract: PRODUCTION_PROJECTION_CONTRACT.to_string(),
             manifest_generation: outcome.generation,
             catalog_fingerprint: catalog_fingerprint.to_string(),
         },
@@ -369,12 +397,30 @@ pub fn validate_production_binding(
     storage_root: &Path,
     manifest_generation: u64,
 ) -> Result<String, ReconciliationError> {
+    match inspect_production_binding(storage_root, manifest_generation)? {
+        ProductionBindingStatus::Current { fingerprint } => Ok(fingerprint),
+        ProductionBindingStatus::UpgradeRequired {
+            installed,
+            required,
+            ..
+        } => Err(ReconciliationError::new(
+            "binding",
+            format!(
+                "catalog projection upgrade required: installed {installed}, required {required}"
+            ),
+        )),
+    }
+}
+
+pub fn inspect_production_binding(
+    storage_root: &Path,
+    manifest_generation: u64,
+) -> Result<ProductionBindingStatus, ReconciliationError> {
     let binding = read_binding(storage_root)?;
     let state = crate::catalog_state::read(&crate::catalog_state::path_for_root(storage_root))
         .map_err(|error| ReconciliationError::new("binding", error))?;
     let state_fingerprint = state.stamp.fingerprint_hex();
     if binding.schema_version != BINDING_SCHEMA_VERSION
-        || binding.projection_contract != PROJECTION_CONTRACT
         || binding.manifest_generation != manifest_generation
         || binding.catalog_fingerprint != state_fingerprint
     {
@@ -383,7 +429,16 @@ pub fn validate_production_binding(
             "catalog binding does not match the active manifest and V3 state",
         ));
     }
-    Ok(state_fingerprint)
+    if binding.projection_contract != PRODUCTION_PROJECTION_CONTRACT {
+        return Ok(ProductionBindingStatus::UpgradeRequired {
+            fingerprint: state_fingerprint,
+            installed: binding.projection_contract,
+            required: PRODUCTION_PROJECTION_CONTRACT.to_string(),
+        });
+    }
+    Ok(ProductionBindingStatus::Current {
+        fingerprint: state_fingerprint,
+    })
 }
 
 fn read_binding(storage_root: &Path) -> Result<CatalogBinding, ReconciliationError> {
@@ -654,6 +709,41 @@ mod tests {
     }
 
     #[test]
+    fn older_shard_schema_rebuilds_all_affected_systems_atomically() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-production-projection-schema-upgrade-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let catalog = two_system_catalog("Super Game");
+        publish_production_projection(&root, &catalog, limits()).unwrap();
+        let before = read_latest_manifest(&root, limits()).unwrap();
+        for system in &before.systems {
+            let connection =
+                rusqlite::Connection::open(root.join(&system.active.sqlite_path)).unwrap();
+            connection
+                .execute(
+                    "UPDATE shard_meta SET value=?1 WHERE key='schema_version'",
+                    [crate::sharded_catalog::SHARD_SCHEMA_VERSION - 1],
+                )
+                .unwrap();
+        }
+
+        let outcome = publish_production_projection(&root, &catalog, limits()).unwrap();
+        let after = read_latest_manifest(&root, limits()).unwrap();
+
+        assert_eq!(before.generation, 1);
+        assert_eq!(outcome.generation, 2);
+        assert_eq!(outcome.rebuilt_systems, 2);
+        assert_eq!(after.generation, 2);
+        let reader = LazyShardedCatalogReader::open(&root, limits()).unwrap();
+        for system in reader.open_registry().unwrap().systems() {
+            reader.open_system(&system.system_id).unwrap();
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn later_projection_removes_systems_absent_from_canonical_catalog() {
         let root = std::env::temp_dir().join(format!(
             "mister-magik-production-projection-remove-{}",
@@ -771,6 +861,42 @@ mod tests {
         validate_production_binding(&storage, interrupted_outcome.generation).unwrap();
         assert!(validate_production_binding(&storage, outcome.generation).is_err());
         assert!(!root.join("library.sqlite3").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn previous_projection_contract_is_reported_as_upgrade_required() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-production-projection-binding-upgrade-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let state = fixture_state();
+        let fingerprint = state.stamp.fingerprint_hex();
+        let catalog = two_system_catalog("Super Game");
+        let outcome =
+            publish_bound_production_projection(&root, &catalog, &fingerprint, limits()).unwrap();
+        crate::catalog_state::write(&crate::catalog_state::path_for_root(&root), &state).unwrap();
+        write_binding(
+            &root,
+            &CatalogBinding {
+                schema_version: BINDING_SCHEMA_VERSION,
+                projection_contract: "rich-game-v1".to_string(),
+                manifest_generation: outcome.generation,
+                catalog_fingerprint: fingerprint.clone(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            inspect_production_binding(&root, outcome.generation).unwrap(),
+            ProductionBindingStatus::UpgradeRequired {
+                fingerprint,
+                installed: "rich-game-v1".to_string(),
+                required: PRODUCTION_PROJECTION_CONTRACT.to_string(),
+            }
+        );
         let _ = fs::remove_dir_all(root);
     }
 
