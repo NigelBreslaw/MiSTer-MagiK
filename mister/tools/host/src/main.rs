@@ -3199,6 +3199,8 @@ fn profile_installed_search(config: &NativeDeviceConfig, output_dir: &Path) -> R
 
 fn search_benchmark_waits_for_catalog(output: &ExecOutput) -> bool {
     output.stderr.contains("no such table: game_search_fts")
+        || output.stderr.contains("no valid manifest slot")
+        || output.stderr.contains("search system arcade is absent")
         || output
             .stderr
             .contains("unsupported persisted search schema version")
@@ -13299,8 +13301,14 @@ H: Handlers=event3 js0"#
             stdout: String::new(),
             stderr: "search benchmark failed: disk I/O error".to_string(),
         };
+        let unpublished = ExecOutput {
+            rc: 1,
+            stdout: String::new(),
+            stderr: "search benchmark failed: read-manifest: no valid manifest slot".to_string(),
+        };
 
         assert!(search_benchmark_waits_for_catalog(&pending));
+        assert!(search_benchmark_waits_for_catalog(&unpublished));
         assert!(!search_benchmark_waits_for_catalog(&unrelated));
     }
 
