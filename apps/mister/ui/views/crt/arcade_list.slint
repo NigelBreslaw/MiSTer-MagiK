@@ -124,6 +124,8 @@ export component ArcadeListScreen inherits Rectangle {
         clip: true;
 
         Text {
+            width: parent.width;
+            height: parent.height;
             visible: MisterBridge.arcade-search-active
                 && (MisterBridge.arcade-search-status != 2 || root.count == 0);
             font-family: MisterUi.crt-font-family;

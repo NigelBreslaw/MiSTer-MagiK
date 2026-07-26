@@ -644,6 +644,13 @@ impl ArcadeCatalog {
         self.system_game_indexes(system_id).get(ordinal).copied()
     }
 
+    pub fn collection_game_index_set(&self, collection_id: &str) -> HashSet<usize> {
+        self.system_game_indexes(collection_id)
+            .iter()
+            .copied()
+            .collect()
+    }
+
     pub fn search_game_indexes(&self, system_id: &str, query: &str) -> Vec<usize> {
         let needle = search_match_key(query);
         let compact_needle = compact_search_match_key(query);
@@ -1545,7 +1552,7 @@ fn filter_key(system_id: &str, filter: &ArcadeFilter) -> Option<ArcadeFilterKey>
     }
 }
 
-fn player_count_label(players: u8) -> String {
+pub(crate) fn player_count_label(players: u8) -> String {
     if players == 0 {
         "Unkown".to_string()
     } else if players == 1 {
@@ -1555,7 +1562,7 @@ fn player_count_label(players: u8) -> String {
     }
 }
 
-fn canonical_control_label(control: &str) -> String {
+pub(crate) fn canonical_control_label(control: &str) -> String {
     let control = control.trim();
     match control.to_ascii_lowercase().as_str() {
         "" => String::new(),

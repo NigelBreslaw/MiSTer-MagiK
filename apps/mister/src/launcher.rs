@@ -3095,12 +3095,14 @@ impl LauncherNav {
         {
             return false;
         }
+        let collection_indexes = catalog.collection_game_index_set(&request.collection_id);
         self.arcade_search.results = result
             .matches
             .into_iter()
             .filter_map(|entry| {
                 catalog.resolve_system_game_ordinal(&entry.system_id, entry.ordinal)
             })
+            .filter(|index| collection_indexes.contains(index))
             .collect();
         self.arcade_search.suggestion = result
             .autocomplete
@@ -5387,6 +5389,47 @@ mod tests {
 
         assert_eq!(nav.arcade_search.status, ArcadeSearchStatus::Ready);
         assert_eq!(nav.active_arcade_game_count(&catalog, "arcade"), 1);
+        assert_eq!(
+            nav.active_arcade_game_at(&catalog, "arcade", 0)
+                .map(|game| game.title.as_ref()),
+            Some("Street Fighter II")
+        );
+    }
+
+    #[test]
+    fn persisted_arcade_search_applies_only_the_current_request() {
+        let catalog = deferred_search_catalog();
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Arcade;
+        nav.enter_arcade_search(&catalog, "arcade");
+        nav.arcade_search.query = "capcom".to_string();
+        nav.ensure_arcade_search_results(&catalog, "arcade");
+        let request = nav
+            .take_arcade_search_request(&catalog, 7)
+            .expect("persisted search request");
+        let mut stale = request.clone();
+        stale.request_id = stale.request_id.wrapping_add(1);
+
+        assert!(!nav.apply_arcade_search_result(
+            &catalog,
+            &stale,
+            mister_magik_catalog::persisted_search::PersistedCollectionSearchResult::default(),
+        ));
+        assert!(nav.apply_arcade_search_result(
+            &catalog,
+            &request,
+            mister_magik_catalog::persisted_search::PersistedCollectionSearchResult {
+                matches: vec![
+                    mister_magik_catalog::persisted_search::PersistedCollectionMatch {
+                        system_id: "arcade".to_string(),
+                        ordinal: 0,
+                        rank: -1.0,
+                    },
+                ],
+                ..Default::default()
+            },
+        ));
+        assert_eq!(nav.arcade_search.status, ArcadeSearchStatus::Ready);
         assert_eq!(
             nav.active_arcade_game_at(&catalog, "arcade", 0)
                 .map(|game| game.title.as_ref()),

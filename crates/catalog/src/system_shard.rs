@@ -373,6 +373,8 @@ pub fn open_system_shard(
             "shard identity or generation does not match registry",
         ));
     }
+    crate::persisted_search::validate(&connection, game_count)
+        .map_err(|error| SystemShardError::new("read", error.to_string()))?;
     let stored_hash = meta_text(&connection, "navigation_hash")?;
     let preview_archive_default = meta_text(&connection, "preview_archive_path")?;
     let projection_stats = optional_projection_stats(&connection, game_count)?;
@@ -873,6 +875,29 @@ mod tests {
                 .unwrap_err()
                 .message(),
             "adjacent navigation hash does not match shard"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[cfg(feature = "builder")]
+    fn reader_rejects_incomplete_persisted_search() {
+        let root = temporary_root("corrupt-search");
+        let sqlite = root.join("1.sqlite3");
+        let navigation = root.join("1.nav.lz4b");
+        let data = fixture_data();
+        write_system_shard(&sqlite, &navigation, &data, limits()).unwrap();
+        let connection = Connection::open(&sqlite).unwrap();
+        connection
+            .execute("DROP TABLE autocomplete_words", [])
+            .unwrap();
+        drop(connection);
+
+        assert!(
+            open_system_shard(&sqlite, &navigation, &data.system_id, 1, limits())
+                .unwrap_err()
+                .message()
+                .starts_with("check persisted autocomplete table:")
         );
         fs::remove_dir_all(root).unwrap();
     }

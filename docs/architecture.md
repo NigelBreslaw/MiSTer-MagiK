@@ -587,10 +587,10 @@ Arcade search is a top-level filter, but it behaves like its own mode instead
 of another hierarchical drawer level. The left pane becomes an on-screen
 keyboard and the Rust-painted game list moves to the right pane as search
 results. Search results are cached as indexes into the hydrated
-`ArcadeCatalog`; queries match normalized title text, MRA basename,
-manufacturer, category, year, and decade. Compact forms keep punctuation and
-spaces from blocking obvious matches, so `pacman` can match `Pac-Man` and
-metadata terms such as `capcom` can match games by manufacturer. The search
+`ArcadeCatalog`; queries match normalized title text, launch basename,
+manufacturer, controls, player count, year, and decade. Compact forms keep
+punctuation and spaces from blocking obvious matches, so `pacman` can match
+`Pac-Man` and metadata terms such as `capcom` can match games by manufacturer. The search
 keyboard also exposes a one-word autocomplete suggestion above the keys; `Y`
 accepts the suggestion by replacing the current partial word and appending a
 space. FTS5 search documents and a compact autocomplete word table are built

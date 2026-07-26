@@ -62,8 +62,11 @@ pub fn search_system_shards(
     query: &str,
     limits: crate::shard_registry::RegistryLimits,
 ) -> Result<PersistedCollectionSearchResult, PersistedSearchError> {
+    let total_started = Instant::now();
+    let prepare_started = Instant::now();
     let manifest = crate::shard_registry::read_latest_manifest_lazy(storage_root, limits)
         .map_err(|error| PersistedSearchError::with("open catalog manifest", error))?;
+    let manifest_prepare_us = elapsed_us(prepare_started);
     let mut result = PersistedCollectionSearchResult::default();
     for system_id in system_ids {
         let system = manifest
@@ -102,11 +105,6 @@ pub fn search_system_shards(
             .timing
             .sqlite_us
             .saturating_add(shard.timing.sqlite_us);
-        result.timing.rust_finalize_us = result
-            .timing
-            .rust_finalize_us
-            .saturating_add(shard.timing.rust_finalize_us);
-        result.timing.total_us = result.timing.total_us.saturating_add(shard.timing.total_us);
     }
     result.matches.sort_by(|left, right| {
         left.rank
@@ -115,6 +113,16 @@ pub fn search_system_shards(
             .then_with(|| left.system_id.cmp(&right.system_id))
             .then_with(|| left.ordinal.cmp(&right.ordinal))
     });
+    result.timing.rust_prepare_us = result
+        .timing
+        .rust_prepare_us
+        .saturating_add(manifest_prepare_us);
+    result.timing.total_us = elapsed_us(total_started);
+    result.timing.rust_finalize_us = result
+        .timing
+        .total_us
+        .saturating_sub(result.timing.rust_prepare_us)
+        .saturating_sub(result.timing.sqlite_us);
     Ok(result)
 }
 
@@ -258,8 +266,13 @@ pub(crate) fn populate(
     for (ordinal, game) in games.iter().enumerate() {
         let title = normalize_search_text(&game.title);
         let manufacturer = normalize_search_text(&game.manufacturer);
-        let control = normalize_search_text(&canonical_control_label(&game.control));
-        let players = game.players.map(player_count_label).unwrap_or_default();
+        let control = normalize_search_text(&crate::arcade_catalog::canonical_control_label(
+            &game.control,
+        ));
+        let players = game
+            .players
+            .map(crate::arcade_catalog::player_count_label)
+            .unwrap_or_default();
         let year = game.year.map(|year| year.to_string()).unwrap_or_default();
         let decade = game
             .year
@@ -289,13 +302,13 @@ pub(crate) fn populate(
         add_words(&mut words, &game.manufacturer, AutocompleteSource::Metadata);
         add_words(
             &mut words,
-            &canonical_control_label(&game.control),
+            &crate::arcade_catalog::canonical_control_label(&game.control),
             AutocompleteSource::Metadata,
         );
         if let Some(players) = game.players {
             add_word(
                 &mut words,
-                &player_count_label(players),
+                &crate::arcade_catalog::player_count_label(players),
                 AutocompleteSource::Metadata,
             );
         }
@@ -337,6 +350,56 @@ pub(crate) fn populate(
         )
         .map_err(|error| PersistedSearchError::with("check FTS integrity", error))?;
     Ok(words.len())
+}
+
+pub(crate) fn validate(
+    connection: &Connection,
+    expected_documents: usize,
+) -> Result<(), PersistedSearchError> {
+    if search_meta_u64(connection, "search_schema_version")? != u64::from(SEARCH_SCHEMA_VERSION) {
+        return Err(PersistedSearchError::new(
+            "unsupported persisted search schema version",
+        ));
+    }
+    let stored_documents = search_meta_usize(connection, "search_document_count")?;
+    let _stored_words = search_meta_usize(connection, "autocomplete_word_count")?;
+    if stored_documents != expected_documents {
+        return Err(PersistedSearchError::new(
+            "persisted search document count does not match shard",
+        ));
+    }
+    let indexed_documents: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM game_search_fts LIMIT 1)",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| PersistedSearchError::with("check persisted search table", error))?;
+    if expected_documents > 0 && !indexed_documents {
+        return Err(PersistedSearchError::new(
+            "persisted search table is unexpectedly empty",
+        ));
+    }
+    connection
+        .prepare("SELECT word FROM autocomplete_words LIMIT 1")
+        .map_err(|error| PersistedSearchError::with("check persisted autocomplete table", error))?;
+    Ok(())
+}
+
+fn search_meta_u64(connection: &Connection, key: &str) -> Result<u64, PersistedSearchError> {
+    let value: String = connection
+        .query_row("SELECT value FROM shard_meta WHERE key=?1", [key], |row| {
+            row.get(0)
+        })
+        .map_err(|error| PersistedSearchError::with("read search metadata", error))?;
+    value
+        .parse()
+        .map_err(|error| PersistedSearchError::with("parse search metadata", error))
+}
+
+fn search_meta_usize(connection: &Connection, key: &str) -> Result<usize, PersistedSearchError> {
+    usize::try_from(search_meta_u64(connection, key)?)
+        .map_err(|_| PersistedSearchError::new("search metadata exceeds platform size"))
 }
 
 fn open_read_only(path: &Path) -> Result<Connection, PersistedSearchError> {
@@ -391,25 +454,6 @@ fn current_search_word(query: &str) -> &str {
 #[cfg(feature = "builder")]
 fn game_basename(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
-}
-
-#[cfg(feature = "builder")]
-fn player_count_label(players: u8) -> String {
-    if players == 1 {
-        "1 Player".to_string()
-    } else {
-        format!("{players} Players")
-    }
-}
-
-#[cfg(feature = "builder")]
-fn canonical_control_label(control: &str) -> String {
-    match control.trim().to_ascii_lowercase().as_str() {
-        "joy" | "joystick" => "Joystick".to_string(),
-        "doublejoy" | "dual joystick" => "Dual Joystick".to_string(),
-        "lightgun" | "light gun" => "Light Gun".to_string(),
-        other => other.replace(['_', '-'], " "),
-    }
 }
 
 #[cfg(feature = "builder")]

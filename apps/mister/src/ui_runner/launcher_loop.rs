@@ -5951,6 +5951,22 @@ fn apply_catalog_session_effects(
                                 timing.total_us
                             ),
                         );
+                        let return_restored = apply_pending_launch_return_state(
+                            nav,
+                            catalog,
+                            pending_launch_return_state,
+                        );
+                        if return_restored {
+                            emit_return_context_restored(
+                                lifecycle,
+                                lifecycle_effects,
+                                nav,
+                                catalog,
+                                preview,
+                                now,
+                            );
+                            lifecycle.tick_startup_reveal(now, true, lifecycle_effects);
+                        }
                         *full_bridge_dirty = true;
                     }
                 }

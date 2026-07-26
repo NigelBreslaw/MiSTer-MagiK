@@ -225,6 +225,8 @@ export component ArcadeListScreen inherits Rectangle {
                     clip: true;
 
                     Text {
+                        width: parent.width;
+                        height: parent.height;
                         visible: MisterBridge.arcade-search-status != 2 || count == 0;
                         text: MisterBridge.arcade-search-status == 1 ? "Searching..." :
                             (MisterBridge.arcade-search-status == 3 ? "Search unavailable" :
