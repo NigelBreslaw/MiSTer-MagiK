@@ -235,9 +235,12 @@ impl BuildSpec {
         let receipt_text = std::fs::read_to_string(repository.join(&self.receipt))
             .map_err(|error| format!("cannot read build receipt: {error}"))?;
         let receipt = BuildReceipt::parse(&receipt_text)?;
+        let (build_number, version, _) = build_metadata(repository)?;
         if receipt.profile != self.profile
             || receipt.features != self.features.join(",")
             || receipt.ui_scope != self.ui_scope.label()
+            || receipt.build_number != build_number
+            || receipt.version != version
             || receipt.cache_identity != self.cache_identity
             || receipt.lock_sha256 != sha256(&repository.join(lockfile(self.target)))?
             || receipt.toolchain_sha256
@@ -258,6 +261,8 @@ pub struct BuildReceipt {
     pub profile: String,
     pub features: String,
     pub ui_scope: String,
+    pub build_number: String,
+    pub version: String,
     pub source_commit: String,
     pub source_dirty: bool,
     pub cache_identity: String,
@@ -272,6 +277,8 @@ impl BuildReceipt {
             profile: spec.profile.into(),
             features: spec.features.join(","),
             ui_scope: spec.ui_scope.label().into(),
+            build_number: String::new(),
+            version: String::new(),
             source_commit: String::new(),
             source_dirty: true,
             cache_identity: spec.cache_identity.clone(),
@@ -303,6 +310,8 @@ impl BuildReceipt {
             profile: required("profile")?,
             features: required("features")?,
             ui_scope: required("ui_scope")?,
+            build_number: required("build_number")?,
+            version: required("version")?,
             source_commit: required("source_commit")?,
             source_dirty,
             cache_identity: required("cache_identity")?,
@@ -650,8 +659,9 @@ impl<'a> ProcessBuildActions<'a> {
             &["status", "--porcelain", "--untracked-files=all"],
         )?
         .is_empty();
+        let (build_number, version, _) = build_metadata(self.repository)?;
         let receipt = format!(
-            "build_receipt_tsv\tbinary_sha256={}\tprofile={}\tfeatures={}\tui_scope={}\tsource_commit={}\tsource_dirty={}\tcache_identity={}\tlock_sha256={}\ttoolchain_sha256={}\n",
+            "build_receipt_tsv\tbinary_sha256={}\tprofile={}\tfeatures={}\tui_scope={}\tbuild_number={build_number}\tversion={version}\tsource_commit={}\tsource_dirty={}\tcache_identity={}\tlock_sha256={}\ttoolchain_sha256={}\n",
             sha256(&artifact)?,
             self.spec.profile,
             self.spec.features.join(","),
@@ -1236,9 +1246,14 @@ mod tests {
     }
 
     #[test]
-    fn receipt_requires_artifact_and_cache_identity() {
-        let valid = "build_receipt_tsv\tbinary_sha256=abc\tprofile=release-device\tfeatures=ui\tui_scope=all\tsource_commit=deadbeef\tsource_dirty=0\tcache_identity=v3\tlock_sha256=lock\ttoolchain_sha256=toolchain\n";
-        assert_eq!(BuildReceipt::parse(valid).unwrap().cache_identity, "v3");
+    fn receipt_requires_artifact_cache_and_release_identity() {
+        let valid = "build_receipt_tsv\tbinary_sha256=abc\tprofile=release-device\tfeatures=ui\tui_scope=all\tbuild_number=2429\tversion=0.2.2429\tsource_commit=deadbeef\tsource_dirty=0\tcache_identity=v3\tlock_sha256=lock\ttoolchain_sha256=toolchain\n";
+        let receipt = BuildReceipt::parse(valid).unwrap();
+        assert_eq!(receipt.cache_identity, "v3");
+        assert_eq!(receipt.build_number, "2429");
+        assert_eq!(receipt.version, "0.2.2429");
         assert!(BuildReceipt::parse(valid.replace("\tcache_identity=v3", "").as_str()).is_err());
+        assert!(BuildReceipt::parse(valid.replace("\tbuild_number=2429", "").as_str()).is_err());
+        assert!(BuildReceipt::parse(valid.replace("\tversion=0.2.2429", "").as_str()).is_err());
     }
 }

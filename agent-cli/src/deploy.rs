@@ -569,12 +569,14 @@ mod tests {
     #[test]
     fn build_receipt_requires_canonical_identity_and_provenance() {
         let receipt = crate::build::BuildReceipt::parse(
-            "build_receipt_tsv\tbinary_sha256=abc\tprofile=release-device\tfeatures=ui\tui_scope=all\tsource_commit=deadbeef\tsource_dirty=1\tcache_identity=v3\tlock_sha256=lock\ttoolchain_sha256=toolchain\n",
+            "build_receipt_tsv\tbinary_sha256=abc\tprofile=release-device\tfeatures=ui\tui_scope=all\tbuild_number=2429\tversion=0.2.2429\tsource_commit=deadbeef\tsource_dirty=1\tcache_identity=v3\tlock_sha256=lock\ttoolchain_sha256=toolchain\n",
         )
         .unwrap();
         assert_eq!(receipt.profile, "release-device");
         assert_eq!(receipt.features, "ui");
         assert_eq!(receipt.ui_scope, "all");
+        assert_eq!(receipt.build_number, "2429");
+        assert_eq!(receipt.version, "0.2.2429");
         assert!(receipt.source_dirty);
         assert!(
             crate::build::BuildReceipt::parse("build_receipt_tsv\tprofile=release-device").is_err()
