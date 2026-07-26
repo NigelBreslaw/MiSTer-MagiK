@@ -14,7 +14,8 @@ AGENT="$ROOT/mister/tools/agent/src/scanout_slots_contract.rs"
 RUST_CONTRACT="$ROOT/mister/platform/contracts/scanout/src/lib.rs"
 DOC="$ROOT/documentation/src/content/docs/architecture/kernel-scanout-plugin.mdx"
 KO="$ROOT/build/scanout-slots/mister_magik_scanout_slots.ko"
-DEPLOY="$ROOT/mister/tools/host/src/main.rs"
+DEPLOY="$ROOT/mister/tools/host/src/platform_deploy.rs"
+PLATFORM_STAGE="$ROOT/agent-cli/src/platform_stage.rs"
 
 if ! command -v rg >/dev/null 2>&1; then
   echo "scanout contract requires ripgrep (rg)" >&2
@@ -29,7 +30,7 @@ require_text() {
   fi
 }
 
-for file in "$SOURCE" "$UAPI" "$PLATFORM" "$POLICY" "$RUST" "$AGENT" "$RUST_CONTRACT" "$DOC"; do
+for file in "$SOURCE" "$UAPI" "$PLATFORM" "$POLICY" "$RUST" "$AGENT" "$RUST_CONTRACT" "$DEPLOY" "$PLATFORM_STAGE" "$DOC"; do
   test -f "$file"
 done
 for text in \
@@ -68,6 +69,9 @@ ${CC:-cc} -std=c11 -Wall -Wextra -Werror \
 require_text "$DEPLOY" PlatformDeployTransaction
 for text in installed_platform_verify_command platform-v2.manifest scanout_module_sha256 latch_rbf_sha256; do
   require_text "$DEPLOY" "$text"
+done
+for text in stage_published_platform_components platform-v2.manifest mister_magik_scanout_slots.ko menu-magik-vblank-latch.rbf; do
+  require_text "$PLATFORM_STAGE" "$text"
 done
 for text in /dev/mister-magik-scanout-slots 960x540 RGB565 /dev/fb0 QEMU; do
   require_text "$DOC" "$text"

@@ -210,7 +210,10 @@ fn check_kernel_workflow(repository: &Path) -> Result<(), String> {
         &[
             "scripts/checks/check-scanout-slots-contract.sh",
             "mister/platform/runtime/src/framebuffer/scanout_slots.rs",
+            "mister/platform/contracts/scanout/src/lib.rs",
             "mister/tools/agent/src/scanout_slots_contract.rs",
+            "agent-cli/src/platform_stage.rs",
+            "mister/tools/host/src/platform_deploy.rs",
         ],
         &[
             "Linux-Kernel_MiSTer",
@@ -218,6 +221,8 @@ fn check_kernel_workflow(repository: &Path) -> Result<(), String> {
             "coccinelle",
             "upload-artifact",
             "workflow_dispatch",
+            "agent-cli/src/delivery.rs",
+            "mister/tools/host/src/main.rs",
         ],
     )
 }

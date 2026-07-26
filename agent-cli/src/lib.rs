@@ -25,6 +25,7 @@ pub mod planner;
 pub mod platform_bundle;
 pub mod platform_ci;
 pub mod platform_manifest;
+mod platform_stage;
 pub mod policy;
 pub mod process;
 pub mod progress;

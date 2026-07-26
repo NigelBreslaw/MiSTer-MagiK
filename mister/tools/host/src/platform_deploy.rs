@@ -1,0 +1,347 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+use super::{
+    DeployRemote, ExecOutput, Layout, Path, PathBuf, Result, Session, SshDeployRemote,
+    exec_failure_message, file_sha256, fs, sh, shell_sequence,
+};
+
+pub(super) fn installed_platform_verify_command(layout: Layout) -> String {
+    let (root, main) = match layout {
+        Layout::Development => ("/media/fat/mister-magik-dev", "/media/fat/MiSTer_MagiKDev"),
+        Layout::Public => ("/media/fat/mister-magik", "/media/fat/MiSTer_MagiK"),
+    };
+    format!(
+        "set -eu; root={root}; manifest=$root/platform-v2.manifest; test -s \"$manifest\"; test -x {main}; test -x \"$root/mister-magik-fb\"; test -x \"$root/mister-magik-manager\"; test -r \"$root/mister_magik_scanout_slots.ko\"; test -r \"$root/fpga/menu-magik-vblank-latch.rbf\"; grep -qx 'format=mister-magik-platform-v2' \"$manifest\"; get() {{ sed -n \"s/^$1=//p\" \"$manifest\"; }}; test \"$(sha256sum {main} | awk '{{print $1}}')\" = \"$(get main_sha256)\"; test \"$(sha256sum \"$root/mister-magik-fb\" | awk '{{print $1}}')\" = \"$(get gui_sha256)\"; test \"$(sha256sum \"$root/mister-magik-manager\" | awk '{{print $1}}')\" = \"$(get manager_sha256)\"; test \"$(sha256sum \"$root/mister_magik_scanout_slots.ko\" | awk '{{print $1}}')\" = \"$(get scanout_module_sha256)\"; test \"$(sha256sum \"$root/fpga/menu-magik-vblank-latch.rbf\" | awk '{{print $1}}')\" = \"$(get latch_rbf_sha256)\""
+    )
+}
+
+pub(super) const PLATFORM_DEPLOY_FILES: &[(&str, &str)] = &[
+    (
+        "mister-magik-fb",
+        "/media/fat/mister-magik-dev/mister-magik-fb",
+    ),
+    (
+        "mister-magik-manager",
+        "/media/fat/mister-magik-dev/mister-magik-manager",
+    ),
+    ("MiSTer_MagiKDev", "/media/fat/MiSTer_MagiKDev"),
+    (
+        "mister_magik_scanout_slots.ko",
+        "/media/fat/mister-magik-dev/mister_magik_scanout_slots.ko",
+    ),
+    (
+        "mister_magik_scanout_slots.metadata.txt",
+        "/media/fat/mister-magik-dev/mister_magik_scanout_slots.metadata.txt",
+    ),
+    (
+        "fpga/menu-magik-vblank-latch.rbf",
+        "/media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.rbf",
+    ),
+    (
+        "fpga/menu-magik-vblank-latch.metadata.txt",
+        "/media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.metadata.txt",
+    ),
+    ("mame.sqlite3", "/media/fat/mister-magik-dev/mame.sqlite3"),
+    (
+        "hbmame.sqlite3",
+        "/media/fat/mister-magik-dev/hbmame.sqlite3",
+    ),
+    (
+        "game-databases-manifest.json",
+        "/media/fat/mister-magik-dev/game-databases-manifest.json",
+    ),
+    (
+        "game-databases-SHA256SUMS",
+        "/media/fat/mister-magik-dev/game-databases-SHA256SUMS",
+    ),
+    (
+        "platform-v2.manifest",
+        "/media/fat/mister-magik-dev/platform-v2.manifest",
+    ),
+];
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct PlatformDeployTransaction {
+    pub(super) stage: PathBuf,
+    pub(super) files: Vec<PlatformDeployFile>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct PlatformDeployFile {
+    pub(super) local: PathBuf,
+    pub(super) remote: String,
+    pub(super) sha256: String,
+    pub(super) bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct PlatformDeployReport {
+    pub(super) changed_files: usize,
+    pub(super) skipped_files: usize,
+    pub(super) transferred_bytes: u64,
+}
+
+impl PlatformDeployTransaction {
+    pub(super) fn validate(stage: &Path) -> Result<Self> {
+        if !stage.is_dir() {
+            return Err(format!("platform stage is missing: {}", stage.display()).into());
+        }
+        let mut files = Vec::new();
+        for (relative, remote) in PLATFORM_DEPLOY_FILES {
+            let local = stage.join(relative);
+            if !local.is_file() {
+                return Err(format!("platform stage is missing {relative}").into());
+            }
+            files.push(PlatformDeployFile {
+                bytes: fs::metadata(&local)?.len(),
+                sha256: file_sha256(local.clone())?,
+                local,
+                remote: (*remote).into(),
+            });
+        }
+        Ok(Self {
+            stage: stage.to_path_buf(),
+            files,
+        })
+    }
+
+    pub(super) fn run(&self, sess: &Session) -> Result<PlatformDeployReport> {
+        self.run_with(&SshDeployRemote { sess })
+    }
+
+    pub(super) fn run_with<R: DeployRemote>(&self, remote: &R) -> Result<PlatformDeployReport> {
+        let inventory = remote.exec(&self.inventory_command())?;
+        if let Some(message) = exec_failure_message("platform inventory", &inventory) {
+            return Err(message.into());
+        }
+        let installed = self.parse_inventory(&inventory.stdout)?;
+        let changed = self
+            .files
+            .iter()
+            .zip(installed)
+            .filter_map(|(file, installed)| {
+                (installed.as_deref() != Some(&file.sha256)).then_some(file)
+            })
+            .collect::<Vec<_>>();
+        let report = PlatformDeployReport {
+            changed_files: changed.len(),
+            skipped_files: self.files.len().saturating_sub(changed.len()),
+            transferred_bytes: changed.iter().map(|file| file.bytes).sum(),
+        };
+        if changed.is_empty() {
+            println!(
+                "platform deploy ok stage={} changed_files=0 skipped_files={} transferred_bytes=0",
+                self.stage.display(),
+                report.skipped_files,
+            );
+            return Ok(report);
+        }
+
+        remote
+            .exec("mkdir -p /media/fat/mister-magik-dev/fpga /media/fat/mister-magik-dev/snapshots")
+            .and_then(|output| checked_deploy_output("platform prepare", output))?;
+        for file in &changed {
+            remote.put(&file.local, &format!("{}.upload", file.remote))?;
+        }
+        let script = self.activation_script(&changed);
+        let output = remote.exec(&script)?;
+        if let Some(message) = exec_failure_message("platform activation", &output) {
+            return Err(message.into());
+        }
+        println!(
+            "platform deploy ok stage={} changed_files={} skipped_files={} transferred_bytes={}",
+            self.stage.display(),
+            report.changed_files,
+            report.skipped_files,
+            report.transferred_bytes,
+        );
+        Ok(report)
+    }
+
+    fn inventory_command(&self) -> String {
+        let mut command = String::from("set -eu; ");
+        for file in &self.files {
+            if let Some(name) = file
+                .local
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| {
+                    matches!(
+                        *name,
+                        "mame.sqlite3" | "hbmame.sqlite3" | "game-databases-manifest.json"
+                    )
+                })
+            {
+                command.push_str(&format!(
+                    "sum=$(awk '$2 == \"{name}\" {{print $1}}' /media/fat/mister-magik-dev/game-databases-SHA256SUMS 2>/dev/null || true); if test -n \"$sum\"; then printf '%s  {path}\\n' \"$sum\"; else printf 'missing  {path}\\n'; fi; ",
+                    path = file.remote,
+                ));
+                continue;
+            }
+            command.push_str(&format!(
+                "if test -f {path}; then sha256sum {path}; else printf 'missing  %s\\n' {path}; fi; ",
+                path = sh(&file.remote),
+            ));
+        }
+        command
+    }
+
+    fn parse_inventory(&self, stdout: &str) -> Result<Vec<Option<String>>> {
+        let lines = stdout.lines().collect::<Vec<_>>();
+        if lines.len() != self.files.len() {
+            return Err(format!(
+                "platform inventory returned {} lines for {} files",
+                lines.len(),
+                self.files.len()
+            )
+            .into());
+        }
+        lines
+            .into_iter()
+            .zip(&self.files)
+            .map(|(line, file)| {
+                let mut fields = line.split_whitespace();
+                let fingerprint = fields.next().unwrap_or_default();
+                let path = fields.next().unwrap_or_default();
+                if path != file.remote {
+                    return Err(format!(
+                        "platform inventory path mismatch: expected {} got {}",
+                        file.remote, path
+                    )
+                    .into());
+                }
+                if fingerprint == "missing" {
+                    return Ok(None);
+                }
+                if fingerprint.len() != 64
+                    || !fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit())
+                {
+                    return Err(
+                        format!("platform inventory invalid SHA-256 for {}", file.remote).into(),
+                    );
+                }
+                Ok(Some(fingerprint.to_ascii_lowercase()))
+            })
+            .collect()
+    }
+
+    pub(super) fn activation_script(&self, changed: &[&PlatformDeployFile]) -> String {
+        let mut verify = String::new();
+        let mut activate = String::new();
+        let mut rollback = String::new();
+        for file in changed {
+            verify.push_str(&format!(
+                "actual=$(sha256sum {} | awk '{{print $1}}'); if test \"$actual\" != {}; then printf 'platform upload hash mismatch: {} expected={} actual=%s\\n' \"$actual\" >&2; exit 1; fi; ",
+                sh(&format!("{}.upload", file.remote)),
+                sh(&file.sha256),
+                sh(&file.remote),
+                sh(&file.sha256),
+            ));
+            rollback.push_str(&format!(
+                "if [ -e {backup} ]; then mv -f {backup} {path}; elif [ -e {missing} ]; then rm -f {path} {missing}; fi; ",
+                path = sh(&file.remote),
+                backup = sh(&format!("{}.rollback", file.remote)),
+                missing = sh(&format!("{}.rollback-missing", file.remote))
+            ));
+        }
+        for file in changed
+            .iter()
+            .filter(|file| !file.remote.ends_with("platform-v2.manifest"))
+        {
+            activate.push_str(&format!(
+                "mv -f {} {}; ",
+                sh(&format!("{}.upload", file.remote)),
+                sh(&file.remote)
+            ));
+        }
+        if let Some(manifest) = changed
+            .iter()
+            .find(|file| file.remote.ends_with("platform-v2.manifest"))
+        {
+            activate.push_str(&format!(
+                "mv -f {} {}; ",
+                sh(&format!("{}.upload", manifest.remote)),
+                sh(&manifest.remote)
+            ));
+        }
+        let mut chmod = String::new();
+        for file in changed.iter().filter(|file| {
+            file.remote.ends_with("/mister-magik-fb")
+                || file.remote.ends_with("/mister-magik-manager")
+                || file.remote == "/media/fat/MiSTer_MagiKDev"
+        }) {
+            chmod.push_str(&format!("chmod 755 {}; ", sh(&file.remote)));
+        }
+        let safety = platform_safety_script();
+        let finish = shell_sequence([safety.as_str(), "trap - EXIT INT TERM", "sync"]);
+        let require_snapshot = "if ! test -f /media/fat/MiSTer.ini.platform-rollback; then printf 'platform snapshot missing: /media/fat/MiSTer.ini.platform-rollback\\n' >&2; exit 1; fi";
+        format!(
+            "set -eu; {safety}; {require_snapshot}; {verify} rollback() {{ {rollback} mv -f /media/fat/MiSTer.ini.platform-rollback /media/fat/MiSTer.ini 2>/dev/null || true; sync; }}; trap rollback EXIT INT TERM; {activate} {chmod} sync; {finish}"
+        )
+    }
+}
+
+fn checked_deploy_output(label: &str, output: ExecOutput) -> Result<ExecOutput> {
+    if let Some(message) = exec_failure_message(label, &output) {
+        Err(message.into())
+    } else {
+        Ok(output)
+    }
+}
+
+pub(super) fn platform_rollback_script() -> String {
+    let mut rollback = String::from("set -eu; ");
+    for (_, remote) in PLATFORM_DEPLOY_FILES {
+        rollback.push_str(&format!(
+            "if [ -e {backup} ]; then mv -f {backup} {path}; elif [ -e {missing} ]; then rm -f {path} {missing}; fi; ",
+            path = sh(remote), backup = sh(&format!("{remote}.rollback")),
+            missing = sh(&format!("{remote}.rollback-missing"))
+        ));
+    }
+    rollback.push_str(
+        "mv -f /media/fat/MiSTer.ini.platform-rollback /media/fat/MiSTer.ini 2>/dev/null || true; sync",
+    );
+    let safety = platform_safety_script();
+    shell_sequence([rollback.as_str(), safety.as_str()])
+}
+
+pub(super) fn platform_snapshot_script() -> String {
+    let safety = platform_safety_script();
+    let mut cleanup = String::from("rm -f /media/fat/MiSTer.ini.platform-rollback; ");
+    let mut snapshot = String::new();
+    for (_, remote) in PLATFORM_DEPLOY_FILES {
+        cleanup.push_str(&format!(
+            "rm -f {backup} {missing}; ",
+            backup = sh(&format!("{remote}.rollback")),
+            missing = sh(&format!("{remote}.rollback-missing"))
+        ));
+        snapshot.push_str(&format!(
+            "if [ -e {path} ]; then cp -p {path} {backup}; else : > {missing}; fi; ",
+            path = sh(remote),
+            backup = sh(&format!("{remote}.rollback")),
+            missing = sh(&format!("{remote}.rollback-missing"))
+        ));
+    }
+    format!(
+        "set -eu; {safety}; cleanup() {{ {cleanup} }}; cleanup; trap cleanup EXIT INT TERM; cp -p /media/fat/MiSTer.ini /media/fat/MiSTer.ini.platform-rollback; {snapshot} sync; trap - EXIT INT TERM"
+    )
+}
+
+pub(super) fn platform_cleanup_script() -> String {
+    let mut commands = vec!["set -eu".to_string(), platform_safety_script()];
+    for (_, remote) in PLATFORM_DEPLOY_FILES {
+        commands.push(format!(
+            "rm -f {} {}",
+            sh(&format!("{remote}.rollback")),
+            sh(&format!("{remote}.rollback-missing"))
+        ));
+    }
+    commands.push("rm -f /media/fat/MiSTer.ini.platform-rollback".to_string());
+    commands.push("sync".to_string());
+    shell_sequence(commands.iter().map(String::as_str))
+}
+
+pub(super) fn platform_safety_script() -> String {
+    "for path in /media/fat/mister-magik/launcher.env /media/fat/mister-magik-dev/launcher.env /tmp/mister-magik/fs-fault-launcher.env /tmp/mister-magik/fs-fault-session /tmp/mister-magik/fs-fault.json /media/fat/mister-magik/rebuild-on-next-boot /media/fat/mister-magik-dev/rebuild-on-next-boot; do if test -e \"$path\"; then printf 'platform safety blocked: %s\\n' \"$path\" >&2; exit 1; fi; done".into()
+}
