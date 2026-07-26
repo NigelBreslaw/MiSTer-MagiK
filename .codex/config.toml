@@ -1,0 +1,23 @@
+[mcp_servers.magik-rust-lsp]
+command = "lspi"
+args = ["mcp", "--workspace-root", ".", "--config", ".codex/lspi.toml"]
+required = false
+startup_timeout_sec = 10
+tool_timeout_sec = 180
+enabled_tools = [
+  "list_servers",
+  "get_server_status",
+  "hover_at",
+  "get_document_symbols",
+  "search_workspace_symbols",
+  "find_definition_at",
+  "find_references_at",
+  "find_implementation_at",
+  "find_type_definition_at",
+  "find_incoming_calls_at",
+  "find_outgoing_calls_at",
+  "get_diagnostics",
+  "rename_symbol_strict",
+  "restart_server",
+  "stop_server",
+]

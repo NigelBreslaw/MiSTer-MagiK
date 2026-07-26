@@ -1,0 +1,124 @@
+workspace_root = ".."
+
+[mcp]
+context = "codex"
+read_only = false
+
+[mcp.output]
+max_total_chars_default = 10000
+max_total_chars_hard = 20000
+
+[mcp.tools]
+allow = [
+  "list_servers",
+  "get_server_status",
+  "hover_at",
+  "get_document_symbols",
+  "search_workspace_symbols",
+  "find_definition_at",
+  "find_references_at",
+  "find_implementation_at",
+  "find_type_definition_at",
+  "find_incoming_calls_at",
+  "find_outgoing_calls_at",
+  "get_diagnostics",
+  "rename_symbol_strict",
+  "restart_server",
+  "stop_server",
+]
+
+[[servers]]
+id = "rust-main"
+kind = "rust_analyzer"
+command = "rustup"
+args = ["run", "1.97.1", "rust-analyzer"]
+extensions = ["rs"]
+root_dir = "."
+initialize_timeout_ms = 120000
+request_timeout_ms = 180000
+idle_shutdown_ms = 120000
+
+[servers.initialize_options]
+linkedProjects = [
+  "agent-cli/Cargo.toml",
+  "apps/mister/Cargo.toml",
+  "apps/mister/ui-generated/Cargo.toml",
+  "mister/tools/agent/Cargo.toml",
+  "mister/tools/manager/Cargo.toml",
+]
+checkOnSave = true
+
+[servers.initialize_options.cargo]
+allTargets = true
+targetDir = true
+
+[servers.initialize_options.cargo.buildScripts]
+enable = true
+
+[servers.initialize_options.check]
+allTargets = true
+command = "clippy"
+workspace = false
+
+[servers.initialize_options.procMacro]
+enable = true
+
+[[servers]]
+id = "rust-desktop"
+kind = "rust_analyzer"
+command = "rustup"
+args = ["run", "1.97.1", "rust-analyzer"]
+extensions = ["rs"]
+root_dir = "apps/desktop"
+initialize_timeout_ms = 120000
+request_timeout_ms = 180000
+idle_shutdown_ms = 120000
+
+[servers.initialize_options]
+linkedProjects = ["Cargo.toml"]
+checkOnSave = true
+
+[servers.initialize_options.cargo]
+allTargets = true
+targetDir = true
+
+[servers.initialize_options.cargo.buildScripts]
+enable = true
+
+[servers.initialize_options.check]
+allTargets = true
+command = "clippy"
+workspace = false
+
+[servers.initialize_options.procMacro]
+enable = true
+
+[[servers]]
+id = "rust-magik-cloud"
+kind = "rust_analyzer"
+command = "rustup"
+args = ["run", "1.97.1", "rust-analyzer"]
+extensions = ["rs"]
+root_dir = "private/magik-cloud"
+initialize_timeout_ms = 120000
+request_timeout_ms = 180000
+idle_shutdown_ms = 120000
+
+[servers.initialize_options]
+linkedProjects = ["Cargo.toml"]
+checkOnSave = true
+
+[servers.initialize_options.cargo]
+allTargets = true
+targetDir = true
+
+[servers.initialize_options.cargo.buildScripts]
+enable = true
+
+[servers.initialize_options.check]
+allTargets = true
+command = "clippy"
+workspace = false
+
+[servers.initialize_options.procMacro]
+enable = true
