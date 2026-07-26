@@ -7,6 +7,8 @@ use std::collections::{BTreeMap, VecDeque};
 use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, IsTerminal, Read, Write};
+use std::mem::MaybeUninit;
+use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
@@ -71,6 +73,79 @@ impl InputDecoder {
             _ => None,
         }
     }
+}
+
+struct TerminalMode {
+    fd: RawFd,
+    original: libc::termios,
+    active: bool,
+}
+
+impl TerminalMode {
+    fn enter(fd: RawFd) -> io::Result<Self> {
+        let original = terminal_settings(fd)
+            .map_err(|error| terminal_error("read terminal settings", error))?;
+        let mut raw = original;
+        raw.c_lflag &= !(libc::ECHO | libc::ICANON);
+        raw.c_cc[libc::VMIN] = 1;
+        raw.c_cc[libc::VTIME] = 0;
+        set_terminal_settings(fd, &raw)
+            .map_err(|error| terminal_error("enable terminal key input", error))?;
+        Ok(Self {
+            fd,
+            original,
+            active: true,
+        })
+    }
+
+    fn set_tail_timeout(&mut self) -> io::Result<()> {
+        let mut timed = self.original;
+        timed.c_lflag &= !(libc::ECHO | libc::ICANON);
+        timed.c_cc[libc::VMIN] = 0;
+        timed.c_cc[libc::VTIME] = 1;
+        set_terminal_settings(self.fd, &timed)
+            .map_err(|error| terminal_error("configure terminal key timeout", error))
+    }
+
+    fn restore(&mut self) -> io::Result<()> {
+        if !self.active {
+            return Ok(());
+        }
+        set_terminal_settings(self.fd, &self.original)
+            .map_err(|error| terminal_error("restore terminal settings", error))?;
+        self.active = false;
+        Ok(())
+    }
+}
+
+impl Drop for TerminalMode {
+    fn drop(&mut self) {
+        if self.active && set_terminal_settings(self.fd, &self.original).is_ok() {
+            self.active = false;
+        }
+    }
+}
+
+fn terminal_settings(fd: RawFd) -> io::Result<libc::termios> {
+    let mut settings = MaybeUninit::<libc::termios>::uninit();
+    // SAFETY: settings points to writable storage and fd remains open for this call.
+    if unsafe { libc::tcgetattr(fd, settings.as_mut_ptr()) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: tcgetattr initialized settings after returning success.
+    Ok(unsafe { settings.assume_init() })
+}
+
+fn set_terminal_settings(fd: RawFd, settings: &libc::termios) -> io::Result<()> {
+    // SAFETY: settings is initialized and fd remains open for this call.
+    if unsafe { libc::tcsetattr(fd, libc::TCSANOW, settings) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+fn terminal_error(action: &str, error: io::Error) -> io::Error {
+    io::Error::new(error.kind(), format!("cannot {action}: {error}"))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -323,33 +398,32 @@ fn read_event(paths: &Paths) -> Result<Option<InputEvent>> {
     if !io::stdin().is_terminal() {
         return Ok(None);
     }
-    let original = Command::new("stty").arg("-g").output()?;
-    let original = String::from_utf8(original.stdout)?.trim().to_string();
-    if !Command::new("stty")
-        .args(["-echo", "-icanon", "min", "1", "time", "0"])
-        .status()?
-        .success()
-    {
-        return Ok(None);
-    }
-    let result = read_event_bytes();
-    let _ = Command::new("stty").arg(original).status();
+    let stdin = io::stdin();
+    let mut terminal = TerminalMode::enter(stdin.as_raw_fd())?;
+    let result = read_event_bytes(&mut stdin.lock(), &mut terminal);
+    let restore = terminal.restore();
     println!();
-    result.map(Some)
+    match (result, restore) {
+        (Ok(event), Ok(())) => Ok(Some(event)),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(_), Err(error)) => Err(error.into()),
+        (Err(read_error), Err(restore_error)) => Err(format!(
+            "{read_error}; additionally could not restore terminal settings: {restore_error}"
+        )
+        .into()),
+    }
 }
 
-fn read_event_bytes() -> Result<InputEvent> {
+fn read_event_bytes(input: &mut impl Read, terminal: &mut TerminalMode) -> Result<InputEvent> {
     let mut first = [0_u8; 1];
-    io::stdin().read_exact(&mut first)?;
+    input.read_exact(&mut first)?;
     let mut decoder = InputDecoder::default();
     if let Some(event) = decoder.push(&first) {
         return Ok(event);
     }
     let mut tail = [0_u8; 2];
-    let _ = Command::new("stty")
-        .args(["min", "0", "time", "1"])
-        .status();
-    let count = io::stdin().read(&mut tail)?;
+    terminal.set_tail_timeout()?;
+    let count = input.read(&mut tail)?;
     decoder
         .push(&tail[..count])
         .or_else(|| decoder.finish())
@@ -842,6 +916,7 @@ fn offer_reboot(paths: &Paths) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::fd::{FromRawFd, OwnedFd};
 
     struct FailAt {
         step: WriteStep,
@@ -870,6 +945,75 @@ mod tests {
             test_mode: true,
             test_keys: RefCell::default(),
         }
+    }
+
+    fn pseudo_terminal() -> (OwnedFd, OwnedFd) {
+        let mut master = -1;
+        let mut slave = -1;
+        // SAFETY: openpty initializes both descriptors; unused optional outputs are null.
+        let result = unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(result, 0, "openpty failed: {}", io::Error::last_os_error());
+        // SAFETY: openpty returned two newly owned descriptors.
+        unsafe { (OwnedFd::from_raw_fd(master), OwnedFd::from_raw_fd(slave)) }
+    }
+
+    fn assert_terminal_settings_eq(left: &libc::termios, right: &libc::termios) {
+        assert_eq!(left.c_iflag, right.c_iflag);
+        assert_eq!(left.c_oflag, right.c_oflag);
+        assert_eq!(left.c_cflag, right.c_cflag);
+        // PENDIN is transient kernel state, not a persisted terminal configuration bit.
+        assert_eq!(left.c_lflag & !libc::PENDIN, right.c_lflag & !libc::PENDIN);
+        assert_eq!(left.c_cc, right.c_cc);
+        // SAFETY: both references point to initialized termios values.
+        assert_eq!(unsafe { libc::cfgetispeed(left) }, unsafe {
+            libc::cfgetispeed(right)
+        });
+        // SAFETY: both references point to initialized termios values.
+        assert_eq!(unsafe { libc::cfgetospeed(left) }, unsafe {
+            libc::cfgetospeed(right)
+        });
+    }
+
+    #[test]
+    fn terminal_mode_configures_timeout_and_explicitly_restores_pty() {
+        let (_master, slave) = pseudo_terminal();
+        let fd = slave.as_raw_fd();
+        let original = terminal_settings(fd).unwrap();
+        let mut terminal = TerminalMode::enter(fd).unwrap();
+
+        let blocking = terminal_settings(fd).unwrap();
+        assert_eq!(blocking.c_lflag & (libc::ECHO | libc::ICANON), 0);
+        assert_eq!(blocking.c_cc[libc::VMIN], 1);
+        assert_eq!(blocking.c_cc[libc::VTIME], 0);
+
+        terminal.set_tail_timeout().unwrap();
+        let timed = terminal_settings(fd).unwrap();
+        assert_eq!(timed.c_lflag & (libc::ECHO | libc::ICANON), 0);
+        assert_eq!(timed.c_cc[libc::VMIN], 0);
+        assert_eq!(timed.c_cc[libc::VTIME], 1);
+
+        terminal.restore().unwrap();
+        assert_terminal_settings_eq(&terminal_settings(fd).unwrap(), &original);
+    }
+
+    #[test]
+    fn terminal_mode_drop_restores_pty_after_early_return() {
+        let (_master, slave) = pseudo_terminal();
+        let fd = slave.as_raw_fd();
+        let original = terminal_settings(fd).unwrap();
+        {
+            let mut terminal = TerminalMode::enter(fd).unwrap();
+            terminal.set_tail_timeout().unwrap();
+        }
+        assert_terminal_settings_eq(&terminal_settings(fd).unwrap(), &original);
     }
 
     #[test]

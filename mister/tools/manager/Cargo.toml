@@ -20,6 +20,7 @@ name = "mister-magik-manager"
 path = "src/main.rs"
 
 [dependencies]
+libc = "0.2"
 mister-magik-ini = { path = "../../../crates/mister-ini" }
 
 [profile.release]
