@@ -53,6 +53,7 @@ mod media_metadata;
 #[cfg(feature = "builder")]
 pub mod multi_system_projection;
 mod namespace_walk;
+pub mod persisted_search;
 pub mod prepared_collections;
 mod preview_archive;
 pub mod preview_worker;

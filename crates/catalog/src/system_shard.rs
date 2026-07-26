@@ -184,6 +184,8 @@ pub(crate) fn write_system_shard_with_durability(
              );",
         )
         .map_err(|error| SystemShardError::with("create shard schema", error))?;
+    crate::persisted_search::create_schema(&connection)
+        .map_err(|error| SystemShardError::new("write", error.to_string()))?;
     let generation = i64::try_from(data.generation)
         .map_err(|_| SystemShardError::new("write", "generation exceeds SQLite integer"))?;
     let transaction = connection
@@ -268,6 +270,23 @@ pub(crate) fn write_system_shard_with_durability(
                 ])
                 .map_err(|error| SystemShardError::with("insert shard game", error))?;
         }
+    }
+    let autocomplete_words = crate::persisted_search::populate(&transaction, &data.games)
+        .map_err(|error| SystemShardError::new("write", error.to_string()))?;
+    for (key, value) in [
+        (
+            "search_schema_version",
+            crate::persisted_search::SEARCH_SCHEMA_VERSION.to_string(),
+        ),
+        ("search_document_count", data.games.len().to_string()),
+        ("autocomplete_word_count", autocomplete_words.to_string()),
+    ] {
+        transaction
+            .execute(
+                "INSERT INTO shard_meta(key,value) VALUES (?1,?2)",
+                rusqlite::params![key, value],
+            )
+            .map_err(|error| SystemShardError::with("insert search metadata", error))?;
     }
     transaction
         .execute(
@@ -764,7 +783,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "builder")]
-    fn schema_two_shard_round_trips_and_matches_navigation() {
+    fn schema_three_shard_round_trips_and_matches_navigation() {
         let root = temporary_root("round-trip");
         let sqlite = root.join("1.sqlite3");
         let navigation = root.join("1.nav.lz4b");

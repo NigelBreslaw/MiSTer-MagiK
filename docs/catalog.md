@@ -2,7 +2,7 @@
 
 Catalog V3 is the only production catalog used by MiSTer MagiK. Its public
 registry, navigation, state, binding, and scanner-cache schemas are version
-**1**; the SQLite shard schema is version **2**. There is no legacy read
+**1**; the SQLite shard schema is version **3**. There is no legacy read
 fallback, migration bridge, dual publication, global summary, or global
 navigation file.
 
