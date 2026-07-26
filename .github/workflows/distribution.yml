@@ -335,12 +335,10 @@ jobs:
               --tag "$RELEASE_TAG" \
               --timestamp "${{ needs.release-metadata.outputs.timestamp }}"
           fi
-          (
-            cd dist/release-assets
-            find . -type f ! -name SHA256SUMS -print0 \
-              | sort -z \
-              | xargs -0 sha256sum > SHA256SUMS
-          )
+          python3 scripts/release/packaging/prepare-published-assets.py \
+            --candidate dist/release-assets \
+            --output dist/published-assets
+          (cd dist/published-assets && sha256sum --check SHA256SUMS)
 
       - name: Verify release identity is consistent
         env:
@@ -388,7 +386,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ${{ needs.release-metadata.outputs.artifact-name }}
-          path: dist/release-assets
+          path: dist/published-assets
           if-no-files-found: error
           retention-days: 30
 
