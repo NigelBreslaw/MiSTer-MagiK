@@ -441,7 +441,11 @@ pub(crate) fn normalize_search_text(value: &str) -> String {
 #[cfg(feature = "builder")]
 fn compact_if_different(value: &str) -> String {
     let compact = value.replace(' ', "");
-    (compact != value).then_some(compact).unwrap_or_default()
+    if compact != value {
+        compact
+    } else {
+        String::new()
+    }
 }
 
 fn current_search_word(query: &str) -> &str {
