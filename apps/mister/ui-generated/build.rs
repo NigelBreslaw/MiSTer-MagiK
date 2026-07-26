@@ -84,8 +84,6 @@ fn main() {
         "../ui/fonts/PressStart2P-PAL288-Regular.ttf.license",
         "../ui/fonts/PressStart2P-PAL576-Regular.ttf",
         "../ui/fonts/PressStart2P-PAL576-Regular.ttf.license",
-        "../ui/fonts/LilliputSteps.otf",
-        "../ui/fonts/LilliputSteps.otf.license",
         "../ui/icons/settings.svg",
     ];
     if bench_scenes {

@@ -70,7 +70,6 @@ pub(crate) enum ConsoleTypeface {
     PressStart2P,
     PressStart2PPal288,
     PressStart2PPal576,
-    LilliputSteps,
 }
 
 impl ConsoleFont {
@@ -91,10 +90,6 @@ impl ConsoleFont {
             ConsoleTypeface::PressStart2PPal288 => (
                 include_bytes!("../ui/fonts/PressStart2P-PAL288-Regular.ttf"),
                 "PressStart2P-PAL288-Regular.ttf",
-            ),
-            ConsoleTypeface::LilliputSteps => (
-                include_bytes!("../ui/fonts/LilliputSteps.otf"),
-                "LilliputSteps.otf",
             ),
         };
         let font = swash::FontRef::from_index(data, 0).unwrap_or_else(|| panic!("{name}"));
@@ -348,8 +343,8 @@ mod tests {
         TextGradient::new(Pixel(0x00ffffff), Pixel(0x00c8bfd8), Pixel(0x00887f90));
 
     #[test]
-    fn lilliput_steps_clipping_uses_measured_advances_and_fits_the_requested_width() {
-        let mut font = ConsoleFont::new_with_typeface(16.0, ConsoleTypeface::LilliputSteps);
+    fn clipping_uses_measured_advances_and_fits_the_requested_width() {
+        let mut font = ConsoleFont::new_with_typeface(16.0, ConsoleTypeface::PressStart2P);
         let clipped = font
             .clipped_text("Cadillacs and Dinosaurs", 80)
             .into_owned();
@@ -360,7 +355,7 @@ mod tests {
 
     #[test]
     fn clipping_never_returns_an_ellipsis_wider_than_the_requested_width() {
-        let mut font = ConsoleFont::new_with_typeface(16.0, ConsoleTypeface::LilliputSteps);
+        let mut font = ConsoleFont::new_with_typeface(16.0, ConsoleTypeface::PressStart2P);
 
         for max_width in 0..font.text_width("...") {
             let clipped = font.clipped_text("Arcade", max_width).into_owned();

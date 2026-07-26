@@ -102,8 +102,7 @@ conversion:
 - CRT and HDMI routes use Press Start 2P for Slint text and the custom Rust
   games renderer. Native PAL routes select renamed OFL-derived families whose
   glyph outlines and vertical metrics are scaled 3:5 for 288p and 6:5 for
-  576p while horizontal advances remain unchanged. Lilliput Steps remains
-  embedded and licensed for future CRT design work.
+  576p while horizontal advances remain unchanged.
 - Rust sends the FPGA `SET_FBUF` route so buffer 0 is scanned to HDMI. For CRT,
   the FPGA receives a framebuffer already matching the full active raster; its
   OSD path is a direct overlay and is not relied on for UI scaling.

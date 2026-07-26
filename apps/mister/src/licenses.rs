@@ -4,32 +4,24 @@
 use std::sync::OnceLock;
 
 // Directly shipped fonts remain visible in the in-app legal surface.
-pub const LICENSE_TITLES: [&str; 5] = [
-    "MiSTer MagiK",
-    "FFmpeg",
-    "Press Start 2P",
-    "Lilliput Steps",
-    "Slint",
-];
+pub const LICENSE_TITLES: [&str; 4] = ["MiSTer MagiK", "FFmpeg", "Press Start 2P", "Slint"];
 
 const GPL3: &str = include_str!("../../../LICENSE");
 const FFMPEG: &str = include_str!("../licenses/FFMPEG.txt");
 const PRESS_START_2P: &str = include_str!("../licenses/PRESS-START-2P.txt");
-const LILLIPUT_STEPS: &str = include_str!("../licenses/LILLIPUT-STEPS.txt");
 const LICENSE_LINE_COLUMNS: usize = 105;
 const LICENSE_VISIBLE_ROWS: usize = 40;
 
 pub fn text(index: usize) -> &'static str {
     match index {
-        0 | 4 => GPL3,
+        0 | 3 => GPL3,
         1 => FFMPEG,
-        2 => PRESS_START_2P,
-        _ => LILLIPUT_STEPS,
+        _ => PRESS_START_2P,
     }
 }
 
 pub fn wrapped_lines(index: usize) -> &'static [String] {
-    static LINES: [OnceLock<Vec<String>>; 5] = [const { OnceLock::new() }; 5];
+    static LINES: [OnceLock<Vec<String>>; 4] = [const { OnceLock::new() }; 4];
     let index = index.min(LICENSE_TITLES.len() - 1);
     LINES[index].get_or_init(|| wrap_text(index))
 }
@@ -81,7 +73,7 @@ mod tests {
 
     #[test]
     fn every_major_license_has_full_text_and_can_scroll() {
-        for index in [0, 1, 2, 4] {
+        for index in [0, 1, 2, 3] {
             assert!(
                 text(index).len() > 1_000,
                 "{} text is incomplete",
@@ -100,18 +92,10 @@ mod tests {
     fn app_surface_is_limited_to_directly_relevant_license_texts() {
         assert_eq!(
             LICENSE_TITLES,
-            [
-                "MiSTer MagiK",
-                "FFmpeg",
-                "Press Start 2P",
-                "Lilliput Steps",
-                "Slint"
-            ]
+            ["MiSTer MagiK", "FFmpeg", "Press Start 2P", "Slint"]
         );
-        assert_eq!(text(4), GPL3);
+        assert_eq!(text(3), GPL3);
         assert!(FFMPEG.contains("FFmpeg 8.1.2"));
         assert!(PRESS_START_2P.contains("SIL Open Font License"));
-        assert!(LILLIPUT_STEPS.contains("Creative Commons Zero"));
-        assert!(LILLIPUT_STEPS.contains("Raymond Larabie"));
     }
 }

@@ -369,7 +369,6 @@ cp "$ROOT/LICENSE" "$STAGE/mister-magik/licenses/MiSTer-MagiK-GPL-3.0-or-later.t
 cp "$ROOT/apps/mister/licenses/RUST-LIBRARIES.txt" "$STAGE/mister-magik/licenses/RUST-LIBRARIES.txt"
 cp "$ROOT/apps/mister/licenses/FFMPEG.txt" "$STAGE/mister-magik/licenses/FFMPEG-LGPL-2.1-or-later.txt"
 cp "$ROOT/apps/mister/licenses/PRESS-START-2P.txt" "$STAGE/mister-magik/licenses/PRESS-START-2P-OFL-1.1.txt"
-cp "$ROOT/apps/mister/licenses/LILLIPUT-STEPS.txt" "$STAGE/mister-magik/licenses/LILLIPUT-STEPS-CC0-1.0.txt"
 cat > "$STAGE/mister-magik/THIRD-PARTY-NOTICES.txt" <<EOF
 MiSTer MagiK distribution notices
 ==================================
@@ -391,7 +390,7 @@ portion remains under its upstream GPL-3.0 terms.
 
 The launcher includes Slint under its GPL-3.0-only option, the normal runtime
 Rust dependency closure, statically linked FFmpeg libraries under LGPL-2.1-or-later,
-and the Press Start 2P font under SIL OFL-1.1 and Lilliput Steps under CC0 1.0. Their complete notices are in
+and the Press Start 2P font under SIL OFL-1.1. Its complete notice is in
 the mister-magik/licenses/ directory.
 
 mame.sqlite3 is generated metadata, not ROM, BIOS, firmware, or game media. It
