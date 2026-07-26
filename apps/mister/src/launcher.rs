@@ -2985,7 +2985,6 @@ impl LauncherNav {
             || self.arcade_search.result_query != self.arcade_search.query
             || self.arcade_search.suggestion_system_id != system_id
             || self.arcade_search.suggestion_query != self.arcade_search.query
-            || self.arcade_search.status == ArcadeSearchStatus::Searching
         {
             self.refresh_arcade_search_results(catalog, system_id);
         }
@@ -5407,6 +5406,11 @@ mod tests {
         let request = nav
             .take_arcade_search_request(&catalog, 7)
             .expect("persisted search request");
+        nav.ensure_arcade_search_results(&catalog, "arcade");
+        assert!(
+            nav.take_arcade_search_request(&catalog, 7).is_none(),
+            "repeated UI frames must not replace an in-flight request"
+        );
         let mut stale = request.clone();
         stale.request_id = stale.request_id.wrapping_add(1);
 
