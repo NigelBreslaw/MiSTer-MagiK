@@ -1638,9 +1638,35 @@ fn parse_framebuffer_capture_lz4(
     value: &Value,
     payload: &[u8],
 ) -> Result<FramebufferCapture, AgentError> {
-    if string_at(value, "/schema") != Some("mister-magik-framebuffer-raw-stream-v1") {
+    if string_at(value, "/schema") != Some("mister-magik-framebuffer-raw-stream-v2") {
         return Err(AgentError::Protocol(
             "unexpected framebuffer raw stream response schema".to_string(),
+        ));
+    }
+    let source = string_at(value, "/source")
+        .ok_or_else(|| AgentError::Protocol("missing framebuffer capture source".to_string()))?;
+    let source_kind = string_at(value, "/capture_source/kind").ok_or_else(|| {
+        AgentError::Protocol("missing framebuffer capture_source.kind".to_string())
+    })?;
+    if source != source_kind
+        || !matches!(
+            source,
+            "fb0" | "producer-composition" | "fpga-latched-scanout-slots"
+        )
+    {
+        return Err(AgentError::Protocol(format!(
+            "invalid framebuffer capture source: {source}"
+        )));
+    }
+    let authoritative = value
+        .pointer("/authoritative_scanout")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| {
+            AgentError::Protocol("missing framebuffer authoritative_scanout".to_string())
+        })?;
+    if authoritative != (source == "fpga-latched-scanout-slots") {
+        return Err(AgentError::Protocol(
+            "inconsistent framebuffer scanout authority".to_string(),
         ));
     }
     let encoding = string_at(value, "/encoding").unwrap_or("raw");
@@ -2638,7 +2664,10 @@ tiny"#
         let payload = lz4_flex::compress_prepend_size(&raw);
         let capture = parse_framebuffer_capture_lz4(
             &json!({
-                "schema": "mister-magik-framebuffer-raw-stream-v1",
+                "schema": "mister-magik-framebuffer-raw-stream-v2",
+                "source": "fb0",
+                "capture_source": {"kind": "fb0"},
+                "authoritative_scanout": false,
                 "width": 2,
                 "height": 1,
                 "stride": 4,
@@ -2672,10 +2701,47 @@ tiny"#
     }
 
     #[test]
+    fn parse_framebuffer_lz4_capture_accepts_current_agent_contract() {
+        let raw = [0x00, 0xf8];
+        let payload = lz4_flex::compress_prepend_size(&raw);
+        let capture = parse_framebuffer_capture_lz4(
+            &json!({
+                "schema": "mister-magik-framebuffer-raw-stream-v2",
+                "source": "fpga-latched-scanout-slots",
+                "capture_source": {
+                    "kind": "fpga-latched-scanout-slots",
+                    "active_base": "0x20000000",
+                    "active_sequence": 7,
+                    "region_index": 0,
+                    "region_name": "menu"
+                },
+                "authoritative_scanout": true,
+                "width": 1,
+                "height": 1,
+                "stride": 2,
+                "bpp": 16,
+                "format": "rgb565-le",
+                "encoding": "lz4-block-size-prepended",
+                "raw_bytes": 2,
+                "payload_bytes": payload.len(),
+                "content_nonzero_bytes": 1,
+                "content_varied": true
+            }),
+            &payload,
+        )
+        .expect("current agent framebuffer contract should parse");
+
+        assert_eq!(capture.raw_pixels, raw);
+    }
+
+    #[test]
     fn parse_framebuffer_lz4_capture_rejects_unknown_encoding() {
         let err = parse_framebuffer_capture_lz4(
             &json!({
-                "schema": "mister-magik-framebuffer-raw-stream-v1",
+                "schema": "mister-magik-framebuffer-raw-stream-v2",
+                "source": "fb0",
+                "capture_source": {"kind": "fb0"},
+                "authoritative_scanout": false,
                 "width": 1,
                 "height": 1,
                 "stride": 2,
@@ -2697,7 +2763,10 @@ tiny"#
         let payload = lz4_flex::compress_prepend_size(&[0u8; 8]);
         let err = parse_framebuffer_capture_lz4(
             &json!({
-                "schema": "mister-magik-framebuffer-raw-stream-v1",
+                "schema": "mister-magik-framebuffer-raw-stream-v2",
+                "source": "fb0",
+                "capture_source": {"kind": "fb0"},
+                "authoritative_scanout": false,
                 "width": 2,
                 "height": 1,
                 "stride": 4,
