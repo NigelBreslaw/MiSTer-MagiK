@@ -1161,6 +1161,7 @@ impl LauncherFrameAccounting {
         catalog_scan_message: &str,
         confirm_visible: bool,
         confirm_title: &str,
+        confirm_message: &str,
         confirm_selected: i32,
         confirm_left_label: &str,
         confirm_right_label: &str,
@@ -1195,6 +1196,7 @@ impl LauncherFrameAccounting {
             catalog_scan_message,
             confirm_visible,
             confirm_title,
+            confirm_message,
             confirm_selected,
             confirm_left_label,
             confirm_right_label,
@@ -1236,6 +1238,7 @@ impl LauncherFrameAccounting {
         catalog_scan_message: &str,
         confirm_visible: bool,
         confirm_title: &str,
+        confirm_message: &str,
         confirm_selected: i32,
         confirm_left_label: &str,
         confirm_right_label: &str,
@@ -1274,6 +1277,7 @@ impl LauncherFrameAccounting {
             catalog_scan_message,
             confirm_visible,
             confirm_title,
+            confirm_message,
             confirm_selected,
             confirm_left_label,
             confirm_right_label,
@@ -1392,6 +1396,7 @@ impl LauncherFrameAccounting {
         catalog_scan_message: &str,
         confirm_visible: bool,
         confirm_title: &str,
+        confirm_message: &str,
         confirm_selected: i32,
         confirm_left_label: &str,
         confirm_right_label: &str,
@@ -1438,6 +1443,7 @@ impl LauncherFrameAccounting {
             catalog_scan_message,
             confirm_visible,
             confirm_title,
+            confirm_message,
             confirm_selected,
             confirm_left_label,
             confirm_right_label,
@@ -1584,20 +1590,22 @@ impl LauncherFrameAccounting {
             self.last_rolling_vsync_us = (self.vsync_us / n) as u64;
             self.last_rolling_present_us = (self.copy_us / n) as u64;
             self.last_rolling_rows = (self.rows / n) as u64;
-            crate::ui_logln!(
-                "launcher fps ~ {} prepare {}us slint-render {}us custom-draw {}us vsync-wait {}us fb-present {}us cached-present {}us hidden-compose {}us direct-preview-present {}us arcade-list-present {}us ({} rows avg)",
-                self.fps_frames,
-                self.prepare_us / n,
-                self.render_us / n,
-                self.custom_draw_us / n,
-                self.vsync_us / n,
-                self.copy_us / n,
-                self.cached_present_us / n,
-                self.hidden_compose_us / n,
-                self.direct_preview_present_us / n,
-                self.arcade_list_present_us / n,
-                self.rows / n
-            );
+            if launcher_fps_log_enabled() {
+                crate::ui_logln!(
+                    "launcher fps ~ {} prepare {}us slint-render {}us custom-draw {}us vsync-wait {}us fb-present {}us cached-present {}us hidden-compose {}us direct-preview-present {}us arcade-list-present {}us ({} rows avg)",
+                    self.fps_frames,
+                    self.prepare_us / n,
+                    self.render_us / n,
+                    self.custom_draw_us / n,
+                    self.vsync_us / n,
+                    self.copy_us / n,
+                    self.cached_present_us / n,
+                    self.hidden_compose_us / n,
+                    self.direct_preview_present_us / n,
+                    self.arcade_list_present_us / n,
+                    self.rows / n
+                );
+            }
             self.fps_window_start = Instant::now();
             self.fps_frames = 0;
             self.prepare_us = 0;
@@ -2054,6 +2062,7 @@ impl LauncherFrameAccounting {
         catalog_scan_message: &str,
         confirm_visible: bool,
         confirm_title: &str,
+        confirm_message: &str,
         confirm_selected: i32,
         confirm_left_label: &str,
         confirm_right_label: &str,
@@ -2159,6 +2168,7 @@ impl LauncherFrameAccounting {
             catalog_background_scan_visible,
             confirm_visible,
             confirm_title,
+            confirm_message,
             confirm_selected,
             confirm_left_label,
             confirm_right_label,
@@ -2234,6 +2244,25 @@ impl LauncherFrameAccounting {
         if idle {
             self.idle_loops_since_status = 0;
         }
+    }
+}
+
+fn launcher_fps_log_enabled() -> bool {
+    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+    {
+        true
+    }
+    #[cfg(not(any(feature = "bench-tools", feature = "diagnostics")))]
+    {
+        static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ENABLED.get_or_init(|| {
+            std::env::var("MISTER_PROFILE")
+                .map(|value| {
+                    let value = value.trim();
+                    !value.is_empty() && !matches!(value, "0" | "off" | "false")
+                })
+                .unwrap_or(false)
+        })
     }
 }
 

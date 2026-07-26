@@ -9,6 +9,7 @@
 
 pub mod arcade_button_overrides;
 pub use mister_magik_mister_runtime::boot_analytics;
+pub mod catalog_failure_report;
 pub mod command_args;
 pub mod controller_db;
 pub mod crash_report;

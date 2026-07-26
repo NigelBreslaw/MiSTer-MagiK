@@ -564,6 +564,7 @@ struct LauncherStatusTextSnapshot {
     catalog_scan_title: SharedString,
     catalog_scan_detail: SharedString,
     confirm_title: SharedString,
+    confirm_message: SharedString,
     confirm_left_label: SharedString,
     confirm_right_label: SharedString,
 }
@@ -575,6 +576,7 @@ impl LauncherStatusTextSnapshot {
             catalog_scan_title: bridge.get_catalog_scan_title(),
             catalog_scan_detail: bridge.get_catalog_scan_detail(),
             confirm_title: bridge.get_confirm_title(),
+            confirm_message: bridge.get_confirm_message(),
             confirm_left_label: bridge.get_confirm_left_label(),
             confirm_right_label: bridge.get_confirm_right_label(),
         }
@@ -585,6 +587,7 @@ impl LauncherStatusTextSnapshot {
             + self.catalog_scan_title.len()
             + self.catalog_scan_detail.len()
             + self.confirm_title.len()
+            + self.confirm_message.len()
             + self.confirm_left_label.len()
             + self.confirm_right_label.len()
     }
@@ -4397,6 +4400,10 @@ pub(super) fn run_launcher_loop(
                     .as_ref()
                     .map(|text| text.confirm_title.as_str())
                     .unwrap_or(""),
+                status_text
+                    .as_ref()
+                    .map(|text| text.confirm_message.as_str())
+                    .unwrap_or(""),
                 confirm_selected,
                 status_text
                     .as_ref()
@@ -5213,6 +5220,10 @@ pub(super) fn run_launcher_loop(
                     .as_ref()
                     .map(|text| text.confirm_title.as_str())
                     .unwrap_or(""),
+                status_text
+                    .as_ref()
+                    .map(|text| text.confirm_message.as_str())
+                    .unwrap_or(""),
                 confirm_selected,
                 status_text
                     .as_ref()
@@ -5330,6 +5341,10 @@ pub(super) fn run_launcher_loop(
                 status_text
                     .as_ref()
                     .map(|text| text.confirm_title.as_str())
+                    .unwrap_or(""),
+                status_text
+                    .as_ref()
+                    .map(|text| text.confirm_message.as_str())
                     .unwrap_or(""),
                 confirm_selected,
                 status_text
@@ -6039,6 +6054,47 @@ fn apply_catalog_session_effects(
                 *catalog_version = (*catalog_version).wrapping_add(1);
                 nav.sync_launcher_taxonomy(catalog);
                 *full_bridge_dirty = true;
+            }
+            CatalogSessionEffect::PersistCatalogFailure {
+                detail,
+                mode,
+                has_stale_catalog,
+                system_id,
+            } => {
+                let (expected, actual) = crate::catalog_failure_report::schema_versions(&detail);
+                let report_path = crate::catalog_failure_report::enqueue(
+                    crate::catalog_failure_report::CatalogFailureReport {
+                        code: mode.diagnostic_code().to_string(),
+                        stage: mode.diagnostic_stage().to_string(),
+                        operation: mode.diagnostic_operation().to_string(),
+                        detail,
+                        expected,
+                        actual,
+                        system_id,
+                        generation: catalog_generation.current.clone(),
+                        usable_catalog: has_stale_catalog && *catalog_ready,
+                        games: catalog.len(),
+                        systems: catalog.systems.len(),
+                        durable_generation: catalog_generation.durable.clone(),
+                        recovery_actions: vec![
+                            mode.label(has_stale_catalog, CatalogRecoveryChoice::Left)
+                                .to_string(),
+                            mode.label(has_stale_catalog, CatalogRecoveryChoice::Right)
+                                .to_string(),
+                        ],
+                    },
+                );
+                print_startup_event(
+                    start,
+                    "catalog_failure_report_queued",
+                    format!(
+                        "code={} stage={} operation={} path={}",
+                        mode.diagnostic_code(),
+                        mode.diagnostic_stage(),
+                        mode.diagnostic_operation(),
+                        report_path.display()
+                    ),
+                );
             }
             CatalogSessionEffect::CatalogBuildFinished => {
                 nav.catalog_build_finished(catalog);

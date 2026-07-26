@@ -155,13 +155,43 @@ impl CatalogRecoveryMode {
         }
     }
 
-    fn label(self, has_stale_catalog: bool, choice: CatalogRecoveryChoice) -> &'static str {
+    pub(super) fn label(
+        self,
+        has_stale_catalog: bool,
+        choice: CatalogRecoveryChoice,
+    ) -> &'static str {
         match self.action(has_stale_catalog, choice) {
             CatalogRecoveryAction::Continue => "Continue",
             CatalogRecoveryAction::Retry => "Retry",
             CatalogRecoveryAction::AtomicRebuild => "Rebuild",
             CatalogRecoveryAction::FreshRebuild => "Full rebuild",
             CatalogRecoveryAction::ExitToMister => "Exit to MiSTer",
+        }
+    }
+
+    pub(super) fn diagnostic_code(self) -> &'static str {
+        match self {
+            Self::InputsChanged => "catalog_inputs_changed",
+            Self::UpgradeRequired => "projection_upgrade_required",
+            Self::RepairRequired => "catalog_repair_required",
+            Self::LoadFailure { .. } => "catalog_load_failed",
+            Self::PersistenceFailure { .. } => "catalog_persistence_failed",
+        }
+    }
+
+    pub(super) fn diagnostic_stage(self) -> &'static str {
+        match self {
+            Self::InputsChanged | Self::UpgradeRequired | Self::RepairRequired => "validate",
+            Self::LoadFailure { .. } => "load",
+            Self::PersistenceFailure { .. } => "persist",
+        }
+    }
+
+    pub(super) fn diagnostic_operation(self) -> &'static str {
+        match self {
+            Self::InputsChanged | Self::UpgradeRequired | Self::RepairRequired => "check",
+            Self::LoadFailure { .. } => "load",
+            Self::PersistenceFailure { .. } => "rebuild",
         }
     }
 }
@@ -184,7 +214,11 @@ fn catalog_recovery_message(
             " Full rebuild deletes generated catalog data only; games, screenshots, and media are untouched."
         }
     };
-    format!("{detail}{safety}{rebuild}")
+    let report = match mode {
+        CatalogRecoveryMode::InputsChanged | CatalogRecoveryMode::UpgradeRequired => "",
+        _ => " Support report: diagnostics/catalog/latest.json.",
+    };
+    format!("{detail}{safety}{rebuild}{report}")
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

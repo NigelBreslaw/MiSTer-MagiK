@@ -115,6 +115,7 @@ launcher_status_types! {
         catalog_scan_title,
         catalog_scan_detail,
         confirm_title,
+        confirm_message,
         confirm_left_label,
         confirm_right_label,
         arcade_drawer_level,
@@ -600,10 +601,34 @@ fn launcher_status_value(
         status.catalog_background_scan_visible
     );
     insert!("confirm_visible", status.confirm_visible);
-    insert!("confirm_title", status.confirm_title);
+    insert!("confirm_title", status.confirm_title.clone());
+    insert!("confirm_message", status.confirm_message.clone());
     insert!("confirm_selected", status.confirm_selected);
-    insert!("confirm_left_label", status.confirm_left_label);
-    insert!("confirm_right_label", status.confirm_right_label);
+    insert!("confirm_left_label", status.confirm_left_label.clone());
+    insert!("confirm_right_label", status.confirm_right_label.clone());
+    let catalog_failure_code = match status.confirm_title.as_str() {
+        "Catalog update required" => Some("projection_upgrade_required"),
+        "Catalog repair required" => Some("catalog_repair_required"),
+        "Catalog unavailable" => Some("catalog_load_failed"),
+        "Catalog rebuild failed" => Some("catalog_persistence_failed"),
+        _ => None,
+    };
+    map.insert(
+        "catalog_failure".to_string(),
+        catalog_failure_code.map_or(Value::Null, |code| {
+            json!({
+                "code": code,
+                "detail": status.confirm_message,
+                "usable_catalog": status.catalog_ready,
+                "report_path": "diagnostics/catalog/latest.json",
+                "recovery": {
+                    "left": status.confirm_left_label,
+                    "right": status.confirm_right_label,
+                    "selected": status.confirm_selected,
+                },
+            })
+        }),
+    );
     insert!("arcade_selected", status.arcade_selected);
     insert!(
         "arcade_visual_index",
@@ -1070,10 +1095,11 @@ mod tests {
                 catalog_scan_percent: -1,
                 catalog_background_scan_visible: false,
                 confirm_visible: true,
-                confirm_title: "Library changed",
+                confirm_title: "Catalog rebuild failed",
+                confirm_message: "Could not publish the new catalog.",
                 confirm_selected: 0,
                 confirm_left_label: "Continue",
-                confirm_right_label: "Rebuild",
+                confirm_right_label: "Full rebuild",
                 arcade_selected: 3,
                 arcade_visual_index: 3.25,
                 arcade_drawer_open: true,
@@ -1321,10 +1347,15 @@ mod tests {
         assert_eq!(value["catalog_scan_message"], "Scanning for games");
         assert_eq!(value["catalog_background_scan_visible"], false);
         assert_eq!(value["confirm_visible"], true);
-        assert_eq!(value["confirm_title"], "Library changed");
+        assert_eq!(value["confirm_title"], "Catalog rebuild failed");
         assert_eq!(value["confirm_selected"], 0);
         assert_eq!(value["confirm_left_label"], "Continue");
-        assert_eq!(value["confirm_right_label"], "Rebuild");
+        assert_eq!(value["confirm_right_label"], "Full rebuild");
+        assert_eq!(
+            value["catalog_failure"]["code"],
+            "catalog_persistence_failed"
+        );
+        assert_eq!(value["catalog_failure"]["usable_catalog"], true);
         assert_eq!(value["arcade_selected"], 3);
         assert_eq!(value["arcade_visual_index"], 3.25);
         assert_eq!(value["arcade_drawer_open"], true);
@@ -1433,6 +1464,7 @@ mod tests {
             catalog_background_scan_visible: true,
             confirm_visible: false,
             confirm_title: "",
+            confirm_message: "",
             confirm_selected: 0,
             confirm_left_label: "",
             confirm_right_label: "",

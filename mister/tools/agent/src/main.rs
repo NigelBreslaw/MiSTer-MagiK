@@ -938,6 +938,10 @@ mod linux {
     const SEQ: &str = "/media/fat/mister-magik-dev/bootlogs/agent.seq";
     const CRASH_DIR: &str = "/media/fat/mister-magik-dev/crashes";
     const LATEST_CRASH_REPORT: &str = "/media/fat/mister-magik-dev/crashes/latest.json";
+    const CATALOG_FAILURE_DIRS: [&str; 2] = [
+        "/media/fat/mister-magik/diagnostics/catalog",
+        "/media/fat/mister-magik-dev/diagnostics/catalog",
+    ];
     const LOG_RING_CAPACITY: usize = 512;
     const TIMELINE_CAPACITY: usize = 128;
     const MAX_DEPLOY_BYTES: u64 = 1024 * 1024 * 1024;
@@ -2415,6 +2419,7 @@ mod linux {
                 "scanout_proc_modules": tail_text_value("/proc/modules", 80),
             },
             "crashes": crash_reports_json(),
+            "catalog_failures": catalog_failure_reports_json(),
         })
     }
 
@@ -3823,6 +3828,68 @@ mod linux {
             "latest": read_json_value(LATEST_CRASH_REPORT),
             "recent": recent,
         })
+    }
+
+    fn catalog_failure_reports_json() -> Value {
+        let mut latest_reports = CATALOG_FAILURE_DIRS
+            .iter()
+            .filter_map(|dir| {
+                let path = Path::new(dir).join("latest.json");
+                let report = read_json_value(path.to_string_lossy().as_ref());
+                report
+                    .is_object()
+                    .then(|| (path.to_string_lossy().to_string(), report))
+            })
+            .collect::<Vec<_>>();
+        latest_reports.sort_by_key(|(_, report)| {
+            report
+                .get("ts_unix_ms")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+        });
+        let latest = latest_reports
+            .pop()
+            .map(|(path, report)| json!({"path": path, "report": report}))
+            .unwrap_or(Value::Null);
+        let recent = CATALOG_FAILURE_DIRS
+            .iter()
+            .flat_map(|dir| recent_catalog_failure_paths(Path::new(dir), 5))
+            .take(5)
+            .map(|path| {
+                let report = read_json_value(path.to_string_lossy().as_ref());
+                json!({
+                    "path": path,
+                    "report_id": report.get("report_id").cloned().unwrap_or(Value::Null),
+                    "ts_unix_ms": report.get("ts_unix_ms").cloned().unwrap_or(Value::Null),
+                    "code": report.pointer("/failure/code").cloned().unwrap_or(Value::Null),
+                })
+            })
+            .collect::<Vec<_>>();
+        json!({
+            "latest": latest,
+            "recent": recent,
+        })
+    }
+
+    fn recent_catalog_failure_paths(dir: &Path, limit: usize) -> Vec<PathBuf> {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return Vec::new();
+        };
+        let mut paths = entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| {
+                        name.starts_with("report-catalog-") && name.ends_with(".json")
+                    })
+            })
+            .collect::<Vec<_>>();
+        paths.sort();
+        paths.reverse();
+        paths.truncate(limit);
+        paths
     }
 
     fn recent_crash_report_paths(limit: usize) -> Vec<PathBuf> {

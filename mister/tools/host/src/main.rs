@@ -8208,6 +8208,7 @@ fn ssh_diagnostics_bundle(agent_error: String) -> Result<Value> {
             "boot_analytics_tail": tail_remote(&sess, "/tmp/mister-magik-boot-analytics.tsv", 80).map(|lines| lines.join("\n")),
         },
         "crashes": ssh_crash_reports_json(&sess),
+        "catalog_failures": ssh_catalog_failure_reports_json(&sess),
     }))
 }
 
@@ -8226,6 +8227,16 @@ fn write_diagnostics_bundle(out_dir: &Path, bundle: &Value) -> Result<()> {
         out_dir,
         "crash-latest.json",
         bundle.pointer("/crashes/latest"),
+    )?;
+    write_json_member(
+        out_dir,
+        "catalog-failures.json",
+        bundle.get("catalog_failures"),
+    )?;
+    write_json_member(
+        out_dir,
+        "catalog-failure-latest.json",
+        bundle.pointer("/catalog_failures/latest/report"),
     )?;
 
     write_string_pointer(out_dir, "ps.txt", bundle.pointer("/processes/ps"))?;
@@ -8301,6 +8312,64 @@ fn ssh_crash_reports_json(sess: &Session) -> Value {
         "latest": latest,
         "recent": recent,
     })
+}
+
+fn ssh_catalog_failure_reports_json(sess: &Session) -> Value {
+    let configured = configured_remote_path("MISTER_MAGIK_APP_DIR", "/media/fat/mister-magik")
+        + "/diagnostics/catalog";
+    let mut dirs = vec![
+        configured,
+        "/media/fat/mister-magik/diagnostics/catalog".to_string(),
+        "/media/fat/mister-magik-dev/diagnostics/catalog".to_string(),
+    ];
+    dirs.sort();
+    dirs.dedup();
+    let mut latest = dirs
+        .iter()
+        .filter_map(|dir| {
+            let path = format!("{dir}/latest.json");
+            let report = remote_read(sess, &path)
+                .and_then(|text| serde_json::from_str::<Value>(&text).ok())?;
+            Some((path, report))
+        })
+        .collect::<Vec<_>>();
+    latest.sort_by_key(|(_, report)| {
+        report
+            .get("ts_unix_ms")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+    });
+    let latest = latest
+        .pop()
+        .map(|(path, report)| json!({"path": path, "report": report}))
+        .unwrap_or(Value::Null);
+    let recent = dirs
+        .iter()
+        .flat_map(|dir| remote_catalog_failure_paths(sess, dir, 5))
+        .take(5)
+        .collect::<Vec<_>>();
+    json!({
+        "latest": latest,
+        "recent_paths": recent,
+    })
+}
+
+fn remote_catalog_failure_paths(sess: &Session, dir: &str, limit: usize) -> Vec<String> {
+    let cmd = format!(
+        "ls -1 {} 2>/dev/null | grep '^report-catalog-.*\\.json$' | sort -r | head -n {}",
+        sh(dir),
+        limit
+    );
+    let Ok(out) = exec(sess, &cmd, true) else {
+        return Vec::new();
+    };
+    if out.rc != 0 {
+        return Vec::new();
+    }
+    out.stdout
+        .lines()
+        .map(|name| format!("{dir}/{name}"))
+        .collect()
 }
 
 fn remote_crash_report_paths(
@@ -13491,6 +13560,37 @@ H: Handlers=event3 js0"#
                     .into()
             )
         );
+    }
+
+    #[test]
+    fn diagnostics_bundle_exports_latest_catalog_failure() {
+        let out = std::env::temp_dir().join(format!(
+            "mister-magik-host-catalog-diagnostics-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&out);
+        fs::create_dir_all(&out).unwrap();
+        let bundle = json!({
+            "catalog_failures": {
+                "latest": {
+                    "path": "/media/fat/mister-magik/diagnostics/catalog/latest.json",
+                    "report": {
+                        "schema": "mister-magik-catalog-failure-v1",
+                        "report_id": "report-catalog-test"
+                    }
+                },
+                "recent_paths": []
+            }
+        });
+
+        write_diagnostics_bundle(&out, &bundle).unwrap();
+
+        assert!(out.join("catalog-failures.json").exists());
+        let latest: Value =
+            serde_json::from_slice(&fs::read(out.join("catalog-failure-latest.json")).unwrap())
+                .unwrap();
+        assert_eq!(latest["schema"], "mister-magik-catalog-failure-v1");
+        let _ = fs::remove_dir_all(out);
     }
 
     const MAME_1942_FIXTURE: &str = r#"<?xml version="1.0"?>

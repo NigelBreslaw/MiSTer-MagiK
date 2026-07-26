@@ -61,6 +61,12 @@ pub(super) enum CatalogSessionEffect {
     CatalogSystemFailed {
         system_id: String,
     },
+    PersistCatalogFailure {
+        detail: String,
+        mode: CatalogRecoveryMode,
+        has_stale_catalog: bool,
+        system_id: Option<String>,
+    },
     CatalogBuildFinished,
     Ui(LauncherWorkerUiIntent),
     FinishMediaWorker,
@@ -236,6 +242,10 @@ impl LauncherCatalogSession {
                 self.handle_progress(context, title, detail, percent, now, &mut effects);
             }
             CatalogWorkerMessage::LoadFailed { error } => {
+                let has_stale_catalog = context.catalog_ready && !context.catalog_partial;
+                let mode = CatalogRecoveryMode::LoadFailure {
+                    transient: catalog_failure_is_transient(&error),
+                };
                 self.refresh_done = true;
                 self.foreground_update = false;
                 self.refresh_failed = true;
@@ -245,6 +255,12 @@ impl LauncherCatalogSession {
                 effects.push(CatalogSessionEffect::CatalogValidationFinished);
                 effects.push(CatalogSessionEffect::CatalogBuildFinished);
                 effects.event("library_load_failed", error.clone());
+                effects.push(CatalogSessionEffect::PersistCatalogFailure {
+                    detail: error.clone(),
+                    mode,
+                    has_stale_catalog,
+                    system_id: None,
+                });
                 effects.ui(LauncherWorkerUiIntent::ClearCatalogScan);
                 if context.catalog_partial {
                     effects.push(CatalogSessionEffect::DiscardPartialCatalog);
@@ -253,7 +269,7 @@ impl LauncherCatalogSession {
                     LauncherLifecycleInput::CatalogLoadFailed {
                         transient: catalog_failure_is_transient(&error),
                         error,
-                        has_stale_catalog: context.catalog_ready && !context.catalog_partial,
+                        has_stale_catalog,
                     },
                 ));
             }
@@ -297,6 +313,12 @@ impl LauncherCatalogSession {
                     "catalog_system_shard_failed",
                     format!("system={system_id} error={error}"),
                 );
+                effects.push(CatalogSessionEffect::PersistCatalogFailure {
+                    detail: error,
+                    mode: CatalogRecoveryMode::LoadFailure { transient: false },
+                    has_stale_catalog: context.catalog_ready && !context.catalog_partial,
+                    system_id: Some(system_id),
+                });
             }
             CatalogWorkerMessage::SearchQueryReady { request, result } => {
                 effects.push(CatalogSessionEffect::ApplySearchResult { request, result });
@@ -374,6 +396,12 @@ impl LauncherCatalogSession {
                 effects.push(CatalogSessionEffect::CatalogValidationFinished);
                 effects.push(CatalogSessionEffect::CatalogBuildFinished);
                 effects.event("library_db_save_failed", error.clone());
+                effects.push(CatalogSessionEffect::PersistCatalogFailure {
+                    detail: error.clone(),
+                    mode: CatalogRecoveryMode::PersistenceFailure { transient },
+                    has_stale_catalog: context.catalog_ready && !context.catalog_partial,
+                    system_id: None,
+                });
                 effects.ui(LauncherWorkerUiIntent::ClearCatalogScan);
                 effects.push(CatalogSessionEffect::Lifecycle(
                     LauncherLifecycleInput::CatalogRecoveryRequired {
@@ -417,6 +445,14 @@ impl LauncherCatalogSession {
                         CatalogRecoveryMode::RepairRequired
                     }
                 };
+                if mode == CatalogRecoveryMode::RepairRequired {
+                    effects.push(CatalogSessionEffect::PersistCatalogFailure {
+                        detail: detail.clone(),
+                        mode,
+                        has_stale_catalog: context.catalog_ready && !context.catalog_partial,
+                        system_id: None,
+                    });
+                }
                 effects.push(CatalogSessionEffect::Lifecycle(
                     LauncherLifecycleInput::CatalogRecoveryRequired {
                         error: detail,
@@ -766,6 +802,7 @@ mod tests {
                         | CatalogSessionEffect::CatalogSystemDiscovered { .. }
                         | CatalogSessionEffect::CatalogSystemReady { .. }
                         | CatalogSessionEffect::CatalogSystemFailed { .. }
+                        | CatalogSessionEffect::PersistCatalogFailure { .. }
                         | CatalogSessionEffect::CatalogBuildFinished
                         | CatalogSessionEffect::ApplySystemShard { .. }
                 )
@@ -783,6 +820,7 @@ mod tests {
                 | CatalogSessionEffect::CatalogSystemDiscovered { .. }
                 | CatalogSessionEffect::CatalogSystemReady { .. }
                 | CatalogSessionEffect::CatalogSystemFailed { .. }
+                | CatalogSessionEffect::PersistCatalogFailure { .. }
                 | CatalogSessionEffect::CatalogBuildFinished
                 | CatalogSessionEffect::ApplySystemShard { .. } => {
                     unreachable!("presentation effects filtered above")
@@ -815,6 +853,7 @@ mod tests {
                     | CatalogSessionEffect::CatalogSystemDiscovered { .. }
                     | CatalogSessionEffect::CatalogSystemReady { .. }
                     | CatalogSessionEffect::CatalogSystemFailed { .. }
+                    | CatalogSessionEffect::PersistCatalogFailure { .. }
                     | CatalogSessionEffect::CatalogBuildFinished
                     | CatalogSessionEffect::ApplySystemShard { .. }
             ) {
@@ -839,6 +878,7 @@ mod tests {
                 | CatalogSessionEffect::CatalogSystemDiscovered { .. }
                 | CatalogSessionEffect::CatalogSystemReady { .. }
                 | CatalogSessionEffect::CatalogSystemFailed { .. }
+                | CatalogSessionEffect::PersistCatalogFailure { .. }
                 | CatalogSessionEffect::CatalogBuildFinished
                 | CatalogSessionEffect::ApplySystemShard { .. } => {
                     unreachable!("presentation effects filtered above")
