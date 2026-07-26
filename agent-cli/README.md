@@ -38,7 +38,9 @@ another registered typed workflow; `catalog-lifecycle` performs an isolated
 full catalog build under `/tmp`, validates every generated shard, then removes
 the fixture and restores the ordinary launcher. Benchmarks never build or
 deploy a temporary runtime, and require the installed revision to match the
-clean local commit.
+clean local commit wherever runtime or platform files changed. Host-only
+benchmark changes may reconcile as a no-op without replacing the installed
+runtime.
 
 The launcher builds and runs `agent-cli` with Cargo's release profile. Explicit
 manifest, target-directory, and binary overrides remain available for tests and

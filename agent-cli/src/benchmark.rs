@@ -38,14 +38,11 @@ fn require_clean_installed_commit(
     device.execute(DeviceRequest::VerifyDevelopmentPlatform)?;
     device.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))?;
     let manifest = device.execute(DeviceRequest::ReadDevelopmentManifest)?;
-    let installed = crate::platform_manifest::parse_installed(
-        &manifest,
-        crate::platform_manifest::Layout::Development,
-    )?;
-    if installed.magik_revision() != head {
+    let reconciliation = crate::deploy::reconcile(repository, &manifest, &head);
+    if reconciliation.decision != crate::deploy::DeliveryDecision::NoOp {
         return Err(format!(
-            "benchmark installed revision {} does not match clean local commit {head}; run scripts/agent deliver first",
-            installed.magik_revision()
+            "benchmark requires delivery reconciliation to be no-op, found {}; run scripts/agent deliver first",
+            reconciliation.decision.label()
         )
         .into());
     }

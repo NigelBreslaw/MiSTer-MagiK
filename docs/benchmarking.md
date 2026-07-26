@@ -4,7 +4,9 @@
 workflow. Scenarios are a closed typed registry rather than a flag matrix. It
 never builds, deploys, replaces platform files, or reboots the MiSTer. The
 installed platform manifest and its hashes are the benchmark identity, and its
-MagiK revision must match the clean local Git HEAD.
+delivery reconciliation against the clean local Git HEAD must be a no-op.
+Host-only benchmark tooling changes therefore do not force an identical runtime
+revision, while pending runtime or platform changes remain a hard failure.
 
 Supported scenarios:
 
