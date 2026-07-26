@@ -1,0 +1,4 @@
+interface:
+  display_name: "MiSTer MagiK Rust LSP"
+  short_description: "Use bounded Rust analyzer tools in the active repository area"
+  default_prompt: "Use $magik-rust-lsp for semantic Rust navigation, Clippy diagnostics, and bounded preview-first renames in the active MiSTer MagiK area."
