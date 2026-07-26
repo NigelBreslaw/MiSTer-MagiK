@@ -103,8 +103,9 @@ component SearchKeyboard inherits Rectangle {
                 }
 
                 Text {
-                    text: MisterBridge.arcade-search-preparing ? "Preparing search…" :
-                        (MisterBridge.arcade-search-suggestion == "" ? "" : MisterBridge.arcade-search-suggestion);
+                    text: MisterBridge.arcade-search-status == 1 ? "Searching..." :
+                        (MisterBridge.arcade-search-status == 3 ? "Search unavailable" :
+                        (MisterBridge.arcade-search-suggestion == "" ? "" : MisterBridge.arcade-search-suggestion));
                     color: MisterBridge.arcade-search-suggestion == "" ? #706080 : #d7eef8;
                     font-size: 11px;
                     vertical-alignment: center;
@@ -205,7 +206,10 @@ export component ArcadeListScreen inherits Rectangle {
                 Text {
                     x: 16px;
                     y: 16px;
-                    text: count + " matches";
+                    text: MisterBridge.arcade-search-status == 1 ? "Searching..." :
+                        (MisterBridge.arcade-search-status == 3 ? "Search unavailable" :
+                        (count == 0 && MisterBridge.arcade-search-status == 2 ? "No matches" :
+                        count + " matches"));
                     color: MisterBridge.arcade-search-pane == 1 ? #06d6a0 : #706080;
                     font-size: 12px;
                 }
@@ -219,6 +223,17 @@ export component ArcadeListScreen inherits Rectangle {
                     border-width: 1px;
                     border-color: MisterBridge.arcade-search-pane == 1 ? #06d6a0 : #352848;
                     clip: true;
+
+                    Text {
+                        visible: MisterBridge.arcade-search-status != 2 || count == 0;
+                        text: MisterBridge.arcade-search-status == 1 ? "Searching..." :
+                            (MisterBridge.arcade-search-status == 3 ? "Search unavailable" :
+                            (count == 0 ? "No matches" : ""));
+                        color: #706080;
+                        font-size: 12px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
                 }
             }
         }
@@ -250,4 +265,3 @@ export component ArcadeListScreen inherits Rectangle {
         }
     }
 }
-

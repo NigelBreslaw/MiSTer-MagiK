@@ -845,6 +845,15 @@ pub enum ArcadeSearchPane {
     Results,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ArcadeSearchStatus {
+    #[default]
+    Idle,
+    Searching,
+    Ready,
+    Failed,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArcadeSearchRequest {
     pub request_id: u64,
@@ -858,7 +867,7 @@ pub struct ArcadeSearchRequest {
 pub struct ArcadeSearchState {
     pub query: String,
     pub suggestion: String,
-    pub preparing: bool,
+    pub status: ArcadeSearchStatus,
     pub selected_key: usize,
     pub pane: ArcadeSearchPane,
     results: Vec<usize>,
@@ -881,7 +890,7 @@ impl ArcadeSearchState {
         Self {
             query: String::new(),
             suggestion: String::new(),
-            preparing: false,
+            status: ArcadeSearchStatus::Idle,
             selected_key: 0,
             pane: ArcadeSearchPane::Keyboard,
             results: Vec::new(),
@@ -2976,7 +2985,7 @@ impl LauncherNav {
             || self.arcade_search.result_query != self.arcade_search.query
             || self.arcade_search.suggestion_system_id != system_id
             || self.arcade_search.suggestion_query != self.arcade_search.query
-            || self.arcade_search.preparing
+            || self.arcade_search.status == ArcadeSearchStatus::Searching
         {
             self.refresh_arcade_search_results(catalog, system_id);
         }
@@ -2989,7 +2998,7 @@ impl LauncherNav {
         self.arcade_search.result_query.clear();
         self.arcade_search.suggestion_system_id = system_id.to_string();
         self.arcade_search.suggestion_query.clear();
-        self.arcade_search.preparing = false;
+        self.arcade_search.status = ArcadeSearchStatus::Idle;
         self.arcade_search.request_pending = false;
         self.arcade_search.request_id = self.arcade_search.request_id.wrapping_add(1);
         self.arcade_search.pane = ArcadeSearchPane::Keyboard;
@@ -3016,14 +3025,14 @@ impl LauncherNav {
             self.arcade_search.result_query = self.arcade_search.query.clone();
             self.arcade_search.suggestion_system_id = system_id.to_string();
             self.arcade_search.suggestion_query = self.arcade_search.query.clone();
-            self.arcade_search.preparing = true;
+            self.arcade_search.status = ArcadeSearchStatus::Searching;
             self.arcade_search.pane = ArcadeSearchPane::Keyboard;
             self.arcade.reset();
             return;
         };
         self.arcade_search.results = results;
         self.arcade_search.suggestion = suggestion;
-        self.arcade_search.preparing = false;
+        self.arcade_search.status = ArcadeSearchStatus::Ready;
         self.arcade_search.result_system_id = system_id.to_string();
         self.arcade_search.result_query = self.arcade_search.query.clone();
         self.arcade_search.suggestion_system_id = system_id.to_string();
@@ -3048,7 +3057,7 @@ impl LauncherNav {
         self.arcade_search.result_query = self.arcade_search.query.clone();
         self.arcade_search.suggestion_system_id = system_id.to_string();
         self.arcade_search.suggestion_query = self.arcade_search.query.clone();
-        self.arcade_search.preparing = true;
+        self.arcade_search.status = ArcadeSearchStatus::Searching;
         self.arcade_search.request_id = self.arcade_search.request_id.wrapping_add(1);
         self.arcade_search.request_pending = true;
         self.arcade_search.pane = ArcadeSearchPane::Keyboard;
@@ -3097,7 +3106,7 @@ impl LauncherNav {
             .autocomplete
             .map(|candidate| candidate.word)
             .unwrap_or_default();
-        self.arcade_search.preparing = false;
+        self.arcade_search.status = ArcadeSearchStatus::Ready;
         self.arcade_search.request_pending = false;
         let count = self.arcade_search.results.len();
         if count == 0 {
@@ -3121,7 +3130,7 @@ impl LauncherNav {
         }
         self.arcade_search.results.clear();
         self.arcade_search.suggestion.clear();
-        self.arcade_search.preparing = false;
+        self.arcade_search.status = ArcadeSearchStatus::Failed;
         self.arcade_search.request_pending = false;
         self.arcade.reset();
         true
@@ -5369,14 +5378,14 @@ mod tests {
         nav.ensure_arcade_search_results(&catalog, "arcade");
 
         assert!(!catalog.text_indexes_ready());
-        assert!(nav.arcade_search.preparing);
+        assert_eq!(nav.arcade_search.status, ArcadeSearchStatus::Searching);
         assert_eq!(nav.arcade_search.pane, ArcadeSearchPane::Keyboard);
         assert_eq!(nav.active_arcade_game_count(&catalog, "arcade"), 0);
 
         assert!(catalog.ensure_text_indexes_ready());
         nav.refresh_arcade_search_if_active(&catalog, "arcade");
 
-        assert!(!nav.arcade_search.preparing);
+        assert_eq!(nav.arcade_search.status, ArcadeSearchStatus::Ready);
         assert_eq!(nav.active_arcade_game_count(&catalog, "arcade"), 1);
         assert_eq!(
             nav.active_arcade_game_at(&catalog, "arcade", 0)
@@ -5579,7 +5588,7 @@ mod tests {
             &catalog,
             state.clone()
         ));
-        assert!(nav.arcade_search.preparing);
+        assert_eq!(nav.arcade_search.status, ArcadeSearchStatus::Searching);
         assert_eq!(nav.arcade_search.query, "battle");
 
         assert!(catalog.ensure_text_indexes_ready());

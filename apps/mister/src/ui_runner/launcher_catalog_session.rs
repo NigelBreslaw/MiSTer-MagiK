@@ -43,17 +43,6 @@ pub(super) enum CatalogSessionEffect {
     },
     ConfirmCatalogSeed,
     DiscardPartialCatalog,
-    StartSearchIndex {
-        job: mister_magik_catalog::arcade_catalog::ArcadeTextIndexBuildJob,
-        games: usize,
-        source: CatalogSource,
-    },
-    SearchIndexesReady {
-        text_index_token: usize,
-        games: usize,
-        source: CatalogSource,
-        timing: mister_magik_catalog::arcade_catalog::ArcadeTextIndexBuildTiming,
-    },
     ApplySearchResult {
         request: launcher::ArcadeSearchRequest,
         result: mister_magik_catalog::persisted_search::PersistedCollectionSearchResult,
@@ -91,13 +80,6 @@ pub(super) enum CatalogSessionEffect {
     Confirm(launcher::ConfirmAction),
     Lifecycle(LauncherLifecycleInput),
     StartCatalogWorker(CatalogWorkerStart),
-}
-
-struct PendingSearchIndex {
-    job: mister_magik_catalog::arcade_catalog::ArcadeTextIndexBuildJob,
-    games: usize,
-    source: CatalogSource,
-    waiting_for_persistence: bool,
 }
 
 #[derive(Default)]
@@ -139,7 +121,6 @@ pub(super) struct LauncherCatalogSession {
     refresh_failed: bool,
     summary_only: bool,
     persisted_summary_seen: bool,
-    pending_search_index: Option<PendingSearchIndex>,
     deferred_worker: Option<DeferredCatalogWorker>,
     games_found_counter: GamesFoundCounter,
     bootstrap_counter_climb_logged: bool,
@@ -155,7 +136,6 @@ impl LauncherCatalogSession {
             refresh_failed: false,
             summary_only: false,
             persisted_summary_seen: false,
-            pending_search_index: None,
             deferred_worker: None,
             games_found_counter: GamesFoundCounter::default(),
             bootstrap_counter_climb_logged: false,
@@ -170,33 +150,6 @@ impl LauncherCatalogSession {
 
     pub(super) fn refresh_done(&self) -> bool {
         self.refresh_done
-    }
-
-    pub(super) fn maybe_start_search_index(
-        &mut self,
-        launcher_idle: bool,
-        search_index_running: bool,
-    ) -> CatalogSessionEffects {
-        let mut effects = CatalogSessionEffects::default();
-        if !launcher_idle || search_index_running {
-            return effects;
-        }
-        let Some(pending) = self.pending_search_index.as_ref() else {
-            return effects;
-        };
-        if pending.waiting_for_persistence {
-            return effects;
-        }
-        let pending = self
-            .pending_search_index
-            .take()
-            .expect("pending search index checked above");
-        effects.push(CatalogSessionEffect::StartSearchIndex {
-            job: pending.job,
-            games: pending.games,
-            source: pending.source,
-        });
-        effects
     }
 
     pub(super) fn mark_refresh_done(&mut self) {
@@ -288,7 +241,6 @@ impl LauncherCatalogSession {
                 self.foreground_update = false;
                 self.refresh_failed = true;
                 self.deferred_worker = None;
-                self.pending_search_index = None;
                 self.games_found_counter.reset();
                 effects.push(CatalogSessionEffect::FinishMediaWorker);
                 effects.push(CatalogSessionEffect::CatalogValidationFinished);
@@ -346,32 +298,6 @@ impl LauncherCatalogSession {
                     format!("system={system_id} error={error}"),
                 );
             }
-            CatalogWorkerMessage::SearchIndexBuildStarted {
-                text_index_token,
-                games,
-                source,
-            } => {
-                effects.event(
-                    "arcade_search_index_build_started",
-                    format!(
-                        "token={text_index_token} games={games} source={}",
-                        source.label()
-                    ),
-                );
-            }
-            CatalogWorkerMessage::SearchIndexesReady {
-                text_index_token,
-                games,
-                source,
-                timing,
-            } => {
-                effects.push(CatalogSessionEffect::SearchIndexesReady {
-                    text_index_token,
-                    games,
-                    source,
-                    timing,
-                });
-            }
             CatalogWorkerMessage::SearchQueryReady { request, result } => {
                 effects.push(CatalogSessionEffect::ApplySearchResult { request, result });
             }
@@ -428,9 +354,6 @@ impl LauncherCatalogSession {
                 effects.push(CatalogSessionEffect::MarkCatalogDurable {
                     generation_fingerprint,
                 });
-                if let Some(pending) = self.pending_search_index.as_mut() {
-                    pending.waiting_for_persistence = false;
-                }
                 let seconds = completed_build_seconds.unwrap_or_else(|| {
                     mister_magik_catalog::catalog_build_record::rounded_seconds(
                         Duration::from_micros(summary.scan_us.saturating_add(summary.import_us)),
@@ -446,7 +369,6 @@ impl LauncherCatalogSession {
                 self.refresh_done = true;
                 self.foreground_update = false;
                 self.refresh_failed = true;
-                self.pending_search_index = None;
                 effects.push(CatalogSessionEffect::FinishMediaWorker);
                 effects.push(CatalogSessionEffect::CatalogValidationFinished);
                 effects.event("library_db_save_failed", error.clone());
@@ -600,7 +522,6 @@ impl LauncherCatalogSession {
         publication_ack: Option<mpsc::Sender<()>>,
         effects: &mut CatalogSessionEffects,
     ) {
-        let text_index_job = ready_catalog.text_index_build_job();
         let cached_before_refresh = summary.is_none() && !durable_save_pending;
         let duplicate_cached_catalog = !self.summary_only
             && duplicate_cached_catalog_ready(catalog_ready, cached_before_refresh);
@@ -619,15 +540,6 @@ impl LauncherCatalogSession {
                 generation_fingerprint,
                 publication_ack: publication_ack.clone(),
             });
-            if let Some(job) = text_index_job {
-                let pending = PendingSearchIndex {
-                    job,
-                    games: catalog_len,
-                    source,
-                    waiting_for_persistence: durable_save_pending,
-                };
-                self.pending_search_index = Some(pending);
-            }
             effects.event(
                 "library_ready",
                 format!("games={catalog_len} load_us={load_us}"),
@@ -821,8 +733,8 @@ mod tests {
                 CatalogSessionEffect::MarkCatalogDurable { .. } => "mark-durable",
                 CatalogSessionEffect::ConfirmCatalogSeed => "confirm-seed",
                 CatalogSessionEffect::DiscardPartialCatalog => "discard-partial",
-                CatalogSessionEffect::StartSearchIndex { .. } => "start-search-index",
-                CatalogSessionEffect::SearchIndexesReady { .. } => "search-indexes-ready",
+                CatalogSessionEffect::ApplySearchResult { .. } => "search-result",
+                CatalogSessionEffect::FailSearchRequest { .. } => "search-failed",
                 CatalogSessionEffect::SyncCatalogBridge => "sync",
                 CatalogSessionEffect::CatalogBuildStarted
                 | CatalogSessionEffect::CatalogSystemDiscovered { .. }
@@ -873,11 +785,11 @@ mod tests {
                 }
                 CatalogSessionEffect::ConfirmCatalogSeed => effect_names.push("confirm-seed"),
                 CatalogSessionEffect::DiscardPartialCatalog => effect_names.push("discard-partial"),
-                CatalogSessionEffect::StartSearchIndex { .. } => {
-                    effect_names.push("start-search-index")
+                CatalogSessionEffect::ApplySearchResult { .. } => {
+                    effect_names.push("search-result")
                 }
-                CatalogSessionEffect::SearchIndexesReady { .. } => {
-                    effect_names.push("search-indexes-ready")
+                CatalogSessionEffect::FailSearchRequest { .. } => {
+                    effect_names.push("search-failed")
                 }
                 CatalogSessionEffect::SyncCatalogBridge => effect_names.push("sync"),
                 CatalogSessionEffect::CatalogBuildStarted
@@ -1050,104 +962,6 @@ mod tests {
                 .into_effects()
                 .into_iter()
                 .any(|effect| matches!(effect, CatalogSessionEffect::CatalogBuildFinished))
-        );
-    }
-
-    #[test]
-    fn fresh_catalog_schedules_search_only_after_persistence_and_idle() {
-        let now = Instant::now();
-        let mut session = LauncherCatalogSession::new(true);
-        let catalog = ArcadeCatalog::new_with_deferred_text_indexes(
-            std::path::PathBuf::from("/media/fat/_Arcade"),
-            vec![arcade_game("Street Fighter II").build()],
-            vec![arcade_system("arcade", 1)],
-            Vec::new(),
-        );
-        let ready_effects = session.handle_worker_message(
-            CatalogWorkerMessageContext {
-                catalog_ready: false,
-                catalog_partial: false,
-                screen: Screen::Home,
-                media_gate: None,
-            },
-            CatalogWorkerMessage::Ready {
-                catalog,
-                summary: None,
-                load_us: 1,
-                source: CatalogSource::FreshBuild,
-                durable_save_pending: true,
-                generation_fingerprint: None,
-                publication_ack: None,
-            },
-            now,
-        );
-        assert!(
-            !ready_effects
-                .into_effects()
-                .into_iter()
-                .any(|effect| { matches!(effect, CatalogSessionEffect::StartSearchIndex { .. }) })
-        );
-
-        let persisted_effects = session.handle_worker_message(
-            CatalogWorkerMessageContext {
-                catalog_ready: true,
-                catalog_partial: false,
-                screen: Screen::Home,
-                media_gate: None,
-            },
-            CatalogWorkerMessage::Persisted {
-                summary: refresh_summary(),
-                completed_build_seconds: None,
-                generation_fingerprint: None,
-            },
-            now,
-        );
-        assert!(
-            !persisted_effects
-                .into_effects()
-                .into_iter()
-                .any(|effect| { matches!(effect, CatalogSessionEffect::StartSearchIndex { .. }) })
-        );
-        assert!(effect_names(session.maybe_start_search_index(false, false)).is_empty());
-        assert_eq!(
-            effect_names(session.maybe_start_search_index(true, false)),
-            vec!["start-search-index"]
-        );
-        assert!(effect_names(session.maybe_start_search_index(true, false)).is_empty());
-    }
-
-    #[test]
-    fn warm_catalog_search_waits_for_launcher_idle() {
-        let now = Instant::now();
-        let mut session = LauncherCatalogSession::new(false);
-        let ready_effects = session.handle_worker_message(
-            CatalogWorkerMessageContext {
-                catalog_ready: false,
-                catalog_partial: false,
-                screen: Screen::Arcade,
-                media_gate: None,
-            },
-            CatalogWorkerMessage::Ready {
-                catalog: ArcadeCatalog::new_with_deferred_text_indexes(
-                    std::path::PathBuf::from("/media/fat/_Arcade"),
-                    vec![arcade_game("Street Fighter II").build()],
-                    vec![arcade_system("arcade", 1)],
-                    Vec::new(),
-                ),
-                summary: None,
-                load_us: 1,
-                source: CatalogSource::NavigationProjection,
-                durable_save_pending: false,
-                generation_fingerprint: None,
-                publication_ack: None,
-            },
-            now,
-        );
-        assert!(!effect_names(ready_effects).contains(&"start-search-index"));
-        assert!(effect_names(session.maybe_start_search_index(false, false)).is_empty());
-        assert_eq!(
-            effect_names(session.maybe_start_search_index(true, false)),
-            vec!["start-search-index"]
         );
     }
 

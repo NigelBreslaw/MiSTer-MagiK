@@ -98,7 +98,12 @@ export component ArcadeListScreen inherits Rectangle {
         width: parent.width - MisterUi.grid-x * 4;
         title: MisterBridge.arcade-search-active ? "Search" : MisterBridge.active-system-title;
         subtitle: "";
-        status: root.count + (MisterBridge.arcade-search-active ? " matches" : " games");
+        status: MisterBridge.arcade-search-active
+            ? (MisterBridge.arcade-search-status == 1 ? "Searching..." :
+                (MisterBridge.arcade-search-status == 3 ? "Search unavailable" :
+                (root.count == 0 && MisterBridge.arcade-search-status == 2
+                    ? "No matches" : root.count + " matches")))
+            : root.count + " games";
     }
 
     if MisterBridge.arcade-search-active : SearchKeyboard {
@@ -117,6 +122,19 @@ export component ArcadeListScreen inherits Rectangle {
         border-width: MisterUi.border;
         border-color: MisterBridge.arcade-search-pane == 1 ? CrtTheme.accent : CrtTheme.border;
         clip: true;
+
+        Text {
+            visible: MisterBridge.arcade-search-active
+                && (MisterBridge.arcade-search-status != 2 || root.count == 0);
+            font-family: MisterUi.crt-font-family;
+            text: MisterBridge.arcade-search-status == 1 ? "Searching..." :
+                (MisterBridge.arcade-search-status == 3 ? "Search unavailable" :
+                (root.count == 0 ? "No matches" : ""));
+            color: CrtTheme.muted;
+            font-size: MisterUi.body-font;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
     }
 
     if root.count > root.visible-game-rows : Rectangle {

@@ -1162,17 +1162,6 @@ pub(super) enum CatalogWorkerMessage {
         system_id: String,
         error: String,
     },
-    SearchIndexBuildStarted {
-        text_index_token: usize,
-        games: usize,
-        source: CatalogSource,
-    },
-    SearchIndexesReady {
-        text_index_token: usize,
-        games: usize,
-        source: CatalogSource,
-        timing: mister_magik_catalog::arcade_catalog::ArcadeTextIndexBuildTiming,
-    },
     SearchQueryReady {
         request: launcher::ArcadeSearchRequest,
         result: mister_magik_catalog::persisted_search::PersistedCollectionSearchResult,

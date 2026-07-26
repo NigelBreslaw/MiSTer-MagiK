@@ -2742,7 +2742,6 @@ pub(super) fn run_launcher_loop(
         mister_magik_catalog::builder_service::set_background_heavy_work_allowed(
             catalog_background_allowed,
         );
-        scheduler.set_search_index_allowed(catalog_background_allowed);
         if let Some(request) = nav.take_arcade_search_request(&catalog, catalog_version) {
             scheduler.request_arcade_search(request);
         }
@@ -2771,27 +2770,6 @@ pub(super) fn run_launcher_loop(
                 }
             }
         }
-        let search_index_effects = catalog_session
-            .maybe_start_search_index(catalog_background_allowed, scheduler.search_index_running());
-        apply_catalog_session_effects(
-            search_index_effects,
-            &app,
-            &mut nav,
-            &mut catalog,
-            &mut catalog_ready,
-            &mut catalog_version,
-            &mut return_capsule_active,
-            &mut catalog_generation,
-            &mut pending_launch_return_state,
-            &mut preview,
-            &mut media_session,
-            &mut scheduler,
-            &mut lifecycle,
-            &mut lifecycle_effects,
-            &mut full_bridge_dirty,
-            loop_start,
-            start,
-        );
         let deferred_worker_policy = deferred_catalog_worker_start_policy(
             catalog_ready,
             frame_accounting.first_visible_copy_done(),
@@ -5140,10 +5118,11 @@ pub(super) fn run_launcher_loop(
                 visual_index: nav.arcade.visual_index,
                 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
                 home_trace: LauncherHomeFrameTrace::from_nav(&nav),
-                search_index_state: if catalog.text_indexes_ready() {
-                    "ready"
-                } else {
-                    "building"
+                search_index_state: match nav.arcade_search.status {
+                    launcher::ArcadeSearchStatus::Idle => "idle",
+                    launcher::ArcadeSearchStatus::Searching => "searching",
+                    launcher::ArcadeSearchStatus::Ready => "ready",
+                    launcher::ArcadeSearchStatus::Failed => "failed",
                 },
             },
             timing: LauncherFrameTiming {
@@ -5610,12 +5589,6 @@ fn should_defer_catalog_message(
     stationary_edge_since: Option<Instant>,
     now: Instant,
 ) -> bool {
-    if matches!(
-        message,
-        CatalogWorkerMessage::Ready { catalog, .. } if !catalog.text_indexes_ready()
-    ) {
-        return false;
-    }
     if !catalog_ready
         || nav.screen != Screen::Arcade
         || !matches!(message, CatalogWorkerMessage::Ready { .. })
@@ -5960,62 +5933,6 @@ fn apply_catalog_session_effects(
                 let bridge = app.global::<slint_ui::launcher::MisterBridge>();
                 preview.clear(&bridge);
                 *full_bridge_dirty = true;
-            }
-            CatalogSessionEffect::StartSearchIndex { job, games, source } => {
-                print_startup_event(
-                    start,
-                    "arcade_search_index_scheduled",
-                    format!(
-                        "games={games} source={} after=launcher_idle",
-                        source.label()
-                    ),
-                );
-                scheduler.start_search_index(job, games, source);
-            }
-            CatalogSessionEffect::SearchIndexesReady {
-                text_index_token,
-                games,
-                source,
-                timing,
-            } => {
-                if catalog.text_index_token() != text_index_token || !catalog.text_indexes_ready() {
-                    print_startup_event(
-                        start,
-                        "arcade_search_index_stale_ignored",
-                        format!("token={text_index_token}"),
-                    );
-                    continue;
-                }
-                print_startup_event(
-                    start,
-                    "arcade_search_index_ready",
-                    format!(
-                        "token={text_index_token} built={} games={games} elapsed_us={} source={} search_keys_us={} autocomplete_us={}",
-                        u8::from(timing.built),
-                        timing.total_us,
-                        source.label(),
-                        timing.search_keys_us,
-                        timing.autocomplete_us
-                    ),
-                );
-                let return_restored =
-                    apply_pending_launch_return_state(nav, catalog, pending_launch_return_state);
-                if return_restored {
-                    emit_return_context_restored(
-                        lifecycle,
-                        lifecycle_effects,
-                        nav,
-                        catalog,
-                        preview,
-                        now,
-                    );
-                    lifecycle.tick_startup_reveal(now, true, lifecycle_effects);
-                }
-                if let Some(system_id) = active_system(catalog, nav).map(|system| system.id.clone())
-                {
-                    nav.refresh_arcade_search_if_active(catalog, &system_id);
-                    *full_bridge_dirty = true;
-                }
             }
             CatalogSessionEffect::ApplySearchResult { request, result } => {
                 if request.catalog_version == *catalog_version {

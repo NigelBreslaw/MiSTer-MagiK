@@ -3,10 +3,6 @@
 
 use super::*;
 use std::collections::{BTreeSet, VecDeque};
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicUsize, Ordering},
-};
 
 pub(super) const CATALOG_MESSAGES_PER_FRAME: usize = 2;
 pub(super) const MEDIA_MESSAGES_PER_FRAME: usize = 2;
@@ -86,11 +82,6 @@ enum CatalogJobState {
     Running(mpsc::Receiver<CatalogWorkerMessage>),
 }
 
-enum SearchIndexJobState {
-    Idle,
-    Running(mpsc::Receiver<CatalogWorkerMessage>),
-}
-
 enum SearchQueryJobState {
     Idle,
     Running(mpsc::Receiver<CatalogWorkerMessage>),
@@ -127,9 +118,6 @@ enum MediaJobState {
 
 pub(super) struct LauncherScheduler {
     catalog: CatalogJobState,
-    search_index: SearchIndexJobState,
-    search_index_generation: Arc<AtomicUsize>,
-    search_index_allowed: Arc<AtomicBool>,
     search_query: SearchQueryJobState,
     pending_search_query: Option<launcher::ArcadeSearchRequest>,
     system_shard: SystemShardJobState,
@@ -144,9 +132,6 @@ impl LauncherScheduler {
     pub(super) fn new(launch_handoff_bench_enabled: bool) -> Self {
         Self {
             catalog: CatalogJobState::Idle,
-            search_index: SearchIndexJobState::Idle,
-            search_index_generation: Arc::new(AtomicUsize::new(0)),
-            search_index_allowed: Arc::new(AtomicBool::new(false)),
             search_query: SearchQueryJobState::Idle,
             pending_search_query: None,
             system_shard: SystemShardJobState::Idle,
@@ -164,13 +149,8 @@ impl LauncherScheduler {
 
     pub(super) fn catalog_messages_running(&self) -> bool {
         self.catalog_worker_running()
-            || matches!(self.search_index, SearchIndexJobState::Running(_))
             || matches!(self.search_query, SearchQueryJobState::Running(_))
             || matches!(self.system_shard, SystemShardJobState::Running { .. })
-    }
-
-    pub(super) fn search_index_running(&self) -> bool {
-        matches!(self.search_index, SearchIndexJobState::Running(_))
     }
 
     pub(super) fn system_shard_loading(&self, system_id: &str) -> bool {
@@ -345,10 +325,6 @@ impl LauncherScheduler {
         }
     }
 
-    pub(super) fn set_search_index_allowed(&self, allowed: bool) {
-        self.search_index_allowed.store(allowed, Ordering::Release);
-    }
-
     pub(super) fn request_arcade_search(&mut self, request: launcher::ArcadeSearchRequest) {
         self.pending_search_query = Some(request);
         self.start_next_arcade_search();
@@ -396,64 +372,6 @@ impl LauncherScheduler {
         }
     }
 
-    /// This is entered by the catalog session only after persistence (when
-    /// required) and the launcher's interaction-aware idle gate. Starting a
-    /// new generation cancels any stale index job at its next cooperative
-    /// checkpoint.
-    pub(super) fn start_search_index(
-        &mut self,
-        job: mister_magik_catalog::arcade_catalog::ArcadeTextIndexBuildJob,
-        games: usize,
-        source: CatalogSource,
-    ) {
-        let generation = self.search_index_generation.fetch_add(1, Ordering::AcqRel) + 1;
-        let active_generation = Arc::clone(&self.search_index_generation);
-        let search_index_allowed = Arc::clone(&self.search_index_allowed);
-        let text_index_token = job.text_index_token();
-        let (tx, rx) = mpsc::channel();
-        self.search_index = SearchIndexJobState::Running(rx);
-        if std::thread::Builder::new()
-            .name("arcade-search-index".to_string())
-            .spawn(move || {
-                let lease = mister_magik_catalog::work_coordinator::background("search-index");
-                if tx
-                    .send(CatalogWorkerMessage::SearchIndexBuildStarted {
-                        text_index_token,
-                        games,
-                        source,
-                    })
-                    .is_err()
-                {
-                    return;
-                }
-                mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
-                    mister_magik_catalog::runtime_thread::RuntimeThreadRole::SearchIndex,
-                );
-                let Some(timing) = job.build_with_timing_while(|| {
-                    lease.cooperate();
-                    while !search_index_allowed.load(Ordering::Acquire) {
-                        if active_generation.load(Ordering::Acquire) != generation {
-                            return false;
-                        }
-                        std::thread::sleep(Duration::from_millis(2));
-                    }
-                    active_generation.load(Ordering::Acquire) == generation
-                }) else {
-                    return;
-                };
-                let _ = tx.send(CatalogWorkerMessage::SearchIndexesReady {
-                    text_index_token,
-                    games,
-                    source,
-                    timing,
-                });
-            })
-            .is_err()
-        {
-            self.search_index = SearchIndexJobState::Idle;
-        }
-    }
-
     pub(super) fn start_catalog_worker(
         &mut self,
         root: String,
@@ -486,22 +404,6 @@ impl LauncherScheduler {
         }
         if disconnected {
             self.catalog = CatalogJobState::Idle;
-        }
-        let mut search_disconnected = false;
-        if let SearchIndexJobState::Running(rx) = &self.search_index {
-            while out.events.len() < CATALOG_MESSAGES_PER_FRAME {
-                match rx.try_recv() {
-                    Ok(message) => out.push(message),
-                    Err(mpsc::TryRecvError::Empty) => break,
-                    Err(mpsc::TryRecvError::Disconnected) => {
-                        search_disconnected = true;
-                        break;
-                    }
-                }
-            }
-        }
-        if search_disconnected {
-            self.search_index = SearchIndexJobState::Idle;
         }
         let mut search_query_terminal = false;
         if let SearchQueryJobState::Running(rx) = &self.search_query {

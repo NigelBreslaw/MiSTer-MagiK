@@ -124,7 +124,8 @@ export global MisterBridge {
     in-out property <bool> arcade-search-active;
     in-out property <string> arcade-search-query;
     in-out property <string> arcade-search-suggestion;
-    in-out property <bool> arcade-search-preparing;
+    // 0 idle, 1 searching, 2 ready, 3 failed.
+    in-out property <int> arcade-search-status;
     in-out property <[string]> arcade-search-keys;
     in-out property <int> arcade-search-key-selected;
     // 0=keyboard, 1=results.
