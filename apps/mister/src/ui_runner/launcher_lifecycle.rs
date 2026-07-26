@@ -685,13 +685,17 @@ impl LauncherLifecycle {
             } => {
                 self.startup_reveal_state = StartupRevealState::RestoreContext;
                 out.startup_event("startup_restore_context", "mode=return_from_game");
-                self.startup_reveal_state = StartupRevealState::WaitRelevantPreview;
                 out.startup_event(
                     "return_context_restored",
                     format!(
                         "screen={screen} system_id={system_id} filter={filter} game_path={game_path} game_index={game_index} visual_index={visual_index:.3} preview_expected={preview_expected}"
                     ),
                 );
+                if *preview_expected {
+                    self.startup_reveal_state = StartupRevealState::WaitRelevantPreview;
+                } else {
+                    self.mark_reveal_ready("preview_state=not_required", out);
+                }
                 return self.step(BridgeSyncPlan::None);
             }
             LauncherLifecycleInput::StartupReturnPreviewReady { preview_state } => {
@@ -1294,6 +1298,40 @@ mod tests {
         );
         assert!(lifecycle.startup_can_present_frame());
         assert!(effect_names(&effects).contains(&"return_preview_ready"));
+        assert!(effect_names(&effects).contains(&"launcher_reveal_ready"));
+    }
+
+    #[test]
+    fn return_start_reveals_when_no_preview_is_expected() {
+        let now = Instant::now();
+        let mut lifecycle = lifecycle();
+        let mut effects = LifecycleEffects::new();
+
+        lifecycle.begin_startup_reveal(StartupMode::ReturnFromGame, now, &mut effects);
+        lifecycle.handle(
+            LauncherLifecycleInput::StartupReturnCatalogHydrationNeeded,
+            &mut effects,
+        );
+        effects.clear();
+
+        lifecycle.handle(
+            LauncherLifecycleInput::StartupReturnContextRestored {
+                screen: "library",
+                system_id: "nes".to_string(),
+                filter: "all".to_string(),
+                game_path: String::new(),
+                game_index: 0,
+                visual_index: 0.0,
+                preview_expected: false,
+            },
+            &mut effects,
+        );
+
+        assert_eq!(
+            lifecycle.startup_status().state,
+            StartupRevealState::RevealLauncher
+        );
+        assert!(lifecycle.startup_can_present_frame());
         assert!(effect_names(&effects).contains(&"launcher_reveal_ready"));
     }
 
