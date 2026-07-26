@@ -1437,26 +1437,11 @@ fn unix_secs_now() -> u64 {
 }
 
 fn fetch_manifest_text(manifest_url: &str) -> Result<(String, HttpCacheMetadata), String> {
-    let headers_path = PathBuf::from(format!(
-        "/tmp/mister-magik-media-manifest-{}.headers",
-        unix_ms_now()
-    ));
-    let mut curl = Command::new("curl");
-    add_curl_download_args(&mut curl, manifest_url, &headers_path, true);
-    let output = curl.output().map_err(|e| format!("spawn curl: {e}"))?;
-    let header_text = fs::read_to_string(&headers_path).unwrap_or_default();
-    let _ = fs::remove_file(headers_path);
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        if stderr.is_empty() {
-            return Err(format!("curl exited with {}", output.status));
-        }
-        return Err(format!("curl exited with {}: {stderr}", output.status));
-    }
-    let body = String::from_utf8(output.stdout).map_err(|e| format!("manifest utf8: {e}"))?;
+    let fetched = crate::media_http::fetch_signed_manifest(manifest_url)?;
+    let body = String::from_utf8(fetched.bytes).map_err(|e| format!("manifest utf8: {e}"))?;
     Ok((
         body,
-        parse_http_headers(&header_text, manifest_url, "response"),
+        parse_http_headers(&fetched.headers, manifest_url, "response"),
     ))
 }
 
@@ -1588,10 +1573,12 @@ impl MediaWorkerConfig {
         if !valid_image_size(&image_size) {
             return Err(format!("invalid MISTER_MEDIA_SIZE: {image_size}"));
         }
+        let manifest_url = std::env::var("MISTER_MEDIA_MANIFEST_URL")
+            .unwrap_or_else(|_| DEFAULT_MANIFEST_URL.to_string());
+        mister_magik_media_contract::validate_https_manifest_url(&manifest_url)?;
         Ok(Self {
             policy,
-            manifest_url: std::env::var("MISTER_MEDIA_MANIFEST_URL")
-                .unwrap_or_else(|_| DEFAULT_MANIFEST_URL.to_string()),
+            manifest_url,
             image_size,
             asset_dir: PathBuf::from(
                 std::env::var("MISTER_MEDIA_ASSET_DIR")

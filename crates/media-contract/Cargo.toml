@@ -15,4 +15,6 @@ warnings = "deny"
 all = "deny"
 
 [dependencies]
+ed25519-dalek = { version = "2.2.0", default-features = false, features = ["std"] }
 mister-magik-catalog = { path = "../catalog", default-features = false }
+serde_json = "1"

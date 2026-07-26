@@ -8,7 +8,7 @@ use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::Path;
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -344,15 +344,82 @@ fn normalize_variant(raw: &str) -> Result<String> {
 }
 
 fn load_manifest(url: &str) -> Result<MediaManifest> {
-    let out = Command::new("curl").args(["-fsSL", url]).output()?;
-    if !out.status.success() {
+    mister_magik_media_contract::validate_https_manifest_url(url)?;
+    let manifest = fetch_https_bytes(
+        url,
+        mister_magik_media_contract::MAX_MANIFEST_BYTES,
+        "media manifest",
+    )?;
+    let signature_url = mister_magik_media_contract::manifest_signature_url(url)?;
+    let signature = fetch_https_bytes(
+        &signature_url,
+        mister_magik_media_contract::MAX_MANIFEST_SIGNATURE_BYTES,
+        "media manifest signature",
+    )?;
+    mister_magik_media_contract::verify_manifest_signature(&manifest, &signature)?;
+    parse_manifest(&serde_json::from_slice(&manifest)?, url)
+}
+
+fn fetch_https_bytes(url: &str, max_bytes: u64, label: &str) -> Result<Vec<u8>> {
+    let mut command = Command::new("curl");
+    add_manifest_curl_args(&mut command, url, max_bytes);
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let mut stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            terminate_child(&mut child);
+            return Err(format!("missing curl stdout for {label}").into());
+        }
+    };
+    let mut bytes = Vec::new();
+    let read_result = stdout
+        .by_ref()
+        .take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes);
+    if read_result.is_err() || bytes.len() as u64 > max_bytes {
+        terminate_child(&mut child);
+    }
+    let output = child.wait_with_output()?;
+    read_result?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(format!("{label} exceeds {max_bytes} bytes").into());
+    }
+    if !output.status.success() {
         return Err(format!(
-            "failed to fetch manifest from {url}: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
+            "failed to fetch {label} from {url}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
         )
         .into());
     }
-    parse_manifest(&serde_json::from_slice(&out.stdout)?, url)
+    Ok(bytes)
+}
+
+fn add_manifest_curl_args(command: &mut Command, url: &str, max_bytes: u64) {
+    command
+        .args([
+            "--fail",
+            "--silent",
+            "--show-error",
+            "--location",
+            "--proto",
+            "=https",
+            "--proto-redir",
+            "=https",
+            "--connect-timeout",
+            "10",
+            "--max-time",
+            "15",
+            "--max-filesize",
+        ])
+        .arg(max_bytes.to_string())
+        .args(["--header", "Accept-Encoding: identity", "-o", "-", url]);
+}
+
+fn terminate_child(child: &mut Child) {
+    let _ = child.kill();
 }
 
 fn parse_manifest(value: &Value, manifest_url: &str) -> Result<MediaManifest> {
@@ -1098,6 +1165,25 @@ case "$content_encoding" in
     result="unsupported-content-encoding-$content_encoding"
     ;;
 esac
+if [ "$result" = "downloaded" ]; then
+  decode_pid=$!
+  exec 3<"$decode_pipe"
+  head -c "$expected_bytes" <&3 > "$decoded"
+  decode_head_rc=$?
+  extra_bytes="$(dd bs=1 count=1 <&3 2>/dev/null | wc -c)"
+  exec 3<&-
+  wait "$decode_pid"
+  rc=$?
+  rm -f "$decode_pipe"
+  if [ "$extra_bytes" -ne 0 ]; then
+    result="size-mismatch"
+    finish
+  fi
+  if [ "$decode_head_rc" -ne 0 ]; then
+    result="decode-bound-failed-$decode_head_rc"
+    finish
+  fi
+fi
 decompress_ms="$(elapsed "$t")"
 if [ "$rc" -ne 0 ]; then
   if [ "$result" = "downloaded" ]; then

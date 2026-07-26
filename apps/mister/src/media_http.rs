@@ -1,0 +1,163 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+use mister_magik_media_contract::{
+    MAX_MANIFEST_BYTES, MAX_MANIFEST_SIGNATURE_BYTES, manifest_signature_url,
+    validate_https_manifest_url, verify_manifest_signature,
+};
+use std::fs;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+const MANIFEST_CONNECT_TIMEOUT_SECS: u64 = 10;
+const MANIFEST_FETCH_TIMEOUT_SECS: u64 = 15;
+
+pub(crate) struct SignedManifestFetch {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) headers: String,
+}
+
+pub(crate) fn fetch_signed_manifest(url: &str) -> Result<SignedManifestFetch, String> {
+    validate_https_manifest_url(url)?;
+    let manifest = fetch_https_bytes(url, MAX_MANIFEST_BYTES, "manifest")?;
+    let signature_url = manifest_signature_url(url)?;
+    let signature = fetch_https_bytes(
+        &signature_url,
+        MAX_MANIFEST_SIGNATURE_BYTES,
+        "manifest signature",
+    )?;
+    verify_manifest_signature(&manifest.bytes, &signature.bytes)?;
+    Ok(SignedManifestFetch {
+        bytes: manifest.bytes,
+        headers: manifest.headers,
+    })
+}
+
+struct HttpsFetch {
+    bytes: Vec<u8>,
+    headers: String,
+}
+
+fn fetch_https_bytes(url: &str, max_bytes: u64, label: &str) -> Result<HttpsFetch, String> {
+    validate_https_manifest_url(url)?;
+    let headers_path = temporary_headers_path(label);
+    let mut command = Command::new("curl");
+    add_https_fetch_args(&mut command, url, &headers_path, max_bytes);
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("spawn curl for {label}: {error}"))?;
+    let mut stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            terminate_child(&mut child);
+            let _ = fs::remove_file(&headers_path);
+            return Err(format!("missing curl stdout for {label}"));
+        }
+    };
+    let mut bytes = Vec::new();
+    let read_result = stdout
+        .by_ref()
+        .take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("read {label}: {error}"));
+    if read_result.is_err() || bytes.len() as u64 > max_bytes {
+        terminate_child(&mut child);
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("wait for {label} curl: {error}"))?;
+    let headers = fs::read_to_string(&headers_path).unwrap_or_default();
+    let _ = fs::remove_file(headers_path);
+    read_result?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(format!("{label} exceeds {max_bytes} bytes"));
+    }
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if stderr.is_empty() {
+            return Err(format!("{label} curl exited with {}", output.status));
+        }
+        return Err(format!(
+            "{label} curl exited with {}: {stderr}",
+            output.status
+        ));
+    }
+    Ok(HttpsFetch { bytes, headers })
+}
+
+fn add_https_fetch_args(command: &mut Command, url: &str, headers_path: &Path, max_bytes: u64) {
+    command
+        .arg("--fail")
+        .arg("--silent")
+        .arg("--show-error")
+        .arg("--location")
+        .arg("--proto")
+        .arg("=https")
+        .arg("--proto-redir")
+        .arg("=https")
+        .arg("--connect-timeout")
+        .arg(MANIFEST_CONNECT_TIMEOUT_SECS.to_string())
+        .arg("--max-time")
+        .arg(MANIFEST_FETCH_TIMEOUT_SECS.to_string())
+        .arg("--max-filesize")
+        .arg(max_bytes.to_string())
+        .arg("--header")
+        .arg("Accept-Encoding: identity")
+        .arg("-D")
+        .arg(headers_path)
+        .arg("-o")
+        .arg("-");
+    if Path::new("/etc/ssl/certs/cacert.pem").is_file() {
+        command.arg("--cacert").arg("/etc/ssl/certs/cacert.pem");
+    }
+    command.arg(url);
+}
+
+fn terminate_child(child: &mut Child) {
+    let _ = child.kill();
+}
+
+fn temporary_headers_path(label: &str) -> PathBuf {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let label = label.replace(' ', "-");
+    PathBuf::from(format!(
+        "/tmp/mister-magik-{label}-{}-{stamp}.headers",
+        std::process::id()
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsString;
+
+    #[test]
+    fn manifest_curl_is_https_only_and_bounded() {
+        let mut command = Command::new("curl");
+        add_https_fetch_args(
+            &mut command,
+            "https://assets.example/manifest.json",
+            Path::new("/tmp/headers"),
+            MAX_MANIFEST_BYTES,
+        );
+        let args = command.get_args().map(OsString::from).collect::<Vec<_>>();
+        let text = args
+            .iter()
+            .map(|arg| arg.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        assert!(text.contains("--proto =https"));
+        assert!(text.contains("--proto-redir =https"));
+        assert!(text.contains("--connect-timeout 10"));
+        assert!(text.contains("--max-time 15"));
+        assert!(text.contains("--max-filesize 262144"));
+    }
+}

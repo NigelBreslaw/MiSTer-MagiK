@@ -86,6 +86,7 @@ mod input;
 mod media_bench_download;
 #[cfg(feature = "bench-tools")]
 mod media_bench_save;
+mod media_http;
 mod media_pack_save;
 mod memory_pressure;
 mod mr_audio;

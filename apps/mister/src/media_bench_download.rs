@@ -252,22 +252,8 @@ fn parse_identity_variant(value: &str) -> Result<String, String> {
 }
 
 fn fetch_text(url: &str) -> Result<String, String> {
-    let mut curl = Command::new("curl");
-    add_curl_download_args(&mut curl, url, None, true);
-    let output = curl
-        .arg("-o")
-        .arg("-")
-        .arg(url)
-        .output()
-        .map_err(|e| format!("spawn curl: {e}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "curl manifest failed with {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    String::from_utf8(output.stdout).map_err(|e| format!("manifest utf8: {e}"))
+    let fetched = crate::media_http::fetch_signed_manifest(url)?;
+    String::from_utf8(fetched.bytes).map_err(|e| format!("manifest utf8: {e}"))
 }
 
 fn run_one(
