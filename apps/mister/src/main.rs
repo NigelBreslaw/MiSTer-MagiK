@@ -27,6 +27,7 @@
 //!     fpga-latch-pattern
 //!                        fill scanout slots and vblank-latch them in FPGA
 //!     catalog-v3-inspect validate the registry, shards, state, and scanner cache
+//!     search-bench       benchmark persisted Arcade FTS5 search
 //!     hbmame-metadata-from-library
 //!                        build supplemental HBMAME metadata from parsed MRA parents
 //!   Bench tools (`--features bench-tools`):
@@ -92,6 +93,7 @@ mod preview_pack_bench;
 mod preview_state;
 use mister_magik_mister_runtime::runtime_status;
 mod screenshot_transitions;
+mod search_bench;
 use mister_magik_mister_runtime::settings;
 #[cfg(test)]
 mod test_support;
@@ -327,6 +329,7 @@ fn dispatch_pre_fpga(cmd: &str, args: &[String]) {
         "display-persist" => run_display_persist(args),
         "reset-delete-screenshot-packs" => run_reset_delete_screenshot_packs(args),
         "benchmark-capabilities" => print_benchmark_capabilities(),
+        "search-bench" => search_bench::run(),
         #[cfg(feature = "bench-tools")]
         "media-bench-download" => media_bench_download::run(),
         #[cfg(feature = "bench-tools")]
@@ -371,6 +374,7 @@ fn print_benchmark_capabilities() {
             "schema": "mister-magik-benchmark-capabilities-v1",
             "screensaver-pprof-v1": cfg!(feature = "profile"),
             "screensaver-frame-evidence-v3": cfg!(feature = "profile"),
+            "persisted-search-v1": true,
         })
     );
 }

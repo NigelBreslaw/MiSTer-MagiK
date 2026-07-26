@@ -17,6 +17,15 @@ New benchmarks must add a named registry entry and a fixed typed device
 request. They may not expose arbitrary commands, duration knobs, remote paths,
 or generic environment overrides.
 
+## Persisted search
+
+The default screensaver workflow begins with a short, read-only benchmark of
+the active `arcade` system shard. Four representative queries each record a
+first result, one warm-up, and 20 measured iterations. Evidence separates Rust
+query preparation, SQLite FTS5 execution, Rust result finalization, and total
+latency, with warm p50, p95, and maximum timings. The search phase is
+informational; the screensaver profile remains the correctness gate.
+
 ## Catalog lifecycle
 
 ```text

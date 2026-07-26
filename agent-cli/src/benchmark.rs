@@ -73,6 +73,17 @@ fn execute_screensaver(
 ) -> AgentResult<Outcome> {
     reporter.emit(
         EventKind::Progress,
+        "search-profile",
+        "profiling installed persisted search",
+        Some(20),
+    )?;
+    let search_detail = device.execute(DeviceRequest::ProfileInstalledSearch {
+        output_dir: output_dir.join("search"),
+    })?;
+    let search: Value = serde_json::from_str(&search_detail).map_err(|error| error.to_string())?;
+    evaluate_search_summary(&search)?;
+    reporter.emit(
+        EventKind::Progress,
         "profile",
         "profiling installed screensaver",
         Some(35),
@@ -88,6 +99,7 @@ fn execute_screensaver(
         "benchmark-result",
         &serde_json::to_string(&json!({
             "installed_manifest": manifest,
+            "search": search,
             "summary": summary,
             "output_dir": output_dir,
         }))
@@ -95,6 +107,27 @@ fn execute_screensaver(
         Some(100),
     )?;
     Ok(Outcome::Passed)
+}
+
+fn evaluate_search_summary(summary: &Value) -> AgentResult<()> {
+    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-search-benchmark-v1") {
+        return Err("persisted search benchmark summary has the wrong schema".into());
+    }
+    let queries = summary
+        .get("queries")
+        .and_then(Value::as_array)
+        .ok_or("persisted search benchmark summary has no queries")?;
+    if queries.is_empty() {
+        return Err("persisted search benchmark ran no queries".into());
+    }
+    if summary
+        .pointer("/warm_all_queries/total_us/p95")
+        .and_then(Value::as_u64)
+        .is_none()
+    {
+        return Err("persisted search benchmark has no warm total p95 timing".into());
+    }
+    Ok(())
 }
 
 fn execute_catalog_lifecycle(

@@ -289,6 +289,10 @@ impl DeviceOperations for NativeDevice {
                 let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 profile_installed_screensaver(&config, output_dir).map_err(device_failure)?
             }
+            DeviceRequest::ProfileInstalledSearch { output_dir } => {
+                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
+                profile_installed_search(&config, output_dir).map_err(device_failure)?
+            }
             DeviceRequest::ProfileInstalledCatalogLifecycle { output_dir } => {
                 let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 profile_installed_catalog_lifecycle(&config, output_dir).map_err(device_failure)?
@@ -3152,6 +3156,32 @@ fn last_json_line(output: &str) -> Option<Value> {
         .lines()
         .rev()
         .find_map(|line| serde_json::from_str::<Value>(line.trim()).ok())
+}
+
+fn profile_installed_search(config: &NativeDeviceConfig, output_dir: &Path) -> Result<String> {
+    let session = connect_with(&config.connection, 10)?;
+    fs::create_dir_all(output_dir)?;
+    let output = exec(
+        &session,
+        "/media/fat/mister-magik-dev/mister-magik-fb search-bench",
+        true,
+    )?;
+    let mut log = output.stdout.clone();
+    log.push_str(&output.stderr);
+    fs::write(output_dir.join("search-bench.log"), &log)?;
+    if let Some(error) = exec_failure_message("installed search benchmark", &output) {
+        return Err(error.into());
+    }
+    let summary =
+        last_json_line(&output.stdout).ok_or("installed search benchmark returned no JSON")?;
+    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-search-benchmark-v1") {
+        return Err("installed search benchmark returned the wrong schema".into());
+    }
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
 }
 
 fn profile_installed_catalog_lifecycle(

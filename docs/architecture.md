@@ -593,17 +593,17 @@ spaces from blocking obvious matches, so `pacman` can match `Pac-Man` and
 metadata terms such as `capcom` can match games by manufacturer. The search
 keyboard also exposes a one-word autocomplete suggestion above the keys; `Y`
 accepts the suggestion by replacing the current partial word and appending a
-space. Empty search shows the active system's full game list and must not build
-deferred text indexes on the Search entry frame. The catalog worker publishes
-the navigation catalog first, then builds search keys and autocomplete on CPU0
-at background priority. Search opens and accepts input immediately; a non-empty
-query shows `Preparing search…` until the worker publishes
-`arcade_search_index_ready`, at which point the current query is refreshed.
-Search-index readiness never gates launcher reveal or input.
+space. FTS5 search documents and a compact autocomplete word table are built
+transactionally into each system shard and published with the catalog
+generation. Empty search shows the active collection's full game list.
+Non-empty queries run asynchronously against every physical system shard that
+backs the collection, and stale results are discarded by request and catalog
+generation. The UI exposes explicit Searching, Ready, and Failed states; search
+never waits for a process-local index build after launcher startup.
 While search is active, screenshot previews stay suppressed because the right
 pane is reserved for result navigation. Launch return state restores the search
-query immediately; if indexes are still building, the exact filtered selection
-is applied when results become ready without delaying reveal or input.
+query immediately and applies the exact filtered selection when its persisted
+query completes without delaying reveal or input.
 
 Current rules:
 
