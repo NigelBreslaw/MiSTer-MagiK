@@ -1,6 +1,6 @@
 {
-  "schema": 1,
-  "generated_at": "2026-06-30",
+  "schema": 2,
+  "generated_at": "2026-07-26",
   "profiles": [
     {
       "id": "atari2600",
@@ -9,10 +9,11 @@
       "title": "Atari 2600",
       "core_name": "Atari2600",
       "core_path": "_Console/Atari2600",
+      "compatible_core_names": ["Atari7800"],
       "game_dirs": ["Atari2600", "ATARI2600-Sinden"],
       "extensions": ["a26", "bin"],
       "archive_entries": true,
-      "evidence": "Main SelectFile starts generic file pickers in user_io_get_core_path(); Atari2600 core picker exposes cartridge payload extensions."
+      "evidence": "The maintained MiSTer Atari7800 core supersedes the archived Atari2600 core and supports Atari 2600 software; Main SelectFile exposes Atari 2600 cartridge payload extensions."
     },
     {
       "id": "atari5200",
@@ -93,6 +94,7 @@
       "title": "Game Boy Color",
       "core_name": "GBC",
       "core_path": "_Console/GBC",
+      "compatible_core_names": ["Gameboy"],
       "game_dirs": ["GBC"],
       "extensions": ["gbc"],
       "archive_entries": true,

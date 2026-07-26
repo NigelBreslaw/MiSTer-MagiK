@@ -1492,6 +1492,39 @@ mod tests {
     }
 
     #[test]
+    fn atari_2600_shared_core_scan_keeps_distinct_system_and_games() {
+        let root = unique_temp_dir("atari2600-shared-core-scan");
+        install_test_console_core(&root, "Atari7800");
+        std::fs::create_dir_all(root.join("games/Atari2600")).expect("create games");
+        std::fs::write(
+            root.join("_Console/Atari 2600.mgl"),
+            r#"<mistergamedescription><rbf>_Console/Atari7800</rbf><setname>Atari2600</setname></mistergamedescription>"#,
+        )
+        .expect("write descriptor");
+        std::fs::write(root.join("games/Atari2600/Adventure.a26"), b"rom").expect("write game");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: root.join("library.sqlite3"),
+        };
+
+        let scan = scan_library(&cfg);
+
+        let profile = scan
+            .profiles
+            .iter()
+            .find(|profile| profile.system_id == "atari2600")
+            .expect("Atari 2600 profile");
+        assert_eq!(
+            profile.core_path.as_deref(),
+            Some("_Console/Atari7800_20260630")
+        );
+        assert!(scan.discoveries.iter().any(|discovery| {
+            discovery.platform_id == "atari2600" && discovery.title == "Adventure"
+        }));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn rbf_cores_are_not_profile_candidates() {
         let profiles = launch_profiles::builtin_profiles();
 

@@ -50,12 +50,18 @@ def read_json(path: Path) -> dict[str, Any]:
         return json.load(fh)
 
 
+def core_names_for_row(row: dict[str, Any]) -> list[str]:
+    names = [str(row.get("core_name", ""))]
+    names.extend(str(name) for name in row.get("compatible_core_names", []))
+    return [name for name in names if name]
+
+
 def source_locations(main_dir: Path, row: dict[str, Any]) -> list[str]:
     if not main_dir.is_dir():
         return []
     needles = {
-        row.get("core_name", ""),
         row.get("core_path", ""),
+        *core_names_for_row(row),
         *row.get("game_dirs", []),
         *row.get("extensions", []),
     }
@@ -145,7 +151,11 @@ def annotate_manifest(
     rows = []
     for row in manifest.get("profiles", []):
         annotated = dict(row)
-        observed = by_core.get(str(row.get("core_name", "")).lower(), [])
+        observed = {
+            core.path: core
+            for core_name in core_names_for_row(row)
+            for core in by_core.get(core_name.lower(), [])
+        }.values()
         annotated["source_locations"] = source_locations(main_dir, row)
         annotated["observed_cores"] = [
             {

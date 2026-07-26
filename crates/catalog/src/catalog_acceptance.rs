@@ -177,12 +177,16 @@ mod tests {
     use crate::catalog_stamp::CatalogStamp;
     use crate::catalog_state::{CatalogState, CatalogStateStats};
     use crate::scanner_cache::ScannerCacheState;
+    use crate::test_support::unique_temp_dir;
     use std::collections::HashMap;
     use std::path::PathBuf;
 
     #[test]
-    fn visible_row_validation_rejects_core_mismatches_and_unreadable_payloads() {
+    fn visible_row_validation_accepts_shared_cores_and_rejects_undeclared_cores() {
         let system_id = crate::catalog_classify::SystemId::parse("atari2600").expect("system");
+        let root = unique_temp_dir("atari2600-shared-core-acceptance");
+        let payload = root.join("Acid Drop (Europe).a26");
+        std::fs::write(&payload, b"rom").expect("write readable payload");
         let game = crate::system_shard::SystemGame {
             stable_key: "acid-drop".to_string(),
             title: "Acid Drop (Europe)".to_string(),
@@ -192,22 +196,30 @@ mod tests {
                 title: "Acid Drop".to_string(),
                 system_id: "atari2600".to_string(),
                 core_path: "_Console/Atari7800".to_string(),
-                payload_path: "/missing/acid-drop.a26".to_string(),
+                payload_path: payload.display().to_string(),
                 mount_kind: "load-file".to_string(),
                 mount_index: 1,
                 delay_secs: 1,
             }),
             ..Default::default()
         };
-        let error = validate_visible_system_rows(&system_id, std::slice::from_ref(&game))
-            .expect_err("cross-system core mismatch");
-        assert!(error.contains("requires canonical core Atari2600"));
+        validate_visible_system_rows(&system_id, std::slice::from_ref(&game))
+            .expect("Atari 7800 is a compatible Atari 2600 core");
 
         let mut unreadable = game.clone();
-        unreadable.launch_plan.as_mut().expect("plan").core_path = "_Console/Atari2600".to_string();
-        let error = validate_visible_system_rows(&system_id, &[unreadable.clone()])
+        unreadable.launch_plan.as_mut().expect("plan").payload_path =
+            root.join("missing.a26").display().to_string();
+        let error = validate_visible_system_rows(&system_id, &[unreadable])
             .expect_err("unreadable payload");
         assert!(error.contains("payload is unreadable"));
+
+        let mut incompatible = game;
+        incompatible.launch_plan.as_mut().expect("plan").core_path =
+            "_Console/Atari5200".to_string();
+        let error = validate_visible_system_rows(&system_id, &[incompatible])
+            .expect_err("undeclared shared core");
+        assert!(error.contains("compatible cores [Atari2600, Atari7800]"));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

@@ -16,7 +16,7 @@ use std::sync::OnceLock;
 use std::time::Instant;
 
 pub const PROFILE_SET_VERSION: u32 = 9;
-pub const CORE_LAUNCH_MANIFEST_VERSION: u32 = 1;
+pub const CORE_LAUNCH_MANIFEST_VERSION: u32 = 2;
 
 const CORE_LAUNCH_MANIFEST_JSON: &str = include_str!("../data/core_launch_manifest.json");
 
@@ -383,7 +383,7 @@ struct CoreLaunchManifest {
     profiles: Vec<CoreLaunchManifestRow>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 struct CoreLaunchManifestRow {
     id: String,
     system_id: String,
@@ -391,6 +391,8 @@ struct CoreLaunchManifestRow {
     title: String,
     core_name: String,
     core_path: String,
+    #[serde(default)]
+    compatible_core_names: Vec<String>,
     game_dirs: Vec<String>,
     extensions: Vec<String>,
     archive_entries: bool,
@@ -548,16 +550,30 @@ fn base_profiles_for_installed_cores(
         .iter()
         .map(|core| core.core_id.to_ascii_lowercase())
         .collect::<BTreeSet<_>>();
-    let canonical_physical_cores = installed_cores
-        .iter()
-        .filter(|core| installed_core_is_canonical_physical(core))
-        .map(|core| (catalog_discovery::compact_system_name(&core.core_id), core))
-        .collect::<BTreeMap<_, _>>();
+    let compatible_physical_cores = installed_cores.iter().fold(
+        BTreeMap::<String, &catalog_discovery::InstalledCore>::new(),
+        |mut cores, core| {
+            if installed_core_is_manifest_compatible(core) {
+                let key = catalog_discovery::compact_system_name(&core.core_id);
+                cores
+                    .entry(key)
+                    .and_modify(|existing| {
+                        if installed_core_is_exact_physical(core)
+                            && !installed_core_is_exact_physical(existing)
+                        {
+                            *existing = core;
+                        }
+                    })
+                    .or_insert(core);
+            }
+            cores
+        },
+    );
     let descriptor_dirs = installed_cores
         .iter()
-        .filter(|core| !installed_core_is_canonical_physical(core))
+        .filter(|core| !installed_core_is_manifest_compatible(core))
         .filter(|core| {
-            !canonical_physical_cores
+            !compatible_physical_cores
                 .contains_key(&catalog_discovery::compact_system_name(&core.core_id))
         })
         .map(|core| catalog_discovery::compact_system_name(&core.core_id))
@@ -568,17 +584,17 @@ fn base_profiles_for_installed_cores(
             .into_iter()
             .filter_map(|mut profile| {
                 let profile_key = catalog_discovery::compact_system_name(&profile.core_name);
-                let canonical_core = canonical_physical_cores.get(&profile_key).copied();
-                if canonical_core.is_none()
+                let compatible_core = compatible_physical_cores.get(&profile_key).copied();
+                if compatible_core.is_none()
                     && !installed
                         .contains(&canonical_core_id(&profile.core_name).to_ascii_lowercase())
                 {
                     return None;
                 }
-                if canonical_core.is_none() && descriptor_dirs.contains(&profile_key) {
+                if compatible_core.is_none() && descriptor_dirs.contains(&profile_key) {
                     return None;
                 }
-                if let Some(core) = canonical_core {
+                if let Some(core) = compatible_core {
                     profile.core_path = relative_core_path_for_installed_core(&core.path);
                 }
                 profile.game_dirs.retain(|dir| {
@@ -590,7 +606,7 @@ fn base_profiles_for_installed_cores(
     profiles
 }
 
-fn installed_core_is_canonical_physical(core: &catalog_discovery::InstalledCore) -> bool {
+fn installed_core_is_exact_physical(core: &catalog_discovery::InstalledCore) -> bool {
     core.path
         .file_stem()
         .and_then(|stem| stem.to_str())
@@ -598,6 +614,12 @@ fn installed_core_is_canonical_physical(core: &catalog_discovery::InstalledCore)
             catalog_discovery::compact_system_name(&canonical_core_id(stem))
                 == catalog_discovery::compact_system_name(&core.core_id)
         })
+}
+
+fn installed_core_is_manifest_compatible(core: &catalog_discovery::InstalledCore) -> bool {
+    installed_core_is_exact_physical(core)
+        || (generic_manifest_profile_for_core(&core.core_id).is_some()
+            && core_path_is_compatible_with_canonical_system(&core.core_id, &core.path))
 }
 
 fn finalize_profiles_from_facts(
@@ -1125,38 +1147,42 @@ fn core_candidates_by_name<'a>(
 }
 
 fn core_path_is_compatible_with_canonical_system(system: &str, path: &Path) -> bool {
-    let Some(profile) = generic_manifest_profile_for_core(system) else {
+    let normalized = canonical_core_id(system);
+    let Some(row) = generic_manifest_rows_cached()
+        .iter()
+        .find(|row| row.core_name.eq_ignore_ascii_case(&normalized))
+    else {
         return true;
     };
-    let expected = catalog_discovery::compact_system_name(&profile.core_name);
-    let actual = path
+    let Some(actual) = path
         .file_stem()
         .and_then(|stem| stem.to_str())
         .map(canonical_core_id)
-        .map(|stem| catalog_discovery::compact_system_name(&stem));
-    if actual.as_deref() == Some(expected.as_str()) {
-        return true;
-    }
-
-    matches!(
-        (expected.as_str(), actual.as_deref()),
-        ("gbc", Some("gameboy"))
-    )
+        .map(|stem| catalog_discovery::compact_system_name(&stem))
+    else {
+        return false;
+    };
+    std::iter::once(&row.core_name)
+        .chain(row.compatible_core_names.iter())
+        .any(|accepted| catalog_discovery::compact_system_name(accepted) == actual)
 }
 
 pub fn validate_canonical_core_profile(system_id: &str, core_path: &str) -> Result<(), String> {
-    let Some(profile) = generic_manifest_profiles_cached()
+    let Some(row) = generic_manifest_rows_cached()
         .iter()
-        .find(|profile| profile.system_id.eq_ignore_ascii_case(system_id))
+        .find(|row| row.system_id.eq_ignore_ascii_case(system_id))
     else {
         return Ok(());
     };
-    if core_path_is_compatible_with_canonical_system(&profile.core_name, Path::new(core_path)) {
+    if core_path_is_compatible_with_canonical_system(&row.core_name, Path::new(core_path)) {
         Ok(())
     } else {
+        let accepted = std::iter::once(row.core_name.as_str())
+            .chain(row.compatible_core_names.iter().map(String::as_str))
+            .collect::<Vec<_>>()
+            .join(", ");
         Err(format!(
-            "system {system_id} requires canonical core {} but launch plan uses {core_path}",
-            profile.core_name
+            "system {system_id} requires one of the compatible cores [{accepted}] but launch plan uses {core_path}"
         ))
     }
 }
@@ -1506,6 +1532,7 @@ pub fn validate_core_launch_manifest() -> Result<(), String> {
         validate_manifest_text("core_name", &row.core_name)?;
         validate_manifest_text("core_path", &row.core_path)?;
         validate_manifest_text("evidence", &row.evidence)?;
+        validate_manifest_compatible_core_names(row)?;
         if row.game_dirs.is_empty() {
             return Err(format!("manifest row {} has no game_dirs", row.id));
         }
@@ -1543,6 +1570,34 @@ pub fn validate_core_launch_manifest() -> Result<(), String> {
                     row.id, ext
                 ));
             }
+        }
+    }
+    Ok(())
+}
+
+fn validate_manifest_compatible_core_names(row: &CoreLaunchManifestRow) -> Result<(), String> {
+    let canonical_core = catalog_discovery::compact_system_name(&row.core_name);
+    let mut compatible_cores = BTreeSet::new();
+    for compatible_core in &row.compatible_core_names {
+        validate_manifest_text("compatible_core_name", compatible_core)?;
+        let normalized = catalog_discovery::compact_system_name(compatible_core);
+        if normalized.is_empty() {
+            return Err(format!(
+                "manifest row {} has invalid compatible core {}",
+                row.id, compatible_core
+            ));
+        }
+        if normalized == canonical_core {
+            return Err(format!(
+                "manifest row {} repeats canonical core {} as compatible",
+                row.id, compatible_core
+            ));
+        }
+        if !compatible_cores.insert(normalized) {
+            return Err(format!(
+                "manifest row {} has duplicate compatible core {}",
+                row.id, compatible_core
+            ));
         }
     }
     Ok(())
@@ -1586,14 +1641,23 @@ fn generic_manifest_profiles_cached() -> &'static [LaunchProfile] {
     static PROFILES: OnceLock<Vec<LaunchProfile>> = OnceLock::new();
     PROFILES
         .get_or_init(|| {
-            parse_core_launch_manifest()
-                .expect("parse core launch manifest")
-                .profiles
-                .into_iter()
+            generic_manifest_rows_cached()
+                .iter()
+                .cloned()
                 .map(generic_manifest_profile)
                 .collect()
         })
         .as_slice()
+}
+
+fn generic_manifest_rows_cached() -> &'static [CoreLaunchManifestRow] {
+    static ROWS: OnceLock<Vec<CoreLaunchManifestRow>> = OnceLock::new();
+    ROWS.get_or_init(|| {
+        parse_core_launch_manifest()
+            .expect("parse core launch manifest")
+            .profiles
+    })
+    .as_slice()
 }
 
 fn parse_core_launch_manifest() -> Result<CoreLaunchManifest, String> {
@@ -2068,6 +2132,45 @@ mod tests {
     #[test]
     fn manifest_rows_validate_and_do_not_collide_with_special_profiles() {
         validate_core_launch_manifest().expect("valid generated core launch manifest");
+        let atari2600 = generic_manifest_rows_cached()
+            .iter()
+            .find(|row| row.system_id == "atari2600")
+            .expect("Atari 2600 manifest row");
+        assert_eq!(atari2600.compatible_core_names, ["Atari7800"]);
+        let gbc = generic_manifest_rows_cached()
+            .iter()
+            .find(|row| row.system_id == "gbc")
+            .expect("GBC manifest row");
+        assert_eq!(gbc.compatible_core_names, ["Gameboy"]);
+    }
+
+    #[test]
+    fn manifest_compatible_core_names_are_normalized_unique_and_not_canonical() {
+        let mut row = generic_manifest_rows_cached()
+            .iter()
+            .find(|row| row.system_id == "atari2600")
+            .expect("Atari 2600 manifest row")
+            .clone();
+        row.compatible_core_names = vec!["Atari 7800".into(), "atari7800".into()];
+        assert!(
+            validate_manifest_compatible_core_names(&row)
+                .expect_err("normalized duplicate")
+                .contains("duplicate compatible core")
+        );
+
+        row.compatible_core_names = vec!["Atari2600".into()];
+        assert!(
+            validate_manifest_compatible_core_names(&row)
+                .expect_err("canonical duplicate")
+                .contains("repeats canonical core")
+        );
+
+        row.compatible_core_names = vec!["---".into()];
+        assert!(
+            validate_manifest_compatible_core_names(&row)
+                .expect_err("empty normalized core")
+                .contains("invalid compatible core")
+        );
     }
 
     #[test]
@@ -2683,18 +2786,51 @@ mod tests {
     }
 
     #[test]
-    fn descriptor_cannot_advertise_canonical_system_through_wrong_core() {
-        let root = unique_temp_dir("runtime-mgl-stray-extension");
+    fn manifest_compatible_descriptor_activates_atari_2600_through_atari_7800() {
+        let root = unique_temp_dir("runtime-mgl-compatible-core");
         std::fs::create_dir_all(root.join("_Console")).expect("create console");
         std::fs::create_dir_all(root.join("games/Atari2600")).expect("create games");
         std::fs::write(root.join("_Console/Atari7800_20260630.rbf"), b"rbf").expect("write core");
+        std::fs::write(root.join("games/Atari2600/Adventure.a26"), b"rom").expect("write game");
+        std::fs::write(root.join("games/Atari2600/Stray.a78"), b"rom").expect("write stray");
+
+        let without_descriptor = active_profiles_for_roots(&[root.display().to_string()]);
+        assert!(
+            profile_for_game_dir(&without_descriptor, "Atari2600").is_none(),
+            "a compatible physical core alone must not infer another system"
+        );
+
         std::fs::write(
             root.join("_Console/Atari 2600.mgl"),
             r#"<mistergamedescription><rbf>_Console/Atari7800</rbf><setname>Atari2600</setname></mistergamedescription>"#,
         )
         .expect("write descriptor");
+
+        let profiles = active_profiles_for_roots(&[root.display().to_string()]);
+        let profile =
+            profile_for_game_dir(&profiles, "Atari2600").expect("Atari 2600 shared-core profile");
+        assert_eq!(profile.system_id, "atari2600");
+        assert!(
+            profile
+                .core_path
+                .as_deref()
+                .is_some_and(|path| path.contains("Atari7800"))
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn descriptor_cannot_advertise_canonical_system_through_undeclared_core() {
+        let root = unique_temp_dir("runtime-mgl-undeclared-core");
+        std::fs::create_dir_all(root.join("_Console")).expect("create console");
+        std::fs::create_dir_all(root.join("games/Atari2600")).expect("create games");
+        std::fs::write(root.join("_Console/Atari5200_20260630.rbf"), b"rbf").expect("write core");
+        std::fs::write(
+            root.join("_Console/Atari 2600.mgl"),
+            r#"<mistergamedescription><rbf>_Console/Atari5200</rbf><setname>Atari2600</setname></mistergamedescription>"#,
+        )
+        .expect("write descriptor");
         std::fs::write(root.join("games/Atari2600/Adventure.a26"), b"rom").expect("write game");
-        std::fs::write(root.join("games/Atari2600/Stray.a78"), b"rom").expect("write stray");
 
         let profiles = active_profiles_for_roots(&[root.display().to_string()]);
         assert!(

@@ -279,10 +279,13 @@ and navigation list are collapsed. Variants remain hidden until a dedicated
 variant-selection UI is added.
 
 Generic manifest profiles are authoritative for canonical system/core pairs.
-An installed MGL descriptor may provide a documented shared-core alias, but it
-cannot advertise a known system through a different system's core. If the
-canonical core is unavailable, that system is omitted as unlaunchable instead
-of receiving a guessed core path.
+An installed MGL descriptor may bind a system to a shared physical core only
+when that core is declared in the profile's `compatible_core_names`. This
+supports maintained shared implementations such as Atari 2600 through
+`Atari7800` and Game Boy Color through `Gameboy` without turning matching
+folders or extensions into core guesses. An exact canonical core takes
+precedence when both are installed. Undeclared cross-system mappings are
+omitted as unlaunchable.
 
 ZIP members are stored as explicit archive-member launch references, never as
 synthetic filesystem paths. Launch preparation validates the member path,
