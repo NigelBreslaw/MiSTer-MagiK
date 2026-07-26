@@ -293,6 +293,10 @@ impl DeviceOperations for NativeDevice {
                 let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 profile_installed_search(&config, output_dir).map_err(device_failure)?
             }
+            DeviceRequest::VerifyInstalledSearchUi { output_dir } => {
+                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
+                verify_installed_search_ui(&config, output_dir).map_err(device_failure)?
+            }
             DeviceRequest::ProfileInstalledCatalogLifecycle { output_dir } => {
                 let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 profile_installed_catalog_lifecycle(&config, output_dir).map_err(device_failure)?
@@ -3195,6 +3199,113 @@ fn profile_installed_search(config: &NativeDeviceConfig, output_dir: &Path) -> R
         format!("{}\n", serde_json::to_string_pretty(&summary)?),
     )?;
     serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn verify_installed_search_ui(config: &NativeDeviceConfig, output_dir: &Path) -> Result<String> {
+    let session = connect_with(&config.connection, 10)?;
+    fs::create_dir_all(output_dir)?;
+    let run_result = (|| -> Result<Value> {
+        let initial = read_launcher_status(&session)?;
+        if initial.get("catalog_ready").and_then(Value::as_bool) != Some(true)
+            || initial
+                .get("catalog_games")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                == 0
+        {
+            return Err("search UI verification requires an existing usable cached catalog".into());
+        }
+        restart_launcher_with_one_shot_env(
+            &session,
+            LauncherRestartOptions {
+                env_vars: vec![
+                    ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+                    ("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()),
+                    ("MISTER_LAUNCHER_START_SYSTEM".into(), "arcade".into()),
+                    (
+                        "MISTER_LAUNCHER_INPUT_SCRIPT".into(),
+                        "left,b,down,a,a,wait:180".into(),
+                    ),
+                    (
+                        "MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES".into(),
+                        "10".into(),
+                    ),
+                ],
+                timeout_secs: 45,
+                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+                ..LauncherRestartOptions::default()
+            },
+        )?;
+        let started = Instant::now();
+        let timeout = Duration::from_secs(30);
+        loop {
+            let status = read_launcher_status(&session)?;
+            if search_ui_status_ready(&status) {
+                return Ok(json!({
+                    "schema": "mister-magik-search-ui-verification-v1",
+                    "status": "ready",
+                    "query": "A",
+                    "results": status["arcade_search_results"],
+                    "elapsed_ms": started.elapsed().as_millis() as u64,
+                }));
+            }
+            if status.get("arcade_search_status").and_then(Value::as_str) == Some("failed") {
+                return Err(format!(
+                    "launcher search failed for query {:?}",
+                    status.get("arcade_search_query")
+                )
+                .into());
+            }
+            if started.elapsed() >= timeout {
+                return Err(format!(
+                    "launcher search did not reach ready results within {} ms; final status={status}",
+                    started.elapsed().as_millis()
+                )
+                .into());
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+    })();
+    let restore_result = launcher_restart(
+        &session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            timeout_secs: 45,
+            ..LauncherRestartOptions::default()
+        },
+    );
+    let summary = match (run_result, restore_result) {
+        (Ok(summary), Ok(())) => summary,
+        (Err(error), Ok(())) => return Err(error),
+        (Ok(_), Err(error)) => {
+            return Err(format!("search UI verification cleanup failed: {error}").into());
+        }
+        (Err(run_error), Err(cleanup_error)) => {
+            return Err(format!(
+                "{run_error}; search UI verification cleanup failed: {cleanup_error}"
+            )
+            .into());
+        }
+    };
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn search_ui_status_ready(status: &Value) -> bool {
+    status.get("scene").and_then(Value::as_str) == Some("launcher")
+        && status.get("screen").and_then(Value::as_str) == Some("arcade")
+        && status.get("arcade_search_active").and_then(Value::as_bool) == Some(true)
+        && status.get("arcade_search_status").and_then(Value::as_str) == Some("ready")
+        && status.get("arcade_search_query").and_then(Value::as_str) == Some("A")
+        && status
+            .get("arcade_search_results")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            > 0
 }
 
 fn search_benchmark_waits_for_catalog(output: &ExecOutput) -> bool {

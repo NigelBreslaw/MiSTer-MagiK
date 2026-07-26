@@ -10,6 +10,7 @@ pub enum BenchmarkScenario {
     #[default]
     Screensaver,
     CatalogLifecycle,
+    Search,
 }
 
 impl BenchmarkScenario {
@@ -18,6 +19,7 @@ impl BenchmarkScenario {
         match self {
             Self::Screensaver => "screensaver",
             Self::CatalogLifecycle => "catalog-lifecycle",
+            Self::Search => "search",
         }
     }
 }

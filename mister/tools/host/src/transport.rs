@@ -37,6 +37,9 @@ pub enum DeviceRequest {
     ProfileInstalledSearch {
         output_dir: PathBuf,
     },
+    VerifyInstalledSearchUi {
+        output_dir: PathBuf,
+    },
     ProfileInstalledCatalogLifecycle {
         output_dir: PathBuf,
     },
@@ -75,6 +78,7 @@ impl DeviceRequest {
             Self::DeliverPlatformTransaction { .. } => "deliver-platform-transaction",
             Self::ProfileInstalledScreensaver { .. } => "profile-installed-screensaver",
             Self::ProfileInstalledSearch { .. } => "profile-installed-search",
+            Self::VerifyInstalledSearchUi { .. } => "verify-installed-search-ui",
             Self::ProfileInstalledCatalogLifecycle { .. } => "profile-installed-catalog-lifecycle",
             Self::VerifyHealth(_) => "verify-health",
             Self::BeginReleaseQualification => "begin-release-qualification",
@@ -231,6 +235,9 @@ mod tests {
             DeviceRequest::ProfileInstalledSearch {
                 output_dir: "search-profile".into(),
             },
+            DeviceRequest::VerifyInstalledSearchUi {
+                output_dir: "search-ui".into(),
+            },
             DeviceRequest::ProfileInstalledCatalogLifecycle {
                 output_dir: "catalog-profile".into(),
             },
@@ -253,7 +260,7 @@ mod tests {
             DeviceRequest::CaptureFramebuffer,
         ];
         let labels: Vec<_> = requests.iter().map(DeviceRequest::label).collect();
-        assert_eq!(labels.len(), 25);
+        assert_eq!(labels.len(), 26);
         assert!(labels.iter().all(|label| !label.is_empty()));
         assert_eq!(
             labels

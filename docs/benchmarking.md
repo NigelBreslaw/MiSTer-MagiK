@@ -12,6 +12,7 @@ Supported scenarios:
 
 - `screensaver` (the default)
 - `catalog-lifecycle`
+- `search`
 
 New benchmarks must add a named registry entry and a fixed typed device
 request. They may not expose arbitrary commands, duration knobs, remote paths,
@@ -19,12 +20,16 @@ or generic environment overrides.
 
 ## Persisted search
 
-The default screensaver workflow begins with a short, read-only benchmark of
-the active `arcade` system shard. Four representative queries each record a
-first result, one warm-up, and 20 measured iterations. Evidence separates Rust
-query preparation, SQLite FTS5 execution, Rust result finalization, and total
-latency, with warm p50, p95, and maximum timings. The search phase is
-informational; the screensaver profile remains the correctness gate.
+The dedicated `search` scenario first runs a short, read-only benchmark of the
+active `arcade` system shard. Four representative queries each record a first
+result, one warm-up, and 20 measured iterations. Evidence separates Rust query
+preparation, SQLite FTS5 execution, Rust result finalization, and total latency,
+with warm p50, p95, and maximum timings.
+
+It then starts the launcher in Arcade with a bounded input script, opens Search,
+types `A`, and requires runtime status to report that exact query as `ready`
+with at least one result. The ordinary launcher is restored whether verification
+passes or fails. This scenario does not start the screensaver.
 
 ## Catalog lifecycle
 

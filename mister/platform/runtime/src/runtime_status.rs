@@ -80,6 +80,8 @@ launcher_status_types! {
         arcade_drawer_selected: usize,
         arcade_drawer_requested_hash: u64,
         arcade_drawer_rendered_hash: u64,
+        arcade_search_active: bool,
+        arcade_search_results: usize,
         preview_transition_progress: f32,
         composition_recovery_count: u64,
         route_reassert_count: u64,
@@ -116,6 +118,8 @@ launcher_status_types! {
         confirm_left_label,
         confirm_right_label,
         arcade_drawer_level,
+        arcade_search_status,
+        arcade_search_query,
         preview_cache_state,
         preview_transition_effect,
         composition_state,
@@ -616,6 +620,10 @@ fn launcher_status_value(
         "arcade_drawer_rendered_hash",
         status.arcade_drawer_rendered_hash
     );
+    insert!("arcade_search_active", status.arcade_search_active);
+    insert!("arcade_search_status", status.arcade_search_status);
+    insert!("arcade_search_query", status.arcade_search_query);
+    insert!("arcade_search_results", status.arcade_search_results);
     insert!("preview_cache_state", status.preview_cache_state);
     insert!(
         "preview_transition_effect",
@@ -1073,6 +1081,10 @@ mod tests {
                 arcade_drawer_selected: 0,
                 arcade_drawer_requested_hash: 123,
                 arcade_drawer_rendered_hash: 123,
+                arcade_search_active: true,
+                arcade_search_status: "ready",
+                arcade_search_query: "A",
+                arcade_search_results: 42,
                 preview_cache_state: "exact",
                 preview_transition_effect: "fade",
                 preview_transition_progress: 0.5,
@@ -1320,6 +1332,10 @@ mod tests {
         assert_eq!(value["arcade_drawer_selected"], 0);
         assert_eq!(value["arcade_drawer_requested_hash"], 123);
         assert_eq!(value["arcade_drawer_rendered_hash"], 123);
+        assert_eq!(value["arcade_search_active"], true);
+        assert_eq!(value["arcade_search_status"], "ready");
+        assert_eq!(value["arcade_search_query"], "A");
+        assert_eq!(value["arcade_search_results"], 42);
         assert_eq!(value["preview_cache_state"], "exact");
         assert_eq!(value["preview_transition_effect"], "fade");
         assert_eq!(value["preview_transition_progress"], 0.5);
@@ -1427,6 +1443,10 @@ mod tests {
             arcade_drawer_selected: 0,
             arcade_drawer_requested_hash: 0,
             arcade_drawer_rendered_hash: 0,
+            arcade_search_active: false,
+            arcade_search_status: "idle",
+            arcade_search_query: "",
+            arcade_search_results: 0,
             preview_cache_state: "placeholder",
             preview_transition_effect: "fade",
             preview_transition_progress: 1.0,

@@ -534,6 +534,14 @@ mod tests {
                 scenario: BenchmarkScenario::CatalogLifecycle
             }
         );
+        assert_eq!(
+            Cli::try_parse_from(["agent-cli", "benchmark", "search"])
+                .unwrap()
+                .into_intent(),
+            Intent::Benchmark {
+                scenario: BenchmarkScenario::Search
+            }
+        );
         assert!(Cli::try_parse_from(["agent-cli", "benchmark", "--duration", "10"]).is_err());
         assert!(Cli::try_parse_from(["agent-cli", "benchmark", "unknown"]).is_err());
     }

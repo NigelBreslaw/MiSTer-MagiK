@@ -62,6 +62,7 @@ fn require_clean_installed_commit(
         BenchmarkScenario::CatalogLifecycle => {
             execute_catalog_lifecycle(&mut device, manifest, output_dir, reporter)
         }
+        BenchmarkScenario::Search => execute_search(&mut device, manifest, output_dir, reporter),
     }
 }
 
@@ -73,20 +74,9 @@ fn execute_screensaver(
 ) -> AgentResult<Outcome> {
     reporter.emit(
         EventKind::Progress,
-        "search-profile",
-        "profiling installed persisted search",
-        Some(20),
-    )?;
-    let search_detail = device.execute(DeviceRequest::ProfileInstalledSearch {
-        output_dir: output_dir.join("search"),
-    })?;
-    let search: Value = serde_json::from_str(&search_detail).map_err(|error| error.to_string())?;
-    evaluate_search_summary(&search)?;
-    reporter.emit(
-        EventKind::Progress,
         "profile",
         "profiling installed screensaver",
-        Some(35),
+        Some(20),
     )?;
     let detail = device.execute(DeviceRequest::ProfileInstalledScreensaver {
         output_dir: output_dir.clone(),
@@ -99,8 +89,51 @@ fn execute_screensaver(
         "benchmark-result",
         &serde_json::to_string(&json!({
             "installed_manifest": manifest,
-            "search": search,
             "summary": summary,
+            "output_dir": output_dir,
+        }))
+        .map_err(|error| error.to_string())?,
+        Some(100),
+    )?;
+    Ok(Outcome::Passed)
+}
+
+fn execute_search(
+    device: &mut DeviceClient,
+    manifest: String,
+    output_dir: std::path::PathBuf,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    reporter.emit(
+        EventKind::Progress,
+        "profile",
+        "profiling installed persisted search",
+        Some(30),
+    )?;
+    let timing_detail = device.execute(DeviceRequest::ProfileInstalledSearch {
+        output_dir: output_dir.join("timing"),
+    })?;
+    let timing: Value = serde_json::from_str(&timing_detail).map_err(|error| error.to_string())?;
+    evaluate_search_summary(&timing)?;
+    reporter.emit(
+        EventKind::Progress,
+        "ui-verification",
+        "verifying persisted search through the launcher UI",
+        Some(60),
+    )?;
+    let ui_detail = device.execute(DeviceRequest::VerifyInstalledSearchUi {
+        output_dir: output_dir.join("ui"),
+    })?;
+    let ui: Value = serde_json::from_str(&ui_detail).map_err(|error| error.to_string())?;
+    evaluate_search_ui_summary(&ui)?;
+    device.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))?;
+    reporter.emit(
+        EventKind::Progress,
+        "benchmark-result",
+        &serde_json::to_string(&json!({
+            "installed_manifest": manifest,
+            "timing": timing,
+            "ui": ui,
             "output_dir": output_dir,
         }))
         .map_err(|error| error.to_string())?,
@@ -126,6 +159,18 @@ fn evaluate_search_summary(summary: &Value) -> AgentResult<()> {
         .is_none()
     {
         return Err("persisted search benchmark has no warm total p95 timing".into());
+    }
+    Ok(())
+}
+
+fn evaluate_search_ui_summary(summary: &Value) -> AgentResult<()> {
+    if summary.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-search-ui-verification-v1")
+        || summary.get("status").and_then(Value::as_str) != Some("ready")
+        || summary.get("query").and_then(Value::as_str) != Some("A")
+        || summary.get("results").and_then(Value::as_u64).unwrap_or(0) == 0
+    {
+        return Err("persisted search UI verification did not reach ready results".into());
     }
     Ok(())
 }

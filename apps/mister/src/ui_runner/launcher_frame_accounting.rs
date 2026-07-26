@@ -2177,6 +2177,15 @@ impl LauncherFrameAccounting {
             } else {
                 0
             },
+            arcade_search_active: nav.arcade_search.is_active(&nav.arcade_filter.active),
+            arcade_search_status: match nav.arcade_search.status {
+                crate::launcher::ArcadeSearchStatus::Idle => "idle",
+                crate::launcher::ArcadeSearchStatus::Searching => "searching",
+                crate::launcher::ArcadeSearchStatus::Ready => "ready",
+                crate::launcher::ArcadeSearchStatus::Failed => "failed",
+            },
+            arcade_search_query: &nav.arcade_search.query,
+            arcade_search_results: nav.arcade_search.results.len(),
             preview_cache_state,
             preview_transition_effect,
             preview_transition_progress,
