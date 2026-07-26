@@ -81,19 +81,15 @@ fault to a motion-sensitive PAL path but does not prove a Main, FPGA, display,
 or application cause. The standard Main timing and full-height destinations
 remain in use while native PAL composition is qualified.
 
-Fresh CRT configuration defaults to native Analog IO VGA at 240p60. The
-installer separately offers automatic HDMI-DAC detection, native VGA at
-288p50, 480p60 or 576p50, and HDMI-only output. It maps them onto the existing
-`direct_video`, `menu_pal`, and
-`forced_scandoubler` keys, preserves saved upgrade choices, and restores only
-installer-owned keys from the pre-MagiK snapshot.
+Installation does not select or alter an output route. It preserves the active
+`video_mode`, `direct_video`, `menu_pal`, and `forced_scandoubler` values
+byte-for-byte. The launcher resolves the existing route from Main's runtime
+state and the effective `[Menu]`, then `[MiSTer]`, configuration.
 
-The 240p60 and 288p50 choices are labelled as 15 kHz modes. The 480p60 and
-576p50 choices require separate confirmation that the attached VGA, multisync,
-or other CRT explicitly supports 31 kHz. DAC detection cannot discover a
-display's supported scan rates. An incompatible display may fail to lock or
-show a rolling or distorted image; MagiK does not claim that an unsupported
-scan rate is harmless on every CRT.
+Explicit output changes remain attended operations. In particular, DAC
+detection cannot discover a display's supported scan rates. An incompatible
+31 kHz setting may fail to lock or show a rolling or distorted image; MagiK
+does not claim that an unsupported scan rate is harmless on every CRT.
 
 ## Core handoff and interlace
 

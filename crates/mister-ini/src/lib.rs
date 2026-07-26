@@ -12,7 +12,6 @@ pub enum Error {
     TooLarge { bytes: usize },
     InvalidUtf8,
     InteriorNul,
-    UnsupportedOutputMode(String),
 }
 
 impl fmt::Display for Error {
@@ -23,9 +22,6 @@ impl fmt::Display for Error {
             }
             Self::InvalidUtf8 => formatter.write_str("MiSTer.ini is not valid UTF-8"),
             Self::InteriorNul => formatter.write_str("MiSTer.ini contains a NUL byte"),
-            Self::UnsupportedOutputMode(mode) => {
-                write!(formatter, "unsupported output mode: {mode}")
-            }
         }
     }
 }
@@ -207,78 +203,17 @@ impl Document {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OutputMode {
-    Auto,
-    Hdmi,
-    Crt240p60,
-    Crt288p50,
-    Crt480p60,
-    Crt576p50,
-}
-
-impl OutputMode {
-    pub fn parse(value: &str) -> Result<Self, Error> {
-        match value {
-            "auto" => Ok(Self::Auto),
-            "hdmi" => Ok(Self::Hdmi),
-            "crt-240p60" => Ok(Self::Crt240p60),
-            "crt-288p50" => Ok(Self::Crt288p50),
-            "crt-480p60" => Ok(Self::Crt480p60),
-            "crt-576p50" => Ok(Self::Crt576p50),
-            other => Err(Error::UnsupportedOutputMode(other.to_string())),
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::Hdmi => "hdmi",
-            Self::Crt240p60 => "crt-240p60",
-            Self::Crt288p50 => "crt-288p50",
-            Self::Crt480p60 => "crt-480p60",
-            Self::Crt576p50 => "crt-576p50",
-        }
-    }
-
-    pub fn settings(self) -> (&'static str, &'static str, &'static str) {
-        match self {
-            Self::Auto => ("2", "0", "0"),
-            Self::Hdmi => ("0", "0", "0"),
-            Self::Crt240p60 => ("1", "0", "0"),
-            Self::Crt288p50 => ("1", "1", "0"),
-            Self::Crt480p60 => ("1", "0", "1"),
-            Self::Crt576p50 => ("1", "1", "1"),
-        }
-    }
-
-    pub fn is_31khz(self) -> bool {
-        matches!(self, Self::Crt480p60 | Self::Crt576p50)
-    }
-}
-
-pub fn apply_install(document: &mut Document, mode: OutputMode) {
-    let (direct_video, menu_pal, forced_scandoubler) = mode.settings();
+pub fn apply_install(document: &mut Document) {
     document.set("MiSTer", "main", "MiSTer_MagiK");
-    document.set("Menu", "direct_video", direct_video);
-    document.set("Menu", "menu_pal", menu_pal);
-    document.set("Menu", "forced_scandoubler", forced_scandoubler);
 }
 
 pub fn apply_restore(document: &mut Document, backup: Option<&Document>) {
-    for (section, key) in [
-        ("MiSTer", "main"),
-        ("Menu", "direct_video"),
-        ("Menu", "menu_pal"),
-        ("Menu", "forced_scandoubler"),
-    ] {
-        if let Some(value) = backup.and_then(|source| source.effective_value(section, key)) {
-            document.set(section, key, &value);
-        } else if backup.is_some() {
-            document.remove(section, key, "MiSTer MagiK restored absent value");
-        } else if section == "MiSTer" && key == "main" {
-            document.set(section, key, "MiSTer");
-        }
+    if let Some(value) = backup.and_then(|source| source.effective_value("MiSTer", "main")) {
+        document.set("MiSTer", "main", &value);
+    } else if backup.is_some() {
+        document.remove("MiSTer", "main", "MiSTer MagiK restored absent value");
+    } else {
+        document.set("MiSTer", "main", "MiSTer");
     }
 }
 
@@ -375,19 +310,13 @@ mod tests {
     fn install_is_idempotent_and_deduplicates_every_owned_key() {
         let input = b"[MiSTer]\nmain=MiSTer\nmain=Other\n[Menu]\ndirect_video=9\ndirect_video=8\nmenu_pal=9\nforced_scandoubler=9\ncustom=keep\n";
         let mut once = Document::parse(input).unwrap();
-        apply_install(&mut once, OutputMode::Auto);
+        apply_install(&mut once);
         let rendered = once.render();
         let mut twice = Document::parse(&rendered).unwrap();
-        apply_install(&mut twice, OutputMode::Auto);
+        apply_install(&mut twice);
         assert_eq!(twice.render(), rendered);
-        for (section, key) in [
-            ("MiSTer", "main"),
-            ("Menu", "direct_video"),
-            ("Menu", "menu_pal"),
-            ("Menu", "forced_scandoubler"),
-        ] {
-            assert_eq!(twice.active_count(section, key), 1);
-        }
+        assert_eq!(twice.active_count("MiSTer", "main"), 1);
+        assert_eq!(twice.active_count("Menu", "direct_video"), 2);
         assert!(String::from_utf8(rendered).unwrap().contains("custom=keep"));
     }
 
@@ -398,8 +327,8 @@ mod tests {
         apply_restore(&mut live, Some(&backup));
         let output = String::from_utf8(live.render()).unwrap();
         assert!(output.contains("main=Other"));
-        assert!(output.contains("direct_video=1"));
-        assert!(output.contains(";menu_pal=0 ; MiSTer MagiK restored absent value"));
+        assert!(output.contains("direct_video=2"));
+        assert!(output.contains("menu_pal=0"));
         assert!(output.contains("user=keep"));
     }
 
@@ -530,10 +459,10 @@ mod tests {
             input.push_str(&format!("user_seed_{seed}=keep-{seed}\n"));
 
             let mut once = Document::parse(input.as_bytes()).unwrap();
-            apply_install(&mut once, OutputMode::Auto);
+            apply_install(&mut once);
             let rendered = once.render();
             let mut twice = Document::parse(&rendered).unwrap();
-            apply_install(&mut twice, OutputMode::Auto);
+            apply_install(&mut twice);
 
             assert_eq!(twice.render(), rendered);
             assert_eq!(twice.active_count("MiSTer", "main"), 1);

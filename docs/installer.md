@@ -14,14 +14,15 @@ Uninstall restores and verifies stock boot before it stops processes or removes
 owned files.
 
 The shared `mister-magik-ini` crate follows Main_MiSTer's last-active-value
-semantics across repeated sections. Setting an owned key leaves exactly one
-active assignment. Later duplicates are retained as comments so user context
-is never silently discarded. Restore changes only installer-owned keys and
-does not replace the live file with the backup.
+semantics across repeated sections. Installation changes only `[MiSTer] main`,
+leaving every video and output setting untouched. It leaves exactly one active
+Main assignment; later duplicates are retained as comments so user context is
+never silently discarded. Restore changes only that Main assignment and does
+not replace the live file with the backup.
 
-Installation, 31 kHz output, and full uninstall require an explicit Down event
-from the keyboard or joystick. A/Enter selects ordinary menu entries and may
-confirm a normal reboot, but it cannot approve those safety boundaries.
+Installation and full uninstall require an explicit Down event from the
+keyboard or joystick. A/Enter may confirm a normal reboot, but it cannot approve
+those safety boundaries.
 
 If the Scripts entrypoint reports a missing or corrupt manager, do not edit
 `MiSTer.ini` or `inittab` by hand. Re-run Downloader or reinstall the complete

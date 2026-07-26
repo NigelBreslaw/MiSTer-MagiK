@@ -37,13 +37,12 @@ printf 'platform_contract_sha256=%s\nsource_commit=%040d\nrbf_sha256=%s\n' \
 cp "$ROOT/scripts/MiSTer-MagiK.sh" "$FAT/Scripts/MiSTer-MagiK.sh"
 chmod 755 "$FAT/Scripts/MiSTer-MagiK.sh"
 printf '::sysinit:/media/fat/MiSTer &\n' >"$TMP/inittab"
-printf '[MiSTer]\r\nmain=MiSTer\r\nmain=Other ; retain\r\n[Menu]\r\ndirect_video=9\r\ndirect_video=8 ; retain\r\nmenu_pal=9\r\nforced_scandoubler=9\r\nuser=keep\r\n' >"$FAT/MiSTer.ini"
+printf '[MiSTer]\r\nmain=MiSTer\r\nmain=Other ; retain\r\n[Menu]\r\ndirect_video=9\r\ndirect_video=8 ; retain\r\nmenu_pal=9\r\nforced_scandoubler=9\r\nvideo_mode=8\r\nuser=keep\r\n' >"$FAT/MiSTer.ini"
 cp "$FAT/MiSTer.ini" "$TMP/original.ini"
 
 run_manager() {
   MISTER_MAGIK_FAT="$FAT" MISTER_MAGIK_INITTAB="$TMP/inittab" \
     MISTER_MAGIK_TEST_MODE=1 \
-    MISTER_MAGIK_TEST_OUTPUT_MODE="${MISTER_MAGIK_TEST_OUTPUT_MODE:-auto}" \
     MISTER_MAGIK_TEST_KEYS="${MISTER_MAGIK_TEST_KEYS:-}" \
     "$FAT/Scripts/MiSTer-MagiK.sh" "$@"
 }
@@ -96,16 +95,6 @@ grep -q 'required tool is unavailable: sha256sum' "$TMP/missing-tool.log"
 test "$(sha256sum "$FAT/MiSTer.ini")" = "$before_ini"
 test "$(sha256sum "$TMP/inittab")" = "$before_inittab"
 
-# A 31 kHz mode has its own Down-only boundary after installation consent.
-if MISTER_MAGIK_TEST_OUTPUT_MODE=crt-480p60 MISTER_MAGIK_TEST_KEYS=down,enter \
-    run_manager install >"$TMP/31khz-enter.log" 2>&1; then
-  echo "Enter unexpectedly confirmed a 31 kHz mode" >&2
-  exit 1
-fi
-grep -q '31 kHz CRT mode was not explicitly confirmed' "$TMP/31khz-enter.log"
-test "$(sha256sum "$FAT/MiSTer.ini")" = "$before_ini"
-test "$(sha256sum "$TMP/inittab")" = "$before_inittab"
-
 # A missing manager is refused by the bootstrap without touching boot files.
 mv "$APP/mister-magik-manager" "$TMP/manager.missing"
 if MISTER_MAGIK_TEST_KEYS=down run_manager install >"$TMP/missing.log" 2>&1; then
@@ -128,20 +117,30 @@ test "$(sha256sum "$FAT/MiSTer.ini")" = "$before_ini"
 cp "$TMP/manager.good" "$APP/mister-magik-manager"
 chmod 755 "$APP/mister-magik-manager"
 
-# Keyboard/joystick Down confirms installation and every owned duplicate is canonicalized.
+# Keyboard/joystick Down confirms installation and the Main duplicate is canonicalized.
 MISTER_MAGIK_TEST_KEYS=down run_manager install >"$TMP/install.log"
 grep -q 'installed. Reboot to start MiSTer MagiK' "$TMP/install.log"
+if grep -q 'Choose launcher output' "$TMP/install.log"; then
+  echo "installer unexpectedly prompted for an output mode" >&2
+  exit 1
+fi
 cmp "$TMP/original.ini" "$FAT/MiSTer.ini.bak.before-magik"
 python3 - "$FAT/MiSTer.ini" <<'PY'
 import pathlib, sys
 data = pathlib.Path(sys.argv[1]).read_bytes()
+original = pathlib.Path(str(sys.argv[1]) + ".bak.before-magik").read_bytes()
 assert b"\n" not in data.replace(b"\r\n", b"")
 text = data.decode()
 assert text.count("main=MiSTer_MagiK") == 1
-assert text.count("direct_video=2") == 1
+assert text.count("direct_video=9") == 1
+assert text.count("direct_video=8") == 1
+assert text.count("menu_pal=9") == 1
+assert text.count("forced_scandoubler=9") == 1
+assert text.count("video_mode=8") == 1
 assert ";main=Other ; retain" in text
-assert ";direct_video=8 ; retain" in text
+assert "direct_video=8 ; retain" in text
 assert "user=keep" in text
+assert data[data.index(b"[Menu]"):] == original[original.index(b"[Menu]"):]
 PY
 
 # Restore changes only owned keys and retains post-install user changes.

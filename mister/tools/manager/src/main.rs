@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use mister_magik_ini::{Document, OutputMode, apply_install, apply_restore};
+use mister_magik_ini::{Document, apply_install, apply_restore};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
 use std::env;
@@ -127,7 +127,6 @@ struct Paths {
     backup: PathBuf,
     app: PathBuf,
     manifest: PathBuf,
-    output_mode: PathBuf,
     script: PathBuf,
     test_mode: bool,
     test_keys: RefCell<VecDeque<InputEvent>>,
@@ -145,7 +144,6 @@ impl Paths {
             ini: fat.join("MiSTer.ini"),
             backup: fat.join("MiSTer.ini.bak.before-magik"),
             manifest: app.join("platform-v2.manifest"),
-            output_mode: app.join("installer-output-mode-v1"),
             script: fat.join("Scripts/MiSTer-MagiK.sh"),
             test_mode: env::var("MISTER_MAGIK_TEST_MODE").as_deref() == Ok("1"),
             test_keys: RefCell::new(
@@ -214,10 +212,9 @@ fn status(paths: &Paths) -> Result<()> {
 fn install(paths: &Paths) -> Result<()> {
     safety_confirmation(
         paths,
-        "MiSTer MagiK supports automatic known-DAC CRT selection with safe HDMI fallback.",
+        "MiSTer MagiK will become the selected Main. Existing video and output settings will not be changed.",
         "installation",
     )?;
-    let mode = choose_output_mode(paths)?;
     verify_platform(paths).map_err(|error| {
         format!("platform verification failed; boot configuration was not changed: {error}")
     })?;
@@ -227,18 +224,14 @@ fn install(paths: &Paths) -> Result<()> {
     ensure_executable(paths.app.join("mister-magik-fb"))?;
     ensure_executable(paths.app.join("mister-magik-manager"))?;
     remount_root_writable(paths)?;
-    let ini = prepare_ini(&paths.ini, |document| apply_install(document, mode))?;
+    let ini = prepare_ini(&paths.ini, apply_install)?;
     let inittab = prepare_stock_inittab(&paths.inittab)?;
     let files = vec![
         PreparedFile::new(paths.inittab.clone(), inittab)?,
         PreparedFile::new(paths.ini.clone(), ini)?,
-        PreparedFile::new(
-            paths.output_mode.clone(),
-            format!("{}\n", mode.as_str()).into_bytes(),
-        )?,
     ];
     replace_transaction(paths, &files, &mut NoWriteFaults, || {
-        validate_install(paths, mode)
+        validate_install(paths)
     })?;
     println!("MiSTer MagiK: installed. Reboot to start MiSTer MagiK.");
     offer_reboot(paths)
@@ -290,86 +283,6 @@ fn safety_confirmation(paths: &Paths, message: &str, operation: &str) -> Result<
         Some(InputEvent::Down) => Ok(()),
         Some(_) => Err(format!("{operation} cancelled; no changes made").into()),
         None => Err(format!("interactive input is unavailable; {operation} refused").into()),
-    }
-}
-
-fn choose_output_mode(paths: &Paths) -> Result<OutputMode> {
-    if let Ok(saved) = fs::read_to_string(&paths.output_mode) {
-        let mode = OutputMode::parse(saved.trim())?;
-        confirm_31khz(paths, mode)?;
-        return Ok(mode);
-    }
-    if paths.test_mode() {
-        let mode = OutputMode::parse(
-            &env::var("MISTER_MAGIK_TEST_OUTPUT_MODE").unwrap_or_else(|_| "auto".into()),
-        )?;
-        confirm_31khz(paths, mode)?;
-        return Ok(mode);
-    }
-    let modes = [
-        OutputMode::Crt240p60,
-        OutputMode::Crt288p50,
-        OutputMode::Crt480p60,
-        OutputMode::Crt576p50,
-        OutputMode::Auto,
-        OutputMode::Hdmi,
-    ];
-    let mut selected = 0;
-    loop {
-        println!(
-            "\nChoose launcher output. Use Up/Down to choose, A/Enter to continue, or B/Escape to cancel."
-        );
-        for (index, mode) in modes.iter().enumerate() {
-            println!(
-                "{} {}",
-                if index == selected { '>' } else { ' ' },
-                output_label(*mode)
-            );
-        }
-        match read_event(paths)? {
-            Some(InputEvent::Up) => {
-                selected = if selected == 0 {
-                    modes.len() - 1
-                } else {
-                    selected - 1
-                }
-            }
-            Some(InputEvent::Down) => selected = (selected + 1) % modes.len(),
-            Some(InputEvent::Confirm) => {
-                confirm_31khz(paths, modes[selected])?;
-                return Ok(modes[selected]);
-            }
-            Some(InputEvent::Cancel | InputEvent::Other) => {
-                return Err("cancelled; no changes made".into());
-            }
-            None => return Err("interactive input is unavailable; installation refused".into()),
-        }
-    }
-}
-
-fn confirm_31khz(paths: &Paths, mode: OutputMode) -> Result<()> {
-    if !mode.is_31khz() {
-        return Ok(());
-    }
-    println!(
-        "\nWARNING: {} is a 31 kHz signal.\nPress Down on the keyboard or joystick only if the display manual confirms 31 kHz support.",
-        mode.as_str()
-    );
-    if read_event(paths)? == Some(InputEvent::Down) {
-        Ok(())
-    } else {
-        Err("31 kHz CRT mode was not explicitly confirmed; no changes made".into())
-    }
-}
-
-fn output_label(mode: OutputMode) -> &'static str {
-    match mode {
-        OutputMode::Crt240p60 => "Analog IO VGA — 15 kHz CRT 240p60 (default)",
-        OutputMode::Crt288p50 => "Analog IO VGA — 15 kHz CRT 288p50",
-        OutputMode::Crt480p60 => "Analog IO VGA — 31 kHz CRT/VGA 480p60",
-        OutputMode::Crt576p50 => "Analog IO VGA — 31 kHz CRT/VGA 576p50",
-        OutputMode::Auto => "Automatic HDMI DAC detection",
-        OutputMode::Hdmi => "HDMI only",
     }
 }
 
@@ -603,20 +516,12 @@ fn remount_root_writable(paths: &Paths) -> Result<()> {
     Ok(())
 }
 
-fn validate_install(paths: &Paths, mode: OutputMode) -> Result<()> {
+fn validate_install(paths: &Paths) -> Result<()> {
     let document = Document::parse(&fs::read(&paths.ini)?)?;
-    let (direct_video, menu_pal, forced_scandoubler) = mode.settings();
-    for (section, key, expected) in [
-        ("MiSTer", "main", "MiSTer_MagiK"),
-        ("Menu", "direct_video", direct_video),
-        ("Menu", "menu_pal", menu_pal),
-        ("Menu", "forced_scandoubler", forced_scandoubler),
-    ] {
-        if document.active_count(section, key) != 1
-            || document.effective_value(section, key).as_deref() != Some(expected)
-        {
-            return Err(format!("{section}.{key} did not validate").into());
-        }
+    if document.active_count("MiSTer", "main") != 1
+        || document.effective_value("MiSTer", "main").as_deref() != Some("MiSTer_MagiK")
+    {
+        return Err("MiSTer.main did not validate".into());
     }
     verify_stock_inittab(&paths.inittab)
 }
@@ -626,15 +531,8 @@ fn validate_stock(paths: &Paths) -> Result<()> {
     if document.effective_value("MiSTer", "main").as_deref() == Some("MiSTer_MagiK") {
         return Err("MiSTer.ini still selects MiSTer MagiK".into());
     }
-    for (section, key) in [
-        ("MiSTer", "main"),
-        ("Menu", "direct_video"),
-        ("Menu", "menu_pal"),
-        ("Menu", "forced_scandoubler"),
-    ] {
-        if document.active_count(section, key) > 1 {
-            return Err(format!("{section}.{key} remains duplicated").into());
-        }
+    if document.active_count("MiSTer", "main") > 1 {
+        return Err("MiSTer.main remains duplicated".into());
     }
     verify_stock_inittab(&paths.inittab)
 }
@@ -968,7 +866,6 @@ mod tests {
             backup: root.join("backup"),
             app: root.join("mister-magik"),
             manifest: root.join("manifest"),
-            output_mode: root.join("mode"),
             script: root.join("script"),
             test_mode: true,
             test_keys: RefCell::default(),
@@ -1028,26 +925,6 @@ mod tests {
 
         let unavailable = InputDecoder::default();
         assert_eq!(unavailable.finish(), None);
-    }
-
-    #[test]
-    fn saved_31khz_mode_still_requires_explicit_confirmation() {
-        let root = env::temp_dir().join(format!("mister-manager-saved-31khz-{}", process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).unwrap();
-        let paths = fixture_paths(&root);
-        fs::write(&paths.output_mode, b"crt-480p60\n").unwrap();
-
-        let error = choose_output_mode(&paths).unwrap_err();
-
-        assert!(
-            error
-                .to_string()
-                .contains("31 kHz CRT mode was not explicitly confirmed")
-        );
-        fs::write(&paths.output_mode, b"crt-240p60\n").unwrap();
-        assert_eq!(choose_output_mode(&paths).unwrap(), OutputMode::Crt240p60);
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
