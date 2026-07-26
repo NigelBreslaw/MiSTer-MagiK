@@ -7398,6 +7398,13 @@ fn format_bytes_nearest_kb(bytes: u64) -> String {
     }
 }
 
+fn resolve_agent_deploy_magik_remote(explicit: Option<&str>, environment: Option<&str>) -> String {
+    explicit
+        .or(environment)
+        .unwrap_or("/media/fat/mister-magik-dev/mister-magik-fb")
+        .to_string()
+}
+
 fn agent_deploy_magik_bin(args: &[String]) -> Result<()> {
     let json_output = args.iter().any(|arg| arg == "--json");
     let positional = args
@@ -7410,11 +7417,11 @@ fn agent_deploy_magik_bin(args: &[String]) -> Result<()> {
     if positional.len() > 2 {
         return Err("usage: mister agent deploy-magik-bin LOCAL [REMOTE] [--json]".into());
     }
-    let remote = positional
-        .get(1)
-        .map(|value| (*value).clone())
-        .or_else(|| std::env::var("MISTER_MAGIK_BIN").ok())
-        .unwrap_or_else(|| "/media/fat/mister-magik/mister-magik-fb".to_string());
+    let environment = std::env::var("MISTER_MAGIK_BIN").ok();
+    let remote = resolve_agent_deploy_magik_remote(
+        positional.get(1).map(|value| value.as_str()),
+        environment.as_deref(),
+    );
     let total_t = Instant::now();
     let read_t = Instant::now();
     let mut source = fs::File::open(local)?;
@@ -11696,6 +11703,22 @@ H: Handlers=event3 js0"#
         assert_eq!(
             tx.chmod_size_verify_command(),
             "chmod +x '/media/fat/mister-magik/mister-magik-fb' && wc -c '/media/fat/mister-magik/mister-magik-fb'"
+        );
+    }
+
+    #[test]
+    fn agent_deploy_magik_remote_defaults_to_development() {
+        assert_eq!(
+            resolve_agent_deploy_magik_remote(None, None),
+            "/media/fat/mister-magik-dev/mister-magik-fb"
+        );
+        assert_eq!(
+            resolve_agent_deploy_magik_remote(None, Some("/environment/bin")),
+            "/environment/bin"
+        );
+        assert_eq!(
+            resolve_agent_deploy_magik_remote(Some("/explicit/bin"), Some("/environment/bin")),
+            "/explicit/bin"
         );
     }
 
