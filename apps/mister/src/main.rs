@@ -82,6 +82,7 @@ use mister_magik_mister_runtime::fpga;
 #[cfg(feature = "ui")]
 mod frame_profile;
 mod input;
+mod latch_failure_report;
 #[cfg(feature = "bench-tools")]
 mod media_bench_download;
 #[cfg(feature = "bench-tools")]

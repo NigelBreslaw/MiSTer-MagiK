@@ -499,6 +499,8 @@ fn persist_latch_failure(
     {
         crate::ui_errln!("latch_failure_evidence_write_failed error={error}");
     }
+    let report_path = crate::latch_failure_report::enqueue(evidence);
+    crate::ui_errln!("latch_failure_report_queued path={}", report_path.display());
 }
 
 struct LivePresentationAdapters<'a, 'target> {
