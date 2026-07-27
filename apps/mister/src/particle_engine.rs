@@ -415,8 +415,8 @@ impl ParticleEngine {
             self.z[index] =
                 (self.z[index] + self.vz[index] * delta).clamp(-DEPTH_EXTENT, DEPTH_EXTENT);
             if self.phase == ParticlePhase::Static {
-                self.x[index] = self.x[index].rem_euclid(width);
-                self.y[index] = self.y[index].rem_euclid(height);
+                self.x[index] = wrap_coordinate(self.x[index], width);
+                self.y[index] = wrap_coordinate(self.y[index], height);
             }
         }
     }
@@ -468,6 +468,24 @@ fn next_random(state: &mut u32) -> u32 {
     value ^= value << 5;
     *state = value;
     value
+}
+
+#[inline(always)]
+fn wrap_coordinate(value: f32, extent: f32) -> f32 {
+    if value < 0.0 {
+        let wrapped = value + extent;
+        if wrapped >= 0.0 {
+            return wrapped;
+        }
+    } else if value >= extent {
+        let wrapped = value - extent;
+        if wrapped < extent {
+            return wrapped;
+        }
+    } else {
+        return value;
+    }
+    value.rem_euclid(extent)
 }
 
 fn unit_float(value: u32) -> f32 {
@@ -648,5 +666,18 @@ mod tests {
                 .map(|_| next_random(&mut second))
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn viewport_wrapping_fast_path_and_fallback_are_exact() {
+        for (value, expected) in [
+            (12.5, 12.5),
+            (-0.5, 31.5),
+            (32.5, 0.5),
+            (-64.5, 31.5),
+            (96.5, 0.5),
+        ] {
+            assert_eq!(wrap_coordinate(value, 32.0), expected);
+        }
     }
 }
