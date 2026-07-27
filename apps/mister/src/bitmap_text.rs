@@ -25,6 +25,13 @@ struct ConsoleGradientGlyph {
     mask: Vec<bool>,
 }
 
+pub(crate) struct TextAlphaMask {
+    pub(crate) width: usize,
+    pub(crate) height: usize,
+    pub(crate) stride: usize,
+    pub(crate) alpha: Vec<u8>,
+}
+
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub(crate) struct TextGradient {
     top: u32,
@@ -149,6 +156,59 @@ impl ConsoleFont {
             }
         }
         width
+    }
+
+    pub(crate) fn rasterize_alpha_mask(&mut self, text: &str) -> Option<TextAlphaMask> {
+        let mut pen_x = 0i32;
+        let mut bounds: Option<(i32, i32, i32, i32)> = None;
+        for ch in text.chars() {
+            let glyph = self.glyph(ch)?;
+            if glyph.width > 0 && glyph.height > 0 {
+                let left = pen_x + glyph.left;
+                let top = -glyph.top;
+                let right = left + glyph.width as i32;
+                let bottom = top + glyph.height as i32;
+                bounds = Some(match bounds {
+                    Some((min_x, min_y, max_x, max_y)) => (
+                        min_x.min(left),
+                        min_y.min(top),
+                        max_x.max(right),
+                        max_y.max(bottom),
+                    ),
+                    None => (left, top, right, bottom),
+                });
+            }
+            pen_x += glyph.advance;
+        }
+        let (min_x, min_y, max_x, max_y) = bounds?;
+        let width = usize::try_from(max_x - min_x).ok()?;
+        let height = usize::try_from(max_y - min_y).ok()?;
+        let mut alpha = vec![0u8; width.saturating_mul(height)];
+        pen_x = 0;
+        for ch in text.chars() {
+            let glyph = self.glyph(ch)?;
+            let left = pen_x + glyph.left - min_x;
+            let top = -glyph.top - min_y;
+            for gy in 0..glyph.height {
+                for gx in 0..glyph.width {
+                    let value = glyph.data[gy * glyph.width + gx];
+                    if value == 0 {
+                        continue;
+                    }
+                    let x = usize::try_from(left + gx as i32).ok()?;
+                    let y = usize::try_from(top + gy as i32).ok()?;
+                    let destination = &mut alpha[y * width + x];
+                    *destination = (*destination).max(value);
+                }
+            }
+            pen_x += glyph.advance;
+        }
+        Some(TextAlphaMask {
+            width,
+            height,
+            stride: width,
+            alpha,
+        })
     }
 
     fn glyph(&mut self, ch: char) -> Option<&ConsoleGlyph> {
@@ -385,6 +445,19 @@ mod tests {
 
         font.draw_text_clipped_gradient(&mut dst, 160, 160, 0, 40, 0, 24, "AB", ALT_TEST_GRADIENT);
         assert_eq!(font.gradient_glyph_cache_len(), 4);
+    }
+
+    #[test]
+    fn alpha_mask_tightly_contains_press_start_text() {
+        let mut font = ConsoleFont::new_with_typeface(128.0, ConsoleTypeface::PressStart2P);
+        let mask = font.rasterize_alpha_mask("MagiK").unwrap();
+        assert!(mask.width > 400);
+        assert!(mask.width < 900);
+        assert!(mask.height > 80);
+        assert!(mask.height < 200);
+        assert_eq!(mask.stride, mask.width);
+        assert!(mask.alpha.iter().any(|alpha| *alpha >= 128));
+        assert!(mask.alpha.iter().any(|alpha| *alpha == 0));
     }
 
     #[test]

@@ -270,12 +270,9 @@ impl ParticleEngine {
         if delta > 0.0 {
             self.advance(delta, elapsed_us);
         }
-        let visible = (0..self.particle_count())
-            .filter(|&index| self.project(index).is_some())
-            .count();
         ParticleFrameStats {
             count: self.particle_count(),
-            visible,
+            visible: 0,
             phase: self.phase,
             cycle: self.cycle,
         }
