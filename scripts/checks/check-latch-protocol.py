@@ -30,8 +30,8 @@ subprocess.run(
     check=True,
 )
 spec = json.loads(SPEC_PATH.read_text())
-if spec["active_protocol_version"] not in (2, 3):
-    raise SystemExit("active latch protocol must be exactly v2 or v3")
+if spec["active_protocol_version"] != 3:
+    raise SystemExit("new FPGA artifacts must advertise latch protocol v3")
 if spec["protocols"]["2"] != {
     "flags": 7,
     "caps_words": 5,

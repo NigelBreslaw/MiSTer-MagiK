@@ -47,6 +47,7 @@ module tb_mister_magik_vblank_latch;
 	wire [15:0] active_route_epoch;
 
 	reg [31:0] requirement_coverage = 32'd0;
+	reg [15:0] status_check_words [0:13];
 	integer accepted_apply_count = 0;
 
 	mister_magik_vblank_latch dut (
@@ -328,6 +329,27 @@ module tb_mister_magik_vblank_latch;
 		end
 	endtask
 
+	task automatic check_status_crc;
+		integer status_index;
+		reg [15:0] expected_crc;
+		reg [15:0] status_word;
+		begin
+			start_command(MAGIK_UIO_GET_FBUF_LATCH, MAGIK_FBUF_STATUS_MAGIC);
+			for(status_index = 0; status_index < 14; status_index = status_index + 1) begin
+				read_word(
+					MAGIK_UIO_GET_FBUF_LATCH,
+					status_index[3:0],
+					status_word
+				);
+				status_check_words[status_index] = status_word;
+			end
+			expected_crc = crc_header(MAGIK_UIO_GET_FBUF_LATCH, 16'd13);
+			for(status_index = 0; status_index < 13; status_index = status_index + 1)
+				expected_crc = crc_word(expected_crc, status_check_words[status_index]);
+			expect16(status_check_words[13], expected_crc, "randomized status CRC");
+		end
+	endtask
+
 	initial begin
 		integer index;
 		integer split;
@@ -339,6 +361,15 @@ module tb_mister_magik_vblank_latch;
 		reg [15:0] flip_before;
 		reg [15:0] epoch_before;
 		reg [15:0] snapshot [0:13];
+		reg [15:0] random_state;
+		reg model_pending;
+		reg [15:0] model_pending_seq;
+		reg [15:0] model_active_seq;
+		reg [15:0] model_post_count;
+		reg [15:0] model_flip_count;
+		reg [15:0] model_drop_count;
+		reg [15:0] model_reject_count;
+		reg [15:0] model_epoch;
 
 		idle_cycles(2);
 		expect16(active_seq, 16'd0, "power-up active sequence");
@@ -604,6 +635,77 @@ module tb_mister_magik_vblank_latch;
 		corrupt_golden_transaction(4'd11);
 		expect16(reject_count, reject_before + 1'd1, "reject counter advances after wrap");
 		requirement_coverage[11] = 1'b1;
+
+		// Fixed-seed transaction/vblank/legacy interleavings against a counter
+		// and sequence reference model.
+		random_state = 16'h1d0f;
+		model_pending = pending;
+		model_pending_seq = pending_seq;
+		model_active_seq = active_seq;
+		model_post_count = post_count;
+		model_flip_count = flip_count;
+		model_drop_count = drop_count;
+		model_reject_count = reject_count;
+		model_epoch = active_route_epoch;
+		for(index = 0; index < 96; index = index + 1) begin
+			random_state = {random_state[14:0],
+			                random_state[15] ^ random_state[13] ^
+			                random_state[12] ^ random_state[10]};
+			case(random_state[2:0])
+				3'd0: begin
+					send_golden_route();
+					if(model_pending) model_drop_count = model_drop_count + 1'd1;
+					model_pending = 1'b1;
+					model_pending_seq = 16'h002a;
+					model_post_count = model_post_count + 1'd1;
+				end
+				3'd1: begin
+					send_route(16'd0, 32'd0, 16'd0, 16'd0,
+					           16'd0, 16'd0, 16'd0, 16'd0, 16'd0,
+					           random_state);
+					if(model_pending) model_drop_count = model_drop_count + 1'd1;
+					model_pending = 1'b1;
+					model_pending_seq = random_state;
+					model_post_count = model_post_count + 1'd1;
+				end
+				3'd2: begin
+					corrupt_golden_transaction({1'b0, random_state[2:0]});
+					model_reject_count = model_reject_count + 1'd1;
+				end
+				3'd3: begin
+					pulse_vblank();
+					if(model_pending) begin
+						model_active_seq = model_pending_seq;
+						model_pending = 1'b0;
+						model_flip_count = model_flip_count + 1'd1;
+						model_epoch = model_epoch + 1'd1;
+					end
+				end
+				3'd4: begin
+					legacy_write = 1'b1;
+					active_lfb_en = 1'b0;
+					active_lfb_base = {16'h4000, random_state};
+					active_lfb_width = 12'd320;
+					active_lfb_height = 12'd240;
+					active_lfb_stride = 14'd640;
+					idle_cycles(1);
+					legacy_write = 1'b0;
+					model_active_seq = 16'd0;
+					model_epoch = model_epoch + 1'd1;
+				end
+				default: check_status_crc();
+			endcase
+			expect16({15'd0, pending}, {15'd0, model_pending},
+			         "randomized pending model");
+			expect16(pending_seq, model_pending_seq, "randomized pending sequence");
+			expect16(active_seq, model_active_seq, "randomized active sequence");
+			expect16(post_count, model_post_count, "randomized post count");
+			expect16(flip_count, model_flip_count, "randomized flip count");
+			expect16(drop_count, model_drop_count, "randomized drop count");
+			expect16(reject_count, model_reject_count, "randomized reject count");
+			expect16(active_route_epoch, model_epoch, "randomized route epoch");
+		end
+		$display("COVER LATCH-V3-RANDOM fixed-seed reference-model interleavings");
 
 		if(requirement_coverage[11:0] !== 12'hfff)
 			fail("not all protocol-v3 RTL requirement coverpoints hit");

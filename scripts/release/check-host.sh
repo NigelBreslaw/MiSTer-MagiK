@@ -91,8 +91,8 @@ CONTRACT="$(printf release-check-contract | sha256sum | awk '{print $1}')"
 printf 'platform_contract_sha256=%s\nmodule_sha256=%s\nvermagic=5.15.1-MiSTer fixture\nsource_revision=%s\n' \
   "$CONTRACT" "$(sha256sum "$WORK/mister_magik_scanout_slots.ko" | awk '{print $1}')" \
   "$MAGIK_REVISION" >"$WORK/scanout.metadata.txt"
-printf 'format=mister-magik-fpga-release-v1\nplatform_contract_sha256=%s\nmagik_commit=%s\nsource_commit=%s\nrbf_sha256=%s\n' \
-  "$CONTRACT" "$MAGIK_REVISION" "$MENU_REVISION" \
+printf 'format=mister-magik-fpga-release-v2\nplatform_contract_sha256=%s\nmagik_commit=%s\nsource_commit=%s\nlatch_protocol_sha256=%064d\nlatch_bridge_sha256=%064d\nlatch_protocol_version=3\nrbf_sha256=%s\n' \
+  "$CONTRACT" "$MAGIK_REVISION" "$MENU_REVISION" 0 0 \
   "$(sha256sum "$WORK/menu-magik-vblank-latch.rbf" | awk '{print $1}')" \
   >"$WORK/latch.metadata.txt"
 scripts/agent ci platform-manifest generate \

@@ -231,6 +231,13 @@ module tb_mister_magik_sys_top_integration;
 		reg [15:0] response;
 		repeat(3) @(posedge test_clk);
 		end_command();
+		// Exercise the production bridge's selected-but-idle parser state.
+		@(negedge test_clk);
+		test_io_uio = 1'b1;
+		test_io_strobe = 1'b0;
+		@(posedge test_clk);
+		#1;
+		end_command();
 
 		begin_command(MAGIK_UIO_GET_FBUF_LATCH_CAPS, MAGIK_FBUF_CAPS_MAGIC);
 		transfer_word(16'd0, response);

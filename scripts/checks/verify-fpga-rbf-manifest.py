@@ -25,7 +25,12 @@ def digest(path: Path) -> str:
     return hasher.hexdigest()
 
 
-def verify(metadata_path: Path, *, require_protocol: bool = True) -> dict[str, str]:
+def verify(
+    metadata_path: Path,
+    *,
+    require_protocol: bool = True,
+    historical_v2: bool = False,
+) -> dict[str, str]:
     if not metadata_path.is_file():
         raise ValueError(f"missing metadata: {metadata_path}")
     fields: dict[str, str] = {}
@@ -47,11 +52,20 @@ def verify(metadata_path: Path, *, require_protocol: bool = True) -> dict[str, s
     }
     if require_protocol:
         required.update(("latch_protocol_sha256", "latch_protocol_version"))
+    if not historical_v2:
+        required.update(
+            ("latch_bridge_sha256", "component_input_sha256", "component_revision")
+        )
     missing = sorted(required - fields.keys())
     if missing:
         raise ValueError("missing metadata fields: " + ", ".join(missing))
-    if fields["format"] != "mister-magik-fpga-release-v1":
-        raise ValueError("unsupported metadata format")
+    expected_format = (
+        "mister-magik-fpga-release-v1"
+        if historical_v2
+        else "mister-magik-fpga-release-v2"
+    )
+    if fields["format"] != expected_format:
+        raise ValueError(f"release metadata must use {expected_format}")
     for name in ("magik_commit", "builder_commit", "source_commit"):
         if not COMMIT_RE.fullmatch(fields[name]):
             raise ValueError(f"{name} must be a full commit SHA")
@@ -63,6 +77,8 @@ def verify(metadata_path: Path, *, require_protocol: bool = True) -> dict[str, s
             raise ValueError(f"invalid SHA-256 in {name}")
     if "latch_protocol_sha256" in fields and not SHA256_RE.fullmatch(fields["latch_protocol_sha256"]):
         raise ValueError("invalid SHA-256 in latch_protocol_sha256")
+    if "latch_bridge_sha256" in fields and not SHA256_RE.fullmatch(fields["latch_bridge_sha256"]):
+        raise ValueError("invalid SHA-256 in latch_bridge_sha256")
     if "component_input_sha256" in fields and not SHA256_RE.fullmatch(fields["component_input_sha256"]):
         raise ValueError("invalid component_input_sha256")
     if "component_revision" in fields and not COMMIT_RE.fullmatch(fields["component_revision"]):
@@ -71,8 +87,12 @@ def verify(metadata_path: Path, *, require_protocol: bool = True) -> dict[str, s
         raise ValueError("release source tree was dirty")
     if fields["quartus_seed"] != "1":
         raise ValueError("release seed must be 1")
-    if "latch_protocol_version" in fields and fields["latch_protocol_version"] != "2":
-        raise ValueError("release must bind latch protocol version 2")
+    expected_protocol = "2" if historical_v2 else "3"
+    if (
+        "latch_protocol_version" in fields
+        and fields["latch_protocol_version"] != expected_protocol
+    ):
+        raise ValueError(f"release must bind latch protocol version {expected_protocol}")
     if not fields["quartus_version"].startswith("17.0"):
         raise ValueError("release must use Quartus 17.0")
     if not fields["workflow_url"].startswith("https://"):
@@ -103,9 +123,14 @@ def verify(metadata_path: Path, *, require_protocol: bool = True) -> dict[str, s
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("metadata", type=Path)
+    parser.add_argument(
+        "--historical-v2",
+        action="store_true",
+        help="verify an immutable protocol-v2 rollback artifact; never use for a new build",
+    )
     args = parser.parse_args()
     try:
-        fields = verify(args.metadata.resolve())
+        fields = verify(args.metadata.resolve(), historical_v2=args.historical_v2)
     except (OSError, ValueError) as error:
         print(f"FPGA manifest verification failed: {error}", file=sys.stderr)
         return 1

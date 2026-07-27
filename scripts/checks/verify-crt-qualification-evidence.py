@@ -36,28 +36,46 @@ def close(actual: float, expected: float, tolerance: float) -> bool:
     return abs(actual - expected) <= expected * tolerance
 
 
-def verify(path: Path) -> dict[str, object]:
+def verify(path: Path, *, historical_v2: bool = False) -> dict[str, object]:
     payload = json.loads(path.read_text())
-    if payload.get("format") != "mister-magik-crt-qualification-v2":
-        raise ValueError("unsupported CRT qualification format")
+    expected_format = (
+        "mister-magik-crt-qualification-v2"
+        if historical_v2
+        else "mister-magik-crt-qualification-v3"
+    )
+    if payload.get("format") != expected_format:
+        raise ValueError(f"CRT qualification must use {expected_format}")
     if payload.get("qualified") is not True:
         raise ValueError("hardware evidence must explicitly be qualified")
     identity = payload.get("identity")
     if not isinstance(identity, dict):
         raise ValueError("missing platform identity")
-    for name in ("app_revision", "main_revision"):
+    revision_names = ["app_revision", "main_revision"]
+    if not historical_v2:
+        revision_names.append("menu_revision")
+    for name in revision_names:
         if not HEX40.fullmatch(str(identity.get(name, ""))):
             raise ValueError(f"invalid {name}")
-    for name in (
+    hash_names = [
         "rbf_sha256",
         "platform_contract_sha256",
         "latch_protocol_sha256",
         "platform_manifest_sha256",
-    ):
+    ]
+    if not historical_v2:
+        hash_names.extend(("kernel_sha256", "fpga_component_id"))
+    for name in hash_names:
         if not HEX64.fullmatch(str(identity.get(name, ""))):
             raise ValueError(f"invalid {name}")
-    if identity.get("latch_protocol_version") != 2:
-        raise ValueError("qualification must use latch protocol version 2")
+    expected_protocol = 2 if historical_v2 else 3
+    if identity.get("latch_protocol_version") != expected_protocol:
+        raise ValueError(
+            f"qualification must use latch protocol version {expected_protocol}"
+        )
+    if not historical_v2 and not str(identity.get("candidate_workflow_url", "")).startswith(
+        "https://"
+    ):
+        raise ValueError("candidate_workflow_url must identify immutable CI evidence")
 
     trial = payload.get("trial")
     if not isinstance(trial, dict):
@@ -124,9 +142,14 @@ def verify(path: Path) -> dict[str, object]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("evidence", type=Path)
+    parser.add_argument(
+        "--historical-v2",
+        action="store_true",
+        help="verify retained protocol-v2 evidence; never use for a new qualification",
+    )
     args = parser.parse_args()
     try:
-        payload = verify(args.evidence)
+        payload = verify(args.evidence, historical_v2=args.historical_v2)
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
         print(f"CRT qualification invalid: {error}", file=sys.stderr)
         return 1

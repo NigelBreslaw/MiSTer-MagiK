@@ -514,8 +514,18 @@ fn verify_fpga(root: &Path, id: &str) -> AgentResult<String> {
         {
             return classified("fpga_component_identity", flavour);
         }
-        if metadata.get("latch_protocol_version").map(String::as_str) != Some("2") {
-            return classified("fpga_protocol", "version 2 required");
+        if metadata.get("format").map(String::as_str) != Some("mister-magik-fpga-release-v2") {
+            return classified("fpga_metadata_format", "release v2 required");
+        }
+        if metadata.get("latch_protocol_version").map(String::as_str) != Some("3") {
+            return classified("fpga_protocol", "version 3 required");
+        }
+        for field in ["latch_protocol_sha256", "latch_bridge_sha256"] {
+            require_hex(
+                field,
+                metadata.get(field).map(String::as_str).unwrap_or_default(),
+                64,
+            )?;
         }
         for report in declared_reports(&directory.join("menu-magik-vblank-latch.metadata.txt"))? {
             let key = format!("report_sha256.{}", report.to_string_lossy());
@@ -766,7 +776,9 @@ mod tests {
             fs::write(
                 directory.join("menu-magik-vblank-latch.metadata.txt"),
                 format!(
-                    "format=mister-magik-fpga-release-v1\ncomponent_input_sha256={component_id}\nplatform_contract_sha256={contract}\nlatch_protocol_version=2\nrbf_sha256={}\nreport_sha256.reports/menu.fit.rpt={}\n",
+                    "format=mister-magik-fpga-release-v2\ncomponent_input_sha256={component_id}\nplatform_contract_sha256={contract}\nlatch_protocol_sha256={}\nlatch_bridge_sha256={}\nlatch_protocol_version=3\nrbf_sha256={}\nreport_sha256.reports/menu.fit.rpt={}\n",
+                    "1".repeat(64),
+                    "2".repeat(64),
                     digest_bytes(rbf.as_bytes()),
                     digest_bytes(report.as_bytes())
                 ),

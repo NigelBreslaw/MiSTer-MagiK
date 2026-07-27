@@ -3,7 +3,7 @@
 MiSTer MagiK does not implement a CRT raster. The launcher publishes RGB565
 frames through the same `UIO_SET_FBUF`/`LFB` machinery used by Menu on HDMI.
 Main and Menu's `sys_top` exclusively own the output clock, raster, sync, and
-Direct Video mux. The MagiK RBF delta remains the protocol-v2 vblank latch; it
+Direct Video mux. The MagiK RBF delta uses the protocol-v3 atomic latch; it
 contains no CRT PLL, DDR scanout reader, line buffers, raster generator, or
 output-clock mux.
 
@@ -110,14 +110,14 @@ framebuffer route override across that handoff.
 
 The bounded `crt_trial` scene exercises route-owned composition and native
 RGB565 publication through the shared
-protocol-v2 latch for exactly 30 seconds. It requires Main to report one of the
+protocol-v3 latch for exactly 30 seconds. It requires Main to report one of the
 four standard CRT modes, advancing flip counters, and no presentation failure.
 Matching top and bottom frame markers expose mixed-frame publication
 immediately. It never switches an FPGA output route.
 
 Morph 4K's analog bridge is useful for checking the emitted clock, totals,
 porches, sync widths, polarities, and horizontal/vertical rates without owning
-a CRT. The version-2 qualification evidence records those external analyzer
+a CRT. The version-3 qualification evidence records those external analyzer
 measurements and binds them to exact app, Main, RBF, protocol, and platform
 hashes. CI can validate the evidence shape and the RBF timing/CDC/stock-delta
 reports, but neither CI nor Morph analysis proves compatibility with every

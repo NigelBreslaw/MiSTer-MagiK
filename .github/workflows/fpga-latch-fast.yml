@@ -7,14 +7,44 @@ on:
   pull_request:
     paths:
       - "mister/platform/fpga/menu-vblank-latch/**"
+      - "mister/platform/contracts/latch/**"
       - "scripts/*fpga*latch*"
       - "scripts/build-fpga-vblank-latch-core.sh"
+      - "scripts/checks/check-latch-protocol.py"
+      - "scripts/checks/check-fpga-latch-coverage.py"
+      - "scripts/checks/check-fpga-latch-integration.py"
+      - "scripts/checks/check-fpga-quartus-delta.py"
+      - "scripts/checks/generate-latch-protocol.py"
+      - "scripts/checks/verify-crt-qualification-evidence.py"
+      - "scripts/checks/verify-fpga-rbf-manifest.py"
+      - "scripts/platform-component-inputs/fpga-v0.1.txt"
+      - "scripts/release/platform/platform-component-id.py"
+      - "scripts/tests/test-crt-qualification-evidence.py"
+      - "scripts/tests/test-fpga-rbf-manifest.py"
+      - "scripts/tests/test-fpga-vblank-latch.sh"
+      - "scripts/tests/test-platform-component-id.py"
+      - "agent-cli/src/platform_bundle.rs"
       - ".github/workflows/fpga-latch-fast.yml"
   push:
     paths:
       - "mister/platform/fpga/menu-vblank-latch/**"
+      - "mister/platform/contracts/latch/**"
       - "scripts/*fpga*latch*"
       - "scripts/build-fpga-vblank-latch-core.sh"
+      - "scripts/checks/check-latch-protocol.py"
+      - "scripts/checks/check-fpga-latch-coverage.py"
+      - "scripts/checks/check-fpga-latch-integration.py"
+      - "scripts/checks/check-fpga-quartus-delta.py"
+      - "scripts/checks/generate-latch-protocol.py"
+      - "scripts/checks/verify-crt-qualification-evidence.py"
+      - "scripts/checks/verify-fpga-rbf-manifest.py"
+      - "scripts/platform-component-inputs/fpga-v0.1.txt"
+      - "scripts/release/platform/platform-component-id.py"
+      - "scripts/tests/test-crt-qualification-evidence.py"
+      - "scripts/tests/test-fpga-rbf-manifest.py"
+      - "scripts/tests/test-fpga-vblank-latch.sh"
+      - "scripts/tests/test-platform-component-id.py"
+      - "agent-cli/src/platform_bundle.rs"
       - ".github/workflows/fpga-latch-fast.yml"
 
 permissions:
@@ -74,3 +104,20 @@ jobs:
           (cd "$build_dir" && "$build_dir/obj/Vtb_mister_magik_vblank_latch")
           verilator_coverage --annotate-min 1 --annotate-all --annotate "$build_dir/annotated" "$build_dir/coverage.dat"
           scripts/checks/check-fpga-latch-coverage.py "$build_dir/annotated"
+      - name: Measure production bridge coverage
+        run: |
+          set -euo pipefail
+          build_dir="$(mktemp -d)"
+          trap 'rm -rf "$build_dir"' EXIT
+          verilator --cc --exe --build --timing --coverage-line \
+            --top-module tb_mister_magik_sys_top_integration \
+            --Mdir "$build_dir/obj" \
+            -Imister/platform/fpga/menu-vblank-latch \
+            mister/platform/fpga/menu-vblank-latch/mister_magik_vblank_latch.sv \
+            mister/platform/fpga/menu-vblank-latch/mister_magik_latch_sys_top_bridge.sv \
+            mister/platform/fpga/menu-vblank-latch/tb_mister_magik_sys_top_integration.sv \
+            "$GITHUB_WORKSPACE/mister/platform/fpga/menu-vblank-latch/verilator_sys_top_coverage_main.cpp"
+          (cd "$build_dir" && "$build_dir/obj/Vtb_mister_magik_sys_top_integration")
+          verilator_coverage --annotate-min 1 --annotate-all --annotate "$build_dir/annotated" "$build_dir/coverage.dat"
+          scripts/checks/check-fpga-latch-coverage.py "$build_dir/annotated" \
+            --source mister_magik_latch_sys_top_bridge.sv

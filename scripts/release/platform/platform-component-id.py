@@ -143,7 +143,13 @@ def main() -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     component = commands.add_parser("component")
     component.add_argument("name", choices=sorted(COMPONENT_INPUT_MANIFESTS))
-    component.add_argument("--github-output", type=Path)
+    component_output = component.add_mutually_exclusive_group()
+    component_output.add_argument("--github-output", type=Path)
+    component_output.add_argument(
+        "--revision-only",
+        action="store_true",
+        help="print the canonical last-changing input revision instead of the identity",
+    )
     bundle = commands.add_parser("bundle")
     bundle.add_argument("--fpga-id", required=True)
     bundle.add_argument("--kernel-id", required=True)
@@ -151,7 +157,9 @@ def main() -> int:
         args = parser.parse_args()
         if args.command == "component":
             identity, revision = component_id(args.root.resolve(), args.name)
-            if args.github_output:
+            if args.revision_only:
+                print(revision)
+            elif args.github_output:
                 with args.github_output.open("a") as output:
                     output.write(f"{args.name}_input_sha256={identity}\n")
                     output.write(f"{args.name}_component_revision={revision}\n")

@@ -522,7 +522,7 @@ jobs:
           set -euo pipefail
           menu_ref="$(cat mister/platform/fpga/menu-vblank-latch/Menu_MiSTer.commit)"
           [[ "$menu_ref" =~ ^[0-9a-f]{40}$ ]]
-          component_revision="$(git log -1 --format=%H -- $(sed '/^#/d;/^$/d' scripts/platform-component-inputs/fpga-v0.1.txt))"
+          component_revision="$(python3 scripts/release/platform/platform-component-id.py component fpga --revision-only)"
           build_date="$(git show -s --format=%cd --date=format:%y%m%d "$component_revision")"
           printf 'menu_ref=%s\ncomponent_revision=%s\nbuild_date=%s\n' "$menu_ref" "$component_revision" "$build_date" >> "$GITHUB_OUTPUT"
 
@@ -601,7 +601,7 @@ jobs:
           set -euo pipefail
           MISTER_FPGA_APPLY_PATCH=0 MISTER_FPGA_OUT_DIR="$GITHUB_WORKSPACE/build/fpga-signoff/stock" \
             MISTER_MENU_BUILD_DIR="$GITHUB_WORKSPACE/build/fpga-signoff/stock/Menu-work" scripts/build-fpga-vblank-latch-core.sh
-          MISTER_FPGA_APPLY_PATCH=1 MISTER_FPGA_QUARTUS_SEED=2 MISTER_FPGA_OUT_DIR="$GITHUB_WORKSPACE/build/fpga-signoff/patched" \
+          MISTER_FPGA_APPLY_PATCH=1 MISTER_FPGA_QUARTUS_SEED=1 MISTER_FPGA_OUT_DIR="$GITHUB_WORKSPACE/build/fpga-signoff/patched" \
             MISTER_MENU_BUILD_DIR="$GITHUB_WORKSPACE/build/fpga-signoff/patched/Menu-work" scripts/build-fpga-vblank-latch-core.sh
 
       - name: Verify Quartus delta
@@ -614,6 +614,8 @@ jobs:
           cp build/fpga-signoff/quartus-delta-signoff.tsv build/fpga-signoff/patched/reports/quartus-delta-signoff.tsv
           delta_sha="$(shasum -a 256 build/fpga-signoff/patched/reports/quartus-delta-signoff.tsv | awk '{print $1}')"
           printf 'report_sha256.reports/quartus-delta-signoff.tsv=%s\nsignoff_valid=1\n' "$delta_sha" >> build/fpga-signoff/patched/menu-magik-vblank-latch.metadata.txt
+          scripts/checks/verify-fpga-rbf-manifest.py \
+            build/fpga-signoff/patched/menu-magik-vblank-latch.metadata.txt
           scripts/agent ci platform-bundle write-component-cache \
             --component fpga --artifact build/fpga-signoff \
             --component-id '${{ needs.plan.outputs.fpga-id }}' \

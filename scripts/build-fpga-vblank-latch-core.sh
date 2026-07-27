@@ -198,7 +198,7 @@ path.write_text(updated)
 PY
 
 {
-  echo "format=mister-magik-fpga-release-v1"
+  echo "format=mister-magik-fpga-release-v2"
   shasum -a 256 "$PLATFORM_CONTRACT" | awk '{print "platform_contract_sha256="$1}'
   echo "magik_commit=$QUALIFIED_MAGIK_REVISION"
   if [[ -n "$COMPONENT_INPUT_SHA256" ]]; then
@@ -212,6 +212,7 @@ PY
   git -C "$MENU_ABS" status --short 2>/dev/null | sed 's/^/source_status=/'
   shasum -a 256 "$PATCH" | awk '{print "patch_sha256="$1}'
   shasum -a 256 "$LATCH_RTL" | awk '{print "latch_rtl_sha256="$1}'
+  shasum -a 256 "$LATCH_BRIDGE" | awk '{print "latch_bridge_sha256="$1}'
   shasum -a 256 "$LATCH_PROTOCOL" | awk '{print "latch_protocol_sha256="$1}'
   python3 -c 'import re,sys; source=open(sys.argv[1]).read(); match=re.search(r"MAGIK_FBUF_PROTOCOL_VERSION\s*=\s*16.d(\d+)", source); assert match; print("latch_protocol_version=" + match.group(1))' "$LATCH_PROTOCOL"
   echo "apply_patch=$APPLY_PATCH"

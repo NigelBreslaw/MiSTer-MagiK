@@ -26,12 +26,16 @@ the typed `mister mode stock` operator command. Packaging output, credentials,
 caches, and private fixtures must not be staged.
 
 CRT qualification additionally records a
-`mister-magik-crt-qualification-v2` evidence document. It binds the exact app
-and Main revisions, RBF and platform-contract hashes, protocol-v2 hash, bounded
-RGB565 publication trial, resolved standard mode, and external analyzer
+`mister-magik-crt-qualification-v3` evidence document. It binds the exact app,
+Main, and Menu revisions; kernel, RBF, platform-contract, platform-manifest,
+protocol, and FPGA-component hashes; the immutable candidate workflow; bounded
+RGB565 publication trial; resolved standard mode; and external analyzer
 measurements for clock, totals, porches, sync widths, polarity, and rates. It
 also records launcher/OSD/input, native-core-timing handoff, game lifecycle,
 HDMI regression, cleanup, limitations, and rollback. Until that attended
 real-CRT document passes
 `scripts/checks/verify-crt-qualification-evidence.py`, CRT remains implemented
 but not hardware-qualified.
+
+Retained protocol-v2 RBF or CRT evidence is rollback-only and must be verified
+with the explicit `--historical-v2` option. It cannot qualify a new platform.

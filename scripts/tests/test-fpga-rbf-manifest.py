@@ -16,7 +16,7 @@ SCRIPT = Path(__file__).resolve().parents[1] / "checks/verify-fpga-rbf-manifest.
 
 
 class ManifestTest(unittest.TestCase):
-    def fixture(self, root: Path) -> Path:
+    def fixture(self, root: Path, *, historical_v2: bool = False) -> Path:
         rbf = root / "release.rbf"
         report = root / "reports/fit.rpt"
         delta = root / "reports/quartus-delta-signoff.tsv"
@@ -28,15 +28,29 @@ class ManifestTest(unittest.TestCase):
         metadata = root / "release.metadata.txt"
         metadata.write_text(
             "\n".join((
-                "format=mister-magik-fpga-release-v1",
+                "format="
+                + (
+                    "mister-magik-fpga-release-v1"
+                    if historical_v2
+                    else "mister-magik-fpga-release-v2"
+                ),
                 "platform_contract_sha256=" + "6" * 64,
                 "magik_commit=" + "1" * 40,
                 "builder_commit=" + "5" * 40,
                 "source_commit=" + "2" * 40,
                 "patch_sha256=" + "3" * 64,
                 "latch_rtl_sha256=" + "4" * 64,
+                *(() if historical_v2 else ("latch_bridge_sha256=" + "8" * 64,)),
+                *(
+                    ()
+                    if historical_v2
+                    else (
+                        "component_input_sha256=" + "9" * 64,
+                        "component_revision=" + "a" * 40,
+                    )
+                ),
                 "latch_protocol_sha256=" + "7" * 64,
-                "latch_protocol_version=2",
+                "latch_protocol_version=" + ("2" if historical_v2 else "3"),
                 "quartus_seed=1",
                 "quartus_version=17.0.0 Build 595",
                 "workflow_url=https://github.example/actions/runs/1",
@@ -50,8 +64,17 @@ class ManifestTest(unittest.TestCase):
         )
         return metadata
 
-    def run_verify(self, metadata: Path) -> subprocess.CompletedProcess[str]:
-        return subprocess.run([str(SCRIPT), str(metadata)], text=True, capture_output=True)
+    def run_verify(
+        self,
+        metadata: Path,
+        *,
+        historical_v2: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        command = [str(SCRIPT)]
+        if historical_v2:
+            command.append("--historical-v2")
+        command.append(str(metadata))
+        return subprocess.run(command, text=True, capture_output=True)
 
     def test_matching_fixture_passes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -89,10 +112,27 @@ class ManifestTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             metadata = self.fixture(Path(directory))
             valid = metadata.read_text()
-            metadata.write_text(valid.replace("latch_protocol_version=2\n", ""))
+            metadata.write_text(valid.replace("latch_protocol_version=3\n", ""))
             self.assertNotEqual(self.run_verify(metadata).returncode, 0)
-            metadata.write_text(valid.replace("latch_protocol_version=2", "latch_protocol_version=3"))
+            metadata.write_text(valid.replace("latch_protocol_version=3", "latch_protocol_version=2"))
             self.assertNotEqual(self.run_verify(metadata).returncode, 0)
+
+    def test_historical_v2_requires_explicit_rollback_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            metadata = self.fixture(Path(directory), historical_v2=True)
+            self.assertNotEqual(self.run_verify(metadata).returncode, 0)
+            self.assertEqual(
+                self.run_verify(metadata, historical_v2=True).returncode,
+                0,
+            )
+
+    def test_new_v3_artifact_is_not_historical_v2(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            metadata = self.fixture(Path(directory))
+            self.assertNotEqual(
+                self.run_verify(metadata, historical_v2=True).returncode,
+                0,
+            )
 
 
 if __name__ == "__main__":
