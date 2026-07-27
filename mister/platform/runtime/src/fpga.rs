@@ -301,6 +301,11 @@ impl Fpga {
         self.spi_en(IO_EN, false);
     }
 
+    fn reset_spi_transport(&mut self) {
+        self.gpo = (self.gpo | BIT31) & !(IO_EN | STROBE | 0xffff);
+        self.wr(self.gpo);
+    }
+
     /// One SPI word, faithful to `fpga_spi`: returns the GPI value captured as ACK
     /// drops (low 16 bits = response data).
     pub fn spi(&mut self, word: u16) -> io::Result<u16> {
@@ -459,6 +464,19 @@ impl Fpga {
     }
 
     pub fn read_magik_latched_fbuf_status(&mut self) -> io::Result<LatchedFbufStatus> {
+        match self.read_magik_latched_fbuf_status_once() {
+            Err(error) if error.kind() == io::ErrorKind::TimedOut => {
+                // GET_FBUF_LATCH is an idempotent status query. Return the bus
+                // to a known idle state and retry it once; never apply this to
+                // framebuffer posts, whose payload may already be committed.
+                self.reset_spi_transport();
+                self.read_magik_latched_fbuf_status_once()
+            }
+            result => result,
+        }
+    }
+
+    fn read_magik_latched_fbuf_status_once(&mut self) -> io::Result<LatchedFbufStatus> {
         let res = (|| {
             let (magic_hi, magic_lo) = self.cmd_capture(MAGIK_UIO_GET_FBUF_LATCH)?;
             let mut words = [0u16; mister_magik_latch_contract::STATUS_WORD_COUNT];
@@ -763,6 +781,24 @@ mod tests {
         let error = low_timeout.spi(0xaa55).unwrap_err();
         assert!(error.to_string().contains("ACK low"));
         assert_eq!(*low_state.borrow().writes.last().unwrap(), BIT31 | 0xaa55);
+    }
+
+    #[test]
+    fn latch_status_timeout_resets_bus_and_retries_only_the_read_command() {
+        let (mut fpga, state) = scripted(&[]);
+
+        let error = fpga.read_magik_latched_fbuf_status().unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(
+            words_from_writes(&state.borrow().writes)
+                .into_iter()
+                .filter(|word| *word == MAGIK_UIO_GET_FBUF_LATCH)
+                .count(),
+            2
+        );
+        assert!(state.borrow().writes.iter().any(|value| *value == BIT31));
+        assert_eq!(fpga.gpo & (IO_EN | STROBE), 0);
     }
 
     #[test]

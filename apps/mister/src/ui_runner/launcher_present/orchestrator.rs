@@ -45,6 +45,13 @@ enum LatchAutoRetryState {
     InProgress,
 }
 
+const LATCH_RETRY_DELAYS: [Duration; 4] = [
+    Duration::from_millis(250),
+    Duration::from_secs(1),
+    Duration::from_secs(5),
+    Duration::from_secs(60),
+];
+
 pub(in crate::ui_runner) struct LauncherPresenter<L = FpgaVblankLatchHiddenPresenter> {
     state: LauncherPresenterState<L>,
     compatibility_transitions: u64,
@@ -52,6 +59,7 @@ pub(in crate::ui_runner) struct LauncherPresenter<L = FpgaVblankLatchHiddenPrese
     latest_failure: Option<LatchFailure>,
     retry_attempts: u8,
     auto_retry: LatchAutoRetryState,
+    next_retry_at: Option<Instant>,
     latest_retry_result: &'static str,
     recovery_state: &'static str,
 }
@@ -160,6 +168,7 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
             latest_failure,
             retry_attempts: 0,
             auto_retry,
+            next_retry_at: None,
             latest_retry_result: "not-attempted",
             recovery_state,
         };
@@ -206,7 +215,7 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
     }
 
     pub(in crate::ui_runner) fn retry_latch_automatically(&mut self, ui: &UiDisplay) -> bool {
-        if !self.begin_automatic_retry() {
+        if !self.begin_automatic_retry(Instant::now()) {
             return false;
         }
         let result = FpgaVblankLatchHiddenPresenter::open(ui);
@@ -317,6 +326,7 @@ impl<L> LauncherPresenter<L> {
         *prompt_visible = false;
         if changed {
             self.auto_retry = LatchAutoRetryState::Disabled;
+            self.next_retry_at = None;
             self.recovery_state = "continued-compatibility";
             self.persist_recovery_evidence();
         }
@@ -325,6 +335,10 @@ impl<L> LauncherPresenter<L> {
 
     pub(in crate::ui_runner) fn compatibility_transitions(&self) -> u64 {
         self.compatibility_transitions
+    }
+
+    pub(in crate::ui_runner) fn retry_attempts(&self) -> u8 {
+        self.retry_attempts
     }
 
     fn transition_latch_failure(&mut self, latch_error: LatchFailure) {
@@ -349,13 +363,13 @@ impl<L> LauncherPresenter<L> {
             self.first_failure = Some(latch_error.clone());
         }
         self.latest_failure = Some(latch_error.clone());
-        let automatic_retry =
-            self.retry_attempts == 0 && latch_error.is_transient_runtime_failure();
+        let automatic_retry = latch_error.is_transient_runtime_failure();
         self.auto_retry = if automatic_retry {
             LatchAutoRetryState::AwaitingSafeFrame
         } else {
             LatchAutoRetryState::Disabled
         };
+        self.next_retry_at = None;
         self.recovery_state = if automatic_retry {
             "awaiting-safe-frame"
         } else {
@@ -371,12 +385,15 @@ impl<L> LauncherPresenter<L> {
         self.persist_recovery_evidence();
     }
 
-    fn begin_automatic_retry(&mut self) -> bool {
-        if self.auto_retry != LatchAutoRetryState::Ready || self.retry_attempts != 0 {
+    fn begin_automatic_retry(&mut self, now: Instant) -> bool {
+        if self.auto_retry != LatchAutoRetryState::Ready
+            || self.next_retry_at.is_none_or(|deadline| now < deadline)
+        {
             return false;
         }
-        self.retry_attempts = 1;
+        self.retry_attempts = self.retry_attempts.saturating_add(1);
         self.auto_retry = LatchAutoRetryState::InProgress;
+        self.next_retry_at = None;
         self.latest_retry_result = "in-progress";
         self.recovery_state = "automatic-retry";
         self.persist_recovery_evidence();
@@ -388,6 +405,7 @@ impl<L> LauncherPresenter<L> {
             Ok(latch) => {
                 self.state = LauncherPresenterState::Latch(latch);
                 self.auto_retry = LatchAutoRetryState::Disabled;
+                self.next_retry_at = None;
                 self.latest_retry_result = "success";
                 self.recovery_state = if automatic {
                     "recovered-automatically"
@@ -408,8 +426,15 @@ impl<L> LauncherPresenter<L> {
     }
 
     fn mark_safe_frame_complete(&mut self) {
+        self.mark_safe_frame_complete_at(Instant::now());
+    }
+
+    fn mark_safe_frame_complete_at(&mut self, now: Instant) {
         if self.auto_retry == LatchAutoRetryState::AwaitingSafeFrame {
             self.auto_retry = LatchAutoRetryState::Ready;
+            let delay_index =
+                usize::from(self.retry_attempts).min(LATCH_RETRY_DELAYS.len().saturating_sub(1));
+            self.next_retry_at = Some(now + LATCH_RETRY_DELAYS[delay_index]);
             self.recovery_state = "safe-frame-complete";
             self.persist_recovery_evidence();
         }
@@ -1095,6 +1120,7 @@ mod tests {
             latest_failure: failure,
             retry_attempts: 0,
             auto_retry: LatchAutoRetryState::Disabled,
+            next_retry_at: None,
             latest_retry_result: "not-attempted",
             recovery_state: "compatibility-prompt",
         }
@@ -1286,7 +1312,7 @@ mod tests {
     }
 
     #[test]
-    fn transient_failure_waits_for_safe_frame_then_retries_once() {
+    fn transient_failure_waits_for_safe_frame_then_retries_on_schedule() {
         let mut presenter = presenter(LauncherPresenterState::Latch(FakeLatch));
         let mut adapters = FakeAdapters::failing();
 
@@ -1295,11 +1321,13 @@ mod tests {
         assert_eq!(presenter.auto_retry, LatchAutoRetryState::Ready);
         assert_eq!(presenter.retry_attempts, 0);
 
-        assert!(presenter.begin_automatic_retry());
+        let first_retry = presenter.next_retry_at.unwrap();
+        assert!(!presenter.begin_automatic_retry(first_retry - Duration::from_millis(1)));
+        assert!(presenter.begin_automatic_retry(first_retry));
         assert!(presenter.apply_retry_result(Ok(FakeLatch), true));
         assert_eq!(presenter.retry_attempts, 1);
         assert_eq!(presenter.recovery_state, "recovered-automatically");
-        assert!(!presenter.begin_automatic_retry());
+        assert!(!presenter.begin_automatic_retry(first_retry));
         assert_eq!(
             presenter.pacing_backend(),
             LauncherPresentBackend::FpgaVblankLatchHidden
@@ -1307,7 +1335,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_automatic_retry_preserves_origin_and_shows_prompt() {
+    fn failed_automatic_retry_preserves_origin_and_schedules_backoff() {
         let mut presenter = presenter(LauncherPresenterState::Latch(FakeLatch));
         let mut adapters = FakeAdapters::failing();
         presenter.present_with(frame(), &mut adapters);
@@ -1317,7 +1345,8 @@ mod tests {
             "retry failed",
         );
 
-        assert!(presenter.begin_automatic_retry());
+        let first_retry = presenter.next_retry_at.unwrap();
+        assert!(presenter.begin_automatic_retry(first_retry));
         assert!(!presenter.apply_retry_result(Err(retry_failure), true));
         assert_eq!(
             presenter.first_failure.as_ref().unwrap().detail,
@@ -1328,9 +1357,15 @@ mod tests {
             "retry failed"
         );
         assert_eq!(presenter.retry_attempts, 1);
-        assert!(presenter.compatibility_prompt_visible());
-        assert_eq!(presenter.auto_retry, LatchAutoRetryState::Disabled);
-        assert!(!presenter.begin_automatic_retry());
+        assert!(!presenter.compatibility_prompt_visible());
+        assert_eq!(presenter.auto_retry, LatchAutoRetryState::AwaitingSafeFrame);
+
+        let safe_frame_at = first_retry + Duration::from_millis(10);
+        presenter.mark_safe_frame_complete_at(safe_frame_at);
+        let second_retry = safe_frame_at + Duration::from_secs(1);
+        assert!(!presenter.begin_automatic_retry(second_retry - Duration::from_millis(1)));
+        assert!(presenter.begin_automatic_retry(second_retry));
+        assert_eq!(presenter.retry_attempts, 2);
     }
 
     #[test]
@@ -1351,12 +1386,12 @@ mod tests {
             presenter.transition_latch_failure(failure);
             assert!(presenter.compatibility_prompt_visible());
             assert_eq!(presenter.auto_retry, LatchAutoRetryState::Disabled);
-            assert!(!presenter.begin_automatic_retry());
+            assert!(!presenter.begin_automatic_retry(Instant::now()));
         }
     }
 
     #[test]
-    fn manual_retry_failure_cannot_start_automatic_loop() {
+    fn transient_manual_retry_failure_rejoins_automatic_recovery() {
         let mut presenter = presenter(LauncherPresenterState::Compatibility {
             failure: LatchFailure::runtime(
                 mister_magik_fb::latch_readiness::LatchFailureStage::LatchPost,
@@ -1377,9 +1412,12 @@ mod tests {
             )),
             false,
         ));
-        assert!(presenter.compatibility_prompt_visible());
-        assert_eq!(presenter.auto_retry, LatchAutoRetryState::Disabled);
-        assert!(!presenter.begin_automatic_retry());
+        assert!(!presenter.compatibility_prompt_visible());
+        assert_eq!(presenter.auto_retry, LatchAutoRetryState::AwaitingSafeFrame);
+        let safe_frame_at = Instant::now();
+        presenter.mark_safe_frame_complete_at(safe_frame_at);
+        assert!(!presenter.begin_automatic_retry(safe_frame_at + Duration::from_millis(999)));
+        assert!(presenter.begin_automatic_retry(safe_frame_at + Duration::from_secs(1)));
     }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]

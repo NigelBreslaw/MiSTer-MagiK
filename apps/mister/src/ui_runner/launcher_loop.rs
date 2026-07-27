@@ -2566,7 +2566,10 @@ pub(super) fn run_launcher_loop(
         if launcher_presenter.retry_latch_automatically(ui) {
             runtime_status::event(
                 "launcher_latch_recovery",
-                "action=automatic-retry attempt=1",
+                &format!(
+                    "action=automatic-retry attempt={}",
+                    launcher_presenter.retry_attempts()
+                ),
             );
             request_launcher_redraw!();
         }
