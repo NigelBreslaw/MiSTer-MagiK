@@ -14100,6 +14100,8 @@ H: Handlers=event3 js0"#
                 "main_present_pending": false,
                 "main_present_flip_count": id + 10,
                 "main_present_drop_count": 2,
+            });
+            let remaining = json!({
                 "status_write_due": false,
                 "runtime_status_write_us": 0,
                 "clock_update_due": false,
@@ -14124,6 +14126,15 @@ H: Handlers=event3 js0"#
                 "particle_clear_us": 0,
                 "particle_raster_us": 0
             });
+            frame
+                .as_object_mut()
+                .expect("screensaver evidence must be an object")
+                .extend(
+                    remaining
+                        .as_object()
+                        .expect("remaining screensaver evidence must be an object")
+                        .clone(),
+                );
             frame["screensaver_render_ahead_sequence"] = json!(id);
             frame["screensaver_render_ahead_queue_depth"] = json!(1);
             frame["screensaver_render_ahead_frame_age_us"] = json!(400);
