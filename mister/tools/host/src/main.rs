@@ -5380,16 +5380,30 @@ fn physical_refresh_summary(
         .ok_or_else(|| {
             format!("screensaver profile run {run} has non-monotonic completion timestamps")
         })?;
-    let unique_latch_flips = frames
+    let latch_flip_deltas = frames
         .windows(2)
         .map(|pair| {
             frame_u16(pair[1], "main_present_flip_count")
                 .wrapping_sub(frame_u16(pair[0], "main_present_flip_count")) as u64
         })
+        .collect::<Vec<_>>();
+    let expected_intervals = intervals
+        .iter()
+        .map(|(_, interval)| {
+            interval
+                .saturating_add(refresh_period_us / 2)
+                .checked_div(refresh_period_us)
+                .unwrap_or(0)
+                .max(1)
+        })
+        .collect::<Vec<_>>();
+    let unique_latch_flips = latch_flip_deltas.iter().sum::<u64>();
+    let expected_refresh_intervals = expected_intervals.iter().sum::<u64>();
+    let repeated_refreshes = expected_intervals
+        .iter()
+        .zip(&latch_flip_deltas)
+        .map(|(expected, flips)| expected.saturating_sub(*flips))
         .sum::<u64>();
-    let expected_refresh_intervals =
-        ((elapsed_us as f64 / refresh_period_us as f64).round() as u64).max(1);
-    let repeated_refreshes = expected_refresh_intervals.saturating_sub(unique_latch_flips);
     let completion_gap_limit_us = refresh_period_us.saturating_mul(3) / 2;
     let long_completion_intervals = intervals
         .iter()
@@ -14123,6 +14137,24 @@ H: Handlers=event3 js0"#
         let summary = physical_summary(&frames, 16_667).unwrap();
         assert_eq!(summary["expected_refresh_intervals"], 3);
         assert_eq!(summary["unique_latch_flips"], 3);
+        assert_eq!(summary["repeated_refreshes"], 0);
+        assert_eq!(summary["long_completion_intervals"], json!([]));
+    }
+
+    #[test]
+    fn physical_refresh_summary_does_not_accumulate_nominal_clock_error() {
+        let frames = (0..1_827)
+            .map(|index| {
+                physical_frame(
+                    index,
+                    1_000_000 + index * 16_667,
+                    u16::try_from(index).unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let summary = physical_summary(&frames, 16_662).unwrap();
+        assert_eq!(summary["expected_refresh_intervals"], 1_826);
+        assert_eq!(summary["unique_latch_flips"], 1_826);
         assert_eq!(summary["repeated_refreshes"], 0);
         assert_eq!(summary["long_completion_intervals"], json!([]));
     }
