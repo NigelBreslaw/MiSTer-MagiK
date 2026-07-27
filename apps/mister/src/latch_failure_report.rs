@@ -226,12 +226,14 @@ fn prune_reports(dir: &Path, active_episode_id: &str, now_ms: u128) -> io::Resul
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let path = entry.path();
-            let name = path.file_name()?.to_str()?;
-            (name.starts_with(REPORT_PREFIX) && name.ends_with(".json")).then(|| {
-                let timestamp = report_timestamp(name).unwrap_or(0);
-                let bytes = entry.metadata().map(|metadata| metadata.len()).unwrap_or(0);
-                (path, timestamp, bytes)
-            })
+            let name = entry.file_name();
+            let name = name.to_str()?;
+            if !name.starts_with(REPORT_PREFIX) || !name.ends_with(".json") {
+                return None;
+            }
+            let timestamp = report_timestamp(name).unwrap_or(0);
+            let bytes = entry.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+            Some((path, timestamp, bytes))
         })
         .collect::<Vec<_>>();
 
