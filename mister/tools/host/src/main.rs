@@ -9292,6 +9292,16 @@ fn ssh_diagnostics_bundle(agent_error: String) -> Result<Value> {
         },
         "crashes": ssh_crash_reports_json(&sess),
         "catalog_failures": ssh_catalog_failure_reports_json(&sess),
+        "catalog_progress": ssh_latest_diagnostic_report(
+            &sess,
+            "diagnostics/catalog/progress-latest.json",
+            "updated_unix_ms",
+        ),
+        "latch_failure": ssh_latest_diagnostic_report(
+            &sess,
+            "diagnostics/latch/latest.json",
+            "updated_unix_ms",
+        ),
     }))
 }
 
@@ -9320,6 +9330,16 @@ fn write_diagnostics_bundle(out_dir: &Path, bundle: &Value) -> Result<()> {
         out_dir,
         "catalog-failure-latest.json",
         bundle.pointer("/catalog_failures/latest/report"),
+    )?;
+    write_json_member(
+        out_dir,
+        "catalog-progress-latest.json",
+        bundle.pointer("/catalog_progress/report"),
+    )?;
+    write_json_member(
+        out_dir,
+        "latch-failure-latest.json",
+        bundle.pointer("/latch_failure/report"),
     )?;
 
     write_string_pointer(out_dir, "ps.txt", bundle.pointer("/processes/ps"))?;
@@ -9438,6 +9458,39 @@ fn ssh_catalog_failure_reports_json(sess: &Session) -> Value {
         "latest": latest,
         "recent_paths": recent,
     })
+}
+
+fn ssh_latest_diagnostic_report(
+    sess: &Session,
+    relative_path: &str,
+    timestamp_field: &str,
+) -> Value {
+    let configured = configured_remote_path("MISTER_MAGIK_APP_DIR", "/media/fat/mister-magik");
+    let mut paths = vec![
+        format!("{configured}/{relative_path}"),
+        format!("/media/fat/mister-magik/{relative_path}"),
+        format!("/media/fat/mister-magik-dev/{relative_path}"),
+    ];
+    paths.sort();
+    paths.dedup();
+    let mut reports = paths
+        .into_iter()
+        .filter_map(|path| {
+            let report = remote_read(sess, &path)
+                .and_then(|text| serde_json::from_str::<Value>(&text).ok())?;
+            Some((path, report))
+        })
+        .collect::<Vec<_>>();
+    reports.sort_by_key(|(_, report)| {
+        report
+            .get(timestamp_field)
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+    });
+    reports
+        .pop()
+        .map(|(path, report)| json!({"path": path, "report": report}))
+        .unwrap_or(Value::Null)
 }
 
 fn remote_catalog_failure_paths(sess: &Session, dir: &str, limit: usize) -> Vec<String> {
@@ -14891,7 +14944,7 @@ H: Handlers=event3 js0"#
     }
 
     #[test]
-    fn diagnostics_bundle_exports_latest_catalog_failure() {
+    fn diagnostics_bundle_exports_latest_support_reports() {
         let out = std::env::temp_dir().join(format!(
             "mister-magik-host-catalog-diagnostics-{}",
             std::process::id()
@@ -14908,7 +14961,21 @@ H: Handlers=event3 js0"#
                     }
                 },
                 "recent_paths": []
-            }
+            },
+            "catalog_progress": {
+                "path": "/media/fat/mister-magik/diagnostics/catalog/progress-latest.json",
+                "report": {
+                    "schema": "mister-magik-catalog-progress-v1",
+                    "episode_id": "progress-catalog-test"
+                }
+            },
+            "latch_failure": {
+                "path": "/media/fat/mister-magik/diagnostics/latch/latest.json",
+                "report": {
+                    "schema": "mister-magik-latch-failure-report-v1",
+                    "episode_id": "report-latch-test"
+                }
+            },
         });
 
         write_diagnostics_bundle(&out, &bundle).unwrap();
@@ -14918,6 +14985,14 @@ H: Handlers=event3 js0"#
             serde_json::from_slice(&fs::read(out.join("catalog-failure-latest.json")).unwrap())
                 .unwrap();
         assert_eq!(latest["schema"], "mister-magik-catalog-failure-v1");
+        let progress: Value =
+            serde_json::from_slice(&fs::read(out.join("catalog-progress-latest.json")).unwrap())
+                .unwrap();
+        assert_eq!(progress["schema"], "mister-magik-catalog-progress-v1");
+        let latch: Value =
+            serde_json::from_slice(&fs::read(out.join("latch-failure-latest.json")).unwrap())
+                .unwrap();
+        assert_eq!(latch["schema"], "mister-magik-latch-failure-report-v1");
         let _ = fs::remove_dir_all(out);
     }
 

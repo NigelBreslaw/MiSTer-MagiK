@@ -942,6 +942,14 @@ mod linux {
         "/media/fat/mister-magik/diagnostics/catalog",
         "/media/fat/mister-magik-dev/diagnostics/catalog",
     ];
+    const CATALOG_PROGRESS_PATHS: [&str; 2] = [
+        "/media/fat/mister-magik/diagnostics/catalog/progress-latest.json",
+        "/media/fat/mister-magik-dev/diagnostics/catalog/progress-latest.json",
+    ];
+    const LATCH_FAILURE_PATHS: [&str; 2] = [
+        "/media/fat/mister-magik/diagnostics/latch/latest.json",
+        "/media/fat/mister-magik-dev/diagnostics/latch/latest.json",
+    ];
     const LOG_RING_CAPACITY: usize = 512;
     const TIMELINE_CAPACITY: usize = 128;
     const MAX_DEPLOY_BYTES: u64 = 1024 * 1024 * 1024;
@@ -2420,6 +2428,14 @@ mod linux {
             },
             "crashes": crash_reports_json(),
             "catalog_failures": catalog_failure_reports_json(),
+            "catalog_progress": latest_diagnostic_report(
+                &CATALOG_PROGRESS_PATHS,
+                "updated_unix_ms",
+            ),
+            "latch_failure": latest_diagnostic_report(
+                &LATCH_FAILURE_PATHS,
+                "updated_unix_ms",
+            ),
         })
     }
 
@@ -3875,6 +3891,26 @@ mod linux {
             "latest": latest,
             "recent": recent,
         })
+    }
+
+    fn latest_diagnostic_report(paths: &[&str], timestamp_field: &str) -> Value {
+        let mut reports = paths
+            .iter()
+            .filter_map(|path| {
+                let report = read_json_value(path);
+                report.is_object().then(|| ((*path).to_string(), report))
+            })
+            .collect::<Vec<_>>();
+        reports.sort_by_key(|(_, report)| {
+            report
+                .get(timestamp_field)
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+        });
+        reports
+            .pop()
+            .map(|(path, report)| json!({"path": path, "report": report}))
+            .unwrap_or(Value::Null)
     }
 
     fn recent_catalog_failure_paths(dir: &Path, limit: usize) -> Vec<PathBuf> {

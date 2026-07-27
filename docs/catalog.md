@@ -257,6 +257,24 @@ recovery actions, and bounded catalog event history. Report-write failure never
 blocks recovery. The volatile `status.json` also exposes the current structured
 `catalog_failure`, and `events.jsonl` records stable failure and recovery events.
 
+Catalog workers also persist a progress episode even when no operation returns
+an error:
+
+```text
+diagnostics/catalog/progress-latest.json
+diagnostics/catalog/progress-catalog-<timestamp>-<pid>-<sequence>.json
+```
+
+The episode records worker operation and execution mode, the latest phase,
+detail and percentage, activity counts, wall and active elapsed time, whether
+background work was intentionally paused, catalog-state and resumable-build
+file metadata, runtime/Main snapshots, and bounded catalog log tails. It is
+written at worker start, at most every two minutes while running, after five
+minutes of active time without worker activity, on recovery from a stall, and
+on completion or failure. Interactive background pauses do not accrue stall
+time. Writes are asynchronous and bounded to 96 KiB each; the newest 24
+episodes, 2 MiB, and 48 hours are hard retention limits.
+
 For a sendable support bundle, run the typed host command:
 
 ```text
@@ -264,9 +282,12 @@ mister agent diagnostics --out PATH
 ```
 
 Agent and SSH-fallback collection probe both public and development
-installations and place the most recent report in the bundle as
-`catalog-failure-latest.json`. A screen capture may clarify what the user saw,
-but is not required to identify the catalog failure.
+installations. The bundle exports `catalog-failure-latest.json`,
+`catalog-progress-latest.json`, and `latch-failure-latest.json` when those
+reports exist. Collect it while a suspected stall is still active when
+possible; the persistent progress episode remains available after restart.
+A screen capture may clarify what the user saw, but is not required to identify
+the catalog phase or last observed activity.
 
 ## Launch Return
 
@@ -394,7 +415,8 @@ device while preserving its schema-two, `rich-game-v1` catalog:
 4. Reboot and verify that the rebuilt catalog remains authoritative and games
    still launch.
 5. Collect `mister agent diagnostics --out PATH` and confirm the bundle contains
-   `catalog-failure-latest.json` when a catalog failure was recorded.
+   `catalog-progress-latest.json`, plus `catalog-failure-latest.json` or
+   `latch-failure-latest.json` when those failures were recorded.
 
 This qualification does not require reset-fault testing and does not change the
 device downloader INI or release channel.
