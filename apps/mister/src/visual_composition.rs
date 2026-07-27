@@ -522,4 +522,22 @@ mod tests {
         assert_eq!(destination[12], source[2]);
         assert_eq!(destination[15], source[3]);
     }
+
+    #[test]
+    fn screenshot_tile_wall_is_deterministic_for_fixture_images() {
+        let images = (0..12)
+            .map(|index| ScreenshotTileImage {
+                pixels: vec![Rgb565Pixel(index as u16 + 1); 4],
+                w: 2,
+                h: 2,
+                stride: 2,
+            })
+            .collect::<Vec<_>>();
+        let mut first = vec![Rgb565Pixel(0); 960 * 540];
+        let mut second = vec![Rgb565Pixel(0); 960 * 540];
+        ScreenshotTileWall::new(960, 540).render(&mut first, 960, 540, &images, 90);
+        ScreenshotTileWall::new(960, 540).render(&mut second, 960, 540, &images, 90);
+        assert_eq!(first, second);
+        assert!(first.iter().any(|pixel| pixel.0 != 0));
+    }
 }

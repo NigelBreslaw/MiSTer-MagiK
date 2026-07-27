@@ -19,8 +19,12 @@ mod macos {
     use slint::platform::software_renderer::{RepaintBufferType, Rgb565Pixel};
     use slint::{ComponentHandle, ModelRc, PhysicalSize, SharedString, VecModel};
     use softbuffer::{Context, Surface};
+    use std::cell::Cell;
     use std::error::Error;
+    use std::fs::OpenOptions;
+    use std::io::Write;
     use std::num::NonZeroU32;
+    use std::path::{Path, PathBuf};
     use std::rc::Rc;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -36,10 +40,12 @@ mod macos {
     const FRAME_PERIOD: Duration = Duration::from_nanos(16_666_667);
 
     pub fn run() -> Result<(), Box<dyn Error>> {
+        let options = PreviewOptions::parse(std::env::args().skip(1))?;
         let slint_window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
+        let fixed_time = Rc::new(Cell::new(Duration::ZERO));
         slint::platform::set_platform(Box::new(MisterPlatform::new(
             Rc::clone(&slint_window),
-            None,
+            Some(Rc::clone(&fixed_time)),
         )))?;
         slint_window.set_size(PhysicalSize::new(FRAME_WIDTH as u32, FRAME_HEIGHT as u32));
 
@@ -54,9 +60,30 @@ mod macos {
         launcher.show()?;
         slint_window.request_redraw();
 
+        let mut application =
+            PreviewApplication::new(launcher, slint_window, fixed_time, Scenario::Home);
+        application.select_scenario(options.scenario);
+        if let Some(output) = options.output {
+            for _ in 0..=options.frame {
+                application.compose_frame();
+            }
+            write_ppm(
+                &output,
+                application.frame_target.cached_565(),
+                FRAME_WIDTH,
+                FRAME_HEIGHT,
+            )?;
+            println!(
+                "capture={} scenario={} frame={} hash={:016x}",
+                output.display(),
+                options.scenario.label(),
+                options.frame,
+                frame_hash(application.frame_target.cached_565())
+            );
+            return Ok(());
+        }
         let event_loop = EventLoop::new()?;
         event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + FRAME_PERIOD));
-        let mut application = PreviewApplication::new(launcher, slint_window, Scenario::Home);
         event_loop.run_app(&mut application)?;
         Ok(())
     }
@@ -64,6 +91,7 @@ mod macos {
     struct PreviewApplication {
         launcher: Launcher,
         slint_window: Rc<MisterSoftwareWindow>,
+        fixed_time: Rc<Cell<Duration>>,
         native_window: Option<Arc<Window>>,
         surface: Option<Surface<Arc<Window>, Arc<Window>>>,
         frame_target: UiFrameTarget,
@@ -84,11 +112,13 @@ mod macos {
         fn new(
             launcher: Launcher,
             slint_window: Rc<MisterSoftwareWindow>,
+            fixed_time: Rc<Cell<Duration>>,
             scenario: Scenario,
         ) -> Self {
             Self {
                 launcher,
                 slint_window,
+                fixed_time,
                 native_window: None,
                 surface: None,
                 frame_target: UiFrameTarget::cached(FramebufferTargetGeometry::new(
@@ -243,7 +273,7 @@ mod macos {
             }
         }
 
-        fn render(&mut self) {
+        fn compose_frame(&mut self) {
             slint::platform::update_timers_and_animations();
             self.slint_window.request_redraw();
             self.slint_window.draw_if_needed(|renderer| {
@@ -302,7 +332,11 @@ mod macos {
             {
                 self.screensaver_elapsed += FRAME_PERIOD;
             }
+            self.fixed_time.set(self.fixed_time.get() + FRAME_PERIOD);
+        }
 
+        fn render(&mut self) {
+            self.compose_frame();
             let Some(window) = self.native_window.as_ref() else {
                 return;
             };
@@ -405,6 +439,30 @@ mod macos {
     }
 
     impl Scenario {
+        fn parse(value: &str) -> Option<Self> {
+            match value.trim().to_ascii_lowercase().replace('_', "-").as_str() {
+                "home" => Some(Self::Home),
+                "arcade" => Some(Self::Arcade),
+                "settings" => Some(Self::Settings),
+                "controller" => Some(Self::Controller),
+                "controller-setup" | "setup" => Some(Self::ControllerSetup),
+                "about" => Some(Self::About),
+                "licenses" => Some(Self::Licenses),
+                "info" => Some(Self::Info),
+                "screensaver-settings" => Some(Self::ScreensaverSettings),
+                "startup" => Some(Self::Startup),
+                "confirm" => Some(Self::Confirm),
+                "catalog-scan" => Some(Self::CatalogScan),
+                "background-scan" => Some(Self::BackgroundScan),
+                "compatibility" => Some(Self::Compatibility),
+                "loading" => Some(Self::Loading),
+                "media-progress" => Some(Self::MediaProgress),
+                "particle" | "particle-screensaver" => Some(Self::ParticleScreensaver),
+                "screenshot-tiles" | "tiles" => Some(Self::ScreenshotTiles),
+                _ => None,
+            }
+        }
+
         fn label(self) -> &'static str {
             match self {
                 Self::Home => "Home",
@@ -450,6 +508,95 @@ mod macos {
                 Self::ControllerSetup => "S",
             }
         }
+    }
+
+    struct PreviewOptions {
+        scenario: Scenario,
+        frame: u64,
+        output: Option<PathBuf>,
+    }
+
+    impl PreviewOptions {
+        fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Self, String> {
+            let mut scenario = Scenario::Home;
+            let mut frame = 0;
+            let mut output = None;
+            let mut arguments = arguments.into_iter();
+            while let Some(argument) = arguments.next() {
+                match argument.as_str() {
+                    "--scenario" => {
+                        let value = arguments
+                            .next()
+                            .ok_or("--scenario requires a scenario name")?;
+                        scenario = Scenario::parse(&value)
+                            .ok_or_else(|| format!("unknown preview scenario {value:?}"))?;
+                    }
+                    "--frame" => {
+                        let value = arguments.next().ok_or("--frame requires a frame number")?;
+                        frame = value
+                            .parse::<u64>()
+                            .map_err(|_| format!("invalid frame number {value:?}"))?;
+                    }
+                    "--output" => {
+                        let value = arguments.next().ok_or("--output requires a file path")?;
+                        output = Some(PathBuf::from(value));
+                    }
+                    "--help" | "-h" => {
+                        return Err(
+                            "usage: mister-magik-ui-preview [--scenario NAME] [--frame N --output FILE.ppm]"
+                                .into(),
+                        );
+                    }
+                    other => return Err(format!("unknown preview argument {other:?}")),
+                }
+            }
+            if frame > 0 && output.is_none() {
+                return Err("--frame requires --output".into());
+            }
+            Ok(Self {
+                scenario,
+                frame,
+                output,
+            })
+        }
+    }
+
+    fn write_ppm(
+        path: &Path,
+        pixels: &[Rgb565Pixel],
+        width: usize,
+        height: usize,
+    ) -> Result<(), Box<dyn Error>> {
+        if pixels.len() != width.saturating_mul(height) {
+            return Err("capture pixel count does not match dimensions".into());
+        }
+        let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
+        write!(file, "P6\n{width} {height}\n255\n")?;
+        let mut row = Vec::with_capacity(width * 3);
+        for pixels in pixels.chunks_exact(width) {
+            row.clear();
+            for &pixel in pixels {
+                let color = rgb565_to_xrgb8888(pixel);
+                row.extend_from_slice(&[
+                    ((color >> 16) & 0xff) as u8,
+                    ((color >> 8) & 0xff) as u8,
+                    (color & 0xff) as u8,
+                ]);
+            }
+            file.write_all(&row)?;
+        }
+        Ok(())
+    }
+
+    fn frame_hash(pixels: &[Rgb565Pixel]) -> u64 {
+        let mut hash = 0xcbf29ce484222325u64;
+        for pixel in pixels {
+            for byte in pixel.0.to_le_bytes() {
+                hash ^= u64::from(byte);
+                hash = hash.wrapping_mul(0x100000001b3);
+            }
+        }
+        hash
     }
 
     fn initialize_bridge(bridge: &MisterBridge) {
@@ -850,6 +997,33 @@ mod macos {
             assert_eq!(rgb565_to_xrgb8888(Rgb565Pixel(0xf800)), 0x00ff0000);
             assert_eq!(rgb565_to_xrgb8888(Rgb565Pixel(0x07e0)), 0x0000ff00);
             assert_eq!(rgb565_to_xrgb8888(Rgb565Pixel(0x001f)), 0x000000ff);
+        }
+
+        #[test]
+        fn preview_options_parse_deterministic_capture() {
+            let options = PreviewOptions::parse(
+                [
+                    "--scenario",
+                    "screenshot-tiles",
+                    "--frame",
+                    "12",
+                    "--output",
+                    "out.ppm",
+                ]
+                .map(String::from),
+            )
+            .unwrap();
+            assert_eq!(options.scenario, Scenario::ScreenshotTiles);
+            assert_eq!(options.frame, 12);
+            assert_eq!(options.output, Some(PathBuf::from("out.ppm")));
+        }
+
+        #[test]
+        fn frame_hash_tracks_rgb565_bytes() {
+            assert_eq!(
+                frame_hash(&[Rgb565Pixel(0x1234), Rgb565Pixel(0xabcd)]),
+                0x462038d925b18c13
+            );
         }
     }
 }
