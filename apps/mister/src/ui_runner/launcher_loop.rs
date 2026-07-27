@@ -1809,6 +1809,14 @@ impl ScreensaverControl {
     }
 }
 
+const fn screensaver_catalog_busy(
+    worker_running: bool,
+    refresh_done: bool,
+    particle_renderer_requested: bool,
+) -> bool {
+    !particle_renderer_requested && (worker_running || !refresh_done)
+}
+
 fn preview_archive_warm_skip_enabled() -> bool {
     matches!(
         std::env::var("MISTER_PREVIEW_SCROLL_SKIP_ARCHIVE_WARM")
@@ -1839,6 +1847,7 @@ pub(super) fn run_launcher_loop(
             .as_deref(),
         Some("1" | "on" | "true" | "yes")
     );
+    let particle_screensaver_requested = launcher_screensaver::particle_renderer_requested();
     let mut screensaver = ScreensaverControl::new(Instant::now(), screensaver_start_active);
     let mut screensaver_pipeline: Option<ScreensaverRenderAhead> = None;
     let mut retiring_screensaver_pipelines: Vec<ScreensaverRenderAhead> = Vec::new();
@@ -3248,8 +3257,11 @@ pub(super) fn run_launcher_loop(
             nav.screen = screen;
         }
 
-        let catalog_build_busy =
-            scheduler.catalog_worker_running() || !catalog_session.refresh_done();
+        let catalog_build_busy = screensaver_catalog_busy(
+            scheduler.catalog_worker_running(),
+            catalog_session.refresh_done(),
+            particle_screensaver_requested,
+        );
         let restore_before = screensaver.restore_full_frame;
         screensaver.update(
             Instant::now(),
@@ -8604,6 +8616,13 @@ mod tests {
         saver.update(start + Duration::from_secs(2), true, delay, false);
         assert!(saver.active);
         assert!(!saver.start_when_ready);
+    }
+
+    #[test]
+    fn particle_screensaver_does_not_wait_for_catalog_work() {
+        assert!(screensaver_catalog_busy(true, false, false));
+        assert!(!screensaver_catalog_busy(true, false, true));
+        assert!(!screensaver_catalog_busy(false, true, false));
     }
 
     #[test]

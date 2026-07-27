@@ -560,7 +560,7 @@ impl LauncherScreensaverLoader {
     }
 }
 
-fn particle_renderer_requested() -> bool {
+pub(in crate::ui_runner) fn particle_renderer_requested() -> bool {
     particle_renderer_label_requested(std::env::var("MISTER_SCREENSAVER_RENDERER").ok().as_deref())
 }
 
