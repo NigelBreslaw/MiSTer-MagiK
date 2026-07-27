@@ -76,25 +76,6 @@ pub fn affected_plan_at(
             operation_conflicts.join(", ")
         ));
     }
-    if matches!(
-        &intent,
-        Intent::Verify {
-            scope: crate::model::Scope::Staged
-        }
-    ) && !paths.is_empty()
-    {
-        let mut policy = builtin(
-            "git.staged-policy",
-            "Check staged Git policy",
-            BuiltinOperation::StagedGitPolicy,
-            "staged verification → repository staging policy",
-        );
-        policy.inputs = paths
-            .iter()
-            .map(|path| path.display().to_string())
-            .collect();
-        operations.insert(policy.id.clone(), policy);
-    }
     external_requirements.sort_by(|left, right| left.id.cmp(&right.id));
     external_requirements.dedup_by(|left, right| left.id == right.id);
     let mut operations: Vec<_> = operations.into_values().collect();
@@ -109,73 +90,6 @@ pub fn affected_plan_at(
         operations,
         external_requirements,
     })
-}
-
-pub fn pre_commit_plan_at(repository: &Path, paths: Vec<PathBuf>) -> Result<Plan, String> {
-    let mut affected = affected_plan_at(
-        repository,
-        Intent::Plan {
-            scope: crate::model::Scope::Paths(paths.clone()),
-            verbose: false,
-        },
-        paths.clone(),
-    )?;
-    affected
-        .operations
-        .retain(|operation| operation.id.ends_with(".format"));
-    for path in &paths {
-        let absolute = repository.join(path);
-        let Ok(text) = std::fs::read_to_string(&absolute) else {
-            continue;
-        };
-        let shell = text
-            .lines()
-            .next()
-            .is_some_and(|line| line == "#!/bin/bash" || line == "#!/usr/bin/env bash");
-        if !shell {
-            continue;
-        }
-        let display = path.display().to_string();
-        affected.operations.push(op_owned(
-            &format!(
-                "pre-commit.shell-syntax.{}",
-                display.replace(['/', '.'], "-")
-            ),
-            &format!("Check {} syntax", path.display()),
-            "bash",
-            vec!["-n".into(), display],
-            "pre-commit validates affected shell syntax",
-        ));
-    }
-    let inputs: Vec<String> = paths
-        .iter()
-        .map(|path| path.display().to_string())
-        .collect();
-    let mut identity = builtin(
-        "git.identity",
-        "Check Git identity",
-        BuiltinOperation::GitIdentity,
-        "pre-commit requires the repository identity",
-    );
-    identity.inputs.clone_from(&inputs);
-    let mut policy = builtin(
-        "git.staged-policy",
-        "Check staged Git policy",
-        BuiltinOperation::StagedGitPolicy,
-        "pre-commit protects forbidden and unpublished staged content",
-    );
-    policy.inputs.clone_from(&inputs);
-    let mut whitespace = staged_diff_check();
-    whitespace.inputs = inputs;
-    affected.operations.extend([identity, policy, whitespace]);
-    affected.operations.sort_by(|left, right| {
-        left.workflow_phase()
-            .cmp(&right.workflow_phase())
-            .then_with(|| left.id.cmp(&right.id))
-    });
-    affected.intent = Intent::PreCommit;
-    affected.external_requirements.clear();
-    Ok(affected)
 }
 
 fn combine_arm_validation(mut operations: Vec<Operation>) -> Vec<Operation> {
@@ -729,6 +643,31 @@ fn add_path_operations(
             add(diff_check());
         }
     }
+    if matches!(
+        path.to_str(),
+        Some(
+            ".githooks/pre-commit"
+                | "scripts/checks/pre-commit.py"
+                | "scripts/checks/run-with-deadline.py"
+                | "scripts/tests/test-pre-commit.py"
+        )
+    ) {
+        add(with_inputs(
+            op(
+                "scripts.pre-commit-contract",
+                "Test the pre-commit contract",
+                "python3",
+                &["scripts/tests/test-pre-commit.py"],
+                "pre-commit tooling changed",
+            ),
+            &[
+                ".githooks/pre-commit",
+                "scripts/checks/pre-commit.py",
+                "scripts/checks/run-with-deadline.py",
+                "scripts/tests/test-pre-commit.py",
+            ],
+        ));
+    }
     if path.starts_with(".github") || path.starts_with(".githooks") {
         add(builtin(
             "repo.workflow-contract",
@@ -1017,21 +956,6 @@ fn diff_check() -> Operation {
     }
 }
 
-fn staged_diff_check() -> Operation {
-    Operation {
-        id: "git.staged-diff-check".into(),
-        title: "Check staged patch whitespace".into(),
-        risk: Risk::ReadOnly,
-        action: ActionKind::Git,
-        phase: WorkflowPhase::Cheap,
-        program: "git".into(),
-        args: vec!["diff".into(), "--cached".into(), "--check".into()],
-        reason: "pre-commit requires whitespace-clean staged content".into(),
-        failure_hint: "inspect the staged patch with git diff --cached".into(),
-        inputs: Vec::new(),
-        builtin: None,
-    }
-}
 fn cargo_format(id: &str, title: &str, args: &[&str], reason: &str) -> Operation {
     let mut operation = op(id, title, "cargo", args, reason);
     operation.action = ActionKind::Cargo {
@@ -1118,6 +1042,29 @@ mod tests {
             ]
         );
         assert!(plan.operations[0].args.contains(&"builder".into()));
+    }
+
+    #[test]
+    fn pre_commit_contract_changes_select_python_fixtures_once() {
+        let plan = affected_plan(
+            Intent::Verify {
+                scope: Scope::Paths(vec![]),
+            },
+            vec![
+                ".githooks/pre-commit".into(),
+                "scripts/checks/pre-commit.py".into(),
+                "scripts/checks/run-with-deadline.py".into(),
+                "scripts/tests/test-pre-commit.py".into(),
+            ],
+        )
+        .unwrap();
+        let operations: Vec<_> = plan
+            .operations
+            .iter()
+            .filter(|operation| operation.id == "scripts.pre-commit-contract")
+            .collect();
+        assert_eq!(operations.len(), 1);
+        assert_eq!(operations[0].args, ["scripts/tests/test-pre-commit.py"]);
     }
 
     #[test]
@@ -1487,52 +1434,6 @@ mod tests {
                 .iter()
                 .any(|arg| arg == "ui,signed-media-manifests")
         );
-    }
-
-    #[test]
-    fn pre_commit_plan_contains_only_policy_format_and_syntax_checks() {
-        let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("repository root");
-        let plan = pre_commit_plan_at(
-            repository,
-            vec![
-                "apps/mister/src/ui_runner/launcher_loop.rs".into(),
-                "scripts/agent".into(),
-            ],
-        )
-        .unwrap();
-        assert_eq!(plan.intent, Intent::PreCommit);
-        assert!(plan.external_requirements.is_empty());
-        assert!(plan.operations.iter().any(|operation| {
-            operation.id == "git.staged-diff-check"
-                && operation.args == ["diff", "--cached", "--check"]
-        }));
-        assert!(
-            plan.operations
-                .iter()
-                .any(|operation| operation.id == "app.format")
-        );
-        assert!(
-            plan.operations
-                .iter()
-                .any(|operation| operation.id == "pre-commit.shell-syntax.scripts-agent")
-        );
-        assert!(plan.operations.iter().all(|operation| {
-            operation.builtin.is_some()
-                || operation.id.ends_with(".format")
-                || operation.id.starts_with("pre-commit.shell-syntax.")
-                || operation.id == "git.staged-diff-check"
-        }));
-        assert!(plan.operations.iter().all(|operation| {
-            operation.action != ActionKind::AppleContainer
-                && !operation.args.iter().any(|arg| {
-                    matches!(
-                        arg.as_str(),
-                        "check" | "clippy" | "test" | "validate-launcher" | "validate-runtime"
-                    )
-                })
-        }));
     }
 
     #[test]

@@ -41,16 +41,11 @@ pub fn execute_with_changes(
     }
     let command = match plan.intent {
         crate::model::Intent::Verify { .. } => "verify",
-        crate::model::Intent::PreCommit => "pre-commit",
         crate::model::Intent::PrePush { .. } => "pre-push",
         crate::model::Intent::CiHostAssurance { .. } => "ci host-assurance",
         _ => "check",
     };
-    let fingerprints = if matches!(plan.intent, crate::model::Intent::PreCommit) {
-        FingerprintContext::empty()
-    } else {
-        FingerprintContext::new(repository, &plan.operations, changes)?
-    };
+    let fingerprints = FingerprintContext::new(repository, &plan.operations, changes)?;
     let mut machine = Machine::default();
     let mut index = 0;
     while index < plan.operations.len() {
@@ -427,14 +422,6 @@ struct FingerprintContext {
 }
 
 impl FingerprintContext {
-    fn empty() -> Self {
-        Self {
-            toolchain: Vec::new(),
-            environment: Vec::new(),
-            files: BTreeMap::new(),
-        }
-    }
-
     fn new(
         repository: &Path,
         operations: &[Operation],

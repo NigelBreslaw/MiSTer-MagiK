@@ -18,9 +18,10 @@ scripts/agent diagnose
 The normal AI loop is edit with bounded Rust analyzer diagnostics where
 applicable, stage intentional paths with ordinary Git, commit, and push.
 `scripts/agent plan` previews the full affected assurance plan without executing
-it. The Git pre-commit hook runs the fail-closed, ten-second fast gate against
-the index. The pre-push hook runs full affected assurance for the exact branch
-commit, while CI remains authoritative.
+it. The Git pre-commit hook runs a bootstrap-free Python gate against the index
+under a fail-closed ten-second deadline. The pre-push hook enters `agent-cli`
+for full affected assurance of the exact branch commit, while CI remains
+authoritative.
 Workflow evidence analysis uses the hidden typed
 `scripts/agent db report` command rather than direct SQL.
 

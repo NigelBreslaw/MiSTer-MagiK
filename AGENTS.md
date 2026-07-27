@@ -127,8 +127,8 @@ writes a bounded 1920x1080 QuickTime movie for 1–60 seconds. Both modes print 
 Markdown artifact link and refuse to overwrite explicit output paths.
 Do not narrate successful operation counts or names: report only that validation
 is running, passed, or failed with the actionable summary. Agents must not
-construct hook or CI assurance commands directly; those boundaries select,
-time, deduplicate, and record their operations.
+construct hook or CI assurance commands directly; those boundaries select and
+time their operations, while pre-push and CI also deduplicate and record them.
 “Build and deploy” means create the Git commit first, then
 `scripts/agent deliver`; do not call
 implementation scripts or supply deployment feature flags. `deliver` never
@@ -142,10 +142,10 @@ exist. Invoke `git add`, `git commit`, and the one-time
 `git config core.hooksPath .githooks` with first-attempt sandbox escalation
 because they write `.git`. Persistent approvals must be limited to the narrow
 `git add` and `git commit` prefixes, never unrestricted `git`. The trusted
-pre-commit hook runs the bounded `scripts/agent pre-commit` fast gate; a
-failure leaves the index staged for correction. The pre-push hook runs full
-affected verification before branch updates reach the remote. Concurrent
-agents must use separate worktrees.
+pre-commit hook runs the bootstrap-free Python fast gate under a strict
+ten-second deadline; a failure leaves the index staged for correction. The
+pre-push hook runs full affected verification before branch updates reach the
+remote. Concurrent agents must use separate worktrees.
 
 ## Universal Hard Rules
 

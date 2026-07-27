@@ -11,4 +11,4 @@ cd "$ROOT"
 exec python3 "$ROOT/scripts/checks/run-with-deadline.py" \
   --seconds 10 \
   --label "pre-commit validation" \
-  -- "$ROOT/scripts/agent" pre-commit
+  -- python3 "$ROOT/scripts/checks/pre-commit.py" --repository "$ROOT"

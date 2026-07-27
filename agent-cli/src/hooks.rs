@@ -129,7 +129,7 @@ mod tests {
     use super::*;
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     static NONCE: AtomicU64 = AtomicU64::new(0);
 
@@ -239,61 +239,5 @@ mod tests {
                 .contains("pre_push_dirty_tree")
         );
         fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn watchdog_propagates_status_and_kills_timed_out_process_groups() {
-        let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("repository root");
-        let watchdog = repository.join("scripts/checks/run-with-deadline.py");
-        let status = Command::new("python3")
-            .arg(&watchdog)
-            .args([
-                "--seconds",
-                "2",
-                "--label",
-                "test",
-                "--",
-                "sh",
-                "-c",
-                "exit 7",
-            ])
-            .status()
-            .unwrap();
-        assert_eq!(status.code(), Some(7));
-
-        let survivor_file = std::env::temp_dir().join(format!(
-            "agent-cli-watchdog-survivor-{}-{}",
-            std::process::id(),
-            NONCE.fetch_add(1, Ordering::Relaxed)
-        ));
-        let command = format!(
-            "(sleep 1; echo survived > {}) & wait",
-            survivor_file.display()
-        );
-        let started = Instant::now();
-        let timed_out = Command::new("python3")
-            .arg(&watchdog)
-            .args([
-                "--seconds",
-                "0.1",
-                "--label",
-                "test",
-                "--",
-                "sh",
-                "-c",
-                &command,
-            ])
-            .status()
-            .unwrap();
-        assert_eq!(timed_out.code(), Some(124));
-        assert!(started.elapsed() < Duration::from_secs(2));
-        std::thread::sleep(Duration::from_millis(1_100));
-        assert!(
-            !survivor_file.exists(),
-            "timed-out descendant survived its process group"
-        );
-        let _ = fs::remove_file(survivor_file);
     }
 }

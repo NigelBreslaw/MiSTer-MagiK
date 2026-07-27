@@ -109,25 +109,6 @@ fn dispatch(
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<Outcome> {
     match intent {
-        Intent::PreCommit => {
-            let paths = scope::collect(
-                evidence,
-                request_id,
-                repository,
-                &agent_cli::model::Scope::Staged,
-            )?;
-            let plan = planner::pre_commit_plan_at(repository, paths.clone())?;
-            evidence.record_plan(request_id, &plan)?;
-            reporter.emit(
-                EventKind::Progress,
-                "pre-commit",
-                &format!("{} fast checks planned", plan.operations.len()),
-                Some(0),
-            )?;
-            return Ok(executor::execute_with_changes(
-                evidence, request_id, repository, &plan, &paths, reporter,
-            )?);
-        }
         Intent::PrePush { remote } => {
             let mut updates = String::new();
             std::io::stdin()

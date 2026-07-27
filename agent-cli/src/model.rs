@@ -64,8 +64,6 @@ pub enum ActionKind {
 #[serde(rename_all = "snake_case")]
 pub enum BuiltinOperation {
     AgentGuidance,
-    GitIdentity,
-    StagedGitPolicy,
     LicenseHeaders,
     ShellOwnership,
     DistributionWorkflow,
@@ -95,7 +93,6 @@ pub enum Scope {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Intent {
-    PreCommit,
     PrePush {
         remote: String,
     },
