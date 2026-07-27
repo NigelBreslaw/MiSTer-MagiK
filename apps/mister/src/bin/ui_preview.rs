@@ -5,9 +5,11 @@
 mod macos {
     use mister_magik_fb::arcade_catalog::ArcadeGameEntry;
     use mister_magik_fb::framebuffer::target::{FramebufferTargetGeometry, UiFrameTarget};
+    use mister_magik_fb::particle_engine::{ParticleConfig, ParticlePreset};
+    use mister_magik_fb::particle_renderer::ParticleRenderer;
     use mister_magik_fb::visual_composition::{
-        ArcadeVisualLayer, PreviewFrame, PreviewPixels, PreviewSurface, compose_preview_frame,
-        hdmi_preview_rect,
+        ArcadeVisualLayer, PreviewFrame, PreviewPixels, PreviewSurface, ScreenshotTileImage,
+        ScreenshotTileWall, compose_preview_frame, hdmi_preview_rect,
     };
     use mister_magik_fb::visual_platform::{MisterPlatform, MisterSoftwareWindow};
     use mister_magik_ui::launcher::{
@@ -71,6 +73,11 @@ mod macos {
         arcade_layer: ArcadeVisualLayer,
         arcade_games: Vec<ArcadeGameEntry>,
         preview_pixels: Vec<Rgb565Pixel>,
+        particle_renderer: ParticleRenderer,
+        tile_wall: ScreenshotTileWall,
+        tile_images: Vec<ScreenshotTileImage>,
+        screensaver_elapsed: Duration,
+        screensaver_paused: bool,
     }
 
     impl PreviewApplication {
@@ -94,6 +101,18 @@ mod macos {
                 arcade_layer: ArcadeVisualLayer::new(FRAME_WIDTH, FRAME_HEIGHT),
                 arcade_games: fixture_arcade_games(),
                 preview_pixels: fixture_preview_pixels(160, 120),
+                particle_renderer: ParticleRenderer::new_magik(ParticleConfig {
+                    count: 16_384,
+                    width: FRAME_WIDTH,
+                    height: FRAME_HEIGHT,
+                    seed: 0x4d61_6769_4b,
+                    preset: ParticlePreset::Visual,
+                })
+                .expect("create production particle screensaver"),
+                tile_wall: ScreenshotTileWall::new(FRAME_WIDTH, FRAME_HEIGHT),
+                tile_images: fixture_tile_images(),
+                screensaver_elapsed: Duration::ZERO,
+                screensaver_paused: false,
             }
         }
 
@@ -132,6 +151,14 @@ mod macos {
             if scenario == Scenario::Arcade {
                 apply_arcade_bridge(&self.launcher, &self.arcade_games, self.selection);
                 self.arcade_layer.invalidate();
+            }
+            if matches!(scenario, Scenario::ParticleScreensaver) {
+                self.particle_renderer.invalidate_hidden_slot(1);
+                self.screensaver_elapsed = Duration::ZERO;
+            }
+            if matches!(scenario, Scenario::ScreenshotTiles) {
+                self.tile_wall.invalidate();
+                self.screensaver_elapsed = Duration::ZERO;
             }
             self.update_selection();
             if let Some(window) = self.native_window.as_ref() {
@@ -194,6 +221,8 @@ mod macos {
                 KeyCode::KeyC => Some(Scenario::Compatibility),
                 KeyCode::KeyL => Some(Scenario::Loading),
                 KeyCode::KeyM => Some(Scenario::MediaProgress),
+                KeyCode::KeyP => Some(Scenario::ParticleScreensaver),
+                KeyCode::KeyT => Some(Scenario::ScreenshotTiles),
                 KeyCode::KeyS => Some(Scenario::ControllerSetup),
                 _ => None,
             };
@@ -204,6 +233,12 @@ mod macos {
             match code {
                 KeyCode::ArrowUp | KeyCode::ArrowLeft => self.move_selection(-1),
                 KeyCode::ArrowDown | KeyCode::ArrowRight => self.move_selection(1),
+                KeyCode::Space => {
+                    self.screensaver_paused = !self.screensaver_paused;
+                }
+                KeyCode::Period if self.screensaver_paused => {
+                    self.screensaver_elapsed += FRAME_PERIOD;
+                }
                 _ => {}
             }
         }
@@ -242,6 +277,30 @@ mod macos {
                     true,
                     PreviewSurface::full(FRAME_WIDTH),
                 );
+            } else if self.scenario == Scenario::ParticleScreensaver {
+                self.particle_renderer
+                    .render(
+                        self.frame_target.cached_565_mut(),
+                        1,
+                        self.screensaver_elapsed,
+                    )
+                    .expect("render production particle screensaver");
+            } else if self.scenario == Scenario::ScreenshotTiles {
+                let frame = (self.screensaver_elapsed.as_micros() * 60 / 1_000_000) as u64;
+                self.tile_wall.render(
+                    self.frame_target.cached_565_mut(),
+                    FRAME_WIDTH,
+                    FRAME_HEIGHT,
+                    &self.tile_images,
+                    frame,
+                );
+            }
+            if matches!(
+                self.scenario,
+                Scenario::ParticleScreensaver | Scenario::ScreenshotTiles
+            ) && !self.screensaver_paused
+            {
+                self.screensaver_elapsed += FRAME_PERIOD;
             }
 
             let Some(window) = self.native_window.as_ref() else {
@@ -341,6 +400,8 @@ mod macos {
         Compatibility,
         Loading,
         MediaProgress,
+        ParticleScreensaver,
+        ScreenshotTiles,
     }
 
     impl Scenario {
@@ -362,6 +423,8 @@ mod macos {
                 Self::Compatibility => "Compatibility",
                 Self::Loading => "Loading",
                 Self::MediaProgress => "Media Progress",
+                Self::ParticleScreensaver => "Particle Screensaver",
+                Self::ScreenshotTiles => "Screenshot Tile Screensaver",
             }
         }
 
@@ -382,6 +445,8 @@ mod macos {
                 Self::Compatibility => "C",
                 Self::Loading => "L",
                 Self::MediaProgress => "M",
+                Self::ParticleScreensaver => "P",
+                Self::ScreenshotTiles => "T",
                 Self::ControllerSetup => "S",
             }
         }
@@ -445,6 +510,7 @@ mod macos {
                 Scenario::Licenses => "licenses",
                 Scenario::Info => "info",
                 Scenario::ScreensaverSettings => "screensaver-settings",
+                Scenario::ParticleScreensaver | Scenario::ScreenshotTiles => "screensaver",
                 _ => "home",
             }
             .into(),
@@ -699,6 +765,35 @@ mod macos {
             }
         }
         pixels
+    }
+
+    fn fixture_tile_images() -> Vec<ScreenshotTileImage> {
+        (0..18)
+            .map(|index| {
+                let width = 160;
+                let height = 120;
+                let mut pixels = fixture_preview_pixels(width, height);
+                let accent = Rgb565Pixel(
+                    (((index * 5) as u16 & 0x1f) << 11)
+                        | (((index * 11) as u16 & 0x3f) << 5)
+                        | ((index * 17) as u16 & 0x1f),
+                );
+                for y in 20..100 {
+                    let inset = y.abs_diff(60) / 2;
+                    for x in (24 + inset)..(136 - inset) {
+                        if x % 7 < 3 {
+                            pixels[y * width + x] = accent;
+                        }
+                    }
+                }
+                ScreenshotTileImage {
+                    pixels,
+                    w: width,
+                    h: height,
+                    stride: width,
+                }
+            })
+            .collect()
     }
 
     fn scale_rgb565_nearest(

@@ -5,7 +5,7 @@
 
 use crate::arcade_catalog::{ArcadeGameEntry, ArcadeGameView};
 use crate::arcade_list_renderer::{ArcadeListGeometry, ArcadeListRenderer, ArcadeListUpdate};
-use mister_magik_mister_runtime::framebuffer::target::{DirtyRect, UiFrameTarget};
+use mister_magik_mister_runtime::framebuffer::target::{DirtyRect, UiFrameTarget, blend_565};
 use slint::platform::software_renderer::Rgb565Pixel;
 
 pub struct ArcadeVisualLayer {
@@ -184,6 +184,280 @@ pub fn compose_preview_frame(
         }
     }
     Some(if clear_screen { screen } else { rect })
+}
+
+#[derive(Clone)]
+pub struct ScreenshotTileImage {
+    pub pixels: Vec<Rgb565Pixel>,
+    pub w: usize,
+    pub h: usize,
+    pub stride: usize,
+}
+
+pub struct ScreenshotTileWall {
+    base: Vec<Rgb565Pixel>,
+    next: Vec<Rgb565Pixel>,
+    page: usize,
+    valid: bool,
+}
+
+impl ScreenshotTileWall {
+    pub fn new(frame_width: usize, frame_height: usize) -> Self {
+        Self {
+            base: vec![Rgb565Pixel(0); frame_width.saturating_mul(frame_height)],
+            next: vec![Rgb565Pixel(0); frame_width.saturating_mul(frame_height)],
+            page: usize::MAX,
+            valid: false,
+        }
+    }
+
+    pub fn invalidate(&mut self) {
+        self.valid = false;
+    }
+
+    pub fn render(
+        &mut self,
+        destination: &mut [Rgb565Pixel],
+        frame_width: usize,
+        frame_height: usize,
+        images: &[ScreenshotTileImage],
+        frame: u64,
+    ) {
+        const SLOT_WIDTH: usize = 320;
+        const SLOT_HEIGHT: usize = 224;
+
+        let gutter_y = frame_height.saturating_sub(SLOT_HEIGHT * 2) / 3;
+        let page = (frame / 360) as usize;
+        let active = ((frame / 60) as usize) % 6;
+        let reveal = ((frame % 60) as usize * SLOT_WIDTH) / 60;
+        if !self.valid || self.page != page || self.base.len() != destination.len() {
+            self.base.resize(destination.len(), Rgb565Pixel(0));
+            self.next.resize(destination.len(), Rgb565Pixel(0));
+            self.base.fill(rgb888_to_rgb565(2, 4, 10));
+            self.next.fill(rgb888_to_rgb565(2, 4, 10));
+            for slot in 0..6 {
+                let column = slot % 3;
+                let row = slot / 3;
+                let x = column * SLOT_WIDTH;
+                let y = gutter_y + row * (SLOT_HEIGHT + gutter_y);
+                fill_rect(
+                    &mut self.base,
+                    frame_width,
+                    frame_height,
+                    DirtyRect {
+                        x0: x,
+                        y0: y,
+                        x1: x + SLOT_WIDTH,
+                        y1: y + SLOT_HEIGHT,
+                    },
+                    Rgb565Pixel(0),
+                );
+                if let Some(image) = tile_image_at(images, page * 6 + slot) {
+                    blit_tile_scaled(
+                        &mut self.base,
+                        frame_width,
+                        frame_height,
+                        image,
+                        x,
+                        y,
+                        SLOT_WIDTH,
+                        SLOT_HEIGHT,
+                        230,
+                    );
+                }
+                if let Some(image) = tile_image_at(images, (page + 1) * 6 + slot) {
+                    blit_tile_scaled(
+                        &mut self.next,
+                        frame_width,
+                        frame_height,
+                        image,
+                        x,
+                        y,
+                        SLOT_WIDTH,
+                        SLOT_HEIGHT,
+                        255,
+                    );
+                }
+                stroke_rect(
+                    &mut self.base,
+                    frame_width,
+                    frame_height,
+                    x,
+                    y,
+                    SLOT_WIDTH,
+                    SLOT_HEIGHT,
+                    rgb888_to_rgb565(70, 255, 210),
+                );
+            }
+            self.page = page;
+            self.valid = true;
+        }
+
+        destination.copy_from_slice(&self.base);
+        if reveal == 0 {
+            return;
+        }
+        let column = active % 3;
+        let row = active / 3;
+        let x = column * SLOT_WIDTH;
+        let y = gutter_y + row * (SLOT_HEIGHT + gutter_y);
+        copy_rect(
+            destination,
+            &self.next,
+            frame_width,
+            frame_height,
+            DirtyRect {
+                x0: x,
+                y0: y,
+                x1: x + reveal,
+                y1: y + SLOT_HEIGHT,
+            },
+        );
+        stroke_rect(
+            destination,
+            frame_width,
+            frame_height,
+            x,
+            y,
+            SLOT_WIDTH,
+            SLOT_HEIGHT,
+            rgb888_to_rgb565(70, 255, 210),
+        );
+    }
+}
+
+fn tile_image_at(images: &[ScreenshotTileImage], index: usize) -> Option<&ScreenshotTileImage> {
+    (!images.is_empty()).then(|| &images[index % images.len()])
+}
+
+#[allow(clippy::too_many_arguments)]
+fn blit_tile_scaled(
+    destination: &mut [Rgb565Pixel],
+    frame_width: usize,
+    frame_height: usize,
+    image: &ScreenshotTileImage,
+    x: usize,
+    y: usize,
+    output_width: usize,
+    output_height: usize,
+    tint: u8,
+) {
+    if output_width == 0 || output_height == 0 || image.w == 0 || image.h == 0 {
+        return;
+    }
+    let x1 = (x + output_width).min(frame_width);
+    let y1 = (y + output_height).min(frame_height);
+    let step_x = ((image.w << 16) / output_width).max(1);
+    let step_y = ((image.h << 16) / output_height).max(1);
+    let dark = rgb888_to_rgb565(0, 0, 18);
+    let mut source_y_fixed = 0usize;
+    for destination_y in y..y1 {
+        let source_y = (source_y_fixed >> 16).min(image.h - 1);
+        let mut source_x_fixed = 0usize;
+        for destination_x in x..x1 {
+            let source_x = (source_x_fixed >> 16).min(image.w - 1);
+            let source = image.pixels[source_y * image.stride + source_x];
+            destination[destination_y * frame_width + destination_x] = if tint == 255 {
+                source
+            } else {
+                blend_565(dark, source, tint)
+            };
+            source_x_fixed = source_x_fixed.saturating_add(step_x);
+        }
+        source_y_fixed = source_y_fixed.saturating_add(step_y);
+    }
+}
+
+fn fill_rect(
+    destination: &mut [Rgb565Pixel],
+    frame_width: usize,
+    frame_height: usize,
+    rect: DirtyRect,
+    color: Rgb565Pixel,
+) {
+    for y in rect.y0..rect.y1.min(frame_height) {
+        let start = y * frame_width + rect.x0.min(frame_width);
+        let end = y * frame_width + rect.x1.min(frame_width);
+        destination[start..end].fill(color);
+    }
+}
+
+fn copy_rect(
+    destination: &mut [Rgb565Pixel],
+    source: &[Rgb565Pixel],
+    frame_width: usize,
+    frame_height: usize,
+    rect: DirtyRect,
+) {
+    for y in rect.y0..rect.y1.min(frame_height) {
+        let start = y * frame_width + rect.x0.min(frame_width);
+        let end = y * frame_width + rect.x1.min(frame_width);
+        destination[start..end].copy_from_slice(&source[start..end]);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn stroke_rect(
+    destination: &mut [Rgb565Pixel],
+    frame_width: usize,
+    frame_height: usize,
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+    color: Rgb565Pixel,
+) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    fill_rect(
+        destination,
+        frame_width,
+        frame_height,
+        DirtyRect {
+            x0: x,
+            y0: y,
+            x1: x + width,
+            y1: y + 2,
+        },
+        color,
+    );
+    fill_rect(
+        destination,
+        frame_width,
+        frame_height,
+        DirtyRect {
+            x0: x,
+            y0: y + height.saturating_sub(2),
+            x1: x + width,
+            y1: y + height,
+        },
+        color,
+    );
+    fill_rect(
+        destination,
+        frame_width,
+        frame_height,
+        DirtyRect {
+            x0: x,
+            y0: y,
+            x1: x + 2,
+            y1: y + height,
+        },
+        color,
+    );
+    fill_rect(
+        destination,
+        frame_width,
+        frame_height,
+        DirtyRect {
+            x0: x + width.saturating_sub(2),
+            y0: y,
+            x1: x + width,
+            y1: y + height,
+        },
+        color,
+    );
 }
 
 fn clear_rect(
