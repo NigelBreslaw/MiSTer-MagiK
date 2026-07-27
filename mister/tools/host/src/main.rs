@@ -1504,6 +1504,7 @@ struct DisplayMatrixReadiness {
     framebuffer: (usize, usize),
     frames_before: u64,
     frames_after: u64,
+    idle: bool,
 }
 
 const DISPLAY_MATRIX_MODES: &[DisplayMatrixMode] = &[
@@ -1806,7 +1807,7 @@ fn validate_live_display_mode(
     )?;
     let readiness = parse_display_matrix_readiness(&readiness.stdout)?;
     validate_display_matrix_geometry(mode, readiness.output, readiness.framebuffer)?;
-    if readiness.frames_after <= readiness.frames_before {
+    if readiness.frames_after <= readiness.frames_before && !readiness.idle {
         return Err("display presentation did not advance".into());
     }
     Ok(readiness)
@@ -2303,11 +2304,17 @@ fn parse_display_matrix_readiness(stdout: &str) -> Result<DisplayMatrixReadiness
         .next()
         .ok_or("missing final frame counter")?
         .parse()?;
+    let idle = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("idle\t"))
+        .ok_or("display readiness missing idle state")?
+        .parse()?;
     Ok(DisplayMatrixReadiness {
         output,
         framebuffer,
         frames_before: before,
         frames_after: after,
+        idle,
     })
 }
 
@@ -2321,7 +2328,7 @@ fn parse_geometry_token(text: &str, prefix: &str) -> Result<(usize, usize)> {
 }
 
 fn release_display_mode_command_for_runtime() -> String {
-    "set -eu; if pidof MiSTer_MagiKDev >/dev/null 2>&1; then root=/media/fat/mister-magik-dev; else root=/media/fat/mister-magik; fi; report=$(\"$root/mister-magik-fb\" latch-readiness-report --json); printf '%s\\n' \"$report\" | grep -Eq '\"state\"[[:space:]]*:[[:space:]]*\"ready\"'; plan=$(grep '^display-plan:' /tmp/mister-magik-slint.log | tail -n 1); before=$(sed -n 's/.*\"frames\":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' /tmp/mister-magik/status.json); test -n \"$before\"; after=$before; attempts=0; while test \"$after\" -le \"$before\" && test \"$attempts\" -lt 10; do sleep 1; after=$(sed -n 's/.*\"frames\":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' /tmp/mister-magik/status.json); test -n \"$after\"; attempts=$((attempts+1)); done; test \"$after\" -gt \"$before\"; printf 'plan\\t%s\\nframes\\t%s\\t%s\\nreadiness\\t%s\\n' \"$plan\" \"$before\" \"$after\" \"$report\"".to_string()
+    "set -eu; if pidof MiSTer_MagiKDev >/dev/null 2>&1; then root=/media/fat/mister-magik-dev; else root=/media/fat/mister-magik; fi; report=$(\"$root/mister-magik-fb\" latch-readiness-report --json); printf '%s\\n' \"$report\" | grep -Eq '\"state\"[[:space:]]*:[[:space:]]*\"ready\"'; plan=$(grep '^display-plan:' /tmp/mister-magik-slint.log | tail -n 1); before=$(sed -n 's/.*\"frames\":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' /tmp/mister-magik/status.json); idle=$(sed -n 's/.*\"idle\":[[:space:]]*\\(true\\|false\\).*/\\1/p' /tmp/mister-magik/status.json); test -n \"$before\"; test -n \"$idle\"; after=$before; attempts=0; if test \"$idle\" != true; then while test \"$after\" -le \"$before\" && test \"$attempts\" -lt 10; do sleep 1; after=$(sed -n 's/.*\"frames\":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' /tmp/mister-magik/status.json); test -n \"$after\"; attempts=$((attempts+1)); done; test \"$after\" -gt \"$before\"; fi; printf 'plan\\t%s\\nframes\\t%s\\t%s\\nidle\\t%s\\nreadiness\\t%s\\n' \"$plan\" \"$before\" \"$after\" \"$idle\" \"$report\"".to_string()
 }
 
 fn delivery_health_command(layout: &str) -> Result<String> {
@@ -11085,9 +11092,9 @@ mod tests {
     }
 
     #[test]
-    fn display_matrix_readiness_requires_geometry_and_advancing_frames() {
+    fn display_matrix_readiness_records_geometry_frames_and_idle_state() {
         let parsed = parse_display_matrix_readiness(
-            "plan\tdisplay-plan: output=640x240 scan=640x240 fb=320x240\nframes\t10\t12\n",
+            "plan\tdisplay-plan: output=640x240 scan=640x240 fb=320x240\nframes\t10\t12\nidle\tfalse\n",
         )
         .unwrap();
         assert_eq!(
@@ -11097,6 +11104,7 @@ mod tests {
                 framebuffer: (320, 240),
                 frames_before: 10,
                 frames_after: 12,
+                idle: false,
             }
         );
         assert!(parse_display_matrix_readiness("frames\t10\t12\n").is_err());
