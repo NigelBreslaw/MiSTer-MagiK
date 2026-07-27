@@ -797,7 +797,7 @@ mod tests {
                 .count(),
             2
         );
-        assert!(state.borrow().writes.iter().any(|value| *value == BIT31));
+        assert!(state.borrow().writes.contains(&BIT31));
         assert_eq!(fpga.gpo & (IO_EN | STROBE), 0);
     }
 
