@@ -125,9 +125,7 @@ impl CatalogProgressMonitor {
         percent: i32,
         now: Instant,
     ) -> Option<CatalogProgressEvidence> {
-        if self.episode_id.is_none() {
-            return None;
-        }
+        self.episode_id.as_ref()?;
         let recovered_from_stall = self.stall_reported;
         self.advance(now);
         self.activity_kind = activity_kind.to_string();
