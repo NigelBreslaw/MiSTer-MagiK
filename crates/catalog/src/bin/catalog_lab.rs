@@ -26,6 +26,9 @@ fn run(mut args: impl Iterator<Item = String>) -> Result<(), String> {
         if command == "rebuild-bench" {
             return rebuild_bench(args);
         }
+        if command == "latch-load-scenario" {
+            return latch_load_scenario(args);
+        }
         return Err(format!("unknown command {command:?}\n{}", usage()));
     }
     let root = args
@@ -60,6 +63,81 @@ fn run(mut args: impl Iterator<Item = String>) -> Result<(), String> {
         summary.spec.large_system_depth
     );
     Ok(())
+}
+
+fn latch_load_scenario(mut args: impl Iterator<Item = String>) -> Result<(), String> {
+    const DEFAULT_GAMES: usize = 500_000;
+
+    let output = args
+        .next()
+        .map(PathBuf::from)
+        .ok_or_else(|| format!("latch-load-scenario needs OUTPUT\n{}", usage()))?;
+    let games = args
+        .next()
+        .map(|value| {
+            value
+                .parse::<usize>()
+                .map_err(|_| format!("invalid game count {value:?}"))
+        })
+        .transpose()?
+        .unwrap_or(DEFAULT_GAMES);
+    let spec = latch_load_spec(games)?;
+    if args.next().is_some() {
+        return Err(format!(
+            "latch-load-scenario has unexpected arguments\n{}",
+            usage()
+        ));
+    }
+
+    std::fs::create_dir(&output)
+        .map_err(|error| format!("could not create {}: {error}", output.display()))?;
+    let library_root = output.join("library");
+    let summary = generate_synthetic_fixture(&library_root, &spec)
+        .map_err(|error| format!("could not create {}: {error}", library_root.display()))?;
+    let scenario = serde_json::json!({
+        "schema": "mister-magik-latch-load-scenario-v1",
+        "max_duration_seconds": 120,
+        "files": summary.files,
+        "environment": {
+            "MISTER_LIBRARY_ROOTS": library_root,
+            "MISTER_SHARDED_CATALOG_DIR": output.join("catalog-v3"),
+            "MISTER_LIBRARY_SQLITE": output.join("library.sqlite3"),
+            "MISTER_MAGIK_DEV_LATCH_STATUS_TIMEOUT_AT": 1,
+        },
+        "expected": {
+            "display_degraded": true,
+            "application_input_blocked": false,
+            "support_report": "diagnostics/latch/latest.json",
+        }
+    });
+    std::fs::write(
+        output.join("scenario.json"),
+        serde_json::to_vec_pretty(&scenario).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| format!("could not write scenario manifest: {error}"))?;
+    println!(
+        "catalog_latch_load_scenario_tsv\troot={}\tfiles={}\tgames={}\tmax_duration_seconds=120\tmanifest={}",
+        output.display(),
+        summary.files,
+        games,
+        output.join("scenario.json").display()
+    );
+    Ok(())
+}
+
+fn latch_load_spec(games: usize) -> Result<SyntheticFixtureSpec, String> {
+    const MAX_GAMES: usize = 500_000;
+    if games == 0 || games > MAX_GAMES {
+        return Err(format!(
+            "latch-load-scenario game count must be between 1 and {MAX_GAMES}"
+        ));
+    }
+    Ok(SyntheticFixtureSpec {
+        arcade_games: 8,
+        small_system_games: 32,
+        large_system_games: games,
+        large_system_depth: 4,
+    })
 }
 
 fn rebuild_bench(mut args: impl Iterator<Item = String>) -> Result<(), String> {
@@ -194,5 +272,20 @@ fn bootstrap_fixture(mut args: impl Iterator<Item = String>) -> Result<(), Strin
 }
 
 fn usage() -> String {
-    "usage: catalog-lab fixture OUTPUT [--arcade-games N] [--small-system-games N] [--large-system-games N] [--large-system-depth N]\n       catalog-lab bootstrap-fixture SOURCE STORAGE snes|c64\n       catalog-lab rebuild-bench STORAGE [SYSTEMS] [GAMES_PER_SYSTEM]".to_string()
+    "usage: catalog-lab fixture OUTPUT [--arcade-games N] [--small-system-games N] [--large-system-games N] [--large-system-depth N]\n       catalog-lab latch-load-scenario OUTPUT [GAMES]\n       catalog-lab bootstrap-fixture SOURCE STORAGE snes|c64\n       catalog-lab rebuild-bench STORAGE [SYSTEMS] [GAMES_PER_SYSTEM]".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn latch_load_scenario_is_bounded_at_500k_games() {
+        assert_eq!(
+            latch_load_spec(500_000).unwrap().large_system_games,
+            500_000
+        );
+        assert!(latch_load_spec(0).is_err());
+        assert!(latch_load_spec(500_001).is_err());
+    }
 }

@@ -1,6 +1,17 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+//! Latch presentation and bounded development fault injection.
+//!
+//! `MISTER_MAGIK_DEV_LATCH_STATUS_TIMEOUT_AT=N` fails exactly the Nth
+//! `0x0058` status read when the executable is installed under
+//! `/media/fat/mister-magik-dev`; public installations ignore it. Keep this
+//! process-scoped and never write it to `launcher.env`.
+//!
+//! `catalog-lab latch-load-scenario OUTPUT` creates a bounded 500K-game
+//! reproduction manifest. Resulting support evidence is retained at
+//! `diagnostics/latch/latest.json` under the active MagiK installation.
+
 use super::super::*;
 use mister_magik_fb::framebuffer::downsample::Rgb565FrameView;
 use mister_magik_fb::framebuffer::vertical_scale::Rgb565FrameView as VerticalRgb565FrameView;
@@ -9,6 +20,10 @@ use std::io;
 
 const TRANSIENT_PENDING_SETTLE_TIMEOUT: Duration = Duration::from_millis(100);
 const POST_OBSERVATION_MAX_READS: usize = 3;
+const DEV_LATCH_TIMEOUT_ENV: &str = "MISTER_MAGIK_DEV_LATCH_STATUS_TIMEOUT_AT";
+
+static DEV_LATCH_STATUS_READS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static DEV_LATCH_TIMEOUT_AT: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
 
 #[derive(Debug)]
 pub(in crate::ui_runner) struct LatchCompletion {
@@ -43,6 +58,17 @@ impl LatchHardware for Fpga {
     }
 
     fn read_latched_status(&mut self) -> io::Result<crate::fpga::LatchedFbufStatus> {
+        let read_number =
+            DEV_LATCH_STATUS_READS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        if dev_latch_timeout_at() == Some(read_number) {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!(
+                    "FPGA SPI timeout waiting for ACK high on word 0x0058 \
+                     (development injection read {read_number})"
+                ),
+            ));
+        }
         self.read_magik_latched_fbuf_status()
     }
 
@@ -56,6 +82,23 @@ impl LatchHardware for Fpga {
     ) -> io::Result<(u16, u16)> {
         self.post_magik_latched_fbuf_rgb565(sequence, base_addr, fb_width, fb_height, geometry)
     }
+}
+
+fn dev_latch_timeout_at() -> Option<u64> {
+    *DEV_LATCH_TIMEOUT_AT.get_or_init(|| {
+        let executable = std::env::current_exe().ok()?;
+        dev_latch_timeout_for(
+            &executable,
+            std::env::var(DEV_LATCH_TIMEOUT_ENV).ok().as_deref(),
+        )
+    })
+}
+
+fn dev_latch_timeout_for(executable: &std::path::Path, configured: Option<&str>) -> Option<u64> {
+    (mister_magik_catalog::device_layout::DeviceLayout::for_executable(executable)
+        == mister_magik_catalog::device_layout::DeviceLayout::Dev)
+        .then_some(())?;
+    configured?.parse::<u64>().ok().filter(|read| *read > 0)
 }
 
 pub(in crate::ui_runner) trait LatchFrameBuffers {
@@ -1126,6 +1169,38 @@ mod tests {
     const BASE1: u32 = 0x227e_9000;
     const BASE2: u32 = 0x22fd_2000;
     const FRONT_BASE: u32 = 0x2200_1000;
+
+    #[test]
+    fn latch_timeout_injection_is_valid_only_for_development_layout() {
+        assert_eq!(
+            dev_latch_timeout_for(
+                std::path::Path::new("/media/fat/mister-magik-dev/mister-magik-fb"),
+                Some("17"),
+            ),
+            Some(17)
+        );
+        assert_eq!(
+            dev_latch_timeout_for(
+                std::path::Path::new("/media/fat/mister-magik/mister-magik-fb"),
+                Some("17"),
+            ),
+            None
+        );
+        assert_eq!(
+            dev_latch_timeout_for(
+                std::path::Path::new("/media/fat/mister-magik-dev/mister-magik-fb"),
+                Some("0"),
+            ),
+            None
+        );
+        assert_eq!(
+            dev_latch_timeout_for(
+                std::path::Path::new("/media/fat/mister-magik-dev/mister-magik-fb"),
+                Some("invalid"),
+            ),
+            None
+        );
+    }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum TestEvent {
