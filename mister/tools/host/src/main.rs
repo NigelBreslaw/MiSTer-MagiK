@@ -4010,34 +4010,48 @@ fn profile_particle_preset(
             }
         }
     }
-    let confirmation = if last_pass > 0 {
-        run_particle_trial(
+    let mut confirmation_count = last_pass;
+    let mut confirmation_attempts = Vec::new();
+    while confirmation_count > 0 {
+        let attempt = run_particle_trial(
             config,
             output_dir,
             preset,
-            last_pass,
+            confirmation_count,
             PARTICLE_CONFIRMATION_SECS,
             "confirm",
-        )?
-    } else {
+        )?;
+        let qualified = attempt.get("qualified").and_then(Value::as_bool) == Some(true);
+        confirmation_attempts.push(attempt);
+        if qualified {
+            break;
+        }
+        first_fail =
+            Some(first_fail.map_or(confirmation_count, |upper| upper.min(confirmation_count)));
+        confirmation_count = particle_confirmation_backoff(confirmation_count).unwrap_or_default();
+    }
+    let confirmation = confirmation_attempts.last().cloned().unwrap_or_else(|| {
         json!({
             "qualified": false,
             "failures": [{"kind": "minimum-count-failed"}],
         })
-    };
+    });
     let confirmed = confirmation.get("qualified").and_then(Value::as_bool) == Some(true);
     let memory = confirmation.get("memory").cloned().unwrap_or(Value::Null);
     Ok(json!({
         "preset": preset,
-        "confirmed_count": if confirmed { last_pass } else { 0 },
+        "confirmed_count": if confirmed { confirmation_count } else { 0 },
         "first_failing_count": first_fail,
-        "upper_bound_reached": last_pass == PARTICLE_COUNT_MAX && first_fail.is_none(),
+        "upper_bound_reached": confirmed
+            && confirmation_count == PARTICLE_COUNT_MAX
+            && first_fail.is_none(),
         "bytes_per_particle": memory
             .get("simulation_bytes_per_particle")
             .and_then(Value::as_u64)
             .unwrap_or(0),
         "memory": memory,
         "trials": trials,
+        "confirmation_attempts": confirmation_attempts,
         "confirmation": confirmation,
     }))
 }
@@ -4049,6 +4063,12 @@ fn particle_refinement_count(last_pass: u64, first_fail: u64) -> Option<u64> {
     }
     let slots = distance / PARTICLE_COUNT_STEP;
     Some(last_pass + (slots / 2).max(1) * PARTICLE_COUNT_STEP)
+}
+
+fn particle_confirmation_backoff(count: u64) -> Option<u64> {
+    count
+        .checked_sub(PARTICLE_COUNT_STEP)
+        .filter(|next| *next > 0)
 }
 
 fn run_particle_trial(
@@ -14751,6 +14771,13 @@ H: Handlers=event3 js0"#
         assert_eq!(particle_refinement_count(0, 524_288), Some(262_144));
         assert_eq!(particle_refinement_count(131_072, 262_144), Some(196_608));
         assert_eq!(particle_refinement_count(196_608, 197_632), None);
+    }
+
+    #[test]
+    fn particle_confirmation_falls_back_at_1024_particle_precision() {
+        assert_eq!(particle_confirmation_backoff(18_432), Some(17_408));
+        assert_eq!(particle_confirmation_backoff(2_048), Some(1_024));
+        assert_eq!(particle_confirmation_backoff(1_024), None);
     }
 
     #[test]
