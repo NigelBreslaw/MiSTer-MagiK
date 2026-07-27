@@ -285,6 +285,7 @@ mod tests {
             [
                 "profile-installed-screensaver",
                 "profile-installed-particles",
+                "profile-installed-particle-cpu",
                 "profile-installed-search",
                 "profile-installed-catalog-lifecycle"
             ]
