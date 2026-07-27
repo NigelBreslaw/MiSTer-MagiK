@@ -4442,20 +4442,20 @@ fn wait_for_particle_capture_state(
     endpoint: &AgentEndpoint,
     count: u64,
     phase: &str,
-    rotation_x_millidegrees: std::ops::RangeInclusive<u64>,
+    rotation_y_millidegrees: std::ops::RangeInclusive<u64>,
     timeout: Duration,
 ) -> Result<()> {
     let started = Instant::now();
     while started.elapsed() < timeout {
         let telemetry = agent_telemetry_for_duration(endpoint, Duration::from_millis(400))?;
-        if particle_capture_state_seen(&telemetry, count, phase, rotation_x_millidegrees.clone()) {
+        if particle_capture_state_seen(&telemetry, count, phase, rotation_y_millidegrees.clone()) {
             return Ok(());
         }
     }
     Err(format!(
         "particle capture did not reach phase={phase} rotation={}..={} within {}ms",
-        rotation_x_millidegrees.start(),
-        rotation_x_millidegrees.end(),
+        rotation_y_millidegrees.start(),
+        rotation_y_millidegrees.end(),
         timeout.as_millis()
     )
     .into())
@@ -4465,7 +4465,7 @@ fn particle_capture_state_seen(
     telemetry: &[Value],
     count: u64,
     phase: &str,
-    rotation_x_millidegrees: std::ops::RangeInclusive<u64>,
+    rotation_y_millidegrees: std::ops::RangeInclusive<u64>,
 ) -> bool {
     telemetry
         .iter()
@@ -4486,9 +4486,9 @@ fn particle_capture_state_seen(
         .is_some_and(|frame| {
             frame.get("particle_phase").and_then(Value::as_str) == Some(phase)
                 && frame
-                    .get("particle_rotation_x_millidegrees")
+                    .get("particle_rotation_y_millidegrees")
                     .and_then(Value::as_u64)
-                    .is_some_and(|angle| rotation_x_millidegrees.contains(&angle))
+                    .is_some_and(|angle| rotation_y_millidegrees.contains(&angle))
         })
 }
 
@@ -5977,7 +5977,7 @@ fn validate_screensaver_frame_evidence(run: usize, frame_id: u64, frame: &Value)
         "particle_simulation_us",
         "particle_clear_us",
         "particle_raster_us",
-        "particle_rotation_x_millidegrees",
+        "particle_rotation_y_millidegrees",
         "particle_simulation_bytes",
         "particle_renderer_scratch_bytes",
     ];
@@ -14253,7 +14253,7 @@ H: Handlers=event3 js0"#
                 "particle_simulation_us": 0,
                 "particle_clear_us": 0,
                 "particle_raster_us": 0,
-                "particle_rotation_x_millidegrees": 0,
+                "particle_rotation_y_millidegrees": 0,
                 "particle_simulation_bytes": 0,
                 "particle_renderer_scratch_bytes": 0
             });
@@ -14662,7 +14662,7 @@ H: Handlers=event3 js0"#
             "particle_simulation_us": 2_000,
             "particle_clear_us": 200,
             "particle_raster_us": 5_000,
-            "particle_rotation_x_millidegrees": 0,
+            "particle_rotation_y_millidegrees": 0,
             "particle_simulation_bytes": 2_162_688,
             "particle_renderer_scratch_bytes": 524_288
         });
@@ -14740,7 +14740,7 @@ H: Handlers=event3 js0"#
                             "particle_preset": "visual",
                             "particle_count": 16_384,
                             "particle_phase": "hold",
-                            "particle_rotation_x_millidegrees": 45_000
+                            "particle_rotation_y_millidegrees": 45_000
                         },
                         {
                             "frame": 11,
@@ -14749,7 +14749,7 @@ H: Handlers=event3 js0"#
                             "particle_preset": "visual",
                             "particle_count": 16_384,
                             "particle_phase": "hold",
-                            "particle_rotation_x_millidegrees": 75_000
+                            "particle_rotation_y_millidegrees": 75_000
                         }
                     ]
                 }
