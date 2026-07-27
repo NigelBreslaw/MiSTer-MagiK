@@ -26,6 +26,11 @@ name = "render-licenses"
 path = "examples/render_licenses.rs"
 required-features = ["ui"]
 
+[[bin]]
+name = "mister-magik-ui-preview"
+path = "src/bin/ui_preview.rs"
+required-features = ["ui-preview"]
+
 [dependencies]
 bytemuck = "1"
 crc32fast = "1"
@@ -54,6 +59,8 @@ mister-magik-catalog = { path = "../../crates/catalog", default-features = false
 mister-magik-ui = { path = "ui-generated", optional = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 slint = { version = "=1.17.1", optional = true, default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm", "std"] }
+softbuffer = "0.4.8"
+winit = "0.30.13"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 slint = { version = "=1.17.1", optional = true, default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm"] }
