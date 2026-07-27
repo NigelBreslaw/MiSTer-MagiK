@@ -10,11 +10,11 @@ use crate::arcade_catalog::{
     ARCADE_LIST_VISIBLE_H, ARCADE_ROW_HEIGHT, ArcadeGameEntry, ArcadeGameView,
 };
 use crate::bitmap_text::{ConsoleFont, ConsoleTypeface, TextGradient};
+use crate::framebuffer::mapped::{MappedRgb565Framebuffer, Pixel, pixel_to_rgb565};
+use crate::framebuffer::present::{copy_dense_rect_565, copy_strided_rect_565};
+use crate::framebuffer::scanout_slots::ScanoutSlotsRgb565Framebuffer;
+use crate::framebuffer::target::{DirtyRect, UiFrameTarget};
 use crate::ui_display::{CrtContentRect, CrtFontFamily, CrtUiMetrics};
-use mister_magik_fb::framebuffer::mapped::{MappedRgb565Framebuffer, Pixel, pixel_to_rgb565};
-use mister_magik_fb::framebuffer::present::{copy_dense_rect_565, copy_strided_rect_565};
-use mister_magik_fb::framebuffer::scanout_slots::ScanoutSlotsRgb565Framebuffer;
-use mister_magik_fb::framebuffer::target::{DirtyRect, UiFrameTarget};
 use slint::platform::software_renderer::Rgb565Pixel;
 
 pub(crate) const ARCADE_LIST_X: usize = 8;

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::bitmap_text::{ConsoleFont, ConsoleTypeface};
-use mister_magik_fb::particle_engine::{
+use crate::particle_engine::{
     ParticleConfig, ParticleEngine, ParticleFrameStats, ParticlePhase, ParticlePreset, TargetMask,
 };
 use slint::platform::software_renderer::Rgb565Pixel;

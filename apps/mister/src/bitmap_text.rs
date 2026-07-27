@@ -4,7 +4,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 
-use mister_magik_fb::framebuffer::mapped::Pixel;
+use crate::framebuffer::mapped::Pixel;
 
 struct ConsoleGlyph {
     left: i32,

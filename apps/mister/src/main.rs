@@ -113,7 +113,8 @@ use mister_magik_mister_runtime::vt;
 pub use mister_magik_fb::{
     arcade_button_overrides, arcade_catalog, command_args, controller_db, input_repeat,
     input_state, launch_preparation, launcher, launcher_taxonomy, library_db, licenses,
-    media_update, preview_worker, return_catalog_capsule, setup_nav, spring_animation,
+    media_update, particle_engine, preview_worker, return_catalog_capsule, setup_nav,
+    spring_animation,
 };
 
 #[cfg(all(feature = "diagnostics", feature = "ui"))]
