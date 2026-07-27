@@ -126,7 +126,7 @@ fn latch_status_read_failure(
 ) -> LatchFailure {
     let detail = error.to_string();
     LatchFailure::runtime(stage, LatchFailureReason::FpgaTransportFailed, detail)
-        .with_wire_diagnostics(error.diagnostics)
+        .with_wire_diagnostics(*error.diagnostics)
 }
 
 fn rejected_wire_diagnostics(mut diagnostics: LatchWireDiagnostics) -> LatchWireDiagnostics {
@@ -1058,7 +1058,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                 let terminal_decision = error.diagnostics.decision;
                 diagnostics.append(&error.diagnostics);
                 diagnostics.decision = terminal_decision;
-                error.diagnostics = std::mem::take(diagnostics);
+                error.diagnostics = Box::new(std::mem::take(diagnostics));
                 Err(latch_status_read_failure(
                     LatchFailureStage::FpgaStatus,
                     error,
@@ -1289,7 +1289,7 @@ pub(in crate::ui_runner) fn wait_for_latch_completion(
                 let terminal_decision = error.diagnostics.decision;
                 diagnostics.append(&error.diagnostics);
                 diagnostics.decision = terminal_decision;
-                error.diagnostics = diagnostics;
+                error.diagnostics = Box::new(diagnostics);
                 return Err(latch_status_read_failure(
                     LatchFailureStage::PostVerification,
                     error,
@@ -1685,7 +1685,7 @@ mod tests {
                 Ok(status) => status,
                 Err(error) => {
                     let mut error = crate::fpga::LatchedFbufStatusReadError::from_io(error);
-                    error.diagnostics = diagnostics;
+                    error.diagnostics = Box::new(diagnostics);
                     return Err(error);
                 }
             };
@@ -1754,6 +1754,8 @@ mod tests {
             active_width: WIDTH as u16,
             active_height: HEIGHT as u16,
             active_stride: rgb565_stride_bytes(WIDTH) as u16,
+            reject_count: 0,
+            active_route_epoch: 0,
         }
     }
 

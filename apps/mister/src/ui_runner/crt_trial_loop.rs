@@ -188,6 +188,29 @@ pub(super) fn run_crt_trial_loop(
         return;
     }
 
+    let (caps_hi, caps_lo, capabilities) = match hardware.read_magik_latched_fbuf_capabilities() {
+        Ok(capabilities) => capabilities,
+        Err(error) => {
+            crate::ui_errln!(
+                "crt_trial_status_v4 schema=4 ok=0 mode={} reason=latch-capabilities detail={}",
+                mode.label(),
+                safe_field(&error.to_string())
+            );
+            return;
+        }
+    };
+    let caps_supported = caps_hi == crate::fpga::MAGIK_FBUF_CAPS_MAGIC
+        || caps_lo == crate::fpga::MAGIK_FBUF_CAPS_MAGIC;
+    if !caps_supported || !capabilities.production_ready() {
+        crate::ui_errln!(
+            "crt_trial_status_v4 schema=4 ok=0 mode={} reason=latch-capabilities protocol={} flags=0x{:04x}",
+            mode.label(),
+            capabilities.protocol_version,
+            capabilities.flags
+        );
+        return;
+    }
+
     let initial_status = match wait_for_crt_latch_settle(hardware) {
         Ok(status) if status.supported() => status,
         Ok(status) => {
@@ -403,6 +426,31 @@ pub(super) fn run_crt_probe_loop(
             secs,
             ui.fb_w(),
             ui.fb_h()
+        );
+        return;
+    }
+
+    let (caps_hi, caps_lo, capabilities) = match hardware.read_magik_latched_fbuf_capabilities() {
+        Ok(capabilities) => capabilities,
+        Err(error) => {
+            crate::ui_errln!(
+                "crt_probe_status_v1 schema=1 ok=0 pattern={} mode={} reason=latch-capabilities detail={}",
+                pattern.label(),
+                mode.label(),
+                safe_field(&error.to_string())
+            );
+            return;
+        }
+    };
+    let caps_supported = caps_hi == crate::fpga::MAGIK_FBUF_CAPS_MAGIC
+        || caps_lo == crate::fpga::MAGIK_FBUF_CAPS_MAGIC;
+    if !caps_supported || !capabilities.production_ready() {
+        crate::ui_errln!(
+            "crt_probe_status_v1 schema=1 ok=0 pattern={} mode={} reason=latch-capabilities protocol={} flags=0x{:04x}",
+            pattern.label(),
+            mode.label(),
+            capabilities.protocol_version,
+            capabilities.flags
         );
         return;
     }
@@ -1145,6 +1193,8 @@ mod tests {
             active_width: 640,
             active_height: 480,
             active_stride: 1280,
+            reject_count: 0,
+            active_route_epoch: 0,
         }
     }
 
