@@ -426,6 +426,26 @@ fn add_path_operations(
             ),
             &["crates/agent-protocol", "mister/tools/host"],
         ));
+        add(with_inputs(
+            cargo(
+                "mister-host.signed-media-tests",
+                "Test signed-manifest host mode",
+                &[
+                    "test",
+                    "--manifest-path",
+                    "mister/tools/host/Cargo.toml",
+                    "--no-default-features",
+                    "--features",
+                    "signed-media-manifests",
+                ],
+                "host media source → signed-manifest feature tests",
+            ),
+            &[
+                "crates/agent-protocol",
+                "crates/media-contract",
+                "mister/tools/host",
+            ],
+        ));
     }
     if path.starts_with("crates/catalog") {
         add(with_inputs(
@@ -507,6 +527,48 @@ fn add_path_operations(
                 "bash",
                 vec!["-n".into(), text.to_string()],
                 "MiSTer build script → syntax",
+            ));
+        }
+    }
+    if matches!(
+        path.to_str(),
+        Some(
+            "apps/mister/Cargo.toml"
+                | "apps/mister/src/media_http.rs"
+                | "apps/mister/src/media_bench_download.rs"
+                | "apps/mister/src/ui_runner/media_worker.rs"
+        )
+    ) {
+        for (id, title, features) in [
+            (
+                "app.media-http-default-tests",
+                "Test unsigned-manifest app mode",
+                "ui",
+            ),
+            (
+                "app.media-http-signed-tests",
+                "Test signed-manifest app mode",
+                "ui,signed-media-manifests",
+            ),
+        ] {
+            add(with_inputs(
+                cargo(
+                    id,
+                    title,
+                    &[
+                        "test",
+                        "--manifest-path",
+                        "apps/mister/Cargo.toml",
+                        "--bin",
+                        "mister-magik-fb",
+                        "--no-default-features",
+                        "--features",
+                        features,
+                        "media_http::tests",
+                    ],
+                    "app media source → manifest feature tests",
+                ),
+                MISTER_APP_COMPILED_INPUTS,
             ));
         }
     }
@@ -709,6 +771,24 @@ fn add_path_operations(
                 "desktop source → compiled UI",
             ));
         }
+    }
+    if path.starts_with("crates/media-contract") {
+        add(with_inputs(
+            cargo(
+                "media-contract.signed-tests",
+                "Test signed-manifest media contract",
+                &[
+                    "test",
+                    "--manifest-path",
+                    "crates/media-contract/Cargo.toml",
+                    "--no-default-features",
+                    "--features",
+                    "signed-media-manifests",
+                ],
+                "media contract → signed-manifest feature tests",
+            ),
+            &["crates/media-contract"],
+        ));
     }
     add_crate(path, "crates/magik-core", "magik-core", depth, out);
     add_crate(
@@ -1367,6 +1447,46 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing {id}"));
             assert_eq!(operation.inputs, MISTER_APP_COMPILED_INPUTS, "{id}");
         }
+    }
+
+    #[test]
+    fn media_manifest_changes_test_default_and_signed_feature_modes() {
+        let plan = affected_plan(
+            Intent::Verify {
+                scope: Scope::Paths(vec![]),
+            },
+            vec![
+                "apps/mister/src/media_http.rs".into(),
+                "crates/media-contract/src/lib.rs".into(),
+                "mister/tools/host/src/media.rs".into(),
+            ],
+        )
+        .unwrap();
+
+        for id in [
+            "app.media-http-default-tests",
+            "app.media-http-signed-tests",
+            "media-contract.tests",
+            "media-contract.signed-tests",
+            "mister-host.tests",
+            "mister-host.signed-media-tests",
+        ] {
+            assert!(
+                plan.operations.iter().any(|operation| operation.id == id),
+                "missing {id}"
+            );
+        }
+        let signed_app = plan
+            .operations
+            .iter()
+            .find(|operation| operation.id == "app.media-http-signed-tests")
+            .unwrap();
+        assert!(
+            signed_app
+                .args
+                .iter()
+                .any(|arg| arg == "ui,signed-media-manifests")
+        );
     }
 
     #[test]

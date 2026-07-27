@@ -24,6 +24,20 @@ pub const MEDIA_TRANSFER_TIMEOUT_SECS: u64 = 20 * 60;
 const TRUSTED_MANIFEST_KEYS: &[(&str, &str)] =
     &[(MANIFEST_PRODUCTION_KEY_ID, MANIFEST_PRODUCTION_PUBLIC_KEY)];
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ManifestTrustMode {
+    UnsignedHttps,
+    SignedHttps,
+}
+
+pub const fn configured_manifest_trust_mode() -> ManifestTrustMode {
+    if cfg!(feature = "signed-media-manifests") {
+        ManifestTrustMode::SignedHttps
+    } else {
+        ManifestTrustMode::UnsignedHttps
+    }
+}
+
 pub fn normalize_compression(value: &str) -> Option<&'static str> {
     match value {
         "none" | "identity" => Some("none"),
@@ -443,6 +457,16 @@ mod tests {
         );
         assert!(validate_https_manifest_url("http://assets.example/manifest.json").is_err());
         assert!(manifest_signature_url("assets.example/manifest.json").is_err());
+    }
+
+    #[test]
+    fn configured_manifest_trust_mode_matches_compile_time_feature() {
+        let expected = if cfg!(feature = "signed-media-manifests") {
+            ManifestTrustMode::SignedHttps
+        } else {
+            ManifestTrustMode::UnsignedHttps
+        };
+        assert_eq!(configured_manifest_trust_mode(), expected);
     }
 
     #[test]

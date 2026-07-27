@@ -1454,7 +1454,7 @@ fn unix_secs_now() -> u64 {
 }
 
 fn fetch_manifest_text(manifest_url: &str) -> Result<(String, HttpCacheMetadata), String> {
-    let fetched = crate::media_http::fetch_signed_manifest(manifest_url)?;
+    let fetched = crate::media_http::fetch_manifest(manifest_url)?;
     let body = String::from_utf8(fetched.bytes).map_err(|e| format!("manifest utf8: {e}"))?;
     Ok((
         body,

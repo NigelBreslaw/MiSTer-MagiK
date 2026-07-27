@@ -3,7 +3,20 @@
 MiSTer MagiK deliberately keeps large screenshot packs and index sidecars
 publicly downloadable over HTTP. Avoiding TLS on the MiSTer reduces CPU cost,
 but HTTP provides neither confidentiality nor transport authenticity. The
-runtime therefore trusts signed metadata, not the object connection.
+runtime bounds and hashes object downloads using metadata fetched over HTTPS.
+
+## Rollout Gate
+
+Signed-manifest enforcement is compiled behind the
+`signed-media-manifests` Cargo feature. The feature is disabled by default and
+is not part of the canonical production feature set (`ui,profile`). Current
+releases therefore fetch and parse the bounded HTTPS manifest without
+requesting `manifest.json.sig`.
+
+There is no runtime or environment override. A later rollout release must
+explicitly enable the compile-time feature after the manifest and signature
+have been deployed together. Until then, HTTPS protects metadata in transit,
+but clients do not independently authenticate the publisher.
 
 ## Trust Boundary
 
@@ -13,24 +26,26 @@ The release flow is:
 2. The publisher signs the exact `manifest.json` bytes with Ed25519.
 3. The publisher deploys `manifest.json` and `manifest.json.sig` together with
    the same no-cache policy.
-4. Every client fetches both metadata files over HTTPS, refuses HTTP redirects,
-   and verifies the signature before UTF-8 conversion or JSON parsing.
+4. A feature-enabled client fetches both metadata files over HTTPS, refuses
+   HTTP redirects, and verifies the signature before UTF-8 conversion or JSON
+   parsing.
 5. The verified manifest supplies each object's expected byte length and
    SHA-256 hash. Object bytes may then arrive over HTTP and are installed only
    after both values match.
 
-This prevents an attacker on the HTTP path from substituting a different
-release unless they also hold an accepted signing key. It does not make the R2
-custom domain private. Anyone who knows or discovers a public object URL can
-download it; signatures authenticate releases but provide no download
-authorization, confidentiality, rate limiting, or hotlink protection.
+When enforcement is enabled, this prevents an attacker on the HTTP path from
+substituting a different release unless they also hold an accepted signing
+key. It does not make the R2 custom domain private. Anyone who knows or
+discovers a public object URL can download it; signatures authenticate releases
+but provide no download authorization, confidentiality, rate limiting, or
+hotlink protection.
 
 ## Enforced Limits
 
 | Resource | Limit |
 | --- | ---: |
 | Manifest response | 256 KiB |
-| Signature response | 4 KiB |
+| Signature response, when enabled | 4 KiB |
 | Declared screenshot pack | 128 MiB |
 | Declared index sidecar | 8 MiB |
 | Object connection establishment | 10 seconds |
@@ -41,10 +56,11 @@ HTTP or HTTPS. Curl's size limit is defense in depth; clients also bound the
 stream themselves and never rely on `Content-Length`. A stream stops before
 writing byte `expected + 1`.
 
-Missing, malformed, unknown-key, or invalid signatures fail closed before
-manifest parsing. Short, oversized, timed-out, or hash-mismatched objects fail
-before publication. Curl and hashing children are reaped, staging files are
-removed, and any previously installed pack remains in place.
+In a feature-enabled build, missing, malformed, unknown-key, or invalid
+signatures fail closed before manifest parsing. Short, oversized, timed-out, or
+hash-mismatched objects fail before publication in both modes. Curl and hashing
+children are reaped, staging files are removed, and any previously installed
+pack remains in place.
 
 ## Signing-Key Custody
 
@@ -57,8 +73,9 @@ Private key material must never be committed, uploaded to R2, or included in a
 site artifact.
 
 An enforcement release must not ship until the signed manifest and detached
-signature have been deployed together. Production deployment remains an
-attended, separately authorized operation.
+signature have been deployed together through the Workers Static Assets site.
+Unchanged content-addressed packs require no R2 update. Production deployment
+remains an attended, separately authorized operation.
 
 ## Two-Key Rotation
 

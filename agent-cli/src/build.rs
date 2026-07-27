@@ -1148,6 +1148,16 @@ mod tests {
     }
 
     #[test]
+    fn canonical_release_keeps_signed_media_manifests_disabled() {
+        let runtime = BuildSpec::canonical(UiScope::All);
+        assert_eq!(runtime.features, ["ui", "profile"]);
+        assert!(
+            !runtime.features.contains(&"signed-media-manifests"),
+            "signed manifests require a separately authorized rollout release"
+        );
+    }
+
+    #[test]
     fn cache_identity_changes_with_profile_scope_and_target() {
         let device = BuildSpec::for_recipe(BuildRecipe::RuntimeDevice(UiScope::All));
         let fast = BuildSpec::for_recipe(BuildRecipe::RuntimeFast);

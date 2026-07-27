@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use mister_magik_media_contract::ManifestTrustMode;
 use serde_json::{Map, Value, json};
 use ssh2::{ExtendedData, Session};
 use std::collections::BTreeMap;
@@ -344,19 +345,43 @@ fn normalize_variant(raw: &str) -> Result<String> {
 }
 
 fn load_manifest(url: &str) -> Result<MediaManifest> {
+    load_manifest_with(
+        url,
+        mister_magik_media_contract::configured_manifest_trust_mode(),
+        fetch_https_bytes,
+        |manifest, signature| {
+            mister_magik_media_contract::verify_manifest_signature(manifest, signature)
+                .map(|_| ())
+                .map_err(Into::into)
+        },
+    )
+}
+
+fn load_manifest_with<F, V>(
+    url: &str,
+    trust_mode: ManifestTrustMode,
+    mut fetch: F,
+    mut verify: V,
+) -> Result<MediaManifest>
+where
+    F: FnMut(&str, u64, &str) -> Result<Vec<u8>>,
+    V: FnMut(&[u8], &[u8]) -> Result<()>,
+{
     mister_magik_media_contract::validate_https_manifest_url(url)?;
-    let manifest = fetch_https_bytes(
+    let manifest = fetch(
         url,
         mister_magik_media_contract::MAX_MANIFEST_BYTES,
         "media manifest",
     )?;
-    let signature_url = mister_magik_media_contract::manifest_signature_url(url)?;
-    let signature = fetch_https_bytes(
-        &signature_url,
-        mister_magik_media_contract::MAX_MANIFEST_SIGNATURE_BYTES,
-        "media manifest signature",
-    )?;
-    mister_magik_media_contract::verify_manifest_signature(&manifest, &signature)?;
+    if trust_mode == ManifestTrustMode::SignedHttps {
+        let signature_url = mister_magik_media_contract::manifest_signature_url(url)?;
+        let signature = fetch(
+            &signature_url,
+            mister_magik_media_contract::MAX_MANIFEST_SIGNATURE_BYTES,
+            "media manifest signature",
+        )?;
+        verify(&manifest, &signature)?;
+    }
     parse_manifest(&serde_json::from_slice(&manifest)?, url)
 }
 
@@ -1349,6 +1374,21 @@ fn tsv(s: &str) -> String {
 mod tests {
     use super::*;
 
+    fn manifest_fetch_fixture() -> Vec<u8> {
+        serde_json::to_vec(&json!({
+            "schema": 1,
+            "generated_at": "2026-07-27T00:00:00Z",
+            "packs": [{
+                "id": "arcade",
+                "object": "mister-magik/v1/packs/arcade/screenshots/320x320/v1/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.mmlz4b",
+                "bytes": 3,
+                "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "codec": "mmlz4b"
+            }]
+        }))
+        .unwrap()
+    }
+
     #[test]
     fn manifest_curl_is_https_only_and_bounded() {
         let mut command = Command::new("curl");
@@ -1368,6 +1408,62 @@ mod tests {
         assert!(text.contains("--connect-timeout 10"));
         assert!(text.contains("--max-time 15"));
         assert!(text.contains("--max-filesize 262144"));
+    }
+
+    #[test]
+    fn unsigned_host_manifest_fetch_skips_signature_and_verification() {
+        let bytes = manifest_fetch_fixture();
+        let mut urls = Vec::new();
+        let manifest = load_manifest_with(
+            "https://assets.mistermagik.com/mister-magik/v1/manifest.json",
+            ManifestTrustMode::UnsignedHttps,
+            |url, _, _| {
+                urls.push(url.to_string());
+                Ok(bytes.clone())
+            },
+            |_, _| panic!("unsigned mode must not verify a signature"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            urls,
+            ["https://assets.mistermagik.com/mister-magik/v1/manifest.json"]
+        );
+        assert_eq!(manifest.packs.len(), 1);
+    }
+
+    #[test]
+    fn signed_host_manifest_fetch_requests_and_verifies_signature() {
+        let manifest_bytes = manifest_fetch_fixture();
+        let signature_bytes = b"signature envelope".to_vec();
+        let mut urls = Vec::new();
+        let manifest = load_manifest_with(
+            "https://assets.mistermagik.com/mister-magik/v1/manifest.json",
+            ManifestTrustMode::SignedHttps,
+            |url, _, label| {
+                urls.push(url.to_string());
+                Ok(if label == "media manifest" {
+                    manifest_bytes.clone()
+                } else {
+                    signature_bytes.clone()
+                })
+            },
+            |actual_manifest, actual_signature| {
+                assert_eq!(actual_manifest, manifest_bytes);
+                assert_eq!(actual_signature, signature_bytes);
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            urls,
+            [
+                "https://assets.mistermagik.com/mister-magik/v1/manifest.json",
+                "https://assets.mistermagik.com/mister-magik/v1/manifest.json.sig"
+            ]
+        );
+        assert_eq!(manifest.packs.len(), 1);
     }
 
     #[test]

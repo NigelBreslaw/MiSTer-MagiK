@@ -35,7 +35,7 @@ lz4_flex = "0.14.0"
 mister-magik-core = { path = "../../crates/magik-core" }
 mister-magik-framebuffer-stream = { path = "../../crates/framebuffer-stream" }
 mister-magik-scanout-contract = { path = "../../mister/platform/contracts/scanout" }
-mister-magik-media-contract = { path = "../../crates/media-contract" }
+mister-magik-media-contract = { path = "../../crates/media-contract", default-features = false }
 mister-magik-latch-contract = { path = "../../mister/platform/contracts/latch" }
 # The runtime owns scanout-slot copy fast paths and their geometry fallbacks.
 mister-magik-mister-runtime = { path = "../../mister/platform/runtime", default-features = false }
@@ -69,6 +69,7 @@ bench-tools = ["mister-magik-mister-runtime/bench-tools"]
 bench-scenes = ["mister-magik-ui?/bench-scenes", "mister-magik-mister-runtime/bench-scenes"]
 experiments = ["bench-scenes"]
 diagnostics = ["mister-magik-mister-runtime/diagnostics"]
+signed-media-manifests = ["mister-magik-media-contract/signed-media-manifests"]
 
 [profile.release]
 # Base optimized Cargo profile. MiSTer builds use release-device by default.

@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use mister_magik_media_contract::{
-    MAX_MANIFEST_BYTES, MAX_MANIFEST_SIGNATURE_BYTES, manifest_signature_url,
-    validate_https_manifest_url, verify_manifest_signature,
+    MAX_MANIFEST_BYTES, MAX_MANIFEST_SIGNATURE_BYTES, ManifestTrustMode,
+    configured_manifest_trust_mode, manifest_signature_url, validate_https_manifest_url,
+    verify_manifest_signature,
 };
 use std::fs;
 use std::io::{Read, Write};
@@ -14,22 +15,43 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const MANIFEST_CONNECT_TIMEOUT_SECS: u64 = 10;
 const MANIFEST_FETCH_TIMEOUT_SECS: u64 = 15;
 
-pub(crate) struct SignedManifestFetch {
+#[derive(Debug)]
+pub(crate) struct ManifestFetch {
     pub(crate) bytes: Vec<u8>,
     pub(crate) headers: String,
 }
 
-pub(crate) fn fetch_signed_manifest(url: &str) -> Result<SignedManifestFetch, String> {
+pub(crate) fn fetch_manifest(url: &str) -> Result<ManifestFetch, String> {
+    fetch_manifest_with(
+        url,
+        configured_manifest_trust_mode(),
+        fetch_https_bytes,
+        verify_manifest_signature,
+    )
+}
+
+fn fetch_manifest_with<F, V>(
+    url: &str,
+    trust_mode: ManifestTrustMode,
+    mut fetch: F,
+    mut verify: V,
+) -> Result<ManifestFetch, String>
+where
+    F: FnMut(&str, u64, &str) -> Result<HttpsFetch, String>,
+    V: FnMut(&[u8], &[u8]) -> Result<String, String>,
+{
     validate_https_manifest_url(url)?;
-    let manifest = fetch_https_bytes(url, MAX_MANIFEST_BYTES, "manifest")?;
-    let signature_url = manifest_signature_url(url)?;
-    let signature = fetch_https_bytes(
-        &signature_url,
-        MAX_MANIFEST_SIGNATURE_BYTES,
-        "manifest signature",
-    )?;
-    verify_manifest_signature(&manifest.bytes, &signature.bytes)?;
-    Ok(SignedManifestFetch {
+    let manifest = fetch(url, MAX_MANIFEST_BYTES, "manifest")?;
+    if trust_mode == ManifestTrustMode::SignedHttps {
+        let signature_url = manifest_signature_url(url)?;
+        let signature = fetch(
+            &signature_url,
+            MAX_MANIFEST_SIGNATURE_BYTES,
+            "manifest signature",
+        )?;
+        verify(&manifest.bytes, &signature.bytes)?;
+    }
+    Ok(ManifestFetch {
         bytes: manifest.bytes,
         headers: manifest.headers,
     })
@@ -183,6 +205,83 @@ mod tests {
         assert!(text.contains("--connect-timeout 10"));
         assert!(text.contains("--max-time 15"));
         assert!(text.contains("--max-filesize 262144"));
+    }
+
+    #[test]
+    fn unsigned_manifest_fetch_skips_signature_and_verification() {
+        let mut urls = Vec::new();
+        let fetched = fetch_manifest_with(
+            "https://assets.example/manifest.json",
+            ManifestTrustMode::UnsignedHttps,
+            |url, _, _| {
+                urls.push(url.to_string());
+                Ok(HttpsFetch {
+                    bytes: b"unsigned manifest".to_vec(),
+                    headers: "etag: test".to_string(),
+                })
+            },
+            |_, _| panic!("unsigned mode must not verify a signature"),
+        )
+        .unwrap();
+
+        assert_eq!(urls, ["https://assets.example/manifest.json"]);
+        assert_eq!(fetched.bytes, b"unsigned manifest");
+        assert_eq!(fetched.headers, "etag: test");
+    }
+
+    #[test]
+    fn signed_manifest_fetch_requests_signature_and_verifies_raw_bytes() {
+        let manifest = vec![0xff, 0x00, b'{'];
+        let signature = b"signature envelope".to_vec();
+        let mut urls = Vec::new();
+        let fetched = fetch_manifest_with(
+            "https://assets.example/manifest.json",
+            ManifestTrustMode::SignedHttps,
+            |url, _, label| {
+                urls.push(url.to_string());
+                Ok(HttpsFetch {
+                    bytes: if label == "manifest" {
+                        manifest.clone()
+                    } else {
+                        signature.clone()
+                    },
+                    headers: String::new(),
+                })
+            },
+            |actual_manifest, actual_signature| {
+                assert_eq!(actual_manifest, manifest);
+                assert_eq!(actual_signature, signature);
+                Ok("test-key".to_string())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            urls,
+            [
+                "https://assets.example/manifest.json",
+                "https://assets.example/manifest.json.sig"
+            ]
+        );
+        assert_eq!(fetched.bytes, manifest);
+    }
+
+    #[test]
+    fn signed_manifest_fetch_propagates_verification_failure() {
+        let error = fetch_manifest_with(
+            "https://assets.example/manifest.json",
+            ManifestTrustMode::SignedHttps,
+            |_, _, label| {
+                Ok(HttpsFetch {
+                    bytes: label.as_bytes().to_vec(),
+                    headers: String::new(),
+                })
+            },
+            |_, _| Err("invalid signature".to_string()),
+        )
+        .unwrap_err();
+
+        assert_eq!(error, "invalid signature");
     }
 
     #[test]

@@ -253,7 +253,7 @@ fn parse_identity_variant(value: &str) -> Result<String, String> {
 }
 
 fn fetch_text(url: &str) -> Result<String, String> {
-    let fetched = crate::media_http::fetch_signed_manifest(url)?;
+    let fetched = crate::media_http::fetch_manifest(url)?;
     String::from_utf8(fetched.bytes).map_err(|e| format!("manifest utf8: {e}"))
 }
 
