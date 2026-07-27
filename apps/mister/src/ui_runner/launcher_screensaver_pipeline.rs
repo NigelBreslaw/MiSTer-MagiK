@@ -443,12 +443,18 @@ fn run_direct_render_ahead_worker(
         let wall_started = Instant::now();
         let cpu_started = thread_cpu_us();
         let trace = render_and_publish_direct_target(target, |pixels| {
-            let trace =
-                renderer.render_at(pixels, width, height, Duration::from_micros(elapsed_us));
+            let trace = renderer.render_at_hidden_slot(
+                pixels,
+                width,
+                height,
+                grant.slot_index,
+                Duration::from_micros(elapsed_us),
+            );
             if let (Some(snapshot), Some(started)) = (&launcher_snapshot, fade_started) {
                 let alpha = (started.elapsed().as_micros().min(200_000) * 255 / 200_000) as u8;
                 if alpha < 255 {
                     blend_rgb565_frame(pixels, snapshot, alpha);
+                    renderer.invalidate_hidden_slot(grant.slot_index);
                 }
             }
             trace

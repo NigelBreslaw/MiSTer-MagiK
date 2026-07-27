@@ -358,8 +358,33 @@ impl LauncherScreensaver {
         h: usize,
         elapsed: Duration,
     ) -> ScreensaverFrameTrace {
+        self.render_at_target(dst, w, h, None, elapsed)
+    }
+
+    pub(in crate::ui_runner) fn render_at_hidden_slot(
+        &mut self,
+        dst: &mut [Rgb565Pixel],
+        w: usize,
+        h: usize,
+        hidden_slot: u8,
+        elapsed: Duration,
+    ) -> ScreensaverFrameTrace {
+        self.render_at_target(dst, w, h, Some(hidden_slot), elapsed)
+    }
+
+    fn render_at_target(
+        &mut self,
+        dst: &mut [Rgb565Pixel],
+        w: usize,
+        h: usize,
+        hidden_slot: Option<u8>,
+        elapsed: Duration,
+    ) -> ScreensaverFrameTrace {
         if let Some(particle) = self.particle.as_mut() {
-            return match particle.render(dst, elapsed) {
+            return match hidden_slot
+                .ok_or_else(|| "particle renderer requires a direct hidden slot".into())
+                .and_then(|hidden_slot| particle.render(dst, hidden_slot, elapsed))
+            {
                 Ok(stats) => ScreensaverFrameTrace {
                     renderer: PARTICLE_RENDERER_LABEL,
                     sampling_profile: "particle-scalar",
@@ -408,6 +433,12 @@ impl LauncherScreensaver {
         }
         self.frame = self.frame.wrapping_add(1);
         trace
+    }
+
+    pub(in crate::ui_runner) fn invalidate_hidden_slot(&mut self, hidden_slot: u8) {
+        if let Some(particle) = self.particle.as_mut() {
+            particle.invalidate_hidden_slot(hidden_slot);
+        }
     }
 
     fn poll_archive(&mut self, w: usize, h: usize) {
