@@ -31,6 +31,7 @@ const KEY_B: u16 = 48;
 const KEY_SPACE: u16 = 57;
 const KEY_F9: u16 = 67;
 const KEY_F10: u16 = 68;
+const KEY_F12: u16 = 88;
 const KEY_UP: u16 = 103;
 const KEY_PAGEUP: u16 = 104;
 const KEY_LEFT: u16 = 105;
@@ -563,6 +564,7 @@ fn drain_keyboard_events<R: Read>(
                     KEY_ENTER => Some(&mut state.enter),
                     KEY_B => Some(&mut state.b),
                     KEY_ESC => Some(&mut state.escape),
+                    KEY_F12 => Some(&mut state.home),
                     KEY_TAB if main_proxy => Some(&mut state.x),
                     KEY_SPACE if main_proxy => Some(&mut state.y),
                     KEY_PAGEUP if main_proxy => Some(&mut state.l),
@@ -1403,7 +1405,7 @@ mod tests {
     }
 
     #[test]
-    fn keyboard_maps_arrows_letters_enter_and_escape_to_navigation() {
+    fn keyboard_maps_navigation_and_f12_home_aliases() {
         let events = [
             input_event_bytes(EV_KEY, KEY_LEFT, 1),
             input_event_bytes(EV_KEY, KEY_UP, 1),
@@ -1411,6 +1413,7 @@ mod tests {
             input_event_bytes(EV_KEY, KEY_ENTER, 1),
             input_event_bytes(EV_KEY, KEY_B, 1),
             input_event_bytes(EV_KEY, KEY_ESC, 1),
+            input_event_bytes(EV_KEY, KEY_F12, 1),
         ]
         .concat();
         let mut reader = PendingEventsThenWouldBlock::new(events);
@@ -1430,6 +1433,7 @@ mod tests {
         assert!(state.dpad_up);
         assert!(state.btn_a);
         assert!(state.btn_b);
+        assert!(state.btn_home);
     }
 
     #[test]
