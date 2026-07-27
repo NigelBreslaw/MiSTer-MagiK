@@ -9,9 +9,11 @@
 
 pub mod arcade_button_overrides;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
+#[allow(dead_code)]
 mod arcade_list_renderer;
 pub use mister_magik_mister_runtime::boot_analytics;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
+#[allow(dead_code)]
 mod bitmap_text;
 pub mod catalog_failure_report;
 pub mod catalog_progress_report;
@@ -40,6 +42,7 @@ pub mod spring_animation;
 #[cfg(test)]
 mod test_support;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
+#[allow(dead_code)]
 mod ui_display;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 pub mod visual_composition;

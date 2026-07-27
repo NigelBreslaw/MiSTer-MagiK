@@ -925,7 +925,7 @@ mod macos {
                         | (((index * 11) as u16 & 0x3f) << 5)
                         | ((index * 17) as u16 & 0x1f),
                 );
-                for y in 20..100 {
+                for y in 20usize..100 {
                     let inset = y.abs_diff(60) / 2;
                     for x in (24 + inset)..(136 - inset) {
                         if x % 7 < 3 {

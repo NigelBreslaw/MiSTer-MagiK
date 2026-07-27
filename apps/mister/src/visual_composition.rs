@@ -5,7 +5,7 @@
 
 use crate::arcade_catalog::{ArcadeGameEntry, ArcadeGameView};
 use crate::arcade_list_renderer::{ArcadeListGeometry, ArcadeListRenderer, ArcadeListUpdate};
-use mister_magik_mister_runtime::framebuffer::target::{DirtyRect, UiFrameTarget, blend_565};
+use crate::framebuffer::target::{DirtyRect, UiFrameTarget, blend_565};
 use slint::platform::software_renderer::Rgb565Pixel;
 
 pub struct ArcadeVisualLayer {

@@ -10,12 +10,10 @@ use mister_magik_fb::framebuffer::format::production_label;
 use mister_magik_fb::framebuffer::mapped::MappedRgb565Framebuffer;
 use mister_magik_fb::framebuffer::vsync::VsyncPaceSource;
 use mister_magik_fb::framebuffer::vsync::VsyncPacer;
-use slint::platform::software_renderer::{
-    RepaintBufferType, Rgb565Pixel, SoftwareRenderer, TargetPixel,
-};
-use slint::platform::{Platform, WindowAdapter};
-use slint::{ComponentHandle, Model, ModelRc, PhysicalSize, SharedString, VecModel, Window};
-use std::rc::{Rc, Weak};
+use slint::platform::WindowAdapter;
+use slint::platform::software_renderer::{RepaintBufferType, Rgb565Pixel, TargetPixel};
+use slint::{ComponentHandle, Model, ModelRc, PhysicalSize, SharedString, VecModel};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use mister_magik_ui as slint_ui;
@@ -69,7 +67,6 @@ use mister_magik_fb::framebuffer::{
     scanout_slots::{HiddenRgb565BufferIndex, ScanoutSlotsRgb565Framebuffer},
 };
 use slint_ui::launcher::PreviewStatus;
-use std::cell::Cell;
 use std::path::PathBuf;
 use std::sync::{OnceLock, mpsc};
 

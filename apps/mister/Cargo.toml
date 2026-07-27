@@ -59,8 +59,8 @@ mister-magik-catalog = { path = "../../crates/catalog", default-features = false
 mister-magik-ui = { path = "ui-generated", optional = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 slint = { version = "=1.17.1", optional = true, default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm", "std"] }
-softbuffer = "0.4.8"
-winit = "0.30.13"
+softbuffer = { version = "0.4.8", optional = true }
+winit = { version = "0.30.13", optional = true }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 slint = { version = "=1.17.1", optional = true, default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm"] }
@@ -72,7 +72,7 @@ ffmpeg-next = { version = "8.1", optional = true, default-features = false, feat
 default = []
 profile = ["dep:pprof"]
 ui = ["dep:slint", "dep:mister-magik-ui", "dep:ffmpeg-next", "mister-magik-mister-runtime/ui"]
-ui-preview = ["dep:slint", "dep:mister-magik-ui"]
+ui-preview = ["dep:slint", "dep:mister-magik-ui", "dep:softbuffer", "dep:winit", "mister-magik-mister-runtime/ui"]
 bench-tools = ["mister-magik-mister-runtime/bench-tools"]
 bench-scenes = ["mister-magik-ui?/bench-scenes", "mister-magik-mister-runtime/bench-scenes"]
 experiments = ["bench-scenes"]
