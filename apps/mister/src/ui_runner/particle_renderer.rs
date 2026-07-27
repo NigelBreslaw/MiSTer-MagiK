@@ -84,25 +84,39 @@ impl ParticleRenderer {
     }
 
     fn raster(&self, destination: &mut [Rgb565Pixel]) -> usize {
-        let config = self.engine.config();
+        match self.engine.config().preset {
+            ParticlePreset::Capacity => self.raster_capacity(destination),
+            ParticlePreset::Visual => self.raster_visual(destination),
+        }
+    }
+
+    fn raster_capacity(&self, destination: &mut [Rgb565Pixel]) -> usize {
+        let width = self.engine.config().width;
         let mut visible = 0usize;
         for index in 0..self.engine.particle_count() {
             let Some(particle) = self.engine.project(index) else {
                 continue;
             };
             visible += 1;
-            let offset = particle.y as usize * config.width + particle.x as usize;
-            match config.preset {
-                ParticlePreset::Capacity => destination[offset] = CAPACITY_COLOR,
-                ParticlePreset::Visual => {
-                    let palette_index = (particle.brightness_key >> 30) as usize;
-                    destination[offset] = VISUAL_PALETTE[palette_index];
-                    if palette_index == VISUAL_PALETTE.len() - 1
-                        && particle.x + 1 < config.width as i32
-                    {
-                        destination[offset + 1] = VISUAL_PALETTE[2];
-                    }
-                }
+            let offset = particle.y as usize * width + particle.x as usize;
+            destination[offset] = CAPACITY_COLOR;
+        }
+        visible
+    }
+
+    fn raster_visual(&self, destination: &mut [Rgb565Pixel]) -> usize {
+        let width = self.engine.config().width;
+        let mut visible = 0usize;
+        for index in 0..self.engine.particle_count() {
+            let Some(particle) = self.engine.project(index) else {
+                continue;
+            };
+            visible += 1;
+            let offset = particle.y as usize * width + particle.x as usize;
+            let palette_index = (self.engine.flicker_key(index) >> 30) as usize;
+            destination[offset] = VISUAL_PALETTE[palette_index];
+            if palette_index == VISUAL_PALETTE.len() - 1 && particle.x + 1 < width as i32 {
+                destination[offset + 1] = VISUAL_PALETTE[2];
             }
         }
         visible

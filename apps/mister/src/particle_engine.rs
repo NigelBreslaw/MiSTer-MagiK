@@ -178,7 +178,6 @@ pub struct ProjectedParticle {
     pub x: i32,
     pub y: i32,
     pub depth: f32,
-    pub brightness_key: u32,
 }
 
 #[derive(Debug)]
@@ -296,8 +295,12 @@ impl ParticleEngine {
             x,
             y,
             depth: self.z[index],
-            brightness_key: mix32(self.seeds[index] ^ self.last_elapsed.as_millis() as u32),
         })
+    }
+
+    #[must_use]
+    pub fn flicker_key(&self, index: usize) -> u32 {
+        mix32(self.seeds[index] ^ self.last_elapsed.as_millis() as u32)
     }
 
     fn initialize_particles(
