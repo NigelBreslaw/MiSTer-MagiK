@@ -430,8 +430,9 @@ fn prune_reports(dir: &Path, latest_episode_id: &str, now_ms: u128) -> io::Resul
             if !name.starts_with(REPORT_PREFIX) || !name.ends_with(".json") {
                 return None;
             }
+            let timestamp = report_timestamp_ms(name);
             let metadata = entry.metadata().ok()?;
-            Some((path, report_timestamp_ms(name), metadata.len()))
+            Some((path, timestamp, metadata.len()))
         })
         .collect::<Vec<_>>();
     reports.sort_by_key(|(_, timestamp, _)| *timestamp);
