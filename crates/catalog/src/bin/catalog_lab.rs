@@ -96,8 +96,10 @@ fn latch_load_scenario(mut args: impl Iterator<Item = String>) -> Result<(), Str
         .map_err(|error| format!("could not create {}: {error}", library_root.display()))?;
     let scenario = serde_json::json!({
         "schema": "mister-magik-latch-load-scenario-v1",
-        "max_duration_seconds": 120,
         "files": summary.files,
+        "limits": {
+            "max_games": 500_000,
+        },
         "environment": {
             "MISTER_LIBRARY_ROOTS": library_root,
             "MISTER_SHARDED_CATALOG_DIR": output.join("catalog-v3"),
@@ -105,8 +107,9 @@ fn latch_load_scenario(mut args: impl Iterator<Item = String>) -> Result<(), Str
             "MISTER_MAGIK_DEV_LATCH_STATUS_TIMEOUT_AT": 1,
         },
         "expected": {
-            "display_degraded": true,
+            "compatibility_fallback_observed": true,
             "application_input_blocked": false,
+            "eventual_latch_recovery": true,
             "support_report": "diagnostics/latch/latest.json",
         }
     });
@@ -116,7 +119,7 @@ fn latch_load_scenario(mut args: impl Iterator<Item = String>) -> Result<(), Str
     )
     .map_err(|error| format!("could not write scenario manifest: {error}"))?;
     println!(
-        "catalog_latch_load_scenario_tsv\troot={}\tfiles={}\tgames={}\tmax_duration_seconds=120\tmanifest={}",
+        "catalog_latch_load_scenario_tsv\troot={}\tfiles={}\tgames={}\tmanifest={}",
         output.display(),
         summary.files,
         games,

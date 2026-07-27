@@ -2573,7 +2573,17 @@ pub(super) fn run_launcher_loop(
             request_launcher_redraw!();
         }
         let compatibility_blocks_app = launcher_presenter.compatibility_blocks_app();
-        frame_accounting.set_display_degraded(launcher_presenter.display_degraded());
+        let display_degraded = launcher_presenter.display_degraded();
+        frame_accounting.set_display_degraded(display_degraded);
+        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+        if bridge.get_compatibility_visible() != display_degraded {
+            bridge.set_compatibility_visible(display_degraded);
+            if !display_degraded {
+                bridge.set_compatibility_reason("".into());
+                bridge.set_compatibility_detail("".into());
+            }
+            request_launcher_redraw!();
+        }
         let lifecycle_launch_active = matches!(
             lifecycle.state(),
             LauncherLifecycleState::Launching { .. } | LauncherLifecycleState::Handoff { .. }

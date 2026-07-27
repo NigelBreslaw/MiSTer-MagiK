@@ -1307,6 +1307,7 @@ mod tests {
 
         assert!(presenter.apply_retry_result(Ok(FakeLatch), false));
         assert!(!presenter.compatibility_prompt_visible());
+        assert!(!presenter.display_degraded());
         assert!(presenter.compatibility_failure().is_none());
         assert_eq!(
             presenter.pacing_backend(),

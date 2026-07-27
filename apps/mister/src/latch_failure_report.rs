@@ -10,7 +10,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc::{self, SyncSender, TrySendError};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -24,12 +24,34 @@ const MAX_REPORT_BYTES: usize = 128 * 1024;
 const MAX_SNAPSHOT_BYTES: usize = 12 * 1024;
 const MAX_LOG_BYTES: usize = 16 * 1024;
 const MAX_LOG_LINES: usize = 96;
+const REPORT_QUEUE_CAPACITY: usize = 32;
 
 static REPORT_SEQUENCE: AtomicU64 = AtomicU64::new(1);
-static EPISODE_ID: OnceLock<String> = OnceLock::new();
-static LAST_EVIDENCE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
-static REPORT_WRITER: OnceLock<Option<Sender<(PathBuf, String, LatchFailureEvidence)>>> =
+static EPISODE_TRACKER: OnceLock<Mutex<EpisodeTracker>> = OnceLock::new();
+static REPORT_WRITER: OnceLock<Option<SyncSender<(PathBuf, String, LatchFailureEvidence)>>> =
     OnceLock::new();
+
+#[derive(Default)]
+struct EpisodeTracker {
+    episode_id: Option<String>,
+    last_evidence: Option<String>,
+}
+
+impl EpisodeTracker {
+    fn prepare(&mut self, dedupe_key: &str) -> Option<String> {
+        if self.last_evidence.as_deref() == Some(dedupe_key) {
+            return None;
+        }
+        Some(self.episode_id.get_or_insert_with(new_episode_id).clone())
+    }
+
+    fn record_sent(&mut self, dedupe_key: String, recovery_state: &str) {
+        self.last_evidence = Some(dedupe_key);
+        if recovery_state.starts_with("recovered-") {
+            self.episode_id = None;
+        }
+    }
+}
 
 pub fn latest_relative_path() -> &'static str {
     "diagnostics/latch/latest.json"
@@ -42,44 +64,45 @@ pub fn latest_path() -> PathBuf {
 pub fn enqueue(evidence: LatchFailureEvidence) -> PathBuf {
     let latest = latest_path();
     let dedupe_key = serde_json::to_string(&evidence).unwrap_or_default();
-    let changed = LAST_EVIDENCE
-        .get_or_init(|| Mutex::new(None))
+    let Ok(mut tracker) = EPISODE_TRACKER
+        .get_or_init(|| Mutex::new(EpisodeTracker::default()))
         .lock()
-        .map(|mut previous| {
-            if previous.as_deref() == Some(&dedupe_key) {
-                false
-            } else {
-                *previous = Some(dedupe_key);
-                true
-            }
-        })
-        .unwrap_or(true);
-    if !changed {
+    else {
+        log_report_error(format_args!("latch failure report tracker lock poisoned"));
         return latest;
-    }
-
-    let episode_id = EPISODE_ID
-        .get_or_init(|| {
-            format!(
-                "{REPORT_PREFIX}{}-{}-{}",
-                unix_ms(),
-                std::process::id(),
-                REPORT_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-            )
-        })
-        .clone();
-    if let Some(writer) = report_writer()
-        && let Err(error) = writer.send((report_dir(), episode_id, evidence))
-    {
-        log_report_error(format_args!("latch failure report queue failed: {error}"));
+    };
+    let Some(episode_id) = tracker.prepare(&dedupe_key) else {
+        return latest;
+    };
+    if let Some(writer) = report_writer() {
+        match writer.try_send((report_dir(), episode_id, evidence.clone())) {
+            Ok(()) => tracker.record_sent(dedupe_key, &evidence.recovery_state),
+            Err(TrySendError::Full(_)) => {
+                log_report_error(format_args!("latch failure report queue full"));
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                log_report_error(format_args!("latch failure report queue disconnected"));
+            }
+        }
     }
     latest
 }
 
-fn report_writer() -> Option<&'static Sender<(PathBuf, String, LatchFailureEvidence)>> {
+fn new_episode_id() -> String {
+    format!(
+        "{REPORT_PREFIX}{}-{}-{}",
+        unix_ms(),
+        std::process::id(),
+        REPORT_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+fn report_writer() -> Option<&'static SyncSender<(PathBuf, String, LatchFailureEvidence)>> {
     REPORT_WRITER
         .get_or_init(|| {
-            let (sender, receiver) = mpsc::channel::<(PathBuf, String, LatchFailureEvidence)>();
+            let (sender, receiver) = mpsc::sync_channel::<(PathBuf, String, LatchFailureEvidence)>(
+                REPORT_QUEUE_CAPACITY,
+            );
             match std::thread::Builder::new()
                 .name("latch-failure-report".to_string())
                 .spawn(move || {
@@ -354,6 +377,26 @@ mod tests {
                 .all(|entry| !entry.file_name().to_string_lossy().ends_with(".tmp"))
         );
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn episode_tracker_dedupes_updates_and_rotates_after_recovery() {
+        let mut tracker = EpisodeTracker::default();
+        let first = serde_json::to_string(&evidence()).unwrap();
+        let first_id = tracker.prepare(&first).unwrap();
+        tracker.record_sent(first.clone(), "safe-frame-complete");
+        assert!(tracker.prepare(&first).is_none());
+
+        let mut recovered = evidence();
+        recovered.recovery_state = "recovered-automatically".to_string();
+        let recovered_key = serde_json::to_string(&recovered).unwrap();
+        assert_eq!(tracker.prepare(&recovered_key).unwrap(), first_id);
+        tracker.record_sent(recovered_key, &recovered.recovery_state);
+
+        let mut later = evidence();
+        later.detail = "later failure".to_string();
+        let later_key = serde_json::to_string(&later).unwrap();
+        assert_ne!(tracker.prepare(&later_key).unwrap(), first_id);
     }
 
     #[test]
