@@ -311,16 +311,20 @@ pub(super) fn platform_snapshot_script() -> String {
     let mut cleanup = String::from("rm -f /media/fat/MiSTer.ini.platform-rollback; ");
     let mut snapshot = String::new();
     for (_, remote) in PLATFORM_DEPLOY_FILES {
+        let parent = Path::new(remote)
+            .parent()
+            .expect("platform deploy path must have a parent");
         cleanup.push_str(&format!(
             "rm -f {backup} {missing}; ",
             backup = sh(&format!("{remote}.rollback")),
             missing = sh(&format!("{remote}.rollback-missing"))
         ));
         snapshot.push_str(&format!(
-            "if [ -e {path} ]; then cp -p {path} {backup}; else : > {missing}; fi; ",
+            "if [ -e {path} ]; then cp -p {path} {backup}; else mkdir -p {parent}; : > {missing}; fi; ",
             path = sh(remote),
             backup = sh(&format!("{remote}.rollback")),
-            missing = sh(&format!("{remote}.rollback-missing"))
+            missing = sh(&format!("{remote}.rollback-missing")),
+            parent = sh(&parent.to_string_lossy())
         ));
     }
     format!(

@@ -13834,6 +13834,9 @@ H: Handlers=event3 js0"#
             snapshot.find("platform safety blocked").unwrap() < snapshot.find("cleanup()").unwrap()
         );
         assert!(snapshot.contains("MiSTer_MagiKDev.rollback"));
+        assert!(snapshot.contains(
+            "mkdir -p '/media/fat/mister-magik-dev/fpga'; : > '/media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.rbf.rollback-missing'"
+        ));
         assert!(
             snapshot
                 .find("rm -f '/media/fat/MiSTer_MagiKDev.rollback'")
