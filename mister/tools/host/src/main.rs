@@ -29,8 +29,9 @@ mod remote;
 use agent_client::{
     AGENT_PORT, AgentEndpoint, agent_binary_request_bounded, agent_request, agent_request_at,
     agent_request_with_liveness, agent_stream_request_reader, agent_telemetry_for_duration,
-    agent_telemetry_until_screensaver_profile_complete, agent_token, agent_token_for_device,
-    bootstrap_agent, bootstrap_agent_with, verify_agent_deploy_result,
+    agent_telemetry_for_particle_trial, agent_telemetry_until_screensaver_profile_complete,
+    agent_token, agent_token_for_device, bootstrap_agent, bootstrap_agent_with,
+    verify_agent_deploy_result,
 };
 use platform_deploy::*;
 use remote::{
@@ -3815,8 +3816,13 @@ fn run_particle_trial(
         },
     )?;
     drop(session);
-    let telemetry =
-        agent_telemetry_for_duration(&config.agent, Duration::from_secs(duration_secs))?;
+    let telemetry = agent_telemetry_for_particle_trial(
+        &config.agent,
+        preset,
+        count,
+        Duration::from_secs(duration_secs),
+        Duration::from_secs(10),
+    )?;
     let filename = format!("{preset}-{count}-{kind}-telemetry.jsonl");
     let telemetry_text = telemetry
         .iter()
@@ -4700,6 +4706,7 @@ fn restart_launcher_with_one_shot_env(
     if options.clear_env || options.env_vars.is_empty() {
         return Err("one-shot launcher restart requires environment variables".into());
     }
+    let previous = wait_launcher_ready(session, Instant::now(), Duration::from_secs(5))?;
     let parent = remote_parent_dir(&options.remote_env)?;
     let out = exec(session, &create_dir_command(parent), true)?;
     if let Some(error) = exec_failure_message("create one-shot launcher env parent", &out) {
@@ -4712,7 +4719,13 @@ fn restart_launcher_with_one_shot_env(
     )?;
     let started = Instant::now();
     let restart_result = issue_launcher_restart(session).and_then(|()| {
-        wait_launcher_ready(session, started, Duration::from_secs(options.timeout_secs)).map(|_| ())
+        wait_launcher_ready_after(
+            session,
+            previous.launcher_pid,
+            started,
+            Duration::from_secs(options.timeout_secs),
+        )
+        .map(|_| ())
     });
     let clear_result = prepare_launcher_env(
         session,
