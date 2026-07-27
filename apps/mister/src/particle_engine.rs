@@ -19,6 +19,7 @@ const TARGET_FIXED_SCALE_RECIP: f32 = 1.0 / TARGET_FIXED_SCALE;
 const TARGET_DEPTH_Q2_HALF_EXTENT: i8 = 40;
 const TARGET_DEPTH_LEVELS: u64 = 81;
 const TARGET_DEPTH_Q2_RECIP: f32 = 0.25;
+const HOLD_DURATION_US: u64 = HOLD_END_US - FORM_END_US;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ParticlePreset {
@@ -169,11 +170,12 @@ impl ParticleConfig {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ParticleFrameStats {
     pub count: usize,
     pub phase: ParticlePhase,
     pub cycle: u64,
+    pub rotation_x_radians: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -190,6 +192,9 @@ pub struct ParticleEngine {
     projection_center_y: f32,
     projection_max_x: f32,
     projection_max_y: f32,
+    rotation_x_radians: f32,
+    rotation_x_sin: f32,
+    rotation_x_cos: f32,
     packed_targets: Vec<u32>,
     target_depth_q2: Vec<i8>,
     x: Vec<f32>,
@@ -226,6 +231,9 @@ impl ParticleEngine {
             projection_center_y: config.height as f32 * 0.5,
             projection_max_x: config.width as f32 - 0.5,
             projection_max_y: config.height as f32 - 0.5,
+            rotation_x_radians: 0.0,
+            rotation_x_sin: 0.0,
+            rotation_x_cos: 1.0,
             packed_targets: Vec::with_capacity(config.count),
             target_depth_q2: Vec::with_capacity(config.count),
             x: Vec::with_capacity(config.count),
@@ -277,6 +285,8 @@ impl ParticleEngine {
             .min(MAX_STEP_SECONDS);
         self.last_elapsed = elapsed;
         self.phase = next_phase;
+        self.rotation_x_radians = rotation_x_at_cycle_us(cycle_us);
+        (self.rotation_x_sin, self.rotation_x_cos) = self.rotation_x_radians.sin_cos();
         if delta > 0.0 {
             self.advance(delta);
         }
@@ -284,21 +294,27 @@ impl ParticleEngine {
             count: self.particle_count(),
             phase: self.phase,
             cycle: self.cycle,
+            rotation_x_radians: self.rotation_x_radians,
         }
     }
 
     #[must_use]
     #[inline(always)]
     pub fn project(&self, index: usize) -> Option<ProjectedParticle> {
-        let denominator = FOCAL_LENGTH + self.z[index];
+        let (rotated_y, rotated_z) = rotate_yz(
+            self.y[index] - self.projection_center_y,
+            self.z[index],
+            self.rotation_x_sin,
+            self.rotation_x_cos,
+        );
+        let denominator = FOCAL_LENGTH + rotated_z;
         if denominator <= 1.0 {
             return None;
         }
         let scale = FOCAL_LENGTH / denominator;
         let screen_x =
             self.projection_center_x + (self.x[index] - self.projection_center_x) * scale;
-        let screen_y =
-            self.projection_center_y + (self.y[index] - self.projection_center_y) * scale;
+        let screen_y = self.projection_center_y + rotated_y * scale;
         if screen_x <= -0.5
             || screen_y <= -0.5
             || screen_x >= self.projection_max_x
@@ -311,7 +327,7 @@ impl ParticleEngine {
         Some(ProjectedParticle {
             x,
             y,
-            depth: self.z[index],
+            depth: rotated_z,
         })
     }
 
@@ -482,6 +498,20 @@ fn distributed_target_depth_q2(value: u32) -> i8 {
     (level as i16 - i16::from(TARGET_DEPTH_Q2_HALF_EXTENT)) as i8
 }
 
+fn rotation_x_at_cycle_us(cycle_us: u64) -> f32 {
+    if !(FORM_END_US..HOLD_END_US).contains(&cycle_us) {
+        return 0.0;
+    }
+    let progress = (cycle_us - FORM_END_US) as f32 / HOLD_DURATION_US as f32;
+    let eased = progress * progress * (3.0 - 2.0 * progress);
+    std::f32::consts::TAU * eased
+}
+
+#[inline(always)]
+fn rotate_yz(y: f32, z: f32, sin: f32, cos: f32) -> (f32, f32) {
+    (y * cos - z * sin, y * sin + z * cos)
+}
+
 #[inline(always)]
 fn wrap_coordinate(value: f32, extent: f32) -> f32 {
     if value < 0.0 {
@@ -581,6 +611,68 @@ mod tests {
             .map(|index| second.project(index))
             .collect::<Vec<_>>();
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn x_rotation_matches_each_quarter_turn() {
+        let epsilon = 1.0e-6;
+        for ((sin, cos), expected) in [
+            ((0.0, 1.0), (10.0, 2.0)),
+            ((1.0, 0.0), (-2.0, 10.0)),
+            ((0.0, -1.0), (-10.0, -2.0)),
+            ((-1.0, 0.0), (2.0, -10.0)),
+            ((0.0, 1.0), (10.0, 2.0)),
+        ] {
+            let actual = rotate_yz(10.0, 2.0, sin, cos);
+            assert!((actual.0 - expected.0).abs() < epsilon);
+            assert!((actual.1 - expected.1).abs() < epsilon);
+        }
+    }
+
+    #[test]
+    fn hold_rotation_eases_through_one_complete_turn() {
+        assert_eq!(rotation_x_at_cycle_us(FORM_END_US), 0.0);
+        assert!(
+            (rotation_x_at_cycle_us(FORM_END_US + HOLD_DURATION_US / 2) - std::f32::consts::PI)
+                .abs()
+                < 1.0e-6
+        );
+        let final_hold_angle = rotation_x_at_cycle_us(HOLD_END_US - 1);
+        assert!((final_hold_angle - std::f32::consts::TAU).abs() < 1.0e-5);
+        assert_eq!(rotation_x_at_cycle_us(HOLD_END_US), 0.0);
+    }
+
+    #[test]
+    fn projection_centre_is_invariant_during_rotation() {
+        let mut engine = engine(1);
+        engine.x[0] = engine.projection_center_x;
+        engine.y[0] = engine.projection_center_y;
+        engine.z[0] = 0.0;
+        for angle in [
+            0.0,
+            std::f32::consts::FRAC_PI_2,
+            std::f32::consts::PI,
+            3.0 * std::f32::consts::FRAC_PI_2,
+            std::f32::consts::TAU,
+        ] {
+            (engine.rotation_x_sin, engine.rotation_x_cos) = angle.sin_cos();
+            let projected = engine.project(0).unwrap();
+            assert_eq!(projected.x, 16);
+            assert_eq!(projected.y, 12);
+        }
+    }
+
+    #[test]
+    fn perspective_separates_near_and_far_particles() {
+        let mut engine = engine(2);
+        engine.x.fill(engine.projection_center_x + 8.0);
+        engine.y.fill(engine.projection_center_y);
+        engine.z[0] = -DEPTH_EXTENT;
+        engine.z[1] = DEPTH_EXTENT;
+        let near = engine.project(0).unwrap();
+        let far = engine.project(1).unwrap();
+        assert!(near.x > far.x);
+        assert!(near.depth < far.depth);
     }
 
     #[test]
