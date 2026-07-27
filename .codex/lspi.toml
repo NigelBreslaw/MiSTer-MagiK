@@ -23,8 +23,6 @@ allow = [
   "find_outgoing_calls_at",
   "get_diagnostics",
   "rename_symbol_strict",
-  "restart_server",
-  "stop_server",
 ]
 
 [[servers]]

@@ -18,8 +18,8 @@ validation, and repository assurance to pre-push and CI.
    - All other repository Rust uses `rust-main`.
 3. Include a representative `file_path` in every workspace-symbol search.
    Longest-root routing selects the backend.
-4. Before switching areas, call `stop_server` for `rs`; the next file-specific
-   call starts only the new area. Stop `rs` again before completing the task.
+4. Let `lspi` own server lifecycle. File-specific calls start the selected
+   backend lazily, and configured idle shutdown releases unused servers.
 
 ## Navigate And Diagnose
 
@@ -27,9 +27,9 @@ validation, and repository assurance to pre-push and CI.
   coordinates.
 - For broad calls, set `max_results=20`, `max_total_chars=10000`, and
   `include_snippet=false` when supported.
-- After a coherent Rust edit batch, call `restart_server` for `rs` once, then
-  request diagnostics for a changed file. This refreshes compiler-backed Clippy
-  diagnostics without restarting after every patch.
+- After a coherent Rust edit batch, request diagnostics for a changed file.
+  Rust Analyzer observes file changes and refreshes compiler-backed Clippy
+  diagnostics without an agent-managed restart.
 - If output is truncated and materially insufficient, make at most one bounded
   follow-up with `max_total_chars` no greater than 20000.
 - Report only the useful findings, result count, backend, warnings, and whether
