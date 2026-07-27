@@ -728,16 +728,24 @@ fn discover_keyboard_devices() -> Vec<String> {
         if !name.starts_with("event") || !name[5..].chars().all(|c| c.is_ascii_digit()) {
             continue;
         }
+        let path = format!("/dev/input/{name}");
         let capabilities = std::fs::read_to_string(entry.path().join("device/capabilities/key"))
             .unwrap_or_default();
         // Letter keys distinguish keyboards from controllers that expose
-        // Enter as a Home button on their companion evdev node.
-        if capability_has_key(&capabilities, KEY_A) && capability_has_key(&capabilities, KEY_B) {
-            paths.push(format!("/dev/input/{name}"));
+        // Enter as a Home button on their companion evdev node. Main's named
+        // proxy is authoritative even if its synthetic capability bitmap does
+        // not resemble an ordinary keyboard on this kernel.
+        if is_navigation_keyboard(input_device_name(&path).as_deref(), &capabilities) {
+            paths.push(path);
         }
     }
     paths.sort();
     paths
+}
+
+fn is_navigation_keyboard(name: Option<&str>, capabilities: &str) -> bool {
+    name == Some(MAIN_INPUT_PROXY_NAME)
+        || (capability_has_key(capabilities, KEY_A) && capability_has_key(capabilities, KEY_B))
 }
 
 fn input_device_name(path: &str) -> Option<String> {
@@ -1548,6 +1556,12 @@ mod tests {
             KEY_RIGHT,
             32
         ));
+    }
+
+    #[test]
+    fn main_proxy_is_discovered_without_keyboard_capabilities() {
+        assert!(is_navigation_keyboard(Some(MAIN_INPUT_PROXY_NAME), ""));
+        assert!(!is_navigation_keyboard(Some("Gamepad"), ""));
     }
 
     #[test]
