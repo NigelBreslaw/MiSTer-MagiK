@@ -109,6 +109,7 @@ impl DeploymentPlan {
                 format!("platform_cache_reused={}", candidate.reused),
                 format!("bundle_id={}", candidate.bundle_id),
                 format!("main_identity={}", candidate.main_identity),
+                format!("main_revision={}", candidate.main_revision),
                 format!("fpga_identity={}", candidate.fpga_identity),
                 format!("kernel_identity={}", candidate.kernel_identity),
                 format!("ci_archive={}", candidate.archive.display()),
@@ -215,6 +216,22 @@ pub fn reconcile(repository: &Path, installed_manifest: &str, head: &str) -> Rec
         decision,
         changed_paths,
     }
+}
+
+pub fn reconcile_with_platform(
+    repository: &Path,
+    installed_manifest: &str,
+    head: &str,
+    desired_main_revision: &str,
+) -> Reconciliation {
+    let Ok(installed) = platform_manifest::parse_installed(installed_manifest, Layout::Development)
+    else {
+        return conservative_reconciliation();
+    };
+    if installed.main_revision() != desired_main_revision {
+        return conservative_reconciliation();
+    }
+    reconcile(repository, installed_manifest, head)
 }
 
 fn conservative_reconciliation() -> Reconciliation {
@@ -353,6 +370,19 @@ mod tests {
         let revision = "a".repeat(40);
         assert_eq!(
             reconcile(Path::new("."), "invalid", &revision).decision,
+            DeliveryDecision::Platform
+        );
+    }
+
+    #[test]
+    fn newer_published_main_requires_platform_delivery() {
+        let revision = "a".repeat(40);
+        let installed_main = "b".repeat(40);
+        let published_main = "c".repeat(40);
+        let installed = manifest(&revision, &installed_main);
+        assert_eq!(
+            reconcile_with_platform(Path::new("."), &installed, &revision, &published_main)
+                .decision,
             DeliveryDecision::Platform
         );
     }

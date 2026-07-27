@@ -106,8 +106,8 @@ pub fn run_transaction(
         (Phase::Classify, 2),
         (Phase::ValidateCommit, 7),
         (Phase::Connect, 12),
-        (Phase::Reconcile, 15),
-        (Phase::GithubResolution, 22),
+        (Phase::GithubResolution, 15),
+        (Phase::Reconcile, 22),
         (Phase::RuntimeBuild, 32),
         (Phase::ManagerQualification, 50),
         (Phase::LocalStaging, 55),
@@ -394,16 +394,26 @@ impl<D: DeviceOperations> DeliveryActions for ProcessActions<'_, D> {
                 let installed_manifest = self
                     .device
                     .execute(DeviceRequest::ReadDevelopmentManifest)?;
-                let reconciliation = crate::deploy::reconcile(
+                let desired_main_revision = &self
+                    .deployment
+                    .platform_candidate
+                    .as_ref()
+                    .ok_or("platform candidate was not resolved before reconciliation")?
+                    .main_revision;
+                let reconciliation = crate::deploy::reconcile_with_platform(
                     self.repository,
                     &installed_manifest,
                     self.expected_commit,
+                    desired_main_revision,
                 );
                 let platform_candidate = self.deployment.platform_candidate.take();
                 self.deployment =
                     crate::deploy::plan(self.repository, reconciliation.changed_paths)?;
                 self.deployment.platform_candidate = platform_candidate;
                 self.decision = reconciliation.decision;
+                if self.decision == DeliveryDecision::Platform {
+                    self.deployment.kind = crate::deploy::DeploymentKind::Platform;
+                }
                 self.installed_manifest = Some(installed_manifest);
                 Ok(())
             }
@@ -443,7 +453,8 @@ impl<D: DeviceOperations> DeliveryActions for ProcessActions<'_, D> {
 
     fn should_run(&self, phase: Phase) -> bool {
         match phase {
-            Phase::GithubResolution | Phase::ManagerQualification | Phase::DatabasePreparation => {
+            Phase::GithubResolution => true,
+            Phase::ManagerQualification | Phase::DatabasePreparation => {
                 self.decision == DeliveryDecision::Platform
             }
             Phase::RuntimeBuild
@@ -669,8 +680,8 @@ mod tests {
         Phase::Classify,
         Phase::ValidateCommit,
         Phase::Connect,
-        Phase::Reconcile,
         Phase::GithubResolution,
+        Phase::Reconcile,
         Phase::RuntimeBuild,
         Phase::ManagerQualification,
         Phase::LocalStaging,

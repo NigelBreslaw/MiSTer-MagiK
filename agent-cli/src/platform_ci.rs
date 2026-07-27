@@ -29,6 +29,7 @@ pub struct Candidate {
     pub head_branch: String,
     pub bundle_id: String,
     pub main_identity: String,
+    pub main_revision: String,
     pub fpga_identity: String,
     pub kernel_identity: String,
 }
@@ -63,6 +64,13 @@ impl PlatformManifest {
             .and_then(|main| main.run_id.as_ref())
             .and_then(ManifestRunId::get)
     }
+
+    fn main_revision(&self) -> Option<&str> {
+        self.components
+            .as_ref()
+            .and_then(|components| components.main.as_ref())
+            .and_then(|main| main.head_sha.as_deref())
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -78,6 +86,7 @@ struct ManifestComponents {
 #[derive(Debug, Deserialize)]
 struct ManifestMain {
     run_id: Option<ManifestRunId>,
+    head_sha: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -247,6 +256,11 @@ fn download_and_verify(
     if payload.origin_sha().is_some_and(|sha| sha != head_sha) {
         return Err("platform candidate manifest does not match the requested commit".into());
     }
+    let main_revision = required_manifest_value(
+        payload.main_revision().unwrap_or_default().to_owned(),
+        "components.main.head_sha",
+        "platform candidate",
+    )?;
     Ok(Candidate {
         run_id,
         head_sha: head_sha.into(),
@@ -261,6 +275,7 @@ fn download_and_verify(
             "main_input_sha256",
             "platform candidate",
         )?,
+        main_revision,
         fpga_identity: required_manifest_value(
             payload.fpga_input_sha256,
             "fpga_input_sha256",
@@ -505,6 +520,11 @@ fn published_candidate(
     let run_id = payload
         .main_run_id()
         .ok_or("published platform manifest is missing Main run_id")?;
+    let main_revision = required_manifest_value(
+        payload.main_revision().unwrap_or_default().to_owned(),
+        "components.main.head_sha",
+        "published platform",
+    )?;
     Ok(Candidate {
         run_id,
         head_sha: head_sha.into(),
@@ -519,6 +539,7 @@ fn published_candidate(
             "main_input_sha256",
             "published platform",
         )?,
+        main_revision,
         fpga_identity: required_manifest_value(
             payload.fpga_input_sha256,
             "fpga_input_sha256",
