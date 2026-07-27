@@ -56,7 +56,10 @@ copy of the UI.
 | `T` | Production screenshot-tile wall |
 
 Arrow keys change selection. `Space` pauses a screensaver; `.` advances one
-frame while paused.
+frame while paused. On Home, `Up` focuses the Settings gear and `Enter` opens
+it; `Down` returns to the system tiles. `Enter` opens supported subpages and
+`Escape` or `Backspace` goes back. The number shortcuts also work on the
+numeric keypad.
 
 ## Deterministic captures
 

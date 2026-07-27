@@ -98,6 +98,7 @@ mod macos {
         xrgb8888: Vec<u32>,
         scenario: Scenario,
         selection: usize,
+        settings_focused: bool,
         arcade_layer: ArcadeVisualLayer,
         arcade_games: Vec<ArcadeGameEntry>,
         preview_pixels: Vec<Rgb565Pixel>,
@@ -128,6 +129,7 @@ mod macos {
                 xrgb8888: Vec::new(),
                 scenario,
                 selection: 0,
+                settings_focused: false,
                 arcade_layer: ArcadeVisualLayer::new(FRAME_WIDTH, FRAME_HEIGHT),
                 arcade_games: fixture_arcade_games(),
                 preview_pixels: fixture_preview_pixels(160, 120),
@@ -177,6 +179,7 @@ mod macos {
         fn select_scenario(&mut self, scenario: Scenario) {
             self.scenario = scenario;
             self.selection = 0;
+            self.settings_focused = false;
             apply_scenario(&self.launcher, scenario);
             if scenario == Scenario::Arcade {
                 apply_arcade_bridge(&self.launcher, &self.arcade_games, self.selection);
@@ -203,7 +206,7 @@ mod macos {
                 Scenario::Settings => 5,
                 Scenario::About => 2,
                 Scenario::Licenses => 2,
-                Scenario::ScreensaverSettings => 2,
+                Scenario::ScreensaverSettings => 3,
                 Scenario::Arcade => self.arcade_games.len(),
                 _ => 1,
             };
@@ -217,6 +220,7 @@ mod macos {
         fn update_selection(&self) {
             let bridge = self.launcher.global::<MisterBridge>();
             bridge.set_selected_index(self.selection as i32);
+            bridge.set_settings_focused(self.settings_focused);
             bridge.set_settings_selected(self.selection as i32);
             bridge.set_about_selected(self.selection as i32);
             bridge.set_licenses_selected(self.selection as i32);
@@ -234,36 +238,65 @@ mod macos {
             self.slint_window.request_redraw();
         }
 
-        fn handle_key(&mut self, code: KeyCode) {
-            let scenario = match code {
-                KeyCode::Digit1 => Some(Scenario::Home),
-                KeyCode::Digit2 => Some(Scenario::Settings),
-                KeyCode::Digit3 => Some(Scenario::Controller),
-                KeyCode::Digit4 => Some(Scenario::About),
-                KeyCode::Digit5 => Some(Scenario::Licenses),
-                KeyCode::Digit6 => Some(Scenario::Info),
-                KeyCode::Digit7 => Some(Scenario::ScreensaverSettings),
-                KeyCode::Digit8 => Some(Scenario::Startup),
-                KeyCode::Digit9 => Some(Scenario::Confirm),
-                KeyCode::Digit0 => Some(Scenario::CatalogScan),
-                KeyCode::KeyA => Some(Scenario::Arcade),
-                KeyCode::KeyB => Some(Scenario::BackgroundScan),
-                KeyCode::KeyC => Some(Scenario::Compatibility),
-                KeyCode::KeyL => Some(Scenario::Loading),
-                KeyCode::KeyM => Some(Scenario::MediaProgress),
-                KeyCode::KeyP => Some(Scenario::ParticleScreensaver),
-                KeyCode::KeyT => Some(Scenario::ScreenshotTiles),
-                KeyCode::KeyS => Some(Scenario::ControllerSetup),
-                _ => None,
-            };
-            if let Some(scenario) = scenario {
+        fn set_settings_focused(&mut self, focused: bool) {
+            self.settings_focused = focused;
+            self.update_selection();
+        }
+
+        fn activate_selection(&mut self) {
+            if self.scenario == Scenario::Settings && self.selection == 0 {
+                let bridge = self.launcher.global::<MisterBridge>();
+                bridge.set_display_combo_open(!bridge.get_display_combo_open());
+                self.slint_window.request_redraw();
+                return;
+            }
+            if let Some(scenario) =
+                activated_scenario(self.scenario, self.selection, self.settings_focused)
+            {
                 self.select_scenario(scenario);
+            }
+        }
+
+        fn go_back(&mut self) {
+            if let Some(scenario) = back_scenario(self.scenario) {
+                self.select_scenario(scenario);
+            }
+        }
+
+        fn handle_key(&mut self, code: KeyCode) {
+            if let Some(scenario) = shortcut_scenario(code) {
+                self.select_scenario(scenario);
+                return;
+            }
+            if matches!(code, KeyCode::Escape | KeyCode::Backspace) {
+                self.go_back();
+                return;
+            }
+            if self.scenario == Scenario::Home {
+                match code {
+                    KeyCode::ArrowUp => self.set_settings_focused(true),
+                    KeyCode::ArrowDown if self.settings_focused => {
+                        self.set_settings_focused(false);
+                    }
+                    KeyCode::ArrowLeft if !self.settings_focused => self.move_selection(-1),
+                    KeyCode::ArrowRight if !self.settings_focused => self.move_selection(1),
+                    KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => {
+                        self.activate_selection();
+                    }
+                    _ => {}
+                }
                 return;
             }
             match code {
                 KeyCode::ArrowUp | KeyCode::ArrowLeft => self.move_selection(-1),
                 KeyCode::ArrowDown | KeyCode::ArrowRight => self.move_selection(1),
-                KeyCode::Space => {
+                KeyCode::Enter | KeyCode::NumpadEnter => self.activate_selection(),
+                KeyCode::Space
+                    if matches!(
+                        self.scenario,
+                        Scenario::ParticleScreensaver | Scenario::ScreenshotTiles
+                    ) =>
+                {
                     self.screensaver_paused = !self.screensaver_paused;
                 }
                 KeyCode::Period if self.screensaver_paused => {
@@ -510,6 +543,55 @@ mod macos {
         }
     }
 
+    fn shortcut_scenario(code: KeyCode) -> Option<Scenario> {
+        match code {
+            KeyCode::Digit1 | KeyCode::Numpad1 => Some(Scenario::Home),
+            KeyCode::Digit2 | KeyCode::Numpad2 => Some(Scenario::Settings),
+            KeyCode::Digit3 | KeyCode::Numpad3 => Some(Scenario::Controller),
+            KeyCode::Digit4 | KeyCode::Numpad4 => Some(Scenario::About),
+            KeyCode::Digit5 | KeyCode::Numpad5 => Some(Scenario::Licenses),
+            KeyCode::Digit6 | KeyCode::Numpad6 => Some(Scenario::Info),
+            KeyCode::Digit7 | KeyCode::Numpad7 => Some(Scenario::ScreensaverSettings),
+            KeyCode::Digit8 | KeyCode::Numpad8 => Some(Scenario::Startup),
+            KeyCode::Digit9 | KeyCode::Numpad9 => Some(Scenario::Confirm),
+            KeyCode::Digit0 | KeyCode::Numpad0 => Some(Scenario::CatalogScan),
+            KeyCode::KeyA => Some(Scenario::Arcade),
+            KeyCode::KeyB => Some(Scenario::BackgroundScan),
+            KeyCode::KeyC => Some(Scenario::Compatibility),
+            KeyCode::KeyL => Some(Scenario::Loading),
+            KeyCode::KeyM => Some(Scenario::MediaProgress),
+            KeyCode::KeyP => Some(Scenario::ParticleScreensaver),
+            KeyCode::KeyT => Some(Scenario::ScreenshotTiles),
+            KeyCode::KeyS => Some(Scenario::ControllerSetup),
+            _ => None,
+        }
+    }
+
+    fn activated_scenario(
+        scenario: Scenario,
+        selection: usize,
+        settings_focused: bool,
+    ) -> Option<Scenario> {
+        match (scenario, selection, settings_focused) {
+            (Scenario::Home, _, true) => Some(Scenario::Settings),
+            (Scenario::Home, 0, false) => Some(Scenario::Arcade),
+            (Scenario::Settings, 1, _) => Some(Scenario::ScreensaverSettings),
+            (Scenario::Settings, 4, _) => Some(Scenario::About),
+            (Scenario::About, 0, _) => Some(Scenario::Info),
+            (Scenario::About, 1, _) => Some(Scenario::Licenses),
+            _ => None,
+        }
+    }
+
+    fn back_scenario(scenario: Scenario) -> Option<Scenario> {
+        match scenario {
+            Scenario::Home => None,
+            Scenario::ScreensaverSettings | Scenario::About => Some(Scenario::Settings),
+            Scenario::Info | Scenario::Licenses => Some(Scenario::About),
+            _ => Some(Scenario::Home),
+        }
+    }
+
     struct PreviewOptions {
         scenario: Scenario,
         frame: u64,
@@ -666,6 +748,7 @@ mod macos {
         bridge.set_menu_breadcrumb("Systems".into());
         bridge.set_menu_items(home_menu_items(0));
         bridge.set_selected_index(0);
+        bridge.set_settings_focused(false);
         bridge.set_settings_selected(0);
         bridge.set_about_selected(0);
         bridge.set_licenses_selected(0);
@@ -1016,6 +1099,47 @@ mod macos {
             assert_eq!(options.scenario, Scenario::ScreenshotTiles);
             assert_eq!(options.frame, 12);
             assert_eq!(options.output, Some(PathBuf::from("out.ppm")));
+        }
+
+        #[test]
+        fn home_settings_focus_activates_settings() {
+            assert_eq!(
+                activated_scenario(Scenario::Home, 0, true),
+                Some(Scenario::Settings)
+            );
+            assert_eq!(
+                activated_scenario(Scenario::Home, 0, false),
+                Some(Scenario::Arcade)
+            );
+        }
+
+        #[test]
+        fn settings_subpages_and_back_routes_match_launcher_hierarchy() {
+            assert_eq!(
+                activated_scenario(Scenario::Settings, 1, false),
+                Some(Scenario::ScreensaverSettings)
+            );
+            assert_eq!(
+                activated_scenario(Scenario::Settings, 4, false),
+                Some(Scenario::About)
+            );
+            assert_eq!(
+                back_scenario(Scenario::ScreensaverSettings),
+                Some(Scenario::Settings)
+            );
+            assert_eq!(back_scenario(Scenario::Info), Some(Scenario::About));
+        }
+
+        #[test]
+        fn numeric_keypad_shortcuts_open_scenarios() {
+            assert_eq!(
+                shortcut_scenario(KeyCode::Numpad2),
+                Some(Scenario::Settings)
+            );
+            assert_eq!(
+                shortcut_scenario(KeyCode::Numpad7),
+                Some(Scenario::ScreensaverSettings)
+            );
         }
 
         #[test]
