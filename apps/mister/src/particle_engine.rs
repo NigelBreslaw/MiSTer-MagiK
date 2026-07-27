@@ -14,6 +14,8 @@ const CYCLE_US: u64 = 10_000_000;
 const MAX_STEP_SECONDS: f32 = 1.0 / 15.0;
 const DEPTH_EXTENT: f32 = 64.0;
 const FOCAL_LENGTH: f32 = 720.0;
+const TARGET_FIXED_SCALE: f32 = 16.0;
+const TARGET_FIXED_SCALE_RECIP: f32 = 1.0 / TARGET_FIXED_SCALE;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ParticlePreset {
@@ -182,8 +184,7 @@ pub struct ProjectedParticle {
 #[derive(Debug)]
 pub struct ParticleEngine {
     config: ParticleConfig,
-    target_points: Vec<ParticleTarget>,
-    target_indices: Vec<u32>,
+    packed_targets: Vec<u32>,
     x: Vec<f32>,
     y: Vec<f32>,
     z: Vec<f32>,
@@ -214,7 +215,7 @@ impl ParticleEngine {
             .collect::<Vec<_>>();
         let mut engine = Self {
             config,
-            target_indices: Vec::with_capacity(config.count),
+            packed_targets: Vec::with_capacity(config.count),
             x: Vec::with_capacity(config.count),
             y: Vec::with_capacity(config.count),
             z: Vec::with_capacity(config.count),
@@ -222,12 +223,11 @@ impl ParticleEngine {
             vy: Vec::with_capacity(config.count),
             vz: Vec::with_capacity(config.count),
             seeds: Vec::with_capacity(config.count),
-            target_points,
             last_elapsed: Duration::ZERO,
             cycle: 0,
             phase: ParticlePhase::Static,
         };
-        engine.initialize_particles(0);
+        engine.initialize_particles(&target_points, 0)?;
         Ok(engine)
     }
 
@@ -300,8 +300,12 @@ impl ParticleEngine {
         })
     }
 
-    fn initialize_particles(&mut self, cycle: u64) {
-        let point_count = self.target_points.len();
+    fn initialize_particles(
+        &mut self,
+        target_points: &[ParticleTarget],
+        cycle: u64,
+    ) -> Result<(), String> {
+        let point_count = target_points.len();
         for index in 0..self.config.count {
             let seed = mix32(
                 self.config.seed as u32
@@ -309,13 +313,18 @@ impl ParticleEngine {
                     ^ index as u32
                     ^ 0x9e37_79b9,
             );
-            self.seeds.push(seed);
             let target_index = if self.config.count <= point_count {
                 index.saturating_mul(point_count) / self.config.count
             } else {
                 index % point_count
             };
-            self.target_indices.push(target_index as u32);
+            let mut target = target_points[target_index];
+            if self.config.count > point_count {
+                target.x += signed_unit(mix32(seed ^ 0xbb67_ae85)) * 0.4;
+                target.y += signed_unit(mix32(seed ^ 0x3c6e_f372)) * 0.4;
+            }
+            self.packed_targets.push(pack_target(target)?);
+            self.seeds.push(seed);
             self.x.push(0.0);
             self.y.push(0.0);
             self.z.push(0.0);
@@ -324,6 +333,7 @@ impl ParticleEngine {
             self.vz.push(0.0);
         }
         self.initialize_scatter(cycle);
+        Ok(())
     }
 
     fn initialize_scatter(&mut self, cycle: u64) {
@@ -395,15 +405,30 @@ impl ParticleEngine {
     }
 
     fn target(&self, index: usize) -> ParticleTarget {
-        let target = self.target_points[self.target_indices[index] as usize];
-        if self.config.count <= self.target_points.len() {
-            return target;
-        }
-        let seed = self.seeds[index];
-        ParticleTarget {
-            x: target.x + signed_unit(mix32(seed ^ 0xbb67_ae85)) * 0.4,
-            y: target.y + signed_unit(mix32(seed ^ 0x3c6e_f372)) * 0.4,
-        }
+        unpack_target(self.packed_targets[index])
+    }
+}
+
+fn pack_target(target: ParticleTarget) -> Result<u32, String> {
+    let x = pack_target_coordinate(target.x)?;
+    let y = pack_target_coordinate(target.y)?;
+    Ok(u32::from(x as u16) | (u32::from(y as u16) << 16))
+}
+
+fn pack_target_coordinate(value: f32) -> Result<i16, String> {
+    let fixed = (value * TARGET_FIXED_SCALE).round();
+    if !fixed.is_finite() || fixed < f32::from(i16::MIN) || fixed > f32::from(i16::MAX) {
+        return Err(format!(
+            "particle target coordinate {value} exceeds Q12.4 range"
+        ));
+    }
+    Ok(fixed as i16)
+}
+
+fn unpack_target(packed: u32) -> ParticleTarget {
+    ParticleTarget {
+        x: f32::from(packed as u16 as i16) * TARGET_FIXED_SCALE_RECIP,
+        y: f32::from((packed >> 16) as u16 as i16) * TARGET_FIXED_SCALE_RECIP,
     }
 }
 
@@ -523,7 +548,7 @@ mod tests {
             engine.vx.capacity(),
             engine.vy.capacity(),
             engine.vz.capacity(),
-            engine.target_indices.capacity(),
+            engine.packed_targets.capacity(),
             engine.seeds.capacity(),
         );
         engine.step(Duration::from_secs(6));
@@ -536,9 +561,30 @@ mod tests {
                 engine.vx.capacity(),
                 engine.vy.capacity(),
                 engine.vz.capacity(),
-                engine.target_indices.capacity(),
+                engine.packed_targets.capacity(),
                 engine.seeds.capacity(),
             )
         );
+    }
+
+    #[test]
+    fn packed_targets_preserve_q12_4_coordinates() {
+        for target in [
+            ParticleTarget { x: -0.4, y: 0.0 },
+            ParticleTarget {
+                x: 479.53125,
+                y: 269.96875,
+            },
+            ParticleTarget { x: 959.4, y: 539.4 },
+        ] {
+            let unpacked = unpack_target(pack_target(target).unwrap());
+            assert!((unpacked.x - target.x).abs() <= 1.0 / 32.0);
+            assert!((unpacked.y - target.y).abs() <= 1.0 / 32.0);
+        }
+    }
+
+    #[test]
+    fn packed_targets_reject_coordinates_outside_q12_4() {
+        assert!(pack_target(ParticleTarget { x: 2_048.0, y: 0.0 }).is_err());
     }
 }
