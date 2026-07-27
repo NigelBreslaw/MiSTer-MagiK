@@ -1,5 +1,8 @@
 # MiSTer frontend build policy
 
+For local macOS UI design and deterministic RGB565 captures, see
+[UI_PREVIEW.md](UI_PREVIEW.md).
+
 Agents build and validate through `scripts/agent`; they do not invoke Cargo,
 Apple container, cross, or deployment implementation commands directly.
 
