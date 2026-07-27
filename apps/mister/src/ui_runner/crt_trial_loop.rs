@@ -174,7 +174,7 @@ pub(super) fn run_crt_trial_loop(
     secs: u64,
     ui: &UiDisplay,
     hardware: &mut Fpga,
-    _display_session: &mut LauncherDisplaySession,
+    display_session: &mut LauncherDisplaySession,
 ) {
     let mode = ui.output_route();
     if secs != CRT_TRIAL_SECS || !mode.is_crt() {
@@ -699,7 +699,7 @@ fn post_probe_slot(
     width: usize,
     height: usize,
     hardware: &mut Fpga,
-    display_session: &mut LauncherDisplaySession,
+    _display_session: &mut LauncherDisplaySession,
     geometry: crate::fpga::LatchedFbufGeometry,
     sequence: &mut u16,
     telemetry: &mut CrtProbeTelemetry,
