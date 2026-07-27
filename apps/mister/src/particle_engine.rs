@@ -234,7 +234,7 @@ impl ParticleEngine {
             cycle: 0,
             phase: ParticlePhase::Static,
         };
-        engine.initialize_particles(&target_points, 0)?;
+        engine.initialize_particles(&target_points)?;
         Ok(engine)
     }
 
@@ -263,7 +263,6 @@ impl ParticleEngine {
         let next_cycle = elapsed_us / CYCLE_US;
         if next_cycle != self.cycle {
             self.cycle = next_cycle;
-            self.initialize_scatter(next_cycle);
         }
         let cycle_us = elapsed_us % CYCLE_US;
         let next_phase = ParticlePhase::at_cycle_us(cycle_us);
@@ -317,11 +316,7 @@ impl ParticleEngine {
         self.random_states[index]
     }
 
-    fn initialize_particles(
-        &mut self,
-        target_points: &[ParticleTarget],
-        cycle: u64,
-    ) -> Result<(), String> {
+    fn initialize_particles(&mut self, target_points: &[ParticleTarget]) -> Result<(), String> {
         let point_count = target_points.len();
         for index in 0..self.config.count {
             let seed = nonzero_random_state(mix32(
@@ -349,15 +344,15 @@ impl ParticleEngine {
             self.vy.push(0.0);
             self.vz.push(0.0);
         }
-        self.initialize_scatter(cycle);
+        self.initialize_scatter();
         Ok(())
     }
 
-    fn initialize_scatter(&mut self, cycle: u64) {
+    fn initialize_scatter(&mut self) {
         let width = self.config.width as f32;
         let height = self.config.height as f32;
         for index in 0..self.particle_count() {
-            let seed = self.random_states[index] ^ cycle as u32;
+            let seed = self.random_states[index];
             self.x[index] = unit_float(mix32(seed ^ 0xa511_e9b3)) * width;
             self.y[index] = unit_float(mix32(seed ^ 0x63d8_3595)) * height;
             self.z[index] = signed_unit(mix32(seed ^ 0x7f4a_7c15)) * DEPTH_EXTENT;
@@ -679,5 +674,19 @@ mod tests {
         ] {
             assert_eq!(wrap_coordinate(value, 32.0), expected);
         }
+    }
+
+    #[test]
+    fn cycle_transition_does_not_reinitialize_scatter() {
+        let mut transitioning = engine(64);
+        let mut already_advanced = engine(64);
+        transitioning.step(Duration::from_millis(9_999));
+        already_advanced.step(Duration::from_millis(9_999));
+        already_advanced.cycle = 1;
+        transitioning.step(Duration::from_millis(10_000));
+        already_advanced.step(Duration::from_millis(10_000));
+        assert_eq!(transitioning.x, already_advanced.x);
+        assert_eq!(transitioning.y, already_advanced.y);
+        assert_eq!(transitioning.z, already_advanced.z);
     }
 }
