@@ -16,6 +16,9 @@ const DEPTH_EXTENT: f32 = 64.0;
 const FOCAL_LENGTH: f32 = 720.0;
 const TARGET_FIXED_SCALE: f32 = 16.0;
 const TARGET_FIXED_SCALE_RECIP: f32 = 1.0 / TARGET_FIXED_SCALE;
+const TARGET_DEPTH_Q2_HALF_EXTENT: i8 = 40;
+const TARGET_DEPTH_LEVELS: u64 = 81;
+const TARGET_DEPTH_Q2_RECIP: f32 = 0.25;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ParticlePreset {
@@ -188,6 +191,7 @@ pub struct ParticleEngine {
     projection_max_x: f32,
     projection_max_y: f32,
     packed_targets: Vec<u32>,
+    target_depth_q2: Vec<i8>,
     x: Vec<f32>,
     y: Vec<f32>,
     z: Vec<f32>,
@@ -223,6 +227,7 @@ impl ParticleEngine {
             projection_max_x: config.width as f32 - 0.5,
             projection_max_y: config.height as f32 - 0.5,
             packed_targets: Vec::with_capacity(config.count),
+            target_depth_q2: Vec::with_capacity(config.count),
             x: Vec::with_capacity(config.count),
             y: Vec::with_capacity(config.count),
             z: Vec::with_capacity(config.count),
@@ -255,7 +260,7 @@ impl ParticleEngine {
 
     #[must_use]
     pub const fn bytes_per_particle() -> usize {
-        7 * std::mem::size_of::<u32>() + std::mem::size_of::<u32>()
+        8 * std::mem::size_of::<u32>() + std::mem::size_of::<i8>()
     }
 
     pub fn step(&mut self, elapsed: Duration) -> ParticleFrameStats {
@@ -336,6 +341,8 @@ impl ParticleEngine {
                 target.y += signed_unit(mix32(seed ^ 0x3c6e_f372)) * 0.4;
             }
             self.packed_targets.push(pack_target(target)?);
+            self.target_depth_q2
+                .push(distributed_target_depth_q2(mix32(seed ^ 0x510e_527f)));
             self.random_states.push(seed);
             self.x.push(0.0);
             self.y.push(0.0);
@@ -380,6 +387,7 @@ impl ParticleEngine {
                 }
                 ParticlePhase::Form | ParticlePhase::Hold => {
                     let target = self.target(index);
+                    let target_z = self.target_depth(index);
                     let hold = self.phase == ParticlePhase::Hold;
                     let stiffness = if hold { 34.0 } else { 18.0 };
                     let damping = if hold { 0.78 } else { 0.88 };
@@ -388,7 +396,7 @@ impl ParticleEngine {
                         (target.x + jitter_x * jitter - self.x[index]) * stiffness * delta;
                     self.vy[index] +=
                         (target.y + jitter_y * jitter - self.y[index]) * stiffness * delta;
-                    self.vz[index] += -self.z[index] * stiffness * delta;
+                    self.vz[index] += (target_z - self.z[index]) * stiffness * delta;
                     self.vx[index] *= damping;
                     self.vy[index] *= damping;
                     self.vz[index] *= damping;
@@ -418,6 +426,10 @@ impl ParticleEngine {
 
     fn target(&self, index: usize) -> ParticleTarget {
         unpack_target(self.packed_targets[index])
+    }
+
+    fn target_depth(&self, index: usize) -> f32 {
+        f32::from(self.target_depth_q2[index]) * TARGET_DEPTH_Q2_RECIP
     }
 }
 
@@ -463,6 +475,11 @@ fn next_random(state: &mut u32) -> u32 {
     value ^= value << 5;
     *state = value;
     value
+}
+
+fn distributed_target_depth_q2(value: u32) -> i8 {
+    let level = (u64::from(value) * TARGET_DEPTH_LEVELS) >> 32;
+    (level as i16 - i16::from(TARGET_DEPTH_Q2_HALF_EXTENT)) as i8
 }
 
 #[inline(always)]
@@ -592,6 +609,7 @@ mod tests {
             engine.vy.capacity(),
             engine.vz.capacity(),
             engine.packed_targets.capacity(),
+            engine.target_depth_q2.capacity(),
             engine.random_states.capacity(),
         );
         engine.step(Duration::from_secs(6));
@@ -605,9 +623,42 @@ mod tests {
                 engine.vy.capacity(),
                 engine.vz.capacity(),
                 engine.packed_targets.capacity(),
+                engine.target_depth_q2.capacity(),
                 engine.random_states.capacity(),
             )
         );
+    }
+
+    #[test]
+    fn formation_depths_are_deterministic_balanced_and_bounded() {
+        let first = engine(16_384);
+        let second = engine(16_384);
+        assert_eq!(first.target_depth_q2, second.target_depth_q2);
+        assert_eq!(ParticleEngine::bytes_per_particle(), 33);
+        let mut levels = [0usize; TARGET_DEPTH_LEVELS as usize];
+        for &depth in &first.target_depth_q2 {
+            assert!((-TARGET_DEPTH_Q2_HALF_EXTENT..=TARGET_DEPTH_Q2_HALF_EXTENT).contains(&depth));
+            levels[usize::from(
+                (i16::from(depth) + i16::from(TARGET_DEPTH_Q2_HALF_EXTENT)) as u16,
+            )] += 1;
+        }
+        let minimum = levels.into_iter().min().unwrap();
+        let maximum = levels.into_iter().max().unwrap();
+        assert!(minimum > 0);
+        assert!(maximum - minimum < 100);
+    }
+
+    #[test]
+    fn particles_converge_on_their_formation_depths() {
+        let mut engine = engine(512);
+        for frame in 1..=360 {
+            engine.step(Duration::from_micros(frame * 16_667));
+        }
+        let mean_error = (0..engine.particle_count())
+            .map(|index| (engine.z[index] - engine.target_depth(index)).abs())
+            .sum::<f32>()
+            / engine.particle_count() as f32;
+        assert!(mean_error < 0.5, "mean depth error was {mean_error}");
     }
 
     #[test]
