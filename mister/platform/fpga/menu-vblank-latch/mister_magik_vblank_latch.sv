@@ -247,7 +247,10 @@ module mister_magik_vblank_latch (
 					4'd2: tx_crc <= crc_word(tx_crc, MAGIK_FBUF_MAX_WIDTH);
 					4'd3: tx_crc <= crc_word(tx_crc, MAGIK_FBUF_MAX_HEIGHT);
 					4'd4: tx_crc <= crc_word(tx_crc, MAGIK_FBUF_MAX_STRIDE);
+					// The enclosing range check makes this defensive arm unreachable.
+					/* verilator coverage_off */
 					default: tx_crc <= tx_crc;
+					/* verilator coverage_on */
 				endcase
 				tx_expected <= tx_expected + 1'd1;
 			end
@@ -335,17 +338,24 @@ module mister_magik_vblank_latch (
 					4'd8: rx_vmax_word <= data_in;
 					4'd9: rx_stride_word <= data_in;
 					4'd10: rx_seq <= data_in;
+					// word_index < 11 and exact ordering restrict this case to 0..10.
+					/* verilator coverage_off */
 					default: begin end
+					/* verilator coverage_on */
 				endcase
 			end
 			else begin
 				rx_open <= 1'b0;
 				rx_faulted <= 1'b0;
+				// Exact in-order framing makes a CRC commit reachable only after all
+				// eleven payload bits are set. Keep the mask check as defense in depth.
+				/* verilator coverage_off */
 				if(rx_mask != 11'h7ff) begin
 					reject_count <= reject_count + 1'd1;
 					last_reject_reason <= MAGIK_REJECT_MISSING_WORD;
 					rx_faulted <= 1'b1;
 				end
+				/* verilator coverage_on */
 				else if(data_in != (rx_crc ^ MAGIK_CRC_FINAL_XOR)) begin
 					reject_count <= reject_count + 1'd1;
 					last_reject_reason <= MAGIK_REJECT_BAD_CRC;

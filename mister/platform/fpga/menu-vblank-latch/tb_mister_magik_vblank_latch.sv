@@ -410,6 +410,17 @@ module tb_mister_magik_vblank_latch;
 		expect16(value, MAGIK_GOLDEN_CAPS_V3_4, "caps stride");
 		read_word(MAGIK_UIO_GET_FBUF_LATCH_CAPS, 4'd5, value);
 		expect16(value, MAGIK_GOLDEN_CAPS_V3_CRC, "caps CRC");
+		read_word(MAGIK_UIO_GET_FBUF_LATCH_CAPS, 4'd6, value);
+		expect16(value, 16'd0, "caps post-close word is zero");
+		@(negedge clk_sys);
+		cmd_id = 8'h5a;
+		cmd_start = 1'b1;
+		#1;
+		expect_true(!response_valid, "unknown command is not acknowledged");
+		expect16(response_data, 16'd0, "unknown command response is zero");
+		@(posedge clk_sys);
+		#1;
+		cmd_start = 1'b0;
 		requirement_coverage[0] = 1'b1;
 
 		send_golden_route();
@@ -554,6 +565,10 @@ module tb_mister_magik_vblank_latch;
 		send_route(16'h8014, 32'h2001, 16'd320, 16'd240,
 		           16'd0, 16'd319, 16'd0, 16'd239, 16'd640, 16'h1002);
 		expect_reject(reject_before, MAGIK_REJECT_INVALID_BASE, "unaligned base");
+		reject_before = reject_count;
+		send_route(16'h8014, 32'h2000, 16'h1140, 16'd240,
+		           16'd0, 16'd319, 16'd0, 16'd239, 16'd640, 16'h1008);
+		expect_reject(reject_before, MAGIK_REJECT_RESERVED, "reserved geometry bits");
 		reject_before = reject_count;
 		send_route(16'h8014, 32'h2000, 16'd0, 16'd240,
 		           16'd0, 16'd319, 16'd0, 16'd239, 16'd640, 16'h1003);
