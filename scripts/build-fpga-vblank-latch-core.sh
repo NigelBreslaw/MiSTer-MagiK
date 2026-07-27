@@ -9,6 +9,7 @@ PATCH="$ROOT/mister/platform/fpga/menu-vblank-latch/Menu_MiSTer-vblank-latched-f
 LATCH_RTL="$ROOT/mister/platform/fpga/menu-vblank-latch/mister_magik_vblank_latch.sv"
 LATCH_BRIDGE="$ROOT/mister/platform/fpga/menu-vblank-latch/mister_magik_latch_sys_top_bridge.sv"
 LATCH_PROTOCOL="$ROOT/mister/platform/fpga/menu-vblank-latch/mister_magik_latch_protocol.svh"
+TIMING_REPORT_TCL="$ROOT/mister/platform/fpga/menu-vblank-latch/report_top_timing.tcl"
 OUT_DIR="${MISTER_FPGA_OUT_DIR:-$ROOT/build/fpga-vblank-latch}"
 WORK_DIR="${MISTER_MENU_BUILD_DIR:-$OUT_DIR/Menu_MiSTer-vblank-latch-work}"
 if [[ -n "${MISTER_MENU_DIR:-}" ]]; then
@@ -21,6 +22,7 @@ fi
 RBF_OUT="$OUT_DIR/menu-magik-vblank-latch.rbf"
 META_OUT="$OUT_DIR/menu-magik-vblank-latch.metadata.txt"
 LOG_OUT="$OUT_DIR/menu-magik-vblank-latch.build.log"
+TIMING_LOG_OUT="$OUT_DIR/menu-magik-vblank-latch.top-timing.log"
 STRACE_PREFIX="quartus-flow.strace"
 QUARTUS_DOCKER_IMAGE="${QUARTUS_DOCKER_IMAGE:-mister-magik-quartus-runtime:ubuntu20-amd64}"
 QUARTUS_DOCKER_CPUS="${QUARTUS_DOCKER_CPUS:-8}"
@@ -85,6 +87,10 @@ if [[ ! -f "$LATCH_BRIDGE" ]]; then
   echo "missing latch sys_top bridge: $LATCH_BRIDGE" >&2
   exit 1
 fi
+if [[ ! -f "$TIMING_REPORT_TCL" ]]; then
+  echo "missing top timing report script: $TIMING_REPORT_TCL" >&2
+  exit 1
+fi
 MENU_ABS="$(abs_path "$MENU_DIR")"
 
 if [[ ! -f "$MENU_ABS/menu.qsf" || ! -f "$MENU_ABS/sys/sys_top.v" ]]; then
@@ -110,7 +116,7 @@ else
 fi
 
 mkdir -p "$OUT_DIR"
-rm -f "$RBF_OUT" "$META_OUT" "$LOG_OUT" "$OUT_DIR"/"$STRACE_PREFIX"*.log
+rm -f "$RBF_OUT" "$META_OUT" "$LOG_OUT" "$TIMING_LOG_OUT" "$OUT_DIR"/"$STRACE_PREFIX"*.log
 rm -rf "$WORK_DIR"
 mkdir -p "$WORK_DIR"
 rsync -a --delete \
@@ -120,6 +126,7 @@ rsync -a --delete \
   --exclude incremental_db \
   "$MENU_ABS"/ "$WORK_DIR"/
 git -C "$WORK_DIR" init -q
+cp "$TIMING_REPORT_TCL" "$WORK_DIR/mister_magik_report_top_timing.tcl"
 
 case "$APPLY_PATCH" in
   0|false|False|FALSE|no|No|NO)
@@ -280,6 +287,23 @@ find "$WORK_DIR" -maxdepth 1 -name "$STRACE_PREFIX*" -print0 |
 
 if [[ "$build_status" -ne 0 ]]; then
   exit "$build_status"
+fi
+
+if [[ "$QUARTUS_MODE" = "docker" ]]; then
+  docker run --platform linux/amd64 --rm \
+    "${docker_security_args[@]}" \
+    "${docker_mount_args[@]}" \
+    --cpus "$QUARTUS_DOCKER_CPUS" \
+    --memory "$QUARTUS_DOCKER_MEMORY" \
+    "${docker_quartus_mount_args[@]}" \
+    --workdir /work \
+    "$QUARTUS_DOCKER_IMAGE" \
+    quartus_sta -t mister_magik_report_top_timing.tcl 2>&1 | tee "$TIMING_LOG_OUT"
+else
+  (
+    cd "$WORK_DIR"
+    quartus_sta -t mister_magik_report_top_timing.tcl
+  ) 2>&1 | tee "$TIMING_LOG_OUT"
 fi
 
 RBF_CANDIDATE="$WORK_DIR/output_files/menu.rbf"
