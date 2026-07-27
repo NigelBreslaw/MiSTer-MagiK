@@ -168,12 +168,27 @@ impl ParticleRenderer {
             let palette_index = (self.engine.flicker_key(index) >> 30) as usize;
             destination[offset] = VISUAL_PALETTE[palette_index];
             dirty_offsets.push(offset as u32);
-            if palette_index == VISUAL_PALETTE.len() - 1 && particle.x + 1 < width as i32 {
+            if visual_particle_has_neighbor(self.engine.phase(), particle.depth, palette_index)
+                && particle.x + 1 < width as i32
+            {
                 destination[offset + 1] = VISUAL_PALETTE[2];
                 dirty_offsets.push((offset + 1) as u32);
             }
         }
         visible
+    }
+}
+
+fn visual_particle_has_neighbor(
+    phase: ParticlePhase,
+    camera_depth: f32,
+    palette_index: usize,
+) -> bool {
+    match phase {
+        ParticlePhase::Form | ParticlePhase::Hold => camera_depth < 0.0,
+        ParticlePhase::Static | ParticlePhase::Disperse => {
+            palette_index == VISUAL_PALETTE.len() - 1
+        }
     }
 }
 
@@ -273,6 +288,31 @@ mod tests {
                 .iter()
                 .all(|pixel| pixel.0 == 0 || VISUAL_PALETTE.contains(pixel))
         );
+    }
+
+    #[test]
+    fn visual_footprint_uses_depth_only_while_the_word_is_formed() {
+        for phase in [ParticlePhase::Form, ParticlePhase::Hold] {
+            assert!(visual_particle_has_neighbor(phase, -0.25, 0));
+            assert!(!visual_particle_has_neighbor(
+                phase,
+                0.0,
+                VISUAL_PALETTE.len() - 1
+            ));
+            assert!(!visual_particle_has_neighbor(
+                phase,
+                10.0,
+                VISUAL_PALETTE.len() - 1
+            ));
+        }
+        for phase in [ParticlePhase::Static, ParticlePhase::Disperse] {
+            assert!(visual_particle_has_neighbor(
+                phase,
+                10.0,
+                VISUAL_PALETTE.len() - 1
+            ));
+            assert!(!visual_particle_has_neighbor(phase, -10.0, 0));
+        }
     }
 
     #[test]
