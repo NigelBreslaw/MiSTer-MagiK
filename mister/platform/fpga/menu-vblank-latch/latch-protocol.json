@@ -1,6 +1,6 @@
 {
   "schema": 3,
-  "active_protocol_version": 2,
+  "active_protocol_version": 3,
   "commands": {
     "set": 87,
     "get": 88,

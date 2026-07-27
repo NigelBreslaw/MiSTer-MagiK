@@ -18,6 +18,8 @@ module mister_magik_vblank_latch (
 	input  wire [11:0] active_lfb_width,
 	input  wire [11:0] active_lfb_height,
 	input  wire [13:0] active_lfb_stride,
+	input  wire        apply_accepted,
+	input  wire        legacy_write,
 
 	output wire        response_valid,
 	output reg  [15:0] response_data,
@@ -40,10 +42,70 @@ module mister_magik_vblank_latch (
 	output reg  [15:0] active_seq = 16'd0,
 	output reg  [15:0] post_count = 16'd0,
 	output reg  [15:0] flip_count = 16'd0,
-	output reg  [15:0] drop_count = 16'd0
+	output reg  [15:0] drop_count = 16'd0,
+	output reg  [15:0] reject_count = 16'd0,
+	output reg  [15:0] active_route_epoch = 16'd0
 );
 
 	`include "mister_magik_latch_protocol.svh"
+
+	function automatic [15:0] crc_byte;
+		input [15:0] current;
+		input [7:0] value;
+		integer bit_index;
+		reg [15:0] next;
+		begin
+			next = current ^ {value, 8'h00};
+			for(bit_index = 0; bit_index < 8; bit_index = bit_index + 1) begin
+				if(next[15]) next = (next << 1) ^ MAGIK_CRC_POLYNOMIAL;
+				else next = next << 1;
+			end
+			crc_byte = next;
+		end
+	endfunction
+
+	function automatic [15:0] crc_word;
+		input [15:0] current;
+		input [15:0] value;
+		begin
+			crc_word = crc_byte(crc_byte(current, value[15:8]), value[7:0]);
+		end
+	endfunction
+
+	function automatic [15:0] crc_header;
+		input [7:0] command;
+		input [15:0] non_crc_words;
+		reg [15:0] next;
+		begin
+			next = crc_word(MAGIK_CRC_INITIAL, {8'd0, command});
+			next = crc_word(next, MAGIK_FBUF_PROTOCOL_VERSION);
+			crc_header = crc_word(next, non_crc_words);
+		end
+	endfunction
+
+	reg rx_open = 1'b0;
+	reg rx_faulted = 1'b0;
+	reg [3:0] rx_expected = 4'd0;
+	reg [10:0] rx_mask = 11'd0;
+	reg [15:0] rx_crc = 16'd0;
+	reg [15:0] rx_mode = 16'd0;
+	reg [31:0] rx_base = 32'd0;
+	reg [15:0] rx_width_word = 16'd0;
+	reg [15:0] rx_height_word = 16'd0;
+	reg [15:0] rx_hmin_word = 16'd0;
+	reg [15:0] rx_hmax_word = 16'd0;
+	reg [15:0] rx_vmin_word = 16'd0;
+	reg [15:0] rx_vmax_word = 16'd0;
+	reg [15:0] rx_stride_word = 16'd0;
+	reg [15:0] rx_seq = 16'd0;
+
+	reg [3:0] last_reject_reason = MAGIK_REJECT_NONE;
+	reg magik_ownership = 1'b0;
+
+	reg [15:0] status_snapshot [0:12];
+	reg [15:0] tx_crc = 16'd0;
+	reg [3:0] tx_expected = 4'd0;
+	reg [7:0] tx_command = 8'd0;
 
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
 	reg vbl_meta = 1'b0;
@@ -52,6 +114,60 @@ module mister_magik_vblank_latch (
 	reg vbl_old = 1'b0;
 	wire vbl_rise = ~vbl_old & vbl_sys;
 	assign apply = pending && vbl_rise;
+
+	wire [15:0] live_status_flags =
+		({12'd0, last_reject_reason} << MAGIK_STATUS_REJECT_REASON_SHIFT) |
+		(active_lfb_en ? (16'd1 << MAGIK_STATUS_ACTIVE_ENABLED) : 16'd0) |
+		((pending && route_en) ? (16'd1 << MAGIK_STATUS_PENDING_ENABLED) : 16'd0) |
+		(pending ? (16'd1 << MAGIK_STATUS_PENDING) : 16'd0) |
+		(magik_ownership ? (16'd1 << MAGIK_STATUS_MAGIK_OWNERSHIP) : 16'd0);
+
+	wire rx_reserved_fields =
+		(|rx_width_word[15:12]) || (|rx_height_word[15:12]) ||
+		(|rx_hmin_word[15:12]) || (|rx_hmax_word[15:12]) ||
+		(|rx_vmin_word[15:12]) || (|rx_vmax_word[15:12]) ||
+		(|rx_stride_word[15:14]);
+	wire [11:0] rx_width = rx_width_word[11:0];
+	wire [11:0] rx_height = rx_height_word[11:0];
+	wire [11:0] rx_hmin = rx_hmin_word[11:0];
+	wire [11:0] rx_hmax = rx_hmax_word[11:0];
+	wire [11:0] rx_vmin = rx_vmin_word[11:0];
+	wire [11:0] rx_vmax = rx_vmax_word[11:0];
+	wire [13:0] rx_stride = rx_stride_word[13:0];
+	wire [47:0] rx_end_address =
+		{16'd0, rx_base} +
+		(({36'd0, rx_height} - 48'd1) * {34'd0, rx_stride}) +
+		({36'd0, rx_width} << 1);
+
+	reg [3:0] semantic_reject;
+	always @(*) begin
+		semantic_reject = MAGIK_REJECT_NONE;
+		if(!rx_mode[15]) begin
+			if((rx_mode != 16'd0) || (rx_base != 32'd0) ||
+			   (rx_width_word != 16'd0) || (rx_height_word != 16'd0) ||
+			   (rx_hmin_word != 16'd0) || (rx_hmax_word != 16'd0) ||
+			   (rx_vmin_word != 16'd0) || (rx_vmax_word != 16'd0) ||
+			   (rx_stride_word != 16'd0))
+				semantic_reject = MAGIK_REJECT_INVALID_MODE;
+		end
+		else if((|rx_mode[13:6]) || (rx_mode[5:0] != 6'h14))
+			semantic_reject = MAGIK_REJECT_INVALID_MODE;
+		else if(rx_reserved_fields)
+			semantic_reject = MAGIK_REJECT_RESERVED;
+		else if((rx_base == 32'd0) || rx_base[0])
+			semantic_reject = MAGIK_REJECT_INVALID_BASE;
+		else if((rx_width == 0) || (rx_width > MAGIK_FBUF_MAX_WIDTH) ||
+		        (rx_height == 0) || (rx_height > MAGIK_FBUF_MAX_HEIGHT))
+			semantic_reject = MAGIK_REJECT_INVALID_GEOMETRY;
+		else if(rx_stride[0] || (rx_stride < ({2'd0, rx_width} << 1)) ||
+		        (rx_stride > MAGIK_FBUF_MAX_STRIDE))
+			semantic_reject = MAGIK_REJECT_INVALID_STRIDE;
+		else if((rx_hmin > rx_hmax) || (rx_vmin > rx_vmax))
+			semantic_reject = MAGIK_REJECT_INVALID_BOUNDS;
+		else if(rx_end_address > 48'h000100000000)
+			semantic_reject = MAGIK_REJECT_ADDRESS_WRAP;
+	end
+
 	assign response_valid =
 		(cmd_start && ((cmd_id == MAGIK_UIO_SET_FBUF_LATCH) ||
 		               (cmd_id == MAGIK_UIO_GET_FBUF_LATCH) ||
@@ -70,20 +186,9 @@ module mister_magik_vblank_latch (
 			endcase
 		end
 		else if(cmd_data && (cmd_id == MAGIK_UIO_GET_FBUF_LATCH)) begin
-			case(word_index)
-				4'd0:  response_data = active_seq;
-				4'd1:  response_data = pending_seq;
-				4'd2:  response_data = {13'd0, pending, route_en, active_lfb_en};
-				4'd3:  response_data = flip_count;
-				4'd4:  response_data = post_count;
-				4'd5:  response_data = drop_count;
-				4'd6:  response_data = active_lfb_base[15:0];
-				4'd7:  response_data = active_lfb_base[31:16];
-				4'd8:  response_data = {4'd0, active_lfb_width};
-				4'd9:  response_data = {4'd0, active_lfb_height};
-				4'd10: response_data = {2'd0, active_lfb_stride};
-				default: response_data = 16'd0;
-			endcase
+			if(word_index < 4'd13) response_data = status_snapshot[word_index];
+			else if(word_index == 4'd13)
+				response_data = tx_crc ^ MAGIK_CRC_FINAL_XOR;
 		end
 		else if(cmd_data && (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_CAPS)) begin
 			case(word_index)
@@ -92,6 +197,7 @@ module mister_magik_vblank_latch (
 				4'd2: response_data = MAGIK_FBUF_MAX_WIDTH;
 				4'd3: response_data = MAGIK_FBUF_MAX_HEIGHT;
 				4'd4: response_data = MAGIK_FBUF_MAX_STRIDE;
+				4'd5: response_data = tx_crc ^ MAGIK_CRC_FINAL_XOR;
 				default: response_data = 16'd0;
 			endcase
 		end
@@ -101,33 +207,173 @@ module mister_magik_vblank_latch (
 		vbl_meta <= hdmi_vbl;
 		vbl_sys <= vbl_meta;
 		vbl_old <= vbl_sys;
-		if(apply) begin
+
+		if(cmd_start && (cmd_id == MAGIK_UIO_GET_FBUF_LATCH)) begin
+			status_snapshot[0] <= active_seq;
+			status_snapshot[1] <= pending_seq;
+			status_snapshot[2] <= live_status_flags;
+			status_snapshot[3] <= flip_count;
+			status_snapshot[4] <= post_count;
+			status_snapshot[5] <= drop_count;
+			status_snapshot[6] <= active_lfb_base[15:0];
+			status_snapshot[7] <= active_lfb_base[31:16];
+			status_snapshot[8] <= {4'd0, active_lfb_width};
+			status_snapshot[9] <= {4'd0, active_lfb_height};
+			status_snapshot[10] <= {2'd0, active_lfb_stride};
+			status_snapshot[11] <= reject_count;
+			status_snapshot[12] <= active_route_epoch;
+			tx_crc <= crc_header(MAGIK_UIO_GET_FBUF_LATCH, 16'd13);
+			tx_expected <= 4'd0;
+			tx_command <= MAGIK_UIO_GET_FBUF_LATCH;
+		end
+		else if(cmd_start && (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_CAPS)) begin
+			tx_crc <= crc_header(MAGIK_UIO_GET_FBUF_LATCH_CAPS, 16'd5);
+			tx_expected <= 4'd0;
+			tx_command <= MAGIK_UIO_GET_FBUF_LATCH_CAPS;
+		end
+		else if(cmd_data && (cmd_id == tx_command) &&
+		        (word_index == tx_expected)) begin
+			if((tx_command == MAGIK_UIO_GET_FBUF_LATCH) && (word_index < 4'd13)) begin
+				tx_crc <= crc_word(tx_crc, status_snapshot[word_index]);
+				tx_expected <= tx_expected + 1'd1;
+			end
+			else if((tx_command == MAGIK_UIO_GET_FBUF_LATCH_CAPS) &&
+			        (word_index < 4'd5)) begin
+				case(word_index)
+					4'd0: tx_crc <= crc_word(tx_crc, MAGIK_FBUF_PROTOCOL_VERSION);
+					4'd1: tx_crc <= crc_word(tx_crc, MAGIK_FBUF_CAPS_FLAGS);
+					4'd2: tx_crc <= crc_word(tx_crc, MAGIK_FBUF_MAX_WIDTH);
+					4'd3: tx_crc <= crc_word(tx_crc, MAGIK_FBUF_MAX_HEIGHT);
+					4'd4: tx_crc <= crc_word(tx_crc, MAGIK_FBUF_MAX_STRIDE);
+					default: tx_crc <= tx_crc;
+				endcase
+				tx_expected <= tx_expected + 1'd1;
+			end
+		end
+
+		if(legacy_write) begin
+			magik_ownership <= 1'b0;
+			active_seq <= 16'd0;
+			active_route_epoch <= active_route_epoch + 1'd1;
+		end
+		else if(apply_accepted) begin
+			magik_ownership <= 1'b1;
 			active_seq <= pending_seq;
+			active_route_epoch <= active_route_epoch + 1'd1;
 			flip_count <= flip_count + 1'd1;
 			pending <= 1'b0;
 		end
 
-		if(cmd_data && (cmd_id == MAGIK_UIO_SET_FBUF_LATCH)) begin
-			case(word_index)
-				4'd0:  {route_en, route_flt, route_fmt} <=
-					{data_in[15], data_in[14], data_in[5:0]};
-				4'd1:  route_base[15:0] <= data_in;
-				4'd2:  route_base[31:16] <= data_in;
-				4'd3:  route_width <= data_in[11:0];
-				4'd4:  route_height <= data_in[11:0];
-				4'd5:  route_hmin <= data_in[11:0];
-				4'd6:  route_hmax <= data_in[11:0];
-				4'd7:  route_vmin <= data_in[11:0];
-				4'd8:  route_vmax <= data_in[11:0];
-				4'd9:  route_stride <= data_in[13:0];
-				4'd10: begin
-					pending_seq <= data_in;
+		if(cmd_start) begin
+			if(rx_open) begin
+				reject_count <= reject_count + 1'd1;
+				if(cmd_id == MAGIK_UIO_SET_FBUF_LATCH)
+					last_reject_reason <= MAGIK_REJECT_RESTARTED;
+				else
+					last_reject_reason <= MAGIK_REJECT_MISSING_WORD;
+			end
+			if(cmd_id == MAGIK_UIO_SET_FBUF_LATCH) begin
+				rx_open <= 1'b1;
+				rx_faulted <= 1'b0;
+				rx_expected <= 4'd0;
+				rx_mask <= 11'd0;
+				rx_crc <= crc_header(MAGIK_UIO_SET_FBUF_LATCH, 16'd11);
+			end
+			else begin
+				rx_open <= 1'b0;
+				rx_faulted <= 1'b1;
+			end
+		end
+		else if(cmd_data && (cmd_id == MAGIK_UIO_SET_FBUF_LATCH)) begin
+			if(!rx_open) begin
+				if(!rx_faulted) begin
+					reject_count <= reject_count + 1'd1;
+					last_reject_reason <= MAGIK_REJECT_POST_CLOSE;
+					rx_faulted <= 1'b1;
+				end
+			end
+			else if((word_index < rx_expected) &&
+			        (word_index + 1'd1 == rx_expected)) begin
+				reject_count <= reject_count + 1'd1;
+				last_reject_reason <= MAGIK_REJECT_DUPLICATE_WORD;
+				rx_open <= 1'b0;
+				rx_faulted <= 1'b1;
+			end
+			else if(word_index < rx_expected) begin
+				reject_count <= reject_count + 1'd1;
+				last_reject_reason <= MAGIK_REJECT_OUT_OF_ORDER;
+				rx_open <= 1'b0;
+				rx_faulted <= 1'b1;
+			end
+			else if((word_index == 4'd11) && (rx_expected != 4'd11)) begin
+				reject_count <= reject_count + 1'd1;
+				last_reject_reason <= MAGIK_REJECT_MISSING_WORD;
+				rx_open <= 1'b0;
+				rx_faulted <= 1'b1;
+			end
+			else if(word_index > rx_expected) begin
+				reject_count <= reject_count + 1'd1;
+				last_reject_reason <= MAGIK_REJECT_SHIFTED_WORD;
+				rx_open <= 1'b0;
+				rx_faulted <= 1'b1;
+			end
+			else if(word_index < 4'd11) begin
+				rx_mask[word_index] <= 1'b1;
+				rx_crc <= crc_word(rx_crc, data_in);
+				rx_expected <= rx_expected + 1'd1;
+				case(word_index)
+					4'd0: rx_mode <= data_in;
+					4'd1: rx_base[15:0] <= data_in;
+					4'd2: rx_base[31:16] <= data_in;
+					4'd3: rx_width_word <= data_in;
+					4'd4: rx_height_word <= data_in;
+					4'd5: rx_hmin_word <= data_in;
+					4'd6: rx_hmax_word <= data_in;
+					4'd7: rx_vmin_word <= data_in;
+					4'd8: rx_vmax_word <= data_in;
+					4'd9: rx_stride_word <= data_in;
+					4'd10: rx_seq <= data_in;
+					default: begin end
+				endcase
+			end
+			else begin
+				rx_open <= 1'b0;
+				rx_faulted <= 1'b0;
+				if(rx_mask != 11'h7ff) begin
+					reject_count <= reject_count + 1'd1;
+					last_reject_reason <= MAGIK_REJECT_MISSING_WORD;
+					rx_faulted <= 1'b1;
+				end
+				else if(data_in != (rx_crc ^ MAGIK_CRC_FINAL_XOR)) begin
+					reject_count <= reject_count + 1'd1;
+					last_reject_reason <= MAGIK_REJECT_BAD_CRC;
+					rx_faulted <= 1'b1;
+				end
+				else if(semantic_reject != MAGIK_REJECT_NONE) begin
+					reject_count <= reject_count + 1'd1;
+					last_reject_reason <= semantic_reject;
+					rx_faulted <= 1'b1;
+				end
+				else begin
+					route_en <= rx_mode[15];
+					route_flt <= rx_mode[14];
+					route_fmt <= rx_mode[5:0];
+					route_base <= rx_base;
+					route_width <= rx_width;
+					route_height <= rx_height;
+					route_hmin <= rx_hmin;
+					route_hmax <= rx_hmax;
+					route_vmin <= rx_vmin;
+					route_vmax <= rx_vmax;
+					route_stride <= rx_stride;
+					pending_seq <= rx_seq;
 					pending <= 1'b1;
 					post_count <= post_count + 1'd1;
-					if(pending) drop_count <= drop_count + 1'd1;
+					last_reject_reason <= MAGIK_REJECT_NONE;
+					if(pending && !apply_accepted)
+						drop_count <= drop_count + 1'd1;
 				end
-				default: begin end
-			endcase
+			end
 		end
 	end
 

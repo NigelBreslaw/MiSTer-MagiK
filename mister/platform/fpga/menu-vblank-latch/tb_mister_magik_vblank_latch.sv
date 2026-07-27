@@ -6,9 +6,6 @@
 
 module tb_mister_magik_vblank_latch;
 	`include "mister_magik_latch_protocol.svh"
-	localparam [7:0] SET_LATCH = MAGIK_UIO_SET_FBUF_LATCH;
-	localparam [7:0] GET_LATCH = MAGIK_UIO_GET_FBUF_LATCH;
-	localparam [7:0] GET_CAPS = MAGIK_UIO_GET_FBUF_LATCH_CAPS;
 
 	reg clk_sys = 1'b0;
 	reg hdmi_vbl = 1'b0;
@@ -22,10 +19,13 @@ module tb_mister_magik_vblank_latch;
 	reg [11:0] active_lfb_width = 12'd0;
 	reg [11:0] active_lfb_height = 12'd0;
 	reg [13:0] active_lfb_stride = 14'd0;
+	reg accept_apply = 1'b1;
+	reg legacy_write = 1'b0;
 
 	wire response_valid;
 	wire [15:0] response_data;
 	wire apply;
+	wire apply_accepted = apply && accept_apply && !legacy_write;
 	wire route_en;
 	wire route_flt;
 	wire [5:0] route_fmt;
@@ -43,19 +43,11 @@ module tb_mister_magik_vblank_latch;
 	wire [15:0] post_count;
 	wire [15:0] flip_count;
 	wire [15:0] drop_count;
+	wire [15:0] reject_count;
+	wire [15:0] active_route_epoch;
 
-	integer apply_count = 0;
-	reg [7:0] requirement_coverage = 8'd0;
-	reg [15:0] captured_seq = 16'd0;
-	reg [31:0] captured_base = 32'd0;
-	reg [11:0] captured_width = 12'd0;
-	reg [11:0] captured_height = 12'd0;
-	reg [11:0] captured_hmin = 12'd0;
-	reg [11:0] captured_hmax = 12'd0;
-	reg [11:0] captured_vmin = 12'd0;
-	reg [11:0] captured_vmax = 12'd0;
-	reg [13:0] captured_stride = 14'd0;
-	reg [7:0] captured_mode = 8'd0;
+	reg [31:0] requirement_coverage = 32'd0;
+	integer accepted_apply_count = 0;
 
 	mister_magik_vblank_latch dut (
 		.clk_sys(clk_sys),
@@ -70,6 +62,8 @@ module tb_mister_magik_vblank_latch;
 		.active_lfb_width(active_lfb_width),
 		.active_lfb_height(active_lfb_height),
 		.active_lfb_stride(active_lfb_stride),
+		.apply_accepted(apply_accepted),
+		.legacy_write(legacy_write),
 		.response_valid(response_valid),
 		.response_data(response_data),
 		.apply(apply),
@@ -89,28 +83,79 @@ module tb_mister_magik_vblank_latch;
 		.active_seq(active_seq),
 		.post_count(post_count),
 		.flip_count(flip_count),
-		.drop_count(drop_count)
+		.drop_count(drop_count),
+		.reject_count(reject_count),
+		.active_route_epoch(active_route_epoch)
 	);
 
 	always #5 clk_sys = ~clk_sys;
 
 	always @(posedge clk_sys) begin
-		if(apply) begin
-			apply_count = apply_count + 1;
-			captured_seq = pending_seq;
-			captured_base = route_base;
-			captured_width = route_width;
-			captured_height = route_height;
-			captured_hmin = route_hmin;
-			captured_hmax = route_hmax;
-			captured_vmin = route_vmin;
-			captured_vmax = route_vmax;
-			captured_stride = route_stride;
-			captured_mode = {route_en, route_flt, route_fmt};
+		if(apply_accepted) begin
+			accepted_apply_count = accepted_apply_count + 1;
+			active_lfb_en <= route_en;
+			active_lfb_base <= route_base;
+			active_lfb_width <= route_width;
+			active_lfb_height <= route_height;
+			active_lfb_stride <= route_stride;
 		end
 	end
 
-	task automatic fail(input [8*96-1:0] message);
+	function automatic [15:0] crc_byte;
+		input [15:0] current;
+		input [7:0] value;
+		integer bit_index;
+		reg [15:0] next;
+		begin
+			next = current ^ {value, 8'h00};
+			for(bit_index = 0; bit_index < 8; bit_index = bit_index + 1) begin
+				if(next[15]) next = (next << 1) ^ 16'h1021;
+				else next = next << 1;
+			end
+			crc_byte = next;
+		end
+	endfunction
+
+	function automatic [15:0] crc_word;
+		input [15:0] current;
+		input [15:0] value;
+		begin
+			crc_word = crc_byte(crc_byte(current, value[15:8]), value[7:0]);
+		end
+	endfunction
+
+	function automatic [15:0] crc_header;
+		input [7:0] command;
+		input [15:0] count;
+		reg [15:0] next;
+		begin
+			next = crc_word(16'hffff, {8'd0, command});
+			next = crc_word(next, 16'd3);
+			crc_header = crc_word(next, count);
+		end
+	endfunction
+
+	function automatic [15:0] golden_set_word;
+		input [3:0] index;
+		begin
+			case(index)
+				4'd0: golden_set_word = MAGIK_GOLDEN_SET_V3_0;
+				4'd1: golden_set_word = MAGIK_GOLDEN_SET_V3_1;
+				4'd2: golden_set_word = MAGIK_GOLDEN_SET_V3_2;
+				4'd3: golden_set_word = MAGIK_GOLDEN_SET_V3_3;
+				4'd4: golden_set_word = MAGIK_GOLDEN_SET_V3_4;
+				4'd5: golden_set_word = MAGIK_GOLDEN_SET_V3_5;
+				4'd6: golden_set_word = MAGIK_GOLDEN_SET_V3_6;
+				4'd7: golden_set_word = MAGIK_GOLDEN_SET_V3_7;
+				4'd8: golden_set_word = MAGIK_GOLDEN_SET_V3_8;
+				4'd9: golden_set_word = MAGIK_GOLDEN_SET_V3_9;
+				4'd10: golden_set_word = MAGIK_GOLDEN_SET_V3_10;
+				default: golden_set_word = MAGIK_GOLDEN_SET_V3_CRC;
+			endcase
+		end
+	endfunction
+
+	task automatic fail(input [8*128-1:0] message);
 		begin
 			$display("FAIL: %0s", message);
 			$fatal(1);
@@ -120,7 +165,7 @@ module tb_mister_magik_vblank_latch;
 	task automatic expect16(
 		input [15:0] actual,
 		input [15:0] expected,
-		input [8*96-1:0] message
+		input [8*128-1:0] message
 	);
 		begin
 			if(actual !== expected) begin
@@ -130,41 +175,30 @@ module tb_mister_magik_vblank_latch;
 		end
 	endtask
 
-	task automatic expect_true(input condition, input [8*96-1:0] message);
+	task automatic expect_true(input condition, input [8*128-1:0] message);
 		begin
 			if(condition !== 1'b1) fail(message);
 		end
 	endtask
 
 	task automatic idle_cycles(input integer count);
-		integer i;
+		integer index;
 		begin
-			for(i = 0; i < count; i = i + 1) @(posedge clk_sys);
+			for(index = 0; index < count; index = index + 1) @(posedge clk_sys);
 			#1;
 		end
 	endtask
 
-	task automatic check_ack(input [7:0] command, input [15:0] expected);
+	task automatic start_command(input [7:0] command, input [15:0] magic);
 		begin
 			@(negedge clk_sys);
 			cmd_id = command;
 			cmd_start = 1'b1;
 			#1;
 			expect_true(response_valid, "recognized command must acknowledge");
-			expect16(response_data, expected, "command acknowledgement magic");
-			@(negedge clk_sys);
-			cmd_start = 1'b0;
-		end
-	endtask
-
-	task automatic check_unrelated_ack;
-		begin
-			@(negedge clk_sys);
-			cmd_id = 8'h56;
-			cmd_start = 1'b1;
+			expect16(response_data, magic, "command acknowledgement magic");
+			@(posedge clk_sys);
 			#1;
-			if(response_valid !== 1'b0) fail("unrelated command acknowledged");
-			@(negedge clk_sys);
 			cmd_start = 1'b0;
 		end
 	endtask
@@ -186,233 +220,400 @@ module tb_mister_magik_vblank_latch;
 		end
 	endtask
 
-	task automatic expect_status(input [3:0] index, input [15:0] expected);
+	task automatic read_word(
+		input [7:0] command,
+		input [3:0] index,
+		output [15:0] value
+	);
 		begin
 			@(negedge clk_sys);
-			cmd_id = GET_LATCH;
+			cmd_id = command;
 			word_index = index;
 			cmd_data = 1'b1;
 			#1;
-			expect_true(response_valid, "status word must be valid");
-			expect16(response_data, expected, "status word mismatch");
+			expect_true(response_valid, "read word must be valid");
+			value = response_data;
+			@(posedge clk_sys);
+			#1;
 			cmd_data = 1'b0;
 		end
 	endtask
 
-	task automatic expect_caps(input [3:0] index, input [15:0] expected);
+	task automatic send_golden_route;
+		integer index;
 		begin
-			@(negedge clk_sys);
-			cmd_id = GET_CAPS;
-			word_index = index;
-			cmd_data = 1'b1;
-			#1;
-			expect_true(response_valid, "capability word must be valid");
-			expect16(response_data, expected, "capability word mismatch");
-			cmd_data = 1'b0;
+			start_command(MAGIK_UIO_SET_FBUF_LATCH, MAGIK_FBUF_LATCH_MAGIC);
+			for(index = 0; index < 12; index = index + 1)
+				send_word(MAGIK_UIO_SET_FBUF_LATCH, index[3:0],
+				          golden_set_word(index[3:0]));
 		end
 	endtask
 
 	task automatic send_route(
 		input [15:0] mode_value,
-		input [31:0] base,
-		input [11:0] width,
-		input [11:0] height,
-		input [11:0] hmin,
-		input [11:0] hmax,
-		input [11:0] vmin,
-		input [11:0] vmax,
-		input [13:0] stride,
+		input [31:0] base_value,
+		input [15:0] width_value,
+		input [15:0] height_value,
+		input [15:0] hmin_value,
+		input [15:0] hmax_value,
+		input [15:0] vmin_value,
+		input [15:0] vmax_value,
+		input [15:0] stride_value,
 		input [15:0] seq_value
 	);
+		reg [15:0] crc;
 		begin
-			send_word(SET_LATCH, 4'd0, mode_value);
-			send_word(SET_LATCH, 4'd1, base[15:0]);
-			send_word(SET_LATCH, 4'd2, base[31:16]);
-			send_word(SET_LATCH, 4'd3, {4'd0, width});
-			send_word(SET_LATCH, 4'd4, {4'd0, height});
-			send_word(SET_LATCH, 4'd5, {4'd0, hmin});
-			send_word(SET_LATCH, 4'd6, {4'd0, hmax});
-			send_word(SET_LATCH, 4'd7, {4'd0, vmin});
-			send_word(SET_LATCH, 4'd8, {4'd0, vmax});
-			send_word(SET_LATCH, 4'd9, {2'd0, stride});
-			send_word(SET_LATCH, 4'd10, seq_value);
+			crc = crc_header(MAGIK_UIO_SET_FBUF_LATCH, 16'd11);
+			crc = crc_word(crc, mode_value);
+			crc = crc_word(crc, base_value[15:0]);
+			crc = crc_word(crc, base_value[31:16]);
+			crc = crc_word(crc, width_value);
+			crc = crc_word(crc, height_value);
+			crc = crc_word(crc, hmin_value);
+			crc = crc_word(crc, hmax_value);
+			crc = crc_word(crc, vmin_value);
+			crc = crc_word(crc, vmax_value);
+			crc = crc_word(crc, stride_value);
+			crc = crc_word(crc, seq_value);
+			start_command(MAGIK_UIO_SET_FBUF_LATCH, MAGIK_FBUF_LATCH_MAGIC);
+			send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, mode_value);
+			send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd1, base_value[15:0]);
+			send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd2, base_value[31:16]);
+			send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd3, width_value);
+			send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd4, height_value);
+			send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd5, hmin_value);
+			send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd6, hmax_value);
+			send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd7, vmin_value);
+			send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd8, vmax_value);
+			send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd9, stride_value);
+			send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd10, seq_value);
+			send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd11, crc);
 		end
 	endtask
 
-	task automatic raise_vblank_and_wait_for_flip(
-		input [15:0] expected_flip,
-		input integer expected_apply_count
-	);
-		integer i;
-		reg found;
+	task automatic pulse_vblank;
+		integer wait_count;
 		begin
 			@(negedge clk_sys);
 			hdmi_vbl = 1'b1;
-			found = 1'b0;
-			for(i = 0; i < 8; i = i + 1) begin
+			for(wait_count = 0; wait_count < 5; wait_count = wait_count + 1)
 				@(posedge clk_sys);
-				#1;
-				if(flip_count == expected_flip) begin
-					found = 1'b1;
-					i = 8;
-				end
-			end
-			if(!found) fail("bounded wait for vblank flip expired");
-			if(apply_count != expected_apply_count) fail("apply pulse count mismatch");
-		end
-	endtask
-
-	task automatic lower_vblank;
-		begin
 			@(negedge clk_sys);
 			hdmi_vbl = 1'b0;
 			idle_cycles(4);
 		end
 	endtask
 
-	initial begin
-		idle_cycles(2);
+	task automatic expect_reject(
+		input [15:0] previous_count,
+		input [3:0] reason,
+		input [8*128-1:0] message
+	);
+		begin
+			expect16(reject_count, previous_count + 1'd1, message);
+			expect16(dut.last_reject_reason, {12'd0, reason}, "rejection reason");
+		end
+	endtask
 
+	task automatic corrupt_golden_transaction(input [3:0] corrupt_index);
+		integer index;
+		reg [15:0] value;
+		begin
+			start_command(MAGIK_UIO_SET_FBUF_LATCH, MAGIK_FBUF_LATCH_MAGIC);
+			for(index = 0; index < 12; index = index + 1) begin
+				value = golden_set_word(index[3:0]);
+				if(index[3:0] == corrupt_index) value = value ^ 16'h0001;
+				send_word(MAGIK_UIO_SET_FBUF_LATCH, index[3:0], value);
+			end
+		end
+	endtask
+
+	initial begin
+		integer index;
+		integer split;
+		reg [15:0] value;
+		reg [15:0] crc;
+		reg [15:0] reject_before;
+		reg [15:0] pending_before;
+		reg [15:0] drop_before;
+		reg [15:0] flip_before;
+		reg [15:0] epoch_before;
+		reg [15:0] snapshot [0:13];
+
+		idle_cycles(2);
 		expect16(active_seq, 16'd0, "power-up active sequence");
 		expect16(pending_seq, 16'd0, "power-up pending sequence");
 		expect16(post_count, 16'd0, "power-up post count");
 		expect16(flip_count, 16'd0, "power-up flip count");
 		expect16(drop_count, 16'd0, "power-up drop count");
-		if(pending || route_en || route_flt || (route_fmt != 0) ||
-		   (route_base != 0) || (route_width != 0) || (route_height != 0) ||
-		   (route_hmin != 0) || (route_hmax != 0) || (route_vmin != 0) ||
-		   (route_vmax != 0) || (route_stride != 0))
-			fail("power-up route state is not zero");
+		expect16(reject_count, 16'd0, "power-up reject count");
+		expect16(active_route_epoch, 16'd0, "power-up route epoch");
 
-		check_ack(SET_LATCH, 16'h4D47);
-		check_ack(GET_LATCH, 16'h4D48);
-		check_ack(GET_CAPS, 16'h4D49);
-		expect_caps(4'd0, 16'd2);
-		expect_caps(4'd1, 16'h0007);
-		expect_caps(4'd2, 16'd1366);
-		expect_caps(4'd3, 16'd768);
-		expect_caps(4'd4, 16'd2736);
-		expect_caps(4'd15, 16'd0);
-		requirement_coverage[0] = 1'b1; // LATCH-001
-		check_unrelated_ack();
+		start_command(MAGIK_UIO_GET_FBUF_LATCH_CAPS, MAGIK_FBUF_CAPS_MAGIC);
+		read_word(MAGIK_UIO_GET_FBUF_LATCH_CAPS, 4'd0, value);
+		expect16(value, MAGIK_GOLDEN_CAPS_V3_0, "caps version");
+		read_word(MAGIK_UIO_GET_FBUF_LATCH_CAPS, 4'd1, value);
+		expect16(value, MAGIK_GOLDEN_CAPS_V3_1, "caps flags");
+		read_word(MAGIK_UIO_GET_FBUF_LATCH_CAPS, 4'd2, value);
+		expect16(value, MAGIK_GOLDEN_CAPS_V3_2, "caps width");
+		read_word(MAGIK_UIO_GET_FBUF_LATCH_CAPS, 4'd3, value);
+		expect16(value, MAGIK_GOLDEN_CAPS_V3_3, "caps height");
+		read_word(MAGIK_UIO_GET_FBUF_LATCH_CAPS, 4'd4, value);
+		expect16(value, MAGIK_GOLDEN_CAPS_V3_4, "caps stride");
+		read_word(MAGIK_UIO_GET_FBUF_LATCH_CAPS, 4'd5, value);
+		expect16(value, MAGIK_GOLDEN_CAPS_V3_CRC, "caps CRC");
+		requirement_coverage[0] = 1'b1;
 
-		// Partial and unrelated payloads can stage data but cannot post a route.
-		send_word(SET_LATCH, 4'd0, 16'hC02A);
-		send_word(SET_LATCH, 4'd1, 16'h5678);
-		send_word(SET_LATCH, 4'd15, 16'hFFFF);
-		send_word(8'h56, 4'd10, 16'h9999);
-		idle_cycles(4);
-		if(pending || (post_count != 0) || (flip_count != 0) || (apply_count != 0))
-			fail("partial, out-of-range, or unrelated word posted a route");
-		requirement_coverage[2] = 1'b1; // LATCH-003
+		send_golden_route();
+		expect_true(pending, "valid CRC must commit pending route");
+		expect16(pending_seq, 16'h002a, "golden pending sequence");
+		expect16(post_count, 16'd1, "first valid post");
+		if(!route_en || route_flt || (route_fmt != 6'h14) ||
+		   (route_base != 32'h227e9000) || (route_width != 12'd960) ||
+		   (route_height != 12'd540) || (route_stride != 14'd1920))
+			fail("committed golden route bundle mismatch");
+		requirement_coverage[1] = 1'b1;
 
-		// Exercise every payload word and prove no edge means no application.
-		send_route(16'hC02A, 32'h12345678, 12'd960, 12'd540,
-		           12'd11, 12'd970, 12'd22, 12'd561, 14'd1920, 16'h0010);
-		expect_true(pending, "sequence word must set pending");
-		expect16(pending_seq, 16'h0010, "pending sequence after post");
-		expect16(post_count, 16'd1, "post count after first post");
-		expect16(drop_count, 16'd0, "first post must not drop");
-		if({route_en, route_flt, route_fmt} !== 8'hEA ||
-		   route_base !== 32'h12345678 || route_width !== 12'd960 ||
-		   route_height !== 12'd540 || route_hmin !== 12'd11 ||
-		   route_hmax !== 12'd970 || route_vmin !== 12'd22 ||
-		   route_vmax !== 12'd561 || route_stride !== 14'd1920)
-			fail("staged route fields mismatch");
-		requirement_coverage[1] = 1'b1; // LATCH-002
-		idle_cycles(6);
-		if((flip_count != 0) || (apply_count != 0)) fail("route applied without vblank edge");
+		pulse_vblank();
+		expect16(active_seq, 16'h002a, "accepted apply sequence");
+		expect16(flip_count, 16'd1, "accepted apply flip count");
+		expect16(active_route_epoch, 16'd1, "accepted apply epoch");
+		expect_true(!pending, "accepted apply clears pending");
+		expect16(accepted_apply_count, 16'd1, "accepted apply pulse count");
+		requirement_coverage[2] = 1'b1;
 
-		raise_vblank_and_wait_for_flip(16'd1, 1);
-		expect16(active_seq, 16'h0010, "active sequence after first flip");
-		if(pending) fail("pending did not clear after flip");
-		if(captured_seq !== 16'h0010 || captured_mode !== 8'hEA ||
-		   captured_base !== 32'h12345678 || captured_width !== 12'd960 ||
-		   captured_height !== 12'd540 || captured_hmin !== 12'd11 ||
-		   captured_hmax !== 12'd970 || captured_vmin !== 12'd22 ||
-		   captured_vmax !== 12'd561 || captured_stride !== 14'd1920)
-			fail("route was not captured atomically on apply");
-		requirement_coverage[3] = 1'b1; // LATCH-004
+		start_command(MAGIK_UIO_GET_FBUF_LATCH, MAGIK_FBUF_STATUS_MAGIC);
+		for(index = 0; index < 14; index = index + 1)
+			read_word(MAGIK_UIO_GET_FBUF_LATCH, index[3:0], snapshot[index]);
+		crc = crc_header(MAGIK_UIO_GET_FBUF_LATCH, 16'd13);
+		for(index = 0; index < 13; index = index + 1)
+			crc = crc_word(crc, snapshot[index]);
+		expect16(snapshot[13], crc, "status snapshot CRC");
+		expect16(snapshot[0], 16'h002a, "status active sequence");
+		expect16(snapshot[2], 16'h0009, "status ownership flags");
+		expect16(snapshot[6], 16'h9000, "status active base low");
+		expect16(snapshot[7], 16'h227e, "status active base high");
+		expect16(snapshot[8], 16'd960, "status active width");
+		expect16(snapshot[9], 16'd540, "status active height");
+		expect16(snapshot[10], 16'd1920, "status active stride");
+		expect16(snapshot[12], 16'd1, "status active epoch");
+		requirement_coverage[3] = 1'b1;
 
-		// Keeping vblank high must not create another apply.
-		idle_cycles(5);
-		if((flip_count != 1) || (apply_count != 1)) fail("level or falling vblank applied route");
-		requirement_coverage[7] = 1'b1; // LATCH-008
+		// A command-start snapshot remains coherent while the live route changes.
+		start_command(MAGIK_UIO_GET_FBUF_LATCH, MAGIK_FBUF_STATUS_MAGIC);
+		for(index = 0; index < 5; index = index + 1)
+			read_word(MAGIK_UIO_GET_FBUF_LATCH, index[3:0], snapshot[index]);
+		epoch_before = active_route_epoch;
+		legacy_write = 1'b1;
+		active_lfb_en = 1'b0;
+		active_lfb_base = 32'h11112222;
+		active_lfb_width = 12'd320;
+		active_lfb_height = 12'd240;
+		active_lfb_stride = 14'd640;
+		idle_cycles(1);
+		legacy_write = 1'b0;
+		for(index = 5; index < 14; index = index + 1)
+			read_word(MAGIK_UIO_GET_FBUF_LATCH, index[3:0], snapshot[index]);
+		crc = crc_header(MAGIK_UIO_GET_FBUF_LATCH, 16'd13);
+		for(index = 0; index < 13; index = index + 1)
+			crc = crc_word(crc, snapshot[index]);
+		expect16(snapshot[13], crc, "status remains one coherent snapshot");
+		expect16(snapshot[0], 16'h002a, "snapshot predates legacy takeover");
+		expect16(snapshot[6], 16'h9000, "snapshot base predates takeover");
+		expect16(active_seq, 16'd0, "legacy takeover clears active sequence");
+		expect16(active_route_epoch, epoch_before + 1'd1, "legacy takeover epoch");
+		requirement_coverage[4] = 1'b1;
 
-		// A complete replacement while pending wins and accounts one dropped post.
-		// Stage it while vblank remains high, then prove the falling edge is inert.
-		send_route(16'h8021, 32'h20001000, 12'd1280, 12'd720,
-		           12'd1, 12'd1280, 12'd2, 12'd721, 14'd2560, 16'h0020);
-		send_route(16'h4022, 32'h30002000, 12'd640, 12'd480,
-		           12'd3, 12'd642, 12'd4, 12'd483, 14'd1280, 16'h0021);
-		expect16(post_count, 16'd3, "post count after replacement");
-		expect16(drop_count, 16'd1, "replacement drop count");
-		expect16(pending_seq, 16'h0021, "replacement pending sequence");
-		if((flip_count != 1) || (apply_count != 1)) fail("high vblank level applied replacement");
-		lower_vblank();
-		if(!pending || (flip_count != 1) || (apply_count != 1))
-			fail("falling vblank edge applied replacement");
-		raise_vblank_and_wait_for_flip(16'd2, 2);
-		expect16(active_seq, 16'h0021, "replacement active sequence");
-		if(captured_seq !== 16'h0021 || captured_mode !== 8'h62 ||
-		   captured_base !== 32'h30002000 || captured_width !== 12'd640 ||
-		   captured_height !== 12'd480 || captured_stride !== 14'd1280)
-			fail("replacement route did not win atomically");
-		requirement_coverage[4] = 1'b1; // LATCH-005
-		lower_vblank();
+		// Vblank after every SET payload word cannot expose the in-flight bundle.
+		for(split = 0; split < 12; split = split + 1) begin
+			reject_before = reject_count;
+			start_command(MAGIK_UIO_SET_FBUF_LATCH, MAGIK_FBUF_LATCH_MAGIC);
+			for(index = 0; index < 12; index = index + 1) begin
+				send_word(MAGIK_UIO_SET_FBUF_LATCH, index[3:0],
+				          golden_set_word(index[3:0]));
+				if(index == split) pulse_vblank();
+			end
+			expect16(reject_count, reject_before, "vblank sweep valid transaction");
+			expect_true(pending || (active_seq == 16'h002a),
+			            "vblank sweep exposes only complete route");
+			if(pending) pulse_vblank();
+		end
+		requirement_coverage[5] = 1'b1;
 
-		// Exact status layout, including externally-owned active route fields.
-		active_lfb_en = 1'b1;
-		active_lfb_base = 32'h89ABCDEF;
-		active_lfb_width = 12'd1280;
-		active_lfb_height = 12'd720;
-		active_lfb_stride = 14'd2560;
-		expect_status(4'd0, 16'h0021);
-		expect_status(4'd1, 16'h0021);
-		expect_status(4'd2, 16'h0001);
-		expect_status(4'd3, 16'd2);
-		expect_status(4'd4, 16'd3);
-		expect_status(4'd5, 16'd1);
-		expect_status(4'd6, 16'hCDEF);
-		expect_status(4'd7, 16'h89AB);
-		expect_status(4'd8, 16'd1280);
-		expect_status(4'd9, 16'd720);
-		expect_status(4'd10, 16'd2560);
-		expect_status(4'd15, 16'd0);
-		requirement_coverage[5] = 1'b1; // LATCH-006
+		// Every SET word, including CRC, is protected; pending is unchanged.
+		send_route(16'h8014, 32'h20002000, 16'd640, 16'd480,
+		           16'd0, 16'd639, 16'd0, 16'd479, 16'd1280, 16'h0040);
+		pending_before = pending_seq;
+		for(index = 0; index < 12; index = index + 1) begin
+			reject_before = reject_count;
+			corrupt_golden_transaction(index[3:0]);
+			expect_reject(reject_before, MAGIK_REJECT_BAD_CRC,
+			              "corrupt SET word rejected once");
+			expect16(pending_seq, pending_before, "corruption cannot alter pending");
+		end
+		requirement_coverage[6] = 1'b1;
 
-		// Force the natural 16-bit wrap boundaries, then exercise them normally.
+		// Framing failures each reject once and leave committed pending untouched.
+		reject_before = reject_count;
+		start_command(MAGIK_UIO_SET_FBUF_LATCH, MAGIK_FBUF_LATCH_MAGIC);
+		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, MAGIK_GOLDEN_SET_V3_0);
+		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd11, MAGIK_GOLDEN_SET_V3_CRC);
+		expect_reject(reject_before, MAGIK_REJECT_MISSING_WORD, "missing word");
+
+		reject_before = reject_count;
+		start_command(MAGIK_UIO_SET_FBUF_LATCH, MAGIK_FBUF_LATCH_MAGIC);
+		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, MAGIK_GOLDEN_SET_V3_0);
+		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, MAGIK_GOLDEN_SET_V3_0);
+		expect_reject(reject_before, MAGIK_REJECT_DUPLICATE_WORD, "duplicate word");
+
+		reject_before = reject_count;
+		start_command(MAGIK_UIO_SET_FBUF_LATCH, MAGIK_FBUF_LATCH_MAGIC);
+		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, MAGIK_GOLDEN_SET_V3_0);
+		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd1, MAGIK_GOLDEN_SET_V3_1);
+		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, MAGIK_GOLDEN_SET_V3_0);
+		expect_reject(reject_before, MAGIK_REJECT_OUT_OF_ORDER, "reordered word");
+
+		reject_before = reject_count;
+		start_command(MAGIK_UIO_SET_FBUF_LATCH, MAGIK_FBUF_LATCH_MAGIC);
+		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd2, MAGIK_GOLDEN_SET_V3_2);
+		expect_reject(reject_before, MAGIK_REJECT_SHIFTED_WORD, "shifted word");
+
+		reject_before = reject_count;
+		start_command(MAGIK_UIO_SET_FBUF_LATCH, MAGIK_FBUF_LATCH_MAGIC);
+		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, MAGIK_GOLDEN_SET_V3_0);
+		start_command(MAGIK_UIO_SET_FBUF_LATCH, MAGIK_FBUF_LATCH_MAGIC);
+		expect_reject(reject_before, MAGIK_REJECT_RESTARTED, "restarted transaction");
+		// Close the newly opened replacement before the post-close test.
+		start_command(MAGIK_UIO_GET_FBUF_LATCH_CAPS, MAGIK_FBUF_CAPS_MAGIC);
+		reject_before = reject_count;
+		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, 16'd0);
+		expect16(reject_count, reject_before, "faulted close coalesces extra words");
+		send_golden_route();
+		reject_before = reject_count;
+		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, 16'd0);
+		expect_reject(reject_before, MAGIK_REJECT_POST_CLOSE, "post-close word");
+		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd1, 16'd0);
+		expect16(reject_count, reject_before + 1'd1, "post-close rejection coalesced");
+		requirement_coverage[7] = 1'b1;
+
+		// Semantic validation rejects canonical violations without replacing pending.
+		pending_before = pending_seq;
+		reject_before = reject_count;
+		send_route(16'h8001, 32'h2000, 16'd320, 16'd240,
+		           16'd0, 16'd319, 16'd0, 16'd239, 16'd640, 16'h1001);
+		expect_reject(reject_before, MAGIK_REJECT_INVALID_MODE, "invalid format");
+		reject_before = reject_count;
+		send_route(16'h8014, 32'h2001, 16'd320, 16'd240,
+		           16'd0, 16'd319, 16'd0, 16'd239, 16'd640, 16'h1002);
+		expect_reject(reject_before, MAGIK_REJECT_INVALID_BASE, "unaligned base");
+		reject_before = reject_count;
+		send_route(16'h8014, 32'h2000, 16'd0, 16'd240,
+		           16'd0, 16'd319, 16'd0, 16'd239, 16'd640, 16'h1003);
+		expect_reject(reject_before, MAGIK_REJECT_INVALID_GEOMETRY, "zero width");
+		reject_before = reject_count;
+		send_route(16'h8014, 32'h2000, 16'd320, 16'd240,
+		           16'd0, 16'd319, 16'd0, 16'd239, 16'd639, 16'h1004);
+		expect_reject(reject_before, MAGIK_REJECT_INVALID_STRIDE, "odd stride");
+		reject_before = reject_count;
+		send_route(16'h8014, 32'h2000, 16'd320, 16'd240,
+		           16'd100, 16'd99, 16'd0, 16'd239, 16'd640, 16'h1005);
+		expect_reject(reject_before, MAGIK_REJECT_INVALID_BOUNDS, "reversed bounds");
+		reject_before = reject_count;
+		send_route(16'h8014, 32'hfffffe00, 16'd320, 16'd2,
+		           16'd0, 16'd319, 16'd0, 16'd1, 16'd640, 16'h1006);
+		expect_reject(reject_before, MAGIK_REJECT_ADDRESS_WRAP, "address wrap");
+		reject_before = reject_count;
+		send_route(16'h0000, 32'h00000002, 16'd0, 16'd0,
+		           16'd0, 16'd0, 16'd0, 16'd0, 16'd0, 16'h1007);
+		expect_reject(reject_before, MAGIK_REJECT_INVALID_MODE,
+		              "disabled route must be canonical");
+		expect16(pending_seq, pending_before, "semantic rejects preserve pending");
+		requirement_coverage[8] = 1'b1;
+
+		// Applying old pending and committing new on one edge keeps the new pending.
+		if(!pending) send_golden_route();
+		drop_before = drop_count;
+		flip_before = flip_count;
+		start_command(MAGIK_UIO_SET_FBUF_LATCH, MAGIK_FBUF_LATCH_MAGIC);
+		for(index = 0; index < 11; index = index + 1)
+			send_word(MAGIK_UIO_SET_FBUF_LATCH, index[3:0],
+			          golden_set_word(index[3:0]));
 		@(negedge clk_sys);
-		dut.post_count = 16'hFFFF;
-		dut.flip_count = 16'hFFFF;
-		dut.drop_count = 16'hFFFF;
-		send_route(16'h8001, 32'h40000000, 12'd320, 12'd240,
-		           12'd0, 12'd319, 12'd0, 12'd239, 14'd640, 16'hFFFF);
-		expect16(post_count, 16'h0000, "post counter wrap");
-		send_word(SET_LATCH, 4'd10, 16'hFFFF);
-		expect16(post_count, 16'h0001, "post count after wrapped replacement");
-		expect16(drop_count, 16'h0000, "drop counter wrap");
-		expect16(pending_seq, 16'hFFFF, "maximum pending sequence");
-		raise_vblank_and_wait_for_flip(16'h0000, 3);
-		expect16(flip_count, 16'h0000, "flip counter wrap");
-		expect16(active_seq, 16'hFFFF, "maximum active sequence");
-		lower_vblank();
-		send_route(16'h0000, 32'h00000000, 12'd0, 12'd0,
-		           12'd0, 12'd0, 12'd0, 12'd0, 14'd0, 16'h0000);
-		expect16(pending_seq, 16'h0000, "sequence wrap to zero");
-		raise_vblank_and_wait_for_flip(16'h0001, 4);
-		expect16(active_seq, 16'h0000, "active sequence wrap");
-		requirement_coverage[6] = 1'b1; // LATCH-007
+		hdmi_vbl = 1'b1;
+		while(!apply) @(negedge clk_sys);
+		cmd_id = MAGIK_UIO_SET_FBUF_LATCH;
+		word_index = 4'd11;
+		data_in = MAGIK_GOLDEN_SET_V3_CRC;
+		cmd_data = 1'b1;
+		@(posedge clk_sys);
+		#1;
+		cmd_data = 1'b0;
+		expect16(flip_count, flip_before + 1'd1, "old pending applied on commit edge");
+		expect_true(pending, "new commit remains pending after old apply");
+		expect16(drop_count, drop_before, "simultaneous apply/commit is not replacement drop");
+		@(negedge clk_sys);
+		hdmi_vbl = 1'b0;
+		idle_cycles(4);
+		requirement_coverage[9] = 1'b1;
 
-		if(requirement_coverage !== 8'hFF) fail("not all RTL requirement coverpoints hit");
-		$display("COVER LATCH-001..LATCH-008 all RTL requirements hit");
+		// Legacy writes win same-edge arbitration and leave the MagiK route pending.
+		epoch_before = active_route_epoch;
+		flip_before = flip_count;
+		@(negedge clk_sys);
+		hdmi_vbl = 1'b1;
+		while(!apply) @(negedge clk_sys);
+		legacy_write = 1'b1;
+		active_lfb_en = 1'b0;
+		active_lfb_base = 32'h33334444;
+		active_lfb_width = 12'd640;
+		active_lfb_height = 12'd480;
+		active_lfb_stride = 14'd1280;
+		@(posedge clk_sys);
+		#1;
+		legacy_write = 1'b0;
+		expect16(flip_count, flip_before, "unaccepted apply cannot flip");
+		expect_true(pending, "legacy winner leaves MagiK pending");
+		expect16(active_seq, 16'd0, "legacy winner clears ownership sequence");
+		expect16(active_route_epoch, epoch_before + 1'd1, "legacy winner advances epoch");
+		@(negedge clk_sys);
+		hdmi_vbl = 1'b0;
+		idle_cycles(4);
+		pulse_vblank();
+		expect_true(!pending, "pending route applies on later accepted edge");
+		expect16(active_seq, 16'h002a, "MagiK ownership returns after accepted apply");
+		requirement_coverage[10] = 1'b1;
 
-		$display("PASS: mister_magik_vblank_latch protocol and vblank semantics");
+		// Counter and sequence/epoch wrap remain explicit.
+		@(negedge clk_sys);
+		dut.post_count = 16'hffff;
+		dut.flip_count = 16'hffff;
+		dut.drop_count = 16'hffff;
+		dut.reject_count = 16'hffff;
+		dut.active_route_epoch = 16'hffff;
+		send_route(16'h0000, 32'd0, 16'd0, 16'd0,
+		           16'd0, 16'd0, 16'd0, 16'd0, 16'd0, 16'hffff);
+		expect16(post_count, 16'd0, "post counter wrap");
+		send_route(16'h0000, 32'd0, 16'd0, 16'd0,
+		           16'd0, 16'd0, 16'd0, 16'd0, 16'd0, 16'd0);
+		expect16(drop_count, 16'd0, "drop counter wrap");
+		pulse_vblank();
+		expect16(flip_count, 16'd0, "flip counter wrap");
+		expect16(active_seq, 16'd0, "sequence wrap");
+		expect16(active_route_epoch, 16'd0, "route epoch wrap");
+		reject_before = reject_count;
+		corrupt_golden_transaction(4'd11);
+		expect16(reject_count, reject_before + 1'd1, "reject counter advances after wrap");
+		requirement_coverage[11] = 1'b1;
+
+		if(requirement_coverage[11:0] !== 12'hfff)
+			fail("not all protocol-v3 RTL requirement coverpoints hit");
+		$display("COVER LATCH-V3-001..LATCH-V3-012 all RTL requirements hit");
+		$display("PASS: atomic protocol-v3 latch, coherent status, and ownership arbitration");
 		$finish;
 	end
 
 	initial begin
-		#20000;
+		#200000;
 		fail("global simulation timeout");
 	end
 

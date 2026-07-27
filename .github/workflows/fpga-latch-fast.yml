@@ -56,8 +56,9 @@ jobs:
           verilator --lint-only --Wall --Wno-fatal
           -Imister/platform/fpga/menu-vblank-latch
           mister/platform/fpga/menu-vblank-latch/mister_magik_vblank_latch.sv
+          mister/platform/fpga/menu-vblank-latch/mister_magik_latch_sys_top_bridge.sv
       - name: Verify pinned patch integration and opcode ownership
-        run: scripts/checks/check-fpga-latch-integration.py build/Menu_MiSTer
+        run: scripts/checks/check-fpga-latch-integration.py --simulate build/Menu_MiSTer
       - name: Measure reachable custom RTL coverage
         run: |
           set -euo pipefail
