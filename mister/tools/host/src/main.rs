@@ -4026,12 +4026,17 @@ fn profile_particle_preset(
         })
     };
     let confirmed = confirmation.get("qualified").and_then(Value::as_bool) == Some(true);
+    let memory = confirmation.get("memory").cloned().unwrap_or(Value::Null);
     Ok(json!({
         "preset": preset,
         "confirmed_count": if confirmed { last_pass } else { 0 },
         "first_failing_count": first_fail,
         "upper_bound_reached": last_pass == PARTICLE_COUNT_MAX && first_fail.is_none(),
-        "bytes_per_particle": 32,
+        "bytes_per_particle": memory
+            .get("simulation_bytes_per_particle")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        "memory": memory,
         "trials": trials,
         "confirmation": confirmation,
     }))
@@ -4302,6 +4307,16 @@ fn summarize_particle_trial(
             )
         })
         .collect::<serde_json::Map<String, Value>>();
+    let simulation_bytes = steady
+        .iter()
+        .map(|frame| frame_u64(frame, "particle_simulation_bytes"))
+        .max()
+        .unwrap_or(0);
+    let renderer_scratch_bytes = steady
+        .iter()
+        .map(|frame| frame_u64(frame, "particle_renderer_scratch_bytes"))
+        .max()
+        .unwrap_or(0);
     json!({
         "kind": kind,
         "preset": preset,
@@ -4333,6 +4348,13 @@ fn summarize_particle_trial(
                 .min()
                 .unwrap_or(0),
         },
+        "memory": {
+            "simulation_bytes": simulation_bytes,
+            "renderer_scratch_bytes": renderer_scratch_bytes,
+            "total_bytes": simulation_bytes.saturating_add(renderer_scratch_bytes),
+            "simulation_bytes_per_particle": simulation_bytes / count.max(1),
+            "renderer_scratch_bytes_per_particle": renderer_scratch_bytes / count.max(1),
+        },
     })
 }
 
@@ -4341,6 +4363,7 @@ fn capture_particle_phases(
     output_dir: &Path,
     count: u64,
 ) -> Result<Value> {
+    const CAPTURE_STATE_TIMEOUT: Duration = Duration::from_secs(12);
     let session = connect_with(&config.connection, 10)?;
     restart_launcher_with_one_shot_env(
         &session,
@@ -4362,20 +4385,91 @@ fn capture_particle_phases(
         },
     )?;
     drop(session);
-    agent_telemetry_for_duration(&config.agent, Duration::from_secs(1))?;
+    wait_for_particle_capture_state(&config.agent, count, "static", 0..=0, CAPTURE_STATE_TIMEOUT)?;
     let static_capture = request_framebuffer_png_at(&config.agent)?;
     let static_path = output_dir.join("particle-static.png");
     fs::write(&static_path, &static_capture.png)?;
-    agent_telemetry_for_duration(&config.agent, Duration::from_secs(5))?;
+    wait_for_particle_capture_state(
+        &config.agent,
+        count,
+        "hold",
+        0..=15_000,
+        CAPTURE_STATE_TIMEOUT,
+    )?;
     let formed_capture = request_framebuffer_png_at(&config.agent)?;
     let formed_path = output_dir.join("particle-formed.png");
     fs::write(&formed_path, &formed_capture.png)?;
+    wait_for_particle_capture_state(
+        &config.agent,
+        count,
+        "hold",
+        30_000..=60_000,
+        CAPTURE_STATE_TIMEOUT,
+    )?;
+    let rotated_capture = request_framebuffer_png_at(&config.agent)?;
+    let rotated_path = output_dir.join("particle-rotated.png");
+    fs::write(&rotated_path, &rotated_capture.png)?;
     Ok(json!({
         "static": static_path,
         "formed": formed_path,
+        "rotated": rotated_path,
         "count": count,
-        "source": capture_source_label(&formed_capture.result)?,
+        "source": capture_source_label(&rotated_capture.result)?,
     }))
+}
+
+fn wait_for_particle_capture_state(
+    endpoint: &AgentEndpoint,
+    count: u64,
+    phase: &str,
+    rotation_x_millidegrees: std::ops::RangeInclusive<u64>,
+    timeout: Duration,
+) -> Result<()> {
+    let started = Instant::now();
+    while started.elapsed() < timeout {
+        let telemetry = agent_telemetry_for_duration(endpoint, Duration::from_millis(400))?;
+        if particle_capture_state_seen(&telemetry, count, phase, rotation_x_millidegrees.clone()) {
+            return Ok(());
+        }
+    }
+    Err(format!(
+        "particle capture did not reach phase={phase} rotation={}..={} within {}ms",
+        rotation_x_millidegrees.start(),
+        rotation_x_millidegrees.end(),
+        timeout.as_millis()
+    )
+    .into())
+}
+
+fn particle_capture_state_seen(
+    telemetry: &[Value],
+    count: u64,
+    phase: &str,
+    rotation_x_millidegrees: std::ops::RangeInclusive<u64>,
+) -> bool {
+    telemetry
+        .iter()
+        .filter_map(|sample| {
+            sample
+                .pointer("/launcher/frame_budget/recent_frames")
+                .and_then(Value::as_array)
+        })
+        .flatten()
+        .filter(|frame| {
+            frame.get("screensaver_active").and_then(Value::as_bool) == Some(true)
+                && frame.get("screensaver_renderer").and_then(Value::as_str)
+                    == Some("particle-magik")
+                && frame.get("particle_preset").and_then(Value::as_str) == Some("visual")
+                && frame.get("particle_count").and_then(Value::as_u64) == Some(count)
+        })
+        .max_by_key(|frame| frame.get("frame").and_then(Value::as_u64).unwrap_or(0))
+        .is_some_and(|frame| {
+            frame.get("particle_phase").and_then(Value::as_str) == Some(phase)
+                && frame
+                    .get("particle_rotation_x_millidegrees")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|angle| rotation_x_millidegrees.contains(&angle))
+        })
 }
 
 fn validate_particle_display_geometry(session: &Session) -> Result<()> {
@@ -4479,8 +4573,16 @@ fn particle_benchmark_report(summary: &Value) -> String {
             .pointer(&format!("/presets/{preset}/first_failing_count"))
             .and_then(Value::as_u64)
             .map_or_else(|| "none within bound".into(), |value| value.to_string());
+        let simulation_bytes = summary
+            .pointer(&format!("/presets/{preset}/memory/simulation_bytes"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let scratch_bytes = summary
+            .pointer(&format!("/presets/{preset}/memory/renderer_scratch_bytes"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
         report.push_str(&format!(
-            "- {preset}: {count} particles; first failing count: {first_fail}\n"
+            "- {preset}: {count} particles; first failing count: {first_fail}; simulation memory: {simulation_bytes} bytes; renderer scratch: {scratch_bytes} bytes\n"
         ));
     }
     report
@@ -5855,6 +5957,9 @@ fn validate_screensaver_frame_evidence(run: usize, frame_id: u64, frame: &Value)
         "particle_simulation_us",
         "particle_clear_us",
         "particle_raster_us",
+        "particle_rotation_x_millidegrees",
+        "particle_simulation_bytes",
+        "particle_renderer_scratch_bytes",
     ];
     const BOOL_FIELDS: &[&str] = &[
         "screensaver_active",
@@ -14124,7 +14229,10 @@ H: Handlers=event3 js0"#
                 "particle_visible": 0,
                 "particle_simulation_us": 0,
                 "particle_clear_us": 0,
-                "particle_raster_us": 0
+                "particle_raster_us": 0,
+                "particle_rotation_x_millidegrees": 0,
+                "particle_simulation_bytes": 0,
+                "particle_renderer_scratch_bytes": 0
             });
             frame
                 .as_object_mut()
@@ -14530,7 +14638,10 @@ H: Handlers=event3 js0"#
             "particle_visible": 65_536,
             "particle_simulation_us": 2_000,
             "particle_clear_us": 200,
-            "particle_raster_us": 5_000
+            "particle_raster_us": 5_000,
+            "particle_rotation_x_millidegrees": 0,
+            "particle_simulation_bytes": 2_162_688,
+            "particle_renderer_scratch_bytes": 524_288
         });
         evidence
             .as_object_mut()
@@ -14567,6 +14678,8 @@ H: Handlers=event3 js0"#
             &particle_telemetry(10_000),
         );
         assert_eq!(passing["qualified"], true);
+        assert_eq!(passing["memory"]["simulation_bytes_per_particle"], 33);
+        assert_eq!(passing["memory"]["renderer_scratch_bytes_per_particle"], 8);
         for phase in ["static", "form", "hold", "disperse"] {
             assert!(passing["phase_timing"][phase]["frames"].as_u64().unwrap() > 0);
         }
@@ -14589,6 +14702,48 @@ H: Handlers=event3 js0"#
                     failure.get("kind").and_then(Value::as_str) == Some("render-deadline")
                 })
         );
+    }
+
+    #[test]
+    fn particle_capture_uses_the_newest_matching_frame() {
+        let telemetry = vec![json!({
+            "launcher": {
+                "frame_budget": {
+                    "recent_frames": [
+                        {
+                            "frame": 10,
+                            "screensaver_active": true,
+                            "screensaver_renderer": "particle-magik",
+                            "particle_preset": "visual",
+                            "particle_count": 16_384,
+                            "particle_phase": "hold",
+                            "particle_rotation_x_millidegrees": 45_000
+                        },
+                        {
+                            "frame": 11,
+                            "screensaver_active": true,
+                            "screensaver_renderer": "particle-magik",
+                            "particle_preset": "visual",
+                            "particle_count": 16_384,
+                            "particle_phase": "hold",
+                            "particle_rotation_x_millidegrees": 75_000
+                        }
+                    ]
+                }
+            }
+        })];
+        assert!(!particle_capture_state_seen(
+            &telemetry,
+            16_384,
+            "hold",
+            30_000..=60_000
+        ));
+        assert!(particle_capture_state_seen(
+            &telemetry,
+            16_384,
+            "hold",
+            70_000..=80_000
+        ));
     }
 
     #[test]
