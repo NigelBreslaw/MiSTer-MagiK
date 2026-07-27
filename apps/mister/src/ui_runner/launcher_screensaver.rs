@@ -293,6 +293,9 @@ pub(super) struct ScreensaverFrameTrace {
     pub(super) particle_simulation_us: u128,
     pub(super) particle_clear_us: u128,
     pub(super) particle_raster_us: u128,
+    pub(super) particle_rotation_x_millidegrees: u32,
+    pub(super) particle_simulation_bytes: usize,
+    pub(super) particle_renderer_scratch_bytes: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -395,6 +398,9 @@ impl LauncherScreensaver {
                     particle_simulation_us: stats.simulation_us,
                     particle_clear_us: stats.clear_us,
                     particle_raster_us: stats.raster_us,
+                    particle_rotation_x_millidegrees: stats.rotation_x_millidegrees,
+                    particle_simulation_bytes: stats.simulation_bytes,
+                    particle_renderer_scratch_bytes: stats.renderer_scratch_bytes,
                     ..ScreensaverFrameTrace::default()
                 },
                 Err(error) => {
