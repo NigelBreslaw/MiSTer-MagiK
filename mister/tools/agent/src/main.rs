@@ -3088,7 +3088,7 @@ mod linux {
 
         fn reset_spi_transport(&mut self) {
             self.gpo = (self.gpo | FPGA_BIT31) & !(FPGA_IO_EN | FPGA_STROBE | 0xffff);
-            self.wr(self.gpo);
+            self.write(self.gpo);
         }
 
         fn cmd_capture(&mut self, cmd: u16) -> io::Result<(u16, u16)> {
