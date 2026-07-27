@@ -244,6 +244,9 @@ pub struct FrameBudgetRecentFrame {
     pub particle_simulation_us: u64,
     pub particle_clear_us: u64,
     pub particle_raster_us: u64,
+    pub particle_rotation_x_millidegrees: u64,
+    pub particle_simulation_bytes: u64,
+    pub particle_renderer_scratch_bytes: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -892,6 +895,15 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
     field!("particle_simulation_us", frame.particle_simulation_us);
     field!("particle_clear_us", frame.particle_clear_us);
     field!("particle_raster_us", frame.particle_raster_us);
+    field!(
+        "particle_rotation_x_millidegrees",
+        frame.particle_rotation_x_millidegrees
+    );
+    field!("particle_simulation_bytes", frame.particle_simulation_bytes);
+    field!(
+        "particle_renderer_scratch_bytes",
+        frame.particle_renderer_scratch_bytes
+    );
     Value::Object(object)
 }
 
@@ -1220,6 +1232,9 @@ mod tests {
                         particle_simulation_us: 2_100,
                         particle_clear_us: 120,
                         particle_raster_us: 900,
+                        particle_rotation_x_millidegrees: 45_000,
+                        particle_simulation_bytes: 540_672,
+                        particle_renderer_scratch_bytes: 262_144,
                         ..FrameBudgetRecentFrame::default()
                     }],
                     slow_frames: vec![FrameBudgetSlowFrame {
@@ -1317,6 +1332,18 @@ mod tests {
         assert_eq!(
             value["frame_budget"]["recent_frames"][0]["particle_phase"],
             "hold"
+        );
+        assert_eq!(
+            value["frame_budget"]["recent_frames"][0]["particle_rotation_x_millidegrees"],
+            45_000
+        );
+        assert_eq!(
+            value["frame_budget"]["recent_frames"][0]["particle_simulation_bytes"],
+            540_672
+        );
+        assert_eq!(
+            value["frame_budget"]["recent_frames"][0]["particle_renderer_scratch_bytes"],
+            262_144
         );
         assert_eq!(value["frame_budget"]["slow_frames"][0]["frame"], 41);
         assert_eq!(value["frame_budget"]["slow_frames"][0]["severity"], "drop");
