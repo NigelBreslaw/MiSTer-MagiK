@@ -183,6 +183,10 @@ pub struct ProjectedParticle {
 #[derive(Debug)]
 pub struct ParticleEngine {
     config: ParticleConfig,
+    projection_center_x: f32,
+    projection_center_y: f32,
+    projection_max_x: f32,
+    projection_max_y: f32,
     packed_targets: Vec<u32>,
     x: Vec<f32>,
     y: Vec<f32>,
@@ -214,6 +218,10 @@ impl ParticleEngine {
             .collect::<Vec<_>>();
         let mut engine = Self {
             config,
+            projection_center_x: config.width as f32 * 0.5,
+            projection_center_y: config.height as f32 * 0.5,
+            projection_max_x: config.width as f32 - 0.5,
+            projection_max_y: config.height as f32 - 0.5,
             packed_targets: Vec::with_capacity(config.count),
             x: Vec::with_capacity(config.count),
             y: Vec::with_capacity(config.count),
@@ -283,15 +291,19 @@ impl ParticleEngine {
             return None;
         }
         let scale = FOCAL_LENGTH / denominator;
-        let center_x = self.config.width as f32 * 0.5;
-        let center_y = self.config.height as f32 * 0.5;
-        let screen_x = center_x + (self.x[index] - center_x) * scale;
-        let screen_y = center_y + (self.y[index] - center_y) * scale;
-        let x = screen_x.round() as i32;
-        let y = screen_y.round() as i32;
-        if x < 0 || y < 0 || x >= self.config.width as i32 || y >= self.config.height as i32 {
+        let screen_x =
+            self.projection_center_x + (self.x[index] - self.projection_center_x) * scale;
+        let screen_y =
+            self.projection_center_y + (self.y[index] - self.projection_center_y) * scale;
+        if screen_x <= -0.5
+            || screen_y <= -0.5
+            || screen_x >= self.projection_max_x
+            || screen_y >= self.projection_max_y
+        {
             return None;
         }
+        let x = (screen_x + 0.5) as i32;
+        let y = (screen_y + 0.5) as i32;
         Some(ProjectedParticle {
             x,
             y,
@@ -604,6 +616,24 @@ mod tests {
     #[test]
     fn packed_targets_reject_coordinates_outside_q12_4() {
         assert!(pack_target(ParticleTarget { x: 2_048.0, y: 0.0 }).is_err());
+    }
+
+    #[test]
+    fn checked_projection_matches_rounding_at_viewport_edges() {
+        let mut engine = engine(1);
+        engine.z[0] = 0.0;
+        for (x, expected) in [
+            (-0.5, None),
+            (-0.499, Some(0)),
+            (0.499, Some(0)),
+            (0.5, Some(1)),
+            (31.499, Some(31)),
+            (31.5, None),
+        ] {
+            engine.x[0] = x;
+            engine.y[0] = 12.0;
+            assert_eq!(engine.project(0).map(|particle| particle.x), expected);
+        }
     }
 
     #[test]
