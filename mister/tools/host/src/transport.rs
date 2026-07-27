@@ -34,6 +34,9 @@ pub enum DeviceRequest {
     ProfileInstalledScreensaver {
         output_dir: PathBuf,
     },
+    ProfileInstalledParticles {
+        output_dir: PathBuf,
+    },
     ProfileInstalledSearch {
         output_dir: PathBuf,
     },
@@ -77,6 +80,7 @@ impl DeviceRequest {
             Self::DeliverRuntimeTransaction { .. } => "deliver-runtime-transaction",
             Self::DeliverPlatformTransaction { .. } => "deliver-platform-transaction",
             Self::ProfileInstalledScreensaver { .. } => "profile-installed-screensaver",
+            Self::ProfileInstalledParticles { .. } => "profile-installed-particles",
             Self::ProfileInstalledSearch { .. } => "profile-installed-search",
             Self::VerifyInstalledSearchUi { .. } => "verify-installed-search-ui",
             Self::ProfileInstalledCatalogLifecycle { .. } => "profile-installed-catalog-lifecycle",
@@ -232,6 +236,9 @@ mod tests {
             DeviceRequest::ProfileInstalledScreensaver {
                 output_dir: "profiles".into(),
             },
+            DeviceRequest::ProfileInstalledParticles {
+                output_dir: "particle-profiles".into(),
+            },
             DeviceRequest::ProfileInstalledSearch {
                 output_dir: "search-profile".into(),
             },
@@ -260,7 +267,7 @@ mod tests {
             DeviceRequest::CaptureFramebuffer,
         ];
         let labels: Vec<_> = requests.iter().map(DeviceRequest::label).collect();
-        assert_eq!(labels.len(), 26);
+        assert_eq!(labels.len(), 27);
         assert!(labels.iter().all(|label| !label.is_empty()));
         assert_eq!(
             labels
@@ -270,6 +277,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             [
                 "profile-installed-screensaver",
+                "profile-installed-particles",
                 "profile-installed-search",
                 "profile-installed-catalog-lifecycle"
             ]

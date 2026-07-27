@@ -376,6 +376,7 @@ fn print_benchmark_capabilities() {
             "schema": "mister-magik-benchmark-capabilities-v1",
             "screensaver-pprof-v1": cfg!(feature = "profile"),
             "screensaver-frame-evidence-v3": cfg!(feature = "profile"),
+            "particle-capacity-v1": true,
             "persisted-search-v1": true,
         })
     );

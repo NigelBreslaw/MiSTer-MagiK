@@ -581,6 +581,54 @@ pub(crate) fn agent_telemetry_until_screensaver_profile_complete(
     Err("screensaver profile did not complete within the bounded timeout".into())
 }
 
+pub(crate) fn agent_telemetry_for_duration(
+    endpoint: &AgentEndpoint,
+    duration: Duration,
+) -> Result<Vec<Value>> {
+    let addr = format!("{}:{AGENT_PORT}", endpoint.host)
+        .to_socket_addrs()?
+        .next()
+        .ok_or("could not resolve MiSTer agent host")?;
+    let request = agent_protocol::request(
+        &endpoint.token,
+        1,
+        "device_telemetry_stream_v1",
+        json!({"analytics_mode": "process", "cadence_ms": 250}),
+    );
+    let started = Instant::now();
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(3))?;
+    stream.set_read_timeout(Some(Duration::from_secs(3)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(3)))?;
+    writeln!(stream, "{request}")?;
+    stream.flush()?;
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    reader.read_line(&mut line)?;
+    parse_agent_response_line(line, started)?;
+
+    let mut samples = Vec::new();
+    while started.elapsed() < duration {
+        if crate::screensaver_profile_interrupted() {
+            return Err("particle benchmark interrupted".into());
+        }
+        let mut line = String::new();
+        match reader.read_line(&mut line) {
+            Ok(0) => return Err("MiSTer telemetry stream closed during particle trial".into()),
+            Ok(_) => samples.push(serde_json::from_str(line.trim())?),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    if samples.is_empty() {
+        return Err("particle benchmark collected no telemetry samples".into());
+    }
+    Ok(samples)
+}
+
 pub(crate) fn agent_binary_request_bounded(
     cmd: &str,
     args: Value,

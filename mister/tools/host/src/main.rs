@@ -28,7 +28,7 @@ mod remote;
 
 use agent_client::{
     AGENT_PORT, AgentEndpoint, agent_binary_request_bounded, agent_request, agent_request_at,
-    agent_request_with_liveness, agent_stream_request_reader,
+    agent_request_with_liveness, agent_stream_request_reader, agent_telemetry_for_duration,
     agent_telemetry_until_screensaver_profile_complete, agent_token, agent_token_for_device,
     bootstrap_agent, bootstrap_agent_with, verify_agent_deploy_result,
 };
@@ -288,6 +288,10 @@ impl DeviceOperations for NativeDevice {
             DeviceRequest::ProfileInstalledScreensaver { output_dir } => {
                 let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 profile_installed_screensaver(&config, output_dir).map_err(device_failure)?
+            }
+            DeviceRequest::ProfileInstalledParticles { output_dir } => {
+                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
+                profile_installed_particles(&config, output_dir).map_err(device_failure)?
             }
             DeviceRequest::ProfileInstalledSearch { output_dir } => {
                 let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
@@ -3154,6 +3158,11 @@ const SCREENSAVER_STARTUP_WARMUP_FRAMES: usize = 3;
 const SCREENSAVER_PROFILE_DURATION_SECS: u64 = 45;
 const SCREENSAVER_PROFILE_TIMEOUT_SECS: u64 = SCREENSAVER_PROFILE_DURATION_SECS + 20;
 const SCREENSAVER_POPULATED_WINDOW_SECS: u64 = 15;
+const PARTICLE_SEARCH_TRIAL_SECS: u64 = 12;
+const PARTICLE_CONFIRMATION_SECS: u64 = 30;
+const PARTICLE_COUNT_STEP: u64 = 1_024;
+const PARTICLE_COUNT_MAX: u64 = 524_288;
+const PARTICLE_POST_RESERVE_US: u64 = 750;
 
 fn last_json_line(output: &str) -> Option<Value> {
     output
@@ -3565,6 +3574,653 @@ fn catalog_lifecycle_report(summary: &Value) -> Result<String> {
     Ok(report)
 }
 
+fn profile_installed_particles(config: &NativeDeviceConfig, output_dir: &Path) -> Result<String> {
+    const DISPLAY_MODE: &str = "hdmi-1920x1080p60";
+    let benchmark_mode = DISPLAY_MATRIX_MODES
+        .iter()
+        .find(|mode| mode.id == DISPLAY_MODE)
+        .copied()
+        .ok_or("particle benchmark display mode is unavailable")?;
+    let session = connect_with(&config.connection, 10)?;
+    let capability = exec_checked_output(
+        &session,
+        "installed particle benchmark capability",
+        "/media/fat/mister-magik-dev/mister-magik-fb benchmark-capabilities",
+    )?;
+    let capability = last_json_line(&capability.stdout)
+        .ok_or("installed benchmark capability output contains no JSON report")?;
+    if capability
+        .get("particle-capacity-v1")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Err("installed app does not support particle-capacity-v1".into());
+    }
+    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v2.manifest")
+        .ok_or("development platform manifest is missing")?;
+    let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable")?
+        .trim()
+        .to_string();
+    let original_ini =
+        remote_read(&session, "/media/fat/MiSTer.ini").ok_or("MiSTer.ini is unavailable")?;
+    let original_reply = exec_checked_output(
+        &session,
+        "query original particle benchmark display mode",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    let original_mode = parse_display_reply_active(original_reply.stdout.trim())?;
+    if parse_display_reply_pending(original_reply.stdout.trim())?.is_some() {
+        return Err("particle benchmark cannot start during a display transaction".into());
+    }
+    let original_mode_spec = DISPLAY_MATRIX_MODES
+        .iter()
+        .find(|mode| mode.id == original_mode)
+        .copied()
+        .ok_or_else(|| format!("particle benchmark cannot restore unknown mode {original_mode}"))?;
+    fs::create_dir_all(output_dir)?;
+    drop(session);
+    let _signal_guard = ScreensaverProfileSignalGuard::install();
+
+    let run_result = (|| -> Result<Value> {
+        apply_confirmed_display_mode(config, benchmark_mode, "particle benchmark")?;
+        let session = connect_with(&config.connection, 10)?;
+        validate_particle_display_geometry(&session)?;
+        drop(session);
+        let capacity = profile_particle_preset(config, output_dir, "capacity")?;
+        let visual = profile_particle_preset(config, output_dir, "visual")?;
+        let visual_count = visual
+            .get("confirmed_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let captures = if visual_count > 0 {
+            capture_particle_phases(config, output_dir, visual_count)?
+        } else {
+            Value::Null
+        };
+        Ok(json!({
+            "capacity": capacity,
+            "visual": visual,
+            "captures": captures,
+        }))
+    })();
+
+    let launcher_cleanup = restore_installed_screensaver_profile(config);
+    let display_restore =
+        apply_confirmed_display_mode(config, original_mode_spec, "particle benchmark restoration");
+    let final_verification = display_restore.and_then(|()| {
+        verify_particle_benchmark_restoration(
+            config,
+            &original_mode,
+            &original_ini,
+            &boot_id,
+            &manifest,
+        )
+    });
+    let cleanup_result = combine_benchmark_cleanup(launcher_cleanup, final_verification);
+    let results = match (run_result, cleanup_result) {
+        (Ok(results), Ok(())) => results,
+        (Err(error), Ok(())) => return Err(error),
+        (Ok(_), Err(error)) => {
+            return Err(format!("particle benchmark cleanup failed: {error}").into());
+        }
+        (Err(run_error), Err(cleanup_error)) => {
+            return Err(
+                format!("{run_error}; particle benchmark cleanup failed: {cleanup_error}").into(),
+            );
+        }
+    };
+    let summary = json!({
+        "schema": "mister-magik-particle-benchmark-v1",
+        "display": {
+            "benchmark_mode": benchmark_mode.id,
+            "framebuffer": "960x540",
+            "bits_per_pixel": 16,
+            "original_mode": original_mode,
+            "restored": true,
+        },
+        "search": {
+            "start_count": PARTICLE_COUNT_STEP,
+            "maximum_count": PARTICLE_COUNT_MAX,
+            "refinement_step": PARTICLE_COUNT_STEP,
+            "trial_seconds": PARTICLE_SEARCH_TRIAL_SECS,
+            "confirmation_seconds": PARTICLE_CONFIRMATION_SECS,
+            "post_reserve_us": PARTICLE_POST_RESERVE_US,
+        },
+        "presets": {
+            "capacity": results.get("capacity").cloned().unwrap_or(Value::Null),
+            "visual": results.get("visual").cloned().unwrap_or(Value::Null),
+        },
+        "captures": results.get("captures").cloned().unwrap_or(Value::Null),
+        "boot_id": boot_id,
+        "manifest": parse_manifest_evidence(&manifest),
+        "output_dir": output_dir,
+    });
+    persist_and_qualify_particle_benchmark(output_dir, &summary)
+}
+
+fn profile_particle_preset(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+    preset: &str,
+) -> Result<Value> {
+    let mut trials = Vec::new();
+    let mut last_pass = 0u64;
+    let mut first_fail = None;
+    let mut count = PARTICLE_COUNT_STEP;
+    while count <= PARTICLE_COUNT_MAX {
+        let trial = run_particle_trial(
+            config,
+            output_dir,
+            preset,
+            count,
+            PARTICLE_SEARCH_TRIAL_SECS,
+            "search",
+        )?;
+        let qualified = trial.get("qualified").and_then(Value::as_bool) == Some(true);
+        trials.push(trial);
+        if qualified {
+            last_pass = count;
+            if count == PARTICLE_COUNT_MAX {
+                break;
+            }
+            count = count.saturating_mul(2).min(PARTICLE_COUNT_MAX);
+        } else {
+            first_fail = Some(count);
+            break;
+        }
+    }
+    if let Some(mut upper) = first_fail {
+        while let Some(middle) = particle_refinement_count(last_pass, upper) {
+            let trial = run_particle_trial(
+                config,
+                output_dir,
+                preset,
+                middle,
+                PARTICLE_SEARCH_TRIAL_SECS,
+                "refine",
+            )?;
+            let qualified = trial.get("qualified").and_then(Value::as_bool) == Some(true);
+            trials.push(trial);
+            if qualified {
+                last_pass = middle;
+            } else {
+                upper = middle;
+                first_fail = Some(middle);
+            }
+        }
+    }
+    let confirmation = if last_pass > 0 {
+        run_particle_trial(
+            config,
+            output_dir,
+            preset,
+            last_pass,
+            PARTICLE_CONFIRMATION_SECS,
+            "confirm",
+        )?
+    } else {
+        json!({
+            "qualified": false,
+            "failures": [{"kind": "minimum-count-failed"}],
+        })
+    };
+    let confirmed = confirmation.get("qualified").and_then(Value::as_bool) == Some(true);
+    Ok(json!({
+        "preset": preset,
+        "confirmed_count": if confirmed { last_pass } else { 0 },
+        "first_failing_count": first_fail,
+        "upper_bound_reached": last_pass == PARTICLE_COUNT_MAX && first_fail.is_none(),
+        "bytes_per_particle": 32,
+        "trials": trials,
+        "confirmation": confirmation,
+    }))
+}
+
+fn particle_refinement_count(last_pass: u64, first_fail: u64) -> Option<u64> {
+    let distance = first_fail.saturating_sub(last_pass);
+    if distance <= PARTICLE_COUNT_STEP {
+        return None;
+    }
+    let slots = distance / PARTICLE_COUNT_STEP;
+    Some(last_pass + (slots / 2).max(1) * PARTICLE_COUNT_STEP)
+}
+
+fn run_particle_trial(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+    preset: &str,
+    count: u64,
+    duration_secs: u64,
+    kind: &str,
+) -> Result<Value> {
+    let session = connect_with(&config.connection, 10)?;
+    restart_launcher_with_one_shot_env(
+        &session,
+        LauncherRestartOptions {
+            env_vars: vec![
+                ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+                ("MISTER_SCREENSAVER_START_ACTIVE".into(), "1".into()),
+                (
+                    "MISTER_SCREENSAVER_RENDERER".into(),
+                    "particle-magik".into(),
+                ),
+                ("MISTER_PARTICLE_COUNT".into(), count.to_string()),
+                ("MISTER_PARTICLE_PRESET".into(), preset.into()),
+                ("MISTER_PARTICLE_SEED".into(), "827141709451".into()),
+            ],
+            timeout_secs: 45,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    drop(session);
+    let telemetry =
+        agent_telemetry_for_duration(&config.agent, Duration::from_secs(duration_secs))?;
+    let filename = format!("{preset}-{count}-{kind}-telemetry.jsonl");
+    let telemetry_text = telemetry
+        .iter()
+        .map(serde_json::to_string)
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .join("\n");
+    fs::write(output_dir.join(&filename), format!("{telemetry_text}\n"))?;
+    Ok(summarize_particle_trial(
+        preset,
+        count,
+        duration_secs,
+        kind,
+        &filename,
+        &telemetry,
+    ))
+}
+
+fn summarize_particle_trial(
+    preset: &str,
+    count: u64,
+    duration_secs: u64,
+    kind: &str,
+    telemetry_file: &str,
+    telemetry: &[Value],
+) -> Value {
+    let mut failures = Vec::new();
+    let direct_backend = telemetry.iter().any(|sample| {
+        sample
+            .pointer("/launcher/present_backend")
+            .and_then(Value::as_str)
+            == Some("fpga-vblank-latch-hidden")
+    });
+    if !direct_backend {
+        failures.push(json!({"kind": "direct-hidden-backend-missing"}));
+    }
+    let mut frame_map = std::collections::BTreeMap::new();
+    for sample in telemetry {
+        if let Some(recent) = sample
+            .pointer("/launcher/frame_budget/recent_frames")
+            .and_then(Value::as_array)
+        {
+            for frame in recent {
+                let selected = frame.get("screensaver_active").and_then(Value::as_bool)
+                    == Some(true)
+                    && frame.get("screensaver_renderer").and_then(Value::as_str)
+                        == Some("particle-magik")
+                    && frame.get("particle_preset").and_then(Value::as_str) == Some(preset)
+                    && frame.get("particle_count").and_then(Value::as_u64) == Some(count);
+                if selected && let Some(id) = frame.get("frame").and_then(Value::as_u64) {
+                    frame_map.insert(id, frame.clone());
+                }
+            }
+        }
+    }
+    let frames = frame_map.values().collect::<Vec<_>>();
+    if frames.len() <= SCREENSAVER_STARTUP_WARMUP_FRAMES {
+        failures.push(json!({"kind": "insufficient-particle-frames", "frames": frames.len()}));
+    }
+    for frame in &frames {
+        if let Err(error) = validate_screensaver_frame_evidence(0, frame_u64(frame, "frame"), frame)
+        {
+            failures.push(json!({"kind": "invalid-frame-evidence", "detail": error.to_string()}));
+            break;
+        }
+    }
+    let steady = frames
+        .get(SCREENSAVER_STARTUP_WARMUP_FRAMES..)
+        .unwrap_or_default();
+    for pair in steady.windows(2) {
+        let previous = pair[0];
+        let current = pair[1];
+        let frame_id = frame_u64(current, "frame");
+        if frame_id != frame_u64(previous, "frame").saturating_add(1) {
+            failures.push(json!({"kind": "frame-gap", "frame": frame_id}));
+        }
+        if !presentation_sequence_is_contiguous(
+            frame_u16(previous, "main_present_sequence"),
+            frame_u16(current, "main_present_sequence"),
+        ) {
+            failures.push(json!({"kind": "sequence-gap", "frame": frame_id}));
+        }
+        if frame_u16(current, "main_present_flip_count")
+            .wrapping_sub(frame_u16(previous, "main_present_flip_count"))
+            != 1
+        {
+            failures.push(json!({"kind": "latch-flip-gap", "frame": frame_id}));
+        }
+        if frame_u16(current, "main_present_drop_count")
+            .wrapping_sub(frame_u16(previous, "main_present_drop_count"))
+            != 0
+        {
+            failures.push(json!({"kind": "latch-drop", "frame": frame_id}));
+        }
+    }
+    let mut refresh_periods = steady
+        .iter()
+        .filter_map(|frame| frame.get("vsync_period_us").and_then(Value::as_u64))
+        .filter(|period| *period > 0)
+        .collect::<Vec<_>>();
+    refresh_periods.sort_unstable();
+    let refresh_period_us = median_u64(&refresh_periods).unwrap_or(16_667);
+    let physical = if steady.len() >= 2 {
+        match physical_refresh_summary(0, steady, refresh_period_us) {
+            Ok(summary) => summary,
+            Err(error) => {
+                failures.push(
+                    json!({"kind": "physical-refresh-evidence", "detail": error.to_string()}),
+                );
+                Value::Null
+            }
+        }
+    } else {
+        Value::Null
+    };
+    let unique_fps = physical
+        .get("unique_fps")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let refresh_hz = physical
+        .get("refresh_hz")
+        .and_then(Value::as_f64)
+        .unwrap_or(f64::INFINITY);
+    if (unique_fps - refresh_hz).abs() > 0.1 {
+        failures.push(json!({
+            "kind": "unique-fps",
+            "actual": unique_fps,
+            "required": refresh_hz,
+        }));
+    }
+    if physical
+        .get("repeated_refreshes")
+        .and_then(Value::as_u64)
+        .unwrap_or(u64::MAX)
+        != 0
+    {
+        failures.push(json!({"kind": "repeated-refresh"}));
+    }
+    if physical
+        .get("long_completion_intervals")
+        .and_then(Value::as_array)
+        .is_none_or(|intervals| !intervals.is_empty())
+    {
+        failures.push(json!({"kind": "long-completion-gap"}));
+    }
+    let phases = steady
+        .iter()
+        .filter_map(|frame| frame.get("particle_phase").and_then(Value::as_str))
+        .collect::<std::collections::BTreeSet<_>>();
+    for required in ["static", "form", "hold", "disperse"] {
+        if !phases.contains(required) {
+            failures.push(json!({"kind": "missing-phase", "phase": required}));
+        }
+    }
+    if steady.iter().any(|frame| {
+        frame.get("main_present_copy_path").and_then(Value::as_str) != Some("external-direct")
+            || frame.get("main_present_status").and_then(Value::as_str) != Some("ok")
+            || frame.get("main_present_pending").and_then(Value::as_bool) != Some(false)
+            || frame.get("vsync_source").and_then(Value::as_str) != Some("vsync")
+            || frame_u64(frame, "vsync_miss_streak") != 0
+    }) {
+        failures.push(json!({"kind": "presentation-path"}));
+    }
+    for (field, kind) in [
+        (
+            "screensaver_render_ahead_starvation_count",
+            "render-starvation",
+        ),
+        ("screensaver_render_ahead_reused_frames", "reused-frame"),
+        (
+            "screensaver_render_ahead_superseded_frames",
+            "superseded-frame",
+        ),
+    ] {
+        if steady.iter().any(|frame| frame_u64(frame, field) != 0) {
+            failures.push(json!({"kind": kind}));
+        }
+    }
+    let mut render_wall = steady
+        .iter()
+        .map(|frame| frame_u64(frame, "screensaver_render_ahead_render_wall_us"))
+        .collect::<Vec<_>>();
+    render_wall.sort_unstable();
+    let p99_render_wall_us = percentile_99(&render_wall);
+    let deadline_us = refresh_period_us.saturating_sub(PARTICLE_POST_RESERVE_US);
+    if p99_render_wall_us >= deadline_us {
+        failures.push(json!({
+            "kind": "render-deadline",
+            "p99_us": p99_render_wall_us,
+            "deadline_us": deadline_us,
+        }));
+    }
+    if steady
+        .iter()
+        .all(|frame| frame_u64(frame, "particle_visible") == 0)
+    {
+        failures.push(json!({"kind": "no-visible-particles"}));
+    }
+    let phase_timing = ["static", "form", "hold", "disperse"]
+        .into_iter()
+        .map(|phase| {
+            let matching = steady
+                .iter()
+                .copied()
+                .filter(|frame| frame.get("particle_phase").and_then(Value::as_str) == Some(phase))
+                .collect::<Vec<_>>();
+            (
+                phase.to_string(),
+                json!({
+                    "frames": matching.len(),
+                    "simulation_mean_us": mean_frame_field(&matching, "particle_simulation_us"),
+                    "clear_mean_us": mean_frame_field(&matching, "particle_clear_us"),
+                    "raster_mean_us": mean_frame_field(&matching, "particle_raster_us"),
+                    "render_wall_mean_us": mean_frame_field(
+                        &matching,
+                        "screensaver_render_ahead_render_wall_us"
+                    ),
+                }),
+            )
+        })
+        .collect::<serde_json::Map<String, Value>>();
+    json!({
+        "kind": kind,
+        "preset": preset,
+        "count": count,
+        "duration_secs": duration_secs,
+        "telemetry_file": telemetry_file,
+        "frames": steady.len(),
+        "qualified": failures.is_empty(),
+        "failures": failures,
+        "refresh_period_us": refresh_period_us,
+        "render_deadline_us": deadline_us,
+        "p99_render_wall_us": p99_render_wall_us,
+        "max_render_wall_us": render_wall.last().copied().unwrap_or(0),
+        "physical_refresh": physical,
+        "phase_timing": phase_timing,
+        "cpu": {
+            "renderer_pct_of_one_core": mean_frame_field(
+                steady,
+                "screensaver_render_ahead_render_cpu_us"
+            ) * 100.0 / refresh_period_us.max(1) as f64,
+            "process_pct_of_one_core": mean_frame_field(steady, "process_cpu_us")
+                * 100.0 / refresh_period_us.max(1) as f64,
+        },
+        "visible": {
+            "mean": mean_frame_field(steady, "particle_visible"),
+            "minimum": steady
+                .iter()
+                .map(|frame| frame_u64(frame, "particle_visible"))
+                .min()
+                .unwrap_or(0),
+        },
+    })
+}
+
+fn capture_particle_phases(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+    count: u64,
+) -> Result<Value> {
+    let session = connect_with(&config.connection, 10)?;
+    restart_launcher_with_one_shot_env(
+        &session,
+        LauncherRestartOptions {
+            env_vars: vec![
+                ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+                ("MISTER_SCREENSAVER_START_ACTIVE".into(), "1".into()),
+                (
+                    "MISTER_SCREENSAVER_RENDERER".into(),
+                    "particle-magik".into(),
+                ),
+                ("MISTER_PARTICLE_COUNT".into(), count.to_string()),
+                ("MISTER_PARTICLE_PRESET".into(), "visual".into()),
+                ("MISTER_PARTICLE_SEED".into(), "827141709451".into()),
+            ],
+            timeout_secs: 45,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    drop(session);
+    agent_telemetry_for_duration(&config.agent, Duration::from_secs(1))?;
+    let static_capture = request_framebuffer_png_at(&config.agent)?;
+    let static_path = output_dir.join("particle-static.png");
+    fs::write(&static_path, &static_capture.png)?;
+    agent_telemetry_for_duration(&config.agent, Duration::from_secs(5))?;
+    let formed_capture = request_framebuffer_png_at(&config.agent)?;
+    let formed_path = output_dir.join("particle-formed.png");
+    fs::write(&formed_path, &formed_capture.png)?;
+    Ok(json!({
+        "static": static_path,
+        "formed": formed_path,
+        "count": count,
+        "source": capture_source_label(&formed_capture.result)?,
+    }))
+}
+
+fn validate_particle_display_geometry(session: &Session) -> Result<()> {
+    let framebuffer = remote_read(session, "/sys/class/graphics/fb0/virtual_size")
+        .ok_or("device framebuffer size is unavailable")?;
+    let bits_per_pixel = remote_read(session, "/sys/class/graphics/fb0/bits_per_pixel")
+        .ok_or("device framebuffer depth is unavailable")?;
+    if framebuffer.trim().replace(',', "x") != "960x540" || bits_per_pixel.trim() != "16" {
+        return Err(format!(
+            "particle benchmark display is {} at {} bpp, expected 960x540 at 16 bpp",
+            framebuffer.trim().replace(',', "x"),
+            bits_per_pixel.trim()
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn verify_particle_benchmark_restoration(
+    config: &NativeDeviceConfig,
+    original_mode: &str,
+    original_ini: &str,
+    expected_boot_id: &str,
+    expected_manifest: &str,
+) -> Result<()> {
+    let session = connect_with(&config.connection, 10)?;
+    wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))?;
+    let state = exec_checked_output(
+        &session,
+        "verify restored particle benchmark display mode",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    if parse_display_reply_pending(state.stdout.trim())?.is_some()
+        || parse_display_reply_active(state.stdout.trim())? != original_mode
+    {
+        return Err("particle benchmark did not restore the original display mode".into());
+    }
+    let final_boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable after particle benchmark")?;
+    if final_boot_id.trim() != expected_boot_id {
+        return Err("device rebooted during the particle benchmark".into());
+    }
+    let final_manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v2.manifest")
+        .ok_or("development platform manifest is missing after particle benchmark")?;
+    if final_manifest != expected_manifest {
+        return Err("installed platform manifest changed during particle benchmark".into());
+    }
+    let final_ini =
+        remote_read(&session, "/media/fat/MiSTer.ini").ok_or("MiSTer.ini is unavailable")?;
+    if final_ini != original_ini {
+        return Err("MiSTer.ini changed while restoring the particle benchmark".into());
+    }
+    exec_checked(
+        &session,
+        "post-particle-benchmark platform fingerprints",
+        &installed_platform_verify_command(Layout::Development),
+    )?;
+    exec_checked(
+        &session,
+        "post-particle-benchmark delivery health",
+        &delivery_health_command("dev")?,
+    )?;
+    Ok(())
+}
+
+fn persist_and_qualify_particle_benchmark(output_dir: &Path, summary: &Value) -> Result<String> {
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(summary)?),
+    )?;
+    fs::write(
+        output_dir.join("report.md"),
+        particle_benchmark_report(summary),
+    )?;
+    let failed = ["capacity", "visual"].into_iter().any(|preset| {
+        summary
+            .pointer(&format!("/presets/{preset}/confirmation/qualified"))
+            .and_then(Value::as_bool)
+            != Some(true)
+    });
+    if failed {
+        return Err(format!(
+            "particle benchmark did not confirm both presets; evidence retained at {}",
+            output_dir.display()
+        )
+        .into());
+    }
+    serde_json::to_string(summary).map_err(Into::into)
+}
+
+fn particle_benchmark_report(summary: &Value) -> String {
+    let mut report = String::from(
+        "# Particle Capacity Benchmark\n\n- Geometry: 960x540 RGB565\n- Presentation: direct hidden-slot latch\n\n## Confirmed ceilings\n\n",
+    );
+    for preset in ["capacity", "visual"] {
+        let count = summary
+            .pointer(&format!("/presets/{preset}/confirmed_count"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let first_fail = summary
+            .pointer(&format!("/presets/{preset}/first_failing_count"))
+            .and_then(Value::as_u64)
+            .map_or_else(|| "none within bound".into(), |value| value.to_string());
+        report.push_str(&format!(
+            "- {preset}: {count} particles; first failing count: {first_fail}\n"
+        ));
+    }
+    report
+}
+
 fn profile_installed_screensaver(config: &NativeDeviceConfig, output_dir: &Path) -> Result<String> {
     const DISPLAY_MODE: &str = "hdmi-1280x720p60";
     let benchmark_mode = DISPLAY_MATRIX_MODES
@@ -3761,24 +4417,32 @@ fn apply_confirmed_benchmark_display_mode(
     config: &NativeDeviceConfig,
     mode: DisplayMatrixMode,
 ) -> Result<()> {
+    apply_confirmed_display_mode(config, mode, "screensaver benchmark")
+}
+
+fn apply_confirmed_display_mode(
+    config: &NativeDeviceConfig,
+    mode: DisplayMatrixMode,
+    operation: &str,
+) -> Result<()> {
     let session = connect_with(&config.connection, 10)?;
     let current = exec_checked_output(
         &session,
-        "query benchmark display mode",
+        &format!("query {operation} display mode"),
         &acknowledged_main_command("mister_magik_display_get_v1"),
     )?;
     if parse_display_reply_pending(current.stdout.trim())?.is_some() {
-        return Err("screensaver benchmark display transaction is already pending".into());
+        return Err(format!("{operation} display transaction is already pending").into());
     }
     let active = parse_display_reply_active(current.stdout.trim())?;
     let ready = wait_launcher_ready(&session, Instant::now(), Duration::from_secs(15))?;
     if active == mode.id {
-        validate_benchmark_display_geometry(&session)?;
+        validate_live_display_mode(&session, mode)?;
         return Ok(());
     }
     exec_checked(
         &session,
-        "apply benchmark display mode",
+        &format!("apply {operation} display mode"),
         &acknowledged_main_command(&format!(
             "mister_magik_display_apply_headless_v1 mode={}",
             mode.id
@@ -3795,7 +4459,7 @@ fn apply_confirmed_benchmark_display_mode(
     validate_live_display_mode(&session, mode)?;
     exec_checked(
         &session,
-        "confirm benchmark display mode",
+        &format!("confirm {operation} display mode"),
         &acknowledged_main_command("mister_magik_display_confirm_v1"),
     )?;
     wait_display_transaction_idle(&session, Duration::from_secs(15))
@@ -4900,6 +5564,11 @@ fn validate_screensaver_frame_evidence(run: usize, frame_id: u64, frame: &Value)
         "screensaver_render_ahead_starvation_count",
         "screensaver_render_ahead_superseded_frames",
         "screensaver_render_ahead_reused_frames",
+        "particle_count",
+        "particle_visible",
+        "particle_simulation_us",
+        "particle_clear_us",
+        "particle_raster_us",
     ];
     const BOOL_FIELDS: &[&str] = &[
         "screensaver_active",
@@ -4913,6 +5582,9 @@ fn validate_screensaver_frame_evidence(run: usize, frame_id: u64, frame: &Value)
         "main_present_status",
         "screensaver_sampling_profile",
         "status_publish_mode",
+        "screensaver_renderer",
+        "particle_preset",
+        "particle_phase",
     ];
     for key in U64_FIELDS {
         if frame.get(*key).and_then(Value::as_u64).is_none() {
@@ -13155,7 +13827,15 @@ H: Handlers=event3 js0"#
                 "screensaver_raster_held_cards": u64::from(id == 4),
                 "screensaver_raster_moved_cards": 4,
                 "screensaver_raster_hold_layer_mask": u64::from(id == 4),
-                "screensaver_raster_visible_layer_mask": 31
+                "screensaver_raster_visible_layer_mask": 31,
+                "screensaver_renderer": "parade",
+                "particle_preset": "capacity",
+                "particle_phase": "static",
+                "particle_count": 0,
+                "particle_visible": 0,
+                "particle_simulation_us": 0,
+                "particle_clear_us": 0,
+                "particle_raster_us": 0
             });
             frame["screensaver_render_ahead_sequence"] = json!(id);
             frame["screensaver_render_ahead_queue_depth"] = json!(1);
@@ -13456,6 +14136,138 @@ H: Handlers=event3 js0"#
         assert_eq!(summary["expected_refresh_intervals"], 3);
         assert_eq!(summary["unique_latch_flips"], 2);
         assert_eq!(summary["repeated_refreshes"], 1);
+    }
+
+    fn particle_evidence_frame(index: u64, render_wall_us: u64) -> Value {
+        let frame = index + 1;
+        let phase = match index % 600 {
+            0..=179 => "static",
+            180..=299 => "form",
+            300..=479 => "hold",
+            _ => "disperse",
+        };
+        json!({
+            "frame": frame,
+            "wall_us": render_wall_us,
+            "prepare_us": 100,
+            "render_us": render_wall_us,
+            "custom_draw_us": 0,
+            "present_us": 100,
+            "cpu_prepare_us": 80,
+            "cpu_render_us": render_wall_us - 100,
+            "cpu_custom_draw_us": 0,
+            "cpu_vsync_us": 10,
+            "cpu_frame_tail_us": 10,
+            "process_cpu_us": render_wall_us,
+            "completion_monotonic_us": frame * 16_667,
+            "vsync_period_us": 16_667,
+            "vsync_miss_streak": 0,
+            "vsync_stale_hits": 0,
+            "vsync_wait_start_age_us": 0,
+            "vsync_accepted_hit_age_us": 0,
+            "vsync_source": "vsync",
+            "main_present_status": "ok",
+            "main_present_copy_path": "external-direct",
+            "main_present_sequence": frame,
+            "main_present_active_sequence": frame,
+            "main_present_pending": false,
+            "main_present_flip_count": frame,
+            "main_present_drop_count": 0,
+            "status_write_due": false,
+            "runtime_status_write_us": 0,
+            "status_enqueue_us": 0,
+            "status_worker_write_us": 0,
+            "status_replaced_count": 0,
+            "status_submitted_sequence": frame,
+            "status_written_sequence": frame,
+            "status_worker_errors": 0,
+            "status_publish_mode": "async",
+            "clock_update_due": false,
+            "clock_update_us": 0,
+            "screensaver_active": true,
+            "screensaver_renderer": "particle-magik",
+            "screensaver_sampling_profile": "full",
+            "screensaver_archive_poll_us": 0,
+            "screensaver_card_adopt_us": 0,
+            "screensaver_parade_advance_us": 0,
+            "screensaver_background_us": 0,
+            "screensaver_draw_order_us": 0,
+            "screensaver_tile_blit_us": 0,
+            "screensaver_raster_held_cards": 0,
+            "screensaver_raster_moved_cards": 0,
+            "screensaver_raster_hold_layer_mask": 0,
+            "screensaver_raster_visible_layer_mask": 0,
+            "screensaver_render_ahead_sequence": frame,
+            "screensaver_render_ahead_queue_depth": 1,
+            "screensaver_render_ahead_frame_age_us": 100,
+            "screensaver_render_ahead_render_wall_us": render_wall_us,
+            "screensaver_render_ahead_render_cpu_us": render_wall_us - 100,
+            "screensaver_render_ahead_starvation_count": 0,
+            "screensaver_render_ahead_superseded_frames": 0,
+            "screensaver_render_ahead_reused_frames": 0,
+            "screensaver_render_ahead_cancelled": false,
+            "particle_preset": "capacity",
+            "particle_phase": phase,
+            "particle_count": 65_536,
+            "particle_visible": 65_536,
+            "particle_simulation_us": 2_000,
+            "particle_clear_us": 200,
+            "particle_raster_us": 5_000
+        })
+    }
+
+    fn particle_telemetry(render_wall_us: u64) -> Vec<Value> {
+        let frames = (0..604)
+            .map(|index| particle_evidence_frame(index, render_wall_us))
+            .collect::<Vec<_>>();
+        vec![json!({
+            "launcher": {
+                "present_backend": "fpga-vblank-latch-hidden",
+                "frame_budget": {"recent_frames": frames}
+            }
+        })]
+    }
+
+    #[test]
+    fn particle_trial_requires_every_phase_and_the_render_reserve() {
+        let passing = summarize_particle_trial(
+            "capacity",
+            65_536,
+            12,
+            "search",
+            "telemetry.jsonl",
+            &particle_telemetry(10_000),
+        );
+        assert_eq!(passing["qualified"], true);
+        for phase in ["static", "form", "hold", "disperse"] {
+            assert!(passing["phase_timing"][phase]["frames"].as_u64().unwrap() > 0);
+        }
+
+        let deadline = summarize_particle_trial(
+            "capacity",
+            65_536,
+            12,
+            "search",
+            "telemetry.jsonl",
+            &particle_telemetry(15_917),
+        );
+        assert_eq!(deadline["qualified"], false);
+        assert!(
+            deadline["failures"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|failure| {
+                    failure.get("kind").and_then(Value::as_str) == Some("render-deadline")
+                })
+        );
+    }
+
+    #[test]
+    fn particle_search_refines_to_1024_particle_precision() {
+        assert_eq!(particle_refinement_count(0, 524_288), Some(262_144));
+        assert_eq!(particle_refinement_count(131_072, 262_144), Some(196_608));
+        assert_eq!(particle_refinement_count(196_608, 197_632), None);
     }
 
     #[test]

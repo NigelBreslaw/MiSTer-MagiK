@@ -9,6 +9,7 @@ use std::path::PathBuf;
 pub enum BenchmarkScenario {
     #[default]
     Screensaver,
+    Particles,
     CatalogLifecycle,
     Search,
 }
@@ -18,6 +19,7 @@ impl BenchmarkScenario {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Screensaver => "screensaver",
+            Self::Particles => "particles",
             Self::CatalogLifecycle => "catalog-lifecycle",
             Self::Search => "search",
         }

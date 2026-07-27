@@ -11,12 +11,40 @@ revision, while pending runtime or platform changes remain a hard failure.
 Supported scenarios:
 
 - `screensaver` (the default)
+- `particles`
 - `catalog-lifecycle`
 - `search`
 
 New benchmarks must add a named registry entry and a fixed typed device
 request. They may not expose arbitrary commands, duration knobs, remote paths,
 or generic environment overrides.
+
+## Particle capacity
+
+The `particles` scenario is the fixed capacity search for the experimental
+960x540 scalar particle renderer. It transactionally selects
+`hdmi-1920x1080p60`, verifies the resulting 960x540 RGB565 framebuffer, and
+requires the direct FPGA vblank-latch hidden-slot backend. The original display
+mode and exact `MiSTer.ini` contents are restored even when profiling fails.
+
+For each of the `capacity` and `visual` presets, the search starts at 1,024
+particles, doubles through 524,288, and then binary-refines at 1,024-particle
+precision. Search trials last 12 seconds so every phase of the deterministic
+ten-second cycle is observed. The highest passing count receives a separate
+30-second confirmation.
+
+A count passes only when unique physical latch flips match refresh within
+0.1 FPS, P99 render wall time is below the refresh period minus 750
+microseconds, and there are no repeated refreshes, completion gaps, latch
+drops, presentation misses or errors, starvation, reused frames, or superseded
+frames. Evidence includes per-phase simulation, clear, raster, and render-wall
+timings, CPU use, visible counts, and the 32-byte simulation footprint per
+particle.
+
+The workflow captures representative static and formed frames through the
+typed agent framebuffer path. Telemetry, captures, `summary.json`, and
+`report.md` are written below
+`build/agent-benchmarks/particles/<timestamp>/`.
 
 ## Persisted search
 

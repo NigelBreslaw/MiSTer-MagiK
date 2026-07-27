@@ -535,6 +535,14 @@ mod tests {
             }
         );
         assert_eq!(
+            Cli::try_parse_from(["agent-cli", "benchmark", "particles"])
+                .unwrap()
+                .into_intent(),
+            Intent::Benchmark {
+                scenario: BenchmarkScenario::Particles
+            }
+        );
+        assert_eq!(
             Cli::try_parse_from(["agent-cli", "benchmark", "search"])
                 .unwrap()
                 .into_intent(),

@@ -10,6 +10,7 @@ The AI-facing commands are:
 scripts/agent plan
 scripts/agent deliver
 scripts/agent benchmark
+scripts/agent benchmark particles
 scripts/agent benchmark catalog-lifecycle
 scripts/agent diagnose
 ```
@@ -34,13 +35,15 @@ still verifies against the latest release.
 
 `benchmark` profiles the already-installed development app in place. With no
 scenario it runs the screensaver benchmark. A positional scenario selects
-another registered typed workflow; `catalog-lifecycle` performs an isolated
-full catalog build under `/tmp`, validates every generated shard, then removes
-the fixture and restores the ordinary launcher. Benchmarks never build or
-deploy a temporary runtime, and require the installed revision to match the
-clean local commit wherever runtime or platform files changed. Host-only
-benchmark changes may reconcile as a no-op without replacing the installed
-runtime.
+another registered typed workflow. `particles` searches and confirms the
+60 FPS ceiling of both particle presets at 960x540, captures representative
+frames, and restores the original display configuration. `catalog-lifecycle`
+performs an isolated full catalog build under `/tmp`, validates every generated
+shard, then removes the fixture and restores the ordinary launcher. Benchmarks
+never build or deploy a temporary runtime, and require the installed revision
+to match the clean local commit wherever runtime or platform files changed.
+Host-only benchmark changes may reconcile as a no-op without replacing the
+installed runtime.
 
 The launcher builds and runs `agent-cli` with Cargo's release profile. Explicit
 manifest, target-directory, and binary overrides remain available for tests and
