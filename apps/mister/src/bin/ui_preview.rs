@@ -3,9 +3,15 @@
 
 #[cfg(target_os = "macos")]
 mod macos {
+    use mister_magik_fb::arcade_catalog::ArcadeGameEntry;
+    use mister_magik_fb::framebuffer::target::{FramebufferTargetGeometry, UiFrameTarget};
+    use mister_magik_fb::visual_composition::{
+        ArcadeVisualLayer, PreviewFrame, PreviewPixels, PreviewSurface, compose_preview_frame,
+        hdmi_preview_rect,
+    };
     use mister_magik_fb::visual_platform::{MisterPlatform, MisterSoftwareWindow};
     use mister_magik_ui::launcher::{
-        Launcher, MenuItem, MenuItemKind, MenuItemStatus, MisterBridge, MisterUi,
+        ArcadeGame, Launcher, MenuItem, MenuItemKind, MenuItemStatus, MisterBridge, MisterUi,
         ScreenshotPackProgress,
     };
     use slint::platform::software_renderer::{RepaintBufferType, Rgb565Pixel};
@@ -58,10 +64,13 @@ mod macos {
         slint_window: Rc<MisterSoftwareWindow>,
         native_window: Option<Arc<Window>>,
         surface: Option<Surface<Arc<Window>, Arc<Window>>>,
-        rgb565: Vec<Rgb565Pixel>,
+        frame_target: UiFrameTarget,
         xrgb8888: Vec<u32>,
         scenario: Scenario,
         selection: usize,
+        arcade_layer: ArcadeVisualLayer,
+        arcade_games: Vec<ArcadeGameEntry>,
+        preview_pixels: Vec<Rgb565Pixel>,
     }
 
     impl PreviewApplication {
@@ -75,10 +84,16 @@ mod macos {
                 slint_window,
                 native_window: None,
                 surface: None,
-                rgb565: vec![Rgb565Pixel(0); FRAME_WIDTH * FRAME_HEIGHT],
+                frame_target: UiFrameTarget::cached(FramebufferTargetGeometry::new(
+                    FRAME_WIDTH,
+                    FRAME_HEIGHT,
+                )),
                 xrgb8888: Vec::new(),
                 scenario,
                 selection: 0,
+                arcade_layer: ArcadeVisualLayer::new(FRAME_WIDTH, FRAME_HEIGHT),
+                arcade_games: fixture_arcade_games(),
+                preview_pixels: fixture_preview_pixels(160, 120),
             }
         }
 
@@ -114,6 +129,10 @@ mod macos {
             self.scenario = scenario;
             self.selection = 0;
             apply_scenario(&self.launcher, scenario);
+            if scenario == Scenario::Arcade {
+                apply_arcade_bridge(&self.launcher, &self.arcade_games, self.selection);
+                self.arcade_layer.invalidate();
+            }
             self.update_selection();
             if let Some(window) = self.native_window.as_ref() {
                 window.set_title(&self.window_title());
@@ -128,6 +147,7 @@ mod macos {
                 Scenario::About => 2,
                 Scenario::Licenses => 2,
                 Scenario::ScreensaverSettings => 2,
+                Scenario::Arcade => self.arcade_games.len(),
                 _ => 1,
             };
             self.selection = self
@@ -145,6 +165,9 @@ mod macos {
             bridge.set_licenses_selected(self.selection as i32);
             bridge.set_screensaver_settings_selected(self.selection as i32);
             bridge.set_confirm_selected(self.selection.min(1) as i32);
+            if self.scenario == Scenario::Arcade {
+                apply_arcade_bridge(&self.launcher, &self.arcade_games, self.selection);
+            }
             if matches!(
                 self.scenario,
                 Scenario::Home | Scenario::BackgroundScan | Scenario::Confirm
@@ -189,8 +212,37 @@ mod macos {
             slint::platform::update_timers_and_animations();
             self.slint_window.request_redraw();
             self.slint_window.draw_if_needed(|renderer| {
-                renderer.render(&mut self.rgb565, FRAME_WIDTH);
+                self.frame_target.render(
+                    renderer,
+                    FramebufferTargetGeometry::new(FRAME_WIDTH, FRAME_HEIGHT),
+                );
             });
+            if self.scenario == Scenario::Arcade {
+                self.arcade_layer.compose(
+                    &mut self.frame_target,
+                    &self.arcade_games,
+                    self.selection,
+                    true,
+                );
+                compose_preview_frame(
+                    self.frame_target.cached_565_mut(),
+                    FRAME_WIDTH,
+                    FRAME_HEIGHT,
+                    hdmi_preview_rect(FRAME_WIDTH, FRAME_HEIGHT),
+                    PreviewFrame {
+                        pixels: PreviewPixels::Rgb565 {
+                            pixels: &self.preview_pixels,
+                            stride_pixels: 160,
+                        },
+                        source_width: 160,
+                        source_height: 120,
+                        display_width: 320,
+                        display_height: 240,
+                    },
+                    true,
+                    PreviewSurface::full(FRAME_WIDTH),
+                );
+            }
 
             let Some(window) = self.native_window.as_ref() else {
                 return;
@@ -212,7 +264,7 @@ mod macos {
             let output_len = size.width as usize * size.height as usize;
             self.xrgb8888.resize(output_len, 0);
             scale_rgb565_nearest(
-                &self.rgb565,
+                self.frame_target.cached_565(),
                 FRAME_WIDTH,
                 FRAME_HEIGHT,
                 &mut self.xrgb8888,
@@ -546,6 +598,107 @@ mod macos {
                 .map(SharedString::from)
                 .collect::<Vec<_>>(),
         ))
+    }
+
+    fn apply_arcade_bridge(launcher: &Launcher, games: &[ArcadeGameEntry], selected: usize) {
+        let bridge = launcher.global::<MisterBridge>();
+        bridge.set_active_system_title("Arcade".into());
+        bridge.set_active_system_count(games.len() as i32);
+        bridge.set_arcade_games(ModelRc::new(VecModel::from(
+            games
+                .iter()
+                .map(|game| ArcadeGame {
+                    title: game.title.as_ref().into(),
+                    mra_path: game.mra_path.as_ref().into(),
+                    preview_archive_path: game.preview_archive_path.as_ref().into(),
+                    preview_asset_key: game.preview_asset_key.as_ref().into(),
+                    has_preview: game.has_preview,
+                    system_id: game.system_id.as_ref().into(),
+                    is_new: game.is_new,
+                })
+                .collect::<Vec<_>>(),
+        )));
+        bridge.set_arcade_selected(selected as i32);
+        bridge.set_arcade_scroll_y((selected as i32 * 48).saturating_sub(5 * 48));
+        bridge.set_arcade_list_x(8);
+        bridge.set_arcade_list_y(56);
+        bridge.set_arcade_list_width(510);
+        bridge.set_arcade_list_height(452);
+        bridge.set_arcade_list_visible(true);
+        bridge.set_arcade_preview_placeholder_visible(false);
+        bridge.set_arcade_preview_status(mister_magik_ui::launcher::PreviewStatus::Ready);
+        bridge.set_arcade_preview_title(
+            games
+                .get(selected)
+                .map(|game| game.title.as_ref())
+                .unwrap_or("No game")
+                .into(),
+        );
+        bridge.set_arcade_preview_source_width(160);
+        bridge.set_arcade_preview_source_height(120);
+        bridge.set_arcade_preview_display_width(320);
+        bridge.set_arcade_preview_display_height(240);
+        bridge.set_arcade_preview_box_x(8);
+        bridge.set_arcade_preview_box_y(92);
+        bridge.set_arcade_preview_box_width(320);
+        bridge.set_arcade_preview_box_height(320);
+    }
+
+    fn fixture_arcade_games() -> Vec<ArcadeGameEntry> {
+        const TITLES: [&str; 16] = [
+            "1942",
+            "Alien Syndrome",
+            "Bubble Bobble",
+            "Centipede",
+            "Donkey Kong",
+            "Elevator Action",
+            "Frogger",
+            "Galaga",
+            "Hyper Sports",
+            "Ikari Warriors",
+            "Joust",
+            "Klax",
+            "Metal Slug",
+            "Out Run",
+            "Pac-Man",
+            "R-Type",
+        ];
+        (0..48)
+            .map(|index| {
+                let title = if index < TITLES.len() {
+                    TITLES[index].to_string()
+                } else {
+                    format!("Fixture Arcade Game {:02}", index + 1)
+                };
+                ArcadeGameEntry {
+                    title: Arc::from(title),
+                    mra_path: Arc::from(format!("/fixture/{index:02}.mra")),
+                    preview_archive_path: Arc::from("/fixture/arcade.zip"),
+                    preview_asset_key: Arc::from(format!("fixture-{index:02}")),
+                    has_preview: index % 7 != 0,
+                    system_id: Arc::from("arcade"),
+                    year: Some(1980 + (index % 20) as u16),
+                    manufacturer: Arc::from(if index % 2 == 0 { "Sega" } else { "Namco" }),
+                    players: Some(if index % 3 == 0 { 2 } else { 1 }),
+                    control: Arc::from("Joystick"),
+                    is_new: index < 3,
+                }
+            })
+            .collect()
+    }
+
+    fn fixture_preview_pixels(width: usize, height: usize) -> Vec<Rgb565Pixel> {
+        let mut pixels = vec![Rgb565Pixel(0); width * height];
+        for y in 0..height {
+            for x in 0..width {
+                let red = ((x * 31) / width) as u16;
+                let green = ((y * 63) / height) as u16;
+                let checker = ((x / 12) + (y / 12)) % 2;
+                let blue = if checker == 0 { 8 } else { 28 };
+                pixels[y * width + x] = Rgb565Pixel((red << 11) | (green << 5) | blue);
+            }
+        }
+        pixels
     }
 
     fn scale_rgb565_nearest(

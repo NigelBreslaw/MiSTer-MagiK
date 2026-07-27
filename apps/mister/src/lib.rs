@@ -8,7 +8,11 @@
 //! fast macOS host tests without compiling Slint/AppKit.
 
 pub mod arcade_button_overrides;
+#[cfg(any(feature = "ui", feature = "ui-preview"))]
+mod arcade_list_renderer;
 pub use mister_magik_mister_runtime::boot_analytics;
+#[cfg(any(feature = "ui", feature = "ui-preview"))]
+mod bitmap_text;
 pub mod catalog_failure_report;
 pub mod catalog_progress_report;
 pub mod command_args;
@@ -33,6 +37,10 @@ pub mod setup_nav;
 pub mod spring_animation;
 #[cfg(test)]
 mod test_support;
+#[cfg(any(feature = "ui", feature = "ui-preview"))]
+mod ui_display;
+#[cfg(any(feature = "ui", feature = "ui-preview"))]
+pub mod visual_composition;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 pub mod visual_platform;
 #[cfg(mister_experiments)]

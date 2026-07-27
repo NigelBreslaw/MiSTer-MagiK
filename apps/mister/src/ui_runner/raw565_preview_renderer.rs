@@ -1724,82 +1724,39 @@ impl Raw565PreviewRenderer {
         clear_screen: bool,
         surface: PreviewSurface,
     ) -> Option<DirtyRect> {
-        let rect = raw_preview_scaled_rect(ui, frame)?;
         let screen = preview_screen_rect(ui);
-        let image_x =
-            screen.x0 as isize + (ARCADE_PREVIEW_BOX_W as isize - frame.display_w as isize) / 2;
-        let image_y =
-            screen.y0 as isize + (ARCADE_PREVIEW_BOX_H as isize - frame.display_h as isize) / 2;
-        let scale_x = (frame.display_w / frame.source_w).max(1) as usize;
-        let scale_y = (frame.display_h / frame.source_h).max(1) as usize;
-        let src_w = frame.source_w as usize;
-        let src_h = frame.source_h as usize;
-
-        if clear_screen {
-            clear_preview_screen(cached, ui, screen, surface);
-        }
-        match frame.pixels {
-            PreviewRawPixels::Empty => {
-                clear_preview_screen(cached, ui, screen, surface);
-            }
+        let pixels = match frame.pixels {
+            PreviewRawPixels::Empty => mister_magik_fb::visual_composition::PreviewPixels::Empty,
             PreviewRawPixels::Rgb565 {
                 pixels,
                 stride_pixels,
-            } if frame.display_w == frame.source_w && frame.display_h == frame.source_h => {
-                for y in rect.y0..rect.y1 {
-                    let src_y = (y as isize - image_y).max(0) as usize;
-                    let src_x = (rect.x0 as isize - image_x).max(0) as usize;
-                    let src_a = src_y * stride_pixels + src_x;
-                    let dst_a = surface.row_start(y, rect.x0);
-                    cached[dst_a..dst_a + rect.width()]
-                        .copy_from_slice(&pixels[src_a..src_a + rect.width()]);
-                }
-            }
-            PreviewRawPixels::Rgb565 {
+            } => mister_magik_fb::visual_composition::PreviewPixels::Rgb565 {
                 pixels,
                 stride_pixels,
-            } if frame.display_w == frame.source_w.saturating_mul(2)
-                && frame.display_h == frame.source_h.saturating_mul(2) =>
-            {
-                for y in rect.y0..rect.y1 {
-                    let src_y = (((y as isize - image_y).max(0) as usize) >> 1).min(src_h - 1);
-                    let src_row = src_y * stride_pixels;
-                    for x in rect.x0..rect.x1 {
-                        let src_x = (((x as isize - image_x).max(0) as usize) >> 1).min(src_w - 1);
-                        cached[surface.row_start(y, x)] = pixels[src_row + src_x];
-                    }
-                }
-            }
-            PreviewRawPixels::Rgb565 {
-                pixels,
-                stride_pixels,
-            } => {
-                for y in rect.y0..rect.y1 {
-                    let src_y = ((y as isize - image_y).max(0) as usize / scale_y).min(src_h - 1);
-                    for x in rect.x0..rect.x1 {
-                        let src_x =
-                            ((x as isize - image_x).max(0) as usize / scale_x).min(src_w - 1);
-                        cached[surface.row_start(y, x)] = pixels[src_y * stride_pixels + src_x];
-                    }
-                }
-            }
+            },
             PreviewRawPixels::Rgb8(rgb) => {
-                for y in rect.y0..rect.y1 {
-                    let src_y = ((y as isize - image_y).max(0) as usize / scale_y).min(src_h - 1);
-                    for x in rect.x0..rect.x1 {
-                        let src_x =
-                            ((x as isize - image_x).max(0) as usize / scale_x).min(src_w - 1);
-                        let si = (src_y * src_w + src_x) * 3;
-                        cached[surface.row_start(y, x)] = <Rgb565Pixel as TargetPixel>::from_rgb(
-                            rgb[si],
-                            rgb[si + 1],
-                            rgb[si + 2],
-                        );
-                    }
-                }
+                mister_magik_fb::visual_composition::PreviewPixels::Rgb8(rgb)
             }
-        }
-        Some(if clear_screen { screen } else { rect })
+        };
+        mister_magik_fb::visual_composition::compose_preview_frame(
+            cached,
+            ui.render_w(),
+            ui.render_h(),
+            screen,
+            mister_magik_fb::visual_composition::PreviewFrame {
+                pixels,
+                source_width: frame.source_w as usize,
+                source_height: frame.source_h as usize,
+                display_width: frame.display_w as usize,
+                display_height: frame.display_h as usize,
+            },
+            clear_screen,
+            mister_magik_fb::visual_composition::PreviewSurface {
+                x: surface.x0,
+                y: surface.y0,
+                stride: surface.stride,
+            },
+        )
     }
 
     pub(super) fn compose_transition(
