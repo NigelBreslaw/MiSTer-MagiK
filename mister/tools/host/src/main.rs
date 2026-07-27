@@ -14451,7 +14451,7 @@ H: Handlers=event3 js0"#
             300..=479 => "hold",
             _ => "disperse",
         };
-        json!({
+        let mut evidence = json!({
             "frame": frame,
             "wall_us": render_wall_us,
             "prepare_us": 100,
@@ -14487,6 +14487,8 @@ H: Handlers=event3 js0"#
             "status_written_sequence": frame,
             "status_worker_errors": 0,
             "status_publish_mode": "async",
+        });
+        let remaining = json!({
             "clock_update_due": false,
             "clock_update_us": 0,
             "screensaver_active": true,
@@ -14518,7 +14520,17 @@ H: Handlers=event3 js0"#
             "particle_simulation_us": 2_000,
             "particle_clear_us": 200,
             "particle_raster_us": 5_000
-        })
+        });
+        evidence
+            .as_object_mut()
+            .expect("particle evidence must be an object")
+            .extend(
+                remaining
+                    .as_object()
+                    .expect("remaining particle evidence must be an object")
+                    .clone(),
+            );
+        evidence
     }
 
     fn particle_telemetry(render_wall_us: u64) -> Vec<Value> {
