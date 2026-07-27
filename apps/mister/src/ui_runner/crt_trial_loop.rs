@@ -179,7 +179,7 @@ pub(super) fn run_crt_trial_loop(
     let mode = ui.output_route();
     if secs != CRT_TRIAL_SECS || !mode.is_crt() {
         crate::ui_errln!(
-            "crt_trial_status_v3 schema=3 ok=0 mode={} reason=invalid-contract requested_secs={} geometry={}x{}",
+            "crt_trial_status_v4 schema=4 ok=0 mode={} reason=invalid-contract requested_secs={} geometry={}x{}",
             mode.label(),
             secs,
             ui.render_w(),
@@ -192,7 +192,7 @@ pub(super) fn run_crt_trial_loop(
         Ok(status) if status.supported() => status,
         Ok(status) => {
             crate::ui_errln!(
-                "crt_trial_status_v3 schema=3 ok=0 mode={} duration_ms=0 frames=0 flips=0 posts=0 drops=0 reason=latch-status-unsupported ack_high=0x{:04x} ack_low=0x{:04x}",
+                "crt_trial_status_v4 schema=4 ok=0 mode={} duration_ms=0 frames=0 flips=0 posts=0 drops=0 reason=latch-status-unsupported ack_high=0x{:04x} ack_low=0x{:04x}",
                 mode.label(),
                 status.magic_hi,
                 status.magic_lo
@@ -201,7 +201,7 @@ pub(super) fn run_crt_trial_loop(
         }
         Err(error) => {
             crate::ui_errln!(
-                "crt_trial_status_v3 schema=3 ok=0 mode={} reason=latch-status-read detail={}",
+                "crt_trial_status_v4 schema=4 ok=0 mode={} reason=latch-status-read detail={}",
                 mode.label(),
                 safe_field(&error.to_string())
             );
@@ -226,7 +226,7 @@ pub(super) fn run_crt_trial_loop(
         Ok(presenter) => presenter,
         Err(failure) => {
             crate::ui_errln!(
-                "crt_trial_status_v3 schema=3 ok=0 mode={} reason=presenter-open stage={} detail={}",
+                "crt_trial_status_v4 schema=4 ok=0 mode={} reason=presenter-open stage={} detail={}",
                 mode.label(),
                 failure.stage.code(),
                 safe_field(&failure.detail)
@@ -247,8 +247,7 @@ pub(super) fn run_crt_trial_loop(
     let mut max_render_us = 0u64;
     let mut max_copy_us = 0u128;
     let mut max_status_us = 0u64;
-    let mut post_status_retry_frames = 0u64;
-    let mut max_post_status_reads = 0u8;
+    let mut post_status_metrics = PostStatusObservationMetrics::default();
     while started.elapsed() < Duration::from_secs(CRT_TRIAL_SECS) {
         if frames > 0 {
             let settle_started = Instant::now();
@@ -292,8 +291,7 @@ pub(super) fn run_crt_trial_loop(
         };
         max_copy_us = max_copy_us.max(stats.copy_us);
         max_status_us = max_status_us.max(stats.status_us);
-        max_post_status_reads = max_post_status_reads.max(stats.post_status_reads);
-        post_status_retry_frames += u64::from(stats.post_status_reads > 1);
+        post_status_metrics.record(stats.post_status_reads, stats.post_status_wire_attempts);
         let selected_base = presenter.buffer_base_addr(stats.buffer_index);
         if settled_status.active_enabled() && settled_status.active_base == selected_base {
             unsafe_active_writes += 1;
@@ -337,7 +335,7 @@ pub(super) fn run_crt_trial_loop(
         "none"
     });
     crate::ui_logln!(
-        "crt_trial_status_v3 schema=3 ok={} mode={} duration_ms={} frames={} flips={} posts={} drops={} final_pending={} final_active_matches={} unsafe_active_writes={} pending_writes={} alternation_misses={} cadence_misses={} max_interval_us={} max_settle_us={} max_render_us={} max_copy_us={} max_status_us={} post_status_retry_frames={} max_post_status_reads={} last_buffer={} last_sequence={} reason={}",
+        "crt_trial_status_v4 schema=4 ok={} mode={} duration_ms={} frames={} flips={} posts={} drops={} final_pending={} final_active_matches={} unsafe_active_writes={} pending_writes={} alternation_misses={} cadence_misses={} max_interval_us={} max_settle_us={} max_render_us={} max_copy_us={} max_status_us={} post_status_retry_frames={} max_post_status_reads={} post_status_transport_retry_frames={} max_post_status_wire_attempts={} last_buffer={} last_sequence={} reason={}",
         u8::from(failure.is_none() && frames > 0 && counters.flips > 0),
         mode.label(),
         started.elapsed().as_millis(),
@@ -356,12 +354,31 @@ pub(super) fn run_crt_trial_loop(
         max_render_us,
         max_copy_us,
         max_status_us,
-        post_status_retry_frames,
-        max_post_status_reads,
+        post_status_metrics.logical_retry_frames,
+        post_status_metrics.max_logical_reads,
+        post_status_metrics.transport_retry_frames,
+        post_status_metrics.max_wire_attempts,
         last_buffer.unwrap_or(0),
         last_sequence,
         reason
     );
+}
+
+#[derive(Default)]
+struct PostStatusObservationMetrics {
+    logical_retry_frames: u64,
+    max_logical_reads: u8,
+    transport_retry_frames: u64,
+    max_wire_attempts: u8,
+}
+
+impl PostStatusObservationMetrics {
+    fn record(&mut self, logical_reads: u8, wire_attempts: u8) {
+        self.logical_retry_frames += u64::from(logical_reads > 1);
+        self.max_logical_reads = self.max_logical_reads.max(logical_reads);
+        self.transport_retry_frames += u64::from(wire_attempts > logical_reads);
+        self.max_wire_attempts = self.max_wire_attempts.max(wire_attempts);
+    }
 }
 
 pub(super) fn run_crt_probe_loop(
@@ -1100,6 +1117,19 @@ fn safe_field(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn post_status_metrics_distinguish_logical_observation_from_transport_retry() {
+        let mut metrics = PostStatusObservationMetrics::default();
+
+        metrics.record(1, 2);
+        metrics.record(3, 3);
+
+        assert_eq!(metrics.logical_retry_frames, 1);
+        assert_eq!(metrics.max_logical_reads, 3);
+        assert_eq!(metrics.transport_retry_frames, 1);
+        assert_eq!(metrics.max_wire_attempts, 3);
+    }
 
     fn status(flips: u16, pending: bool) -> crate::fpga::LatchedFbufStatus {
         crate::fpga::LatchedFbufStatus {

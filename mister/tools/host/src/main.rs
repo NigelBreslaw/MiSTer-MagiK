@@ -2715,7 +2715,7 @@ fn scene_cli(args: &[String]) -> Result<()> {
         let output = exec_checked_output(
             &session,
             "CRT trial status",
-            "sed -n '/^crt_trial_status_v[23] /p' /tmp/mister-magik-crt_trial.log | tail -n 1",
+            "tail -n 128 /tmp/mister-magik-crt_trial.log",
         )?;
         println!("{}", parse_crt_trial_status(&output.stdout)?);
         Ok(())
@@ -2840,7 +2840,7 @@ fn run_crt_geometry_trial_with(
     let trial_status = exec_checked_output(
         &recovery_session,
         "geometry trial status",
-        "sed -n '/^crt_trial_status_v[23] /p' /tmp/mister-magik-crt_trial.log | tail -n 1",
+        "tail -n 128 /tmp/mister-magik-crt_trial.log",
     )?;
     let trial_status = parse_crt_trial_status(&trial_status.stdout)?;
     let content_bounds = runtime_settings
@@ -3093,9 +3093,10 @@ fn validate_crt_geometry_trial(runtime_settings: &str, rectangle: [u16; 4]) -> R
 }
 
 fn parse_crt_trial_status(output: &str) -> Result<&str> {
-    const MARKERS: [&str; 2] = [
+    const MARKERS: [&str; 3] = [
         "crt_trial_status_v2 schema=2 ",
         "crt_trial_status_v3 schema=3 ",
+        "crt_trial_status_v4 schema=4 ",
     ];
     let status = output
         .match_indices("crt_trial_status_v")
@@ -3136,7 +3137,7 @@ fn parse_crt_trial_status(output: &str) -> Result<&str> {
             return Err(format!("CRT trial status omitted successful {required}").into());
         }
     }
-    if marker == Some(MARKERS[1]) {
+    if marker != Some(MARKERS[0]) {
         for required in [
             "posts=",
             "drops=",
@@ -3155,6 +3156,19 @@ fn parse_crt_trial_status(output: &str) -> Result<&str> {
             "max_post_status_reads=",
             "last_buffer=",
             "last_sequence=",
+        ] {
+            if !status
+                .split_ascii_whitespace()
+                .any(|field| field.starts_with(required))
+            {
+                return Err(format!("CRT trial status omitted diagnostic {required}").into());
+            }
+        }
+    }
+    if marker == Some(MARKERS[2]) {
+        for required in [
+            "post_status_transport_retry_frames=",
+            "max_post_status_wire_attempts=",
         ] {
             if !status
                 .split_ascii_whitespace()
@@ -12182,6 +12196,18 @@ video_mode=14
         assert_eq!(
             parse_crt_trial_status(diagnostic).unwrap(),
             diagnostic.trim()
+        );
+        let wire_diagnostic = "crt_trial_status_v4 schema=4 ok=1 mode=crt-576p50 duration_ms=30001 frames=1513 flips=1513 posts=1513 drops=0 final_pending=0 final_active_matches=1 unsafe_active_writes=0 pending_writes=0 alternation_misses=0 cadence_misses=0 max_interval_us=20500 max_settle_us=18000 max_render_us=1000 max_copy_us=500 max_status_us=200 post_status_retry_frames=0 max_post_status_reads=1 post_status_transport_retry_frames=1 max_post_status_wire_attempts=2 last_buffer=1 last_sequence=1513 reason=none\n";
+        assert_eq!(
+            parse_crt_trial_status(wire_diagnostic).unwrap(),
+            wire_diagnostic.trim()
+        );
+        let mixed_versions = format!(
+            "older output\n{diagnostic}unrelated trailer\n{wire_diagnostic}final trailer\n"
+        );
+        assert_eq!(
+            parse_crt_trial_status(&mixed_versions).unwrap(),
+            wire_diagnostic.trim()
         );
         let failure = parse_crt_trial_status(
             "crt_trial_status_v2 schema=2 ok=0 mode=crt-240p60 duration_ms=12 frames=0 flips=0 reason=no-latch-flips"
