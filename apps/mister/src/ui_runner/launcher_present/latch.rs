@@ -367,7 +367,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
     pub(in crate::ui_runner) fn try_issue_hidden_slot_render_grant<H: LatchHardware>(
         &mut self,
         hardware: &mut H,
-        display_session: &mut LauncherDisplaySession,
+        _display_session: &mut LauncherDisplaySession,
     ) -> Result<Option<HiddenSlotRenderGrant>, LatchFailure> {
         if self.disabled
             || !self.exact_identity_geometry()
@@ -383,7 +383,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                 error.to_string(),
             )
         })?;
-        self.sync_latch_state_from_status(status, display_session)?;
+        self.sync_latch_state_from_status(status)?;
         if status.pending() {
             return Ok(None);
         }
@@ -406,7 +406,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         &mut self,
         completed: CompletedHiddenFrame,
         hardware: &mut H,
-        display_session: &mut LauncherDisplaySession,
+        _display_session: &mut LauncherDisplaySession,
     ) -> Result<FpgaVblankLatchHiddenPresentStats, LatchFailure> {
         let grant = completed.grant;
         if self.outstanding_direct_grant != Some(grant) {
@@ -427,7 +427,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                 error.to_string(),
             )
         })?;
-        self.sync_latch_state_from_status(before_status, display_session)?;
+        self.sync_latch_state_from_status(before_status)?;
         if before_status.pending() || !self.latch_state.slot_is_writable(grant.slot_index) {
             return Err(LatchFailure::runtime(
                 LatchFailureStage::PostVerification,
@@ -458,15 +458,9 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                 )
             })?;
         let post_us = post_start.elapsed().as_micros();
-        let set_vga_fb_us = display_session
-            .arm_latch_route_with_hardware(hardware)
-            .map_err(|error| {
-                LatchFailure::runtime(
-                    LatchFailureStage::RouteArm,
-                    LatchFailureReason::RouteArmFailed,
-                    error.to_string(),
-                )
-            })?;
+        // Retained in the accounting schema for compatibility. Main_MiSTer
+        // exclusively owns UIO_BUT_SW and the VGA framebuffer mux.
+        let set_vga_fb_us = 0;
         let (after_status, post_status_us, post_status_reads) =
             read_post_status(hardware, sequence).map_err(|error| {
                 LatchFailure::runtime(
@@ -573,7 +567,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         cached: CachedFrameView<'_>,
         input: LauncherFramePlan,
         hardware: &mut H,
-        display_session: &mut LauncherDisplaySession,
+        _display_session: &mut LauncherDisplaySession,
         apply_overlays: F,
     ) -> Result<FpgaVblankLatchHiddenPresentStats, LatchFailure>
     where
@@ -599,7 +593,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             )
         })?;
         let mut status_us = status_start.elapsed().as_micros() as u64;
-        self.sync_latch_state_from_status(before_status, display_session)?;
+        self.sync_latch_state_from_status(before_status)?;
 
         let mut plan = self.latch_state.plan_next(input);
         if plan.is_none() && before_status.pending() {
@@ -615,7 +609,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                     )
                 })?;
                 status_us = status_us.saturating_add(retry_started.elapsed().as_micros() as u64);
-                self.sync_latch_state_from_status(before_status, display_session)?;
+                self.sync_latch_state_from_status(before_status)?;
                 plan = self.latch_state.plan_next(input);
                 if plan.is_some() || !before_status.pending() {
                     break;
@@ -721,17 +715,9 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             }
         };
         let post_us = post_start.elapsed().as_micros();
-        let set_vga_fb_us = match display_session.arm_latch_route_with_hardware(hardware) {
-            Ok(elapsed_us) => elapsed_us,
-            Err(e) => {
-                self.latch_state.mark_attempt_failed(buffer_index);
-                return Err(LatchFailure::runtime(
-                    LatchFailureStage::RouteArm,
-                    LatchFailureReason::RouteArmFailed,
-                    e.to_string(),
-                ));
-            }
-        };
+        // Retained in the accounting schema for compatibility. Main_MiSTer
+        // exclusively owns UIO_BUT_SW and the VGA framebuffer mux.
+        let set_vga_fb_us = 0;
         let set_supported = ack.0 == crate::fpga::MAGIK_FBUF_LATCH_MAGIC
             || ack.1 == crate::fpga::MAGIK_FBUF_LATCH_MAGIC;
 
@@ -848,7 +834,6 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
     fn sync_latch_state_from_status(
         &mut self,
         status: crate::fpga::LatchedFbufStatus,
-        display_session: &mut LauncherDisplaySession,
     ) -> Result<(), LatchFailure> {
         let sync = match classify_latch_status(
             status,
@@ -876,7 +861,6 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                 expected_stride,
             }) => {
                 self.latch_state.invalidate_all();
-                display_session.note_latch_route_lost();
                 self.hidden_active_verified = false;
                 return Err(LatchFailure::runtime(
                     LatchFailureStage::PostVerification,
@@ -890,7 +874,6 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
 
         if sync.recovered_non_hidden_active {
             self.latch_state.invalidate_all();
-            display_session.note_latch_route_lost();
             self.hidden_active_verified = false;
         }
         if sync.hidden_active_verified {
@@ -1151,7 +1134,6 @@ mod tests {
         Overlay,
         Publish,
         Post,
-        ArmRoute,
     }
 
     type EventLog = Rc<RefCell<Vec<TestEvent>>>;
@@ -1243,7 +1225,6 @@ mod tests {
         post_bases: Vec<u32>,
         last_posted_sequence: Option<u16>,
         posted_sequence_visibility_delay_reads: usize,
-        set_vga_fb_calls: usize,
         events: Option<EventLog>,
     }
 
@@ -1255,14 +1236,6 @@ mod tests {
             _fb_height: usize,
         ) -> io::Result<u16> {
             Ok(1)
-        }
-
-        fn set_vga_fb(&mut self, _enable: bool) -> io::Result<()> {
-            self.set_vga_fb_calls += 1;
-            if let Some(events) = &self.events {
-                events.borrow_mut().push(TestEvent::ArmRoute);
-            }
-            Ok(())
         }
     }
 
@@ -1391,7 +1364,7 @@ mod tests {
     }
 
     #[test]
-    fn successful_present_orders_copy_overlay_post_route_arm_and_status_reads() {
+    fn successful_present_orders_copy_overlay_post_and_status_reads() {
         let events = EventLog::default();
         let mut presenter = presenter_with_events(events.clone());
         let mut hardware = FakeHardware {
@@ -1423,7 +1396,6 @@ mod tests {
                 TestEvent::Overlay,
                 TestEvent::Publish,
                 TestEvent::Post,
-                TestEvent::ArmRoute,
                 TestEvent::ReadStatus,
             ]
         );
@@ -1642,7 +1614,7 @@ mod tests {
     }
 
     #[test]
-    fn front_buffer_after_hidden_verification_invalidates_slots_and_rearms_route() {
+    fn front_buffer_after_hidden_verification_invalidates_slots_without_rearming_main_route() {
         let mut presenter = presenter();
         let mut hardware = FakeHardware {
             statuses: vec![
@@ -1668,7 +1640,6 @@ mod tests {
         assert_eq!(recovered.invalid_bytes, WIDTH * HEIGHT * 2);
         assert!(recovered_other_slot.full_copy);
         assert_eq!(recovered_other_slot.invalid_bytes, WIDTH * HEIGHT * 2);
-        assert_eq!(hardware.set_vga_fb_calls, 2);
         assert_eq!(hardware.read_count, 8);
     }
 

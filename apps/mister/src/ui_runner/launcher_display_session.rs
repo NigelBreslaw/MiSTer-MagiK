@@ -12,8 +12,6 @@ pub(in crate::ui_runner) trait LauncherDisplayHardware {
         fb_width: usize,
         fb_height: usize,
     ) -> io::Result<u16>;
-
-    fn set_vga_fb(&mut self, enable: bool) -> io::Result<()>;
 }
 
 impl LauncherDisplayHardware for Fpga {
@@ -25,10 +23,6 @@ impl LauncherDisplayHardware for Fpga {
     ) -> io::Result<u16> {
         Fpga::enable_launcher_framebuffer_route(self, route, fb_width, fb_height)
     }
-
-    fn set_vga_fb(&mut self, enable: bool) -> io::Result<()> {
-        Fpga::set_vga_fb(self, enable)
-    }
 }
 
 pub(crate) struct LauncherDisplaySession {
@@ -36,7 +30,6 @@ pub(crate) struct LauncherDisplaySession {
     fb_width: usize,
     fb_height: usize,
     route_guard: FramebufferRouteGuard,
-    latch_route_armed: bool,
     reassert_count: u64,
     last_reassert_frame: u64,
     last_reassert_ok: bool,
@@ -57,7 +50,6 @@ impl LauncherDisplaySession {
             fb_width: ui.fb_w(),
             fb_height: ui.fb_h(),
             route_guard,
-            latch_route_armed: false,
             reassert_count: 0,
             last_reassert_frame: 0,
             last_reassert_ok: false,
@@ -139,34 +131,11 @@ impl LauncherDisplaySession {
         launching || action.force_full_present
     }
 
-    pub(super) fn arm_latch_route(&mut self, hardware: &mut Fpga) -> io::Result<u128> {
-        self.arm_latch_route_with_hardware(hardware)
-    }
-
-    pub(in crate::ui_runner) fn arm_latch_route_with_hardware(
-        &mut self,
-        hardware: &mut impl LauncherDisplayHardware,
-    ) -> io::Result<u128> {
-        if !self.route.set_vga_fb() || self.latch_route_armed {
-            return Ok(0);
-        }
-        let start = Instant::now();
-        hardware.set_vga_fb(true)?;
-        self.latch_route_armed = true;
-        Ok(start.elapsed().as_micros())
-    }
-
     pub(in crate::ui_runner) fn activate_fb0_route_with_hardware(
         &mut self,
         hardware: &mut impl LauncherDisplayHardware,
     ) -> io::Result<u16> {
-        let support = self.enable_route(hardware)?;
-        self.latch_route_armed = false;
-        Ok(support)
-    }
-
-    pub(super) fn note_latch_route_lost(&mut self) {
-        self.latch_route_armed = false;
+        self.enable_route(hardware)
     }
 
     pub(super) fn recover_after_launch_failure(
@@ -182,7 +151,6 @@ impl LauncherDisplaySession {
         frame: u64,
         hardware: &mut impl LauncherDisplayHardware,
     ) -> io::Result<u16> {
-        self.latch_route_armed = false;
         self.reassert_count = self.reassert_count.saturating_add(1);
         self.last_reassert_frame = frame;
         match self.enable_route(hardware) {
@@ -237,8 +205,6 @@ mod tests {
         enable_results: Vec<io::Result<u16>>,
         enable_calls: usize,
         last_enable_args: Option<(u16, u16, bool, usize, usize)>,
-        set_vga_fb_results: Vec<io::Result<()>>,
-        set_vga_fb_calls: usize,
     }
 
     impl LauncherDisplayHardware for FakeHardware {
@@ -252,7 +218,7 @@ mod tests {
             self.last_enable_args = Some((
                 route.mode().hact,
                 route.mode().vact,
-                route.set_vga_fb(),
+                route.direct_video(),
                 fb_width,
                 fb_height,
             ));
@@ -260,15 +226,6 @@ mod tests {
                 Ok(1)
             } else {
                 self.enable_results.remove(0)
-            }
-        }
-
-        fn set_vga_fb(&mut self, _enable: bool) -> io::Result<()> {
-            self.set_vga_fb_calls += 1;
-            if self.set_vga_fb_results.is_empty() {
-                Ok(())
-            } else {
-                self.set_vga_fb_results.remove(0)
             }
         }
     }
@@ -324,49 +281,22 @@ mod tests {
     }
 
     #[test]
-    fn latch_route_arms_once_and_rearms_after_route_loss() {
+    fn fb0_fallback_reenables_only_the_framebuffer_geometry() {
         let mut session = session(0);
         let mut hardware = FakeHardware::default();
-
-        session
-            .arm_latch_route_with_hardware(&mut hardware)
-            .unwrap();
-        session
-            .arm_latch_route_with_hardware(&mut hardware)
-            .unwrap();
-        assert_eq!(hardware.set_vga_fb_calls, 1);
-
-        session.note_latch_route_lost();
-        session
-            .arm_latch_route_with_hardware(&mut hardware)
-            .unwrap();
-        assert_eq!(hardware.set_vga_fb_calls, 2);
-    }
-
-    #[test]
-    fn fb0_fallback_reenables_base_route_and_requires_future_latch_rearm() {
-        let mut session = session(0);
-        let mut hardware = FakeHardware::default();
-        session
-            .arm_latch_route_with_hardware(&mut hardware)
-            .unwrap();
 
         let support = session
             .activate_fb0_route_with_hardware(&mut hardware)
             .unwrap();
-        session
-            .arm_latch_route_with_hardware(&mut hardware)
-            .unwrap();
 
         assert_eq!(support, 1);
         assert_eq!(hardware.enable_calls, 1);
-        assert_eq!(hardware.set_vga_fb_calls, 2);
         assert_eq!(
             hardware.last_enable_args,
             Some((
                 session.route.mode().hact,
                 session.route.mode().vact,
-                session.route.set_vga_fb(),
+                session.route.direct_video(),
                 session.fb_width,
                 session.fb_height,
             ))
@@ -374,23 +304,16 @@ mod tests {
     }
 
     #[test]
-    fn launch_failure_recovery_reasserts_route_and_requires_latch_rearm() {
+    fn launch_failure_recovery_reasserts_only_framebuffer_geometry() {
         let mut session = session(0);
         let mut hardware = FakeHardware::default();
-        session
-            .arm_latch_route_with_hardware(&mut hardware)
-            .unwrap();
 
         let flag = session
             .recover_after_launch_failure_with_hardware(42, &mut hardware)
             .unwrap();
-        session
-            .arm_latch_route_with_hardware(&mut hardware)
-            .unwrap();
 
         assert_eq!(flag, 1);
         assert_eq!(hardware.enable_calls, 1);
-        assert_eq!(hardware.set_vga_fb_calls, 2);
         assert_eq!(session.reassert_count(), 1);
         assert_eq!(session.last_reassert_frame(), 42);
         assert!(session.route_ok());
@@ -408,7 +331,7 @@ mod tests {
             Some((
                 session.route.mode().hact,
                 session.route.mode().vact,
-                session.route.set_vga_fb(),
+                session.route.direct_video(),
                 session.fb_width,
                 session.fb_height,
             ))
@@ -416,41 +339,21 @@ mod tests {
     }
 
     #[test]
-    fn non_direct_video_never_arms_vga_route() {
-        let mut session = session_with_direct_video(0, false);
+    fn non_direct_video_route_retains_its_geometry_semantics() {
+        let session = session_with_direct_video(0, false);
         let mut hardware = FakeHardware::default();
 
-        session
-            .arm_latch_route_with_hardware(&mut hardware)
-            .unwrap();
-        session.note_latch_route_lost();
-        session
-            .arm_latch_route_with_hardware(&mut hardware)
-            .unwrap();
+        session.enable_route(&mut hardware).unwrap();
 
-        assert_eq!(hardware.set_vga_fb_calls, 0);
-    }
-
-    #[test]
-    fn failed_latch_arm_is_retried_until_success() {
-        let mut session = session(0);
-        let mut hardware = FakeHardware {
-            set_vga_fb_results: vec![Err(io::Error::other("arm failed")), Ok(())],
-            ..FakeHardware::default()
-        };
-
-        assert!(
-            session
-                .arm_latch_route_with_hardware(&mut hardware)
-                .is_err()
+        assert_eq!(
+            hardware.last_enable_args,
+            Some((
+                session.route.mode().hact,
+                session.route.mode().vact,
+                false,
+                session.fb_width,
+                session.fb_height,
+            ))
         );
-        session
-            .arm_latch_route_with_hardware(&mut hardware)
-            .unwrap();
-        session
-            .arm_latch_route_with_hardware(&mut hardware)
-            .unwrap();
-
-        assert_eq!(hardware.set_vga_fb_calls, 2);
     }
 }

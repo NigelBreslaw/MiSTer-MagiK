@@ -37,15 +37,19 @@ Production boot stays compatible with stock MiSTer:
    an empty/default Menu boot to the manifest-owned production RBF at
    the Menu boot to that layout's `fpga/menu-magik-vblank-latch.rbf`.
 5. The fork initializes HDMI/video through the normal Main path.
-6. The fork runs `mister-magik-fb early-black` after `video_init()` so Rust
-   clears and routes the launcher framebuffer before the full UI starts.
+6. The fork clears and routes the initial RGB565 launcher framebuffer through
+   `video_magik_route_black()`, using Main's complete FPGA configuration word.
 7. The fork starts the selected layout's `mister-magik-fb ui launcher 0` on
    `tty2` and enters dormant launcher mode. Rust independently derives the same
    application root from its executable location.
 
-The fork must not write the launcher framebuffer mode, route a generic 8888
-framebuffer, draw the stock menu OSD, or keep input grabbed while Slint owns the
-launcher.
+Main exclusively owns `UIO_BUT_SW`, including `CONF_VGA_FB`, composite sync,
+SoG, Direct Video, and the other framework flags. Rust may publish RGB565
+geometry and pixels through the framebuffer commands, but it must never
+reconstruct or replace that complete configuration word. Main must not draw the
+stock menu OSD or release launcher input while a supervised MagiK child exists.
+If the initial route or child spawn fails before a child exists, Main restores
+the stock Menu instead of starting MagiK with an unqualified route.
 
 Display resolution changes are Main-owned provisional transactions. Main
 suspends Slint, applies the selected HDMI or CRT/VGA timing, exports the

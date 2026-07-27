@@ -44,16 +44,16 @@ impl FramebufferPlacement {
 pub struct LauncherFramebufferRoute {
     mode: FramebufferRouteMode,
     placement: FramebufferPlacement,
-    set_vga_fb: bool,
+    direct_video: bool,
 }
 
 impl LauncherFramebufferRoute {
-    pub const fn for_scan(scan_w: u16, scan_h: u16, set_vga_fb: bool) -> Self {
-        let mode = ui_fpga_scaled_mode(scan_w, scan_h, set_vga_fb);
+    pub const fn for_scan(scan_w: u16, scan_h: u16, direct_video: bool) -> Self {
+        let mode = ui_fpga_scaled_mode(scan_w, scan_h, direct_video);
         Self {
             mode,
-            placement: ui_fpga_placement(mode, set_vga_fb),
-            set_vga_fb,
+            placement: ui_fpga_placement(mode, direct_video),
+            direct_video,
         }
     }
 
@@ -61,8 +61,8 @@ impl LauncherFramebufferRoute {
         self.mode
     }
 
-    pub const fn set_vga_fb(self) -> bool {
-        self.set_vga_fb
+    pub const fn direct_video(self) -> bool {
+        self.direct_video
     }
 
     pub const fn placement(self) -> FramebufferPlacement {
@@ -111,7 +111,7 @@ mod tests {
 
         assert_eq!(route.mode().hact, 960);
         assert_eq!(route.mode().vact, 540);
-        assert!(route.set_vga_fb());
+        assert!(route.direct_video());
     }
 
     #[test]
@@ -120,7 +120,7 @@ mod tests {
 
         assert_eq!(route.mode().hact, 1920);
         assert_eq!(route.mode().vact, 1080);
-        assert!(!route.set_vga_fb());
+        assert!(!route.direct_video());
     }
 
     #[test]

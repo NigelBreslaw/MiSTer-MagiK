@@ -726,9 +726,6 @@ fn post_probe_slot(
     {
         return Err("latch-post-unsupported".to_string());
     }
-    display_session
-        .arm_latch_route_with_hardware(hardware)
-        .map_err(|error| format!("route-arm-{}", safe_field(&error.to_string())))?;
     let settle_started = Instant::now();
     let after = wait_for_crt_post_settle(hardware, posted_sequence)
         .map_err(|error| format!("post-settle-{}", safe_field(&error.to_string())))?;

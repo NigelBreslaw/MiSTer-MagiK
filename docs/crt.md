@@ -7,6 +7,12 @@ Direct Video mux. The MagiK RBF delta remains the protocol-v2 vblank latch; it
 contains no CRT PLL, DDR scanout reader, line buffers, raster generator, or
 output-clock mux.
 
+Main is also the sole writer of the complete `UIO_BUT_SW` framework word.
+MagiK never toggles `CONF_VGA_FB` directly: doing so with a partial word would
+erase Main's composite-sync, SoG, scaler, Direct Video, audio, and HDMI flags.
+Framebuffer activation and recovery only publish RGB565 geometry and pixels;
+Main enables the mux before spawning MagiK and restores it during handoff.
+
 ## Launcher modes
 
 The maintained Main fork supports two ways to activate the shared CRT path.

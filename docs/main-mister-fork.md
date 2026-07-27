@@ -57,13 +57,19 @@ fork.
 The fork selects its application root from its executable name, then:
 
 1. Initializes video/menu-core prerequisites.
-2. Runs Rust `early-black` after `video_init()` so Rust owns the launcher
-   framebuffer mode and scan-out route.
+2. Clears and routes the initial RGB565 launcher framebuffer after
+   `video_init()`, preserving Main's complete FPGA framework configuration.
 3. Starts the matching public or development `mister-magik-fb ui launcher 0`
    on `tty2`.
 4. Enters dormant launcher mode.
 5. Polls only launcher lifecycle and explicit handoff commands while Slint owns
    the launcher UI.
+
+Main is the only writer of `UIO_BUT_SW` and the `CONF_VGA_FB` mux bit. Rust
+publishes framebuffer geometry and pixels but does not rebuild the framework
+configuration word. A route or spawn failure before the launcher child exists
+restores stock Menu input and OSD; those paths remain suppressed for the entire
+lifetime of a supervised launcher child.
 
 When the supervised launcher child exits unexpectedly, the fork records a local
 crash report under `/media/fat/mister-magik/crashes/`, updates

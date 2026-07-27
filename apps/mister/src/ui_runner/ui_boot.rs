@@ -99,12 +99,12 @@ impl UiBootFramebufferSession {
         boot_analytics::event(
             "initial_fb_enable_direct_attempt",
             format!(
-                "w={} h={} mode=fpga-scale-scan scan={}x{} set_vga_fb={}",
+                "w={} h={} mode=fpga-scale-scan scan={}x{} direct_video={}",
                 disp.width(),
                 disp.height(),
                 ui.scan_w(),
                 ui.scan_h(),
-                route.set_vga_fb()
+                route.direct_video()
             ),
         );
         let support_flag = match display_session.enable_initial(f) {
@@ -263,7 +263,7 @@ mod tests {
 
         assert_eq!(route.mode().hact, plan.scan_w);
         assert_eq!(route.mode().vact, plan.scan_h);
-        assert!(route.set_vga_fb());
+        assert!(route.direct_video());
     }
 
     #[test]
@@ -278,6 +278,6 @@ mod tests {
         assert_eq!((plan.render_w, plan.render_h), (640, 480));
         assert_eq!((plan.fb_w, plan.fb_h), (640, 576));
         assert_eq!((route.mode().hact, route.mode().vact), (640, 576));
-        assert!(route.set_vga_fb());
+        assert!(route.direct_video());
     }
 }

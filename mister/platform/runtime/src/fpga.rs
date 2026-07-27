@@ -35,7 +35,6 @@ const BIT31: u32 = 0x8000_0000;
 pub const UIO_GET_VRES: u16 = 0x23;
 pub const UIO_GET_FB_PAR: u16 = 0x40;
 pub const UIO_SET_FBUF: u16 = 0x2F;
-pub const UIO_BUT_SW: u16 = 0x01;
 pub const UIO_AUDVOL: u16 = 0x26;
 // Private Menu_MiSTer experiment commands. 0x43 is UIO_GET_F12_MOD in
 // hps_io.sv, and 0x53..0x56 are file-I/O commands, so keep this pair above
@@ -46,11 +45,6 @@ pub const MAGIK_UIO_GET_FBUF_LATCH_CAPS: u16 = mister_magik_latch_contract::GET_
 pub const MAGIK_FBUF_LATCH_MAGIC: u16 = mister_magik_latch_contract::LATCH_MAGIC;
 pub const MAGIK_FBUF_STATUS_MAGIC: u16 = mister_magik_latch_contract::STATUS_MAGIC;
 pub const MAGIK_FBUF_CAPS_MAGIC: u16 = mister_magik_latch_contract::CAPS_MAGIC;
-
-// user_io.h CONF_* flags for UIO_BUT_SW (direct_video + HPS framebuffer path).
-pub const CONF_VGA_SCALER: u16 = 0x0004;
-pub const CONF_DIRECT_VIDEO: u16 = 0x0400;
-pub const CONF_VGA_FB: u16 = 0x1000;
 
 use crate::framebuffer::format::{FB_FMT_565, FB_FMT_RXB, rgb565_stride_bytes};
 
@@ -399,17 +393,6 @@ impl Fpga {
         res
     }
 
-    /// Tail of `video_fb_enable` when `direct_video=1` — muxes HDMI to the HPS fb.
-    /// Without this, SET_FBUF writes pixels but HDMI stays on the (blank) core path.
-    pub fn set_vga_fb(&mut self, enable: bool) -> io::Result<()> {
-        let mut map = CONF_VGA_SCALER | CONF_DIRECT_VIDEO;
-        if enable {
-            map |= CONF_VGA_FB;
-        }
-        self.uio_cmd16(UIO_BUT_SW, map)?;
-        Ok(())
-    }
-
     /// Set the FPGA digital audio attenuation. This mirrors Main_MiSTer's
     /// `send_volume()` path; `0` is max volume and bit 4 would mute.
     pub fn set_audio_volume(&mut self, attenuation: u8) -> io::Result<()> {
@@ -566,7 +549,6 @@ impl Fpga {
         fb_width: u16,
         fb_height: u16,
         mode: FramebufferRouteMode,
-        set_vga_fb: bool,
     ) -> io::Result<u16> {
         let fb_addr = FB_ADDR + (FB_SIZE_PX * 4 * n) + if n == 0 { 4096 } else { 0 };
         // direct_video offsets: xoff = item[4] - FB_DV_LBRD, yoff = item[8] - FB_DV_UBRD.
@@ -617,11 +599,6 @@ impl Fpga {
         })();
         self.disable_io();
         stream_res?;
-        // MiSTer only toggles this mux when cfg.direct_video is enabled. In
-        // normal HDMI mode, SET_FBUF alone is the Main_MiSTer path.
-        if set_vga_fb {
-            self.set_vga_fb(true)?;
-        }
         Ok(flag)
     }
 
@@ -636,7 +613,6 @@ impl Fpga {
             fb_width as u16,
             fb_height as u16,
             route.placement(),
-            route.set_vga_fb(),
         )
     }
 
@@ -646,7 +622,6 @@ impl Fpga {
         fb_width: u16,
         fb_height: u16,
         placement: FramebufferPlacement,
-        set_vga_fb: bool,
     ) -> io::Result<u16> {
         let mode = FramebufferRouteMode {
             hact: placement.width,
@@ -654,7 +629,7 @@ impl Fpga {
             vact: placement.height,
             vbp: placement.top.saturating_add(FB_DV_UBRD as u16),
         };
-        self.fb_enable_rgb565(n, fb_width, fb_height, mode, set_vga_fb)
+        self.fb_enable_rgb565(n, fb_width, fb_height, mode)
     }
 }
 
@@ -836,7 +811,7 @@ mod tests {
     fn framebuffer_commands_emit_complete_bounded_payloads() {
         let mode = FramebufferRouteMode::framebuffer_sized(960, 540);
         let (mut fpga, state) = scripted(&[(0x44, 0); 13]);
-        let support = fpga.fb_enable_rgb565(0, 960, 540, mode, true).unwrap();
+        let support = fpga.fb_enable_rgb565(0, 960, 540, mode).unwrap();
         assert_eq!(support, 0x44);
         let words = words_from_writes(&state.borrow().writes);
         assert!(words.starts_with(&[
@@ -847,10 +822,8 @@ mod tests {
             960,
             540,
         ]));
-        assert!(words.ends_with(&[
-            UIO_BUT_SW,
-            CONF_VGA_SCALER | CONF_DIRECT_VIDEO | CONF_VGA_FB
-        ]));
+        assert_eq!(words.len(), 11);
+        assert_eq!(*words.last().unwrap(), rgb565_stride_bytes(960) as u16);
         assert_eq!(fpga.gpo & IO_EN, 0);
 
         let geometry = LatchedFbufGeometry::new(960, mode, 1);
