@@ -174,7 +174,7 @@ pub(super) fn run_crt_trial_loop(
     secs: u64,
     ui: &UiDisplay,
     hardware: &mut Fpga,
-    display_session: &mut LauncherDisplaySession,
+    _display_session: &mut LauncherDisplaySession,
 ) {
     let mode = ui.output_route();
     if secs != CRT_TRIAL_SECS || !mode.is_crt() {
