@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Nigel Breslaw
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Apply and structurally verify the latch-only Menu integration patch."""
+"""Apply and verify the production bridge integration against pinned Menu."""
 
 from __future__ import annotations
 
@@ -17,7 +17,61 @@ from pathlib import Path
 COMMAND_PATTERNS = {
     "0x57": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')57", re.I),
     "0x58": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')58", re.I),
+    "0x59": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')59", re.I),
 }
+
+BRIDGE_MAPPING = """mister_magik_latch_sys_top_bridge magik_latch_bridge
+(
+\t.clk_sys(clk_sys),
+\t.hdmi_vbl(hdmi_vbl),
+\t.io_uio(io_uio),
+\t.io_strobe(io_strobe),
+\t.io_din(io_din),
+\t.active_lfb_en(LFB_EN),
+\t.active_lfb_base(LFB_BASE),
+\t.active_lfb_width(LFB_WIDTH),
+\t.active_lfb_height(LFB_HEIGHT),
+\t.active_lfb_stride(LFB_STRIDE),
+\t.response_valid(magik_response_valid),
+\t.response_data(magik_response_data),
+\t.apply(),
+\t.apply_accepted(magik_lfb_apply_accepted),
+\t.legacy_write(),
+\t.active_word_index(),
+\t.route_en(magik_lfb_en),
+\t.route_flt(magik_lfb_flt),
+\t.route_fmt(magik_lfb_fmt),
+\t.route_width(magik_lfb_width),
+\t.route_height(magik_lfb_height),
+\t.route_hmin(magik_lfb_hmin),
+\t.route_hmax(magik_lfb_hmax),
+\t.route_vmin(magik_lfb_vmin),
+\t.route_vmax(magik_lfb_vmax),
+\t.route_base(magik_lfb_base),
+\t.route_stride(magik_lfb_stride),
+\t.pending(magik_lfb_pending),
+\t.pending_seq(magik_lfb_pending_seq),
+\t.active_seq(magik_lfb_active_seq),
+\t.post_count(magik_lfb_post_count),
+\t.flip_count(magik_lfb_flip_count),
+\t.drop_count(magik_lfb_drop_count),
+\t.reject_count(magik_lfb_reject_count),
+\t.active_route_epoch(magik_lfb_active_route_epoch)
+);"""
+
+APPLY_BUNDLE = """if(magik_lfb_apply_accepted) begin
+\t\tLFB_EN     <= magik_lfb_en;
+\t\tLFB_FLT    <= magik_lfb_flt;
+\t\tLFB_FMT    <= magik_lfb_fmt;
+\t\tLFB_WIDTH  <= magik_lfb_width;
+\t\tLFB_HEIGHT <= magik_lfb_height;
+\t\tLFB_HMIN   <= magik_lfb_hmin;
+\t\tLFB_HMAX   <= magik_lfb_hmax;
+\t\tLFB_VMIN   <= magik_lfb_vmin;
+\t\tLFB_VMAX   <= magik_lfb_vmax;
+\t\tLFB_BASE   <= magik_lfb_base;
+\t\tLFB_STRIDE <= magik_lfb_stride;
+\tend"""
 
 
 def fail(message: str) -> None:
@@ -33,14 +87,18 @@ def qualified_menu_commit(root: Path) -> str:
         fail(f"cannot read qualified Menu source revision {pin}: {error}")
     if not re.fullmatch(r"[0-9a-f]{40}\n?", contents):
         fail(f"invalid qualified Menu source revision in {pin}: {contents!r}")
-    commit = contents.rstrip("\n")
-    return commit
+    return contents.rstrip("\n")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("menu_dir", type=Path)
     parser.add_argument("--allow-unpinned", action="store_true")
+    parser.add_argument(
+        "--simulate",
+        action="store_true",
+        help="drive the exact production command/strobe bridge and latch RTL",
+    )
     args = parser.parse_args()
 
     root = Path(__file__).resolve().parents[2]
@@ -71,36 +129,75 @@ def main() -> None:
     if conflicts:
         fail("upstream opcode conflict: " + "; ".join(conflicts))
 
-    patch = root / "mister/platform/fpga/menu-vblank-latch/Menu_MiSTer-vblank-latched-fbuf.patch"
-    rtl = root / "mister/platform/fpga/menu-vblank-latch/mister_magik_vblank_latch.sv"
-    protocol = root / "mister/platform/fpga/menu-vblank-latch/mister_magik_latch_protocol.svh"
+    source_dir = root / "mister/platform/fpga/menu-vblank-latch"
+    patch = source_dir / "Menu_MiSTer-vblank-latched-fbuf.patch"
+    rtl = source_dir / "mister_magik_vblank_latch.sv"
+    bridge = source_dir / "mister_magik_latch_sys_top_bridge.sv"
+    protocol = source_dir / "mister_magik_latch_protocol.svh"
+    integration_tb = source_dir / "tb_mister_magik_sys_top_integration.sv"
     with tempfile.TemporaryDirectory(prefix="mister-magik-fpga-integration-") as temporary:
         work = Path(temporary) / "Menu_MiSTer"
         shutil.copytree(menu, work, ignore=shutil.ignore_patterns(".git", "db", "output_files"))
         subprocess.run(["git", "apply", "--check", str(patch)], cwd=work, check=True)
         subprocess.run(["git", "apply", str(patch)], cwd=work, check=True)
-        shutil.copy2(rtl, work / "sys/mister_magik_vblank_latch.sv")
-        shutil.copy2(protocol, work / "sys/mister_magik_latch_protocol.svh")
+        for source in (rtl, bridge, protocol):
+            shutil.copy2(source, work / "sys" / source.name)
         with (work / "menu.qsf").open("a") as output:
-            output.write("\nset_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_vblank_latch.sv\n")
+            output.write(
+                "\nset_global_assignment -name SYSTEMVERILOG_FILE "
+                "sys/mister_magik_vblank_latch.sv\n"
+                "set_global_assignment -name SYSTEMVERILOG_FILE "
+                "sys/mister_magik_latch_sys_top_bridge.sv\n"
+            )
 
         patched = (work / "sys/sys_top.v").read_text()
-        required = (
-            "mister_magik_vblank_latch magik_vblank_latch",
-            ".cmd_start(io_uio && io_strobe && !has_cmd)",
-            ".cmd_data(io_uio && io_strobe && has_cmd)",
-            "if(magik_lfb_apply)",
-            "if(magik_response_valid) io_dout_sys <= magik_response_data;",
-        )
-        missing = [fragment for fragment in required if fragment not in patched]
-        if missing:
-            fail("patched integration is missing: " + ", ".join(missing))
-        qsf_text = (work / "menu.qsf").read_text()
-        assignment = "SYSTEMVERILOG_FILE sys/mister_magik_vblank_latch.sv"
-        if qsf_text.count(assignment) != 1:
-            fail("generated QSF must contain exactly one latch RTL assignment")
+        required_counts = {
+            BRIDGE_MAPPING: 1,
+            APPLY_BUNDLE: 1,
+            "if(magik_response_valid) io_dout_sys <= magik_response_data;": 2,
+        }
+        mismatches = [
+            f"{fragment.splitlines()[0]!r} expected {expected}, found {patched.count(fragment)}"
+            for fragment, expected in required_counts.items()
+            if patched.count(fragment) != expected
+        ]
+        if mismatches:
+            fail("patched production bridge binding mismatch: " + "; ".join(mismatches))
 
-    print(f"COVER LATCH-009 pinned Menu integration and opcode ownership ({commit})")
+        qsf_text = (work / "menu.qsf").read_text()
+        assignments = (
+            "SYSTEMVERILOG_FILE sys/mister_magik_vblank_latch.sv",
+            "SYSTEMVERILOG_FILE sys/mister_magik_latch_sys_top_bridge.sv",
+        )
+        bad_assignments = [
+            assignment for assignment in assignments if qsf_text.count(assignment) != 1
+        ]
+        if bad_assignments:
+            fail("generated QSF assignment mismatch: " + ", ".join(bad_assignments))
+
+        if args.simulate:
+            simulation = Path(temporary) / "sys-top-integration.vvp"
+            subprocess.run(
+                [
+                    "iverilog",
+                    "-g2012",
+                    "-Wall",
+                    "-Wimplicit",
+                    "-I",
+                    str(source_dir),
+                    "-s",
+                    "tb_mister_magik_sys_top_integration",
+                    "-o",
+                    str(simulation),
+                    str(rtl),
+                    str(bridge),
+                    str(integration_tb),
+                ],
+                check=True,
+            )
+            subprocess.run(["vvp", str(simulation)], check=True)
+
+    print(f"COVER LATCH-009 pinned Menu production bridge and opcode ownership ({commit})")
     print("FPGA latch integration check passed")
 
 

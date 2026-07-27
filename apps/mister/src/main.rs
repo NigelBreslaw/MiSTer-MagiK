@@ -1439,17 +1439,60 @@ fn run_fpga_latch_report() {
             std::process::exit(1);
         }
     };
+    let negotiated_caps = match fpga.read_magik_latched_fbuf_capabilities() {
+        Ok(caps) => caps,
+        Err(e) => {
+            crate::ui_logln!(
+                "fpga_latch_caps_tsv\tcmd=0x{:02x}\tsupported=0\tproduction_ready=0\tmagic_expected=0x{:04x}\terror={e}",
+                fpga::MAGIK_UIO_GET_FBUF_LATCH_CAPS,
+                fpga::MAGIK_FBUF_CAPS_MAGIC
+            );
+            std::process::exit(1);
+        }
+    };
+    let negotiated_profile_ready = (negotiated_caps.0 == fpga::MAGIK_FBUF_CAPS_MAGIC
+        || negotiated_caps.1 == fpga::MAGIK_FBUF_CAPS_MAGIC)
+        && negotiated_caps.2.production_ready();
+    if !negotiated_profile_ready {
+        crate::ui_logln!(
+            "fpga_latch_caps_tsv\tcmd=0x{:02x}\tsupported={}\tproduction_ready=0\tmagic_expected=0x{:04x}\tack_high=0x{:04x}\tack_low=0x{:04x}\tprotocol_version={}\tflags=0x{:04x}\tmax_width={}\tmax_height={}\tmax_stride_bytes={}",
+            fpga::MAGIK_UIO_GET_FBUF_LATCH_CAPS,
+            bool_tsv(
+                negotiated_caps.0 == fpga::MAGIK_FBUF_CAPS_MAGIC
+                    || negotiated_caps.1 == fpga::MAGIK_FBUF_CAPS_MAGIC
+            ),
+            fpga::MAGIK_FBUF_CAPS_MAGIC,
+            negotiated_caps.0,
+            negotiated_caps.1,
+            negotiated_caps.2.protocol_version,
+            negotiated_caps.2.flags,
+            negotiated_caps.2.max_width,
+            negotiated_caps.2.max_height,
+            negotiated_caps.2.max_stride_bytes
+        );
+        std::process::exit(1);
+    }
 
-    let set_probe = match fpga.probe_magik_latched_fbuf_set() {
-        Ok((hi, lo)) => (hi, lo, String::new()),
-        Err(e) => (0, 0, e.to_string()),
+    let set_probe = match negotiated_caps.2.protocol {
+        mister_magik_latch_contract::LatchProtocol::V2 => {
+            match fpga.probe_magik_latched_fbuf_set() {
+                Ok((hi, lo)) => (hi, lo, String::new(), "wire"),
+                Err(e) => (0, 0, e.to_string(), "wire"),
+            }
+        }
+        mister_magik_latch_contract::LatchProtocol::V3 => (0, 0, String::new(), "capabilities"),
     };
     let set_supported =
-        set_probe.0 == MAGIK_FBUF_LATCH_MAGIC || set_probe.1 == MAGIK_FBUF_LATCH_MAGIC;
+        if negotiated_caps.2.protocol == mister_magik_latch_contract::LatchProtocol::V3 {
+            negotiated_profile_ready
+        } else {
+            set_probe.0 == MAGIK_FBUF_LATCH_MAGIC || set_probe.1 == MAGIK_FBUF_LATCH_MAGIC
+        };
     crate::ui_logln!(
-        "fpga_latch_set_probe_tsv\tcmd=0x{:02x}\tsupported={}\tmagic_expected=0x{:04x}\tack_high=0x{:04x}\tack_low=0x{:04x}\terror={}",
+        "fpga_latch_set_probe_tsv\tcmd=0x{:02x}\tsupported={}\tsource={}\tmagic_expected=0x{:04x}\tack_high=0x{:04x}\tack_low=0x{:04x}\terror={}",
         fpga::MAGIK_UIO_SET_FBUF_LATCH,
         bool_tsv(set_supported),
+        set_probe.3,
         MAGIK_FBUF_LATCH_MAGIC,
         set_probe.0,
         set_probe.1,
@@ -1491,17 +1534,7 @@ fn run_fpga_latch_report() {
         status.active_stride
     );
 
-    let (caps_hi, caps_lo, caps) = match fpga.read_magik_latched_fbuf_capabilities() {
-        Ok(caps) => caps,
-        Err(e) => {
-            crate::ui_logln!(
-                "fpga_latch_caps_tsv\tcmd=0x{:02x}\tsupported=0\tproduction_ready=0\tmagic_expected=0x{:04x}\terror={e}",
-                fpga::MAGIK_UIO_GET_FBUF_LATCH_CAPS,
-                fpga::MAGIK_FBUF_CAPS_MAGIC
-            );
-            std::process::exit(1);
-        }
-    };
+    let (caps_hi, caps_lo, caps) = negotiated_caps;
     let caps_supported =
         caps_hi == fpga::MAGIK_FBUF_CAPS_MAGIC || caps_lo == fpga::MAGIK_FBUF_CAPS_MAGIC;
     crate::ui_logln!(
@@ -1524,9 +1557,34 @@ fn run_fpga_latch_report() {
 }
 
 #[cfg(all(feature = "diagnostics", feature = "ui"))]
+fn require_diagnostic_latch_capabilities(
+    fpga: &mut Fpga,
+    command: &str,
+) -> mister_magik_latch_contract::LatchCapabilities {
+    let (magic_hi, magic_lo, capabilities) = fpga
+        .read_magik_latched_fbuf_capabilities()
+        .unwrap_or_else(|error| {
+            crate::ui_errln!("{command}_failed\tstage=capabilities\terror={error}");
+            std::process::exit(1);
+        });
+    let supported =
+        magic_hi == fpga::MAGIK_FBUF_CAPS_MAGIC || magic_lo == fpga::MAGIK_FBUF_CAPS_MAGIC;
+    if !supported || !capabilities.production_ready() {
+        crate::ui_errln!(
+            "{command}_failed\tstage=capabilities\tmagic=0x{magic_hi:04x}/0x{magic_lo:04x}\tprotocol={}\tflags=0x{:04x}",
+            capabilities.protocol_version,
+            capabilities.flags
+        );
+        std::process::exit(1);
+    }
+    capabilities
+}
+
+#[cfg(all(feature = "diagnostics", feature = "ui"))]
 fn run_fpga_latch_post_report(fpga: &mut Fpga) {
     use slint::platform::software_renderer::Rgb565Pixel;
 
+    let _capabilities = require_diagnostic_latch_capabilities(fpga, "fpga_latch_post_report");
     let width = 960usize;
     let height = 540usize;
     let stride_bytes = rgb565_stride_bytes(width);
@@ -1619,6 +1677,7 @@ fn run_fpga_latch_post_report(fpga: &mut Fpga) {
 fn run_fpga_latch_pattern(fpga: &mut Fpga) {
     use slint::platform::software_renderer::Rgb565Pixel;
 
+    let _capabilities = require_diagnostic_latch_capabilities(fpga, "fpga_latch_pattern");
     let frames = std::env::var("MISTER_FPGA_LATCH_PATTERN_FRAMES")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())

@@ -11,6 +11,135 @@ use std::path::Path;
 pub const REPORT_PATH: &str = "/tmp/mister-magik/latch-readiness.json";
 pub const RUNTIME_FAILURE_PATH: &str = "/tmp/mister-magik/latch-failure.json";
 
+pub const MAX_LATCH_WIRE_WORDS: usize = 14;
+pub const MAX_LATCH_WIRE_ATTEMPTS: usize = 6;
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LatchWireErrorPhase {
+    #[default]
+    None,
+    AckHigh,
+    AckLow,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LatchWireResult {
+    #[default]
+    Empty,
+    Decoded,
+    TransportError,
+    DecodeError,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LatchWireDecision {
+    #[default]
+    None,
+    Decoded,
+    ReadFailed,
+    TransportRetryRecovered,
+    TransportRetryFailed,
+    Corroborated,
+    Rejected,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LatchWireWord {
+    pub index: u8,
+    pub transmitted: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ack_high: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ack_low: Option<u16>,
+    #[serde(default)]
+    pub error_phase: LatchWireErrorPhase,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LatchWireAttempt {
+    pub command: u16,
+    pub elapsed_us: u64,
+    pub command_word: LatchWireWord,
+    pub response_words: [LatchWireWord; MAX_LATCH_WIRE_WORDS],
+    pub response_word_count: u8,
+    pub result: LatchWireResult,
+}
+
+impl Default for LatchWireAttempt {
+    fn default() -> Self {
+        Self {
+            command: 0,
+            elapsed_us: 0,
+            command_word: LatchWireWord::default(),
+            response_words: [LatchWireWord::default(); MAX_LATCH_WIRE_WORDS],
+            response_word_count: 0,
+            result: LatchWireResult::Empty,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LatchWireDiagnostics {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol_version: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability_flags: Option<u16>,
+    pub attempts: [LatchWireAttempt; MAX_LATCH_WIRE_ATTEMPTS],
+    pub attempt_count: u8,
+    #[serde(default)]
+    pub decision: LatchWireDecision,
+    #[serde(default)]
+    pub suppressed_similar_episodes: u32,
+}
+
+impl Default for LatchWireDiagnostics {
+    fn default() -> Self {
+        Self {
+            protocol_version: None,
+            capability_flags: None,
+            attempts: [LatchWireAttempt::default(); MAX_LATCH_WIRE_ATTEMPTS],
+            attempt_count: 0,
+            decision: LatchWireDecision::None,
+            suppressed_similar_episodes: 0,
+        }
+    }
+}
+
+impl LatchWireDiagnostics {
+    pub fn push_attempt(&mut self, attempt: LatchWireAttempt) {
+        let index = usize::from(self.attempt_count);
+        if index < MAX_LATCH_WIRE_ATTEMPTS {
+            self.attempts[index] = attempt;
+            self.attempt_count += 1;
+        } else {
+            self.suppressed_similar_episodes = self.suppressed_similar_episodes.saturating_add(1);
+        }
+    }
+
+    pub fn append(&mut self, other: &Self) {
+        if self.protocol_version.is_none() {
+            self.protocol_version = other.protocol_version;
+        }
+        if self.capability_flags.is_none() {
+            self.capability_flags = other.capability_flags;
+        }
+        for attempt in other
+            .attempts
+            .iter()
+            .take(usize::from(other.attempt_count))
+            .copied()
+        {
+            self.push_attempt(attempt);
+        }
+        self.suppressed_similar_episodes = self
+            .suppressed_similar_episodes
+            .saturating_add(other.suppressed_similar_episodes);
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum LatchReadinessState {
@@ -99,6 +228,8 @@ pub struct LatchFailure {
     pub stage: LatchFailureStage,
     pub reason: LatchFailureReason,
     pub detail: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wire_diagnostics: Option<LatchWireDiagnostics>,
 }
 
 impl LatchFailure {
@@ -112,6 +243,7 @@ impl LatchFailure {
             stage,
             reason,
             detail: detail.into(),
+            wire_diagnostics: None,
         }
     }
 
@@ -125,7 +257,13 @@ impl LatchFailure {
             stage,
             reason,
             detail: detail.into(),
+            wire_diagnostics: None,
         }
+    }
+
+    pub fn with_wire_diagnostics(mut self, diagnostics: LatchWireDiagnostics) -> Self {
+        self.wire_diagnostics = Some(diagnostics);
+        self
     }
 
     pub const fn reason_code(&self) -> &'static str {
@@ -195,12 +333,20 @@ pub struct LatchFailureEvidence {
     pub latest_result: String,
     #[serde(default)]
     pub recovery_state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_wire_diagnostics: Option<LatchWireDiagnostics>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wire_diagnostics: Option<LatchWireDiagnostics>,
 }
 
 impl From<&LatchFailure> for LatchFailureEvidence {
     fn from(failure: &LatchFailure) -> Self {
         Self {
-            schema: "mister-magik-latch-failure-v1",
+            schema: if failure.wire_diagnostics.is_some() {
+                "mister-magik-latch-failure-v3"
+            } else {
+                "mister-magik-latch-failure-v1"
+            },
             state: failure.state.code().to_string(),
             stage: failure.stage.code().to_string(),
             reason: failure.reason_code().to_string(),
@@ -212,6 +358,8 @@ impl From<&LatchFailure> for LatchFailureEvidence {
             attempt_count: 0,
             latest_result: "not-attempted".to_string(),
             recovery_state: "compatibility-prompt".to_string(),
+            first_wire_diagnostics: failure.wire_diagnostics.clone(),
+            wire_diagnostics: failure.wire_diagnostics.clone(),
         }
     }
 }
@@ -225,7 +373,11 @@ impl LatchFailureEvidence {
         recovery_state: impl Into<String>,
     ) -> Self {
         Self {
-            schema: "mister-magik-latch-failure-v2",
+            schema: if latest.wire_diagnostics.is_some() || first.wire_diagnostics.is_some() {
+                "mister-magik-latch-failure-v3"
+            } else {
+                "mister-magik-latch-failure-v2"
+            },
             state: first.state.code().to_string(),
             stage: first.stage.code().to_string(),
             reason: first.reason_code().to_string(),
@@ -237,6 +389,8 @@ impl LatchFailureEvidence {
             attempt_count,
             latest_result: latest_result.into(),
             recovery_state: recovery_state.into(),
+            first_wire_diagnostics: first.wire_diagnostics.clone(),
+            wire_diagnostics: latest.wire_diagnostics.clone(),
         }
     }
 
@@ -533,5 +687,54 @@ mod tests {
                 .exists()
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn wire_diagnostics_round_trip_without_losing_ack_phases() {
+        let diagnostics = LatchWireDiagnostics {
+            protocol_version: Some(2),
+            capability_flags: Some(7),
+            attempts: [LatchWireAttempt {
+                command: 0x58,
+                elapsed_us: 42,
+                command_word: LatchWireWord {
+                    index: 0,
+                    transmitted: 0x58,
+                    ack_high: Some(0x4d48),
+                    ack_low: Some(0),
+                    error_phase: LatchWireErrorPhase::None,
+                },
+                response_words: {
+                    let mut words = [LatchWireWord::default(); MAX_LATCH_WIRE_WORDS];
+                    words[0] = LatchWireWord {
+                        index: 0,
+                        transmitted: 0,
+                        ack_high: Some(0),
+                        ack_low: Some(0x1234),
+                        error_phase: LatchWireErrorPhase::None,
+                    };
+                    words
+                },
+                response_word_count: 1,
+                result: LatchWireResult::Decoded,
+            }; MAX_LATCH_WIRE_ATTEMPTS],
+            attempt_count: 1,
+            decision: LatchWireDecision::Corroborated,
+            suppressed_similar_episodes: 3,
+        };
+        let failure = LatchFailure::runtime(
+            LatchFailureStage::FpgaStatus,
+            LatchFailureReason::ActiveGeometryMismatch,
+            "diagnostic fixture",
+        )
+        .with_wire_diagnostics(diagnostics.clone());
+        let evidence = LatchFailureEvidence::from(&failure);
+        assert_eq!(evidence.schema, "mister-magik-latch-failure-v3");
+        let encoded = serde_json::to_vec(&evidence).unwrap();
+        assert!(encoded.len() < 32 * 1024);
+        let decoded: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+        let decoded_diagnostics: LatchWireDiagnostics =
+            serde_json::from_value(decoded["wire_diagnostics"].clone()).unwrap();
+        assert_eq!(decoded_diagnostics, diagnostics);
     }
 }

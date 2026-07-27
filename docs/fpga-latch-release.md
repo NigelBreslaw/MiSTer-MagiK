@@ -1,109 +1,110 @@
-# FPGA vblank latch release requirements
+# FPGA latch-v3 release requirements
 
 The latch is a production subsystem. Its source lives under
 `mister/platform/fpga/menu-vblank-latch/`, and its installed RBF lives under
 `/media/fat/mister-magik/fpga/`. Root `/media/fat/menu.rbf` is stock firmware
-owned by `update_all`. Every new RBF hash, including the Menu `20260603` port,
-must complete this qualification before platform-manifest activation.
+owned by `update_all`. Every new RBF hash must complete this qualification
+before platform-manifest activation.
 
-This document defines the commercial-release contract for the small Menu FPGA
-delta used by MiSTer MagiK. Its scope is only the `0x57` set command, the `0x58`
-status command, the `0x59` capability command, and the vblank-latched
-framebuffer route. The retired scanout mailbox, command `0x5a`, AXI/ACP access,
-DMA ownership, and completion
-fences are not part of this design or its qualification.
+The production scope is commands `0x57` SET, `0x58` GET, and `0x59` CAPS plus
+the vblank-latched framebuffer route. The retired scanout mailbox, command
+`0x5a`, AXI/ACP access, DMA ownership, and completion fences are not part of
+this design.
 
 ## Behavioral requirements
 
-- **LATCH-001 — command discovery.** Starting commands `0x57`, `0x58`, and
-  `0x59` return `0x4d47`, `0x4d48`, and `0x4d49` respectively. Other commands
-  are unaffected.
-- **LATCH-002 — route staging.** `0x57` words 0–9 stage enable/filter/format,
-  base, width, height, horizontal and vertical bounds, and stride. Staging these
-  words must not change the active framebuffer route or create a pending post.
-- **LATCH-003 — post commit.** Word 10 supplies the 16-bit sequence, marks the
-  staged route pending, and increments the 16-bit post counter.
-- **LATCH-004 — vblank application.** A pending route is applied atomically on
-  the next rising edge from the synchronized `hdmi_vbl` signal, and never on a
-  falling edge or outside vblank. Application copies every staged route field,
-  makes the pending sequence active, increments the 16-bit flip counter, and
-  clears pending.
-- **LATCH-005 — pending replacement.** If word 10 commits while a request is
-  already pending, the newly staged request replaces it, the post counter still
-  increments, and the 16-bit drop counter increments once. The next eligible
-  vblank applies the replacement request.
-- **LATCH-006 — status layout.** `0x58` words 0–10 return, respectively: active
-  sequence; pending sequence; `{13'b0, pending, pending_enable, active_enable}`;
-  flip count; post count; drop count; active base low; active base high; active
-  width; active height; and active stride.
-- **LATCH-007 — initialization.** All MagiK staging, sequence, counter, pending,
-  and vblank-synchronizer registers power up to zero. The delta has no runtime
-  reset interface and must not add one implicitly.
-- **LATCH-008 — finite-width behavior.** Sequences are opaque 16-bit values.
-  Post, flip, and drop counters wrap modulo 65,536; wrapping must not alter
-  pending or route behavior.
-- **LATCH-009 — compatibility.** Stock `UIO_SET_FBUF` behavior and all unrelated
-  Menu commands remain unchanged. The latch remains compatible with the
-  hidden-slot renderer and its `/dev/fb0` fallback.
-- **LATCH-010 — qualified capabilities.** `0x59` reports protocol version 2,
-  RGB565/double-buffer/variable-geometry flags, and maximum geometry 1366x768
-  with a 2736-byte stride.
+- **LATCH-V3-001 — discovery and capabilities.** The commands retain magic
+  `0x4d47`, `0x4d48`, and `0x4d49`. CAPS advertises exact protocol 3, flags
+  `0x007f`, limits 1366x768/2736, and a valid CRC.
+- **LATCH-V3-002 — isolated receive staging.** SET words 0–10 enter a private
+  receive bundle. Partial, duplicate, shifted, reordered, restarted, and
+  post-close transactions cannot alter committed pending or active state.
+- **LATCH-V3-003 — CRC commit.** SET word 11 is the sole commit point. It
+  commits only a complete ordered mask with valid CRC and increments post count
+  once.
+- **LATCH-V3-004 — semantic validation.** Enabled routes require RGB565+RXB,
+  legal mode bits, aligned nonzero base, bounded geometry/stride, ordered
+  destination bounds, and non-wrapping widened address arithmetic. Disabled
+  routes are canonical all-zero bundles apart from the opaque sequence.
+- **LATCH-V3-005 — accepted vblank application.** A committed route applies
+  only on synchronized rising vblank and explicit `apply_accepted` feedback.
+  Preempted applies remain pending.
+- **LATCH-V3-006 — replacement arbitration.** Pending replacement increments
+  drop once. If old apply and new commit coincide, old applies, new remains
+  pending, and no replacement drop is counted.
+- **LATCH-V3-007 — coherent status.** GET snapshots all thirteen non-CRC words
+  at command start and returns one coherent snapshot plus CRC despite apply or
+  legacy activity during the read.
+- **LATCH-V3-008 — active ownership.** Authoritative legacy Main `LFB_*` writes
+  win same-edge arbitration, clear MagiK ownership/active sequence, and advance
+  route epoch. Accepted MagiK applies restore ownership and advance epoch.
+- **LATCH-V3-009 — rejection evidence.** A malformed transaction increments
+  reject count once and publishes its four-bit reason without changing pending
+  state.
+- **LATCH-V3-010 — finite-width behavior.** Sequences are opaque 16-bit values.
+  Post, flip, drop, reject, and epoch counters wrap modulo 65,536 without
+  changing arbitration.
+- **LATCH-V3-011 — transition compatibility.** New runtime may negotiate the
+  frozen protocol-v2 RBF for interrupted upgrades and rollback. It never
+  downgrades malformed v3 traffic. Every newly built FPGA release is v3.
+- **LATCH-V3-012 — production integration.** The simulated command/strobe
+  bridge is the exact SystemVerilog module copied into the RBF. All three
+  opcodes are checked for upstream conflicts and the complete `sys_top` apply
+  bundle is structurally verified.
 
 ## Requirement-to-test matrix
 
-These are release gates. A row is not satisfied merely because a test is named;
-the retained result must identify the exact source and RBF hashes under test.
+Retained results must identify the exact source, component, RBF, and report
+hashes under test.
 
-| Requirement | RTL simulation / assertion | Integration or hardware evidence |
+| Requirement | Deterministic gate | Hardware evidence |
 | --- | --- | --- |
-| LATCH-001 | All three magic values; unrelated opcode has no latch response | Passive `fpga-latch-report` reports all three commands supported |
-| LATCH-002 | Exercise every word and prove no early pending/apply | Posted geometry and active route match |
-| LATCH-003 | Sequence commit, pending, and post-count checks | Post counter advances during launcher motion |
-| LATCH-004 | Rising/falling/no-edge cases; atomic-route assertion | Flip counter advances with zero visual/alternation misses |
-| LATCH-005 | Two posts before vblank; replacement and one drop | Deliberate over-post increments drop once, then recovers |
-| LATCH-006 | Exact readback for all eleven status words | Passive report agrees with active route and counters |
-| LATCH-007 | Power-up state and bounded startup checks | Cold boot and RBF reload start safely |
-| LATCH-008 | Sequence and all counter wrap cases | Long soak shows continued counter progress |
-| LATCH-009 | Patch integration, opcode collision check, stock comparison | Lifecycle tests and clean `/dev/fb0` fallback |
-| LATCH-010 | Exact five-word capability response | Passive report matches the kernel ABI v3 maximum |
+| LATCH-V3-001 | Exact CAPS payload and golden CRC | Passive report shows exact v3 profile |
+| LATCH-V3-002/003 | Vblank after every SET word; corrupt every word/CRC | No partial active geometry or pending corruption |
+| LATCH-V3-004 | Every semantic rejection and canonical disabled route | Deliberate invalid posts reject once and recover |
+| LATCH-V3-005/006 | Apply/commit, apply/reject, replacement, falling/no-edge cases | Flip/post/drop deltas match reference behavior |
+| LATCH-V3-007 | Route change after every GET word; snapshot CRC | Status agrees with authoritative active route |
+| LATCH-V3-008 | Same-edge legacy collision and MagiK return | Ownership, sequence, epoch, and `LFB_*` stay consistent |
+| LATCH-V3-009/010 | Reject and every counter/sequence wrap | Soak has no unexpected reject/drop delta |
+| LATCH-V3-011 | Rust v2/v3 negotiation and CRC/no-downgrade regressions | v2 rollback works; old-runtime/v3 pairing rejects safely |
+| LATCH-V3-012 | Direct RTL and production-bridge simulation | Stock comparison, lifecycle, and rollback |
 
-## Custom-delta release signoff
+## Candidate and custom-delta gates
 
-A release candidate is eligible only when all of the following are retained:
+A candidate is eligible only when all of the following are retained:
 
-1. The exact MagiK commit, pinned upstream Menu commit, latch patch hash,
-   Quartus 17.0 build identity and seed, RBF SHA-256, and report hashes.
-2. Passing self-checking RTL tests for every requirement above, complete
-   reachable line/branch and functional-point coverage, and reviewed assertions
-   for vblank-only and atomic application behavior.
-3. A stock-versus-patched Quartus comparison made with identical inputs. The
-   patch may add no warning, unconstrained endpoint, inferred latch, negative
-   slack, non-zero TNS, or unreviewed CDC finding. The two-stage vblank
-   synchronizer must be recognized and have a documented MTBF disposition.
-4. Hardware qualification tied to the candidate RBF hash: both command magic
-   values, advancing post/flip counters, zero unexpected drops, supported video
-   geometries, lifecycle and fallback cases, deliberate-overflow recovery, a
-   two-hour soak, and physical HDMI inspection. Qualification on only one MiSTer
-   remains single-unit qualification; commercial signoff requires a second
-   representative MiSTer/display combination.
-5. Independent review of the custom RTL, Menu integration, constraints, waiver
-   ledger, and retained evidence, plus a tested stock-RBF rollback.
+1. Merged MagiK commit, pinned Menu commit, FPGA component ID, protocol version
+   and hash, patch/RTL/bridge hashes, Quartus 17.0 identity/seed, RBF hash,
+   immutable workflow URL, and every report hash.
+2. Deterministic contract generation, direct RTL simulation, production-bridge
+   integration simulation, warning-clean lint, complete reachable line/branch
+   coverage, and explicit functional coverpoints.
+3. A stock-versus-patched Quartus comparison with identical source, toolchain,
+   settings, and seed. The patch adds no warning, inferred latch, unconstrained
+   endpoint, negative slack, nonzero TNS, or unreviewed CDC finding.
+4. Hardware evidence bound to the candidate: 20 cold starts, 100 launcher
+   first-use restarts, 100 Main-mediated RBF reload/returns, 50 core
+   handoff/returns, at least 10,000 posts under load, deliberate replacement
+   and corruption, HDMI 720p/1080p, CRT 240p/288p/480p/576p, a two-hour primary
+   soak, and a second-unit/display matrix.
+5. Zero unexpected reject/drop increments, CRC or malformed-status errors,
+   persistent latch episodes, crashes, or reboots. Physical sink observation
+   remains mandatory; framebuffer content alone is insufficient.
+6. New runtime with v2 and v3 RBFs, old runtime with v2, safe rejection of the
+   interrupted old-runtime/v3 pairing, v3-to-v2 rollback, update_all overwrite,
+   and fresh installation.
+7. Independent Rust and FPGA review of the final diff, component identity,
+   workflow triggers, updater safety, rollback, and documentation.
 
-## Artifact status
+## Historical artifacts
 
-The latch-only RBF from GitHub Actions run `29153173239`, SHA-256
-`7f4f5c40260f52341f11f3cc66891c551699376dd89fc39ff03efdebd48eb5c2`, is the
-behavioral baseline documented in
-[the zero-copy retirement record](../history/2026-07-11-zero-copy-retirement.md).
-It is not the final release artifact; extraction and delta signoff will produce
-a new candidate hash.
+Protocol-v2 RBFs and their evidence are retained only for rollback validation.
+They require the verifier's explicit `--historical-v2` mode and cannot satisfy
+a new build or qualification gate. The superseded candidate disposition is in
+[FPGA latch release signoff](fpga-latch-release-signoff.md). A candidate hash
+listed there is not approval for protocol v3.
 
-The current ignored local RBF has SHA-256
-`f61ad600ad63d8e91fc9fa8b093448fcecdd5d4370b5d330456bc53f19d5a17c` and its
-metadata includes the retired mailbox patch and RTL. It is stale, is not the
-latch-only baseline, and is ineligible for release qualification or deployment.
-
-The previous extracted-latch candidate and its historical qualification disposition are
-recorded in [FPGA latch release signoff](fpga-latch-release-signoff.md). A
-candidate hash listed there is not an approved commercial release while any
-custom-delta checklist item remains open.
+The implementation PR ends after its merge and successful checks. The
+**Build MiSTer MagiK Platform** workflow is dispatched separately on `main`
+with `publish=false`; promotion and attended `scripts/agent release qualify`
+remain separately authorized gates.

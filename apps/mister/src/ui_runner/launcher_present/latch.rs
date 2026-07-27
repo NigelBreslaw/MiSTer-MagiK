@@ -15,11 +15,12 @@
 use super::super::*;
 use mister_magik_fb::framebuffer::downsample::Rgb565FrameView;
 use mister_magik_fb::framebuffer::vertical_scale::Rgb565FrameView as VerticalRgb565FrameView;
-use mister_magik_fb::latch_readiness::{LatchFailure, LatchFailureReason, LatchFailureStage};
+use mister_magik_fb::latch_readiness::{
+    LatchFailure, LatchFailureReason, LatchFailureStage, LatchWireDecision, LatchWireDiagnostics,
+};
 use std::io;
 
 const TRANSIENT_PENDING_SETTLE_TIMEOUT: Duration = Duration::from_millis(100);
-const POST_OBSERVATION_MAX_READS: usize = 3;
 const DEV_LATCH_TIMEOUT_ENV: &str = "MISTER_MAGIK_DEV_LATCH_STATUS_TIMEOUT_AT";
 
 static DEV_LATCH_STATUS_READS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -38,7 +39,15 @@ pub(in crate::ui_runner) trait LatchHardware: LauncherDisplayHardware {
         &mut self,
     ) -> io::Result<(u16, u16, mister_magik_latch_contract::LatchCapabilities)>;
 
-    fn read_latched_status(&mut self) -> io::Result<crate::fpga::LatchedFbufStatus>;
+    fn read_latched_status(
+        &mut self,
+    ) -> Result<crate::fpga::LatchedFbufStatusSample, crate::fpga::LatchedFbufStatusReadError>;
+
+    fn negotiated_latch_capabilities(
+        &self,
+    ) -> Option<mister_magik_latch_contract::LatchCapabilities> {
+        None
+    }
 
     fn post_latched_rgb565(
         &mut self,
@@ -57,19 +66,29 @@ impl LatchHardware for Fpga {
         self.read_magik_latched_fbuf_capabilities()
     }
 
-    fn read_latched_status(&mut self) -> io::Result<crate::fpga::LatchedFbufStatus> {
+    fn read_latched_status(
+        &mut self,
+    ) -> Result<crate::fpga::LatchedFbufStatusSample, crate::fpga::LatchedFbufStatusReadError> {
         let read_number =
             DEV_LATCH_STATUS_READS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         if dev_latch_timeout_at() == Some(read_number) {
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                format!(
-                    "FPGA SPI timeout waiting for ACK high on word 0x0058 \
+            return Err(crate::fpga::LatchedFbufStatusReadError::from_io(
+                io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!(
+                        "FPGA SPI timeout waiting for ACK high on word 0x0058 \
                      (development injection read {read_number})"
+                    ),
                 ),
             ));
         }
-        self.read_magik_latched_fbuf_status()
+        self.read_magik_latched_fbuf_status_sample()
+    }
+
+    fn negotiated_latch_capabilities(
+        &self,
+    ) -> Option<mister_magik_latch_contract::LatchCapabilities> {
+        self.negotiated_magik_latch_capabilities()
     }
 
     fn post_latched_rgb565(
@@ -99,6 +118,46 @@ fn dev_latch_timeout_for(executable: &std::path::Path, configured: Option<&str>)
         == mister_magik_catalog::device_layout::DeviceLayout::Dev)
         .then_some(())?;
     configured?.parse::<u64>().ok().filter(|read| *read > 0)
+}
+
+fn latch_status_read_failure(
+    stage: LatchFailureStage,
+    error: crate::fpga::LatchedFbufStatusReadError,
+) -> LatchFailure {
+    let detail = error.to_string();
+    LatchFailure::runtime(stage, LatchFailureReason::FpgaTransportFailed, detail)
+        .with_wire_diagnostics(*error.diagnostics)
+}
+
+fn rejected_wire_diagnostics(mut diagnostics: LatchWireDiagnostics) -> LatchWireDiagnostics {
+    diagnostics.decision = LatchWireDecision::Rejected;
+    diagnostics
+}
+
+fn stamp_wire_capabilities(
+    diagnostics: &mut LatchWireDiagnostics,
+    capabilities: Option<mister_magik_latch_contract::LatchCapabilities>,
+) {
+    if let Some(capabilities) = capabilities {
+        diagnostics.protocol_version = Some(capabilities.protocol_version);
+        diagnostics.capability_flags = Some(capabilities.flags);
+    }
+}
+
+fn read_status_sample(
+    hardware: &mut impl LatchHardware,
+    capabilities: Option<mister_magik_latch_contract::LatchCapabilities>,
+) -> Result<crate::fpga::LatchedFbufStatusSample, crate::fpga::LatchedFbufStatusReadError> {
+    match hardware.read_latched_status() {
+        Ok(mut sample) => {
+            stamp_wire_capabilities(&mut sample.diagnostics, capabilities);
+            Ok(sample)
+        }
+        Err(mut error) => {
+            stamp_wire_capabilities(&mut error.diagnostics, capabilities);
+            Err(error)
+        }
+    }
 }
 
 pub(in crate::ui_runner) trait LatchFrameBuffers {
@@ -325,6 +384,7 @@ pub(in crate::ui_runner) struct FpgaVblankLatchHiddenPresenter<B = PluginLatchFr
     latch_geometry: crate::fpga::LatchedFbufGeometry,
     hidden_active_verified: bool,
     capabilities_verified: bool,
+    negotiated_capabilities: Option<mister_magik_latch_contract::LatchCapabilities>,
     last_committed_buffer: Option<u8>,
     latch_state: TwoBufferLatchState,
     direct_generation: u64,
@@ -351,6 +411,8 @@ pub(in crate::ui_runner) struct FpgaVblankLatchHiddenPresentStats {
     pub(in crate::ui_runner) posted_sequence: u16,
     /// Includes the initial observation; values above one recovered a transient gap.
     pub(in crate::ui_runner) post_status_reads: u8,
+    /// Physical GET attempts, including the one permitted transport retry per logical read.
+    pub(in crate::ui_runner) post_status_wire_attempts: u8,
     pub(in crate::ui_runner) flip_count: u16,
     pub(in crate::ui_runner) drop_count: u16,
 }
@@ -396,6 +458,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             latch_geometry,
             hidden_active_verified: false,
             capabilities_verified: false,
+            negotiated_capabilities: None,
             last_committed_buffer: None,
             latch_state: TwoBufferLatchState::new(render_width, render_height),
             direct_generation: 0,
@@ -419,14 +482,8 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             return Ok(None);
         }
         self.verify_capabilities(hardware)?;
-        let status = hardware.read_latched_status().map_err(|error| {
-            LatchFailure::runtime(
-                LatchFailureStage::FpgaStatus,
-                LatchFailureReason::FpgaTransportFailed,
-                error.to_string(),
-            )
-        })?;
-        self.sync_latch_state_from_status(status)?;
+        let sample = self.read_geometry_safe_status(hardware)?;
+        let status = sample.status;
         if status.pending() {
             return Ok(None);
         }
@@ -463,14 +520,8 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             ));
         }
         let status_started = Instant::now();
-        let before_status = hardware.read_latched_status().map_err(|error| {
-            LatchFailure::runtime(
-                LatchFailureStage::FpgaStatus,
-                LatchFailureReason::FpgaTransportFailed,
-                error.to_string(),
-            )
-        })?;
-        self.sync_latch_state_from_status(before_status)?;
+        let before_sample = self.read_geometry_safe_status(hardware)?;
+        let before_status = before_sample.status;
         if before_status.pending() || !self.latch_state.slot_is_writable(grant.slot_index) {
             return Err(LatchFailure::runtime(
                 LatchFailureStage::PostVerification,
@@ -479,7 +530,8 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                     "external slot {} became active or pending before post",
                     grant.slot_index
                 ),
-            ));
+            )
+            .with_wire_diagnostics(rejected_wire_diagnostics(before_sample.diagnostics)));
         }
         let mut status_us = status_started.elapsed().as_micros() as u64;
         let sequence = self.sequence;
@@ -504,14 +556,12 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         // Retained in the accounting schema for compatibility. Main_MiSTer
         // exclusively owns UIO_BUT_SW and the VGA framebuffer mux.
         let set_vga_fb_us = 0;
-        let (after_status, post_status_us, post_status_reads) =
-            read_post_status(hardware, sequence).map_err(|error| {
-                LatchFailure::runtime(
-                    LatchFailureStage::FpgaStatus,
-                    LatchFailureReason::FpgaTransportFailed,
-                    error.to_string(),
-                )
+        let mut read_budget = LogicalStatusReadBudget::new();
+        let (after_sample, post_status_us, post_status_reads, post_status_wire_attempts) =
+            read_post_status(sequence, &mut read_budget, |budget| {
+                self.read_geometry_safe_status_with_budget(hardware, budget)
             })?;
+        let after_status = after_sample.status;
         status_us = status_us.saturating_add(post_status_us);
         let set_supported = ack.0 == crate::fpga::MAGIK_FBUF_LATCH_MAGIC
             || ack.1 == crate::fpga::MAGIK_FBUF_LATCH_MAGIC;
@@ -529,7 +579,8 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                     u8::from(after_status.pending()),
                     after_status.pending_sequence
                 ),
-            ));
+            )
+            .with_wire_diagnostics(rejected_wire_diagnostics(after_sample.diagnostics)));
         }
         self.outstanding_direct_grant = None;
         self.last_committed_buffer = Some(grant.slot_index);
@@ -553,6 +604,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             status_supported: after_status.supported(),
             posted_sequence: sequence,
             post_status_reads,
+            post_status_wire_attempts,
             flip_count: after_status.flip_count,
             drop_count: after_status.drop_count,
         })
@@ -601,6 +653,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                 ),
             ));
         }
+        self.negotiated_capabilities = Some(capabilities);
         self.capabilities_verified = true;
         Ok(())
     }
@@ -628,15 +681,9 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         self.verify_capabilities(hardware)?;
 
         let status_start = Instant::now();
-        let mut before_status = hardware.read_latched_status().map_err(|e| {
-            LatchFailure::runtime(
-                LatchFailureStage::FpgaStatus,
-                LatchFailureReason::FpgaTransportFailed,
-                e.to_string(),
-            )
-        })?;
+        let mut before_sample = self.read_geometry_safe_status(hardware)?;
+        let mut before_status = before_sample.status;
         let mut status_us = status_start.elapsed().as_micros() as u64;
-        self.sync_latch_state_from_status(before_status)?;
 
         let mut plan = self.latch_state.plan_next(input);
         if plan.is_none() && before_status.pending() {
@@ -644,15 +691,9 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             while settle_started.elapsed() < TRANSIENT_PENDING_SETTLE_TIMEOUT {
                 std::thread::sleep(Duration::from_millis(1));
                 let retry_started = Instant::now();
-                before_status = hardware.read_latched_status().map_err(|e| {
-                    LatchFailure::runtime(
-                        LatchFailureStage::FpgaStatus,
-                        LatchFailureReason::FpgaTransportFailed,
-                        e.to_string(),
-                    )
-                })?;
+                before_sample = self.read_geometry_safe_status(hardware)?;
+                before_status = before_sample.status;
                 status_us = status_us.saturating_add(retry_started.elapsed().as_micros() as u64);
-                self.sync_latch_state_from_status(before_status)?;
                 plan = self.latch_state.plan_next(input);
                 if plan.is_some() || !before_status.pending() {
                     break;
@@ -665,6 +706,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                 LatchFailureReason::NoWritableHiddenBuffer,
                 "both hidden buffers are active or pending",
             )
+            .with_wire_diagnostics(rejected_wire_diagnostics(before_sample.diagnostics))
         })?;
         let buffer_index = plan.slot_index;
         let invalid_bytes = self.latch_state.restore_bytes_for_slot(buffer_index);
@@ -764,18 +806,18 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         let set_supported = ack.0 == crate::fpga::MAGIK_FBUF_LATCH_MAGIC
             || ack.1 == crate::fpga::MAGIK_FBUF_LATCH_MAGIC;
 
-        let (after_status, post_status_us, post_status_reads) =
-            match read_post_status(hardware, sequence) {
+        let mut read_budget = LogicalStatusReadBudget::new();
+        let (after_sample, post_status_us, post_status_reads, post_status_wire_attempts) =
+            match read_post_status(sequence, &mut read_budget, |budget| {
+                self.read_geometry_safe_status_with_budget(hardware, budget)
+            }) {
                 Ok(result) => result,
                 Err(e) => {
                     self.latch_state.mark_attempt_failed(buffer_index);
-                    return Err(LatchFailure::runtime(
-                        LatchFailureStage::FpgaStatus,
-                        LatchFailureReason::FpgaTransportFailed,
-                        e.to_string(),
-                    ));
+                    return Err(e);
                 }
             };
+        let after_status = after_sample.status;
         status_us = status_us.saturating_add(post_status_us);
         let status_supported = after_status.supported();
         let flip_count = after_status.flip_count;
@@ -796,7 +838,8 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                     after_status.magic_hi,
                     after_status.magic_lo
                 ),
-            ));
+            )
+            .with_wire_diagnostics(rejected_wire_diagnostics(after_sample.diagnostics)));
         }
 
         if !posted_sequence_observed(after_status, sequence) {
@@ -811,7 +854,8 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                     u8::from(after_status.pending()),
                     after_status.pending_sequence
                 ),
-            ));
+            )
+            .with_wire_diagnostics(rejected_wire_diagnostics(after_sample.diagnostics)));
         }
 
         self.latch_state.mark_post_success(plan);
@@ -834,6 +878,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             status_supported,
             posted_sequence: sequence,
             post_status_reads,
+            post_status_wire_attempts,
             flip_count,
             drop_count,
         })
@@ -874,18 +919,175 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         }
     }
 
-    fn sync_latch_state_from_status(
-        &mut self,
+    fn classify_latch_status(
+        &self,
         status: crate::fpga::LatchedFbufStatus,
-    ) -> Result<(), LatchFailure> {
-        let sync = match classify_latch_status(
+    ) -> Result<LatchStatusSync, LatchStatusSyncError> {
+        classify_latch_status(
             status,
             self.buffers.base_addr(1),
             self.buffers.base_addr(2),
             self.width,
             self.height,
             self.hidden_active_verified,
-        ) {
+        )
+    }
+
+    /// Protocol v2 has no coherent snapshot marker. This containment is
+    /// intentionally narrow: only a hidden-route geometry mismatch triggers
+    /// corroboration. Structurally valid torn projections remain a v2 protocol
+    /// limitation and are eliminated by protocol v3's snapshot CRC.
+    fn read_geometry_safe_status(
+        &mut self,
+        hardware: &mut impl LatchHardware,
+    ) -> Result<crate::fpga::LatchedFbufStatusSample, LatchFailure> {
+        let mut budget = LogicalStatusReadBudget::new();
+        self.read_geometry_safe_status_with_budget(hardware, &mut budget)
+    }
+
+    fn read_geometry_safe_status_with_budget(
+        &mut self,
+        hardware: &mut impl LatchHardware,
+        budget: &mut LogicalStatusReadBudget,
+    ) -> Result<crate::fpga::LatchedFbufStatusSample, LatchFailure> {
+        budget.consume().map_err(|_| {
+            self.uncorroborated_status_failure(
+                "protocol-v2 latch status exhausted its three-read safety budget",
+                LatchWireDiagnostics::default(),
+            )
+        })?;
+        let first = read_status_sample(hardware, self.negotiated_capabilities)
+            .map_err(|error| latch_status_read_failure(LatchFailureStage::FpgaStatus, error))?;
+        match self.classify_latch_status(first.status) {
+            Ok(sync) => {
+                self.apply_latch_status_sync(sync);
+                return Ok(first);
+            }
+            Err(LatchStatusSyncError::Unsupported { .. }) => {
+                self.sync_latch_state_from_status(&first)?;
+                unreachable!("unsupported status must fail synchronization");
+            }
+            Err(LatchStatusSyncError::HiddenGeometryMismatch { .. })
+                if self
+                    .negotiated_capabilities
+                    .map_or(true, |capabilities| capabilities.protocol_version != 2) =>
+            {
+                self.sync_latch_state_from_status(&first)?;
+                unreachable!("non-v2 geometry mismatch must fail synchronization");
+            }
+            Err(LatchStatusSyncError::HiddenGeometryMismatch { .. }) => {}
+        }
+
+        let first_projection = LatchSafetyProjection::from(first.status);
+        let mut diagnostics = first.diagnostics;
+        let mut second = self.read_corroboration_status(hardware, budget, &mut diagnostics)?;
+        match self.classify_latch_status(second.status) {
+            Err(LatchStatusSyncError::Unsupported { .. }) => {
+                second.diagnostics = diagnostics;
+                self.sync_latch_state_from_status(&second)?;
+                unreachable!("unsupported status must fail synchronization");
+            }
+            Err(LatchStatusSyncError::HiddenGeometryMismatch { .. })
+                if LatchSafetyProjection::from(second.status) == first_projection =>
+            {
+                second.diagnostics = diagnostics;
+                self.sync_latch_state_from_status(&second)?;
+                unreachable!("repeated geometry mismatch must fail synchronization");
+            }
+            Err(LatchStatusSyncError::HiddenGeometryMismatch { .. }) => {
+                let mut third =
+                    self.read_corroboration_status(hardware, budget, &mut diagnostics)?;
+                match self.classify_latch_status(third.status) {
+                    Err(_) => {
+                        third.diagnostics = diagnostics;
+                        self.sync_latch_state_from_status(&third)?;
+                        unreachable!("invalid status must fail synchronization");
+                    }
+                    Ok(_) => {
+                        return Err(self.uncorroborated_status_failure(
+                            "protocol-v2 latch status changed between two invalid samples and only one subsequent valid sample was observed",
+                            diagnostics,
+                        ));
+                    }
+                }
+            }
+            Ok(_) => {}
+        }
+
+        let second_projection = LatchSafetyProjection::from(second.status);
+        let mut third = self.read_corroboration_status(hardware, budget, &mut diagnostics)?;
+        let third_sync = match self.classify_latch_status(third.status) {
+            Ok(sync) if LatchSafetyProjection::from(third.status) == second_projection => sync,
+            Ok(_) => {
+                return Err(self.uncorroborated_status_failure(
+                    "protocol-v2 latch status produced two valid samples with different safety projections",
+                    diagnostics,
+                ));
+            }
+            Err(_) => {
+                third.diagnostics = diagnostics;
+                self.sync_latch_state_from_status(&third)?;
+                unreachable!("invalid status must fail synchronization");
+            }
+        };
+        diagnostics.decision = LatchWireDecision::Corroborated;
+        third.diagnostics = diagnostics;
+        self.apply_latch_status_sync(third_sync);
+        Ok(third)
+    }
+
+    fn read_corroboration_status(
+        &mut self,
+        hardware: &mut impl LatchHardware,
+        budget: &mut LogicalStatusReadBudget,
+        diagnostics: &mut LatchWireDiagnostics,
+    ) -> Result<crate::fpga::LatchedFbufStatusSample, LatchFailure> {
+        if budget.consume().is_err() {
+            return Err(self.uncorroborated_status_failure(
+                "protocol-v2 latch status exhausted its three-read safety budget before corroboration",
+                std::mem::take(diagnostics),
+            ));
+        }
+        match read_status_sample(hardware, self.negotiated_capabilities) {
+            Ok(mut sample) => {
+                diagnostics.append(&sample.diagnostics);
+                sample.diagnostics = LatchWireDiagnostics::default();
+                Ok(sample)
+            }
+            Err(mut error) => {
+                let terminal_decision = error.diagnostics.decision;
+                diagnostics.append(&error.diagnostics);
+                diagnostics.decision = terminal_decision;
+                error.diagnostics = Box::new(std::mem::take(diagnostics));
+                Err(latch_status_read_failure(
+                    LatchFailureStage::FpgaStatus,
+                    error,
+                ))
+            }
+        }
+    }
+
+    fn uncorroborated_status_failure(
+        &mut self,
+        detail: &'static str,
+        diagnostics: LatchWireDiagnostics,
+    ) -> LatchFailure {
+        self.latch_state.invalidate_all();
+        self.hidden_active_verified = false;
+        LatchFailure::runtime(
+            LatchFailureStage::PostVerification,
+            LatchFailureReason::ActiveGeometryMismatch,
+            detail,
+        )
+        .with_wire_diagnostics(rejected_wire_diagnostics(diagnostics))
+    }
+
+    fn sync_latch_state_from_status(
+        &mut self,
+        sample: &crate::fpga::LatchedFbufStatusSample,
+    ) -> Result<(), LatchFailure> {
+        let status = sample.status;
+        let sync = match self.classify_latch_status(status) {
             Ok(sync) => sync,
             Err(LatchStatusSyncError::Unsupported { magic_hi, magic_lo }) => {
                 self.disabled = true;
@@ -893,7 +1095,8 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                     LatchFailureStage::FpgaStatus,
                     LatchFailureReason::FpgaStatusUnsupported,
                     format!("ack_high=0x{magic_hi:04x} ack_low=0x{magic_lo:04x}"),
-                ));
+                )
+                .with_wire_diagnostics(rejected_wire_diagnostics(sample.diagnostics.clone())));
             }
             Err(LatchStatusSyncError::HiddenGeometryMismatch {
                 active_width,
@@ -911,10 +1114,18 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                     format!(
                         "latched framebuffer geometry mismatch active={active_width}x{active_height} stride={active_stride} expected={expected_width}x{expected_height} stride={expected_stride}"
                     ),
-                ));
+                )
+                .with_wire_diagnostics(rejected_wire_diagnostics(
+                    sample.diagnostics.clone(),
+                )));
             }
         };
 
+        self.apply_latch_status_sync(sync);
+        Ok(())
+    }
+
+    fn apply_latch_status_sync(&mut self, sync: LatchStatusSync) {
         if sync.recovered_non_hidden_active {
             self.latch_state.invalidate_all();
             self.hidden_active_verified = false;
@@ -928,7 +1139,6 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             sync.pending,
             sync.pending_sequence,
         );
-        Ok(())
     }
 }
 
@@ -958,25 +1168,95 @@ enum LatchStatusSyncError {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct LatchSafetyProjection {
+    active_enabled: bool,
+    active_base: u32,
+    active_width: u16,
+    active_height: u16,
+    active_stride: u16,
+    active_sequence: u16,
+}
+
+impl From<crate::fpga::LatchedFbufStatus> for LatchSafetyProjection {
+    fn from(status: crate::fpga::LatchedFbufStatus) -> Self {
+        Self {
+            active_enabled: status.active_enabled(),
+            active_base: status.active_base,
+            active_width: status.active_width,
+            active_height: status.active_height,
+            active_stride: status.active_stride,
+            active_sequence: status.active_sequence,
+        }
+    }
+}
+
+struct LogicalStatusReadBudget {
+    reads: u8,
+}
+
+impl LogicalStatusReadBudget {
+    const MAX_READS: u8 = 3;
+
+    const fn new() -> Self {
+        Self { reads: 0 }
+    }
+
+    fn consume(&mut self) -> Result<(), ()> {
+        if self.reads >= Self::MAX_READS {
+            return Err(());
+        }
+        self.reads += 1;
+        Ok(())
+    }
+
+    const fn exhausted(&self) -> bool {
+        self.reads >= Self::MAX_READS
+    }
+}
+
 fn read_post_status(
-    hardware: &mut impl LatchHardware,
     sequence: u16,
-) -> io::Result<(crate::fpga::LatchedFbufStatus, u64, u8)> {
+    budget: &mut LogicalStatusReadBudget,
+    mut read_status: impl FnMut(
+        &mut LogicalStatusReadBudget,
+    ) -> Result<crate::fpga::LatchedFbufStatusSample, LatchFailure>,
+) -> Result<(crate::fpga::LatchedFbufStatusSample, u64, u8, u8), LatchFailure> {
     let started = Instant::now();
-    let mut reads = 1u8;
-    let mut status = hardware.read_latched_status()?;
-    for _ in 1..POST_OBSERVATION_MAX_READS {
-        if !status.supported() || posted_sequence_observed(status, sequence) {
+    let mut sample = read_status(budget)?;
+    let mut diagnostics = std::mem::take(&mut sample.diagnostics);
+    while !budget.exhausted() {
+        if !sample.status.supported() || posted_sequence_observed(sample.status, sequence) {
             break;
         }
         std::thread::yield_now();
-        status = hardware.read_latched_status()?;
-        reads += 1;
+        sample = match read_status(budget) {
+            Ok(mut next) => {
+                diagnostics.append(&next.diagnostics);
+                next.diagnostics = Default::default();
+                next
+            }
+            Err(mut failure) => {
+                if let Some(terminal) = failure.wire_diagnostics.take() {
+                    let terminal_decision = terminal.decision;
+                    diagnostics.append(&terminal);
+                    diagnostics.decision = terminal_decision;
+                    failure.wire_diagnostics = Some(diagnostics);
+                }
+                return Err(failure);
+            }
+        };
     }
+    if budget.reads > 1 {
+        diagnostics.decision = LatchWireDecision::Corroborated;
+    }
+    let wire_attempts = diagnostics.attempt_count;
+    sample.diagnostics = diagnostics;
     Ok((
-        status,
+        sample,
         started.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
-        reads,
+        budget.reads,
+        wire_attempts,
     ))
 }
 
@@ -989,12 +1269,67 @@ pub(in crate::ui_runner) fn wait_for_latch_completion(
     posted_sequence: u16,
     timeout: Duration,
 ) -> Result<LatchCompletion, LatchFailure> {
-    wait_for_latch_completion_with(
-        || hardware.read_latched_status(),
-        posted_sequence,
-        timeout,
-        std::thread::yield_now,
-    )
+    // This pacing boundary never selects or writes a hidden buffer. Protocol-v2
+    // geometry containment runs again before every subsequent copy or post.
+    // Protocol v3 replaces this residual unsnapshotted sequence observation
+    // with a coherent, CRC-protected status read.
+    let started = Instant::now();
+    let cpu_started = thread_cpu_us();
+    let mut poll_count = 0u16;
+    let mut post_observed = false;
+    let mut diagnostics = mister_magik_fb::latch_readiness::LatchWireDiagnostics::default();
+    let capabilities = hardware.negotiated_latch_capabilities();
+    loop {
+        let status = match read_status_sample(hardware, capabilities) {
+            Ok(sample) => {
+                diagnostics.append(&sample.diagnostics);
+                sample.status
+            }
+            Err(mut error) => {
+                let terminal_decision = error.diagnostics.decision;
+                diagnostics.append(&error.diagnostics);
+                diagnostics.decision = terminal_decision;
+                error.diagnostics = Box::new(diagnostics);
+                return Err(latch_status_read_failure(
+                    LatchFailureStage::PostVerification,
+                    error,
+                ));
+            }
+        };
+        poll_count = poll_count.saturating_add(1);
+        if !status.supported() {
+            return Err(LatchFailure::incompatible(
+                LatchFailureStage::PostVerification,
+                LatchFailureReason::FpgaStatusUnsupported,
+                "latch completion status is unsupported",
+            )
+            .with_wire_diagnostics(rejected_wire_diagnostics(diagnostics)));
+        }
+        if !status.pending() && status.active_sequence == posted_sequence {
+            return Ok(LatchCompletion {
+                status,
+                poll_count,
+                wall_us: started.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
+                cpu_us: elapsed_thread_cpu_us(cpu_started),
+            });
+        }
+        post_observed |= status.pending() && status.pending_sequence == posted_sequence;
+        if started.elapsed() >= timeout {
+            return Err(LatchFailure::runtime(
+                LatchFailureStage::PostVerification,
+                LatchFailureReason::PostedSequenceUnverified,
+                format!(
+                    "latch completion timed out posted={posted_sequence} pending_observed={} final_active={} final_pending={} final_pending_sequence={} polls={poll_count}",
+                    u8::from(post_observed),
+                    status.active_sequence,
+                    u8::from(status.pending()),
+                    status.pending_sequence,
+                ),
+            )
+            .with_wire_diagnostics(rejected_wire_diagnostics(diagnostics)));
+        }
+        std::thread::yield_now();
+    }
 }
 
 fn wait_for_latch_completion_with(
@@ -1295,6 +1630,7 @@ mod tests {
     #[derive(Default)]
     struct FakeHardware {
         statuses: Vec<io::Result<crate::fpga::LatchedFbufStatus>>,
+        status_diagnostics: Vec<mister_magik_fb::latch_readiness::LatchWireDiagnostics>,
         posts: Vec<io::Result<(u16, u16)>>,
         read_count: usize,
         post_bases: Vec<u32>,
@@ -1324,27 +1660,60 @@ mod tests {
                 mister_magik_latch_contract::decode_capabilities(&[
                     2,
                     mister_magik_latch_contract::REQUIRED_CAPS,
-                    1280,
-                    720,
-                    2560,
+                    1366,
+                    768,
+                    2736,
                 ])
                 .map_err(io::Error::other)?,
             ))
         }
 
-        fn read_latched_status(&mut self) -> io::Result<crate::fpga::LatchedFbufStatus> {
+        fn read_latched_status(
+            &mut self,
+        ) -> Result<crate::fpga::LatchedFbufStatusSample, crate::fpga::LatchedFbufStatusReadError>
+        {
             if let Some(events) = &self.events {
                 events.borrow_mut().push(TestEvent::ReadStatus);
             }
             self.read_count += 1;
-            let mut status = self.statuses.remove(0)?;
+            let diagnostics = if self.status_diagnostics.is_empty() {
+                Default::default()
+            } else {
+                self.status_diagnostics.remove(0)
+            };
+            let mut status = match self.statuses.remove(0) {
+                Ok(status) => status,
+                Err(error) => {
+                    let mut error = crate::fpga::LatchedFbufStatusReadError::from_io(error);
+                    error.diagnostics = Box::new(diagnostics);
+                    return Err(error);
+                }
+            };
             if self.posted_sequence_visibility_delay_reads > 0 {
                 self.posted_sequence_visibility_delay_reads -= 1;
             } else if let Some(sequence) = self.last_posted_sequence.take() {
                 status.pending_sequence = sequence;
                 status.flags |= 0x0004;
             }
-            Ok(status)
+            Ok(crate::fpga::LatchedFbufStatusSample {
+                status,
+                diagnostics,
+            })
+        }
+
+        fn negotiated_latch_capabilities(
+            &self,
+        ) -> Option<mister_magik_latch_contract::LatchCapabilities> {
+            Some(
+                mister_magik_latch_contract::decode_capabilities(&[
+                    2,
+                    mister_magik_latch_contract::REQUIRED_CAPS,
+                    1366,
+                    768,
+                    2736,
+                ])
+                .unwrap(),
+            )
         }
 
         fn post_latched_rgb565(
@@ -1385,7 +1754,34 @@ mod tests {
             active_width: WIDTH as u16,
             active_height: HEIGHT as u16,
             active_stride: rgb565_stride_bytes(WIDTH) as u16,
+            reject_count: 0,
+            active_route_epoch: 0,
         }
+    }
+
+    fn wire_diagnostics(command: u16) -> mister_magik_fb::latch_readiness::LatchWireDiagnostics {
+        let mut diagnostics = mister_magik_fb::latch_readiness::LatchWireDiagnostics::default();
+        diagnostics.push_attempt(mister_magik_fb::latch_readiness::LatchWireAttempt {
+            command,
+            ..Default::default()
+        });
+        diagnostics
+    }
+
+    fn wire_transport_failure(
+        commands: &[u16],
+    ) -> mister_magik_fb::latch_readiness::LatchWireDiagnostics {
+        let mut diagnostics = mister_magik_fb::latch_readiness::LatchWireDiagnostics {
+            decision: LatchWireDecision::TransportRetryFailed,
+            ..Default::default()
+        };
+        for command in commands {
+            diagnostics.push_attempt(mister_magik_fb::latch_readiness::LatchWireAttempt {
+                command: *command,
+                ..Default::default()
+            });
+        }
+        diagnostics
     }
 
     fn presenter_with_events(events: EventLog) -> FpgaVblankLatchHiddenPresenter<FakeBuffers> {
@@ -1778,6 +2174,73 @@ mod tests {
     }
 
     #[test]
+    fn post_observation_retains_every_wire_sample() {
+        let mut hardware = FakeHardware {
+            statuses: vec![
+                Ok(status(FRONT_BASE, 0x0001)),
+                Ok(status(FRONT_BASE, 0x0001)),
+                Ok(status(FRONT_BASE, 0x0001 | 0x0004)),
+            ],
+            status_diagnostics: vec![
+                wire_diagnostics(1),
+                wire_diagnostics(2),
+                wire_diagnostics(3),
+            ],
+            posted_sequence_visibility_delay_reads: usize::MAX,
+            ..FakeHardware::default()
+        };
+        hardware.statuses[2].as_mut().unwrap().pending_sequence = 77;
+
+        let mut budget = LogicalStatusReadBudget::new();
+        let (sample, _, reads, wire_attempts) = read_post_status(77, &mut budget, |budget| {
+            budget.consume().unwrap();
+            read_status_sample(&mut hardware, None)
+                .map_err(|error| latch_status_read_failure(LatchFailureStage::FpgaStatus, error))
+        })
+        .unwrap();
+
+        assert_eq!(reads, 3);
+        assert_eq!(wire_attempts, 3);
+        assert_eq!(sample.diagnostics.attempt_count, 3);
+        assert_eq!(sample.diagnostics.attempts[0].command, 1);
+        assert_eq!(sample.diagnostics.attempts[1].command, 2);
+        assert_eq!(sample.diagnostics.attempts[2].command, 3);
+        assert_eq!(sample.diagnostics.decision, LatchWireDecision::Corroborated);
+    }
+
+    #[test]
+    fn suspicious_post_observation_shares_one_three_read_budget() {
+        let mut invalid = status(BASE1, 0x0001);
+        invalid.active_width = 960;
+        invalid.active_height = 0;
+        invalid.active_stride = 0;
+        let valid_stale = status(BASE1, 0x0001);
+        let mut presenter = presenter();
+        let mut hardware = FakeHardware {
+            statuses: vec![Ok(invalid), Ok(valid_stale), Ok(valid_stale)],
+            status_diagnostics: vec![
+                wire_diagnostics(1),
+                wire_diagnostics(2),
+                wire_diagnostics(3),
+            ],
+            ..FakeHardware::default()
+        };
+        presenter.verify_capabilities(&mut hardware).unwrap();
+        let mut budget = LogicalStatusReadBudget::new();
+
+        let (sample, _, logical_reads, wire_attempts) =
+            read_post_status(77, &mut budget, |budget| {
+                presenter.read_geometry_safe_status_with_budget(&mut hardware, budget)
+            })
+            .unwrap();
+
+        assert_eq!(logical_reads, 3);
+        assert_eq!(wire_attempts, 3);
+        assert_eq!(hardware.read_count, 3);
+        assert!(!posted_sequence_observed(sample.status, 77));
+    }
+
+    #[test]
     fn unsupported_status_disables_presenter() {
         let mut unsupported = status(FRONT_BASE, 0x0001);
         unsupported.magic_hi = 0;
@@ -1799,20 +2262,165 @@ mod tests {
     }
 
     #[test]
-    fn hidden_geometry_mismatch_is_rejected_before_copy_or_post() {
+    fn transient_v2_geometry_fault_requires_two_matching_valid_samples_before_copy_or_post() {
         let mut bad_geometry = status(BASE1, 0x0001);
-        bad_geometry.active_height -= 1;
-        let mut presenter = presenter();
+        bad_geometry.active_width = 960;
+        bad_geometry.active_height = 0;
+        bad_geometry.active_stride = 0;
+        let valid = status(BASE1, 0x0001);
+        let events = EventLog::default();
+        let mut presenter = presenter_with_events(Rc::clone(&events));
         let mut hardware = FakeHardware {
-            statuses: vec![Ok(bad_geometry)],
+            statuses: vec![
+                Ok(bad_geometry),
+                Ok(valid),
+                Ok(valid),
+                Ok(status(BASE1, 0x0001)),
+            ],
+            events: Some(Rc::clone(&events)),
+            ..FakeHardware::default()
+        };
+        let mut display = display_session();
+
+        let stats = present(&mut presenter, &mut hardware, &mut display).unwrap();
+
+        assert_eq!(stats.buffer_index, 2);
+        assert_eq!(hardware.read_count, 4);
+        assert_eq!(
+            &events.borrow()[..4],
+            &[
+                TestEvent::ReadStatus,
+                TestEvent::ReadStatus,
+                TestEvent::ReadStatus,
+                TestEvent::Copy,
+            ]
+        );
+        assert_eq!(hardware.post_bases, [BASE2]);
+    }
+
+    #[test]
+    fn two_identical_invalid_v2_samples_fail_early_without_copy_or_post() {
+        let mut bad_geometry = status(BASE1, 0x0001);
+        bad_geometry.active_width = 960;
+        bad_geometry.active_height = 0;
+        bad_geometry.active_stride = 0;
+        let events = EventLog::default();
+        let mut presenter = presenter_with_events(Rc::clone(&events));
+        let mut hardware = FakeHardware {
+            statuses: vec![Ok(bad_geometry), Ok(bad_geometry)],
+            events: Some(Rc::clone(&events)),
+            ..FakeHardware::default()
+        };
+        let mut display = display_session();
+
+        let error = present(&mut presenter, &mut hardware, &mut display).unwrap_err();
+        let diagnostics = error.wire_diagnostics.as_ref().unwrap();
+
+        assert_eq!(hardware.read_count, 2);
+        assert_eq!(diagnostics.decision, LatchWireDecision::Rejected);
+        assert_eq!(diagnostics.protocol_version, Some(2));
+        assert_eq!(
+            diagnostics.capability_flags,
+            Some(mister_magik_latch_contract::REQUIRED_CAPS)
+        );
+        assert_eq!(
+            events.borrow().as_slice(),
+            &[TestEvent::ReadStatus, TestEvent::ReadStatus]
+        );
+        assert!(hardware.post_bases.is_empty());
+        let evidence = mister_magik_fb::latch_readiness::LatchFailureEvidence::from(&error);
+        assert_eq!(evidence.schema, "mister-magik-latch-failure-v3");
+    }
+
+    #[test]
+    fn changing_invalid_v2_samples_then_one_valid_sample_remain_rejected() {
+        let mut invalid_a = status(BASE1, 0x0001);
+        invalid_a.active_width = 960;
+        invalid_a.active_height = 0;
+        invalid_a.active_stride = 0;
+        let mut invalid_b = invalid_a;
+        invalid_b.active_width -= 1;
+        let events = EventLog::default();
+        let mut presenter = presenter_with_events(Rc::clone(&events));
+        let mut hardware = FakeHardware {
+            statuses: vec![Ok(invalid_a), Ok(invalid_b), Ok(status(BASE1, 0x0001))],
+            events: Some(Rc::clone(&events)),
             ..FakeHardware::default()
         };
         let mut display = display_session();
 
         let error = present(&mut presenter, &mut hardware, &mut display).unwrap_err();
 
-        assert!(error.to_string().contains("geometry mismatch"));
+        assert_eq!(error.reason, LatchFailureReason::ActiveGeometryMismatch);
+        assert_eq!(hardware.read_count, 3);
+        assert_eq!(
+            events.borrow().as_slice(),
+            &[
+                TestEvent::ReadStatus,
+                TestEvent::ReadStatus,
+                TestEvent::ReadStatus,
+            ]
+        );
         assert!(hardware.post_bases.is_empty());
+    }
+
+    #[test]
+    fn pending_to_active_transition_is_not_mistaken_for_two_matching_valid_samples() {
+        let mut invalid = status(BASE1, 0x0001);
+        invalid.active_width = 960;
+        invalid.active_height = 0;
+        invalid.active_stride = 0;
+        let mut pending = status(BASE1, 0x0001 | 0x0002 | 0x0004);
+        pending.active_sequence = 11;
+        pending.pending_sequence = 12;
+        let mut active = status(BASE2, 0x0001);
+        active.active_sequence = 12;
+        active.pending_sequence = 0;
+        let events = EventLog::default();
+        let mut presenter = presenter_with_events(Rc::clone(&events));
+        let mut hardware = FakeHardware {
+            statuses: vec![Ok(invalid), Ok(pending), Ok(active)],
+            events: Some(Rc::clone(&events)),
+            ..FakeHardware::default()
+        };
+        let mut display = display_session();
+
+        let error = present(&mut presenter, &mut hardware, &mut display).unwrap_err();
+
+        assert_eq!(error.reason, LatchFailureReason::ActiveGeometryMismatch);
+        assert_eq!(hardware.read_count, 3);
+        assert_eq!(
+            events.borrow().as_slice(),
+            &[
+                TestEvent::ReadStatus,
+                TestEvent::ReadStatus,
+                TestEvent::ReadStatus,
+            ]
+        );
+        assert!(hardware.post_bases.is_empty());
+    }
+
+    #[test]
+    fn direct_grant_uses_the_same_v2_status_corroboration_policy() {
+        let mut invalid = status(BASE1, 0x0001);
+        invalid.active_width = 960;
+        invalid.active_height = 0;
+        invalid.active_stride = 0;
+        let valid = status(BASE1, 0x0001);
+        let mut presenter = presenter();
+        let mut hardware = FakeHardware {
+            statuses: vec![Ok(invalid), Ok(valid), Ok(valid)],
+            ..FakeHardware::default()
+        };
+        let mut display = display_session();
+
+        let grant = presenter
+            .try_issue_hidden_slot_render_grant(&mut hardware, &mut display)
+            .unwrap()
+            .expect("corroborated direct grant");
+
+        assert_eq!(grant.slot_index, 2);
+        assert_eq!(hardware.read_count, 3);
     }
 
     #[test]
@@ -1922,5 +2530,66 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(transport.reason, LatchFailureReason::FpgaTransportFailed);
+    }
+
+    #[test]
+    fn production_completion_wait_retains_wire_samples_on_failure() {
+        let mut hardware = FakeHardware {
+            statuses: vec![Ok(status(BASE1, 0x0001))],
+            status_diagnostics: vec![wire_diagnostics(0x58)],
+            ..FakeHardware::default()
+        };
+
+        let error = wait_for_latch_completion(&mut hardware, 99, Duration::ZERO).unwrap_err();
+        let diagnostics = error.wire_diagnostics.expect("wire diagnostics");
+
+        assert_eq!(diagnostics.attempt_count, 1);
+        assert_eq!(diagnostics.attempts[0].command, 0x58);
+    }
+
+    #[test]
+    fn production_completion_wait_preserves_terminal_transport_decision_and_profile() {
+        let mut hardware = FakeHardware {
+            statuses: vec![Ok(status(BASE1, 0x0001)), Err(io::Error::other("failed"))],
+            status_diagnostics: vec![wire_diagnostics(1), wire_transport_failure(&[2, 3])],
+            ..FakeHardware::default()
+        };
+
+        let error =
+            wait_for_latch_completion(&mut hardware, 99, Duration::from_millis(1)).unwrap_err();
+        let diagnostics = error.wire_diagnostics.expect("wire diagnostics");
+
+        assert_eq!(
+            diagnostics.decision,
+            LatchWireDecision::TransportRetryFailed
+        );
+        assert_eq!(diagnostics.protocol_version, Some(2));
+        assert_eq!(
+            diagnostics.capability_flags,
+            Some(mister_magik_latch_contract::REQUIRED_CAPS)
+        );
+        assert_eq!(diagnostics.attempt_count, 3);
+        assert_eq!(diagnostics.attempts[0].command, 1);
+        assert_eq!(diagnostics.attempts[1].command, 2);
+        assert_eq!(diagnostics.attempts[2].command, 3);
+    }
+
+    #[test]
+    fn production_completion_wait_preserves_immediate_transport_failure() {
+        let mut hardware = FakeHardware {
+            statuses: vec![Err(io::Error::other("failed"))],
+            status_diagnostics: vec![wire_transport_failure(&[2, 3])],
+            ..FakeHardware::default()
+        };
+
+        let error = wait_for_latch_completion(&mut hardware, 99, Duration::ZERO).unwrap_err();
+        let diagnostics = error.wire_diagnostics.expect("wire diagnostics");
+
+        assert_eq!(
+            diagnostics.decision,
+            LatchWireDecision::TransportRetryFailed
+        );
+        assert_eq!(diagnostics.protocol_version, Some(2));
+        assert_eq!(diagnostics.attempt_count, 2);
     }
 }

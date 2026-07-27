@@ -7,6 +7,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PATCH="$ROOT/mister/platform/fpga/menu-vblank-latch/Menu_MiSTer-vblank-latched-fbuf.patch"
 LATCH_RTL="$ROOT/mister/platform/fpga/menu-vblank-latch/mister_magik_vblank_latch.sv"
+LATCH_BRIDGE="$ROOT/mister/platform/fpga/menu-vblank-latch/mister_magik_latch_sys_top_bridge.sv"
 LATCH_PROTOCOL="$ROOT/mister/platform/fpga/menu-vblank-latch/mister_magik_latch_protocol.svh"
 OUT_DIR="${MISTER_FPGA_OUT_DIR:-$ROOT/build/fpga-vblank-latch}"
 WORK_DIR="${MISTER_MENU_BUILD_DIR:-$OUT_DIR/Menu_MiSTer-vblank-latch-work}"
@@ -80,6 +81,10 @@ if [[ ! -f "$LATCH_PROTOCOL" ]]; then
   echo "missing latch protocol header: $LATCH_PROTOCOL" >&2
   exit 1
 fi
+if [[ ! -f "$LATCH_BRIDGE" ]]; then
+  echo "missing latch sys_top bridge: $LATCH_BRIDGE" >&2
+  exit 1
+fi
 MENU_ABS="$(abs_path "$MENU_DIR")"
 
 if [[ ! -f "$MENU_ABS/menu.qsf" || ! -f "$MENU_ABS/sys/sys_top.v" ]]; then
@@ -130,8 +135,9 @@ case "$APPLY_PATCH" in
       git -C "$WORK_DIR" apply --recount --check "$PATCH"
     fi
     cp "$LATCH_RTL" "$WORK_DIR/sys/mister_magik_vblank_latch.sv"
+    cp "$LATCH_BRIDGE" "$WORK_DIR/sys/mister_magik_latch_sys_top_bridge.sv"
     cp "$LATCH_PROTOCOL" "$WORK_DIR/sys/mister_magik_latch_protocol.svh"
-    printf '\nset_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_vblank_latch.sv\n' >> "$WORK_DIR/menu.qsf"
+    printf '\nset_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_vblank_latch.sv\nset_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_latch_sys_top_bridge.sv\n' >> "$WORK_DIR/menu.qsf"
     ;;
 esac
 if [[ ! "$BUILD_DATE" =~ ^[0-9]{6}$ ]]; then
@@ -192,7 +198,7 @@ path.write_text(updated)
 PY
 
 {
-  echo "format=mister-magik-fpga-release-v1"
+  echo "format=mister-magik-fpga-release-v2"
   shasum -a 256 "$PLATFORM_CONTRACT" | awk '{print "platform_contract_sha256="$1}'
   echo "magik_commit=$QUALIFIED_MAGIK_REVISION"
   if [[ -n "$COMPONENT_INPUT_SHA256" ]]; then
@@ -206,6 +212,7 @@ PY
   git -C "$MENU_ABS" status --short 2>/dev/null | sed 's/^/source_status=/'
   shasum -a 256 "$PATCH" | awk '{print "patch_sha256="$1}'
   shasum -a 256 "$LATCH_RTL" | awk '{print "latch_rtl_sha256="$1}'
+  shasum -a 256 "$LATCH_BRIDGE" | awk '{print "latch_bridge_sha256="$1}'
   shasum -a 256 "$LATCH_PROTOCOL" | awk '{print "latch_protocol_sha256="$1}'
   python3 -c 'import re,sys; source=open(sys.argv[1]).read(); match=re.search(r"MAGIK_FBUF_PROTOCOL_VERSION\s*=\s*16.d(\d+)", source); assert match; print("latch_protocol_version=" + match.group(1))' "$LATCH_PROTOCOL"
   echo "apply_patch=$APPLY_PATCH"

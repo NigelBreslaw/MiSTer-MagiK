@@ -1,14 +1,137 @@
 {
-  "set_command": 87,
-  "get_command": 88,
-  "caps_command": 89,
-  "latch_magic": 19783,
-  "status_magic": 19784,
-  "caps_magic": 19785,
-  "protocol_version": 2,
-  "capability_words": ["protocol_version", "flags", "max_width", "max_height", "max_stride_bytes"],
-  "status_words": [
-    "active_seq", "pending_seq", "flags", "flip_count", "post_count",
-    "drop_count", "base_low", "base_high", "width", "height", "stride"
-  ]
+  "schema": 3,
+  "active_protocol_version": 3,
+  "commands": {
+    "set": 87,
+    "get": 88,
+    "caps": 89
+  },
+  "magic": {
+    "set": 19783,
+    "status": 19784,
+    "caps": 19785
+  },
+  "limits": {
+    "max_width": 1366,
+    "max_height": 768,
+    "max_stride_bytes": 2736
+  },
+  "capabilities": {
+    "rgb565": 0,
+    "double_buffer": 1,
+    "variable_geometry": 2,
+    "transactional_post": 3,
+    "coherent_status": 4,
+    "status_crc": 5,
+    "post_crc": 6
+  },
+  "protocols": {
+    "2": {
+      "flags": 7,
+      "caps_words": 5,
+      "set_payload_words": 11,
+      "status_payload_words": 11,
+      "caps_crc": false,
+      "set_crc": false,
+      "status_crc": false
+    },
+    "3": {
+      "flags": 127,
+      "caps_words": 6,
+      "set_payload_words": 11,
+      "set_words": 12,
+      "status_payload_words": 13,
+      "status_words": 14,
+      "caps_crc": true,
+      "set_crc": true,
+      "status_crc": true
+    }
+  },
+  "set_words_v3": [
+    "mode",
+    "base_low",
+    "base_high",
+    "width",
+    "height",
+    "destination_left",
+    "destination_right",
+    "destination_top",
+    "destination_bottom",
+    "stride",
+    "sequence",
+    "crc"
+  ],
+  "status_words_v3": [
+    "active_sequence",
+    "pending_sequence",
+    "flags",
+    "flip_count",
+    "post_count",
+    "drop_count",
+    "active_base_low",
+    "active_base_high",
+    "active_width",
+    "active_height",
+    "active_stride",
+    "reject_count",
+    "active_route_epoch",
+    "crc"
+  ],
+  "status_flags": {
+    "active_enabled": 0,
+    "pending_enabled": 1,
+    "pending": 2,
+    "magik_ownership": 3,
+    "reject_reason_shift": 4,
+    "reject_reason_width": 4
+  },
+  "rejection_reasons": {
+    "none": 0,
+    "missing_word": 1,
+    "duplicate_word": 2,
+    "out_of_order": 3,
+    "post_close": 4,
+    "bad_crc": 5,
+    "invalid_mode": 6,
+    "invalid_base": 7,
+    "invalid_geometry": 8,
+    "invalid_stride": 9,
+    "invalid_bounds": 10,
+    "address_wrap": 11,
+    "restarted": 12,
+    "shifted_word": 13,
+    "reserved": 14,
+    "internal": 15
+  },
+  "crc": {
+    "name": "CRC-16/CCITT-FALSE",
+    "polynomial": 4129,
+    "initial": 65535,
+    "reflect_input": false,
+    "reflect_output": false,
+    "final_xor": 0,
+    "word_byte_order": "high-low",
+    "header_words": [
+      "command",
+      "protocol_version",
+      "non_crc_word_count"
+    ]
+  },
+  "goldens": {
+    "caps_v3": {
+      "command": 89,
+      "payload": [3, 127, 1366, 768, 2736],
+      "crc": 43565
+    },
+    "set_v3": {
+      "command": 87,
+      "payload": [32788, 36864, 8830, 960, 540, 0, 959, 0, 539, 1920, 42],
+      "crc": 36601
+    },
+    "status_v3": {
+      "command": 88,
+      "payload": [42, 43, 15, 3, 4, 5, 36864, 8830, 960, 540, 1920, 7, 9],
+      "crc": 10101
+    }
+  }
 }

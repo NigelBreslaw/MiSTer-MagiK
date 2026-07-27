@@ -1,9 +1,9 @@
-# FPGA latch release signoff (superseded artifact)
+# FPGA latch release signoff (superseded protocol-v2 artifact)
 
 ## Disposition
 
 This records evidence for the superseded pre-Menu-20260603 RBF. It is **not an
-approval of the newly ported production artifact**. Automated RTL and Quartus custom-delta signoff pass, and matched
+approval of the protocol-v3 production artifact**. Automated RTL and Quartus custom-delta signoff pass, and matched
 single-device 960x540 qualification passes. The release remains blocked by the
 open items below. The new hash requires complete host, Quartus, device,
 update_all-overwrite, return, and rollback qualification.
@@ -82,10 +82,10 @@ review.
 
 ## Installation verification and rollback
 
-Before installation, run:
+For rollback audit only, run:
 
 ```text
-scripts/checks/verify-fpga-rbf-manifest.py build/fpga-vblank-latch/menu-magik-vblank-latch.metadata.txt
+scripts/checks/verify-fpga-rbf-manifest.py --historical-v2 build/fpga-vblank-latch/menu-magik-vblank-latch.metadata.txt
 ```
 
 Deployment uploads the RBF and adjacent metadata to temporary names, verifies

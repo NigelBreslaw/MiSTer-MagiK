@@ -136,14 +136,16 @@ conversion:
   does not activate the fast path, and `load_core` from the launcher state does
   not prove the patched core is running.
   Runtime proof comes from Main's cmdline, the scanout-slots module, passive
-  `fpga-latch-report` magic for commands `0x57`/`0x58`, production-ready
-  protocol-v2 capabilities from `0x59`, and advancing latch
+  `fpga-latch-report` magic for passive commands `0x58`/`0x59`, production-ready
+  exact protocol-v3 capabilities and CAPS CRC from `0x59`, SET support derived
+  from that exact profile without a side-effecting `0x57` probe, and advancing latch
   `flip_count`/`post_count` while the launcher runs. The JSON
   `composition_state` describes UI composition, not the final present backend.
   For `/dev/fb0`, userspace wall/loop cadence is the visual proof because the
   copy happens after vblank. For the latch path, TV-visible proof comes from
   posts completing before deadline, alternating hidden buffers, consistent
-  sampled flip counters, and passive `drop_count=0`; Linux wake jitter after the
+  sampled flip counters, valid status CRC, and passive
+  `drop_count=0`/unchanged `reject_count`; Linux wake jitter after the
   vblank wait is reported separately as scheduler timing.
 - The launcher routes the framebuffer during startup and explicit recovery. The
   old periodic route watchdog is disabled by default now that the Main_MiSTer

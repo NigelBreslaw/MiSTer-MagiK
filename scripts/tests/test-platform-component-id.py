@@ -143,6 +143,24 @@ class ComponentIdentityTests(unittest.TestCase):
         self.assertNotEqual(fpga_before, fpga_after)
         self.assertNotEqual(kernel_before, kernel_after)
 
+    def test_canonical_revision_includes_identity_definitions(self) -> None:
+        before = component_id.component_revision(self.root, "fpga")
+        implementation = self.root / component_id.IDENTITY_IMPLEMENTATION
+        implementation.write_text("revision-defining identity implementation\n")
+        self.commit("change canonical identity implementation")
+        after = component_id.component_revision(self.root, "fpga")
+        self.assertNotEqual(before, after)
+        self.assertEqual(
+            after,
+            subprocess.run(
+                ["git", "-C", str(self.root), "rev-parse", "HEAD"],
+                check=True,
+                text=True,
+                capture_output=True,
+                env=git_env(),
+            ).stdout.strip(),
+        )
+
     def test_generated_untracked_file_does_not_change_identity(self) -> None:
         fpga_before, _ = component_id.component_id(self.root, "fpga")
         kernel_before, _ = component_id.component_id(self.root, "kernel")

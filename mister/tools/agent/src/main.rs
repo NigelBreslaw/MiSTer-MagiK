@@ -912,7 +912,9 @@ mod linux {
     const FRAMEBUFFER_PRODUCER_PORT: u16 = 7499;
     const TOKEN_PATH: &str = "/media/fat/mister-magik-dev/agent.token";
     const MAGIK_UIO_GET_FBUF_LATCH: u16 = mister_magik_latch_contract::GET_FBUF_LATCH;
+    const MAGIK_UIO_GET_FBUF_LATCH_CAPS: u16 = mister_magik_latch_contract::GET_FBUF_LATCH_CAPS;
     const MAGIK_FBUF_STATUS_MAGIC: u16 = mister_magik_latch_contract::STATUS_MAGIC;
+    const MAGIK_FBUF_CAPS_MAGIC: u16 = mister_magik_latch_contract::CAPS_MAGIC;
     const FPGA_MGR_BASE: i64 = 0xFF70_6000;
     const FPGA_MGR_LEN: usize = 0x1000;
     const FPGA_GPO_OFF: usize = 0x10;
@@ -2934,6 +2936,7 @@ mod linux {
         base: *mut u8,
         _file: File,
         gpo: u32,
+        latch_protocol: Option<mister_magik_latch_contract::LatchProtocol>,
     }
 
     impl FpgaIo {
@@ -2956,10 +2959,31 @@ mod linux {
                 base: base.cast::<u8>(),
                 _file: file,
                 gpo: FPGA_BIT31,
+                latch_protocol: None,
             })
         }
 
         fn read_latched_fbuf_status(&mut self) -> io::Result<LatchedFbufStatus> {
+            let protocol = match self.latch_protocol {
+                Some(protocol) => protocol,
+                None => self.negotiate_latch_protocol()?,
+            };
+            match self.read_latched_fbuf_status_once(protocol) {
+                Err(first)
+                    if protocol == mister_magik_latch_contract::LatchProtocol::V3
+                        && first.kind() == io::ErrorKind::InvalidData =>
+                {
+                    self.reset_spi_transport();
+                    self.read_latched_fbuf_status_once(protocol)
+                }
+                result => result,
+            }
+        }
+
+        fn read_latched_fbuf_status_once(
+            &mut self,
+            protocol: mister_magik_latch_contract::LatchProtocol,
+        ) -> io::Result<LatchedFbufStatus> {
             let result = (|| {
                 let (magic_hi, magic_lo) = self.cmd_capture(MAGIK_UIO_GET_FBUF_LATCH)?;
                 if magic_hi != MAGIK_FBUF_STATUS_MAGIC && magic_lo != MAGIK_FBUF_STATUS_MAGIC {
@@ -2970,25 +2994,101 @@ mod linux {
                         ),
                     ));
                 }
-                let mut words = [0u16; 11];
-                for word in &mut words {
+                let mut words = [0u16; mister_magik_latch_contract::V3_STATUS_WORDS];
+                for word in words.iter_mut().take(protocol.status_word_count()) {
                     *word = self.spi_capture(0)?.1;
                 }
+                let decoded = mister_magik_latch_contract::decode_status(
+                    protocol,
+                    &words[..protocol.status_word_count()],
+                )
+                .map_err(|message| io::Error::new(io::ErrorKind::InvalidData, message))?;
                 Ok(LatchedFbufStatus {
-                    active_sequence: words[0],
-                    pending_sequence: words[1],
-                    flags: words[2],
-                    flip_count: words[3],
-                    post_count: words[4],
-                    drop_count: words[5],
-                    active_base: words[6] as u32 | ((words[7] as u32) << 16),
-                    active_width: words[8],
-                    active_height: words[9],
-                    active_stride: words[10],
+                    active_sequence: decoded.active_seq,
+                    pending_sequence: decoded.pending_seq,
+                    flags: decoded.flags,
+                    flip_count: decoded.flip_count,
+                    post_count: decoded.post_count,
+                    drop_count: decoded.drop_count,
+                    active_base: decoded.base,
+                    active_width: decoded.width,
+                    active_height: decoded.height,
+                    active_stride: decoded.stride,
                 })
             })();
             self.disable_io();
             result
+        }
+
+        fn negotiate_latch_protocol(
+            &mut self,
+        ) -> io::Result<mister_magik_latch_contract::LatchProtocol> {
+            self.latch_protocol = None;
+            let result = match self.read_latch_capabilities_once() {
+                Err((first, Some(mister_magik_latch_contract::LatchProtocol::V3)))
+                    if first.kind() == io::ErrorKind::InvalidData =>
+                {
+                    self.reset_spi_transport();
+                    self.read_latch_capabilities_once()
+                        .map_err(|(error, _)| error)
+                }
+                result => result.map_err(|(error, _)| error),
+            };
+            let capabilities = result?;
+            self.latch_protocol = Some(capabilities.protocol);
+            Ok(capabilities.protocol)
+        }
+
+        fn read_latch_capabilities_once(
+            &mut self,
+        ) -> Result<
+            mister_magik_latch_contract::LatchCapabilities,
+            (
+                io::Error,
+                Option<mister_magik_latch_contract::LatchProtocol>,
+            ),
+        > {
+            let mut observed_protocol = None;
+            let result = (|| {
+                let (magic_hi, magic_lo) = self.cmd_capture(MAGIK_UIO_GET_FBUF_LATCH_CAPS)?;
+                if magic_hi != MAGIK_FBUF_CAPS_MAGIC && magic_lo != MAGIK_FBUF_CAPS_MAGIC {
+                    return Err(io::Error::new(
+                        io::ErrorKind::NotFound,
+                        format!(
+                            "latched framebuffer capabilities unsupported: ack_high=0x{magic_hi:04x} ack_low=0x{magic_lo:04x}"
+                        ),
+                    ));
+                }
+                let mut words = [0u16; mister_magik_latch_contract::V3_CAPS_WORDS];
+                words[0] = self.spi_capture(0)?.1;
+                let protocol = mister_magik_latch_contract::LatchProtocol::try_from(words[0])
+                    .map_err(|message| io::Error::new(io::ErrorKind::InvalidData, message))?;
+                observed_protocol = Some(protocol);
+                for word in words.iter_mut().take(protocol.caps_word_count()).skip(1) {
+                    *word = self.spi_capture(0)?.1;
+                }
+                let capabilities = mister_magik_latch_contract::decode_capabilities(
+                    &words[..protocol.caps_word_count()],
+                )
+                .map_err(|message| io::Error::new(io::ErrorKind::InvalidData, message))?;
+                if !capabilities.production_ready() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "latched framebuffer capabilities are not production-ready: protocol={} flags=0x{:04x}",
+                            capabilities.protocol_version, capabilities.flags
+                        ),
+                    ));
+                }
+                Ok(capabilities)
+            })();
+            self.disable_io();
+            result.map_err(|error| (error, observed_protocol))
+        }
+
+        fn reset_spi_transport(&mut self) {
+            self.gpo = (self.gpo | FPGA_BIT31) & !(FPGA_IO_EN | FPGA_STROBE | 0xffff);
+            self.write(self.gpo);
         }
 
         fn cmd_capture(&mut self, cmd: u16) -> io::Result<(u16, u16)> {
