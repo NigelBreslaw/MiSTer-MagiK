@@ -616,6 +616,29 @@ impl ArcadeCatalog {
         )
     }
 
+    /// Removes zero-game system shells after an authoritative catalog replaces
+    /// the progressive discovery view.
+    pub fn without_empty_system_placeholders(&self) -> Self {
+        let mut catalog = self.clone();
+        catalog
+            .systems
+            .retain(|system| system.count > 0 || self.system_game_count(&system.id) > 0);
+        if catalog.systems.len() == self.systems.len() {
+            return self.clone();
+        }
+        let retained_system_ids = catalog
+            .systems
+            .iter()
+            .map(|system| system.id.as_str())
+            .collect::<HashSet<_>>();
+        Arc::make_mut(&mut catalog.platform_kinds)
+            .retain(|system_id, _| retained_system_ids.contains(system_id.as_str()));
+        catalog
+            .projection_stats_by_system
+            .retain(|system_id, _| retained_system_ids.contains(system_id.as_str()));
+        catalog
+    }
+
     pub fn system_game_count(&self, system_id: &str) -> usize {
         self.system_game_indexes(system_id).len()
     }
@@ -1969,6 +1992,90 @@ mod tests {
             replaced.launch_target_for_ref("magik-plan:snes"),
             LaunchTarget::Structured(_)
         ));
+    }
+
+    #[test]
+    fn empty_placeholder_cleanup_preserves_registered_and_resident_systems() {
+        let resident_game = ArcadeGameEntry {
+            title: "1942".into(),
+            mra_path: "/media/fat/_Arcade/1942.mra".into(),
+            preview_archive_path: "".into(),
+            preview_asset_key: "".into(),
+            has_preview: false,
+            system_id: "arcade".into(),
+            year: None,
+            manufacturer: "".into(),
+            players: None,
+            control: "".into(),
+            is_new: false,
+        };
+        let catalog = ArcadeCatalog::new_with_deferred_text_indexes_and_platform_kinds(
+            PathBuf::from("/fixture"),
+            vec![resident_game],
+            vec![
+                GameSystemEntry {
+                    id: "arcade".into(),
+                    title: "Arcade".into(),
+                    count: 0,
+                },
+                GameSystemEntry {
+                    id: "snes".into(),
+                    title: "SNES".into(),
+                    count: 4,
+                },
+                GameSystemEntry {
+                    id: "apple-iigs".into(),
+                    title: "APPLE-IIGS".into(),
+                    count: 0,
+                },
+            ],
+            Vec::new(),
+            HashMap::from([
+                ("arcade".to_string(), PlatformKind::Arcade),
+                ("snes".to_string(), PlatformKind::Console),
+                ("apple-iigs".to_string(), PlatformKind::Unknown),
+            ]),
+        )
+        .with_projection_stats(HashMap::from([
+            (
+                "arcade".to_string(),
+                SystemProjectionStats {
+                    source_games: 1,
+                    visible_families: 1,
+                    collapsed_variants: 0,
+                },
+            ),
+            (
+                "apple-iigs".to_string(),
+                SystemProjectionStats {
+                    source_games: 0,
+                    visible_families: 0,
+                    collapsed_variants: 0,
+                },
+            ),
+        ]));
+
+        let cleaned = catalog.without_empty_system_placeholders();
+
+        assert_eq!(
+            cleaned
+                .systems
+                .iter()
+                .map(|system| system.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["arcade", "snes"]
+        );
+        assert_eq!(cleaned.system_game_count("arcade"), 1);
+        assert_eq!(cleaned.system_game_count("snes"), 0);
+        assert_eq!(cleaned.platform_kind("arcade"), PlatformKind::Arcade);
+        assert_eq!(cleaned.platform_kind("snes"), PlatformKind::Console);
+        assert!(!cleaned.platform_kinds.contains_key("apple-iigs"));
+        assert!(cleaned.projection_stats_by_system.contains_key("arcade"));
+        assert!(
+            !cleaned
+                .projection_stats_by_system
+                .contains_key("apple-iigs")
+        );
     }
 
     #[cfg(feature = "builder")]

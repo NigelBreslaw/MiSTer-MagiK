@@ -1317,12 +1317,20 @@ impl LauncherNav {
 
     pub fn catalog_build_finished(&mut self, catalog: &ArcadeCatalog) {
         self.catalog_build_active = false;
-        self.catalog_build_systems.retain(|system_id| {
-            catalog.system_game_count(system_id) > 0
-                || self.catalog_build_failures.contains(system_id)
-        });
+        let authoritative_systems = catalog
+            .systems
+            .iter()
+            .filter(|system| system.count > 0 || catalog.system_game_count(&system.id) > 0)
+            .map(|system| system.id.as_str())
+            .collect::<HashSet<_>>();
+        self.catalog_build_systems
+            .retain(|system_id| authoritative_systems.contains(system_id.as_str()));
         self.catalog_build_ready
             .retain(|system_id| self.catalog_build_systems.contains(system_id));
+        self.catalog_build_failures
+            .retain(|system_id| authoritative_systems.contains(system_id.as_str()));
+        self.catalog_hydration_active
+            .retain(|system_id| authoritative_systems.contains(system_id.as_str()));
     }
 
     pub fn catalog_with_build_shells(&self, mut catalog: ArcadeCatalog) -> ArcadeCatalog {
@@ -8004,10 +8012,11 @@ mod tests {
     }
 
     #[test]
-    fn progressive_catalog_shell_is_busy_unavailable_and_rolls_up_failure() {
+    fn progressive_catalog_shell_is_busy_then_disappears_without_failure() {
         let catalog = arcade_catalog(Vec::new(), Vec::new()).with_system_placeholder("snes");
         let mut nav = LauncherNav::new();
         nav.catalog_system_discovered("snes");
+        nav.catalog_system_hydration_started("snes");
         nav.sync_launcher_taxonomy(&catalog);
 
         let consoles = nav
@@ -8040,8 +8049,37 @@ mod tests {
         );
 
         nav.catalog_system_failed("snes");
+        let catalog = catalog.without_empty_system_placeholders();
         nav.catalog_build_finished(&catalog);
+        nav.sync_launcher_taxonomy(&catalog);
         nav.go_root();
+        assert!(
+            nav.current_menu_items()
+                .iter()
+                .all(|item| item.id != crate::launcher_taxonomy::CONSOLES_MENU_ID)
+        );
+        assert!(!nav.catalog_system_has_failed("snes"));
+        assert!(!nav.catalog_build_systems.contains("snes"));
+        assert!(!nav.catalog_hydration_active.contains("snes"));
+        assert!(
+            nav.catalog_with_build_shells(catalog)
+                .systems
+                .iter()
+                .all(|system| system.id != "snes"),
+            "discarded build state must not reintroduce the placeholder"
+        );
+    }
+
+    #[test]
+    fn manifest_backed_system_failure_survives_build_reconciliation() {
+        let catalog = arcade_catalog(Vec::new(), vec![arcade_system("snes", 1)]);
+        let mut nav = LauncherNav::new();
+        nav.catalog_system_discovered("snes");
+        nav.catalog_system_failed("snes");
+        nav.catalog_build_finished(&catalog);
+        nav.sync_launcher_taxonomy(&catalog);
+        nav.go_root();
+
         let consoles = nav
             .current_menu_items()
             .iter()
@@ -8052,6 +8090,7 @@ mod tests {
             nav.menu_item_catalog_presentation(&consoles),
             (false, true, true)
         );
+        assert!(nav.catalog_system_has_failed("snes"));
 
         nav.catalog_build_started();
         assert_eq!(

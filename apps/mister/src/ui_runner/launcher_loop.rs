@@ -6092,6 +6092,7 @@ fn apply_catalog_session_effects(
                 );
             }
             CatalogSessionEffect::CatalogBuildFinished => {
+                *catalog = catalog.without_empty_system_placeholders();
                 nav.catalog_build_finished(catalog);
                 *catalog_version = (*catalog_version).wrapping_add(1);
                 nav.sync_launcher_taxonomy(catalog);
