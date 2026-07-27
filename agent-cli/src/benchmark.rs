@@ -62,11 +62,59 @@ fn require_clean_installed_commit(
         BenchmarkScenario::Particles => {
             execute_particles(&mut device, manifest, output_dir, reporter)
         }
+        BenchmarkScenario::ParticleProfile => {
+            execute_particle_profile(&mut device, manifest, output_dir, reporter)
+        }
         BenchmarkScenario::CatalogLifecycle => {
             execute_catalog_lifecycle(&mut device, manifest, output_dir, reporter)
         }
         BenchmarkScenario::Search => execute_search(&mut device, manifest, output_dir, reporter),
     }
+}
+
+fn execute_particle_profile(
+    device: &mut DeviceClient,
+    manifest: String,
+    output_dir: std::path::PathBuf,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    reporter.emit(
+        EventKind::Progress,
+        "profile",
+        "sampling installed particle renderer CPU stacks",
+        Some(20),
+    )?;
+    let detail = device.execute(DeviceRequest::ProfileInstalledParticleCpu {
+        output_dir: output_dir.clone(),
+    })?;
+    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+    device.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))?;
+    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-particle-cpu-profile-v1")
+    {
+        return Err("particle CPU profile summary has the wrong schema".into());
+    }
+    for preset in ["capacity", "visual"] {
+        if summary
+            .pointer(&format!("/presets/{preset}/profile/sample_hits"))
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            <= 0
+        {
+            return Err(format!("particle CPU profile produced no {preset} samples").into());
+        }
+    }
+    reporter.emit(
+        EventKind::Progress,
+        "benchmark-result",
+        &serde_json::to_string(&json!({
+            "installed_manifest": manifest,
+            "summary": summary,
+            "output_dir": output_dir,
+        }))
+        .map_err(|error| error.to_string())?,
+        Some(100),
+    )?;
+    Ok(Outcome::Passed)
 }
 
 fn execute_particles(

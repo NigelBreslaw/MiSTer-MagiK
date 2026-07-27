@@ -37,6 +37,9 @@ pub enum DeviceRequest {
     ProfileInstalledParticles {
         output_dir: PathBuf,
     },
+    ProfileInstalledParticleCpu {
+        output_dir: PathBuf,
+    },
     ProfileInstalledSearch {
         output_dir: PathBuf,
     },
@@ -81,6 +84,7 @@ impl DeviceRequest {
             Self::DeliverPlatformTransaction { .. } => "deliver-platform-transaction",
             Self::ProfileInstalledScreensaver { .. } => "profile-installed-screensaver",
             Self::ProfileInstalledParticles { .. } => "profile-installed-particles",
+            Self::ProfileInstalledParticleCpu { .. } => "profile-installed-particle-cpu",
             Self::ProfileInstalledSearch { .. } => "profile-installed-search",
             Self::VerifyInstalledSearchUi { .. } => "verify-installed-search-ui",
             Self::ProfileInstalledCatalogLifecycle { .. } => "profile-installed-catalog-lifecycle",
@@ -239,6 +243,9 @@ mod tests {
             DeviceRequest::ProfileInstalledParticles {
                 output_dir: "particle-profiles".into(),
             },
+            DeviceRequest::ProfileInstalledParticleCpu {
+                output_dir: "particle-cpu-profiles".into(),
+            },
             DeviceRequest::ProfileInstalledSearch {
                 output_dir: "search-profile".into(),
             },
@@ -267,7 +274,7 @@ mod tests {
             DeviceRequest::CaptureFramebuffer,
         ];
         let labels: Vec<_> = requests.iter().map(DeviceRequest::label).collect();
-        assert_eq!(labels.len(), 27);
+        assert_eq!(labels.len(), 28);
         assert!(labels.iter().all(|label| !label.is_empty()));
         assert_eq!(
             labels

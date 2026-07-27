@@ -12,6 +12,7 @@ Supported scenarios:
 
 - `screensaver` (the default)
 - `particles`
+- `particle-profile`
 - `catalog-lifecycle`
 - `search`
 
@@ -45,6 +46,21 @@ The workflow captures representative static and formed frames through the
 typed agent framebuffer path. Telemetry, captures, `summary.json`, and
 `report.md` are written below
 `build/agent-benchmarks/particles/<timestamp>/`.
+
+## Particle CPU profile
+
+The fixed `particle-profile` scenario samples the scalar particle renderer at
+99 Hz for 30 seconds in each preset, using 12,288 capacity particles and 9,216
+visual particles. It reuses the screensaver-triggered pprof runtime so sampling
+starts only after the particle renderer becomes active. The workflow requires
+the direct 960x540 RGB565 hidden-slot path, writes SVG flamegraphs, folded
+stacks, metadata, and telemetry below
+`build/agent-benchmarks/particle-profile/<timestamp>/`, then restores the
+original display mode, INI, launcher environment, and healthy Home screen.
+
+This is attribution evidence rather than a capacity qualification: sampling
+overhead may create frame misses. Production ceilings remain owned by the
+ordinary `particles` scenario.
 
 ## Persisted search
 

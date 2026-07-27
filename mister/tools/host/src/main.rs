@@ -294,6 +294,10 @@ impl DeviceOperations for NativeDevice {
                 let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 profile_installed_particles(&config, output_dir).map_err(device_failure)?
             }
+            DeviceRequest::ProfileInstalledParticleCpu { output_dir } => {
+                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
+                profile_installed_particle_cpu(&config, output_dir).map_err(device_failure)?
+            }
             DeviceRequest::ProfileInstalledSearch { output_dir } => {
                 let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 profile_installed_search(&config, output_dir).map_err(device_failure)?
@@ -3168,6 +3172,9 @@ const SCREENSAVER_PROFILE_TIMEOUT_SECS: u64 = SCREENSAVER_PROFILE_DURATION_SECS 
 const SCREENSAVER_POPULATED_WINDOW_SECS: u64 = 15;
 const PARTICLE_SEARCH_TRIAL_SECS: u64 = 12;
 const PARTICLE_CONFIRMATION_SECS: u64 = 30;
+const PARTICLE_CPU_PROFILE_DURATION_SECS: u64 = 30;
+const PARTICLE_CPU_PROFILE_CAPACITY_COUNT: u64 = 12_288;
+const PARTICLE_CPU_PROFILE_VISUAL_COUNT: u64 = 9_216;
 const PARTICLE_COUNT_STEP: u64 = 1_024;
 const PARTICLE_COUNT_MAX: u64 = 524_288;
 const PARTICLE_POST_RESERVE_US: u64 = 750;
@@ -3705,6 +3712,251 @@ fn profile_installed_particles(config: &NativeDeviceConfig, output_dir: &Path) -
         "output_dir": output_dir,
     });
     persist_and_qualify_particle_benchmark(output_dir, &summary)
+}
+
+fn profile_installed_particle_cpu(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    const DISPLAY_MODE: &str = "hdmi-1920x1080p60";
+    let benchmark_mode = DISPLAY_MATRIX_MODES
+        .iter()
+        .find(|mode| mode.id == DISPLAY_MODE)
+        .copied()
+        .ok_or("particle CPU profile display mode is unavailable")?;
+    let session = connect_with(&config.connection, 10)?;
+    let capability = exec_checked_output(
+        &session,
+        "installed particle CPU profile capability",
+        "/media/fat/mister-magik-dev/mister-magik-fb benchmark-capabilities",
+    )?;
+    let capability = last_json_line(&capability.stdout)
+        .ok_or("installed benchmark capability output contains no JSON report")?;
+    for capability_name in ["particle-capacity-v1", "screensaver-pprof-v1"] {
+        if capability.get(capability_name).and_then(Value::as_bool) != Some(true) {
+            return Err(format!("installed app does not support {capability_name}").into());
+        }
+    }
+    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v2.manifest")
+        .ok_or("development platform manifest is missing")?;
+    let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable")?
+        .trim()
+        .to_string();
+    let original_ini =
+        remote_read(&session, "/media/fat/MiSTer.ini").ok_or("MiSTer.ini is unavailable")?;
+    let original_reply = exec_checked_output(
+        &session,
+        "query original particle CPU profile display mode",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    let original_mode = parse_display_reply_active(original_reply.stdout.trim())?;
+    if parse_display_reply_pending(original_reply.stdout.trim())?.is_some() {
+        return Err("particle CPU profile cannot start during a display transaction".into());
+    }
+    let original_mode_spec = DISPLAY_MATRIX_MODES
+        .iter()
+        .find(|mode| mode.id == original_mode)
+        .copied()
+        .ok_or_else(|| {
+            format!("particle CPU profile cannot restore unknown mode {original_mode}")
+        })?;
+    fs::create_dir_all(output_dir)?;
+    drop(session);
+    let _signal_guard = ScreensaverProfileSignalGuard::install();
+
+    let run_result = (|| -> Result<Value> {
+        apply_confirmed_display_mode(config, benchmark_mode, "particle CPU profile")?;
+        let session = connect_with(&config.connection, 10)?;
+        validate_particle_display_geometry(&session)?;
+        drop(session);
+        let capacity = profile_particle_cpu_preset(
+            config,
+            output_dir,
+            "capacity",
+            PARTICLE_CPU_PROFILE_CAPACITY_COUNT,
+        )?;
+        let visual = profile_particle_cpu_preset(
+            config,
+            output_dir,
+            "visual",
+            PARTICLE_CPU_PROFILE_VISUAL_COUNT,
+        )?;
+        Ok(json!({
+            "capacity": capacity,
+            "visual": visual,
+        }))
+    })();
+
+    let launcher_cleanup = restore_installed_screensaver_profile(config);
+    let display_restore = apply_confirmed_display_mode(
+        config,
+        original_mode_spec,
+        "particle CPU profile restoration",
+    );
+    let final_verification = display_restore.and_then(|()| {
+        verify_particle_benchmark_restoration(
+            config,
+            &original_mode,
+            &original_ini,
+            &boot_id,
+            &manifest,
+        )
+    });
+    let cleanup_result = combine_benchmark_cleanup(launcher_cleanup, final_verification);
+    let presets = match (run_result, cleanup_result) {
+        (Ok(results), Ok(())) => results,
+        (Err(error), Ok(())) => return Err(error),
+        (Ok(_), Err(error)) => {
+            return Err(format!("particle CPU profile cleanup failed: {error}").into());
+        }
+        (Err(run_error), Err(cleanup_error)) => {
+            return Err(format!(
+                "{run_error}; particle CPU profile cleanup failed: {cleanup_error}"
+            )
+            .into());
+        }
+    };
+    let summary = json!({
+        "schema": "mister-magik-particle-cpu-profile-v1",
+        "display": {
+            "benchmark_mode": benchmark_mode.id,
+            "framebuffer": "960x540",
+            "bits_per_pixel": 16,
+            "original_mode": original_mode,
+            "restored": true,
+        },
+        "duration_secs": PARTICLE_CPU_PROFILE_DURATION_SECS,
+        "sampling_hz": 99,
+        "presets": presets,
+        "boot_id": boot_id,
+        "manifest": parse_manifest_evidence(&manifest),
+        "output_dir": output_dir,
+    });
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn profile_particle_cpu_preset(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+    preset: &str,
+    count: u64,
+) -> Result<Value> {
+    let remote_svg = format!("{SCREENSAVER_PROFILE_REMOTE_DIR}/particle-{preset}.svg");
+    let remote_folded = format!("{SCREENSAVER_PROFILE_REMOTE_DIR}/particle-{preset}.folded");
+    let remote_complete = format!("{SCREENSAVER_PROFILE_REMOTE_DIR}/particle-{preset}.json");
+    let session = connect_with(&config.connection, 10)?;
+    exec_checked(
+        &session,
+        "reset particle CPU profile artifacts",
+        &format!(
+            "set -eu; mkdir -p {0}; rm -f {1} {2} {3}",
+            sh(SCREENSAVER_PROFILE_REMOTE_DIR),
+            sh(&remote_svg),
+            sh(&remote_folded),
+            sh(&remote_complete)
+        ),
+    )?;
+    restart_launcher_with_one_shot_env(
+        &session,
+        LauncherRestartOptions {
+            env_vars: vec![
+                ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+                ("MISTER_SCREENSAVER_START_ACTIVE".into(), "1".into()),
+                (
+                    "MISTER_SCREENSAVER_RENDERER".into(),
+                    "particle-magik".into(),
+                ),
+                ("MISTER_PARTICLE_COUNT".into(), count.to_string()),
+                ("MISTER_PARTICLE_PRESET".into(), preset.into()),
+                ("MISTER_PARTICLE_SEED".into(), "827141709451".into()),
+                ("MISTER_PPROF".into(), "1".into()),
+                ("MISTER_PPROF_TRIGGER".into(), "screensaver".into()),
+                (
+                    "MISTER_PPROF_DURATION_SECS".into(),
+                    PARTICLE_CPU_PROFILE_DURATION_SECS.to_string(),
+                ),
+                ("MISTER_PPROF_HZ".into(), "99".into()),
+                ("MISTER_PPROF_OUT".into(), remote_svg.clone()),
+                ("MISTER_PPROF_FOLDED_OUT".into(), remote_folded.clone()),
+                ("MISTER_PPROF_COMPLETE".into(), remote_complete.clone()),
+            ],
+            timeout_secs: 45,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    drop(session);
+
+    let telemetry = agent_telemetry_until_screensaver_profile_complete(
+        &config.agent,
+        Duration::from_secs(PARTICLE_CPU_PROFILE_DURATION_SECS + 20),
+    )?;
+    let telemetry_file = format!("{preset}-telemetry.jsonl");
+    let timing = summarize_particle_trial(
+        preset,
+        count,
+        PARTICLE_CPU_PROFILE_DURATION_SECS,
+        "profile",
+        &telemetry_file,
+        &telemetry,
+    );
+    if timing.get("frames").and_then(Value::as_u64).unwrap_or(0) == 0 {
+        return Err(format!("particle CPU profile did not attest {preset} count {count}").into());
+    }
+    let session = connect_with(&config.connection, 10)?;
+    let metadata = remote_read(&session, &remote_complete)
+        .ok_or("particle CPU profile completion metadata is missing")?;
+    let metadata_value: Value = serde_json::from_str(metadata.trim())?;
+    if metadata_value.get("state").and_then(Value::as_str) != Some("complete")
+        || metadata_value
+            .get("sample_hits")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            <= 0
+    {
+        return Err(format!("particle CPU profile for {preset} produced no CPU samples").into());
+    }
+    let svg = remote_read(&session, &remote_svg)
+        .filter(|text| !text.is_empty())
+        .ok_or("particle CPU profile SVG is missing")?;
+    let folded = remote_read(&session, &remote_folded)
+        .filter(|text| !text.is_empty())
+        .ok_or("particle CPU profile folded stacks are missing")?;
+    let svg_file = format!("{preset}.svg");
+    let folded_file = format!("{preset}.folded");
+    let profile_file = format!("{preset}-profile.json");
+    fs::write(output_dir.join(&svg_file), svg)?;
+    fs::write(output_dir.join(&folded_file), folded)?;
+    fs::write(
+        output_dir.join(&profile_file),
+        format!("{}\n", serde_json::to_string_pretty(&metadata_value)?),
+    )?;
+    let telemetry_text = telemetry
+        .iter()
+        .map(serde_json::to_string)
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .join("\n");
+    fs::write(
+        output_dir.join(&telemetry_file),
+        format!("{telemetry_text}\n"),
+    )?;
+    Ok(json!({
+        "preset": preset,
+        "count": count,
+        "profile": metadata_value,
+        "timing": timing,
+        "artifacts": {
+            "svg": svg_file,
+            "folded": folded_file,
+            "metadata": profile_file,
+            "telemetry": telemetry_file,
+        },
+    }))
 }
 
 fn profile_particle_preset(
