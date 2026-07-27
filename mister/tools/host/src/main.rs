@@ -857,7 +857,10 @@ fn validate_delivery_present_state(
 }
 
 fn validate_terminal_compatibility_evidence(evidence: &Value) -> Result<&str> {
-    if evidence.get("schema").and_then(Value::as_str) != Some("mister-magik-latch-failure-v2") {
+    if !matches!(
+        evidence.get("schema").and_then(Value::as_str),
+        Some("mister-magik-latch-failure-v2" | "mister-magik-latch-failure-v3")
+    ) {
         return Err("compatibility delivery has unsupported latch evidence schema".into());
     }
     for field in [
@@ -13645,6 +13648,17 @@ H: Handlers=event3 js0"#
         continued_evidence["recovery_state"] = json!("continued-compatibility");
         assert_eq!(
             validate_delivery_present_state(&continued, Some(&continued_evidence)).unwrap(),
+            DeliveryPresentState::Compatibility
+        );
+
+        let mut structured = terminal_compatibility_evidence();
+        structured["schema"] = json!("mister-magik-latch-failure-v3");
+        structured["wire_diagnostics"] = json!({
+            "attempt_count": 1,
+            "decision": "rejected"
+        });
+        assert_eq!(
+            validate_delivery_present_state(&compatibility, Some(&structured)).unwrap(),
             DeliveryPresentState::Compatibility
         );
     }

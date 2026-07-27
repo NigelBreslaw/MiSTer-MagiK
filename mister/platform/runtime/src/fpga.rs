@@ -16,9 +16,14 @@ use std::fs::OpenOptions;
 use std::io;
 use std::os::unix::io::AsRawFd;
 use std::ptr::{read_volatile, write_volatile};
+use std::time::Instant;
 
 use crate::framebuffer::route::{
     FramebufferPlacement, FramebufferRouteMode, LauncherFramebufferRoute,
+};
+use crate::latch_readiness::{
+    LatchWireAttempt, LatchWireDecision, LatchWireDiagnostics, LatchWireErrorPhase,
+    LatchWireResult, LatchWireWord,
 };
 
 const MGR_BASE: i64 = 0xFF70_6000; // SOCFPGA FPGA-manager, page aligned
@@ -199,6 +204,19 @@ impl FbParams {
 /// us forever, unlike MiSTer which reboots in that case.
 const SPIN_LIMIT: u32 = 2_000_000;
 
+#[derive(Clone, Copy, Debug)]
+struct SpiCapture {
+    ack_high: u16,
+    ack_low: u16,
+}
+
+#[derive(Debug)]
+struct SpiCaptureFailure {
+    error: io::Error,
+    ack_high: Option<u16>,
+    phase: LatchWireErrorPhase,
+}
+
 trait RegisterIo {
     fn write_gpo(&mut self, value: u32);
     fn read_gpi(&mut self) -> u32;
@@ -238,6 +256,7 @@ impl Drop for MmioRegisters {
 pub struct Fpga {
     registers: Box<dyn RegisterIo>,
     gpo: u32,
+    latch_capabilities: Option<mister_magik_latch_contract::LatchCapabilities>,
 }
 
 impl Fpga {
@@ -274,6 +293,7 @@ impl Fpga {
             // GPO is write-only; we can't read its current value, so start from a
             // known-safe shadow (configured bit set, everything else clear).
             gpo: BIT31,
+            latch_capabilities: None,
         })
     }
 
@@ -319,6 +339,12 @@ impl Fpga {
     /// `history/2026-5-2/framebuffer-experiments.md` was too slow to tell).
     /// Returns `(ack_high_data, ack_low_data)`.
     pub fn spi_capture(&mut self, word: u16) -> io::Result<(u16, u16)> {
+        self.spi_capture_observed(word)
+            .map(|capture| (capture.ack_high, capture.ack_low))
+            .map_err(|failure| failure.error)
+    }
+
+    fn spi_capture_observed(&mut self, word: u16) -> Result<SpiCapture, SpiCaptureFailure> {
         let gpo = (self.gpo & !(0xFFFF | STROBE)) | word as u32;
         self.wr(gpo);
         self.wr(gpo | STROBE);
@@ -334,7 +360,11 @@ impl Fpga {
             n += 1;
             if n >= SPIN_LIMIT {
                 self.wr(gpo);
-                return Err(Self::spi_timeout("high", word));
+                return Err(SpiCaptureFailure {
+                    error: Self::spi_timeout("high", word),
+                    ack_high: None,
+                    phase: LatchWireErrorPhase::AckHigh,
+                });
             }
         }
 
@@ -350,10 +380,17 @@ impl Fpga {
             }
             n += 1;
             if n >= SPIN_LIMIT {
-                return Err(Self::spi_timeout("low", word));
+                return Err(SpiCaptureFailure {
+                    error: Self::spi_timeout("low", word),
+                    ack_high: Some(hi),
+                    phase: LatchWireErrorPhase::AckLow,
+                });
             }
         }
-        Ok((hi, lo))
+        Ok(SpiCapture {
+            ack_high: hi,
+            ack_low: lo,
+        })
     }
 
     #[inline]
@@ -464,30 +501,115 @@ impl Fpga {
     }
 
     pub fn read_magik_latched_fbuf_status(&mut self) -> io::Result<LatchedFbufStatus> {
+        self.read_magik_latched_fbuf_status_sample()
+            .map(|sample| sample.status)
+            .map_err(LatchedFbufStatusReadError::into_io)
+    }
+
+    pub fn read_magik_latched_fbuf_status_sample(
+        &mut self,
+    ) -> Result<LatchedFbufStatusSample, LatchedFbufStatusReadError> {
         match self.read_magik_latched_fbuf_status_once() {
-            Err(error) if error.kind() == io::ErrorKind::TimedOut => {
+            Err(mut first) if first.source.kind() == io::ErrorKind::TimedOut => {
                 // GET_FBUF_LATCH is an idempotent status query. Return the bus
                 // to a known idle state and retry it once; never apply this to
                 // framebuffer posts, whose payload may already be committed.
                 self.reset_spi_transport();
-                self.read_magik_latched_fbuf_status_once()
+                match self.read_magik_latched_fbuf_status_once() {
+                    Ok(mut sample) => {
+                        first.diagnostics.append(&sample.diagnostics);
+                        first.diagnostics.decision = LatchWireDecision::TransportRetryRecovered;
+                        sample.diagnostics = first.diagnostics;
+                        Ok(sample)
+                    }
+                    Err(second) => {
+                        first.diagnostics.append(&second.diagnostics);
+                        first.diagnostics.decision = LatchWireDecision::TransportRetryFailed;
+                        Err(LatchedFbufStatusReadError {
+                            source: second.source,
+                            diagnostics: first.diagnostics,
+                        })
+                    }
+                }
             }
             result => result,
         }
     }
 
-    fn read_magik_latched_fbuf_status_once(&mut self) -> io::Result<LatchedFbufStatus> {
-        let res = (|| {
-            let (magic_hi, magic_lo) = self.cmd_capture(MAGIK_UIO_GET_FBUF_LATCH)?;
-            let mut words = [0u16; mister_magik_latch_contract::STATUS_WORD_COUNT];
-            for word in words.iter_mut() {
-                *word = self.spi_capture(0)?.1;
+    fn read_magik_latched_fbuf_status_once(
+        &mut self,
+    ) -> Result<LatchedFbufStatusSample, LatchedFbufStatusReadError> {
+        let started = Instant::now();
+        let mut attempt = LatchWireAttempt {
+            command: MAGIK_UIO_GET_FBUF_LATCH,
+            command_word: LatchWireWord {
+                index: 0,
+                transmitted: MAGIK_UIO_GET_FBUF_LATCH,
+                ..LatchWireWord::default()
+            },
+            ..LatchWireAttempt::default()
+        };
+        self.enable_io();
+        let command = match self.spi_capture_observed(MAGIK_UIO_GET_FBUF_LATCH) {
+            Ok(capture) => {
+                attempt.command_word.ack_high = Some(capture.ack_high);
+                attempt.command_word.ack_low = Some(capture.ack_low);
+                capture
             }
-            let decoded = mister_magik_latch_contract::decode_status(&words)
-                .map_err(|message| io::Error::new(io::ErrorKind::InvalidData, message))?;
-            Ok(LatchedFbufStatus {
-                magic_hi,
-                magic_lo,
+            Err(failure) => {
+                attempt.command_word.ack_high = failure.ack_high;
+                attempt.command_word.error_phase = failure.phase;
+                attempt.elapsed_us = started.elapsed().as_micros() as u64;
+                attempt.result = LatchWireResult::TransportError;
+                self.disable_io();
+                return Err(LatchedFbufStatusReadError::new(failure.error, attempt));
+            }
+        };
+        let mut words = [0u16; mister_magik_latch_contract::STATUS_WORD_COUNT];
+        for (index, word) in words.iter_mut().enumerate() {
+            let mut observed = LatchWireWord {
+                index: index as u8,
+                transmitted: 0,
+                ..LatchWireWord::default()
+            };
+            match self.spi_capture_observed(0) {
+                Ok(capture) => {
+                    observed.ack_high = Some(capture.ack_high);
+                    observed.ack_low = Some(capture.ack_low);
+                    *word = capture.ack_low;
+                    attempt.response_words[index] = observed;
+                    attempt.response_word_count = (index + 1) as u8;
+                }
+                Err(failure) => {
+                    observed.ack_high = failure.ack_high;
+                    observed.error_phase = failure.phase;
+                    attempt.response_words[index] = observed;
+                    attempt.response_word_count = (index + 1) as u8;
+                    attempt.elapsed_us = started.elapsed().as_micros() as u64;
+                    attempt.result = LatchWireResult::TransportError;
+                    self.disable_io();
+                    return Err(LatchedFbufStatusReadError::new(failure.error, attempt));
+                }
+            }
+        }
+        self.disable_io();
+        let decoded = match mister_magik_latch_contract::decode_status(&words) {
+            Ok(decoded) => decoded,
+            Err(message) => {
+                attempt.elapsed_us = started.elapsed().as_micros() as u64;
+                attempt.result = LatchWireResult::DecodeError;
+                return Err(LatchedFbufStatusReadError::new(
+                    io::Error::new(io::ErrorKind::InvalidData, message),
+                    attempt,
+                ));
+            }
+        };
+        attempt.elapsed_us = started.elapsed().as_micros() as u64;
+        attempt.result = LatchWireResult::Decoded;
+        Ok(LatchedFbufStatusSample {
+            status: LatchedFbufStatus {
+                magic_hi: command.ack_high,
+                magic_lo: command.ack_low,
                 active_sequence: decoded.active_seq,
                 pending_sequence: decoded.pending_seq,
                 flags: decoded.flags,
@@ -498,10 +620,9 @@ impl Fpga {
                 active_width: decoded.width,
                 active_height: decoded.height,
                 active_stride: decoded.stride,
-            })
-        })();
-        self.disable_io();
-        res
+            },
+            diagnostics: diagnostics_with_attempt(attempt, LatchWireDecision::Decoded),
+        })
     }
 
     pub fn probe_magik_latched_fbuf_set(&mut self) -> io::Result<(u16, u16)> {
@@ -524,7 +645,16 @@ impl Fpga {
             Ok((magic_hi, magic_lo, capabilities))
         })();
         self.disable_io();
+        if let Ok((_, _, capabilities)) = &result {
+            self.latch_capabilities = Some(*capabilities);
+        }
         result
+    }
+
+    pub fn negotiated_magik_latch_capabilities(
+        &self,
+    ) -> Option<mister_magik_latch_contract::LatchCapabilities> {
+        self.latch_capabilities
     }
 
     pub fn post_magik_latched_fbuf_rgb565(
@@ -667,6 +797,66 @@ pub struct LatchedFbufStatus {
     pub active_stride: u16,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LatchedFbufStatusSample {
+    pub status: LatchedFbufStatus,
+    pub diagnostics: LatchWireDiagnostics,
+}
+
+#[derive(Debug)]
+pub struct LatchedFbufStatusReadError {
+    source: io::Error,
+    pub diagnostics: LatchWireDiagnostics,
+}
+
+impl LatchedFbufStatusReadError {
+    fn new(source: io::Error, attempt: LatchWireAttempt) -> Self {
+        Self {
+            source,
+            diagnostics: diagnostics_with_attempt(attempt, LatchWireDecision::ReadFailed),
+        }
+    }
+
+    pub fn kind(&self) -> io::ErrorKind {
+        self.source.kind()
+    }
+
+    pub fn from_io(source: io::Error) -> Self {
+        Self {
+            source,
+            diagnostics: LatchWireDiagnostics::default(),
+        }
+    }
+
+    pub fn into_io(self) -> io::Error {
+        self.source
+    }
+}
+
+fn diagnostics_with_attempt(
+    attempt: LatchWireAttempt,
+    decision: LatchWireDecision,
+) -> LatchWireDiagnostics {
+    let mut diagnostics = LatchWireDiagnostics {
+        decision,
+        ..LatchWireDiagnostics::default()
+    };
+    diagnostics.push_attempt(attempt);
+    diagnostics
+}
+
+impl std::fmt::Display for LatchedFbufStatusReadError {
+    fn fmt(&self, output: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.source.fmt(output)
+    }
+}
+
+impl std::error::Error for LatchedFbufStatusReadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
 impl LatchedFbufStatus {
     pub fn supported(self) -> bool {
         self.magic_hi == MAGIK_FBUF_STATUS_MAGIC || self.magic_lo == MAGIK_FBUF_STATUS_MAGIC
@@ -723,8 +913,45 @@ mod tests {
         let fpga = Fpga {
             registers: Box::new(ScriptedRegisters(Rc::clone(&state))),
             gpo: BIT31,
+            latch_capabilities: None,
         };
         (fpga, state)
+    }
+
+    fn scripted_reads(
+        reads: impl IntoIterator<Item = u32>,
+        default_read: u32,
+    ) -> (Fpga, Rc<RefCell<RegisterState>>) {
+        let state = Rc::new(RefCell::new(RegisterState {
+            reads: reads.into_iter().collect(),
+            default_read,
+            ..RegisterState::default()
+        }));
+        let fpga = Fpga {
+            registers: Box::new(ScriptedRegisters(Rc::clone(&state))),
+            gpo: BIT31,
+            latch_capabilities: None,
+        };
+        (fpga, state)
+    }
+
+    fn status_pairs() -> Vec<(u16, u16)> {
+        let status_words = [1, 2, 7, 3, 4, 5, 0x9000, 0x227e, 960, 540, 1920];
+        let mut pairs = vec![(MAGIK_FBUF_STATUS_MAGIC, 0)];
+        pairs.extend(
+            status_words
+                .into_iter()
+                .enumerate()
+                .map(|(index, word)| (0xa000 | index as u16, word)),
+        );
+        pairs
+    }
+
+    fn reads_from_pairs(pairs: &[(u16, u16)]) -> Vec<u32> {
+        pairs
+            .iter()
+            .flat_map(|(hi, lo)| [ACK | u32::from(*hi), u32::from(*lo)])
+            .collect()
     }
 
     fn words_from_writes(writes: &[u32]) -> Vec<u16> {
@@ -787,9 +1014,18 @@ mod tests {
     fn latch_status_timeout_resets_bus_and_retries_only_the_read_command() {
         let (mut fpga, state) = scripted(&[]);
 
-        let error = fpga.read_magik_latched_fbuf_status().unwrap_err();
+        let error = fpga.read_magik_latched_fbuf_status_sample().unwrap_err();
 
         assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(error.diagnostics.attempt_count, 2);
+        assert_eq!(
+            error.diagnostics.decision,
+            LatchWireDecision::TransportRetryFailed
+        );
+        assert_eq!(
+            error.diagnostics.attempts[0].command_word.error_phase,
+            LatchWireErrorPhase::AckHigh
+        );
         assert_eq!(
             words_from_writes(&state.borrow().writes)
                 .into_iter()
@@ -799,6 +1035,126 @@ mod tests {
         );
         assert!(state.borrow().writes.contains(&BIT31));
         assert_eq!(fpga.gpo & (IO_EN | STROBE), 0);
+    }
+
+    #[test]
+    fn latch_status_command_ack_low_timeout_retains_ack_high() {
+        let (mut fpga, _) = scripted_reads([ACK | u32::from(MAGIK_FBUF_STATUS_MAGIC)], ACK);
+
+        let error = fpga.read_magik_latched_fbuf_status_once().unwrap_err();
+        let attempt = error.diagnostics.attempts[0];
+
+        assert_eq!(attempt.command_word.ack_high, Some(MAGIK_FBUF_STATUS_MAGIC));
+        assert_eq!(attempt.command_word.ack_low, None);
+        assert_eq!(
+            attempt.command_word.error_phase,
+            LatchWireErrorPhase::AckLow
+        );
+        assert_eq!(attempt.response_word_count, 0);
+    }
+
+    #[test]
+    fn latch_status_response_timeouts_retain_preceding_words_and_failure_phase() {
+        let pairs = status_pairs();
+        let prefix = reads_from_pairs(&pairs[..3]);
+        let (mut high_timeout, _) = scripted_reads(prefix, 0);
+
+        let high_error = high_timeout
+            .read_magik_latched_fbuf_status_once()
+            .unwrap_err();
+        let high_attempt = high_error.diagnostics.attempts[0];
+        assert_eq!(high_attempt.response_word_count, 3);
+        assert_eq!(high_attempt.response_words[1].ack_low, Some(2));
+        assert_eq!(
+            high_attempt.response_words[2].error_phase,
+            LatchWireErrorPhase::AckHigh
+        );
+
+        let mut low_reads = reads_from_pairs(&pairs[..3]);
+        low_reads.push(ACK | 0xa002);
+        let (mut low_timeout, _) = scripted_reads(low_reads, ACK);
+        let low_error = low_timeout
+            .read_magik_latched_fbuf_status_once()
+            .unwrap_err();
+        let low_attempt = low_error.diagnostics.attempts[0];
+        assert_eq!(low_attempt.response_word_count, 3);
+        assert_eq!(low_attempt.response_words[1].ack_low, Some(2));
+        assert_eq!(low_attempt.response_words[2].ack_high, Some(0xa002));
+        assert_eq!(
+            low_attempt.response_words[2].error_phase,
+            LatchWireErrorPhase::AckLow
+        );
+    }
+
+    #[test]
+    fn latch_status_timeout_then_success_retains_both_attempts_in_order() {
+        let pairs = status_pairs();
+        let reads = std::iter::repeat(0)
+            .take(SPIN_LIMIT as usize)
+            .chain(reads_from_pairs(&pairs))
+            .collect::<Vec<_>>();
+        let (mut fpga, _) = scripted_reads(reads, 0);
+
+        let sample = fpga.read_magik_latched_fbuf_status_sample().unwrap();
+
+        assert_eq!(sample.diagnostics.attempt_count, 2);
+        assert_eq!(
+            sample.diagnostics.decision,
+            LatchWireDecision::TransportRetryRecovered
+        );
+        assert_eq!(
+            sample.diagnostics.attempts[0].command_word.error_phase,
+            LatchWireErrorPhase::AckHigh
+        );
+        assert_eq!(
+            sample.diagnostics.attempts[1].result,
+            LatchWireResult::Decoded
+        );
+    }
+
+    #[test]
+    fn latch_status_partial_timeout_then_second_failure_retains_both_partials() {
+        let pairs = status_pairs();
+        let mut reads = reads_from_pairs(&pairs[..2]);
+        reads.extend(std::iter::repeat(0).take(SPIN_LIMIT as usize));
+        reads.extend(reads_from_pairs(&pairs[..3]));
+        reads.push(ACK | 0xa002);
+        let (mut fpga, _) = scripted_reads(reads, ACK);
+
+        let error = fpga.read_magik_latched_fbuf_status_sample().unwrap_err();
+
+        assert_eq!(error.diagnostics.attempt_count, 2);
+        assert_eq!(
+            error.diagnostics.decision,
+            LatchWireDecision::TransportRetryFailed
+        );
+        assert_eq!(error.diagnostics.attempts[0].response_word_count, 2);
+        assert_eq!(
+            error.diagnostics.attempts[0].response_words[1].error_phase,
+            LatchWireErrorPhase::AckHigh
+        );
+        assert_eq!(error.diagnostics.attempts[1].response_word_count, 3);
+        assert_eq!(
+            error.diagnostics.attempts[1].response_words[2].error_phase,
+            LatchWireErrorPhase::AckLow
+        );
+    }
+
+    #[test]
+    fn latch_status_sample_retains_raw_high_and_low_phases() {
+        let pairs = status_pairs();
+        let (mut fpga, _) = scripted(&pairs);
+
+        let sample = fpga.read_magik_latched_fbuf_status_sample().unwrap();
+
+        assert_eq!(sample.status.active_base, 0x227e_9000);
+        assert_eq!(sample.diagnostics.attempt_count, 1);
+        let attempt = sample.diagnostics.attempts[0];
+        assert_eq!(attempt.command_word.ack_high, Some(MAGIK_FBUF_STATUS_MAGIC));
+        assert_eq!(attempt.response_word_count, 11);
+        assert_eq!(attempt.response_words[8].ack_high, Some(0xa008));
+        assert_eq!(attempt.response_words[8].ack_low, Some(960));
+        assert_eq!(fpga.gpo & IO_EN, 0);
     }
 
     #[test]
