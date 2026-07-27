@@ -8016,7 +8016,6 @@ mod tests {
         let catalog = arcade_catalog(Vec::new(), Vec::new()).with_system_placeholder("snes");
         let mut nav = LauncherNav::new();
         nav.catalog_system_discovered("snes");
-        nav.catalog_system_hydration_started("snes");
         nav.sync_launcher_taxonomy(&catalog);
 
         let consoles = nav
@@ -8048,6 +8047,7 @@ mod tests {
             (false, false, true)
         );
 
+        nav.catalog_system_hydration_started("snes");
         nav.catalog_system_failed("snes");
         let catalog = catalog.without_empty_system_placeholders();
         nav.catalog_build_finished(&catalog);
