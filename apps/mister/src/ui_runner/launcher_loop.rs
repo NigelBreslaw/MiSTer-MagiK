@@ -4541,7 +4541,14 @@ pub(super) fn run_launcher_loop(
                         started.elapsed().as_micros()
                     );
                 }
-                if launcher_presenter.direct_hidden_slots_available(ui) {
+                let direct_hidden_available = launcher_presenter.direct_hidden_slots_available(ui);
+                if ready.requires_direct_hidden() && !direct_hidden_available {
+                    crate::ui_errln!(
+                        "particle experiment requires the direct hidden-slot latch backend"
+                    );
+                    screensaver.fail_current_activation(Instant::now());
+                    screensaver_frame_visible = false;
+                } else if direct_hidden_available {
                     let launcher_snapshot_view = layer_target.cached_frame_view();
                     let launcher_snapshot = screensaver
                         .is_preview()

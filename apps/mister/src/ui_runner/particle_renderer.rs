@@ -20,11 +20,11 @@ const VISUAL_PALETTE: [Rgb565Pixel; 4] = [
     Rgb565Pixel(0xffff),
 ];
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct ParticleRenderStats {
     pub(super) count: usize,
     pub(super) visible: usize,
-    pub(super) phase: Option<ParticlePhase>,
+    pub(super) phase: ParticlePhase,
     pub(super) cycle: u64,
     pub(super) simulation_us: u128,
     pub(super) clear_us: u128,
@@ -134,7 +134,7 @@ fn stats(
     ParticleRenderStats {
         count: frame.count,
         visible,
-        phase: Some(frame.phase),
+        phase: frame.phase,
         cycle: frame.cycle,
         simulation_us,
         clear_us,

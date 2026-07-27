@@ -174,6 +174,7 @@ pub struct FrameBudgetStatus {
 pub struct FrameBudgetRecentFrame {
     pub frame: u64,
     pub screensaver_active: bool,
+    pub screensaver_renderer: &'static str,
     pub wall_us: u64,
     pub prepare_us: u64,
     pub render_us: u64,
@@ -236,6 +237,13 @@ pub struct FrameBudgetRecentFrame {
     pub screensaver_render_ahead_superseded_frames: u64,
     pub screensaver_render_ahead_reused_frames: u64,
     pub screensaver_render_ahead_cancelled: bool,
+    pub particle_preset: &'static str,
+    pub particle_phase: &'static str,
+    pub particle_count: u64,
+    pub particle_visible: u64,
+    pub particle_simulation_us: u64,
+    pub particle_clear_us: u64,
+    pub particle_raster_us: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -748,6 +756,7 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
     }
     field!("frame", frame.frame);
     field!("screensaver_active", frame.screensaver_active);
+    field!("screensaver_renderer", frame.screensaver_renderer);
     field!("wall_us", frame.wall_us);
     field!("prepare_us", frame.prepare_us);
     field!("render_us", frame.render_us);
@@ -876,6 +885,13 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
         "screensaver_render_ahead_cancelled",
         frame.screensaver_render_ahead_cancelled
     );
+    field!("particle_preset", frame.particle_preset);
+    field!("particle_phase", frame.particle_phase);
+    field!("particle_count", frame.particle_count);
+    field!("particle_visible", frame.particle_visible);
+    field!("particle_simulation_us", frame.particle_simulation_us);
+    field!("particle_clear_us", frame.particle_clear_us);
+    field!("particle_raster_us", frame.particle_raster_us);
     Value::Object(object)
 }
 
@@ -1167,6 +1183,7 @@ mod tests {
                     recent_frames: vec![FrameBudgetRecentFrame {
                         frame: 42,
                         screensaver_active: true,
+                        screensaver_renderer: "particle-magik",
                         wall_us: 18_000,
                         prepare_us: 100,
                         render_us: 2_000,
@@ -1196,6 +1213,13 @@ mod tests {
                         screensaver_raster_moved_cards: 8,
                         screensaver_raster_hold_layer_mask: 1,
                         screensaver_raster_visible_layer_mask: 3,
+                        particle_preset: "visual",
+                        particle_phase: "hold",
+                        particle_count: 16_384,
+                        particle_visible: 16_000,
+                        particle_simulation_us: 2_100,
+                        particle_clear_us: 120,
+                        particle_raster_us: 900,
                         ..FrameBudgetRecentFrame::default()
                     }],
                     slow_frames: vec![FrameBudgetSlowFrame {
@@ -1281,6 +1305,18 @@ mod tests {
         assert_eq!(
             value["frame_budget"]["recent_frames"][0]["screensaver_raster_held_cards"],
             2
+        );
+        assert_eq!(
+            value["frame_budget"]["recent_frames"][0]["screensaver_renderer"],
+            "particle-magik"
+        );
+        assert_eq!(
+            value["frame_budget"]["recent_frames"][0]["particle_count"],
+            16_384
+        );
+        assert_eq!(
+            value["frame_budget"]["recent_frames"][0]["particle_phase"],
+            "hold"
         );
         assert_eq!(value["frame_budget"]["slow_frames"][0]["frame"], 41);
         assert_eq!(value["frame_budget"]["slow_frames"][0]["severity"], "drop");

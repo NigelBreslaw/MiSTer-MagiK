@@ -4,6 +4,7 @@
 use super::*;
 use crate::preview_worker;
 use mister_magik_catalog::device_layout::DeviceLayout;
+use mister_magik_fb::particle_engine::{ParticleConfig, ParticlePreset};
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs::File;
@@ -12,6 +13,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+
+use super::particle_renderer::ParticleRenderer;
+
+const PARTICLE_RENDERER_LABEL: &str = "particle-magik";
+const DEFAULT_PARTICLE_COUNT: usize = 16_384;
+const DEFAULT_PARTICLE_SEED: u64 = 0x4d61_6769_4b;
 
 #[cfg(not(mister_bench_scenes))]
 fn hash2_u8(x: usize, y: usize) -> u8 {
@@ -242,6 +249,7 @@ struct ScreensaverRenderState {
 
 pub(in crate::ui_runner) struct LauncherScreensaver {
     parade: ParadeState,
+    particle: Option<ParticleRenderer>,
     archive_rx: Option<Receiver<ArchiveLoadResult>>,
     archive_cancelled: Arc<AtomicBool>,
     startup_started_at: Option<Instant>,
@@ -252,6 +260,7 @@ pub(in crate::ui_runner) struct LauncherScreensaver {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct ScreensaverFrameTrace {
+    pub(super) renderer: &'static str,
     pub(super) archive_poll_us: u128,
     pub(super) card_adopt_us: u128,
     pub(super) cards_adopted: usize,
@@ -277,6 +286,13 @@ pub(super) struct ScreensaverFrameTrace {
     pub(super) render_ahead_superseded_frames: u64,
     pub(super) render_ahead_reused_frames: u64,
     pub(super) render_ahead_cancelled: bool,
+    pub(super) particle_preset: &'static str,
+    pub(super) particle_phase: &'static str,
+    pub(super) particle_count: usize,
+    pub(super) particle_visible: usize,
+    pub(super) particle_simulation_us: u128,
+    pub(super) particle_clear_us: u128,
+    pub(super) particle_raster_us: u128,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -296,9 +312,24 @@ impl LauncherScreensaver {
         let now = Instant::now();
         Self {
             parade: ParadeState::new_with_profile(random_seed(), sampling_profile),
+            particle: None,
             archive_rx: Some(archive_rx),
             archive_cancelled,
             startup_started_at,
+            frame: 0,
+            motion_started_at: now,
+            motion_ticks_fp: 0,
+        }
+    }
+
+    fn particle(renderer: ParticleRenderer, archive_cancelled: Arc<AtomicBool>) -> Self {
+        let now = Instant::now();
+        Self {
+            parade: ParadeState::new_with_profile(random_seed(), ParadeSamplingProfile::LegacyHalf),
+            particle: Some(renderer),
+            archive_rx: None,
+            archive_cancelled,
+            startup_started_at: None,
             frame: 0,
             motion_started_at: now,
             motion_ticks_fp: 0,
@@ -327,6 +358,33 @@ impl LauncherScreensaver {
         h: usize,
         elapsed: Duration,
     ) -> ScreensaverFrameTrace {
+        if let Some(particle) = self.particle.as_mut() {
+            return match particle.render(dst, elapsed) {
+                Ok(stats) => ScreensaverFrameTrace {
+                    renderer: PARTICLE_RENDERER_LABEL,
+                    sampling_profile: "particle-scalar",
+                    particle_preset: particle.preset().label(),
+                    particle_phase: stats.phase.label(),
+                    particle_count: stats.count,
+                    particle_visible: stats.visible,
+                    particle_simulation_us: stats.simulation_us,
+                    particle_clear_us: stats.clear_us,
+                    particle_raster_us: stats.raster_us,
+                    ..ScreensaverFrameTrace::default()
+                },
+                Err(error) => {
+                    dst.fill(Rgb565Pixel(0));
+                    crate::ui_errln!("particle renderer failed: {error}");
+                    ScreensaverFrameTrace {
+                        renderer: "particle-error",
+                        sampling_profile: "particle-error",
+                        particle_preset: particle.preset().label(),
+                        particle_count: particle.particle_count(),
+                        ..ScreensaverFrameTrace::default()
+                    }
+                }
+            };
+        }
         let next_motion_ticks_fp = (parade_tick_delta_fp(elapsed) as u64).max(self.motion_ticks_fp);
         let tick_delta_fp = next_motion_ticks_fp
             .saturating_sub(self.motion_ticks_fp)
@@ -343,6 +401,7 @@ impl LauncherScreensaver {
             self.motion_ticks_fp,
             tick_delta_fp,
         );
+        trace.renderer = "parade";
         trace.archive_poll_us = archive_poll_us;
         if self.frame > 0 && self.frame % 600 == 0 {
             self.parade.log_scaler_stats();
@@ -389,15 +448,28 @@ impl LauncherScreensaver {
     }
 
     pub(in crate::ui_runner) fn has_rendered_card(&self) -> bool {
+        if self.particle.is_some() {
+            return true;
+        }
         self.parade.tiles.iter().any(|tile| tile.active)
     }
 
     pub(in crate::ui_runner) fn is_loading_archive(&self) -> bool {
+        if self.particle.is_some() {
+            return false;
+        }
         self.archive_rx.is_some()
     }
 
     pub(in crate::ui_runner) fn active_card_count(&self) -> usize {
+        if self.particle.is_some() {
+            return 0;
+        }
         self.parade.tiles.iter().filter(|tile| tile.active).count()
+    }
+
+    pub(in crate::ui_runner) fn requires_direct_hidden(&self) -> bool {
+        self.particle.is_some()
     }
 }
 
@@ -422,12 +494,25 @@ pub(in crate::ui_runner) struct LauncherScreensaverLoader {
 
 impl LauncherScreensaverLoader {
     pub(in crate::ui_runner) fn start(
-        _w: usize,
-        _h: usize,
+        w: usize,
+        h: usize,
         startup_started_at: Option<Instant>,
         crt_output: bool,
     ) -> Self {
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        if particle_renderer_requested() {
+            let archive_cancelled = Arc::new(AtomicBool::new(false));
+            match particle_config_from_env(w, h).and_then(ParticleRenderer::new_magik) {
+                Ok(renderer) => {
+                    let _ =
+                        ready_tx.send(LauncherScreensaver::particle(renderer, archive_cancelled));
+                }
+                Err(error) => {
+                    crate::ui_errln!("particle renderer initialization failed: {error}");
+                }
+            }
+            return Self { ready_rx };
+        }
         let (archive_tx, archive_rx) = mpsc::sync_channel(1);
         let archive_cancelled = Arc::new(AtomicBool::new(false));
         let worker_cancelled = Arc::clone(&archive_cancelled);
@@ -473,6 +558,56 @@ impl LauncherScreensaverLoader {
     pub(in crate::ui_runner) fn try_ready(&self) -> Option<LauncherScreensaver> {
         self.ready_rx.try_recv().ok()
     }
+}
+
+fn particle_renderer_requested() -> bool {
+    particle_renderer_label_requested(std::env::var("MISTER_SCREENSAVER_RENDERER").ok().as_deref())
+}
+
+fn particle_renderer_label_requested(value: Option<&str>) -> bool {
+    value.is_some_and(|value| value.trim().eq_ignore_ascii_case(PARTICLE_RENDERER_LABEL))
+}
+
+fn particle_config_from_env(width: usize, height: usize) -> Result<ParticleConfig, String> {
+    if (width, height) != (960, 540) {
+        return Err(format!(
+            "particle experiment requires 960x540, received {width}x{height}"
+        ));
+    }
+    let count = std::env::var("MISTER_PARTICLE_COUNT")
+        .ok()
+        .map(|value| {
+            value
+                .parse::<usize>()
+                .map_err(|error| format!("invalid MISTER_PARTICLE_COUNT={value:?}: {error}"))
+        })
+        .transpose()?
+        .unwrap_or(DEFAULT_PARTICLE_COUNT);
+    let preset = std::env::var("MISTER_PARTICLE_PRESET")
+        .ok()
+        .map(|value| {
+            ParticlePreset::parse(&value)
+                .ok_or_else(|| format!("invalid MISTER_PARTICLE_PRESET={value:?}"))
+        })
+        .transpose()?
+        .unwrap_or(ParticlePreset::Visual);
+    let seed = std::env::var("MISTER_PARTICLE_SEED")
+        .ok()
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .map_err(|error| format!("invalid MISTER_PARTICLE_SEED={value:?}: {error}"))
+        })
+        .transpose()?
+        .unwrap_or(DEFAULT_PARTICLE_SEED);
+    ParticleConfig {
+        count,
+        width,
+        height,
+        seed,
+        preset,
+    }
+    .validate()
 }
 
 impl ScreensaverRenderState {
@@ -5104,5 +5239,31 @@ mod tests {
         assert_eq!(parse_screensaver_seed("0X2A"), Some(42));
         assert_eq!(parse_screensaver_seed(""), None);
         assert_eq!(parse_screensaver_seed("seed"), None);
+    }
+
+    #[test]
+    fn particle_renderer_is_selected_only_by_its_explicit_label() {
+        assert!(particle_renderer_label_requested(Some("particle-magik")));
+        assert!(particle_renderer_label_requested(Some(" PARTICLE-MAGIK ")));
+        assert!(!particle_renderer_label_requested(None));
+        assert!(!particle_renderer_label_requested(Some("")));
+        assert!(!particle_renderer_label_requested(Some("parade")));
+    }
+
+    #[test]
+    fn particle_renderer_requires_the_direct_hidden_pipeline() {
+        let renderer = ParticleRenderer::new_magik(ParticleConfig {
+            count: 1_024,
+            width: 960,
+            height: 540,
+            seed: 7,
+            preset: ParticlePreset::Capacity,
+        })
+        .unwrap();
+        let screensaver = LauncherScreensaver::particle(renderer, Arc::new(AtomicBool::new(false)));
+        assert!(screensaver.requires_direct_hidden());
+        assert!(!screensaver.is_loading_archive());
+        assert!(screensaver.has_rendered_card());
+        assert_eq!(screensaver.active_card_count(), 0);
     }
 }

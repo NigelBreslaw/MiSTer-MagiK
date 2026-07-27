@@ -1698,6 +1698,7 @@ impl LauncherFrameAccounting {
             .push(runtime_status::FrameBudgetRecentFrame {
                 frame: frame.frames,
                 screensaver_active: frame.screensaver_active,
+                screensaver_renderer: frame.screensaver_frame_trace.renderer,
                 wall_us,
                 prepare_us,
                 render_us,
@@ -1815,6 +1816,23 @@ impl LauncherFrameAccounting {
                 screensaver_render_ahead_cancelled: frame
                     .screensaver_frame_trace
                     .render_ahead_cancelled,
+                particle_preset: frame.screensaver_frame_trace.particle_preset,
+                particle_phase: frame.screensaver_frame_trace.particle_phase,
+                particle_count: usize_to_u64_saturating(
+                    frame.screensaver_frame_trace.particle_count,
+                ),
+                particle_visible: usize_to_u64_saturating(
+                    frame.screensaver_frame_trace.particle_visible,
+                ),
+                particle_simulation_us: u128_to_u64_saturating(
+                    frame.screensaver_frame_trace.particle_simulation_us,
+                ),
+                particle_clear_us: u128_to_u64_saturating(
+                    frame.screensaver_frame_trace.particle_clear_us,
+                ),
+                particle_raster_us: u128_to_u64_saturating(
+                    frame.screensaver_frame_trace.particle_raster_us,
+                ),
             });
     }
 

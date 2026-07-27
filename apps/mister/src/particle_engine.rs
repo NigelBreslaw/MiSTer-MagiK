@@ -167,7 +167,6 @@ impl ParticleConfig {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ParticleFrameStats {
     pub count: usize,
-    pub visible: usize,
     pub phase: ParticlePhase,
     pub cycle: u64,
 }
@@ -272,7 +271,6 @@ impl ParticleEngine {
         }
         ParticleFrameStats {
             count: self.particle_count(),
-            visible: 0,
             phase: self.phase,
             cycle: self.cycle,
         }
