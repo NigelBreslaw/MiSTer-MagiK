@@ -22,6 +22,7 @@ pub mod launcher;
 pub mod launcher_taxonomy;
 pub mod licenses;
 pub mod media_update;
+pub mod particle_engine;
 pub mod raw565;
 pub mod return_catalog_capsule;
 pub use mister_magik_mister_runtime::runtime_status;
