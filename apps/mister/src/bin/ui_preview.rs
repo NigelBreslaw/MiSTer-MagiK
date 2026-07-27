@@ -4,9 +4,12 @@
 #[cfg(target_os = "macos")]
 mod macos {
     use mister_magik_fb::visual_platform::{MisterPlatform, MisterSoftwareWindow};
-    use mister_magik_ui::launcher::{Launcher, MisterBridge, MisterUi};
+    use mister_magik_ui::launcher::{
+        Launcher, MenuItem, MenuItemKind, MenuItemStatus, MisterBridge, MisterUi,
+        ScreenshotPackProgress,
+    };
     use slint::platform::software_renderer::{RepaintBufferType, Rgb565Pixel};
-    use slint::{ComponentHandle, PhysicalSize};
+    use slint::{ComponentHandle, ModelRc, PhysicalSize, SharedString, VecModel};
     use softbuffer::{Context, Surface};
     use std::error::Error;
     use std::num::NonZeroU32;
@@ -15,8 +18,9 @@ mod macos {
     use std::time::{Duration, Instant};
     use winit::application::ApplicationHandler;
     use winit::dpi::LogicalSize;
-    use winit::event::WindowEvent;
+    use winit::event::{ElementState, WindowEvent};
     use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+    use winit::keyboard::{KeyCode, PhysicalKey};
     use winit::window::{Window, WindowId};
 
     const FRAME_WIDTH: usize = 960;
@@ -37,45 +41,50 @@ mod macos {
         ui.set_window_height(FRAME_HEIGHT as i32);
         ui.set_crt_layout(false);
         let bridge = launcher.global::<MisterBridge>();
-        bridge.set_startup_visible(false);
-        bridge.set_effective_view("home".into());
-        bridge.set_screen_mode(0);
-        bridge.set_menu_title("MiSTer MagiK".into());
-        bridge.set_clock_text("12:34".into());
+        initialize_bridge(&bridge);
+        apply_scenario(&launcher, Scenario::Home);
         launcher.show()?;
         slint_window.request_redraw();
 
         let event_loop = EventLoop::new()?;
         event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + FRAME_PERIOD));
-        let mut application = PreviewApplication::new(launcher, slint_window);
+        let mut application = PreviewApplication::new(launcher, slint_window, Scenario::Home);
         event_loop.run_app(&mut application)?;
         Ok(())
     }
 
     struct PreviewApplication {
-        _launcher: Launcher,
+        launcher: Launcher,
         slint_window: Rc<MisterSoftwareWindow>,
         native_window: Option<Arc<Window>>,
         surface: Option<Surface<Arc<Window>, Arc<Window>>>,
         rgb565: Vec<Rgb565Pixel>,
         xrgb8888: Vec<u32>,
+        scenario: Scenario,
+        selection: usize,
     }
 
     impl PreviewApplication {
-        fn new(launcher: Launcher, slint_window: Rc<MisterSoftwareWindow>) -> Self {
+        fn new(
+            launcher: Launcher,
+            slint_window: Rc<MisterSoftwareWindow>,
+            scenario: Scenario,
+        ) -> Self {
             Self {
-                _launcher: launcher,
+                launcher,
                 slint_window,
                 native_window: None,
                 surface: None,
                 rgb565: vec![Rgb565Pixel(0); FRAME_WIDTH * FRAME_HEIGHT],
                 xrgb8888: Vec::new(),
+                scenario,
+                selection: 0,
             }
         }
 
         fn create_window(&mut self, event_loop: &ActiveEventLoop) {
             let attributes = Window::default_attributes()
-                .with_title("MiSTer MagiK UI Preview — Home")
+                .with_title(self.window_title())
                 .with_inner_size(LogicalSize::new(FRAME_WIDTH as f64, FRAME_HEIGHT as f64))
                 .with_min_inner_size(LogicalSize::new(
                     (FRAME_WIDTH / 2) as f64,
@@ -91,6 +100,89 @@ mod macos {
                 Surface::new(&context, Arc::clone(&window)).expect("create preview window surface");
             self.native_window = Some(window);
             self.surface = Some(surface);
+        }
+
+        fn window_title(&self) -> String {
+            format!(
+                "MiSTer MagiK UI Preview — {} — {}",
+                self.scenario.label(),
+                self.scenario.shortcut()
+            )
+        }
+
+        fn select_scenario(&mut self, scenario: Scenario) {
+            self.scenario = scenario;
+            self.selection = 0;
+            apply_scenario(&self.launcher, scenario);
+            self.update_selection();
+            if let Some(window) = self.native_window.as_ref() {
+                window.set_title(&self.window_title());
+                window.request_redraw();
+            }
+        }
+
+        fn move_selection(&mut self, delta: isize) {
+            let count = match self.scenario {
+                Scenario::Home | Scenario::BackgroundScan | Scenario::Confirm => 6,
+                Scenario::Settings => 5,
+                Scenario::About => 2,
+                Scenario::Licenses => 2,
+                Scenario::ScreensaverSettings => 2,
+                _ => 1,
+            };
+            self.selection = self
+                .selection
+                .saturating_add_signed(delta)
+                .min(count.saturating_sub(1));
+            self.update_selection();
+        }
+
+        fn update_selection(&self) {
+            let bridge = self.launcher.global::<MisterBridge>();
+            bridge.set_selected_index(self.selection as i32);
+            bridge.set_settings_selected(self.selection as i32);
+            bridge.set_about_selected(self.selection as i32);
+            bridge.set_licenses_selected(self.selection as i32);
+            bridge.set_screensaver_settings_selected(self.selection as i32);
+            bridge.set_confirm_selected(self.selection.min(1) as i32);
+            if matches!(
+                self.scenario,
+                Scenario::Home | Scenario::BackgroundScan | Scenario::Confirm
+            ) {
+                bridge.set_menu_items(home_menu_items(self.selection));
+            }
+            self.slint_window.request_redraw();
+        }
+
+        fn handle_key(&mut self, code: KeyCode) {
+            let scenario = match code {
+                KeyCode::Digit1 => Some(Scenario::Home),
+                KeyCode::Digit2 => Some(Scenario::Settings),
+                KeyCode::Digit3 => Some(Scenario::Controller),
+                KeyCode::Digit4 => Some(Scenario::About),
+                KeyCode::Digit5 => Some(Scenario::Licenses),
+                KeyCode::Digit6 => Some(Scenario::Info),
+                KeyCode::Digit7 => Some(Scenario::ScreensaverSettings),
+                KeyCode::Digit8 => Some(Scenario::Startup),
+                KeyCode::Digit9 => Some(Scenario::Confirm),
+                KeyCode::Digit0 => Some(Scenario::CatalogScan),
+                KeyCode::KeyA => Some(Scenario::Arcade),
+                KeyCode::KeyB => Some(Scenario::BackgroundScan),
+                KeyCode::KeyC => Some(Scenario::Compatibility),
+                KeyCode::KeyL => Some(Scenario::Loading),
+                KeyCode::KeyM => Some(Scenario::MediaProgress),
+                KeyCode::KeyS => Some(Scenario::ControllerSetup),
+                _ => None,
+            };
+            if let Some(scenario) = scenario {
+                self.select_scenario(scenario);
+                return;
+            }
+            match code {
+                KeyCode::ArrowUp | KeyCode::ArrowLeft => self.move_selection(-1),
+                KeyCode::ArrowDown | KeyCode::ArrowRight => self.move_selection(1),
+                _ => {}
+            }
         }
 
         fn render(&mut self) {
@@ -155,6 +247,13 @@ mod macos {
             match event {
                 WindowEvent::CloseRequested => event_loop.exit(),
                 WindowEvent::RedrawRequested => self.render(),
+                WindowEvent::KeyboardInput { event, .. }
+                    if event.state == ElementState::Pressed && !event.repeat =>
+                {
+                    if let PhysicalKey::Code(code) = event.physical_key {
+                        self.handle_key(code);
+                    }
+                }
                 WindowEvent::Resized(_) => {
                     if let Some(window) = self.native_window.as_ref() {
                         window.request_redraw();
@@ -170,6 +269,283 @@ mod macos {
                 window.request_redraw();
             }
         }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Scenario {
+        Home,
+        Arcade,
+        Settings,
+        Controller,
+        ControllerSetup,
+        About,
+        Licenses,
+        Info,
+        ScreensaverSettings,
+        Startup,
+        Confirm,
+        CatalogScan,
+        BackgroundScan,
+        Compatibility,
+        Loading,
+        MediaProgress,
+    }
+
+    impl Scenario {
+        fn label(self) -> &'static str {
+            match self {
+                Self::Home => "Home",
+                Self::Arcade => "Arcade",
+                Self::Settings => "Settings",
+                Self::Controller => "Controller",
+                Self::ControllerSetup => "Controller Setup",
+                Self::About => "About",
+                Self::Licenses => "Licenses",
+                Self::Info => "Info",
+                Self::ScreensaverSettings => "Screensaver Settings",
+                Self::Startup => "Startup",
+                Self::Confirm => "Confirmation",
+                Self::CatalogScan => "Catalog Scan",
+                Self::BackgroundScan => "Background Scan",
+                Self::Compatibility => "Compatibility",
+                Self::Loading => "Loading",
+                Self::MediaProgress => "Media Progress",
+            }
+        }
+
+        fn shortcut(self) -> &'static str {
+            match self {
+                Self::Home => "1",
+                Self::Settings => "2",
+                Self::Controller => "3",
+                Self::About => "4",
+                Self::Licenses => "5",
+                Self::Info => "6",
+                Self::ScreensaverSettings => "7",
+                Self::Startup => "8",
+                Self::Confirm => "9",
+                Self::CatalogScan => "0",
+                Self::Arcade => "A",
+                Self::BackgroundScan => "B",
+                Self::Compatibility => "C",
+                Self::Loading => "L",
+                Self::MediaProgress => "M",
+                Self::ControllerSetup => "S",
+            }
+        }
+    }
+
+    fn initialize_bridge(bridge: &MisterBridge) {
+        bridge.set_clock_text("12:34".into());
+        bridge.set_build_label("Mac visual preview".into());
+        bridge.set_present_mode_label("RGB565 host composition".into());
+        bridge.set_capture_available(true);
+        bridge.set_device_label("Controller 1".into());
+        bridge.set_device_name("Fixture Gamepad".into());
+        bridge.set_usb_port("USB 1-2".into());
+        bridge.set_usb_id("045e:028e".into());
+        bridge.set_serial_id("PREVIEW-0001".into());
+        bridge.set_js_counts("16 buttons · 6 axes".into());
+        bridge.set_pressed_now("A · D-pad Right".into());
+        bridge.set_last_event_label("Button A pressed".into());
+        bridge.set_last_raw_event("type=1 code=304 value=1".into());
+        bridge.set_display_options(strings(&[
+            "Current mode",
+            "1920×1080 60 Hz",
+            "1280×720 60 Hz",
+            "CRT 240p 60 Hz",
+        ]));
+        bridge.set_display_active_label("1920×1080 60 Hz".into());
+        bridge.set_arcade_search_keys(strings(&[
+            "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q",
+            "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+        ]));
+        bridge.set_license_lines(strings(&[
+            "MiSTer MagiK",
+            "",
+            "GNU General Public License, version 3",
+            "",
+            "Slint 1.17.1",
+            "FFmpeg 8.1",
+            "Rust third-party license inventory",
+        ]));
+    }
+
+    fn apply_scenario(launcher: &Launcher, scenario: Scenario) {
+        let bridge = launcher.global::<MisterBridge>();
+        reset_transient_bridge(&bridge);
+        bridge.set_screen_mode(match scenario {
+            Scenario::Controller | Scenario::ControllerSetup => 1,
+            Scenario::Arcade => 2,
+            Scenario::Settings => 3,
+            Scenario::About => 4,
+            Scenario::Licenses => 5,
+            Scenario::Info => 6,
+            Scenario::ScreensaverSettings => 7,
+            _ => 0,
+        });
+        bridge.set_effective_view(
+            match scenario {
+                Scenario::Arcade => "arcade",
+                Scenario::Settings => "settings",
+                Scenario::Controller | Scenario::ControllerSetup => "controller",
+                Scenario::About => "about",
+                Scenario::Licenses => "licenses",
+                Scenario::Info => "info",
+                Scenario::ScreensaverSettings => "screensaver-settings",
+                _ => "home",
+            }
+            .into(),
+        );
+        bridge.set_menu_title("MiSTer MagiK".into());
+        bridge.set_menu_breadcrumb("Systems".into());
+        bridge.set_menu_items(home_menu_items(0));
+        bridge.set_selected_index(0);
+        bridge.set_settings_selected(0);
+        bridge.set_about_selected(0);
+        bridge.set_licenses_selected(0);
+        bridge.set_screensaver_settings_selected(0);
+        bridge.set_screensaver_enabled(true);
+        bridge.set_screensaver_delay_minutes(5);
+        bridge.set_simple_joystick_handling(true);
+        bridge.set_info_kernel_version("Linux 6.6.68-MiSTer".into());
+        bridge.set_info_database_build("1,284 ms · 12,846 games".into());
+
+        match scenario {
+            Scenario::Startup => bridge.set_startup_visible(true),
+            Scenario::Confirm => {
+                bridge.set_confirm_visible(true);
+                bridge.set_confirm_title("Rebuild game database?".into());
+                bridge.set_confirm_message(
+                    "Existing catalog data will be replaced after the next launcher start.".into(),
+                );
+                bridge.set_confirm_left_label("Cancel".into());
+                bridge.set_confirm_right_label("Rebuild".into());
+            }
+            Scenario::CatalogScan => {
+                bridge.set_catalog_scan_visible(true);
+                bridge.set_catalog_scan_title("Building game library".into());
+                bridge.set_catalog_scan_message("Scanning Arcade".into());
+                bridge.set_catalog_scan_detail("4,812 of 12,846 games".into());
+                bridge.set_catalog_scan_percent(37);
+            }
+            Scenario::BackgroundScan => bridge.set_catalog_background_scan_visible(true),
+            Scenario::Compatibility => {
+                bridge.set_compatibility_visible(true);
+                bridge.set_compatibility_reason("Display route needs attention".into());
+                bridge.set_compatibility_detail(
+                    "Previewing the launcher while the production route is unavailable.".into(),
+                );
+            }
+            Scenario::Loading => {
+                bridge.set_loading_message("Launching Out Run".into());
+                bridge.set_loading_detail("Preparing core handoff".into());
+            }
+            Scenario::MediaProgress => {
+                bridge.set_media_pack_summary("Downloading screenshot packs".into());
+                bridge.set_media_pack_progresses(ModelRc::new(VecModel::from(vec![
+                    ScreenshotPackProgress {
+                        system: "Arcade".into(),
+                        image_size: "320px".into(),
+                        phase: "Downloading".into(),
+                        percent: 68,
+                        bytes_label: "42 MB / 61 MB".into(),
+                        pack_position: "2 of 4".into(),
+                    },
+                    ScreenshotPackProgress {
+                        system: "Neo Geo".into(),
+                        image_size: "320px".into(),
+                        phase: "Queued".into(),
+                        percent: 0,
+                        bytes_label: "0 MB / 18 MB".into(),
+                        pack_position: "3 of 4".into(),
+                    },
+                ])));
+            }
+            Scenario::ControllerSetup => {
+                bridge.set_setup_visible(true);
+                bridge.set_setup_phase(4);
+                bridge.set_setup_title("Configure Fixture Gamepad".into());
+                bridge.set_setup_subtitle("Press the requested control".into());
+                bridge.set_setup_list(strings(&["D-pad", "Buttons", "Shoulders", "System"]));
+                bridge.set_setup_selected(1);
+                bridge.set_setup_config_labels(strings(&["A", "B", "X", "Y", "Start"]));
+                bridge.set_setup_config_values(strings(&["Button 0", "Button 1", "—", "—", "—"]));
+                bridge.set_setup_name("Fixture Gamepad".into());
+                bridge.set_setup_kind_label("Standard controller".into());
+            }
+            _ => {}
+        }
+        launcher.window().request_redraw();
+    }
+
+    fn reset_transient_bridge(bridge: &MisterBridge) {
+        bridge.set_startup_visible(false);
+        bridge.set_confirm_visible(false);
+        bridge.set_catalog_scan_visible(false);
+        bridge.set_catalog_background_scan_visible(false);
+        bridge.set_compatibility_visible(false);
+        bridge.set_loading_message("".into());
+        bridge.set_loading_detail("".into());
+        bridge.set_media_pack_progresses(ModelRc::new(VecModel::from(
+            Vec::<ScreenshotPackProgress>::new(),
+        )));
+        bridge.set_media_pack_summary("".into());
+        bridge.set_setup_visible(false);
+        bridge.set_display_combo_open(false);
+        bridge.set_arcade_games_loading(false);
+        bridge.set_arcade_preview_placeholder_visible(true);
+    }
+
+    fn home_menu_items(selected: usize) -> ModelRc<MenuItem> {
+        let definitions = [
+            ("arcade", "Arcade", "2,184 games", MenuItemStatus::Ready),
+            ("console", "Consoles", "6,420 games", MenuItemStatus::Ready),
+            (
+                "computer",
+                "Computers",
+                "Scanning…",
+                MenuItemStatus::Scanning,
+            ),
+            (
+                "handheld",
+                "Handhelds",
+                "1,126 games",
+                MenuItemStatus::Partial,
+            ),
+            ("favorites", "Favourites", "42 games", MenuItemStatus::Ready),
+            (
+                "recent",
+                "Recently Added",
+                "Scan failed",
+                MenuItemStatus::Failed,
+            ),
+        ];
+        ModelRc::new(VecModel::from(
+            definitions
+                .into_iter()
+                .enumerate()
+                .map(|(index, (id, label, subtitle, status))| MenuItem {
+                    id: id.into(),
+                    label: label.into(),
+                    subtitle: subtitle.into(),
+                    focused: index == selected,
+                    available: status != MenuItemStatus::Failed,
+                    node_kind: MenuItemKind::Collection,
+                    status,
+                })
+                .collect::<Vec<_>>(),
+        ))
+    }
+
+    fn strings(values: &[&str]) -> ModelRc<SharedString> {
+        ModelRc::new(VecModel::from(
+            values
+                .iter()
+                .copied()
+                .map(SharedString::from)
+                .collect::<Vec<_>>(),
+        ))
     }
 
     fn scale_rgb565_nearest(
