@@ -262,7 +262,7 @@ module tb_mister_magik_sys_top_integration;
 		#1;
 		expect16(dut.LFB_BASE[15:0], 16'h9000, "sys_top accepted base low");
 		expect16(dut.LFB_BASE[31:16], 16'h227e, "sys_top accepted base high");
-		expect16(dut.LFB_HEIGHT, 16'd540, "sys_top accepted height");
+		expect16({4'd0, dut.LFB_HEIGHT}, 16'd540, "sys_top accepted height");
 		expect16(dut.magik_lfb_active_seq, 16'h002a, "sys_top accepted sequence");
 		@(negedge test_clk);
 		test_vblank = 1'b0;
