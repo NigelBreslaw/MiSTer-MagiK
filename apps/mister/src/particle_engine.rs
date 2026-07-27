@@ -190,7 +190,7 @@ pub struct ParticleEngine {
     vx: Vec<f32>,
     vy: Vec<f32>,
     vz: Vec<f32>,
-    seeds: Vec<u32>,
+    random_states: Vec<u32>,
     last_elapsed: Duration,
     cycle: u64,
     phase: ParticlePhase,
@@ -221,7 +221,7 @@ impl ParticleEngine {
             vx: Vec::with_capacity(config.count),
             vy: Vec::with_capacity(config.count),
             vz: Vec::with_capacity(config.count),
-            seeds: Vec::with_capacity(config.count),
+            random_states: Vec::with_capacity(config.count),
             last_elapsed: Duration::ZERO,
             cycle: 0,
             phase: ParticlePhase::Static,
@@ -266,7 +266,7 @@ impl ParticleEngine {
         self.last_elapsed = elapsed;
         self.phase = next_phase;
         if delta > 0.0 {
-            self.advance(delta, elapsed_us);
+            self.advance(delta);
         }
         ParticleFrameStats {
             count: self.particle_count(),
@@ -302,7 +302,7 @@ impl ParticleEngine {
     #[must_use]
     #[inline(always)]
     pub fn flicker_key(&self, index: usize) -> u32 {
-        mix32(self.seeds[index] ^ self.last_elapsed.as_millis() as u32)
+        self.random_states[index]
     }
 
     fn initialize_particles(
@@ -312,12 +312,12 @@ impl ParticleEngine {
     ) -> Result<(), String> {
         let point_count = target_points.len();
         for index in 0..self.config.count {
-            let seed = mix32(
+            let seed = nonzero_random_state(mix32(
                 self.config.seed as u32
                     ^ (self.config.seed >> 32) as u32
                     ^ index as u32
                     ^ 0x9e37_79b9,
-            );
+            ));
             let target_index = if self.config.count <= point_count {
                 index.saturating_mul(point_count) / self.config.count
             } else {
@@ -329,7 +329,7 @@ impl ParticleEngine {
                 target.y += signed_unit(mix32(seed ^ 0x3c6e_f372)) * 0.4;
             }
             self.packed_targets.push(pack_target(target)?);
-            self.seeds.push(seed);
+            self.random_states.push(seed);
             self.x.push(0.0);
             self.y.push(0.0);
             self.z.push(0.0);
@@ -345,7 +345,7 @@ impl ParticleEngine {
         let width = self.config.width as f32;
         let height = self.config.height as f32;
         for index in 0..self.particle_count() {
-            let seed = self.seeds[index] ^ cycle as u32;
+            let seed = self.random_states[index] ^ cycle as u32;
             self.x[index] = unit_float(mix32(seed ^ 0xa511_e9b3)) * width;
             self.y[index] = unit_float(mix32(seed ^ 0x63d8_3595)) * height;
             self.z[index] = signed_unit(mix32(seed ^ 0x7f4a_7c15)) * DEPTH_EXTENT;
@@ -355,11 +355,11 @@ impl ParticleEngine {
         }
     }
 
-    fn advance(&mut self, delta: f32, elapsed_us: u64) {
+    fn advance(&mut self, delta: f32) {
         let width = self.config.width as f32;
         let height = self.config.height as f32;
         for index in 0..self.particle_count() {
-            let noise = mix32(self.seeds[index] ^ (elapsed_us / 16_667) as u32);
+            let noise = next_random(&mut self.random_states[index]);
             let jitter_x = signed_unit(noise);
             let jitter_y = signed_unit(noise.rotate_left(11));
             match self.phase {
@@ -443,6 +443,19 @@ fn mix32(mut value: u32) -> u32 {
     value ^= value >> 15;
     value = value.wrapping_mul(0x846c_a68b);
     value ^ (value >> 16)
+}
+
+const fn nonzero_random_state(value: u32) -> u32 {
+    if value == 0 { 0x6d2b_79f5 } else { value }
+}
+
+fn next_random(state: &mut u32) -> u32 {
+    let mut value = *state;
+    value ^= value << 13;
+    value ^= value >> 17;
+    value ^= value << 5;
+    *state = value;
+    value
 }
 
 fn unit_float(value: u32) -> f32 {
@@ -554,7 +567,7 @@ mod tests {
             engine.vy.capacity(),
             engine.vz.capacity(),
             engine.packed_targets.capacity(),
-            engine.seeds.capacity(),
+            engine.random_states.capacity(),
         );
         engine.step(Duration::from_secs(6));
         assert_eq!(
@@ -567,7 +580,7 @@ mod tests {
                 engine.vy.capacity(),
                 engine.vz.capacity(),
                 engine.packed_targets.capacity(),
-                engine.seeds.capacity(),
+                engine.random_states.capacity(),
             )
         );
     }
@@ -591,5 +604,19 @@ mod tests {
     #[test]
     fn packed_targets_reject_coordinates_outside_q12_4() {
         assert!(pack_target(ParticleTarget { x: 2_048.0, y: 0.0 }).is_err());
+    }
+
+    #[test]
+    fn particle_randomness_is_nonzero_and_deterministic() {
+        let mut first = nonzero_random_state(0);
+        let mut second = nonzero_random_state(0);
+        let sequence = (0..16).map(|_| next_random(&mut first)).collect::<Vec<_>>();
+        assert!(sequence.iter().all(|value| *value != 0));
+        assert_eq!(
+            sequence,
+            (0..16)
+                .map(|_| next_random(&mut second))
+                .collect::<Vec<_>>()
+        );
     }
 }
