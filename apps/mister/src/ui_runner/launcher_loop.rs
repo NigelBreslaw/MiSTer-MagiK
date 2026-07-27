@@ -2726,6 +2726,7 @@ pub(super) fn run_launcher_loop(
         mister_magik_catalog::builder_service::set_background_heavy_work_allowed(
             catalog_background_allowed,
         );
+        scheduler.tick_catalog_progress(catalog_background_allowed, loop_start);
         if let Some(request) = nav.take_arcade_search_request(&catalog, catalog_version) {
             scheduler.request_arcade_search(request);
         }

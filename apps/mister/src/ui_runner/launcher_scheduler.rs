@@ -118,6 +118,7 @@ enum MediaJobState {
 
 pub(super) struct LauncherScheduler {
     catalog: CatalogJobState,
+    catalog_progress: crate::catalog_progress_report::CatalogProgressMonitor,
     search_query: SearchQueryJobState,
     pending_search_query: Option<launcher::ArcadeSearchRequest>,
     system_shard: SystemShardJobState,
@@ -130,8 +131,10 @@ pub(super) struct LauncherScheduler {
 
 impl LauncherScheduler {
     pub(super) fn new(launch_handoff_bench_enabled: bool) -> Self {
+        let now = Instant::now();
         Self {
             catalog: CatalogJobState::Idle,
+            catalog_progress: crate::catalog_progress_report::CatalogProgressMonitor::new(now),
             search_query: SearchQueryJobState::Idle,
             pending_search_query: None,
             system_shard: SystemShardJobState::Idle,
@@ -379,6 +382,14 @@ impl LauncherScheduler {
         initial_cache: CatalogWorkerInitialCache,
         execution_mode: CatalogExecutionMode,
     ) {
+        self.finish_catalog_progress("replaced", "a new catalog worker replaced this worker");
+        let evidence = self.catalog_progress.start(
+            root.clone(),
+            request.label(),
+            execution_mode.label(),
+            Instant::now(),
+        );
+        self.enqueue_catalog_progress(evidence);
         self.catalog = CatalogJobState::Running(start_library_catalog_worker(
             root,
             request,
@@ -390,20 +401,29 @@ impl LauncherScheduler {
     pub(super) fn poll_catalog(&mut self, out: &mut CatalogJobEventBuf) -> bool {
         out.clear();
         let mut disconnected = false;
-        if let CatalogJobState::Running(rx) = &self.catalog {
-            for _ in 0..CATALOG_MESSAGES_PER_FRAME {
-                match rx.try_recv() {
-                    Ok(message) => out.push(message),
-                    Err(mpsc::TryRecvError::Empty) => break,
-                    Err(mpsc::TryRecvError::Disconnected) => {
-                        disconnected = true;
-                        break;
-                    }
+        for _ in 0..CATALOG_MESSAGES_PER_FRAME {
+            let received = match &self.catalog {
+                CatalogJobState::Running(rx) => rx.try_recv(),
+                CatalogJobState::Idle => break,
+            };
+            match received {
+                Ok(message) => {
+                    self.record_catalog_progress_message(&message, Instant::now());
+                    out.push(message);
+                }
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    disconnected = true;
+                    break;
                 }
             }
         }
         if disconnected {
             self.catalog = CatalogJobState::Idle;
+            self.finish_catalog_progress(
+                "disconnected",
+                "catalog worker channel disconnected without a terminal message",
+            );
         }
         let mut search_query_terminal = false;
         if let SearchQueryJobState::Running(rx) = &self.search_query {
@@ -468,6 +488,155 @@ impl LauncherScheduler {
             self.start_next_system_shard_load();
         }
         disconnected
+    }
+
+    pub(super) fn tick_catalog_progress(&mut self, background_work_allowed: bool, now: Instant) {
+        if let Some(evidence) =
+            self.catalog_progress
+                .tick(self.catalog_worker_running(), background_work_allowed, now)
+        {
+            self.enqueue_catalog_progress(evidence);
+        }
+    }
+
+    fn record_catalog_progress_message(&mut self, message: &CatalogWorkerMessage, now: Instant) {
+        match message {
+            CatalogWorkerMessage::Progress {
+                title,
+                detail,
+                percent,
+            } => self.note_catalog_progress("progress", title, detail, *percent, now),
+            CatalogWorkerMessage::Timing { name, detail } => {
+                self.note_catalog_progress("timing", name, detail, -1, now);
+            }
+            CatalogWorkerMessage::FreshCleanupStarted => {
+                self.note_catalog_progress("cleanup", "fresh-cleanup", "started", -1, now);
+            }
+            CatalogWorkerMessage::FreshCleanupCompleted { removed } => {
+                self.note_catalog_progress(
+                    "cleanup",
+                    "fresh-cleanup",
+                    &format!("completed removed={removed}"),
+                    -1,
+                    now,
+                );
+            }
+            CatalogWorkerMessage::SystemDiscovered { system_id } => {
+                self.note_catalog_progress(
+                    "system-discovered",
+                    "publishing-systems",
+                    system_id,
+                    -1,
+                    now,
+                );
+            }
+            CatalogWorkerMessage::SystemShardReady { system_id, games } => {
+                self.note_catalog_progress(
+                    "system-ready",
+                    "publishing-systems",
+                    &format!("system={system_id} games={}", games.len()),
+                    -1,
+                    now,
+                );
+            }
+            CatalogWorkerMessage::SystemShardFailed { system_id, error } => {
+                self.note_catalog_progress(
+                    "system-failed",
+                    "publishing-systems",
+                    &format!("system={system_id} error={error}"),
+                    -1,
+                    now,
+                );
+            }
+            CatalogWorkerMessage::Ready {
+                catalog,
+                durable_save_pending,
+                ..
+            } => {
+                self.note_catalog_progress(
+                    "catalog-ready",
+                    "catalog-ready",
+                    &format!(
+                        "games={} durable_save_pending={}",
+                        catalog.len(),
+                        u8::from(*durable_save_pending)
+                    ),
+                    100,
+                    now,
+                );
+            }
+            CatalogWorkerMessage::HydrationDoneNeedsValidation { root } => {
+                self.note_catalog_progress("hydration-ready", "validation-deferred", root, -1, now);
+            }
+            CatalogWorkerMessage::Persisted { summary, .. } => self.finish_catalog_progress_at(
+                "completed",
+                &format!(
+                    "persisted games={} files={} entries={}",
+                    summary.discoveries, summary.normal_files, summary.entries
+                ),
+                now,
+            ),
+            CatalogWorkerMessage::Unchanged { summary } => self.finish_catalog_progress_at(
+                "unchanged",
+                &format!(
+                    "games={} files={} entries={}",
+                    summary.discoveries, summary.normal_files, summary.entries
+                ),
+                now,
+            ),
+            CatalogWorkerMessage::Done => {
+                self.finish_catalog_progress_at("completed", "worker completed", now);
+            }
+            CatalogWorkerMessage::LoadFailed { error } => {
+                self.finish_catalog_progress_at("failed", error, now);
+            }
+            CatalogWorkerMessage::PersistenceFailed { error } => {
+                self.finish_catalog_progress_at("failed", error, now);
+            }
+            CatalogWorkerMessage::Changed { detail, .. } => {
+                self.finish_catalog_progress_at("changed", detail, now);
+            }
+            CatalogWorkerMessage::SearchQueryReady { .. }
+            | CatalogWorkerMessage::SearchQueryFailed { .. } => {}
+        }
+    }
+
+    fn note_catalog_progress(
+        &mut self,
+        activity_kind: &str,
+        phase: &str,
+        detail: &str,
+        percent: i32,
+        now: Instant,
+    ) {
+        if let Some(evidence) =
+            self.catalog_progress
+                .note_activity(activity_kind, phase, detail, percent, now)
+        {
+            self.enqueue_catalog_progress(evidence);
+        }
+    }
+
+    fn finish_catalog_progress(&mut self, state: &str, detail: &str) {
+        self.finish_catalog_progress_at(state, detail, Instant::now());
+    }
+
+    fn finish_catalog_progress_at(&mut self, state: &str, detail: &str, now: Instant) {
+        let episode_id = self.catalog_progress.episode_id().map(str::to_string);
+        if let Some(evidence) = self.catalog_progress.finish(state, detail, now)
+            && let Some(episode_id) = episode_id
+        {
+            emit_catalog_progress(episode_id, evidence);
+        }
+    }
+
+    fn enqueue_catalog_progress(
+        &self,
+        evidence: crate::catalog_progress_report::CatalogProgressEvidence,
+    ) {
+        if let Some(episode_id) = self.catalog_progress.episode_id() {
+            emit_catalog_progress(episode_id.to_string(), evidence);
+        }
     }
 
     pub(super) fn media_worker_running(&self) -> bool {
@@ -605,6 +774,21 @@ impl LauncherScheduler {
     pub(super) fn launch_runtime_action(&self, now: Instant) -> Option<LaunchHandoffRuntimeAction> {
         self.launch_handoff.runtime_action(now)
     }
+}
+
+#[cfg(not(test))]
+fn emit_catalog_progress(
+    episode_id: String,
+    evidence: crate::catalog_progress_report::CatalogProgressEvidence,
+) {
+    crate::catalog_progress_report::enqueue(episode_id, evidence);
+}
+
+#[cfg(test)]
+fn emit_catalog_progress(
+    _episode_id: String,
+    _evidence: crate::catalog_progress_report::CatalogProgressEvidence,
+) {
 }
 
 #[cfg(test)]
