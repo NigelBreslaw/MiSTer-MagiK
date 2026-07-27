@@ -19,7 +19,7 @@ import {
     LoadingOverlay,
     MediaProgressPopup,
     StartupSplash,
-    CompatibilityScreen,
+    DisplayDegradedBanner,
 } from "hdmi_overlays.slint";
 
 export component HdmiLauncherUi inherits Rectangle {
@@ -53,5 +53,8 @@ export component HdmiLauncherUi inherits Rectangle {
     if MisterBridge.display-combo-open : ComboBoxOverlay { }
     if MisterBridge.loading-message != "" : LoadingOverlay { }
     if MisterBridge.startup-visible : StartupSplash { }
-    if MisterBridge.compatibility-visible : CompatibilityScreen { }
+    if MisterBridge.compatibility-visible : DisplayDegradedBanner {
+        x: parent.width - 376px;
+        y: 16px;
+    }
 }

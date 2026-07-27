@@ -9,7 +9,7 @@ use mister_magik_fb::latch_readiness::LatchFailure;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Fb0PresentReason {
     Explicit,
-    CompatibilityScreen,
+    CompatibilityMode,
 }
 
 enum LauncherPresenterState<L> {
@@ -135,10 +135,10 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
                             auto_retry = LatchAutoRetryState::AwaitingSafeFrame;
                             recovery_state = "awaiting-safe-frame";
                         } else {
-                            recovery_state = "compatibility-prompt";
+                            recovery_state = "compatibility-mode";
                         }
                         crate::ui_errln!(
-                            "latch_failure_tsv\tvalid=0\tstate={}\tstage={}\treason={}\taction=compatibility-screen\tdetail={}",
+                            "latch_failure_tsv\tvalid=0\tstate={}\tstage={}\treason={}\taction=compatibility-mode\tdetail={}",
                             failure.state.code(),
                             failure.stage.code(),
                             failure.reason_code(),
@@ -148,7 +148,7 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
                             failure,
                             screen_ready: false,
                             route_active: false,
-                            prompt_visible: auto_retry == LatchAutoRetryState::Disabled,
+                            prompt_visible: false,
                         }
                     }
                 }
@@ -313,9 +313,11 @@ impl<L> LauncherPresenter<L> {
     }
 
     pub(in crate::ui_runner) fn compatibility_blocks_app(&self) -> bool {
+        false
+    }
+
+    pub(in crate::ui_runner) fn display_degraded(&self) -> bool {
         matches!(self.state, LauncherPresenterState::Compatibility { .. })
-            && (self.compatibility_prompt_visible()
-                || self.auto_retry != LatchAutoRetryState::Disabled)
     }
 
     pub(in crate::ui_runner) fn continue_in_compatibility(&mut self) -> bool {
@@ -343,7 +345,7 @@ impl<L> LauncherPresenter<L> {
 
     fn transition_latch_failure(&mut self, latch_error: LatchFailure) {
         crate::ui_errln!(
-            "latch_failure_tsv\tvalid=0\tstate={}\tstage={}\treason={}\taction=compatibility-screen\tdetail={}",
+            "latch_failure_tsv\tvalid=0\tstate={}\tstage={}\treason={}\taction=compatibility-mode\tdetail={}",
             latch_error.state.code(),
             latch_error.stage.code(),
             latch_error.reason_code(),
@@ -373,14 +375,14 @@ impl<L> LauncherPresenter<L> {
         self.recovery_state = if automatic_retry {
             "awaiting-safe-frame"
         } else {
-            "compatibility-prompt"
+            "compatibility-mode"
         };
         self.compatibility_transitions = self.compatibility_transitions.saturating_add(1);
         self.state = LauncherPresenterState::Compatibility {
             failure: latch_error,
             screen_ready: false,
             route_active: false,
-            prompt_visible: !automatic_retry,
+            prompt_visible: false,
         };
         self.persist_recovery_evidence();
     }
@@ -477,7 +479,7 @@ impl<L> LauncherPresenter<L> {
                 }
                 let result = adapters.present_fb0(
                     frame,
-                    Fb0PresentReason::CompatibilityScreen,
+                    Fb0PresentReason::CompatibilityMode,
                     !*route_active,
                 );
                 *route_active |= result.route_active;
@@ -824,12 +826,12 @@ fn fb0_present_result(
         hidden_arcade_compose_us: 0,
         direct_preview_present_us: stats.direct_preview_present_us,
         arcade_list_present_us: stats.arcade_list_present_us,
-        main_present_backend: if reason == Fb0PresentReason::CompatibilityScreen {
+        main_present_backend: if reason == Fb0PresentReason::CompatibilityMode {
             LauncherPresentBackend::CompatibilityFb0
         } else {
             LauncherPresentBackend::Fb0Dirty
         },
-        main_present_status: if reason == Fb0PresentReason::CompatibilityScreen {
+        main_present_status: if reason == Fb0PresentReason::CompatibilityMode {
             LauncherPresentStatus::Compatibility
         } else {
             LauncherPresentStatus::None
@@ -1122,7 +1124,7 @@ mod tests {
             auto_retry: LatchAutoRetryState::Disabled,
             next_retry_at: None,
             latest_retry_result: "not-attempted",
-            recovery_state: "compatibility-prompt",
+            recovery_state: "compatibility-mode",
         }
     }
 
@@ -1157,7 +1159,7 @@ mod tests {
     }
 
     #[test]
-    fn startup_failure_blacks_before_presenting_compatibility_screen() {
+    fn startup_failure_blacks_before_presenting_compatibility_mode() {
         let mut presenter = presenter(LauncherPresenterState::Compatibility {
             failure: LatchFailure::incompatible(
                 mister_magik_fb::latch_readiness::LatchFailureStage::BufferMap,
@@ -1166,7 +1168,7 @@ mod tests {
             ),
             screen_ready: false,
             route_active: false,
-            prompt_visible: true,
+            prompt_visible: false,
         });
         let mut adapters = FakeAdapters::succeeding();
 
@@ -1212,7 +1214,7 @@ mod tests {
     }
 
     #[test]
-    fn frame_after_runtime_failure_renders_only_compatibility_screen() {
+    fn frame_after_runtime_failure_renders_launcher_in_compatibility_mode() {
         let mut presenter = presenter(LauncherPresenterState::Latch(FakeLatch));
         let mut first = FakeAdapters::failing();
         presenter.present_with(frame(), &mut first);
@@ -1221,7 +1223,7 @@ mod tests {
         assert_eq!(presenter.present_with(frame(), &mut second), 2);
         assert_eq!(
             second.events,
-            [Event::Fb0(Fb0PresentReason::CompatibilityScreen)]
+            [Event::Fb0(Fb0PresentReason::CompatibilityMode)]
         );
         assert_eq!(
             presenter.pacing_backend(),
@@ -1240,7 +1242,7 @@ mod tests {
             ),
             screen_ready: true,
             route_active: false,
-            prompt_visible: true,
+            prompt_visible: false,
         });
         let mut failed_route = FakeAdapters::succeeding();
         failed_route.route_active = false;
@@ -1257,7 +1259,7 @@ mod tests {
     }
 
     #[test]
-    fn compatibility_continue_hides_prompt_without_discarding_failure() {
+    fn compatibility_mode_is_nonblocking_and_preserves_failure() {
         let mut presenter = presenter(LauncherPresenterState::Compatibility {
             failure: LatchFailure::runtime(
                 mister_magik_fb::latch_readiness::LatchFailureStage::LatchPost,
@@ -1266,11 +1268,12 @@ mod tests {
             ),
             screen_ready: true,
             route_active: true,
-            prompt_visible: true,
+            prompt_visible: false,
         });
 
-        assert!(presenter.continue_in_compatibility());
+        assert!(presenter.display_degraded());
         assert!(!presenter.compatibility_prompt_visible());
+        assert!(!presenter.compatibility_blocks_app());
         assert!(presenter.compatibility_failure().is_some());
         assert!(!presenter.continue_in_compatibility());
     }
@@ -1285,7 +1288,7 @@ mod tests {
             ),
             screen_ready: true,
             route_active: true,
-            prompt_visible: true,
+            prompt_visible: false,
         });
         let retry_failure = || {
             LatchFailure::runtime(
@@ -1299,7 +1302,7 @@ mod tests {
         assert!(!presenter.apply_retry_result(Err(retry_failure()), false));
         presenter.retry_attempts = 2;
         assert!(!presenter.apply_retry_result(Err(retry_failure()), false));
-        assert!(presenter.compatibility_prompt_visible());
+        assert!(!presenter.compatibility_prompt_visible());
         assert_eq!(presenter.compatibility_transitions(), 2);
 
         assert!(presenter.apply_retry_result(Ok(FakeLatch), false));
@@ -1384,7 +1387,9 @@ mod tests {
         ] {
             let mut presenter = presenter(LauncherPresenterState::Latch(FakeLatch));
             presenter.transition_latch_failure(failure);
-            assert!(presenter.compatibility_prompt_visible());
+            assert!(presenter.display_degraded());
+            assert!(!presenter.compatibility_prompt_visible());
+            assert!(!presenter.compatibility_blocks_app());
             assert_eq!(presenter.auto_retry, LatchAutoRetryState::Disabled);
             assert!(!presenter.begin_automatic_retry(Instant::now()));
         }
@@ -1400,7 +1405,7 @@ mod tests {
             ),
             screen_ready: true,
             route_active: true,
-            prompt_visible: true,
+            prompt_visible: false,
         });
         presenter.retry_attempts = 1;
 

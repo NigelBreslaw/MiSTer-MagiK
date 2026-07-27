@@ -34,50 +34,32 @@ component CrtProgressRow inherits Rectangle {
     }
 }
 
-export component CompatibilityScreen inherits Rectangle {
+export component DisplayDegradedBanner inherits Rectangle {
+    height: MisterUi.footer-height;
+    background: #241a20ee;
+    border-width: MisterUi.border;
+    border-color: #ffd166;
 
-    background: CrtTheme.background;
-
-    VerticalLayout {
+    HorizontalLayout {
         padding-left: MisterUi.grid-x;
         padding-right: MisterUi.grid-x;
-        padding-top: MisterUi.grid-y;
-        padding-bottom: MisterUi.grid-y;
-        spacing: MisterUi.grid-y;
-        alignment: center;
+        spacing: MisterUi.grid-x;
+        cross-axis-alignment: center;
 
         Text {
             font-family: MisterUi.crt-font-family;
-            text: "MiSTer MagiK compatibility check failed";
-            color: #ff5d73;
-            font-size: MisterUi.heading-font;
-            horizontal-alignment: center;
+            text: "COMPATIBILITY DISPLAY";
+            color: #ffd166;
+            font-size: MisterUi.body-font;
         }
 
         Text {
             font-family: MisterUi.crt-font-family;
             text: MisterBridge.compatibility-reason;
-            color: #ffd166;
-            font-size: MisterUi.body-font;
-            horizontal-alignment: center;
-        }
-
-        Text {
-            font-family: MisterUi.crt-font-family;
-            text: MisterBridge.compatibility-detail;
             color: CrtTheme.text;
             font-size: MisterUi.body-font;
-            horizontal-alignment: center;
-            wrap: word-wrap;
-        }
-
-        Text {
-            font-family: MisterUi.crt-font-family;
-            text: "A: Retry latch    B: Continue using compatibility mode";
-            color: CrtTheme.muted;
-            font-size: MisterUi.body-font;
-            horizontal-alignment: center;
-            wrap: word-wrap;
+            overflow: elide;
+            horizontal-stretch: 1;
         }
     }
 }

@@ -6,46 +6,31 @@ import { MisterBridge } from "../api.slint";
 import { LauncherTile, OsdSideLabel } from "../components/launcher_chrome.slint";
 import { ScreenshotPackProgressRow } from "../components/progress.slint";
 
-export component CompatibilityScreen inherits Rectangle {
-
-    background: #09070d;
+export component DisplayDegradedBanner inherits Rectangle {
+    width: 360px;
+    height: 52px;
+    background: #241a20ee;
+    border-width: 1px;
+    border-color: #ffd166;
 
     VerticalLayout {
-        padding-left: 80px;
-        padding-right: 80px;
-        padding-top: 70px;
-        padding-bottom: 70px;
-        spacing: 22px;
-        alignment: center;
+        padding-left: 12px;
+        padding-right: 12px;
+        padding-top: 7px;
+        padding-bottom: 7px;
+        spacing: 3px;
 
         Text {
-            text: "MiSTer MagiK compatibility check failed";
-            color: #ff5d73;
-            font-size: 16px;
-            horizontal-alignment: center;
+            text: "Compatibility display mode";
+            color: #ffd166;
+            font-size: 12px;
         }
 
         Text {
             text: MisterBridge.compatibility-reason;
-            color: #ffd166;
-            font-size: 8px;
-            horizontal-alignment: center;
-        }
-
-        Text {
-            text: MisterBridge.compatibility-detail;
             color: #e8e0f0;
             font-size: 8px;
-            horizontal-alignment: center;
-            wrap: word-wrap;
-        }
-
-        Text {
-            text: "A: Retry latch    B: Continue using compatibility mode";
-            color: #9080a8;
-            font-size: 8px;
-            horizontal-alignment: center;
-            wrap: word-wrap;
+            overflow: elide;
         }
     }
 }
