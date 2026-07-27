@@ -31,11 +31,16 @@ pub(super) struct ParticleRenderStats {
     pub(super) simulation_us: u128,
     pub(super) clear_us: u128,
     pub(super) raster_us: u128,
+    pub(super) rotation_x_millidegrees: u32,
+    pub(super) simulation_bytes: usize,
+    pub(super) renderer_scratch_bytes: usize,
 }
 
 pub(super) struct ParticleRenderer {
     engine: ParticleEngine,
     dirty_slots: [ParticleDirtySlot; HIDDEN_SLOT_COUNT],
+    simulation_bytes: usize,
+    renderer_scratch_bytes: usize,
 }
 
 struct ParticleDirtySlot {
@@ -54,12 +59,25 @@ impl ParticleRenderer {
             ParticlePreset::Capacity => config.count,
             ParticlePreset::Visual => config.count.saturating_mul(2),
         };
+        let simulation_bytes = config
+            .count
+            .saturating_mul(ParticleEngine::bytes_per_particle());
+        let dirty_slots = std::array::from_fn(|_| ParticleDirtySlot {
+            initialized: false,
+            offsets: Vec::with_capacity(write_capacity),
+        });
+        let renderer_scratch_bytes = dirty_slots.iter().fold(0usize, |total, slot| {
+            total.saturating_add(
+                slot.offsets
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<u32>()),
+            )
+        });
         Ok(Self {
             engine: ParticleEngine::new(config, mask)?,
-            dirty_slots: std::array::from_fn(|_| ParticleDirtySlot {
-                initialized: false,
-                offsets: Vec::with_capacity(write_capacity),
-            }),
+            dirty_slots,
+            simulation_bytes,
+            renderer_scratch_bytes,
         })
     }
 
@@ -96,7 +114,15 @@ impl ParticleRenderer {
         let visible = self.raster(destination, &mut dirty_offsets);
         let raster_us = raster_started.elapsed().as_micros();
         self.dirty_slots[slot_offset].offsets = dirty_offsets;
-        Ok(stats(frame, visible, simulation_us, clear_us, raster_us))
+        Ok(stats(
+            frame,
+            visible,
+            simulation_us,
+            clear_us,
+            raster_us,
+            self.simulation_bytes,
+            self.renderer_scratch_bytes,
+        ))
     }
 
     pub(super) fn invalidate_hidden_slot(&mut self, hidden_slot: u8) {
@@ -222,6 +248,8 @@ fn stats(
     simulation_us: u128,
     clear_us: u128,
     raster_us: u128,
+    simulation_bytes: usize,
+    renderer_scratch_bytes: usize,
 ) -> ParticleRenderStats {
     ParticleRenderStats {
         count: frame.count,
@@ -231,6 +259,10 @@ fn stats(
         simulation_us,
         clear_us,
         raster_us,
+        rotation_x_millidegrees: (frame.rotation_x_radians * (180_000.0 / std::f32::consts::PI)
+            + 0.5) as u32,
+        simulation_bytes,
+        renderer_scratch_bytes,
     }
 }
 
@@ -370,6 +402,16 @@ mod tests {
                 .each_ref()
                 .map(|slot| slot.offsets.capacity())
         );
+    }
+
+    #[test]
+    fn renderer_memory_accounts_for_simulation_and_both_dirty_slots() {
+        let capacity = ParticleRenderer::new(config(ParticlePreset::Capacity), mask()).unwrap();
+        assert_eq!(capacity.simulation_bytes, 64 * 33);
+        assert_eq!(capacity.renderer_scratch_bytes, 64 * 8);
+        let visual = ParticleRenderer::new(config(ParticlePreset::Visual), mask()).unwrap();
+        assert_eq!(visual.simulation_bytes, 64 * 33);
+        assert_eq!(visual.renderer_scratch_bytes, 64 * 16);
     }
 
     #[test]
