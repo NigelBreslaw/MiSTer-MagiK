@@ -276,6 +276,7 @@ impl ParticleEngine {
     }
 
     #[must_use]
+    #[inline(always)]
     pub fn project(&self, index: usize) -> Option<ProjectedParticle> {
         let denominator = FOCAL_LENGTH + self.z[index];
         if denominator <= 1.0 {
@@ -299,6 +300,7 @@ impl ParticleEngine {
     }
 
     #[must_use]
+    #[inline(always)]
     pub fn flicker_key(&self, index: usize) -> u32 {
         mix32(self.seeds[index] ^ self.last_elapsed.as_millis() as u32)
     }
