@@ -84,25 +84,31 @@ impl PadPool {
         } else {
             crate::ui_errln!("pad: listening on {} device(s)", pads.len());
         }
+        let keyboards: Vec<_> = discover_keyboard_devices()
+            .into_iter()
+            .filter_map(|path| match KeyboardReader::open(&path) {
+                Ok(reader) => Some(reader),
+                Err(e) => {
+                    crate::ui_errln!("keyboard: skip {path}: {e}");
+                    None
+                }
+            })
+            .collect();
+        let prefer_main_proxy = std::env::var(MAIN_INPUT_PROXY_ENV).as_deref() == Ok("1");
+        crate::ui_errln!(
+            "input proxy: preferred={prefer_main_proxy} detected={}",
+            keyboards.iter().any(|keyboard| keyboard.is_main_proxy)
+        );
         Ok(Self {
             pads,
-            keyboards: discover_keyboard_devices()
-                .into_iter()
-                .filter_map(|path| match KeyboardReader::open(&path) {
-                    Ok(reader) => Some(reader),
-                    Err(e) => {
-                        crate::ui_errln!("keyboard: skip {path}: {e}");
-                        None
-                    }
-                })
-                .collect(),
+            keyboards,
             mouse: open_mouse_activity(),
             user_activity: false,
             merged: PadState::default(),
             active_idx: 0,
             db,
             last_rescan: Instant::now(),
-            prefer_main_proxy: std::env::var(MAIN_INPUT_PROXY_ENV).as_deref() == Ok("1"),
+            prefer_main_proxy,
         })
     }
 
@@ -360,9 +366,7 @@ impl PadPool {
     }
 
     fn rebuild_merged_state(&mut self) {
-        let use_main_proxy =
-            self.prefer_main_proxy && self.keyboards.iter().any(|keyboard| keyboard.is_main_proxy);
-        let states: Vec<&PadState> = if use_main_proxy {
+        let states: Vec<&PadState> = if self.prefer_main_proxy {
             Vec::new()
         } else {
             self.pads.iter().map(|p| p.state()).collect()
@@ -1490,6 +1494,26 @@ mod tests {
         assert!(setup.btn_a);
         assert!(setup.btn_y);
         assert!(!setup.btn_b);
+    }
+
+    #[test]
+    fn advertised_main_proxy_suppresses_raw_navigation_while_device_is_missing() {
+        let mut raw = PadState {
+            btn_a: true,
+            btn_b: true,
+            ..PadState::default()
+        };
+        raw.rebuild_pressed_now();
+        let mut pool = PadPool::from_test_states(vec![raw]);
+        pool.prefer_main_proxy = true;
+
+        pool.rebuild_merged_state();
+
+        assert!(!pool.state().btn_a);
+        assert!(!pool.state().btn_b);
+        let setup = pool.navigation_state_at(0);
+        assert!(setup.btn_a);
+        assert!(setup.btn_b);
     }
 
     #[test]
