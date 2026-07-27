@@ -156,11 +156,13 @@ module mister_magik_vblank_latch (
 			semantic_reject = MAGIK_REJECT_RESERVED;
 		else if((rx_base == 32'd0) || rx_base[0])
 			semantic_reject = MAGIK_REJECT_INVALID_BASE;
-		else if((rx_width == 0) || (rx_width > MAGIK_FBUF_MAX_WIDTH) ||
-		        (rx_height == 0) || (rx_height > MAGIK_FBUF_MAX_HEIGHT))
+		else if((rx_width == 0) ||
+		        ({4'd0, rx_width} > MAGIK_FBUF_MAX_WIDTH) ||
+		        (rx_height == 0) ||
+		        ({4'd0, rx_height} > MAGIK_FBUF_MAX_HEIGHT))
 			semantic_reject = MAGIK_REJECT_INVALID_GEOMETRY;
 		else if(rx_stride[0] || (rx_stride < ({2'd0, rx_width} << 1)) ||
-		        (rx_stride > MAGIK_FBUF_MAX_STRIDE))
+		        ({2'd0, rx_stride} > MAGIK_FBUF_MAX_STRIDE))
 			semantic_reject = MAGIK_REJECT_INVALID_STRIDE;
 		else if((rx_hmin > rx_hmax) || (rx_vmin > rx_vmax))
 			semantic_reject = MAGIK_REJECT_INVALID_BOUNDS;

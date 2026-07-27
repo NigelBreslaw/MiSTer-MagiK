@@ -176,6 +176,19 @@ module tb_mister_magik_vblank_latch;
 		end
 	endtask
 
+	task automatic expect32(
+		input [31:0] actual,
+		input [31:0] expected,
+		input [8*128-1:0] message
+	);
+		begin
+			if(actual !== expected) begin
+				$display("FAIL: %0s: got %08x expected %08x", message, actual, expected);
+				$fatal(1);
+			end
+		end
+	endtask
+
 	task automatic expect_true(input condition, input [8*128-1:0] message);
 		begin
 			if(condition !== 1'b1) fail(message);
@@ -312,7 +325,11 @@ module tb_mister_magik_vblank_latch;
 	);
 		begin
 			expect16(reject_count, previous_count + 1'd1, message);
-			expect16(dut.last_reject_reason, {12'd0, reason}, "rejection reason");
+			expect16(
+				{12'd0, dut.last_reject_reason},
+				{12'd0, reason},
+				"rejection reason"
+			);
 		end
 	endtask
 
@@ -410,7 +427,7 @@ module tb_mister_magik_vblank_latch;
 		expect16(flip_count, 16'd1, "accepted apply flip count");
 		expect16(active_route_epoch, 16'd1, "accepted apply epoch");
 		expect_true(!pending, "accepted apply clears pending");
-		expect16(accepted_apply_count, 16'd1, "accepted apply pulse count");
+		expect32(accepted_apply_count, 32'd1, "accepted apply pulse count");
 		requirement_coverage[2] = 1'b1;
 
 		start_command(MAGIK_UIO_GET_FBUF_LATCH, MAGIK_FBUF_STATUS_MAGIC);
