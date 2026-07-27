@@ -967,7 +967,15 @@ mod tests {
 
     #[test]
     fn framebuffer_direct_hidden_geometry_accepts_half_resolution_hdmi() {
-        let ui = UiDisplay::for_plan(UiDisplayPlan::from_output(1920, 1080, false, "test"));
+        let ui = UiDisplay::for_plan(UiDisplayPlan::from_runtime_geometry(
+            RuntimeDisplayGeometry {
+                output_w: 1920,
+                output_h: 1080,
+                scan_w: 1920,
+                scan_h: 1080,
+            },
+            false,
+        ));
         assert_eq!((ui.render_w(), ui.render_h()), (960, 540));
         assert_eq!(
             (usize::from(ui.scan_w()), usize::from(ui.scan_h())),
