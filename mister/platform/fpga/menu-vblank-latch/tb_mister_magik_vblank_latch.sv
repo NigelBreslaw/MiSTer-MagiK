@@ -585,12 +585,20 @@ module tb_mister_magik_vblank_latch;
 		send_route(16'h8014, 32'hfffffe00, 16'd320, 16'd2,
 		           16'd0, 16'd319, 16'd0, 16'd1, 16'd640, 16'h1006);
 		expect_reject(reject_before, MAGIK_REJECT_ADDRESS_WRAP, "address wrap");
+		expect16(pending_seq, pending_before, "semantic rejects preserve pending");
+		// The next transaction must replace the pipelined wrap result. An
+		// exclusive end address exactly at 2^32 is valid.
+		send_route(16'h8014, 32'hfffffd80, 16'd320, 16'd1,
+		           16'd0, 16'd319, 16'd0, 16'd0, 16'd640, 16'h1007);
+		expect16(pending_seq, 16'h1007, "valid route after address wrap commits");
+		expect32(route_base, 32'hfffffd80, "boundary route base commits");
+		pending_before = pending_seq;
 		reject_before = reject_count;
 		send_route(16'h0000, 32'h00000002, 16'd0, 16'd0,
-		           16'd0, 16'd0, 16'd0, 16'd0, 16'd0, 16'h1007);
+		           16'd0, 16'd0, 16'd0, 16'd0, 16'd0, 16'h1008);
 		expect_reject(reject_before, MAGIK_REJECT_INVALID_MODE,
 		              "disabled route must be canonical");
-		expect16(pending_seq, pending_before, "semantic rejects preserve pending");
+		expect16(pending_seq, pending_before, "later semantic reject preserves pending");
 		requirement_coverage[8] = 1'b1;
 
 		// Applying old pending and committing new on one edge keeps the new pending.

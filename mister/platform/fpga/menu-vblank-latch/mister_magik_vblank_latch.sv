@@ -98,6 +98,8 @@ module mister_magik_vblank_latch (
 	reg [15:0] rx_vmax_word = 16'd0;
 	reg [15:0] rx_stride_word = 16'd0;
 	reg [15:0] rx_seq = 16'd0;
+	reg [25:0] rx_row_span = 26'd0;
+	reg rx_address_wrap = 1'b0;
 
 	reg [3:0] last_reject_reason = MAGIK_REJECT_NONE;
 	reg magik_ownership = 1'b0;
@@ -134,10 +136,13 @@ module mister_magik_vblank_latch (
 	wire [11:0] rx_vmin = rx_vmin_word[11:0];
 	wire [11:0] rx_vmax = rx_vmax_word[11:0];
 	wire [13:0] rx_stride = rx_stride_word[13:0];
-	wire [47:0] rx_end_address =
-		{16'd0, rx_base} +
-		(({36'd0, rx_height} - 48'd1) * {34'd0, rx_stride}) +
-		({36'd0, rx_width} << 1);
+	wire [11:0] rx_height_minus_one = rx_height - 12'd1;
+	wire [25:0] rx_next_row_span =
+		rx_height_minus_one * data_in[13:0];
+	wire [32:0] rx_pipelined_end_address =
+		{1'b0, rx_base} +
+		{{7{1'b0}}, rx_row_span} +
+		{{20{1'b0}}, rx_width, 1'b0};
 
 	reg [3:0] semantic_reject;
 	always @(*) begin
@@ -166,7 +171,7 @@ module mister_magik_vblank_latch (
 			semantic_reject = MAGIK_REJECT_INVALID_STRIDE;
 		else if((rx_hmin > rx_hmax) || (rx_vmin > rx_vmax))
 			semantic_reject = MAGIK_REJECT_INVALID_BOUNDS;
-		else if(rx_end_address > 48'h000100000000)
+		else if(rx_address_wrap)
 			semantic_reject = MAGIK_REJECT_ADDRESS_WRAP;
 	end
 
@@ -283,6 +288,8 @@ module mister_magik_vblank_latch (
 				rx_expected <= 4'd0;
 				rx_mask <= 11'd0;
 				rx_crc <= crc_header(MAGIK_UIO_SET_FBUF_LATCH, 16'd11);
+				rx_row_span <= 26'd0;
+				rx_address_wrap <= 1'b0;
 			end
 			else begin
 				rx_open <= 1'b0;
@@ -336,8 +343,15 @@ module mister_magik_vblank_latch (
 					4'd6: rx_hmax_word <= data_in;
 					4'd7: rx_vmin_word <= data_in;
 					4'd8: rx_vmax_word <= data_in;
-					4'd9: rx_stride_word <= data_in;
-					4'd10: rx_seq <= data_in;
+					4'd9: begin
+						rx_stride_word <= data_in;
+						rx_row_span <= rx_next_row_span;
+					end
+					4'd10: begin
+						rx_seq <= data_in;
+						rx_address_wrap <=
+							rx_pipelined_end_address > 33'h100000000;
+					end
 					// word_index < 11 and exact ordering restrict this case to 0..10.
 					/* verilator coverage_off */
 					default: begin end
