@@ -1833,10 +1833,10 @@ impl LauncherFrameAccounting {
                 particle_raster_us: u128_to_u64_saturating(
                     frame.screensaver_frame_trace.particle_raster_us,
                 ),
-                particle_rotation_x_millidegrees: u64::from(
+                particle_rotation_y_millidegrees: u64::from(
                     frame
                         .screensaver_frame_trace
-                        .particle_rotation_x_millidegrees,
+                        .particle_rotation_y_millidegrees,
                 ),
                 particle_simulation_bytes: usize_to_u64_saturating(
                     frame.screensaver_frame_trace.particle_simulation_bytes,

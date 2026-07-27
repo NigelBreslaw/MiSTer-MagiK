@@ -31,7 +31,7 @@ pub(super) struct ParticleRenderStats {
     pub(super) simulation_us: u128,
     pub(super) clear_us: u128,
     pub(super) raster_us: u128,
-    pub(super) rotation_x_millidegrees: u32,
+    pub(super) rotation_y_millidegrees: u32,
     pub(super) simulation_bytes: usize,
     pub(super) renderer_scratch_bytes: usize,
 }
@@ -259,7 +259,7 @@ fn stats(
         simulation_us,
         clear_us,
         raster_us,
-        rotation_x_millidegrees: (frame.rotation_x_radians * (180_000.0 / std::f32::consts::PI)
+        rotation_y_millidegrees: (frame.rotation_y_radians * (180_000.0 / std::f32::consts::PI)
             + 0.5) as u32,
         simulation_bytes,
         renderer_scratch_bytes,

@@ -244,7 +244,7 @@ pub struct FrameBudgetRecentFrame {
     pub particle_simulation_us: u64,
     pub particle_clear_us: u64,
     pub particle_raster_us: u64,
-    pub particle_rotation_x_millidegrees: u64,
+    pub particle_rotation_y_millidegrees: u64,
     pub particle_simulation_bytes: u64,
     pub particle_renderer_scratch_bytes: u64,
 }
@@ -896,8 +896,8 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
     field!("particle_clear_us", frame.particle_clear_us);
     field!("particle_raster_us", frame.particle_raster_us);
     field!(
-        "particle_rotation_x_millidegrees",
-        frame.particle_rotation_x_millidegrees
+        "particle_rotation_y_millidegrees",
+        frame.particle_rotation_y_millidegrees
     );
     field!("particle_simulation_bytes", frame.particle_simulation_bytes);
     field!(
@@ -1232,7 +1232,7 @@ mod tests {
                         particle_simulation_us: 2_100,
                         particle_clear_us: 120,
                         particle_raster_us: 900,
-                        particle_rotation_x_millidegrees: 45_000,
+                        particle_rotation_y_millidegrees: 45_000,
                         particle_simulation_bytes: 540_672,
                         particle_renderer_scratch_bytes: 262_144,
                         ..FrameBudgetRecentFrame::default()
@@ -1334,7 +1334,7 @@ mod tests {
             "hold"
         );
         assert_eq!(
-            value["frame_budget"]["recent_frames"][0]["particle_rotation_x_millidegrees"],
+            value["frame_budget"]["recent_frames"][0]["particle_rotation_y_millidegrees"],
             45_000
         );
         assert_eq!(
