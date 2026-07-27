@@ -65,6 +65,7 @@ ffmpeg-next = { version = "8.1", optional = true, default-features = false, feat
 default = []
 profile = ["dep:pprof"]
 ui = ["dep:slint", "dep:mister-magik-ui", "dep:ffmpeg-next", "mister-magik-mister-runtime/ui"]
+ui-preview = ["dep:slint", "dep:mister-magik-ui"]
 bench-tools = ["mister-magik-mister-runtime/bench-tools"]
 bench-scenes = ["mister-magik-ui?/bench-scenes", "mister-magik-mister-runtime/bench-scenes"]
 experiments = ["bench-scenes"]

@@ -1,0 +1,287 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+use slint::platform::software_renderer::{RepaintBufferType, SoftwareRenderer};
+use slint::platform::{Platform, WindowAdapter};
+use slint::{PhysicalSize, Window};
+use std::cell::Cell;
+use std::rc::{Rc, Weak};
+use std::time::{Duration, Instant};
+
+pub struct MisterSoftwareWindow {
+    window: Window,
+    renderer: SoftwareRenderer,
+    redraw_pending: Cell<bool>,
+    size: Cell<PhysicalSize>,
+}
+
+impl MisterSoftwareWindow {
+    pub fn new(repaint_buffer_type: RepaintBufferType) -> Rc<Self> {
+        Rc::new_cyclic(|weak: &Weak<Self>| Self {
+            window: Window::new(weak.clone()),
+            renderer: SoftwareRenderer::new_with_repaint_buffer_type(repaint_buffer_type),
+            redraw_pending: Cell::new(false),
+            size: Cell::new(PhysicalSize::default()),
+        })
+    }
+
+    pub fn redraw_pending(&self) -> bool {
+        self.redraw_pending.get()
+    }
+
+    pub fn draw_if_needed(&self, render_callback: impl FnOnce(&SoftwareRenderer)) -> bool {
+        if self.redraw_pending.replace(false) {
+            render_callback(&self.renderer);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn set_size(&self, size: impl Into<slint::WindowSize>) {
+        self.window.set_size(size);
+    }
+}
+
+impl WindowAdapter for MisterSoftwareWindow {
+    fn window(&self) -> &Window {
+        &self.window
+    }
+
+    fn renderer(&self) -> &dyn slint::platform::Renderer {
+        &self.renderer
+    }
+
+    fn size(&self) -> PhysicalSize {
+        self.size.get()
+    }
+
+    fn set_size(&self, size: slint::WindowSize) {
+        let scale_factor = self.window.scale_factor();
+        self.size.set(size.to_physical(scale_factor));
+        self.window
+            .dispatch_event(slint::platform::WindowEvent::Resized {
+                size: size.to_logical(scale_factor),
+            });
+    }
+
+    fn request_redraw(&self) {
+        self.redraw_pending.set(true);
+    }
+}
+
+impl std::ops::Deref for MisterSoftwareWindow {
+    type Target = Window;
+
+    fn deref(&self) -> &Self::Target {
+        &self.window
+    }
+}
+
+pub struct MisterPlatform {
+    window: Rc<MisterSoftwareWindow>,
+    start: Instant,
+    fixed_time: Option<Rc<Cell<Duration>>>,
+}
+
+impl MisterPlatform {
+    pub fn new(window: Rc<MisterSoftwareWindow>, fixed_time: Option<Rc<Cell<Duration>>>) -> Self {
+        Self {
+            window,
+            start: Instant::now(),
+            fixed_time,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct AnimationClock {
+    fixed_time: Option<Rc<Cell<Duration>>>,
+    fixed_step: Duration,
+}
+
+impl AnimationClock {
+    pub fn from_env() -> Self {
+        Self::from_env_with_fixed_step(Duration::from_nanos(16_666_667))
+    }
+
+    pub fn from_env_with_fixed_step(fixed_step: Duration) -> Self {
+        match std::env::var("MISTER_ANIMATION_CLOCK")
+            .ok()
+            .map(|s| s.to_ascii_lowercase().replace('_', "-"))
+            .as_deref()
+        {
+            None | Some("") | Some("fixed60") | Some("fixed-60") | Some("frame")
+            | Some("frame-clock") => Self {
+                fixed_time: Some(Rc::new(Cell::new(Duration::ZERO))),
+                fixed_step,
+            },
+            Some("wall") | Some("wall-clock") => Self {
+                fixed_time: None,
+                fixed_step,
+            },
+            other => {
+                crate::ui_errln!("ui: unknown MISTER_ANIMATION_CLOCK={other:?}; use wall|fixed60");
+                Self {
+                    fixed_time: None,
+                    fixed_step,
+                }
+            }
+        }
+    }
+
+    pub fn platform_time(&self) -> Option<Rc<Cell<Duration>>> {
+        self.fixed_time.clone()
+    }
+
+    #[cfg(any(mister_bench_scenes, all(target_os = "linux", target_arch = "arm")))]
+    pub fn label(&self) -> &'static str {
+        if self.fixed_time.is_some() {
+            "fixed60"
+        } else {
+            "wall"
+        }
+    }
+
+    pub fn advance(&self) {
+        if let Some(t) = &self.fixed_time {
+            t.set(t.get() + self.fixed_step);
+        }
+    }
+}
+
+pub fn update_slint_animations(animation_clock: &AnimationClock) {
+    animation_clock.advance();
+    slint::platform::update_timers_and_animations();
+}
+
+const PRESENT_DELAY_ENV: &str = "MISTER_FB_PRESENT_DELAY_US";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FrameOrder {
+    RenderThenVsync,
+    VsyncThenRender,
+}
+
+impl FrameOrder {
+    pub fn from_env() -> Self {
+        match std::env::var("MISTER_FRAME_ORDER")
+            .ok()
+            .map(|s| s.to_ascii_lowercase().replace('_', "-"))
+            .as_deref()
+        {
+            None | Some("") | Some("render-then-vsync") | Some("render") => Self::RenderThenVsync,
+            Some("vsync-then-render") | Some("vsync-first") | Some("vsync") => {
+                Self::VsyncThenRender
+            }
+            other => {
+                crate::ui_errln!(
+                    "ui: unknown MISTER_FRAME_ORDER={other:?}; use render-then-vsync|vsync-first"
+                );
+                Self::RenderThenVsync
+            }
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::RenderThenVsync => "render-then-vsync",
+            Self::VsyncThenRender => "vsync-first",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PresentTiming {
+    delay_us: u64,
+}
+
+impl PresentTiming {
+    pub fn from_env() -> Self {
+        let delay_us = std::env::var(PRESENT_DELAY_ENV)
+            .ok()
+            .and_then(|value| present_delay_from_value(&value));
+        Self {
+            delay_us: delay_us.unwrap_or(0),
+        }
+    }
+
+    pub fn delay_us(self) -> u64 {
+        self.delay_us
+    }
+
+    pub fn wait_until_present_time(self, vsync_done: std::time::Instant) {
+        if self.delay_us == 0 {
+            return;
+        }
+        let target = vsync_done + Duration::from_micros(self.delay_us);
+        let now = std::time::Instant::now();
+        if target > now {
+            std::thread::sleep(target - now);
+        }
+    }
+}
+
+fn present_delay_from_value(value: &str) -> Option<u64> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    match trimmed.parse::<u64>() {
+        Ok(delay) => Some(delay.min(50_000)),
+        Err(_) => {
+            crate::ui_errln!(
+                "ui: ignoring invalid {PRESENT_DELAY_ENV}={value:?}; expected microseconds"
+            );
+            None
+        }
+    }
+}
+
+impl Platform for MisterPlatform {
+    fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
+        Ok(self.window.clone())
+    }
+    fn duration_since_start(&self) -> core::time::Duration {
+        self.fixed_time
+            .as_ref()
+            .map(|t| t.get())
+            .unwrap_or_else(|| self.start.elapsed())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn software_window_redraw_state_is_authoritative() {
+        let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
+        assert!(!window.redraw_pending());
+
+        WindowAdapter::request_redraw(window.as_ref());
+        assert!(window.redraw_pending());
+
+        let mut rendered = false;
+        assert!(window.draw_if_needed(|_| rendered = true));
+        assert!(rendered);
+        assert!(!window.redraw_pending());
+        assert!(!window.draw_if_needed(|_| panic!("idle window rendered")));
+    }
+
+    #[test]
+    fn present_delay_parses_microseconds() {
+        assert_eq!(present_delay_from_value("2500"), Some(2500));
+        assert_eq!(present_delay_from_value(""), None);
+    }
+
+    #[test]
+    fn present_delay_clamps_extreme_values() {
+        assert_eq!(present_delay_from_value("999999"), Some(50_000));
+    }
+
+    #[test]
+    fn present_delay_rejects_invalid_text() {
+        assert_eq!(present_delay_from_value("later"), None);
+    }
+}

@@ -323,11 +323,10 @@ pub fn run_effect_bench(f: &mut Fpga) {
     let mut overlay_ctx = if needs_overlay {
         let window = MinimalSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
         let animation_clock = AnimationClock::from_env();
-        slint::platform::set_platform(Box::new(MisterPlatform {
-            window: window.clone(),
-            start: Instant::now(),
-            fixed_time: animation_clock.platform_time(),
-        }))
+        slint::platform::set_platform(Box::new(MisterPlatform::new(
+            window.clone(),
+            animation_clock.platform_time(),
+        )))
         .expect("set_platform");
         let app = slint_ui::effect_hud::EffectHud::new().expect("EffectHud");
         let mister_ui = app.global::<slint_ui::effect_hud::MisterUi>();

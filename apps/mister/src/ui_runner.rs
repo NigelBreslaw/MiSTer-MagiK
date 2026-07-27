@@ -381,11 +381,10 @@ pub fn run_ui(f: &mut Fpga) {
             .map(Duration::from_micros)
             .unwrap_or(Duration::from_nanos(16_666_667)),
     );
-    slint::platform::set_platform(Box::new(MisterPlatform {
-        window: window.clone(),
-        start: Instant::now(),
-        fixed_time: animation_clock.platform_time(),
-    }))
+    slint::platform::set_platform(Box::new(MisterPlatform::new(
+        window.clone(),
+        animation_clock.platform_time(),
+    )))
     .expect("set_platform");
     boot_analytics::event("slint_platform_set", "ok=1");
 

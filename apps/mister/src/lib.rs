@@ -33,6 +33,8 @@ pub mod setup_nav;
 pub mod spring_animation;
 #[cfg(test)]
 mod test_support;
+#[cfg(any(feature = "ui", feature = "ui-preview"))]
+pub mod visual_platform;
 #[cfg(mister_experiments)]
 pub mod experiments {
     pub mod effects;

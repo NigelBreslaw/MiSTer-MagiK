@@ -1549,11 +1549,8 @@ mod tests {
         INIT.call_once(|| {
             let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
             let fixed_time = Some(Rc::new(Cell::new(Duration::ZERO)));
-            let _ = slint::platform::set_platform(Box::new(MisterPlatform {
-                window,
-                start: Instant::now(),
-                fixed_time,
-            }));
+            let _ =
+                slint::platform::set_platform(Box::new(MisterPlatform::new(window, fixed_time)));
         });
     }
 
