@@ -27,6 +27,16 @@ fn presenter_state_uses_latch<L>(state: &LauncherPresenterState<L>) -> bool {
     matches!(state, LauncherPresenterState::Latch(_))
 }
 
+fn direct_hidden_framebuffer_geometry_available(ui: &UiDisplay) -> bool {
+    ui.render_w() == ui.fb_w() && ui.render_h() == ui.fb_h() && !ui.output_route().is_crt()
+}
+
+fn direct_hidden_scan_geometry_available(ui: &UiDisplay) -> bool {
+    direct_hidden_framebuffer_geometry_available(ui)
+        && ui.render_w() == usize::from(ui.scan_w())
+        && ui.render_h() == usize::from(ui.scan_h())
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum LatchAutoRetryState {
     Disabled,
@@ -214,6 +224,14 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
     }
 
     pub(in crate::ui_runner) fn direct_hidden_slots_available(&self, ui: &UiDisplay) -> bool {
+        self.direct_hidden_framebuffer_slots_available(ui)
+            && direct_hidden_scan_geometry_available(ui)
+    }
+
+    pub(in crate::ui_runner) fn direct_hidden_framebuffer_slots_available(
+        &self,
+        ui: &UiDisplay,
+    ) -> bool {
         if !presenter_state_uses_latch(&self.state) {
             return false;
         }
@@ -221,9 +239,7 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
             &self.state,
             LauncherPresenterState::Latch(latch)
                 if latch.exact_identity_geometry()
-                    && ui.render_w() == usize::from(ui.scan_w())
-                    && ui.render_h() == usize::from(ui.scan_h())
-                    && !ui.output_route().is_crt()
+                    && direct_hidden_framebuffer_geometry_available(ui)
         )
     }
 
@@ -947,6 +963,18 @@ mod tests {
         assert!(presenter_state_uses_latch(&LauncherPresenterState::Latch(
             FakeLatch
         )));
+    }
+
+    #[test]
+    fn framebuffer_direct_hidden_geometry_accepts_half_resolution_hdmi() {
+        let ui = UiDisplay::for_plan(UiDisplayPlan::from_output(1920, 1080, false, "test"));
+        assert_eq!((ui.render_w(), ui.render_h()), (960, 540));
+        assert_eq!(
+            (usize::from(ui.scan_w()), usize::from(ui.scan_h())),
+            (1920, 1080)
+        );
+        assert!(direct_hidden_framebuffer_geometry_available(&ui));
+        assert!(!direct_hidden_scan_geometry_available(&ui));
     }
 
     #[derive(Debug)]

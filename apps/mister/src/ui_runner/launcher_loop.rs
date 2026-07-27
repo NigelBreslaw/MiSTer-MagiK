@@ -4553,8 +4553,13 @@ pub(super) fn run_launcher_loop(
                         started.elapsed().as_micros()
                     );
                 }
-                let direct_hidden_available = launcher_presenter.direct_hidden_slots_available(ui);
-                if ready.requires_direct_hidden() && !direct_hidden_available {
+                let requires_direct_hidden = ready.requires_direct_hidden();
+                let direct_hidden_available = if requires_direct_hidden {
+                    launcher_presenter.direct_hidden_framebuffer_slots_available(ui)
+                } else {
+                    launcher_presenter.direct_hidden_slots_available(ui)
+                };
+                if requires_direct_hidden && !direct_hidden_available {
                     crate::ui_errln!(
                         "particle experiment requires the direct hidden-slot latch backend"
                     );
