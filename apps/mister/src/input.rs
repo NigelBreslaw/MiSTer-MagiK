@@ -28,10 +28,19 @@ const KEY_ESC: u16 = 1;
 const KEY_ENTER: u16 = 28;
 const KEY_A: u16 = 30;
 const KEY_B: u16 = 48;
+const KEY_SPACE: u16 = 57;
+const KEY_F9: u16 = 67;
+const KEY_F10: u16 = 68;
 const KEY_UP: u16 = 103;
+const KEY_PAGEUP: u16 = 104;
 const KEY_LEFT: u16 = 105;
 const KEY_RIGHT: u16 = 106;
 const KEY_DOWN: u16 = 108;
+const KEY_PAGEDOWN: u16 = 109;
+const KEY_MENU: u16 = 139;
+const KEY_TAB: u16 = 15;
+const MAIN_INPUT_PROXY_ENV: &str = "MISTER_MAGIK_INPUT_PROXY";
+const MAIN_INPUT_PROXY_NAME: &str = "MiSTer virtual input";
 
 pub struct PadReader {
     file: File,
@@ -51,6 +60,7 @@ pub struct PadPool {
     active_idx: usize,
     db: crate::controller_db::ControllerDb,
     last_rescan: Instant,
+    prefer_main_proxy: bool,
 }
 
 impl PadPool {
@@ -92,6 +102,7 @@ impl PadPool {
             active_idx: 0,
             db,
             last_rescan: Instant::now(),
+            prefer_main_proxy: std::env::var(MAIN_INPUT_PROXY_ENV).as_deref() == Ok("1"),
         })
     }
 
@@ -154,7 +165,11 @@ impl PadPool {
 
     pub fn navigation_state_at(&self, idx: usize) -> PadState {
         let mut state = self.state_at(idx).clone();
-        for keyboard in &self.keyboards {
+        for keyboard in self
+            .keyboards
+            .iter()
+            .filter(|keyboard| !keyboard.is_main_proxy)
+        {
             keyboard.merge_into(&mut state);
         }
         state.rebuild_pressed_now();
@@ -345,7 +360,13 @@ impl PadPool {
     }
 
     fn rebuild_merged_state(&mut self) {
-        let states: Vec<&PadState> = self.pads.iter().map(|p| p.state()).collect();
+        let use_main_proxy =
+            self.prefer_main_proxy && self.keyboards.iter().any(|keyboard| keyboard.is_main_proxy);
+        let states: Vec<&PadState> = if use_main_proxy {
+            Vec::new()
+        } else {
+            self.pads.iter().map(|p| p.state()).collect()
+        };
         let active_idx = self.clamped_active_idx();
         let active_raw = self
             .pads
@@ -397,6 +418,7 @@ impl PadPool {
             active_idx: 0,
             db: crate::controller_db::ControllerDb::load(),
             last_rescan: Instant::now(),
+            prefer_main_proxy: false,
         };
         pool.rebuild_merged_state();
         pool
@@ -407,6 +429,7 @@ impl PadPool {
         self.keyboards = vec![KeyboardReader {
             file: File::open("/dev/null").expect("open /dev/null"),
             path: "test-keyboard".into(),
+            is_main_proxy: false,
             state: KeyboardState {
                 up: state.dpad_up,
                 down: state.dpad_down,
@@ -451,11 +474,19 @@ struct KeyboardState {
     enter: bool,
     b: bool,
     escape: bool,
+    x: bool,
+    y: bool,
+    l: bool,
+    r: bool,
+    select: bool,
+    start: bool,
+    home: bool,
 }
 
 struct KeyboardReader {
     file: File,
     path: String,
+    is_main_proxy: bool,
     state: KeyboardState,
 }
 
@@ -463,16 +494,25 @@ impl KeyboardReader {
     fn open(path: &str) -> io::Result<Self> {
         let file = OpenOptions::new().read(true).open(path)?;
         set_nonblocking(&file)?;
-        crate::ui_errln!("keyboard: opened {path}");
+        let is_main_proxy = input_device_name(path).as_deref() == Some(MAIN_INPUT_PROXY_NAME);
+        crate::ui_errln!(
+            "keyboard: opened {path}{}",
+            if is_main_proxy {
+                " (Main menu input proxy)"
+            } else {
+                ""
+            }
+        );
         Ok(Self {
             file,
             path: path.to_string(),
+            is_main_proxy,
             state: KeyboardState::default(),
         })
     }
 
     fn poll(&mut self) -> io::Result<bool> {
-        drain_keyboard_events(&mut self.file, &mut self.state)
+        drain_keyboard_events(&mut self.file, &mut self.state, self.is_main_proxy)
     }
 
     fn merge_into(&self, state: &mut PadState) {
@@ -482,10 +522,21 @@ impl KeyboardReader {
         state.dpad_right |= self.state.right;
         state.btn_a |= self.state.a || self.state.enter;
         state.btn_b |= self.state.b || self.state.escape;
+        state.btn_x |= self.state.x;
+        state.btn_y |= self.state.y;
+        state.btn_l |= self.state.l;
+        state.btn_r |= self.state.r;
+        state.btn_select |= self.state.select;
+        state.btn_start |= self.state.start;
+        state.btn_home |= self.state.home;
     }
 }
 
-fn drain_keyboard_events<R: Read>(reader: &mut R, state: &mut KeyboardState) -> io::Result<bool> {
+fn drain_keyboard_events<R: Read>(
+    reader: &mut R,
+    state: &mut KeyboardState,
+    main_proxy: bool,
+) -> io::Result<bool> {
     let mut buf = [0u8; INPUT_EVENT_SIZE];
     let mut changed = false;
     loop {
@@ -508,6 +559,13 @@ fn drain_keyboard_events<R: Read>(reader: &mut R, state: &mut KeyboardState) -> 
                     KEY_ENTER => Some(&mut state.enter),
                     KEY_B => Some(&mut state.b),
                     KEY_ESC => Some(&mut state.escape),
+                    KEY_TAB if main_proxy => Some(&mut state.x),
+                    KEY_SPACE if main_proxy => Some(&mut state.y),
+                    KEY_PAGEUP if main_proxy => Some(&mut state.l),
+                    KEY_PAGEDOWN if main_proxy => Some(&mut state.r),
+                    KEY_F10 if main_proxy => Some(&mut state.select),
+                    KEY_F9 if main_proxy => Some(&mut state.start),
+                    KEY_MENU if main_proxy => Some(&mut state.home),
                     _ => None,
                 };
                 if let Some(field) = field {
@@ -680,6 +738,13 @@ fn discover_keyboard_devices() -> Vec<String> {
     }
     paths.sort();
     paths
+}
+
+fn input_device_name(path: &str) -> Option<String> {
+    let node = Path::new(path).file_name()?.to_str()?;
+    std::fs::read_to_string(Path::new("/sys/class/input").join(node).join("device/name"))
+        .ok()
+        .map(|name| name.trim().to_string())
 }
 
 fn capability_has_key(words: &str, code: u16) -> bool {
@@ -1308,6 +1373,7 @@ mod tests {
             active_idx: 0,
             db: crate::controller_db::ControllerDb::load(),
             last_rescan: Instant::now(),
+            prefer_main_proxy: false,
         }
     }
 
@@ -1338,11 +1404,12 @@ mod tests {
         let mut reader = PendingEventsThenWouldBlock::new(events);
         let mut keyboard = KeyboardState::default();
 
-        assert!(drain_keyboard_events(&mut reader, &mut keyboard).expect("drain keyboard"));
+        assert!(drain_keyboard_events(&mut reader, &mut keyboard, false).expect("drain keyboard"));
 
         let keyboard = KeyboardReader {
             file: File::open("/dev/null").expect("open /dev/null"),
             path: "test".into(),
+            is_main_proxy: false,
             state: keyboard,
         };
         let mut state = PadState::default();
@@ -1354,12 +1421,76 @@ mod tests {
     }
 
     #[test]
+    fn main_proxy_maps_resolved_menu_actions() {
+        let events = [
+            input_event_bytes(EV_KEY, KEY_TAB, 1),
+            input_event_bytes(EV_KEY, KEY_SPACE, 1),
+            input_event_bytes(EV_KEY, KEY_PAGEUP, 1),
+            input_event_bytes(EV_KEY, KEY_PAGEDOWN, 1),
+            input_event_bytes(EV_KEY, KEY_F10, 1),
+            input_event_bytes(EV_KEY, KEY_F9, 1),
+            input_event_bytes(EV_KEY, KEY_MENU, 1),
+        ]
+        .concat();
+        let mut reader = PendingEventsThenWouldBlock::new(events);
+        let mut keyboard = KeyboardState::default();
+
+        assert!(drain_keyboard_events(&mut reader, &mut keyboard, true).expect("drain proxy"));
+
+        let proxy = KeyboardReader {
+            file: File::open("/dev/null").expect("open /dev/null"),
+            path: "proxy".into(),
+            is_main_proxy: true,
+            state: keyboard,
+        };
+        let mut state = PadState::default();
+        proxy.merge_into(&mut state);
+        assert!(state.btn_x);
+        assert!(state.btn_y);
+        assert!(state.btn_l);
+        assert!(state.btn_r);
+        assert!(state.btn_select);
+        assert!(state.btn_start);
+        assert!(state.btn_home);
+    }
+
+    #[test]
+    fn main_proxy_is_authoritative_but_setup_keeps_raw_pad_state() {
+        let mut raw = PadState {
+            btn_a: true,
+            btn_y: true,
+            ..PadState::default()
+        };
+        raw.rebuild_pressed_now();
+        let mut pool = PadPool::from_test_states(vec![raw]);
+        pool.prefer_main_proxy = true;
+        pool.keyboards.push(KeyboardReader {
+            file: File::open("/dev/null").expect("open /dev/null"),
+            path: "proxy".into(),
+            is_main_proxy: true,
+            state: KeyboardState {
+                escape: true,
+                ..KeyboardState::default()
+            },
+        });
+        pool.rebuild_merged_state();
+
+        assert!(pool.state().btn_b);
+        assert!(!pool.state().btn_a);
+        assert!(!pool.state().btn_y);
+        let setup = pool.navigation_state_at(0);
+        assert!(setup.btn_a);
+        assert!(setup.btn_y);
+        assert!(!setup.btn_b);
+    }
+
+    #[test]
     fn unbound_keyboard_key_still_reports_activity() {
         let mut reader =
             PendingEventsThenWouldBlock::new(input_event_bytes(EV_KEY, 42, 1).to_vec());
         let mut keyboard = KeyboardState::default();
 
-        assert!(drain_keyboard_events(&mut reader, &mut keyboard).expect("drain keyboard"));
+        assert!(drain_keyboard_events(&mut reader, &mut keyboard, false).expect("drain keyboard"));
         assert_eq!(keyboard, KeyboardState::default());
     }
 
@@ -1374,7 +1505,7 @@ mod tests {
         let mut reader = PendingEventsThenWouldBlock::new(events);
         let mut keyboard = KeyboardState::default();
 
-        drain_keyboard_events(&mut reader, &mut keyboard).expect("drain keyboard");
+        drain_keyboard_events(&mut reader, &mut keyboard, false).expect("drain keyboard");
 
         assert!(!keyboard.a);
         assert!(keyboard.enter);

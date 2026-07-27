@@ -673,7 +673,8 @@ tracking, and CI details. Do not duplicate those details here.
 ## Open Areas
 
 - Return to launcher after game reset without a full reboot.
-- Continue controller mapping and hot-plug polish.
+- Validate Main-owned launcher controller mapping across representative USB and
+  Bluetooth devices after each platform input change.
 - Keep the fork patch surface small and documented in `../Main_MiSTer`
   `MAGIK_PATCHSET.md`.
 Catalog scanning, validation, and database publication run inside

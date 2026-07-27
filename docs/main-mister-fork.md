@@ -109,6 +109,14 @@ mode, and applies the override file as a generic adapter while constructing its
 normal input maps. Main must not parse MRA XML or classify arcade labels such as
 coin, start, pause, service, or player-two controls.
 
+Launcher navigation uses Main's stock menu mapping path as well. While the
+supervised launcher is active, Main keeps its evdev discovery, controller
+quirks, user menu maps, gamecontrollerdb fallback, hot-plug handling, and
+custom Menu OK/Back precedence authoritative. Resolved menu actions are emitted
+through Main's virtual input device for Rust to consume. Rust retains direct
+`js*` profiles only for setup, diagnostics, and compatibility with an older
+Main that does not advertise `MISTER_MAGIK_INPUT_PROXY=1`.
+
 Runtime display transactions preserve automatic sink detection only while
 applying `auto`. Every explicit HDMI or CRT mode clears Main's automatic-routing
 latch before loading geometry, so cancel and timeout restore the saved route
