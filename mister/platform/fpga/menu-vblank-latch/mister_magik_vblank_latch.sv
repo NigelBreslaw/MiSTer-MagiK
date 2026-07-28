@@ -218,7 +218,7 @@ module mister_magik_vblank_latch (
 			endcase
 		end
 		else if(cmd_data && (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_DIAGNOSTICS)) begin
-			if(word_index < 4'd6) response_data = diagnostics_snapshot[word_index];
+			if(word_index < 4'd6) response_data = diagnostics_snapshot[word_index[2:0]];
 			else if(word_index == 4'd6)
 				response_data = tx_crc ^ MAGIK_CRC_FINAL_XOR;
 		end
@@ -286,7 +286,7 @@ module mister_magik_vblank_latch (
 				end
 				else if((tx_command == MAGIK_UIO_GET_FBUF_LATCH_DIAGNOSTICS) &&
 				        (word_index < 4'd6)) begin
-					tx_crc <= crc_word(tx_crc, diagnostics_snapshot[word_index]);
+					tx_crc <= crc_word(tx_crc, diagnostics_snapshot[word_index[2:0]]);
 					tx_expected <= tx_expected + 1'd1;
 				end
 			end

@@ -426,7 +426,7 @@ module tb_mister_magik_vblank_latch;
 		for(index = 0; index < 6; index = index + 1)
 			crc = crc_word(crc, snapshot[index]);
 		expect16(snapshot[0], 16'd0, "initial diagnostics reject count");
-		expect16(snapshot[1], MAGIK_REJECT_NONE, "initial diagnostics reason");
+		expect16(snapshot[1], {12'd0, MAGIK_REJECT_NONE}, "initial diagnostics reason");
 		expect16(snapshot[2], 16'hffff, "initial diagnostics expected index");
 		expect16(snapshot[3], 16'hffff, "initial diagnostics observed index");
 		expect16(snapshot[4], 16'd0, "initial diagnostics observed command");
@@ -543,10 +543,18 @@ module tb_mister_magik_vblank_latch;
 		for(index = 0; index < 6; index = index + 1)
 			crc = crc_word(crc, snapshot[index]);
 		expect16(snapshot[0], reject_before + 1'd1, "diagnostics reject count");
-		expect16(snapshot[1], MAGIK_REJECT_MISSING_WORD, "diagnostics reject reason");
+		expect16(
+			snapshot[1],
+			{12'd0, MAGIK_REJECT_MISSING_WORD},
+			"diagnostics reject reason"
+		);
 		expect16(snapshot[2], 16'd1, "diagnostics expected word");
 		expect16(snapshot[3], 16'd11, "diagnostics observed word");
-		expect16(snapshot[4], MAGIK_UIO_SET_FBUF_LATCH, "diagnostics observed command");
+		expect16(
+			snapshot[4],
+			{8'd0, MAGIK_UIO_SET_FBUF_LATCH},
+			"diagnostics observed command"
+		);
 		expect16(snapshot[5], 16'd1, "diagnostics pre-reject receiver state");
 		expect16(snapshot[6], crc, "diagnostics CRC");
 
