@@ -594,13 +594,14 @@ impl ParticleShowcaseRenderer {
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
         let wind = (seconds * 0.72).sin() * 26.0 + (seconds * 0.19).sin() * 13.0;
         let mut clipped = 0usize;
-        for index in 0..self.pool.active() {
+        let live_embers = self.pool.active() / 4;
+        for ember in 0..live_embers {
+            let index = ember * 4;
             let random = self.pool.random[index];
             let age = (seconds * (0.72 + unit01(random.rotate_left(13)) * 0.38)
                 + unit01(random) * 5.6)
                 .rem_euclid(5.6);
-            if index & 3 != 0 || age < 0.12 {
-                self.commands.push(u32::MAX);
+            if age < 0.12 {
                 continue;
             }
             let base_x = unit_signed(random.rotate_left(7)) * 390.0;
@@ -623,7 +624,7 @@ impl ParticleShowcaseRenderer {
                 screen_x,
                 screen_y,
                 style,
-                index & 127 == 0,
+                ember & 31 == 0,
             ) {
                 clipped = clipped.saturating_add(1);
             }
@@ -1380,6 +1381,7 @@ mod tests {
         assert_eq!(first_stats.demo, ParticleDemoKind::FireEmbers);
         assert_eq!(first_stats.beat, "flame");
         assert!(first_stats.visible > 0);
+        assert!(first.commands.len() <= first.pool.active() / 4);
         assert!(first.heat.iter().any(|value| *value > 0));
         assert_eq!(first.heat, second.heat);
         assert_eq!(first_destination, second_destination);
