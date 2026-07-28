@@ -1,0 +1,12 @@
+Arcade Cabinet model attribution
+================================
+
+Title: Arcade Cabinet
+Author: Lluc Guardiolaa
+Source: https://sketchfab.com/3d-models/arcade-cabinet-122e641e25ee4fe9904fc79399d822b0
+Author profile: https://sketchfab.com/LlucGuardiola
+License: Creative Commons Attribution-NonCommercial 4.0 International
+License URL: https://creativecommons.org/licenses/by-nc/4.0/
+
+The compiled arcade-cabinet.pcloud is derived from this model and is subject
+to the attribution and non-commercial requirements of CC-BY-NC-4.0.

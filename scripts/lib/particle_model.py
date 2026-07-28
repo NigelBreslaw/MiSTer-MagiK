@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import random
 import struct
@@ -135,6 +136,88 @@ def load_obj(path: Path) -> tuple[list[tuple[float, float, float]], list[Triangl
                     triangles.append(triangle)
     if not vertices or not triangles:
         raise ValueError(f"{path}: no non-degenerate triangle geometry")
+    return vertices, triangles, colors
+
+
+def _glb_accessor(
+    document: dict, binary: bytes, accessor_index: int
+) -> list[tuple[float, ...]]:
+    accessor = document["accessors"][accessor_index]
+    view = document["bufferViews"][accessor["bufferView"]]
+    components = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4}[accessor["type"]]
+    formats = {5121: "B", 5123: "H", 5125: "I", 5126: "f"}
+    component_type = accessor["componentType"]
+    if component_type not in formats:
+        raise ValueError(f"unsupported glTF component type {component_type}")
+    record = struct.Struct("<" + formats[component_type] * components)
+    stride = view.get("byteStride", record.size)
+    start = view.get("byteOffset", 0) + accessor.get("byteOffset", 0)
+    end = start + (accessor["count"] - 1) * stride + record.size
+    if end > len(binary):
+        raise ValueError("glTF accessor exceeds the binary buffer")
+    return [record.unpack_from(binary, start + index * stride) for index in range(accessor["count"])]
+
+
+def load_glb(
+    path: Path,
+) -> tuple[list[tuple[float, float, float]], list[Triangle], dict[str, tuple[float, float, float]]]:
+    payload = path.read_bytes()
+    if len(payload) < 20 or payload[:4] != b"glTF":
+        raise ValueError(f"{path}: invalid GLB header")
+    version, declared_length = struct.unpack_from("<II", payload, 4)
+    if version != 2 or declared_length != len(payload):
+        raise ValueError(f"{path}: unsupported or truncated GLB")
+    cursor = 12
+    chunks: dict[int, bytes] = {}
+    while cursor + 8 <= len(payload):
+        length, kind = struct.unpack_from("<II", payload, cursor)
+        cursor += 8
+        if cursor + length > len(payload):
+            raise ValueError(f"{path}: GLB chunk exceeds declared length")
+        chunks[kind] = payload[cursor : cursor + length]
+        cursor += length
+    if 0x4E4F534A not in chunks or 0x004E4942 not in chunks:
+        raise ValueError(f"{path}: GLB requires JSON and BIN chunks")
+    document = json.loads(chunks[0x4E4F534A].rstrip(b" \0"))
+    binary = chunks[0x004E4942]
+    vertices: list[tuple[float, float, float]] = []
+    triangles: list[Triangle] = []
+    colors: dict[str, tuple[float, float, float]] = {}
+    materials = document.get("materials", [])
+    for index, material in enumerate(materials):
+        name = material.get("name", f"material-{index}")
+        factor = material.get("pbrMetallicRoughness", {}).get(
+            "baseColorFactor", (0.55, 0.65, 0.8, 1.0)
+        )
+        colors[name] = tuple(float(value) for value in factor[:3])
+    for mesh in document.get("meshes", []):
+        for primitive in mesh.get("primitives", []):
+            if primitive.get("mode", 4) != 4:
+                raise ValueError("only GLB triangle primitives are supported")
+            positions = _glb_accessor(document, binary, primitive["attributes"]["POSITION"])
+            base = len(vertices)
+            vertices.extend(tuple(float(value) for value in position) for position in positions)
+            if "indices" in primitive:
+                indices = [int(value[0]) for value in _glb_accessor(document, binary, primitive["indices"])]
+            else:
+                indices = list(range(len(positions)))
+            if len(indices) % 3:
+                raise ValueError("GLB triangle index count is not divisible by three")
+            material_index = primitive.get("material")
+            material = (
+                materials[material_index].get("name", f"material-{material_index}")
+                if material_index is not None
+                else ""
+            )
+            for offset in range(0, len(indices), 3):
+                face = tuple(base + indices[offset + lane] for lane in range(3))
+                if any(index < base or index >= len(vertices) for index in face):
+                    raise ValueError("GLB triangle index is out of bounds")
+                a, b, c = (vertices[index] for index in face)
+                if _length(_cross(_sub(b, a), _sub(c, a))) > 1.0e-9:
+                    triangles.append(Triangle(face, material))
+    if not vertices or not triangles:
+        raise ValueError(f"{path}: no non-degenerate GLB triangle geometry")
     return vertices, triangles, colors
 
 
@@ -269,7 +352,10 @@ def encode(points: list[Point]) -> bytes:
 
 def compile_model(args: argparse.Namespace) -> int:
     started = time.perf_counter()
-    vertices, triangles, colors = load_obj(args.model)
+    if args.model.suffix.lower() == ".glb":
+        vertices, triangles, colors = load_glb(args.model)
+    else:
+        vertices, triangles, colors = load_obj(args.model)
     vertices = transform_and_normalize(vertices, args.up_axis, args.front_axis)
     points = sample_points(vertices, triangles, colors, args.points, args.seed)
     payload = encode(points)
@@ -287,7 +373,7 @@ def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(prog="scripts/particle-model")
     commands = result.add_subparsers(dest="command", required=True)
     compile_parser = commands.add_parser("compile")
-    compile_parser.add_argument("model", type=Path)
+    compile_parser.add_argument("model", type=Path, help="Wavefront OBJ or binary glTF GLB")
     compile_parser.add_argument("--output", type=Path, required=True)
     compile_parser.add_argument("--points", type=int, default=65_536)
     compile_parser.add_argument("--seed", type=int, default=0x1983)
