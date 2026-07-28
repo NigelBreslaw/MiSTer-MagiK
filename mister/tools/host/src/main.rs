@@ -3250,7 +3250,7 @@ fn particle_showcase_demo(number: u8) -> Result<(&'static str, u64)> {
     match number {
         1 => Ok(("fireworks", 24_576)),
         2 => Ok(("fire-embers", 20_480)),
-        3 => Ok(("spiral-galaxy", 94_208)),
+        3 => Ok(("spiral-galaxy", 90_112)),
         4 => Ok(("warp-speed", 49_152)),
         5 => Ok(("meteor-shower", 20_480)),
         6 => Ok(("weather", 49_152)),
