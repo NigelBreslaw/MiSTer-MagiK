@@ -32,16 +32,6 @@ const FIRE_HEAT_SCALE: usize = 3;
 const METEOR_TRAIL_SAMPLES: usize = 64;
 const METEOR_TRACK_COUNT: usize = 64;
 const METEOR_PARTICLE_COUNT: usize = METEOR_TRAIL_SAMPLES * METEOR_TRACK_COUNT;
-const SHOWCASE_PALETTE: [Rgb565Pixel; 8] = [
-    Rgb565Pixel(0x18c3),
-    Rgb565Pixel(0x31a6),
-    Rgb565Pixel(0x52aa),
-    Rgb565Pixel(0x7bcf),
-    Rgb565Pixel(0xa514),
-    Rgb565Pixel(0xc638),
-    Rgb565Pixel(0xe71c),
-    Rgb565Pixel(0xffff),
-];
 const FIREWORKS_PALETTE: [Rgb565Pixel; 8] = [
     Rgb565Pixel(0x2805),
     Rgb565Pixel(0x600a),
@@ -625,46 +615,6 @@ impl ParticleShowcaseRenderer {
         offsets
     }
 
-    fn project_diagnostic(&mut self, elapsed: Duration) -> usize {
-        self.commands.clear();
-        self.segments.clear();
-        let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
-        let (sin_y, cos_y) = (seconds * 0.08).sin_cos();
-        let center_x = self.config.width as f32 * 0.5;
-        let center_y = self.config.height as f32 * 0.5;
-        let mut clipped = 0usize;
-        for index in 0..self.pool.active() {
-            let x = self.pool.x[index];
-            let z = self.pool.z[index];
-            let rotated_x = x.mul_add(cos_y, z * sin_y);
-            let rotated_z = (-x).mul_add(sin_y, z * cos_y);
-            let depth = 420.0 + rotated_z;
-            let scale = 420.0 / depth;
-            let screen_x = center_x + rotated_x * scale;
-            let screen_y = center_y + self.pool.y[index] * scale;
-            if screen_x < 0.0
-                || screen_y < 0.0
-                || screen_x >= self.config.width as f32
-                || screen_y >= self.config.height as f32
-            {
-                self.commands.push(u32::MAX);
-                clipped = clipped.saturating_add(1);
-                continue;
-            }
-            let x = screen_x as usize;
-            let y = screen_y as usize;
-            let offset = y * self.config.width + x;
-            let style = u32::from(self.pool.style[index] & 7) << COMMAND_STYLE_SHIFT;
-            let neighbor = if self.pool.flags[index] != 0 && x + 1 < self.config.width {
-                COMMAND_NEIGHBOR
-            } else {
-                0
-            };
-            self.commands.push(offset as u32 | style | neighbor);
-        }
-        clipped
-    }
-
     fn project_effect(&mut self, elapsed: Duration) -> usize {
         match self.demo {
             ParticleDemoKind::Fireworks => self.project_fireworks(elapsed),
@@ -677,7 +627,6 @@ impl ParticleShowcaseRenderer {
             ParticleDemoKind::ElectricStorm => self.project_electric_storm(elapsed),
             ParticleDemoKind::FountainWaterfall => self.project_fountain_waterfall(elapsed),
             ParticleDemoKind::ArcadeCabinet => self.project_arcade_cabinet(elapsed),
-            _ => self.project_diagnostic(elapsed),
         }
     }
 
@@ -2651,7 +2600,7 @@ mod tests {
                 y1: 8,
                 style: 7,
             },
-            &SHOWCASE_PALETTE,
+            &FIREWORKS_PALETTE,
         );
         assert!(writes <= MAX_SEGMENT_PIXELS as usize);
         assert!(dirty.iter().all(|offset| *offset < 16 * 16));
