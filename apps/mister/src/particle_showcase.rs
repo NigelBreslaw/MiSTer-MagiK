@@ -112,6 +112,16 @@ const PORTAL_PALETTE: [Rgb565Pixel; 8] = [
     Rgb565Pixel(0xb7ff),
     Rgb565Pixel(0xffff),
 ];
+const ELECTRIC_PALETTE: [Rgb565Pixel; 8] = [
+    Rgb565Pixel(0x0808),
+    Rgb565Pixel(0x180f),
+    Rgb565Pixel(0x301f),
+    Rgb565Pixel(0x801f),
+    Rgb565Pixel(0x42df),
+    Rgb565Pixel(0x8d7f),
+    Rgb565Pixel(0xdfff),
+    Rgb565Pixel(0xffff),
+];
 static PARTICLE_DEMO_NAVIGATION: AtomicI32 = AtomicI32::new(0);
 
 #[cfg(target_arch = "arm")]
@@ -566,6 +576,8 @@ impl ParticleShowcaseRenderer {
             self.initialize_weather();
         } else if demo == ParticleDemoKind::ParticlePortal {
             self.initialize_particle_portal();
+        } else if demo == ParticleDemoKind::ElectricStorm {
+            self.initialize_electric_storm();
         }
     }
 
@@ -634,6 +646,7 @@ impl ParticleShowcaseRenderer {
             ParticleDemoKind::MeteorShower => self.project_meteor_shower(elapsed),
             ParticleDemoKind::Weather => self.project_weather(elapsed),
             ParticleDemoKind::ParticlePortal => self.project_particle_portal(elapsed),
+            ParticleDemoKind::ElectricStorm => self.project_electric_storm(elapsed),
             _ => self.project_diagnostic(elapsed),
         }
     }
@@ -684,7 +697,108 @@ impl ParticleShowcaseRenderer {
                 value if value < 26.0 => "pulse",
                 _ => "surge",
             },
+            ParticleDemoKind::ElectricStorm => match seconds {
+                value if value < 8.0 => "charge",
+                value if value < 16.0 => "leader",
+                value if value < 22.0 => "return-stroke",
+                _ => "branches",
+            },
             _ => "diagnostic",
+        }
+    }
+
+    fn initialize_electric_storm(&mut self) {
+        for index in 0..self.pool.active() {
+            let random = self.pool.random[index];
+            self.pool.x[index] = unit_signed(random.rotate_left(5)) * 510.0;
+            self.pool.y[index] = unit_signed(random.rotate_left(15)) * 300.0;
+            self.pool.z[index] = unit01(random.rotate_left(25));
+            self.pool.age[index] = unit01(random.rotate_left(9));
+            self.pool.style[index] = 1 + ((random >> 30) as u8).min(3);
+            self.pool.flags[index] = u8::from(random & 127 == 0);
+        }
+    }
+
+    fn project_electric_storm(&mut self, elapsed: Duration) -> usize {
+        self.commands.clear();
+        self.segments.clear();
+        let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
+        let mut clipped = 0usize;
+        let center_x = self.config.width as f32 * 0.5;
+        let center_y = self.config.height as f32 * 0.5;
+        let charge = ((seconds * 3.7).sin() * 0.5 + 0.5).powi(3);
+        for index in (0..self.pool.active()).step_by(2) {
+            let layer = 0.7 + self.pool.z[index] * 0.6;
+            let drift = triangle_wave(seconds * 0.09 + self.pool.age[index]) * 18.0;
+            let x = center_x + self.pool.x[index] * layer + drift;
+            let y = center_y + self.pool.y[index] * layer;
+            let spark = self.pool.flags[index] != 0 && charge > self.pool.age[index];
+            let style = if spark { 5 } else { self.pool.style[index] };
+            if !push_screen_command(
+                &mut self.commands,
+                self.config.width,
+                self.config.height,
+                x,
+                y,
+                style,
+                spark,
+            ) {
+                clipped = clipped.saturating_add(1);
+            }
+        }
+
+        if seconds >= 8.0 {
+            let epoch = (seconds * if seconds < 16.0 { 1.5 } else { 4.0 }) as u32;
+            let seed = xorshift32(epoch ^ fold_seed(self.config.seed, self.demo));
+            let bright = seconds >= 16.0;
+            let branches = seconds >= 22.0;
+            self.append_lightning_bolt(seed, bright, branches);
+            if seconds >= 22.0 {
+                self.append_lightning_bolt(seed.rotate_left(13), false, true);
+            }
+        }
+        clipped
+    }
+
+    fn append_lightning_bolt(&mut self, seed: u32, bright: bool, branches: bool) {
+        let mut state = seed;
+        let mut x = 260.0 + unit01(state) * 440.0;
+        let mut y = 24.0;
+        let steps = 40usize;
+        for step in 0..steps {
+            state = xorshift32(state);
+            let next_x = (x + unit_signed(state) * 18.0).clamp(36.0, 924.0);
+            let next_y = y + 12.0;
+            for (offset, style) in [(-1.0, 3), (1.0, 5), (0.0, if bright { 7 } else { 6 })] {
+                self.segments.push(ParticleShowcaseSegment {
+                    x0: (x + offset) as i16,
+                    y0: y as i16,
+                    x1: (next_x + offset) as i16,
+                    y1: next_y as i16,
+                    style,
+                });
+            }
+            if branches && step > 6 && step % 6 == 0 {
+                let direction = if state & 1 == 0 { -1.0 } else { 1.0 };
+                let mut branch_x = next_x;
+                let mut branch_y = next_y;
+                for _ in 0..5 {
+                    state = xorshift32(state);
+                    let branch_next_x = branch_x + direction * (9.0 + unit01(state) * 13.0);
+                    let branch_next_y = branch_y + 7.0 + unit01(state.rotate_left(9)) * 5.0;
+                    self.segments.push(ParticleShowcaseSegment {
+                        x0: branch_x as i16,
+                        y0: branch_y as i16,
+                        x1: branch_next_x as i16,
+                        y1: branch_next_y as i16,
+                        style: 5,
+                    });
+                    branch_x = branch_next_x;
+                    branch_y = branch_next_y;
+                }
+            }
+            x = next_x;
+            y = next_y;
         }
     }
 
@@ -1892,6 +2006,7 @@ fn showcase_palette(demo: ParticleDemoKind) -> &'static [Rgb565Pixel; 8] {
         ParticleDemoKind::MeteorShower => &METEOR_PALETTE,
         ParticleDemoKind::Weather => &WEATHER_PALETTE,
         ParticleDemoKind::ParticlePortal => &PORTAL_PALETTE,
+        ParticleDemoKind::ElectricStorm => &ELECTRIC_PALETTE,
         _ => &SHOWCASE_PALETTE,
     }
 }
@@ -2330,5 +2445,32 @@ mod tests {
         assert!(stats.visible > renderer.pool.active() / 16);
         assert!(stats.segment_count > 0);
         assert!(stats.segment_count <= renderer.pool.active() / 128);
+    }
+
+    #[test]
+    fn electric_storm_bounds_branching_and_layers_return_stroke() {
+        let mut renderer = ParticleShowcaseRenderer::new(ParticleShowcaseConfig {
+            width: 960,
+            height: 540,
+            seed: 0xb017,
+            initial_demo: ParticleDemoKind::ElectricStorm,
+        })
+        .unwrap();
+        let mut destination = vec![Rgb565Pixel(0); 960 * 540];
+        let stats = renderer
+            .render(&mut destination, 1, Duration::from_secs(25))
+            .unwrap();
+
+        assert_eq!(stats.demo, ParticleDemoKind::ElectricStorm);
+        assert_eq!(stats.beat, "branches");
+        assert_eq!(renderer.commands.len(), renderer.pool.active() / 2);
+        assert!((240..=360).contains(&stats.segment_count));
+        assert!(renderer.segments.iter().any(|segment| segment.style == 7));
+        assert!(
+            renderer
+                .segments
+                .iter()
+                .all(|segment| i32::from(segment.y1) - i32::from(segment.y0) <= MAX_SEGMENT_PIXELS)
+        );
     }
 }
