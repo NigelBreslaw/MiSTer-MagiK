@@ -5,9 +5,11 @@
 pub const SET_FBUF_LATCH: u16 = 0x57;
 pub const GET_FBUF_LATCH: u16 = 0x58;
 pub const GET_FBUF_LATCH_CAPS: u16 = 0x59;
+pub const GET_FBUF_LATCH_DIAGNOSTICS: u16 = 0x5a;
 pub const LATCH_MAGIC: u16 = 0x4d47;
 pub const STATUS_MAGIC: u16 = 0x4d48;
 pub const CAPS_MAGIC: u16 = 0x4d49;
+pub const DIAGNOSTICS_MAGIC: u16 = 0x4d4a;
 pub const ACTIVE_PROTOCOL_VERSION: u16 = 3;
 pub const PROTOCOL_V2: u16 = 2;
 pub const PROTOCOL_V3: u16 = 3;
@@ -22,14 +24,16 @@ pub const CAP_TRANSACTIONAL_POST: u16 = 1 << 3;
 pub const CAP_COHERENT_STATUS: u16 = 1 << 4;
 pub const CAP_STATUS_CRC: u16 = 1 << 5;
 pub const CAP_POST_CRC: u16 = 1 << 6;
+pub const CAP_REJECTION_CONTEXT: u16 = 1 << 7;
 pub const V2_CAPS_FLAGS: u16 = 0x0007;
-pub const V3_CAPS_FLAGS: u16 = 0x007f;
+pub const V3_CAPS_FLAGS: u16 = 0x00ff;
 pub const V2_CAPS_WORDS: usize = 5;
 pub const V3_CAPS_WORDS: usize = 6;
 pub const V2_SET_WORDS: usize = 11;
 pub const V3_SET_WORDS: usize = 12;
 pub const V2_STATUS_WORDS: usize = 11;
 pub const V3_STATUS_WORDS: usize = 14;
+pub const V3_DIAGNOSTICS_WORDS: usize = 7;
 
 pub const STATUS_ACTIVE_ENABLED: u16 = 0;
 pub const STATUS_PENDING_ENABLED: u16 = 1;
@@ -62,12 +66,12 @@ pub const CRC_FINAL_XOR: u16 = 0x0000;
 #[rustfmt::skip]
 pub const GOLDEN_CAPS_V3_PAYLOAD: [u16; 5] = [
     0x0003,
-    0x007f,
+    0x00ff,
     0x0556,
     0x0300,
     0x0ab0,
 ];
-pub const GOLDEN_CAPS_V3_CRC: u16 = 0xaa2d;
+pub const GOLDEN_CAPS_V3_CRC: u16 = 0x01d4;
 #[rustfmt::skip]
 pub const GOLDEN_SET_V3_PAYLOAD: [u16; 11] = [
     0x8014,
@@ -100,3 +104,13 @@ pub const GOLDEN_STATUS_V3_PAYLOAD: [u16; 13] = [
     0x0009,
 ];
 pub const GOLDEN_STATUS_V3_CRC: u16 = 0x2775;
+#[rustfmt::skip]
+pub const GOLDEN_DIAGNOSTICS_V3_PAYLOAD: [u16; 6] = [
+    0x0007,
+    0x0001,
+    0x000b,
+    0x0000,
+    0x0058,
+    0x0000,
+];
+pub const GOLDEN_DIAGNOSTICS_V3_CRC: u16 = 0x97ea;

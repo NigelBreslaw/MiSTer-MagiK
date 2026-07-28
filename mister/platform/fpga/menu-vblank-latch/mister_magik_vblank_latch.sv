@@ -102,9 +102,14 @@ module mister_magik_vblank_latch (
 	reg rx_address_wrap = 1'b0;
 
 	reg [3:0] last_reject_reason = MAGIK_REJECT_NONE;
+	reg [15:0] last_reject_expected_index = 16'hffff;
+	reg [15:0] last_reject_observed_index = 16'hffff;
+	reg [15:0] last_reject_command = 16'd0;
+	reg [15:0] last_reject_receiver_flags = 16'd0;
 	reg magik_ownership = 1'b0;
 
 	reg [15:0] status_snapshot [0:12];
+	reg [15:0] diagnostics_snapshot [0:5];
 	reg [15:0] tx_crc = 16'd0;
 	reg [3:0] tx_expected = 4'd0;
 	reg [7:0] tx_command = 8'd0;
@@ -178,9 +183,11 @@ module mister_magik_vblank_latch (
 	assign response_valid =
 		(cmd_start && ((cmd_id == MAGIK_UIO_SET_FBUF_LATCH) ||
 		               (cmd_id == MAGIK_UIO_GET_FBUF_LATCH) ||
-		               (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_CAPS))) ||
+		               (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_CAPS) ||
+		               (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_DIAGNOSTICS))) ||
 		(cmd_data && ((cmd_id == MAGIK_UIO_GET_FBUF_LATCH) ||
-		              (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_CAPS)));
+		              (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_CAPS) ||
+		              (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_DIAGNOSTICS)));
 
 	always @(*) begin
 		response_data = 16'd0;
@@ -189,6 +196,8 @@ module mister_magik_vblank_latch (
 				MAGIK_UIO_SET_FBUF_LATCH: response_data = MAGIK_FBUF_LATCH_MAGIC;
 				MAGIK_UIO_GET_FBUF_LATCH: response_data = MAGIK_FBUF_STATUS_MAGIC;
 				MAGIK_UIO_GET_FBUF_LATCH_CAPS: response_data = MAGIK_FBUF_CAPS_MAGIC;
+				MAGIK_UIO_GET_FBUF_LATCH_DIAGNOSTICS:
+					response_data = MAGIK_FBUF_DIAGNOSTICS_MAGIC;
 				default: response_data = 16'd0;
 			endcase
 		end
@@ -207,6 +216,11 @@ module mister_magik_vblank_latch (
 				4'd5: response_data = tx_crc ^ MAGIK_CRC_FINAL_XOR;
 				default: response_data = 16'd0;
 			endcase
+		end
+		else if(cmd_data && (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_DIAGNOSTICS)) begin
+			if(word_index < 4'd6) response_data = diagnostics_snapshot[word_index];
+			else if(word_index == 4'd6)
+				response_data = tx_crc ^ MAGIK_CRC_FINAL_XOR;
 		end
 	end
 
@@ -238,14 +252,25 @@ module mister_magik_vblank_latch (
 			tx_expected <= 4'd0;
 			tx_command <= MAGIK_UIO_GET_FBUF_LATCH_CAPS;
 		end
+		else if(cmd_start && (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_DIAGNOSTICS)) begin
+			diagnostics_snapshot[0] <= reject_count;
+			diagnostics_snapshot[1] <= {12'd0, last_reject_reason};
+			diagnostics_snapshot[2] <= last_reject_expected_index;
+			diagnostics_snapshot[3] <= last_reject_observed_index;
+			diagnostics_snapshot[4] <= last_reject_command;
+			diagnostics_snapshot[5] <= last_reject_receiver_flags;
+			tx_crc <= crc_header(MAGIK_UIO_GET_FBUF_LATCH_DIAGNOSTICS, 16'd6);
+			tx_expected <= 4'd0;
+			tx_command <= MAGIK_UIO_GET_FBUF_LATCH_DIAGNOSTICS;
+		end
 		else if(cmd_data && (cmd_id == tx_command) &&
 		        (word_index == tx_expected)) begin
 			if((tx_command == MAGIK_UIO_GET_FBUF_LATCH) && (word_index < 4'd13)) begin
 				tx_crc <= crc_word(tx_crc, status_snapshot[word_index]);
 				tx_expected <= tx_expected + 1'd1;
 			end
-			else if((tx_command == MAGIK_UIO_GET_FBUF_LATCH_CAPS) &&
-			        (word_index < 4'd5)) begin
+				else if((tx_command == MAGIK_UIO_GET_FBUF_LATCH_CAPS) &&
+				        (word_index < 4'd5)) begin
 				case(word_index)
 					4'd0: tx_crc <= crc_word(tx_crc, MAGIK_FBUF_PROTOCOL_VERSION);
 					4'd1: tx_crc <= crc_word(tx_crc, MAGIK_FBUF_CAPS_FLAGS);
@@ -257,9 +282,14 @@ module mister_magik_vblank_latch (
 					default: tx_crc <= tx_crc;
 					/* verilator coverage_on */
 				endcase
-				tx_expected <= tx_expected + 1'd1;
+					tx_expected <= tx_expected + 1'd1;
+				end
+				else if((tx_command == MAGIK_UIO_GET_FBUF_LATCH_DIAGNOSTICS) &&
+				        (word_index < 4'd6)) begin
+					tx_crc <= crc_word(tx_crc, diagnostics_snapshot[word_index]);
+					tx_expected <= tx_expected + 1'd1;
+				end
 			end
-		end
 
 		if(legacy_write) begin
 			magik_ownership <= 1'b0;
@@ -277,6 +307,10 @@ module mister_magik_vblank_latch (
 		if(cmd_start) begin
 			if(rx_open) begin
 				reject_count <= reject_count + 1'd1;
+				last_reject_expected_index <= {12'd0, rx_expected};
+				last_reject_observed_index <= 16'd0;
+				last_reject_command <= {8'd0, cmd_id};
+				last_reject_receiver_flags <= {14'd0, rx_faulted, rx_open};
 				if(cmd_id == MAGIK_UIO_SET_FBUF_LATCH)
 					last_reject_reason <= MAGIK_REJECT_RESTARTED;
 				else
@@ -301,6 +335,10 @@ module mister_magik_vblank_latch (
 				if(!rx_faulted) begin
 					reject_count <= reject_count + 1'd1;
 					last_reject_reason <= MAGIK_REJECT_POST_CLOSE;
+					last_reject_expected_index <= {12'd0, rx_expected};
+					last_reject_observed_index <= {12'd0, word_index};
+					last_reject_command <= {8'd0, cmd_id};
+					last_reject_receiver_flags <= {14'd0, rx_faulted, rx_open};
 					rx_faulted <= 1'b1;
 				end
 			end
@@ -308,24 +346,40 @@ module mister_magik_vblank_latch (
 			        (word_index + 1'd1 == rx_expected)) begin
 				reject_count <= reject_count + 1'd1;
 				last_reject_reason <= MAGIK_REJECT_DUPLICATE_WORD;
+				last_reject_expected_index <= {12'd0, rx_expected};
+				last_reject_observed_index <= {12'd0, word_index};
+				last_reject_command <= {8'd0, cmd_id};
+				last_reject_receiver_flags <= {14'd0, rx_faulted, rx_open};
 				rx_open <= 1'b0;
 				rx_faulted <= 1'b1;
 			end
 			else if(word_index < rx_expected) begin
 				reject_count <= reject_count + 1'd1;
 				last_reject_reason <= MAGIK_REJECT_OUT_OF_ORDER;
+				last_reject_expected_index <= {12'd0, rx_expected};
+				last_reject_observed_index <= {12'd0, word_index};
+				last_reject_command <= {8'd0, cmd_id};
+				last_reject_receiver_flags <= {14'd0, rx_faulted, rx_open};
 				rx_open <= 1'b0;
 				rx_faulted <= 1'b1;
 			end
 			else if((word_index == 4'd11) && (rx_expected != 4'd11)) begin
 				reject_count <= reject_count + 1'd1;
 				last_reject_reason <= MAGIK_REJECT_MISSING_WORD;
+				last_reject_expected_index <= {12'd0, rx_expected};
+				last_reject_observed_index <= {12'd0, word_index};
+				last_reject_command <= {8'd0, cmd_id};
+				last_reject_receiver_flags <= {14'd0, rx_faulted, rx_open};
 				rx_open <= 1'b0;
 				rx_faulted <= 1'b1;
 			end
 			else if(word_index > rx_expected) begin
 				reject_count <= reject_count + 1'd1;
 				last_reject_reason <= MAGIK_REJECT_SHIFTED_WORD;
+				last_reject_expected_index <= {12'd0, rx_expected};
+				last_reject_observed_index <= {12'd0, word_index};
+				last_reject_command <= {8'd0, cmd_id};
+				last_reject_receiver_flags <= {14'd0, rx_faulted, rx_open};
 				rx_open <= 1'b0;
 				rx_faulted <= 1'b1;
 			end
@@ -367,17 +421,29 @@ module mister_magik_vblank_latch (
 				if(rx_mask != 11'h7ff) begin
 					reject_count <= reject_count + 1'd1;
 					last_reject_reason <= MAGIK_REJECT_MISSING_WORD;
+					last_reject_expected_index <= {12'd0, rx_expected};
+					last_reject_observed_index <= {12'd0, word_index};
+					last_reject_command <= {8'd0, cmd_id};
+					last_reject_receiver_flags <= {14'd0, rx_faulted, rx_open};
 					rx_faulted <= 1'b1;
 				end
 				/* verilator coverage_on */
 				else if(data_in != (rx_crc ^ MAGIK_CRC_FINAL_XOR)) begin
 					reject_count <= reject_count + 1'd1;
 					last_reject_reason <= MAGIK_REJECT_BAD_CRC;
+					last_reject_expected_index <= {12'd0, rx_expected};
+					last_reject_observed_index <= {12'd0, word_index};
+					last_reject_command <= {8'd0, cmd_id};
+					last_reject_receiver_flags <= {14'd0, rx_faulted, rx_open};
 					rx_faulted <= 1'b1;
 				end
 				else if(semantic_reject != MAGIK_REJECT_NONE) begin
 					reject_count <= reject_count + 1'd1;
 					last_reject_reason <= semantic_reject;
+					last_reject_expected_index <= {12'd0, rx_expected};
+					last_reject_observed_index <= {12'd0, word_index};
+					last_reject_command <= {8'd0, cmd_id};
+					last_reject_receiver_flags <= {14'd0, rx_faulted, rx_open};
 					rx_faulted <= 1'b1;
 				end
 				else begin

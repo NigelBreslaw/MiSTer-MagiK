@@ -4,12 +4,14 @@
   "commands": {
     "set": 87,
     "get": 88,
-    "caps": 89
+    "caps": 89,
+    "diagnostics": 90
   },
   "magic": {
     "set": 19783,
     "status": 19784,
-    "caps": 19785
+    "caps": 19785,
+    "diagnostics": 19786
   },
   "limits": {
     "max_width": 1366,
@@ -23,7 +25,8 @@
     "transactional_post": 3,
     "coherent_status": 4,
     "status_crc": 5,
-    "post_crc": 6
+    "post_crc": 6,
+    "rejection_context": 7
   },
   "protocols": {
     "2": {
@@ -36,12 +39,14 @@
       "status_crc": false
     },
     "3": {
-      "flags": 127,
+      "flags": 255,
       "caps_words": 6,
       "set_payload_words": 11,
       "set_words": 12,
       "status_payload_words": 13,
       "status_words": 14,
+      "diagnostics_payload_words": 6,
+      "diagnostics_words": 7,
       "caps_crc": true,
       "set_crc": true,
       "status_crc": true
@@ -75,6 +80,15 @@
     "active_stride",
     "reject_count",
     "active_route_epoch",
+    "crc"
+  ],
+  "diagnostics_words_v3": [
+    "reject_count",
+    "last_reject_reason",
+    "last_reject_expected_index",
+    "last_reject_observed_index",
+    "last_reject_command",
+    "receiver_flags",
     "crc"
   ],
   "status_flags": {
@@ -120,8 +134,8 @@
   "goldens": {
     "caps_v3": {
       "command": 89,
-      "payload": [3, 127, 1366, 768, 2736],
-      "crc": 43565
+      "payload": [3, 255, 1366, 768, 2736],
+      "crc": 468
     },
     "set_v3": {
       "command": 87,
@@ -132,6 +146,11 @@
       "command": 88,
       "payload": [42, 43, 15, 3, 4, 5, 36864, 8830, 960, 540, 1920, 7, 9],
       "crc": 10101
+    },
+    "diagnostics_v3": {
+      "command": 90,
+      "payload": [7, 1, 11, 0, 88, 0],
+      "crc": 38890
     }
   }
 }

@@ -13,6 +13,7 @@ pub const RUNTIME_FAILURE_PATH: &str = "/tmp/mister-magik/latch-failure.json";
 
 pub const MAX_LATCH_WIRE_WORDS: usize = 14;
 pub const MAX_LATCH_WIRE_ATTEMPTS: usize = 6;
+pub const MAX_LATCH_POST_WORDS: usize = 12;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -140,6 +141,85 @@ impl LatchWireDiagnostics {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LatchPostWord {
+    pub index: u8,
+    pub transmitted: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ack_high: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ack_low: Option<u16>,
+    #[serde(default)]
+    pub elapsed_us: u64,
+    #[serde(default)]
+    pub error_phase: LatchWireErrorPhase,
+    #[serde(default)]
+    pub injected_skip: bool,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LatchPostDiagnostics {
+    pub protocol_version: u16,
+    pub sequence: u16,
+    pub command_word: LatchPostWord,
+    pub words: [LatchPostWord; MAX_LATCH_POST_WORDS],
+    pub word_count: u8,
+    pub expected_word_count: u8,
+    pub transmitted_word_count: u8,
+    pub total_elapsed_us: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub injected_skip_index: Option<u8>,
+}
+
+impl Default for LatchPostDiagnostics {
+    fn default() -> Self {
+        Self {
+            protocol_version: 0,
+            sequence: 0,
+            command_word: LatchPostWord::default(),
+            words: [LatchPostWord::default(); MAX_LATCH_POST_WORDS],
+            word_count: 0,
+            expected_word_count: 0,
+            transmitted_word_count: 0,
+            total_elapsed_us: 0,
+            injected_skip_index: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LatchStatusObservation {
+    pub active_sequence: u16,
+    pub pending_sequence: u16,
+    pub flags: u16,
+    pub active_enabled: bool,
+    pub pending_enabled: bool,
+    pub pending: bool,
+    pub magik_owned: bool,
+    pub flip_count: u16,
+    pub post_count: u16,
+    pub drop_count: u16,
+    pub reject_count: u16,
+    pub rejection_reason: u8,
+    pub active_route_epoch: u16,
+    pub active_base: u32,
+    pub active_width: u16,
+    pub active_height: u16,
+    pub active_stride: u16,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LatchRejectionObservation {
+    pub reject_count: u16,
+    pub reason: u8,
+    pub expected_index: u16,
+    pub observed_index: u16,
+    pub observed_command: u16,
+    pub receiver_open: bool,
+    pub receiver_faulted: bool,
+    pub crc: u16,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum LatchReadinessState {
@@ -230,6 +310,12 @@ pub struct LatchFailure {
     pub detail: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wire_diagnostics: Option<LatchWireDiagnostics>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_diagnostics: Option<LatchPostDiagnostics>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_observation: Option<LatchStatusObservation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rejection_observation: Option<LatchRejectionObservation>,
 }
 
 impl LatchFailure {
@@ -244,6 +330,9 @@ impl LatchFailure {
             reason,
             detail: detail.into(),
             wire_diagnostics: None,
+            post_diagnostics: None,
+            status_observation: None,
+            rejection_observation: None,
         }
     }
 
@@ -258,12 +347,37 @@ impl LatchFailure {
             reason,
             detail: detail.into(),
             wire_diagnostics: None,
+            post_diagnostics: None,
+            status_observation: None,
+            rejection_observation: None,
         }
     }
 
     pub fn with_wire_diagnostics(mut self, diagnostics: LatchWireDiagnostics) -> Self {
         self.wire_diagnostics = Some(diagnostics);
         self
+    }
+
+    pub fn with_post_diagnostics(mut self, diagnostics: LatchPostDiagnostics) -> Self {
+        self.post_diagnostics = Some(diagnostics);
+        self
+    }
+
+    pub fn with_status_observation(mut self, observation: LatchStatusObservation) -> Self {
+        self.status_observation = Some(observation);
+        self
+    }
+
+    pub fn with_rejection_observation(mut self, observation: LatchRejectionObservation) -> Self {
+        self.rejection_observation = Some(observation);
+        self
+    }
+
+    fn has_diagnostics(&self) -> bool {
+        self.wire_diagnostics.is_some()
+            || self.post_diagnostics.is_some()
+            || self.status_observation.is_some()
+            || self.rejection_observation.is_some()
     }
 
     pub const fn reason_code(&self) -> &'static str {
@@ -337,12 +451,24 @@ pub struct LatchFailureEvidence {
     pub first_wire_diagnostics: Option<LatchWireDiagnostics>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wire_diagnostics: Option<LatchWireDiagnostics>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_post_diagnostics: Option<LatchPostDiagnostics>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_diagnostics: Option<LatchPostDiagnostics>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_status_observation: Option<LatchStatusObservation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_observation: Option<LatchStatusObservation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_rejection_observation: Option<LatchRejectionObservation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rejection_observation: Option<LatchRejectionObservation>,
 }
 
 impl From<&LatchFailure> for LatchFailureEvidence {
     fn from(failure: &LatchFailure) -> Self {
         Self {
-            schema: if failure.wire_diagnostics.is_some() {
+            schema: if failure.has_diagnostics() {
                 "mister-magik-latch-failure-v3"
             } else {
                 "mister-magik-latch-failure-v1"
@@ -360,6 +486,12 @@ impl From<&LatchFailure> for LatchFailureEvidence {
             recovery_state: "compatibility-prompt".to_string(),
             first_wire_diagnostics: failure.wire_diagnostics.clone(),
             wire_diagnostics: failure.wire_diagnostics.clone(),
+            first_post_diagnostics: failure.post_diagnostics,
+            post_diagnostics: failure.post_diagnostics,
+            first_status_observation: failure.status_observation,
+            status_observation: failure.status_observation,
+            first_rejection_observation: failure.rejection_observation,
+            rejection_observation: failure.rejection_observation,
         }
     }
 }
@@ -373,7 +505,7 @@ impl LatchFailureEvidence {
         recovery_state: impl Into<String>,
     ) -> Self {
         Self {
-            schema: if latest.wire_diagnostics.is_some() || first.wire_diagnostics.is_some() {
+            schema: if latest.has_diagnostics() || first.has_diagnostics() {
                 "mister-magik-latch-failure-v3"
             } else {
                 "mister-magik-latch-failure-v2"
@@ -391,6 +523,12 @@ impl LatchFailureEvidence {
             recovery_state: recovery_state.into(),
             first_wire_diagnostics: first.wire_diagnostics.clone(),
             wire_diagnostics: latest.wire_diagnostics.clone(),
+            first_post_diagnostics: first.post_diagnostics,
+            post_diagnostics: latest.post_diagnostics,
+            first_status_observation: first.status_observation,
+            status_observation: latest.status_observation,
+            first_rejection_observation: first.rejection_observation,
+            rejection_observation: latest.rejection_observation,
         }
     }
 
@@ -736,5 +874,70 @@ mod tests {
         let decoded_diagnostics: LatchWireDiagnostics =
             serde_json::from_value(decoded["wire_diagnostics"].clone()).unwrap();
         assert_eq!(decoded_diagnostics, diagnostics);
+    }
+
+    #[test]
+    fn post_rejection_evidence_includes_geometry_and_receiver_position() {
+        let post = LatchPostDiagnostics {
+            protocol_version: 3,
+            sequence: 219,
+            command_word: LatchPostWord {
+                transmitted: 0x57,
+                ack_high: Some(0x4d47),
+                ..Default::default()
+            },
+            words: {
+                let mut words = [LatchPostWord::default(); MAX_LATCH_POST_WORDS];
+                words[4] = LatchPostWord {
+                    index: 4,
+                    transmitted: 540,
+                    injected_skip: true,
+                    ..Default::default()
+                };
+                words
+            },
+            word_count: 12,
+            expected_word_count: 12,
+            transmitted_word_count: 11,
+            injected_skip_index: Some(4),
+            ..Default::default()
+        };
+        let status = LatchStatusObservation {
+            active_sequence: 218,
+            flags: 0x0019,
+            active_enabled: true,
+            magik_owned: true,
+            reject_count: 4,
+            rejection_reason: 1,
+            active_width: 1280,
+            active_height: 720,
+            active_stride: 2560,
+            ..Default::default()
+        };
+        let rejection = LatchRejectionObservation {
+            reject_count: 4,
+            reason: 1,
+            expected_index: 4,
+            observed_index: 5,
+            observed_command: 0x57,
+            receiver_open: true,
+            ..Default::default()
+        };
+        let failure = LatchFailure::runtime(
+            LatchFailureStage::PostVerification,
+            LatchFailureReason::PostedSequenceUnverified,
+            "posted=219 final_active=218",
+        )
+        .with_post_diagnostics(post)
+        .with_status_observation(status)
+        .with_rejection_observation(rejection);
+
+        let encoded = serde_json::to_value(LatchFailureEvidence::from(&failure)).unwrap();
+
+        assert_eq!(encoded["post_diagnostics"]["injected_skip_index"], 4);
+        assert_eq!(encoded["status_observation"]["active_width"], 1280);
+        assert_eq!(encoded["status_observation"]["active_height"], 720);
+        assert_eq!(encoded["rejection_observation"]["expected_index"], 4);
+        assert_eq!(encoded["rejection_observation"]["observed_index"], 5);
     }
 }

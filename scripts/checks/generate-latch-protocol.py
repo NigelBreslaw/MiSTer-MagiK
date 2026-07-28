@@ -39,9 +39,11 @@ def render_rust(spec: dict) -> str:
         f"pub const SET_FBUF_LATCH: u16 = 0x{commands['set']:02x};",
         f"pub const GET_FBUF_LATCH: u16 = 0x{commands['get']:02x};",
         f"pub const GET_FBUF_LATCH_CAPS: u16 = 0x{commands['caps']:02x};",
+        f"pub const GET_FBUF_LATCH_DIAGNOSTICS: u16 = 0x{commands['diagnostics']:02x};",
         f"pub const LATCH_MAGIC: u16 = 0x{magic['set']:04x};",
         f"pub const STATUS_MAGIC: u16 = 0x{magic['status']:04x};",
         f"pub const CAPS_MAGIC: u16 = 0x{magic['caps']:04x};",
+        f"pub const DIAGNOSTICS_MAGIC: u16 = 0x{magic['diagnostics']:04x};",
         f"pub const ACTIVE_PROTOCOL_VERSION: u16 = {spec['active_protocol_version']};",
         "pub const PROTOCOL_V2: u16 = 2;",
         "pub const PROTOCOL_V3: u16 = 3;",
@@ -62,6 +64,7 @@ def render_rust(spec: dict) -> str:
             f"pub const V3_SET_WORDS: usize = {protocols['3']['set_words']};",
             f"pub const V2_STATUS_WORDS: usize = {protocols['2']['status_payload_words']};",
             f"pub const V3_STATUS_WORDS: usize = {protocols['3']['status_words']};",
+            f"pub const V3_DIAGNOSTICS_WORDS: usize = {protocols['3']['diagnostics_words']};",
             "",
         ]
     )
@@ -107,9 +110,11 @@ def render_sv(spec: dict) -> str:
         f"localparam [7:0]  MAGIK_UIO_SET_FBUF_LATCH = 8'h{commands['set']:02X};",
         f"localparam [7:0]  MAGIK_UIO_GET_FBUF_LATCH = 8'h{commands['get']:02X};",
         f"localparam [7:0]  MAGIK_UIO_GET_FBUF_LATCH_CAPS = 8'h{commands['caps']:02X};",
+        f"localparam [7:0]  MAGIK_UIO_GET_FBUF_LATCH_DIAGNOSTICS = 8'h{commands['diagnostics']:02X};",
         f"localparam [15:0] MAGIK_FBUF_LATCH_MAGIC = 16'h{magic['set']:04X};",
         f"localparam [15:0] MAGIK_FBUF_STATUS_MAGIC = 16'h{magic['status']:04X};",
         f"localparam [15:0] MAGIK_FBUF_CAPS_MAGIC = 16'h{magic['caps']:04X};",
+        f"localparam [15:0] MAGIK_FBUF_DIAGNOSTICS_MAGIC = 16'h{magic['diagnostics']:04X};",
         f"localparam [15:0] MAGIK_FBUF_PROTOCOL_VERSION = 16'd{spec['active_protocol_version']};",
         "localparam [15:0] MAGIK_FBUF_PROTOCOL_V2 = 16'd2;",
         "localparam [15:0] MAGIK_FBUF_PROTOCOL_V3 = 16'd3;",
@@ -125,6 +130,7 @@ def render_sv(spec: dict) -> str:
         f"localparam [4:0]  MAGIK_FBUF_V3_SET_WORDS = 5'd{protocols['3']['set_words']};",
         f"localparam [4:0]  MAGIK_FBUF_V2_STATUS_WORDS = 5'd{protocols['2']['status_payload_words']};",
         f"localparam [4:0]  MAGIK_FBUF_V3_STATUS_WORDS = 5'd{protocols['3']['status_words']};",
+        f"localparam [4:0]  MAGIK_FBUF_V3_DIAGNOSTICS_WORDS = 5'd{protocols['3']['diagnostics_words']};",
         "",
     ]
     for name, bit in capabilities.items():

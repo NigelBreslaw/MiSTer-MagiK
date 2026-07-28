@@ -147,6 +147,15 @@ conversion:
   sampled flip counters, valid status CRC, and passive
   `drop_count=0`/unchanged `reject_count`; Linux wake jitter after the
   vblank wait is reported separately as scheduler timing.
+  A protocol-v3 rejection also snapshots passive `0x5a` receiver context:
+  reject count/reason, expected and observed word indices, observed command,
+  receiver state, and CRC. The latch failure episode pairs that snapshot with
+  the outbound `0x57` command and payload/CRC ACK phases and timings, the
+  post-verification counters, route epoch, and active RGB565 geometry. For an
+  attended development-layout reproduction only,
+  `MISTER_MAGIK_DEV_LATCH_POST_SKIP_WORD_INDEX=N` omits one zero-based SET word
+  once per process; public installations ignore it and it must never be
+  persisted in `launcher.env`.
 - The launcher routes the framebuffer during startup and explicit recovery. The
   old periodic route watchdog is disabled by default now that the Main_MiSTer
   fork suppresses stock OSD/menu/framebuffer paths while MagiK owns the UI.

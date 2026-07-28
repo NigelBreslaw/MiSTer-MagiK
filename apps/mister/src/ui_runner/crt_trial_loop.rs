@@ -778,7 +778,7 @@ fn post_probe_slot(
     let posted_sequence = *sequence;
     *sequence = (*sequence).wrapping_add(1).max(1);
     let started = Instant::now();
-    let ack = hardware
+    let post = hardware
         .post_latched_rgb565(
             posted_sequence,
             buffers.base_addr(slot),
@@ -787,7 +787,8 @@ fn post_probe_slot(
             geometry,
         )
         .map_err(|error| format!("latch-post-{}", safe_field(&error.to_string())))?;
-    if ack.0 != crate::fpga::MAGIK_FBUF_LATCH_MAGIC && ack.1 != crate::fpga::MAGIK_FBUF_LATCH_MAGIC
+    if post.ack_high != crate::fpga::MAGIK_FBUF_LATCH_MAGIC
+        && post.ack_low != crate::fpga::MAGIK_FBUF_LATCH_MAGIC
     {
         return Err("latch-post-unsupported".to_string());
     }

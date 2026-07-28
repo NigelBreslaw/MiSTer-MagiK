@@ -57,6 +57,13 @@ impl LatchProtocol {
     pub const fn status_has_crc(self) -> bool {
         matches!(self, Self::V3)
     }
+
+    pub const fn diagnostics_word_count(self) -> Option<usize> {
+        match self {
+            Self::V2 => None,
+            Self::V3 => Some(V3_DIAGNOSTICS_WORDS),
+        }
+    }
 }
 
 impl TryFrom<u16> for LatchProtocol {
@@ -205,6 +212,50 @@ pub fn decode_status(protocol: LatchProtocol, words: &[u16]) -> Result<LatchStat
         } else {
             None
         },
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LatchRejectionDiagnostics {
+    pub reject_count: u16,
+    pub reason: u8,
+    pub expected_index: u16,
+    pub observed_index: u16,
+    pub observed_command: u16,
+    pub receiver_open: bool,
+    pub receiver_faulted: bool,
+    pub crc: u16,
+}
+
+pub fn decode_rejection_diagnostics(
+    protocol: LatchProtocol,
+    words: &[u16],
+) -> Result<LatchRejectionDiagnostics, String> {
+    let Some(word_count) = protocol.diagnostics_word_count() else {
+        return Err("latch rejection diagnostics require protocol v3".to_string());
+    };
+    if words.len() != word_count {
+        return Err(format!(
+            "latch protocol {} rejection diagnostics need {word_count} words, got {}",
+            protocol.version(),
+            words.len()
+        ));
+    }
+    verify_crc(
+        GET_FBUF_LATCH_DIAGNOSTICS,
+        protocol,
+        &words[..word_count - 1],
+        words[word_count - 1],
+    )?;
+    Ok(LatchRejectionDiagnostics {
+        reject_count: words[0],
+        reason: (words[1] & 0x000f) as u8,
+        expected_index: words[2],
+        observed_index: words[3],
+        observed_command: words[4],
+        receiver_open: words[5] & 0x0001 != 0,
+        receiver_faulted: words[5] & 0x0002 != 0,
+        crc: words[6],
     })
 }
 
@@ -368,6 +419,14 @@ mod tests {
             message_crc(GET_FBUF_LATCH, LatchProtocol::V3, &GOLDEN_STATUS_V3_PAYLOAD),
             GOLDEN_STATUS_V3_CRC
         );
+        assert_eq!(
+            message_crc(
+                GET_FBUF_LATCH_DIAGNOSTICS,
+                LatchProtocol::V3,
+                &GOLDEN_DIAGNOSTICS_V3_PAYLOAD
+            ),
+            GOLDEN_DIAGNOSTICS_V3_CRC
+        );
     }
 
     #[test]
@@ -413,5 +472,23 @@ mod tests {
         assert_eq!(v3.active_route_epoch, 9);
         words[13] ^= 1;
         assert!(decode_status(LatchProtocol::V3, &words).is_err());
+    }
+
+    #[test]
+    fn rejection_diagnostics_are_v3_only_and_crc_protected() {
+        let mut words = [0; V3_DIAGNOSTICS_WORDS];
+        words[..6].copy_from_slice(&GOLDEN_DIAGNOSTICS_V3_PAYLOAD);
+        words[6] = GOLDEN_DIAGNOSTICS_V3_CRC;
+
+        let diagnostics = decode_rejection_diagnostics(LatchProtocol::V3, &words).unwrap();
+        assert_eq!(diagnostics.reject_count, 7);
+        assert_eq!(diagnostics.reason, REJECT_MISSING_WORD);
+        assert_eq!(diagnostics.expected_index, 11);
+        assert_eq!(diagnostics.observed_command, GET_FBUF_LATCH);
+        assert!(!diagnostics.receiver_open);
+        assert!(decode_rejection_diagnostics(LatchProtocol::V2, &words).is_err());
+
+        words[6] ^= 1;
+        assert!(decode_rejection_diagnostics(LatchProtocol::V3, &words).is_err());
     }
 }

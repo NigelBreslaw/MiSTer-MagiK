@@ -7,6 +7,9 @@
 //! `0x0058` status read when the executable is installed under
 //! `/media/fat/mister-magik-dev`; public installations ignore it. Keep this
 //! process-scoped and never write it to `launcher.env`.
+//! `MISTER_MAGIK_DEV_LATCH_POST_SKIP_WORD_INDEX=N` similarly omits exactly one
+//! zero-based SET payload word once per process, only from the development
+//! installation, so receiver rejection evidence can be validated end to end.
 //!
 //! `catalog-lab latch-load-scenario OUTPUT` creates a bounded 500K-game
 //! reproduction manifest. Resulting support evidence is retained at
@@ -22,9 +25,13 @@ use std::io;
 
 const TRANSIENT_PENDING_SETTLE_TIMEOUT: Duration = Duration::from_millis(100);
 const DEV_LATCH_TIMEOUT_ENV: &str = "MISTER_MAGIK_DEV_LATCH_STATUS_TIMEOUT_AT";
+const DEV_LATCH_POST_SKIP_ENV: &str = "MISTER_MAGIK_DEV_LATCH_POST_SKIP_WORD_INDEX";
 
 static DEV_LATCH_STATUS_READS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static DEV_LATCH_TIMEOUT_AT: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+static DEV_LATCH_POST_SKIP_INDEX: std::sync::OnceLock<Option<usize>> = std::sync::OnceLock::new();
+static DEV_LATCH_POST_SKIP_USED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 #[derive(Debug)]
 pub(in crate::ui_runner) struct LatchCompletion {
@@ -56,7 +63,13 @@ pub(in crate::ui_runner) trait LatchHardware: LauncherDisplayHardware {
         fb_width: u16,
         fb_height: u16,
         geometry: crate::fpga::LatchedFbufGeometry,
-    ) -> io::Result<(u16, u16)>;
+    ) -> Result<crate::fpga::LatchedFbufPostAttempt, crate::fpga::LatchedFbufPostError>;
+
+    fn read_latch_rejection_diagnostics(
+        &mut self,
+    ) -> io::Result<Option<mister_magik_fb::latch_readiness::LatchRejectionObservation>> {
+        Ok(None)
+    }
 }
 
 impl LatchHardware for Fpga {
@@ -98,8 +111,21 @@ impl LatchHardware for Fpga {
         fb_width: u16,
         fb_height: u16,
         geometry: crate::fpga::LatchedFbufGeometry,
-    ) -> io::Result<(u16, u16)> {
-        self.post_magik_latched_fbuf_rgb565(sequence, base_addr, fb_width, fb_height, geometry)
+    ) -> Result<crate::fpga::LatchedFbufPostAttempt, crate::fpga::LatchedFbufPostError> {
+        self.post_magik_latched_fbuf_rgb565_observed(
+            sequence,
+            base_addr,
+            fb_width,
+            fb_height,
+            geometry,
+            dev_latch_post_skip_word_index(),
+        )
+    }
+
+    fn read_latch_rejection_diagnostics(
+        &mut self,
+    ) -> io::Result<Option<mister_magik_fb::latch_readiness::LatchRejectionObservation>> {
+        self.read_magik_latched_fbuf_rejection_diagnostics()
     }
 }
 
@@ -120,6 +146,31 @@ fn dev_latch_timeout_for(executable: &std::path::Path, configured: Option<&str>)
     configured?.parse::<u64>().ok().filter(|read| *read > 0)
 }
 
+fn dev_latch_post_skip_word_index() -> Option<usize> {
+    let configured = *DEV_LATCH_POST_SKIP_INDEX.get_or_init(|| {
+        let executable = std::env::current_exe().ok()?;
+        dev_latch_post_skip_for(
+            &executable,
+            std::env::var(DEV_LATCH_POST_SKIP_ENV).ok().as_deref(),
+        )
+    });
+    configured
+        .filter(|_| !DEV_LATCH_POST_SKIP_USED.swap(true, std::sync::atomic::Ordering::Relaxed))
+}
+
+fn dev_latch_post_skip_for(
+    executable: &std::path::Path,
+    configured: Option<&str>,
+) -> Option<usize> {
+    (mister_magik_catalog::device_layout::DeviceLayout::for_executable(executable)
+        == mister_magik_catalog::device_layout::DeviceLayout::Dev)
+        .then_some(())?;
+    configured?
+        .parse::<usize>()
+        .ok()
+        .filter(|index| *index < mister_magik_latch_contract::V3_SET_WORDS)
+}
+
 fn latch_status_read_failure(
     stage: LatchFailureStage,
     error: crate::fpga::LatchedFbufStatusReadError,
@@ -132,6 +183,24 @@ fn latch_status_read_failure(
 fn rejected_wire_diagnostics(mut diagnostics: LatchWireDiagnostics) -> LatchWireDiagnostics {
     diagnostics.decision = LatchWireDecision::Rejected;
     diagnostics
+}
+
+fn with_post_failure_evidence(
+    hardware: &mut impl LatchHardware,
+    mut failure: LatchFailure,
+    post: mister_magik_fb::latch_readiness::LatchPostDiagnostics,
+    status: Option<crate::fpga::LatchedFbufStatus>,
+) -> LatchFailure {
+    failure = failure.with_post_diagnostics(post);
+    if let Some(status) = status {
+        failure = failure.with_status_observation(status.into());
+        if status.rejection_reason() != mister_magik_latch_contract::REJECT_NONE
+            && let Ok(Some(observation)) = hardware.read_latch_rejection_diagnostics()
+        {
+            failure = failure.with_rejection_observation(observation);
+        }
+    }
+    failure
 }
 
 fn stamp_wire_capabilities(
@@ -537,7 +606,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         let sequence = self.sequence;
         self.sequence = self.sequence.wrapping_add(1).max(1);
         let post_start = Instant::now();
-        let ack = hardware
+        let post = hardware
             .post_latched_rgb565(
                 sequence,
                 self.buffers.base_addr(grant.slot_index),
@@ -551,6 +620,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                     LatchFailureReason::LatchPostFailed,
                     error.to_string(),
                 )
+                .with_post_diagnostics(*error.diagnostics)
             })?;
         let post_us = post_start.elapsed().as_micros();
         // Retained in the accounting schema for compatibility. Main_MiSTer
@@ -560,16 +630,19 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         let (after_sample, post_status_us, post_status_reads, post_status_wire_attempts) =
             read_post_status(sequence, &mut read_budget, |budget| {
                 self.read_geometry_safe_status_with_budget(hardware, budget)
+            })
+            .map_err(|failure| {
+                with_post_failure_evidence(hardware, failure, post.diagnostics, None)
             })?;
         let after_status = after_sample.status;
         status_us = status_us.saturating_add(post_status_us);
-        let set_supported = ack.0 == crate::fpga::MAGIK_FBUF_LATCH_MAGIC
-            || ack.1 == crate::fpga::MAGIK_FBUF_LATCH_MAGIC;
+        let set_supported = post.ack_high == crate::fpga::MAGIK_FBUF_LATCH_MAGIC
+            || post.ack_low == crate::fpga::MAGIK_FBUF_LATCH_MAGIC;
         if !set_supported
             || !after_status.supported()
             || !posted_sequence_observed(after_status, sequence)
         {
-            return Err(LatchFailure::runtime(
+            let failure = LatchFailure::runtime(
                 LatchFailureStage::PostVerification,
                 LatchFailureReason::PostedSequenceUnverified,
                 format!(
@@ -580,7 +653,13 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                     after_status.pending_sequence
                 ),
             )
-            .with_wire_diagnostics(rejected_wire_diagnostics(after_sample.diagnostics)));
+            .with_wire_diagnostics(rejected_wire_diagnostics(after_sample.diagnostics));
+            return Err(with_post_failure_evidence(
+                hardware,
+                failure,
+                post.diagnostics,
+                Some(after_status),
+            ));
         }
         self.outstanding_direct_grant = None;
         self.last_committed_buffer = Some(grant.slot_index);
@@ -782,29 +861,30 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         let sequence = self.sequence;
         self.sequence = self.sequence.wrapping_add(1).max(1);
         let post_start = Instant::now();
-        let ack = match hardware.post_latched_rgb565(
+        let post = match hardware.post_latched_rgb565(
             sequence,
             base_addr,
             self.width as u16,
             self.height as u16,
             self.latch_geometry,
         ) {
-            Ok(ack) => ack,
+            Ok(post) => post,
             Err(e) => {
                 self.latch_state.mark_attempt_failed(buffer_index);
                 return Err(LatchFailure::runtime(
                     LatchFailureStage::LatchPost,
                     LatchFailureReason::LatchPostFailed,
                     e.to_string(),
-                ));
+                )
+                .with_post_diagnostics(*e.diagnostics));
             }
         };
         let post_us = post_start.elapsed().as_micros();
         // Retained in the accounting schema for compatibility. Main_MiSTer
         // exclusively owns UIO_BUT_SW and the VGA framebuffer mux.
         let set_vga_fb_us = 0;
-        let set_supported = ack.0 == crate::fpga::MAGIK_FBUF_LATCH_MAGIC
-            || ack.1 == crate::fpga::MAGIK_FBUF_LATCH_MAGIC;
+        let set_supported = post.ack_high == crate::fpga::MAGIK_FBUF_LATCH_MAGIC
+            || post.ack_low == crate::fpga::MAGIK_FBUF_LATCH_MAGIC;
 
         let mut read_budget = LogicalStatusReadBudget::new();
         let (after_sample, post_status_us, post_status_reads, post_status_wire_attempts) =
@@ -814,7 +894,12 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                 Ok(result) => result,
                 Err(e) => {
                     self.latch_state.mark_attempt_failed(buffer_index);
-                    return Err(e);
+                    return Err(with_post_failure_evidence(
+                        hardware,
+                        e,
+                        post.diagnostics,
+                        None,
+                    ));
                 }
             };
         let after_status = after_sample.status;
@@ -826,25 +911,31 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         if !set_supported || !status_supported {
             self.latch_state.mark_attempt_failed(buffer_index);
             self.disabled = true;
-            return Err(LatchFailure::incompatible(
+            let failure = LatchFailure::incompatible(
                 LatchFailureStage::FpgaStatus,
                 LatchFailureReason::FpgaStatusUnsupported,
                 format!(
                     "unsupported latch core set_supported={} status_supported={} ack_high=0x{:04x} ack_low=0x{:04x} status_high=0x{:04x} status_low=0x{:04x}",
                     u8::from(set_supported),
                     u8::from(status_supported),
-                    ack.0,
-                    ack.1,
+                    post.ack_high,
+                    post.ack_low,
                     after_status.magic_hi,
                     after_status.magic_lo
                 ),
             )
-            .with_wire_diagnostics(rejected_wire_diagnostics(after_sample.diagnostics)));
+            .with_wire_diagnostics(rejected_wire_diagnostics(after_sample.diagnostics));
+            return Err(with_post_failure_evidence(
+                hardware,
+                failure,
+                post.diagnostics,
+                Some(after_status),
+            ));
         }
 
         if !posted_sequence_observed(after_status, sequence) {
             self.latch_state.mark_attempt_failed(buffer_index);
-            return Err(LatchFailure::runtime(
+            let failure = LatchFailure::runtime(
                 LatchFailureStage::PostVerification,
                 LatchFailureReason::PostedSequenceUnverified,
                 format!(
@@ -855,7 +946,13 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                     after_status.pending_sequence
                 ),
             )
-            .with_wire_diagnostics(rejected_wire_diagnostics(after_sample.diagnostics)));
+            .with_wire_diagnostics(rejected_wire_diagnostics(after_sample.diagnostics));
+            return Err(with_post_failure_evidence(
+                hardware,
+                failure,
+                post.diagnostics,
+                Some(after_status),
+            ));
         }
 
         self.latch_state.mark_post_success(plan);
@@ -1537,6 +1634,38 @@ mod tests {
         );
     }
 
+    #[test]
+    fn latch_post_skip_injection_is_valid_only_for_development_layout() {
+        assert_eq!(
+            dev_latch_post_skip_for(
+                std::path::Path::new("/media/fat/mister-magik-dev/mister-magik-fb"),
+                Some("4"),
+            ),
+            Some(4)
+        );
+        assert_eq!(
+            dev_latch_post_skip_for(
+                std::path::Path::new("/media/fat/mister-magik/mister-magik-fb"),
+                Some("4"),
+            ),
+            None
+        );
+        assert_eq!(
+            dev_latch_post_skip_for(
+                std::path::Path::new("/media/fat/mister-magik-dev/mister-magik-fb"),
+                Some("12"),
+            ),
+            None
+        );
+        assert_eq!(
+            dev_latch_post_skip_for(
+                std::path::Path::new("/media/fat/mister-magik-dev/mister-magik-fb"),
+                Some("invalid"),
+            ),
+            None
+        );
+    }
+
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum TestEvent {
         ReadStatus,
@@ -1723,7 +1852,8 @@ mod tests {
             _fb_width: u16,
             _fb_height: u16,
             _geometry: crate::fpga::LatchedFbufGeometry,
-        ) -> io::Result<(u16, u16)> {
+        ) -> Result<crate::fpga::LatchedFbufPostAttempt, crate::fpga::LatchedFbufPostError>
+        {
             if let Some(events) = &self.events {
                 events.borrow_mut().push(TestEvent::Post);
             }
@@ -1733,10 +1863,23 @@ mod tests {
             } else {
                 self.posts.remove(0)
             };
-            if result.is_ok() {
-                self.last_posted_sequence = Some(sequence);
+            match result {
+                Ok((ack_high, ack_low)) => {
+                    self.last_posted_sequence = Some(sequence);
+                    Ok(crate::fpga::LatchedFbufPostAttempt {
+                        ack_high,
+                        ack_low,
+                        diagnostics: mister_magik_fb::latch_readiness::LatchPostDiagnostics {
+                            protocol_version: 2,
+                            sequence,
+                            expected_word_count: mister_magik_latch_contract::V2_SET_WORDS as u8,
+                            transmitted_word_count: mister_magik_latch_contract::V2_SET_WORDS as u8,
+                            ..Default::default()
+                        },
+                    })
+                }
+                Err(error) => Err(crate::fpga::LatchedFbufPostError::from_io(error)),
             }
-            result
         }
     }
 
