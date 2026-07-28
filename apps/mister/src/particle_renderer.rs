@@ -8,6 +8,7 @@ use crate::particle_engine::{
 };
 use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
 use slint::platform::software_renderer::Rgb565Pixel;
+use std::collections::VecDeque;
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -115,8 +116,8 @@ struct ParticlePreparationPipeline {
     request_tx: Option<SyncSender<ParticlePreparationRequest>>,
     ready_rx: Receiver<Result<PreparedParticleFrame, String>>,
     presentation_tick: u64,
-    in_flight: Option<u64>,
-    spare_commands: Option<Vec<u32>>,
+    in_flight: VecDeque<u64>,
+    spare_commands: Vec<Vec<u32>>,
     worker: Option<JoinHandle<()>>,
 }
 
@@ -160,7 +161,10 @@ impl ParticleRenderer {
                 engine
                     .take()
                     .expect("particle preparation pipeline must receive its engine"),
-                Vec::with_capacity(config.count),
+                [
+                    Vec::with_capacity(config.count),
+                    Vec::with_capacity(config.count),
+                ],
                 Vec::with_capacity(config.count),
                 order_commands.then(|| Vec::with_capacity(config.count)),
             )?)
@@ -169,9 +173,8 @@ impl ParticleRenderer {
         };
         let command_ordering_scratch = (preparation_pipeline.is_none() && order_commands)
             .then(|| Vec::with_capacity(config.count));
-        let pipeline_buffers = usize::from(preparation_pipeline.is_some());
         let command_buffer_count =
-            1 + pipeline_buffers.saturating_mul(2) + usize::from(order_commands);
+            if preparation_pipeline.is_some() { 4 } else { 1 } + usize::from(order_commands);
         let renderer_scratch_bytes = dirty_slots.iter().fold(0usize, |total, slot| {
             total.saturating_add(
                 slot.offsets
@@ -345,12 +348,12 @@ impl ParticleRenderer {
 impl ParticlePreparationPipeline {
     fn start(
         engine: ParticleEngine,
-        spare_commands: Vec<u32>,
+        spare_commands: [Vec<u32>; 2],
         cached_commands: Vec<u32>,
         ordering_scratch: Option<Vec<u32>>,
     ) -> Result<Self, String> {
-        let (request_tx, request_rx) = mpsc::sync_channel::<ParticlePreparationRequest>(1);
-        let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<PreparedParticleFrame, String>>(1);
+        let (request_tx, request_rx) = mpsc::sync_channel::<ParticlePreparationRequest>(2);
+        let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<PreparedParticleFrame, String>>(2);
         let worker = std::thread::Builder::new()
             .name("particle-prepare".into())
             .spawn(move || {
@@ -368,8 +371,8 @@ impl ParticlePreparationPipeline {
             request_tx: Some(request_tx),
             ready_rx,
             presentation_tick: 0,
-            in_flight: None,
-            spare_commands: Some(spare_commands),
+            in_flight: VecDeque::new(),
+            spare_commands: spare_commands.into(),
             worker: Some(worker),
         })
     }
@@ -382,33 +385,41 @@ impl ParticlePreparationPipeline {
     ) -> Result<PreparedParticleFrame, String> {
         let tick = self.presentation_tick;
         self.presentation_tick = self.presentation_tick.wrapping_add(1);
-        let preparation_queue_depth = usize::from(self.in_flight.is_some());
+        let preparation_queue_depth = self.in_flight.len();
         let wait_started = Instant::now();
-        let mut prepared = if let Some(in_flight_tick) = self.in_flight.take() {
+        let mut prepared = if let Some(in_flight_tick) = self.in_flight.pop_front() {
             debug_assert_eq!(in_flight_tick, tick);
             self.receive()?
         } else {
             self.send(tick, elapsed)?;
             self.receive()?
         };
-        let mut lookahead_mismatch_count = 0;
         if prepared.tick != tick {
-            lookahead_mismatch_count = 1;
-            self.spare_commands = Some(std::mem::take(&mut prepared.commands));
-            self.send(tick, elapsed)?;
-            prepared = self.receive()?;
+            self.spare_commands
+                .push(std::mem::take(&mut prepared.commands));
+            return Err(format!(
+                "particle preparation queue returned tick {}, expected {tick}",
+                prepared.tick
+            ));
         }
         debug_assert_eq!(prepared.tick, tick);
         prepared.preparation_wait_us = wait_started.elapsed().as_micros();
         prepared.prepared_frame_age_us = prepared.completed_at.elapsed().as_micros();
-        prepared.lookahead_mismatch_count = lookahead_mismatch_count;
+        prepared.lookahead_mismatch_count = 0;
         prepared.preparation_queue_depth = preparation_queue_depth;
         std::mem::swap(commands, &mut prepared.commands);
-        self.spare_commands = Some(std::mem::take(&mut prepared.commands));
+        self.spare_commands
+            .push(std::mem::take(&mut prepared.commands));
         if let Some(next_elapsed) = next_elapsed.filter(|next| *next > elapsed) {
-            let next_tick = tick.wrapping_add(1);
-            self.send(next_tick, next_elapsed)?;
-            self.in_flight = Some(next_tick);
+            let period = next_elapsed.saturating_sub(elapsed);
+            while self.in_flight.len() < 2 {
+                let frames_ahead = self.in_flight.len() + 1;
+                let next_tick = tick.wrapping_add(frames_ahead as u64);
+                let prepared_elapsed =
+                    next_elapsed.saturating_add(period.saturating_mul((frames_ahead - 1) as u32));
+                self.send(next_tick, prepared_elapsed)?;
+                self.in_flight.push_back(next_tick);
+            }
         }
         Ok(prepared)
     }
@@ -416,7 +427,7 @@ impl ParticlePreparationPipeline {
     fn send(&mut self, tick: u64, elapsed: Duration) -> Result<(), String> {
         let commands = self
             .spare_commands
-            .take()
+            .pop()
             .ok_or("particle preparation pipeline has no spare command buffer")?;
         self.request_tx
             .as_ref()
@@ -1343,7 +1354,7 @@ mod tests {
         let engine = ParticleEngine::new(config(ParticlePreset::Capacity), mask()).unwrap();
         let mut pipeline = ParticlePreparationPipeline::start(
             engine,
-            Vec::with_capacity(64),
+            [Vec::with_capacity(64), Vec::with_capacity(64)],
             Vec::with_capacity(64),
             None,
         )
@@ -1365,9 +1376,18 @@ mod tests {
             .unwrap();
         assert_eq!(second.tick, 1);
         assert_eq!(second.lookahead_mismatch_count, 0);
-        assert_eq!(second.preparation_queue_depth, 1);
+        assert_eq!(second.preparation_queue_depth, 2);
         assert_eq!(commands.len(), second.visible);
         assert_ne!(commands, first_commands);
+        let third_elapsed = Duration::from_micros(50_001);
+        let fourth_elapsed = Duration::from_micros(66_668);
+        let third = pipeline
+            .acquire(third_elapsed, Some(fourth_elapsed), &mut commands)
+            .unwrap();
+        assert_eq!(third.tick, 2);
+        assert_eq!(third.lookahead_mismatch_count, 0);
+        assert_eq!(third.preparation_queue_depth, 1);
+        assert_eq!(pipeline.in_flight.len(), 2);
     }
 
     #[test]
@@ -1375,7 +1395,7 @@ mod tests {
         let engine = ParticleEngine::new(config(ParticlePreset::Capacity), mask()).unwrap();
         let mut pipeline = ParticlePreparationPipeline::start(
             engine,
-            Vec::with_capacity(64),
+            [Vec::with_capacity(64), Vec::with_capacity(64)],
             Vec::with_capacity(64),
             None,
         )
