@@ -6,6 +6,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=MISTER_MAGIK_BUILD_NUMBER");
     println!("cargo:rerun-if-env-changed=MISTER_MAGIK_VERSION");
     println!("cargo:rerun-if-env-changed=MISTER_MAGIK_BUILD_TIME");
+    println!("cargo:rerun-if-env-changed=MISTER_MAGIK_SOURCE_REVISION");
+    println!("cargo:rerun-if-env-changed=MISTER_MAGIK_SOURCE_DIRTY");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=Cargo.toml");
     println!("cargo:rerun-if-changed=src/particle_neon.c");
@@ -16,8 +18,12 @@ fn main() {
     println!("cargo:rustc-check-cfg=cfg(mister_experiments)");
     let build_number = git_commit_count();
     let version = release_version(&build_number);
+    let source_revision = source_revision();
+    let source_dirty = source_dirty();
     println!("cargo:rustc-env=MISTER_MAGIK_BUILD_NUMBER={build_number}");
     println!("cargo:rustc-env=MISTER_MAGIK_VERSION={version}");
+    println!("cargo:rustc-env=MISTER_MAGIK_SOURCE_REVISION={source_revision}");
+    println!("cargo:rustc-env=MISTER_MAGIK_SOURCE_DIRTY={source_dirty}");
     println!(
         "cargo:rustc-env=MISTER_MAGIK_BUILD_TIME={}",
         build_timestamp()
@@ -85,7 +91,7 @@ fn build_timestamp() -> String {
     }
 
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
-    command_stdout(
+    command_output_text(
         "git",
         &[
             "-C",
@@ -100,7 +106,54 @@ fn build_timestamp() -> String {
     .unwrap_or_else(|| "unknown".into())
 }
 
+fn source_revision() -> String {
+    if let Some(value) = nonempty_env("MISTER_MAGIK_SOURCE_REVISION") {
+        return value;
+    }
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
+    command_stdout("git", &["-C", &manifest_dir, "rev-parse", "HEAD"])
+        .unwrap_or_else(|| "unknown".into())
+}
+
+fn source_dirty() -> String {
+    if let Some(value) = nonempty_env("MISTER_MAGIK_SOURCE_DIRTY") {
+        return value;
+    }
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
+    command_stdout(
+        "git",
+        &[
+            "-C",
+            &manifest_dir,
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+        ],
+    )
+    .map_or_else(
+        || "unknown".into(),
+        |output| {
+            if output.is_empty() {
+                "0".into()
+            } else {
+                "1".into()
+            }
+        },
+    )
+}
+
+fn nonempty_env(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
 fn command_stdout(command: &str, args: &[&str]) -> Option<String> {
+    command_output_text(command, args).filter(|text| !text.is_empty())
+}
+
+fn command_output_text(command: &str, args: &[&str]) -> Option<String> {
     let output = std::process::Command::new(command)
         .args(args)
         .output()
@@ -109,10 +162,5 @@ fn command_stdout(command: &str, args: &[&str]) -> Option<String> {
         return None;
     }
     let text = String::from_utf8(output.stdout).ok()?;
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.into())
-    }
+    Some(text.trim().into())
 }

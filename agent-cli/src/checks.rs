@@ -214,6 +214,8 @@ fn check_distribution_workflow(repository: &Path) -> Result<(), String> {
         "MISTER_MAGIK_BUILD_NUMBER",
         "MISTER_MAGIK_VERSION",
         "MISTER_MAGIK_BUILD_TIME",
+        "MISTER_MAGIK_SOURCE_REVISION",
+        "MISTER_MAGIK_SOURCE_DIRTY",
     ] {
         if !cross.contains(&format!("\"{variable}\"")) {
             return Err(format!("distribution_contract_missing: {variable}"));

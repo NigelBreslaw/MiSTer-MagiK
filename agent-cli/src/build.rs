@@ -184,7 +184,7 @@ impl BuildSpec {
         };
         let receipt = PathBuf::from(format!("{}.build-receipt.tsv", artifact.display()));
         let cache_identity = format!(
-            "v4:{TARGET}:{target:?}:{mode:?}:{profile}:{}:{}",
+            "v5:{TARGET}:{target:?}:{mode:?}:{profile}:{}:{}",
             features.join(","),
             scope.label()
         );
@@ -235,12 +235,14 @@ impl BuildSpec {
         let receipt_text = std::fs::read_to_string(repository.join(&self.receipt))
             .map_err(|error| format!("cannot read build receipt: {error}"))?;
         let receipt = BuildReceipt::parse(&receipt_text)?;
-        let (build_number, version, _) = build_metadata(repository)?;
+        let metadata = build_metadata(repository)?;
         if receipt.profile != self.profile
             || receipt.features != self.features.join(",")
             || receipt.ui_scope != self.ui_scope.label()
-            || receipt.build_number != build_number
-            || receipt.version != version
+            || receipt.build_number != metadata.build_number
+            || receipt.version != metadata.version
+            || receipt.source_commit != metadata.source_revision
+            || receipt.source_dirty != metadata.source_dirty
             || receipt.cache_identity != self.cache_identity
             || receipt.lock_sha256 != sha256(&repository.join(lockfile(self.target)))?
             || receipt.toolchain_sha256
@@ -426,7 +428,7 @@ pub fn execute_runtime_validation(
         .to_string();
     let cargo_home = home_dir()?.join(".cargo");
     let rust_toolchain = home_dir()?.join(".rustup/toolchains/stable-aarch64-unknown-linux-gnu");
-    let (build_number, version, build_time) = build_metadata(repository)?;
+    let metadata = build_metadata(repository)?;
     let mut command = Command::new("container");
     command
         .current_dir(repository)
@@ -448,11 +450,7 @@ pub fn execute_runtime_validation(
         ])
         .arg("--env")
         .arg(format!("CARGO_BUILD_JOBS={cpus}"));
-    for value in [
-        format!("MISTER_MAGIK_BUILD_NUMBER={build_number}"),
-        format!("MISTER_MAGIK_VERSION={version}"),
-        format!("MISTER_MAGIK_BUILD_TIME={build_time}"),
-    ] {
+    for value in metadata.environment() {
         command.arg("--env").arg(value);
     }
     for (name, value) in FFMPEG_APPLE_CONTAINER_ENV {
@@ -536,7 +534,7 @@ impl<'a> ProcessBuildActions<'a> {
         let cargo_home = home_dir()?.join(".cargo");
         let rust_toolchain =
             home_dir()?.join(".rustup/toolchains/stable-aarch64-unknown-linux-gnu");
-        let (build_number, version, build_time) = build_metadata(self.repository)?;
+        let metadata = build_metadata(self.repository)?;
         let rustflags = if self.spec.features.contains(&"profile") {
             "-D warnings -C target-cpu=cortex-a9 -C force-frame-pointers=yes"
         } else {
@@ -565,11 +563,7 @@ impl<'a> ProcessBuildActions<'a> {
             .args(["--env", "RUSTC_WRAPPER=", "--env"])
             .arg(format!("RUSTFLAGS={rustflags}"))
             .args(["--env", "SLINT_FONT_SIZES=8,16,24,32"]);
-        for value in [
-            format!("MISTER_MAGIK_BUILD_NUMBER={build_number}"),
-            format!("MISTER_MAGIK_VERSION={version}"),
-            format!("MISTER_MAGIK_BUILD_TIME={build_time}"),
-        ] {
+        for value in metadata.environment() {
             command.arg("--env").arg(value);
         }
         if self.spec.target == BuildTarget::Runtime && self.spec.mode != BuildMode::CheckLibrary {
@@ -600,7 +594,7 @@ impl<'a> ProcessBuildActions<'a> {
     }
 
     fn compile_with_cross(&self) -> AgentResult<()> {
-        let (build_number, version, build_time) = build_metadata(self.repository)?;
+        let metadata = build_metadata(self.repository)?;
         let rustflags = if self.spec.features.contains(&"profile") {
             "-D warnings -C target-cpu=cortex-a9 -C force-frame-pointers=yes"
         } else {
@@ -612,9 +606,14 @@ impl<'a> ProcessBuildActions<'a> {
             .env("RUSTC_WRAPPER", "")
             .env("RUSTFLAGS", rustflags)
             .env("MISTER_UI_BUILD_SCOPE", self.spec.ui_scope.label())
-            .env("MISTER_MAGIK_BUILD_NUMBER", build_number)
-            .env("MISTER_MAGIK_VERSION", version)
-            .env("MISTER_MAGIK_BUILD_TIME", build_time)
+            .env("MISTER_MAGIK_BUILD_NUMBER", &metadata.build_number)
+            .env("MISTER_MAGIK_VERSION", &metadata.version)
+            .env("MISTER_MAGIK_BUILD_TIME", &metadata.build_time)
+            .env("MISTER_MAGIK_SOURCE_REVISION", &metadata.source_revision)
+            .env(
+                "MISTER_MAGIK_SOURCE_DIRTY",
+                u8::from(metadata.source_dirty).to_string(),
+            )
             .args(cargo_args(self.spec, requested_cargo_timings()));
         configure_cross_environment(&mut command, self.repository)?;
         if self.spec.target == BuildTarget::Runtime && self.spec.mode != BuildMode::CheckLibrary {
@@ -653,21 +652,17 @@ impl<'a> ProcessBuildActions<'a> {
             return Ok(());
         }
         let artifact = self.repository.join(&self.spec.artifact);
-        let commit = git_output(self.repository, &["rev-parse", "HEAD"])?;
-        let dirty = !git_output(
-            self.repository,
-            &["status", "--porcelain", "--untracked-files=all"],
-        )?
-        .is_empty();
-        let (build_number, version, _) = build_metadata(self.repository)?;
+        let metadata = build_metadata(self.repository)?;
         let receipt = format!(
-            "build_receipt_tsv\tbinary_sha256={}\tprofile={}\tfeatures={}\tui_scope={}\tbuild_number={build_number}\tversion={version}\tsource_commit={}\tsource_dirty={}\tcache_identity={}\tlock_sha256={}\ttoolchain_sha256={}\n",
+            "build_receipt_tsv\tbinary_sha256={}\tprofile={}\tfeatures={}\tui_scope={}\tbuild_number={}\tversion={}\tsource_commit={}\tsource_dirty={}\tcache_identity={}\tlock_sha256={}\ttoolchain_sha256={}\n",
             sha256(&artifact)?,
             self.spec.profile,
             self.spec.features.join(","),
             self.spec.ui_scope.label(),
-            commit,
-            u8::from(dirty),
+            metadata.build_number,
+            metadata.version,
+            metadata.source_revision,
+            u8::from(metadata.source_dirty),
             self.spec.cache_identity,
             sha256(&self.repository.join(lockfile(self.spec.target)))?,
             sha256(&self.repository.join("apps/mister/rust-toolchain.toml"))?,
@@ -1075,7 +1070,28 @@ fn ffmpeg_cross_env(repository: &Path) -> Vec<(&'static str, OsString)> {
     ]
 }
 
-fn build_metadata(repository: &Path) -> AgentResult<(String, String, String)> {
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct BuildMetadata {
+    build_number: String,
+    version: String,
+    build_time: String,
+    source_revision: String,
+    source_dirty: bool,
+}
+
+impl BuildMetadata {
+    fn environment(&self) -> [String; 5] {
+        [
+            format!("MISTER_MAGIK_BUILD_NUMBER={}", self.build_number),
+            format!("MISTER_MAGIK_VERSION={}", self.version),
+            format!("MISTER_MAGIK_BUILD_TIME={}", self.build_time),
+            format!("MISTER_MAGIK_SOURCE_REVISION={}", self.source_revision),
+            format!("MISTER_MAGIK_SOURCE_DIRTY={}", u8::from(self.source_dirty)),
+        ]
+    }
+}
+
+fn build_metadata(repository: &Path) -> AgentResult<BuildMetadata> {
     let build_number = std::env::var("MISTER_MAGIK_BUILD_NUMBER")
         .unwrap_or(git_output(repository, &["rev-list", "--count", "HEAD"])?);
     let version =
@@ -1093,7 +1109,31 @@ fn build_metadata(repository: &Path) -> AgentResult<(String, String, String)> {
             ],
         )?,
     };
-    Ok((build_number, version, build_time))
+    let source_revision = std::env::var("MISTER_MAGIK_SOURCE_REVISION")
+        .unwrap_or(git_output(repository, &["rev-parse", "HEAD"])?);
+    let source_dirty = match std::env::var("MISTER_MAGIK_SOURCE_DIRTY") {
+        Ok(value) => parse_source_dirty(&value)?,
+        Err(_) => !git_output(
+            repository,
+            &["status", "--porcelain", "--untracked-files=all"],
+        )?
+        .is_empty(),
+    };
+    Ok(BuildMetadata {
+        build_number,
+        version,
+        build_time,
+        source_revision,
+        source_dirty,
+    })
+}
+
+fn parse_source_dirty(value: &str) -> AgentResult<bool> {
+    match value.trim() {
+        "0" | "false" => Ok(false),
+        "1" | "true" => Ok(true),
+        _ => Err(format!("invalid MISTER_MAGIK_SOURCE_DIRTY={value:?}; use 0 or 1").into()),
+    }
 }
 
 fn run_bounded(command: &mut Command, deadline: Duration) -> AgentResult<()> {
@@ -1265,5 +1305,34 @@ mod tests {
         assert!(BuildReceipt::parse(valid.replace("\tcache_identity=v3", "").as_str()).is_err());
         assert!(BuildReceipt::parse(valid.replace("\tbuild_number=2429", "").as_str()).is_err());
         assert!(BuildReceipt::parse(valid.replace("\tversion=0.2.2429", "").as_str()).is_err());
+    }
+
+    #[test]
+    fn embedded_build_metadata_environment_includes_source_identity() {
+        let metadata = BuildMetadata {
+            build_number: "2429".into(),
+            version: "0.2.2429".into(),
+            build_time: "28.7.2026 12:00".into(),
+            source_revision: "deadbeef".into(),
+            source_dirty: true,
+        };
+
+        assert_eq!(
+            metadata.environment(),
+            [
+                "MISTER_MAGIK_BUILD_NUMBER=2429",
+                "MISTER_MAGIK_VERSION=0.2.2429",
+                "MISTER_MAGIK_BUILD_TIME=28.7.2026 12:00",
+                "MISTER_MAGIK_SOURCE_REVISION=deadbeef",
+                "MISTER_MAGIK_SOURCE_DIRTY=1",
+            ]
+        );
+    }
+
+    #[test]
+    fn source_dirty_environment_is_strictly_parsed() {
+        assert!(!parse_source_dirty("0").unwrap());
+        assert!(parse_source_dirty("true").unwrap());
+        assert!(parse_source_dirty("unknown").is_err());
     }
 }
