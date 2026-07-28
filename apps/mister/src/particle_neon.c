@@ -5,6 +5,7 @@
 #include <math.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 static const float DEPTH_EXTENT = 64.0f;
 static const float DEPTH_FIXED_SCALE = 128.0f;
@@ -53,8 +54,12 @@ static inline void target_xy(
 }
 
 static inline float32x4_t target_z(const int8_t *depths) {
-    int32_t values[4] = {depths[0], depths[1], depths[2], depths[3]};
-    return vmulq_n_f32(vcvtq_f32_s32(vld1q_s32(values)), TARGET_DEPTH_Q2_RECIP);
+    int32_t packed;
+    memcpy(&packed, depths, sizeof(packed));
+    int8x8_t bytes = vreinterpret_s8_s32(vdup_n_s32(packed));
+    int16x8_t wide16 = vmovl_s8(bytes);
+    int32x4_t wide32 = vmovl_s16(vget_low_s16(wide16));
+    return vmulq_n_f32(vcvtq_f32_s32(wide32), TARGET_DEPTH_Q2_RECIP);
 }
 
 static inline float32x4_t clamp_depth(float32x4_t value) {
@@ -110,27 +115,26 @@ size_t mister_magik_particle_neon_static(
     float width,
     float height,
     float delta,
-    uint32_t *random_states,
-    float *x,
-    float *y,
-    int16_t *z_q7,
-    float *vx,
-    float *vy,
-    float *vz
+    uint32_t *restrict random_states,
+    float *restrict x,
+    float *restrict y,
+    int16_t *restrict z_q7,
+    float *restrict vx,
+    float *restrict vy,
+    float *restrict vz
 ) {
     size_t vector_end = count & ~(size_t)3;
     float32x4_t delta_vector = vdupq_n_f32(delta);
+    float jitter_xy_gain = 75.0f * delta;
+    float jitter_z_gain = 8.0f * delta;
     for (size_t index = 0; index < vector_end; index += 4) {
         uint32x4_t noise = next_random(random_states + index);
         float32x4_t jitter_x = signed_unit_vector(noise);
         float32x4_t jitter_y = signed_unit_vector(rotate_left_11(noise));
         float32x4_t jitter_z = signed_unit_vector(rotate_left_21(noise));
-        float32x4_t force_x =
-            vmulq_n_f32(vmulq_n_f32(jitter_x, 75.0f), delta);
-        float32x4_t force_y =
-            vmulq_n_f32(vmulq_n_f32(jitter_y, 75.0f), delta);
-        float32x4_t force_z =
-            vmulq_n_f32(vmulq_n_f32(jitter_z, 8.0f), delta);
+        float32x4_t force_x = vmulq_n_f32(jitter_x, jitter_xy_gain);
+        float32x4_t force_y = vmulq_n_f32(jitter_y, jitter_xy_gain);
+        float32x4_t force_z = vmulq_n_f32(jitter_z, jitter_z_gain);
         float32x4_t next_vx =
             vmulq_n_f32(vaddq_f32(vld1q_f32(vx + index), force_x), 0.985f);
         float32x4_t next_vy =
@@ -140,20 +144,16 @@ size_t mister_magik_particle_neon_static(
         vst1q_f32(vx + index, next_vx);
         vst1q_f32(vy + index, next_vy);
         vst1q_f32(vz + index, next_vz);
-        vst1q_f32(
-            x + index,
-            wrap_once(
-                vaddq_f32(vld1q_f32(x + index), vmulq_f32(next_vx, delta_vector)),
-                width
-            )
+        float32x4_t next_x = wrap_once(
+            vaddq_f32(vld1q_f32(x + index), vmulq_f32(next_vx, delta_vector)),
+            width
         );
-        vst1q_f32(
-            y + index,
-            wrap_once(
-                vaddq_f32(vld1q_f32(y + index), vmulq_f32(next_vy, delta_vector)),
-                height
-            )
+        float32x4_t next_y = wrap_once(
+            vaddq_f32(vld1q_f32(y + index), vmulq_f32(next_vy, delta_vector)),
+            height
         );
+        vst1q_f32(x + index, next_x);
+        vst1q_f32(y + index, next_y);
         store_depth_q7(
             z_q7 + index,
             vaddq_f32(
@@ -161,12 +161,26 @@ size_t mister_magik_particle_neon_static(
                 vmulq_f32(next_vz, delta_vector)
             )
         );
-        for (size_t lane = index; lane < index + 4; lane++) {
-            if (x[lane] < 0.0f || x[lane] >= width) {
-                x[lane] = wrap_coordinate(x[lane], width);
-            }
-            if (y[lane] < 0.0f || y[lane] >= height) {
-                y[lane] = wrap_coordinate(y[lane], height);
+        uint32x4_t exceptional = vorrq_u32(
+            vorrq_u32(
+                vcltq_f32(next_x, vdupq_n_f32(0.0f)),
+                vcgeq_f32(next_x, vdupq_n_f32(width))
+            ),
+            vorrq_u32(
+                vcltq_f32(next_y, vdupq_n_f32(0.0f)),
+                vcgeq_f32(next_y, vdupq_n_f32(height))
+            )
+        );
+        uint64x2_t exceptional_pairs = vreinterpretq_u64_u32(exceptional);
+        if ((vgetq_lane_u64(exceptional_pairs, 0) |
+             vgetq_lane_u64(exceptional_pairs, 1)) != 0) {
+            for (size_t lane = index; lane < index + 4; lane++) {
+                if (x[lane] < 0.0f || x[lane] >= width) {
+                    x[lane] = wrap_coordinate(x[lane], width);
+                }
+                if (y[lane] < 0.0f || y[lane] >= height) {
+                    y[lane] = wrap_coordinate(y[lane], height);
+                }
             }
         }
     }
@@ -179,18 +193,19 @@ size_t mister_magik_particle_neon_attract(
     float stiffness,
     float jitter,
     float damping,
-    const uint32_t *packed_targets,
-    const int8_t *target_depth_q2,
-    uint32_t *random_states,
-    float *x,
-    float *y,
-    int16_t *z_q7,
-    float *vx,
-    float *vy,
-    float *vz
+    const uint32_t *restrict packed_targets,
+    const int8_t *restrict target_depth_q2,
+    uint32_t *restrict random_states,
+    float *restrict x,
+    float *restrict y,
+    int16_t *restrict z_q7,
+    float *restrict vx,
+    float *restrict vy,
+    float *restrict vz
 ) {
     size_t vector_end = count & ~(size_t)3;
     float32x4_t delta_vector = vdupq_n_f32(delta);
+    float force_gain = stiffness * delta;
     for (size_t index = 0; index < vector_end; index += 4) {
         uint32x4_t noise = next_random(random_states + index);
         float32x4_t jitter_x = signed_unit_vector(noise);
@@ -203,28 +218,22 @@ size_t mister_magik_particle_neon_attract(
         float32x4_t old_y = vld1q_f32(y + index);
         float32x4_t old_z = load_depth_q7(z_q7 + index);
         float32x4_t force_x = vmulq_n_f32(
-            vmulq_n_f32(
-                vsubq_f32(
-                    vaddq_f32(target_x, vmulq_n_f32(jitter_x, jitter)),
-                    old_x
-                ),
-                stiffness
+            vsubq_f32(
+                vaddq_f32(target_x, vmulq_n_f32(jitter_x, jitter)),
+                old_x
             ),
-            delta
+            force_gain
         );
         float32x4_t force_y = vmulq_n_f32(
-            vmulq_n_f32(
-                vsubq_f32(
-                    vaddq_f32(target_y, vmulq_n_f32(jitter_y, jitter)),
-                    old_y
-                ),
-                stiffness
+            vsubq_f32(
+                vaddq_f32(target_y, vmulq_n_f32(jitter_y, jitter)),
+                old_y
             ),
-            delta
+            force_gain
         );
         float32x4_t force_z = vmulq_n_f32(
-            vmulq_n_f32(vsubq_f32(target_depth, old_z), stiffness),
-            delta
+            vsubq_f32(target_depth, old_z),
+            force_gain
         );
         float32x4_t next_vx =
             vmulq_n_f32(vaddq_f32(vld1q_f32(vx + index), force_x), damping);
@@ -248,17 +257,20 @@ size_t mister_magik_particle_neon_attract(
 size_t mister_magik_particle_neon_disperse(
     size_t count,
     float delta,
-    const uint32_t *packed_targets,
-    uint32_t *random_states,
-    float *x,
-    float *y,
-    int16_t *z_q7,
-    float *vx,
-    float *vy,
-    float *vz
+    const uint32_t *restrict packed_targets,
+    uint32_t *restrict random_states,
+    float *restrict x,
+    float *restrict y,
+    int16_t *restrict z_q7,
+    float *restrict vx,
+    float *restrict vy,
+    float *restrict vz
 ) {
     size_t vector_end = count & ~(size_t)3;
     float32x4_t delta_vector = vdupq_n_f32(delta);
+    float repulsion_gain = 2.2f * delta;
+    float jitter_xy_gain = 115.0f * delta;
+    float jitter_z_gain = 55.0f * delta;
     for (size_t index = 0; index < vector_end; index += 4) {
         uint32x4_t noise = next_random(random_states + index);
         float32x4_t jitter_x = signed_unit_vector(noise);
@@ -271,21 +283,16 @@ size_t mister_magik_particle_neon_disperse(
         float32x4_t old_y = vld1q_f32(y + index);
         float32x4_t old_z = load_depth_q7(z_q7 + index);
         float32x4_t force_x = vmulq_n_f32(
-            vaddq_f32(
-                vmulq_n_f32(vsubq_f32(old_x, target_x), 2.2f),
-                vmulq_n_f32(jitter_x, 115.0f)
-            ),
-            delta
+            vsubq_f32(old_x, target_x),
+            repulsion_gain
         );
+        force_x = vaddq_f32(force_x, vmulq_n_f32(jitter_x, jitter_xy_gain));
         float32x4_t force_y = vmulq_n_f32(
-            vaddq_f32(
-                vmulq_n_f32(vsubq_f32(old_y, target_y), 2.2f),
-                vmulq_n_f32(jitter_y, 115.0f)
-            ),
-            delta
+            vsubq_f32(old_y, target_y),
+            repulsion_gain
         );
-        float32x4_t force_z =
-            vmulq_n_f32(vmulq_n_f32(jitter_z, 55.0f), delta);
+        force_y = vaddq_f32(force_y, vmulq_n_f32(jitter_y, jitter_xy_gain));
+        float32x4_t force_z = vmulq_n_f32(jitter_z, jitter_z_gain);
         float32x4_t next_vx =
             vmulq_n_f32(vaddq_f32(vld1q_f32(vx + index), force_x), 0.99f);
         float32x4_t next_vy =
@@ -413,11 +420,11 @@ size_t mister_magik_particle_neon_project_commands(
     float projection_max_y,
     float rotation_y_sin,
     float rotation_y_cos,
-    const float *x,
-    const float *y,
-    const int16_t *z_q7,
-    const uint32_t *random_states,
-    uint32_t *commands
+    const float *restrict x,
+    const float *restrict y,
+    const int16_t *restrict z_q7,
+    const uint32_t *restrict random_states,
+    uint32_t *restrict commands
 ) {
     size_t vector_end = count & ~(size_t)7;
     uint32x4_t visible_count = vdupq_n_u32(0);
