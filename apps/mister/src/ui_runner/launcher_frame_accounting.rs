@@ -1842,6 +1842,25 @@ impl LauncherFrameAccounting {
                 particle_projection_cpu_us: u128_to_u64_saturating(
                     frame.screensaver_frame_trace.particle_projection_cpu_us,
                 ),
+                particle_preparation_wait_us: u128_to_u64_saturating(
+                    frame.screensaver_frame_trace.particle_preparation_wait_us,
+                ),
+                particle_prepared_frame_age_us: u128_to_u64_saturating(
+                    frame.screensaver_frame_trace.particle_prepared_frame_age_us,
+                ),
+                particle_lookahead_mismatch_count: frame
+                    .screensaver_frame_trace
+                    .particle_lookahead_mismatch_count,
+                particle_preparation_queue_depth: usize_to_u64_saturating(
+                    frame
+                        .screensaver_frame_trace
+                        .particle_preparation_queue_depth,
+                ),
+                particle_worker_wake_latency_us: u128_to_u64_saturating(
+                    frame
+                        .screensaver_frame_trace
+                        .particle_worker_wake_latency_us,
+                ),
                 particle_clear_us: u128_to_u64_saturating(
                     frame.screensaver_frame_trace.particle_clear_us,
                 ),
