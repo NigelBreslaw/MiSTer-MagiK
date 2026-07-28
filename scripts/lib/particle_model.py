@@ -158,6 +158,28 @@ def _glb_accessor(
     return [record.unpack_from(binary, start + index * stride) for index in range(accessor["count"])]
 
 
+def _matrix_multiply(a: list[float], b: list[float]) -> list[float]:
+    result = [0.0] * 16
+    for column in range(4):
+        for row in range(4):
+            result[column * 4 + row] = sum(
+                a[index * 4 + row] * b[column * 4 + index] for index in range(4)
+            )
+    return result
+
+
+def _transform_point(matrix: list[float], point: tuple[float, ...]) -> tuple[float, float, float]:
+    x, y, z = point
+    divisor = matrix[3] * x + matrix[7] * y + matrix[11] * z + matrix[15]
+    if abs(divisor) < 1.0e-9:
+        raise ValueError("GLB node transform produced a point at infinity")
+    return (
+        (matrix[0] * x + matrix[4] * y + matrix[8] * z + matrix[12]) / divisor,
+        (matrix[1] * x + matrix[5] * y + matrix[9] * z + matrix[13]) / divisor,
+        (matrix[2] * x + matrix[6] * y + matrix[10] * z + matrix[14]) / divisor,
+    )
+
+
 def load_glb(
     path: Path,
 ) -> tuple[list[tuple[float, float, float]], list[Triangle], dict[str, tuple[float, float, float]]]:
@@ -190,11 +212,63 @@ def load_glb(
             "baseColorFactor", (0.55, 0.65, 0.8, 1.0)
         )
         colors[name] = tuple(float(value) for value in factor[:3])
-    for mesh in document.get("meshes", []):
+    nodes = document.get("nodes", [])
+    parents: dict[int, int] = {}
+    for parent, node in enumerate(nodes):
+        for child in node.get("children", []):
+            parents[child] = parent
+    identity = [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+    ]
+    world_cache: dict[int, list[float]] = {}
+
+    def world_matrix(node_index: int) -> list[float]:
+        if node_index in world_cache:
+            return world_cache[node_index]
+        encoded = nodes[node_index].get("matrix")
+        local = (
+            [float(value) for value in encoded]
+            if isinstance(encoded, list) and len(encoded) == 16
+            else identity
+        )
+        parent = parents.get(node_index)
+        world = local if parent is None else _matrix_multiply(world_matrix(parent), local)
+        world_cache[node_index] = world
+        return world
+
+    mesh_instances = [
+        (node["mesh"], world_matrix(index))
+        for index, node in enumerate(nodes)
+        if "mesh" in node
+    ]
+    if not mesh_instances:
+        mesh_instances = [(index, identity) for index in range(len(document.get("meshes", [])))]
+    for mesh_index, matrix in mesh_instances:
+        mesh = document["meshes"][mesh_index]
         for primitive in mesh.get("primitives", []):
             if primitive.get("mode", 4) != 4:
                 raise ValueError("only GLB triangle primitives are supported")
-            positions = _glb_accessor(document, binary, primitive["attributes"]["POSITION"])
+            positions = [
+                _transform_point(matrix, position)
+                for position in _glb_accessor(
+                    document, binary, primitive["attributes"]["POSITION"]
+                )
+            ]
             base = len(vertices)
             vertices.extend(tuple(float(value) for value in position) for position in positions)
             if "indices" in primitive:
