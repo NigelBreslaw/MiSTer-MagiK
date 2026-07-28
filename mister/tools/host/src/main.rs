@@ -4381,8 +4381,29 @@ fn summarize_particle_trial(
                 json!({
                     "frames": matching.len(),
                     "simulation_mean_us": mean_frame_field(&matching, "particle_simulation_us"),
+                    "simulation_cpu_mean_us": mean_frame_field(
+                        &matching,
+                        "particle_simulation_cpu_us"
+                    ),
+                    "simulation_descheduled_mean_us": mean_frame_difference(
+                        &matching,
+                        "particle_simulation_us",
+                        "particle_simulation_cpu_us"
+                    ),
                     "clear_mean_us": mean_frame_field(&matching, "particle_clear_us"),
+                    "clear_cpu_mean_us": mean_frame_field(&matching, "particle_clear_cpu_us"),
+                    "clear_descheduled_mean_us": mean_frame_difference(
+                        &matching,
+                        "particle_clear_us",
+                        "particle_clear_cpu_us"
+                    ),
                     "raster_mean_us": mean_frame_field(&matching, "particle_raster_us"),
+                    "raster_cpu_mean_us": mean_frame_field(&matching, "particle_raster_cpu_us"),
+                    "raster_descheduled_mean_us": mean_frame_difference(
+                        &matching,
+                        "particle_raster_us",
+                        "particle_raster_cpu_us"
+                    ),
                     "render_wall_mean_us": mean_frame_field(
                         &matching,
                         "screensaver_render_ahead_render_wall_us"
@@ -4416,6 +4437,18 @@ fn summarize_particle_trial(
         "max_render_wall_us": render_wall.last().copied().unwrap_or(0),
         "physical_refresh": physical,
         "phase_timing": phase_timing,
+        "scheduler": {
+            "voluntary_context_switches": steady.iter().map(|frame| {
+                frame_u64(frame, "particle_voluntary_context_switches")
+            }).sum::<u64>(),
+            "involuntary_context_switches": steady.iter().map(|frame| {
+                frame_u64(frame, "particle_involuntary_context_switches")
+            }).sum::<u64>(),
+            "cpu_migrations": steady.iter().filter(|frame| {
+                frame_u64(frame, "particle_render_cpu_start")
+                    != frame_u64(frame, "particle_render_cpu_end")
+            }).count(),
+        },
         "cpu": {
             "renderer_pct_of_one_core": mean_frame_field(
                 steady,
@@ -6084,8 +6117,15 @@ fn validate_screensaver_frame_evidence(run: usize, frame_id: u64, frame: &Value)
         "particle_count",
         "particle_visible",
         "particle_simulation_us",
+        "particle_simulation_cpu_us",
         "particle_clear_us",
+        "particle_clear_cpu_us",
         "particle_raster_us",
+        "particle_raster_cpu_us",
+        "particle_render_cpu_start",
+        "particle_render_cpu_end",
+        "particle_voluntary_context_switches",
+        "particle_involuntary_context_switches",
         "particle_rotation_y_millidegrees",
         "particle_simulation_bytes",
         "particle_renderer_scratch_bytes",
@@ -6255,6 +6295,17 @@ fn mean_frame_field(frames: &[&Value], key: &str) -> f64 {
     frames
         .iter()
         .map(|frame| frame_u64(frame, key) as f64)
+        .sum::<f64>()
+        / frames.len() as f64
+}
+
+fn mean_frame_difference(frames: &[&Value], minuend: &str, subtrahend: &str) -> f64 {
+    if frames.is_empty() {
+        return 0.0;
+    }
+    frames
+        .iter()
+        .map(|frame| frame_u64(frame, minuend).saturating_sub(frame_u64(frame, subtrahend)) as f64)
         .sum::<f64>()
         / frames.len() as f64
 }
@@ -14436,8 +14487,15 @@ H: Handlers=event3 js0"#
                 "particle_count": 0,
                 "particle_visible": 0,
                 "particle_simulation_us": 0,
+                "particle_simulation_cpu_us": 0,
                 "particle_clear_us": 0,
+                "particle_clear_cpu_us": 0,
                 "particle_raster_us": 0,
+                "particle_raster_cpu_us": 0,
+                "particle_render_cpu_start": 0,
+                "particle_render_cpu_end": 0,
+                "particle_voluntary_context_switches": 0,
+                "particle_involuntary_context_switches": 0,
                 "particle_rotation_y_millidegrees": 0,
                 "particle_simulation_bytes": 0,
                 "particle_renderer_scratch_bytes": 0
@@ -14845,8 +14903,15 @@ H: Handlers=event3 js0"#
             "particle_count": 65_536,
             "particle_visible": 65_536,
             "particle_simulation_us": 2_000,
+            "particle_simulation_cpu_us": 1_900,
             "particle_clear_us": 200,
+            "particle_clear_cpu_us": 180,
             "particle_raster_us": 5_000,
+            "particle_raster_cpu_us": 4_800,
+            "particle_render_cpu_start": 0,
+            "particle_render_cpu_end": 0,
+            "particle_voluntary_context_switches": 0,
+            "particle_involuntary_context_switches": u64::from(index == 100),
             "particle_rotation_y_millidegrees": 0,
             "particle_simulation_bytes": 2_162_688,
             "particle_renderer_scratch_bytes": 524_288
@@ -14890,7 +14955,13 @@ H: Handlers=event3 js0"#
         assert_eq!(passing["memory"]["renderer_scratch_bytes_per_particle"], 8);
         for phase in ["static", "form", "hold", "disperse"] {
             assert!(passing["phase_timing"][phase]["frames"].as_u64().unwrap() > 0);
+            assert_eq!(
+                passing["phase_timing"][phase]["simulation_descheduled_mean_us"],
+                100.0
+            );
         }
+        assert_eq!(passing["scheduler"]["involuntary_context_switches"], 1);
+        assert_eq!(passing["scheduler"]["cpu_migrations"], 0);
 
         let deadline = summarize_particle_trial(
             "capacity",

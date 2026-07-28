@@ -243,8 +243,15 @@ pub struct FrameBudgetRecentFrame {
     pub particle_count: u64,
     pub particle_visible: u64,
     pub particle_simulation_us: u64,
+    pub particle_simulation_cpu_us: u64,
     pub particle_clear_us: u64,
+    pub particle_clear_cpu_us: u64,
     pub particle_raster_us: u64,
+    pub particle_raster_cpu_us: u64,
+    pub particle_render_cpu_start: u64,
+    pub particle_render_cpu_end: u64,
+    pub particle_voluntary_context_switches: u64,
+    pub particle_involuntary_context_switches: u64,
     pub particle_rotation_y_millidegrees: u64,
     pub particle_simulation_bytes: u64,
     pub particle_renderer_scratch_bytes: u64,
@@ -895,8 +902,24 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
     field!("particle_count", frame.particle_count);
     field!("particle_visible", frame.particle_visible);
     field!("particle_simulation_us", frame.particle_simulation_us);
+    field!(
+        "particle_simulation_cpu_us",
+        frame.particle_simulation_cpu_us
+    );
     field!("particle_clear_us", frame.particle_clear_us);
+    field!("particle_clear_cpu_us", frame.particle_clear_cpu_us);
     field!("particle_raster_us", frame.particle_raster_us);
+    field!("particle_raster_cpu_us", frame.particle_raster_cpu_us);
+    field!("particle_render_cpu_start", frame.particle_render_cpu_start);
+    field!("particle_render_cpu_end", frame.particle_render_cpu_end);
+    field!(
+        "particle_voluntary_context_switches",
+        frame.particle_voluntary_context_switches
+    );
+    field!(
+        "particle_involuntary_context_switches",
+        frame.particle_involuntary_context_switches
+    );
     field!(
         "particle_rotation_y_millidegrees",
         frame.particle_rotation_y_millidegrees
@@ -1233,8 +1256,15 @@ mod tests {
                         particle_count: 16_384,
                         particle_visible: 16_000,
                         particle_simulation_us: 2_100,
+                        particle_simulation_cpu_us: 2_000,
                         particle_clear_us: 120,
+                        particle_clear_cpu_us: 100,
                         particle_raster_us: 900,
+                        particle_raster_cpu_us: 850,
+                        particle_render_cpu_start: 0,
+                        particle_render_cpu_end: 0,
+                        particle_voluntary_context_switches: 1,
+                        particle_involuntary_context_switches: 2,
                         particle_rotation_y_millidegrees: 45_000,
                         particle_simulation_bytes: 540_672,
                         particle_renderer_scratch_bytes: 262_144,
@@ -1335,6 +1365,14 @@ mod tests {
         assert_eq!(
             value["frame_budget"]["recent_frames"][0]["particle_phase"],
             "hold"
+        );
+        assert_eq!(
+            value["frame_budget"]["recent_frames"][0]["particle_simulation_cpu_us"],
+            2_000
+        );
+        assert_eq!(
+            value["frame_budget"]["recent_frames"][0]["particle_involuntary_context_switches"],
+            2
         );
         assert_eq!(
             value["frame_budget"]["recent_frames"][0]["particle_rotation_y_millidegrees"],

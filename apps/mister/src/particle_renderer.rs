@@ -29,8 +29,15 @@ pub struct ParticleRenderStats {
     pub phase: ParticlePhase,
     pub cycle: u64,
     pub simulation_us: u128,
+    pub simulation_cpu_us: u128,
     pub clear_us: u128,
+    pub clear_cpu_us: u128,
     pub raster_us: u128,
+    pub raster_cpu_us: u128,
+    pub render_cpu_start: u64,
+    pub render_cpu_end: u64,
+    pub voluntary_context_switches: u64,
+    pub involuntary_context_switches: u64,
     pub rotation_y_millidegrees: u32,
     pub simulation_bytes: usize,
     pub renderer_scratch_bytes: usize,
@@ -104,22 +111,35 @@ impl ParticleRenderer {
             ));
         }
         let slot_offset = hidden_slot_offset(hidden_slot)?;
+        let execution_started = thread_execution_snapshot();
         let simulation_started = Instant::now();
+        let simulation_cpu_started = thread_cpu_time_us();
         let frame = self.engine.step(elapsed);
         let simulation_us = simulation_started.elapsed().as_micros();
+        let simulation_cpu_us = elapsed_thread_cpu_us(simulation_cpu_started);
         let clear_started = Instant::now();
+        let clear_cpu_started = thread_cpu_time_us();
         let mut dirty_offsets = self.prepare_hidden_slot(destination, slot_offset);
         let clear_us = clear_started.elapsed().as_micros();
+        let clear_cpu_us = elapsed_thread_cpu_us(clear_cpu_started);
         let raster_started = Instant::now();
+        let raster_cpu_started = thread_cpu_time_us();
         let visible = self.raster(destination, &mut dirty_offsets);
         let raster_us = raster_started.elapsed().as_micros();
+        let raster_cpu_us = elapsed_thread_cpu_us(raster_cpu_started);
+        let execution_finished = thread_execution_snapshot();
         self.dirty_slots[slot_offset].offsets = dirty_offsets;
         Ok(stats(
             frame,
             visible,
             simulation_us,
+            simulation_cpu_us,
             clear_us,
+            clear_cpu_us,
             raster_us,
+            raster_cpu_us,
+            execution_started,
+            execution_finished,
             self.simulation_bytes,
             self.renderer_scratch_bytes,
         ))
@@ -246,8 +266,13 @@ fn stats(
     frame: ParticleFrameStats,
     visible: usize,
     simulation_us: u128,
+    simulation_cpu_us: u128,
     clear_us: u128,
+    clear_cpu_us: u128,
     raster_us: u128,
+    raster_cpu_us: u128,
+    execution_started: ThreadExecutionSnapshot,
+    execution_finished: ThreadExecutionSnapshot,
     simulation_bytes: usize,
     renderer_scratch_bytes: usize,
 ) -> ParticleRenderStats {
@@ -257,12 +282,88 @@ fn stats(
         phase: frame.phase,
         cycle: frame.cycle,
         simulation_us,
+        simulation_cpu_us,
         clear_us,
+        clear_cpu_us,
         raster_us,
+        raster_cpu_us,
+        render_cpu_start: execution_started.cpu,
+        render_cpu_end: execution_finished.cpu,
+        voluntary_context_switches: execution_finished
+            .voluntary_context_switches
+            .saturating_sub(execution_started.voluntary_context_switches),
+        involuntary_context_switches: execution_finished
+            .involuntary_context_switches
+            .saturating_sub(execution_started.involuntary_context_switches),
         rotation_y_millidegrees: (frame.rotation_y_radians * (180_000.0 / std::f32::consts::PI)
             + 0.5) as u32,
         simulation_bytes,
         renderer_scratch_bytes,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct ThreadExecutionSnapshot {
+    cpu: u64,
+    voluntary_context_switches: u64,
+    involuntary_context_switches: u64,
+}
+
+#[cfg(target_os = "linux")]
+fn thread_cpu_time_us() -> Option<u128> {
+    let mut time = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `time` is writable for the duration of the call.
+    if unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut time) } != 0 {
+        return None;
+    }
+    let seconds = u128::try_from(time.tv_sec).ok()?;
+    let nanoseconds = u128::try_from(time.tv_nsec).ok()?;
+    Some(
+        seconds
+            .saturating_mul(1_000_000)
+            .saturating_add(nanoseconds / 1_000),
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+fn thread_cpu_time_us() -> Option<u128> {
+    None
+}
+
+fn elapsed_thread_cpu_us(started: Option<u128>) -> u128 {
+    started
+        .zip(thread_cpu_time_us())
+        .map_or(0, |(started, finished)| finished.saturating_sub(started))
+}
+
+#[cfg(target_os = "linux")]
+fn thread_execution_snapshot() -> ThreadExecutionSnapshot {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+    // SAFETY: `usage` points to writable, correctly sized storage.
+    let usage_available = unsafe { libc::getrusage(libc::RUSAGE_THREAD, usage.as_mut_ptr()) } == 0;
+    // SAFETY: a successful `getrusage` initialized the complete value. On failure
+    // the zeroed representation is valid for the integer-only C structure.
+    let usage = unsafe { usage.assume_init() };
+    let cpu = unsafe { libc::sched_getcpu() };
+    ThreadExecutionSnapshot {
+        cpu: u64::try_from(cpu).unwrap_or(u64::MAX),
+        voluntary_context_switches: usage_available
+            .then(|| u64::try_from(usage.ru_nvcsw).unwrap_or(0))
+            .unwrap_or(0),
+        involuntary_context_switches: usage_available
+            .then(|| u64::try_from(usage.ru_nivcsw).unwrap_or(0))
+            .unwrap_or(0),
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn thread_execution_snapshot() -> ThreadExecutionSnapshot {
+    ThreadExecutionSnapshot {
+        cpu: u64::MAX,
+        ..ThreadExecutionSnapshot::default()
     }
 }
 
