@@ -768,7 +768,7 @@ fn particle_showcase_config_from_env(
                 .ok_or_else(|| format!("invalid MISTER_PARTICLE_DEMO={value:?}"))
         })
         .transpose()?
-        .unwrap_or(ParticleDemoKind::Fireworks);
+        .unwrap_or(ParticleDemoKind::SolarChrysanthemum);
     let seed = std::env::var("MISTER_PARTICLE_SEED")
         .ok()
         .map(|value| {

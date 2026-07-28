@@ -4,6 +4,7 @@
 //! Shared data model for the interactive ARM particle showcase.
 
 use crate::bitmap_text::{ConsoleFont, ConsoleTypeface};
+use crate::fireworks::{FireworkRenderer, embedded_firework_json};
 use crate::framebuffer::mapped::Pixel;
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -172,7 +173,12 @@ unsafe extern "C" {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum ParticleDemoKind {
-    Fireworks,
+    SolarChrysanthemum,
+    RecursiveHalo,
+    CopperWillowRain,
+    PhoenixComet,
+    MagneticFlower,
+    OledPeony,
     FireEmbers,
     SpiralGalaxy,
     WarpSpeed,
@@ -185,8 +191,13 @@ pub enum ParticleDemoKind {
 }
 
 impl ParticleDemoKind {
-    pub const ALL: [Self; 10] = [
-        Self::Fireworks,
+    pub const ALL: [Self; 15] = [
+        Self::SolarChrysanthemum,
+        Self::RecursiveHalo,
+        Self::CopperWillowRain,
+        Self::PhoenixComet,
+        Self::MagneticFlower,
+        Self::OledPeony,
         Self::FireEmbers,
         Self::SpiralGalaxy,
         Self::WarpSpeed,
@@ -211,7 +222,12 @@ impl ParticleDemoKind {
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Fireworks => "FIREWORKS",
+            Self::SolarChrysanthemum => "SOLAR CHRYSANTHEMUM",
+            Self::RecursiveHalo => "RECURSIVE HALO",
+            Self::CopperWillowRain => "COPPER WILLOW RAIN",
+            Self::PhoenixComet => "PHOENIX COMET",
+            Self::MagneticFlower => "MAGNETIC FLOWER",
+            Self::OledPeony => "OLED PEONY",
             Self::FireEmbers => "FIRE + EMBERS",
             Self::SpiralGalaxy => "SPIRAL GALAXY",
             Self::WarpSpeed => "WARP SPEED",
@@ -227,7 +243,12 @@ impl ParticleDemoKind {
     #[must_use]
     pub const fn telemetry_label(self) -> &'static str {
         match self {
-            Self::Fireworks => "fireworks",
+            Self::SolarChrysanthemum => "solar-chrysanthemum",
+            Self::RecursiveHalo => "recursive-halo",
+            Self::CopperWillowRain => "copper-willow-rain",
+            Self::PhoenixComet => "phoenix-comet",
+            Self::MagneticFlower => "magnetic-flower",
+            Self::OledPeony => "oled-peony",
             Self::FireEmbers => "fire-embers",
             Self::SpiralGalaxy => "spiral-galaxy",
             Self::WarpSpeed => "warp-speed",
@@ -243,23 +264,46 @@ impl ParticleDemoKind {
     #[must_use]
     pub const fn hud_label(self) -> &'static str {
         match self {
-            Self::Fireworks => "01/10 FIREWORKS",
-            Self::FireEmbers => "02/10 FIRE + EMBERS",
-            Self::SpiralGalaxy => "03/10 SPIRAL GALAXY",
-            Self::WarpSpeed => "04/10 WARP SPEED",
-            Self::MeteorShower => "05/10 METEOR SHOWER",
-            Self::Weather => "06/10 WEATHER",
-            Self::ParticlePortal => "07/10 PARTICLE PORTAL",
-            Self::ElectricStorm => "08/10 ELECTRIC STORM",
-            Self::FountainWaterfall => "09/10 FOUNTAIN / WATERFALL",
-            Self::ArcadeCabinet => "10/10 ARCADE CABINET",
+            Self::SolarChrysanthemum => "01/15 SOLAR CHRYSANTHEMUM",
+            Self::RecursiveHalo => "02/15 RECURSIVE HALO",
+            Self::CopperWillowRain => "03/15 COPPER WILLOW RAIN",
+            Self::PhoenixComet => "04/15 PHOENIX COMET",
+            Self::MagneticFlower => "05/15 MAGNETIC FLOWER",
+            Self::OledPeony => "06/15 OLED PEONY",
+            Self::FireEmbers => "07/15 FIRE + EMBERS",
+            Self::SpiralGalaxy => "08/15 SPIRAL GALAXY",
+            Self::WarpSpeed => "09/15 WARP SPEED",
+            Self::MeteorShower => "10/15 METEOR SHOWER",
+            Self::Weather => "11/15 WEATHER",
+            Self::ParticlePortal => "12/15 PARTICLE PORTAL",
+            Self::ElectricStorm => "13/15 ELECTRIC STORM",
+            Self::FountainWaterfall => "14/15 FOUNTAIN / WATERFALL",
+            Self::ArcadeCabinet => "15/15 ARCADE CABINET",
+        }
+    }
+
+    #[must_use]
+    pub const fn firework_id(self) -> Option<&'static str> {
+        match self {
+            Self::SolarChrysanthemum => Some("solar-chrysanthemum"),
+            Self::RecursiveHalo => Some("recursive-halo"),
+            Self::CopperWillowRain => Some("copper-willow-rain"),
+            Self::PhoenixComet => Some("phoenix-comet"),
+            Self::MagneticFlower => Some("magnetic-flower"),
+            Self::OledPeony => Some("oled-peony"),
+            _ => None,
         }
     }
 
     #[must_use]
     pub const fn starting_count(self) -> usize {
         match self {
-            Self::Fireworks => 24_576,
+            Self::SolarChrysanthemum
+            | Self::RecursiveHalo
+            | Self::CopperWillowRain
+            | Self::PhoenixComet
+            | Self::MagneticFlower
+            | Self::OledPeony => 0,
             Self::FireEmbers | Self::MeteorShower => 20_480,
             Self::SpiralGalaxy => 81_920,
             Self::WarpSpeed => 45_056,
@@ -332,6 +376,7 @@ pub struct ParticleShowcaseRenderer {
     config: ParticleShowcaseConfig,
     demo: ParticleDemoKind,
     demo_started_at: Duration,
+    firework_renderer: Option<FireworkRenderer>,
     pool: ParticleShowcasePool,
     commands: Vec<u32>,
     previous_commands: Vec<u32>,
@@ -435,6 +480,7 @@ impl ParticleShowcaseRenderer {
             config,
             demo: config.initial_demo,
             demo_started_at: Duration::ZERO,
+            firework_renderer: None,
             pool,
             commands,
             previous_commands,
@@ -484,6 +530,17 @@ impl ParticleShowcaseRenderer {
         let mut dirty_offsets = self.prepare_hidden_slot(destination, slot);
         let clear_us = clear_started.elapsed().as_micros();
         let clear_cpu_us = elapsed_thread_cpu_us(clear_cpu_started);
+
+        if self.firework_renderer.is_some() {
+            return self.render_firework(
+                destination,
+                slot,
+                elapsed,
+                dirty_offsets,
+                clear_us,
+                clear_cpu_us,
+            );
+        }
 
         let simulation_started = Instant::now();
         let simulation_cpu_started = thread_cpu_time_us();
@@ -547,6 +604,53 @@ impl ParticleShowcaseRenderer {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn render_firework(
+        &mut self,
+        destination: &mut [Rgb565Pixel],
+        slot: usize,
+        elapsed: Duration,
+        mut dirty_offsets: Vec<u32>,
+        clear_us: u128,
+        clear_cpu_us: u128,
+    ) -> Result<ParticleShowcaseRenderStats, String> {
+        let demo_elapsed = elapsed.saturating_sub(self.demo_started_at);
+        let renderer = self
+            .firework_renderer
+            .as_ref()
+            .expect("firework renderer checked before dispatch");
+        let duration_ms = renderer.duration().as_millis().max(1);
+        let logical_ms = demo_elapsed.as_millis() % duration_ms;
+        let logical_elapsed = Duration::from_millis(logical_ms as u64);
+        let raster_started = Instant::now();
+        let raster_cpu_started = thread_cpu_time_us();
+        let stats = renderer.render(destination, logical_elapsed)?;
+        self.draw_hud(destination, &mut dirty_offsets);
+        let raster_us = raster_started.elapsed().as_micros();
+        let raster_cpu_us = elapsed_thread_cpu_us(raster_cpu_started);
+        self.dirty_slots[slot].offsets = dirty_offsets;
+        Ok(ParticleShowcaseRenderStats {
+            demo: self.demo,
+            beat: firework_beat(logical_elapsed),
+            count: stats.particles,
+            visible: stats.visible,
+            simulation_us: 0,
+            simulation_cpu_us: 0,
+            projection_us: 0,
+            projection_cpu_us: 0,
+            geometry_us: 0,
+            clear_us,
+            clear_cpu_us,
+            raster_us,
+            raster_cpu_us,
+            segment_count: 0,
+            attempted_pixel_writes: stats.pixel_writes,
+            clipped_commands: 0,
+            simulation_bytes: self.pool.allocated_bytes(),
+            renderer_scratch_bytes: self.renderer_scratch_bytes,
+        })
+    }
+
     fn apply_navigation(&mut self, elapsed: Duration) {
         let delta = PARTICLE_DEMO_NAVIGATION.swap(0, Ordering::AcqRel);
         if delta != 0 {
@@ -565,6 +669,15 @@ impl ParticleShowcaseRenderer {
     fn reset_demo(&mut self, demo: ParticleDemoKind, elapsed: Duration) {
         self.demo = demo;
         self.demo_started_at = elapsed;
+        self.firework_renderer = demo.firework_id().map(|id| {
+            FireworkRenderer::from_json(
+                embedded_firework_json(id).expect("registered firework must be embedded"),
+                self.config.width,
+                self.config.height,
+                self.config.seed,
+            )
+            .expect("embedded firework must satisfy its runtime contract")
+        });
         self.pool.reset(demo, self.config.seed);
         self.heat.fill(0);
         self.heat_frame = u64::MAX;
@@ -618,7 +731,16 @@ impl ParticleShowcaseRenderer {
 
     fn project_effect(&mut self, elapsed: Duration) -> usize {
         match self.demo {
-            ParticleDemoKind::Fireworks => self.project_fireworks(elapsed),
+            ParticleDemoKind::SolarChrysanthemum
+            | ParticleDemoKind::RecursiveHalo
+            | ParticleDemoKind::CopperWillowRain
+            | ParticleDemoKind::PhoenixComet
+            | ParticleDemoKind::MagneticFlower
+            | ParticleDemoKind::OledPeony => {
+                self.commands.clear();
+                self.segments.clear();
+                0
+            }
             ParticleDemoKind::FireEmbers => self.project_fire_embers(elapsed),
             ParticleDemoKind::SpiralGalaxy => self.project_spiral_galaxy(elapsed),
             ParticleDemoKind::WarpSpeed => self.project_warp_speed(elapsed),
@@ -640,11 +762,12 @@ impl ParticleShowcaseRenderer {
     fn effect_beat(&self, elapsed: Duration) -> &'static str {
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
         match self.demo {
-            ParticleDemoKind::Fireworks => match seconds.rem_euclid(4.8) {
-                value if value < 1.25 => "launch",
-                value if value < 2.6 => "burst",
-                _ => "fall",
-            },
+            ParticleDemoKind::SolarChrysanthemum
+            | ParticleDemoKind::RecursiveHalo
+            | ParticleDemoKind::CopperWillowRain
+            | ParticleDemoKind::PhoenixComet
+            | ParticleDemoKind::MagneticFlower
+            | ParticleDemoKind::OledPeony => firework_beat(Duration::from_secs_f32(seconds)),
             ParticleDemoKind::FireEmbers => match seconds.rem_euclid(10.0) {
                 value if value < 3.5 => "flame",
                 value if value < 7.0 => "gust",
@@ -1732,148 +1855,6 @@ impl ParticleShowcaseRenderer {
         clipped
     }
 
-    fn project_fireworks(&mut self, elapsed: Duration) -> usize {
-        self.commands.clear();
-        self.segments.clear();
-        let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
-        let width = self.config.width as f32;
-        let height = self.config.height as f32;
-        let particles_per_burst = 768usize;
-        let burst_count = self.pool.active().div_ceil(particles_per_burst);
-        let mut clipped = 0usize;
-        for index in 0..self.pool.active() {
-            let burst = index / particles_per_burst;
-            let lane = index % particles_per_burst;
-            let random = self.pool.random[index];
-            let start = burst as f32 * 0.82;
-            let local = (seconds - start).rem_euclid((burst_count as f32 * 0.82).max(4.8));
-            let burst_x = width * (0.12 + 0.76 * unit01(random.rotate_left(5)));
-            let apex_y = height * (0.16 + 0.31 * unit01(random.rotate_left(13)));
-            let launch_duration = 1.25;
-            if local < launch_duration {
-                if lane & 31 != 0 {
-                    self.commands.push(u32::MAX);
-                    continue;
-                }
-                let trail = (lane / 32) as f32 / 24.0;
-                let progress = (local / launch_duration - trail * 0.16).clamp(0.0, 1.0);
-                let x = burst_x + (unit_signed(random.rotate_left(17)) * 3.0) * progress;
-                let y = height - 18.0 - (height - apex_y - 18.0) * ease_out_cubic(progress);
-                let style = 4 + ((lane / 32) & 3) as u8;
-                if !push_screen_command(
-                    &mut self.commands,
-                    self.config.width,
-                    self.config.height,
-                    x,
-                    y,
-                    style,
-                    lane & 63 == 0,
-                ) {
-                    clipped = clipped.saturating_add(1);
-                }
-                continue;
-            }
-
-            let age = local - launch_duration;
-            if age > 3.55 {
-                self.commands.push(u32::MAX);
-                continue;
-            }
-            let angle = std::f32::consts::TAU * unit01(random);
-            let vertical = unit_signed(random.rotate_left(9));
-            let ring_radius = (1.0 - vertical * vertical).max(0.0).sqrt();
-            let template = burst & 3;
-            let base_speed = match template {
-                0 => 66.0 + 54.0 * unit01(random.rotate_left(19)),
-                1 => 88.0 + 18.0 * unit01(random.rotate_left(19)),
-                2 => 52.0 + 76.0 * unit01(random.rotate_left(19)).powi(2),
-                _ => 72.0 + 38.0 * unit01(random.rotate_left(19)),
-            };
-            let (mut dx, mut dy, mut dz) = match template {
-                0 => (
-                    angle.cos() * ring_radius,
-                    vertical,
-                    angle.sin() * ring_radius,
-                ),
-                1 => (angle.cos(), angle.sin() * 0.18, angle.sin()),
-                2 => (
-                    angle.cos() * (0.35 + 0.65 * ring_radius),
-                    -vertical.abs() * 0.95 - 0.1,
-                    angle.sin() * (0.35 + 0.65 * ring_radius),
-                ),
-                _ => (
-                    angle.cos() * ring_radius,
-                    vertical * 0.72,
-                    angle.sin() * ring_radius,
-                ),
-            };
-            if template == 3 {
-                dy -= age * 0.16;
-            }
-            let drag = (-age * 0.31).exp();
-            dx *= base_speed * drag;
-            dy *= base_speed * drag;
-            dz *= base_speed * drag;
-            let world_x = burst_x - width * 0.5 + dx * age;
-            let world_y = apex_y - height * 0.5 + dy * age + 34.0 * age * age;
-            let world_z = dz * age;
-            let style_base = ((burst * 3 + lane / 96) & 7) as u8;
-            let fade = ((1.0 - age / 3.55) * 7.0) as u8;
-            let style = style_base.min(fade).max(1);
-            let Some((x, y)) = project_world(
-                world_x,
-                world_y,
-                world_z,
-                self.config.width,
-                self.config.height,
-                470.0,
-            ) else {
-                self.commands.push(u32::MAX);
-                clipped = clipped.saturating_add(1);
-                continue;
-            };
-            if !push_screen_command(
-                &mut self.commands,
-                self.config.width,
-                self.config.height,
-                x,
-                y,
-                style,
-                lane & 127 == 0,
-            ) {
-                clipped = clipped.saturating_add(1);
-                continue;
-            }
-            if lane & 31 == 0 && age > 0.05 {
-                let previous_age = age - 0.05;
-                let previous_drag = (-previous_age * 0.31).exp();
-                let previous_world_x =
-                    burst_x - width * 0.5 + dx / drag * previous_drag * previous_age;
-                let previous_world_y = apex_y - height * 0.5
-                    + dy / drag * previous_drag * previous_age
-                    + 34.0 * previous_age * previous_age;
-                let previous_world_z = dz / drag * previous_drag * previous_age;
-                if let Some((previous_x, previous_y)) = project_world(
-                    previous_world_x,
-                    previous_world_y,
-                    previous_world_z,
-                    self.config.width,
-                    self.config.height,
-                    470.0,
-                ) {
-                    self.segments.push(ParticleShowcaseSegment {
-                        x0: previous_x as i16,
-                        y0: previous_y as i16,
-                        x1: x as i16,
-                        y1: y as i16,
-                        style,
-                    });
-                }
-            }
-        }
-        clipped
-    }
-
     fn begin_transition(&mut self, elapsed: Duration) {
         let visible = self
             .commands
@@ -2345,9 +2326,22 @@ fn warp_travel_and_speed(seconds: f32) -> (f32, f32) {
     (distance.rem_euclid(1.0), speed)
 }
 
+fn firework_beat(elapsed: Duration) -> &'static str {
+    match elapsed.as_secs_f32() {
+        seconds if seconds < 1.2 => "launch",
+        seconds if seconds < 2.8 => "burst",
+        _ => "fall",
+    }
+}
+
 fn showcase_palette(demo: ParticleDemoKind) -> &'static [Rgb565Pixel; 8] {
     match demo {
-        ParticleDemoKind::Fireworks => &FIREWORKS_PALETTE,
+        ParticleDemoKind::SolarChrysanthemum
+        | ParticleDemoKind::RecursiveHalo
+        | ParticleDemoKind::CopperWillowRain
+        | ParticleDemoKind::PhoenixComet
+        | ParticleDemoKind::MagneticFlower
+        | ParticleDemoKind::OledPeony => &FIREWORKS_PALETTE,
         ParticleDemoKind::FireEmbers => &FIRE_PALETTE,
         ParticleDemoKind::SpiralGalaxy => &GALAXY_PALETTE,
         ParticleDemoKind::WarpSpeed => &WARP_PALETTE,
@@ -2491,14 +2485,14 @@ mod tests {
 
     #[test]
     fn demo_order_and_wrapping_are_stable() {
-        assert_eq!(ParticleDemoKind::ALL.len(), 10);
+        assert_eq!(ParticleDemoKind::ALL.len(), 15);
         assert_eq!(
-            ParticleDemoKind::Fireworks.offset_wrapped(-1),
+            ParticleDemoKind::SolarChrysanthemum.offset_wrapped(-1),
             ParticleDemoKind::ArcadeCabinet
         );
         assert_eq!(
             ParticleDemoKind::ArcadeCabinet.offset_wrapped(1),
-            ParticleDemoKind::Fireworks
+            ParticleDemoKind::SolarChrysanthemum
         );
         for (index, kind) in ParticleDemoKind::ALL.into_iter().enumerate() {
             assert_eq!(kind.index(), index);
@@ -2511,13 +2505,17 @@ mod tests {
     fn demo_parser_accepts_numbers_and_stable_labels() {
         assert_eq!(
             ParticleDemoKind::parse("1"),
-            Some(ParticleDemoKind::Fireworks)
+            Some(ParticleDemoKind::SolarChrysanthemum)
+        );
+        assert_eq!(
+            ParticleDemoKind::parse("oled-peony"),
+            Some(ParticleDemoKind::OledPeony)
         );
         assert_eq!(
             ParticleDemoKind::parse("particle-portal"),
             Some(ParticleDemoKind::ParticlePortal)
         );
-        assert_eq!(ParticleDemoKind::parse("11"), None);
+        assert_eq!(ParticleDemoKind::parse("16"), None);
         assert_eq!(ParticleDemoKind::parse("unknown"), None);
     }
 
@@ -2545,7 +2543,7 @@ mod tests {
                 width: 960,
                 height: 540,
                 seed: 1,
-                initial_demo: ParticleDemoKind::Fireworks,
+                initial_demo: ParticleDemoKind::SolarChrysanthemum,
             }
             .validate()
             .is_ok()
@@ -2555,7 +2553,7 @@ mod tests {
                 width: 1280,
                 height: 720,
                 seed: 1,
-                initial_demo: ParticleDemoKind::Fireworks,
+                initial_demo: ParticleDemoKind::SolarChrysanthemum,
             }
             .validate()
             .is_err()
@@ -2568,19 +2566,19 @@ mod tests {
             width: 960,
             height: 540,
             seed: 7,
-            initial_demo: ParticleDemoKind::Fireworks,
+            initial_demo: ParticleDemoKind::SolarChrysanthemum,
         })
         .unwrap();
         let mut destination = vec![Rgb565Pixel(0); 960 * 540];
         let first = renderer
-            .render(&mut destination, 1, Duration::ZERO)
+            .render(&mut destination, 1, Duration::from_millis(800))
             .unwrap();
-        assert_eq!(first.demo, ParticleDemoKind::Fireworks);
+        assert_eq!(first.demo, ParticleDemoKind::SolarChrysanthemum);
         assert!(first.visible > 0);
 
         request_particle_demo_navigation(-1);
         let wrapped = renderer
-            .render(&mut destination, 2, Duration::from_millis(17))
+            .render(&mut destination, 2, Duration::from_millis(817))
             .unwrap();
         assert_eq!(wrapped.demo, ParticleDemoKind::ArcadeCabinet);
         assert!(
