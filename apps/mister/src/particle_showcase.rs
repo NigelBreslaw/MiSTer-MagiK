@@ -69,6 +69,16 @@ const GALAXY_PALETTE: [Rgb565Pixel; 8] = [
     Rgb565Pixel(0xff59),
     Rgb565Pixel(0xffff),
 ];
+const WARP_PALETTE: [Rgb565Pixel; 8] = [
+    Rgb565Pixel(0x0806),
+    Rgb565Pixel(0x100c),
+    Rgb565Pixel(0x1814),
+    Rgb565Pixel(0x211f),
+    Rgb565Pixel(0x4adf),
+    Rgb565Pixel(0x8d7f),
+    Rgb565Pixel(0xdfff),
+    Rgb565Pixel(0xffff),
+];
 static PARTICLE_DEMO_NAVIGATION: AtomicI32 = AtomicI32::new(0);
 
 #[cfg(target_arch = "arm")]
@@ -86,6 +96,19 @@ unsafe extern "C" {
         styles: *const u8,
         flags: *const u8,
         commands: *mut u32,
+    ) -> usize;
+    fn mister_magik_showcase_neon_project_warp(
+        count: usize,
+        width: usize,
+        height: usize,
+        travel: f32,
+        previous_step: f32,
+        x: *const f32,
+        y: *const f32,
+        depth_phase: *const f32,
+        styles: *const u8,
+        commands: *mut u32,
+        previous_commands: *mut u32,
     ) -> usize;
 }
 
@@ -252,6 +275,7 @@ pub struct ParticleShowcaseRenderer {
     demo_started_at: Duration,
     pool: ParticleShowcasePool,
     commands: Vec<u32>,
+    previous_commands: Vec<u32>,
     segments: Vec<ParticleShowcaseSegment>,
     transition: ParticleShowcaseTransition,
     transition_started_at: Option<Duration>,
@@ -292,6 +316,7 @@ impl ParticleShowcaseRenderer {
         let config = config.validate()?;
         let pool = ParticleShowcasePool::new();
         let commands = Vec::with_capacity(PARTICLE_DEMO_MAX_COUNT + PARTICLE_DEMO_TRANSITION_COUNT);
+        let previous_commands = Vec::with_capacity(PARTICLE_DEMO_MAX_COUNT);
         let segments = Vec::with_capacity(SEGMENT_CAPACITY);
         let transition = ParticleShowcaseTransition::new();
         let heat = vec![0; FIRE_HEAT_W * FIRE_HEAT_H];
@@ -321,6 +346,11 @@ impl ParticleShowcaseRenderer {
             .capacity()
             .saturating_mul(std::mem::size_of::<u32>())
             .saturating_add(
+                previous_commands
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<u32>()),
+            )
+            .saturating_add(
                 dirty_slots
                     .iter()
                     .map(|slot| {
@@ -348,6 +378,7 @@ impl ParticleShowcaseRenderer {
             demo_started_at: Duration::ZERO,
             pool,
             commands,
+            previous_commands,
             segments,
             transition,
             transition_started_at: None,
@@ -493,6 +524,8 @@ impl ParticleShowcaseRenderer {
         }
         if demo == ParticleDemoKind::SpiralGalaxy {
             self.galaxy_projected_count = self.initialize_galaxy();
+        } else if demo == ParticleDemoKind::WarpSpeed {
+            self.initialize_warp_speed();
         }
     }
 
@@ -557,6 +590,7 @@ impl ParticleShowcaseRenderer {
             ParticleDemoKind::Fireworks => self.project_fireworks(elapsed),
             ParticleDemoKind::FireEmbers => self.project_fire_embers(elapsed),
             ParticleDemoKind::SpiralGalaxy => self.project_spiral_galaxy(elapsed),
+            ParticleDemoKind::WarpSpeed => self.project_warp_speed(elapsed),
             _ => self.project_diagnostic(elapsed),
         }
     }
@@ -585,8 +619,119 @@ impl ParticleShowcaseRenderer {
                 value if value < 20.0 => "arm-pass",
                 _ => "core-pulse",
             },
+            ParticleDemoKind::WarpSpeed => match seconds {
+                value if value < 7.0 => "calm",
+                value if value < 14.0 => "accelerate",
+                value if value < 23.0 => "warp",
+                _ => "decelerate",
+            },
             _ => "diagnostic",
         }
+    }
+
+    fn initialize_warp_speed(&mut self) {
+        for index in 0..self.pool.active() {
+            let random = self.pool.random[index];
+            self.pool.x[index] = unit_signed(random.rotate_left(5)) * 580.0;
+            self.pool.y[index] = unit_signed(random.rotate_left(17)) * 330.0;
+            self.pool.z[index] = unit01(random.rotate_left(27));
+            self.pool.style[index] = 3 + ((random >> 30) as u8).min(4);
+            self.pool.flags[index] = 1;
+        }
+    }
+
+    fn project_warp_speed(&mut self, elapsed: Duration) -> usize {
+        self.commands.clear();
+        self.previous_commands.clear();
+        self.segments.clear();
+        let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
+        let (travel, speed) = warp_travel_and_speed(seconds);
+        let previous_step = (speed * 0.05).clamp(0.002, 0.048);
+        #[cfg(target_arch = "arm")]
+        let visible = {
+            self.commands.resize(self.pool.active(), u32::MAX);
+            self.previous_commands.resize(self.pool.active(), u32::MAX);
+            unsafe {
+                mister_magik_showcase_neon_project_warp(
+                    self.pool.active(),
+                    self.config.width,
+                    self.config.height,
+                    travel,
+                    previous_step,
+                    self.pool.x.as_ptr(),
+                    self.pool.y.as_ptr(),
+                    self.pool.z.as_ptr(),
+                    self.pool.style.as_ptr(),
+                    self.commands.as_mut_ptr(),
+                    self.previous_commands.as_mut_ptr(),
+                )
+            }
+        };
+        #[cfg(not(target_arch = "arm"))]
+        let visible = self.project_warp_speed_scalar(travel, previous_step);
+
+        let stride = if speed < 0.12 {
+            64
+        } else if speed < 0.55 {
+            16
+        } else {
+            8
+        };
+        for index in (0..self.commands.len()).step_by(stride) {
+            let current = self.commands[index];
+            let previous = self.previous_commands[index];
+            if current == u32::MAX || previous == u32::MAX {
+                continue;
+            }
+            let current_offset = (current & COMMAND_OFFSET_MASK) as usize;
+            let previous_offset = (previous & COMMAND_OFFSET_MASK) as usize;
+            self.segments.push(ParticleShowcaseSegment {
+                x0: (previous_offset % self.config.width) as i16,
+                y0: (previous_offset / self.config.width) as i16,
+                x1: (current_offset % self.config.width) as i16,
+                y1: (current_offset / self.config.width) as i16,
+                style: ((current >> COMMAND_STYLE_SHIFT) & 7) as u8,
+            });
+        }
+        self.pool.active().saturating_sub(visible)
+    }
+
+    #[cfg(not(target_arch = "arm"))]
+    fn project_warp_speed_scalar(&mut self, travel: f32, previous_step: f32) -> usize {
+        let center_x = self.config.width as f32 * 0.5;
+        let center_y = self.config.height as f32 * 0.5;
+        let mut visible = 0usize;
+        for index in 0..self.pool.active() {
+            let depth = (self.pool.z[index] - travel).rem_euclid(1.0);
+            let previous_depth = (depth + previous_step).rem_euclid(1.0);
+            let scale = 0.22 / (0.14 + depth);
+            let previous_scale = 0.22 / (0.14 + previous_depth);
+            let x = center_x + self.pool.x[index] * scale;
+            let y = center_y + self.pool.y[index] * scale;
+            let previous_x = center_x + self.pool.x[index] * previous_scale;
+            let previous_y = center_y + self.pool.y[index] * previous_scale;
+            let emitted = push_screen_command(
+                &mut self.commands,
+                self.config.width,
+                self.config.height,
+                x,
+                y,
+                self.pool.style[index],
+                false,
+            );
+            visible += usize::from(emitted);
+            if previous_x >= 0.0
+                && previous_y >= 0.0
+                && previous_x < self.config.width as f32
+                && previous_y < self.config.height as f32
+            {
+                self.previous_commands
+                    .push((previous_y as usize * self.config.width + previous_x as usize) as u32);
+            } else {
+                self.previous_commands.push(u32::MAX);
+            }
+        }
+        visible
     }
 
     fn initialize_galaxy(&mut self) -> usize {
@@ -1272,11 +1417,36 @@ fn ease_out_cubic(value: f32) -> f32 {
     1.0 - (1.0 - value).powi(3)
 }
 
+fn warp_travel_and_speed(seconds: f32) -> (f32, f32) {
+    let cycle = seconds.rem_euclid(30.0);
+    let (distance, speed) = if cycle < 7.0 {
+        (cycle * 0.03, 0.03)
+    } else if cycle < 14.0 {
+        let time = cycle - 7.0;
+        let acceleration = 0.87 / 7.0;
+        (
+            0.21 + 0.03 * time + 0.5 * acceleration * time * time,
+            0.03 + acceleration * time,
+        )
+    } else if cycle < 23.0 {
+        (3.465 + (cycle - 14.0) * 0.9, 0.9)
+    } else {
+        let time = cycle - 23.0;
+        let deceleration = 0.87 / 7.0;
+        (
+            11.565 + 0.9 * time - 0.5 * deceleration * time * time,
+            0.9 - deceleration * time,
+        )
+    };
+    (distance.rem_euclid(1.0), speed)
+}
+
 fn showcase_palette(demo: ParticleDemoKind) -> &'static [Rgb565Pixel; 8] {
     match demo {
         ParticleDemoKind::Fireworks => &FIREWORKS_PALETTE,
         ParticleDemoKind::FireEmbers => &FIRE_PALETTE,
         ParticleDemoKind::SpiralGalaxy => &GALAXY_PALETTE,
+        ParticleDemoKind::WarpSpeed => &WARP_PALETTE,
         _ => &SHOWCASE_PALETTE,
     }
 }
@@ -1599,5 +1769,31 @@ mod tests {
                 .iter()
                 .any(|flag| *flag == 0)
         );
+    }
+
+    #[test]
+    fn warp_speed_accelerates_and_emits_bounded_streaks() {
+        let (calm_travel, calm_speed) = warp_travel_and_speed(2.0);
+        let (_, warp_speed) = warp_travel_and_speed(18.0);
+        assert!((0.0..1.0).contains(&calm_travel));
+        assert!(warp_speed > calm_speed * 20.0);
+
+        let mut renderer = ParticleShowcaseRenderer::new(ParticleShowcaseConfig {
+            width: 960,
+            height: 540,
+            seed: 0x5eed,
+            initial_demo: ParticleDemoKind::WarpSpeed,
+        })
+        .unwrap();
+        let mut destination = vec![Rgb565Pixel(0); 960 * 540];
+        let stats = renderer
+            .render(&mut destination, 1, Duration::from_secs(18))
+            .unwrap();
+
+        assert_eq!(stats.demo, ParticleDemoKind::WarpSpeed);
+        assert_eq!(stats.beat, "warp");
+        assert!(stats.visible > renderer.pool.active() / 2);
+        assert!(!renderer.segments.is_empty());
+        assert!(renderer.segments.len() <= renderer.pool.active().div_ceil(8));
     }
 }

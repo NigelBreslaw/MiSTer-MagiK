@@ -653,3 +653,124 @@ size_t mister_magik_showcase_neon_project_galaxy(
     vst1q_u32(lanes, visible_count);
     return (size_t)lanes[0] + lanes[1] + lanes[2] + lanes[3];
 }
+
+size_t mister_magik_showcase_neon_project_warp(
+    size_t count,
+    size_t width,
+    size_t height,
+    float travel,
+    float previous_step,
+    const float *restrict x,
+    const float *restrict y,
+    const float *restrict depth_phase,
+    const uint8_t *restrict styles,
+    uint32_t *restrict commands,
+    uint32_t *restrict previous_commands
+) {
+    const uint32_t width_u32 = (uint32_t)width;
+    const size_t vector_end = count & ~(size_t)3;
+    const float32x4_t center_x = vdupq_n_f32((float)width * 0.5f);
+    const float32x4_t center_y = vdupq_n_f32((float)height * 0.5f);
+    const float32x4_t max_x = vdupq_n_f32((float)width - 0.5f);
+    const float32x4_t max_y = vdupq_n_f32((float)height - 0.5f);
+    const float32x4_t travel_vector = vdupq_n_f32(travel);
+    const float32x4_t previous_step_vector = vdupq_n_f32(previous_step);
+    const float32x4_t zero = vdupq_n_f32(0.0f);
+    const float32x4_t one = vdupq_n_f32(1.0f);
+    uint32x4_t visible_count = vdupq_n_u32(0);
+
+    for (size_t index = 0; index < vector_end; index += 4) {
+        float32x4_t depth = vsubq_f32(
+            vld1q_f32(depth_phase + index),
+            travel_vector
+        );
+        depth = vbslq_f32(vcltq_f32(depth, zero), vaddq_f32(depth, one), depth);
+        float32x4_t previous_depth = vaddq_f32(depth, previous_step_vector);
+        previous_depth = vbslq_f32(
+            vcgeq_f32(previous_depth, one),
+            vsubq_f32(previous_depth, one),
+            previous_depth
+        );
+        const float32x4_t source_x = vld1q_f32(x + index);
+        const float32x4_t source_y = vld1q_f32(y + index);
+        const float32x4_t scale = vmulq_n_f32(
+            reciprocal_once(vaddq_f32(depth, vdupq_n_f32(0.14f))),
+            0.22f
+        );
+        const float32x4_t previous_scale = vmulq_n_f32(
+            reciprocal_once(vaddq_f32(previous_depth, vdupq_n_f32(0.14f))),
+            0.22f
+        );
+        const float32x4_t screen_x =
+            vaddq_f32(center_x, vmulq_f32(source_x, scale));
+        const float32x4_t screen_y =
+            vaddq_f32(center_y, vmulq_f32(source_y, scale));
+        const float32x4_t previous_x =
+            vaddq_f32(center_x, vmulq_f32(source_x, previous_scale));
+        const float32x4_t previous_y =
+            vaddq_f32(center_y, vmulq_f32(source_y, previous_scale));
+        uint32x4_t visible_mask =
+            vcgtq_f32(screen_x, vdupq_n_f32(-0.5f));
+        visible_mask = vandq_u32(
+            visible_mask,
+            vcgtq_f32(screen_y, vdupq_n_f32(-0.5f))
+        );
+        visible_mask = vandq_u32(visible_mask, vcltq_f32(screen_x, max_x));
+        visible_mask = vandq_u32(visible_mask, vcltq_f32(screen_y, max_y));
+        uint32x4_t previous_mask =
+            vcgtq_f32(previous_x, vdupq_n_f32(-0.5f));
+        previous_mask = vandq_u32(
+            previous_mask,
+            vcgtq_f32(previous_y, vdupq_n_f32(-0.5f))
+        );
+        previous_mask = vandq_u32(
+            previous_mask,
+            vcltq_f32(previous_x, max_x)
+        );
+        previous_mask = vandq_u32(
+            previous_mask,
+            vcltq_f32(previous_y, max_y)
+        );
+        const uint32x4_t pixel_x =
+            vcvtq_u32_f32(vaddq_f32(screen_x, vdupq_n_f32(0.5f)));
+        const uint32x4_t pixel_y =
+            vcvtq_u32_f32(vaddq_f32(screen_y, vdupq_n_f32(0.5f)));
+        const uint32x4_t previous_pixel_x =
+            vcvtq_u32_f32(vaddq_f32(previous_x, vdupq_n_f32(0.5f)));
+        const uint32x4_t previous_pixel_y =
+            vcvtq_u32_f32(vaddq_f32(previous_y, vdupq_n_f32(0.5f)));
+        const uint32x4_t palette =
+            vandq_u32(widen_four_u8(styles + index), vdupq_n_u32(7));
+        uint32x4_t command = vmlaq_n_u32(pixel_x, pixel_y, width_u32);
+        command = vorrq_u32(command, vshlq_n_u32(palette, 20));
+        const uint32x4_t previous_command =
+            vmlaq_n_u32(previous_pixel_x, previous_pixel_y, width_u32);
+        vst1q_u32(
+            commands + index,
+            vbslq_u32(
+                visible_mask,
+                command,
+                vdupq_n_u32(PARTICLE_NOT_VISIBLE)
+            )
+        );
+        vst1q_u32(
+            previous_commands + index,
+            vbslq_u32(
+                previous_mask,
+                previous_command,
+                vdupq_n_u32(PARTICLE_NOT_VISIBLE)
+            )
+        );
+        visible_count = vaddq_u32(
+            visible_count,
+            vshrq_n_u32(visible_mask, 31)
+        );
+    }
+    for (size_t index = vector_end; index < count; index++) {
+        commands[index] = PARTICLE_NOT_VISIBLE;
+        previous_commands[index] = PARTICLE_NOT_VISIBLE;
+    }
+    uint32_t lanes[4];
+    vst1q_u32(lanes, visible_count);
+    return (size_t)lanes[0] + lanes[1] + lanes[2] + lanes[3];
+}
