@@ -107,6 +107,7 @@ impl FireworkRenderer {
                         ^ particle_index)
                         % emitter.palette.len()];
                     let mut drew = false;
+                    let mut previous_point = None;
                     for sample in (0..emitter.trail.samples).rev() {
                         let sample_seconds =
                             local_seconds - f32::from(sample) * emitter.trail.step_seconds;
@@ -123,22 +124,34 @@ impl FireworkRenderer {
                             self.width,
                             self.height,
                         );
-                        let brush = if sample == 0 {
-                            emitter.brush
-                        } else {
-                            Brush::Spark
-                        };
-                        if draw_brush(
-                            destination,
-                            self.width,
-                            self.height,
-                            point.0,
-                            point.1,
-                            color,
-                            intensity * trail_age,
-                            brush,
-                            &mut stats.pixel_writes,
-                        ) {
+                        if let Some(previous) = previous_point
+                            && draw_trail_segment(
+                                destination,
+                                self.width,
+                                self.height,
+                                previous,
+                                point,
+                                color,
+                                intensity * trail_age,
+                                &mut stats.pixel_writes,
+                            )
+                        {
+                            drew = true;
+                        }
+                        previous_point = Some(point);
+                        if sample == 0
+                            && draw_brush(
+                                destination,
+                                self.width,
+                                self.height,
+                                point.0,
+                                point.1,
+                                color,
+                                intensity,
+                                emitter.brush,
+                                &mut stats.pixel_writes,
+                            )
+                        {
                             drew = true;
                         }
                     }
@@ -191,6 +204,8 @@ struct EmitterSpec {
     rotation_deg: f32,
     #[serde(default)]
     angular_velocity_deg: f32,
+    #[serde(default)]
+    curl_deg: [f32; 2],
     #[serde(default = "one")]
     petals: u16,
     speed: [f32; 2],
@@ -250,6 +265,7 @@ struct CompiledEmitter {
     spread: f32,
     rotation: f32,
     angular_velocity: f32,
+    curl: (f32, f32),
     petals: usize,
     speed: (f32, f32),
     gravity: f32,
@@ -341,6 +357,10 @@ impl CompiledShow {
                 spread: emitter.spread_deg.to_radians(),
                 rotation: emitter.rotation_deg.to_radians(),
                 angular_velocity: emitter.angular_velocity_deg.to_radians(),
+                curl: (
+                    emitter.curl_deg[0].to_radians(),
+                    emitter.curl_deg[1].to_radians(),
+                ),
                 petals: usize::from(emitter.petals.max(1)),
                 speed: (emitter.speed[0], emitter.speed[1]),
                 gravity: emitter.gravity,
@@ -390,7 +410,13 @@ impl CompiledEmitter {
                     + within as f32 * 0.001
             }
             Shape::Radial | Shape::Ring => self.rotation + ordinal * self.spread + jitter,
-        } + self.angular_velocity * seconds;
+        } + (self.angular_velocity
+            + lerp(
+                self.curl.0,
+                self.curl.1,
+                random_unit(random.rotate_left(51)),
+            ))
+            * seconds;
         let shape_speed = match self.shape {
             Shape::Ring => (self.speed.0 + self.speed.1) * 0.5,
             Shape::Rosette => {
@@ -466,6 +492,57 @@ fn draw_brush(
         destination[offset] = additive_rgb565(destination[offset], color, intensity * weight);
         *pixel_writes += 1;
         drew = true;
+    }
+    drew
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_trail_segment(
+    destination: &mut [Rgb565Pixel],
+    width: usize,
+    height: usize,
+    start: (f32, f32),
+    end: (f32, f32),
+    color: Rgb888,
+    intensity: f32,
+    pixel_writes: &mut usize,
+) -> bool {
+    let dx = end.0 - start.0;
+    let dy = end.1 - start.1;
+    let steps = dx.abs().max(dy.abs()).ceil().clamp(1.0, 64.0) as usize;
+    let mut drew = false;
+    for step in 0..=steps {
+        let amount = step as f32 / steps as f32;
+        let x = start.0 + dx * amount;
+        let y = start.1 + dy * amount;
+        if draw_brush(
+            destination,
+            width,
+            height,
+            x,
+            y,
+            color,
+            intensity,
+            Brush::Spark,
+            pixel_writes,
+        ) {
+            drew = true;
+        }
+        if step & 1 == 0 {
+            for (halo_x, halo_y) in [(x - 1.0, y), (x + 1.0, y), (x, y - 1.0), (x, y + 1.0)] {
+                let _ = draw_brush(
+                    destination,
+                    width,
+                    height,
+                    halo_x,
+                    halo_y,
+                    color,
+                    intensity * 0.16,
+                    Brush::Spark,
+                    pixel_writes,
+                );
+            }
+        }
     }
     drew
 }
