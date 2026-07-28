@@ -92,6 +92,16 @@ const METEOR_PALETTE: [Rgb565Pixel; 8] = [
     Rgb565Pixel(0xffb5),
     Rgb565Pixel(0xffff),
 ];
+const WEATHER_PALETTE: [Rgb565Pixel; 8] = [
+    Rgb565Pixel(0x080a),
+    Rgb565Pixel(0x18d2),
+    Rgb565Pixel(0x7bef),
+    Rgb565Pixel(0xe71c),
+    Rgb565Pixel(0x2945),
+    Rgb565Pixel(0x8208),
+    Rgb565Pixel(0xfd20),
+    Rgb565Pixel(0xffb5),
+];
 static PARTICLE_DEMO_NAVIGATION: AtomicI32 = AtomicI32::new(0);
 
 #[cfg(target_arch = "arm")]
@@ -542,6 +552,8 @@ impl ParticleShowcaseRenderer {
             self.initialize_warp_speed();
         } else if demo == ParticleDemoKind::MeteorShower {
             self.initialize_meteor_shower();
+        } else if demo == ParticleDemoKind::Weather {
+            self.initialize_weather();
         }
     }
 
@@ -608,6 +620,7 @@ impl ParticleShowcaseRenderer {
             ParticleDemoKind::SpiralGalaxy => self.project_spiral_galaxy(elapsed),
             ParticleDemoKind::WarpSpeed => self.project_warp_speed(elapsed),
             ParticleDemoKind::MeteorShower => self.project_meteor_shower(elapsed),
+            ParticleDemoKind::Weather => self.project_weather(elapsed),
             _ => self.project_diagnostic(elapsed),
         }
     }
@@ -647,8 +660,146 @@ impl ParticleShowcaseRenderer {
                 value if value < 20.0 => "shower",
                 _ => "peak",
             },
+            ParticleDemoKind::Weather => match seconds {
+                value if value < 10.0 => "rain",
+                value if value < 20.0 => "snow",
+                _ => "ash",
+            },
             _ => "diagnostic",
         }
+    }
+
+    fn initialize_weather(&mut self) {
+        for index in 0..self.pool.active() {
+            let random = self.pool.random[index];
+            self.pool.x[index] = unit_signed(random.rotate_left(3)) * 520.0;
+            self.pool.y[index] = unit01(random.rotate_left(13)) * 620.0 - 40.0;
+            self.pool.z[index] = unit01(random.rotate_left(23));
+            self.pool.age[index] = unit01(random.rotate_left(7)) * 8.0;
+            self.pool.life[index] = 0.65 + unit01(random.rotate_left(17)) * 0.7;
+            self.pool.style[index] = ((random >> 29) & 7) as u8;
+            self.pool.flags[index] = u8::from(random & 63 == 0);
+        }
+    }
+
+    fn project_weather(&mut self, elapsed: Duration) -> usize {
+        self.commands.clear();
+        self.segments.clear();
+        let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
+        if seconds < 10.0 {
+            self.project_weather_rain(seconds)
+        } else if seconds < 20.0 {
+            self.project_weather_snow(seconds - 10.0)
+        } else {
+            self.project_weather_ash(seconds - 20.0)
+        }
+    }
+
+    fn project_weather_rain(&mut self, seconds: f32) -> usize {
+        let mut clipped = 0usize;
+        let wind = 34.0 + triangle_wave(seconds * 0.08) * 24.0;
+        for index in (0..self.pool.active()).step_by(2) {
+            let layer = 0.62 + self.pool.z[index] * 0.72;
+            let fall = (self.pool.y[index] + seconds * (410.0 + 330.0 * self.pool.z[index]))
+                .rem_euclid(620.0)
+                - 40.0;
+            let x = self.config.width as f32 * 0.5
+                + self.pool.x[index] * layer
+                + wind * (fall / self.config.height as f32);
+            let style = 1 + (self.pool.z[index] * 2.8) as u8;
+            if !push_screen_command(
+                &mut self.commands,
+                self.config.width,
+                self.config.height,
+                x,
+                fall,
+                style,
+                self.pool.flags[index] != 0,
+            ) {
+                clipped = clipped.saturating_add(1);
+                continue;
+            }
+            if index & 31 == 0 {
+                self.segments.push(ParticleShowcaseSegment {
+                    x0: (x - wind * 0.016) as i16,
+                    y0: (fall - 12.0 - self.pool.z[index] * 10.0) as i16,
+                    x1: x as i16,
+                    y1: fall as i16,
+                    style,
+                });
+            }
+        }
+        clipped
+    }
+
+    fn project_weather_snow(&mut self, seconds: f32) -> usize {
+        let mut clipped = 0usize;
+        let gust = triangle_wave(seconds * 0.055) * 42.0;
+        for index in (0..self.pool.active()).step_by(2) {
+            let layer = 0.72 + self.pool.z[index] * 0.58;
+            let fall = (self.pool.y[index]
+                + seconds * (34.0 + 58.0 * self.pool.z[index]) * self.pool.life[index])
+                .rem_euclid(600.0)
+                - 30.0;
+            let flutter =
+                triangle_wave(seconds * self.pool.life[index] * 0.42 + self.pool.age[index])
+                    * (12.0 + self.pool.z[index] * 25.0);
+            let x = self.config.width as f32 * 0.5
+                + self.pool.x[index] * layer
+                + flutter
+                + gust * self.pool.z[index];
+            let style = 2 + u8::from(self.pool.z[index] > 0.45);
+            if !push_screen_command(
+                &mut self.commands,
+                self.config.width,
+                self.config.height,
+                x,
+                fall,
+                style,
+                self.pool.flags[index] != 0 || index & 127 == 0,
+            ) {
+                clipped = clipped.saturating_add(1);
+            }
+        }
+        clipped
+    }
+
+    fn project_weather_ash(&mut self, seconds: f32) -> usize {
+        let mut clipped = 0usize;
+        let wind = triangle_wave(seconds * 0.07) * 55.0;
+        for index in (0..self.pool.active()).step_by(2) {
+            let age = (seconds * self.pool.life[index] + self.pool.age[index]).rem_euclid(6.4);
+            let layer = 0.68 + self.pool.z[index] * 0.7;
+            let rise = 570.0 - age * (62.0 + self.pool.z[index] * 42.0);
+            let curl = triangle_wave(age * 0.19 + self.pool.age[index]) * (18.0 + age * 5.0);
+            let x = self.config.width as f32 * 0.5
+                + self.pool.x[index] * layer
+                + wind * age * 0.09
+                + curl;
+            let style = (7.0 - age * 0.62).clamp(4.0, 7.0) as u8;
+            if !push_screen_command(
+                &mut self.commands,
+                self.config.width,
+                self.config.height,
+                x,
+                rise,
+                style,
+                self.pool.flags[index] != 0 || index & 255 == 0,
+            ) {
+                clipped = clipped.saturating_add(1);
+                continue;
+            }
+            if index & 63 == 0 {
+                self.segments.push(ParticleShowcaseSegment {
+                    x0: (x - curl * 0.18) as i16,
+                    y0: (rise + 7.0) as i16,
+                    x1: x as i16,
+                    y1: rise as i16,
+                    style: style.saturating_sub(1),
+                });
+            }
+        }
+        clipped
     }
 
     fn initialize_meteor_shower(&mut self) {
@@ -1554,6 +1705,15 @@ fn ease_out_cubic(value: f32) -> f32 {
     1.0 - (1.0 - value).powi(3)
 }
 
+fn triangle_wave(value: f32) -> f32 {
+    let phase = value.rem_euclid(2.0);
+    if phase < 1.0 {
+        phase.mul_add(2.0, -1.0)
+    } else {
+        3.0 - phase * 2.0
+    }
+}
+
 fn warp_travel_and_speed(seconds: f32) -> (f32, f32) {
     let cycle = seconds.rem_euclid(30.0);
     let (distance, speed) = if cycle < 7.0 {
@@ -1585,6 +1745,7 @@ fn showcase_palette(demo: ParticleDemoKind) -> &'static [Rgb565Pixel; 8] {
         ParticleDemoKind::SpiralGalaxy => &GALAXY_PALETTE,
         ParticleDemoKind::WarpSpeed => &WARP_PALETTE,
         ParticleDemoKind::MeteorShower => &METEOR_PALETTE,
+        ParticleDemoKind::Weather => &WEATHER_PALETTE,
         _ => &SHOWCASE_PALETTE,
     }
 }
@@ -1962,5 +2123,40 @@ mod tests {
             let head_dy = i32::from(segment.y1) - radiant.1;
             head_dx * head_dx + head_dy * head_dy >= tail_dx * tail_dx + tail_dy * tail_dy
         }));
+    }
+
+    #[test]
+    fn weather_sections_change_motion_palette_and_geometry_deterministically() {
+        let config = ParticleShowcaseConfig {
+            width: 960,
+            height: 540,
+            seed: 0xc10d,
+            initial_demo: ParticleDemoKind::Weather,
+        };
+        let mut renderer = ParticleShowcaseRenderer::new(config).unwrap();
+        let mut destination = vec![Rgb565Pixel(0); 960 * 540];
+
+        let rain = renderer
+            .render(&mut destination, 1, Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(rain.beat, "rain");
+        assert!(rain.segment_count > 0);
+        assert_eq!(renderer.commands.len(), renderer.pool.active() / 2);
+
+        let snow = renderer
+            .render(&mut destination, 2, Duration::from_secs(15))
+            .unwrap();
+        assert_eq!(snow.beat, "snow");
+        assert_eq!(snow.segment_count, 0);
+        assert!(snow.visible > renderer.pool.active() / 8);
+
+        let ash = renderer
+            .render(&mut destination, 1, Duration::from_secs(25))
+            .unwrap();
+        assert_eq!(ash.beat, "ash");
+        assert!(ash.segment_count > 0);
+        assert!(ash.clipped_commands < renderer.pool.active() / 2);
+        assert_eq!(triangle_wave(0.5), 0.0);
+        assert_eq!(triangle_wave(1.5), 0.0);
     }
 }
