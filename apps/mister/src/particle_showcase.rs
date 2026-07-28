@@ -102,6 +102,16 @@ const WEATHER_PALETTE: [Rgb565Pixel; 8] = [
     Rgb565Pixel(0xfd20),
     Rgb565Pixel(0xffb5),
 ];
+const PORTAL_PALETTE: [Rgb565Pixel; 8] = [
+    Rgb565Pixel(0x1008),
+    Rgb565Pixel(0x2812),
+    Rgb565Pixel(0x501f),
+    Rgb565Pixel(0x801f),
+    Rgb565Pixel(0x42df),
+    Rgb565Pixel(0x07ff),
+    Rgb565Pixel(0xb7ff),
+    Rgb565Pixel(0xffff),
+];
 static PARTICLE_DEMO_NAVIGATION: AtomicI32 = AtomicI32::new(0);
 
 #[cfg(target_arch = "arm")]
@@ -554,6 +564,8 @@ impl ParticleShowcaseRenderer {
             self.initialize_meteor_shower();
         } else if demo == ParticleDemoKind::Weather {
             self.initialize_weather();
+        } else if demo == ParticleDemoKind::ParticlePortal {
+            self.initialize_particle_portal();
         }
     }
 
@@ -621,6 +633,7 @@ impl ParticleShowcaseRenderer {
             ParticleDemoKind::WarpSpeed => self.project_warp_speed(elapsed),
             ParticleDemoKind::MeteorShower => self.project_meteor_shower(elapsed),
             ParticleDemoKind::Weather => self.project_weather(elapsed),
+            ParticleDemoKind::ParticlePortal => self.project_particle_portal(elapsed),
             _ => self.project_diagnostic(elapsed),
         }
     }
@@ -665,8 +678,106 @@ impl ParticleShowcaseRenderer {
                 value if value < 20.0 => "snow",
                 _ => "ash",
             },
+            ParticleDemoKind::ParticlePortal => match seconds {
+                value if value < 8.0 => "gather",
+                value if value < 20.0 => "vortex",
+                value if value < 26.0 => "pulse",
+                _ => "surge",
+            },
             _ => "diagnostic",
         }
+    }
+
+    fn initialize_particle_portal(&mut self) {
+        for index in 0..self.pool.active() {
+            let random = self.pool.random[index];
+            let band = random & 1;
+            let major_angle =
+                std::f32::consts::TAU * (index as f32 / self.pool.active() as f32) * 19.0
+                    + unit_signed(random.rotate_left(7)) * 0.08;
+            let minor_angle = major_angle * (3.0 + band as f32 * 2.0)
+                + std::f32::consts::TAU * unit01(random.rotate_left(17));
+            let minor_radius = 28.0 + unit01(random.rotate_left(23)) * 34.0;
+            let radius = 160.0 + minor_angle.cos() * minor_radius;
+            self.pool.x[index] = major_angle.cos() * radius;
+            self.pool.y[index] = major_angle.sin() * radius;
+            self.pool.z[index] = minor_angle.sin() * minor_radius;
+            self.pool.age[index] = unit01(random.rotate_left(11));
+            self.pool.style[index] = 3 + ((random >> 29) as u8).min(4);
+            self.pool.flags[index] =
+                band as u8 | (u8::from(index & 127 == 0) << 1) | (u8::from(index & 511 == 0) << 2);
+        }
+    }
+
+    fn project_particle_portal(&mut self, elapsed: Duration) -> usize {
+        self.commands.clear();
+        self.segments.clear();
+        let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
+        let forward_angle = seconds * 0.42;
+        let reverse_angle = seconds * -0.31;
+        let (forward_sin, forward_cos) = forward_angle.sin_cos();
+        let (reverse_sin, reverse_cos) = reverse_angle.sin_cos();
+        let (tilt_sin, tilt_cos) = 0.72_f32.sin_cos();
+        let pulse = 0.94 + ((seconds * 1.9).sin() * 0.5 + 0.5) * 0.12;
+        let center_x = self.config.width as f32 * 0.5;
+        let center_y = self.config.height as f32 * 0.5;
+        let mut clipped = 0usize;
+
+        for index in (0..self.pool.active()).step_by(4) {
+            let reverse = self.pool.flags[index] & 1 != 0;
+            let (sin_rotation, cos_rotation) = if reverse {
+                (reverse_sin, reverse_cos)
+            } else {
+                (forward_sin, forward_cos)
+            };
+            let phase = (seconds * (0.24 + self.pool.age[index] * 0.16) + self.pool.age[index])
+                .rem_euclid(1.0);
+            let inward = 1.0 - phase * phase * 0.18;
+            let base_x = self.pool.x[index];
+            let base_y = self.pool.y[index];
+            let x = base_x.mul_add(cos_rotation, -(base_y * sin_rotation)) * inward * pulse;
+            let ring_y = base_x.mul_add(sin_rotation, base_y * cos_rotation) * inward * pulse;
+            let tendril = if self.pool.flags[index] & 2 != 0 {
+                triangle_wave(seconds * 0.22 + self.pool.age[index]) * 78.0
+            } else {
+                0.0
+            };
+            let z = self.pool.z[index] + tendril;
+            let y = ring_y.mul_add(tilt_cos, -(z * tilt_sin));
+            let depth_axis = ring_y.mul_add(tilt_sin, z * tilt_cos);
+            let depth = 570.0 + depth_axis;
+            let scale = 570.0 / depth.max(96.0);
+            let screen_x = center_x + x * scale;
+            let screen_y = center_y + y * scale;
+            let depth_style = ((depth_axis + 230.0) * (3.0 / 460.0)).clamp(0.0, 3.0) as u8;
+            let style = (self.pool.style[index].min(4) + depth_style).min(7);
+            if !push_screen_command(
+                &mut self.commands,
+                self.config.width,
+                self.config.height,
+                screen_x,
+                screen_y,
+                style,
+                self.pool.flags[index] & 4 != 0,
+            ) {
+                clipped = clipped.saturating_add(1);
+                continue;
+            }
+            if self.pool.flags[index] & 2 != 0 {
+                let previous_rotation = if reverse { 0.035 } else { -0.035 };
+                let (previous_sin, previous_cos) = previous_rotation.sin_cos();
+                let previous_x = x.mul_add(previous_cos, -(ring_y * previous_sin));
+                let previous_y = x.mul_add(previous_sin, ring_y * previous_cos);
+                self.segments.push(ParticleShowcaseSegment {
+                    x0: (center_x + previous_x * scale) as i16,
+                    y0: (center_y + previous_y * tilt_cos * scale) as i16,
+                    x1: screen_x as i16,
+                    y1: screen_y as i16,
+                    style,
+                });
+            }
+        }
+        clipped
     }
 
     fn initialize_weather(&mut self) {
@@ -1746,6 +1857,7 @@ fn showcase_palette(demo: ParticleDemoKind) -> &'static [Rgb565Pixel; 8] {
         ParticleDemoKind::WarpSpeed => &WARP_PALETTE,
         ParticleDemoKind::MeteorShower => &METEOR_PALETTE,
         ParticleDemoKind::Weather => &WEATHER_PALETTE,
+        ParticleDemoKind::ParticlePortal => &PORTAL_PALETTE,
         _ => &SHOWCASE_PALETTE,
     }
 }
@@ -2158,5 +2270,31 @@ mod tests {
         assert!(ash.clipped_commands < renderer.pool.active() / 2);
         assert_eq!(triangle_wave(0.5), 0.0);
         assert_eq!(triangle_wave(1.5), 0.0);
+    }
+
+    #[test]
+    fn portal_preserves_toroidal_volume_and_bounded_tendrils() {
+        let mut renderer = ParticleShowcaseRenderer::new(ParticleShowcaseConfig {
+            width: 960,
+            height: 540,
+            seed: 0x9077_a1,
+            initial_demo: ParticleDemoKind::ParticlePortal,
+        })
+        .unwrap();
+        let mut destination = vec![Rgb565Pixel(0); 960 * 540];
+        let stats = renderer
+            .render(&mut destination, 1, Duration::from_secs(23))
+            .unwrap();
+        let radial_min = renderer.pool.x[0]
+            .mul_add(renderer.pool.x[0], renderer.pool.y[0] * renderer.pool.y[0])
+            .sqrt();
+
+        assert_eq!(stats.demo, ParticleDemoKind::ParticlePortal);
+        assert_eq!(stats.beat, "pulse");
+        assert!((90.0..230.0).contains(&radial_min));
+        assert_eq!(renderer.commands.len(), renderer.pool.active() / 4);
+        assert!(stats.visible > renderer.pool.active() / 8);
+        assert!(stats.segment_count > 0);
+        assert!(stats.segment_count <= renderer.pool.active() / 128);
     }
 }
