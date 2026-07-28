@@ -91,8 +91,16 @@ pub struct LatchCapabilities {
 
 impl LatchCapabilities {
     pub fn production_ready(self) -> bool {
+        let required_flags = match self.protocol {
+            LatchProtocol::V2 => V2_CAPS_FLAGS,
+            // Rejection context was added to the deployed v3 wire profile.
+            // Keep the previously qualified v3 RBF usable during rollout; new
+            // generated artifacts still advertise the complete V3_CAPS_FLAGS.
+            LatchProtocol::V3 => V3_CAPS_FLAGS & !CAP_REJECTION_CONTEXT,
+        };
         self.protocol_version == self.protocol.version()
-            && self.flags == self.protocol.capability_flags()
+            && self.flags & required_flags == required_flags
+            && self.flags & !self.protocol.capability_flags() == 0
             && self.max_width == MAX_WIDTH
             && self.max_height == MAX_HEIGHT
             && self.max_stride_bytes == MAX_STRIDE_BYTES
@@ -490,5 +498,34 @@ mod tests {
 
         words[6] ^= 1;
         assert!(decode_rejection_diagnostics(LatchProtocol::V3, &words).is_err());
+    }
+
+    #[test]
+    fn v3_rejection_context_is_optional_during_platform_rollout() {
+        let legacy_v3 = LatchCapabilities {
+            protocol: LatchProtocol::V3,
+            protocol_version: PROTOCOL_V3,
+            flags: V3_CAPS_FLAGS & !CAP_REJECTION_CONTEXT,
+            max_width: MAX_WIDTH,
+            max_height: MAX_HEIGHT,
+            max_stride_bytes: MAX_STRIDE_BYTES,
+            crc: Some(0),
+        };
+
+        assert!(legacy_v3.production_ready());
+        assert!(
+            !LatchCapabilities {
+                flags: legacy_v3.flags & !CAP_POST_CRC,
+                ..legacy_v3
+            }
+            .production_ready()
+        );
+        assert!(
+            !LatchCapabilities {
+                flags: V3_CAPS_FLAGS | 0x8000,
+                ..legacy_v3
+            }
+            .production_ready()
+        );
     }
 }
