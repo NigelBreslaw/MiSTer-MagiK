@@ -29,6 +29,9 @@ const SEGMENT_CAPACITY: usize = 32_768;
 const FIRE_HEAT_W: usize = 320;
 const FIRE_HEAT_H: usize = 72;
 const FIRE_HEAT_SCALE: usize = 3;
+const METEOR_TRAIL_SAMPLES: usize = 64;
+const METEOR_TRACK_COUNT: usize = 64;
+const METEOR_PARTICLE_COUNT: usize = METEOR_TRAIL_SAMPLES * METEOR_TRACK_COUNT;
 const SHOWCASE_PALETTE: [Rgb565Pixel; 8] = [
     Rgb565Pixel(0x18c3),
     Rgb565Pixel(0x31a6),
@@ -77,6 +80,16 @@ const WARP_PALETTE: [Rgb565Pixel; 8] = [
     Rgb565Pixel(0x4adf),
     Rgb565Pixel(0x8d7f),
     Rgb565Pixel(0xdfff),
+    Rgb565Pixel(0xffff),
+];
+const METEOR_PALETTE: [Rgb565Pixel; 8] = [
+    Rgb565Pixel(0x0808),
+    Rgb565Pixel(0x1010),
+    Rgb565Pixel(0x295f),
+    Rgb565Pixel(0x631f),
+    Rgb565Pixel(0xa514),
+    Rgb565Pixel(0xfd80),
+    Rgb565Pixel(0xffb5),
     Rgb565Pixel(0xffff),
 ];
 static PARTICLE_DEMO_NAVIGATION: AtomicI32 = AtomicI32::new(0);
@@ -527,6 +540,8 @@ impl ParticleShowcaseRenderer {
             self.galaxy_projected_count = self.initialize_galaxy();
         } else if demo == ParticleDemoKind::WarpSpeed {
             self.initialize_warp_speed();
+        } else if demo == ParticleDemoKind::MeteorShower {
+            self.initialize_meteor_shower();
         }
     }
 
@@ -592,6 +607,7 @@ impl ParticleShowcaseRenderer {
             ParticleDemoKind::FireEmbers => self.project_fire_embers(elapsed),
             ParticleDemoKind::SpiralGalaxy => self.project_spiral_galaxy(elapsed),
             ParticleDemoKind::WarpSpeed => self.project_warp_speed(elapsed),
+            ParticleDemoKind::MeteorShower => self.project_meteor_shower(elapsed),
             _ => self.project_diagnostic(elapsed),
         }
     }
@@ -626,8 +642,128 @@ impl ParticleShowcaseRenderer {
                 value if value < 23.0 => "warp",
                 _ => "decelerate",
             },
+            ParticleDemoKind::MeteorShower => match seconds {
+                value if value < 8.0 => "quiet",
+                value if value < 20.0 => "shower",
+                _ => "peak",
+            },
             _ => "diagnostic",
         }
+    }
+
+    fn initialize_meteor_shower(&mut self) {
+        let star_count = self.pool.active().saturating_sub(METEOR_PARTICLE_COUNT);
+        for index in 0..star_count {
+            let random = self.pool.random[index];
+            self.pool.x[index] = unit_signed(random.rotate_left(3)) * 760.0;
+            self.pool.y[index] = unit_signed(random.rotate_left(13)) * 430.0;
+            self.pool.z[index] = unit01(random.rotate_left(23)) * 760.0 - 80.0;
+            self.pool.style[index] = 1 + ((random >> 30) as u8).min(2);
+            self.pool.flags[index] = u8::from(random & 255 == 0);
+        }
+        for track in 0..METEOR_TRACK_COUNT {
+            let first = star_count + track * METEOR_TRAIL_SAMPLES;
+            let random = self.pool.random[first];
+            let angle = -0.15 + unit01(random.rotate_left(7)) * 3.45;
+            let radius = 280.0 + unit01(random.rotate_left(17)) * 1_050.0;
+            let invariant_x = angle.cos() * radius;
+            let invariant_y = angle.sin() * radius;
+            let phase = unit01(random.rotate_left(27)) * 3.1;
+            for sample in 0..METEOR_TRAIL_SAMPLES {
+                let index = first + sample;
+                self.pool.x[index] = invariant_x;
+                self.pool.y[index] = invariant_y;
+                self.pool.z[index] = phase;
+                self.pool.style[index] = 4 + ((sample * 4 / METEOR_TRAIL_SAMPLES) as u8).min(3);
+                self.pool.flags[index] = u8::from(sample + 1 == METEOR_TRAIL_SAMPLES);
+            }
+        }
+    }
+
+    fn project_meteor_shower(&mut self, elapsed: Duration) -> usize {
+        self.commands.clear();
+        self.segments.clear();
+        let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
+        let star_count = self.pool.active().saturating_sub(METEOR_PARTICLE_COUNT);
+        let (sin_drift, cos_drift) = (seconds * 0.018).sin_cos();
+        let center_x = self.config.width as f32 * 0.5;
+        let center_y = self.config.height as f32 * 0.5;
+        let mut clipped = 0usize;
+
+        for index in 0..star_count {
+            let x = self.pool.x[index];
+            let z = self.pool.z[index];
+            let rotated_x = x.mul_add(cos_drift, z * sin_drift);
+            let rotated_z = (-x).mul_add(sin_drift, z * cos_drift);
+            let depth = 760.0 + rotated_z;
+            let scale = 760.0 / depth.max(96.0);
+            if !push_screen_command(
+                &mut self.commands,
+                self.config.width,
+                self.config.height,
+                center_x + rotated_x * scale,
+                center_y + self.pool.y[index] * scale,
+                self.pool.style[index],
+                self.pool.flags[index] != 0,
+            ) {
+                clipped = clipped.saturating_add(1);
+            }
+        }
+
+        let active_tracks = if seconds < 8.0 {
+            METEOR_TRACK_COUNT / 4
+        } else if seconds < 20.0 {
+            METEOR_TRACK_COUNT / 2
+        } else {
+            METEOR_TRACK_COUNT
+        };
+        let focal = 620.0;
+        let radiant_x = center_x + 186.0;
+        let radiant_y = center_y - 154.0;
+        for track in 0..METEOR_TRACK_COUNT {
+            let first = star_count + track * METEOR_TRAIL_SAMPLES;
+            if track >= active_tracks {
+                self.commands
+                    .resize(self.commands.len() + METEOR_TRAIL_SAMPLES, u32::MAX);
+                continue;
+            }
+            let random = self.pool.random[first];
+            let rate = 0.82 + unit01(random.rotate_left(11)) * 0.34;
+            let age = (seconds * rate + self.pool.z[first]).rem_euclid(3.1);
+            let head_depth = 1_900.0 - age * 590.0;
+            let mut tail = None;
+            let mut head = None;
+            for sample in 0..METEOR_TRAIL_SAMPLES {
+                let index = first + sample;
+                let depth = head_depth + (METEOR_TRAIL_SAMPLES - 1 - sample) as f32 * 9.5;
+                let x = radiant_x + focal * self.pool.x[index] / depth;
+                let y = radiant_y + focal * self.pool.y[index] / depth;
+                if !push_screen_command(
+                    &mut self.commands,
+                    self.config.width,
+                    self.config.height,
+                    x,
+                    y,
+                    self.pool.style[index],
+                    self.pool.flags[index] != 0,
+                ) {
+                    clipped = clipped.saturating_add(1);
+                    continue;
+                }
+                tail.get_or_insert((x, y));
+                head = Some((x, y));
+            }
+            if let (Some((tail_x, tail_y)), Some((head_x, head_y))) = (tail, head) {
+                self.segments.push(ParticleShowcaseSegment {
+                    x0: tail_x as i16,
+                    y0: tail_y as i16,
+                    x1: head_x as i16,
+                    y1: head_y as i16,
+                    style: 6 + u8::from(track & 3 == 0),
+                });
+            }
+        }
+        clipped
     }
 
     fn initialize_warp_speed(&mut self) {
@@ -1448,6 +1584,7 @@ fn showcase_palette(demo: ParticleDemoKind) -> &'static [Rgb565Pixel; 8] {
         ParticleDemoKind::FireEmbers => &FIRE_PALETTE,
         ParticleDemoKind::SpiralGalaxy => &GALAXY_PALETTE,
         ParticleDemoKind::WarpSpeed => &WARP_PALETTE,
+        ParticleDemoKind::MeteorShower => &METEOR_PALETTE,
         _ => &SHOWCASE_PALETTE,
     }
 }
@@ -1796,5 +1933,34 @@ mod tests {
         assert!(stats.visible > renderer.pool.active() / 2);
         assert!(!renderer.segments.is_empty());
         assert!(renderer.segments.len() <= renderer.pool.active().div_ceil(8));
+    }
+
+    #[test]
+    fn meteor_shower_converges_on_radiant_and_scales_its_peak() {
+        let mut renderer = ParticleShowcaseRenderer::new(ParticleShowcaseConfig {
+            width: 960,
+            height: 540,
+            seed: 0x5eed,
+            initial_demo: ParticleDemoKind::MeteorShower,
+        })
+        .unwrap();
+        let mut destination = vec![Rgb565Pixel(0); 960 * 540];
+        let stats = renderer
+            .render(&mut destination, 1, Duration::from_secs(24))
+            .unwrap();
+        let radiant = (666_i32, 116_i32);
+
+        assert_eq!(stats.demo, ParticleDemoKind::MeteorShower);
+        assert_eq!(stats.beat, "peak");
+        assert_eq!(renderer.commands.len(), renderer.pool.active());
+        assert!(!renderer.segments.is_empty());
+        assert!(renderer.segments.len() <= METEOR_TRACK_COUNT);
+        assert!(renderer.segments.iter().all(|segment| {
+            let tail_dx = i32::from(segment.x0) - radiant.0;
+            let tail_dy = i32::from(segment.y0) - radiant.1;
+            let head_dx = i32::from(segment.x1) - radiant.0;
+            let head_dy = i32::from(segment.y1) - radiant.1;
+            head_dx * head_dx + head_dy * head_dy >= tail_dx * tail_dx + tail_dy * tail_dy
+        }));
     }
 }
