@@ -10,10 +10,13 @@ mod macos {
     use mister_magik_fb::launcher_presentation::LauncherBridgePresenter;
     use mister_magik_fb::particle_engine::{ParticleConfig, ParticlePreset};
     use mister_magik_fb::particle_renderer::ParticleRenderer;
-    use mister_magik_fb::ui_preview_fixtures::UiPreviewFixtures;
+    use mister_magik_fb::preview_transition::{
+        PreviewTransitionController, Rgb565PreviewTransitionCompositor, transition_duration,
+    };
+    use mister_magik_fb::ui_preview_fixtures::{FixtureScreenshot, UiPreviewFixtures};
     use mister_magik_fb::visual_composition::{
         ArcadeVisualLayer, PreviewFrame, PreviewPixels, PreviewSurface, ScreenshotTileImage,
-        ScreenshotTileWall, compose_preview_frame, hdmi_preview_rect,
+        ScreenshotTileWall, hdmi_preview_rect,
     };
     use mister_magik_fb::visual_platform::{MisterPlatform, MisterSoftwareWindow};
     use mister_magik_ui::launcher::{
@@ -42,6 +45,7 @@ mod macos {
     const FRAME_WIDTH: usize = 960;
     const FRAME_HEIGHT: usize = 540;
     const FRAME_PERIOD: Duration = Duration::from_nanos(16_666_667);
+    const PREVIEW_TRANSITION_DURATION: Duration = Duration::from_millis(200);
 
     pub fn run() -> Result<(), Box<dyn Error>> {
         let options = PreviewOptions::parse(std::env::args().skip(1))?;
@@ -108,6 +112,12 @@ mod macos {
         bridge_presenter: LauncherBridgePresenter,
         fixtures: UiPreviewFixtures,
         arcade_layer: ArcadeVisualLayer,
+        preview_transition: PreviewTransitionController<()>,
+        preview_compositor: Rgb565PreviewTransitionCompositor,
+        preview_previous_index: Option<usize>,
+        preview_current_index: Option<usize>,
+        preview_transition_id: u64,
+        preview_transition_duration: Duration,
         particle_renderer: ParticleRenderer,
         tile_wall: ScreenshotTileWall,
         tile_images: Vec<ScreenshotTileImage>,
@@ -161,6 +171,15 @@ mod macos {
                 bridge_presenter: LauncherBridgePresenter::default(),
                 fixtures,
                 arcade_layer: ArcadeVisualLayer::new(FRAME_WIDTH, FRAME_HEIGHT),
+                preview_transition: PreviewTransitionController::default(),
+                preview_compositor: Rgb565PreviewTransitionCompositor::new(
+                    FRAME_WIDTH,
+                    FRAME_HEIGHT,
+                ),
+                preview_previous_index: None,
+                preview_current_index: None,
+                preview_transition_id: 0,
+                preview_transition_duration: PREVIEW_TRANSITION_DURATION,
                 particle_renderer: ParticleRenderer::new_magik(ParticleConfig {
                     count: 16_384,
                     width: FRAME_WIDTH,
@@ -210,11 +229,16 @@ mod macos {
             self.scenario = scenario;
             self.selection = 0;
             self.settings_focused = false;
+            if scenario == Scenario::ArcadeCrossfade {
+                self.preview_previous_index = None;
+                self.preview_current_index = Some(0);
+                self.preview_transition.reset();
+            }
             if scenario.uses_launcher_navigation() {
                 self.configure_launcher_screen(scenario);
             }
             apply_scenario(&self.launcher, scenario);
-            if scenario == Scenario::Arcade {
+            if matches!(scenario, Scenario::Arcade | Scenario::ArcadeCrossfade) {
                 self.arcade_layer.invalidate();
             }
             if matches!(scenario, Scenario::ParticleScreensaver) {
@@ -349,9 +373,13 @@ mod macos {
         fn configure_launcher_screen(&mut self, scenario: Scenario) {
             match scenario {
                 Scenario::Home => self.launcher_nav.go_root(),
-                Scenario::Arcade => {
+                Scenario::Arcade | Scenario::ArcadeCrossfade => {
                     self.launcher_nav
                         .open_default_arcade(&self.fixtures.catalog);
+                    if scenario == Scenario::ArcadeCrossfade {
+                        self.launcher_nav.arcade.selected = 1;
+                        self.launcher_nav.arcade.snap_to_selected();
+                    }
                 }
                 Scenario::Settings => self.launcher_nav.screen = Screen::Settings,
                 Scenario::Controller => self.launcher_nav.screen = Screen::Controller,
@@ -416,6 +444,26 @@ mod macos {
         }
 
         fn sync_launcher_navigation(&mut self) {
+            if self.launcher_nav.screen == Screen::Arcade {
+                let selected = self.launcher_nav.arcade.selected;
+                if self.preview_current_index != Some(selected) {
+                    self.preview_previous_index = self.preview_current_index;
+                    self.preview_current_index = Some(selected);
+                    self.preview_transition_id = self.preview_transition_id.wrapping_add(1);
+                    self.preview_transition_duration = transition_duration(
+                        PREVIEW_TRANSITION_DURATION,
+                        if self.launcher_nav.arcade.is_turbo_active() {
+                            2
+                        } else {
+                            1
+                        },
+                    );
+                }
+            } else {
+                self.preview_previous_index = None;
+                self.preview_current_index = None;
+                self.preview_transition.reset();
+            }
             self.bridge_presenter.sync(
                 &self.launcher,
                 &self.launcher_nav,
@@ -457,29 +505,31 @@ mod macos {
                     self.launcher_nav.arcade.visual_index,
                     true,
                 );
-                let preview = self
-                    .fixtures
-                    .arcade_games()
-                    .get(self.launcher_nav.arcade.selected)
+                let current = self
+                    .preview_current_index
+                    .and_then(|index| self.fixtures.arcade_games().get(index))
                     .and_then(|game| self.fixtures.screenshot(&game.preview_asset_key))
                     .or_else(|| self.fixtures.screenshots.first());
-                if let Some(preview) = preview {
-                    compose_preview_frame(
+                let previous = self
+                    .preview_previous_index
+                    .and_then(|index| self.fixtures.arcade_games().get(index))
+                    .and_then(|game| self.fixtures.screenshot(&game.preview_asset_key));
+                if let Some(current) = current {
+                    let transition = self.preview_transition.update(
+                        Some(self.preview_transition_id),
+                        previous.is_some(),
+                        (),
+                        self.preview_transition_duration,
+                        self.fixed_time.get(),
+                    );
+                    self.preview_compositor.compose(
                         self.frame_target.cached_565_mut(),
                         FRAME_WIDTH,
                         FRAME_HEIGHT,
                         hdmi_preview_rect(FRAME_WIDTH, FRAME_HEIGHT),
-                        PreviewFrame {
-                            pixels: PreviewPixels::Rgb565 {
-                                pixels: &preview.pixels,
-                                stride_pixels: preview.stride,
-                            },
-                            source_width: preview.width,
-                            source_height: preview.height,
-                            display_width: 320,
-                            display_height: 240,
-                        },
-                        true,
+                        previous.map(fixture_preview_frame),
+                        fixture_preview_frame(current),
+                        transition.progress,
                         PreviewSurface::full(FRAME_WIDTH),
                     );
                 }
@@ -601,6 +651,7 @@ mod macos {
     enum Scenario {
         Home,
         Arcade,
+        ArcadeCrossfade,
         Settings,
         Controller,
         ControllerSetup,
@@ -625,6 +676,7 @@ mod macos {
                 self,
                 Self::Home
                     | Self::Arcade
+                    | Self::ArcadeCrossfade
                     | Self::Settings
                     | Self::Controller
                     | Self::About
@@ -651,6 +703,7 @@ mod macos {
             match value.trim().to_ascii_lowercase().replace('_', "-").as_str() {
                 "home" => Some(Self::Home),
                 "arcade" => Some(Self::Arcade),
+                "arcade-crossfade" | "crossfade" => Some(Self::ArcadeCrossfade),
                 "settings" => Some(Self::Settings),
                 "controller" => Some(Self::Controller),
                 "controller-setup" | "setup" => Some(Self::ControllerSetup),
@@ -675,6 +728,7 @@ mod macos {
             match self {
                 Self::Home => "Home",
                 Self::Arcade => "Arcade",
+                Self::ArcadeCrossfade => "Arcade Crossfade",
                 Self::Settings => "Settings",
                 Self::Controller => "Controller",
                 Self::ControllerSetup => "Controller Setup",
@@ -707,6 +761,7 @@ mod macos {
                 Self::Confirm => "9",
                 Self::CatalogScan => "0",
                 Self::Arcade => "A",
+                Self::ArcadeCrossfade => "headless",
                 Self::BackgroundScan => "B",
                 Self::Compatibility => "C",
                 Self::Loading => "L",
@@ -1069,6 +1124,19 @@ mod macos {
                 .map(SharedString::from)
                 .collect::<Vec<_>>(),
         ))
+    }
+
+    fn fixture_preview_frame(screenshot: &FixtureScreenshot) -> PreviewFrame<'_> {
+        PreviewFrame {
+            pixels: PreviewPixels::Rgb565 {
+                pixels: &screenshot.pixels,
+                stride_pixels: screenshot.stride,
+            },
+            source_width: screenshot.width,
+            source_height: screenshot.height,
+            display_width: 320,
+            display_height: 240,
+        }
     }
 
     fn apply_arcade_fixture_bridge(
