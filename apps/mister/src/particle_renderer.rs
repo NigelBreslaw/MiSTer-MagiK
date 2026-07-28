@@ -80,12 +80,14 @@ pub struct ParticleRenderer {
     simulation_bytes: usize,
     renderer_scratch_bytes: usize,
     commands: Vec<u32>,
+    shadow_raster: bool,
     pmu: ParticlePmu,
 }
 
 struct ParticleDirtySlot {
     initialized: bool,
     offsets: Vec<u32>,
+    shadow: Vec<Rgb565Pixel>,
 }
 
 struct ParticlePreparationRequest {
@@ -149,9 +151,13 @@ impl ParticleRenderer {
         let simulation_bytes = config
             .count
             .saturating_mul(ParticleEngine::bytes_per_particle());
+        let shadow_raster = particle_shadow_raster_requested();
         let dirty_slots = std::array::from_fn(|_| ParticleDirtySlot {
             initialized: false,
             offsets: Vec::with_capacity(write_capacity),
+            shadow: shadow_raster
+                .then(|| vec![Rgb565Pixel(0); config.width.saturating_mul(config.height)])
+                .unwrap_or_default(),
         });
         let mut engine = Some(ParticleEngine::new(config, mask)?);
         let commands = Vec::with_capacity(config.count);
@@ -176,11 +182,17 @@ impl ParticleRenderer {
         let command_buffer_count =
             if preparation_pipeline.is_some() { 4 } else { 1 } + usize::from(order_commands);
         let renderer_scratch_bytes = dirty_slots.iter().fold(0usize, |total, slot| {
-            total.saturating_add(
-                slot.offsets
-                    .capacity()
-                    .saturating_mul(std::mem::size_of::<u32>()),
-            )
+            total
+                .saturating_add(
+                    slot.offsets
+                        .capacity()
+                        .saturating_mul(std::mem::size_of::<u32>()),
+                )
+                .saturating_add(
+                    slot.shadow
+                        .capacity()
+                        .saturating_mul(std::mem::size_of::<Rgb565Pixel>()),
+                )
         }) + commands
             .capacity()
             .saturating_mul(std::mem::size_of::<u32>())
@@ -194,6 +206,7 @@ impl ParticleRenderer {
             simulation_bytes,
             renderer_scratch_bytes,
             commands,
+            shadow_raster,
             pmu: ParticlePmu::from_env(),
         })
     }
@@ -248,17 +261,27 @@ impl ParticleRenderer {
         };
         let clear_started = Instant::now();
         let clear_cpu_started = thread_cpu_time_us();
-        let mut dirty_offsets = self.prepare_hidden_slot(destination, slot_offset);
+        let mut shadow = self
+            .shadow_raster
+            .then(|| std::mem::take(&mut self.dirty_slots[slot_offset].shadow));
+        let render_target = shadow.as_deref_mut().unwrap_or(&mut *destination);
+        let mut dirty_offsets = self.prepare_hidden_slot(render_target, slot_offset);
         let clear_us = clear_started.elapsed().as_micros();
         let clear_cpu_us = elapsed_thread_cpu_us(clear_cpu_started);
         let raster_started = Instant::now();
         let raster_cpu_started = thread_cpu_time_us();
-        self.raster(destination, &mut dirty_offsets);
+        self.raster(render_target, &mut dirty_offsets);
+        if let Some(shadow) = shadow.as_ref() {
+            destination.copy_from_slice(shadow);
+        }
         let raster_us = raster_started.elapsed().as_micros();
         let raster_cpu_us = elapsed_thread_cpu_us(raster_cpu_started);
         let execution_finished = thread_execution_snapshot();
         let pmu = self.pmu.finish();
         self.dirty_slots[slot_offset].offsets = dirty_offsets;
+        if let Some(shadow) = shadow {
+            self.dirty_slots[slot_offset].shadow = shadow;
+        }
         Ok(stats(
             prepared.frame,
             prepared.visible,
@@ -776,6 +799,14 @@ fn particle_pipeline_requested() -> bool {
         && !matches!(
             std::env::var("MISTER_PARTICLE_PIPELINE").ok().as_deref(),
             Some("0" | "off" | "false" | "no")
+        )
+}
+
+fn particle_shadow_raster_requested() -> bool {
+    cfg!(all(target_os = "linux", target_arch = "arm"))
+        && !matches!(
+            std::env::var("MISTER_PARTICLE_RASTER").ok().as_deref(),
+            Some("direct" | "wc-direct" | "off" | "false" | "no")
         )
 }
 
@@ -1329,6 +1360,23 @@ mod tests {
         renderer.invalidate_hidden_slot(1);
         let _offsets = renderer.prepare_hidden_slot(&mut pixels, 0);
         assert_eq!(pixels[767], Rgb565Pixel(0));
+    }
+
+    #[test]
+    fn cached_shadow_raster_matches_direct_raster_across_slot_reuse() {
+        let mut direct = ParticleRenderer::new(config(ParticlePreset::Visual), mask()).unwrap();
+        let mut cached = ParticleRenderer::new(config(ParticlePreset::Visual), mask()).unwrap();
+        cached.shadow_raster = true;
+        for slot in &mut cached.dirty_slots {
+            slot.shadow = vec![Rgb565Pixel(0); 32 * 24];
+        }
+        let mut direct_pixels = vec![Rgb565Pixel(0xffff); 32 * 24];
+        let mut cached_pixels = direct_pixels.clone();
+        for elapsed in [Duration::from_secs(6), Duration::from_micros(6_016_667)] {
+            direct.render(&mut direct_pixels, 1, elapsed).unwrap();
+            cached.render(&mut cached_pixels, 1, elapsed).unwrap();
+            assert_eq!(cached_pixels, direct_pixels);
+        }
     }
 
     #[test]
