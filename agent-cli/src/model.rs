@@ -11,6 +11,8 @@ pub enum BenchmarkScenario {
     Screensaver,
     Particles,
     ParticleCapacity,
+    #[serde(rename = "particle-demo-40k")]
+    #[value(name = "particle-demo-40k")]
     ParticleDemo40k,
     ParticleStep,
     ParticleProfile,
