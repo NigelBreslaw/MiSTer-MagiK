@@ -46,6 +46,8 @@ mod test_support;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 #[allow(dead_code)]
 mod ui_display;
+#[cfg(all(feature = "ui-preview", target_os = "macos"))]
+pub mod ui_preview_fixtures;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 pub mod visual_composition;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
