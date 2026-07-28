@@ -469,6 +469,9 @@ fn filtered_event_tail(path: &str, pid: u32) -> Vec<String> {
                 return false;
             }
             let line = line.to_ascii_lowercase();
+            if line.contains("screenshot") && !line.contains("error") && !line.contains("fail") {
+                return false;
+            }
             ["catalog", "library", "scan", "builder", "sqlite"]
                 .iter()
                 .any(|token| line.contains(token))
@@ -711,7 +714,8 @@ mod tests {
         fs::write(
             &path,
             "{\"pid\":41,\"event\":\"catalog_old\"}\n\
-             {\"pid\":42,\"event\":\"catalog_current\"}\n",
+             {\"pid\":42,\"event\":\"catalog_current\"}\n\
+             {\"pid\":42,\"event\":\"screenshot_media_catalog_ensure\"}\n",
         )
         .unwrap();
 

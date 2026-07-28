@@ -3631,7 +3631,7 @@ fn catalog_lifecycle_input_script() -> String {
 
 fn catalog_lifecycle_evidence_command() -> String {
     format!(
-        "set -eu; root={root}; find \"$root/diagnostics\" -maxdepth 1 -type f -print -exec sed -n '1,240p' {{}} \\; 2>/dev/null || true; ps -eo pid,tid,ni,psr,comm,args | sed -n '/mister-magik-fb/p'",
+        "set -eu; root={root}; find \"$root/diagnostics\" -maxdepth 1 -type f -print -exec sed -n '1,240p' {{}} \\; 2>/dev/null || true; pid=$(pidof mister-magik-fb | awk '{{print $1}}'); for task in /proc/$pid/task/*; do awk '/^(Name|Pid|Tgid|Cpus_allowed_list):/{{print}}' \"$task/status\"; awk '{{print \"Nice:\\t\" $19}}' \"$task/stat\"; done",
         root = sh(CATALOG_LIFECYCLE_REMOTE_DIR),
     )
 }
@@ -15331,6 +15331,10 @@ H: Handlers=event3 js0"#
                 .contains("MISTER_SHARDED_CATALOG_DIR='/media/fat/mister-magik-dev/catalog-v3'")
         );
         assert!(catalog_lifecycle_cleanup_command().contains(CATALOG_LIFECYCLE_REMOTE_DIR));
+        let evidence = catalog_lifecycle_evidence_command();
+        assert!(evidence.contains("Cpus_allowed_list"));
+        assert!(evidence.contains("/proc/$pid/task/*"));
+        assert!(!evidence.contains("ps -eo"));
         let env = catalog_lifecycle_launcher_env();
         assert!(env.iter().any(|(key, value)| {
             key == "MISTER_CATALOG_DIAGNOSTICS_DIR"
