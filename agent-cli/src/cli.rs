@@ -62,6 +62,10 @@ pub enum Command {
     Benchmark {
         #[arg(value_enum, default_value_t)]
         scenario: BenchmarkScenario,
+        #[arg(long, conflicts_with = "all")]
+        firework: Option<String>,
+        #[arg(long, conflicts_with = "firework")]
+        all: bool,
     },
     Demo {
         #[arg(value_enum)]
@@ -403,7 +407,16 @@ impl Cli {
             Some(Command::Doctor) => Intent::Doctor,
             Some(Command::Diagnose) => Intent::Diagnose,
             Some(Command::Deliver) => Intent::Deliver,
-            Some(Command::Benchmark { scenario }) => Intent::Benchmark { scenario },
+            Some(Command::Benchmark {
+                scenario: BenchmarkScenario::FireworkVisual,
+                firework,
+                all,
+            }) => Intent::FireworkVisual { firework, all },
+            Some(Command::Benchmark {
+                scenario,
+                firework: _,
+                all: _,
+            }) => Intent::Benchmark { scenario },
             Some(Command::Demo {
                 demo: DemoCommand::ParticleShowcase,
             }) => Intent::LaunchParticleShowcase,
@@ -622,6 +635,30 @@ mod tests {
                 .into_intent(),
             Intent::Benchmark {
                 scenario: BenchmarkScenario::Search
+            }
+        );
+        assert_eq!(
+            Cli::try_parse_from([
+                "agent-cli",
+                "benchmark",
+                "firework-visual",
+                "--firework",
+                "oled-peony",
+            ])
+            .unwrap()
+            .into_intent(),
+            Intent::FireworkVisual {
+                firework: Some("oled-peony".into()),
+                all: false,
+            }
+        );
+        assert_eq!(
+            Cli::try_parse_from(["agent-cli", "benchmark", "firework-visual", "--all"])
+                .unwrap()
+                .into_intent(),
+            Intent::FireworkVisual {
+                firework: None,
+                all: true,
             }
         );
         assert!(Cli::try_parse_from(["agent-cli", "benchmark", "--duration", "10"]).is_err());

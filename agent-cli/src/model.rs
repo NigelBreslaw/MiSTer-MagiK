@@ -82,6 +82,9 @@ pub enum BenchmarkScenario {
     #[serde(rename = "particle-demos-profile")]
     #[value(name = "particle-demos-profile")]
     ParticleDemosProfile,
+    #[serde(rename = "firework-visual")]
+    #[value(name = "firework-visual")]
+    FireworkVisual,
     CatalogLifecycle,
     Search,
 }
@@ -118,6 +121,7 @@ impl BenchmarkScenario {
             Self::ParticleDemoProfile10 => "particle-demo-profile-10",
             Self::ParticleDemosCarousel => "particle-demos-carousel",
             Self::ParticleDemosProfile => "particle-demos-profile",
+            Self::FireworkVisual => "firework-visual",
             Self::CatalogLifecycle => "catalog-lifecycle",
             Self::Search => "search",
         }
@@ -246,6 +250,10 @@ pub enum Intent {
     Benchmark {
         scenario: BenchmarkScenario,
     },
+    FireworkVisual {
+        firework: Option<String>,
+        all: bool,
+    },
     LaunchParticleShowcase,
     CaptureUsbVideo {
         output: Option<PathBuf>,
@@ -308,6 +316,7 @@ impl Intent {
             Self::ReleaseQualify | Self::DatabaseRotate => Risk::Destructive,
             Self::Deliver { .. }
             | Self::Benchmark { .. }
+            | Self::FireworkVisual { .. }
             | Self::Diagnose
             | Self::LaunchParticleShowcase => Risk::DeviceWrite,
             Self::Build { .. } => Risk::LocalWrite,

@@ -11,12 +11,113 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+const FIREWORK_VISUALS: [(u8, &str, u64); 6] = [
+    (1, "solar-chrysanthemum", 2100),
+    (2, "recursive-halo", 2200),
+    (3, "copper-willow-rain", 2500),
+    (4, "phoenix-comet", 2350),
+    (5, "magnetic-flower", 2500),
+    (6, "oled-peony", 2000),
+];
+
 pub fn execute(
     repository: &Path,
     scenario: BenchmarkScenario,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<Outcome> {
     require_clean_installed_commit(repository, scenario, reporter)
+}
+
+pub fn execute_firework_visual(
+    repository: &Path,
+    firework: Option<&str>,
+    all: bool,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    let selected = if all {
+        FIREWORK_VISUALS.to_vec()
+    } else {
+        let firework = firework.ok_or("firework-visual requires --firework <slug> or --all")?;
+        vec![
+            FIREWORK_VISUALS
+                .iter()
+                .copied()
+                .find(|(_, label, _)| *label == firework)
+                .ok_or_else(|| format!("unknown firework {firework:?}"))?,
+        ]
+    };
+    let head = crate::git::value(repository, &["rev-parse", "HEAD"])?;
+    if !crate::git::value(repository, &["status", "--porcelain"])?.is_empty() {
+        return Err("firework visual capture requires a clean exact-commit worktree".into());
+    }
+    let mut device = DeviceClient::default();
+    reporter.emit(
+        EventKind::Progress,
+        "preflight",
+        "firework visual installed-runtime preflight",
+        Some(10),
+    )?;
+    device.execute(DeviceRequest::Discover)?;
+    device.execute(DeviceRequest::VerifyDevelopmentPlatform)?;
+    device.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))?;
+    let manifest = device.execute(DeviceRequest::ReadDevelopmentManifest)?;
+    let reconciliation = crate::deploy::reconcile(repository, &manifest, &head);
+    if reconciliation.decision != crate::deploy::DeliveryDecision::NoOp {
+        return Err(format!(
+            "firework visual capture requires delivery reconciliation to be no-op, found {}; run scripts/agent deliver first",
+            reconciliation.decision.label()
+        )
+        .into());
+    }
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_secs();
+    let output_dir = repository
+        .join("build/agent-benchmarks/firework-visual")
+        .join(timestamp.to_string());
+    fs::create_dir_all(&output_dir).map_err(|error| error.to_string())?;
+    let mut captures = Vec::with_capacity(selected.len());
+    for (index, (demo, label, time_ms)) in selected.iter().copied().enumerate() {
+        reporter.emit(
+            EventKind::Progress,
+            "capture",
+            &format!("capturing {label} at {time_ms} ms"),
+            Some(20 + ((index + 1) * 70 / selected.len()) as u8),
+        )?;
+        let style_dir = output_dir.join(label);
+        let detail = device.execute(DeviceRequest::CaptureInstalledFireworkVisual {
+            output_dir: style_dir,
+            demo,
+            label: label.into(),
+            time_ms,
+        })?;
+        let capture: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+        if capture.get("schema").and_then(Value::as_str) != Some("mister-magik-firework-visual-v1")
+            || capture
+                .get("particle_magik_observed")
+                .and_then(Value::as_bool)
+                != Some(false)
+        {
+            return Err(format!("firework visual capture for {label} is invalid").into());
+        }
+        captures.push(capture);
+        device.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))?;
+    }
+    let summary = json!({
+        "schema": "mister-magik-firework-visual-suite-v1",
+        "manifest": manifest.clone(),
+        "captures": captures,
+    });
+    fs::write(
+        output_dir.join("summary.json"),
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&summary).map_err(|error| error.to_string())?
+        ),
+    )
+    .map_err(|error| error.to_string())?;
+    emit_benchmark_result(reporter, manifest, summary, output_dir)
 }
 
 fn require_clean_installed_commit(
@@ -102,6 +203,9 @@ fn require_clean_installed_commit(
             execute_catalog_lifecycle(&mut device, manifest, output_dir, reporter)
         }
         BenchmarkScenario::Search => execute_search(&mut device, manifest, output_dir, reporter),
+        BenchmarkScenario::FireworkVisual => {
+            unreachable!("firework visual capture uses its typed intent")
+        }
         BenchmarkScenario::ParticleDemo01
         | BenchmarkScenario::ParticleDemoProfile01
         | BenchmarkScenario::ParticleDemo02
@@ -129,17 +233,22 @@ fn require_clean_installed_commit(
     }
 }
 
-const PARTICLE_SHOWCASE_DEMOS: [(u8, &str); 10] = [
-    (1, "fireworks"),
-    (2, "fire-embers"),
-    (3, "spiral-galaxy"),
-    (4, "warp-speed"),
-    (5, "meteor-shower"),
-    (6, "weather"),
-    (7, "particle-portal"),
-    (8, "electric-storm"),
-    (9, "fountain-waterfall"),
-    (10, "arcade-cabinet"),
+const PARTICLE_SHOWCASE_DEMOS: [(u8, &str); 15] = [
+    (1, "solar-chrysanthemum"),
+    (2, "recursive-halo"),
+    (3, "copper-willow-rain"),
+    (4, "phoenix-comet"),
+    (5, "magnetic-flower"),
+    (6, "oled-peony"),
+    (7, "fire-embers"),
+    (8, "spiral-galaxy"),
+    (9, "warp-speed"),
+    (10, "meteor-shower"),
+    (11, "weather"),
+    (12, "particle-portal"),
+    (13, "electric-storm"),
+    (14, "fountain-waterfall"),
+    (15, "arcade-cabinet"),
 ];
 
 fn execute_particle_showcase_suite(
@@ -156,10 +265,10 @@ fn execute_particle_showcase_suite(
             EventKind::Progress,
             "profile",
             &format!(
-                "{} particle showcase {number:02}/10 {label}",
+                "{} particle showcase {number:02}/15 {label}",
                 if cpu_profile { "sampling" } else { "measuring" }
             ),
-            Some(10 + ((index as u8 + 1) * 8)),
+            Some(10 + (((index + 1) * 80 / PARTICLE_SHOWCASE_DEMOS.len()) as u8)),
         )?;
         let demo_dir = output_dir.join(format!("{number:02}-{label}"));
         let detail = device.execute(DeviceRequest::ProfileInstalledParticleShowcase {
@@ -174,7 +283,7 @@ fn execute_particle_showcase_suite(
     let summary = json!({
         "schema": "mister-magik-particle-showcase-suite-v1",
         "mode": if cpu_profile { "isolated-cpu-profiles" } else { "sequential-30-second-captures" },
-        "duration_secs": if cpu_profile { 320 } else { 300 },
+        "duration_secs": if cpu_profile { 480 } else { 450 },
         "manifest": manifest.clone(),
         "demos": demos,
     });

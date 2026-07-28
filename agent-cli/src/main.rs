@@ -147,6 +147,14 @@ fn dispatch(
         Intent::Benchmark { scenario } => {
             return agent_cli::benchmark::execute(repository, *scenario, reporter);
         }
+        Intent::FireworkVisual { firework, all } => {
+            return agent_cli::benchmark::execute_firework_visual(
+                repository,
+                firework.as_deref(),
+                *all,
+                reporter,
+            );
+        }
         Intent::LaunchParticleShowcase => {
             reporter.emit(
                 EventKind::Progress,

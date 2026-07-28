@@ -657,7 +657,28 @@ impl LauncherScreensaverLoader {
         if particle_showcase_renderer_requested() {
             let archive_cancelled = Arc::new(AtomicBool::new(false));
             match particle_showcase_config_from_env(w, h).and_then(ParticleShowcaseRenderer::new) {
-                Ok(renderer) => {
+                Ok(mut renderer) => {
+                    let capture_time = std::env::var("MISTER_FIREWORK_TIME_MS")
+                        .ok()
+                        .map(|value| {
+                            value
+                                .parse::<u64>()
+                                .map(Duration::from_millis)
+                                .map_err(|error| {
+                                    format!("invalid MISTER_FIREWORK_TIME_MS={value:?}: {error}")
+                                })
+                        })
+                        .transpose();
+                    let hud_visible = std::env::var("MISTER_PARTICLE_HUD")
+                        .map_or(true, |value| !value.trim().eq_ignore_ascii_case("off"));
+                    let Ok(capture_time) = capture_time else {
+                        crate::ui_errln!(
+                            "particle showcase initialization failed: {}",
+                            capture_time.unwrap_err()
+                        );
+                        return Self { ready_rx };
+                    };
+                    renderer.configure_firework_capture(capture_time, hud_visible);
                     let _ = ready_tx.send(LauncherScreensaver::particle_showcase(
                         renderer,
                         archive_cancelled,

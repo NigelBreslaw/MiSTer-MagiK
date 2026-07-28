@@ -54,6 +54,12 @@ pub enum DeviceRequest {
         demo: u8,
         cpu_profile: bool,
     },
+    CaptureInstalledFireworkVisual {
+        output_dir: PathBuf,
+        demo: u8,
+        label: String,
+        time_ms: u64,
+    },
     LaunchParticleShowcase,
     ProfileInstalledSearch {
         output_dir: PathBuf,
@@ -109,6 +115,7 @@ impl DeviceRequest {
             Self::ProfileInstalledParticleShowcase {
                 cpu_profile: true, ..
             } => "profile-installed-particle-showcase-cpu",
+            Self::CaptureInstalledFireworkVisual { .. } => "capture-installed-firework-visual",
             Self::LaunchParticleShowcase => "launch-particle-showcase",
             Self::ProfileInstalledSearch { .. } => "profile-installed-search",
             Self::VerifyInstalledSearchUi { .. } => "verify-installed-search-ui",
@@ -289,6 +296,12 @@ mod tests {
                 output_dir: "particle-showcase-cpu-profiles".into(),
                 demo: 1,
                 cpu_profile: true,
+            },
+            DeviceRequest::CaptureInstalledFireworkVisual {
+                output_dir: "firework-visual".into(),
+                demo: 1,
+                label: "solar-chrysanthemum".into(),
+                time_ms: 2100,
             },
             DeviceRequest::ProfileInstalledSearch {
                 output_dir: "search-profile".into(),

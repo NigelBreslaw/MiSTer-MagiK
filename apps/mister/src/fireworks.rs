@@ -78,7 +78,10 @@ impl FireworkRenderer {
         }
         destination.fill(Rgb565Pixel(0));
         let show_ms = elapsed.as_secs_f32() * 1000.0;
-        let mut stats = FireworkRenderStats::default();
+        let mut stats = FireworkRenderStats {
+            particles: self.show.particle_count,
+            ..FireworkRenderStats::default()
+        };
         for (emitter_index, emitter) in self.show.emitters.iter().enumerate() {
             for repeat in 0..emitter.repeats {
                 let start_ms = emitter.start_ms + emitter.repeat_ms * repeat as f32;
@@ -87,7 +90,6 @@ impl FireworkRenderer {
                     continue;
                 }
                 for particle_index in 0..emitter.count {
-                    stats.particles += 1;
                     let random = particle_seed(self.seed, emitter_index, repeat, particle_index);
                     let life_seconds = lerp(
                         emitter.life_seconds.0,
@@ -255,6 +257,7 @@ struct CompiledShow {
     id: String,
     label: String,
     duration: Duration,
+    particle_count: usize,
     emitters: Vec<CompiledEmitter>,
 }
 
@@ -395,6 +398,7 @@ impl CompiledShow {
             id: spec.id,
             label: spec.label,
             duration: Duration::from_millis(spec.duration_ms),
+            particle_count: particle_total,
             emitters,
         })
     }

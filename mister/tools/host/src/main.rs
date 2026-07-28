@@ -332,6 +332,16 @@ impl DeviceOperations for NativeDevice {
                     .map_err(device_failure)?
                 }
             }
+            DeviceRequest::CaptureInstalledFireworkVisual {
+                output_dir,
+                demo,
+                label,
+                time_ms,
+            } => {
+                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
+                capture_installed_firework_visual(&config, output_dir, *demo, label, *time_ms)
+                    .map_err(device_failure)?
+            }
             DeviceRequest::LaunchParticleShowcase => {
                 let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 launch_particle_showcase_interactive(&config).map_err(device_failure)?
@@ -3252,17 +3262,22 @@ enum ParticleBenchmarkRun {
 
 fn particle_showcase_demo(number: u8) -> Result<(&'static str, u64)> {
     match number {
-        1 => Ok(("fireworks", 24_576)),
-        2 => Ok(("fire-embers", 20_480)),
-        3 => Ok(("spiral-galaxy", 81_920)),
-        4 => Ok(("warp-speed", 45_056)),
-        5 => Ok(("meteor-shower", 20_480)),
-        6 => Ok(("weather", 49_152)),
-        7 => Ok(("particle-portal", 65_536)),
-        8 => Ok(("electric-storm", 16_384)),
-        9 => Ok(("fountain-waterfall", 32_768)),
-        10 => Ok(("arcade-cabinet", 12_288)),
-        _ => Err(format!("particle showcase demo must be in 1..=10, received {number}").into()),
+        1 => Ok(("solar-chrysanthemum", 1_728)),
+        2 => Ok(("recursive-halo", 1_732)),
+        3 => Ok(("copper-willow-rain", 1_624)),
+        4 => Ok(("phoenix-comet", 2_272)),
+        5 => Ok(("magnetic-flower", 1_958)),
+        6 => Ok(("oled-peony", 1_644)),
+        7 => Ok(("fire-embers", 20_480)),
+        8 => Ok(("spiral-galaxy", 81_920)),
+        9 => Ok(("warp-speed", 45_056)),
+        10 => Ok(("meteor-shower", 20_480)),
+        11 => Ok(("weather", 49_152)),
+        12 => Ok(("particle-portal", 65_536)),
+        13 => Ok(("electric-storm", 16_384)),
+        14 => Ok(("fountain-waterfall", 32_768)),
+        15 => Ok(("arcade-cabinet", 12_288)),
+        _ => Err(format!("particle showcase demo must be in 1..=15, received {number}").into()),
     }
 }
 
@@ -4774,6 +4789,131 @@ fn capture_particle_showcase_frame(
         "count": count,
         "source": capture_source_label(&capture.result)?,
     }))
+}
+
+fn capture_installed_firework_visual(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+    demo_number: u8,
+    label: &str,
+    time_ms: u64,
+) -> Result<String> {
+    if !(1..=6).contains(&demo_number) {
+        return Err(format!(
+            "firework visual capture demo must be in 1..=6, received {demo_number}"
+        )
+        .into());
+    }
+    let (expected_label, _) = particle_showcase_demo(demo_number)?;
+    if label != expected_label {
+        return Err(format!(
+            "firework visual demo {demo_number} is {expected_label:?}, received {label:?}"
+        )
+        .into());
+    }
+    if time_ms > 10_000 {
+        return Err(
+            format!("firework visual time must be at most 10000 ms, received {time_ms}").into(),
+        );
+    }
+    fs::create_dir_all(output_dir)?;
+    let run_result = (|| -> Result<Value> {
+        let session = connect_with(&config.connection, 10)?;
+        validate_particle_display_geometry(&session)?;
+        restart_launcher_with_one_shot_env(
+            &session,
+            LauncherRestartOptions {
+                env_vars: vec![
+                    ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+                    ("MISTER_SCREENSAVER_START_ACTIVE".into(), "1".into()),
+                    (
+                        "MISTER_SCREENSAVER_RENDERER".into(),
+                        "particle-demos".into(),
+                    ),
+                    ("MISTER_PARTICLE_DEMO".into(), demo_number.to_string()),
+                    ("MISTER_PARTICLE_SEED".into(), "827141709451".into()),
+                    ("MISTER_FIREWORK_TIME_MS".into(), time_ms.to_string()),
+                    ("MISTER_PARTICLE_HUD".into(), "off".into()),
+                ],
+                timeout_secs: 45,
+                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+                ..LauncherRestartOptions::default()
+            },
+        )?;
+        drop(session);
+        let telemetry = agent_telemetry_for_duration(&config.agent, Duration::from_secs(5))?;
+        let frames = telemetry
+            .iter()
+            .filter_map(|sample| {
+                sample
+                    .pointer("/launcher/frame_budget/recent_frames")
+                    .and_then(Value::as_array)
+            })
+            .flatten()
+            .filter(|frame| frame.get("screensaver_active").and_then(Value::as_bool) == Some(true))
+            .collect::<Vec<_>>();
+        if frames.iter().any(|frame| {
+            frame.get("screensaver_renderer").and_then(Value::as_str) == Some("particle-magik")
+        }) {
+            return Err(
+                "firework visual capture observed the forbidden particle-magik renderer".into(),
+            );
+        }
+        let first_active_renderer = frames
+            .first()
+            .and_then(|frame| frame.get("screensaver_renderer"))
+            .and_then(Value::as_str)
+            .ok_or("firework visual capture observed no active screensaver frame")?;
+        if first_active_renderer != "particle-demos" {
+            return Err(format!(
+                "firework visual capture started with {first_active_renderer:?}, expected particle-demos"
+            )
+            .into());
+        }
+        if !frames.iter().any(|frame| {
+            frame.get("screensaver_renderer").and_then(Value::as_str) == Some("particle-demos")
+                && frame.get("particle_preset").and_then(Value::as_str) == Some(label)
+        }) {
+            return Err(format!(
+                "firework visual capture did not observe demo {demo_number:02} {label}"
+            )
+            .into());
+        }
+        let capture = request_framebuffer_png_at(&config.agent)?;
+        validate_visible_launcher_capture(&capture)?;
+        let filename = format!("{demo_number:02}-{label}-{time_ms}ms.png");
+        let path = output_dir.join(&filename);
+        fs::write(&path, &capture.png)?;
+        Ok(json!({
+            "schema": "mister-magik-firework-visual-v1",
+            "demo_number": demo_number,
+            "firework": label,
+            "time_ms": time_ms,
+            "seed": 827141709451_u64,
+            "first_active_renderer": first_active_renderer,
+            "particle_magik_observed": false,
+            "capture": filename,
+            "source": capture_source_label(&capture.result)?,
+        }))
+    })();
+    let cleanup_result = restore_installed_screensaver_profile(config);
+    let summary = match (run_result, cleanup_result) {
+        (Ok(summary), Ok(())) => summary,
+        (Err(error), Ok(())) => return Err(error),
+        (Ok(_), Err(error)) => {
+            return Err(format!("firework visual cleanup failed: {error}").into());
+        }
+        (Err(run_error), Err(cleanup_error)) => {
+            return Err(
+                format!("{run_error}; firework visual cleanup failed: {cleanup_error}").into(),
+            );
+        }
+    };
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
 }
 
 fn summarize_particle_trial(

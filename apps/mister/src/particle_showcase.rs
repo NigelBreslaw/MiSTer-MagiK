@@ -377,6 +377,8 @@ pub struct ParticleShowcaseRenderer {
     demo: ParticleDemoKind,
     demo_started_at: Duration,
     firework_renderer: Option<FireworkRenderer>,
+    firework_capture_time: Option<Duration>,
+    hud_visible: bool,
     pool: ParticleShowcasePool,
     commands: Vec<u32>,
     previous_commands: Vec<u32>,
@@ -481,6 +483,8 @@ impl ParticleShowcaseRenderer {
             demo: config.initial_demo,
             demo_started_at: Duration::ZERO,
             firework_renderer: None,
+            firework_capture_time: None,
+            hud_visible: true,
             pool,
             commands,
             previous_commands,
@@ -604,6 +608,15 @@ impl ParticleShowcaseRenderer {
         }
     }
 
+    pub fn configure_firework_capture(
+        &mut self,
+        capture_time: Option<Duration>,
+        hud_visible: bool,
+    ) {
+        self.firework_capture_time = capture_time;
+        self.hud_visible = hud_visible;
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn render_firework(
         &mut self,
@@ -621,11 +634,15 @@ impl ParticleShowcaseRenderer {
             .expect("firework renderer checked before dispatch");
         let duration_ms = renderer.duration().as_millis().max(1);
         let logical_ms = demo_elapsed.as_millis() % duration_ms;
-        let logical_elapsed = Duration::from_millis(logical_ms as u64);
+        let logical_elapsed = self
+            .firework_capture_time
+            .unwrap_or_else(|| Duration::from_millis(logical_ms as u64));
         let raster_started = Instant::now();
         let raster_cpu_started = thread_cpu_time_us();
         let stats = renderer.render(destination, logical_elapsed)?;
-        self.draw_hud(destination, &mut dirty_offsets);
+        if self.hud_visible {
+            self.draw_hud(destination, &mut dirty_offsets);
+        }
         let raster_us = raster_started.elapsed().as_micros();
         let raster_cpu_us = elapsed_thread_cpu_us(raster_cpu_started);
         self.dirty_slots[slot].offsets = dirty_offsets;
