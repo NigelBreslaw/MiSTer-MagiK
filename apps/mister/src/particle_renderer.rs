@@ -25,6 +25,7 @@ const VISUAL_PALETTE: [Rgb565Pixel; 4] = [
 ];
 const HIDDEN_SLOT_COUNT: usize = 2;
 const FULL_CLEAR_DIRTY_DIVISOR: usize = 4;
+const LOOKAHEAD_ELAPSED_TOLERANCE_US: u128 = 64;
 const COMMAND_OFFSET_BITS: u32 = 20;
 const COMMAND_OFFSET_MASK: u32 = (1 << COMMAND_OFFSET_BITS) - 1;
 const COMMAND_PALETTE_SHIFT: u32 = COMMAND_OFFSET_BITS;
@@ -323,12 +324,12 @@ impl ParticlePreparationPipeline {
             self.send(elapsed)?;
             self.receive()?
         };
-        if prepared.elapsed != elapsed {
+        if !lookahead_elapsed_matches(prepared.elapsed, elapsed) {
             self.spare_commands = Some(std::mem::take(&mut prepared.commands));
             self.send(elapsed)?;
             prepared = self.receive()?;
         }
-        debug_assert_eq!(prepared.elapsed, elapsed);
+        debug_assert!(lookahead_elapsed_matches(prepared.elapsed, elapsed));
         std::mem::swap(commands, &mut prepared.commands);
         self.spare_commands = Some(std::mem::take(&mut prepared.commands));
         if let Some(next_elapsed) = next_elapsed.filter(|next| *next > elapsed) {
@@ -455,6 +456,10 @@ fn particle_pipeline_requested() -> bool {
             std::env::var("MISTER_PARTICLE_PIPELINE").ok().as_deref(),
             Some("0" | "off" | "false" | "no")
         )
+}
+
+fn lookahead_elapsed_matches(prepared: Duration, actual: Duration) -> bool {
+    prepared.as_micros().abs_diff(actual.as_micros()) <= LOOKAHEAD_ELAPSED_TOLERANCE_US
 }
 
 fn pack_visual_command(offset: u32, palette_index: usize, neighbor: bool) -> u32 {
@@ -1028,5 +1033,23 @@ mod tests {
         assert_eq!(second.elapsed, second_elapsed);
         assert_eq!(commands.len(), second.visible);
         assert_ne!(commands, first_commands);
+    }
+
+    #[test]
+    fn lookahead_accepts_period_estimation_jitter_but_not_a_skipped_refresh() {
+        let elapsed = Duration::from_micros(1_000_000);
+        assert!(lookahead_elapsed_matches(elapsed, elapsed));
+        assert!(lookahead_elapsed_matches(
+            elapsed + Duration::from_micros(64),
+            elapsed
+        ));
+        assert!(!lookahead_elapsed_matches(
+            elapsed + Duration::from_micros(65),
+            elapsed
+        ));
+        assert!(!lookahead_elapsed_matches(
+            elapsed + Duration::from_micros(16_663),
+            elapsed
+        ));
     }
 }
