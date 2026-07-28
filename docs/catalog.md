@@ -129,7 +129,11 @@ without walking `_Arcade` or opening every MRA. Missing, corrupt, oversized, or
 stale indexes fall back to the existing foreground Arcade scan. When that
 bounded projection is acknowledged, the launcher can reveal Home and Arcade.
 System discoveries update scanning tiles while the complete authoritative scan
-continues.
+continues. These progressive discovery tiles are presentation-only placeholders:
+they cannot schedule a system-shard read until a valid registry generation is
+authoritative. Publishing that registry reconciles and removes non-authoritative
+placeholders before lazy hydration or taxonomy synchronization can observe the
+new generation.
 
 The retained index is generated locally from each MiSTer's canonical catalog;
 it is not a catalog of one developer's paths and is not assumed to match every

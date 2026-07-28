@@ -177,6 +177,9 @@ impl LauncherScheduler {
         reason: &'static str,
         now: Instant,
     ) -> bool {
+        if self.system_shard_generation.is_none() {
+            return false;
+        }
         if self.system_shard_attempted.contains(&system_id) {
             if let Some(queued) = self
                 .system_shard_queue
@@ -832,9 +835,10 @@ mod tests {
     fn system_shard_requests_deduplicate_and_upgrade_priority() {
         let (_tx, rx) = mpsc::channel();
         let mut scheduler = LauncherScheduler::new(false);
+        scheduler.system_shard_generation = Some("generation-a".to_string());
         scheduler.system_shard = SystemShardJobState::Running {
             system_id: "active".to_string(),
-            generation: None,
+            generation: Some("generation-a".to_string()),
             receiver: rx,
         };
         let now = Instant::now();
@@ -865,9 +869,10 @@ mod tests {
     fn urgent_system_shard_request_ranks_ahead_of_prefetch() {
         let (_tx, rx) = mpsc::channel();
         let mut scheduler = LauncherScheduler::new(false);
+        scheduler.system_shard_generation = Some("generation-a".to_string());
         scheduler.system_shard = SystemShardJobState::Running {
             system_id: "active".to_string(),
-            generation: None,
+            generation: Some("generation-a".to_string()),
             receiver: rx,
         };
         let now = Instant::now();
@@ -896,12 +901,12 @@ mod tests {
     fn system_shard_generation_change_clears_attempts_and_speculative_queue() {
         let (_tx, rx) = mpsc::channel();
         let mut scheduler = LauncherScheduler::new(false);
+        scheduler.system_shard_generation = Some("generation-a".to_string());
         scheduler.system_shard = SystemShardJobState::Running {
             system_id: "active".to_string(),
-            generation: None,
+            generation: Some("generation-a".to_string()),
             receiver: rx,
         };
-        let _ = scheduler.set_system_shard_generation(Some("generation-a"));
         assert!(scheduler.request_system_shard(
             "c64".to_string(),
             SystemShardPriority::Prefetch,
@@ -919,9 +924,10 @@ mod tests {
     fn explicit_retry_requeues_a_failed_attempt_as_urgent() {
         let (_tx, rx) = mpsc::channel();
         let mut scheduler = LauncherScheduler::new(false);
+        scheduler.system_shard_generation = Some("generation-a".to_string());
         scheduler.system_shard = SystemShardJobState::Running {
             system_id: "active".to_string(),
-            generation: None,
+            generation: Some("generation-a".to_string()),
             receiver: rx,
         };
         scheduler.system_shard_attempted.insert("c64".to_string());
@@ -932,6 +938,20 @@ mod tests {
             scheduler.system_shard_queue[0].priority,
             SystemShardPriority::Urgent
         );
+    }
+
+    #[test]
+    fn system_shard_request_requires_authoritative_generation() {
+        let mut scheduler = LauncherScheduler::new(false);
+
+        assert!(!scheduler.request_system_shard(
+            "c64".to_string(),
+            SystemShardPriority::Urgent,
+            "open",
+            Instant::now()
+        ));
+        assert!(scheduler.system_shard_queue.is_empty());
+        assert!(!scheduler.system_shard_attempted("c64"));
     }
 
     #[test]

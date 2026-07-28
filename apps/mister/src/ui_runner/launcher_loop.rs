@@ -1531,6 +1531,19 @@ fn catalog_taxonomy_sync_required(catalog_ready: bool, source: CatalogSource) ->
     !(catalog_ready && source == CatalogSource::NavigationProjection)
 }
 
+fn catalog_for_ready_source(
+    nav: &mut LauncherNav,
+    catalog: ArcadeCatalog,
+    source: CatalogSource,
+) -> ArcadeCatalog {
+    if source == CatalogSource::ShardedRegistry {
+        nav.catalog_build_finished(&catalog);
+        catalog
+    } else {
+        nav.catalog_with_build_shells(catalog)
+    }
+}
+
 #[cfg(test)]
 fn catalog_summary_seed_matches_sqlite(
     sqlite_path: &Path,
@@ -5865,7 +5878,7 @@ fn apply_catalog_session_effects(
                 publication_ack,
             } => {
                 let taxonomy_sync_required = catalog_taxonomy_sync_required(*catalog_ready, source);
-                *catalog = nav.catalog_with_build_shells(ready_catalog);
+                *catalog = catalog_for_ready_source(nav, ready_catalog, source);
                 *catalog_version = (*catalog_version).wrapping_add(1);
                 *catalog_ready = true;
                 *return_capsule_active = false;
@@ -6813,6 +6826,40 @@ mod tests {
             systems.push(arcade_system(*system_id, 1));
         }
         arcade_catalog(games, systems)
+    }
+
+    #[test]
+    fn authoritative_registry_reconciles_discovery_shells_before_taxonomy_sync() {
+        let mut nav = LauncherNav::new();
+        nav.catalog_system_discovered("snes");
+        nav.catalog_system_discovered("3do");
+        let authoritative = catalog_for_media_systems(&["snes"]);
+
+        let catalog =
+            catalog_for_ready_source(&mut nav, authoritative, CatalogSource::ShardedRegistry);
+        nav.sync_launcher_taxonomy(&catalog);
+
+        assert!(catalog.systems.iter().any(|system| system.id == "snes"));
+        assert!(catalog.systems.iter().all(|system| system.id != "3do"));
+        assert!(nav.open_menu(crate::launcher_taxonomy::CONSOLES_MENU_ID));
+        assert!(
+            nav.current_menu_items()
+                .iter()
+                .any(|item| item.id == "snes")
+        );
+        assert!(nav.current_menu_items().iter().all(|item| item.id != "3do"));
+    }
+
+    #[test]
+    fn progressive_catalog_retains_discovery_shells_until_registry_publish() {
+        let mut nav = LauncherNav::new();
+        nav.catalog_system_discovered("snes");
+        let bootstrap = catalog_for_media_systems(&["arcade"]);
+
+        let catalog =
+            catalog_for_ready_source(&mut nav, bootstrap, CatalogSource::NavigationProjection);
+
+        assert!(catalog.systems.iter().any(|system| system.id == "snes"));
     }
 
     fn summary_catalog_for_media_systems(system_ids: &[&str]) -> ArcadeCatalog {
