@@ -36,6 +36,8 @@ pub mod particle_engine;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 pub mod particle_renderer;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
+pub mod particle_showcase;
+#[cfg(any(feature = "ui", feature = "ui-preview"))]
 pub mod preview_transition;
 pub mod raw565;
 pub mod return_catalog_capsule;
