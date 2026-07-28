@@ -1372,7 +1372,7 @@ mod tests {
         already_advanced.step(Duration::from_millis(10_000));
         assert_eq!(transitioning.x, already_advanced.x);
         assert_eq!(transitioning.y, already_advanced.y);
-        assert_eq!(transitioning.z, already_advanced.z);
+        assert_eq!(transitioning.z_q7, already_advanced.z_q7);
     }
 
     #[cfg(not(target_arch = "arm"))]
