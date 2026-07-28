@@ -5,8 +5,12 @@
 mod macos {
     use mister_magik_fb::arcade_catalog::ArcadeGameEntry;
     use mister_magik_fb::framebuffer::target::{FramebufferTargetGeometry, UiFrameTarget};
+    use mister_magik_fb::input_state::PadState;
+    use mister_magik_fb::launcher::{LauncherAction, LauncherNav, Screen};
+    use mister_magik_fb::launcher_presentation::LauncherBridgePresenter;
     use mister_magik_fb::particle_engine::{ParticleConfig, ParticlePreset};
     use mister_magik_fb::particle_renderer::ParticleRenderer;
+    use mister_magik_fb::ui_preview_fixtures::UiPreviewFixtures;
     use mister_magik_fb::visual_composition::{
         ArcadeVisualLayer, PreviewFrame, PreviewPixels, PreviewSurface, ScreenshotTileImage,
         ScreenshotTileWall, compose_preview_frame, hdmi_preview_rect,
@@ -56,12 +60,11 @@ mod macos {
         ui.set_crt_layout(false);
         let bridge = launcher.global::<MisterBridge>();
         initialize_bridge(&bridge);
-        apply_scenario(&launcher, Scenario::Home);
         launcher.show()?;
         slint_window.request_redraw();
 
         let mut application =
-            PreviewApplication::new(launcher, slint_window, fixed_time, Scenario::Home);
+            PreviewApplication::new(launcher, slint_window, fixed_time, Scenario::Home)?;
         application.select_scenario(options.scenario);
         if let Some(output) = options.output {
             for _ in 0..=options.frame {
@@ -99,9 +102,12 @@ mod macos {
         scenario: Scenario,
         selection: usize,
         settings_focused: bool,
+        launcher_nav: LauncherNav,
+        launcher_pad: PadState,
+        launcher_epoch: Instant,
+        bridge_presenter: LauncherBridgePresenter,
+        fixtures: UiPreviewFixtures,
         arcade_layer: ArcadeVisualLayer,
-        arcade_games: Vec<ArcadeGameEntry>,
-        preview_pixels: Vec<Rgb565Pixel>,
         particle_renderer: ParticleRenderer,
         tile_wall: ScreenshotTileWall,
         tile_images: Vec<ScreenshotTileImage>,
@@ -115,8 +121,27 @@ mod macos {
             slint_window: Rc<MisterSoftwareWindow>,
             fixed_time: Rc<Cell<Duration>>,
             scenario: Scenario,
-        ) -> Self {
-            Self {
+        ) -> Result<Self, Box<dyn Error>> {
+            let fixtures = UiPreviewFixtures::new()?;
+            let mut launcher_nav = LauncherNav::new();
+            launcher_nav.catalog_build_started();
+            for system_id in &fixtures.shell_system_ids {
+                launcher_nav.catalog_system_discovered(system_id);
+                launcher_nav.catalog_system_ready(system_id);
+            }
+            launcher_nav.sync_launcher_taxonomy(&fixtures.catalog);
+            launcher_nav.catalog_build_finished(&fixtures.catalog);
+            let tile_images = fixtures
+                .screenshots
+                .iter()
+                .map(|image| ScreenshotTileImage {
+                    pixels: image.pixels.clone(),
+                    w: image.width,
+                    h: image.height,
+                    stride: image.stride,
+                })
+                .collect();
+            let mut application = Self {
                 launcher,
                 slint_window,
                 fixed_time,
@@ -130,9 +155,12 @@ mod macos {
                 scenario,
                 selection: 0,
                 settings_focused: false,
+                launcher_nav,
+                launcher_pad: PadState::default(),
+                launcher_epoch: Instant::now(),
+                bridge_presenter: LauncherBridgePresenter::default(),
+                fixtures,
                 arcade_layer: ArcadeVisualLayer::new(FRAME_WIDTH, FRAME_HEIGHT),
-                arcade_games: fixture_arcade_games(),
-                preview_pixels: fixture_preview_pixels(160, 120),
                 particle_renderer: ParticleRenderer::new_magik(ParticleConfig {
                     count: 16_384,
                     width: FRAME_WIDTH,
@@ -142,10 +170,12 @@ mod macos {
                 })
                 .expect("create production particle screensaver"),
                 tile_wall: ScreenshotTileWall::new(FRAME_WIDTH, FRAME_HEIGHT),
-                tile_images: fixture_tile_images(),
+                tile_images,
                 screensaver_elapsed: Duration::ZERO,
                 screensaver_paused: false,
-            }
+            };
+            application.select_scenario(scenario);
+            Ok(application)
         }
 
         fn create_window(&mut self, event_loop: &ActiveEventLoop) {
@@ -180,9 +210,11 @@ mod macos {
             self.scenario = scenario;
             self.selection = 0;
             self.settings_focused = false;
+            if scenario.uses_launcher_navigation() {
+                self.configure_launcher_screen(scenario);
+            }
             apply_scenario(&self.launcher, scenario);
             if scenario == Scenario::Arcade {
-                apply_arcade_bridge(&self.launcher, &self.arcade_games, self.selection);
                 self.arcade_layer.invalidate();
             }
             if matches!(scenario, Scenario::ParticleScreensaver) {
@@ -193,7 +225,11 @@ mod macos {
                 self.tile_wall.invalidate();
                 self.screensaver_elapsed = Duration::ZERO;
             }
-            self.update_selection();
+            if scenario.uses_launcher_navigation() {
+                self.sync_launcher_navigation();
+            } else {
+                self.update_selection();
+            }
             if let Some(window) = self.native_window.as_ref() {
                 window.set_title(&self.window_title());
                 window.request_redraw();
@@ -207,7 +243,7 @@ mod macos {
                 Scenario::About => 2,
                 Scenario::Licenses => 2,
                 Scenario::ScreensaverSettings => 3,
-                Scenario::Arcade => self.arcade_games.len(),
+                Scenario::Arcade => self.fixtures.arcade_games().len(),
                 _ => 1,
             };
             self.selection = self
@@ -227,7 +263,11 @@ mod macos {
             bridge.set_screensaver_settings_selected(self.selection as i32);
             bridge.set_confirm_selected(self.selection.min(1) as i32);
             if self.scenario == Scenario::Arcade {
-                apply_arcade_bridge(&self.launcher, &self.arcade_games, self.selection);
+                apply_arcade_fixture_bridge(
+                    &self.launcher,
+                    self.fixtures.arcade_games(),
+                    self.selection,
+                );
             }
             if matches!(
                 self.scenario,
@@ -306,7 +346,93 @@ mod macos {
             }
         }
 
+        fn configure_launcher_screen(&mut self, scenario: Scenario) {
+            match scenario {
+                Scenario::Home => self.launcher_nav.go_root(),
+                Scenario::Arcade => {
+                    self.launcher_nav
+                        .open_default_arcade(&self.fixtures.catalog);
+                }
+                Scenario::Settings => self.launcher_nav.screen = Screen::Settings,
+                Scenario::Controller => self.launcher_nav.screen = Screen::Controller,
+                Scenario::About => self.launcher_nav.screen = Screen::About,
+                Scenario::Licenses => self.launcher_nav.screen = Screen::Licenses,
+                Scenario::Info => self.launcher_nav.screen = Screen::Info,
+                Scenario::ScreensaverSettings => self.launcher_nav.screen = Screen::Screensaver,
+                _ => {}
+            }
+            self.launcher_pad = PadState::default();
+            self.launcher_nav.absorb_input(&self.launcher_pad);
+        }
+
+        fn handle_launcher_key(&mut self, code: KeyCode, state: ElementState) -> bool {
+            let pressed = state == ElementState::Pressed;
+            let field = match code {
+                KeyCode::ArrowUp => Some(&mut self.launcher_pad.dpad_up),
+                KeyCode::ArrowDown => Some(&mut self.launcher_pad.dpad_down),
+                KeyCode::ArrowLeft => Some(&mut self.launcher_pad.dpad_left),
+                KeyCode::ArrowRight => Some(&mut self.launcher_pad.dpad_right),
+                KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => {
+                    Some(&mut self.launcher_pad.btn_a)
+                }
+                KeyCode::Escape | KeyCode::Backspace => Some(&mut self.launcher_pad.btn_b),
+                KeyCode::Home => Some(&mut self.launcher_pad.btn_home),
+                _ => None,
+            };
+            if let Some(field) = field {
+                *field = pressed;
+                self.launcher_pad.rebuild_pressed_now();
+                true
+            } else {
+                false
+            }
+        }
+
+        fn tick_launcher_navigation(&mut self) {
+            if !self.scenario.uses_launcher_navigation() {
+                return;
+            }
+            let frame_now = self.launcher_epoch + self.fixed_time.get();
+            let event = self.launcher_nav.handle_input(
+                &self.launcher_pad,
+                frame_now,
+                &self.fixtures.catalog,
+            );
+            if let Some(event) = event {
+                match event.action {
+                    LauncherAction::PreviewScreensaver => {}
+                    LauncherAction::LaunchGame => {}
+                    _ => {}
+                }
+            }
+            let previous = self.scenario;
+            self.scenario = Scenario::from_screen(self.launcher_nav.screen);
+            self.sync_launcher_navigation();
+            if self.scenario != previous
+                && let Some(window) = self.native_window.as_ref()
+            {
+                window.set_title(&self.window_title());
+            }
+        }
+
+        fn sync_launcher_navigation(&mut self) {
+            self.bridge_presenter.sync(
+                &self.launcher,
+                &self.launcher_nav,
+                &self.fixtures.catalog,
+                Some(1),
+                false,
+            );
+            apply_arcade_fixture_bridge(
+                &self.launcher,
+                self.fixtures.arcade_games(),
+                self.launcher_nav.arcade.selected,
+            );
+            self.slint_window.request_redraw();
+        }
+
         fn compose_frame(&mut self) {
+            self.tick_launcher_navigation();
             slint::platform::update_timers_and_animations();
             self.slint_window.request_redraw();
             self.slint_window.draw_if_needed(|renderer| {
@@ -316,30 +442,47 @@ mod macos {
                 );
             });
             if self.scenario == Scenario::Arcade {
+                let games = self
+                    .launcher_nav
+                    .active_collection_id()
+                    .map(|collection| {
+                        self.launcher_nav
+                            .active_arcade_game_view(&self.fixtures.catalog, collection)
+                    })
+                    .unwrap_or_else(mister_magik_fb::arcade_catalog::ArcadeGameView::empty);
                 self.arcade_layer.compose(
                     &mut self.frame_target,
-                    &self.arcade_games,
-                    self.selection,
+                    games,
+                    self.launcher_nav.arcade.selected,
+                    self.launcher_nav.arcade.visual_index,
                     true,
                 );
-                compose_preview_frame(
-                    self.frame_target.cached_565_mut(),
-                    FRAME_WIDTH,
-                    FRAME_HEIGHT,
-                    hdmi_preview_rect(FRAME_WIDTH, FRAME_HEIGHT),
-                    PreviewFrame {
-                        pixels: PreviewPixels::Rgb565 {
-                            pixels: &self.preview_pixels,
-                            stride_pixels: 160,
+                let preview = self
+                    .fixtures
+                    .arcade_games()
+                    .get(self.launcher_nav.arcade.selected)
+                    .and_then(|game| self.fixtures.screenshot(&game.preview_asset_key))
+                    .or_else(|| self.fixtures.screenshots.first());
+                if let Some(preview) = preview {
+                    compose_preview_frame(
+                        self.frame_target.cached_565_mut(),
+                        FRAME_WIDTH,
+                        FRAME_HEIGHT,
+                        hdmi_preview_rect(FRAME_WIDTH, FRAME_HEIGHT),
+                        PreviewFrame {
+                            pixels: PreviewPixels::Rgb565 {
+                                pixels: &preview.pixels,
+                                stride_pixels: preview.stride,
+                            },
+                            source_width: preview.width,
+                            source_height: preview.height,
+                            display_width: 320,
+                            display_height: 240,
                         },
-                        source_width: 160,
-                        source_height: 120,
-                        display_width: 320,
-                        display_height: 240,
-                    },
-                    true,
-                    PreviewSurface::full(FRAME_WIDTH),
-                );
+                        true,
+                        PreviewSurface::full(FRAME_WIDTH),
+                    );
+                }
             } else if self.scenario == Scenario::ParticleScreensaver {
                 self.particle_renderer
                     .render(
@@ -425,11 +568,16 @@ mod macos {
             match event {
                 WindowEvent::CloseRequested => event_loop.exit(),
                 WindowEvent::RedrawRequested => self.render(),
-                WindowEvent::KeyboardInput { event, .. }
-                    if event.state == ElementState::Pressed && !event.repeat =>
-                {
+                WindowEvent::KeyboardInput { event, .. } if !event.repeat => {
                     if let PhysicalKey::Code(code) = event.physical_key {
-                        self.handle_key(code);
+                        if event.state == ElementState::Pressed && shortcut_scenario(code).is_some()
+                        {
+                            self.handle_key(code);
+                        } else if self.scenario.uses_launcher_navigation() {
+                            self.handle_launcher_key(code, event.state);
+                        } else if event.state == ElementState::Pressed {
+                            self.handle_key(code);
+                        }
                     }
                 }
                 WindowEvent::Resized(_) => {
@@ -472,6 +620,33 @@ mod macos {
     }
 
     impl Scenario {
+        fn uses_launcher_navigation(self) -> bool {
+            matches!(
+                self,
+                Self::Home
+                    | Self::Arcade
+                    | Self::Settings
+                    | Self::Controller
+                    | Self::About
+                    | Self::Licenses
+                    | Self::Info
+                    | Self::ScreensaverSettings
+            )
+        }
+
+        fn from_screen(screen: Screen) -> Self {
+            match screen {
+                Screen::Home => Self::Home,
+                Screen::Controller => Self::Controller,
+                Screen::Arcade => Self::Arcade,
+                Screen::Settings => Self::Settings,
+                Screen::About => Self::About,
+                Screen::Licenses => Self::Licenses,
+                Screen::Info => Self::Info,
+                Screen::Screensaver => Self::ScreensaverSettings,
+            }
+        }
+
         fn parse(value: &str) -> Option<Self> {
             match value.trim().to_ascii_lowercase().replace('_', "-").as_str() {
                 "home" => Some(Self::Home),
@@ -896,7 +1071,11 @@ mod macos {
         ))
     }
 
-    fn apply_arcade_bridge(launcher: &Launcher, games: &[ArcadeGameEntry], selected: usize) {
+    fn apply_arcade_fixture_bridge(
+        launcher: &Launcher,
+        games: &[ArcadeGameEntry],
+        selected: usize,
+    ) {
         let bridge = launcher.global::<MisterBridge>();
         bridge.set_active_system_title("Arcade".into());
         bridge.set_active_system_count(games.len() as i32);
@@ -914,8 +1093,6 @@ mod macos {
                 })
                 .collect::<Vec<_>>(),
         )));
-        bridge.set_arcade_selected(selected as i32);
-        bridge.set_arcade_scroll_y((selected as i32 * 48).saturating_sub(5 * 48));
         bridge.set_arcade_list_x(8);
         bridge.set_arcade_list_y(56);
         bridge.set_arcade_list_width(510);
@@ -938,92 +1115,6 @@ mod macos {
         bridge.set_arcade_preview_box_y(92);
         bridge.set_arcade_preview_box_width(320);
         bridge.set_arcade_preview_box_height(320);
-    }
-
-    fn fixture_arcade_games() -> Vec<ArcadeGameEntry> {
-        const TITLES: [&str; 16] = [
-            "1942",
-            "Alien Syndrome",
-            "Bubble Bobble",
-            "Centipede",
-            "Donkey Kong",
-            "Elevator Action",
-            "Frogger",
-            "Galaga",
-            "Hyper Sports",
-            "Ikari Warriors",
-            "Joust",
-            "Klax",
-            "Metal Slug",
-            "Out Run",
-            "Pac-Man",
-            "R-Type",
-        ];
-        (0..48)
-            .map(|index| {
-                let title = if index < TITLES.len() {
-                    TITLES[index].to_string()
-                } else {
-                    format!("Fixture Arcade Game {:02}", index + 1)
-                };
-                ArcadeGameEntry {
-                    title: Arc::from(title),
-                    mra_path: Arc::from(format!("/fixture/{index:02}.mra")),
-                    preview_archive_path: Arc::from("/fixture/arcade.zip"),
-                    preview_asset_key: Arc::from(format!("fixture-{index:02}")),
-                    has_preview: index % 7 != 0,
-                    system_id: Arc::from("arcade"),
-                    year: Some(1980 + (index % 20) as u16),
-                    manufacturer: Arc::from(if index % 2 == 0 { "Sega" } else { "Namco" }),
-                    players: Some(if index % 3 == 0 { 2 } else { 1 }),
-                    control: Arc::from("Joystick"),
-                    is_new: index < 3,
-                }
-            })
-            .collect()
-    }
-
-    fn fixture_preview_pixels(width: usize, height: usize) -> Vec<Rgb565Pixel> {
-        let mut pixels = vec![Rgb565Pixel(0); width * height];
-        for y in 0..height {
-            for x in 0..width {
-                let red = ((x * 31) / width) as u16;
-                let green = ((y * 63) / height) as u16;
-                let checker = ((x / 12) + (y / 12)) % 2;
-                let blue = if checker == 0 { 8 } else { 28 };
-                pixels[y * width + x] = Rgb565Pixel((red << 11) | (green << 5) | blue);
-            }
-        }
-        pixels
-    }
-
-    fn fixture_tile_images() -> Vec<ScreenshotTileImage> {
-        (0..18)
-            .map(|index| {
-                let width = 160;
-                let height = 120;
-                let mut pixels = fixture_preview_pixels(width, height);
-                let accent = Rgb565Pixel(
-                    (((index * 5) as u16 & 0x1f) << 11)
-                        | (((index * 11) as u16 & 0x3f) << 5)
-                        | ((index * 17) as u16 & 0x1f),
-                );
-                for y in 20usize..100 {
-                    let inset = y.abs_diff(60) / 2;
-                    for x in (24 + inset)..(136 - inset) {
-                        if x % 7 < 3 {
-                            pixels[y * width + x] = accent;
-                        }
-                    }
-                }
-                ScreenshotTileImage {
-                    pixels,
-                    w: width,
-                    h: height,
-                    stride: width,
-                }
-            })
-            .collect()
     }
 
     fn scale_rgb565_nearest(

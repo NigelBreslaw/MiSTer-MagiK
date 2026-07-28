@@ -3,7 +3,7 @@
 
 //! Host-neutral composition helpers shared by the device and visual preview.
 
-use crate::arcade_catalog::{ArcadeGameEntry, ArcadeGameView};
+use crate::arcade_catalog::ArcadeGameView;
 use crate::arcade_list_renderer::{ArcadeListGeometry, ArcadeListRenderer, ArcadeListUpdate};
 use crate::framebuffer::target::{DirtyRect, UiFrameTarget, blend_565};
 use slint::platform::software_renderer::Rgb565Pixel;
@@ -24,16 +24,12 @@ impl ArcadeVisualLayer {
     pub fn compose(
         &mut self,
         target: &mut UiFrameTarget,
-        games: &[ArcadeGameEntry],
+        games: ArcadeGameView<'_>,
         selected: usize,
+        visual_index: f32,
         force: bool,
     ) -> Option<DirtyRect> {
-        let update = self.renderer.draw(
-            ArcadeGameView::Contiguous(games),
-            selected,
-            selected as f32,
-            force,
-        )?;
+        let update = self.renderer.draw(games, selected, visual_index, force)?;
         let rect = match update {
             ArcadeListUpdate::Full(rect) | ArcadeListUpdate::Scroll { rect, .. } => rect,
         };
