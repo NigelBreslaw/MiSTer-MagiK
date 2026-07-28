@@ -17,6 +17,12 @@ const DEPTH_EXTENT: f32 = 64.0;
 const DEPTH_FIXED_SCALE: f32 = 128.0;
 const DEPTH_FIXED_SCALE_RECIP: f32 = 1.0 / DEPTH_FIXED_SCALE;
 const FOCAL_LENGTH: f32 = 720.0;
+const RECIPROCAL_TABLE_MIN: f32 = 192.0;
+const RECIPROCAL_TABLE_MAX: f32 = 1_248.0;
+const RECIPROCAL_TABLE_STEP: f32 = 4.0;
+const RECIPROCAL_TABLE_STEP_RECIP: f32 = 1.0 / RECIPROCAL_TABLE_STEP;
+const RECIPROCAL_TABLE_COUNT: usize =
+    ((RECIPROCAL_TABLE_MAX - RECIPROCAL_TABLE_MIN) / RECIPROCAL_TABLE_STEP) as usize + 1;
 const TARGET_FIXED_SCALE: f32 = 16.0;
 const TARGET_FIXED_SCALE_RECIP: f32 = 1.0 / TARGET_FIXED_SCALE;
 const TARGET_DEPTH_Q2_HALF_EXTENT: i8 = 40;
@@ -198,6 +204,7 @@ pub struct ParticleEngine {
     projection_center_y: f32,
     projection_max_x: f32,
     projection_max_y: f32,
+    reciprocal_table: [f32; RECIPROCAL_TABLE_COUNT],
     rotation_y_radians: f32,
     rotation_y_sin: f32,
     rotation_y_cos: f32,
@@ -217,6 +224,7 @@ pub struct ParticleEngine {
     phase: ParticlePhase,
     use_neon: bool,
     use_neon_projection: bool,
+    use_table_projection: bool,
     use_alternating_cohorts: bool,
 }
 
@@ -242,6 +250,9 @@ impl ParticleEngine {
             projection_center_y: config.height as f32 * 0.5,
             projection_max_x: config.width as f32 - 0.5,
             projection_max_y: config.height as f32 - 0.5,
+            reciprocal_table: std::array::from_fn(|index| {
+                1.0 / (RECIPROCAL_TABLE_MIN + index as f32 * RECIPROCAL_TABLE_STEP)
+            }),
             rotation_y_radians: 0.0,
             rotation_y_sin: 0.0,
             rotation_y_cos: 1.0,
@@ -261,6 +272,7 @@ impl ParticleEngine {
             phase: ParticlePhase::Static,
             use_neon: particle_neon_enabled(),
             use_neon_projection: particle_neon_projection_enabled(),
+            use_table_projection: particle_table_projection_enabled(),
             use_alternating_cohorts: particle_alternating_cohorts_enabled(),
         };
         engine.initialize_particles(&target_points)?;
@@ -346,10 +358,25 @@ impl ParticleEngine {
         if denominator <= 1.0 {
             return None;
         }
-        let scale = FOCAL_LENGTH / denominator;
-        let screen_x = self.projection_center_x + rotated_x * scale;
-        let screen_y =
-            self.projection_center_y + (self.y[index] - self.projection_center_y) * scale;
+        let relative_y = self.y[index] - self.projection_center_y;
+        let (mut scale, scale_error) = self.projection_scale(denominator);
+        let mut screen_x = self.projection_center_x + rotated_x * scale;
+        let mut screen_y = self.projection_center_y + relative_y * scale;
+        if scale_error > 0.0
+            && (projection_coordinate_needs_exact(
+                screen_x,
+                self.projection_max_x,
+                rotated_x.abs() * scale_error,
+            ) || projection_coordinate_needs_exact(
+                screen_y,
+                self.projection_max_y,
+                relative_y.abs() * scale_error,
+            ))
+        {
+            scale = FOCAL_LENGTH / denominator;
+            screen_x = self.projection_center_x + rotated_x * scale;
+            screen_y = self.projection_center_y + relative_y * scale;
+        }
         if screen_x <= -0.5
             || screen_y <= -0.5
             || screen_x >= self.projection_max_x
@@ -402,6 +429,8 @@ impl ParticleEngine {
     pub const fn projection_backend_label(&self) -> &'static str {
         if self.use_neon_projection {
             "armv7-neon-corrected"
+        } else if self.use_table_projection {
+            "scalar-table-corrected"
         } else {
             "scalar-exact"
         }
@@ -638,6 +667,28 @@ impl ParticleEngine {
         f32::from(self.z_q7[index]) * DEPTH_FIXED_SCALE_RECIP
     }
 
+    #[inline(always)]
+    fn projection_scale(&self, denominator: f32) -> (f32, f32) {
+        if !self.use_table_projection
+            || !(RECIPROCAL_TABLE_MIN..RECIPROCAL_TABLE_MAX).contains(&denominator)
+        {
+            return (FOCAL_LENGTH / denominator, 0.0);
+        }
+        let table_position = (denominator - RECIPROCAL_TABLE_MIN) * RECIPROCAL_TABLE_STEP_RECIP;
+        let index = table_position as usize;
+        let fraction = table_position - index as f32;
+        let lower_reciprocal = self.reciprocal_table[index];
+        let reciprocal =
+            lower_reciprocal + (self.reciprocal_table[index + 1] - lower_reciprocal) * fraction;
+        let lower_denominator = RECIPROCAL_TABLE_MIN + index as f32 * RECIPROCAL_TABLE_STEP;
+        let reciprocal_error_bound = RECIPROCAL_TABLE_STEP * RECIPROCAL_TABLE_STEP
+            / (4.0 * lower_denominator * lower_denominator * lower_denominator);
+        (
+            FOCAL_LENGTH * reciprocal,
+            FOCAL_LENGTH * reciprocal_error_bound,
+        )
+    }
+
     #[cfg(test)]
     #[inline(always)]
     fn target_depth(&self, index: usize) -> f32 {
@@ -660,6 +711,13 @@ fn particle_neon_projection_enabled() -> bool {
 }
 
 #[cfg(target_arch = "arm")]
+fn particle_table_projection_enabled() -> bool {
+    std::env::var("MISTER_PARTICLE_PROJECTION")
+        .ok()
+        .is_none_or(|value| value.trim().eq_ignore_ascii_case("table"))
+}
+
+#[cfg(target_arch = "arm")]
 fn particle_alternating_cohorts_enabled() -> bool {
     std::env::var("MISTER_PARTICLE_COHORTS")
         .ok()
@@ -673,6 +731,11 @@ const fn particle_neon_enabled() -> bool {
 
 #[cfg(not(target_arch = "arm"))]
 const fn particle_neon_projection_enabled() -> bool {
+    false
+}
+
+#[cfg(not(target_arch = "arm"))]
+const fn particle_table_projection_enabled() -> bool {
     false
 }
 
@@ -910,6 +973,22 @@ fn rotate_xz(x: f32, z: f32, sin: f32, cos: f32) -> (f32, f32) {
 }
 
 #[inline(always)]
+fn projection_coordinate_needs_exact(value: f32, maximum: f32, error: f32) -> bool {
+    if error >= 0.5 {
+        return true;
+    }
+    if (value + 0.5).abs() <= error || (value - maximum).abs() <= error {
+        return true;
+    }
+    let shifted = value + 0.5;
+    if shifted <= 0.0 || value >= maximum {
+        return false;
+    }
+    let fraction = shifted - shifted as i32 as f32;
+    fraction <= error || fraction >= 1.0 - error
+}
+
+#[inline(always)]
 fn wrap_coordinate(value: f32, extent: f32) -> f32 {
     if value < 0.0 {
         let wrapped = value + extent;
@@ -1125,6 +1204,23 @@ mod tests {
                 assert_eq!(unsafe { offset.assume_init() }, expected);
             }
             assert_eq!(visible, expected_visible);
+        }
+    }
+
+    #[test]
+    fn corrected_reciprocal_table_preserves_projected_pixels() {
+        let mut engine = engine(1_024);
+        for milliseconds in [0, 2_000, 4_000, 5_000, 6_000, 7_000, 9_000] {
+            engine.step(Duration::from_millis(milliseconds));
+            engine.use_table_projection = false;
+            let exact = (0..engine.particle_count())
+                .map(|index| engine.project(index))
+                .collect::<Vec<_>>();
+            engine.use_table_projection = true;
+            let corrected = (0..engine.particle_count())
+                .map(|index| engine.project(index))
+                .collect::<Vec<_>>();
+            assert_eq!(corrected, exact, "projection differed at {milliseconds} ms");
         }
     }
 
