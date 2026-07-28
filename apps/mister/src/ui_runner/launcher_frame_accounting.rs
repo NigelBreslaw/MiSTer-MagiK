@@ -21,6 +21,8 @@ const FRAME_ANALYTICS_LEASE_PATH: &str = "/tmp/mister-magik/realtime-frame-analy
 const FRAME_ANALYTICS_LEASE_MAX_AGE: Duration = Duration::from_secs(3);
 const FRAME_ANALYTICS_SAMPLE_CAP: usize = 75;
 const FRAME_SLOW_SAMPLE_CAP: usize = 32;
+const PARTICLE_STATUS_MIN_SLACK_US: u128 = 2_000;
+const PARTICLE_STATUS_MAX_DEFER: Duration = Duration::from_millis(250);
 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
 const PREVIEW_SCROLL_TRACE_FLUSH_ROWS: usize = 60;
 
@@ -1252,7 +1254,8 @@ impl LauncherFrameAccounting {
         startup_status: StartupRevealStatus,
     ) -> LauncherFrameFinishTraceTiming {
         let frame_finish_start = Instant::now();
-        let runtime_status_write_deferred = should_defer_runtime_status_write(frame);
+        let runtime_status_write_deferred =
+            should_defer_runtime_status_write(frame, self.last_status_write.elapsed());
         let status_write_now = frame.status_write_due && !runtime_status_write_deferred;
         if status_write_now {
             self.refresh_frame_analytics_mode();
@@ -2378,10 +2381,20 @@ fn frame_tail_slack_us(frame: &LauncherPresentedFrame) -> u128 {
     u128::from(frame.vsync_period_us).saturating_sub(frame_wall_us)
 }
 
-fn should_defer_runtime_status_write(_frame: &LauncherPresentedFrame) -> bool {
-    // Runtime status has no deferred flush path: suppressing this write would
-    // freeze heartbeat and presentation evidence while animation continued.
-    false
+fn should_defer_runtime_status_write(
+    frame: &LauncherPresentedFrame,
+    last_status_write_age: Duration,
+) -> bool {
+    let trace = frame.screensaver_frame_trace;
+    let preparation_age_limit_us = u128::from(frame.vsync_period_us).saturating_mul(3) / 2;
+    frame.status_write_due
+        && frame.screensaver_active
+        && trace.particle_count > 0
+        && frame.main_present_backend == LauncherPresentBackend::FpgaVblankLatchHidden
+        && frame_tail_slack_us(frame) < PARTICLE_STATUS_MIN_SLACK_US
+        && (trace.particle_preparation_queue_depth < 2
+            || trace.particle_prepared_frame_age_us < preparation_age_limit_us)
+        && last_status_write_age < Duration::from_secs(1) + PARTICLE_STATUS_MAX_DEFER
 }
 
 fn frame_analytics_mode_label(mode: FrameAnalyticsMode) -> &'static str {
@@ -2973,25 +2986,53 @@ mod tests {
     }
 
     #[test]
-    fn rendered_latch_frames_keep_runtime_status_live() {
+    fn particle_deadline_deferral_is_bounded_and_latch_only() {
         let start = Instant::now();
         let mut low_slack = presented_frame(46, start, 15_500);
         low_slack.status_write_due = true;
+        low_slack.screensaver_active = true;
+        low_slack.screensaver_frame_trace.particle_count = 40_960;
+        low_slack
+            .screensaver_frame_trace
+            .particle_preparation_queue_depth = 1;
         low_slack.main_present_backend = LauncherPresentBackend::FpgaVblankLatchHidden;
 
         assert_eq!(frame_tail_slack_us(&low_slack), 1_167);
-        assert!(!should_defer_runtime_status_write(&low_slack));
+        assert!(should_defer_runtime_status_write(
+            &low_slack,
+            Duration::from_millis(1_100)
+        ));
+        assert!(!should_defer_runtime_status_write(
+            &low_slack,
+            Duration::from_millis(1_250)
+        ));
 
         let mut enough_slack = presented_frame(47, start, 14_000);
         enough_slack.status_write_due = true;
+        enough_slack.screensaver_active = true;
+        enough_slack.screensaver_frame_trace.particle_count = 40_960;
+        enough_slack
+            .screensaver_frame_trace
+            .particle_preparation_queue_depth = 1;
         enough_slack.main_present_backend = LauncherPresentBackend::FpgaVblankLatchHidden;
         assert_eq!(frame_tail_slack_us(&enough_slack), 2_667);
-        assert!(!should_defer_runtime_status_write(&enough_slack));
+        assert!(!should_defer_runtime_status_write(
+            &enough_slack,
+            Duration::from_millis(1_100)
+        ));
 
         let mut non_latch = presented_frame(48, start, 15_500);
         non_latch.status_write_due = true;
+        non_latch.screensaver_active = true;
+        non_latch.screensaver_frame_trace.particle_count = 40_960;
+        non_latch
+            .screensaver_frame_trace
+            .particle_preparation_queue_depth = 1;
         non_latch.main_present_backend = LauncherPresentBackend::Fb0Dirty;
-        assert!(!should_defer_runtime_status_write(&non_latch));
+        assert!(!should_defer_runtime_status_write(
+            &non_latch,
+            Duration::from_millis(1_100)
+        ));
     }
 
     #[test]
