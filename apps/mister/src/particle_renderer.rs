@@ -96,7 +96,6 @@ struct ParticlePreparationRequest {
 
 struct PreparedParticleFrame {
     tick: u64,
-    elapsed: Duration,
     frame: ParticleFrameStats,
     visible: usize,
     simulation_us: u128,
@@ -474,7 +473,6 @@ fn prepare_particle_frame(
     let projection_cpu_us = elapsed_thread_cpu_us(projection_cpu_started);
     Ok(PreparedParticleFrame {
         tick,
-        elapsed,
         frame,
         visible,
         simulation_us,
@@ -1234,7 +1232,6 @@ mod tests {
             .acquire(first_elapsed, Some(second_elapsed), &mut commands)
             .unwrap();
         assert_eq!(first.tick, 0);
-        assert_eq!(first.elapsed, first_elapsed);
         assert_eq!(first.lookahead_mismatch_count, 0);
         assert_eq!(first.preparation_queue_depth, 0);
         assert_eq!(commands.len(), first.visible);
@@ -1244,7 +1241,6 @@ mod tests {
             .acquire(jittered_second_elapsed, None, &mut commands)
             .unwrap();
         assert_eq!(second.tick, 1);
-        assert_eq!(second.elapsed, second_elapsed);
         assert_eq!(second.lookahead_mismatch_count, 0);
         assert_eq!(second.preparation_queue_depth, 1);
         assert_eq!(commands.len(), second.visible);
@@ -1272,7 +1268,6 @@ mod tests {
             .unwrap();
         assert_eq!(first.tick, u64::MAX);
         assert_eq!(second.tick, 0);
-        assert_eq!(second.elapsed, second_elapsed);
         assert_eq!(second.lookahead_mismatch_count, 0);
     }
 
