@@ -698,7 +698,7 @@ impl ParticleShowcaseRenderer {
     fn project_weather_rain(&mut self, seconds: f32) -> usize {
         let mut clipped = 0usize;
         let wind = 34.0 + triangle_wave(seconds * 0.08) * 24.0;
-        for index in (0..self.pool.active()).step_by(2) {
+        for index in (0..self.pool.active()).step_by(4) {
             let layer = 0.62 + self.pool.z[index] * 0.72;
             let fall = (self.pool.y[index] + seconds * (410.0 + 330.0 * self.pool.z[index]))
                 .rem_euclid(620.0)
@@ -735,7 +735,7 @@ impl ParticleShowcaseRenderer {
     fn project_weather_snow(&mut self, seconds: f32) -> usize {
         let mut clipped = 0usize;
         let gust = triangle_wave(seconds * 0.055) * 42.0;
-        for index in (0..self.pool.active()).step_by(2) {
+        for index in (0..self.pool.active()).step_by(4) {
             let layer = 0.72 + self.pool.z[index] * 0.58;
             let fall = (self.pool.y[index]
                 + seconds * (34.0 + 58.0 * self.pool.z[index]) * self.pool.life[index])
@@ -767,7 +767,7 @@ impl ParticleShowcaseRenderer {
     fn project_weather_ash(&mut self, seconds: f32) -> usize {
         let mut clipped = 0usize;
         let wind = triangle_wave(seconds * 0.07) * 55.0;
-        for index in (0..self.pool.active()).step_by(2) {
+        for index in (0..self.pool.active()).step_by(4) {
             let age = (seconds * self.pool.life[index] + self.pool.age[index]).rem_euclid(6.4);
             let layer = 0.68 + self.pool.z[index] * 0.7;
             let rise = 570.0 - age * (62.0 + self.pool.z[index] * 42.0);
@@ -2141,7 +2141,7 @@ mod tests {
             .unwrap();
         assert_eq!(rain.beat, "rain");
         assert!(rain.segment_count > 0);
-        assert_eq!(renderer.commands.len(), renderer.pool.active() / 2);
+        assert_eq!(renderer.commands.len(), renderer.pool.active() / 4);
 
         let snow = renderer
             .render(&mut destination, 2, Duration::from_secs(15))
