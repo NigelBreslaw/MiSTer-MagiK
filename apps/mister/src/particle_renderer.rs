@@ -101,7 +101,7 @@ struct PreparedParticleFrame {
 
 struct ParticlePreparationPipeline {
     request_tx: Option<SyncSender<ParticlePreparationRequest>>,
-    ready_rx: Receiver<PreparedParticleFrame>,
+    ready_rx: Receiver<Result<PreparedParticleFrame, String>>,
     in_flight: Option<Duration>,
     spare_commands: Option<Vec<u32>>,
     worker: Option<JoinHandle<()>>,
@@ -210,7 +210,7 @@ impl ParticleRenderer {
                 elapsed,
                 &mut self.commands,
                 self.command_ordering_scratch.as_mut(),
-            )
+            )?
         };
         let clear_started = Instant::now();
         let clear_cpu_started = thread_cpu_time_us();
@@ -291,6 +291,9 @@ impl ParticleRenderer {
 
     fn raster_visual(&self, destination: &mut [Rgb565Pixel], dirty_offsets: &mut Vec<u32>) {
         for &command in &self.commands {
+            if command == PARTICLE_NOT_VISIBLE_OFFSET {
+                continue;
+            }
             let offset = (command & COMMAND_OFFSET_MASK) as usize;
             let palette_index = ((command >> COMMAND_PALETTE_SHIFT) & 3) as usize;
             destination[offset] = VISUAL_PALETTE[palette_index];
@@ -310,7 +313,7 @@ impl ParticlePreparationPipeline {
         ordering_scratch: Option<Vec<u32>>,
     ) -> Result<Self, String> {
         let (request_tx, request_rx) = mpsc::sync_channel::<ParticlePreparationRequest>(1);
-        let (ready_tx, ready_rx) = mpsc::sync_channel::<PreparedParticleFrame>(1);
+        let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<PreparedParticleFrame, String>>(1);
         let worker = std::thread::Builder::new()
             .name("particle-prepare".into())
             .spawn(move || {
@@ -369,7 +372,7 @@ impl ParticlePreparationPipeline {
     fn receive(&self) -> Result<PreparedParticleFrame, String> {
         self.ready_rx
             .recv()
-            .map_err(|_| "particle preparation worker disconnected".to_string())
+            .map_err(|_| "particle preparation worker disconnected".to_string())?
     }
 }
 
@@ -386,18 +389,22 @@ fn run_particle_preparation_worker(
     mut engine: ParticleEngine,
     mut ordering_scratch: Option<Vec<u32>>,
     request_rx: Receiver<ParticlePreparationRequest>,
-    ready_tx: SyncSender<PreparedParticleFrame>,
+    ready_tx: SyncSender<Result<PreparedParticleFrame, String>>,
 ) {
     while let Ok(request) = request_rx.recv() {
         let mut commands = request.commands;
-        let mut prepared = prepare_particle_frame(
+        let prepared = prepare_particle_frame(
             &mut engine,
             request.elapsed,
             &mut commands,
             ordering_scratch.as_mut(),
         );
-        prepared.commands = commands;
-        if ready_tx.send(prepared).is_err() {
+        let prepared = prepared.map(|mut prepared| {
+            prepared.commands = commands;
+            prepared
+        });
+        let failed = prepared.is_err();
+        if ready_tx.send(prepared).is_err() || failed {
             break;
         }
     }
@@ -408,7 +415,7 @@ fn prepare_particle_frame(
     elapsed: Duration,
     commands: &mut Vec<u32>,
     ordering_scratch: Option<&mut Vec<u32>>,
-) -> PreparedParticleFrame {
+) -> Result<PreparedParticleFrame, String> {
     let simulation_started = Instant::now();
     let simulation_cpu_started = thread_cpu_time_us();
     let frame = engine.step(elapsed);
@@ -416,13 +423,13 @@ fn prepare_particle_frame(
     let simulation_cpu_us = elapsed_thread_cpu_us(simulation_cpu_started);
     let projection_started = Instant::now();
     let projection_cpu_started = thread_cpu_time_us();
-    let visible = prepare_particle_commands(engine, commands);
+    let visible = prepare_particle_commands(engine, commands)?;
     if let Some(ordering_scratch) = ordering_scratch {
         order_particle_commands(engine.config().preset, commands, ordering_scratch);
     }
     let projection_us = projection_started.elapsed().as_micros();
     let projection_cpu_us = elapsed_thread_cpu_us(projection_cpu_started);
-    PreparedParticleFrame {
+    Ok(PreparedParticleFrame {
         elapsed,
         frame,
         visible,
@@ -431,7 +438,7 @@ fn prepare_particle_frame(
         projection_us,
         projection_cpu_us,
         commands: Vec::new(),
-    }
+    })
 }
 
 fn order_particle_commands(
@@ -466,38 +473,46 @@ fn order_particle_commands(
 }
 
 fn particle_command_bin(preset: ParticlePreset, command: u32) -> usize {
+    if command == PARTICLE_NOT_VISIBLE_OFFSET {
+        return COMMAND_INVISIBLE_BIN;
+    }
     let offset = match preset {
-        ParticlePreset::Capacity if command == PARTICLE_NOT_VISIBLE_OFFSET => {
-            return COMMAND_INVISIBLE_BIN;
-        }
         ParticlePreset::Capacity => command,
         ParticlePreset::Visual => command & COMMAND_OFFSET_MASK,
     };
     ((offset >> COMMAND_BIN_SHIFT) as usize).min(COMMAND_INVISIBLE_BIN - 1)
 }
 
-fn prepare_particle_commands(engine: &ParticleEngine, commands: &mut Vec<u32>) -> usize {
+fn prepare_particle_commands(
+    engine: &ParticleEngine,
+    commands: &mut Vec<u32>,
+) -> Result<usize, String> {
     commands.clear();
+    if engine.uses_vector_projection() {
+        let count = engine.particle_count();
+        assert!(commands.capacity() >= count);
+        let visible = engine.project_packed_commands(
+            &mut commands.spare_capacity_mut()[..count],
+            engine.config().preset == ParticlePreset::Visual,
+        );
+        // SAFETY: `project_packed_commands` initialized exactly `count` entries.
+        unsafe {
+            commands.set_len(count);
+        }
+        if engine.validates_vector_projection() {
+            validate_sampled_packed_commands(engine, commands)?;
+        }
+        return Ok(visible);
+    }
     match engine.config().preset {
         ParticlePreset::Capacity => {
-            if engine.uses_vector_projection() {
-                let count = engine.particle_count();
-                assert!(commands.capacity() >= count);
-                let visible = engine.project_offsets(&mut commands.spare_capacity_mut()[..count]);
-                // SAFETY: `project_offsets` initialized exactly `count` entries.
-                unsafe {
-                    commands.set_len(count);
+            let width = engine.config().width;
+            for index in 0..engine.particle_count() {
+                if let Some(particle) = engine.project(index) {
+                    commands.push((particle.y as usize * width + particle.x as usize) as u32);
                 }
-                visible
-            } else {
-                let width = engine.config().width;
-                for index in 0..engine.particle_count() {
-                    if let Some(particle) = engine.project(index) {
-                        commands.push((particle.y as usize * width + particle.x as usize) as u32);
-                    }
-                }
-                commands.len()
             }
+            Ok(commands.len())
         }
         ParticlePreset::Visual => {
             let width = engine.config().width;
@@ -512,9 +527,71 @@ fn prepare_particle_commands(engine: &ParticleEngine, commands: &mut Vec<u32>) -
                         && particle.x + 1 < width as i32;
                 commands.push(pack_visual_command(offset, palette_index, neighbor));
             }
-            commands.len()
+            Ok(commands.len())
         }
     }
+}
+
+fn validate_sampled_packed_commands(
+    engine: &ParticleEngine,
+    commands: &[u32],
+) -> Result<(), String> {
+    const SAMPLE_COUNT: usize = 64;
+    let width = engine.config().width;
+    let height = engine.config().height;
+    let visual = engine.config().preset == ParticlePreset::Visual;
+    let stride = engine.particle_count().div_ceil(SAMPLE_COUNT).max(1);
+    for index in (0..engine.particle_count()).step_by(stride) {
+        let command = commands[index];
+        let exact = engine.project(index);
+        let Some(projected) = exact else {
+            if command != PARTICLE_NOT_VISIBLE_OFFSET {
+                return Err(format!(
+                    "packed projection made invisible particle {index} visible"
+                ));
+            }
+            continue;
+        };
+        if command == PARTICLE_NOT_VISIBLE_OFFSET {
+            return Err(format!("packed projection hid visible particle {index}"));
+        }
+        let offset = (command & COMMAND_OFFSET_MASK) as usize;
+        if offset >= width.saturating_mul(height) {
+            return Err(format!(
+                "packed projection emitted unsafe offset {offset} for particle {index}"
+            ));
+        }
+        let approximate_x = offset % width;
+        let approximate_y = offset / width;
+        if approximate_x.abs_diff(projected.x as usize) > 1
+            || approximate_y.abs_diff(projected.y as usize) > 1
+        {
+            return Err(format!(
+                "packed projection exceeded one-pixel error for particle {index}"
+            ));
+        }
+        if visual {
+            let palette_index = (engine.flicker_key(index) >> 30) as usize;
+            let actual_palette = ((command >> COMMAND_PALETTE_SHIFT) & 3) as usize;
+            if actual_palette != palette_index {
+                return Err(format!(
+                    "packed projection changed palette semantics for particle {index}"
+                ));
+            }
+            let expected_neighbor =
+                visual_particle_has_neighbor(engine.phase(), projected.depth, palette_index)
+                    && projected.x + 1 < width as i32;
+            let actual_neighbor = command & COMMAND_NEIGHBOR != 0;
+            if actual_neighbor != expected_neighbor
+                || (actual_neighbor && offset + 1 >= width.saturating_mul(height))
+            {
+                return Err(format!(
+                    "packed projection changed neighbor semantics for particle {index}"
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn particle_pipeline_requested() -> bool {
@@ -1145,9 +1222,45 @@ mod tests {
         let first = pack_visual_command(4_100, 3, true);
         let second = pack_visual_command(8, 0, false);
         let third = pack_visual_command(4_096, 1, false);
-        let mut commands = vec![first, second, third];
+        let mut commands = vec![first, PARTICLE_NOT_VISIBLE_OFFSET, second, third];
         let mut scratch = Vec::with_capacity(commands.len());
         order_particle_commands(ParticlePreset::Visual, &mut commands, &mut scratch);
-        assert_eq!(commands, vec![second, first, third]);
+        assert_eq!(
+            commands,
+            vec![second, first, third, PARTICLE_NOT_VISIBLE_OFFSET]
+        );
+    }
+
+    #[test]
+    fn sampled_packed_visual_validation_enforces_safety_and_semantics() {
+        let mut engine = ParticleEngine::new(config(ParticlePreset::Visual), mask()).unwrap();
+        engine.step(Duration::from_millis(5_000));
+        let width = engine.config().width;
+        let mut commands = (0..engine.particle_count())
+            .map(|index| {
+                engine
+                    .project(index)
+                    .map_or(PARTICLE_NOT_VISIBLE_OFFSET, |particle| {
+                        let offset = (particle.y as usize * width + particle.x as usize) as u32;
+                        let palette = (engine.flicker_key(index) >> 30) as usize;
+                        let neighbor =
+                            visual_particle_has_neighbor(engine.phase(), particle.depth, palette)
+                                && particle.x + 1 < width as i32;
+                        pack_visual_command(offset, palette, neighbor)
+                    })
+            })
+            .collect::<Vec<_>>();
+        validate_sampled_packed_commands(&engine, &commands).unwrap();
+
+        let sampled = (0..engine.particle_count())
+            .step_by(engine.particle_count().div_ceil(64).max(1))
+            .find(|index| commands[*index] != PARTICLE_NOT_VISIBLE_OFFSET)
+            .unwrap();
+        commands[sampled] = (commands[sampled] & !COMMAND_OFFSET_MASK) | COMMAND_OFFSET_MASK;
+        assert!(
+            validate_sampled_packed_commands(&engine, &commands)
+                .unwrap_err()
+                .contains("unsafe offset")
+        );
     }
 }

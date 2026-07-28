@@ -13,7 +13,9 @@ static const float TARGET_FIXED_SCALE_RECIP = 1.0f / 16.0f;
 static const float TARGET_DEPTH_Q2_RECIP = 1.0f / 4.0f;
 static const float RANDOM_UNIT_RECIP = 1.0f / 16777215.0f;
 static const float FOCAL_LENGTH = 720.0f;
-static const float PROJECTION_CORRECTION_MARGIN = 0.01f;
+static const uint32_t PARTICLE_NOT_VISIBLE = UINT32_MAX;
+static const uint32_t COMMAND_PALETTE_SHIFT = 20;
+static const uint32_t COMMAND_NEIGHBOR = 1u << 22;
 
 static inline uint32x4_t next_random(uint32_t *states) {
     uint32x4_t value = vld1q_u32(states);
@@ -303,31 +305,108 @@ size_t mister_magik_particle_neon_disperse(
     return vector_end;
 }
 
-static inline int projection_needs_correction(
-    float screen_x,
-    float screen_y,
-    float projection_max_x,
-    float projection_max_y
-) {
-    if (screen_x <= -0.5f + PROJECTION_CORRECTION_MARGIN ||
-        screen_y <= -0.5f + PROJECTION_CORRECTION_MARGIN ||
-        screen_x >= projection_max_x - PROJECTION_CORRECTION_MARGIN ||
-        screen_y >= projection_max_y - PROJECTION_CORRECTION_MARGIN) {
-        return 1;
-    }
-    float shifted_x = screen_x + 0.5f;
-    float shifted_y = screen_y + 0.5f;
-    float fraction_x = shifted_x - (float)(int32_t)shifted_x;
-    float fraction_y = shifted_y - (float)(int32_t)shifted_y;
-    return fraction_x < PROJECTION_CORRECTION_MARGIN ||
-           fraction_x > 1.0f - PROJECTION_CORRECTION_MARGIN ||
-           fraction_y < PROJECTION_CORRECTION_MARGIN ||
-           fraction_y > 1.0f - PROJECTION_CORRECTION_MARGIN;
+static inline float32x4_t reciprocal_once(float32x4_t denominator) {
+    float32x4_t reciprocal = vrecpeq_f32(denominator);
+    return vmulq_f32(
+        reciprocal,
+        vrecpsq_f32(denominator, reciprocal)
+    );
 }
 
-size_t mister_magik_particle_neon_project_offsets(
+static inline uint32x4_t project_four_commands(
+    size_t index,
+    uint32_t width,
+    uint32_t visual,
+    uint32_t formed,
+    float32x4_t center_x,
+    float32x4_t center_y,
+    float32x4_t max_x,
+    float32x4_t max_y,
+    float32x4_t sin_y,
+    float32x4_t cos_y,
+    const float *x,
+    const float *y,
+    const int16_t *z_q7,
+    const uint32_t *random_states,
+    uint32x4_t *visible_count
+) {
+    float32x4_t relative_x = vsubq_f32(vld1q_f32(x + index), center_x);
+    float32x4_t source_z = load_depth_q7(z_q7 + index);
+    float32x4_t rotated_x = vaddq_f32(
+        vmulq_f32(relative_x, cos_y),
+        vmulq_f32(source_z, sin_y)
+    );
+    float32x4_t rotated_z = vsubq_f32(
+        vmulq_f32(source_z, cos_y),
+        vmulq_f32(relative_x, sin_y)
+    );
+    float32x4_t denominator =
+        vaddq_f32(vdupq_n_f32(FOCAL_LENGTH), rotated_z);
+    float32x4_t scale =
+        vmulq_n_f32(reciprocal_once(denominator), FOCAL_LENGTH);
+    float32x4_t screen_x =
+        vaddq_f32(center_x, vmulq_f32(rotated_x, scale));
+    float32x4_t screen_y = vaddq_f32(
+        center_y,
+        vmulq_f32(vsubq_f32(vld1q_f32(y + index), center_y), scale)
+    );
+    uint32x4_t visible_mask =
+        vcgtq_f32(denominator, vdupq_n_f32(1.0f));
+    visible_mask = vandq_u32(
+        visible_mask,
+        vcgtq_f32(screen_x, vdupq_n_f32(-0.5f))
+    );
+    visible_mask = vandq_u32(
+        visible_mask,
+        vcgtq_f32(screen_y, vdupq_n_f32(-0.5f))
+    );
+    visible_mask = vandq_u32(visible_mask, vcltq_f32(screen_x, max_x));
+    visible_mask = vandq_u32(visible_mask, vcltq_f32(screen_y, max_y));
+
+    uint32x4_t pixel_x =
+        vcvtq_u32_f32(vaddq_f32(screen_x, vdupq_n_f32(0.5f)));
+    uint32x4_t pixel_y =
+        vcvtq_u32_f32(vaddq_f32(screen_y, vdupq_n_f32(0.5f)));
+    uint32x4_t command = vmlaq_n_u32(pixel_x, pixel_y, width);
+    if (visual != 0) {
+        uint32x4_t palette =
+            vshrq_n_u32(vld1q_u32(random_states + index), 30);
+        command = vorrq_u32(
+            command,
+            vshlq_n_u32(palette, COMMAND_PALETTE_SHIFT)
+        );
+        uint32x4_t neighbor_mask = vcltq_u32(
+            pixel_x,
+            vdupq_n_u32(width - 1)
+        );
+        uint32x4_t phase_neighbor = formed != 0
+            ? vcltq_f32(rotated_z, vdupq_n_f32(0.0f))
+            : vceqq_u32(palette, vdupq_n_u32(3));
+        neighbor_mask = vandq_u32(
+            visible_mask,
+            vandq_u32(neighbor_mask, phase_neighbor)
+        );
+        command = vorrq_u32(
+            command,
+            vandq_u32(neighbor_mask, vdupq_n_u32(COMMAND_NEIGHBOR))
+        );
+    }
+    *visible_count = vaddq_u32(
+        *visible_count,
+        vshrq_n_u32(visible_mask, 31)
+    );
+    return vbslq_u32(
+        visible_mask,
+        command,
+        vdupq_n_u32(PARTICLE_NOT_VISIBLE)
+    );
+}
+
+size_t mister_magik_particle_neon_project_commands(
     size_t count,
     size_t width,
+    uint32_t visual,
+    uint32_t phase,
     float projection_center_x,
     float projection_center_y,
     float projection_max_x,
@@ -337,82 +416,60 @@ size_t mister_magik_particle_neon_project_offsets(
     const float *x,
     const float *y,
     const int16_t *z_q7,
-    uint32_t *offsets
+    const uint32_t *random_states,
+    uint32_t *commands
 ) {
-    size_t visible = 0;
-    size_t vector_end = count & ~(size_t)3;
+    size_t vector_end = count & ~(size_t)7;
+    uint32x4_t visible_count = vdupq_n_u32(0);
     float32x4_t center_x = vdupq_n_f32(projection_center_x);
     float32x4_t center_y = vdupq_n_f32(projection_center_y);
-    float32x4_t focal = vdupq_n_f32(FOCAL_LENGTH);
-    for (size_t index = 0; index < vector_end; index += 4) {
-        float32x4_t relative_x = vsubq_f32(vld1q_f32(x + index), center_x);
-        float32x4_t source_z = load_depth_q7(z_q7 + index);
-        float32x4_t rotated_x = vaddq_f32(
-            vmulq_n_f32(relative_x, rotation_y_cos),
-            vmulq_n_f32(source_z, rotation_y_sin)
+    float32x4_t max_x = vdupq_n_f32(projection_max_x);
+    float32x4_t max_y = vdupq_n_f32(projection_max_y);
+    float32x4_t sin_y = vdupq_n_f32(rotation_y_sin);
+    float32x4_t cos_y = vdupq_n_f32(rotation_y_cos);
+    uint32_t formed = phase == 1 || phase == 2;
+    uint32_t width_u32 = (uint32_t)width;
+    for (size_t index = 0; index < vector_end; index += 8) {
+        vst1q_u32(
+            commands + index,
+            project_four_commands(
+                index,
+                width_u32,
+                visual,
+                formed,
+                center_x,
+                center_y,
+                max_x,
+                max_y,
+                sin_y,
+                cos_y,
+                x,
+                y,
+                z_q7,
+                random_states,
+                &visible_count
+            )
         );
-        float32x4_t rotated_z = vaddq_f32(
-            vmulq_n_f32(relative_x, -rotation_y_sin),
-            vmulq_n_f32(source_z, rotation_y_cos)
+        vst1q_u32(
+            commands + index + 4,
+            project_four_commands(
+                index + 4,
+                width_u32,
+                visual,
+                formed,
+                center_x,
+                center_y,
+                max_x,
+                max_y,
+                sin_y,
+                cos_y,
+                x,
+                y,
+                z_q7,
+                random_states,
+                &visible_count
+            )
         );
-        float32x4_t denominator = vaddq_f32(focal, rotated_z);
-        float32x4_t reciprocal = vrecpeq_f32(denominator);
-        reciprocal = vmulq_f32(
-            reciprocal,
-            vrecpsq_f32(denominator, reciprocal)
-        );
-        reciprocal = vmulq_f32(
-            reciprocal,
-            vrecpsq_f32(denominator, reciprocal)
-        );
-        float32x4_t scale = vmulq_f32(focal, reciprocal);
-        float32x4_t screen_x = vaddq_f32(
-            center_x,
-            vmulq_f32(rotated_x, scale)
-        );
-        float32x4_t screen_y = vaddq_f32(
-            center_y,
-            vmulq_f32(vsubq_f32(vld1q_f32(y + index), center_y), scale)
-        );
-        float denominator_values[4];
-        float rotated_x_values[4];
-        float rotated_z_values[4];
-        float screen_x_values[4];
-        float screen_y_values[4];
-        vst1q_f32(denominator_values, denominator);
-        vst1q_f32(rotated_x_values, rotated_x);
-        vst1q_f32(rotated_z_values, rotated_z);
-        vst1q_f32(screen_x_values, screen_x);
-        vst1q_f32(screen_y_values, screen_y);
-        for (size_t lane = 0; lane < 4; lane++) {
-            float lane_x = screen_x_values[lane];
-            float lane_y = screen_y_values[lane];
-            if (denominator_values[lane] <= 1.0f) {
-                offsets[index + lane] = UINT32_MAX;
-                continue;
-            }
-            if (projection_needs_correction(
-                    lane_x,
-                    lane_y,
-                    projection_max_x,
-                    projection_max_y)) {
-                float exact_scale = FOCAL_LENGTH / denominator_values[lane];
-                lane_x =
-                    projection_center_x + rotated_x_values[lane] * exact_scale;
-                lane_y = projection_center_y +
-                    (y[index + lane] - projection_center_y) * exact_scale;
-            }
-            if (lane_x <= -0.5f || lane_y <= -0.5f ||
-                lane_x >= projection_max_x || lane_y >= projection_max_y) {
-                offsets[index + lane] = UINT32_MAX;
-                continue;
-            }
-            uint32_t pixel_x = (uint32_t)(lane_x + 0.5f);
-            uint32_t pixel_y = (uint32_t)(lane_y + 0.5f);
-            offsets[index + lane] =
-                pixel_y * (uint32_t)width + pixel_x;
-            visible++;
-        }
     }
     for (size_t index = vector_end; index < count; index++) {
         float relative_x = x[index] - projection_center_x;
@@ -423,22 +480,41 @@ size_t mister_magik_particle_neon_project_offsets(
             -relative_x * rotation_y_sin + source_z * rotation_y_cos;
         float denominator = FOCAL_LENGTH + rotated_z;
         if (denominator <= 1.0f) {
-            offsets[index] = UINT32_MAX;
+            commands[index] = PARTICLE_NOT_VISIBLE;
             continue;
         }
-        float scale = FOCAL_LENGTH / denominator;
+        float32x2_t denominator_vector = vdup_n_f32(denominator);
+        float32x2_t reciprocal = vrecpe_f32(denominator_vector);
+        reciprocal = vmul_f32(
+            reciprocal,
+            vrecps_f32(denominator_vector, reciprocal)
+        );
+        float scale = FOCAL_LENGTH * vget_lane_f32(reciprocal, 0);
         float screen_x = projection_center_x + rotated_x * scale;
         float screen_y = projection_center_y +
             (y[index] - projection_center_y) * scale;
         if (screen_x <= -0.5f || screen_y <= -0.5f ||
             screen_x >= projection_max_x || screen_y >= projection_max_y) {
-            offsets[index] = UINT32_MAX;
+            commands[index] = PARTICLE_NOT_VISIBLE;
             continue;
         }
         uint32_t pixel_x = (uint32_t)(screen_x + 0.5f);
         uint32_t pixel_y = (uint32_t)(screen_y + 0.5f);
-        offsets[index] = pixel_y * (uint32_t)width + pixel_x;
-        visible++;
+        uint32_t command = pixel_y * width_u32 + pixel_x;
+        if (visual != 0) {
+            uint32_t palette = random_states[index] >> 30;
+            uint32_t neighbor = pixel_x + 1 < width_u32 &&
+                (formed != 0 ? rotated_z < 0.0f : palette == 3);
+            command |= palette << COMMAND_PALETTE_SHIFT;
+            command |= neighbor != 0 ? COMMAND_NEIGHBOR : 0;
+        }
+        commands[index] = command;
+        visible_count = vaddq_u32(
+            visible_count,
+            (uint32x4_t){1, 0, 0, 0}
+        );
     }
-    return visible;
+    uint32_t lanes[4];
+    vst1q_u32(lanes, visible_count);
+    return (size_t)lanes[0] + lanes[1] + lanes[2] + lanes[3];
 }

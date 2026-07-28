@@ -224,6 +224,7 @@ pub struct ParticleEngine {
     phase: ParticlePhase,
     use_neon: bool,
     use_neon_projection: bool,
+    validate_neon_projection: bool,
     use_table_projection: bool,
     use_alternating_cohorts: bool,
 }
@@ -272,6 +273,7 @@ impl ParticleEngine {
             phase: ParticlePhase::Static,
             use_neon: particle_neon_enabled(),
             use_neon_projection: particle_neon_projection_enabled(),
+            validate_neon_projection: particle_neon_projection_validation_enabled(),
             use_table_projection: particle_table_projection_enabled(),
             use_alternating_cohorts: particle_alternating_cohorts_enabled(),
         };
@@ -397,13 +399,23 @@ impl ParticleEngine {
     /// supplies uninitialized storage so the renderer can reuse its dirty list
     /// without an extra fill pass.
     pub fn project_offsets(&self, output: &mut [MaybeUninit<u32>]) -> usize {
+        self.project_packed_commands(output, false)
+    }
+
+    /// Projects every particle into a fixed index-ordered packed command.
+    /// Invisible particles receive `PARTICLE_NOT_VISIBLE_OFFSET`.
+    pub fn project_packed_commands(&self, output: &mut [MaybeUninit<u32>], visual: bool) -> usize {
         assert!(output.len() >= self.particle_count());
         #[cfg(target_arch = "arm")]
         if self.use_neon_projection {
             // SAFETY: the C kernel writes exactly one offset or sentinel for
             // every particle and never retains any supplied pointer.
-            return unsafe { neon::project_offsets(self, output.as_mut_ptr().cast()) };
+            return unsafe { neon::project_commands(self, output.as_mut_ptr().cast(), visual) };
         }
+        debug_assert!(
+            !visual,
+            "visual packed projection requires the NEON backend"
+        );
         self.project_offsets_scalar(output, 0..self.particle_count())
     }
 
@@ -428,7 +440,7 @@ impl ParticleEngine {
     #[must_use]
     pub const fn projection_backend_label(&self) -> &'static str {
         if self.use_neon_projection {
-            "armv7-neon-corrected"
+            "armv7-neon-packed-r1"
         } else if self.use_table_projection {
             "scalar-table-corrected"
         } else {
@@ -439,6 +451,11 @@ impl ParticleEngine {
     #[must_use]
     pub const fn uses_vector_projection(&self) -> bool {
         self.use_neon_projection
+    }
+
+    #[must_use]
+    pub const fn validates_vector_projection(&self) -> bool {
+        self.validate_neon_projection
     }
 
     #[must_use]
@@ -707,7 +724,12 @@ fn particle_neon_enabled() -> bool {
 fn particle_neon_projection_enabled() -> bool {
     std::env::var("MISTER_PARTICLE_PROJECTION")
         .ok()
-        .is_some_and(|value| value.trim().eq_ignore_ascii_case("neon"))
+        .is_none_or(|value| {
+            !matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "scalar" | "exact" | "table"
+            )
+        })
 }
 
 #[cfg(target_arch = "arm")]
@@ -715,6 +737,13 @@ fn particle_table_projection_enabled() -> bool {
     std::env::var("MISTER_PARTICLE_PROJECTION")
         .ok()
         .is_some_and(|value| value.trim().eq_ignore_ascii_case("table"))
+}
+
+#[cfg(target_arch = "arm")]
+fn particle_neon_projection_validation_enabled() -> bool {
+    std::env::var("MISTER_PARTICLE_PROJECTION_VALIDATE")
+        .ok()
+        .is_some_and(|value| !matches!(value.as_str(), "0" | "off" | "false" | "no"))
 }
 
 #[cfg(target_arch = "arm")]
@@ -736,6 +765,11 @@ const fn particle_neon_projection_enabled() -> bool {
 
 #[cfg(not(target_arch = "arm"))]
 const fn particle_table_projection_enabled() -> bool {
+    false
+}
+
+#[cfg(not(target_arch = "arm"))]
+const fn particle_neon_projection_validation_enabled() -> bool {
     false
 }
 
@@ -791,9 +825,11 @@ mod neon {
             vy: *mut f32,
             vz: *mut f32,
         ) -> usize;
-        fn mister_magik_particle_neon_project_offsets(
+        fn mister_magik_particle_neon_project_commands(
             count: usize,
             width: usize,
+            visual: u32,
+            phase: u32,
             projection_center_x: f32,
             projection_center_y: f32,
             projection_max_x: f32,
@@ -803,7 +839,8 @@ mod neon {
             x: *const f32,
             y: *const f32,
             z_q7: *const i16,
-            offsets: *mut u32,
+            random_states: *const u32,
+            commands: *mut u32,
         ) -> usize;
     }
 
@@ -881,11 +918,23 @@ mod neon {
         range.start + processed
     }
 
-    pub(super) unsafe fn project_offsets(engine: &ParticleEngine, offsets: *mut u32) -> usize {
+    pub(super) unsafe fn project_commands(
+        engine: &ParticleEngine,
+        commands: *mut u32,
+        visual: bool,
+    ) -> usize {
+        let phase = match engine.phase {
+            super::ParticlePhase::Static => 0,
+            super::ParticlePhase::Form => 1,
+            super::ParticlePhase::Hold => 2,
+            super::ParticlePhase::Disperse => 3,
+        };
         unsafe {
-            mister_magik_particle_neon_project_offsets(
+            mister_magik_particle_neon_project_commands(
                 engine.particle_count(),
                 engine.config.width,
+                u32::from(visual),
+                phase,
                 engine.projection_center_x,
                 engine.projection_center_y,
                 engine.projection_max_x,
@@ -895,7 +944,8 @@ mod neon {
                 engine.x.as_ptr(),
                 engine.y.as_ptr(),
                 engine.z_q7.as_ptr(),
-                offsets,
+                engine.random_states.as_ptr(),
+                commands,
             )
         }
     }

@@ -4302,6 +4302,9 @@ fn run_particle_trial(
     if kind == "step" {
         env_vars.push(("MISTER_PARTICLE_PMU".into(), "1".into()));
     }
+    if kind == "demo-40k" {
+        env_vars.push(("MISTER_PARTICLE_PROJECTION_VALIDATE".into(), "1".into()));
+    }
     restart_launcher_with_one_shot_env(
         &session,
         LauncherRestartOptions {
