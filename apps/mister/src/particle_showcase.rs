@@ -764,7 +764,7 @@ impl ParticleShowcaseRenderer {
                 continue;
             }
             if self.pool.flags[index] & 2 != 0 {
-                let previous_rotation = if reverse { 0.035 } else { -0.035 };
+                let previous_rotation: f32 = if reverse { 0.035 } else { -0.035 };
                 let (previous_sin, previous_cos) = previous_rotation.sin_cos();
                 let previous_x = x.mul_add(previous_cos, -(ring_y * previous_sin));
                 let previous_y = x.mul_add(previous_sin, ring_y * previous_cos);
