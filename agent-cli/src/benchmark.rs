@@ -89,7 +89,26 @@ fn require_clean_installed_commit(
             execute_catalog_lifecycle(&mut device, manifest, output_dir, reporter)
         }
         BenchmarkScenario::Search => execute_search(&mut device, manifest, output_dir, reporter),
-        BenchmarkScenario::ParticleDemo01 | BenchmarkScenario::ParticleDemoProfile01 => {
+        BenchmarkScenario::ParticleDemo01
+        | BenchmarkScenario::ParticleDemoProfile01
+        | BenchmarkScenario::ParticleDemo02
+        | BenchmarkScenario::ParticleDemoProfile02
+        | BenchmarkScenario::ParticleDemo03
+        | BenchmarkScenario::ParticleDemoProfile03
+        | BenchmarkScenario::ParticleDemo04
+        | BenchmarkScenario::ParticleDemoProfile04
+        | BenchmarkScenario::ParticleDemo05
+        | BenchmarkScenario::ParticleDemoProfile05
+        | BenchmarkScenario::ParticleDemo06
+        | BenchmarkScenario::ParticleDemoProfile06
+        | BenchmarkScenario::ParticleDemo07
+        | BenchmarkScenario::ParticleDemoProfile07
+        | BenchmarkScenario::ParticleDemo08
+        | BenchmarkScenario::ParticleDemoProfile08
+        | BenchmarkScenario::ParticleDemo09
+        | BenchmarkScenario::ParticleDemoProfile09
+        | BenchmarkScenario::ParticleDemo10
+        | BenchmarkScenario::ParticleDemoProfile10 => {
             unreachable!("particle showcase scenarios return before the fixed registry match")
         }
     }

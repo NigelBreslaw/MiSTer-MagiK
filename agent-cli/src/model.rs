@@ -22,6 +22,60 @@ pub enum BenchmarkScenario {
     #[serde(rename = "particle-demo-profile-01")]
     #[value(name = "particle-demo-profile-01")]
     ParticleDemoProfile01,
+    #[serde(rename = "particle-demo-02")]
+    #[value(name = "particle-demo-02")]
+    ParticleDemo02,
+    #[serde(rename = "particle-demo-profile-02")]
+    #[value(name = "particle-demo-profile-02")]
+    ParticleDemoProfile02,
+    #[serde(rename = "particle-demo-03")]
+    #[value(name = "particle-demo-03")]
+    ParticleDemo03,
+    #[serde(rename = "particle-demo-profile-03")]
+    #[value(name = "particle-demo-profile-03")]
+    ParticleDemoProfile03,
+    #[serde(rename = "particle-demo-04")]
+    #[value(name = "particle-demo-04")]
+    ParticleDemo04,
+    #[serde(rename = "particle-demo-profile-04")]
+    #[value(name = "particle-demo-profile-04")]
+    ParticleDemoProfile04,
+    #[serde(rename = "particle-demo-05")]
+    #[value(name = "particle-demo-05")]
+    ParticleDemo05,
+    #[serde(rename = "particle-demo-profile-05")]
+    #[value(name = "particle-demo-profile-05")]
+    ParticleDemoProfile05,
+    #[serde(rename = "particle-demo-06")]
+    #[value(name = "particle-demo-06")]
+    ParticleDemo06,
+    #[serde(rename = "particle-demo-profile-06")]
+    #[value(name = "particle-demo-profile-06")]
+    ParticleDemoProfile06,
+    #[serde(rename = "particle-demo-07")]
+    #[value(name = "particle-demo-07")]
+    ParticleDemo07,
+    #[serde(rename = "particle-demo-profile-07")]
+    #[value(name = "particle-demo-profile-07")]
+    ParticleDemoProfile07,
+    #[serde(rename = "particle-demo-08")]
+    #[value(name = "particle-demo-08")]
+    ParticleDemo08,
+    #[serde(rename = "particle-demo-profile-08")]
+    #[value(name = "particle-demo-profile-08")]
+    ParticleDemoProfile08,
+    #[serde(rename = "particle-demo-09")]
+    #[value(name = "particle-demo-09")]
+    ParticleDemo09,
+    #[serde(rename = "particle-demo-profile-09")]
+    #[value(name = "particle-demo-profile-09")]
+    ParticleDemoProfile09,
+    #[serde(rename = "particle-demo-10")]
+    #[value(name = "particle-demo-10")]
+    ParticleDemo10,
+    #[serde(rename = "particle-demo-profile-10")]
+    #[value(name = "particle-demo-profile-10")]
+    ParticleDemoProfile10,
     CatalogLifecycle,
     Search,
 }
@@ -38,6 +92,24 @@ impl BenchmarkScenario {
             Self::ParticleProfile => "particle-profile",
             Self::ParticleDemo01 => "particle-demo-01",
             Self::ParticleDemoProfile01 => "particle-demo-profile-01",
+            Self::ParticleDemo02 => "particle-demo-02",
+            Self::ParticleDemoProfile02 => "particle-demo-profile-02",
+            Self::ParticleDemo03 => "particle-demo-03",
+            Self::ParticleDemoProfile03 => "particle-demo-profile-03",
+            Self::ParticleDemo04 => "particle-demo-04",
+            Self::ParticleDemoProfile04 => "particle-demo-profile-04",
+            Self::ParticleDemo05 => "particle-demo-05",
+            Self::ParticleDemoProfile05 => "particle-demo-profile-05",
+            Self::ParticleDemo06 => "particle-demo-06",
+            Self::ParticleDemoProfile06 => "particle-demo-profile-06",
+            Self::ParticleDemo07 => "particle-demo-07",
+            Self::ParticleDemoProfile07 => "particle-demo-profile-07",
+            Self::ParticleDemo08 => "particle-demo-08",
+            Self::ParticleDemoProfile08 => "particle-demo-profile-08",
+            Self::ParticleDemo09 => "particle-demo-09",
+            Self::ParticleDemoProfile09 => "particle-demo-profile-09",
+            Self::ParticleDemo10 => "particle-demo-10",
+            Self::ParticleDemoProfile10 => "particle-demo-profile-10",
             Self::CatalogLifecycle => "catalog-lifecycle",
             Self::Search => "search",
         }
@@ -48,6 +120,24 @@ impl BenchmarkScenario {
         match self {
             Self::ParticleDemo01 => Some((1, false)),
             Self::ParticleDemoProfile01 => Some((1, true)),
+            Self::ParticleDemo02 => Some((2, false)),
+            Self::ParticleDemoProfile02 => Some((2, true)),
+            Self::ParticleDemo03 => Some((3, false)),
+            Self::ParticleDemoProfile03 => Some((3, true)),
+            Self::ParticleDemo04 => Some((4, false)),
+            Self::ParticleDemoProfile04 => Some((4, true)),
+            Self::ParticleDemo05 => Some((5, false)),
+            Self::ParticleDemoProfile05 => Some((5, true)),
+            Self::ParticleDemo06 => Some((6, false)),
+            Self::ParticleDemoProfile06 => Some((6, true)),
+            Self::ParticleDemo07 => Some((7, false)),
+            Self::ParticleDemoProfile07 => Some((7, true)),
+            Self::ParticleDemo08 => Some((8, false)),
+            Self::ParticleDemoProfile08 => Some((8, true)),
+            Self::ParticleDemo09 => Some((9, false)),
+            Self::ParticleDemoProfile09 => Some((9, true)),
+            Self::ParticleDemo10 => Some((10, false)),
+            Self::ParticleDemoProfile10 => Some((10, true)),
             _ => None,
         }
     }
