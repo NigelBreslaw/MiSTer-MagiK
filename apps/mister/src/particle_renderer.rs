@@ -30,6 +30,9 @@ const COMMAND_OFFSET_BITS: u32 = 20;
 const COMMAND_OFFSET_MASK: u32 = (1 << COMMAND_OFFSET_BITS) - 1;
 const COMMAND_PALETTE_SHIFT: u32 = COMMAND_OFFSET_BITS;
 const COMMAND_NEIGHBOR: u32 = 1 << (COMMAND_PALETTE_SHIFT + 2);
+const COMMAND_BIN_SHIFT: u32 = 11;
+const COMMAND_BIN_COUNT: usize = (1 << (COMMAND_OFFSET_BITS - COMMAND_BIN_SHIFT)) + 1;
+const COMMAND_INVISIBLE_BIN: usize = COMMAND_BIN_COUNT - 1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ParticleRenderStats {
@@ -67,6 +70,7 @@ pub struct ParticleRenderer {
     config: ParticleConfig,
     engine: Option<ParticleEngine>,
     preparation_pipeline: Option<ParticlePreparationPipeline>,
+    command_ordering_scratch: Option<Vec<u32>>,
     dirty_slots: [ParticleDirtySlot; HIDDEN_SLOT_COUNT],
     simulation_bytes: usize,
     renderer_scratch_bytes: usize,
@@ -129,11 +133,15 @@ impl ParticleRenderer {
                     .take()
                     .expect("particle preparation pipeline must receive its engine"),
                 Vec::with_capacity(config.count),
+                Vec::with_capacity(config.count),
             )?)
         } else {
             None
         };
-        let command_buffer_count = 1 + usize::from(preparation_pipeline.is_some());
+        let command_ordering_scratch = preparation_pipeline
+            .is_none()
+            .then(|| Vec::with_capacity(config.count));
+        let command_buffer_count = 2 + usize::from(preparation_pipeline.is_some());
         let renderer_scratch_bytes = dirty_slots.iter().fold(0usize, |total, slot| {
             total.saturating_add(
                 slot.offsets
@@ -148,6 +156,7 @@ impl ParticleRenderer {
             config,
             engine,
             preparation_pipeline,
+            command_ordering_scratch,
             dirty_slots,
             simulation_bytes,
             renderer_scratch_bytes,
@@ -199,6 +208,9 @@ impl ParticleRenderer {
                     .expect("same-thread particle renderer must own its engine"),
                 elapsed,
                 &mut self.commands,
+                self.command_ordering_scratch
+                    .as_mut()
+                    .expect("same-thread particle renderer must own ordering scratch"),
             )
         };
         let clear_started = Instant::now();
@@ -293,14 +305,18 @@ impl ParticleRenderer {
 }
 
 impl ParticlePreparationPipeline {
-    fn start(engine: ParticleEngine, spare_commands: Vec<u32>) -> Result<Self, String> {
+    fn start(
+        engine: ParticleEngine,
+        spare_commands: Vec<u32>,
+        ordering_scratch: Vec<u32>,
+    ) -> Result<Self, String> {
         let (request_tx, request_rx) = mpsc::sync_channel::<ParticlePreparationRequest>(1);
         let (ready_tx, ready_rx) = mpsc::sync_channel::<PreparedParticleFrame>(1);
         let worker = std::thread::Builder::new()
             .name("particle-prepare".into())
             .spawn(move || {
                 apply_runtime_thread_policy(RuntimeThreadRole::ParticlePreparer);
-                run_particle_preparation_worker(engine, request_rx, ready_tx);
+                run_particle_preparation_worker(engine, ordering_scratch, request_rx, ready_tx);
             })
             .map_err(|error| format!("spawn particle preparation worker: {error}"))?;
         Ok(Self {
@@ -369,12 +385,18 @@ impl Drop for ParticlePreparationPipeline {
 
 fn run_particle_preparation_worker(
     mut engine: ParticleEngine,
+    mut ordering_scratch: Vec<u32>,
     request_rx: Receiver<ParticlePreparationRequest>,
     ready_tx: SyncSender<PreparedParticleFrame>,
 ) {
     while let Ok(request) = request_rx.recv() {
         let mut commands = request.commands;
-        let mut prepared = prepare_particle_frame(&mut engine, request.elapsed, &mut commands);
+        let mut prepared = prepare_particle_frame(
+            &mut engine,
+            request.elapsed,
+            &mut commands,
+            &mut ordering_scratch,
+        );
         prepared.commands = commands;
         if ready_tx.send(prepared).is_err() {
             break;
@@ -386,6 +408,7 @@ fn prepare_particle_frame(
     engine: &mut ParticleEngine,
     elapsed: Duration,
     commands: &mut Vec<u32>,
+    ordering_scratch: &mut Vec<u32>,
 ) -> PreparedParticleFrame {
     let simulation_started = Instant::now();
     let simulation_cpu_started = thread_cpu_time_us();
@@ -395,6 +418,7 @@ fn prepare_particle_frame(
     let projection_started = Instant::now();
     let projection_cpu_started = thread_cpu_time_us();
     let visible = prepare_particle_commands(engine, commands);
+    order_particle_commands(engine.config().preset, commands, ordering_scratch);
     let projection_us = projection_started.elapsed().as_micros();
     let projection_cpu_us = elapsed_thread_cpu_us(projection_cpu_started);
     PreparedParticleFrame {
@@ -407,6 +431,48 @@ fn prepare_particle_frame(
         projection_cpu_us,
         commands: Vec::new(),
     }
+}
+
+fn order_particle_commands(
+    preset: ParticlePreset,
+    commands: &mut Vec<u32>,
+    scratch: &mut Vec<u32>,
+) {
+    let mut counts = [0usize; COMMAND_BIN_COUNT];
+    for &command in commands.iter() {
+        counts[particle_command_bin(preset, command)] += 1;
+    }
+    let mut positions = [0usize; COMMAND_BIN_COUNT];
+    let mut next = 0usize;
+    for (position, count) in positions.iter_mut().zip(counts) {
+        *position = next;
+        next += count;
+    }
+    scratch.clear();
+    assert!(scratch.capacity() >= commands.len());
+    let len = commands.len();
+    let output = &mut scratch.spare_capacity_mut()[..len];
+    for &command in commands.iter() {
+        let bin = particle_command_bin(preset, command);
+        output[positions[bin]].write(command);
+        positions[bin] += 1;
+    }
+    // SAFETY: the stable counting pass initialized exactly `len` entries.
+    unsafe {
+        scratch.set_len(len);
+    }
+    std::mem::swap(commands, scratch);
+}
+
+fn particle_command_bin(preset: ParticlePreset, command: u32) -> usize {
+    let offset = match preset {
+        ParticlePreset::Capacity if command == PARTICLE_NOT_VISIBLE_OFFSET => {
+            return COMMAND_INVISIBLE_BIN;
+        }
+        ParticlePreset::Capacity => command,
+        ParticlePreset::Visual => command & COMMAND_OFFSET_MASK,
+    };
+    ((offset >> COMMAND_BIN_SHIFT) as usize).min(COMMAND_INVISIBLE_BIN - 1)
 }
 
 fn prepare_particle_commands(engine: &ParticleEngine, commands: &mut Vec<u32>) -> usize {
@@ -978,10 +1044,10 @@ mod tests {
     fn renderer_memory_accounts_for_simulation_and_both_dirty_slots() {
         let capacity = ParticleRenderer::new(config(ParticlePreset::Capacity), mask()).unwrap();
         assert_eq!(capacity.simulation_bytes, 64 * 33);
-        assert_eq!(capacity.renderer_scratch_bytes, 64 * 12);
+        assert_eq!(capacity.renderer_scratch_bytes, 64 * 16);
         let visual = ParticleRenderer::new(config(ParticlePreset::Visual), mask()).unwrap();
         assert_eq!(visual.simulation_bytes, 64 * 33);
-        assert_eq!(visual.renderer_scratch_bytes, 64 * 20);
+        assert_eq!(visual.renderer_scratch_bytes, 64 * 24);
     }
 
     #[test]
@@ -1016,8 +1082,12 @@ mod tests {
     #[test]
     fn preparation_pipeline_returns_exact_lookahead_frames_in_order() {
         let engine = ParticleEngine::new(config(ParticlePreset::Capacity), mask()).unwrap();
-        let mut pipeline =
-            ParticlePreparationPipeline::start(engine, Vec::with_capacity(64)).unwrap();
+        let mut pipeline = ParticlePreparationPipeline::start(
+            engine,
+            Vec::with_capacity(64),
+            Vec::with_capacity(64),
+        )
+        .unwrap();
         let mut commands = Vec::with_capacity(64);
         let first_elapsed = Duration::from_micros(16_667);
         let second_elapsed = Duration::from_micros(33_334);
@@ -1051,5 +1121,27 @@ mod tests {
             elapsed + Duration::from_micros(16_663),
             elapsed
         ));
+    }
+
+    #[test]
+    fn command_ordering_is_stable_within_contiguous_framebuffer_bins() {
+        let mut commands = vec![4_100, 8, 4_096, 7, PARTICLE_NOT_VISIBLE_OFFSET];
+        let mut scratch = Vec::with_capacity(commands.len());
+        order_particle_commands(ParticlePreset::Capacity, &mut commands, &mut scratch);
+        assert_eq!(
+            commands,
+            vec![8, 7, 4_100, 4_096, PARTICLE_NOT_VISIBLE_OFFSET]
+        );
+    }
+
+    #[test]
+    fn visual_command_ordering_uses_only_the_packed_pixel_offset() {
+        let first = pack_visual_command(4_100, 3, true);
+        let second = pack_visual_command(8, 0, false);
+        let third = pack_visual_command(4_096, 1, false);
+        let mut commands = vec![first, second, third];
+        let mut scratch = Vec::with_capacity(commands.len());
+        order_particle_commands(ParticlePreset::Visual, &mut commands, &mut scratch);
+        assert_eq!(commands, vec![second, first, third]);
     }
 }
