@@ -4859,10 +4859,7 @@ fn capture_installed_firework_visual(
                 "firework visual capture observed the forbidden particle-magik renderer".into(),
             );
         }
-        let first_active_renderer = frames
-            .first()
-            .and_then(|frame| frame.get("screensaver_renderer"))
-            .and_then(Value::as_str)
+        let first_active_renderer = first_declared_screensaver_renderer(&frames)
             .ok_or("firework visual capture observed no active screensaver frame")?;
         if first_active_renderer != "particle-demos" {
             return Err(format!(
@@ -4914,6 +4911,15 @@ fn capture_installed_firework_visual(
         format!("{}\n", serde_json::to_string_pretty(&summary)?),
     )?;
     serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn first_declared_screensaver_renderer<'a>(frames: &'a [&Value]) -> Option<&'a str> {
+    frames.iter().find_map(|frame| {
+        frame
+            .get("screensaver_renderer")
+            .and_then(Value::as_str)
+            .filter(|renderer| !renderer.is_empty())
+    })
 }
 
 fn summarize_particle_trial(
@@ -16124,6 +16130,30 @@ H: Handlers=event3 js0"#
             "hold",
             70_000..=80_000
         ));
+    }
+
+    #[test]
+    fn firework_capture_ignores_only_undeclared_startup_renderer() {
+        let frames = [
+            json!({"screensaver_renderer": ""}),
+            json!({"screensaver_renderer": "particle-demos"}),
+        ];
+        let references = frames.iter().collect::<Vec<_>>();
+        assert_eq!(
+            first_declared_screensaver_renderer(&references),
+            Some("particle-demos")
+        );
+
+        let unexpected = [
+            json!({"screensaver_renderer": ""}),
+            json!({"screensaver_renderer": "other-renderer"}),
+            json!({"screensaver_renderer": "particle-demos"}),
+        ];
+        let unexpected_references = unexpected.iter().collect::<Vec<_>>();
+        assert_eq!(
+            first_declared_screensaver_renderer(&unexpected_references),
+            Some("other-renderer")
+        );
     }
 
     #[test]
