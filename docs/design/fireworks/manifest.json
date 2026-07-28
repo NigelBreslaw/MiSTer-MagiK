@@ -1,0 +1,148 @@
+{
+  "schema": "mister-magik-firework-reference-v1",
+  "geometry": {
+    "source_width": 1672,
+    "source_height": 941,
+    "runtime_width": 960,
+    "runtime_height": 540,
+    "runtime_format": "RGB565"
+  },
+  "references": [
+    {
+      "id": "solar-chrysanthemum",
+      "label": "Solar Chrysanthemum",
+      "file": "solar-chrysanthemum.png",
+      "sha256": "895b11bfde5c4d75f4fa8306956f3dd1b05d7a59fb206140fb8efd30b721087e",
+      "duration_ms": 6000,
+      "checkpoints_ms": {
+        "launch": 800,
+        "ignition": 1250,
+        "hero": 2100,
+        "secondary": 2700,
+        "decay": 4800
+      },
+      "required_colors": [
+        "white",
+        "gold",
+        "amber",
+        "red",
+        "cyan"
+      ],
+      "signature": "A dense branching gold canopy around a compact red core, with a separate thin cyan shock ring and sparse terminal glitter."
+    },
+    {
+      "id": "recursive-halo",
+      "label": "Recursive Halo",
+      "file": "recursive-halo.png",
+      "sha256": "01712ce2df4274b8b3af323f9e12022a9010d8759d55afc6dcdaeb997faec350",
+      "duration_ms": 6500,
+      "checkpoints_ms": {
+        "launch": 800,
+        "ignition": 1200,
+        "hero": 2200,
+        "secondary": 3000,
+        "decay": 5200
+      },
+      "required_colors": [
+        "white-violet",
+        "magenta",
+        "violet",
+        "mint",
+        "electric-blue",
+        "amber"
+      ],
+      "signature": "Three concentric layers with substantial black space and eight evenly spaced delayed mint satellite rosettes."
+    },
+    {
+      "id": "copper-willow-rain",
+      "label": "Copper Willow Rain",
+      "file": "copper-willow-rain.png",
+      "sha256": "18339799605ea2f2729bdbc2ae83fa6c97c747be0a24b5002c2a14838eeef10b",
+      "duration_ms": 8000,
+      "checkpoints_ms": {
+        "launch": 900,
+        "ignition": 1350,
+        "hero": 2500,
+        "secondary": 3900,
+        "decay": 6800
+      },
+      "required_colors": [
+        "white-gold",
+        "copper",
+        "amber",
+        "red-orange",
+        "pale-green"
+      ],
+      "signature": "A compact high crown feeding long gravity-dominated copper and gold curtains with restrained pale-green rear threads and red-orange fragmentation."
+    },
+    {
+      "id": "phoenix-comet",
+      "label": "Phoenix Comet",
+      "file": "phoenix-comet.png",
+      "sha256": "00d742e5ea8669582e7356393d7ba4dccff85fdc54a26dd419f9a837515a0cc5",
+      "duration_ms": 6500,
+      "checkpoints_ms": {
+        "launch": 850,
+        "ignition": 1450,
+        "hero": 2350,
+        "secondary": 3100,
+        "decay": 5300
+      },
+      "required_colors": [
+        "white",
+        "gold",
+        "orange",
+        "magenta",
+        "red",
+        "turquoise"
+      ],
+      "signature": "A diagonal gold comet opens into asymmetric magenta and orange fan wings, punctuated by turquoise tips and a curling ember tail."
+    },
+    {
+      "id": "magnetic-flower",
+      "label": "Magnetic Flower",
+      "file": "magnetic-flower.png",
+      "sha256": "be8e92588bf094c69cd6acc9d891f064eb33b202e8dab1d4fbdcc2d231fdfc98",
+      "duration_ms": 7000,
+      "checkpoints_ms": {
+        "launch": 800,
+        "ignition": 1250,
+        "hero": 2500,
+        "secondary": 3400,
+        "decay": 5900
+      },
+      "required_colors": [
+        "white",
+        "cobalt",
+        "hot-pink",
+        "lime",
+        "gold",
+        "red"
+      ],
+      "signature": "Six counter-rotating cobalt and hot-pink spiral petals retain dark centers behind a broken lime orbit, three gold micro-bursts, and falling red embers."
+    },
+    {
+      "id": "oled-peony",
+      "label": "OLED Peony",
+      "file": "oled-peony.png",
+      "sha256": "bf0fd30544ca61c9130d10e8c631b99775a4c884c17389470218edf4a8df2f77",
+      "duration_ms": 5500,
+      "checkpoints_ms": {
+        "launch": 800,
+        "ignition": 1250,
+        "hero": 2000,
+        "secondary": 2600,
+        "decay": 4500
+      },
+      "required_colors": [
+        "white",
+        "red",
+        "magenta",
+        "cobalt",
+        "cyan",
+        "gold"
+      ],
+      "signature": "A clean conventional sphere with red and magenta inner sparks, cobalt and cyan outer streaks, sparse gold tips, restrained bloom, and abundant true black."
+    }
+  ]
+}
