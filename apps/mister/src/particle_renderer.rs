@@ -3,7 +3,8 @@
 
 use crate::bitmap_text::{ConsoleFont, ConsoleTypeface};
 use crate::particle_engine::{
-    ParticleConfig, ParticleEngine, ParticleFrameStats, ParticlePhase, ParticlePreset, TargetMask,
+    PARTICLE_NOT_VISIBLE_OFFSET, ParticleConfig, ParticleEngine, ParticleFrameStats, ParticlePhase,
+    ParticlePreset, TargetMask,
 };
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::time::{Duration, Instant};
@@ -29,6 +30,7 @@ pub struct ParticleRenderStats {
     pub phase: ParticlePhase,
     pub cycle: u64,
     pub simulation_backend: &'static str,
+    pub projection_backend: &'static str,
     pub simulation_us: u128,
     pub simulation_cpu_us: u128,
     pub clear_us: u128,
@@ -176,7 +178,9 @@ impl ParticleRenderer {
             destination.fill(Rgb565Pixel(0));
         } else {
             for &offset in &slot.offsets {
-                destination[offset as usize] = Rgb565Pixel(0);
+                if offset != PARTICLE_NOT_VISIBLE_OFFSET {
+                    destination[offset as usize] = Rgb565Pixel(0);
+                }
             }
         }
         slot.initialized = true;
@@ -197,16 +201,19 @@ impl ParticleRenderer {
         destination: &mut [Rgb565Pixel],
         dirty_offsets: &mut Vec<u32>,
     ) -> usize {
-        let width = self.engine.config().width;
-        let mut visible = 0usize;
-        for index in 0..self.engine.particle_count() {
-            let Some(particle) = self.engine.project(index) else {
-                continue;
-            };
-            visible += 1;
-            let offset = particle.y as usize * width + particle.x as usize;
-            destination[offset] = CAPACITY_COLOR;
-            dirty_offsets.push(offset as u32);
+        let count = self.engine.particle_count();
+        assert!(dirty_offsets.capacity() >= count);
+        let visible = self
+            .engine
+            .project_offsets(&mut dirty_offsets.spare_capacity_mut()[..count]);
+        // SAFETY: `project_offsets` initialized exactly `count` entries.
+        unsafe {
+            dirty_offsets.set_len(count);
+        }
+        for &offset in dirty_offsets.iter() {
+            if offset != PARTICLE_NOT_VISIBLE_OFFSET {
+                destination[offset as usize] = CAPACITY_COLOR;
+            }
         }
         visible
     }
@@ -296,6 +303,7 @@ fn stats(
         phase: frame.phase,
         cycle: frame.cycle,
         simulation_backend: frame.simulation_backend,
+        projection_backend: frame.projection_backend,
         simulation_us,
         simulation_cpu_us,
         clear_us,

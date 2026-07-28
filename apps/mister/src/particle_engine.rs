@@ -4,6 +4,7 @@
 //! Deterministic scalar particle simulation for software-rendered effects.
 
 use std::time::Duration;
+use std::{mem::MaybeUninit, ops::Range};
 
 pub const PARTICLE_COUNT_MAX: usize = 524_288;
 pub const PARTICLE_CYCLE: Duration = Duration::from_secs(10);
@@ -20,6 +21,7 @@ const TARGET_DEPTH_Q2_HALF_EXTENT: i8 = 40;
 const TARGET_DEPTH_LEVELS: u64 = 81;
 const TARGET_DEPTH_Q2_RECIP: f32 = 0.25;
 const HOLD_DURATION_US: u64 = HOLD_END_US - FORM_END_US;
+pub const PARTICLE_NOT_VISIBLE_OFFSET: u32 = u32::MAX;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ParticlePreset {
@@ -177,6 +179,7 @@ pub struct ParticleFrameStats {
     pub cycle: u64,
     pub rotation_y_radians: f32,
     pub simulation_backend: &'static str,
+    pub projection_backend: &'static str,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -299,6 +302,7 @@ impl ParticleEngine {
             cycle: self.cycle,
             rotation_y_radians: self.rotation_y_radians,
             simulation_backend: self.simulation_backend_label(),
+            projection_backend: self.projection_backend_label(),
         }
     }
 
@@ -333,6 +337,47 @@ impl ParticleEngine {
             y,
             depth: rotated_z,
         })
+    }
+
+    /// Projects every particle into a packed RGB565 pixel offset. The caller
+    /// supplies uninitialized storage so the renderer can reuse its dirty list
+    /// without an extra fill pass.
+    pub fn project_offsets(&self, output: &mut [MaybeUninit<u32>]) -> usize {
+        assert!(output.len() >= self.particle_count());
+        #[cfg(target_arch = "arm")]
+        if self.use_neon {
+            // SAFETY: the C kernel writes exactly one offset or sentinel for
+            // every particle and never retains any supplied pointer.
+            return unsafe { neon::project_offsets(self, output.as_mut_ptr().cast()) };
+        }
+        self.project_offsets_scalar(output, 0..self.particle_count())
+    }
+
+    fn project_offsets_scalar(
+        &self,
+        output: &mut [MaybeUninit<u32>],
+        range: Range<usize>,
+    ) -> usize {
+        let mut visible = 0usize;
+        for index in range {
+            let offset = self
+                .project(index)
+                .map_or(PARTICLE_NOT_VISIBLE_OFFSET, |particle| {
+                    visible += 1;
+                    (particle.y as usize * self.config.width + particle.x as usize) as u32
+                });
+            output[index].write(offset);
+        }
+        visible
+    }
+
+    #[must_use]
+    pub const fn projection_backend_label(&self) -> &'static str {
+        if self.use_neon {
+            "armv7-neon-corrected"
+        } else {
+            "scalar-exact"
+        }
     }
 
     #[must_use]
@@ -616,6 +661,20 @@ mod neon {
             vy: *mut f32,
             vz: *mut f32,
         ) -> usize;
+        fn mister_magik_particle_neon_project_offsets(
+            count: usize,
+            width: usize,
+            projection_center_x: f32,
+            projection_center_y: f32,
+            projection_max_x: f32,
+            projection_max_y: f32,
+            rotation_y_sin: f32,
+            rotation_y_cos: f32,
+            x: *const f32,
+            y: *const f32,
+            z: *const f32,
+            offsets: *mut u32,
+        ) -> usize;
     }
 
     pub(super) unsafe fn advance_static(engine: &mut ParticleEngine, delta: f32) -> usize {
@@ -676,6 +735,25 @@ mod neon {
                 engine.vx.as_mut_ptr(),
                 engine.vy.as_mut_ptr(),
                 engine.vz.as_mut_ptr(),
+            )
+        }
+    }
+
+    pub(super) unsafe fn project_offsets(engine: &ParticleEngine, offsets: *mut u32) -> usize {
+        unsafe {
+            mister_magik_particle_neon_project_offsets(
+                engine.particle_count(),
+                engine.config.width,
+                engine.projection_center_x,
+                engine.projection_center_y,
+                engine.projection_max_x,
+                engine.projection_max_y,
+                engine.rotation_y_sin,
+                engine.rotation_y_cos,
+                engine.x.as_ptr(),
+                engine.y.as_ptr(),
+                engine.z.as_ptr(),
+                offsets,
             )
         }
     }
@@ -920,6 +998,29 @@ mod tests {
                     assert!(projected.depth.is_finite());
                 }
             }
+        }
+    }
+
+    #[test]
+    fn packed_projection_offsets_match_the_exact_scalar_projection() {
+        let mut engine = engine(131);
+        for milliseconds in [0, 2_000, 4_000, 5_000, 6_000, 7_000, 9_000] {
+            engine.step(Duration::from_millis(milliseconds));
+            let mut offsets = vec![MaybeUninit::uninit(); engine.particle_count()];
+            let visible = engine.project_offsets(&mut offsets);
+            let mut expected_visible = 0usize;
+            for (index, offset) in offsets.into_iter().enumerate() {
+                let expected =
+                    engine
+                        .project(index)
+                        .map_or(PARTICLE_NOT_VISIBLE_OFFSET, |particle| {
+                            expected_visible += 1;
+                            (particle.y as usize * engine.config.width + particle.x as usize) as u32
+                        });
+                // SAFETY: `project_offsets` initializes every supplied entry.
+                assert_eq!(unsafe { offset.assume_init() }, expected);
+            }
+            assert_eq!(visible, expected_visible);
         }
     }
 

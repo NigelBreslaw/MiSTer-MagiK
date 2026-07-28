@@ -10,6 +10,8 @@ static const float DEPTH_EXTENT = 64.0f;
 static const float TARGET_FIXED_SCALE_RECIP = 1.0f / 16.0f;
 static const float TARGET_DEPTH_Q2_RECIP = 1.0f / 4.0f;
 static const float RANDOM_UNIT_RECIP = 1.0f / 16777215.0f;
+static const float FOCAL_LENGTH = 720.0f;
+static const float PROJECTION_CORRECTION_MARGIN = 0.01f;
 
 static inline uint32x4_t next_random(uint32_t *states) {
     uint32x4_t value = vld1q_u32(states);
@@ -275,4 +277,143 @@ size_t mister_magik_particle_neon_disperse(
         );
     }
     return vector_end;
+}
+
+static inline int projection_needs_correction(
+    float screen_x,
+    float screen_y,
+    float projection_max_x,
+    float projection_max_y
+) {
+    if (screen_x <= -0.5f + PROJECTION_CORRECTION_MARGIN ||
+        screen_y <= -0.5f + PROJECTION_CORRECTION_MARGIN ||
+        screen_x >= projection_max_x - PROJECTION_CORRECTION_MARGIN ||
+        screen_y >= projection_max_y - PROJECTION_CORRECTION_MARGIN) {
+        return 1;
+    }
+    float shifted_x = screen_x + 0.5f;
+    float shifted_y = screen_y + 0.5f;
+    float fraction_x = shifted_x - (float)(int32_t)shifted_x;
+    float fraction_y = shifted_y - (float)(int32_t)shifted_y;
+    return fraction_x < PROJECTION_CORRECTION_MARGIN ||
+           fraction_x > 1.0f - PROJECTION_CORRECTION_MARGIN ||
+           fraction_y < PROJECTION_CORRECTION_MARGIN ||
+           fraction_y > 1.0f - PROJECTION_CORRECTION_MARGIN;
+}
+
+size_t mister_magik_particle_neon_project_offsets(
+    size_t count,
+    size_t width,
+    float projection_center_x,
+    float projection_center_y,
+    float projection_max_x,
+    float projection_max_y,
+    float rotation_y_sin,
+    float rotation_y_cos,
+    const float *x,
+    const float *y,
+    const float *z,
+    uint32_t *offsets
+) {
+    size_t visible = 0;
+    size_t vector_end = count & ~(size_t)3;
+    float32x4_t center_x = vdupq_n_f32(projection_center_x);
+    float32x4_t center_y = vdupq_n_f32(projection_center_y);
+    float32x4_t focal = vdupq_n_f32(FOCAL_LENGTH);
+    for (size_t index = 0; index < vector_end; index += 4) {
+        float32x4_t relative_x = vsubq_f32(vld1q_f32(x + index), center_x);
+        float32x4_t source_z = vld1q_f32(z + index);
+        float32x4_t rotated_x = vaddq_f32(
+            vmulq_n_f32(relative_x, rotation_y_cos),
+            vmulq_n_f32(source_z, rotation_y_sin)
+        );
+        float32x4_t rotated_z = vaddq_f32(
+            vmulq_n_f32(relative_x, -rotation_y_sin),
+            vmulq_n_f32(source_z, rotation_y_cos)
+        );
+        float32x4_t denominator = vaddq_f32(focal, rotated_z);
+        float32x4_t reciprocal = vrecpeq_f32(denominator);
+        reciprocal = vmulq_f32(
+            reciprocal,
+            vrecpsq_f32(denominator, reciprocal)
+        );
+        reciprocal = vmulq_f32(
+            reciprocal,
+            vrecpsq_f32(denominator, reciprocal)
+        );
+        float32x4_t scale = vmulq_f32(focal, reciprocal);
+        float32x4_t screen_x = vaddq_f32(
+            center_x,
+            vmulq_f32(rotated_x, scale)
+        );
+        float32x4_t screen_y = vaddq_f32(
+            center_y,
+            vmulq_f32(vsubq_f32(vld1q_f32(y + index), center_y), scale)
+        );
+        float denominator_values[4];
+        float rotated_x_values[4];
+        float rotated_z_values[4];
+        float screen_x_values[4];
+        float screen_y_values[4];
+        vst1q_f32(denominator_values, denominator);
+        vst1q_f32(rotated_x_values, rotated_x);
+        vst1q_f32(rotated_z_values, rotated_z);
+        vst1q_f32(screen_x_values, screen_x);
+        vst1q_f32(screen_y_values, screen_y);
+        for (size_t lane = 0; lane < 4; lane++) {
+            float lane_x = screen_x_values[lane];
+            float lane_y = screen_y_values[lane];
+            if (denominator_values[lane] <= 1.0f) {
+                offsets[index + lane] = UINT32_MAX;
+                continue;
+            }
+            if (projection_needs_correction(
+                    lane_x,
+                    lane_y,
+                    projection_max_x,
+                    projection_max_y)) {
+                float exact_scale = FOCAL_LENGTH / denominator_values[lane];
+                lane_x =
+                    projection_center_x + rotated_x_values[lane] * exact_scale;
+                lane_y = projection_center_y +
+                    (y[index + lane] - projection_center_y) * exact_scale;
+            }
+            if (lane_x <= -0.5f || lane_y <= -0.5f ||
+                lane_x >= projection_max_x || lane_y >= projection_max_y) {
+                offsets[index + lane] = UINT32_MAX;
+                continue;
+            }
+            uint32_t pixel_x = (uint32_t)(lane_x + 0.5f);
+            uint32_t pixel_y = (uint32_t)(lane_y + 0.5f);
+            offsets[index + lane] =
+                pixel_y * (uint32_t)width + pixel_x;
+            visible++;
+        }
+    }
+    for (size_t index = vector_end; index < count; index++) {
+        float relative_x = x[index] - projection_center_x;
+        float rotated_x =
+            relative_x * rotation_y_cos + z[index] * rotation_y_sin;
+        float rotated_z =
+            -relative_x * rotation_y_sin + z[index] * rotation_y_cos;
+        float denominator = FOCAL_LENGTH + rotated_z;
+        if (denominator <= 1.0f) {
+            offsets[index] = UINT32_MAX;
+            continue;
+        }
+        float scale = FOCAL_LENGTH / denominator;
+        float screen_x = projection_center_x + rotated_x * scale;
+        float screen_y = projection_center_y +
+            (y[index] - projection_center_y) * scale;
+        if (screen_x <= -0.5f || screen_y <= -0.5f ||
+            screen_x >= projection_max_x || screen_y >= projection_max_y) {
+            offsets[index] = UINT32_MAX;
+            continue;
+        }
+        uint32_t pixel_x = (uint32_t)(screen_x + 0.5f);
+        uint32_t pixel_y = (uint32_t)(screen_y + 0.5f);
+        offsets[index] = pixel_y * (uint32_t)width + pixel_x;
+        visible++;
+    }
+    return visible;
 }

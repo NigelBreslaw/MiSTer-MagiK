@@ -1821,6 +1821,9 @@ impl LauncherFrameAccounting {
                 particle_simulation_backend: frame
                     .screensaver_frame_trace
                     .particle_simulation_backend,
+                particle_projection_backend: frame
+                    .screensaver_frame_trace
+                    .particle_projection_backend,
                 particle_count: usize_to_u64_saturating(
                     frame.screensaver_frame_trace.particle_count,
                 ),

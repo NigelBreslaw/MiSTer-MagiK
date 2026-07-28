@@ -241,6 +241,7 @@ pub struct FrameBudgetRecentFrame {
     pub particle_preset: &'static str,
     pub particle_phase: &'static str,
     pub particle_simulation_backend: &'static str,
+    pub particle_projection_backend: &'static str,
     pub particle_count: u64,
     pub particle_visible: u64,
     pub particle_simulation_us: u64,
@@ -911,6 +912,10 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
         "particle_simulation_backend",
         frame.particle_simulation_backend
     );
+    field!(
+        "particle_projection_backend",
+        frame.particle_projection_backend
+    );
     field!("particle_count", frame.particle_count);
     field!("particle_visible", frame.particle_visible);
     field!("particle_simulation_us", frame.particle_simulation_us);
@@ -1282,6 +1287,7 @@ mod tests {
                         particle_preset: "visual",
                         particle_phase: "hold",
                         particle_simulation_backend: "armv7-neon",
+                        particle_projection_backend: "armv7-neon-corrected",
                         particle_count: 16_384,
                         particle_visible: 16_000,
                         particle_simulation_us: 2_100,
@@ -1405,6 +1411,10 @@ mod tests {
         assert_eq!(
             value["frame_budget"]["recent_frames"][0]["particle_simulation_backend"],
             "armv7-neon"
+        );
+        assert_eq!(
+            value["frame_budget"]["recent_frames"][0]["particle_projection_backend"],
+            "armv7-neon-corrected"
         );
         assert_eq!(
             value["frame_budget"]["recent_frames"][0]["particle_simulation_cpu_us"],
