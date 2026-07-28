@@ -3261,7 +3261,7 @@ fn particle_showcase_demo(number: u8) -> Result<(&'static str, u64)> {
         7 => Ok(("particle-portal", 65_536)),
         8 => Ok(("electric-storm", 16_384)),
         9 => Ok(("fountain-waterfall", 32_768)),
-        10 => Ok(("arcade-cabinet", 65_536)),
+        10 => Ok(("arcade-cabinet", 24_576)),
         _ => Err(format!("particle showcase demo must be in 1..=10, received {number}").into()),
     }
 }
