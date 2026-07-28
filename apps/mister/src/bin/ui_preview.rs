@@ -127,7 +127,7 @@ mod macos {
         preview_current_index: Option<usize>,
         preview_transition_id: u64,
         preview_transition_duration: Duration,
-        particle_renderer: ParticleRenderer,
+        particle_renderer: Option<ParticleRenderer>,
         tile_wall: ScreenshotTileWall,
         tile_images: Vec<ScreenshotTileImage>,
         screensaver_elapsed: Duration,
@@ -204,14 +204,7 @@ mod macos {
                 preview_current_index: None,
                 preview_transition_id: 0,
                 preview_transition_duration: PREVIEW_TRANSITION_DURATION,
-                particle_renderer: ParticleRenderer::new_magik(ParticleConfig {
-                    count: 16_384,
-                    width: FRAME_WIDTH,
-                    height: FRAME_HEIGHT,
-                    seed: 0x4d61_6769_4b,
-                    preset: ParticlePreset::Visual,
-                })
-                .expect("create production particle screensaver"),
+                particle_renderer: None,
                 tile_wall: ScreenshotTileWall::new(FRAME_WIDTH, FRAME_HEIGHT),
                 tile_images,
                 screensaver_elapsed: Duration::ZERO,
@@ -284,7 +277,7 @@ mod macos {
                 self.arcade_layer.invalidate();
             }
             if matches!(scenario, Scenario::ParticleScreensaver) {
-                self.particle_renderer.invalidate_hidden_slot(1);
+                self.magik_particle_renderer().invalidate_hidden_slot(1);
                 self.screensaver_elapsed = Duration::ZERO;
             }
             if matches!(scenario, Scenario::ScreenshotTiles) {
@@ -600,7 +593,12 @@ mod macos {
                     );
                 }
             } else if self.scenario == Scenario::ParticleScreensaver {
+                if self.particle_renderer.is_none() {
+                    let _ = self.magik_particle_renderer();
+                }
                 self.particle_renderer
+                    .as_mut()
+                    .expect("particle renderer initialized for selected scenario")
                     .render(
                         self.frame_target.cached_565_mut(),
                         1,
@@ -624,6 +622,19 @@ mod macos {
                 self.screensaver_elapsed += frame_delta;
             }
             self.fixed_time.set(self.fixed_time.get() + frame_delta);
+        }
+
+        fn magik_particle_renderer(&mut self) -> &mut ParticleRenderer {
+            self.particle_renderer.get_or_insert_with(|| {
+                ParticleRenderer::new_magik(ParticleConfig {
+                    count: 16_384,
+                    width: FRAME_WIDTH,
+                    height: FRAME_HEIGHT,
+                    seed: 0x4d61_6769_4b,
+                    preset: ParticlePreset::Visual,
+                })
+                .expect("create production particle screensaver")
+            })
         }
 
         fn frame_delta(&mut self) -> Duration {
