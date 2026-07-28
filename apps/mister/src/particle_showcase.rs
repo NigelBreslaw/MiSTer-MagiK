@@ -81,8 +81,6 @@ unsafe extern "C" {
         camera_z: f32,
         rotation_y_sin: f32,
         rotation_y_cos: f32,
-        tilt_sin: f32,
-        tilt_cos: f32,
         core_scale: f32,
         x: *const f32,
         y: *const f32,
@@ -617,12 +615,19 @@ impl ParticleShowcaseRenderer {
             self.pool.z[index] = angle.sin() * radius;
             let outer = ((radius - 32.0) * (4.0 / 382.0)).clamp(0.0, 3.0) as u8;
             self.pool.style[index] = 5u8.saturating_sub(outer);
-            let dust_lane = random.rotate_left(3) & 31 < 5;
+            let dust_lane = random.rotate_left(3) & 31 < 10;
             self.pool.flags[index] = if dust_lane {
                 0
             } else {
                 1 | (u8::from(random & 511 == 0) << 1)
             };
+        }
+        let (sin_tilt, cos_tilt) = 0.92_f32.sin_cos();
+        for index in 0..self.pool.active() {
+            let y = self.pool.y[index];
+            let z = self.pool.z[index];
+            self.pool.y[index] = y.mul_add(cos_tilt, -(z * sin_tilt));
+            self.pool.z[index] = y.mul_add(sin_tilt, z * cos_tilt);
         }
     }
 
@@ -631,7 +636,6 @@ impl ParticleShowcaseRenderer {
         self.segments.clear();
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
         let (sin_yaw, cos_yaw) = (seconds * 0.042).sin_cos();
-        let (sin_tilt, cos_tilt) = 0.92_f32.sin_cos();
         let core_pulse = ((seconds * 1.7).sin() * 0.5 + 0.5) * 0.18 + 0.82;
         let bulge_count = self.pool.active() * 3 / 20;
         #[cfg(target_arch = "arm")]
@@ -646,8 +650,6 @@ impl ParticleShowcaseRenderer {
                     650.0,
                     sin_yaw,
                     cos_yaw,
-                    sin_tilt,
-                    cos_tilt,
                     core_pulse,
                     self.pool.x.as_ptr(),
                     self.pool.y.as_ptr(),
@@ -670,15 +672,13 @@ impl ParticleShowcaseRenderer {
             let x = self.pool.x[index];
             let y = self.pool.y[index];
             let z = self.pool.z[index];
-            let yaw_x = x.mul_add(cos_yaw, z * sin_yaw);
-            let yaw_z = (-x).mul_add(sin_yaw, z * cos_yaw);
-            let tilted_y = y.mul_add(cos_tilt, -(yaw_z * sin_tilt));
-            let tilted_z = y.mul_add(sin_tilt, yaw_z * cos_tilt);
+            let display_x = x.mul_add(cos_yaw, -(y * sin_yaw));
+            let display_y = x.mul_add(sin_yaw, y * cos_yaw);
             let scale = if index < bulge_count { core_pulse } else { 1.0 };
             let Some((screen_x, screen_y)) = project_world(
-                yaw_x * scale,
-                tilted_y * scale,
-                tilted_z,
+                display_x * scale,
+                display_y * scale,
+                z,
                 self.config.width,
                 self.config.height,
                 650.0,
@@ -1565,7 +1565,7 @@ mod tests {
         assert_eq!(stats.demo, ParticleDemoKind::SpiralGalaxy);
         assert_eq!(stats.beat, "arm-pass");
         assert_eq!(renderer.commands.len(), renderer.pool.active());
-        assert!(stats.visible > renderer.pool.active() * 3 / 4);
+        assert!(stats.visible > renderer.pool.active() / 2);
         assert!(
             renderer.pool.style[..bulge_count]
                 .iter()
