@@ -248,6 +248,14 @@ pub struct FrameBudgetRecentFrame {
     pub particle_simulation_cpu_us: u64,
     pub particle_projection_us: u64,
     pub particle_projection_cpu_us: u64,
+    pub particle_preparation_wait_us: u64,
+    pub particle_prepared_frame_age_us: u64,
+    pub particle_lookahead_mismatch_count: u64,
+    pub particle_preparation_queue_depth: u64,
+    pub particle_worker_wake_latency_us: u64,
+    pub particle_preparation_cpu_us: u64,
+    pub particle_preparation_cpu_start: u64,
+    pub particle_preparation_cpu_end: u64,
     pub particle_clear_us: u64,
     pub particle_clear_cpu_us: u64,
     pub particle_raster_us: u64,
@@ -930,6 +938,38 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
         "particle_projection_cpu_us",
         frame.particle_projection_cpu_us
     );
+    field!(
+        "particle_preparation_wait_us",
+        frame.particle_preparation_wait_us
+    );
+    field!(
+        "particle_prepared_frame_age_us",
+        frame.particle_prepared_frame_age_us
+    );
+    field!(
+        "particle_lookahead_mismatch_count",
+        frame.particle_lookahead_mismatch_count
+    );
+    field!(
+        "particle_preparation_queue_depth",
+        frame.particle_preparation_queue_depth
+    );
+    field!(
+        "particle_worker_wake_latency_us",
+        frame.particle_worker_wake_latency_us
+    );
+    field!(
+        "particle_preparation_cpu_us",
+        frame.particle_preparation_cpu_us
+    );
+    field!(
+        "particle_preparation_cpu_start",
+        frame.particle_preparation_cpu_start
+    );
+    field!(
+        "particle_preparation_cpu_end",
+        frame.particle_preparation_cpu_end
+    );
     field!("particle_clear_us", frame.particle_clear_us);
     field!("particle_clear_cpu_us", frame.particle_clear_cpu_us);
     field!("particle_raster_us", frame.particle_raster_us);
@@ -1301,6 +1341,14 @@ mod tests {
                         particle_simulation_cpu_us: 2_000,
                         particle_projection_us: 800,
                         particle_projection_cpu_us: 750,
+                        particle_preparation_wait_us: 40,
+                        particle_prepared_frame_age_us: 60,
+                        particle_lookahead_mismatch_count: 0,
+                        particle_preparation_queue_depth: 1,
+                        particle_worker_wake_latency_us: 15,
+                        particle_preparation_cpu_us: 2_750,
+                        particle_preparation_cpu_start: 1,
+                        particle_preparation_cpu_end: 1,
                         particle_clear_us: 120,
                         particle_clear_cpu_us: 100,
                         particle_raster_us: 900,

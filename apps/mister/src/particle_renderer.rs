@@ -46,6 +46,14 @@ pub struct ParticleRenderStats {
     pub simulation_cpu_us: u128,
     pub projection_us: u128,
     pub projection_cpu_us: u128,
+    pub preparation_wait_us: u128,
+    pub prepared_frame_age_us: u128,
+    pub lookahead_mismatch_count: u64,
+    pub preparation_queue_depth: usize,
+    pub worker_wake_latency_us: u128,
+    pub preparation_cpu_us: u128,
+    pub preparation_cpu_start: u64,
+    pub preparation_cpu_end: u64,
     pub clear_us: u128,
     pub clear_cpu_us: u128,
     pub raster_us: u128,
@@ -85,6 +93,7 @@ struct ParticleDirtySlot {
 
 struct ParticlePreparationRequest {
     elapsed: Duration,
+    sent_at: Instant,
     commands: Vec<u32>,
 }
 
@@ -96,6 +105,15 @@ struct PreparedParticleFrame {
     simulation_cpu_us: u128,
     projection_us: u128,
     projection_cpu_us: u128,
+    preparation_wait_us: u128,
+    prepared_frame_age_us: u128,
+    lookahead_mismatch_count: u64,
+    preparation_queue_depth: usize,
+    worker_wake_latency_us: u128,
+    preparation_cpu_us: u128,
+    preparation_cpu_start: u64,
+    preparation_cpu_end: u64,
+    completed_at: Instant,
     commands: Vec<u32>,
 }
 
@@ -232,6 +250,14 @@ impl ParticleRenderer {
             prepared.simulation_cpu_us,
             prepared.projection_us,
             prepared.projection_cpu_us,
+            prepared.preparation_wait_us,
+            prepared.prepared_frame_age_us,
+            prepared.lookahead_mismatch_count,
+            prepared.preparation_queue_depth,
+            prepared.worker_wake_latency_us,
+            prepared.preparation_cpu_us,
+            prepared.preparation_cpu_start,
+            prepared.preparation_cpu_end,
             clear_us,
             clear_cpu_us,
             raster_us,
@@ -333,18 +359,26 @@ impl ParticlePreparationPipeline {
         next_elapsed: Option<Duration>,
         commands: &mut Vec<u32>,
     ) -> Result<PreparedParticleFrame, String> {
+        let preparation_queue_depth = usize::from(self.in_flight.is_some());
+        let wait_started = Instant::now();
         let mut prepared = if self.in_flight.take().is_some() {
             self.receive()?
         } else {
             self.send(elapsed)?;
             self.receive()?
         };
+        let mut lookahead_mismatch_count = 0;
         if !lookahead_elapsed_matches(prepared.elapsed, elapsed) {
+            lookahead_mismatch_count = 1;
             self.spare_commands = Some(std::mem::take(&mut prepared.commands));
             self.send(elapsed)?;
             prepared = self.receive()?;
         }
         debug_assert!(lookahead_elapsed_matches(prepared.elapsed, elapsed));
+        prepared.preparation_wait_us = wait_started.elapsed().as_micros();
+        prepared.prepared_frame_age_us = prepared.completed_at.elapsed().as_micros();
+        prepared.lookahead_mismatch_count = lookahead_mismatch_count;
+        prepared.preparation_queue_depth = preparation_queue_depth;
         std::mem::swap(commands, &mut prepared.commands);
         self.spare_commands = Some(std::mem::take(&mut prepared.commands));
         if let Some(next_elapsed) = next_elapsed.filter(|next| *next > elapsed) {
@@ -362,7 +396,11 @@ impl ParticlePreparationPipeline {
         self.request_tx
             .as_ref()
             .ok_or("particle preparation worker has stopped")?
-            .send(ParticlePreparationRequest { elapsed, commands })
+            .send(ParticlePreparationRequest {
+                elapsed,
+                sent_at: Instant::now(),
+                commands,
+            })
             .map_err(|_| "particle preparation worker disconnected".to_string())
     }
 
@@ -389,6 +427,9 @@ fn run_particle_preparation_worker(
     ready_tx: SyncSender<PreparedParticleFrame>,
 ) {
     while let Ok(request) = request_rx.recv() {
+        let worker_wake_latency_us = request.sent_at.elapsed().as_micros();
+        let execution_started = thread_execution_snapshot();
+        let preparation_cpu_started = thread_cpu_time_us();
         let mut commands = request.commands;
         let mut prepared = prepare_particle_frame(
             &mut engine,
@@ -396,6 +437,12 @@ fn run_particle_preparation_worker(
             &mut commands,
             ordering_scratch.as_mut(),
         );
+        let execution_finished = thread_execution_snapshot();
+        prepared.worker_wake_latency_us = worker_wake_latency_us;
+        prepared.preparation_cpu_us = elapsed_thread_cpu_us(preparation_cpu_started);
+        prepared.preparation_cpu_start = execution_started.cpu;
+        prepared.preparation_cpu_end = execution_finished.cpu;
+        prepared.completed_at = Instant::now();
         prepared.commands = commands;
         if ready_tx.send(prepared).is_err() {
             break;
@@ -430,6 +477,15 @@ fn prepare_particle_frame(
         simulation_cpu_us,
         projection_us,
         projection_cpu_us,
+        preparation_wait_us: 0,
+        prepared_frame_age_us: 0,
+        lookahead_mismatch_count: 0,
+        preparation_queue_depth: 0,
+        worker_wake_latency_us: 0,
+        preparation_cpu_us: simulation_cpu_us.saturating_add(projection_cpu_us),
+        preparation_cpu_start: 0,
+        preparation_cpu_end: 0,
+        completed_at: Instant::now(),
         commands: Vec::new(),
     }
 }
@@ -589,6 +645,14 @@ fn stats(
     simulation_cpu_us: u128,
     projection_us: u128,
     projection_cpu_us: u128,
+    preparation_wait_us: u128,
+    prepared_frame_age_us: u128,
+    lookahead_mismatch_count: u64,
+    preparation_queue_depth: usize,
+    worker_wake_latency_us: u128,
+    preparation_cpu_us: u128,
+    preparation_cpu_start: u64,
+    preparation_cpu_end: u64,
     clear_us: u128,
     clear_cpu_us: u128,
     raster_us: u128,
@@ -610,6 +674,14 @@ fn stats(
         simulation_cpu_us,
         projection_us,
         projection_cpu_us,
+        preparation_wait_us,
+        prepared_frame_age_us,
+        lookahead_mismatch_count,
+        preparation_queue_depth,
+        worker_wake_latency_us,
+        preparation_cpu_us,
+        preparation_cpu_start,
+        preparation_cpu_end,
         clear_us,
         clear_cpu_us,
         raster_us,
@@ -1101,12 +1173,16 @@ mod tests {
             .acquire(first_elapsed, Some(second_elapsed), &mut commands)
             .unwrap();
         assert_eq!(first.elapsed, first_elapsed);
+        assert_eq!(first.lookahead_mismatch_count, 0);
+        assert_eq!(first.preparation_queue_depth, 0);
         assert_eq!(commands.len(), first.visible);
         let first_commands = commands.clone();
         let second = pipeline
             .acquire(second_elapsed, None, &mut commands)
             .unwrap();
         assert_eq!(second.elapsed, second_elapsed);
+        assert_eq!(second.lookahead_mismatch_count, 0);
+        assert_eq!(second.preparation_queue_depth, 1);
         assert_eq!(commands.len(), second.visible);
         assert_ne!(commands, first_commands);
     }

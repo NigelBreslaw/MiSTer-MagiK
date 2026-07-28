@@ -4548,6 +4548,18 @@ fn summarize_particle_trial(
                         "particle_projection_us",
                         "particle_projection_cpu_us"
                     ),
+                    "preparation_wait_mean_us": mean_frame_field(
+                        &matching,
+                        "particle_preparation_wait_us"
+                    ),
+                    "prepared_frame_age_mean_us": mean_frame_field(
+                        &matching,
+                        "particle_prepared_frame_age_us"
+                    ),
+                    "worker_wake_latency_mean_us": mean_frame_field(
+                        &matching,
+                        "particle_worker_wake_latency_us"
+                    ),
                     "clear_mean_us": mean_frame_field(&matching, "particle_clear_us"),
                     "clear_cpu_mean_us": mean_frame_field(&matching, "particle_clear_cpu_us"),
                     "clear_descheduled_mean_us": mean_frame_difference(
@@ -4652,16 +4664,74 @@ fn summarize_particle_trial(
             frame.get("particle_projection_backend").and_then(Value::as_str)
         }).collect::<std::collections::BTreeSet<_>>(),
         "pipeline": {
+            "preparation_wait_mean_us": mean_frame_field(
+                steady,
+                "particle_preparation_wait_us"
+            ),
+            "preparation_wait_p99_us": percentile_99_frame_field(
+                steady,
+                "particle_preparation_wait_us"
+            ),
+            "preparation_wait_max_us": max_frame_field(
+                steady,
+                "particle_preparation_wait_us"
+            ),
             "prepared_frame_age_mean_us": mean_frame_field(
                 steady,
-                "screensaver_render_ahead_frame_age_us"
+                "particle_prepared_frame_age_us"
+            ),
+            "prepared_frame_age_p99_us": percentile_99_frame_field(
+                steady,
+                "particle_prepared_frame_age_us"
+            ),
+            "prepared_frame_age_max_us": max_frame_field(
+                steady,
+                "particle_prepared_frame_age_us"
+            ),
+            "lookahead_mismatch_count": sum_frame_field(
+                steady,
+                "particle_lookahead_mismatch_count"
             ),
             "queue_depth_mean": mean_frame_field(
                 steady,
-                "screensaver_render_ahead_queue_depth"
+                "particle_preparation_queue_depth"
             ),
+            "queue_depth_max": max_frame_field(
+                steady,
+                "particle_preparation_queue_depth"
+            ),
+            "worker_wake_latency_mean_us": mean_frame_field(
+                steady,
+                "particle_worker_wake_latency_us"
+            ),
+            "worker_wake_latency_p99_us": percentile_99_frame_field(
+                steady,
+                "particle_worker_wake_latency_us"
+            ),
+            "worker_wake_latency_max_us": max_frame_field(
+                steady,
+                "particle_worker_wake_latency_us"
+            ),
+            "worker_cpu_migrations": steady.iter().filter(|frame| {
+                frame_u64(frame, "particle_preparation_cpu_start")
+                    != frame_u64(frame, "particle_preparation_cpu_end")
+            }).count(),
+            "worker_cpu_ids": steady.iter().flat_map(|frame| {
+                [
+                    frame_u64(frame, "particle_preparation_cpu_start"),
+                    frame_u64(frame, "particle_preparation_cpu_end"),
+                ]
+            }).collect::<std::collections::BTreeSet<_>>(),
         },
         "cpu": {
+            "preparation_pct_of_one_core": mean_frame_field(
+                steady,
+                "particle_preparation_cpu_us"
+            ) * 100.0 / refresh_period_us.max(1) as f64,
+            "clear_raster_pct_of_one_core": (
+                mean_frame_field(steady, "particle_clear_cpu_us")
+                    + mean_frame_field(steady, "particle_raster_cpu_us")
+            ) * 100.0 / refresh_period_us.max(1) as f64,
             "renderer_pct_of_one_core": mean_frame_field(
                 steady,
                 "screensaver_render_ahead_render_cpu_us"
@@ -4911,7 +4981,7 @@ fn persist_and_qualify_particle_benchmark(
 fn particle_benchmark_report(summary: &Value) -> String {
     if let Some(demo) = summary.get("demo").filter(|demo| !demo.is_null()) {
         let mut report = format!(
-            "# Particle 40K Visual Trial\n\n- Geometry: 960x540 RGB565\n- Presentation: direct hidden-slot latch\n- Preset: visual\n- Particles: {}\n- Duration: {} seconds\n- Qualified: {}\n- Unique FPS: {:.6}\n- Repeated refreshes: {}\n- Process CPU: {:.2}% of one core\n- Renderer CPU: {:.2}% of one core\n- Prepared-frame age mean: {:.2} us\n- P99 render wall: {} us\n- Maximum render wall: {} us\n\n## Phase means\n\n| Phase | Simulation wall | Simulation CPU | Projection wall | Projection CPU | Clear wall | Raster wall | Render wall |\n|---|---:|---:|---:|---:|---:|---:|---:|\n",
+            "# Particle 40K Visual Trial\n\n- Geometry: 960x540 RGB565\n- Presentation: direct hidden-slot latch\n- Preset: visual\n- Particles: {}\n- Duration: {} seconds\n- Qualified: {}\n- Unique FPS: {:.6}\n- Repeated refreshes: {}\n- Process CPU: {:.2}% of one core\n- CPU1 preparation CPU: {:.2}% of one core\n- CPU0 clear+raster CPU: {:.2}% of one core\n- Renderer CPU: {:.2}% of one core\n- Preparation wait mean / P99 / max: {:.2} / {} / {} us\n- Prepared-frame age mean / P99 / max: {:.2} / {} / {} us\n- Worker wake latency mean / P99 / max: {:.2} / {} / {} us\n- Lookahead mismatch recomputes: {}\n- Preparation queue depth mean / max: {:.2} / {}\n- P99 render wall: {} us\n- Maximum render wall: {} us\n\n## Phase means\n\n| Phase | Simulation wall | Simulation CPU | Projection wall | Projection CPU | Preparation wait | Clear wall | Raster wall | Render wall |\n|---|---:|---:|---:|---:|---:|---:|---:|---:|\n",
             demo.get("count").and_then(Value::as_u64).unwrap_or(0),
             demo.get("duration_secs")
                 .and_then(Value::as_u64)
@@ -4928,12 +4998,51 @@ fn particle_benchmark_report(summary: &Value) -> String {
             demo.pointer("/cpu/process_pct_of_one_core")
                 .and_then(Value::as_f64)
                 .unwrap_or(0.0),
+            demo.pointer("/cpu/preparation_pct_of_one_core")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0),
+            demo.pointer("/cpu/clear_raster_pct_of_one_core")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0),
             demo.pointer("/cpu/renderer_pct_of_one_core")
                 .and_then(Value::as_f64)
                 .unwrap_or(0.0),
+            demo.pointer("/pipeline/preparation_wait_mean_us")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0),
+            demo.pointer("/pipeline/preparation_wait_p99_us")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            demo.pointer("/pipeline/preparation_wait_max_us")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
             demo.pointer("/pipeline/prepared_frame_age_mean_us")
                 .and_then(Value::as_f64)
                 .unwrap_or(0.0),
+            demo.pointer("/pipeline/prepared_frame_age_p99_us")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            demo.pointer("/pipeline/prepared_frame_age_max_us")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            demo.pointer("/pipeline/worker_wake_latency_mean_us")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0),
+            demo.pointer("/pipeline/worker_wake_latency_p99_us")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            demo.pointer("/pipeline/worker_wake_latency_max_us")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            demo.pointer("/pipeline/lookahead_mismatch_count")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            demo.pointer("/pipeline/queue_depth_mean")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0),
+            demo.pointer("/pipeline/queue_depth_max")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
             demo.get("p99_render_wall_us")
                 .and_then(Value::as_u64)
                 .unwrap_or(0),
@@ -4950,11 +5059,12 @@ fn particle_benchmark_report(summary: &Value) -> String {
                     .unwrap_or(0.0)
             };
             report.push_str(&format!(
-                "| {phase} | {:.2} us | {:.2} us | {:.2} us | {:.2} us | {:.2} us | {:.2} us | {:.2} us |\n",
+                "| {phase} | {:.2} us | {:.2} us | {:.2} us | {:.2} us | {:.2} us | {:.2} us | {:.2} us | {:.2} us |\n",
                 mean("simulation_mean_us"),
                 mean("simulation_cpu_mean_us"),
                 mean("projection_mean_us"),
                 mean("projection_cpu_mean_us"),
+                mean("preparation_wait_mean_us"),
                 mean("clear_mean_us"),
                 mean("raster_mean_us"),
                 mean("render_wall_mean_us"),
@@ -6389,6 +6499,14 @@ fn validate_screensaver_frame_evidence(run: usize, frame_id: u64, frame: &Value)
         "particle_simulation_cpu_us",
         "particle_projection_us",
         "particle_projection_cpu_us",
+        "particle_preparation_wait_us",
+        "particle_prepared_frame_age_us",
+        "particle_lookahead_mismatch_count",
+        "particle_preparation_queue_depth",
+        "particle_worker_wake_latency_us",
+        "particle_preparation_cpu_us",
+        "particle_preparation_cpu_start",
+        "particle_preparation_cpu_end",
         "particle_clear_us",
         "particle_clear_cpu_us",
         "particle_raster_us",
@@ -6577,6 +6695,27 @@ fn mean_frame_field(frames: &[&Value], key: &str) -> f64 {
         .map(|frame| frame_u64(frame, key) as f64)
         .sum::<f64>()
         / frames.len() as f64
+}
+
+fn max_frame_field(frames: &[&Value], key: &str) -> u64 {
+    frames
+        .iter()
+        .map(|frame| frame_u64(frame, key))
+        .max()
+        .unwrap_or(0)
+}
+
+fn sum_frame_field(frames: &[&Value], key: &str) -> u64 {
+    frames.iter().map(|frame| frame_u64(frame, key)).sum()
+}
+
+fn percentile_99_frame_field(frames: &[&Value], key: &str) -> u64 {
+    let mut values = frames
+        .iter()
+        .map(|frame| frame_u64(frame, key))
+        .collect::<Vec<_>>();
+    values.sort_unstable();
+    percentile_99(&values)
 }
 
 fn mean_frame_difference(frames: &[&Value], minuend: &str, subtrahend: &str) -> f64 {
@@ -14782,6 +14921,14 @@ H: Handlers=event3 js0"#
                 "particle_simulation_cpu_us": 0,
                 "particle_projection_us": 0,
                 "particle_projection_cpu_us": 0,
+                "particle_preparation_wait_us": 0,
+                "particle_prepared_frame_age_us": 0,
+                "particle_lookahead_mismatch_count": 0,
+                "particle_preparation_queue_depth": 0,
+                "particle_worker_wake_latency_us": 0,
+                "particle_preparation_cpu_us": 0,
+                "particle_preparation_cpu_start": 0,
+                "particle_preparation_cpu_end": 0,
                 "particle_clear_us": 0,
                 "particle_clear_cpu_us": 0,
                 "particle_raster_us": 0,
@@ -15220,6 +15367,14 @@ H: Handlers=event3 js0"#
             "particle_simulation_cpu_us": 1_900,
             "particle_projection_us": 2_500,
             "particle_projection_cpu_us": 2_400,
+            "particle_preparation_wait_us": 50,
+            "particle_prepared_frame_age_us": 75,
+            "particle_lookahead_mismatch_count": 0,
+            "particle_preparation_queue_depth": 1,
+            "particle_worker_wake_latency_us": 20,
+            "particle_preparation_cpu_us": 4_300,
+            "particle_preparation_cpu_start": 1,
+            "particle_preparation_cpu_end": 1,
             "particle_clear_us": 200,
             "particle_clear_cpu_us": 180,
             "particle_raster_us": 5_000,
