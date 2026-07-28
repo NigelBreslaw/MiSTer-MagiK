@@ -252,6 +252,13 @@ pub struct FrameBudgetRecentFrame {
     pub particle_render_cpu_end: u64,
     pub particle_voluntary_context_switches: u64,
     pub particle_involuntary_context_switches: u64,
+    pub particle_pmu_available: bool,
+    pub particle_pmu_cycles: u64,
+    pub particle_pmu_instructions: u64,
+    pub particle_pmu_cache_references: u64,
+    pub particle_pmu_cache_misses: u64,
+    pub particle_pmu_branch_instructions: u64,
+    pub particle_pmu_branch_misses: u64,
     pub particle_rotation_y_millidegrees: u64,
     pub particle_simulation_bytes: u64,
     pub particle_renderer_scratch_bytes: u64,
@@ -920,6 +927,22 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
         "particle_involuntary_context_switches",
         frame.particle_involuntary_context_switches
     );
+    field!("particle_pmu_available", frame.particle_pmu_available);
+    field!("particle_pmu_cycles", frame.particle_pmu_cycles);
+    field!("particle_pmu_instructions", frame.particle_pmu_instructions);
+    field!(
+        "particle_pmu_cache_references",
+        frame.particle_pmu_cache_references
+    );
+    field!("particle_pmu_cache_misses", frame.particle_pmu_cache_misses);
+    field!(
+        "particle_pmu_branch_instructions",
+        frame.particle_pmu_branch_instructions
+    );
+    field!(
+        "particle_pmu_branch_misses",
+        frame.particle_pmu_branch_misses
+    );
     field!(
         "particle_rotation_y_millidegrees",
         frame.particle_rotation_y_millidegrees
@@ -1265,6 +1288,13 @@ mod tests {
                         particle_render_cpu_end: 0,
                         particle_voluntary_context_switches: 1,
                         particle_involuntary_context_switches: 2,
+                        particle_pmu_available: true,
+                        particle_pmu_cycles: 12_000,
+                        particle_pmu_instructions: 10_000,
+                        particle_pmu_cache_references: 1_000,
+                        particle_pmu_cache_misses: 100,
+                        particle_pmu_branch_instructions: 500,
+                        particle_pmu_branch_misses: 25,
                         particle_rotation_y_millidegrees: 45_000,
                         particle_simulation_bytes: 540_672,
                         particle_renderer_scratch_bytes: 262_144,
@@ -1373,6 +1403,10 @@ mod tests {
         assert_eq!(
             value["frame_budget"]["recent_frames"][0]["particle_involuntary_context_switches"],
             2
+        );
+        assert_eq!(
+            value["frame_budget"]["recent_frames"][0]["particle_pmu_cycles"],
+            12_000
         );
         assert_eq!(
             value["frame_budget"]["recent_frames"][0]["particle_rotation_y_millidegrees"],

@@ -4144,20 +4144,24 @@ fn run_particle_trial(
     kind: &str,
 ) -> Result<Value> {
     let session = connect_with(&config.connection, 10)?;
+    let mut env_vars = vec![
+        ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+        ("MISTER_SCREENSAVER_START_ACTIVE".into(), "1".into()),
+        (
+            "MISTER_SCREENSAVER_RENDERER".into(),
+            "particle-magik".into(),
+        ),
+        ("MISTER_PARTICLE_COUNT".into(), count.to_string()),
+        ("MISTER_PARTICLE_PRESET".into(), preset.into()),
+        ("MISTER_PARTICLE_SEED".into(), "827141709451".into()),
+    ];
+    if kind == "step" {
+        env_vars.push(("MISTER_PARTICLE_PMU".into(), "1".into()));
+    }
     restart_launcher_with_one_shot_env(
         &session,
         LauncherRestartOptions {
-            env_vars: vec![
-                ("MISTER_CATALOG_REFRESH".into(), "off".into()),
-                ("MISTER_SCREENSAVER_START_ACTIVE".into(), "1".into()),
-                (
-                    "MISTER_SCREENSAVER_RENDERER".into(),
-                    "particle-magik".into(),
-                ),
-                ("MISTER_PARTICLE_COUNT".into(), count.to_string()),
-                ("MISTER_PARTICLE_PRESET".into(), preset.into()),
-                ("MISTER_PARTICLE_SEED".into(), "827141709451".into()),
-            ],
+            env_vars,
             timeout_secs: 45,
             remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
             ..LauncherRestartOptions::default()
@@ -4422,6 +4426,30 @@ fn summarize_particle_trial(
         .map(|frame| frame_u64(frame, "particle_renderer_scratch_bytes"))
         .max()
         .unwrap_or(0);
+    let pmu_cycles = steady
+        .iter()
+        .map(|frame| frame_u64(frame, "particle_pmu_cycles"))
+        .sum::<u64>();
+    let pmu_instructions = steady
+        .iter()
+        .map(|frame| frame_u64(frame, "particle_pmu_instructions"))
+        .sum::<u64>();
+    let pmu_cache_references = steady
+        .iter()
+        .map(|frame| frame_u64(frame, "particle_pmu_cache_references"))
+        .sum::<u64>();
+    let pmu_cache_misses = steady
+        .iter()
+        .map(|frame| frame_u64(frame, "particle_pmu_cache_misses"))
+        .sum::<u64>();
+    let pmu_branch_instructions = steady
+        .iter()
+        .map(|frame| frame_u64(frame, "particle_pmu_branch_instructions"))
+        .sum::<u64>();
+    let pmu_branch_misses = steady
+        .iter()
+        .map(|frame| frame_u64(frame, "particle_pmu_branch_misses"))
+        .sum::<u64>();
     json!({
         "kind": kind,
         "preset": preset,
@@ -4448,6 +4476,20 @@ fn summarize_particle_trial(
                 frame_u64(frame, "particle_render_cpu_start")
                     != frame_u64(frame, "particle_render_cpu_end")
             }).count(),
+        },
+        "pmu": {
+            "available_frames": steady.iter().filter(|frame| {
+                frame.get("particle_pmu_available").and_then(Value::as_bool) == Some(true)
+            }).count(),
+            "cycles": pmu_cycles,
+            "instructions": pmu_instructions,
+            "instructions_per_cycle": ratio(pmu_instructions, pmu_cycles),
+            "cache_references": pmu_cache_references,
+            "cache_misses": pmu_cache_misses,
+            "cache_miss_pct": ratio(pmu_cache_misses, pmu_cache_references) * 100.0,
+            "branch_instructions": pmu_branch_instructions,
+            "branch_misses": pmu_branch_misses,
+            "branch_miss_pct": ratio(pmu_branch_misses, pmu_branch_instructions) * 100.0,
         },
         "cpu": {
             "renderer_pct_of_one_core": mean_frame_field(
@@ -6126,6 +6168,12 @@ fn validate_screensaver_frame_evidence(run: usize, frame_id: u64, frame: &Value)
         "particle_render_cpu_end",
         "particle_voluntary_context_switches",
         "particle_involuntary_context_switches",
+        "particle_pmu_cycles",
+        "particle_pmu_instructions",
+        "particle_pmu_cache_references",
+        "particle_pmu_cache_misses",
+        "particle_pmu_branch_instructions",
+        "particle_pmu_branch_misses",
         "particle_rotation_y_millidegrees",
         "particle_simulation_bytes",
         "particle_renderer_scratch_bytes",
@@ -6136,6 +6184,7 @@ fn validate_screensaver_frame_evidence(run: usize, frame_id: u64, frame: &Value)
         "status_write_due",
         "clock_update_due",
         "screensaver_render_ahead_cancelled",
+        "particle_pmu_available",
     ];
     const STRING_FIELDS: &[&str] = &[
         "vsync_source",
@@ -6308,6 +6357,14 @@ fn mean_frame_difference(frames: &[&Value], minuend: &str, subtrahend: &str) -> 
         .map(|frame| frame_u64(frame, minuend).saturating_sub(frame_u64(frame, subtrahend)) as f64)
         .sum::<f64>()
         / frames.len() as f64
+}
+
+fn ratio(numerator: u64, denominator: u64) -> f64 {
+    if denominator == 0 {
+        0.0
+    } else {
+        numerator as f64 / denominator as f64
+    }
 }
 
 fn raster_cadence_summary(frames: &[&Value]) -> Value {
@@ -14496,6 +14553,13 @@ H: Handlers=event3 js0"#
                 "particle_render_cpu_end": 0,
                 "particle_voluntary_context_switches": 0,
                 "particle_involuntary_context_switches": 0,
+                "particle_pmu_available": false,
+                "particle_pmu_cycles": 0,
+                "particle_pmu_instructions": 0,
+                "particle_pmu_cache_references": 0,
+                "particle_pmu_cache_misses": 0,
+                "particle_pmu_branch_instructions": 0,
+                "particle_pmu_branch_misses": 0,
                 "particle_rotation_y_millidegrees": 0,
                 "particle_simulation_bytes": 0,
                 "particle_renderer_scratch_bytes": 0
@@ -14912,6 +14976,13 @@ H: Handlers=event3 js0"#
             "particle_render_cpu_end": 0,
             "particle_voluntary_context_switches": 0,
             "particle_involuntary_context_switches": u64::from(index == 100),
+            "particle_pmu_available": true,
+            "particle_pmu_cycles": 10_000,
+            "particle_pmu_instructions": 8_000,
+            "particle_pmu_cache_references": 1_000,
+            "particle_pmu_cache_misses": 100,
+            "particle_pmu_branch_instructions": 500,
+            "particle_pmu_branch_misses": 25,
             "particle_rotation_y_millidegrees": 0,
             "particle_simulation_bytes": 2_162_688,
             "particle_renderer_scratch_bytes": 524_288
@@ -14962,6 +15033,10 @@ H: Handlers=event3 js0"#
         }
         assert_eq!(passing["scheduler"]["involuntary_context_switches"], 1);
         assert_eq!(passing["scheduler"]["cpu_migrations"], 0);
+        assert_eq!(passing["pmu"]["available_frames"], 604);
+        assert_eq!(passing["pmu"]["instructions_per_cycle"], 0.8);
+        assert_eq!(passing["pmu"]["cache_miss_pct"], 10.0);
+        assert_eq!(passing["pmu"]["branch_miss_pct"], 5.0);
 
         let deadline = summarize_particle_trial(
             "capacity",

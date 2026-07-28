@@ -1850,6 +1850,19 @@ impl LauncherFrameAccounting {
                 particle_involuntary_context_switches: frame
                     .screensaver_frame_trace
                     .particle_involuntary_context_switches,
+                particle_pmu_available: frame.screensaver_frame_trace.particle_pmu_available,
+                particle_pmu_cycles: frame.screensaver_frame_trace.particle_pmu_cycles,
+                particle_pmu_instructions: frame.screensaver_frame_trace.particle_pmu_instructions,
+                particle_pmu_cache_references: frame
+                    .screensaver_frame_trace
+                    .particle_pmu_cache_references,
+                particle_pmu_cache_misses: frame.screensaver_frame_trace.particle_pmu_cache_misses,
+                particle_pmu_branch_instructions: frame
+                    .screensaver_frame_trace
+                    .particle_pmu_branch_instructions,
+                particle_pmu_branch_misses: frame
+                    .screensaver_frame_trace
+                    .particle_pmu_branch_misses,
                 particle_rotation_y_millidegrees: u64::from(
                     frame
                         .screensaver_frame_trace
