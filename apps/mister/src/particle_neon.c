@@ -525,3 +525,154 @@ size_t mister_magik_particle_neon_project_commands(
     vst1q_u32(lanes, visible_count);
     return (size_t)lanes[0] + lanes[1] + lanes[2] + lanes[3];
 }
+
+static inline uint32x4_t widen_four_u8(const uint8_t *values) {
+    uint32_t packed;
+    memcpy(&packed, values, sizeof(packed));
+    uint8x8_t bytes = vreinterpret_u8_u32(vdup_n_u32(packed));
+    return vmovl_u16(vget_low_u16(vmovl_u8(bytes)));
+}
+
+size_t mister_magik_showcase_neon_project_galaxy(
+    size_t count,
+    size_t width,
+    size_t height,
+    size_t core_count,
+    float camera_z,
+    float rotation_y_sin,
+    float rotation_y_cos,
+    float tilt_sin,
+    float tilt_cos,
+    float core_scale,
+    const float *restrict x,
+    const float *restrict y,
+    const float *restrict z,
+    const uint8_t *restrict styles,
+    const uint8_t *restrict flags,
+    uint32_t *restrict commands
+) {
+    const uint32_t showcase_neighbor = 1u << 23;
+    const uint32_t width_u32 = (uint32_t)width;
+    const size_t vector_end = count & ~(size_t)3;
+    const float32x4_t center_x = vdupq_n_f32((float)width * 0.5f);
+    const float32x4_t center_y = vdupq_n_f32((float)height * 0.5f);
+    const float32x4_t max_x = vdupq_n_f32((float)width - 0.5f);
+    const float32x4_t max_y = vdupq_n_f32((float)height - 0.5f);
+    const float32x4_t camera = vdupq_n_f32(camera_z);
+    const float32x4_t sin_yaw = vdupq_n_f32(rotation_y_sin);
+    const float32x4_t cos_yaw = vdupq_n_f32(rotation_y_cos);
+    const float32x4_t sin_tilt_vector = vdupq_n_f32(tilt_sin);
+    const float32x4_t cos_tilt_vector = vdupq_n_f32(tilt_cos);
+    const float32x4_t core_scale_vector = vdupq_n_f32(core_scale);
+    uint32x4_t visible_count = vdupq_n_u32(0);
+
+    for (size_t index = 0; index < vector_end; index += 4) {
+        const float32x4_t source_x = vld1q_f32(x + index);
+        const float32x4_t source_y = vld1q_f32(y + index);
+        const float32x4_t source_z = vld1q_f32(z + index);
+        const float32x4_t yaw_x = vaddq_f32(
+            vmulq_f32(source_x, cos_yaw),
+            vmulq_f32(source_z, sin_yaw)
+        );
+        const float32x4_t yaw_z = vsubq_f32(
+            vmulq_f32(source_z, cos_yaw),
+            vmulq_f32(source_x, sin_yaw)
+        );
+        float32x4_t tilted_y = vsubq_f32(
+            vmulq_f32(source_y, cos_tilt_vector),
+            vmulq_f32(yaw_z, sin_tilt_vector)
+        );
+        const float32x4_t tilted_z = vaddq_f32(
+            vmulq_f32(source_y, sin_tilt_vector),
+            vmulq_f32(yaw_z, cos_tilt_vector)
+        );
+        const uint32x4_t indices = {
+            (uint32_t)index,
+            (uint32_t)index + 1,
+            (uint32_t)index + 2,
+            (uint32_t)index + 3
+        };
+        const uint32x4_t core_mask =
+            vcltq_u32(indices, vdupq_n_u32((uint32_t)core_count));
+        const float32x4_t display_x = vbslq_f32(
+            core_mask,
+            vmulq_f32(yaw_x, core_scale_vector),
+            yaw_x
+        );
+        tilted_y = vbslq_f32(
+            core_mask,
+            vmulq_f32(tilted_y, core_scale_vector),
+            tilted_y
+        );
+        const float32x4_t denominator = vaddq_f32(camera, tilted_z);
+        const float32x4_t scale =
+            vmulq_f32(reciprocal_once(denominator), camera);
+        const float32x4_t screen_x =
+            vaddq_f32(center_x, vmulq_f32(display_x, scale));
+        const float32x4_t screen_y =
+            vaddq_f32(center_y, vmulq_f32(tilted_y, scale));
+        const uint32x4_t particle_flags = widen_four_u8(flags + index);
+        uint32x4_t visible_mask = vtstq_u32(
+            vandq_u32(particle_flags, vdupq_n_u32(1)),
+            vdupq_n_u32(1)
+        );
+        visible_mask = vandq_u32(
+            visible_mask,
+            vcgtq_f32(denominator, vdupq_n_f32(32.0f))
+        );
+        visible_mask = vandq_u32(
+            visible_mask,
+            vcgtq_f32(screen_x, vdupq_n_f32(-0.5f))
+        );
+        visible_mask = vandq_u32(
+            visible_mask,
+            vcgtq_f32(screen_y, vdupq_n_f32(-0.5f))
+        );
+        visible_mask = vandq_u32(visible_mask, vcltq_f32(screen_x, max_x));
+        visible_mask = vandq_u32(visible_mask, vcltq_f32(screen_y, max_y));
+
+        const uint32x4_t pixel_x =
+            vcvtq_u32_f32(vaddq_f32(screen_x, vdupq_n_f32(0.5f)));
+        const uint32x4_t pixel_y =
+            vcvtq_u32_f32(vaddq_f32(screen_y, vdupq_n_f32(0.5f)));
+        uint32x4_t command = vmlaq_n_u32(pixel_x, pixel_y, width_u32);
+        command = vorrq_u32(
+            command,
+            vshlq_n_u32(vandq_u32(widen_four_u8(styles + index), vdupq_n_u32(7)), 20)
+        );
+        uint32x4_t neighbor_mask = vtstq_u32(
+            vandq_u32(particle_flags, vdupq_n_u32(2)),
+            vdupq_n_u32(2)
+        );
+        neighbor_mask = vandq_u32(
+            visible_mask,
+            vandq_u32(
+                neighbor_mask,
+                vcltq_u32(pixel_x, vdupq_n_u32(width_u32 - 1))
+            )
+        );
+        command = vorrq_u32(
+            command,
+            vandq_u32(neighbor_mask, vdupq_n_u32(showcase_neighbor))
+        );
+        vst1q_u32(
+            commands + index,
+            vbslq_u32(
+                visible_mask,
+                command,
+                vdupq_n_u32(PARTICLE_NOT_VISIBLE)
+            )
+        );
+        visible_count = vaddq_u32(
+            visible_count,
+            vshrq_n_u32(visible_mask, 31)
+        );
+    }
+
+    for (size_t index = vector_end; index < count; index++) {
+        commands[index] = PARTICLE_NOT_VISIBLE;
+    }
+    uint32_t lanes[4];
+    vst1q_u32(lanes, visible_count);
+    return (size_t)lanes[0] + lanes[1] + lanes[2] + lanes[3];
+}

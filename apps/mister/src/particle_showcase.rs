@@ -71,6 +71,28 @@ const GALAXY_PALETTE: [Rgb565Pixel; 8] = [
 ];
 static PARTICLE_DEMO_NAVIGATION: AtomicI32 = AtomicI32::new(0);
 
+#[cfg(target_arch = "arm")]
+unsafe extern "C" {
+    fn mister_magik_showcase_neon_project_galaxy(
+        count: usize,
+        width: usize,
+        height: usize,
+        core_count: usize,
+        camera_z: f32,
+        rotation_y_sin: f32,
+        rotation_y_cos: f32,
+        tilt_sin: f32,
+        tilt_cos: f32,
+        core_scale: f32,
+        x: *const f32,
+        y: *const f32,
+        z: *const f32,
+        styles: *const u8,
+        flags: *const u8,
+        commands: *mut u32,
+    ) -> usize;
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum ParticleDemoKind {
@@ -581,7 +603,7 @@ impl ParticleShowcaseRenderer {
                 self.pool.y[index] = vertical * radius * 0.68;
                 self.pool.z[index] = azimuth.sin() * planar;
                 self.pool.style[index] = 6 + u8::from(index & 15 == 0);
-                self.pool.flags[index] = 1;
+                self.pool.flags[index] = 1 | (u8::from(index & 255 == 0) << 1);
                 continue;
             }
 
@@ -596,7 +618,11 @@ impl ParticleShowcaseRenderer {
             let outer = ((radius - 32.0) * (4.0 / 382.0)).clamp(0.0, 3.0) as u8;
             self.pool.style[index] = 5u8.saturating_sub(outer);
             let dust_lane = random.rotate_left(3) & 31 < 5;
-            self.pool.flags[index] = if dust_lane { 0 } else { 1 };
+            self.pool.flags[index] = if dust_lane {
+                0
+            } else {
+                1 | (u8::from(random & 511 == 0) << 1)
+            };
         }
     }
 
@@ -608,7 +634,34 @@ impl ParticleShowcaseRenderer {
         let (sin_tilt, cos_tilt) = 0.92_f32.sin_cos();
         let core_pulse = ((seconds * 1.7).sin() * 0.5 + 0.5) * 0.18 + 0.82;
         let bulge_count = self.pool.active() * 3 / 20;
+        #[cfg(target_arch = "arm")]
+        {
+            self.commands.resize(self.pool.active(), u32::MAX);
+            let visible = unsafe {
+                mister_magik_showcase_neon_project_galaxy(
+                    self.pool.active(),
+                    self.config.width,
+                    self.config.height,
+                    bulge_count,
+                    650.0,
+                    sin_yaw,
+                    cos_yaw,
+                    sin_tilt,
+                    cos_tilt,
+                    core_pulse,
+                    self.pool.x.as_ptr(),
+                    self.pool.y.as_ptr(),
+                    self.pool.z.as_ptr(),
+                    self.pool.style.as_ptr(),
+                    self.pool.flags.as_ptr(),
+                    self.commands.as_mut_ptr(),
+                )
+            };
+            return self.pool.active().saturating_sub(visible);
+        }
+        #[cfg(not(target_arch = "arm"))]
         let mut clipped = 0usize;
+        #[cfg(not(target_arch = "arm"))]
         for index in 0..self.pool.active() {
             if self.pool.flags[index] == 0 {
                 self.commands.push(u32::MAX);
@@ -646,6 +699,7 @@ impl ParticleShowcaseRenderer {
                 clipped = clipped.saturating_add(1);
             }
         }
+        #[cfg(not(target_arch = "arm"))]
         clipped
     }
 
