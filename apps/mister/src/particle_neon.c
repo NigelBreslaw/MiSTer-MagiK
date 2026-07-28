@@ -525,27 +525,3 @@ size_t mister_magik_particle_neon_project_commands(
     vst1q_u32(lanes, visible_count);
     return (size_t)lanes[0] + lanes[1] + lanes[2] + lanes[3];
 }
-
-void mister_magik_particle_neon_copy_rgb565(
-    uint16_t *restrict destination,
-    const uint16_t *restrict shadow,
-    size_t pixel_count
-) {
-    size_t index = 0;
-    for (; index + 32 <= pixel_count; index += 32) {
-        if (index + 160 < pixel_count) {
-            __builtin_prefetch(shadow + index + 160, 0, 1);
-        }
-        uint16x8_t pixels_0 = vld1q_u16(shadow + index);
-        uint16x8_t pixels_1 = vld1q_u16(shadow + index + 8);
-        uint16x8_t pixels_2 = vld1q_u16(shadow + index + 16);
-        uint16x8_t pixels_3 = vld1q_u16(shadow + index + 24);
-        vst1q_u16(destination + index, pixels_0);
-        vst1q_u16(destination + index + 8, pixels_1);
-        vst1q_u16(destination + index + 16, pixels_2);
-        vst1q_u16(destination + index + 24, pixels_3);
-    }
-    for (; index < pixel_count; index++) {
-        destination[index] = shadow[index];
-    }
-}
