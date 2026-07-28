@@ -40,6 +40,9 @@ pub enum DeviceRequest {
     ProfileInstalledParticleCapacity {
         output_dir: PathBuf,
     },
+    ProfileInstalledParticleDemo40k {
+        output_dir: PathBuf,
+    },
     ProfileInstalledParticleStep {
         output_dir: PathBuf,
     },
@@ -91,6 +94,7 @@ impl DeviceRequest {
             Self::ProfileInstalledScreensaver { .. } => "profile-installed-screensaver",
             Self::ProfileInstalledParticles { .. } => "profile-installed-particles",
             Self::ProfileInstalledParticleCapacity { .. } => "profile-installed-particle-capacity",
+            Self::ProfileInstalledParticleDemo40k { .. } => "profile-installed-particle-demo-40k",
             Self::ProfileInstalledParticleStep { .. } => "profile-installed-particle-step",
             Self::ProfileInstalledParticleCpu { .. } => "profile-installed-particle-cpu",
             Self::ProfileInstalledSearch { .. } => "profile-installed-search",
@@ -254,6 +258,9 @@ mod tests {
             DeviceRequest::ProfileInstalledParticleCapacity {
                 output_dir: "particle-capacity-profiles".into(),
             },
+            DeviceRequest::ProfileInstalledParticleDemo40k {
+                output_dir: "particle-demo-40k-profiles".into(),
+            },
             DeviceRequest::ProfileInstalledParticleStep {
                 output_dir: "particle-step-profiles".into(),
             },
@@ -288,7 +295,7 @@ mod tests {
             DeviceRequest::CaptureFramebuffer,
         ];
         let labels: Vec<_> = requests.iter().map(DeviceRequest::label).collect();
-        assert_eq!(labels.len(), 30);
+        assert_eq!(labels.len(), 31);
         assert!(labels.iter().all(|label| !label.is_empty()));
         assert_eq!(
             labels
@@ -300,6 +307,7 @@ mod tests {
                 "profile-installed-screensaver",
                 "profile-installed-particles",
                 "profile-installed-particle-capacity",
+                "profile-installed-particle-demo-40k",
                 "profile-installed-particle-step",
                 "profile-installed-particle-cpu",
                 "profile-installed-search",

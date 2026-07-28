@@ -65,6 +65,9 @@ fn require_clean_installed_commit(
         BenchmarkScenario::ParticleCapacity => {
             execute_particle_capacity(&mut device, manifest, output_dir, reporter)
         }
+        BenchmarkScenario::ParticleDemo40k => {
+            execute_particle_demo_40k(&mut device, manifest, output_dir, reporter)
+        }
         BenchmarkScenario::ParticleStep => {
             execute_particle_step(&mut device, manifest, output_dir, reporter)
         }
@@ -180,6 +183,31 @@ fn execute_particle_capacity(
             != Some(true)
     {
         return Err("particle capacity benchmark did not confirm a ceiling".into());
+    }
+    emit_benchmark_result(reporter, manifest, summary, output_dir)
+}
+
+fn execute_particle_demo_40k(
+    device: &mut DeviceClient,
+    manifest: String,
+    output_dir: std::path::PathBuf,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    reporter.emit(
+        EventKind::Progress,
+        "profile",
+        "measuring fixed 40,960-particle visual trial",
+        Some(20),
+    )?;
+    let detail = device.execute(DeviceRequest::ProfileInstalledParticleDemo40k {
+        output_dir: output_dir.clone(),
+    })?;
+    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+    device.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))?;
+    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-particle-demo-40k-v1")
+        || summary.pointer("/demo/qualified").and_then(Value::as_bool) != Some(true)
+    {
+        return Err("fixed 40,960-particle visual trial did not qualify".into());
     }
     emit_benchmark_result(reporter, manifest, summary, output_dir)
 }

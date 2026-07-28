@@ -557,6 +557,14 @@ mod tests {
             }
         );
         assert_eq!(
+            Cli::try_parse_from(["agent-cli", "benchmark", "particle-demo-40k"])
+                .unwrap()
+                .into_intent(),
+            Intent::Benchmark {
+                scenario: BenchmarkScenario::ParticleDemo40k
+            }
+        );
+        assert_eq!(
             Cli::try_parse_from(["agent-cli", "benchmark", "particle-step"])
                 .unwrap()
                 .into_intent(),

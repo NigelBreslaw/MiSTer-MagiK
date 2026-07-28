@@ -12,6 +12,9 @@ Supported scenarios:
 
 - `screensaver` (the default)
 - `particles`
+- `particle-demo-40k`
+- `particle-capacity`
+- `particle-step`
 - `particle-profile`
 - `catalog-lifecycle`
 - `search`
@@ -19,6 +22,16 @@ Supported scenarios:
 New benchmarks must add a named registry entry and a fixed typed device
 request. They may not expose arbitrary commands, duration knobs, remote paths,
 or generic environment overrides.
+
+## Fixed particle optimisation trial
+
+`particle-demo-40k` is the campaign comparison trial: exactly 40,960 Visual
+particles for 15 seconds at 960x540 RGB565. It covers every deterministic
+particle phase, uses the same strict physical-refresh, latch-continuity, render
+reserve, cleanup, and restoration checks as the ceiling search, and records
+per-phase simulation, projection, clear, raster, prepared-frame age, process
+CPU, render P99, and maximum timings. Evidence is written below
+`build/agent-benchmarks/particle-demo-40k/<timestamp>/`.
 
 ## Particle capacity
 

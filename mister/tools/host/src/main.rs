@@ -300,6 +300,11 @@ impl DeviceOperations for NativeDevice {
                 profile_installed_particles(&config, output_dir, ParticleBenchmarkRun::Capacity)
                     .map_err(device_failure)?
             }
+            DeviceRequest::ProfileInstalledParticleDemo40k { output_dir } => {
+                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
+                profile_installed_particles(&config, output_dir, ParticleBenchmarkRun::Demo40k)
+                    .map_err(device_failure)?
+            }
             DeviceRequest::ProfileInstalledParticleStep { output_dir } => {
                 let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 profile_installed_particles(&config, output_dir, ParticleBenchmarkRun::Step)
@@ -3202,6 +3207,8 @@ const SCREENSAVER_PROFILE_TIMEOUT_SECS: u64 = SCREENSAVER_PROFILE_DURATION_SECS 
 const SCREENSAVER_POPULATED_WINDOW_SECS: u64 = 15;
 const PARTICLE_SEARCH_TRIAL_SECS: u64 = 12;
 const PARTICLE_CONFIRMATION_SECS: u64 = 30;
+const PARTICLE_DEMO_40K_DURATION_SECS: u64 = 15;
+const PARTICLE_DEMO_40K_COUNT: u64 = 40_960;
 const PARTICLE_STEP_DURATION_SECS: u64 = 20;
 const PARTICLE_STEP_COUNT: u64 = 14_336;
 const PARTICLE_CPU_PROFILE_DURATION_SECS: u64 = 30;
@@ -3215,6 +3222,7 @@ const PARTICLE_POST_RESERVE_US: u64 = 750;
 enum ParticleBenchmarkRun {
     Complete,
     Capacity,
+    Demo40k,
     Step,
 }
 
@@ -3829,6 +3837,16 @@ fn profile_installed_particles(
             ParticleBenchmarkRun::Capacity => Ok(json!({
                 "capacity": profile_particle_preset(config, output_dir, "capacity")?,
             })),
+            ParticleBenchmarkRun::Demo40k => Ok(json!({
+                "demo": run_particle_trial(
+                    config,
+                    output_dir,
+                    "visual",
+                    PARTICLE_DEMO_40K_COUNT,
+                    PARTICLE_DEMO_40K_DURATION_SECS,
+                    "demo-40k",
+                )?,
+            })),
             ParticleBenchmarkRun::Step => Ok(json!({
                 "step": run_particle_trial(
                     config,
@@ -3870,6 +3888,7 @@ fn profile_installed_particles(
     let schema = match run {
         ParticleBenchmarkRun::Complete => "mister-magik-particle-benchmark-v1",
         ParticleBenchmarkRun::Capacity => "mister-magik-particle-capacity-benchmark-v1",
+        ParticleBenchmarkRun::Demo40k => "mister-magik-particle-demo-40k-v1",
         ParticleBenchmarkRun::Step => "mister-magik-particle-step-v1",
     };
     let summary = json!({
@@ -3893,6 +3912,7 @@ fn profile_installed_particles(
             "capacity": results.get("capacity").cloned().unwrap_or(Value::Null),
             "visual": results.get("visual").cloned().unwrap_or(Value::Null),
         },
+        "demo": results.get("demo").cloned().unwrap_or(Value::Null),
         "step": results.get("step").cloned().unwrap_or(Value::Null),
         "captures": results.get("captures").cloned().unwrap_or(Value::Null),
         "boot_id": boot_id,
@@ -4631,6 +4651,16 @@ fn summarize_particle_trial(
         "projection_backends": steady.iter().filter_map(|frame| {
             frame.get("particle_projection_backend").and_then(Value::as_str)
         }).collect::<std::collections::BTreeSet<_>>(),
+        "pipeline": {
+            "prepared_frame_age_mean_us": mean_frame_field(
+                steady,
+                "screensaver_render_ahead_frame_age_us"
+            ),
+            "queue_depth_mean": mean_frame_field(
+                steady,
+                "screensaver_render_ahead_queue_depth"
+            ),
+        },
         "cpu": {
             "renderer_pct_of_one_core": mean_frame_field(
                 steady,
@@ -4861,6 +4891,9 @@ fn persist_and_qualify_particle_benchmark(
                 .and_then(Value::as_bool)
                 != Some(true)
         }
+        ParticleBenchmarkRun::Demo40k => {
+            summary.pointer("/demo/qualified").and_then(Value::as_bool) != Some(true)
+        }
         ParticleBenchmarkRun::Step => {
             summary.pointer("/step/qualified").and_then(Value::as_bool) != Some(true)
         }
@@ -4876,6 +4909,59 @@ fn persist_and_qualify_particle_benchmark(
 }
 
 fn particle_benchmark_report(summary: &Value) -> String {
+    if let Some(demo) = summary.get("demo").filter(|demo| !demo.is_null()) {
+        let mut report = format!(
+            "# Particle 40K Visual Trial\n\n- Geometry: 960x540 RGB565\n- Presentation: direct hidden-slot latch\n- Preset: visual\n- Particles: {}\n- Duration: {} seconds\n- Qualified: {}\n- Unique FPS: {:.6}\n- Repeated refreshes: {}\n- Process CPU: {:.2}% of one core\n- Renderer CPU: {:.2}% of one core\n- Prepared-frame age mean: {:.2} us\n- P99 render wall: {} us\n- Maximum render wall: {} us\n\n## Phase means\n\n| Phase | Simulation wall | Simulation CPU | Projection wall | Projection CPU | Clear wall | Raster wall | Render wall |\n|---|---:|---:|---:|---:|---:|---:|---:|\n",
+            demo.get("count").and_then(Value::as_u64).unwrap_or(0),
+            demo.get("duration_secs")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            demo.get("qualified")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            demo.pointer("/physical_refresh/unique_fps")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0),
+            demo.pointer("/physical_refresh/repeated_refreshes")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            demo.pointer("/cpu/process_pct_of_one_core")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0),
+            demo.pointer("/cpu/renderer_pct_of_one_core")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0),
+            demo.pointer("/pipeline/prepared_frame_age_mean_us")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0),
+            demo.get("p99_render_wall_us")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            demo.get("max_render_wall_us")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+        );
+        for phase in ["static", "form", "hold", "disperse"] {
+            let timing = demo.pointer(&format!("/phase_timing/{phase}"));
+            let mean = |field| {
+                timing
+                    .and_then(|value| value.get(field))
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0)
+            };
+            report.push_str(&format!(
+                "| {phase} | {:.2} us | {:.2} us | {:.2} us | {:.2} us | {:.2} us | {:.2} us | {:.2} us |\n",
+                mean("simulation_mean_us"),
+                mean("simulation_cpu_mean_us"),
+                mean("projection_mean_us"),
+                mean("projection_cpu_mean_us"),
+                mean("clear_mean_us"),
+                mean("raster_mean_us"),
+                mean("render_wall_mean_us"),
+            ));
+        }
+        return report;
+    }
     if let Some(step) = summary.get("step").filter(|step| !step.is_null()) {
         return format!(
             "# Particle Optimisation Trial\n\n- Geometry: 960x540 RGB565\n- Presentation: direct hidden-slot latch\n- Preset: capacity\n- Particles: {}\n- Qualified: {}\n- Unique FPS: {:.6}\n- Process CPU: {:.2}% of one core\n- Renderer CPU: {:.2}% of one core\n- P99 render wall: {} us\n- Maximum render wall: {} us\n",
