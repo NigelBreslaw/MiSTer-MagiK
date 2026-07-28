@@ -1619,6 +1619,7 @@ struct ScreensaverControl {
     restore_full_frame: bool,
     preview_fade_started: Option<Instant>,
     reactivation_suppressed: bool,
+    particle_demo_direction_held: i8,
 }
 
 impl ScreensaverControl {
@@ -1632,6 +1633,7 @@ impl ScreensaverControl {
             restore_full_frame: false,
             preview_fade_started: None,
             reactivation_suppressed: false,
+            particle_demo_direction_held: 0,
         }
     }
 
@@ -1686,12 +1688,33 @@ impl ScreensaverControl {
 
     /// Returns true when this input frame is consumed by screensaver control.
     fn handle_input(&mut self, now: Instant, input_held: bool, user_activity: bool) -> bool {
+        self.handle_input_with_particle_demo_navigation(now, input_held, user_activity, 0)
+    }
+
+    fn handle_input_with_particle_demo_navigation(
+        &mut self,
+        now: Instant,
+        input_held: bool,
+        user_activity: bool,
+        particle_demo_direction: i8,
+    ) -> bool {
         if self.active && self.waiting_for_input_release {
             if !input_held {
                 self.waiting_for_input_release = false;
             }
             return true;
         }
+        if self.active && particle_demo_direction != 0 {
+            if self.particle_demo_direction_held == 0 {
+                mister_magik_fb::particle_showcase::request_particle_demo_navigation(i32::from(
+                    particle_demo_direction,
+                ));
+            }
+            self.particle_demo_direction_held = particle_demo_direction;
+            self.last_activity = now;
+            return true;
+        }
+        self.particle_demo_direction_held = 0;
         if self.active && user_activity {
             self.active = false;
             self.preview_active = false;
@@ -1772,6 +1795,7 @@ pub(super) fn run_launcher_loop(
         Some("1" | "on" | "true" | "yes")
     );
     let particle_screensaver_requested = launcher_screensaver::particle_renderer_requested();
+    let particle_showcase_requested = launcher_screensaver::particle_showcase_renderer_requested();
     let mut screensaver = ScreensaverControl::new(Instant::now(), screensaver_start_active);
     let mut screensaver_pipeline: Option<ScreensaverRenderAhead> = None;
     let mut retiring_screensaver_pipelines: Vec<ScreensaverRenderAhead> = Vec::new();
@@ -3172,10 +3196,17 @@ pub(super) fn run_launcher_loop(
 
             let input_session = ControllerSetupInputSession::new(&pad, &setup);
             let launcher_state = input_session.launcher_state().clone();
-            if screensaver.handle_input(
+            let particle_demo_direction = if particle_showcase_requested {
+                (if launcher_state.dpad_right { 1 } else { 0 })
+                    - (if launcher_state.dpad_left { 1 } else { 0 })
+            } else {
+                0
+            };
+            if screensaver.handle_input_with_particle_demo_navigation(
                 frame_now,
                 pad_state_has_active_input(&launcher_state),
                 screensaver_input_activity,
+                particle_demo_direction,
             ) {
                 nav.absorb_input(&launcher_state);
                 request_launcher_redraw!();

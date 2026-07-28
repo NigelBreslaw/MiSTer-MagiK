@@ -5,6 +5,9 @@ use super::*;
 use crate::preview_worker;
 use mister_magik_catalog::device_layout::DeviceLayout;
 use mister_magik_fb::particle_engine::{ParticleConfig, ParticlePreset};
+use mister_magik_fb::particle_showcase::{
+    ParticleDemoKind, ParticleShowcaseConfig, ParticleShowcaseRenderer,
+};
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs::File;
@@ -18,6 +21,7 @@ use super::particle_renderer::ParticleRenderer;
 use mister_magik_fb::visual_composition::{ScreenshotTileImage as SaverImage, ScreenshotTileWall};
 
 const PARTICLE_RENDERER_LABEL: &str = "particle-magik";
+const PARTICLE_SHOWCASE_RENDERER_LABEL: &str = "particle-demos";
 const DEFAULT_PARTICLE_COUNT: usize = 16_384;
 const DEFAULT_PARTICLE_SEED: u64 = 0x4d61_6769_4b;
 
@@ -240,6 +244,7 @@ struct ScreensaverRenderState {
 pub(in crate::ui_runner) struct LauncherScreensaver {
     parade: ParadeState,
     particle: Option<ParticleRenderer>,
+    particle_showcase: Option<ParticleShowcaseRenderer>,
     archive_rx: Option<Receiver<ArchiveLoadResult>>,
     archive_cancelled: Arc<AtomicBool>,
     startup_started_at: Option<Instant>,
@@ -329,6 +334,7 @@ impl LauncherScreensaver {
         Self {
             parade: ParadeState::new_with_profile(random_seed(), sampling_profile),
             particle: None,
+            particle_showcase: None,
             archive_rx: Some(archive_rx),
             archive_cancelled,
             startup_started_at,
@@ -343,6 +349,25 @@ impl LauncherScreensaver {
         Self {
             parade: ParadeState::new_with_profile(random_seed(), ParadeSamplingProfile::LegacyHalf),
             particle: Some(renderer),
+            particle_showcase: None,
+            archive_rx: None,
+            archive_cancelled,
+            startup_started_at: None,
+            frame: 0,
+            motion_started_at: now,
+            motion_ticks_fp: 0,
+        }
+    }
+
+    fn particle_showcase(
+        renderer: ParticleShowcaseRenderer,
+        archive_cancelled: Arc<AtomicBool>,
+    ) -> Self {
+        let now = Instant::now();
+        Self {
+            parade: ParadeState::new_with_profile(random_seed(), ParadeSamplingProfile::LegacyHalf),
+            particle: None,
+            particle_showcase: Some(renderer),
             archive_rx: None,
             archive_cancelled,
             startup_started_at: None,
@@ -409,6 +434,45 @@ impl LauncherScreensaver {
         elapsed: Duration,
         next_elapsed: Option<Duration>,
     ) -> ScreensaverFrameTrace {
+        if let Some(showcase) = self.particle_showcase.as_mut() {
+            return match hidden_slot
+                .ok_or_else(|| "particle showcase requires a direct hidden slot".into())
+                .and_then(|hidden_slot| showcase.render(dst, hidden_slot, elapsed))
+            {
+                Ok(stats) => ScreensaverFrameTrace {
+                    renderer: PARTICLE_SHOWCASE_RENDERER_LABEL,
+                    sampling_profile: "particle-showcase",
+                    particle_preset: stats.demo.telemetry_label(),
+                    particle_phase: stats.beat,
+                    particle_simulation_backend: "arm-showcase-scalar",
+                    particle_projection_backend: "arm-showcase-perspective",
+                    particle_count: stats.count,
+                    particle_visible: stats.visible,
+                    particle_simulation_us: stats.simulation_us,
+                    particle_simulation_cpu_us: stats.simulation_cpu_us,
+                    particle_projection_us: stats.projection_us,
+                    particle_projection_cpu_us: stats.projection_cpu_us,
+                    particle_clear_us: stats.clear_us,
+                    particle_clear_cpu_us: stats.clear_cpu_us,
+                    particle_raster_us: stats.raster_us,
+                    particle_raster_cpu_us: stats.raster_cpu_us,
+                    particle_simulation_bytes: stats.simulation_bytes,
+                    particle_renderer_scratch_bytes: stats.renderer_scratch_bytes,
+                    ..ScreensaverFrameTrace::default()
+                },
+                Err(error) => {
+                    dst.fill(Rgb565Pixel(0));
+                    crate::ui_errln!("particle showcase failed: {error}");
+                    ScreensaverFrameTrace {
+                        renderer: "particle-demos-error",
+                        sampling_profile: "particle-showcase-error",
+                        particle_preset: showcase.demo().telemetry_label(),
+                        particle_count: showcase.particle_count(),
+                        ..ScreensaverFrameTrace::default()
+                    }
+                }
+            };
+        }
         if let Some(particle) = self.particle.as_mut() {
             return match hidden_slot
                 .ok_or_else(|| "particle renderer requires a direct hidden slot".into())
@@ -492,6 +556,9 @@ impl LauncherScreensaver {
     }
 
     pub(in crate::ui_runner) fn invalidate_hidden_slot(&mut self, hidden_slot: u8) {
+        if let Some(showcase) = self.particle_showcase.as_mut() {
+            showcase.invalidate_hidden_slot(hidden_slot);
+        }
         if let Some(particle) = self.particle.as_mut() {
             particle.invalidate_hidden_slot(hidden_slot);
         }
@@ -535,28 +602,28 @@ impl LauncherScreensaver {
     }
 
     pub(in crate::ui_runner) fn has_rendered_card(&self) -> bool {
-        if self.particle.is_some() {
+        if self.particle.is_some() || self.particle_showcase.is_some() {
             return true;
         }
         self.parade.tiles.iter().any(|tile| tile.active)
     }
 
     pub(in crate::ui_runner) fn is_loading_archive(&self) -> bool {
-        if self.particle.is_some() {
+        if self.particle.is_some() || self.particle_showcase.is_some() {
             return false;
         }
         self.archive_rx.is_some()
     }
 
     pub(in crate::ui_runner) fn active_card_count(&self) -> usize {
-        if self.particle.is_some() {
+        if self.particle.is_some() || self.particle_showcase.is_some() {
             return 0;
         }
         self.parade.tiles.iter().filter(|tile| tile.active).count()
     }
 
     pub(in crate::ui_runner) fn requires_direct_hidden(&self) -> bool {
-        self.particle.is_some()
+        self.particle.is_some() || self.particle_showcase.is_some()
     }
 }
 
@@ -587,7 +654,22 @@ impl LauncherScreensaverLoader {
         crt_output: bool,
     ) -> Self {
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
-        if particle_renderer_requested() {
+        if particle_showcase_renderer_requested() {
+            let archive_cancelled = Arc::new(AtomicBool::new(false));
+            match particle_showcase_config_from_env(w, h).and_then(ParticleShowcaseRenderer::new) {
+                Ok(renderer) => {
+                    let _ = ready_tx.send(LauncherScreensaver::particle_showcase(
+                        renderer,
+                        archive_cancelled,
+                    ));
+                }
+                Err(error) => {
+                    crate::ui_errln!("particle showcase initialization failed: {error}");
+                }
+            }
+            return Self { ready_rx };
+        }
+        if magik_particle_renderer_requested() {
             let archive_cancelled = Arc::new(AtomicBool::new(false));
             match particle_config_from_env(w, h).and_then(ParticleRenderer::new_magik) {
                 Ok(renderer) => {
@@ -648,11 +730,61 @@ impl LauncherScreensaverLoader {
 }
 
 pub(in crate::ui_runner) fn particle_renderer_requested() -> bool {
-    particle_renderer_label_requested(std::env::var("MISTER_SCREENSAVER_RENDERER").ok().as_deref())
+    let value = std::env::var("MISTER_SCREENSAVER_RENDERER").ok();
+    particle_renderer_label_requested(value.as_deref())
+        || particle_showcase_renderer_label_requested(value.as_deref())
 }
 
 fn particle_renderer_label_requested(value: Option<&str>) -> bool {
     value.is_some_and(|value| value.trim().eq_ignore_ascii_case(PARTICLE_RENDERER_LABEL))
+}
+
+pub(in crate::ui_runner) fn particle_showcase_renderer_requested() -> bool {
+    particle_showcase_renderer_label_requested(
+        std::env::var("MISTER_SCREENSAVER_RENDERER").ok().as_deref(),
+    )
+}
+
+fn magik_particle_renderer_requested() -> bool {
+    particle_renderer_label_requested(std::env::var("MISTER_SCREENSAVER_RENDERER").ok().as_deref())
+}
+
+fn particle_showcase_renderer_label_requested(value: Option<&str>) -> bool {
+    value.is_some_and(|value| {
+        value
+            .trim()
+            .eq_ignore_ascii_case(PARTICLE_SHOWCASE_RENDERER_LABEL)
+    })
+}
+
+fn particle_showcase_config_from_env(
+    width: usize,
+    height: usize,
+) -> Result<ParticleShowcaseConfig, String> {
+    let initial_demo = std::env::var("MISTER_PARTICLE_DEMO")
+        .ok()
+        .map(|value| {
+            ParticleDemoKind::parse(&value)
+                .ok_or_else(|| format!("invalid MISTER_PARTICLE_DEMO={value:?}"))
+        })
+        .transpose()?
+        .unwrap_or(ParticleDemoKind::Fireworks);
+    let seed = std::env::var("MISTER_PARTICLE_SEED")
+        .ok()
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .map_err(|error| format!("invalid MISTER_PARTICLE_SEED={value:?}: {error}"))
+        })
+        .transpose()?
+        .unwrap_or(DEFAULT_PARTICLE_SEED);
+    ParticleShowcaseConfig {
+        width,
+        height,
+        seed,
+        initial_demo,
+    }
+    .validate()
 }
 
 fn particle_config_from_env(width: usize, height: usize) -> Result<ParticleConfig, String> {
@@ -5257,6 +5389,20 @@ mod tests {
         assert!(!particle_renderer_label_requested(None));
         assert!(!particle_renderer_label_requested(Some("")));
         assert!(!particle_renderer_label_requested(Some("parade")));
+    }
+
+    #[test]
+    fn particle_showcase_is_selected_only_by_its_explicit_label() {
+        assert!(particle_showcase_renderer_label_requested(Some(
+            "particle-demos"
+        )));
+        assert!(particle_showcase_renderer_label_requested(Some(
+            " PARTICLE-DEMOS "
+        )));
+        assert!(!particle_showcase_renderer_label_requested(None));
+        assert!(!particle_showcase_renderer_label_requested(Some(
+            "particle-magik"
+        )));
     }
 
     #[test]

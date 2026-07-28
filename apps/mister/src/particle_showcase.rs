@@ -3,12 +3,37 @@
 
 //! Shared data model for the interactive ARM particle showcase.
 
-use std::time::Duration;
+use crate::bitmap_text::{ConsoleFont, ConsoleTypeface};
+use slint::platform::software_renderer::Rgb565Pixel;
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::time::{Duration, Instant};
 
 pub const PARTICLE_DEMO_DURATION: Duration = Duration::from_secs(30);
 pub const PARTICLE_DEMO_MAX_COUNT: usize = 98_304;
 pub const PARTICLE_DEMO_TRANSITION_COUNT: usize = 4_096;
 pub const PARTICLE_DEMO_TRANSITION_DURATION: Duration = Duration::from_millis(600);
+const HIDDEN_SLOT_COUNT: usize = 2;
+const FULL_CLEAR_DIRTY_DIVISOR: usize = 4;
+const COMMAND_OFFSET_BITS: u32 = 20;
+const COMMAND_OFFSET_MASK: u32 = (1 << COMMAND_OFFSET_BITS) - 1;
+const COMMAND_STYLE_SHIFT: u32 = COMMAND_OFFSET_BITS;
+const COMMAND_NEIGHBOR: u32 = 1 << 23;
+const HUD_FONT_PX: f32 = 8.0;
+const HUD_X: isize = 8;
+const HUD_BASELINE_Y: isize = 14;
+const HUD_W: usize = 232;
+const HUD_H: usize = 18;
+const SHOWCASE_PALETTE: [Rgb565Pixel; 8] = [
+    Rgb565Pixel(0x18c3),
+    Rgb565Pixel(0x31a6),
+    Rgb565Pixel(0x52aa),
+    Rgb565Pixel(0x7bcf),
+    Rgb565Pixel(0xa514),
+    Rgb565Pixel(0xc638),
+    Rgb565Pixel(0xe71c),
+    Rgb565Pixel(0xffff),
+];
+static PARTICLE_DEMO_NAVIGATION: AtomicI32 = AtomicI32::new(0);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -82,6 +107,22 @@ impl ParticleDemoKind {
     }
 
     #[must_use]
+    pub const fn hud_label(self) -> &'static str {
+        match self {
+            Self::Fireworks => "01/10 FIREWORKS",
+            Self::FireEmbers => "02/10 FIRE + EMBERS",
+            Self::SpiralGalaxy => "03/10 SPIRAL GALAXY",
+            Self::WarpSpeed => "04/10 WARP SPEED",
+            Self::MeteorShower => "05/10 METEOR SHOWER",
+            Self::Weather => "06/10 WEATHER",
+            Self::ParticlePortal => "07/10 PARTICLE PORTAL",
+            Self::ElectricStorm => "08/10 ELECTRIC STORM",
+            Self::FountainWaterfall => "09/10 FOUNTAIN / WATERFALL",
+            Self::ArcadeCabinet => "10/10 ARCADE CABINET",
+        }
+    }
+
+    #[must_use]
     pub const fn starting_count(self) -> usize {
         match self {
             Self::Fireworks => 24_576,
@@ -127,6 +168,294 @@ pub struct ParticleShowcaseConfig {
     pub height: usize,
     pub seed: u64,
     pub initial_demo: ParticleDemoKind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParticleShowcaseRenderStats {
+    pub demo: ParticleDemoKind,
+    pub beat: &'static str,
+    pub count: usize,
+    pub visible: usize,
+    pub simulation_us: u128,
+    pub simulation_cpu_us: u128,
+    pub projection_us: u128,
+    pub projection_cpu_us: u128,
+    pub geometry_us: u128,
+    pub clear_us: u128,
+    pub clear_cpu_us: u128,
+    pub raster_us: u128,
+    pub raster_cpu_us: u128,
+    pub segment_count: usize,
+    pub attempted_pixel_writes: usize,
+    pub clipped_commands: usize,
+    pub simulation_bytes: usize,
+    pub renderer_scratch_bytes: usize,
+}
+
+pub struct ParticleShowcaseRenderer {
+    config: ParticleShowcaseConfig,
+    demo: ParticleDemoKind,
+    demo_started_at: Duration,
+    pool: ParticleShowcasePool,
+    commands: Vec<u32>,
+    dirty_slots: [ParticleShowcaseDirtySlot; HIDDEN_SLOT_COUNT],
+    hud_font: ConsoleFont,
+    renderer_scratch_bytes: usize,
+}
+
+struct ParticleShowcaseDirtySlot {
+    initialized: bool,
+    offsets: Vec<u32>,
+}
+
+impl ParticleShowcaseRenderer {
+    pub fn new(config: ParticleShowcaseConfig) -> Result<Self, String> {
+        let config = config.validate()?;
+        let pool = ParticleShowcasePool::new();
+        let commands = Vec::with_capacity(PARTICLE_DEMO_MAX_COUNT);
+        let dirty_slots = std::array::from_fn(|_| ParticleShowcaseDirtySlot {
+            initialized: false,
+            offsets: Vec::with_capacity(PARTICLE_DEMO_MAX_COUNT.saturating_mul(2)),
+        });
+        let renderer_scratch_bytes = commands
+            .capacity()
+            .saturating_mul(std::mem::size_of::<u32>())
+            .saturating_add(
+                dirty_slots
+                    .iter()
+                    .map(|slot| {
+                        slot.offsets
+                            .capacity()
+                            .saturating_mul(std::mem::size_of::<u32>())
+                    })
+                    .sum::<usize>(),
+            );
+        let mut renderer = Self {
+            config,
+            demo: config.initial_demo,
+            demo_started_at: Duration::ZERO,
+            pool,
+            commands,
+            dirty_slots,
+            hud_font: ConsoleFont::new_with_typeface(HUD_FONT_PX, ConsoleTypeface::PressStart2P),
+            renderer_scratch_bytes,
+        };
+        renderer.reset_demo(config.initial_demo, Duration::ZERO);
+        Ok(renderer)
+    }
+
+    #[must_use]
+    pub const fn demo(&self) -> ParticleDemoKind {
+        self.demo
+    }
+
+    #[must_use]
+    pub const fn particle_count(&self) -> usize {
+        self.pool.active()
+    }
+
+    pub fn render(
+        &mut self,
+        destination: &mut [Rgb565Pixel],
+        hidden_slot: u8,
+        elapsed: Duration,
+    ) -> Result<ParticleShowcaseRenderStats, String> {
+        let frame_len = self.config.width.saturating_mul(self.config.height);
+        if destination.len() != frame_len {
+            return Err(format!(
+                "particle showcase destination has {} pixels, expected {frame_len}",
+                destination.len()
+            ));
+        }
+        let slot = hidden_slot_offset(hidden_slot)?;
+        self.apply_navigation(elapsed);
+
+        let clear_started = Instant::now();
+        let clear_cpu_started = thread_cpu_time_us();
+        let mut dirty_offsets = self.prepare_hidden_slot(destination, slot);
+        let clear_us = clear_started.elapsed().as_micros();
+        let clear_cpu_us = elapsed_thread_cpu_us(clear_cpu_started);
+
+        let projection_started = Instant::now();
+        let projection_cpu_started = thread_cpu_time_us();
+        let clipped_commands = self.project_diagnostic(elapsed);
+        let projection_us = projection_started.elapsed().as_micros();
+        let projection_cpu_us = elapsed_thread_cpu_us(projection_cpu_started);
+
+        let raster_started = Instant::now();
+        let raster_cpu_started = thread_cpu_time_us();
+        let (visible, attempted_pixel_writes) = self.raster_points(destination, &mut dirty_offsets);
+        self.draw_hud(destination, &mut dirty_offsets);
+        let raster_us = raster_started.elapsed().as_micros();
+        let raster_cpu_us = elapsed_thread_cpu_us(raster_cpu_started);
+
+        self.dirty_slots[slot].offsets = dirty_offsets;
+        Ok(ParticleShowcaseRenderStats {
+            demo: self.demo,
+            beat: "diagnostic",
+            count: self.pool.active(),
+            visible,
+            simulation_us: 0,
+            simulation_cpu_us: 0,
+            projection_us,
+            projection_cpu_us,
+            geometry_us: 0,
+            clear_us,
+            clear_cpu_us,
+            raster_us,
+            raster_cpu_us,
+            segment_count: 0,
+            attempted_pixel_writes,
+            clipped_commands,
+            simulation_bytes: self.pool.allocated_bytes(),
+            renderer_scratch_bytes: self.renderer_scratch_bytes,
+        })
+    }
+
+    pub fn invalidate_hidden_slot(&mut self, hidden_slot: u8) {
+        if let Ok(slot) = hidden_slot_offset(hidden_slot) {
+            self.dirty_slots[slot].initialized = false;
+            self.dirty_slots[slot].offsets.clear();
+        }
+    }
+
+    fn apply_navigation(&mut self, elapsed: Duration) {
+        let delta = PARTICLE_DEMO_NAVIGATION.swap(0, Ordering::AcqRel);
+        if delta != 0 {
+            self.reset_demo(self.demo.offset_wrapped(delta), elapsed);
+            return;
+        }
+        let demo_elapsed = elapsed.saturating_sub(self.demo_started_at);
+        if demo_elapsed >= PARTICLE_DEMO_DURATION {
+            let advances = (demo_elapsed.as_micros() / PARTICLE_DEMO_DURATION.as_micros()) as i32;
+            self.reset_demo(self.demo.offset_wrapped(advances), elapsed);
+        }
+    }
+
+    fn reset_demo(&mut self, demo: ParticleDemoKind, elapsed: Duration) {
+        self.demo = demo;
+        self.demo_started_at = elapsed;
+        self.pool.reset(demo, self.config.seed);
+        for index in 0..self.pool.active() {
+            let random = self.pool.random[index];
+            self.pool.x[index] = unit_signed(random) * 248.0;
+            self.pool.y[index] = unit_signed(random.rotate_left(11)) * 135.0;
+            self.pool.z[index] = unit_signed(random.rotate_left(21)) * 88.0;
+            self.pool.style[index] = ((random >> 29) & 7) as u8;
+            self.pool.flags[index] = u8::from(random & 0x1f == 0);
+        }
+    }
+
+    fn prepare_hidden_slot(&mut self, destination: &mut [Rgb565Pixel], slot: usize) -> Vec<u32> {
+        let dirty = &mut self.dirty_slots[slot];
+        if !dirty.initialized || dirty.offsets.len() >= destination.len() / FULL_CLEAR_DIRTY_DIVISOR
+        {
+            destination.fill(Rgb565Pixel(0));
+        } else {
+            for &offset in &dirty.offsets {
+                destination[offset as usize] = Rgb565Pixel(0);
+            }
+        }
+        dirty.initialized = true;
+        let mut offsets = std::mem::take(&mut dirty.offsets);
+        offsets.clear();
+        offsets
+    }
+
+    fn project_diagnostic(&mut self, elapsed: Duration) -> usize {
+        self.commands.clear();
+        let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
+        let (sin_y, cos_y) = (seconds * 0.08).sin_cos();
+        let center_x = self.config.width as f32 * 0.5;
+        let center_y = self.config.height as f32 * 0.5;
+        let mut clipped = 0usize;
+        for index in 0..self.pool.active() {
+            let x = self.pool.x[index];
+            let z = self.pool.z[index];
+            let rotated_x = x.mul_add(cos_y, z * sin_y);
+            let rotated_z = (-x).mul_add(sin_y, z * cos_y);
+            let depth = 420.0 + rotated_z;
+            let scale = 420.0 / depth;
+            let screen_x = center_x + rotated_x * scale;
+            let screen_y = center_y + self.pool.y[index] * scale;
+            if screen_x < 0.0
+                || screen_y < 0.0
+                || screen_x >= self.config.width as f32
+                || screen_y >= self.config.height as f32
+            {
+                self.commands.push(u32::MAX);
+                clipped = clipped.saturating_add(1);
+                continue;
+            }
+            let x = screen_x as usize;
+            let y = screen_y as usize;
+            let offset = y * self.config.width + x;
+            let style = u32::from(self.pool.style[index] & 7) << COMMAND_STYLE_SHIFT;
+            let neighbor = if self.pool.flags[index] != 0 && x + 1 < self.config.width {
+                COMMAND_NEIGHBOR
+            } else {
+                0
+            };
+            self.commands.push(offset as u32 | style | neighbor);
+        }
+        clipped
+    }
+
+    fn raster_points(
+        &self,
+        destination: &mut [Rgb565Pixel],
+        dirty_offsets: &mut Vec<u32>,
+    ) -> (usize, usize) {
+        let mut visible = 0usize;
+        let mut writes = 0usize;
+        for &command in &self.commands {
+            if command == u32::MAX {
+                continue;
+            }
+            let offset = (command & COMMAND_OFFSET_MASK) as usize;
+            let style = ((command >> COMMAND_STYLE_SHIFT) & 7) as usize;
+            destination[offset] = SHOWCASE_PALETTE[style];
+            dirty_offsets.push(offset as u32);
+            writes = writes.saturating_add(1);
+            if command & COMMAND_NEIGHBOR != 0 {
+                destination[offset + 1] = SHOWCASE_PALETTE[style.saturating_sub(1)];
+                dirty_offsets.push((offset + 1) as u32);
+                writes = writes.saturating_add(1);
+            }
+            visible = visible.saturating_add(1);
+        }
+        (visible, writes)
+    }
+
+    fn draw_hud(&mut self, destination: &mut [Rgb565Pixel], dirty_offsets: &mut Vec<u32>) {
+        self.hud_font.draw_text_clipped(
+            destination,
+            self.config.width,
+            self.config.width,
+            0,
+            self.config.height,
+            HUD_X,
+            HUD_BASELINE_Y,
+            self.demo.hud_label(),
+            Rgb565Pixel(0xbdf7),
+        );
+        let max_x = (HUD_X as usize + HUD_W).min(self.config.width);
+        for y in 0..HUD_H.min(self.config.height) {
+            let row = y * self.config.width;
+            for x in HUD_X as usize..max_x {
+                let offset = row + x;
+                if destination[offset].0 != 0 {
+                    dirty_offsets.push(offset as u32);
+                }
+            }
+        }
+    }
+}
+
+pub fn request_particle_demo_navigation(delta: i32) {
+    if delta != 0 {
+        PARTICLE_DEMO_NAVIGATION.fetch_add(delta, Ordering::AcqRel);
+    }
 }
 
 impl ParticleShowcaseConfig {
@@ -246,6 +575,48 @@ pub(crate) fn xorshift32(mut state: u32) -> u32 {
     state
 }
 
+fn unit_signed(value: u32) -> f32 {
+    ((value >> 8) as f32) * (2.0 / 16_777_215.0) - 1.0
+}
+
+fn hidden_slot_offset(hidden_slot: u8) -> Result<usize, String> {
+    match hidden_slot {
+        1 => Ok(0),
+        2 => Ok(1),
+        _ => Err(format!(
+            "particle showcase hidden slot must be 1 or 2, received {hidden_slot}"
+        )),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn thread_cpu_time_us() -> Option<u64> {
+    let mut time = std::mem::MaybeUninit::<libc::timespec>::uninit();
+    let rc = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, time.as_mut_ptr()) };
+    if rc != 0 {
+        return None;
+    }
+    let time = unsafe { time.assume_init() };
+    Some(
+        u64::try_from(time.tv_sec)
+            .unwrap_or(0)
+            .saturating_mul(1_000_000)
+            .saturating_add(u64::try_from(time.tv_nsec).unwrap_or(0) / 1_000),
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+fn thread_cpu_time_us() -> Option<u64> {
+    None
+}
+
+fn elapsed_thread_cpu_us(start: Option<u64>) -> u128 {
+    start
+        .and_then(|start| thread_cpu_time_us().map(|end| end.saturating_sub(start)))
+        .map(u128::from)
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -320,6 +691,34 @@ mod tests {
             }
             .validate()
             .is_err()
+        );
+    }
+
+    #[test]
+    fn diagnostic_renderer_uses_both_hidden_slots_and_wraps_navigation() {
+        let mut renderer = ParticleShowcaseRenderer::new(ParticleShowcaseConfig {
+            width: 960,
+            height: 540,
+            seed: 7,
+            initial_demo: ParticleDemoKind::Fireworks,
+        })
+        .unwrap();
+        let mut destination = vec![Rgb565Pixel(0); 960 * 540];
+        let first = renderer
+            .render(&mut destination, 1, Duration::ZERO)
+            .unwrap();
+        assert_eq!(first.demo, ParticleDemoKind::Fireworks);
+        assert!(first.visible > 0);
+
+        request_particle_demo_navigation(-1);
+        let wrapped = renderer
+            .render(&mut destination, 2, Duration::from_millis(17))
+            .unwrap();
+        assert_eq!(wrapped.demo, ParticleDemoKind::ArcadeCabinet);
+        assert!(
+            renderer
+                .render(&mut destination, 0, Duration::ZERO)
+                .is_err()
         );
     }
 }
