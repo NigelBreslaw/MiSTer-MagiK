@@ -2290,13 +2290,19 @@ fn triangle_wave(value: f32) -> f32 {
 fn arcade_camera(seconds: f32) -> (f32, f32, f32, f32, f32) {
     let formation = ease_out_cubic((seconds * 0.25).clamp(0.0, 1.0));
     if seconds < 4.0 {
-        return (formation, -0.62, -0.08, 760.0, 0.0);
+        return (
+            formation,
+            std::f32::consts::FRAC_PI_2 - 0.62,
+            -0.08,
+            760.0,
+            0.0,
+        );
     }
     if seconds < 24.0 {
         let phase = (seconds - 4.0) / 20.0;
         return (
             1.0,
-            -0.62 + (phase * std::f32::consts::TAU).sin() * 1.15,
+            std::f32::consts::FRAC_PI_2 - 0.62 + (phase * std::f32::consts::TAU).sin() * 1.15,
             triangle_wave(phase * 2.0) * 0.13,
             720.0 + triangle_wave(phase + 0.25) * 82.0,
             0.0,
@@ -2306,7 +2312,7 @@ fn arcade_camera(seconds: f32) -> (f32, f32, f32, f32, f32) {
         let return_t = ease_out_cubic((seconds - 24.0) * 0.2);
         return (
             1.0,
-            -0.62 * (1.0 - return_t) + 0.72 * return_t,
+            (std::f32::consts::FRAC_PI_2 - 0.62) * (1.0 - return_t) + 0.72 * return_t,
             0.11 * return_t,
             720.0 + 35.0 * return_t,
             0.0,
