@@ -386,58 +386,93 @@ impl ParticleEngine {
     }
 
     fn advance(&mut self, delta: f32) {
+        match self.phase {
+            ParticlePhase::Static => self.advance_static(delta),
+            ParticlePhase::Form => self.advance_form(delta),
+            ParticlePhase::Hold => self.advance_hold(delta),
+            ParticlePhase::Disperse => self.advance_disperse(delta),
+        }
+    }
+
+    fn advance_static(&mut self, delta: f32) {
         let width = self.config.width as f32;
         let height = self.config.height as f32;
         for index in 0..self.particle_count() {
             let noise = next_random(&mut self.random_states[index]);
             let jitter_x = signed_unit(noise);
             let jitter_y = signed_unit(noise.rotate_left(11));
-            match self.phase {
-                ParticlePhase::Static => {
-                    self.vx[index] += jitter_x * 75.0 * delta;
-                    self.vy[index] += jitter_y * 75.0 * delta;
-                    self.vz[index] += signed_unit(noise.rotate_left(21)) * 8.0 * delta;
-                    self.vx[index] *= 0.985;
-                    self.vy[index] *= 0.985;
-                    self.vz[index] *= 0.98;
-                }
-                ParticlePhase::Form | ParticlePhase::Hold => {
-                    let target = self.target(index);
-                    let target_z = self.target_depth(index);
-                    let hold = self.phase == ParticlePhase::Hold;
-                    let stiffness = if hold { 34.0 } else { 18.0 };
-                    let damping = if hold { 0.78 } else { 0.88 };
-                    let jitter = if hold { 0.35 } else { 0.08 };
-                    self.vx[index] +=
-                        (target.x + jitter_x * jitter - self.x[index]) * stiffness * delta;
-                    self.vy[index] +=
-                        (target.y + jitter_y * jitter - self.y[index]) * stiffness * delta;
-                    self.vz[index] += (target_z - self.z[index]) * stiffness * delta;
-                    self.vx[index] *= damping;
-                    self.vy[index] *= damping;
-                    self.vz[index] *= damping;
-                }
-                ParticlePhase::Disperse => {
-                    let target = self.target(index);
-                    let dx = self.x[index] - target.x;
-                    let dy = self.y[index] - target.y;
-                    self.vx[index] += (dx * 2.2 + jitter_x * 115.0) * delta;
-                    self.vy[index] += (dy * 2.2 + jitter_y * 115.0) * delta;
-                    self.vz[index] += signed_unit(noise.rotate_left(21)) * 55.0 * delta;
-                    self.vx[index] *= 0.99;
-                    self.vy[index] *= 0.99;
-                    self.vz[index] *= 0.99;
-                }
-            }
+            self.vx[index] += jitter_x * 75.0 * delta;
+            self.vy[index] += jitter_y * 75.0 * delta;
+            self.vz[index] += signed_unit(noise.rotate_left(21)) * 8.0 * delta;
+            self.vx[index] *= 0.985;
+            self.vy[index] *= 0.985;
+            self.vz[index] *= 0.98;
             self.x[index] += self.vx[index] * delta;
             self.y[index] += self.vy[index] * delta;
             self.z[index] =
                 (self.z[index] + self.vz[index] * delta).clamp(-DEPTH_EXTENT, DEPTH_EXTENT);
-            if self.phase == ParticlePhase::Static {
-                self.x[index] = wrap_coordinate(self.x[index], width);
-                self.y[index] = wrap_coordinate(self.y[index], height);
-            }
+            self.x[index] = wrap_coordinate(self.x[index], width);
+            self.y[index] = wrap_coordinate(self.y[index], height);
         }
+    }
+
+    fn advance_form(&mut self, delta: f32) {
+        for index in 0..self.particle_count() {
+            let noise = next_random(&mut self.random_states[index]);
+            let jitter_x = signed_unit(noise);
+            let jitter_y = signed_unit(noise.rotate_left(11));
+            let target = self.target(index);
+            let target_z = self.target_depth(index);
+            self.vx[index] += (target.x + jitter_x * 0.08 - self.x[index]) * 18.0 * delta;
+            self.vy[index] += (target.y + jitter_y * 0.08 - self.y[index]) * 18.0 * delta;
+            self.vz[index] += (target_z - self.z[index]) * 18.0 * delta;
+            self.vx[index] *= 0.88;
+            self.vy[index] *= 0.88;
+            self.vz[index] *= 0.88;
+            self.integrate_bounded(index, delta);
+        }
+    }
+
+    fn advance_hold(&mut self, delta: f32) {
+        for index in 0..self.particle_count() {
+            let noise = next_random(&mut self.random_states[index]);
+            let jitter_x = signed_unit(noise);
+            let jitter_y = signed_unit(noise.rotate_left(11));
+            let target = self.target(index);
+            let target_z = self.target_depth(index);
+            self.vx[index] += (target.x + jitter_x * 0.35 - self.x[index]) * 34.0 * delta;
+            self.vy[index] += (target.y + jitter_y * 0.35 - self.y[index]) * 34.0 * delta;
+            self.vz[index] += (target_z - self.z[index]) * 34.0 * delta;
+            self.vx[index] *= 0.78;
+            self.vy[index] *= 0.78;
+            self.vz[index] *= 0.78;
+            self.integrate_bounded(index, delta);
+        }
+    }
+
+    fn advance_disperse(&mut self, delta: f32) {
+        for index in 0..self.particle_count() {
+            let noise = next_random(&mut self.random_states[index]);
+            let jitter_x = signed_unit(noise);
+            let jitter_y = signed_unit(noise.rotate_left(11));
+            let target = self.target(index);
+            let dx = self.x[index] - target.x;
+            let dy = self.y[index] - target.y;
+            self.vx[index] += (dx * 2.2 + jitter_x * 115.0) * delta;
+            self.vy[index] += (dy * 2.2 + jitter_y * 115.0) * delta;
+            self.vz[index] += signed_unit(noise.rotate_left(21)) * 55.0 * delta;
+            self.vx[index] *= 0.99;
+            self.vy[index] *= 0.99;
+            self.vz[index] *= 0.99;
+            self.integrate_bounded(index, delta);
+        }
+    }
+
+    #[inline(always)]
+    fn integrate_bounded(&mut self, index: usize, delta: f32) {
+        self.x[index] += self.vx[index] * delta;
+        self.y[index] += self.vy[index] * delta;
+        self.z[index] = (self.z[index] + self.vz[index] * delta).clamp(-DEPTH_EXTENT, DEPTH_EXTENT);
     }
 
     fn target(&self, index: usize) -> ParticleTarget {
