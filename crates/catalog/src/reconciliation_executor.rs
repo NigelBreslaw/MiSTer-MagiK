@@ -535,6 +535,11 @@ fn execute_fresh_pipeline(
         mpsc::channel::<Result<CompletedShard, ReconciliationError>>();
     std::thread::scope(|scope| {
         let publisher = scope.spawn(move || {
+            if background {
+                crate::runtime_thread::apply_runtime_thread_policy(
+                    crate::runtime_thread::RuntimeThreadRole::CatalogWorker,
+                );
+            }
             let _background_scope =
                 background.then(crate::cooperative_work::BackgroundScope::enter);
             publish_staged_shards(storage_root, generation, limits, staged_rx, completed_tx)

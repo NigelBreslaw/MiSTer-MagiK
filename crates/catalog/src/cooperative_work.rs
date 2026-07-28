@@ -1,12 +1,12 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Process-wide permission with thread-local opt-in for interactive-safe work.
+//! Process-wide permission with thread-local background-work scope.
 //!
-//! The launcher owns the permission bit, while catalog code marks only the
-//! background phases and worker threads that must cooperate with it. Foreground
-//! first-visible work never enters a background scope and therefore never
-//! waits on interactive policy.
+//! Production keeps permission open continuously and constrains background
+//! phases through CPU affinity and nice levels. Tests can close the permission
+//! bit to verify that checkpoints do not restart work or leak scope. Foreground
+//! first-visible work never enters a background scope.
 
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, Ordering};

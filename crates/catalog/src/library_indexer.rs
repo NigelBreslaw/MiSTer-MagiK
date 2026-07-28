@@ -1106,7 +1106,7 @@ fn report_scan_target(
         }
         .to_string(),
         cooperative_policy: match priority {
-            LibraryScanPriority::Background => "interaction_idle_gate",
+            LibraryScanPriority::Background => "continuous_cpu0",
             LibraryScanPriority::Foreground => "unrestricted",
         }
         .to_string(),

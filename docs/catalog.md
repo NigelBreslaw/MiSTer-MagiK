@@ -18,7 +18,8 @@ catalog storage.
 - Start warm launches from a small registry and one eager Arcade mini-nav.
 - Load other systems only when selected.
 - Rebuild and publish only changed system projections.
-- Keep every background scan and rebuild phase subordinate to UI responsiveness.
+- Keep every post-reveal scan and rebuild phase continuously on CPU0 at
+  background priority so UI work on the display core remains responsive.
 - Keep catalog construction testable and benchmarkable without Slint, the
   framebuffer, Main, or a complete MiSTer installation.
 
@@ -145,15 +146,23 @@ and never used to suppress the authoritative background scan. That scan audits
 weak filesystem stamps and replaces any initially stale projection during the
 same launch.
 
-Foreground first-visible Arcade work does not obey the background idle latch.
-It must finish promptly because there is no usable game UI yet. It must also
-remain free of preview-cache rebuilds and screenshot/media walks.
+Foreground first-visible Arcade work is not pinned to CPU0. It must finish
+promptly because there is no usable game UI yet. It must also remain free of
+preview-cache rebuilds and screenshot/media walks.
 
-## UI-Cooperative Background Work
+## Continuous CPU0 Background Work
 
-The launcher owns an idle latch. Once any catalog is usable, all heavy catalog
-work uses lightweight cooperative checkpoints and waits while that latch is
-closed. Checkpoints cover:
+Once a first-visible catalog is usable, the catalog parent switches to the
+`CatalogWorker` policy (nice 5, CPU0) before it starts the authoritative full
+scan. The walker uses the lower-priority `LibraryWalker` policy (nice 10,
+CPU0). Audit, projection, snapshot, shard construction, publication,
+scanner-cache, catalog-state, and helper threads remain explicitly pinned to
+CPU0 or inherit that affinity.
+
+Input, navigation motion, media work, preview work, scripted benchmarks, and
+visual animation never pause catalog construction. Cooperative checkpoints
+remain at bounded cancellation and scheduling boundaries, but their permission
+stays open. Checkpoints cover:
 
 - builder and scan-plan boundaries;
 - library and prepared-payload filesystem walks;
@@ -163,13 +172,16 @@ closed. Checkpoints cover:
 - deferred projection and publication preparation.
 
 Checks occur at bounded batches rather than by polling an atomic for every
-file. A wait must not hold a filesystem iterator borrow, database transaction,
-publication lock, or UI lock, and it must not emit progress that suggests work
-advanced while paused. Reopening the latch resumes the same operation without
-discarding discoveries or restarting the scan.
+file. A checkpoint must not hold a filesystem iterator borrow, database
+transaction, publication lock, or UI lock.
 
-That latch is in-process pause/resume only. A first build also keeps disposable
-durable progress in `catalog-v3/state/build-progress.sqlite3`. Completed scan
+Foreground Arcade bootstrap remains all-core and normal priority until its
+snapshot is published and retained. If no first-visible projection can be
+published, initial creation stays foreground rather than waiting on a
+post-reveal policy transition that never happened.
+
+A first build also keeps disposable durable progress in
+`catalog-v3/state/build-progress.sqlite3`. Completed scan
 targets are committed atomically with their eligible-input fingerprints. After
 a launcher handoff terminates MagiK, the next launcher re-enumerates target
 metadata, hydrates exact matches without reparsing or classifying them, and
@@ -265,15 +277,15 @@ diagnostics/catalog/progress-latest.json
 diagnostics/catalog/progress-catalog-<timestamp>-<pid>-<sequence>.json
 ```
 
-The episode records worker operation and execution mode, the latest phase,
-detail and percentage, activity counts, wall and active elapsed time, whether
-background work was intentionally paused, catalog-state and resumable-build
-file metadata, runtime/Main snapshots, and bounded catalog log tails. It is
-written at worker start, at most every two minutes while running, after five
-minutes of active time without worker activity, on recovery from a stall, and
-on completion or failure. Interactive background pauses do not accrue stall
-time. Writes are asynchronous and bounded to 96 KiB each; the newest 24
-episodes, 2 MiB, and 48 hours are hard retention limits.
+The episode records worker operation, execution mode and cooperative policy,
+the current scan target and durable target/shard counters, the latest phase,
+detail and percentage, activity counts, wall and active elapsed time,
+catalog-state and resumable-build file metadata, projected runtime/Main
+snapshots, and current-PID bounded catalog log tails. It is written at worker
+start, at most every two minutes while running, after five minutes without
+worker activity, on recovery from a stall, and on completion or failure.
+Writes are asynchronous and bounded to 96 KiB each; the newest 24 episodes,
+2 MiB, and 48 hours are hard retention limits.
 
 For a sendable support bundle, run the typed host command:
 
@@ -338,7 +350,7 @@ The analyzer supplies package-scoped Rust diagnostics during editing. Pre-push
 and CI run the standalone suite and consumer assurance.
 The standalone suite covers registry atomicity, shard integrity, lazy reads,
 incremental reconciliation, scan checkpoints, first-visible bootstrap, and
-pause/resume behavior.
+the foreground-to-continuous-CPU0 transition.
 Fresh-build reconciliation rows report `pipeline_overlap_us`,
 `pipeline_queue_wait_us`, `pipeline_peak_in_flight`, and `pipeline_fallbacks`.
 A qualifying pipelined run has positive overlap, never exceeds two in-flight

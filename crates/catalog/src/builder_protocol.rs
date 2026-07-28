@@ -223,7 +223,7 @@ mod tests {
                     completed_targets: 0,
                     discoveries: 0,
                     execution_mode: "background_interactive".into(),
-                    cooperative_policy: "interaction_idle_gate".into(),
+                    cooperative_policy: "continuous_cpu0".into(),
                 }),
             }),
         };

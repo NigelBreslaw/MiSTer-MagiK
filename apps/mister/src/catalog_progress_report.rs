@@ -111,7 +111,7 @@ impl CatalogProgressMonitor {
         self.cooperative_policy = if execution_mode == "foreground_exclusive" {
             "unrestricted"
         } else {
-            "interaction_idle_gate"
+            "continuous_cpu0"
         }
         .to_string();
         self.root = root;

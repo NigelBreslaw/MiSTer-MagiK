@@ -24,8 +24,8 @@ pub enum BuilderOperation {
     FreshBuild,
 }
 
-/// Let the interactive launcher suspend projection and persistence work while
-/// input, navigation motion, or a latency-sensitive preview is active.
+/// Controls cooperative catalog checkpoints. Production launcher policy keeps
+/// this enabled continuously; tests may close it to exercise checkpoint safety.
 pub fn set_background_heavy_work_allowed(allowed: bool) {
     crate::cooperative_work::set_background_allowed(allowed);
 }
@@ -54,7 +54,6 @@ pub fn run(
     mut emit: impl FnMut(CatalogBuilderEvent),
 ) -> Result<(), String> {
     let mut backend = SystemBuilderBackend {
-        replacement_rebuild: operation == BuilderOperation::Rebuild,
         bootstrap_first_visible: matches!(
             operation,
             BuilderOperation::Build | BuilderOperation::FreshBuild
@@ -63,6 +62,7 @@ pub fn run(
             operation,
             BuilderOperation::Build | BuilderOperation::FreshBuild
         ),
+        post_reveal_background: false,
         arcade_bootstrap_scan: None,
     };
     run_with_backend(
@@ -149,6 +149,7 @@ trait BuilderBackend {
     ) -> Result<Option<StageOutput<Self::Prepared>>, String> {
         Ok(None)
     }
+    fn set_post_reveal_background(&mut self, _background: bool) {}
     fn scan(
         &mut self,
         progress: &mut dyn FnMut(&str, &str),
@@ -243,9 +244,8 @@ fn run_with_backend<B: BuilderBackend>(
     }
     snapshot_cleanup.arm();
 
-    // A first build owns the machine through durable persistence. Publishing
-    // the first-visible snapshot changes what the UI can show, not the build's
-    // foreground scheduling policy.
+    // Initial creation stays foreground only through first-visible bootstrap.
+    // Until then there is no usable game UI to protect with background policy.
     let build_role = initial_build_role(operation);
     apply_runtime_thread_policy(build_role);
     let bootstrap = {
@@ -264,7 +264,7 @@ fn run_with_backend<B: BuilderBackend>(
     }
     .map_err(|error| fail(protocol, "bootstrap", error, emit))?;
     let first_visible_published = bootstrap.is_some();
-    let background_build = full_build_runs_in_background(operation);
+    let background_build = full_build_runs_in_background(operation) || first_visible_published;
     if let Some(bootstrap) = bootstrap {
         emit_timings(protocol, bootstrap.timings, emit);
         let games = backend.games(&bootstrap.value);
@@ -309,12 +309,22 @@ fn run_with_backend<B: BuilderBackend>(
                 detail: format!("status=error error={}", error.replace('\t', " ")),
             }),
         }
+    }
+    backend.set_post_reveal_background(background_build);
+    if background_build {
+        apply_runtime_thread_policy(RuntimeThreadRole::CatalogWorker);
+        emit(CatalogBuilderEvent::Timing {
+            protocol,
+            name: "builder_execution_mode".into(),
+            detail: "mode=background_continuous affinity=cpu0 nice=5 boundary=post-first-visible"
+                .into(),
+        });
+    } else {
         apply_runtime_thread_policy(build_role);
     }
-    // First-visible serialization and publication are part of foreground
-    // bootstrap. Entering the cooperative scope before CatalogReady creates a
-    // circular wait: the catalog screen holds the idle latch closed while the
-    // builder waits for that latch before it can publish the UI that opens it.
+    // First-visible serialization and publication are foreground. Only after
+    // CatalogReady has been emitted and the retained index has been published
+    // does the complete pipeline enter the CPU0 background scope.
     let _background_scope = background_build.then(crate::cooperative_work::BackgroundScope::enter);
     let scanned = {
         let protocol_output = RefCell::new(&mut *emit);
@@ -570,9 +580,9 @@ enum BootstrapSource {
 }
 
 struct SystemBuilderBackend {
-    replacement_rebuild: bool,
     bootstrap_first_visible: bool,
     durable_resume: bool,
+    post_reveal_background: bool,
     arcade_bootstrap_scan: Option<library_db::LibraryRamScanArtifact>,
 }
 
@@ -688,6 +698,10 @@ impl BuilderBackend for SystemBuilderBackend {
 
     fn fresh_cleanup(&mut self) -> Result<usize, String> {
         remove_default_production_catalog_artifacts()
+    }
+
+    fn set_post_reveal_background(&mut self, background: bool) {
+        self.post_reveal_background = background;
     }
 
     fn check(&mut self) -> Result<CheckOutput, StageFailure> {
@@ -875,7 +889,7 @@ impl BuilderBackend for SystemBuilderBackend {
         // The bootstrap is UI-only. A resumable full build owns one stable,
         // complete ordered target list across the first and later processes.
         self.arcade_bootstrap_scan.take();
-        let background_full_build = self.replacement_rebuild || self.bootstrap_first_visible;
+        let background_full_build = self.post_reveal_background;
         let scanned = if background_full_build {
             library_db::scan_default_library_ram_background_with_events(
                 Some(progress),
@@ -913,7 +927,7 @@ impl BuilderBackend for SystemBuilderBackend {
         progress: &mut dyn FnMut(&str, &str),
     ) -> Result<StageOutput<Self::Prepared>, String> {
         let root = crate::arcade_catalog::DEFAULT_ARCADE_ROOT;
-        let background_full_build = self.replacement_rebuild || self.bootstrap_first_visible;
+        let background_full_build = self.post_reveal_background;
         let (prepared_state, catalog, timing, scanner_cache) = if background_full_build {
             scan.complete_coverage_audit_and_catalog_background_with_progress(root, progress)?
         } else {
@@ -1173,6 +1187,9 @@ fn with_builder_progress_heartbeat<T: Send>(
     std::thread::scope(|scope| {
         let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
         scope.spawn(move || {
+            if background {
+                apply_runtime_thread_policy(RuntimeThreadRole::CatalogWorker);
+            }
             let _background_scope =
                 background.then(crate::cooperative_work::BackgroundScope::enter);
             crate::cooperative_work::checkpoint();
@@ -1409,7 +1426,7 @@ mod tests {
     }
 
     #[test]
-    fn replacement_rebuild_is_background_but_first_creation_is_foreground() {
+    fn initial_bootstrap_is_foreground_and_replacement_build_is_background() {
         assert_eq!(
             initial_build_role(BuilderOperation::Rebuild),
             RuntimeThreadRole::CatalogWorker
@@ -1435,6 +1452,10 @@ mod tests {
         bootstrap_first_visible: bool,
         calls: Vec<&'static str>,
         snapshot_background_scopes: Vec<bool>,
+        scan_background_scopes: Vec<bool>,
+        prepare_background_scopes: Vec<bool>,
+        persist_background_scopes: Vec<bool>,
+        post_reveal_background: Vec<bool>,
     }
 
     impl FakeBackend {
@@ -1455,6 +1476,10 @@ mod tests {
             self.calls.push("fresh-cleanup");
             self.fail("fresh-cleanup")?;
             Ok(self.cleanup_removed)
+        }
+
+        fn set_post_reveal_background(&mut self, background: bool) {
+            self.post_reveal_background.push(background);
         }
 
         fn check(&mut self) -> Result<CheckOutput, StageFailure> {
@@ -1500,6 +1525,8 @@ mod tests {
             scan_event: &mut dyn FnMut(library_db::LibraryScanEvent),
         ) -> Result<StageOutput<Self::Scan>, String> {
             self.calls.push("scan");
+            self.scan_background_scopes
+                .push(crate::cooperative_work::in_background_scope());
             self.fail("scan")?;
             progress("Scanning", "fixture");
             scan_event(library_db::LibraryScanEvent::SystemDiscovered {
@@ -1517,6 +1544,8 @@ mod tests {
             progress: &mut dyn FnMut(&str, &str),
         ) -> Result<StageOutput<Self::Prepared>, String> {
             self.calls.push("prepare-catalog");
+            self.prepare_background_scopes
+                .push(crate::cooperative_work::in_background_scope());
             self.fail("prepare-catalog")?;
             progress("Indexing library", "Preparing library — 2 discoveries");
             progress("Indexing library", "Resolving playable games — 2 of 2");
@@ -1575,6 +1604,8 @@ mod tests {
             progress: &mut dyn FnMut(&str, &str),
         ) -> Result<BuilderSummary, String> {
             self.calls.push("persist");
+            self.persist_background_scopes
+                .push(crate::cooperative_work::in_background_scope());
             self.fail("persist")?;
             progress("Persisting", "fixture");
             Ok(BuilderSummary {
@@ -1702,6 +1733,10 @@ mod tests {
                 "build-duration"
             ]
         );
+        assert_eq!(backend.post_reveal_background, [false]);
+        assert_eq!(backend.scan_background_scopes, [false]);
+        assert_eq!(backend.prepare_background_scopes, [false]);
+        assert_eq!(backend.persist_background_scopes, [false]);
     }
 
     #[test]
@@ -1771,13 +1806,28 @@ mod tests {
             .iter()
             .position(|event| {
                 matches!(event, CatalogBuilderEvent::Timing { name, .. } if name == "builder_arcade_bootstrap_index_publish")
-        })
+            })
             .expect("retained first-visible timing");
+        let background_transition = events
+            .iter()
+            .position(|event| {
+                matches!(
+                    event,
+                    CatalogBuilderEvent::Timing { name, detail, .. }
+                        if name == "builder_execution_mode"
+                            && detail.contains("affinity=cpu0")
+                )
+            })
+            .expect("post-reveal background transition");
         assert_eq!(
             backend.snapshot_background_scopes,
             [false],
             "fresh builds publish only the foreground first-visible snapshot"
         );
+        assert_eq!(backend.post_reveal_background, [true]);
+        assert_eq!(backend.scan_background_scopes, [true]);
+        assert_eq!(backend.prepare_background_scopes, [true]);
+        assert_eq!(backend.persist_background_scopes, [true]);
         let full_scan_timing = events
             .iter()
             .position(|event| {
@@ -1786,6 +1836,8 @@ mod tests {
             .unwrap();
         assert!(ready[0] < full_scan_timing);
         assert!(ready[0] < retained);
+        assert!(retained < background_transition);
+        assert!(background_transition < full_scan_timing);
         assert!(retained < full_scan_timing);
         let authoritative_prepared = events
             .iter()
