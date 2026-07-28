@@ -12,6 +12,7 @@ const MAX_PARTICLES: usize = 98_304;
 const MAX_TRAIL_SAMPLES: u8 = 32;
 const COPPER_WILLOW_RAIN: &str =
     include_str!("../assets/particles/fireworks/copper-willow-rain.json");
+const MAGNETIC_FLOWER: &str = include_str!("../assets/particles/fireworks/magnetic-flower.json");
 const OLED_PEONY: &str = include_str!("../assets/particles/fireworks/oled-peony.json");
 const PHOENIX_COMET: &str = include_str!("../assets/particles/fireworks/phoenix-comet.json");
 const RECURSIVE_HALO: &str = include_str!("../assets/particles/fireworks/recursive-halo.json");
@@ -152,6 +153,7 @@ impl FireworkRenderer {
 pub fn embedded_firework_json(id: &str) -> Option<&'static str> {
     match id.trim().to_ascii_lowercase().as_str() {
         "copper-willow-rain" | "copper-willow" | "copper" => Some(COPPER_WILLOW_RAIN),
+        "magnetic-flower" | "magnetic" => Some(MAGNETIC_FLOWER),
         "oled-peony" | "oled" => Some(OLED_PEONY),
         "phoenix-comet" | "phoenix" => Some(PHOENIX_COMET),
         "recursive-halo" | "halo" => Some(RECURSIVE_HALO),
@@ -187,6 +189,8 @@ struct EmitterSpec {
     spread_deg: f32,
     #[serde(default)]
     rotation_deg: f32,
+    #[serde(default)]
+    angular_velocity_deg: f32,
     #[serde(default = "one")]
     petals: u16,
     speed: [f32; 2],
@@ -245,6 +249,7 @@ struct CompiledEmitter {
     direction: f32,
     spread: f32,
     rotation: f32,
+    angular_velocity: f32,
     petals: usize,
     speed: (f32, f32),
     gravity: f32,
@@ -335,6 +340,7 @@ impl CompiledShow {
                 direction: emitter.direction_deg.to_radians(),
                 spread: emitter.spread_deg.to_radians(),
                 rotation: emitter.rotation_deg.to_radians(),
+                angular_velocity: emitter.angular_velocity_deg.to_radians(),
                 petals: usize::from(emitter.petals.max(1)),
                 speed: (emitter.speed[0], emitter.speed[1]),
                 gravity: emitter.gravity,
@@ -384,7 +390,7 @@ impl CompiledEmitter {
                     + within as f32 * 0.001
             }
             Shape::Radial | Shape::Ring => self.rotation + ordinal * self.spread + jitter,
-        };
+        } + self.angular_velocity * seconds;
         let shape_speed = match self.shape {
             Shape::Ring => (self.speed.0 + self.speed.1) * 0.5,
             Shape::Rosette => {
