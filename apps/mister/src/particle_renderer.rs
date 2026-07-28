@@ -577,6 +577,11 @@ fn prepare_cached_particle_commands(
     if !engine.uses_vector_projection() {
         return prepare_particle_commands(engine, commands);
     }
+    if frame.phase == ParticlePhase::Hold {
+        cache.initialized = false;
+        cache.phase = Some(frame.phase);
+        return prepare_particle_commands(engine, commands);
+    }
     let count = engine.particle_count();
     if cache.commands.len() != count {
         cache.commands.resize(count, PARTICLE_NOT_VISIBLE_OFFSET);
