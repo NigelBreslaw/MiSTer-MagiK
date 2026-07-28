@@ -14560,6 +14560,8 @@ H: Handlers=event3 js0"#
                 "screensaver_raster_hold_layer_mask": u64::from(id == 4),
                 "screensaver_raster_visible_layer_mask": 31,
                 "screensaver_renderer": "parade",
+            });
+            let particle = json!({
                 "particle_preset": "capacity",
                 "particle_phase": "static",
                 "particle_simulation_backend": "scalar",
@@ -14596,6 +14598,15 @@ H: Handlers=event3 js0"#
                     remaining
                         .as_object()
                         .expect("remaining screensaver evidence must be an object")
+                        .clone(),
+                );
+            frame
+                .as_object_mut()
+                .expect("screensaver evidence must be an object")
+                .extend(
+                    particle
+                        .as_object()
+                        .expect("particle evidence must be an object")
                         .clone(),
                 );
             frame["screensaver_render_ahead_sequence"] = json!(id);
@@ -14987,6 +14998,8 @@ H: Handlers=event3 js0"#
             "screensaver_render_ahead_superseded_frames": 0,
             "screensaver_render_ahead_reused_frames": 0,
             "screensaver_render_ahead_cancelled": false,
+        });
+        let particle = json!({
             "particle_preset": "capacity",
             "particle_phase": phase,
             "particle_simulation_backend": "armv7-neon",
@@ -15023,6 +15036,15 @@ H: Handlers=event3 js0"#
                 remaining
                     .as_object()
                     .expect("remaining particle evidence must be an object")
+                    .clone(),
+            );
+        evidence
+            .as_object_mut()
+            .expect("particle evidence must be an object")
+            .extend(
+                particle
+                    .as_object()
+                    .expect("particle fields must be an object")
                     .clone(),
             );
         evidence
