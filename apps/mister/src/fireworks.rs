@@ -134,7 +134,7 @@ impl FireworkRenderer {
                                 previous,
                                 point,
                                 color,
-                                intensity * trail_age,
+                                intensity * trail_age * 0.36,
                                 &mut stats.pixel_writes,
                             )
                         {
@@ -563,7 +563,7 @@ fn draw_trail_segment(
             y,
             color,
             intensity,
-            Brush::Spark,
+            Brush::Glow,
             pixel_writes,
         ) {
             drew = true;

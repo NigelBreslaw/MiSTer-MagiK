@@ -49,7 +49,7 @@
       "life_ms": [2800, 3900],
       "palette": ["#fff4a4", "#ffd044", "#ff9d10", "#ff6d00"],
       "brush": "glow",
-      "trail": {"samples": 16, "step_ms": 10},
+      "trail": {"samples": 24, "step_ms": 22},
       "twinkle": 0.24
     },
     {
@@ -67,7 +67,7 @@
       "life_ms": [1900, 2800],
       "palette": ["#ff2a23", "#ff451e", "#ff6a24"],
       "brush": "glow",
-      "trail": {"samples": 10, "step_ms": 11},
+      "trail": {"samples": 16, "step_ms": 18},
       "twinkle": 0.12
     },
     {
@@ -76,7 +76,7 @@
       "count": 260,
       "shape": "ring",
       "rotation_deg": 2.0,
-      "speed": [368.0, 368.0],
+      "speed": [290.0, 290.0],
       "gravity": 0.0,
       "drag": 0.11,
       "life_ms": [1080, 1550],

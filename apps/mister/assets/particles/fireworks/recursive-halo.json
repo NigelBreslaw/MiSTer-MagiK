@@ -69,7 +69,7 @@
       "count": 240,
       "shape": "ring",
       "rotation_deg": 1.4,
-      "speed": [352.0, 352.0],
+      "speed": [290.0, 290.0],
       "gravity": 18.0,
       "drag": 0.10,
       "life_ms": [1750, 2400],

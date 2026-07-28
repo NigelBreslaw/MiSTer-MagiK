@@ -42,21 +42,21 @@
       "strands": 72,
       "strand_spread_deg": 0.8,
       "direction_deg": 90.0,
-      "spread_deg": 180.0,
-      "curl_deg": [-7.0, 7.0],
-      "speed": [0.0, 340.0],
-      "gravity": 72.0,
-      "drag": 0.25,
+      "spread_deg": 220.0,
+      "curl_deg": [-18.0, 18.0],
+      "speed": [0.0, 300.0],
+      "gravity": 105.0,
+      "drag": 0.22,
       "life_ms": [3900, 5700],
-      "palette": ["#fff0b0", "#ffc25c", "#e77925", "#a93612"],
+      "palette": ["#ffd27a", "#ee8d2f", "#c65318", "#8f2c0f"],
       "brush": "glow",
-      "trail": {"samples": 32, "step_ms": 17},
+      "trail": {"samples": 32, "step_ms": 24},
       "twinkle": 0.28
     },
     {
       "start_ms": 1420,
       "origin": [0.50, 0.20],
-      "count": 280,
+      "count": 80,
       "shape": "fan",
       "strands": 28,
       "strand_spread_deg": 0.9,
@@ -69,7 +69,7 @@
       "life_ms": [3300, 4900],
       "palette": ["#b6b747", "#839b2d", "#5e6f20"],
       "brush": "spark",
-      "trail": {"samples": 24, "step_ms": 18},
+      "trail": {"samples": 24, "step_ms": 24},
       "twinkle": 0.18
     }
   ]

@@ -11,12 +11,12 @@ All captures use seed `827141709451`, a black background, and no HUD.
 
 | Firework | Hero time | Exact local RGB565 frame hash |
 | --- | ---: | --- |
-| Solar Chrysanthemum | 2100 ms | `dae39c44ef620147` |
-| Recursive Halo | 2200 ms | `51155689ec64879b` |
-| Copper Willow Rain | 2500 ms | `9ba742a19b7d783e` |
-| Phoenix Comet | 2350 ms | `bd5bcef28b6a6227` |
-| Magnetic Flower | 2500 ms | `acb592e36dd1c408` |
-| OLED Peony | 2000 ms | `3f8875ec9cae953d` |
+| Solar Chrysanthemum | 2100 ms | `fc0c900a27f8b67e` |
+| Recursive Halo | 2200 ms | `e439f88f56eed5d6` |
+| Copper Willow Rain | 2500 ms | `a4054c9e752e5718` |
+| Phoenix Comet | 2350 ms | `f8084f2140ddf0da` |
+| Magnetic Flower | 2500 ms | `9d81df4004e0683b` |
+| OLED Peony | 2000 ms | `e18c762ea9aa270a` |
 
 The hashes are renderer-reported PPM pixel hashes, not PNG file hashes. They
 detect accidental output drift; visual comparison against the concept remains
