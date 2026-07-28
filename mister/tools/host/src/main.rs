@@ -3194,6 +3194,8 @@ fn parse_crt_trial_status(output: &str) -> Result<&str> {
 
 const SCREENSAVER_PROFILE_REMOTE_DIR: &str = "/tmp/mister-magik/screensaver-profile";
 const CATALOG_LIFECYCLE_REMOTE_DIR: &str = "/tmp/mister-magik/catalog-lifecycle-benchmark";
+const CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS: u64 = 60;
+const CATALOG_LIFECYCLE_COMPLETE_TIMEOUT_SECS: u64 = 20 * 60;
 const SCREENSAVER_STARTUP_WARMUP_FRAMES: usize = 3;
 const SCREENSAVER_PROFILE_DURATION_SECS: u64 = 45;
 const SCREENSAVER_PROFILE_TIMEOUT_SECS: u64 = SCREENSAVER_PROFILE_DURATION_SECS + 20;
@@ -3390,13 +3392,7 @@ fn profile_installed_catalog_lifecycle(
         .to_string();
     fs::create_dir_all(output_dir)?;
 
-    exec_checked(
-        &session,
-        "catalog lifecycle launcher suspend",
-        &acknowledged_main_command("mister_magik_suspend"),
-    )?;
-
-    let mut refresh_log = String::new();
+    let mut lifecycle_log = String::new();
     let mut inspect_log = String::new();
     let run_result = (|| -> Result<Value> {
         exec_checked(
@@ -3404,39 +3400,88 @@ fn profile_installed_catalog_lifecycle(
             "catalog lifecycle isolated fixture",
             &catalog_lifecycle_prepare_command(),
         )?;
-        let refresh_started = Instant::now();
-        let refresh = exec(
+        let started = Instant::now();
+        restart_launcher_with_one_shot_env(
             &session,
-            &catalog_lifecycle_runtime_command("library-refresh"),
-            true,
+            LauncherRestartOptions {
+                env_vars: catalog_lifecycle_launcher_env(),
+                timeout_secs: CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS,
+                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+                ..LauncherRestartOptions::default()
+            },
         )?;
-        refresh_log.push_str(&refresh.stdout);
-        refresh_log.push_str(&refresh.stderr);
-        if let Some(error) = exec_failure_message("catalog lifecycle refresh", &refresh) {
-            return Err(error.into());
-        }
-        let refresh_ms = refresh_started.elapsed().as_millis() as u64;
+        let mut first_visible_ms = None;
+        let (catalog, final_status) = loop {
+            let status = read_launcher_status(&session)?;
+            let elapsed_ms = started.elapsed().as_millis() as u64;
+            if first_visible_ms.is_none()
+                && status.get("catalog_ready").and_then(Value::as_bool) == Some(true)
+                && status
+                    .get("catalog_games")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+                    > 0
+            {
+                first_visible_ms = Some(elapsed_ms);
+                lifecycle_log.push_str(&format!(
+                    "first_visible elapsed_ms={elapsed_ms} games={}\n",
+                    status["catalog_games"]
+                ));
+            }
+            if first_visible_ms.is_none()
+                && started.elapsed()
+                    >= Duration::from_secs(CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS)
+            {
+                return Err(format!(
+                    "launcher catalog did not become first-visible within {} seconds; final status={status}",
+                    CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS
+                )
+                .into());
+            }
 
-        let inspect_started = Instant::now();
-        let inspect = exec(
-            &session,
-            &catalog_lifecycle_runtime_command("catalog-v3-inspect"),
-            true,
+            let inspect = exec(
+                &session,
+                &catalog_lifecycle_runtime_command("catalog-v3-inspect"),
+                true,
+            )?;
+            if exec_failure_message("catalog lifecycle inspect", &inspect).is_none() {
+                inspect_log = inspect.stdout;
+                break (parse_catalog_lifecycle_inspect(&inspect_log)?, status);
+            }
+            if started.elapsed() >= Duration::from_secs(CATALOG_LIFECYCLE_COMPLETE_TIMEOUT_SECS) {
+                lifecycle_log.push_str(&inspect.stdout);
+                lifecycle_log.push_str(&inspect.stderr);
+                return Err(format!(
+                    "launcher catalog did not publish a valid manifest within {} seconds; first_visible_ms={first_visible_ms:?}",
+                    CATALOG_LIFECYCLE_COMPLETE_TIMEOUT_SECS
+                )
+                .into());
+            }
+            thread::sleep(Duration::from_secs(1));
+        };
+        let complete_ms = started.elapsed().as_millis() as u64;
+        lifecycle_log.push_str(&format!(
+            "complete elapsed_ms={complete_ms} systems={} games={}\n",
+            catalog["systems"].as_array().map_or(0, Vec::len),
+            catalog["total_games"]
+        ));
+        fs::write(
+            output_dir.join("launcher-status.json"),
+            format!("{}\n", serde_json::to_string_pretty(&final_status)?),
         )?;
-        inspect_log.push_str(&inspect.stdout);
-        inspect_log.push_str(&inspect.stderr);
-        if let Some(error) = exec_failure_message("catalog lifecycle inspect", &inspect) {
+        let diagnostics = exec(&session, &catalog_lifecycle_evidence_command(), true)?;
+        lifecycle_log.push_str(&diagnostics.stdout);
+        lifecycle_log.push_str(&diagnostics.stderr);
+        if let Some(error) = exec_failure_message("catalog lifecycle evidence", &diagnostics) {
             return Err(error.into());
         }
-        let catalog = parse_catalog_lifecycle_inspect(&inspect.stdout)?;
-        let inspect_ms = inspect_started.elapsed().as_millis() as u64;
         Ok(json!({
             "schema": "mister-magik-installed-benchmark-v1",
             "scenario": "catalog-lifecycle",
-            "elapsed_ms": refresh_ms,
+            "elapsed_ms": complete_ms,
             "timing": {
-                "refresh_ms": refresh_ms,
-                "inspect_ms": inspect_ms,
+                "first_visible_ms": first_visible_ms,
+                "complete_ms": complete_ms,
             },
             "catalog": catalog,
             "manifest": parse_manifest_evidence(&manifest),
@@ -3450,22 +3495,26 @@ fn profile_installed_catalog_lifecycle(
     })();
 
     let evidence_result = (|| -> Result<()> {
-        fs::write(output_dir.join("library-refresh.log"), &refresh_log)?;
+        fs::write(output_dir.join("catalog-lifecycle.log"), &lifecycle_log)?;
         fs::write(output_dir.join("catalog-inspect.tsv"), &inspect_log)?;
         Ok(())
     })();
 
+    let restart_result = launcher_restart(
+        &session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            timeout_secs: CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS,
+            ..LauncherRestartOptions::default()
+        },
+    );
     let cleanup_result = exec_checked(
         &session,
         "catalog lifecycle isolated cleanup",
         &catalog_lifecycle_cleanup_command(),
     );
-    let resume_result = exec_checked(
-        &session,
-        "catalog lifecycle launcher resume",
-        &acknowledged_main_command("mister_magik_resume"),
-    );
-    let restore_result = combine_catalog_lifecycle_restore(cleanup_result, resume_result);
+    let restore_result = combine_catalog_lifecycle_restore(cleanup_result, restart_result);
     let summary = match (run_result, evidence_result, restore_result) {
         (Ok(summary), Ok(()), Ok(())) => summary,
         (Err(error), _, Ok(())) => return Err(error),
@@ -3524,6 +3573,62 @@ fn catalog_lifecycle_runtime_command(subcommand: &str) -> String {
         refresh_lock = sh(&format!("{root}/library-refresh.lock")),
         builder_lock = sh(&format!("{root}/catalog-builder.lock")),
         ready_snapshot = sh(&format!("{root}/catalog-ready.snapshot")),
+    )
+}
+
+fn catalog_lifecycle_launcher_env() -> Vec<(String, String)> {
+    let root = CATALOG_LIFECYCLE_REMOTE_DIR;
+    vec![
+        ("MISTER_CATALOG_REFRESH".into(), "force".into()),
+        (
+            "MISTER_SHARDED_CATALOG_DIR".into(),
+            format!("{root}/catalog-v3"),
+        ),
+        (
+            "MISTER_LIBRARY_SQLITE".into(),
+            format!("{root}/library.sqlite3"),
+        ),
+        (
+            "MISTER_ARCADE_BOOTSTRAP_INDEX".into(),
+            format!("{root}/arcade-bootstrap.nav.lz4b"),
+        ),
+        (
+            "MISTER_LIBRARY_REFRESH_LOCK".into(),
+            format!("{root}/library-refresh.lock"),
+        ),
+        (
+            "MISTER_CATALOG_BUILDER_LOCK".into(),
+            format!("{root}/catalog-builder.lock"),
+        ),
+        (
+            "MISTER_CATALOG_READY_SNAPSHOT".into(),
+            format!("{root}/catalog-ready.snapshot"),
+        ),
+        (
+            "MISTER_CATALOG_DIAGNOSTICS_DIR".into(),
+            format!("{root}/diagnostics"),
+        ),
+        (
+            "MISTER_LAUNCHER_INPUT_SCRIPT".into(),
+            catalog_lifecycle_input_script(),
+        ),
+        (
+            "MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES".into(),
+            "1".into(),
+        ),
+    ]
+}
+
+fn catalog_lifecycle_input_script() -> String {
+    std::iter::repeat_n("down,up,wait:600", 150)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn catalog_lifecycle_evidence_command() -> String {
+    format!(
+        "set -eu; root={root}; find \"$root/diagnostics\" -maxdepth 1 -type f -print -exec sed -n '1,240p' {{}} \\; 2>/dev/null || true; ps -eo pid,tid,ni,psr,comm,args | sed -n '/mister-magik-fb/p'",
+        root = sh(CATALOG_LIFECYCLE_REMOTE_DIR),
     )
 }
 
@@ -15222,6 +15327,24 @@ H: Handlers=event3 js0"#
                 .contains("MISTER_SHARDED_CATALOG_DIR='/media/fat/mister-magik-dev/catalog-v3'")
         );
         assert!(catalog_lifecycle_cleanup_command().contains(CATALOG_LIFECYCLE_REMOTE_DIR));
+        let env = catalog_lifecycle_launcher_env();
+        assert!(env.iter().any(|(key, value)| {
+            key == "MISTER_CATALOG_DIAGNOSTICS_DIR"
+                && value.starts_with(CATALOG_LIFECYCLE_REMOTE_DIR)
+        }));
+        assert!(
+            env.iter()
+                .filter(|(key, _)| key.starts_with("MISTER_"))
+                .all(|(_, value)| !value.starts_with("/media/fat/mister-magik"))
+        );
+    }
+
+    #[test]
+    fn catalog_lifecycle_keeps_scripted_input_active_past_completion_deadline() {
+        let script = catalog_lifecycle_input_script();
+        assert_eq!(script.matches("wait:600").count(), 150);
+        assert!(script.starts_with("down,up,"));
+        assert!(script.len() < 4_096);
     }
 
     #[test]

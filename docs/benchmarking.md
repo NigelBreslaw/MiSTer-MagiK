@@ -79,25 +79,30 @@ passes or fails. This scenario does not start the screensaver.
 
 ```text
 Verify installed platform, health, and exact clean revision
--> suspend the ordinary launcher through Main
 -> create a fixed isolated /tmp catalog root
--> build the full catalog from installed read-only media and core inputs
+-> restart the ordinary launcher with one-shot isolated catalog paths
+-> keep deterministic controller navigation active throughout the build
+-> require first-visible Arcade data within 60 seconds
+-> require a valid complete manifest within 20 minutes
 -> inspect the registry and every system shard
--> record elapsed time and per-system game counts
+-> record first-visible/full-build timings, affinity, progress, and per-system counts
+-> restart the ordinary launcher without the one-shot environment
 -> remove the isolated fixture
--> resume the ordinary launcher
 -> verify platform identity and health
 ```
 
 The scenario redirects the sharded catalog, library database, arcade bootstrap
 index, ready snapshot, and builder/refresh locks beneath
 `/tmp/mister-magik/catalog-lifecycle-benchmark`. Production catalog and library
-artifacts are never renamed, deleted, or overwritten. Cleanup and launcher
-resume run after every post-suspend success or failure.
+artifacts are never renamed, deleted, or overwritten. The scripted input lasts
+longer than the completion deadline so interaction-dependent catalog starvation
+is deterministic. Cleanup and ordinary launcher restart run after every
+post-fixture success or failure.
 
 Evidence is written under
-`build/agent-benchmarks/catalog-lifecycle/<timestamp>/` as the refresh log,
-catalog inspection TSV, structured summary, and Markdown report.
+`build/agent-benchmarks/catalog-lifecycle/<timestamp>/` as the lifecycle and
+diagnostic log, final launcher status, catalog inspection TSV, structured
+summary, and Markdown report.
 
 ## Installed screensaver profile
 
