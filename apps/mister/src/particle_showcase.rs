@@ -26,6 +26,9 @@ const HUD_W: usize = 232;
 const HUD_H: usize = 18;
 const MAX_SEGMENT_PIXELS: i32 = 12;
 const SEGMENT_CAPACITY: usize = 32_768;
+const FIRE_HEAT_W: usize = 320;
+const FIRE_HEAT_H: usize = 72;
+const FIRE_HEAT_SCALE: usize = 3;
 const SHOWCASE_PALETTE: [Rgb565Pixel; 8] = [
     Rgb565Pixel(0x18c3),
     Rgb565Pixel(0x31a6),
@@ -44,6 +47,16 @@ const FIREWORKS_PALETTE: [Rgb565Pixel; 8] = [
     Rgb565Pixel(0xfd20),
     Rgb565Pixel(0xff40),
     Rgb565Pixel(0xffdb),
+    Rgb565Pixel(0xffff),
+];
+const FIRE_PALETTE: [Rgb565Pixel; 8] = [
+    Rgb565Pixel(0x0000),
+    Rgb565Pixel(0x3000),
+    Rgb565Pixel(0x7800),
+    Rgb565Pixel(0xb800),
+    Rgb565Pixel(0xf940),
+    Rgb565Pixel(0xfca0),
+    Rgb565Pixel(0xff40),
     Rgb565Pixel(0xffff),
 ];
 static PARTICLE_DEMO_NAVIGATION: AtomicI32 = AtomicI32::new(0);
@@ -214,6 +227,8 @@ pub struct ParticleShowcaseRenderer {
     segments: Vec<ParticleShowcaseSegment>,
     transition: ParticleShowcaseTransition,
     transition_started_at: Option<Duration>,
+    heat: Vec<u8>,
+    heat_frame: u64,
     dirty_slots: [ParticleShowcaseDirtySlot; HIDDEN_SLOT_COUNT],
     hud_font: ConsoleFont,
     hud_pixels: Vec<Pixel>,
@@ -250,6 +265,7 @@ impl ParticleShowcaseRenderer {
         let commands = Vec::with_capacity(PARTICLE_DEMO_MAX_COUNT + PARTICLE_DEMO_TRANSITION_COUNT);
         let segments = Vec::with_capacity(SEGMENT_CAPACITY);
         let transition = ParticleShowcaseTransition::new();
+        let heat = vec![0; FIRE_HEAT_W * FIRE_HEAT_H];
         let dirty_slots = std::array::from_fn(|_| ParticleShowcaseDirtySlot {
             initialized: false,
             offsets: Vec::with_capacity(PARTICLE_DEMO_MAX_COUNT.saturating_mul(2)),
@@ -296,6 +312,7 @@ impl ParticleShowcaseRenderer {
                     .saturating_mul(std::mem::size_of::<ParticleShowcaseSegment>()),
             )
             .saturating_add(transition.allocated_bytes());
+        let renderer_scratch_bytes = renderer_scratch_bytes.saturating_add(heat.capacity());
         let mut renderer = Self {
             config,
             demo: config.initial_demo,
@@ -305,6 +322,8 @@ impl ParticleShowcaseRenderer {
             segments,
             transition,
             transition_started_at: None,
+            heat,
+            heat_frame: u64::MAX,
             dirty_slots,
             hud_font,
             hud_pixels,
@@ -346,6 +365,12 @@ impl ParticleShowcaseRenderer {
         let clear_us = clear_started.elapsed().as_micros();
         let clear_cpu_us = elapsed_thread_cpu_us(clear_cpu_started);
 
+        let simulation_started = Instant::now();
+        let simulation_cpu_started = thread_cpu_time_us();
+        self.update_effect(elapsed);
+        let simulation_us = simulation_started.elapsed().as_micros();
+        let simulation_cpu_us = elapsed_thread_cpu_us(simulation_cpu_started);
+
         let projection_started = Instant::now();
         let projection_cpu_started = thread_cpu_time_us();
         let mut clipped_commands = self.project_effect(elapsed);
@@ -359,8 +384,9 @@ impl ParticleShowcaseRenderer {
 
         let raster_started = Instant::now();
         let raster_cpu_started = thread_cpu_time_us();
-        let (visible, mut attempted_pixel_writes) =
-            self.raster_points(destination, &mut dirty_offsets);
+        let mut attempted_pixel_writes = self.raster_effect_background(destination);
+        let (visible, point_writes) = self.raster_points(destination, &mut dirty_offsets);
+        attempted_pixel_writes = attempted_pixel_writes.saturating_add(point_writes);
         attempted_pixel_writes = attempted_pixel_writes
             .saturating_add(self.raster_segments(destination, &mut dirty_offsets));
         self.draw_hud(destination, &mut dirty_offsets);
@@ -377,8 +403,8 @@ impl ParticleShowcaseRenderer {
             },
             count: self.pool.active(),
             visible,
-            simulation_us: 0,
-            simulation_cpu_us: 0,
+            simulation_us,
+            simulation_cpu_us,
             projection_us,
             projection_cpu_us,
             geometry_us,
@@ -420,6 +446,12 @@ impl ParticleShowcaseRenderer {
         self.demo = demo;
         self.demo_started_at = elapsed;
         self.pool.reset(demo, self.config.seed);
+        self.heat.fill(0);
+        self.heat_frame = u64::MAX;
+        for slot in &mut self.dirty_slots {
+            slot.initialized = false;
+            slot.offsets.clear();
+        }
         for index in 0..self.pool.active() {
             let random = self.pool.random[index];
             self.pool.x[index] = unit_signed(random) * 248.0;
@@ -489,7 +521,14 @@ impl ParticleShowcaseRenderer {
     fn project_effect(&mut self, elapsed: Duration) -> usize {
         match self.demo {
             ParticleDemoKind::Fireworks => self.project_fireworks(elapsed),
+            ParticleDemoKind::FireEmbers => self.project_fire_embers(elapsed),
             _ => self.project_diagnostic(elapsed),
+        }
+    }
+
+    fn update_effect(&mut self, elapsed: Duration) {
+        if self.demo == ParticleDemoKind::FireEmbers {
+            self.update_fire_heat(elapsed);
         }
     }
 
@@ -501,8 +540,95 @@ impl ParticleShowcaseRenderer {
                 value if value < 2.6 => "burst",
                 _ => "fall",
             },
+            ParticleDemoKind::FireEmbers => match seconds.rem_euclid(10.0) {
+                value if value < 3.5 => "flame",
+                value if value < 7.0 => "gust",
+                _ => "embers",
+            },
             _ => "diagnostic",
         }
+    }
+
+    fn update_fire_heat(&mut self, elapsed: Duration) {
+        let frame = (elapsed.saturating_sub(self.demo_started_at).as_micros() / 16_667) as u64;
+        if frame == self.heat_frame {
+            return;
+        }
+        self.heat_frame = frame;
+        let bottom = (FIRE_HEAT_H - 1) * FIRE_HEAT_W;
+        for x in 0..FIRE_HEAT_W {
+            let centered = (x as f32 - FIRE_HEAT_W as f32 * 0.5).abs() / (FIRE_HEAT_W as f32 * 0.5);
+            let envelope = ((1.0 - centered).max(0.0) * 72.0) as u8;
+            let hash = xorshift32(
+                (frame as u32)
+                    .wrapping_mul(0x9e37_79b9)
+                    .wrapping_add(x as u32 * 0x45d9_f3b),
+            );
+            let flicker = ((hash >> 25) & 0x7f) as u8;
+            self.heat[bottom + x] = 150u8.saturating_add(envelope).saturating_add(flicker);
+        }
+        for y in 0..FIRE_HEAT_H - 1 {
+            let row = y * FIRE_HEAT_W;
+            let source_row = row + FIRE_HEAT_W;
+            for x in 0..FIRE_HEAT_W {
+                let hash = xorshift32(
+                    (frame as u32)
+                        .wrapping_add((y * FIRE_HEAT_W + x) as u32)
+                        .wrapping_mul(0x85eb_ca6b),
+                );
+                let drift = match hash & 3 {
+                    0 => -1,
+                    1 => 1,
+                    _ => 0,
+                };
+                let source_x = (x as isize + drift).clamp(0, FIRE_HEAT_W as isize - 1) as usize;
+                let cooling = ((hash >> 8) & 7) as u8;
+                self.heat[row + x] = self.heat[source_row + source_x].saturating_sub(cooling);
+            }
+        }
+    }
+
+    fn project_fire_embers(&mut self, elapsed: Duration) -> usize {
+        self.commands.clear();
+        self.segments.clear();
+        let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
+        let wind = (seconds * 0.72).sin() * 26.0 + (seconds * 0.19).sin() * 13.0;
+        let mut clipped = 0usize;
+        for index in 0..self.pool.active() {
+            let random = self.pool.random[index];
+            let age = (seconds * (0.72 + unit01(random.rotate_left(13)) * 0.38)
+                + unit01(random) * 5.6)
+                .rem_euclid(5.6);
+            if index & 3 != 0 || age < 0.12 {
+                self.commands.push(u32::MAX);
+                continue;
+            }
+            let base_x = unit_signed(random.rotate_left(7)) * 390.0;
+            let turbulence = unit_signed(random.rotate_left(19)) * age * age * 7.0;
+            let x = base_x + wind * age * 0.12 + turbulence;
+            let y = 252.0 - age * (67.0 + unit01(random.rotate_left(3)) * 31.0);
+            let z = unit_signed(random.rotate_left(23)) * 72.0 + age * 5.0;
+            let style = ((1.0 - age / 5.6) * 7.0).clamp(2.0, 7.0) as u8;
+            let Some((screen_x, screen_y)) =
+                project_world(x, y, z, self.config.width, self.config.height, 520.0)
+            else {
+                self.commands.push(u32::MAX);
+                clipped = clipped.saturating_add(1);
+                continue;
+            };
+            if !push_screen_command(
+                &mut self.commands,
+                self.config.width,
+                self.config.height,
+                screen_x,
+                screen_y,
+                style,
+                index & 127 == 0,
+            ) {
+                clipped = clipped.saturating_add(1);
+            }
+        }
+        clipped
     }
 
     fn project_fireworks(&mut self, elapsed: Duration) -> usize {
@@ -739,6 +865,33 @@ impl ParticleShowcaseRenderer {
         writes
     }
 
+    fn raster_effect_background(&self, destination: &mut [Rgb565Pixel]) -> usize {
+        if self.demo != ParticleDemoKind::FireEmbers {
+            return 0;
+        }
+        let top = self
+            .config
+            .height
+            .saturating_sub(FIRE_HEAT_H * FIRE_HEAT_SCALE);
+        let mut writes = 0usize;
+        for heat_y in 0..FIRE_HEAT_H {
+            for heat_x in 0..FIRE_HEAT_W {
+                let style = usize::from(self.heat[heat_y * FIRE_HEAT_W + heat_x] >> 5).min(7);
+                let color = FIRE_PALETTE[style];
+                let x0 = heat_x * FIRE_HEAT_SCALE;
+                let y0 = top + heat_y * FIRE_HEAT_SCALE;
+                for y in y0..(y0 + FIRE_HEAT_SCALE).min(self.config.height) {
+                    let row = y * self.config.width;
+                    for x in x0..(x0 + FIRE_HEAT_SCALE).min(self.config.width) {
+                        destination[row + x] = color;
+                        writes = writes.saturating_add(1);
+                    }
+                }
+            }
+        }
+        writes
+    }
+
     fn raster_points(
         &self,
         destination: &mut [Rgb565Pixel],
@@ -950,6 +1103,7 @@ fn ease_out_cubic(value: f32) -> f32 {
 fn showcase_palette(demo: ParticleDemoKind) -> &'static [Rgb565Pixel; 8] {
     match demo {
         ParticleDemoKind::Fireworks => &FIREWORKS_PALETTE,
+        ParticleDemoKind::FireEmbers => &FIRE_PALETTE,
         _ => &SHOWCASE_PALETTE,
     }
 }
@@ -1204,5 +1358,35 @@ mod tests {
         );
         assert!(writes <= MAX_SEGMENT_PIXELS as usize);
         assert!(dirty.iter().all(|offset| *offset < 16 * 16));
+    }
+
+    #[test]
+    fn fire_heat_and_embers_are_deterministic_and_visible() {
+        let config = ParticleShowcaseConfig {
+            width: 960,
+            height: 540,
+            seed: 0xf1ae,
+            initial_demo: ParticleDemoKind::FireEmbers,
+        };
+        let mut first = ParticleShowcaseRenderer::new(config).unwrap();
+        let mut second = ParticleShowcaseRenderer::new(config).unwrap();
+        let mut first_destination = vec![Rgb565Pixel(0); 960 * 540];
+        let mut second_destination = vec![Rgb565Pixel(0); 960 * 540];
+        let elapsed = Duration::from_millis(1_250);
+
+        let first_stats = first.render(&mut first_destination, 1, elapsed).unwrap();
+        let second_stats = second.render(&mut second_destination, 1, elapsed).unwrap();
+
+        assert_eq!(first_stats.demo, ParticleDemoKind::FireEmbers);
+        assert_eq!(first_stats.beat, "flame");
+        assert!(first_stats.visible > 0);
+        assert!(first.heat.iter().any(|value| *value > 0));
+        assert_eq!(first.heat, second.heat);
+        assert_eq!(first_destination, second_destination);
+        assert!(
+            first_destination[(540 - FIRE_HEAT_H * FIRE_HEAT_SCALE) * 960..]
+                .iter()
+                .any(|pixel| *pixel != Rgb565Pixel(0))
+        );
     }
 }
