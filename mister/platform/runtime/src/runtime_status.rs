@@ -246,6 +246,8 @@ pub struct FrameBudgetRecentFrame {
     pub particle_visible: u64,
     pub particle_simulation_us: u64,
     pub particle_simulation_cpu_us: u64,
+    pub particle_projection_us: u64,
+    pub particle_projection_cpu_us: u64,
     pub particle_clear_us: u64,
     pub particle_clear_cpu_us: u64,
     pub particle_raster_us: u64,
@@ -923,6 +925,11 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
         "particle_simulation_cpu_us",
         frame.particle_simulation_cpu_us
     );
+    field!("particle_projection_us", frame.particle_projection_us);
+    field!(
+        "particle_projection_cpu_us",
+        frame.particle_projection_cpu_us
+    );
     field!("particle_clear_us", frame.particle_clear_us);
     field!("particle_clear_cpu_us", frame.particle_clear_cpu_us);
     field!("particle_raster_us", frame.particle_raster_us);
@@ -1292,6 +1299,8 @@ mod tests {
                         particle_visible: 16_000,
                         particle_simulation_us: 2_100,
                         particle_simulation_cpu_us: 2_000,
+                        particle_projection_us: 800,
+                        particle_projection_cpu_us: 750,
                         particle_clear_us: 120,
                         particle_clear_cpu_us: 100,
                         particle_raster_us: 900,
@@ -1419,6 +1428,10 @@ mod tests {
         assert_eq!(
             value["frame_budget"]["recent_frames"][0]["particle_simulation_cpu_us"],
             2_000
+        );
+        assert_eq!(
+            value["frame_budget"]["recent_frames"][0]["particle_projection_cpu_us"],
+            750
         );
         assert_eq!(
             value["frame_budget"]["recent_frames"][0]["particle_involuntary_context_switches"],

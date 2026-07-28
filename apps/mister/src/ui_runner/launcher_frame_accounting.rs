@@ -1836,6 +1836,12 @@ impl LauncherFrameAccounting {
                 particle_simulation_cpu_us: u128_to_u64_saturating(
                     frame.screensaver_frame_trace.particle_simulation_cpu_us,
                 ),
+                particle_projection_us: u128_to_u64_saturating(
+                    frame.screensaver_frame_trace.particle_projection_us,
+                ),
+                particle_projection_cpu_us: u128_to_u64_saturating(
+                    frame.screensaver_frame_trace.particle_projection_cpu_us,
+                ),
                 particle_clear_us: u128_to_u64_saturating(
                     frame.screensaver_frame_trace.particle_clear_us,
                 ),

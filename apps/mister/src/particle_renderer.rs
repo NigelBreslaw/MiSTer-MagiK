@@ -22,6 +22,10 @@ const VISUAL_PALETTE: [Rgb565Pixel; 4] = [
 ];
 const HIDDEN_SLOT_COUNT: usize = 2;
 const FULL_CLEAR_DIRTY_DIVISOR: usize = 4;
+const COMMAND_OFFSET_BITS: u32 = 20;
+const COMMAND_OFFSET_MASK: u32 = (1 << COMMAND_OFFSET_BITS) - 1;
+const COMMAND_PALETTE_SHIFT: u32 = COMMAND_OFFSET_BITS;
+const COMMAND_NEIGHBOR: u32 = 1 << (COMMAND_PALETTE_SHIFT + 2);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ParticleRenderStats {
@@ -33,6 +37,8 @@ pub struct ParticleRenderStats {
     pub projection_backend: &'static str,
     pub simulation_us: u128,
     pub simulation_cpu_us: u128,
+    pub projection_us: u128,
+    pub projection_cpu_us: u128,
     pub clear_us: u128,
     pub clear_cpu_us: u128,
     pub raster_us: u128,
@@ -58,6 +64,7 @@ pub struct ParticleRenderer {
     dirty_slots: [ParticleDirtySlot; HIDDEN_SLOT_COUNT],
     simulation_bytes: usize,
     renderer_scratch_bytes: usize,
+    commands: Vec<u32>,
     pmu: ParticlePmu,
 }
 
@@ -84,18 +91,22 @@ impl ParticleRenderer {
             initialized: false,
             offsets: Vec::with_capacity(write_capacity),
         });
+        let commands = Vec::with_capacity(config.count);
         let renderer_scratch_bytes = dirty_slots.iter().fold(0usize, |total, slot| {
             total.saturating_add(
                 slot.offsets
                     .capacity()
                     .saturating_mul(std::mem::size_of::<u32>()),
             )
-        });
+        }) + commands
+            .capacity()
+            .saturating_mul(std::mem::size_of::<u32>());
         Ok(Self {
             engine: ParticleEngine::new(config, mask)?,
             dirty_slots,
             simulation_bytes,
             renderer_scratch_bytes,
+            commands,
             pmu: ParticlePmu::from_env(),
         })
     }
@@ -130,6 +141,11 @@ impl ParticleRenderer {
         let frame = self.engine.step(elapsed);
         let simulation_us = simulation_started.elapsed().as_micros();
         let simulation_cpu_us = elapsed_thread_cpu_us(simulation_cpu_started);
+        let projection_started = Instant::now();
+        let projection_cpu_started = thread_cpu_time_us();
+        let visible = self.prepare_commands();
+        let projection_us = projection_started.elapsed().as_micros();
+        let projection_cpu_us = elapsed_thread_cpu_us(projection_cpu_started);
         let clear_started = Instant::now();
         let clear_cpu_started = thread_cpu_time_us();
         let mut dirty_offsets = self.prepare_hidden_slot(destination, slot_offset);
@@ -137,7 +153,7 @@ impl ParticleRenderer {
         let clear_cpu_us = elapsed_thread_cpu_us(clear_cpu_started);
         let raster_started = Instant::now();
         let raster_cpu_started = thread_cpu_time_us();
-        let visible = self.raster(destination, &mut dirty_offsets);
+        self.raster(destination, &mut dirty_offsets);
         let raster_us = raster_started.elapsed().as_micros();
         let raster_cpu_us = elapsed_thread_cpu_us(raster_cpu_started);
         let execution_finished = thread_execution_snapshot();
@@ -148,6 +164,8 @@ impl ParticleRenderer {
             visible,
             simulation_us,
             simulation_cpu_us,
+            projection_us,
+            projection_cpu_us,
             clear_us,
             clear_cpu_us,
             raster_us,
@@ -158,6 +176,53 @@ impl ParticleRenderer {
             self.simulation_bytes,
             self.renderer_scratch_bytes,
         ))
+    }
+
+    fn prepare_commands(&mut self) -> usize {
+        self.commands.clear();
+        match self.engine.config().preset {
+            ParticlePreset::Capacity => {
+                if self.engine.uses_vector_projection() {
+                    let count = self.engine.particle_count();
+                    assert!(self.commands.capacity() >= count);
+                    let visible = self
+                        .engine
+                        .project_offsets(&mut self.commands.spare_capacity_mut()[..count]);
+                    // SAFETY: `project_offsets` initialized exactly `count` entries.
+                    unsafe {
+                        self.commands.set_len(count);
+                    }
+                    visible
+                } else {
+                    let width = self.engine.config().width;
+                    for index in 0..self.engine.particle_count() {
+                        if let Some(particle) = self.engine.project(index) {
+                            self.commands
+                                .push((particle.y as usize * width + particle.x as usize) as u32);
+                        }
+                    }
+                    self.commands.len()
+                }
+            }
+            ParticlePreset::Visual => {
+                let width = self.engine.config().width;
+                for index in 0..self.engine.particle_count() {
+                    let Some(particle) = self.engine.project(index) else {
+                        continue;
+                    };
+                    let offset = (particle.y as usize * width + particle.x as usize) as u32;
+                    let palette_index = (self.engine.flicker_key(index) >> 30) as usize;
+                    let neighbor = visual_particle_has_neighbor(
+                        self.engine.phase(),
+                        particle.depth,
+                        palette_index,
+                    ) && particle.x + 1 < width as i32;
+                    self.commands
+                        .push(pack_visual_command(offset, palette_index, neighbor));
+                }
+                self.commands.len()
+            }
+        }
     }
 
     pub fn invalidate_hidden_slot(&mut self, hidden_slot: u8) {
@@ -189,74 +254,41 @@ impl ParticleRenderer {
         offsets
     }
 
-    fn raster(&self, destination: &mut [Rgb565Pixel], dirty_offsets: &mut Vec<u32>) -> usize {
+    fn raster(&self, destination: &mut [Rgb565Pixel], dirty_offsets: &mut Vec<u32>) {
         match self.engine.config().preset {
             ParticlePreset::Capacity => self.raster_capacity(destination, dirty_offsets),
             ParticlePreset::Visual => self.raster_visual(destination, dirty_offsets),
         }
     }
 
-    fn raster_capacity(
-        &self,
-        destination: &mut [Rgb565Pixel],
-        dirty_offsets: &mut Vec<u32>,
-    ) -> usize {
-        if !self.engine.uses_vector_projection() {
-            let width = self.engine.config().width;
-            let mut visible = 0usize;
-            for index in 0..self.engine.particle_count() {
-                let Some(particle) = self.engine.project(index) else {
-                    continue;
-                };
-                visible += 1;
-                let offset = particle.y as usize * width + particle.x as usize;
-                destination[offset] = CAPACITY_COLOR;
-                dirty_offsets.push(offset as u32);
-            }
-            return visible;
-        }
-        let count = self.engine.particle_count();
-        assert!(dirty_offsets.capacity() >= count);
-        let visible = self
-            .engine
-            .project_offsets(&mut dirty_offsets.spare_capacity_mut()[..count]);
-        // SAFETY: `project_offsets` initialized exactly `count` entries.
-        unsafe {
-            dirty_offsets.set_len(count);
-        }
-        for &offset in dirty_offsets.iter() {
+    fn raster_capacity(&self, destination: &mut [Rgb565Pixel], dirty_offsets: &mut Vec<u32>) {
+        for &offset in &self.commands {
             if offset != PARTICLE_NOT_VISIBLE_OFFSET {
                 destination[offset as usize] = CAPACITY_COLOR;
+                dirty_offsets.push(offset);
             }
         }
-        visible
     }
 
-    fn raster_visual(
-        &self,
-        destination: &mut [Rgb565Pixel],
-        dirty_offsets: &mut Vec<u32>,
-    ) -> usize {
-        let width = self.engine.config().width;
-        let mut visible = 0usize;
-        for index in 0..self.engine.particle_count() {
-            let Some(particle) = self.engine.project(index) else {
-                continue;
-            };
-            visible += 1;
-            let offset = particle.y as usize * width + particle.x as usize;
-            let palette_index = (self.engine.flicker_key(index) >> 30) as usize;
+    fn raster_visual(&self, destination: &mut [Rgb565Pixel], dirty_offsets: &mut Vec<u32>) {
+        for &command in &self.commands {
+            let offset = (command & COMMAND_OFFSET_MASK) as usize;
+            let palette_index = ((command >> COMMAND_PALETTE_SHIFT) & 3) as usize;
             destination[offset] = VISUAL_PALETTE[palette_index];
             dirty_offsets.push(offset as u32);
-            if visual_particle_has_neighbor(self.engine.phase(), particle.depth, palette_index)
-                && particle.x + 1 < width as i32
-            {
+            if command & COMMAND_NEIGHBOR != 0 {
                 destination[offset + 1] = VISUAL_PALETTE[2];
                 dirty_offsets.push((offset + 1) as u32);
             }
         }
-        visible
     }
+}
+
+fn pack_visual_command(offset: u32, palette_index: usize, neighbor: bool) -> u32 {
+    debug_assert!(offset <= COMMAND_OFFSET_MASK);
+    offset
+        | ((palette_index as u32) << COMMAND_PALETTE_SHIFT)
+        | if neighbor { COMMAND_NEIGHBOR } else { 0 }
 }
 
 fn visual_particle_has_neighbor(
@@ -301,6 +333,8 @@ fn stats(
     visible: usize,
     simulation_us: u128,
     simulation_cpu_us: u128,
+    projection_us: u128,
+    projection_cpu_us: u128,
     clear_us: u128,
     clear_cpu_us: u128,
     raster_us: u128,
@@ -320,6 +354,8 @@ fn stats(
         projection_backend: frame.projection_backend,
         simulation_us,
         simulation_cpu_us,
+        projection_us,
+        projection_cpu_us,
         clear_us,
         clear_cpu_us,
         raster_us,
@@ -733,6 +769,7 @@ mod tests {
     #[test]
     fn visual_dirty_history_records_every_written_pixel_without_growth() {
         let mut renderer = ParticleRenderer::new(config(ParticlePreset::Visual), mask()).unwrap();
+        let command_capacity = renderer.commands.capacity();
         let capacities = renderer
             .dirty_slots
             .each_ref()
@@ -756,16 +793,17 @@ mod tests {
                 .each_ref()
                 .map(|slot| slot.offsets.capacity())
         );
+        assert_eq!(renderer.commands.capacity(), command_capacity);
     }
 
     #[test]
     fn renderer_memory_accounts_for_simulation_and_both_dirty_slots() {
         let capacity = ParticleRenderer::new(config(ParticlePreset::Capacity), mask()).unwrap();
         assert_eq!(capacity.simulation_bytes, 64 * 33);
-        assert_eq!(capacity.renderer_scratch_bytes, 64 * 8);
+        assert_eq!(capacity.renderer_scratch_bytes, 64 * 12);
         let visual = ParticleRenderer::new(config(ParticlePreset::Visual), mask()).unwrap();
         assert_eq!(visual.simulation_bytes, 64 * 33);
-        assert_eq!(visual.renderer_scratch_bytes, 64 * 16);
+        assert_eq!(visual.renderer_scratch_bytes, 64 * 20);
     }
 
     #[test]

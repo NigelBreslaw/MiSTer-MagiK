@@ -4394,6 +4394,16 @@ fn summarize_particle_trial(
                         "particle_simulation_us",
                         "particle_simulation_cpu_us"
                     ),
+                    "projection_mean_us": mean_frame_field(&matching, "particle_projection_us"),
+                    "projection_cpu_mean_us": mean_frame_field(
+                        &matching,
+                        "particle_projection_cpu_us"
+                    ),
+                    "projection_descheduled_mean_us": mean_frame_difference(
+                        &matching,
+                        "particle_projection_us",
+                        "particle_projection_cpu_us"
+                    ),
                     "clear_mean_us": mean_frame_field(&matching, "particle_clear_us"),
                     "clear_cpu_mean_us": mean_frame_field(&matching, "particle_clear_cpu_us"),
                     "clear_descheduled_mean_us": mean_frame_difference(
@@ -6166,6 +6176,8 @@ fn validate_screensaver_frame_evidence(run: usize, frame_id: u64, frame: &Value)
         "particle_visible",
         "particle_simulation_us",
         "particle_simulation_cpu_us",
+        "particle_projection_us",
+        "particle_projection_cpu_us",
         "particle_clear_us",
         "particle_clear_cpu_us",
         "particle_raster_us",
@@ -14555,6 +14567,8 @@ H: Handlers=event3 js0"#
                 "particle_visible": 0,
                 "particle_simulation_us": 0,
                 "particle_simulation_cpu_us": 0,
+                "particle_projection_us": 0,
+                "particle_projection_cpu_us": 0,
                 "particle_clear_us": 0,
                 "particle_clear_cpu_us": 0,
                 "particle_raster_us": 0,
@@ -14980,6 +14994,8 @@ H: Handlers=event3 js0"#
             "particle_visible": 65_536,
             "particle_simulation_us": 2_000,
             "particle_simulation_cpu_us": 1_900,
+            "particle_projection_us": 2_500,
+            "particle_projection_cpu_us": 2_400,
             "particle_clear_us": 200,
             "particle_clear_cpu_us": 180,
             "particle_raster_us": 5_000,
@@ -14997,7 +15013,7 @@ H: Handlers=event3 js0"#
             "particle_pmu_branch_misses": 25,
             "particle_rotation_y_millidegrees": 0,
             "particle_simulation_bytes": 2_162_688,
-            "particle_renderer_scratch_bytes": 524_288
+            "particle_renderer_scratch_bytes": 786_432
         });
         evidence
             .as_object_mut()
@@ -15035,11 +15051,15 @@ H: Handlers=event3 js0"#
         );
         assert_eq!(passing["qualified"], true);
         assert_eq!(passing["memory"]["simulation_bytes_per_particle"], 33);
-        assert_eq!(passing["memory"]["renderer_scratch_bytes_per_particle"], 8);
+        assert_eq!(passing["memory"]["renderer_scratch_bytes_per_particle"], 12);
         for phase in ["static", "form", "hold", "disperse"] {
             assert!(passing["phase_timing"][phase]["frames"].as_u64().unwrap() > 0);
             assert_eq!(
                 passing["phase_timing"][phase]["simulation_descheduled_mean_us"],
+                100.0
+            );
+            assert_eq!(
+                passing["phase_timing"][phase]["projection_descheduled_mean_us"],
                 100.0
             );
         }
