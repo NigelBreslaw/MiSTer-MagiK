@@ -40,6 +40,7 @@ jobs:
       kernel-changed: ${{ steps.plan.outputs.kernel_changed }}
       main-id: ${{ steps.identity.outputs.main_id }}
       fpga-id: ${{ steps.reuse.outputs.fpga_id || steps.identity.outputs.fpga_id }}
+      fpga-synthesis-id: ${{ steps.identity.outputs.fpga_synthesis_id }}
       kernel-id: ${{ steps.reuse.outputs.kernel_id || steps.identity.outputs.kernel_id }}
       main-revision: ${{ steps.identity.outputs.main_revision }}
       bundle-id: ${{ steps.plan.outputs.bundle_id }}
@@ -80,9 +81,10 @@ jobs:
           [[ "$main_revision" =~ ^[0-9a-f]{40}$ ]]
           main_id="$(python3 scripts/release/platform/main-component.py identity --revision "$main_revision")"
           fpga_id="$(python3 scripts/release/platform/platform-component-id.py component fpga)"
+          fpga_synthesis_id="$(python3 scripts/release/platform/platform-component-id.py component fpga-synthesis)"
           kernel_id="$(python3 scripts/release/platform/platform-component-id.py component kernel)"
-          printf 'main_revision=%s\nmain_id=%s\nfpga_id=%s\nkernel_id=%s\n' \
-            "$main_revision" "$main_id" "$fpga_id" "$kernel_id" >> "$GITHUB_OUTPUT"
+          printf 'main_revision=%s\nmain_id=%s\nfpga_id=%s\nfpga_synthesis_id=%s\nkernel_id=%s\n' \
+            "$main_revision" "$main_id" "$fpga_id" "$fpga_synthesis_id" "$kernel_id" >> "$GITHUB_OUTPUT"
 
       - name: Inspect latest platform release
         id: current
@@ -523,16 +525,45 @@ jobs:
           menu_ref="$(cat mister/platform/fpga/menu-vblank-latch/Menu_MiSTer.commit)"
           [[ "$menu_ref" =~ ^[0-9a-f]{40}$ ]]
           component_revision="$(python3 scripts/release/platform/platform-component-id.py component fpga --revision-only)"
-          build_date="$(git show -s --format=%cd --date=format:%y%m%d "$component_revision")"
-          printf 'menu_ref=%s\ncomponent_revision=%s\nbuild_date=%s\n' "$menu_ref" "$component_revision" "$build_date" >> "$GITHUB_OUTPUT"
+          synthesis_revision="$(python3 scripts/release/platform/platform-component-id.py component fpga-synthesis --revision-only)"
+          build_date="$(git show -s --format=%cd --date=format:%y%m%d "$synthesis_revision")"
+          printf 'menu_ref=%s\ncomponent_revision=%s\nsynthesis_revision=%s\nbuild_date=%s\n' \
+            "$menu_ref" "$component_revision" "$synthesis_revision" "$build_date" >> "$GITHUB_OUTPUT"
+
+      - name: Restore completed FPGA synthesis
+        id: fpga-synthesis-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            build/fpga-signoff
+            !build/fpga-signoff/**/Menu-work/**
+          key: platform-fpga-synthesis-v0.1-${{ needs.plan.outputs.fpga-synthesis-id }}
+
+      - name: Verify restored FPGA synthesis identity
+        if: steps.fpga-synthesis-cache.outputs.cache-hit == 'true'
+        env:
+          SYNTHESIS_ID: ${{ needs.plan.outputs.fpga-synthesis-id }}
+        run: |
+          set -euo pipefail
+          for flavour in stock patched; do
+            root="build/fpga-signoff/$flavour"
+            test -f "$root/menu-magik-vblank-latch.rbf"
+            test -f "$root/menu-magik-vblank-latch.build.log"
+            test -d "$root/reports"
+            grep -Fx "synthesis_input_sha256=$SYNTHESIS_ID" \
+              "$root/menu-magik-vblank-latch.metadata.txt"
+          done
+          echo "Reusing completed Quartus synthesis; all FPGA validation will run again." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Bind runner temp to build volume
+        if: steps.fpga-synthesis-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           mkdir -p "$GITHUB_WORKSPACE/.runner-temp"
           sudo mount --bind "$GITHUB_WORKSPACE/.runner-temp" "$RUNNER_TEMP"
 
       - name: Prepare Quartus Docker runtime
+        if: steps.fpga-synthesis-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           sudo systemctl stop docker
@@ -544,6 +575,7 @@ jobs:
 
       - name: Restore private Quartus runtime
         id: quartus-cache
+        if: steps.fpga-synthesis-cache.outputs.cache-hit != 'true'
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.QUARTUS_R2_READ_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.QUARTUS_R2_READ_SECRET_ACCESS_KEY }}
@@ -562,7 +594,7 @@ jobs:
           fi
 
       - name: Install Quartus on cache miss
-        if: steps.quartus-cache.outputs.hit != 'true'
+        if: steps.fpga-synthesis-cache.outputs.cache-hit != 'true' && steps.quartus-cache.outputs.hit != 'true'
         env:
           QUARTUS_RUN_URL_SECRET: ${{ secrets.QUARTUS_17_0_RUN_URL }}
           CYCLONEV_QDZ_URL_SECRET: ${{ secrets.QUARTUS_17_0_CYCLONEV_QDZ_URL }}
@@ -576,24 +608,25 @@ jobs:
           scripts/install-quartus-lite-docker.sh
 
       - name: Save private Quartus runtime
-        if: steps.quartus-cache.outputs.hit == 'false'
+        if: steps.fpga-synthesis-cache.outputs.cache-hit != 'true' && steps.quartus-cache.outputs.hit == 'false'
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.QUARTUS_R2_WRITE_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.QUARTUS_R2_WRITE_SECRET_ACCESS_KEY }}
         run: scripts/quartus-r2-cache.sh save
 
       - uses: actions/checkout@v7
+        if: steps.fpga-synthesis-cache.outputs.cache-hit != 'true'
         with:
           repository: MiSTer-devel/Menu_MiSTer
           ref: ${{ steps.metadata.outputs.menu_ref }}
           path: build/Menu_MiSTer
 
       - name: Build matched stock and patched RBFs
+        if: steps.fpga-synthesis-cache.outputs.cache-hit != 'true'
         env:
           MISTER_MENU_DIR: ${{ github.workspace }}/build/Menu_MiSTer
           MISTER_FPGA_QUALIFIED_MAGIK_REVISION: ${{ github.sha }}
-          MISTER_FPGA_COMPONENT_INPUT_SHA256: ${{ needs.plan.outputs.fpga-id }}
-          MISTER_FPGA_COMPONENT_REVISION: ${{ steps.metadata.outputs.component_revision }}
+          MISTER_FPGA_SYNTHESIS_INPUT_SHA256: ${{ needs.plan.outputs.fpga-synthesis-id }}
           MISTER_FPGA_BUILD_DATE: ${{ steps.metadata.outputs.build_date }}
           QUARTUS_DOCKER_EMPTY_SYS: "1"
           QUARTUS_STRACE: "0"
@@ -604,7 +637,19 @@ jobs:
           MISTER_FPGA_APPLY_PATCH=1 MISTER_FPGA_QUARTUS_SEED=1 MISTER_FPGA_OUT_DIR="$GITHUB_WORKSPACE/build/fpga-signoff/patched" \
             MISTER_MENU_BUILD_DIR="$GITHUB_WORKSPACE/build/fpga-signoff/patched/Menu-work" scripts/build-fpga-vblank-latch-core.sh
 
+      - name: Preserve completed FPGA synthesis
+        if: steps.fpga-synthesis-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            build/fpga-signoff
+            !build/fpga-signoff/**/Menu-work/**
+          key: platform-fpga-synthesis-v0.1-${{ needs.plan.outputs.fpga-synthesis-id }}
+
       - name: Verify Quartus delta
+        env:
+          COMPONENT_ID: ${{ needs.plan.outputs.fpga-id }}
+          COMPONENT_REVISION: ${{ steps.metadata.outputs.component_revision }}
         run: |
           set -euo pipefail
           args=()
@@ -613,7 +658,12 @@ jobs:
           scripts/checks/check-fpga-quartus-delta.py "${args[@]}" | tee build/fpga-signoff/quartus-delta-signoff.tsv
           cp build/fpga-signoff/quartus-delta-signoff.tsv build/fpga-signoff/patched/reports/quartus-delta-signoff.tsv
           delta_sha="$(shasum -a 256 build/fpga-signoff/patched/reports/quartus-delta-signoff.tsv | awk '{print $1}')"
-          printf 'report_sha256.reports/quartus-delta-signoff.tsv=%s\nsignoff_valid=1\n' "$delta_sha" >> build/fpga-signoff/patched/menu-magik-vblank-latch.metadata.txt
+          for flavour in stock patched; do
+            printf 'component_input_sha256=%s\ncomponent_revision=%s\n' \
+              "$COMPONENT_ID" "$COMPONENT_REVISION" >> "build/fpga-signoff/$flavour/menu-magik-vblank-latch.metadata.txt"
+          done
+          printf 'report_sha256.reports/quartus-delta-signoff.tsv=%s\nsignoff_valid=1\n' \
+            "$delta_sha" >> build/fpga-signoff/patched/menu-magik-vblank-latch.metadata.txt
           scripts/checks/verify-fpga-rbf-manifest.py \
             build/fpga-signoff/patched/menu-magik-vblank-latch.metadata.txt
           scripts/agent ci platform-bundle write-component-cache \

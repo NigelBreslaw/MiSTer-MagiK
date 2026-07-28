@@ -20,6 +20,12 @@ pushes automatically. Main, the scanout kernel module, and the latch RBF come
 from the latest qualified GitHub platform release, with its verified
 tag-addressed archive reused across deliveries.
 
+The platform workflow preserves completed stock and patched Quartus synthesis
+under a synthesis-only content identity before qualification begins. If a
+validator fails and its logic is subsequently fixed, the next run may restore
+those identical RBF outputs, but it always reruns the complete FPGA validation
+and creates fresh component provenance before assembly or publication.
+
 The attended qualification is fixed and flag-free. It checks runtime, catalog,
 input/handoff/return, display, recovery capability, and restoration. Rollback is
 the typed `mister mode stock` operator command. Packaging output, credentials,
