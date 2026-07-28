@@ -209,10 +209,13 @@ pub struct ParticleEngine {
     vz: Vec<f32>,
     random_states: Vec<u32>,
     last_elapsed: Duration,
+    cohort_elapsed: [Duration; 2],
+    simulation_step: u64,
     cycle: u64,
     phase: ParticlePhase,
     use_neon: bool,
     use_neon_projection: bool,
+    use_alternating_cohorts: bool,
 }
 
 impl ParticleEngine {
@@ -250,10 +253,13 @@ impl ParticleEngine {
             vz: Vec::with_capacity(config.count),
             random_states: Vec::with_capacity(config.count),
             last_elapsed: Duration::ZERO,
+            cohort_elapsed: [Duration::ZERO; 2],
+            simulation_step: 0,
             cycle: 0,
             phase: ParticlePhase::Static,
             use_neon: particle_neon_enabled(),
             use_neon_projection: particle_neon_projection_enabled(),
+            use_alternating_cohorts: particle_alternating_cohorts_enabled(),
         };
         engine.initialize_particles(&target_points)?;
         Ok(engine)
@@ -296,7 +302,24 @@ impl ParticleEngine {
         self.rotation_y_radians = rotation_y_at_cycle_us(cycle_us);
         (self.rotation_y_sin, self.rotation_y_cos) = self.rotation_y_radians.sin_cos();
         if delta > 0.0 {
-            self.advance(delta);
+            if self.use_alternating_cohorts {
+                let cohort = (self.simulation_step & 1) as usize;
+                let cohort_delta = elapsed
+                    .saturating_sub(self.cohort_elapsed[cohort])
+                    .as_secs_f32()
+                    .min(MAX_STEP_SECONDS);
+                self.cohort_elapsed[cohort] = elapsed;
+                let midpoint = self.particle_count() / 2;
+                let range = if cohort == 0 {
+                    0..midpoint
+                } else {
+                    midpoint..self.particle_count()
+                };
+                self.advance_range(cohort_delta, range);
+                self.simulation_step = self.simulation_step.wrapping_add(1);
+            } else {
+                self.advance_range(delta, 0..self.particle_count());
+            }
         }
         ParticleFrameStats {
             count: self.particle_count(),
@@ -441,41 +464,45 @@ impl ParticleEngine {
         }
     }
 
-    fn advance(&mut self, delta: f32) {
+    fn advance_range(&mut self, delta: f32, range: Range<usize>) {
         match self.phase {
-            ParticlePhase::Static => self.advance_static(delta),
-            ParticlePhase::Form => self.advance_form(delta),
-            ParticlePhase::Hold => self.advance_hold(delta),
-            ParticlePhase::Disperse => self.advance_disperse(delta),
+            ParticlePhase::Static => self.advance_static(delta, range),
+            ParticlePhase::Form => self.advance_form(delta, range),
+            ParticlePhase::Hold => self.advance_hold(delta, range),
+            ParticlePhase::Disperse => self.advance_disperse(delta, range),
         }
     }
 
     const fn simulation_backend_label(&self) -> &'static str {
-        if self.use_neon {
+        if self.use_neon && self.use_alternating_cohorts {
+            "armv7-neon-cohort30"
+        } else if self.use_neon {
             "armv7-neon"
+        } else if self.use_alternating_cohorts {
+            "scalar-cohort30"
         } else {
             "scalar"
         }
     }
 
-    fn advance_static(&mut self, delta: f32) {
+    fn advance_static(&mut self, delta: f32, range: Range<usize>) {
         #[cfg(target_arch = "arm")]
         let first_scalar = if self.use_neon {
             // SAFETY: device builds target Cortex-A9 with NEON enabled. The
             // backend operates only on complete four-particle groups.
-            unsafe { neon::advance_static(self, delta) }
+            unsafe { neon::advance_static(self, delta, range.clone()) }
         } else {
-            0
+            range.start
         };
         #[cfg(not(target_arch = "arm"))]
-        let first_scalar = 0;
-        self.advance_static_scalar(delta, first_scalar);
+        let first_scalar = range.start;
+        self.advance_static_scalar(delta, first_scalar..range.end);
     }
 
-    fn advance_static_scalar(&mut self, delta: f32, first: usize) {
+    fn advance_static_scalar(&mut self, delta: f32, range: Range<usize>) {
         let width = self.config.width as f32;
         let height = self.config.height as f32;
-        for index in first..self.particle_count() {
+        for index in range {
             let noise = next_random(&mut self.random_states[index]);
             let jitter_x = signed_unit(noise);
             let jitter_y = signed_unit(noise.rotate_left(11));
@@ -491,21 +518,21 @@ impl ParticleEngine {
         }
     }
 
-    fn advance_form(&mut self, delta: f32) {
+    fn advance_form(&mut self, delta: f32, range: Range<usize>) {
         #[cfg(target_arch = "arm")]
         let first_scalar = if self.use_neon {
             // SAFETY: see `advance_static`.
-            unsafe { neon::advance_attract(self, delta, 18.0, 0.08, 0.88) }
+            unsafe { neon::advance_attract(self, delta, 18.0, 0.08, 0.88, range.clone()) }
         } else {
-            0
+            range.start
         };
         #[cfg(not(target_arch = "arm"))]
-        let first_scalar = 0;
-        self.advance_form_scalar(delta, first_scalar);
+        let first_scalar = range.start;
+        self.advance_form_scalar(delta, first_scalar..range.end);
     }
 
-    fn advance_form_scalar(&mut self, delta: f32, first: usize) {
-        for index in first..self.particle_count() {
+    fn advance_form_scalar(&mut self, delta: f32, range: Range<usize>) {
+        for index in range {
             let noise = next_random(&mut self.random_states[index]);
             let jitter_x = signed_unit(noise);
             let jitter_y = signed_unit(noise.rotate_left(11));
@@ -525,21 +552,21 @@ impl ParticleEngine {
         }
     }
 
-    fn advance_hold(&mut self, delta: f32) {
+    fn advance_hold(&mut self, delta: f32, range: Range<usize>) {
         #[cfg(target_arch = "arm")]
         let first_scalar = if self.use_neon {
             // SAFETY: see `advance_static`.
-            unsafe { neon::advance_attract(self, delta, 34.0, 0.35, 0.78) }
+            unsafe { neon::advance_attract(self, delta, 34.0, 0.35, 0.78, range.clone()) }
         } else {
-            0
+            range.start
         };
         #[cfg(not(target_arch = "arm"))]
-        let first_scalar = 0;
-        self.advance_hold_scalar(delta, first_scalar);
+        let first_scalar = range.start;
+        self.advance_hold_scalar(delta, first_scalar..range.end);
     }
 
-    fn advance_hold_scalar(&mut self, delta: f32, first: usize) {
-        for index in first..self.particle_count() {
+    fn advance_hold_scalar(&mut self, delta: f32, range: Range<usize>) {
+        for index in range {
             let noise = next_random(&mut self.random_states[index]);
             let jitter_x = signed_unit(noise);
             let jitter_y = signed_unit(noise.rotate_left(11));
@@ -559,21 +586,21 @@ impl ParticleEngine {
         }
     }
 
-    fn advance_disperse(&mut self, delta: f32) {
+    fn advance_disperse(&mut self, delta: f32, range: Range<usize>) {
         #[cfg(target_arch = "arm")]
         let first_scalar = if self.use_neon {
             // SAFETY: see `advance_static`.
-            unsafe { neon::advance_disperse(self, delta) }
+            unsafe { neon::advance_disperse(self, delta, range.clone()) }
         } else {
-            0
+            range.start
         };
         #[cfg(not(target_arch = "arm"))]
-        let first_scalar = 0;
-        self.advance_disperse_scalar(delta, first_scalar);
+        let first_scalar = range.start;
+        self.advance_disperse_scalar(delta, first_scalar..range.end);
     }
 
-    fn advance_disperse_scalar(&mut self, delta: f32, first: usize) {
-        for index in first..self.particle_count() {
+    fn advance_disperse_scalar(&mut self, delta: f32, range: Range<usize>) {
+        for index in range {
             let noise = next_random(&mut self.random_states[index]);
             let jitter_x = signed_unit(noise);
             let jitter_y = signed_unit(noise.rotate_left(11));
@@ -624,6 +651,13 @@ fn particle_neon_projection_enabled() -> bool {
         .is_some_and(|value| value.trim().eq_ignore_ascii_case("neon"))
 }
 
+#[cfg(target_arch = "arm")]
+fn particle_alternating_cohorts_enabled() -> bool {
+    std::env::var("MISTER_PARTICLE_COHORTS")
+        .ok()
+        .is_none_or(|value| !value.trim().eq_ignore_ascii_case("full"))
+}
+
 #[cfg(not(target_arch = "arm"))]
 const fn particle_neon_enabled() -> bool {
     false
@@ -634,9 +668,15 @@ const fn particle_neon_projection_enabled() -> bool {
     false
 }
 
+#[cfg(not(target_arch = "arm"))]
+const fn particle_alternating_cohorts_enabled() -> bool {
+    false
+}
+
 #[cfg(target_arch = "arm")]
 mod neon {
     use super::ParticleEngine;
+    use std::ops::Range;
 
     unsafe extern "C" {
         fn mister_magik_particle_neon_static(
@@ -696,22 +736,27 @@ mod neon {
         ) -> usize;
     }
 
-    pub(super) unsafe fn advance_static(engine: &mut ParticleEngine, delta: f32) -> usize {
-        unsafe {
+    pub(super) unsafe fn advance_static(
+        engine: &mut ParticleEngine,
+        delta: f32,
+        range: Range<usize>,
+    ) -> usize {
+        let processed = unsafe {
             mister_magik_particle_neon_static(
-                engine.particle_count(),
+                range.len(),
                 engine.config.width as f32,
                 engine.config.height as f32,
                 delta,
-                engine.random_states.as_mut_ptr(),
-                engine.x.as_mut_ptr(),
-                engine.y.as_mut_ptr(),
-                engine.z.as_mut_ptr(),
-                engine.vx.as_mut_ptr(),
-                engine.vy.as_mut_ptr(),
-                engine.vz.as_mut_ptr(),
+                engine.random_states.as_mut_ptr().add(range.start),
+                engine.x.as_mut_ptr().add(range.start),
+                engine.y.as_mut_ptr().add(range.start),
+                engine.z.as_mut_ptr().add(range.start),
+                engine.vx.as_mut_ptr().add(range.start),
+                engine.vy.as_mut_ptr().add(range.start),
+                engine.vz.as_mut_ptr().add(range.start),
             )
-        }
+        };
+        range.start + processed
     }
 
     pub(super) unsafe fn advance_attract(
@@ -720,42 +765,49 @@ mod neon {
         stiffness: f32,
         jitter: f32,
         damping: f32,
+        range: Range<usize>,
     ) -> usize {
-        unsafe {
+        let processed = unsafe {
             mister_magik_particle_neon_attract(
-                engine.particle_count(),
+                range.len(),
                 delta,
                 stiffness,
                 jitter,
                 damping,
-                engine.packed_targets.as_ptr(),
-                engine.target_depth_q2.as_ptr(),
-                engine.random_states.as_mut_ptr(),
-                engine.x.as_mut_ptr(),
-                engine.y.as_mut_ptr(),
-                engine.z.as_mut_ptr(),
-                engine.vx.as_mut_ptr(),
-                engine.vy.as_mut_ptr(),
-                engine.vz.as_mut_ptr(),
+                engine.packed_targets.as_ptr().add(range.start),
+                engine.target_depth_q2.as_ptr().add(range.start),
+                engine.random_states.as_mut_ptr().add(range.start),
+                engine.x.as_mut_ptr().add(range.start),
+                engine.y.as_mut_ptr().add(range.start),
+                engine.z.as_mut_ptr().add(range.start),
+                engine.vx.as_mut_ptr().add(range.start),
+                engine.vy.as_mut_ptr().add(range.start),
+                engine.vz.as_mut_ptr().add(range.start),
             )
-        }
+        };
+        range.start + processed
     }
 
-    pub(super) unsafe fn advance_disperse(engine: &mut ParticleEngine, delta: f32) -> usize {
-        unsafe {
+    pub(super) unsafe fn advance_disperse(
+        engine: &mut ParticleEngine,
+        delta: f32,
+        range: Range<usize>,
+    ) -> usize {
+        let processed = unsafe {
             mister_magik_particle_neon_disperse(
-                engine.particle_count(),
+                range.len(),
                 delta,
-                engine.packed_targets.as_ptr(),
-                engine.random_states.as_mut_ptr(),
-                engine.x.as_mut_ptr(),
-                engine.y.as_mut_ptr(),
-                engine.z.as_mut_ptr(),
-                engine.vx.as_mut_ptr(),
-                engine.vy.as_mut_ptr(),
-                engine.vz.as_mut_ptr(),
+                engine.packed_targets.as_ptr().add(range.start),
+                engine.random_states.as_mut_ptr().add(range.start),
+                engine.x.as_mut_ptr().add(range.start),
+                engine.y.as_mut_ptr().add(range.start),
+                engine.z.as_mut_ptr().add(range.start),
+                engine.vx.as_mut_ptr().add(range.start),
+                engine.vy.as_mut_ptr().add(range.start),
+                engine.vz.as_mut_ptr().add(range.start),
             )
-        }
+        };
+        range.start + processed
     }
 
     pub(super) unsafe fn project_offsets(engine: &ParticleEngine, offsets: *mut u32) -> usize {
@@ -941,6 +993,20 @@ mod tests {
             .map(|index| second.project(index))
             .collect::<Vec<_>>();
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn alternating_cohorts_advance_each_particle_half_on_opposite_frames() {
+        let mut engine = engine(8);
+        engine.use_alternating_cohorts = true;
+        let initial = engine.random_states.clone();
+        engine.step(Duration::from_micros(16_667));
+        assert_ne!(&engine.random_states[..4], &initial[..4]);
+        assert_eq!(&engine.random_states[4..], &initial[4..]);
+        let after_first = engine.random_states.clone();
+        engine.step(Duration::from_micros(33_334));
+        assert_eq!(&engine.random_states[..4], &after_first[..4]);
+        assert_ne!(&engine.random_states[4..], &after_first[4..]);
     }
 
     #[test]
