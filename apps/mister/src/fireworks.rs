@@ -9,7 +9,9 @@ use std::time::Duration;
 
 const SCHEMA: &str = "mister-magik-firework-v1";
 const MAX_PARTICLES: usize = 98_304;
-const MAX_TRAIL_SAMPLES: u8 = 16;
+const MAX_TRAIL_SAMPLES: u8 = 32;
+const COPPER_WILLOW_RAIN: &str =
+    include_str!("../assets/particles/fireworks/copper-willow-rain.json");
 const OLED_PEONY: &str = include_str!("../assets/particles/fireworks/oled-peony.json");
 const RECURSIVE_HALO: &str = include_str!("../assets/particles/fireworks/recursive-halo.json");
 const SOLAR_CHRYSANTHEMUM: &str =
@@ -148,6 +150,7 @@ impl FireworkRenderer {
 
 pub fn embedded_firework_json(id: &str) -> Option<&'static str> {
     match id.trim().to_ascii_lowercase().as_str() {
+        "copper-willow-rain" | "copper-willow" | "copper" => Some(COPPER_WILLOW_RAIN),
         "oled-peony" | "oled" => Some(OLED_PEONY),
         "recursive-halo" | "halo" => Some(RECURSIVE_HALO),
         "solar-chrysanthemum" | "solar" => Some(SOLAR_CHRYSANTHEMUM),
