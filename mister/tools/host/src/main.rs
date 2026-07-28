@@ -3469,12 +3469,6 @@ fn profile_installed_catalog_lifecycle(
             output_dir.join("launcher-status.json"),
             format!("{}\n", serde_json::to_string_pretty(&final_status)?),
         )?;
-        let diagnostics = exec(&session, &catalog_lifecycle_evidence_command(), true)?;
-        lifecycle_log.push_str(&diagnostics.stdout);
-        lifecycle_log.push_str(&diagnostics.stderr);
-        if let Some(error) = exec_failure_message("catalog lifecycle evidence", &diagnostics) {
-            return Err(error.into());
-        }
         Ok(json!({
             "schema": "mister-magik-installed-benchmark-v1",
             "scenario": "catalog-lifecycle",
@@ -3494,6 +3488,16 @@ fn profile_installed_catalog_lifecycle(
         }))
     })();
 
+    match exec(&session, &catalog_lifecycle_evidence_command(), true) {
+        Ok(diagnostics) => {
+            lifecycle_log.push_str(&diagnostics.stdout);
+            lifecycle_log.push_str(&diagnostics.stderr);
+            if let Some(error) = exec_failure_message("catalog lifecycle evidence", &diagnostics) {
+                lifecycle_log.push_str(&format!("evidence_error={error}\n"));
+            }
+        }
+        Err(error) => lifecycle_log.push_str(&format!("evidence_error={error}\n")),
+    }
     let evidence_result = (|| -> Result<()> {
         fs::write(output_dir.join("catalog-lifecycle.log"), &lifecycle_log)?;
         fs::write(output_dir.join("catalog-inspect.tsv"), &inspect_log)?;
