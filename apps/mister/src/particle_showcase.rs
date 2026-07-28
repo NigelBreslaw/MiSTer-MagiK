@@ -132,6 +132,20 @@ const WATER_PALETTE: [Rgb565Pixel; 8] = [
     Rgb565Pixel(0xd7ff),
     Rgb565Pixel(0xffff),
 ];
+const ARCADE_PALETTE: [Rgb565Pixel; 8] = [
+    Rgb565Pixel(0x080a),
+    Rgb565Pixel(0x2128),
+    Rgb565Pixel(0x02d3),
+    Rgb565Pixel(0x05bf),
+    Rgb565Pixel(0xb80c),
+    Rgb565Pixel(0xfaa5),
+    Rgb565Pixel(0xfec8),
+    Rgb565Pixel(0xffff),
+];
+const ARCADE_CLOUD: &[u8] = include_bytes!("../assets/particles/arcade-cabinet.pcloud");
+const PARTICLE_CLOUD_MAGIC: &[u8; 8] = b"PCLOUD1\0";
+const PARTICLE_CLOUD_HEADER_BYTES: usize = 28;
+const PARTICLE_CLOUD_RECORD_BYTES: usize = 8;
 static PARTICLE_DEMO_NAVIGATION: AtomicI32 = AtomicI32::new(0);
 
 #[cfg(target_arch = "arm")]
@@ -590,6 +604,8 @@ impl ParticleShowcaseRenderer {
             self.initialize_electric_storm();
         } else if demo == ParticleDemoKind::FountainWaterfall {
             self.initialize_fountain_waterfall();
+        } else if demo == ParticleDemoKind::ArcadeCabinet {
+            self.initialize_arcade_cabinet();
         }
     }
 
@@ -660,6 +676,7 @@ impl ParticleShowcaseRenderer {
             ParticleDemoKind::ParticlePortal => self.project_particle_portal(elapsed),
             ParticleDemoKind::ElectricStorm => self.project_electric_storm(elapsed),
             ParticleDemoKind::FountainWaterfall => self.project_fountain_waterfall(elapsed),
+            ParticleDemoKind::ArcadeCabinet => self.project_arcade_cabinet(elapsed),
             _ => self.project_diagnostic(elapsed),
         }
     }
@@ -722,8 +739,86 @@ impl ParticleShowcaseRenderer {
                 value if value < 24.0 => "waterfall",
                 _ => "impact",
             },
-            _ => "diagnostic",
+            ParticleDemoKind::ArcadeCabinet => match seconds {
+                value if value < 4.0 => "formation",
+                value if value < 24.0 => "fly-around",
+                value if value < 29.0 => "three-quarter",
+                _ => "dispersal",
+            },
         }
+    }
+
+    fn initialize_arcade_cabinet(&mut self) {
+        let count = decode_particle_cloud(ARCADE_CLOUD, &mut self.pool)
+            .expect("checked-in arcade particle cloud must satisfy its runtime contract");
+        debug_assert_eq!(count, ParticleDemoKind::ArcadeCabinet.starting_count());
+        for index in 0..count {
+            let random = self.pool.random[index];
+            self.pool.previous_x[index] = unit_signed(random.rotate_left(3)) * 510.0;
+            self.pool.previous_y[index] = unit_signed(random.rotate_left(13)) * 300.0;
+            self.pool.previous_z[index] = unit_signed(random.rotate_left(23)) * 360.0;
+        }
+    }
+
+    fn project_arcade_cabinet(&mut self, elapsed: Duration) -> usize {
+        self.commands.clear();
+        self.segments.clear();
+        let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
+        let (formation, yaw, pitch, dolly, dispersal) = arcade_camera(seconds);
+        let (sin_yaw, cos_yaw) = yaw.sin_cos();
+        let (sin_pitch, cos_pitch) = pitch.sin_cos();
+        let center_x = self.config.width as f32 * 0.5;
+        let center_y = self.config.height as f32 * 0.5 + 16.0;
+        let mut clipped = 0usize;
+        for index in 0..self.pool.active() {
+            let target_x = self.pool.x[index];
+            let target_y = self.pool.y[index];
+            let target_z = self.pool.z[index];
+            let source_x = self.pool.previous_x[index];
+            let source_y = self.pool.previous_y[index];
+            let source_z = self.pool.previous_z[index];
+            let formed_x = source_x + (target_x - source_x) * formation;
+            let formed_y = source_y + (target_y - source_y) * formation;
+            let formed_z = source_z + (target_z - source_z) * formation;
+            let disperse_scale = 1.0 + dispersal * (0.9 + self.pool.life[index] * 1.6);
+            let world_x = formed_x * disperse_scale;
+            let world_y = formed_y * disperse_scale
+                + dispersal * unit_signed(self.pool.random[index].rotate_left(11)) * 90.0;
+            let world_z = formed_z * disperse_scale;
+            let rotated_x = world_x.mul_add(cos_yaw, world_z * sin_yaw);
+            let yaw_z = (-world_x).mul_add(sin_yaw, world_z * cos_yaw);
+            let rotated_y = world_y.mul_add(cos_pitch, -(yaw_z * sin_pitch));
+            let rotated_z = world_y.mul_add(sin_pitch, yaw_z * cos_pitch);
+            let depth = dolly + rotated_z;
+            if depth <= 48.0 {
+                self.commands.push(u32::MAX);
+                clipped = clipped.saturating_add(1);
+                continue;
+            }
+            let scale = 610.0 / depth;
+            let x = center_x + rotated_x * scale;
+            let y = center_y + rotated_y * scale;
+            let feature = self.pool.flags[index];
+            let style = if feature & 2 != 0 {
+                7
+            } else if feature & 1 != 0 {
+                self.pool.style[index].saturating_add(2).min(7)
+            } else {
+                self.pool.style[index]
+            };
+            if !push_screen_command(
+                &mut self.commands,
+                self.config.width,
+                self.config.height,
+                x,
+                y,
+                style,
+                feature != 0 && index & 3 == 0,
+            ) {
+                clipped = clipped.saturating_add(1);
+            }
+        }
+        clipped
     }
 
     fn initialize_fountain_waterfall(&mut self) {
@@ -2140,6 +2235,74 @@ impl ParticleShowcasePool {
     }
 }
 
+fn decode_particle_cloud(bytes: &[u8], pool: &mut ParticleShowcasePool) -> Result<usize, String> {
+    if bytes.len() < PARTICLE_CLOUD_HEADER_BYTES {
+        return Err("particle cloud header is truncated".to_string());
+    }
+    if &bytes[..8] != PARTICLE_CLOUD_MAGIC {
+        return Err("particle cloud magic is invalid".to_string());
+    }
+    let version = u16::from_le_bytes([bytes[8], bytes[9]]);
+    let stride = u16::from_le_bytes([bytes[10], bytes[11]]) as usize;
+    let count = u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]) as usize;
+    if version != 1 {
+        return Err(format!("particle cloud version {version} is unsupported"));
+    }
+    if stride != PARTICLE_CLOUD_RECORD_BYTES {
+        return Err(format!(
+            "particle cloud record stride {stride} is unsupported"
+        ));
+    }
+    if count == 0 || count > pool.active() {
+        return Err(format!(
+            "particle cloud count {count} exceeds active pool {}",
+            pool.active()
+        ));
+    }
+    let expected = PARTICLE_CLOUD_HEADER_BYTES.saturating_add(count.saturating_mul(stride));
+    if bytes.len() != expected {
+        return Err(format!(
+            "particle cloud length {} does not match expected {expected}",
+            bytes.len()
+        ));
+    }
+    let mut bounds = [0i16; 6];
+    for (index, value) in bounds.iter_mut().enumerate() {
+        let offset = 16 + index * 2;
+        *value = i16::from_le_bytes([bytes[offset], bytes[offset + 1]]);
+    }
+    if bounds[0] > bounds[1] || bounds[2] > bounds[3] || bounds[4] > bounds[5] {
+        return Err("particle cloud header bounds are invalid".to_string());
+    }
+    for index in 0..count {
+        let offset = PARTICLE_CLOUD_HEADER_BYTES + index * stride;
+        let x = i16::from_le_bytes([bytes[offset], bytes[offset + 1]]);
+        let y = i16::from_le_bytes([bytes[offset + 2], bytes[offset + 3]]);
+        let z = i16::from_le_bytes([bytes[offset + 4], bytes[offset + 5]]);
+        let palette = bytes[offset + 6];
+        let flags = bytes[offset + 7];
+        if x < bounds[0]
+            || x > bounds[1]
+            || y < bounds[2]
+            || y > bounds[3]
+            || z < bounds[4]
+            || z > bounds[5]
+            || y < 0
+            || palette > 7
+            || flags & !3 != 0
+        {
+            return Err(format!("particle cloud record {index} is out of bounds"));
+        }
+        pool.x[index] = f32::from(x) * (390.0 / 32_767.0);
+        pool.y[index] = 220.0 - f32::from(y) * (440.0 / 32_767.0);
+        pool.z[index] = f32::from(z) * (390.0 / 32_767.0);
+        pool.style[index] = palette;
+        pool.flags[index] = flags;
+        pool.life[index] = unit01(pool.random[index].rotate_left(17));
+    }
+    Ok(count)
+}
+
 fn fold_seed(seed: u64, kind: ParticleDemoKind) -> u32 {
     let folded = seed ^ (seed >> 32) ^ ((kind.number() as u64) * 0x9e37_79b9);
     let folded = folded as u32;
@@ -2172,6 +2335,35 @@ fn triangle_wave(value: f32) -> f32 {
     } else {
         3.0 - phase * 2.0
     }
+}
+
+fn arcade_camera(seconds: f32) -> (f32, f32, f32, f32, f32) {
+    let formation = ease_out_cubic((seconds * 0.25).clamp(0.0, 1.0));
+    if seconds < 4.0 {
+        return (formation, -0.62, -0.08, 760.0, 0.0);
+    }
+    if seconds < 24.0 {
+        let phase = (seconds - 4.0) / 20.0;
+        let orbit = phase * std::f32::consts::TAU;
+        return (
+            1.0,
+            -0.62 + orbit,
+            triangle_wave(phase * 2.0) * 0.13,
+            720.0 + triangle_wave(phase + 0.25) * 82.0,
+            0.0,
+        );
+    }
+    if seconds < 29.0 {
+        let return_t = ease_out_cubic((seconds - 24.0) * 0.2);
+        return (
+            1.0,
+            (-0.62 + std::f32::consts::TAU) * (1.0 - return_t) + 0.72 * return_t,
+            0.11 * return_t,
+            720.0 + 35.0 * return_t,
+            0.0,
+        );
+    }
+    (1.0, 0.72, 0.11, 755.0, (seconds - 29.0).clamp(0.0, 1.0))
 }
 
 fn warp_travel_and_speed(seconds: f32) -> (f32, f32) {
@@ -2209,7 +2401,7 @@ fn showcase_palette(demo: ParticleDemoKind) -> &'static [Rgb565Pixel; 8] {
         ParticleDemoKind::ParticlePortal => &PORTAL_PALETTE,
         ParticleDemoKind::ElectricStorm => &ELECTRIC_PALETTE,
         ParticleDemoKind::FountainWaterfall => &WATER_PALETTE,
-        _ => &SHOWCASE_PALETTE,
+        ParticleDemoKind::ArcadeCabinet => &ARCADE_PALETTE,
     }
 }
 
@@ -2706,5 +2898,53 @@ mod tests {
         assert!(waterfall.segments.iter().all(|segment| {
             (i32::from(segment.y1) - i32::from(segment.y0)).abs() <= MAX_SEGMENT_PIXELS
         }));
+    }
+
+    #[test]
+    fn arcade_cloud_validates_and_forms_feature_aware_cabinet() {
+        let config = ParticleShowcaseConfig {
+            width: 960,
+            height: 540,
+            seed: 0x1983,
+            initial_demo: ParticleDemoKind::ArcadeCabinet,
+        };
+        let mut renderer = ParticleShowcaseRenderer::new(config).unwrap();
+        let mut destination = vec![Rgb565Pixel(0); 960 * 540];
+        let formation = renderer
+            .render(&mut destination, 1, Duration::from_secs(2))
+            .unwrap();
+        let orbit = renderer
+            .render(&mut destination, 2, Duration::from_secs(16))
+            .unwrap();
+
+        assert_eq!(formation.beat, "formation");
+        assert_eq!(orbit.beat, "fly-around");
+        assert_eq!(renderer.commands.len(), 65_536);
+        assert!(orbit.visible > 60_000);
+        assert!(
+            renderer.pool.flags[..renderer.pool.active()]
+                .iter()
+                .any(|flags| flags & 1 != 0)
+        );
+        assert!(
+            renderer.pool.flags[..renderer.pool.active()]
+                .iter()
+                .any(|flags| flags & 2 != 0)
+        );
+    }
+
+    #[test]
+    fn arcade_cloud_rejects_malformed_headers_and_records() {
+        let mut pool = ParticleShowcasePool::new();
+        pool.reset(ParticleDemoKind::ArcadeCabinet, 1);
+        assert!(decode_particle_cloud(b"short", &mut pool).is_err());
+
+        let mut bad_version = ARCADE_CLOUD.to_vec();
+        bad_version[8] = 2;
+        assert!(decode_particle_cloud(&bad_version, &mut pool).is_err());
+
+        let mut bad_palette = ARCADE_CLOUD.to_vec();
+        bad_palette[PARTICLE_CLOUD_HEADER_BYTES + 6] = 8;
+        assert!(decode_particle_cloud(&bad_palette, &mut pool).is_err());
     }
 }
