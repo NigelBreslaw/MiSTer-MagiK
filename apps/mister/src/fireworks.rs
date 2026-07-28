@@ -686,18 +686,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn embedded_oled_peony_is_valid_and_deterministic() {
-        let renderer = FireworkRenderer::from_json(OLED_PEONY, 96, 54, 7).unwrap();
-        let mut first = vec![Rgb565Pixel(0); 96 * 54];
-        let mut second = vec![Rgb565Pixel(0); 96 * 54];
-        renderer
-            .render(&mut first, Duration::from_millis(2000))
-            .unwrap();
-        renderer
-            .render(&mut second, Duration::from_millis(2000))
-            .unwrap();
-        assert_eq!(first, second);
-        assert!(first.iter().any(|pixel| pixel.0 != 0));
+    fn all_embedded_fireworks_are_valid_visible_and_deterministic() {
+        let hero_frames = [
+            ("solar-chrysanthemum", 2100),
+            ("recursive-halo", 2200),
+            ("copper-willow-rain", 2500),
+            ("phoenix-comet", 2350),
+            ("magnetic-flower", 2500),
+            ("oled-peony", 2000),
+        ];
+
+        for (id, hero_ms) in hero_frames {
+            let json = embedded_firework_json(id).unwrap();
+            let renderer = FireworkRenderer::from_json(json, 96, 54, 7).unwrap();
+            assert_eq!(renderer.id(), id);
+
+            let mut first = vec![Rgb565Pixel(0); 96 * 54];
+            let mut second = vec![Rgb565Pixel(0); 96 * 54];
+            let first_stats = renderer
+                .render(&mut first, Duration::from_millis(hero_ms))
+                .unwrap();
+            renderer
+                .render(&mut second, Duration::from_millis(hero_ms))
+                .unwrap();
+
+            assert_eq!(first, second, "{id} changed between identical renders");
+            assert!(
+                first.iter().any(|pixel| pixel.0 != 0),
+                "{id} hero frame was blank"
+            );
+            assert!(first_stats.particles > 0, "{id} declared no particles");
+            assert!(
+                first_stats.visible > 0,
+                "{id} rendered no visible particles"
+            );
+        }
     }
 
     #[test]
