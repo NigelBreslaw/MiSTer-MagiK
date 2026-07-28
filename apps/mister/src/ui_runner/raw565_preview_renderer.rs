@@ -7,6 +7,11 @@ use mister_magik_fb::framebuffer::target::DirtyRect;
 use mister_magik_fb::framebuffer::target::blend_565;
 #[cfg(mister_experiments)]
 use mister_magik_fb::framebuffer::target::brighten_565;
+use mister_magik_fb::preview_transition::{
+    blend_rgb565_bucket as blend_565_bucket,
+    blend_rgb565_row_with_black as blend_565_row_with_black,
+    blend_rgb565_rows_bucketed as blend_565_row_bucketed,
+};
 use std::sync::OnceLock;
 use std::time::Instant;
 
@@ -408,23 +413,6 @@ fn elapsed_thread_cpu_us(start: Option<u64>) -> u64 {
         .unwrap_or(0)
 }
 
-#[inline(always)]
-fn blend_565_bucket(from: Rgb565Pixel, to: Rgb565Pixel, alpha_bucket: u16) -> Rgb565Pixel {
-    let f = from.0 as u32;
-    let t = to.0 as u32;
-    let a = alpha_bucket.min(32) as u32;
-    if a == 0 {
-        return from;
-    }
-    if a >= 32 {
-        return to;
-    }
-    let ia = 32 - a;
-    let rb = (((f & 0xf81f) * ia + (t & 0xf81f) * a) >> 5) & 0xf81f;
-    let g = (((f & 0x07e0) * ia + (t & 0x07e0) * a) >> 5) & 0x07e0;
-    Rgb565Pixel((rb | g) as u16)
-}
-
 fn blend_565_row(
     dst: &mut [Rgb565Pixel],
     previous: &[Rgb565Pixel],
@@ -437,62 +425,6 @@ fn blend_565_row(
     );
     let a = ((alpha as u16 + 4) >> 3).min(32);
     blend_565_row_bucketed(dst, previous, current, a);
-}
-
-fn blend_565_row_bucketed(
-    dst: &mut [Rgb565Pixel],
-    previous: &[Rgb565Pixel],
-    current: &[Rgb565Pixel],
-    alpha_bucket: u16,
-) {
-    debug_assert!(previous.len() >= dst.len());
-    debug_assert!(current.len() >= dst.len());
-    let a = alpha_bucket.min(32);
-    if a == 0 {
-        dst.copy_from_slice(&previous[..dst.len()]);
-        return;
-    }
-    if a >= 32 {
-        dst.copy_from_slice(&current[..dst.len()]);
-        return;
-    }
-    for x in 0..dst.len() {
-        dst[x] = blend_565_bucket(previous[x], current[x], a);
-    }
-}
-
-fn blend_565_row_with_black(
-    dst: &mut [Rgb565Pixel],
-    pixels: &[Rgb565Pixel],
-    alpha_bucket: u16,
-    fade_in: bool,
-) {
-    debug_assert!(pixels.len() >= dst.len());
-    let a = alpha_bucket.min(32);
-    if a == 0 {
-        if fade_in {
-            dst.fill(<Rgb565Pixel as TargetPixel>::from_rgb(0, 0, 0));
-        } else {
-            dst.copy_from_slice(&pixels[..dst.len()]);
-        }
-        return;
-    }
-    if a >= 32 {
-        if fade_in {
-            dst.copy_from_slice(&pixels[..dst.len()]);
-        } else {
-            dst.fill(<Rgb565Pixel as TargetPixel>::from_rgb(0, 0, 0));
-        }
-        return;
-    }
-    let black = <Rgb565Pixel as TargetPixel>::from_rgb(0, 0, 0);
-    for x in 0..dst.len() {
-        dst[x] = if fade_in {
-            blend_565_bucket(black, pixels[x], a)
-        } else {
-            blend_565_bucket(pixels[x], black, a)
-        };
-    }
 }
 
 fn preview_fade_fast_path_enabled() -> bool {

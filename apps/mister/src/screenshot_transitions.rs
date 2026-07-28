@@ -8,6 +8,7 @@ use std::time::Duration;
 #[cfg(mister_experiments)]
 use crate::experiments::preview_transitions as experiment_preview_transitions;
 use crate::preview_state::PreviewRawTransitionFrame;
+use mister_magik_fb::preview_transition::{PreviewTransitionController, transition_duration};
 
 const DEFAULT_PREVIEW_TRANSITION_MS: u64 = 200;
 
@@ -124,16 +125,6 @@ impl PreviewTransitionEffect {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct ActivePreviewTransition {
-    transition_id: u64,
-    effect: PreviewTransitionEffect,
-    start_elapsed: Duration,
-    duration: Duration,
-    last_retarget_elapsed: Duration,
-    completed_presented: bool,
-}
-
-#[derive(Clone, Copy, Debug)]
 pub(crate) struct PreviewTransitionTrace {
     pub(crate) effect: PreviewTransitionEffect,
     pub(crate) progress: f32,
@@ -211,8 +202,7 @@ pub(crate) struct PreviewTransitionDemo {
     picker_index: Option<usize>,
     pub(crate) segment: Duration,
     pub(crate) duration: Duration,
-    last_transition_id: u64,
-    active: Option<ActivePreviewTransition>,
+    timeline: PreviewTransitionController<PreviewTransitionEffect>,
     label_overlay: bool,
 }
 
@@ -223,8 +213,7 @@ impl PreviewTransitionDemo {
             picker_index: None,
             segment: Duration::from_secs(1),
             duration: Duration::from_millis(DEFAULT_PREVIEW_TRANSITION_MS),
-            last_transition_id: u64::MAX,
-            active: None,
+            timeline: PreviewTransitionController::default(),
             label_overlay: false,
         }
     }
@@ -282,8 +271,7 @@ impl PreviewTransitionDemo {
             picker_index,
             segment: Duration::from_secs(segment_secs),
             duration: Duration::from_millis(duration_ms),
-            last_transition_id: u64::MAX,
-            active: None,
+            timeline: PreviewTransitionController::default(),
             label_overlay,
         }
     }
@@ -329,8 +317,7 @@ impl PreviewTransitionDemo {
             return false;
         }
         self.picker_index = Some(next);
-        self.active = None;
-        self.last_transition_id = u64::MAX;
+        self.timeline.reset();
         true
     }
 
@@ -344,75 +331,20 @@ impl PreviewTransitionDemo {
         elapsed: Duration,
     ) -> PreviewTransitionTrace {
         let scheduled_effect = self.current_effect(elapsed);
-        let Some(frame) = frame else {
-            self.active = None;
-            return PreviewTransitionTrace {
-                effect: scheduled_effect,
-                progress: 1.0,
-                active: false,
-                fade: PreviewFadeTrace::default(),
-            };
-        };
-
-        if frame.transition_id != self.last_transition_id {
-            self.last_transition_id = frame.transition_id;
-            self.active = if frame.previous.is_some() {
-                let (effect, start_elapsed, duration) = self
-                    .active
-                    .filter(|active| {
-                        elapsed.saturating_sub(active.last_retarget_elapsed) < active.duration
-                    })
-                    .map(|active| (active.effect, active.start_elapsed, active.duration))
-                    .unwrap_or((
-                        scheduled_effect,
-                        elapsed,
-                        transition_duration_for_frame(self.duration, frame.duration_divisor),
-                    ));
-                Some(ActivePreviewTransition {
-                    transition_id: frame.transition_id,
-                    effect,
-                    start_elapsed,
-                    duration,
-                    last_retarget_elapsed: elapsed,
-                    completed_presented: false,
-                })
-            } else {
-                None
-            };
-        }
-
-        if let Some(active) = self.active {
-            if active.transition_id == frame.transition_id {
-                let progress = transition_progress(
-                    elapsed.saturating_sub(active.start_elapsed),
-                    active.duration,
-                );
-                if progress < 1.0 {
-                    return PreviewTransitionTrace {
-                        effect: active.effect,
-                        progress,
-                        active: true,
-                        fade: PreviewFadeTrace::default(),
-                    };
-                }
-                let needs_final_present = !active.completed_presented;
-                if let Some(active) = self.active.as_mut() {
-                    active.completed_presented = true;
-                }
-                return PreviewTransitionTrace {
-                    effect: active.effect,
-                    progress: 1.0,
-                    active: needs_final_present,
-                    fade: PreviewFadeTrace::default(),
-                };
-            }
-            self.active = None;
-        }
-
+        let duration = frame.map_or(self.duration, |frame| {
+            transition_duration(self.duration, frame.duration_divisor)
+        });
+        let state = self.timeline.update(
+            frame.map(|frame| frame.transition_id),
+            frame.is_some_and(|frame| frame.previous.is_some()),
+            scheduled_effect,
+            duration,
+            elapsed,
+        );
         PreviewTransitionTrace {
-            effect: scheduled_effect,
-            progress: 1.0,
-            active: false,
+            effect: state.effect,
+            progress: state.progress,
+            active: state.active,
             fade: PreviewFadeTrace::default(),
         }
     }
@@ -429,20 +361,6 @@ fn transition_picker_enabled() -> bool {
         .unwrap_or(false)
 }
 
-fn transition_progress(elapsed: Duration, duration: Duration) -> f32 {
-    let denom = duration.as_secs_f32();
-    if denom <= 0.0 {
-        return 1.0;
-    }
-    (elapsed.as_secs_f32() / denom).clamp(0.0, 1.0)
-}
-
-fn transition_duration_for_frame(duration: Duration, divisor: u32) -> Duration {
-    let divisor = divisor.max(1) as u128;
-    let micros = (duration.as_micros() / divisor).max(1);
-    Duration::from_micros(micros.min(u64::MAX as u128) as u64)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -454,8 +372,7 @@ mod tests {
             picker_index: None,
             segment: Duration::from_secs(5),
             duration,
-            last_transition_id: u64::MAX,
-            active: None,
+            timeline: PreviewTransitionController::default(),
             label_overlay: false,
         }
     }
@@ -572,11 +489,11 @@ mod tests {
     #[test]
     fn transition_duration_divisor_shortens_fade() {
         assert_eq!(
-            transition_duration_for_frame(Duration::from_millis(200), 2),
+            transition_duration(Duration::from_millis(200), 2),
             Duration::from_millis(100)
         );
         assert_eq!(
-            transition_duration_for_frame(Duration::from_millis(200), 0),
+            transition_duration(Duration::from_millis(200), 0),
             Duration::from_millis(200)
         );
     }

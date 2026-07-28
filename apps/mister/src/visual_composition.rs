@@ -77,7 +77,7 @@ impl PreviewSurface {
         Self { x: 0, y: 0, stride }
     }
 
-    fn row_start(self, y: usize, x: usize) -> usize {
+    pub(crate) fn row_start(self, y: usize, x: usize) -> usize {
         (y - self.y) * self.stride + (x - self.x)
     }
 }
