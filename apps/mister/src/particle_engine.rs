@@ -714,7 +714,7 @@ fn particle_neon_projection_enabled() -> bool {
 fn particle_table_projection_enabled() -> bool {
     std::env::var("MISTER_PARTICLE_PROJECTION")
         .ok()
-        .is_none_or(|value| value.trim().eq_ignore_ascii_case("table"))
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("table"))
 }
 
 #[cfg(target_arch = "arm")]
