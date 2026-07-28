@@ -538,13 +538,11 @@ size_t mister_magik_showcase_neon_project_galaxy(
     size_t width,
     size_t height,
     size_t core_count,
-    float camera_z,
     float rotation_y_sin,
     float rotation_y_cos,
     float core_scale,
     const float *restrict x,
     const float *restrict y,
-    const float *restrict z,
     const uint8_t *restrict styles,
     const uint8_t *restrict flags,
     uint32_t *restrict commands
@@ -556,7 +554,6 @@ size_t mister_magik_showcase_neon_project_galaxy(
     const float32x4_t center_y = vdupq_n_f32((float)height * 0.5f);
     const float32x4_t max_x = vdupq_n_f32((float)width - 0.5f);
     const float32x4_t max_y = vdupq_n_f32((float)height - 0.5f);
-    const float32x4_t camera = vdupq_n_f32(camera_z);
     const float32x4_t sin_yaw = vdupq_n_f32(rotation_y_sin);
     const float32x4_t cos_yaw = vdupq_n_f32(rotation_y_cos);
     const float32x4_t core_scale_vector = vdupq_n_f32(core_scale);
@@ -565,7 +562,6 @@ size_t mister_magik_showcase_neon_project_galaxy(
     for (size_t index = 0; index < vector_end; index += 4) {
         const float32x4_t source_x = vld1q_f32(x + index);
         const float32x4_t source_y = vld1q_f32(y + index);
-        const float32x4_t source_z = vld1q_f32(z + index);
         const float32x4_t display_x_unscaled = vsubq_f32(
             vmulq_f32(source_x, cos_yaw),
             vmulq_f32(source_y, sin_yaw)
@@ -592,21 +588,14 @@ size_t mister_magik_showcase_neon_project_galaxy(
             vmulq_f32(display_y, core_scale_vector),
             display_y
         );
-        const float32x4_t denominator = vaddq_f32(camera, source_z);
-        const float32x4_t scale =
-            vmulq_f32(reciprocal_once(denominator), camera);
         const float32x4_t screen_x =
-            vaddq_f32(center_x, vmulq_f32(display_x, scale));
+            vaddq_f32(center_x, display_x);
         const float32x4_t screen_y =
-            vaddq_f32(center_y, vmulq_f32(display_y, scale));
+            vaddq_f32(center_y, display_y);
         const uint32x4_t particle_flags = widen_four_u8(flags + index);
         uint32x4_t visible_mask = vtstq_u32(
             vandq_u32(particle_flags, vdupq_n_u32(1)),
             vdupq_n_u32(1)
-        );
-        visible_mask = vandq_u32(
-            visible_mask,
-            vcgtq_f32(denominator, vdupq_n_f32(32.0f))
         );
         visible_mask = vandq_u32(
             visible_mask,

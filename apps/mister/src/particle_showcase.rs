@@ -78,13 +78,11 @@ unsafe extern "C" {
         width: usize,
         height: usize,
         core_count: usize,
-        camera_z: f32,
         rotation_y_sin: f32,
         rotation_y_cos: f32,
         core_scale: f32,
         x: *const f32,
         y: *const f32,
-        z: *const f32,
         styles: *const u8,
         flags: *const u8,
         commands: *mut u32,
@@ -626,8 +624,12 @@ impl ParticleShowcaseRenderer {
         for index in 0..self.pool.active() {
             let y = self.pool.y[index];
             let z = self.pool.z[index];
-            self.pool.y[index] = y.mul_add(cos_tilt, -(z * sin_tilt));
-            self.pool.z[index] = y.mul_add(sin_tilt, z * cos_tilt);
+            let tilted_y = y.mul_add(cos_tilt, -(z * sin_tilt));
+            let tilted_z = y.mul_add(sin_tilt, z * cos_tilt);
+            let perspective = 650.0 / (650.0 + tilted_z);
+            self.pool.x[index] *= perspective;
+            self.pool.y[index] = tilted_y * perspective;
+            self.pool.z[index] = tilted_z;
         }
     }
 
@@ -647,13 +649,11 @@ impl ParticleShowcaseRenderer {
                     self.config.width,
                     self.config.height,
                     bulge_count,
-                    650.0,
                     sin_yaw,
                     cos_yaw,
                     core_pulse,
                     self.pool.x.as_ptr(),
                     self.pool.y.as_ptr(),
-                    self.pool.z.as_ptr(),
                     self.pool.style.as_ptr(),
                     self.pool.flags.as_ptr(),
                     self.commands.as_mut_ptr(),
@@ -671,22 +671,20 @@ impl ParticleShowcaseRenderer {
             }
             let x = self.pool.x[index];
             let y = self.pool.y[index];
-            let z = self.pool.z[index];
             let display_x = x.mul_add(cos_yaw, -(y * sin_yaw));
             let display_y = x.mul_add(sin_yaw, y * cos_yaw);
             let scale = if index < bulge_count { core_pulse } else { 1.0 };
-            let Some((screen_x, screen_y)) = project_world(
-                display_x * scale,
-                display_y * scale,
-                z,
-                self.config.width,
-                self.config.height,
-                650.0,
-            ) else {
+            let screen_x = self.config.width as f32 * 0.5 + display_x * scale;
+            let screen_y = self.config.height as f32 * 0.5 + display_y * scale;
+            if screen_x < 0.0
+                || screen_y < 0.0
+                || screen_x >= self.config.width as f32
+                || screen_y >= self.config.height as f32
+            {
                 self.commands.push(u32::MAX);
                 clipped = clipped.saturating_add(1);
                 continue;
-            };
+            }
             if !push_screen_command(
                 &mut self.commands,
                 self.config.width,
