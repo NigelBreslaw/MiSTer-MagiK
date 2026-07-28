@@ -21,6 +21,18 @@ apps/mister/scripts/dev-ui-mac.sh --scenario screenshot-tiles
 apps/mister/scripts/dev-ui-mac.sh --scenario particle
 ```
 
+Interactive previews use the current monitor refresh rate, capped at 120 Hz.
+Force a target when comparing motion:
+
+```bash
+apps/mister/scripts/dev-ui-mac.sh --refresh-rate 60
+apps/mister/scripts/dev-ui-mac.sh --refresh-rate 120
+```
+
+With `--refresh-rate auto` (the default), moving the window to another monitor
+updates the target shown in the window title. An unfocused preview releases held
+input and pauses its clock.
+
 If `cargo-watch` is installed, rebuild and restart the compiled preview when
 Rust or Slint files change:
 
@@ -55,11 +67,14 @@ copy of the UI.
 | `P` | Production particle screensaver |
 | `T` | Production screenshot-tile wall |
 
-Arrow keys change selection. `Space` pauses a screensaver; `.` advances one
-frame while paused. On Home, `Up` focuses the Settings gear and `Enter` opens
-it; `Down` returns to the system tiles. `Enter` opens supported subpages and
-`Escape` or `Backspace` goes back. The number shortcuts also work on the
-numeric keypad.
+Arrow-key presses and releases drive the production launcher navigation,
+including velocity, turbo re-press, and spring settlement. `Space` pauses a
+screensaver; `.` advances one refresh interval while paused. On Home, `Up`
+focuses the Settings gear and `Enter` opens it; `Down` returns to the system
+tiles. `Enter` opens systems and supported subpages, including Settings →
+Screensaver → Preview. Screenshot tiles return to the underlying launcher view
+on input. `Escape` or `Backspace` goes back. The number shortcuts also work on
+the numeric keypad.
 
 ## Deterministic captures
 
@@ -68,23 +83,32 @@ The capture path must not already exist:
 ```bash
 apps/mister/scripts/dev-ui-mac.sh \
   --scenario arcade \
+  --refresh-rate 120 \
   --frame 12 \
   --output /tmp/mister-magik-arcade.ppm
 ```
 
 Useful capture scenarios include `home`, `arcade`, `settings`,
-`controller-setup`, `catalog-scan`, `particle`, and `screenshot-tiles`.
-Captures use a fixed animation clock and deterministic synthetic catalog/media
-fixtures.
+`arcade-crossfade`, `controller-setup`, `catalog-scan`, `particle`, and
+`screenshot-tiles`. Captures use a fixed animation clock and deterministic
+in-memory catalog/media fixtures. Headless `auto` uses 60 Hz; at an explicit
+120 Hz, frame 12 is exactly 100 ms. Repeating a scenario, frame, and refresh
+rate produces the same RGB565 output.
 
 ## What the preview exercises
 
 - compiled HDMI Slint layouts, fonts, models, overlays, and animations;
 - final 960x540 RGB565 composition;
+- the production launcher hierarchy, navigation, velocity, and spring motion;
 - the production Rust Arcade list renderer;
-- the production static screenshot scaling path;
+- the production screenshot scaling and crossfade compositor;
 - the production particle renderer;
-- the production screenshot-tile wall algorithm.
+- the production time-based screenshot-tile wall algorithm.
+
+The adapter supplies keyboard state, deterministic fixture media, native window
+presentation, and refresh timing. It derives every system shell from the
+canonical taxonomy and populates only Arcade, so launcher UI and navigation
+changes are shared with MiSTer rather than reimplemented for macOS.
 
 It does not validate FPGA routing, HDMI/CRT scanout, vblank latch behaviour,
 Linux controller mappings, Main handoff, or Cortex-A9 performance. Continue to

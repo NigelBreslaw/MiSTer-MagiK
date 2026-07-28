@@ -44,7 +44,8 @@ mod macos {
 
     const FRAME_WIDTH: usize = 960;
     const FRAME_HEIGHT: usize = 540;
-    const FRAME_PERIOD: Duration = Duration::from_nanos(16_666_667);
+    const DEFAULT_REFRESH_HZ: u32 = 60;
+    const MAX_AUTO_REFRESH_HZ: u32 = 120;
     const PREVIEW_TRANSITION_DURATION: Duration = Duration::from_millis(200);
 
     pub fn run() -> Result<(), Box<dyn Error>> {
@@ -67,8 +68,15 @@ mod macos {
         launcher.show()?;
         slint_window.request_redraw();
 
-        let mut application =
-            PreviewApplication::new(launcher, slint_window, fixed_time, Scenario::Home)?;
+        let headless = options.output.is_some();
+        let mut application = PreviewApplication::new(
+            launcher,
+            slint_window,
+            fixed_time,
+            Scenario::Home,
+            options.refresh_rate,
+            headless,
+        )?;
         application.select_scenario(options.scenario);
         if let Some(output) = options.output {
             for _ in 0..=options.frame {
@@ -81,16 +89,17 @@ mod macos {
                 FRAME_HEIGHT,
             )?;
             println!(
-                "capture={} scenario={} frame={} hash={:016x}",
+                "capture={} scenario={} frame={} refresh_hz={} hash={:016x}",
                 output.display(),
                 options.scenario.label(),
                 options.frame,
+                application.refresh_hz,
                 frame_hash(application.frame_target.cached_565())
             );
             return Ok(());
         }
         let event_loop = EventLoop::new()?;
-        event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + FRAME_PERIOD));
+        event_loop.set_control_flow(ControlFlow::WaitUntil(application.next_frame_deadline));
         event_loop.run_app(&mut application)?;
         Ok(())
     }
@@ -124,6 +133,15 @@ mod macos {
         screensaver_elapsed: Duration,
         screensaver_paused: bool,
         screensaver_return: Option<Scenario>,
+        refresh_rate: RefreshRate,
+        refresh_hz: u32,
+        headless: bool,
+        headless_frame: u64,
+        last_frame_at: Instant,
+        schedule_anchor: Instant,
+        schedule_frame: u64,
+        next_frame_deadline: Instant,
+        focused: bool,
     }
 
     impl PreviewApplication {
@@ -132,6 +150,8 @@ mod macos {
             slint_window: Rc<MisterSoftwareWindow>,
             fixed_time: Rc<Cell<Duration>>,
             scenario: Scenario,
+            refresh_rate: RefreshRate,
+            headless: bool,
         ) -> Result<Self, Box<dyn Error>> {
             let fixtures = UiPreviewFixtures::new()?;
             let mut launcher_nav = LauncherNav::new();
@@ -152,6 +172,9 @@ mod macos {
                     stride: image.stride,
                 })
                 .collect();
+            let refresh_hz = refresh_rate.headless_hz();
+            let now = Instant::now();
+            let next_frame_deadline = now + elapsed_for_frame(1, refresh_hz);
             let mut application = Self {
                 launcher,
                 slint_window,
@@ -194,6 +217,15 @@ mod macos {
                 screensaver_elapsed: Duration::ZERO,
                 screensaver_paused: false,
                 screensaver_return: None,
+                refresh_rate,
+                refresh_hz,
+                headless,
+                headless_frame: 0,
+                last_frame_at: now,
+                schedule_anchor: now,
+                schedule_frame: 1,
+                next_frame_deadline,
+                focused: true,
             };
             application.select_scenario(scenario);
             Ok(application)
@@ -217,13 +249,15 @@ mod macos {
                 Surface::new(&context, Arc::clone(&window)).expect("create preview window surface");
             self.native_window = Some(window);
             self.surface = Some(surface);
+            self.refresh_from_monitor();
         }
 
         fn window_title(&self) -> String {
             format!(
-                "MiSTer MagiK UI Preview — {} — {}",
+                "MiSTer MagiK UI Preview — {} — {} — {} Hz",
                 self.scenario.label(),
-                self.scenario.shortcut()
+                self.scenario.shortcut(),
+                self.refresh_hz
             )
         }
 
@@ -346,7 +380,7 @@ mod macos {
                         self.screensaver_paused = !self.screensaver_paused;
                     }
                     KeyCode::Period if self.screensaver_paused => {
-                        self.screensaver_elapsed += FRAME_PERIOD;
+                        self.screensaver_elapsed += elapsed_for_frame(1, self.refresh_hz);
                     }
                     _ => self.exit_screenshot_tiles(),
                 }
@@ -384,7 +418,7 @@ mod macos {
                     self.screensaver_paused = !self.screensaver_paused;
                 }
                 KeyCode::Period if self.screensaver_paused => {
-                    self.screensaver_elapsed += FRAME_PERIOD;
+                    self.screensaver_elapsed += elapsed_for_frame(1, self.refresh_hz);
                 }
                 _ => {}
             }
@@ -511,6 +545,7 @@ mod macos {
         }
 
         fn compose_frame(&mut self) {
+            let frame_delta = self.frame_delta();
             self.tick_launcher_navigation();
             slint::platform::update_timers_and_animations();
             self.slint_window.request_redraw();
@@ -586,9 +621,77 @@ mod macos {
                 Scenario::ParticleScreensaver | Scenario::ScreenshotTiles
             ) && !self.screensaver_paused
             {
-                self.screensaver_elapsed += FRAME_PERIOD;
+                self.screensaver_elapsed += frame_delta;
             }
-            self.fixed_time.set(self.fixed_time.get() + FRAME_PERIOD);
+            self.fixed_time.set(self.fixed_time.get() + frame_delta);
+        }
+
+        fn frame_delta(&mut self) -> Duration {
+            if self.headless {
+                let previous = elapsed_for_frame(self.headless_frame, self.refresh_hz);
+                self.headless_frame = self.headless_frame.saturating_add(1);
+                return elapsed_for_frame(self.headless_frame, self.refresh_hz)
+                    .saturating_sub(previous);
+            }
+            let now = Instant::now();
+            let delta = now
+                .saturating_duration_since(self.last_frame_at)
+                .min(Duration::from_millis(100));
+            self.last_frame_at = now;
+            delta
+        }
+
+        fn refresh_from_monitor(&mut self) {
+            if self.refresh_rate != RefreshRate::Auto {
+                return;
+            }
+            let detected = self
+                .native_window
+                .as_ref()
+                .and_then(|window| window.current_monitor())
+                .and_then(|monitor| monitor.refresh_rate_millihertz())
+                .map(|millihertz| ((millihertz + 500) / 1_000).clamp(30, MAX_AUTO_REFRESH_HZ))
+                .unwrap_or(DEFAULT_REFRESH_HZ);
+            self.set_refresh_hz(detected);
+        }
+
+        fn set_refresh_hz(&mut self, refresh_hz: u32) {
+            let refresh_hz = refresh_hz.clamp(1, MAX_AUTO_REFRESH_HZ);
+            if self.refresh_hz == refresh_hz && self.schedule_frame > 0 {
+                return;
+            }
+            self.refresh_hz = refresh_hz;
+            let now = Instant::now();
+            self.last_frame_at = now;
+            self.schedule_anchor = now;
+            self.schedule_frame = 1;
+            self.next_frame_deadline = now + elapsed_for_frame(1, refresh_hz);
+            if let Some(window) = self.native_window.as_ref() {
+                window.set_title(&self.window_title());
+            }
+        }
+
+        fn reset_focus_clock(&mut self) {
+            let now = Instant::now();
+            self.last_frame_at = now;
+            self.schedule_anchor = now;
+            self.schedule_frame = 1;
+            self.next_frame_deadline = now + elapsed_for_frame(1, self.refresh_hz);
+        }
+
+        fn schedule_next_frame(&mut self, now: Instant) -> bool {
+            if !self.focused {
+                return false;
+            }
+            if now < self.next_frame_deadline {
+                return false;
+            }
+            while self.next_frame_deadline <= now {
+                self.schedule_frame = self.schedule_frame.saturating_add(1);
+                self.next_frame_deadline =
+                    self.schedule_anchor + elapsed_for_frame(self.schedule_frame, self.refresh_hz);
+            }
+            true
         }
 
         fn render(&mut self) {
@@ -665,15 +768,34 @@ mod macos {
                         window.request_redraw();
                     }
                 }
+                WindowEvent::Moved(_) | WindowEvent::ScaleFactorChanged { .. } => {
+                    self.refresh_from_monitor();
+                }
+                WindowEvent::Focused(focused) => {
+                    self.focused = focused;
+                    self.launcher_pad = PadState::default();
+                    self.launcher_nav.absorb_input(&self.launcher_pad);
+                    self.reset_focus_clock();
+                    if focused && let Some(window) = self.native_window.as_ref() {
+                        window.request_redraw();
+                    }
+                }
                 _ => {}
             }
         }
 
         fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-            event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + FRAME_PERIOD));
-            if let Some(window) = self.native_window.as_ref() {
+            if !self.focused {
+                event_loop.set_control_flow(ControlFlow::Wait);
+                return;
+            }
+            let now = Instant::now();
+            if self.schedule_next_frame(now)
+                && let Some(window) = self.native_window.as_ref()
+            {
                 window.request_redraw();
             }
+            event_loop.set_control_flow(ControlFlow::WaitUntil(self.next_frame_deadline));
         }
     }
 
@@ -856,6 +978,7 @@ mod macos {
         scenario: Scenario,
         frame: u64,
         output: Option<PathBuf>,
+        refresh_rate: RefreshRate,
     }
 
     impl PreviewOptions {
@@ -863,6 +986,7 @@ mod macos {
             let mut scenario = Scenario::Home;
             let mut frame = 0;
             let mut output = None;
+            let mut refresh_rate = RefreshRate::Auto;
             let mut arguments = arguments.into_iter();
             while let Some(argument) = arguments.next() {
                 match argument.as_str() {
@@ -883,9 +1007,15 @@ mod macos {
                         let value = arguments.next().ok_or("--output requires a file path")?;
                         output = Some(PathBuf::from(value));
                     }
+                    "--refresh-rate" => {
+                        let value = arguments
+                            .next()
+                            .ok_or("--refresh-rate requires auto, 60, or 120")?;
+                        refresh_rate = RefreshRate::parse(&value)?;
+                    }
                     "--help" | "-h" => {
                         return Err(
-                            "usage: mister-magik-ui-preview [--scenario NAME] [--frame N --output FILE.ppm]"
+                            "usage: mister-magik-ui-preview [--scenario NAME] [--refresh-rate auto|60|120] [--frame N --output FILE.ppm]"
                                 .into(),
                         );
                     }
@@ -899,8 +1029,46 @@ mod macos {
                 scenario,
                 frame,
                 output,
+                refresh_rate,
             })
         }
+    }
+
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    enum RefreshRate {
+        #[default]
+        Auto,
+        Hz60,
+        Hz120,
+    }
+
+    impl RefreshRate {
+        fn parse(value: &str) -> Result<Self, String> {
+            match value.trim().to_ascii_lowercase().as_str() {
+                "auto" => Ok(Self::Auto),
+                "60" => Ok(Self::Hz60),
+                "120" => Ok(Self::Hz120),
+                _ => Err(format!(
+                    "invalid refresh rate {value:?}; expected auto, 60, or 120"
+                )),
+            }
+        }
+
+        fn headless_hz(self) -> u32 {
+            match self {
+                Self::Auto | Self::Hz60 => 60,
+                Self::Hz120 => 120,
+            }
+        }
+    }
+
+    fn elapsed_for_frame(frame: u64, refresh_hz: u32) -> Duration {
+        let nanos = u128::from(frame)
+            .saturating_mul(1_000_000_000)
+            .checked_div(u128::from(refresh_hz.max(1)))
+            .unwrap_or(0)
+            .min(u128::from(u64::MAX));
+        Duration::from_nanos(nanos as u64)
     }
 
     fn write_ppm(
@@ -1006,7 +1174,9 @@ mod macos {
         );
         bridge.set_menu_title("MiSTer MagiK".into());
         bridge.set_menu_breadcrumb("Systems".into());
-        bridge.set_menu_items(home_menu_items(0));
+        if !scenario.uses_launcher_navigation() {
+            bridge.set_menu_items(home_menu_items(0));
+        }
         bridge.set_selected_index(0);
         bridge.set_settings_focused(false);
         bridge.set_settings_selected(0);
@@ -1288,6 +1458,32 @@ mod macos {
             assert_eq!(options.scenario, Scenario::ScreenshotTiles);
             assert_eq!(options.frame, 12);
             assert_eq!(options.output, Some(PathBuf::from("out.ppm")));
+            assert_eq!(options.refresh_rate, RefreshRate::Auto);
+        }
+
+        #[test]
+        fn explicit_refresh_rate_gives_time_based_headless_frames() {
+            let options =
+                PreviewOptions::parse(["--refresh-rate", "120"].map(String::from)).unwrap();
+            assert_eq!(options.refresh_rate, RefreshRate::Hz120);
+            assert_eq!(elapsed_for_frame(6, 60), Duration::from_millis(100));
+            assert_eq!(elapsed_for_frame(12, 120), Duration::from_millis(100));
+        }
+
+        #[test]
+        fn production_home_velocity_matches_at_60_and_120_hz() {
+            let sixty = run_home_velocity(60);
+            let one_twenty = run_home_velocity(120);
+            assert_eq!(sixty.0, one_twenty.0);
+            assert!((sixty.1 - one_twenty.1).abs() <= 1);
+        }
+
+        #[test]
+        fn production_arcade_velocity_matches_at_60_and_120_hz() {
+            let sixty = run_arcade_velocity(60);
+            let one_twenty = run_arcade_velocity(120);
+            assert_eq!(sixty.0, one_twenty.0);
+            assert!((sixty.1 - one_twenty.1).abs() <= 1);
         }
 
         #[test]
@@ -1337,6 +1533,72 @@ mod macos {
                 frame_hash(&[Rgb565Pixel(0x1234), Rgb565Pixel(0xabcd)]),
                 0x462038d925b18c13
             );
+        }
+
+        fn prepared_nav() -> (UiPreviewFixtures, LauncherNav) {
+            let fixtures = UiPreviewFixtures::new().expect("preview fixtures");
+            let mut nav = LauncherNav::new();
+            nav.catalog_build_started();
+            for system_id in &fixtures.shell_system_ids {
+                nav.catalog_system_discovered(system_id);
+                nav.catalog_system_ready(system_id);
+            }
+            nav.sync_launcher_taxonomy(&fixtures.catalog);
+            nav.catalog_build_finished(&fixtures.catalog);
+            (fixtures, nav)
+        }
+
+        fn run_home_velocity(refresh_hz: u32) -> (usize, i32) {
+            let (fixtures, mut nav) = prepared_nav();
+            let epoch = Instant::now();
+            let mut pad = PadState {
+                dpad_right: true,
+                ..PadState::default()
+            };
+            pad.rebuild_pressed_now();
+            for frame in 0..refresh_hz {
+                nav.handle_input(
+                    &pad,
+                    epoch + elapsed_for_frame(u64::from(frame), refresh_hz),
+                    &fixtures.catalog,
+                );
+            }
+            pad = PadState::default();
+            for frame in refresh_hz..=refresh_hz * 2 {
+                nav.handle_input(
+                    &pad,
+                    epoch + elapsed_for_frame(u64::from(frame), refresh_hz),
+                    &fixtures.catalog,
+                );
+            }
+            (nav.selected, nav.scroll_x)
+        }
+
+        fn run_arcade_velocity(refresh_hz: u32) -> (usize, i32) {
+            let (fixtures, mut nav) = prepared_nav();
+            assert!(nav.open_default_arcade(&fixtures.catalog));
+            let epoch = Instant::now();
+            let mut pad = PadState {
+                dpad_down: true,
+                ..PadState::default()
+            };
+            pad.rebuild_pressed_now();
+            for frame in 0..refresh_hz {
+                nav.handle_input(
+                    &pad,
+                    epoch + elapsed_for_frame(u64::from(frame), refresh_hz),
+                    &fixtures.catalog,
+                );
+            }
+            pad = PadState::default();
+            for frame in refresh_hz..=refresh_hz * 2 {
+                nav.handle_input(
+                    &pad,
+                    epoch + elapsed_for_frame(u64::from(frame), refresh_hz),
+                    &fixtures.catalog,
+                );
+            }
+            (nav.arcade.selected, nav.arcade.scroll_y)
         }
     }
 }
