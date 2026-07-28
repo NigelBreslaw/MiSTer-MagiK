@@ -188,6 +188,15 @@ pub struct ParticleFrameStats {
     pub rotation_y_radians: f32,
     pub simulation_backend: &'static str,
     pub projection_backend: &'static str,
+    pub simulation_update: ParticleSimulationUpdate,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ParticleSimulationUpdate {
+    #[default]
+    None,
+    Cohort(u8),
+    All,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -317,6 +326,7 @@ impl ParticleEngine {
         self.phase = next_phase;
         self.rotation_y_radians = rotation_y_at_cycle_us(cycle_us);
         (self.rotation_y_sin, self.rotation_y_cos) = self.rotation_y_radians.sin_cos();
+        let mut simulation_update = ParticleSimulationUpdate::None;
         if delta > 0.0 {
             if self.use_alternating_cohorts {
                 let cohort = (self.simulation_step & 1) as usize;
@@ -333,8 +343,10 @@ impl ParticleEngine {
                 };
                 self.advance_range(cohort_delta, range);
                 self.simulation_step = self.simulation_step.wrapping_add(1);
+                simulation_update = ParticleSimulationUpdate::Cohort(cohort as u8);
             } else {
                 self.advance_range(delta, 0..self.particle_count());
+                simulation_update = ParticleSimulationUpdate::All;
             }
         }
         ParticleFrameStats {
@@ -344,6 +356,7 @@ impl ParticleEngine {
             rotation_y_radians: self.rotation_y_radians,
             simulation_backend: self.simulation_backend_label(),
             projection_backend: self.projection_backend_label(),
+            simulation_update,
         }
     }
 
@@ -417,6 +430,40 @@ impl ParticleEngine {
             "visual packed projection requires the NEON backend"
         );
         self.project_offsets_scalar(output, 0..self.particle_count())
+    }
+
+    /// Updates a contiguous range in an already initialized fixed command
+    /// buffer, preserving particle-index positions outside the range.
+    pub fn project_packed_commands_range(
+        &self,
+        output: &mut [u32],
+        range: Range<usize>,
+        visual: bool,
+    ) -> usize {
+        assert!(output.len() >= self.particle_count());
+        assert!(range.start <= range.end && range.end <= self.particle_count());
+        #[cfg(target_arch = "arm")]
+        if self.use_neon_projection {
+            // SAFETY: the range and all backing arrays are bounded above, and
+            // the C kernel writes exactly `range.len()` initialized commands.
+            return unsafe {
+                neon::project_commands_range(self, output.as_mut_ptr(), range, visual)
+            };
+        }
+        debug_assert!(
+            !visual,
+            "visual packed projection requires the NEON backend"
+        );
+        let mut visible = 0;
+        for index in range {
+            output[index] = self
+                .project(index)
+                .map_or(PARTICLE_NOT_VISIBLE_OFFSET, |particle| {
+                    visible += 1;
+                    (particle.y as usize * self.config.width + particle.x as usize) as u32
+                });
+        }
+        visible
     }
 
     fn project_offsets_scalar(
@@ -949,6 +996,39 @@ mod neon {
             )
         }
     }
+
+    pub(super) unsafe fn project_commands_range(
+        engine: &ParticleEngine,
+        commands: *mut u32,
+        range: Range<usize>,
+        visual: bool,
+    ) -> usize {
+        let phase = match engine.phase {
+            super::ParticlePhase::Static => 0,
+            super::ParticlePhase::Form => 1,
+            super::ParticlePhase::Hold => 2,
+            super::ParticlePhase::Disperse => 3,
+        };
+        unsafe {
+            mister_magik_particle_neon_project_commands(
+                range.len(),
+                engine.config.width,
+                u32::from(visual),
+                phase,
+                engine.projection_center_x,
+                engine.projection_center_y,
+                engine.projection_max_x,
+                engine.projection_max_y,
+                engine.rotation_y_sin,
+                engine.rotation_y_cos,
+                engine.x.as_ptr().add(range.start),
+                engine.y.as_ptr().add(range.start),
+                engine.z_q7.as_ptr().add(range.start),
+                engine.random_states.as_ptr().add(range.start),
+                commands.add(range.start),
+            )
+        }
+    }
 }
 
 fn pack_target(target: ParticleTarget) -> Result<u32, String> {
@@ -1144,11 +1224,16 @@ mod tests {
         let mut engine = engine(8);
         engine.use_alternating_cohorts = true;
         let initial = engine.random_states.clone();
-        engine.step(Duration::from_micros(16_667));
+        let first = engine.step(Duration::from_micros(16_667));
+        assert_eq!(first.simulation_update, ParticleSimulationUpdate::Cohort(0));
         assert_ne!(&engine.random_states[..4], &initial[..4]);
         assert_eq!(&engine.random_states[4..], &initial[4..]);
         let after_first = engine.random_states.clone();
-        engine.step(Duration::from_micros(33_334));
+        let second = engine.step(Duration::from_micros(33_334));
+        assert_eq!(
+            second.simulation_update,
+            ParticleSimulationUpdate::Cohort(1)
+        );
         assert_eq!(&engine.random_states[..4], &after_first[..4]);
         assert_ne!(&engine.random_states[4..], &after_first[4..]);
     }

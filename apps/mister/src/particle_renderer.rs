@@ -4,7 +4,7 @@
 use crate::bitmap_text::{ConsoleFont, ConsoleTypeface};
 use crate::particle_engine::{
     PARTICLE_NOT_VISIBLE_OFFSET, ParticleConfig, ParticleEngine, ParticleFrameStats, ParticlePhase,
-    ParticlePreset, TargetMask,
+    ParticlePreset, ParticleSimulationUpdate, TargetMask,
 };
 use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
 use slint::platform::software_renderer::Rgb565Pixel;
@@ -120,6 +120,20 @@ struct ParticlePreparationPipeline {
     worker: Option<JoinHandle<()>>,
 }
 
+struct ParticleProjectionCache {
+    commands: Vec<u32>,
+    cohort_visible: [usize; 2],
+    phase: Option<ParticlePhase>,
+    initialized: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProjectionCacheUpdate {
+    None,
+    Cohort(u8),
+    All,
+}
+
 impl ParticleRenderer {
     pub fn new_magik(config: ParticleConfig) -> Result<Self, String> {
         let mask = magik_target_mask()?;
@@ -147,6 +161,7 @@ impl ParticleRenderer {
                     .take()
                     .expect("particle preparation pipeline must receive its engine"),
                 Vec::with_capacity(config.count),
+                Vec::with_capacity(config.count),
                 order_commands.then(|| Vec::with_capacity(config.count)),
             )?)
         } else {
@@ -154,8 +169,9 @@ impl ParticleRenderer {
         };
         let command_ordering_scratch = (preparation_pipeline.is_none() && order_commands)
             .then(|| Vec::with_capacity(config.count));
+        let pipeline_buffers = usize::from(preparation_pipeline.is_some());
         let command_buffer_count =
-            1 + usize::from(preparation_pipeline.is_some()) + usize::from(order_commands);
+            1 + pipeline_buffers.saturating_mul(2) + usize::from(order_commands);
         let renderer_scratch_bytes = dirty_slots.iter().fold(0usize, |total, slot| {
             total.saturating_add(
                 slot.offsets
@@ -224,6 +240,7 @@ impl ParticleRenderer {
                 elapsed,
                 &mut self.commands,
                 self.command_ordering_scratch.as_mut(),
+                None,
             )?
         };
         let clear_started = Instant::now();
@@ -329,6 +346,7 @@ impl ParticlePreparationPipeline {
     fn start(
         engine: ParticleEngine,
         spare_commands: Vec<u32>,
+        cached_commands: Vec<u32>,
         ordering_scratch: Option<Vec<u32>>,
     ) -> Result<Self, String> {
         let (request_tx, request_rx) = mpsc::sync_channel::<ParticlePreparationRequest>(1);
@@ -337,7 +355,13 @@ impl ParticlePreparationPipeline {
             .name("particle-prepare".into())
             .spawn(move || {
                 apply_runtime_thread_policy(RuntimeThreadRole::ParticlePreparer);
-                run_particle_preparation_worker(engine, ordering_scratch, request_rx, ready_tx);
+                run_particle_preparation_worker(
+                    engine,
+                    cached_commands,
+                    ordering_scratch,
+                    request_rx,
+                    ready_tx,
+                );
             })
             .map_err(|error| format!("spawn particle preparation worker: {error}"))?;
         Ok(Self {
@@ -424,10 +448,17 @@ impl Drop for ParticlePreparationPipeline {
 
 fn run_particle_preparation_worker(
     mut engine: ParticleEngine,
+    cached_commands: Vec<u32>,
     mut ordering_scratch: Option<Vec<u32>>,
     request_rx: Receiver<ParticlePreparationRequest>,
     ready_tx: SyncSender<Result<PreparedParticleFrame, String>>,
 ) {
+    let mut projection_cache = ParticleProjectionCache {
+        commands: cached_commands,
+        cohort_visible: [0; 2],
+        phase: None,
+        initialized: false,
+    };
     while let Ok(request) = request_rx.recv() {
         let worker_wake_latency_us = request.sent_at.elapsed().as_micros();
         let mut commands = request.commands;
@@ -437,6 +468,7 @@ fn run_particle_preparation_worker(
             request.elapsed,
             &mut commands,
             ordering_scratch.as_mut(),
+            Some(&mut projection_cache),
         );
         let prepared = prepared.map(|mut prepared| {
             prepared.worker_wake_latency_us = worker_wake_latency_us;
@@ -457,6 +489,7 @@ fn prepare_particle_frame(
     elapsed: Duration,
     commands: &mut Vec<u32>,
     ordering_scratch: Option<&mut Vec<u32>>,
+    projection_cache: Option<&mut ParticleProjectionCache>,
 ) -> Result<PreparedParticleFrame, String> {
     let simulation_started = Instant::now();
     let simulation_cpu_started = thread_cpu_time_us();
@@ -465,7 +498,11 @@ fn prepare_particle_frame(
     let simulation_cpu_us = elapsed_thread_cpu_us(simulation_cpu_started);
     let projection_started = Instant::now();
     let projection_cpu_started = thread_cpu_time_us();
-    let visible = prepare_particle_commands(engine, commands)?;
+    let visible = if let Some(projection_cache) = projection_cache {
+        prepare_cached_particle_commands(engine, frame, commands, projection_cache)?
+    } else {
+        prepare_particle_commands(engine, commands)?
+    };
     if let Some(ordering_scratch) = ordering_scratch {
         order_particle_commands(engine.config().preset, commands, ordering_scratch);
     }
@@ -529,6 +566,82 @@ fn particle_command_bin(preset: ParticlePreset, command: u32) -> usize {
         ParticlePreset::Visual => command & COMMAND_OFFSET_MASK,
     };
     ((offset >> COMMAND_BIN_SHIFT) as usize).min(COMMAND_INVISIBLE_BIN - 1)
+}
+
+fn prepare_cached_particle_commands(
+    engine: &ParticleEngine,
+    frame: ParticleFrameStats,
+    commands: &mut Vec<u32>,
+    cache: &mut ParticleProjectionCache,
+) -> Result<usize, String> {
+    if !engine.uses_vector_projection() {
+        return prepare_particle_commands(engine, commands);
+    }
+    let count = engine.particle_count();
+    if cache.commands.len() != count {
+        cache.commands.resize(count, PARTICLE_NOT_VISIBLE_OFFSET);
+        cache.initialized = false;
+    }
+    let update = projection_cache_update(
+        cache.initialized,
+        cache.phase,
+        frame.phase,
+        frame.simulation_update,
+    );
+    let visual = engine.config().preset == ParticlePreset::Visual;
+    match update {
+        ProjectionCacheUpdate::None => {}
+        ProjectionCacheUpdate::Cohort(cohort) => {
+            let cohort = usize::from(cohort);
+            let range = particle_cohort_range(count, cohort);
+            cache.cohort_visible[cohort] =
+                engine.project_packed_commands_range(&mut cache.commands, range, visual);
+        }
+        ProjectionCacheUpdate::All => {
+            for cohort in 0..2 {
+                cache.cohort_visible[cohort] = engine.project_packed_commands_range(
+                    &mut cache.commands,
+                    particle_cohort_range(count, cohort),
+                    visual,
+                );
+            }
+        }
+    }
+    cache.initialized = true;
+    cache.phase = Some(frame.phase);
+    if engine.validates_vector_projection() {
+        validate_sampled_packed_commands(engine, &cache.commands)?;
+    }
+    commands.clear();
+    commands.extend_from_slice(&cache.commands);
+    Ok(cache.cohort_visible.iter().sum())
+}
+
+fn projection_cache_update(
+    initialized: bool,
+    cached_phase: Option<ParticlePhase>,
+    phase: ParticlePhase,
+    simulation_update: ParticleSimulationUpdate,
+) -> ProjectionCacheUpdate {
+    if !initialized || cached_phase != Some(phase) || phase == ParticlePhase::Hold {
+        return ProjectionCacheUpdate::All;
+    }
+    match simulation_update {
+        ParticleSimulationUpdate::None => ProjectionCacheUpdate::None,
+        ParticleSimulationUpdate::Cohort(cohort @ 0..=1) => ProjectionCacheUpdate::Cohort(cohort),
+        ParticleSimulationUpdate::Cohort(_) | ParticleSimulationUpdate::All => {
+            ProjectionCacheUpdate::All
+        }
+    }
+}
+
+fn particle_cohort_range(count: usize, cohort: usize) -> std::ops::Range<usize> {
+    let midpoint = count / 2;
+    match cohort {
+        0 => 0..midpoint,
+        1 => midpoint..count,
+        _ => 0..count,
+    }
 }
 
 fn prepare_particle_commands(
@@ -1223,8 +1336,13 @@ mod tests {
     #[test]
     fn preparation_pipeline_returns_exact_lookahead_frames_in_order() {
         let engine = ParticleEngine::new(config(ParticlePreset::Capacity), mask()).unwrap();
-        let mut pipeline =
-            ParticlePreparationPipeline::start(engine, Vec::with_capacity(64), None).unwrap();
+        let mut pipeline = ParticlePreparationPipeline::start(
+            engine,
+            Vec::with_capacity(64),
+            Vec::with_capacity(64),
+            None,
+        )
+        .unwrap();
         let mut commands = Vec::with_capacity(64);
         let first_elapsed = Duration::from_micros(16_667);
         let second_elapsed = Duration::from_micros(33_334);
@@ -1250,8 +1368,13 @@ mod tests {
     #[test]
     fn preparation_ticks_roll_over_without_elapsed_matching() {
         let engine = ParticleEngine::new(config(ParticlePreset::Capacity), mask()).unwrap();
-        let mut pipeline =
-            ParticlePreparationPipeline::start(engine, Vec::with_capacity(64), None).unwrap();
+        let mut pipeline = ParticlePreparationPipeline::start(
+            engine,
+            Vec::with_capacity(64),
+            Vec::with_capacity(64),
+            None,
+        )
+        .unwrap();
         pipeline.presentation_tick = u64::MAX;
         let mut commands = Vec::with_capacity(64);
         let first_elapsed = Duration::from_micros(16_667);
@@ -1269,6 +1392,46 @@ mod tests {
         assert_eq!(first.tick, u64::MAX);
         assert_eq!(second.tick, 0);
         assert_eq!(second.lookahead_mismatch_count, 0);
+    }
+
+    #[test]
+    fn projection_cache_reprojects_phase_changes_and_rotating_hold() {
+        assert_eq!(
+            projection_cache_update(
+                false,
+                None,
+                ParticlePhase::Static,
+                ParticleSimulationUpdate::Cohort(0),
+            ),
+            ProjectionCacheUpdate::All
+        );
+        assert_eq!(
+            projection_cache_update(
+                true,
+                Some(ParticlePhase::Static),
+                ParticlePhase::Static,
+                ParticleSimulationUpdate::Cohort(1),
+            ),
+            ProjectionCacheUpdate::Cohort(1)
+        );
+        assert_eq!(
+            projection_cache_update(
+                true,
+                Some(ParticlePhase::Static),
+                ParticlePhase::Form,
+                ParticleSimulationUpdate::Cohort(0),
+            ),
+            ProjectionCacheUpdate::All
+        );
+        assert_eq!(
+            projection_cache_update(
+                true,
+                Some(ParticlePhase::Hold),
+                ParticlePhase::Hold,
+                ParticleSimulationUpdate::Cohort(1),
+            ),
+            ProjectionCacheUpdate::All
+        );
     }
 
     #[test]
