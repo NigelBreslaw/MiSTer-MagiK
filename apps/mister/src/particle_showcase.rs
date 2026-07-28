@@ -181,7 +181,7 @@ impl ParticleDemoKind {
         match self {
             Self::Fireworks => 24_576,
             Self::FireEmbers | Self::MeteorShower => 20_480,
-            Self::SpiralGalaxy => 86_016,
+            Self::SpiralGalaxy => 81_920,
             Self::WarpSpeed | Self::Weather => 49_152,
             Self::ParticlePortal | Self::ArcadeCabinet => 65_536,
             Self::ElectricStorm => 16_384,
