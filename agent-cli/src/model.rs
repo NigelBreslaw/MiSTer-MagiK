@@ -10,6 +10,8 @@ pub enum BenchmarkScenario {
     #[default]
     Screensaver,
     Particles,
+    ParticleCapacity,
+    ParticleStep,
     ParticleProfile,
     CatalogLifecycle,
     Search,
@@ -21,6 +23,8 @@ impl BenchmarkScenario {
         match self {
             Self::Screensaver => "screensaver",
             Self::Particles => "particles",
+            Self::ParticleCapacity => "particle-capacity",
+            Self::ParticleStep => "particle-step",
             Self::ParticleProfile => "particle-profile",
             Self::CatalogLifecycle => "catalog-lifecycle",
             Self::Search => "search",

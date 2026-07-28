@@ -37,6 +37,12 @@ pub enum DeviceRequest {
     ProfileInstalledParticles {
         output_dir: PathBuf,
     },
+    ProfileInstalledParticleCapacity {
+        output_dir: PathBuf,
+    },
+    ProfileInstalledParticleStep {
+        output_dir: PathBuf,
+    },
     ProfileInstalledParticleCpu {
         output_dir: PathBuf,
     },
@@ -84,6 +90,8 @@ impl DeviceRequest {
             Self::DeliverPlatformTransaction { .. } => "deliver-platform-transaction",
             Self::ProfileInstalledScreensaver { .. } => "profile-installed-screensaver",
             Self::ProfileInstalledParticles { .. } => "profile-installed-particles",
+            Self::ProfileInstalledParticleCapacity { .. } => "profile-installed-particle-capacity",
+            Self::ProfileInstalledParticleStep { .. } => "profile-installed-particle-step",
             Self::ProfileInstalledParticleCpu { .. } => "profile-installed-particle-cpu",
             Self::ProfileInstalledSearch { .. } => "profile-installed-search",
             Self::VerifyInstalledSearchUi { .. } => "verify-installed-search-ui",
@@ -242,6 +250,12 @@ mod tests {
             },
             DeviceRequest::ProfileInstalledParticles {
                 output_dir: "particle-profiles".into(),
+            },
+            DeviceRequest::ProfileInstalledParticleCapacity {
+                output_dir: "particle-capacity-profiles".into(),
+            },
+            DeviceRequest::ProfileInstalledParticleStep {
+                output_dir: "particle-step-profiles".into(),
             },
             DeviceRequest::ProfileInstalledParticleCpu {
                 output_dir: "particle-cpu-profiles".into(),

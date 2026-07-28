@@ -292,7 +292,18 @@ impl DeviceOperations for NativeDevice {
             }
             DeviceRequest::ProfileInstalledParticles { output_dir } => {
                 let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
-                profile_installed_particles(&config, output_dir).map_err(device_failure)?
+                profile_installed_particles(&config, output_dir, ParticleBenchmarkRun::Complete)
+                    .map_err(device_failure)?
+            }
+            DeviceRequest::ProfileInstalledParticleCapacity { output_dir } => {
+                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
+                profile_installed_particles(&config, output_dir, ParticleBenchmarkRun::Capacity)
+                    .map_err(device_failure)?
+            }
+            DeviceRequest::ProfileInstalledParticleStep { output_dir } => {
+                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
+                profile_installed_particles(&config, output_dir, ParticleBenchmarkRun::Step)
+                    .map_err(device_failure)?
             }
             DeviceRequest::ProfileInstalledParticleCpu { output_dir } => {
                 let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
@@ -3189,12 +3200,21 @@ const SCREENSAVER_PROFILE_TIMEOUT_SECS: u64 = SCREENSAVER_PROFILE_DURATION_SECS 
 const SCREENSAVER_POPULATED_WINDOW_SECS: u64 = 15;
 const PARTICLE_SEARCH_TRIAL_SECS: u64 = 12;
 const PARTICLE_CONFIRMATION_SECS: u64 = 30;
+const PARTICLE_STEP_DURATION_SECS: u64 = 20;
+const PARTICLE_STEP_COUNT: u64 = 14_336;
 const PARTICLE_CPU_PROFILE_DURATION_SECS: u64 = 30;
 const PARTICLE_CPU_PROFILE_CAPACITY_COUNT: u64 = 14_336;
 const PARTICLE_CPU_PROFILE_VISUAL_COUNT: u64 = 9_216;
 const PARTICLE_COUNT_STEP: u64 = 1_024;
 const PARTICLE_COUNT_MAX: u64 = 524_288;
 const PARTICLE_POST_RESERVE_US: u64 = 750;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ParticleBenchmarkRun {
+    Complete,
+    Capacity,
+    Step,
+}
 
 fn last_json_line(output: &str) -> Option<Value> {
     output
@@ -3606,7 +3626,11 @@ fn catalog_lifecycle_report(summary: &Value) -> Result<String> {
     Ok(report)
 }
 
-fn profile_installed_particles(config: &NativeDeviceConfig, output_dir: &Path) -> Result<String> {
+fn profile_installed_particles(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+    run: ParticleBenchmarkRun,
+) -> Result<String> {
     const DISPLAY_MODE: &str = "hdmi-1920x1080p60";
     let benchmark_mode = DISPLAY_MATRIX_MODES
         .iter()
@@ -3659,22 +3683,39 @@ fn profile_installed_particles(config: &NativeDeviceConfig, output_dir: &Path) -
         let session = connect_with(&config.connection, 10)?;
         validate_particle_display_geometry(&session)?;
         drop(session);
-        let capacity = profile_particle_preset(config, output_dir, "capacity")?;
-        let visual = profile_particle_preset(config, output_dir, "visual")?;
-        let visual_count = visual
-            .get("confirmed_count")
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
-        let captures = if visual_count > 0 {
-            capture_particle_phases(config, output_dir, visual_count)?
-        } else {
-            Value::Null
-        };
-        Ok(json!({
-            "capacity": capacity,
-            "visual": visual,
-            "captures": captures,
-        }))
+        match run {
+            ParticleBenchmarkRun::Complete => {
+                let capacity = profile_particle_preset(config, output_dir, "capacity")?;
+                let visual = profile_particle_preset(config, output_dir, "visual")?;
+                let visual_count = visual
+                    .get("confirmed_count")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                let captures = if visual_count > 0 {
+                    capture_particle_phases(config, output_dir, visual_count)?
+                } else {
+                    Value::Null
+                };
+                Ok(json!({
+                    "capacity": capacity,
+                    "visual": visual,
+                    "captures": captures,
+                }))
+            }
+            ParticleBenchmarkRun::Capacity => Ok(json!({
+                "capacity": profile_particle_preset(config, output_dir, "capacity")?,
+            })),
+            ParticleBenchmarkRun::Step => Ok(json!({
+                "step": run_particle_trial(
+                    config,
+                    output_dir,
+                    "capacity",
+                    PARTICLE_STEP_COUNT,
+                    PARTICLE_STEP_DURATION_SECS,
+                    "step",
+                )?,
+            })),
+        }
     })();
 
     let launcher_cleanup = restore_installed_screensaver_profile(config);
@@ -3702,8 +3743,13 @@ fn profile_installed_particles(config: &NativeDeviceConfig, output_dir: &Path) -
             );
         }
     };
+    let schema = match run {
+        ParticleBenchmarkRun::Complete => "mister-magik-particle-benchmark-v1",
+        ParticleBenchmarkRun::Capacity => "mister-magik-particle-capacity-benchmark-v1",
+        ParticleBenchmarkRun::Step => "mister-magik-particle-step-v1",
+    };
     let summary = json!({
-        "schema": "mister-magik-particle-benchmark-v1",
+        "schema": schema,
         "display": {
             "benchmark_mode": benchmark_mode.id,
             "framebuffer": "960x540",
@@ -3723,12 +3769,13 @@ fn profile_installed_particles(config: &NativeDeviceConfig, output_dir: &Path) -
             "capacity": results.get("capacity").cloned().unwrap_or(Value::Null),
             "visual": results.get("visual").cloned().unwrap_or(Value::Null),
         },
+        "step": results.get("step").cloned().unwrap_or(Value::Null),
         "captures": results.get("captures").cloned().unwrap_or(Value::Null),
         "boot_id": boot_id,
         "manifest": parse_manifest_evidence(&manifest),
         "output_dir": output_dir,
     });
-    persist_and_qualify_particle_benchmark(output_dir, &summary)
+    persist_and_qualify_particle_benchmark(output_dir, &summary, run)
 }
 
 fn profile_installed_particle_cpu(
@@ -4572,7 +4619,11 @@ fn verify_particle_benchmark_restoration(
     Ok(())
 }
 
-fn persist_and_qualify_particle_benchmark(output_dir: &Path, summary: &Value) -> Result<String> {
+fn persist_and_qualify_particle_benchmark(
+    output_dir: &Path,
+    summary: &Value,
+    run: ParticleBenchmarkRun,
+) -> Result<String> {
     fs::write(
         output_dir.join("summary.json"),
         format!("{}\n", serde_json::to_string_pretty(summary)?),
@@ -4581,15 +4632,26 @@ fn persist_and_qualify_particle_benchmark(output_dir: &Path, summary: &Value) ->
         output_dir.join("report.md"),
         particle_benchmark_report(summary),
     )?;
-    let failed = ["capacity", "visual"].into_iter().any(|preset| {
-        summary
-            .pointer(&format!("/presets/{preset}/confirmation/qualified"))
-            .and_then(Value::as_bool)
-            != Some(true)
-    });
+    let failed = match run {
+        ParticleBenchmarkRun::Complete => ["capacity", "visual"].into_iter().any(|preset| {
+            summary
+                .pointer(&format!("/presets/{preset}/confirmation/qualified"))
+                .and_then(Value::as_bool)
+                != Some(true)
+        }),
+        ParticleBenchmarkRun::Capacity => {
+            summary
+                .pointer("/presets/capacity/confirmation/qualified")
+                .and_then(Value::as_bool)
+                != Some(true)
+        }
+        ParticleBenchmarkRun::Step => {
+            summary.pointer("/step/qualified").and_then(Value::as_bool) != Some(true)
+        }
+    };
     if failed {
         return Err(format!(
-            "particle benchmark did not confirm both presets; evidence retained at {}",
+            "particle benchmark did not qualify; evidence retained at {}",
             output_dir.display()
         )
         .into());
@@ -4598,10 +4660,40 @@ fn persist_and_qualify_particle_benchmark(output_dir: &Path, summary: &Value) ->
 }
 
 fn particle_benchmark_report(summary: &Value) -> String {
+    if let Some(step) = summary.get("step").filter(|step| !step.is_null()) {
+        return format!(
+            "# Particle Optimisation Trial\n\n- Geometry: 960x540 RGB565\n- Presentation: direct hidden-slot latch\n- Preset: capacity\n- Particles: {}\n- Qualified: {}\n- Unique FPS: {:.6}\n- Process CPU: {:.2}% of one core\n- Renderer CPU: {:.2}% of one core\n- P99 render wall: {} us\n- Maximum render wall: {} us\n",
+            step.get("count").and_then(Value::as_u64).unwrap_or(0),
+            step.get("qualified")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            step.pointer("/physical_refresh/unique_fps")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0),
+            step.pointer("/cpu/process_pct_of_one_core")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0),
+            step.pointer("/cpu/renderer_pct_of_one_core")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0),
+            step.get("p99_render_wall_us")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            step.get("max_render_wall_us")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+        );
+    }
     let mut report = String::from(
         "# Particle Capacity Benchmark\n\n- Geometry: 960x540 RGB565\n- Presentation: direct hidden-slot latch\n\n## Confirmed ceilings\n\n",
     );
     for preset in ["capacity", "visual"] {
+        if summary
+            .pointer(&format!("/presets/{preset}"))
+            .is_none_or(Value::is_null)
+        {
+            continue;
+        }
         let count = summary
             .pointer(&format!("/presets/{preset}/confirmed_count"))
             .and_then(Value::as_u64)

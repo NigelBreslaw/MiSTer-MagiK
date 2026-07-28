@@ -62,6 +62,12 @@ fn require_clean_installed_commit(
         BenchmarkScenario::Particles => {
             execute_particles(&mut device, manifest, output_dir, reporter)
         }
+        BenchmarkScenario::ParticleCapacity => {
+            execute_particle_capacity(&mut device, manifest, output_dir, reporter)
+        }
+        BenchmarkScenario::ParticleStep => {
+            execute_particle_step(&mut device, manifest, output_dir, reporter)
+        }
         BenchmarkScenario::ParticleProfile => {
             execute_particle_profile(&mut device, manifest, output_dir, reporter)
         }
@@ -135,6 +141,80 @@ fn execute_particles(
     let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
     device.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))?;
     evaluate_particle_summary(&summary)?;
+    reporter.emit(
+        EventKind::Progress,
+        "benchmark-result",
+        &serde_json::to_string(&json!({
+            "installed_manifest": manifest,
+            "summary": summary,
+            "output_dir": output_dir,
+        }))
+        .map_err(|error| error.to_string())?,
+        Some(100),
+    )?;
+    Ok(Outcome::Passed)
+}
+
+fn execute_particle_capacity(
+    device: &mut DeviceClient,
+    manifest: String,
+    output_dir: std::path::PathBuf,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    reporter.emit(
+        EventKind::Progress,
+        "profile",
+        "measuring installed capacity-preset particle ceiling",
+        Some(20),
+    )?;
+    let detail = device.execute(DeviceRequest::ProfileInstalledParticleCapacity {
+        output_dir: output_dir.clone(),
+    })?;
+    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+    device.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))?;
+    if summary.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-particle-capacity-benchmark-v1")
+        || summary
+            .pointer("/presets/capacity/confirmation/qualified")
+            .and_then(Value::as_bool)
+            != Some(true)
+    {
+        return Err("particle capacity benchmark did not confirm a ceiling".into());
+    }
+    emit_benchmark_result(reporter, manifest, summary, output_dir)
+}
+
+fn execute_particle_step(
+    device: &mut DeviceClient,
+    manifest: String,
+    output_dir: std::path::PathBuf,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    reporter.emit(
+        EventKind::Progress,
+        "profile",
+        "measuring fixed 14,336-particle capacity trial",
+        Some(20),
+    )?;
+    let detail = device.execute(DeviceRequest::ProfileInstalledParticleStep {
+        output_dir: output_dir.clone(),
+    })?;
+    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+    device.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))?;
+    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-particle-step-v1")
+        || summary.pointer("/step/qualified").and_then(Value::as_bool) != Some(true)
+    {
+        return Err("fixed particle optimisation trial did not qualify".into());
+    }
+    emit_benchmark_result(reporter, manifest, summary, output_dir)
+}
+
+fn emit_benchmark_result(
+    reporter: &mut Reporter<'_>,
+    manifest: String,
+    summary: Value,
+    output_dir: std::path::PathBuf,
+) -> AgentResult<Outcome> {
     reporter.emit(
         EventKind::Progress,
         "benchmark-result",
