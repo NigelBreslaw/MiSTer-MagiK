@@ -212,6 +212,7 @@ pub struct ParticleEngine {
     cycle: u64,
     phase: ParticlePhase,
     use_neon: bool,
+    use_neon_projection: bool,
 }
 
 impl ParticleEngine {
@@ -252,6 +253,7 @@ impl ParticleEngine {
             cycle: 0,
             phase: ParticlePhase::Static,
             use_neon: particle_neon_enabled(),
+            use_neon_projection: particle_neon_projection_enabled(),
         };
         engine.initialize_particles(&target_points)?;
         Ok(engine)
@@ -345,7 +347,7 @@ impl ParticleEngine {
     pub fn project_offsets(&self, output: &mut [MaybeUninit<u32>]) -> usize {
         assert!(output.len() >= self.particle_count());
         #[cfg(target_arch = "arm")]
-        if self.use_neon {
+        if self.use_neon_projection {
             // SAFETY: the C kernel writes exactly one offset or sentinel for
             // every particle and never retains any supplied pointer.
             return unsafe { neon::project_offsets(self, output.as_mut_ptr().cast()) };
@@ -373,11 +375,16 @@ impl ParticleEngine {
 
     #[must_use]
     pub const fn projection_backend_label(&self) -> &'static str {
-        if self.use_neon {
+        if self.use_neon_projection {
             "armv7-neon-corrected"
         } else {
             "scalar-exact"
         }
+    }
+
+    #[must_use]
+    pub const fn uses_vector_projection(&self) -> bool {
+        self.use_neon_projection
     }
 
     #[must_use]
@@ -610,8 +617,20 @@ fn particle_neon_enabled() -> bool {
         .is_none_or(|value| !value.trim().eq_ignore_ascii_case("scalar"))
 }
 
+#[cfg(target_arch = "arm")]
+fn particle_neon_projection_enabled() -> bool {
+    std::env::var("MISTER_PARTICLE_PROJECTION")
+        .ok()
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("neon"))
+}
+
 #[cfg(not(target_arch = "arm"))]
 const fn particle_neon_enabled() -> bool {
+    false
+}
+
+#[cfg(not(target_arch = "arm"))]
+const fn particle_neon_projection_enabled() -> bool {
     false
 }
 
@@ -1004,6 +1023,10 @@ mod tests {
     #[test]
     fn packed_projection_offsets_match_the_exact_scalar_projection() {
         let mut engine = engine(131);
+        #[cfg(target_arch = "arm")]
+        {
+            engine.use_neon_projection = true;
+        }
         for milliseconds in [0, 2_000, 4_000, 5_000, 6_000, 7_000, 9_000] {
             engine.step(Duration::from_millis(milliseconds));
             let mut offsets = vec![MaybeUninit::uninit(); engine.particle_count()];
@@ -1170,7 +1193,9 @@ mod tests {
     #[cfg(not(target_arch = "arm"))]
     #[test]
     fn non_arm_builds_keep_the_scalar_reference_backend() {
-        assert_eq!(engine(7).simulation_backend_label(), "scalar");
+        let engine = engine(7);
+        assert_eq!(engine.simulation_backend_label(), "scalar");
+        assert_eq!(engine.projection_backend_label(), "scalar-exact");
     }
 
     #[cfg(target_arch = "arm")]

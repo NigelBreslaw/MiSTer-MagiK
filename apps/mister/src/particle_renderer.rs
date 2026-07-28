@@ -201,6 +201,20 @@ impl ParticleRenderer {
         destination: &mut [Rgb565Pixel],
         dirty_offsets: &mut Vec<u32>,
     ) -> usize {
+        if !self.engine.uses_vector_projection() {
+            let width = self.engine.config().width;
+            let mut visible = 0usize;
+            for index in 0..self.engine.particle_count() {
+                let Some(particle) = self.engine.project(index) else {
+                    continue;
+                };
+                visible += 1;
+                let offset = particle.y as usize * width + particle.x as usize;
+                destination[offset] = CAPACITY_COLOR;
+                dirty_offsets.push(offset as u32);
+            }
+            return visible;
+        }
         let count = self.engine.particle_count();
         assert!(dirty_offsets.capacity() >= count);
         let visible = self
