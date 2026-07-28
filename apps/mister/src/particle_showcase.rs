@@ -122,6 +122,16 @@ const ELECTRIC_PALETTE: [Rgb565Pixel; 8] = [
     Rgb565Pixel(0xdfff),
     Rgb565Pixel(0xffff),
 ];
+const WATER_PALETTE: [Rgb565Pixel; 8] = [
+    Rgb565Pixel(0x0809),
+    Rgb565Pixel(0x1012),
+    Rgb565Pixel(0x19da),
+    Rgb565Pixel(0x2b5f),
+    Rgb565Pixel(0x65ff),
+    Rgb565Pixel(0x9eff),
+    Rgb565Pixel(0xd7ff),
+    Rgb565Pixel(0xffff),
+];
 static PARTICLE_DEMO_NAVIGATION: AtomicI32 = AtomicI32::new(0);
 
 #[cfg(target_arch = "arm")]
@@ -578,6 +588,8 @@ impl ParticleShowcaseRenderer {
             self.initialize_particle_portal();
         } else if demo == ParticleDemoKind::ElectricStorm {
             self.initialize_electric_storm();
+        } else if demo == ParticleDemoKind::FountainWaterfall {
+            self.initialize_fountain_waterfall();
         }
     }
 
@@ -647,6 +659,7 @@ impl ParticleShowcaseRenderer {
             ParticleDemoKind::Weather => self.project_weather(elapsed),
             ParticleDemoKind::ParticlePortal => self.project_particle_portal(elapsed),
             ParticleDemoKind::ElectricStorm => self.project_electric_storm(elapsed),
+            ParticleDemoKind::FountainWaterfall => self.project_fountain_waterfall(elapsed),
             _ => self.project_diagnostic(elapsed),
         }
     }
@@ -703,7 +716,195 @@ impl ParticleShowcaseRenderer {
                 value if value < 22.0 => "return-stroke",
                 _ => "branches",
             },
+            ParticleDemoKind::FountainWaterfall => match seconds {
+                value if value < 9.0 => "fountain",
+                value if value < 13.0 => "morph",
+                value if value < 24.0 => "waterfall",
+                _ => "impact",
+            },
             _ => "diagnostic",
+        }
+    }
+
+    fn initialize_fountain_waterfall(&mut self) {
+        for index in 0..self.pool.active() {
+            let random = self.pool.random[index];
+            let angle = std::f32::consts::TAU * unit01(random.rotate_left(5));
+            let (sin_angle, cos_angle) = angle.sin_cos();
+            let radial_speed = 58.0 + unit01(random.rotate_left(15)) * 118.0;
+            self.pool.x[index] = unit_signed(random.rotate_left(25)) * 72.0;
+            self.pool.y[index] = unit_signed(random.rotate_left(9)) * 18.0;
+            self.pool.z[index] = unit_signed(random.rotate_left(19)) * 92.0;
+            self.pool.vx[index] = cos_angle * radial_speed;
+            self.pool.vy[index] = -285.0 - unit01(random.rotate_left(13)) * 150.0;
+            self.pool.vz[index] = sin_angle * radial_speed;
+            self.pool.age[index] = unit01(random.rotate_left(23)) * 2.4;
+            self.pool.life[index] = 0.78 + unit01(random.rotate_left(29)) * 0.54;
+            self.pool.style[index] = 2 + ((random >> 29) as u8).min(5);
+            self.pool.flags[index] = ((index / 4) % 8) as u8 | (u8::from(random & 127 == 0) << 4);
+        }
+    }
+
+    fn project_fountain_waterfall(&mut self, elapsed: Duration) -> usize {
+        self.commands.clear();
+        self.segments.clear();
+        let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
+        let mut clipped = 0usize;
+        for index in (0..self.pool.active()).step_by(4) {
+            let fountain = self.fountain_particle(index, seconds);
+            let waterfall = self.waterfall_particle(index, (seconds - 9.0).max(0.0));
+            let (world_x, world_y, world_z, style, neighbor) = if seconds < 9.0 {
+                fountain
+            } else if seconds < 13.0 {
+                let blend = ease_out_cubic((seconds - 9.0) * 0.25);
+                (
+                    fountain.0 + (waterfall.0 - fountain.0) * blend,
+                    fountain.1 + (waterfall.1 - fountain.1) * blend,
+                    fountain.2 + (waterfall.2 - fountain.2) * blend,
+                    if blend < 0.55 {
+                        fountain.3
+                    } else {
+                        waterfall.3
+                    },
+                    fountain.4 || waterfall.4,
+                )
+            } else {
+                self.waterfall_particle(index, seconds - 13.0)
+            };
+            let camera_x = if seconds < 9.0 {
+                0.0
+            } else {
+                ease_out_cubic(((seconds - 9.0) * 0.25).min(1.0)) * 72.0
+            };
+            if let Some((x, y)) = project_world(
+                world_x - camera_x,
+                world_y,
+                world_z,
+                self.config.width,
+                self.config.height,
+                610.0,
+            ) {
+                if !push_screen_command(
+                    &mut self.commands,
+                    self.config.width,
+                    self.config.height,
+                    x,
+                    y,
+                    style,
+                    neighbor,
+                ) {
+                    clipped = clipped.saturating_add(1);
+                }
+            } else {
+                self.commands.push(u32::MAX);
+                clipped = clipped.saturating_add(1);
+            }
+        }
+        if seconds < 11.0 {
+            self.append_fountain_basin(seconds);
+        }
+        if seconds >= 10.0 {
+            self.append_waterfall_edges(seconds);
+        }
+        clipped
+    }
+
+    fn fountain_particle(&self, index: usize, seconds: f32) -> (f32, f32, f32, u8, bool) {
+        let age = (seconds * self.pool.life[index] + self.pool.age[index]).rem_euclid(2.4);
+        let drag = 1.0 / (1.0 + age * 0.16);
+        let x = self.pool.vx[index] * age * drag;
+        let y = 196.0 + self.pool.vy[index] * age * drag + 118.0 * age * age;
+        let z = self.pool.vz[index] * age * drag;
+        let brightness = (7.0 - age * 1.45).clamp(2.0, 7.0) as u8;
+        (
+            x,
+            y,
+            z,
+            brightness,
+            self.pool.flags[index] & 16 != 0 || age < 0.08,
+        )
+    }
+
+    fn waterfall_particle(&self, index: usize, seconds: f32) -> (f32, f32, f32, u8, bool) {
+        let class = self.pool.flags[index] & 7;
+        let random_x = self.pool.x[index];
+        let random_z = self.pool.z[index];
+        if class <= 4 {
+            let age = (seconds * (0.88 + self.pool.life[index] * 0.2) + self.pool.age[index])
+                .rem_euclid(2.35);
+            let y = -214.0 + age * (118.0 + age * 86.0);
+            let curl = triangle_wave(age * 0.34 + self.pool.age[index]) * (5.0 + age * 7.0);
+            (
+                92.0 + random_x * 0.82 + curl,
+                y.min(202.0),
+                random_z * 0.72 + triangle_wave(age * 0.23) * 12.0,
+                (3.0 + self.pool.z[index].abs() * 0.035).clamp(3.0, 7.0) as u8,
+                self.pool.flags[index] & 16 != 0,
+            )
+        } else if class <= 6 {
+            let age = (seconds * (0.72 + self.pool.life[index] * 0.25) + self.pool.age[index])
+                .rem_euclid(1.55);
+            let spread = 0.62 + age * 0.54;
+            (
+                92.0 + self.pool.vx[index] * age * spread,
+                202.0 + self.pool.vy[index] * age * 0.26 + 118.0 * age * age,
+                self.pool.vz[index] * age * spread,
+                (7.0 - age * 2.0).clamp(3.0, 7.0) as u8,
+                age < 0.18,
+            )
+        } else {
+            let age = (seconds * (0.32 + self.pool.life[index] * 0.18) + self.pool.age[index])
+                .rem_euclid(3.8);
+            (
+                92.0 + random_x * (0.9 + age * 0.45)
+                    + triangle_wave(age * 0.19 + self.pool.life[index]) * 34.0,
+                205.0 - age * (24.0 + self.pool.life[index] * 17.0),
+                random_z * (0.65 + age * 0.2),
+                (5.0 - age * 0.55).clamp(1.0, 5.0) as u8,
+                self.pool.flags[index] & 16 != 0,
+            )
+        }
+    }
+
+    fn append_fountain_basin(&mut self, seconds: f32) {
+        let pulse = 1.0 + triangle_wave(seconds * 0.22) * 0.035;
+        for ring in 0..3 {
+            let radius_x = (116.0 + ring as f32 * 34.0) * pulse;
+            let radius_y = 17.0 + ring as f32 * 7.0;
+            for step in 0..48 {
+                let angle0 = std::f32::consts::TAU * step as f32 / 48.0;
+                let angle1 = std::f32::consts::TAU * (step + 1) as f32 / 48.0;
+                self.segments.push(ParticleShowcaseSegment {
+                    x0: (self.config.width as f32 * 0.5 + angle0.cos() * radius_x) as i16,
+                    y0: (self.config.height as f32 * 0.5 + 198.0 + angle0.sin() * radius_y) as i16,
+                    x1: (self.config.width as f32 * 0.5 + angle1.cos() * radius_x) as i16,
+                    y1: (self.config.height as f32 * 0.5 + 198.0 + angle1.sin() * radius_y) as i16,
+                    style: 2 + ring as u8,
+                });
+            }
+        }
+    }
+
+    fn append_waterfall_edges(&mut self, seconds: f32) {
+        let blend = ease_out_cubic(((seconds - 10.0) / 3.0).clamp(0.0, 1.0));
+        let center_x = self.config.width as f32 * 0.5 + 20.0;
+        let top_y = self.config.height as f32 * 0.5 - 214.0;
+        let bottom_y = self.config.height as f32 * 0.5 + 202.0;
+        for edge in [-1.0_f32, 1.0] {
+            let x = center_x + edge * 88.0 * blend;
+            let steps = 36;
+            for step in 0..steps {
+                let y0 = top_y + (bottom_y - top_y) * step as f32 / steps as f32;
+                let y1 = top_y + (bottom_y - top_y) * (step + 1) as f32 / steps as f32;
+                let ripple = triangle_wave(seconds * 0.19 + step as f32 * 0.17) * 5.0;
+                self.segments.push(ParticleShowcaseSegment {
+                    x0: (x + ripple) as i16,
+                    y0: y0 as i16,
+                    x1: (x - ripple) as i16,
+                    y1: y1 as i16,
+                    style: 4,
+                });
+            }
         }
     }
 
@@ -2007,6 +2208,7 @@ fn showcase_palette(demo: ParticleDemoKind) -> &'static [Rgb565Pixel; 8] {
         ParticleDemoKind::Weather => &WEATHER_PALETTE,
         ParticleDemoKind::ParticlePortal => &PORTAL_PALETTE,
         ParticleDemoKind::ElectricStorm => &ELECTRIC_PALETTE,
+        ParticleDemoKind::FountainWaterfall => &WATER_PALETTE,
         _ => &SHOWCASE_PALETTE,
     }
 }
@@ -2472,5 +2674,37 @@ mod tests {
                 .iter()
                 .all(|segment| i32::from(segment.y1) - i32::from(segment.y0) <= MAX_SEGMENT_PIXELS)
         );
+    }
+
+    #[test]
+    fn fountain_morphs_into_bounded_waterfall_with_impact_layers() {
+        let config = ParticleShowcaseConfig {
+            width: 960,
+            height: 540,
+            seed: 0x57a7_e2,
+            initial_demo: ParticleDemoKind::FountainWaterfall,
+        };
+        let mut fountain = ParticleShowcaseRenderer::new(config).unwrap();
+        let mut waterfall = ParticleShowcaseRenderer::new(config).unwrap();
+        let mut destination = vec![Rgb565Pixel(0); 960 * 540];
+
+        let fountain_stats = fountain
+            .render(&mut destination, 1, Duration::from_secs(6))
+            .unwrap();
+        let waterfall_stats = waterfall
+            .render(&mut destination, 1, Duration::from_secs(26))
+            .unwrap();
+
+        assert_eq!(fountain_stats.beat, "fountain");
+        assert_eq!(waterfall_stats.beat, "impact");
+        assert_eq!(fountain.commands.len(), fountain.pool.active() / 4);
+        assert_eq!(waterfall.commands.len(), waterfall.pool.active() / 4);
+        assert!(fountain_stats.segment_count >= 120);
+        assert!(waterfall_stats.segment_count >= 64);
+        assert!(fountain_stats.visible > fountain.pool.active() / 8);
+        assert!(waterfall_stats.visible > waterfall.pool.active() / 8);
+        assert!(waterfall.segments.iter().all(|segment| {
+            (i32::from(segment.y1) - i32::from(segment.y0)).abs() <= MAX_SEGMENT_PIXELS
+        }));
     }
 }
