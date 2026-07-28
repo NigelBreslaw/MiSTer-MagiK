@@ -24,6 +24,8 @@ const HUD_X: isize = 8;
 const HUD_BASELINE_Y: isize = 14;
 const HUD_W: usize = 232;
 const HUD_H: usize = 18;
+const MAX_SEGMENT_PIXELS: i32 = 12;
+const SEGMENT_CAPACITY: usize = 32_768;
 const SHOWCASE_PALETTE: [Rgb565Pixel; 8] = [
     Rgb565Pixel(0x18c3),
     Rgb565Pixel(0x31a6),
@@ -199,10 +201,31 @@ pub struct ParticleShowcaseRenderer {
     demo_started_at: Duration,
     pool: ParticleShowcasePool,
     commands: Vec<u32>,
+    segments: Vec<ParticleShowcaseSegment>,
+    transition: ParticleShowcaseTransition,
+    transition_started_at: Option<Duration>,
     dirty_slots: [ParticleShowcaseDirtySlot; HIDDEN_SLOT_COUNT],
     hud_font: ConsoleFont,
     hud_pixels: Vec<Pixel>,
     renderer_scratch_bytes: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct ParticleShowcaseSegment {
+    x0: i16,
+    y0: i16,
+    x1: i16,
+    y1: i16,
+    style: u8,
+}
+
+struct ParticleShowcaseTransition {
+    count: usize,
+    x: Vec<f32>,
+    y: Vec<f32>,
+    vx: Vec<f32>,
+    vy: Vec<f32>,
+    style: Vec<u8>,
 }
 
 struct ParticleShowcaseDirtySlot {
@@ -214,7 +237,9 @@ impl ParticleShowcaseRenderer {
     pub fn new(config: ParticleShowcaseConfig) -> Result<Self, String> {
         let config = config.validate()?;
         let pool = ParticleShowcasePool::new();
-        let commands = Vec::with_capacity(PARTICLE_DEMO_MAX_COUNT);
+        let commands = Vec::with_capacity(PARTICLE_DEMO_MAX_COUNT + PARTICLE_DEMO_TRANSITION_COUNT);
+        let segments = Vec::with_capacity(SEGMENT_CAPACITY);
+        let transition = ParticleShowcaseTransition::new();
         let dirty_slots = std::array::from_fn(|_| ParticleShowcaseDirtySlot {
             initialized: false,
             offsets: Vec::with_capacity(PARTICLE_DEMO_MAX_COUNT.saturating_mul(2)),
@@ -254,13 +279,22 @@ impl ParticleShowcaseRenderer {
                 hud_pixels
                     .capacity()
                     .saturating_mul(std::mem::size_of::<Pixel>()),
-            );
+            )
+            .saturating_add(
+                segments
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<ParticleShowcaseSegment>()),
+            )
+            .saturating_add(transition.allocated_bytes());
         let mut renderer = Self {
             config,
             demo: config.initial_demo,
             demo_started_at: Duration::ZERO,
             pool,
             commands,
+            segments,
+            transition,
+            transition_started_at: None,
             dirty_slots,
             hud_font,
             hud_pixels,
@@ -304,13 +338,21 @@ impl ParticleShowcaseRenderer {
 
         let projection_started = Instant::now();
         let projection_cpu_started = thread_cpu_time_us();
-        let clipped_commands = self.project_diagnostic(elapsed);
+        let mut clipped_commands = self.project_diagnostic(elapsed);
         let projection_us = projection_started.elapsed().as_micros();
         let projection_cpu_us = elapsed_thread_cpu_us(projection_cpu_started);
 
+        let geometry_started = Instant::now();
+        clipped_commands =
+            clipped_commands.saturating_add(self.append_transition_commands(elapsed));
+        let geometry_us = geometry_started.elapsed().as_micros();
+
         let raster_started = Instant::now();
         let raster_cpu_started = thread_cpu_time_us();
-        let (visible, attempted_pixel_writes) = self.raster_points(destination, &mut dirty_offsets);
+        let (visible, mut attempted_pixel_writes) =
+            self.raster_points(destination, &mut dirty_offsets);
+        attempted_pixel_writes = attempted_pixel_writes
+            .saturating_add(self.raster_segments(destination, &mut dirty_offsets));
         self.draw_hud(destination, &mut dirty_offsets);
         let raster_us = raster_started.elapsed().as_micros();
         let raster_cpu_us = elapsed_thread_cpu_us(raster_cpu_started);
@@ -318,19 +360,23 @@ impl ParticleShowcaseRenderer {
         self.dirty_slots[slot].offsets = dirty_offsets;
         Ok(ParticleShowcaseRenderStats {
             demo: self.demo,
-            beat: "diagnostic",
+            beat: if self.transition_started_at.is_some() {
+                "transition"
+            } else {
+                "diagnostic"
+            },
             count: self.pool.active(),
             visible,
             simulation_us: 0,
             simulation_cpu_us: 0,
             projection_us,
             projection_cpu_us,
-            geometry_us: 0,
+            geometry_us,
             clear_us,
             clear_cpu_us,
             raster_us,
             raster_cpu_us,
-            segment_count: 0,
+            segment_count: self.segments.len(),
             attempted_pixel_writes,
             clipped_commands,
             simulation_bytes: self.pool.allocated_bytes(),
@@ -348,12 +394,14 @@ impl ParticleShowcaseRenderer {
     fn apply_navigation(&mut self, elapsed: Duration) {
         let delta = PARTICLE_DEMO_NAVIGATION.swap(0, Ordering::AcqRel);
         if delta != 0 {
+            self.begin_transition(elapsed);
             self.reset_demo(self.demo.offset_wrapped(delta), elapsed);
             return;
         }
         let demo_elapsed = elapsed.saturating_sub(self.demo_started_at);
         if demo_elapsed >= PARTICLE_DEMO_DURATION {
             let advances = (demo_elapsed.as_micros() / PARTICLE_DEMO_DURATION.as_micros()) as i32;
+            self.begin_transition(elapsed);
             self.reset_demo(self.demo.offset_wrapped(advances), elapsed);
         }
     }
@@ -390,6 +438,7 @@ impl ParticleShowcaseRenderer {
 
     fn project_diagnostic(&mut self, elapsed: Duration) -> usize {
         self.commands.clear();
+        self.segments.clear();
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
         let (sin_y, cos_y) = (seconds * 0.08).sin_cos();
         let center_x = self.config.width as f32 * 0.5;
@@ -425,6 +474,97 @@ impl ParticleShowcaseRenderer {
             self.commands.push(offset as u32 | style | neighbor);
         }
         clipped
+    }
+
+    fn begin_transition(&mut self, elapsed: Duration) {
+        let visible = self
+            .commands
+            .iter()
+            .filter(|command| **command != u32::MAX)
+            .count();
+        if visible == 0 {
+            self.transition.count = 0;
+            self.transition_started_at = None;
+            return;
+        }
+        let count = visible.min(PARTICLE_DEMO_TRANSITION_COUNT);
+        let stride = visible.div_ceil(count);
+        let mut source_index = 0usize;
+        let mut transition_index = 0usize;
+        while transition_index < count && source_index < self.commands.len() {
+            let command = self.commands[source_index];
+            source_index = source_index.saturating_add(stride);
+            if command == u32::MAX {
+                continue;
+            }
+            let offset = (command & COMMAND_OFFSET_MASK) as usize;
+            let x = (offset % self.config.width) as f32;
+            let y = (offset / self.config.width) as f32;
+            let dx = x - self.config.width as f32 * 0.5;
+            let dy = y - self.config.height as f32 * 0.5;
+            let inverse_length = (dx.mul_add(dx, dy * dy)).sqrt().max(1.0).recip();
+            let jitter =
+                unit_signed(self.pool.random[transition_index % self.pool.active()].rotate_left(7));
+            self.transition.x[transition_index] = x;
+            self.transition.y[transition_index] = y;
+            self.transition.vx[transition_index] = dx * inverse_length * (38.0 + jitter * 12.0);
+            self.transition.vy[transition_index] =
+                dy * inverse_length * (38.0 + jitter * 12.0) - 8.0;
+            self.transition.style[transition_index] = ((command >> COMMAND_STYLE_SHIFT) & 7) as u8;
+            transition_index += 1;
+        }
+        self.transition.count = transition_index;
+        self.transition_started_at = (transition_index > 0).then_some(elapsed);
+    }
+
+    fn append_transition_commands(&mut self, elapsed: Duration) -> usize {
+        let Some(started) = self.transition_started_at else {
+            return 0;
+        };
+        let age = elapsed.saturating_sub(started);
+        if age >= PARTICLE_DEMO_TRANSITION_DURATION {
+            self.transition.count = 0;
+            self.transition_started_at = None;
+            return 0;
+        }
+        let t = age.as_secs_f32();
+        let life = 1.0 - age.as_secs_f32() / PARTICLE_DEMO_TRANSITION_DURATION.as_secs_f32();
+        let mut clipped = 0usize;
+        for index in 0..self.transition.count {
+            if (index & 3) as f32 > life * 4.0 {
+                continue;
+            }
+            let x = self.transition.x[index] + self.transition.vx[index] * t;
+            let y = self.transition.y[index] + self.transition.vy[index] * t + 28.0 * t * t;
+            if x < 0.0 || y < 0.0 || x >= self.config.width as f32 || y >= self.config.height as f32
+            {
+                clipped = clipped.saturating_add(1);
+                continue;
+            }
+            let offset = y as usize * self.config.width + x as usize;
+            let style = self.transition.style[index].min((life * 7.0) as u8);
+            self.commands
+                .push(offset as u32 | u32::from(style) << COMMAND_STYLE_SHIFT);
+        }
+        clipped
+    }
+
+    fn raster_segments(
+        &self,
+        destination: &mut [Rgb565Pixel],
+        dirty_offsets: &mut Vec<u32>,
+    ) -> usize {
+        let mut writes = 0usize;
+        for segment in &self.segments {
+            writes = writes.saturating_add(raster_bounded_segment(
+                destination,
+                dirty_offsets,
+                self.config.width,
+                self.config.height,
+                *segment,
+            ));
+        }
+        writes
     }
 
     fn raster_points(
@@ -478,6 +618,25 @@ impl ParticleShowcaseRenderer {
                 }
             }
         }
+    }
+}
+
+impl ParticleShowcaseTransition {
+    fn new() -> Self {
+        Self {
+            count: 0,
+            x: vec![0.0; PARTICLE_DEMO_TRANSITION_COUNT],
+            y: vec![0.0; PARTICLE_DEMO_TRANSITION_COUNT],
+            vx: vec![0.0; PARTICLE_DEMO_TRANSITION_COUNT],
+            vy: vec![0.0; PARTICLE_DEMO_TRANSITION_COUNT],
+            style: vec![0; PARTICLE_DEMO_TRANSITION_COUNT],
+        }
+    }
+
+    fn allocated_bytes(&self) -> usize {
+        (self.x.capacity() + self.y.capacity() + self.vx.capacity() + self.vy.capacity())
+            .saturating_mul(std::mem::size_of::<f32>())
+            .saturating_add(self.style.capacity())
     }
 }
 
@@ -625,6 +784,46 @@ fn pixel_to_rgb565(pixel: Pixel) -> Rgb565Pixel {
     Rgb565Pixel(((red >> 3) << 11 | (green >> 2) << 5 | (blue >> 3)) as u16)
 }
 
+fn raster_bounded_segment(
+    destination: &mut [Rgb565Pixel],
+    dirty_offsets: &mut Vec<u32>,
+    width: usize,
+    height: usize,
+    segment: ParticleShowcaseSegment,
+) -> usize {
+    let mut x = i32::from(segment.x0);
+    let mut y = i32::from(segment.y0);
+    let end_x = i32::from(segment.x1);
+    let end_y = i32::from(segment.y1);
+    let dx = (end_x - x).abs();
+    let sx = if x < end_x { 1 } else { -1 };
+    let dy = -(end_y - y).abs();
+    let sy = if y < end_y { 1 } else { -1 };
+    let mut error = dx + dy;
+    let mut writes = 0usize;
+    for _ in 0..MAX_SEGMENT_PIXELS {
+        if x >= 0 && y >= 0 && x < width as i32 && y < height as i32 {
+            let offset = y as usize * width + x as usize;
+            destination[offset] = SHOWCASE_PALETTE[usize::from(segment.style.min(7))];
+            dirty_offsets.push(offset as u32);
+            writes = writes.saturating_add(1);
+        }
+        if x == end_x && y == end_y {
+            break;
+        }
+        let doubled = error * 2;
+        if doubled >= dy {
+            error += dy;
+            x += sx;
+        }
+        if doubled <= dx {
+            error += dx;
+            y += sy;
+        }
+    }
+    writes
+}
+
 #[cfg(target_os = "linux")]
 fn thread_cpu_time_us() -> Option<u64> {
     let mut time = std::mem::MaybeUninit::<libc::timespec>::uninit();
@@ -756,5 +955,26 @@ mod tests {
                 .render(&mut destination, 0, Duration::ZERO)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn bounded_segments_clip_and_never_exceed_the_pixel_limit() {
+        let mut destination = vec![Rgb565Pixel(0); 16 * 16];
+        let mut dirty = Vec::new();
+        let writes = raster_bounded_segment(
+            &mut destination,
+            &mut dirty,
+            16,
+            16,
+            ParticleShowcaseSegment {
+                x0: -4,
+                y0: 8,
+                x1: 30,
+                y1: 8,
+                style: 7,
+            },
+        );
+        assert!(writes <= MAX_SEGMENT_PIXELS as usize);
+        assert!(dirty.iter().all(|offset| *offset < 16 * 16));
     }
 }
