@@ -767,7 +767,7 @@ impl ParticleShowcaseRenderer {
     fn project_weather_ash(&mut self, seconds: f32) -> usize {
         let mut clipped = 0usize;
         let wind = triangle_wave(seconds * 0.07) * 55.0;
-        for index in (0..self.pool.active()).step_by(4) {
+        for index in (0..self.pool.active()).step_by(8) {
             let age = (seconds * self.pool.life[index] + self.pool.age[index]).rem_euclid(6.4);
             let layer = 0.68 + self.pool.z[index] * 0.7;
             let rise = 570.0 - age * (62.0 + self.pool.z[index] * 42.0);
