@@ -4,6 +4,7 @@
 //! Shared data model for the interactive ARM particle showcase.
 
 use crate::bitmap_text::{ConsoleFont, ConsoleTypeface};
+use crate::framebuffer::mapped::Pixel;
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, Instant};
@@ -200,6 +201,7 @@ pub struct ParticleShowcaseRenderer {
     commands: Vec<u32>,
     dirty_slots: [ParticleShowcaseDirtySlot; HIDDEN_SLOT_COUNT],
     hud_font: ConsoleFont,
+    hud_pixels: Vec<Pixel>,
     renderer_scratch_bytes: usize,
 }
 
@@ -217,6 +219,24 @@ impl ParticleShowcaseRenderer {
             initialized: false,
             offsets: Vec::with_capacity(PARTICLE_DEMO_MAX_COUNT.saturating_mul(2)),
         });
+        let mut hud_font =
+            ConsoleFont::new_with_typeface(HUD_FONT_PX, ConsoleTypeface::PressStart2P);
+        let mut hud_pixels = vec![Pixel(0); HUD_W * HUD_H];
+        for kind in ParticleDemoKind::ALL {
+            hud_pixels.fill(Pixel(0));
+            hud_font.draw_text_clipped(
+                &mut hud_pixels,
+                HUD_W,
+                HUD_W,
+                0,
+                HUD_H,
+                0,
+                HUD_BASELINE_Y,
+                kind.hud_label(),
+                Pixel(0x00bd_baff),
+            );
+        }
+        hud_pixels.fill(Pixel(0));
         let renderer_scratch_bytes = commands
             .capacity()
             .saturating_mul(std::mem::size_of::<u32>())
@@ -229,6 +249,11 @@ impl ParticleShowcaseRenderer {
                             .saturating_mul(std::mem::size_of::<u32>())
                     })
                     .sum::<usize>(),
+            )
+            .saturating_add(
+                hud_pixels
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<Pixel>()),
             );
         let mut renderer = Self {
             config,
@@ -237,7 +262,8 @@ impl ParticleShowcaseRenderer {
             pool,
             commands,
             dirty_slots,
-            hud_font: ConsoleFont::new_with_typeface(HUD_FONT_PX, ConsoleTypeface::PressStart2P),
+            hud_font,
+            hud_pixels,
             renderer_scratch_bytes,
         };
         renderer.reset_demo(config.initial_demo, Duration::ZERO);
@@ -428,23 +454,26 @@ impl ParticleShowcaseRenderer {
     }
 
     fn draw_hud(&mut self, destination: &mut [Rgb565Pixel], dirty_offsets: &mut Vec<u32>) {
+        self.hud_pixels.fill(Pixel(0));
         self.hud_font.draw_text_clipped(
-            destination,
-            self.config.width,
-            self.config.width,
+            &mut self.hud_pixels,
+            HUD_W,
+            HUD_W,
             0,
-            self.config.height,
-            HUD_X,
+            HUD_H,
+            0,
             HUD_BASELINE_Y,
             self.demo.hud_label(),
-            Rgb565Pixel(0xbdf7),
+            Pixel(0x00bd_baff),
         );
         let max_x = (HUD_X as usize + HUD_W).min(self.config.width);
         for y in 0..HUD_H.min(self.config.height) {
             let row = y * self.config.width;
             for x in HUD_X as usize..max_x {
                 let offset = row + x;
-                if destination[offset].0 != 0 {
+                let source = self.hud_pixels[y * HUD_W + x - HUD_X as usize];
+                if source.0 != 0 {
+                    destination[offset] = pixel_to_rgb565(source);
                     dirty_offsets.push(offset as u32);
                 }
             }
@@ -587,6 +616,13 @@ fn hidden_slot_offset(hidden_slot: u8) -> Result<usize, String> {
             "particle showcase hidden slot must be 1 or 2, received {hidden_slot}"
         )),
     }
+}
+
+fn pixel_to_rgb565(pixel: Pixel) -> Rgb565Pixel {
+    let red = (pixel.0 >> 16) & 0xff;
+    let green = (pixel.0 >> 8) & 0xff;
+    let blue = pixel.0 & 0xff;
+    Rgb565Pixel(((red >> 3) << 11 | (green >> 2) << 5 | (blue >> 3)) as u16)
 }
 
 #[cfg(target_os = "linux")]
