@@ -967,13 +967,28 @@ mod tests {
             }
         });
         assert!(telemetry_contains_particle_frame(
-            &sample, "capacity", 65_536
+            &sample,
+            "particle-magik",
+            "capacity",
+            65_536
         ));
         assert!(!telemetry_contains_particle_frame(
-            &sample, "visual", 65_536
+            &sample,
+            "particle-demos",
+            "capacity",
+            65_536
         ));
         assert!(!telemetry_contains_particle_frame(
-            &sample, "capacity", 66_560
+            &sample,
+            "particle-magik",
+            "visual",
+            65_536
+        ));
+        assert!(!telemetry_contains_particle_frame(
+            &sample,
+            "particle-magik",
+            "capacity",
+            66_560
         ));
     }
 
