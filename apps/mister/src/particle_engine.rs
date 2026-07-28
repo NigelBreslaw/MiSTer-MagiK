@@ -14,6 +14,8 @@ const HOLD_END_US: u64 = 8_000_000;
 const CYCLE_US: u64 = 10_000_000;
 const MAX_STEP_SECONDS: f32 = 1.0 / 15.0;
 const DEPTH_EXTENT: f32 = 64.0;
+const DEPTH_FIXED_SCALE: f32 = 128.0;
+const DEPTH_FIXED_SCALE_RECIP: f32 = 1.0 / DEPTH_FIXED_SCALE;
 const FOCAL_LENGTH: f32 = 720.0;
 const TARGET_FIXED_SCALE: f32 = 16.0;
 const TARGET_FIXED_SCALE_RECIP: f32 = 1.0 / TARGET_FIXED_SCALE;
@@ -203,7 +205,7 @@ pub struct ParticleEngine {
     target_depth_q2: Vec<i8>,
     x: Vec<f32>,
     y: Vec<f32>,
-    z: Vec<f32>,
+    z_q7: Vec<i16>,
     vx: Vec<f32>,
     vy: Vec<f32>,
     vz: Vec<f32>,
@@ -247,7 +249,7 @@ impl ParticleEngine {
             target_depth_q2: Vec::with_capacity(config.count),
             x: Vec::with_capacity(config.count),
             y: Vec::with_capacity(config.count),
-            z: Vec::with_capacity(config.count),
+            z_q7: Vec::with_capacity(config.count),
             vx: Vec::with_capacity(config.count),
             vy: Vec::with_capacity(config.count),
             vz: Vec::with_capacity(config.count),
@@ -282,7 +284,7 @@ impl ParticleEngine {
 
     #[must_use]
     pub const fn bytes_per_particle() -> usize {
-        8 * std::mem::size_of::<u32>() + std::mem::size_of::<i8>()
+        7 * std::mem::size_of::<u32>() + std::mem::size_of::<i16>() + std::mem::size_of::<i8>()
     }
 
     pub fn step(&mut self, elapsed: Duration) -> ParticleFrameStats {
@@ -336,7 +338,7 @@ impl ParticleEngine {
     pub fn project(&self, index: usize) -> Option<ProjectedParticle> {
         let (rotated_x, rotated_z) = rotate_xz(
             self.x[index] - self.projection_center_x,
-            self.z[index],
+            self.depth(index),
             self.rotation_y_sin,
             self.rotation_y_cos,
         );
@@ -441,7 +443,7 @@ impl ParticleEngine {
             self.random_states.push(seed);
             self.x.push(0.0);
             self.y.push(0.0);
-            self.z.push(0.0);
+            self.z_q7.push(0);
             self.vx.push(0.0);
             self.vy.push(0.0);
             self.vz.push(0.0);
@@ -457,7 +459,7 @@ impl ParticleEngine {
             let seed = self.random_states[index];
             self.x[index] = unit_float(mix32(seed ^ 0xa511_e9b3)) * width;
             self.y[index] = unit_float(mix32(seed ^ 0x63d8_3595)) * height;
-            self.z[index] = signed_unit(mix32(seed ^ 0x7f4a_7c15)) * DEPTH_EXTENT;
+            self.z_q7[index] = pack_depth(signed_unit(mix32(seed ^ 0x7f4a_7c15)) * DEPTH_EXTENT);
             self.vx[index] = signed_unit(mix32(seed ^ 0x94d0_49bb)) * 42.0;
             self.vy[index] = signed_unit(mix32(seed ^ 0x2c1b_3c6d)) * 42.0;
             self.vz[index] = signed_unit(mix32(seed ^ 0x297a_2d39)) * 10.0;
@@ -514,7 +516,8 @@ impl ParticleEngine {
             self.vz[index] = vz;
             self.x[index] = wrap_coordinate(self.x[index] + vx * delta, width);
             self.y[index] = wrap_coordinate(self.y[index] + vy * delta, height);
-            self.z[index] = (self.z[index] + vz * delta).clamp(-DEPTH_EXTENT, DEPTH_EXTENT);
+            let next_z = (self.depth(index) + vz * delta).clamp(-DEPTH_EXTENT, DEPTH_EXTENT);
+            self.z_q7[index] = pack_depth(next_z);
         }
     }
 
@@ -539,7 +542,7 @@ impl ParticleEngine {
             let (target_x, target_y, target_z) = self.target_components(index);
             let x = self.x[index];
             let y = self.y[index];
-            let z = self.z[index];
+            let z = self.depth(index);
             let vx = (self.vx[index] + (target_x + jitter_x * 0.08 - x) * 18.0 * delta) * 0.88;
             let vy = (self.vy[index] + (target_y + jitter_y * 0.08 - y) * 18.0 * delta) * 0.88;
             let vz = (self.vz[index] + (target_z - z) * 18.0 * delta) * 0.88;
@@ -548,7 +551,7 @@ impl ParticleEngine {
             self.vz[index] = vz;
             self.x[index] = x + vx * delta;
             self.y[index] = y + vy * delta;
-            self.z[index] = (z + vz * delta).clamp(-DEPTH_EXTENT, DEPTH_EXTENT);
+            self.z_q7[index] = pack_depth((z + vz * delta).clamp(-DEPTH_EXTENT, DEPTH_EXTENT));
         }
     }
 
@@ -573,7 +576,7 @@ impl ParticleEngine {
             let (target_x, target_y, target_z) = self.target_components(index);
             let x = self.x[index];
             let y = self.y[index];
-            let z = self.z[index];
+            let z = self.depth(index);
             let vx = (self.vx[index] + (target_x + jitter_x * 0.35 - x) * 34.0 * delta) * 0.78;
             let vy = (self.vy[index] + (target_y + jitter_y * 0.35 - y) * 34.0 * delta) * 0.78;
             let vz = (self.vz[index] + (target_z - z) * 34.0 * delta) * 0.78;
@@ -582,7 +585,7 @@ impl ParticleEngine {
             self.vz[index] = vz;
             self.x[index] = x + vx * delta;
             self.y[index] = y + vy * delta;
-            self.z[index] = (z + vz * delta).clamp(-DEPTH_EXTENT, DEPTH_EXTENT);
+            self.z_q7[index] = pack_depth((z + vz * delta).clamp(-DEPTH_EXTENT, DEPTH_EXTENT));
         }
     }
 
@@ -607,7 +610,7 @@ impl ParticleEngine {
             let (target_x, target_y, _) = self.target_components(index);
             let x = self.x[index];
             let y = self.y[index];
-            let z = self.z[index];
+            let z = self.depth(index);
             let vx = (self.vx[index] + ((x - target_x) * 2.2 + jitter_x * 115.0) * delta) * 0.99;
             let vy = (self.vy[index] + ((y - target_y) * 2.2 + jitter_y * 115.0) * delta) * 0.99;
             let vz = (self.vz[index] + signed_unit(noise.rotate_left(21)) * 55.0 * delta) * 0.99;
@@ -616,7 +619,7 @@ impl ParticleEngine {
             self.vz[index] = vz;
             self.x[index] = x + vx * delta;
             self.y[index] = y + vy * delta;
-            self.z[index] = (z + vz * delta).clamp(-DEPTH_EXTENT, DEPTH_EXTENT);
+            self.z_q7[index] = pack_depth((z + vz * delta).clamp(-DEPTH_EXTENT, DEPTH_EXTENT));
         }
     }
 
@@ -628,6 +631,11 @@ impl ParticleEngine {
             target.y,
             f32::from(self.target_depth_q2[index]) * TARGET_DEPTH_Q2_RECIP,
         )
+    }
+
+    #[inline(always)]
+    fn depth(&self, index: usize) -> f32 {
+        f32::from(self.z_q7[index]) * DEPTH_FIXED_SCALE_RECIP
     }
 
     #[cfg(test)]
@@ -687,7 +695,7 @@ mod neon {
             random_states: *mut u32,
             x: *mut f32,
             y: *mut f32,
-            z: *mut f32,
+            z_q7: *mut i16,
             vx: *mut f32,
             vy: *mut f32,
             vz: *mut f32,
@@ -703,7 +711,7 @@ mod neon {
             random_states: *mut u32,
             x: *mut f32,
             y: *mut f32,
-            z: *mut f32,
+            z_q7: *mut i16,
             vx: *mut f32,
             vy: *mut f32,
             vz: *mut f32,
@@ -715,7 +723,7 @@ mod neon {
             random_states: *mut u32,
             x: *mut f32,
             y: *mut f32,
-            z: *mut f32,
+            z_q7: *mut i16,
             vx: *mut f32,
             vy: *mut f32,
             vz: *mut f32,
@@ -731,7 +739,7 @@ mod neon {
             rotation_y_cos: f32,
             x: *const f32,
             y: *const f32,
-            z: *const f32,
+            z_q7: *const i16,
             offsets: *mut u32,
         ) -> usize;
     }
@@ -750,7 +758,7 @@ mod neon {
                 engine.random_states.as_mut_ptr().add(range.start),
                 engine.x.as_mut_ptr().add(range.start),
                 engine.y.as_mut_ptr().add(range.start),
-                engine.z.as_mut_ptr().add(range.start),
+                engine.z_q7.as_mut_ptr().add(range.start),
                 engine.vx.as_mut_ptr().add(range.start),
                 engine.vy.as_mut_ptr().add(range.start),
                 engine.vz.as_mut_ptr().add(range.start),
@@ -779,7 +787,7 @@ mod neon {
                 engine.random_states.as_mut_ptr().add(range.start),
                 engine.x.as_mut_ptr().add(range.start),
                 engine.y.as_mut_ptr().add(range.start),
-                engine.z.as_mut_ptr().add(range.start),
+                engine.z_q7.as_mut_ptr().add(range.start),
                 engine.vx.as_mut_ptr().add(range.start),
                 engine.vy.as_mut_ptr().add(range.start),
                 engine.vz.as_mut_ptr().add(range.start),
@@ -801,7 +809,7 @@ mod neon {
                 engine.random_states.as_mut_ptr().add(range.start),
                 engine.x.as_mut_ptr().add(range.start),
                 engine.y.as_mut_ptr().add(range.start),
-                engine.z.as_mut_ptr().add(range.start),
+                engine.z_q7.as_mut_ptr().add(range.start),
                 engine.vx.as_mut_ptr().add(range.start),
                 engine.vy.as_mut_ptr().add(range.start),
                 engine.vz.as_mut_ptr().add(range.start),
@@ -823,7 +831,7 @@ mod neon {
                 engine.rotation_y_cos,
                 engine.x.as_ptr(),
                 engine.y.as_ptr(),
-                engine.z.as_ptr(),
+                engine.z_q7.as_ptr(),
                 offsets,
             )
         }
@@ -878,6 +886,13 @@ fn next_random(state: &mut u32) -> u32 {
 fn distributed_target_depth_q2(value: u32) -> i8 {
     let level = (u64::from(value) * TARGET_DEPTH_LEVELS) >> 32;
     (level as i16 - i16::from(TARGET_DEPTH_Q2_HALF_EXTENT)) as i8
+}
+
+#[inline(always)]
+fn pack_depth(value: f32) -> i16 {
+    debug_assert!(value.is_finite());
+    debug_assert!((-DEPTH_EXTENT..=DEPTH_EXTENT).contains(&value));
+    (value * DEPTH_FIXED_SCALE).round() as i16
 }
 
 fn rotation_y_at_cycle_us(cycle_us: u64) -> f32 {
@@ -1043,7 +1058,7 @@ mod tests {
         let mut engine = engine(1);
         engine.x[0] = engine.projection_center_x;
         engine.y[0] = engine.projection_center_y;
-        engine.z[0] = 0.0;
+        engine.z_q7[0] = pack_depth(0.0);
         for angle in [
             0.0,
             std::f32::consts::FRAC_PI_2,
@@ -1063,8 +1078,8 @@ mod tests {
         let mut engine = engine(2);
         engine.x.fill(engine.projection_center_x + 8.0);
         engine.y.fill(engine.projection_center_y);
-        engine.z[0] = -DEPTH_EXTENT;
-        engine.z[1] = DEPTH_EXTENT;
+        engine.z_q7[0] = pack_depth(-DEPTH_EXTENT);
+        engine.z_q7[1] = pack_depth(DEPTH_EXTENT);
         let near = engine.project(0).unwrap();
         let far = engine.project(1).unwrap();
         assert!(near.x > far.x);
@@ -1119,7 +1134,7 @@ mod tests {
         let capacities = (
             engine.x.capacity(),
             engine.y.capacity(),
-            engine.z.capacity(),
+            engine.z_q7.capacity(),
             engine.vx.capacity(),
             engine.vy.capacity(),
             engine.vz.capacity(),
@@ -1133,7 +1148,7 @@ mod tests {
             (
                 engine.x.capacity(),
                 engine.y.capacity(),
-                engine.z.capacity(),
+                engine.z_q7.capacity(),
                 engine.vx.capacity(),
                 engine.vy.capacity(),
                 engine.vz.capacity(),
@@ -1149,7 +1164,7 @@ mod tests {
         let first = engine(16_384);
         let second = engine(16_384);
         assert_eq!(first.target_depth_q2, second.target_depth_q2);
-        assert_eq!(ParticleEngine::bytes_per_particle(), 33);
+        assert_eq!(ParticleEngine::bytes_per_particle(), 31);
         let mut levels = [0usize; TARGET_DEPTH_LEVELS as usize];
         for &depth in &first.target_depth_q2 {
             assert!((-TARGET_DEPTH_Q2_HALF_EXTENT..=TARGET_DEPTH_Q2_HALF_EXTENT).contains(&depth));
@@ -1170,7 +1185,7 @@ mod tests {
             engine.step(Duration::from_micros(frame * 16_667));
         }
         let mean_error = (0..engine.particle_count())
-            .map(|index| (engine.z[index] - engine.target_depth(index)).abs())
+            .map(|index| (engine.depth(index) - engine.target_depth(index)).abs())
             .sum::<f32>()
             / engine.particle_count() as f32;
         assert!(mean_error < 0.5, "mean depth error was {mean_error}");
@@ -1198,9 +1213,17 @@ mod tests {
     }
 
     #[test]
+    fn packed_depth_preserves_q8_7_precision_across_the_simulation_range() {
+        for depth in [-DEPTH_EXTENT, -10.123, 0.0, 10.123, DEPTH_EXTENT] {
+            let unpacked = f32::from(pack_depth(depth)) * DEPTH_FIXED_SCALE_RECIP;
+            assert!((unpacked - depth).abs() <= 1.0 / (DEPTH_FIXED_SCALE * 2.0));
+        }
+    }
+
+    #[test]
     fn checked_projection_matches_rounding_at_viewport_edges() {
         let mut engine = engine(1);
-        engine.z[0] = 0.0;
+        engine.z_q7[0] = pack_depth(0.0);
         for (x, expected) in [
             (-0.5, None),
             (-0.499, Some(0)),

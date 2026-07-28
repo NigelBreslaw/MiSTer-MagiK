@@ -7,6 +7,8 @@
 #include <stdint.h>
 
 static const float DEPTH_EXTENT = 64.0f;
+static const float DEPTH_FIXED_SCALE = 128.0f;
+static const float DEPTH_FIXED_SCALE_RECIP = 1.0f / 128.0f;
 static const float TARGET_FIXED_SCALE_RECIP = 1.0f / 16.0f;
 static const float TARGET_DEPTH_Q2_RECIP = 1.0f / 4.0f;
 static const float RANDOM_UNIT_RECIP = 1.0f / 16777215.0f;
@@ -60,6 +62,27 @@ static inline float32x4_t clamp_depth(float32x4_t value) {
     );
 }
 
+static inline float32x4_t load_depth_q7(const int16_t *depths) {
+    return vmulq_n_f32(
+        vcvtq_f32_s32(vmovl_s16(vld1_s16(depths))),
+        DEPTH_FIXED_SCALE_RECIP
+    );
+}
+
+static inline void store_depth_q7(int16_t *depths, float32x4_t value) {
+    float32x4_t scaled = vmulq_n_f32(clamp_depth(value), DEPTH_FIXED_SCALE);
+    uint32x4_t negative = vcltq_f32(scaled, vdupq_n_f32(0.0f));
+    float32x4_t adjustment = vbslq_f32(
+        negative,
+        vdupq_n_f32(-0.5f),
+        vdupq_n_f32(0.5f)
+    );
+    vst1_s16(
+        depths,
+        vmovn_s32(vcvtq_s32_f32(vaddq_f32(scaled, adjustment)))
+    );
+}
+
 static inline float32x4_t wrap_once(float32x4_t value, float extent_value) {
     float32x4_t zero = vdupq_n_f32(0.0f);
     float32x4_t extent = vdupq_n_f32(extent_value);
@@ -88,7 +111,7 @@ size_t mister_magik_particle_neon_static(
     uint32_t *random_states,
     float *x,
     float *y,
-    float *z,
+    int16_t *z_q7,
     float *vx,
     float *vy,
     float *vz
@@ -129,10 +152,11 @@ size_t mister_magik_particle_neon_static(
                 height
             )
         );
-        vst1q_f32(
-            z + index,
-            clamp_depth(
-                vaddq_f32(vld1q_f32(z + index), vmulq_f32(next_vz, delta_vector))
+        store_depth_q7(
+            z_q7 + index,
+            vaddq_f32(
+                load_depth_q7(z_q7 + index),
+                vmulq_f32(next_vz, delta_vector)
             )
         );
         for (size_t lane = index; lane < index + 4; lane++) {
@@ -158,7 +182,7 @@ size_t mister_magik_particle_neon_attract(
     uint32_t *random_states,
     float *x,
     float *y,
-    float *z,
+    int16_t *z_q7,
     float *vx,
     float *vy,
     float *vz
@@ -175,7 +199,7 @@ size_t mister_magik_particle_neon_attract(
         float32x4_t target_depth = target_z(target_depth_q2 + index);
         float32x4_t old_x = vld1q_f32(x + index);
         float32x4_t old_y = vld1q_f32(y + index);
-        float32x4_t old_z = vld1q_f32(z + index);
+        float32x4_t old_z = load_depth_q7(z_q7 + index);
         float32x4_t force_x = vmulq_n_f32(
             vmulq_n_f32(
                 vsubq_f32(
@@ -211,9 +235,9 @@ size_t mister_magik_particle_neon_attract(
         vst1q_f32(vz + index, next_vz);
         vst1q_f32(x + index, vaddq_f32(old_x, vmulq_f32(next_vx, delta_vector)));
         vst1q_f32(y + index, vaddq_f32(old_y, vmulq_f32(next_vy, delta_vector)));
-        vst1q_f32(
-            z + index,
-            clamp_depth(vaddq_f32(old_z, vmulq_f32(next_vz, delta_vector)))
+        store_depth_q7(
+            z_q7 + index,
+            vaddq_f32(old_z, vmulq_f32(next_vz, delta_vector))
         );
     }
     return vector_end;
@@ -226,7 +250,7 @@ size_t mister_magik_particle_neon_disperse(
     uint32_t *random_states,
     float *x,
     float *y,
-    float *z,
+    int16_t *z_q7,
     float *vx,
     float *vy,
     float *vz
@@ -243,7 +267,7 @@ size_t mister_magik_particle_neon_disperse(
         target_xy(packed_targets + index, &target_x, &target_y);
         float32x4_t old_x = vld1q_f32(x + index);
         float32x4_t old_y = vld1q_f32(y + index);
-        float32x4_t old_z = vld1q_f32(z + index);
+        float32x4_t old_z = load_depth_q7(z_q7 + index);
         float32x4_t force_x = vmulq_n_f32(
             vaddq_f32(
                 vmulq_n_f32(vsubq_f32(old_x, target_x), 2.2f),
@@ -271,9 +295,9 @@ size_t mister_magik_particle_neon_disperse(
         vst1q_f32(vz + index, next_vz);
         vst1q_f32(x + index, vaddq_f32(old_x, vmulq_f32(next_vx, delta_vector)));
         vst1q_f32(y + index, vaddq_f32(old_y, vmulq_f32(next_vy, delta_vector)));
-        vst1q_f32(
-            z + index,
-            clamp_depth(vaddq_f32(old_z, vmulq_f32(next_vz, delta_vector)))
+        store_depth_q7(
+            z_q7 + index,
+            vaddq_f32(old_z, vmulq_f32(next_vz, delta_vector))
         );
     }
     return vector_end;
@@ -312,7 +336,7 @@ size_t mister_magik_particle_neon_project_offsets(
     float rotation_y_cos,
     const float *x,
     const float *y,
-    const float *z,
+    const int16_t *z_q7,
     uint32_t *offsets
 ) {
     size_t visible = 0;
@@ -322,7 +346,7 @@ size_t mister_magik_particle_neon_project_offsets(
     float32x4_t focal = vdupq_n_f32(FOCAL_LENGTH);
     for (size_t index = 0; index < vector_end; index += 4) {
         float32x4_t relative_x = vsubq_f32(vld1q_f32(x + index), center_x);
-        float32x4_t source_z = vld1q_f32(z + index);
+        float32x4_t source_z = load_depth_q7(z_q7 + index);
         float32x4_t rotated_x = vaddq_f32(
             vmulq_n_f32(relative_x, rotation_y_cos),
             vmulq_n_f32(source_z, rotation_y_sin)
@@ -392,10 +416,11 @@ size_t mister_magik_particle_neon_project_offsets(
     }
     for (size_t index = vector_end; index < count; index++) {
         float relative_x = x[index] - projection_center_x;
+        float source_z = (float)z_q7[index] * DEPTH_FIXED_SCALE_RECIP;
         float rotated_x =
-            relative_x * rotation_y_cos + z[index] * rotation_y_sin;
+            relative_x * rotation_y_cos + source_z * rotation_y_sin;
         float rotated_z =
-            -relative_x * rotation_y_sin + z[index] * rotation_y_cos;
+            -relative_x * rotation_y_sin + source_z * rotation_y_cos;
         float denominator = FOCAL_LENGTH + rotated_z;
         if (denominator <= 1.0f) {
             offsets[index] = UINT32_MAX;

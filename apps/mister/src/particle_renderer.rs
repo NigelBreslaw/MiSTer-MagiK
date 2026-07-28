@@ -1053,10 +1053,10 @@ mod tests {
     #[test]
     fn renderer_memory_accounts_for_simulation_and_both_dirty_slots() {
         let capacity = ParticleRenderer::new(config(ParticlePreset::Capacity), mask()).unwrap();
-        assert_eq!(capacity.simulation_bytes, 64 * 33);
+        assert_eq!(capacity.simulation_bytes, 64 * 31);
         assert_eq!(capacity.renderer_scratch_bytes, 64 * 12);
         let visual = ParticleRenderer::new(config(ParticlePreset::Visual), mask()).unwrap();
-        assert_eq!(visual.simulation_bytes, 64 * 33);
+        assert_eq!(visual.simulation_bytes, 64 * 31);
         assert_eq!(visual.renderer_scratch_bytes, 64 * 20);
     }
 
