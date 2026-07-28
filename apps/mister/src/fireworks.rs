@@ -10,6 +10,7 @@ use std::time::Duration;
 const SCHEMA: &str = "mister-magik-firework-v1";
 const MAX_PARTICLES: usize = 98_304;
 const MAX_TRAIL_SAMPLES: u8 = 32;
+pub const FIREWORK_VISUAL_SEED: u64 = 827_141_709_451;
 const COPPER_WILLOW_RAIN: &str =
     include_str!("../assets/particles/fireworks/copper-willow-rain.json");
 const MAGNETIC_FLOWER: &str = include_str!("../assets/particles/fireworks/magnetic-flower.json");

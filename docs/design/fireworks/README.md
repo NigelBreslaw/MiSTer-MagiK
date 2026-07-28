@@ -11,16 +11,18 @@ All captures use seed `827141709451`, a black background, and no HUD.
 
 | Firework | Hero time | Exact local RGB565 frame hash |
 | --- | ---: | --- |
-| Solar Chrysanthemum | 2100 ms | `fc0c900a27f8b67e` |
-| Recursive Halo | 2200 ms | `e439f88f56eed5d6` |
-| Copper Willow Rain | 2500 ms | `a4054c9e752e5718` |
-| Phoenix Comet | 2350 ms | `f8084f2140ddf0da` |
-| Magnetic Flower | 2500 ms | `9d81df4004e0683b` |
-| OLED Peony | 2000 ms | `e18c762ea9aa270a` |
+| Solar Chrysanthemum | 2100 ms | `40b77ebdd3e5a9df` |
+| Recursive Halo | 2200 ms | `df8ace68654fb5c8` |
+| Copper Willow Rain | 2500 ms | `8c92a48429162f81` |
+| Phoenix Comet | 2350 ms | `1e84e839507fba14` |
+| Magnetic Flower | 2500 ms | `029968672f2cba94` |
+| OLED Peony | 2000 ms | `5cab1a90691132e0` |
 
 The hashes are renderer-reported PPM pixel hashes, not PNG file hashes. They
 detect accidental output drift; visual comparison against the concept remains
-the artistic acceptance test.
+the artistic acceptance test. The macOS preview and device workflow share the
+same seed. Small edge-pixel differences from x86_64 versus ARM floating-point
+evaluation are expected; the FPGA-latched device PNG is authoritative.
 
 ## Declarative vocabulary
 

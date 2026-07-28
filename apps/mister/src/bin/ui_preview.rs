@@ -4,7 +4,9 @@
 #[cfg(target_os = "macos")]
 mod macos {
     use mister_magik_fb::arcade_catalog::ArcadeGameEntry;
-    use mister_magik_fb::fireworks::{FireworkRenderer, embedded_firework_json};
+    use mister_magik_fb::fireworks::{
+        FIREWORK_VISUAL_SEED, FireworkRenderer, embedded_firework_json,
+    };
     use mister_magik_fb::framebuffer::target::{FramebufferTargetGeometry, UiFrameTarget};
     use mister_magik_fb::input_state::PadState;
     use mister_magik_fb::launcher::{LauncherAction, LauncherNav, Screen};
@@ -83,7 +85,7 @@ mod macos {
                 &json,
                 FRAME_WIDTH,
                 FRAME_HEIGHT,
-                0x4d61_6769_4b,
+                FIREWORK_VISUAL_SEED,
             )?)
         } else {
             None
