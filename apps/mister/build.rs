@@ -8,6 +8,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=MISTER_MAGIK_BUILD_TIME");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=Cargo.toml");
+    println!("cargo:rerun-if-changed=src/particle_neon.c");
     println!("cargo:rerun-if-changed=../../.git/HEAD");
     println!("cargo:rerun-if-changed=../../.git/refs/heads");
     println!("cargo:rustc-check-cfg=cfg(mister_ui_scope_launcher)");
@@ -38,6 +39,17 @@ fn main() {
     let experiments = std::env::var_os("CARGO_FEATURE_EXPERIMENTS").is_some();
     if experiments {
         println!("cargo:rustc-cfg=mister_experiments");
+    }
+    if std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("arm") {
+        cc::Build::new()
+            .file("src/particle_neon.c")
+            .flag("-std=c11")
+            .flag("-O3")
+            .flag("-mcpu=cortex-a9")
+            .flag("-mfpu=neon-vfpv3")
+            .flag("-mfloat-abi=hard")
+            .flag("-ffp-contract=off")
+            .compile("mister_magik_particle_neon");
     }
 }
 

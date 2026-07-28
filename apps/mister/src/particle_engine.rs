@@ -572,83 +572,70 @@ const fn particle_neon_enabled() -> bool {
 
 #[cfg(target_arch = "arm")]
 mod neon {
-    use super::{
-        DEPTH_EXTENT, ParticleEngine, TARGET_DEPTH_Q2_RECIP, TARGET_FIXED_SCALE_RECIP,
-        wrap_coordinate,
-    };
-    use core::arch::arm::*;
+    use super::ParticleEngine;
 
-    #[target_feature(enable = "neon")]
+    unsafe extern "C" {
+        fn mister_magik_particle_neon_static(
+            count: usize,
+            width: f32,
+            height: f32,
+            delta: f32,
+            random_states: *mut u32,
+            x: *mut f32,
+            y: *mut f32,
+            z: *mut f32,
+            vx: *mut f32,
+            vy: *mut f32,
+            vz: *mut f32,
+        ) -> usize;
+        fn mister_magik_particle_neon_attract(
+            count: usize,
+            delta: f32,
+            stiffness: f32,
+            jitter: f32,
+            damping: f32,
+            packed_targets: *const u32,
+            target_depth_q2: *const i8,
+            random_states: *mut u32,
+            x: *mut f32,
+            y: *mut f32,
+            z: *mut f32,
+            vx: *mut f32,
+            vy: *mut f32,
+            vz: *mut f32,
+        ) -> usize;
+        fn mister_magik_particle_neon_disperse(
+            count: usize,
+            delta: f32,
+            packed_targets: *const u32,
+            random_states: *mut u32,
+            x: *mut f32,
+            y: *mut f32,
+            z: *mut f32,
+            vx: *mut f32,
+            vy: *mut f32,
+            vz: *mut f32,
+        ) -> usize;
+    }
+
     pub(super) unsafe fn advance_static(engine: &mut ParticleEngine, delta: f32) -> usize {
         unsafe {
-            let vector_end = engine.particle_count() & !3;
-            let width = engine.config.width as f32;
-            let height = engine.config.height as f32;
-            let delta_vector = vdupq_n_f32(delta);
-            for index in (0..vector_end).step_by(4) {
-                let noise = next_random(engine.random_states.as_mut_ptr().add(index));
-                let jitter_x = signed_unit_vector(noise);
-                let jitter_y = signed_unit_vector(rotate_left_11(noise));
-                let jitter_z = signed_unit_vector(rotate_left_21(noise));
-                let vx = vmulq_n_f32(
-                    vaddq_f32(
-                        vld1q_f32(engine.vx.as_ptr().add(index)),
-                        vmulq_f32(vmulq_n_f32(jitter_x, 75.0), delta_vector),
-                    ),
-                    0.985,
-                );
-                let vy = vmulq_n_f32(
-                    vaddq_f32(
-                        vld1q_f32(engine.vy.as_ptr().add(index)),
-                        vmulq_f32(vmulq_n_f32(jitter_y, 75.0), delta_vector),
-                    ),
-                    0.985,
-                );
-                let vz = vmulq_n_f32(
-                    vaddq_f32(
-                        vld1q_f32(engine.vz.as_ptr().add(index)),
-                        vmulq_f32(vmulq_n_f32(jitter_z, 8.0), delta_vector),
-                    ),
-                    0.98,
-                );
-                vst1q_f32(engine.vx.as_mut_ptr().add(index), vx);
-                vst1q_f32(engine.vy.as_mut_ptr().add(index), vy);
-                vst1q_f32(engine.vz.as_mut_ptr().add(index), vz);
-                let x = wrap_vector(
-                    vaddq_f32(
-                        vld1q_f32(engine.x.as_ptr().add(index)),
-                        vmulq_f32(vx, delta_vector),
-                    ),
-                    width,
-                );
-                let y = wrap_vector(
-                    vaddq_f32(
-                        vld1q_f32(engine.y.as_ptr().add(index)),
-                        vmulq_f32(vy, delta_vector),
-                    ),
-                    height,
-                );
-                let z = clamp_depth(vaddq_f32(
-                    vld1q_f32(engine.z.as_ptr().add(index)),
-                    vmulq_f32(vz, delta_vector),
-                ));
-                vst1q_f32(engine.x.as_mut_ptr().add(index), x);
-                vst1q_f32(engine.y.as_mut_ptr().add(index), y);
-                vst1q_f32(engine.z.as_mut_ptr().add(index), z);
-                for lane in index..index + 4 {
-                    if engine.x[lane] < 0.0 || engine.x[lane] >= width {
-                        engine.x[lane] = wrap_coordinate(engine.x[lane], width);
-                    }
-                    if engine.y[lane] < 0.0 || engine.y[lane] >= height {
-                        engine.y[lane] = wrap_coordinate(engine.y[lane], height);
-                    }
-                }
-            }
-            vector_end
+            mister_magik_particle_neon_static(
+                engine.particle_count(),
+                engine.config.width as f32,
+                engine.config.height as f32,
+                delta,
+                engine.random_states.as_mut_ptr(),
+                engine.x.as_mut_ptr(),
+                engine.y.as_mut_ptr(),
+                engine.z.as_mut_ptr(),
+                engine.vx.as_mut_ptr(),
+                engine.vy.as_mut_ptr(),
+                engine.vz.as_mut_ptr(),
+            )
         }
     }
 
-    #[target_feature(enable = "neon")]
     pub(super) unsafe fn advance_attract(
         engine: &mut ParticleEngine,
         delta: f32,
@@ -657,204 +644,38 @@ mod neon {
         damping: f32,
     ) -> usize {
         unsafe {
-            let vector_end = engine.particle_count() & !3;
-            let delta_vector = vdupq_n_f32(delta);
-            for index in (0..vector_end).step_by(4) {
-                let noise = next_random(engine.random_states.as_mut_ptr().add(index));
-                let jitter_x = signed_unit_vector(noise);
-                let jitter_y = signed_unit_vector(rotate_left_11(noise));
-                let (target_x, target_y) = target_xy(engine.packed_targets.as_ptr().add(index));
-                let target_z = target_z(engine.target_depth_q2.as_ptr().add(index));
-                let x = vld1q_f32(engine.x.as_ptr().add(index));
-                let y = vld1q_f32(engine.y.as_ptr().add(index));
-                let z = vld1q_f32(engine.z.as_ptr().add(index));
-                let force_x = vmulq_n_f32(
-                    vmulq_n_f32(
-                        vsubq_f32(vaddq_f32(target_x, vmulq_n_f32(jitter_x, jitter)), x),
-                        stiffness,
-                    ),
-                    delta,
-                );
-                let force_y = vmulq_n_f32(
-                    vmulq_n_f32(
-                        vsubq_f32(vaddq_f32(target_y, vmulq_n_f32(jitter_y, jitter)), y),
-                        stiffness,
-                    ),
-                    delta,
-                );
-                let force_z = vmulq_n_f32(vmulq_n_f32(vsubq_f32(target_z, z), stiffness), delta);
-                let vx = vmulq_n_f32(
-                    vaddq_f32(vld1q_f32(engine.vx.as_ptr().add(index)), force_x),
-                    damping,
-                );
-                let vy = vmulq_n_f32(
-                    vaddq_f32(vld1q_f32(engine.vy.as_ptr().add(index)), force_y),
-                    damping,
-                );
-                let vz = vmulq_n_f32(
-                    vaddq_f32(vld1q_f32(engine.vz.as_ptr().add(index)), force_z),
-                    damping,
-                );
-                vst1q_f32(engine.vx.as_mut_ptr().add(index), vx);
-                vst1q_f32(engine.vy.as_mut_ptr().add(index), vy);
-                vst1q_f32(engine.vz.as_mut_ptr().add(index), vz);
-                vst1q_f32(
-                    engine.x.as_mut_ptr().add(index),
-                    vaddq_f32(x, vmulq_f32(vx, delta_vector)),
-                );
-                vst1q_f32(
-                    engine.y.as_mut_ptr().add(index),
-                    vaddq_f32(y, vmulq_f32(vy, delta_vector)),
-                );
-                vst1q_f32(
-                    engine.z.as_mut_ptr().add(index),
-                    clamp_depth(vaddq_f32(z, vmulq_f32(vz, delta_vector))),
-                );
-            }
-            vector_end
+            mister_magik_particle_neon_attract(
+                engine.particle_count(),
+                delta,
+                stiffness,
+                jitter,
+                damping,
+                engine.packed_targets.as_ptr(),
+                engine.target_depth_q2.as_ptr(),
+                engine.random_states.as_mut_ptr(),
+                engine.x.as_mut_ptr(),
+                engine.y.as_mut_ptr(),
+                engine.z.as_mut_ptr(),
+                engine.vx.as_mut_ptr(),
+                engine.vy.as_mut_ptr(),
+                engine.vz.as_mut_ptr(),
+            )
         }
     }
 
-    #[target_feature(enable = "neon")]
     pub(super) unsafe fn advance_disperse(engine: &mut ParticleEngine, delta: f32) -> usize {
         unsafe {
-            let vector_end = engine.particle_count() & !3;
-            let delta_vector = vdupq_n_f32(delta);
-            for index in (0..vector_end).step_by(4) {
-                let noise = next_random(engine.random_states.as_mut_ptr().add(index));
-                let jitter_x = signed_unit_vector(noise);
-                let jitter_y = signed_unit_vector(rotate_left_11(noise));
-                let jitter_z = signed_unit_vector(rotate_left_21(noise));
-                let (target_x, target_y) = target_xy(engine.packed_targets.as_ptr().add(index));
-                let x = vld1q_f32(engine.x.as_ptr().add(index));
-                let y = vld1q_f32(engine.y.as_ptr().add(index));
-                let z = vld1q_f32(engine.z.as_ptr().add(index));
-                let force_x = vmulq_n_f32(
-                    vaddq_f32(
-                        vmulq_n_f32(vsubq_f32(x, target_x), 2.2),
-                        vmulq_n_f32(jitter_x, 115.0),
-                    ),
-                    delta,
-                );
-                let force_y = vmulq_n_f32(
-                    vaddq_f32(
-                        vmulq_n_f32(vsubq_f32(y, target_y), 2.2),
-                        vmulq_n_f32(jitter_y, 115.0),
-                    ),
-                    delta,
-                );
-                let force_z = vmulq_n_f32(vmulq_n_f32(jitter_z, 55.0), delta);
-                let vx = vmulq_n_f32(
-                    vaddq_f32(vld1q_f32(engine.vx.as_ptr().add(index)), force_x),
-                    0.99,
-                );
-                let vy = vmulq_n_f32(
-                    vaddq_f32(vld1q_f32(engine.vy.as_ptr().add(index)), force_y),
-                    0.99,
-                );
-                let vz = vmulq_n_f32(
-                    vaddq_f32(vld1q_f32(engine.vz.as_ptr().add(index)), force_z),
-                    0.99,
-                );
-                vst1q_f32(engine.vx.as_mut_ptr().add(index), vx);
-                vst1q_f32(engine.vy.as_mut_ptr().add(index), vy);
-                vst1q_f32(engine.vz.as_mut_ptr().add(index), vz);
-                vst1q_f32(
-                    engine.x.as_mut_ptr().add(index),
-                    vaddq_f32(x, vmulq_f32(vx, delta_vector)),
-                );
-                vst1q_f32(
-                    engine.y.as_mut_ptr().add(index),
-                    vaddq_f32(y, vmulq_f32(vy, delta_vector)),
-                );
-                vst1q_f32(
-                    engine.z.as_mut_ptr().add(index),
-                    clamp_depth(vaddq_f32(z, vmulq_f32(vz, delta_vector))),
-                );
-            }
-            vector_end
-        }
-    }
-
-    #[inline(always)]
-    unsafe fn next_random(states: *mut u32) -> uint32x4_t {
-        unsafe {
-            let mut value = vld1q_u32(states);
-            value = veorq_u32(value, vshlq_n_u32::<13>(value));
-            value = veorq_u32(value, vshrq_n_u32::<17>(value));
-            value = veorq_u32(value, vshlq_n_u32::<5>(value));
-            vst1q_u32(states, value);
-            value
-        }
-    }
-
-    #[inline(always)]
-    unsafe fn rotate_left_11(value: uint32x4_t) -> uint32x4_t {
-        unsafe { vorrq_u32(vshlq_n_u32::<11>(value), vshrq_n_u32::<21>(value)) }
-    }
-
-    #[inline(always)]
-    unsafe fn rotate_left_21(value: uint32x4_t) -> uint32x4_t {
-        unsafe { vorrq_u32(vshlq_n_u32::<21>(value), vshrq_n_u32::<11>(value)) }
-    }
-
-    #[inline(always)]
-    unsafe fn signed_unit_vector(value: uint32x4_t) -> float32x4_t {
-        unsafe {
-            vsubq_f32(
-                vmulq_n_f32(vcvtq_f32_u32(vshrq_n_u32::<8>(value)), 2.0 / 16_777_215.0),
-                vdupq_n_f32(1.0),
-            )
-        }
-    }
-
-    #[inline(always)]
-    unsafe fn target_xy(targets: *const u32) -> (float32x4_t, float32x4_t) {
-        unsafe {
-            let packed = vld1q_u32(targets);
-            let signed = vreinterpretq_s32_u32(packed);
-            let x = vshrq_n_s32::<16>(vshlq_n_s32::<16>(signed));
-            let y = vshrq_n_s32::<16>(signed);
-            (
-                vmulq_n_f32(vcvtq_f32_s32(x), TARGET_FIXED_SCALE_RECIP),
-                vmulq_n_f32(vcvtq_f32_s32(y), TARGET_FIXED_SCALE_RECIP),
-            )
-        }
-    }
-
-    #[inline(always)]
-    unsafe fn target_z(depths: *const i8) -> float32x4_t {
-        unsafe {
-            let values = [
-                f32::from(*depths),
-                f32::from(*depths.add(1)),
-                f32::from(*depths.add(2)),
-                f32::from(*depths.add(3)),
-            ];
-            vmulq_n_f32(vld1q_f32(values.as_ptr()), TARGET_DEPTH_Q2_RECIP)
-        }
-    }
-
-    #[inline(always)]
-    unsafe fn clamp_depth(value: float32x4_t) -> float32x4_t {
-        unsafe {
-            vminq_f32(
-                vmaxq_f32(value, vdupq_n_f32(-DEPTH_EXTENT)),
-                vdupq_n_f32(DEPTH_EXTENT),
-            )
-        }
-    }
-
-    #[inline(always)]
-    unsafe fn wrap_vector(value: float32x4_t, extent: f32) -> float32x4_t {
-        unsafe {
-            let zero = vdupq_n_f32(0.0);
-            let extent = vdupq_n_f32(extent);
-            let add_wrapped = vbslq_f32(vcltq_f32(value, zero), vaddq_f32(value, extent), value);
-            vbslq_f32(
-                vcgeq_f32(add_wrapped, extent),
-                vsubq_f32(add_wrapped, extent),
-                add_wrapped,
+            mister_magik_particle_neon_disperse(
+                engine.particle_count(),
+                delta,
+                engine.packed_targets.as_ptr(),
+                engine.random_states.as_mut_ptr(),
+                engine.x.as_mut_ptr(),
+                engine.y.as_mut_ptr(),
+                engine.z.as_mut_ptr(),
+                engine.vx.as_mut_ptr(),
+                engine.vy.as_mut_ptr(),
+                engine.vz.as_mut_ptr(),
             )
         }
     }

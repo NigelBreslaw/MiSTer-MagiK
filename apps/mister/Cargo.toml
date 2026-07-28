@@ -68,6 +68,9 @@ slint = { version = "=1.17.1", optional = true, default-features = false, featur
 [target.'cfg(all(target_os = "linux", target_arch = "arm"))'.dependencies]
 ffmpeg-next = { version = "8.1", optional = true, default-features = false, features = ["codec", "format", "software-resampling", "static"] }
 
+[build-dependencies]
+cc = "1.3"
+
 [features]
 default = []
 profile = ["dep:pprof"]
