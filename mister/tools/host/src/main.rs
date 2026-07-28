@@ -4834,9 +4834,11 @@ fn summarize_particle_trial_for_renderer(
         .iter()
         .filter_map(|frame| frame.get("particle_phase").and_then(Value::as_str))
         .collect::<std::collections::BTreeSet<_>>();
-    for required in ["static", "form", "hold", "disperse"] {
-        if !phases.contains(required) {
-            failures.push(json!({"kind": "missing-phase", "phase": required}));
+    if renderer == "particle-magik" {
+        for required in ["static", "form", "hold", "disperse"] {
+            if !phases.contains(required) {
+                failures.push(json!({"kind": "missing-phase", "phase": required}));
+            }
         }
     }
     if steady.iter().any(|frame| {
@@ -5346,8 +5348,19 @@ fn persist_and_qualify_particle_benchmark(
 
 fn particle_benchmark_report(summary: &Value) -> String {
     if let Some(demo) = summary.get("demo").filter(|demo| !demo.is_null()) {
+        let showcase = summary.get("schema").and_then(Value::as_str)
+            == Some("mister-magik-particle-showcase-v1");
+        let title = if showcase {
+            "Particle Showcase Trial"
+        } else {
+            "Particle 40K Visual Trial"
+        };
+        let preset = demo
+            .get("preset")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
         let mut report = format!(
-            "# Particle 40K Visual Trial\n\n- Geometry: 960x540 RGB565\n- Presentation: direct hidden-slot latch\n- Preset: visual\n- Particles: {}\n- Duration: {} seconds\n- Qualified: {}\n- Unique FPS: {:.6}\n- Repeated refreshes: {}\n- Process CPU: {:.2}% of one core\n- CPU1 preparation CPU: {:.2}% of one core\n- CPU0 clear+raster CPU: {:.2}% of one core\n- Renderer CPU: {:.2}% of one core\n- Preparation wait mean / P99 / max: {:.2} / {} / {} us\n- Prepared-frame age mean / P99 / max: {:.2} / {} / {} us\n- Worker wake latency mean / P99 / max: {:.2} / {} / {} us\n- Lookahead mismatch recomputes: {}\n- Preparation queue depth mean / max: {:.2} / {}\n- P99 render wall: {} us\n- Maximum render wall: {} us\n\n## Phase means\n\n| Phase | Simulation wall | Simulation CPU | Projection wall | Projection CPU | Preparation wait | Clear wall | Raster wall | Render wall |\n|---|---:|---:|---:|---:|---:|---:|---:|---:|\n",
+            "# {title}\n\n- Geometry: 960x540 RGB565\n- Presentation: direct hidden-slot latch\n- Preset/demo: {preset}\n- Particles: {}\n- Duration: {} seconds\n- Qualified: {}\n- Unique FPS: {:.6}\n- Repeated refreshes: {}\n- Process CPU: {:.2}% of one core\n- Update+projection CPU: {:.2}% of one core\n- Clear+raster CPU: {:.2}% of one core\n- Renderer CPU: {:.2}% of one core\n- Preparation wait mean / P99 / max: {:.2} / {} / {} us\n- Prepared-frame age mean / P99 / max: {:.2} / {} / {} us\n- Worker wake latency mean / P99 / max: {:.2} / {} / {} us\n- Lookahead mismatch recomputes: {}\n- Preparation queue depth mean / max: {:.2} / {}\n- P99 render wall: {} us\n- Maximum render wall: {} us\n\n## Phase means\n\n| Phase | Simulation wall | Simulation CPU | Projection wall | Projection CPU | Preparation wait | Clear wall | Raster wall | Render wall |\n|---|---:|---:|---:|---:|---:|---:|---:|---:|\n",
             demo.get("count").and_then(Value::as_u64).unwrap_or(0),
             demo.get("duration_secs")
                 .and_then(Value::as_u64)
@@ -5416,14 +5429,13 @@ fn particle_benchmark_report(summary: &Value) -> String {
                 .and_then(Value::as_u64)
                 .unwrap_or(0),
         );
-        for phase in ["static", "form", "hold", "disperse"] {
-            let timing = demo.pointer(&format!("/phase_timing/{phase}"));
-            let mean = |field| {
-                timing
-                    .and_then(|value| value.get(field))
-                    .and_then(Value::as_f64)
-                    .unwrap_or(0.0)
-            };
+        let empty = serde_json::Map::new();
+        let phases = demo
+            .get("phase_timing")
+            .and_then(Value::as_object)
+            .unwrap_or(&empty);
+        for (phase, timing) in phases {
+            let mean = |field| timing.get(field).and_then(Value::as_f64).unwrap_or(0.0);
             report.push_str(&format!(
                 "| {phase} | {:.2} us | {:.2} us | {:.2} us | {:.2} us | {:.2} us | {:.2} us | {:.2} us | {:.2} us |\n",
                 mean("simulation_mean_us"),
