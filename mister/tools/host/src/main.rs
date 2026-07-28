@@ -4491,6 +4491,9 @@ fn summarize_particle_trial(
             "branch_misses": pmu_branch_misses,
             "branch_miss_pct": ratio(pmu_branch_misses, pmu_branch_instructions) * 100.0,
         },
+        "simulation_backends": steady.iter().filter_map(|frame| {
+            frame.get("particle_simulation_backend").and_then(Value::as_str)
+        }).collect::<std::collections::BTreeSet<_>>(),
         "cpu": {
             "renderer_pct_of_one_core": mean_frame_field(
                 steady,
@@ -6194,6 +6197,7 @@ fn validate_screensaver_frame_evidence(run: usize, frame_id: u64, frame: &Value)
         "screensaver_renderer",
         "particle_preset",
         "particle_phase",
+        "particle_simulation_backend",
     ];
     for key in U64_FIELDS {
         if frame.get(*key).and_then(Value::as_u64).is_none() {
@@ -14541,6 +14545,7 @@ H: Handlers=event3 js0"#
                 "screensaver_renderer": "parade",
                 "particle_preset": "capacity",
                 "particle_phase": "static",
+                "particle_simulation_backend": "scalar",
                 "particle_count": 0,
                 "particle_visible": 0,
                 "particle_simulation_us": 0,
@@ -14964,6 +14969,7 @@ H: Handlers=event3 js0"#
             "screensaver_render_ahead_cancelled": false,
             "particle_preset": "capacity",
             "particle_phase": phase,
+            "particle_simulation_backend": "armv7-neon",
             "particle_count": 65_536,
             "particle_visible": 65_536,
             "particle_simulation_us": 2_000,
@@ -15033,6 +15039,7 @@ H: Handlers=event3 js0"#
         }
         assert_eq!(passing["scheduler"]["involuntary_context_switches"], 1);
         assert_eq!(passing["scheduler"]["cpu_migrations"], 0);
+        assert_eq!(passing["simulation_backends"], json!(["armv7-neon"]));
         assert_eq!(passing["pmu"]["available_frames"], 604);
         assert_eq!(passing["pmu"]["instructions_per_cycle"], 0.8);
         assert_eq!(passing["pmu"]["cache_miss_pct"], 10.0);
