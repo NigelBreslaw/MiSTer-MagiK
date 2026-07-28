@@ -27,6 +27,8 @@ pub use mister_magik_mister_runtime::latch_readiness;
 pub mod latch_failure_report;
 pub mod launch_preparation;
 pub mod launcher;
+#[cfg(any(feature = "ui", feature = "ui-preview"))]
+pub mod launcher_presentation;
 pub mod launcher_taxonomy;
 pub mod licenses;
 pub mod media_update;

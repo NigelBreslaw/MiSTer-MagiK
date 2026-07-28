@@ -66,6 +66,7 @@ use mister_magik_fb::framebuffer::{
     format::rgb565_stride_bytes,
     scanout_slots::{HiddenRgb565BufferIndex, ScanoutSlotsRgb565Framebuffer},
 };
+use mister_magik_fb::launcher_presentation::LauncherBridgePresenter;
 use slint_ui::launcher::PreviewStatus;
 use std::path::PathBuf;
 use std::sync::{OnceLock, mpsc};

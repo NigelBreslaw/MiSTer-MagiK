@@ -640,6 +640,15 @@ pub(super) fn sync_bridge_launcher(
     ui: &UiDisplay,
 ) {
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+    if let Some(catalog) = catalog {
+        models.sync(
+            app,
+            nav,
+            catalog,
+            Some(catalog_version),
+            defer_selected_preview,
+        );
+    }
     bridge.set_startup_visible(false);
     sync_bridge_pad_launcher(&bridge, pad);
     bridge.set_screen_mode(match nav.screen {
@@ -737,6 +746,7 @@ pub(super) fn sync_bridge_launcher_light(
     defer_selected_preview: bool,
     ui: &UiDisplay,
 ) {
+    models.sync(app, nav, catalog, None, defer_arcade_overlay_bridge);
     models.sync_menu_item_focus(nav.selected);
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     let active_games_loading = active_system_games_loading(catalog, nav);
@@ -1277,86 +1287,7 @@ impl LauncherBridgeKey {
     }
 }
 
-#[derive(Default)]
-pub(super) struct LauncherBridgeModels {
-    menu_items_key: Option<(usize, String)>,
-    menu_items: Option<Rc<VecModel<slint_ui::launcher::MenuItem>>>,
-    menu_items_selected: Option<usize>,
-    license_lines_index: Option<usize>,
-    license_lines: Option<Rc<VecModel<SharedString>>>,
-}
-
-impl LauncherBridgeModels {
-    fn license_lines_index(&self) -> Option<usize> {
-        self.license_lines_index
-    }
-
-    fn license_lines(&mut self, index: usize) -> ModelRc<SharedString> {
-        if self.license_lines_index != Some(index) {
-            let lines = crate::licenses::wrapped_lines(index)
-                .iter()
-                .map(|line| SharedString::from(line.as_str()))
-                .collect::<Vec<_>>();
-            self.license_lines = Some(Rc::new(VecModel::from(lines)));
-            self.license_lines_index = Some(index);
-        }
-        ModelRc::from(
-            self.license_lines
-                .as_ref()
-                .expect("license line model initialized")
-                .clone(),
-        )
-    }
-}
-
-impl LauncherBridgeModels {
-    pub(super) fn menu_items(
-        &mut self,
-        nav: &LauncherNav,
-        catalog_version: usize,
-    ) -> ModelRc<slint_ui::launcher::MenuItem> {
-        let key = (catalog_version, nav.current_menu_id().to_string());
-        if self.menu_items_key.as_ref() != Some(&key) {
-            self.menu_items = Some(slint_menu_items(nav));
-            self.menu_items_key = Some(key);
-            self.menu_items_selected =
-                (nav.selected < nav.current_menu_count()).then_some(nav.selected);
-        } else {
-            self.sync_menu_item_focus(nav.selected);
-        }
-        ModelRc::from(
-            self.menu_items
-                .as_ref()
-                .expect("launcher menu model should be initialized")
-                .clone(),
-        )
-    }
-
-    fn sync_menu_item_focus(&mut self, selected: usize) {
-        let model = self
-            .menu_items
-            .as_ref()
-            .expect("launcher menu model should be initialized");
-        let selected = (selected < model.row_count()).then_some(selected);
-        if self.menu_items_selected == selected {
-            return;
-        }
-
-        if let Some(previous) = self.menu_items_selected {
-            if let Some(mut row) = model.row_data(previous) {
-                row.focused = false;
-                model.set_row_data(previous, row);
-            }
-        }
-        if let Some(current) = selected {
-            if let Some(mut row) = model.row_data(current) {
-                row.focused = true;
-                model.set_row_data(current, row);
-            }
-        }
-        self.menu_items_selected = selected;
-    }
-}
+pub(super) type LauncherBridgeModels = LauncherBridgePresenter;
 
 #[cfg(test)]
 mod tests {
