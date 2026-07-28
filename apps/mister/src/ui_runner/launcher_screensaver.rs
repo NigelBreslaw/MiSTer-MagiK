@@ -1526,7 +1526,13 @@ fn render_attract_wall(
     images: &[SaverImage],
     frame: u64,
 ) {
-    state.attract_wall.render(dst, w, h, images, frame);
+    state.attract_wall.render(
+        dst,
+        w,
+        h,
+        images,
+        Duration::from_micros(frame.saturating_mul(1_000_000) / 60),
+    );
 }
 
 fn render_carousel(dst: &mut [Rgb565Pixel], w: usize, h: usize, images: &[SaverImage], frame: u64) {

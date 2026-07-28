@@ -123,6 +123,7 @@ mod macos {
         tile_images: Vec<ScreenshotTileImage>,
         screensaver_elapsed: Duration,
         screensaver_paused: bool,
+        screensaver_return: Option<Scenario>,
     }
 
     impl PreviewApplication {
@@ -192,6 +193,7 @@ mod macos {
                 tile_images,
                 screensaver_elapsed: Duration::ZERO,
                 screensaver_paused: false,
+                screensaver_return: None,
             };
             application.select_scenario(scenario);
             Ok(application)
@@ -226,6 +228,12 @@ mod macos {
         }
 
         fn select_scenario(&mut self, scenario: Scenario) {
+            let previous_scenario = self.scenario;
+            if scenario == Scenario::ScreenshotTiles
+                && previous_scenario != Scenario::ScreenshotTiles
+            {
+                self.screensaver_return = Some(previous_scenario);
+            }
             self.scenario = scenario;
             self.selection = 0;
             self.settings_focused = false;
@@ -332,6 +340,18 @@ mod macos {
                 self.select_scenario(scenario);
                 return;
             }
+            if self.scenario == Scenario::ScreenshotTiles {
+                match code {
+                    KeyCode::Space => {
+                        self.screensaver_paused = !self.screensaver_paused;
+                    }
+                    KeyCode::Period if self.screensaver_paused => {
+                        self.screensaver_elapsed += FRAME_PERIOD;
+                    }
+                    _ => self.exit_screenshot_tiles(),
+                }
+                return;
+            }
             if matches!(code, KeyCode::Escape | KeyCode::Backspace) {
                 self.go_back();
                 return;
@@ -428,7 +448,10 @@ mod macos {
             );
             if let Some(event) = event {
                 match event.action {
-                    LauncherAction::PreviewScreensaver => {}
+                    LauncherAction::PreviewScreensaver => {
+                        self.select_scenario(Scenario::ScreenshotTiles);
+                        return;
+                    }
                     LauncherAction::LaunchGame => {}
                     _ => {}
                 }
@@ -441,6 +464,14 @@ mod macos {
             {
                 window.set_title(&self.window_title());
             }
+        }
+
+        fn exit_screenshot_tiles(&mut self) {
+            let scenario = self
+                .screensaver_return
+                .take()
+                .unwrap_or(Scenario::ScreensaverSettings);
+            self.select_scenario(scenario);
         }
 
         fn sync_launcher_navigation(&mut self) {
@@ -542,13 +573,12 @@ mod macos {
                     )
                     .expect("render production particle screensaver");
             } else if self.scenario == Scenario::ScreenshotTiles {
-                let frame = (self.screensaver_elapsed.as_micros() * 60 / 1_000_000) as u64;
                 self.tile_wall.render(
                     self.frame_target.cached_565_mut(),
                     FRAME_WIDTH,
                     FRAME_HEIGHT,
                     &self.tile_images,
-                    frame,
+                    self.screensaver_elapsed,
                 );
             }
             if matches!(

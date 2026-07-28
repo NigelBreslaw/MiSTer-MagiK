@@ -7,6 +7,7 @@ use crate::arcade_catalog::ArcadeGameView;
 use crate::arcade_list_renderer::{ArcadeListGeometry, ArcadeListRenderer, ArcadeListUpdate};
 use crate::framebuffer::target::{DirtyRect, UiFrameTarget, blend_565};
 use slint::platform::software_renderer::Rgb565Pixel;
+use std::time::Duration;
 
 pub struct ArcadeVisualLayer {
     renderer: ArcadeListRenderer,
@@ -217,15 +218,17 @@ impl ScreenshotTileWall {
         frame_width: usize,
         frame_height: usize,
         images: &[ScreenshotTileImage],
-        frame: u64,
+        elapsed: Duration,
     ) {
         const SLOT_WIDTH: usize = 320;
         const SLOT_HEIGHT: usize = 224;
+        const SECOND_US: u128 = 1_000_000;
 
         let gutter_y = frame_height.saturating_sub(SLOT_HEIGHT * 2) / 3;
-        let page = (frame / 360) as usize;
-        let active = ((frame / 60) as usize) % 6;
-        let reveal = ((frame % 60) as usize * SLOT_WIDTH) / 60;
+        let elapsed_us = elapsed.as_micros();
+        let page = (elapsed_us / (6 * SECOND_US)) as usize;
+        let active = ((elapsed_us / SECOND_US) as usize) % 6;
+        let reveal = ((elapsed_us % SECOND_US) as usize * SLOT_WIDTH) / SECOND_US as usize;
         if !self.valid || self.page != page || self.base.len() != destination.len() {
             self.base.resize(destination.len(), Rgb565Pixel(0));
             self.next.resize(destination.len(), Rgb565Pixel(0));
@@ -531,8 +534,20 @@ mod tests {
             .collect::<Vec<_>>();
         let mut first = vec![Rgb565Pixel(0); 960 * 540];
         let mut second = vec![Rgb565Pixel(0); 960 * 540];
-        ScreenshotTileWall::new(960, 540).render(&mut first, 960, 540, &images, 90);
-        ScreenshotTileWall::new(960, 540).render(&mut second, 960, 540, &images, 90);
+        ScreenshotTileWall::new(960, 540).render(
+            &mut first,
+            960,
+            540,
+            &images,
+            Duration::from_millis(1_500),
+        );
+        ScreenshotTileWall::new(960, 540).render(
+            &mut second,
+            960,
+            540,
+            &images,
+            Duration::from_millis(1_500),
+        );
         assert_eq!(first, second);
         assert!(first.iter().any(|pixel| pixel.0 != 0));
     }
