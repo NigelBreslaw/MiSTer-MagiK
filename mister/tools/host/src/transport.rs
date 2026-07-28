@@ -54,6 +54,7 @@ pub enum DeviceRequest {
         demo: u8,
         cpu_profile: bool,
     },
+    LaunchParticleShowcase,
     ProfileInstalledSearch {
         output_dir: PathBuf,
     },
@@ -108,6 +109,7 @@ impl DeviceRequest {
             Self::ProfileInstalledParticleShowcase {
                 cpu_profile: true, ..
             } => "profile-installed-particle-showcase-cpu",
+            Self::LaunchParticleShowcase => "launch-particle-showcase",
             Self::ProfileInstalledSearch { .. } => "profile-installed-search",
             Self::VerifyInstalledSearchUi { .. } => "verify-installed-search-ui",
             Self::ProfileInstalledCatalogLifecycle { .. } => "profile-installed-catalog-lifecycle",

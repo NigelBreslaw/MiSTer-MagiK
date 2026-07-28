@@ -63,6 +63,10 @@ pub enum Command {
         #[arg(value_enum, default_value_t)]
         scenario: BenchmarkScenario,
     },
+    Demo {
+        #[arg(value_enum)]
+        demo: DemoCommand,
+    },
     Capture {
         #[command(subcommand)]
         command: CaptureCommand,
@@ -330,6 +334,11 @@ pub enum CaptureCommand {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum DemoCommand {
+    ParticleShowcase,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum RunCommand {
     Show { run_id: String },
@@ -395,6 +404,9 @@ impl Cli {
             Some(Command::Diagnose) => Intent::Diagnose,
             Some(Command::Deliver) => Intent::Deliver,
             Some(Command::Benchmark { scenario }) => Intent::Benchmark { scenario },
+            Some(Command::Demo {
+                demo: DemoCommand::ParticleShowcase,
+            }) => Intent::LaunchParticleShowcase,
             Some(Command::Capture {
                 command: CaptureCommand::UsbVideo { output, seconds },
             }) => Intent::CaptureUsbVideo { output, seconds },

@@ -332,6 +332,10 @@ impl DeviceOperations for NativeDevice {
                     .map_err(device_failure)?
                 }
             }
+            DeviceRequest::LaunchParticleShowcase => {
+                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
+                launch_particle_showcase_interactive(&config).map_err(device_failure)?
+            }
             DeviceRequest::ProfileInstalledSearch { output_dir } => {
                 let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 profile_installed_search(&config, output_dir).map_err(device_failure)?
@@ -4681,6 +4685,30 @@ fn run_particle_showcase_trial(
         &telemetry,
         "particle-demos",
     ))
+}
+
+fn launch_particle_showcase_interactive(config: &NativeDeviceConfig) -> Result<String> {
+    let session = connect_with(&config.connection, 10)?;
+    validate_particle_display_geometry(&session)?;
+    restart_launcher_with_one_shot_env(
+        &session,
+        LauncherRestartOptions {
+            env_vars: vec![
+                ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+                ("MISTER_SCREENSAVER_START_ACTIVE".into(), "1".into()),
+                (
+                    "MISTER_SCREENSAVER_RENDERER".into(),
+                    "particle-demos".into(),
+                ),
+                ("MISTER_PARTICLE_DEMO".into(), "1".into()),
+                ("MISTER_PARTICLE_SEED".into(), "827141709451".into()),
+            ],
+            timeout_secs: 45,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    Ok("particle showcase is running; left/right changes demos and any other input exits".into())
 }
 
 fn capture_particle_showcase_frame(

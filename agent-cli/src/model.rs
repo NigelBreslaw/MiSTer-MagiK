@@ -238,6 +238,7 @@ pub enum Intent {
     Benchmark {
         scenario: BenchmarkScenario,
     },
+    LaunchParticleShowcase,
     CaptureUsbVideo {
         output: Option<PathBuf>,
         seconds: Option<u64>,
@@ -297,7 +298,10 @@ impl Intent {
             | Self::CiHostAssurance { .. }
             | Self::CaptureUsbVideo { .. } => Risk::LocalWrite,
             Self::ReleaseQualify | Self::DatabaseRotate => Risk::Destructive,
-            Self::Deliver { .. } | Self::Benchmark { .. } | Self::Diagnose => Risk::DeviceWrite,
+            Self::Deliver { .. }
+            | Self::Benchmark { .. }
+            | Self::Diagnose
+            | Self::LaunchParticleShowcase => Risk::DeviceWrite,
             Self::Build { .. } => Risk::LocalWrite,
             _ => Risk::ReadOnly,
         }

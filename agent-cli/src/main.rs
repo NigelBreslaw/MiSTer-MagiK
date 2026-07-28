@@ -147,6 +147,19 @@ fn dispatch(
         Intent::Benchmark { scenario } => {
             return agent_cli::benchmark::execute(repository, *scenario, reporter);
         }
+        Intent::LaunchParticleShowcase => {
+            reporter.emit(
+                EventKind::Progress,
+                "launch",
+                "Starting interactive particle showcase",
+                Some(50),
+            )?;
+            let mut device = agent_cli::device::DeviceClient::default();
+            let detail =
+                device.execute(mister_tool::transport::DeviceRequest::LaunchParticleShowcase)?;
+            println!("{detail}");
+            return Ok(Outcome::Passed);
+        }
         Intent::CaptureUsbVideo {
             output: destination,
             seconds,
