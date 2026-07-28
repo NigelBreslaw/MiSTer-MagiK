@@ -13,6 +13,7 @@ const MAX_TRAIL_SAMPLES: u8 = 32;
 const COPPER_WILLOW_RAIN: &str =
     include_str!("../assets/particles/fireworks/copper-willow-rain.json");
 const OLED_PEONY: &str = include_str!("../assets/particles/fireworks/oled-peony.json");
+const PHOENIX_COMET: &str = include_str!("../assets/particles/fireworks/phoenix-comet.json");
 const RECURSIVE_HALO: &str = include_str!("../assets/particles/fireworks/recursive-halo.json");
 const SOLAR_CHRYSANTHEMUM: &str =
     include_str!("../assets/particles/fireworks/solar-chrysanthemum.json");
@@ -152,6 +153,7 @@ pub fn embedded_firework_json(id: &str) -> Option<&'static str> {
     match id.trim().to_ascii_lowercase().as_str() {
         "copper-willow-rain" | "copper-willow" | "copper" => Some(COPPER_WILLOW_RAIN),
         "oled-peony" | "oled" => Some(OLED_PEONY),
+        "phoenix-comet" | "phoenix" => Some(PHOENIX_COMET),
         "recursive-halo" | "halo" => Some(RECURSIVE_HALO),
         "solar-chrysanthemum" | "solar" => Some(SOLAR_CHRYSANTHEMUM),
         _ => None,
