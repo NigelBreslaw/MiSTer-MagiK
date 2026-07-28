@@ -15093,7 +15093,7 @@ H: Handlers=event3 js0"#
             passing["projection_backends"],
             json!(["armv7-neon-corrected"])
         );
-        assert_eq!(passing["pmu"]["available_frames"], 604);
+        assert_eq!(passing["pmu"]["available_frames"], 601);
         assert_eq!(passing["pmu"]["instructions_per_cycle"], 0.8);
         assert_eq!(passing["pmu"]["cache_miss_pct"], 10.0);
         assert_eq!(passing["pmu"]["branch_miss_pct"], 5.0);

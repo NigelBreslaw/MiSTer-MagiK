@@ -288,7 +288,7 @@ mod tests {
             DeviceRequest::CaptureFramebuffer,
         ];
         let labels: Vec<_> = requests.iter().map(DeviceRequest::label).collect();
-        assert_eq!(labels.len(), 28);
+        assert_eq!(labels.len(), 30);
         assert!(labels.iter().all(|label| !label.is_empty()));
         assert_eq!(
             labels
@@ -299,6 +299,8 @@ mod tests {
             [
                 "profile-installed-screensaver",
                 "profile-installed-particles",
+                "profile-installed-particle-capacity",
+                "profile-installed-particle-step",
                 "profile-installed-particle-cpu",
                 "profile-installed-search",
                 "profile-installed-catalog-lifecycle"
