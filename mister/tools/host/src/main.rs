@@ -3427,6 +3427,16 @@ fn profile_installed_catalog_lifecycle(
                     "first_visible elapsed_ms={elapsed_ms} games={}\n",
                     status["catalog_games"]
                 ));
+                match exec(&session, &catalog_lifecycle_affinity_command(), true) {
+                    Ok(affinity) => {
+                        lifecycle_log.push_str("first_visible_thread_policy\n");
+                        lifecycle_log.push_str(&affinity.stdout);
+                        lifecycle_log.push_str(&affinity.stderr);
+                    }
+                    Err(error) => {
+                        lifecycle_log.push_str(&format!("affinity_error={error}\n"));
+                    }
+                }
             }
             if first_visible_ms.is_none()
                 && started.elapsed()
@@ -3631,9 +3641,14 @@ fn catalog_lifecycle_input_script() -> String {
 
 fn catalog_lifecycle_evidence_command() -> String {
     format!(
-        "set -eu; root={root}; find \"$root/diagnostics\" -maxdepth 1 -type f -print -exec sed -n '1,240p' {{}} \\; 2>/dev/null || true; pid=$(pidof mister-magik-fb | awk '{{print $1}}'); for task in /proc/$pid/task/*; do awk '/^(Name|Pid|Tgid|Cpus_allowed_list):/{{print}}' \"$task/status\"; awk '{{print \"Nice:\\t\" $19}}' \"$task/stat\"; done",
+        "set -eu; root={root}; find \"$root/diagnostics\" -maxdepth 1 -type f -print -exec sed -n '1,240p' {{}} \\; 2>/dev/null || true; {affinity}",
         root = sh(CATALOG_LIFECYCLE_REMOTE_DIR),
+        affinity = catalog_lifecycle_affinity_command(),
     )
+}
+
+fn catalog_lifecycle_affinity_command() -> String {
+    "pid=$(pidof mister-magik-fb | awk '{print $1}'); for task in /proc/$pid/task/*; do awk '/^(Name|Pid|Tgid|Cpus_allowed_list):/{print}' \"$task/status\"; awk '{print \"Nice:\\t\" $19}' \"$task/stat\"; done".to_string()
 }
 
 fn catalog_lifecycle_cleanup_command() -> String {
@@ -15331,10 +15346,10 @@ H: Handlers=event3 js0"#
                 .contains("MISTER_SHARDED_CATALOG_DIR='/media/fat/mister-magik-dev/catalog-v3'")
         );
         assert!(catalog_lifecycle_cleanup_command().contains(CATALOG_LIFECYCLE_REMOTE_DIR));
-        let evidence = catalog_lifecycle_evidence_command();
-        assert!(evidence.contains("Cpus_allowed_list"));
-        assert!(evidence.contains("/proc/$pid/task/*"));
-        assert!(!evidence.contains("ps -eo"));
+        let affinity = catalog_lifecycle_affinity_command();
+        assert!(affinity.contains("Cpus_allowed_list"));
+        assert!(affinity.contains("/proc/$pid/task/*"));
+        assert!(!affinity.contains("ps -eo"));
         let env = catalog_lifecycle_launcher_env();
         assert!(env.iter().any(|(key, value)| {
             key == "MISTER_CATALOG_DIAGNOSTICS_DIR"

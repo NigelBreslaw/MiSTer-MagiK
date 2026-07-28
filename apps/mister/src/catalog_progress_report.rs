@@ -290,6 +290,9 @@ fn report_writer() -> Option<&'static SyncSender<(PathBuf, String, CatalogProgre
             match std::thread::Builder::new()
                 .name("catalog-progress-report".to_string())
                 .spawn(move || {
+                    mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
+                        mister_magik_catalog::runtime_thread::RuntimeThreadRole::CatalogWorker,
+                    );
                     while let Ok((dir, episode_id, evidence)) = receiver.recv() {
                         if let Err(error) = write_report(&dir, &episode_id, evidence, unix_ms()) {
                             log_report_error(format_args!(
