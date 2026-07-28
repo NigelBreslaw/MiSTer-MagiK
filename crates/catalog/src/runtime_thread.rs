@@ -68,9 +68,12 @@ impl RuntimeThreadRole {
             Self::MediaWorker | Self::MediaIndex => {
                 RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0)
             }
-            Self::FramebufferStream | Self::RuntimeStatus => {
-                RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0)
-            }
+            Self::FramebufferStream => RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0),
+            // Status serialization and filesystem publication are periodic,
+            // bursty work. Keep them off the CPU0 screensaver render worker;
+            // CPU1 has ample launcher slack while the particle experiment is
+            // active.
+            Self::RuntimeStatus => RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu1),
             // Download starts only after it has joined the cooperative work
             // coordinator.  It may then use both online Cortex-A9 cores while
             // yielding at bounded stream-copy units for selected previews.
@@ -450,7 +453,7 @@ mod tests {
                 10,
                 ThreadAffinity::Cpu0,
             ),
-            (RuntimeThreadRole::RuntimeStatus, 10, ThreadAffinity::Cpu0),
+            (RuntimeThreadRole::RuntimeStatus, 10, ThreadAffinity::Cpu1),
             (RuntimeThreadRole::VideoDecode, 5, ThreadAffinity::Inherit),
             (RuntimeThreadRole::VideoAudio, 5, ThreadAffinity::Inherit),
             (
