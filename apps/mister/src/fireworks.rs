@@ -11,6 +11,8 @@ const SCHEMA: &str = "mister-magik-firework-v1";
 const MAX_PARTICLES: usize = 98_304;
 const MAX_TRAIL_SAMPLES: u8 = 16;
 const OLED_PEONY: &str = include_str!("../assets/particles/fireworks/oled-peony.json");
+const SOLAR_CHRYSANTHEMUM: &str =
+    include_str!("../assets/particles/fireworks/solar-chrysanthemum.json");
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct FireworkRenderStats {
@@ -146,6 +148,7 @@ impl FireworkRenderer {
 pub fn embedded_firework_json(id: &str) -> Option<&'static str> {
     match id.trim().to_ascii_lowercase().as_str() {
         "oled-peony" | "oled" => Some(OLED_PEONY),
+        "solar-chrysanthemum" | "solar" => Some(SOLAR_CHRYSANTHEMUM),
         _ => None,
     }
 }
