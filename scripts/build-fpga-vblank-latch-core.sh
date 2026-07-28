@@ -33,6 +33,7 @@ BUILD_DATE="${MISTER_FPGA_BUILD_DATE:-$(git -C "$ROOT" show -s --format=%cd --da
 QUALIFIED_MAGIK_REVISION="${MISTER_FPGA_QUALIFIED_MAGIK_REVISION:-$(git -C "$ROOT" rev-parse HEAD)}"
 COMPONENT_INPUT_SHA256="${MISTER_FPGA_COMPONENT_INPUT_SHA256:-}"
 COMPONENT_REVISION="${MISTER_FPGA_COMPONENT_REVISION:-}"
+SYNTHESIS_INPUT_SHA256="${MISTER_FPGA_SYNTHESIS_INPUT_SHA256:-}"
 QUARTUS_SEED="${MISTER_FPGA_QUARTUS_SEED:-}"
 PLATFORM_CONTRACT="$ROOT/mister/platform/kernel/scanout-slots/mister_magik_scanout_platform.h"
 
@@ -159,6 +160,10 @@ if [[ -n "$COMPONENT_REVISION" && ! "$COMPONENT_REVISION" =~ ^[0-9a-f]{40}$ ]]; 
   echo "MISTER_FPGA_COMPONENT_REVISION must be a full commit SHA" >&2
   exit 1
 fi
+if [[ -n "$SYNTHESIS_INPUT_SHA256" && ! "$SYNTHESIS_INPUT_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "MISTER_FPGA_SYNTHESIS_INPUT_SHA256 must be a SHA-256 value" >&2
+  exit 1
+fi
 if [[ -n "$QUARTUS_SEED" && ! "$QUARTUS_SEED" =~ ^[1-9][0-9]*$ ]]; then
   echo "MISTER_FPGA_QUARTUS_SEED must be a positive integer" >&2
   exit 1
@@ -211,6 +216,9 @@ PY
   if [[ -n "$COMPONENT_INPUT_SHA256" ]]; then
     echo "component_input_sha256=$COMPONENT_INPUT_SHA256"
     echo "component_revision=$COMPONENT_REVISION"
+  fi
+  if [[ -n "$SYNTHESIS_INPUT_SHA256" ]]; then
+    echo "synthesis_input_sha256=$SYNTHESIS_INPUT_SHA256"
   fi
   git -C "$ROOT" rev-parse HEAD 2>/dev/null | sed 's/^/builder_commit=/'
   git -C "$ROOT" status --short --untracked-files=no 2>/dev/null | sed 's/^/magik_status=/'

@@ -102,6 +102,7 @@ class ComponentIdentityTests(unittest.TestCase):
 
     def test_fpga_manifest_change_leaves_kernel_identity_unchanged(self) -> None:
         fpga_before, _ = component_id.component_id(self.root, "fpga")
+        synthesis_before, _ = component_id.component_id(self.root, "fpga-synthesis")
         kernel_before, _ = component_id.component_id(self.root, "kernel")
         manifest = self.root / component_id.COMPONENT_INPUT_MANIFESTS["fpga"]
         manifest.write_text(
@@ -112,9 +113,33 @@ class ComponentIdentityTests(unittest.TestCase):
         extra.write_text("extra FPGA input\n")
         self.commit("extend FPGA identity manifest")
         fpga_after, _ = component_id.component_id(self.root, "fpga")
+        synthesis_after, _ = component_id.component_id(self.root, "fpga-synthesis")
         kernel_after, _ = component_id.component_id(self.root, "kernel")
         self.assertNotEqual(fpga_before, fpga_after)
+        self.assertEqual(synthesis_before, synthesis_after)
         self.assertEqual(kernel_before, kernel_after)
+
+    def test_validation_change_does_not_invalidate_fpga_synthesis(self) -> None:
+        fpga_before, _ = component_id.component_id(self.root, "fpga")
+        synthesis_before, _ = component_id.component_id(self.root, "fpga-synthesis")
+        validator = self.root / "scripts/checks/check-fpga-quartus-delta.py"
+        validator.write_text("fixed validation\n")
+        self.commit("fix FPGA validation")
+        fpga_after, _ = component_id.component_id(self.root, "fpga")
+        synthesis_after, _ = component_id.component_id(self.root, "fpga-synthesis")
+        self.assertNotEqual(fpga_before, fpga_after)
+        self.assertEqual(synthesis_before, synthesis_after)
+
+    def test_synthesis_change_invalidates_fpga_component_and_synthesis(self) -> None:
+        fpga_before, _ = component_id.component_id(self.root, "fpga")
+        synthesis_before, _ = component_id.component_id(self.root, "fpga-synthesis")
+        build = self.root / "scripts/build-fpga-vblank-latch-core.sh"
+        build.write_text("changed synthesis\n")
+        self.commit("change FPGA synthesis")
+        fpga_after, _ = component_id.component_id(self.root, "fpga")
+        synthesis_after, _ = component_id.component_id(self.root, "fpga-synthesis")
+        self.assertNotEqual(fpga_before, fpga_after)
+        self.assertNotEqual(synthesis_before, synthesis_after)
 
     def test_kernel_manifest_change_only_invalidates_kernel_identity(self) -> None:
         fpga_before, _ = component_id.component_id(self.root, "fpga")

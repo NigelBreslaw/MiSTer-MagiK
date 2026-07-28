@@ -1,0 +1,10 @@
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Inputs that can change the stock or patched Quartus synthesis result.
+# Validation and workflow-only inputs intentionally belong to fpga-v0.1.txt,
+# so fixing qualification logic does not force identical RBFs to be rebuilt.
+mister/platform/fpga/menu-vblank-latch
+mister/platform/kernel/scanout-slots/mister_magik_scanout_platform.h
+scripts/build-fpga-vblank-latch-core.sh
+scripts/install-quartus-lite-docker.sh

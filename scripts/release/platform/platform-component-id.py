@@ -18,6 +18,7 @@ BUNDLE_FORMAT = "mister-magik-platform-bundle-v0.1"
 
 COMPONENT_INPUT_MANIFESTS = {
     "fpga": "scripts/platform-component-inputs/fpga-v0.1.txt",
+    "fpga-synthesis": "scripts/platform-component-inputs/fpga-synthesis-v0.1.txt",
     "kernel": "scripts/platform-component-inputs/kernel-v0.1.txt",
 }
 IDENTITY_IMPLEMENTATION = "scripts/release/platform/platform-component-id.py"
