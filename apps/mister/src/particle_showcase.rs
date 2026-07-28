@@ -717,13 +717,44 @@ impl ParticleShowcaseRenderer {
         let reverse_angle = seconds * -0.31;
         let (forward_sin, forward_cos) = forward_angle.sin_cos();
         let (reverse_sin, reverse_cos) = reverse_angle.sin_cos();
-        let (tilt_sin, tilt_cos) = 0.72_f32.sin_cos();
+        let (previous_forward_sin, previous_forward_cos) = (-0.035_f32).sin_cos();
+        let (previous_reverse_sin, previous_reverse_cos) = 0.035_f32.sin_cos();
+        let (tilt_sin, tilt_cos) = 0.42_f32.sin_cos();
         let pulse = 0.94 + ((seconds * 1.9).sin() * 0.5 + 0.5) * 0.12;
         let center_x = self.config.width as f32 * 0.5;
         let center_y = self.config.height as f32 * 0.5;
         let mut clipped = 0usize;
 
-        for index in (0..self.pool.active()).step_by(4) {
+        for index in (0..self.pool.active()).step_by(8) {
+            if index & 63 == 0 {
+                let rim_index = index / 64;
+                let rim_count = self.pool.active() / 64;
+                let rim_lane = (rim_index & 1) as f32;
+                let angle = std::f32::consts::TAU * ((rim_index / 2) as f32 + rim_lane * 0.5)
+                    / (rim_count / 2) as f32
+                    + seconds * 0.08;
+                let (sin_angle, cos_angle) = angle.sin_cos();
+                let radius =
+                    168.0 + rim_lane * 14.0 + 3.0 * triangle_wave(rim_index as f32 * 0.381_966);
+                let rim_x = cos_angle * radius;
+                let rim_y = sin_angle * radius;
+                let rim_z = triangle_wave(angle * 1.5 + seconds * 0.12) * 14.0;
+                let y = rim_y.mul_add(tilt_cos, -(rim_z * tilt_sin));
+                let depth_axis = rim_y.mul_add(tilt_sin, rim_z * tilt_cos);
+                let scale = 570.0 / (570.0 + depth_axis);
+                if !push_screen_command(
+                    &mut self.commands,
+                    self.config.width,
+                    self.config.height,
+                    center_x + rim_x * scale,
+                    center_y + y * scale,
+                    7,
+                    true,
+                ) {
+                    clipped = clipped.saturating_add(1);
+                }
+                continue;
+            }
             let reverse = self.pool.flags[index] & 1 != 0;
             let (sin_rotation, cos_rotation) = if reverse {
                 (reverse_sin, reverse_cos)
@@ -764,8 +795,11 @@ impl ParticleShowcaseRenderer {
                 continue;
             }
             if self.pool.flags[index] & 2 != 0 {
-                let previous_rotation: f32 = if reverse { 0.035 } else { -0.035 };
-                let (previous_sin, previous_cos) = previous_rotation.sin_cos();
+                let (previous_sin, previous_cos) = if reverse {
+                    (previous_reverse_sin, previous_reverse_cos)
+                } else {
+                    (previous_forward_sin, previous_forward_cos)
+                };
                 let previous_x = x.mul_add(previous_cos, -(ring_y * previous_sin));
                 let previous_y = x.mul_add(previous_sin, ring_y * previous_cos);
                 self.segments.push(ParticleShowcaseSegment {
@@ -2292,8 +2326,8 @@ mod tests {
         assert_eq!(stats.demo, ParticleDemoKind::ParticlePortal);
         assert_eq!(stats.beat, "pulse");
         assert!((90.0..230.0).contains(&radial_min));
-        assert_eq!(renderer.commands.len(), renderer.pool.active() / 4);
-        assert!(stats.visible > renderer.pool.active() / 8);
+        assert_eq!(renderer.commands.len(), renderer.pool.active() / 8);
+        assert!(stats.visible > renderer.pool.active() / 16);
         assert!(stats.segment_count > 0);
         assert!(stats.segment_count <= renderer.pool.active() / 128);
     }
