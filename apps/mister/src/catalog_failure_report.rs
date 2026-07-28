@@ -131,10 +131,7 @@ fn report_value(report_id: &str, ts_unix_ms: u128, mut report: CatalogFailureRep
         "report_id": report_id,
         "ts_unix_ms": ts_unix_ms,
         "pid": std::process::id(),
-        "build": {
-            "package_version": env!("CARGO_PKG_VERSION"),
-            "arch": std::env::consts::ARCH,
-        },
+        "build": crate::build_identity::BuildIdentity::current(),
         "failure": {
             "code": report.code,
             "stage": report.stage,
@@ -311,9 +308,15 @@ mod tests {
         }
         let latest = fs::read(dir.join(LATEST_FILE)).unwrap();
         assert!(latest.len() <= MAX_REPORT_BYTES);
+        let value = serde_json::from_slice::<Value>(&latest).unwrap();
+        assert_eq!(value["schema"], REPORT_SCHEMA);
         assert_eq!(
-            serde_json::from_slice::<Value>(&latest).unwrap()["schema"],
-            REPORT_SCHEMA
+            value["build"]["build_number"],
+            env!("MISTER_MAGIK_BUILD_NUMBER")
+        );
+        assert_eq!(
+            value["build"]["source_revision"],
+            env!("MISTER_MAGIK_SOURCE_REVISION")
         );
         let retained = fs::read_dir(&dir)
             .unwrap()

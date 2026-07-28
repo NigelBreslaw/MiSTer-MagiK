@@ -15,6 +15,7 @@ pub use mister_magik_mister_runtime::boot_analytics;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 #[allow(dead_code)]
 mod bitmap_text;
+pub mod build_identity;
 pub mod catalog_failure_report;
 pub mod catalog_progress_report;
 pub mod command_args;

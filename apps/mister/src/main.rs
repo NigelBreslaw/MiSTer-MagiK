@@ -71,6 +71,7 @@ use std::path::{Path, PathBuf};
 mod arcade_list_renderer;
 mod artifact_publish;
 mod bitmap_text;
+pub use mister_magik_fb::build_identity;
 use mister_magik_mister_runtime::boot_analytics;
 mod catalog_failure_report;
 mod catalog_progress_report;
@@ -142,7 +143,11 @@ fn main() {
     unsafe { mister_magik_catalog::device_layout::initialize_process_env() };
     let args: Vec<String> = std::env::args().collect();
     mister_magik_fb::crash_report::install_panic_hook(args.clone());
-    boot_analytics::event("process_start", format!("args={}", args.join(" ")));
+    let build_identity = build_identity::BuildIdentity::current();
+    boot_analytics::event(
+        "process_start",
+        format!("args={} {}", args.join(" "), build_identity.log_detail()),
+    );
 
     if args.len() >= 2 {
         if command_args::should_handoff_to_mister(&args[1]) {
@@ -162,7 +167,7 @@ fn main() {
     let latch_readiness_json =
         cmd == "latch-readiness-report" && args.iter().any(|arg| arg == "--json");
     if cmd != "catalog-v3-inspect" && !latch_readiness_json {
-        crate::ui_logln!("mister-magik-fb [{cmd}] (arch={})", std::env::consts::ARCH);
+        crate::ui_logln!("mister-magik-fb [{cmd}] ({})", build_identity.log_detail());
     }
 
     let command = command_args::find_command(&cmd).unwrap_or_else(|| unknown_command(&cmd));

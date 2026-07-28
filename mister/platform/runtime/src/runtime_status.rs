@@ -98,6 +98,13 @@ launcher_status_types! {
         frame_budget: FrameBudgetStatus,
     }
     strings {
+        build_package_version,
+        build_version,
+        build_number,
+        build_source_revision,
+        build_source_dirty,
+        build_time,
+        build_arch,
         scene,
         screen,
         effective_view,
@@ -581,6 +588,22 @@ fn launcher_status_value(
     insert!("ts_unix_ms", ts_unix_ms);
     insert!("pid", pid);
     insert!("mode", "ui");
+    insert!(
+        "build",
+        json!({
+            "package_version": status.build_package_version,
+            "version": status.build_version,
+            "build_number": status.build_number,
+            "source_revision": status.build_source_revision,
+            "source_dirty": match status.build_source_dirty.as_str() {
+                "0" => Some(false),
+                "1" => Some(true),
+                _ => None,
+            },
+            "build_time": status.build_time,
+            "arch": status.build_arch,
+        })
+    );
     insert!("scene", status.scene);
     insert!("screen", status.screen);
     insert!("effective_view", status.effective_view);
@@ -1167,6 +1190,13 @@ mod tests {
     fn launcher_status_value_contains_runtime_state_and_rounds_fps() {
         let value = launcher_status_value(
             LauncherStatus {
+                build_package_version: "0.1.0",
+                build_version: "0.2.2429",
+                build_number: "2429",
+                build_source_revision: "deadbeef",
+                build_source_dirty: "0",
+                build_time: "28.7.2026 12:00",
+                build_arch: "arm",
                 scene: "launcher",
                 screen: "home",
                 effective_view: "home",
@@ -1515,6 +1545,11 @@ mod tests {
         assert_eq!(value["ts_unix_ms"], 5678);
         assert_eq!(value["pid"], 101);
         assert_eq!(value["mode"], "ui");
+        assert_eq!(value["build"]["version"], "0.2.2429");
+        assert_eq!(value["build"]["build_number"], "2429");
+        assert_eq!(value["build"]["source_revision"], "deadbeef");
+        assert_eq!(value["build"]["source_dirty"], false);
+        assert_eq!(value["build"]["arch"], "arm");
         assert_eq!(value["scene"], "launcher");
         assert_eq!(value["screen"], "home");
         assert_eq!(value["output_route"], "crt-576p50");
@@ -1614,6 +1649,13 @@ mod tests {
         screensaver_profile_state: &'static str,
     ) -> LauncherStatus<'static> {
         LauncherStatus {
+            build_package_version: "0.1.0",
+            build_version: "0.2.2429",
+            build_number: "2429",
+            build_source_revision: "deadbeef",
+            build_source_dirty: "0",
+            build_time: "28.7.2026 12:00",
+            build_arch: "arm",
             scene: "launcher",
             screen,
             effective_view: screen,

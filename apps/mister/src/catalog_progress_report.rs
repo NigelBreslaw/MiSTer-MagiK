@@ -350,11 +350,7 @@ fn report_value(episode_id: &str, now_ms: u128, evidence: CatalogProgressEvidenc
         "episode_id": episode_id,
         "updated_unix_ms": now_ms,
         "pid": std::process::id(),
-        "build": {
-            "package_version": env!("CARGO_PKG_VERSION"),
-            "arch": std::env::consts::ARCH,
-            "source_revision": option_env!("GIT_HASH").unwrap_or("unknown"),
-        },
+        "build": crate::build_identity::BuildIdentity::current(),
         "progress": evidence,
         "files": {
             "build_progress": file_snapshot(
@@ -848,6 +844,16 @@ mod tests {
             .count();
         assert!(reports <= MAX_RETAINED_REPORTS);
         assert!(dir.join(LATEST_FILE).exists());
+        let latest: Value =
+            serde_json::from_slice(&fs::read(dir.join(LATEST_FILE)).unwrap()).unwrap();
+        assert_eq!(
+            latest["build"]["build_number"],
+            env!("MISTER_MAGIK_BUILD_NUMBER")
+        );
+        assert_eq!(
+            latest["build"]["source_revision"],
+            env!("MISTER_MAGIK_SOURCE_REVISION")
+        );
         assert!(
             fs::read_dir(&dir)
                 .unwrap()

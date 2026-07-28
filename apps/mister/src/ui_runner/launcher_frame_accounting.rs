@@ -2215,7 +2215,15 @@ impl LauncherFrameAccounting {
         };
         self.status_sequence = self.status_sequence.saturating_add(1);
         let screensaver_profile_state = cpu_profile::screensaver_profile_state();
+        let build_identity = crate::build_identity::BuildIdentity::current();
         let status_submitted = self.runtime_status_publisher.submit(LauncherStatus {
+            build_package_version: build_identity.package_version,
+            build_version: build_identity.version,
+            build_number: build_identity.build_number,
+            build_source_revision: build_identity.source_revision,
+            build_source_dirty: build_identity.source_dirty_label(),
+            build_time: build_identity.build_time,
+            build_arch: build_identity.arch,
             scene: "launcher",
             screen: self.effective_view,
             effective_view: self.effective_view,

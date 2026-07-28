@@ -66,6 +66,7 @@ fn panic_report_value(
         "report_id": report_id,
         "ts_unix_ms": ts_unix_ms,
         "pid": pid,
+        "build": crate::build_identity::BuildIdentity::current(),
         "process": {
             "arch": std::env::consts::ARCH,
             "package_version": env!("CARGO_PKG_VERSION"),

@@ -168,10 +168,7 @@ fn report_value(episode_id: &str, now_ms: u128, mut evidence: LatchFailureEviden
         "episode_id": episode_id,
         "updated_unix_ms": now_ms,
         "pid": std::process::id(),
-        "build": {
-            "package_version": env!("CARGO_PKG_VERSION"),
-            "arch": std::env::consts::ARCH,
-        },
+        "build": crate::build_identity::BuildIdentity::current(),
         "failure": evidence,
         "snapshots": {
             "runtime": read_json_snapshot("/tmp/mister-magik/status.json"),
@@ -366,9 +363,15 @@ mod tests {
         write_report(&dir, &id, evidence(), 1_000).unwrap();
         let latest = fs::read(dir.join(LATEST_FILE)).unwrap();
         assert!(latest.len() <= MAX_REPORT_BYTES);
+        let value = serde_json::from_slice::<Value>(&latest).unwrap();
+        assert_eq!(value["schema"], REPORT_SCHEMA);
         assert_eq!(
-            serde_json::from_slice::<Value>(&latest).unwrap()["schema"],
-            REPORT_SCHEMA
+            value["build"]["build_number"],
+            env!("MISTER_MAGIK_BUILD_NUMBER")
+        );
+        assert_eq!(
+            value["build"]["source_revision"],
+            env!("MISTER_MAGIK_SOURCE_REVISION")
         );
         assert!(
             fs::read_dir(&dir)
