@@ -735,7 +735,7 @@ impl ParticleShowcaseRenderer {
     fn project_weather_snow(&mut self, seconds: f32) -> usize {
         let mut clipped = 0usize;
         let gust = triangle_wave(seconds * 0.055) * 42.0;
-        for index in (0..self.pool.active()).step_by(4) {
+        for index in (0..self.pool.active()).step_by(8) {
             let layer = 0.72 + self.pool.z[index] * 0.58;
             let fall = (self.pool.y[index]
                 + seconds * (34.0 + 58.0 * self.pool.z[index]) * self.pool.life[index])
@@ -2148,7 +2148,7 @@ mod tests {
             .unwrap();
         assert_eq!(snow.beat, "snow");
         assert_eq!(snow.segment_count, 0);
-        assert!(snow.visible > renderer.pool.active() / 8);
+        assert!(snow.visible > renderer.pool.active() / 16);
 
         let ash = renderer
             .render(&mut destination, 1, Duration::from_secs(25))
