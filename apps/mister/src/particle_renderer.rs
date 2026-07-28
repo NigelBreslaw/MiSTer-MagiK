@@ -265,14 +265,23 @@ impl ParticleRenderer {
             .shadow_raster
             .then(|| std::mem::take(&mut self.dirty_slots[slot_offset].shadow));
         let render_target = shadow.as_deref_mut().unwrap_or(&mut *destination);
-        let mut dirty_offsets = self.prepare_hidden_slot(render_target, slot_offset);
+        let mut dirty_offsets = if self.shadow_raster {
+            render_target.fill(Rgb565Pixel(0));
+            let slot = &mut self.dirty_slots[slot_offset];
+            slot.initialized = true;
+            let mut offsets = std::mem::take(&mut slot.offsets);
+            offsets.clear();
+            offsets
+        } else {
+            self.prepare_hidden_slot(render_target, slot_offset)
+        };
         let clear_us = clear_started.elapsed().as_micros();
         let clear_cpu_us = elapsed_thread_cpu_us(clear_cpu_started);
         let raster_started = Instant::now();
         let raster_cpu_started = thread_cpu_time_us();
         self.raster(render_target, &mut dirty_offsets);
         if let Some(shadow) = shadow.as_ref() {
-            destination.copy_from_slice(shadow);
+            copy_particle_shadow(destination, shadow);
         }
         let raster_us = raster_started.elapsed().as_micros();
         let raster_cpu_us = elapsed_thread_cpu_us(raster_cpu_started);
@@ -808,6 +817,31 @@ fn particle_shadow_raster_requested() -> bool {
             std::env::var("MISTER_PARTICLE_RASTER").ok().as_deref(),
             Some("direct" | "wc-direct" | "off" | "false" | "no")
         )
+}
+
+fn copy_particle_shadow(destination: &mut [Rgb565Pixel], shadow: &[Rgb565Pixel]) {
+    debug_assert_eq!(destination.len(), shadow.len());
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    {
+        unsafe extern "C" {
+            fn mister_magik_particle_neon_copy_rgb565(
+                destination: *mut u16,
+                shadow: *const u16,
+                pixel_count: usize,
+            );
+        }
+        // SAFETY: RGB565 pixels are one u16 each, both slices are valid for
+        // `len` elements, and the per-slot shadow never aliases framebuffer memory.
+        unsafe {
+            mister_magik_particle_neon_copy_rgb565(
+                destination.as_mut_ptr().cast(),
+                shadow.as_ptr().cast(),
+                destination.len(),
+            );
+        }
+    }
+    #[cfg(not(all(target_os = "linux", target_arch = "arm")))]
+    destination.copy_from_slice(shadow);
 }
 
 fn particle_command_order_requested() -> bool {
