@@ -267,7 +267,7 @@ impl ParticleDemoKind {
             Self::ParticlePortal => 65_536,
             Self::ElectricStorm => 16_384,
             Self::FountainWaterfall => 32_768,
-            Self::ArcadeCabinet => 20_480,
+            Self::ArcadeCabinet => 16_384,
         }
     }
 
@@ -2868,8 +2868,8 @@ mod tests {
 
         assert_eq!(formation.beat, "formation");
         assert_eq!(orbit.beat, "fly-around");
-        assert_eq!(renderer.commands.len(), 20_480);
-        assert!(orbit.visible > 18_000);
+        assert_eq!(renderer.commands.len(), 16_384);
+        assert!(orbit.visible > 14_000);
         assert!(
             renderer.pool.flags[..renderer.pool.active()]
                 .iter()
