@@ -208,6 +208,10 @@ struct EmitterSpec {
     curl_deg: [f32; 2],
     #[serde(default = "one")]
     petals: u16,
+    #[serde(default)]
+    strands: u16,
+    #[serde(default = "default_strand_spread")]
+    strand_spread_deg: f32,
     speed: [f32; 2],
     #[serde(default)]
     gravity: f32,
@@ -267,6 +271,8 @@ struct CompiledEmitter {
     angular_velocity: f32,
     curl: (f32, f32),
     petals: usize,
+    strands: usize,
+    strand_spread: f32,
     speed: (f32, f32),
     gravity: f32,
     drag: f32,
@@ -317,6 +323,11 @@ impl CompiledShow {
                     "emitter {index} count and repeats must be non-zero"
                 ));
             }
+            if usize::from(emitter.strands) > emitter.count {
+                return Err(format!(
+                    "emitter {index} strands must not exceed its particle count"
+                ));
+            }
             particle_total = particle_total
                 .saturating_add(emitter.count.saturating_mul(usize::from(emitter.repeats)));
             if particle_total > MAX_PARTICLES {
@@ -362,6 +373,8 @@ impl CompiledShow {
                     emitter.curl_deg[1].to_radians(),
                 ),
                 petals: usize::from(emitter.petals.max(1)),
+                strands: usize::from(emitter.strands),
+                strand_spread: emitter.strand_spread_deg.to_radians(),
                 speed: (emitter.speed[0], emitter.speed[1]),
                 gravity: emitter.gravity,
                 drag: emitter.drag,
@@ -396,8 +409,29 @@ impl CompiledEmitter {
         width: usize,
         height: usize,
     ) -> (f32, f32) {
-        let ordinal = particle_index as f32 / self.count.max(1) as f32;
-        let jitter = random_signed(random.rotate_left(9)) * self.spread / self.count.max(1) as f32;
+        let trajectory_count = if self.strands == 0 {
+            self.count.max(1)
+        } else {
+            self.strands
+        };
+        let trajectory_index = if self.strands == 0 {
+            particle_index
+        } else {
+            particle_index % self.strands
+        };
+        let trajectory_random = if self.strands == 0 {
+            random
+        } else {
+            splitmix64(
+                (trajectory_index as u64).wrapping_mul(0xd6e8_feb8_6659_fd93) ^ self.count as u64,
+            )
+        };
+        let ordinal = trajectory_index as f32 / trajectory_count as f32;
+        let jitter = if self.strands == 0 {
+            random_signed(random.rotate_left(9)) * self.spread / trajectory_count as f32
+        } else {
+            random_signed(random.rotate_left(9)) * self.strand_spread
+        };
         let base_angle = match self.shape {
             Shape::Comet | Shape::Fan => self.direction + (ordinal - 0.5) * self.spread + jitter,
             Shape::Spiral => self.rotation + ordinal * self.spread * 2.5 + jitter,
@@ -425,11 +459,13 @@ impl CompiledEmitter {
                     .abs();
                 lerp(self.speed.0, self.speed.1, petal_phase)
             }
-            _ => lerp(
-                self.speed.0,
-                self.speed.1,
-                random_unit(random.rotate_left(41)),
-            ),
+            _ => {
+                lerp(
+                    self.speed.0,
+                    self.speed.1,
+                    random_unit(trajectory_random.rotate_left(41)),
+                ) * (1.0 + random_signed(random.rotate_left(29)) * 0.06)
+            }
         };
         let travel = if self.drag.abs() < f32::EPSILON {
             shape_speed * seconds
@@ -635,6 +671,10 @@ fn default_direction() -> f32 {
 
 fn full_circle() -> f32 {
     360.0
+}
+
+fn default_strand_spread() -> f32 {
+    1.5
 }
 
 #[cfg(test)]
