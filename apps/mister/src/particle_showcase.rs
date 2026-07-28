@@ -257,6 +257,7 @@ pub struct ParticleShowcaseRenderer {
     transition_started_at: Option<Duration>,
     heat: Vec<u8>,
     heat_frame: u64,
+    galaxy_projected_count: usize,
     dirty_slots: [ParticleShowcaseDirtySlot; HIDDEN_SLOT_COUNT],
     hud_font: ConsoleFont,
     hud_pixels: Vec<Pixel>,
@@ -352,6 +353,7 @@ impl ParticleShowcaseRenderer {
             transition_started_at: None,
             heat,
             heat_frame: u64::MAX,
+            galaxy_projected_count: 0,
             dirty_slots,
             hud_font,
             hud_pixels,
@@ -476,6 +478,7 @@ impl ParticleShowcaseRenderer {
         self.pool.reset(demo, self.config.seed);
         self.heat.fill(0);
         self.heat_frame = u64::MAX;
+        self.galaxy_projected_count = 0;
         for slot in &mut self.dirty_slots {
             slot.initialized = false;
             slot.offsets.clear();
@@ -489,7 +492,7 @@ impl ParticleShowcaseRenderer {
             self.pool.flags[index] = u8::from(random & 0x1f == 0);
         }
         if demo == ParticleDemoKind::SpiralGalaxy {
-            self.initialize_galaxy();
+            self.galaxy_projected_count = self.initialize_galaxy();
         }
     }
 
@@ -586,7 +589,7 @@ impl ParticleShowcaseRenderer {
         }
     }
 
-    fn initialize_galaxy(&mut self) {
+    fn initialize_galaxy(&mut self) -> usize {
         let bulge_count = self.pool.active() * 3 / 20;
         for index in 0..self.pool.active() {
             let random = self.pool.random[index];
@@ -631,6 +634,17 @@ impl ParticleShowcaseRenderer {
             self.pool.y[index] = tilted_y * perspective;
             self.pool.z[index] = tilted_z;
         }
+        let mut projected_count = 0usize;
+        for index in 0..self.pool.active() {
+            if self.pool.flags[index] == 0 {
+                continue;
+            }
+            if projected_count != index {
+                self.pool.swap_projection_entries(projected_count, index);
+            }
+            projected_count += 1;
+        }
+        projected_count
     }
 
     fn project_spiral_galaxy(&mut self, elapsed: Duration) -> usize {
@@ -642,10 +656,10 @@ impl ParticleShowcaseRenderer {
         let bulge_count = self.pool.active() * 3 / 20;
         #[cfg(target_arch = "arm")]
         {
-            self.commands.resize(self.pool.active(), u32::MAX);
+            self.commands.resize(self.galaxy_projected_count, u32::MAX);
             let visible = unsafe {
                 mister_magik_showcase_neon_project_galaxy(
-                    self.pool.active(),
+                    self.galaxy_projected_count,
                     self.config.width,
                     self.config.height,
                     bulge_count,
@@ -659,16 +673,12 @@ impl ParticleShowcaseRenderer {
                     self.commands.as_mut_ptr(),
                 )
             };
-            return self.pool.active().saturating_sub(visible);
+            return self.galaxy_projected_count.saturating_sub(visible);
         }
         #[cfg(not(target_arch = "arm"))]
         let mut clipped = 0usize;
         #[cfg(not(target_arch = "arm"))]
-        for index in 0..self.pool.active() {
-            if self.pool.flags[index] == 0 {
-                self.commands.push(u32::MAX);
-                continue;
-            }
+        for index in 0..self.galaxy_projected_count {
             let x = self.pool.x[index];
             let y = self.pool.y[index];
             let display_x = x.mul_add(cos_yaw, -(y * sin_yaw));
@@ -1226,6 +1236,15 @@ impl ParticleShowcasePool {
             .saturating_add(self.style.capacity())
             .saturating_add(self.flags.capacity())
     }
+
+    fn swap_projection_entries(&mut self, first: usize, second: usize) {
+        self.random.swap(first, second);
+        self.x.swap(first, second);
+        self.y.swap(first, second);
+        self.z.swap(first, second);
+        self.style.swap(first, second);
+        self.flags.swap(first, second);
+    }
 }
 
 fn fold_seed(seed: u64, kind: ParticleDemoKind) -> u32 {
@@ -1562,7 +1581,8 @@ mod tests {
 
         assert_eq!(stats.demo, ParticleDemoKind::SpiralGalaxy);
         assert_eq!(stats.beat, "arm-pass");
-        assert_eq!(renderer.commands.len(), renderer.pool.active());
+        assert_eq!(renderer.commands.len(), renderer.galaxy_projected_count);
+        assert!(renderer.galaxy_projected_count < renderer.pool.active());
         assert!(stats.visible > renderer.pool.active() / 2);
         assert!(
             renderer.pool.style[..bulge_count]
@@ -1575,7 +1595,7 @@ mod tests {
                 .any(|height| height.abs() > 8.0)
         );
         assert!(
-            renderer.pool.flags[bulge_count..]
+            renderer.pool.flags[renderer.galaxy_projected_count..]
                 .iter()
                 .any(|flag| *flag == 0)
         );
