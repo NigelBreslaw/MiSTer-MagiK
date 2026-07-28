@@ -1050,6 +1050,22 @@ fn pad_state_has_active_input(state: &PadState) -> bool {
         || state.btn_capture
 }
 
+fn screensaver_user_activity(
+    particle_showcase_requested: bool,
+    raw_user_activity: bool,
+    launcher_state: &PadState,
+) -> bool {
+    if particle_showcase_requested {
+        // Main's virtual input mapping is authoritative while the launcher is
+        // active. A physical js event can arrive one poll before its mapped
+        // virtual key, so treating raw activity as dismissal races navigation.
+        // Wait for a mapped action: directions navigate and other actions exit.
+        pad_state_has_active_input(launcher_state)
+    } else {
+        raw_user_activity
+    }
+}
+
 fn direct_preview_requested(
     screen: Screen,
     memory_guard_active: bool,
@@ -3182,7 +3198,7 @@ pub(super) fn run_launcher_loop(
             let pad_changed = pad_changed_for_input
                 .take()
                 .unwrap_or_else(|| pad.poll_with_debug_labels(setup_active));
-            let screensaver_input_activity = pad.user_activity();
+            let raw_screensaver_input_activity = pad.user_activity();
             let frame_now = Instant::now();
 
             if setup_active && setup.target_pad_idx >= pad.len() {
@@ -3196,6 +3212,11 @@ pub(super) fn run_launcher_loop(
 
             let input_session = ControllerSetupInputSession::new(&pad, &setup);
             let launcher_state = input_session.launcher_state().clone();
+            let screensaver_input_activity = screensaver_user_activity(
+                particle_showcase_requested,
+                raw_screensaver_input_activity,
+                &launcher_state,
+            );
             let particle_demo_direction = if particle_showcase_requested {
                 (if launcher_state.dpad_right { 1 } else { 0 })
                     - (if launcher_state.dpad_left { 1 } else { 0 })
@@ -7900,6 +7921,19 @@ mod tests {
         assert!(!pad_state_home_horizontal_held(&pad_state_with(|state| {
             state.dpad_up = true;
         })));
+    }
+
+    #[test]
+    pub(super) fn particle_showcase_waits_for_mapped_input_before_dismissal() {
+        let idle = PadState::default();
+        assert!(!screensaver_user_activity(true, true, &idle));
+        assert!(screensaver_user_activity(false, true, &idle));
+
+        let left = pad_state_with(|state| state.dpad_left = true);
+        assert!(screensaver_user_activity(true, true, &left));
+
+        let button = pad_state_with(|state| state.btn_a = true);
+        assert!(screensaver_user_activity(true, true, &button));
     }
 
     #[test]
