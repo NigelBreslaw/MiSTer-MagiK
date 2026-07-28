@@ -123,8 +123,8 @@ const WATER_PALETTE: [Rgb565Pixel; 8] = [
     Rgb565Pixel(0xffff),
 ];
 const ARCADE_PALETTE: [Rgb565Pixel; 8] = [
-    Rgb565Pixel(0x080a),
-    Rgb565Pixel(0x2128),
+    Rgb565Pixel(0x18d3),
+    Rgb565Pixel(0x31d7),
     Rgb565Pixel(0x02d3),
     Rgb565Pixel(0x05bf),
     Rgb565Pixel(0xb80c),
@@ -264,9 +264,10 @@ impl ParticleDemoKind {
             Self::SpiralGalaxy => 81_920,
             Self::WarpSpeed => 45_056,
             Self::Weather => 49_152,
-            Self::ParticlePortal | Self::ArcadeCabinet => 65_536,
+            Self::ParticlePortal => 65_536,
             Self::ElectricStorm => 16_384,
             Self::FountainWaterfall => 32_768,
+            Self::ArcadeCabinet => 24_576,
         }
     }
 
@@ -2868,8 +2869,8 @@ mod tests {
 
         assert_eq!(formation.beat, "formation");
         assert_eq!(orbit.beat, "fly-around");
-        assert_eq!(renderer.commands.len(), 65_536);
-        assert!(orbit.visible > 60_000);
+        assert_eq!(renderer.commands.len(), 24_576);
+        assert!(orbit.visible > 22_000);
         assert!(
             renderer.pool.flags[..renderer.pool.active()]
                 .iter()
