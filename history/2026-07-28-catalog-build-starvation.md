@@ -64,3 +64,40 @@ pipeline to the background CPU0 role and keep it continuously permitted.
 Controller, navigation, media, and preview activity must not suspend catalog
 work. Foreground bootstrap work remains all-core until first-visible
 publication; the no-first-visible failure path remains foreground.
+
+## Post-fix qualification
+
+Qualified installed runtime revision:
+`22ba0c8155fd543e671ca144079441717804b30d`
+
+The same typed benchmark, isolated paths, installed media, and input script
+passed with:
+
+- first-visible Arcade catalog: 9,480 ms, 917 games;
+- valid manifest generation: 170,821 ms;
+- published systems: 70;
+- published games: 39,744;
+- scan targets: 156 of 156 completed;
+- progress policy: `continuous_cpu0`;
+- intentional pauses: none;
+- device reboot: none;
+- cleanup: isolated fixture removed and the ordinary Home launcher restored.
+
+The benchmark captured live `/proc` policy immediately after first-visible
+publication, while the full scanner was active:
+
+- `library-catalog`: CPU list `0`, nice `5`;
+- `library-walker`: CPU list `0`, nice `10`;
+- `catalog-progress-report`: CPU list `0`, nice `5`.
+
+The later audit/projection event independently reported
+`worker_role=catalog-worker worker_affinity=cpu0`. The progress report recorded
+the final target path and 156 completed targets, parsed the full runtime status
+before projecting it, retained only current-PID catalog events, and contained
+no screenshot-event spam.
+
+Compared with the unchanged pre-fix scenario, completion changed from no
+manifest at the 1,200-second deadline to a complete manifest in 170.821
+seconds while continuous scripted interaction remained active. This verifies
+that the catalog no longer depends on an interaction-idle window and that the
+post-reveal pipeline is isolated to CPU0 as intended.
