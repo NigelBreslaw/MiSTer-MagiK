@@ -3251,7 +3251,7 @@ fn particle_showcase_demo(number: u8) -> Result<(&'static str, u64)> {
         1 => Ok(("fireworks", 24_576)),
         2 => Ok(("fire-embers", 20_480)),
         3 => Ok(("spiral-galaxy", 81_920)),
-        4 => Ok(("warp-speed", 49_152)),
+        4 => Ok(("warp-speed", 45_056)),
         5 => Ok(("meteor-shower", 20_480)),
         6 => Ok(("weather", 49_152)),
         7 => Ok(("particle-portal", 65_536)),
