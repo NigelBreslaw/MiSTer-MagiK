@@ -379,8 +379,9 @@ impl LauncherScreensaver {
         h: usize,
         hidden_slot: u8,
         elapsed: Duration,
+        next_elapsed: Option<Duration>,
     ) -> ScreensaverFrameTrace {
-        self.render_at_target(dst, w, h, Some(hidden_slot), elapsed)
+        self.render_at_target_with_lookahead(dst, w, h, Some(hidden_slot), elapsed, next_elapsed)
     }
 
     fn render_at_target(
@@ -391,11 +392,24 @@ impl LauncherScreensaver {
         hidden_slot: Option<u8>,
         elapsed: Duration,
     ) -> ScreensaverFrameTrace {
+        self.render_at_target_with_lookahead(dst, w, h, hidden_slot, elapsed, None)
+    }
+
+    fn render_at_target_with_lookahead(
+        &mut self,
+        dst: &mut [Rgb565Pixel],
+        w: usize,
+        h: usize,
+        hidden_slot: Option<u8>,
+        elapsed: Duration,
+        next_elapsed: Option<Duration>,
+    ) -> ScreensaverFrameTrace {
         if let Some(particle) = self.particle.as_mut() {
             return match hidden_slot
                 .ok_or_else(|| "particle renderer requires a direct hidden slot".into())
-                .and_then(|hidden_slot| particle.render(dst, hidden_slot, elapsed))
-            {
+                .and_then(|hidden_slot| {
+                    particle.render_with_lookahead(dst, hidden_slot, elapsed, next_elapsed)
+                }) {
                 Ok(stats) => ScreensaverFrameTrace {
                     renderer: PARTICLE_RENDERER_LABEL,
                     sampling_profile: "particle-scalar",

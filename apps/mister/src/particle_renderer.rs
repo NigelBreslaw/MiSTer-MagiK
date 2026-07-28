@@ -6,7 +6,10 @@ use crate::particle_engine::{
     PARTICLE_NOT_VISIBLE_OFFSET, ParticleConfig, ParticleEngine, ParticleFrameStats, ParticlePhase,
     ParticlePreset, TargetMask,
 };
+use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
 use slint::platform::software_renderer::Rgb565Pixel;
+use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 const MAGIK_FONT_PX: f32 = 128.0;
@@ -60,7 +63,9 @@ pub struct ParticleRenderStats {
 }
 
 pub struct ParticleRenderer {
-    engine: ParticleEngine,
+    config: ParticleConfig,
+    engine: Option<ParticleEngine>,
+    preparation_pipeline: Option<ParticlePreparationPipeline>,
     dirty_slots: [ParticleDirtySlot; HIDDEN_SLOT_COUNT],
     simulation_bytes: usize,
     renderer_scratch_bytes: usize,
@@ -71,6 +76,30 @@ pub struct ParticleRenderer {
 struct ParticleDirtySlot {
     initialized: bool,
     offsets: Vec<u32>,
+}
+
+struct ParticlePreparationRequest {
+    elapsed: Duration,
+    commands: Vec<u32>,
+}
+
+struct PreparedParticleFrame {
+    elapsed: Duration,
+    frame: ParticleFrameStats,
+    visible: usize,
+    simulation_us: u128,
+    simulation_cpu_us: u128,
+    projection_us: u128,
+    projection_cpu_us: u128,
+    commands: Vec<u32>,
+}
+
+struct ParticlePreparationPipeline {
+    request_tx: Option<SyncSender<ParticlePreparationRequest>>,
+    ready_rx: Receiver<PreparedParticleFrame>,
+    in_flight: Option<Duration>,
+    spare_commands: Option<Vec<u32>>,
+    worker: Option<JoinHandle<()>>,
 }
 
 impl ParticleRenderer {
@@ -91,7 +120,19 @@ impl ParticleRenderer {
             initialized: false,
             offsets: Vec::with_capacity(write_capacity),
         });
+        let mut engine = Some(ParticleEngine::new(config, mask)?);
         let commands = Vec::with_capacity(config.count);
+        let preparation_pipeline = if particle_pipeline_requested() {
+            Some(ParticlePreparationPipeline::start(
+                engine
+                    .take()
+                    .expect("particle preparation pipeline must receive its engine"),
+                Vec::with_capacity(config.count),
+            )?)
+        } else {
+            None
+        };
+        let command_buffer_count = 1 + usize::from(preparation_pipeline.is_some());
         let renderer_scratch_bytes = dirty_slots.iter().fold(0usize, |total, slot| {
             total.saturating_add(
                 slot.offsets
@@ -100,9 +141,12 @@ impl ParticleRenderer {
             )
         }) + commands
             .capacity()
-            .saturating_mul(std::mem::size_of::<u32>());
+            .saturating_mul(std::mem::size_of::<u32>())
+            .saturating_mul(command_buffer_count);
         Ok(Self {
-            engine: ParticleEngine::new(config, mask)?,
+            config,
+            engine,
+            preparation_pipeline,
             dirty_slots,
             simulation_bytes,
             renderer_scratch_bytes,
@@ -112,11 +156,11 @@ impl ParticleRenderer {
     }
 
     pub fn preset(&self) -> ParticlePreset {
-        self.engine.config().preset
+        self.config.preset
     }
 
     pub fn particle_count(&self) -> usize {
-        self.engine.particle_count()
+        self.config.count
     }
 
     pub fn render(
@@ -125,8 +169,17 @@ impl ParticleRenderer {
         hidden_slot: u8,
         elapsed: Duration,
     ) -> Result<ParticleRenderStats, String> {
-        let config = self.engine.config();
-        let frame_len = config.width.saturating_mul(config.height);
+        self.render_with_lookahead(destination, hidden_slot, elapsed, None)
+    }
+
+    pub fn render_with_lookahead(
+        &mut self,
+        destination: &mut [Rgb565Pixel],
+        hidden_slot: u8,
+        elapsed: Duration,
+        next_elapsed: Option<Duration>,
+    ) -> Result<ParticleRenderStats, String> {
+        let frame_len = self.config.width.saturating_mul(self.config.height);
         if destination.len() != frame_len {
             return Err(format!(
                 "particle destination has {} pixels, expected {frame_len}",
@@ -136,16 +189,17 @@ impl ParticleRenderer {
         let slot_offset = hidden_slot_offset(hidden_slot)?;
         self.pmu.begin();
         let execution_started = thread_execution_snapshot();
-        let simulation_started = Instant::now();
-        let simulation_cpu_started = thread_cpu_time_us();
-        let frame = self.engine.step(elapsed);
-        let simulation_us = simulation_started.elapsed().as_micros();
-        let simulation_cpu_us = elapsed_thread_cpu_us(simulation_cpu_started);
-        let projection_started = Instant::now();
-        let projection_cpu_started = thread_cpu_time_us();
-        let visible = self.prepare_commands();
-        let projection_us = projection_started.elapsed().as_micros();
-        let projection_cpu_us = elapsed_thread_cpu_us(projection_cpu_started);
+        let prepared = if let Some(pipeline) = self.preparation_pipeline.as_mut() {
+            pipeline.acquire(elapsed, next_elapsed, &mut self.commands)?
+        } else {
+            prepare_particle_frame(
+                self.engine
+                    .as_mut()
+                    .expect("same-thread particle renderer must own its engine"),
+                elapsed,
+                &mut self.commands,
+            )
+        };
         let clear_started = Instant::now();
         let clear_cpu_started = thread_cpu_time_us();
         let mut dirty_offsets = self.prepare_hidden_slot(destination, slot_offset);
@@ -160,12 +214,12 @@ impl ParticleRenderer {
         let pmu = self.pmu.finish();
         self.dirty_slots[slot_offset].offsets = dirty_offsets;
         Ok(stats(
-            frame,
-            visible,
-            simulation_us,
-            simulation_cpu_us,
-            projection_us,
-            projection_cpu_us,
+            prepared.frame,
+            prepared.visible,
+            prepared.simulation_us,
+            prepared.simulation_cpu_us,
+            prepared.projection_us,
+            prepared.projection_cpu_us,
             clear_us,
             clear_cpu_us,
             raster_us,
@@ -176,53 +230,6 @@ impl ParticleRenderer {
             self.simulation_bytes,
             self.renderer_scratch_bytes,
         ))
-    }
-
-    fn prepare_commands(&mut self) -> usize {
-        self.commands.clear();
-        match self.engine.config().preset {
-            ParticlePreset::Capacity => {
-                if self.engine.uses_vector_projection() {
-                    let count = self.engine.particle_count();
-                    assert!(self.commands.capacity() >= count);
-                    let visible = self
-                        .engine
-                        .project_offsets(&mut self.commands.spare_capacity_mut()[..count]);
-                    // SAFETY: `project_offsets` initialized exactly `count` entries.
-                    unsafe {
-                        self.commands.set_len(count);
-                    }
-                    visible
-                } else {
-                    let width = self.engine.config().width;
-                    for index in 0..self.engine.particle_count() {
-                        if let Some(particle) = self.engine.project(index) {
-                            self.commands
-                                .push((particle.y as usize * width + particle.x as usize) as u32);
-                        }
-                    }
-                    self.commands.len()
-                }
-            }
-            ParticlePreset::Visual => {
-                let width = self.engine.config().width;
-                for index in 0..self.engine.particle_count() {
-                    let Some(particle) = self.engine.project(index) else {
-                        continue;
-                    };
-                    let offset = (particle.y as usize * width + particle.x as usize) as u32;
-                    let palette_index = (self.engine.flicker_key(index) >> 30) as usize;
-                    let neighbor = visual_particle_has_neighbor(
-                        self.engine.phase(),
-                        particle.depth,
-                        palette_index,
-                    ) && particle.x + 1 < width as i32;
-                    self.commands
-                        .push(pack_visual_command(offset, palette_index, neighbor));
-                }
-                self.commands.len()
-            }
-        }
     }
 
     pub fn invalidate_hidden_slot(&mut self, hidden_slot: u8) {
@@ -255,7 +262,7 @@ impl ParticleRenderer {
     }
 
     fn raster(&self, destination: &mut [Rgb565Pixel], dirty_offsets: &mut Vec<u32>) {
-        match self.engine.config().preset {
+        match self.config.preset {
             ParticlePreset::Capacity => self.raster_capacity(destination, dirty_offsets),
             ParticlePreset::Visual => self.raster_visual(destination, dirty_offsets),
         }
@@ -282,6 +289,172 @@ impl ParticleRenderer {
             }
         }
     }
+}
+
+impl ParticlePreparationPipeline {
+    fn start(engine: ParticleEngine, spare_commands: Vec<u32>) -> Result<Self, String> {
+        let (request_tx, request_rx) = mpsc::sync_channel::<ParticlePreparationRequest>(1);
+        let (ready_tx, ready_rx) = mpsc::sync_channel::<PreparedParticleFrame>(1);
+        let worker = std::thread::Builder::new()
+            .name("particle-prepare".into())
+            .spawn(move || {
+                apply_runtime_thread_policy(RuntimeThreadRole::ParticlePreparer);
+                run_particle_preparation_worker(engine, request_rx, ready_tx);
+            })
+            .map_err(|error| format!("spawn particle preparation worker: {error}"))?;
+        Ok(Self {
+            request_tx: Some(request_tx),
+            ready_rx,
+            in_flight: None,
+            spare_commands: Some(spare_commands),
+            worker: Some(worker),
+        })
+    }
+
+    fn acquire(
+        &mut self,
+        elapsed: Duration,
+        next_elapsed: Option<Duration>,
+        commands: &mut Vec<u32>,
+    ) -> Result<PreparedParticleFrame, String> {
+        let mut prepared = if self.in_flight.take().is_some() {
+            self.receive()?
+        } else {
+            self.send(elapsed)?;
+            self.receive()?
+        };
+        if prepared.elapsed != elapsed {
+            self.spare_commands = Some(std::mem::take(&mut prepared.commands));
+            self.send(elapsed)?;
+            prepared = self.receive()?;
+        }
+        debug_assert_eq!(prepared.elapsed, elapsed);
+        std::mem::swap(commands, &mut prepared.commands);
+        self.spare_commands = Some(std::mem::take(&mut prepared.commands));
+        if let Some(next_elapsed) = next_elapsed.filter(|next| *next > elapsed) {
+            self.send(next_elapsed)?;
+            self.in_flight = Some(next_elapsed);
+        }
+        Ok(prepared)
+    }
+
+    fn send(&mut self, elapsed: Duration) -> Result<(), String> {
+        let commands = self
+            .spare_commands
+            .take()
+            .ok_or("particle preparation pipeline has no spare command buffer")?;
+        self.request_tx
+            .as_ref()
+            .ok_or("particle preparation worker has stopped")?
+            .send(ParticlePreparationRequest { elapsed, commands })
+            .map_err(|_| "particle preparation worker disconnected".to_string())
+    }
+
+    fn receive(&self) -> Result<PreparedParticleFrame, String> {
+        self.ready_rx
+            .recv()
+            .map_err(|_| "particle preparation worker disconnected".to_string())
+    }
+}
+
+impl Drop for ParticlePreparationPipeline {
+    fn drop(&mut self) {
+        self.request_tx.take();
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+fn run_particle_preparation_worker(
+    mut engine: ParticleEngine,
+    request_rx: Receiver<ParticlePreparationRequest>,
+    ready_tx: SyncSender<PreparedParticleFrame>,
+) {
+    while let Ok(request) = request_rx.recv() {
+        let mut commands = request.commands;
+        let mut prepared = prepare_particle_frame(&mut engine, request.elapsed, &mut commands);
+        prepared.commands = commands;
+        if ready_tx.send(prepared).is_err() {
+            break;
+        }
+    }
+}
+
+fn prepare_particle_frame(
+    engine: &mut ParticleEngine,
+    elapsed: Duration,
+    commands: &mut Vec<u32>,
+) -> PreparedParticleFrame {
+    let simulation_started = Instant::now();
+    let simulation_cpu_started = thread_cpu_time_us();
+    let frame = engine.step(elapsed);
+    let simulation_us = simulation_started.elapsed().as_micros();
+    let simulation_cpu_us = elapsed_thread_cpu_us(simulation_cpu_started);
+    let projection_started = Instant::now();
+    let projection_cpu_started = thread_cpu_time_us();
+    let visible = prepare_particle_commands(engine, commands);
+    let projection_us = projection_started.elapsed().as_micros();
+    let projection_cpu_us = elapsed_thread_cpu_us(projection_cpu_started);
+    PreparedParticleFrame {
+        elapsed,
+        frame,
+        visible,
+        simulation_us,
+        simulation_cpu_us,
+        projection_us,
+        projection_cpu_us,
+        commands: Vec::new(),
+    }
+}
+
+fn prepare_particle_commands(engine: &ParticleEngine, commands: &mut Vec<u32>) -> usize {
+    commands.clear();
+    match engine.config().preset {
+        ParticlePreset::Capacity => {
+            if engine.uses_vector_projection() {
+                let count = engine.particle_count();
+                assert!(commands.capacity() >= count);
+                let visible = engine.project_offsets(&mut commands.spare_capacity_mut()[..count]);
+                // SAFETY: `project_offsets` initialized exactly `count` entries.
+                unsafe {
+                    commands.set_len(count);
+                }
+                visible
+            } else {
+                let width = engine.config().width;
+                for index in 0..engine.particle_count() {
+                    if let Some(particle) = engine.project(index) {
+                        commands.push((particle.y as usize * width + particle.x as usize) as u32);
+                    }
+                }
+                commands.len()
+            }
+        }
+        ParticlePreset::Visual => {
+            let width = engine.config().width;
+            for index in 0..engine.particle_count() {
+                let Some(particle) = engine.project(index) else {
+                    continue;
+                };
+                let offset = (particle.y as usize * width + particle.x as usize) as u32;
+                let palette_index = (engine.flicker_key(index) >> 30) as usize;
+                let neighbor =
+                    visual_particle_has_neighbor(engine.phase(), particle.depth, palette_index)
+                        && particle.x + 1 < width as i32;
+                commands.push(pack_visual_command(offset, palette_index, neighbor));
+            }
+            commands.len()
+        }
+    }
+}
+
+fn particle_pipeline_requested() -> bool {
+    cfg!(all(target_os = "linux", target_arch = "arm"))
+        && !matches!(
+            std::env::var("MISTER_PARTICLE_PIPELINE").ok().as_deref(),
+            Some("0" | "off" | "false" | "no")
+        )
 }
 
 fn pack_visual_command(offset: u32, palette_index: usize, neighbor: bool) -> u32 {
@@ -833,5 +1006,27 @@ mod tests {
         assert_eq!(hidden_slot_offset(1), Ok(0));
         assert_eq!(hidden_slot_offset(2), Ok(1));
         assert!(hidden_slot_offset(3).is_err());
+    }
+
+    #[test]
+    fn preparation_pipeline_returns_exact_lookahead_frames_in_order() {
+        let engine = ParticleEngine::new(config(ParticlePreset::Capacity), mask()).unwrap();
+        let mut pipeline =
+            ParticlePreparationPipeline::start(engine, Vec::with_capacity(64)).unwrap();
+        let mut commands = Vec::with_capacity(64);
+        let first_elapsed = Duration::from_micros(16_667);
+        let second_elapsed = Duration::from_micros(33_334);
+        let first = pipeline
+            .acquire(first_elapsed, Some(second_elapsed), &mut commands)
+            .unwrap();
+        assert_eq!(first.elapsed, first_elapsed);
+        assert_eq!(commands.len(), first.visible);
+        let first_commands = commands.clone();
+        let second = pipeline
+            .acquire(second_elapsed, None, &mut commands)
+            .unwrap();
+        assert_eq!(second.elapsed, second_elapsed);
+        assert_eq!(commands.len(), second.visible);
+        assert_ne!(commands, first_commands);
     }
 }

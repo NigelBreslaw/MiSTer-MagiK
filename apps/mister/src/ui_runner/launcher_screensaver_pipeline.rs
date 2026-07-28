@@ -434,6 +434,9 @@ fn run_direct_render_ahead_worker(
                 .max(1)
                 .saturating_mul(advanced_ticks),
         );
+        let next_elapsed = Duration::from_micros(
+            elapsed_us.saturating_add(period_us.load(Ordering::Relaxed).max(1)),
+        );
         sequence = sequence.wrapping_add(1);
         let target = if grant.slot_index == 1 {
             &mut slot1
@@ -449,6 +452,7 @@ fn run_direct_render_ahead_worker(
                 height,
                 grant.slot_index,
                 Duration::from_micros(elapsed_us),
+                Some(next_elapsed),
             );
             if let (Some(snapshot), Some(started)) = (&launcher_snapshot, fade_started) {
                 let alpha = (started.elapsed().as_micros().min(200_000) * 255 / 200_000) as u8;

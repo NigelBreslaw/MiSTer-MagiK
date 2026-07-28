@@ -23,6 +23,7 @@ pub enum RuntimeThreadRole {
     VideoDecode,
     VideoAudio,
     ScreensaverRenderer,
+    ParticlePreparer,
     ScreensaverLoader,
     ScreensaverScaler,
 }
@@ -46,6 +47,7 @@ impl RuntimeThreadRole {
             Self::VideoDecode => "video-decode",
             Self::VideoAudio => "video-audio",
             Self::ScreensaverRenderer => "screensaver-renderer",
+            Self::ParticlePreparer => "particle-preparer",
             Self::ScreensaverLoader => "screensaver-loader",
             Self::ScreensaverScaler => "screensaver-scaler",
         }
@@ -82,6 +84,7 @@ impl RuntimeThreadRole {
                 RuntimeThreadPolicy::new(5, ThreadAffinity::Inherit)
             }
             Self::ScreensaverRenderer => RuntimeThreadPolicy::new(-5, ThreadAffinity::Cpu0),
+            Self::ParticlePreparer => RuntimeThreadPolicy::new(-5, ThreadAffinity::Cpu1),
             Self::ScreensaverLoader | Self::ScreensaverScaler => {
                 RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0)
             }
@@ -384,7 +387,6 @@ mod tests {
             RuntimeThreadRole::MediaWorker,
             RuntimeThreadRole::MediaIndex,
             RuntimeThreadRole::FramebufferStream,
-            RuntimeThreadRole::RuntimeStatus,
             RuntimeThreadRole::ScreensaverRenderer,
             RuntimeThreadRole::ScreensaverLoader,
             RuntimeThreadRole::ScreensaverScaler,
@@ -396,6 +398,18 @@ mod tests {
                 assert!(role.default_policy().nice >= 5);
             }
         }
+    }
+
+    #[test]
+    fn particle_preparation_uses_the_launcher_core_at_render_priority() {
+        assert_eq!(
+            RuntimeThreadRole::ParticlePreparer.default_policy(),
+            RuntimeThreadPolicy::new(-5, ThreadAffinity::Cpu1)
+        );
+        assert_eq!(
+            RuntimeThreadRole::RuntimeStatus.default_policy(),
+            RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu1)
+        );
     }
 
     #[test]
@@ -460,6 +474,11 @@ mod tests {
                 RuntimeThreadRole::ScreensaverRenderer,
                 -5,
                 ThreadAffinity::Cpu0,
+            ),
+            (
+                RuntimeThreadRole::ParticlePreparer,
+                -5,
+                ThreadAffinity::Cpu1,
             ),
             (
                 RuntimeThreadRole::ScreensaverLoader,
