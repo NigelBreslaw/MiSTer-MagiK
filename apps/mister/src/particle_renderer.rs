@@ -127,21 +127,22 @@ impl ParticleRenderer {
         });
         let mut engine = Some(ParticleEngine::new(config, mask)?);
         let commands = Vec::with_capacity(config.count);
+        let order_commands = particle_command_order_requested();
         let preparation_pipeline = if particle_pipeline_requested() {
             Some(ParticlePreparationPipeline::start(
                 engine
                     .take()
                     .expect("particle preparation pipeline must receive its engine"),
                 Vec::with_capacity(config.count),
-                Vec::with_capacity(config.count),
+                order_commands.then(|| Vec::with_capacity(config.count)),
             )?)
         } else {
             None
         };
-        let command_ordering_scratch = preparation_pipeline
-            .is_none()
+        let command_ordering_scratch = (preparation_pipeline.is_none() && order_commands)
             .then(|| Vec::with_capacity(config.count));
-        let command_buffer_count = 2 + usize::from(preparation_pipeline.is_some());
+        let command_buffer_count =
+            1 + usize::from(preparation_pipeline.is_some()) + usize::from(order_commands);
         let renderer_scratch_bytes = dirty_slots.iter().fold(0usize, |total, slot| {
             total.saturating_add(
                 slot.offsets
@@ -208,9 +209,7 @@ impl ParticleRenderer {
                     .expect("same-thread particle renderer must own its engine"),
                 elapsed,
                 &mut self.commands,
-                self.command_ordering_scratch
-                    .as_mut()
-                    .expect("same-thread particle renderer must own ordering scratch"),
+                self.command_ordering_scratch.as_mut(),
             )
         };
         let clear_started = Instant::now();
@@ -308,7 +307,7 @@ impl ParticlePreparationPipeline {
     fn start(
         engine: ParticleEngine,
         spare_commands: Vec<u32>,
-        ordering_scratch: Vec<u32>,
+        ordering_scratch: Option<Vec<u32>>,
     ) -> Result<Self, String> {
         let (request_tx, request_rx) = mpsc::sync_channel::<ParticlePreparationRequest>(1);
         let (ready_tx, ready_rx) = mpsc::sync_channel::<PreparedParticleFrame>(1);
@@ -385,7 +384,7 @@ impl Drop for ParticlePreparationPipeline {
 
 fn run_particle_preparation_worker(
     mut engine: ParticleEngine,
-    mut ordering_scratch: Vec<u32>,
+    mut ordering_scratch: Option<Vec<u32>>,
     request_rx: Receiver<ParticlePreparationRequest>,
     ready_tx: SyncSender<PreparedParticleFrame>,
 ) {
@@ -395,7 +394,7 @@ fn run_particle_preparation_worker(
             &mut engine,
             request.elapsed,
             &mut commands,
-            &mut ordering_scratch,
+            ordering_scratch.as_mut(),
         );
         prepared.commands = commands;
         if ready_tx.send(prepared).is_err() {
@@ -408,7 +407,7 @@ fn prepare_particle_frame(
     engine: &mut ParticleEngine,
     elapsed: Duration,
     commands: &mut Vec<u32>,
-    ordering_scratch: &mut Vec<u32>,
+    ordering_scratch: Option<&mut Vec<u32>>,
 ) -> PreparedParticleFrame {
     let simulation_started = Instant::now();
     let simulation_cpu_started = thread_cpu_time_us();
@@ -418,7 +417,9 @@ fn prepare_particle_frame(
     let projection_started = Instant::now();
     let projection_cpu_started = thread_cpu_time_us();
     let visible = prepare_particle_commands(engine, commands);
-    order_particle_commands(engine.config().preset, commands, ordering_scratch);
+    if let Some(ordering_scratch) = ordering_scratch {
+        order_particle_commands(engine.config().preset, commands, ordering_scratch);
+    }
     let projection_us = projection_started.elapsed().as_micros();
     let projection_cpu_us = elapsed_thread_cpu_us(projection_cpu_started);
     PreparedParticleFrame {
@@ -522,6 +523,15 @@ fn particle_pipeline_requested() -> bool {
             std::env::var("MISTER_PARTICLE_PIPELINE").ok().as_deref(),
             Some("0" | "off" | "false" | "no")
         )
+}
+
+fn particle_command_order_requested() -> bool {
+    matches!(
+        std::env::var("MISTER_PARTICLE_COMMAND_ORDER")
+            .ok()
+            .as_deref(),
+        Some("1" | "on" | "true" | "locality")
+    )
 }
 
 fn lookahead_elapsed_matches(prepared: Duration, actual: Duration) -> bool {
@@ -1044,10 +1054,10 @@ mod tests {
     fn renderer_memory_accounts_for_simulation_and_both_dirty_slots() {
         let capacity = ParticleRenderer::new(config(ParticlePreset::Capacity), mask()).unwrap();
         assert_eq!(capacity.simulation_bytes, 64 * 33);
-        assert_eq!(capacity.renderer_scratch_bytes, 64 * 16);
+        assert_eq!(capacity.renderer_scratch_bytes, 64 * 12);
         let visual = ParticleRenderer::new(config(ParticlePreset::Visual), mask()).unwrap();
         assert_eq!(visual.simulation_bytes, 64 * 33);
-        assert_eq!(visual.renderer_scratch_bytes, 64 * 24);
+        assert_eq!(visual.renderer_scratch_bytes, 64 * 20);
     }
 
     #[test]
@@ -1082,12 +1092,8 @@ mod tests {
     #[test]
     fn preparation_pipeline_returns_exact_lookahead_frames_in_order() {
         let engine = ParticleEngine::new(config(ParticlePreset::Capacity), mask()).unwrap();
-        let mut pipeline = ParticlePreparationPipeline::start(
-            engine,
-            Vec::with_capacity(64),
-            Vec::with_capacity(64),
-        )
-        .unwrap();
+        let mut pipeline =
+            ParticlePreparationPipeline::start(engine, Vec::with_capacity(64), None).unwrap();
         let mut commands = Vec::with_capacity(64);
         let first_elapsed = Duration::from_micros(16_667);
         let second_elapsed = Duration::from_micros(33_334);
