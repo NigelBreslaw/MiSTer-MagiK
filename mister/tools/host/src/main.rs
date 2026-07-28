@@ -4600,9 +4600,10 @@ fn wait_for_particle_capture_state(
     rotation_y_millidegrees: std::ops::RangeInclusive<u64>,
     timeout: Duration,
 ) -> Result<()> {
+    const CAPTURE_POLL_DURATION: Duration = Duration::from_millis(100);
     let started = Instant::now();
     while started.elapsed() < timeout {
-        let telemetry = agent_telemetry_for_duration(endpoint, Duration::from_millis(400))?;
+        let telemetry = agent_telemetry_for_duration(endpoint, CAPTURE_POLL_DURATION)?;
         if particle_capture_state_seen(&telemetry, count, phase, rotation_y_millidegrees.clone()) {
             return Ok(());
         }
