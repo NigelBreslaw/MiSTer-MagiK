@@ -7,7 +7,8 @@ use crate::model::{BenchmarkScenario, Outcome};
 use crate::progress::{EventKind, Reporter};
 use mister_tool::transport::{DeviceRequest, Layout as DeviceLayout};
 use serde_json::{Value, json};
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn execute(
@@ -65,6 +66,18 @@ fn require_clean_installed_commit(
             reporter,
         );
     }
+    if matches!(
+        scenario,
+        BenchmarkScenario::ParticleDemosCarousel | BenchmarkScenario::ParticleDemosProfile
+    ) {
+        return execute_particle_showcase_suite(
+            &mut device,
+            manifest,
+            output_dir,
+            scenario == BenchmarkScenario::ParticleDemosProfile,
+            reporter,
+        );
+    }
 
     match scenario {
         BenchmarkScenario::Screensaver => {
@@ -108,10 +121,136 @@ fn require_clean_installed_commit(
         | BenchmarkScenario::ParticleDemo09
         | BenchmarkScenario::ParticleDemoProfile09
         | BenchmarkScenario::ParticleDemo10
-        | BenchmarkScenario::ParticleDemoProfile10 => {
+        | BenchmarkScenario::ParticleDemoProfile10
+        | BenchmarkScenario::ParticleDemosCarousel
+        | BenchmarkScenario::ParticleDemosProfile => {
             unreachable!("particle showcase scenarios return before the fixed registry match")
         }
     }
+}
+
+const PARTICLE_SHOWCASE_DEMOS: [(u8, &str); 10] = [
+    (1, "fireworks"),
+    (2, "fire-embers"),
+    (3, "spiral-galaxy"),
+    (4, "warp-speed"),
+    (5, "meteor-shower"),
+    (6, "weather"),
+    (7, "particle-portal"),
+    (8, "electric-storm"),
+    (9, "fountain-waterfall"),
+    (10, "arcade-cabinet"),
+];
+
+fn execute_particle_showcase_suite(
+    device: &mut DeviceClient,
+    manifest: String,
+    output_dir: PathBuf,
+    cpu_profile: bool,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    fs::create_dir_all(&output_dir).map_err(|error| error.to_string())?;
+    let mut demos = Vec::with_capacity(PARTICLE_SHOWCASE_DEMOS.len());
+    for (index, (number, label)) in PARTICLE_SHOWCASE_DEMOS.into_iter().enumerate() {
+        reporter.emit(
+            EventKind::Progress,
+            "profile",
+            &format!(
+                "{} particle showcase {number:02}/10 {label}",
+                if cpu_profile { "sampling" } else { "measuring" }
+            ),
+            Some(10 + ((index as u8 + 1) * 8)),
+        )?;
+        let demo_dir = output_dir.join(format!("{number:02}-{label}"));
+        let detail = device.execute(DeviceRequest::ProfileInstalledParticleShowcase {
+            output_dir: demo_dir,
+            demo: number,
+            cpu_profile,
+        })?;
+        let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+        demos.push(summary);
+        device.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))?;
+    }
+    let summary = json!({
+        "schema": "mister-magik-particle-showcase-suite-v1",
+        "mode": if cpu_profile { "isolated-cpu-profiles" } else { "sequential-30-second-captures" },
+        "duration_secs": if cpu_profile { 320 } else { 300 },
+        "manifest": manifest.clone(),
+        "demos": demos,
+    });
+    fs::write(
+        output_dir.join("summary.json"),
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&summary).map_err(|error| error.to_string())?
+        ),
+    )
+    .map_err(|error| error.to_string())?;
+    fs::write(
+        output_dir.join("report.md"),
+        showcase_suite_report(&summary, cpu_profile),
+    )
+    .map_err(|error| error.to_string())?;
+    emit_benchmark_result(reporter, manifest, summary, output_dir)
+}
+
+fn showcase_suite_report(summary: &Value, cpu_profile: bool) -> String {
+    let mut report = String::from("# Particle Showcase Performance Index\n\n");
+    report.push_str(if cpu_profile {
+        "| # | Demo | Samples | Process CPU | P99 render |\n|---:|---|---:|---:|---:|\n"
+    } else {
+        "| # | Demo | Count | Qualified | Process CPU | P99 render | Repeats |\n|---:|---|---:|:---:|---:|---:|---:|\n"
+    });
+    for (index, demo) in summary["demos"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        let label = demo
+            .pointer("/demo/preset")
+            .or_else(|| demo.pointer("/demo/profile/preset"))
+            .and_then(Value::as_str)
+            .unwrap_or(PARTICLE_SHOWCASE_DEMOS[index].1);
+        if cpu_profile {
+            let samples = demo
+                .pointer("/demo/profile/sample_hits")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            let cpu = demo
+                .pointer("/demo/profile/process_cpu_pct")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0);
+            let p99 = demo
+                .pointer("/demo/timing/p99_render_wall_us")
+                .or_else(|| demo.pointer("/demo/p99_render_wall_us"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            report.push_str(&format!(
+                "| {:02} | {label} | {samples} | {cpu:.2}% | {p99} us |\n",
+                index + 1
+            ));
+        } else {
+            let trial = &demo["demo"];
+            let count = trial["count"].as_u64().unwrap_or(0);
+            let qualified = trial["qualified"].as_bool().unwrap_or(false);
+            let cpu = trial
+                .pointer("/cpu/process_pct_of_one_core")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0);
+            let p99 = trial["p99_render_wall_us"].as_u64().unwrap_or(0);
+            let repeats = trial
+                .pointer("/physical_refresh/repeated_refreshes")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            report.push_str(&format!(
+                "| {:02} | {label} | {count} | {} | {cpu:.2}% | {p99} us | {repeats} |\n",
+                index + 1,
+                if qualified { "yes" } else { "no" }
+            ));
+        }
+    }
+    report
 }
 
 fn execute_particle_showcase(
