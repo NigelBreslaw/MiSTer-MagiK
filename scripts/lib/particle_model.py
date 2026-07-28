@@ -396,7 +396,8 @@ def sample_points(
         triangle = triangles[_weighted_choice(rng, areas, total_area)]
         a, b, c = (vertices[index] for index in triangle.vertices)
         root = math.sqrt(rng.random())
-        u, v, w = 1.0 - root, root * (1.0 - rng.random()), root * rng.random()
+        split = rng.random()
+        u, v, w = 1.0 - root, root * (1.0 - split), root * split
         xyz = _add(_add(_mul(a, u), _mul(b, v)), _mul(c, w))
         points.append(Point(xyz, palette_class(triangle.material, colors), 0))
 

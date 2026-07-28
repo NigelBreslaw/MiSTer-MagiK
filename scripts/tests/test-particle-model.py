@@ -70,6 +70,19 @@ class ParticleModelTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "no non-degenerate"):
                 particle_model.load_obj(path)
 
+    def test_surface_samples_remain_inside_source_triangle(self):
+        vertices = [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)]
+        triangles = [particle_model.Triangle((0, 1, 2), "")]
+        points = particle_model.sample_points(vertices, triangles, {}, 4096, 19)
+
+        self.assertEqual(len(points), 4096)
+        for point in points:
+            x, y, z = point.xyz
+            self.assertGreaterEqual(x, 0.0)
+            self.assertGreaterEqual(y, 0.0)
+            self.assertLessEqual(x + y, 1.0 + 1.0e-7)
+            self.assertAlmostEqual(z, 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()
