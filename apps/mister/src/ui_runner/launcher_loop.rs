@@ -1714,6 +1714,23 @@ impl ScreensaverControl {
         user_activity: bool,
         particle_demo_direction: i8,
     ) -> bool {
+        self.handle_input_with_particle_demo_navigation_and(
+            now,
+            input_held,
+            user_activity,
+            particle_demo_direction,
+            mister_magik_fb::particle_showcase::request_particle_demo_navigation,
+        )
+    }
+
+    fn handle_input_with_particle_demo_navigation_and(
+        &mut self,
+        now: Instant,
+        input_held: bool,
+        user_activity: bool,
+        particle_demo_direction: i8,
+        request_navigation: impl FnOnce(i32),
+    ) -> bool {
         if self.active && self.waiting_for_input_release {
             if !input_held {
                 self.waiting_for_input_release = false;
@@ -1722,9 +1739,7 @@ impl ScreensaverControl {
         }
         if self.active && particle_demo_direction != 0 {
             if self.particle_demo_direction_held == 0 {
-                mister_magik_fb::particle_showcase::request_particle_demo_navigation(i32::from(
-                    particle_demo_direction,
-                ));
+                request_navigation(i32::from(particle_demo_direction));
             }
             self.particle_demo_direction_held = particle_demo_direction;
             self.last_activity = now;
@@ -7934,6 +7949,65 @@ mod tests {
 
         let button = pad_state_with(|state| state.btn_a = true);
         assert!(screensaver_user_activity(true, true, &button));
+    }
+
+    #[test]
+    fn particle_showcase_navigation_consumes_press_hold_and_release_before_exit() {
+        let start = Instant::now();
+        let mut saver = ScreensaverControl::new(start, true);
+        saver.update(start, true, Duration::from_secs(300), false);
+        assert!(saver.active);
+
+        let idle = PadState::default();
+        assert!(!saver.handle_input_with_particle_demo_navigation_and(
+            start + Duration::from_millis(1),
+            false,
+            screensaver_user_activity(true, true, &idle),
+            0,
+            |_| panic!("raw joystick activity must not navigate"),
+        ));
+        assert!(saver.active);
+
+        let left = pad_state_with(|state| state.dpad_left = true);
+        let mut requested = 0;
+        assert!(saver.handle_input_with_particle_demo_navigation_and(
+            start + Duration::from_millis(2),
+            true,
+            screensaver_user_activity(true, true, &left),
+            -1,
+            |delta| requested = delta,
+        ));
+        assert_eq!(requested, -1);
+        assert!(saver.active);
+
+        assert!(saver.handle_input_with_particle_demo_navigation_and(
+            start + Duration::from_millis(3),
+            true,
+            true,
+            -1,
+            |_| panic!("held direction must not navigate twice"),
+        ));
+        assert!(saver.active);
+
+        assert!(!saver.handle_input_with_particle_demo_navigation_and(
+            start + Duration::from_millis(4),
+            false,
+            false,
+            0,
+            |_| panic!("direction release must not navigate"),
+        ));
+        assert!(saver.active);
+
+        let button = pad_state_with(|state| state.btn_a = true);
+        assert!(saver.handle_input_with_particle_demo_navigation_and(
+            start + Duration::from_millis(5),
+            true,
+            screensaver_user_activity(true, true, &button),
+            0,
+            |_| panic!("button exit must not navigate"),
+        ));
+        assert!(!saver.active);
+        assert!(saver.take_restore_full_frame());
     }
 
     #[test]
