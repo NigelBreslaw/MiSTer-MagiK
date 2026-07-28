@@ -1,0 +1,13 @@
+# Original unbranded placeholder materials.
+newmtl cabinet
+Kd 0.06 0.08 0.14
+newmtl trim
+Kd 0.08 0.70 0.90
+newmtl marquee
+Kd 0.95 0.70 0.08
+newmtl screen
+Kd 0.05 0.32 0.55
+newmtl controls
+Kd 0.90 0.18 0.22
+newmtl metal
+Kd 0.65 0.70 0.75
