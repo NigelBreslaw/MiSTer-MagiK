@@ -22,6 +22,8 @@ pub mod command_args;
 pub mod controller_db;
 pub mod crash_report;
 mod fallible_log;
+#[cfg(any(feature = "ui", feature = "ui-preview"))]
+pub mod fireworks;
 pub use mister_magik_core::{input_info, input_repeat, input_state};
 pub use mister_magik_mister_runtime::framebuffer;
 pub use mister_magik_mister_runtime::latch_readiness;
