@@ -59,6 +59,16 @@ const FIRE_PALETTE: [Rgb565Pixel; 8] = [
     Rgb565Pixel(0xff40),
     Rgb565Pixel(0xffff),
 ];
+const GALAXY_PALETTE: [Rgb565Pixel; 8] = [
+    Rgb565Pixel(0x080f),
+    Rgb565Pixel(0x201f),
+    Rgb565Pixel(0x42bf),
+    Rgb565Pixel(0x8d7f),
+    Rgb565Pixel(0xc65f),
+    Rgb565Pixel(0xfdb5),
+    Rgb565Pixel(0xff59),
+    Rgb565Pixel(0xffff),
+];
 static PARTICLE_DEMO_NAVIGATION: AtomicI32 = AtomicI32::new(0);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -460,6 +470,9 @@ impl ParticleShowcaseRenderer {
             self.pool.style[index] = ((random >> 29) & 7) as u8;
             self.pool.flags[index] = u8::from(random & 0x1f == 0);
         }
+        if demo == ParticleDemoKind::SpiralGalaxy {
+            self.initialize_galaxy();
+        }
     }
 
     fn prepare_hidden_slot(&mut self, destination: &mut [Rgb565Pixel], slot: usize) -> Vec<u32> {
@@ -522,6 +535,7 @@ impl ParticleShowcaseRenderer {
         match self.demo {
             ParticleDemoKind::Fireworks => self.project_fireworks(elapsed),
             ParticleDemoKind::FireEmbers => self.project_fire_embers(elapsed),
+            ParticleDemoKind::SpiralGalaxy => self.project_spiral_galaxy(elapsed),
             _ => self.project_diagnostic(elapsed),
         }
     }
@@ -545,8 +559,94 @@ impl ParticleShowcaseRenderer {
                 value if value < 7.0 => "gust",
                 _ => "embers",
             },
+            ParticleDemoKind::SpiralGalaxy => match seconds {
+                value if value < 10.0 => "wide-orbit",
+                value if value < 20.0 => "arm-pass",
+                _ => "core-pulse",
+            },
             _ => "diagnostic",
         }
+    }
+
+    fn initialize_galaxy(&mut self) {
+        let bulge_count = self.pool.active() * 3 / 20;
+        for index in 0..self.pool.active() {
+            let random = self.pool.random[index];
+            let azimuth = std::f32::consts::TAU * unit01(random);
+            if index < bulge_count {
+                let radius = 94.0 * unit01(random.rotate_left(7)).cbrt();
+                let vertical = unit_signed(random.rotate_left(17));
+                let planar = (1.0 - vertical * vertical).max(0.0).sqrt() * radius;
+                self.pool.x[index] = azimuth.cos() * planar;
+                self.pool.y[index] = vertical * radius * 0.68;
+                self.pool.z[index] = azimuth.sin() * planar;
+                self.pool.style[index] = 6 + u8::from(index & 15 == 0);
+                self.pool.flags[index] = 1;
+                continue;
+            }
+
+            let radius = 32.0 + unit01(random.rotate_left(5)).sqrt() * 382.0;
+            let arm = (random.rotate_left(11) & 3) as f32;
+            let uneven = unit_signed(random.rotate_left(19)) * (0.16 + radius * 0.0007);
+            let angle = arm * std::f32::consts::FRAC_PI_2 + (radius / 32.0).ln() * 1.48 + uneven;
+            let thickness = (34.0 - radius * 0.055).max(7.0) * unit_signed(random.rotate_left(23));
+            self.pool.x[index] = angle.cos() * radius;
+            self.pool.y[index] = thickness;
+            self.pool.z[index] = angle.sin() * radius;
+            let outer = ((radius - 32.0) * (4.0 / 382.0)).clamp(0.0, 3.0) as u8;
+            self.pool.style[index] = 5u8.saturating_sub(outer);
+            let dust_lane = random.rotate_left(3) & 31 < 5;
+            self.pool.flags[index] = if dust_lane { 0 } else { 1 };
+        }
+    }
+
+    fn project_spiral_galaxy(&mut self, elapsed: Duration) -> usize {
+        self.commands.clear();
+        self.segments.clear();
+        let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
+        let (sin_yaw, cos_yaw) = (seconds * 0.042).sin_cos();
+        let (sin_tilt, cos_tilt) = 0.92_f32.sin_cos();
+        let core_pulse = ((seconds * 1.7).sin() * 0.5 + 0.5) * 0.18 + 0.82;
+        let bulge_count = self.pool.active() * 3 / 20;
+        let mut clipped = 0usize;
+        for index in 0..self.pool.active() {
+            if self.pool.flags[index] == 0 {
+                self.commands.push(u32::MAX);
+                continue;
+            }
+            let x = self.pool.x[index];
+            let y = self.pool.y[index];
+            let z = self.pool.z[index];
+            let yaw_x = x.mul_add(cos_yaw, z * sin_yaw);
+            let yaw_z = (-x).mul_add(sin_yaw, z * cos_yaw);
+            let tilted_y = y.mul_add(cos_tilt, -(yaw_z * sin_tilt));
+            let tilted_z = y.mul_add(sin_tilt, yaw_z * cos_tilt);
+            let scale = if index < bulge_count { core_pulse } else { 1.0 };
+            let Some((screen_x, screen_y)) = project_world(
+                yaw_x * scale,
+                tilted_y * scale,
+                tilted_z,
+                self.config.width,
+                self.config.height,
+                650.0,
+            ) else {
+                self.commands.push(u32::MAX);
+                clipped = clipped.saturating_add(1);
+                continue;
+            };
+            if !push_screen_command(
+                &mut self.commands,
+                self.config.width,
+                self.config.height,
+                screen_x,
+                screen_y,
+                self.pool.style[index],
+                index & 511 == 0,
+            ) {
+                clipped = clipped.saturating_add(1);
+            }
+        }
+        clipped
     }
 
     fn update_fire_heat(&mut self, elapsed: Duration) {
@@ -1105,6 +1205,7 @@ fn showcase_palette(demo: ParticleDemoKind) -> &'static [Rgb565Pixel; 8] {
     match demo {
         ParticleDemoKind::Fireworks => &FIREWORKS_PALETTE,
         ParticleDemoKind::FireEmbers => &FIRE_PALETTE,
+        ParticleDemoKind::SpiralGalaxy => &GALAXY_PALETTE,
         _ => &SHOWCASE_PALETTE,
     }
 }
@@ -1389,6 +1490,42 @@ mod tests {
             first_destination[(540 - FIRE_HEAT_H * FIRE_HEAT_SCALE) * 960..]
                 .iter()
                 .any(|pixel| *pixel != Rgb565Pixel(0))
+        );
+    }
+
+    #[test]
+    fn galaxy_has_four_arms_bulge_depth_and_dust_gaps() {
+        let mut renderer = ParticleShowcaseRenderer::new(ParticleShowcaseConfig {
+            width: 960,
+            height: 540,
+            seed: 0x6a1a_9a,
+            initial_demo: ParticleDemoKind::SpiralGalaxy,
+        })
+        .unwrap();
+        let mut destination = vec![Rgb565Pixel(0); 960 * 540];
+        let stats = renderer
+            .render(&mut destination, 1, Duration::from_secs(15))
+            .unwrap();
+        let bulge_count = renderer.pool.active() * 3 / 20;
+
+        assert_eq!(stats.demo, ParticleDemoKind::SpiralGalaxy);
+        assert_eq!(stats.beat, "arm-pass");
+        assert_eq!(renderer.commands.len(), renderer.pool.active());
+        assert!(stats.visible > renderer.pool.active() * 3 / 4);
+        assert!(
+            renderer.pool.style[..bulge_count]
+                .iter()
+                .all(|style| *style >= 6)
+        );
+        assert!(
+            renderer.pool.y[bulge_count..]
+                .iter()
+                .any(|height| height.abs() > 8.0)
+        );
+        assert!(
+            renderer.pool.flags[bulge_count..]
+                .iter()
+                .any(|flag| *flag == 0)
         );
     }
 }
