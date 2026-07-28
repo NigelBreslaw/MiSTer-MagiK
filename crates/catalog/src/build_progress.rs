@@ -6,7 +6,7 @@
 //! This database is never catalog authority. A caller must still publish the
 //! normal shard manifest, binding, scanner cache, and catalog state in order.
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -61,6 +61,16 @@ pub struct CompletedShard {
     pub manifest_system_json: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct BuildProgressSummary {
+    pub build_id: String,
+    pub total_targets: u64,
+    pub completed_targets: u64,
+    pub completed_shards: u64,
+    pub last_completed_ordinal: Option<u32>,
+    pub last_completed_path: Option<String>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OpenStatus {
     Created,
@@ -87,6 +97,56 @@ pub fn remove(path: &Path) -> Result<(), String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(format!("remove build progress {}: {error}", path.display())),
     }
+}
+
+/// Reads bounded journal counters without taking write ownership of disposable
+/// build progress. This is diagnostics only; catalog authority remains the
+/// published manifest and state.
+pub fn read_summary(path: &Path) -> Result<Option<BuildProgressSummary>, String> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|error| format!("open build progress summary {}: {error}", path.display()))?;
+    let version: String = meta(&conn, "schema_version")?;
+    if version != SCHEMA_VERSION.to_string() {
+        return Err(format!("unsupported build progress schema {version}"));
+    }
+    let last = conn
+        .query_row(
+            "SELECT t.ordinal,t.path
+             FROM scan_targets t JOIN completed_targets c USING(ordinal)
+             ORDER BY t.ordinal DESC LIMIT 1",
+            [],
+            |row| Ok((row.get::<_, u32>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(|error| format!("read last completed target: {error}"))?;
+    Ok(Some(BuildProgressSummary {
+        build_id: meta(&conn, "build_id")?,
+        total_targets: row_count(&conn, "scan_targets")?,
+        completed_targets: row_count(&conn, "completed_targets")?,
+        completed_shards: row_count(&conn, "completed_shards")?,
+        last_completed_ordinal: last.as_ref().map(|(ordinal, _)| *ordinal),
+        last_completed_path: last.map(|(_, path)| path),
+    }))
+}
+
+fn row_count(conn: &Connection, table: &str) -> Result<u64, String> {
+    if !matches!(
+        table,
+        "scan_targets" | "completed_targets" | "completed_shards"
+    ) {
+        return Err("unsupported build progress count table".to_string());
+    }
+    conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+        row.get::<_, i64>(0)
+    })
+    .map(|count| count.max(0) as u64)
+    .map_err(|error| format!("count build progress {table}: {error}"))
 }
 
 impl BuildProgressJournal {
@@ -522,6 +582,28 @@ mod tests {
         assert_eq!(journal.build_id(), id);
         assert_eq!(journal.completed_targets().unwrap(), vec![completed()]);
         assert_eq!(journal.completed_shards().unwrap(), vec![shard]);
+        remove(&path).unwrap();
+    }
+
+    #[test]
+    fn read_only_summary_reports_durable_counters_and_last_target() {
+        let path = temp_path("build-progress-summary");
+        let (mut journal, _) =
+            BuildProgressJournal::open_or_create(&path, &contract(), &targets()).unwrap();
+        let build_id = journal.build_id().to_string();
+        journal.checkpoint_target(&completed()).unwrap();
+        drop(journal);
+
+        let summary = read_summary(&path).unwrap().unwrap();
+        assert_eq!(summary.build_id, build_id);
+        assert_eq!(summary.total_targets, 1);
+        assert_eq!(summary.completed_targets, 1);
+        assert_eq!(summary.completed_shards, 0);
+        assert_eq!(summary.last_completed_ordinal, Some(0));
+        assert_eq!(
+            summary.last_completed_path.as_deref(),
+            Some("/games/arcade")
+        );
         remove(&path).unwrap();
     }
 

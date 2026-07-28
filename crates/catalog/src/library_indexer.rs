@@ -564,6 +564,8 @@ fn scan_library_with_progress_and_events(
         ),
     );
     let mut resume = prepare_resume_scan(cfg, &plan, &excluded_targets, priority, durable_resume);
+    let target_count =
+        catalog_scan::planned_scan_target_descriptors(&cfg.roots, &plan, &excluded_targets).len();
     let prepared_payload_t = Instant::now();
     let prepared_payload_index = PreparedPayloadIndex::from_library_roots(&cfg.roots);
     crate::cooperative_work::checkpoint();
@@ -610,10 +612,35 @@ fn scan_library_with_progress_and_events(
     let mut target_fingerprint = Fingerprint::new();
     let mut skip_target = false;
     let mut target_checkpointable = true;
+    let mut last_target_heartbeat = Instant::now();
     while let Ok(event) = rx.recv() {
         crate::cooperative_work::checkpoint();
+        if last_target_heartbeat.elapsed() >= std::time::Duration::from_secs(30)
+            && let Some(descriptor) = target_descriptor.as_ref()
+        {
+            report_scan_target(
+                &mut scan_events,
+                descriptor,
+                target_count,
+                priority,
+                "heartbeat",
+                descriptor.ordinal,
+                discoveries.len(),
+            );
+            last_target_heartbeat = Instant::now();
+        }
         let files = match event {
             DiscoveryEvent::TargetStart(descriptor) => {
+                report_scan_target(
+                    &mut scan_events,
+                    &descriptor,
+                    target_count,
+                    priority,
+                    "started",
+                    descriptor.ordinal,
+                    discoveries.len(),
+                );
+                last_target_heartbeat = Instant::now();
                 target_fingerprint = Fingerprint::for_descriptor(&descriptor);
                 target_checkpointable = true;
                 target_offsets = Some(TargetOffsets::capture(
@@ -721,6 +748,15 @@ fn scan_library_with_progress_and_events(
                         ),
                     }
                 }
+                report_scan_target(
+                    &mut scan_events,
+                    &descriptor,
+                    target_count,
+                    priority,
+                    "completed",
+                    descriptor.ordinal.saturating_add(1),
+                    discoveries.len(),
+                );
                 target_descriptor = None;
                 target_offsets = None;
                 skip_target = false;
@@ -1042,6 +1078,39 @@ fn scan_library_with_progress_and_events(
         discover_us,
         classify_us: classify_t.elapsed().as_micros() as u64,
     }
+}
+
+fn report_scan_target(
+    scan_events: &mut ScanEventCallback<'_>,
+    descriptor: &crate::catalog_scan::ScanTargetDescriptor,
+    total: usize,
+    priority: LibraryScanPriority,
+    state: &str,
+    completed_targets: usize,
+    discoveries: usize,
+) {
+    let Some(report) = scan_events.as_mut() else {
+        return;
+    };
+    report(LibraryScanEvent::TargetProgress {
+        ordinal: descriptor.ordinal,
+        total,
+        path: descriptor.path.display().to_string(),
+        target_kind: format!("{:?}", descriptor.kind).to_ascii_lowercase(),
+        state: state.to_string(),
+        completed_targets,
+        discoveries,
+        execution_mode: match priority {
+            LibraryScanPriority::Background => "background_interactive",
+            LibraryScanPriority::Foreground => "foreground_exclusive",
+        }
+        .to_string(),
+        cooperative_policy: match priority {
+            LibraryScanPriority::Background => "interaction_idle_gate",
+            LibraryScanPriority::Foreground => "unrestricted",
+        }
+        .to_string(),
+    });
 }
 
 fn report_new_discovered_systems(

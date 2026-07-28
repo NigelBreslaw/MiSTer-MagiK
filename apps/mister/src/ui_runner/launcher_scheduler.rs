@@ -505,7 +505,16 @@ impl LauncherScheduler {
                 title,
                 detail,
                 percent,
-            } => self.note_catalog_progress("progress", title, detail, *percent, now),
+                metadata,
+            } => {
+                if let Some(target) = metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.scan_target.as_ref())
+                {
+                    self.catalog_progress.note_scan_target(target.clone());
+                }
+                self.note_catalog_progress("progress", title, detail, *percent, now);
+            }
             CatalogWorkerMessage::Timing { name, detail } => {
                 self.note_catalog_progress("timing", name, detail, -1, now);
             }

@@ -24,7 +24,7 @@ const RETENTION_MS: u128 = 48 * 60 * 60 * 1000;
 const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(120);
 const STALL_AFTER_ACTIVE: Duration = Duration::from_secs(5 * 60);
 const STALL_REPEAT_INTERVAL: Duration = Duration::from_secs(5 * 60);
-const MAX_SNAPSHOT_BYTES: usize = 12 * 1024;
+const MAX_JSON_INPUT_BYTES: u64 = 512 * 1024;
 const MAX_LOG_BYTES: usize = 24 * 1024;
 const MAX_LOG_LINES: usize = 96;
 
@@ -37,6 +37,7 @@ pub struct CatalogProgressEvidence {
     pub state: String,
     pub operation: String,
     pub execution_mode: String,
+    pub cooperative_policy: String,
     pub root: String,
     pub phase: String,
     pub detail: String,
@@ -48,12 +49,15 @@ pub struct CatalogProgressEvidence {
     pub inactive_elapsed_ms: u64,
     pub intentionally_paused: bool,
     pub worker_running: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scan_target: Option<mister_magik_catalog::builder_protocol::CatalogScanTargetProgress>,
 }
 
 pub struct CatalogProgressMonitor {
     episode_id: Option<String>,
     operation: String,
     execution_mode: String,
+    cooperative_policy: String,
     root: String,
     phase: String,
     detail: String,
@@ -67,6 +71,7 @@ pub struct CatalogProgressMonitor {
     inactive_elapsed: Duration,
     last_tick_active: bool,
     stall_reported: bool,
+    scan_target: Option<mister_magik_catalog::builder_protocol::CatalogScanTargetProgress>,
 }
 
 impl CatalogProgressMonitor {
@@ -75,6 +80,7 @@ impl CatalogProgressMonitor {
             episode_id: None,
             operation: String::new(),
             execution_mode: String::new(),
+            cooperative_policy: String::new(),
             root: String::new(),
             phase: String::new(),
             detail: String::new(),
@@ -88,6 +94,7 @@ impl CatalogProgressMonitor {
             inactive_elapsed: Duration::ZERO,
             last_tick_active: false,
             stall_reported: false,
+            scan_target: None,
         }
     }
 
@@ -101,6 +108,12 @@ impl CatalogProgressMonitor {
         self.episode_id = Some(new_episode_id());
         self.operation = operation.to_string();
         self.execution_mode = execution_mode.to_string();
+        self.cooperative_policy = if execution_mode == "foreground_exclusive" {
+            "unrestricted"
+        } else {
+            "interaction_idle_gate"
+        }
+        .to_string();
         self.root = root;
         self.phase = "starting".to_string();
         self.detail.clear();
@@ -114,6 +127,7 @@ impl CatalogProgressMonitor {
         self.inactive_elapsed = Duration::ZERO;
         self.last_tick_active = execution_mode == "foreground_exclusive";
         self.stall_reported = false;
+        self.scan_target = None;
         self.evidence("running", true)
     }
 
@@ -179,6 +193,16 @@ impl CatalogProgressMonitor {
         ))
     }
 
+    pub fn note_scan_target(
+        &mut self,
+        target: mister_magik_catalog::builder_protocol::CatalogScanTargetProgress,
+    ) {
+        self.execution_mode.clone_from(&target.execution_mode);
+        self.cooperative_policy
+            .clone_from(&target.cooperative_policy);
+        self.scan_target = Some(target);
+    }
+
     pub fn finish(
         &mut self,
         state: &str,
@@ -215,6 +239,7 @@ impl CatalogProgressMonitor {
             state: state.to_string(),
             operation: self.operation.clone(),
             execution_mode: self.execution_mode.clone(),
+            cooperative_policy: self.cooperative_policy.clone(),
             root: self.root.clone(),
             phase: self.phase.clone(),
             detail: self.detail.clone(),
@@ -226,6 +251,7 @@ impl CatalogProgressMonitor {
             inactive_elapsed_ms: duration_ms(self.inactive_elapsed),
             intentionally_paused: worker_running && !self.last_tick_active,
             worker_running,
+            scan_target: self.scan_target.clone(),
         }
     }
 }
@@ -285,6 +311,9 @@ fn report_writer() -> Option<&'static SyncSender<(PathBuf, String, CatalogProgre
 }
 
 fn report_dir() -> PathBuf {
+    if let Some(path) = std::env::var_os("MISTER_CATALOG_DIAGNOSTICS_DIR") {
+        return PathBuf::from(path);
+    }
     mister_magik_catalog::device_layout::current_app_path("diagnostics/catalog")
 }
 
@@ -321,6 +350,7 @@ fn report_value(episode_id: &str, now_ms: u128, evidence: CatalogProgressEvidenc
         "build": {
             "package_version": env!("CARGO_PKG_VERSION"),
             "arch": std::env::consts::ARCH,
+            "source_revision": option_env!("GIT_HASH").unwrap_or("unknown"),
         },
         "progress": evidence,
         "files": {
@@ -331,13 +361,35 @@ fn report_value(episode_id: &str, now_ms: u128, evidence: CatalogProgressEvidenc
                 &mister_magik_catalog::catalog_state::default_path()
             ),
         },
+        "journal": build_progress_summary(
+            &mister_magik_catalog::catalog_config::default_build_progress_path()
+        ),
         "snapshots": {
             "runtime": read_json_snapshot("/tmp/mister-magik/status.json"),
             "main": read_json_snapshot("/tmp/mister-magik/main-status.json"),
         },
-        "events": filtered_log_tail("/tmp/mister-magik/events.jsonl"),
-        "application_log": filtered_log_tail("/tmp/mister-magik-slint.log"),
+        "events": filtered_event_tail(
+            "/tmp/mister-magik/events.jsonl",
+            std::process::id()
+        ),
+        "application_log": filtered_application_log_tail("/tmp/mister-magik-slint.log"),
     })
+}
+
+fn build_progress_summary(path: &Path) -> Value {
+    match mister_magik_catalog::build_progress::read_summary(path) {
+        Ok(Some(summary)) => json!({
+            "available": true,
+            "summary": summary,
+        }),
+        Ok(None) => json!({
+            "available": false,
+        }),
+        Err(error) => json!({
+            "available": false,
+            "error": error,
+        }),
+    }
 }
 
 fn file_snapshot(path: &Path) -> Value {
@@ -357,11 +409,51 @@ fn file_snapshot(path: &Path) -> Value {
 }
 
 fn read_json_snapshot(path: &str) -> Option<Value> {
-    let bytes = read_bounded(path, MAX_SNAPSHOT_BYTES).ok()?;
-    serde_json::from_slice(&bytes).ok()
+    let file = fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    if len > MAX_JSON_INPUT_BYTES {
+        return Some(json!({
+            "projection_error": "snapshot exceeds bounded JSON input",
+            "bytes": len,
+        }));
+    }
+    let value: Value = serde_json::from_reader(file).ok()?;
+    let Value::Object(source) = value else {
+        return None;
+    };
+    let keys = [
+        "schema",
+        "ts_unix_ms",
+        "pid",
+        "mode",
+        "scene",
+        "screen",
+        "launcher_state",
+        "launcher_pid",
+        "catalog_ready",
+        "catalog_games",
+        "catalog_partial",
+        "catalog_refresh_policy",
+        "catalog_worker_enabled",
+        "catalog_worker_running",
+        "catalog_progress_report",
+        "last_frame_ms_ago",
+        "present_backend",
+        "present_status",
+    ];
+    let projected = keys
+        .into_iter()
+        .filter_map(|key| {
+            source
+                .get(key)
+                .cloned()
+                .map(|value| (key.to_string(), value))
+        })
+        .collect();
+    Some(Value::Object(projected))
 }
 
-fn filtered_log_tail(path: &str) -> Vec<String> {
+fn filtered_event_tail(path: &str, pid: u32) -> Vec<String> {
     let Ok(bytes) = read_bounded(path, MAX_LOG_BYTES) else {
         return Vec::new();
     };
@@ -370,6 +462,12 @@ fn filtered_log_tail(path: &str) -> Vec<String> {
         .lines()
         .rev()
         .filter(|line| {
+            let Ok(event) = serde_json::from_str::<Value>(line) else {
+                return false;
+            };
+            if event.get("pid").and_then(Value::as_u64) != Some(u64::from(pid)) {
+                return false;
+            }
             let line = line.to_ascii_lowercase();
             ["catalog", "library", "scan", "builder", "sqlite"]
                 .iter()
@@ -382,6 +480,35 @@ fn filtered_log_tail(path: &str) -> Vec<String> {
             line
         })
         .collect::<Vec<_>>();
+    lines.reverse();
+    lines
+}
+
+fn filtered_application_log_tail(path: &str) -> Vec<String> {
+    let Ok(bytes) = read_bounded(path, MAX_LOG_BYTES) else {
+        return Vec::new();
+    };
+    let text = String::from_utf8_lossy(&bytes);
+    let mut previous: Option<String> = None;
+    let mut lines = Vec::new();
+    for line in text.lines().rev() {
+        let lower = line.to_ascii_lowercase();
+        if !["catalog", "library", "scan", "builder", "sqlite"]
+            .iter()
+            .any(|token| lower.contains(token))
+            || (lower.contains("screenshot") && !lower.contains("error") && !lower.contains("fail"))
+            || previous.as_deref() == Some(line)
+        {
+            continue;
+        }
+        let mut line = line.to_string();
+        truncate_string(&mut line, 2_048);
+        previous = Some(line.clone());
+        lines.push(line);
+        if lines.len() >= MAX_LOG_LINES {
+            break;
+        }
+    }
     lines.reverse();
     lines
 }
@@ -546,6 +673,54 @@ fn log_report_error(arguments: std::fmt::Arguments<'_>) {
 mod tests {
     use super::*;
 
+    fn temp_file(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "mister-magik-catalog-report-{name}-{}-{}",
+            std::process::id(),
+            REPORT_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
+
+    #[test]
+    fn oversized_runtime_status_is_fully_parsed_then_projected() {
+        let path = temp_file("runtime-status.json");
+        let padding = "x".repeat(32 * 1024);
+        fs::write(
+            &path,
+            serde_json::to_vec(&json!({
+                "schema": "mister-magik-slint-status-v1",
+                "pid": 42,
+                "catalog_ready": true,
+                "catalog_games": 906,
+                "large_unrelated_field": padding,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let snapshot = read_json_snapshot(path.to_str().unwrap()).unwrap();
+        assert_eq!(snapshot["pid"], 42);
+        assert_eq!(snapshot["catalog_games"], 906);
+        assert!(snapshot.get("large_unrelated_field").is_none());
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn event_tail_excludes_previous_launcher_pids() {
+        let path = temp_file("events.jsonl");
+        fs::write(
+            &path,
+            "{\"pid\":41,\"event\":\"catalog_old\"}\n\
+             {\"pid\":42,\"event\":\"catalog_current\"}\n",
+        )
+        .unwrap();
+
+        let events = filtered_event_tail(path.to_str().unwrap(), 42);
+        assert_eq!(events.len(), 1);
+        assert!(events[0].contains("catalog_current"));
+        let _ = fs::remove_file(path);
+    }
+
     #[test]
     fn monitor_ignores_intentional_background_pauses() {
         let start = Instant::now();
@@ -636,6 +811,7 @@ mod tests {
                     state: "running".to_string(),
                     operation: "build".to_string(),
                     execution_mode: "foreground_exclusive".to_string(),
+                    cooperative_policy: "unrestricted".to_string(),
                     root: "/media/fat".to_string(),
                     phase: "Scanning".to_string(),
                     detail: "Games found".to_string(),
@@ -647,6 +823,7 @@ mod tests {
                     inactive_elapsed_ms: 0,
                     intentionally_paused: false,
                     worker_running: true,
+                    scan_target: None,
                 },
                 0,
             )

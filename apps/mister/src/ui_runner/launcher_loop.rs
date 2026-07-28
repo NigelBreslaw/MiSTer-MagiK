@@ -1069,6 +1069,35 @@ impl CatalogBackgroundIdleInput {
             && !self.nav_motion_active
             && !self.preview_critical
     }
+
+    fn blockers(self) -> String {
+        let mut blockers = Vec::new();
+        let mut push = |blocked: bool, label: &'static str| {
+            if blocked {
+                blockers.push(label);
+            }
+        };
+        push(
+            !(self.first_visible_copy_done || self.startup_return_waiting_for_catalog),
+            "first-visible-copy",
+        );
+        push(!self.startup_input_enabled, "startup-input-disabled");
+        push(self.launching, "launching");
+        push(self.setup_active, "setup");
+        push(self.benchmark_active, "benchmark");
+        push(self.scripted_input_active, "scripted-input");
+        push(self.pad_changed, "pad-changed");
+        push(self.pad_active, "pad-active");
+        push(self.catalog_publication_pending, "catalog-publication");
+        push(self.media_message_seen, "media-message");
+        push(self.nav_motion_active, "navigation-motion");
+        push(self.preview_critical, "preview-critical");
+        if blockers.is_empty() {
+            "idle-settle".to_string()
+        } else {
+            blockers.join(",")
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1884,6 +1913,8 @@ pub(super) fn run_launcher_loop(
     let mut catalog_ready_stationary_edge_since: Option<Instant> = None;
     let mut catalog_background_idle_gate =
         CatalogBackgroundIdleGate::new(CATALOG_BACKGROUND_IDLE_SETTLE);
+    let mut last_catalog_background_allowed = None;
+    let mut last_catalog_background_gate_report = None;
     let mut media_message_seen_last_loop = false;
     let mut media_events = MediaJobEventBuf::new();
     let mut lifecycle_effects = LifecycleEffects::new();
@@ -2723,6 +2754,24 @@ pub(super) fn run_launcher_loop(
         };
         let catalog_background_allowed =
             catalog_background_idle_gate.allow(catalog_background_input, loop_start);
+        let gate_transition = last_catalog_background_allowed != Some(catalog_background_allowed);
+        let blocked_report_due = !catalog_background_allowed
+            && scheduler.catalog_worker_running()
+            && last_catalog_background_gate_report.is_none_or(|last: Instant| {
+                loop_start.saturating_duration_since(last) >= Duration::from_secs(30)
+            });
+        if gate_transition || blocked_report_due {
+            runtime_status::event(
+                "catalog_background_gate",
+                format!(
+                    "allowed={} blockers={}",
+                    u8::from(catalog_background_allowed),
+                    catalog_background_input.blockers()
+                ),
+            );
+            last_catalog_background_allowed = Some(catalog_background_allowed);
+            last_catalog_background_gate_report = Some(loop_start);
+        }
         mister_magik_catalog::builder_service::set_background_heavy_work_allowed(
             catalog_background_allowed,
         );
@@ -8420,6 +8469,7 @@ mod tests {
             title: "Indexing library".to_string(),
             detail: "Still working".to_string(),
             percent: -1,
+            metadata: None,
         };
         assert!(!catalog_message_requires_publication_pause(&progress));
 

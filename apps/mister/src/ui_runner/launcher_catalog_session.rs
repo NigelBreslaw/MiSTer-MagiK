@@ -238,6 +238,7 @@ impl LauncherCatalogSession {
                 title,
                 detail,
                 percent,
+                ..
             } => {
                 self.handle_progress(context, title, detail, percent, now, &mut effects);
             }
@@ -1238,6 +1239,7 @@ mod tests {
                 title: "Saving library".to_string(),
                 detail: "Writing catalog database before opening launcher...".to_string(),
                 percent: -1,
+                metadata: None,
             },
             now,
         ));
@@ -1426,6 +1428,7 @@ mod tests {
                 title: "Library scan failed".to_string(),
                 detail: "disk unavailable".to_string(),
                 percent: -1,
+                metadata: None,
             },
             now,
         );
@@ -1470,6 +1473,7 @@ mod tests {
                 title: "Library load failed".to_string(),
                 detail: "sqlite projection corrupt".to_string(),
                 percent: -1,
+                metadata: None,
             },
             now,
         );

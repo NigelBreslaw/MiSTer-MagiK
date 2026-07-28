@@ -63,7 +63,20 @@ pub type ScanEventCallback<'a> = Option<&'a mut dyn FnMut(LibraryScanEvent)>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LibraryScanEvent {
-    SystemDiscovered { system_id: String },
+    SystemDiscovered {
+        system_id: String,
+    },
+    TargetProgress {
+        ordinal: usize,
+        total: usize,
+        path: String,
+        target_kind: String,
+        state: String,
+        completed_targets: usize,
+        discoveries: usize,
+        execution_mode: String,
+        cooperative_policy: String,
+    },
 }
 
 pub(crate) const AMIGAVISION_GAME_LAUNCH_PREFIX: &str = "magik-amigavision:";
@@ -3363,6 +3376,7 @@ mod tests {
         let mut systems = Vec::new();
         let mut scan_events = |event: LibraryScanEvent| match event {
             LibraryScanEvent::SystemDiscovered { system_id } => systems.push(system_id),
+            LibraryScanEvent::TargetProgress { .. } => {}
         };
 
         let scan = scan_library_with_progress_and_events(&cfg, None, Some(&mut scan_events));
@@ -3392,6 +3406,7 @@ mod tests {
         let mut systems = Vec::new();
         let mut scan_events = |event: LibraryScanEvent| match event {
             LibraryScanEvent::SystemDiscovered { system_id } => systems.push(system_id),
+            LibraryScanEvent::TargetProgress { .. } => {}
         };
 
         let scan = scan_library_with_progress_and_events(&cfg, None, Some(&mut scan_events));

@@ -43,6 +43,25 @@ pub struct CatalogFailureDiagnostic {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct CatalogScanTargetProgress {
+    pub ordinal: usize,
+    pub total: usize,
+    pub path: String,
+    pub target_kind: String,
+    pub state: String,
+    pub completed_targets: usize,
+    pub discoveries: usize,
+    pub execution_mode: String,
+    pub cooperative_policy: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+pub struct CatalogProgressMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan_target: Option<CatalogScanTargetProgress>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum CatalogBuilderEvent {
     Handshake {
@@ -54,6 +73,8 @@ pub enum CatalogBuilderEvent {
         protocol: u32,
         title: String,
         detail: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        metadata: Option<CatalogProgressMetadata>,
     },
     SystemDiscovered {
         protocol: u32,
@@ -168,6 +189,43 @@ mod tests {
             protocol: CATALOG_BUILDER_PROTOCOL_VERSION,
             title: "Finding games".into(),
             detail: "42 games found".into(),
+            metadata: None,
+        };
+        let encoded = serde_json::to_string(&event).unwrap();
+        assert_eq!(
+            serde_json::from_str::<CatalogBuilderEvent>(&encoded).unwrap(),
+            event
+        );
+    }
+
+    #[test]
+    fn progress_metadata_is_additive_and_round_trips_target_state() {
+        let previous: CatalogBuilderEvent = serde_json::from_str(
+            r#"{"event":"progress","protocol":1,"title":"Scanning","detail":"working"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            previous,
+            CatalogBuilderEvent::Progress { metadata: None, .. }
+        ));
+
+        let event = CatalogBuilderEvent::Progress {
+            protocol: CATALOG_BUILDER_PROTOCOL_VERSION,
+            title: "Scanning library".into(),
+            detail: "target=1 of 170 state=started".into(),
+            metadata: Some(CatalogProgressMetadata {
+                scan_target: Some(CatalogScanTargetProgress {
+                    ordinal: 0,
+                    total: 170,
+                    path: "/media/fat/games/NES".into(),
+                    target_kind: "static".into(),
+                    state: "started".into(),
+                    completed_targets: 0,
+                    discoveries: 0,
+                    execution_mode: "background_interactive".into(),
+                    cooperative_policy: "interaction_idle_gate".into(),
+                }),
+            }),
         };
         let encoded = serde_json::to_string(&event).unwrap();
         assert_eq!(
@@ -201,26 +259,31 @@ mod tests {
                 protocol,
                 title: "Indexing library".into(),
                 detail: "Preparing library — 53,458 discoveries".into(),
+                metadata: None,
             },
             CatalogBuilderEvent::Progress {
                 protocol,
                 title: "Indexing library".into(),
                 detail: "Resolving playable games — 51,101 of 53,458".into(),
+                metadata: None,
             },
             CatalogBuilderEvent::Progress {
                 protocol,
                 title: "Indexing library".into(),
                 detail: "Building launcher indexes — 51,101 of 51,101".into(),
+                metadata: None,
             },
             CatalogBuilderEvent::Progress {
                 protocol,
                 title: "Indexing library".into(),
                 detail: "Creating compressed navigation catalog…".into(),
+                metadata: None,
             },
             CatalogBuilderEvent::Progress {
                 protocol,
                 title: "Indexing library".into(),
                 detail: "Opening library — 51,101 games".into(),
+                metadata: None,
             },
             CatalogBuilderEvent::CatalogReady {
                 protocol,

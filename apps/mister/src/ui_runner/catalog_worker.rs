@@ -174,6 +174,46 @@ pub(super) fn start_library_catalog_worker(
                         system_id,
                     });
                 }
+                library_db::LibraryScanEvent::TargetProgress {
+                    ordinal,
+                    total,
+                    path,
+                    target_kind,
+                    state,
+                    completed_targets,
+                    discoveries,
+                    execution_mode,
+                    cooperative_policy,
+                } => {
+                    let detail = format!(
+                        "target={} of {} state={} path={path}",
+                        ordinal.saturating_add(1),
+                        total,
+                        state
+                    );
+                    let _ = scan_event_tx.send(CatalogWorkerMessage::Progress {
+                        title: "Scanning library".into(),
+                        detail,
+                        percent: -1,
+                        metadata: Some(
+                            mister_magik_catalog::builder_protocol::CatalogProgressMetadata {
+                                scan_target: Some(
+                                    mister_magik_catalog::builder_protocol::CatalogScanTargetProgress {
+                                        ordinal,
+                                        total,
+                                        path,
+                                        target_kind,
+                                        state,
+                                        completed_targets,
+                                        discoveries,
+                                        execution_mode,
+                                        cooperative_policy,
+                                    },
+                                ),
+                            },
+                        ),
+                    });
+                }
             };
             let mut cache_state = CatalogCacheState::Missing;
             #[cfg(test)]
@@ -909,8 +949,22 @@ fn handle_embedded_builder_event(
             );
             state.terminal_seen = true;
         }
-        CatalogBuilderEvent::Progress { title, detail, .. } => {
-            send_catalog_progress_text(tx, progress_coalescer, &title, &detail);
+        CatalogBuilderEvent::Progress {
+            title,
+            detail,
+            metadata,
+            ..
+        } => {
+            if metadata.is_some() {
+                let _ = tx.send(CatalogWorkerMessage::Progress {
+                    title,
+                    detail,
+                    percent: -1,
+                    metadata,
+                });
+            } else {
+                send_catalog_progress_text(tx, progress_coalescer, &title, &detail);
+            }
         }
         CatalogBuilderEvent::SystemDiscovered { system_id, .. } => {
             let _ = tx.send(CatalogWorkerMessage::SystemDiscovered { system_id });
@@ -1151,6 +1205,7 @@ pub(super) enum CatalogWorkerMessage {
         title: String,
         detail: String,
         percent: i32,
+        metadata: Option<mister_magik_catalog::builder_protocol::CatalogProgressMetadata>,
     },
     LoadFailed {
         error: String,
@@ -1264,6 +1319,7 @@ fn send_catalog_progress_text(
         title: title.to_string(),
         detail: detail.to_string(),
         percent,
+        metadata: None,
     });
 }
 
@@ -1277,6 +1333,7 @@ fn send_catalog_progress(
         title: display.title().to_string(),
         detail: display.detail().to_string(),
         percent: display.percent(),
+        metadata: None,
     });
 }
 
@@ -1963,6 +2020,7 @@ mod tests {
             protocol,
             title: "Scanning library".into(),
             detail: "Scanning 1 folder".into(),
+            metadata: None,
         });
         assert!(matches!(
             rx.recv().unwrap(),

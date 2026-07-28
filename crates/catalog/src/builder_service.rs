@@ -145,14 +145,14 @@ trait BuilderBackend {
     fn bootstrap_first_visible(
         &mut self,
         _progress: &mut dyn FnMut(&str, &str),
-        _system_discovered: &mut dyn FnMut(String),
+        _scan_event: &mut dyn FnMut(crate::library_db::LibraryScanEvent),
     ) -> Result<Option<StageOutput<Self::Prepared>>, String> {
         Ok(None)
     }
     fn scan(
         &mut self,
         progress: &mut dyn FnMut(&str, &str),
-        system_discovered: &mut dyn FnMut(String),
+        scan_event: &mut dyn FnMut(crate::library_db::LibraryScanEvent),
     ) -> Result<StageOutput<Self::Scan>, String>;
     fn prepare(
         &mut self,
@@ -255,13 +255,11 @@ fn run_with_backend<B: BuilderBackend>(
                 protocol,
                 title: title.into(),
                 detail: detail.into(),
+                metadata: None,
             });
         };
-        backend.bootstrap_first_visible(&mut progress, &mut |system_id| {
-            (protocol_output.borrow_mut())(CatalogBuilderEvent::SystemDiscovered {
-                protocol,
-                system_id,
-            });
+        backend.bootstrap_first_visible(&mut progress, &mut |event| {
+            emit_scan_event(protocol, event, &mut *protocol_output.borrow_mut());
         })
     }
     .map_err(|error| fail(protocol, "bootstrap", error, emit))?;
@@ -278,6 +276,7 @@ fn run_with_backend<B: BuilderBackend>(
                     protocol,
                     title: title.into(),
                     detail: detail.into(),
+                    metadata: None,
                 });
             })
             .map_err(|error| fail(protocol, "bootstrap-snapshot", error, emit))?;
@@ -324,13 +323,11 @@ fn run_with_backend<B: BuilderBackend>(
                 protocol,
                 title: title.into(),
                 detail: detail.into(),
+                metadata: None,
             });
         };
-        backend.scan(&mut scan_progress, &mut |system_id| {
-            (protocol_output.borrow_mut())(CatalogBuilderEvent::SystemDiscovered {
-                protocol,
-                system_id,
-            });
+        backend.scan(&mut scan_progress, &mut |event| {
+            emit_scan_event(protocol, event, &mut *protocol_output.borrow_mut());
         })
     }
     .map_err(|error| fail(protocol, "scan", error, emit))?;
@@ -344,6 +341,7 @@ fn run_with_backend<B: BuilderBackend>(
                 protocol,
                 title: title.into(),
                 detail: detail.into(),
+                metadata: None,
             });
         };
         backend
@@ -378,6 +376,7 @@ fn run_with_backend<B: BuilderBackend>(
                     protocol,
                     title: title.into(),
                     detail: detail.into(),
+                    metadata: None,
                 });
             };
             backend
@@ -389,6 +388,7 @@ fn run_with_backend<B: BuilderBackend>(
             protocol,
             title: "Indexing library".into(),
             detail: format!("Opening library — {games} games"),
+            metadata: None,
         });
         emit(CatalogBuilderEvent::Timing {
             protocol,
@@ -430,6 +430,7 @@ fn run_with_backend<B: BuilderBackend>(
             protocol,
             title: title.into(),
             detail: detail.into(),
+            metadata: None,
         });
     };
     wait_for_background_heavy_work_enabled(background_build);
@@ -483,6 +484,57 @@ fn emit_timings(
             name,
             detail,
         });
+    }
+}
+
+fn emit_scan_event(
+    protocol: u32,
+    event: crate::library_db::LibraryScanEvent,
+    emit: &mut dyn FnMut(CatalogBuilderEvent),
+) {
+    match event {
+        crate::library_db::LibraryScanEvent::SystemDiscovered { system_id } => {
+            emit(CatalogBuilderEvent::SystemDiscovered {
+                protocol,
+                system_id,
+            });
+        }
+        crate::library_db::LibraryScanEvent::TargetProgress {
+            ordinal,
+            total,
+            path,
+            target_kind,
+            state,
+            completed_targets,
+            discoveries,
+            execution_mode,
+            cooperative_policy,
+        } => {
+            let detail = format!(
+                "target={} of {} state={} path={path}",
+                ordinal.saturating_add(1),
+                total,
+                state
+            );
+            emit(CatalogBuilderEvent::Progress {
+                protocol,
+                title: "Scanning library".into(),
+                detail,
+                metadata: Some(crate::builder_protocol::CatalogProgressMetadata {
+                    scan_target: Some(crate::builder_protocol::CatalogScanTargetProgress {
+                        ordinal,
+                        total,
+                        path,
+                        target_kind,
+                        state,
+                        completed_targets,
+                        discoveries,
+                        execution_mode,
+                        cooperative_policy,
+                    }),
+                }),
+            });
+        }
     }
 }
 
@@ -713,7 +765,7 @@ impl BuilderBackend for SystemBuilderBackend {
     fn bootstrap_first_visible(
         &mut self,
         progress: &mut dyn FnMut(&str, &str),
-        system_discovered: &mut dyn FnMut(String),
+        scan_event: &mut dyn FnMut(library_db::LibraryScanEvent),
     ) -> Result<Option<StageOutput<Self::Prepared>>, String> {
         if !self.bootstrap_first_visible {
             return Ok(None);
@@ -721,7 +773,9 @@ impl BuilderBackend for SystemBuilderBackend {
         let root = crate::arcade_catalog::DEFAULT_ARCADE_ROOT;
         match crate::arcade_bootstrap_index::probe(Path::new(root)) {
             crate::arcade_bootstrap_index::ProbeResult::Hit(loaded) => {
-                system_discovered("arcade".to_string());
+                scan_event(library_db::LibraryScanEvent::SystemDiscovered {
+                    system_id: "arcade".to_string(),
+                });
                 let games = loaded.catalog.len();
                 return Ok(Some(StageOutput {
                     value: PreparedBuild {
@@ -765,11 +819,7 @@ impl BuilderBackend for SystemBuilderBackend {
             }
         }
         progress("Indexing library", "Scanning Arcade first…");
-        let mut scan_events = |event: library_db::LibraryScanEvent| match event {
-            library_db::LibraryScanEvent::SystemDiscovered { system_id } => {
-                system_discovered(system_id);
-            }
-        };
+        let mut scan_events = |event: library_db::LibraryScanEvent| scan_event(event);
         let scanned = library_db::scan_arcade_bootstrap_ram_foreground_with_events(
             Some(progress),
             Some(&mut scan_events),
@@ -819,13 +869,9 @@ impl BuilderBackend for SystemBuilderBackend {
     fn scan(
         &mut self,
         progress: &mut dyn FnMut(&str, &str),
-        system_discovered: &mut dyn FnMut(String),
+        scan_event: &mut dyn FnMut(library_db::LibraryScanEvent),
     ) -> Result<StageOutput<Self::Scan>, String> {
-        let mut scan_events = |event: library_db::LibraryScanEvent| match event {
-            library_db::LibraryScanEvent::SystemDiscovered { system_id } => {
-                system_discovered(system_id);
-            }
-        };
+        let mut scan_events = |event: library_db::LibraryScanEvent| scan_event(event);
         // The bootstrap is UI-only. A resumable full build owns one stable,
         // complete ordered target list across the first and later processes.
         self.arcade_bootstrap_scan.take();
@@ -1432,14 +1478,16 @@ mod tests {
         fn bootstrap_first_visible(
             &mut self,
             progress: &mut dyn FnMut(&str, &str),
-            system_discovered: &mut dyn FnMut(String),
+            scan_event: &mut dyn FnMut(library_db::LibraryScanEvent),
         ) -> Result<Option<StageOutput<Self::Prepared>>, String> {
             if !self.bootstrap_first_visible {
                 return Ok(None);
             }
             self.calls.push("bootstrap");
             progress("Indexing library", "Scanning Arcade first…");
-            system_discovered("arcade".into());
+            scan_event(library_db::LibraryScanEvent::SystemDiscovered {
+                system_id: "arcade".into(),
+            });
             Ok(Some(StageOutput {
                 value: (),
                 timings: vec![("builder_first_visible_scan".into(), "fixture".into())],
@@ -1449,12 +1497,14 @@ mod tests {
         fn scan(
             &mut self,
             progress: &mut dyn FnMut(&str, &str),
-            system_discovered: &mut dyn FnMut(String),
+            scan_event: &mut dyn FnMut(library_db::LibraryScanEvent),
         ) -> Result<StageOutput<Self::Scan>, String> {
             self.calls.push("scan");
             self.fail("scan")?;
             progress("Scanning", "fixture");
-            system_discovered("arcade".into());
+            scan_event(library_db::LibraryScanEvent::SystemDiscovered {
+                system_id: "arcade".into(),
+            });
             Ok(StageOutput {
                 value: (),
                 timings: vec![("library_scan_complete".into(), "fixture".into())],
