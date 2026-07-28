@@ -671,11 +671,11 @@ impl ParticleShowcaseRenderer {
         let visible = self.project_warp_speed_scalar(travel, previous_step);
 
         let stride = if speed < 0.12 {
-            96
+            128
         } else if speed < 0.55 {
-            32
+            64
         } else {
-            16
+            32
         };
         for index in (0..self.commands.len()).step_by(stride) {
             let current = self.commands[index];
