@@ -55,6 +55,17 @@ fn require_clean_installed_commit(
         .join(scenario.label())
         .join(timestamp.to_string());
 
+    if let Some((demo, cpu_profile)) = scenario.particle_showcase() {
+        return execute_particle_showcase(
+            &mut device,
+            manifest,
+            output_dir,
+            demo,
+            cpu_profile,
+            reporter,
+        );
+    }
+
     match scenario {
         BenchmarkScenario::Screensaver => {
             execute_screensaver(&mut device, manifest, output_dir, reporter)
@@ -78,7 +89,55 @@ fn require_clean_installed_commit(
             execute_catalog_lifecycle(&mut device, manifest, output_dir, reporter)
         }
         BenchmarkScenario::Search => execute_search(&mut device, manifest, output_dir, reporter),
+        BenchmarkScenario::ParticleDemo01 | BenchmarkScenario::ParticleDemoProfile01 => {
+            unreachable!("particle showcase scenarios return before the fixed registry match")
+        }
     }
+}
+
+fn execute_particle_showcase(
+    device: &mut DeviceClient,
+    manifest: String,
+    output_dir: std::path::PathBuf,
+    demo: u8,
+    cpu_profile: bool,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    reporter.emit(
+        EventKind::Progress,
+        "profile",
+        if cpu_profile {
+            "sampling installed particle showcase CPU stacks"
+        } else {
+            "measuring fixed particle showcase demo"
+        },
+        Some(20),
+    )?;
+    let detail = device.execute(DeviceRequest::ProfileInstalledParticleShowcase {
+        output_dir: output_dir.clone(),
+        demo,
+        cpu_profile,
+    })?;
+    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+    device.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))?;
+    if cpu_profile {
+        if summary.get("schema").and_then(Value::as_str)
+            != Some("mister-magik-particle-showcase-cpu-profile-v1")
+            || summary
+                .pointer("/demo/profile/sample_hits")
+                .and_then(Value::as_i64)
+                .unwrap_or(0)
+                <= 0
+        {
+            return Err(format!("particle showcase demo {demo} CPU profile is incomplete").into());
+        }
+    } else if summary.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-particle-showcase-v1")
+        || summary.pointer("/demo/qualified").and_then(Value::as_bool) != Some(true)
+    {
+        return Err(format!("particle showcase demo {demo} did not qualify").into());
+    }
+    emit_benchmark_result(reporter, manifest, summary, output_dir)
 }
 
 fn execute_particle_profile(

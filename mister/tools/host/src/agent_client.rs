@@ -636,6 +636,24 @@ pub(crate) fn agent_telemetry_for_particle_trial(
     duration: Duration,
     startup_timeout: Duration,
 ) -> Result<Vec<Value>> {
+    agent_telemetry_for_particle_renderer_trial(
+        endpoint,
+        "particle-magik",
+        preset,
+        count,
+        duration,
+        startup_timeout,
+    )
+}
+
+pub(crate) fn agent_telemetry_for_particle_renderer_trial(
+    endpoint: &AgentEndpoint,
+    renderer: &str,
+    preset: &str,
+    count: u64,
+    duration: Duration,
+    startup_timeout: Duration,
+) -> Result<Vec<Value>> {
     let addr = format!("{}:{AGENT_PORT}", endpoint.host)
         .to_socket_addrs()?
         .next()
@@ -674,7 +692,7 @@ pub(crate) fn agent_telemetry_for_particle_trial(
                 .and_then(Value::as_u64)
                 .unwrap_or(0);
             return Err(format!(
-                "particle trial did not attest renderer=particle-magik preset={preset} count={count} within {}ms; last screen={screen} pid={pid}",
+                "particle trial did not attest renderer={renderer} preset={preset} count={count} within {}ms; last screen={screen} pid={pid}",
                 startup_timeout.as_millis()
             )
             .into());
@@ -688,7 +706,7 @@ pub(crate) fn agent_telemetry_for_particle_trial(
             Ok(_) => {
                 let sample: Value = serde_json::from_str(line.trim())?;
                 if measurement_started.is_none()
-                    && telemetry_contains_particle_frame(&sample, preset, count)
+                    && telemetry_contains_particle_frame(&sample, renderer, preset, count)
                 {
                     measurement_started = Some(Instant::now());
                     samples.clear();
@@ -708,15 +726,19 @@ pub(crate) fn agent_telemetry_for_particle_trial(
     }
 }
 
-fn telemetry_contains_particle_frame(sample: &Value, preset: &str, count: u64) -> bool {
+fn telemetry_contains_particle_frame(
+    sample: &Value,
+    renderer: &str,
+    preset: &str,
+    count: u64,
+) -> bool {
     sample
         .pointer("/launcher/frame_budget/recent_frames")
         .and_then(Value::as_array)
         .is_some_and(|frames| {
             frames.iter().any(|frame| {
                 frame.get("screensaver_active").and_then(Value::as_bool) == Some(true)
-                    && frame.get("screensaver_renderer").and_then(Value::as_str)
-                        == Some("particle-magik")
+                    && frame.get("screensaver_renderer").and_then(Value::as_str) == Some(renderer)
                     && frame.get("particle_preset").and_then(Value::as_str) == Some(preset)
                     && frame.get("particle_count").and_then(Value::as_u64) == Some(count)
             })

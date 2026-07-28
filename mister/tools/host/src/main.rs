@@ -29,9 +29,9 @@ mod remote;
 use agent_client::{
     AGENT_PORT, AgentEndpoint, agent_binary_request_bounded, agent_request, agent_request_at,
     agent_request_with_liveness, agent_stream_request_reader, agent_telemetry_for_duration,
-    agent_telemetry_for_particle_trial, agent_telemetry_until_screensaver_profile_complete,
-    agent_token, agent_token_for_device, bootstrap_agent, bootstrap_agent_with,
-    verify_agent_deploy_result,
+    agent_telemetry_for_particle_renderer_trial, agent_telemetry_for_particle_trial,
+    agent_telemetry_until_screensaver_profile_complete, agent_token, agent_token_for_device,
+    bootstrap_agent, bootstrap_agent_with, verify_agent_deploy_result,
 };
 use platform_deploy::*;
 use remote::{
@@ -313,6 +313,24 @@ impl DeviceOperations for NativeDevice {
             DeviceRequest::ProfileInstalledParticleCpu { output_dir } => {
                 let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 profile_installed_particle_cpu(&config, output_dir).map_err(device_failure)?
+            }
+            DeviceRequest::ProfileInstalledParticleShowcase {
+                output_dir,
+                demo,
+                cpu_profile,
+            } => {
+                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
+                if *cpu_profile {
+                    profile_installed_particle_showcase_cpu(&config, output_dir, *demo)
+                        .map_err(device_failure)?
+                } else {
+                    profile_installed_particles(
+                        &config,
+                        output_dir,
+                        ParticleBenchmarkRun::Showcase(*demo),
+                    )
+                    .map_err(device_failure)?
+                }
             }
             DeviceRequest::ProfileInstalledSearch { output_dir } => {
                 let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
@@ -3214,6 +3232,7 @@ const PARTICLE_STEP_COUNT: u64 = 14_336;
 const PARTICLE_CPU_PROFILE_DURATION_SECS: u64 = 30;
 const PARTICLE_CPU_PROFILE_CAPACITY_COUNT: u64 = 14_336;
 const PARTICLE_CPU_PROFILE_VISUAL_COUNT: u64 = 9_216;
+const PARTICLE_SHOWCASE_DURATION_SECS: u64 = 30;
 const PARTICLE_COUNT_STEP: u64 = 1_024;
 const PARTICLE_COUNT_MAX: u64 = 524_288;
 const PARTICLE_POST_RESERVE_US: u64 = 750;
@@ -3224,6 +3243,23 @@ enum ParticleBenchmarkRun {
     Capacity,
     Demo40k,
     Step,
+    Showcase(u8),
+}
+
+fn particle_showcase_demo(number: u8) -> Result<(&'static str, u64)> {
+    match number {
+        1 => Ok(("fireworks", 24_576)),
+        2 => Ok(("fire-embers", 20_480)),
+        3 => Ok(("spiral-galaxy", 98_304)),
+        4 => Ok(("warp-speed", 49_152)),
+        5 => Ok(("meteor-shower", 20_480)),
+        6 => Ok(("weather", 49_152)),
+        7 => Ok(("particle-portal", 65_536)),
+        8 => Ok(("electric-storm", 16_384)),
+        9 => Ok(("fountain-waterfall", 32_768)),
+        10 => Ok(("arcade-cabinet", 65_536)),
+        _ => Err(format!("particle showcase demo must be in 1..=10, received {number}").into()),
+    }
 }
 
 fn last_json_line(output: &str) -> Option<Value> {
@@ -3857,6 +3893,18 @@ fn profile_installed_particles(
                     "step",
                 )?,
             })),
+            ParticleBenchmarkRun::Showcase(demo_number) => {
+                let (label, count) = particle_showcase_demo(demo_number)?;
+                Ok(json!({
+                    "demo": run_particle_showcase_trial(
+                        config,
+                        output_dir,
+                        demo_number,
+                        label,
+                        count,
+                    )?,
+                }))
+            }
         }
     })();
 
@@ -3890,6 +3938,7 @@ fn profile_installed_particles(
         ParticleBenchmarkRun::Capacity => "mister-magik-particle-capacity-benchmark-v1",
         ParticleBenchmarkRun::Demo40k => "mister-magik-particle-demo-40k-v1",
         ParticleBenchmarkRun::Step => "mister-magik-particle-step-v1",
+        ParticleBenchmarkRun::Showcase(_) => "mister-magik-particle-showcase-v1",
     };
     let summary = json!({
         "schema": schema,
@@ -3914,6 +3963,10 @@ fn profile_installed_particles(
         },
         "demo": results.get("demo").cloned().unwrap_or(Value::Null),
         "step": results.get("step").cloned().unwrap_or(Value::Null),
+        "showcase_demo": match run {
+            ParticleBenchmarkRun::Showcase(demo) => Value::from(demo),
+            _ => Value::Null,
+        },
         "captures": results.get("captures").cloned().unwrap_or(Value::Null),
         "boot_id": boot_id,
         "manifest": parse_manifest_evidence(&manifest),
@@ -4046,6 +4099,245 @@ fn profile_installed_particle_cpu(
         format!("{}\n", serde_json::to_string_pretty(&summary)?),
     )?;
     serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn profile_installed_particle_showcase_cpu(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+    demo_number: u8,
+) -> Result<String> {
+    const DISPLAY_MODE: &str = "hdmi-1920x1080p60";
+    let (label, count) = particle_showcase_demo(demo_number)?;
+    let benchmark_mode = DISPLAY_MATRIX_MODES
+        .iter()
+        .find(|mode| mode.id == DISPLAY_MODE)
+        .copied()
+        .ok_or("particle showcase CPU profile display mode is unavailable")?;
+    let session = connect_with(&config.connection, 10)?;
+    let capability = exec_checked_output(
+        &session,
+        "installed particle showcase CPU profile capability",
+        "/media/fat/mister-magik-dev/mister-magik-fb benchmark-capabilities",
+    )?;
+    let capability = last_json_line(&capability.stdout)
+        .ok_or("installed benchmark capability output contains no JSON report")?;
+    for capability_name in ["particle-showcase-v1", "screensaver-pprof-v1"] {
+        if capability.get(capability_name).and_then(Value::as_bool) != Some(true) {
+            return Err(format!("installed app does not support {capability_name}").into());
+        }
+    }
+    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v2.manifest")
+        .ok_or("development platform manifest is missing")?;
+    let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable")?
+        .trim()
+        .to_string();
+    let original_ini =
+        remote_read(&session, "/media/fat/MiSTer.ini").ok_or("MiSTer.ini is unavailable")?;
+    let original_reply = exec_checked_output(
+        &session,
+        "query original particle showcase CPU profile display mode",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    let original_mode = parse_display_reply_active(original_reply.stdout.trim())?;
+    if parse_display_reply_pending(original_reply.stdout.trim())?.is_some() {
+        return Err(
+            "particle showcase CPU profile cannot start during a display transaction".into(),
+        );
+    }
+    let original_mode_spec = DISPLAY_MATRIX_MODES
+        .iter()
+        .find(|mode| mode.id == original_mode)
+        .copied()
+        .ok_or_else(|| {
+            format!("particle showcase CPU profile cannot restore unknown mode {original_mode}")
+        })?;
+    fs::create_dir_all(output_dir)?;
+    drop(session);
+    let _signal_guard = ScreensaverProfileSignalGuard::install();
+
+    let run_result = (|| -> Result<Value> {
+        apply_confirmed_display_mode(config, benchmark_mode, "particle showcase CPU profile")?;
+        let session = connect_with(&config.connection, 10)?;
+        validate_particle_display_geometry(&session)?;
+        drop(session);
+        profile_particle_showcase_cpu_demo(config, output_dir, demo_number, label, count)
+    })();
+
+    let launcher_cleanup = restore_installed_screensaver_profile(config);
+    let display_restore = apply_confirmed_display_mode(
+        config,
+        original_mode_spec,
+        "particle showcase CPU profile restoration",
+    );
+    let final_verification = display_restore.and_then(|()| {
+        verify_particle_benchmark_restoration(
+            config,
+            &original_mode,
+            &original_ini,
+            &boot_id,
+            &manifest,
+        )
+    });
+    let cleanup_result = combine_benchmark_cleanup(launcher_cleanup, final_verification);
+    let profile = match (run_result, cleanup_result) {
+        (Ok(profile), Ok(())) => profile,
+        (Err(error), Ok(())) => return Err(error),
+        (Ok(_), Err(error)) => {
+            return Err(format!("particle showcase CPU profile cleanup failed: {error}").into());
+        }
+        (Err(run_error), Err(cleanup_error)) => {
+            return Err(format!(
+                "{run_error}; particle showcase CPU profile cleanup failed: {cleanup_error}"
+            )
+            .into());
+        }
+    };
+    let summary = json!({
+        "schema": "mister-magik-particle-showcase-cpu-profile-v1",
+        "display": {
+            "benchmark_mode": benchmark_mode.id,
+            "framebuffer": "960x540",
+            "bits_per_pixel": 16,
+            "original_mode": original_mode,
+            "restored": true,
+        },
+        "duration_secs": PARTICLE_CPU_PROFILE_DURATION_SECS,
+        "sampling_hz": 99,
+        "demo_number": demo_number,
+        "demo": profile,
+        "boot_id": boot_id,
+        "manifest": parse_manifest_evidence(&manifest),
+        "output_dir": output_dir,
+    });
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn profile_particle_showcase_cpu_demo(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+    demo_number: u8,
+    label: &str,
+    count: u64,
+) -> Result<Value> {
+    let remote_svg =
+        format!("{SCREENSAVER_PROFILE_REMOTE_DIR}/particle-showcase-{demo_number:02}.svg");
+    let remote_folded =
+        format!("{SCREENSAVER_PROFILE_REMOTE_DIR}/particle-showcase-{demo_number:02}.folded");
+    let remote_complete =
+        format!("{SCREENSAVER_PROFILE_REMOTE_DIR}/particle-showcase-{demo_number:02}.json");
+    let session = connect_with(&config.connection, 10)?;
+    exec_checked(
+        &session,
+        "reset particle showcase CPU profile artifacts",
+        &format!(
+            "set -eu; mkdir -p {0}; rm -f {1} {2} {3}",
+            sh(SCREENSAVER_PROFILE_REMOTE_DIR),
+            sh(&remote_svg),
+            sh(&remote_folded),
+            sh(&remote_complete)
+        ),
+    )?;
+    restart_launcher_with_one_shot_env(
+        &session,
+        LauncherRestartOptions {
+            env_vars: vec![
+                ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+                ("MISTER_SCREENSAVER_START_ACTIVE".into(), "1".into()),
+                (
+                    "MISTER_SCREENSAVER_RENDERER".into(),
+                    "particle-demos".into(),
+                ),
+                ("MISTER_PARTICLE_DEMO".into(), demo_number.to_string()),
+                ("MISTER_PARTICLE_SEED".into(), "827141709451".into()),
+                ("MISTER_PPROF".into(), "1".into()),
+                ("MISTER_PPROF_TRIGGER".into(), "screensaver".into()),
+                (
+                    "MISTER_PPROF_DURATION_SECS".into(),
+                    PARTICLE_CPU_PROFILE_DURATION_SECS.to_string(),
+                ),
+                ("MISTER_PPROF_HZ".into(), "99".into()),
+                ("MISTER_PPROF_OUT".into(), remote_svg.clone()),
+                ("MISTER_PPROF_FOLDED_OUT".into(), remote_folded.clone()),
+                ("MISTER_PPROF_COMPLETE".into(), remote_complete.clone()),
+            ],
+            timeout_secs: 45,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    drop(session);
+
+    let telemetry = agent_telemetry_until_screensaver_profile_complete(
+        &config.agent,
+        Duration::from_secs(PARTICLE_CPU_PROFILE_DURATION_SECS + 20),
+    )?;
+    let telemetry_file = format!("{demo_number:02}-{label}-profile-telemetry.jsonl");
+    let timing = summarize_particle_trial_for_renderer(
+        label,
+        count,
+        PARTICLE_CPU_PROFILE_DURATION_SECS,
+        "profile",
+        &telemetry_file,
+        &telemetry,
+        "particle-demos",
+    );
+    if timing.get("frames").and_then(Value::as_u64).unwrap_or(0) == 0 {
+        return Err(format!("particle showcase profile did not attest demo {demo_number}").into());
+    }
+    let session = connect_with(&config.connection, 10)?;
+    let metadata = remote_read(&session, &remote_complete)
+        .ok_or("particle showcase profile completion metadata is missing")?;
+    let metadata_value: Value = serde_json::from_str(metadata.trim())?;
+    if metadata_value.get("state").and_then(Value::as_str) != Some("complete")
+        || metadata_value
+            .get("sample_hits")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            <= 0
+    {
+        return Err(format!("particle showcase demo {demo_number} produced no CPU samples").into());
+    }
+    let svg = remote_read(&session, &remote_svg)
+        .filter(|text| !text.is_empty())
+        .ok_or("particle showcase profile SVG is missing")?;
+    let folded = remote_read(&session, &remote_folded)
+        .filter(|text| !text.is_empty())
+        .ok_or("particle showcase folded stacks are missing")?;
+    let svg_file = format!("{demo_number:02}-{label}.svg");
+    let folded_file = format!("{demo_number:02}-{label}.folded");
+    let profile_file = format!("{demo_number:02}-{label}-profile.json");
+    fs::write(output_dir.join(&svg_file), svg)?;
+    fs::write(output_dir.join(&folded_file), folded)?;
+    fs::write(
+        output_dir.join(&profile_file),
+        format!("{}\n", serde_json::to_string_pretty(&metadata_value)?),
+    )?;
+    let telemetry_text = telemetry
+        .iter()
+        .map(serde_json::to_string)
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .join("\n");
+    fs::write(
+        output_dir.join(&telemetry_file),
+        format!("{telemetry_text}\n"),
+    )?;
+    Ok(json!({
+        "label": label,
+        "count": count,
+        "profile": metadata_value,
+        "timing": timing,
+        "artifacts": {
+            "svg": svg_file,
+            "folded": folded_file,
+            "metadata": profile_file,
+            "telemetry": telemetry_file,
+        },
+    }))
 }
 
 fn profile_particle_cpu_preset(
@@ -4339,6 +4631,59 @@ fn run_particle_trial(
     ))
 }
 
+fn run_particle_showcase_trial(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+    demo_number: u8,
+    label: &str,
+    count: u64,
+) -> Result<Value> {
+    let session = connect_with(&config.connection, 10)?;
+    restart_launcher_with_one_shot_env(
+        &session,
+        LauncherRestartOptions {
+            env_vars: vec![
+                ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+                ("MISTER_SCREENSAVER_START_ACTIVE".into(), "1".into()),
+                (
+                    "MISTER_SCREENSAVER_RENDERER".into(),
+                    "particle-demos".into(),
+                ),
+                ("MISTER_PARTICLE_DEMO".into(), demo_number.to_string()),
+                ("MISTER_PARTICLE_SEED".into(), "827141709451".into()),
+            ],
+            timeout_secs: 45,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    drop(session);
+    let telemetry = agent_telemetry_for_particle_renderer_trial(
+        &config.agent,
+        "particle-demos",
+        label,
+        count,
+        Duration::from_secs(PARTICLE_SHOWCASE_DURATION_SECS),
+        Duration::from_secs(10),
+    )?;
+    let filename = format!("{demo_number:02}-{label}-telemetry.jsonl");
+    let telemetry_text = telemetry
+        .iter()
+        .map(serde_json::to_string)
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .join("\n");
+    fs::write(output_dir.join(&filename), format!("{telemetry_text}\n"))?;
+    Ok(summarize_particle_trial_for_renderer(
+        label,
+        count,
+        PARTICLE_SHOWCASE_DURATION_SECS,
+        "showcase",
+        &filename,
+        &telemetry,
+        "particle-demos",
+    ))
+}
+
 fn summarize_particle_trial(
     preset: &str,
     count: u64,
@@ -4346,6 +4691,26 @@ fn summarize_particle_trial(
     kind: &str,
     telemetry_file: &str,
     telemetry: &[Value],
+) -> Value {
+    summarize_particle_trial_for_renderer(
+        preset,
+        count,
+        duration_secs,
+        kind,
+        telemetry_file,
+        telemetry,
+        "particle-magik",
+    )
+}
+
+fn summarize_particle_trial_for_renderer(
+    preset: &str,
+    count: u64,
+    duration_secs: u64,
+    kind: &str,
+    telemetry_file: &str,
+    telemetry: &[Value],
+    renderer: &str,
 ) -> Value {
     let mut failures = Vec::new();
     let direct_backend = telemetry.iter().any(|sample| {
@@ -4366,8 +4731,7 @@ fn summarize_particle_trial(
             for frame in recent {
                 let selected = frame.get("screensaver_active").and_then(Value::as_bool)
                     == Some(true)
-                    && frame.get("screensaver_renderer").and_then(Value::as_str)
-                        == Some("particle-magik")
+                    && frame.get("screensaver_renderer").and_then(Value::as_str) == Some(renderer)
                     && frame.get("particle_preset").and_then(Value::as_str) == Some(preset)
                     && frame.get("particle_count").and_then(Value::as_u64) == Some(count);
                 if selected && let Some(id) = frame.get("frame").and_then(Value::as_u64) {
@@ -4519,7 +4883,11 @@ fn summarize_particle_trial(
     {
         failures.push(json!({"kind": "no-visible-particles"}));
     }
-    let phase_timing = ["static", "form", "hold", "disperse"]
+    let phase_labels = steady
+        .iter()
+        .filter_map(|frame| frame.get("particle_phase").and_then(Value::as_str))
+        .collect::<std::collections::BTreeSet<_>>();
+    let phase_timing = phase_labels
         .into_iter()
         .map(|phase| {
             let matching = steady
@@ -4961,6 +5329,9 @@ fn persist_and_qualify_particle_benchmark(
         }
         ParticleBenchmarkRun::Step => {
             summary.pointer("/step/qualified").and_then(Value::as_bool) != Some(true)
+        }
+        ParticleBenchmarkRun::Showcase(_) => {
+            summary.pointer("/demo/qualified").and_then(Value::as_bool) != Some(true)
         }
     };
     if failed {

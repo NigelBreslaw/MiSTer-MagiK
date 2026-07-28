@@ -36,6 +36,16 @@ const SHOWCASE_PALETTE: [Rgb565Pixel; 8] = [
     Rgb565Pixel(0xe71c),
     Rgb565Pixel(0xffff),
 ];
+const FIREWORKS_PALETTE: [Rgb565Pixel; 8] = [
+    Rgb565Pixel(0x2805),
+    Rgb565Pixel(0x600a),
+    Rgb565Pixel(0xa80f),
+    Rgb565Pixel(0xf813),
+    Rgb565Pixel(0xfd20),
+    Rgb565Pixel(0xff40),
+    Rgb565Pixel(0xffdb),
+    Rgb565Pixel(0xffff),
+];
 static PARTICLE_DEMO_NAVIGATION: AtomicI32 = AtomicI32::new(0);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -338,7 +348,7 @@ impl ParticleShowcaseRenderer {
 
         let projection_started = Instant::now();
         let projection_cpu_started = thread_cpu_time_us();
-        let mut clipped_commands = self.project_diagnostic(elapsed);
+        let mut clipped_commands = self.project_effect(elapsed);
         let projection_us = projection_started.elapsed().as_micros();
         let projection_cpu_us = elapsed_thread_cpu_us(projection_cpu_started);
 
@@ -363,7 +373,7 @@ impl ParticleShowcaseRenderer {
             beat: if self.transition_started_at.is_some() {
                 "transition"
             } else {
-                "diagnostic"
+                self.effect_beat(elapsed)
             },
             count: self.pool.active(),
             visible,
@@ -476,6 +486,167 @@ impl ParticleShowcaseRenderer {
         clipped
     }
 
+    fn project_effect(&mut self, elapsed: Duration) -> usize {
+        match self.demo {
+            ParticleDemoKind::Fireworks => self.project_fireworks(elapsed),
+            _ => self.project_diagnostic(elapsed),
+        }
+    }
+
+    fn effect_beat(&self, elapsed: Duration) -> &'static str {
+        let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
+        match self.demo {
+            ParticleDemoKind::Fireworks => match seconds.rem_euclid(4.8) {
+                value if value < 1.25 => "launch",
+                value if value < 2.6 => "burst",
+                _ => "fall",
+            },
+            _ => "diagnostic",
+        }
+    }
+
+    fn project_fireworks(&mut self, elapsed: Duration) -> usize {
+        self.commands.clear();
+        self.segments.clear();
+        let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
+        let width = self.config.width as f32;
+        let height = self.config.height as f32;
+        let particles_per_burst = 768usize;
+        let burst_count = self.pool.active().div_ceil(particles_per_burst);
+        let mut clipped = 0usize;
+        for index in 0..self.pool.active() {
+            let burst = index / particles_per_burst;
+            let lane = index % particles_per_burst;
+            let random = self.pool.random[index];
+            let start = burst as f32 * 0.82;
+            let local = (seconds - start).rem_euclid((burst_count as f32 * 0.82).max(4.8));
+            let burst_x = width * (0.12 + 0.76 * unit01(random.rotate_left(5)));
+            let apex_y = height * (0.16 + 0.31 * unit01(random.rotate_left(13)));
+            let launch_duration = 1.25;
+            if local < launch_duration {
+                if lane & 31 != 0 {
+                    self.commands.push(u32::MAX);
+                    continue;
+                }
+                let trail = (lane / 32) as f32 / 24.0;
+                let progress = (local / launch_duration - trail * 0.16).clamp(0.0, 1.0);
+                let x = burst_x + (unit_signed(random.rotate_left(17)) * 3.0) * progress;
+                let y = height - 18.0 - (height - apex_y - 18.0) * ease_out_cubic(progress);
+                let style = 4 + ((lane / 32) & 3) as u8;
+                if !push_screen_command(
+                    &mut self.commands,
+                    self.config.width,
+                    self.config.height,
+                    x,
+                    y,
+                    style,
+                    lane & 63 == 0,
+                ) {
+                    clipped = clipped.saturating_add(1);
+                }
+                continue;
+            }
+
+            let age = local - launch_duration;
+            if age > 3.55 {
+                self.commands.push(u32::MAX);
+                continue;
+            }
+            let angle = std::f32::consts::TAU * unit01(random);
+            let vertical = unit_signed(random.rotate_left(9));
+            let ring_radius = (1.0 - vertical * vertical).max(0.0).sqrt();
+            let template = burst & 3;
+            let base_speed = match template {
+                0 => 66.0 + 54.0 * unit01(random.rotate_left(19)),
+                1 => 88.0 + 18.0 * unit01(random.rotate_left(19)),
+                2 => 52.0 + 76.0 * unit01(random.rotate_left(19)).powi(2),
+                _ => 72.0 + 38.0 * unit01(random.rotate_left(19)),
+            };
+            let (mut dx, mut dy, mut dz) = match template {
+                0 => (
+                    angle.cos() * ring_radius,
+                    vertical,
+                    angle.sin() * ring_radius,
+                ),
+                1 => (angle.cos(), angle.sin() * 0.18, angle.sin()),
+                2 => (
+                    angle.cos() * (0.35 + 0.65 * ring_radius),
+                    -vertical.abs() * 0.95 - 0.1,
+                    angle.sin() * (0.35 + 0.65 * ring_radius),
+                ),
+                _ => (
+                    angle.cos() * ring_radius,
+                    vertical * 0.72,
+                    angle.sin() * ring_radius,
+                ),
+            };
+            if template == 3 {
+                dy -= age * 0.16;
+            }
+            let drag = (-age * 0.31).exp();
+            dx *= base_speed * drag;
+            dy *= base_speed * drag;
+            dz *= base_speed * drag;
+            let world_x = burst_x - width * 0.5 + dx * age;
+            let world_y = apex_y - height * 0.5 + dy * age + 34.0 * age * age;
+            let world_z = dz * age;
+            let style_base = ((burst * 3 + lane / 96) & 7) as u8;
+            let fade = ((1.0 - age / 3.55) * 7.0) as u8;
+            let style = style_base.min(fade).max(1);
+            let Some((x, y)) = project_world(
+                world_x,
+                world_y,
+                world_z,
+                self.config.width,
+                self.config.height,
+                470.0,
+            ) else {
+                self.commands.push(u32::MAX);
+                clipped = clipped.saturating_add(1);
+                continue;
+            };
+            if !push_screen_command(
+                &mut self.commands,
+                self.config.width,
+                self.config.height,
+                x,
+                y,
+                style,
+                lane & 127 == 0,
+            ) {
+                clipped = clipped.saturating_add(1);
+                continue;
+            }
+            if lane & 31 == 0 && age > 0.05 {
+                let previous_age = age - 0.05;
+                let previous_drag = (-previous_age * 0.31).exp();
+                let previous_world_x =
+                    burst_x - width * 0.5 + dx / drag * previous_drag * previous_age;
+                let previous_world_y = apex_y - height * 0.5
+                    + dy / drag * previous_drag * previous_age
+                    + 34.0 * previous_age * previous_age;
+                let previous_world_z = dz / drag * previous_drag * previous_age;
+                if let Some((previous_x, previous_y)) = project_world(
+                    previous_world_x,
+                    previous_world_y,
+                    previous_world_z,
+                    self.config.width,
+                    self.config.height,
+                    470.0,
+                ) {
+                    self.segments.push(ParticleShowcaseSegment {
+                        x0: previous_x as i16,
+                        y0: previous_y as i16,
+                        x1: x as i16,
+                        y1: y as i16,
+                        style,
+                    });
+                }
+            }
+        }
+        clipped
+    }
+
     fn begin_transition(&mut self, elapsed: Duration) {
         let visible = self
             .commands
@@ -562,6 +733,7 @@ impl ParticleShowcaseRenderer {
                 self.config.width,
                 self.config.height,
                 *segment,
+                showcase_palette(self.demo),
             ));
         }
         writes
@@ -580,11 +752,11 @@ impl ParticleShowcaseRenderer {
             }
             let offset = (command & COMMAND_OFFSET_MASK) as usize;
             let style = ((command >> COMMAND_STYLE_SHIFT) & 7) as usize;
-            destination[offset] = SHOWCASE_PALETTE[style];
+            destination[offset] = showcase_palette(self.demo)[style];
             dirty_offsets.push(offset as u32);
             writes = writes.saturating_add(1);
             if command & COMMAND_NEIGHBOR != 0 {
-                destination[offset + 1] = SHOWCASE_PALETTE[style.saturating_sub(1)];
+                destination[offset + 1] = showcase_palette(self.demo)[style.saturating_sub(1)];
                 dirty_offsets.push((offset + 1) as u32);
                 writes = writes.saturating_add(1);
             }
@@ -767,6 +939,60 @@ fn unit_signed(value: u32) -> f32 {
     ((value >> 8) as f32) * (2.0 / 16_777_215.0) - 1.0
 }
 
+fn unit01(value: u32) -> f32 {
+    ((value >> 8) as f32) * (1.0 / 16_777_215.0)
+}
+
+fn ease_out_cubic(value: f32) -> f32 {
+    1.0 - (1.0 - value).powi(3)
+}
+
+fn showcase_palette(demo: ParticleDemoKind) -> &'static [Rgb565Pixel; 8] {
+    match demo {
+        ParticleDemoKind::Fireworks => &FIREWORKS_PALETTE,
+        _ => &SHOWCASE_PALETTE,
+    }
+}
+
+fn project_world(
+    x: f32,
+    y: f32,
+    z: f32,
+    width: usize,
+    height: usize,
+    camera_z: f32,
+) -> Option<(f32, f32)> {
+    let depth = camera_z + z;
+    if depth <= 32.0 {
+        return None;
+    }
+    let scale = camera_z / depth;
+    let screen_x = width as f32 * 0.5 + x * scale;
+    let screen_y = height as f32 * 0.5 + y * scale;
+    (screen_x >= 0.0 && screen_y >= 0.0 && screen_x < width as f32 && screen_y < height as f32)
+        .then_some((screen_x, screen_y))
+}
+
+fn push_screen_command(
+    commands: &mut Vec<u32>,
+    width: usize,
+    height: usize,
+    x: f32,
+    y: f32,
+    style: u8,
+    neighbor: bool,
+) -> bool {
+    if x < 0.0 || y < 0.0 || x >= width as f32 || y >= height as f32 {
+        commands.push(u32::MAX);
+        return false;
+    }
+    let x = x as usize;
+    let offset = y as usize * width + x;
+    let neighbor = u32::from(neighbor && x + 1 < width) * COMMAND_NEIGHBOR;
+    commands.push(offset as u32 | u32::from(style.min(7)) << COMMAND_STYLE_SHIFT | neighbor);
+    true
+}
+
 fn hidden_slot_offset(hidden_slot: u8) -> Result<usize, String> {
     match hidden_slot {
         1 => Ok(0),
@@ -790,6 +1016,7 @@ fn raster_bounded_segment(
     width: usize,
     height: usize,
     segment: ParticleShowcaseSegment,
+    palette: &[Rgb565Pixel; 8],
 ) -> usize {
     let mut x = i32::from(segment.x0);
     let mut y = i32::from(segment.y0);
@@ -804,7 +1031,7 @@ fn raster_bounded_segment(
     for _ in 0..MAX_SEGMENT_PIXELS {
         if x >= 0 && y >= 0 && x < width as i32 && y < height as i32 {
             let offset = y as usize * width + x as usize;
-            destination[offset] = SHOWCASE_PALETTE[usize::from(segment.style.min(7))];
+            destination[offset] = palette[usize::from(segment.style.min(7))];
             dirty_offsets.push(offset as u32);
             writes = writes.saturating_add(1);
         }
@@ -973,6 +1200,7 @@ mod tests {
                 y1: 8,
                 style: 7,
             },
+            &SHOWCASE_PALETTE,
         );
         assert!(writes <= MAX_SEGMENT_PIXELS as usize);
         assert!(dirty.iter().all(|offset| *offset < 16 * 16));

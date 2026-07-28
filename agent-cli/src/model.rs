@@ -16,6 +16,12 @@ pub enum BenchmarkScenario {
     ParticleDemo40k,
     ParticleStep,
     ParticleProfile,
+    #[serde(rename = "particle-demo-01")]
+    #[value(name = "particle-demo-01")]
+    ParticleDemo01,
+    #[serde(rename = "particle-demo-profile-01")]
+    #[value(name = "particle-demo-profile-01")]
+    ParticleDemoProfile01,
     CatalogLifecycle,
     Search,
 }
@@ -30,8 +36,19 @@ impl BenchmarkScenario {
             Self::ParticleDemo40k => "particle-demo-40k",
             Self::ParticleStep => "particle-step",
             Self::ParticleProfile => "particle-profile",
+            Self::ParticleDemo01 => "particle-demo-01",
+            Self::ParticleDemoProfile01 => "particle-demo-profile-01",
             Self::CatalogLifecycle => "catalog-lifecycle",
             Self::Search => "search",
+        }
+    }
+
+    #[must_use]
+    pub const fn particle_showcase(self) -> Option<(u8, bool)> {
+        match self {
+            Self::ParticleDemo01 => Some((1, false)),
+            Self::ParticleDemoProfile01 => Some((1, true)),
+            _ => None,
         }
     }
 }

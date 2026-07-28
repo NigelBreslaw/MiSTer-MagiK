@@ -49,6 +49,11 @@ pub enum DeviceRequest {
     ProfileInstalledParticleCpu {
         output_dir: PathBuf,
     },
+    ProfileInstalledParticleShowcase {
+        output_dir: PathBuf,
+        demo: u8,
+        cpu_profile: bool,
+    },
     ProfileInstalledSearch {
         output_dir: PathBuf,
     },
@@ -97,6 +102,12 @@ impl DeviceRequest {
             Self::ProfileInstalledParticleDemo40k { .. } => "profile-installed-particle-demo-40k",
             Self::ProfileInstalledParticleStep { .. } => "profile-installed-particle-step",
             Self::ProfileInstalledParticleCpu { .. } => "profile-installed-particle-cpu",
+            Self::ProfileInstalledParticleShowcase {
+                cpu_profile: false, ..
+            } => "profile-installed-particle-showcase",
+            Self::ProfileInstalledParticleShowcase {
+                cpu_profile: true, ..
+            } => "profile-installed-particle-showcase-cpu",
             Self::ProfileInstalledSearch { .. } => "profile-installed-search",
             Self::VerifyInstalledSearchUi { .. } => "verify-installed-search-ui",
             Self::ProfileInstalledCatalogLifecycle { .. } => "profile-installed-catalog-lifecycle",
@@ -267,6 +278,16 @@ mod tests {
             DeviceRequest::ProfileInstalledParticleCpu {
                 output_dir: "particle-cpu-profiles".into(),
             },
+            DeviceRequest::ProfileInstalledParticleShowcase {
+                output_dir: "particle-showcase-profiles".into(),
+                demo: 1,
+                cpu_profile: false,
+            },
+            DeviceRequest::ProfileInstalledParticleShowcase {
+                output_dir: "particle-showcase-cpu-profiles".into(),
+                demo: 1,
+                cpu_profile: true,
+            },
             DeviceRequest::ProfileInstalledSearch {
                 output_dir: "search-profile".into(),
             },
@@ -295,7 +316,7 @@ mod tests {
             DeviceRequest::CaptureFramebuffer,
         ];
         let labels: Vec<_> = requests.iter().map(DeviceRequest::label).collect();
-        assert_eq!(labels.len(), 31);
+        assert_eq!(labels.len(), 33);
         assert!(labels.iter().all(|label| !label.is_empty()));
         assert_eq!(
             labels
@@ -310,6 +331,8 @@ mod tests {
                 "profile-installed-particle-demo-40k",
                 "profile-installed-particle-step",
                 "profile-installed-particle-cpu",
+                "profile-installed-particle-showcase",
+                "profile-installed-particle-showcase-cpu",
                 "profile-installed-search",
                 "profile-installed-catalog-lifecycle"
             ]
