@@ -401,18 +401,15 @@ impl ParticleEngine {
             let noise = next_random(&mut self.random_states[index]);
             let jitter_x = signed_unit(noise);
             let jitter_y = signed_unit(noise.rotate_left(11));
-            self.vx[index] += jitter_x * 75.0 * delta;
-            self.vy[index] += jitter_y * 75.0 * delta;
-            self.vz[index] += signed_unit(noise.rotate_left(21)) * 8.0 * delta;
-            self.vx[index] *= 0.985;
-            self.vy[index] *= 0.985;
-            self.vz[index] *= 0.98;
-            self.x[index] += self.vx[index] * delta;
-            self.y[index] += self.vy[index] * delta;
-            self.z[index] =
-                (self.z[index] + self.vz[index] * delta).clamp(-DEPTH_EXTENT, DEPTH_EXTENT);
-            self.x[index] = wrap_coordinate(self.x[index], width);
-            self.y[index] = wrap_coordinate(self.y[index], height);
+            let vx = (self.vx[index] + jitter_x * 75.0 * delta) * 0.985;
+            let vy = (self.vy[index] + jitter_y * 75.0 * delta) * 0.985;
+            let vz = (self.vz[index] + signed_unit(noise.rotate_left(21)) * 8.0 * delta) * 0.98;
+            self.vx[index] = vx;
+            self.vy[index] = vy;
+            self.vz[index] = vz;
+            self.x[index] = wrap_coordinate(self.x[index] + vx * delta, width);
+            self.y[index] = wrap_coordinate(self.y[index] + vy * delta, height);
+            self.z[index] = (self.z[index] + vz * delta).clamp(-DEPTH_EXTENT, DEPTH_EXTENT);
         }
     }
 
@@ -421,15 +418,19 @@ impl ParticleEngine {
             let noise = next_random(&mut self.random_states[index]);
             let jitter_x = signed_unit(noise);
             let jitter_y = signed_unit(noise.rotate_left(11));
-            let target = self.target(index);
-            let target_z = self.target_depth(index);
-            self.vx[index] += (target.x + jitter_x * 0.08 - self.x[index]) * 18.0 * delta;
-            self.vy[index] += (target.y + jitter_y * 0.08 - self.y[index]) * 18.0 * delta;
-            self.vz[index] += (target_z - self.z[index]) * 18.0 * delta;
-            self.vx[index] *= 0.88;
-            self.vy[index] *= 0.88;
-            self.vz[index] *= 0.88;
-            self.integrate_bounded(index, delta);
+            let (target_x, target_y, target_z) = self.target_components(index);
+            let x = self.x[index];
+            let y = self.y[index];
+            let z = self.z[index];
+            let vx = (self.vx[index] + (target_x + jitter_x * 0.08 - x) * 18.0 * delta) * 0.88;
+            let vy = (self.vy[index] + (target_y + jitter_y * 0.08 - y) * 18.0 * delta) * 0.88;
+            let vz = (self.vz[index] + (target_z - z) * 18.0 * delta) * 0.88;
+            self.vx[index] = vx;
+            self.vy[index] = vy;
+            self.vz[index] = vz;
+            self.x[index] = x + vx * delta;
+            self.y[index] = y + vy * delta;
+            self.z[index] = (z + vz * delta).clamp(-DEPTH_EXTENT, DEPTH_EXTENT);
         }
     }
 
@@ -438,15 +439,19 @@ impl ParticleEngine {
             let noise = next_random(&mut self.random_states[index]);
             let jitter_x = signed_unit(noise);
             let jitter_y = signed_unit(noise.rotate_left(11));
-            let target = self.target(index);
-            let target_z = self.target_depth(index);
-            self.vx[index] += (target.x + jitter_x * 0.35 - self.x[index]) * 34.0 * delta;
-            self.vy[index] += (target.y + jitter_y * 0.35 - self.y[index]) * 34.0 * delta;
-            self.vz[index] += (target_z - self.z[index]) * 34.0 * delta;
-            self.vx[index] *= 0.78;
-            self.vy[index] *= 0.78;
-            self.vz[index] *= 0.78;
-            self.integrate_bounded(index, delta);
+            let (target_x, target_y, target_z) = self.target_components(index);
+            let x = self.x[index];
+            let y = self.y[index];
+            let z = self.z[index];
+            let vx = (self.vx[index] + (target_x + jitter_x * 0.35 - x) * 34.0 * delta) * 0.78;
+            let vy = (self.vy[index] + (target_y + jitter_y * 0.35 - y) * 34.0 * delta) * 0.78;
+            let vz = (self.vz[index] + (target_z - z) * 34.0 * delta) * 0.78;
+            self.vx[index] = vx;
+            self.vy[index] = vy;
+            self.vz[index] = vz;
+            self.x[index] = x + vx * delta;
+            self.y[index] = y + vy * delta;
+            self.z[index] = (z + vz * delta).clamp(-DEPTH_EXTENT, DEPTH_EXTENT);
         }
     }
 
@@ -455,30 +460,34 @@ impl ParticleEngine {
             let noise = next_random(&mut self.random_states[index]);
             let jitter_x = signed_unit(noise);
             let jitter_y = signed_unit(noise.rotate_left(11));
-            let target = self.target(index);
-            let dx = self.x[index] - target.x;
-            let dy = self.y[index] - target.y;
-            self.vx[index] += (dx * 2.2 + jitter_x * 115.0) * delta;
-            self.vy[index] += (dy * 2.2 + jitter_y * 115.0) * delta;
-            self.vz[index] += signed_unit(noise.rotate_left(21)) * 55.0 * delta;
-            self.vx[index] *= 0.99;
-            self.vy[index] *= 0.99;
-            self.vz[index] *= 0.99;
-            self.integrate_bounded(index, delta);
+            let (target_x, target_y, _) = self.target_components(index);
+            let x = self.x[index];
+            let y = self.y[index];
+            let z = self.z[index];
+            let vx = (self.vx[index] + ((x - target_x) * 2.2 + jitter_x * 115.0) * delta) * 0.99;
+            let vy = (self.vy[index] + ((y - target_y) * 2.2 + jitter_y * 115.0) * delta) * 0.99;
+            let vz = (self.vz[index] + signed_unit(noise.rotate_left(21)) * 55.0 * delta) * 0.99;
+            self.vx[index] = vx;
+            self.vy[index] = vy;
+            self.vz[index] = vz;
+            self.x[index] = x + vx * delta;
+            self.y[index] = y + vy * delta;
+            self.z[index] = (z + vz * delta).clamp(-DEPTH_EXTENT, DEPTH_EXTENT);
         }
     }
 
     #[inline(always)]
-    fn integrate_bounded(&mut self, index: usize, delta: f32) {
-        self.x[index] += self.vx[index] * delta;
-        self.y[index] += self.vy[index] * delta;
-        self.z[index] = (self.z[index] + self.vz[index] * delta).clamp(-DEPTH_EXTENT, DEPTH_EXTENT);
+    fn target_components(&self, index: usize) -> (f32, f32, f32) {
+        let target = unpack_target(self.packed_targets[index]);
+        (
+            target.x,
+            target.y,
+            f32::from(self.target_depth_q2[index]) * TARGET_DEPTH_Q2_RECIP,
+        )
     }
 
-    fn target(&self, index: usize) -> ParticleTarget {
-        unpack_target(self.packed_targets[index])
-    }
-
+    #[cfg(test)]
+    #[inline(always)]
     fn target_depth(&self, index: usize) -> f32 {
         f32::from(self.target_depth_q2[index]) * TARGET_DEPTH_Q2_RECIP
     }
@@ -500,6 +509,7 @@ fn pack_target_coordinate(value: f32) -> Result<i16, String> {
     Ok(fixed as i16)
 }
 
+#[inline(always)]
 fn unpack_target(packed: u32) -> ParticleTarget {
     ParticleTarget {
         x: f32::from(packed as u16 as i16) * TARGET_FIXED_SCALE_RECIP,
