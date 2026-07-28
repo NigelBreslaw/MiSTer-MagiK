@@ -4755,7 +4755,9 @@ fn capture_particle_phases(
     output_dir: &Path,
     count: u64,
 ) -> Result<Value> {
-    const CAPTURE_STATE_TIMEOUT: Duration = Duration::from_secs(12);
+    // A framebuffer PNG can consume enough of the early Hold window that the
+    // next matching sample belongs to the following animation cycle.
+    const CAPTURE_STATE_TIMEOUT: Duration = Duration::from_secs(24);
     let session = connect_with(&config.connection, 10)?;
     restart_launcher_with_one_shot_env(
         &session,
