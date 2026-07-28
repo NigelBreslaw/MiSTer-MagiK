@@ -25,7 +25,6 @@ const VISUAL_PALETTE: [Rgb565Pixel; 4] = [
 ];
 const HIDDEN_SLOT_COUNT: usize = 2;
 const FULL_CLEAR_DIRTY_DIVISOR: usize = 4;
-const LOOKAHEAD_ELAPSED_TOLERANCE_US: u128 = 64;
 const COMMAND_OFFSET_BITS: u32 = 20;
 const COMMAND_OFFSET_MASK: u32 = (1 << COMMAND_OFFSET_BITS) - 1;
 const COMMAND_PALETTE_SHIFT: u32 = COMMAND_OFFSET_BITS;
@@ -89,12 +88,14 @@ struct ParticleDirtySlot {
 }
 
 struct ParticlePreparationRequest {
+    tick: u64,
     elapsed: Duration,
     sent_at: Instant,
     commands: Vec<u32>,
 }
 
 struct PreparedParticleFrame {
+    tick: u64,
     elapsed: Duration,
     frame: ParticleFrameStats,
     visible: usize,
@@ -114,7 +115,8 @@ struct PreparedParticleFrame {
 struct ParticlePreparationPipeline {
     request_tx: Option<SyncSender<ParticlePreparationRequest>>,
     ready_rx: Receiver<Result<PreparedParticleFrame, String>>,
-    in_flight: Option<Duration>,
+    presentation_tick: u64,
+    in_flight: Option<u64>,
     spare_commands: Option<Vec<u32>>,
     worker: Option<JoinHandle<()>>,
 }
@@ -219,6 +221,7 @@ impl ParticleRenderer {
                 self.engine
                     .as_mut()
                     .expect("same-thread particle renderer must own its engine"),
+                0,
                 elapsed,
                 &mut self.commands,
                 self.command_ordering_scratch.as_mut(),
@@ -341,6 +344,7 @@ impl ParticlePreparationPipeline {
         Ok(Self {
             request_tx: Some(request_tx),
             ready_rx,
+            presentation_tick: 0,
             in_flight: None,
             spare_commands: Some(spare_commands),
             worker: Some(worker),
@@ -353,22 +357,25 @@ impl ParticlePreparationPipeline {
         next_elapsed: Option<Duration>,
         commands: &mut Vec<u32>,
     ) -> Result<PreparedParticleFrame, String> {
+        let tick = self.presentation_tick;
+        self.presentation_tick = self.presentation_tick.wrapping_add(1);
         let preparation_queue_depth = usize::from(self.in_flight.is_some());
         let wait_started = Instant::now();
-        let mut prepared = if self.in_flight.take().is_some() {
+        let mut prepared = if let Some(in_flight_tick) = self.in_flight.take() {
+            debug_assert_eq!(in_flight_tick, tick);
             self.receive()?
         } else {
-            self.send(elapsed)?;
+            self.send(tick, elapsed)?;
             self.receive()?
         };
         let mut lookahead_mismatch_count = 0;
-        if !lookahead_elapsed_matches(prepared.elapsed, elapsed) {
+        if prepared.tick != tick {
             lookahead_mismatch_count = 1;
             self.spare_commands = Some(std::mem::take(&mut prepared.commands));
-            self.send(elapsed)?;
+            self.send(tick, elapsed)?;
             prepared = self.receive()?;
         }
-        debug_assert!(lookahead_elapsed_matches(prepared.elapsed, elapsed));
+        debug_assert_eq!(prepared.tick, tick);
         prepared.preparation_wait_us = wait_started.elapsed().as_micros();
         prepared.prepared_frame_age_us = prepared.completed_at.elapsed().as_micros();
         prepared.lookahead_mismatch_count = lookahead_mismatch_count;
@@ -376,13 +383,14 @@ impl ParticlePreparationPipeline {
         std::mem::swap(commands, &mut prepared.commands);
         self.spare_commands = Some(std::mem::take(&mut prepared.commands));
         if let Some(next_elapsed) = next_elapsed.filter(|next| *next > elapsed) {
-            self.send(next_elapsed)?;
-            self.in_flight = Some(next_elapsed);
+            let next_tick = tick.wrapping_add(1);
+            self.send(next_tick, next_elapsed)?;
+            self.in_flight = Some(next_tick);
         }
         Ok(prepared)
     }
 
-    fn send(&mut self, elapsed: Duration) -> Result<(), String> {
+    fn send(&mut self, tick: u64, elapsed: Duration) -> Result<(), String> {
         let commands = self
             .spare_commands
             .take()
@@ -391,6 +399,7 @@ impl ParticlePreparationPipeline {
             .as_ref()
             .ok_or("particle preparation worker has stopped")?
             .send(ParticlePreparationRequest {
+                tick,
                 elapsed,
                 sent_at: Instant::now(),
                 commands,
@@ -425,6 +434,7 @@ fn run_particle_preparation_worker(
         let mut commands = request.commands;
         let prepared = prepare_particle_frame(
             &mut engine,
+            request.tick,
             request.elapsed,
             &mut commands,
             ordering_scratch.as_mut(),
@@ -444,6 +454,7 @@ fn run_particle_preparation_worker(
 
 fn prepare_particle_frame(
     engine: &mut ParticleEngine,
+    tick: u64,
     elapsed: Duration,
     commands: &mut Vec<u32>,
     ordering_scratch: Option<&mut Vec<u32>>,
@@ -462,6 +473,7 @@ fn prepare_particle_frame(
     let projection_us = projection_started.elapsed().as_micros();
     let projection_cpu_us = elapsed_thread_cpu_us(projection_cpu_started);
     Ok(PreparedParticleFrame {
+        tick,
         elapsed,
         frame,
         visible,
@@ -647,10 +659,6 @@ fn particle_command_order_requested() -> bool {
             .as_deref(),
         Some("1" | "on" | "true" | "locality")
     )
-}
-
-fn lookahead_elapsed_matches(prepared: Duration, actual: Duration) -> bool {
-    prepared.as_micros().abs_diff(actual.as_micros()) <= LOOKAHEAD_ELAPSED_TOLERANCE_US
 }
 
 fn pack_visual_command(offset: u32, palette_index: usize, neighbor: bool) -> u32 {
@@ -1225,14 +1233,17 @@ mod tests {
         let first = pipeline
             .acquire(first_elapsed, Some(second_elapsed), &mut commands)
             .unwrap();
+        assert_eq!(first.tick, 0);
         assert_eq!(first.elapsed, first_elapsed);
         assert_eq!(first.lookahead_mismatch_count, 0);
         assert_eq!(first.preparation_queue_depth, 0);
         assert_eq!(commands.len(), first.visible);
         let first_commands = commands.clone();
+        let jittered_second_elapsed = second_elapsed + Duration::from_micros(500);
         let second = pipeline
-            .acquire(second_elapsed, None, &mut commands)
+            .acquire(jittered_second_elapsed, None, &mut commands)
             .unwrap();
+        assert_eq!(second.tick, 1);
         assert_eq!(second.elapsed, second_elapsed);
         assert_eq!(second.lookahead_mismatch_count, 0);
         assert_eq!(second.preparation_queue_depth, 1);
@@ -1241,21 +1252,28 @@ mod tests {
     }
 
     #[test]
-    fn lookahead_accepts_period_estimation_jitter_but_not_a_skipped_refresh() {
-        let elapsed = Duration::from_micros(1_000_000);
-        assert!(lookahead_elapsed_matches(elapsed, elapsed));
-        assert!(lookahead_elapsed_matches(
-            elapsed + Duration::from_micros(64),
-            elapsed
-        ));
-        assert!(!lookahead_elapsed_matches(
-            elapsed + Duration::from_micros(65),
-            elapsed
-        ));
-        assert!(!lookahead_elapsed_matches(
-            elapsed + Duration::from_micros(16_663),
-            elapsed
-        ));
+    fn preparation_ticks_roll_over_without_elapsed_matching() {
+        let engine = ParticleEngine::new(config(ParticlePreset::Capacity), mask()).unwrap();
+        let mut pipeline =
+            ParticlePreparationPipeline::start(engine, Vec::with_capacity(64), None).unwrap();
+        pipeline.presentation_tick = u64::MAX;
+        let mut commands = Vec::with_capacity(64);
+        let first_elapsed = Duration::from_micros(16_667);
+        let second_elapsed = Duration::from_micros(33_334);
+        let first = pipeline
+            .acquire(first_elapsed, Some(second_elapsed), &mut commands)
+            .unwrap();
+        let second = pipeline
+            .acquire(
+                second_elapsed + Duration::from_micros(900),
+                None,
+                &mut commands,
+            )
+            .unwrap();
+        assert_eq!(first.tick, u64::MAX);
+        assert_eq!(second.tick, 0);
+        assert_eq!(second.elapsed, second_elapsed);
+        assert_eq!(second.lookahead_mismatch_count, 0);
     }
 
     #[test]
