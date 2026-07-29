@@ -108,31 +108,40 @@ pub(crate) fn raster_tapered_segment(
         .max(dy.abs())
         .ceil()
         .clamp(1.0, MAX_STROKE_SAMPLES as f32) as usize;
-    let mut stats = MaterialRasterStats::default();
+    let length = (dx * dx + dy * dy).sqrt().max(1.0);
+    let normal_x = -dy / length;
+    let normal_y = dx / length;
+    let source_r = (stroke.color.0 >> 11) & 0x1f;
+    let source_g = (stroke.color.0 >> 5) & 0x3f;
+    let source_b = stroke.color.0 & 0x1f;
+    let intensity = u16::from(stroke.intensity.min(15));
+    let scaled_r = source_r * intensity / 15;
+    let scaled_g = source_g * intensity / 15;
+    let scaled_b = source_b * intensity / 15;
+    let mut stats = MaterialRasterStats {
+        stamps: steps + 1,
+        attempted_pixel_writes: 0,
+    };
     for step in 0..=steps {
         let amount = step as f32 / steps as f32;
-        let radius = (f32::from(stroke.start_radius)
+        let radius = (f32::from(stroke.start_radius.min(3))
             + (f32::from(stroke.end_radius) - f32::from(stroke.start_radius)) * amount)
-            .round() as u8;
-        let fade = ((1.0 - amount * 0.35) * f32::from(stroke.intensity)).round() as u8;
-        let sample = raster_stamp(
-            destination,
-            dirty_offsets,
-            width,
-            height,
-            MaterialStamp {
-                x: (stroke.x0 + dx * amount).round() as i16,
-                y: (stroke.y0 + dy * amount).round() as i16,
-                radius,
-                intensity: fade,
-                color: stroke.color,
-                shape: MaterialShape::Disc,
-            },
-        );
-        stats.stamps = stats.stamps.saturating_add(sample.stamps);
-        stats.attempted_pixel_writes = stats
-            .attempted_pixel_writes
-            .saturating_add(sample.attempted_pixel_writes);
+            .round()
+            .clamp(1.0, 3.0) as i16;
+        let center_x = stroke.x0 + dx * amount;
+        let center_y = stroke.y0 + dy * amount;
+        for across in -radius..=radius {
+            let x = (center_x + normal_x * f32::from(across)).round() as i16;
+            let y = (center_y + normal_y * f32::from(across)).round() as i16;
+            if !(0..width as i16).contains(&x) || !(0..height as i16).contains(&y) {
+                continue;
+            }
+            let offset = y as usize * width + x as usize;
+            destination[offset] =
+                additive_rgb565(destination[offset], scaled_r, scaled_g, scaled_b);
+            dirty_offsets.push(offset as u32);
+            stats.attempted_pixel_writes = stats.attempted_pixel_writes.saturating_add(1);
+        }
     }
     stats
 }
