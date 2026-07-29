@@ -12,6 +12,10 @@ mod macos {
     use mister_magik_fb::input_state::PadState;
     use mister_magik_fb::launcher::{LauncherAction, LauncherNav, Screen};
     use mister_magik_fb::launcher_presentation::LauncherBridgePresenter;
+    use mister_magik_fb::launcher_runtime::settings::{FileSettingsStore, SettingsStore};
+    use mister_magik_fb::macos_preview_content::{
+        ContentMode, PreviewContent, default_settings_path, resolve_preview_content,
+    };
     use mister_magik_fb::particle_engine::{ParticleConfig, ParticlePreset};
     use mister_magik_fb::particle_renderer::ParticleRenderer;
     use mister_magik_fb::preview_transition::{
@@ -78,6 +82,13 @@ mod macos {
 
     pub fn run() -> Result<(), Box<dyn Error>> {
         let options = PreviewOptions::parse(std::env::args().skip(1))?;
+        let headless = options.output.is_some();
+        let content = resolve_preview_content(
+            options.content_mode,
+            options.sd_root.as_deref(),
+            options.cache_root.as_deref(),
+            headless,
+        )?;
         let slint_window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
         let fixed_time = Rc::new(Cell::new(Duration::ZERO));
         slint::platform::set_platform(Box::new(MisterPlatform::new(
@@ -96,7 +107,6 @@ mod macos {
         launcher.show()?;
         slint_window.request_redraw();
 
-        let headless = options.output.is_some();
         let firework_renderer = if options.scenario == Scenario::Fireworks {
             let json = if let Some(path) = options.firework_spec.as_ref() {
                 read_to_string(path)
@@ -119,6 +129,7 @@ mod macos {
             options.refresh_rate,
             headless,
             firework_renderer,
+            content,
         )?;
         application.select_scenario(options.scenario);
         if let Some(output) = options.output {
@@ -169,6 +180,8 @@ mod macos {
         launcher_pad: PadState,
         launcher_epoch: Instant,
         bridge_presenter: LauncherBridgePresenter,
+        content: PreviewContent,
+        settings_store: FileSettingsStore,
         fixtures: UiPreviewFixtures,
         arcade_layer: ArcadeVisualLayer,
         preview_transition: PreviewTransitionController<()>,
@@ -204,9 +217,12 @@ mod macos {
             refresh_rate: RefreshRate,
             headless: bool,
             firework_renderer: Option<PreviewFireworkRenderer>,
+            content: PreviewContent,
         ) -> Result<Self, Box<dyn Error>> {
             let fixtures = UiPreviewFixtures::new()?;
             let mut launcher_nav = LauncherNav::new();
+            let settings_store = FileSettingsStore::new(default_settings_path());
+            launcher_nav.settings = settings_store.load();
             launcher_nav.catalog_build_started();
             for system_id in &fixtures.shell_system_ids {
                 launcher_nav.catalog_system_discovered(system_id);
@@ -227,6 +243,9 @@ mod macos {
             let refresh_hz = refresh_rate.headless_hz();
             let now = Instant::now();
             let next_frame_deadline = now + elapsed_for_frame(1, refresh_hz);
+            launcher
+                .global::<MisterBridge>()
+                .set_build_label(format!("Mac visual preview · {}", content.label()).into());
             let mut application = Self {
                 launcher,
                 slint_window,
@@ -245,6 +264,8 @@ mod macos {
                 launcher_pad: PadState::default(),
                 launcher_epoch: Instant::now(),
                 bridge_presenter: LauncherBridgePresenter::default(),
+                content,
+                settings_store,
                 fixtures,
                 arcade_layer: ArcadeVisualLayer::new(FRAME_WIDTH, FRAME_HEIGHT),
                 preview_transition: PreviewTransitionController::default(),
@@ -303,8 +324,8 @@ mod macos {
                 "MiSTer MagiK UI Preview — {} — {} — {} Hz",
                 self.scenario.label(),
                 self.scenario.shortcut(),
-                self.refresh_hz
-            )
+                self.refresh_hz,
+            ) + &format!(" — {}", self.content.label())
         }
 
         fn select_scenario(&mut self, scenario: Scenario) {
@@ -536,7 +557,13 @@ mod macos {
                         return;
                     }
                     LauncherAction::LaunchGame => {}
-                    LauncherAction::PersistSettings => {}
+                    LauncherAction::PersistSettings => {
+                        if let Some(settings) = event.settings.as_ref()
+                            && let Err(error) = self.settings_store.save(settings)
+                        {
+                            eprintln!("settings: failed to save Mac preview settings: {error}");
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -1061,6 +1088,9 @@ mod macos {
         firework_spec: Option<PathBuf>,
         time_ms: Option<u64>,
         hud: bool,
+        content_mode: ContentMode,
+        sd_root: Option<PathBuf>,
+        cache_root: Option<PathBuf>,
     }
 
     impl PreviewOptions {
@@ -1073,6 +1103,9 @@ mod macos {
             let mut firework_spec = None;
             let mut time_ms = None;
             let mut hud = true;
+            let mut content_mode = ContentMode::Auto;
+            let mut sd_root = None;
+            let mut cache_root = None;
             let mut arguments = arguments.into_iter();
             while let Some(argument) = arguments.next() {
                 match argument.as_str() {
@@ -1125,9 +1158,25 @@ mod macos {
                             _ => return Err("--hud requires on or off".into()),
                         };
                     }
+                    "--content" => {
+                        let value = arguments
+                            .next()
+                            .ok_or("--content requires auto, fixtures, or card")?;
+                        content_mode = ContentMode::parse(&value)?;
+                    }
+                    "--sd-root" => {
+                        sd_root = Some(PathBuf::from(
+                            arguments.next().ok_or("--sd-root requires a path")?,
+                        ));
+                    }
+                    "--cache-root" => {
+                        cache_root = Some(PathBuf::from(
+                            arguments.next().ok_or("--cache-root requires a path")?,
+                        ));
+                    }
                     "--help" | "-h" => {
                         return Err(
-                            "usage: mister-magik-ui-preview [--scenario NAME] [--refresh-rate auto|60|120] [--frame N | --time-ms N] [--firework ID] [--firework-spec FILE.json] [--hud on|off] --output FILE.ppm"
+                            "usage: mister-magik-ui-preview [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N | --time-ms N] [--firework ID] [--firework-spec FILE.json] [--hud on|off] [--output FILE.ppm]"
                                 .into(),
                         );
                     }
@@ -1152,6 +1201,9 @@ mod macos {
                 firework_spec,
                 time_ms,
                 hud,
+                content_mode,
+                sd_root,
+                cache_root,
             })
         }
     }
@@ -1583,6 +1635,30 @@ mod macos {
             assert_eq!(options.frame, 12);
             assert_eq!(options.output, Some(PathBuf::from("out.ppm")));
             assert_eq!(options.refresh_rate, RefreshRate::Auto);
+            assert_eq!(options.content_mode, ContentMode::Auto);
+        }
+
+        #[test]
+        fn preview_options_parse_explicit_card_paths() {
+            let options = PreviewOptions::parse(
+                [
+                    "--content",
+                    "card",
+                    "--sd-root",
+                    "/Volumes/MiSTer_Data",
+                    "--cache-root",
+                    "/tmp/mister-preview-cache",
+                ]
+                .map(String::from),
+            )
+            .unwrap();
+
+            assert_eq!(options.content_mode, ContentMode::Card);
+            assert_eq!(options.sd_root, Some(PathBuf::from("/Volumes/MiSTer_Data")));
+            assert_eq!(
+                options.cache_root,
+                Some(PathBuf::from("/tmp/mister-preview-cache"))
+            );
         }
 
         #[test]
