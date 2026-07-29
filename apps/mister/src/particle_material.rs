@@ -28,6 +28,18 @@ pub(crate) struct MaterialStamp {
     pub shape: MaterialShape,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct MaterialStroke {
+    pub x0: f32,
+    pub y0: f32,
+    pub x1: f32,
+    pub y1: f32,
+    pub start_radius: u8,
+    pub end_radius: u8,
+    pub intensity: u8,
+    pub color: Rgb565Pixel,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct MaterialRasterStats {
     pub stamps: usize,
@@ -71,24 +83,15 @@ pub(crate) fn raster_stamp(
     stats
 }
 
-#[allow(clippy::too_many_arguments)]
-#[allow(dead_code)]
 pub(crate) fn raster_tapered_segment(
     destination: &mut [Rgb565Pixel],
     dirty_offsets: &mut Vec<u32>,
     width: usize,
     height: usize,
-    x0: f32,
-    y0: f32,
-    x1: f32,
-    y1: f32,
-    start_radius: u8,
-    end_radius: u8,
-    color: Rgb565Pixel,
-    intensity: u8,
+    stroke: MaterialStroke,
 ) -> MaterialRasterStats {
-    let dx = x1 - x0;
-    let dy = y1 - y0;
+    let dx = stroke.x1 - stroke.x0;
+    let dy = stroke.y1 - stroke.y0;
     let steps = dx
         .abs()
         .max(dy.abs())
@@ -97,21 +100,21 @@ pub(crate) fn raster_tapered_segment(
     let mut stats = MaterialRasterStats::default();
     for step in 0..=steps {
         let amount = step as f32 / steps as f32;
-        let radius = (f32::from(start_radius)
-            + (f32::from(end_radius) - f32::from(start_radius)) * amount)
+        let radius = (f32::from(stroke.start_radius)
+            + (f32::from(stroke.end_radius) - f32::from(stroke.start_radius)) * amount)
             .round() as u8;
-        let fade = ((1.0 - amount * 0.35) * f32::from(intensity)).round() as u8;
+        let fade = ((1.0 - amount * 0.35) * f32::from(stroke.intensity)).round() as u8;
         let sample = raster_stamp(
             destination,
             dirty_offsets,
             width,
             height,
             MaterialStamp {
-                x: (x0 + dx * amount).round() as i16,
-                y: (y0 + dy * amount).round() as i16,
+                x: (stroke.x0 + dx * amount).round() as i16,
+                y: (stroke.y0 + dy * amount).round() as i16,
                 radius,
                 intensity: fade,
-                color,
+                color: stroke.color,
                 shape: MaterialShape::Disc,
             },
         );

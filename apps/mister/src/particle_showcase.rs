@@ -7,7 +7,10 @@ use crate::bitmap_text::{ConsoleFont, ConsoleTypeface};
 use crate::fireworks::{FireworkRenderer, embedded_firework_json};
 use crate::fireworks_v2::{FireworkV2Renderer, embedded_firework_v2_json};
 use crate::framebuffer::mapped::Pixel;
-use crate::particle_material::{MaterialRasterStats, MaterialShape, MaterialStamp, raster_stamp};
+use crate::particle_material::{
+    MaterialRasterStats, MaterialShape, MaterialStamp, MaterialStroke, raster_stamp,
+    raster_tapered_segment,
+};
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, Instant};
@@ -145,6 +148,16 @@ const MATERIAL_PALETTE: [Rgb565Pixel; 8] = [
     Rgb565Pixel(0xff75),
     Rgb565Pixel(0xffff),
 ];
+const RIBBON_PALETTE: [Rgb565Pixel; 8] = [
+    Rgb565Pixel(0x1008),
+    Rgb565Pixel(0x2012),
+    Rgb565Pixel(0x381f),
+    Rgb565Pixel(0x801f),
+    Rgb565Pixel(0xf81f),
+    Rgb565Pixel(0x05ff),
+    Rgb565Pixel(0x8fff),
+    Rgb565Pixel(0xff75),
+];
 const ARCADE_CLOUD: &[u8] = include_bytes!("../assets/particles/arcade-cabinet.pcloud");
 const PARTICLE_CLOUD_MAGIC: &[u8; 8] = b"PCLOUD1\0";
 const PARTICLE_CLOUD_HEADER_BYTES: usize = 28;
@@ -207,10 +220,11 @@ pub enum ParticleDemoKind {
     FountainWaterfall,
     ArcadeCabinet,
     ProceduralSpriteMaterials,
+    VariableWidthRibbons,
 }
 
 impl ParticleDemoKind {
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 23] = [
         Self::SolarChrysanthemum,
         Self::RecursiveHalo,
         Self::CopperWillowRain,
@@ -233,6 +247,7 @@ impl ParticleDemoKind {
         Self::FountainWaterfall,
         Self::ArcadeCabinet,
         Self::ProceduralSpriteMaterials,
+        Self::VariableWidthRibbons,
     ];
 
     #[must_use]
@@ -270,6 +285,7 @@ impl ParticleDemoKind {
             Self::FountainWaterfall => "FOUNTAIN / WATERFALL",
             Self::ArcadeCabinet => "ARCADE CABINET",
             Self::ProceduralSpriteMaterials => "PROCEDURAL SPRITE MATERIALS",
+            Self::VariableWidthRibbons => "VARIABLE-WIDTH RIBBONS",
         }
     }
 
@@ -298,6 +314,7 @@ impl ParticleDemoKind {
             Self::FountainWaterfall => "fountain-waterfall",
             Self::ArcadeCabinet => "arcade-cabinet",
             Self::ProceduralSpriteMaterials => "procedural-sprite-materials",
+            Self::VariableWidthRibbons => "variable-width-ribbons",
         }
     }
 
@@ -361,6 +378,7 @@ impl ParticleDemoKind {
             Self::FountainWaterfall => 32_768,
             Self::ArcadeCabinet => 12_288,
             Self::ProceduralSpriteMaterials => 16_384,
+            Self::VariableWidthRibbons => 8_192,
         }
     }
 
@@ -433,6 +451,7 @@ pub struct ParticleShowcaseRenderer {
     previous_commands: Vec<u32>,
     segments: Vec<ParticleShowcaseSegment>,
     material_stamps: Vec<MaterialStamp>,
+    material_strokes: Vec<MaterialStroke>,
     transition: ParticleShowcaseTransition,
     transition_started_at: Option<Duration>,
     heat: Vec<u8>,
@@ -504,6 +523,7 @@ impl ParticleShowcaseRenderer {
         let previous_commands = Vec::with_capacity(PARTICLE_DEMO_MAX_COUNT);
         let segments = Vec::with_capacity(SEGMENT_CAPACITY);
         let material_stamps = Vec::with_capacity(16_384);
+        let material_strokes = Vec::with_capacity(2_048);
         let transition = ParticleShowcaseTransition::new();
         let heat = vec![0; FIRE_HEAT_W * FIRE_HEAT_H];
         let dirty_slots = std::array::from_fn(|_| ParticleShowcaseDirtySlot {
@@ -561,6 +581,11 @@ impl ParticleShowcaseRenderer {
                     .capacity()
                     .saturating_mul(std::mem::size_of::<MaterialStamp>()),
             )
+            .saturating_add(
+                material_strokes
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<MaterialStroke>()),
+            )
             .saturating_add(transition.allocated_bytes());
         let renderer_scratch_bytes = renderer_scratch_bytes.saturating_add(heat.capacity());
         let mut renderer = Self {
@@ -575,6 +600,7 @@ impl ParticleShowcaseRenderer {
             previous_commands,
             segments,
             material_stamps,
+            material_strokes,
             transition,
             transition_started_at: None,
             heat,
@@ -641,6 +667,7 @@ impl ParticleShowcaseRenderer {
         let projection_started = Instant::now();
         let projection_cpu_started = thread_cpu_time_us();
         self.material_stamps.clear();
+        self.material_strokes.clear();
         let mut clipped_commands = self.project_effect(elapsed);
         let projection_us = projection_started.elapsed().as_micros();
         let projection_cpu_us = elapsed_thread_cpu_us(projection_cpu_started);
@@ -658,6 +685,9 @@ impl ParticleShowcaseRenderer {
         let material = self.raster_materials(destination, &mut dirty_offsets);
         attempted_pixel_writes =
             attempted_pixel_writes.saturating_add(material.attempted_pixel_writes);
+        let strokes = self.raster_material_strokes(destination, &mut dirty_offsets);
+        attempted_pixel_writes =
+            attempted_pixel_writes.saturating_add(strokes.attempted_pixel_writes);
         attempted_pixel_writes = attempted_pixel_writes
             .saturating_add(self.raster_segments(destination, &mut dirty_offsets));
         self.draw_hud(destination, &mut dirty_offsets);
@@ -837,6 +867,8 @@ impl ParticleShowcaseRenderer {
             self.initialize_arcade_cabinet();
         } else if demo == ParticleDemoKind::ProceduralSpriteMaterials {
             self.initialize_procedural_sprite_materials();
+        } else if demo == ParticleDemoKind::VariableWidthRibbons {
+            self.initialize_variable_width_ribbons();
         }
     }
 
@@ -886,6 +918,7 @@ impl ParticleShowcaseRenderer {
             ParticleDemoKind::ProceduralSpriteMaterials => {
                 self.project_procedural_sprite_materials(elapsed)
             }
+            ParticleDemoKind::VariableWidthRibbons => self.project_variable_width_ribbons(elapsed),
         }
     }
 
@@ -965,7 +998,95 @@ impl ParticleShowcaseRenderer {
                 value if value < 20.0 => "material-bloom",
                 _ => "cooling",
             },
+            ParticleDemoKind::VariableWidthRibbons => match seconds {
+                value if value < 6.0 => "draw",
+                value if value < 22.0 => "crossover",
+                _ => "breakup",
+            },
         }
+    }
+
+    fn initialize_variable_width_ribbons(&mut self) {
+        for index in 0..self.pool.active() {
+            let random = self.pool.random[index];
+            self.pool.age[index] = unit01(random.rotate_left(7));
+            self.pool.life[index] = 0.7 + unit01(random.rotate_left(17)) * 0.8;
+            self.pool.style[index] = ((random >> 29) & 7) as u8;
+        }
+    }
+
+    fn project_variable_width_ribbons(&mut self, elapsed: Duration) -> usize {
+        self.commands.clear();
+        self.segments.clear();
+        let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
+        let center_x = self.config.width as f32 * 0.5;
+        let center_y = self.config.height as f32 * 0.5;
+        for ribbon in 0..24usize {
+            let lane = ribbon % RIBBON_PALETTE.len();
+            let phase = ribbon as f32 * 0.41 + seconds * (0.16 + ribbon as f32 * 0.0015);
+            let vertical = unit_signed(self.pool.random[ribbon].rotate_left(9)) * 78.0;
+            let mut previous = None;
+            for sample in 0..16usize {
+                let t = sample as f32 / 15.0;
+                let x = center_x + (t - 0.5) * 760.0;
+                let envelope = (t * std::f32::consts::PI).sin();
+                let y = center_y
+                    + vertical
+                    + (t * std::f32::consts::TAU * 1.35 + phase).sin()
+                        * (58.0 + ribbon as f32 * 1.8)
+                        * envelope
+                    + (t * std::f32::consts::TAU * 0.5 + phase * 0.7).cos() * 34.0;
+                if let Some((previous_x, previous_y)) = previous {
+                    self.material_strokes.push(MaterialStroke {
+                        x0: previous_x,
+                        y0: previous_y,
+                        x1: x,
+                        y1: y,
+                        start_radius: if sample < 5 { 1 } else { 2 },
+                        end_radius: if sample > 12 { 1 } else { 2 },
+                        intensity: 10 + u8::from(ribbon & 3 == 0) * 4,
+                        color: RIBBON_PALETTE[lane],
+                    });
+                }
+                previous = Some((x, y));
+            }
+            let head_t = (seconds * 0.17 + ribbon as f32 * 0.071).rem_euclid(1.0);
+            let head_x = center_x + (head_t - 0.5) * 760.0;
+            let head_y = center_y
+                + vertical
+                + (head_t * std::f32::consts::TAU * 1.35 + phase).sin()
+                    * (58.0 + ribbon as f32 * 1.8)
+                    * (head_t * std::f32::consts::PI).sin()
+                + (head_t * std::f32::consts::TAU * 0.5 + phase * 0.7).cos() * 34.0;
+            self.material_stamps.push(MaterialStamp {
+                x: head_x as i16,
+                y: head_y as i16,
+                radius: 3,
+                intensity: 15,
+                color: RIBBON_PALETTE[lane],
+                shape: MaterialShape::Star,
+            });
+        }
+        for streak in 0..192usize {
+            let index = 24 + streak;
+            let random = self.pool.random[index];
+            let x = 70.0 + unit01(random) * 820.0;
+            let y = 55.0
+                + unit01(random.rotate_left(11)) * 430.0
+                + (seconds * self.pool.life[index] + self.pool.age[index] * 7.0).sin() * 18.0;
+            let length = 6.0 + unit01(random.rotate_left(21)) * 22.0;
+            self.material_strokes.push(MaterialStroke {
+                x0: x - length,
+                y0: y + length * 0.18,
+                x1: x,
+                y1: y,
+                start_radius: 1,
+                end_radius: 1,
+                intensity: 7,
+                color: RIBBON_PALETTE[usize::from(self.pool.style[index])],
+            });
+        }
+        0
     }
 
     fn initialize_procedural_sprite_materials(&mut self) {
@@ -2179,6 +2300,28 @@ impl ParticleShowcaseRenderer {
         total
     }
 
+    fn raster_material_strokes(
+        &self,
+        destination: &mut [Rgb565Pixel],
+        dirty_offsets: &mut Vec<u32>,
+    ) -> MaterialRasterStats {
+        let mut total = MaterialRasterStats::default();
+        for &stroke in &self.material_strokes {
+            let stats = raster_tapered_segment(
+                destination,
+                dirty_offsets,
+                self.config.width,
+                self.config.height,
+                stroke,
+            );
+            total.stamps = total.stamps.saturating_add(stats.stamps);
+            total.attempted_pixel_writes = total
+                .attempted_pixel_writes
+                .saturating_add(stats.attempted_pixel_writes);
+        }
+        total
+    }
+
     fn raster_effect_background(&self, destination: &mut [Rgb565Pixel]) -> usize {
         if self.demo != ParticleDemoKind::FireEmbers {
             return 0;
@@ -2590,6 +2733,7 @@ fn showcase_palette(demo: ParticleDemoKind) -> &'static [Rgb565Pixel; 8] {
         ParticleDemoKind::FountainWaterfall => &WATER_PALETTE,
         ParticleDemoKind::ArcadeCabinet => &ARCADE_PALETTE,
         ParticleDemoKind::ProceduralSpriteMaterials => &MATERIAL_PALETTE,
+        ParticleDemoKind::VariableWidthRibbons => &RIBBON_PALETTE,
     }
 }
 
@@ -2724,13 +2868,13 @@ mod tests {
 
     #[test]
     fn demo_order_and_wrapping_are_stable() {
-        assert_eq!(ParticleDemoKind::ALL.len(), 22);
+        assert_eq!(ParticleDemoKind::ALL.len(), 23);
         assert_eq!(
             ParticleDemoKind::SolarChrysanthemum.offset_wrapped(-1),
-            ParticleDemoKind::ProceduralSpriteMaterials
+            ParticleDemoKind::VariableWidthRibbons
         );
         assert_eq!(
-            ParticleDemoKind::ProceduralSpriteMaterials.offset_wrapped(1),
+            ParticleDemoKind::VariableWidthRibbons.offset_wrapped(1),
             ParticleDemoKind::SolarChrysanthemum
         );
         for (index, kind) in ParticleDemoKind::ALL.into_iter().enumerate() {
@@ -2766,7 +2910,11 @@ mod tests {
             ParticleDemoKind::parse("22"),
             Some(ParticleDemoKind::ProceduralSpriteMaterials)
         );
-        assert_eq!(ParticleDemoKind::parse("23"), None);
+        assert_eq!(
+            ParticleDemoKind::parse("23"),
+            Some(ParticleDemoKind::VariableWidthRibbons)
+        );
+        assert_eq!(ParticleDemoKind::parse("24"), None);
         assert_eq!(ParticleDemoKind::parse("unknown"), None);
     }
 
