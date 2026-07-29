@@ -4,3 +4,4 @@
 //! Host-neutral launcher runtime decisions shared by the MiSTer and macOS UI.
 
 pub mod composition;
+pub mod lifecycle;

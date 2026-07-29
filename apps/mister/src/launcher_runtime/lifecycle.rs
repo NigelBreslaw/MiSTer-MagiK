@@ -1,10 +1,11 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use super::*;
+use crate::{arcade_catalog, launcher};
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum CatalogSource {
+pub enum CatalogSource {
     ReturnCapsule,
     ShardedRegistry,
     SummaryProjection,
@@ -14,7 +15,7 @@ pub(super) enum CatalogSource {
 }
 
 impl CatalogSource {
-    pub(super) fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Self::ReturnCapsule => "return-capsule",
             Self::ShardedRegistry => "sharded-registry",
@@ -27,7 +28,7 @@ impl CatalogSource {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum LauncherLifecycleState {
+pub enum LauncherLifecycleState {
     BootSplash,
     CatalogBuilding {
         mode: CatalogBuildMode,
@@ -64,7 +65,7 @@ pub(super) enum LauncherLifecycleState {
 }
 
 impl LauncherLifecycleState {
-    pub(super) fn label(&self) -> &'static str {
+    pub fn label(&self) -> &'static str {
         match self {
             Self::BootSplash => "boot-splash",
             Self::CatalogBuilding { .. } => "catalog-building",
@@ -81,20 +82,20 @@ impl LauncherLifecycleState {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum CatalogBuildMode {
+pub enum CatalogBuildMode {
     FirstBuild,
     Update,
     FreshRecovery,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum CatalogRecoveryChoice {
+pub enum CatalogRecoveryChoice {
     Left,
     Right,
 }
 
 impl CatalogRecoveryChoice {
-    pub(super) fn selected_index(self) -> i32 {
+    pub fn selected_index(self) -> i32 {
         match self {
             Self::Left => 0,
             Self::Right => 1,
@@ -103,7 +104,7 @@ impl CatalogRecoveryChoice {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum CatalogRecoveryMode {
+pub enum CatalogRecoveryMode {
     InputsChanged,
     UpgradeRequired,
     RepairRequired,
@@ -155,11 +156,7 @@ impl CatalogRecoveryMode {
         }
     }
 
-    pub(super) fn label(
-        self,
-        has_stale_catalog: bool,
-        choice: CatalogRecoveryChoice,
-    ) -> &'static str {
+    pub fn label(self, has_stale_catalog: bool, choice: CatalogRecoveryChoice) -> &'static str {
         match self.action(has_stale_catalog, choice) {
             CatalogRecoveryAction::Continue => "Continue",
             CatalogRecoveryAction::Retry => "Retry",
@@ -169,7 +166,7 @@ impl CatalogRecoveryMode {
         }
     }
 
-    pub(super) fn diagnostic_code(self) -> &'static str {
+    pub fn diagnostic_code(self) -> &'static str {
         match self {
             Self::InputsChanged => "catalog_inputs_changed",
             Self::UpgradeRequired => "projection_upgrade_required",
@@ -179,7 +176,7 @@ impl CatalogRecoveryMode {
         }
     }
 
-    pub(super) fn diagnostic_stage(self) -> &'static str {
+    pub fn diagnostic_stage(self) -> &'static str {
         match self {
             Self::InputsChanged | Self::UpgradeRequired | Self::RepairRequired => "validate",
             Self::LoadFailure { .. } => "load",
@@ -187,7 +184,7 @@ impl CatalogRecoveryMode {
         }
     }
 
-    pub(super) fn diagnostic_operation(self) -> &'static str {
+    pub fn diagnostic_operation(self) -> &'static str {
         match self {
             Self::InputsChanged | Self::UpgradeRequired | Self::RepairRequired => "check",
             Self::LoadFailure { .. } => "load",
@@ -222,19 +219,19 @@ fn catalog_recovery_message(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum FreshRebuildPhase {
+pub enum FreshRebuildPhase {
     AwaitingLock,
     DeletingArtifacts,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum LaunchingPhase {
+pub enum LaunchingPhase {
     LoadingFramePending { launch_ref: String },
     HandoffPending,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum RecoveryReason {
+pub enum RecoveryReason {
     LaunchFailed {
         title: String,
         kind: launcher::LaunchFailureKind,
@@ -244,14 +241,14 @@ pub(super) enum RecoveryReason {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum StartupMode {
+pub enum StartupMode {
     ColdNoCatalog,
     WarmCatalog,
     ReturnFromGame,
 }
 
 impl StartupMode {
-    pub(super) fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Self::ColdNoCatalog => "cold_no_catalog",
             Self::WarmCatalog => "warm_catalog",
@@ -261,7 +258,7 @@ impl StartupMode {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum StartupRevealState {
+pub enum StartupRevealState {
     SplashVisible,
     CatalogProgressVisible,
     HoldBlack,
@@ -274,7 +271,7 @@ pub(super) enum StartupRevealState {
 }
 
 impl StartupRevealState {
-    pub(super) fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Self::SplashVisible => "splash_visible",
             Self::CatalogProgressVisible => "catalog_progress_visible",
@@ -290,30 +287,30 @@ impl StartupRevealState {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct StartupRevealStatus {
-    pub(super) mode: StartupMode,
-    pub(super) state: StartupRevealState,
-    pub(super) revealed: bool,
-    pub(super) input_enabled: bool,
-    pub(super) reveal_ms: u64,
-    pub(super) input_enabled_ms: u64,
+pub struct StartupRevealStatus {
+    pub mode: StartupMode,
+    pub state: StartupRevealState,
+    pub revealed: bool,
+    pub input_enabled: bool,
+    pub reveal_ms: u64,
+    pub input_enabled_ms: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum BridgeSyncPlan {
+pub enum BridgeSyncPlan {
     None,
     Light,
     Full,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum LauncherInputMode {
+pub enum LauncherInputMode {
     Normal,
     Launching,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum LauncherEffect {
+pub enum LauncherEffect {
     StartupEvent {
         name: &'static str,
         detail: String,
@@ -340,33 +337,33 @@ pub(super) enum LauncherEffect {
 }
 
 #[derive(Debug, Default)]
-pub(super) struct LifecycleEffects {
+pub struct LifecycleEffects {
     effects: Vec<LauncherEffect>,
 }
 
 impl LifecycleEffects {
-    pub(super) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             effects: Vec::with_capacity(8),
         }
     }
 
-    pub(super) fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.effects.clear();
     }
 
-    pub(super) fn push(&mut self, effect: LauncherEffect) {
+    pub fn push(&mut self, effect: LauncherEffect) {
         self.effects.push(effect);
     }
 
-    pub(super) fn startup_event(&mut self, name: &'static str, detail: impl Into<String>) {
+    pub fn startup_event(&mut self, name: &'static str, detail: impl Into<String>) {
         self.push(LauncherEffect::StartupEvent {
             name,
             detail: detail.into(),
         });
     }
 
-    pub(super) fn drain(&mut self) -> impl Iterator<Item = LauncherEffect> + '_ {
+    pub fn drain(&mut self) -> impl Iterator<Item = LauncherEffect> + '_ {
         self.effects.drain(..)
     }
 
@@ -377,12 +374,12 @@ impl LifecycleEffects {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct LauncherLifecycleConfig {
-    pub(super) catalog_worker_enabled: bool,
+pub struct LauncherLifecycleConfig {
+    pub catalog_worker_enabled: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum StartupCatalogState {
+pub enum StartupCatalogState {
     Ready {
         source: CatalogSource,
         validation_scheduled: bool,
@@ -400,7 +397,7 @@ pub(super) enum StartupCatalogState {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(super) enum LauncherLifecycleInput {
+pub enum LauncherLifecycleInput {
     StartupRevealReady {
         preview_state: &'static str,
     },
@@ -462,33 +459,33 @@ pub(super) enum LauncherLifecycleInput {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct LauncherLifecycleStep {
-    pub(super) state: LauncherLifecycleState,
-    pub(super) bridge_sync: BridgeSyncPlan,
+pub struct LauncherLifecycleStep {
+    pub state: LauncherLifecycleState,
+    pub bridge_sync: BridgeSyncPlan,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct LauncherView {
-    pub(super) state: LauncherLifecycleState,
+pub struct LauncherView {
+    pub state: LauncherLifecycleState,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct CatalogRecoveryDialog {
-    pub(super) title: &'static str,
-    pub(super) message: String,
-    pub(super) left_label: &'static str,
-    pub(super) right_label: &'static str,
-    pub(super) selected: CatalogRecoveryChoice,
+pub struct CatalogRecoveryDialog {
+    pub title: &'static str,
+    pub message: String,
+    pub left_label: &'static str,
+    pub right_label: &'static str,
+    pub selected: CatalogRecoveryChoice,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct LaunchFailureDialog {
-    pub(super) title: String,
-    pub(super) message: &'static str,
+pub struct LaunchFailureDialog {
+    pub title: String,
+    pub message: &'static str,
 }
 
 impl LauncherView {
-    pub(super) fn catalog_recovery_dialog(&self) -> Option<CatalogRecoveryDialog> {
+    pub fn catalog_recovery_dialog(&self) -> Option<CatalogRecoveryDialog> {
         match &self.state {
             LauncherLifecycleState::CatalogLoadFailed {
                 error,
@@ -506,7 +503,7 @@ impl LauncherView {
         }
     }
 
-    pub(super) fn launch_failure_dialog(&self) -> Option<LaunchFailureDialog> {
+    pub fn launch_failure_dialog(&self) -> Option<LaunchFailureDialog> {
         let (title, kind) = match &self.state {
             LauncherLifecycleState::Recovered {
                 reason: RecoveryReason::LaunchFailed { title, kind, .. },
@@ -540,7 +537,7 @@ impl LauncherView {
     }
 }
 
-pub(super) struct LauncherLifecycle {
+pub struct LauncherLifecycle {
     state: LauncherLifecycleState,
     config: LauncherLifecycleConfig,
     boot_splash_presented: bool,
@@ -554,11 +551,11 @@ pub(super) struct LauncherLifecycle {
 }
 
 impl LauncherLifecycle {
-    pub(super) const COLD_SPLASH_DURATION: Duration = Duration::from_secs(2);
-    pub(super) const RETURN_PREVIEW_HOLD_TIMEOUT: Duration = Duration::from_millis(250);
-    pub(super) const RETURN_BLACK_SCREEN_TIMEOUT: Duration = Duration::from_secs(5);
+    pub const COLD_SPLASH_DURATION: Duration = Duration::from_secs(2);
+    pub const RETURN_PREVIEW_HOLD_TIMEOUT: Duration = Duration::from_millis(250);
+    pub const RETURN_BLACK_SCREEN_TIMEOUT: Duration = Duration::from_secs(5);
 
-    pub(super) fn new(config: LauncherLifecycleConfig, now: Instant) -> Self {
+    pub fn new(config: LauncherLifecycleConfig, now: Instant) -> Self {
         Self {
             state: LauncherLifecycleState::BootSplash,
             config,
@@ -573,11 +570,11 @@ impl LauncherLifecycle {
         }
     }
 
-    pub(super) fn set_catalog_root(&mut self, root: String) {
+    pub fn set_catalog_root(&mut self, root: String) {
         self.catalog_root = root;
     }
 
-    pub(super) fn begin_startup_reveal(
+    pub fn begin_startup_reveal(
         &mut self,
         mode: StartupMode,
         now: Instant,
@@ -608,7 +605,7 @@ impl LauncherLifecycle {
         }
     }
 
-    pub(super) fn tick_startup_reveal(
+    pub fn tick_startup_reveal(
         &mut self,
         now: Instant,
         catalog_ready: bool,
@@ -658,11 +655,11 @@ impl LauncherLifecycle {
         }
     }
 
-    pub(super) fn startup_should_show_splash(&self) -> bool {
+    pub fn startup_should_show_splash(&self) -> bool {
         self.startup_reveal_state == StartupRevealState::SplashVisible
     }
 
-    pub(super) fn startup_can_present_frame(&self) -> bool {
+    pub fn startup_can_present_frame(&self) -> bool {
         matches!(
             self.startup_reveal_state,
             StartupRevealState::SplashVisible
@@ -672,16 +669,16 @@ impl LauncherLifecycle {
         )
     }
 
-    pub(super) fn startup_input_enabled(&self) -> bool {
+    pub fn startup_input_enabled(&self) -> bool {
         self.startup_input_enabled_at.is_some()
     }
 
-    pub(super) fn startup_waiting_for_return_catalog(&self) -> bool {
+    pub fn startup_waiting_for_return_catalog(&self) -> bool {
         self.startup_mode == StartupMode::ReturnFromGame
             && self.startup_reveal_state == StartupRevealState::HydrateReturnCatalog
     }
 
-    pub(super) fn catalog_worker_start_delay(&self, default_delay: Duration) -> Duration {
+    pub fn catalog_worker_start_delay(&self, default_delay: Duration) -> Duration {
         if self.startup_waiting_for_return_catalog() {
             Duration::ZERO
         } else {
@@ -689,7 +686,7 @@ impl LauncherLifecycle {
         }
     }
 
-    pub(super) fn startup_status(&self) -> StartupRevealStatus {
+    pub fn startup_status(&self) -> StartupRevealStatus {
         StartupRevealStatus {
             mode: self.startup_mode,
             state: self.startup_reveal_state,
@@ -712,7 +709,7 @@ impl LauncherLifecycle {
         }
     }
 
-    pub(super) fn note_startup_frame_presented(
+    pub fn note_startup_frame_presented(
         &mut self,
         frame: u64,
         now: Instant,
@@ -738,7 +735,7 @@ impl LauncherLifecycle {
         }
     }
 
-    pub(super) fn after_boot_splash_presented(
+    pub fn after_boot_splash_presented(
         &mut self,
         input: StartupCatalogState,
         out: &mut LifecycleEffects,
@@ -797,7 +794,7 @@ impl LauncherLifecycle {
         self.step(BridgeSyncPlan::Full)
     }
 
-    pub(super) fn input_mode(&self) -> LauncherInputMode {
+    pub fn input_mode(&self) -> LauncherInputMode {
         match self.state {
             LauncherLifecycleState::Launching { .. } | LauncherLifecycleState::Handoff { .. } => {
                 LauncherInputMode::Launching
@@ -806,7 +803,7 @@ impl LauncherLifecycle {
         }
     }
 
-    pub(super) fn handle(
+    pub fn handle(
         &mut self,
         input: LauncherLifecycleInput,
         out: &mut LifecycleEffects,
@@ -1215,7 +1212,7 @@ impl LauncherLifecycle {
         self.step(BridgeSyncPlan::None)
     }
 
-    pub(super) fn loading_frame_presented(&mut self, at: Instant, out: &mut LifecycleEffects) {
+    pub fn loading_frame_presented(&mut self, at: Instant, out: &mut LifecycleEffects) {
         let launch_ref = match &self.state {
             LauncherLifecycleState::Launching {
                 phase: LaunchingPhase::LoadingFramePending { launch_ref },
@@ -1235,13 +1232,13 @@ impl LauncherLifecycle {
         );
     }
 
-    pub(super) fn recovery_frame_presented(&mut self, _at: Instant, _out: &mut LifecycleEffects) {}
+    pub fn recovery_frame_presented(&mut self, _at: Instant, _out: &mut LifecycleEffects) {}
 
-    pub(super) fn state(&self) -> &LauncherLifecycleState {
+    pub fn state(&self) -> &LauncherLifecycleState {
         &self.state
     }
 
-    pub(super) fn view(&self) -> LauncherView {
+    pub fn view(&self) -> LauncherView {
         LauncherView {
             state: self.state.clone(),
         }
