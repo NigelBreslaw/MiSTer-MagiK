@@ -21,6 +21,42 @@ apps/mister/scripts/dev-ui-mac.sh --scenario screenshot-tiles
 apps/mister/scripts/dev-ui-mac.sh --scenario particle
 ```
 
+To smoke-test a mounted MiSTer card, let the preview discover the single valid
+card under `/Volumes`, or select it explicitly:
+
+```bash
+apps/mister/scripts/dev-ui-mac.sh --content card --sd-root /Volumes/MiSTer_Data
+```
+
+Card mode loads the newest valid Catalog V3 generation from the per-card Mac
+cache, production card directory, or development card directory. Interactive
+sessions then rebuild the catalog in the background with the production
+scanner. Physical card paths are remapped back to `/media/fat` before
+publication, so launch references are identical to MiSTer.
+
+The card is always a read-only content source. Catalog state, scanner caches,
+downloaded screenshot packs, settings, and temporary work are written beneath
+`~/Library/Caches/MiSTer MagiK/ui-preview` and
+`~/Library/Application Support/MiSTer MagiK/ui-preview`. Nothing in card mode
+writes beneath `/Volumes`.
+
+Use the offline controls when isolating a visual check:
+
+```bash
+apps/mister/scripts/dev-ui-mac.sh \
+  --content card \
+  --sd-root /Volumes/MiSTer_Data \
+  --no-scan \
+  --no-download \
+  --scenario arcade
+```
+
+If a selected screenshot is absent from both the Mac cache and card, an
+interactive session uses the production manifest downloader, checksum/index
+verification, atomic publisher, media-state writer, and Catalog V3 availability
+reconciler. Its destination roots are the Mac cache. Headless captures never
+start downloads.
+
 Interactive previews use the current monitor refresh rate, capped at 120 Hz.
 Force a target when comparing motion:
 
@@ -32,6 +68,18 @@ apps/mister/scripts/dev-ui-mac.sh --refresh-rate 120
 With `--refresh-rate auto` (the default), moving the window to another monitor
 updates the target shown in the window title. An unfocused preview releases held
 input and pauses its clock.
+
+The default display profile is the production HDMI layout. The CRT profile
+selects the production CRT Slint variant and CRT navigation metrics:
+
+```bash
+apps/mister/scripts/dev-ui-mac.sh --display-profile hdmi
+apps/mister/scripts/dev-ui-mac.sh --display-profile crt --scenario arcade
+```
+
+The CRT profile is for layout and clipping review. macOS does not emulate
+MiSTer video modes, FPGA scaling, direct-video timing, vblank/latch behaviour,
+or the physical CRT raster.
 
 If `cargo-watch` is installed, rebuild and restart the compiled preview when
 Rust or Slint files change:
@@ -91,24 +139,30 @@ apps/mister/scripts/dev-ui-mac.sh \
 Useful capture scenarios include `home`, `arcade`, `settings`,
 `arcade-crossfade`, `controller-setup`, `catalog-scan`, `particle`, and
 `screenshot-tiles`. Captures use a fixed animation clock and deterministic
-in-memory catalog/media fixtures. Headless `auto` uses 60 Hz; at an explicit
-120 Hz, frame 12 is exactly 100 ms. Repeating a scenario, frame, and refresh
-rate produces the same RGB565 output.
+in-memory catalog/media fixtures by default. Pass `--content card --sd-root
+PATH --no-scan --no-download` for a bounded capture of real card data. Headless
+`auto` uses 60 Hz; at an explicit 120 Hz, frame 12 is exactly 100 ms. Repeating
+a scenario, frame, and refresh rate produces the same RGB565 output.
 
 ## What the preview exercises
 
-- compiled HDMI Slint layouts, fonts, models, overlays, and animations;
+- compiled HDMI and CRT Slint layouts, fonts, models, overlays, and animations;
 - final 960x540 RGB565 composition;
 - the production launcher hierarchy, navigation, velocity, and spring motion;
 - the production Rust Arcade list renderer;
 - the production screenshot scaling and crossfade compositor;
 - the production particle renderer;
-- the production time-based screenshot-tile wall algorithm.
+- the production time-based screenshot-tile wall algorithm;
+- mounted-card discovery and canonical `/media/fat` path mapping;
+- the production Catalog V3 scanner, publisher, and loader with Mac-local state;
+- the production preview archive resolver, RGB565 decoder, and media downloader.
 
-The adapter supplies keyboard state, deterministic fixture media, native window
-presentation, and refresh timing. It derives every system shell from the
-canonical taxonomy and populates only Arcade, so launcher UI and navigation
-changes are shared with MiSTer rather than reimplemented for macOS.
+The adapter supplies keyboard state, Mac storage roots, native window
+presentation, and refresh timing. Fixture mode derives every system shell from
+the canonical taxonomy and populates only Arcade. Card mode uses the real
+catalog and screenshot packs. Launcher lifecycle, settings mutation, scanning,
+catalog projection/loading, media download/decode, Slint presentation, RGB565
+composition, transitions, and screensavers are shared with MiSTer.
 
 It does not validate FPGA routing, HDMI/CRT scanout, vblank latch behaviour,
 Linux controller mappings, Main handoff, or Cortex-A9 performance. Continue to

@@ -1,7 +1,9 @@
 # macOS UI Preview Plan
 
-Status: implemented as the `mister-magik-ui-preview` binary and documented in
-`apps/mister/UI_PREVIEW.md`.
+Status: implemented and extended with read-only mounted-card discovery,
+Mac-local Catalog V3 rebuilds, production screenshot pack loading/downloading,
+shared settings persistence, and HDMI/CRT layout profiles. The operator
+workflow is documented in `apps/mister/UI_PREVIEW.md`.
 
 ## Objective
 
