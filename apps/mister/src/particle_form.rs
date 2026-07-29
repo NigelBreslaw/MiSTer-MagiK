@@ -381,7 +381,7 @@ impl FormSceneRenderer {
                         center_x + angle.cos() * radius,
                         38.0,
                         center_z + angle.sin() * radius,
-                        6,
+                        if button == 0 { 5 } else { 6 },
                     )
                 }
             };
@@ -389,7 +389,7 @@ impl FormSceneRenderer {
             self.rest_x[index] = x;
             self.rest_y[index] = y;
             self.rest_z[index] = z + duplicate * 0.15;
-            self.aux_x[index] = if part == 4 { 1.0 } else { a };
+            self.aux_x[index] = if part == 4 { style as f32 } else { a };
             self.aux_y[index] = ((y + 230.0) / 400.0).clamp(0.0, 1.0);
             self.style[index] = style;
             self.flags[index] = 1 | (part << 1);
@@ -723,12 +723,12 @@ fn hologram_material_style(
     x: f32,
     y: f32,
     z: f32,
-    _radial_map: f32,
+    material_map: f32,
     scan_coordinate: f32,
     scan_position: f32,
 ) -> u8 {
     if part == 4 {
-        return 6;
+        return if material_map < 5.5 { 5 } else { 6 };
     }
     let scan_delta = (scan_coordinate - scan_position).abs();
     let scan_delta = scan_delta.min(1.0 - scan_delta);
@@ -749,6 +749,13 @@ fn hologram_material_style(
                     });
                 if in_button_well {
                     0
+                } else if [(-52.0_f32, -103.0_f32), (184.0, 31.0), (49.0, 105.0)]
+                    .iter()
+                    .any(|&(marker_x, marker_z)| {
+                        (x - marker_x).powi(2) + (z - marker_z).powi(2) < 6.0_f32.powi(2)
+                    })
+                {
+                    6
                 } else if x.abs() > 188.0 || z.abs() > 108.0 {
                     5
                 } else {
@@ -795,7 +802,6 @@ fn hologram_material_style(
                 _ => 2,
             }
         }
-        4 => 6,
         _ => 5,
     }
 }
@@ -877,8 +883,8 @@ mod tests {
             hologram_material_style(0, -122.0, 48.0, -45.0, 0.0, 0.8, 0.2),
             0
         );
-        assert_eq!(hologram_material_style(4, 0.0, 35.0, 0.0, 0.1, 0.8, 0.2), 6);
-        assert_eq!(hologram_material_style(4, 0.0, 35.0, 0.0, 0.9, 0.8, 0.2), 6);
+        assert_eq!(hologram_material_style(4, 0.0, 35.0, 0.0, 5.0, 0.8, 0.2), 5);
+        assert_eq!(hologram_material_style(4, 0.0, 35.0, 0.0, 6.0, 0.8, 0.2), 6);
         assert_eq!(
             hologram_material_style(1, 0.0, -40.0, 0.0, 0.0, 0.205, 0.2),
             7
