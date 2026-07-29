@@ -1280,7 +1280,15 @@ impl ParticleShowcaseRenderer {
         }
         let cavity_x = 480.0 + (elapsed.as_secs_f32() * 0.21).sin() * 58.0;
         let cavity_y = 270.0;
+        let cohort = ((elapsed.as_micros() / 16_667) & 3) as usize;
         for index in 0..self.pool.active() {
+            if index & 3 != cohort {
+                self.pool.x[index] =
+                    (self.pool.x[index] + self.pool.vx[index] * dt + 960.0).rem_euclid(960.0);
+                self.pool.y[index] =
+                    (self.pool.y[index] + self.pool.vy[index] * dt + 540.0).rem_euclid(540.0);
+                continue;
+            }
             let cell_x =
                 (self.pool.x[index] / FLOCK_CELL_PX).clamp(0.0, (FLOCK_GRID_W - 1) as f32) as usize;
             let cell_y =
@@ -1550,7 +1558,7 @@ impl ParticleShowcaseRenderer {
         self.segments.clear();
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
         let mut clipped = 0usize;
-        for index in 0..self.pool.active() {
+        for index in (0..self.pool.active()).step_by(2) {
             let depth = self.pool.z[index];
             let parallax = 0.35 + depth * 1.05;
             let drift = seconds * (12.0 + depth * 68.0) * self.pool.life[index];
@@ -1571,7 +1579,7 @@ impl ParticleShowcaseRenderer {
             } else {
                 5 + usize::from(self.pool.style[index] & 1)
             };
-            if depth > 0.72 && index & 3 == 0 {
+            if depth > 0.72 && index & 31 == 0 {
                 self.material_stamps.push(MaterialStamp {
                     x: x as i16,
                     y: y as i16,
@@ -1777,7 +1785,7 @@ impl ParticleShowcaseRenderer {
         self.density.fill(0);
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
         let pulse = 0.92 + (seconds * 0.7).sin() * 0.06;
-        for index in 0..self.pool.active() {
+        for index in (0..self.pool.active()).step_by(4) {
             let random = self.pool.random[index];
             let angle = std::f32::consts::TAU
                 * (unit01(random) + seconds * (0.006 + self.pool.age[index] * 0.004));
@@ -3221,6 +3229,7 @@ impl ParticleShowcaseRenderer {
 
     fn raster_effect_background(&self, destination: &mut [Rgb565Pixel]) -> usize {
         if self.demo == ParticleDemoKind::LowResolutionDensityBloom {
+            destination.fill(Rgb565Pixel(0));
             let mut writes = 0usize;
             for cell_y in 0..DENSITY_H {
                 for cell_x in 0..DENSITY_W {
@@ -3235,6 +3244,9 @@ impl ParticleShowcaseRenderer {
                         192..=287 => 6,
                         _ => 7,
                     };
+                    if style == 0 {
+                        continue;
+                    }
                     let color = DENSITY_PALETTE[style];
                     for y in cell_y * DENSITY_SCALE..(cell_y + 1) * DENSITY_SCALE {
                         let row = y * self.config.width;
