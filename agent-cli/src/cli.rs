@@ -258,6 +258,14 @@ pub enum GameDatabaseCommand {
         #[arg(long)]
         hbmame_builder_sha: String,
         #[arg(long)]
+        arcade_database_csv: PathBuf,
+        #[arg(long)]
+        arcade_database_license: PathBuf,
+        #[arg(long)]
+        arcade_database_sha: String,
+        #[arg(long)]
+        arcade_database_builder_sha: String,
+        #[arg(long)]
         output: PathBuf,
     },
     Verify {
@@ -283,6 +291,8 @@ pub enum GameDatabaseCommand {
         hbmame_tag: String,
         #[arg(long)]
         hbmame_sha: String,
+        #[arg(long)]
+        arcade_database_sha: String,
         #[arg(long)]
         github_output: Option<PathBuf>,
     },

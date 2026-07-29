@@ -199,6 +199,8 @@ trap 'rm -rf "$DATABASE_TMP"' EXIT
 MAME_SQLITE="$DATABASE_TMP/mame.sqlite3"
 HBMAME_SQLITE="$DATABASE_TMP/hbmame.sqlite3"
 GAME_DATABASES_MANIFEST="$DATABASE_TMP/game-databases-manifest.json"
+ARCADE_DATABASE_CSV="$DATABASE_TMP/ArcadeDatabase.csv"
+ARCADE_DATABASE_LICENSE="$DATABASE_TMP/ArcadeDatabase-LICENSE.txt"
 if [[ ! -f "$INSTALLER" ]]; then
   echo "ERROR: installer not found: $INSTALLER" >&2
   exit 1
@@ -287,6 +289,7 @@ PY
 GAME_DATABASE_VERSION="$(manifest_field release_version)"
 MAME_SOURCE_REF="$(manifest_field sources.mame.tag)"
 HBMAME_SOURCE_REVISION="$(manifest_field sources.hbmame.sha)"
+ARCADE_DATABASE_SOURCE_REVISION="$(manifest_field sources.arcade_database.sha)"
 if [[ "$(sed -n 's/^main_revision=//p' "$PLATFORM_MANIFEST")" != "$MAIN_SOURCE_REVISION" ]]; then
   echo "ERROR: --main-source-revision does not match platform manifest" >&2
   exit 1
@@ -369,6 +372,9 @@ cp "$ROOT/LICENSE" "$STAGE/mister-magik/licenses/MiSTer-MagiK-GPL-3.0-or-later.t
 cp "$ROOT/apps/mister/licenses/RUST-LIBRARIES.txt" "$STAGE/mister-magik/licenses/RUST-LIBRARIES.txt"
 cp "$ROOT/apps/mister/licenses/FFMPEG.txt" "$STAGE/mister-magik/licenses/FFMPEG-LGPL-2.1-or-later.txt"
 cp "$ROOT/apps/mister/licenses/PRESS-START-2P.txt" "$STAGE/mister-magik/licenses/PRESS-START-2P-OFL-1.1.txt"
+mkdir -p "$STAGE/mister-magik/licenses/ArcadeDatabase_MiSTer"
+cp "$ARCADE_DATABASE_CSV" "$STAGE/mister-magik/licenses/ArcadeDatabase_MiSTer/ArcadeDatabase.csv"
+cp "$ARCADE_DATABASE_LICENSE" "$STAGE/mister-magik/licenses/ArcadeDatabase_MiSTer/LICENSE.txt"
 cat > "$STAGE/mister-magik/THIRD-PARTY-NOTICES.txt" <<EOF
 MiSTer MagiK distribution notices
 ==================================
@@ -398,6 +404,12 @@ is derived from MAME listxml and software-list data from mamedev/mame at ref:
   $MAME_SOURCE_REF
 MAME is distributed under the BSD 3-Clause License. Source and license:
   https://github.com/mamedev/mame/tree/$MAME_SOURCE_REF
+
+The arcade-specific rows embedded in mame.sqlite3 are derived from
+MiSTer-devel/ArcadeDatabase_MiSTer at revision:
+  $ARCADE_DATABASE_SOURCE_REVISION
+The exact CSV and GPL-3.0 license are included under:
+  mister-magik/licenses/ArcadeDatabase_MiSTer/
 EOF
 if [[ -n "$HBMAME_SQLITE" ]]; then
   cat >> "$STAGE/mister-magik/THIRD-PARTY-NOTICES.txt" <<EOF

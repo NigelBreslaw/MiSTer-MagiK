@@ -31,12 +31,14 @@ jobs:
       update-needed: ${{ steps.plan.outputs.update_needed }}
       mame-changed: ${{ steps.plan.outputs.mame_changed }}
       hbmame-changed: ${{ steps.plan.outputs.hbmame_changed }}
+      arcade-database-changed: ${{ steps.plan.outputs.arcade_database_changed }}
       mame-tag: ${{ steps.upstream.outputs.mame_tag }}
       mame-sha: ${{ steps.upstream.outputs.mame_sha }}
       mame-listxml-asset: ${{ steps.upstream.outputs.mame_listxml_asset }}
       mame-listxml-url: ${{ steps.upstream.outputs.mame_listxml_url }}
       hbmame-tag: ${{ steps.upstream.outputs.hbmame_tag }}
       hbmame-sha: ${{ steps.upstream.outputs.hbmame_sha }}
+      arcade-database-sha: ${{ steps.upstream.outputs.arcade_database_sha }}
     steps:
       - name: Refuse non-main dispatch
         if: github.ref != 'refs/heads/main'
@@ -76,6 +78,8 @@ jobs:
           hbmame_tag="$(jq -r 'add | [.[] | select(.name | test("^tag[0-9]+$"))] | max_by(.name | ltrimstr("tag") | tonumber) | .name' build/game-databases/hbmame-tags.json)"
           test -n "$hbmame_tag" && test "$hbmame_tag" != null
           hbmame_sha="$(gh api "repos/Robbbert/hbmame/commits/$hbmame_tag" --jq .sha)"
+          arcade_database_sha="$(gh api repos/MiSTer-devel/ArcadeDatabase_MiSTer/commits/main --jq .sha)"
+          test "$arcade_database_sha" != null
 
           echo "mame_tag=$mame_tag" >> "$GITHUB_OUTPUT"
           echo "mame_sha=$mame_sha" >> "$GITHUB_OUTPUT"
@@ -83,6 +87,7 @@ jobs:
           echo "mame_listxml_url=$mame_url" >> "$GITHUB_OUTPUT"
           echo "hbmame_tag=$hbmame_tag" >> "$GITHUB_OUTPUT"
           echo "hbmame_sha=$hbmame_sha" >> "$GITHUB_OUTPUT"
+          echo "arcade_database_sha=$arcade_database_sha" >> "$GITHUB_OUTPUT"
 
       - name: Download and verify current numbered release
         id: current
@@ -117,6 +122,7 @@ jobs:
           MAME_SHA: ${{ steps.upstream.outputs.mame_sha }}
           HBMAME_TAG: ${{ steps.upstream.outputs.hbmame_tag }}
           HBMAME_SHA: ${{ steps.upstream.outputs.hbmame_sha }}
+          ARCADE_DATABASE_SHA: ${{ steps.upstream.outputs.arcade_database_sha }}
         run: |
           set -euo pipefail
           args=()
@@ -126,6 +132,7 @@ jobs:
           scripts/agent ci game-databases plan-update "${args[@]}" \
             --mame-tag "$MAME_TAG" --mame-sha "$MAME_SHA" \
             --hbmame-tag "$HBMAME_TAG" --hbmame-sha "$HBMAME_SHA" \
+            --arcade-database-sha "$ARCADE_DATABASE_SHA" \
             --github-output "$GITHUB_OUTPUT"
           if [ "$FORCE_MAME_REBUILD" = true ]; then
             echo "mame_changed=true" >> "$GITHUB_OUTPUT"
@@ -139,6 +146,7 @@ jobs:
           NEXT_VERSION: ${{ steps.plan.outputs.next_version }}
           MAME_CHANGED: ${{ steps.plan.outputs.mame_changed }}
           HBMAME_CHANGED: ${{ steps.plan.outputs.hbmame_changed }}
+          ARCADE_DATABASE_CHANGED: ${{ steps.plan.outputs.arcade_database_changed }}
           MAME_TAG: ${{ steps.upstream.outputs.mame_tag }}
           HBMAME_TAG: ${{ steps.upstream.outputs.hbmame_tag }}
         run: |
@@ -146,7 +154,7 @@ jobs:
             echo "## Game database promotion"
             echo
             if [ "$UPDATE_NEEDED" = true ]; then
-              echo "Preparing v$NEXT_VERSION (current v$CURRENT_VERSION): MAME changed=$MAME_CHANGED, HBMAME changed=$HBMAME_CHANGED."
+              echo "Preparing v$NEXT_VERSION (current v$CURRENT_VERSION): MAME changed=$MAME_CHANGED, HBMAME changed=$HBMAME_CHANGED, ArcadeDatabase changed=$ARCADE_DATABASE_CHANGED."
             else
               echo "Game databases v$CURRENT_VERSION are already up to date ($MAME_TAG, $HBMAME_TAG)."
             fi
@@ -258,7 +266,7 @@ jobs:
       - uses: ./.github/actions/setup-agent-cli
 
       - name: Install package tools
-        run: sudo apt-get update && sudo apt-get install -y sqlite3 unzip
+        run: sudo apt-get update && sudo apt-get install -y curl sqlite3 unzip
 
       - name: Restore unchanged databases from current release
         if: needs.inspect.outputs.current-version != '0'
@@ -276,6 +284,9 @@ jobs:
           scripts/agent ci game-databases verify "$archive" \
             --manifest build/current/game-databases-manifest.json >/dev/null
           unzip -q "$archive" mame.sqlite3 hbmame.sqlite3 -d build/current
+          if unzip -Z1 "$archive" | grep -qx ArcadeDatabase.csv; then
+            unzip -q "$archive" ArcadeDatabase.csv ArcadeDatabase-LICENSE.txt -d build/current
+          fi
 
       - name: Download rebuilt MAME database
         if: needs.inspect.outputs.mame-changed == 'true'
@@ -287,6 +298,24 @@ jobs:
       - name: Reuse unchanged MAME database
         if: needs.inspect.outputs.mame-changed != 'true'
         run: cp build/current/mame.sqlite3 build/mame.sqlite3
+
+      - name: Fetch pinned ArcadeDatabase source
+        if: needs.inspect.outputs.mame-changed == 'true' || needs.inspect.outputs.arcade-database-changed == 'true'
+        env:
+          ARCADE_DATABASE_SHA: ${{ needs.inspect.outputs.arcade-database-sha }}
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://raw.githubusercontent.com/MiSTer-devel/ArcadeDatabase_MiSTer/$ARCADE_DATABASE_SHA/ArcadeDatabase.csv" -o build/ArcadeDatabase.csv
+          curl -fsSL "https://raw.githubusercontent.com/MiSTer-devel/ArcadeDatabase_MiSTer/$ARCADE_DATABASE_SHA/LICENSE" -o build/ArcadeDatabase-LICENSE.txt
+          cargo run --locked --manifest-path mister/tools/host/Cargo.toml --bin mister -- \
+            arcade-database-import --sqlite build/mame.sqlite3 \
+            --csv build/ArcadeDatabase.csv --source-sha "$ARCADE_DATABASE_SHA"
+
+      - name: Reuse unchanged ArcadeDatabase source
+        if: needs.inspect.outputs.mame-changed != 'true' && needs.inspect.outputs.arcade-database-changed != 'true'
+        run: |
+          cp build/current/ArcadeDatabase.csv build/ArcadeDatabase.csv
+          cp build/current/ArcadeDatabase-LICENSE.txt build/ArcadeDatabase-LICENSE.txt
 
       - name: Download rebuilt HBMAME listxml
         if: needs.inspect.outputs.hbmame-changed == 'true'
@@ -308,6 +337,7 @@ jobs:
           set -euo pipefail
           mame_builder_sha="$GITHUB_SHA"
           hbmame_builder_sha="$GITHUB_SHA"
+          arcade_database_builder_sha="$GITHUB_SHA"
           if [ '${{ needs.inspect.outputs.mame-changed }}' = true ]; then
             mame_listxml_sha256="$(cat build/mame-listxml.sha256)"
           else
@@ -316,6 +346,9 @@ jobs:
           fi
           if [ '${{ needs.inspect.outputs.hbmame-changed }}' != true ]; then
             hbmame_builder_sha="$(jq -r '.sources.hbmame.builder_sha' build/current/game-databases-manifest.json)"
+          fi
+          if [ '${{ needs.inspect.outputs.mame-changed }}' != true ] && [ '${{ needs.inspect.outputs.arcade-database-changed }}' != true ]; then
+            arcade_database_builder_sha="$(jq -r '.sources.arcade_database.builder_sha' build/current/game-databases-manifest.json)"
           fi
           scripts/agent ci game-databases create \
             --mame-sqlite build/mame.sqlite3 --hbmame-sqlite build/hbmame.sqlite3 \
@@ -328,6 +361,10 @@ jobs:
             --hbmame-sha '${{ needs.inspect.outputs.hbmame-sha }}' \
             --mame-builder-sha "$mame_builder_sha" \
             --hbmame-builder-sha "$hbmame_builder_sha" \
+            --arcade-database-csv build/ArcadeDatabase.csv \
+            --arcade-database-license build/ArcadeDatabase-LICENSE.txt \
+            --arcade-database-sha '${{ needs.inspect.outputs.arcade-database-sha }}' \
+            --arcade-database-builder-sha "$arcade_database_builder_sha" \
             --output build/game-databases
 
       - uses: actions/upload-artifact@v7

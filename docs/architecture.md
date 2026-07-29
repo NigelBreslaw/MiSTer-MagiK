@@ -656,10 +656,12 @@ Current rules:
   preview entries fail at runtime and show the blank preview state.
 - Catalog code must not read `gamelist.xml`; runtime loading goes through the V3
   registry and per-system mini-navs.
-- MAME XML and MAME software-list XML are database-publisher inputs only. The
+- MAME XML, MAME software-list XML, and the commit-pinned
+  `MiSTer-devel/ArcadeDatabase_MiSTer` CSV are database-publisher inputs only. The
   production conversion to `mame.sqlite3` runs exclusively in
   `.github/workflows/game-databases.yml`; application distribution consumes a
-  verified immutable `game-databases-vN` release. The runtime scanner consumes
+  verified immutable `game-databases-vN` release. ArcadeDatabase rows are
+  embedded in `mame.sqlite3`; the runtime scanner consumes
   SQLite rows, never XML. Local synthetic conversion is test-only.
 - Runtime preview loading is raw565-oriented. Build source screenshots, raw565
   caches, fixed LZ4-block `.mmlz4b` preview packs, and `.mmlz4b.idx` seek

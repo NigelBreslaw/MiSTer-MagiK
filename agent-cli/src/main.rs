@@ -309,6 +309,10 @@ fn dispatch(
                     hbmame_sha,
                     mame_builder_sha,
                     hbmame_builder_sha,
+                    arcade_database_csv,
+                    arcade_database_license,
+                    arcade_database_sha,
+                    arcade_database_builder_sha,
                     output,
                 } => {
                     let archive =
@@ -324,6 +328,10 @@ fn dispatch(
                             hbmame_sha,
                             mame_builder_sha,
                             hbmame_builder_sha,
+                            arcade_database_csv,
+                            arcade_database_license,
+                            arcade_database_sha,
+                            arcade_database_builder_sha,
                             output,
                         })?;
                     println!("{}", archive.display());
@@ -358,6 +366,7 @@ fn dispatch(
                     mame_sha,
                     hbmame_tag,
                     hbmame_sha,
+                    arcade_database_sha,
                     github_output,
                 } => {
                     let current = manifest
@@ -373,6 +382,7 @@ fn dispatch(
                         mame_sha,
                         hbmame_tag,
                         hbmame_sha,
+                        arcade_database_sha,
                     )?;
                     if let Some(path) = github_output {
                         append_github_output(
@@ -383,6 +393,7 @@ fn dispatch(
                                 "next_version",
                                 "mame_changed",
                                 "hbmame_changed",
+                                "arcade_database_changed",
                                 "update_needed",
                             ],
                         )?;

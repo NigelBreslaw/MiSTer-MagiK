@@ -49,6 +49,14 @@ WITH RECURSIVE seq(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM seq WHERE i<50000)
 INSERT INTO mame_machines SELECT 'machine'||i,'','Machine '||i,1+(i%4),'joy','0.288 (mame0288)' FROM seq;
 CREATE TABLE mame_software_items(list_name TEXT NOT NULL,item_name TEXT NOT NULL);
 INSERT INTO mame_software_items VALUES('lynx','one'),('megadriv','one'),('n64','one'),('nes','one'),('saturn','one'),('sms','one'),('snes','one');
+CREATE TABLE mister_arcade_source(
+  id INTEGER PRIMARY KEY CHECK(id=1), source_sha TEXT NOT NULL,
+  csv_sha256 TEXT NOT NULL, row_count INTEGER NOT NULL,
+  category_count INTEGER NOT NULL
+);
+CREATE TABLE mister_arcade_entries(
+  ordinal INTEGER PRIMARY KEY, raw_json TEXT NOT NULL
+);
 """)
 mame.commit()
 mame.close()
@@ -64,6 +72,35 @@ INSERT INTO package_padding VALUES(zeroblob(1048576));
 hbmame.commit()
 hbmame.close()
 PY
+python3 - "$WORK/mame.sqlite3" "$WORK/ArcadeDatabase.csv" <<'PY'
+import csv
+import hashlib
+import json
+import sqlite3
+import sys
+
+database_path, csv_path = sys.argv[1:]
+rows = []
+with open(csv_path, "w", newline="", encoding="utf-8") as stream:
+    writer = csv.writer(stream)
+    writer.writerow(["name", "category"])
+    for ordinal in range(2800):
+        row = {"name": f"Machine {ordinal}", "category": f"Category {ordinal % 100}"}
+        rows.append(row)
+        writer.writerow(row.values())
+digest = hashlib.sha256(open(csv_path, "rb").read()).hexdigest()
+database = sqlite3.connect(database_path)
+database.executemany(
+    "INSERT INTO mister_arcade_entries(ordinal,raw_json) VALUES(?,?)",
+    [(ordinal, json.dumps(row)) for ordinal, row in enumerate(rows)],
+)
+database.execute(
+    "INSERT INTO mister_arcade_source VALUES(1,?,?,?,?)",
+    ("3" * 40, digest, len(rows), 100),
+)
+database.commit()
+PY
+printf 'GPL-3.0-or-later fixture\n' >"$WORK/ArcadeDatabase-LICENSE.txt"
 
 scripts/agent ci game-databases create \
   --mame-sqlite "$WORK/mame.sqlite3" --hbmame-sqlite "$WORK/hbmame.sqlite3" \
@@ -74,6 +111,10 @@ scripts/agent ci game-databases create \
   --hbmame-sha 2222222222222222222222222222222222222222 \
   --mame-builder-sha "$(git rev-parse HEAD)" \
   --hbmame-builder-sha "$(git rev-parse HEAD)" \
+  --arcade-database-csv "$WORK/ArcadeDatabase.csv" \
+  --arcade-database-license "$WORK/ArcadeDatabase-LICENSE.txt" \
+  --arcade-database-sha 3333333333333333333333333333333333333333 \
+  --arcade-database-builder-sha "$(git rev-parse HEAD)" \
   --output "$WORK/game-databases" >/dev/null
 
 if [[ -f "$MAIN_BIN" ]]; then
