@@ -218,6 +218,16 @@ const MORPH_PALETTE: [Rgb565Pixel; 8] = [
     Rgb565Pixel(0xffdf),
     Rgb565Pixel(0xffff),
 ];
+const COLLISION_PALETTE: [Rgb565Pixel; 8] = [
+    Rgb565Pixel(0x0808),
+    Rgb565Pixel(0x1014),
+    Rgb565Pixel(0x029f),
+    Rgb565Pixel(0x05ff),
+    Rgb565Pixel(0x7800),
+    Rgb565Pixel(0xf980),
+    Rgb565Pixel(0xff75),
+    Rgb565Pixel(0xffff),
+];
 const DENSITY_W: usize = 240;
 const DENSITY_H: usize = 135;
 const DENSITY_SCALE: usize = 4;
@@ -290,10 +300,11 @@ pub enum ParticleDemoKind {
     SpatialFieldStack,
     DepthAwareMaterialLod,
     SourceDrivenMorph,
+    SdfCollisionEvents,
 }
 
 impl ParticleDemoKind {
-    pub const ALL: [Self; 29] = [
+    pub const ALL: [Self; 30] = [
         Self::SolarChrysanthemum,
         Self::RecursiveHalo,
         Self::CopperWillowRain,
@@ -323,6 +334,7 @@ impl ParticleDemoKind {
         Self::SpatialFieldStack,
         Self::DepthAwareMaterialLod,
         Self::SourceDrivenMorph,
+        Self::SdfCollisionEvents,
     ];
 
     #[must_use]
@@ -367,6 +379,7 @@ impl ParticleDemoKind {
             Self::SpatialFieldStack => "SPATIAL FIELD STACK",
             Self::DepthAwareMaterialLod => "DEPTH-AWARE MATERIAL LOD",
             Self::SourceDrivenMorph => "SOURCE-DRIVEN MORPH",
+            Self::SdfCollisionEvents => "SDF COLLISION EVENTS",
         }
     }
 
@@ -402,6 +415,7 @@ impl ParticleDemoKind {
             Self::SpatialFieldStack => "spatial-field-stack",
             Self::DepthAwareMaterialLod => "depth-aware-material-lod",
             Self::SourceDrivenMorph => "source-morph",
+            Self::SdfCollisionEvents => "sdf-collision",
         }
     }
 
@@ -472,6 +486,7 @@ impl ParticleDemoKind {
             Self::SpatialFieldStack => 24_576,
             Self::DepthAwareMaterialLod => 40_960,
             Self::SourceDrivenMorph => 12_288,
+            Self::SdfCollisionEvents => 8_192,
         }
     }
 
@@ -982,6 +997,8 @@ impl ParticleShowcaseRenderer {
             self.initialize_depth_aware_material_lod();
         } else if demo == ParticleDemoKind::SourceDrivenMorph {
             self.initialize_source_driven_morph();
+        } else if demo == ParticleDemoKind::SdfCollisionEvents {
+            self.initialize_sdf_collision_events();
         }
     }
 
@@ -1040,6 +1057,7 @@ impl ParticleShowcaseRenderer {
                 self.project_depth_aware_material_lod(elapsed)
             }
             ParticleDemoKind::SourceDrivenMorph => self.project_source_driven_morph(elapsed),
+            ParticleDemoKind::SdfCollisionEvents => self.project_sdf_collision_events(elapsed),
         }
     }
 
@@ -1155,7 +1173,94 @@ impl ParticleShowcaseRenderer {
                 value if value < 23.0 => "controller-hold",
                 _ => "return",
             },
+            ParticleDemoKind::SdfCollisionEvents => match seconds {
+                value if value < 8.0 => "waterfall-impact",
+                value if value < 22.0 => "slide-bounce",
+                _ => "splash-mist",
+            },
         }
+    }
+
+    fn initialize_sdf_collision_events(&mut self) {
+        for index in 0..self.pool.active() {
+            let random = self.pool.random[index];
+            self.pool.x[index] = unit_signed(random) * 96.0;
+            self.pool.y[index] = unit_signed(random.rotate_left(11)) * 42.0;
+            self.pool.age[index] = unit01(random.rotate_left(21)) * 4.0;
+            self.pool.life[index] = 0.72 + unit01(random.rotate_left(7)) * 0.65;
+            self.pool.style[index] = ((random >> 29) & 7) as u8;
+            self.pool.flags[index] = u8::from(index & 3 == 0);
+        }
+    }
+
+    fn project_sdf_collision_events(&mut self, elapsed: Duration) -> usize {
+        self.commands.clear();
+        self.segments.clear();
+        let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
+        let mut clipped = 0usize;
+        for index in 0..self.pool.active() {
+            let random = self.pool.random[index];
+            let warm = self.pool.flags[index] != 0;
+            let (x, y, collided, style) = if warm {
+                let phase = (seconds * 0.18 * self.pool.life[index] + self.pool.age[index]).fract();
+                let angle = std::f32::consts::TAU * unit01(random.rotate_left(13));
+                let travel = 190.0 - phase * 165.0;
+                let mut local_x = 172.0 + angle.cos() * travel;
+                let mut local_y = 4.0 + angle.sin() * travel;
+                let dx = local_x - 172.0;
+                let dy = local_y - 4.0;
+                let distance = (dx * dx + dy * dy).sqrt().max(0.001);
+                let collided = distance < 88.0;
+                if collided {
+                    let bounce = 88.0 + (phase * 19.0).sin().abs() * 22.0;
+                    local_x = 172.0 + dx / distance * bounce;
+                    local_y = 4.0 + dy / distance * bounce;
+                }
+                (local_x, local_y, collided, 4 + usize::from(collided) * 2)
+            } else {
+                let phase =
+                    (seconds * 0.28 * self.pool.life[index] + self.pool.age[index]).rem_euclid(3.2);
+                let mut local_x = -176.0 + self.pool.x[index] * 0.48;
+                let mut local_y = -252.0 + phase * 172.0 + 42.0 * phase * phase;
+                let bowl_y = 116.0 + (local_x + 176.0).powi(2) * 0.0026;
+                let collided = local_y > bowl_y;
+                if collided {
+                    let slide = (phase - 1.55).max(0.0);
+                    local_x += self.pool.x[index].signum() * slide * 92.0;
+                    local_y = 116.0 + (local_x + 176.0).powi(2) * 0.0026
+                        - (slide * 8.0).sin().abs() * 16.0;
+                }
+                (local_x, local_y, collided, 2 + usize::from(collided))
+            };
+            let screen_x = 480.0 + x;
+            let screen_y = 270.0 + y;
+            if !push_screen_command(
+                &mut self.commands,
+                self.config.width,
+                self.config.height,
+                screen_x,
+                screen_y,
+                style as u8,
+                collided && index & 31 == 0,
+            ) {
+                clipped = clipped.saturating_add(1);
+            }
+            if collided && index & 63 == 0 {
+                self.material_stamps.push(MaterialStamp {
+                    x: screen_x as i16,
+                    y: screen_y as i16,
+                    radius: 2 + u8::from(warm),
+                    intensity: 11,
+                    color: COLLISION_PALETTE[style],
+                    shape: if warm {
+                        MaterialShape::Spark
+                    } else {
+                        MaterialShape::Smoke
+                    },
+                });
+            }
+        }
+        clipped
     }
 
     fn initialize_source_driven_morph(&mut self) {
@@ -3367,6 +3472,7 @@ fn showcase_palette(demo: ParticleDemoKind) -> &'static [Rgb565Pixel; 8] {
         ParticleDemoKind::SpatialFieldStack => &FIELD_PALETTE,
         ParticleDemoKind::DepthAwareMaterialLod => &DEPTH_PALETTE,
         ParticleDemoKind::SourceDrivenMorph => &MORPH_PALETTE,
+        ParticleDemoKind::SdfCollisionEvents => &COLLISION_PALETTE,
     }
 }
 
@@ -3501,13 +3607,13 @@ mod tests {
 
     #[test]
     fn demo_order_and_wrapping_are_stable() {
-        assert_eq!(ParticleDemoKind::ALL.len(), 29);
+        assert_eq!(ParticleDemoKind::ALL.len(), 30);
         assert_eq!(
             ParticleDemoKind::SolarChrysanthemum.offset_wrapped(-1),
-            ParticleDemoKind::SourceDrivenMorph
+            ParticleDemoKind::SdfCollisionEvents
         );
         assert_eq!(
-            ParticleDemoKind::SourceDrivenMorph.offset_wrapped(1),
+            ParticleDemoKind::SdfCollisionEvents.offset_wrapped(1),
             ParticleDemoKind::SolarChrysanthemum
         );
         for (index, kind) in ParticleDemoKind::ALL.into_iter().enumerate() {
@@ -3571,7 +3677,11 @@ mod tests {
             ParticleDemoKind::parse("29"),
             Some(ParticleDemoKind::SourceDrivenMorph)
         );
-        assert_eq!(ParticleDemoKind::parse("30"), None);
+        assert_eq!(
+            ParticleDemoKind::parse("30"),
+            Some(ParticleDemoKind::SdfCollisionEvents)
+        );
+        assert_eq!(ParticleDemoKind::parse("31"), None);
         assert_eq!(ParticleDemoKind::parse("unknown"), None);
     }
 
