@@ -26,7 +26,7 @@
 //!                        fill one scanout slot and post it through FPGA latch
 //!     fpga-latch-pattern
 //!                        fill scanout slots and vblank-latch them in FPGA
-//!     catalog-v4-inspect validate the registry, shards, state, and scanner cache
+//!     catalog-v3-inspect validate the registry, shards, state, and scanner cache
 //!     search-bench       benchmark persisted Arcade FTS5 search
 //!     hbmame-metadata-from-library
 //!                        build supplemental HBMAME metadata from parsed MRA parents
@@ -167,7 +167,7 @@ fn main() {
 
     let latch_readiness_json =
         cmd == "latch-readiness-report" && args.iter().any(|arg| arg == "--json");
-    if cmd != "catalog-v4-inspect" && !latch_readiness_json {
+    if cmd != command_args::CATALOG_INSPECT_COMMAND && !latch_readiness_json {
         crate::ui_logln!("mister-magik-fb [{cmd}] ({})", build_identity.log_detail());
     }
 
@@ -349,7 +349,7 @@ fn dispatch_pre_fpga(cmd: &str, args: &[String]) {
         "preview-pack-bench" => preview_pack_bench::run(),
         #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
         "preview-index-refresh-bench" => run_preview_index_refresh_bench(),
-        "catalog-v4-inspect" => run_catalog_v4_inspect(),
+        command_args::CATALOG_INSPECT_COMMAND => run_catalog_v3_inspect(),
         #[cfg(feature = "diagnostics")]
         "hbmame-metadata-from-library" => run_hbmame_metadata_from_library(),
         #[cfg(feature = "bench-tools")]
@@ -392,11 +392,11 @@ fn print_benchmark_capabilities() {
     );
 }
 
-fn run_catalog_v4_inspect() {
+fn run_catalog_v3_inspect() {
     match mister_magik_catalog::catalog_acceptance::inspect_production_catalog() {
         Ok(report) => crate::ui_log!("{report}"),
         Err(error) => {
-            crate::ui_errln!("catalog_v4_summary_tsv\tvalid=0\terror={error}");
+            crate::ui_errln!("catalog_v3_summary_tsv\tvalid=0\terror={error}");
             std::process::exit(1);
         }
     }

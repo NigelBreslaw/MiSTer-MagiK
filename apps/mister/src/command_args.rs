@@ -20,6 +20,8 @@ impl CommandSpec {
     }
 }
 
+pub const CATALOG_INSPECT_COMMAND: &str = "catalog-v3-inspect";
+
 pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("read", CommandKind::Fpga),
     CommandSpec::new("early-black", CommandKind::Fpga),
@@ -77,7 +79,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("preview-pack-bench", CommandKind::PreFpga),
     #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
     CommandSpec::new("preview-index-refresh-bench", CommandKind::PreFpga),
-    CommandSpec::new("catalog-v3-inspect", CommandKind::PreFpga),
+    CommandSpec::new(CATALOG_INSPECT_COMMAND, CommandKind::PreFpga),
     #[cfg(feature = "diagnostics")]
     CommandSpec::new("hbmame-metadata-from-library", CommandKind::PreFpga),
     #[cfg(feature = "diagnostics")]
