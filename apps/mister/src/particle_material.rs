@@ -100,6 +100,8 @@ pub(crate) fn raster_tapered_segment(
     width: usize,
     height: usize,
     stroke: MaterialStroke,
+    sample_stride: usize,
+    track_dirty: bool,
 ) -> MaterialRasterStats {
     let dx = stroke.x1 - stroke.x0;
     let dy = stroke.y1 - stroke.y0;
@@ -122,7 +124,7 @@ pub(crate) fn raster_tapered_segment(
         stamps: steps + 1,
         attempted_pixel_writes: 0,
     };
-    for step in 0..=steps {
+    for step in (0..=steps).step_by(sample_stride.max(1)) {
         let amount = step as f32 / steps as f32;
         let radius = (f32::from(stroke.start_radius.min(3))
             + (f32::from(stroke.end_radius) - f32::from(stroke.start_radius)) * amount)
@@ -139,7 +141,9 @@ pub(crate) fn raster_tapered_segment(
             let offset = y as usize * width + x as usize;
             destination[offset] =
                 additive_rgb565(destination[offset], scaled_r, scaled_g, scaled_b);
-            dirty_offsets.push(offset as u32);
+            if track_dirty {
+                dirty_offsets.push(offset as u32);
+            }
             stats.attempted_pixel_writes = stats.attempted_pixel_writes.saturating_add(1);
         }
     }
@@ -263,5 +267,26 @@ mod tests {
         );
         assert!(stats.attempted_pixel_writes <= 16);
         assert!(dirty.iter().all(|&offset| offset < 16));
+    }
+
+    #[test]
+    fn sparse_untracked_strokes_preserve_pixels_without_dirty_bookkeeping() {
+        let stroke = MaterialStroke {
+            x0: 1.0,
+            y0: 4.0,
+            x1: 14.0,
+            y1: 4.0,
+            start_radius: 1,
+            end_radius: 2,
+            intensity: 12,
+            color: Rgb565Pixel(0x07ff),
+        };
+        let mut destination = vec![Rgb565Pixel(0); 16 * 8];
+        let mut dirty = Vec::new();
+        let sparse = raster_tapered_segment(&mut destination, &mut dirty, 16, 8, stroke, 2, false);
+
+        assert!(sparse.attempted_pixel_writes > 0);
+        assert!(dirty.is_empty());
+        assert!(destination.iter().any(|pixel| pixel.0 != 0));
     }
 }

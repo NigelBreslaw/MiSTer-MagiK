@@ -1062,8 +1062,11 @@ impl ParticleShowcaseRenderer {
     }
 
     fn prepare_hidden_slot(&mut self, destination: &mut [Rgb565Pixel], slot: usize) -> Vec<u32> {
+        let force_full_clear = self.demo == ParticleDemoKind::VariableWidthRibbons;
         let dirty = &mut self.dirty_slots[slot];
-        if !dirty.initialized || dirty.offsets.len() >= destination.len() / FULL_CLEAR_DIRTY_DIVISOR
+        if force_full_clear
+            || !dirty.initialized
+            || dirty.offsets.len() >= destination.len() / FULL_CLEAR_DIRTY_DIVISOR
         {
             destination.fill(Rgb565Pixel(0));
         } else {
@@ -1982,6 +1985,7 @@ impl ParticleShowcaseRenderer {
             let lane = ribbon % RIBBON_PALETTE.len();
             let random = self.pool.random[ribbon];
             let depth = unit01(random.rotate_left(9));
+            let hero = ribbon % 4 == 0;
             let lane_offset = (ribbon as f32 - 11.5) * (2.5 + depth * 1.4);
             let start_t = unit01(random.rotate_left(19)) * 0.18;
             let end_t = 0.76
@@ -2001,8 +2005,8 @@ impl ParticleShowcaseRenderer {
                         y0: previous_y,
                         x1: x,
                         y1: y,
-                        start_radius: if sample < 5 { 1 } else { 2 },
-                        end_radius: if sample > 13 && depth > 0.55 { 3 } else { 2 },
+                        start_radius: u8::from(hero && sample >= 5) + 1,
+                        end_radius: u8::from(hero && sample <= 13) + 1,
                         intensity: 7 + (depth * 8.0) as u8,
                         color: RIBBON_PALETTE[lane],
                     });
@@ -2012,9 +2016,9 @@ impl ParticleShowcaseRenderer {
                             y0: previous_y,
                             x1: x,
                             y1: y,
-                            start_radius: 3,
-                            end_radius: 3,
-                            intensity: 3,
+                            start_radius: 2,
+                            end_radius: 2,
+                            intensity: 2,
                             color: RIBBON_PALETTE[lane.saturating_sub(1)],
                         });
                     }
@@ -3297,6 +3301,7 @@ impl ParticleShowcaseRenderer {
         dirty_offsets: &mut Vec<u32>,
     ) -> MaterialRasterStats {
         let mut total = MaterialRasterStats::default();
+        let sparse_untracked = self.demo == ParticleDemoKind::VariableWidthRibbons;
         for &stroke in &self.material_strokes {
             let stats = raster_tapered_segment(
                 destination,
@@ -3304,6 +3309,8 @@ impl ParticleShowcaseRenderer {
                 self.config.width,
                 self.config.height,
                 stroke,
+                if sparse_untracked { 2 } else { 1 },
+                !sparse_untracked,
             );
             total.stamps = total.stamps.saturating_add(stats.stamps);
             total.attempted_pixel_writes = total
