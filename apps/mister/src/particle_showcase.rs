@@ -3546,13 +3546,28 @@ impl ParticleShowcaseRenderer {
             }
             let offset = (command & COMMAND_OFFSET_MASK) as usize;
             let style = ((command >> COMMAND_STYLE_SHIFT) & 7) as usize;
-            destination[offset] = showcase_palette(self.demo)[style];
+            let color = showcase_palette(self.demo)[style];
+            destination[offset] = color;
             dirty_offsets.push(offset as u32);
             writes = writes.saturating_add(1);
             if command & COMMAND_NEIGHBOR != 0 {
-                destination[offset + 1] = showcase_palette(self.demo)[style.saturating_sub(1)];
+                let neighbor_color = if self.demo == ParticleDemoKind::LayerMappedHologram {
+                    color
+                } else {
+                    showcase_palette(self.demo)[style.saturating_sub(1)]
+                };
+                destination[offset + 1] = neighbor_color;
                 dirty_offsets.push((offset + 1) as u32);
                 writes = writes.saturating_add(1);
+                if self.demo == ParticleDemoKind::LayerMappedHologram
+                    && offset + self.config.width + 1 < destination.len()
+                {
+                    destination[offset + self.config.width] = color;
+                    destination[offset + self.config.width + 1] = color;
+                    dirty_offsets.push((offset + self.config.width) as u32);
+                    dirty_offsets.push((offset + self.config.width + 1) as u32);
+                    writes = writes.saturating_add(2);
+                }
             }
             visible = visible.saturating_add(1);
         }

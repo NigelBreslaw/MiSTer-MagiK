@@ -11,6 +11,10 @@ use std::time::Duration;
 
 pub const FORM_MAX_PARTICLES: usize = 98_304;
 pub const FORM_MAX_SEGMENTS: usize = 32_768;
+const HOLOGRAM_BASE_END: usize = 20_480;
+const HOLOGRAM_SHAFT_END: usize = 26_624;
+const HOLOGRAM_BALL_END: usize = 32_768;
+const HOLOGRAM_COLLAR_END: usize = 36_864;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -249,21 +253,17 @@ impl FormSceneRenderer {
 
     fn initialize_hologram(&mut self) {
         let count = FormSceneKind::LayerMappedHologram.count();
-        const BASE_END: usize = 20_480;
-        const SHAFT_END: usize = 26_624;
-        const BALL_END: usize = 32_768;
-        const COLLAR_END: usize = 36_864;
         for index in 0..count {
-            let (part_start, logical, part) = if index < BASE_END {
+            let (part_start, logical, part) = if index < HOLOGRAM_BASE_END {
                 (0, index / 4, 0)
-            } else if index < SHAFT_END {
-                (BASE_END, (index - BASE_END) / 4, 1)
-            } else if index < BALL_END {
-                (SHAFT_END, (index - SHAFT_END) / 4, 2)
-            } else if index < COLLAR_END {
-                (BALL_END, (index - BALL_END) / 4, 3)
+            } else if index < HOLOGRAM_SHAFT_END {
+                (HOLOGRAM_BASE_END, (index - HOLOGRAM_BASE_END) / 4, 1)
+            } else if index < HOLOGRAM_BALL_END {
+                (HOLOGRAM_SHAFT_END, (index - HOLOGRAM_SHAFT_END) / 4, 2)
+            } else if index < HOLOGRAM_COLLAR_END {
+                (HOLOGRAM_BALL_END, (index - HOLOGRAM_BALL_END) / 4, 3)
             } else {
-                (COLLAR_END, (index - COLLAR_END) / 4, 4)
+                (HOLOGRAM_COLLAR_END, (index - HOLOGRAM_COLLAR_END) / 4, 4)
             };
             let state = xorshift32(
                 (logical as u32)
@@ -326,7 +326,7 @@ impl FormSceneRenderer {
                 1 => {
                     let angle = (logical & 63) as f32 * TAU / 64.0;
                     let height = (logical >> 6) as f32 / 23.0;
-                    let radius = 19.0 + unit_signed(state.rotate_left(21)) * 1.0;
+                    let radius = 19.0;
                     (
                         angle.cos() * radius,
                         45.0 - height * 165.0,
@@ -335,11 +335,12 @@ impl FormSceneRenderer {
                     )
                 }
                 2 => {
-                    let sphere_count = (BALL_END - SHAFT_END) / 4;
-                    let t = (logical as f32 + 0.5) / sphere_count as f32;
-                    let sphere_y = 1.0 - 2.0 * t;
-                    let radial = (1.0 - sphere_y * sphere_y).sqrt();
-                    let angle = logical as f32 * PI * (3.0 - 5.0_f32.sqrt());
+                    let latitude = logical >> 6;
+                    let longitude = logical & 63;
+                    let latitude_angle = (latitude as f32 + 0.5) * PI / 24.0;
+                    let sphere_y = -latitude_angle.cos();
+                    let radial = latitude_angle.sin();
+                    let angle = longitude as f32 * TAU / 64.0;
                     let latitude_style = if sphere_y.abs() < 0.32 { 7 } else { 5 };
                     (
                         angle.cos() * radial * 54.0,
@@ -354,13 +355,12 @@ impl FormSceneRenderer {
                     // inflated torus.
                     let ring = logical & 3;
                     let ring_sample = logical >> 2;
-                    let samples_per_ring = (COLLAR_END - BALL_END) / 16;
+                    let samples_per_ring = (HOLOGRAM_COLLAR_END - HOLOGRAM_BALL_END) / 16;
                     let major_angle = ring_sample as f32 * TAU / samples_per_ring as f32;
-                    let radius =
-                        49.0 + ring as f32 * 17.0 + unit_signed(state.rotate_left(7)) * 4.0;
+                    let radius = 49.0 + ring as f32 * 17.0;
                     (
                         major_angle.cos() * radius,
-                        41.0 + ring as f32 * 3.0 + unit_signed(state.rotate_left(19)) * 1.5,
+                        41.0 + ring as f32 * 3.0,
                         major_angle.sin() * radius,
                         5,
                     )
@@ -379,7 +379,7 @@ impl FormSceneRenderer {
                     };
                     (
                         center_x + angle.cos() * radius,
-                        39.0 - unit01(state.rotate_left(23)) * 8.0,
+                        38.0,
                         center_z + angle.sin() * radius,
                         6,
                     )
@@ -518,6 +518,17 @@ impl FormSceneRenderer {
         let (pitch_sin, pitch_cos) = (-0.55_f32).sin_cos();
         let scan_position = (seconds * 0.18).fract();
         for index in (0..count).step_by(4) {
+            let part = self.flags[index] >> 1;
+            let keep_sample = match part {
+                0 => true,
+                1 | 2 => ((index - HOLOGRAM_BASE_END) >> 2) & 1 == 0,
+                3 => ((index - HOLOGRAM_BALL_END) >> 4) & 1 == 0,
+                4 => ((index - HOLOGRAM_COLLAR_END) / 12) & 1 == 0,
+                _ => false,
+            };
+            if !keep_sample {
+                continue;
+            }
             if self.aux_y[index] > reveal {
                 continue;
             }
@@ -529,7 +540,7 @@ impl FormSceneRenderer {
             let z = local_y.mul_add(pitch_sin, yaw_z * pitch_cos);
             let original_style = self.style[index];
             self.style[index] = hologram_material_style(
-                self.flags[index] >> 1,
+                part,
                 self.rest_x[index],
                 self.rest_y[index],
                 self.rest_z[index],
