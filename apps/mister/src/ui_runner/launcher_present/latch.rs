@@ -1776,6 +1776,10 @@ mod tests {
             active_stride: rgb565_stride_bytes(WIDTH) as u16,
             reject_count: 0,
             active_route_epoch: 0,
+            accepted_sequence: if flags & 0x0004 != 0 { 12 } else { 11 },
+            active_transaction: 1,
+            pending_transaction: if flags & 0x0004 != 0 { 2 } else { 0 },
+            accepted_transaction: if flags & 0x0004 != 0 { 2 } else { 1 },
         }
     }
 
