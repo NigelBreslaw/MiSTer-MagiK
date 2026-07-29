@@ -433,7 +433,7 @@ module tb_mister_magik_vblank_latch;
 		expect16(snapshot[5], 16'd0, "initial diagnostics receiver flags");
 		expect16(snapshot[6], crc, "initial diagnostics CRC");
 		@(negedge clk_sys);
-		cmd_id = 8'h5b;
+		cmd_id = 8'h5c;
 		cmd_start = 1'b1;
 		#1;
 		expect_true(!response_valid, "unknown command is not acknowledged");
