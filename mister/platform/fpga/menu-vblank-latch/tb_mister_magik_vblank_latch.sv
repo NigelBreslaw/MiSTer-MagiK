@@ -140,18 +140,18 @@ module tb_mister_magik_vblank_latch;
 		input [3:0] index;
 		begin
 			case(index)
-				4'd0: golden_set_word = MAGIK_GOLDEN_SET_V3_0;
-				4'd1: golden_set_word = MAGIK_GOLDEN_SET_V3_1;
-				4'd2: golden_set_word = MAGIK_GOLDEN_SET_V3_2;
-				4'd3: golden_set_word = MAGIK_GOLDEN_SET_V3_3;
-				4'd4: golden_set_word = MAGIK_GOLDEN_SET_V3_4;
-				4'd5: golden_set_word = MAGIK_GOLDEN_SET_V3_5;
-				4'd6: golden_set_word = MAGIK_GOLDEN_SET_V3_6;
-				4'd7: golden_set_word = MAGIK_GOLDEN_SET_V3_7;
-				4'd8: golden_set_word = MAGIK_GOLDEN_SET_V3_8;
-				4'd9: golden_set_word = MAGIK_GOLDEN_SET_V3_9;
-				4'd10: golden_set_word = MAGIK_GOLDEN_SET_V3_10;
-				default: golden_set_word = MAGIK_GOLDEN_SET_V3_CRC;
+				4'd0: golden_set_word = MAGIK_GOLDEN_SET_V4_0;
+				4'd1: golden_set_word = MAGIK_GOLDEN_SET_V4_1;
+				4'd2: golden_set_word = MAGIK_GOLDEN_SET_V4_2;
+				4'd3: golden_set_word = MAGIK_GOLDEN_SET_V4_3;
+				4'd4: golden_set_word = MAGIK_GOLDEN_SET_V4_4;
+				4'd5: golden_set_word = MAGIK_GOLDEN_SET_V4_5;
+				4'd6: golden_set_word = MAGIK_GOLDEN_SET_V4_6;
+				4'd7: golden_set_word = MAGIK_GOLDEN_SET_V4_7;
+				4'd8: golden_set_word = MAGIK_GOLDEN_SET_V4_8;
+				4'd9: golden_set_word = MAGIK_GOLDEN_SET_V4_9;
+				4'd10: golden_set_word = MAGIK_GOLDEN_SET_V4_10;
+				default: golden_set_word = MAGIK_GOLDEN_SET_V4_CRC;
 			endcase
 		end
 	endfunction
@@ -399,17 +399,17 @@ module tb_mister_magik_vblank_latch;
 
 		start_command(MAGIK_UIO_GET_FBUF_LATCH_CAPS, MAGIK_FBUF_CAPS_MAGIC);
 		read_word(MAGIK_UIO_GET_FBUF_LATCH_CAPS, 4'd0, value);
-		expect16(value, MAGIK_GOLDEN_CAPS_V3_0, "caps version");
+		expect16(value, MAGIK_GOLDEN_CAPS_V4_0, "caps version");
 		read_word(MAGIK_UIO_GET_FBUF_LATCH_CAPS, 4'd1, value);
-		expect16(value, MAGIK_GOLDEN_CAPS_V3_1, "caps flags");
+		expect16(value, MAGIK_GOLDEN_CAPS_V4_1, "caps flags");
 		read_word(MAGIK_UIO_GET_FBUF_LATCH_CAPS, 4'd2, value);
-		expect16(value, MAGIK_GOLDEN_CAPS_V3_2, "caps width");
+		expect16(value, MAGIK_GOLDEN_CAPS_V4_2, "caps width");
 		read_word(MAGIK_UIO_GET_FBUF_LATCH_CAPS, 4'd3, value);
-		expect16(value, MAGIK_GOLDEN_CAPS_V3_3, "caps height");
+		expect16(value, MAGIK_GOLDEN_CAPS_V4_3, "caps height");
 		read_word(MAGIK_UIO_GET_FBUF_LATCH_CAPS, 4'd4, value);
-		expect16(value, MAGIK_GOLDEN_CAPS_V3_4, "caps stride");
+		expect16(value, MAGIK_GOLDEN_CAPS_V4_4, "caps stride");
 		read_word(MAGIK_UIO_GET_FBUF_LATCH_CAPS, 4'd5, value);
-		expect16(value, MAGIK_GOLDEN_CAPS_V3_CRC, "caps CRC");
+		expect16(value, MAGIK_GOLDEN_CAPS_V4_CRC, "caps CRC");
 		read_word(MAGIK_UIO_GET_FBUF_LATCH_CAPS, 4'd6, value);
 		expect16(value, 16'd0, "caps post-close word is zero");
 		start_command(
@@ -535,8 +535,8 @@ module tb_mister_magik_vblank_latch;
 		// Framing failures each reject once and leave committed pending untouched.
 		reject_before = reject_count;
 		start_command(MAGIK_UIO_SET_FBUF_LATCH, MAGIK_FBUF_LATCH_MAGIC);
-		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, MAGIK_GOLDEN_SET_V3_0);
-		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd11, MAGIK_GOLDEN_SET_V3_CRC);
+		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, MAGIK_GOLDEN_SET_V4_0);
+		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd11, MAGIK_GOLDEN_SET_V4_CRC);
 		expect_reject(reject_before, MAGIK_REJECT_MISSING_WORD, "missing word");
 		start_command(
 			MAGIK_UIO_GET_FBUF_LATCH_DIAGNOSTICS,
@@ -569,25 +569,25 @@ module tb_mister_magik_vblank_latch;
 
 		reject_before = reject_count;
 		start_command(MAGIK_UIO_SET_FBUF_LATCH, MAGIK_FBUF_LATCH_MAGIC);
-		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, MAGIK_GOLDEN_SET_V3_0);
-		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, MAGIK_GOLDEN_SET_V3_0);
+		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, MAGIK_GOLDEN_SET_V4_0);
+		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, MAGIK_GOLDEN_SET_V4_0);
 		expect_reject(reject_before, MAGIK_REJECT_DUPLICATE_WORD, "duplicate word");
 
 		reject_before = reject_count;
 		start_command(MAGIK_UIO_SET_FBUF_LATCH, MAGIK_FBUF_LATCH_MAGIC);
-		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, MAGIK_GOLDEN_SET_V3_0);
-		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd1, MAGIK_GOLDEN_SET_V3_1);
-		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, MAGIK_GOLDEN_SET_V3_0);
+		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, MAGIK_GOLDEN_SET_V4_0);
+		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd1, MAGIK_GOLDEN_SET_V4_1);
+		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, MAGIK_GOLDEN_SET_V4_0);
 		expect_reject(reject_before, MAGIK_REJECT_OUT_OF_ORDER, "reordered word");
 
 		reject_before = reject_count;
 		start_command(MAGIK_UIO_SET_FBUF_LATCH, MAGIK_FBUF_LATCH_MAGIC);
-		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd2, MAGIK_GOLDEN_SET_V3_2);
+		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd2, MAGIK_GOLDEN_SET_V4_2);
 		expect_reject(reject_before, MAGIK_REJECT_SHIFTED_WORD, "shifted word");
 
 		reject_before = reject_count;
 		start_command(MAGIK_UIO_SET_FBUF_LATCH, MAGIK_FBUF_LATCH_MAGIC);
-		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, MAGIK_GOLDEN_SET_V3_0);
+		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, MAGIK_GOLDEN_SET_V4_0);
 		start_command(MAGIK_UIO_SET_FBUF_LATCH, MAGIK_FBUF_LATCH_MAGIC);
 		expect_reject(reject_before, MAGIK_REJECT_RESTARTED, "restarted transaction");
 		// Close the newly opened replacement before the post-close test.
@@ -662,7 +662,7 @@ module tb_mister_magik_vblank_latch;
 		while(!apply) @(negedge clk_sys);
 		cmd_id = MAGIK_UIO_SET_FBUF_LATCH;
 		word_index = 4'd11;
-		data_in = MAGIK_GOLDEN_SET_V3_CRC;
+		data_in = MAGIK_GOLDEN_SET_V4_CRC;
 		cmd_data = 1'b1;
 		@(posedge clk_sys);
 		#1;
@@ -793,12 +793,12 @@ module tb_mister_magik_vblank_latch;
 			expect16(reject_count, model_reject_count, "randomized reject count");
 			expect16(active_route_epoch, model_epoch, "randomized route epoch");
 		end
-		$display("COVER LATCH-V3-RANDOM fixed-seed reference-model interleavings");
+		$display("COVER LATCH-V4-RANDOM fixed-seed reference-model interleavings");
 
 		if(requirement_coverage[11:0] !== 12'hfff)
-			fail("not all protocol-v3 RTL requirement coverpoints hit");
-		$display("COVER LATCH-V3-001..LATCH-V3-012 all RTL requirements hit");
-		$display("PASS: atomic protocol-v3 latch, coherent status, and ownership arbitration");
+			fail("not all protocol-v4 RTL requirement coverpoints hit");
+		$display("COVER LATCH-V4-001..LATCH-V4-012 all RTL requirements hit");
+		$display("PASS: atomic protocol-v4 latch, coherent status, and ownership arbitration");
 		$finish;
 	end
 

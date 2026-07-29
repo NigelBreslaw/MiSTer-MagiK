@@ -230,6 +230,7 @@ PY
   shasum -a 256 "$LATCH_BRIDGE" | awk '{print "latch_bridge_sha256="$1}'
   shasum -a 256 "$LATCH_PROTOCOL" | awk '{print "latch_protocol_sha256="$1}'
   python3 -c 'import re,sys; source=open(sys.argv[1]).read(); match=re.search(r"MAGIK_FBUF_PROTOCOL_VERSION\s*=\s*16.d(\d+)", source); assert match; print("latch_protocol_version=" + match.group(1))' "$LATCH_PROTOCOL"
+  python3 -c 'import re,sys; source=open(sys.argv[1]).read(); match=re.search(r"MAGIK_FBUF_CAPS_FLAGS\s*=\s*16.h([0-9A-Fa-f]+)", source); assert match; print("latch_capability_mask=0x" + match.group(1).lower())' "$LATCH_PROTOCOL"
   echo "apply_patch=$APPLY_PATCH"
   echo "build_date=$BUILD_DATE"
   echo "work_dir=$WORK_DIR"

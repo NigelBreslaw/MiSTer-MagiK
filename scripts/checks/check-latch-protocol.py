@@ -30,28 +30,20 @@ subprocess.run(
     check=True,
 )
 spec = json.loads(SPEC_PATH.read_text())
-if spec["active_protocol_version"] != 3:
-    raise SystemExit("new FPGA artifacts must advertise latch protocol v3")
-if spec["protocols"]["2"] != {
-    "flags": 7,
-    "caps_words": 5,
-    "set_payload_words": 11,
-    "status_payload_words": 11,
-    "caps_crc": False,
-    "set_crc": False,
-    "status_crc": False,
-}:
-    raise SystemExit("protocol-v2 wire profile changed")
-if len(spec["set_words_v3"]) != 12 or spec["set_words_v3"][-1] != "crc":
-    raise SystemExit("protocol-v3 SET must contain eleven payload words plus CRC")
-if len(spec["status_words_v3"]) != 14 or spec["status_words_v3"][-1] != "crc":
-    raise SystemExit("protocol-v3 status must contain thirteen payload words plus CRC")
-if spec["protocols"]["3"]["flags"] != 0x007F:
-    raise SystemExit("protocol-v3 capability flags must be the exact complete profile")
+if spec["active_protocol_version"] != 4 or set(spec["protocols"]) != {"4"}:
+    raise SystemExit("only latch protocol v4 may be generated")
+if len(spec["set_words_v4"]) != 12 or spec["set_words_v4"][-1] != "crc":
+    raise SystemExit("protocol-v4 SET must contain eleven payload words plus CRC")
+if len(spec["status_words_v4"]) != 16 or spec["status_words_v4"][-1] != "crc":
+    raise SystemExit("protocol-v4 status must contain fifteen payload words plus CRC")
+if len(spec["receipt_words_v4"]) != 11 or spec["receipt_words_v4"][-1] != "crc":
+    raise SystemExit("protocol-v4 receipt must contain ten payload words plus CRC")
+if spec["protocols"]["4"]["flags"] != 0x01FF:
+    raise SystemExit("protocol-v4 capability flags must be exactly 0x01ff")
 for name, golden in spec["goldens"].items():
     words = [
         golden["command"],
-        3,
+        4,
         len(golden["payload"]),
         *golden["payload"],
     ]

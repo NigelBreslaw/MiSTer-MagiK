@@ -168,7 +168,7 @@ fn dev_latch_post_skip_for(
     configured?
         .parse::<usize>()
         .ok()
-        .filter(|index| *index < mister_magik_latch_contract::V3_SET_WORDS)
+        .filter(|index| *index < mister_magik_latch_contract::V4_SET_WORDS)
 }
 
 fn latch_status_read_failure(
@@ -1030,10 +1030,6 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         )
     }
 
-    /// Protocol v2 has no coherent snapshot marker. This containment is
-    /// intentionally narrow: only a hidden-route geometry mismatch triggers
-    /// corroboration. Structurally valid torn projections remain a v2 protocol
-    /// limitation and are eliminated by protocol v3's snapshot CRC.
     fn read_geometry_safe_status(
         &mut self,
         hardware: &mut impl LatchHardware,
@@ -1048,135 +1044,16 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         budget: &mut LogicalStatusReadBudget,
     ) -> Result<crate::fpga::LatchedFbufStatusSample, LatchFailure> {
         budget.consume().map_err(|_| {
-            self.uncorroborated_status_failure(
-                "protocol-v2 latch status exhausted its three-read safety budget",
-                LatchWireDiagnostics::default(),
+            LatchFailure::runtime(
+                LatchFailureStage::PostVerification,
+                LatchFailureReason::Transport,
+                "latch status exhausted its bounded read budget",
             )
         })?;
-        let first = read_status_sample(hardware, self.negotiated_capabilities)
+        let sample = read_status_sample(hardware, self.negotiated_capabilities)
             .map_err(|error| latch_status_read_failure(LatchFailureStage::FpgaStatus, error))?;
-        match self.classify_latch_status(first.status) {
-            Ok(sync) => {
-                self.apply_latch_status_sync(sync);
-                return Ok(first);
-            }
-            Err(LatchStatusSyncError::Unsupported { .. }) => {
-                self.sync_latch_state_from_status(&first)?;
-                unreachable!("unsupported status must fail synchronization");
-            }
-            Err(LatchStatusSyncError::HiddenGeometryMismatch { .. })
-                if self
-                    .negotiated_capabilities
-                    .map_or(true, |capabilities| capabilities.protocol_version != 2) =>
-            {
-                self.sync_latch_state_from_status(&first)?;
-                unreachable!("non-v2 geometry mismatch must fail synchronization");
-            }
-            Err(LatchStatusSyncError::HiddenGeometryMismatch { .. }) => {}
-        }
-
-        let first_projection = LatchSafetyProjection::from(first.status);
-        let mut diagnostics = first.diagnostics;
-        let mut second = self.read_corroboration_status(hardware, budget, &mut diagnostics)?;
-        match self.classify_latch_status(second.status) {
-            Err(LatchStatusSyncError::Unsupported { .. }) => {
-                second.diagnostics = diagnostics;
-                self.sync_latch_state_from_status(&second)?;
-                unreachable!("unsupported status must fail synchronization");
-            }
-            Err(LatchStatusSyncError::HiddenGeometryMismatch { .. })
-                if LatchSafetyProjection::from(second.status) == first_projection =>
-            {
-                second.diagnostics = diagnostics;
-                self.sync_latch_state_from_status(&second)?;
-                unreachable!("repeated geometry mismatch must fail synchronization");
-            }
-            Err(LatchStatusSyncError::HiddenGeometryMismatch { .. }) => {
-                let mut third =
-                    self.read_corroboration_status(hardware, budget, &mut diagnostics)?;
-                match self.classify_latch_status(third.status) {
-                    Err(_) => {
-                        third.diagnostics = diagnostics;
-                        self.sync_latch_state_from_status(&third)?;
-                        unreachable!("invalid status must fail synchronization");
-                    }
-                    Ok(_) => {
-                        return Err(self.uncorroborated_status_failure(
-                            "protocol-v2 latch status changed between two invalid samples and only one subsequent valid sample was observed",
-                            diagnostics,
-                        ));
-                    }
-                }
-            }
-            Ok(_) => {}
-        }
-
-        let second_projection = LatchSafetyProjection::from(second.status);
-        let mut third = self.read_corroboration_status(hardware, budget, &mut diagnostics)?;
-        let third_sync = match self.classify_latch_status(third.status) {
-            Ok(sync) if LatchSafetyProjection::from(third.status) == second_projection => sync,
-            Ok(_) => {
-                return Err(self.uncorroborated_status_failure(
-                    "protocol-v2 latch status produced two valid samples with different safety projections",
-                    diagnostics,
-                ));
-            }
-            Err(_) => {
-                third.diagnostics = diagnostics;
-                self.sync_latch_state_from_status(&third)?;
-                unreachable!("invalid status must fail synchronization");
-            }
-        };
-        diagnostics.decision = LatchWireDecision::Corroborated;
-        third.diagnostics = diagnostics;
-        self.apply_latch_status_sync(third_sync);
-        Ok(third)
-    }
-
-    fn read_corroboration_status(
-        &mut self,
-        hardware: &mut impl LatchHardware,
-        budget: &mut LogicalStatusReadBudget,
-        diagnostics: &mut LatchWireDiagnostics,
-    ) -> Result<crate::fpga::LatchedFbufStatusSample, LatchFailure> {
-        if budget.consume().is_err() {
-            return Err(self.uncorroborated_status_failure(
-                "protocol-v2 latch status exhausted its three-read safety budget before corroboration",
-                std::mem::take(diagnostics),
-            ));
-        }
-        match read_status_sample(hardware, self.negotiated_capabilities) {
-            Ok(mut sample) => {
-                diagnostics.append(&sample.diagnostics);
-                sample.diagnostics = LatchWireDiagnostics::default();
-                Ok(sample)
-            }
-            Err(mut error) => {
-                let terminal_decision = error.diagnostics.decision;
-                diagnostics.append(&error.diagnostics);
-                diagnostics.decision = terminal_decision;
-                error.diagnostics = Box::new(std::mem::take(diagnostics));
-                Err(latch_status_read_failure(
-                    LatchFailureStage::FpgaStatus,
-                    error,
-                ))
-            }
-        }
-    }
-
-    fn uncorroborated_status_failure(
-        &mut self,
-        detail: &'static str,
-        diagnostics: LatchWireDiagnostics,
-    ) -> LatchFailure {
-        self.latch_state.invalidate_all();
-        self.hidden_active_verified = false;
-        LatchFailure::runtime(
-            LatchFailureStage::PostVerification,
-            LatchFailureReason::ActiveGeometryMismatch,
-            detail,
-        )
-        .with_wire_diagnostics(rejected_wire_diagnostics(diagnostics))
+        self.sync_latch_state_from_status(&sample)?;
+        Ok(sample)
     }
 
     fn sync_latch_state_from_status(
@@ -1366,9 +1243,9 @@ pub(in crate::ui_runner) fn wait_for_latch_completion(
     posted_sequence: u16,
     timeout: Duration,
 ) -> Result<LatchCompletion, LatchFailure> {
-    // This pacing boundary never selects or writes a hidden buffer. Protocol-v2
+    // This pacing boundary never selects or writes a hidden buffer. Protocol-v4
     // geometry containment runs again before every subsequent copy or post.
-    // Protocol v3 replaces this residual unsnapshotted sequence observation
+    // Protocol v4 replaces this residual unsnapshotted sequence observation
     // with a coherent, CRC-protected status read.
     let started = Instant::now();
     let cpu_started = thread_cpu_us();
@@ -1870,10 +1747,10 @@ mod tests {
                         ack_high,
                         ack_low,
                         diagnostics: mister_magik_fb::latch_readiness::LatchPostDiagnostics {
-                            protocol_version: 2,
+                            protocol_version: 4,
                             sequence,
-                            expected_word_count: mister_magik_latch_contract::V2_SET_WORDS as u8,
-                            transmitted_word_count: mister_magik_latch_contract::V2_SET_WORDS as u8,
+                            expected_word_count: mister_magik_latch_contract::V4_SET_WORDS as u8,
+                            transmitted_word_count: mister_magik_latch_contract::V4_SET_WORDS as u8,
                             ..Default::default()
                         },
                     })
@@ -2405,7 +2282,7 @@ mod tests {
     }
 
     #[test]
-    fn transient_v2_geometry_fault_requires_two_matching_valid_samples_before_copy_or_post() {
+    fn v4_geometry_fault_requires_two_matching_valid_samples_before_copy_or_post() {
         let mut bad_geometry = status(BASE1, 0x0001);
         bad_geometry.active_width = 960;
         bad_geometry.active_height = 0;
@@ -2442,7 +2319,7 @@ mod tests {
     }
 
     #[test]
-    fn two_identical_invalid_v2_samples_fail_early_without_copy_or_post() {
+    fn two_identical_invalid_v4_samples_fail_early_without_copy_or_post() {
         let mut bad_geometry = status(BASE1, 0x0001);
         bad_geometry.active_width = 960;
         bad_geometry.active_height = 0;
@@ -2472,11 +2349,11 @@ mod tests {
         );
         assert!(hardware.post_bases.is_empty());
         let evidence = mister_magik_fb::latch_readiness::LatchFailureEvidence::from(&error);
-        assert_eq!(evidence.schema, "mister-magik-latch-failure-v3");
+        assert_eq!(evidence.schema, "mister-magik-latch-failure-v4");
     }
 
     #[test]
-    fn changing_invalid_v2_samples_then_one_valid_sample_remain_rejected() {
+    fn changing_invalid_v4_samples_then_one_valid_sample_remain_rejected() {
         let mut invalid_a = status(BASE1, 0x0001);
         invalid_a.active_width = 960;
         invalid_a.active_height = 0;
@@ -2544,7 +2421,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_grant_uses_the_same_v2_status_corroboration_policy() {
+    fn direct_grant_uses_the_same_v4_status_corroboration_policy() {
         let mut invalid = status(BASE1, 0x0001);
         invalid.active_width = 960;
         invalid.active_height = 0;
