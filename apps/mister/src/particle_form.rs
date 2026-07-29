@@ -337,7 +337,7 @@ impl FormSceneRenderer {
             self.aux_x[index] = angle.sin();
             self.aux_y[index] = angle.cos();
             self.style[index] = (1 + group * 2 + (local & 1)) as u8;
-            self.flags[index] = u8::from(index & 15 == 0);
+            self.flags[index] = 1;
         }
     }
 
@@ -439,7 +439,7 @@ impl FormSceneRenderer {
         let twist = 0.18 + seconds * 0.035;
         let pulse = 1.0 + (seconds * 1.3).sin() * 0.045;
         for index in 0..count {
-            if (index / 4) & 3 != 0 {
+            if (index / 4) & 7 != 0 {
                 continue;
             }
             let local_angle = twist * (self.rest_y[index] / 220.0);
