@@ -341,6 +341,7 @@ module mister_magik_vblank_latch (
 			active_transaction <= 16'd0;
 			accepted_seq <= 16'd0;
 			accepted_transaction <= 16'd0;
+			pending_seq <= 16'd0;
 			pending_transaction <= 16'd0;
 			pending <= 1'b0;
 			active_route_epoch <= active_route_epoch + 1'd1;
@@ -349,6 +350,8 @@ module mister_magik_vblank_latch (
 			magik_ownership <= 1'b1;
 			active_seq <= pending_seq;
 			active_transaction <= pending_transaction;
+			pending_seq <= 16'd0;
+			pending_transaction <= 16'd0;
 			active_route_epoch <= active_route_epoch + 1'd1;
 			flip_count <= flip_count + 1'd1;
 			pending <= 1'b0;
@@ -379,6 +382,7 @@ module mister_magik_vblank_latch (
 				receipt_reject_reason <= MAGIK_REJECT_NONE;
 				rx_open <= 1'b1;
 				rx_faulted <= 1'b0;
+				rx_seq <= 16'd0;
 				rx_expected <= 4'd0;
 				rx_mask <= 11'd0;
 				rx_crc <= crc_header(MAGIK_UIO_SET_FBUF_LATCH, 16'd11);

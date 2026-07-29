@@ -447,6 +447,30 @@ module tb_mister_magik_vblank_latch;
 		expect_true(pending, "valid CRC must commit pending route");
 		expect16(pending_seq, 16'h002b, "golden pending sequence");
 		expect16(post_count, 16'd1, "first valid post");
+		start_command(
+			MAGIK_UIO_GET_FBUF_LATCH_RECEIPT,
+			MAGIK_FBUF_RECEIPT_MAGIC
+		);
+		for(index = 0; index < 11; index = index + 1)
+			read_word(
+				MAGIK_UIO_GET_FBUF_LATCH_RECEIPT,
+				index[3:0],
+				snapshot[index]
+			);
+		crc = crc_header(MAGIK_UIO_GET_FBUF_LATCH_RECEIPT, 16'd10);
+		for(index = 0; index < 10; index = index + 1)
+			crc = crc_word(crc, snapshot[index]);
+		expect16(snapshot[0], 16'd1, "accepted receipt attempted transaction");
+		expect16(snapshot[1], 16'h002b, "accepted receipt attempted sequence");
+		expect16(snapshot[2], MAGIK_RECEIPT_ACCEPTED, "accepted receipt disposition");
+		expect16(snapshot[3], 16'd1, "accepted receipt accepted transaction");
+		expect16(snapshot[4], 16'h002b, "accepted receipt accepted sequence");
+		expect16(snapshot[5], 16'd1, "accepted receipt pending transaction");
+		expect16(snapshot[6], 16'h002b, "accepted receipt pending sequence");
+		expect16(snapshot[7], 16'd0, "accepted receipt active transaction");
+		expect16(snapshot[8], 16'd0, "accepted receipt active sequence");
+		expect16(snapshot[9], MAGIK_REJECT_NONE, "accepted receipt rejection reason");
+		expect16(snapshot[10], crc, "accepted receipt CRC");
 		if(!route_en || route_flt || (route_fmt != 6'h14) ||
 		   (route_base != 32'h227e9000) || (route_width != 12'd960) ||
 		   (route_height != 12'd540) || (route_stride != 14'd1920))
@@ -503,6 +527,40 @@ module tb_mister_magik_vblank_latch;
 		expect16(snapshot[5], 16'h9000, "snapshot base predates takeover");
 		expect16(active_seq, 16'd0, "legacy takeover clears active sequence");
 		expect16(active_route_epoch, epoch_before + 1'd1, "legacy takeover epoch");
+
+		// A receipt query finalizes an interrupted SET as one rejected attempt.
+		start_command(MAGIK_UIO_SET_FBUF_LATCH, MAGIK_FBUF_LATCH_MAGIC);
+		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, MAGIK_GOLDEN_SET_V4_0);
+		reject_before = reject_count;
+		start_command(
+			MAGIK_UIO_GET_FBUF_LATCH_RECEIPT,
+			MAGIK_FBUF_RECEIPT_MAGIC
+		);
+		for(index = 0; index < 11; index = index + 1)
+			read_word(
+				MAGIK_UIO_GET_FBUF_LATCH_RECEIPT,
+				index[3:0],
+				snapshot[index]
+			);
+		crc = crc_header(MAGIK_UIO_GET_FBUF_LATCH_RECEIPT, 16'd10);
+		for(index = 0; index < 10; index = index + 1)
+			crc = crc_word(crc, snapshot[index]);
+		expect16(reject_count, reject_before + 1'd1, "interrupted SET rejects once");
+		expect16(snapshot[0], 16'd2, "rejected receipt attempted transaction");
+		expect16(snapshot[1], 16'd0, "interrupted receipt has no posted sequence");
+		expect16(snapshot[2], MAGIK_RECEIPT_REJECTED, "rejected receipt disposition");
+		expect16(snapshot[3], 16'd0, "rejected receipt accepted transaction");
+		expect16(snapshot[4], 16'd0, "rejected receipt accepted sequence");
+		expect16(snapshot[5], 16'd0, "rejected receipt pending transaction");
+		expect16(snapshot[6], 16'd0, "rejected receipt has no pending sequence");
+		expect16(snapshot[7], 16'd0, "rejected receipt active transaction");
+		expect16(snapshot[8], 16'd0, "rejected receipt active sequence");
+		expect16(
+			snapshot[9],
+			MAGIK_REJECT_MISSING_WORD,
+			"interrupted receipt rejection reason"
+		);
+		expect16(snapshot[10], crc, "rejected receipt CRC");
 		requirement_coverage[4] = 1'b1;
 
 		// Vblank after every SET payload word cannot expose the in-flight bundle.
@@ -792,6 +850,7 @@ module tb_mister_magik_vblank_latch;
 					if(model_pending) begin
 						model_active_seq = model_pending_seq;
 						model_pending = 1'b0;
+						model_pending_seq = 16'd0;
 						model_flip_count = model_flip_count + 1'd1;
 						model_epoch = model_epoch + 1'd1;
 					end
@@ -807,6 +866,7 @@ module tb_mister_magik_vblank_latch;
 					legacy_write = 1'b0;
 					model_active_seq = 16'd0;
 					model_pending = 1'b0;
+					model_pending_seq = 16'd0;
 					model_epoch = model_epoch + 1'd1;
 				end
 				default: check_status_crc();
