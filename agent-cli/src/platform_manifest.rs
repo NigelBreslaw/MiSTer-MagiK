@@ -443,7 +443,7 @@ fn validate_metadata(artifacts: &Artifacts) -> AgentResult<(String, String)> {
     Ok((contract.clone(), menu.clone()))
 }
 
-fn qualification_candidate_id(values: &BTreeMap<String, String>) -> String {
+pub(crate) fn qualification_candidate_id(values: &BTreeMap<String, String>) -> String {
     let mut hash = Sha256::new();
     for field in FIELDS {
         if *field == "qualification_candidate_id" {

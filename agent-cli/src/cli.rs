@@ -911,6 +911,8 @@ mod tests {
                 "latch.rbf",
                 "--latch-metadata",
                 "latch.txt",
+                "--platform-bundle-manifest",
+                "platform-bundle-v0.2.json",
                 "--main-revision",
                 &main_revision,
                 "--magik-revision",
