@@ -12,6 +12,15 @@ const MAX_PARTICLES: usize = 98_304;
 const MAX_TRAIL_SAMPLES: u8 = 48;
 const SOLAR_CHRYSANTHEMUM_V2: &str =
     include_str!("../assets/particles/fireworks-v2/solar-chrysanthemum-v2.json");
+const RECURSIVE_HALO_V2: &str =
+    include_str!("../assets/particles/fireworks-v2/recursive-halo-v2.json");
+const COPPER_WILLOW_RAIN_V2: &str =
+    include_str!("../assets/particles/fireworks-v2/copper-willow-rain-v2.json");
+const PHOENIX_COMET_V2: &str =
+    include_str!("../assets/particles/fireworks-v2/phoenix-comet-v2.json");
+const MAGNETIC_FLOWER_V2: &str =
+    include_str!("../assets/particles/fireworks-v2/magnetic-flower-v2.json");
+const OLED_PEONY_V2: &str = include_str!("../assets/particles/fireworks-v2/oled-peony-v2.json");
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct FireworkV2RenderStats {
@@ -202,6 +211,11 @@ impl FireworkV2Renderer {
 pub fn embedded_firework_v2_json(id: &str) -> Option<&'static str> {
     match id.trim().to_ascii_lowercase().as_str() {
         "solar-chrysanthemum-v2" | "solar-v2" => Some(SOLAR_CHRYSANTHEMUM_V2),
+        "recursive-halo-v2" | "halo-v2" => Some(RECURSIVE_HALO_V2),
+        "copper-willow-rain-v2" | "copper-v2" => Some(COPPER_WILLOW_RAIN_V2),
+        "phoenix-comet-v2" | "phoenix-v2" => Some(PHOENIX_COMET_V2),
+        "magnetic-flower-v2" | "magnetic-v2" => Some(MAGNETIC_FLOWER_V2),
+        "oled-peony-v2" | "oled-v2" => Some(OLED_PEONY_V2),
         _ => None,
     }
 }
