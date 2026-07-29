@@ -1,110 +1,96 @@
-# FPGA latch-v3 release requirements
+# FPGA latch-v4 production requirements
 
-The latch is a production subsystem. Its source lives under
-`mister/platform/fpga/menu-vblank-latch/`, and its installed RBF lives under
-`/media/fat/mister-magik/fpga/`. Root `/media/fat/menu.rbf` is stock firmware
-owned by `update_all`. Every new RBF hash must complete this qualification
-before platform-manifest activation.
+Latch v4 is the only production protocol. New builds must not contain v2/v3
+negotiation, decoding, fixtures, feature switches, fallback presentation, or
+rollback paths. Main, the scanout module, the latch RBF, and the MagiK runtime
+are one platform candidate and are installed or rejected as one transaction.
 
-The production scope is commands `0x57` SET, `0x58` GET, and `0x59` CAPS plus
-the vblank-latched framebuffer route. The retired scanout mailbox, command
-`0x5a`, AXI/ACP access, DMA ownership, and completion fences are not part of
-this design.
+## State invariant
 
-## Behavioral requirements
+For an accepted sequence `N`, only these states are legal:
 
-- **LATCH-V3-001 — discovery and capabilities.** The commands retain magic
-  `0x4d47`, `0x4d48`, and `0x4d49`. CAPS advertises exact protocol 3, flags
-  `0x007f`, limits 1366x768/2736, and a valid CRC.
-- **LATCH-V3-002 — isolated receive staging.** SET words 0–10 enter a private
-  receive bundle. Partial, duplicate, shifted, reordered, restarted, and
-  post-close transactions cannot alter committed pending or active state.
-- **LATCH-V3-003 — CRC commit.** SET word 11 is the sole commit point. It
-  commits only a complete ordered mask with valid CRC and increments post count
-  once.
-- **LATCH-V3-004 — semantic validation.** Enabled routes require RGB565+RXB,
-  legal mode bits, aligned nonzero base, bounded geometry/stride, ordered
-  destination bounds, and non-wrapping widened address arithmetic. Disabled
-  routes are canonical all-zero bundles apart from the opaque sequence.
-- **LATCH-V3-005 — accepted vblank application.** A committed route applies
-  only on synchronized rising vblank and explicit `apply_accepted` feedback.
-  Preempted applies remain pending.
-- **LATCH-V3-006 — replacement arbitration.** Pending replacement increments
-  drop once. If old apply and new commit coincide, old applies, new remains
-  pending, and no replacement drop is counted.
-- **LATCH-V3-007 — coherent status.** GET snapshots all thirteen non-CRC words
-  at command start and returns one coherent snapshot plus CRC despite apply or
-  legacy activity during the read.
-- **LATCH-V3-008 — active ownership.** Authoritative legacy Main `LFB_*` writes
-  win same-edge arbitration, clear MagiK ownership/active sequence, and advance
-  route epoch. Accepted MagiK applies restore ownership and advance epoch.
-- **LATCH-V3-009 — rejection evidence.** A malformed transaction increments
-  reject count once and publishes its four-bit reason without changing pending
-  state.
-- **LATCH-V3-010 — finite-width behavior.** Sequences are opaque 16-bit values.
-  Post, flip, drop, reject, and epoch counters wrap modulo 65,536 without
-  changing arbitration.
-- **LATCH-V3-011 — transition compatibility.** New runtime may negotiate the
-  frozen protocol-v2 RBF for interrupted upgrades and rollback. It never
-  downgrades malformed v3 traffic. Every newly built FPGA release is v3.
-- **LATCH-V3-012 — production integration.** The simulated command/strobe
-  bridge is the exact SystemVerilog module copied into the RBF. All three
-  opcodes are checked for upstream conflicts and the complete `sys_top` apply
-  bundle is structurally verified.
+- `accepted=N`, `active=N`, `pending=false`; or
+- `accepted=N`, `active=N-1`, `pending=true`, `pending_sequence=N`.
 
-## Requirement-to-test matrix
+`accepted=N`, `active=N-1`, `pending=false` is forbidden. An interrupted SET
+is a rejected attempt; it does not advance accepted state and must never be
+described as posted.
 
-Retained results must identify the exact source, component, RBF, and report
-hashes under test.
+Every SET start advances the 16-bit FPGA transaction identifier. Software
+extends transaction and sequence wrap into 64-bit journal counters. Every
+attempt has exactly one CRC-protected terminal receipt. A post is accepted by
+software only when the receipt identifies the attempted transaction and
+sequence, accepted state advances once, pending or active names that same
+transaction, and active confirmation reaches it while the FPGA lock is held.
+An ambiguous SET is never retried.
 
-| Requirement | Deterministic gate | Hardware evidence |
-| --- | --- | --- |
-| LATCH-V3-001 | Exact CAPS payload and golden CRC | Passive report shows exact v3 profile |
-| LATCH-V3-002/003 | Vblank after every SET word; corrupt every word/CRC | No partial active geometry or pending corruption |
-| LATCH-V3-004 | Every semantic rejection and canonical disabled route | Deliberate invalid posts reject once and recover |
-| LATCH-V3-005/006 | Apply/commit, apply/reject, replacement, falling/no-edge cases | Flip/post/drop deltas match reference behavior |
-| LATCH-V3-007 | Route change after every GET word; snapshot CRC | Status agrees with authoritative active route |
-| LATCH-V3-008 | Same-edge legacy collision and MagiK return | Ownership, sequence, epoch, and `LFB_*` stay consistent |
-| LATCH-V3-009/010 | Reject and every counter/sequence wrap | Soak has no unexpected reject/drop delta |
-| LATCH-V3-011 | Rust v2/v3 negotiation and CRC/no-downgrade regressions | v2 rollback works; old-runtime/v3 pairing rejects safely |
-| LATCH-V3-012 | Direct RTL and production-bridge simulation | Stock comparison, lifecycle, and rollback |
+## Wire and ownership requirements
 
-## Candidate and custom-delta gates
+- Protocol is exactly `4`; capabilities are exactly `0x01ff`.
+- SET, status, diagnostics, capabilities, and receipt messages are
+  CRC-16/CCITT-FALSE protected.
+- A second SET while presentation is pending is rejected and cannot replace the
+  pending frame.
+- Active base, geometry, sequence, and transaction become visible atomically;
+  pending clears only on that successful edge.
+- Main owns every FPGA SPI/GPO writer until it transfers an ownership epoch to
+  MagiK. Cross-owner writes are blocked and counted.
+- Main recovers ownership before handoff, shutdown, restart, or terminal
+  recovery.
+- Runtime failure freezes the last confirmed frame. There is no fb0 fallback,
+  black compatibility route, or compatibility display popup.
 
-A candidate is eligible only when all of the following are retained:
+## Diagnostic identity
 
-1. Merged MagiK commit, pinned Menu commit, FPGA component ID, protocol version
-   and hash, patch/RTL/bridge hashes, Quartus 17.0 identity/seed, RBF hash,
-   immutable workflow URL, and every report hash.
-2. Deterministic contract generation, direct RTL simulation, production-bridge
-   integration simulation, warning-clean lint, complete reachable line/branch
-   coverage, and explicit functional coverpoints.
-3. A stock-versus-patched Quartus comparison with identical source, toolchain,
-   settings, and seed. The patch adds no warning, inferred latch, unconstrained
-   endpoint, negative slack, nonzero TNS, or unreviewed CDC finding.
-4. Hardware evidence bound to the candidate: 20 cold starts, 100 launcher
-   first-use restarts, 100 Main-mediated RBF reload/returns, 50 core
-   handoff/returns, at least 10,000 posts under load, deliberate replacement
-   and corruption, HDMI 720p/1080p, CRT 240p/288p/480p/576p, a two-hour primary
-   soak, and a second-unit/display matrix.
-5. Zero unexpected reject/drop increments, CRC or malformed-status errors,
-   persistent latch episodes, crashes, or reboots. Physical sink observation
-   remains mandatory; framebuffer content alone is insufficient.
-6. New runtime with v2 and v3 RBFs, old runtime with v2, safe rejection of the
-   interrupted old-runtime/v3 pairing, v3-to-v2 rollback, update_all overwrite,
-   and fresh installation.
-7. Independent Rust and FPGA review of the final diff, component identity,
-   workflow triggers, updater safety, rollback, and documentation.
+Every current report uses `mister-magik-latch-failure-report-v2` and includes:
 
-## Historical artifacts
+- runtime version, build number, source revision/dirty state, and binary hash;
+- platform release number/tag, bundle ID, candidate ID, and manifest hash;
+- Main, scanout-module, and latch-RBF hashes and source revisions;
+- protocol/capability identity;
+- device boot ID and launcher session ID;
+- classification and any validation failure.
 
-Protocol-v2 RBFs and their evidence are retained only for rollback validation.
-They require the verifier's explicit `--historical-v2` mode and cannot satisfy
-a new build or qualification gate. The superseded candidate disposition is in
-[FPGA latch release signoff](fpga-latch-release-signoff.md). A candidate hash
-listed there is not approval for protocol v3.
+Reports live under an exact release/bundle/build/binary/boot/session namespace.
+Only the namespace’s own `latest.json` is current. The root
+`current-identity.json` is a pointer containing the same identity; readers
+reject a pointed report whose identity differs. Reports without v2 identity
+are `legacy-unidentified`; internally inconsistent identities are
+`mixed-invalid`. Neither is health or qualification evidence.
 
-The implementation PR ends after its merge and successful checks. The
-**Build MiSTer MagiK Platform** workflow is dispatched separately on `main`
-with `publish=false`; promotion and attended `scripts/agent release qualify`
-remain separately authorized gates.
+## Deterministic gates
+
+Simulation must include named reproductions for `1213/1212/no-pending` and
+`962/961/no-pending`, sequence and transaction wrap, interruption after every
+SET word, every vblank phase, reads on the apply edge, suppressed apply,
+concurrent Main/runtime/agent access, injected illegal pending clearing, and
+seeded randomized interleavings. Assertions must make the forbidden invariant,
+unreceipted active state, and rejected-attempt mutation fatal.
+
+## Six-hour qualification
+
+Qualification is an attended, identity-locked run of the production renderer,
+real catalog worker/scanner, media decoders, and input paths. It repeatedly
+forces cold catalog generation while rotating particle animation, transitions,
+rapid Arcade scrolling, preview/archive decoding, search/model churn, and
+keyboard/controller/pointer traffic.
+
+The exact candidate must retain at least:
+
+- six hours elapsed and 12 cold catalog generations;
+- 1,000,000 accepted and active-confirmed frames;
+- 250,000 catalog/UI overlap frames;
+- 25,000 frames in every UI stress class;
+- 4,000 authoritative receipt/status samples;
+- zero forbidden state, rejected production post, ambiguous transaction,
+  blocked Main write, crash, hang, black frame, or compatibility screen;
+- the approved latency and memory-stability bounds.
+
+Evidence is rejected if release, bundle, candidate, manifest, runtime build,
+runtime binary, Main, module, RBF, boot, or launcher session identity differs.
+Any unknown or mixed report created during the run fails qualification. Any
+source or artifact change requires a complete rerun.
+
+After qualification, the identical candidate tuple runs a seven-day canary
+with daily concurrent cold-catalog/UI stress. Promotion never rebuilds or
+relabels the tuple or its evidence.
