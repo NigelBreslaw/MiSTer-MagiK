@@ -5,6 +5,7 @@
 
 use crate::bitmap_text::{ConsoleFont, ConsoleTypeface};
 use crate::fireworks::{FireworkRenderer, embedded_firework_json};
+use crate::fireworks_v2::{FireworkV2Renderer, embedded_firework_v2_json};
 use crate::framebuffer::mapped::Pixel;
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -179,6 +180,12 @@ pub enum ParticleDemoKind {
     PhoenixComet,
     MagneticFlower,
     OledPeony,
+    SolarChrysanthemumV2,
+    RecursiveHaloV2,
+    CopperWillowRainV2,
+    PhoenixCometV2,
+    MagneticFlowerV2,
+    OledPeonyV2,
     FireEmbers,
     SpiralGalaxy,
     WarpSpeed,
@@ -191,13 +198,19 @@ pub enum ParticleDemoKind {
 }
 
 impl ParticleDemoKind {
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 21] = [
         Self::SolarChrysanthemum,
         Self::RecursiveHalo,
         Self::CopperWillowRain,
         Self::PhoenixComet,
         Self::MagneticFlower,
         Self::OledPeony,
+        Self::SolarChrysanthemumV2,
+        Self::RecursiveHaloV2,
+        Self::CopperWillowRainV2,
+        Self::PhoenixCometV2,
+        Self::MagneticFlowerV2,
+        Self::OledPeonyV2,
         Self::FireEmbers,
         Self::SpiralGalaxy,
         Self::WarpSpeed,
@@ -228,6 +241,12 @@ impl ParticleDemoKind {
             Self::PhoenixComet => "PHOENIX COMET",
             Self::MagneticFlower => "MAGNETIC FLOWER",
             Self::OledPeony => "OLED PEONY",
+            Self::SolarChrysanthemumV2 => "SOLAR CHRYSANTHEMUM V2",
+            Self::RecursiveHaloV2 => "RECURSIVE HALO V2",
+            Self::CopperWillowRainV2 => "COPPER WILLOW RAIN V2",
+            Self::PhoenixCometV2 => "PHOENIX COMET V2",
+            Self::MagneticFlowerV2 => "MAGNETIC FLOWER V2",
+            Self::OledPeonyV2 => "OLED PEONY V2",
             Self::FireEmbers => "FIRE + EMBERS",
             Self::SpiralGalaxy => "SPIRAL GALAXY",
             Self::WarpSpeed => "WARP SPEED",
@@ -249,6 +268,12 @@ impl ParticleDemoKind {
             Self::PhoenixComet => "phoenix-comet",
             Self::MagneticFlower => "magnetic-flower",
             Self::OledPeony => "oled-peony",
+            Self::SolarChrysanthemumV2 => "solar-chrysanthemum-v2",
+            Self::RecursiveHaloV2 => "recursive-halo-v2",
+            Self::CopperWillowRainV2 => "copper-willow-rain-v2",
+            Self::PhoenixCometV2 => "phoenix-comet-v2",
+            Self::MagneticFlowerV2 => "magnetic-flower-v2",
+            Self::OledPeonyV2 => "oled-peony-v2",
             Self::FireEmbers => "fire-embers",
             Self::SpiralGalaxy => "spiral-galaxy",
             Self::WarpSpeed => "warp-speed",
@@ -270,15 +295,21 @@ impl ParticleDemoKind {
             Self::PhoenixComet => "04/15 PHOENIX COMET",
             Self::MagneticFlower => "05/15 MAGNETIC FLOWER",
             Self::OledPeony => "06/15 OLED PEONY",
-            Self::FireEmbers => "07/15 FIRE + EMBERS",
-            Self::SpiralGalaxy => "08/15 SPIRAL GALAXY",
-            Self::WarpSpeed => "09/15 WARP SPEED",
-            Self::MeteorShower => "10/15 METEOR SHOWER",
-            Self::Weather => "11/15 WEATHER",
-            Self::ParticlePortal => "12/15 PARTICLE PORTAL",
-            Self::ElectricStorm => "13/15 ELECTRIC STORM",
-            Self::FountainWaterfall => "14/15 FOUNTAIN / WATERFALL",
-            Self::ArcadeCabinet => "15/15 ARCADE CABINET",
+            Self::SolarChrysanthemumV2 => "07/21 SOLAR CHRYSANTHEMUM V2",
+            Self::RecursiveHaloV2 => "08/21 RECURSIVE HALO V2",
+            Self::CopperWillowRainV2 => "09/21 COPPER WILLOW RAIN V2",
+            Self::PhoenixCometV2 => "10/21 PHOENIX COMET V2",
+            Self::MagneticFlowerV2 => "11/21 MAGNETIC FLOWER V2",
+            Self::OledPeonyV2 => "12/21 OLED PEONY V2",
+            Self::FireEmbers => "13/21 FIRE + EMBERS",
+            Self::SpiralGalaxy => "14/21 SPIRAL GALAXY",
+            Self::WarpSpeed => "15/21 WARP SPEED",
+            Self::MeteorShower => "16/21 METEOR SHOWER",
+            Self::Weather => "17/21 WEATHER",
+            Self::ParticlePortal => "18/21 PARTICLE PORTAL",
+            Self::ElectricStorm => "19/21 ELECTRIC STORM",
+            Self::FountainWaterfall => "20/21 FOUNTAIN / WATERFALL",
+            Self::ArcadeCabinet => "21/21 ARCADE CABINET",
         }
     }
 
@@ -296,6 +327,19 @@ impl ParticleDemoKind {
     }
 
     #[must_use]
+    pub const fn firework_v2_id(self) -> Option<&'static str> {
+        match self {
+            Self::SolarChrysanthemumV2 => Some("solar-chrysanthemum-v2"),
+            Self::RecursiveHaloV2 => Some("recursive-halo-v2"),
+            Self::CopperWillowRainV2 => Some("copper-willow-rain-v2"),
+            Self::PhoenixCometV2 => Some("phoenix-comet-v2"),
+            Self::MagneticFlowerV2 => Some("magnetic-flower-v2"),
+            Self::OledPeonyV2 => Some("oled-peony-v2"),
+            _ => None,
+        }
+    }
+
+    #[must_use]
     pub const fn starting_count(self) -> usize {
         match self {
             Self::SolarChrysanthemum
@@ -303,7 +347,13 @@ impl ParticleDemoKind {
             | Self::CopperWillowRain
             | Self::PhoenixComet
             | Self::MagneticFlower
-            | Self::OledPeony => 0,
+            | Self::OledPeony
+            | Self::SolarChrysanthemumV2
+            | Self::RecursiveHaloV2
+            | Self::CopperWillowRainV2
+            | Self::PhoenixCometV2
+            | Self::MagneticFlowerV2
+            | Self::OledPeonyV2 => 0,
             Self::FireEmbers | Self::MeteorShower => 20_480,
             Self::SpiralGalaxy => 81_920,
             Self::WarpSpeed => 45_056,
@@ -376,7 +426,7 @@ pub struct ParticleShowcaseRenderer {
     config: ParticleShowcaseConfig,
     demo: ParticleDemoKind,
     demo_started_at: Duration,
-    firework_renderer: Option<FireworkRenderer>,
+    firework_renderer: Option<ShowcaseFireworkRenderer>,
     firework_capture_time: Option<Duration>,
     hud_visible: bool,
     pool: ParticleShowcasePool,
@@ -392,6 +442,35 @@ pub struct ParticleShowcaseRenderer {
     hud_font: ConsoleFont,
     hud_pixels: Vec<Pixel>,
     renderer_scratch_bytes: usize,
+}
+
+enum ShowcaseFireworkRenderer {
+    V1(FireworkRenderer),
+    V2(FireworkV2Renderer),
+}
+
+impl ShowcaseFireworkRenderer {
+    fn duration(&self) -> Duration {
+        match self {
+            Self::V1(renderer) => renderer.duration(),
+            Self::V2(renderer) => renderer.duration(),
+        }
+    }
+
+    fn render(
+        &self,
+        destination: &mut [Rgb565Pixel],
+        elapsed: Duration,
+    ) -> Result<(usize, usize, usize), String> {
+        match self {
+            Self::V1(renderer) => renderer
+                .render(destination, elapsed)
+                .map(|stats| (stats.particles, stats.visible, stats.pixel_writes)),
+            Self::V2(renderer) => renderer
+                .render(destination, elapsed)
+                .map(|stats| (stats.particles, stats.visible, stats.pixel_writes)),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -639,7 +718,7 @@ impl ParticleShowcaseRenderer {
             .unwrap_or_else(|| Duration::from_millis(logical_ms as u64));
         let raster_started = Instant::now();
         let raster_cpu_started = thread_cpu_time_us();
-        let stats = renderer.render(destination, logical_elapsed)?;
+        let (particles, visible, pixel_writes) = renderer.render(destination, logical_elapsed)?;
         if self.hud_visible {
             self.draw_hud(destination, &mut dirty_offsets);
         }
@@ -649,8 +728,8 @@ impl ParticleShowcaseRenderer {
         Ok(ParticleShowcaseRenderStats {
             demo: self.demo,
             beat: firework_beat(logical_elapsed),
-            count: stats.particles,
-            visible: stats.visible,
+            count: particles,
+            visible,
             simulation_us: 0,
             simulation_cpu_us: 0,
             projection_us: 0,
@@ -661,7 +740,7 @@ impl ParticleShowcaseRenderer {
             raster_us,
             raster_cpu_us,
             segment_count: 0,
-            attempted_pixel_writes: stats.pixel_writes,
+            attempted_pixel_writes: pixel_writes,
             clipped_commands: 0,
             simulation_bytes: self.pool.allocated_bytes(),
             renderer_scratch_bytes: self.renderer_scratch_bytes,
@@ -686,15 +765,33 @@ impl ParticleShowcaseRenderer {
     fn reset_demo(&mut self, demo: ParticleDemoKind, elapsed: Duration) {
         self.demo = demo;
         self.demo_started_at = elapsed;
-        self.firework_renderer = demo.firework_id().map(|id| {
-            FireworkRenderer::from_json(
-                embedded_firework_json(id).expect("registered firework must be embedded"),
-                self.config.width,
-                self.config.height,
-                self.config.seed,
-            )
-            .expect("embedded firework must satisfy its runtime contract")
-        });
+        self.firework_renderer = demo
+            .firework_id()
+            .map(|id| {
+                ShowcaseFireworkRenderer::V1(
+                    FireworkRenderer::from_json(
+                        embedded_firework_json(id).expect("registered firework must be embedded"),
+                        self.config.width,
+                        self.config.height,
+                        self.config.seed,
+                    )
+                    .expect("embedded V1 firework must satisfy its runtime contract"),
+                )
+            })
+            .or_else(|| {
+                demo.firework_v2_id().map(|id| {
+                    ShowcaseFireworkRenderer::V2(
+                        FireworkV2Renderer::from_json(
+                            embedded_firework_v2_json(id)
+                                .expect("registered V2 firework must be embedded"),
+                            self.config.width,
+                            self.config.height,
+                            self.config.seed,
+                        )
+                        .expect("embedded V2 firework must satisfy its runtime contract"),
+                    )
+                })
+            });
         self.pool.reset(demo, self.config.seed);
         self.heat.fill(0);
         self.heat_frame = u64::MAX;
@@ -753,7 +850,13 @@ impl ParticleShowcaseRenderer {
             | ParticleDemoKind::CopperWillowRain
             | ParticleDemoKind::PhoenixComet
             | ParticleDemoKind::MagneticFlower
-            | ParticleDemoKind::OledPeony => {
+            | ParticleDemoKind::OledPeony
+            | ParticleDemoKind::SolarChrysanthemumV2
+            | ParticleDemoKind::RecursiveHaloV2
+            | ParticleDemoKind::CopperWillowRainV2
+            | ParticleDemoKind::PhoenixCometV2
+            | ParticleDemoKind::MagneticFlowerV2
+            | ParticleDemoKind::OledPeonyV2 => {
                 self.commands.clear();
                 self.segments.clear();
                 0
@@ -784,7 +887,13 @@ impl ParticleShowcaseRenderer {
             | ParticleDemoKind::CopperWillowRain
             | ParticleDemoKind::PhoenixComet
             | ParticleDemoKind::MagneticFlower
-            | ParticleDemoKind::OledPeony => firework_beat(Duration::from_secs_f32(seconds)),
+            | ParticleDemoKind::OledPeony
+            | ParticleDemoKind::SolarChrysanthemumV2
+            | ParticleDemoKind::RecursiveHaloV2
+            | ParticleDemoKind::CopperWillowRainV2
+            | ParticleDemoKind::PhoenixCometV2
+            | ParticleDemoKind::MagneticFlowerV2
+            | ParticleDemoKind::OledPeonyV2 => firework_beat(Duration::from_secs_f32(seconds)),
             ParticleDemoKind::FireEmbers => match seconds.rem_euclid(10.0) {
                 value if value < 3.5 => "flame",
                 value if value < 7.0 => "gust",
@@ -2358,7 +2467,13 @@ fn showcase_palette(demo: ParticleDemoKind) -> &'static [Rgb565Pixel; 8] {
         | ParticleDemoKind::CopperWillowRain
         | ParticleDemoKind::PhoenixComet
         | ParticleDemoKind::MagneticFlower
-        | ParticleDemoKind::OledPeony => &FIREWORKS_PALETTE,
+        | ParticleDemoKind::OledPeony
+        | ParticleDemoKind::SolarChrysanthemumV2
+        | ParticleDemoKind::RecursiveHaloV2
+        | ParticleDemoKind::CopperWillowRainV2
+        | ParticleDemoKind::PhoenixCometV2
+        | ParticleDemoKind::MagneticFlowerV2
+        | ParticleDemoKind::OledPeonyV2 => &FIREWORKS_PALETTE,
         ParticleDemoKind::FireEmbers => &FIRE_PALETTE,
         ParticleDemoKind::SpiralGalaxy => &GALAXY_PALETTE,
         ParticleDemoKind::WarpSpeed => &WARP_PALETTE,
@@ -2502,7 +2617,7 @@ mod tests {
 
     #[test]
     fn demo_order_and_wrapping_are_stable() {
-        assert_eq!(ParticleDemoKind::ALL.len(), 15);
+        assert_eq!(ParticleDemoKind::ALL.len(), 21);
         assert_eq!(
             ParticleDemoKind::SolarChrysanthemum.offset_wrapped(-1),
             ParticleDemoKind::ArcadeCabinet
@@ -2529,10 +2644,18 @@ mod tests {
             Some(ParticleDemoKind::OledPeony)
         );
         assert_eq!(
+            ParticleDemoKind::parse("oled-peony-v2"),
+            Some(ParticleDemoKind::OledPeonyV2)
+        );
+        assert_eq!(
             ParticleDemoKind::parse("particle-portal"),
             Some(ParticleDemoKind::ParticlePortal)
         );
-        assert_eq!(ParticleDemoKind::parse("16"), None);
+        assert_eq!(
+            ParticleDemoKind::parse("12"),
+            Some(ParticleDemoKind::OledPeonyV2)
+        );
+        assert_eq!(ParticleDemoKind::parse("22"), None);
         assert_eq!(ParticleDemoKind::parse("unknown"), None);
     }
 
