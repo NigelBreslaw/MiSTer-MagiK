@@ -35,6 +35,7 @@ mod macos {
     use mister_magik_fb::preview_transition::{
         PreviewTransitionController, Rgb565PreviewTransitionCompositor, transition_duration,
     };
+    use mister_magik_fb::ui_display::CrtUiMetrics;
     use mister_magik_fb::ui_preview_fixtures::{FixtureScreenshot, UiPreviewFixtures};
     use mister_magik_fb::visual_composition::{
         ArcadeVisualLayer, PreviewFrame, PreviewPixels, PreviewSurface, ScreenshotTileImage,
@@ -116,7 +117,7 @@ mod macos {
         let ui = launcher.global::<MisterUi>();
         ui.set_window_width(FRAME_WIDTH as i32);
         ui.set_window_height(FRAME_HEIGHT as i32);
-        ui.set_crt_layout(false);
+        ui.set_crt_layout(options.display_profile.is_crt());
         let bridge = launcher.global::<MisterBridge>();
         initialize_bridge(&bridge);
         launcher.show()?;
@@ -147,6 +148,7 @@ mod macos {
             content,
             !options.no_scan,
             !options.no_download,
+            options.display_profile,
         )?;
         application.select_scenario(options.scenario);
         if let Some(output) = options.output {
@@ -285,6 +287,7 @@ mod macos {
         schedule_frame: u64,
         next_frame_deadline: Instant,
         focused: bool,
+        display_profile: DisplayProfile,
     }
 
     impl PreviewApplication {
@@ -299,11 +302,15 @@ mod macos {
             content: PreviewContent,
             scan_card: bool,
             download_media: bool,
+            display_profile: DisplayProfile,
         ) -> Result<Self, Box<dyn Error>> {
             let fixtures = UiPreviewFixtures::new()?;
             let (catalog, catalog_generation, catalog_source) =
                 preview_catalog(&content, fixtures.catalog)?;
-            let mut launcher_nav = LauncherNav::new();
+            let mut launcher_nav = LauncherNav::for_crt_layout_with_row_height(
+                display_profile.is_crt(),
+                CrtUiMetrics::for_framebuffer(FRAME_WIDTH, FRAME_HEIGHT).game_row_height,
+            );
             let settings_store = FileSettingsStore::new(default_settings_path());
             launcher_nav.settings = settings_store.load();
             launcher_nav.catalog_build_started();
@@ -391,6 +398,7 @@ mod macos {
                 schedule_frame: 1,
                 next_frame_deadline,
                 focused: true,
+                display_profile,
             };
             application.select_scenario(scenario);
             if headless {
@@ -422,12 +430,13 @@ mod macos {
 
         fn window_title(&self) -> String {
             format!(
-                "MiSTer MagiK UI Preview — {} — {} — {} Hz — {} — {}",
+                "MiSTer MagiK UI Preview — {} — {} — {} Hz — {} — {} — {}",
                 self.scenario.label(),
                 self.scenario.shortcut(),
                 self.refresh_hz,
                 self.content.label(),
                 self.catalog_source,
+                self.display_profile.label(),
             )
         }
 
@@ -1490,6 +1499,7 @@ mod macos {
         cache_root: Option<PathBuf>,
         no_scan: bool,
         no_download: bool,
+        display_profile: DisplayProfile,
     }
 
     impl PreviewOptions {
@@ -1507,6 +1517,7 @@ mod macos {
             let mut cache_root = None;
             let mut no_scan = false;
             let mut no_download = false;
+            let mut display_profile = DisplayProfile::Hdmi;
             let mut arguments = arguments.into_iter();
             while let Some(argument) = arguments.next() {
                 match argument.as_str() {
@@ -1577,9 +1588,15 @@ mod macos {
                     }
                     "--no-scan" => no_scan = true,
                     "--no-download" => no_download = true,
+                    "--display-profile" => {
+                        let value = arguments
+                            .next()
+                            .ok_or("--display-profile requires hdmi or crt")?;
+                        display_profile = DisplayProfile::parse(&value)?;
+                    }
                     "--help" | "-h" => {
                         return Err(
-                            "usage: mister-magik-ui-preview [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N | --time-ms N] [--firework ID] [--firework-spec FILE.json] [--hud on|off] [--output FILE.ppm]"
+                            "usage: mister-magik-ui-preview [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--display-profile hdmi|crt] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N | --time-ms N] [--firework ID] [--firework-spec FILE.json] [--hud on|off] [--output FILE.ppm]"
                                 .into(),
                         );
                     }
@@ -1609,7 +1626,38 @@ mod macos {
                 cache_root,
                 no_scan,
                 no_download,
+                display_profile,
             })
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    enum DisplayProfile {
+        #[default]
+        Hdmi,
+        Crt,
+    }
+
+    impl DisplayProfile {
+        fn parse(value: &str) -> Result<Self, String> {
+            match value.trim().to_ascii_lowercase().as_str() {
+                "hdmi" => Ok(Self::Hdmi),
+                "crt" | "crt-480p" => Ok(Self::Crt),
+                _ => Err(format!(
+                    "invalid display profile {value:?}; expected hdmi or crt"
+                )),
+            }
+        }
+
+        const fn is_crt(self) -> bool {
+            matches!(self, Self::Crt)
+        }
+
+        const fn label(self) -> &'static str {
+            match self {
+                Self::Hdmi => "display:hdmi",
+                Self::Crt => "display:crt-layout",
+            }
         }
     }
 
@@ -2157,6 +2205,19 @@ mod macos {
             assert_eq!(options.output, Some(PathBuf::from("out.ppm")));
             assert_eq!(options.refresh_rate, RefreshRate::Auto);
             assert_eq!(options.content_mode, ContentMode::Auto);
+            assert_eq!(options.display_profile, DisplayProfile::Hdmi);
+        }
+
+        #[test]
+        fn preview_options_parse_crt_and_offline_card_controls() {
+            let options = PreviewOptions::parse(
+                ["--display-profile", "crt", "--no-scan", "--no-download"].map(String::from),
+            )
+            .unwrap();
+
+            assert_eq!(options.display_profile, DisplayProfile::Crt);
+            assert!(options.no_scan);
+            assert!(options.no_download);
         }
 
         #[test]
