@@ -158,6 +158,16 @@ const RIBBON_PALETTE: [Rgb565Pixel; 8] = [
     Rgb565Pixel(0x8fff),
     Rgb565Pixel(0xff75),
 ];
+const FLOW_PALETTE: [Rgb565Pixel; 8] = [
+    Rgb565Pixel(0x0808),
+    Rgb565Pixel(0x1012),
+    Rgb565Pixel(0x201f),
+    Rgb565Pixel(0x03ff),
+    Rgb565Pixel(0x67ff),
+    Rgb565Pixel(0xafea),
+    Rgb565Pixel(0xffa0),
+    Rgb565Pixel(0xffff),
+];
 const ARCADE_CLOUD: &[u8] = include_bytes!("../assets/particles/arcade-cabinet.pcloud");
 const PARTICLE_CLOUD_MAGIC: &[u8; 8] = b"PCLOUD1\0";
 const PARTICLE_CLOUD_HEADER_BYTES: usize = 28;
@@ -221,10 +231,11 @@ pub enum ParticleDemoKind {
     ArcadeCabinet,
     ProceduralSpriteMaterials,
     VariableWidthRibbons,
+    CurlNoiseFlowField,
 }
 
 impl ParticleDemoKind {
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 24] = [
         Self::SolarChrysanthemum,
         Self::RecursiveHalo,
         Self::CopperWillowRain,
@@ -248,6 +259,7 @@ impl ParticleDemoKind {
         Self::ArcadeCabinet,
         Self::ProceduralSpriteMaterials,
         Self::VariableWidthRibbons,
+        Self::CurlNoiseFlowField,
     ];
 
     #[must_use]
@@ -286,6 +298,7 @@ impl ParticleDemoKind {
             Self::ArcadeCabinet => "ARCADE CABINET",
             Self::ProceduralSpriteMaterials => "PROCEDURAL SPRITE MATERIALS",
             Self::VariableWidthRibbons => "VARIABLE-WIDTH RIBBONS",
+            Self::CurlNoiseFlowField => "CURL-NOISE FLOW FIELD",
         }
     }
 
@@ -315,6 +328,7 @@ impl ParticleDemoKind {
             Self::ArcadeCabinet => "arcade-cabinet",
             Self::ProceduralSpriteMaterials => "procedural-sprite-materials",
             Self::VariableWidthRibbons => "variable-width-ribbons",
+            Self::CurlNoiseFlowField => "curl-noise-flow-field",
         }
     }
 
@@ -379,6 +393,7 @@ impl ParticleDemoKind {
             Self::ArcadeCabinet => 12_288,
             Self::ProceduralSpriteMaterials => 16_384,
             Self::VariableWidthRibbons => 8_192,
+            Self::CurlNoiseFlowField => 32_768,
         }
     }
 
@@ -869,6 +884,8 @@ impl ParticleShowcaseRenderer {
             self.initialize_procedural_sprite_materials();
         } else if demo == ParticleDemoKind::VariableWidthRibbons {
             self.initialize_variable_width_ribbons();
+        } else if demo == ParticleDemoKind::CurlNoiseFlowField {
+            self.initialize_curl_noise_flow_field();
         }
     }
 
@@ -919,6 +936,7 @@ impl ParticleShowcaseRenderer {
                 self.project_procedural_sprite_materials(elapsed)
             }
             ParticleDemoKind::VariableWidthRibbons => self.project_variable_width_ribbons(elapsed),
+            ParticleDemoKind::CurlNoiseFlowField => self.project_curl_noise_flow_field(elapsed),
         }
     }
 
@@ -1003,7 +1021,80 @@ impl ParticleShowcaseRenderer {
                 value if value < 22.0 => "crossover",
                 _ => "breakup",
             },
+            ParticleDemoKind::CurlNoiseFlowField => match seconds {
+                value if value < 8.0 => "counter-current",
+                value if value < 22.0 => "curl-pair",
+                _ => "eddy-shift",
+            },
         }
+    }
+
+    fn initialize_curl_noise_flow_field(&mut self) {
+        for index in 0..self.pool.active() {
+            let random = self.pool.random[index];
+            self.pool.x[index] = 24.0 + unit01(random) * 912.0;
+            self.pool.y[index] = 24.0 + unit01(random.rotate_left(11)) * 492.0;
+            self.pool.age[index] = unit01(random.rotate_left(21));
+            self.pool.life[index] = 0.45 + unit01(random.rotate_left(7)) * 0.85;
+            self.pool.style[index] = ((random >> 29) & 7) as u8;
+            self.pool.flags[index] = u8::from(index & 127 == 0);
+        }
+    }
+
+    fn project_curl_noise_flow_field(&mut self, elapsed: Duration) -> usize {
+        self.commands.clear();
+        self.segments.clear();
+        let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
+        let mut clipped = 0usize;
+        for index in (0..self.pool.active()).step_by(4) {
+            let base_x = self.pool.x[index];
+            let base_y = self.pool.y[index];
+            let normalized_x = (base_x - 480.0) / 260.0;
+            let normalized_y = (base_y - 270.0) / 180.0;
+            let phase = seconds * self.pool.life[index] * 0.13 + self.pool.age[index] * 9.0;
+            let wave_x = (normalized_x * 2.1 + phase * 0.37).sin();
+            let wave_y = (normalized_y * 2.7 - phase * 0.29).cos();
+            let left_dx = normalized_x + 0.78;
+            let right_dx = normalized_x - 0.78;
+            let left_radius = (left_dx * left_dx + normalized_y * normalized_y + 0.18).recip();
+            let right_radius = (right_dx * right_dx + normalized_y * normalized_y + 0.18).recip();
+            let vx =
+                -normalized_y * left_radius + normalized_y * right_radius - wave_y * 0.52 + 0.32;
+            let vy = left_dx * left_radius - right_dx * right_radius + wave_x * 0.48;
+            let travel = 32.0 + 34.0 * (phase * 0.73).sin();
+            let x = (base_x + vx * travel + 960.0).rem_euclid(960.0);
+            let y = (base_y + vy * travel + 540.0).rem_euclid(540.0);
+            let tracer = self.pool.flags[index] != 0;
+            let style = if tracer {
+                7
+            } else {
+                usize::from(self.pool.style[index]).min(5)
+            };
+            if !push_screen_command(
+                &mut self.commands,
+                self.config.width,
+                self.config.height,
+                x,
+                y,
+                style as u8,
+                tracer,
+            ) {
+                clipped = clipped.saturating_add(1);
+            }
+            if tracer {
+                self.material_strokes.push(MaterialStroke {
+                    x0: x - vx * 4.0,
+                    y0: y - vy * 4.0,
+                    x1: x,
+                    y1: y,
+                    start_radius: 1,
+                    end_radius: 2,
+                    intensity: 13,
+                    color: FLOW_PALETTE[style],
+                });
+            }
+        }
+        clipped
     }
 
     fn initialize_variable_width_ribbons(&mut self) {
@@ -2734,6 +2825,7 @@ fn showcase_palette(demo: ParticleDemoKind) -> &'static [Rgb565Pixel; 8] {
         ParticleDemoKind::ArcadeCabinet => &ARCADE_PALETTE,
         ParticleDemoKind::ProceduralSpriteMaterials => &MATERIAL_PALETTE,
         ParticleDemoKind::VariableWidthRibbons => &RIBBON_PALETTE,
+        ParticleDemoKind::CurlNoiseFlowField => &FLOW_PALETTE,
     }
 }
 
@@ -2868,13 +2960,13 @@ mod tests {
 
     #[test]
     fn demo_order_and_wrapping_are_stable() {
-        assert_eq!(ParticleDemoKind::ALL.len(), 23);
+        assert_eq!(ParticleDemoKind::ALL.len(), 24);
         assert_eq!(
             ParticleDemoKind::SolarChrysanthemum.offset_wrapped(-1),
-            ParticleDemoKind::VariableWidthRibbons
+            ParticleDemoKind::CurlNoiseFlowField
         );
         assert_eq!(
-            ParticleDemoKind::VariableWidthRibbons.offset_wrapped(1),
+            ParticleDemoKind::CurlNoiseFlowField.offset_wrapped(1),
             ParticleDemoKind::SolarChrysanthemum
         );
         for (index, kind) in ParticleDemoKind::ALL.into_iter().enumerate() {
@@ -2914,7 +3006,11 @@ mod tests {
             ParticleDemoKind::parse("23"),
             Some(ParticleDemoKind::VariableWidthRibbons)
         );
-        assert_eq!(ParticleDemoKind::parse("24"), None);
+        assert_eq!(
+            ParticleDemoKind::parse("24"),
+            Some(ParticleDemoKind::CurlNoiseFlowField)
+        );
+        assert_eq!(ParticleDemoKind::parse("25"), None);
         assert_eq!(ParticleDemoKind::parse("unknown"), None);
     }
 
