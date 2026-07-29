@@ -178,6 +178,16 @@ const DENSITY_PALETTE: [Rgb565Pixel; 8] = [
     Rgb565Pixel(0xff59),
     Rgb565Pixel(0xffff),
 ];
+const CHILD_PALETTE: [Rgb565Pixel; 8] = [
+    Rgb565Pixel(0x1808),
+    Rgb565Pixel(0x400f),
+    Rgb565Pixel(0x8014),
+    Rgb565Pixel(0xf81f),
+    Rgb565Pixel(0x029f),
+    Rgb565Pixel(0x05ff),
+    Rgb565Pixel(0x9ff5),
+    Rgb565Pixel(0xffff),
+];
 const DENSITY_W: usize = 240;
 const DENSITY_H: usize = 135;
 const DENSITY_SCALE: usize = 4;
@@ -246,10 +256,11 @@ pub enum ParticleDemoKind {
     VariableWidthRibbons,
     CurlNoiseFlowField,
     LowResolutionDensityBloom,
+    LayeredChildSystems,
 }
 
 impl ParticleDemoKind {
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 26] = [
         Self::SolarChrysanthemum,
         Self::RecursiveHalo,
         Self::CopperWillowRain,
@@ -275,6 +286,7 @@ impl ParticleDemoKind {
         Self::VariableWidthRibbons,
         Self::CurlNoiseFlowField,
         Self::LowResolutionDensityBloom,
+        Self::LayeredChildSystems,
     ];
 
     #[must_use]
@@ -315,6 +327,7 @@ impl ParticleDemoKind {
             Self::VariableWidthRibbons => "VARIABLE-WIDTH RIBBONS",
             Self::CurlNoiseFlowField => "CURL-NOISE FLOW FIELD",
             Self::LowResolutionDensityBloom => "LOW-RES DENSITY + BLOOM",
+            Self::LayeredChildSystems => "LAYERED CHILD SYSTEMS",
         }
     }
 
@@ -346,6 +359,7 @@ impl ParticleDemoKind {
             Self::VariableWidthRibbons => "variable-width-ribbons",
             Self::CurlNoiseFlowField => "curl-noise-flow-field",
             Self::LowResolutionDensityBloom => "density-bloom",
+            Self::LayeredChildSystems => "layered-child-systems",
         }
     }
 
@@ -412,6 +426,7 @@ impl ParticleDemoKind {
             Self::VariableWidthRibbons => 8_192,
             Self::CurlNoiseFlowField => 32_768,
             Self::LowResolutionDensityBloom => 24_576,
+            Self::LayeredChildSystems => 4_096,
         }
     }
 
@@ -914,6 +929,8 @@ impl ParticleShowcaseRenderer {
             self.initialize_curl_noise_flow_field();
         } else if demo == ParticleDemoKind::LowResolutionDensityBloom {
             self.initialize_density_bloom();
+        } else if demo == ParticleDemoKind::LayeredChildSystems {
+            self.initialize_layered_child_systems();
         }
     }
 
@@ -966,6 +983,7 @@ impl ParticleShowcaseRenderer {
             ParticleDemoKind::VariableWidthRibbons => self.project_variable_width_ribbons(elapsed),
             ParticleDemoKind::CurlNoiseFlowField => self.project_curl_noise_flow_field(elapsed),
             ParticleDemoKind::LowResolutionDensityBloom => self.project_density_bloom(elapsed),
+            ParticleDemoKind::LayeredChildSystems => self.project_layered_child_systems(elapsed),
         }
     }
 
@@ -1060,7 +1078,103 @@ impl ParticleShowcaseRenderer {
                 value if value < 22.0 => "crescent-ridge",
                 _ => "cavity-pulse",
             },
+            ParticleDemoKind::LayeredChildSystems => match seconds {
+                value if value < 7.0 => "parents",
+                value if value < 18.0 => "event-rings",
+                _ => "terminal-children",
+            },
         }
+    }
+
+    fn initialize_layered_child_systems(&mut self) {
+        for index in 0..self.pool.active() {
+            let random = self.pool.random[index];
+            self.pool.age[index] = unit01(random.rotate_left(7));
+            self.pool.life[index] = 0.65 + unit01(random.rotate_left(17)) * 0.7;
+            self.pool.style[index] = ((random >> 29) & 7) as u8;
+            self.pool.flags[index] = (index % 3) as u8;
+        }
+    }
+
+    fn project_layered_child_systems(&mut self, elapsed: Duration) -> usize {
+        self.commands.clear();
+        self.segments.clear();
+        let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
+        let cycle = seconds.rem_euclid(10.0) / 10.0;
+        for parent in 0..3usize {
+            let offset = parent as f32 - 1.0;
+            let head_x = 480.0 + offset * 215.0 + (cycle * std::f32::consts::TAU).sin() * 58.0;
+            let head_y = 420.0 - cycle * 330.0
+                + (cycle * std::f32::consts::PI).sin() * (-72.0 - parent as f32 * 18.0);
+            let color = CHILD_PALETTE[3 + parent];
+            let mut previous = None;
+            for sample in 0..14usize {
+                let trail = sample as f32 / 13.0;
+                let x = head_x - (cycle * 5.0 + parent as f32).cos() * trail * 92.0
+                    + (trail * 17.0 + parent as f32).sin() * 7.0;
+                let y = head_y + trail * (80.0 + parent as f32 * 12.0);
+                if let Some((previous_x, previous_y)) = previous {
+                    self.material_strokes.push(MaterialStroke {
+                        x0: previous_x,
+                        y0: previous_y,
+                        x1: x,
+                        y1: y,
+                        start_radius: 2,
+                        end_radius: 1,
+                        intensity: (15.0 - trail * 8.0) as u8,
+                        color,
+                    });
+                }
+                previous = Some((x, y));
+            }
+            self.material_stamps.push(MaterialStamp {
+                x: head_x as i16,
+                y: head_y as i16,
+                radius: 4,
+                intensity: 15,
+                color: Rgb565Pixel(0xffff),
+                shape: MaterialShape::Star,
+            });
+            let ring_radius = 22.0 + ((cycle * 3.0 + parent as f32 * 0.27).fract()) * 52.0;
+            for ring in 0..32usize {
+                let angle = std::f32::consts::TAU * ring as f32 / 32.0;
+                self.material_stamps.push(MaterialStamp {
+                    x: (head_x + angle.cos() * ring_radius) as i16,
+                    y: (head_y + angle.sin() * ring_radius) as i16,
+                    radius: 1,
+                    intensity: 11,
+                    color: CHILD_PALETTE[5],
+                    shape: MaterialShape::Disc,
+                });
+            }
+        }
+        for index in 3..self.pool.active() {
+            let parent = usize::from(self.pool.flags[index]);
+            let random = self.pool.random[index];
+            let release = (cycle + self.pool.age[index]).fract();
+            let parent_offset = parent as f32 - 1.0;
+            let origin_x = 480.0 + parent_offset * 215.0;
+            let origin_y = 190.0 + parent as f32 * 18.0;
+            let angle = std::f32::consts::TAU * unit01(random.rotate_left(11));
+            let speed = 18.0 + unit01(random.rotate_left(21)) * 105.0;
+            let x = origin_x + angle.cos() * speed * release;
+            let y = origin_y + angle.sin() * speed * release + 72.0 * release * release;
+            let style = if release < 0.18 {
+                7
+            } else {
+                usize::from(self.pool.style[index]).min(6)
+            };
+            let _ = push_screen_command(
+                &mut self.commands,
+                self.config.width,
+                self.config.height,
+                x,
+                y,
+                style as u8,
+                index & 63 == 0,
+            );
+        }
+        0
     }
 
     fn initialize_density_bloom(&mut self) {
@@ -2949,6 +3063,7 @@ fn showcase_palette(demo: ParticleDemoKind) -> &'static [Rgb565Pixel; 8] {
         ParticleDemoKind::VariableWidthRibbons => &RIBBON_PALETTE,
         ParticleDemoKind::CurlNoiseFlowField => &FLOW_PALETTE,
         ParticleDemoKind::LowResolutionDensityBloom => &DENSITY_PALETTE,
+        ParticleDemoKind::LayeredChildSystems => &CHILD_PALETTE,
     }
 }
 
@@ -3083,13 +3198,13 @@ mod tests {
 
     #[test]
     fn demo_order_and_wrapping_are_stable() {
-        assert_eq!(ParticleDemoKind::ALL.len(), 25);
+        assert_eq!(ParticleDemoKind::ALL.len(), 26);
         assert_eq!(
             ParticleDemoKind::SolarChrysanthemum.offset_wrapped(-1),
-            ParticleDemoKind::LowResolutionDensityBloom
+            ParticleDemoKind::LayeredChildSystems
         );
         assert_eq!(
-            ParticleDemoKind::LowResolutionDensityBloom.offset_wrapped(1),
+            ParticleDemoKind::LayeredChildSystems.offset_wrapped(1),
             ParticleDemoKind::SolarChrysanthemum
         );
         for (index, kind) in ParticleDemoKind::ALL.into_iter().enumerate() {
@@ -3137,7 +3252,11 @@ mod tests {
             ParticleDemoKind::parse("25"),
             Some(ParticleDemoKind::LowResolutionDensityBloom)
         );
-        assert_eq!(ParticleDemoKind::parse("26"), None);
+        assert_eq!(
+            ParticleDemoKind::parse("26"),
+            Some(ParticleDemoKind::LayeredChildSystems)
+        );
+        assert_eq!(ParticleDemoKind::parse("27"), None);
         assert_eq!(ParticleDemoKind::parse("unknown"), None);
     }
 
