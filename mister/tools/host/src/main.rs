@@ -3301,7 +3301,8 @@ fn particle_showcase_demo(number: u8) -> Result<(&'static str, u64)> {
         25 => Ok(("density-bloom", 24_576)),
         26 => Ok(("layered-child-systems", 4_096)),
         27 => Ok(("spatial-field-stack", 24_576)),
-        _ => Err(format!("particle showcase demo must be in 1..=27, received {number}").into()),
+        28 => Ok(("depth-aware-material-lod", 40_960)),
+        _ => Err(format!("particle showcase demo must be in 1..=28, received {number}").into()),
     }
 }
 

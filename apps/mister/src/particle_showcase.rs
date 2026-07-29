@@ -198,6 +198,16 @@ const FIELD_PALETTE: [Rgb565Pixel; 8] = [
     Rgb565Pixel(0xfec0),
     Rgb565Pixel(0xffff),
 ];
+const DEPTH_PALETTE: [Rgb565Pixel; 8] = [
+    Rgb565Pixel(0x0808),
+    Rgb565Pixel(0x1010),
+    Rgb565Pixel(0x18d4),
+    Rgb565Pixel(0x2b5f),
+    Rgb565Pixel(0x67ff),
+    Rgb565Pixel(0xafff),
+    Rgb565Pixel(0xff59),
+    Rgb565Pixel(0xffff),
+];
 const DENSITY_W: usize = 240;
 const DENSITY_H: usize = 135;
 const DENSITY_SCALE: usize = 4;
@@ -268,10 +278,11 @@ pub enum ParticleDemoKind {
     LowResolutionDensityBloom,
     LayeredChildSystems,
     SpatialFieldStack,
+    DepthAwareMaterialLod,
 }
 
 impl ParticleDemoKind {
-    pub const ALL: [Self; 27] = [
+    pub const ALL: [Self; 28] = [
         Self::SolarChrysanthemum,
         Self::RecursiveHalo,
         Self::CopperWillowRain,
@@ -299,6 +310,7 @@ impl ParticleDemoKind {
         Self::LowResolutionDensityBloom,
         Self::LayeredChildSystems,
         Self::SpatialFieldStack,
+        Self::DepthAwareMaterialLod,
     ];
 
     #[must_use]
@@ -341,6 +353,7 @@ impl ParticleDemoKind {
             Self::LowResolutionDensityBloom => "LOW-RES DENSITY + BLOOM",
             Self::LayeredChildSystems => "LAYERED CHILD SYSTEMS",
             Self::SpatialFieldStack => "SPATIAL FIELD STACK",
+            Self::DepthAwareMaterialLod => "DEPTH-AWARE MATERIAL LOD",
         }
     }
 
@@ -374,6 +387,7 @@ impl ParticleDemoKind {
             Self::LowResolutionDensityBloom => "density-bloom",
             Self::LayeredChildSystems => "layered-child-systems",
             Self::SpatialFieldStack => "spatial-field-stack",
+            Self::DepthAwareMaterialLod => "depth-aware-material-lod",
         }
     }
 
@@ -442,6 +456,7 @@ impl ParticleDemoKind {
             Self::LowResolutionDensityBloom => 24_576,
             Self::LayeredChildSystems => 4_096,
             Self::SpatialFieldStack => 24_576,
+            Self::DepthAwareMaterialLod => 40_960,
         }
     }
 
@@ -948,6 +963,8 @@ impl ParticleShowcaseRenderer {
             self.initialize_layered_child_systems();
         } else if demo == ParticleDemoKind::SpatialFieldStack {
             self.initialize_spatial_field_stack();
+        } else if demo == ParticleDemoKind::DepthAwareMaterialLod {
+            self.initialize_depth_aware_material_lod();
         }
     }
 
@@ -1002,6 +1019,9 @@ impl ParticleShowcaseRenderer {
             ParticleDemoKind::LowResolutionDensityBloom => self.project_density_bloom(elapsed),
             ParticleDemoKind::LayeredChildSystems => self.project_layered_child_systems(elapsed),
             ParticleDemoKind::SpatialFieldStack => self.project_spatial_field_stack(elapsed),
+            ParticleDemoKind::DepthAwareMaterialLod => {
+                self.project_depth_aware_material_lod(elapsed)
+            }
         }
     }
 
@@ -1106,7 +1126,86 @@ impl ParticleShowcaseRenderer {
                 value if value < 22.0 => "capture-orbit",
                 _ => "release",
             },
+            ParticleDemoKind::DepthAwareMaterialLod => match seconds {
+                value if value < 8.0 => "far-field",
+                value if value < 22.0 => "focal-plane",
+                _ => "near-pass",
+            },
         }
+    }
+
+    fn initialize_depth_aware_material_lod(&mut self) {
+        for index in 0..self.pool.active() {
+            let random = self.pool.random[index];
+            self.pool.x[index] = unit_signed(random) * 520.0;
+            self.pool.y[index] = unit_signed(random.rotate_left(11)) * 310.0;
+            self.pool.z[index] = unit01(random.rotate_left(21));
+            self.pool.age[index] = unit01(random.rotate_left(7));
+            self.pool.life[index] = 0.6 + unit01(random.rotate_left(17)) * 0.8;
+            self.pool.style[index] = ((random >> 29) & 7) as u8;
+        }
+    }
+
+    fn project_depth_aware_material_lod(&mut self, elapsed: Duration) -> usize {
+        self.commands.clear();
+        self.segments.clear();
+        let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
+        let mut clipped = 0usize;
+        for index in 0..self.pool.active() {
+            let depth = self.pool.z[index];
+            let parallax = 0.35 + depth * 1.05;
+            let drift = seconds * (12.0 + depth * 68.0) * self.pool.life[index];
+            let x = (480.0 + self.pool.x[index] * parallax + drift + 960.0).rem_euclid(960.0);
+            let corridor = 34.0 + (1.0 - depth) * 42.0;
+            let mut y = 270.0 + self.pool.y[index] * parallax;
+            if y > 270.0 - corridor && y < 270.0 + corridor {
+                y += if self.pool.y[index].is_sign_negative() {
+                    -corridor
+                } else {
+                    corridor
+                };
+            }
+            let style = if depth < 0.33 {
+                1 + usize::from(self.pool.style[index] & 1)
+            } else if depth < 0.72 {
+                3 + usize::from(self.pool.style[index] & 1)
+            } else {
+                5 + usize::from(self.pool.style[index] & 1)
+            };
+            if depth > 0.72 && index & 3 == 0 {
+                self.material_stamps.push(MaterialStamp {
+                    x: x as i16,
+                    y: y as i16,
+                    radius: 3 + u8::from(depth > 0.9),
+                    intensity: 8 + (depth * 7.0) as u8,
+                    color: DEPTH_PALETTE[style],
+                    shape: MaterialShape::Disc,
+                });
+                if index & 31 == 0 {
+                    self.material_strokes.push(MaterialStroke {
+                        x0: x - 10.0 - depth * 18.0,
+                        y0: y,
+                        x1: x,
+                        y1: y,
+                        start_radius: 1,
+                        end_radius: 2,
+                        intensity: 11,
+                        color: DEPTH_PALETTE[style],
+                    });
+                }
+            } else if !push_screen_command(
+                &mut self.commands,
+                self.config.width,
+                self.config.height,
+                x,
+                y,
+                style as u8,
+                depth >= 0.33,
+            ) {
+                clipped = clipped.saturating_add(1);
+            }
+        }
+        clipped
     }
 
     fn initialize_spatial_field_stack(&mut self) {
@@ -3151,6 +3250,7 @@ fn showcase_palette(demo: ParticleDemoKind) -> &'static [Rgb565Pixel; 8] {
         ParticleDemoKind::LowResolutionDensityBloom => &DENSITY_PALETTE,
         ParticleDemoKind::LayeredChildSystems => &CHILD_PALETTE,
         ParticleDemoKind::SpatialFieldStack => &FIELD_PALETTE,
+        ParticleDemoKind::DepthAwareMaterialLod => &DEPTH_PALETTE,
     }
 }
 
@@ -3285,13 +3385,13 @@ mod tests {
 
     #[test]
     fn demo_order_and_wrapping_are_stable() {
-        assert_eq!(ParticleDemoKind::ALL.len(), 27);
+        assert_eq!(ParticleDemoKind::ALL.len(), 28);
         assert_eq!(
             ParticleDemoKind::SolarChrysanthemum.offset_wrapped(-1),
-            ParticleDemoKind::SpatialFieldStack
+            ParticleDemoKind::DepthAwareMaterialLod
         );
         assert_eq!(
-            ParticleDemoKind::SpatialFieldStack.offset_wrapped(1),
+            ParticleDemoKind::DepthAwareMaterialLod.offset_wrapped(1),
             ParticleDemoKind::SolarChrysanthemum
         );
         for (index, kind) in ParticleDemoKind::ALL.into_iter().enumerate() {
@@ -3347,7 +3447,11 @@ mod tests {
             ParticleDemoKind::parse("27"),
             Some(ParticleDemoKind::SpatialFieldStack)
         );
-        assert_eq!(ParticleDemoKind::parse("28"), None);
+        assert_eq!(
+            ParticleDemoKind::parse("28"),
+            Some(ParticleDemoKind::DepthAwareMaterialLod)
+        );
+        assert_eq!(ParticleDemoKind::parse("29"), None);
         assert_eq!(ParticleDemoKind::parse("unknown"), None);
     }
 
