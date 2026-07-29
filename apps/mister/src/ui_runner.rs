@@ -69,6 +69,7 @@ use mister_magik_fb::framebuffer::{
 use mister_magik_fb::launcher_presentation::LauncherBridgePresenter;
 use mister_magik_fb::launcher_runtime::composition::*;
 use mister_magik_fb::launcher_runtime::lifecycle::*;
+use mister_magik_fb::launcher_runtime::settings::{FileSettingsStore, SettingsStore};
 use slint_ui::launcher::PreviewStatus;
 use std::path::PathBuf;
 use std::sync::{OnceLock, mpsc};

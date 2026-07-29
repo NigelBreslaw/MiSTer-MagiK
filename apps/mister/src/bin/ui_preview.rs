@@ -536,6 +536,7 @@ mod macos {
                         return;
                     }
                     LauncherAction::LaunchGame => {}
+                    LauncherAction::PersistSettings => {}
                     _ => {}
                 }
             }

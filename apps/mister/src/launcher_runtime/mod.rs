@@ -5,3 +5,4 @@
 
 pub mod composition;
 pub mod lifecycle;
+pub mod settings;

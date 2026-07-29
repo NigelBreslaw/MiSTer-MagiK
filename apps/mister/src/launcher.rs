@@ -280,11 +280,13 @@ pub enum LauncherAction {
     ApplyDisplayResolution,
     ConfirmDisplayResolution,
     CancelDisplayResolution,
+    PersistSettings,
 }
 
 pub struct LauncherEvent {
     pub action: LauncherAction,
     pub path: Option<String>,
+    pub settings: Option<MagikSettings>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1811,6 +1813,7 @@ impl LauncherNav {
                                 return Some(LauncherEvent {
                                     action: LauncherAction::OpenCollection,
                                     path: Some(item.id),
+                                    settings: None,
                                 });
                             }
                             self.activate_collection(catalog, &item.id);
@@ -2008,6 +2011,7 @@ impl LauncherNav {
                 .map(|game| LauncherEvent {
                     action: LauncherAction::LaunchGame,
                     path: Some(game.mra_path.to_string()),
+                    settings: None,
                 });
         }
 
@@ -2088,6 +2092,7 @@ impl LauncherNav {
                         .map(|game| LauncherEvent {
                             action: LauncherAction::LaunchGame,
                             path: Some(game.mra_path.to_string()),
+                            settings: None,
                         });
                 }
             }
@@ -2174,6 +2179,7 @@ impl LauncherNav {
                 return Some(LauncherEvent {
                     action: LauncherAction::ApplyDisplayResolution,
                     path: Some(id.to_owned()),
+                    settings: None,
                 });
             }
             return None;
@@ -2284,6 +2290,7 @@ impl LauncherNav {
             return Some(LauncherEvent {
                 action: LauncherAction::PreviewScreensaver,
                 path: None,
+                settings: None,
             });
         }
         let mut next = self.settings.clone();
@@ -2294,11 +2301,12 @@ impl LauncherNav {
         } else {
             return None;
         }
-        match next.save() {
-            Ok(()) => self.settings = next,
-            Err(e) => crate::ui_errln!("settings: failed to save screensaver setting: {e}"),
-        }
-        None
+        self.settings = next.clone();
+        Some(LauncherEvent {
+            action: LauncherAction::PersistSettings,
+            path: None,
+            settings: Some(next),
+        })
     }
 
     pub fn absorb_input(&mut self, now: &PadState) {
@@ -2387,6 +2395,7 @@ impl LauncherNav {
                 return Some(LauncherEvent {
                     action: LauncherAction::CancelDisplayResolution,
                     path: None,
+                    settings: None,
                 });
             }
             if self.confirm_action == Some(ConfirmAction::LibraryChanged) {
@@ -2398,6 +2407,7 @@ impl LauncherNav {
                 return Some(LauncherEvent {
                     action: LauncherAction::ContinueWithStaleLibrary,
                     path: None,
+                    settings: None,
                 });
             }
             self.confirm_action = None;
@@ -2440,14 +2450,17 @@ impl LauncherNav {
                     Some(ConfirmAction::ExitToMister) => Some(LauncherEvent {
                         action: LauncherAction::ExitToMister,
                         path: None,
+                        settings: None,
                     }),
                     Some(ConfirmAction::ResetDatabase) => Some(LauncherEvent {
                         action: LauncherAction::ResetDatabase,
                         path: None,
+                        settings: None,
                     }),
                     Some(ConfirmAction::Restart) => Some(LauncherEvent {
                         action: LauncherAction::Restart,
                         path: None,
+                        settings: None,
                     }),
                     Some(ConfirmAction::LibraryChanged) => Some(LauncherEvent {
                         action: if selected == 0 {
@@ -2456,11 +2469,13 @@ impl LauncherNav {
                             LauncherAction::RebuildLibrary
                         },
                         path: None,
+                        settings: None,
                     }),
                     Some(ConfirmAction::LibraryUpdateFailed) => None,
                     Some(ConfirmAction::DisplayResolution) => Some(LauncherEvent {
                         action: LauncherAction::ConfirmDisplayResolution,
                         path: None,
+                        settings: None,
                     }),
                     Some(ConfirmAction::DisplayResolutionError) => None,
                     None => None,
@@ -2470,6 +2485,7 @@ impl LauncherNav {
                 return Some(LauncherEvent {
                     action: LauncherAction::CancelDisplayResolution,
                     path: None,
+                    settings: None,
                 });
             }
         }
@@ -6664,6 +6680,24 @@ mod tests {
 
         assert_eq!(event.action, LauncherAction::PreviewScreensaver);
         assert_eq!(event.path, None);
+        assert_eq!(event.settings, None);
+    }
+
+    #[test]
+    fn screensaver_setting_change_emits_persistence_effect() {
+        let catalog = multi_system_catalog();
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Screensaver;
+        nav.screensaver_selected = 0;
+        let previous = nav.settings.screensaver_enabled;
+
+        let event = nav
+            .handle_input(&pad_with(|pad| pad.btn_a = true), Instant::now(), &catalog)
+            .expect("settings persistence effect");
+
+        assert_eq!(event.action, LauncherAction::PersistSettings);
+        assert_eq!(nav.settings.screensaver_enabled, !previous);
+        assert_eq!(event.settings, Some(nav.settings.clone()));
     }
 
     #[test]

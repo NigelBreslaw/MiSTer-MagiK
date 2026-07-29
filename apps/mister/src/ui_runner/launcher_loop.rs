@@ -1922,7 +1922,10 @@ pub(super) fn run_launcher_loop(
     let preview_route = PreviewRoutePolicy::new(crt_layout);
     let mut nav =
         LauncherNav::for_crt_layout_with_row_height(crt_layout, crt_metrics.game_row_height);
-    nav.settings = crate::settings::MagikSettings::load();
+    let settings_store = FileSettingsStore::new(
+        mister_magik_catalog::device_layout::current_app_path("settings.json"),
+    );
+    nav.settings = settings_store.load();
     nav.screen = start_screen;
     let mut display_confirm_deadline = None;
     let (display_confirm_tx, display_confirm_rx) =
@@ -3403,6 +3406,7 @@ pub(super) fn run_launcher_loop(
                             .map(|game| launcher::LauncherEvent {
                                 action: LauncherAction::LaunchGame,
                                 path: Some(game.mra_path.to_string()),
+                                settings: None,
                             })
                     } else if auto_launch_selected
                         && !auto_launch_selected_done
@@ -3417,6 +3421,7 @@ pub(super) fn run_launcher_loop(
                             .map(|game| launcher::LauncherEvent {
                                 action: LauncherAction::LaunchGame,
                                 path: Some(game.mra_path.to_string()),
+                                settings: None,
                             });
                         auto_launch_selected_done = event.is_some();
                         event
@@ -3709,6 +3714,15 @@ pub(super) fn run_launcher_loop(
                                 }
                                 request_launcher_redraw!();
                                 continue;
+                            }
+                            LauncherAction::PersistSettings => {
+                                if let Some(settings) = event.settings.as_ref()
+                                    && let Err(error) = settings_store.save(settings)
+                                {
+                                    crate::ui_errln!(
+                                        "settings: failed to save launcher settings: {error}"
+                                    );
+                                }
                             }
                             LauncherAction::LaunchGame => {}
                         }
