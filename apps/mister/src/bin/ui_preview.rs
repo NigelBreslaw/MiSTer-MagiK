@@ -73,6 +73,7 @@ mod macos {
     const DEFAULT_REFRESH_HZ: u32 = 60;
     const MAX_AUTO_REFRESH_HZ: u32 = 120;
     const PREVIEW_TRANSITION_DURATION: Duration = Duration::from_millis(200);
+    const ARCADE_MEDIA_SYSTEM_ID: &str = "arcade";
     const SCREENSHOT_TILE_IMAGE_CAP: usize = 256;
     const SCREENSHOT_TILE_SEED: u64 = 0x4d61_6769_4b54_696c;
 
@@ -1015,14 +1016,14 @@ mod macos {
                 self.tile_pack_status = "tiles:fixtures".to_owned();
                 return;
             }
-            let canonical = preview_archive_path_for_system(MENU_ARCADE_SYSTEM_ID);
+            let canonical = preview_archive_path_for_system(ARCADE_MEDIA_SYSTEM_ID);
             let Some(path) = self.resolve_preview_archive_path(&canonical) else {
                 self.tile_pack_status = if self.download_media {
                     "tiles:downloading-arcade".to_owned()
                 } else {
                     "tiles:arcade-pack-missing".to_owned()
                 };
-                self.ensure_media_download(MENU_ARCADE_SYSTEM_ID);
+                self.ensure_media_download(ARCADE_MEDIA_SYSTEM_ID);
                 return;
             };
             let path = PathBuf::from(path);
@@ -1118,7 +1119,7 @@ mod macos {
             if matches!(self.content, PreviewContent::Fixtures) {
                 return Ok(());
             }
-            let canonical = preview_archive_path_for_system(MENU_ARCADE_SYSTEM_ID);
+            let canonical = preview_archive_path_for_system(ARCADE_MEDIA_SYSTEM_ID);
             let path = self.resolve_preview_archive_path(&canonical).ok_or_else(|| {
                 format!(
                     "headless card screenshot tiles require the Arcade screenshot pack {canonical}"
@@ -1222,7 +1223,7 @@ mod macos {
                         status,
                         detail,
                         ..
-                    } if system == MENU_ARCADE_SYSTEM_ID => {
+                    } if system == ARCADE_MEDIA_SYSTEM_ID => {
                         let update = screenshot_tile_media_update(&status, &detail);
                         self.tile_pack_status = update.status;
                         reload_screenshot_tiles |= update.reload;
@@ -2659,6 +2660,10 @@ mod macos {
 
         #[test]
         fn arcade_media_completion_triggers_tile_pack_reload() {
+            assert!(
+                preview_archive_path_for_system(ARCADE_MEDIA_SYSTEM_ID)
+                    .ends_with("/arcade-screenshots.mmlz4b")
+            );
             for status in ["current", "downloaded"] {
                 let update = screenshot_tile_media_update(status, "ready");
                 assert!(update.reload);
