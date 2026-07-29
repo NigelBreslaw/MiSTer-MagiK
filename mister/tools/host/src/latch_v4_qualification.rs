@@ -35,6 +35,18 @@ const STRESS_CLASSES: [&str; 6] = [
 pub(super) fn run(config: &NativeDeviceConfig) -> Result<String> {
     let _lock = DeliveryProcessLock::acquire(&config.device_id)
         .map_err(|error| format!("qualification lock failed: {error:?}"))?;
+    let preflight_session = connect_with(&config.connection, 10)?;
+    exec_checked(
+        &preflight_session,
+        "latch v4 qualification preflight",
+        &format!("set -eu; test -s {RELEASE_TOKEN}"),
+    )?;
+    issue_reboot(&preflight_session, RebootMode::Supervised)?;
+    drop(preflight_session);
+    if !wait_down_with(&config.connection, 40.0) || wait_up_with(&config.connection, 120.0)? != 0 {
+        return Err("latch v4 qualification clean boot did not complete".into());
+    }
+
     let session = connect_with(&config.connection, 10)?;
     let development = exec(&session, "pidof MiSTer_MagiKDev >/dev/null 2>&1", false)?.rc == 0;
     let root = if development {

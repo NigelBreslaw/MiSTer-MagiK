@@ -89,6 +89,10 @@ directory. The host rotates the six stress classes every five minutes,
 requests serial cold catalog generations every seven minutes and thirty
 seconds, and reads the CRC-protected receipt/status interfaces every five
 seconds through the same FPGA transaction lock used by production.
+The stress phase begins with one supervised clean boot; the immutable boot and
+launcher session identities are captured only afterward. Main ownership,
+crash, and invariant counters must therefore remain zero from that boot rather
+than being compared with or offset by an earlier baseline.
 
 Raw samples and the terminal summary are retained under
 `build/release-qualification/latch-v4/<candidate-id>/<run-id>/`. The summary
