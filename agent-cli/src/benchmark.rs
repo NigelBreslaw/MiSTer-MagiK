@@ -239,7 +239,7 @@ fn require_clean_installed_commit(
     }
 }
 
-const PARTICLE_SHOWCASE_DEMOS: [(u8, &str); 21] = [
+const PARTICLE_SHOWCASE_DEMOS: [(u8, &str); 22] = [
     (1, "solar-chrysanthemum"),
     (2, "recursive-halo"),
     (3, "copper-willow-rain"),
@@ -261,6 +261,7 @@ const PARTICLE_SHOWCASE_DEMOS: [(u8, &str); 21] = [
     (19, "electric-storm"),
     (20, "fountain-waterfall"),
     (21, "arcade-cabinet"),
+    (22, "procedural-sprite-materials"),
 ];
 
 fn execute_particle_showcase_suite(
@@ -277,8 +278,9 @@ fn execute_particle_showcase_suite(
             EventKind::Progress,
             "profile",
             &format!(
-                "{} particle showcase {number:02}/21 {label}",
-                if cpu_profile { "sampling" } else { "measuring" }
+                "{} particle showcase {number:02}/{:02} {label}",
+                if cpu_profile { "sampling" } else { "measuring" },
+                PARTICLE_SHOWCASE_DEMOS.len()
             ),
             Some(10 + (((index + 1) * 80 / PARTICLE_SHOWCASE_DEMOS.len()) as u8)),
         )?;

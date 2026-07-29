@@ -7,7 +7,7 @@ use crate::bitmap_text::{ConsoleFont, ConsoleTypeface};
 use crate::fireworks::{FireworkRenderer, embedded_firework_json};
 use crate::fireworks_v2::{FireworkV2Renderer, embedded_firework_v2_json};
 use crate::framebuffer::mapped::Pixel;
-use crate::particle_material::{MaterialRasterStats, MaterialStamp, raster_stamp};
+use crate::particle_material::{MaterialRasterStats, MaterialShape, MaterialStamp, raster_stamp};
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, Instant};
@@ -135,6 +135,16 @@ const ARCADE_PALETTE: [Rgb565Pixel; 8] = [
     Rgb565Pixel(0xfec8),
     Rgb565Pixel(0xffff),
 ];
+const MATERIAL_PALETTE: [Rgb565Pixel; 8] = [
+    Rgb565Pixel(0x1000),
+    Rgb565Pixel(0x3800),
+    Rgb565Pixel(0x7800),
+    Rgb565Pixel(0xb900),
+    Rgb565Pixel(0xfac0),
+    Rgb565Pixel(0xfe20),
+    Rgb565Pixel(0xff75),
+    Rgb565Pixel(0xffff),
+];
 const ARCADE_CLOUD: &[u8] = include_bytes!("../assets/particles/arcade-cabinet.pcloud");
 const PARTICLE_CLOUD_MAGIC: &[u8; 8] = b"PCLOUD1\0";
 const PARTICLE_CLOUD_HEADER_BYTES: usize = 28;
@@ -196,10 +206,11 @@ pub enum ParticleDemoKind {
     ElectricStorm,
     FountainWaterfall,
     ArcadeCabinet,
+    ProceduralSpriteMaterials,
 }
 
 impl ParticleDemoKind {
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 22] = [
         Self::SolarChrysanthemum,
         Self::RecursiveHalo,
         Self::CopperWillowRain,
@@ -221,6 +232,7 @@ impl ParticleDemoKind {
         Self::ElectricStorm,
         Self::FountainWaterfall,
         Self::ArcadeCabinet,
+        Self::ProceduralSpriteMaterials,
     ];
 
     #[must_use]
@@ -257,6 +269,7 @@ impl ParticleDemoKind {
             Self::ElectricStorm => "ELECTRIC STORM",
             Self::FountainWaterfall => "FOUNTAIN / WATERFALL",
             Self::ArcadeCabinet => "ARCADE CABINET",
+            Self::ProceduralSpriteMaterials => "PROCEDURAL SPRITE MATERIALS",
         }
     }
 
@@ -284,6 +297,7 @@ impl ParticleDemoKind {
             Self::ElectricStorm => "electric-storm",
             Self::FountainWaterfall => "fountain-waterfall",
             Self::ArcadeCabinet => "arcade-cabinet",
+            Self::ProceduralSpriteMaterials => "procedural-sprite-materials",
         }
     }
 
@@ -346,6 +360,7 @@ impl ParticleDemoKind {
             Self::ElectricStorm => 16_384,
             Self::FountainWaterfall => 32_768,
             Self::ArcadeCabinet => 12_288,
+            Self::ProceduralSpriteMaterials => 16_384,
         }
     }
 
@@ -820,6 +835,8 @@ impl ParticleShowcaseRenderer {
             self.initialize_fountain_waterfall();
         } else if demo == ParticleDemoKind::ArcadeCabinet {
             self.initialize_arcade_cabinet();
+        } else if demo == ParticleDemoKind::ProceduralSpriteMaterials {
+            self.initialize_procedural_sprite_materials();
         }
     }
 
@@ -866,6 +883,9 @@ impl ParticleShowcaseRenderer {
             ParticleDemoKind::ElectricStorm => self.project_electric_storm(elapsed),
             ParticleDemoKind::FountainWaterfall => self.project_fountain_waterfall(elapsed),
             ParticleDemoKind::ArcadeCabinet => self.project_arcade_cabinet(elapsed),
+            ParticleDemoKind::ProceduralSpriteMaterials => {
+                self.project_procedural_sprite_materials(elapsed)
+            }
         }
     }
 
@@ -940,7 +960,75 @@ impl ParticleShowcaseRenderer {
                 value if value < 29.0 => "three-quarter",
                 _ => "dispersal",
             },
+            ParticleDemoKind::ProceduralSpriteMaterials => match seconds {
+                value if value < 6.0 => "ignite",
+                value if value < 20.0 => "material-bloom",
+                _ => "cooling",
+            },
         }
+    }
+
+    fn initialize_procedural_sprite_materials(&mut self) {
+        for index in 0..self.pool.active() {
+            let random = self.pool.random[index];
+            self.pool.x[index] = unit_signed(random.rotate_left(3)) * 430.0;
+            self.pool.y[index] = unit_signed(random.rotate_left(13)) * 230.0;
+            self.pool.z[index] = unit01(random.rotate_left(23));
+            self.pool.age[index] = unit01(random.rotate_left(7));
+            self.pool.life[index] = 0.55 + unit01(random.rotate_left(17)) * 0.9;
+            self.pool.style[index] = ((random >> 29) & 7) as u8;
+            self.pool.flags[index] = (index % 5) as u8;
+        }
+    }
+
+    fn project_procedural_sprite_materials(&mut self, elapsed: Duration) -> usize {
+        self.commands.clear();
+        self.segments.clear();
+        let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
+        let center_x = self.config.width as f32 * 0.5;
+        let center_y = self.config.height as f32 * 0.58;
+        for index in (0..self.pool.active()).step_by(2) {
+            let phase =
+                (seconds * self.pool.life[index] * 0.12 + self.pool.age[index]).rem_euclid(1.0);
+            let random = self.pool.random[index];
+            let shape_lane = self.pool.flags[index];
+            let angle = unit_signed(random.rotate_left(11)) * 1.15 - std::f32::consts::FRAC_PI_2
+                + (seconds * 0.17 + self.pool.age[index] * 9.0).sin() * 0.08;
+            let speed = 70.0 + unit01(random.rotate_left(21)) * 290.0;
+            let travel = phase * speed;
+            let spread = 0.45 + f32::from(shape_lane) * 0.11;
+            let x = center_x + angle.cos() * travel * spread + self.pool.x[index] * phase * 0.28;
+            let y = center_y + angle.sin() * travel + 118.0 * phase * phase;
+            let over_life = (1.0 - phase).clamp(0.0, 1.0);
+            let radius = match shape_lane {
+                0 => 2,
+                1 => 3,
+                2 => 4,
+                3 => 5,
+                _ => 3,
+            };
+            let shape = match shape_lane {
+                0 => MaterialShape::Spark,
+                1 => MaterialShape::Star,
+                2 => MaterialShape::Disc,
+                3 => MaterialShape::Smoke,
+                _ => MaterialShape::Shard,
+            };
+            let style = if phase < 0.12 {
+                7
+            } else {
+                ((over_life * 6.0) as usize + usize::from(self.pool.style[index] & 1)).min(7)
+            };
+            self.material_stamps.push(MaterialStamp {
+                x: x.round() as i16,
+                y: y.round() as i16,
+                radius,
+                intensity: (4.0 + over_life * 11.0) as u8,
+                color: MATERIAL_PALETTE[style],
+                shape,
+            });
+        }
+        0
     }
 
     fn initialize_arcade_cabinet(&mut self) {
@@ -2501,6 +2589,7 @@ fn showcase_palette(demo: ParticleDemoKind) -> &'static [Rgb565Pixel; 8] {
         ParticleDemoKind::ElectricStorm => &ELECTRIC_PALETTE,
         ParticleDemoKind::FountainWaterfall => &WATER_PALETTE,
         ParticleDemoKind::ArcadeCabinet => &ARCADE_PALETTE,
+        ParticleDemoKind::ProceduralSpriteMaterials => &MATERIAL_PALETTE,
     }
 }
 
@@ -2635,13 +2724,13 @@ mod tests {
 
     #[test]
     fn demo_order_and_wrapping_are_stable() {
-        assert_eq!(ParticleDemoKind::ALL.len(), 21);
+        assert_eq!(ParticleDemoKind::ALL.len(), 22);
         assert_eq!(
             ParticleDemoKind::SolarChrysanthemum.offset_wrapped(-1),
-            ParticleDemoKind::ArcadeCabinet
+            ParticleDemoKind::ProceduralSpriteMaterials
         );
         assert_eq!(
-            ParticleDemoKind::ArcadeCabinet.offset_wrapped(1),
+            ParticleDemoKind::ProceduralSpriteMaterials.offset_wrapped(1),
             ParticleDemoKind::SolarChrysanthemum
         );
         for (index, kind) in ParticleDemoKind::ALL.into_iter().enumerate() {
@@ -2673,7 +2762,11 @@ mod tests {
             ParticleDemoKind::parse("12"),
             Some(ParticleDemoKind::OledPeonyV2)
         );
-        assert_eq!(ParticleDemoKind::parse("22"), None);
+        assert_eq!(
+            ParticleDemoKind::parse("22"),
+            Some(ParticleDemoKind::ProceduralSpriteMaterials)
+        );
+        assert_eq!(ParticleDemoKind::parse("23"), None);
         assert_eq!(ParticleDemoKind::parse("unknown"), None);
     }
 
