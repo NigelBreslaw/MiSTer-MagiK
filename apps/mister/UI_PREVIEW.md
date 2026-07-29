@@ -57,6 +57,15 @@ verification, atomic publisher, media-state writer, and Catalog V3 availability
 reconciler. Its destination roots are the Mac cache. Headless captures never
 start downloads.
 
+The screenshot-tile screensaver follows the same media precedence. In fixture
+mode it uses the deterministic built-in images. In card mode it resolves the
+Arcade 320x320 pack from the Mac cache, production card, or development card,
+then decodes a deterministic selection of at most 256 images on a background
+thread. Fixture tiles continue moving until the complete real batch is ready.
+The window title reports whether tiles are fixtures, loading, downloaded, or
+backed by the Arcade pack. Removing the card cancels an in-flight read and
+retains the last complete batch.
+
 Interactive previews use the current monitor refresh rate, capped at 120 Hz.
 Force a target when comparing motion:
 
@@ -144,6 +153,11 @@ PATH --no-scan --no-download` for a bounded capture of real card data. Headless
 `auto` uses 60 Hz; at an explicit 120 Hz, frame 12 is exactly 100 ms. Repeating
 a scenario, frame, and refresh rate produces the same RGB565 output.
 
+An explicit card-mode `screenshot-tiles` capture synchronously decodes the same
+fixed-seed, 256-image Arcade batch before rendering. It fails with an actionable
+error when the pack is unavailable; it never substitutes fixture screenshots
+or starts a network download.
+
 ## What the preview exercises
 
 - compiled HDMI and CRT Slint layouts, fonts, models, overlays, and animations;
@@ -152,7 +166,8 @@ a scenario, frame, and refresh rate produces the same RGB565 output.
 - the production Rust Arcade list renderer;
 - the production screenshot scaling and crossfade compositor;
 - the production particle renderer;
-- the production time-based screenshot-tile wall algorithm;
+- the production time-based screenshot-tile wall algorithm with real Arcade
+  pack images in card mode;
 - mounted-card discovery and canonical `/media/fat` path mapping;
 - the production Catalog V3 scanner, publisher, and loader with Mac-local state;
 - the production preview archive resolver, RGB565 decoder, and media downloader.
