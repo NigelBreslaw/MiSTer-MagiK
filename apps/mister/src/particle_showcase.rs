@@ -845,7 +845,9 @@ impl ParticleShowcaseRenderer {
             attempted_pixel_writes.saturating_add(strokes.attempted_pixel_writes);
         attempted_pixel_writes = attempted_pixel_writes
             .saturating_add(self.raster_segments(destination, &mut dirty_offsets));
-        self.draw_hud(destination, &mut dirty_offsets);
+        if self.hud_visible {
+            self.draw_hud(destination, &mut dirty_offsets);
+        }
         let raster_us = raster_started.elapsed().as_micros();
         let raster_cpu_us = elapsed_thread_cpu_us(raster_cpu_started);
 
@@ -889,6 +891,10 @@ impl ParticleShowcaseRenderer {
         hud_visible: bool,
     ) {
         self.firework_capture_time = capture_time;
+        self.hud_visible = hud_visible;
+    }
+
+    pub fn configure_capture_hud(&mut self, hud_visible: bool) {
         self.hud_visible = hud_visible;
     }
 

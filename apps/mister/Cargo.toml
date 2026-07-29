@@ -31,6 +31,11 @@ name = "mister-magik-ui-preview"
 path = "src/bin/ui_preview.rs"
 required-features = ["ui-preview"]
 
+[[bin]]
+name = "mister-magik-particle-preview"
+path = "src/bin/particle_technique_preview.rs"
+required-features = ["ui-preview"]
+
 [dependencies]
 bytemuck = "1"
 crc32fast = "1"
