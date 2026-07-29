@@ -4,11 +4,10 @@
 //! Immutable installed-platform identity attached to operational evidence.
 
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-use std::fs::File;
-use std::io::{self, Read};
+use std::io;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -222,17 +221,24 @@ fn required<'a>(
 }
 
 fn digest(path: &Path) -> io::Result<String> {
-    let mut file = File::open(path)?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0_u8; 1024 * 1024];
-    loop {
-        let read = file.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
+    let output = Command::new("sha256sum").arg(path).output()?;
+    if !output.status.success() {
+        return Err(io::Error::other(format!(
+            "sha256sum failed for {}",
+            path.display()
+        )));
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    let digest = String::from_utf8(output.stdout)
+        .ok()
+        .and_then(|text| text.split_whitespace().next().map(str::to_owned))
+        .filter(|value| {
+            value.len() == 64
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        })
+        .ok_or_else(|| io::Error::other("sha256sum returned an invalid digest"))?;
+    Ok(digest)
 }
 
 fn safe_component(value: &str) -> String {
