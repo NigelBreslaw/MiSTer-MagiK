@@ -52,6 +52,9 @@ mod media_pack_save;
 pub mod media_update;
 pub mod particle_engine;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
+#[allow(dead_code)]
+mod particle_material;
+#[cfg(any(feature = "ui", feature = "ui-preview"))]
 pub mod particle_renderer;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 pub mod particle_showcase;
