@@ -537,6 +537,7 @@ fn materialize_catalog_system(
             has_preview: game.has_preview,
             year: game.year,
             manufacturer: game.manufacturer.to_string(),
+            category: game.category.to_string(),
             players: game.players,
             control: game.control.to_string(),
             is_new: game.is_new,

@@ -208,6 +208,7 @@ pub(crate) fn launcher_entry(
         system_id: system_id.into().into(),
         year: metadata.year,
         manufacturer: metadata.manufacturer.into(),
+        category: metadata.category.into(),
         players: metadata.players,
         control: metadata.control.into(),
         is_new,

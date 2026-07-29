@@ -20,8 +20,8 @@ pub const DEFAULT_HBMAME_SQLITE_PATH: &str = "/media/fat/mister-magik/hbmame.sql
 pub const DEFAULT_SQLITE_BUILD_DIR: &str = "/tmp/mister-magik/sqlite-build";
 pub const DEFAULT_SHARDED_CATALOG_DIR: &str = "/media/fat/mister-magik/catalog-v3";
 
-pub const SCHEMA_VERSION: u32 = 66;
-pub const CATALOG_BUILD_VERSION: u32 = 15;
+pub const SCHEMA_VERSION: u32 = 67;
+pub const CATALOG_BUILD_VERSION: u32 = 16;
 
 pub fn default_sqlite_path() -> PathBuf {
     configured_path(

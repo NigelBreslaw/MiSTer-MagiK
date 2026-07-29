@@ -1,8 +1,9 @@
 # Catalog V3
 
 Catalog V3 is the only production catalog used by MiSTer MagiK. Its public
-registry, navigation, state, binding, and scanner-cache schemas are version
-**1**; the SQLite shard schema is version **3**. There is no legacy read
+registry, state, binding, and scanner-cache schemas are version **1**; the
+mini-navigation schema is version **2** and the SQLite shard schema is version
+**4**. There is no legacy read
 fallback, migration bridge, dual publication, global summary, or global
 navigation file.
 
@@ -230,7 +231,7 @@ only artifacts not referenced by the active or retained previous generation.
 The projection contract and shard schema identify generated catalog formats,
 not user content. A valid `rich-game-v1` binding or schema-two shard is an
 upgrade requirement, not corruption. Reconciliation rebuilds every affected
-system into schema-three, `rich-game-v2` immutable artifacts even when its game
+system into schema-four, `rich-game-v2` immutable artifacts even when its game
 fingerprint is unchanged. Incompatible resumable build journals are discarded.
 The previous manifest remains authoritative unless every replacement shard,
 the new manifest, binding, scanner cache, and catalog state validate and publish
@@ -255,6 +256,15 @@ been cleared:
 Continuing preserves resident/bootstrap Arcade entries and any other already
 available systems. A lazy-load failure marks only that system unavailable and
 does not block the launcher. Deterministic schema mismatches do not offer Retry.
+
+Arcade metadata comes from the commit-pinned ArcadeDatabase rows embedded in
+`mame.sqlite3`. MRA filename matching takes precedence over setname matching;
+matched title, year, manufacturer, category, player, and control fields overlay
+the MAME fallback. Category is persisted in the main catalog, navigation
+snapshot, per-system shard, summary, and return capsule. Installing this build
+over an existing catalog raises the generated schema versions, so the launcher
+keeps the usable catalog visible while it builds and atomically publishes the
+replacement; no in-place mutation of the old cache is attempted.
 
 ## Catalog Failure Reports
 
@@ -443,7 +453,7 @@ device downloader INI or release channel.
 - `catalog_state.rs`: schema-one stamp/checkpoint state.
 - `scanner_cache.rs`: schema-one scanner cache.
 - `shard_registry.rs`: schema-one manifests and artifact validation.
-- `system_shard.rs`: schema-three per-system SQLite and schema-one mini-nav artifacts.
+- `system_shard.rs`: schema-four per-system SQLite and schema-two mini-nav artifacts.
 - `production_sharded_projection.rs`: production reconciliation, binding, and
   publication.
 - `lazy_sharded_reader.rs`: registry-first and per-system reads.

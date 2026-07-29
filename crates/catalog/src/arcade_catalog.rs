@@ -38,6 +38,7 @@ pub struct ArcadeGameEntry {
     pub system_id: Arc<str>,
     pub year: Option<u16>,
     pub manufacturer: Arc<str>,
+    pub category: Arc<str>,
     pub players: Option<u8>,
     pub control: Arc<str>,
     pub is_new: bool,
@@ -48,6 +49,7 @@ impl ArcadeGameEntry {
         ArcadeGameMetadataKey {
             year: self.year,
             manufacturer: self.manufacturer.to_string(),
+            category: self.category.to_string(),
             players: self.players,
             control: self.control.to_string(),
         }
@@ -58,6 +60,7 @@ impl ArcadeGameEntry {
 pub struct ArcadeGameMetadataKey {
     pub year: Option<u16>,
     pub manufacturer: String,
+    pub category: String,
     pub players: Option<u8>,
     pub control: String,
 }

@@ -100,6 +100,18 @@ pub(crate) struct MameMachineMetadata {
 pub(crate) struct ArcadeMachineMetadata {
     pub(crate) mame: HashMap<String, MameMachineMetadata>,
     pub(crate) hbmame: HashMap<String, MameMachineMetadata>,
+    pub(crate) mister_by_setname: HashMap<String, MisterArcadeMetadata>,
+    pub(crate) mister_by_mra_name: HashMap<String, MisterArcadeMetadata>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct MisterArcadeMetadata {
+    pub(crate) title: String,
+    pub(crate) category: String,
+    pub(crate) year: Option<u16>,
+    pub(crate) manufacturer: String,
+    pub(crate) players: Option<u8>,
+    pub(crate) control: String,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -332,6 +344,7 @@ pub(crate) fn load_arcade_machine_metadata(
     ArcadeMachineMetadata {
         mame: load_mame_machine_metadata(mame_path),
         hbmame: load_mame_machine_metadata(hbmame_path),
+        ..load_mister_arcade_metadata(mame_path)
     }
 }
 
@@ -343,7 +356,85 @@ pub(crate) fn load_arcade_machine_metadata_for_setnames(
     ArcadeMachineMetadata {
         mame: load_mame_machine_metadata_for_setnames(mame_path, setnames),
         hbmame: load_mame_machine_metadata_for_setnames(hbmame_path, setnames),
+        ..load_mister_arcade_metadata(mame_path)
     }
+}
+
+fn load_mister_arcade_metadata(path: &Path) -> ArcadeMachineMetadata {
+    let Ok(conn) = library_db::open_sqlite_read_only(path) else {
+        return ArcadeMachineMetadata::default();
+    };
+    if !library_db::sqlite_table_exists(&conn, "mister_arcade_entries").unwrap_or(false) {
+        return ArcadeMachineMetadata::default();
+    }
+    let Ok(mut statement) = conn.prepare(
+        "SELECT setname_key,mra_name_key,name,category,year,manufacturer,players,
+                move_inputs,special_controls
+         FROM mister_arcade_entries
+         ORDER BY ordinal",
+    ) else {
+        return ArcadeMachineMetadata::default();
+    };
+    let Ok(rows) = statement.query_map([], |row| {
+        let players = row.get::<_, String>(6)?;
+        let move_inputs = row.get::<_, String>(7)?;
+        let special_controls = row.get::<_, String>(8)?;
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            MisterArcadeMetadata {
+                title: row.get(2)?,
+                category: row.get(3)?,
+                year: row
+                    .get::<_, Option<i64>>(4)?
+                    .and_then(|value| u16::try_from(value).ok()),
+                manufacturer: row.get(5)?,
+                players: leading_player_count(&players),
+                control: if special_controls.trim().is_empty() {
+                    move_inputs
+                } else {
+                    special_controls
+                },
+            },
+        ))
+    }) else {
+        return ArcadeMachineMetadata::default();
+    };
+    let mut metadata = ArcadeMachineMetadata::default();
+    for (setname, mra_name, entry) in rows.flatten() {
+        metadata
+            .mister_by_setname
+            .entry(setname)
+            .or_insert_with(|| entry.clone());
+        metadata.mister_by_mra_name.insert(mra_name, entry);
+    }
+    metadata
+}
+
+fn leading_player_count(value: &str) -> Option<u8> {
+    value
+        .split_whitespace()
+        .next()
+        .and_then(|value| value.parse::<u8>().ok())
+}
+
+pub(crate) fn mister_arcade_metadata_for_discovery<'a>(
+    metadata: &'a ArcadeMachineMetadata,
+    discovery: &GameDiscovery,
+    identity_id: &str,
+) -> Option<&'a MisterArcadeMetadata> {
+    let mra_name = Path::new(&discovery.source_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_ascii_lowercase);
+    mra_name
+        .as_deref()
+        .and_then(|name| metadata.mister_by_mra_name.get(name))
+        .or_else(|| {
+            metadata
+                .mister_by_setname
+                .get(&library_db::normalize_id(identity_id))
+        })
 }
 
 pub(crate) fn write_simple_mame_metadata_db(

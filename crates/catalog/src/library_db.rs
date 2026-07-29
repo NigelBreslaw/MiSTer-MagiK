@@ -51,7 +51,7 @@ use crate::software_identity::{
     SoftwareHashCache, console_preview_asset, load_arcade_machine_metadata_for_setnames,
     load_mame_machine_metadata_for_setnames, load_mame_software_metadata,
     mame_identity_for_discovery, mame_identity_projection, mame_software_identity_for_discovery,
-    write_simple_mame_metadata_db,
+    mister_arcade_metadata_for_discovery, write_simple_mame_metadata_db,
 };
 use crate::sqlite_catalog;
 use rusqlite::Connection;
@@ -1940,6 +1940,7 @@ impl CatalogProjectionBuildContext<'_> {
                 ArcadeGameMetadataKey {
                     year: discovery.year,
                     manufacturer: discovery.manufacturer.clone().unwrap_or_default(),
+                    category: discovery.category.clone(),
                     players: None,
                     control: String::new(),
                 },
@@ -1962,6 +1963,16 @@ impl CatalogProjectionBuildContext<'_> {
             },
         );
         if is_arcade {
+            if let Some(identity_id) = mame_identity_for_discovery(discovery)
+                && let Some(metadata) = mister_arcade_metadata_for_discovery(
+                    self.arcade_metadata,
+                    discovery,
+                    &identity_id,
+                )
+                && !metadata.title.is_empty()
+            {
+                row.game.title = metadata.title.clone().into();
+            }
             row.game.has_preview = row.game.has_preview
                 && self
                     .preview_paths
@@ -2160,6 +2171,7 @@ fn catalog_arcade_projection_fields_for_discovery(
             discovery.parent.as_deref(),
             &discovery.title,
         );
+        let mister = mister_arcade_metadata_for_discovery(arcade_metadata, discovery, &identity_id);
         let parent = if family_id == identity_id {
             String::new()
         } else {
@@ -2175,10 +2187,21 @@ fn catalog_arcade_projection_fields_for_discovery(
             parent,
             family_key,
             ArcadeGameMetadataKey {
-                year: optional_year_from_metadata(year),
-                manufacturer: manufacturer.unwrap_or_default().to_string(),
-                players,
-                control: control.unwrap_or_default().to_string(),
+                year: mister
+                    .and_then(|metadata| metadata.year)
+                    .or_else(|| optional_year_from_metadata(year)),
+                manufacturer: mister
+                    .filter(|metadata| !metadata.manufacturer.is_empty())
+                    .map(|metadata| metadata.manufacturer.clone())
+                    .unwrap_or_else(|| manufacturer.unwrap_or_default().to_string()),
+                category: mister
+                    .map(|metadata| metadata.category.clone())
+                    .unwrap_or_default(),
+                players: mister.and_then(|metadata| metadata.players).or(players),
+                control: mister
+                    .filter(|metadata| !metadata.control.is_empty())
+                    .map(|metadata| metadata.control.clone())
+                    .unwrap_or_else(|| control.unwrap_or_default().to_string()),
             },
         );
     }
@@ -2189,6 +2212,7 @@ fn catalog_arcade_projection_fields_for_discovery(
         ArcadeGameMetadataKey {
             year: discovery.year,
             manufacturer: discovery.manufacturer.clone().unwrap_or_default(),
+            category: discovery.category.clone(),
             players: None,
             control: String::new(),
         },
@@ -2224,6 +2248,7 @@ fn build_arcade_catalog_from_scan_with_metadata(
             crate::arcade_catalog::ArcadeGameMetadataKey {
                 year: discovery.year,
                 manufacturer: discovery.manufacturer.clone().unwrap_or_default(),
+                category: discovery.category.clone(),
                 players: None,
                 control: String::new(),
             },

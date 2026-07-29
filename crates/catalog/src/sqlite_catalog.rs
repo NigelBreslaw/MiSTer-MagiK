@@ -44,6 +44,7 @@ use crate::software_identity::{
     PreviewArchivePaths, SoftwareHashCache, console_preview_asset,
     load_arcade_machine_metadata_for_setnames, load_mame_software_metadata,
     mame_identity_for_discovery, mame_identity_projection, mame_software_identity_for_discovery,
+    mister_arcade_metadata_for_discovery,
 };
 use rusqlite::functions::FunctionFlags;
 use rusqlite::types::ValueRef;
@@ -901,7 +902,7 @@ struct CatalogSqlQueryResult {
     timing: CatalogSqlQueryTiming,
 }
 
-const CATALOG_GAME_ENTRY_COLUMNS: [&str; 10] = [
+const CATALOG_GAME_ENTRY_COLUMNS: [&str; 11] = [
     "title",
     "launch_ref",
     "preview_asset_key",
@@ -909,6 +910,7 @@ const CATALOG_GAME_ENTRY_COLUMNS: [&str; 10] = [
     "system_id",
     "year",
     "manufacturer",
+    "category",
     "players",
     "control",
     "discovered_at_unix",
@@ -921,9 +923,10 @@ const GAME_ENTRY_HAS_PREVIEW: usize = 3;
 const GAME_ENTRY_SYSTEM_ID: usize = 4;
 const GAME_ENTRY_YEAR: usize = 5;
 const GAME_ENTRY_MANUFACTURER: usize = 6;
-const GAME_ENTRY_PLAYERS: usize = 7;
-const GAME_ENTRY_CONTROL: usize = 8;
-const GAME_ENTRY_DISCOVERED_AT_UNIX: usize = 9;
+const GAME_ENTRY_CATEGORY: usize = 7;
+const GAME_ENTRY_PLAYERS: usize = 8;
+const GAME_ENTRY_CONTROL: usize = 9;
+const GAME_ENTRY_DISCOVERED_AT_UNIX: usize = 10;
 
 fn catalog_game_entry_select_sql(source: &str, where_sql: &str, order_by: &str) -> String {
     format!(
@@ -1087,6 +1090,10 @@ fn game_entry_from_row(
         year: optional_year_from_row(row, GAME_ENTRY_YEAR)?,
         manufacturer: row
             .get::<_, Option<String>>(GAME_ENTRY_MANUFACTURER)?
+            .unwrap_or_default()
+            .into(),
+        category: row
+            .get::<_, Option<String>>(GAME_ENTRY_CATEGORY)?
             .unwrap_or_default()
             .into(),
         players: row
@@ -1310,6 +1317,7 @@ pub(crate) fn load_joined_launcher_catalog(
                     games.manufacturer,
                     NULL,
                     NULL,
+                    NULL,
                     games.discovered_at_unix,
                     launch_plans.launch_kind,
                     COALESCE(launch_plans.setname,''),
@@ -1329,7 +1337,7 @@ pub(crate) fn load_joined_launcher_catalog(
         .map_err(|e| format!("prepare arcade catalog query: {e}"))?;
     let rows = stmt
         .query_map([], |row| {
-            let discovered_at_unix = row.get::<_, Option<i64>>(10)?;
+            let discovered_at_unix = row.get::<_, Option<i64>>(11)?;
             let preview =
                 LauncherPreviewAsset::new(row.get::<_, String>(2)?, row.get::<_, String>(3)?);
             Ok(CatalogProjectionRow::new(
@@ -1340,16 +1348,17 @@ pub(crate) fn load_joined_launcher_catalog(
                 ArcadeGameMetadataKey {
                     year: optional_year_from_row(row, 6)?,
                     manufacturer: row.get::<_, Option<String>>(7)?.unwrap_or_default(),
+                    category: row.get::<_, Option<String>>(8)?.unwrap_or_default(),
                     players: row
-                        .get::<_, Option<i64>>(8)?
+                        .get::<_, Option<i64>>(9)?
                         .and_then(|value| u8::try_from(value).ok()),
-                    control: row.get::<_, Option<String>>(9)?.unwrap_or_default(),
+                    control: row.get::<_, Option<String>>(10)?.unwrap_or_default(),
                 },
                 is_new_discovery(discovered_at_unix, now),
                 CatalogProjectionSource {
-                    source_kind: row.get::<_, String>(11)?,
-                    setname: row.get::<_, String>(12)?,
-                    parent: row.get::<_, String>(13)?,
+                    source_kind: row.get::<_, String>(12)?,
+                    setname: row.get::<_, String>(13)?,
+                    parent: row.get::<_, String>(14)?,
                     family_key: None,
                     identity_matched: false,
                     prepared: None,
@@ -2609,6 +2618,7 @@ fn write_sqlite_scan_with_sources_inner(
             metadata_title_string_id INTEGER,
             year_string_id INTEGER,
             manufacturer_string_id INTEGER,
+            category_string_id INTEGER,
             players INTEGER,
             control_string_id INTEGER,
             source_string_id INTEGER NOT NULL,
@@ -2623,6 +2633,7 @@ fn write_sqlite_scan_with_sources_inner(
                    metadata_title_values.value AS metadata_title,
                    year_values.value AS year,
                    manufacturer_values.value AS manufacturer,
+                   category_values.value AS category,
                    launchable_identity_rows.players,
                    control_values.value AS control,
                    source_values.value AS source
@@ -2640,6 +2651,8 @@ fn write_sqlite_scan_with_sources_inner(
                  ON year_values.string_id = launchable_identity_rows.year_string_id
             LEFT JOIN string_values manufacturer_values
                  ON manufacturer_values.string_id = launchable_identity_rows.manufacturer_string_id
+            LEFT JOIN string_values category_values
+                 ON category_values.string_id = launchable_identity_rows.category_string_id
             LEFT JOIN string_values control_values
                  ON control_values.string_id = launchable_identity_rows.control_string_id
             JOIN string_values source_values
@@ -2677,6 +2690,7 @@ fn write_sqlite_scan_with_sources_inner(
                    ui_arcade_preferred_text.system_id,
                    ui_arcade_preferred_text.year,
                    ui_arcade_preferred_text.manufacturer,
+                   ui_arcade_preferred_text.category,
                    ui_arcade_preferred_text.players,
                    ui_arcade_preferred_text.control,
                    ui_arcade_preferred_text.discovered_at_unix
@@ -2691,6 +2705,7 @@ fn write_sqlite_scan_with_sources_inner(
                    games.system_id,
                    game_detail_rows.year,
                    games.manufacturer,
+                   NULL AS category,
                    NULL AS players,
                    NULL AS control,
                    game_detail_rows.discovered_at_unix
@@ -2731,6 +2746,7 @@ fn write_sqlite_scan_with_sources_inner(
                    games.system_id,
                    COALESCE(i.year, game_detail_rows.year) AS year,
                    COALESCE(i.manufacturer, games.manufacturer) AS manufacturer,
+                   i.category,
                    i.players,
                    i.control,
                    game_detail_rows.discovered_at_unix,
@@ -2768,6 +2784,7 @@ fn write_sqlite_scan_with_sources_inner(
                    ui_arcade_variants_text.system_id,
                    ui_arcade_variants_text.year,
                    ui_arcade_variants_text.manufacturer,
+                   ui_arcade_variants_text.category,
                    ui_arcade_variants_text.players,
                    ui_arcade_variants_text.control,
                    ui_arcade_variants_text.discovered_at_unix,
@@ -3053,8 +3070,8 @@ fn write_sqlite_scan_with_sources_inner(
             .map_err(|e| format!("prepare prepared launch diagnostic insert: {e}"))?;
         let mut identity_stmt = tx
             .prepare(
-                "INSERT INTO launchable_identity_rows(game_key_id,namespace_string_id,identity_string_id,family_string_id,metadata_title_string_id,year_string_id,manufacturer_string_id,players,control_string_id,source_string_id)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                "INSERT INTO launchable_identity_rows(game_key_id,namespace_string_id,identity_string_id,family_string_id,metadata_title_string_id,year_string_id,manufacturer_string_id,category_string_id,players,control_string_id,source_string_id)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
             )
             .map_err(|e| format!("prepare launchable identity insert: {e}"))?;
         let mut region_stmt = tx
@@ -3138,6 +3155,10 @@ fn write_sqlite_scan_with_sources_inner(
                 &software_metadata,
                 &mut sources.software_hash_cache,
             );
+            let arcade_identity_id = mame_identity_for_discovery(discovery);
+            let mister_arcade = arcade_identity_id.as_deref().and_then(|identity_id| {
+                mister_arcade_metadata_for_discovery(&arcade_metadata, discovery, identity_id)
+            });
             let preview_asset = software_identity
                 .as_ref()
                 .and_then(|identity| console_preview_asset(identity, sources.preview_paths));
@@ -3148,10 +3169,23 @@ fn write_sqlite_scan_with_sources_inner(
                     string_interner.intern(game_id_storage.kind),
                     game_id_storage.path.map(|path| path_interner.intern(path)),
                     game_id_storage.text,
-                    discovery.title.as_str(),
+                    mister_arcade
+                        .filter(|metadata| !metadata.title.is_empty())
+                        .map(|metadata| metadata.title.as_str())
+                        .unwrap_or(discovery.title.as_str()),
                     string_interner.intern(system_id.as_str()),
-                    string_interner.intern_optional(discovery.manufacturer.as_deref()),
-                    string_interner.intern_optional(discovery.genre.as_deref())
+                    string_interner.intern_optional(
+                        mister_arcade
+                            .filter(|metadata| !metadata.manufacturer.is_empty())
+                            .map(|metadata| metadata.manufacturer.as_str())
+                            .or(discovery.manufacturer.as_deref())
+                    ),
+                    string_interner.intern_optional(
+                        mister_arcade
+                            .filter(|metadata| !metadata.category.is_empty())
+                            .map(|metadata| metadata.category.as_str())
+                            .or(discovery.genre.as_deref())
+                    )
                 ])
                 .map_err(|e| format!("insert game: {e}"))?;
             if discovery.year.is_some() || discovered_at_unix.is_some() {
@@ -3195,6 +3229,7 @@ fn write_sqlite_scan_with_sources_inner(
                         ArcadeGameMetadataKey {
                             year: discovery.year,
                             manufacturer: discovery.manufacturer.clone().unwrap_or_default(),
+                            category: discovery.category.clone(),
                             players: None,
                             control: String::new(),
                         },
@@ -3282,7 +3317,7 @@ fn write_sqlite_scan_with_sources_inner(
                     .map_err(|e| format!("insert prepared launch diagnostic: {e}"))?;
             }
             let mut arcade_identity = None;
-            if let Some(identity_id) = mame_identity_for_discovery(discovery) {
+            if let Some(identity_id) = arcade_identity_id {
                 let (family_id, title, year, manufacturer, players, control, source) =
                     mame_identity_projection(
                         &identity_id,
@@ -3296,11 +3331,40 @@ fn write_sqlite_scan_with_sources_inner(
                         string_interner.intern("mame"),
                         string_interner.intern(identity_id.as_str()),
                         string_interner.intern_optional(Some(family_id.as_str())),
-                        string_interner.intern_optional(title),
-                        string_interner.intern_optional(year),
-                        string_interner.intern_optional(manufacturer),
-                        players.map(i64::from),
-                        string_interner.intern_optional(control),
+                        string_interner.intern_optional(
+                            mister_arcade
+                                .filter(|metadata| !metadata.title.is_empty())
+                                .map(|metadata| metadata.title.as_str())
+                                .or(title)
+                        ),
+                        string_interner.intern_optional(
+                            mister_arcade
+                                .and_then(|metadata| metadata.year)
+                                .map(|value| value.to_string())
+                                .as_deref()
+                                .or(year)
+                        ),
+                        string_interner.intern_optional(
+                            mister_arcade
+                                .filter(|metadata| !metadata.manufacturer.is_empty())
+                                .map(|metadata| metadata.manufacturer.as_str())
+                                .or(manufacturer)
+                        ),
+                        string_interner.intern_optional(
+                            mister_arcade
+                                .filter(|metadata| !metadata.category.is_empty())
+                                .map(|metadata| metadata.category.as_str())
+                        ),
+                        mister_arcade
+                            .and_then(|metadata| metadata.players)
+                            .or(players)
+                            .map(i64::from),
+                        string_interner.intern_optional(
+                            mister_arcade
+                                .filter(|metadata| !metadata.control.is_empty())
+                                .map(|metadata| metadata.control.as_str())
+                                .or(control)
+                        ),
                         string_interner.intern(source)
                     ])
                     .map_err(|e| format!("insert launchable identity: {e}"))?;
@@ -3317,6 +3381,7 @@ fn write_sqlite_scan_with_sources_inner(
                         string_interner.intern_optional(identity.metadata_title.as_deref()),
                         string_interner.intern_optional(identity.year.as_deref()),
                         string_interner.intern_optional(identity.manufacturer.as_deref()),
+                        Option::<i64>::None,
                         Option::<i64>::None,
                         Option::<i64>::None,
                         string_interner.intern(identity.source)

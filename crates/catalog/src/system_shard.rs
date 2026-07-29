@@ -33,6 +33,7 @@ pub struct SystemGame {
     pub has_preview: bool,
     pub year: Option<u16>,
     pub manufacturer: String,
+    pub category: String,
     pub players: Option<u8>,
     pub control: String,
     pub is_new: bool,
@@ -173,6 +174,7 @@ pub(crate) fn write_system_shard_with_durability(
                  has_preview INTEGER NOT NULL,
                  year INTEGER,
                  manufacturer TEXT NOT NULL,
+                 category TEXT NOT NULL,
                  players INTEGER,
                  control TEXT NOT NULL,
                  is_new INTEGER NOT NULL,
@@ -231,9 +233,9 @@ pub(crate) fn write_system_shard_with_durability(
             .prepare(
                 "INSERT INTO games(
                     stable_key,ordinal,title,launch_ref,preview_archive_path,
-                    preview_asset_key,has_preview,year,manufacturer,players,
+                    preview_asset_key,has_preview,year,manufacturer,category,players,
                     control,is_new,launch_plan_json
-                 ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+                 ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
             )
             .map_err(|error| SystemShardError::with("prepare shard games", error))?;
         let mut insertion_order = (0..data.games.len()).collect::<Vec<_>>();
@@ -259,6 +261,7 @@ pub(crate) fn write_system_shard_with_durability(
                     i64::from(game.has_preview),
                     game.year.map(i64::from),
                     game.manufacturer,
+                    game.category,
                     game.players.map(i64::from),
                     game.control,
                     i64::from(game.is_new),
@@ -418,7 +421,7 @@ pub fn open_system_shard(
     let mut statement = connection
         .prepare(
             "SELECT stable_key,title,launch_ref,preview_archive_path,
-                    preview_asset_key,has_preview,year,manufacturer,players,
+                    preview_asset_key,has_preview,year,manufacturer,category,players,
                     control,is_new,launch_plan_json
              FROM games ORDER BY ordinal",
         )
@@ -434,7 +437,7 @@ pub fn open_system_shard(
                 SystemShardError::new("read", "canonical shard has fewer games than navigation")
             })?;
         let launch_plan_json: Option<String> = row
-            .get(11)
+            .get(12)
             .map_err(|error| SystemShardError::with("read canonical launch plan", error))?;
         let launch_plan = launch_plan_json
             .map(|encoded| serde_json::from_str(&encoded))
@@ -466,14 +469,17 @@ pub fn open_system_shard(
             manufacturer: row
                 .get(7)
                 .map_err(|error| SystemShardError::with("read manufacturer", error))?,
-            players: row
+            category: row
                 .get(8)
+                .map_err(|error| SystemShardError::with("read category", error))?,
+            players: row
+                .get(9)
                 .map_err(|error| SystemShardError::with("read players", error))?,
             control: row
-                .get(9)
+                .get(10)
                 .map_err(|error| SystemShardError::with("read control", error))?,
             is_new: row
-                .get(10)
+                .get(11)
                 .map_err(|error| SystemShardError::with("read new flag", error))?,
             launch_plan,
         };
