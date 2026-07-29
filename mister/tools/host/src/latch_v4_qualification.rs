@@ -128,7 +128,6 @@ pub(super) fn run(config: &NativeDeviceConfig) -> Result<String> {
                 STRESS_CLASSES[class_index],
                 catalog_request,
             )?;
-            validate_sample(&sample, &baseline_identity, root, &session)?;
             peak_rss_hwm_kb = peak_rss_hwm_kb.max(u64_at(
                 required_pointer(&sample, "/status")?,
                 "/rss_hwm_kb",
@@ -138,6 +137,7 @@ pub(super) fn run(config: &NativeDeviceConfig) -> Result<String> {
             raw.write_all(b"\n")?;
             raw.flush()?;
             samples = samples.saturating_add(1);
+            validate_sample(&sample, &baseline_identity, root, &session)?;
             if Instant::now() >= next_progress {
                 println!(
                     "latch-v4 qualification elapsed={}m samples={} accepted={} overlap={} catalogs={}",
@@ -303,8 +303,16 @@ fn validate_sample(
         "/crash_count",
         "/invariant_count",
     ] {
-        if u64_at(main, pointer)? != 0 {
-            return Err(format!("Main qualification counter is nonzero: {pointer}").into());
+        let value = u64_at(main, pointer)?;
+        if value != 0 {
+            return Err(format!(
+                "Main qualification counter is nonzero: {pointer}={value} owner_epoch={} last_blocked_site={}",
+                u64_at(main, "/fpga_owner_epoch")?,
+                main.get("last_blocked_fpga_site")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown")
+            )
+            .into());
         }
     }
     require_text(required_pointer(sample, "/readiness")?, "/state", "ready")?;
