@@ -272,61 +272,61 @@ impl FormSceneRenderer {
                     .wrapping_add(self.seed as u32),
             );
             let a = unit01(state);
-            let b = unit01(state.rotate_left(13));
             let (x, y, z, style) = match part {
                 0 => {
-                    // Spend most of the base budget on the control panel. The
-                    // concept is a high three-quarter view, so an even six-face
-                    // distribution starves its defining surface of samples.
-                    let face_slot = logical % 11;
-                    let face = if face_slot < 6 { 0 } else { face_slot - 5 };
+                    const TOP_SAMPLES: usize = 64 * 44;
+                    const SIDE_SAMPLES: usize = 32 * 18;
                     let half_x = 205.0;
                     let half_y = 48.0;
                     let half_z = 120.0;
                     let center_y = 96.0;
-                    match face {
-                        0 => (
-                            unit_signed(state) * half_x,
+                    if logical < TOP_SAMPLES {
+                        let ix = logical & 63;
+                        let iz = logical >> 6;
+                        (
+                            lerp(-half_x, half_x, ix as f32 / 63.0),
                             center_y - half_y,
-                            unit_signed(state.rotate_left(11)) * half_z,
-                            4 + ((logical >> 4) & 1) as u8,
-                        ),
-                        1 => (
-                            unit_signed(state) * half_x,
-                            center_y + half_y,
-                            unit_signed(state.rotate_left(11)) * half_z,
-                            2,
-                        ),
-                        2 => (
-                            -half_x,
-                            center_y + unit_signed(state) * half_y,
-                            unit_signed(state.rotate_left(11)) * half_z,
-                            3,
-                        ),
-                        3 => (
-                            half_x,
-                            center_y + unit_signed(state) * half_y,
-                            unit_signed(state.rotate_left(11)) * half_z,
-                            4,
-                        ),
-                        4 => (
-                            unit_signed(state) * half_x,
-                            center_y + unit_signed(state.rotate_left(11)) * half_y,
-                            -half_z,
-                            3,
-                        ),
-                        _ => (
-                            unit_signed(state) * half_x,
-                            center_y + unit_signed(state.rotate_left(11)) * half_y,
-                            half_z,
-                            4,
-                        ),
+                            lerp(-half_z, half_z, iz as f32 / 43.0),
+                            5,
+                        )
+                    } else {
+                        let side_index = logical - TOP_SAMPLES;
+                        let face = side_index / SIDE_SAMPLES;
+                        let sample = side_index % SIDE_SAMPLES;
+                        let across = (sample & 31) as f32 / 31.0;
+                        let down = (sample >> 5) as f32 / 17.0;
+                        match face {
+                            0 => (
+                                lerp(-half_x, half_x, across),
+                                lerp(center_y - half_y, center_y + half_y, down),
+                                -half_z,
+                                3,
+                            ),
+                            1 => (
+                                lerp(-half_x, half_x, across),
+                                lerp(center_y - half_y, center_y + half_y, down),
+                                half_z,
+                                4,
+                            ),
+                            2 => (
+                                -half_x,
+                                lerp(center_y - half_y, center_y + half_y, down),
+                                lerp(-half_z, half_z, across),
+                                3,
+                            ),
+                            _ => (
+                                half_x,
+                                lerp(center_y - half_y, center_y + half_y, down),
+                                lerp(-half_z, half_z, across),
+                                4,
+                            ),
+                        }
                     }
                 }
                 1 => {
-                    let angle = a * TAU;
-                    let height = b;
-                    let radius = 19.0 + unit_signed(state.rotate_left(21)) * 2.5;
+                    let angle = (logical & 63) as f32 * TAU / 64.0;
+                    let height = (logical >> 6) as f32 / 23.0;
+                    let radius = 19.0 + unit_signed(state.rotate_left(21)) * 1.0;
                     (
                         angle.cos() * radius,
                         45.0 - height * 165.0,
@@ -367,8 +367,11 @@ impl FormSceneRenderer {
                 }
                 _ => {
                     let button = logical % 3;
-                    let radius = a.sqrt() * 28.0;
-                    let angle = b * TAU;
+                    let button_sample = logical / 3;
+                    let ring = button_sample % 3;
+                    let ring_sample = button_sample / 3;
+                    let angle = ring_sample as f32 * TAU / 114.0;
+                    let radius = 24.0 + ring as f32 * 3.0;
                     let (center_x, center_z) = match button {
                         0 => (-122.0, -45.0),
                         1 => (118.0, -48.0),
@@ -386,7 +389,7 @@ impl FormSceneRenderer {
             self.rest_x[index] = x;
             self.rest_y[index] = y;
             self.rest_z[index] = z + duplicate * 0.15;
-            self.aux_x[index] = a;
+            self.aux_x[index] = if part == 4 { 1.0 } else { a };
             self.aux_y[index] = ((y + 230.0) / 400.0).clamp(0.0, 1.0);
             self.style[index] = style;
             self.flags[index] = 1 | (part << 1);
