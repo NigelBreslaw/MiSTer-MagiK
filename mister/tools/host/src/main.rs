@@ -20,6 +20,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 mod agent_client;
+mod arcade_database;
 mod crt_qualification;
 mod discovery;
 mod media;
@@ -1519,6 +1520,17 @@ pub fn run_cli() -> Result<()> {
         "mame-metadata-build" => {
             mame_metadata_build(&args)?;
         }
+        "arcade-database-import" => {
+            let sqlite = option_value(&args, "--sqlite")
+                .ok_or("arcade-database-import needs --sqlite <mame.sqlite3>")?;
+            let csv = option_value(&args, "--csv")
+                .ok_or("arcade-database-import needs --csv <ArcadeDatabase.csv>")?;
+            let source_sha = option_value(&args, "--source-sha")
+                .ok_or("arcade-database-import needs --source-sha <commit>")?;
+            let summary =
+                arcade_database::import(Path::new(&sqlite), Path::new(&csv), &source_sha)?;
+            println!("{}", serde_json::to_string(&summary)?);
+        }
         "recover" => {
             let dry_run = args.iter().any(|a| a == "--dry-run");
             if !dry_run {
@@ -1538,7 +1550,7 @@ pub fn run_cli() -> Result<()> {
     Ok(())
 }
 
-const CLI_USAGE: &str = "usage: mister --capture-buffer\n       mister <status|arming-status|mode|scene|display-mode|display-matrix|crt|ini-edit|core-list|catalog|media-check|media-download|agent|reboot-wait|doctor|mame-metadata-build> ...\n       mode <status|dev|public|stock>\n       scene <launcher|controller_test|tear_pattern|video_playback|crt_trial> [seconds]\n       display-mode MODE --attended [--keep]\n         MODE: auto|hdmi-1280x720p60|hdmi-1366x768p60|hdmi-1920x1080p60\n               hdmi-1920x1200p60|hdmi-2048x1536p60|hdmi-2560x1440p60\n               crt-240p60|crt-288p50|crt-480p60|crt-576p50\n       display-matrix --attended --out DIRECTORY\n       crt qualify --attended [--out DIRECTORY]\n       crt qualify --restore\n       ini-edit menu <OUTPUT> [--dry-run]\n       OUTPUT: hdmi|auto|crt-240p60|crt-288p50|crt-480p60|crt-576p50\n               1280x720p60|1024x768p60|720x480p60|720x576p50|1280x1024p60\n               800x600p60|640x480p60|1280x720p50|1920x1080p60|1920x1080p50\n               1366x768p60|1024x600p60|1920x1440p60|2048x1536p60\n       2560x1440p60: Mister does not support 1440p\n       ini-edit stock-boot [--dry-run]\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>]\n       operator commands are typed and bounded; direct-reset-no-sync remains experimental and requires a volatile session token";
+const CLI_USAGE: &str = "usage: mister --capture-buffer\n       mister <status|arming-status|mode|scene|display-mode|display-matrix|crt|ini-edit|core-list|catalog|media-check|media-download|agent|reboot-wait|doctor|mame-metadata-build|arcade-database-import> ...\n       mode <status|dev|public|stock>\n       scene <launcher|controller_test|tear_pattern|video_playback|crt_trial> [seconds]\n       display-mode MODE --attended [--keep]\n         MODE: auto|hdmi-1280x720p60|hdmi-1366x768p60|hdmi-1920x1080p60\n               hdmi-1920x1200p60|hdmi-2048x1536p60|hdmi-2560x1440p60\n               crt-240p60|crt-288p50|crt-480p60|crt-576p50\n       display-matrix --attended --out DIRECTORY\n       crt qualify --attended [--out DIRECTORY]\n       crt qualify --restore\n       ini-edit menu <OUTPUT> [--dry-run]\n       OUTPUT: hdmi|auto|crt-240p60|crt-288p50|crt-480p60|crt-576p50\n               1280x720p60|1024x768p60|720x480p60|720x576p50|1280x1024p60\n               800x600p60|640x480p60|1280x720p50|1920x1080p60|1920x1080p50\n               1366x768p60|1024x600p60|1920x1440p60|2048x1536p60\n       2560x1440p60: Mister does not support 1440p\n       ini-edit stock-boot [--dry-run]\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>]\n       arcade-database-import --sqlite <mame.sqlite3> --csv <ArcadeDatabase.csv> --source-sha <commit>\n       operator commands are typed and bounded; direct-reset-no-sync remains experimental and requires a volatile session token";
 
 fn usage() {
     println!("{CLI_USAGE}");
@@ -7774,6 +7786,7 @@ fn action_uses_device(action: &str) -> bool {
     !matches!(
         action,
         "mame-metadata-build"
+            | "arcade-database-import"
             | "profile-summary"
             | "-h"
             | "--help"
