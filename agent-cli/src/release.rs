@@ -53,8 +53,8 @@ pub fn run_workflow(
         (Phase::Runtime, 25),
         (Phase::Catalog, 40),
         (Phase::InputAndHandoff, 58),
-        (Phase::Display, 72),
-        (Phase::LatchV4Stress, 78),
+        (Phase::LatchV4Stress, 65),
+        (Phase::Display, 90),
         (Phase::Recovery, 92),
         (Phase::Restore, 100),
     ];

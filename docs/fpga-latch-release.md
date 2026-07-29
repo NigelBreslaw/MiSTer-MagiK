@@ -81,13 +81,14 @@ Run the gate only through:
 scripts/agent release qualify
 ```
 
-The fixed workflow performs its normal release checks and then runs
-`latch-v4-six-hour-stress`. The launcher reads the real installed libraries and
-metadata, but writes every generated catalog artifact to a volatile isolated
-qualification directory. The host rotates the six stress classes every five
-minutes, requests serial cold catalog generations every seven minutes and
-thirty seconds, and reads the CRC-protected receipt/status interfaces every
-five seconds through the same FPGA transaction lock used by production.
+The fixed workflow performs its runtime, catalog, and handoff preflights, then
+runs `latch-v4-six-hour-stress` before the independent multi-mode display
+matrix. The launcher reads the real installed libraries and metadata, but
+writes every generated catalog artifact to a volatile isolated qualification
+directory. The host rotates the six stress classes every five minutes,
+requests serial cold catalog generations every seven minutes and thirty
+seconds, and reads the CRC-protected receipt/status interfaces every five
+seconds through the same FPGA transaction lock used by production.
 
 Raw samples and the terminal summary are retained under
 `build/release-qualification/latch-v4/<candidate-id>/<run-id>/`. The summary
