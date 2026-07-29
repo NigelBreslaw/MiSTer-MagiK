@@ -82,6 +82,12 @@ pub enum BenchmarkScenario {
     #[serde(rename = "particle-demos-profile")]
     #[value(name = "particle-demos-profile")]
     ParticleDemosProfile,
+    #[serde(rename = "particle-techniques")]
+    #[value(name = "particle-techniques")]
+    ParticleTechniques,
+    #[serde(rename = "particle-techniques-profile")]
+    #[value(name = "particle-techniques-profile")]
+    ParticleTechniquesProfile,
     #[serde(rename = "firework-visual")]
     #[value(name = "firework-visual")]
     FireworkVisual,
@@ -121,6 +127,8 @@ impl BenchmarkScenario {
             Self::ParticleDemoProfile10 => "particle-demo-profile-10",
             Self::ParticleDemosCarousel => "particle-demos-carousel",
             Self::ParticleDemosProfile => "particle-demos-profile",
+            Self::ParticleTechniques => "particle-techniques",
+            Self::ParticleTechniquesProfile => "particle-techniques-profile",
             Self::FireworkVisual => "firework-visual",
             Self::CatalogLifecycle => "catalog-lifecycle",
             Self::Search => "search",

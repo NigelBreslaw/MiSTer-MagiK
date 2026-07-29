@@ -175,13 +175,30 @@ fn require_clean_installed_commit(
     }
     if matches!(
         scenario,
-        BenchmarkScenario::ParticleDemosCarousel | BenchmarkScenario::ParticleDemosProfile
+        BenchmarkScenario::ParticleDemosCarousel
+            | BenchmarkScenario::ParticleDemosProfile
+            | BenchmarkScenario::ParticleTechniques
+            | BenchmarkScenario::ParticleTechniquesProfile
     ) {
+        let techniques_only = matches!(
+            scenario,
+            BenchmarkScenario::ParticleTechniques | BenchmarkScenario::ParticleTechniquesProfile
+        );
+        let demos = if techniques_only {
+            &PARTICLE_SHOWCASE_DEMOS[21..]
+        } else {
+            &PARTICLE_SHOWCASE_DEMOS[..]
+        };
         return execute_particle_showcase_suite(
             &mut device,
             manifest,
             output_dir,
-            scenario == BenchmarkScenario::ParticleDemosProfile,
+            demos,
+            matches!(
+                scenario,
+                BenchmarkScenario::ParticleDemosProfile
+                    | BenchmarkScenario::ParticleTechniquesProfile
+            ),
             reporter,
         );
     }
@@ -233,7 +250,9 @@ fn require_clean_installed_commit(
         | BenchmarkScenario::ParticleDemo10
         | BenchmarkScenario::ParticleDemoProfile10
         | BenchmarkScenario::ParticleDemosCarousel
-        | BenchmarkScenario::ParticleDemosProfile => {
+        | BenchmarkScenario::ParticleDemosProfile
+        | BenchmarkScenario::ParticleTechniques
+        | BenchmarkScenario::ParticleTechniquesProfile => {
             unreachable!("particle showcase scenarios return before the fixed registry match")
         }
     }
@@ -277,21 +296,22 @@ fn execute_particle_showcase_suite(
     device: &mut DeviceClient,
     manifest: String,
     output_dir: PathBuf,
+    showcase_demos: &[(u8, &str)],
     cpu_profile: bool,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<Outcome> {
     fs::create_dir_all(&output_dir).map_err(|error| error.to_string())?;
-    let mut demos = Vec::with_capacity(PARTICLE_SHOWCASE_DEMOS.len());
-    for (index, (number, label)) in PARTICLE_SHOWCASE_DEMOS.into_iter().enumerate() {
+    let mut demos = Vec::with_capacity(showcase_demos.len());
+    for (index, (number, label)) in showcase_demos.iter().copied().enumerate() {
         reporter.emit(
             EventKind::Progress,
             "profile",
             &format!(
                 "{} particle showcase {number:02}/{:02} {label}",
                 if cpu_profile { "sampling" } else { "measuring" },
-                PARTICLE_SHOWCASE_DEMOS.len()
+                showcase_demos.len()
             ),
-            Some(10 + (((index + 1) * 80 / PARTICLE_SHOWCASE_DEMOS.len()) as u8)),
+            Some(10 + (((index + 1) * 80 / showcase_demos.len()) as u8)),
         )?;
         let demo_dir = output_dir.join(format!("{number:02}-{label}"));
         let detail = device.execute(DeviceRequest::ProfileInstalledParticleShowcase {
@@ -306,7 +326,7 @@ fn execute_particle_showcase_suite(
     let summary = json!({
         "schema": "mister-magik-particle-showcase-suite-v1",
         "mode": if cpu_profile { "isolated-cpu-profiles" } else { "sequential-30-second-captures" },
-        "duration_secs": if cpu_profile { 672 } else { 630 },
+        "duration_secs": showcase_demos.len() as u64 * if cpu_profile { 32 } else { 30 },
         "manifest": manifest.clone(),
         "demos": demos,
     });

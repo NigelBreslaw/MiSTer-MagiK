@@ -16,12 +16,27 @@ Supported scenarios:
 - `particle-capacity`
 - `particle-step`
 - `particle-profile`
+- `particle-techniques`
+- `particle-techniques-profile`
 - `catalog-lifecycle`
 - `search`
 
 New benchmarks must add a named registry entry and a fixed typed device
 request. They may not expose arbitrary commands, duration knobs, remote paths,
 or generic environment overrides.
+
+## Commercial particle techniques
+
+`particle-techniques` runs showcase demos 22-31 for 30 seconds each at their
+fixed visual budgets. It records strict latch qualification, per-stage timing,
+CPU use, and one FPGA-latched capture per technique without re-running the
+legacy showcase. `particle-techniques-profile` samples the same closed set at
+99 Hz and retains the ordinary restoration and platform-identity checks.
+
+The fixed budgets and visual acceptance gates live in
+`docs/design/particle-techniques/acceptance.md`. A performance result is not
+accepted if either independent reviewer finds that tuning removed a defining
+visual read.
 
 ## Fixed particle optimisation trial
 
