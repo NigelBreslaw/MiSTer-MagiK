@@ -5,6 +5,8 @@ use crate::error::AgentResult;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+const PLATFORM_MANIFEST: &str = "platform-v3.manifest";
+
 pub(super) fn stage_published_platform_components(
     extracted: &Path,
     stage: &Path,
@@ -42,11 +44,12 @@ pub(super) fn generate_platform_manifest(
     stage: &Path,
     main_revision: &str,
 ) -> AgentResult<()> {
+    debug_assert_eq!(PLATFORM_MANIFEST, crate::platform_manifest::FILE_NAME);
     let release = crate::platform_manifest::ReleaseIdentity::from_bundle_manifest(
         &stage.join(crate::platform_bundle::MANIFEST),
     )?;
     crate::platform_manifest::generate(
-        &stage.join(crate::platform_manifest::FILE_NAME),
+        &stage.join(PLATFORM_MANIFEST),
         &crate::platform_manifest::Artifacts {
             main: stage.join("MiSTer_MagiKDev"),
             gui: stage.join("mister-magik-fb"),

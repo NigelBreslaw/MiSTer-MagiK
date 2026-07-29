@@ -132,7 +132,7 @@
     "restarted": 12,
     "shifted_word": 13,
     "pending_busy": 14,
-    "internal": 15
+    "reserved": 15
   },
   "crc": {
     "name": "CRC-16/CCITT-FALSE",

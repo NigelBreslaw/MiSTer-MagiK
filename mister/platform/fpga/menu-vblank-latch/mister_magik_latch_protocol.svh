@@ -61,7 +61,7 @@ localparam [3:0] MAGIK_REJECT_ADDRESS_WRAP = 4'd11;
 localparam [3:0] MAGIK_REJECT_RESTARTED = 4'd12;
 localparam [3:0] MAGIK_REJECT_SHIFTED_WORD = 4'd13;
 localparam [3:0] MAGIK_REJECT_PENDING_BUSY = 4'd14;
-localparam [3:0] MAGIK_REJECT_INTERNAL = 4'd15;
+localparam [3:0] MAGIK_REJECT_RESERVED = 4'd15;
 
 localparam [15:0] MAGIK_CRC_POLYNOMIAL = 16'h1021;
 localparam [15:0] MAGIK_CRC_INITIAL = 16'hFFFF;

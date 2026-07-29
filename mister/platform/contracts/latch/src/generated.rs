@@ -61,7 +61,7 @@ pub const REJECT_ADDRESS_WRAP: u8 = 11;
 pub const REJECT_RESTARTED: u8 = 12;
 pub const REJECT_SHIFTED_WORD: u8 = 13;
 pub const REJECT_PENDING_BUSY: u8 = 14;
-pub const REJECT_INTERNAL: u8 = 15;
+pub const REJECT_RESERVED: u8 = 15;
 
 pub const CRC_POLYNOMIAL: u16 = 0x1021;
 pub const CRC_INITIAL: u16 = 0xffff;
