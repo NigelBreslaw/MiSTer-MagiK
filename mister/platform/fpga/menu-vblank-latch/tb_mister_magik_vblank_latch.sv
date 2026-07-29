@@ -356,7 +356,7 @@ module tb_mister_magik_vblank_latch;
 				16'd1920,
 				accepted_value
 			);
-			expect16(dut.accepted_sequence, accepted_value, "regression accepted sequence");
+			expect16(dut.accepted_seq, accepted_value, "regression accepted sequence");
 			expect16(active_seq, active_value, "regression prior active sequence");
 			expect_true(pending, "accepted N with active N-1 must retain pending");
 			expect16(pending_seq, accepted_value, "regression pending sequence");
