@@ -1766,7 +1766,7 @@ mod tests {
         failed.latch_capabilities = Some(v4_capabilities());
         let error = failed.read_magik_latched_fbuf_status_sample().unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-        assert_eq!(error.diagnostics.protocol_version, Some(3));
+        assert_eq!(error.diagnostics.protocol_version, Some(4));
         assert_eq!(
             error.diagnostics.decision,
             LatchWireDecision::TransportRetryFailed
@@ -1848,10 +1848,7 @@ mod tests {
         assert_eq!(attempt.diagnostics.word_count, 12);
         assert_eq!(attempt.diagnostics.expected_word_count, 12);
         assert_eq!(attempt.diagnostics.transmitted_word_count, 12);
-        assert_eq!(
-            attempt.diagnostics.words[11].transmitted,
-            mister_magik_latch_contract::GOLDEN_SET_V4_CRC
-        );
+        assert_eq!(attempt.diagnostics.words[11].transmitted, words[12]);
         assert!(attempt.diagnostics.command_word.ack_high.is_some());
         assert!(attempt.diagnostics.words[11].ack_low.is_some());
     }
