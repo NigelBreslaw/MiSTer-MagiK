@@ -948,9 +948,9 @@ mod linux {
         "/media/fat/mister-magik/diagnostics/catalog/progress-latest.json",
         "/media/fat/mister-magik-dev/diagnostics/catalog/progress-latest.json",
     ];
-    const LATCH_FAILURE_PATHS: [&str; 2] = [
-        "/media/fat/mister-magik/diagnostics/latch/latest.json",
-        "/media/fat/mister-magik-dev/diagnostics/latch/latest.json",
+    const LATCH_IDENTITY_PATHS: [&str; 2] = [
+        "/media/fat/mister-magik/diagnostics/latch/current-identity.json",
+        "/media/fat/mister-magik-dev/diagnostics/latch/current-identity.json",
     ];
     const LOG_RING_CAPACITY: usize = 512;
     const TIMELINE_CAPACITY: usize = 128;
@@ -2434,10 +2434,7 @@ mod linux {
                 &CATALOG_PROGRESS_PATHS,
                 "updated_unix_ms",
             ),
-            "latch_failure": latest_diagnostic_report(
-                &LATCH_FAILURE_PATHS,
-                "updated_unix_ms",
-            ),
+            "latch_failure": current_latch_failure_report(),
         })
     }
 
@@ -4066,6 +4063,35 @@ mod linux {
             .pop()
             .map(|(path, report)| json!({"path": path, "report": report}))
             .unwrap_or(Value::Null)
+    }
+
+    fn current_latch_failure_report() -> Value {
+        for pointer_path in LATCH_IDENTITY_PATHS {
+            let pointer = read_json_value(pointer_path);
+            let Some(relative) = pointer.get("latest_relative_path").and_then(Value::as_str) else {
+                continue;
+            };
+            if relative.starts_with('/') || relative.split('/').any(|part| part == "..") {
+                continue;
+            }
+            let Some(root) = Path::new(pointer_path).parent() else {
+                continue;
+            };
+            let report_path = root.join(relative);
+            let report = read_json_value(report_path.to_string_lossy().as_ref());
+            if report.get("schema").and_then(Value::as_str)
+                != Some("mister-magik-latch-failure-report-v2")
+                || report.get("identity") != pointer.get("identity")
+            {
+                continue;
+            }
+            return json!({
+                "path": report_path,
+                "identity_pointer": pointer_path,
+                "report": report,
+            });
+        }
+        Value::Null
     }
 
     fn recent_catalog_failure_paths(dir: &Path, limit: usize) -> Vec<PathBuf> {

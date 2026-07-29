@@ -1,0 +1,258 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! Immutable installed-platform identity attached to operational evidence.
+
+use serde::Serialize;
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
+use std::fs::File;
+use std::io::{self, Read};
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+const MANIFEST_FORMAT: &str = "mister-magik-platform-v3";
+const MANIFEST_FILE: &str = "platform-v3.manifest";
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum IdentityClassification {
+    QualifiedRelease,
+    QualifiedPlatformDevelopmentRuntime,
+    Candidate,
+    MixedInvalid,
+    Unknown,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DiagnosticIdentity {
+    pub classification: IdentityClassification,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub validation_failure: Option<String>,
+    pub runtime: RuntimeIdentity,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub platform: Option<PlatformIdentity>,
+    pub device_boot_id: String,
+    pub launcher_session_id: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct RuntimeIdentity {
+    pub version: &'static str,
+    pub build_number: &'static str,
+    pub source_revision: &'static str,
+    pub source_dirty: Option<bool>,
+    pub binary_sha256: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PlatformIdentity {
+    pub release_tag: String,
+    pub release_number: u64,
+    pub bundle_id: String,
+    pub qualification_candidate_id: String,
+    pub manifest_sha256: String,
+    pub main_sha256: String,
+    pub runtime_sha256: String,
+    pub scanout_module_sha256: String,
+    pub latch_rbf_sha256: String,
+    pub main_revision: String,
+    pub magik_revision: String,
+    pub menu_revision: String,
+    pub latch_protocol_version: u16,
+    pub latch_capability_mask: String,
+}
+
+static IDENTITY: OnceLock<DiagnosticIdentity> = OnceLock::new();
+
+pub fn current() -> &'static DiagnosticIdentity {
+    IDENTITY.get_or_init(load_current)
+}
+
+impl DiagnosticIdentity {
+    #[must_use]
+    pub fn namespace(&self) -> String {
+        let build = safe_component(self.runtime.build_number);
+        let boot = short_component(&self.device_boot_id);
+        let session = short_component(&self.launcher_session_id);
+        match &self.platform {
+            Some(platform) => format!(
+                "{}/bundle-{}/build-{}/binary-{}/boot-{}/session-{}",
+                safe_component(&platform.release_tag),
+                short_component(&platform.bundle_id),
+                build,
+                short_component(self.runtime.binary_sha256.as_deref().unwrap_or("unknown")),
+                boot,
+                session
+            ),
+            None => format!("unknown/build-{build}/boot-{boot}/session-{session}"),
+        }
+    }
+}
+
+fn load_current() -> DiagnosticIdentity {
+    let build = crate::build_identity::BuildIdentity::current();
+    let binary_sha256 = std::env::current_exe()
+        .ok()
+        .and_then(|path| digest(&path).ok());
+    let boot_id = std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
+        .map(|value| value.trim().to_owned())
+        .unwrap_or_else(|_| "unknown-boot".to_owned());
+    let session_id = format!(
+        "{}-{}-{}",
+        boot_id,
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|value| value.as_millis())
+            .unwrap_or(0)
+    );
+    let runtime = RuntimeIdentity {
+        version: build.version,
+        build_number: build.build_number,
+        source_revision: build.source_revision,
+        source_dirty: build.source_dirty,
+        binary_sha256,
+    };
+    let manifest_path = mister_magik_catalog::device_layout::current_app_path(MANIFEST_FILE);
+    match load_platform(&manifest_path, &runtime) {
+        Ok(platform) => DiagnosticIdentity {
+            classification: IdentityClassification::Candidate,
+            validation_failure: None,
+            runtime,
+            platform: Some(platform),
+            device_boot_id: boot_id,
+            launcher_session_id: session_id,
+        },
+        Err((failure, platform)) => DiagnosticIdentity {
+            classification: if platform.is_some() {
+                IdentityClassification::MixedInvalid
+            } else {
+                IdentityClassification::Unknown
+            },
+            validation_failure: Some(failure),
+            runtime,
+            platform,
+            device_boot_id: boot_id,
+            launcher_session_id: session_id,
+        },
+    }
+}
+
+fn load_platform(
+    manifest_path: &Path,
+    runtime: &RuntimeIdentity,
+) -> Result<PlatformIdentity, (String, Option<PlatformIdentity>)> {
+    let text = std::fs::read_to_string(manifest_path)
+        .map_err(|error| (format!("manifest unavailable: {error}"), None))?;
+    let manifest_sha256 =
+        digest(manifest_path).map_err(|error| (format!("manifest hash failed: {error}"), None))?;
+    let values = parse_fields(&text).map_err(|error| (error, None))?;
+    let platform = PlatformIdentity {
+        release_tag: required(&values, "platform_release")?.to_owned(),
+        release_number: required(&values, "platform_release_number")?
+            .parse()
+            .map_err(|_| ("invalid platform release number".to_owned(), None))?,
+        bundle_id: required(&values, "platform_bundle_id")?.to_owned(),
+        qualification_candidate_id: required(&values, "qualification_candidate_id")?.to_owned(),
+        manifest_sha256,
+        main_sha256: required(&values, "main_sha256")?.to_owned(),
+        runtime_sha256: required(&values, "gui_sha256")?.to_owned(),
+        scanout_module_sha256: required(&values, "scanout_module_sha256")?.to_owned(),
+        latch_rbf_sha256: required(&values, "latch_rbf_sha256")?.to_owned(),
+        main_revision: required(&values, "main_revision")?.to_owned(),
+        magik_revision: required(&values, "magik_revision")?.to_owned(),
+        menu_revision: required(&values, "menu_revision")?.to_owned(),
+        latch_protocol_version: required(&values, "latch_protocol_version")?
+            .parse()
+            .map_err(|_| ("invalid latch protocol version".to_owned(), None))?,
+        latch_capability_mask: required(&values, "latch_capability_mask")?.to_owned(),
+    };
+    let invalid = values.get("format").map(String::as_str) != Some(MANIFEST_FORMAT)
+        || platform.release_tag != format!("platform-v0.{}", platform.release_number)
+        || platform.latch_protocol_version != 4
+        || platform.latch_capability_mask != "0x01ff"
+        || runtime.binary_sha256.as_ref() != Some(&platform.runtime_sha256)
+        || runtime.source_revision != platform.magik_revision;
+    if invalid {
+        return Err((
+            "installed tuple does not match its v3 manifest".to_owned(),
+            Some(platform),
+        ));
+    }
+    for (path_field, hash_field) in [
+        ("main_path", "main_sha256"),
+        ("scanout_module_path", "scanout_module_sha256"),
+        ("latch_rbf_path", "latch_rbf_sha256"),
+    ] {
+        let path = PathBuf::from(required(&values, path_field)?);
+        let expected = required(&values, hash_field)?;
+        if digest(&path).ok().as_deref() != Some(expected) {
+            return Err((
+                format!("{path_field} artifact hash mismatch"),
+                Some(platform),
+            ));
+        }
+    }
+    Ok(platform)
+}
+
+fn parse_fields(text: &str) -> Result<BTreeMap<String, String>, String> {
+    let mut values = BTreeMap::new();
+    for line in text.lines().filter(|line| !line.is_empty()) {
+        let (key, value) = line
+            .split_once('=')
+            .ok_or_else(|| "malformed platform manifest".to_owned())?;
+        if key.is_empty() || value.is_empty() || values.insert(key.into(), value.into()).is_some() {
+            return Err("duplicate or empty platform manifest field".to_owned());
+        }
+    }
+    Ok(values)
+}
+
+fn required<'a>(
+    values: &'a BTreeMap<String, String>,
+    field: &str,
+) -> Result<&'a str, (String, Option<PlatformIdentity>)> {
+    values
+        .get(field)
+        .map(String::as_str)
+        .ok_or_else(|| (format!("platform manifest missing {field}"), None))
+}
+
+fn digest(path: &Path) -> io::Result<String> {
+    let mut file = File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 1024 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn safe_component(value: &str) -> String {
+    let safe = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '.' | '-') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if safe.is_empty() {
+        "unknown".to_owned()
+    } else {
+        safe
+    }
+}
+
+fn short_component(value: &str) -> String {
+    safe_component(value).chars().take(16).collect()
+}

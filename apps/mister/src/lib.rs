@@ -26,6 +26,7 @@ pub mod catalog_progress_report;
 pub mod command_args;
 pub mod controller_db;
 pub mod crash_report;
+pub mod diagnostic_identity;
 mod fallible_log;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 pub mod fireworks;

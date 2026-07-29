@@ -14,7 +14,7 @@ use std::sync::mpsc::{self, SyncSender, TrySendError};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const REPORT_SCHEMA: &str = "mister-magik-latch-failure-report-v1";
+const REPORT_SCHEMA: &str = "mister-magik-latch-failure-report-v2";
 const REPORT_PREFIX: &str = "report-latch-";
 const LATEST_FILE: &str = "latest.json";
 const RETENTION_MS: u128 = 48 * 60 * 60 * 1_000;
@@ -47,14 +47,14 @@ impl EpisodeTracker {
 
     fn record_sent(&mut self, dedupe_key: String, recovery_state: &str) {
         self.last_evidence = Some(dedupe_key);
-        if recovery_state.starts_with("recovered-") {
-            self.episode_id = None;
-        }
+        let _ = recovery_state;
     }
 }
 
-pub fn latest_relative_path() -> &'static str {
-    "diagnostics/latch/latest.json"
+pub fn latest_relative_path() -> PathBuf {
+    PathBuf::from("diagnostics/latch")
+        .join(crate::diagnostic_identity::current().namespace())
+        .join(LATEST_FILE)
 }
 
 pub fn latest_path() -> PathBuf {
@@ -63,7 +63,11 @@ pub fn latest_path() -> PathBuf {
 
 pub fn enqueue(evidence: LatchFailureEvidence) -> PathBuf {
     let latest = latest_path();
-    let dedupe_key = serde_json::to_string(&evidence).unwrap_or_default();
+    let dedupe_key = format!(
+        "{}:{}",
+        crate::diagnostic_identity::current().namespace(),
+        serde_json::to_string(&evidence).unwrap_or_default()
+    );
     let Ok(mut tracker) = EPISODE_TRACKER
         .get_or_init(|| Mutex::new(EpisodeTracker::default()))
         .lock()
@@ -89,9 +93,17 @@ pub fn enqueue(evidence: LatchFailureEvidence) -> PathBuf {
 }
 
 fn new_episode_id() -> String {
+    let identity = crate::diagnostic_identity::current();
+    let release = identity
+        .platform
+        .as_ref()
+        .map(|platform| platform.release_tag.as_str())
+        .unwrap_or("unknown");
     format!(
-        "{REPORT_PREFIX}{}-{}-{}",
+        "{REPORT_PREFIX}{}-{}-build-{}-{}-{}",
         unix_ms(),
+        release,
+        identity.runtime.build_number,
         std::process::id(),
         REPORT_SEQUENCE.fetch_add(1, Ordering::Relaxed)
     )
@@ -132,6 +144,7 @@ fn log_report_error(arguments: std::fmt::Arguments<'_>) {
 
 fn report_dir() -> PathBuf {
     mister_magik_catalog::device_layout::current_app_path("diagnostics/latch")
+        .join(crate::diagnostic_identity::current().namespace())
 }
 
 fn write_report(
@@ -154,6 +167,7 @@ fn write_report(
     let report_path = dir.join(format!("{episode_id}.json"));
     write_atomic(&report_path, &encoded)?;
     write_atomic(&dir.join(LATEST_FILE), &encoded)?;
+    write_current_pointer(dir)?;
     sync_parent_dir(&report_path);
     prune_reports(dir, episode_id, now_ms)?;
     Ok(report_path)
@@ -169,6 +183,7 @@ fn report_value(episode_id: &str, now_ms: u128, mut evidence: LatchFailureEviden
         "updated_unix_ms": now_ms,
         "pid": std::process::id(),
         "build": crate::build_identity::BuildIdentity::current(),
+        "identity": crate::diagnostic_identity::current(),
         "failure": evidence,
         "snapshots": {
             "runtime": read_json_snapshot("/tmp/mister-magik/status.json"),
@@ -178,6 +193,26 @@ fn report_value(episode_id: &str, now_ms: u128, mut evidence: LatchFailureEviden
         "events": filtered_log_tail("/tmp/mister-magik/events.jsonl"),
         "application_log": filtered_log_tail("/tmp/mister-magik-slint.log"),
     })
+}
+
+fn write_current_pointer(namespace_dir: &Path) -> io::Result<()> {
+    let app = mister_magik_catalog::device_layout::current_app_path("diagnostics/latch");
+    if !namespace_dir.starts_with(&app) {
+        return Ok(());
+    }
+    let relative = namespace_dir
+        .strip_prefix(mister_magik_catalog::device_layout::current_app_path(
+            "diagnostics/latch",
+        ))
+        .unwrap_or(namespace_dir);
+    let mut encoded = serde_json::to_vec_pretty(&json!({
+        "schema": "mister-magik-latch-current-identity-v1",
+        "identity": crate::diagnostic_identity::current(),
+        "latest_relative_path": relative.join(LATEST_FILE),
+    }))?;
+    encoded.push(b'\n');
+    fs::create_dir_all(&app)?;
+    write_atomic(&app.join("current-identity.json"), &encoded)
 }
 
 fn read_json_snapshot(path: &str) -> Option<Value> {
@@ -383,7 +418,7 @@ mod tests {
     }
 
     #[test]
-    fn episode_tracker_dedupes_updates_and_rotates_after_recovery() {
+    fn episode_tracker_dedupes_updates_without_erasing_session_history() {
         let mut tracker = EpisodeTracker::default();
         let first = serde_json::to_string(&evidence()).unwrap();
         let first_id = tracker.prepare(&first).unwrap();
@@ -399,7 +434,7 @@ mod tests {
         let mut later = evidence();
         later.detail = "later failure".to_string();
         let later_key = serde_json::to_string(&later).unwrap();
-        assert_ne!(tracker.prepare(&later_key).unwrap(), first_id);
+        assert_eq!(tracker.prepare(&later_key).unwrap(), first_id);
     }
 
     #[test]
@@ -465,13 +500,19 @@ mod tests {
     fn report_relative_path_uses_each_fixed_device_layout() {
         use mister_magik_catalog::device_layout::DeviceLayout;
 
-        assert_eq!(
-            DeviceLayout::Public.app_path(latest_relative_path()),
-            PathBuf::from("/media/fat/mister-magik/diagnostics/latch/latest.json")
+        let relative = latest_relative_path();
+        let relative = relative.to_string_lossy();
+        assert!(
+            DeviceLayout::Public
+                .app_path(&relative)
+                .starts_with(PathBuf::from("/media/fat/mister-magik/diagnostics/latch"))
         );
-        assert_eq!(
-            DeviceLayout::Dev.app_path(latest_relative_path()),
-            PathBuf::from("/media/fat/mister-magik-dev/diagnostics/latch/latest.json")
+        assert!(
+            DeviceLayout::Dev
+                .app_path(&relative)
+                .starts_with(PathBuf::from(
+                    "/media/fat/mister-magik-dev/diagnostics/latch"
+                ))
         );
     }
 }

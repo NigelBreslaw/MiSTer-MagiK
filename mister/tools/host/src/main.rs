@@ -10683,11 +10683,7 @@ fn ssh_diagnostics_bundle(agent_error: String) -> Result<Value> {
             "diagnostics/catalog/progress-latest.json",
             "updated_unix_ms",
         ),
-        "latch_failure": ssh_latest_diagnostic_report(
-            &sess,
-            "diagnostics/latch/latest.json",
-            "updated_unix_ms",
-        ),
+        "latch_failure": ssh_current_latch_failure_report(&sess),
     }))
 }
 
@@ -10877,6 +10873,44 @@ fn ssh_latest_diagnostic_report(
         .pop()
         .map(|(path, report)| json!({"path": path, "report": report}))
         .unwrap_or(Value::Null)
+}
+
+fn ssh_current_latch_failure_report(sess: &Session) -> Value {
+    for app in [
+        configured_remote_path("MISTER_MAGIK_APP_DIR", "/media/fat/mister-magik"),
+        "/media/fat/mister-magik".to_owned(),
+        "/media/fat/mister-magik-dev".to_owned(),
+    ] {
+        let pointer_path = format!("{app}/diagnostics/latch/current-identity.json");
+        let Some(pointer) = remote_read(sess, &pointer_path)
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        else {
+            continue;
+        };
+        let Some(relative) = pointer.get("latest_relative_path").and_then(Value::as_str) else {
+            continue;
+        };
+        if relative.starts_with('/') || relative.split('/').any(|part| part == "..") {
+            continue;
+        }
+        let report_path = format!("{app}/diagnostics/latch/{relative}");
+        let Some(report) = remote_read(sess, &report_path)
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        else {
+            continue;
+        };
+        if report.get("schema").and_then(Value::as_str)
+            == Some("mister-magik-latch-failure-report-v2")
+            && report.get("identity") == pointer.get("identity")
+        {
+            return json!({
+                "path": report_path,
+                "identity_pointer": pointer_path,
+                "report": report,
+            });
+        }
+    }
+    Value::Null
 }
 
 fn remote_catalog_failure_paths(sess: &Session, dir: &str, limit: usize) -> Vec<String> {
