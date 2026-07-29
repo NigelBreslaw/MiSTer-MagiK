@@ -228,6 +228,19 @@ const COLLISION_PALETTE: [Rgb565Pixel; 8] = [
     Rgb565Pixel(0xff75),
     Rgb565Pixel(0xffff),
 ];
+const FLOCK_PALETTE: [Rgb565Pixel; 8] = [
+    Rgb565Pixel(0x0808),
+    Rgb565Pixel(0x1014),
+    Rgb565Pixel(0x201f),
+    Rgb565Pixel(0x501f),
+    Rgb565Pixel(0x05ff),
+    Rgb565Pixel(0x9fff),
+    Rgb565Pixel(0xfe80),
+    Rgb565Pixel(0xffff),
+];
+const FLOCK_GRID_W: usize = 60;
+const FLOCK_GRID_H: usize = 34;
+const FLOCK_CELL_PX: f32 = 16.0;
 const DENSITY_W: usize = 240;
 const DENSITY_H: usize = 135;
 const DENSITY_SCALE: usize = 4;
@@ -301,10 +314,11 @@ pub enum ParticleDemoKind {
     DepthAwareMaterialLod,
     SourceDrivenMorph,
     SdfCollisionEvents,
+    GridAcceleratedFlocking,
 }
 
 impl ParticleDemoKind {
-    pub const ALL: [Self; 30] = [
+    pub const ALL: [Self; 31] = [
         Self::SolarChrysanthemum,
         Self::RecursiveHalo,
         Self::CopperWillowRain,
@@ -335,6 +349,7 @@ impl ParticleDemoKind {
         Self::DepthAwareMaterialLod,
         Self::SourceDrivenMorph,
         Self::SdfCollisionEvents,
+        Self::GridAcceleratedFlocking,
     ];
 
     #[must_use]
@@ -380,6 +395,7 @@ impl ParticleDemoKind {
             Self::DepthAwareMaterialLod => "DEPTH-AWARE MATERIAL LOD",
             Self::SourceDrivenMorph => "SOURCE-DRIVEN MORPH",
             Self::SdfCollisionEvents => "SDF COLLISION EVENTS",
+            Self::GridAcceleratedFlocking => "GRID-ACCELERATED FLOCKING",
         }
     }
 
@@ -416,6 +432,7 @@ impl ParticleDemoKind {
             Self::DepthAwareMaterialLod => "depth-aware-material-lod",
             Self::SourceDrivenMorph => "source-morph",
             Self::SdfCollisionEvents => "sdf-collision",
+            Self::GridAcceleratedFlocking => "grid-flocking",
         }
     }
 
@@ -487,6 +504,7 @@ impl ParticleDemoKind {
             Self::DepthAwareMaterialLod => 40_960,
             Self::SourceDrivenMorph => 12_288,
             Self::SdfCollisionEvents => 8_192,
+            Self::GridAcceleratedFlocking => 12_288,
         }
     }
 
@@ -564,6 +582,10 @@ pub struct ParticleShowcaseRenderer {
     transition_started_at: Option<Duration>,
     heat: Vec<u8>,
     density: Vec<u16>,
+    flock_counts: Vec<u16>,
+    flock_vx: Vec<f32>,
+    flock_vy: Vec<f32>,
+    flock_last_elapsed: Duration,
     heat_frame: u64,
     galaxy_projected_count: usize,
     dirty_slots: [ParticleShowcaseDirtySlot; HIDDEN_SLOT_COUNT],
@@ -636,6 +658,9 @@ impl ParticleShowcaseRenderer {
         let transition = ParticleShowcaseTransition::new();
         let heat = vec![0; FIRE_HEAT_W * FIRE_HEAT_H];
         let density = vec![0; DENSITY_W * DENSITY_H];
+        let flock_counts = vec![0; FLOCK_GRID_W * FLOCK_GRID_H];
+        let flock_vx = vec![0.0; FLOCK_GRID_W * FLOCK_GRID_H];
+        let flock_vy = vec![0.0; FLOCK_GRID_W * FLOCK_GRID_H];
         let dirty_slots = std::array::from_fn(|_| ParticleShowcaseDirtySlot {
             initialized: false,
             offsets: Vec::with_capacity(PARTICLE_DEMO_MAX_COUNT.saturating_mul(2)),
@@ -703,6 +728,16 @@ impl ParticleShowcaseRenderer {
                 .capacity()
                 .saturating_mul(std::mem::size_of::<u16>()),
         );
+        let renderer_scratch_bytes = renderer_scratch_bytes
+            .saturating_add(
+                flock_counts
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<u16>()),
+            )
+            .saturating_add(
+                (flock_vx.capacity() + flock_vy.capacity())
+                    .saturating_mul(std::mem::size_of::<f32>()),
+            );
         let mut renderer = Self {
             config,
             demo: config.initial_demo,
@@ -720,6 +755,10 @@ impl ParticleShowcaseRenderer {
             transition_started_at: None,
             heat,
             density,
+            flock_counts,
+            flock_vx,
+            flock_vy,
+            flock_last_elapsed: Duration::ZERO,
             heat_frame: u64::MAX,
             galaxy_projected_count: 0,
             dirty_slots,
@@ -952,6 +991,7 @@ impl ParticleShowcaseRenderer {
         self.pool.reset(demo, self.config.seed);
         self.heat.fill(0);
         self.heat_frame = u64::MAX;
+        self.flock_last_elapsed = elapsed;
         self.galaxy_projected_count = 0;
         for slot in &mut self.dirty_slots {
             slot.initialized = false;
@@ -999,6 +1039,8 @@ impl ParticleShowcaseRenderer {
             self.initialize_source_driven_morph();
         } else if demo == ParticleDemoKind::SdfCollisionEvents {
             self.initialize_sdf_collision_events();
+        } else if demo == ParticleDemoKind::GridAcceleratedFlocking {
+            self.initialize_grid_flocking();
         }
     }
 
@@ -1058,12 +1100,15 @@ impl ParticleShowcaseRenderer {
             }
             ParticleDemoKind::SourceDrivenMorph => self.project_source_driven_morph(elapsed),
             ParticleDemoKind::SdfCollisionEvents => self.project_sdf_collision_events(elapsed),
+            ParticleDemoKind::GridAcceleratedFlocking => self.project_grid_flocking(),
         }
     }
 
     fn update_effect(&mut self, elapsed: Duration) {
         if self.demo == ParticleDemoKind::FireEmbers {
             self.update_fire_heat(elapsed);
+        } else if self.demo == ParticleDemoKind::GridAcceleratedFlocking {
+            self.update_grid_flocking(elapsed);
         }
     }
 
@@ -1178,7 +1223,135 @@ impl ParticleShowcaseRenderer {
                 value if value < 22.0 => "slide-bounce",
                 _ => "splash-mist",
             },
+            ParticleDemoKind::GridAcceleratedFlocking => match seconds {
+                value if value < 8.0 => "wing-arcs",
+                value if value < 22.0 => "split-rejoin",
+                _ => "chaser-pass",
+            },
         }
+    }
+
+    fn initialize_grid_flocking(&mut self) {
+        for index in 0..self.pool.active() {
+            let random = self.pool.random[index];
+            let side = if index & 1 == 0 { -1.0 } else { 1.0 };
+            self.pool.x[index] = 480.0 + side * (70.0 + unit01(random) * 330.0);
+            self.pool.y[index] = 270.0 + unit_signed(random.rotate_left(11)) * 185.0;
+            let angle = unit_signed(random.rotate_left(21)) * 0.65
+                + if side < 0.0 {
+                    0.15
+                } else {
+                    std::f32::consts::PI - 0.15
+                };
+            self.pool.vx[index] = angle.cos() * (18.0 + unit01(random.rotate_left(7)) * 34.0);
+            self.pool.vy[index] = angle.sin() * (18.0 + unit01(random.rotate_left(17)) * 34.0);
+            self.pool.style[index] = 2 + ((random >> 30) as u8).min(3);
+            self.pool.flags[index] = u8::from(index & 1023 == 0);
+        }
+    }
+
+    fn update_grid_flocking(&mut self, elapsed: Duration) {
+        let dt = elapsed
+            .saturating_sub(self.flock_last_elapsed)
+            .as_secs_f32()
+            .clamp(0.0, 1.0 / 30.0);
+        self.flock_last_elapsed = elapsed;
+        if dt <= f32::EPSILON {
+            return;
+        }
+        self.flock_counts.fill(0);
+        self.flock_vx.fill(0.0);
+        self.flock_vy.fill(0.0);
+        for index in 0..self.pool.active() {
+            let cell_x =
+                (self.pool.x[index] / FLOCK_CELL_PX).clamp(0.0, (FLOCK_GRID_W - 1) as f32) as usize;
+            let cell_y =
+                (self.pool.y[index] / FLOCK_CELL_PX).clamp(0.0, (FLOCK_GRID_H - 1) as f32) as usize;
+            let cell = cell_y * FLOCK_GRID_W + cell_x;
+            self.flock_counts[cell] = self.flock_counts[cell].saturating_add(1);
+            self.flock_vx[cell] += self.pool.vx[index];
+            self.flock_vy[cell] += self.pool.vy[index];
+        }
+        let cavity_x = 480.0 + (elapsed.as_secs_f32() * 0.21).sin() * 58.0;
+        let cavity_y = 270.0;
+        for index in 0..self.pool.active() {
+            let cell_x =
+                (self.pool.x[index] / FLOCK_CELL_PX).clamp(0.0, (FLOCK_GRID_W - 1) as f32) as usize;
+            let cell_y =
+                (self.pool.y[index] / FLOCK_CELL_PX).clamp(0.0, (FLOCK_GRID_H - 1) as f32) as usize;
+            let mut count = 0u32;
+            let mut sum_vx = 0.0;
+            let mut sum_vy = 0.0;
+            for y in cell_y.saturating_sub(1)..=(cell_y + 1).min(FLOCK_GRID_H - 1) {
+                for x in cell_x.saturating_sub(1)..=(cell_x + 1).min(FLOCK_GRID_W - 1) {
+                    let cell = y * FLOCK_GRID_W + x;
+                    count += u32::from(self.flock_counts[cell]);
+                    sum_vx += self.flock_vx[cell];
+                    sum_vy += self.flock_vy[cell];
+                }
+            }
+            if count > 0 {
+                self.pool.vx[index] += (sum_vx / count as f32 - self.pool.vx[index]) * dt * 2.6;
+                self.pool.vy[index] += (sum_vy / count as f32 - self.pool.vy[index]) * dt * 2.6;
+            }
+            let dx = self.pool.x[index] - cavity_x;
+            let dy = self.pool.y[index] - cavity_y;
+            let distance2 = dx * dx + dy * dy;
+            if distance2 < 118.0 * 118.0 {
+                let inverse = distance2.max(64.0).sqrt().recip();
+                self.pool.vx[index] += dx * inverse * dt * 260.0;
+                self.pool.vy[index] += dy * inverse * dt * 260.0;
+            }
+            let side = if index & 1 == 0 { -1.0 } else { 1.0 };
+            let target_y = 270.0
+                + side
+                    * (self.pool.x[index] - 480.0).abs().sqrt()
+                    * 8.0
+                    * (elapsed.as_secs_f32() * 0.09).cos();
+            self.pool.vy[index] += (target_y - self.pool.y[index]) * dt * 0.75;
+            let speed = (self.pool.vx[index] * self.pool.vx[index]
+                + self.pool.vy[index] * self.pool.vy[index])
+                .sqrt()
+                .max(1.0);
+            let limited = 72.0 / speed.max(72.0);
+            self.pool.vx[index] *= limited;
+            self.pool.vy[index] *= limited;
+            self.pool.x[index] =
+                (self.pool.x[index] + self.pool.vx[index] * dt + 960.0).rem_euclid(960.0);
+            self.pool.y[index] =
+                (self.pool.y[index] + self.pool.vy[index] * dt + 540.0).rem_euclid(540.0);
+        }
+    }
+
+    fn project_grid_flocking(&mut self) -> usize {
+        self.commands.clear();
+        self.segments.clear();
+        for index in 0..self.pool.active() {
+            let chaser = self.pool.flags[index] != 0;
+            let style = if chaser { 6 } else { self.pool.style[index] };
+            let _ = push_screen_command(
+                &mut self.commands,
+                self.config.width,
+                self.config.height,
+                self.pool.x[index],
+                self.pool.y[index],
+                style,
+                index & 31 == 0,
+            );
+            if chaser {
+                self.material_strokes.push(MaterialStroke {
+                    x0: self.pool.x[index] - self.pool.vx[index] * 0.22,
+                    y0: self.pool.y[index] - self.pool.vy[index] * 0.22,
+                    x1: self.pool.x[index],
+                    y1: self.pool.y[index],
+                    start_radius: 1,
+                    end_radius: 2,
+                    intensity: 14,
+                    color: FLOCK_PALETTE[6],
+                });
+            }
+        }
+        0
     }
 
     fn initialize_sdf_collision_events(&mut self) {
@@ -3473,6 +3646,7 @@ fn showcase_palette(demo: ParticleDemoKind) -> &'static [Rgb565Pixel; 8] {
         ParticleDemoKind::DepthAwareMaterialLod => &DEPTH_PALETTE,
         ParticleDemoKind::SourceDrivenMorph => &MORPH_PALETTE,
         ParticleDemoKind::SdfCollisionEvents => &COLLISION_PALETTE,
+        ParticleDemoKind::GridAcceleratedFlocking => &FLOCK_PALETTE,
     }
 }
 
@@ -3607,13 +3781,13 @@ mod tests {
 
     #[test]
     fn demo_order_and_wrapping_are_stable() {
-        assert_eq!(ParticleDemoKind::ALL.len(), 30);
+        assert_eq!(ParticleDemoKind::ALL.len(), 31);
         assert_eq!(
             ParticleDemoKind::SolarChrysanthemum.offset_wrapped(-1),
-            ParticleDemoKind::SdfCollisionEvents
+            ParticleDemoKind::GridAcceleratedFlocking
         );
         assert_eq!(
-            ParticleDemoKind::SdfCollisionEvents.offset_wrapped(1),
+            ParticleDemoKind::GridAcceleratedFlocking.offset_wrapped(1),
             ParticleDemoKind::SolarChrysanthemum
         );
         for (index, kind) in ParticleDemoKind::ALL.into_iter().enumerate() {
@@ -3681,7 +3855,11 @@ mod tests {
             ParticleDemoKind::parse("30"),
             Some(ParticleDemoKind::SdfCollisionEvents)
         );
-        assert_eq!(ParticleDemoKind::parse("31"), None);
+        assert_eq!(
+            ParticleDemoKind::parse("31"),
+            Some(ParticleDemoKind::GridAcceleratedFlocking)
+        );
+        assert_eq!(ParticleDemoKind::parse("32"), None);
         assert_eq!(ParticleDemoKind::parse("unknown"), None);
     }
 
