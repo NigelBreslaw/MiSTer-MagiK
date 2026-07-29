@@ -25,6 +25,16 @@ const FIREWORK_VISUALS: [(u8, &str, u64); 12] = [
     (11, "magnetic-flower-v2", 2500),
     (12, "oled-peony-v2", 2000),
 ];
+const PARTICLE_TECHNIQUE_IMAGES: [(u8, &str, u64); 8] = [
+    (24, "curl-noise-flow-field", 15),
+    (25, "density-bloom", 16),
+    (26, "layered-child-systems", 12),
+    (27, "spatial-field-stack", 15),
+    (28, "depth-aware-material-lod", 16),
+    (29, "source-morph", 10),
+    (30, "sdf-collision", 15),
+    (31, "grid-flocking", 15),
+];
 
 pub fn execute(
     repository: &Path,
@@ -173,6 +183,9 @@ fn require_clean_installed_commit(
             reporter,
         );
     }
+    if scenario == BenchmarkScenario::ParticleTechniqueImages {
+        return execute_particle_technique_images(&mut device, manifest, output_dir, reporter);
+    }
     if matches!(
         scenario,
         BenchmarkScenario::ParticleDemosCarousel
@@ -252,10 +265,58 @@ fn require_clean_installed_commit(
         | BenchmarkScenario::ParticleDemosCarousel
         | BenchmarkScenario::ParticleDemosProfile
         | BenchmarkScenario::ParticleTechniques
-        | BenchmarkScenario::ParticleTechniquesProfile => {
+        | BenchmarkScenario::ParticleTechniquesProfile
+        | BenchmarkScenario::ParticleTechniqueImages => {
             unreachable!("particle showcase scenarios return before the fixed registry match")
         }
     }
+}
+
+fn execute_particle_technique_images(
+    device: &mut DeviceClient,
+    manifest: String,
+    output_dir: PathBuf,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    fs::create_dir_all(&output_dir).map_err(|error| error.to_string())?;
+    let mut captures = Vec::with_capacity(PARTICLE_TECHNIQUE_IMAGES.len());
+    for (index, (demo, label, hero_secs)) in PARTICLE_TECHNIQUE_IMAGES.iter().copied().enumerate() {
+        reporter.emit(
+            EventKind::Progress,
+            "capture",
+            &format!("capturing particle technique {demo:02} {label} hero frame"),
+            Some(10 + ((index + 1) * 80 / PARTICLE_TECHNIQUE_IMAGES.len()) as u8),
+        )?;
+        let detail = device.execute(DeviceRequest::CaptureInstalledParticleTechnique {
+            output_dir: output_dir.join(format!("{demo:02}-{label}")),
+            demo,
+            label: label.into(),
+            hero_secs,
+        })?;
+        let capture: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+        if capture.get("schema").and_then(Value::as_str)
+            != Some("mister-magik-particle-technique-capture-v1")
+            || capture.get("source").and_then(Value::as_str) != Some("fpga-latched-scanout-slots")
+        {
+            return Err(format!("particle technique capture for {label} is invalid").into());
+        }
+        captures.push(capture);
+        device.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))?;
+    }
+    let summary = json!({
+        "schema": "mister-magik-particle-technique-captures-v1",
+        "manifest": manifest.clone(),
+        "captures": captures,
+    });
+    fs::write(
+        output_dir.join("summary.json"),
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&summary).map_err(|error| error.to_string())?
+        ),
+    )
+    .map_err(|error| error.to_string())?;
+    emit_benchmark_result(reporter, manifest, summary, output_dir)
 }
 
 const PARTICLE_SHOWCASE_DEMOS: [(u8, &str); 31] = [

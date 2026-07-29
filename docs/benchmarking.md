@@ -18,6 +18,7 @@ Supported scenarios:
 - `particle-profile`
 - `particle-techniques`
 - `particle-techniques-profile`
+- `particle-technique-images`
 - `catalog-lifecycle`
 - `search`
 
@@ -32,6 +33,9 @@ fixed visual budgets. It records strict latch qualification, per-stage timing,
 CPU use, and one FPGA-latched capture per technique without re-running the
 legacy showcase. `particle-techniques-profile` samples the same closed set at
 99 Hz and retains the ordinary restoration and platform-identity checks.
+`particle-technique-images` captures authoritative hero-beat RGB565 frames for
+techniques 24-31 without making their availability depend on earlier
+performance qualification.
 
 The fixed budgets and visual acceptance gates live in
 `docs/design/particle-techniques/acceptance.md`. A performance result is not

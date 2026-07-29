@@ -60,6 +60,12 @@ pub enum DeviceRequest {
         label: String,
         time_ms: u64,
     },
+    CaptureInstalledParticleTechnique {
+        output_dir: PathBuf,
+        demo: u8,
+        label: String,
+        hero_secs: u64,
+    },
     LaunchParticleShowcase,
     ProfileInstalledSearch {
         output_dir: PathBuf,
@@ -116,6 +122,9 @@ impl DeviceRequest {
                 cpu_profile: true, ..
             } => "profile-installed-particle-showcase-cpu",
             Self::CaptureInstalledFireworkVisual { .. } => "capture-installed-firework-visual",
+            Self::CaptureInstalledParticleTechnique { .. } => {
+                "capture-installed-particle-technique"
+            }
             Self::LaunchParticleShowcase => "launch-particle-showcase",
             Self::ProfileInstalledSearch { .. } => "profile-installed-search",
             Self::VerifyInstalledSearchUi { .. } => "verify-installed-search-ui",
@@ -303,6 +312,12 @@ mod tests {
                 label: "solar-chrysanthemum".into(),
                 time_ms: 2100,
             },
+            DeviceRequest::CaptureInstalledParticleTechnique {
+                output_dir: "particle-technique".into(),
+                demo: 24,
+                label: "curl-noise-flow-field".into(),
+                hero_secs: 15,
+            },
             DeviceRequest::ProfileInstalledSearch {
                 output_dir: "search-profile".into(),
             },
@@ -331,7 +346,7 @@ mod tests {
             DeviceRequest::CaptureFramebuffer,
         ];
         let labels: Vec<_> = requests.iter().map(DeviceRequest::label).collect();
-        assert_eq!(labels.len(), 34);
+        assert_eq!(labels.len(), 35);
         assert!(labels.iter().all(|label| !label.is_empty()));
         assert_eq!(
             labels

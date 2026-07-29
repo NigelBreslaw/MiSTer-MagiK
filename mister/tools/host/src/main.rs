@@ -343,6 +343,16 @@ impl DeviceOperations for NativeDevice {
                 capture_installed_firework_visual(&config, output_dir, *demo, label, *time_ms)
                     .map_err(device_failure)?
             }
+            DeviceRequest::CaptureInstalledParticleTechnique {
+                output_dir,
+                demo,
+                label,
+                hero_secs,
+            } => {
+                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
+                capture_installed_particle_technique(&config, output_dir, *demo, label, *hero_secs)
+                    .map_err(device_failure)?
+            }
             DeviceRequest::LaunchParticleShowcase => {
                 let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 launch_particle_showcase_interactive(&config).map_err(device_failure)?
@@ -4935,6 +4945,121 @@ fn capture_installed_firework_visual(
             return Err(
                 format!("{run_error}; firework visual cleanup failed: {cleanup_error}").into(),
             );
+        }
+    };
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn capture_installed_particle_technique(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+    demo_number: u8,
+    label: &str,
+    hero_secs: u64,
+) -> Result<String> {
+    if !(24..=31).contains(&demo_number) {
+        return Err(format!(
+            "particle technique capture demo must be in 24..=31, received {demo_number}"
+        )
+        .into());
+    }
+    let (expected_label, count) = particle_showcase_demo(demo_number)?;
+    if label != expected_label {
+        return Err(format!(
+            "particle technique demo {demo_number} is {expected_label:?}, received {label:?}"
+        )
+        .into());
+    }
+    if !(1..=30).contains(&hero_secs) {
+        return Err(format!(
+            "particle technique hero time must be in 1..=30 seconds, received {hero_secs}"
+        )
+        .into());
+    }
+    fs::create_dir_all(output_dir)?;
+    let run_result = (|| -> Result<Value> {
+        let session = connect_with(&config.connection, 10)?;
+        validate_particle_display_geometry(&session)?;
+        restart_launcher_with_one_shot_env(
+            &session,
+            LauncherRestartOptions {
+                env_vars: vec![
+                    ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+                    ("MISTER_SCREENSAVER_START_ACTIVE".into(), "1".into()),
+                    (
+                        "MISTER_SCREENSAVER_RENDERER".into(),
+                        "particle-demos".into(),
+                    ),
+                    ("MISTER_PARTICLE_DEMO".into(), demo_number.to_string()),
+                    ("MISTER_PARTICLE_SEED".into(), "827141709451".into()),
+                    ("MISTER_PARTICLE_HUD".into(), "off".into()),
+                ],
+                timeout_secs: 45,
+                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+                ..LauncherRestartOptions::default()
+            },
+        )?;
+        drop(session);
+        let telemetry =
+            agent_telemetry_for_duration(&config.agent, Duration::from_secs(hero_secs))?;
+        let latest = telemetry
+            .iter()
+            .filter_map(|sample| {
+                sample
+                    .pointer("/launcher/frame_budget/recent_frames")
+                    .and_then(Value::as_array)
+            })
+            .flatten()
+            .filter(|frame| {
+                frame.get("screensaver_active").and_then(Value::as_bool) == Some(true)
+                    && frame.get("screensaver_renderer").and_then(Value::as_str)
+                        == Some("particle-demos")
+                    && frame.get("particle_preset").and_then(Value::as_str) == Some(label)
+                    && frame.get("particle_count").and_then(Value::as_u64) == Some(count)
+            })
+            .max_by_key(|frame| frame.get("frame").and_then(Value::as_u64).unwrap_or(0))
+            .ok_or_else(|| {
+                format!("particle technique capture did not observe demo {demo_number:02} {label}")
+            })?;
+        let beat = latest
+            .get("particle_phase")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let capture =
+            request_framebuffer_png_at_when_latched(&config.agent, Duration::from_secs(3))?;
+        validate_visible_launcher_capture(&capture)?;
+        let filename = format!("{demo_number:02}-{label}-{beat}.png");
+        fs::write(output_dir.join(&filename), &capture.png)?;
+        Ok(json!({
+            "schema": "mister-magik-particle-technique-capture-v1",
+            "demo_number": demo_number,
+            "technique": label,
+            "hero_secs": hero_secs,
+            "beat": beat,
+            "count": count,
+            "seed": 827141709451_u64,
+            "geometry": "960x540",
+            "pixel_format": "RGB565",
+            "capture": filename,
+            "source": capture_source_label(&capture.result)?,
+        }))
+    })();
+    let cleanup_result = restore_installed_screensaver_profile(config);
+    let summary = match (run_result, cleanup_result) {
+        (Ok(summary), Ok(())) => summary,
+        (Err(error), Ok(())) => return Err(error),
+        (Ok(_), Err(error)) => {
+            return Err(format!("particle technique capture cleanup failed: {error}").into());
+        }
+        (Err(run_error), Err(cleanup_error)) => {
+            return Err(format!(
+                "{run_error}; particle technique capture cleanup failed: {cleanup_error}"
+            )
+            .into());
         }
     };
     fs::write(
