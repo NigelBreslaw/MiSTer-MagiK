@@ -7,6 +7,7 @@ use crate::bitmap_text::{ConsoleFont, ConsoleTypeface};
 use crate::fireworks::{FireworkRenderer, embedded_firework_json};
 use crate::fireworks_v2::{FireworkV2Renderer, embedded_firework_v2_json};
 use crate::framebuffer::mapped::Pixel;
+use crate::particle_form::{FormSceneKind, FormSceneRenderer};
 use crate::particle_material::{
     MaterialRasterStats, MaterialShape, MaterialStamp, MaterialStroke, raster_stamp,
     raster_tapered_segment,
@@ -218,6 +219,56 @@ const MORPH_PALETTE: [Rgb565Pixel; 8] = [
     Rgb565Pixel(0xffdf),
     Rgb565Pixel(0xffff),
 ];
+const FORM_TERRAIN_PALETTE: [Rgb565Pixel; 8] = [
+    Rgb565Pixel(0x080c),
+    Rgb565Pixel(0x1818),
+    Rgb565Pixel(0x301f),
+    Rgb565Pixel(0x801f),
+    Rgb565Pixel(0xf81f),
+    Rgb565Pixel(0x07ff),
+    Rgb565Pixel(0xffdf),
+    Rgb565Pixel(0xffff),
+];
+const FORM_HOLOGRAM_PALETTE: [Rgb565Pixel; 8] = [
+    Rgb565Pixel(0x080a),
+    Rgb565Pixel(0x1012),
+    Rgb565Pixel(0x201f),
+    Rgb565Pixel(0x481f),
+    Rgb565Pixel(0x02ff),
+    Rgb565Pixel(0x05ff),
+    Rgb565Pixel(0x9fff),
+    Rgb565Pixel(0xffff),
+];
+const FORM_OBSERVATORY_PALETTE: [Rgb565Pixel; 8] = [
+    Rgb565Pixel(0x1008),
+    Rgb565Pixel(0x2810),
+    Rgb565Pixel(0x601f),
+    Rgb565Pixel(0xc81f),
+    Rgb565Pixel(0xfa9f),
+    Rgb565Pixel(0x05ff),
+    Rgb565Pixel(0xffb5),
+    Rgb565Pixel(0xffff),
+];
+const FORM_CATHEDRAL_PALETTE: [Rgb565Pixel; 8] = [
+    Rgb565Pixel(0x0808),
+    Rgb565Pixel(0x180f),
+    Rgb565Pixel(0x381f),
+    Rgb565Pixel(0x801f),
+    Rgb565Pixel(0xd81f),
+    Rgb565Pixel(0x03ff),
+    Rgb565Pixel(0xff75),
+    Rgb565Pixel(0xffff),
+];
+const FORM_MORPH_PALETTE: [Rgb565Pixel; 8] = [
+    Rgb565Pixel(0x080d),
+    Rgb565Pixel(0x1018),
+    Rgb565Pixel(0x281f),
+    Rgb565Pixel(0x03ff),
+    Rgb565Pixel(0x07e0),
+    Rgb565Pixel(0xfd20),
+    Rgb565Pixel(0xffdf),
+    Rgb565Pixel(0xffff),
+];
 const COLLISION_PALETTE: [Rgb565Pixel; 8] = [
     Rgb565Pixel(0x0808),
     Rgb565Pixel(0x1014),
@@ -315,10 +366,15 @@ pub enum ParticleDemoKind {
     SourceDrivenMorph,
     SdfCollisionEvents,
     GridAcceleratedFlocking,
+    FractalGridTerrain,
+    LayerMappedHologram,
+    SphericalFieldObservatory,
+    TwistedMultiFormCathedral,
+    PointCloudMorphPassage,
 }
 
 impl ParticleDemoKind {
-    pub const ALL: [Self; 31] = [
+    pub const ALL: [Self; 36] = [
         Self::SolarChrysanthemum,
         Self::RecursiveHalo,
         Self::CopperWillowRain,
@@ -350,6 +406,11 @@ impl ParticleDemoKind {
         Self::SourceDrivenMorph,
         Self::SdfCollisionEvents,
         Self::GridAcceleratedFlocking,
+        Self::FractalGridTerrain,
+        Self::LayerMappedHologram,
+        Self::SphericalFieldObservatory,
+        Self::TwistedMultiFormCathedral,
+        Self::PointCloudMorphPassage,
     ];
 
     #[must_use]
@@ -396,6 +457,11 @@ impl ParticleDemoKind {
             Self::SourceDrivenMorph => "SOURCE-DRIVEN MORPH",
             Self::SdfCollisionEvents => "SDF COLLISION EVENTS",
             Self::GridAcceleratedFlocking => "GRID-ACCELERATED FLOCKING",
+            Self::FractalGridTerrain => "FRACTAL GRID TERRAIN",
+            Self::LayerMappedHologram => "LAYER-MAPPED HOLOGRAM",
+            Self::SphericalFieldObservatory => "SPHERICAL FIELD OBSERVATORY",
+            Self::TwistedMultiFormCathedral => "TWISTED MULTI-FORM CATHEDRAL",
+            Self::PointCloudMorphPassage => "POINT-CLOUD MORPH PASSAGE",
         }
     }
 
@@ -433,6 +499,11 @@ impl ParticleDemoKind {
             Self::SourceDrivenMorph => "source-morph",
             Self::SdfCollisionEvents => "sdf-collision",
             Self::GridAcceleratedFlocking => "grid-flocking",
+            Self::FractalGridTerrain => "fractal-grid-terrain",
+            Self::LayerMappedHologram => "layer-mapped-hologram",
+            Self::SphericalFieldObservatory => "spherical-field-observatory",
+            Self::TwistedMultiFormCathedral => "twisted-multi-form-cathedral",
+            Self::PointCloudMorphPassage => "point-cloud-morph-passage",
         }
     }
 
@@ -505,6 +576,23 @@ impl ParticleDemoKind {
             Self::SourceDrivenMorph => 12_288,
             Self::SdfCollisionEvents => 8_192,
             Self::GridAcceleratedFlocking => 12_288,
+            Self::FractalGridTerrain => 49_152,
+            Self::LayerMappedHologram => 40_960,
+            Self::SphericalFieldObservatory => 32_768,
+            Self::TwistedMultiFormCathedral => 65_536,
+            Self::PointCloudMorphPassage => 24_576,
+        }
+    }
+
+    #[must_use]
+    pub const fn form_scene(self) -> Option<FormSceneKind> {
+        match self {
+            Self::FractalGridTerrain => Some(FormSceneKind::FractalGridTerrain),
+            Self::LayerMappedHologram => Some(FormSceneKind::LayerMappedHologram),
+            Self::SphericalFieldObservatory => Some(FormSceneKind::SphericalFieldObservatory),
+            Self::TwistedMultiFormCathedral => Some(FormSceneKind::TwistedMultiFormCathedral),
+            Self::PointCloudMorphPassage => Some(FormSceneKind::PointCloudMorphPassage),
+            _ => None,
         }
     }
 
@@ -573,6 +661,7 @@ pub struct ParticleShowcaseRenderer {
     firework_capture_time: Option<Duration>,
     hud_visible: bool,
     pool: ParticleShowcasePool,
+    form_renderer: FormSceneRenderer,
     commands: Vec<u32>,
     previous_commands: Vec<u32>,
     segments: Vec<ParticleShowcaseSegment>,
@@ -652,6 +741,7 @@ impl ParticleShowcaseRenderer {
     pub fn new(config: ParticleShowcaseConfig) -> Result<Self, String> {
         let config = config.validate()?;
         let pool = ParticleShowcasePool::new();
+        let form_renderer = FormSceneRenderer::new(config.seed);
         let commands = Vec::with_capacity(PARTICLE_DEMO_MAX_COUNT + PARTICLE_DEMO_TRANSITION_COUNT);
         let previous_commands = Vec::with_capacity(PARTICLE_DEMO_MAX_COUNT);
         let segments = Vec::with_capacity(SEGMENT_CAPACITY);
@@ -725,6 +815,8 @@ impl ParticleShowcaseRenderer {
                     .saturating_mul(std::mem::size_of::<MaterialStroke>()),
             )
             .saturating_add(transition.allocated_bytes());
+        let renderer_scratch_bytes =
+            renderer_scratch_bytes.saturating_add(form_renderer.allocated_bytes());
         let renderer_scratch_bytes = renderer_scratch_bytes.saturating_add(heat.capacity());
         let renderer_scratch_bytes = renderer_scratch_bytes.saturating_add(
             density
@@ -754,6 +846,7 @@ impl ParticleShowcaseRenderer {
             firework_capture_time: None,
             hud_visible: true,
             pool,
+            form_renderer,
             commands,
             previous_commands,
             segments,
@@ -1005,6 +1098,9 @@ impl ParticleShowcaseRenderer {
                 })
             });
         self.pool.reset(demo, self.config.seed);
+        if let Some(scene) = demo.form_scene() {
+            self.form_renderer.reset(scene);
+        }
         self.heat.fill(0);
         self.heat_frame = u64::MAX;
         self.flock_last_elapsed = elapsed;
@@ -1121,6 +1217,11 @@ impl ParticleShowcaseRenderer {
             ParticleDemoKind::SourceDrivenMorph => self.project_source_driven_morph(elapsed),
             ParticleDemoKind::SdfCollisionEvents => self.project_sdf_collision_events(elapsed),
             ParticleDemoKind::GridAcceleratedFlocking => self.project_grid_flocking(),
+            ParticleDemoKind::FractalGridTerrain
+            | ParticleDemoKind::LayerMappedHologram
+            | ParticleDemoKind::SphericalFieldObservatory
+            | ParticleDemoKind::TwistedMultiFormCathedral
+            | ParticleDemoKind::PointCloudMorphPassage => self.project_form_scene(elapsed),
         }
     }
 
@@ -1250,7 +1351,56 @@ impl ParticleShowcaseRenderer {
                 value if value < 22.0 => "split-rejoin",
                 _ => "chaser-pass",
             },
+            ParticleDemoKind::FractalGridTerrain
+            | ParticleDemoKind::LayerMappedHologram
+            | ParticleDemoKind::SphericalFieldObservatory
+            | ParticleDemoKind::TwistedMultiFormCathedral
+            | ParticleDemoKind::PointCloudMorphPassage => self
+                .demo
+                .form_scene()
+                .expect("Form demo must map to a Form scene")
+                .beat(seconds),
         }
+    }
+
+    fn project_form_scene(&mut self, elapsed: Duration) -> usize {
+        self.commands.clear();
+        self.segments.clear();
+        let scene = self
+            .demo
+            .form_scene()
+            .expect("Form projection requires a Form demo");
+        let logical_elapsed = elapsed.saturating_sub(self.demo_started_at);
+        let (points, segments) = self.form_renderer.project(
+            scene,
+            logical_elapsed,
+            self.config.width,
+            self.config.height,
+        );
+        let mut clipped = 0usize;
+        for point in points {
+            if !push_screen_command(
+                &mut self.commands,
+                self.config.width,
+                self.config.height,
+                point.x,
+                point.y,
+                point.style,
+                point.neighbor,
+            ) {
+                clipped = clipped.saturating_add(1);
+            }
+        }
+        for segment in segments {
+            self.segments.push(ParticleShowcaseSegment {
+                x0: segment.x0,
+                y0: segment.y0,
+                x1: segment.x1,
+                y1: segment.y1,
+                style: segment.style,
+            });
+        }
+        clipped
     }
 
     fn initialize_grid_flocking(&mut self) {
@@ -3776,6 +3926,11 @@ fn showcase_palette(demo: ParticleDemoKind) -> &'static [Rgb565Pixel; 8] {
         ParticleDemoKind::SourceDrivenMorph => &MORPH_PALETTE,
         ParticleDemoKind::SdfCollisionEvents => &COLLISION_PALETTE,
         ParticleDemoKind::GridAcceleratedFlocking => &FLOCK_PALETTE,
+        ParticleDemoKind::FractalGridTerrain => &FORM_TERRAIN_PALETTE,
+        ParticleDemoKind::LayerMappedHologram => &FORM_HOLOGRAM_PALETTE,
+        ParticleDemoKind::SphericalFieldObservatory => &FORM_OBSERVATORY_PALETTE,
+        ParticleDemoKind::TwistedMultiFormCathedral => &FORM_CATHEDRAL_PALETTE,
+        ParticleDemoKind::PointCloudMorphPassage => &FORM_MORPH_PALETTE,
     }
 }
 
@@ -3910,13 +4065,13 @@ mod tests {
 
     #[test]
     fn demo_order_and_wrapping_are_stable() {
-        assert_eq!(ParticleDemoKind::ALL.len(), 31);
+        assert_eq!(ParticleDemoKind::ALL.len(), 36);
         assert_eq!(
             ParticleDemoKind::SolarChrysanthemum.offset_wrapped(-1),
-            ParticleDemoKind::GridAcceleratedFlocking
+            ParticleDemoKind::PointCloudMorphPassage
         );
         assert_eq!(
-            ParticleDemoKind::GridAcceleratedFlocking.offset_wrapped(1),
+            ParticleDemoKind::PointCloudMorphPassage.offset_wrapped(1),
             ParticleDemoKind::SolarChrysanthemum
         );
         for (index, kind) in ParticleDemoKind::ALL.into_iter().enumerate() {
@@ -3988,7 +4143,15 @@ mod tests {
             ParticleDemoKind::parse("31"),
             Some(ParticleDemoKind::GridAcceleratedFlocking)
         );
-        assert_eq!(ParticleDemoKind::parse("32"), None);
+        assert_eq!(
+            ParticleDemoKind::parse("32"),
+            Some(ParticleDemoKind::FractalGridTerrain)
+        );
+        assert_eq!(
+            ParticleDemoKind::parse("36"),
+            Some(ParticleDemoKind::PointCloudMorphPassage)
+        );
+        assert_eq!(ParticleDemoKind::parse("37"), None);
         assert_eq!(ParticleDemoKind::parse("unknown"), None);
     }
 
