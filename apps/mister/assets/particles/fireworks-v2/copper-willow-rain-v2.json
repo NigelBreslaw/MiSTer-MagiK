@@ -18,10 +18,10 @@
       "trail": {"samples": 26, "step_ms": 18, "fade_power": 1.8}
     },
     {
-      "start_ms": 1160,
+      "start_ms": 1050,
       "origin": [0.50, 0.31],
-      "count": 32,
-      "strands": 32,
+      "count": 40,
+      "strands": 40,
       "trajectory_seed": 5201,
       "shape": "fan",
       "direction_deg": -90.0,
@@ -37,15 +37,15 @@
       "motion": {"kind": "ballistic", "turn_deg": [-3.5, 3.5], "perspective": 0.12},
       "envelope": {"attack": 0.01, "hold": 0.56, "decay_power": 1.7},
       "topology": {"path_variation_px": 12.0, "time_variation": 0.18, "brightness_variation": 0.32, "width_variation": 0.26, "breakup_start": 0.34, "trail_dropout": 0.44},
-      "material": {"head_radius": 1.65, "head_intensity": 1.92, "head_white": 0.76, "trail_width": [0.42, 0.92], "trail_intensity": 0.62, "trail_white": 0.18, "halo_radius": 2.2, "halo_intensity": 0.14, "bead_every": 2, "bead_intensity": 1.46, "blend": "screen"},
+      "material": {"head_radius": 1.52, "head_intensity": 1.94, "head_white": 0.72, "trail_width": [0.36, 0.78], "trail_intensity": 0.28, "trail_white": 0.14, "halo_radius": 2.0, "halo_intensity": 0.13, "bead_every": 2, "bead_intensity": 1.76, "blend": "screen"},
       "trail": {"samples": 42, "step_ms": 26, "fade_power": 1.35},
       "twinkle": 0.12
     },
     {
-      "start_ms": 1160,
+      "start_ms": 1050,
       "origin": [0.50, 0.31],
-      "count": 1280,
-      "strands": 32,
+      "count": 2000,
+      "strands": 40,
       "trajectory_seed": 5201,
       "shape": "fan",
       "direction_deg": -90.0,
@@ -60,12 +60,12 @@
       "motion": {"kind": "ballistic", "turn_deg": [-3.5, 3.5], "perspective": 0.12},
       "envelope": {"attack": 0.02, "hold": 0.20, "decay_power": 2.5},
       "topology": {"path_variation_px": 12.0, "time_variation": 0.20, "brightness_variation": 0.42, "width_variation": 0.35, "breakup_start": 0.16, "trail_dropout": 0.72},
-      "material": {"head_radius": 0.82, "head_intensity": 1.62, "head_white": 0.16, "trail_width": [0.22, 0.50], "trail_intensity": 0.30, "trail_white": 0.01, "halo_radius": 1.0, "halo_intensity": 0.07, "bead_every": 2, "bead_intensity": 1.62, "blend": "screen"},
+      "material": {"head_radius": 0.96, "head_intensity": 1.84, "head_white": 0.18, "trail_width": [0.20, 0.44], "trail_intensity": 0.14, "trail_white": 0.01, "halo_radius": 1.1, "halo_intensity": 0.08, "bead_every": 2, "bead_intensity": 1.88, "blend": "screen"},
       "trail": {"samples": 14, "step_ms": 24, "fade_power": 2.0},
       "twinkle": 0.44
     },
     {
-      "start_ms": 1200,
+      "start_ms": 1090,
       "origin": [0.50, 0.31],
       "count": 18,
       "strands": 18,

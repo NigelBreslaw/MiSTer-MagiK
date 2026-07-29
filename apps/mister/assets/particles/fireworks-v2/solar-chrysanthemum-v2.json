@@ -133,12 +133,12 @@
         "head_intensity": 1.75,
         "head_white": 0.78,
         "trail_width": [0.55, 1.22],
-        "trail_intensity": 0.68,
+        "trail_intensity": 0.30,
         "trail_white": 0.28,
         "halo_radius": 2.3,
         "halo_intensity": 0.16,
         "bead_every": 2,
-        "bead_intensity": 1.55,
+        "bead_intensity": 1.82,
         "blend": "screen"
       },
       "trail": {
@@ -151,7 +151,7 @@
     {
       "start_ms": 1170,
       "origin": [0.50, 0.47],
-      "count": 1008,
+      "count": 1600,
       "strands": 42,
       "trajectory_seed": 4101,
       "strand_spread_deg": 0.35,
@@ -190,16 +190,16 @@
         "trail_dropout": 0.62
       },
       "material": {
-        "head_radius": 0.90,
-        "head_intensity": 1.48,
+        "head_radius": 1.08,
+        "head_intensity": 1.82,
         "head_white": 0.32,
         "trail_width": [0.28, 0.62],
-        "trail_intensity": 0.34,
+        "trail_intensity": 0.16,
         "trail_white": 0.04,
         "halo_radius": 1.3,
         "halo_intensity": 0.08,
         "bead_every": 2,
-        "bead_intensity": 1.42,
+        "bead_intensity": 1.86,
         "blend": "screen"
       },
       "trail": {

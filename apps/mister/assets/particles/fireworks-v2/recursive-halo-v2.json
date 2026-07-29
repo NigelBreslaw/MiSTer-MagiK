@@ -20,9 +20,9 @@
     {
       "start_ms": 1080,
       "origin": [0.50, 0.48],
-      "count": 96,
+      "count": 140,
       "shape": "ring",
-      "speed": [112.0, 112.0],
+      "speed": [88.0, 88.0],
       "drag": 0.10,
       "life_ms": [1800, 2200],
       "palette": ["#ff43e6", "#ff71f0", "#d641ff"],
@@ -30,16 +30,16 @@
       "motion": {"kind": "ballistic", "turn_deg": [-2.0, 2.0], "perspective": 0.02},
       "envelope": {"attack": 0.01, "hold": 0.38, "decay_power": 2.1},
       "topology": {"path_variation_px": 5.0, "time_variation": 0.10, "brightness_variation": 0.28, "width_variation": 0.20, "breakup_start": 0.28, "trail_dropout": 0.48},
-      "material": {"head_radius": 1.15, "head_intensity": 1.65, "head_white": 0.28, "trail_width": [0.34, 0.72], "trail_intensity": 0.58, "trail_white": 0.04, "halo_radius": 1.4, "halo_intensity": 0.12, "bead_every": 3, "bead_intensity": 0.95, "blend": "screen"},
+      "material": {"head_radius": 1.05, "head_intensity": 1.76, "head_white": 0.30, "trail_width": [0.26, 0.60], "trail_intensity": 0.18, "trail_white": 0.04, "halo_radius": 1.4, "halo_intensity": 0.12, "bead_every": 2, "bead_intensity": 1.62, "blend": "screen"},
       "trail": {"samples": 14, "step_ms": 18, "fade_power": 2.0},
       "twinkle": 0.18
     },
     {
       "start_ms": 1120,
       "origin": [0.50, 0.48],
-      "count": 180,
+      "count": 260,
       "shape": "ring",
-      "speed": [205.0, 205.0],
+      "speed": [180.0, 180.0],
       "drag": 0.09,
       "life_ms": [2100, 2550],
       "palette": ["#8358ff", "#a875ff", "#c59aff"],
@@ -47,16 +47,16 @@
       "motion": {"kind": "ballistic", "turn_deg": [-1.5, 1.5], "perspective": 0.02},
       "envelope": {"attack": 0.015, "hold": 0.46, "decay_power": 1.8},
       "topology": {"path_variation_px": 8.0, "time_variation": 0.12, "brightness_variation": 0.32, "width_variation": 0.22, "breakup_start": 0.24, "trail_dropout": 0.58},
-      "material": {"head_radius": 0.85, "head_intensity": 1.42, "head_white": 0.18, "trail_width": [0.28, 0.55], "trail_intensity": 0.34, "trail_white": 0.02, "halo_radius": 1.2, "halo_intensity": 0.09, "bead_every": 2, "bead_intensity": 0.92, "blend": "screen"},
+      "material": {"head_radius": 0.88, "head_intensity": 1.58, "head_white": 0.20, "trail_width": [0.22, 0.48], "trail_intensity": 0.16, "trail_white": 0.02, "halo_radius": 1.2, "halo_intensity": 0.10, "bead_every": 2, "bead_intensity": 1.52, "blend": "screen"},
       "trail": {"samples": 10, "step_ms": 17, "fade_power": 2.3},
       "twinkle": 0.31
     },
     {
       "start_ms": 1160,
       "origin": [0.50, 0.48],
-      "count": 110,
+      "count": 150,
       "shape": "ring",
-      "speed": [246.0, 246.0],
+      "speed": [226.0, 226.0],
       "gravity": 18.0,
       "drag": 0.11,
       "life_ms": [2050, 2450],
@@ -67,7 +67,7 @@
       "motion": {"kind": "ballistic", "turn_deg": [-1.0, 1.0], "perspective": 0.02},
       "envelope": {"attack": 0.01, "hold": 0.42, "decay_power": 2.2},
       "topology": {"path_variation_px": 10.0, "time_variation": 0.14, "brightness_variation": 0.36, "width_variation": 0.25, "breakup_start": 0.18, "trail_dropout": 0.68},
-      "material": {"head_radius": 1.1, "head_intensity": 1.75, "head_white": 0.48, "trail_width": [0.30, 0.64], "trail_intensity": 0.56, "trail_white": 0.12, "halo_radius": 1.7, "halo_intensity": 0.14, "bead_every": 5, "bead_intensity": 0.7, "blend": "screen"},
+      "material": {"head_radius": 1.0, "head_intensity": 1.82, "head_white": 0.50, "trail_width": [0.24, 0.54], "trail_intensity": 0.15, "trail_white": 0.10, "halo_radius": 1.6, "halo_intensity": 0.14, "bead_every": 3, "bead_intensity": 1.48, "blend": "screen"},
       "trail": {"samples": 12, "step_ms": 20, "fade_power": 1.9}
     },
     {
@@ -85,7 +85,7 @@
       "motion": {"kind": "ballistic", "turn_deg": [-5.0, 5.0], "perspective": 0.16},
       "envelope": {"attack": 0.02, "hold": 0.14, "decay_power": 2.6},
       "topology": {"path_variation_px": 6.0, "time_variation": 0.18, "brightness_variation": 0.38, "width_variation": 0.30, "breakup_start": 0.24, "trail_dropout": 0.58},
-      "material": {"head_radius": 0.82, "head_intensity": 1.48, "head_white": 0.28, "trail_width": [0.25, 0.52], "trail_intensity": 0.30, "trail_white": 0.03, "halo_radius": 1.1, "halo_intensity": 0.08, "bead_every": 2, "bead_intensity": 1.18, "blend": "screen"},
+      "material": {"head_radius": 0.90, "head_intensity": 1.70, "head_white": 0.30, "trail_width": [0.20, 0.44], "trail_intensity": 0.12, "trail_white": 0.02, "halo_radius": 1.1, "halo_intensity": 0.09, "bead_every": 2, "bead_intensity": 1.72, "blend": "screen"},
       "trail": {"samples": 16, "step_ms": 23, "fade_power": 2.1},
       "twinkle": 0.32
     },
@@ -103,7 +103,7 @@
       "motion": {"kind": "vortex", "center": [0.50, 0.24], "duration_ms": 1550, "radius_px": [7.0, 58.0], "turns": [0.02, 0.18], "path_spread_px": 2.0, "time_power": 0.84},
       "topology": {"path_variation_px": 7.0, "time_variation": 0.16, "brightness_variation": 0.30, "width_variation": 0.22, "breakup_start": 0.34, "trail_dropout": 0.44},
       "envelope": {"attack": 0.02, "hold": 0.45, "decay_power": 2.0},
-      "material": {"head_radius": 0.9, "head_intensity": 1.52, "head_white": 0.28, "trail_width": [0.25, 0.58], "trail_intensity": 0.48, "trail_white": 0.05, "halo_radius": 1.3, "halo_intensity": 0.11, "bead_every": 3, "bead_intensity": 0.74, "blend": "screen"},
+      "material": {"head_radius": 0.92, "head_intensity": 1.68, "head_white": 0.28, "trail_width": [0.20, 0.48], "trail_intensity": 0.15, "trail_white": 0.03, "halo_radius": 1.3, "halo_intensity": 0.11, "bead_every": 2, "bead_intensity": 1.54, "blend": "screen"},
       "trail": {"samples": 12, "step_ms": 18, "fade_power": 2.0}
     },
     {
@@ -120,7 +120,7 @@
       "motion": {"kind": "vortex", "center": [0.71, 0.31], "duration_ms": 1550, "radius_px": [7.0, 58.0], "turns": [0.02, 0.18], "path_spread_px": 2.0, "time_power": 0.84},
       "topology": {"path_variation_px": 7.0, "time_variation": 0.16, "brightness_variation": 0.30, "width_variation": 0.22, "breakup_start": 0.34, "trail_dropout": 0.44},
       "envelope": {"attack": 0.02, "hold": 0.45, "decay_power": 2.0},
-      "material": {"head_radius": 0.9, "head_intensity": 1.52, "head_white": 0.28, "trail_width": [0.25, 0.58], "trail_intensity": 0.48, "trail_white": 0.05, "halo_radius": 1.3, "halo_intensity": 0.11, "bead_every": 3, "bead_intensity": 0.74, "blend": "screen"},
+      "material": {"head_radius": 0.92, "head_intensity": 1.68, "head_white": 0.28, "trail_width": [0.20, 0.48], "trail_intensity": 0.15, "trail_white": 0.03, "halo_radius": 1.3, "halo_intensity": 0.11, "bead_every": 2, "bead_intensity": 1.54, "blend": "screen"},
       "trail": {"samples": 12, "step_ms": 18, "fade_power": 2.0}
     },
     {
@@ -137,7 +137,7 @@
       "motion": {"kind": "vortex", "center": [0.79, 0.52], "duration_ms": 1550, "radius_px": [7.0, 58.0], "turns": [0.02, 0.18], "path_spread_px": 2.0, "time_power": 0.84},
       "topology": {"path_variation_px": 7.0, "time_variation": 0.16, "brightness_variation": 0.30, "width_variation": 0.22, "breakup_start": 0.34, "trail_dropout": 0.44},
       "envelope": {"attack": 0.02, "hold": 0.45, "decay_power": 2.0},
-      "material": {"head_radius": 0.9, "head_intensity": 1.52, "head_white": 0.28, "trail_width": [0.25, 0.58], "trail_intensity": 0.48, "trail_white": 0.05, "halo_radius": 1.3, "halo_intensity": 0.11, "bead_every": 3, "bead_intensity": 0.74, "blend": "screen"},
+      "material": {"head_radius": 0.92, "head_intensity": 1.68, "head_white": 0.28, "trail_width": [0.20, 0.48], "trail_intensity": 0.15, "trail_white": 0.03, "halo_radius": 1.3, "halo_intensity": 0.11, "bead_every": 2, "bead_intensity": 1.54, "blend": "screen"},
       "trail": {"samples": 12, "step_ms": 18, "fade_power": 2.0}
     },
     {
@@ -154,7 +154,7 @@
       "motion": {"kind": "vortex", "center": [0.70, 0.71], "duration_ms": 1550, "radius_px": [7.0, 58.0], "turns": [0.02, 0.18], "path_spread_px": 2.0, "time_power": 0.84},
       "topology": {"path_variation_px": 7.0, "time_variation": 0.16, "brightness_variation": 0.30, "width_variation": 0.22, "breakup_start": 0.34, "trail_dropout": 0.44},
       "envelope": {"attack": 0.02, "hold": 0.45, "decay_power": 2.0},
-      "material": {"head_radius": 0.9, "head_intensity": 1.52, "head_white": 0.28, "trail_width": [0.25, 0.58], "trail_intensity": 0.48, "trail_white": 0.05, "halo_radius": 1.3, "halo_intensity": 0.11, "bead_every": 3, "bead_intensity": 0.74, "blend": "screen"},
+      "material": {"head_radius": 0.92, "head_intensity": 1.68, "head_white": 0.28, "trail_width": [0.20, 0.48], "trail_intensity": 0.15, "trail_white": 0.03, "halo_radius": 1.3, "halo_intensity": 0.11, "bead_every": 2, "bead_intensity": 1.54, "blend": "screen"},
       "trail": {"samples": 12, "step_ms": 18, "fade_power": 2.0}
     },
     {
@@ -171,7 +171,7 @@
       "motion": {"kind": "vortex", "center": [0.30, 0.71], "duration_ms": 1550, "radius_px": [7.0, 58.0], "turns": [0.02, 0.18], "path_spread_px": 2.0, "time_power": 0.84},
       "topology": {"path_variation_px": 7.0, "time_variation": 0.16, "brightness_variation": 0.30, "width_variation": 0.22, "breakup_start": 0.34, "trail_dropout": 0.44},
       "envelope": {"attack": 0.02, "hold": 0.45, "decay_power": 2.0},
-      "material": {"head_radius": 0.9, "head_intensity": 1.52, "head_white": 0.28, "trail_width": [0.25, 0.58], "trail_intensity": 0.48, "trail_white": 0.05, "halo_radius": 1.3, "halo_intensity": 0.11, "bead_every": 3, "bead_intensity": 0.74, "blend": "screen"},
+      "material": {"head_radius": 0.92, "head_intensity": 1.68, "head_white": 0.28, "trail_width": [0.20, 0.48], "trail_intensity": 0.15, "trail_white": 0.03, "halo_radius": 1.3, "halo_intensity": 0.11, "bead_every": 2, "bead_intensity": 1.54, "blend": "screen"},
       "trail": {"samples": 12, "step_ms": 18, "fade_power": 2.0}
     },
     {
@@ -188,7 +188,7 @@
       "motion": {"kind": "vortex", "center": [0.21, 0.52], "duration_ms": 1550, "radius_px": [7.0, 58.0], "turns": [0.02, 0.18], "path_spread_px": 2.0, "time_power": 0.84},
       "topology": {"path_variation_px": 7.0, "time_variation": 0.16, "brightness_variation": 0.30, "width_variation": 0.22, "breakup_start": 0.34, "trail_dropout": 0.44},
       "envelope": {"attack": 0.02, "hold": 0.45, "decay_power": 2.0},
-      "material": {"head_radius": 0.9, "head_intensity": 1.52, "head_white": 0.28, "trail_width": [0.25, 0.58], "trail_intensity": 0.48, "trail_white": 0.05, "halo_radius": 1.3, "halo_intensity": 0.11, "bead_every": 3, "bead_intensity": 0.74, "blend": "screen"},
+      "material": {"head_radius": 0.92, "head_intensity": 1.68, "head_white": 0.28, "trail_width": [0.20, 0.48], "trail_intensity": 0.15, "trail_white": 0.03, "halo_radius": 1.3, "halo_intensity": 0.11, "bead_every": 2, "bead_intensity": 1.54, "blend": "screen"},
       "trail": {"samples": 12, "step_ms": 18, "fade_power": 2.0}
     },
     {
@@ -205,7 +205,7 @@
       "motion": {"kind": "vortex", "center": [0.29, 0.31], "duration_ms": 1550, "radius_px": [7.0, 58.0], "turns": [0.02, 0.18], "path_spread_px": 2.0, "time_power": 0.84},
       "topology": {"path_variation_px": 7.0, "time_variation": 0.16, "brightness_variation": 0.30, "width_variation": 0.22, "breakup_start": 0.34, "trail_dropout": 0.44},
       "envelope": {"attack": 0.02, "hold": 0.45, "decay_power": 2.0},
-      "material": {"head_radius": 0.9, "head_intensity": 1.52, "head_white": 0.28, "trail_width": [0.25, 0.58], "trail_intensity": 0.48, "trail_white": 0.05, "halo_radius": 1.3, "halo_intensity": 0.11, "bead_every": 3, "bead_intensity": 0.74, "blend": "screen"},
+      "material": {"head_radius": 0.92, "head_intensity": 1.68, "head_white": 0.28, "trail_width": [0.20, 0.48], "trail_intensity": 0.15, "trail_white": 0.03, "halo_radius": 1.3, "halo_intensity": 0.11, "bead_every": 2, "bead_intensity": 1.54, "blend": "screen"},
       "trail": {"samples": 12, "step_ms": 18, "fade_power": 2.0}
     },
     {
@@ -222,7 +222,7 @@
       "motion": {"kind": "vortex", "center": [0.50, 0.77], "duration_ms": 1550, "radius_px": [7.0, 58.0], "turns": [-0.18, -0.02], "path_spread_px": 2.0, "time_power": 0.84},
       "topology": {"path_variation_px": 7.0, "time_variation": 0.16, "brightness_variation": 0.30, "width_variation": 0.22, "breakup_start": 0.34, "trail_dropout": 0.44},
       "envelope": {"attack": 0.02, "hold": 0.45, "decay_power": 2.0},
-      "material": {"head_radius": 0.9, "head_intensity": 1.52, "head_white": 0.28, "trail_width": [0.25, 0.58], "trail_intensity": 0.38, "trail_white": 0.05, "halo_radius": 1.3, "halo_intensity": 0.11, "bead_every": 2, "bead_intensity": 1.04, "blend": "screen"},
+      "material": {"head_radius": 0.98, "head_intensity": 1.74, "head_white": 0.32, "trail_width": [0.20, 0.50], "trail_intensity": 0.13, "trail_white": 0.03, "halo_radius": 1.4, "halo_intensity": 0.12, "bead_every": 2, "bead_intensity": 1.66, "blend": "screen"},
       "trail": {"samples": 12, "step_ms": 18, "fade_power": 2.0}
     },
     {
