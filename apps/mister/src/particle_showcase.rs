@@ -7,6 +7,7 @@ use crate::bitmap_text::{ConsoleFont, ConsoleTypeface};
 use crate::fireworks::{FireworkRenderer, embedded_firework_json};
 use crate::fireworks_v2::{FireworkV2Renderer, embedded_firework_v2_json};
 use crate::framebuffer::mapped::Pixel;
+use crate::particle_material::{MaterialRasterStats, MaterialStamp, raster_stamp};
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, Instant};
@@ -287,30 +288,13 @@ impl ParticleDemoKind {
     }
 
     #[must_use]
-    pub const fn hud_label(self) -> &'static str {
-        match self {
-            Self::SolarChrysanthemum => "01/15 SOLAR CHRYSANTHEMUM",
-            Self::RecursiveHalo => "02/15 RECURSIVE HALO",
-            Self::CopperWillowRain => "03/15 COPPER WILLOW RAIN",
-            Self::PhoenixComet => "04/15 PHOENIX COMET",
-            Self::MagneticFlower => "05/15 MAGNETIC FLOWER",
-            Self::OledPeony => "06/15 OLED PEONY",
-            Self::SolarChrysanthemumV2 => "07/21 SOLAR CHRYSANTHEMUM V2",
-            Self::RecursiveHaloV2 => "08/21 RECURSIVE HALO V2",
-            Self::CopperWillowRainV2 => "09/21 COPPER WILLOW RAIN V2",
-            Self::PhoenixCometV2 => "10/21 PHOENIX COMET V2",
-            Self::MagneticFlowerV2 => "11/21 MAGNETIC FLOWER V2",
-            Self::OledPeonyV2 => "12/21 OLED PEONY V2",
-            Self::FireEmbers => "13/21 FIRE + EMBERS",
-            Self::SpiralGalaxy => "14/21 SPIRAL GALAXY",
-            Self::WarpSpeed => "15/21 WARP SPEED",
-            Self::MeteorShower => "16/21 METEOR SHOWER",
-            Self::Weather => "17/21 WEATHER",
-            Self::ParticlePortal => "18/21 PARTICLE PORTAL",
-            Self::ElectricStorm => "19/21 ELECTRIC STORM",
-            Self::FountainWaterfall => "20/21 FOUNTAIN / WATERFALL",
-            Self::ArcadeCabinet => "21/21 ARCADE CABINET",
-        }
+    pub fn hud_label(self) -> String {
+        format!(
+            "{:02}/{:02} {}",
+            self.number(),
+            Self::ALL.len(),
+            self.label()
+        )
     }
 
     #[must_use]
@@ -433,6 +417,7 @@ pub struct ParticleShowcaseRenderer {
     commands: Vec<u32>,
     previous_commands: Vec<u32>,
     segments: Vec<ParticleShowcaseSegment>,
+    material_stamps: Vec<MaterialStamp>,
     transition: ParticleShowcaseTransition,
     transition_started_at: Option<Duration>,
     heat: Vec<u8>,
@@ -503,6 +488,7 @@ impl ParticleShowcaseRenderer {
         let commands = Vec::with_capacity(PARTICLE_DEMO_MAX_COUNT + PARTICLE_DEMO_TRANSITION_COUNT);
         let previous_commands = Vec::with_capacity(PARTICLE_DEMO_MAX_COUNT);
         let segments = Vec::with_capacity(SEGMENT_CAPACITY);
+        let material_stamps = Vec::with_capacity(16_384);
         let transition = ParticleShowcaseTransition::new();
         let heat = vec![0; FIRE_HEAT_W * FIRE_HEAT_H];
         let dirty_slots = std::array::from_fn(|_| ParticleShowcaseDirtySlot {
@@ -522,7 +508,7 @@ impl ParticleShowcaseRenderer {
                 HUD_H,
                 0,
                 HUD_BASELINE_Y,
-                kind.hud_label(),
+                &kind.hud_label(),
                 Pixel(0x00bd_baff),
             );
         }
@@ -555,6 +541,11 @@ impl ParticleShowcaseRenderer {
                     .capacity()
                     .saturating_mul(std::mem::size_of::<ParticleShowcaseSegment>()),
             )
+            .saturating_add(
+                material_stamps
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<MaterialStamp>()),
+            )
             .saturating_add(transition.allocated_bytes());
         let renderer_scratch_bytes = renderer_scratch_bytes.saturating_add(heat.capacity());
         let mut renderer = Self {
@@ -568,6 +559,7 @@ impl ParticleShowcaseRenderer {
             commands,
             previous_commands,
             segments,
+            material_stamps,
             transition,
             transition_started_at: None,
             heat,
@@ -633,6 +625,7 @@ impl ParticleShowcaseRenderer {
 
         let projection_started = Instant::now();
         let projection_cpu_started = thread_cpu_time_us();
+        self.material_stamps.clear();
         let mut clipped_commands = self.project_effect(elapsed);
         let projection_us = projection_started.elapsed().as_micros();
         let projection_cpu_us = elapsed_thread_cpu_us(projection_cpu_started);
@@ -647,6 +640,9 @@ impl ParticleShowcaseRenderer {
         let mut attempted_pixel_writes = self.raster_effect_background(destination);
         let (visible, point_writes) = self.raster_points(destination, &mut dirty_offsets);
         attempted_pixel_writes = attempted_pixel_writes.saturating_add(point_writes);
+        let material = self.raster_materials(destination, &mut dirty_offsets);
+        attempted_pixel_writes =
+            attempted_pixel_writes.saturating_add(material.attempted_pixel_writes);
         attempted_pixel_writes = attempted_pixel_writes
             .saturating_add(self.raster_segments(destination, &mut dirty_offsets));
         self.draw_hud(destination, &mut dirty_offsets);
@@ -2073,6 +2069,28 @@ impl ParticleShowcaseRenderer {
         writes
     }
 
+    fn raster_materials(
+        &self,
+        destination: &mut [Rgb565Pixel],
+        dirty_offsets: &mut Vec<u32>,
+    ) -> MaterialRasterStats {
+        let mut total = MaterialRasterStats::default();
+        for &stamp in &self.material_stamps {
+            let stats = raster_stamp(
+                destination,
+                dirty_offsets,
+                self.config.width,
+                self.config.height,
+                stamp,
+            );
+            total.stamps = total.stamps.saturating_add(stats.stamps);
+            total.attempted_pixel_writes = total
+                .attempted_pixel_writes
+                .saturating_add(stats.attempted_pixel_writes);
+        }
+        total
+    }
+
     fn raster_effect_background(&self, destination: &mut [Rgb565Pixel]) -> usize {
         if self.demo != ParticleDemoKind::FireEmbers {
             return 0;
@@ -2136,7 +2154,7 @@ impl ParticleShowcaseRenderer {
             HUD_H,
             0,
             HUD_BASELINE_Y,
-            self.demo.hud_label(),
+            &self.demo.hud_label(),
             Pixel(0x00bd_baff),
         );
         let max_x = (HUD_X as usize + HUD_W).min(self.config.width);

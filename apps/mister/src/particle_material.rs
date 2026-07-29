@@ -9,6 +9,7 @@ const MAX_STAMP_RADIUS: i16 = 5;
 const MAX_STROKE_SAMPLES: usize = 48;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(dead_code)]
 pub(crate) enum MaterialShape {
     Disc,
     Spark,
@@ -71,6 +72,7 @@ pub(crate) fn raster_stamp(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(dead_code)]
 pub(crate) fn raster_tapered_segment(
     destination: &mut [Rgb565Pixel],
     dirty_offsets: &mut Vec<u32>,
