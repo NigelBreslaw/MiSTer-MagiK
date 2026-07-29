@@ -1046,7 +1046,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         budget.consume().map_err(|_| {
             LatchFailure::runtime(
                 LatchFailureStage::PostVerification,
-                LatchFailureReason::Transport,
+                LatchFailureReason::FpgaTransportFailed,
                 "latch status exhausted its bounded read budget",
             )
         })?;
