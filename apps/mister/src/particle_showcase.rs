@@ -4275,4 +4275,38 @@ mod tests {
         bad_palette[PARTICLE_CLOUD_HEADER_BYTES + 6] = 8;
         assert!(decode_particle_cloud(&bad_palette, &mut pool).is_err());
     }
+
+    #[test]
+    fn commercial_techniques_render_nonempty_bounded_frames() {
+        for kind in ParticleDemoKind::ALL.into_iter().skip(21) {
+            let mut renderer = ParticleShowcaseRenderer::new(ParticleShowcaseConfig {
+                width: 960,
+                height: 540,
+                seed: 827_141_709_451,
+                initial_demo: kind,
+            })
+            .unwrap();
+            renderer.configure_capture_hud(false);
+            let mut first = vec![Rgb565Pixel(0); 960 * 540];
+            let mut second = vec![Rgb565Pixel(0); 960 * 540];
+            renderer.render(&mut first, 1, Duration::ZERO).unwrap();
+            let stats = renderer
+                .render(&mut second, 2, Duration::from_secs(15))
+                .unwrap();
+
+            assert_eq!(stats.demo, kind);
+            assert_eq!(stats.count, kind.starting_count());
+            assert!(
+                stats.attempted_pixel_writes > 0,
+                "{} produced no pixel writes",
+                kind.telemetry_label()
+            );
+            assert!(
+                second.iter().any(|pixel| pixel.0 != 0),
+                "{} produced an empty hero frame",
+                kind.telemetry_label()
+            );
+            assert!(stats.clipped_commands <= stats.count);
+        }
+    }
 }
