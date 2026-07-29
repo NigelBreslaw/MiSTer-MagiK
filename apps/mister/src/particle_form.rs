@@ -697,10 +697,6 @@ fn unit01(value: u32) -> f32 {
     ((value >> 8) as f32) * (1.0 / 16_777_215.0)
 }
 
-fn unit_signed(value: u32) -> f32 {
-    unit01(value).mul_add(2.0, -1.0)
-}
-
 fn lerp(first: f32, second: f32, amount: f32) -> f32 {
     first + (second - first) * amount
 }
