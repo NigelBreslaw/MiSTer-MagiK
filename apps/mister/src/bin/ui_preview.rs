@@ -7,7 +7,8 @@ mod macos {
         PortableCatalogBuild, publish_portable_catalog,
     };
     use mister_magik_catalog::preview_worker::{
-        PreviewPixels as CatalogPreviewPixels, PreviewWorker, load_preview_asset_pixels,
+        PreviewArchiveBatch, PreviewPixels as CatalogPreviewPixels, PreviewWorker,
+        load_preview_archive_batch, load_preview_asset_pixels, preview_archive_path_for_system,
         preview_asset_cache_key, resolved_preview_archive_path,
     };
     use mister_magik_fb::arcade_catalog::{ArcadeCatalog, ArcadeGameEntry, MENU_ARCADE_SYSTEM_ID};
@@ -57,6 +58,7 @@ mod macos {
     use std::num::NonZeroU32;
     use std::path::{Path, PathBuf};
     use std::rc::Rc;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, mpsc};
     use std::time::{Duration, Instant};
     use winit::application::ApplicationHandler;
@@ -71,6 +73,8 @@ mod macos {
     const DEFAULT_REFRESH_HZ: u32 = 60;
     const MAX_AUTO_REFRESH_HZ: u32 = 120;
     const PREVIEW_TRANSITION_DURATION: Duration = Duration::from_millis(200);
+    const SCREENSHOT_TILE_IMAGE_CAP: usize = 256;
+    const SCREENSHOT_TILE_SEED: u64 = 0x4d61_6769_4b54_696c;
 
     enum PreviewFireworkRenderer {
         V1(FireworkRenderer),
@@ -151,6 +155,9 @@ mod macos {
             options.display_profile,
         )?;
         application.select_scenario(options.scenario);
+        if headless && options.scenario == Scenario::ScreenshotTiles {
+            application.load_headless_screenshot_tiles()?;
+        }
         if let Some(output) = options.output {
             if let Some(time_ms) = options.time_ms {
                 application.screensaver_elapsed = Duration::from_millis(time_ms);
@@ -237,6 +244,19 @@ mod macos {
         ))
     }
 
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct TilePackFingerprint {
+        path: PathBuf,
+        bytes: u64,
+        modified_nanos: u128,
+    }
+
+    struct TilePackLoader {
+        fingerprint: TilePackFingerprint,
+        cancelled: Arc<AtomicBool>,
+        receiver: mpsc::Receiver<Result<Option<PreviewArchiveBatch>, String>>,
+    }
+
     struct PreviewApplication {
         launcher: Launcher,
         slint_window: Rc<MisterSoftwareWindow>,
@@ -263,6 +283,7 @@ mod macos {
         preview_worker: Option<PreviewWorker>,
         requested_preview_key: Option<String>,
         media_worker: Option<MediaWorkerHandle>,
+        download_media_configured: bool,
         download_media: bool,
         arcade_layer: ArcadeVisualLayer,
         preview_transition: PreviewTransitionController<()>,
@@ -274,7 +295,11 @@ mod macos {
         particle_renderer: Option<ParticleRenderer>,
         firework_renderer: Option<PreviewFireworkRenderer>,
         tile_wall: ScreenshotTileWall,
+        fixture_tile_images: Vec<ScreenshotTileImage>,
         tile_images: Vec<ScreenshotTileImage>,
+        tile_pack_loader: Option<TilePackLoader>,
+        tile_pack_fingerprint: Option<TilePackFingerprint>,
+        tile_pack_status: String,
         screensaver_elapsed: Duration,
         screensaver_paused: bool,
         screensaver_return: Option<Scenario>,
@@ -322,7 +347,7 @@ mod macos {
             }
             launcher_nav.sync_launcher_taxonomy(&catalog);
             launcher_nav.catalog_build_finished(&catalog);
-            let tile_images = fixtures
+            let fixture_tile_images = fixtures
                 .screenshots
                 .iter()
                 .map(|image| ScreenshotTileImage {
@@ -331,7 +356,8 @@ mod macos {
                     h: image.height,
                     stride: image.stride,
                 })
-                .collect();
+                .collect::<Vec<_>>();
+            let tile_images = fixture_tile_images.clone();
             let refresh_hz = refresh_rate.headless_hz();
             let now = Instant::now();
             let next_frame_deadline = now + elapsed_for_frame(1, refresh_hz);
@@ -376,6 +402,7 @@ mod macos {
                 preview_worker,
                 requested_preview_key: None,
                 media_worker: None,
+                download_media_configured: download_media && !headless,
                 download_media: download_media && !headless,
                 arcade_layer: ArcadeVisualLayer::new(FRAME_WIDTH, FRAME_HEIGHT),
                 preview_transition: PreviewTransitionController::default(),
@@ -390,7 +417,11 @@ mod macos {
                 particle_renderer: None,
                 firework_renderer,
                 tile_wall: ScreenshotTileWall::new(FRAME_WIDTH, FRAME_HEIGHT),
+                fixture_tile_images,
                 tile_images,
+                tile_pack_loader: None,
+                tile_pack_fingerprint: None,
+                tile_pack_status: "tiles:fixtures".to_owned(),
                 screensaver_elapsed: Duration::ZERO,
                 screensaver_paused: false,
                 screensaver_return: None,
@@ -437,13 +468,14 @@ mod macos {
 
         fn window_title(&self) -> String {
             format!(
-                "MiSTer MagiK UI Preview — {} — {} — {} Hz — {} — {} — {}",
+                "MiSTer MagiK UI Preview — {} — {} — {} Hz — {} — {} — {} — {}",
                 self.scenario.label(),
                 self.scenario.shortcut(),
                 self.refresh_hz,
                 self.content.label(),
                 self.catalog_source,
                 self.display_profile.label(),
+                self.tile_pack_status,
             )
         }
 
@@ -479,6 +511,7 @@ mod macos {
             if matches!(scenario, Scenario::ScreenshotTiles) {
                 self.tile_wall.invalidate();
                 self.screensaver_elapsed = Duration::ZERO;
+                self.ensure_screenshot_tile_images();
             }
             if scenario.uses_launcher_navigation() {
                 self.sync_launcher_navigation();
@@ -743,6 +776,7 @@ mod macos {
             self.poll_catalog_worker();
             self.poll_preview_worker();
             self.poll_media_worker();
+            self.poll_screenshot_tile_loader();
             self.poll_card_connection();
             let frame_delta = self.frame_delta();
             self.tick_launcher_navigation();
@@ -973,6 +1007,147 @@ mod macos {
             Path::new(&development).is_file().then_some(development)
         }
 
+        fn ensure_screenshot_tile_images(&mut self) {
+            if self.headless {
+                return;
+            }
+            if matches!(self.content, PreviewContent::Fixtures) {
+                self.tile_pack_status = "tiles:fixtures".to_owned();
+                return;
+            }
+            let canonical = preview_archive_path_for_system(MENU_ARCADE_SYSTEM_ID);
+            let Some(path) = self.resolve_preview_archive_path(&canonical) else {
+                self.tile_pack_status = if self.download_media {
+                    "tiles:downloading-arcade".to_owned()
+                } else {
+                    "tiles:arcade-pack-missing".to_owned()
+                };
+                self.ensure_media_download(MENU_ARCADE_SYSTEM_ID);
+                return;
+            };
+            let path = PathBuf::from(path);
+            let fingerprint = match tile_pack_fingerprint(&path) {
+                Ok(fingerprint) => fingerprint,
+                Err(error) => {
+                    self.tile_pack_status = format!("tiles:error:{error}");
+                    return;
+                }
+            };
+            if self.tile_pack_fingerprint.as_ref() == Some(&fingerprint)
+                || self
+                    .tile_pack_loader
+                    .as_ref()
+                    .is_some_and(|loader| loader.fingerprint == fingerprint)
+            {
+                return;
+            }
+            self.cancel_screenshot_tile_load();
+            let cancelled = Arc::new(AtomicBool::new(false));
+            let worker_cancelled = Arc::clone(&cancelled);
+            let worker_path = path.clone();
+            let (sender, receiver) = mpsc::channel();
+            let spawn = std::thread::Builder::new()
+                .name("mac-screenshot-tiles".into())
+                .spawn(move || {
+                    let result = load_preview_archive_batch(
+                        &worker_path,
+                        SCREENSHOT_TILE_IMAGE_CAP,
+                        SCREENSHOT_TILE_SEED,
+                        || worker_cancelled.load(Ordering::Relaxed),
+                    );
+                    let _ = sender.send(result);
+                });
+            match spawn {
+                Ok(_) => {
+                    self.tile_pack_status = format!("tiles:loading:{}", fingerprint.path.display());
+                    self.tile_pack_loader = Some(TilePackLoader {
+                        fingerprint,
+                        cancelled,
+                        receiver,
+                    });
+                }
+                Err(error) => {
+                    self.tile_pack_status = format!("tiles:error:start loader: {error}");
+                }
+            }
+        }
+
+        fn cancel_screenshot_tile_load(&mut self) {
+            if let Some(loader) = self.tile_pack_loader.take() {
+                loader.cancelled.store(true, Ordering::Relaxed);
+            }
+        }
+
+        fn poll_screenshot_tile_loader(&mut self) {
+            let Some(loader) = self.tile_pack_loader.take() else {
+                return;
+            };
+            match loader.receiver.try_recv() {
+                Ok(Ok(Some(batch))) => {
+                    let fingerprint = loader.fingerprint;
+                    self.install_screenshot_tile_batch(batch);
+                    self.tile_pack_fingerprint = Some(fingerprint);
+                }
+                Ok(Ok(None)) => {}
+                Ok(Err(error)) => {
+                    self.tile_pack_status = format!("tiles:error:{error}");
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    self.tile_pack_loader = Some(loader);
+                    return;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.tile_pack_status = "tiles:error:loader disconnected".to_owned();
+                }
+            }
+            if let Some(window) = self.native_window.as_ref() {
+                window.set_title(&self.window_title());
+                window.request_redraw();
+            }
+        }
+
+        fn install_screenshot_tile_batch(&mut self, batch: PreviewArchiveBatch) {
+            let image_count = batch.images.len();
+            let total_entries = batch.total_entries;
+            let failed_entries = batch.failed_entries;
+            let source_path = batch.source_path;
+            self.tile_images = batch
+                .images
+                .into_iter()
+                .map(catalog_pixels_to_tile_image)
+                .collect();
+            self.tile_wall.invalidate();
+            self.tile_pack_status = format!(
+                "tiles:arcade-pack:{image_count}/{total_entries}:failed={failed_entries}:{}",
+                source_path.display()
+            );
+            self.slint_window.request_redraw();
+        }
+
+        fn load_headless_screenshot_tiles(&mut self) -> Result<(), String> {
+            if matches!(self.content, PreviewContent::Fixtures) {
+                return Ok(());
+            }
+            let canonical = preview_archive_path_for_system(MENU_ARCADE_SYSTEM_ID);
+            let path = self.resolve_preview_archive_path(&canonical).ok_or_else(|| {
+                format!(
+                    "headless card screenshot tiles require the Arcade screenshot pack {canonical}"
+                )
+            })?;
+            let path = PathBuf::from(path);
+            let fingerprint = tile_pack_fingerprint(&path)?;
+            let batch = load_preview_archive_batch(
+                &path,
+                SCREENSHOT_TILE_IMAGE_CAP,
+                SCREENSHOT_TILE_SEED,
+                || false,
+            )?
+            .ok_or_else(|| "headless screenshot tile load was cancelled".to_owned())?;
+            self.install_screenshot_tile_batch(batch);
+            self.tile_pack_fingerprint = Some(fingerprint);
+            Ok(())
+        }
+
         fn ensure_media_download(&mut self, system_id: &str) {
             if !self.download_media {
                 return;
@@ -1001,6 +1176,8 @@ mod macos {
 
         fn poll_media_worker(&mut self) {
             let mut reload_catalog = false;
+            let mut reload_screenshot_tiles = false;
+            let mut worker_done = false;
             while let Some(message) = self
                 .media_worker
                 .as_ref()
@@ -1048,7 +1225,26 @@ mod macos {
                     MediaWorkerMessage::Done { .. } => {
                         bridge.set_media_pack_summary("Screenshot packs ready".into());
                         self.requested_preview_key = None;
+                        worker_done = true;
                     }
+                    MediaWorkerMessage::PackStatus {
+                        system,
+                        status,
+                        detail,
+                        ..
+                    } if system == MENU_ARCADE_SYSTEM_ID => match status.as_str() {
+                        "current" | "downloaded" => {
+                            self.tile_pack_status = format!("tiles:{status}:arcade");
+                            reload_screenshot_tiles = true;
+                        }
+                        "failed" => {
+                            self.tile_pack_status =
+                                format!("tiles:error:Arcade download failed: {detail}");
+                        }
+                        _ => {
+                            self.tile_pack_status = format!("tiles:{status}:arcade");
+                        }
+                    },
                     MediaWorkerMessage::Timing { .. }
                     | MediaWorkerMessage::CacheMetadata { .. }
                     | MediaWorkerMessage::PackStatus { .. } => {}
@@ -1056,6 +1252,12 @@ mod macos {
             }
             if reload_catalog {
                 self.reload_mac_catalog();
+            }
+            if worker_done {
+                self.media_worker = None;
+            }
+            if reload_screenshot_tiles {
+                self.ensure_screenshot_tile_images();
             }
         }
 
@@ -1093,6 +1295,10 @@ mod macos {
             if connected {
                 bridge.set_compatibility_visible(false);
                 self.catalog_source = "catalog:card-reconnected".to_owned();
+                self.download_media = self.download_media_configured;
+                if self.scenario == Scenario::ScreenshotTiles {
+                    self.ensure_screenshot_tile_images();
+                }
             } else {
                 bridge.set_compatibility_visible(true);
                 bridge.set_compatibility_reason("MiSTer card disconnected".into());
@@ -1102,10 +1308,18 @@ mod macos {
                 );
                 self.catalog_source = "catalog:card-disconnected".to_owned();
                 self.catalog_worker = None;
+                self.cancel_screenshot_tile_load();
                 if let Some(worker) = self.media_worker.as_ref() {
                     worker.finish();
                 }
                 self.download_media = false;
+                if self.tile_pack_fingerprint.is_none() {
+                    self.tile_images = self.fixture_tile_images.clone();
+                    self.tile_pack_status = "tiles:fixtures:card-disconnected".to_owned();
+                    self.tile_wall.invalidate();
+                } else {
+                    self.tile_pack_status = "tiles:last-good:card-disconnected".to_owned();
+                }
             }
             if let Some(window) = self.native_window.as_ref() {
                 window.set_title(&self.window_title());
@@ -2081,6 +2295,42 @@ mod macos {
                 })
             }
         }
+    }
+
+    fn catalog_pixels_to_tile_image(image: CatalogPreviewPixels) -> ScreenshotTileImage {
+        match image {
+            CatalogPreviewPixels::Rgb565 {
+                width,
+                height,
+                stride_bytes,
+                words,
+            } => ScreenshotTileImage {
+                pixels: words.iter().copied().map(Rgb565Pixel).collect(),
+                w: width as usize,
+                h: height as usize,
+                stride: stride_bytes as usize / 2,
+            },
+        }
+    }
+
+    fn tile_pack_fingerprint(path: &Path) -> Result<TilePackFingerprint, String> {
+        let metadata = std::fs::metadata(path)
+            .map_err(|error| format!("read Arcade screenshot pack metadata: {error}"))?;
+        let modified_nanos = metadata
+            .modified()
+            .ok()
+            .and_then(|modified| {
+                modified
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .ok()
+                    .map(|duration| duration.as_nanos())
+            })
+            .unwrap_or(0);
+        Ok(TilePackFingerprint {
+            path: path.to_path_buf(),
+            bytes: metadata.len(),
+            modified_nanos,
+        })
     }
 
     fn fixture_screenshot<'a>(
