@@ -33,9 +33,12 @@ pub struct ScannerCacheState {
     pub(crate) software_hash_cache: SoftwareHashCache,
 }
 
+pub fn path_for_root(storage_root: &Path) -> PathBuf {
+    crate::catalog_state::path_for_root(storage_root).with_file_name(FILE_NAME)
+}
+
 pub(crate) fn default_path() -> PathBuf {
-    crate::catalog_state::path_for_root(&crate::catalog_config::default_sharded_catalog_path())
-        .with_file_name(FILE_NAME)
+    path_for_root(&crate::catalog_config::default_sharded_catalog_path())
 }
 
 pub(crate) fn load_default() -> ScannerCacheState {

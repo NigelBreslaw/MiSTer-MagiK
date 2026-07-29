@@ -1003,6 +1003,27 @@ pub fn scan_default_library_ram_foreground_with_events(
         ))
 }
 
+pub fn scan_library_ram_foreground_with_roots(
+    roots: Vec<PathBuf>,
+    progress: ProgressCallback<'_>,
+    scan_events: ScanEventCallback<'_>,
+    durable_resume: bool,
+) -> Result<LibraryRamScanArtifact, String> {
+    let cfg = BenchConfig {
+        roots: roots
+            .into_iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect(),
+        sqlite_path: PathBuf::new(),
+    };
+    Ok(CatalogRefreshPipeline::new(&cfg)
+        .scan_ram_artifact_foreground_with_events_and_durable_resume(
+            progress,
+            scan_events,
+            durable_resume,
+        ))
+}
+
 /// Scan only the first visible Arcade collection for cold-start publication.
 /// The authoritative full scan follows after the launcher acknowledges this
 /// compact generation, so this artifact is never persisted as the final
@@ -1379,9 +1400,16 @@ pub(crate) fn apply_library_path_map(mut artifact: LibraryScanArtifact) -> Libra
 }
 
 pub(crate) fn apply_library_path_map_to_ram_artifact(
-    mut artifact: LibraryRamScanArtifact,
+    artifact: LibraryRamScanArtifact,
 ) -> LibraryRamScanArtifact {
     let rules = catalog_config::library_path_map_from_env();
+    apply_library_path_map_to_ram_artifact_with_rules(artifact, &rules)
+}
+
+pub fn apply_library_path_map_to_ram_artifact_with_rules(
+    mut artifact: LibraryRamScanArtifact,
+    rules: &[catalog_config::PathMapRule],
+) -> LibraryRamScanArtifact {
     if rules.is_empty() {
         return artifact;
     }

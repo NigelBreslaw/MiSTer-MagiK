@@ -3,6 +3,9 @@
 
 #[cfg(target_os = "macos")]
 mod macos {
+    use mister_magik_catalog::portable_catalog_builder::{
+        PortableCatalogBuild, publish_portable_catalog,
+    };
     use mister_magik_fb::arcade_catalog::{ArcadeCatalog, ArcadeGameEntry};
     use mister_magik_fb::fireworks::{
         FIREWORK_VISUAL_SEED, FireworkRenderer, embedded_firework_json,
@@ -44,7 +47,7 @@ mod macos {
     use std::num::NonZeroU32;
     use std::path::{Path, PathBuf};
     use std::rc::Rc;
-    use std::sync::Arc;
+    use std::sync::{Arc, mpsc};
     use std::time::{Duration, Instant};
     use winit::application::ApplicationHandler;
     use winit::dpi::LogicalSize;
@@ -133,6 +136,7 @@ mod macos {
             headless,
             firework_renderer,
             content,
+            !options.no_scan,
         )?;
         application.select_scenario(options.scenario);
         if let Some(output) = options.output {
@@ -240,6 +244,7 @@ mod macos {
         catalog: ArcadeCatalog,
         catalog_generation: Option<u64>,
         catalog_source: String,
+        catalog_worker: Option<mpsc::Receiver<CatalogWorkerEvent>>,
         settings_store: FileSettingsStore,
         fixture_screenshots: Vec<FixtureScreenshot>,
         arcade_layer: ArcadeVisualLayer,
@@ -277,6 +282,7 @@ mod macos {
             headless: bool,
             firework_renderer: Option<PreviewFireworkRenderer>,
             content: PreviewContent,
+            scan_card: bool,
         ) -> Result<Self, Box<dyn Error>> {
             let fixtures = UiPreviewFixtures::new()?;
             let (catalog, catalog_generation, catalog_source) =
@@ -304,6 +310,11 @@ mod macos {
             let refresh_hz = refresh_rate.headless_hz();
             let now = Instant::now();
             let next_frame_deadline = now + elapsed_for_frame(1, refresh_hz);
+            let catalog_worker = if scan_card && !headless {
+                content.card().map(spawn_catalog_worker).transpose()?
+            } else {
+                None
+            };
             launcher
                 .global::<MisterBridge>()
                 .set_build_label(format!("Mac visual preview · {}", content.label()).into());
@@ -329,6 +340,7 @@ mod macos {
                 catalog,
                 catalog_generation,
                 catalog_source,
+                catalog_worker,
                 settings_store,
                 fixture_screenshots: fixtures.screenshots,
                 arcade_layer: ArcadeVisualLayer::new(FRAME_WIDTH, FRAME_HEIGHT),
@@ -686,6 +698,7 @@ mod macos {
         }
 
         fn compose_frame(&mut self) {
+            self.poll_catalog_worker();
             let frame_delta = self.frame_delta();
             self.tick_launcher_navigation();
             slint::platform::update_timers_and_animations();
@@ -781,6 +794,59 @@ mod macos {
                 self.screensaver_elapsed += frame_delta;
             }
             self.fixed_time.set(self.fixed_time.get() + frame_delta);
+        }
+
+        fn poll_catalog_worker(&mut self) {
+            let Some(receiver) = self.catalog_worker.take() else {
+                return;
+            };
+            let mut keep_receiver = true;
+            while let Ok(event) = receiver.try_recv() {
+                let bridge = self.launcher.global::<MisterBridge>();
+                match event {
+                    CatalogWorkerEvent::Progress { title, detail } => {
+                        bridge.set_catalog_scan_visible(true);
+                        bridge.set_catalog_scan_title(title.into());
+                        bridge.set_catalog_scan_message("Reading the mounted card".into());
+                        bridge.set_catalog_scan_detail(detail.into());
+                        bridge.set_catalog_scan_percent(0);
+                    }
+                    CatalogWorkerEvent::Ready(build) => {
+                        self.catalog = build.catalog;
+                        self.catalog_generation = Some(build.generation);
+                        self.catalog_source = format!("catalog:mac-cache:g{}", build.generation);
+                        self.launcher_nav.catalog_build_started();
+                        for system in &self.catalog.systems {
+                            self.launcher_nav.catalog_system_discovered(&system.id);
+                            self.launcher_nav.catalog_system_ready(&system.id);
+                        }
+                        self.launcher_nav.sync_launcher_taxonomy(&self.catalog);
+                        self.launcher_nav.catalog_build_finished(&self.catalog);
+                        self.selection = self
+                            .selection
+                            .min(self.catalog.games.len().saturating_sub(1));
+                        bridge.set_catalog_scan_visible(false);
+                        self.sync_launcher_navigation();
+                        if let Some(window) = self.native_window.as_ref() {
+                            window.set_title(&self.window_title());
+                        }
+                        keep_receiver = false;
+                    }
+                    CatalogWorkerEvent::Failed(error) => {
+                        bridge.set_catalog_scan_visible(true);
+                        bridge.set_catalog_scan_title("Mac catalog scan failed".into());
+                        bridge.set_catalog_scan_message("The card was not modified".into());
+                        bridge.set_catalog_scan_detail(error.clone().into());
+                        bridge.set_catalog_scan_percent(0);
+                        self.catalog_source = "catalog:scan-failed".to_owned();
+                        eprintln!("catalog scan failed: {error}");
+                        keep_receiver = false;
+                    }
+                }
+            }
+            if keep_receiver {
+                self.catalog_worker = Some(receiver);
+            }
         }
 
         fn magik_particle_renderer(&mut self) -> &mut ParticleRenderer {
@@ -1160,6 +1226,7 @@ mod macos {
         content_mode: ContentMode,
         sd_root: Option<PathBuf>,
         cache_root: Option<PathBuf>,
+        no_scan: bool,
     }
 
     impl PreviewOptions {
@@ -1175,6 +1242,7 @@ mod macos {
             let mut content_mode = ContentMode::Auto;
             let mut sd_root = None;
             let mut cache_root = None;
+            let mut no_scan = false;
             let mut arguments = arguments.into_iter();
             while let Some(argument) = arguments.next() {
                 match argument.as_str() {
@@ -1243,9 +1311,10 @@ mod macos {
                             arguments.next().ok_or("--cache-root requires a path")?,
                         ));
                     }
+                    "--no-scan" => no_scan = true,
                     "--help" | "-h" => {
                         return Err(
-                            "usage: mister-magik-ui-preview [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N | --time-ms N] [--firework ID] [--firework-spec FILE.json] [--hud on|off] [--output FILE.ppm]"
+                            "usage: mister-magik-ui-preview [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N | --time-ms N] [--firework ID] [--firework-spec FILE.json] [--hud on|off] [--output FILE.ppm]"
                                 .into(),
                         );
                     }
@@ -1273,8 +1342,53 @@ mod macos {
                 content_mode,
                 sd_root,
                 cache_root,
+                no_scan,
             })
         }
+    }
+
+    enum CatalogWorkerEvent {
+        Progress { title: String, detail: String },
+        Ready(PortableCatalogBuild),
+        Failed(String),
+    }
+
+    fn spawn_catalog_worker(
+        layout: &mister_magik_fb::macos_preview_content::HostContentLayout,
+    ) -> Result<mpsc::Receiver<CatalogWorkerEvent>, String> {
+        let layout = layout.clone();
+        let (sender, receiver) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("mac-catalog-scan".into())
+            .spawn(move || {
+                let source_roots = mister_magik_catalog::catalog_config::DEFAULT_ROOTS
+                    .iter()
+                    .filter_map(|root| layout.to_card_path(root).ok())
+                    .filter(|root| root.is_dir())
+                    .collect::<Vec<_>>();
+                let progress_sender = sender.clone();
+                let mut progress = move |title: &str, detail: &str| {
+                    let _ = progress_sender.send(CatalogWorkerEvent::Progress {
+                        title: title.to_owned(),
+                        detail: detail.to_owned(),
+                    });
+                };
+                let result = publish_portable_catalog(
+                    source_roots,
+                    &layout.card_root,
+                    Path::new("/media/fat"),
+                    Path::new("/media/fat/_Arcade"),
+                    &layout.catalog_root,
+                    &mut progress,
+                );
+                let event = match result {
+                    Ok(build) => CatalogWorkerEvent::Ready(build),
+                    Err(error) => CatalogWorkerEvent::Failed(error),
+                };
+                let _ = sender.send(event);
+            })
+            .map_err(|error| format!("start Mac catalog scanner: {error}"))?;
+        Ok(receiver)
     }
 
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

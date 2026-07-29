@@ -54,6 +54,8 @@ mod media_metadata;
 pub mod multi_system_projection;
 mod namespace_walk;
 pub mod persisted_search;
+#[cfg(feature = "builder")]
+pub mod portable_catalog_builder;
 pub mod prepared_collections;
 mod preview_archive;
 pub mod preview_worker;
