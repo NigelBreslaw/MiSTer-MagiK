@@ -1686,9 +1686,9 @@ mod tests {
         assert_eq!(sample.diagnostics.attempt_count, 1);
         let attempt = sample.diagnostics.attempts[0];
         assert_eq!(attempt.command_word.ack_high, Some(MAGIK_FBUF_STATUS_MAGIC));
-        assert_eq!(attempt.response_word_count, 11);
-        assert_eq!(attempt.response_words[8].ack_high, Some(0xa008));
-        assert_eq!(attempt.response_words[8].ack_low, Some(960));
+        assert_eq!(attempt.response_word_count, 16);
+        assert_eq!(attempt.response_words[7].ack_high, Some(0xa007));
+        assert_eq!(attempt.response_words[7].ack_low, Some(960));
         assert_eq!(fpga.gpo & IO_EN, 0);
     }
 
@@ -1751,7 +1751,7 @@ mod tests {
 
         assert_eq!(sample.status.reject_count, 7);
         assert_eq!(sample.status.active_route_epoch, 9);
-        assert_eq!(sample.diagnostics.protocol_version, Some(3));
+        assert_eq!(sample.diagnostics.protocol_version, Some(4));
         assert_eq!(sample.diagnostics.attempt_count, 2);
         assert_eq!(
             sample.diagnostics.decision,
@@ -1825,11 +1825,17 @@ mod tests {
 
         let words = words_from_writes(&state.borrow().writes);
         assert_eq!(words[0], MAGIK_UIO_SET_FBUF_LATCH);
+        let mut expected_payload = mister_magik_latch_contract::GOLDEN_SET_V4_PAYLOAD;
+        expected_payload[10] = 42;
+        assert_eq!(&words[1..12], &expected_payload);
         assert_eq!(
-            &words[1..12],
-            &mister_magik_latch_contract::GOLDEN_SET_V4_PAYLOAD
+            words[12],
+            mister_magik_latch_contract::message_crc(
+                MAGIK_UIO_SET_FBUF_LATCH,
+                mister_magik_latch_contract::LatchProtocol::V4,
+                &expected_payload,
+            )
         );
-        assert_eq!(words[12], mister_magik_latch_contract::GOLDEN_SET_V4_CRC);
         assert_eq!(
             words
                 .iter()
