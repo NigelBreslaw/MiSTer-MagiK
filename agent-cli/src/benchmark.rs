@@ -11,13 +11,19 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const FIREWORK_VISUALS: [(u8, &str, u64); 6] = [
+const FIREWORK_VISUALS: [(u8, &str, u64); 12] = [
     (1, "solar-chrysanthemum", 2100),
     (2, "recursive-halo", 2200),
     (3, "copper-willow-rain", 2500),
     (4, "phoenix-comet", 2350),
     (5, "magnetic-flower", 2500),
     (6, "oled-peony", 2000),
+    (7, "solar-chrysanthemum-v2", 2100),
+    (8, "recursive-halo-v2", 2200),
+    (9, "copper-willow-rain-v2", 2500),
+    (10, "phoenix-comet-v2", 2350),
+    (11, "magnetic-flower-v2", 2500),
+    (12, "oled-peony-v2", 2000),
 ];
 
 pub fn execute(
@@ -93,7 +99,7 @@ pub fn execute_firework_visual(
             time_ms,
         })?;
         let capture: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
-        if capture.get("schema").and_then(Value::as_str) != Some("mister-magik-firework-visual-v1")
+        if capture.get("schema").and_then(Value::as_str) != Some("mister-magik-firework-visual-v2")
             || capture
                 .get("particle_magik_observed")
                 .and_then(Value::as_bool)
@@ -105,7 +111,7 @@ pub fn execute_firework_visual(
         device.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))?;
     }
     let summary = json!({
-        "schema": "mister-magik-firework-visual-suite-v1",
+        "schema": "mister-magik-firework-visual-suite-v2",
         "manifest": manifest.clone(),
         "captures": captures,
     });
@@ -233,22 +239,28 @@ fn require_clean_installed_commit(
     }
 }
 
-const PARTICLE_SHOWCASE_DEMOS: [(u8, &str); 15] = [
+const PARTICLE_SHOWCASE_DEMOS: [(u8, &str); 21] = [
     (1, "solar-chrysanthemum"),
     (2, "recursive-halo"),
     (3, "copper-willow-rain"),
     (4, "phoenix-comet"),
     (5, "magnetic-flower"),
     (6, "oled-peony"),
-    (7, "fire-embers"),
-    (8, "spiral-galaxy"),
-    (9, "warp-speed"),
-    (10, "meteor-shower"),
-    (11, "weather"),
-    (12, "particle-portal"),
-    (13, "electric-storm"),
-    (14, "fountain-waterfall"),
-    (15, "arcade-cabinet"),
+    (7, "solar-chrysanthemum-v2"),
+    (8, "recursive-halo-v2"),
+    (9, "copper-willow-rain-v2"),
+    (10, "phoenix-comet-v2"),
+    (11, "magnetic-flower-v2"),
+    (12, "oled-peony-v2"),
+    (13, "fire-embers"),
+    (14, "spiral-galaxy"),
+    (15, "warp-speed"),
+    (16, "meteor-shower"),
+    (17, "weather"),
+    (18, "particle-portal"),
+    (19, "electric-storm"),
+    (20, "fountain-waterfall"),
+    (21, "arcade-cabinet"),
 ];
 
 fn execute_particle_showcase_suite(
@@ -265,7 +277,7 @@ fn execute_particle_showcase_suite(
             EventKind::Progress,
             "profile",
             &format!(
-                "{} particle showcase {number:02}/15 {label}",
+                "{} particle showcase {number:02}/21 {label}",
                 if cpu_profile { "sampling" } else { "measuring" }
             ),
             Some(10 + (((index + 1) * 80 / PARTICLE_SHOWCASE_DEMOS.len()) as u8)),
@@ -283,7 +295,7 @@ fn execute_particle_showcase_suite(
     let summary = json!({
         "schema": "mister-magik-particle-showcase-suite-v1",
         "mode": if cpu_profile { "isolated-cpu-profiles" } else { "sequential-30-second-captures" },
-        "duration_secs": if cpu_profile { 480 } else { 450 },
+        "duration_secs": if cpu_profile { 672 } else { 630 },
         "manifest": manifest.clone(),
         "demos": demos,
     });

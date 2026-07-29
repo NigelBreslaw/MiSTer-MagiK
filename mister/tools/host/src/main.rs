@@ -3268,16 +3268,22 @@ fn particle_showcase_demo(number: u8) -> Result<(&'static str, u64)> {
         4 => Ok(("phoenix-comet", 2_272)),
         5 => Ok(("magnetic-flower", 1_958)),
         6 => Ok(("oled-peony", 1_644)),
-        7 => Ok(("fire-embers", 20_480)),
-        8 => Ok(("spiral-galaxy", 81_920)),
-        9 => Ok(("warp-speed", 45_056)),
-        10 => Ok(("meteor-shower", 20_480)),
-        11 => Ok(("weather", 49_152)),
-        12 => Ok(("particle-portal", 65_536)),
-        13 => Ok(("electric-storm", 16_384)),
-        14 => Ok(("fountain-waterfall", 32_768)),
-        15 => Ok(("arcade-cabinet", 12_288)),
-        _ => Err(format!("particle showcase demo must be in 1..=15, received {number}").into()),
+        7 => Ok(("solar-chrysanthemum-v2", 1_276)),
+        8 => Ok(("recursive-halo-v2", 1_798)),
+        9 => Ok(("copper-willow-rain-v2", 908)),
+        10 => Ok(("phoenix-comet-v2", 1_214)),
+        11 => Ok(("magnetic-flower-v2", 2_180)),
+        12 => Ok(("oled-peony-v2", 1_278)),
+        13 => Ok(("fire-embers", 20_480)),
+        14 => Ok(("spiral-galaxy", 81_920)),
+        15 => Ok(("warp-speed", 45_056)),
+        16 => Ok(("meteor-shower", 20_480)),
+        17 => Ok(("weather", 49_152)),
+        18 => Ok(("particle-portal", 65_536)),
+        19 => Ok(("electric-storm", 16_384)),
+        20 => Ok(("fountain-waterfall", 32_768)),
+        21 => Ok(("arcade-cabinet", 12_288)),
+        _ => Err(format!("particle showcase demo must be in 1..=21, received {number}").into()),
     }
 }
 
@@ -4798,9 +4804,9 @@ fn capture_installed_firework_visual(
     label: &str,
     time_ms: u64,
 ) -> Result<String> {
-    if !(1..=6).contains(&demo_number) {
+    if !(1..=12).contains(&demo_number) {
         return Err(format!(
-            "firework visual capture demo must be in 1..=6, received {demo_number}"
+            "firework visual capture demo must be in 1..=12, received {demo_number}"
         )
         .into());
     }
@@ -4882,7 +4888,7 @@ fn capture_installed_firework_visual(
         let path = output_dir.join(&filename);
         fs::write(&path, &capture.png)?;
         Ok(json!({
-            "schema": "mister-magik-firework-visual-v1",
+            "schema": "mister-magik-firework-visual-v2",
             "demo_number": demo_number,
             "firework": label,
             "time_ms": time_ms,
