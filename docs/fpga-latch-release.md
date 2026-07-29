@@ -93,6 +93,10 @@ The stress phase begins with one supervised clean boot; the immutable boot and
 launcher session identities are captured only afterward. Main ownership,
 crash, and invariant counters must therefore remain zero from that boot rather
 than being compared with or offset by an earlier baseline.
+The attended host process verifies its volatile release token before a
+supervised reboot and recreates only that token after reconnecting. The
+configuration snapshot is retained on the FAT volume until restoration so a
+reboot cannot silently discard the rollback source.
 
 Raw samples and the terminal summary are retained under
 `build/release-qualification/latch-v4/<candidate-id>/<run-id>/`. The summary

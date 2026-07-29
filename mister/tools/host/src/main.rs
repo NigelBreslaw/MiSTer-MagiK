@@ -2477,7 +2477,13 @@ fn launcher_heartbeat_sample_command() -> &'static str {
 }
 
 const RELEASE_TOKEN: &str = "/tmp/mister-magik/release-qualification-session";
-const RELEASE_SNAPSHOT: &str = "/tmp/mister-magik/release-qualification-snapshot";
+const RELEASE_SNAPSHOT: &str = "/media/fat/mister-magik/release-qualification-snapshot";
+
+fn release_rearm_token_command() -> String {
+    format!(
+        "mkdir -p /tmp/mister-magik; printf '%s\\n' attended-non-network-recovery-confirmed >{RELEASE_TOKEN}; test \"$(cat {RELEASE_TOKEN})\" = attended-non-network-recovery-confirmed"
+    )
+}
 
 fn release_arming_cleanup_command() -> &'static str {
     "rm -f /media/fat/mister-magik/launcher.env /media/fat/mister-magik-dev/launcher.env /tmp/mister-magik/fs-fault-launcher.env /tmp/mister-magik/fs-fault-session /tmp/mister-magik/fs-fault.json /tmp/mister-magik/latch-v4-qualification-control.tsv /tmp/mister-magik/latch-v4-qualification-control.tsv.tmp /tmp/mister-magik/latch-v4-qualification-state.json /media/fat/mister-magik/rebuild-on-next-boot /media/fat/mister-magik-dev/rebuild-on-next-boot; rm -rf /tmp/mister-magik/latch-v4-catalog"
@@ -2596,6 +2602,11 @@ fn qualify_release_display_matrix_with(
             return Err(format!("{} did not complete its reboot transition", mode.label).into());
         }
         let session = connect_with(connection, 10)?;
+        exec_checked(
+            &session,
+            "release display rearm token",
+            &release_rearm_token_command(),
+        )?;
         wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))?;
         exec_checked(
             &session,
@@ -15660,7 +15671,13 @@ H: Handlers=event3 js0"#
 
     #[test]
     fn release_recovery_requires_volatile_token_and_clears_every_arming_path() {
-        assert!(!release_begin_command().contains(";;"));
+        let begin = release_begin_command();
+        assert!(!begin.contains(";;"));
+        assert!(begin.contains(RELEASE_SNAPSHOT));
+        assert!(RELEASE_SNAPSHOT.starts_with("/media/fat/"));
+        let rearm = release_rearm_token_command();
+        assert!(rearm.contains(RELEASE_TOKEN));
+        assert!(!rearm.contains(RELEASE_SNAPSHOT));
         let catalog = release_catalog_command();
         assert!(catalog.contains("pidof MiSTer_MagiKDev"));
         assert!(catalog.contains("root=/media/fat/mister-magik-dev"));
@@ -15669,6 +15686,7 @@ H: Handlers=event3 js0"#
         assert!(recovery.contains("attended-non-network-recovery-confirmed"));
         let restore = release_restore_command();
         assert!(!restore.contains(";;"));
+        assert!(restore.contains(RELEASE_SNAPSHOT));
         for path in [
             "/media/fat/mister-magik/launcher.env",
             "/media/fat/mister-magik-dev/launcher.env",

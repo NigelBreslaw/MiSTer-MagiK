@@ -48,6 +48,11 @@ pub(super) fn run(config: &NativeDeviceConfig) -> Result<String> {
     }
 
     let session = connect_with(&config.connection, 10)?;
+    exec_checked(
+        &session,
+        "latch v4 qualification rearm token",
+        &release_rearm_token_command(),
+    )?;
     let development = exec(&session, "pidof MiSTer_MagiKDev >/dev/null 2>&1", false)?.rc == 0;
     let root = if development {
         "/media/fat/mister-magik-dev"
