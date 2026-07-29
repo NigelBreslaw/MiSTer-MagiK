@@ -316,6 +316,7 @@ pub enum Intent {
     PruneLogs,
     Doctor,
     Diagnose,
+    ClearLatchDiagnostics,
     Deliver,
     Benchmark {
         scenario: BenchmarkScenario,
@@ -384,7 +385,9 @@ impl Intent {
             | Self::PrePush { .. }
             | Self::CiHostAssurance { .. }
             | Self::CaptureUsbVideo { .. } => Risk::LocalWrite,
-            Self::ReleaseQualify | Self::DatabaseRotate => Risk::Destructive,
+            Self::ReleaseQualify | Self::DatabaseRotate | Self::ClearLatchDiagnostics => {
+                Risk::Destructive
+            }
             Self::Deliver { .. }
             | Self::Benchmark { .. }
             | Self::FireworkVisual { .. }

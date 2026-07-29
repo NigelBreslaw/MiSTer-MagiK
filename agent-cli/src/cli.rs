@@ -58,6 +58,7 @@ pub enum Command {
     #[command(hide = true)]
     Doctor,
     Diagnose,
+    ClearLatchDiagnostics,
     Deliver,
     Benchmark {
         #[arg(value_enum, default_value_t)]
@@ -418,6 +419,7 @@ impl Cli {
             }) => Intent::PruneLogs,
             Some(Command::Doctor) => Intent::Doctor,
             Some(Command::Diagnose) => Intent::Diagnose,
+            Some(Command::ClearLatchDiagnostics) => Intent::ClearLatchDiagnostics,
             Some(Command::Deliver) => Intent::Deliver,
             Some(Command::Benchmark {
                 scenario: BenchmarkScenario::FireworkVisual,
@@ -749,6 +751,16 @@ mod tests {
             Intent::Diagnose
         );
         assert!(Cli::try_parse_from(["agent-cli", "diagnose", "--repair-all"]).is_err());
+    }
+
+    #[test]
+    fn clear_latch_diagnostics_maps_to_the_bounded_device_intent() {
+        assert_eq!(
+            Cli::try_parse_from(["agent-cli", "clear-latch-diagnostics"])
+                .unwrap()
+                .into_intent(),
+            Intent::ClearLatchDiagnostics
+        );
     }
 
     #[test]

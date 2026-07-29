@@ -85,6 +85,7 @@ pub enum DeviceRequest {
     QualifyReleaseRecovery,
     RestoreReleaseQualification,
     CollectDiagnosticFacts,
+    ClearLatchDiagnostics,
     CollectLatestCrashReport,
     /// Runs one bounded, self-restoring CRT destination-rectangle experiment.
     RunCrtGeometryTrial {
@@ -138,6 +139,7 @@ impl DeviceRequest {
             Self::QualifyReleaseRecovery => "qualify-release-recovery",
             Self::RestoreReleaseQualification => "restore-release-qualification",
             Self::CollectDiagnosticFacts => "collect-diagnostic-facts",
+            Self::ClearLatchDiagnostics => "clear-latch-diagnostics",
             Self::CollectLatestCrashReport => "collect-latest-crash-report",
             Self::RunCrtGeometryTrial { .. } => "run-crt-geometry-trial",
             Self::RunCrtScreensaverTrial => "run-crt-screensaver-trial",

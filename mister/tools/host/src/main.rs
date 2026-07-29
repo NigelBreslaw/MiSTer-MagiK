@@ -549,6 +549,17 @@ impl DeviceOperations for NativeDevice {
                 }
                 serde_json::to_string(&facts).map_err(device_failure)?
             }
+            DeviceRequest::ClearLatchDiagnostics => {
+                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
+                let session = connect(10).map_err(device_failure)?;
+                exec_checked(
+                    &session,
+                    "latch diagnostics cleanup",
+                    clear_latch_diagnostics_command(),
+                )
+                .map_err(device_failure)?;
+                "latch diagnostics cleared and verified".into()
+            }
             DeviceRequest::CollectLatestCrashReport => {
                 let session = connect(10).map_err(device_failure)?;
                 let main_status = remote_read(&session, MAIN_STATUS_REMOTE)
@@ -2627,6 +2638,10 @@ fn diagnostic_facts_command() -> String {
         "set -eu; main=false; launcher=false; agent=false; credentials=false; scanout=false; firmware=false; latch=false; unstable=false; temporary=false; launcher_heartbeat_advancing=false; {{ pidof MiSTer_MagiKDev >/dev/null 2>&1 || pidof MiSTer_MagiK >/dev/null 2>&1; }} && main=true; pidof mister-magik-fb >/dev/null 2>&1 && launcher=true; pidof mister-magik-agent >/dev/null 2>&1 && agent=true; test -s /media/fat/mister-magik-dev/agent.token && credentials=true; {{ grep -q '^mister_magik_scanout_slots ' /proc/modules 2>/dev/null && test -c /dev/mister-magik-scanout-slots; }} && scanout=true; \"$scanout\" && firmware=true; if pidof MiSTer_MagiKDev >/dev/null 2>&1; then root=/media/fat/mister-magik-dev; else root=/media/fat/mister-magik; fi; if test -x \"$root/mister-magik-fb\"; then latch_report=$(\"$root/mister-magik-fb\" latch-readiness-report 2>/dev/null || true); printf '%s\\n' \"$latch_report\" | grep -Eq 'latch_readiness_tsv[[:space:]]+valid=1[[:space:]]+state=ready' && latch=true; fi; {}; if test -n \"$pid_before\" && test \"$pid_before\" = \"$pid_after\" && test -n \"$sequence_before\" && test -n \"$sequence_after\" && test \"$sequence_after\" -gt \"$sequence_before\"; then launcher_heartbeat_advancing=true; fi; test -e /tmp/mister-magik/reboot-unstable && unstable=true; arming=0; for path in /media/fat/mister-magik/launcher.env /media/fat/mister-magik-dev/launcher.env /tmp/mister-magik/fs-fault-launcher.env /tmp/mister-magik/fs-fault-session /tmp/mister-magik/fs-fault.json /media/fat/mister-magik/rebuild-on-next-boot /media/fat/mister-magik-dev/rebuild-on-next-boot; do test ! -e \"$path\" || arming=$((arming + 1)); done; for path in /tmp/mister-magik/agent-benchmark.tsv /tmp/mister-magik/agent-benchmark-warmup.tsv /tmp/mister-magik/agent-cold-benchmark.out /tmp/mister-magik/stale-launcher-return-state.json /tmp/mister-magik/realtime-frame-analytics /tmp/mister-magik/screensaver-profile; do test ! -e \"$path\" || temporary=true; done; printf '{{\"main_running\":%s,\"launcher_running\":%s,\"agent_running\":%s,\"credentials_ready\":%s,\"firmware_compatible\":%s,\"scanout_ready\":%s,\"latch_ready\":%s,\"reboot_unstable\":%s,\"arming_files\":%s,\"temporary_state\":%s,\"launcher_heartbeat_advancing\":%s}}\\n' \"$main\" \"$launcher\" \"$agent\" \"$credentials\" \"$firmware\" \"$scanout\" \"$latch\" \"$unstable\" \"$arming\" \"$temporary\" \"$launcher_heartbeat_advancing\"",
         launcher_heartbeat_sample_command()
     )
+}
+
+fn clear_latch_diagnostics_command() -> &'static str {
+    "set -eu; rm -rf /media/fat/mister-magik/diagnostics/latch /media/fat/mister-magik-dev/diagnostics/latch; mkdir -p /media/fat/mister-magik/diagnostics/latch /media/fat/mister-magik-dev/diagnostics/latch; test -z \"$(find /media/fat/mister-magik/diagnostics/latch /media/fat/mister-magik-dev/diagnostics/latch -mindepth 1 -print -quit)\"; printf 'latch_diagnostics_clear_tsv\\tvalid=1\\tpublic=empty\\tdevelopment=empty\\n'"
 }
 
 fn is_safe_crash_report_path(path: &str) -> bool {
@@ -16520,6 +16535,28 @@ H: Handlers=event3 js0"#
         }
         assert!(release_arming_cleanup_command().contains("rebuild-on-next-boot"));
         assert!(!DeviceRequest::CaptureFramebuffer.label().contains("run"));
+    }
+
+    #[test]
+    fn latch_diagnostics_cleanup_is_bounded_and_self_verifying() {
+        let command = clear_latch_diagnostics_command();
+        assert_eq!(
+            command
+                .matches("/media/fat/mister-magik/diagnostics/latch")
+                .count(),
+            3
+        );
+        assert_eq!(
+            command
+                .matches("/media/fat/mister-magik-dev/diagnostics/latch")
+                .count(),
+            3
+        );
+        assert!(command.contains("rm -rf /media/fat/mister-magik/diagnostics/latch"));
+        assert!(command.contains("mkdir -p /media/fat/mister-magik/diagnostics/latch"));
+        assert!(command.contains("-mindepth 1 -print -quit"));
+        assert!(!command.contains("launcher.env"));
+        assert!(!command.contains("rebuild-on-next-boot"));
     }
 
     #[test]

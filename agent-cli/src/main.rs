@@ -144,6 +144,19 @@ fn dispatch(
             return Ok(outcome);
         }
         Intent::Deliver => return deliver(evidence, repository, reporter),
+        Intent::ClearLatchDiagnostics => {
+            reporter.emit(
+                EventKind::Progress,
+                "diagnostics",
+                "Clearing latch diagnostics from the public and development layouts",
+                Some(50),
+            )?;
+            let mut device = agent_cli::device::DeviceClient::default();
+            let detail =
+                device.execute(mister_tool::transport::DeviceRequest::ClearLatchDiagnostics)?;
+            println!("{detail}");
+            return Ok(Outcome::Passed);
+        }
         Intent::Benchmark { scenario } => {
             return agent_cli::benchmark::execute(repository, *scenario, reporter);
         }
