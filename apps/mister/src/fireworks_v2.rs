@@ -10,6 +10,8 @@ use std::time::Duration;
 const SCHEMA: &str = "mister-magik-firework-v2";
 const MAX_PARTICLES: usize = 98_304;
 const MAX_TRAIL_SAMPLES: u8 = 48;
+const SOLAR_CHRYSANTHEMUM_V2: &str =
+    include_str!("../assets/particles/fireworks-v2/solar-chrysanthemum-v2.json");
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct FireworkV2RenderStats {
@@ -197,6 +199,13 @@ impl FireworkV2Renderer {
     }
 }
 
+pub fn embedded_firework_v2_json(id: &str) -> Option<&'static str> {
+    match id.trim().to_ascii_lowercase().as_str() {
+        "solar-chrysanthemum-v2" | "solar-v2" => Some(SOLAR_CHRYSANTHEMUM_V2),
+        _ => None,
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ShowSpec {
@@ -219,6 +228,8 @@ struct EmitterSpec {
     count: usize,
     #[serde(default)]
     strands: u16,
+    #[serde(default)]
+    trajectory_seed: u64,
     #[serde(default = "default_strand_spread")]
     strand_spread_deg: f32,
     shape: Shape,
@@ -444,6 +455,7 @@ struct CompiledEmitter {
     origin: [f32; 2],
     count: usize,
     strands: usize,
+    trajectory_seed: u64,
     strand_spread: f32,
     shape: Shape,
     direction: f32,
@@ -628,6 +640,7 @@ impl CompiledShow {
                 origin: emitter.origin,
                 count: emitter.count,
                 strands: usize::from(emitter.strands),
+                trajectory_seed: emitter.trajectory_seed,
                 strand_spread: emitter.strand_spread_deg.to_radians(),
                 shape: emitter.shape,
                 direction: emitter.direction_deg.to_radians(),
@@ -914,9 +927,13 @@ impl CompiledEmitter {
                 duration_seconds, ..
             } => birth_phase * duration_seconds,
         };
-        let trajectory_random = splitmix64(
-            (trajectory_index as u64).wrapping_mul(0xd6e8_feb8_6659_fd93) ^ self.count as u64,
-        );
+        let family_seed = if self.trajectory_seed == 0 {
+            self.count as u64
+        } else {
+            self.trajectory_seed
+        };
+        let trajectory_random =
+            splitmix64((trajectory_index as u64).wrapping_mul(0xd6e8_feb8_6659_fd93) ^ family_seed);
         let ordinal = (trajectory_index as f32 + 0.5) / trajectory_count as f32;
         let angular_jitter = random_signed(trajectory_random.rotate_left(9)) * self.strand_spread;
         let (base_angle, direction) =
@@ -1016,14 +1033,16 @@ impl CompiledEmitter {
             &self.palette
         };
         let index = match self.palette_mode {
-            PaletteMode::Random => random.rotate_left(31) as usize,
-            PaletteMode::Strand => context.trajectory_index,
-            PaletteMode::Depth => {
-                ((context.direction.z + 1.0) * 0.5 * palette.len() as f32) as usize
+            PaletteMode::Random => random.rotate_left(31) as usize % palette.len(),
+            PaletteMode::Strand => context.trajectory_index % palette.len(),
+            PaletteMode::Depth => (((context.direction.z + 1.0) * 0.5 * palette.len() as f32)
+                as usize)
+                .min(palette.len() - 1),
+            PaletteMode::Speed => {
+                ((context.speed_normalized * palette.len() as f32) as usize).min(palette.len() - 1)
             }
-            PaletteMode::Speed => (context.speed_normalized * palette.len() as f32) as usize,
         };
-        palette[index.min(palette.len().saturating_sub(1)) % palette.len()]
+        palette[index]
     }
 
     fn sample(
@@ -1453,7 +1472,16 @@ fn unpack_rgb565(pixel: Rgb565Pixel) -> (u16, u16, u16) {
 }
 
 fn pack_rgb565(red: u16, green: u16, blue: u16) -> Rgb565Pixel {
-    Rgb565Pixel(((red * 31 / 255) << 11) | ((green * 63 / 255) << 5) | (blue * 31 / 255))
+    let mut red5 = (red * 31 + 127) / 255;
+    let green6 = (green * 63 + 127) / 255;
+    let mut blue5 = (blue * 31 + 127) / 255;
+    if red >= green && red > 0 && red5 == 0 && green6 > 0 {
+        red5 = 1;
+    }
+    if blue >= green && blue > 0 && blue5 == 0 && green6 > 0 {
+        blue5 = 1;
+    }
+    Rgb565Pixel((red5 << 11) | (green6 << 5) | blue5)
 }
 
 fn mix_white(color: Rgb888, amount: f32) -> Rgb888 {
@@ -1622,5 +1650,18 @@ mod tests {
         let (red, green, blue) = unpack_rgb565(result);
         assert_eq!(red, 0);
         assert!(blue > green);
+    }
+
+    #[test]
+    fn low_intensity_warm_trail_does_not_quantize_to_green() {
+        let gold = Rgb888 {
+            red: 255,
+            green: 155,
+            blue: 28,
+        };
+        let result = screen_rgb565(Rgb565Pixel(0), gold, 0.02);
+        let (red, green, blue) = unpack_rgb565(result);
+        assert!(red >= green);
+        assert!(green >= blue);
     }
 }

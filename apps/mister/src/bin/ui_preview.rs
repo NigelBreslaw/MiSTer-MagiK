@@ -7,6 +7,7 @@ mod macos {
     use mister_magik_fb::fireworks::{
         FIREWORK_VISUAL_SEED, FireworkRenderer, embedded_firework_json,
     };
+    use mister_magik_fb::fireworks_v2::{FireworkV2Renderer, embedded_firework_v2_json};
     use mister_magik_fb::framebuffer::target::{FramebufferTargetGeometry, UiFrameTarget};
     use mister_magik_fb::input_state::PadState;
     use mister_magik_fb::launcher::{LauncherAction, LauncherNav, Screen};
@@ -51,6 +52,30 @@ mod macos {
     const MAX_AUTO_REFRESH_HZ: u32 = 120;
     const PREVIEW_TRANSITION_DURATION: Duration = Duration::from_millis(200);
 
+    enum PreviewFireworkRenderer {
+        V1(FireworkRenderer),
+        V2(FireworkV2Renderer),
+    }
+
+    impl PreviewFireworkRenderer {
+        fn from_json(json: &str) -> Result<Self, String> {
+            if json.contains("\"mister-magik-firework-v2\"") {
+                FireworkV2Renderer::from_json(json, FRAME_WIDTH, FRAME_HEIGHT, FIREWORK_VISUAL_SEED)
+                    .map(Self::V2)
+            } else {
+                FireworkRenderer::from_json(json, FRAME_WIDTH, FRAME_HEIGHT, FIREWORK_VISUAL_SEED)
+                    .map(Self::V1)
+            }
+        }
+
+        fn render(&self, destination: &mut [Rgb565Pixel], elapsed: Duration) -> Result<(), String> {
+            match self {
+                Self::V1(renderer) => renderer.render(destination, elapsed).map(|_| ()),
+                Self::V2(renderer) => renderer.render(destination, elapsed).map(|_| ()),
+            }
+        }
+    }
+
     pub fn run() -> Result<(), Box<dyn Error>> {
         let options = PreviewOptions::parse(std::env::args().skip(1))?;
         let slint_window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
@@ -78,15 +103,11 @@ mod macos {
                     .map_err(|error| format!("read firework spec {}: {error}", path.display()))?
             } else {
                 embedded_firework_json(&options.firework)
+                    .or_else(|| embedded_firework_v2_json(&options.firework))
                     .ok_or_else(|| format!("unknown firework {:?}", options.firework))?
                     .to_owned()
             };
-            Some(FireworkRenderer::from_json(
-                &json,
-                FRAME_WIDTH,
-                FRAME_HEIGHT,
-                FIREWORK_VISUAL_SEED,
-            )?)
+            Some(PreviewFireworkRenderer::from_json(&json)?)
         } else {
             None
         };
@@ -157,7 +178,7 @@ mod macos {
         preview_transition_id: u64,
         preview_transition_duration: Duration,
         particle_renderer: Option<ParticleRenderer>,
-        firework_renderer: Option<FireworkRenderer>,
+        firework_renderer: Option<PreviewFireworkRenderer>,
         tile_wall: ScreenshotTileWall,
         tile_images: Vec<ScreenshotTileImage>,
         screensaver_elapsed: Duration,
@@ -182,7 +203,7 @@ mod macos {
             scenario: Scenario,
             refresh_rate: RefreshRate,
             headless: bool,
-            firework_renderer: Option<FireworkRenderer>,
+            firework_renderer: Option<PreviewFireworkRenderer>,
         ) -> Result<Self, Box<dyn Error>> {
             let fixtures = UiPreviewFixtures::new()?;
             let mut launcher_nav = LauncherNav::new();
