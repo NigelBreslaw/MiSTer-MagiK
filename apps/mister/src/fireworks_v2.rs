@@ -123,18 +123,25 @@ impl FireworkV2Renderer {
                             1.0 - f32::from(trail_sample) / f32::from(emitter.trail.samples.max(1));
                         let brightness = emitter.envelope.evaluate(sample_age)
                             * twinkle_intensity(emitter.twinkle, random, show_seconds * 1000.0)
+                            * context.brightness_scale
                             * trail_progress.powf(emitter.trail.fade_power);
                         if brightness <= 0.003 {
                             continue;
                         }
                         let point =
                             emitter.sample(&context, sample_seconds, self.width, self.height);
-                        if let Some(older) = previous {
+                        if let Some(older) = previous
+                            && emitter.topology.segment_visible(
+                                context.random,
+                                trail_sample,
+                                sample_age,
+                            )
+                        {
                             let width = lerp(
                                 emitter.material.trail_width.0,
                                 emitter.material.trail_width.1,
                                 trail_progress,
-                            );
+                            ) * context.width_scale;
                             if draw_luminous_segment(
                                 destination,
                                 self.width,
@@ -164,7 +171,7 @@ impl FireworkV2Renderer {
                                 point,
                                 color,
                                 brightness * emitter.material.bead_intensity,
-                                emitter.material.trail_width.1,
+                                emitter.material.trail_width.1 * context.width_scale,
                                 emitter.material.trail_white,
                                 emitter.material.halo_radius,
                                 emitter.material.halo_intensity,
@@ -179,6 +186,7 @@ impl FireworkV2Renderer {
                     let age = particle_seconds / life_seconds;
                     let head_brightness = emitter.envelope.evaluate(age)
                         * twinkle_intensity(emitter.twinkle, random, show_seconds * 1000.0)
+                        * context.brightness_scale
                         * emitter.material.head_intensity;
                     if head_brightness > 0.003 {
                         let point =
@@ -190,7 +198,7 @@ impl FireworkV2Renderer {
                             point,
                             color,
                             head_brightness,
-                            emitter.material.head_radius,
+                            emitter.material.head_radius * context.width_scale,
                             emitter.material.head_white,
                             emitter.material.halo_radius,
                             emitter.material.halo_intensity,
@@ -272,6 +280,8 @@ struct EmitterSpec {
     motion: MotionSpec,
     #[serde(default)]
     envelope: EnvelopeSpec,
+    #[serde(default)]
+    topology: TopologySpec,
     material: MaterialSpec,
     trail: TrailSpec,
     #[serde(default)]
@@ -394,6 +404,30 @@ impl Default for EnvelopeSpec {
     }
 }
 
+#[derive(Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct TopologySpec {
+    path_variation_px: f32,
+    time_variation: f32,
+    brightness_variation: f32,
+    width_variation: f32,
+    breakup_start: f32,
+    trail_dropout: f32,
+}
+
+impl Default for TopologySpec {
+    fn default() -> Self {
+        Self {
+            path_variation_px: 0.0,
+            time_variation: 0.0,
+            brightness_variation: 0.0,
+            width_variation: 0.0,
+            breakup_start: 1.0,
+            trail_dropout: 0.0,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 enum BlendMode {
@@ -486,6 +520,7 @@ struct CompiledEmitter {
     emission: CompiledEmission,
     motion: CompiledMotion,
     envelope: CompiledEnvelope,
+    topology: CompiledTopology,
     material: CompiledMaterial,
     trail: CompiledTrail,
     twinkle: f32,
@@ -538,6 +573,16 @@ struct CompiledEnvelope {
 }
 
 #[derive(Clone, Copy)]
+struct CompiledTopology {
+    path_variation: f32,
+    time_variation: f32,
+    brightness_variation: f32,
+    width_variation: f32,
+    breakup_start: f32,
+    trail_dropout: f32,
+}
+
+#[derive(Clone, Copy)]
 struct CompiledMaterial {
     head_radius: f32,
     head_intensity: f32,
@@ -569,6 +614,11 @@ struct ParticleContext {
     direction: Vec3,
     speed: f32,
     speed_normalized: f32,
+    time_scale: f32,
+    path_offset: f32,
+    path_wobble: f32,
+    brightness_scale: f32,
+    width_scale: f32,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -677,6 +727,14 @@ impl CompiledShow {
                     attack: emitter.envelope.attack,
                     hold: emitter.envelope.hold,
                     decay_power: emitter.envelope.decay_power,
+                },
+                topology: CompiledTopology {
+                    path_variation: emitter.topology.path_variation_px,
+                    time_variation: emitter.topology.time_variation,
+                    brightness_variation: emitter.topology.brightness_variation,
+                    width_variation: emitter.topology.width_variation,
+                    breakup_start: emitter.topology.breakup_start,
+                    trail_dropout: emitter.topology.trail_dropout,
                 },
                 material: CompiledMaterial {
                     head_radius: emitter.material.head_radius,
@@ -809,6 +867,15 @@ fn validate_emitter(index: usize, emitter: &EmitterSpec) -> Result<(), String> {
     {
         return Err(format!("firework V2 emitter {index} motion is invalid"));
     }
+    if emitter.topology.path_variation_px < 0.0
+        || !(0.0..=0.5).contains(&emitter.topology.time_variation)
+        || !(0.0..=0.8).contains(&emitter.topology.brightness_variation)
+        || !(0.0..=0.8).contains(&emitter.topology.width_variation)
+        || !(0.0..=1.0).contains(&emitter.topology.breakup_start)
+        || !(0.0..=1.0).contains(&emitter.topology.trail_dropout)
+    {
+        return Err(format!("firework V2 emitter {index} topology is invalid"));
+    }
     Ok(())
 }
 
@@ -916,6 +983,19 @@ impl CompiledEnvelope {
     }
 }
 
+impl CompiledTopology {
+    fn segment_visible(self, random: u64, trail_sample: u8, age: f32) -> bool {
+        if self.trail_dropout <= 0.0 || age <= self.breakup_start {
+            return true;
+        }
+        let breakup =
+            ((age - self.breakup_start) / (1.0 - self.breakup_start).max(0.001)).clamp(0.0, 1.0);
+        let sample_random =
+            splitmix64(random ^ u64::from(trail_sample).wrapping_mul(0xa076_1d64_78bd_642f));
+        random_unit(sample_random) >= self.trail_dropout * breakup
+    }
+}
+
 impl CompiledEmitter {
     fn particle_context(&self, particle_index: usize, random: u64) -> ParticleContext {
         let streamed = !matches!(self.emission, CompiledEmission::Burst);
@@ -972,6 +1052,17 @@ impl CompiledEmitter {
             direction,
             speed,
             speed_normalized,
+            time_scale: 1.0
+                + random_signed(trajectory_random.rotate_left(5)) * self.topology.time_variation,
+            path_offset: random_signed(trajectory_random.rotate_left(19))
+                * self.topology.path_variation,
+            path_wobble: random_signed(trajectory_random.rotate_left(27))
+                * self.topology.path_variation,
+            brightness_scale: 1.0
+                + random_signed(trajectory_random.rotate_left(33))
+                    * self.topology.brightness_variation,
+            width_scale: 1.0
+                + random_signed(trajectory_random.rotate_left(47)) * self.topology.width_variation,
         }
     }
 
@@ -1096,6 +1187,7 @@ impl CompiledEmitter {
     ) -> SamplePoint {
         match self.motion {
             CompiledMotion::Ballistic { turn, perspective } => {
+                let seconds = seconds / context.time_scale.max(0.5);
                 let turn_rate = lerp(
                     turn.0,
                     turn.1,
@@ -1127,7 +1219,7 @@ impl CompiledEmitter {
                 time_power,
                 perspective,
             } => {
-                let progress = (seconds / duration_seconds)
+                let progress = (seconds / (duration_seconds * context.time_scale.max(0.5)))
                     .clamp(0.0, 1.0)
                     .powf(time_power);
                 let point = cubic_bezier(self.origin, control1, control2, end, progress);
@@ -1139,7 +1231,9 @@ impl CompiledEmitter {
                 };
                 let spread = random_signed(context.random.rotate_left(23))
                     * path_spread
-                    * (progress * std::f32::consts::PI).sin().abs();
+                    * (progress * std::f32::consts::PI).sin().abs()
+                    + context.path_offset * (progress * std::f32::consts::PI).sin()
+                    + context.path_wobble * 0.5 * (progress * std::f32::consts::TAU).sin();
                 let depth = random_signed(context.trajectory_random.rotate_left(13));
                 let depth_scale = (1.0 + depth * perspective).clamp(0.65, 1.35);
                 SamplePoint {
@@ -1162,7 +1256,7 @@ impl CompiledEmitter {
                 time_power,
                 perspective,
             } => {
-                let progress = (seconds / duration_seconds)
+                let progress = (seconds / (duration_seconds * context.time_scale.max(0.5)))
                     .clamp(0.0, 1.0)
                     .powf(time_power);
                 let turns = lerp(
@@ -1172,7 +1266,9 @@ impl CompiledEmitter {
                 );
                 let angle = context.base_angle + turns * std::f32::consts::TAU * progress;
                 let radius = lerp(radius.0, radius.1, progress)
-                    + random_signed(context.random.rotate_left(23)) * path_spread;
+                    + random_signed(context.random.rotate_left(23)) * path_spread
+                    + context.path_offset
+                    + context.path_wobble * 0.5 * (progress * std::f32::consts::TAU).sin();
                 let depth = random_signed(context.trajectory_random.rotate_left(13));
                 let depth_scale = (1.0 + depth * perspective).clamp(0.65, 1.35);
                 SamplePoint {
@@ -1617,6 +1713,14 @@ mod tests {
           "scatter_speed": [12.0, 32.0],
           "scatter_deg": 18.0
         },
+        "topology": {
+          "path_variation_px": 5.0,
+          "time_variation": 0.12,
+          "brightness_variation": 0.2,
+          "width_variation": 0.15,
+          "breakup_start": 0.45,
+          "trail_dropout": 0.35
+        },
         "material": {
           "head_radius": 1.4,
           "head_white": 0.5,
@@ -1648,6 +1752,16 @@ mod tests {
         let invalid = TEST_SHOW.replacen(
             "\"duration_ms\": 4000,",
             "\"duration_ms\": 4000, \"surprise\": true,",
+            1,
+        );
+        assert!(FireworkV2Renderer::from_json(&invalid, 96, 54, 7).is_err());
+    }
+
+    #[test]
+    fn v2_unknown_topology_fields_are_rejected() {
+        let invalid = TEST_SHOW.replacen(
+            "\"trail_dropout\": 0.35",
+            "\"trail_dropout\": 0.35, \"unbounded_noise\": true",
             1,
         );
         assert!(FireworkV2Renderer::from_json(&invalid, 96, 54, 7).is_err());
