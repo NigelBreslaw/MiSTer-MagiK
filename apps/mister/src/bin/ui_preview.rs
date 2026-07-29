@@ -1107,20 +1107,10 @@ mod macos {
         }
 
         fn install_screenshot_tile_batch(&mut self, batch: PreviewArchiveBatch) {
-            let image_count = batch.images.len();
-            let total_entries = batch.total_entries;
-            let failed_entries = batch.failed_entries;
-            let source_path = batch.source_path;
-            self.tile_images = batch
-                .images
-                .into_iter()
-                .map(catalog_pixels_to_tile_image)
-                .collect();
+            let (images, status) = tile_images_from_batch(batch);
+            self.tile_images = images;
             self.tile_wall.invalidate();
-            self.tile_pack_status = format!(
-                "tiles:arcade-pack:{image_count}/{total_entries}:failed={failed_entries}:{}",
-                source_path.display()
-            );
+            self.tile_pack_status = status;
             self.slint_window.request_redraw();
         }
 
@@ -1232,19 +1222,11 @@ mod macos {
                         status,
                         detail,
                         ..
-                    } if system == MENU_ARCADE_SYSTEM_ID => match status.as_str() {
-                        "current" | "downloaded" => {
-                            self.tile_pack_status = format!("tiles:{status}:arcade");
-                            reload_screenshot_tiles = true;
-                        }
-                        "failed" => {
-                            self.tile_pack_status =
-                                format!("tiles:error:Arcade download failed: {detail}");
-                        }
-                        _ => {
-                            self.tile_pack_status = format!("tiles:{status}:arcade");
-                        }
-                    },
+                    } if system == MENU_ARCADE_SYSTEM_ID => {
+                        let update = screenshot_tile_media_update(&status, &detail);
+                        self.tile_pack_status = update.status;
+                        reload_screenshot_tiles |= update.reload;
+                    }
                     MediaWorkerMessage::Timing { .. }
                     | MediaWorkerMessage::CacheMetadata { .. }
                     | MediaWorkerMessage::PackStatus { .. } => {}
@@ -2313,6 +2295,45 @@ mod macos {
         }
     }
 
+    struct ScreenshotTileMediaUpdate {
+        status: String,
+        reload: bool,
+    }
+
+    fn screenshot_tile_media_update(status: &str, detail: &str) -> ScreenshotTileMediaUpdate {
+        match status {
+            "current" | "downloaded" => ScreenshotTileMediaUpdate {
+                status: format!("tiles:{status}:arcade"),
+                reload: true,
+            },
+            "failed" => ScreenshotTileMediaUpdate {
+                status: format!("tiles:error:Arcade download failed: {detail}"),
+                reload: false,
+            },
+            _ => ScreenshotTileMediaUpdate {
+                status: format!("tiles:{status}:arcade"),
+                reload: false,
+            },
+        }
+    }
+
+    fn tile_images_from_batch(batch: PreviewArchiveBatch) -> (Vec<ScreenshotTileImage>, String) {
+        let image_count = batch.images.len();
+        let total_entries = batch.total_entries;
+        let failed_entries = batch.failed_entries;
+        let source_path = batch.source_path;
+        let images = batch
+            .images
+            .into_iter()
+            .map(catalog_pixels_to_tile_image)
+            .collect();
+        let status = format!(
+            "tiles:arcade-pack:{image_count}/{total_entries}:failed={failed_entries}:{}",
+            source_path.display()
+        );
+        (images, status)
+    }
+
     fn tile_pack_fingerprint(path: &Path) -> Result<TilePackFingerprint, String> {
         let metadata = std::fs::metadata(path)
             .map_err(|error| format!("read Arcade screenshot pack metadata: {error}"))?;
@@ -2634,6 +2655,66 @@ mod macos {
                 frame_hash(&[Rgb565Pixel(0x1234), Rgb565Pixel(0xabcd)]),
                 0x462038d925b18c13
             );
+        }
+
+        #[test]
+        fn arcade_media_completion_triggers_tile_pack_reload() {
+            for status in ["current", "downloaded"] {
+                let update = screenshot_tile_media_update(status, "ready");
+                assert!(update.reload);
+                assert_eq!(update.status, format!("tiles:{status}:arcade"));
+            }
+            let failed = screenshot_tile_media_update("failed", "checksum mismatch");
+            assert!(!failed.reload);
+            assert!(failed.status.contains("checksum mismatch"));
+            let missing = screenshot_tile_media_update("missing", "not cached");
+            assert!(!missing.reload);
+            assert_eq!(missing.status, "tiles:missing:arcade");
+        }
+
+        #[test]
+        fn completed_tile_batch_converts_all_images_before_adoption() {
+            let batch = PreviewArchiveBatch {
+                images: vec![
+                    CatalogPreviewPixels::Rgb565 {
+                        width: 2,
+                        height: 1,
+                        stride_bytes: 4,
+                        words: Arc::from([0xf800, 0x07e0]),
+                    },
+                    CatalogPreviewPixels::Rgb565 {
+                        width: 1,
+                        height: 1,
+                        stride_bytes: 2,
+                        words: Arc::from([0x001f]),
+                    },
+                ],
+                total_entries: 3,
+                failed_entries: 1,
+                source_path: PathBuf::from("/tmp/arcade-screenshots-320x320.mmlz4b"),
+            };
+
+            let (images, status) = tile_images_from_batch(batch);
+
+            assert_eq!(images.len(), 2);
+            assert_eq!(images[0].pixels[0], Rgb565Pixel(0xf800));
+            assert_eq!(images[0].stride, 2);
+            assert!(status.contains("arcade-pack:2/3:failed=1"));
+        }
+
+        #[test]
+        fn tile_pack_fingerprint_detects_republished_archive() {
+            let path = std::env::temp_dir().join(format!(
+                "mister-magik-ui-preview-fingerprint-{}",
+                std::process::id()
+            ));
+            std::fs::write(&path, b"first").expect("write first pack");
+            let first = tile_pack_fingerprint(&path).expect("first fingerprint");
+            std::fs::write(&path, b"second-version").expect("replace pack");
+            let second = tile_pack_fingerprint(&path).expect("second fingerprint");
+
+            assert_ne!(first, second);
+            let _ = std::fs::remove_file(path);
         }
 
         fn prepared_nav() -> (UiPreviewFixtures, LauncherNav) {
