@@ -1391,7 +1391,7 @@ pub(crate) fn apply_library_path_map(mut artifact: LibraryScanArtifact) -> Libra
     if rules.is_empty() {
         return artifact;
     }
-    remap_library_scan_paths(&mut artifact.scan, &rules);
+    remap_library_scan_paths(&mut artifact.scan, rules);
     artifact.stamp = catalog_stamp::compute_default_catalog_stamp_with_audit(
         &artifact.scan.roots,
         &artifact.scan.audit_rows,
