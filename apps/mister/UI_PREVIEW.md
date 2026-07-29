@@ -17,7 +17,7 @@ Start on a particular scenario:
 
 ```bash
 apps/mister/scripts/dev-ui-mac.sh --scenario arcade
-apps/mister/scripts/dev-ui-mac.sh --scenario screenshot-tiles
+apps/mister/scripts/dev-ui-mac.sh --scenario screenshot-screensaver
 apps/mister/scripts/dev-ui-mac.sh --scenario particle
 ```
 
@@ -57,14 +57,13 @@ verification, atomic publisher, media-state writer, and Catalog V3 availability
 reconciler. Its destination roots are the Mac cache. Headless captures never
 start downloads.
 
-The screenshot-tile screensaver follows the same media precedence. In fixture
-mode it uses the deterministic built-in images. In card mode it resolves the
-Arcade 320x320 pack from the Mac cache, production card, or development card,
-then decodes a deterministic selection of at most 256 images on a background
-thread. Fixture tiles continue moving until the complete real batch is ready.
-The window title reports whether tiles are fixtures, loading, downloaded, or
-backed by the Arcade pack. Removing the card cancels an in-flight read and
-retains the last complete batch.
+The screenshot screensaver follows the same media precedence. Card mode resolves
+the Arcade 320x320 pack from the Mac cache, production card, or development
+card, then constructs the production `LauncherScreensaver`. Its archive-backed
+parade, depth layers, starfield, motion schedule, Lanczos scaling worker, card
+rounding, and HDMI/CRT sampling profiles are the same Rust implementation used
+by the MiSTer launcher. Removing the card cancels an in-flight open and retains
+the last complete renderer.
 
 Interactive previews use the current monitor refresh rate, capped at 120 Hz.
 Force a target when comparing motion:
@@ -122,14 +121,14 @@ copy of the UI.
 | `M` | Media progress |
 | `S` | Controller setup |
 | `P` | Production particle screensaver |
-| `T` | Production screenshot-tile wall |
+| `T` | Production archive-backed screenshot screensaver |
 
 Arrow-key presses and releases drive the production launcher navigation,
 including velocity, turbo re-press, and spring settlement. `Space` pauses a
 screensaver; `.` advances one refresh interval while paused. On Home, `Up`
 focuses the Settings gear and `Enter` opens it; `Down` returns to the system
 tiles. `Enter` opens systems and supported subpages, including Settings →
-Screensaver → Preview. Screenshot tiles return to the underlying launcher view
+Screensaver → Preview. The screenshot screensaver returns to the launcher view
 on input. `Escape` or `Backspace` goes back. The number shortcuts also work on
 the numeric keypad.
 
@@ -147,16 +146,17 @@ apps/mister/scripts/dev-ui-mac.sh \
 
 Useful capture scenarios include `home`, `arcade`, `settings`,
 `arcade-crossfade`, `controller-setup`, `catalog-scan`, `particle`, and
-`screenshot-tiles`. Captures use a fixed animation clock and deterministic
+`screenshot-screensaver`. Captures use a fixed animation clock and deterministic
 in-memory catalog/media fixtures by default. Pass `--content card --sd-root
 PATH --no-scan --no-download` for a bounded capture of real card data. Headless
 `auto` uses 60 Hz; at an explicit 120 Hz, frame 12 is exactly 100 ms. Repeating
 a scenario, frame, and refresh rate produces the same RGB565 output.
 
-An explicit card-mode `screenshot-tiles` capture synchronously decodes the same
-fixed-seed, 256-image Arcade batch before rendering. It fails with an actionable
-error when the pack is unavailable; it never substitutes fixture screenshots
-or starts a network download.
+An explicit card-mode `screenshot-screensaver` capture opens the production
+archive with a fixed smoke-test seed, advances the same renderer with the fixed
+capture clock, and waits for a bounded number of production scaler results
+before writing the image. It fails when the pack or production renderer is
+unavailable; it never substitutes fixture screenshots or starts a download.
 
 ## What the preview exercises
 
@@ -166,8 +166,8 @@ or starts a network download.
 - the production Rust Arcade list renderer;
 - the production screenshot scaling and crossfade compositor;
 - the production particle renderer;
-- the production time-based screenshot-tile wall algorithm with real Arcade
-  pack images in card mode;
+- the production archive-streamed, multi-depth screenshot parade with real
+  Arcade pack images in card mode;
 - mounted-card discovery and canonical `/media/fat` path mapping;
 - the production Catalog V3 scanner, publisher, and loader with Mac-local state;
 - the production preview archive resolver, RGB565 decoder, and media downloader.
