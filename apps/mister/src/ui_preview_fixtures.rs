@@ -113,6 +113,12 @@ fn fixture_arcade_games() -> Vec<ArcadeGameEntry> {
                     2 => "Sega",
                     _ => "Taito",
                 }),
+                category: Arc::from(match index % 4 {
+                    0 => "Shooter",
+                    1 => "Action",
+                    2 => "Platform",
+                    _ => "Sports",
+                }),
                 players: Some(if index % 3 == 0 { 2 } else { 1 }),
                 control: Arc::from(if index % 5 == 0 {
                     "Trackball"
