@@ -287,18 +287,18 @@ impl FormSceneRenderer {
 
     fn initialize_observatory(&mut self) {
         let count = FormSceneKind::SphericalFieldObservatory.count();
-        let golden = PI * (3.0 - 5.0_f32.sqrt());
         for index in 0..count {
-            let t = index as f32 / count as f32;
-            let y = 1.0 - 2.0 * t;
-            let radial = (1.0 - y * y).sqrt();
-            let angle = index as f32 * golden;
-            let radius = 155.0 + ((index.wrapping_mul(29) & 255) as f32 - 127.5) * 0.32;
-            self.rest_x[index] = angle.cos() * radial * radius;
-            self.rest_y[index] = y * radius;
-            self.rest_z[index] = angle.sin() * radial * radius;
-            self.aux_x[index] = angle.sin();
-            self.aux_y[index] = angle.cos();
+            let trail = index & 127;
+            let sample = index >> 7;
+            let t = sample as f32 / 255.0;
+            let phase = trail as f32 * (TAU / 128.0);
+            let convergence = smootherstep(t);
+            let wave = t * TAU * 1.35 + phase;
+            self.rest_x[index] = (t - 0.5) * 720.0;
+            self.rest_y[index] = wave.sin() * (125.0 - convergence * 70.0) + phase.cos() * 70.0;
+            self.rest_z[index] = phase.sin() * (95.0 - convergence * 35.0) + wave.cos() * 32.0;
+            self.aux_x[index] = phase.sin();
+            self.aux_y[index] = phase.cos();
             self.style[index] = (2 + ((index >> 7) & 5)) as u8;
             self.flags[index] = u8::from(index & 31 == 0);
         }
@@ -348,8 +348,8 @@ impl FormSceneRenderer {
             let band = index % 96;
             let across = band as f32 / 95.0;
             let longitudinal = (index / 96) as f32 / ((count / 96) - 1) as f32;
-            let ship_x = (across - 0.5) * (75.0 + longitudinal * 250.0);
-            let ship_y = (longitudinal - 0.5) * 360.0;
+            let ship_x = -245.0 + (longitudinal - 0.5) * 280.0;
+            let ship_y = (across - 0.5) * (65.0 + longitudinal * 190.0);
             let ship_z = ((t * TAU * 17.0).sin()) * (18.0 + longitudinal * 35.0);
             self.rest_x[index] = ship_x;
             self.rest_y[index] = ship_y;
@@ -357,8 +357,8 @@ impl FormSceneRenderer {
 
             let wing = (across - 0.5) * 2.0;
             let manta_width = (1.0 - (longitudinal - 0.48).abs() * 1.6).max(0.08);
-            self.target_x[index] = wing * manta_width * 300.0;
-            self.target_y[index] = (longitudinal - 0.5) * 270.0 + wing.abs().powf(1.6) * 75.0;
+            self.target_x[index] = 245.0 + wing * manta_width * 265.0;
+            self.target_y[index] = (longitudinal - 0.5) * 210.0 + wing.abs().powf(1.6) * 68.0;
             self.target_z[index] =
                 wing.signum() * wing.abs().powi(2) * 55.0 + (longitudinal * TAU).sin() * 20.0;
             let phase = t * TAU * 7.0;
@@ -401,7 +401,10 @@ impl FormSceneRenderer {
         };
         let angle = seconds * 0.17;
         let (sin, cos) = angle.sin_cos();
-        for index in (0..count).step_by(4) {
+        for index in 0..count {
+            if (index / 10) & 3 != 0 {
+                continue;
+            }
             let scan = (seconds * 0.25 + self.aux_y[index]).fract();
             if scan > reveal || (index & 3 == 0 && scan > 0.82) {
                 continue;
@@ -416,16 +419,16 @@ impl FormSceneRenderer {
 
     fn project_observatory(&mut self, seconds: f32, width: usize, height: usize) {
         let count = FormSceneKind::SphericalFieldObservatory.count();
-        let orbit = seconds * 0.23;
+        let orbit = seconds * 0.16;
         let (sin, cos) = orbit.sin_cos();
-        let void = 32.0 + smooth_envelope(seconds, 2.0, 14.0, 27.0) * 48.0;
+        let field = smooth_envelope(seconds, 2.0, 14.0, 27.0);
         for index in (0..count).step_by(2) {
             let phase_sin = self.aux_x[index].mul_add(cos, self.aux_y[index] * sin);
             let phase_cos = self.aux_y[index].mul_add(cos, -self.aux_x[index] * sin);
-            let radial = 1.0 + phase_sin * 0.12;
-            let x = self.rest_x[index] * radial + phase_cos * void;
-            let y = self.rest_y[index] * radial;
-            let z = self.rest_z[index] * radial + phase_sin * 28.0;
+            let convergence = ((self.rest_x[index] + 360.0) / 720.0).clamp(0.0, 1.0);
+            let x = self.rest_x[index] + convergence * phase_cos * field * 48.0;
+            let y = self.rest_y[index] + phase_sin * convergence * field * 72.0;
+            let z = self.rest_z[index] + phase_cos * convergence * field * 45.0;
             self.push_world(x, y, z, 610.0, width, height, index);
         }
         let visible = self.points.len();
@@ -468,15 +471,23 @@ impl FormSceneRenderer {
         } else {
             0.0
         };
-        let breakup = (morph * PI).sin() * 52.0;
+        let breakup = (morph * PI).sin() * 42.0;
         let angle = -0.28 + seconds * 0.025;
         let (sin, cos) = angle.sin_cos();
         for index in (0..count).step_by(2) {
+            let assignment_rank = (index % 96) as f32 / 95.0;
+            let local_morph = if morph <= 0.0 {
+                0.0
+            } else if morph >= 1.0 {
+                1.0
+            } else {
+                smootherstep(((morph - assignment_rank * 0.7) / 0.3).clamp(0.0, 1.0))
+            };
             let wobble = self.aux_x[index] * breakup;
-            let x = lerp(self.rest_x[index], self.target_x[index], morph) + wobble;
-            let y = lerp(self.rest_y[index], self.target_y[index], morph)
+            let x = lerp(self.rest_x[index], self.target_x[index], local_morph) + wobble;
+            let y = lerp(self.rest_y[index], self.target_y[index], local_morph)
                 + self.aux_y[index] * breakup * 0.38;
-            let z = lerp(self.rest_z[index], self.target_z[index], morph)
+            let z = lerp(self.rest_z[index], self.target_z[index], local_morph)
                 + self.aux_x[index] * breakup * 0.55;
             let rx = x.mul_add(cos, z * sin);
             let rz = (-x).mul_add(sin, z * cos);
