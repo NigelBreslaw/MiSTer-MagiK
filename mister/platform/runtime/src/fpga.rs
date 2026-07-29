@@ -1970,6 +1970,10 @@ mod tests {
             active_stride: 1920,
             reject_count: 0,
             active_route_epoch: 0,
+            accepted_sequence: 2,
+            active_transaction: 1,
+            pending_transaction: 2,
+            accepted_transaction: 2,
         };
         assert!(status.supported());
         assert!(status.active_enabled());
