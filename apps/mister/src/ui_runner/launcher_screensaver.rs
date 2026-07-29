@@ -1,13 +1,28 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#![cfg_attr(target_os = "macos", allow(dead_code))]
+
+#[cfg(not(target_os = "macos"))]
 use super::*;
+#[cfg(target_os = "macos")]
+use crate::framebuffer::target::{DirtyRect, blend_565, brighten_565};
+#[cfg(target_os = "macos")]
+use crate::particle_engine::{ParticleConfig, ParticlePreset};
+#[cfg(target_os = "macos")]
+use crate::particle_showcase::{
+    ParticleDemoKind, ParticleShowcaseConfig, ParticleShowcaseRenderer,
+};
 use crate::preview_worker;
 use mister_magik_catalog::device_layout::DeviceLayout;
+#[cfg(not(target_os = "macos"))]
 use mister_magik_fb::particle_engine::{ParticleConfig, ParticlePreset};
+#[cfg(not(target_os = "macos"))]
 use mister_magik_fb::particle_showcase::{
     ParticleDemoKind, ParticleShowcaseConfig, ParticleShowcaseRenderer,
 };
+#[cfg(target_os = "macos")]
+use slint::platform::software_renderer::{Rgb565Pixel, TargetPixel};
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs::File;
@@ -16,8 +31,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+#[cfg(target_os = "macos")]
+use std::time::{Duration, Instant};
 
 use super::particle_renderer::ParticleRenderer;
+#[cfg(target_os = "macos")]
+use crate::visual_composition::{ScreenshotTileImage as SaverImage, ScreenshotTileWall};
+#[cfg(not(target_os = "macos"))]
 use mister_magik_fb::visual_composition::{ScreenshotTileImage as SaverImage, ScreenshotTileWall};
 
 const PARTICLE_RENDERER_LABEL: &str = "particle-magik";
@@ -241,7 +261,7 @@ struct ScreensaverRenderState {
     starfield_contact_valid: bool,
 }
 
-pub(in crate::ui_runner) struct LauncherScreensaver {
+pub struct LauncherScreensaver {
     parade: ParadeState,
     particle: Option<ParticleRenderer>,
     particle_showcase: Option<ParticleShowcaseRenderer>,
@@ -254,7 +274,7 @@ pub(in crate::ui_runner) struct LauncherScreensaver {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-pub(super) struct ScreensaverFrameTrace {
+pub struct ScreensaverFrameTrace {
     pub(super) renderer: &'static str,
     pub(super) archive_poll_us: u128,
     pub(super) card_adopt_us: u128,
@@ -377,12 +397,7 @@ impl LauncherScreensaver {
         }
     }
 
-    pub(in crate::ui_runner) fn render(
-        &mut self,
-        dst: &mut [Rgb565Pixel],
-        w: usize,
-        h: usize,
-    ) -> ScreensaverFrameTrace {
+    pub fn render(&mut self, dst: &mut [Rgb565Pixel], w: usize, h: usize) -> ScreensaverFrameTrace {
         let now = Instant::now();
         self.render_at(
             dst,
@@ -392,7 +407,7 @@ impl LauncherScreensaver {
         )
     }
 
-    pub(in crate::ui_runner) fn render_at(
+    pub fn render_at(
         &mut self,
         dst: &mut [Rgb565Pixel],
         w: usize,
@@ -402,7 +417,7 @@ impl LauncherScreensaver {
         self.render_at_target(dst, w, h, None, elapsed)
     }
 
-    pub(in crate::ui_runner) fn render_at_hidden_slot(
+    pub fn render_at_hidden_slot(
         &mut self,
         dst: &mut [Rgb565Pixel],
         w: usize,
@@ -555,7 +570,7 @@ impl LauncherScreensaver {
         trace
     }
 
-    pub(in crate::ui_runner) fn invalidate_hidden_slot(&mut self, hidden_slot: u8) {
+    pub fn invalidate_hidden_slot(&mut self, hidden_slot: u8) {
         if let Some(showcase) = self.particle_showcase.as_mut() {
             showcase.invalidate_hidden_slot(hidden_slot);
         }
@@ -601,28 +616,32 @@ impl LauncherScreensaver {
         }
     }
 
-    pub(in crate::ui_runner) fn has_rendered_card(&self) -> bool {
+    pub fn has_rendered_card(&self) -> bool {
         if self.particle.is_some() || self.particle_showcase.is_some() {
             return true;
         }
         self.parade.tiles.iter().any(|tile| tile.active)
     }
 
-    pub(in crate::ui_runner) fn is_loading_archive(&self) -> bool {
+    pub fn is_loading_archive(&self) -> bool {
         if self.particle.is_some() || self.particle_showcase.is_some() {
             return false;
         }
         self.archive_rx.is_some()
     }
 
-    pub(in crate::ui_runner) fn active_card_count(&self) -> usize {
+    pub fn active_card_count(&self) -> usize {
         if self.particle.is_some() || self.particle_showcase.is_some() {
             return 0;
         }
         self.parade.tiles.iter().filter(|tile| tile.active).count()
     }
 
-    pub(in crate::ui_runner) fn requires_direct_hidden(&self) -> bool {
+    pub fn has_pending_card_work(&self) -> bool {
+        self.parade.scale_queue_depth > 0
+    }
+
+    pub fn requires_direct_hidden(&self) -> bool {
         self.particle.is_some() || self.particle_showcase.is_some()
     }
 }
@@ -630,6 +649,34 @@ impl LauncherScreensaver {
 impl Drop for LauncherScreensaver {
     fn drop(&mut self) {
         self.archive_cancelled.store(true, Ordering::Relaxed);
+    }
+}
+
+impl LauncherScreensaver {
+    pub fn from_archive_path(
+        path: &std::path::Path,
+        width: usize,
+        height: usize,
+        seed: u64,
+        crt_output: bool,
+    ) -> Result<Self, String> {
+        let archive = preview_worker::ResidentPreviewArchive::open(path)?;
+        let asset_keys = archive.asset_keys().to_vec();
+        let sampling_profile = ParadeSamplingProfile::for_crt_output(crt_output);
+        let mut parade = ParadeState::new_with_archive(seed, archive, sampling_profile);
+        parade.begin_archive_streaming(asset_keys, width, height, None);
+        let now = Instant::now();
+        Ok(Self {
+            parade,
+            particle: None,
+            particle_showcase: None,
+            archive_rx: None,
+            archive_cancelled: Arc::new(AtomicBool::new(false)),
+            startup_started_at: None,
+            frame: 0,
+            motion_started_at: now,
+            motion_ticks_fp: 0,
+        })
     }
 }
 
@@ -642,12 +689,12 @@ struct LoadedScreensaverArchive {
 
 type ArchiveLoadResult = Result<LoadedScreensaverArchive, String>;
 
-pub(in crate::ui_runner) struct LauncherScreensaverLoader {
+pub struct LauncherScreensaverLoader {
     ready_rx: Receiver<LauncherScreensaver>,
 }
 
 impl LauncherScreensaverLoader {
-    pub(in crate::ui_runner) fn start(
+    pub fn start(
         w: usize,
         h: usize,
         startup_started_at: Option<Instant>,
@@ -745,12 +792,12 @@ impl LauncherScreensaverLoader {
         Self { ready_rx }
     }
 
-    pub(in crate::ui_runner) fn try_ready(&self) -> Option<LauncherScreensaver> {
+    pub fn try_ready(&self) -> Option<LauncherScreensaver> {
         self.ready_rx.try_recv().ok()
     }
 }
 
-pub(in crate::ui_runner) fn particle_renderer_requested() -> bool {
+pub fn particle_renderer_requested() -> bool {
     let value = std::env::var("MISTER_SCREENSAVER_RENDERER").ok();
     particle_renderer_label_requested(value.as_deref())
         || particle_showcase_renderer_label_requested(value.as_deref())
@@ -760,7 +807,7 @@ fn particle_renderer_label_requested(value: Option<&str>) -> bool {
     value.is_some_and(|value| value.trim().eq_ignore_ascii_case(PARTICLE_RENDERER_LABEL))
 }
 
-pub(in crate::ui_runner) fn particle_showcase_renderer_requested() -> bool {
+pub fn particle_showcase_renderer_requested() -> bool {
     particle_showcase_renderer_label_requested(
         std::env::var("MISTER_SCREENSAVER_RENDERER").ok().as_deref(),
     )
@@ -878,6 +925,7 @@ impl ScreensaverRenderState {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 pub(in crate::ui_runner) fn run_screensaver_loop(
     secs: u64,
     ui: &UiDisplay,
@@ -1039,24 +1087,39 @@ fn load_screensaver_images_cancellable(
         std::env::var_os("MISTER_MEDIA_ASSET_DIR").as_deref(),
         DeviceLayout::current(),
     );
-    let result = preview_worker::load_preview_archive_batch(
-        &arcade_screenshot_pack,
-        cap,
-        random_seed(),
-        || cancelled.is_some_and(|cancelled| cancelled.load(Ordering::Relaxed)),
-    );
-    let images = match result {
-        Ok(Some(batch)) => batch
-            .images
-            .into_iter()
-            .map(preview_pixels_to_saver_image)
-            .collect(),
-        Ok(None) => Vec::new(),
-        Err(error) => {
-            crate::ui_errln!("screensaver: arcade screenshot pack load failed: {error}");
-            Vec::new()
+    let mut asset_keys =
+        match preview_worker::preview_archive_sidecar_entry_stems(&arcade_screenshot_pack) {
+            Ok(Some(sidecar)) => sidecar.entries,
+            Ok(None) => match preview_worker::preview_archive_index(&arcade_screenshot_pack) {
+                Ok(index) => index.entries,
+                Err(error) => {
+                    crate::ui_errln!("screensaver: arcade screenshot pack index failed: {error}");
+                    Vec::new()
+                }
+            },
+            Err(error) => {
+                crate::ui_errln!("screensaver: arcade screenshot sidecar failed: {error}");
+                Vec::new()
+            }
+        };
+    let mut rng = random_seed();
+    shuffle(&mut asset_keys, &mut rng);
+    let mut images = Vec::new();
+    for asset_key in asset_keys {
+        if cancelled.is_some_and(|cancelled| cancelled.load(Ordering::Relaxed)) {
+            break;
         }
-    };
+        if images.len() >= cap {
+            break;
+        }
+        if let Ok(image) = preview_worker::load_preview_asset_pixels(
+            &arcade_screenshot_pack.display().to_string(),
+            &asset_key,
+        ) {
+            let image = preview_pixels_to_saver_image(image);
+            images.push(image);
+        }
+    }
     crate::ui_logln!(
         "screensaver_loader path={} images={}",
         arcade_screenshot_pack.display(),

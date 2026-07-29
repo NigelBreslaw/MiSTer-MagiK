@@ -55,6 +55,9 @@ pub mod particle_renderer;
 pub mod particle_showcase;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 pub mod preview_transition;
+#[cfg(all(feature = "ui-preview", target_os = "macos"))]
+#[path = "ui_runner/launcher_screensaver.rs"]
+pub mod production_launcher_screensaver;
 pub mod raw565;
 pub mod return_catalog_capsule;
 pub use mister_magik_mister_runtime::runtime_status;
