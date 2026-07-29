@@ -723,31 +723,44 @@ fn hologram_material_style(
     x: f32,
     y: f32,
     z: f32,
-    radial_map: f32,
+    _radial_map: f32,
     scan_coordinate: f32,
     scan_position: f32,
 ) -> u8 {
+    if part == 4 {
+        return 6;
+    }
     let scan_delta = (scan_coordinate - scan_position).abs();
     let scan_delta = scan_delta.min(1.0 - scan_delta);
-    if scan_delta < 0.016 {
+    if scan_delta < 0.012 {
         return 7;
     }
-    if scan_delta < 0.036 && part != 4 {
+    if scan_delta < 0.024 && part == 0 {
         return 6;
     }
     match part {
         0 => {
-            let edge = x.abs() > 188.0 || z.abs() > 108.0;
-            if edge {
-                5
-            } else if y < 55.0 {
-                let terrace = ((x * 0.018 + z * 0.025).floor() as i32).rem_euclid(4);
-                if terrace == 0 { 5 } else { 4 }
+            let on_top = y < 55.0;
+            if on_top {
+                let in_button_well = [(-122.0_f32, -45.0_f32), (118.0, -48.0), (112.0, 54.0)]
+                    .iter()
+                    .any(|&(center_x, center_z)| {
+                        (x - center_x).powi(2) + (z - center_z).powi(2) < 31.0_f32.powi(2)
+                    });
+                if in_button_well {
+                    0
+                } else if x.abs() > 188.0 || z.abs() > 108.0 {
+                    5
+                } else {
+                    4
+                }
             } else {
                 let vertical = ((y - 48.0) / 96.0).clamp(0.0, 1.0);
-                if vertical < 0.28 {
+                if vertical < 0.18 {
+                    5
+                } else if vertical < 0.52 {
                     4
-                } else if vertical < 0.72 {
+                } else if vertical < 0.82 {
                     2
                 } else {
                     1
@@ -755,38 +768,34 @@ fn hologram_material_style(
             }
         }
         1 => {
-            if x > 8.0 {
+            if x > -4.0 {
                 5
-            } else if y < -70.0 {
-                4
             } else {
-                2
+                4
             }
         }
         2 => {
             let latitude = ((y + 169.0) / 54.0).clamp(-1.0, 1.0);
-            if latitude < -0.32 {
+            if latitude < -0.78 {
                 7
-            } else if latitude < 0.38 {
+            } else if latitude < -0.18 {
                 5
+            } else if latitude < 0.52 {
+                4
             } else {
-                3
+                5
             }
         }
         3 => {
-            if z < 0.0 {
-                5
-            } else {
-                3
+            let ring = ((y - 41.0) / 3.0).round() as i32;
+            match ring {
+                0 => 7,
+                1 => 5,
+                2 => 3,
+                _ => 2,
             }
         }
-        4 => {
-            if radial_map.sqrt() < 0.62 {
-                0
-            } else {
-                6
-            }
-        }
+        4 => 6,
         _ => 5,
     }
 }
@@ -860,7 +869,15 @@ mod tests {
             hologram_material_style(2, 0.0, -220.0, 0.0, 0.0, 0.8, 0.2),
             7
         );
-        assert_eq!(hologram_material_style(4, 0.0, 35.0, 0.0, 0.1, 0.8, 0.2), 0);
+        assert_eq!(
+            hologram_material_style(2, 0.0, -169.0, 0.0, 0.0, 0.8, 0.2),
+            4
+        );
+        assert_eq!(
+            hologram_material_style(0, -122.0, 48.0, -45.0, 0.0, 0.8, 0.2),
+            0
+        );
+        assert_eq!(hologram_material_style(4, 0.0, 35.0, 0.0, 0.1, 0.8, 0.2), 6);
         assert_eq!(hologram_material_style(4, 0.0, 35.0, 0.0, 0.9, 0.8, 0.2), 6);
         assert_eq!(
             hologram_material_style(1, 0.0, -40.0, 0.0, 0.0, 0.205, 0.2),
