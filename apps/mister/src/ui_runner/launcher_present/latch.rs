@@ -42,6 +42,10 @@ pub(in crate::ui_runner) struct LatchCompletion {
 }
 
 pub(in crate::ui_runner) trait LatchHardware: LauncherDisplayHardware {
+    fn lock_latch_transaction(&mut self) -> io::Result<Option<crate::fpga::FpgaUioGuard>> {
+        Ok(None)
+    }
+
     fn read_latch_capabilities(
         &mut self,
     ) -> io::Result<(u16, u16, mister_magik_latch_contract::LatchCapabilities)>;
@@ -73,6 +77,10 @@ pub(in crate::ui_runner) trait LatchHardware: LauncherDisplayHardware {
 }
 
 impl LatchHardware for Fpga {
+    fn lock_latch_transaction(&mut self) -> io::Result<Option<crate::fpga::FpgaUioGuard>> {
+        self.lock_latch_transaction()
+    }
+
     fn read_latch_capabilities(
         &mut self,
     ) -> io::Result<(u16, u16, mister_magik_latch_contract::LatchCapabilities)> {
@@ -605,6 +613,29 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         let mut status_us = status_started.elapsed().as_micros() as u64;
         let sequence = self.sequence;
         self.sequence = self.sequence.wrapping_add(1).max(1);
+        let _transaction_guard = hardware.lock_latch_transaction().map_err(|error| {
+            LatchFailure::runtime(
+                LatchFailureStage::LatchPost,
+                LatchFailureReason::FpgaTransportFailed,
+                format!("failed to lock complete latch transaction: {error}"),
+            )
+        })?;
+        let locked_status_started = Instant::now();
+        let locked_before_sample = self.read_geometry_safe_status(hardware)?;
+        status_us = status_us.saturating_add(locked_status_started.elapsed().as_micros() as u64);
+        if locked_before_sample.status.pending()
+            || !self.latch_state.slot_is_writable(grant.slot_index)
+        {
+            return Err(LatchFailure::runtime(
+                LatchFailureStage::PostVerification,
+                LatchFailureReason::NoWritableHiddenBuffer,
+                format!(
+                    "external slot {} became active or pending inside locked transaction",
+                    grant.slot_index
+                ),
+            )
+            .with_wire_diagnostics(rejected_wire_diagnostics(locked_before_sample.diagnostics)));
+        }
         let post_start = Instant::now();
         let post = hardware
             .post_latched_rgb565(
@@ -860,6 +891,27 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
 
         let sequence = self.sequence;
         self.sequence = self.sequence.wrapping_add(1).max(1);
+        let _transaction_guard = hardware.lock_latch_transaction().map_err(|error| {
+            self.latch_state.mark_attempt_failed(buffer_index);
+            LatchFailure::runtime(
+                LatchFailureStage::LatchPost,
+                LatchFailureReason::FpgaTransportFailed,
+                format!("failed to lock complete latch transaction: {error}"),
+            )
+        })?;
+        let locked_status_started = Instant::now();
+        let locked_before_sample = self.read_geometry_safe_status(hardware)?;
+        status_us = status_us.saturating_add(locked_status_started.elapsed().as_micros() as u64);
+        if locked_before_sample.status.pending() || !self.latch_state.slot_is_writable(buffer_index)
+        {
+            self.latch_state.mark_attempt_failed(buffer_index);
+            return Err(LatchFailure::runtime(
+                LatchFailureStage::PostVerification,
+                LatchFailureReason::NoWritableHiddenBuffer,
+                format!("slot {buffer_index} became active or pending inside locked transaction"),
+            )
+            .with_wire_diagnostics(rejected_wire_diagnostics(locked_before_sample.diagnostics)));
+        }
         let post_start = Instant::now();
         let post = match hardware.post_latched_rgb565(
             sequence,

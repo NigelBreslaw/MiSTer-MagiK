@@ -12,10 +12,12 @@
 //! `gpo_copy`. Bit31 must stay set (it means "configured"); bit20 is the IO chip
 //! select (EnableIO/DisableIO); bit17 is the strobe; the low 16 bits are data.
 
+use std::cell::Cell;
 use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::os::unix::io::AsRawFd;
 use std::ptr::{read_volatile, write_volatile};
+use std::rc::Rc;
 use std::time::Instant;
 
 use crate::framebuffer::route::{
@@ -265,14 +267,23 @@ pub struct Fpga {
     gpo: u32,
     latch_capabilities: Option<mister_magik_latch_contract::LatchCapabilities>,
     uio_lock: Option<File>,
+    uio_lock_depth: Rc<Cell<u32>>,
 }
 
-struct FpgaUioGuard {
+pub struct FpgaUioGuard {
     fd: std::os::fd::RawFd,
+    depth: Rc<Cell<u32>>,
 }
 
 impl Drop for FpgaUioGuard {
     fn drop(&mut self) {
+        let depth = self.depth.get();
+        debug_assert!(depth > 0);
+        let remaining = depth.saturating_sub(1);
+        self.depth.set(remaining);
+        if remaining != 0 {
+            return;
+        }
         // SAFETY: fd belongs to the live lock file held by Fpga for longer than
         // this guard; LOCK_UN only releases this process's advisory flock.
         unsafe {
@@ -324,6 +335,7 @@ impl Fpga {
             gpo: BIT31,
             latch_capabilities: None,
             uio_lock: Some(uio_lock),
+            uio_lock_depth: Rc::new(Cell::new(0)),
         })
     }
 
@@ -332,11 +344,22 @@ impl Fpga {
             return Ok(None);
         };
         let fd = lock.as_raw_fd();
-        // SAFETY: fd is a valid open lock file descriptor owned by self.
-        if unsafe { libc::flock(fd, libc::LOCK_EX) } != 0 {
-            return Err(io::Error::last_os_error());
+        let depth = self.uio_lock_depth.get();
+        if depth == 0 {
+            // SAFETY: fd is a valid open lock file descriptor owned by self.
+            if unsafe { libc::flock(fd, libc::LOCK_EX) } != 0 {
+                return Err(io::Error::last_os_error());
+            }
         }
-        Ok(Some(FpgaUioGuard { fd }))
+        self.uio_lock_depth.set(depth.saturating_add(1));
+        Ok(Some(FpgaUioGuard {
+            fd,
+            depth: Rc::clone(&self.uio_lock_depth),
+        }))
+    }
+
+    pub fn lock_latch_transaction(&self) -> io::Result<Option<FpgaUioGuard>> {
+        self.lock_uio_transaction()
     }
 
     #[inline]
@@ -1376,6 +1399,7 @@ mod tests {
             gpo: BIT31,
             latch_capabilities: Some(v4_capabilities()),
             uio_lock: None,
+            uio_lock_depth: Rc::new(Cell::new(0)),
         };
         (fpga, state)
     }
@@ -1394,6 +1418,7 @@ mod tests {
             gpo: BIT31,
             latch_capabilities: Some(v4_capabilities()),
             uio_lock: None,
+            uio_lock_depth: Rc::new(Cell::new(0)),
         };
         (fpga, state)
     }
