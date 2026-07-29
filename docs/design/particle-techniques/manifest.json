@@ -1,0 +1,82 @@
+{
+  "schema": "mister-magik-particle-technique-reference-v1",
+  "geometry": {
+    "width": 960,
+    "height": 540,
+    "format": "RGB565",
+    "png_channels": "expanded-r5g6b5",
+    "alpha": false
+  },
+  "references": [
+    {
+      "id": "procedural-sprite-materials",
+      "label": "Procedural Sprite Materials",
+      "file": "01-procedural-sprite-materials-rgb565.png",
+      "sha256": "53e01942c9ae18252c7664a3756008f2b8dc48c6fa15a7e13037bd6ad69905ed",
+      "true_black_percent": 82.0
+    },
+    {
+      "id": "variable-width-ribbons",
+      "label": "Variable-width Ribbons and Streaklets",
+      "file": "02-variable-width-ribbons-rgb565.png",
+      "sha256": "fec040533801e97675607cc5a8840c89aadec6f3eca1c6331230c3860c7d175c",
+      "true_black_percent": 80.5
+    },
+    {
+      "id": "curl-noise-flow-field",
+      "label": "Curl-noise Flow Field",
+      "file": "03-curl-noise-flow-field-rgb565.png",
+      "sha256": "bc81162d7972d69254ceb96ca3f3648af209cf8f33380591c85ef49eddcf7e72",
+      "true_black_percent": 62.4
+    },
+    {
+      "id": "density-bloom",
+      "label": "Low-resolution Density and Bloom",
+      "file": "04-density-bloom-rgb565.png",
+      "sha256": "a458b0c4475c9bbda87b13d6d6bdc879df24f4cec304d96f9a1cc3bd173a2b35",
+      "true_black_percent": 72.0
+    },
+    {
+      "id": "layered-child-systems",
+      "label": "Layered Systems and Child Emission",
+      "file": "05-layered-child-systems-rgb565.png",
+      "sha256": "db052f9519952e8817343983b08c771d3047f96e5ccdead91bc648e4d561d025",
+      "true_black_percent": 87.9
+    },
+    {
+      "id": "spatial-field-stack",
+      "label": "Spatial Field Stack",
+      "file": "06-spatial-field-stack-rgb565.png",
+      "sha256": "3d30413a9da58b201b2fd2540219ea732db319d9e65843a40f5dc7bedc02c9d0",
+      "true_black_percent": 73.2
+    },
+    {
+      "id": "depth-aware-material-lod",
+      "label": "Depth-aware Material LOD",
+      "file": "07-depth-aware-material-lod-rgb565.png",
+      "sha256": "b27006b9896214cdae4f8efda9e2b17b0f98eadc86b2fd98d12fbe114d7d602a",
+      "true_black_percent": 59.8
+    },
+    {
+      "id": "source-morph",
+      "label": "Source-driven Emission and Morph",
+      "file": "08-source-morph-rgb565.png",
+      "sha256": "e8048465f81855a3d2b2c52a2c8992de2f86c26ab08a1542ba2c990779561436",
+      "true_black_percent": 74.7
+    },
+    {
+      "id": "sdf-collision",
+      "label": "SDF Collision and Collision Events",
+      "file": "09-sdf-collision-rgb565.png",
+      "sha256": "44cea03df99aa1fdf8dafaa83ca77f9926ad6f006115019aa9d321315539bc9a",
+      "true_black_percent": 72.6
+    },
+    {
+      "id": "grid-flocking",
+      "label": "Grid-accelerated Flocking",
+      "file": "10-grid-flocking-rgb565.png",
+      "sha256": "da4453ec94f45da3f4105f5a1f868044f3b9bcceb8dfaf85ceb3bc98c65e3eed",
+      "true_black_percent": 78.1
+    }
+  ]
+}
