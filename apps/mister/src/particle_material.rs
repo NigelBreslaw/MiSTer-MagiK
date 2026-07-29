@@ -55,6 +55,12 @@ pub(crate) fn raster_stamp(
 ) -> MaterialRasterStats {
     let radius = i16::from(stamp.radius).clamp(1, MAX_STAMP_RADIUS);
     let intensity = stamp.intensity.min(15);
+    let source_r = (stamp.color.0 >> 11) & 0x1f;
+    let source_g = (stamp.color.0 >> 5) & 0x3f;
+    let source_b = stamp.color.0 & 0x1f;
+    let scaled_r = std::array::from_fn::<_, 16, _>(|alpha| source_r * alpha as u16 / 15);
+    let scaled_g = std::array::from_fn::<_, 16, _>(|alpha| source_g * alpha as u16 / 15);
+    let scaled_b = std::array::from_fn::<_, 16, _>(|alpha| source_b * alpha as u16 / 15);
     let mut stats = MaterialRasterStats {
         stamps: 1,
         attempted_pixel_writes: 0,
@@ -75,7 +81,12 @@ pub(crate) fn raster_stamp(
             }
             let offset = y as usize * width + x as usize;
             let alpha = ((u16::from(coverage) * u16::from(intensity) + 7) / 15).min(15) as u8;
-            destination[offset] = screen_rgb565(destination[offset], stamp.color, alpha);
+            destination[offset] = additive_rgb565(
+                destination[offset],
+                scaled_r[usize::from(alpha)],
+                scaled_g[usize::from(alpha)],
+                scaled_b[usize::from(alpha)],
+            );
             dirty_offsets.push(offset as u32);
             stats.attempted_pixel_writes = stats.attempted_pixel_writes.saturating_add(1);
         }
@@ -177,19 +188,18 @@ fn radial_coverage(distance2: i16, radius2: i16) -> u8 {
     }
 }
 
-fn screen_rgb565(destination: Rgb565Pixel, source: Rgb565Pixel, alpha: u8) -> Rgb565Pixel {
-    if alpha == 0 {
-        return destination;
-    }
+fn additive_rgb565(
+    destination: Rgb565Pixel,
+    source_r: u16,
+    source_g: u16,
+    source_b: u16,
+) -> Rgb565Pixel {
     let dst_r = (destination.0 >> 11) & 0x1f;
     let dst_g = (destination.0 >> 5) & 0x3f;
     let dst_b = destination.0 & 0x1f;
-    let src_r = ((source.0 >> 11) & 0x1f) * u16::from(alpha) / 15;
-    let src_g = ((source.0 >> 5) & 0x3f) * u16::from(alpha) / 15;
-    let src_b = (source.0 & 0x1f) * u16::from(alpha) / 15;
-    let red = dst_r + src_r - dst_r * src_r / 31;
-    let green = dst_g + src_g - dst_g * src_g / 63;
-    let blue = dst_b + src_b - dst_b * src_b / 31;
+    let red = (dst_r + source_r).min(31);
+    let green = (dst_g + source_g).min(63);
+    let blue = (dst_b + source_b).min(31);
     Rgb565Pixel((red << 11) | (green << 5) | blue)
 }
 
@@ -217,10 +227,10 @@ mod tests {
     }
 
     #[test]
-    fn screen_blend_preserves_rgb565_channels() {
-        let blue = screen_rgb565(Rgb565Pixel(0), Rgb565Pixel(0x001f), 15);
+    fn additive_blend_preserves_rgb565_channels() {
+        let blue = additive_rgb565(Rgb565Pixel(0), 0, 0, 31);
         assert_eq!(blue, Rgb565Pixel(0x001f));
-        let saturated = screen_rgb565(Rgb565Pixel(0xffff), Rgb565Pixel(0xf800), 15);
+        let saturated = additive_rgb565(Rgb565Pixel(0xffff), 31, 0, 0);
         assert_eq!(saturated, Rgb565Pixel(0xffff));
     }
 

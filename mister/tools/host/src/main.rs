@@ -4300,6 +4300,7 @@ fn profile_particle_showcase_cpu_demo(
                 ),
                 ("MISTER_PARTICLE_DEMO".into(), demo_number.to_string()),
                 ("MISTER_PARTICLE_SEED".into(), "827141709451".into()),
+                ("MISTER_PARTICLE_HUD".into(), "off".into()),
                 ("MISTER_PPROF".into(), "1".into()),
                 ("MISTER_PPROF_TRIGGER".into(), "screensaver".into()),
                 (
@@ -4697,6 +4698,7 @@ fn run_particle_showcase_trial(
                 ),
                 ("MISTER_PARTICLE_DEMO".into(), demo_number.to_string()),
                 ("MISTER_PARTICLE_SEED".into(), "827141709451".into()),
+                ("MISTER_PARTICLE_HUD".into(), "off".into()),
             ],
             timeout_secs: 45,
             remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
@@ -4774,6 +4776,7 @@ fn capture_particle_showcase_frame(
                 ),
                 ("MISTER_PARTICLE_DEMO".into(), demo_number.to_string()),
                 ("MISTER_PARTICLE_SEED".into(), "827141709451".into()),
+                ("MISTER_PARTICLE_HUD".into(), "off".into()),
             ],
             timeout_secs: 45,
             remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),

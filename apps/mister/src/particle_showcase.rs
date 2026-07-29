@@ -1992,6 +1992,7 @@ impl ParticleShowcaseRenderer {
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
         let center_x = self.config.width as f32 * 0.5;
         let center_y = self.config.height as f32 * 0.58;
+        let mut clipped = 0usize;
         for index in (0..self.pool.active()).step_by(2) {
             let phase =
                 (seconds * self.pool.life[index] * 0.12 + self.pool.age[index]).rem_euclid(1.0);
@@ -2024,16 +2025,28 @@ impl ParticleShowcaseRenderer {
             } else {
                 ((over_life * 6.0) as usize + usize::from(self.pool.style[index] & 1)).min(7)
             };
-            self.material_stamps.push(MaterialStamp {
-                x: x.round() as i16,
-                y: y.round() as i16,
-                radius,
-                intensity: (4.0 + over_life * 11.0) as u8,
-                color: MATERIAL_PALETTE[style],
-                shape,
-            });
+            if index & 31 == 0 {
+                self.material_stamps.push(MaterialStamp {
+                    x: x.round() as i16,
+                    y: y.round() as i16,
+                    radius,
+                    intensity: (4.0 + over_life * 11.0) as u8,
+                    color: MATERIAL_PALETTE[style],
+                    shape,
+                });
+            } else if !push_screen_command(
+                &mut self.commands,
+                self.config.width,
+                self.config.height,
+                x,
+                y,
+                style as u8,
+                matches!(shape, MaterialShape::Spark | MaterialShape::Star),
+            ) {
+                clipped = clipped.saturating_add(1);
+            }
         }
-        0
+        clipped
     }
 
     fn initialize_arcade_cabinet(&mut self) {
