@@ -686,7 +686,7 @@ module tb_mister_magik_vblank_latch;
 		idle_cycles(4);
 		requirement_coverage[9] = 1'b1;
 
-		// Legacy writes win same-edge arbitration and leave the MagiK route pending.
+		// Legacy writes win same-edge arbitration and cancel MagiK's pending route.
 		send_golden_route();
 		epoch_before = active_route_epoch;
 		flip_before = flip_count;
@@ -703,14 +703,15 @@ module tb_mister_magik_vblank_latch;
 		#1;
 		legacy_write = 1'b0;
 		expect16(flip_count, flip_before, "unaccepted apply cannot flip");
-		expect_true(pending, "legacy winner leaves MagiK pending");
+		expect_true(!pending, "legacy winner cancels MagiK pending state");
 		expect16(active_seq, 16'd0, "legacy winner clears ownership sequence");
 		expect16(active_route_epoch, epoch_before + 1'd1, "legacy winner advances epoch");
 		@(negedge clk_sys);
 		hdmi_vbl = 1'b0;
 		idle_cycles(4);
+		send_golden_route();
 		pulse_vblank();
-		expect_true(!pending, "pending route applies on later accepted edge");
+		expect_true(!pending, "new route applies after ownership returns");
 		expect16(active_seq, 16'h002b, "MagiK ownership returns after accepted apply");
 		requirement_coverage[10] = 1'b1;
 
