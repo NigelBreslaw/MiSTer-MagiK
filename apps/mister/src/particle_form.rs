@@ -538,6 +538,13 @@ impl FormSceneRenderer {
             let local_y = self.rest_y[index] + terrace - 18.0;
             let y = local_y.mul_add(pitch_cos, -yaw_z * pitch_sin);
             let z = local_y.mul_add(pitch_sin, yaw_z * pitch_cos);
+            if part == 2 {
+                let sphere_y = self.rest_y[index] + 169.0;
+                let sphere_depth = sphere_y.mul_add(pitch_sin, yaw_z * pitch_cos);
+                if sphere_depth > 0.0 {
+                    continue;
+                }
+            }
             let original_style = self.style[index];
             self.style[index] = hologram_material_style(
                 part,
