@@ -582,10 +582,12 @@ pub struct ParticleShowcaseRenderer {
     transition_started_at: Option<Duration>,
     heat: Vec<u8>,
     density: Vec<u16>,
+    density_blur: Vec<u16>,
     flock_counts: Vec<u16>,
     flock_vx: Vec<f32>,
     flock_vy: Vec<f32>,
     flock_last_elapsed: Duration,
+    flow_last_elapsed: Duration,
     heat_frame: u64,
     galaxy_projected_count: usize,
     dirty_slots: [ParticleShowcaseDirtySlot; HIDDEN_SLOT_COUNT],
@@ -658,6 +660,7 @@ impl ParticleShowcaseRenderer {
         let transition = ParticleShowcaseTransition::new();
         let heat = vec![0; FIRE_HEAT_W * FIRE_HEAT_H];
         let density = vec![0; DENSITY_W * DENSITY_H];
+        let density_blur = vec![0; DENSITY_W * DENSITY_H];
         let flock_counts = vec![0; FLOCK_GRID_W * FLOCK_GRID_H];
         let flock_vx = vec![0.0; FLOCK_GRID_W * FLOCK_GRID_H];
         let flock_vy = vec![0.0; FLOCK_GRID_W * FLOCK_GRID_H];
@@ -728,6 +731,11 @@ impl ParticleShowcaseRenderer {
                 .capacity()
                 .saturating_mul(std::mem::size_of::<u16>()),
         );
+        let renderer_scratch_bytes = renderer_scratch_bytes.saturating_add(
+            density_blur
+                .capacity()
+                .saturating_mul(std::mem::size_of::<u16>()),
+        );
         let renderer_scratch_bytes = renderer_scratch_bytes
             .saturating_add(
                 flock_counts
@@ -755,10 +763,12 @@ impl ParticleShowcaseRenderer {
             transition_started_at: None,
             heat,
             density,
+            density_blur,
             flock_counts,
             flock_vx,
             flock_vy,
             flock_last_elapsed: Duration::ZERO,
+            flow_last_elapsed: Duration::ZERO,
             heat_frame: u64::MAX,
             galaxy_projected_count: 0,
             dirty_slots,
@@ -998,6 +1008,7 @@ impl ParticleShowcaseRenderer {
         self.heat.fill(0);
         self.heat_frame = u64::MAX;
         self.flock_last_elapsed = elapsed;
+        self.flow_last_elapsed = elapsed;
         self.galaxy_projected_count = 0;
         for slot in &mut self.dirty_slots {
             slot.initialized = false;
@@ -1115,6 +1126,8 @@ impl ParticleShowcaseRenderer {
             self.update_fire_heat(elapsed);
         } else if self.demo == ParticleDemoKind::GridAcceleratedFlocking {
             self.update_grid_flocking(elapsed);
+        } else if self.demo == ParticleDemoKind::CurlNoiseFlowField {
+            self.update_curl_noise_flow_field(elapsed);
         }
     }
 
@@ -1307,6 +1320,24 @@ impl ParticleShowcaseRenderer {
             if count > 0 {
                 self.pool.vx[index] += (sum_vx / count as f32 - self.pool.vx[index]) * dt * 2.6;
                 self.pool.vy[index] += (sum_vy / count as f32 - self.pool.vy[index]) * dt * 2.6;
+            }
+            let left = self.flock_counts[cell_y * FLOCK_GRID_W + cell_x.saturating_sub(1)];
+            let right =
+                self.flock_counts[cell_y * FLOCK_GRID_W + (cell_x + 1).min(FLOCK_GRID_W - 1)];
+            let above = self.flock_counts[cell_y.saturating_sub(1) * FLOCK_GRID_W + cell_x];
+            let below =
+                self.flock_counts[(cell_y + 1).min(FLOCK_GRID_H - 1) * FLOCK_GRID_W + cell_x];
+            self.pool.vx[index] += (f32::from(left) - f32::from(right)) * dt * 1.8;
+            self.pool.vy[index] += (f32::from(above) - f32::from(below)) * dt * 1.8;
+            for chaser in (0..self.pool.active()).step_by(1_024) {
+                let chaser_dx = self.pool.x[index] - self.pool.x[chaser];
+                let chaser_dy = self.pool.y[index] - self.pool.y[chaser];
+                let chaser_distance2 = chaser_dx * chaser_dx + chaser_dy * chaser_dy;
+                if chaser_distance2 > 16.0 && chaser_distance2 < 132.0 * 132.0 {
+                    let inverse = chaser_distance2.sqrt().recip();
+                    self.pool.vx[index] += chaser_dx * inverse * dt * 94.0;
+                    self.pool.vy[index] += chaser_dy * inverse * dt * 94.0;
+                }
             }
             let dx = self.pool.x[index] - cavity_x;
             let dy = self.pool.y[index] - cavity_y;
@@ -1559,7 +1590,8 @@ impl ParticleShowcaseRenderer {
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
         let mut clipped = 0usize;
         for index in (0..self.pool.active()).step_by(2) {
-            let depth = self.pool.z[index];
+            let depth =
+                (self.pool.z[index] + seconds * self.pool.life[index] * 0.025).rem_euclid(1.0);
             let parallax = 0.35 + depth * 1.05;
             let drift = seconds * (12.0 + depth * 68.0) * self.pool.life[index];
             let x = (480.0 + self.pool.x[index] * parallax + drift + 960.0).rem_euclid(960.0);
@@ -1727,17 +1759,20 @@ impl ParticleShowcaseRenderer {
                 color: Rgb565Pixel(0xffff),
                 shape: MaterialShape::Star,
             });
-            let ring_radius = 22.0 + ((cycle * 3.0 + parent as f32 * 0.27).fract()) * 52.0;
-            for ring in 0..32usize {
-                let angle = std::f32::consts::TAU * ring as f32 / 32.0;
-                self.material_stamps.push(MaterialStamp {
-                    x: (head_x + angle.cos() * ring_radius) as i16,
-                    y: (head_y + angle.sin() * ring_radius) as i16,
-                    radius: 1,
-                    intensity: 11,
-                    color: CHILD_PALETTE[5],
-                    shape: MaterialShape::Disc,
-                });
+            let ring_age = (cycle * 3.0 + parent as f32 * 0.27).fract();
+            if ring_age < 0.58 {
+                let ring_radius = 22.0 + ring_age * 90.0;
+                for ring in 0..32usize {
+                    let angle = std::f32::consts::TAU * ring as f32 / 32.0;
+                    self.material_stamps.push(MaterialStamp {
+                        x: (head_x + angle.cos() * ring_radius) as i16,
+                        y: (head_y + angle.sin() * ring_radius) as i16,
+                        radius: 1,
+                        intensity: (13.0 - ring_age * 14.0) as u8,
+                        color: CHILD_PALETTE[5],
+                        shape: MaterialShape::Disc,
+                    });
+                }
             }
         }
         for index in 3..self.pool.active() {
@@ -1827,6 +1862,19 @@ impl ParticleShowcaseRenderer {
                 );
             }
         }
+        self.density_blur.fill(0);
+        for y in 1..DENSITY_H - 1 {
+            for x in 1..DENSITY_W - 1 {
+                let offset = y * DENSITY_W + x;
+                self.density_blur[offset] = (self.density[offset] * 2
+                    + self.density[offset - 1]
+                    + self.density[offset + 1]
+                    + self.density[offset - DENSITY_W]
+                    + self.density[offset + DENSITY_W])
+                    / 6;
+            }
+        }
+        std::mem::swap(&mut self.density, &mut self.density_blur);
         0
     }
 
@@ -1842,29 +1890,46 @@ impl ParticleShowcaseRenderer {
         }
     }
 
-    fn project_curl_noise_flow_field(&mut self, elapsed: Duration) -> usize {
-        self.commands.clear();
-        self.segments.clear();
+    fn update_curl_noise_flow_field(&mut self, elapsed: Duration) {
+        let dt = elapsed
+            .saturating_sub(self.flow_last_elapsed)
+            .as_secs_f32()
+            .clamp(0.0, 1.0 / 30.0);
+        self.flow_last_elapsed = elapsed;
+        if dt <= f32::EPSILON {
+            return;
+        }
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
-        let mut clipped = 0usize;
-        for index in (0..self.pool.active()).step_by(4) {
-            let base_x = self.pool.x[index];
-            let base_y = self.pool.y[index];
-            let normalized_x = (base_x - 480.0) / 260.0;
-            let normalized_y = (base_y - 270.0) / 180.0;
-            let phase = seconds * self.pool.life[index] * 0.13 + self.pool.age[index] * 9.0;
-            let wave_x = (normalized_x * 2.1 + phase * 0.37).sin();
-            let wave_y = (normalized_y * 2.7 - phase * 0.29).cos();
+        let cohort = ((elapsed.as_micros() / 16_667) & 3) as usize;
+        for index in (cohort..self.pool.active()).step_by(4) {
+            let normalized_x = (self.pool.x[index] - 480.0) / 260.0;
+            let normalized_y = (self.pool.y[index] - 270.0) / 180.0;
+            let phase = seconds * 0.19 + self.pool.age[index] * 9.0;
             let left_dx = normalized_x + 0.78;
             let right_dx = normalized_x - 0.78;
             let left_radius = (left_dx * left_dx + normalized_y * normalized_y + 0.18).recip();
             let right_radius = (right_dx * right_dx + normalized_y * normalized_y + 0.18).recip();
-            let vx =
-                -normalized_y * left_radius + normalized_y * right_radius - wave_y * 0.52 + 0.32;
-            let vy = left_dx * left_radius - right_dx * right_radius + wave_x * 0.48;
-            let travel = 32.0 + 34.0 * (phase * 0.73).sin();
-            let x = (base_x + vx * travel + 960.0).rem_euclid(960.0);
-            let y = (base_y + vy * travel + 540.0).rem_euclid(540.0);
+            let vx = -normalized_y * left_radius + normalized_y * right_radius
+                - (normalized_y * 2.7 - phase * 0.29).cos() * 0.52
+                + 0.32;
+            let vy = left_dx * left_radius - right_dx * right_radius
+                + (normalized_x * 2.1 + phase * 0.37).sin() * 0.48;
+            self.pool.vx[index] = vx * 58.0;
+            self.pool.vy[index] = vy * 58.0;
+            self.pool.x[index] =
+                (self.pool.x[index] + self.pool.vx[index] * dt * 4.0 + 960.0).rem_euclid(960.0);
+            self.pool.y[index] =
+                (self.pool.y[index] + self.pool.vy[index] * dt * 4.0 + 540.0).rem_euclid(540.0);
+        }
+    }
+
+    fn project_curl_noise_flow_field(&mut self, _elapsed: Duration) -> usize {
+        self.commands.clear();
+        self.segments.clear();
+        let mut clipped = 0usize;
+        for index in (0..self.pool.active()).step_by(4) {
+            let x = self.pool.x[index];
+            let y = self.pool.y[index];
             let tracer = self.pool.flags[index] != 0;
             let style = if tracer {
                 7
@@ -1884,8 +1949,8 @@ impl ParticleShowcaseRenderer {
             }
             if tracer {
                 self.material_strokes.push(MaterialStroke {
-                    x0: x - vx * 4.0,
-                    y0: y - vy * 4.0,
+                    x0: x - self.pool.vx[index] * 0.12,
+                    y0: y - self.pool.vy[index] * 0.12,
                     x1: x,
                     y1: y,
                     start_radius: 1,
@@ -1915,19 +1980,21 @@ impl ParticleShowcaseRenderer {
         let center_y = self.config.height as f32 * 0.5;
         for ribbon in 0..24usize {
             let lane = ribbon % RIBBON_PALETTE.len();
-            let phase = ribbon as f32 * 0.41 + seconds * (0.16 + ribbon as f32 * 0.0015);
-            let vertical = unit_signed(self.pool.random[ribbon].rotate_left(9)) * 78.0;
+            let random = self.pool.random[ribbon];
+            let depth = unit01(random.rotate_left(9));
+            let lane_offset = (ribbon as f32 - 11.5) * (2.5 + depth * 1.4);
+            let start_t = unit01(random.rotate_left(19)) * 0.18;
+            let end_t = 0.76
+                + unit01(random.rotate_left(29)) * 0.24
+                + (seconds * 0.11 + ribbon as f32).sin() * 0.018;
             let mut previous = None;
             for sample in 0..16usize {
-                let t = sample as f32 / 15.0;
-                let x = center_x + (t - 0.5) * 760.0;
-                let envelope = (t * std::f32::consts::PI).sin();
-                let y = center_y
-                    + vertical
-                    + (t * std::f32::consts::TAU * 1.35 + phase).sin()
-                        * (58.0 + ribbon as f32 * 1.8)
-                        * envelope
-                    + (t * std::f32::consts::TAU * 0.5 + phase * 0.7).cos() * 34.0;
+                let progress = sample as f32 / 15.0;
+                let t = start_t + (end_t - start_t) * progress;
+                let u = t * 2.0 - 1.0;
+                let x = center_x + u * (350.0 + depth * 48.0);
+                let y = center_y - (u * std::f32::consts::PI).sin() * (128.0 + depth * 52.0)
+                    + lane_offset * (u * std::f32::consts::PI).cos();
                 if let Some((previous_x, previous_y)) = previous {
                     self.material_strokes.push(MaterialStroke {
                         x0: previous_x,
@@ -1935,21 +2002,29 @@ impl ParticleShowcaseRenderer {
                         x1: x,
                         y1: y,
                         start_radius: if sample < 5 { 1 } else { 2 },
-                        end_radius: if sample > 12 { 1 } else { 2 },
-                        intensity: 10 + u8::from(ribbon & 3 == 0) * 4,
+                        end_radius: if sample > 13 && depth > 0.55 { 3 } else { 2 },
+                        intensity: 7 + (depth * 8.0) as u8,
                         color: RIBBON_PALETTE[lane],
                     });
+                    if ribbon % 6 == 0 && sample > 5 {
+                        self.material_strokes.push(MaterialStroke {
+                            x0: previous_x,
+                            y0: previous_y,
+                            x1: x,
+                            y1: y,
+                            start_radius: 3,
+                            end_radius: 3,
+                            intensity: 3,
+                            color: RIBBON_PALETTE[lane.saturating_sub(1)],
+                        });
+                    }
                 }
                 previous = Some((x, y));
             }
-            let head_t = (seconds * 0.17 + ribbon as f32 * 0.071).rem_euclid(1.0);
-            let head_x = center_x + (head_t - 0.5) * 760.0;
-            let head_y = center_y
-                + vertical
-                + (head_t * std::f32::consts::TAU * 1.35 + phase).sin()
-                    * (58.0 + ribbon as f32 * 1.8)
-                    * (head_t * std::f32::consts::PI).sin()
-                + (head_t * std::f32::consts::TAU * 0.5 + phase * 0.7).cos() * 34.0;
+            let head_u = end_t * 2.0 - 1.0;
+            let head_x = center_x + head_u * (350.0 + depth * 48.0);
+            let head_y = center_y - (head_u * std::f32::consts::PI).sin() * (128.0 + depth * 52.0)
+                + lane_offset * (head_u * std::f32::consts::PI).cos();
             self.material_stamps.push(MaterialStamp {
                 x: head_x as i16,
                 y: head_y as i16,
@@ -1962,14 +2037,15 @@ impl ParticleShowcaseRenderer {
         for streak in 0..192usize {
             let index = 24 + streak;
             let random = self.pool.random[index];
-            let x = 70.0 + unit01(random) * 820.0;
-            let y = 55.0
-                + unit01(random.rotate_left(11)) * 430.0
-                + (seconds * self.pool.life[index] + self.pool.age[index] * 7.0).sin() * 18.0;
-            let length = 6.0 + unit01(random.rotate_left(21)) * 22.0;
+            let t = unit01(random);
+            let u = t * 2.0 - 1.0;
+            let x = center_x + u * 410.0;
+            let y = center_y - (u * std::f32::consts::PI).sin() * 190.0
+                + unit_signed(random.rotate_left(11)) * 54.0;
+            let length = 3.0 + unit01(random.rotate_left(21)) * 12.0;
             self.material_strokes.push(MaterialStroke {
                 x0: x - length,
-                y0: y + length * 0.18,
+                y0: y + length * 0.32,
                 x1: x,
                 y1: y,
                 start_radius: 1,
@@ -1999,7 +2075,7 @@ impl ParticleShowcaseRenderer {
         self.segments.clear();
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
         let center_x = self.config.width as f32 * 0.5;
-        let center_y = self.config.height as f32 * 0.58;
+        let center_y = self.config.height as f32 * 0.94;
         let mut clipped = 0usize;
         for index in (0..self.pool.active()).step_by(4) {
             let phase =
@@ -2008,18 +2084,18 @@ impl ParticleShowcaseRenderer {
             let shape_lane = self.pool.flags[index];
             let angle = unit_signed(random.rotate_left(11)) * 1.15 - std::f32::consts::FRAC_PI_2
                 + (seconds * 0.17 + self.pool.age[index] * 9.0).sin() * 0.08;
-            let speed = 70.0 + unit01(random.rotate_left(21)) * 290.0;
+            let speed = 90.0 + unit01(random.rotate_left(21)) * 360.0;
             let travel = phase * speed;
             let spread = 0.45 + f32::from(shape_lane) * 0.11;
             let x = center_x + angle.cos() * travel * spread + self.pool.x[index] * phase * 0.28;
-            let y = center_y + angle.sin() * travel + 118.0 * phase * phase;
+            let y = center_y + angle.sin() * travel + 90.0 * phase * phase;
             let over_life = (1.0 - phase).clamp(0.0, 1.0);
             let radius = match shape_lane {
-                0 => 2,
-                1 => 3,
-                2 => 4,
+                0 => 3,
+                1 => 4,
+                2 => 5,
                 3 => 5,
-                _ => 3,
+                _ => 4,
             };
             let shape = match shape_lane {
                 0 => MaterialShape::Spark,
@@ -2033,13 +2109,23 @@ impl ParticleShowcaseRenderer {
             } else {
                 ((over_life * 6.0) as usize + usize::from(self.pool.style[index] & 1)).min(7)
             };
+            let material_color = if index & 127 == 0 {
+                Rgb565Pixel(0x05ff)
+            } else {
+                match shape {
+                    MaterialShape::Star => Rgb565Pixel(0xf81f),
+                    MaterialShape::Smoke => Rgb565Pixel(0x600f),
+                    MaterialShape::Shard => Rgb565Pixel(0xfe80),
+                    _ => MATERIAL_PALETTE[style],
+                }
+            };
             if index & 63 == 0 {
                 self.material_stamps.push(MaterialStamp {
                     x: x.round() as i16,
                     y: y.round() as i16,
                     radius,
                     intensity: (4.0 + over_life * 11.0) as u8,
-                    color: MATERIAL_PALETTE[style],
+                    color: material_color,
                     shape,
                 });
             } else if !push_screen_command(
