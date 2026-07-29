@@ -2807,6 +2807,9 @@ mod linux {
             return Err("scanout slots device is not present".to_string());
         }
         let mut fpga = FpgaIo::open().map_err(|err| format!("open FPGA IO: {err}"))?;
+        let _uio_guard = fpga
+            .lock_uio_transaction()
+            .map_err(|err| format!("lock FPGA UIO transaction: {err}"))?;
         let status = fpga
             .read_latched_fbuf_status()
             .map_err(|err| format!("read latched fbuf status: {err}"))?;
@@ -2935,12 +2938,59 @@ mod linux {
     struct FpgaIo {
         base: *mut u8,
         _file: File,
+        uio_lock: File,
         gpo: u32,
         latch_protocol: Option<mister_magik_latch_contract::LatchProtocol>,
     }
 
+    struct FpgaUioGuard {
+        fd: std::os::fd::RawFd,
+    }
+
+    impl FpgaUioGuard {
+        fn acquire(lock: &File, timeout: Duration) -> io::Result<Self> {
+            let fd = lock.as_raw_fd();
+            let started = Instant::now();
+            loop {
+                // SAFETY: fd is a valid open lock file descriptor and flock
+                // does not access memory through the descriptor.
+                if unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+                    return Ok(Self { fd });
+                }
+                let error = io::Error::last_os_error();
+                if error.kind() != io::ErrorKind::WouldBlock {
+                    return Err(error);
+                }
+                if started.elapsed() >= timeout {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "FPGA UIO transaction busy",
+                    ));
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+        }
+    }
+
+    impl Drop for FpgaUioGuard {
+        fn drop(&mut self) {
+            // SAFETY: fd belongs to the live FpgaIo lock file for longer than
+            // this guard; LOCK_UN only releases this process's advisory flock.
+            unsafe {
+                libc::flock(self.fd, libc::LOCK_UN);
+            }
+        }
+    }
+
     impl FpgaIo {
         fn open() -> io::Result<Self> {
+            fs::create_dir_all("/tmp/mister-magik")?;
+            let uio_lock = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(mister_magik_latch_contract::FPGA_UIO_LOCK_PATH)?;
             let file = OpenOptions::new().read(true).write(true).open("/dev/mem")?;
             let base = unsafe {
                 libc::mmap(
@@ -2958,9 +3008,14 @@ mod linux {
             Ok(Self {
                 base: base.cast::<u8>(),
                 _file: file,
+                uio_lock,
                 gpo: FPGA_BIT31,
                 latch_protocol: None,
             })
+        }
+
+        fn lock_uio_transaction(&self) -> io::Result<FpgaUioGuard> {
+            FpgaUioGuard::acquire(&self.uio_lock, Duration::from_millis(250))
         }
 
         fn read_latched_fbuf_status(&mut self) -> io::Result<LatchedFbufStatus> {

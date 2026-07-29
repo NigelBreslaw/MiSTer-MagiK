@@ -11,6 +11,7 @@ pub const PROTOCOL_VERSION: u16 = ACTIVE_PROTOCOL_VERSION;
 pub const REQUIRED_CAPS: u16 = V2_CAPS_FLAGS;
 pub const CAPS_WORD_COUNT: usize = V2_CAPS_WORDS;
 pub const STATUS_WORD_COUNT: usize = V2_STATUS_WORDS;
+pub const FPGA_UIO_LOCK_PATH: &str = "/tmp/mister-magik/fpga-uio.lock";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LatchProtocol {

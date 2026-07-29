@@ -12,7 +12,7 @@
 //! `gpo_copy`. Bit31 must stay set (it means "configured"); bit20 is the IO chip
 //! select (EnableIO/DisableIO); bit17 is the strobe; the low 16 bits are data.
 
-use std::fs::OpenOptions;
+use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::os::unix::io::AsRawFd;
 use std::ptr::{read_volatile, write_volatile};
@@ -261,6 +261,21 @@ pub struct Fpga {
     registers: Box<dyn RegisterIo>,
     gpo: u32,
     latch_capabilities: Option<mister_magik_latch_contract::LatchCapabilities>,
+    uio_lock: Option<File>,
+}
+
+struct FpgaUioGuard {
+    fd: std::os::fd::RawFd,
+}
+
+impl Drop for FpgaUioGuard {
+    fn drop(&mut self) {
+        // SAFETY: fd belongs to the live lock file held by Fpga for longer than
+        // this guard; LOCK_UN only releases this process's advisory flock.
+        unsafe {
+            libc::flock(self.fd, libc::LOCK_UN);
+        }
+    }
 }
 
 impl Fpga {
@@ -272,6 +287,13 @@ impl Fpga {
     }
 
     pub fn open() -> io::Result<Self> {
+        fs::create_dir_all("/tmp/mister-magik")?;
+        let uio_lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(mister_magik_latch_contract::FPGA_UIO_LOCK_PATH)?;
         let file = OpenOptions::new().read(true).write(true).open("/dev/mem")?;
         // SAFETY: maps the documented MiSTer FPGA manager MMIO page from
         // /dev/mem. MGR_LEN and MGR_BASE are constants for this device, and the
@@ -298,7 +320,20 @@ impl Fpga {
             // known-safe shadow (configured bit set, everything else clear).
             gpo: BIT31,
             latch_capabilities: None,
+            uio_lock: Some(uio_lock),
         })
+    }
+
+    fn lock_uio_transaction(&self) -> io::Result<Option<FpgaUioGuard>> {
+        let Some(lock) = self.uio_lock.as_ref() else {
+            return Ok(None);
+        };
+        let fd = lock.as_raw_fd();
+        // SAFETY: fd is a valid open lock file descriptor owned by self.
+        if unsafe { libc::flock(fd, libc::LOCK_EX) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Some(FpgaUioGuard { fd }))
     }
 
     #[inline]
@@ -442,11 +477,13 @@ impl Fpga {
     /// Set the FPGA digital audio attenuation. This mirrors Main_MiSTer's
     /// `send_volume()` path; `0` is max volume and bit 4 would mute.
     pub fn set_audio_volume(&mut self, attenuation: u8) -> io::Result<()> {
+        let _uio_guard = self.lock_uio_transaction()?;
         self.uio_cmd16(UIO_AUDVOL, attenuation as u16)?;
         Ok(())
     }
 
     pub fn read_video_info(&mut self) -> io::Result<VideoInfo> {
+        let _uio_guard = self.lock_uio_transaction()?;
         let res = (|| {
             let _ = self.cmd_capture(UIO_GET_VRES)?;
             let word = |this: &mut Self| -> io::Result<u16> { Ok(this.spi_capture(0)?.1) };
@@ -482,6 +519,7 @@ impl Fpga {
     }
 
     pub fn read_fb_params(&mut self) -> io::Result<FbParams> {
+        let _uio_guard = self.lock_uio_transaction()?;
         let res = (|| {
             let (crc, _) = self.cmd_capture(UIO_GET_FB_PAR)?;
             let arx_raw = self.spi_capture(0)?.1;
@@ -513,6 +551,9 @@ impl Fpga {
     pub fn read_magik_latched_fbuf_status_sample(
         &mut self,
     ) -> Result<LatchedFbufStatusSample, LatchedFbufStatusReadError> {
+        let _uio_guard = self
+            .lock_uio_transaction()
+            .map_err(LatchedFbufStatusReadError::from_io)?;
         let Some(protocol) = self
             .latch_capabilities
             .map(|capabilities| capabilities.protocol)
@@ -675,6 +716,7 @@ impl Fpga {
     }
 
     pub fn probe_magik_latched_fbuf_set(&mut self) -> io::Result<(u16, u16)> {
+        let _uio_guard = self.lock_uio_transaction()?;
         let res = self.cmd_capture(MAGIK_UIO_SET_FBUF_LATCH);
         self.disable_io();
         res
@@ -683,6 +725,7 @@ impl Fpga {
     pub fn read_magik_latched_fbuf_capabilities(
         &mut self,
     ) -> io::Result<(u16, u16, mister_magik_latch_contract::LatchCapabilities)> {
+        let _uio_guard = self.lock_uio_transaction()?;
         self.latch_capabilities = None;
         let result = match self.read_magik_latched_fbuf_capabilities_once() {
             Err((first, Some(mister_magik_latch_contract::LatchProtocol::V3)))
@@ -766,6 +809,9 @@ impl Fpga {
         geometry: LatchedFbufGeometry,
         injected_skip_index: Option<usize>,
     ) -> Result<LatchedFbufPostAttempt, LatchedFbufPostError> {
+        let _uio_guard = self
+            .lock_uio_transaction()
+            .map_err(LatchedFbufPostError::from_io)?;
         let started = Instant::now();
         self.disable_io();
         let protocol = match self
@@ -883,6 +929,7 @@ impl Fpga {
     pub fn read_magik_latched_fbuf_rejection_diagnostics(
         &mut self,
     ) -> io::Result<Option<LatchRejectionObservation>> {
+        let _uio_guard = self.lock_uio_transaction()?;
         let Some(capabilities) = self.latch_capabilities else {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -947,6 +994,7 @@ impl Fpga {
         fb_height: u16,
         mode: FramebufferRouteMode,
     ) -> io::Result<u16> {
+        let _uio_guard = self.lock_uio_transaction()?;
         let fb_addr = FB_ADDR + (FB_SIZE_PX * 4 * n) + if n == 0 { 4096 } else { 0 };
         // direct_video offsets: xoff = item[4] - FB_DV_LBRD, yoff = item[8] - FB_DV_UBRD.
         let xoff = mode.hbp as i32 - FB_DV_LBRD;
@@ -1239,6 +1287,7 @@ mod tests {
             registers: Box::new(ScriptedRegisters(Rc::clone(&state))),
             gpo: BIT31,
             latch_capabilities: Some(v2_capabilities()),
+            uio_lock: None,
         };
         (fpga, state)
     }
@@ -1256,6 +1305,7 @@ mod tests {
             registers: Box::new(ScriptedRegisters(Rc::clone(&state))),
             gpo: BIT31,
             latch_capabilities: Some(v2_capabilities()),
+            uio_lock: None,
         };
         (fpga, state)
     }

@@ -9558,7 +9558,7 @@ fn request_framebuffer_png_at_when_latched(
                 if is_transient_authoritative_capture_error(&error.to_string())
                     && started.elapsed() < timeout =>
             {
-                thread::sleep(Duration::from_millis(16));
+                thread::sleep(Duration::from_millis(7));
             }
             Err(error) => return Err(error),
         }
