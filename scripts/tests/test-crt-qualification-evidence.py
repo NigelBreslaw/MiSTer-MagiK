@@ -24,7 +24,7 @@ class CrtEvidenceTest(unittest.TestCase):
             "platform_contract_sha256": "4" * 64,
             "latch_protocol_sha256": "5" * 64,
             "platform_manifest_sha256": "6" * 64,
-            "latch_protocol_version": 2 if historical_v2 else 3,
+            "latch_protocol_version": 2 if historical_v2 else 4,
         }
         if not historical_v2:
             identity.update(
@@ -33,6 +33,7 @@ class CrtEvidenceTest(unittest.TestCase):
                     "kernel_sha256": "8" * 64,
                     "fpga_component_id": "9" * 64,
                     "candidate_workflow_url": "https://github.example/actions/runs/1",
+                    "latch_capability_mask": "0x01ff",
                 }
             )
         payload = {
@@ -95,12 +96,16 @@ class CrtEvidenceTest(unittest.TestCase):
         command.append(str(evidence))
         return subprocess.run(command, text=True, capture_output=True)
 
-    def test_new_evidence_requires_complete_v3_identity(self) -> None:
+    def test_new_evidence_requires_complete_v4_identity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             evidence = self.fixture(Path(directory))
             self.assertEqual(self.run_verify(evidence).returncode, 0)
             payload = json.loads(evidence.read_text())
             del payload["identity"]["fpga_component_id"]
+            evidence.write_text(json.dumps(payload))
+            self.assertNotEqual(self.run_verify(evidence).returncode, 0)
+            payload["identity"]["fpga_component_id"] = "9" * 64
+            payload["identity"]["latch_capability_mask"] = "0x01fe"
             evidence.write_text(json.dumps(payload))
             self.assertNotEqual(self.run_verify(evidence).returncode, 0)
 
@@ -113,7 +118,7 @@ class CrtEvidenceTest(unittest.TestCase):
                 0,
             )
 
-    def test_v3_cannot_use_historical_mode(self) -> None:
+    def test_v4_cannot_use_historical_mode(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             evidence = self.fixture(Path(directory))
             self.assertNotEqual(

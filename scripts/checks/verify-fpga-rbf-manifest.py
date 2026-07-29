@@ -51,10 +51,15 @@ def verify(
         "signoff_valid", "build_date",
     }
     if require_protocol:
-        required.update(("latch_protocol_sha256", "latch_protocol_version", "latch_capability_mask"))
+        required.update(("latch_protocol_sha256", "latch_protocol_version"))
     if not historical_v2:
         required.update(
-            ("latch_bridge_sha256", "component_input_sha256", "component_revision")
+            (
+                "latch_bridge_sha256",
+                "latch_capability_mask",
+                "component_input_sha256",
+                "component_revision",
+            )
         )
     missing = sorted(required - fields.keys())
     if missing:

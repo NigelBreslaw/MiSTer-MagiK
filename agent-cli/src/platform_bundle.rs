@@ -3,6 +3,7 @@
 
 use crate::archive::{MemberLayout, read_zip};
 use crate::error::{AgentError, AgentResult};
+use crate::platform_manifest::{LATCH_CAPABILITY_MASK, LATCH_PROTOCOL_VERSION};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -517,8 +518,20 @@ fn verify_fpga(root: &Path, id: &str) -> AgentResult<String> {
         if metadata.get("format").map(String::as_str) != Some("mister-magik-fpga-release-v2") {
             return classified("fpga_metadata_format", "release v2 required");
         }
-        if metadata.get("latch_protocol_version").map(String::as_str) != Some("3") {
-            return classified("fpga_protocol", "version 3 required");
+        if metadata.get("latch_protocol_version").map(String::as_str)
+            != Some(LATCH_PROTOCOL_VERSION)
+        {
+            return classified(
+                "fpga_protocol",
+                format!("version {LATCH_PROTOCOL_VERSION} required"),
+            );
+        }
+        if metadata.get("latch_capability_mask").map(String::as_str) != Some(LATCH_CAPABILITY_MASK)
+        {
+            return classified(
+                "fpga_capabilities",
+                format!("{LATCH_CAPABILITY_MASK} required"),
+            );
         }
         for field in ["latch_protocol_sha256", "latch_bridge_sha256"] {
             require_hex(
@@ -776,7 +789,7 @@ mod tests {
             fs::write(
                 directory.join("menu-magik-vblank-latch.metadata.txt"),
                 format!(
-                    "format=mister-magik-fpga-release-v2\ncomponent_input_sha256={component_id}\nplatform_contract_sha256={contract}\nlatch_protocol_sha256={}\nlatch_bridge_sha256={}\nlatch_protocol_version=3\nrbf_sha256={}\nreport_sha256.reports/menu.fit.rpt={}\n",
+                    "format=mister-magik-fpga-release-v2\ncomponent_input_sha256={component_id}\nplatform_contract_sha256={contract}\nlatch_protocol_sha256={}\nlatch_bridge_sha256={}\nlatch_protocol_version={LATCH_PROTOCOL_VERSION}\nlatch_capability_mask={LATCH_CAPABILITY_MASK}\nrbf_sha256={}\nreport_sha256.reports/menu.fit.rpt={}\n",
                     "1".repeat(64),
                     "2".repeat(64),
                     digest_bytes(rbf.as_bytes()),
@@ -872,6 +885,38 @@ mod tests {
             })
         ));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fpga_verification_requires_exact_v4_identity() {
+        for (label, original, replacement, expected_code) in [
+            (
+                "protocol",
+                format!("latch_protocol_version={LATCH_PROTOCOL_VERSION}"),
+                "latch_protocol_version=3".to_owned(),
+                "fpga_protocol",
+            ),
+            (
+                "capabilities",
+                format!("latch_capability_mask={LATCH_CAPABILITY_MASK}"),
+                "latch_capability_mask=0x01fe".to_owned(),
+                "fpga_capabilities",
+            ),
+        ] {
+            let root = temp_root(label);
+            let component_id = "a".repeat(64);
+            fpga_component(&root, &component_id);
+            let metadata = root.join("patched/menu-magik-vblank-latch.metadata.txt");
+            let source = fs::read_to_string(&metadata).unwrap();
+            fs::write(&metadata, source.replace(&original, &replacement)).unwrap();
+            match verify_component("fpga", &root, &component_id, None) {
+                Err(AgentError::Classified { code, .. }) => {
+                    assert_eq!(code, expected_code);
+                }
+                result => panic!("unexpected verification result: {result:?}"),
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[test]

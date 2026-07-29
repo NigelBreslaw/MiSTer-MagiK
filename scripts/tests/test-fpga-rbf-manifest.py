@@ -50,7 +50,8 @@ class ManifestTest(unittest.TestCase):
                     )
                 ),
                 "latch_protocol_sha256=" + "7" * 64,
-                "latch_protocol_version=" + ("2" if historical_v2 else "3"),
+                "latch_protocol_version=" + ("2" if historical_v2 else "4"),
+                *(() if historical_v2 else ("latch_capability_mask=0x01ff",)),
                 "quartus_seed=1",
                 "quartus_version=17.0.0 Build 595",
                 "workflow_url=https://github.example/actions/runs/1",
@@ -112,9 +113,18 @@ class ManifestTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             metadata = self.fixture(Path(directory))
             valid = metadata.read_text()
-            metadata.write_text(valid.replace("latch_protocol_version=3\n", ""))
+            metadata.write_text(valid.replace("latch_protocol_version=4\n", ""))
             self.assertNotEqual(self.run_verify(metadata).returncode, 0)
-            metadata.write_text(valid.replace("latch_protocol_version=3", "latch_protocol_version=2"))
+            metadata.write_text(
+                valid.replace("latch_protocol_version=4", "latch_protocol_version=3")
+            )
+            self.assertNotEqual(self.run_verify(metadata).returncode, 0)
+            metadata.write_text(
+                valid.replace(
+                    "latch_capability_mask=0x01ff",
+                    "latch_capability_mask=0x01fe",
+                )
+            )
             self.assertNotEqual(self.run_verify(metadata).returncode, 0)
 
     def test_historical_v2_requires_explicit_rollback_mode(self) -> None:
@@ -126,7 +136,7 @@ class ManifestTest(unittest.TestCase):
                 0,
             )
 
-    def test_new_v3_artifact_is_not_historical_v2(self) -> None:
+    def test_new_v4_artifact_is_not_historical_v2(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             metadata = self.fixture(Path(directory))
             self.assertNotEqual(

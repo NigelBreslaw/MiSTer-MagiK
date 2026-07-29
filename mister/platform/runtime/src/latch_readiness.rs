@@ -904,7 +904,7 @@ mod tests {
     #[test]
     fn post_rejection_evidence_includes_geometry_and_receiver_position() {
         let post = LatchPostDiagnostics {
-            protocol_version: 3,
+            protocol_version: 4,
             sequence: 219,
             command_word: LatchPostWord {
                 transmitted: 0x57,
