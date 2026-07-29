@@ -536,7 +536,7 @@ impl FormSceneRenderer {
             let terrace = (self.aux_y[index] * 12.0).floor() * 1.8;
             let (x, y, z) = if part == 2 {
                 let sphere_y = self.rest_y[index] + 169.0;
-                let center_y = -169.0 - 18.0;
+                let center_y: f32 = -169.0 - 18.0;
                 (
                     self.rest_x[index],
                     center_y.mul_add(pitch_cos, sphere_y),
