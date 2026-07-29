@@ -469,7 +469,11 @@ module tb_mister_magik_vblank_latch;
 		expect16(snapshot[6], 16'h002b, "accepted receipt pending sequence");
 		expect16(snapshot[7], 16'd0, "accepted receipt active transaction");
 		expect16(snapshot[8], 16'd0, "accepted receipt active sequence");
-		expect16(snapshot[9], MAGIK_REJECT_NONE, "accepted receipt rejection reason");
+		expect16(
+			snapshot[9],
+			{12'd0, MAGIK_REJECT_NONE},
+			"accepted receipt rejection reason"
+		);
 		expect16(snapshot[10], crc, "accepted receipt CRC");
 		if(!route_en || route_flt || (route_fmt != 6'h14) ||
 		   (route_base != 32'h227e9000) || (route_width != 12'd960) ||
@@ -557,7 +561,7 @@ module tb_mister_magik_vblank_latch;
 		expect16(snapshot[8], 16'd0, "rejected receipt active sequence");
 		expect16(
 			snapshot[9],
-			MAGIK_REJECT_MISSING_WORD,
+			{12'd0, MAGIK_REJECT_MISSING_WORD},
 			"interrupted receipt rejection reason"
 		);
 		expect16(snapshot[10], crc, "rejected receipt CRC");
