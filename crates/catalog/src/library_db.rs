@@ -1391,7 +1391,7 @@ pub(crate) fn apply_library_path_map(mut artifact: LibraryScanArtifact) -> Libra
     if rules.is_empty() {
         return artifact;
     }
-    remap_library_scan_paths(&mut artifact.scan, rules);
+    remap_library_scan_paths(&mut artifact.scan, &rules);
     artifact.stamp = catalog_stamp::compute_default_catalog_stamp_with_audit(
         &artifact.scan.roots,
         &artifact.scan.audit_rows,
@@ -1413,7 +1413,7 @@ pub fn apply_library_path_map_to_ram_artifact_with_rules(
     if rules.is_empty() {
         return artifact;
     }
-    remap_library_scan_paths(&mut artifact.scan, &rules);
+    remap_library_scan_paths(&mut artifact.scan, rules);
     let covered_payloads = covered_payload_paths(&artifact.scan.discoveries);
     artifact.preferred_discoveries =
         preferred_playable_discovery_indices_by_key(&artifact.scan.discoveries, &covered_payloads);
