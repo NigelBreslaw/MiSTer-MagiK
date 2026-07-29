@@ -2868,6 +2868,7 @@ mod tests {
             system_id: "saturn".into(),
             year: None,
             manufacturer: "".into(),
+            category: "".into(),
             players: None,
             control: "".into(),
             is_new: false,

@@ -111,6 +111,7 @@ impl CatalogReader for LazyShardedCatalogReader {
                     has_preview: game.has_preview,
                     year: game.year,
                     manufacturer: game.manufacturer,
+                    category: game.category,
                     players: game.players,
                     control: game.control,
                     is_new: game.is_new,

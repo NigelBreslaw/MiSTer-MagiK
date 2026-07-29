@@ -895,7 +895,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(columns, 13);
+        assert_eq!(columns, 14);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1027,6 +1027,7 @@ mod tests {
                     has_preview: true,
                     year: Some(1992),
                     manufacturer: "Fixture Corp".to_string(),
+                    category: "Platform".to_string(),
                     players: Some(2),
                     control: "Gamepad".to_string(),
                     is_new: true,

@@ -47,6 +47,7 @@ pub(super) fn arcade_filter_cache_token(filter: &arcade_catalog::ArcadeFilter) -
     match filter {
         arcade_catalog::ArcadeFilter::All => "all".to_string(),
         arcade_catalog::ArcadeFilter::Search => "search".to_string(),
+        arcade_catalog::ArcadeFilter::Category(category) => format!("category:{category}"),
         arcade_catalog::ArcadeFilter::Decade(decade) => format!("decade:{decade}"),
         arcade_catalog::ArcadeFilter::Manufacturer(manufacturer) => {
             format!("manufacturer:{manufacturer}")

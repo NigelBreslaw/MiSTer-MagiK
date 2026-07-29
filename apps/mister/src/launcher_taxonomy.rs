@@ -801,6 +801,7 @@ mod tests {
             system_id: system_id.into(),
             year: None,
             manufacturer: manufacturer.into(),
+            category: "".into(),
             players: None,
             control: "".into(),
             is_new: false,

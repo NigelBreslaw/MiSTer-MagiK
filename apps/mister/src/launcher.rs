@@ -809,6 +809,7 @@ pub struct HomeViewState {
 pub enum ArcadeFilterLevel {
     Alphabet,
     Top,
+    Categories,
     Decades,
     Manufacturers,
     Players,
@@ -820,7 +821,11 @@ impl ArcadeFilterLevel {
         match self {
             Self::Top => None,
             Self::Alphabet => None,
-            Self::Decades | Self::Manufacturers | Self::Players | Self::Controls => Some(Self::Top),
+            Self::Categories
+            | Self::Decades
+            | Self::Manufacturers
+            | Self::Players
+            | Self::Controls => Some(Self::Top),
         }
     }
 }
@@ -829,6 +834,7 @@ impl ArcadeFilterLevel {
 enum ArcadeFilterGroup {
     Games,
     Search,
+    Categories,
     Decades,
     Manufacturers,
     Players,
@@ -955,6 +961,7 @@ impl ArcadeFilterState {
         match self.level {
             ArcadeFilterLevel::Alphabet => "Games A-Z",
             ArcadeFilterLevel::Top => "Filters",
+            ArcadeFilterLevel::Categories => "Categories",
             ArcadeFilterLevel::Decades => "Decades",
             ArcadeFilterLevel::Manufacturers => "Manufacturers",
             ArcadeFilterLevel::Players => "Players",
@@ -966,6 +973,7 @@ impl ArcadeFilterState {
         match &self.active {
             ArcadeFilter::All => "Games A-Z".to_string(),
             ArcadeFilter::Search => "Search".to_string(),
+            ArcadeFilter::Category(category) => category.clone(),
             ArcadeFilter::Decade(decade) => format!("{decade}'s"),
             ArcadeFilter::Manufacturer(manufacturer) => manufacturer.clone(),
             ArcadeFilter::Players(players) => player_count_label(*players),
@@ -981,6 +989,7 @@ impl ArcadeFilterState {
         match self.active {
             ArcadeFilter::All => ArcadeFilterGroup::Games,
             ArcadeFilter::Search => ArcadeFilterGroup::Search,
+            ArcadeFilter::Category(_) => ArcadeFilterGroup::Categories,
             ArcadeFilter::Decade(_) => ArcadeFilterGroup::Decades,
             ArcadeFilter::Manufacturer(_) => ArcadeFilterGroup::Manufacturers,
             ArcadeFilter::Players(_) => ArcadeFilterGroup::Players,
@@ -991,6 +1000,7 @@ impl ArcadeFilterState {
     fn active_level(&self) -> ArcadeFilterLevel {
         match self.active {
             ArcadeFilter::All | ArcadeFilter::Search => ArcadeFilterLevel::Top,
+            ArcadeFilter::Category(_) => ArcadeFilterLevel::Categories,
             ArcadeFilter::Decade(_) => ArcadeFilterLevel::Decades,
             ArcadeFilter::Manufacturer(_) => ArcadeFilterLevel::Manufacturers,
             ArcadeFilter::Players(_) => ArcadeFilterLevel::Players,
@@ -2577,6 +2587,11 @@ impl LauncherNav {
         match self.arcade_filter.level {
             ArcadeFilterLevel::Alphabet => self.arcade_alphabet_items(catalog, system_id),
             ArcadeFilterLevel::Top => self.arcade_filter_top_items(catalog, system_id),
+            ArcadeFilterLevel::Categories => filter_option_items(
+                catalog.category_options(system_id),
+                |label| Some(ArcadeFilter::Category(label.to_string())),
+                &self.arcade_filter.active,
+            ),
             ArcadeFilterLevel::Decades => filter_option_items(
                 catalog.decade_options(system_id),
                 |label| decade_from_label(label).map(ArcadeFilter::Decade),
@@ -2634,6 +2649,16 @@ impl LauncherNav {
                 },
             },
         ];
+        if catalog.category_option_count(system_id) > 1 {
+            items.push(ArcadeTopDrawerItem {
+                group: ArcadeFilterGroup::Categories,
+                item: ArcadeDrawerItem {
+                    label: "Categories".to_string(),
+                    count: catalog.category_option_count(system_id),
+                    active: matches!(self.arcade_filter.active, ArcadeFilter::Category(_)),
+                },
+            });
+        }
         if catalog.decade_option_count(system_id) > 1 {
             items.push(ArcadeTopDrawerItem {
                 group: ArcadeFilterGroup::Decades,
@@ -2700,6 +2725,7 @@ impl LauncherNav {
         };
         let group_is_visible = match resolved {
             ArcadeFilter::All | ArcadeFilter::Search => true,
+            ArcadeFilter::Category(_) => catalog.category_option_count(system_id) > 1,
             ArcadeFilter::Decade(_) => catalog.decade_option_count(system_id) > 1,
             ArcadeFilter::Manufacturer(_) => catalog.manufacturer_option_count(system_id) > 1,
             ArcadeFilter::Players(_) => catalog.player_option_count(system_id) > 1,
@@ -2818,6 +2844,11 @@ impl LauncherNav {
                     self.apply_arcade_filter(catalog, system_id, ArcadeFilter::All)
                 }
                 Some(ArcadeFilterGroup::Search) => self.enter_arcade_search(catalog, system_id),
+                Some(ArcadeFilterGroup::Categories) => self.enter_arcade_filter_level(
+                    catalog,
+                    system_id,
+                    ArcadeFilterLevel::Categories,
+                ),
                 Some(ArcadeFilterGroup::Decades) => {
                     self.enter_arcade_filter_level(catalog, system_id, ArcadeFilterLevel::Decades)
                 }
@@ -2834,6 +2865,13 @@ impl LauncherNav {
                 }
                 _ => {}
             },
+            ArcadeFilterLevel::Categories => {
+                self.apply_arcade_filter(
+                    catalog,
+                    system_id,
+                    ArcadeFilter::Category(items[self.arcade_filter.selected].label.clone()),
+                );
+            }
             ArcadeFilterLevel::Decades => {
                 if let Some(decade) = decade_from_label(&items[self.arcade_filter.selected].label) {
                     self.apply_arcade_filter(catalog, system_id, ArcadeFilter::Decade(decade));
@@ -3317,6 +3355,7 @@ fn filter_memory_key(filter: &ArcadeFilter) -> String {
     match filter {
         ArcadeFilter::All => "all".to_string(),
         ArcadeFilter::Search => "search".to_string(),
+        ArcadeFilter::Category(category) => format!("category:{category}"),
         ArcadeFilter::Decade(decade) => format!("decade:{decade}"),
         ArcadeFilter::Manufacturer(manufacturer) => format!("manufacturer:{manufacturer}"),
         ArcadeFilter::Players(players) => format!("players:{players}"),
@@ -3580,6 +3619,7 @@ fn serialize_arcade_filter(filter: &ArcadeFilter) -> (String, Option<String>) {
     match filter {
         ArcadeFilter::All => ("all".to_string(), None),
         ArcadeFilter::Search => ("search".to_string(), None),
+        ArcadeFilter::Category(category) => ("category".to_string(), Some(category.clone())),
         ArcadeFilter::Decade(decade) => ("decade".to_string(), Some(decade.to_string())),
         ArcadeFilter::Manufacturer(manufacturer) => {
             ("manufacturer".to_string(), Some(manufacturer.clone()))
@@ -3593,6 +3633,7 @@ fn deserialize_arcade_filter(kind: &str, value: Option<&str>) -> Option<ArcadeFi
     match kind {
         "all" => Some(ArcadeFilter::All),
         "search" => Some(ArcadeFilter::Search),
+        "category" => value.map(|value| ArcadeFilter::Category(value.to_string())),
         "decade" => value
             .and_then(|value| value.parse::<u16>().ok())
             .map(ArcadeFilter::Decade),
@@ -5886,6 +5927,7 @@ mod tests {
                             let items = activated.arcade_filter_items(&catalog, "arcade");
                             activated.activate_arcade_filter_selection(&catalog, "arcade", &items);
                             let expected_level = match row.group {
+                                ArcadeFilterGroup::Categories => ArcadeFilterLevel::Categories,
                                 ArcadeFilterGroup::Decades => ArcadeFilterLevel::Decades,
                                 ArcadeFilterGroup::Manufacturers => {
                                     ArcadeFilterLevel::Manufacturers

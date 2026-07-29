@@ -319,6 +319,7 @@ mod tests {
             system_id: "atarilynx".into(),
             year: None,
             manufacturer: "".into(),
+            category: "".into(),
             players: None,
             control: "".into(),
             is_new: false,

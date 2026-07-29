@@ -277,6 +277,7 @@ pub struct CatalogGame {
     pub has_preview: bool,
     pub year: Option<u16>,
     pub manufacturer: String,
+    pub category: String,
     pub players: Option<u8>,
     pub control: String,
     pub is_new: bool,
