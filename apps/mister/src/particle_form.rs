@@ -392,7 +392,13 @@ impl FormSceneRenderer {
 
     fn project_hologram(&mut self, seconds: f32, width: usize, height: usize) {
         let count = FormSceneKind::LayerMappedHologram.count();
-        let reveal = smooth_envelope(seconds, 0.0, 5.0, 29.0);
+        let reveal = if seconds < 5.0 {
+            smootherstep(seconds / 5.0)
+        } else if seconds < 24.0 {
+            1.0
+        } else {
+            1.0 - smootherstep((seconds - 24.0) / 6.0) * 0.65
+        };
         let angle = seconds * 0.17;
         let (sin, cos) = angle.sin_cos();
         for index in (0..count).step_by(2) {
