@@ -968,6 +968,10 @@ impl Fpga {
                 }
             }
         }
+        // GET_FBUF_LATCH_RECEIPT is a distinct UIO command. Deassert IO_EN
+        // after the SET stream so the sys_top bridge resets its command
+        // framing before the receipt opcode is sent.
+        self.disable_io();
         let receipt = match self.read_magik_latched_fbuf_receipt_unlocked() {
             Ok(receipt) => receipt,
             Err(source) => {
@@ -1867,6 +1871,25 @@ mod tests {
                 .filter(|word| **word == MAGIK_UIO_SET_FBUF_LATCH)
                 .count(),
             1
+        );
+        let writes = &state.borrow().writes;
+        let strobed = writes
+            .windows(2)
+            .enumerate()
+            .filter(|(_, pair)| pair[1] == pair[0] | STROBE)
+            .map(|(index, pair)| (index, pair[0] as u16))
+            .collect::<Vec<_>>();
+        let set_crc_write = strobed[12].0;
+        let receipt_command_write = strobed
+            .iter()
+            .find(|(_, word)| *word == MAGIK_UIO_GET_FBUF_LATCH_RECEIPT)
+            .unwrap()
+            .0;
+        assert!(
+            writes[set_crc_write + 2..receipt_command_write]
+                .iter()
+                .any(|write| write & IO_EN == 0),
+            "SET and receipt commands must be separated by an IO_EN-low boundary"
         );
         assert_eq!(attempt.diagnostics.protocol_version, 4);
         assert_eq!(attempt.diagnostics.sequence, 42);
