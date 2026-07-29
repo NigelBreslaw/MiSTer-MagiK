@@ -1981,13 +1981,13 @@ impl ParticleShowcaseRenderer {
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
         let center_x = self.config.width as f32 * 0.5;
         let center_y = self.config.height as f32 * 0.5;
-        const RIBBON_COUNT: usize = 18;
+        const RIBBON_COUNT: usize = 24;
         const RIBBON_SAMPLES: usize = 16;
         for ribbon in 0..RIBBON_COUNT {
             let lane = ribbon % RIBBON_PALETTE.len();
             let random = self.pool.random[ribbon];
             let depth = unit01(random.rotate_left(9));
-            let hero = ribbon % 3 == 0;
+            let hero = ribbon % 4 == 0;
             let lane_offset =
                 (ribbon as f32 - (RIBBON_COUNT as f32 - 1.0) * 0.5) * (3.2 + depth * 1.6);
             let start_t = unit01(random.rotate_left(19)) * 0.18;
@@ -2043,7 +2043,7 @@ impl ParticleShowcaseRenderer {
                 shape: MaterialShape::Star,
             });
         }
-        for streak in 0..144usize {
+        for streak in 0..192usize {
             let index = RIBBON_COUNT + streak;
             let random = self.pool.random[index];
             let t = unit01(random);

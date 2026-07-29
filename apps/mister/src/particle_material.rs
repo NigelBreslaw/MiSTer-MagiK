@@ -111,8 +111,17 @@ pub(crate) fn raster_tapered_segment(
         .ceil()
         .clamp(1.0, MAX_STROKE_SAMPLES as f32) as usize;
     let length = (dx * dx + dy * dy).sqrt().max(1.0);
-    let normal_x = -dy / length;
-    let normal_y = dx / length;
+    const FIXED_SHIFT: i32 = 16;
+    const FIXED_ONE: i32 = 1 << FIXED_SHIFT;
+    const FIXED_HALF: i32 = FIXED_ONE / 2;
+    let x0_fixed = (stroke.x0 * FIXED_ONE as f32).round() as i32;
+    let y0_fixed = (stroke.y0 * FIXED_ONE as f32).round() as i32;
+    let dx_fixed = (dx * FIXED_ONE as f32).round() as i32;
+    let dy_fixed = (dy * FIXED_ONE as f32).round() as i32;
+    let center_step_x = dx_fixed / steps as i32;
+    let center_step_y = dy_fixed / steps as i32;
+    let normal_x_fixed = (-dy / length * FIXED_ONE as f32).round() as i32;
+    let normal_y_fixed = (dx / length * FIXED_ONE as f32).round() as i32;
     let source_r = (stroke.color.0 >> 11) & 0x1f;
     let source_g = (stroke.color.0 >> 5) & 0x3f;
     let source_b = stroke.color.0 & 0x1f;
@@ -125,16 +134,29 @@ pub(crate) fn raster_tapered_segment(
         attempted_pixel_writes: 0,
     };
     for step in (0..=steps).step_by(sample_stride.max(1)) {
-        let amount = step as f32 / steps as f32;
-        let radius = (f32::from(stroke.start_radius.min(3))
-            + (f32::from(stroke.end_radius) - f32::from(stroke.start_radius)) * amount)
-            .round()
-            .clamp(1.0, 3.0) as i16;
-        let center_x = stroke.x0 + dx * amount;
-        let center_y = stroke.y0 + dy * amount;
+        let start_radius = i32::from(stroke.start_radius.clamp(1, 3));
+        let end_radius = i32::from(stroke.end_radius.clamp(1, 3));
+        let radius = if start_radius == end_radius {
+            start_radius
+        } else {
+            (start_radius * (steps - step) as i32 + end_radius * step as i32 + steps as i32 / 2)
+                / steps as i32
+        };
+        let center_x_fixed = x0_fixed + center_step_x * step as i32;
+        let center_y_fixed = y0_fixed + center_step_y * step as i32;
         for across in -radius..=radius {
-            let x = (center_x + normal_x * f32::from(across)).round() as i16;
-            let y = (center_y + normal_y * f32::from(across)).round() as i16;
+            let x_fixed = center_x_fixed + normal_x_fixed * across;
+            let y_fixed = center_y_fixed + normal_y_fixed * across;
+            let x = if x_fixed >= 0 {
+                (x_fixed + FIXED_HALF) >> FIXED_SHIFT
+            } else {
+                -((-x_fixed + FIXED_HALF) >> FIXED_SHIFT)
+            } as i16;
+            let y = if y_fixed >= 0 {
+                (y_fixed + FIXED_HALF) >> FIXED_SHIFT
+            } else {
+                -((-y_fixed + FIXED_HALF) >> FIXED_SHIFT)
+            } as i16;
             if !(0..width as i16).contains(&x) || !(0..height as i16).contains(&y) {
                 continue;
             }
