@@ -64,6 +64,7 @@ pub struct PlatformIdentity {
 }
 
 static IDENTITY: OnceLock<DiagnosticIdentity> = OnceLock::new();
+type IdentityLoadError = (String, Option<Box<PlatformIdentity>>);
 
 pub fn current() -> &'static DiagnosticIdentity {
     IDENTITY.get_or_init(load_current)
@@ -132,7 +133,7 @@ fn load_current() -> DiagnosticIdentity {
             },
             validation_failure: Some(failure),
             runtime,
-            platform,
+            platform: platform.map(|platform| *platform),
             device_boot_id: boot_id,
             launcher_session_id: session_id,
         },
@@ -142,7 +143,7 @@ fn load_current() -> DiagnosticIdentity {
 fn load_platform(
     manifest_path: &Path,
     runtime: &RuntimeIdentity,
-) -> Result<PlatformIdentity, (String, Option<PlatformIdentity>)> {
+) -> Result<PlatformIdentity, IdentityLoadError> {
     let text = std::fs::read_to_string(manifest_path)
         .map_err(|error| (format!("manifest unavailable: {error}"), None))?;
     let manifest_sha256 =
@@ -177,7 +178,7 @@ fn load_platform(
     if invalid {
         return Err((
             "installed tuple does not match its v3 manifest".to_owned(),
-            Some(platform),
+            Some(Box::new(platform)),
         ));
     }
     for (path_field, hash_field) in [
@@ -190,7 +191,7 @@ fn load_platform(
         if digest(&path).ok().as_deref() != Some(expected) {
             return Err((
                 format!("{path_field} artifact hash mismatch"),
-                Some(platform),
+                Some(Box::new(platform)),
             ));
         }
     }
@@ -213,7 +214,7 @@ fn parse_fields(text: &str) -> Result<BTreeMap<String, String>, String> {
 fn required<'a>(
     values: &'a BTreeMap<String, String>,
     field: &str,
-) -> Result<&'a str, (String, Option<PlatformIdentity>)> {
+) -> Result<&'a str, IdentityLoadError> {
     values
         .get(field)
         .map(String::as_str)
