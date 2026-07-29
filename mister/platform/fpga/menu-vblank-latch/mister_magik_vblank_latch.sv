@@ -117,9 +117,9 @@ module mister_magik_vblank_latch (
 	reg [15:0] receipt_disposition = MAGIK_RECEIPT_NONE;
 	reg [3:0] receipt_reject_reason = MAGIK_REJECT_NONE;
 
-	reg [15:0] status_snapshot [0:14];
-	reg [15:0] diagnostics_snapshot [0:5];
-	reg [15:0] receipt_snapshot [0:9];
+	// Read commands are serialized, so one bank preserves each command-start
+	// snapshot without carrying three mutually exclusive register arrays.
+	reg [15:0] response_snapshot [0:14];
 	reg [15:0] tx_crc = 16'd0;
 	reg [3:0] tx_expected = 4'd0;
 	reg [7:0] tx_command = 8'd0;
@@ -216,7 +216,7 @@ module mister_magik_vblank_latch (
 			endcase
 		end
 		else if(cmd_data && (cmd_id == MAGIK_UIO_GET_FBUF_LATCH)) begin
-			if(word_index < 4'd15) response_data = status_snapshot[word_index];
+			if(word_index < 4'd15) response_data = response_snapshot[word_index];
 			else if(word_index == 4'd15)
 				response_data = tx_crc ^ MAGIK_CRC_FINAL_XOR;
 		end
@@ -232,12 +232,12 @@ module mister_magik_vblank_latch (
 			endcase
 		end
 		else if(cmd_data && (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_DIAGNOSTICS)) begin
-			if(word_index < 4'd6) response_data = diagnostics_snapshot[word_index[2:0]];
+			if(word_index < 4'd6) response_data = response_snapshot[word_index];
 			else if(word_index == 4'd6)
 				response_data = tx_crc ^ MAGIK_CRC_FINAL_XOR;
 		end
 		else if(cmd_data && (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_RECEIPT)) begin
-			if(word_index < 4'd10) response_data = receipt_snapshot[word_index];
+			if(word_index < 4'd10) response_data = response_snapshot[word_index];
 			else if(word_index == 4'd10)
 				response_data = tx_crc ^ MAGIK_CRC_FINAL_XOR;
 		end
@@ -249,21 +249,21 @@ module mister_magik_vblank_latch (
 		vbl_old <= vbl_sys;
 
 		if(cmd_start && (cmd_id == MAGIK_UIO_GET_FBUF_LATCH)) begin
-			status_snapshot[0] <= active_seq;
-			status_snapshot[1] <= pending_seq;
-			status_snapshot[2] <= live_status_flags;
-			status_snapshot[3] <= flip_count;
-			status_snapshot[4] <= post_count;
-			status_snapshot[5] <= active_lfb_base[15:0];
-			status_snapshot[6] <= active_lfb_base[31:16];
-			status_snapshot[7] <= {4'd0, active_lfb_width};
-			status_snapshot[8] <= {4'd0, active_lfb_height};
-			status_snapshot[9] <= {2'd0, active_lfb_stride};
-			status_snapshot[10] <= reject_count;
-			status_snapshot[11] <= active_route_epoch;
-			status_snapshot[12] <= active_transaction;
-			status_snapshot[13] <= pending_transaction;
-			status_snapshot[14] <= accepted_transaction;
+			response_snapshot[0] <= active_seq;
+			response_snapshot[1] <= pending_seq;
+			response_snapshot[2] <= live_status_flags;
+			response_snapshot[3] <= flip_count;
+			response_snapshot[4] <= post_count;
+			response_snapshot[5] <= active_lfb_base[15:0];
+			response_snapshot[6] <= active_lfb_base[31:16];
+			response_snapshot[7] <= {4'd0, active_lfb_width};
+			response_snapshot[8] <= {4'd0, active_lfb_height};
+			response_snapshot[9] <= {2'd0, active_lfb_stride};
+			response_snapshot[10] <= reject_count;
+			response_snapshot[11] <= active_route_epoch;
+			response_snapshot[12] <= active_transaction;
+			response_snapshot[13] <= pending_transaction;
+			response_snapshot[14] <= accepted_transaction;
 			tx_crc <= crc_header(MAGIK_UIO_GET_FBUF_LATCH, 16'd15);
 			tx_expected <= 4'd0;
 			tx_command <= MAGIK_UIO_GET_FBUF_LATCH;
@@ -274,29 +274,29 @@ module mister_magik_vblank_latch (
 			tx_command <= MAGIK_UIO_GET_FBUF_LATCH_CAPS;
 		end
 		else if(cmd_start && (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_DIAGNOSTICS)) begin
-			diagnostics_snapshot[0] <= reject_count;
-			diagnostics_snapshot[1] <= {12'd0, last_reject_reason};
-			diagnostics_snapshot[2] <= last_reject_expected_index;
-			diagnostics_snapshot[3] <= last_reject_observed_index;
-			diagnostics_snapshot[4] <= last_reject_command;
-			diagnostics_snapshot[5] <= last_reject_receiver_flags;
+			response_snapshot[0] <= reject_count;
+			response_snapshot[1] <= {12'd0, last_reject_reason};
+			response_snapshot[2] <= last_reject_expected_index;
+			response_snapshot[3] <= last_reject_observed_index;
+			response_snapshot[4] <= last_reject_command;
+			response_snapshot[5] <= last_reject_receiver_flags;
 			tx_crc <= crc_header(MAGIK_UIO_GET_FBUF_LATCH_DIAGNOSTICS, 16'd6);
 			tx_expected <= 4'd0;
 			tx_command <= MAGIK_UIO_GET_FBUF_LATCH_DIAGNOSTICS;
 		end
 		else if(cmd_start && (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_RECEIPT)) begin
-			receipt_snapshot[0] <= rx_open ? attempted_transaction :
+			response_snapshot[0] <= rx_open ? attempted_transaction :
 				receipt_attempted_transaction;
-			receipt_snapshot[1] <= rx_open ? rx_seq : receipt_attempted_sequence;
-			receipt_snapshot[2] <= rx_open ? MAGIK_RECEIPT_REJECTED :
+			response_snapshot[1] <= rx_open ? rx_seq : receipt_attempted_sequence;
+			response_snapshot[2] <= rx_open ? MAGIK_RECEIPT_REJECTED :
 				receipt_disposition;
-			receipt_snapshot[3] <= accepted_transaction;
-			receipt_snapshot[4] <= accepted_seq;
-			receipt_snapshot[5] <= pending_transaction;
-			receipt_snapshot[6] <= pending_seq;
-			receipt_snapshot[7] <= active_transaction;
-			receipt_snapshot[8] <= active_seq;
-			receipt_snapshot[9] <= rx_open ? {12'd0, MAGIK_REJECT_MISSING_WORD} :
+			response_snapshot[3] <= accepted_transaction;
+			response_snapshot[4] <= accepted_seq;
+			response_snapshot[5] <= pending_transaction;
+			response_snapshot[6] <= pending_seq;
+			response_snapshot[7] <= active_transaction;
+			response_snapshot[8] <= active_seq;
+			response_snapshot[9] <= rx_open ? {12'd0, MAGIK_REJECT_MISSING_WORD} :
 				{12'd0, receipt_reject_reason};
 			tx_crc <= crc_header(MAGIK_UIO_GET_FBUF_LATCH_RECEIPT, 16'd10);
 			tx_expected <= 4'd0;
@@ -305,7 +305,7 @@ module mister_magik_vblank_latch (
 		else if(cmd_data && (cmd_id == tx_command) &&
 		        (word_index == tx_expected)) begin
 			if((tx_command == MAGIK_UIO_GET_FBUF_LATCH) && (word_index < 4'd15)) begin
-				tx_crc <= crc_word(tx_crc, status_snapshot[word_index]);
+				tx_crc <= crc_word(tx_crc, response_snapshot[word_index]);
 				tx_expected <= tx_expected + 1'd1;
 			end
 				else if((tx_command == MAGIK_UIO_GET_FBUF_LATCH_CAPS) &&
@@ -325,12 +325,12 @@ module mister_magik_vblank_latch (
 				end
 				else if((tx_command == MAGIK_UIO_GET_FBUF_LATCH_DIAGNOSTICS) &&
 				        (word_index < 4'd6)) begin
-					tx_crc <= crc_word(tx_crc, diagnostics_snapshot[word_index[2:0]]);
+					tx_crc <= crc_word(tx_crc, response_snapshot[word_index]);
 					tx_expected <= tx_expected + 1'd1;
 				end
 				else if((tx_command == MAGIK_UIO_GET_FBUF_LATCH_RECEIPT) &&
 				        (word_index < 4'd10)) begin
-					tx_crc <= crc_word(tx_crc, receipt_snapshot[word_index]);
+					tx_crc <= crc_word(tx_crc, response_snapshot[word_index]);
 					tx_expected <= tx_expected + 1'd1;
 				end
 			end
