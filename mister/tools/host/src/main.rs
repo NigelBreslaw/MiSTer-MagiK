@@ -4809,7 +4809,7 @@ fn capture_particle_showcase_frame(
         .and_then(Value::as_str)
         .unwrap_or("unknown")
         .to_string();
-    let capture = request_framebuffer_png_at(&config.agent)?;
+    let capture = request_framebuffer_png_at_when_latched(&config.agent, Duration::from_secs(3))?;
     validate_visible_launcher_capture(&capture)?;
     let filename = format!("{demo_number:02}-{label}-{beat}.png");
     let path = output_dir.join(filename);
@@ -9544,6 +9544,29 @@ fn request_framebuffer_png_at(agent: &AgentEndpoint) -> Result<PngCapture> {
         png,
         elapsed_ms: reply.elapsed_ms,
     })
+}
+
+fn request_framebuffer_png_at_when_latched(
+    agent: &AgentEndpoint,
+    timeout: Duration,
+) -> Result<PngCapture> {
+    let started = Instant::now();
+    loop {
+        match request_framebuffer_png_at(agent) {
+            Ok(capture) => return Ok(capture),
+            Err(error)
+                if is_inactive_latch_capture_error(&error.to_string())
+                    && started.elapsed() < timeout =>
+            {
+                thread::sleep(Duration::from_millis(16));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn is_inactive_latch_capture_error(error: &str) -> bool {
+    error.contains("latched framebuffer status is not active")
 }
 
 fn validate_png(png: &[u8]) -> Result<()> {
@@ -14970,6 +14993,19 @@ H: Handlers=event3 js0"#
                 .to_string()
                 .contains("unsupported schema")
         );
+    }
+
+    #[test]
+    fn inactive_latch_capture_errors_are_the_only_retryable_capture_failures() {
+        assert!(is_inactive_latch_capture_error(
+            "device_operation_failed: authoritative scanout capture failed: latched framebuffer status is not active"
+        ));
+        assert!(!is_inactive_latch_capture_error(
+            "authoritative scanout capture failed: active base is not a hidden slot"
+        ));
+        assert!(!is_inactive_latch_capture_error(
+            "agent framebuffer capture returned invalid PNG data"
+        ));
     }
 
     #[test]
