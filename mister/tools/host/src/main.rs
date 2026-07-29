@@ -728,7 +728,10 @@ fn smoke_development_delivery(
                     "delivery latch health",
                     &delivery_health_command("dev")?,
                 )?;
-                let capture = request_framebuffer_png_at(&config.agent)?;
+                let capture = request_framebuffer_png_at_when_latched(
+                    &config.agent,
+                    Duration::from_secs(3),
+                )?;
                 delivery_smoke_capture_detail(&capture)
             }
             DeliveryPresentState::Compatibility => Ok(
