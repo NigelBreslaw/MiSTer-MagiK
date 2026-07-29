@@ -168,6 +168,19 @@ const FLOW_PALETTE: [Rgb565Pixel; 8] = [
     Rgb565Pixel(0xffa0),
     Rgb565Pixel(0xffff),
 ];
+const DENSITY_PALETTE: [Rgb565Pixel; 8] = [
+    Rgb565Pixel(0x0000),
+    Rgb565Pixel(0x100b),
+    Rgb565Pixel(0x3015),
+    Rgb565Pixel(0x681f),
+    Rgb565Pixel(0xd81f),
+    Rgb565Pixel(0xfa9f),
+    Rgb565Pixel(0xff59),
+    Rgb565Pixel(0xffff),
+];
+const DENSITY_W: usize = 240;
+const DENSITY_H: usize = 135;
+const DENSITY_SCALE: usize = 4;
 const ARCADE_CLOUD: &[u8] = include_bytes!("../assets/particles/arcade-cabinet.pcloud");
 const PARTICLE_CLOUD_MAGIC: &[u8; 8] = b"PCLOUD1\0";
 const PARTICLE_CLOUD_HEADER_BYTES: usize = 28;
@@ -232,10 +245,11 @@ pub enum ParticleDemoKind {
     ProceduralSpriteMaterials,
     VariableWidthRibbons,
     CurlNoiseFlowField,
+    LowResolutionDensityBloom,
 }
 
 impl ParticleDemoKind {
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 25] = [
         Self::SolarChrysanthemum,
         Self::RecursiveHalo,
         Self::CopperWillowRain,
@@ -260,6 +274,7 @@ impl ParticleDemoKind {
         Self::ProceduralSpriteMaterials,
         Self::VariableWidthRibbons,
         Self::CurlNoiseFlowField,
+        Self::LowResolutionDensityBloom,
     ];
 
     #[must_use]
@@ -299,6 +314,7 @@ impl ParticleDemoKind {
             Self::ProceduralSpriteMaterials => "PROCEDURAL SPRITE MATERIALS",
             Self::VariableWidthRibbons => "VARIABLE-WIDTH RIBBONS",
             Self::CurlNoiseFlowField => "CURL-NOISE FLOW FIELD",
+            Self::LowResolutionDensityBloom => "LOW-RES DENSITY + BLOOM",
         }
     }
 
@@ -329,6 +345,7 @@ impl ParticleDemoKind {
             Self::ProceduralSpriteMaterials => "procedural-sprite-materials",
             Self::VariableWidthRibbons => "variable-width-ribbons",
             Self::CurlNoiseFlowField => "curl-noise-flow-field",
+            Self::LowResolutionDensityBloom => "density-bloom",
         }
     }
 
@@ -394,6 +411,7 @@ impl ParticleDemoKind {
             Self::ProceduralSpriteMaterials => 16_384,
             Self::VariableWidthRibbons => 8_192,
             Self::CurlNoiseFlowField => 32_768,
+            Self::LowResolutionDensityBloom => 24_576,
         }
     }
 
@@ -470,6 +488,7 @@ pub struct ParticleShowcaseRenderer {
     transition: ParticleShowcaseTransition,
     transition_started_at: Option<Duration>,
     heat: Vec<u8>,
+    density: Vec<u16>,
     heat_frame: u64,
     galaxy_projected_count: usize,
     dirty_slots: [ParticleShowcaseDirtySlot; HIDDEN_SLOT_COUNT],
@@ -541,6 +560,7 @@ impl ParticleShowcaseRenderer {
         let material_strokes = Vec::with_capacity(2_048);
         let transition = ParticleShowcaseTransition::new();
         let heat = vec![0; FIRE_HEAT_W * FIRE_HEAT_H];
+        let density = vec![0; DENSITY_W * DENSITY_H];
         let dirty_slots = std::array::from_fn(|_| ParticleShowcaseDirtySlot {
             initialized: false,
             offsets: Vec::with_capacity(PARTICLE_DEMO_MAX_COUNT.saturating_mul(2)),
@@ -603,6 +623,11 @@ impl ParticleShowcaseRenderer {
             )
             .saturating_add(transition.allocated_bytes());
         let renderer_scratch_bytes = renderer_scratch_bytes.saturating_add(heat.capacity());
+        let renderer_scratch_bytes = renderer_scratch_bytes.saturating_add(
+            density
+                .capacity()
+                .saturating_mul(std::mem::size_of::<u16>()),
+        );
         let mut renderer = Self {
             config,
             demo: config.initial_demo,
@@ -619,6 +644,7 @@ impl ParticleShowcaseRenderer {
             transition,
             transition_started_at: None,
             heat,
+            density,
             heat_frame: u64::MAX,
             galaxy_projected_count: 0,
             dirty_slots,
@@ -886,6 +912,8 @@ impl ParticleShowcaseRenderer {
             self.initialize_variable_width_ribbons();
         } else if demo == ParticleDemoKind::CurlNoiseFlowField {
             self.initialize_curl_noise_flow_field();
+        } else if demo == ParticleDemoKind::LowResolutionDensityBloom {
+            self.initialize_density_bloom();
         }
     }
 
@@ -937,6 +965,7 @@ impl ParticleShowcaseRenderer {
             }
             ParticleDemoKind::VariableWidthRibbons => self.project_variable_width_ribbons(elapsed),
             ParticleDemoKind::CurlNoiseFlowField => self.project_curl_noise_flow_field(elapsed),
+            ParticleDemoKind::LowResolutionDensityBloom => self.project_density_bloom(elapsed),
         }
     }
 
@@ -1026,7 +1055,73 @@ impl ParticleShowcaseRenderer {
                 value if value < 22.0 => "curl-pair",
                 _ => "eddy-shift",
             },
+            ParticleDemoKind::LowResolutionDensityBloom => match seconds {
+                value if value < 8.0 => "splat",
+                value if value < 22.0 => "crescent-ridge",
+                _ => "cavity-pulse",
+            },
         }
+    }
+
+    fn initialize_density_bloom(&mut self) {
+        for index in 0..self.pool.active() {
+            let random = self.pool.random[index];
+            self.pool.age[index] = unit01(random.rotate_left(7));
+            self.pool.life[index] = 0.75 + unit01(random.rotate_left(17)) * 0.5;
+            self.pool.style[index] = ((random >> 29) & 7) as u8;
+            self.pool.flags[index] = u8::from(index & 63 == 0);
+        }
+    }
+
+    fn project_density_bloom(&mut self, elapsed: Duration) -> usize {
+        self.commands.clear();
+        self.segments.clear();
+        self.density.fill(0);
+        let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
+        let pulse = 0.92 + (seconds * 0.7).sin() * 0.06;
+        for index in 0..self.pool.active() {
+            let random = self.pool.random[index];
+            let angle = std::f32::consts::TAU
+                * (unit01(random) + seconds * (0.006 + self.pool.age[index] * 0.004));
+            let radial = (0.45 + unit01(random.rotate_left(11)) * 0.55).sqrt();
+            let radius = (54.0 + radial * 168.0) * pulse;
+            let world_x = angle.cos() * radius + 42.0;
+            let world_y = angle.sin() * radius * 0.82;
+            let cavity_x = world_x + 58.0;
+            let cavity_y = world_y;
+            if cavity_x * cavity_x + cavity_y * cavity_y < 118.0 * 118.0 {
+                continue;
+            }
+            let x = ((480.0 + world_x) * 0.25) as i32;
+            let y = ((270.0 + world_y) * 0.25) as i32;
+            if !(1..DENSITY_W as i32 - 1).contains(&x) || !(1..DENSITY_H as i32 - 1).contains(&y) {
+                continue;
+            }
+            let center = y as usize * DENSITY_W + x as usize;
+            let weight = 6 + u16::from(self.pool.style[index]);
+            for (offset, scale) in [
+                (0isize, 4u16),
+                (-1, 2),
+                (1, 2),
+                (-(DENSITY_W as isize), 2),
+                (DENSITY_W as isize, 2),
+            ] {
+                let cell = (center as isize + offset) as usize;
+                self.density[cell] = self.density[cell].saturating_add(weight * scale);
+            }
+            if self.pool.flags[index] != 0 {
+                let _ = push_screen_command(
+                    &mut self.commands,
+                    self.config.width,
+                    self.config.height,
+                    480.0 + world_x,
+                    270.0 + world_y,
+                    7,
+                    true,
+                );
+            }
+        }
+        0
     }
 
     fn initialize_curl_noise_flow_field(&mut self) {
@@ -2414,6 +2509,33 @@ impl ParticleShowcaseRenderer {
     }
 
     fn raster_effect_background(&self, destination: &mut [Rgb565Pixel]) -> usize {
+        if self.demo == ParticleDemoKind::LowResolutionDensityBloom {
+            let mut writes = 0usize;
+            for cell_y in 0..DENSITY_H {
+                for cell_x in 0..DENSITY_W {
+                    let density = self.density[cell_y * DENSITY_W + cell_x];
+                    let style = match density {
+                        0..=7 => 0,
+                        8..=23 => 1,
+                        24..=47 => 2,
+                        48..=79 => 3,
+                        80..=127 => 4,
+                        128..=191 => 5,
+                        192..=287 => 6,
+                        _ => 7,
+                    };
+                    let color = DENSITY_PALETTE[style];
+                    for y in cell_y * DENSITY_SCALE..(cell_y + 1) * DENSITY_SCALE {
+                        let row = y * self.config.width;
+                        for x in cell_x * DENSITY_SCALE..(cell_x + 1) * DENSITY_SCALE {
+                            destination[row + x] = color;
+                            writes = writes.saturating_add(1);
+                        }
+                    }
+                }
+            }
+            return writes;
+        }
         if self.demo != ParticleDemoKind::FireEmbers {
             return 0;
         }
@@ -2826,6 +2948,7 @@ fn showcase_palette(demo: ParticleDemoKind) -> &'static [Rgb565Pixel; 8] {
         ParticleDemoKind::ProceduralSpriteMaterials => &MATERIAL_PALETTE,
         ParticleDemoKind::VariableWidthRibbons => &RIBBON_PALETTE,
         ParticleDemoKind::CurlNoiseFlowField => &FLOW_PALETTE,
+        ParticleDemoKind::LowResolutionDensityBloom => &DENSITY_PALETTE,
     }
 }
 
@@ -2960,13 +3083,13 @@ mod tests {
 
     #[test]
     fn demo_order_and_wrapping_are_stable() {
-        assert_eq!(ParticleDemoKind::ALL.len(), 24);
+        assert_eq!(ParticleDemoKind::ALL.len(), 25);
         assert_eq!(
             ParticleDemoKind::SolarChrysanthemum.offset_wrapped(-1),
-            ParticleDemoKind::CurlNoiseFlowField
+            ParticleDemoKind::LowResolutionDensityBloom
         );
         assert_eq!(
-            ParticleDemoKind::CurlNoiseFlowField.offset_wrapped(1),
+            ParticleDemoKind::LowResolutionDensityBloom.offset_wrapped(1),
             ParticleDemoKind::SolarChrysanthemum
         );
         for (index, kind) in ParticleDemoKind::ALL.into_iter().enumerate() {
@@ -3010,7 +3133,11 @@ mod tests {
             ParticleDemoKind::parse("24"),
             Some(ParticleDemoKind::CurlNoiseFlowField)
         );
-        assert_eq!(ParticleDemoKind::parse("25"), None);
+        assert_eq!(
+            ParticleDemoKind::parse("25"),
+            Some(ParticleDemoKind::LowResolutionDensityBloom)
+        );
+        assert_eq!(ParticleDemoKind::parse("26"), None);
         assert_eq!(ParticleDemoKind::parse("unknown"), None);
     }
 
