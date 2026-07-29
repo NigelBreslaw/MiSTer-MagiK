@@ -230,12 +230,12 @@ const FORM_TERRAIN_PALETTE: [Rgb565Pixel; 8] = [
     Rgb565Pixel(0xffff),
 ];
 const FORM_HOLOGRAM_PALETTE: [Rgb565Pixel; 8] = [
-    Rgb565Pixel(0x0808),
-    Rgb565Pixel(0x181f),
-    Rgb565Pixel(0x401f),
-    Rgb565Pixel(0x801f),
+    Rgb565Pixel(0x0000),
+    Rgb565Pixel(0x2010),
+    Rgb565Pixel(0x501f),
+    Rgb565Pixel(0xa81f),
     Rgb565Pixel(0x02df),
-    Rgb565Pixel(0x05ff),
+    Rgb565Pixel(0x07ff),
     Rgb565Pixel(0xfd20),
     Rgb565Pixel(0xffff),
 ];

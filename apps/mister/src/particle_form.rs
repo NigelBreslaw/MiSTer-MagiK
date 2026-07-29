@@ -376,7 +376,7 @@ impl FormSceneRenderer {
             self.aux_x[index] = a;
             self.aux_y[index] = ((y + 230.0) / 400.0).clamp(0.0, 1.0);
             self.style[index] = style;
-            self.flags[index] = 1;
+            self.flags[index] = 1 | (part << 1);
         }
     }
 
@@ -509,9 +509,15 @@ impl FormSceneRenderer {
             let y = local_y.mul_add(pitch_cos, -yaw_z * pitch_sin);
             let z = local_y.mul_add(pitch_sin, yaw_z * pitch_cos);
             let original_style = self.style[index];
-            if (self.aux_y[index] - scan_position).abs() < 0.028 {
-                self.style[index] = 7;
-            }
+            self.style[index] = hologram_material_style(
+                self.flags[index] >> 1,
+                self.rest_x[index],
+                self.rest_y[index],
+                self.rest_z[index],
+                self.aux_x[index],
+                self.aux_y[index],
+                scan_position,
+            );
             self.push_world(x, y, z, 650.0, width, height, index);
             self.style[index] = original_style;
         }
@@ -686,6 +692,79 @@ fn smooth_envelope(seconds: f32, enter: f32, peak: f32, exit: f32) -> f32 {
     }
 }
 
+fn hologram_material_style(
+    part: u8,
+    x: f32,
+    y: f32,
+    z: f32,
+    radial_map: f32,
+    scan_coordinate: f32,
+    scan_position: f32,
+) -> u8 {
+    let scan_delta = (scan_coordinate - scan_position).abs();
+    let scan_delta = scan_delta.min(1.0 - scan_delta);
+    if scan_delta < 0.016 {
+        return 7;
+    }
+    if scan_delta < 0.036 && part != 4 {
+        return 6;
+    }
+    match part {
+        0 => {
+            let edge = x.abs() > 188.0 || z.abs() > 108.0;
+            if edge {
+                5
+            } else if y < 55.0 {
+                let terrace = ((x * 0.018 + z * 0.025).floor() as i32).rem_euclid(4);
+                if terrace == 0 { 5 } else { 4 }
+            } else {
+                let vertical = ((y - 48.0) / 96.0).clamp(0.0, 1.0);
+                if vertical < 0.28 {
+                    4
+                } else if vertical < 0.72 {
+                    2
+                } else {
+                    1
+                }
+            }
+        }
+        1 => {
+            if x > 8.0 {
+                5
+            } else if y < -70.0 {
+                4
+            } else {
+                2
+            }
+        }
+        2 => {
+            let latitude = ((y + 169.0) / 54.0).clamp(-1.0, 1.0);
+            if latitude < -0.32 {
+                7
+            } else if latitude < 0.38 {
+                5
+            } else {
+                3
+            }
+        }
+        3 => {
+            if z < 0.0 {
+                5
+            } else {
+                3
+            }
+        }
+        4 => {
+            if radial_map.sqrt() < 0.62 {
+                0
+            } else {
+                6
+            }
+        }
+        _ => 5,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -738,6 +817,28 @@ mod tests {
         assert_eq!(
             FormSceneKind::PointCloudMorphPassage.beat(15.0),
             "manta-hold"
+        );
+    }
+
+    #[test]
+    fn hologram_material_map_preserves_concept_color_hierarchy() {
+        assert_eq!(
+            hologram_material_style(0, 0.0, 140.0, 0.0, 0.0, 0.8, 0.2),
+            1
+        );
+        assert_eq!(
+            hologram_material_style(0, 200.0, 48.0, 0.0, 0.0, 0.8, 0.2),
+            5
+        );
+        assert_eq!(
+            hologram_material_style(2, 0.0, -220.0, 0.0, 0.0, 0.8, 0.2),
+            7
+        );
+        assert_eq!(hologram_material_style(4, 0.0, 35.0, 0.0, 0.1, 0.8, 0.2), 0);
+        assert_eq!(hologram_material_style(4, 0.0, 35.0, 0.0, 0.9, 0.8, 0.2), 6);
+        assert_eq!(
+            hologram_material_style(1, 0.0, -40.0, 0.0, 0.0, 0.205, 0.2),
+            7
         );
     }
 }
