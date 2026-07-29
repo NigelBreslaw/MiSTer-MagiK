@@ -3,7 +3,7 @@
 
 #[cfg(target_os = "macos")]
 mod macos {
-    use mister_magik_fb::arcade_catalog::ArcadeGameEntry;
+    use mister_magik_fb::arcade_catalog::{ArcadeCatalog, ArcadeGameEntry};
     use mister_magik_fb::fireworks::{
         FIREWORK_VISUAL_SEED, FireworkRenderer, embedded_firework_json,
     };
@@ -12,6 +12,9 @@ mod macos {
     use mister_magik_fb::input_state::PadState;
     use mister_magik_fb::launcher::{LauncherAction, LauncherNav, Screen};
     use mister_magik_fb::launcher_presentation::LauncherBridgePresenter;
+    use mister_magik_fb::launcher_runtime::catalog::{
+        ShardedCatalogSeed, load_sharded_registry_seed_at,
+    };
     use mister_magik_fb::launcher_runtime::settings::{FileSettingsStore, SettingsStore};
     use mister_magik_fb::macos_preview_content::{
         ContentMode, PreviewContent, default_settings_path, resolve_preview_content,
@@ -165,6 +168,59 @@ mod macos {
         Ok(())
     }
 
+    fn preview_catalog(
+        content: &PreviewContent,
+        fixture_catalog: ArcadeCatalog,
+    ) -> Result<(ArcadeCatalog, Option<u64>, String), String> {
+        let Some(layout) = content.card() else {
+            return Ok((fixture_catalog, None, "catalog:fixtures".to_owned()));
+        };
+        let candidates = [
+            ("mac-cache", layout.catalog_root.clone()),
+            (
+                "card-production",
+                layout.card_root.join("mister-magik").join("catalog-v3"),
+            ),
+            (
+                "card-development",
+                layout.card_root.join("mister-magik-dev").join("catalog-v3"),
+            ),
+        ];
+        let mut selected: Option<(ShardedCatalogSeed, &'static str)> = None;
+        let mut failures = Vec::new();
+        for (label, path) in candidates {
+            match load_sharded_registry_seed_at("/media/fat/_Arcade", &path) {
+                Ok(seed)
+                    if selected
+                        .as_ref()
+                        .is_none_or(|(current, _)| seed.generation > current.generation) =>
+                {
+                    selected = Some((seed, label));
+                }
+                Ok(_) => {}
+                Err(error) => failures.push(format!("{label}={}", error.status)),
+            }
+        }
+        if let Some((seed, label)) = selected {
+            let generation = seed.generation;
+            return Ok((
+                seed.catalog,
+                Some(generation),
+                format!("catalog:{label}:g{generation}"),
+            ));
+        }
+        eprintln!(
+            "catalog: no valid Catalog V3 seed for {}; {}",
+            layout.card_root.display(),
+            failures.join(" ")
+        );
+        Ok((
+            ArcadeCatalog::new(PathBuf::from("/media/fat/_Arcade"), Vec::new(), Vec::new()),
+            None,
+            "catalog:missing".to_owned(),
+        ))
+    }
+
     struct PreviewApplication {
         launcher: Launcher,
         slint_window: Rc<MisterSoftwareWindow>,
@@ -181,8 +237,11 @@ mod macos {
         launcher_epoch: Instant,
         bridge_presenter: LauncherBridgePresenter,
         content: PreviewContent,
+        catalog: ArcadeCatalog,
+        catalog_generation: Option<u64>,
+        catalog_source: String,
         settings_store: FileSettingsStore,
-        fixtures: UiPreviewFixtures,
+        fixture_screenshots: Vec<FixtureScreenshot>,
         arcade_layer: ArcadeVisualLayer,
         preview_transition: PreviewTransitionController<()>,
         preview_compositor: Rgb565PreviewTransitionCompositor,
@@ -220,16 +279,18 @@ mod macos {
             content: PreviewContent,
         ) -> Result<Self, Box<dyn Error>> {
             let fixtures = UiPreviewFixtures::new()?;
+            let (catalog, catalog_generation, catalog_source) =
+                preview_catalog(&content, fixtures.catalog)?;
             let mut launcher_nav = LauncherNav::new();
             let settings_store = FileSettingsStore::new(default_settings_path());
             launcher_nav.settings = settings_store.load();
             launcher_nav.catalog_build_started();
-            for system_id in &fixtures.shell_system_ids {
-                launcher_nav.catalog_system_discovered(system_id);
-                launcher_nav.catalog_system_ready(system_id);
+            for system in &catalog.systems {
+                launcher_nav.catalog_system_discovered(&system.id);
+                launcher_nav.catalog_system_ready(&system.id);
             }
-            launcher_nav.sync_launcher_taxonomy(&fixtures.catalog);
-            launcher_nav.catalog_build_finished(&fixtures.catalog);
+            launcher_nav.sync_launcher_taxonomy(&catalog);
+            launcher_nav.catalog_build_finished(&catalog);
             let tile_images = fixtures
                 .screenshots
                 .iter()
@@ -265,8 +326,11 @@ mod macos {
                 launcher_epoch: Instant::now(),
                 bridge_presenter: LauncherBridgePresenter::default(),
                 content,
+                catalog,
+                catalog_generation,
+                catalog_source,
                 settings_store,
-                fixtures,
+                fixture_screenshots: fixtures.screenshots,
                 arcade_layer: ArcadeVisualLayer::new(FRAME_WIDTH, FRAME_HEIGHT),
                 preview_transition: PreviewTransitionController::default(),
                 preview_compositor: Rgb565PreviewTransitionCompositor::new(
@@ -321,11 +385,13 @@ mod macos {
 
         fn window_title(&self) -> String {
             format!(
-                "MiSTer MagiK UI Preview — {} — {} — {} Hz",
+                "MiSTer MagiK UI Preview — {} — {} — {} Hz — {} — {}",
                 self.scenario.label(),
                 self.scenario.shortcut(),
                 self.refresh_hz,
-            ) + &format!(" — {}", self.content.label())
+                self.content.label(),
+                self.catalog_source,
+            )
         }
 
         fn select_scenario(&mut self, scenario: Scenario) {
@@ -379,7 +445,7 @@ mod macos {
                 Scenario::About => 2,
                 Scenario::Licenses => 2,
                 Scenario::ScreensaverSettings => 3,
-                Scenario::Arcade => self.fixtures.arcade_games().len(),
+                Scenario::Arcade => self.catalog.games.len(),
                 _ => 1,
             };
             self.selection = self
@@ -401,7 +467,7 @@ mod macos {
             if self.scenario == Scenario::Arcade {
                 apply_arcade_fixture_bridge(
                     &self.launcher,
-                    self.fixtures.arcade_games(),
+                    self.catalog.games.as_slice(),
                     self.selection,
                 );
             }
@@ -498,8 +564,7 @@ mod macos {
             match scenario {
                 Scenario::Home => self.launcher_nav.go_root(),
                 Scenario::Arcade | Scenario::ArcadeCrossfade => {
-                    self.launcher_nav
-                        .open_default_arcade(&self.fixtures.catalog);
+                    self.launcher_nav.open_default_arcade(&self.catalog);
                     if scenario == Scenario::ArcadeCrossfade {
                         self.launcher_nav.arcade.selected = 1;
                         self.launcher_nav.arcade.snap_to_selected();
@@ -545,11 +610,9 @@ mod macos {
                 return;
             }
             let frame_now = self.launcher_epoch + self.fixed_time.get();
-            let event = self.launcher_nav.handle_input(
-                &self.launcher_pad,
-                frame_now,
-                &self.fixtures.catalog,
-            );
+            let event =
+                self.launcher_nav
+                    .handle_input(&self.launcher_pad, frame_now, &self.catalog);
             if let Some(event) = event {
                 match event.action {
                     LauncherAction::PreviewScreensaver => {
@@ -609,13 +672,14 @@ mod macos {
             self.bridge_presenter.sync(
                 &self.launcher,
                 &self.launcher_nav,
-                &self.fixtures.catalog,
-                Some(1),
+                &self.catalog,
+                self.catalog_generation
+                    .and_then(|generation| usize::try_from(generation).ok()),
                 false,
             );
             apply_arcade_fixture_bridge(
                 &self.launcher,
-                self.fixtures.arcade_games(),
+                self.catalog.games.as_slice(),
                 self.launcher_nav.arcade.selected,
             );
             self.slint_window.request_redraw();
@@ -638,7 +702,7 @@ mod macos {
                     .active_collection_id()
                     .map(|collection| {
                         self.launcher_nav
-                            .active_arcade_game_view(&self.fixtures.catalog, collection)
+                            .active_arcade_game_view(&self.catalog, collection)
                     })
                     .unwrap_or_else(mister_magik_fb::arcade_catalog::ArcadeGameView::empty);
                 self.arcade_layer.compose(
@@ -648,15 +712,20 @@ mod macos {
                     self.launcher_nav.arcade.visual_index,
                     true,
                 );
+                let fixture_screenshots = &self.fixture_screenshots;
                 let current = self
                     .preview_current_index
-                    .and_then(|index| self.fixtures.arcade_games().get(index))
-                    .and_then(|game| self.fixtures.screenshot(&game.preview_asset_key))
-                    .or_else(|| self.fixtures.screenshots.first());
+                    .and_then(|index| self.catalog.games.get(index))
+                    .and_then(|game| {
+                        fixture_screenshot(fixture_screenshots, &game.preview_asset_key)
+                    })
+                    .or_else(|| fixture_screenshots.first());
                 let previous = self
                     .preview_previous_index
-                    .and_then(|index| self.fixtures.arcade_games().get(index))
-                    .and_then(|game| self.fixtures.screenshot(&game.preview_asset_key));
+                    .and_then(|index| self.catalog.games.get(index))
+                    .and_then(|game| {
+                        fixture_screenshot(fixture_screenshots, &game.preview_asset_key)
+                    });
                 if let Some(current) = current {
                     let transition = self.preview_transition.update(
                         Some(self.preview_transition_id),
@@ -1513,6 +1582,15 @@ mod macos {
             display_width: 320,
             display_height: 240,
         }
+    }
+
+    fn fixture_screenshot<'a>(
+        screenshots: &'a [FixtureScreenshot],
+        key: &str,
+    ) -> Option<&'a FixtureScreenshot> {
+        screenshots
+            .iter()
+            .find(|screenshot| screenshot.key.as_ref() == key)
     }
 
     fn apply_arcade_fixture_bridge(
