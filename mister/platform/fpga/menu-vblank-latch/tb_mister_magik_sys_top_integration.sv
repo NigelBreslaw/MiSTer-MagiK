@@ -241,7 +241,7 @@ module tb_mister_magik_sys_top_integration;
 
 		begin_command(MAGIK_UIO_GET_FBUF_LATCH_CAPS, MAGIK_FBUF_CAPS_MAGIC);
 		transfer_word(16'd0, response);
-		expect16(response, 16'd3, "sys_top caps version");
+		expect16(response, MAGIK_FBUF_PROTOCOL_VERSION, "sys_top caps version");
 		transfer_word(16'd0, response);
 		expect16(response, MAGIK_FBUF_CAPS_FLAGS, "sys_top caps flags");
 		for(index = 2; index < 5; index = index + 1)

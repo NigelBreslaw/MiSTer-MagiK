@@ -131,7 +131,7 @@ module tb_mister_magik_vblank_latch;
 		reg [15:0] next;
 		begin
 			next = crc_word(16'hffff, {8'd0, command});
-			next = crc_word(next, 16'd3);
+			next = crc_word(next, MAGIK_FBUF_PROTOCOL_VERSION);
 			crc_header = crc_word(next, count);
 		end
 	endfunction
