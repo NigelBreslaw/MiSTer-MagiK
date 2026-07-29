@@ -4242,6 +4242,47 @@ mod tests {
         );
     }
 
+    #[test]
+    fn public_archive_constructor_runs_the_production_parade() {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-production-screensaver-{}.mmlz4b",
+            std::process::id()
+        ));
+        write_single_image_archive(&path);
+        let mut screensaver =
+            LauncherScreensaver::from_archive_path(&path, 320, 180, 0x1234, false)
+                .expect("open production screensaver");
+        let mut frame = vec![Rgb565Pixel(0); 320 * 180];
+        let trace = screensaver.render_at(&mut frame, 320, 180, Duration::from_secs(2));
+
+        assert_eq!(trace.renderer, "parade");
+        assert!(!screensaver.is_loading_archive());
+        let _ = std::fs::remove_file(path);
+    }
+
+    fn write_single_image_archive(path: &std::path::Path) {
+        let name = b"fixture.rgb565";
+        let width = 2_u32;
+        let height = 2_u32;
+        let stride_bytes = 4_u32;
+        let pixels = [0x00_u8, 0xf8, 0xe0, 0x07, 0x1f, 0x00, 0xff, 0xff];
+        let index_len = 8 + 4 + 2 + 4 + 4 + 4 + 4 + 1 + 4 + 8 + name.len();
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"MMPX2B1\0");
+        bytes.extend_from_slice(&1_u32.to_le_bytes());
+        bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        bytes.extend_from_slice(&width.to_le_bytes());
+        bytes.extend_from_slice(&height.to_le_bytes());
+        bytes.extend_from_slice(&stride_bytes.to_le_bytes());
+        bytes.extend_from_slice(&(pixels.len() as u32).to_le_bytes());
+        bytes.push(1);
+        bytes.extend_from_slice(&(pixels.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&(index_len as u64).to_le_bytes());
+        bytes.extend_from_slice(name);
+        bytes.extend_from_slice(&pixels);
+        std::fs::write(path, bytes).expect("write production screensaver archive fixture");
+    }
+
     fn test_images(count: usize) -> Vec<SaverImage> {
         (0..count)
             .map(|idx| SaverImage {
