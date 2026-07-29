@@ -401,7 +401,7 @@ impl FormSceneRenderer {
         };
         let angle = seconds * 0.17;
         let (sin, cos) = angle.sin_cos();
-        for index in (0..count).step_by(2) {
+        for index in (0..count).step_by(4) {
             let scan = (seconds * 0.25 + self.aux_y[index]).fract();
             if scan > reveal || (index & 3 == 0 && scan > 0.82) {
                 continue;
