@@ -1981,32 +1981,37 @@ impl ParticleShowcaseRenderer {
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
         let center_x = self.config.width as f32 * 0.5;
         let center_y = self.config.height as f32 * 0.5;
-        for ribbon in 0..24usize {
+        const RIBBON_COUNT: usize = 18;
+        const RIBBON_SAMPLES: usize = 16;
+        for ribbon in 0..RIBBON_COUNT {
             let lane = ribbon % RIBBON_PALETTE.len();
             let random = self.pool.random[ribbon];
             let depth = unit01(random.rotate_left(9));
-            let hero = ribbon % 4 == 0;
-            let lane_offset = (ribbon as f32 - 11.5) * (2.5 + depth * 1.4);
+            let hero = ribbon % 3 == 0;
+            let lane_offset =
+                (ribbon as f32 - (RIBBON_COUNT as f32 - 1.0) * 0.5) * (3.2 + depth * 1.6);
             let start_t = unit01(random.rotate_left(19)) * 0.18;
             let end_t = 0.76
                 + unit01(random.rotate_left(29)) * 0.24
                 + (seconds * 0.11 + ribbon as f32).sin() * 0.018;
             let mut previous = None;
-            for sample in 0..16usize {
-                let progress = sample as f32 / 15.0;
+            for sample in 0..RIBBON_SAMPLES {
+                let progress = sample as f32 / (RIBBON_SAMPLES - 1) as f32;
                 let t = start_t + (end_t - start_t) * progress;
                 let u = t * 2.0 - 1.0;
                 let x = center_x + u * (350.0 + depth * 48.0);
                 let y = center_y - (u * std::f32::consts::PI).sin() * (128.0 + depth * 52.0)
                     + lane_offset * (u * std::f32::consts::PI).cos();
                 if let Some((previous_x, previous_y)) = previous {
+                    let previous_radius = u8::from(hero && (4..=13).contains(&sample)) + 1;
+                    let radius = u8::from(hero && (4..=12).contains(&sample)) + 1;
                     self.material_strokes.push(MaterialStroke {
                         x0: previous_x,
                         y0: previous_y,
                         x1: x,
                         y1: y,
-                        start_radius: u8::from(hero && sample >= 5) + 1,
-                        end_radius: u8::from(hero && sample <= 13) + 1,
+                        start_radius: previous_radius,
+                        end_radius: radius,
                         intensity: 7 + (depth * 8.0) as u8,
                         color: RIBBON_PALETTE[lane],
                     });
@@ -2032,14 +2037,14 @@ impl ParticleShowcaseRenderer {
             self.material_stamps.push(MaterialStamp {
                 x: head_x as i16,
                 y: head_y as i16,
-                radius: 3,
+                radius: if hero { 4 } else { 2 },
                 intensity: 15,
                 color: RIBBON_PALETTE[lane],
                 shape: MaterialShape::Star,
             });
         }
-        for streak in 0..192usize {
-            let index = 24 + streak;
+        for streak in 0..144usize {
+            let index = RIBBON_COUNT + streak;
             let random = self.pool.random[index];
             let t = unit01(random);
             let u = t * 2.0 - 1.0;
