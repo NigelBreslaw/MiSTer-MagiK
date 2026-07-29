@@ -1993,7 +1993,7 @@ impl ParticleShowcaseRenderer {
         let center_x = self.config.width as f32 * 0.5;
         let center_y = self.config.height as f32 * 0.58;
         let mut clipped = 0usize;
-        for index in (0..self.pool.active()).step_by(2) {
+        for index in (0..self.pool.active()).step_by(4) {
             let phase =
                 (seconds * self.pool.life[index] * 0.12 + self.pool.age[index]).rem_euclid(1.0);
             let random = self.pool.random[index];
@@ -2025,7 +2025,7 @@ impl ParticleShowcaseRenderer {
             } else {
                 ((over_life * 6.0) as usize + usize::from(self.pool.style[index] & 1)).min(7)
             };
-            if index & 31 == 0 {
+            if index & 63 == 0 {
                 self.material_stamps.push(MaterialStamp {
                     x: x.round() as i16,
                     y: y.round() as i16,
