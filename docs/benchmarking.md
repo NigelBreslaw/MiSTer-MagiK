@@ -19,6 +19,10 @@ Supported scenarios:
 - `particle-techniques`
 - `particle-techniques-profile`
 - `particle-technique-images`
+- `particle-demo-32` through `particle-demo-36`
+- `particle-demo-profile-32` through `particle-demo-profile-36`
+- `particle-form-scenes`
+- `particle-form-scenes-profile`
 - `catalog-lifecycle`
 - `search`
 
@@ -41,6 +45,15 @@ The fixed budgets and visual acceptance gates live in
 `docs/design/particle-techniques/acceptance.md`. A performance result is not
 accepted if either independent reviewer finds that tuning removed a defining
 visual read.
+
+## Particle Form scenes
+
+`particle-form-scenes` qualifies showcase demos 32-36 individually for 30
+seconds at their declared budgets. `particle-form-scenes-profile` samples the
+same fixed set only when qualification identifies a bottleneck. The fixed
+individual scenarios address one Form scene without exposing an arbitrary
+demo selector. Visual targets and the two-reviewer acceptance contract live in
+`docs/design/form-scenes/`.
 
 ## Fixed particle optimisation trial
 
