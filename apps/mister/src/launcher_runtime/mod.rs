@@ -1,0 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! Host-neutral launcher runtime decisions shared by the MiSTer and macOS UI.
+
+pub mod composition;

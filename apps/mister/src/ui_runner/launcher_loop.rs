@@ -4183,15 +4183,16 @@ pub(super) fn run_launcher_loop(
         let preview_frame_status = preview.raw_frame_status();
         let preview_cache_state_before_composition = preview.trace_cache_state();
         let composition_decision = composition.tick(UiCompositionInput {
-            effective_view,
+            screensaver_active: effective_view == EffectiveLauncherView::Screensaver,
+            return_screen: effective_view.return_screen(),
             confirm_visible,
             fullscreen_overlay_visible: catalog_scan_visible,
             arcade_ready: active_arcade_games_available,
             route_ok: display_session.route_ok(),
             wants_arcade_list,
             wants_preview,
-            preview_cache_state: preview_cache_state_before_composition,
-            preview_frame_status,
+            preview_cache_exact: preview_cache_state_before_composition == "exact",
+            preview_frame_ready: preview_frame_status == PreviewRawFrameStatus::Ready,
         });
         if screensaver.active {
             full_frame_present = true;
@@ -6651,15 +6652,16 @@ mod tests {
     fn full_present_during_crt_arcade_keeps_same_frame_list_repaint_ownership() {
         let mut composition = UiCompositionController::new();
         let input = UiCompositionInput {
-            effective_view: EffectiveLauncherView::Navigation(Screen::Arcade),
+            screensaver_active: false,
+            return_screen: Some(Screen::Arcade),
             confirm_visible: false,
             fullscreen_overlay_visible: false,
             arcade_ready: true,
             route_ok: true,
             wants_arcade_list: true,
             wants_preview: false,
-            preview_cache_state: "empty",
-            preview_frame_status: PreviewRawFrameStatus::Empty,
+            preview_cache_exact: false,
+            preview_frame_ready: false,
         };
         let first = composition.tick(input);
         let full_present = composition.tick(input);

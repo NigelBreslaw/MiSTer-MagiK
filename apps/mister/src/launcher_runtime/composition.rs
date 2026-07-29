@@ -1,10 +1,10 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use super::*;
+use crate::launcher::Screen;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum UiCompositionState {
+pub enum UiCompositionState {
     FullSlint,
     MixedArcade,
     Screensaver,
@@ -14,7 +14,7 @@ pub(super) enum UiCompositionState {
 }
 
 impl UiCompositionState {
-    pub(super) fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Self::FullSlint => "full-slint",
             Self::MixedArcade => "mixed-arcade",
@@ -31,11 +31,11 @@ impl UiCompositionState {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct UiCompositionStatus {
-    pub(super) state: &'static str,
-    pub(super) recovery_count: u64,
-    pub(super) last_invariant_kind: String,
-    pub(super) last_invariant_detail: String,
+pub struct UiCompositionStatus {
+    pub state: &'static str,
+    pub recovery_count: u64,
+    pub last_invariant_kind: String,
+    pub last_invariant_detail: String,
 }
 
 impl Default for UiCompositionStatus {
@@ -50,33 +50,34 @@ impl Default for UiCompositionStatus {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct UiCompositionInput {
-    pub(super) effective_view: EffectiveLauncherView,
-    pub(super) confirm_visible: bool,
-    pub(super) fullscreen_overlay_visible: bool,
-    pub(super) arcade_ready: bool,
-    pub(super) route_ok: bool,
-    pub(super) wants_arcade_list: bool,
-    pub(super) wants_preview: bool,
-    pub(super) preview_cache_state: &'static str,
-    pub(super) preview_frame_status: PreviewRawFrameStatus,
+pub struct UiCompositionInput {
+    pub screensaver_active: bool,
+    pub return_screen: Option<Screen>,
+    pub confirm_visible: bool,
+    pub fullscreen_overlay_visible: bool,
+    pub arcade_ready: bool,
+    pub route_ok: bool,
+    pub wants_arcade_list: bool,
+    pub wants_preview: bool,
+    pub preview_cache_exact: bool,
+    pub preview_frame_ready: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct UiCompositionDecision {
-    pub(super) state: UiCompositionState,
-    pub(super) allow_arcade_list_blit: bool,
-    pub(super) allow_preview_blit: bool,
-    pub(super) force_full_slint_present: bool,
-    pub(super) clear_direct_layers: bool,
-    pub(super) recovery_count: u64,
-    pub(super) last_invariant_kind: String,
-    pub(super) last_invariant_detail: String,
-    pub(super) events: Vec<UiCompositionEvent>,
+pub struct UiCompositionDecision {
+    pub state: UiCompositionState,
+    pub allow_arcade_list_blit: bool,
+    pub allow_preview_blit: bool,
+    pub force_full_slint_present: bool,
+    pub clear_direct_layers: bool,
+    pub recovery_count: u64,
+    pub last_invariant_kind: String,
+    pub last_invariant_detail: String,
+    pub events: Vec<UiCompositionEvent>,
 }
 
 impl UiCompositionDecision {
-    pub(super) fn status(&self) -> UiCompositionStatus {
+    pub fn status(&self) -> UiCompositionStatus {
         UiCompositionStatus {
             state: self.state.label(),
             recovery_count: self.recovery_count,
@@ -87,13 +88,13 @@ impl UiCompositionDecision {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct UiCompositionEvent {
-    pub(super) name: &'static str,
-    pub(super) detail: String,
+pub struct UiCompositionEvent {
+    pub name: &'static str,
+    pub detail: String,
 }
 
 #[derive(Debug)]
-pub(super) struct UiCompositionController {
+pub struct UiCompositionController {
     state: UiCompositionState,
     recovery_count: u64,
     last_invariant_kind: String,
@@ -101,7 +102,7 @@ pub(super) struct UiCompositionController {
 }
 
 impl UiCompositionController {
-    pub(super) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             state: UiCompositionState::FullSlint,
             recovery_count: 0,
@@ -110,7 +111,7 @@ impl UiCompositionController {
         }
     }
 
-    pub(super) fn tick(&mut self, input: UiCompositionInput) -> UiCompositionDecision {
+    pub fn tick(&mut self, input: UiCompositionInput) -> UiCompositionDecision {
         let requested_state = requested_state(input);
         let invariant = composition_invariant(input, requested_state);
         let previous = self.state;
@@ -164,7 +165,7 @@ impl UiCompositionController {
             state,
             allow_arcade_list_blit: state == UiCompositionState::MixedArcade,
             allow_preview_blit: state == UiCompositionState::MixedArcade
-                && preview_frame_drawable(input.preview_cache_state, input.preview_frame_status),
+                && (!input.preview_cache_exact || input.preview_frame_ready),
             force_full_slint_present,
             clear_direct_layers,
             recovery_count: self.recovery_count,
@@ -181,17 +182,17 @@ struct CompositionInvariant {
 }
 
 fn requested_state(input: UiCompositionInput) -> UiCompositionState {
-    if input.effective_view == EffectiveLauncherView::Screensaver {
+    if input.screensaver_active {
         UiCompositionState::Screensaver
     } else if input.fullscreen_overlay_visible {
         UiCompositionState::ModalFullSlint
     } else if input.confirm_visible {
-        if input.effective_view.return_screen() == Some(Screen::Arcade) && input.arcade_ready {
+        if input.return_screen == Some(Screen::Arcade) && input.arcade_ready {
             UiCompositionState::ModalOverArcade
         } else {
             UiCompositionState::ModalFullSlint
         }
-    } else if input.effective_view.return_screen() == Some(Screen::Arcade) && input.arcade_ready {
+    } else if input.return_screen == Some(Screen::Arcade) && input.arcade_ready {
         UiCompositionState::MixedArcade
     } else {
         UiCompositionState::FullSlint
@@ -209,7 +210,7 @@ fn composition_invariant(
         });
     }
 
-    let direct_requested = input.effective_view != EffectiveLauncherView::Screensaver
+    let direct_requested = !input.screensaver_active
         && !input.fullscreen_overlay_visible
         && (input.wants_arcade_list || input.wants_preview);
     if direct_requested && !requested_state.allows_direct_layers() {
@@ -227,28 +228,22 @@ fn composition_invariant(
     None
 }
 
-fn preview_frame_drawable(
-    preview_cache_state: &'static str,
-    preview_frame_status: PreviewRawFrameStatus,
-) -> bool {
-    preview_cache_state != "exact" || preview_frame_status == PreviewRawFrameStatus::Ready
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn input(screen: Screen) -> UiCompositionInput {
         UiCompositionInput {
-            effective_view: EffectiveLauncherView::Navigation(screen),
+            screensaver_active: false,
+            return_screen: Some(screen),
             confirm_visible: false,
             fullscreen_overlay_visible: false,
             arcade_ready: screen == Screen::Arcade,
             route_ok: true,
             wants_arcade_list: false,
             wants_preview: false,
-            preview_cache_state: "empty",
-            preview_frame_status: PreviewRawFrameStatus::Empty,
+            preview_cache_exact: false,
+            preview_frame_ready: false,
         }
     }
 
@@ -258,8 +253,8 @@ mod tests {
         let decision = controller.tick(UiCompositionInput {
             wants_arcade_list: true,
             wants_preview: true,
-            preview_cache_state: "exact",
-            preview_frame_status: PreviewRawFrameStatus::Ready,
+            preview_cache_exact: true,
+            preview_frame_ready: true,
             ..input(Screen::Arcade)
         });
 
@@ -296,13 +291,14 @@ mod tests {
         let _ = controller.tick(UiCompositionInput {
             wants_arcade_list: true,
             wants_preview: true,
-            preview_cache_state: "exact",
-            preview_frame_status: PreviewRawFrameStatus::Ready,
+            preview_cache_exact: true,
+            preview_frame_ready: true,
             ..input(Screen::Arcade)
         });
 
         let decision = controller.tick(UiCompositionInput {
-            effective_view: EffectiveLauncherView::Screensaver,
+            screensaver_active: true,
+            return_screen: None,
             wants_arcade_list: true,
             wants_preview: true,
             ..input(Screen::Arcade)
@@ -315,7 +311,8 @@ mod tests {
         assert!(decision.clear_direct_layers);
 
         let steady = controller.tick(UiCompositionInput {
-            effective_view: EffectiveLauncherView::Screensaver,
+            screensaver_active: true,
+            return_screen: None,
             wants_arcade_list: true,
             wants_preview: true,
             ..input(Screen::Arcade)
@@ -332,7 +329,8 @@ mod tests {
         let mut controller = UiCompositionController::new();
 
         let decision = controller.tick(UiCompositionInput {
-            effective_view: EffectiveLauncherView::Screensaver,
+            screensaver_active: true,
+            return_screen: None,
             ..input(Screen::Home)
         });
 
@@ -392,8 +390,8 @@ mod tests {
         let mut controller = UiCompositionController::new();
         let _ = controller.tick(UiCompositionInput {
             wants_arcade_list: true,
-            preview_cache_state: "exact",
-            preview_frame_status: PreviewRawFrameStatus::Ready,
+            preview_cache_exact: true,
+            preview_frame_ready: true,
             ..input(Screen::Arcade)
         });
 
@@ -401,8 +399,8 @@ mod tests {
             fullscreen_overlay_visible: true,
             wants_arcade_list: true,
             wants_preview: true,
-            preview_cache_state: "exact",
-            preview_frame_status: PreviewRawFrameStatus::Ready,
+            preview_cache_exact: true,
+            preview_frame_ready: true,
             ..input(Screen::Arcade)
         });
 
@@ -418,8 +416,8 @@ mod tests {
             fullscreen_overlay_visible: true,
             wants_arcade_list: true,
             wants_preview: true,
-            preview_cache_state: "exact",
-            preview_frame_status: PreviewRawFrameStatus::Ready,
+            preview_cache_exact: true,
+            preview_frame_ready: true,
             ..input(Screen::Arcade)
         });
 
@@ -438,8 +436,8 @@ mod tests {
         let decision = controller.tick(UiCompositionInput {
             confirm_visible: true,
             wants_arcade_list: true,
-            preview_cache_state: "exact",
-            preview_frame_status: PreviewRawFrameStatus::Ready,
+            preview_cache_exact: true,
+            preview_frame_ready: true,
             ..input(Screen::Arcade)
         });
 
@@ -457,8 +455,8 @@ mod tests {
         let decision = controller.tick(UiCompositionInput {
             wants_arcade_list: true,
             wants_preview: true,
-            preview_cache_state: "exact",
-            preview_frame_status: PreviewRawFrameStatus::Empty,
+            preview_cache_exact: true,
+            preview_frame_ready: false,
             ..input(Screen::Arcade)
         });
 

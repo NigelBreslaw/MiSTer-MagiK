@@ -34,6 +34,8 @@ pub mod launch_preparation;
 pub mod launcher;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 pub mod launcher_presentation;
+#[cfg(any(feature = "ui", feature = "ui-preview"))]
+pub mod launcher_runtime;
 pub mod launcher_taxonomy;
 pub mod licenses;
 pub mod media_update;

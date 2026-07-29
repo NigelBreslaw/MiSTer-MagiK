@@ -67,6 +67,7 @@ use mister_magik_fb::framebuffer::{
     scanout_slots::{HiddenRgb565BufferIndex, ScanoutSlotsRgb565Framebuffer},
 };
 use mister_magik_fb::launcher_presentation::LauncherBridgePresenter;
+use mister_magik_fb::launcher_runtime::composition::*;
 use slint_ui::launcher::PreviewStatus;
 use std::path::PathBuf;
 use std::sync::{OnceLock, mpsc};
@@ -83,7 +84,6 @@ mod launcher_bench;
 mod launcher_bridge;
 mod launcher_catalog_publication_test;
 mod launcher_catalog_session;
-mod launcher_composition;
 mod launcher_compositor;
 pub(crate) mod launcher_display_session;
 mod launcher_frame_accounting;
@@ -122,7 +122,6 @@ use launcher_bench::*;
 use launcher_bridge::*;
 use launcher_catalog_publication_test::*;
 use launcher_catalog_session::*;
-use launcher_composition::*;
 use launcher_compositor::*;
 use launcher_display_session::*;
 use launcher_frame_accounting::*;
