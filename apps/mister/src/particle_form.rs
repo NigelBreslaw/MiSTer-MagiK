@@ -285,7 +285,7 @@ impl FormSceneRenderer {
                             unit_signed(state) * half_x,
                             center_y - half_y,
                             unit_signed(state.rotate_left(11)) * half_z,
-                            5,
+                            4 + ((logical >> 4) & 1) as u8,
                         ),
                         1 => (
                             unit_signed(state) * half_x,
@@ -327,7 +327,7 @@ impl FormSceneRenderer {
                         angle.cos() * radius,
                         45.0 - height * 165.0,
                         angle.sin() * radius,
-                        6,
+                        5,
                     )
                 }
                 2 => {
@@ -336,11 +336,12 @@ impl FormSceneRenderer {
                     let sphere_y = 1.0 - 2.0 * t;
                     let radial = (1.0 - sphere_y * sphere_y).sqrt();
                     let angle = logical as f32 * PI * (3.0 - 5.0_f32.sqrt());
+                    let latitude_style = if sphere_y.abs() < 0.32 { 7 } else { 5 };
                     (
                         angle.cos() * radial * 54.0,
                         -169.0 + sphere_y * 54.0,
                         angle.sin() * radial * 54.0,
-                        7,
+                        latitude_style,
                     )
                 }
                 3 => {
@@ -493,17 +494,26 @@ impl FormSceneRenderer {
         } else {
             1.0 - smootherstep((seconds - 24.0) / 6.0) * 0.65
         };
-        let angle = seconds * 0.17;
+        let angle = -0.55 + seconds * 0.055;
         let (sin, cos) = angle.sin_cos();
+        let (pitch_sin, pitch_cos) = (-0.24_f32).sin_cos();
+        let scan_position = (seconds * 0.18).fract();
         for index in (0..count).step_by(4) {
             if self.aux_y[index] > reveal {
                 continue;
             }
             let terrace = (self.aux_y[index] * 12.0).floor() * 1.8;
             let x = self.rest_x[index].mul_add(cos, self.rest_z[index] * sin);
-            let z = (-self.rest_x[index]).mul_add(sin, self.rest_z[index] * cos);
-            let y = self.rest_y[index] + terrace - 18.0;
-            self.push_world(x, y, z, 620.0, width, height, index);
+            let yaw_z = (-self.rest_x[index]).mul_add(sin, self.rest_z[index] * cos);
+            let local_y = self.rest_y[index] + terrace - 18.0;
+            let y = local_y.mul_add(pitch_cos, -yaw_z * pitch_sin);
+            let z = local_y.mul_add(pitch_sin, yaw_z * pitch_cos);
+            let original_style = self.style[index];
+            if (self.aux_y[index] - scan_position).abs() < 0.028 {
+                self.style[index] = 7;
+            }
+            self.push_world(x, y, z, 650.0, width, height, index);
+            self.style[index] = original_style;
         }
     }
 
