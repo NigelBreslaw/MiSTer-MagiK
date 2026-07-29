@@ -288,6 +288,8 @@ mod macos {
         next_frame_deadline: Instant,
         focused: bool,
         display_profile: DisplayProfile,
+        card_connected: bool,
+        next_card_check_at: Instant,
     }
 
     impl PreviewApplication {
@@ -339,6 +341,9 @@ mod macos {
                 None
             };
             let preview_worker = content.card().map(|_| PreviewWorker::new());
+            let card_connected = content
+                .card()
+                .is_none_or(|layout| layout.card_root.is_dir());
             launcher
                 .global::<MisterBridge>()
                 .set_build_label(format!("Mac visual preview · {}", content.label()).into());
@@ -399,6 +404,8 @@ mod macos {
                 next_frame_deadline,
                 focused: true,
                 display_profile,
+                card_connected,
+                next_card_check_at: now + Duration::from_secs(1),
             };
             application.select_scenario(scenario);
             if headless {
@@ -736,6 +743,7 @@ mod macos {
             self.poll_catalog_worker();
             self.poll_preview_worker();
             self.poll_media_worker();
+            self.poll_card_connection();
             let frame_delta = self.frame_delta();
             self.tick_launcher_navigation();
             slint::platform::update_timers_and_animations();
@@ -1065,6 +1073,43 @@ mod macos {
             self.catalog = seed.catalog;
             self.launcher_nav.sync_launcher_taxonomy(&self.catalog);
             self.sync_launcher_navigation();
+        }
+
+        fn poll_card_connection(&mut self) {
+            let now = Instant::now();
+            if now < self.next_card_check_at {
+                return;
+            }
+            self.next_card_check_at = now + Duration::from_secs(1);
+            let connected = self
+                .content
+                .card()
+                .is_none_or(|layout| layout.card_root.is_dir());
+            if connected == self.card_connected {
+                return;
+            }
+            self.card_connected = connected;
+            let bridge = self.launcher.global::<MisterBridge>();
+            if connected {
+                bridge.set_compatibility_visible(false);
+                self.catalog_source = "catalog:card-reconnected".to_owned();
+            } else {
+                bridge.set_compatibility_visible(true);
+                bridge.set_compatibility_reason("MiSTer card disconnected".into());
+                bridge.set_compatibility_detail(
+                    "The last Mac-cached catalog remains available; reconnect the card to scan or load media."
+                        .into(),
+                );
+                self.catalog_source = "catalog:card-disconnected".to_owned();
+                self.catalog_worker = None;
+                if let Some(worker) = self.media_worker.as_ref() {
+                    worker.finish();
+                }
+                self.download_media = false;
+            }
+            if let Some(window) = self.native_window.as_ref() {
+                window.set_title(&self.window_title());
+            }
         }
 
         fn poll_catalog_worker(&mut self) {
