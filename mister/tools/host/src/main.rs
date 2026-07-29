@@ -9555,7 +9555,7 @@ fn request_framebuffer_png_at_when_latched(
         match request_framebuffer_png_at(agent) {
             Ok(capture) => return Ok(capture),
             Err(error)
-                if is_inactive_latch_capture_error(&error.to_string())
+                if is_transient_authoritative_capture_error(&error.to_string())
                     && started.elapsed() < timeout =>
             {
                 thread::sleep(Duration::from_millis(16));
@@ -9565,8 +9565,9 @@ fn request_framebuffer_png_at_when_latched(
     }
 }
 
-fn is_inactive_latch_capture_error(error: &str) -> bool {
+fn is_transient_authoritative_capture_error(error: &str) -> bool {
     error.contains("latched framebuffer status is not active")
+        || error.contains("no scanout slot matches active base")
 }
 
 fn validate_png(png: &[u8]) -> Result<()> {
@@ -14996,14 +14997,17 @@ H: Handlers=event3 js0"#
     }
 
     #[test]
-    fn inactive_latch_capture_errors_are_the_only_retryable_capture_failures() {
-        assert!(is_inactive_latch_capture_error(
+    fn transitional_scanout_capture_errors_are_the_only_retryable_capture_failures() {
+        assert!(is_transient_authoritative_capture_error(
             "device_operation_failed: authoritative scanout capture failed: latched framebuffer status is not active"
         ));
-        assert!(!is_inactive_latch_capture_error(
+        assert!(is_transient_authoritative_capture_error(
+            "authoritative scanout capture failed: no scanout slot matches active base 0x22001000"
+        ));
+        assert!(!is_transient_authoritative_capture_error(
             "authoritative scanout capture failed: active base is not a hidden slot"
         ));
-        assert!(!is_inactive_latch_capture_error(
+        assert!(!is_transient_authoritative_capture_error(
             "agent framebuffer capture returned invalid PNG data"
         ));
     }
