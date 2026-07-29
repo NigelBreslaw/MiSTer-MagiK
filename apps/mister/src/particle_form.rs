@@ -275,7 +275,11 @@ impl FormSceneRenderer {
             let b = unit01(state.rotate_left(13));
             let (x, y, z, style) = match part {
                 0 => {
-                    let face = logical % 6;
+                    // Spend most of the base budget on the control panel. The
+                    // concept is a high three-quarter view, so an even six-face
+                    // distribution starves its defining surface of samples.
+                    let face_slot = logical % 11;
+                    let face = if face_slot < 6 { 0 } else { face_slot - 5 };
                     let half_x = 205.0;
                     let half_y = 48.0;
                     let half_z = 120.0;
@@ -345,27 +349,36 @@ impl FormSceneRenderer {
                     )
                 }
                 3 => {
-                    let major_angle = a * TAU;
-                    let minor_angle = b * TAU;
-                    let radius = 54.0 + minor_angle.cos() * 11.0;
+                    // Four independently sampled annular terraces read much
+                    // closer to the layered holographic collar than a single
+                    // inflated torus.
+                    let ring = logical & 3;
+                    let ring_sample = logical >> 2;
+                    let samples_per_ring = (COLLAR_END - BALL_END) / 16;
+                    let major_angle = ring_sample as f32 * TAU / samples_per_ring as f32;
+                    let radius =
+                        49.0 + ring as f32 * 17.0 + unit_signed(state.rotate_left(7)) * 4.0;
                     (
                         major_angle.cos() * radius,
-                        43.0 + minor_angle.sin() * 11.0,
+                        41.0 + ring as f32 * 3.0 + unit_signed(state.rotate_left(19)) * 1.5,
                         major_angle.sin() * radius,
                         5,
                     )
                 }
                 _ => {
-                    let button = logical & 1;
-                    let radius = a.sqrt() * 31.0;
+                    let button = logical % 3;
+                    let radius = a.sqrt() * 28.0;
                     let angle = b * TAU;
-                    let center_x = if button == 0 { -108.0 } else { 108.0 };
-                    let center_z = if button == 0 { -27.0 } else { 22.0 };
+                    let (center_x, center_z) = match button {
+                        0 => (-122.0, -45.0),
+                        1 => (118.0, -48.0),
+                        _ => (112.0, 54.0),
+                    };
                     (
                         center_x + angle.cos() * radius,
                         39.0 - unit01(state.rotate_left(23)) * 8.0,
                         center_z + angle.sin() * radius,
-                        if button == 0 { 6 } else { 7 },
+                        6,
                     )
                 }
             };
@@ -496,7 +509,10 @@ impl FormSceneRenderer {
         };
         let angle = -0.55 + seconds * 0.055;
         let (sin, cos) = angle.sin_cos();
-        let (pitch_sin, pitch_cos) = (-0.24_f32).sin_cos();
+        // Match the concept's high three-quarter presentation. Besides making
+        // the silhouette legible, this exposes the top-plane material map and
+        // separates the concentric collar terraces in screen space.
+        let (pitch_sin, pitch_cos) = (-0.55_f32).sin_cos();
         let scan_position = (seconds * 0.18).fract();
         for index in (0..count).step_by(4) {
             if self.aux_y[index] > reveal {
