@@ -263,7 +263,7 @@ module tb_mister_magik_sys_top_integration;
 		expect16(dut.LFB_BASE[15:0], 16'h9000, "sys_top accepted base low");
 		expect16(dut.LFB_BASE[31:16], 16'h227e, "sys_top accepted base high");
 		expect16({4'd0, dut.LFB_HEIGHT}, 16'd540, "sys_top accepted height");
-		expect16(dut.magik_lfb_active_seq, 16'h002a, "sys_top accepted sequence");
+		expect16(dut.magik_lfb_active_seq, 16'h002b, "sys_top accepted sequence");
 		@(negedge test_clk);
 		test_vblank = 1'b0;
 		repeat(4) @(posedge test_clk);
@@ -274,7 +274,7 @@ module tb_mister_magik_sys_top_integration;
 		for(index = 0; index < 12; index = index + 1)
 			transfer_word(golden_set_word(index[3:0]), response);
 		end_command();
-		if(!dut.magik_lfb_pending) fail("replacement route is not pending");
+		if(!dut.magik_lfb_pending) fail("new route is not pending");
 
 		begin_command(8'h2f, 16'd1);
 		@(negedge test_clk);
@@ -285,7 +285,7 @@ module tb_mister_magik_sys_top_integration;
 		@(posedge test_clk);
 		#1;
 		test_io_strobe = 1'b0;
-		if(!dut.magik_lfb_pending) fail("legacy collision consumed pending route");
+		if(dut.magik_lfb_pending) fail("legacy collision did not cancel pending route");
 		expect16(dut.magik_lfb_active_seq, 16'd0,
 		         "legacy collision clears active sequence");
 		transfer_word(16'h4444, response);
