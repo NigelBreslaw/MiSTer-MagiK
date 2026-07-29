@@ -375,6 +375,11 @@ impl FormSceneRenderer {
         let angle = -0.22 + seconds * 0.012;
         let (sin, cos) = angle.sin_cos();
         for index in 0..count {
+            let grid_x = index & 255;
+            let grid_y = index >> 8;
+            if grid_x & 1 != 0 || grid_y & 1 != 0 {
+                continue;
+            }
             let x = self.rest_x[index] + self.target_x[index] * crest;
             let y = self.rest_y[index] + self.target_y[index] * crest;
             let z = self.rest_z[index];
@@ -390,7 +395,7 @@ impl FormSceneRenderer {
         let reveal = smooth_envelope(seconds, 0.0, 5.0, 29.0);
         let angle = seconds * 0.17;
         let (sin, cos) = angle.sin_cos();
-        for index in 0..count {
+        for index in (0..count).step_by(2) {
             let scan = (seconds * 0.25 + self.aux_y[index]).fract();
             if scan > reveal || (index & 3 == 0 && scan > 0.82) {
                 continue;
@@ -408,7 +413,7 @@ impl FormSceneRenderer {
         let orbit = seconds * 0.23;
         let (sin, cos) = orbit.sin_cos();
         let void = 32.0 + smooth_envelope(seconds, 2.0, 14.0, 27.0) * 48.0;
-        for index in 0..count {
+        for index in (0..count).step_by(2) {
             let phase_sin = self.aux_x[index].mul_add(cos, self.aux_y[index] * sin);
             let phase_cos = self.aux_y[index].mul_add(cos, -self.aux_x[index] * sin);
             let radial = 1.0 + phase_sin * 0.12;
@@ -417,8 +422,9 @@ impl FormSceneRenderer {
             let z = self.rest_z[index] * radial + phase_sin * 28.0;
             self.push_world(x, y, z, 610.0, width, height, index);
         }
-        for index in (0..count).step_by(512) {
-            self.push_segment_from_points(index, (index + 7) % count);
+        let visible = self.points.len();
+        for index in (0..visible).step_by(256) {
+            self.push_segment_from_points(index, (index + 7) % visible);
         }
     }
 
@@ -427,6 +433,9 @@ impl FormSceneRenderer {
         let twist = 0.18 + seconds * 0.035;
         let pulse = 1.0 + (seconds * 1.3).sin() * 0.045;
         for index in 0..count {
+            if (index / 4) & 3 != 0 {
+                continue;
+            }
             let local_angle = twist * (self.rest_y[index] / 220.0);
             let (sin, cos) = local_angle.sin_cos();
             let x = self.rest_x[index].mul_add(cos, self.rest_z[index] * sin) * pulse;
@@ -434,7 +443,8 @@ impl FormSceneRenderer {
             let y = self.rest_y[index] * pulse;
             self.push_world(x, y, z, 660.0, width, height, index);
         }
-        for index in (0..count.saturating_sub(16)).step_by(16) {
+        let visible = self.points.len();
+        for index in (0..visible.saturating_sub(16)).step_by(16) {
             self.push_segment_from_points(index, index + 16);
         }
     }
@@ -455,7 +465,7 @@ impl FormSceneRenderer {
         let breakup = (morph * PI).sin() * 52.0;
         let angle = -0.28 + seconds * 0.025;
         let (sin, cos) = angle.sin_cos();
-        for index in 0..count {
+        for index in (0..count).step_by(2) {
             let wobble = self.aux_x[index] * breakup;
             let x = lerp(self.rest_x[index], self.target_x[index], morph) + wobble;
             let y = lerp(self.rest_y[index], self.target_y[index], morph)
@@ -467,8 +477,9 @@ impl FormSceneRenderer {
             self.push_world(rx, y, rz, 640.0, width, height, index);
         }
         if (0.05..0.95).contains(&morph) {
-            for index in (0..count).step_by(256) {
-                self.push_segment_from_points(index, (index + 1024) % count);
+            let visible = self.points.len();
+            for index in (0..visible).step_by(128) {
+                self.push_segment_from_points(index, (index + 512) % visible);
             }
         }
     }
