@@ -335,11 +335,21 @@ fn optional_integer(value: &str, field: &str) -> Result<Option<i64>> {
 }
 
 fn normalize_key(value: &str) -> String {
-    value
-        .chars()
-        .filter(|character| character.is_ascii_alphanumeric())
-        .flat_map(char::to_lowercase)
-        .collect()
+    let mut normalized = String::new();
+    let mut last_dash = false;
+    for character in value.trim().chars().flat_map(char::to_lowercase) {
+        if character.is_ascii_alphanumeric() {
+            normalized.push(character);
+            last_dash = false;
+        } else if !last_dash && !normalized.is_empty() {
+            normalized.push('-');
+            last_dash = true;
+        }
+    }
+    while normalized.ends_with('-') {
+        normalized.pop();
+    }
+    normalized
 }
 
 fn digest_bytes(bytes: &[u8]) -> String {
@@ -447,5 +457,12 @@ mod tests {
         assert_eq!(value, "kept");
         let _ = fs::remove_file(path);
         let _ = fs::remove_file(csv_path);
+    }
+
+    #[test]
+    fn setname_keys_match_catalog_normalization() {
+        assert_eq!(normalize_key(" SF2_CE / Turbo "), "sf2-ce-turbo");
+        assert_eq!(normalize_key("1942GXC64"), "1942gxc64");
+        assert_eq!(normalize_key(""), "");
     }
 }

@@ -202,6 +202,9 @@ pub fn verify(
     }
     verify_file_entries(&payload, &files)?;
     verify_checksums(&files)?;
+    if payload["format"] == FORMAT {
+        verify_arcade_database_source_files(&payload, &files)?;
+    }
     with_extracted_databases(&files, |mame, hbmame| {
         validate_database(
             mame,
@@ -530,15 +533,31 @@ fn verify_checksums(files: &BTreeMap<String, Vec<u8>>) -> AgentResult<()> {
 fn validate_arcade_database(path: &Path, source_sha: &str, csv_sha256: &str) -> AgentResult<()> {
     let database = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|error| format!("invalid SQLite database {}: {error}", path.display()))?;
-    let source: (String, String, i64, i64) = database
+    let source: (i64, String, String, String, String, i64, i64) = database
         .query_row(
-            "SELECT source_sha,csv_sha256,row_count,category_count
+            "SELECT schema_version,repository,source_path,source_sha,csv_sha256,
+                    row_count,category_count
              FROM mister_arcade_source WHERE id=1",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            },
         )
         .map_err(|error| format!("invalid ArcadeDatabase source metadata: {error}"))?;
-    if source.0 != source_sha || source.1 != csv_sha256 {
+    if source.0 != 1
+        || source.1 != "MiSTer-devel/ArcadeDatabase_MiSTer"
+        || source.2 != ARCADE_DATABASE_CSV
+        || source.3 != source_sha
+        || source.4 != csv_sha256
+    {
         return classified("database_source_version", "ArcadeDatabase source mismatch");
     }
     let rows: i64 = database
@@ -546,11 +565,40 @@ fn validate_arcade_database(path: &Path, source_sha: &str, csv_sha256: &str) -> 
             row.get(0)
         })
         .map_err(|error| error.to_string())?;
-    if rows != source.2 || rows < 2_800 || source.3 < 100 {
+    if rows != source.5 || rows < 2_800 || source.6 < 100 {
         return classified(
             "database_row_count",
-            format!("ArcadeDatabase has rows={rows} categories={}", source.3),
+            format!("ArcadeDatabase has rows={rows} categories={}", source.6),
         );
+    }
+    Ok(())
+}
+
+fn verify_arcade_database_source_files(
+    payload: &Value,
+    files: &BTreeMap<String, Vec<u8>>,
+) -> AgentResult<()> {
+    for (name, pointer) in [
+        (ARCADE_DATABASE_CSV, "/sources/arcade_database/csv_sha256"),
+        (
+            ARCADE_DATABASE_LICENSE,
+            "/sources/arcade_database/license_sha256",
+        ),
+    ] {
+        let expected = payload
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let actual = files
+            .get(name)
+            .map(|bytes| digest_bytes(bytes))
+            .unwrap_or_default();
+        if actual != expected {
+            return classified(
+                "database_source_checksum",
+                format!("{name} does not match {pointer}"),
+            );
+        }
     }
     Ok(())
 }
@@ -684,6 +732,29 @@ mod tests {
         assert_eq!(result["hbmame_changed"], false);
         assert_eq!(result["arcade_database_changed"], true);
         assert_eq!(result["update_needed"], true);
+    }
+
+    #[test]
+    fn arcade_source_hashes_must_match_bundled_files() {
+        let csv = b"setname,name\n1942,1942\n".to_vec();
+        let license = b"GPL-3.0-or-later\n".to_vec();
+        let payload = json!({
+            "sources": {
+                "arcade_database": {
+                    "csv_sha256": digest_bytes(&csv),
+                    "license_sha256": digest_bytes(&license)
+                }
+            }
+        });
+        let files = BTreeMap::from([
+            (ARCADE_DATABASE_CSV.to_string(), csv),
+            (ARCADE_DATABASE_LICENSE.to_string(), license),
+        ]);
+
+        assert!(verify_arcade_database_source_files(&payload, &files).is_ok());
+        let mut mismatched = payload;
+        mismatched["sources"]["arcade_database"]["license_sha256"] = Value::String("0".repeat(64));
+        assert!(verify_arcade_database_source_files(&mismatched, &files).is_err());
     }
 
     #[test]

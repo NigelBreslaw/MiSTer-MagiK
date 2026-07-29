@@ -1137,6 +1137,42 @@ mod tests {
     use crate::test_support::*;
 
     #[test]
+    fn mister_arcade_matching_prefers_mra_filename_then_setname() {
+        let filename_match = MisterArcadeMetadata {
+            title: "Filename Match".to_string(),
+            category: "Shooter".to_string(),
+            ..MisterArcadeMetadata::default()
+        };
+        let setname_match = MisterArcadeMetadata {
+            title: "Setname Match".to_string(),
+            category: "Maze".to_string(),
+            ..MisterArcadeMetadata::default()
+        };
+        let metadata = ArcadeMachineMetadata {
+            mister_by_mra_name: HashMap::from([(
+                "special edition.mra".to_string(),
+                filename_match.clone(),
+            )]),
+            mister_by_setname: HashMap::from([("sf2-ce-turbo".to_string(), setname_match.clone())]),
+            ..ArcadeMachineMetadata::default()
+        };
+        let mut discovery = mra_discovery(1, "Special Edition");
+        discovery.setname = Some("SF2_CE / Turbo".to_string());
+
+        assert_eq!(
+            mister_arcade_metadata_for_discovery(&metadata, &discovery, "sf2-ce-turbo")
+                .map(|entry| entry.title.as_str()),
+            Some("Filename Match")
+        );
+        discovery.source_path = "/media/fat/_Arcade/Other Name.mra".to_string();
+        assert_eq!(
+            mister_arcade_metadata_for_discovery(&metadata, &discovery, "sf2-ce-turbo")
+                .map(|entry| entry.title.as_str()),
+            Some("Setname Match")
+        );
+    }
+
+    #[test]
     fn mame_machine_metadata_filter_loads_only_needed_setnames() {
         let root = unique_temp_dir("mame-machine-filter");
         std::fs::create_dir_all(&root).expect("create temp root");

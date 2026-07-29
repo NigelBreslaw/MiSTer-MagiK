@@ -50,7 +50,8 @@ INSERT INTO mame_machines SELECT 'machine'||i,'','Machine '||i,1+(i%4),'joy','0.
 CREATE TABLE mame_software_items(list_name TEXT NOT NULL,item_name TEXT NOT NULL);
 INSERT INTO mame_software_items VALUES('lynx','one'),('megadriv','one'),('n64','one'),('nes','one'),('saturn','one'),('sms','one'),('snes','one');
 CREATE TABLE mister_arcade_source(
-  id INTEGER PRIMARY KEY CHECK(id=1), source_sha TEXT NOT NULL,
+  id INTEGER PRIMARY KEY CHECK(id=1), schema_version INTEGER NOT NULL,
+  repository TEXT NOT NULL, source_path TEXT NOT NULL, source_sha TEXT NOT NULL,
   csv_sha256 TEXT NOT NULL, row_count INTEGER NOT NULL,
   category_count INTEGER NOT NULL
 );
@@ -95,8 +96,16 @@ database.executemany(
     [(ordinal, json.dumps(row)) for ordinal, row in enumerate(rows)],
 )
 database.execute(
-    "INSERT INTO mister_arcade_source VALUES(1,?,?,?,?)",
-    ("3" * 40, digest, len(rows), 100),
+    "INSERT INTO mister_arcade_source VALUES(1,?,?,?,?,?,?,?)",
+    (
+        1,
+        "MiSTer-devel/ArcadeDatabase_MiSTer",
+        "ArcadeDatabase.csv",
+        "3" * 40,
+        digest,
+        len(rows),
+        100,
+    ),
 )
 database.commit()
 PY

@@ -497,7 +497,7 @@ display without valid scan-out.
 ## Catalog And Preview Model
 
 Catalog V3 is the sole authoritative production catalog. Its schema-one
-manifest registry names immutable schema-two SQLite/schema-one mini-nav pairs
+manifest registry names immutable schema-four SQLite/schema-two mini-nav pairs
 for each playable system. A small checksummed Arcade bootstrap mini-nav may be
 retained beside Catalog V3 as a disposable startup accelerator; it is never a
 complete catalog or publication authority.

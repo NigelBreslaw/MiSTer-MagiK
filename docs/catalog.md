@@ -431,12 +431,12 @@ skip-build, or fixture flags.
 
 Implementation and local validation do not publish or deploy an alpha. After a
 separately authorized alpha publication, qualify the existing alpha-channel
-device while preserving its schema-two, `rich-game-v1` catalog:
+device while preserving its schema-three, `rich-game-v2` catalog:
 
 1. Install the published alpha through the normal downloader path and confirm
    that the format-upgrade dialog appears before rebuilding.
 2. Choose Continue and launch a resident Arcade game.
-3. Return to the launcher, choose the atomic rebuild, and verify schema-three,
+3. Return to the launcher, choose the atomic rebuild, and verify schema-four,
    `rich-game-v2` artifacts and a newly published durable generation.
 4. Reboot and verify that the rebuilt catalog remains authoritative and games
    still launch.
