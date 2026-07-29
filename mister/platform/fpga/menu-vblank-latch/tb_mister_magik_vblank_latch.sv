@@ -47,7 +47,7 @@ module tb_mister_magik_vblank_latch;
 	wire [15:0] active_route_epoch;
 
 	reg [31:0] requirement_coverage = 32'd0;
-	reg [15:0] status_check_words [0:13];
+	reg [15:0] status_check_words [0:15];
 	integer accepted_apply_count = 0;
 
 	mister_magik_vblank_latch dut (
@@ -352,7 +352,7 @@ module tb_mister_magik_vblank_latch;
 		reg [15:0] status_word;
 		begin
 			start_command(MAGIK_UIO_GET_FBUF_LATCH, MAGIK_FBUF_STATUS_MAGIC);
-			for(status_index = 0; status_index < 14; status_index = status_index + 1) begin
+			for(status_index = 0; status_index < 16; status_index = status_index + 1) begin
 				read_word(
 					MAGIK_UIO_GET_FBUF_LATCH,
 					status_index[3:0],
@@ -360,10 +360,10 @@ module tb_mister_magik_vblank_latch;
 				);
 				status_check_words[status_index] = status_word;
 			end
-			expected_crc = crc_header(MAGIK_UIO_GET_FBUF_LATCH, 16'd13);
-			for(status_index = 0; status_index < 13; status_index = status_index + 1)
+			expected_crc = crc_header(MAGIK_UIO_GET_FBUF_LATCH, 16'd15);
+			for(status_index = 0; status_index < 15; status_index = status_index + 1)
 				expected_crc = crc_word(expected_crc, status_check_words[status_index]);
-			expect16(status_check_words[13], expected_crc, "randomized status CRC");
+			expect16(status_check_words[15], expected_crc, "randomized status CRC");
 		end
 	endtask
 
@@ -377,7 +377,7 @@ module tb_mister_magik_vblank_latch;
 		reg [15:0] drop_before;
 		reg [15:0] flip_before;
 		reg [15:0] epoch_before;
-		reg [15:0] snapshot [0:13];
+		reg [15:0] snapshot [0:15];
 		reg [15:0] random_state;
 		reg model_pending;
 		reg [15:0] model_pending_seq;
@@ -445,7 +445,7 @@ module tb_mister_magik_vblank_latch;
 
 		send_golden_route();
 		expect_true(pending, "valid CRC must commit pending route");
-		expect16(pending_seq, 16'h002a, "golden pending sequence");
+		expect16(pending_seq, 16'h002b, "golden pending sequence");
 		expect16(post_count, 16'd1, "first valid post");
 		if(!route_en || route_flt || (route_fmt != 6'h14) ||
 		   (route_base != 32'h227e9000) || (route_width != 12'd960) ||
@@ -454,7 +454,7 @@ module tb_mister_magik_vblank_latch;
 		requirement_coverage[1] = 1'b1;
 
 		pulse_vblank();
-		expect16(active_seq, 16'h002a, "accepted apply sequence");
+		expect16(active_seq, 16'h002b, "accepted apply sequence");
 		expect16(flip_count, 16'd1, "accepted apply flip count");
 		expect16(active_route_epoch, 16'd1, "accepted apply epoch");
 		expect_true(!pending, "accepted apply clears pending");
@@ -462,20 +462,22 @@ module tb_mister_magik_vblank_latch;
 		requirement_coverage[2] = 1'b1;
 
 		start_command(MAGIK_UIO_GET_FBUF_LATCH, MAGIK_FBUF_STATUS_MAGIC);
-		for(index = 0; index < 14; index = index + 1)
+		for(index = 0; index < 16; index = index + 1)
 			read_word(MAGIK_UIO_GET_FBUF_LATCH, index[3:0], snapshot[index]);
-		crc = crc_header(MAGIK_UIO_GET_FBUF_LATCH, 16'd13);
-		for(index = 0; index < 13; index = index + 1)
+		crc = crc_header(MAGIK_UIO_GET_FBUF_LATCH, 16'd15);
+		for(index = 0; index < 15; index = index + 1)
 			crc = crc_word(crc, snapshot[index]);
-		expect16(snapshot[13], crc, "status snapshot CRC");
-		expect16(snapshot[0], 16'h002a, "status active sequence");
+		expect16(snapshot[15], crc, "status snapshot CRC");
+		expect16(snapshot[0], 16'h002b, "status active sequence");
 		expect16(snapshot[2], 16'h0009, "status ownership flags");
-		expect16(snapshot[6], 16'h9000, "status active base low");
-		expect16(snapshot[7], 16'h227e, "status active base high");
-		expect16(snapshot[8], 16'd960, "status active width");
-		expect16(snapshot[9], 16'd540, "status active height");
-		expect16(snapshot[10], 16'd1920, "status active stride");
-		expect16(snapshot[12], 16'd1, "status active epoch");
+		expect16(snapshot[5], 16'h9000, "status active base low");
+		expect16(snapshot[6], 16'h227e, "status active base high");
+		expect16(snapshot[7], 16'd960, "status active width");
+		expect16(snapshot[8], 16'd540, "status active height");
+		expect16(snapshot[9], 16'd1920, "status active stride");
+		expect16(snapshot[11], 16'd1, "status active epoch");
+		expect16(snapshot[12], 16'd1, "status active transaction");
+		expect16(snapshot[14], 16'd1, "status accepted transaction");
 		requirement_coverage[3] = 1'b1;
 
 		// A command-start snapshot remains coherent while the live route changes.
@@ -491,14 +493,14 @@ module tb_mister_magik_vblank_latch;
 		active_lfb_stride = 14'd640;
 		idle_cycles(1);
 		legacy_write = 1'b0;
-		for(index = 5; index < 14; index = index + 1)
+		for(index = 5; index < 16; index = index + 1)
 			read_word(MAGIK_UIO_GET_FBUF_LATCH, index[3:0], snapshot[index]);
-		crc = crc_header(MAGIK_UIO_GET_FBUF_LATCH, 16'd13);
-		for(index = 0; index < 13; index = index + 1)
+		crc = crc_header(MAGIK_UIO_GET_FBUF_LATCH, 16'd15);
+		for(index = 0; index < 15; index = index + 1)
 			crc = crc_word(crc, snapshot[index]);
-		expect16(snapshot[13], crc, "status remains one coherent snapshot");
-		expect16(snapshot[0], 16'h002a, "snapshot predates legacy takeover");
-		expect16(snapshot[6], 16'h9000, "snapshot base predates takeover");
+		expect16(snapshot[15], crc, "status remains one coherent snapshot");
+		expect16(snapshot[0], 16'h002b, "snapshot predates legacy takeover");
+		expect16(snapshot[5], 16'h9000, "snapshot base predates takeover");
 		expect16(active_seq, 16'd0, "legacy takeover clears active sequence");
 		expect16(active_route_epoch, epoch_before + 1'd1, "legacy takeover epoch");
 		requirement_coverage[4] = 1'b1;
@@ -513,7 +515,7 @@ module tb_mister_magik_vblank_latch;
 				if(index == split) pulse_vblank();
 			end
 			expect16(reject_count, reject_before, "vblank sweep valid transaction");
-			expect_true(pending || (active_seq == 16'h002a),
+			expect_true(pending || (active_seq == 16'h002b),
 			            "vblank sweep exposes only complete route");
 			if(pending) pulse_vblank();
 		end
@@ -595,12 +597,14 @@ module tb_mister_magik_vblank_latch;
 		reject_before = reject_count;
 		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, 16'd0);
 		expect16(reject_count, reject_before, "faulted close coalesces extra words");
+		if(pending) pulse_vblank();
 		send_golden_route();
 		reject_before = reject_count;
 		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, 16'd0);
 		expect_reject(reject_before, MAGIK_REJECT_POST_CLOSE, "post-close word");
 		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd1, 16'd0);
 		expect16(reject_count, reject_before + 1'd1, "post-close rejection coalesced");
+		pulse_vblank();
 		requirement_coverage[7] = 1'b1;
 
 		// Semantic validation rejects canonical violations without replacing pending.
@@ -640,6 +644,7 @@ module tb_mister_magik_vblank_latch;
 		           16'd0, 16'd319, 16'd0, 16'd0, 16'd640, 16'h1007);
 		expect16(pending_seq, 16'h1007, "valid route after address wrap commits");
 		expect32(route_base, 32'hfffffd80, "boundary route base commits");
+		pulse_vblank();
 		pending_before = pending_seq;
 		reject_before = reject_count;
 		send_route(16'h0000, 32'h00000002, 16'd0, 16'd0,
@@ -649,10 +654,11 @@ module tb_mister_magik_vblank_latch;
 		expect16(pending_seq, pending_before, "later semantic reject preserves pending");
 		requirement_coverage[8] = 1'b1;
 
-		// Applying old pending and committing new on one edge keeps the new pending.
+		// A SET completed on the old pending's apply edge is still rejected.
 		if(!pending) send_golden_route();
 		drop_before = drop_count;
 		flip_before = flip_count;
+		reject_before = reject_count;
 		start_command(MAGIK_UIO_SET_FBUF_LATCH, MAGIK_FBUF_LATCH_MAGIC);
 		for(index = 0; index < 11; index = index + 1)
 			send_word(MAGIK_UIO_SET_FBUF_LATCH, index[3:0],
@@ -668,14 +674,20 @@ module tb_mister_magik_vblank_latch;
 		#1;
 		cmd_data = 1'b0;
 		expect16(flip_count, flip_before + 1'd1, "old pending applied on commit edge");
-		expect_true(pending, "new commit remains pending after old apply");
-		expect16(drop_count, drop_before, "simultaneous apply/commit is not replacement drop");
+		expect_true(!pending, "old pending clears on its accepted apply edge");
+		expect16(drop_count, drop_before + 1'd1, "busy SET is counted without replacement");
+		expect_reject(
+			reject_before,
+			MAGIK_REJECT_PENDING_BUSY,
+			"simultaneous apply/SET rejects the new transaction"
+		);
 		@(negedge clk_sys);
 		hdmi_vbl = 1'b0;
 		idle_cycles(4);
 		requirement_coverage[9] = 1'b1;
 
 		// Legacy writes win same-edge arbitration and leave the MagiK route pending.
+		send_golden_route();
 		epoch_before = active_route_epoch;
 		flip_before = flip_count;
 		@(negedge clk_sys);
@@ -699,7 +711,7 @@ module tb_mister_magik_vblank_latch;
 		idle_cycles(4);
 		pulse_vblank();
 		expect_true(!pending, "pending route applies on later accepted edge");
-		expect16(active_seq, 16'h002a, "MagiK ownership returns after accepted apply");
+		expect16(active_seq, 16'h002b, "MagiK ownership returns after accepted apply");
 		requirement_coverage[10] = 1'b1;
 
 		// Counter and sequence/epoch wrap remain explicit.
@@ -717,8 +729,12 @@ module tb_mister_magik_vblank_latch;
 		expect16(drop_count, 16'd0, "drop counter wrap");
 		pulse_vblank();
 		expect16(flip_count, 16'd0, "flip counter wrap");
-		expect16(active_seq, 16'd0, "sequence wrap");
+		expect16(active_seq, 16'hffff, "first wrap-boundary sequence applies");
 		expect16(active_route_epoch, 16'd0, "route epoch wrap");
+		send_route(16'h0000, 32'd0, 16'd0, 16'd0,
+		           16'd0, 16'd0, 16'd0, 16'd0, 16'd0, 16'd0);
+		pulse_vblank();
+		expect16(active_seq, 16'd0, "sequence wrap");
 		reject_before = reject_count;
 		corrupt_golden_transaction(4'd11);
 		expect16(reject_count, reject_before + 1'd1, "reject counter advances after wrap");
@@ -742,19 +758,29 @@ module tb_mister_magik_vblank_latch;
 			case(random_state[2:0])
 				3'd0: begin
 					send_golden_route();
-					if(model_pending) model_drop_count = model_drop_count + 1'd1;
-					model_pending = 1'b1;
-					model_pending_seq = 16'h002a;
-					model_post_count = model_post_count + 1'd1;
+					if(model_pending) begin
+						model_drop_count = model_drop_count + 1'd1;
+						model_reject_count = model_reject_count + 1'd1;
+					end
+					else begin
+						model_pending = 1'b1;
+						model_pending_seq = 16'h002b;
+						model_post_count = model_post_count + 1'd1;
+					end
 				end
 				3'd1: begin
 					send_route(16'd0, 32'd0, 16'd0, 16'd0,
 					           16'd0, 16'd0, 16'd0, 16'd0, 16'd0,
 					           random_state);
-					if(model_pending) model_drop_count = model_drop_count + 1'd1;
-					model_pending = 1'b1;
-					model_pending_seq = random_state;
-					model_post_count = model_post_count + 1'd1;
+					if(model_pending) begin
+						model_drop_count = model_drop_count + 1'd1;
+						model_reject_count = model_reject_count + 1'd1;
+					end
+					else begin
+						model_pending = 1'b1;
+						model_pending_seq = random_state;
+						model_post_count = model_post_count + 1'd1;
+					end
 				end
 				3'd2: begin
 					corrupt_golden_transaction({1'b0, random_state[2:0]});
@@ -779,6 +805,7 @@ module tb_mister_magik_vblank_latch;
 					idle_cycles(1);
 					legacy_write = 1'b0;
 					model_active_seq = 16'd0;
+					model_pending = 1'b0;
 					model_epoch = model_epoch + 1'd1;
 				end
 				default: check_status_crc();
