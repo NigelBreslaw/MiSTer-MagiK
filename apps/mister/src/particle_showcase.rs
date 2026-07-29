@@ -188,6 +188,16 @@ const CHILD_PALETTE: [Rgb565Pixel; 8] = [
     Rgb565Pixel(0x9ff5),
     Rgb565Pixel(0xffff),
 ];
+const FIELD_PALETTE: [Rgb565Pixel; 8] = [
+    Rgb565Pixel(0x0808),
+    Rgb565Pixel(0x1014),
+    Rgb565Pixel(0x301f),
+    Rgb565Pixel(0x801f),
+    Rgb565Pixel(0x05ff),
+    Rgb565Pixel(0x77ea),
+    Rgb565Pixel(0xfec0),
+    Rgb565Pixel(0xffff),
+];
 const DENSITY_W: usize = 240;
 const DENSITY_H: usize = 135;
 const DENSITY_SCALE: usize = 4;
@@ -257,10 +267,11 @@ pub enum ParticleDemoKind {
     CurlNoiseFlowField,
     LowResolutionDensityBloom,
     LayeredChildSystems,
+    SpatialFieldStack,
 }
 
 impl ParticleDemoKind {
-    pub const ALL: [Self; 26] = [
+    pub const ALL: [Self; 27] = [
         Self::SolarChrysanthemum,
         Self::RecursiveHalo,
         Self::CopperWillowRain,
@@ -287,6 +298,7 @@ impl ParticleDemoKind {
         Self::CurlNoiseFlowField,
         Self::LowResolutionDensityBloom,
         Self::LayeredChildSystems,
+        Self::SpatialFieldStack,
     ];
 
     #[must_use]
@@ -328,6 +340,7 @@ impl ParticleDemoKind {
             Self::CurlNoiseFlowField => "CURL-NOISE FLOW FIELD",
             Self::LowResolutionDensityBloom => "LOW-RES DENSITY + BLOOM",
             Self::LayeredChildSystems => "LAYERED CHILD SYSTEMS",
+            Self::SpatialFieldStack => "SPATIAL FIELD STACK",
         }
     }
 
@@ -360,6 +373,7 @@ impl ParticleDemoKind {
             Self::CurlNoiseFlowField => "curl-noise-flow-field",
             Self::LowResolutionDensityBloom => "density-bloom",
             Self::LayeredChildSystems => "layered-child-systems",
+            Self::SpatialFieldStack => "spatial-field-stack",
         }
     }
 
@@ -427,6 +441,7 @@ impl ParticleDemoKind {
             Self::CurlNoiseFlowField => 32_768,
             Self::LowResolutionDensityBloom => 24_576,
             Self::LayeredChildSystems => 4_096,
+            Self::SpatialFieldStack => 24_576,
         }
     }
 
@@ -931,6 +946,8 @@ impl ParticleShowcaseRenderer {
             self.initialize_density_bloom();
         } else if demo == ParticleDemoKind::LayeredChildSystems {
             self.initialize_layered_child_systems();
+        } else if demo == ParticleDemoKind::SpatialFieldStack {
+            self.initialize_spatial_field_stack();
         }
     }
 
@@ -984,6 +1001,7 @@ impl ParticleShowcaseRenderer {
             ParticleDemoKind::CurlNoiseFlowField => self.project_curl_noise_flow_field(elapsed),
             ParticleDemoKind::LowResolutionDensityBloom => self.project_density_bloom(elapsed),
             ParticleDemoKind::LayeredChildSystems => self.project_layered_child_systems(elapsed),
+            ParticleDemoKind::SpatialFieldStack => self.project_spatial_field_stack(elapsed),
         }
     }
 
@@ -1083,7 +1101,75 @@ impl ParticleShowcaseRenderer {
                 value if value < 18.0 => "event-rings",
                 _ => "terminal-children",
             },
+            ParticleDemoKind::SpatialFieldStack => match seconds {
+                value if value < 9.0 => "attract-repel",
+                value if value < 22.0 => "capture-orbit",
+                _ => "release",
+            },
         }
+    }
+
+    fn initialize_spatial_field_stack(&mut self) {
+        for index in 0..self.pool.active() {
+            let random = self.pool.random[index];
+            self.pool.x[index] = unit_signed(random) * 148.0;
+            self.pool.y[index] = unit_signed(random.rotate_left(11)) * 226.0;
+            self.pool.age[index] = unit01(random.rotate_left(21));
+            self.pool.life[index] = 0.55 + unit01(random.rotate_left(7)) * 0.9;
+            self.pool.style[index] = ((random >> 29) & 7) as u8;
+            self.pool.flags[index] = (index % 3) as u8;
+        }
+    }
+
+    fn project_spatial_field_stack(&mut self, elapsed: Duration) -> usize {
+        self.commands.clear();
+        self.segments.clear();
+        let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
+        let mut clipped = 0usize;
+        for index in (0..self.pool.active()).step_by(2) {
+            let lane = self.pool.flags[index];
+            let phase = (seconds * 0.08 * self.pool.life[index] + self.pool.age[index]).fract();
+            let base_x = self.pool.x[index];
+            let base_y = self.pool.y[index];
+            let (center, x, y, style) = match lane {
+                0 => {
+                    let contraction = 0.22 + (1.0 - phase) * 0.78;
+                    let angle = seconds * 0.17 + self.pool.age[index] * 4.0;
+                    let rotated_x = base_x * angle.cos() - base_y * 0.22 * angle.sin();
+                    let rotated_y = base_x * angle.sin() * 0.35 + base_y * angle.cos();
+                    (240.0, rotated_x * contraction, rotated_y * contraction, 5)
+                }
+                1 => {
+                    let radius = (base_x * base_x + base_y * base_y).sqrt().max(1.0);
+                    let cavity = 68.0 + phase * 145.0;
+                    let scale = cavity.max(radius) / radius;
+                    (480.0, base_x * scale, base_y * scale, 6)
+                }
+                _ => {
+                    let capture = if phase < 0.72 {
+                        1.0 - phase * 0.58
+                    } else {
+                        0.58 + (phase - 0.72) * 3.2
+                    };
+                    let angle = seconds * (0.62 + self.pool.age[index] * 0.3);
+                    let rotated_x = base_x * angle.cos() - base_y * angle.sin();
+                    let rotated_y = base_x * angle.sin() + base_y * angle.cos();
+                    (720.0, rotated_x * capture, rotated_y * capture, 4)
+                }
+            };
+            if !push_screen_command(
+                &mut self.commands,
+                self.config.width,
+                self.config.height,
+                center + x,
+                270.0 + y,
+                style,
+                index & 127 == 0,
+            ) {
+                clipped = clipped.saturating_add(1);
+            }
+        }
+        clipped
     }
 
     fn initialize_layered_child_systems(&mut self) {
@@ -3064,6 +3150,7 @@ fn showcase_palette(demo: ParticleDemoKind) -> &'static [Rgb565Pixel; 8] {
         ParticleDemoKind::CurlNoiseFlowField => &FLOW_PALETTE,
         ParticleDemoKind::LowResolutionDensityBloom => &DENSITY_PALETTE,
         ParticleDemoKind::LayeredChildSystems => &CHILD_PALETTE,
+        ParticleDemoKind::SpatialFieldStack => &FIELD_PALETTE,
     }
 }
 
@@ -3198,13 +3285,13 @@ mod tests {
 
     #[test]
     fn demo_order_and_wrapping_are_stable() {
-        assert_eq!(ParticleDemoKind::ALL.len(), 26);
+        assert_eq!(ParticleDemoKind::ALL.len(), 27);
         assert_eq!(
             ParticleDemoKind::SolarChrysanthemum.offset_wrapped(-1),
-            ParticleDemoKind::LayeredChildSystems
+            ParticleDemoKind::SpatialFieldStack
         );
         assert_eq!(
-            ParticleDemoKind::LayeredChildSystems.offset_wrapped(1),
+            ParticleDemoKind::SpatialFieldStack.offset_wrapped(1),
             ParticleDemoKind::SolarChrysanthemum
         );
         for (index, kind) in ParticleDemoKind::ALL.into_iter().enumerate() {
@@ -3256,7 +3343,11 @@ mod tests {
             ParticleDemoKind::parse("26"),
             Some(ParticleDemoKind::LayeredChildSystems)
         );
-        assert_eq!(ParticleDemoKind::parse("27"), None);
+        assert_eq!(
+            ParticleDemoKind::parse("27"),
+            Some(ParticleDemoKind::SpatialFieldStack)
+        );
+        assert_eq!(ParticleDemoKind::parse("28"), None);
         assert_eq!(ParticleDemoKind::parse("unknown"), None);
     }
 

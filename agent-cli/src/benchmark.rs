@@ -239,7 +239,7 @@ fn require_clean_installed_commit(
     }
 }
 
-const PARTICLE_SHOWCASE_DEMOS: [(u8, &str); 26] = [
+const PARTICLE_SHOWCASE_DEMOS: [(u8, &str); 27] = [
     (1, "solar-chrysanthemum"),
     (2, "recursive-halo"),
     (3, "copper-willow-rain"),
@@ -266,6 +266,7 @@ const PARTICLE_SHOWCASE_DEMOS: [(u8, &str); 26] = [
     (24, "curl-noise-flow-field"),
     (25, "density-bloom"),
     (26, "layered-child-systems"),
+    (27, "spatial-field-stack"),
 ];
 
 fn execute_particle_showcase_suite(
