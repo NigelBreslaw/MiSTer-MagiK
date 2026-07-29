@@ -11,7 +11,7 @@ use std::path::Path;
 pub const REPORT_PATH: &str = "/tmp/mister-magik/latch-readiness.json";
 pub const RUNTIME_FAILURE_PATH: &str = "/tmp/mister-magik/latch-failure.json";
 
-pub const MAX_LATCH_WIRE_WORDS: usize = 14;
+pub const MAX_LATCH_WIRE_WORDS: usize = 16;
 pub const MAX_LATCH_WIRE_ATTEMPTS: usize = 6;
 pub const MAX_LATCH_POST_WORDS: usize = 12;
 

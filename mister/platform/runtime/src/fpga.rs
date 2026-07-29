@@ -1436,6 +1436,51 @@ mod tests {
         pairs
     }
 
+    fn v4_receipt_pairs(sequence: u16, accepted: bool) -> Vec<(u16, u16)> {
+        let disposition = if accepted {
+            mister_magik_latch_contract::RECEIPT_ACCEPTED
+        } else {
+            mister_magik_latch_contract::RECEIPT_REJECTED
+        };
+        let transaction = 1;
+        let payload = if accepted {
+            [
+                transaction,
+                sequence,
+                disposition,
+                transaction,
+                sequence,
+                transaction,
+                sequence,
+                0,
+                0,
+                0,
+            ]
+        } else {
+            [
+                transaction,
+                sequence,
+                disposition,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                u16::from(mister_magik_latch_contract::REJECT_MISSING_WORD),
+            ]
+        };
+        let crc = mister_magik_latch_contract::message_crc(
+            MAGIK_UIO_GET_FBUF_LATCH_RECEIPT,
+            mister_magik_latch_contract::LatchProtocol::V4,
+            &payload,
+        );
+        let mut pairs = vec![(MAGIK_FBUF_RECEIPT_MAGIC, 0)];
+        pairs.extend(payload.map(|word| (0, word)));
+        pairs.push((0, crc));
+        pairs
+    }
+
     fn reads_from_pairs(pairs: &[(u16, u16)]) -> Vec<u32> {
         pairs
             .iter()
@@ -1555,7 +1600,7 @@ mod tests {
             .unwrap_err();
         let high_attempt = high_error.diagnostics.attempts[0];
         assert_eq!(high_attempt.response_word_count, 3);
-        assert_eq!(high_attempt.response_words[1].ack_low, Some(2));
+        assert_eq!(high_attempt.response_words[1].ack_low, Some(43));
         assert_eq!(
             high_attempt.response_words[2].error_phase,
             LatchWireErrorPhase::AckHigh
@@ -1569,7 +1614,7 @@ mod tests {
             .unwrap_err();
         let low_attempt = low_error.diagnostics.attempts[0];
         assert_eq!(low_attempt.response_word_count, 3);
-        assert_eq!(low_attempt.response_words[1].ack_low, Some(2));
+        assert_eq!(low_attempt.response_words[1].ack_low, Some(43));
         assert_eq!(low_attempt.response_words[2].ack_high, Some(0xa002));
         assert_eq!(
             low_attempt.response_words[2].error_phase,
@@ -1762,7 +1807,9 @@ mod tests {
 
     #[test]
     fn v4_set_posts_crc_once_and_is_never_retried() {
-        let (mut fpga, state) = scripted(&[(MAGIK_FBUF_LATCH_MAGIC, 0); 13]);
+        let mut pairs = vec![(MAGIK_FBUF_LATCH_MAGIC, 0); 13];
+        pairs.extend(v4_receipt_pairs(42, true));
+        let (mut fpga, state) = scripted(&pairs);
         fpga.latch_capabilities = Some(v4_capabilities());
         let geometry = LatchedFbufGeometry {
             xoff: 0,
@@ -1790,7 +1837,7 @@ mod tests {
                 .count(),
             1
         );
-        assert_eq!(attempt.diagnostics.protocol_version, 3);
+        assert_eq!(attempt.diagnostics.protocol_version, 4);
         assert_eq!(attempt.diagnostics.sequence, 42);
         assert_eq!(attempt.diagnostics.word_count, 12);
         assert_eq!(attempt.diagnostics.expected_word_count, 12);
@@ -1805,7 +1852,9 @@ mod tests {
 
     #[test]
     fn v4_set_can_omit_one_word_once_for_bounded_receiver_reproduction() {
-        let (mut fpga, state) = scripted(&[(MAGIK_FBUF_LATCH_MAGIC, 0); 12]);
+        let mut pairs = vec![(MAGIK_FBUF_LATCH_MAGIC, 0); 12];
+        pairs.extend(v4_receipt_pairs(42, false));
+        let (mut fpga, state) = scripted(&pairs);
         fpga.latch_capabilities = Some(v4_capabilities());
         let geometry = LatchedFbufGeometry {
             xoff: 0,
@@ -1815,18 +1864,23 @@ mod tests {
             stride_bytes: 1920,
         };
 
-        let attempt = fpga
+        let error = fpga
             .post_magik_latched_fbuf_rgb565_observed(42, 0x227e_9000, 960, 540, geometry, Some(4))
-            .unwrap();
+            .unwrap_err();
 
         let words = words_from_writes(&state.borrow().writes);
-        assert_eq!(words.len(), 12);
-        assert_eq!(words[0], MAGIK_UIO_SET_FBUF_LATCH);
-        assert!(!words[1..].contains(&mister_magik_latch_contract::GOLDEN_SET_V4_PAYLOAD[4]));
-        assert_eq!(attempt.diagnostics.injected_skip_index, Some(4));
-        assert!(attempt.diagnostics.words[4].injected_skip);
-        assert_eq!(attempt.diagnostics.transmitted_word_count, 11);
-        assert_eq!(attempt.diagnostics.expected_word_count, 12);
+        let set_words = &words[..12];
+        assert_eq!(set_words[0], MAGIK_UIO_SET_FBUF_LATCH);
+        assert!(!set_words[1..].contains(&mister_magik_latch_contract::GOLDEN_SET_V4_PAYLOAD[4]));
+        assert!(words.contains(&MAGIK_UIO_GET_FBUF_LATCH_RECEIPT));
+        assert_eq!(error.diagnostics.injected_skip_index, Some(4));
+        assert!(error.diagnostics.words[4].injected_skip);
+        assert_eq!(error.diagnostics.transmitted_word_count, 11);
+        assert_eq!(error.diagnostics.expected_word_count, 12);
+        assert_eq!(
+            error.diagnostics.receipt_disposition,
+            mister_magik_latch_contract::RECEIPT_REJECTED
+        );
     }
 
     #[test]
@@ -1913,7 +1967,9 @@ mod tests {
         assert_eq!(fpga.gpo & IO_EN, 0);
 
         let geometry = LatchedFbufGeometry::new(960, mode, 1);
-        let (mut fpga, state) = scripted(&[(0x55, 0); 12]);
+        let mut pairs = vec![(0x55, 0); 13];
+        pairs.extend(v4_receipt_pairs(7, true));
+        let (mut fpga, state) = scripted(&pairs);
         assert_eq!(
             fpga.post_magik_latched_fbuf_rgb565(7, FB_ADDR, 960, 540, geometry)
                 .unwrap(),
@@ -1921,7 +1977,8 @@ mod tests {
         );
         let words = words_from_writes(&state.borrow().writes);
         assert_eq!(words[0], MAGIK_UIO_SET_FBUF_LATCH);
-        assert_eq!(*words.last().unwrap(), 7);
+        assert!(words.contains(&7));
+        assert!(words.contains(&MAGIK_UIO_GET_FBUF_LATCH_RECEIPT));
         assert_eq!(fpga.gpo & IO_EN, 0);
     }
 
