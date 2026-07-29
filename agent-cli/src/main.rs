@@ -243,6 +243,7 @@ fn dispatch(
             scanout_metadata,
             latch_rbf,
             latch_metadata,
+            platform_bundle_manifest,
             main_revision,
             magik_revision,
             layout,
@@ -264,6 +265,9 @@ fn dispatch(
                     latch_rbf: latch_rbf.clone(),
                     latch_metadata: latch_metadata.clone(),
                 },
+                &agent_cli::platform_manifest::ReleaseIdentity::from_bundle_manifest(
+                    platform_bundle_manifest,
+                )?,
                 main_revision,
                 magik_revision,
                 agent_cli::platform_manifest::Layout::parse(layout)?,

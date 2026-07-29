@@ -2,15 +2,25 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::error::{AgentError, AgentResult};
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-const FORMAT: &str = "mister-magik-platform-v2";
+pub const FORMAT: &str = "mister-magik-platform-v3";
+pub const FILE_NAME: &str = "platform-v3.manifest";
+pub const LATCH_PROTOCOL_VERSION: &str = "4";
+pub const LATCH_CAPABILITY_MASK: &str = "0x01ff";
 pub(crate) const FIELDS: &[&str] = &[
     "format",
+    "platform_release",
+    "platform_release_number",
+    "platform_bundle_id",
+    "qualification_candidate_id",
+    "latch_protocol_version",
+    "latch_capability_mask",
     "main_path",
     "gui_path",
     "manager_path",
@@ -119,6 +129,44 @@ pub struct Artifacts {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReleaseIdentity {
+    pub release_number: u64,
+    pub bundle_id: String,
+}
+
+#[derive(Deserialize)]
+struct BundleManifest {
+    format: String,
+    release_version: u64,
+    bundle_id: String,
+}
+
+impl ReleaseIdentity {
+    pub fn from_bundle_manifest(path: &Path) -> AgentResult<Self> {
+        let bytes =
+            fs::read(path).map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+        let manifest: BundleManifest = serde_json::from_slice(&bytes)
+            .map_err(|error| format!("cannot parse {}: {error}", path.display()))?;
+        if manifest.format != crate::platform_bundle::FORMAT {
+            return classified("unsupported_platform_bundle", manifest.format);
+        }
+        if manifest.release_version == 0 {
+            return classified("invalid_platform_release", "release number is zero");
+        }
+        require_hex("platform_bundle_id", &manifest.bundle_id, 64)?;
+        Ok(Self {
+            release_number: manifest.release_version,
+            bundle_id: manifest.bundle_id,
+        })
+    }
+
+    #[must_use]
+    pub fn release_tag(&self) -> String {
+        format!("platform-v0.{}", self.release_number)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InstalledManifest {
     values: BTreeMap<String, String>,
 }
@@ -188,6 +236,7 @@ impl Artifacts {
 pub fn generate(
     output: &Path,
     artifacts: &Artifacts,
+    release: &ReleaseIdentity,
     main_revision: &str,
     magik_revision: &str,
     layout: Layout,
@@ -205,6 +254,17 @@ pub fn generate(
     let (contract, menu_revision) = validate_metadata(artifacts)?;
     let mut values: BTreeMap<String, String> = BTreeMap::new();
     values.insert("format".into(), FORMAT.to_owned());
+    values.insert("platform_release".into(), release.release_tag());
+    values.insert(
+        "platform_release_number".into(),
+        release.release_number.to_string(),
+    );
+    values.insert("platform_bundle_id".into(), release.bundle_id.clone());
+    values.insert(
+        "latch_protocol_version".into(),
+        LATCH_PROTOCOL_VERSION.into(),
+    );
+    values.insert("latch_capability_mask".into(), LATCH_CAPABILITY_MASK.into());
     for (name, path) in layout.paths() {
         values.insert(format!("{name}_path"), path.to_owned());
     }
@@ -215,6 +275,10 @@ pub fn generate(
     values.insert("main_revision".into(), main_revision.into());
     values.insert("magik_revision".into(), magik_revision.into());
     values.insert("menu_revision".into(), menu_revision);
+    values.insert(
+        "qualification_candidate_id".into(),
+        qualification_candidate_id(&values),
+    );
     let text = FIELDS
         .iter()
         .map(|field| format!("{field}={}\n", values[*field]))
@@ -226,29 +290,6 @@ pub fn generate(
     fs::write(output, text)
         .map_err(|error| format!("cannot write {}: {error}", output.display()))?;
     verify(output, None, layout)
-}
-
-pub fn update_runtime(
-    output: &Path,
-    installed: &str,
-    gui: &Path,
-    magik_revision: &str,
-) -> AgentResult<()> {
-    require_hex("magik_revision", magik_revision, 40)?;
-    let mut values = parse_installed(installed, Layout::Development)?.values;
-    values.insert("gui_sha256".into(), digest(gui)?);
-    values.insert("magik_revision".into(), magik_revision.into());
-    let text = FIELDS
-        .iter()
-        .map(|field| format!("{field}={}\n", values[*field]))
-        .collect::<String>();
-    if let Some(parent) = output.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
-    }
-    fs::write(output, text)
-        .map_err(|error| format!("cannot write {}: {error}", output.display()))?;
-    verify(output, None, Layout::Development)
 }
 
 pub fn verify(manifest: &Path, artifact_root: Option<&Path>, layout: Layout) -> AgentResult<()> {
@@ -263,6 +304,36 @@ pub fn verify(manifest: &Path, artifact_root: Option<&Path>, layout: Layout) -> 
 fn validate_manifest_fields(fields: &BTreeMap<String, String>, layout: Layout) -> AgentResult<()> {
     if fields["format"] != FORMAT {
         return classified("unsupported_platform_manifest", fields["format"].clone());
+    }
+    let release_number = fields["platform_release_number"]
+        .parse::<u64>()
+        .map_err(|_| AgentError::Classified {
+            code: "invalid_platform_release",
+            detail: fields["platform_release_number"].clone(),
+        })?;
+    if release_number == 0 || fields["platform_release"] != format!("platform-v0.{release_number}")
+    {
+        return classified(
+            "invalid_platform_release",
+            fields["platform_release"].clone(),
+        );
+    }
+    require_hex("platform_bundle_id", &fields["platform_bundle_id"], 64)?;
+    require_hex(
+        "qualification_candidate_id",
+        &fields["qualification_candidate_id"],
+        64,
+    )?;
+    if fields["latch_protocol_version"] != LATCH_PROTOCOL_VERSION
+        || fields["latch_capability_mask"] != LATCH_CAPABILITY_MASK
+    {
+        return classified(
+            "unsupported_latch_protocol",
+            format!(
+                "version={} capabilities={}",
+                fields["latch_protocol_version"], fields["latch_capability_mask"]
+            ),
+        );
     }
     for (name, expected) in layout.paths() {
         if fields[&format!("{name}_path")] != expected {
@@ -281,6 +352,12 @@ fn validate_manifest_fields(fields: &BTreeMap<String, String>, layout: Layout) -
     )?;
     for name in ["main_revision", "magik_revision", "menu_revision"] {
         require_hex(name, &fields[name], 40)?;
+    }
+    if fields["qualification_candidate_id"] != qualification_candidate_id(fields) {
+        return classified(
+            "platform_candidate_identity_mismatch",
+            fields["qualification_candidate_id"].clone(),
+        );
     }
     Ok(())
 }
@@ -340,12 +417,49 @@ fn validate_metadata(artifacts: &Artifacts) -> AgentResult<(String, String)> {
             "component metadata uses mixed contracts",
         );
     }
+    if latch.get("latch_protocol_version").map(String::as_str) != Some(LATCH_PROTOCOL_VERSION)
+        || latch.get("latch_capability_mask").map(String::as_str) != Some(LATCH_CAPABILITY_MASK)
+    {
+        return classified(
+            "unsupported_latch_protocol",
+            format!(
+                "version={} capabilities={}",
+                latch
+                    .get("latch_protocol_version")
+                    .map(String::as_str)
+                    .unwrap_or("missing"),
+                latch
+                    .get("latch_capability_mask")
+                    .map(String::as_str)
+                    .unwrap_or("missing")
+            ),
+        );
+    }
     require_hex("platform_contract_sha256", contract, 64)?;
     let menu = latch
         .get("source_commit")
         .ok_or("latch metadata has no source commit")?;
     require_hex("menu_revision", menu, 40)?;
     Ok((contract.clone(), menu.clone()))
+}
+
+fn qualification_candidate_id(values: &BTreeMap<String, String>) -> String {
+    let mut hash = Sha256::new();
+    for field in FIELDS {
+        if *field == "qualification_candidate_id" {
+            continue;
+        }
+        if let Some(value) = values.get(*field) {
+            hash.update(field.as_bytes());
+            hash.update(b"=");
+            hash.update(value.as_bytes());
+            hash.update(b"\n");
+        }
+    }
+    hash.finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn parse_fields(path: &Path, exact: Option<&[&str]>) -> AgentResult<BTreeMap<String, String>> {
@@ -430,6 +544,17 @@ mod tests {
     fn canonical_manifest() -> String {
         let mut values = BTreeMap::new();
         values.insert("format".to_owned(), FORMAT.to_owned());
+        values.insert("platform_release".to_owned(), "platform-v0.16".to_owned());
+        values.insert("platform_release_number".to_owned(), "16".to_owned());
+        values.insert("platform_bundle_id".to_owned(), "c".repeat(64));
+        values.insert(
+            "latch_protocol_version".to_owned(),
+            LATCH_PROTOCOL_VERSION.to_owned(),
+        );
+        values.insert(
+            "latch_capability_mask".to_owned(),
+            LATCH_CAPABILITY_MASK.to_owned(),
+        );
         for (name, path) in Layout::Development.paths() {
             values.insert(format!("{name}_path"), path.into());
         }
@@ -448,6 +573,10 @@ mod tests {
         for name in ["main_revision", "magik_revision", "menu_revision"] {
             values.insert(name.to_owned(), "b".repeat(40));
         }
+        values.insert(
+            "qualification_candidate_id".to_owned(),
+            qualification_candidate_id(&values),
+        );
         FIELDS
             .iter()
             .map(|field| format!("{field}={}\n", values[*field]))
@@ -488,20 +617,12 @@ mod tests {
     }
 
     #[test]
-    fn runtime_update_changes_only_gui_identity_and_magik_revision() {
-        let root = std::env::temp_dir().join(format!("runtime-manifest-{}", std::process::id()));
-        fs::create_dir_all(&root).unwrap();
-        let gui = root.join("mister-magik-fb");
-        let output = root.join("platform-v2.manifest");
-        fs::write(&gui, b"new-gui").unwrap();
-        let installed = canonical_manifest();
-
-        update_runtime(&output, &installed, &gui, &"c".repeat(40)).unwrap();
-
-        let updated = parse_fields(&output, Some(FIELDS)).unwrap();
-        assert_eq!(updated["magik_revision"], "c".repeat(40));
-        assert_eq!(updated["gui_sha256"], digest(&gui).unwrap());
-        assert_eq!(updated["main_sha256"], "a".repeat(64));
-        let _ = fs::remove_dir_all(root);
+    fn changing_any_component_invalidates_candidate_identity() {
+        let valid = canonical_manifest();
+        let invalid = valid.replace(
+            &format!("gui_sha256={}", "a".repeat(64)),
+            &format!("gui_sha256={}", "d".repeat(64)),
+        );
+        assert!(parse_installed(&invalid, Layout::Development).is_err());
     }
 }

@@ -32,7 +32,7 @@ Production boot stays compatible with stock MiSTer:
 3. `[MiSTer] main=MiSTer_MagiK` or `MiSTer_MagiKDev` re-execs the selected
    MagiK Main fork.
 4. The fork selects `mister-magik/` or `mister-magik-dev/` from its own
-   executable name, prefers that layout's `platform-v2.manifest` (with v1 as an
+   executable name, prefers that layout's `platform-v3.manifest` (with v1 as an
    installed-system compatibility fallback), and redirects
    an empty/default Menu boot to the manifest-owned production RBF at
    the Menu boot to that layout's `fpga/menu-magik-vblank-latch.rbf`.

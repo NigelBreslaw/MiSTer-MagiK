@@ -6,7 +6,7 @@
 set -eu
 
 FAT="${MISTER_MAGIK_FAT:-/media/fat}"
-MANIFEST="$FAT/mister-magik/platform-v2.manifest"
+MANIFEST="$FAT/mister-magik/platform-v3.manifest"
 MANAGER="$FAT/mister-magik/mister-magik-manager"
 
 fail() {

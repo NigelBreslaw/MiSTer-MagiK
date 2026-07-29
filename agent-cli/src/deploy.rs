@@ -393,7 +393,7 @@ mod tests {
         let main = "b".repeat(40);
         for manifest in [
             format!(
-                "format=mister-magik-platform-v2\nmagik_revision={revision}\nmain_revision={main}\n"
+                "format=mister-magik-platform-v3\nmagik_revision={revision}\nmain_revision={main}\n"
             ),
             format!("{}magik_revision={revision}\n", manifest(&revision, &main)),
             format!("{}extra=value\n", manifest(&revision, &main)),
@@ -450,7 +450,7 @@ mod tests {
 
     fn manifest(magik: &str, main: &str) -> String {
         let mut values = std::collections::BTreeMap::<String, String>::new();
-        values.insert("format".into(), "mister-magik-platform-v2".to_owned());
+        values.insert("format".into(), "mister-magik-platform-v3".to_owned());
         for (name, path) in Layout::Development.paths() {
             values.insert(format!("{name}_path"), path.to_owned());
         }

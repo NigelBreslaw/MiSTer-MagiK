@@ -318,17 +318,6 @@ impl<D: DeviceOperations> ProcessActions<'_, D> {
         Ok(())
     }
 
-    fn prepare_runtime_manifest(&self) -> AgentResult<()> {
-        crate::platform_manifest::update_runtime(
-            &self.stage.join("platform-v2.manifest"),
-            self.installed_manifest
-                .as_deref()
-                .ok_or("runtime delivery is missing the installed platform manifest")?,
-            &self.repository.join(self.deployment.build.artifact()),
-            self.expected_commit,
-        )
-    }
-
     fn qualify_manager(&mut self) -> AgentResult<()> {
         self.manager_artifact = Some(self.prepare_manager()?);
         Ok(())
@@ -410,7 +399,12 @@ impl<D: DeviceOperations> DeliveryActions for ProcessActions<'_, D> {
                 self.deployment =
                     crate::deploy::plan(self.repository, reconciliation.changed_paths)?;
                 self.deployment.platform_candidate = platform_candidate;
-                self.decision = reconciliation.decision;
+                self.decision = match reconciliation.decision {
+                    DeliveryDecision::NoOp => DeliveryDecision::NoOp,
+                    DeliveryDecision::Runtime | DeliveryDecision::Platform => {
+                        DeliveryDecision::Platform
+                    }
+                };
                 if self.decision == DeliveryDecision::Platform {
                     self.deployment.kind = crate::deploy::DeploymentKind::Platform;
                 }
@@ -420,8 +414,10 @@ impl<D: DeviceOperations> DeliveryActions for ProcessActions<'_, D> {
             Phase::RuntimeBuild => self.build_runtime(),
             Phase::ManagerQualification => self.qualify_manager(),
             Phase::LocalStaging => match self.decision {
-                DeliveryDecision::Runtime => self.prepare_runtime_manifest(),
                 DeliveryDecision::Platform => self.prepare_local_stage(),
+                DeliveryDecision::Runtime => {
+                    Err("runtime-only delivery is forbidden by the v4 platform contract".into())
+                }
                 DeliveryDecision::NoOp => Ok(()),
             },
             Phase::DatabasePreparation => self.prepare_databases(),
@@ -435,8 +431,8 @@ impl<D: DeviceOperations> DeliveryActions for ProcessActions<'_, D> {
                     DeliveryDecision::Runtime => DeviceRequest::DeliverRuntimeTransaction {
                         local: self.repository.join(self.deployment.build.artifact()),
                         remote: "/media/fat/mister-magik-dev/mister-magik-fb".into(),
-                        manifest_local: self.stage.join("platform-v2.manifest"),
-                        manifest_remote: "/media/fat/mister-magik-dev/platform-v2.manifest".into(),
+                        manifest_local: self.stage.join(crate::platform_manifest::FILE_NAME),
+                        manifest_remote: "/media/fat/mister-magik-dev/platform-v3.manifest".into(),
                         expected_sha256,
                     },
                     DeliveryDecision::Platform => DeviceRequest::DeliverPlatformTransaction {

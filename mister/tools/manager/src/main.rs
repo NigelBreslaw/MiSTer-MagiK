@@ -18,6 +18,12 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 const MANIFEST_FIELDS: &[&str] = &[
     "format",
+    "platform_release",
+    "platform_release_number",
+    "platform_bundle_id",
+    "qualification_candidate_id",
+    "latch_protocol_version",
+    "latch_capability_mask",
     "main_path",
     "gui_path",
     "manager_path",
@@ -218,7 +224,7 @@ impl Paths {
             ),
             ini: fat.join("MiSTer.ini"),
             backup: fat.join("MiSTer.ini.bak.before-magik"),
-            manifest: app.join("platform-v2.manifest"),
+            manifest: app.join("platform-v3.manifest"),
             script: fat.join("Scripts/MiSTer-MagiK.sh"),
             test_mode: env::var("MISTER_MAGIK_TEST_MODE").as_deref() == Ok("1"),
             test_keys: RefCell::new(
@@ -637,8 +643,22 @@ fn verify_platform(paths: &Paths) -> Result<()> {
     {
         return Err("platform manifest has unexpected fields".into());
     }
-    if fields["format"] != "mister-magik-platform-v2" {
+    if fields["format"] != "mister-magik-platform-v3" {
         return Err("unsupported platform manifest".into());
+    }
+    let release_number = fields["platform_release_number"].parse::<u64>()?;
+    if release_number == 0 || fields["platform_release"] != format!("platform-v0.{release_number}")
+    {
+        return Err("invalid platform release identity".into());
+    }
+    require_lower_hex("platform_bundle_id", &fields["platform_bundle_id"], 64)?;
+    require_lower_hex(
+        "qualification_candidate_id",
+        &fields["qualification_candidate_id"],
+        64,
+    )?;
+    if fields["latch_protocol_version"] != "4" || fields["latch_capability_mask"] != "0x01ff" {
+        return Err("platform does not provide the required latch v4 contract".into());
     }
     for name in ["main_revision", "magik_revision", "menu_revision"] {
         require_lower_hex(name, &fields[name], 40)?;
@@ -697,6 +717,11 @@ fn verify_platform(paths: &Paths) -> Result<()> {
     }
     if latch_metadata.get("source_commit") != Some(&fields["menu_revision"]) {
         return Err("latch metadata source revision mismatch".into());
+    }
+    if latch_metadata.get("latch_protocol_version") != Some(&fields["latch_protocol_version"])
+        || latch_metadata.get("latch_capability_mask") != Some(&fields["latch_capability_mask"])
+    {
+        return Err("latch metadata protocol identity mismatch".into());
     }
     if !module_metadata
         .get("vermagic")
@@ -1096,7 +1121,7 @@ mod tests {
         let root = env::temp_dir().join(format!("mister-manager-manifest-{}", process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
-        let manifest = root.join("platform-v2.manifest");
+        let manifest = root.join("platform-v3.manifest");
         fs::write(&manifest, b"format=one\nformat=two\n").unwrap();
         assert!(parse_manifest(&manifest).is_err());
         fs::remove_dir_all(root).unwrap();

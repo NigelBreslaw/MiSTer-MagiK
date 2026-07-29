@@ -12,7 +12,7 @@ pub(super) fn installed_platform_verify_command(layout: Layout) -> String {
         Layout::Public => ("/media/fat/mister-magik", "/media/fat/MiSTer_MagiK"),
     };
     format!(
-        "set -eu; root={root}; manifest=$root/platform-v2.manifest; test -s \"$manifest\"; test -x {main}; test -x \"$root/mister-magik-fb\"; test -x \"$root/mister-magik-manager\"; test -r \"$root/mister_magik_scanout_slots.ko\"; test -r \"$root/fpga/menu-magik-vblank-latch.rbf\"; grep -qx 'format=mister-magik-platform-v2' \"$manifest\"; get() {{ sed -n \"s/^$1=//p\" \"$manifest\"; }}; test \"$(sha256sum {main} | awk '{{print $1}}')\" = \"$(get main_sha256)\"; test \"$(sha256sum \"$root/mister-magik-fb\" | awk '{{print $1}}')\" = \"$(get gui_sha256)\"; test \"$(sha256sum \"$root/mister-magik-manager\" | awk '{{print $1}}')\" = \"$(get manager_sha256)\"; test \"$(sha256sum \"$root/mister_magik_scanout_slots.ko\" | awk '{{print $1}}')\" = \"$(get scanout_module_sha256)\"; test \"$(sha256sum \"$root/fpga/menu-magik-vblank-latch.rbf\" | awk '{{print $1}}')\" = \"$(get latch_rbf_sha256)\""
+        "set -eu; root={root}; manifest=$root/platform-v3.manifest; test -s \"$manifest\"; test -x {main}; test -x \"$root/mister-magik-fb\"; test -x \"$root/mister-magik-manager\"; test -r \"$root/mister_magik_scanout_slots.ko\"; test -r \"$root/fpga/menu-magik-vblank-latch.rbf\"; grep -qx 'format=mister-magik-platform-v3' \"$manifest\"; get() {{ sed -n \"s/^$1=//p\" \"$manifest\"; }}; test \"$(sha256sum {main} | awk '{{print $1}}')\" = \"$(get main_sha256)\"; test \"$(sha256sum \"$root/mister-magik-fb\" | awk '{{print $1}}')\" = \"$(get gui_sha256)\"; test \"$(sha256sum \"$root/mister-magik-manager\" | awk '{{print $1}}')\" = \"$(get manager_sha256)\"; test \"$(sha256sum \"$root/mister_magik_scanout_slots.ko\" | awk '{{print $1}}')\" = \"$(get scanout_module_sha256)\"; test \"$(sha256sum \"$root/fpga/menu-magik-vblank-latch.rbf\" | awk '{{print $1}}')\" = \"$(get latch_rbf_sha256)\""
     )
 }
 
@@ -56,8 +56,8 @@ pub(super) const PLATFORM_DEPLOY_FILES: &[(&str, &str)] = &[
         "/media/fat/mister-magik-dev/game-databases-SHA256SUMS",
     ),
     (
-        "platform-v2.manifest",
-        "/media/fat/mister-magik-dev/platform-v2.manifest",
+        "platform-v3.manifest",
+        "/media/fat/mister-magik-dev/platform-v3.manifest",
     ),
 ];
 
@@ -247,7 +247,7 @@ impl PlatformDeployTransaction {
         }
         for file in changed
             .iter()
-            .filter(|file| !file.remote.ends_with("platform-v2.manifest"))
+            .filter(|file| !file.remote.ends_with("platform-v3.manifest"))
         {
             activate.push_str(&format!(
                 "mv -f {} {}; ",
@@ -257,7 +257,7 @@ impl PlatformDeployTransaction {
         }
         if let Some(manifest) = changed
             .iter()
-            .find(|file| file.remote.ends_with("platform-v2.manifest"))
+            .find(|file| file.remote.ends_with("platform-v3.manifest"))
         {
             activate.push_str(&format!(
                 "mv -f {} {}; ",

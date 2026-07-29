@@ -318,6 +318,8 @@ pub enum PlatformManifestCommand {
         #[arg(long)]
         latch_metadata: PathBuf,
         #[arg(long)]
+        platform_bundle_manifest: PathBuf,
+        #[arg(long)]
         main_revision: String,
         #[arg(long)]
         magik_revision: String,
@@ -466,6 +468,7 @@ impl Cli {
                         scanout_metadata,
                         latch_rbf,
                         latch_metadata,
+                        platform_bundle_manifest,
                         main_revision,
                         magik_revision,
                         layout,
@@ -478,6 +481,7 @@ impl Cli {
                         scanout_metadata,
                         latch_rbf,
                         latch_metadata,
+                        platform_bundle_manifest,
                         main_revision,
                         magik_revision,
                         layout,

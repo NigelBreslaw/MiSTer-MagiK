@@ -47,10 +47,10 @@ def main() -> None:
     package = read("scripts/package-distribution.sh")
     forbid(package, "--catalog-builder", "release package")
     forbid(package, "mister-magik-catalog-builder", "release package")
-    require(package, "platform-v2.manifest", "release package")
+    require(package, "platform-v3.manifest", "release package")
 
     manifest = read("agent-cli/src/platform_manifest.rs")
-    require(manifest, 'FORMAT: &str = "mister-magik-platform-v2"', "platform manifest")
+    require(manifest, 'FORMAT: &str = "mister-magik-platform-v3"', "platform manifest")
     forbid(manifest, '"catalog_builder"', "platform manifest")
 
     print("embedded catalog release checks ok")

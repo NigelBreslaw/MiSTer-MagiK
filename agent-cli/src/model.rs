@@ -358,6 +358,7 @@ pub enum Intent {
         scanout_metadata: PathBuf,
         latch_rbf: PathBuf,
         latch_metadata: PathBuf,
+        platform_bundle_manifest: PathBuf,
         main_revision: String,
         magik_revision: String,
         layout: String,

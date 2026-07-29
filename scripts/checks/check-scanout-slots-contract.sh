@@ -67,10 +67,10 @@ ${CC:-cc} -std=c11 -Wall -Wextra -Werror \
   "$ROOT/mister/platform/kernel/scanout-slots/mister_magik_scanout_policy_test.c" -o "$policy_test"
 "$policy_test"
 require_text "$DEPLOY" PlatformDeployTransaction
-for text in installed_platform_verify_command platform-v2.manifest scanout_module_sha256 latch_rbf_sha256; do
+for text in installed_platform_verify_command platform-v3.manifest scanout_module_sha256 latch_rbf_sha256; do
   require_text "$DEPLOY" "$text"
 done
-for text in stage_published_platform_components platform-v2.manifest mister_magik_scanout_slots.ko menu-magik-vblank-latch.rbf; do
+for text in stage_published_platform_components platform-v3.manifest mister_magik_scanout_slots.ko menu-magik-vblank-latch.rbf; do
   require_text "$PLATFORM_STAGE" "$text"
 done
 for text in /dev/mister-magik-scanout-slots 960x540 RGB565 /dev/fb0 QEMU; do
