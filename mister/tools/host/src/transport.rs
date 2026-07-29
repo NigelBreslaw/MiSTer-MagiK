@@ -82,6 +82,7 @@ pub enum DeviceRequest {
     QualifyReleaseCatalog,
     QualifyReleaseInputAndHandoff,
     QualifyReleaseDisplay,
+    QualifyReleaseLatchV4Stress,
     QualifyReleaseRecovery,
     RestoreReleaseQualification,
     CollectDiagnosticFacts,
@@ -136,6 +137,7 @@ impl DeviceRequest {
             Self::QualifyReleaseCatalog => "qualify-release-catalog",
             Self::QualifyReleaseInputAndHandoff => "qualify-release-input-and-handoff",
             Self::QualifyReleaseDisplay => "qualify-release-display",
+            Self::QualifyReleaseLatchV4Stress => "qualify-release-latch-v4-stress",
             Self::QualifyReleaseRecovery => "qualify-release-recovery",
             Self::RestoreReleaseQualification => "restore-release-qualification",
             Self::CollectDiagnosticFacts => "collect-diagnostic-facts",
@@ -335,6 +337,7 @@ mod tests {
             DeviceRequest::QualifyReleaseCatalog,
             DeviceRequest::QualifyReleaseInputAndHandoff,
             DeviceRequest::QualifyReleaseDisplay,
+            DeviceRequest::QualifyReleaseLatchV4Stress,
             DeviceRequest::QualifyReleaseRecovery,
             DeviceRequest::RestoreReleaseQualification,
             DeviceRequest::CollectDiagnosticFacts,
@@ -348,7 +351,7 @@ mod tests {
             DeviceRequest::CaptureFramebuffer,
         ];
         let labels: Vec<_> = requests.iter().map(DeviceRequest::label).collect();
-        assert_eq!(labels.len(), 35);
+        assert_eq!(labels.len(), 36);
         assert!(labels.iter().all(|label| !label.is_empty()));
         assert_eq!(
             labels

@@ -16,6 +16,7 @@ pub enum Phase {
     Catalog,
     InputAndHandoff,
     Display,
+    LatchV4Stress,
     Recovery,
     Restore,
 }
@@ -29,6 +30,7 @@ impl Phase {
             Self::Catalog => "catalog",
             Self::InputAndHandoff => "input-and-handoff",
             Self::Display => "display",
+            Self::LatchV4Stress => "latch-v4-six-hour-stress",
             Self::Recovery => "recovery",
             Self::Restore => "restore",
         }
@@ -52,7 +54,8 @@ pub fn run_workflow(
         (Phase::Catalog, 40),
         (Phase::InputAndHandoff, 58),
         (Phase::Display, 72),
-        (Phase::Recovery, 88),
+        (Phase::LatchV4Stress, 78),
+        (Phase::Recovery, 92),
         (Phase::Restore, 100),
     ];
     crate::workflow::run_restorable_phases(
@@ -139,6 +142,10 @@ impl ReleaseActions for ProcessActions {
                 .device
                 .execute(DeviceRequest::QualifyReleaseDisplay)
                 .map(|_| ()),
+            Phase::LatchV4Stress => self
+                .device
+                .execute(DeviceRequest::QualifyReleaseLatchV4Stress)
+                .map(|_| ()),
             Phase::Recovery => self
                 .device
                 .execute(DeviceRequest::QualifyReleaseRecovery)
@@ -224,6 +231,7 @@ mod tests {
             Phase::Catalog,
             Phase::InputAndHandoff,
             Phase::Display,
+            Phase::LatchV4Stress,
             Phase::Recovery,
         ] {
             let mut actions = FakeActions {

@@ -23,6 +23,7 @@ mod agent_client;
 mod arcade_database;
 mod crt_qualification;
 mod discovery;
+mod latch_v4_qualification;
 mod media;
 mod platform_deploy;
 mod remote;
@@ -421,6 +422,9 @@ impl DeviceOperations for NativeDevice {
             DeviceRequest::QualifyReleaseDisplay => {
                 qualify_release_display_matrix_with(&config.connection, &config.agent)
                     .map_err(device_failure)?
+            }
+            DeviceRequest::QualifyReleaseLatchV4Stress => {
+                latch_v4_qualification::run(&config).map_err(device_failure)?
             }
             DeviceRequest::QualifyReleaseRecovery => {
                 let session = connect(10).map_err(device_failure)?;
@@ -2476,7 +2480,7 @@ const RELEASE_TOKEN: &str = "/tmp/mister-magik/release-qualification-session";
 const RELEASE_SNAPSHOT: &str = "/tmp/mister-magik/release-qualification-snapshot";
 
 fn release_arming_cleanup_command() -> &'static str {
-    "rm -f /media/fat/mister-magik/launcher.env /media/fat/mister-magik-dev/launcher.env /tmp/mister-magik/fs-fault-launcher.env /tmp/mister-magik/fs-fault-session /tmp/mister-magik/fs-fault.json /media/fat/mister-magik/rebuild-on-next-boot /media/fat/mister-magik-dev/rebuild-on-next-boot"
+    "rm -f /media/fat/mister-magik/launcher.env /media/fat/mister-magik-dev/launcher.env /tmp/mister-magik/fs-fault-launcher.env /tmp/mister-magik/fs-fault-session /tmp/mister-magik/fs-fault.json /tmp/mister-magik/latch-v4-qualification-control.tsv /tmp/mister-magik/latch-v4-qualification-control.tsv.tmp /tmp/mister-magik/latch-v4-qualification-state.json /media/fat/mister-magik/rebuild-on-next-boot /media/fat/mister-magik-dev/rebuild-on-next-boot; rm -rf /tmp/mister-magik/latch-v4-catalog"
 }
 
 fn release_begin_command() -> String {

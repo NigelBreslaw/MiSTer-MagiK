@@ -1494,6 +1494,16 @@ impl ScreensaverControl {
         }
     }
 
+    fn set_qualification_particles(&mut self, now: Instant, requested: bool) {
+        if requested {
+            if !self.active {
+                self.start_when_ready = true;
+            }
+        } else if self.active || self.start_when_ready {
+            self.cancel_for_exclusive_view(now);
+        }
+    }
+
     fn preview(&mut self, now: Instant) {
         self.active = true;
         self.preview_active = true;
@@ -1667,6 +1677,8 @@ pub(super) fn run_launcher_loop(
     let mut screensaver_first_card_present_logged = false;
     let mut launcher_presenter = LauncherPresenter::new(ui);
     let launcher_bench_scenario = LauncherBenchScenario::from_env();
+    let mut latch_v4_qualification = LatchV4Qualification::from_env(start);
+    let mut latch_v4_bench_state = LauncherBenchState::default();
     let launcher_bench_after_input_script =
         launcher_bench_scenario.is_some() && launcher_bench_after_input_script_enabled();
     let launcher_bench_launch_handoff =
@@ -1695,7 +1707,10 @@ pub(super) fn run_launcher_loop(
         .is_some()
         .then(launcher_start_menu_from_env)
         .flatten();
-    let start_screen = env_start_screen
+    let start_screen = latch_v4_qualification
+        .enabled()
+        .then_some(Screen::Arcade)
+        .or(env_start_screen)
         .or_else(|| env_start_system.as_ref().map(|_| Screen::Arcade))
         .or_else(|| bench_starts_on_arcade.then_some(Screen::Arcade))
         .unwrap_or(Screen::Home);
@@ -2902,6 +2917,58 @@ pub(super) fn run_launcher_loop(
             }
         }
 
+        latch_v4_qualification.poll_control(loop_start);
+        latch_v4_qualification.observe_catalog_worker(
+            scheduler.catalog_worker_running(),
+            catalog_session.refresh_done(),
+        );
+        if latch_v4_qualification.take_catalog_request(scheduler.catalog_worker_running()) {
+            let effects = catalog_session.qualification_fresh_rebuild(arcade_root.clone());
+            apply_catalog_session_effects(
+                effects,
+                &app,
+                &mut nav,
+                &mut catalog,
+                &mut catalog_ready,
+                &mut catalog_version,
+                &mut return_capsule_active,
+                &mut catalog_generation,
+                &mut pending_launch_return_state,
+                &mut preview,
+                &mut media_session,
+                &mut scheduler,
+                &mut lifecycle,
+                &mut lifecycle_effects,
+                &mut full_bridge_dirty,
+                loop_start,
+                start,
+            );
+            request_launcher_redraw!();
+        }
+        if latch_v4_qualification.enabled()
+            && launcher_presenter.latch_failure().is_none()
+            && arcade_navigation_ready(catalog_ready, &catalog)
+            && let Some(scenario) = latch_v4_qualification.stress_class().bench_scenario()
+        {
+            let before = LauncherBridgeKey::from_nav(&nav);
+            if launcher_bench_step(
+                scenario,
+                &mut nav,
+                &catalog,
+                None,
+                &mut latch_v4_bench_state,
+                loop_start,
+            ) {
+                latch_v4_bench_state.advance_if(true);
+                let after = LauncherBridgeKey::from_nav(&nav);
+                if before != after {
+                    media_session.note_nav_change(&before, &after, loop_start);
+                    full_bridge_dirty = true;
+                }
+                request_launcher_redraw!();
+            }
+        }
+
         if let Some(scenario) = launcher_bench_scenario {
             let latch_failure_active = launcher_presenter.latch_failure().is_some();
             let after_input_script_ready = match scenario {
@@ -2996,6 +3063,11 @@ pub(super) fn run_launcher_loop(
             scheduler.catalog_worker_running(),
             catalog_session.refresh_done(),
             particle_screensaver_requested,
+        );
+        screensaver.set_qualification_particles(
+            loop_start,
+            latch_v4_qualification.enabled()
+                && latch_v4_qualification.stress_class() == LatchV4StressClass::Particles,
         );
         let restore_before = screensaver.restore_full_frame;
         screensaver.update(
@@ -4958,6 +5030,7 @@ pub(super) fn run_launcher_loop(
             },
         }
         .build();
+        let mut accepted_and_active_confirmed = false;
         if latch_trace_flush_deferred {
             let finish_timing = frame_accounting.finish_frame_before_trace(
                 &presented_frame,
@@ -5060,6 +5133,11 @@ pub(super) fn run_launcher_loop(
                     presented_frame.main_present_pending = true;
                 }
             }
+            accepted_and_active_confirmed = presented_frame.main_present_sequence != 0
+                && presented_frame.main_present_active_sequence
+                    == presented_frame.main_present_sequence
+                && !presented_frame.main_present_pending
+                && launcher_presenter.latch_failure().is_none();
             frame_accounting.record_finished_frame(
                 &presented_frame,
                 start,
@@ -5128,6 +5206,11 @@ pub(super) fn run_launcher_loop(
                 latch_trace_flush_deferred,
             );
         }
+        latch_v4_qualification.record_present(
+            accepted_and_active_confirmed,
+            scheduler.catalog_worker_running(),
+        );
+        latch_v4_qualification.write_state_if_due(Instant::now());
         frames += 1;
     }
     // Preserve the continuous background permission for a later launcher run

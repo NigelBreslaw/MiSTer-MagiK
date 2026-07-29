@@ -516,6 +516,30 @@ impl LauncherCatalogSession {
         effects
     }
 
+    pub(super) fn qualification_fresh_rebuild(&mut self, root: String) -> CatalogSessionEffects {
+        let mut effects = CatalogSessionEffects::default();
+        effects.event(
+            "library_fresh_rebuild_requested",
+            "source=latch-v4-qualification",
+        );
+        self.refresh_done = false;
+        self.foreground_update = true;
+        self.deferred_worker = None;
+        self.refresh_failed = false;
+        self.reset_counter_metrics();
+        self.games_found_counter.reset();
+        effects.push(CatalogSessionEffect::StartCatalogWorker(
+            CatalogWorkerStart {
+                root,
+                request: CatalogWorkerRequest::FreshBuild,
+                initial_cache: CatalogWorkerInitialCache::AlreadyProbedMissing,
+                execution_mode: CatalogExecutionMode::ForegroundExclusive,
+            },
+        ));
+        effects.ui(catalog_rebuild_started_intent(self.foreground_update));
+        effects
+    }
+
     fn handle_progress(
         &mut self,
         context: CatalogWorkerMessageContext,
@@ -1686,6 +1710,25 @@ mod tests {
         assert_eq!(effect_names(effects), vec!["event", "start-worker", "ui"]);
         assert!(!session.refresh_done());
         assert!(session.foreground_update());
+    }
+
+    #[test]
+    fn qualification_rebuild_is_a_fresh_foreground_generation() {
+        let mut session = LauncherCatalogSession::new(false);
+        let effects = session.qualification_fresh_rebuild("/media/fat/_Arcade".to_string());
+        let worker = effects
+            .effects
+            .iter()
+            .find_map(|effect| match effect {
+                CatalogSessionEffect::StartCatalogWorker(worker) => Some(worker),
+                _ => None,
+            })
+            .expect("catalog worker");
+        assert_eq!(worker.request, CatalogWorkerRequest::FreshBuild);
+        assert_eq!(
+            worker.execution_mode,
+            CatalogExecutionMode::ForegroundExclusive
+        );
     }
 
     #[test]

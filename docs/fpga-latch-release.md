@@ -75,6 +75,26 @@ forces cold catalog generation while rotating particle animation, transitions,
 rapid Arcade scrolling, preview/archive decoding, search/model churn, and
 keyboard/controller/pointer traffic.
 
+Run the gate only through:
+
+```text
+scripts/agent release qualify
+```
+
+The fixed workflow performs its normal release checks and then runs
+`latch-v4-six-hour-stress`. The launcher reads the real installed libraries and
+metadata, but writes every generated catalog artifact to a volatile isolated
+qualification directory. The host rotates the six stress classes every five
+minutes, requests serial cold catalog generations every seven minutes and
+thirty seconds, and reads the CRC-protected receipt/status interfaces every
+five seconds through the same FPGA transaction lock used by production.
+
+Raw samples and the terminal summary are retained under
+`build/release-qualification/latch-v4/<candidate-id>/<run-id>/`. The summary
+binds the immutable identity block and the SHA-256 of the NDJSON sample stream.
+An interruption or any failed sample fails the gate and still runs the release
+restoration path.
+
 The exact candidate must retain at least:
 
 - six hours elapsed and 12 cold catalog generations;
@@ -84,7 +104,10 @@ The exact candidate must retain at least:
 - 4,000 authoritative receipt/status samples;
 - zero forbidden state, rejected production post, ambiguous transaction,
   blocked Main write, crash, hang, black frame, or compatibility screen;
-- the approved latency and memory-stability bounds.
+- maximum observed frame wall time of 250 ms;
+- maximum consecutive vblank-miss streak of two frames;
+- launcher RSS high-water mark no greater than 192 MiB;
+- final launcher RSS no more than 32 MiB above the starting RSS.
 
 Evidence is rejected if release, bundle, candidate, manifest, runtime build,
 runtime binary, Main, module, RBF, boot, or launcher session identity differs.
