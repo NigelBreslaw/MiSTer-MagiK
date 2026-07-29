@@ -487,6 +487,8 @@ pub struct LatchFailureEvidence {
     pub first_rejection_observation: Option<LatchRejectionObservation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rejection_observation: Option<LatchRejectionObservation>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failure_history: Vec<LatchFailure>,
 }
 
 impl From<&LatchFailure> for LatchFailureEvidence {
@@ -516,6 +518,7 @@ impl From<&LatchFailure> for LatchFailureEvidence {
             status_observation: failure.status_observation,
             first_rejection_observation: failure.rejection_observation,
             rejection_observation: failure.rejection_observation,
+            failure_history: vec![failure.clone()],
         }
     }
 }
@@ -524,16 +527,13 @@ impl LatchFailureEvidence {
     pub fn for_recovery(
         first: &LatchFailure,
         latest: &LatchFailure,
+        failure_history: &[LatchFailure],
         attempt_count: u8,
         latest_result: impl Into<String>,
         recovery_state: impl Into<String>,
     ) -> Self {
         Self {
-            schema: if latest.has_diagnostics() || first.has_diagnostics() {
-                "mister-magik-latch-failure-v3"
-            } else {
-                "mister-magik-latch-failure-v2"
-            },
+            schema: "mister-magik-latch-failure-v4",
             state: first.state.code().to_string(),
             stage: first.stage.code().to_string(),
             reason: first.reason_code().to_string(),
@@ -553,6 +553,7 @@ impl LatchFailureEvidence {
             status_observation: latest.status_observation,
             first_rejection_observation: first.rejection_observation,
             rejection_observation: latest.rejection_observation,
+            failure_history: failure_history.to_vec(),
         }
     }
 

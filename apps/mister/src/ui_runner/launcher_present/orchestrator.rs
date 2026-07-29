@@ -46,6 +46,7 @@ pub(in crate::ui_runner) struct LauncherPresenter<L = FpgaVblankLatchHiddenPrese
     failure_transitions: u64,
     first_failure: Option<LatchFailure>,
     latest_failure: Option<LatchFailure>,
+    failure_history: Vec<LatchFailure>,
     retry_attempts: u8,
     auto_retry: LatchAutoRetryState,
     next_retry_at: Option<Instant>,
@@ -102,6 +103,7 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
     pub(in crate::ui_runner) fn new(ui: &UiDisplay) -> Self {
         let mut first_failure = None;
         let mut latest_failure = None;
+        let mut failure_history = Vec::new();
         let mut auto_retry = LatchAutoRetryState::Disabled;
         let mut recovery_state = "not-needed";
         let state = match launcher_present_backend() {
@@ -111,6 +113,7 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
                     Err(failure) => {
                         first_failure = Some(failure.clone());
                         latest_failure = Some(failure.clone());
+                        failure_history.push(failure.clone());
                         if failure.is_transient_runtime_failure() {
                             auto_retry = LatchAutoRetryState::Ready;
                             recovery_state = "output-frozen";
@@ -138,6 +141,7 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
             failure_transitions,
             first_failure,
             latest_failure,
+            failure_history,
             retry_attempts: 0,
             auto_retry,
             next_retry_at: None,
@@ -293,6 +297,7 @@ impl<L> LauncherPresenter<L> {
             self.first_failure = Some(latch_error.clone());
         }
         self.latest_failure = Some(latch_error.clone());
+        self.failure_history.push(latch_error.clone());
         let automatic_retry = latch_error.is_transient_runtime_failure();
         self.auto_retry = if automatic_retry && self.retry_attempts < MAX_AUTO_RETRY_ATTEMPTS {
             LatchAutoRetryState::Ready
@@ -369,6 +374,7 @@ impl<L> LauncherPresenter<L> {
         persist_latch_failure(
             first,
             latest,
+            &self.failure_history,
             self.retry_attempts,
             self.latest_retry_result,
             self.recovery_state,
@@ -398,6 +404,7 @@ impl<L> LauncherPresenter<L> {
 fn persist_latch_failure(
     first: &LatchFailure,
     latest: &LatchFailure,
+    failure_history: &[LatchFailure],
     retry_attempts: u8,
     latest_retry_result: &str,
     recovery_state: &str,
@@ -405,6 +412,7 @@ fn persist_latch_failure(
     let evidence = mister_magik_fb::latch_readiness::LatchFailureEvidence::for_recovery(
         first,
         latest,
+        failure_history,
         retry_attempts,
         latest_retry_result,
         recovery_state,
@@ -906,7 +914,8 @@ mod tests {
             state,
             failure_transitions: 0,
             first_failure: failure.clone(),
-            latest_failure: failure,
+            latest_failure: failure.clone(),
+            failure_history: failure.into_iter().collect(),
             retry_attempts: 0,
             auto_retry: LatchAutoRetryState::Disabled,
             next_retry_at: None,
@@ -1066,6 +1075,14 @@ mod tests {
             presenter.latest_failure.as_ref().unwrap().detail,
             "retry failed"
         );
+        assert_eq!(
+            presenter
+                .failure_history
+                .iter()
+                .map(|failure| failure.detail.as_str())
+                .collect::<Vec<_>>(),
+            ["failed latch", "retry failed"]
+        );
         assert_eq!(presenter.retry_attempts, 1);
         assert_eq!(presenter.auto_retry, LatchAutoRetryState::Ready);
 
@@ -1127,6 +1144,7 @@ mod tests {
             presenter.latest_failure.as_ref().unwrap().detail,
             "retry 4 failed"
         );
+        assert_eq!(presenter.failure_history.len(), 5);
     }
 
     #[test]
