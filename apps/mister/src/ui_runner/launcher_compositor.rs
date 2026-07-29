@@ -8,7 +8,6 @@ use super::*;
 pub(super) enum LauncherPresentBackend {
     None,
     Fb0Dirty,
-    CompatibilityFb0,
     FpgaVblankLatchHidden,
 }
 
@@ -17,7 +16,6 @@ impl LauncherPresentBackend {
         match self {
             Self::None => "none",
             Self::Fb0Dirty => "fb0-dirty",
-            Self::CompatibilityFb0 => "compatibility-fb0",
             Self::FpgaVblankLatchHidden => "fpga-vblank-latch-hidden",
         }
     }
@@ -32,7 +30,7 @@ pub(super) enum LauncherPresentStatus {
     None,
     Ok,
     Unsupported,
-    Compatibility,
+    Frozen,
 }
 
 impl LauncherPresentStatus {
@@ -41,7 +39,7 @@ impl LauncherPresentStatus {
             Self::None => "none",
             Self::Ok => "ok",
             Self::Unsupported => "unsupported",
-            Self::Compatibility => "compatibility",
+            Self::Frozen => "frozen",
         }
     }
 }

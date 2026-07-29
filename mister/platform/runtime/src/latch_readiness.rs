@@ -507,7 +507,7 @@ impl From<&LatchFailure> for LatchFailureEvidence {
             latest_detail: failure.detail.clone(),
             attempt_count: 0,
             latest_result: "not-attempted".to_string(),
-            recovery_state: "compatibility-prompt".to_string(),
+            recovery_state: "output-frozen".to_string(),
             first_wire_diagnostics: failure.wire_diagnostics.clone(),
             wire_diagnostics: failure.wire_diagnostics.clone(),
             first_post_diagnostics: failure.post_diagnostics,

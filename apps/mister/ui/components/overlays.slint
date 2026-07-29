@@ -7,47 +7,6 @@ import { OsdSideLabel } from "launcher_chrome.slint";
 import { CrtTheme } from "crt_ui.slint";
 import { ScreenshotPackProgressRow } from "progress.slint";
 
-export component CompatibilityScreen inherits Rectangle {
-
-    background: CrtTheme.background;
-
-    VerticalLayout {
-        padding: MisterUi.grid;
-        spacing: MisterUi.compact-layout ? MisterUi.grid : 16px;
-        alignment: center;
-
-        Text {
-            text: "MiSTer MagiK compatibility check failed";
-            color: #ff5d73;
-            font-size: MisterUi.heading-font;
-            horizontal-alignment: center;
-        }
-
-        Text {
-            text: MisterBridge.compatibility-reason;
-            color: #ffd166;
-            font-size: MisterUi.body-font;
-            horizontal-alignment: center;
-        }
-
-        Text {
-            text: MisterBridge.compatibility-detail;
-            color: #e8e0f0;
-            font-size: MisterUi.body-font;
-            horizontal-alignment: center;
-            wrap: word-wrap;
-        }
-
-        Text {
-            text: "A: Retry latch    B: Continue using compatibility mode";
-            color: #9080a8;
-            font-size: MisterUi.body-font;
-            horizontal-alignment: center;
-            wrap: word-wrap;
-        }
-    }
-}
-
 export component CatalogScanPopup inherits Rectangle {
     property <length> scan-osd-width: MisterUi.compact-layout ? 0px : 56px;
     property <length> scan-horizontal-padding: MisterUi.compact-layout ? MisterUi.grid : 70px;

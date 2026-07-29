@@ -32,15 +32,16 @@ Production boot stays compatible with stock MiSTer:
 3. `[MiSTer] main=MiSTer_MagiK` or `MiSTer_MagiKDev` re-execs the selected
    MagiK Main fork.
 4. The fork selects `mister-magik/` or `mister-magik-dev/` from its own
-   executable name, prefers that layout's `platform-v3.manifest` (with v1 as an
-   installed-system compatibility fallback), and redirects
-   an empty/default Menu boot to the manifest-owned production RBF at
-   the Menu boot to that layout's `fpga/menu-magik-vblank-latch.rbf`.
+   executable name, requires that layout's exact `platform-v3.manifest`, and
+   redirects an empty/default Menu boot to the manifest-owned production RBF
+   at `fpga/menu-magik-vblank-latch.rbf`.
 5. The fork initializes HDMI/video through the normal Main path.
-6. The fork clears and routes the initial RGB565 launcher framebuffer through
-   `video_magik_route_black()`, using Main's complete FPGA configuration word.
+6. Before transferring FPGA ownership, the fork validates the exact Main,
+   runtime, scanout-module, and latch-RBF tuple. A failed preflight leaves Main
+   in control and does not start the launcher.
 7. The fork starts the selected layout's `mister-magik-fb ui launcher 0` on
-   `tty2` and enters dormant launcher mode. Rust independently derives the same
+   `tty2`, transfers exclusive FPGA ownership for the supervised child, and
+   enters dormant launcher mode. Rust independently derives the same
    application root from its executable location.
 
 Main exclusively owns `UIO_BUT_SW`, including `CONF_VGA_FB`, composite sync,
@@ -116,9 +117,11 @@ conversion:
   address before vblank, then waits for vblank only as the pacing boundary for
   the next frame. Hidden-slot writes follow copy → overlay → publish → post;
   ARM publication uses a full-system store barrier to drain write-combined
-  stores before the FPGA latch sees the slot. A latch readiness failure enters
-  a compatibility screen and emits machine-readable failure records; it never
-  presents the normal launcher through `/dev/fb0`. The single-frame `/dev/fb0`
+  stores before the FPGA latch sees the slot. A latch failure freezes the last
+  confirmed hardware frame, emits machine-readable failure records, and makes
+  bounded recovery attempts after 250 ms, 1 s, 5 s, and 60 s. It never clears
+  the visible route, presents a fallback screen, or presents the normal
+  launcher through `/dev/fb0`. The single-frame `/dev/fb0`
   dirty-copy path is an explicit diagnostic renderer selected only with
   `MISTER_PRESENT_BACKEND=fb0-dirty`; that path intentionally keeps the older
   order: wait for vblank, then dirty-copy to `/dev/fb0`.
@@ -166,7 +169,7 @@ Important policy:
 
 - Do not render the normal Slint launcher into the live framebuffer. The latch
   path is the required production renderer; cached-RAM plus `/dev/fb0`
-  dirty-copy is diagnostic-only, apart from the dedicated compatibility screen.
+  dirty-copy is diagnostic-only.
 - Do not assume `/dev/fb0` contents are visible on HDMI. The FPGA may be scanning
   another buffer.
 - RGB888/8888 UI support and color-route smoke tooling have been removed from

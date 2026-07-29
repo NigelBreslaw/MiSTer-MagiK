@@ -20,7 +20,6 @@ import {
     LoadingOverlay,
     MediaProgressPopup,
     StartupSplash,
-    DisplayDegradedBanner,
 } from "crt_overlays.slint";
 
 export component CrtLauncherUi inherits Rectangle {
@@ -62,10 +61,5 @@ export component CrtLauncherUi inherits Rectangle {
         if MisterBridge.display-combo-open : CrtComboBoxOverlay { }
         if MisterBridge.loading-message != "" : LoadingOverlay { }
         if MisterBridge.startup-visible : StartupSplash { }
-        if MisterBridge.compatibility-visible : DisplayDegradedBanner {
-            x: MisterUi.grid-x;
-            y: MisterUi.grid-y;
-            width: content.width - MisterUi.grid-x * 2;
-        }
     }
 }

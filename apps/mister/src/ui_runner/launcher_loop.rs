@@ -66,7 +66,7 @@ impl LauncherPresentBackend {
 
     fn log_if_experimental(self) {
         match self {
-            Self::None | Self::Fb0Dirty | Self::CompatibilityFb0 => {}
+            Self::None | Self::Fb0Dirty => {}
             Self::FpgaVblankLatchHidden => {
                 crate::ui_logln!("launcher_present_backend=fpga-vblank-latch-hidden");
                 boot_analytics::event("launcher_present_backend", "fpga-vblank-latch-hidden");
@@ -96,8 +96,7 @@ fn present_mode_label_for_backend_status(
 ) -> &'static str {
     match (backend, status) {
         (LauncherPresentBackend::FpgaVblankLatchHidden, LauncherPresentStatus::Ok) => "Mode=latch",
-        (LauncherPresentBackend::CompatibilityFb0, _)
-        | (_, LauncherPresentStatus::Compatibility) => "Mode=compatibility",
+        (_, LauncherPresentStatus::Frozen) => "Mode=output frozen",
         _ => "Mode=/dev/fb0 diagnostic",
     }
 }
@@ -1388,7 +1387,6 @@ fn sqlite_file_has_valid_header(path: &Path) -> bool {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum EffectiveLauncherView {
-    Compatibility,
     Launching,
     Screensaver,
     Navigation(Screen),
@@ -1398,26 +1396,17 @@ impl EffectiveLauncherView {
     fn resolve(
         lifecycle: &LauncherLifecycle,
         screensaver_active: bool,
-        compatibility_active: bool,
         return_screen: Screen,
     ) -> Self {
-        Self::resolve_state(
-            lifecycle.state(),
-            screensaver_active,
-            compatibility_active,
-            return_screen,
-        )
+        Self::resolve_state(lifecycle.state(), screensaver_active, return_screen)
     }
 
     fn resolve_state(
         lifecycle: &LauncherLifecycleState,
         screensaver_active: bool,
-        compatibility_active: bool,
         return_screen: Screen,
     ) -> Self {
-        if compatibility_active {
-            Self::Compatibility
-        } else if matches!(
+        if matches!(
             lifecycle,
             LauncherLifecycleState::Launching { .. } | LauncherLifecycleState::Handoff { .. }
         ) {
@@ -1431,7 +1420,6 @@ impl EffectiveLauncherView {
 
     fn label(self) -> &'static str {
         match self {
-            Self::Compatibility => "compatibility",
             Self::Launching => "launching",
             Self::Screensaver => "screensaver",
             Self::Navigation(screen) => screen_label(screen),
@@ -1449,7 +1437,7 @@ impl EffectiveLauncherView {
     pub(super) const fn return_screen(self) -> Option<Screen> {
         match self {
             Self::Navigation(screen) => Some(screen),
-            Self::Compatibility | Self::Launching | Self::Screensaver => None,
+            Self::Launching | Self::Screensaver => None,
         }
     }
 }
@@ -2284,7 +2272,7 @@ pub(super) fn run_launcher_loop(
     let mut first_vsync_logged = false;
     let mut first_launcher_frame_logged = false;
     let mut frame_accounting = LauncherFrameAccounting::new(run_start, ui.output_route().label());
-    if let Some(failure) = launcher_presenter.compatibility_failure() {
+    if let Some(failure) = launcher_presenter.latch_failure() {
         frame_accounting.record_latch_failure(failure);
     }
     if launcher_bench_after_input_script {
@@ -2380,18 +2368,7 @@ pub(super) fn run_launcher_loop(
             );
             request_launcher_redraw!();
         }
-        let compatibility_blocks_app = launcher_presenter.compatibility_blocks_app();
-        let display_degraded = launcher_presenter.display_degraded();
-        frame_accounting.set_display_degraded(display_degraded);
-        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-        if bridge.get_compatibility_visible() != display_degraded {
-            bridge.set_compatibility_visible(display_degraded);
-            if !display_degraded {
-                bridge.set_compatibility_reason("".into());
-                bridge.set_compatibility_detail("".into());
-            }
-            request_launcher_redraw!();
-        }
+        frame_accounting.set_display_frozen(launcher_presenter.display_frozen());
         let lifecycle_launch_active = matches!(
             lifecycle.state(),
             LauncherLifecycleState::Launching { .. } | LauncherLifecycleState::Handoff { .. }
@@ -2402,25 +2379,15 @@ pub(super) fn run_launcher_loop(
                 "kind=stale-launch-transport lifecycle=interactive",
             );
         }
-        if (lifecycle_launch_active || compatibility_blocks_app)
-            && screensaver.cancel_for_exclusive_view(loop_start)
-        {
+        if lifecycle_launch_active && screensaver.cancel_for_exclusive_view(loop_start) {
             runtime_status::event(
                 "launcher_state_invariant_recovered",
-                if lifecycle_launch_active {
-                    "kind=screensaver-during-launch action=cancel-screensaver"
-                } else {
-                    "kind=screensaver-under-compatibility action=cancel-screensaver"
-                },
+                "kind=screensaver-during-launch action=cancel-screensaver",
             );
             request_launcher_redraw!();
         }
-        let mut effective_view = EffectiveLauncherView::resolve(
-            &lifecycle,
-            screensaver.active,
-            compatibility_blocks_app,
-            nav.screen,
-        );
+        let mut effective_view =
+            EffectiveLauncherView::resolve(&lifecycle, screensaver.active, nav.screen);
         let mut launching = effective_view.launch_active();
         let setup_active = setup.is_active();
         let mut light_bridge_dirty = false;
@@ -2924,7 +2891,7 @@ pub(super) fn run_launcher_loop(
         }
 
         if let Some(scenario) = launcher_bench_scenario {
-            let compatibility_active = launcher_presenter.compatibility_failure().is_some();
+            let latch_failure_active = launcher_presenter.latch_failure().is_some();
             let after_input_script_ready = match scenario {
                 LauncherBenchScenario::ScreensaverShow => screensaver.active,
                 _ => {
@@ -2958,7 +2925,7 @@ pub(super) fn run_launcher_loop(
                 catalog_ready
             };
             if launcher_bench_active
-                && !compatibility_active
+                && !latch_failure_active
                 && catalog_ready_for_bench
                 && launcher_bench_waiting_for_initial_preview
             {
@@ -2976,7 +2943,7 @@ pub(super) fn run_launcher_loop(
                 }
             }
             if launcher_bench_active
-                && !compatibility_active
+                && !latch_failure_active
                 && catalog_ready_for_bench
                 && !launcher_bench_waiting_for_initial_preview
                 && launcher_bench_next_step.elapsed() >= scenario.period()
@@ -3028,12 +2995,7 @@ pub(super) fn run_launcher_loop(
         if !restore_before && screensaver.restore_full_frame {
             request_launcher_redraw!();
         }
-        effective_view = EffectiveLauncherView::resolve(
-            &lifecycle,
-            screensaver.active,
-            compatibility_blocks_app,
-            nav.screen,
-        );
+        effective_view = EffectiveLauncherView::resolve(&lifecycle, screensaver.active, nav.screen);
         launching = effective_view.launch_active();
         frame_accounting.set_effective_view(effective_view.label());
         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
@@ -3982,12 +3944,7 @@ pub(super) fn run_launcher_loop(
         sync_startup_visibility(&app, &lifecycle);
         let startup_reveal_ready =
             lifecycle.startup_status().state == StartupRevealState::RevealLauncher;
-        effective_view = EffectiveLauncherView::resolve(
-            &lifecycle,
-            screensaver.active,
-            launcher_presenter.compatibility_blocks_app(),
-            nav.screen,
-        );
+        effective_view = EffectiveLauncherView::resolve(&lifecycle, screensaver.active, nav.screen);
         if effective_view.launch_active() && screensaver.cancel_for_exclusive_view(Instant::now()) {
             effective_view = EffectiveLauncherView::Launching;
             request_launcher_redraw!();
@@ -4835,13 +4792,8 @@ pub(super) fn run_launcher_loop(
                     .unwrap_or(u64::MAX),
             );
         }
-        if let Some(failure) = launcher_presenter.compatibility_failure() {
+        if let Some(failure) = launcher_presenter.latch_failure() {
             frame_accounting.record_latch_failure(failure);
-            let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-            bridge.set_compatibility_visible(launcher_presenter.display_degraded());
-            bridge.set_compatibility_reason(failure.reason_code().into());
-            bridge.set_compatibility_detail(failure.detail.as_str().into());
-            request_launcher_redraw!();
         }
         app.global::<slint_ui::launcher::MisterBridge>()
             .set_present_mode_label(
@@ -5089,12 +5041,8 @@ pub(super) fn run_launcher_loop(
                 }
                 Err(failure) => {
                     launcher_presenter.fail_latch_completion(failure);
-                    if let Some(failure) = launcher_presenter.compatibility_failure() {
+                    if let Some(failure) = launcher_presenter.latch_failure() {
                         frame_accounting.record_latch_failure(failure);
-                        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                        bridge.set_compatibility_visible(launcher_presenter.display_degraded());
-                        bridge.set_compatibility_reason(failure.reason_code().into());
-                        bridge.set_compatibility_detail(failure.detail.as_str().into());
                     }
                     presented_frame.main_present_active_sequence = 0;
                     presented_frame.main_present_pending = true;
@@ -7217,9 +7165,9 @@ mod tests {
         assert_eq!(
             present_mode_label_for_backend_status(
                 LauncherPresentBackend::FpgaVblankLatchHidden,
-                LauncherPresentStatus::Compatibility,
+                LauncherPresentStatus::Frozen,
             ),
-            "Mode=compatibility"
+            "Mode=output frozen"
         );
         assert_eq!(
             present_mode_label_for_backend_status(
@@ -8440,7 +8388,6 @@ mod tests {
         let view = EffectiveLauncherView::resolve_state(
             &LauncherLifecycleState::Idle,
             saver.active,
-            false,
             Screen::Settings,
         );
 
@@ -8461,12 +8408,8 @@ mod tests {
         let launch_state = LauncherLifecycleState::Launching {
             phase: LaunchingPhase::HandoffPending,
         };
-        let view = EffectiveLauncherView::resolve_state(
-            &launch_state,
-            saver.active,
-            false,
-            Screen::Arcade,
-        );
+        let view =
+            EffectiveLauncherView::resolve_state(&launch_state, saver.active, Screen::Arcade);
         assert_eq!(view, EffectiveLauncherView::Launching);
         assert!(saver.cancel_for_exclusive_view(start + Duration::from_millis(1)));
         assert!(!saver.active);

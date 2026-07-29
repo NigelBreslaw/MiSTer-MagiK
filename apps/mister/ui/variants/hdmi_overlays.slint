@@ -6,35 +6,6 @@ import { MisterBridge } from "../api.slint";
 import { LauncherTile, OsdSideLabel } from "../components/launcher_chrome.slint";
 import { ScreenshotPackProgressRow } from "../components/progress.slint";
 
-export component DisplayDegradedBanner inherits Rectangle {
-    width: 360px;
-    height: 52px;
-    background: #241a20ee;
-    border-width: 1px;
-    border-color: #ffd166;
-
-    VerticalLayout {
-        padding-left: 12px;
-        padding-right: 12px;
-        padding-top: 7px;
-        padding-bottom: 7px;
-        spacing: 3px;
-
-        Text {
-            text: "Compatibility display mode";
-            color: #ffd166;
-            font-size: 12px;
-        }
-
-        Text {
-            text: MisterBridge.compatibility-reason;
-            color: #e8e0f0;
-            font-size: 8px;
-            overflow: elide;
-        }
-    }
-}
-
 export component CatalogScanPopup inherits Rectangle {
     property <length> scan-osd-width: 56px;
     property <length> scan-horizontal-padding: 70px;

@@ -78,7 +78,7 @@ pub(super) struct LauncherFrameAccounting {
     latch_failure_stage: String,
     latch_failure_reason: String,
     latch_failure_detail: String,
-    display_degraded: bool,
+    display_frozen: bool,
     last_present_buffer: u8,
     last_latch_publish_us: u64,
     last_latch_sequence: u16,
@@ -1081,7 +1081,7 @@ impl LauncherFrameAccounting {
             latch_failure_stage: String::new(),
             latch_failure_reason: String::new(),
             latch_failure_detail: String::new(),
-            display_degraded: false,
+            display_frozen: false,
             last_present_buffer: 0,
             last_latch_publish_us: 0,
             last_latch_sequence: 0,
@@ -1113,8 +1113,8 @@ impl LauncherFrameAccounting {
         self.latch_failure_detail.clone_from(&failure.detail);
     }
 
-    pub(super) fn set_display_degraded(&mut self, degraded: bool) {
-        self.display_degraded = degraded;
+    pub(super) fn set_display_frozen(&mut self, frozen: bool) {
+        self.display_frozen = frozen;
     }
 
     pub(super) fn set_effective_view(&mut self, effective_view: &'static str) {
@@ -2250,8 +2250,7 @@ impl LauncherFrameAccounting {
             latch_failure_stage: &self.latch_failure_stage,
             latch_failure_reason: &self.latch_failure_reason,
             latch_failure_detail: &self.latch_failure_detail,
-            compatibility_prompt_visible: false,
-            display_degraded: self.display_degraded,
+            display_frozen: self.display_frozen,
             present_buffer: self.last_present_buffer,
             latch_publish_us: self.last_latch_publish_us,
             latch_sequence: self.last_latch_sequence,
