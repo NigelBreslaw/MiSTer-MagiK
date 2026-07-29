@@ -5,65 +5,44 @@ mod generated;
 
 pub use generated::*;
 
-// Historical aliases retained for v2 manifests and consumers. New code must
-// negotiate a LatchProtocol and use its profile-specific counts.
 pub const PROTOCOL_VERSION: u16 = ACTIVE_PROTOCOL_VERSION;
-pub const REQUIRED_CAPS: u16 = V2_CAPS_FLAGS;
-pub const CAPS_WORD_COUNT: usize = V2_CAPS_WORDS;
-pub const STATUS_WORD_COUNT: usize = V2_STATUS_WORDS;
+pub const REQUIRED_CAPS: u16 = V4_CAPS_FLAGS;
+pub const CAPS_WORD_COUNT: usize = V4_CAPS_WORDS;
+pub const STATUS_WORD_COUNT: usize = V4_STATUS_WORDS;
 pub const FPGA_UIO_LOCK_PATH: &str = "/tmp/mister-magik/fpga-uio.lock";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LatchProtocol {
-    V2,
-    V3,
+    V4,
 }
 
 impl LatchProtocol {
     pub const fn version(self) -> u16 {
-        match self {
-            Self::V2 => PROTOCOL_V2,
-            Self::V3 => PROTOCOL_V3,
-        }
+        PROTOCOL_V4
     }
 
     pub const fn capability_flags(self) -> u16 {
-        match self {
-            Self::V2 => V2_CAPS_FLAGS,
-            Self::V3 => V3_CAPS_FLAGS,
-        }
+        V4_CAPS_FLAGS
     }
 
     pub const fn caps_word_count(self) -> usize {
-        match self {
-            Self::V2 => V2_CAPS_WORDS,
-            Self::V3 => V3_CAPS_WORDS,
-        }
+        V4_CAPS_WORDS
     }
 
     pub const fn set_word_count(self) -> usize {
-        match self {
-            Self::V2 => V2_SET_WORDS,
-            Self::V3 => V3_SET_WORDS,
-        }
+        V4_SET_WORDS
     }
 
     pub const fn status_word_count(self) -> usize {
-        match self {
-            Self::V2 => V2_STATUS_WORDS,
-            Self::V3 => V3_STATUS_WORDS,
-        }
+        V4_STATUS_WORDS
     }
 
     pub const fn status_has_crc(self) -> bool {
-        matches!(self, Self::V3)
+        true
     }
 
     pub const fn diagnostics_word_count(self) -> Option<usize> {
-        match self {
-            Self::V2 => None,
-            Self::V3 => Some(V3_DIAGNOSTICS_WORDS),
-        }
+        Some(V4_DIAGNOSTICS_WORDS)
     }
 }
 
@@ -71,11 +50,9 @@ impl TryFrom<u16> for LatchProtocol {
     type Error = String;
 
     fn try_from(version: u16) -> Result<Self, Self::Error> {
-        match version {
-            PROTOCOL_V2 => Ok(Self::V2),
-            PROTOCOL_V3 => Ok(Self::V3),
-            _ => Err(format!("unsupported latch protocol version {version}")),
-        }
+        (version == PROTOCOL_V4)
+            .then_some(Self::V4)
+            .ok_or_else(|| format!("unsupported latch protocol version {version}; v4 required"))
     }
 }
 
@@ -92,16 +69,8 @@ pub struct LatchCapabilities {
 
 impl LatchCapabilities {
     pub fn production_ready(self) -> bool {
-        let required_flags = match self.protocol {
-            LatchProtocol::V2 => V2_CAPS_FLAGS,
-            // Rejection context was added to the deployed v3 wire profile.
-            // Keep the previously qualified v3 RBF usable during rollout; new
-            // generated artifacts still advertise the complete V3_CAPS_FLAGS.
-            LatchProtocol::V3 => V3_CAPS_FLAGS & !CAP_REJECTION_CONTEXT,
-        };
         self.protocol_version == self.protocol.version()
-            && self.flags & required_flags == required_flags
-            && self.flags & !self.protocol.capability_flags() == 0
+            && self.flags == V4_CAPS_FLAGS
             && self.max_width == MAX_WIDTH
             && self.max_height == MAX_HEIGHT
             && self.max_stride_bytes == MAX_STRIDE_BYTES
@@ -122,9 +91,7 @@ pub fn decode_capabilities(words: &[u16]) -> Result<LatchCapabilities, String> {
             words.len()
         ));
     }
-    if protocol == LatchProtocol::V3 {
-        verify_crc(GET_FBUF_LATCH_CAPS, protocol, &words[..5], words[5])?;
-    }
+    verify_crc(GET_FBUF_LATCH_CAPS, protocol, &words[..5], words[5])?;
     Ok(LatchCapabilities {
         protocol,
         protocol_version: words[0],
@@ -132,11 +99,7 @@ pub fn decode_capabilities(words: &[u16]) -> Result<LatchCapabilities, String> {
         max_width: words[2],
         max_height: words[3],
         max_stride_bytes: words[4],
-        crc: if protocol == LatchProtocol::V3 {
-            Some(words[5])
-        } else {
-            None
-        },
+        crc: Some(words[5]),
     })
 }
 
@@ -154,6 +117,10 @@ pub struct LatchStatus {
     pub stride: u16,
     pub reject_count: u16,
     pub active_route_epoch: u16,
+    pub accepted_seq: u16,
+    pub active_transaction: u16,
+    pub pending_transaction: u16,
+    pub accepted_transaction: u16,
     pub crc: Option<u16>,
 }
 
@@ -188,39 +155,25 @@ pub fn decode_status(protocol: LatchProtocol, words: &[u16]) -> Result<LatchStat
             words.len()
         ));
     }
-    if protocol == LatchProtocol::V3 {
-        verify_crc(GET_FBUF_LATCH, protocol, &words[..13], words[13])?;
-    }
-    let flag_mask = match protocol {
-        LatchProtocol::V2 => 0x0007,
-        LatchProtocol::V3 => 0x00ff,
-    };
+    verify_crc(GET_FBUF_LATCH, protocol, &words[..15], words[15])?;
     Ok(LatchStatus {
         active_seq: words[0],
         pending_seq: words[1],
-        flags: words[2] & flag_mask,
+        flags: words[2] & 0x00ff,
         flip_count: words[3],
         post_count: words[4],
-        drop_count: words[5],
-        base: u32::from(words[6]) | (u32::from(words[7]) << 16),
-        width: words[8] & 0x0fff,
-        height: words[9] & 0x0fff,
-        stride: words[10] & 0x3fff,
-        reject_count: if protocol == LatchProtocol::V3 {
-            words[11]
-        } else {
-            0
-        },
-        active_route_epoch: if protocol == LatchProtocol::V3 {
-            words[12]
-        } else {
-            0
-        },
-        crc: if protocol == LatchProtocol::V3 {
-            Some(words[13])
-        } else {
-            None
-        },
+        drop_count: 0,
+        base: u32::from(words[5]) | (u32::from(words[6]) << 16),
+        width: words[7] & 0x0fff,
+        height: words[8] & 0x0fff,
+        stride: words[9] & 0x3fff,
+        reject_count: words[10],
+        active_route_epoch: words[11],
+        accepted_seq: words[1],
+        active_transaction: words[12],
+        pending_transaction: words[13],
+        accepted_transaction: words[14],
+        crc: Some(words[15]),
     })
 }
 
@@ -241,7 +194,7 @@ pub fn decode_rejection_diagnostics(
     words: &[u16],
 ) -> Result<LatchRejectionDiagnostics, String> {
     let Some(word_count) = protocol.diagnostics_word_count() else {
-        return Err("latch rejection diagnostics require protocol v3".to_string());
+        return Err("latch rejection diagnostics require protocol v4".to_string());
     };
     if words.len() != word_count {
         return Err(format!(
@@ -269,6 +222,65 @@ pub fn decode_rejection_diagnostics(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LatchReceipt {
+    pub attempted_transaction: u16,
+    pub attempted_sequence: u16,
+    pub disposition: u16,
+    pub accepted_transaction: u16,
+    pub accepted_sequence: u16,
+    pub pending_transaction: u16,
+    pub pending_sequence: u16,
+    pub active_transaction: u16,
+    pub active_sequence: u16,
+    pub reject_reason: u8,
+    pub crc: u16,
+}
+
+impl LatchReceipt {
+    pub const fn accepted(self) -> bool {
+        self.disposition == RECEIPT_ACCEPTED
+    }
+
+    pub const fn rejected(self) -> bool {
+        self.disposition == RECEIPT_REJECTED
+    }
+}
+
+pub fn decode_receipt(words: &[u16]) -> Result<LatchReceipt, String> {
+    if words.len() != V4_RECEIPT_WORDS {
+        return Err(format!(
+            "latch protocol v4 receipt needs {V4_RECEIPT_WORDS} words, got {}",
+            words.len()
+        ));
+    }
+    verify_crc(
+        GET_FBUF_LATCH_RECEIPT,
+        LatchProtocol::V4,
+        &words[..V4_RECEIPT_WORDS - 1],
+        words[V4_RECEIPT_WORDS - 1],
+    )?;
+    if !matches!(words[2], RECEIPT_ACCEPTED | RECEIPT_REJECTED) {
+        return Err(format!(
+            "latch receipt is not terminal: disposition={}",
+            words[2]
+        ));
+    }
+    Ok(LatchReceipt {
+        attempted_transaction: words[0],
+        attempted_sequence: words[1],
+        disposition: words[2],
+        accepted_transaction: words[3],
+        accepted_sequence: words[4],
+        pending_transaction: words[5],
+        pending_sequence: words[6],
+        active_transaction: words[7],
+        active_sequence: words[8],
+        reject_reason: (words[9] & 0x000f) as u8,
+        crc: words[10],
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LatchSetPayload {
     pub mode: u16,
     pub base: u32,
@@ -283,7 +295,7 @@ pub struct LatchSetPayload {
 }
 
 impl LatchSetPayload {
-    pub const fn words(self) -> [u16; V2_SET_WORDS] {
+    pub const fn words(self) -> [u16; V4_SET_PAYLOAD_WORDS] {
         [
             self.mode,
             self.base as u16,
@@ -302,17 +314,15 @@ impl LatchSetPayload {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LatchSetWords {
-    pub words: [u16; V3_SET_WORDS],
+    pub words: [u16; V4_SET_WORDS],
     pub word_count: usize,
 }
 
 pub fn encode_set(protocol: LatchProtocol, payload: LatchSetPayload) -> LatchSetWords {
     let payload_words = payload.words();
-    let mut words = [0; V3_SET_WORDS];
-    words[..V2_SET_WORDS].copy_from_slice(&payload_words);
-    if protocol == LatchProtocol::V3 {
-        words[V2_SET_WORDS] = message_crc(SET_FBUF_LATCH, protocol, &payload_words);
-    }
+    let mut words = [0; V4_SET_WORDS];
+    words[..V4_SET_PAYLOAD_WORDS].copy_from_slice(&payload_words);
+    words[V4_SET_PAYLOAD_WORDS] = message_crc(SET_FBUF_LATCH, protocol, &payload_words);
     LatchSetWords {
         words,
         word_count: protocol.set_word_count(),
@@ -371,42 +381,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn protocol_v2_profile_is_frozen() {
-        let capabilities =
-            decode_capabilities(&[2, V2_CAPS_FLAGS, MAX_WIDTH, MAX_HEIGHT, MAX_STRIDE_BYTES])
-                .unwrap();
-        assert_eq!(capabilities.protocol, LatchProtocol::V2);
-        assert!(capabilities.production_ready());
-        assert_eq!(LatchProtocol::V2.caps_word_count(), 5);
-        assert_eq!(LatchProtocol::V2.set_word_count(), 11);
-        assert_eq!(LatchProtocol::V2.status_word_count(), 11);
-        assert!(
-            !decode_capabilities(&[
-                2,
-                V2_CAPS_FLAGS | CAP_POST_CRC,
-                MAX_WIDTH,
-                MAX_HEIGHT,
-                MAX_STRIDE_BYTES,
-            ])
-            .unwrap()
-            .production_ready()
-        );
-    }
-
-    #[test]
-    fn protocol_v3_requires_the_exact_complete_profile_and_caps_crc() {
-        let mut words = [0; V3_CAPS_WORDS];
-        words[..5].copy_from_slice(&GOLDEN_CAPS_V3_PAYLOAD);
-        words[5] = GOLDEN_CAPS_V3_CRC;
+    fn protocol_v4_requires_the_exact_complete_profile_and_caps_crc() {
+        let mut words = [0; V4_CAPS_WORDS];
+        words[..5].copy_from_slice(&GOLDEN_CAPS_V4_PAYLOAD);
+        words[5] = GOLDEN_CAPS_V4_CRC;
         let capabilities = decode_capabilities(&words).unwrap();
-        assert_eq!(capabilities.protocol, LatchProtocol::V3);
+        assert_eq!(capabilities.protocol, LatchProtocol::V4);
         assert!(capabilities.production_ready());
 
         words[1] ^= CAP_POST_CRC;
-        words[5] = message_crc(GET_FBUF_LATCH_CAPS, LatchProtocol::V3, &words[..5]);
+        words[5] = message_crc(GET_FBUF_LATCH_CAPS, LatchProtocol::V4, &words[..5]);
         assert!(!decode_capabilities(&words).unwrap().production_ready());
         words[1] ^= CAP_POST_CRC;
-        words[5] = message_crc(GET_FBUF_LATCH_CAPS, LatchProtocol::V3, &words[..5]) ^ 1;
+        words[5] = message_crc(GET_FBUF_LATCH_CAPS, LatchProtocol::V4, &words[..5]) ^ 1;
         assert!(decode_capabilities(&words).is_err());
     }
 
@@ -415,118 +402,128 @@ mod tests {
         assert_eq!(
             message_crc(
                 GET_FBUF_LATCH_CAPS,
-                LatchProtocol::V3,
-                &GOLDEN_CAPS_V3_PAYLOAD
+                LatchProtocol::V4,
+                &GOLDEN_CAPS_V4_PAYLOAD
             ),
-            GOLDEN_CAPS_V3_CRC
+            GOLDEN_CAPS_V4_CRC
         );
         assert_eq!(
-            message_crc(SET_FBUF_LATCH, LatchProtocol::V3, &GOLDEN_SET_V3_PAYLOAD),
-            GOLDEN_SET_V3_CRC
+            message_crc(SET_FBUF_LATCH, LatchProtocol::V4, &GOLDEN_SET_V4_PAYLOAD),
+            GOLDEN_SET_V4_CRC
         );
         assert_eq!(
-            message_crc(GET_FBUF_LATCH, LatchProtocol::V3, &GOLDEN_STATUS_V3_PAYLOAD),
-            GOLDEN_STATUS_V3_CRC
+            message_crc(GET_FBUF_LATCH, LatchProtocol::V4, &GOLDEN_STATUS_V4_PAYLOAD),
+            GOLDEN_STATUS_V4_CRC
         );
         assert_eq!(
             message_crc(
                 GET_FBUF_LATCH_DIAGNOSTICS,
-                LatchProtocol::V3,
-                &GOLDEN_DIAGNOSTICS_V3_PAYLOAD
+                LatchProtocol::V4,
+                &GOLDEN_DIAGNOSTICS_V4_PAYLOAD
             ),
-            GOLDEN_DIAGNOSTICS_V3_CRC
+            GOLDEN_DIAGNOSTICS_V4_CRC
+        );
+        assert_eq!(
+            message_crc(
+                GET_FBUF_LATCH_RECEIPT,
+                LatchProtocol::V4,
+                &GOLDEN_RECEIPT_V4_PAYLOAD
+            ),
+            GOLDEN_RECEIPT_V4_CRC
         );
     }
 
     #[test]
-    fn set_encoder_appends_crc_only_for_v3() {
+    fn set_encoder_always_appends_v4_crc() {
         let payload = LatchSetPayload {
-            mode: GOLDEN_SET_V3_PAYLOAD[0],
-            base: u32::from(GOLDEN_SET_V3_PAYLOAD[1]) | (u32::from(GOLDEN_SET_V3_PAYLOAD[2]) << 16),
-            width: GOLDEN_SET_V3_PAYLOAD[3],
-            height: GOLDEN_SET_V3_PAYLOAD[4],
-            destination_left: GOLDEN_SET_V3_PAYLOAD[5],
-            destination_right: GOLDEN_SET_V3_PAYLOAD[6],
-            destination_top: GOLDEN_SET_V3_PAYLOAD[7],
-            destination_bottom: GOLDEN_SET_V3_PAYLOAD[8],
-            stride: GOLDEN_SET_V3_PAYLOAD[9],
-            sequence: GOLDEN_SET_V3_PAYLOAD[10],
+            mode: GOLDEN_SET_V4_PAYLOAD[0],
+            base: u32::from(GOLDEN_SET_V4_PAYLOAD[1]) | (u32::from(GOLDEN_SET_V4_PAYLOAD[2]) << 16),
+            width: GOLDEN_SET_V4_PAYLOAD[3],
+            height: GOLDEN_SET_V4_PAYLOAD[4],
+            destination_left: GOLDEN_SET_V4_PAYLOAD[5],
+            destination_right: GOLDEN_SET_V4_PAYLOAD[6],
+            destination_top: GOLDEN_SET_V4_PAYLOAD[7],
+            destination_bottom: GOLDEN_SET_V4_PAYLOAD[8],
+            stride: GOLDEN_SET_V4_PAYLOAD[9],
+            sequence: GOLDEN_SET_V4_PAYLOAD[10],
         };
-        let v2 = encode_set(LatchProtocol::V2, payload);
-        assert_eq!(v2.word_count, V2_SET_WORDS);
-        assert_eq!(&v2.words[..V2_SET_WORDS], &GOLDEN_SET_V3_PAYLOAD);
-        let v3 = encode_set(LatchProtocol::V3, payload);
-        assert_eq!(v3.word_count, V3_SET_WORDS);
-        assert_eq!(v3.words[V2_SET_WORDS], GOLDEN_SET_V3_CRC);
+        let v4 = encode_set(LatchProtocol::V4, payload);
+        assert_eq!(v4.word_count, V4_SET_WORDS);
+        assert_eq!(&v4.words[..V4_SET_PAYLOAD_WORDS], &GOLDEN_SET_V4_PAYLOAD);
+        assert_eq!(v4.words[V4_SET_PAYLOAD_WORDS], GOLDEN_SET_V4_CRC);
     }
 
     #[test]
-    fn status_decoders_preserve_v2_and_verify_v3() {
-        let v2 = decode_status(
-            LatchProtocol::V2,
-            &[1, 2, 7, 3, 4, 5, 0x9000, 0x227e, 960, 540, 1920],
-        )
-        .unwrap();
-        assert_eq!(v2.base, 0x227e_9000);
-        assert_eq!((v2.width, v2.height, v2.stride), (960, 540, 1920));
-        assert_eq!(v2.reject_count, 0);
-
-        let mut words = [0; V3_STATUS_WORDS];
-        words[..13].copy_from_slice(&GOLDEN_STATUS_V3_PAYLOAD);
-        words[13] = GOLDEN_STATUS_V3_CRC;
-        let v3 = decode_status(LatchProtocol::V3, &words).unwrap();
-        assert!(v3.magik_ownership());
-        assert_eq!(v3.rejection_reason(), 0);
-        assert_eq!(v3.reject_count, 7);
-        assert_eq!(v3.active_route_epoch, 9);
-        words[13] ^= 1;
-        assert!(decode_status(LatchProtocol::V3, &words).is_err());
+    fn status_decoder_verifies_v4_identity_and_crc() {
+        let mut words = [0; V4_STATUS_WORDS];
+        words[..15].copy_from_slice(&GOLDEN_STATUS_V4_PAYLOAD);
+        words[15] = GOLDEN_STATUS_V4_CRC;
+        let v4 = decode_status(LatchProtocol::V4, &words).unwrap();
+        assert!(v4.magik_ownership());
+        assert_eq!(v4.rejection_reason(), 0);
+        assert_eq!(v4.reject_count, 7);
+        assert_eq!(v4.active_route_epoch, 9);
+        assert_eq!(v4.accepted_transaction, 101);
+        words[15] ^= 1;
+        assert!(decode_status(LatchProtocol::V4, &words).is_err());
     }
 
     #[test]
-    fn rejection_diagnostics_are_v3_only_and_crc_protected() {
-        let mut words = [0; V3_DIAGNOSTICS_WORDS];
-        words[..6].copy_from_slice(&GOLDEN_DIAGNOSTICS_V3_PAYLOAD);
-        words[6] = GOLDEN_DIAGNOSTICS_V3_CRC;
+    fn rejection_diagnostics_are_v4_only_and_crc_protected() {
+        let mut words = [0; V4_DIAGNOSTICS_WORDS];
+        words[..6].copy_from_slice(&GOLDEN_DIAGNOSTICS_V4_PAYLOAD);
+        words[6] = GOLDEN_DIAGNOSTICS_V4_CRC;
 
-        let diagnostics = decode_rejection_diagnostics(LatchProtocol::V3, &words).unwrap();
+        let diagnostics = decode_rejection_diagnostics(LatchProtocol::V4, &words).unwrap();
         assert_eq!(diagnostics.reject_count, 7);
         assert_eq!(diagnostics.reason, REJECT_MISSING_WORD);
         assert_eq!(diagnostics.expected_index, 11);
         assert_eq!(diagnostics.observed_command, GET_FBUF_LATCH);
         assert!(!diagnostics.receiver_open);
-        assert!(decode_rejection_diagnostics(LatchProtocol::V2, &words).is_err());
-
         words[6] ^= 1;
-        assert!(decode_rejection_diagnostics(LatchProtocol::V3, &words).is_err());
+        assert!(decode_rejection_diagnostics(LatchProtocol::V4, &words).is_err());
     }
 
     #[test]
-    fn v3_rejection_context_is_optional_during_platform_rollout() {
-        let legacy_v3 = LatchCapabilities {
-            protocol: LatchProtocol::V3,
-            protocol_version: PROTOCOL_V3,
-            flags: V3_CAPS_FLAGS & !CAP_REJECTION_CONTEXT,
+    fn v4_requires_exact_capabilities() {
+        let v4 = LatchCapabilities {
+            protocol: LatchProtocol::V4,
+            protocol_version: PROTOCOL_V4,
+            flags: V4_CAPS_FLAGS,
             max_width: MAX_WIDTH,
             max_height: MAX_HEIGHT,
             max_stride_bytes: MAX_STRIDE_BYTES,
             crc: Some(0),
         };
 
-        assert!(legacy_v3.production_ready());
+        assert!(v4.production_ready());
         assert!(
             !LatchCapabilities {
-                flags: legacy_v3.flags & !CAP_POST_CRC,
-                ..legacy_v3
+                flags: v4.flags & !CAP_POST_CRC,
+                ..v4
             }
             .production_ready()
         );
         assert!(
             !LatchCapabilities {
-                flags: V3_CAPS_FLAGS | 0x8000,
-                ..legacy_v3
+                flags: V4_CAPS_FLAGS | 0x8000,
+                ..v4
             }
             .production_ready()
         );
+    }
+
+    #[test]
+    fn receipt_is_terminal_and_crc_protected() {
+        let mut words = [0; V4_RECEIPT_WORDS];
+        words[..10].copy_from_slice(&GOLDEN_RECEIPT_V4_PAYLOAD);
+        words[10] = GOLDEN_RECEIPT_V4_CRC;
+        let receipt = decode_receipt(&words).unwrap();
+        assert!(receipt.accepted());
+        assert_eq!(receipt.attempted_transaction, 101);
+        assert_eq!(receipt.active_transaction, 100);
+        words[2] = RECEIPT_NONE;
+        words[10] = message_crc(GET_FBUF_LATCH_RECEIPT, LatchProtocol::V4, &words[..10]);
+        assert!(decode_receipt(&words).is_err());
     }
 }

@@ -107,9 +107,19 @@ module mister_magik_vblank_latch (
 	reg [15:0] last_reject_command = 16'd0;
 	reg [15:0] last_reject_receiver_flags = 16'd0;
 	reg magik_ownership = 1'b0;
+	reg [15:0] attempted_transaction = 16'd0;
+	reg [15:0] accepted_transaction = 16'd0;
+	reg [15:0] pending_transaction = 16'd0;
+	reg [15:0] active_transaction = 16'd0;
+	reg [15:0] accepted_seq = 16'd0;
+	reg [15:0] receipt_attempted_transaction = 16'd0;
+	reg [15:0] receipt_attempted_sequence = 16'd0;
+	reg [15:0] receipt_disposition = MAGIK_RECEIPT_NONE;
+	reg [3:0] receipt_reject_reason = MAGIK_REJECT_NONE;
 
-	reg [15:0] status_snapshot [0:12];
+	reg [15:0] status_snapshot [0:14];
 	reg [15:0] diagnostics_snapshot [0:5];
+	reg [15:0] receipt_snapshot [0:9];
 	reg [15:0] tx_crc = 16'd0;
 	reg [3:0] tx_expected = 4'd0;
 	reg [7:0] tx_command = 8'd0;
@@ -184,10 +194,12 @@ module mister_magik_vblank_latch (
 		(cmd_start && ((cmd_id == MAGIK_UIO_SET_FBUF_LATCH) ||
 		               (cmd_id == MAGIK_UIO_GET_FBUF_LATCH) ||
 		               (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_CAPS) ||
-		               (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_DIAGNOSTICS))) ||
+		               (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_DIAGNOSTICS) ||
+		               (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_RECEIPT))) ||
 		(cmd_data && ((cmd_id == MAGIK_UIO_GET_FBUF_LATCH) ||
 		              (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_CAPS) ||
-		              (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_DIAGNOSTICS)));
+		              (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_DIAGNOSTICS) ||
+		              (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_RECEIPT)));
 
 	always @(*) begin
 		response_data = 16'd0;
@@ -198,12 +210,14 @@ module mister_magik_vblank_latch (
 				MAGIK_UIO_GET_FBUF_LATCH_CAPS: response_data = MAGIK_FBUF_CAPS_MAGIC;
 				MAGIK_UIO_GET_FBUF_LATCH_DIAGNOSTICS:
 					response_data = MAGIK_FBUF_DIAGNOSTICS_MAGIC;
+				MAGIK_UIO_GET_FBUF_LATCH_RECEIPT:
+					response_data = MAGIK_FBUF_RECEIPT_MAGIC;
 				default: response_data = 16'd0;
 			endcase
 		end
 		else if(cmd_data && (cmd_id == MAGIK_UIO_GET_FBUF_LATCH)) begin
-			if(word_index < 4'd13) response_data = status_snapshot[word_index];
-			else if(word_index == 4'd13)
+			if(word_index < 4'd15) response_data = status_snapshot[word_index];
+			else if(word_index == 4'd15)
 				response_data = tx_crc ^ MAGIK_CRC_FINAL_XOR;
 		end
 		else if(cmd_data && (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_CAPS)) begin
@@ -222,6 +236,11 @@ module mister_magik_vblank_latch (
 			else if(word_index == 4'd6)
 				response_data = tx_crc ^ MAGIK_CRC_FINAL_XOR;
 		end
+		else if(cmd_data && (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_RECEIPT)) begin
+			if(word_index < 4'd10) response_data = receipt_snapshot[word_index];
+			else if(word_index == 4'd10)
+				response_data = tx_crc ^ MAGIK_CRC_FINAL_XOR;
+		end
 	end
 
 	always @(posedge clk_sys) begin
@@ -235,15 +254,17 @@ module mister_magik_vblank_latch (
 			status_snapshot[2] <= live_status_flags;
 			status_snapshot[3] <= flip_count;
 			status_snapshot[4] <= post_count;
-			status_snapshot[5] <= drop_count;
-			status_snapshot[6] <= active_lfb_base[15:0];
-			status_snapshot[7] <= active_lfb_base[31:16];
-			status_snapshot[8] <= {4'd0, active_lfb_width};
-			status_snapshot[9] <= {4'd0, active_lfb_height};
-			status_snapshot[10] <= {2'd0, active_lfb_stride};
-			status_snapshot[11] <= reject_count;
-			status_snapshot[12] <= active_route_epoch;
-			tx_crc <= crc_header(MAGIK_UIO_GET_FBUF_LATCH, 16'd13);
+			status_snapshot[5] <= active_lfb_base[15:0];
+			status_snapshot[6] <= active_lfb_base[31:16];
+			status_snapshot[7] <= {4'd0, active_lfb_width};
+			status_snapshot[8] <= {4'd0, active_lfb_height};
+			status_snapshot[9] <= {2'd0, active_lfb_stride};
+			status_snapshot[10] <= reject_count;
+			status_snapshot[11] <= active_route_epoch;
+			status_snapshot[12] <= active_transaction;
+			status_snapshot[13] <= pending_transaction;
+			status_snapshot[14] <= accepted_transaction;
+			tx_crc <= crc_header(MAGIK_UIO_GET_FBUF_LATCH, 16'd15);
 			tx_expected <= 4'd0;
 			tx_command <= MAGIK_UIO_GET_FBUF_LATCH;
 		end
@@ -263,9 +284,27 @@ module mister_magik_vblank_latch (
 			tx_expected <= 4'd0;
 			tx_command <= MAGIK_UIO_GET_FBUF_LATCH_DIAGNOSTICS;
 		end
+		else if(cmd_start && (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_RECEIPT)) begin
+			receipt_snapshot[0] <= rx_open ? attempted_transaction :
+				receipt_attempted_transaction;
+			receipt_snapshot[1] <= rx_open ? rx_seq : receipt_attempted_sequence;
+			receipt_snapshot[2] <= rx_open ? MAGIK_RECEIPT_REJECTED :
+				receipt_disposition;
+			receipt_snapshot[3] <= accepted_transaction;
+			receipt_snapshot[4] <= accepted_seq;
+			receipt_snapshot[5] <= pending_transaction;
+			receipt_snapshot[6] <= pending_seq;
+			receipt_snapshot[7] <= active_transaction;
+			receipt_snapshot[8] <= active_seq;
+			receipt_snapshot[9] <= rx_open ? {12'd0, MAGIK_REJECT_MISSING_WORD} :
+				{12'd0, receipt_reject_reason};
+			tx_crc <= crc_header(MAGIK_UIO_GET_FBUF_LATCH_RECEIPT, 16'd10);
+			tx_expected <= 4'd0;
+			tx_command <= MAGIK_UIO_GET_FBUF_LATCH_RECEIPT;
+		end
 		else if(cmd_data && (cmd_id == tx_command) &&
 		        (word_index == tx_expected)) begin
-			if((tx_command == MAGIK_UIO_GET_FBUF_LATCH) && (word_index < 4'd13)) begin
+			if((tx_command == MAGIK_UIO_GET_FBUF_LATCH) && (word_index < 4'd15)) begin
 				tx_crc <= crc_word(tx_crc, status_snapshot[word_index]);
 				tx_expected <= tx_expected + 1'd1;
 			end
@@ -289,16 +328,30 @@ module mister_magik_vblank_latch (
 					tx_crc <= crc_word(tx_crc, diagnostics_snapshot[word_index[2:0]]);
 					tx_expected <= tx_expected + 1'd1;
 				end
+				else if((tx_command == MAGIK_UIO_GET_FBUF_LATCH_RECEIPT) &&
+				        (word_index < 4'd10)) begin
+					tx_crc <= crc_word(tx_crc, receipt_snapshot[word_index]);
+					tx_expected <= tx_expected + 1'd1;
+				end
 			end
 
 		if(legacy_write) begin
 			magik_ownership <= 1'b0;
 			active_seq <= 16'd0;
+			active_transaction <= 16'd0;
+			accepted_seq <= 16'd0;
+			accepted_transaction <= 16'd0;
+			pending_seq <= 16'd0;
+			pending_transaction <= 16'd0;
+			pending <= 1'b0;
 			active_route_epoch <= active_route_epoch + 1'd1;
 		end
 		else if(apply_accepted) begin
 			magik_ownership <= 1'b1;
 			active_seq <= pending_seq;
+			active_transaction <= pending_transaction;
+			pending_seq <= 16'd0;
+			pending_transaction <= 16'd0;
 			active_route_epoch <= active_route_epoch + 1'd1;
 			flip_count <= flip_count + 1'd1;
 			pending <= 1'b0;
@@ -315,10 +368,21 @@ module mister_magik_vblank_latch (
 					last_reject_reason <= MAGIK_REJECT_RESTARTED;
 				else
 					last_reject_reason <= MAGIK_REJECT_MISSING_WORD;
+				receipt_attempted_transaction <= attempted_transaction;
+				receipt_attempted_sequence <= rx_seq;
+				receipt_disposition <= MAGIK_RECEIPT_REJECTED;
+				receipt_reject_reason <= (cmd_id == MAGIK_UIO_SET_FBUF_LATCH) ?
+					MAGIK_REJECT_RESTARTED : MAGIK_REJECT_MISSING_WORD;
 			end
 			if(cmd_id == MAGIK_UIO_SET_FBUF_LATCH) begin
+				attempted_transaction <= attempted_transaction + 1'd1;
+				receipt_attempted_transaction <= attempted_transaction + 1'd1;
+				receipt_attempted_sequence <= 16'd0;
+				receipt_disposition <= MAGIK_RECEIPT_NONE;
+				receipt_reject_reason <= MAGIK_REJECT_NONE;
 				rx_open <= 1'b1;
 				rx_faulted <= 1'b0;
+				rx_seq <= 16'd0;
 				rx_expected <= 4'd0;
 				rx_mask <= 11'd0;
 				rx_crc <= crc_header(MAGIK_UIO_SET_FBUF_LATCH, 16'd11);
@@ -335,6 +399,8 @@ module mister_magik_vblank_latch (
 				if(!rx_faulted) begin
 					reject_count <= reject_count + 1'd1;
 					last_reject_reason <= MAGIK_REJECT_POST_CLOSE;
+					receipt_disposition <= MAGIK_RECEIPT_REJECTED;
+					receipt_reject_reason <= MAGIK_REJECT_POST_CLOSE;
 					last_reject_expected_index <= {12'd0, rx_expected};
 					last_reject_observed_index <= {12'd0, word_index};
 					last_reject_command <= {8'd0, cmd_id};
@@ -346,6 +412,8 @@ module mister_magik_vblank_latch (
 			        (word_index + 1'd1 == rx_expected)) begin
 				reject_count <= reject_count + 1'd1;
 				last_reject_reason <= MAGIK_REJECT_DUPLICATE_WORD;
+				receipt_disposition <= MAGIK_RECEIPT_REJECTED;
+				receipt_reject_reason <= MAGIK_REJECT_DUPLICATE_WORD;
 				last_reject_expected_index <= {12'd0, rx_expected};
 				last_reject_observed_index <= {12'd0, word_index};
 				last_reject_command <= {8'd0, cmd_id};
@@ -356,6 +424,8 @@ module mister_magik_vblank_latch (
 			else if(word_index < rx_expected) begin
 				reject_count <= reject_count + 1'd1;
 				last_reject_reason <= MAGIK_REJECT_OUT_OF_ORDER;
+				receipt_disposition <= MAGIK_RECEIPT_REJECTED;
+				receipt_reject_reason <= MAGIK_REJECT_OUT_OF_ORDER;
 				last_reject_expected_index <= {12'd0, rx_expected};
 				last_reject_observed_index <= {12'd0, word_index};
 				last_reject_command <= {8'd0, cmd_id};
@@ -366,6 +436,8 @@ module mister_magik_vblank_latch (
 			else if((word_index == 4'd11) && (rx_expected != 4'd11)) begin
 				reject_count <= reject_count + 1'd1;
 				last_reject_reason <= MAGIK_REJECT_MISSING_WORD;
+				receipt_disposition <= MAGIK_RECEIPT_REJECTED;
+				receipt_reject_reason <= MAGIK_REJECT_MISSING_WORD;
 				last_reject_expected_index <= {12'd0, rx_expected};
 				last_reject_observed_index <= {12'd0, word_index};
 				last_reject_command <= {8'd0, cmd_id};
@@ -376,6 +448,8 @@ module mister_magik_vblank_latch (
 			else if(word_index > rx_expected) begin
 				reject_count <= reject_count + 1'd1;
 				last_reject_reason <= MAGIK_REJECT_SHIFTED_WORD;
+				receipt_disposition <= MAGIK_RECEIPT_REJECTED;
+				receipt_reject_reason <= MAGIK_REJECT_SHIFTED_WORD;
 				last_reject_expected_index <= {12'd0, rx_expected};
 				last_reject_observed_index <= {12'd0, word_index};
 				last_reject_command <= {8'd0, cmd_id};
@@ -403,6 +477,7 @@ module mister_magik_vblank_latch (
 					end
 					4'd10: begin
 						rx_seq <= data_in;
+						receipt_attempted_sequence <= data_in;
 						rx_address_wrap <=
 							rx_pipelined_end_address > 33'h100000000;
 					end
@@ -421,6 +496,8 @@ module mister_magik_vblank_latch (
 				if(rx_mask != 11'h7ff) begin
 					reject_count <= reject_count + 1'd1;
 					last_reject_reason <= MAGIK_REJECT_MISSING_WORD;
+					receipt_disposition <= MAGIK_RECEIPT_REJECTED;
+					receipt_reject_reason <= MAGIK_REJECT_MISSING_WORD;
 					last_reject_expected_index <= {12'd0, rx_expected};
 					last_reject_observed_index <= {12'd0, word_index};
 					last_reject_command <= {8'd0, cmd_id};
@@ -431,15 +508,31 @@ module mister_magik_vblank_latch (
 				else if(data_in != (rx_crc ^ MAGIK_CRC_FINAL_XOR)) begin
 					reject_count <= reject_count + 1'd1;
 					last_reject_reason <= MAGIK_REJECT_BAD_CRC;
+					receipt_disposition <= MAGIK_RECEIPT_REJECTED;
+					receipt_reject_reason <= MAGIK_REJECT_BAD_CRC;
 					last_reject_expected_index <= {12'd0, rx_expected};
 					last_reject_observed_index <= {12'd0, word_index};
 					last_reject_command <= {8'd0, cmd_id};
 					last_reject_receiver_flags <= {14'd0, rx_faulted, rx_open};
 					rx_faulted <= 1'b1;
 				end
+				else if(pending) begin
+					reject_count <= reject_count + 1'd1;
+					drop_count <= drop_count + 1'd1;
+					last_reject_reason <= MAGIK_REJECT_PENDING_BUSY;
+					last_reject_expected_index <= {12'd0, rx_expected};
+					last_reject_observed_index <= {12'd0, word_index};
+					last_reject_command <= {8'd0, cmd_id};
+					last_reject_receiver_flags <= {14'd0, rx_faulted, rx_open};
+					receipt_disposition <= MAGIK_RECEIPT_REJECTED;
+					receipt_reject_reason <= MAGIK_REJECT_PENDING_BUSY;
+					rx_faulted <= 1'b1;
+				end
 				else if(semantic_reject != MAGIK_REJECT_NONE) begin
 					reject_count <= reject_count + 1'd1;
 					last_reject_reason <= semantic_reject;
+					receipt_disposition <= MAGIK_RECEIPT_REJECTED;
+					receipt_reject_reason <= semantic_reject;
 					last_reject_expected_index <= {12'd0, rx_expected};
 					last_reject_observed_index <= {12'd0, word_index};
 					last_reject_command <= {8'd0, cmd_id};
@@ -459,15 +552,29 @@ module mister_magik_vblank_latch (
 					route_vmax <= rx_vmax;
 					route_stride <= rx_stride;
 					pending_seq <= rx_seq;
+					pending_transaction <= attempted_transaction;
+					accepted_transaction <= attempted_transaction;
+					accepted_seq <= rx_seq;
 					pending <= 1'b1;
 					post_count <= post_count + 1'd1;
 					last_reject_reason <= MAGIK_REJECT_NONE;
-					if(pending && !apply_accepted)
-						drop_count <= drop_count + 1'd1;
+					receipt_disposition <= MAGIK_RECEIPT_ACCEPTED;
+					receipt_reject_reason <= MAGIK_REJECT_NONE;
 				end
 			end
 		end
 	end
+
+	`ifndef SYNTHESIS
+	always @(posedge clk_sys) begin
+		if(!pending) begin
+			assert(accepted_seq == active_seq)
+				else $fatal(1, "accepted N / active N-1 / no pending is forbidden");
+			assert(accepted_transaction == active_transaction)
+				else $fatal(1, "active transaction must originate from the accepted receipt");
+		end
+	end
+	`endif
 
 endmodule
 

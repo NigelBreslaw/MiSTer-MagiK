@@ -1,17 +1,19 @@
 {
-  "schema": 3,
-  "active_protocol_version": 3,
+  "schema": 4,
+  "active_protocol_version": 4,
   "commands": {
     "set": 87,
     "get": 88,
     "caps": 89,
-    "diagnostics": 90
+    "diagnostics": 90,
+    "receipt": 91
   },
   "magic": {
     "set": 19783,
     "status": 19784,
     "caps": 19785,
-    "diagnostics": 19786
+    "diagnostics": 19786,
+    "receipt": 19787
   },
   "limits": {
     "max_width": 1366,
@@ -26,33 +28,28 @@
     "coherent_status": 4,
     "status_crc": 5,
     "post_crc": 6,
-    "rejection_context": 7
+    "rejection_context": 7,
+    "authoritative_receipt": 8
   },
   "protocols": {
-    "2": {
-      "flags": 7,
-      "caps_words": 5,
-      "set_payload_words": 11,
-      "status_payload_words": 11,
-      "caps_crc": false,
-      "set_crc": false,
-      "status_crc": false
-    },
-    "3": {
-      "flags": 255,
+    "4": {
+      "flags": 511,
       "caps_words": 6,
       "set_payload_words": 11,
       "set_words": 12,
-      "status_payload_words": 13,
-      "status_words": 14,
+      "status_payload_words": 15,
+      "status_words": 16,
       "diagnostics_payload_words": 6,
       "diagnostics_words": 7,
+      "receipt_payload_words": 10,
+      "receipt_words": 11,
       "caps_crc": true,
       "set_crc": true,
-      "status_crc": true
+      "status_crc": true,
+      "receipt_crc": true
     }
   },
-  "set_words_v3": [
+  "set_words_v4": [
     "mode",
     "base_low",
     "base_high",
@@ -66,13 +63,12 @@
     "sequence",
     "crc"
   ],
-  "status_words_v3": [
+  "status_words_v4": [
     "active_sequence",
     "pending_sequence",
     "flags",
     "flip_count",
-    "post_count",
-    "drop_count",
+    "accepted_count",
     "active_base_low",
     "active_base_high",
     "active_width",
@@ -80,9 +76,12 @@
     "active_stride",
     "reject_count",
     "active_route_epoch",
+    "active_transaction",
+    "pending_transaction",
+    "accepted_transaction",
     "crc"
   ],
-  "diagnostics_words_v3": [
+  "diagnostics_words_v4": [
     "reject_count",
     "last_reject_reason",
     "last_reject_expected_index",
@@ -91,6 +90,24 @@
     "receiver_flags",
     "crc"
   ],
+  "receipt_words_v4": [
+    "attempted_transaction",
+    "attempted_sequence",
+    "disposition",
+    "accepted_transaction",
+    "accepted_sequence",
+    "pending_transaction",
+    "pending_sequence",
+    "active_transaction",
+    "active_sequence",
+    "reject_reason",
+    "crc"
+  ],
+  "receipt_dispositions": {
+    "none": 0,
+    "accepted": 1,
+    "rejected": 2
+  },
   "status_flags": {
     "active_enabled": 0,
     "pending_enabled": 1,
@@ -114,8 +131,8 @@
     "address_wrap": 11,
     "restarted": 12,
     "shifted_word": 13,
-    "reserved": 14,
-    "internal": 15
+    "pending_busy": 14,
+    "reserved": 15
   },
   "crc": {
     "name": "CRC-16/CCITT-FALSE",
@@ -132,25 +149,30 @@
     ]
   },
   "goldens": {
-    "caps_v3": {
+    "caps_v4": {
       "command": 89,
-      "payload": [3, 255, 1366, 768, 2736],
-      "crc": 468
+      "payload": [4, 511, 1366, 768, 2736],
+      "crc": 15780
     },
-    "set_v3": {
+    "set_v4": {
       "command": 87,
-      "payload": [32788, 36864, 8830, 960, 540, 0, 959, 0, 539, 1920, 42],
-      "crc": 36601
+      "payload": [32788, 36864, 8830, 960, 540, 0, 959, 0, 539, 1920, 43],
+      "crc": 22261
     },
-    "status_v3": {
+    "status_v4": {
       "command": 88,
-      "payload": [42, 43, 15, 3, 4, 5, 36864, 8830, 960, 540, 1920, 7, 9],
-      "crc": 10101
+      "payload": [42, 43, 15, 3, 4, 36864, 8830, 960, 540, 1920, 7, 9, 100, 101, 101],
+      "crc": 37242
     },
-    "diagnostics_v3": {
+    "diagnostics_v4": {
       "command": 90,
       "payload": [7, 1, 11, 0, 88, 0],
-      "crc": 38890
+      "crc": 61309
+    },
+    "receipt_v4": {
+      "command": 91,
+      "payload": [101, 43, 1, 101, 43, 101, 43, 100, 42, 0],
+      "crc": 22657
     }
   }
 }

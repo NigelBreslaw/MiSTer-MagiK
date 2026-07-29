@@ -40,13 +40,14 @@ def render_rust(spec: dict) -> str:
         f"pub const GET_FBUF_LATCH: u16 = 0x{commands['get']:02x};",
         f"pub const GET_FBUF_LATCH_CAPS: u16 = 0x{commands['caps']:02x};",
         f"pub const GET_FBUF_LATCH_DIAGNOSTICS: u16 = 0x{commands['diagnostics']:02x};",
+        f"pub const GET_FBUF_LATCH_RECEIPT: u16 = 0x{commands['receipt']:02x};",
         f"pub const LATCH_MAGIC: u16 = 0x{magic['set']:04x};",
         f"pub const STATUS_MAGIC: u16 = 0x{magic['status']:04x};",
         f"pub const CAPS_MAGIC: u16 = 0x{magic['caps']:04x};",
         f"pub const DIAGNOSTICS_MAGIC: u16 = 0x{magic['diagnostics']:04x};",
+        f"pub const RECEIPT_MAGIC: u16 = 0x{magic['receipt']:04x};",
         f"pub const ACTIVE_PROTOCOL_VERSION: u16 = {spec['active_protocol_version']};",
-        "pub const PROTOCOL_V2: u16 = 2;",
-        "pub const PROTOCOL_V3: u16 = 3;",
+        "pub const PROTOCOL_V4: u16 = 4;",
         f"pub const MAX_WIDTH: u16 = {limits['max_width']};",
         f"pub const MAX_HEIGHT: u16 = {limits['max_height']};",
         f"pub const MAX_STRIDE_BYTES: u16 = {limits['max_stride_bytes']};",
@@ -56,18 +57,19 @@ def render_rust(spec: dict) -> str:
         lines.append(f"pub const CAP_{rust_name(name)}: u16 = 1 << {bit};")
     lines.extend(
         [
-            f"pub const V2_CAPS_FLAGS: u16 = 0x{protocols['2']['flags']:04x};",
-            f"pub const V3_CAPS_FLAGS: u16 = 0x{protocols['3']['flags']:04x};",
-            f"pub const V2_CAPS_WORDS: usize = {protocols['2']['caps_words']};",
-            f"pub const V3_CAPS_WORDS: usize = {protocols['3']['caps_words']};",
-            f"pub const V2_SET_WORDS: usize = {protocols['2']['set_payload_words']};",
-            f"pub const V3_SET_WORDS: usize = {protocols['3']['set_words']};",
-            f"pub const V2_STATUS_WORDS: usize = {protocols['2']['status_payload_words']};",
-            f"pub const V3_STATUS_WORDS: usize = {protocols['3']['status_words']};",
-            f"pub const V3_DIAGNOSTICS_WORDS: usize = {protocols['3']['diagnostics_words']};",
+            f"pub const V4_CAPS_FLAGS: u16 = 0x{protocols['4']['flags']:04x};",
+            f"pub const V4_CAPS_WORDS: usize = {protocols['4']['caps_words']};",
+            f"pub const V4_SET_PAYLOAD_WORDS: usize = {protocols['4']['set_payload_words']};",
+            f"pub const V4_SET_WORDS: usize = {protocols['4']['set_words']};",
+            f"pub const V4_STATUS_WORDS: usize = {protocols['4']['status_words']};",
+            f"pub const V4_DIAGNOSTICS_WORDS: usize = {protocols['4']['diagnostics_words']};",
+            f"pub const V4_RECEIPT_WORDS: usize = {protocols['4']['receipt_words']};",
             "",
         ]
     )
+    for name, value in spec["receipt_dispositions"].items():
+        lines.append(f"pub const RECEIPT_{rust_name(name)}: u16 = {value};")
+    lines.append("")
     for name, bit in flags.items():
         lines.append(f"pub const STATUS_{rust_name(name)}: u16 = {bit};")
     lines.append("")
@@ -111,28 +113,29 @@ def render_sv(spec: dict) -> str:
         f"localparam [7:0]  MAGIK_UIO_GET_FBUF_LATCH = 8'h{commands['get']:02X};",
         f"localparam [7:0]  MAGIK_UIO_GET_FBUF_LATCH_CAPS = 8'h{commands['caps']:02X};",
         f"localparam [7:0]  MAGIK_UIO_GET_FBUF_LATCH_DIAGNOSTICS = 8'h{commands['diagnostics']:02X};",
+        f"localparam [7:0]  MAGIK_UIO_GET_FBUF_LATCH_RECEIPT = 8'h{commands['receipt']:02X};",
         f"localparam [15:0] MAGIK_FBUF_LATCH_MAGIC = 16'h{magic['set']:04X};",
         f"localparam [15:0] MAGIK_FBUF_STATUS_MAGIC = 16'h{magic['status']:04X};",
         f"localparam [15:0] MAGIK_FBUF_CAPS_MAGIC = 16'h{magic['caps']:04X};",
         f"localparam [15:0] MAGIK_FBUF_DIAGNOSTICS_MAGIC = 16'h{magic['diagnostics']:04X};",
+        f"localparam [15:0] MAGIK_FBUF_RECEIPT_MAGIC = 16'h{magic['receipt']:04X};",
         f"localparam [15:0] MAGIK_FBUF_PROTOCOL_VERSION = 16'd{spec['active_protocol_version']};",
-        "localparam [15:0] MAGIK_FBUF_PROTOCOL_V2 = 16'd2;",
-        "localparam [15:0] MAGIK_FBUF_PROTOCOL_V3 = 16'd3;",
+        "localparam [15:0] MAGIK_FBUF_PROTOCOL_V4 = 16'd4;",
         f"localparam [15:0] MAGIK_FBUF_CAPS_FLAGS = 16'h{protocols[str(spec['active_protocol_version'])]['flags']:04X};",
-        f"localparam [15:0] MAGIK_FBUF_V2_CAPS_FLAGS = 16'h{protocols['2']['flags']:04X};",
-        f"localparam [15:0] MAGIK_FBUF_V3_CAPS_FLAGS = 16'h{protocols['3']['flags']:04X};",
         f"localparam [15:0] MAGIK_FBUF_MAX_WIDTH = 16'd{limits['max_width']};",
         f"localparam [15:0] MAGIK_FBUF_MAX_HEIGHT = 16'd{limits['max_height']};",
         f"localparam [15:0] MAGIK_FBUF_MAX_STRIDE = 16'd{limits['max_stride_bytes']};",
-        f"localparam [4:0]  MAGIK_FBUF_V2_CAPS_WORDS = 5'd{protocols['2']['caps_words']};",
-        f"localparam [4:0]  MAGIK_FBUF_V3_CAPS_WORDS = 5'd{protocols['3']['caps_words']};",
-        f"localparam [4:0]  MAGIK_FBUF_V2_SET_WORDS = 5'd{protocols['2']['set_payload_words']};",
-        f"localparam [4:0]  MAGIK_FBUF_V3_SET_WORDS = 5'd{protocols['3']['set_words']};",
-        f"localparam [4:0]  MAGIK_FBUF_V2_STATUS_WORDS = 5'd{protocols['2']['status_payload_words']};",
-        f"localparam [4:0]  MAGIK_FBUF_V3_STATUS_WORDS = 5'd{protocols['3']['status_words']};",
-        f"localparam [4:0]  MAGIK_FBUF_V3_DIAGNOSTICS_WORDS = 5'd{protocols['3']['diagnostics_words']};",
+        f"localparam [4:0]  MAGIK_FBUF_V4_CAPS_WORDS = 5'd{protocols['4']['caps_words']};",
+        f"localparam [4:0]  MAGIK_FBUF_V4_SET_PAYLOAD_WORDS = 5'd{protocols['4']['set_payload_words']};",
+        f"localparam [4:0]  MAGIK_FBUF_V4_SET_WORDS = 5'd{protocols['4']['set_words']};",
+        f"localparam [4:0]  MAGIK_FBUF_V4_STATUS_WORDS = 5'd{protocols['4']['status_words']};",
+        f"localparam [4:0]  MAGIK_FBUF_V4_DIAGNOSTICS_WORDS = 5'd{protocols['4']['diagnostics_words']};",
+        f"localparam [4:0]  MAGIK_FBUF_V4_RECEIPT_WORDS = 5'd{protocols['4']['receipt_words']};",
         "",
     ]
+    for name, value in spec["receipt_dispositions"].items():
+        lines.append(f"localparam [15:0] MAGIK_RECEIPT_{rust_name(name)} = 16'd{value};")
+    lines.append("")
     for name, bit in capabilities.items():
         lines.append(f"localparam [15:0] MAGIK_CAP_{rust_name(name)} = 16'h{1 << bit:04X};")
     lines.append("")

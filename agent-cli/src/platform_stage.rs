@@ -5,11 +5,17 @@ use crate::error::AgentResult;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+const PLATFORM_MANIFEST: &str = "platform-v3.manifest";
+
 pub(super) fn stage_published_platform_components(
     extracted: &Path,
     stage: &Path,
 ) -> AgentResult<()> {
     for (from, to) in [
+        (
+            crate::platform_bundle::MANIFEST,
+            crate::platform_bundle::MANIFEST,
+        ),
         ("main/MiSTer_MagiK", "MiSTer_MagiKDev"),
         (
             "scanout/mister_magik_scanout_slots.ko",
@@ -38,8 +44,12 @@ pub(super) fn generate_platform_manifest(
     stage: &Path,
     main_revision: &str,
 ) -> AgentResult<()> {
+    debug_assert_eq!(PLATFORM_MANIFEST, crate::platform_manifest::FILE_NAME);
+    let release = crate::platform_manifest::ReleaseIdentity::from_bundle_manifest(
+        &stage.join(crate::platform_bundle::MANIFEST),
+    )?;
     crate::platform_manifest::generate(
-        &stage.join("platform-v2.manifest"),
+        &stage.join(PLATFORM_MANIFEST),
         &crate::platform_manifest::Artifacts {
             main: stage.join("MiSTer_MagiKDev"),
             gui: stage.join("mister-magik-fb"),
@@ -49,6 +59,7 @@ pub(super) fn generate_platform_manifest(
             latch_rbf: stage.join("fpga/menu-magik-vblank-latch.rbf"),
             latch_metadata: stage.join("fpga/menu-magik-vblank-latch.metadata.txt"),
         },
+        &release,
         main_revision,
         &crate::git::value(repository, &["rev-parse", "HEAD"])?,
         crate::platform_manifest::Layout::Development,
@@ -78,6 +89,15 @@ mod tests {
         fs::create_dir_all(extracted.join("fpga/patched")).unwrap();
         fs::create_dir_all(stage.join("fpga")).unwrap();
         fs::write(extracted.join("main/MiSTer_MagiK"), b"github-main").unwrap();
+        fs::write(
+            extracted.join(crate::platform_bundle::MANIFEST),
+            format!(
+                "{{\"format\":\"{}\",\"release_version\":16,\"bundle_id\":\"{}\"}}\n",
+                crate::platform_bundle::FORMAT,
+                "a".repeat(64)
+            ),
+        )
+        .unwrap();
         fs::write(
             extracted.join("scanout/mister_magik_scanout_slots.ko"),
             b"github-kernel",

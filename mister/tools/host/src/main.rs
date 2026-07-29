@@ -246,7 +246,7 @@ impl DeviceOperations for NativeDevice {
             }
             DeviceRequest::ReadDevelopmentManifest => {
                 let session = connect(10).map_err(device_failure)?;
-                remote_read(&session, "/media/fat/mister-magik-dev/platform-v2.manifest")
+                remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
                     .unwrap_or_default()
             }
             DeviceRequest::VerifyDevelopmentPlatform => {
@@ -637,7 +637,7 @@ fn fetch_verified_development_manager(
         &installed_platform_verify_command(Layout::Development),
     )
     .map_err(device_failure)?;
-    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v2.manifest")
+    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
         .ok_or_else(|| DeviceFailure::ArtifactMismatch("development manifest is missing".into()))?;
     if !manifest_has_manager(&manifest, expected_sha256) {
         return Err(DeviceFailure::ArtifactMismatch(
@@ -2431,7 +2431,7 @@ fn validate_delivery_remote(remote: &str) -> Result<()> {
 }
 
 fn validate_runtime_manifest_remote(remote: &str) -> Result<()> {
-    if remote == "/media/fat/mister-magik-dev/platform-v2.manifest" {
+    if remote == "/media/fat/mister-magik-dev/platform-v3.manifest" {
         Ok(())
     } else {
         Err(format!("unsupported runtime manifest remote: {remote}").into())
@@ -3490,7 +3490,7 @@ fn profile_installed_catalog_lifecycle(
     output_dir: &Path,
 ) -> Result<String> {
     let session = connect_with(&config.connection, 10)?;
-    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v2.manifest")
+    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
         .ok_or("development platform manifest is missing")?;
     let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
         .ok_or("device boot id is unavailable")?
@@ -3657,7 +3657,7 @@ fn profile_installed_catalog_lifecycle(
     if final_boot_id.trim() != boot_id {
         return Err("device rebooted during the catalog lifecycle benchmark".into());
     }
-    let final_manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v2.manifest")
+    let final_manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
         .ok_or("development platform manifest is missing after catalog lifecycle benchmark")?;
     if final_manifest != manifest {
         return Err(
@@ -3882,7 +3882,7 @@ fn profile_installed_particles(
     {
         return Err("installed app does not support particle-capacity-v1".into());
     }
-    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v2.manifest")
+    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
         .ok_or("development platform manifest is missing")?;
     let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
         .ok_or("device boot id is unavailable")?
@@ -4059,7 +4059,7 @@ fn profile_installed_particle_cpu(
             return Err(format!("installed app does not support {capability_name}").into());
         }
     }
-    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v2.manifest")
+    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
         .ok_or("development platform manifest is missing")?;
     let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
         .ok_or("device boot id is unavailable")?
@@ -4187,7 +4187,7 @@ fn profile_installed_particle_showcase_cpu(
             return Err(format!("installed app does not support {capability_name}").into());
         }
     }
-    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v2.manifest")
+    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
         .ok_or("development platform manifest is missing")?;
     let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
         .ok_or("device boot id is unavailable")?
@@ -5676,7 +5676,7 @@ fn verify_particle_benchmark_restoration(
     if final_boot_id.trim() != expected_boot_id {
         return Err("device rebooted during the particle benchmark".into());
     }
-    let final_manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v2.manifest")
+    let final_manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
         .ok_or("development platform manifest is missing after particle benchmark")?;
     if final_manifest != expected_manifest {
         return Err("installed platform manifest changed during particle benchmark".into());
@@ -5945,7 +5945,7 @@ fn profile_installed_screensaver(config: &NativeDeviceConfig, output_dir: &Path)
     {
         return Err("screensaver benchmark requires an existing usable cached catalog".into());
     }
-    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v2.manifest")
+    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
         .ok_or("development platform manifest is missing")?;
     let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
         .ok_or("device boot id is unavailable")?
@@ -6220,7 +6220,7 @@ fn finalize_benchmark_state(
     if final_boot_id.trim() != expected_boot_id {
         return Err("device rebooted during the in-place screensaver benchmark".into());
     }
-    let final_manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v2.manifest")
+    let final_manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
         .ok_or("development platform manifest is missing after benchmark")?;
     if final_manifest != expected_manifest {
         return Err("installed platform manifest changed during benchmark".into());
@@ -8852,7 +8852,7 @@ impl MagikDeployTransaction {
         manifest_remote: &str,
     ) -> Result<Self> {
         let mut transaction = Self::validate(local, remote)?;
-        if manifest_remote != "/media/fat/mister-magik-dev/platform-v2.manifest"
+        if manifest_remote != "/media/fat/mister-magik-dev/platform-v3.manifest"
             || !manifest_local.is_file()
         {
             return Err("unsupported runtime bundle manifest".into());
@@ -10683,11 +10683,7 @@ fn ssh_diagnostics_bundle(agent_error: String) -> Result<Value> {
             "diagnostics/catalog/progress-latest.json",
             "updated_unix_ms",
         ),
-        "latch_failure": ssh_latest_diagnostic_report(
-            &sess,
-            "diagnostics/latch/latest.json",
-            "updated_unix_ms",
-        ),
+        "latch_failure": ssh_current_latch_failure_report(&sess),
     }))
 }
 
@@ -10877,6 +10873,44 @@ fn ssh_latest_diagnostic_report(
         .pop()
         .map(|(path, report)| json!({"path": path, "report": report}))
         .unwrap_or(Value::Null)
+}
+
+fn ssh_current_latch_failure_report(sess: &Session) -> Value {
+    for app in [
+        configured_remote_path("MISTER_MAGIK_APP_DIR", "/media/fat/mister-magik"),
+        "/media/fat/mister-magik".to_owned(),
+        "/media/fat/mister-magik-dev".to_owned(),
+    ] {
+        let pointer_path = format!("{app}/diagnostics/latch/current-identity.json");
+        let Some(pointer) = remote_read(sess, &pointer_path)
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        else {
+            continue;
+        };
+        let Some(relative) = pointer.get("latest_relative_path").and_then(Value::as_str) else {
+            continue;
+        };
+        if relative.starts_with('/') || relative.split('/').any(|part| part == "..") {
+            continue;
+        }
+        let report_path = format!("{app}/diagnostics/latch/{relative}");
+        let Some(report) = remote_read(sess, &report_path)
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        else {
+            continue;
+        };
+        if report.get("schema").and_then(Value::as_str)
+            == Some("mister-magik-latch-failure-report-v2")
+            && report.get("identity") == pointer.get("identity")
+        {
+            return json!({
+                "path": report_path,
+                "identity_pointer": pointer_path,
+                "report": report,
+            });
+        }
+    }
+    Value::Null
 }
 
 fn remote_catalog_failure_paths(sess: &Session, dir: &str, limit: usize) -> Vec<String> {
@@ -14538,7 +14572,7 @@ H: Handlers=event3 js0"#
             &local,
             "/media/fat/mister-magik-dev/mister-magik-fb",
             &manifest,
-            "/media/fat/mister-magik-dev/platform-v2.manifest",
+            "/media/fat/mister-magik-dev/platform-v3.manifest",
         )
         .unwrap();
         let remote = scripted_deploy_remote(3);
@@ -14546,10 +14580,10 @@ H: Handlers=event3 js0"#
         tx.run_with(&remote, 0, Instant::now()).unwrap();
         let events = remote.events();
         assert!(events[2].ends_with("mister-magik-fb.upload"));
-        assert!(events[3].ends_with("platform-v2.manifest.upload"));
+        assert!(events[3].ends_with("platform-v3.manifest.upload"));
         assert!(
             events[4].find("mister-magik-fb.upload").unwrap()
-                < events[4].find("platform-v2.manifest.upload").unwrap()
+                < events[4].find("platform-v3.manifest.upload").unwrap()
         );
         let _ = fs::remove_file(local);
         let _ = fs::remove_file(manifest);
@@ -15287,7 +15321,7 @@ H: Handlers=event3 js0"#
             .find("mister-magik-fb.upload' '/media/fat/mister-magik-dev/mister-magik-fb'")
             .unwrap();
         let manifest = script
-            .find("platform-v2.manifest.upload' '/media/fat/mister-magik-dev/platform-v2.manifest'")
+            .find("platform-v3.manifest.upload' '/media/fat/mister-magik-dev/platform-v3.manifest'")
             .unwrap();
         assert!(manifest > gui);
         assert!(script.contains("trap rollback EXIT INT TERM"));
@@ -15435,7 +15469,7 @@ H: Handlers=event3 js0"#
     fn platform_deploy_uploads_only_changed_files_and_activates_manifest_last() {
         let (stage, transaction) = platform_stage("platform-stage-incremental");
         let gui = "/media/fat/mister-magik-dev/mister-magik-fb";
-        let manifest = "/media/fat/mister-magik-dev/platform-v2.manifest";
+        let manifest = "/media/fat/mister-magik-dev/platform-v3.manifest";
         let remote = scripted_platform_remote(platform_inventory(
             &transaction,
             &[(gui, false), (manifest, false)],
@@ -16477,7 +16511,7 @@ H: Handlers=event3 js0"#
     fn typed_operator_commands_own_platform_and_scene_safety() {
         for layout in [Layout::Development, Layout::Public] {
             let verify = installed_platform_verify_command(layout);
-            assert!(verify.contains("platform-v2.manifest"));
+            assert!(verify.contains("platform-v3.manifest"));
             assert!(verify.contains("sha256sum"));
             assert!(verify.contains("mister-magik-manager"));
             assert!(verify.contains("manager_sha256"));

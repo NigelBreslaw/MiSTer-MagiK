@@ -176,18 +176,18 @@ module tb_mister_magik_sys_top_integration;
 		input [3:0] word;
 		begin
 			case(word)
-				4'd0: golden_set_word = MAGIK_GOLDEN_SET_V3_0;
-				4'd1: golden_set_word = MAGIK_GOLDEN_SET_V3_1;
-				4'd2: golden_set_word = MAGIK_GOLDEN_SET_V3_2;
-				4'd3: golden_set_word = MAGIK_GOLDEN_SET_V3_3;
-				4'd4: golden_set_word = MAGIK_GOLDEN_SET_V3_4;
-				4'd5: golden_set_word = MAGIK_GOLDEN_SET_V3_5;
-				4'd6: golden_set_word = MAGIK_GOLDEN_SET_V3_6;
-				4'd7: golden_set_word = MAGIK_GOLDEN_SET_V3_7;
-				4'd8: golden_set_word = MAGIK_GOLDEN_SET_V3_8;
-				4'd9: golden_set_word = MAGIK_GOLDEN_SET_V3_9;
-				4'd10: golden_set_word = MAGIK_GOLDEN_SET_V3_10;
-				default: golden_set_word = MAGIK_GOLDEN_SET_V3_CRC;
+				4'd0: golden_set_word = MAGIK_GOLDEN_SET_V4_0;
+				4'd1: golden_set_word = MAGIK_GOLDEN_SET_V4_1;
+				4'd2: golden_set_word = MAGIK_GOLDEN_SET_V4_2;
+				4'd3: golden_set_word = MAGIK_GOLDEN_SET_V4_3;
+				4'd4: golden_set_word = MAGIK_GOLDEN_SET_V4_4;
+				4'd5: golden_set_word = MAGIK_GOLDEN_SET_V4_5;
+				4'd6: golden_set_word = MAGIK_GOLDEN_SET_V4_6;
+				4'd7: golden_set_word = MAGIK_GOLDEN_SET_V4_7;
+				4'd8: golden_set_word = MAGIK_GOLDEN_SET_V4_8;
+				4'd9: golden_set_word = MAGIK_GOLDEN_SET_V4_9;
+				4'd10: golden_set_word = MAGIK_GOLDEN_SET_V4_10;
+				default: golden_set_word = MAGIK_GOLDEN_SET_V4_CRC;
 			endcase
 		end
 	endfunction
@@ -241,13 +241,13 @@ module tb_mister_magik_sys_top_integration;
 
 		begin_command(MAGIK_UIO_GET_FBUF_LATCH_CAPS, MAGIK_FBUF_CAPS_MAGIC);
 		transfer_word(16'd0, response);
-		expect16(response, 16'd3, "sys_top caps version");
+		expect16(response, MAGIK_FBUF_PROTOCOL_VERSION, "sys_top caps version");
 		transfer_word(16'd0, response);
 		expect16(response, MAGIK_FBUF_CAPS_FLAGS, "sys_top caps flags");
 		for(index = 2; index < 5; index = index + 1)
 			transfer_word(16'd0, response);
 		transfer_word(16'd0, response);
-		expect16(response, MAGIK_GOLDEN_CAPS_V3_CRC, "sys_top caps CRC");
+		expect16(response, MAGIK_GOLDEN_CAPS_V4_CRC, "sys_top caps CRC");
 		end_command();
 
 		begin_command(MAGIK_UIO_SET_FBUF_LATCH, MAGIK_FBUF_LATCH_MAGIC);
@@ -263,7 +263,7 @@ module tb_mister_magik_sys_top_integration;
 		expect16(dut.LFB_BASE[15:0], 16'h9000, "sys_top accepted base low");
 		expect16(dut.LFB_BASE[31:16], 16'h227e, "sys_top accepted base high");
 		expect16({4'd0, dut.LFB_HEIGHT}, 16'd540, "sys_top accepted height");
-		expect16(dut.magik_lfb_active_seq, 16'h002a, "sys_top accepted sequence");
+		expect16(dut.magik_lfb_active_seq, 16'h002b, "sys_top accepted sequence");
 		@(negedge test_clk);
 		test_vblank = 1'b0;
 		repeat(4) @(posedge test_clk);
@@ -274,7 +274,7 @@ module tb_mister_magik_sys_top_integration;
 		for(index = 0; index < 12; index = index + 1)
 			transfer_word(golden_set_word(index[3:0]), response);
 		end_command();
-		if(!dut.magik_lfb_pending) fail("replacement route is not pending");
+		if(!dut.magik_lfb_pending) fail("new route is not pending");
 
 		begin_command(8'h2f, 16'd1);
 		@(negedge test_clk);
@@ -285,7 +285,7 @@ module tb_mister_magik_sys_top_integration;
 		@(posedge test_clk);
 		#1;
 		test_io_strobe = 1'b0;
-		if(!dut.magik_lfb_pending) fail("legacy collision consumed pending route");
+		if(dut.magik_lfb_pending) fail("legacy collision did not cancel pending route");
 		expect16(dut.magik_lfb_active_seq, 16'd0,
 		         "legacy collision clears active sequence");
 		transfer_word(16'h4444, response);
@@ -298,7 +298,7 @@ module tb_mister_magik_sys_top_integration;
 		expect16(dut.LFB_BASE[31:16], 16'h3333, "legacy base high wins");
 		expect16(dut.magik_lfb_active_seq, 16'd0, "legacy write clears active sequence");
 
-		$display("COVER LATCH-V3-SYS-TOP actual command counter/strobe path");
+		$display("COVER LATCH-V4-SYS-TOP actual command counter/strobe path");
 		$display("PASS: patched sys_top latch integration");
 		$finish;
 	end

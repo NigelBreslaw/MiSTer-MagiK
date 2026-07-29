@@ -22,16 +22,19 @@ module_hash="$(sha256sum "$APP/mister_magik_scanout_slots.ko" | awk '{print $1}'
 rbf_hash="$(sha256sum "$APP/fpga/menu-magik-vblank-latch.rbf" | awk '{print $1}')"
 printf 'platform_contract_sha256=%s\nmodule_sha256=%s\nvermagic=5.15.1-MiSTer fixture\n' \
   "$contract" "$module_hash" >"$APP/mister_magik_scanout_slots.metadata.txt"
-printf 'platform_contract_sha256=%s\nsource_commit=%040d\nrbf_sha256=%s\n' \
+printf 'platform_contract_sha256=%s\nsource_commit=%040d\nlatch_protocol_version=4\nlatch_capability_mask=0x01ff\nrbf_sha256=%s\n' \
   "$contract" 3 "$rbf_hash" >"$APP/fpga/menu-magik-vblank-latch.metadata.txt"
+printf '{"format":"mister-magik-platform-bundle-v0.2","release_version":16,"bundle_id":"%064d"}\n' 0 \
+  >"$APP/platform-bundle-v0.2.json"
 "$ROOT/scripts/agent" ci platform-manifest generate \
-  --output "$APP/platform-v2.manifest" --layout public \
+  --output "$APP/platform-v3.manifest" --layout public \
   --main "$FAT/MiSTer_MagiK" --gui "$APP/mister-magik-fb" \
   --manager "$APP/mister-magik-manager" \
   --scanout-module "$APP/mister_magik_scanout_slots.ko" \
   --scanout-metadata "$APP/mister_magik_scanout_slots.metadata.txt" \
   --latch-rbf "$APP/fpga/menu-magik-vblank-latch.rbf" \
   --latch-metadata "$APP/fpga/menu-magik-vblank-latch.metadata.txt" \
+  --platform-bundle-manifest "$APP/platform-bundle-v0.2.json" \
   --main-revision "$(printf %040d 2)" --magik-revision "$(printf %040d 1)" >/dev/null
 
 cp "$ROOT/scripts/MiSTer-MagiK.sh" "$FAT/Scripts/MiSTer-MagiK.sh"
@@ -59,18 +62,18 @@ test "$(sha256sum "$FAT/MiSTer.ini")" = "$before_ini"
 test "$(sha256sum "$TMP/inittab")" = "$before_inittab"
 
 # Malformed, duplicate, and noncanonical bootstrap fields are refused byte-identically.
-cp "$APP/platform-v2.manifest" "$TMP/manifest.good"
+cp "$APP/platform-v3.manifest" "$TMP/manifest.good"
 for case_name in malformed duplicate noncanonical; do
-  cp "$TMP/manifest.good" "$APP/platform-v2.manifest"
+  cp "$TMP/manifest.good" "$APP/platform-v3.manifest"
   case "$case_name" in
     malformed)
-      sed -i.bak 's/^manager_sha256=.*/manager_sha256=UPPERCASE/' "$APP/platform-v2.manifest"
+      sed -i.bak 's/^manager_sha256=.*/manager_sha256=UPPERCASE/' "$APP/platform-v3.manifest"
       ;;
     duplicate)
-      printf 'manager_path=/media/fat/mister-magik/mister-magik-manager\n' >>"$APP/platform-v2.manifest"
+      printf 'manager_path=/media/fat/mister-magik/mister-magik-manager\n' >>"$APP/platform-v3.manifest"
       ;;
     noncanonical)
-      sed -i.bak 's#^manager_path=.*#manager_path=/media/fat/mister-magik/../mister-magik/mister-magik-manager#' "$APP/platform-v2.manifest"
+      sed -i.bak 's#^manager_path=.*#manager_path=/media/fat/mister-magik/../mister-magik/mister-magik-manager#' "$APP/platform-v3.manifest"
       ;;
   esac
   if MISTER_MAGIK_TEST_KEYS=down run_manager install >"$TMP/bootstrap-$case_name.log" 2>&1; then
@@ -80,7 +83,7 @@ for case_name in malformed duplicate noncanonical; do
   test "$(sha256sum "$FAT/MiSTer.ini")" = "$before_ini"
   test "$(sha256sum "$TMP/inittab")" = "$before_inittab"
 done
-cp "$TMP/manifest.good" "$APP/platform-v2.manifest"
+cp "$TMP/manifest.good" "$APP/platform-v3.manifest"
 
 # The bootstrap reports a missing hashing tool and refuses to run the manager.
 mkdir "$TMP/bootstrap-bin"

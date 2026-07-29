@@ -141,21 +141,22 @@ CONTRACT="$(printf release-check-contract | sha256sum | awk '{print $1}')"
 printf 'platform_contract_sha256=%s\nmodule_sha256=%s\nvermagic=5.15.1-MiSTer fixture\nsource_revision=%s\n' \
   "$CONTRACT" "$(sha256sum "$WORK/mister_magik_scanout_slots.ko" | awk '{print $1}')" \
   "$MAGIK_REVISION" >"$WORK/scanout.metadata.txt"
-printf 'format=mister-magik-fpga-release-v2\nplatform_contract_sha256=%s\nmagik_commit=%s\nsource_commit=%s\nlatch_protocol_sha256=%064d\nlatch_bridge_sha256=%064d\nlatch_protocol_version=3\nrbf_sha256=%s\n' \
+printf 'format=mister-magik-fpga-release-v2\nplatform_contract_sha256=%s\nmagik_commit=%s\nsource_commit=%s\nlatch_protocol_sha256=%064d\nlatch_bridge_sha256=%064d\nlatch_protocol_version=4\nlatch_capability_mask=0x01ff\nrbf_sha256=%s\n' \
   "$CONTRACT" "$MAGIK_REVISION" "$MENU_REVISION" 0 0 \
   "$(sha256sum "$WORK/menu-magik-vblank-latch.rbf" | awk '{print $1}')" \
   >"$WORK/latch.metadata.txt"
+printf '{"format":"mister-magik-platform-bundle-v0.2","release_version":16,"bundle_id":"%064d"}\n' 0 \
+  >"$WORK/platform-bundle-v0.2.json"
 scripts/agent ci platform-manifest generate \
-  --layout public --output "$WORK/platform-v2.manifest" \
+  --layout public --output "$WORK/platform-v3.manifest" \
   --main "$MAIN_BIN" --gui "$BIN" \
   --manager "$MANAGER" \
   --scanout-module "$WORK/mister_magik_scanout_slots.ko" \
   --scanout-metadata "$WORK/scanout.metadata.txt" \
   --latch-rbf "$WORK/menu-magik-vblank-latch.rbf" \
   --latch-metadata "$WORK/latch.metadata.txt" \
+  --platform-bundle-manifest "$WORK/platform-bundle-v0.2.json" \
   --main-revision "$MAIN_SOURCE_REVISION" --magik-revision "$MAGIK_REVISION" >/dev/null
-printf '{"format":"mister-magik-platform-bundle-v0.1","bundle_id":"%064d"}\n' 0 \
-  >"$WORK/platform-bundle-v0.1.json"
 
 VERSION="$(source scripts/lib/bench-context-lib.sh; bench_context_build_receipt_field "$BIN" version)"
 BUILD_NUMBER="$(source scripts/lib/bench-context-lib.sh; bench_context_build_receipt_field "$BIN" build_number)"
@@ -171,8 +172,8 @@ ZIP="$(scripts/package-distribution.sh \
   --scanout-metadata "$WORK/scanout.metadata.txt" \
   --latch-rbf "$WORK/menu-magik-vblank-latch.rbf" \
   --latch-metadata "$WORK/latch.metadata.txt" \
-  --platform-manifest "$WORK/platform-v2.manifest" \
-  --platform-bundle-manifest "$WORK/platform-bundle-v0.1.json")"
+  --platform-manifest "$WORK/platform-v3.manifest" \
+  --platform-bundle-manifest "$WORK/platform-bundle-v0.2.json")"
 
 ZIP="$ZIP" python3 - <<'PY'
 import hashlib
@@ -187,7 +188,7 @@ required = {
     "mister-magik/mister-magik-manager",
     "mister-magik/mame.sqlite3",
     "mister-magik/hbmame.sqlite3",
-    "mister-magik/platform-v2.manifest",
+    "mister-magik/platform-v3.manifest",
     "mister-magik/platform-bundle-v0.1.json",
     "mister-magik/game-databases-manifest.json",
     "mister-magik/mister_magik_scanout_slots.ko",
@@ -201,7 +202,7 @@ with zipfile.ZipFile(os.environ["ZIP"]) as archive:
     manager_mode = archive.getinfo("mister-magik/mister-magik-manager").external_attr >> 16
     manifest = dict(
         line.split("=", 1)
-        for line in archive.read("mister-magik/platform-v2.manifest").decode().splitlines()
+        for line in archive.read("mister-magik/platform-v3.manifest").decode().splitlines()
         if line and not line.startswith("#")
     )
 missing = sorted(required - names)

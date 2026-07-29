@@ -51,7 +51,7 @@ def verify(
         "signoff_valid", "build_date",
     }
     if require_protocol:
-        required.update(("latch_protocol_sha256", "latch_protocol_version"))
+        required.update(("latch_protocol_sha256", "latch_protocol_version", "latch_capability_mask"))
     if not historical_v2:
         required.update(
             ("latch_bridge_sha256", "component_input_sha256", "component_revision")
@@ -87,12 +87,14 @@ def verify(
         raise ValueError("release source tree was dirty")
     if fields["quartus_seed"] != "1":
         raise ValueError("release seed must be 1")
-    expected_protocol = "2" if historical_v2 else "3"
+    expected_protocol = "2" if historical_v2 else "4"
     if (
         "latch_protocol_version" in fields
         and fields["latch_protocol_version"] != expected_protocol
     ):
         raise ValueError(f"release must bind latch protocol version {expected_protocol}")
+    if not historical_v2 and fields["latch_capability_mask"] != "0x01ff":
+        raise ValueError("release must bind latch capability mask 0x01ff")
     if not fields["quartus_version"].startswith("17.0"):
         raise ValueError("release must use Quartus 17.0")
     if not fields["workflow_url"].startswith("https://"):

@@ -80,7 +80,7 @@ The zip is laid out relative to the MiSTer SD-card root:
   mister-magik/hbmame.sqlite3
   mister-magik/assets/...     when --asset-pack is provided
   MiSTer_MagiK
-  mister-magik/platform-v2.manifest
+  mister-magik/platform-v3.manifest
   mister-magik/platform-bundle-v0.1.json or platform-bundle-v0.2.json
   mister-magik/game-databases-manifest.json
   mister-magik/mister_magik_scanout_slots.ko
@@ -343,7 +343,7 @@ cp "$SCANOUT_MODULE" "$STAGE/mister-magik/mister_magik_scanout_slots.ko"
 cp "$SCANOUT_METADATA" "$STAGE/mister-magik/mister_magik_scanout_slots.metadata.txt"
 cp "$LATCH_RBF" "$STAGE/mister-magik/fpga/menu-magik-vblank-latch.rbf"
 cp "$LATCH_METADATA" "$STAGE/mister-magik/fpga/menu-magik-vblank-latch.metadata.txt"
-cp "$PLATFORM_MANIFEST" "$STAGE/mister-magik/platform-v2.manifest"
+cp "$PLATFORM_MANIFEST" "$STAGE/mister-magik/platform-v3.manifest"
 cp "$PLATFORM_BUNDLE_MANIFEST" "$STAGE/mister-magik/$PLATFORM_BUNDLE_BASENAME"
 cp "$GAME_DATABASES_MANIFEST" "$STAGE/mister-magik/game-databases-manifest.json"
 MAIN_SHA256="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$MAIN_BIN")"
@@ -360,7 +360,7 @@ game_database_version=$GAME_DATABASE_VERSION
 EOF
 chmod 755 "$STAGE/MiSTer_MagiK"
 "$ROOT/scripts/agent" ci platform-manifest verify \
-  "$STAGE/mister-magik/platform-v2.manifest" --root "$STAGE" --layout public >/dev/null
+  "$STAGE/mister-magik/platform-v3.manifest" --root "$STAGE" --layout public >/dev/null
 if find "$STAGE" -type f \( -path '*/experiments/*' -o -name menu.rbf \) -print -quit | grep -q .; then
   echo "ERROR: production package contains experiments/ or root menu.rbf" >&2
   exit 1

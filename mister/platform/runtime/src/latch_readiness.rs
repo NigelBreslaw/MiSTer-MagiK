@@ -11,7 +11,7 @@ use std::path::Path;
 pub const REPORT_PATH: &str = "/tmp/mister-magik/latch-readiness.json";
 pub const RUNTIME_FAILURE_PATH: &str = "/tmp/mister-magik/latch-failure.json";
 
-pub const MAX_LATCH_WIRE_WORDS: usize = 14;
+pub const MAX_LATCH_WIRE_WORDS: usize = 16;
 pub const MAX_LATCH_WIRE_ATTEMPTS: usize = 6;
 pub const MAX_LATCH_POST_WORDS: usize = 12;
 
@@ -167,6 +167,16 @@ pub struct LatchPostDiagnostics {
     pub expected_word_count: u8,
     pub transmitted_word_count: u8,
     pub total_elapsed_us: u64,
+    pub attempted_transaction: u16,
+    pub receipt_disposition: u16,
+    pub accepted_transaction: u16,
+    pub accepted_sequence: u16,
+    pub pending_transaction: u16,
+    pub pending_sequence: u16,
+    pub active_transaction: u16,
+    pub active_sequence: u16,
+    pub receipt_reject_reason: u8,
+    pub receipt_crc: u16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub injected_skip_index: Option<u8>,
 }
@@ -182,6 +192,16 @@ impl Default for LatchPostDiagnostics {
             expected_word_count: 0,
             transmitted_word_count: 0,
             total_elapsed_us: 0,
+            attempted_transaction: 0,
+            receipt_disposition: 0,
+            accepted_transaction: 0,
+            accepted_sequence: 0,
+            pending_transaction: 0,
+            pending_sequence: 0,
+            active_transaction: 0,
+            active_sequence: 0,
+            receipt_reject_reason: 0,
+            receipt_crc: 0,
             injected_skip_index: None,
         }
     }
@@ -202,6 +222,10 @@ pub struct LatchStatusObservation {
     pub reject_count: u16,
     pub rejection_reason: u8,
     pub active_route_epoch: u16,
+    pub accepted_sequence: u16,
+    pub active_transaction: u16,
+    pub pending_transaction: u16,
+    pub accepted_transaction: u16,
     pub active_base: u32,
     pub active_width: u16,
     pub active_height: u16,
@@ -463,6 +487,8 @@ pub struct LatchFailureEvidence {
     pub first_rejection_observation: Option<LatchRejectionObservation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rejection_observation: Option<LatchRejectionObservation>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failure_history: Vec<LatchFailure>,
 }
 
 impl From<&LatchFailure> for LatchFailureEvidence {
@@ -483,7 +509,7 @@ impl From<&LatchFailure> for LatchFailureEvidence {
             latest_detail: failure.detail.clone(),
             attempt_count: 0,
             latest_result: "not-attempted".to_string(),
-            recovery_state: "compatibility-prompt".to_string(),
+            recovery_state: "output-frozen".to_string(),
             first_wire_diagnostics: failure.wire_diagnostics.clone(),
             wire_diagnostics: failure.wire_diagnostics.clone(),
             first_post_diagnostics: failure.post_diagnostics,
@@ -492,6 +518,7 @@ impl From<&LatchFailure> for LatchFailureEvidence {
             status_observation: failure.status_observation,
             first_rejection_observation: failure.rejection_observation,
             rejection_observation: failure.rejection_observation,
+            failure_history: vec![failure.clone()],
         }
     }
 }
@@ -500,16 +527,13 @@ impl LatchFailureEvidence {
     pub fn for_recovery(
         first: &LatchFailure,
         latest: &LatchFailure,
+        failure_history: &[LatchFailure],
         attempt_count: u8,
         latest_result: impl Into<String>,
         recovery_state: impl Into<String>,
     ) -> Self {
         Self {
-            schema: if latest.has_diagnostics() || first.has_diagnostics() {
-                "mister-magik-latch-failure-v3"
-            } else {
-                "mister-magik-latch-failure-v2"
-            },
+            schema: "mister-magik-latch-failure-v4",
             state: first.state.code().to_string(),
             stage: first.stage.code().to_string(),
             reason: first.reason_code().to_string(),
@@ -529,6 +553,7 @@ impl LatchFailureEvidence {
             status_observation: latest.status_observation,
             first_rejection_observation: first.rejection_observation,
             rejection_observation: latest.rejection_observation,
+            failure_history: failure_history.to_vec(),
         }
     }
 

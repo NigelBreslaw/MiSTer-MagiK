@@ -26,7 +26,7 @@
 //!                        fill one scanout slot and post it through FPGA latch
 //!     fpga-latch-pattern
 //!                        fill scanout slots and vblank-latch them in FPGA
-//!     catalog-v3-inspect validate the registry, shards, state, and scanner cache
+//!     catalog-v4-inspect validate the registry, shards, state, and scanner cache
 //!     search-bench       benchmark persisted Arcade FTS5 search
 //!     hbmame-metadata-from-library
 //!                        build supplemental HBMAME metadata from parsed MRA parents
@@ -76,6 +76,7 @@ use mister_magik_mister_runtime::boot_analytics;
 mod catalog_failure_report;
 mod catalog_progress_report;
 mod cpu_profile;
+mod diagnostic_identity;
 mod display_config;
 #[cfg(mister_experiments)]
 mod experiments;
@@ -166,7 +167,7 @@ fn main() {
 
     let latch_readiness_json =
         cmd == "latch-readiness-report" && args.iter().any(|arg| arg == "--json");
-    if cmd != "catalog-v3-inspect" && !latch_readiness_json {
+    if cmd != "catalog-v4-inspect" && !latch_readiness_json {
         crate::ui_logln!("mister-magik-fb [{cmd}] ({})", build_identity.log_detail());
     }
 
@@ -348,7 +349,7 @@ fn dispatch_pre_fpga(cmd: &str, args: &[String]) {
         "preview-pack-bench" => preview_pack_bench::run(),
         #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
         "preview-index-refresh-bench" => run_preview_index_refresh_bench(),
-        "catalog-v3-inspect" => run_catalog_v3_inspect(),
+        "catalog-v4-inspect" => run_catalog_v4_inspect(),
         #[cfg(feature = "diagnostics")]
         "hbmame-metadata-from-library" => run_hbmame_metadata_from_library(),
         #[cfg(feature = "bench-tools")]
@@ -383,7 +384,7 @@ fn print_benchmark_capabilities() {
         serde_json::json!({
             "schema": "mister-magik-benchmark-capabilities-v1",
             "screensaver-pprof-v1": cfg!(feature = "profile"),
-            "screensaver-frame-evidence-v3": cfg!(feature = "profile"),
+            "screensaver-frame-evidence-v4": cfg!(feature = "profile"),
             "particle-capacity-v1": true,
             "particle-showcase-v1": true,
             "persisted-search-v1": true,
@@ -391,11 +392,11 @@ fn print_benchmark_capabilities() {
     );
 }
 
-fn run_catalog_v3_inspect() {
+fn run_catalog_v4_inspect() {
     match mister_magik_catalog::catalog_acceptance::inspect_production_catalog() {
         Ok(report) => crate::ui_log!("{report}"),
         Err(error) => {
-            crate::ui_errln!("catalog_v3_summary_tsv\tvalid=0\terror={error}");
+            crate::ui_errln!("catalog_v4_summary_tsv\tvalid=0\terror={error}");
             std::process::exit(1);
         }
     }
@@ -1481,21 +1482,8 @@ fn run_fpga_latch_report() {
         std::process::exit(1);
     }
 
-    let set_probe = match negotiated_caps.2.protocol {
-        mister_magik_latch_contract::LatchProtocol::V2 => {
-            match fpga.probe_magik_latched_fbuf_set() {
-                Ok((hi, lo)) => (hi, lo, String::new(), "wire"),
-                Err(e) => (0, 0, e.to_string(), "wire"),
-            }
-        }
-        mister_magik_latch_contract::LatchProtocol::V3 => (0, 0, String::new(), "capabilities"),
-    };
-    let set_supported =
-        if negotiated_caps.2.protocol == mister_magik_latch_contract::LatchProtocol::V3 {
-            negotiated_profile_ready
-        } else {
-            set_probe.0 == MAGIK_FBUF_LATCH_MAGIC || set_probe.1 == MAGIK_FBUF_LATCH_MAGIC
-        };
+    let set_probe = (0, 0, String::new(), "capabilities");
+    let set_supported = negotiated_profile_ready;
     crate::ui_logln!(
         "fpga_latch_set_probe_tsv\tcmd=0x{:02x}\tsupported={}\tsource={}\tmagic_expected=0x{:04x}\tack_high=0x{:04x}\tack_low=0x{:04x}\terror={}",
         fpga::MAGIK_UIO_SET_FBUF_LATCH,

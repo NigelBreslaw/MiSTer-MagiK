@@ -34,36 +34,6 @@ component CrtProgressRow inherits Rectangle {
     }
 }
 
-export component DisplayDegradedBanner inherits Rectangle {
-    height: MisterUi.footer-height;
-    background: #241a20ee;
-    border-width: MisterUi.border;
-    border-color: #ffd166;
-
-    HorizontalLayout {
-        padding-left: MisterUi.grid-x;
-        padding-right: MisterUi.grid-x;
-        spacing: MisterUi.grid-x;
-        cross-axis-alignment: center;
-
-        Text {
-            font-family: MisterUi.crt-font-family;
-            text: "COMPATIBILITY DISPLAY";
-            color: #ffd166;
-            font-size: MisterUi.body-font;
-        }
-
-        Text {
-            font-family: MisterUi.crt-font-family;
-            text: MisterBridge.compatibility-reason;
-            color: CrtTheme.text;
-            font-size: MisterUi.body-font;
-            overflow: elide;
-            horizontal-stretch: 1;
-        }
-    }
-}
-
 export component CatalogScanPopup inherits Rectangle {
     property <length> scan-osd-width: 0px;
     property <length> scan-horizontal-padding: MisterUi.grid-x;

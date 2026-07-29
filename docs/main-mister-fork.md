@@ -204,7 +204,7 @@ The development script deploys:
 - the bundle Main to `/media/fat/MiSTer_MagiKDev`
 - the bundle scanout module and metadata to `/media/fat/mister-magik-dev/`
 - the bundle Menu latch RBF and metadata to `/media/fat/mister-magik-dev/fpga/`
-- the complete platform contract to `/media/fat/mister-magik-dev/platform-v2.manifest`
+- the complete platform contract to `/media/fat/mister-magik-dev/platform-v3.manifest`
 
 The transaction selects the development Main only after the complete manifest
 has been activated.

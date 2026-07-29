@@ -318,11 +318,13 @@ pub enum PlatformManifestCommand {
         #[arg(long)]
         latch_metadata: PathBuf,
         #[arg(long)]
+        platform_bundle_manifest: PathBuf,
+        #[arg(long)]
         main_revision: String,
         #[arg(long)]
         magik_revision: String,
         #[arg(long, default_value = "public")]
-        layout: String,
+        layout: Box<String>,
     },
     Verify {
         manifest: PathBuf,
@@ -466,6 +468,7 @@ impl Cli {
                         scanout_metadata,
                         latch_rbf,
                         latch_metadata,
+                        platform_bundle_manifest,
                         main_revision,
                         magik_revision,
                         layout,
@@ -478,9 +481,10 @@ impl Cli {
                         scanout_metadata,
                         latch_rbf,
                         latch_metadata,
+                        platform_bundle_manifest,
                         main_revision,
                         magik_revision,
-                        layout,
+                        layout: *layout,
                     },
                     PlatformManifestCommand::Verify {
                         manifest,
@@ -907,6 +911,8 @@ mod tests {
                 "latch.rbf",
                 "--latch-metadata",
                 "latch.txt",
+                "--platform-bundle-manifest",
+                "platform-bundle-v0.2.json",
                 "--main-revision",
                 &main_revision,
                 "--magik-revision",

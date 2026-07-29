@@ -6,13 +6,14 @@ pub const SET_FBUF_LATCH: u16 = 0x57;
 pub const GET_FBUF_LATCH: u16 = 0x58;
 pub const GET_FBUF_LATCH_CAPS: u16 = 0x59;
 pub const GET_FBUF_LATCH_DIAGNOSTICS: u16 = 0x5a;
+pub const GET_FBUF_LATCH_RECEIPT: u16 = 0x5b;
 pub const LATCH_MAGIC: u16 = 0x4d47;
 pub const STATUS_MAGIC: u16 = 0x4d48;
 pub const CAPS_MAGIC: u16 = 0x4d49;
 pub const DIAGNOSTICS_MAGIC: u16 = 0x4d4a;
-pub const ACTIVE_PROTOCOL_VERSION: u16 = 3;
-pub const PROTOCOL_V2: u16 = 2;
-pub const PROTOCOL_V3: u16 = 3;
+pub const RECEIPT_MAGIC: u16 = 0x4d4b;
+pub const ACTIVE_PROTOCOL_VERSION: u16 = 4;
+pub const PROTOCOL_V4: u16 = 4;
 pub const MAX_WIDTH: u16 = 1366;
 pub const MAX_HEIGHT: u16 = 768;
 pub const MAX_STRIDE_BYTES: u16 = 2736;
@@ -25,15 +26,18 @@ pub const CAP_COHERENT_STATUS: u16 = 1 << 4;
 pub const CAP_STATUS_CRC: u16 = 1 << 5;
 pub const CAP_POST_CRC: u16 = 1 << 6;
 pub const CAP_REJECTION_CONTEXT: u16 = 1 << 7;
-pub const V2_CAPS_FLAGS: u16 = 0x0007;
-pub const V3_CAPS_FLAGS: u16 = 0x00ff;
-pub const V2_CAPS_WORDS: usize = 5;
-pub const V3_CAPS_WORDS: usize = 6;
-pub const V2_SET_WORDS: usize = 11;
-pub const V3_SET_WORDS: usize = 12;
-pub const V2_STATUS_WORDS: usize = 11;
-pub const V3_STATUS_WORDS: usize = 14;
-pub const V3_DIAGNOSTICS_WORDS: usize = 7;
+pub const CAP_AUTHORITATIVE_RECEIPT: u16 = 1 << 8;
+pub const V4_CAPS_FLAGS: u16 = 0x01ff;
+pub const V4_CAPS_WORDS: usize = 6;
+pub const V4_SET_PAYLOAD_WORDS: usize = 11;
+pub const V4_SET_WORDS: usize = 12;
+pub const V4_STATUS_WORDS: usize = 16;
+pub const V4_DIAGNOSTICS_WORDS: usize = 7;
+pub const V4_RECEIPT_WORDS: usize = 11;
+
+pub const RECEIPT_NONE: u16 = 0;
+pub const RECEIPT_ACCEPTED: u16 = 1;
+pub const RECEIPT_REJECTED: u16 = 2;
 
 pub const STATUS_ACTIVE_ENABLED: u16 = 0;
 pub const STATUS_PENDING_ENABLED: u16 = 1;
@@ -56,24 +60,24 @@ pub const REJECT_INVALID_BOUNDS: u8 = 10;
 pub const REJECT_ADDRESS_WRAP: u8 = 11;
 pub const REJECT_RESTARTED: u8 = 12;
 pub const REJECT_SHIFTED_WORD: u8 = 13;
-pub const REJECT_RESERVED: u8 = 14;
-pub const REJECT_INTERNAL: u8 = 15;
+pub const REJECT_PENDING_BUSY: u8 = 14;
+pub const REJECT_RESERVED: u8 = 15;
 
 pub const CRC_POLYNOMIAL: u16 = 0x1021;
 pub const CRC_INITIAL: u16 = 0xffff;
 pub const CRC_FINAL_XOR: u16 = 0x0000;
 
 #[rustfmt::skip]
-pub const GOLDEN_CAPS_V3_PAYLOAD: [u16; 5] = [
-    0x0003,
-    0x00ff,
+pub const GOLDEN_CAPS_V4_PAYLOAD: [u16; 5] = [
+    0x0004,
+    0x01ff,
     0x0556,
     0x0300,
     0x0ab0,
 ];
-pub const GOLDEN_CAPS_V3_CRC: u16 = 0x01d4;
+pub const GOLDEN_CAPS_V4_CRC: u16 = 0x3da4;
 #[rustfmt::skip]
-pub const GOLDEN_SET_V3_PAYLOAD: [u16; 11] = [
+pub const GOLDEN_SET_V4_PAYLOAD: [u16; 11] = [
     0x8014,
     0x9000,
     0x227e,
@@ -84,17 +88,16 @@ pub const GOLDEN_SET_V3_PAYLOAD: [u16; 11] = [
     0x0000,
     0x021b,
     0x0780,
-    0x002a,
+    0x002b,
 ];
-pub const GOLDEN_SET_V3_CRC: u16 = 0x8ef9;
+pub const GOLDEN_SET_V4_CRC: u16 = 0x56f5;
 #[rustfmt::skip]
-pub const GOLDEN_STATUS_V3_PAYLOAD: [u16; 13] = [
+pub const GOLDEN_STATUS_V4_PAYLOAD: [u16; 15] = [
     0x002a,
     0x002b,
     0x000f,
     0x0003,
     0x0004,
-    0x0005,
     0x9000,
     0x227e,
     0x03c0,
@@ -102,10 +105,13 @@ pub const GOLDEN_STATUS_V3_PAYLOAD: [u16; 13] = [
     0x0780,
     0x0007,
     0x0009,
+    0x0064,
+    0x0065,
+    0x0065,
 ];
-pub const GOLDEN_STATUS_V3_CRC: u16 = 0x2775;
+pub const GOLDEN_STATUS_V4_CRC: u16 = 0x917a;
 #[rustfmt::skip]
-pub const GOLDEN_DIAGNOSTICS_V3_PAYLOAD: [u16; 6] = [
+pub const GOLDEN_DIAGNOSTICS_V4_PAYLOAD: [u16; 6] = [
     0x0007,
     0x0001,
     0x000b,
@@ -113,4 +119,18 @@ pub const GOLDEN_DIAGNOSTICS_V3_PAYLOAD: [u16; 6] = [
     0x0058,
     0x0000,
 ];
-pub const GOLDEN_DIAGNOSTICS_V3_CRC: u16 = 0x97ea;
+pub const GOLDEN_DIAGNOSTICS_V4_CRC: u16 = 0xef7d;
+#[rustfmt::skip]
+pub const GOLDEN_RECEIPT_V4_PAYLOAD: [u16; 10] = [
+    0x0065,
+    0x002b,
+    0x0001,
+    0x0065,
+    0x002b,
+    0x0065,
+    0x002b,
+    0x0064,
+    0x002a,
+    0x0000,
+];
+pub const GOLDEN_RECEIPT_V4_CRC: u16 = 0x5881;

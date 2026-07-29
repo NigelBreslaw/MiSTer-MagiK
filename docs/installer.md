@@ -2,7 +2,7 @@
 
 `Scripts/MiSTer-MagiK.sh` is only the stable MiSTer Scripts, Downloader, and
 update_all entrypoint. It verifies the fixed path and SHA-256 of
-`mister-magik-manager` from `platform-v2.manifest`, then replaces itself with
+`mister-magik-manager` from `platform-v3.manifest`, then replaces itself with
 that Rust process. A missing, malformed, or mismatched manager fails before any
 boot configuration is changed.
 
@@ -28,6 +28,6 @@ boundaries.
 
 If the Scripts entrypoint reports a missing or corrupt manager, do not edit
 `MiSTer.ini` or `inittab` by hand. Re-run Downloader or reinstall the complete
-MiSTer MagiK package so `mister-magik-manager` and `platform-v2.manifest` come
+MiSTer MagiK package so `mister-magik-manager` and `platform-v3.manifest` come
 from the same release, then run the entrypoint again. The bootstrap refuses to
 run a partial or mismatched package and leaves boot configuration unchanged.

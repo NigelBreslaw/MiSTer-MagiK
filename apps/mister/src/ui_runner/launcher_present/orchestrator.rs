@@ -6,21 +6,10 @@ use crate::ui_runner::launcher_pacing::LauncherPacingTrace;
 use mister_magik_fb::framebuffer::vsync::VsyncPace;
 use mister_magik_fb::latch_readiness::LatchFailure;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Fb0PresentReason {
-    Explicit,
-    CompatibilityMode,
-}
-
 enum LauncherPresenterState<L> {
     ExplicitFb0,
     Latch(L),
-    Compatibility {
-        failure: LatchFailure,
-        screen_ready: bool,
-        route_active: bool,
-        prompt_visible: bool,
-    },
+    Frozen { failure: LatchFailure },
 }
 
 fn presenter_state_uses_latch<L>(state: &LauncherPresenterState<L>) -> bool {
@@ -40,7 +29,6 @@ fn direct_hidden_scan_geometry_available(ui: &UiDisplay) -> bool {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum LatchAutoRetryState {
     Disabled,
-    AwaitingSafeFrame,
     Ready,
     InProgress,
 }
@@ -51,17 +39,20 @@ const LATCH_RETRY_DELAYS: [Duration; 4] = [
     Duration::from_secs(5),
     Duration::from_secs(60),
 ];
+const MAX_AUTO_RETRY_ATTEMPTS: u8 = LATCH_RETRY_DELAYS.len() as u8;
 
 pub(in crate::ui_runner) struct LauncherPresenter<L = FpgaVblankLatchHiddenPresenter> {
     state: LauncherPresenterState<L>,
-    compatibility_transitions: u64,
+    failure_transitions: u64,
     first_failure: Option<LatchFailure>,
     latest_failure: Option<LatchFailure>,
+    failure_history: Vec<LatchFailure>,
     retry_attempts: u8,
     auto_retry: LatchAutoRetryState,
     next_retry_at: Option<Instant>,
     latest_retry_result: &'static str,
     recovery_state: &'static str,
+    supervised_restart_requested: bool,
 }
 
 pub(in crate::ui_runner) struct LauncherPresentFrame {
@@ -103,25 +94,16 @@ trait PresentationAdapters<L> {
         frame: LauncherFramePlan,
     ) -> Result<Self::Output, LatchFailure>;
 
-    fn present_compatibility_black(&mut self) -> Fb0AdapterOutput<Self::Output>;
+    fn present_frozen(&mut self) -> Self::Output;
 
-    fn present_fb0(
-        &mut self,
-        frame: LauncherFramePlan,
-        reason: Fb0PresentReason,
-        activate_compatibility_route: bool,
-    ) -> Fb0AdapterOutput<Self::Output>;
-}
-
-struct Fb0AdapterOutput<T> {
-    output: T,
-    route_active: bool,
+    fn present_fb0(&mut self, frame: LauncherFramePlan) -> Self::Output;
 }
 
 impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
     pub(in crate::ui_runner) fn new(ui: &UiDisplay) -> Self {
         let mut first_failure = None;
         let mut latest_failure = None;
+        let mut failure_history = Vec::new();
         let mut auto_retry = LatchAutoRetryState::Disabled;
         let mut recovery_state = "not-needed";
         let state = match launcher_present_backend() {
@@ -131,47 +113,45 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
                     Err(failure) => {
                         first_failure = Some(failure.clone());
                         latest_failure = Some(failure.clone());
+                        failure_history.push(failure.clone());
                         if failure.is_transient_runtime_failure() {
-                            auto_retry = LatchAutoRetryState::AwaitingSafeFrame;
-                            recovery_state = "awaiting-safe-frame";
+                            auto_retry = LatchAutoRetryState::Ready;
+                            recovery_state = "output-frozen";
                         } else {
-                            recovery_state = "compatibility-mode";
+                            recovery_state = "terminal-failure";
                         }
                         crate::ui_errln!(
-                            "latch_failure_tsv\tvalid=0\tstate={}\tstage={}\treason={}\taction=compatibility-mode\tdetail={}",
+                            "latch_failure_tsv\tvalid=0\tstate={}\tstage={}\treason={}\taction=freeze-last-good\tdetail={}",
                             failure.state.code(),
                             failure.stage.code(),
                             failure.reason_code(),
                             failure.detail.replace(['\t', '\n', '\r'], " ")
                         );
-                        LauncherPresenterState::Compatibility {
-                            failure,
-                            screen_ready: false,
-                            route_active: false,
-                            prompt_visible: false,
-                        }
+                        LauncherPresenterState::Frozen { failure }
                     }
                 }
             }
-            LauncherPresentBackend::None
-            | LauncherPresentBackend::Fb0Dirty
-            | LauncherPresentBackend::CompatibilityFb0 => LauncherPresenterState::ExplicitFb0,
+            LauncherPresentBackend::None | LauncherPresentBackend::Fb0Dirty => {
+                LauncherPresenterState::ExplicitFb0
+            }
         };
-        let compatibility_transitions = u64::from(matches!(
+        let failure_transitions = u64::from(matches!(state, LauncherPresenterState::Frozen { .. }));
+        let mut presenter = Self {
             state,
-            LauncherPresenterState::Compatibility { .. }
-        ));
-        let presenter = Self {
-            state,
-            compatibility_transitions,
+            failure_transitions,
             first_failure,
             latest_failure,
+            failure_history,
             retry_attempts: 0,
             auto_retry,
             next_retry_at: None,
             latest_retry_result: "not-attempted",
             recovery_state,
+            supervised_restart_requested: false,
         };
+        if presenter.auto_retry == LatchAutoRetryState::Ready {
+            presenter.schedule_automatic_retry_at(Instant::now());
+        }
         presenter.persist_recovery_evidence();
         presenter
     }
@@ -203,32 +183,19 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
         self.transition_latch_failure(failure);
     }
 
-    pub(in crate::ui_runner) fn retry_latch(&mut self, ui: &UiDisplay) -> bool {
-        if !self.compatibility_prompt_visible() {
-            return false;
-        }
-        self.retry_attempts = self.retry_attempts.saturating_add(1);
-        self.latest_retry_result = "in-progress";
-        self.recovery_state = "manual-retry";
-        let result = FpgaVblankLatchHiddenPresenter::open(ui);
-        self.apply_retry_result(result, false)
-    }
-
     pub(in crate::ui_runner) fn retry_latch_automatically(&mut self, ui: &UiDisplay) -> bool {
         if !self.begin_automatic_retry(Instant::now()) {
             return false;
         }
         let result = FpgaVblankLatchHiddenPresenter::open(ui);
-        self.apply_retry_result(result, true);
+        self.apply_retry_result(result);
         true
     }
 
     pub(in crate::ui_runner) fn publish_stream_refinement_if_due(&self) -> bool {
         match &self.state {
             LauncherPresenterState::Latch(latch) => latch.publish_requested_full_snapshot(),
-            LauncherPresenterState::ExplicitFb0 | LauncherPresenterState::Compatibility { .. } => {
-                false
-            }
+            LauncherPresenterState::ExplicitFb0 | LauncherPresenterState::Frozen { .. } => false,
         }
     }
 
@@ -261,9 +228,7 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
             LauncherPresenterState::Latch(latch) => {
                 latch.try_issue_hidden_slot_render_grant(hardware, display)
             }
-            LauncherPresenterState::ExplicitFb0 | LauncherPresenterState::Compatibility { .. } => {
-                Ok(None)
-            }
+            LauncherPresenterState::ExplicitFb0 | LauncherPresenterState::Frozen { .. } => Ok(None),
         }
     }
 
@@ -279,80 +244,47 @@ impl<L> LauncherPresenter<L> {
         match self.state {
             LauncherPresenterState::Latch(_) => LauncherPresentBackend::FpgaVblankLatchHidden,
             LauncherPresenterState::ExplicitFb0 => LauncherPresentBackend::Fb0Dirty,
-            LauncherPresenterState::Compatibility { .. } => {
-                LauncherPresentBackend::CompatibilityFb0
-            }
+            LauncherPresenterState::Frozen { .. } => LauncherPresentBackend::None,
         }
     }
 
     pub(in crate::ui_runner) fn needs_frame(&self) -> bool {
-        matches!(
-            self.state,
-            LauncherPresenterState::Compatibility {
-                screen_ready: false,
-                ..
-            }
-        )
+        false
     }
 
-    pub(in crate::ui_runner) fn compatibility_failure(&self) -> Option<&LatchFailure> {
+    pub(in crate::ui_runner) fn latch_failure(&self) -> Option<&LatchFailure> {
         match &self.state {
-            LauncherPresenterState::Compatibility { failure, .. } => Some(failure),
+            LauncherPresenterState::Frozen { failure } => Some(failure),
             LauncherPresenterState::ExplicitFb0 | LauncherPresenterState::Latch(_) => None,
         }
     }
 
-    pub(in crate::ui_runner) fn compatibility_prompt_visible(&self) -> bool {
-        matches!(
-            self.state,
-            LauncherPresenterState::Compatibility {
-                prompt_visible: true,
-                ..
-            }
-        )
+    pub(in crate::ui_runner) fn display_frozen(&self) -> bool {
+        matches!(self.state, LauncherPresenterState::Frozen { .. })
     }
 
-    pub(in crate::ui_runner) fn compatibility_blocks_app(&self) -> bool {
-        false
-    }
-
-    pub(in crate::ui_runner) fn display_degraded(&self) -> bool {
-        matches!(self.state, LauncherPresenterState::Compatibility { .. })
-    }
-
-    pub(in crate::ui_runner) fn continue_in_compatibility(&mut self) -> bool {
-        let LauncherPresenterState::Compatibility { prompt_visible, .. } = &mut self.state else {
-            return false;
-        };
-        let changed = *prompt_visible;
-        *prompt_visible = false;
-        if changed {
-            self.auto_retry = LatchAutoRetryState::Disabled;
-            self.next_retry_at = None;
-            self.recovery_state = "continued-compatibility";
-            self.persist_recovery_evidence();
-        }
-        changed
-    }
-
-    pub(in crate::ui_runner) fn compatibility_transitions(&self) -> u64 {
-        self.compatibility_transitions
+    pub(in crate::ui_runner) fn failure_transitions(&self) -> u64 {
+        self.failure_transitions
     }
 
     pub(in crate::ui_runner) fn retry_attempts(&self) -> u8 {
         self.retry_attempts
     }
 
+    pub(in crate::ui_runner) fn take_supervised_restart_request(&mut self) -> bool {
+        std::mem::take(&mut self.supervised_restart_requested)
+    }
+
     fn transition_latch_failure(&mut self, latch_error: LatchFailure) {
         crate::ui_errln!(
-            "latch_failure_tsv\tvalid=0\tstate={}\tstage={}\treason={}\taction=compatibility-mode\tdetail={}",
+            "latch_failure_tsv\tvalid=0\tstate={}\tstage={}\treason={}\taction=freeze-last-good\tdetail={}",
             latch_error.state.code(),
             latch_error.stage.code(),
             latch_error.reason_code(),
             latch_error.detail.replace(['\t', '\n', '\r'], " ")
         );
         boot_analytics::event(
-            "fpga_vblank_latch_compatibility",
+            "fpga_vblank_latch_output_frozen",
             format!(
                 "state={:?} stage={:?} reason={} detail={}",
                 latch_error.state,
@@ -365,30 +297,35 @@ impl<L> LauncherPresenter<L> {
             self.first_failure = Some(latch_error.clone());
         }
         self.latest_failure = Some(latch_error.clone());
+        self.failure_history.push(latch_error.clone());
         let automatic_retry = latch_error.is_transient_runtime_failure();
-        self.auto_retry = if automatic_retry {
-            LatchAutoRetryState::AwaitingSafeFrame
+        self.auto_retry = if automatic_retry && self.retry_attempts < MAX_AUTO_RETRY_ATTEMPTS {
+            LatchAutoRetryState::Ready
         } else {
             LatchAutoRetryState::Disabled
         };
         self.next_retry_at = None;
-        self.recovery_state = if automatic_retry {
-            "awaiting-safe-frame"
+        self.recovery_state = if self.auto_retry == LatchAutoRetryState::Ready {
+            "output-frozen"
         } else {
-            "compatibility-mode"
+            "terminal-failure"
         };
-        self.compatibility_transitions = self.compatibility_transitions.saturating_add(1);
-        self.state = LauncherPresenterState::Compatibility {
+        if automatic_retry && self.retry_attempts >= MAX_AUTO_RETRY_ATTEMPTS {
+            self.supervised_restart_requested = true;
+        }
+        self.failure_transitions = self.failure_transitions.saturating_add(1);
+        self.state = LauncherPresenterState::Frozen {
             failure: latch_error,
-            screen_ready: false,
-            route_active: false,
-            prompt_visible: false,
         };
+        if self.auto_retry == LatchAutoRetryState::Ready {
+            self.schedule_automatic_retry_at(Instant::now());
+        }
         self.persist_recovery_evidence();
     }
 
     fn begin_automatic_retry(&mut self, now: Instant) -> bool {
         if self.auto_retry != LatchAutoRetryState::Ready
+            || self.retry_attempts >= MAX_AUTO_RETRY_ATTEMPTS
             || self.next_retry_at.is_none_or(|deadline| now < deadline)
         {
             return false;
@@ -402,18 +339,14 @@ impl<L> LauncherPresenter<L> {
         true
     }
 
-    fn apply_retry_result(&mut self, result: Result<L, LatchFailure>, automatic: bool) -> bool {
+    fn apply_retry_result(&mut self, result: Result<L, LatchFailure>) -> bool {
         match result {
             Ok(latch) => {
                 self.state = LauncherPresenterState::Latch(latch);
                 self.auto_retry = LatchAutoRetryState::Disabled;
                 self.next_retry_at = None;
                 self.latest_retry_result = "success";
-                self.recovery_state = if automatic {
-                    "recovered-automatically"
-                } else {
-                    "recovered-manually"
-                };
+                self.recovery_state = "recovered-automatically";
                 self.persist_recovery_evidence();
                 true
             }
@@ -427,19 +360,11 @@ impl<L> LauncherPresenter<L> {
         }
     }
 
-    fn mark_safe_frame_complete(&mut self) {
-        self.mark_safe_frame_complete_at(Instant::now());
-    }
-
-    fn mark_safe_frame_complete_at(&mut self, now: Instant) {
-        if self.auto_retry == LatchAutoRetryState::AwaitingSafeFrame {
-            self.auto_retry = LatchAutoRetryState::Ready;
-            let delay_index =
-                usize::from(self.retry_attempts).min(LATCH_RETRY_DELAYS.len().saturating_sub(1));
-            self.next_retry_at = Some(now + LATCH_RETRY_DELAYS[delay_index]);
-            self.recovery_state = "safe-frame-complete";
-            self.persist_recovery_evidence();
-        }
+    fn schedule_automatic_retry_at(&mut self, now: Instant) {
+        let delay_index =
+            usize::from(self.retry_attempts).min(LATCH_RETRY_DELAYS.len().saturating_sub(1));
+        self.next_retry_at = Some(now + LATCH_RETRY_DELAYS[delay_index]);
+        self.persist_recovery_evidence();
     }
 
     fn persist_recovery_evidence(&self) {
@@ -449,6 +374,7 @@ impl<L> LauncherPresenter<L> {
         persist_latch_failure(
             first,
             latest,
+            &self.failure_history,
             self.retry_attempts,
             self.latest_retry_result,
             self.recovery_state,
@@ -461,30 +387,9 @@ impl<L> LauncherPresenter<L> {
     {
         let latch_error = match &mut self.state {
             LauncherPresenterState::ExplicitFb0 => {
-                return adapters
-                    .present_fb0(frame, Fb0PresentReason::Explicit, false)
-                    .output;
+                return adapters.present_fb0(frame);
             }
-            LauncherPresenterState::Compatibility {
-                screen_ready,
-                route_active,
-                ..
-            } => {
-                if !*screen_ready {
-                    *screen_ready = true;
-                    let result = adapters.present_compatibility_black();
-                    *route_active = result.route_active;
-                    self.mark_safe_frame_complete();
-                    return result.output;
-                }
-                let result = adapters.present_fb0(
-                    frame,
-                    Fb0PresentReason::CompatibilityMode,
-                    !*route_active,
-                );
-                *route_active |= result.route_active;
-                return result.output;
-            }
+            LauncherPresenterState::Frozen { .. } => return adapters.present_frozen(),
             LauncherPresenterState::Latch(latch) => match adapters.present_latch(latch, frame) {
                 Ok(output) => return output,
                 Err(error) => error,
@@ -492,24 +397,14 @@ impl<L> LauncherPresenter<L> {
         };
 
         self.transition_latch_failure(latch_error);
-        let result = adapters.present_compatibility_black();
-        if let LauncherPresenterState::Compatibility {
-            screen_ready,
-            route_active,
-            ..
-        } = &mut self.state
-        {
-            *screen_ready = true;
-            *route_active = result.route_active;
-        }
-        self.mark_safe_frame_complete();
-        result.output
+        adapters.present_frozen()
     }
 }
 
 fn persist_latch_failure(
     first: &LatchFailure,
     latest: &LatchFailure,
+    failure_history: &[LatchFailure],
     retry_attempts: u8,
     latest_retry_result: &str,
     recovery_state: &str,
@@ -517,6 +412,7 @@ fn persist_latch_failure(
     let evidence = mister_magik_fb::latch_readiness::LatchFailureEvidence::for_recovery(
         first,
         latest,
+        failure_history,
         retry_attempts,
         latest_retry_result,
         recovery_state,
@@ -540,20 +436,6 @@ struct LivePresentationAdapters<'a, 'target> {
     stream_motion_active: bool,
     direct_hidden_mode: bool,
     completed_hidden_frame: Option<CompletedHiddenFrame>,
-}
-
-fn run_fb0_transaction<T>(
-    frame: LauncherFramePlan,
-    activate_compatibility_route: bool,
-    present: impl FnOnce(LauncherFramePlan) -> T,
-    activate_route: impl FnOnce() -> bool,
-) -> Fb0AdapterOutput<T> {
-    let output = present(frame);
-    let route_active = !activate_compatibility_route || activate_route();
-    Fb0AdapterOutput {
-        output,
-        route_active,
-    }
 }
 
 impl LivePresentationAdapters<'_, '_> {
@@ -726,93 +608,37 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
         })
     }
 
-    fn present_compatibility_black(&mut self) -> Fb0AdapterOutput<Self::Output> {
-        let (_, frame_t3, cpu_t3, pacing_trace) = self.pace_before_fb0();
-        self.targets.fb0.clear_black();
-        let route_active = match self
-            .display
-            .activate_fb0_route_with_hardware(self.targets.hardware)
-        {
-            Ok(_) => true,
-            Err(error) => {
-                crate::ui_errln!("compatibility_fb0_route_failed: {error}");
-                boot_analytics::event("compatibility_fb0_route_failed", error);
-                false
-            }
-        };
-        Fb0AdapterOutput {
-            output: LauncherPresentCycle {
-                presentation: compatibility_present_result(),
-                frame_t3,
-                frame_t4: Instant::now(),
-                cpu_t3,
-                cpu_t4: FrameAnalyticsCpuStamp::capture(self.frame_analytics_mode),
-                pacing_trace,
-            },
-            route_active,
-        }
+    fn present_frozen(&mut self) -> Self::Output {
+        let mut cycle = self.present_suppressed();
+        cycle.presentation = frozen_present_result();
+        cycle
     }
 
-    fn present_fb0(
-        &mut self,
-        frame: LauncherFramePlan,
-        reason: Fb0PresentReason,
-        activate_compatibility_route: bool,
-    ) -> Fb0AdapterOutput<Self::Output> {
+    fn present_fb0(&mut self, frame: LauncherFramePlan) -> Self::Output {
         let (_, frame_t3, cpu_t3, pacing_trace) = self.pace_before_fb0();
         let cached_frame = self.targets.layer_target.cached_frame_view();
         let direct_preview = self.targets.layer_target.direct_preview_view();
         let fb0 = &mut *self.targets.fb0;
         let arcade_list_renderer = &mut *self.targets.arcade_list_renderer;
-        let display = &mut *self.display;
-        let hardware = &mut *self.targets.hardware;
-        let transaction = run_fb0_transaction(
-            frame,
-            activate_compatibility_route,
-            |frame_plan| {
-                Fb0DirtyPresenter::present(Fb0DirtyPresentRequest {
-                    frame_plan,
-                    cached_frame,
-                    direct_preview,
-                    fb0,
-                    arcade_list_renderer,
-                })
-            },
-            || match display.activate_fb0_route_with_hardware(hardware) {
-                Ok(_) => true,
-                Err(error) => {
-                    static WARNED: OnceLock<()> = OnceLock::new();
-                    WARNED.get_or_init(|| {
-                        crate::ui_errln!(
-                            "failed to activate fb0 route after latch failure: {error}; retrying"
-                        );
-                        boot_analytics::event(
-                            "launcher_fb0_fallback_route_failed",
-                            format!("error={error} retrying=1"),
-                        );
-                    });
-                    false
-                }
-            },
-        );
-        Fb0AdapterOutput {
-            output: LauncherPresentCycle {
-                presentation: fb0_present_result(transaction.output, reason),
-                frame_t3,
-                frame_t4: Instant::now(),
-                cpu_t3,
-                cpu_t4: FrameAnalyticsCpuStamp::capture(self.frame_analytics_mode),
-                pacing_trace,
-            },
-            route_active: transaction.route_active,
+        let stats = Fb0DirtyPresenter::present(Fb0DirtyPresentRequest {
+            frame_plan: frame,
+            cached_frame,
+            direct_preview,
+            fb0,
+            arcade_list_renderer,
+        });
+        LauncherPresentCycle {
+            presentation: fb0_present_result(stats),
+            frame_t3,
+            frame_t4: Instant::now(),
+            cpu_t3,
+            cpu_t4: FrameAnalyticsCpuStamp::capture(self.frame_analytics_mode),
+            pacing_trace,
         }
     }
 }
 
-fn fb0_present_result(
-    stats: Fb0DirtyPresentStats,
-    reason: Fb0PresentReason,
-) -> LauncherPresentResult {
+fn fb0_present_result(stats: Fb0DirtyPresentStats) -> LauncherPresentResult {
     LauncherPresentResult {
         copied_rows: stats.copied_rows,
         direct_preview_rows: stats.direct_preview_rows,
@@ -826,16 +652,8 @@ fn fb0_present_result(
         hidden_arcade_compose_us: 0,
         direct_preview_present_us: stats.direct_preview_present_us,
         arcade_list_present_us: stats.arcade_list_present_us,
-        main_present_backend: if reason == Fb0PresentReason::CompatibilityMode {
-            LauncherPresentBackend::CompatibilityFb0
-        } else {
-            LauncherPresentBackend::Fb0Dirty
-        },
-        main_present_status: if reason == Fb0PresentReason::CompatibilityMode {
-            LauncherPresentStatus::Compatibility
-        } else {
-            LauncherPresentStatus::None
-        },
+        main_present_backend: LauncherPresentBackend::Fb0Dirty,
+        main_present_status: LauncherPresentStatus::None,
         main_present_buffer: 0,
         main_present_hidden_copy_us: 0,
         main_present_hidden_publish_us: 0,
@@ -854,15 +672,14 @@ fn fb0_present_result(
     }
 }
 
-fn compatibility_present_result() -> LauncherPresentResult {
-    let mut result = empty_present_result();
-    result.main_present_backend = LauncherPresentBackend::CompatibilityFb0;
-    result.main_present_status = LauncherPresentStatus::Compatibility;
-    result
-}
-
 fn direct_hidden_waiting_present_result() -> LauncherPresentResult {
     empty_present_result()
+}
+
+fn frozen_present_result() -> LauncherPresentResult {
+    let mut result = empty_present_result();
+    result.main_present_status = LauncherPresentStatus::Frozen;
+    result
 }
 
 fn latch_present_result(
@@ -960,8 +777,6 @@ fn empty_present_result() -> LauncherPresentResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::RefCell;
-    use std::rc::Rc;
 
     #[test]
     fn unfinished_direct_frame_does_not_claim_a_latch_post() {
@@ -973,20 +788,17 @@ mod tests {
     }
 
     #[test]
-    fn direct_hidden_slots_are_unavailable_on_fb0_and_compatibility_routes() {
+    fn direct_hidden_slots_are_unavailable_on_fb0_and_frozen_routes() {
         assert!(!presenter_state_uses_latch::<FakeLatch>(
             &LauncherPresenterState::ExplicitFb0
         ));
         assert!(!presenter_state_uses_latch::<FakeLatch>(
-            &LauncherPresenterState::Compatibility {
+            &LauncherPresenterState::Frozen {
                 failure: LatchFailure::runtime(
                     mister_magik_fb::latch_readiness::LatchFailureStage::LatchPost,
                     mister_magik_fb::latch_readiness::LatchFailureReason::LatchPostFailed,
                     "failed latch",
                 ),
-                screen_ready: true,
-                route_active: true,
-                prompt_visible: false,
             }
         ));
         assert!(presenter_state_uses_latch(&LauncherPresenterState::Latch(
@@ -1020,8 +832,8 @@ mod tests {
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum Event {
         Latch,
-        CompatibilityBlack,
-        Fb0(Fb0PresentReason),
+        Frozen,
+        Fb0,
     }
 
     struct FakeAdapters {
@@ -1029,8 +841,6 @@ mod tests {
         events: Vec<Event>,
         latch_frames: Vec<LauncherFramePlan>,
         fb0_frames: Vec<LauncherFramePlan>,
-        route_active: bool,
-        route_activation_requests: Vec<bool>,
     }
 
     impl FakeAdapters {
@@ -1040,8 +850,6 @@ mod tests {
                 events: Vec::new(),
                 latch_frames: Vec::new(),
                 fb0_frames: Vec::new(),
-                route_active: true,
-                route_activation_requests: Vec::new(),
             }
         }
 
@@ -1070,28 +878,15 @@ mod tests {
             self.latch_result.clone()
         }
 
-        fn present_compatibility_black(&mut self) -> Fb0AdapterOutput<Self::Output> {
-            self.events.push(Event::CompatibilityBlack);
-            Fb0AdapterOutput {
-                output: 3,
-                route_active: self.route_active,
-            }
+        fn present_frozen(&mut self) -> Self::Output {
+            self.events.push(Event::Frozen);
+            3
         }
 
-        fn present_fb0(
-            &mut self,
-            frame: LauncherFramePlan,
-            reason: Fb0PresentReason,
-            activate_compatibility_route: bool,
-        ) -> Fb0AdapterOutput<Self::Output> {
-            self.events.push(Event::Fb0(reason));
+        fn present_fb0(&mut self, frame: LauncherFramePlan) -> Self::Output {
+            self.events.push(Event::Fb0);
             self.fb0_frames.push(frame);
-            self.route_activation_requests
-                .push(activate_compatibility_route);
-            Fb0AdapterOutput {
-                output: 2,
-                route_active: self.route_active,
-            }
+            2
         }
     }
 
@@ -1112,19 +907,21 @@ mod tests {
 
     fn presenter(state: LauncherPresenterState<FakeLatch>) -> LauncherPresenter<FakeLatch> {
         let failure = match &state {
-            LauncherPresenterState::Compatibility { failure, .. } => Some(failure.clone()),
+            LauncherPresenterState::Frozen { failure } => Some(failure.clone()),
             LauncherPresenterState::ExplicitFb0 | LauncherPresenterState::Latch(_) => None,
         };
         LauncherPresenter {
             state,
-            compatibility_transitions: 0,
+            failure_transitions: 0,
             first_failure: failure.clone(),
-            latest_failure: failure,
+            latest_failure: failure.clone(),
+            failure_history: failure.into_iter().collect(),
             retry_attempts: 0,
             auto_retry: LatchAutoRetryState::Disabled,
             next_retry_at: None,
             latest_retry_result: "not-attempted",
-            recovery_state: "compatibility-mode",
+            recovery_state: "output-frozen",
+            supervised_restart_requested: false,
         }
     }
 
@@ -1134,7 +931,7 @@ mod tests {
         let mut adapters = FakeAdapters::succeeding();
 
         assert_eq!(presenter.present_with(frame(), &mut adapters), 2);
-        assert_eq!(adapters.events, [Event::Fb0(Fb0PresentReason::Explicit)]);
+        assert_eq!(adapters.events, [Event::Fb0]);
         assert_eq!(presenter.pacing_backend(), LauncherPresentBackend::Fb0Dirty);
     }
 
@@ -1159,156 +956,74 @@ mod tests {
     }
 
     #[test]
-    fn startup_failure_blacks_before_presenting_compatibility_mode() {
-        let mut presenter = presenter(LauncherPresenterState::Compatibility {
+    fn startup_failure_freezes_without_presenting_fb0() {
+        let mut presenter = presenter(LauncherPresenterState::Frozen {
             failure: LatchFailure::incompatible(
                 mister_magik_fb::latch_readiness::LatchFailureStage::BufferMap,
                 mister_magik_fb::latch_readiness::LatchFailureReason::ScanoutDeviceMissing,
                 "missing",
             ),
-            screen_ready: false,
-            route_active: false,
-            prompt_visible: false,
         });
         let mut adapters = FakeAdapters::succeeding();
 
         assert_eq!(presenter.present_with(frame(), &mut adapters), 3);
-        assert_eq!(adapters.events, [Event::CompatibilityBlack]);
-        assert_eq!(
-            presenter.pacing_backend(),
-            LauncherPresentBackend::CompatibilityFb0
-        );
+        assert_eq!(adapters.events, [Event::Frozen]);
+        assert_eq!(presenter.pacing_backend(), LauncherPresentBackend::None);
+        assert!(adapters.fb0_frames.is_empty());
     }
 
     #[test]
-    fn runtime_failure_blacks_instead_of_presenting_launcher_through_fb0() {
+    fn runtime_failure_freezes_last_good_instead_of_presenting_fb0() {
         let expected = frame();
         let mut presenter = presenter(LauncherPresenterState::Latch(FakeLatch));
         let mut adapters = FakeAdapters::failing();
 
         assert_eq!(presenter.present_with(expected, &mut adapters), 3);
-        assert_eq!(adapters.events, [Event::Latch, Event::CompatibilityBlack]);
+        assert_eq!(adapters.events, [Event::Latch, Event::Frozen]);
         assert_eq!(adapters.latch_frames, [expected]);
         assert!(adapters.fb0_frames.is_empty());
-    }
-
-    #[test]
-    fn runtime_failure_enters_structured_compatibility_state() {
-        let mut presenter = presenter(LauncherPresenterState::Latch(FakeLatch));
-        let mut adapters = FakeAdapters::failing();
-
-        presenter.present_with(frame(), &mut adapters);
-
-        assert_eq!(
-            presenter.pacing_backend(),
-            LauncherPresentBackend::CompatibilityFb0
-        );
+        assert_eq!(presenter.pacing_backend(), LauncherPresentBackend::None);
         assert_eq!(
             presenter
-                .compatibility_failure()
-                .expect("compatibility failure")
+                .latch_failure()
+                .expect("preserved failure")
                 .reason_code(),
             "latch-post-failed"
         );
-        assert_eq!(presenter.compatibility_transitions(), 1);
+        assert_eq!(presenter.failure_transitions(), 1);
     }
 
     #[test]
-    fn frame_after_runtime_failure_renders_launcher_in_compatibility_mode() {
+    fn frame_after_runtime_failure_remains_frozen() {
         let mut presenter = presenter(LauncherPresenterState::Latch(FakeLatch));
         let mut first = FakeAdapters::failing();
         presenter.present_with(frame(), &mut first);
         let mut second = FakeAdapters::succeeding();
 
-        assert_eq!(presenter.present_with(frame(), &mut second), 2);
-        assert_eq!(
-            second.events,
-            [Event::Fb0(Fb0PresentReason::CompatibilityMode)]
-        );
-        assert_eq!(
-            presenter.pacing_backend(),
-            LauncherPresentBackend::CompatibilityFb0
-        );
-        assert_eq!(second.route_activation_requests, [false]);
+        assert_eq!(presenter.present_with(frame(), &mut second), 3);
+        assert_eq!(second.events, [Event::Frozen]);
+        assert!(second.fb0_frames.is_empty());
     }
 
     #[test]
-    fn compatibility_route_activation_retries_only_after_failure() {
-        let mut presenter = presenter(LauncherPresenterState::Compatibility {
-            failure: LatchFailure::runtime(
-                mister_magik_fb::latch_readiness::LatchFailureStage::LatchPost,
-                mister_magik_fb::latch_readiness::LatchFailureReason::LatchPostFailed,
-                "failed latch",
-            ),
-            screen_ready: true,
-            route_active: false,
-            prompt_visible: false,
-        });
-        let mut failed_route = FakeAdapters::succeeding();
-        failed_route.route_active = false;
-        presenter.present_with(frame(), &mut failed_route);
-        assert_eq!(failed_route.route_activation_requests, [true]);
-
-        let mut recovered_route = FakeAdapters::succeeding();
-        presenter.present_with(frame(), &mut recovered_route);
-        assert_eq!(recovered_route.route_activation_requests, [true]);
-
-        let mut stable_route = FakeAdapters::succeeding();
-        presenter.present_with(frame(), &mut stable_route);
-        assert_eq!(stable_route.route_activation_requests, [false]);
-    }
-
-    #[test]
-    fn compatibility_mode_is_nonblocking_and_preserves_failure() {
-        let mut presenter = presenter(LauncherPresenterState::Compatibility {
-            failure: LatchFailure::runtime(
-                mister_magik_fb::latch_readiness::LatchFailureStage::LatchPost,
-                mister_magik_fb::latch_readiness::LatchFailureReason::LatchPostFailed,
-                "failed latch",
-            ),
-            screen_ready: true,
-            route_active: true,
-            prompt_visible: false,
-        });
-
-        assert!(presenter.display_degraded());
-        assert!(!presenter.compatibility_prompt_visible());
-        assert!(!presenter.compatibility_blocks_app());
-        assert!(presenter.compatibility_failure().is_some());
-        assert!(!presenter.continue_in_compatibility());
-    }
-
-    #[test]
-    fn compatibility_retry_can_fail_repeatedly_then_restore_latch() {
-        let mut presenter = presenter(LauncherPresenterState::Compatibility {
+    fn successful_retry_restores_latch_without_clearing_failure_history() {
+        let mut presenter = presenter(LauncherPresenterState::Frozen {
             failure: LatchFailure::runtime(
                 mister_magik_fb::latch_readiness::LatchFailureStage::LatchPost,
                 mister_magik_fb::latch_readiness::LatchFailureReason::LatchPostFailed,
                 "first failure",
             ),
-            screen_ready: true,
-            route_active: true,
-            prompt_visible: false,
         });
-        let retry_failure = || {
-            LatchFailure::runtime(
-                mister_magik_fb::latch_readiness::LatchFailureStage::PostVerification,
-                mister_magik_fb::latch_readiness::LatchFailureReason::PostedSequenceUnverified,
-                "retry failed",
-            )
-        };
+        presenter.first_failure = presenter.latch_failure().cloned();
+        presenter.latest_failure = presenter.first_failure.clone();
 
-        presenter.retry_attempts = 1;
-        assert!(!presenter.apply_retry_result(Err(retry_failure()), false));
-        presenter.retry_attempts = 2;
-        assert!(!presenter.apply_retry_result(Err(retry_failure()), false));
-        assert!(!presenter.compatibility_prompt_visible());
-        assert_eq!(presenter.compatibility_transitions(), 2);
-
-        assert!(presenter.apply_retry_result(Ok(FakeLatch), false));
-        assert!(!presenter.compatibility_prompt_visible());
-        assert!(!presenter.display_degraded());
-        assert!(presenter.compatibility_failure().is_none());
+        assert!(presenter.apply_retry_result(Ok(FakeLatch)));
+        assert!(!presenter.display_frozen());
+        assert!(presenter.latch_failure().is_none());
+        assert_eq!(
+            presenter.first_failure.as_ref().unwrap().detail,
+            "first failure"
+        );
         assert_eq!(
             presenter.pacing_backend(),
             LauncherPresentBackend::FpgaVblankLatchHidden
@@ -1316,19 +1031,19 @@ mod tests {
     }
 
     #[test]
-    fn transient_failure_waits_for_safe_frame_then_retries_on_schedule() {
+    fn transient_failure_freezes_and_retries_after_250_ms() {
         let mut presenter = presenter(LauncherPresenterState::Latch(FakeLatch));
         let mut adapters = FakeAdapters::failing();
 
         assert_eq!(presenter.present_with(frame(), &mut adapters), 3);
-        assert_eq!(adapters.events, [Event::Latch, Event::CompatibilityBlack]);
+        assert_eq!(adapters.events, [Event::Latch, Event::Frozen]);
         assert_eq!(presenter.auto_retry, LatchAutoRetryState::Ready);
         assert_eq!(presenter.retry_attempts, 0);
 
         let first_retry = presenter.next_retry_at.unwrap();
         assert!(!presenter.begin_automatic_retry(first_retry - Duration::from_millis(1)));
         assert!(presenter.begin_automatic_retry(first_retry));
-        assert!(presenter.apply_retry_result(Ok(FakeLatch), true));
+        assert!(presenter.apply_retry_result(Ok(FakeLatch)));
         assert_eq!(presenter.retry_attempts, 1);
         assert_eq!(presenter.recovery_state, "recovered-automatically");
         assert!(!presenter.begin_automatic_retry(first_retry));
@@ -1339,7 +1054,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_automatic_retry_preserves_origin_and_schedules_backoff() {
+    fn failed_automatic_retry_preserves_origin_and_schedules_one_second_backoff() {
         let mut presenter = presenter(LauncherPresenterState::Latch(FakeLatch));
         let mut adapters = FakeAdapters::failing();
         presenter.present_with(frame(), &mut adapters);
@@ -1351,7 +1066,7 @@ mod tests {
 
         let first_retry = presenter.next_retry_at.unwrap();
         assert!(presenter.begin_automatic_retry(first_retry));
-        assert!(!presenter.apply_retry_result(Err(retry_failure), true));
+        assert!(!presenter.apply_retry_result(Err(retry_failure)));
         assert_eq!(
             presenter.first_failure.as_ref().unwrap().detail,
             "failed latch"
@@ -1360,13 +1075,18 @@ mod tests {
             presenter.latest_failure.as_ref().unwrap().detail,
             "retry failed"
         );
+        assert_eq!(
+            presenter
+                .failure_history
+                .iter()
+                .map(|failure| failure.detail.as_str())
+                .collect::<Vec<_>>(),
+            ["failed latch", "retry failed"]
+        );
         assert_eq!(presenter.retry_attempts, 1);
-        assert!(!presenter.compatibility_prompt_visible());
-        assert_eq!(presenter.auto_retry, LatchAutoRetryState::AwaitingSafeFrame);
+        assert_eq!(presenter.auto_retry, LatchAutoRetryState::Ready);
 
-        let safe_frame_at = first_retry + Duration::from_millis(10);
-        presenter.mark_safe_frame_complete_at(safe_frame_at);
-        let second_retry = safe_frame_at + Duration::from_secs(1);
+        let second_retry = presenter.next_retry_at.unwrap();
         assert!(!presenter.begin_automatic_retry(second_retry - Duration::from_millis(1)));
         assert!(presenter.begin_automatic_retry(second_retry));
         assert_eq!(presenter.retry_attempts, 2);
@@ -1388,129 +1108,60 @@ mod tests {
         ] {
             let mut presenter = presenter(LauncherPresenterState::Latch(FakeLatch));
             presenter.transition_latch_failure(failure);
-            assert!(presenter.display_degraded());
-            assert!(!presenter.compatibility_prompt_visible());
-            assert!(!presenter.compatibility_blocks_app());
+            assert!(presenter.display_frozen());
             assert_eq!(presenter.auto_retry, LatchAutoRetryState::Disabled);
             assert!(!presenter.begin_automatic_retry(Instant::now()));
         }
     }
 
     #[test]
-    fn transient_manual_retry_failure_rejoins_automatic_recovery() {
-        let mut presenter = presenter(LauncherPresenterState::Compatibility {
+    fn automatic_recovery_is_bounded_to_four_attempts() {
+        let mut presenter = presenter(LauncherPresenterState::Latch(FakeLatch));
+        presenter.transition_latch_failure(LatchFailure::runtime(
+            mister_magik_fb::latch_readiness::LatchFailureStage::LatchPost,
+            mister_magik_fb::latch_readiness::LatchFailureReason::LatchPostFailed,
+            "origin",
+        ));
+
+        for attempt in 1..=MAX_AUTO_RETRY_ATTEMPTS {
+            let deadline = presenter.next_retry_at.expect("scheduled retry");
+            assert!(presenter.begin_automatic_retry(deadline));
+            assert_eq!(presenter.retry_attempts, attempt);
+            assert!(!presenter.apply_retry_result(Err(LatchFailure::runtime(
+                mister_magik_fb::latch_readiness::LatchFailureStage::RouteArm,
+                mister_magik_fb::latch_readiness::LatchFailureReason::RouteArmFailed,
+                format!("retry {attempt} failed"),
+            )),));
+        }
+
+        assert_eq!(presenter.auto_retry, LatchAutoRetryState::Disabled);
+        assert!(presenter.next_retry_at.is_none());
+        assert_eq!(presenter.recovery_state, "terminal-failure");
+        assert!(presenter.take_supervised_restart_request());
+        assert!(!presenter.take_supervised_restart_request());
+        assert_eq!(presenter.first_failure.as_ref().unwrap().detail, "origin");
+        assert_eq!(
+            presenter.latest_failure.as_ref().unwrap().detail,
+            "retry 4 failed"
+        );
+        assert_eq!(presenter.failure_history.len(), 5);
+    }
+
+    #[test]
+    fn retry_schedule_uses_250ms_1s_5s_and_60s_delays() {
+        let mut presenter = presenter(LauncherPresenterState::Frozen {
             failure: LatchFailure::runtime(
                 mister_magik_fb::latch_readiness::LatchFailureStage::LatchPost,
                 mister_magik_fb::latch_readiness::LatchFailureReason::LatchPostFailed,
                 "origin",
             ),
-            screen_ready: true,
-            route_active: true,
-            prompt_visible: false,
         });
-        presenter.retry_attempts = 1;
-
-        assert!(!presenter.apply_retry_result(
-            Err(LatchFailure::runtime(
-                mister_magik_fb::latch_readiness::LatchFailureStage::RouteArm,
-                mister_magik_fb::latch_readiness::LatchFailureReason::RouteArmFailed,
-                "manual retry failed",
-            )),
-            false,
-        ));
-        assert!(!presenter.compatibility_prompt_visible());
-        assert_eq!(presenter.auto_retry, LatchAutoRetryState::AwaitingSafeFrame);
-        let safe_frame_at = Instant::now();
-        presenter.mark_safe_frame_complete_at(safe_frame_at);
-        assert!(!presenter.begin_automatic_retry(safe_frame_at + Duration::from_millis(999)));
-        assert!(presenter.begin_automatic_retry(safe_frame_at + Duration::from_secs(1)));
-    }
-
-    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    enum TransactionEvent {
-        Cached,
-        Preview,
-        Arcade,
-        RouteFailed,
-        RouteOk,
-    }
-
-    struct TransactionSink {
-        events: Rc<RefCell<Vec<TransactionEvent>>>,
-    }
-
-    impl Fb0DirtyCopySink for TransactionSink {
-        fn copy_cached(&mut self, _view: CachedFrameView<'_>, rect: DirtyRect) -> u32 {
-            self.events.borrow_mut().push(TransactionEvent::Cached);
-            rect.rows()
+        presenter.auto_retry = LatchAutoRetryState::Ready;
+        let origin = Instant::now();
+        for (index, delay) in LATCH_RETRY_DELAYS.into_iter().enumerate() {
+            presenter.retry_attempts = index as u8;
+            presenter.schedule_automatic_retry_at(origin);
+            assert_eq!(presenter.next_retry_at, Some(origin + delay));
         }
-
-        fn copy_direct_preview(&mut self, _view: DirectPreviewView<'_>, rect: DirtyRect) -> u32 {
-            self.events.borrow_mut().push(TransactionEvent::Preview);
-            rect.rows()
-        }
-
-        fn copy_arcade_list(&mut self, update: ArcadeListUpdate) -> PresentCopyStats {
-            self.events.borrow_mut().push(TransactionEvent::Arcade);
-            PresentCopyStats {
-                rows: arcade_update_dirty_rect(&update).rows(),
-                bytes: 1,
-            }
-        }
-    }
-
-    #[test]
-    fn compatibility_screen_copy_completes_before_route_activation() {
-        let logical_frame = LauncherFramePlan::new(
-            DirtyRectList::from_one(DirtyRect {
-                x0: 0,
-                y0: 0,
-                x1: 1,
-                y1: 1,
-            }),
-            None,
-            None,
-            None,
-            None,
-        );
-        let pixels = vec![Rgb565Pixel(0); 100];
-        let cached = CachedFrameView::new(&pixels, 10, 10);
-        let target = UiFrameTarget::cached(FramebufferTargetGeometry::new(10, 10));
-        let direct_preview = target.direct_preview_view();
-        let events = Rc::new(RefCell::new(Vec::new()));
-        let mut sink = TransactionSink {
-            events: events.clone(),
-        };
-
-        let failed = run_fb0_transaction(
-            logical_frame,
-            true,
-            |frame| Fb0DirtyPresenter::present_to(frame, cached, direct_preview, &mut sink),
-            || {
-                events.borrow_mut().push(TransactionEvent::RouteFailed);
-                false
-            },
-        );
-
-        assert!(!failed.route_active);
-        let first_events = events.borrow().clone();
-        assert_eq!(
-            first_events,
-            [TransactionEvent::Cached, TransactionEvent::RouteFailed]
-        );
-
-        events.borrow_mut().clear();
-        let retried = run_fb0_transaction(
-            logical_frame,
-            true,
-            |frame| Fb0DirtyPresenter::present_to(frame, cached, direct_preview, &mut sink),
-            || {
-                events.borrow_mut().push(TransactionEvent::RouteOk);
-                true
-            },
-        );
-
-        assert!(retried.route_active);
-        assert_eq!(events.borrow().last(), Some(&TransactionEvent::RouteOk));
     }
 }

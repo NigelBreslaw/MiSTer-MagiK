@@ -297,7 +297,7 @@ jobs:
           test -f "$main_bin" && [[ "$main_revision" =~ ^[0-9a-f]{40}$ ]]
           scripts/agent build manager-device
           scripts/agent ci platform-manifest generate \
-            --output build/platform-v2.manifest \
+            --output build/platform-v3.manifest \
             --main "$main_bin" \
             --gui apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb \
             --manager mister/tools/manager/target/armv7-unknown-linux-gnueabihf/release/mister-magik-manager \
@@ -305,6 +305,7 @@ jobs:
             --scanout-metadata "$module_meta" \
             --latch-rbf "$rbf" \
             --latch-metadata "$rbf_meta" \
+            --platform-bundle-manifest '${{ steps.platform.outputs.manifest }}' \
             --main-revision "$main_revision" \
             --magik-revision "$GITHUB_SHA"
           scripts/package-distribution.sh \
@@ -314,7 +315,7 @@ jobs:
             --scanout-metadata "$module_meta" \
             --latch-rbf "$rbf" \
             --latch-metadata "$rbf_meta" \
-            --platform-manifest build/platform-v2.manifest \
+            --platform-manifest build/platform-v3.manifest \
             --platform-bundle-manifest '${{ steps.platform.outputs.manifest }}' \
             --game-databases-release-dir build/game-databases \
             --version "$RELEASE_VERSION" \

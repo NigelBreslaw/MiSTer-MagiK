@@ -1196,6 +1196,10 @@ mod tests {
             active_stride: 1280,
             reject_count: 0,
             active_route_epoch: 0,
+            accepted_sequence: if pending { 2 } else { 1 },
+            active_transaction: 1,
+            pending_transaction: if pending { 2 } else { 0 },
+            accepted_transaction: if pending { 2 } else { 1 },
         }
     }
 

@@ -12,10 +12,12 @@
 //! `gpo_copy`. Bit31 must stay set (it means "configured"); bit20 is the IO chip
 //! select (EnableIO/DisableIO); bit17 is the strobe; the low 16 bits are data.
 
+use std::cell::Cell;
 use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::os::unix::io::AsRawFd;
 use std::ptr::{read_volatile, write_volatile};
+use std::rc::Rc;
 use std::time::Instant;
 
 use crate::framebuffer::route::{
@@ -50,10 +52,13 @@ pub const MAGIK_UIO_GET_FBUF_LATCH: u16 = mister_magik_latch_contract::GET_FBUF_
 pub const MAGIK_UIO_GET_FBUF_LATCH_CAPS: u16 = mister_magik_latch_contract::GET_FBUF_LATCH_CAPS;
 pub const MAGIK_UIO_GET_FBUF_LATCH_DIAGNOSTICS: u16 =
     mister_magik_latch_contract::GET_FBUF_LATCH_DIAGNOSTICS;
+pub const MAGIK_UIO_GET_FBUF_LATCH_RECEIPT: u16 =
+    mister_magik_latch_contract::GET_FBUF_LATCH_RECEIPT;
 pub const MAGIK_FBUF_LATCH_MAGIC: u16 = mister_magik_latch_contract::LATCH_MAGIC;
 pub const MAGIK_FBUF_STATUS_MAGIC: u16 = mister_magik_latch_contract::STATUS_MAGIC;
 pub const MAGIK_FBUF_CAPS_MAGIC: u16 = mister_magik_latch_contract::CAPS_MAGIC;
 pub const MAGIK_FBUF_DIAGNOSTICS_MAGIC: u16 = mister_magik_latch_contract::DIAGNOSTICS_MAGIC;
+pub const MAGIK_FBUF_RECEIPT_MAGIC: u16 = mister_magik_latch_contract::RECEIPT_MAGIC;
 
 use crate::framebuffer::format::{FB_FMT_565, FB_FMT_RXB, rgb565_stride_bytes};
 
@@ -262,14 +267,23 @@ pub struct Fpga {
     gpo: u32,
     latch_capabilities: Option<mister_magik_latch_contract::LatchCapabilities>,
     uio_lock: Option<File>,
+    uio_lock_depth: Rc<Cell<u32>>,
 }
 
-struct FpgaUioGuard {
+pub struct FpgaUioGuard {
     fd: std::os::fd::RawFd,
+    depth: Rc<Cell<u32>>,
 }
 
 impl Drop for FpgaUioGuard {
     fn drop(&mut self) {
+        let depth = self.depth.get();
+        debug_assert!(depth > 0);
+        let remaining = depth.saturating_sub(1);
+        self.depth.set(remaining);
+        if remaining != 0 {
+            return;
+        }
         // SAFETY: fd belongs to the live lock file held by Fpga for longer than
         // this guard; LOCK_UN only releases this process's advisory flock.
         unsafe {
@@ -321,6 +335,7 @@ impl Fpga {
             gpo: BIT31,
             latch_capabilities: None,
             uio_lock: Some(uio_lock),
+            uio_lock_depth: Rc::new(Cell::new(0)),
         })
     }
 
@@ -329,11 +344,22 @@ impl Fpga {
             return Ok(None);
         };
         let fd = lock.as_raw_fd();
-        // SAFETY: fd is a valid open lock file descriptor owned by self.
-        if unsafe { libc::flock(fd, libc::LOCK_EX) } != 0 {
-            return Err(io::Error::last_os_error());
+        let depth = self.uio_lock_depth.get();
+        if depth == 0 {
+            // SAFETY: fd is a valid open lock file descriptor owned by self.
+            if unsafe { libc::flock(fd, libc::LOCK_EX) } != 0 {
+                return Err(io::Error::last_os_error());
+            }
         }
-        Ok(Some(FpgaUioGuard { fd }))
+        self.uio_lock_depth.set(depth.saturating_add(1));
+        Ok(Some(FpgaUioGuard {
+            fd,
+            depth: Rc::clone(&self.uio_lock_depth),
+        }))
+    }
+
+    pub fn lock_latch_transaction(&self) -> io::Result<Option<FpgaUioGuard>> {
+        self.lock_uio_transaction()
     }
 
     #[inline]
@@ -566,7 +592,7 @@ impl Fpga {
         match self.read_magik_latched_fbuf_status_once(protocol) {
             Err(mut first)
                 if first.source.kind() == io::ErrorKind::TimedOut
-                    || (protocol == mister_magik_latch_contract::LatchProtocol::V3
+                    || (protocol == mister_magik_latch_contract::LatchProtocol::V4
                         && first.source.kind() == io::ErrorKind::InvalidData) =>
             {
                 // GET_FBUF_LATCH is an idempotent status query. Return the bus
@@ -624,7 +650,7 @@ impl Fpga {
                 return Err(self.latched_status_read_error(failure.error, attempt, protocol));
             }
         };
-        let mut words = [0u16; mister_magik_latch_contract::V3_STATUS_WORDS];
+        let mut words = [0u16; mister_magik_latch_contract::V4_STATUS_WORDS];
         for (index, word) in words
             .iter_mut()
             .take(protocol.status_word_count())
@@ -689,6 +715,10 @@ impl Fpga {
                 active_stride: decoded.stride,
                 reject_count: decoded.reject_count,
                 active_route_epoch: decoded.active_route_epoch,
+                accepted_sequence: decoded.accepted_seq,
+                active_transaction: decoded.active_transaction,
+                pending_transaction: decoded.pending_transaction,
+                accepted_transaction: decoded.accepted_transaction,
             },
             diagnostics: {
                 let mut diagnostics = diagnostics_with_attempt(attempt, LatchWireDecision::Decoded);
@@ -699,6 +729,27 @@ impl Fpga {
                 diagnostics
             },
         })
+    }
+
+    fn read_magik_latched_fbuf_receipt_unlocked(
+        &mut self,
+    ) -> io::Result<mister_magik_latch_contract::LatchReceipt> {
+        let command = self.cmd_capture(MAGIK_UIO_GET_FBUF_LATCH_RECEIPT)?;
+        if command.0 != MAGIK_FBUF_RECEIPT_MAGIC && command.1 != MAGIK_FBUF_RECEIPT_MAGIC {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "unsupported latch receipt magic high=0x{:04x} low=0x{:04x}",
+                    command.0, command.1
+                ),
+            ));
+        }
+        let mut words = [0u16; mister_magik_latch_contract::V4_RECEIPT_WORDS];
+        for word in &mut words {
+            *word = self.spi_capture(0)?.1;
+        }
+        mister_magik_latch_contract::decode_receipt(&words)
+            .map_err(|message| io::Error::new(io::ErrorKind::InvalidData, message))
     }
 
     fn latched_status_read_error(
@@ -728,7 +779,7 @@ impl Fpga {
         let _uio_guard = self.lock_uio_transaction()?;
         self.latch_capabilities = None;
         let result = match self.read_magik_latched_fbuf_capabilities_once() {
-            Err((first, Some(mister_magik_latch_contract::LatchProtocol::V3)))
+            Err((first, Some(mister_magik_latch_contract::LatchProtocol::V4)))
                 if first.kind() == io::ErrorKind::InvalidData =>
             {
                 self.reset_spi_transport();
@@ -758,7 +809,7 @@ impl Fpga {
         let mut observed_protocol = None;
         let result = (|| {
             let (magic_hi, magic_lo) = self.cmd_capture(MAGIK_UIO_GET_FBUF_LATCH_CAPS)?;
-            let mut words = [0u16; mister_magik_latch_contract::V3_CAPS_WORDS];
+            let mut words = [0u16; mister_magik_latch_contract::V4_CAPS_WORDS];
             words[0] = self.spi_capture(0)?.1;
             let protocol = mister_magik_latch_contract::LatchProtocol::try_from(words[0])
                 .map_err(|message| io::Error::new(io::ErrorKind::InvalidData, message))?;
@@ -917,6 +968,58 @@ impl Fpga {
                 }
             }
         }
+        let receipt = match self.read_magik_latched_fbuf_receipt_unlocked() {
+            Ok(receipt) => receipt,
+            Err(source) => {
+                self.disable_io();
+                diagnostics.total_elapsed_us = started.elapsed().as_micros() as u64;
+                return Err(LatchedFbufPostError {
+                    source,
+                    diagnostics: Box::new(diagnostics),
+                });
+            }
+        };
+        diagnostics.attempted_transaction = receipt.attempted_transaction;
+        diagnostics.receipt_disposition = receipt.disposition;
+        diagnostics.accepted_transaction = receipt.accepted_transaction;
+        diagnostics.accepted_sequence = receipt.accepted_sequence;
+        diagnostics.pending_transaction = receipt.pending_transaction;
+        diagnostics.pending_sequence = receipt.pending_sequence;
+        diagnostics.active_transaction = receipt.active_transaction;
+        diagnostics.active_sequence = receipt.active_sequence;
+        diagnostics.receipt_reject_reason = receipt.reject_reason;
+        diagnostics.receipt_crc = receipt.crc;
+        if !receipt.accepted()
+            || receipt.attempted_sequence != sequence
+            || receipt.accepted_sequence != sequence
+            || receipt.accepted_transaction != receipt.attempted_transaction
+            || !((receipt.pending_transaction == receipt.attempted_transaction
+                && receipt.pending_sequence == sequence)
+                || (receipt.active_transaction == receipt.attempted_transaction
+                    && receipt.active_sequence == sequence))
+        {
+            self.disable_io();
+            diagnostics.total_elapsed_us = started.elapsed().as_micros() as u64;
+            return Err(LatchedFbufPostError {
+                source: io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "latch SET rejected or ambiguous: attempted_tx={} attempted_seq={} disposition={} accepted_tx={} accepted_seq={} pending_tx={} pending_seq={} active_tx={} active_seq={} reject_reason={}",
+                        receipt.attempted_transaction,
+                        receipt.attempted_sequence,
+                        receipt.disposition,
+                        receipt.accepted_transaction,
+                        receipt.accepted_sequence,
+                        receipt.pending_transaction,
+                        receipt.pending_sequence,
+                        receipt.active_transaction,
+                        receipt.active_sequence,
+                        receipt.reject_reason
+                    ),
+                ),
+                diagnostics: Box::new(diagnostics),
+            });
+        }
         self.disable_io();
         diagnostics.total_elapsed_us = started.elapsed().as_micros() as u64;
         Ok(LatchedFbufPostAttempt {
@@ -936,7 +1039,7 @@ impl Fpga {
                 "latch rejection diagnostics require successful capability negotiation",
             ));
         };
-        if capabilities.protocol != mister_magik_latch_contract::LatchProtocol::V3
+        if capabilities.protocol != mister_magik_latch_contract::LatchProtocol::V4
             || capabilities.flags & mister_magik_latch_contract::CAP_REJECTION_CONTEXT == 0
         {
             return Ok(None);
@@ -958,8 +1061,8 @@ impl Fpga {
             let word_count = capabilities
                 .protocol
                 .diagnostics_word_count()
-                .expect("protocol v3 has rejection diagnostics");
-            let mut words = [0u16; mister_magik_latch_contract::V3_DIAGNOSTICS_WORDS];
+                .expect("protocol v4 has rejection diagnostics");
+            let mut words = [0u16; mister_magik_latch_contract::V4_DIAGNOSTICS_WORDS];
             for word in words.iter_mut().take(word_count) {
                 *word = self.spi_capture(0)?.1;
             }
@@ -1094,6 +1197,10 @@ pub struct LatchedFbufStatus {
     pub active_stride: u16,
     pub reject_count: u16,
     pub active_route_epoch: u16,
+    pub accepted_sequence: u16,
+    pub active_transaction: u16,
+    pub pending_transaction: u16,
+    pub accepted_transaction: u16,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -1240,6 +1347,10 @@ impl From<LatchedFbufStatus> for LatchStatusObservation {
             reject_count: status.reject_count,
             rejection_reason: status.rejection_reason(),
             active_route_epoch: status.active_route_epoch,
+            accepted_sequence: status.accepted_sequence,
+            active_transaction: status.active_transaction,
+            pending_transaction: status.pending_transaction,
+            accepted_transaction: status.accepted_transaction,
             active_base: status.active_base,
             active_width: status.active_width,
             active_height: status.active_height,
@@ -1286,8 +1397,9 @@ mod tests {
         let fpga = Fpga {
             registers: Box::new(ScriptedRegisters(Rc::clone(&state))),
             gpo: BIT31,
-            latch_capabilities: Some(v2_capabilities()),
+            latch_capabilities: Some(v4_capabilities()),
             uio_lock: None,
+            uio_lock_depth: Rc::new(Cell::new(0)),
         };
         (fpga, state)
     }
@@ -1304,58 +1416,93 @@ mod tests {
         let fpga = Fpga {
             registers: Box::new(ScriptedRegisters(Rc::clone(&state))),
             gpo: BIT31,
-            latch_capabilities: Some(v2_capabilities()),
+            latch_capabilities: Some(v4_capabilities()),
             uio_lock: None,
+            uio_lock_depth: Rc::new(Cell::new(0)),
         };
         (fpga, state)
     }
 
     fn status_pairs() -> Vec<(u16, u16)> {
-        let status_words = [1, 2, 7, 3, 4, 5, 0x9000, 0x227e, 960, 540, 1920];
         let mut pairs = vec![(MAGIK_FBUF_STATUS_MAGIC, 0)];
         pairs.extend(
-            status_words
+            mister_magik_latch_contract::GOLDEN_STATUS_V4_PAYLOAD
                 .into_iter()
                 .enumerate()
                 .map(|(index, word)| (0xa000 | index as u16, word)),
         );
+        pairs.push((0xa00f, mister_magik_latch_contract::GOLDEN_STATUS_V4_CRC));
         pairs
     }
 
-    fn v3_capabilities() -> mister_magik_latch_contract::LatchCapabilities {
-        let mut words = [0; mister_magik_latch_contract::V3_CAPS_WORDS];
-        words[..5].copy_from_slice(&mister_magik_latch_contract::GOLDEN_CAPS_V3_PAYLOAD);
-        words[5] = mister_magik_latch_contract::GOLDEN_CAPS_V3_CRC;
+    fn v4_capabilities() -> mister_magik_latch_contract::LatchCapabilities {
+        let mut words = [0; mister_magik_latch_contract::V4_CAPS_WORDS];
+        words[..5].copy_from_slice(&mister_magik_latch_contract::GOLDEN_CAPS_V4_PAYLOAD);
+        words[5] = mister_magik_latch_contract::GOLDEN_CAPS_V4_CRC;
         mister_magik_latch_contract::decode_capabilities(&words).unwrap()
     }
 
-    fn v2_capabilities() -> mister_magik_latch_contract::LatchCapabilities {
-        mister_magik_latch_contract::decode_capabilities(&[
-            2,
-            mister_magik_latch_contract::V2_CAPS_FLAGS,
-            mister_magik_latch_contract::MAX_WIDTH,
-            mister_magik_latch_contract::MAX_HEIGHT,
-            mister_magik_latch_contract::MAX_STRIDE_BYTES,
-        ])
-        .unwrap()
-    }
-
-    fn v3_capability_pairs(crc: u16) -> Vec<(u16, u16)> {
+    fn v4_capability_pairs(crc: u16) -> Vec<(u16, u16)> {
         let mut pairs = vec![(MAGIK_FBUF_CAPS_MAGIC, 0)];
-        pairs.extend(mister_magik_latch_contract::GOLDEN_CAPS_V3_PAYLOAD.map(|word| (0, word)));
+        pairs.extend(mister_magik_latch_contract::GOLDEN_CAPS_V4_PAYLOAD.map(|word| (0, word)));
         pairs.push((0, crc));
         pairs
     }
 
-    fn v3_status_pairs(crc: u16) -> Vec<(u16, u16)> {
+    fn v4_status_pairs(crc: u16) -> Vec<(u16, u16)> {
         let mut pairs = vec![(MAGIK_FBUF_STATUS_MAGIC, 0)];
         pairs.extend(
-            mister_magik_latch_contract::GOLDEN_STATUS_V3_PAYLOAD
+            mister_magik_latch_contract::GOLDEN_STATUS_V4_PAYLOAD
                 .into_iter()
                 .enumerate()
                 .map(|(index, word)| (0xa000 | index as u16, word)),
         );
-        pairs.push((0xa00d, crc));
+        pairs.push((0xa00f, crc));
+        pairs
+    }
+
+    fn v4_receipt_pairs(sequence: u16, accepted: bool) -> Vec<(u16, u16)> {
+        let disposition = if accepted {
+            mister_magik_latch_contract::RECEIPT_ACCEPTED
+        } else {
+            mister_magik_latch_contract::RECEIPT_REJECTED
+        };
+        let transaction = 1;
+        let payload = if accepted {
+            [
+                transaction,
+                sequence,
+                disposition,
+                transaction,
+                sequence,
+                transaction,
+                sequence,
+                0,
+                0,
+                0,
+            ]
+        } else {
+            [
+                transaction,
+                sequence,
+                disposition,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                u16::from(mister_magik_latch_contract::REJECT_MISSING_WORD),
+            ]
+        };
+        let crc = mister_magik_latch_contract::message_crc(
+            MAGIK_UIO_GET_FBUF_LATCH_RECEIPT,
+            mister_magik_latch_contract::LatchProtocol::V4,
+            &payload,
+        );
+        let mut pairs = vec![(MAGIK_FBUF_RECEIPT_MAGIC, 0)];
+        pairs.extend(payload.map(|word| (0, word)));
+        pairs.push((0, crc));
         pairs
     }
 
@@ -1454,7 +1601,7 @@ mod tests {
         let (mut fpga, _) = scripted_reads([ACK | u32::from(MAGIK_FBUF_STATUS_MAGIC)], ACK);
 
         let error = fpga
-            .read_magik_latched_fbuf_status_once(mister_magik_latch_contract::LatchProtocol::V2)
+            .read_magik_latched_fbuf_status_once(mister_magik_latch_contract::LatchProtocol::V4)
             .unwrap_err();
         let attempt = error.diagnostics.attempts[0];
 
@@ -1474,11 +1621,11 @@ mod tests {
         let (mut high_timeout, _) = scripted_reads(prefix, 0);
 
         let high_error = high_timeout
-            .read_magik_latched_fbuf_status_once(mister_magik_latch_contract::LatchProtocol::V2)
+            .read_magik_latched_fbuf_status_once(mister_magik_latch_contract::LatchProtocol::V4)
             .unwrap_err();
         let high_attempt = high_error.diagnostics.attempts[0];
         assert_eq!(high_attempt.response_word_count, 3);
-        assert_eq!(high_attempt.response_words[1].ack_low, Some(2));
+        assert_eq!(high_attempt.response_words[1].ack_low, Some(43));
         assert_eq!(
             high_attempt.response_words[2].error_phase,
             LatchWireErrorPhase::AckHigh
@@ -1488,11 +1635,11 @@ mod tests {
         low_reads.push(ACK | 0xa002);
         let (mut low_timeout, _) = scripted_reads(low_reads, ACK);
         let low_error = low_timeout
-            .read_magik_latched_fbuf_status_once(mister_magik_latch_contract::LatchProtocol::V2)
+            .read_magik_latched_fbuf_status_once(mister_magik_latch_contract::LatchProtocol::V4)
             .unwrap_err();
         let low_attempt = low_error.diagnostics.attempts[0];
         assert_eq!(low_attempt.response_word_count, 3);
-        assert_eq!(low_attempt.response_words[1].ack_low, Some(2));
+        assert_eq!(low_attempt.response_words[1].ack_low, Some(43));
         assert_eq!(low_attempt.response_words[2].ack_high, Some(0xa002));
         assert_eq!(
             low_attempt.response_words[2].error_phase,
@@ -1564,17 +1711,17 @@ mod tests {
         assert_eq!(sample.diagnostics.attempt_count, 1);
         let attempt = sample.diagnostics.attempts[0];
         assert_eq!(attempt.command_word.ack_high, Some(MAGIK_FBUF_STATUS_MAGIC));
-        assert_eq!(attempt.response_word_count, 11);
-        assert_eq!(attempt.response_words[8].ack_high, Some(0xa008));
-        assert_eq!(attempt.response_words[8].ack_low, Some(960));
+        assert_eq!(attempt.response_word_count, 16);
+        assert_eq!(attempt.response_words[7].ack_high, Some(0xa007));
+        assert_eq!(attempt.response_words[7].ack_low, Some(960));
         assert_eq!(fpga.gpo & IO_EN, 0);
     }
 
     #[test]
-    fn v3_capability_crc_retries_once_without_downgrading() {
-        let mut pairs = v3_capability_pairs(mister_magik_latch_contract::GOLDEN_CAPS_V3_CRC ^ 1);
-        pairs.extend(v3_capability_pairs(
-            mister_magik_latch_contract::GOLDEN_CAPS_V3_CRC,
+    fn v4_capability_crc_retries_once_without_downgrading() {
+        let mut pairs = v4_capability_pairs(mister_magik_latch_contract::GOLDEN_CAPS_V4_CRC ^ 1);
+        pairs.extend(v4_capability_pairs(
+            mister_magik_latch_contract::GOLDEN_CAPS_V4_CRC,
         ));
         let (mut fpga, state) = scripted(&pairs);
 
@@ -1582,7 +1729,7 @@ mod tests {
 
         assert_eq!(
             capabilities.protocol,
-            mister_magik_latch_contract::LatchProtocol::V3
+            mister_magik_latch_contract::LatchProtocol::V4
         );
         assert_eq!(
             words_from_writes(&state.borrow().writes)
@@ -1592,9 +1739,9 @@ mod tests {
             2
         );
 
-        let mut pairs = v3_capability_pairs(mister_magik_latch_contract::GOLDEN_CAPS_V3_CRC ^ 1);
-        pairs.extend(v3_capability_pairs(
-            mister_magik_latch_contract::GOLDEN_CAPS_V3_CRC ^ 2,
+        let mut pairs = v4_capability_pairs(mister_magik_latch_contract::GOLDEN_CAPS_V4_CRC ^ 1);
+        pairs.extend(v4_capability_pairs(
+            mister_magik_latch_contract::GOLDEN_CAPS_V4_CRC ^ 2,
         ));
         let (mut failed, _) = scripted(&pairs);
         let error = failed.read_magik_latched_fbuf_capabilities().unwrap_err();
@@ -1602,57 +1749,49 @@ mod tests {
         assert!(failed.latch_capabilities.is_none());
 
         let reads = reads_from_pairs(&[(MAGIK_FBUF_CAPS_MAGIC, 0), (0, 2)]);
-        let (mut failed_v2, _) = scripted_reads(reads, 0);
-        failed_v2.latch_capabilities = Some(v3_capabilities());
-        let error = failed_v2
+        let (mut obsolete_protocol, _) = scripted_reads(reads, 0);
+        obsolete_protocol.latch_capabilities = Some(v4_capabilities());
+        let error = obsolete_protocol
             .read_magik_latched_fbuf_capabilities()
             .unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
-        assert!(failed_v2.latch_capabilities.is_none());
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(obsolete_protocol.latch_capabilities.is_none());
 
-        let malformed_v2 = [
-            (MAGIK_FBUF_CAPS_MAGIC, 0),
-            (0, 2),
-            (0, mister_magik_latch_contract::V2_CAPS_FLAGS | 0x8000),
-            (0, mister_magik_latch_contract::MAX_WIDTH),
-            (0, mister_magik_latch_contract::MAX_HEIGHT),
-            (0, mister_magik_latch_contract::MAX_STRIDE_BYTES),
-        ];
-        let (mut malformed, _) = scripted(&malformed_v2);
-        let (_, _, capabilities) = malformed.read_magik_latched_fbuf_capabilities().unwrap();
-        assert!(!capabilities.production_ready());
+        let obsolete_protocol = [(MAGIK_FBUF_CAPS_MAGIC, 0), (0, 2)];
+        let (mut malformed, _) = scripted(&obsolete_protocol);
+        assert!(malformed.read_magik_latched_fbuf_capabilities().is_err());
         assert!(malformed.latch_capabilities.is_none());
     }
 
     #[test]
-    fn v3_status_crc_retries_once_without_v2_fallback() {
-        let mut pairs = v3_status_pairs(mister_magik_latch_contract::GOLDEN_STATUS_V3_CRC ^ 1);
-        pairs.extend(v3_status_pairs(
-            mister_magik_latch_contract::GOLDEN_STATUS_V3_CRC,
+    fn v4_status_crc_retries_once_without_protocol_fallback() {
+        let mut pairs = v4_status_pairs(mister_magik_latch_contract::GOLDEN_STATUS_V4_CRC ^ 1);
+        pairs.extend(v4_status_pairs(
+            mister_magik_latch_contract::GOLDEN_STATUS_V4_CRC,
         ));
         let (mut fpga, _) = scripted(&pairs);
-        fpga.latch_capabilities = Some(v3_capabilities());
+        fpga.latch_capabilities = Some(v4_capabilities());
 
         let sample = fpga.read_magik_latched_fbuf_status_sample().unwrap();
 
         assert_eq!(sample.status.reject_count, 7);
         assert_eq!(sample.status.active_route_epoch, 9);
-        assert_eq!(sample.diagnostics.protocol_version, Some(3));
+        assert_eq!(sample.diagnostics.protocol_version, Some(4));
         assert_eq!(sample.diagnostics.attempt_count, 2);
         assert_eq!(
             sample.diagnostics.decision,
             LatchWireDecision::TransportRetryRecovered
         );
 
-        let mut pairs = v3_status_pairs(mister_magik_latch_contract::GOLDEN_STATUS_V3_CRC ^ 1);
-        pairs.extend(v3_status_pairs(
-            mister_magik_latch_contract::GOLDEN_STATUS_V3_CRC ^ 2,
+        let mut pairs = v4_status_pairs(mister_magik_latch_contract::GOLDEN_STATUS_V4_CRC ^ 1);
+        pairs.extend(v4_status_pairs(
+            mister_magik_latch_contract::GOLDEN_STATUS_V4_CRC ^ 2,
         ));
         let (mut failed, _) = scripted(&pairs);
-        failed.latch_capabilities = Some(v3_capabilities());
+        failed.latch_capabilities = Some(v4_capabilities());
         let error = failed.read_magik_latched_fbuf_status_sample().unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-        assert_eq!(error.diagnostics.protocol_version, Some(3));
+        assert_eq!(error.diagnostics.protocol_version, Some(4));
         assert_eq!(
             error.diagnostics.decision,
             LatchWireDecision::TransportRetryFailed
@@ -1692,9 +1831,11 @@ mod tests {
     }
 
     #[test]
-    fn v3_set_posts_crc_once_and_is_never_retried() {
-        let (mut fpga, state) = scripted(&[(MAGIK_FBUF_LATCH_MAGIC, 0); 13]);
-        fpga.latch_capabilities = Some(v3_capabilities());
+    fn v4_set_posts_crc_once_and_is_never_retried() {
+        let mut pairs = vec![(MAGIK_FBUF_LATCH_MAGIC, 0); 13];
+        pairs.extend(v4_receipt_pairs(42, true));
+        let (mut fpga, state) = scripted(&pairs);
+        fpga.latch_capabilities = Some(v4_capabilities());
         let geometry = LatchedFbufGeometry {
             xoff: 0,
             right: 959,
@@ -1709,11 +1850,17 @@ mod tests {
 
         let words = words_from_writes(&state.borrow().writes);
         assert_eq!(words[0], MAGIK_UIO_SET_FBUF_LATCH);
+        let mut expected_payload = mister_magik_latch_contract::GOLDEN_SET_V4_PAYLOAD;
+        expected_payload[10] = 42;
+        assert_eq!(&words[1..12], &expected_payload);
         assert_eq!(
-            &words[1..12],
-            &mister_magik_latch_contract::GOLDEN_SET_V3_PAYLOAD
+            words[12],
+            mister_magik_latch_contract::message_crc(
+                MAGIK_UIO_SET_FBUF_LATCH,
+                mister_magik_latch_contract::LatchProtocol::V4,
+                &expected_payload,
+            )
         );
-        assert_eq!(words[12], mister_magik_latch_contract::GOLDEN_SET_V3_CRC);
         assert_eq!(
             words
                 .iter()
@@ -1721,23 +1868,22 @@ mod tests {
                 .count(),
             1
         );
-        assert_eq!(attempt.diagnostics.protocol_version, 3);
+        assert_eq!(attempt.diagnostics.protocol_version, 4);
         assert_eq!(attempt.diagnostics.sequence, 42);
         assert_eq!(attempt.diagnostics.word_count, 12);
         assert_eq!(attempt.diagnostics.expected_word_count, 12);
         assert_eq!(attempt.diagnostics.transmitted_word_count, 12);
-        assert_eq!(
-            attempt.diagnostics.words[11].transmitted,
-            mister_magik_latch_contract::GOLDEN_SET_V3_CRC
-        );
+        assert_eq!(attempt.diagnostics.words[11].transmitted, words[12]);
         assert!(attempt.diagnostics.command_word.ack_high.is_some());
         assert!(attempt.diagnostics.words[11].ack_low.is_some());
     }
 
     #[test]
-    fn v3_set_can_omit_one_word_once_for_bounded_receiver_reproduction() {
-        let (mut fpga, state) = scripted(&[(MAGIK_FBUF_LATCH_MAGIC, 0); 12]);
-        fpga.latch_capabilities = Some(v3_capabilities());
+    fn v4_set_can_omit_one_word_once_for_bounded_receiver_reproduction() {
+        let mut pairs = vec![(MAGIK_FBUF_LATCH_MAGIC, 0); 12];
+        pairs.extend(v4_receipt_pairs(42, false));
+        let (mut fpga, state) = scripted(&pairs);
+        fpga.latch_capabilities = Some(v4_capabilities());
         let geometry = LatchedFbufGeometry {
             xoff: 0,
             right: 959,
@@ -1746,29 +1892,34 @@ mod tests {
             stride_bytes: 1920,
         };
 
-        let attempt = fpga
+        let error = fpga
             .post_magik_latched_fbuf_rgb565_observed(42, 0x227e_9000, 960, 540, geometry, Some(4))
-            .unwrap();
+            .unwrap_err();
 
         let words = words_from_writes(&state.borrow().writes);
-        assert_eq!(words.len(), 12);
-        assert_eq!(words[0], MAGIK_UIO_SET_FBUF_LATCH);
-        assert!(!words[1..].contains(&mister_magik_latch_contract::GOLDEN_SET_V3_PAYLOAD[4]));
-        assert_eq!(attempt.diagnostics.injected_skip_index, Some(4));
-        assert!(attempt.diagnostics.words[4].injected_skip);
-        assert_eq!(attempt.diagnostics.transmitted_word_count, 11);
-        assert_eq!(attempt.diagnostics.expected_word_count, 12);
+        let set_words = &words[..12];
+        assert_eq!(set_words[0], MAGIK_UIO_SET_FBUF_LATCH);
+        assert!(!set_words[1..].contains(&mister_magik_latch_contract::GOLDEN_SET_V4_PAYLOAD[4]));
+        assert!(words.contains(&MAGIK_UIO_GET_FBUF_LATCH_RECEIPT));
+        assert_eq!(error.diagnostics.injected_skip_index, Some(4));
+        assert!(error.diagnostics.words[4].injected_skip);
+        assert_eq!(error.diagnostics.transmitted_word_count, 11);
+        assert_eq!(error.diagnostics.expected_word_count, 12);
+        assert_eq!(
+            error.diagnostics.receipt_disposition,
+            mister_magik_latch_contract::RECEIPT_REJECTED
+        );
     }
 
     #[test]
-    fn v3_rejection_diagnostics_decode_receiver_context() {
+    fn v4_rejection_diagnostics_decode_receiver_context() {
         let mut pairs = vec![(MAGIK_FBUF_DIAGNOSTICS_MAGIC, 0)];
         pairs.extend(
-            mister_magik_latch_contract::GOLDEN_DIAGNOSTICS_V3_PAYLOAD.map(|word| (0, word)),
+            mister_magik_latch_contract::GOLDEN_DIAGNOSTICS_V4_PAYLOAD.map(|word| (0, word)),
         );
-        pairs.push((0, mister_magik_latch_contract::GOLDEN_DIAGNOSTICS_V3_CRC));
+        pairs.push((0, mister_magik_latch_contract::GOLDEN_DIAGNOSTICS_V4_CRC));
         let (mut fpga, _) = scripted(&pairs);
-        fpga.latch_capabilities = Some(v3_capabilities());
+        fpga.latch_capabilities = Some(v4_capabilities());
 
         let observation = fpga
             .read_magik_latched_fbuf_rejection_diagnostics()
@@ -1844,7 +1995,9 @@ mod tests {
         assert_eq!(fpga.gpo & IO_EN, 0);
 
         let geometry = LatchedFbufGeometry::new(960, mode, 1);
-        let (mut fpga, state) = scripted(&[(0x55, 0); 12]);
+        let mut pairs = vec![(0x55, 0); 13];
+        pairs.extend(v4_receipt_pairs(7, true));
+        let (mut fpga, state) = scripted(&pairs);
         assert_eq!(
             fpga.post_magik_latched_fbuf_rgb565(7, FB_ADDR, 960, 540, geometry)
                 .unwrap(),
@@ -1852,7 +2005,8 @@ mod tests {
         );
         let words = words_from_writes(&state.borrow().writes);
         assert_eq!(words[0], MAGIK_UIO_SET_FBUF_LATCH);
-        assert_eq!(*words.last().unwrap(), 7);
+        assert!(words.contains(&7));
+        assert!(words.contains(&MAGIK_UIO_GET_FBUF_LATCH_RECEIPT));
         assert_eq!(fpga.gpo & IO_EN, 0);
     }
 
@@ -1901,6 +2055,10 @@ mod tests {
             active_stride: 1920,
             reject_count: 0,
             active_route_epoch: 0,
+            accepted_sequence: 2,
+            active_transaction: 1,
+            pending_transaction: 2,
+            accepted_transaction: 2,
         };
         assert!(status.supported());
         assert!(status.active_enabled());

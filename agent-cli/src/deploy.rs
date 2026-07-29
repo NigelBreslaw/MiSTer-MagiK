@@ -393,7 +393,7 @@ mod tests {
         let main = "b".repeat(40);
         for manifest in [
             format!(
-                "format=mister-magik-platform-v2\nmagik_revision={revision}\nmain_revision={main}\n"
+                "format=mister-magik-platform-v3\nmagik_revision={revision}\nmain_revision={main}\n"
             ),
             format!("{}magik_revision={revision}\n", manifest(&revision, &main)),
             format!("{}extra=value\n", manifest(&revision, &main)),
@@ -450,7 +450,12 @@ mod tests {
 
     fn manifest(magik: &str, main: &str) -> String {
         let mut values = std::collections::BTreeMap::<String, String>::new();
-        values.insert("format".into(), "mister-magik-platform-v2".to_owned());
+        values.insert("format".into(), "mister-magik-platform-v3".to_owned());
+        values.insert("platform_release".into(), "platform-v0.16".to_owned());
+        values.insert("platform_release_number".into(), "16".to_owned());
+        values.insert("platform_bundle_id".into(), "e".repeat(64));
+        values.insert("latch_protocol_version".into(), "4".to_owned());
+        values.insert("latch_capability_mask".into(), "0x01ff".to_owned());
         for (name, path) in Layout::Development.paths() {
             values.insert(format!("{name}_path"), path.to_owned());
         }
@@ -469,6 +474,10 @@ mod tests {
         values.insert("main_revision".into(), main.to_owned());
         values.insert("magik_revision".into(), magik.to_owned());
         values.insert("menu_revision".into(), "d".repeat(40));
+        values.insert(
+            "qualification_candidate_id".into(),
+            platform_manifest::qualification_candidate_id(&values),
+        );
         platform_manifest::FIELDS
             .iter()
             .map(|field| format!("{field}={}\n", values[*field]))

@@ -1097,6 +1097,15 @@ impl ParticleShowcaseRenderer {
                     )
                 })
             });
+        // Transitions copy their outgoing geometry before reset. Everything
+        // left here belongs to the previous renderer family and must not leak
+        // into firework demos, which render directly without rebuilding the
+        // shared command buffers.
+        self.commands.clear();
+        self.previous_commands.clear();
+        self.segments.clear();
+        self.material_stamps.clear();
+        self.material_strokes.clear();
         self.pool.reset(demo, self.config.seed);
         if let Some(scene) = demo.form_scene() {
             self.form_renderer.reset(scene);
@@ -3363,8 +3372,15 @@ impl ParticleShowcaseRenderer {
             let dx = x - self.config.width as f32 * 0.5;
             let dy = y - self.config.height as f32 * 0.5;
             let inverse_length = (dx.mul_add(dx, dy * dy)).sqrt().max(1.0).recip();
-            let jitter =
-                unit_signed(self.pool.random[transition_index % self.pool.active()].rotate_left(7));
+            // Renderer families such as fireworks intentionally have no
+            // simulation-pool particles. Derive transition jitter from the
+            // rendered command instead of indexing a possibly empty pool.
+            let random = xorshift32(
+                fold_seed(self.config.seed, self.demo)
+                    .wrapping_add((transition_index as u32).wrapping_mul(0x9e37_79b9))
+                    .wrapping_add(command.rotate_left(11)),
+            );
+            let jitter = unit_signed(random.rotate_left(7));
             self.transition.x[transition_index] = x;
             self.transition.y[transition_index] = y;
             self.transition.vx[transition_index] = dx * inverse_length * (38.0 + jitter * 12.0);
@@ -4237,6 +4253,41 @@ mod tests {
                 .render(&mut destination, 0, Duration::ZERO)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn zero_pool_transition_clears_stale_geometry_and_uses_renderer_neutral_jitter() {
+        let mut renderer = ParticleShowcaseRenderer::new(ParticleShowcaseConfig {
+            width: 960,
+            height: 540,
+            seed: 0x33_7a,
+            initial_demo: ParticleDemoKind::LayerMappedHologram,
+        })
+        .unwrap();
+        let mut destination = vec![Rgb565Pixel(0); 960 * 540];
+        renderer
+            .render(&mut destination, 1, Duration::from_secs(15))
+            .unwrap();
+        let outgoing_command = renderer
+            .commands
+            .iter()
+            .copied()
+            .find(|command| *command != u32::MAX)
+            .expect("Form demo must project visible transition geometry");
+
+        renderer.reset_demo(
+            ParticleDemoKind::SolarChrysanthemum,
+            Duration::from_secs(15),
+        );
+        assert_eq!(renderer.pool.active(), 0);
+        assert!(renderer.commands.is_empty());
+
+        // Recreate the stale-command state from the device crash. This must
+        // remain safe even though the direct firework renderer has no pool.
+        renderer.commands.push(outgoing_command);
+        renderer.begin_transition(Duration::from_secs(45));
+        assert_eq!(renderer.transition.count, 1);
+        assert!(renderer.transition_started_at.is_some());
     }
 
     #[test]

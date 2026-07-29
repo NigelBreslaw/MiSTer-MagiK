@@ -1288,21 +1288,13 @@ mod macos {
                 return;
             }
             self.card_connected = connected;
-            let bridge = self.launcher.global::<MisterBridge>();
             if connected {
-                bridge.set_compatibility_visible(false);
                 self.catalog_source = "catalog:card-reconnected".to_owned();
                 self.download_media = self.download_media_configured;
                 if self.scenario == Scenario::ScreenshotTiles {
                     self.ensure_screenshot_tile_images();
                 }
             } else {
-                bridge.set_compatibility_visible(true);
-                bridge.set_compatibility_reason("MiSTer card disconnected".into());
-                bridge.set_compatibility_detail(
-                    "The last Mac-cached catalog remains available; reconnect the card to scan or load media."
-                        .into(),
-                );
                 self.catalog_source = "catalog:card-disconnected".to_owned();
                 self.catalog_worker = None;
                 self.cancel_screenshot_tile_load();
@@ -1577,7 +1569,6 @@ mod macos {
         Confirm,
         CatalogScan,
         BackgroundScan,
-        Compatibility,
         Loading,
         MediaProgress,
         ParticleScreensaver,
@@ -1630,7 +1621,6 @@ mod macos {
                 "confirm" => Some(Self::Confirm),
                 "catalog-scan" => Some(Self::CatalogScan),
                 "background-scan" => Some(Self::BackgroundScan),
-                "compatibility" => Some(Self::Compatibility),
                 "loading" => Some(Self::Loading),
                 "media-progress" => Some(Self::MediaProgress),
                 "particle" | "particle-screensaver" => Some(Self::ParticleScreensaver),
@@ -1658,7 +1648,6 @@ mod macos {
                 Self::Confirm => "Confirmation",
                 Self::CatalogScan => "Catalog Scan",
                 Self::BackgroundScan => "Background Scan",
-                Self::Compatibility => "Compatibility",
                 Self::Loading => "Loading",
                 Self::MediaProgress => "Media Progress",
                 Self::ParticleScreensaver => "Particle Screensaver",
@@ -1682,7 +1671,6 @@ mod macos {
                 Self::Arcade => "A",
                 Self::ArcadeCrossfade => "headless",
                 Self::BackgroundScan => "B",
-                Self::Compatibility => "C",
                 Self::Loading => "L",
                 Self::MediaProgress => "M",
                 Self::ParticleScreensaver => "P",
@@ -1707,7 +1695,6 @@ mod macos {
             KeyCode::Digit0 | KeyCode::Numpad0 => Some(Scenario::CatalogScan),
             KeyCode::KeyA => Some(Scenario::Arcade),
             KeyCode::KeyB => Some(Scenario::BackgroundScan),
-            KeyCode::KeyC => Some(Scenario::Compatibility),
             KeyCode::KeyL => Some(Scenario::Loading),
             KeyCode::KeyM => Some(Scenario::MediaProgress),
             KeyCode::KeyP => Some(Scenario::ParticleScreensaver),
@@ -2138,13 +2125,6 @@ mod macos {
                 bridge.set_catalog_scan_percent(37);
             }
             Scenario::BackgroundScan => bridge.set_catalog_background_scan_visible(true),
-            Scenario::Compatibility => {
-                bridge.set_compatibility_visible(true);
-                bridge.set_compatibility_reason("Display route needs attention".into());
-                bridge.set_compatibility_detail(
-                    "Previewing the launcher while the production route is unavailable.".into(),
-                );
-            }
             Scenario::Loading => {
                 bridge.set_loading_message("Launching Out Run".into());
                 bridge.set_loading_detail("Preparing core handoff".into());
@@ -2192,7 +2172,6 @@ mod macos {
         bridge.set_confirm_visible(false);
         bridge.set_catalog_scan_visible(false);
         bridge.set_catalog_background_scan_visible(false);
-        bridge.set_compatibility_visible(false);
         bridge.set_loading_message("".into());
         bridge.set_loading_detail("".into());
         bridge.set_media_pack_progresses(ModelRc::new(VecModel::from(
