@@ -318,6 +318,54 @@ module tb_mister_magik_vblank_latch;
 		end
 	endtask
 
+	task automatic reproduce_preserved_no_pending_gap(
+		input [15:0] accepted_value,
+		input [15:0] active_value
+	);
+		begin
+			$display(
+				"REGRESSION: accepted=%0d active=%0d no-pending must be unreachable",
+				accepted_value,
+				active_value
+			);
+			if(pending) pulse_vblank();
+			send_route(
+				MAGIK_GOLDEN_SET_V4_0,
+				32'h227e9000,
+				16'd960,
+				16'd540,
+				16'd0,
+				16'd1920,
+				16'd0,
+				16'd1080,
+				16'd1920,
+				active_value
+			);
+			expect_true(pending, "regression active setup must be pending");
+			pulse_vblank();
+			expect16(active_seq, active_value, "regression active setup sequence");
+			send_route(
+				MAGIK_GOLDEN_SET_V4_0,
+				32'h227e9000,
+				16'd960,
+				16'd540,
+				16'd0,
+				16'd1920,
+				16'd0,
+				16'd1080,
+				16'd1920,
+				accepted_value
+			);
+			expect16(dut.accepted_sequence, accepted_value, "regression accepted sequence");
+			expect16(active_seq, active_value, "regression prior active sequence");
+			expect_true(pending, "accepted N with active N-1 must retain pending");
+			expect16(pending_seq, accepted_value, "regression pending sequence");
+			pulse_vblank();
+			expect16(active_seq, accepted_value, "regression sequence becomes active");
+			expect_true(!pending, "regression pending clears only with activation");
+		end
+	endtask
+
 	task automatic expect_reject(
 		input [15:0] previous_count,
 		input [3:0] reason,
@@ -776,6 +824,9 @@ module tb_mister_magik_vblank_latch;
 		expect_true(!pending, "new route applies after ownership returns");
 		expect16(active_seq, 16'h002b, "MagiK ownership returns after accepted apply");
 		requirement_coverage[10] = 1'b1;
+
+		reproduce_preserved_no_pending_gap(16'd1213, 16'd1212);
+		reproduce_preserved_no_pending_gap(16'd962, 16'd961);
 
 		// Counter and sequence/epoch wrap remain explicit.
 		@(negedge clk_sys);
