@@ -6,7 +6,11 @@ mod macos {
     use mister_magik_catalog::portable_catalog_builder::{
         PortableCatalogBuild, publish_portable_catalog,
     };
-    use mister_magik_fb::arcade_catalog::{ArcadeCatalog, ArcadeGameEntry};
+    use mister_magik_catalog::preview_worker::{
+        PreviewPixels as CatalogPreviewPixels, PreviewWorker, load_preview_asset_pixels,
+        preview_asset_cache_key, resolved_preview_archive_path,
+    };
+    use mister_magik_fb::arcade_catalog::{ArcadeCatalog, ArcadeGameEntry, MENU_ARCADE_SYSTEM_ID};
     use mister_magik_fb::fireworks::{
         FIREWORK_VISUAL_SEED, FireworkRenderer, embedded_firework_json,
     };
@@ -41,6 +45,7 @@ mod macos {
     use slint::{ComponentHandle, ModelRc, PhysicalSize, SharedString, VecModel};
     use softbuffer::{Context, Surface};
     use std::cell::Cell;
+    use std::collections::HashMap;
     use std::error::Error;
     use std::fs::{OpenOptions, read_to_string};
     use std::io::Write;
@@ -247,6 +252,9 @@ mod macos {
         catalog_worker: Option<mpsc::Receiver<CatalogWorkerEvent>>,
         settings_store: FileSettingsStore,
         fixture_screenshots: Vec<FixtureScreenshot>,
+        loaded_screenshots: HashMap<String, FixtureScreenshot>,
+        preview_worker: Option<PreviewWorker>,
+        requested_preview_key: Option<String>,
         arcade_layer: ArcadeVisualLayer,
         preview_transition: PreviewTransitionController<()>,
         preview_compositor: Rgb565PreviewTransitionCompositor,
@@ -315,6 +323,7 @@ mod macos {
             } else {
                 None
             };
+            let preview_worker = content.card().map(|_| PreviewWorker::new());
             launcher
                 .global::<MisterBridge>()
                 .set_build_label(format!("Mac visual preview · {}", content.label()).into());
@@ -343,6 +352,9 @@ mod macos {
                 catalog_worker,
                 settings_store,
                 fixture_screenshots: fixtures.screenshots,
+                loaded_screenshots: HashMap::new(),
+                preview_worker,
+                requested_preview_key: None,
                 arcade_layer: ArcadeVisualLayer::new(FRAME_WIDTH, FRAME_HEIGHT),
                 preview_transition: PreviewTransitionController::default(),
                 preview_compositor: Rgb565PreviewTransitionCompositor::new(
@@ -371,6 +383,9 @@ mod macos {
                 focused: true,
             };
             application.select_scenario(scenario);
+            if headless {
+                application.load_headless_selected_preview();
+            }
             Ok(application)
         }
 
@@ -694,11 +709,13 @@ mod macos {
                 self.catalog.games.as_slice(),
                 self.launcher_nav.arcade.selected,
             );
+            self.request_selected_preview();
             self.slint_window.request_redraw();
         }
 
         fn compose_frame(&mut self) {
             self.poll_catalog_worker();
+            self.poll_preview_worker();
             let frame_delta = self.frame_delta();
             self.tick_launcher_navigation();
             slint::platform::update_timers_and_animations();
@@ -725,19 +742,34 @@ mod macos {
                     self.launcher_nav.arcade.visual_index,
                     true,
                 );
-                let fixture_screenshots = &self.fixture_screenshots;
+                let use_fixtures = matches!(self.content, PreviewContent::Fixtures);
                 let current = self
                     .preview_current_index
-                    .and_then(|index| self.catalog.games.get(index))
+                    .or(Some(self.launcher_nav.arcade.selected))
+                    .and_then(|index| preview_game(&self.launcher_nav, &self.catalog, index))
                     .and_then(|game| {
-                        fixture_screenshot(fixture_screenshots, &game.preview_asset_key)
+                        preview_screenshot(
+                            game,
+                            &self.loaded_screenshots,
+                            &self.fixture_screenshots,
+                            use_fixtures,
+                        )
                     })
-                    .or_else(|| fixture_screenshots.first());
+                    .or_else(|| {
+                        use_fixtures
+                            .then(|| self.fixture_screenshots.first())
+                            .flatten()
+                    });
                 let previous = self
                     .preview_previous_index
-                    .and_then(|index| self.catalog.games.get(index))
+                    .and_then(|index| preview_game(&self.launcher_nav, &self.catalog, index))
                     .and_then(|game| {
-                        fixture_screenshot(fixture_screenshots, &game.preview_asset_key)
+                        preview_screenshot(
+                            game,
+                            &self.loaded_screenshots,
+                            &self.fixture_screenshots,
+                            use_fixtures,
+                        )
                     });
                 if let Some(current) = current {
                     let transition = self.preview_transition.update(
@@ -794,6 +826,121 @@ mod macos {
                 self.screensaver_elapsed += frame_delta;
             }
             self.fixed_time.set(self.fixed_time.get() + frame_delta);
+        }
+
+        fn request_selected_preview(&mut self) {
+            let index = self
+                .preview_current_index
+                .unwrap_or(self.launcher_nav.arcade.selected);
+            let Some(game) = preview_game(&self.launcher_nav, &self.catalog, index) else {
+                return;
+            };
+            let Some(path) = self.resolve_preview_archive_path(&game.preview_archive_path) else {
+                return;
+            };
+            let key = preview_storage_key(&path, &game.preview_asset_key);
+            if self.loaded_screenshots.contains_key(&key)
+                || self.requested_preview_key.as_deref() == Some(&key)
+            {
+                return;
+            }
+            let Some(worker) = self.preview_worker.as_mut() else {
+                return;
+            };
+            worker.request_selected(
+                game.title.to_string(),
+                path,
+                game.preview_asset_key.to_string(),
+            );
+            self.requested_preview_key = Some(key);
+        }
+
+        fn poll_preview_worker(&mut self) {
+            let Some(result) = self
+                .preview_worker
+                .as_ref()
+                .and_then(PreviewWorker::take_latest_selected_result)
+            else {
+                return;
+            };
+            self.requested_preview_key = None;
+            let key = preview_storage_key(&result.preview_archive_path, &result.preview_asset_key);
+            let asset_key = result.preview_asset_key.clone();
+            let Some(image) = result.image else {
+                return;
+            };
+            if let Some(screenshot) = loaded_screenshot(key, asset_key, image) {
+                self.loaded_screenshots
+                    .insert(screenshot.key.to_string(), screenshot);
+                self.arcade_layer.invalidate();
+                self.slint_window.request_redraw();
+            }
+        }
+
+        fn load_headless_selected_preview(&mut self) {
+            let index = self
+                .preview_current_index
+                .unwrap_or(self.launcher_nav.arcade.selected);
+            let Some(game) = preview_game(&self.launcher_nav, &self.catalog, index) else {
+                return;
+            };
+            let Some(path) = self.resolve_preview_archive_path(&game.preview_archive_path) else {
+                eprintln!(
+                    "preview: no host archive for title={:?} canonical={:?}",
+                    game.title, game.preview_archive_path
+                );
+                return;
+            };
+            let image = match load_preview_asset_pixels(&path, &game.preview_asset_key) {
+                Ok(image) => image,
+                Err(error) => {
+                    eprintln!(
+                        "preview: load failed title={:?} archive={} key={:?}: {error}",
+                        game.title, path, game.preview_asset_key
+                    );
+                    return;
+                }
+            };
+            let key = preview_storage_key(&path, &game.preview_asset_key);
+            if let Some(screenshot) =
+                loaded_screenshot(key.clone(), game.preview_asset_key.to_string(), image)
+            {
+                eprintln!(
+                    "preview: loaded title={:?} key={:?} geometry={}x{} nonblack={}",
+                    game.title,
+                    game.preview_asset_key,
+                    screenshot.width,
+                    screenshot.height,
+                    screenshot
+                        .pixels
+                        .iter()
+                        .filter(|pixel| pixel.0 != 0)
+                        .count()
+                );
+                self.loaded_screenshots.insert(key, screenshot);
+            }
+        }
+
+        fn resolve_preview_archive_path(&self, canonical: &str) -> Option<String> {
+            let layout = self.content.card()?;
+            let file_name = Path::new(canonical).file_name()?;
+            let local = layout.media_root.join(file_name);
+            let local = resolved_preview_archive_path(local.to_string_lossy().as_ref());
+            if Path::new(&local).is_file() {
+                return Some(local);
+            }
+            let card = layout.to_card_path(canonical).ok()?;
+            let card = resolved_preview_archive_path(card.to_string_lossy().as_ref());
+            if Path::new(&card).is_file() {
+                return Some(card);
+            }
+            let development = layout
+                .card_root
+                .join("mister-magik-dev")
+                .join("assets")
+                .join(file_name);
+            let development = resolved_preview_archive_path(development.to_string_lossy().as_ref());
+            Path::new(&development).is_file().then_some(development)
         }
 
         fn poll_catalog_worker(&mut self) {
@@ -1698,6 +1845,32 @@ mod macos {
         }
     }
 
+    fn loaded_screenshot(
+        key: String,
+        _asset_key: String,
+        image: CatalogPreviewPixels,
+    ) -> Option<FixtureScreenshot> {
+        match image {
+            CatalogPreviewPixels::Rgb565 {
+                width,
+                height,
+                stride_bytes,
+                words,
+            } => {
+                let width = usize::try_from(width).ok()?;
+                let height = usize::try_from(height).ok()?;
+                let stride = usize::try_from(stride_bytes).ok()?.checked_div(2)?;
+                Some(FixtureScreenshot {
+                    key: key.into(),
+                    pixels: words.iter().copied().map(Rgb565Pixel).collect(),
+                    width,
+                    height,
+                    stride,
+                })
+            }
+        }
+    }
+
     fn fixture_screenshot<'a>(
         screenshots: &'a [FixtureScreenshot],
         key: &str,
@@ -1705,6 +1878,43 @@ mod macos {
         screenshots
             .iter()
             .find(|screenshot| screenshot.key.as_ref() == key)
+    }
+
+    fn preview_storage_key(archive_path: &str, asset_key: &str) -> String {
+        let archive_name = Path::new(archive_path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(archive_path);
+        let pack_id = archive_name
+            .split_once("-screenshots")
+            .map(|(system, _)| system)
+            .unwrap_or(archive_name);
+        preview_asset_cache_key(pack_id, asset_key)
+    }
+
+    fn preview_screenshot<'a>(
+        game: &ArcadeGameEntry,
+        loaded: &'a HashMap<String, FixtureScreenshot>,
+        fixtures: &'a [FixtureScreenshot],
+        use_fixtures: bool,
+    ) -> Option<&'a FixtureScreenshot> {
+        let key = preview_storage_key(&game.preview_archive_path, &game.preview_asset_key);
+        loaded.get(&key).or_else(|| {
+            use_fixtures
+                .then(|| fixture_screenshot(fixtures, &game.preview_asset_key))
+                .flatten()
+        })
+    }
+
+    fn preview_game<'a>(
+        navigation: &'a LauncherNav,
+        catalog: &'a ArcadeCatalog,
+        index: usize,
+    ) -> Option<&'a ArcadeGameEntry> {
+        navigation
+            .active_collection_id()
+            .and_then(|collection| navigation.active_arcade_game_at(catalog, collection, index))
+            .or_else(|| catalog.system_game_at(MENU_ARCADE_SYSTEM_ID, index))
     }
 
     fn apply_arcade_fixture_bridge(
