@@ -6,4 +6,5 @@
 pub mod catalog;
 pub mod composition;
 pub mod lifecycle;
+pub mod media;
 pub mod settings;

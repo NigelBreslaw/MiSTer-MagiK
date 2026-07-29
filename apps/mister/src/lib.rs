@@ -11,6 +11,9 @@ pub mod arcade_button_overrides;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 #[allow(dead_code)]
 mod arcade_list_renderer;
+#[cfg(any(feature = "ui", feature = "ui-preview"))]
+#[allow(dead_code)]
+mod artifact_publish;
 pub use mister_magik_mister_runtime::boot_analytics;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 #[allow(dead_code)]
@@ -40,6 +43,10 @@ pub mod launcher_taxonomy;
 pub mod licenses;
 #[cfg(all(feature = "ui-preview", target_os = "macos"))]
 pub mod macos_preview_content;
+#[cfg(any(feature = "ui", feature = "ui-preview"))]
+mod media_http;
+#[cfg(any(feature = "ui", feature = "ui-preview"))]
+mod media_pack_save;
 pub mod media_update;
 pub mod particle_engine;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]

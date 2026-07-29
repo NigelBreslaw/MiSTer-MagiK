@@ -22,6 +22,10 @@ mod macos {
     use mister_magik_fb::launcher_runtime::catalog::{
         ShardedCatalogSeed, load_sharded_registry_seed_at,
     };
+    use mister_magik_fb::launcher_runtime::media::{
+        MediaWorkerConfig, MediaWorkerHandle, MediaWorkerMessage,
+        start_screenshot_media_worker_with_config,
+    };
     use mister_magik_fb::launcher_runtime::settings::{FileSettingsStore, SettingsStore};
     use mister_magik_fb::macos_preview_content::{
         ContentMode, PreviewContent, default_settings_path, resolve_preview_content,
@@ -142,6 +146,7 @@ mod macos {
             firework_renderer,
             content,
             !options.no_scan,
+            !options.no_download,
         )?;
         application.select_scenario(options.scenario);
         if let Some(output) = options.output {
@@ -255,6 +260,8 @@ mod macos {
         loaded_screenshots: HashMap<String, FixtureScreenshot>,
         preview_worker: Option<PreviewWorker>,
         requested_preview_key: Option<String>,
+        media_worker: Option<MediaWorkerHandle>,
+        download_media: bool,
         arcade_layer: ArcadeVisualLayer,
         preview_transition: PreviewTransitionController<()>,
         preview_compositor: Rgb565PreviewTransitionCompositor,
@@ -291,6 +298,7 @@ mod macos {
             firework_renderer: Option<PreviewFireworkRenderer>,
             content: PreviewContent,
             scan_card: bool,
+            download_media: bool,
         ) -> Result<Self, Box<dyn Error>> {
             let fixtures = UiPreviewFixtures::new()?;
             let (catalog, catalog_generation, catalog_source) =
@@ -355,6 +363,8 @@ mod macos {
                 loaded_screenshots: HashMap::new(),
                 preview_worker,
                 requested_preview_key: None,
+                media_worker: None,
+                download_media: download_media && !headless,
                 arcade_layer: ArcadeVisualLayer::new(FRAME_WIDTH, FRAME_HEIGHT),
                 preview_transition: PreviewTransitionController::default(),
                 preview_compositor: Rgb565PreviewTransitionCompositor::new(
@@ -716,6 +726,7 @@ mod macos {
         fn compose_frame(&mut self) {
             self.poll_catalog_worker();
             self.poll_preview_worker();
+            self.poll_media_worker();
             let frame_delta = self.frame_delta();
             self.tick_launcher_navigation();
             slint::platform::update_timers_and_animations();
@@ -836,6 +847,8 @@ mod macos {
                 return;
             };
             let Some(path) = self.resolve_preview_archive_path(&game.preview_archive_path) else {
+                let system_id = game.system_id.to_string();
+                self.ensure_media_download(&system_id);
                 return;
             };
             let key = preview_storage_key(&path, &game.preview_asset_key);
@@ -941,6 +954,108 @@ mod macos {
                 .join(file_name);
             let development = resolved_preview_archive_path(development.to_string_lossy().as_ref());
             Path::new(&development).is_file().then_some(development)
+        }
+
+        fn ensure_media_download(&mut self, system_id: &str) {
+            if !self.download_media {
+                return;
+            }
+            if self.media_worker.is_none() {
+                let Some(layout) = self.content.card() else {
+                    return;
+                };
+                let config = match MediaWorkerConfig::for_host(
+                    layout.media_root.clone(),
+                    layout.catalog_root.clone(),
+                ) {
+                    Ok(config) => config,
+                    Err(error) => {
+                        eprintln!("media: cannot configure Mac downloader: {error}");
+                        self.download_media = false;
+                        return;
+                    }
+                };
+                self.media_worker = start_screenshot_media_worker_with_config(config);
+            }
+            if let Some(worker) = self.media_worker.as_ref() {
+                worker.ensure_system(system_id);
+            }
+        }
+
+        fn poll_media_worker(&mut self) {
+            let mut reload_catalog = false;
+            while let Some(message) = self
+                .media_worker
+                .as_ref()
+                .and_then(MediaWorkerHandle::try_recv)
+            {
+                let bridge = self.launcher.global::<MisterBridge>();
+                match message {
+                    MediaWorkerMessage::Progress(event) => {
+                        let percent = event
+                            .bytes_done
+                            .min(event.bytes_total)
+                            .saturating_mul(100)
+                            .checked_div(event.bytes_total)
+                            .and_then(|value| i32::try_from(value).ok())
+                            .unwrap_or(-1);
+                        bridge.set_media_pack_summary("Downloading screenshot packs".into());
+                        bridge.set_media_pack_progresses(ModelRc::new(VecModel::from(vec![
+                            ScreenshotPackProgress {
+                                system: event.system.into(),
+                                image_size: event.image_size.into(),
+                                phase: event.phase.into(),
+                                percent,
+                                bytes_label: format!(
+                                    "{} / {}",
+                                    event.bytes_done, event.bytes_total
+                                )
+                                .into(),
+                                pack_position: format!(
+                                    "{} of {}",
+                                    event.pack_index, event.pack_count
+                                )
+                                .into(),
+                            },
+                        ])));
+                    }
+                    MediaWorkerMessage::PreviewAvailabilityUpdated { .. } => {
+                        reload_catalog = true;
+                    }
+                    MediaWorkerMessage::Failed { detail }
+                    | MediaWorkerMessage::PreviewAvailabilityFailed { detail, .. } => {
+                        bridge.set_media_pack_summary(
+                            format!("Screenshot download failed: {detail}").into(),
+                        );
+                    }
+                    MediaWorkerMessage::Done { .. } => {
+                        bridge.set_media_pack_summary("Screenshot packs ready".into());
+                        self.requested_preview_key = None;
+                    }
+                    MediaWorkerMessage::Timing { .. }
+                    | MediaWorkerMessage::CacheMetadata { .. }
+                    | MediaWorkerMessage::PackStatus { .. } => {}
+                }
+            }
+            if reload_catalog {
+                self.reload_mac_catalog();
+            }
+        }
+
+        fn reload_mac_catalog(&mut self) {
+            let Some(layout) = self.content.card() else {
+                return;
+            };
+            let Ok(seed) =
+                load_sharded_registry_seed_at("/media/fat/_Arcade", &layout.catalog_root)
+            else {
+                return;
+            };
+            self.catalog_generation = Some(seed.generation);
+            self.catalog_source = format!("catalog:mac-cache:g{}", seed.generation);
+            self.catalog = seed.catalog;
+            self.launcher_nav.sync_launcher_taxonomy(&self.catalog);
+            self.sync_launcher_navigation();
         }
 
         fn poll_catalog_worker(&mut self) {
@@ -1374,6 +1489,7 @@ mod macos {
         sd_root: Option<PathBuf>,
         cache_root: Option<PathBuf>,
         no_scan: bool,
+        no_download: bool,
     }
 
     impl PreviewOptions {
@@ -1390,6 +1506,7 @@ mod macos {
             let mut sd_root = None;
             let mut cache_root = None;
             let mut no_scan = false;
+            let mut no_download = false;
             let mut arguments = arguments.into_iter();
             while let Some(argument) = arguments.next() {
                 match argument.as_str() {
@@ -1459,9 +1576,10 @@ mod macos {
                         ));
                     }
                     "--no-scan" => no_scan = true,
+                    "--no-download" => no_download = true,
                     "--help" | "-h" => {
                         return Err(
-                            "usage: mister-magik-ui-preview [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N | --time-ms N] [--firework ID] [--firework-spec FILE.json] [--hud on|off] [--output FILE.ppm]"
+                            "usage: mister-magik-ui-preview [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N | --time-ms N] [--firework ID] [--firework-spec FILE.json] [--hud on|off] [--output FILE.ppm]"
                                 .into(),
                         );
                     }
@@ -1490,6 +1608,7 @@ mod macos {
                 sd_root,
                 cache_root,
                 no_scan,
+                no_download,
             })
         }
     }

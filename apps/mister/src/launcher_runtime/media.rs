@@ -5,6 +5,11 @@ use crate::artifact_publish::{
     ArtifactPublishLabels, hidden_timestamped_temp_path_for, prepare_artifact_publish,
     sync_path_rust_best_effort, timestamped_temp_path_for,
 };
+use crate::media_update::{
+    DEFAULT_ASSET_DIR, DEFAULT_IMAGE_SIZE, DEFAULT_MANIFEST_URL, LocalPackStatus, MediaIndex,
+    MediaPack, MediaUpdatePolicy, MediaVariant, index_path_for_pack_path, pack_status_from_state,
+    parse_manifest_json, size_qualified_pack_path, state_path, valid_image_size,
+};
 use mister_magik_catalog::media_identity::preferred_screenshot_image_size;
 use mister_magik_catalog::preview_worker::invalidate_preview_archive_metadata_cache;
 use mister_magik_catalog::production_sharded_projection::{
@@ -12,11 +17,6 @@ use mister_magik_catalog::production_sharded_projection::{
     reconcile_production_preview_availability,
 };
 use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
-use mister_magik_fb::media_update::{
-    DEFAULT_ASSET_DIR, DEFAULT_IMAGE_SIZE, DEFAULT_MANIFEST_URL, LocalPackStatus, MediaIndex,
-    MediaPack, MediaUpdatePolicy, MediaVariant, index_path_for_pack_path, pack_status_from_state,
-    parse_manifest_json, size_qualified_pack_path, state_path, valid_image_size,
-};
 use mister_magik_media_contract::{MEDIA_CONNECT_TIMEOUT_SECS, MEDIA_TRANSFER_TIMEOUT_SECS};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -29,6 +29,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const DEFAULT_MAX_CONCURRENT_MEDIA_DOWNLOADS: usize = 1;
+#[cfg(test)]
 const MAX_CONCURRENT_MEDIA_DOWNLOADS: usize = 1;
 const MANIFEST_FETCH_ATTEMPTS: usize = 30;
 const MANIFEST_FETCH_FAST_RETRY: Duration = Duration::from_secs(1);
@@ -37,19 +38,19 @@ const MANIFEST_FETCH_INITIAL_BACKOFF: Duration = Duration::from_secs(2);
 const MANIFEST_FETCH_MAX_RETRY: Duration = Duration::from_secs(10);
 const MEDIA_DOWNLOAD_WORK_DIR: &str = "/tmp/mister-magik-media-download";
 
-pub(super) struct MediaWorkerHandle {
+pub struct MediaWorkerHandle {
     command_tx: mpsc::Sender<MediaWorkerCommand>,
     message_rx: mpsc::Receiver<MediaWorkerMessage>,
 }
 
 impl MediaWorkerHandle {
-    pub(super) fn ensure_system(&self, system_id: &str) {
+    pub fn ensure_system(&self, system_id: &str) {
         let _ = self.command_tx.send(MediaWorkerCommand::EnsureSystem {
             system_id: system_id.to_string(),
         });
     }
 
-    pub(super) fn set_interaction_active(&self, active: bool, reason: &str) {
+    pub fn set_interaction_active(&self, active: bool, reason: &str) {
         let _ = self
             .command_tx
             .send(MediaWorkerCommand::SetInteractionActive {
@@ -58,16 +59,16 @@ impl MediaWorkerHandle {
             });
     }
 
-    pub(super) fn finish(&self) {
+    pub fn finish(&self) {
         let _ = self.command_tx.send(MediaWorkerCommand::Finish);
     }
 
-    pub(super) fn try_recv(&self) -> Option<MediaWorkerMessage> {
+    pub fn try_recv(&self) -> Option<MediaWorkerMessage> {
         self.message_rx.try_recv().ok()
     }
 }
 
-pub(super) fn start_screenshot_media_worker() -> Option<MediaWorkerHandle> {
+pub fn start_screenshot_media_worker() -> Option<MediaWorkerHandle> {
     let config = match MediaWorkerConfig::from_env() {
         Ok(config) => config,
         Err(error) => {
@@ -78,6 +79,12 @@ pub(super) fn start_screenshot_media_worker() -> Option<MediaWorkerHandle> {
     if config.policy == MediaUpdatePolicy::Off {
         return None;
     }
+    start_screenshot_media_worker_with_config(config)
+}
+
+pub fn start_screenshot_media_worker_with_config(
+    config: MediaWorkerConfig,
+) -> Option<MediaWorkerHandle> {
     let (message_tx, message_rx) = mpsc::channel();
     let (command_tx, command_rx) = mpsc::channel();
     std::thread::Builder::new()
@@ -207,7 +214,7 @@ fn run_screenshot_media_worker(
         }
         if finish_requested && active.is_empty() && queue.pending.is_empty() {
             for (_system, (pack, local_path)) in std::mem::take(&mut pending_reconciliation) {
-                reconcile_pack_preview_availability(&pack, &local_path, &tx);
+                reconcile_pack_preview_availability(&config.catalog_root, &pack, &local_path, &tx);
             }
             break;
         }
@@ -1577,11 +1584,12 @@ fn read_media_state(asset_dir: &Path) -> Option<Value> {
 }
 
 #[derive(Clone, Debug)]
-struct MediaWorkerConfig {
+pub struct MediaWorkerConfig {
     policy: MediaUpdatePolicy,
     manifest_url: String,
     image_size: String,
     asset_dir: PathBuf,
+    catalog_root: PathBuf,
     max_concurrent_downloads: usize,
     benchmark_auto_finish: bool,
 }
@@ -1606,8 +1614,23 @@ impl MediaWorkerConfig {
                 std::env::var("MISTER_MEDIA_ASSET_DIR")
                     .unwrap_or_else(|_| DEFAULT_ASSET_DIR.to_string()),
             ),
+            catalog_root: mister_magik_catalog::catalog_config::default_sharded_catalog_path(),
             max_concurrent_downloads: media_download_concurrency_from_env(),
             benchmark_auto_finish: media_benchmark_auto_finish_enabled(),
+        })
+    }
+
+    pub fn for_host(asset_dir: PathBuf, catalog_root: PathBuf) -> Result<Self, String> {
+        let manifest_url = DEFAULT_MANIFEST_URL.to_string();
+        mister_magik_media_contract::validate_https_manifest_url(&manifest_url)?;
+        Ok(Self {
+            policy: MediaUpdatePolicy::Download,
+            manifest_url,
+            image_size: DEFAULT_IMAGE_SIZE.to_string(),
+            asset_dir,
+            catalog_root,
+            max_concurrent_downloads: DEFAULT_MAX_CONCURRENT_MEDIA_DOWNLOADS,
+            benchmark_auto_finish: false,
         })
     }
 }
@@ -1650,7 +1673,7 @@ impl MediaCheckCounts {
 }
 
 #[derive(Clone, Debug)]
-pub(super) enum MediaWorkerMessage {
+pub enum MediaWorkerMessage {
     Timing {
         name: String,
         detail: String,
@@ -1682,6 +1705,7 @@ pub(super) enum MediaWorkerMessage {
 }
 
 fn reconcile_pack_preview_availability(
+    catalog_root: &Path,
     pack: &MediaPack,
     local_path: &Path,
     tx: &mpsc::Sender<MediaWorkerMessage>,
@@ -1697,7 +1721,7 @@ fn reconcile_pack_preview_availability(
         }
     };
     match reconcile_production_preview_availability(
-        &mister_magik_catalog::catalog_config::default_sharded_catalog_path(),
+        catalog_root,
         &system_id,
         local_path,
         production_registry_limits(),
@@ -1715,7 +1739,7 @@ fn reconcile_pack_preview_availability(
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct MediaProgressEvent {
+pub struct MediaProgressEvent {
     pub system: String,
     pub image_size: String,
     pub variant: String,
@@ -1729,7 +1753,7 @@ pub(super) struct MediaProgressEvent {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(super) struct HttpCacheMetadata {
+pub struct HttpCacheMetadata {
     pub status: Option<u16>,
     pub etag: String,
     pub last_modified: String,
@@ -1744,7 +1768,7 @@ pub(super) struct HttpCacheMetadata {
 }
 
 impl HttpCacheMetadata {
-    pub(super) fn log_detail(&self, scope: &str) -> String {
+    pub fn log_detail(&self, scope: &str) -> String {
         format!(
             "scope={} source={} status={} etag={} last_modified={} cache_control={} age={} cf_cache_status={} cf_ray={} content_length={} content_encoding={} effective_url={}",
             scope,
@@ -1861,7 +1885,7 @@ impl MediaProgressEvent {
             .unwrap_or(-1)
     }
 
-    pub(super) fn log_detail(&self) -> String {
+    pub fn log_detail(&self) -> String {
         let mbps = self
             .download_mbps
             .map(|value| format!("{value:.2}"))
@@ -1890,7 +1914,7 @@ fn send_progress(tx: &mpsc::Sender<MediaWorkerMessage>, event: MediaProgressEven
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mister_magik_fb::media_update::parse_manifest_json;
+    use crate::media_update::parse_manifest_json;
 
     const SHA: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
