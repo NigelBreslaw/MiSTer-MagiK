@@ -845,10 +845,6 @@ fn validate_delivery_present_state(
         .get("input_enabled")
         .and_then(Value::as_bool)
         .ok_or("delivery status is missing input_enabled")?;
-    let compatibility_prompt_visible = status
-        .get("compatibility_prompt_visible")
-        .and_then(Value::as_bool)
-        .ok_or("delivery status is missing compatibility_prompt_visible")?;
     if screen != effective_view {
         return Err(format!(
             "delivery status view mismatch screen={screen} effective_view={effective_view}"
@@ -900,6 +896,10 @@ fn validate_delivery_present_state(
             Ok(DeliveryPresentState::Latch)
         }
         ("compatibility-fb0", "compatibility") => {
+            let compatibility_prompt_visible = status
+                .get("compatibility_prompt_visible")
+                .and_then(Value::as_bool)
+                .ok_or("compatibility delivery status is missing compatibility_prompt_visible")?;
             let recovery_state = validate_terminal_compatibility_evidence(
                 latch_failure.ok_or("compatibility delivery is missing latch failure evidence")?,
             )?;
@@ -15059,12 +15059,16 @@ H: Handlers=event3 js0"#
 
     #[test]
     fn delivery_accepts_latch_or_terminal_evidenced_compatibility() {
-        let latch = delivery_status(
+        let mut latch = delivery_status(
             "screensaver",
             "screensaver-settings",
             "fpga-vblank-latch-hidden",
             "ok",
         );
+        latch
+            .as_object_mut()
+            .unwrap()
+            .remove("compatibility_prompt_visible");
         assert_eq!(
             validate_delivery_present_state(&latch, None).unwrap(),
             DeliveryPresentState::Latch
