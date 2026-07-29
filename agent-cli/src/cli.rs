@@ -324,7 +324,7 @@ pub enum PlatformManifestCommand {
         #[arg(long)]
         magik_revision: String,
         #[arg(long, default_value = "public")]
-        layout: String,
+        layout: Box<String>,
     },
     Verify {
         manifest: PathBuf,
@@ -484,7 +484,7 @@ impl Cli {
                         platform_bundle_manifest,
                         main_revision,
                         magik_revision,
-                        layout,
+                        layout: *layout,
                     },
                     PlatformManifestCommand::Verify {
                         manifest,
