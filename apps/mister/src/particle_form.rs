@@ -640,12 +640,6 @@ impl FormSceneRenderer {
     }
 }
 
-fn fold_seed(seed: u64, salt: u64) -> u32 {
-    let folded = seed ^ (seed >> 32) ^ salt;
-    let folded = folded as u32;
-    if folded == 0 { 0xa341_316c } else { folded }
-}
-
 fn xorshift32(mut state: u32) -> u32 {
     state ^= state << 13;
     state ^= state >> 17;
