@@ -208,6 +208,16 @@ const DEPTH_PALETTE: [Rgb565Pixel; 8] = [
     Rgb565Pixel(0xff59),
     Rgb565Pixel(0xffff),
 ];
+const MORPH_PALETTE: [Rgb565Pixel; 8] = [
+    Rgb565Pixel(0x1010),
+    Rgb565Pixel(0x201f),
+    Rgb565Pixel(0x03ff),
+    Rgb565Pixel(0x07e0),
+    Rgb565Pixel(0xf800),
+    Rgb565Pixel(0xfd20),
+    Rgb565Pixel(0xffdf),
+    Rgb565Pixel(0xffff),
+];
 const DENSITY_W: usize = 240;
 const DENSITY_H: usize = 135;
 const DENSITY_SCALE: usize = 4;
@@ -279,10 +289,11 @@ pub enum ParticleDemoKind {
     LayeredChildSystems,
     SpatialFieldStack,
     DepthAwareMaterialLod,
+    SourceDrivenMorph,
 }
 
 impl ParticleDemoKind {
-    pub const ALL: [Self; 28] = [
+    pub const ALL: [Self; 29] = [
         Self::SolarChrysanthemum,
         Self::RecursiveHalo,
         Self::CopperWillowRain,
@@ -311,6 +322,7 @@ impl ParticleDemoKind {
         Self::LayeredChildSystems,
         Self::SpatialFieldStack,
         Self::DepthAwareMaterialLod,
+        Self::SourceDrivenMorph,
     ];
 
     #[must_use]
@@ -354,6 +366,7 @@ impl ParticleDemoKind {
             Self::LayeredChildSystems => "LAYERED CHILD SYSTEMS",
             Self::SpatialFieldStack => "SPATIAL FIELD STACK",
             Self::DepthAwareMaterialLod => "DEPTH-AWARE MATERIAL LOD",
+            Self::SourceDrivenMorph => "SOURCE-DRIVEN MORPH",
         }
     }
 
@@ -388,6 +401,7 @@ impl ParticleDemoKind {
             Self::LayeredChildSystems => "layered-child-systems",
             Self::SpatialFieldStack => "spatial-field-stack",
             Self::DepthAwareMaterialLod => "depth-aware-material-lod",
+            Self::SourceDrivenMorph => "source-morph",
         }
     }
 
@@ -457,6 +471,7 @@ impl ParticleDemoKind {
             Self::LayeredChildSystems => 4_096,
             Self::SpatialFieldStack => 24_576,
             Self::DepthAwareMaterialLod => 40_960,
+            Self::SourceDrivenMorph => 12_288,
         }
     }
 
@@ -965,6 +980,8 @@ impl ParticleShowcaseRenderer {
             self.initialize_spatial_field_stack();
         } else if demo == ParticleDemoKind::DepthAwareMaterialLod {
             self.initialize_depth_aware_material_lod();
+        } else if demo == ParticleDemoKind::SourceDrivenMorph {
+            self.initialize_source_driven_morph();
         }
     }
 
@@ -1022,6 +1039,7 @@ impl ParticleShowcaseRenderer {
             ParticleDemoKind::DepthAwareMaterialLod => {
                 self.project_depth_aware_material_lod(elapsed)
             }
+            ParticleDemoKind::SourceDrivenMorph => self.project_source_driven_morph(elapsed),
         }
     }
 
@@ -1131,7 +1149,104 @@ impl ParticleShowcaseRenderer {
                 value if value < 22.0 => "focal-plane",
                 _ => "near-pass",
             },
+            ParticleDemoKind::SourceDrivenMorph => match seconds {
+                value if value < 6.0 => "joystick-hold",
+                value if value < 14.0 => "assignment-morph",
+                value if value < 23.0 => "controller-hold",
+                _ => "return",
+            },
         }
+    }
+
+    fn initialize_source_driven_morph(&mut self) {
+        for index in 0..self.pool.active() {
+            let random = self.pool.random[index];
+            let u = unit_signed(random);
+            let v = unit_signed(random.rotate_left(11));
+            let group = index % 8;
+            let (source_x, source_y) = if group < 5 {
+                (u * 180.0, 78.0 + v * 72.0)
+            } else if group < 7 {
+                (u * 34.0, -12.0 + v * 110.0)
+            } else {
+                let angle = std::f32::consts::TAU * unit01(random.rotate_left(21));
+                (angle.cos() * 58.0, -128.0 + angle.sin() * 42.0)
+            };
+            let (target_x, target_y) = if group < 5 {
+                let angle = std::f32::consts::TAU * unit01(random.rotate_left(7));
+                let radius = 118.0 + unit_signed(random.rotate_left(17)) * 46.0;
+                (angle.cos() * radius, angle.sin() * radius * 0.55)
+            } else if group < 7 {
+                (u * 205.0, 42.0 + v.abs() * 112.0 + u.abs() * 48.0)
+            } else {
+                let button = (index / 8) % 4;
+                (
+                    92.0 + (button & 1) as f32 * 46.0,
+                    -24.0 + (button >> 1) as f32 * 42.0,
+                )
+            };
+            self.pool.previous_x[index] = source_x;
+            self.pool.previous_y[index] = source_y;
+            self.pool.x[index] = target_x;
+            self.pool.y[index] = target_y;
+            self.pool.age[index] = unit01(random.rotate_left(27));
+            self.pool.style[index] = if group == 7 {
+                7
+            } else {
+                ((random >> 29) & 7) as u8
+            };
+            self.pool.flags[index] = u8::from(index & 127 == 0);
+        }
+    }
+
+    fn project_source_driven_morph(&mut self, elapsed: Duration) -> usize {
+        self.commands.clear();
+        self.segments.clear();
+        let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
+        let blend = if seconds < 6.0 {
+            0.0
+        } else if seconds < 14.0 {
+            ease_out_cubic((seconds - 6.0) / 8.0)
+        } else if seconds < 23.0 {
+            1.0
+        } else {
+            1.0 - ease_out_cubic((seconds - 23.0) / 7.0)
+        };
+        let arc = (blend * std::f32::consts::PI).sin();
+        let mut clipped = 0usize;
+        for index in (0..self.pool.active()).step_by(2) {
+            let source_x = self.pool.previous_x[index];
+            let source_y = self.pool.previous_y[index];
+            let target_x = self.pool.x[index];
+            let target_y = self.pool.y[index];
+            let x = 480.0 + source_x + (target_x - source_x) * blend;
+            let y = 270.0 + source_y + (target_y - source_y) * blend
+                - arc * (18.0 + self.pool.age[index] * 54.0);
+            if !push_screen_command(
+                &mut self.commands,
+                self.config.width,
+                self.config.height,
+                x,
+                y,
+                self.pool.style[index],
+                index & 31 == 0,
+            ) {
+                clipped = clipped.saturating_add(1);
+            }
+            if self.pool.flags[index] != 0 && blend > 0.04 && blend < 0.96 {
+                self.material_strokes.push(MaterialStroke {
+                    x0: x,
+                    y0: y,
+                    x1: 480.0 + target_x,
+                    y1: 270.0 + target_y,
+                    start_radius: 1,
+                    end_radius: 1,
+                    intensity: 6,
+                    color: MORPH_PALETTE[usize::from(self.pool.style[index])],
+                });
+            }
+        }
+        clipped
     }
 
     fn initialize_depth_aware_material_lod(&mut self) {
@@ -3251,6 +3366,7 @@ fn showcase_palette(demo: ParticleDemoKind) -> &'static [Rgb565Pixel; 8] {
         ParticleDemoKind::LayeredChildSystems => &CHILD_PALETTE,
         ParticleDemoKind::SpatialFieldStack => &FIELD_PALETTE,
         ParticleDemoKind::DepthAwareMaterialLod => &DEPTH_PALETTE,
+        ParticleDemoKind::SourceDrivenMorph => &MORPH_PALETTE,
     }
 }
 
@@ -3385,13 +3501,13 @@ mod tests {
 
     #[test]
     fn demo_order_and_wrapping_are_stable() {
-        assert_eq!(ParticleDemoKind::ALL.len(), 28);
+        assert_eq!(ParticleDemoKind::ALL.len(), 29);
         assert_eq!(
             ParticleDemoKind::SolarChrysanthemum.offset_wrapped(-1),
-            ParticleDemoKind::DepthAwareMaterialLod
+            ParticleDemoKind::SourceDrivenMorph
         );
         assert_eq!(
-            ParticleDemoKind::DepthAwareMaterialLod.offset_wrapped(1),
+            ParticleDemoKind::SourceDrivenMorph.offset_wrapped(1),
             ParticleDemoKind::SolarChrysanthemum
         );
         for (index, kind) in ParticleDemoKind::ALL.into_iter().enumerate() {
@@ -3451,7 +3567,11 @@ mod tests {
             ParticleDemoKind::parse("28"),
             Some(ParticleDemoKind::DepthAwareMaterialLod)
         );
-        assert_eq!(ParticleDemoKind::parse("29"), None);
+        assert_eq!(
+            ParticleDemoKind::parse("29"),
+            Some(ParticleDemoKind::SourceDrivenMorph)
+        );
+        assert_eq!(ParticleDemoKind::parse("30"), None);
         assert_eq!(ParticleDemoKind::parse("unknown"), None);
     }
 
