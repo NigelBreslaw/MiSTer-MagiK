@@ -7,6 +7,8 @@
 //! target behind the `ui` feature. This library keeps pure logic available for
 //! fast macOS host tests without compiling Slint/AppKit.
 
+extern crate self as mister_magik_fb;
+
 pub mod arcade_button_overrides;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 #[allow(dead_code)]

@@ -7,17 +7,9 @@
 use super::*;
 #[cfg(target_os = "macos")]
 use crate::framebuffer::target::{DirtyRect, blend_565, brighten_565};
-#[cfg(target_os = "macos")]
-use crate::particle_engine::{ParticleConfig, ParticlePreset};
-#[cfg(target_os = "macos")]
-use crate::particle_showcase::{
-    ParticleDemoKind, ParticleShowcaseConfig, ParticleShowcaseRenderer,
-};
 use crate::preview_worker;
 use mister_magik_catalog::device_layout::DeviceLayout;
-#[cfg(not(target_os = "macos"))]
 use mister_magik_fb::particle_engine::{ParticleConfig, ParticlePreset};
-#[cfg(not(target_os = "macos"))]
 use mister_magik_fb::particle_showcase::{
     ParticleDemoKind, ParticleShowcaseConfig, ParticleShowcaseRenderer,
 };
@@ -35,9 +27,6 @@ use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
 use super::particle_renderer::ParticleRenderer;
-#[cfg(target_os = "macos")]
-use crate::visual_composition::{ScreenshotTileImage as SaverImage, ScreenshotTileWall};
-#[cfg(not(target_os = "macos"))]
 use mister_magik_fb::visual_composition::{ScreenshotTileImage as SaverImage, ScreenshotTileWall};
 
 const PARTICLE_RENDERER_LABEL: &str = "particle-magik";
