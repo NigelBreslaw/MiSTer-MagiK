@@ -249,39 +249,133 @@ impl FormSceneRenderer {
 
     fn initialize_hologram(&mut self) {
         let count = FormSceneKind::LayerMappedHologram.count();
-        let mut state = fold_seed(self.seed, 0x484f_4c4f);
+        const BASE_END: usize = 20_480;
+        const SHAFT_END: usize = 26_624;
+        const BALL_END: usize = 32_768;
+        const COLLAR_END: usize = 36_864;
         for index in 0..count {
-            state = xorshift32(state);
-            let selector = index % 10;
-            let a = unit01(state.rotate_left(7));
-            let b = unit01(state.rotate_left(17));
-            let angle = a * TAU;
-            let (x, y, z) = if selector < 6 {
-                let sx = unit_signed(state) * 185.0;
-                let sz = unit_signed(state.rotate_left(11)) * 130.0;
-                let edge = if selector & 1 == 0 { 1.0 } else { -1.0 };
-                (sx, 90.0 + edge * b * 72.0, sz)
-            } else if selector < 9 {
-                (
-                    angle.cos() * (18.0 + b * 16.0),
-                    25.0 - b * 190.0,
-                    angle.sin() * (18.0 + b * 16.0),
-                )
+            let (part_start, logical, part) = if index < BASE_END {
+                (0, index / 4, 0)
+            } else if index < SHAFT_END {
+                (BASE_END, (index - BASE_END) / 4, 1)
+            } else if index < BALL_END {
+                (SHAFT_END, (index - SHAFT_END) / 4, 2)
+            } else if index < COLLAR_END {
+                (BALL_END, (index - BALL_END) / 4, 3)
             } else {
-                let radius = 38.0 + b * 38.0;
-                (
-                    angle.cos() * radius,
-                    -185.0 + unit_signed(state.rotate_left(23)) * 42.0,
-                    angle.sin() * radius,
-                )
+                (COLLAR_END, (index - COLLAR_END) / 4, 4)
             };
+            let state = xorshift32(
+                (logical as u32)
+                    .wrapping_mul(0x9e37_79b9)
+                    .wrapping_add(part_start as u32)
+                    .wrapping_add(self.seed as u32),
+            );
+            let a = unit01(state);
+            let b = unit01(state.rotate_left(13));
+            let (x, y, z, style) = match part {
+                0 => {
+                    let face = logical % 6;
+                    let half_x = 205.0;
+                    let half_y = 48.0;
+                    let half_z = 120.0;
+                    let center_y = 96.0;
+                    match face {
+                        0 => (
+                            unit_signed(state) * half_x,
+                            center_y - half_y,
+                            unit_signed(state.rotate_left(11)) * half_z,
+                            5,
+                        ),
+                        1 => (
+                            unit_signed(state) * half_x,
+                            center_y + half_y,
+                            unit_signed(state.rotate_left(11)) * half_z,
+                            2,
+                        ),
+                        2 => (
+                            -half_x,
+                            center_y + unit_signed(state) * half_y,
+                            unit_signed(state.rotate_left(11)) * half_z,
+                            3,
+                        ),
+                        3 => (
+                            half_x,
+                            center_y + unit_signed(state) * half_y,
+                            unit_signed(state.rotate_left(11)) * half_z,
+                            4,
+                        ),
+                        4 => (
+                            unit_signed(state) * half_x,
+                            center_y + unit_signed(state.rotate_left(11)) * half_y,
+                            -half_z,
+                            3,
+                        ),
+                        _ => (
+                            unit_signed(state) * half_x,
+                            center_y + unit_signed(state.rotate_left(11)) * half_y,
+                            half_z,
+                            4,
+                        ),
+                    }
+                }
+                1 => {
+                    let angle = a * TAU;
+                    let height = b;
+                    let radius = 19.0 + unit_signed(state.rotate_left(21)) * 2.5;
+                    (
+                        angle.cos() * radius,
+                        45.0 - height * 165.0,
+                        angle.sin() * radius,
+                        6,
+                    )
+                }
+                2 => {
+                    let sphere_count = (BALL_END - SHAFT_END) / 4;
+                    let t = (logical as f32 + 0.5) / sphere_count as f32;
+                    let sphere_y = 1.0 - 2.0 * t;
+                    let radial = (1.0 - sphere_y * sphere_y).sqrt();
+                    let angle = logical as f32 * PI * (3.0 - 5.0_f32.sqrt());
+                    (
+                        angle.cos() * radial * 54.0,
+                        -169.0 + sphere_y * 54.0,
+                        angle.sin() * radial * 54.0,
+                        7,
+                    )
+                }
+                3 => {
+                    let major_angle = a * TAU;
+                    let minor_angle = b * TAU;
+                    let radius = 54.0 + minor_angle.cos() * 11.0;
+                    (
+                        major_angle.cos() * radius,
+                        43.0 + minor_angle.sin() * 11.0,
+                        major_angle.sin() * radius,
+                        5,
+                    )
+                }
+                _ => {
+                    let button = logical & 1;
+                    let radius = a.sqrt() * 31.0;
+                    let angle = b * TAU;
+                    let center_x = if button == 0 { -108.0 } else { 108.0 };
+                    let center_z = if button == 0 { -27.0 } else { 22.0 };
+                    (
+                        center_x + angle.cos() * radius,
+                        39.0 - unit01(state.rotate_left(23)) * 8.0,
+                        center_z + angle.sin() * radius,
+                        if button == 0 { 6 } else { 7 },
+                    )
+                }
+            };
+            let duplicate = (index & 3) as f32;
             self.rest_x[index] = x;
             self.rest_y[index] = y;
-            self.rest_z[index] = z;
+            self.rest_z[index] = z + duplicate * 0.15;
             self.aux_x[index] = a;
             self.aux_y[index] = ((y + 230.0) / 400.0).clamp(0.0, 1.0);
-            self.style[index] = (self.aux_y[index] * 7.99) as u8;
-            self.flags[index] = u8::from(index & 7 == 0);
+            self.style[index] = style;
+            self.flags[index] = 1;
         }
     }
 
@@ -401,12 +495,8 @@ impl FormSceneRenderer {
         };
         let angle = seconds * 0.17;
         let (sin, cos) = angle.sin_cos();
-        for index in 0..count {
-            if (index / 10) & 3 != 0 {
-                continue;
-            }
-            let scan = (seconds * 0.25 + self.aux_y[index]).fract();
-            if scan > reveal || (index & 3 == 0 && scan > 0.82) {
+        for index in (0..count).step_by(4) {
+            if self.aux_y[index] > reveal {
                 continue;
             }
             let terrace = (self.aux_y[index] * 12.0).floor() * 1.8;
