@@ -54,7 +54,7 @@ fn publish_persisted_registry_seed_at(
     storage: &Path,
 ) -> Option<String> {
     let load_started = Instant::now();
-    match super::launcher_loop::load_sharded_registry_seed_at(root, storage) {
+    match load_sharded_registry_seed_at(root, storage) {
         Ok(seed) => {
             let load_us = load_started.elapsed().as_micros() as u64;
             let fingerprint = seed.catalog_fingerprint.clone();
