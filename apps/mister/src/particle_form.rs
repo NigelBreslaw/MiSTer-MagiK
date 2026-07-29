@@ -340,12 +340,13 @@ impl FormSceneRenderer {
                     let latitude_angle = (latitude as f32 + 0.5) * PI / 24.0;
                     let sphere_y = -latitude_angle.cos();
                     let radial = latitude_angle.sin();
-                    let angle = longitude as f32 * TAU / 64.0;
+                    let front_longitude = longitude >> 1;
+                    let angle = lerp(-PI * 0.5, PI * 0.5, front_longitude as f32 / 31.0);
                     let latitude_style = if sphere_y.abs() < 0.32 { 7 } else { 5 };
                     (
-                        angle.cos() * radial * 54.0,
-                        -169.0 + sphere_y * 54.0,
                         angle.sin() * radial * 54.0,
+                        -169.0 + sphere_y * 54.0,
+                        -angle.cos() * radial * 54.0,
                         latitude_style,
                     )
                 }
@@ -533,18 +534,22 @@ impl FormSceneRenderer {
                 continue;
             }
             let terrace = (self.aux_y[index] * 12.0).floor() * 1.8;
-            let x = self.rest_x[index].mul_add(cos, self.rest_z[index] * sin);
-            let yaw_z = (-self.rest_x[index]).mul_add(sin, self.rest_z[index] * cos);
-            let local_y = self.rest_y[index] + terrace - 18.0;
-            let y = local_y.mul_add(pitch_cos, -yaw_z * pitch_sin);
-            let z = local_y.mul_add(pitch_sin, yaw_z * pitch_cos);
-            if part == 2 {
+            let (x, y, z) = if part == 2 {
                 let sphere_y = self.rest_y[index] + 169.0;
-                let sphere_depth = sphere_y.mul_add(pitch_sin, yaw_z * pitch_cos);
-                if sphere_depth > 0.0 {
-                    continue;
-                }
-            }
+                let center_y = -169.0 - 18.0;
+                (
+                    self.rest_x[index],
+                    center_y.mul_add(pitch_cos, sphere_y),
+                    center_y.mul_add(pitch_sin, self.rest_z[index]),
+                )
+            } else {
+                let x = self.rest_x[index].mul_add(cos, self.rest_z[index] * sin);
+                let yaw_z = (-self.rest_x[index]).mul_add(sin, self.rest_z[index] * cos);
+                let local_y = self.rest_y[index] + terrace - 18.0;
+                let y = local_y.mul_add(pitch_cos, -yaw_z * pitch_sin);
+                let z = local_y.mul_add(pitch_sin, yaw_z * pitch_cos);
+                (x, y, z)
+            };
             let original_style = self.style[index];
             self.style[index] = hologram_material_style(
                 part,
