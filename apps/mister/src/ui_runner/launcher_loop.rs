@@ -2368,6 +2368,18 @@ pub(super) fn run_launcher_loop(
             );
             request_launcher_redraw!();
         }
+        if launcher_presenter.take_supervised_restart_request() {
+            match launcher::request_supervised_launcher_restart() {
+                Ok(()) => runtime_status::event(
+                    "launcher_latch_recovery",
+                    "action=supervised-restart-requested",
+                ),
+                Err(error) => runtime_status::event(
+                    "launcher_latch_recovery",
+                    &format!("action=supervised-restart-failed error={error}"),
+                ),
+            }
+        }
         frame_accounting.set_display_frozen(launcher_presenter.display_frozen());
         let lifecycle_launch_active = matches!(
             lifecycle.state(),

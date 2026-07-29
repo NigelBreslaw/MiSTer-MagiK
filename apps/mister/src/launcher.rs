@@ -3838,6 +3838,14 @@ fn write_mister_command_nonblocking(cmd: &str) -> Result<(), String> {
     ))
 }
 
+pub fn request_supervised_launcher_restart() -> Result<(), String> {
+    static REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if REQUESTED.swap(true, Ordering::AcqRel) {
+        return Err("supervised launcher restart already requested".to_string());
+    }
+    write_mister_command_nonblocking("mister_magik_supervised_restart_launcher\n")
+}
+
 fn write_magik_command_response(cmd: &str) -> Result<String, String> {
     let command_lock = std::fs::OpenOptions::new()
         .create(true)

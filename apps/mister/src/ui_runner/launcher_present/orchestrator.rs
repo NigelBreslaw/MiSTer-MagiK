@@ -51,6 +51,7 @@ pub(in crate::ui_runner) struct LauncherPresenter<L = FpgaVblankLatchHiddenPrese
     next_retry_at: Option<Instant>,
     latest_retry_result: &'static str,
     recovery_state: &'static str,
+    supervised_restart_requested: bool,
 }
 
 pub(in crate::ui_runner) struct LauncherPresentFrame {
@@ -142,6 +143,7 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
             next_retry_at: None,
             latest_retry_result: "not-attempted",
             recovery_state,
+            supervised_restart_requested: false,
         };
         if presenter.auto_retry == LatchAutoRetryState::Ready {
             presenter.schedule_automatic_retry_at(Instant::now());
@@ -265,6 +267,10 @@ impl<L> LauncherPresenter<L> {
         self.retry_attempts
     }
 
+    pub(in crate::ui_runner) fn take_supervised_restart_request(&mut self) -> bool {
+        std::mem::take(&mut self.supervised_restart_requested)
+    }
+
     fn transition_latch_failure(&mut self, latch_error: LatchFailure) {
         crate::ui_errln!(
             "latch_failure_tsv\tvalid=0\tstate={}\tstage={}\treason={}\taction=freeze-last-good\tdetail={}",
@@ -299,6 +305,9 @@ impl<L> LauncherPresenter<L> {
         } else {
             "terminal-failure"
         };
+        if automatic_retry && self.retry_attempts >= MAX_AUTO_RETRY_ATTEMPTS {
+            self.supervised_restart_requested = true;
+        }
         self.failure_transitions = self.failure_transitions.saturating_add(1);
         self.state = LauncherPresenterState::Frozen {
             failure: latch_error,
@@ -903,6 +912,7 @@ mod tests {
             next_retry_at: None,
             latest_retry_result: "not-attempted",
             recovery_state: "output-frozen",
+            supervised_restart_requested: false,
         }
     }
 
@@ -1110,6 +1120,8 @@ mod tests {
         assert_eq!(presenter.auto_retry, LatchAutoRetryState::Disabled);
         assert!(presenter.next_retry_at.is_none());
         assert_eq!(presenter.recovery_state, "terminal-failure");
+        assert!(presenter.take_supervised_restart_request());
+        assert!(!presenter.take_supervised_restart_request());
         assert_eq!(presenter.first_failure.as_ref().unwrap().detail, "origin");
         assert_eq!(
             presenter.latest_failure.as_ref().unwrap().detail,
