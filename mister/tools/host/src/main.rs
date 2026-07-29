@@ -3315,7 +3315,12 @@ fn particle_showcase_demo(number: u8) -> Result<(&'static str, u64)> {
         29 => Ok(("source-morph", 12_288)),
         30 => Ok(("sdf-collision", 8_192)),
         31 => Ok(("grid-flocking", 12_288)),
-        _ => Err(format!("particle showcase demo must be in 1..=31, received {number}").into()),
+        32 => Ok(("fractal-grid-terrain", 49_152)),
+        33 => Ok(("layer-mapped-hologram", 40_960)),
+        34 => Ok(("spherical-field-observatory", 32_768)),
+        35 => Ok(("twisted-multi-form-cathedral", 65_536)),
+        36 => Ok(("point-cloud-morph-passage", 24_576)),
+        _ => Err(format!("particle showcase demo must be in 1..=36, received {number}").into()),
     }
 }
 

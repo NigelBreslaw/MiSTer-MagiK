@@ -91,6 +91,42 @@ pub enum BenchmarkScenario {
     #[serde(rename = "particle-technique-images")]
     #[value(name = "particle-technique-images")]
     ParticleTechniqueImages,
+    #[serde(rename = "particle-demo-32")]
+    #[value(name = "particle-demo-32")]
+    ParticleDemo32,
+    #[serde(rename = "particle-demo-profile-32")]
+    #[value(name = "particle-demo-profile-32")]
+    ParticleDemoProfile32,
+    #[serde(rename = "particle-demo-33")]
+    #[value(name = "particle-demo-33")]
+    ParticleDemo33,
+    #[serde(rename = "particle-demo-profile-33")]
+    #[value(name = "particle-demo-profile-33")]
+    ParticleDemoProfile33,
+    #[serde(rename = "particle-demo-34")]
+    #[value(name = "particle-demo-34")]
+    ParticleDemo34,
+    #[serde(rename = "particle-demo-profile-34")]
+    #[value(name = "particle-demo-profile-34")]
+    ParticleDemoProfile34,
+    #[serde(rename = "particle-demo-35")]
+    #[value(name = "particle-demo-35")]
+    ParticleDemo35,
+    #[serde(rename = "particle-demo-profile-35")]
+    #[value(name = "particle-demo-profile-35")]
+    ParticleDemoProfile35,
+    #[serde(rename = "particle-demo-36")]
+    #[value(name = "particle-demo-36")]
+    ParticleDemo36,
+    #[serde(rename = "particle-demo-profile-36")]
+    #[value(name = "particle-demo-profile-36")]
+    ParticleDemoProfile36,
+    #[serde(rename = "particle-form-scenes")]
+    #[value(name = "particle-form-scenes")]
+    ParticleFormScenes,
+    #[serde(rename = "particle-form-scenes-profile")]
+    #[value(name = "particle-form-scenes-profile")]
+    ParticleFormScenesProfile,
     #[serde(rename = "firework-visual")]
     #[value(name = "firework-visual")]
     FireworkVisual,
@@ -133,6 +169,18 @@ impl BenchmarkScenario {
             Self::ParticleTechniques => "particle-techniques",
             Self::ParticleTechniquesProfile => "particle-techniques-profile",
             Self::ParticleTechniqueImages => "particle-technique-images",
+            Self::ParticleDemo32 => "particle-demo-32",
+            Self::ParticleDemoProfile32 => "particle-demo-profile-32",
+            Self::ParticleDemo33 => "particle-demo-33",
+            Self::ParticleDemoProfile33 => "particle-demo-profile-33",
+            Self::ParticleDemo34 => "particle-demo-34",
+            Self::ParticleDemoProfile34 => "particle-demo-profile-34",
+            Self::ParticleDemo35 => "particle-demo-35",
+            Self::ParticleDemoProfile35 => "particle-demo-profile-35",
+            Self::ParticleDemo36 => "particle-demo-36",
+            Self::ParticleDemoProfile36 => "particle-demo-profile-36",
+            Self::ParticleFormScenes => "particle-form-scenes",
+            Self::ParticleFormScenesProfile => "particle-form-scenes-profile",
             Self::FireworkVisual => "firework-visual",
             Self::CatalogLifecycle => "catalog-lifecycle",
             Self::Search => "search",
@@ -162,6 +210,16 @@ impl BenchmarkScenario {
             Self::ParticleDemoProfile09 => Some((9, true)),
             Self::ParticleDemo10 => Some((10, false)),
             Self::ParticleDemoProfile10 => Some((10, true)),
+            Self::ParticleDemo32 => Some((32, false)),
+            Self::ParticleDemoProfile32 => Some((32, true)),
+            Self::ParticleDemo33 => Some((33, false)),
+            Self::ParticleDemoProfile33 => Some((33, true)),
+            Self::ParticleDemo34 => Some((34, false)),
+            Self::ParticleDemoProfile34 => Some((34, true)),
+            Self::ParticleDemo35 => Some((35, false)),
+            Self::ParticleDemoProfile35 => Some((35, true)),
+            Self::ParticleDemo36 => Some((36, false)),
+            Self::ParticleDemoProfile36 => Some((36, true)),
             _ => None,
         }
     }

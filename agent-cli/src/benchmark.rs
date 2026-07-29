@@ -192,13 +192,21 @@ fn require_clean_installed_commit(
             | BenchmarkScenario::ParticleDemosProfile
             | BenchmarkScenario::ParticleTechniques
             | BenchmarkScenario::ParticleTechniquesProfile
+            | BenchmarkScenario::ParticleFormScenes
+            | BenchmarkScenario::ParticleFormScenesProfile
     ) {
         let techniques_only = matches!(
             scenario,
             BenchmarkScenario::ParticleTechniques | BenchmarkScenario::ParticleTechniquesProfile
         );
+        let form_only = matches!(
+            scenario,
+            BenchmarkScenario::ParticleFormScenes | BenchmarkScenario::ParticleFormScenesProfile
+        );
         let demos = if techniques_only {
             &PARTICLE_SHOWCASE_DEMOS[21..]
+        } else if form_only {
+            &PARTICLE_SHOWCASE_DEMOS[31..]
         } else {
             &PARTICLE_SHOWCASE_DEMOS[..]
         };
@@ -211,6 +219,7 @@ fn require_clean_installed_commit(
                 scenario,
                 BenchmarkScenario::ParticleDemosProfile
                     | BenchmarkScenario::ParticleTechniquesProfile
+                    | BenchmarkScenario::ParticleFormScenesProfile
             ),
             reporter,
         );
@@ -262,10 +271,22 @@ fn require_clean_installed_commit(
         | BenchmarkScenario::ParticleDemoProfile09
         | BenchmarkScenario::ParticleDemo10
         | BenchmarkScenario::ParticleDemoProfile10
+        | BenchmarkScenario::ParticleDemo32
+        | BenchmarkScenario::ParticleDemoProfile32
+        | BenchmarkScenario::ParticleDemo33
+        | BenchmarkScenario::ParticleDemoProfile33
+        | BenchmarkScenario::ParticleDemo34
+        | BenchmarkScenario::ParticleDemoProfile34
+        | BenchmarkScenario::ParticleDemo35
+        | BenchmarkScenario::ParticleDemoProfile35
+        | BenchmarkScenario::ParticleDemo36
+        | BenchmarkScenario::ParticleDemoProfile36
         | BenchmarkScenario::ParticleDemosCarousel
         | BenchmarkScenario::ParticleDemosProfile
         | BenchmarkScenario::ParticleTechniques
         | BenchmarkScenario::ParticleTechniquesProfile
+        | BenchmarkScenario::ParticleFormScenes
+        | BenchmarkScenario::ParticleFormScenesProfile
         | BenchmarkScenario::ParticleTechniqueImages => {
             unreachable!("particle showcase scenarios return before the fixed registry match")
         }
@@ -319,7 +340,7 @@ fn execute_particle_technique_images(
     emit_benchmark_result(reporter, manifest, summary, output_dir)
 }
 
-const PARTICLE_SHOWCASE_DEMOS: [(u8, &str); 31] = [
+const PARTICLE_SHOWCASE_DEMOS: [(u8, &str); 36] = [
     (1, "solar-chrysanthemum"),
     (2, "recursive-halo"),
     (3, "copper-willow-rain"),
@@ -351,6 +372,11 @@ const PARTICLE_SHOWCASE_DEMOS: [(u8, &str); 31] = [
     (29, "source-morph"),
     (30, "sdf-collision"),
     (31, "grid-flocking"),
+    (32, "fractal-grid-terrain"),
+    (33, "layer-mapped-hologram"),
+    (34, "spherical-field-observatory"),
+    (35, "twisted-multi-form-cathedral"),
+    (36, "point-cloud-morph-passage"),
 ];
 
 fn execute_particle_showcase_suite(
