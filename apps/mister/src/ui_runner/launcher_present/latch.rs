@@ -78,7 +78,7 @@ pub(in crate::ui_runner) trait LatchHardware: LauncherDisplayHardware {
 
 impl LatchHardware for Fpga {
     fn lock_latch_transaction(&mut self) -> io::Result<Option<crate::fpga::FpgaUioGuard>> {
-        self.lock_latch_transaction()
+        Fpga::lock_latch_transaction(self)
     }
 
     fn read_latch_capabilities(
