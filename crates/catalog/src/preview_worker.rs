@@ -310,6 +310,14 @@ pub struct ResidentPreviewArchive {
     asset_keys: Vec<String>,
 }
 
+#[derive(Clone, Debug)]
+pub struct PreviewArchiveBatch {
+    pub images: Vec<PreviewPixels>,
+    pub total_entries: usize,
+    pub failed_entries: usize,
+    pub source_path: PathBuf,
+}
+
 impl ResidentPreviewArchive {
     pub fn open(path: &Path) -> Result<Self, String> {
         let archive = PreviewArchive::open(path)?;
@@ -351,6 +359,72 @@ impl ResidentPreviewArchive {
             .clone();
         self.load_pixels(&asset_key)
     }
+}
+
+/// Decode a deterministic, bounded selection of images from one preview pack.
+///
+/// A cancelled load returns `Ok(None)` so callers cannot accidentally publish
+/// a partially decoded batch.
+pub fn load_preview_archive_batch<F>(
+    path: &Path,
+    cap: usize,
+    seed: u64,
+    mut cancelled: F,
+) -> Result<Option<PreviewArchiveBatch>, String>
+where
+    F: FnMut() -> bool,
+{
+    if cancelled() {
+        return Ok(None);
+    }
+    let mut archive = ResidentPreviewArchive::open(path)?;
+    let total_entries = archive.asset_keys().len();
+    let mut indices = (0..total_entries).collect::<Vec<_>>();
+    shuffle_preview_indices(&mut indices, seed);
+    let mut images = Vec::with_capacity(cap.min(total_entries));
+    let mut failed_entries = 0;
+    for index in indices {
+        if cancelled() {
+            return Ok(None);
+        }
+        if images.len() >= cap {
+            break;
+        }
+        match archive.load_pixels_at(index) {
+            Ok(image) => images.push(image),
+            Err(_) => failed_entries += 1,
+        }
+    }
+    if cancelled() {
+        return Ok(None);
+    }
+    if cap > 0 && images.is_empty() {
+        return Err(format!(
+            "preview archive {} contains no usable images (entries={total_entries} failed={failed_entries})",
+            path.display()
+        ));
+    }
+    Ok(Some(PreviewArchiveBatch {
+        images,
+        total_entries,
+        failed_entries,
+        source_path: path.to_path_buf(),
+    }))
+}
+
+fn shuffle_preview_indices(indices: &mut [usize], seed: u64) {
+    let mut rng = seed;
+    for index in (1..indices.len()).rev() {
+        let swap_with = (advance_preview_rng(&mut rng) as usize) % (index + 1);
+        indices.swap(index, swap_with);
+    }
+}
+
+fn advance_preview_rng(rng: &mut u64) -> u64 {
+    *rng ^= *rng << 13;
+    *rng ^= *rng >> 7;
+    *rng ^= *rng << 17;
+    *rng
 }
 
 impl PreviewPixels {
@@ -3560,6 +3634,73 @@ mod tests {
     }
 
     #[test]
+    fn preview_archive_batch_is_seeded_bounded_and_cancellable() {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-preview-batch-{}.mmlz4b",
+            std::process::id()
+        ));
+        let entries = [
+            ("alpha.rgb565", raw565_fixture(1, 1, &[0x0001])),
+            ("bravo.rgb565", raw565_fixture(1, 1, &[0x0002])),
+            ("charlie.rgb565", raw565_fixture(1, 1, &[0x0003])),
+            ("delta.rgb565", raw565_fixture(1, 1, &[0x0004])),
+        ];
+        write_preview_archive_entries(&path, &entries);
+
+        let first = load_preview_archive_batch(&path, 3, 0x1234, || false)
+            .expect("load batch")
+            .expect("not cancelled");
+        let second = load_preview_archive_batch(&path, 3, 0x1234, || false)
+            .expect("load batch")
+            .expect("not cancelled");
+
+        assert_eq!(first.total_entries, 4);
+        assert_eq!(first.images.len(), 3);
+        assert_eq!(first.failed_entries, 0);
+        let words = |batch: &PreviewArchiveBatch| {
+            batch
+                .images
+                .iter()
+                .map(|image| match image {
+                    PreviewPixels::Rgb565 { words, .. } => words[0],
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(words(&first), words(&second));
+
+        let mut cancellation_checks = 0;
+        let cancelled = load_preview_archive_batch(&path, 4, 0x1234, || {
+            cancellation_checks += 1;
+            cancellation_checks >= 3
+        })
+        .expect("cancel batch");
+        assert!(cancelled.is_none());
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn preview_archive_batch_reports_missing_and_empty_archives() {
+        let missing = std::env::temp_dir().join(format!(
+            "mister-magik-preview-batch-missing-{}.mmlz4b",
+            std::process::id()
+        ));
+        let missing_error = load_preview_archive_batch(&missing, 1, 1, || false)
+            .expect_err("missing archive must fail");
+        assert!(missing_error.contains("open preview archive"));
+
+        let empty = std::env::temp_dir().join(format!(
+            "mister-magik-preview-batch-empty-{}.mmlz4b",
+            std::process::id()
+        ));
+        write_preview_archive_entries(&empty, &[]);
+        let empty_error = load_preview_archive_batch(&empty, 1, 1, || false)
+            .expect_err("empty archive must fail");
+        assert!(empty_error.contains("contains no usable images"));
+        let _ = std::fs::remove_file(empty);
+    }
+
+    #[test]
     fn preview_archive_sidecar_rejects_oversized_entry_count_before_allocating() {
         let path = std::env::temp_dir().join(format!(
             "mister-magik-preview-index-too-many-{}.mmlz4b",
@@ -4103,6 +4244,40 @@ mod tests {
         bytes.extend_from_slice(name.as_bytes());
         bytes.extend_from_slice(pixels);
         std::fs::write(path, bytes).expect("write v2 pixel archive fixture");
+    }
+
+    fn write_preview_archive_entries(path: &Path, entries: &[(&str, Vec<u8>)]) {
+        let index_len = 8
+            + 4
+            + entries
+                .iter()
+                .map(|(name, _)| 2 + 4 + 4 + 4 + 4 + 1 + 4 + 8 + name.len())
+                .sum::<usize>();
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(V2_PIXELS_MAGIC);
+        bytes.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+        let mut payload_offset = index_len;
+        for (name, payload) in entries {
+            assert_eq!(&payload[..8], b"MM56501\0");
+            let width = u32::from_le_bytes(payload[8..12].try_into().unwrap());
+            let height = u32::from_le_bytes(payload[12..16].try_into().unwrap());
+            let stride_bytes = u32::from_le_bytes(payload[16..20].try_into().unwrap());
+            let pixels = &payload[20..];
+            bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            bytes.extend_from_slice(&width.to_le_bytes());
+            bytes.extend_from_slice(&height.to_le_bytes());
+            bytes.extend_from_slice(&stride_bytes.to_le_bytes());
+            bytes.extend_from_slice(&(pixels.len() as u32).to_le_bytes());
+            bytes.push(1);
+            bytes.extend_from_slice(&(pixels.len() as u32).to_le_bytes());
+            bytes.extend_from_slice(&(payload_offset as u64).to_le_bytes());
+            bytes.extend_from_slice(name.as_bytes());
+            payload_offset += pixels.len();
+        }
+        for (_, payload) in entries {
+            bytes.extend_from_slice(&payload[20..]);
+        }
+        std::fs::write(path, bytes).expect("write multi-entry preview archive fixture");
     }
 
     fn write_lz4_block_archive_with_index(path: &Path, name: &str, payload: &[u8]) {

@@ -1039,39 +1039,24 @@ fn load_screensaver_images_cancellable(
         std::env::var_os("MISTER_MEDIA_ASSET_DIR").as_deref(),
         DeviceLayout::current(),
     );
-    let mut asset_keys =
-        match preview_worker::preview_archive_sidecar_entry_stems(&arcade_screenshot_pack) {
-            Ok(Some(sidecar)) => sidecar.entries,
-            Ok(None) => match preview_worker::preview_archive_index(&arcade_screenshot_pack) {
-                Ok(index) => index.entries,
-                Err(error) => {
-                    crate::ui_errln!("screensaver: arcade screenshot pack index failed: {error}");
-                    Vec::new()
-                }
-            },
-            Err(error) => {
-                crate::ui_errln!("screensaver: arcade screenshot sidecar failed: {error}");
-                Vec::new()
-            }
-        };
-    let mut rng = random_seed();
-    shuffle(&mut asset_keys, &mut rng);
-    let mut images = Vec::new();
-    for asset_key in asset_keys {
-        if cancelled.is_some_and(|cancelled| cancelled.load(Ordering::Relaxed)) {
-            break;
+    let result = preview_worker::load_preview_archive_batch(
+        &arcade_screenshot_pack,
+        cap,
+        random_seed(),
+        || cancelled.is_some_and(|cancelled| cancelled.load(Ordering::Relaxed)),
+    );
+    let images = match result {
+        Ok(Some(batch)) => batch
+            .images
+            .into_iter()
+            .map(preview_pixels_to_saver_image)
+            .collect(),
+        Ok(None) => Vec::new(),
+        Err(error) => {
+            crate::ui_errln!("screensaver: arcade screenshot pack load failed: {error}");
+            Vec::new()
         }
-        if images.len() >= cap {
-            break;
-        }
-        if let Ok(image) = preview_worker::load_preview_asset_pixels(
-            &arcade_screenshot_pack.display().to_string(),
-            &asset_key,
-        ) {
-            let image = preview_pixels_to_saver_image(image);
-            images.push(image);
-        }
-    }
+    };
     crate::ui_logln!(
         "screensaver_loader path={} images={}",
         arcade_screenshot_pack.display(),
