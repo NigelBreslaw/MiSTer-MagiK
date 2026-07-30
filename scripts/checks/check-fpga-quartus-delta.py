@@ -33,6 +33,16 @@ RESOURCE_RE = re.compile(
     r"^\s*(Total (?:logic elements|registers|block memory bits|DSP Blocks))\s*[:;]\s*([\d,]+)",
     re.IGNORECASE,
 )
+BOOTSTRAP_BLACK_LOOP_WARNING = "332125:Found combinational loop of 6 nodes"
+BOOTSTRAP_BLACK_COMBOUT_WARNING = '332126:Node "emu|random|lc0|combout"'
+BOOTSTRAP_BLACK_DATA_WARNING = '332126:Node "emu|random|lc0|data*"'
+EXPECTED_BOOTSTRAP_BLACK_REMOVED_WARNING_IDENTITIES = frozenset(
+    (
+        BOOTSTRAP_BLACK_LOOP_WARNING,
+        BOOTSTRAP_BLACK_COMBOUT_WARNING,
+        BOOTSTRAP_BLACK_DATA_WARNING,
+    )
+)
 
 
 def normalize_space(value: str) -> str:
@@ -170,6 +180,21 @@ def counter_delta(left: Counter[str], right: Counter[str]) -> list[str]:
     return result
 
 
+def is_expected_bootstrap_black_warning_removal(
+    removed: Counter[str], patched: Counter[str]
+) -> bool:
+    """Recognize only the stock Menu random-loop warnings pruned by black RGB."""
+    if set(removed) != EXPECTED_BOOTSTRAP_BLACK_REMOVED_WARNING_IDENTITIES:
+        return False
+    loop_count = removed[BOOTSTRAP_BLACK_LOOP_WARNING]
+    return (
+        loop_count in (5, 7)
+        and removed[BOOTSTRAP_BLACK_COMBOUT_WARNING] == loop_count
+        and removed[BOOTSTRAP_BLACK_DATA_WARNING] == loop_count * 5
+        and not any(patched[identity] for identity in EXPECTED_BOOTSTRAP_BLACK_REMOVED_WARNING_IDENTITIES)
+    )
+
+
 def estimated_calculable_chains(chain_counts: list[int], uncalculated_fractions: list[float]) -> int | None:
     if not chain_counts or not uncalculated_fractions:
         return None
@@ -185,9 +210,13 @@ def compare(stock: dict[str, object], patched: dict[str, object]) -> tuple[list[
     assert isinstance(stock_warnings, Counter) and isinstance(patched_warnings, Counter)
     added_warnings = counter_delta(stock_warnings, patched_warnings)
     removed_warnings = counter_delta(patched_warnings, stock_warnings)
+    removed_warning_counts = stock_warnings - patched_warnings
+    expected_bootstrap_black_warning_removal = is_expected_bootstrap_black_warning_removal(
+        removed_warning_counts, patched_warnings
+    )
     if added_warnings:
         reasons.append("warning_added")
-    if removed_warnings:
+    if removed_warnings and not expected_bootstrap_black_warning_removal:
         reasons.append("warning_baseline_mismatch")
 
     stock_unconstrained = stock["unconstrained"]
@@ -247,6 +276,7 @@ def compare(stock: dict[str, object], patched: dict[str, object]) -> tuple[list[
         "patched_warning_count": sum(patched_warnings.values()),
         "added_warnings": added_warnings,
         "removed_warnings": removed_warnings,
+        "expected_bootstrap_black_warning_removal": expected_bootstrap_black_warning_removal,
         "added_unconstrained": added_unconstrained,
         "patched_setup_slack_min": min(slacks["setup"]) if slacks["setup"] else None,
         "patched_hold_slack_min": min(slacks["hold"]) if slacks["hold"] else None,

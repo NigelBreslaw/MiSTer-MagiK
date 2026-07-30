@@ -39,6 +39,20 @@ Info (332114): Report Metastability: Found 6 synchronizer chains.
 Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.700
 """
 
+def bootstrap_black_warnings(copies: int) -> str:
+    return (
+        "Warning (332125): Found combinational loop of 6 nodes\n" * copies
+        + 'Warning (332126): Node "emu|random|lc0|combout"\n' * copies
+        + 'Warning (332126): Node "emu|random|lc0|dataa"\n' * copies
+        + 'Warning (332126): Node "emu|random|lc0|datab"\n' * copies
+        + 'Warning (332126): Node "emu|random|lc0|datac"\n' * copies
+        + 'Warning (332126): Node "emu|random|lc0|datad"\n' * copies
+        + 'Warning (332126): Node "emu|random|lc0|datae"\n' * copies
+    )
+
+
+EXPECTED_BOOTSTRAP_BLACK_REMOVED_WARNINGS = bootstrap_black_warnings(7)
+
 
 class QuartusDeltaTest(unittest.TestCase):
     def run_check(self, stock: str, patched: str) -> tuple[subprocess.CompletedProcess[str], dict[str, object]]:
@@ -87,6 +101,59 @@ class QuartusDeltaTest(unittest.TestCase):
 
     def test_missing_inherited_warning_fails_exact_baseline(self) -> None:
         result, payload = self.run_check(BASE, BASE.replace("Warning (10001): inherited warning File: /work/sys/top.v Line: 7\n", "") + CUSTOM_SYNC)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("warning_baseline_mismatch", payload["invalid_reason"])
+
+    def test_expected_bootstrap_black_warning_removal_passes(self) -> None:
+        stock = BASE + EXPECTED_BOOTSTRAP_BLACK_REMOVED_WARNINGS
+        result, payload = self.run_check(stock, BASE + CUSTOM_SYNC)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(payload["expected_bootstrap_black_warning_removal"], True)
+
+    def test_retained_artifact_warning_removal_passes(self) -> None:
+        stock = BASE + bootstrap_black_warnings(5)
+        result, payload = self.run_check(stock, BASE + CUSTOM_SYNC)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(payload["expected_bootstrap_black_warning_removal"], True)
+
+    def test_consistent_partial_bootstrap_black_warning_removal_fails(self) -> None:
+        stock = BASE + bootstrap_black_warnings(7)
+        patched = BASE + bootstrap_black_warnings(6) + CUSTOM_SYNC
+        result, payload = self.run_check(stock, patched)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("warning_baseline_mismatch", payload["invalid_reason"])
+
+    def test_known_removal_count_fails_when_matching_warnings_remain(self) -> None:
+        stock = BASE + bootstrap_black_warnings(7)
+        patched = BASE + bootstrap_black_warnings(2) + CUSTOM_SYNC
+        result, payload = self.run_check(stock, patched)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("warning_baseline_mismatch", payload["invalid_reason"])
+
+    def test_arbitrary_proportional_warning_removal_fails(self) -> None:
+        stock = BASE + bootstrap_black_warnings(2)
+        result, payload = self.run_check(stock, BASE + CUSTOM_SYNC)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("warning_baseline_mismatch", payload["invalid_reason"])
+
+    def test_partial_bootstrap_black_warning_removal_fails(self) -> None:
+        stock = BASE + EXPECTED_BOOTSTRAP_BLACK_REMOVED_WARNINGS
+        patched = BASE + EXPECTED_BOOTSTRAP_BLACK_REMOVED_WARNINGS.replace(
+            "Warning (332125): Found combinational loop of 6 nodes\n",
+            "",
+            1,
+        ) + CUSTOM_SYNC
+        result, payload = self.run_check(stock, patched)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("warning_baseline_mismatch", payload["invalid_reason"])
+
+    def test_unrelated_warning_removal_still_fails_with_expected_removal(self) -> None:
+        stock = BASE + EXPECTED_BOOTSTRAP_BLACK_REMOVED_WARNINGS
+        patched = BASE.replace(
+            "Warning (10001): inherited warning File: /work/sys/top.v Line: 7\n",
+            "",
+        ) + CUSTOM_SYNC
+        result, payload = self.run_check(stock, patched)
         self.assertEqual(result.returncode, 1)
         self.assertIn("warning_baseline_mismatch", payload["invalid_reason"])
 
