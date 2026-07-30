@@ -50,7 +50,7 @@ fn main() {
             .file("src/particle_neon.c")
             .flag("-std=c11")
             .flag("-O3")
-            .flag("-mcpu=cortex-a9")
+            .flag("-mtune=cortex-a9")
             .flag("-mfpu=neon-vfpv3")
             .flag("-mfloat-abi=hard")
             .flag("-ffp-contract=off")
