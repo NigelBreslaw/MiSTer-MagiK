@@ -6,6 +6,8 @@
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::time::Instant;
 
+mod sprite_foundry;
+
 const PROGRESS_MAX: u16 = u16::MAX;
 const COVER_PROGRESS: u16 = 36_044;
 const DEFAULT_PREPARATION_TIMEOUT_US: u64 = 5_000_000;
@@ -713,6 +715,8 @@ pub struct NavigationTransitionRenderStats {
     pub copied_pixels: u64,
     pub filled_pixels: u64,
     pub outline_pixels: u64,
+    pub particle_pixels: u64,
+    pub glyph_packets: u64,
 }
 
 #[derive(Debug)]
@@ -725,6 +729,7 @@ pub struct NavigationTransitionPoc {
     last_render_stats: NavigationTransitionRenderStats,
     last_frame_work_us: u64,
     hud_scratch: Vec<Rgb565Pixel>,
+    sprite_foundry: sprite_foundry::SpriteFoundryRenderer,
 }
 
 impl NavigationTransitionPoc {
@@ -769,11 +774,16 @@ impl NavigationTransitionPoc {
                     0
                 }
             ],
+            sprite_foundry: sprite_foundry::SpriteFoundryRenderer::empty(if enabled {
+                sprite_foundry::configured_particle_count()
+            } else {
+                512
+            }),
         }
     }
 
     pub const fn implemented_style_count() -> usize {
-        1
+        2
     }
 
     pub const fn enabled(&self) -> bool {
@@ -797,6 +807,10 @@ impl NavigationTransitionPoc {
             return false;
         }
         self.style_index = (self.style_index as i32 + delta).rem_euclid(count as i32) as usize;
+        if self.style() == NavigationTransitionStyle::SpriteFoundry {
+            self.sprite_foundry
+                .prepare(self.buffers.width, self.buffers.height);
+        }
         true
     }
 
@@ -813,6 +827,10 @@ impl NavigationTransitionPoc {
         }
         if direction == NavigationTransitionDirection::Forward {
             self.geometry_history[edge.history_index()] = Some(geometry);
+        }
+        if self.style() == NavigationTransitionStyle::SpriteFoundry {
+            self.sprite_foundry
+                .prepare(self.buffers.width, self.buffers.height);
         }
         self.buffers.begin_capture();
         let capture_started = Instant::now();
@@ -861,6 +879,12 @@ impl NavigationTransitionPoc {
             NavigationTransitionStyle::SuperScalerShell => {
                 render_super_scaler_shell(&mut self.buffers, request, frame)?
             }
+            NavigationTransitionStyle::SpriteFoundry => sprite_foundry::render_sprite_foundry(
+                &mut self.sprite_foundry,
+                &mut self.buffers,
+                request,
+                frame,
+            )?,
             _ => return Err(NavigationTransitionFailure::SnapshotSizeMismatch),
         };
         stats.render_us = started.elapsed().as_micros().min(u64::MAX as u128) as u64;
@@ -1801,6 +1825,60 @@ mod tests {
             Some(NavigationTransitionEndpoint::Source)
         );
         assert_eq!(cancelled.render().unwrap(), source);
+    }
+
+    #[test]
+    fn sprite_foundry_is_deterministic_bounded_and_endpoint_exact() {
+        let width = 160;
+        let height = 90;
+        let source = (0..width * height)
+            .map(|value| Rgb565Pixel(value as u16))
+            .collect::<Vec<_>>();
+        let destination = (0..width * height)
+            .map(|value| Rgb565Pixel((value as u16).wrapping_mul(17)))
+            .collect::<Vec<_>>();
+        let geometry = NavigationTransitionGeometry {
+            source_card: NavigationTransitionRect {
+                x: 32,
+                y: 14,
+                width: 40,
+                height: 68,
+            },
+            source_label: NavigationTransitionRect {
+                x: 38,
+                y: 42,
+                width: 28,
+                height: 8,
+            },
+            destination_title: NavigationTransitionRect {
+                x: 8,
+                y: 6,
+                width: 64,
+                height: 10,
+            },
+        };
+        let mut poc = NavigationTransitionPoc::new_with_style(width, height, true, 1);
+        poc.begin(
+            NavigationTransitionEdge::HomeToConsoles,
+            NavigationTransitionDirection::Forward,
+            geometry,
+            &source,
+            0,
+        )
+        .unwrap();
+        assert_eq!(poc.render().unwrap(), source);
+        poc.capture_destination(&destination).unwrap();
+        poc.tick(180_000);
+        let first = poc.render().unwrap().to_vec();
+        let first_stats = poc.last_render_stats();
+        let second = poc.render().unwrap().to_vec();
+        assert_eq!(first, second);
+        assert!(first_stats.particle_pixels <= 4_096);
+        assert!(first_stats.glyph_packets <= 6);
+        assert_eq!(poc.sprite_foundry.particle_count(), 2_048);
+
+        poc.tick(500_000);
+        assert_eq!(poc.render().unwrap(), destination);
     }
 
     #[test]

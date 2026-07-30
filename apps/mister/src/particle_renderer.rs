@@ -329,19 +329,7 @@ impl ParticleRenderer {
     }
 
     fn raster_visual(&self, destination: &mut [Rgb565Pixel], dirty_offsets: &mut Vec<u32>) {
-        for &command in &self.commands {
-            if command == PARTICLE_NOT_VISIBLE_OFFSET {
-                continue;
-            }
-            let offset = (command & COMMAND_OFFSET_MASK) as usize;
-            let palette_index = ((command >> COMMAND_PALETTE_SHIFT) & 3) as usize;
-            destination[offset] = VISUAL_PALETTE[palette_index];
-            dirty_offsets.push(offset as u32);
-            if command & COMMAND_NEIGHBOR != 0 {
-                destination[offset + 1] = VISUAL_PALETTE[2];
-                dirty_offsets.push((offset + 1) as u32);
-            }
-        }
+        raster_packed_visual_commands(destination, &self.commands, dirty_offsets);
     }
 }
 
@@ -788,11 +776,49 @@ fn particle_command_order_requested() -> bool {
     )
 }
 
-fn pack_visual_command(offset: u32, palette_index: usize, neighbor: bool) -> u32 {
+pub(crate) fn pack_visual_command(offset: u32, palette_index: usize, neighbor: bool) -> u32 {
     debug_assert!(offset <= COMMAND_OFFSET_MASK);
     offset
         | ((palette_index as u32) << COMMAND_PALETTE_SHIFT)
         | if neighbor { COMMAND_NEIGHBOR } else { 0 }
+}
+
+pub(crate) fn unpack_visual_command(command: u32) -> Option<(usize, usize, bool)> {
+    (command != PARTICLE_NOT_VISIBLE_OFFSET).then(|| {
+        (
+            (command & COMMAND_OFFSET_MASK) as usize,
+            ((command >> COMMAND_PALETTE_SHIFT) & 3) as usize,
+            command & COMMAND_NEIGHBOR != 0,
+        )
+    })
+}
+
+pub(crate) fn raster_packed_visual_commands(
+    destination: &mut [Rgb565Pixel],
+    commands: &[u32],
+    dirty_offsets: &mut Vec<u32>,
+) -> usize {
+    let mut written = 0usize;
+    for &command in commands {
+        let Some((offset, palette_index, neighbor)) = unpack_visual_command(command) else {
+            continue;
+        };
+        let Some(pixel) = destination.get_mut(offset) else {
+            continue;
+        };
+        *pixel = VISUAL_PALETTE[palette_index];
+        dirty_offsets.push(offset as u32);
+        written = written.saturating_add(1);
+        if neighbor {
+            let Some(pixel) = destination.get_mut(offset.saturating_add(1)) else {
+                continue;
+            };
+            *pixel = VISUAL_PALETTE[2];
+            dirty_offsets.push(offset.saturating_add(1) as u32);
+            written = written.saturating_add(1);
+        }
+    }
+    written
 }
 
 fn visual_particle_has_neighbor(
