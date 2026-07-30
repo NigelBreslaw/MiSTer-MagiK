@@ -5651,7 +5651,7 @@ fn apply_lifecycle_effects(
                 print_startup_event(start, "catalog_retry_started", &root);
                 scheduler.start_catalog_worker(
                     root,
-                    CatalogWorkerRequest::ForceBuild,
+                    CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS,
                     CatalogWorkerInitialCache::AlreadyProbedMissing,
                     CatalogExecutionMode::ForegroundExclusive,
                 );
@@ -5660,7 +5660,7 @@ fn apply_lifecycle_effects(
                 print_startup_event(start, "catalog_rebuild_started", &root);
                 scheduler.start_catalog_worker(
                     root,
-                    CatalogWorkerRequest::ForceBuild,
+                    CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS,
                     CatalogWorkerInitialCache::AlreadyLoadedReady,
                     CatalogExecutionMode::BackgroundInteractive,
                 );
@@ -6202,14 +6202,14 @@ fn catalog_startup_without_summary_plan(
     match sqlite_state {
         CatalogStartupSqliteState::HeaderValid => {
             return CatalogStartupWithoutSummaryPlan::DeferredWorker {
-                request: CatalogWorkerRequest::ForceBuild,
+                request: CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS,
                 initial_cache: CatalogWorkerInitialCache::AlreadyProbedMissing,
                 execution_mode: CatalogExecutionMode::ForegroundExclusive,
             };
         }
         CatalogStartupSqliteState::ExistingUnusable => {
             return CatalogStartupWithoutSummaryPlan::DeferredWorker {
-                request: CatalogWorkerRequest::ForceBuild,
+                request: CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS,
                 initial_cache: CatalogWorkerInitialCache::AlreadyProbedMissing,
                 execution_mode: CatalogExecutionMode::ForegroundExclusive,
             };
@@ -6218,7 +6218,7 @@ fn catalog_startup_without_summary_plan(
     }
     if catalog_worker_enabled {
         return CatalogStartupWithoutSummaryPlan::DeferredWorker {
-            request: CatalogWorkerRequest::ForceBuild,
+            request: CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS,
             initial_cache: CatalogWorkerInitialCache::AlreadyProbedMissing,
             execution_mode: CatalogExecutionMode::ForegroundExclusive,
         };
@@ -6267,7 +6267,7 @@ fn deferred_catalog_worker_lifecycle_input(
             },
             foreground: matches!(
                 request,
-                CatalogWorkerRequest::ForceBuild | CatalogWorkerRequest::FreshBuild
+                CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS | CatalogWorkerRequest::FreshBuild
             ),
             has_stale_catalog: false,
         }
@@ -6330,7 +6330,7 @@ fn ready_catalog_worker_request(refresh_policy: CatalogRefreshPolicy) -> Catalog
     if refresh_policy == CatalogRefreshPolicy::Off {
         CatalogWorkerRequest::LoadOnly
     } else if refresh_policy.force_requested() {
-        CatalogWorkerRequest::ForceBuild
+        CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS
     } else {
         CatalogWorkerRequest::CheckStamp
     }
@@ -6342,7 +6342,7 @@ fn summary_seed_catalog_worker_request(
     return_catalog_hydration_needed: bool,
 ) -> Option<CatalogWorkerRequest> {
     if deferred_library_rebuild {
-        return Some(CatalogWorkerRequest::ForceBuild);
+        return Some(CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS);
     }
     let request = ready_catalog_worker_request(refresh_policy);
     if return_catalog_hydration_needed {
@@ -6356,7 +6356,7 @@ fn summary_seed_catalog_worker_starts_immediately(
     request: CatalogWorkerRequest,
     return_catalog_hydration_needed: bool,
 ) -> bool {
-    request == CatalogWorkerRequest::ForceBuild || return_catalog_hydration_needed
+    request == CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS || return_catalog_hydration_needed
 }
 
 fn summary_seed_catalog_worker_initial_cache(
@@ -8090,7 +8090,7 @@ mod tests {
         );
         assert_eq!(
             ready_catalog_worker_request(CatalogRefreshPolicy::Force),
-            CatalogWorkerRequest::ForceBuild
+            CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS
         );
         assert_eq!(
             ready_catalog_worker_request(CatalogRefreshPolicy::Off),
@@ -8114,7 +8114,7 @@ mod tests {
         );
         assert_eq!(
             summary_seed_catalog_worker_request(CatalogRefreshPolicy::Off, true, true),
-            Some(CatalogWorkerRequest::ForceBuild)
+            Some(CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS)
         );
     }
 
@@ -8129,7 +8129,7 @@ mod tests {
             true
         ));
         assert!(summary_seed_catalog_worker_starts_immediately(
-            CatalogWorkerRequest::ForceBuild,
+            CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS,
             false
         ));
     }
@@ -8145,7 +8145,10 @@ mod tests {
             CatalogWorkerInitialCache::AlreadyLoadedReady
         );
         assert_eq!(
-            summary_seed_catalog_worker_initial_cache(CatalogWorkerRequest::ForceBuild, false),
+            summary_seed_catalog_worker_initial_cache(
+                CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS,
+                false,
+            ),
             CatalogWorkerInitialCache::AlreadyLoadedReady
         );
     }
@@ -8160,7 +8163,7 @@ mod tests {
                 false,
             ),
             CatalogStartupWithoutSummaryPlan::DeferredWorker {
-                request: CatalogWorkerRequest::ForceBuild,
+                request: CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS,
                 initial_cache: CatalogWorkerInitialCache::AlreadyProbedMissing,
                 execution_mode: CatalogExecutionMode::ForegroundExclusive,
             }
@@ -8173,7 +8176,7 @@ mod tests {
                 false,
             ),
             CatalogStartupWithoutSummaryPlan::DeferredWorker {
-                request: CatalogWorkerRequest::ForceBuild,
+                request: CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS,
                 initial_cache: CatalogWorkerInitialCache::AlreadyProbedMissing,
                 execution_mode: CatalogExecutionMode::ForegroundExclusive,
             },
@@ -8187,7 +8190,7 @@ mod tests {
                 false,
             ),
             CatalogStartupWithoutSummaryPlan::DeferredWorker {
-                request: CatalogWorkerRequest::ForceBuild,
+                request: CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS,
                 initial_cache: CatalogWorkerInitialCache::AlreadyProbedMissing,
                 execution_mode: CatalogExecutionMode::ForegroundExclusive,
             }
@@ -8223,7 +8226,7 @@ mod tests {
                 false,
             ),
             CatalogStartupWithoutSummaryPlan::DeferredWorker {
-                request: CatalogWorkerRequest::ForceBuild,
+                request: CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS,
                 initial_cache: CatalogWorkerInitialCache::AlreadyProbedMissing,
                 execution_mode: CatalogExecutionMode::ForegroundExclusive,
             }
@@ -8236,7 +8239,7 @@ mod tests {
                 false,
             ),
             CatalogStartupWithoutSummaryPlan::DeferredWorker {
-                request: CatalogWorkerRequest::ForceBuild,
+                request: CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS,
                 initial_cache: CatalogWorkerInitialCache::AlreadyProbedMissing,
                 execution_mode: CatalogExecutionMode::ForegroundExclusive,
             },
@@ -8250,7 +8253,7 @@ mod tests {
                 false,
             ),
             CatalogStartupWithoutSummaryPlan::DeferredWorker {
-                request: CatalogWorkerRequest::ForceBuild,
+                request: CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS,
                 initial_cache: CatalogWorkerInitialCache::AlreadyProbedMissing,
                 execution_mode: CatalogExecutionMode::ForegroundExclusive,
             },
@@ -8275,7 +8278,7 @@ mod tests {
         assert!(matches!(
             deferred_catalog_worker_lifecycle_input(
                 CatalogExecutionMode::ForegroundExclusive,
-                CatalogWorkerRequest::ForceBuild,
+                CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS,
             ),
             LauncherLifecycleInput::CatalogBuilding {
                 foreground: true,
@@ -8336,7 +8339,7 @@ mod tests {
     #[test]
     fn forced_hydration_with_a_usable_catalog_stays_background() {
         assert_eq!(
-            catalog_hydration_execution_mode(CatalogWorkerRequest::ForceBuild),
+            catalog_hydration_execution_mode(CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS),
             CatalogExecutionMode::BackgroundInteractive
         );
         assert_eq!(

@@ -569,7 +569,7 @@ impl LauncherCatalogSession {
         effects.push(CatalogSessionEffect::StartCatalogWorker(
             CatalogWorkerStart {
                 root,
-                request: CatalogWorkerRequest::ForceBuild,
+                request: CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS,
                 initial_cache: CatalogWorkerInitialCache::AlreadyLoadedReady,
                 execution_mode: CatalogExecutionMode::BackgroundInteractive,
             },
@@ -598,7 +598,7 @@ impl LauncherCatalogSession {
         effects.push(CatalogSessionEffect::StartCatalogWorker(
             CatalogWorkerStart {
                 root,
-                request: CatalogWorkerRequest::RebuildAll,
+                request: CatalogWorkerRequest::RECONCILE_ALL_SYSTEMS,
                 initial_cache: CatalogWorkerInitialCache::AlreadyLoadedReady,
                 execution_mode: CatalogExecutionMode::BackgroundInteractive,
             },
@@ -1824,7 +1824,10 @@ mod tests {
                 _ => None,
             })
             .expect("catalog worker");
-        assert_eq!(worker.request, CatalogWorkerRequest::ForceBuild);
+        assert_eq!(
+            worker.request,
+            CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS
+        );
         assert_eq!(
             worker.execution_mode,
             CatalogExecutionMode::BackgroundInteractive
@@ -1853,7 +1856,7 @@ mod tests {
                 _ => None,
             })
             .expect("catalog worker");
-        assert_eq!(worker.request, CatalogWorkerRequest::RebuildAll);
+        assert_eq!(worker.request, CatalogWorkerRequest::RECONCILE_ALL_SYSTEMS);
         assert_eq!(
             worker.initial_cache,
             CatalogWorkerInitialCache::AlreadyLoadedReady

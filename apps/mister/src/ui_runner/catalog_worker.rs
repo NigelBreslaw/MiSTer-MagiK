@@ -547,8 +547,8 @@ pub(super) fn start_library_catalog_worker(
                 matches!(
                     plan,
                     CatalogWorkerPlan::InitialBuild
-                        | CatalogWorkerPlan::ForceBuild
-                        | CatalogWorkerPlan::RebuildAll
+                        | CatalogWorkerPlan::RECONCILE_CHANGED_INPUTS
+                        | CatalogWorkerPlan::RECONCILE_ALL_SYSTEMS
                         | CatalogWorkerPlan::FreshBuild
                 )
                     && execution_mode == CatalogExecutionMode::ForegroundExclusive;
@@ -585,8 +585,8 @@ pub(super) fn start_library_catalog_worker(
                 }
                 CatalogWorkerPlan::CheckStamp => {}
                 CatalogWorkerPlan::InitialBuild
-                | CatalogWorkerPlan::ForceBuild
-                | CatalogWorkerPlan::RebuildAll => {
+                | CatalogWorkerPlan::RECONCILE_CHANGED_INPUTS
+                | CatalogWorkerPlan::RECONCILE_ALL_SYSTEMS => {
                     send_catalog_progress(
                         &tx,
                         library_db::CatalogProgress::indexing_building_catalog(),
@@ -598,8 +598,8 @@ pub(super) fn start_library_catalog_worker(
                 plan,
                 CatalogWorkerPlan::CheckStamp
                     | CatalogWorkerPlan::InitialBuild
-                    | CatalogWorkerPlan::ForceBuild
-                    | CatalogWorkerPlan::RebuildAll
+                    | CatalogWorkerPlan::RECONCILE_CHANGED_INPUTS
+                    | CatalogWorkerPlan::RECONCILE_ALL_SYSTEMS
                     | CatalogWorkerPlan::FreshBuild
             ) {
                 drop(progress);
@@ -614,7 +614,8 @@ pub(super) fn start_library_catalog_worker(
             }
             if matches!(
                 plan,
-                CatalogWorkerPlan::ForceBuild | CatalogWorkerPlan::RebuildAll
+                CatalogWorkerPlan::RECONCILE_CHANGED_INPUTS
+                    | CatalogWorkerPlan::RECONCILE_ALL_SYSTEMS
             ) {
                 if foreground_exclusive {
                     let ram_artifact_result = library_db::scan_default_library_ram_foreground_with_events(
@@ -1057,7 +1058,8 @@ fn handle_embedded_builder_event(
         } => {
             if matches!(
                 plan,
-                CatalogWorkerPlan::ForceBuild | CatalogWorkerPlan::RebuildAll
+                CatalogWorkerPlan::RECONCILE_CHANGED_INPUTS
+                    | CatalogWorkerPlan::RECONCILE_ALL_SYSTEMS
             ) {
                 let _ = tx.send(CatalogWorkerMessage::Timing {
                     name: "catalog_warm_bootstrap_ignored".to_string(),
@@ -1123,8 +1125,12 @@ fn catalog_builder_operation(
     Some(match plan {
         CatalogWorkerPlan::CheckStamp => (BuilderOperation::Check, "check"),
         CatalogWorkerPlan::InitialBuild => (BuilderOperation::Build, "build"),
-        CatalogWorkerPlan::ForceBuild => (BuilderOperation::Rebuild, "rebuild"),
-        CatalogWorkerPlan::RebuildAll => (BuilderOperation::RebuildAll, "rebuild-all"),
+        CatalogWorkerPlan::Reconcile {
+            scope: CatalogReconcileScope::ChangedInputs,
+        } => (BuilderOperation::Rebuild, "rebuild"),
+        CatalogWorkerPlan::Reconcile {
+            scope: CatalogReconcileScope::AllSystems,
+        } => (BuilderOperation::RebuildAll, "rebuild-all"),
         CatalogWorkerPlan::FreshBuild => (BuilderOperation::FreshBuild, "fresh-build"),
         CatalogWorkerPlan::LoadOnly => return None,
     })
@@ -1161,12 +1167,17 @@ fn refresh_summary(value: BuilderSummary) -> library_db::LibraryRefreshSummary {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CatalogReconcileScope {
+    ChangedInputs,
+    AllSystems,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum CatalogWorkerRequest {
     LoadOnly,
     StrictLoad,
     CheckStamp,
-    ForceBuild,
-    RebuildAll,
+    Reconcile { scope: CatalogReconcileScope },
     FreshBuild,
 }
 
@@ -1205,13 +1216,24 @@ pub(super) enum CatalogWorkerInitialCache {
 }
 
 impl CatalogWorkerRequest {
+    pub(super) const RECONCILE_CHANGED_INPUTS: Self = Self::Reconcile {
+        scope: CatalogReconcileScope::ChangedInputs,
+    };
+    pub(super) const RECONCILE_ALL_SYSTEMS: Self = Self::Reconcile {
+        scope: CatalogReconcileScope::AllSystems,
+    };
+
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::LoadOnly => "load_only",
             Self::StrictLoad => "strict_load",
             Self::CheckStamp => "check_stamp",
-            Self::ForceBuild => "force_build",
-            Self::RebuildAll => "rebuild_all",
+            Self::Reconcile {
+                scope: CatalogReconcileScope::ChangedInputs,
+            } => "reconcile_changed_inputs",
+            Self::Reconcile {
+                scope: CatalogReconcileScope::AllSystems,
+            } => "reconcile_all_systems",
             Self::FreshBuild => "fresh_build",
         }
     }
@@ -1243,19 +1265,29 @@ enum CatalogWorkerPlan {
     LoadOnly,
     CheckStamp,
     InitialBuild,
-    ForceBuild,
-    RebuildAll,
+    Reconcile { scope: CatalogReconcileScope },
     FreshBuild,
 }
 
 impl CatalogWorkerPlan {
+    const RECONCILE_CHANGED_INPUTS: Self = Self::Reconcile {
+        scope: CatalogReconcileScope::ChangedInputs,
+    };
+    const RECONCILE_ALL_SYSTEMS: Self = Self::Reconcile {
+        scope: CatalogReconcileScope::AllSystems,
+    };
+
     fn label(self) -> &'static str {
         match self {
             Self::LoadOnly => "load_only",
             Self::CheckStamp => "check_stamp",
             Self::InitialBuild => "initial_build",
-            Self::ForceBuild => "force_build",
-            Self::RebuildAll => "rebuild_all",
+            Self::Reconcile {
+                scope: CatalogReconcileScope::ChangedInputs,
+            } => "reconcile_changed_inputs",
+            Self::Reconcile {
+                scope: CatalogReconcileScope::AllSystems,
+            } => "reconcile_all_systems",
             Self::FreshBuild => "fresh_build",
         }
     }
@@ -1267,7 +1299,9 @@ fn catalog_worker_plan(
 ) -> CatalogWorkerPlan {
     match request {
         CatalogWorkerRequest::StrictLoad => return CatalogWorkerPlan::LoadOnly,
-        CatalogWorkerRequest::ForceBuild => return CatalogWorkerPlan::ForceBuild,
+        CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS => {
+            return CatalogWorkerPlan::RECONCILE_CHANGED_INPUTS;
+        }
         CatalogWorkerRequest::FreshBuild => return CatalogWorkerPlan::FreshBuild,
         _ => {}
     }
@@ -1276,8 +1310,10 @@ fn catalog_worker_plan(
             CatalogWorkerRequest::LoadOnly => CatalogWorkerPlan::LoadOnly,
             CatalogWorkerRequest::StrictLoad => CatalogWorkerPlan::LoadOnly,
             CatalogWorkerRequest::CheckStamp => CatalogWorkerPlan::CheckStamp,
-            CatalogWorkerRequest::ForceBuild => CatalogWorkerPlan::ForceBuild,
-            CatalogWorkerRequest::RebuildAll => CatalogWorkerPlan::RebuildAll,
+            CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS => {
+                CatalogWorkerPlan::RECONCILE_CHANGED_INPUTS
+            }
+            CatalogWorkerRequest::RECONCILE_ALL_SYSTEMS => CatalogWorkerPlan::RECONCILE_ALL_SYSTEMS,
             CatalogWorkerRequest::FreshBuild => CatalogWorkerPlan::FreshBuild,
         },
         CatalogCacheState::Empty | CatalogCacheState::Missing => CatalogWorkerPlan::InitialBuild,
@@ -2081,21 +2117,21 @@ mod tests {
         );
         assert_eq!(
             catalog_builder_operation(
-                CatalogWorkerPlan::ForceBuild,
+                CatalogWorkerPlan::RECONCILE_CHANGED_INPUTS,
                 CatalogExecutionMode::ForegroundExclusive
             ),
             Some((BuilderOperation::Rebuild, "rebuild"))
         );
         assert_eq!(
             catalog_builder_operation(
-                CatalogWorkerPlan::ForceBuild,
+                CatalogWorkerPlan::RECONCILE_CHANGED_INPUTS,
                 CatalogExecutionMode::BackgroundInteractive
             ),
             Some((BuilderOperation::Rebuild, "rebuild"))
         );
         assert_eq!(
             catalog_builder_operation(
-                CatalogWorkerPlan::RebuildAll,
+                CatalogWorkerPlan::RECONCILE_ALL_SYSTEMS,
                 CatalogExecutionMode::BackgroundInteractive
             ),
             Some((BuilderOperation::RebuildAll, "rebuild-all"))
@@ -2270,7 +2306,7 @@ mod tests {
         };
         handle_embedded_builder_event(
             "/media/fat",
-            CatalogWorkerPlan::ForceBuild,
+            CatalogWorkerPlan::RECONCILE_CHANGED_INPUTS,
             "rebuild",
             CatalogBuilderEvent::CatalogReady {
                 protocol,
@@ -2444,12 +2480,15 @@ mod tests {
     #[test]
     fn full_warm_rebuild_requires_a_published_catalog() {
         assert_eq!(
-            catalog_worker_plan(CatalogCacheState::Ready, CatalogWorkerRequest::RebuildAll),
-            CatalogWorkerPlan::RebuildAll
+            catalog_worker_plan(
+                CatalogCacheState::Ready,
+                CatalogWorkerRequest::RECONCILE_ALL_SYSTEMS,
+            ),
+            CatalogWorkerPlan::RECONCILE_ALL_SYSTEMS
         );
         for state in [CatalogCacheState::Empty, CatalogCacheState::Missing] {
             assert_eq!(
-                catalog_worker_plan(state, CatalogWorkerRequest::RebuildAll),
+                catalog_worker_plan(state, CatalogWorkerRequest::RECONCILE_ALL_SYSTEMS),
                 CatalogWorkerPlan::InitialBuild
             );
         }
@@ -2458,13 +2497,16 @@ mod tests {
     #[test]
     fn catalog_worker_refreshes_only_when_requested() {
         assert_eq!(
-            catalog_worker_plan(CatalogCacheState::Ready, CatalogWorkerRequest::ForceBuild),
-            CatalogWorkerPlan::ForceBuild
+            catalog_worker_plan(
+                CatalogCacheState::Ready,
+                CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS,
+            ),
+            CatalogWorkerPlan::RECONCILE_CHANGED_INPUTS
         );
         for state in [CatalogCacheState::Empty, CatalogCacheState::Missing] {
             assert_eq!(
-                catalog_worker_plan(state, CatalogWorkerRequest::ForceBuild),
-                CatalogWorkerPlan::ForceBuild,
+                catalog_worker_plan(state, CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS),
+                CatalogWorkerPlan::RECONCILE_CHANGED_INPUTS,
                 "an explicit rebuild remains a rebuild request"
             );
         }

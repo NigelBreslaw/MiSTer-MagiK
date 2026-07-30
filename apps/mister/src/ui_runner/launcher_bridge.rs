@@ -1006,43 +1006,6 @@ pub(super) fn slint_menu_items(nav: &LauncherNav) -> Rc<VecModel<slint_ui::launc
     Rc::new(VecModel::from(rows))
 }
 
-pub(super) fn slint_sharded_menu_items(
-    tiles: &[&mister_magik_catalog::launcher_catalog_session::LauncherSystemTile],
-    selected: usize,
-) -> Rc<VecModel<slint_ui::launcher::MenuItem>> {
-    use mister_magik_catalog::launcher_catalog_session::LauncherSystemState;
-
-    let rows = tiles
-        .iter()
-        .enumerate()
-        .map(|(index, tile)| {
-            let (subtitle, status) = match &tile.state {
-                LauncherSystemState::Queued | LauncherSystemState::Scanning => {
-                    (String::new(), slint_ui::launcher::MenuItemStatus::Scanning)
-                }
-                LauncherSystemState::Ready { games, .. } => (
-                    format!("{games} games"),
-                    slint_ui::launcher::MenuItemStatus::Ready,
-                ),
-                LauncherSystemState::Failed { .. } => (
-                    "Scan failed".to_string(),
-                    slint_ui::launcher::MenuItemStatus::Failed,
-                ),
-            };
-            slint_ui::launcher::MenuItem {
-                id: tile.system_id.as_str().into(),
-                label: tile.display_title.clone().into(),
-                subtitle: subtitle.into(),
-                focused: index == selected,
-                available: matches!(tile.state, LauncherSystemState::Ready { .. }),
-                node_kind: slint_ui::launcher::MenuItemKind::Collection,
-                status,
-            }
-        })
-        .collect::<Vec<_>>();
-    Rc::new(VecModel::from(rows))
-}
-
 pub(super) fn empty_arcade_catalog(root: &str) -> ArcadeCatalog {
     ArcadeCatalog::new(PathBuf::from(root), Vec::new(), Vec::new())
 }
@@ -1662,46 +1625,5 @@ mod tests {
         assert_eq!(bridge.get_confirm_left_label().as_str(), "Exit to MiSTer");
         assert_eq!(bridge.get_confirm_right_label().as_str(), "Full rebuild");
         assert_eq!(bridge.get_confirm_selected(), 0);
-    }
-
-    #[test]
-    fn sharded_tiles_map_progressive_states_without_game_models() {
-        use mister_magik_catalog::catalog_classify::SystemId;
-        use mister_magik_catalog::launcher_catalog_session::{
-            LauncherSystemState, LauncherSystemTile,
-        };
-
-        let arcade = LauncherSystemTile {
-            system_id: SystemId::parse("arcade").unwrap(),
-            display_title: "Arcade".to_string(),
-            section: "Arcade".to_string(),
-            family: "Arcade".to_string(),
-            order: 0,
-            state: LauncherSystemState::Ready {
-                generation: 1,
-                games: 42,
-            },
-        };
-        let snes = LauncherSystemTile {
-            system_id: SystemId::parse("snes").unwrap(),
-            display_title: "SNES".to_string(),
-            section: "Consoles".to_string(),
-            family: "Nintendo".to_string(),
-            order: 1,
-            state: LauncherSystemState::Scanning,
-        };
-        let rows = slint_sharded_menu_items(&[&arcade, &snes], 0);
-        assert_eq!(rows.row_count(), 2);
-        let ready = rows.row_data(0).unwrap();
-        assert_eq!(ready.subtitle.as_str(), "42 games");
-        assert_eq!(ready.status, slint_ui::launcher::MenuItemStatus::Ready);
-        assert!(ready.available);
-        let scanning = rows.row_data(1).unwrap();
-        assert_eq!(scanning.subtitle.as_str(), "");
-        assert_eq!(
-            scanning.status,
-            slint_ui::launcher::MenuItemStatus::Scanning
-        );
-        assert!(!scanning.available);
     }
 }

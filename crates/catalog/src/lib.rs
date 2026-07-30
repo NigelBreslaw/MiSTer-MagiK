@@ -42,7 +42,6 @@ mod game_discovery;
 #[cfg(feature = "builder")]
 pub mod incremental_inputs;
 pub mod launch_profiles;
-pub mod launcher_catalog_session;
 pub mod lazy_sharded_reader;
 pub mod library_bench;
 mod library_cli;
@@ -72,7 +71,6 @@ pub mod reconciliation_planner;
 pub mod runtime_thread;
 pub mod scanner_cache;
 pub mod shard_registry;
-pub mod sharded_builder_protocol;
 pub mod sharded_catalog;
 mod software_identity;
 mod sqlite_catalog;
