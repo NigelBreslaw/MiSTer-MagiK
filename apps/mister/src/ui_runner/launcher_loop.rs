@@ -1494,8 +1494,16 @@ impl ScreensaverControl {
         }
     }
 
-    fn set_qualification_particles(&mut self, now: Instant, requested: bool) {
-        if requested {
+    fn set_qualification_particles(
+        &mut self,
+        now: Instant,
+        qualification_enabled: bool,
+        particles_requested: bool,
+    ) {
+        if !qualification_enabled {
+            return;
+        }
+        if particles_requested {
             if !self.active {
                 self.start_when_ready = true;
             }
@@ -3066,8 +3074,8 @@ pub(super) fn run_launcher_loop(
         );
         screensaver.set_qualification_particles(
             loop_start,
-            latch_v4_qualification.enabled()
-                && latch_v4_qualification.stress_class() == LatchV4StressClass::Particles,
+            latch_v4_qualification.enabled(),
+            latch_v4_qualification.stress_class() == LatchV4StressClass::Particles,
         );
         let restore_before = screensaver.restore_full_frame;
         screensaver.update(
@@ -8440,6 +8448,52 @@ mod tests {
         assert!(screensaver_catalog_busy(true, false, false));
         assert!(!screensaver_catalog_busy(true, false, true));
         assert!(!screensaver_catalog_busy(false, true, false));
+    }
+
+    #[test]
+    fn disabled_qualification_preserves_preview_for_pipeline_start() {
+        let start = Instant::now();
+        let next_frame = start + Duration::from_millis(16);
+        let mut saver = ScreensaverControl::new(start, false);
+
+        saver.preview(start);
+        saver.set_qualification_particles(next_frame, false, true);
+        saver.update(next_frame, false, Duration::from_secs(300), true);
+
+        assert!(saver.active);
+        assert!(saver.preview_active);
+        assert!(!saver.restore_full_frame);
+        assert!(screensaver_pipeline_start_allowed(
+            saver.active,
+            false,
+            false,
+            false,
+            0,
+        ));
+    }
+
+    #[test]
+    fn enabled_qualification_particles_start_and_stop_screensaver() {
+        let start = Instant::now();
+        let mut saver = ScreensaverControl::new(start, false);
+
+        saver.set_qualification_particles(start, true, true);
+        assert!(saver.start_when_ready);
+        assert!(!saver.active);
+
+        saver.update(
+            start + Duration::from_millis(16),
+            false,
+            Duration::from_secs(300),
+            false,
+        );
+        assert!(saver.active);
+        assert!(!saver.start_when_ready);
+
+        saver.set_qualification_particles(start + Duration::from_millis(32), true, false);
+        assert!(!saver.active);
+        assert!(!saver.start_when_ready);
+        assert!(saver.restore_full_frame);
     }
 
     #[test]
