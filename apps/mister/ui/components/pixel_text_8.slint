@@ -26,7 +26,6 @@ export component PixelText8 {
     in property <TextVerticalAlignment> vertical-alignment: top;
     in property <TextOverflow> overflow: clip;
     in property <TextWrap> wrap: no-wrap;
-    in property <int> line-capacity: 1;
 
     private property <length> resolved-font-size: PixelText8Metrics.resolve(root.size);
     private property <length> font-metric-height:
@@ -34,30 +33,16 @@ export component PixelText8 {
     out property <length> line-pitch:
         ceil(max(root.resolved-font-size, root.font-metric-height) / 8px) * 8px;
 
-    min-width: label.min-width;
-    preferred-width: label.preferred-width;
-    min-height: root.line-pitch * max(1, root.line-capacity);
-    preferred-height: root.min-height;
 
-    Rectangle {
-        width: 100%;
-        height: 100%;
-        background: transparent;
-        clip: true;
 
-        label := Text {
-            x: 0px;
-            y: 0px;
-            width: 100%;
-            height: 100%;
-            text: root.text;
-            color: root.color;
-            font-family: root.font-family;
-            font-size: root.resolved-font-size;
-            horizontal-alignment: root.horizontal-alignment;
-            vertical-alignment: root.vertical-alignment;
-            overflow: root.overflow;
-            wrap: root.wrap;
-        }
+    label := Text {
+        text: root.text;
+        color: root.color;
+        font-family: root.font-family;
+        font-size: root.resolved-font-size;
+        horizontal-alignment: root.horizontal-alignment;
+        vertical-alignment: root.vertical-alignment;
+        overflow: root.overflow;
+        wrap: root.wrap;
     }
 }
