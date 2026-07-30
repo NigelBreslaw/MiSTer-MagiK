@@ -28,12 +28,6 @@ export component PixelText8 {
     in property <TextWrap> wrap: no-wrap;
 
     private property <length> resolved-font-size: PixelText8Metrics.resolve(root.size);
-    private property <length> font-metric-height:
-        label.font-metrics.ascent - label.font-metrics.descent;
-    out property <length> line-pitch:
-        ceil(max(root.resolved-font-size, root.font-metric-height) / 8px) * 8px;
-
-
 
     label := Text {
         text: root.text;
