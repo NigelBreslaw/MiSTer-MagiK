@@ -1235,6 +1235,7 @@ impl BuilderBackend for SystemBuilderBackend {
         crate::build_progress::commit_successful_state(
             &build_progress_path,
             &crate::catalog_config::default_builder_state_path(),
+            outcome.generation,
         )?;
         crate::build_progress::remove(&build_progress_path)?;
         let import_us = v3_started.elapsed().as_micros() as u64;

@@ -998,8 +998,14 @@ fn handle_embedded_builder_event(
             all_published_systems,
             ..
         } => {
+            let all_published_systems =
+                all_published_systems || plan == CatalogWorkerPlan::RECONCILE_ALL_SYSTEMS;
             let _ = tx.send(CatalogWorkerMessage::ReconciliationPlanReady {
-                system_ids,
+                system_ids: if all_published_systems {
+                    Vec::new()
+                } else {
+                    system_ids
+                },
                 all_published_systems,
             });
         }
@@ -2326,6 +2332,38 @@ mod tests {
         ));
         assert!(!state.catalog_ready_seen);
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn full_reconciliation_keeps_the_all_system_plan_authoritative() {
+        let protocol = mister_magik_catalog::builder_protocol::CATALOG_BUILDER_PROTOCOL_VERSION;
+        let (tx, rx) = mpsc::channel();
+        let mut state = EmbeddedBuilderEventState {
+            handshake_seen: true,
+            ..EmbeddedBuilderEventState::default()
+        };
+
+        handle_embedded_builder_event(
+            "/media/fat",
+            CatalogWorkerPlan::RECONCILE_ALL_SYSTEMS,
+            "rebuild-all",
+            CatalogBuilderEvent::PlanReady {
+                protocol,
+                system_ids: vec!["amiga".into()],
+                all_published_systems: false,
+            },
+            &tx,
+            &mut CatalogProgressCoalescer::default(),
+            &mut state,
+        );
+
+        assert!(matches!(
+            rx.recv().expect("full reconcile plan"),
+            CatalogWorkerMessage::ReconciliationPlanReady {
+                system_ids,
+                all_published_systems: true,
+            } if system_ids.is_empty()
+        ));
     }
 
     #[test]

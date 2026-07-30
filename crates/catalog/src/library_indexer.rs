@@ -316,7 +316,14 @@ fn prepare_resume_scan(
     let descriptors =
         catalog_scan::planned_scan_target_descriptors(&cfg.roots, plan, excluded_targets);
     let targets: Vec<_> = descriptors.iter().map(progress_target).collect();
+    let active_manifest_generation = crate::shard_registry::read_latest_manifest_lazy(
+        &crate::catalog_config::default_sharded_catalog_path(),
+        crate::shard_registry::production_registry_limits(),
+    )
+    .ok()
+    .map(|manifest| manifest.generation);
     let contract = crate::build_progress::BuildContract {
+        active_manifest_generation,
         roots: cfg.roots.clone(),
         path_mapping: crate::catalog_config::library_path_map_from_env()
             .into_iter()

@@ -1325,6 +1325,7 @@ mod tests {
         let root = temporary_root("resume-unpublished");
         let progress_path = crate::build_progress::path_for_root(&root);
         let contract = crate::build_progress::BuildContract {
+            active_manifest_generation: None,
             roots: vec!["/fixture".into()],
             path_mapping: Vec::new(),
             scanner_version: 1,

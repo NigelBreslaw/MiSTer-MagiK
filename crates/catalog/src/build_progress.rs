@@ -13,10 +13,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const FILE_NAME: &str = "build-progress.sqlite3";
 const COMMITTED_FILE_NAME: &str = "builder-state.sqlite3";
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BuildContract {
+    pub active_manifest_generation: Option<u64>,
     pub roots: Vec<String>,
     pub path_mapping: Vec<(String, String)>,
     pub scanner_version: u32,
@@ -125,6 +126,7 @@ pub fn seed_from_committed(committed_path: &Path, progress_path: &Path) -> Resul
 pub fn commit_successful_state(
     progress_path: &Path,
     committed_path: &Path,
+    published_generation: u64,
 ) -> Result<bool, String> {
     if !progress_path.exists() {
         return Ok(false);
@@ -140,6 +142,16 @@ pub fn commit_successful_state(
     let conn = Connection::open(progress_path)
         .map_err(|error| format!("open successful build progress: {error}"))?;
     configure(&conn)?;
+    let mut contract: BuildContract = serde_json::from_str(&meta(&conn, "contract")?)
+        .map_err(|error| format!("decode successful build contract: {error}"))?;
+    contract.active_manifest_generation = Some(published_generation);
+    let contract_json = serde_json::to_string(&contract)
+        .map_err(|error| format!("encode successful build contract: {error}"))?;
+    conn.execute(
+        "UPDATE progress_meta SET value=?1 WHERE key='contract'",
+        [&contract_json],
+    )
+    .map_err(|error| format!("bind successful build generation: {error}"))?;
     conn.execute("DELETE FROM completed_shards", [])
         .map_err(|error| format!("clear generation-specific shard checkpoints: {error}"))?;
     drop(conn);
@@ -620,6 +632,7 @@ mod tests {
     }
     fn contract() -> BuildContract {
         BuildContract {
+            active_manifest_generation: None,
             roots: vec!["/games".into()],
             path_mapping: vec![],
             scanner_version: 12,
@@ -892,9 +905,12 @@ mod tests {
             .unwrap();
         drop(journal);
 
-        assert!(commit_successful_state(&progress, &committed).unwrap());
+        assert!(commit_successful_state(&progress, &committed, 3).unwrap());
         assert!(seed_from_committed(&committed, &resumed).unwrap());
-        let journal = BuildProgressJournal::open_for_projection(&resumed).unwrap();
+        let mut bound_contract = contract();
+        bound_contract.active_manifest_generation = Some(3);
+        let journal =
+            BuildProgressJournal::open_existing(&resumed, &bound_contract, &targets()).unwrap();
         assert_eq!(journal.completed_targets(), Ok(vec![completed()]));
         assert!(journal.completed_shards().unwrap().is_empty());
 
