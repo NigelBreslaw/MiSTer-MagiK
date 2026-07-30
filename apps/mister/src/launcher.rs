@@ -283,6 +283,14 @@ pub enum LauncherAction {
     PersistSettings,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CatalogSystemUpdateState {
+    Queued,
+    Scanning,
+    Prepared,
+    Failed,
+}
+
 pub struct LauncherEvent {
     pub action: LauncherAction,
     pub path: Option<String>,
@@ -757,9 +765,7 @@ pub struct LauncherNav {
     collection_filters: HashMap<String, ArcadeFilter>,
     collection_search_queries: HashMap<String, String>,
     catalog_build_active: bool,
-    catalog_build_systems: HashSet<String>,
-    catalog_build_ready: HashSet<String>,
-    catalog_build_failures: HashSet<String>,
+    catalog_update_states: HashMap<String, CatalogSystemUpdateState>,
     catalog_hydration_active: HashSet<String>,
     taxonomy: LauncherTaxonomy,
     taxonomy_token: LauncherTaxonomyToken,
@@ -1071,9 +1077,7 @@ impl LauncherNav {
             collection_filters: HashMap::new(),
             collection_search_queries: HashMap::new(),
             catalog_build_active: false,
-            catalog_build_systems: HashSet::new(),
-            catalog_build_ready: HashSet::new(),
-            catalog_build_failures: HashSet::new(),
+            catalog_update_states: HashMap::new(),
             catalog_hydration_active: HashSet::new(),
             taxonomy: LauncherTaxonomy::default(),
             taxonomy_token: LauncherTaxonomyToken::default(),
@@ -1104,8 +1108,8 @@ impl LauncherNav {
         let old_path = self.menu_path.clone();
         let old_collection = self.active_collection_id.clone();
         let had_active_collection = old_collection.is_some();
-        self.taxonomy =
-            LauncherTaxonomy::from_catalog_with_shells(catalog, &self.catalog_build_systems);
+        let build_systems = self.catalog_update_states.keys().cloned().collect();
+        self.taxonomy = LauncherTaxonomy::from_catalog_with_shells(catalog, &build_systems);
         self.taxonomy_token = token;
         for diagnostic in self.taxonomy.diagnostics() {
             crate::ui_errln!("{diagnostic}");
@@ -1281,9 +1285,7 @@ impl LauncherNav {
     }
 
     pub fn catalog_build_started(&mut self) {
-        self.catalog_build_systems.clear();
-        self.catalog_build_ready.clear();
-        self.catalog_build_failures.clear();
+        self.catalog_update_states.clear();
         self.catalog_build_active = true;
     }
 
@@ -1292,7 +1294,8 @@ impl LauncherNav {
             self.catalog_build_started();
         }
         self.catalog_build_active = true;
-        self.catalog_build_systems.insert(system_id.to_string());
+        self.catalog_update_states
+            .insert(system_id.to_string(), CatalogSystemUpdateState::Queued);
     }
 
     pub fn catalog_reconciliation_plan(
@@ -1302,35 +1305,39 @@ impl LauncherNav {
         all_published_systems: bool,
     ) {
         self.catalog_build_active = true;
-        self.catalog_build_ready.clear();
-        self.catalog_build_failures.clear();
-        self.catalog_build_systems = if all_published_systems {
+        let systems = if all_published_systems {
             catalog
                 .systems
                 .iter()
                 .map(|system| system.id.clone())
-                .collect()
+                .collect::<Vec<_>>()
         } else {
-            system_ids.iter().cloned().collect()
+            system_ids.to_vec()
         };
+        self.catalog_update_states = systems
+            .into_iter()
+            .map(|system_id| (system_id, CatalogSystemUpdateState::Queued))
+            .collect();
     }
 
     pub fn catalog_system_scanning(&mut self, system_id: &str) {
         self.catalog_build_active = true;
-        self.catalog_build_systems.insert(system_id.to_string());
-        self.catalog_build_ready.remove(system_id);
-        self.catalog_build_failures.remove(system_id);
+        self.catalog_update_states
+            .insert(system_id.to_string(), CatalogSystemUpdateState::Scanning);
+    }
+
+    pub fn catalog_system_prepared(&mut self, system_id: &str) {
+        self.catalog_update_states
+            .insert(system_id.to_string(), CatalogSystemUpdateState::Prepared);
     }
 
     pub fn catalog_system_ready(&mut self, system_id: &str) {
-        self.catalog_build_systems.insert(system_id.to_string());
-        self.catalog_build_ready.insert(system_id.to_string());
-        self.catalog_build_failures.remove(system_id);
+        self.catalog_update_states.remove(system_id);
     }
 
     pub fn catalog_system_failed(&mut self, system_id: &str) {
-        self.catalog_build_systems.insert(system_id.to_string());
-        self.catalog_build_failures.insert(system_id.to_string());
+        self.catalog_update_states
+            .insert(system_id.to_string(), CatalogSystemUpdateState::Failed);
     }
 
     pub fn catalog_system_hydration_started(&mut self, system_id: &str) {
@@ -1338,7 +1345,7 @@ impl LauncherNav {
     }
 
     pub fn catalog_system_retry_started(&mut self, system_id: &str) {
-        self.catalog_build_failures.remove(system_id);
+        self.catalog_update_states.remove(system_id);
         self.catalog_hydration_active.insert(system_id.to_string());
     }
 
@@ -1351,7 +1358,7 @@ impl LauncherNav {
     }
 
     pub fn catalog_system_has_failed(&self, system_id: &str) -> bool {
-        self.catalog_build_failures.contains(system_id)
+        self.catalog_update_states.get(system_id) == Some(&CatalogSystemUpdateState::Failed)
     }
 
     pub fn catalog_build_finished(&mut self, catalog: &ArcadeCatalog) {
@@ -1362,18 +1369,16 @@ impl LauncherNav {
             .filter(|system| system.count > 0 || catalog.system_game_count(&system.id) > 0)
             .map(|system| system.id.as_str())
             .collect::<HashSet<_>>();
-        self.catalog_build_systems
-            .retain(|system_id| authoritative_systems.contains(system_id.as_str()));
-        self.catalog_build_ready
-            .retain(|system_id| self.catalog_build_systems.contains(system_id));
-        self.catalog_build_failures
-            .retain(|system_id| authoritative_systems.contains(system_id.as_str()));
+        self.catalog_update_states.retain(|system_id, state| {
+            *state == CatalogSystemUpdateState::Failed
+                && authoritative_systems.contains(system_id.as_str())
+        });
         self.catalog_hydration_active
             .retain(|system_id| authoritative_systems.contains(system_id.as_str()));
     }
 
     pub fn catalog_with_build_shells(&self, mut catalog: ArcadeCatalog) -> ArcadeCatalog {
-        for system_id in &self.catalog_build_systems {
+        for system_id in self.catalog_update_states.keys() {
             catalog = catalog.with_system_placeholder(system_id);
         }
         catalog
@@ -1390,14 +1395,19 @@ impl LauncherNav {
                 )
             }
             LauncherMenuItemKind::Collection => {
-                let failed = self.catalog_build_failures.contains(&item.id);
+                let update = self.catalog_update_states.get(&item.id);
+                let failed = update == Some(&CatalogSystemUpdateState::Failed);
                 let scanning = (self.catalog_build_active
-                    && self.catalog_build_systems.contains(&item.id)
-                    && !self.catalog_build_ready.contains(&item.id)
-                    && !failed)
+                    && matches!(
+                        update,
+                        Some(
+                            CatalogSystemUpdateState::Queued
+                                | CatalogSystemUpdateState::Scanning
+                                | CatalogSystemUpdateState::Prepared
+                        )
+                    ))
                     || self.catalog_hydration_active.contains(&item.id);
-                let available =
-                    self.catalog_build_ready.contains(&item.id) || (item.count > 0 && !failed);
+                let available = item.count > 0;
                 (scanning, failed, available)
             }
         }
@@ -1410,7 +1420,7 @@ impl LauncherNav {
                 .map(|item| match item.kind {
                     LauncherMenuItemKind::Menu => self.menu_discovered_system_count(&item.id),
                     LauncherMenuItemKind::Collection => {
-                        usize::from(self.catalog_build_systems.contains(&item.id))
+                        usize::from(self.catalog_update_states.contains_key(&item.id))
                     }
                 })
                 .sum()
@@ -1421,7 +1431,10 @@ impl LauncherNav {
         self.taxonomy.menu(menu_id).is_some_and(|menu| {
             menu.items.iter().any(|item| match item.kind {
                 LauncherMenuItemKind::Menu => self.menu_contains_failed_descendant(&item.id),
-                LauncherMenuItemKind::Collection => self.catalog_build_failures.contains(&item.id),
+                LauncherMenuItemKind::Collection => {
+                    self.catalog_update_states.get(&item.id)
+                        == Some(&CatalogSystemUpdateState::Failed)
+                }
             })
         })
     }
@@ -1431,9 +1444,14 @@ impl LauncherNav {
             menu.items.iter().any(|item| match item.kind {
                 LauncherMenuItemKind::Menu => self.menu_contains_scanning_descendant(&item.id),
                 LauncherMenuItemKind::Collection => {
-                    self.catalog_build_systems.contains(&item.id)
-                        && !self.catalog_build_ready.contains(&item.id)
-                        && !self.catalog_build_failures.contains(&item.id)
+                    matches!(
+                        self.catalog_update_states.get(&item.id),
+                        Some(
+                            CatalogSystemUpdateState::Queued
+                                | CatalogSystemUpdateState::Scanning
+                                | CatalogSystemUpdateState::Prepared
+                        )
+                    )
                 }
             })
         })
@@ -8187,7 +8205,7 @@ mod tests {
                 .all(|item| item.id != crate::launcher_taxonomy::CONSOLES_MENU_ID)
         );
         assert!(!nav.catalog_system_has_failed("snes"));
-        assert!(!nav.catalog_build_systems.contains("snes"));
+        assert!(!nav.catalog_update_states.contains_key("snes"));
         assert!(!nav.catalog_hydration_active.contains("snes"));
         assert!(
             nav.catalog_with_build_shells(catalog)
@@ -8219,12 +8237,24 @@ mod tests {
             (false, true, true)
         );
         assert!(nav.catalog_system_has_failed("snes"));
+        assert!(nav.open_menu(crate::launcher_taxonomy::CONSOLES_MENU_ID));
+        let snes = nav
+            .current_menu_items()
+            .iter()
+            .find(|item| item.id == "snes")
+            .expect("published failed system remains visible");
+        assert_eq!(
+            nav.menu_item_catalog_presentation(snes),
+            (false, true, true),
+            "an update failure must not revoke published availability"
+        );
+        nav.go_root();
 
         nav.catalog_build_started();
         assert_eq!(
             nav.menu_item_catalog_presentation(&consoles),
-            (true, false, true),
-            "a new build must not inherit the previous build's failures"
+            (false, false, true),
+            "a new build must not inherit failures or mark systems before its plan"
         );
     }
 }

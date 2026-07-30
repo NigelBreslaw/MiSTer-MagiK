@@ -5907,6 +5907,9 @@ fn apply_catalog_session_effects(
                 system_id,
                 generation,
             } => {
+                nav.catalog_system_prepared(&system_id);
+                *catalog_version = (*catalog_version).wrapping_add(1);
+                *full_bridge_dirty = true;
                 print_startup_event(
                     start,
                     "catalog_system_prepared",
