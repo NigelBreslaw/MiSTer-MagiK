@@ -7,4 +7,5 @@ pub mod catalog;
 pub mod composition;
 pub mod lifecycle;
 pub mod media;
+pub mod navigation_transition;
 pub mod settings;

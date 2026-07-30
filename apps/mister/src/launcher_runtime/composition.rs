@@ -7,6 +7,7 @@ use crate::launcher::Screen;
 pub enum UiCompositionState {
     FullSlint,
     MixedArcade,
+    NavigationTransition,
     Screensaver,
     ModalFullSlint,
     ModalOverArcade,
@@ -18,6 +19,7 @@ impl UiCompositionState {
         match self {
             Self::FullSlint => "full-slint",
             Self::MixedArcade => "mixed-arcade",
+            Self::NavigationTransition => "navigation-transition",
             Self::Screensaver => "screensaver",
             Self::ModalFullSlint => "modal-full-slint",
             Self::ModalOverArcade => "modal-over-arcade",
@@ -52,6 +54,7 @@ impl Default for UiCompositionStatus {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UiCompositionInput {
     pub screensaver_active: bool,
+    pub navigation_transition_active: bool,
     pub return_screen: Option<Screen>,
     pub confirm_visible: bool,
     pub fullscreen_overlay_visible: bool,
@@ -68,6 +71,7 @@ pub struct UiCompositionDecision {
     pub state: UiCompositionState,
     pub allow_arcade_list_blit: bool,
     pub allow_preview_blit: bool,
+    pub transition_owns_full_frame: bool,
     pub force_full_slint_present: bool,
     pub clear_direct_layers: bool,
     pub recovery_count: u64,
@@ -166,6 +170,7 @@ impl UiCompositionController {
             allow_arcade_list_blit: state == UiCompositionState::MixedArcade,
             allow_preview_blit: state == UiCompositionState::MixedArcade
                 && (!input.preview_cache_exact || input.preview_frame_ready),
+            transition_owns_full_frame: state == UiCompositionState::NavigationTransition,
             force_full_slint_present,
             clear_direct_layers,
             recovery_count: self.recovery_count,
@@ -192,6 +197,8 @@ fn requested_state(input: UiCompositionInput) -> UiCompositionState {
         } else {
             UiCompositionState::ModalFullSlint
         }
+    } else if input.navigation_transition_active {
+        UiCompositionState::NavigationTransition
     } else if input.return_screen == Some(Screen::Arcade) && input.arcade_ready {
         UiCompositionState::MixedArcade
     } else {
@@ -212,6 +219,7 @@ fn composition_invariant(
 
     let direct_requested = !input.screensaver_active
         && !input.fullscreen_overlay_visible
+        && !input.navigation_transition_active
         && (input.wants_arcade_list || input.wants_preview);
     if direct_requested && !requested_state.allows_direct_layers() {
         return Some(CompositionInvariant {
@@ -235,6 +243,7 @@ mod tests {
     fn input(screen: Screen) -> UiCompositionInput {
         UiCompositionInput {
             screensaver_active: false,
+            navigation_transition_active: false,
             return_screen: Some(screen),
             confirm_visible: false,
             fullscreen_overlay_visible: false,
@@ -283,6 +292,44 @@ mod tests {
         assert_eq!(decision.state, UiCompositionState::FullSlint);
         assert!(decision.force_full_slint_present);
         assert!(decision.clear_direct_layers);
+    }
+
+    #[test]
+    fn navigation_transition_owns_full_frame_and_suppresses_direct_layers() {
+        let mut controller = UiCompositionController::new();
+        let _ = controller.tick(UiCompositionInput {
+            wants_arcade_list: true,
+            wants_preview: true,
+            ..input(Screen::Arcade)
+        });
+        let decision = controller.tick(UiCompositionInput {
+            navigation_transition_active: true,
+            wants_arcade_list: true,
+            wants_preview: true,
+            ..input(Screen::Arcade)
+        });
+
+        assert_eq!(decision.state, UiCompositionState::NavigationTransition);
+        assert!(decision.transition_owns_full_frame);
+        assert!(!decision.allow_arcade_list_blit);
+        assert!(!decision.allow_preview_blit);
+        assert!(decision.force_full_slint_present);
+        assert!(decision.clear_direct_layers);
+        assert_eq!(decision.recovery_count, 0);
+    }
+
+    #[test]
+    fn confirmation_modal_preempts_navigation_transition() {
+        let mut controller = UiCompositionController::new();
+        let decision = controller.tick(UiCompositionInput {
+            navigation_transition_active: true,
+            confirm_visible: true,
+            ..input(Screen::Home)
+        });
+
+        assert_eq!(decision.state, UiCompositionState::ModalFullSlint);
+        assert!(!decision.transition_owns_full_frame);
+        assert!(decision.force_full_slint_present);
     }
 
     #[test]
