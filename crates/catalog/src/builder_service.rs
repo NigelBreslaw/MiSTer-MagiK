@@ -432,21 +432,24 @@ fn run_with_backend<B: BuilderBackend>(
     } else {
         build_role
     });
-    let mut progress = |title: &str, detail: &str| {
-        wait_for_background_heavy_work_enabled(background_build);
-        emit(CatalogBuilderEvent::Progress {
-            protocol,
-            title: title.into(),
-            detail: detail.into(),
-            metadata: None,
-        });
-    };
     wait_for_background_heavy_work_enabled(background_build);
-    let summary = backend
-        .persist(prepared.value, &mut progress, &mut |event| {
-            emit_reconciliation_event(protocol, event, emit);
-        })
-        .map_err(|error| fail(protocol, "persist", error, emit))?;
+    let persist_result = {
+        let shared_emit = RefCell::new(&mut *emit);
+        let mut progress = |title: &str, detail: &str| {
+            wait_for_background_heavy_work_enabled(background_build);
+            (shared_emit.borrow_mut())(CatalogBuilderEvent::Progress {
+                protocol,
+                title: title.into(),
+                detail: detail.into(),
+                metadata: None,
+            });
+        };
+        let mut lifecycle = |event| {
+            emit_reconciliation_event(protocol, event, &mut *shared_emit.borrow_mut());
+        };
+        backend.persist(prepared.value, &mut progress, &mut lifecycle)
+    };
+    let summary = persist_result.map_err(|error| fail(protocol, "persist", error, emit))?;
     let completed_build_seconds = backend
         .write_build_duration(&config.sqlite_path, run_started.elapsed())
         .map_err(|error| fail(protocol, "build-duration", error, emit))?;
