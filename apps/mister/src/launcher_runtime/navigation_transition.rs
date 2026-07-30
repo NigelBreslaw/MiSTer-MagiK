@@ -957,6 +957,9 @@ impl NavigationTransitionPoc {
                 )?
             }
         };
+        if request.style == NavigationTransitionStyle::SuperScalerShell {
+            render_hero_label_last(&mut self.buffers, request, frame, &mut stats)?;
+        }
         stats.render_us = started.elapsed().as_micros().min(u64::MAX as u128) as u64;
         self.controller
             .telemetry_mut()
@@ -1093,6 +1096,199 @@ fn render_super_scaler_shell(
     request: NavigationTransitionRequest,
     frame: NavigationTransitionFrame,
 ) -> Result<NavigationTransitionRenderStats, NavigationTransitionFailure> {
+    if request.style != NavigationTransitionStyle::SuperScalerShell {
+        return render_legacy_decorated_shell(buffers, request, frame);
+    }
+    let source = buffers
+        .source
+        .get(..)
+        .filter(|_| buffers.source_ready)
+        .ok_or(NavigationTransitionFailure::SnapshotSizeMismatch)?;
+    let destination = buffers
+        .destination
+        .get(..)
+        .filter(|_| buffers.destination_ready);
+    let working = buffers.working.as_mut_slice();
+    if working.len() != source.len() {
+        return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
+    }
+    working.copy_from_slice(source);
+    let mut stats = NavigationTransitionRenderStats {
+        copied_pixels: source.len() as u64,
+        ..NavigationTransitionRenderStats::default()
+    };
+    let width = buffers.width;
+    let height = buffers.height;
+    let full = NavigationTransitionRect {
+        x: 0,
+        y: 0,
+        width: width.min(u16::MAX as usize) as u16,
+        height: height.min(u16::MAX as usize) as u16,
+    };
+    let shell = Rgb565Pixel(0x1028);
+    let mint = Rgb565Pixel(0x07d6);
+    let violet = Rgb565Pixel(0x79b8);
+    let deep_violet = Rgb565Pixel(0x30aa);
+
+    if frame.phase == NavigationTransitionPhase::Settled {
+        match frame.endpoint {
+            Some(NavigationTransitionEndpoint::Source) => return Ok(stats),
+            Some(NavigationTransitionEndpoint::Destination) => {
+                if let Some(destination) = destination {
+                    working.copy_from_slice(destination);
+                    stats.copied_pixels =
+                        stats.copied_pixels.saturating_add(destination.len() as u64);
+                }
+                return Ok(stats);
+            }
+            None => {}
+        }
+    }
+    if frame.progress_q16 == 0 {
+        return Ok(stats);
+    }
+
+    match request.direction {
+        NavigationTransitionDirection::Forward => {
+            if frame.reveal_progress_q16 > 0 {
+                fill_rect_565(working, width, height, full, shell, &mut stats);
+                if let Some(destination) = destination {
+                    reveal_destination_regions(
+                        working,
+                        destination,
+                        width,
+                        height,
+                        frame.reveal_progress_q16,
+                        request,
+                        &mut stats,
+                    );
+                }
+            }
+            let rect = super_scaler_card_rect(
+                request.geometry.source_card,
+                full,
+                frame.cover_progress_q16,
+            );
+            if frame.reveal_progress_q16 == 0 {
+                let source_background =
+                    background_outside_rect(source, width, height, request.geometry.source_card);
+                fill_rect_565(
+                    working,
+                    width,
+                    height,
+                    request.geometry.source_card,
+                    source_background,
+                    &mut stats,
+                );
+                if frame.cover_progress_q16 < 59_000 {
+                    for echo in (1..=3).rev() {
+                        let delayed_cover = frame
+                            .cover_progress_q16
+                            .saturating_sub((echo * 4_800) as u16);
+                        let echo_rect = super_scaler_card_rect(
+                            request.geometry.source_card,
+                            full,
+                            delayed_cover,
+                        );
+                        draw_outline_565(
+                            working,
+                            width,
+                            height,
+                            echo_rect,
+                            match echo {
+                                1 => mint,
+                                2 => violet,
+                                _ => deep_violet,
+                            },
+                            &mut stats,
+                        );
+                    }
+                }
+                fill_rect_565(working, width, height, rect, shell, &mut stats);
+                blit_scaled_card_565(
+                    working,
+                    source,
+                    width,
+                    height,
+                    request.geometry.source_card,
+                    rect,
+                    request.geometry.source_label,
+                    PROGRESS_MAX.saturating_sub(smoothstep_q16(window_q16(
+                        frame.cover_progress_q16,
+                        10_000,
+                        26_000,
+                    ))),
+                    &mut stats,
+                );
+                if frame.cover_progress_q16 < 62_000 {
+                    draw_outline_565(working, width, height, rect, mint, &mut stats);
+                }
+            }
+        }
+        NavigationTransitionDirection::Reverse => {
+            let cover = smoothstep_q16(frame.cover_progress_q16);
+            if frame.reveal_progress_q16 == 0 {
+                conceal_source_regions(
+                    working, source, width, height, cover, request, shell, &mut stats,
+                );
+            } else if let Some(destination) = destination {
+                working.copy_from_slice(destination);
+                stats.copied_pixels = stats.copied_pixels.saturating_add(destination.len() as u64);
+                let rect = super_scaler_card_rect(
+                    request.geometry.source_card,
+                    full,
+                    PROGRESS_MAX.saturating_sub(frame.reveal_progress_q16),
+                );
+                if frame.reveal_progress_q16 > 6_000 {
+                    for echo in (1..=3).rev() {
+                        let delayed = frame
+                            .reveal_progress_q16
+                            .saturating_sub((echo * 4_200) as u16);
+                        let echo_rect = super_scaler_card_rect(
+                            request.geometry.source_card,
+                            full,
+                            PROGRESS_MAX.saturating_sub(delayed),
+                        );
+                        draw_outline_565(
+                            working,
+                            width,
+                            height,
+                            echo_rect,
+                            match echo {
+                                1 => mint,
+                                2 => violet,
+                                _ => deep_violet,
+                            },
+                            &mut stats,
+                        );
+                    }
+                }
+                fill_rect_565(working, width, height, rect, shell, &mut stats);
+                blit_scaled_card_565(
+                    working,
+                    destination,
+                    width,
+                    height,
+                    request.geometry.source_card,
+                    rect,
+                    request.geometry.source_label,
+                    smoothstep_q16(window_q16(frame.reveal_progress_q16, 38_000, 60_000)),
+                    &mut stats,
+                );
+                if frame.reveal_progress_q16 > 4_000 {
+                    draw_outline_565(working, width, height, rect, mint, &mut stats);
+                }
+            }
+        }
+    }
+    Ok(stats)
+}
+
+fn render_legacy_decorated_shell(
+    buffers: &mut NavigationTransitionBuffers,
+    request: NavigationTransitionRequest,
+    frame: NavigationTransitionFrame,
+) -> Result<NavigationTransitionRenderStats, NavigationTransitionFailure> {
     let source = buffers
         .source
         .get(..)
@@ -1143,7 +1339,7 @@ fn render_super_scaler_shell(
             if frame.reveal_progress_q16 > 0 {
                 fill_rect_565(working, width, height, full, shell, &mut stats);
                 if let Some(destination) = destination {
-                    reveal_destination_bands(
+                    reveal_legacy_destination_bands(
                         working,
                         destination,
                         width,
@@ -1243,7 +1439,7 @@ fn render_super_scaler_shell(
     Ok(stats)
 }
 
-fn reveal_destination_bands(
+fn reveal_legacy_destination_bands(
     working: &mut [Rgb565Pixel],
     destination: &[Rgb565Pixel],
     width: usize,
@@ -1267,17 +1463,691 @@ fn reveal_destination_bands(
         let rise = 24usize.saturating_mul((PROGRESS_MAX - local) as usize) / PROGRESS_MAX as usize;
         let visible_rows = (y1 - y0).saturating_mul(local as usize) / PROGRESS_MAX as usize;
         for row in 0..visible_rows {
-            let dst_y = y1.saturating_sub(visible_rows).saturating_add(row);
-            let src_y = dst_y.saturating_add(rise).min(height.saturating_sub(1));
-            let dst_start = dst_y * width;
-            let src_start = src_y * width;
-            working[dst_start..dst_start + width]
-                .copy_from_slice(&destination[src_start..src_start + width]);
+            let destination_y = y1.saturating_sub(visible_rows).saturating_add(row);
+            let source_y = destination_y
+                .saturating_add(rise)
+                .min(height.saturating_sub(1));
+            let destination_start = destination_y * width;
+            let source_start = source_y * width;
+            working[destination_start..destination_start + width]
+                .copy_from_slice(&destination[source_start..source_start + width]);
             stats.copied_pixels = stats.copied_pixels.saturating_add(width as u64);
         }
     }
     if progress_q16 == PROGRESS_MAX {
         working.copy_from_slice(destination);
+    }
+}
+
+fn render_hero_label_last(
+    buffers: &mut NavigationTransitionBuffers,
+    request: NavigationTransitionRequest,
+    frame: NavigationTransitionFrame,
+    stats: &mut NavigationTransitionRenderStats,
+) -> Result<(), NavigationTransitionFailure> {
+    if frame.progress_q16 == 0
+        || frame.phase == NavigationTransitionPhase::Settled
+        || (request.direction == NavigationTransitionDirection::Forward
+            && frame.reveal_progress_q16 >= 62_000)
+    {
+        return Ok(());
+    }
+    let source = buffers
+        .source
+        .get(..)
+        .filter(|_| buffers.source_ready)
+        .ok_or(NavigationTransitionFailure::SnapshotSizeMismatch)?;
+    let destination = buffers
+        .destination
+        .get(..)
+        .filter(|_| buffers.destination_ready);
+    let working = buffers.working.as_mut_slice();
+    let width = buffers.width;
+    let height = buffers.height;
+    match request.direction {
+        NavigationTransitionDirection::Forward => {
+            if frame.reveal_progress_q16 > 0 {
+                erase_rect_from_snapshot_background(
+                    working,
+                    destination.unwrap_or(source),
+                    width,
+                    height,
+                    request.geometry.destination_title,
+                    stats,
+                );
+            }
+            move_label_between_rects(
+                working,
+                source,
+                width,
+                height,
+                request.geometry.source_label,
+                request.geometry.destination_title,
+                if frame.reveal_progress_q16 > 0 {
+                    PROGRESS_MAX
+                } else {
+                    smoothstep_q16(window_q16(frame.cover_progress_q16, 3_500, 60_000))
+                },
+                false,
+                stats,
+            );
+        }
+        NavigationTransitionDirection::Reverse => {
+            let progress = if frame.reveal_progress_q16 > 0 {
+                smoothstep_q16(frame.reveal_progress_q16)
+            } else {
+                0
+            };
+            move_label_between_rects(
+                working,
+                source,
+                width,
+                height,
+                request.geometry.destination_title,
+                request.geometry.source_label,
+                progress,
+                true,
+                stats,
+            );
+        }
+    }
+    Ok(())
+}
+
+fn reveal_destination_regions(
+    working: &mut [Rgb565Pixel],
+    destination: &[Rgb565Pixel],
+    width: usize,
+    height: usize,
+    progress_q16: u16,
+    request: NavigationTransitionRequest,
+    stats: &mut NavigationTransitionRenderStats,
+) {
+    if working.len() != destination.len() || width == 0 || height == 0 {
+        return;
+    }
+    let header_height = height.saturating_mul(15) / 100;
+    let header_progress = smoothstep_q16(window_q16(progress_q16, 0, 21_000));
+    copy_rect_horizontal_wipe(
+        working,
+        destination,
+        width,
+        height,
+        NavigationTransitionRect {
+            x: 0,
+            y: 0,
+            width: width as u16,
+            height: header_height as u16,
+        },
+        header_progress,
+        request.geometry.destination_title.x as usize,
+        stats,
+    );
+
+    if request.edge.enters_system_browser() {
+        let split_x = width.saturating_mul(55) / 100;
+        let body_y = header_height;
+        let selected_y = height.saturating_mul(46) / 100;
+        let selected_height = height.saturating_mul(10) / 100;
+        copy_rect_horizontal_wipe(
+            working,
+            destination,
+            width,
+            height,
+            NavigationTransitionRect {
+                x: 0,
+                y: selected_y as u16,
+                width: split_x as u16,
+                height: selected_height as u16,
+            },
+            smoothstep_q16(window_q16(progress_q16, 8_000, 27_000)),
+            request.geometry.destination_title.x as usize,
+            stats,
+        );
+        copy_rect_vertical_wipe(
+            working,
+            destination,
+            width,
+            height,
+            NavigationTransitionRect {
+                x: 0,
+                y: body_y as u16,
+                width: split_x as u16,
+                height: height.saturating_sub(body_y) as u16,
+            },
+            smoothstep_q16(window_q16(progress_q16, 15_000, 49_000)),
+            false,
+            stats,
+        );
+        copy_rect_horizontal_wipe(
+            working,
+            destination,
+            width,
+            height,
+            NavigationTransitionRect {
+                x: split_x as u16,
+                y: body_y as u16,
+                width: width.saturating_sub(split_x) as u16,
+                height: height.saturating_sub(body_y) as u16,
+            },
+            smoothstep_q16(window_q16(progress_q16, 26_000, 59_000)),
+            split_x,
+            stats,
+        );
+    } else {
+        let card_y = header_height;
+        let source_center = request.geometry.source_card.x as usize
+            + request.geometry.source_card.width as usize / 2;
+        let selected_column = (source_center.saturating_mul(4) / width).min(3);
+        for distance in 0..4 {
+            for column in 0usize..4 {
+                if column.abs_diff(selected_column) != distance {
+                    continue;
+                }
+                let x0 = column * width / 4;
+                let x1 = (column + 1) * width / 4;
+                let start = 9_000u16.saturating_add((distance * 5_500) as u16);
+                copy_rect_vertical_wipe(
+                    working,
+                    destination,
+                    width,
+                    height,
+                    NavigationTransitionRect {
+                        x: x0 as u16,
+                        y: card_y as u16,
+                        width: x1.saturating_sub(x0) as u16,
+                        height: height.saturating_sub(card_y) as u16,
+                    },
+                    smoothstep_q16(window_q16(
+                        progress_q16,
+                        start,
+                        start.saturating_add(31_000),
+                    )),
+                    false,
+                    stats,
+                );
+            }
+        }
+    }
+    if progress_q16 >= 62_000 {
+        working.copy_from_slice(destination);
+        stats.copied_pixels = stats.copied_pixels.saturating_add(destination.len() as u64);
+    }
+}
+
+fn super_scaler_card_rect(
+    source: NavigationTransitionRect,
+    full: NavigationTransitionRect,
+    progress_q16: u16,
+) -> NavigationTransitionRect {
+    const PRESS_END: u16 = 14_000;
+    if progress_q16 < PRESS_END {
+        let half = PRESS_END / 2;
+        let press = if progress_q16 <= half {
+            window_q16(progress_q16, 0, half)
+        } else {
+            PROGRESS_MAX.saturating_sub(window_q16(progress_q16, half, PRESS_END))
+        };
+        let inset_x = (3u32 * press as u32 / PROGRESS_MAX as u32) as u16;
+        let inset_y = (6u32 * press as u32 / PROGRESS_MAX as u32) as u16;
+        return NavigationTransitionRect {
+            x: source.x.saturating_add(inset_x),
+            y: source.y.saturating_add(inset_y),
+            width: source.width.saturating_sub(inset_x.saturating_mul(2)),
+            height: source.height.saturating_sub(inset_y.saturating_mul(2)),
+        };
+    }
+    let source_center = source.x as usize + source.width as usize / 2;
+    let full_center = full.width as usize / 2;
+    let selected_left = source_center <= full_center;
+    let near_end = 56_000;
+    let far_end = PROGRESS_MAX;
+    let left_end = if selected_left { near_end } else { far_end };
+    let right_end = if selected_left { far_end } else { near_end };
+    let left = lerp_u16(
+        source.x,
+        full.x,
+        smoothstep_q16(window_q16(progress_q16, PRESS_END, left_end)),
+    );
+    let right = lerp_u16(
+        source.right(),
+        full.right(),
+        smoothstep_q16(window_q16(progress_q16, PRESS_END, right_end)),
+    );
+    let top = lerp_u16(
+        source.y,
+        full.y,
+        smoothstep_q16(window_q16(progress_q16, PRESS_END, 59_000)),
+    );
+    let bottom = lerp_u16(
+        source.bottom(),
+        full.bottom(),
+        smoothstep_q16(window_q16(progress_q16, 16_000, PROGRESS_MAX)),
+    );
+    NavigationTransitionRect {
+        x: left,
+        y: top,
+        width: right.saturating_sub(left).max(1),
+        height: bottom.saturating_sub(top).max(1),
+    }
+}
+
+fn window_q16(progress_q16: u16, start_q16: u16, end_q16: u16) -> u16 {
+    if progress_q16 <= start_q16 {
+        return 0;
+    }
+    if progress_q16 >= end_q16 {
+        return PROGRESS_MAX;
+    }
+    ((progress_q16 - start_q16) as u32 * PROGRESS_MAX as u32
+        / end_q16.saturating_sub(start_q16).max(1) as u32) as u16
+}
+
+fn smoothstep_q16(progress_q16: u16) -> u16 {
+    let progress = progress_q16 as u64;
+    let maximum = PROGRESS_MAX as u64;
+    let squared = progress.saturating_mul(progress) / maximum;
+    squared
+        .saturating_mul(
+            maximum
+                .saturating_mul(3)
+                .saturating_sub(progress.saturating_mul(2)),
+        )
+        .saturating_div(maximum)
+        .min(maximum) as u16
+}
+
+fn background_outside_rect(
+    source: &[Rgb565Pixel],
+    width: usize,
+    height: usize,
+    rect: NavigationTransitionRect,
+) -> Rgb565Pixel {
+    if source.len() != width.saturating_mul(height) || width == 0 || height == 0 {
+        return Rgb565Pixel(0);
+    }
+    let x = (rect.x as usize).saturating_sub(2).min(width - 1);
+    let y = (rect.y as usize + rect.height as usize / 2).min(height - 1);
+    source[y * width + x]
+}
+
+#[allow(clippy::too_many_arguments)]
+fn blit_scaled_card_565(
+    destination: &mut [Rgb565Pixel],
+    source: &[Rgb565Pixel],
+    width: usize,
+    height: usize,
+    source_rect: NavigationTransitionRect,
+    target_rect: NavigationTransitionRect,
+    excluded_source_rect: NavigationTransitionRect,
+    texture_q16: u16,
+    stats: &mut NavigationTransitionRenderStats,
+) {
+    if source.len() != width.saturating_mul(height)
+        || destination.len() != source.len()
+        || !source_rect.fits(width, height)
+        || source_rect.width == 0
+        || source_rect.height == 0
+        || target_rect.width == 0
+        || target_rect.height == 0
+        || texture_q16 == 0
+    {
+        return;
+    }
+    let source_width = source_rect.width as usize;
+    let source_height = source_rect.height as usize;
+    let target_width = target_rect.width as usize;
+    let target_height = target_rect.height as usize;
+    let x_step_q16 = ((source_width as u64) << 16) / target_width as u64;
+    let y_step_q16 = ((source_height as u64) << 16) / target_height as u64;
+    const DITHER: [[u16; 4]; 4] = [
+        [0, 32_768, 8_192, 40_960],
+        [49_152, 16_384, 57_344, 24_576],
+        [12_288, 45_056, 4_096, 36_864],
+        [61_440, 28_672, 53_248, 20_480],
+    ];
+    for target_y in 0..target_height {
+        let y = target_rect.y as usize + target_y;
+        if y >= height {
+            break;
+        }
+        let source_y = source_rect.y as usize + ((target_y as u64 * y_step_q16) >> 16) as usize;
+        let mut source_x_q16 = 0u64;
+        for target_x in 0..target_width {
+            let x = target_rect.x as usize + target_x;
+            if x >= width {
+                break;
+            }
+            let source_x = source_rect.x as usize + (source_x_q16 >> 16) as usize;
+            source_x_q16 = source_x_q16.saturating_add(x_step_q16);
+            let excluded = source_x >= excluded_source_rect.x as usize
+                && source_x < excluded_source_rect.right() as usize
+                && source_y >= excluded_source_rect.y as usize
+                && source_y < excluded_source_rect.bottom() as usize;
+            if !excluded && DITHER[y & 3][x & 3] < texture_q16 {
+                destination[y * width + x] = source[source_y * width + source_x];
+            }
+        }
+    }
+    stats.copied_pixels = stats
+        .copied_pixels
+        .saturating_add(target_width.saturating_mul(target_height) as u64);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn copy_rect_horizontal_wipe(
+    working: &mut [Rgb565Pixel],
+    source: &[Rgb565Pixel],
+    width: usize,
+    height: usize,
+    rect: NavigationTransitionRect,
+    progress_q16: u16,
+    anchor_x: usize,
+    stats: &mut NavigationTransitionRenderStats,
+) {
+    let Some(rect) = clip_rect_to_frame(rect, width, height) else {
+        return;
+    };
+    if progress_q16 == 0 {
+        return;
+    }
+    let visible_width = rect.width as usize * progress_q16 as usize / PROGRESS_MAX as usize;
+    if visible_width == 0 {
+        return;
+    }
+    let minimum_x = rect.x as usize;
+    let maximum_x = rect.right() as usize;
+    let maximum_start = maximum_x.saturating_sub(visible_width).max(minimum_x);
+    let x0 = anchor_x
+        .saturating_sub(visible_width / 2)
+        .clamp(minimum_x, maximum_start);
+    copy_rect_565(
+        working,
+        source,
+        width,
+        height,
+        NavigationTransitionRect {
+            x: x0 as u16,
+            y: rect.y,
+            width: visible_width as u16,
+            height: rect.height,
+        },
+        stats,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn copy_rect_vertical_wipe(
+    working: &mut [Rgb565Pixel],
+    source: &[Rgb565Pixel],
+    width: usize,
+    height: usize,
+    rect: NavigationTransitionRect,
+    progress_q16: u16,
+    from_top: bool,
+    stats: &mut NavigationTransitionRenderStats,
+) {
+    let Some(rect) = clip_rect_to_frame(rect, width, height) else {
+        return;
+    };
+    if progress_q16 == 0 {
+        return;
+    }
+    let visible_height = rect.height as usize * progress_q16 as usize / PROGRESS_MAX as usize;
+    if visible_height == 0 {
+        return;
+    }
+    let y = if from_top {
+        rect.y as usize
+    } else {
+        rect.bottom() as usize - visible_height
+    };
+    copy_rect_565(
+        working,
+        source,
+        width,
+        height,
+        NavigationTransitionRect {
+            x: rect.x,
+            y: y as u16,
+            width: rect.width,
+            height: visible_height as u16,
+        },
+        stats,
+    );
+}
+
+fn clip_rect_to_frame(
+    rect: NavigationTransitionRect,
+    width: usize,
+    height: usize,
+) -> Option<NavigationTransitionRect> {
+    let x0 = (rect.x as usize).min(width);
+    let y0 = (rect.y as usize).min(height);
+    let x1 = (rect.right() as usize).min(width);
+    let y1 = (rect.bottom() as usize).min(height);
+    (x1 > x0 && y1 > y0).then_some(NavigationTransitionRect {
+        x: x0 as u16,
+        y: y0 as u16,
+        width: x1.saturating_sub(x0) as u16,
+        height: y1.saturating_sub(y0) as u16,
+    })
+}
+
+fn copy_rect_565(
+    working: &mut [Rgb565Pixel],
+    source: &[Rgb565Pixel],
+    width: usize,
+    height: usize,
+    rect: NavigationTransitionRect,
+    stats: &mut NavigationTransitionRenderStats,
+) {
+    if working.len() != source.len() || working.len() != width.saturating_mul(height) {
+        return;
+    }
+    let x0 = (rect.x as usize).min(width);
+    let x1 = (rect.right() as usize).min(width);
+    let y0 = (rect.y as usize).min(height);
+    let y1 = (rect.bottom() as usize).min(height);
+    for y in y0..y1 {
+        let start = y * width + x0;
+        let end = y * width + x1;
+        working[start..end].copy_from_slice(&source[start..end]);
+        stats.copied_pixels = stats
+            .copied_pixels
+            .saturating_add(end.saturating_sub(start) as u64);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn conceal_source_regions(
+    working: &mut [Rgb565Pixel],
+    _source: &[Rgb565Pixel],
+    width: usize,
+    height: usize,
+    progress_q16: u16,
+    request: NavigationTransitionRequest,
+    shell: Rgb565Pixel,
+    stats: &mut NavigationTransitionRenderStats,
+) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    if request.edge.enters_system_browser() {
+        let split_x = width.saturating_mul(55) / 100;
+        let body_y = height.saturating_mul(15) / 100;
+        let preview_progress = smoothstep_q16(window_q16(progress_q16, 0, 31_000));
+        let preview_width =
+            width.saturating_sub(split_x) * preview_progress as usize / PROGRESS_MAX as usize;
+        fill_rect_565(
+            working,
+            width,
+            height,
+            NavigationTransitionRect {
+                x: width.saturating_sub(preview_width) as u16,
+                y: body_y as u16,
+                width: preview_width as u16,
+                height: height.saturating_sub(body_y) as u16,
+            },
+            shell,
+            stats,
+        );
+        let list_progress = smoothstep_q16(window_q16(progress_q16, 7_000, 46_000));
+        let list_height =
+            height.saturating_sub(body_y) * list_progress as usize / PROGRESS_MAX as usize;
+        fill_rect_565(
+            working,
+            width,
+            height,
+            NavigationTransitionRect {
+                x: 0,
+                y: height.saturating_sub(list_height) as u16,
+                width: split_x as u16,
+                height: list_height as u16,
+            },
+            shell,
+            stats,
+        );
+        let header_progress = smoothstep_q16(window_q16(progress_q16, 36_000, PROGRESS_MAX));
+        let header_width = width * header_progress as usize / PROGRESS_MAX as usize;
+        fill_rect_565(
+            working,
+            width,
+            height,
+            NavigationTransitionRect {
+                x: (width.saturating_sub(header_width) / 2) as u16,
+                y: 0,
+                width: header_width as u16,
+                height: body_y as u16,
+            },
+            shell,
+            stats,
+        );
+    } else {
+        let source_center = request.geometry.source_card.x as usize
+            + request.geometry.source_card.width as usize / 2;
+        let selected_column = (source_center.saturating_mul(4) / width).min(3);
+        for column in 0usize..4 {
+            let start = (column.abs_diff(selected_column) * 4_000) as u16;
+            let local = smoothstep_q16(window_q16(
+                progress_q16,
+                start,
+                48_000u16.saturating_add(start),
+            ));
+            let x0 = column * width / 4;
+            let x1 = (column + 1) * width / 4;
+            let covered_height = height * local as usize / PROGRESS_MAX as usize;
+            fill_rect_565(
+                working,
+                width,
+                height,
+                NavigationTransitionRect {
+                    x: x0 as u16,
+                    y: height.saturating_sub(covered_height) as u16,
+                    width: x1.saturating_sub(x0) as u16,
+                    height: covered_height as u16,
+                },
+                shell,
+                stats,
+            );
+        }
+    }
+    if progress_q16 == PROGRESS_MAX {
+        fill_rect_565(
+            working,
+            width,
+            height,
+            NavigationTransitionRect {
+                x: 0,
+                y: 0,
+                width: width as u16,
+                height: height as u16,
+            },
+            shell,
+            stats,
+        );
+    }
+}
+
+fn erase_rect_from_snapshot_background(
+    working: &mut [Rgb565Pixel],
+    snapshot: &[Rgb565Pixel],
+    width: usize,
+    height: usize,
+    rect: NavigationTransitionRect,
+    stats: &mut NavigationTransitionRenderStats,
+) {
+    if working.len() != width.saturating_mul(height)
+        || snapshot.len() != working.len()
+        || width == 0
+        || height == 0
+    {
+        return;
+    }
+    let background = opaque_content_bounds(snapshot, width, height, rect)
+        .map(|(_, background)| background)
+        .unwrap_or_else(|| {
+            let sample_x = (rect.right() as usize + 2).min(width - 1);
+            let sample_y = (rect.y as usize + rect.height as usize / 2).min(height - 1);
+            snapshot[sample_y * width + sample_x]
+        });
+    fill_rect_565(working, width, height, rect, background, stats);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn move_label_between_rects(
+    working: &mut [Rgb565Pixel],
+    source: &[Rgb565Pixel],
+    width: usize,
+    height: usize,
+    from: NavigationTransitionRect,
+    to: NavigationTransitionRect,
+    progress_q16: u16,
+    center_target: bool,
+    stats: &mut NavigationTransitionRenderStats,
+) {
+    let Some((content, background)) = opaque_content_bounds(source, width, height, from) else {
+        return;
+    };
+    let target_content = label_target_rect(content, from, to, center_target);
+    blit_scaled_masked_565(
+        working,
+        source,
+        width,
+        height,
+        content,
+        lerp_rect(content, target_content, progress_q16),
+        background,
+        stats,
+    );
+}
+
+fn label_target_rect(
+    content: NavigationTransitionRect,
+    from: NavigationTransitionRect,
+    to: NavigationTransitionRect,
+    center_target: bool,
+) -> NavigationTransitionRect {
+    let target_height = ((content.height as u32 * to.height.max(1) as u32)
+        / from.height.max(1) as u32)
+        .min(to.height.max(1) as u32)
+        .max(1) as u16;
+    let target_width = ((content.width as u32 * target_height as u32)
+        / content.height.max(1) as u32)
+        .min(to.width.max(1) as u32)
+        .max(1) as u16;
+    NavigationTransitionRect {
+        x: if center_target {
+            to.x.saturating_add(to.width.saturating_sub(target_width) / 2)
+        } else {
+            to.x
+        },
+        y: to.y.saturating_add(
+            ((content.y.saturating_sub(from.y) as u32 * to.height as u32)
+                / from.height.max(1) as u32) as u16,
+        ),
+        width: target_width,
+        height: target_height,
     }
 }
 
@@ -1576,6 +2446,235 @@ mod tests {
             settled.endpoint,
             Some(NavigationTransitionEndpoint::Destination)
         );
+    }
+
+    #[test]
+    fn super_scaler_card_press_and_expansion_keep_exact_endpoints() {
+        let source = geometry().source_card;
+        let full = NavigationTransitionRect {
+            x: 0,
+            y: 0,
+            width: 960,
+            height: 540,
+        };
+
+        assert_eq!(super_scaler_card_rect(source, full, 0), source);
+        let pressed = super_scaler_card_rect(source, full, 7_000);
+        assert_eq!(pressed.x, source.x + 3);
+        assert_eq!(pressed.y, source.y + 6);
+        assert_eq!(pressed.width, source.width - 6);
+        assert_eq!(pressed.height, source.height - 12);
+        assert_eq!(super_scaler_card_rect(source, full, PROGRESS_MAX), full);
+    }
+
+    #[test]
+    fn super_scaler_keeps_exact_source_and_has_no_cover_reveal_surface_cut() {
+        let width = 32;
+        let height = 24;
+        let source = (0..width * height)
+            .map(|pixel| Rgb565Pixel((pixel as u16).wrapping_mul(17)))
+            .collect::<Vec<_>>();
+        let destination = (0..width * height)
+            .map(|pixel| Rgb565Pixel((pixel as u16).wrapping_mul(29)))
+            .collect::<Vec<_>>();
+        let mut buffers = NavigationTransitionBuffers::new(width, height);
+        buffers.capture_source(&source).unwrap();
+        buffers.capture_destination(&destination).unwrap();
+        let request = NavigationTransitionRequest::new(
+            NavigationTransitionStyle::SuperScalerShell,
+            NavigationTransitionEdge::HomeToArcade,
+            NavigationTransitionDirection::Forward,
+            NavigationTransitionGeometry {
+                source_card: NavigationTransitionRect {
+                    x: 2,
+                    y: 4,
+                    width: 8,
+                    height: 16,
+                },
+                source_label: NavigationTransitionRect {
+                    x: 3,
+                    y: 10,
+                    width: 6,
+                    height: 3,
+                },
+                destination_title: NavigationTransitionRect {
+                    x: 1,
+                    y: 1,
+                    width: 10,
+                    height: 3,
+                },
+            },
+        );
+        let at_source = render_super_scaler_shell(
+            &mut buffers,
+            request,
+            NavigationTransitionFrame {
+                phase: NavigationTransitionPhase::Expand,
+                owns_full_frame: true,
+                ..NavigationTransitionFrame::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(at_source.copied_pixels, source.len() as u64);
+        assert_eq!(buffers.working(), source);
+
+        render_super_scaler_shell(
+            &mut buffers,
+            request,
+            NavigationTransitionFrame {
+                phase: NavigationTransitionPhase::Expand,
+                progress_q16: COVER_PROGRESS,
+                cover_progress_q16: PROGRESS_MAX,
+                owns_full_frame: true,
+                ..NavigationTransitionFrame::default()
+            },
+        )
+        .unwrap();
+        let final_cover = buffers.working().to_vec();
+        render_super_scaler_shell(
+            &mut buffers,
+            request,
+            NavigationTransitionFrame {
+                phase: NavigationTransitionPhase::Reveal,
+                progress_q16: COVER_PROGRESS + 1,
+                cover_progress_q16: PROGRESS_MAX,
+                reveal_progress_q16: 1,
+                owns_full_frame: true,
+                ..NavigationTransitionFrame::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(buffers.working(), final_cover);
+    }
+
+    #[test]
+    fn scaled_card_excludes_the_duplicate_label_surface() {
+        let width = 8;
+        let height = 8;
+        let mut source = vec![Rgb565Pixel(0x1111); width * height];
+        let card = NavigationTransitionRect {
+            x: 1,
+            y: 1,
+            width: 6,
+            height: 6,
+        };
+        let label = NavigationTransitionRect {
+            x: 3,
+            y: 3,
+            width: 2,
+            height: 2,
+        };
+        for y in label.y as usize..label.bottom() as usize {
+            for x in label.x as usize..label.right() as usize {
+                source[y * width + x] = Rgb565Pixel(0xffff);
+            }
+        }
+        let mut destination = vec![Rgb565Pixel(0x2222); width * height];
+        let mut stats = NavigationTransitionRenderStats::default();
+        blit_scaled_card_565(
+            &mut destination,
+            &source,
+            width,
+            height,
+            card,
+            card,
+            label,
+            PROGRESS_MAX,
+            &mut stats,
+        );
+
+        assert_eq!(destination[3 * width + 3], Rgb565Pixel(0x2222));
+        assert_eq!(destination[1 * width + 1], Rgb565Pixel(0x1111));
+    }
+
+    #[test]
+    fn forward_hero_title_docks_to_left_aligned_destination() {
+        let from = NavigationTransitionRect {
+            x: 20,
+            y: 100,
+            width: 180,
+            height: 16,
+        };
+        let centered_content = NavigationTransitionRect {
+            x: 80,
+            y: 103,
+            width: 60,
+            height: 10,
+        };
+        let destination = NavigationTransitionRect {
+            x: 16,
+            y: 16,
+            width: 160,
+            height: 24,
+        };
+
+        let target = label_target_rect(centered_content, from, destination, false);
+
+        assert_eq!(target.x, destination.x);
+        assert_eq!(target.y, 20);
+        assert_eq!(target.height, 15);
+    }
+
+    #[test]
+    fn final_region_reveal_is_the_exact_destination() {
+        let width = 16;
+        let height = 12;
+        let mut working = vec![Rgb565Pixel(0); width * height];
+        let destination = (0..width * height)
+            .map(|pixel| Rgb565Pixel(pixel as u16))
+            .collect::<Vec<_>>();
+        let mut stats = NavigationTransitionRenderStats::default();
+
+        reveal_destination_regions(
+            &mut working,
+            &destination,
+            width,
+            height,
+            62_000,
+            request(),
+            &mut stats,
+        );
+
+        assert_eq!(working, destination);
+    }
+
+    #[test]
+    fn wipe_helpers_clip_saturated_rectangles_without_panicking() {
+        let width = 8;
+        let height = 6;
+        let source = vec![Rgb565Pixel(0xaaaa); width * height];
+        let mut working = vec![Rgb565Pixel(0); width * height];
+        let mut stats = NavigationTransitionRenderStats::default();
+        let saturated = NavigationTransitionRect {
+            x: 6,
+            y: 4,
+            width: u16::MAX,
+            height: u16::MAX,
+        };
+
+        copy_rect_horizontal_wipe(
+            &mut working,
+            &source,
+            width,
+            height,
+            saturated,
+            PROGRESS_MAX,
+            usize::MAX,
+            &mut stats,
+        );
+        copy_rect_vertical_wipe(
+            &mut working,
+            &source,
+            width,
+            height,
+            saturated,
+            PROGRESS_MAX,
+            false,
+            &mut stats,
+        );
+
+        assert_eq!(working[4 * width + 6], Rgb565Pixel(0xaaaa));
+        assert_eq!(working[5 * width + 7], Rgb565Pixel(0xaaaa));
     }
 
     #[test]
