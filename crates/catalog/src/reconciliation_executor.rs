@@ -268,6 +268,11 @@ pub fn execute_reconciliation_with_events(
         && !crate::cooperative_work::in_background_scope();
     let completed_shards = if pipeline_enabled {
         worker_count = 2;
+        for planned in &rebuilds {
+            emit(ReconciliationEvent::SystemScanning {
+                system_id: planned.system_id.clone(),
+            });
+        }
         let pipeline = execute_fresh_pipeline(
             storage_root,
             &rebuilds,
@@ -284,6 +289,12 @@ pub fn execute_reconciliation_with_events(
         pipeline_fallbacks = pipeline.fallbacks;
         shard_build_wall_time = pipeline.build_time;
         shard_publication_wall_time = pipeline.publish_time;
+        for shard in &pipeline.completed {
+            emit(ReconciliationEvent::SystemPrepared {
+                system_id: shard.system.system_id.clone(),
+                generation: expected_generation,
+            });
+        }
         pipeline.completed
     } else {
         let mut sequential = Vec::with_capacity(rebuilds.len());
