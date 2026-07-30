@@ -188,7 +188,7 @@ required = {
     "mister-magik/mame.sqlite3",
     "mister-magik/hbmame.sqlite3",
     "mister-magik/platform-v3.manifest",
-    "mister-magik/platform-bundle-v0.1.json",
+    "mister-magik/platform-bundle-v0.2.json",
     "mister-magik/game-databases-manifest.json",
     "mister-magik/mister_magik_scanout_slots.ko",
     "mister-magik/fpga/menu-magik-vblank-latch.rbf",
