@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 // Keep this compatible with the previous builder during an in-place deploy. The
 // new operation and events are additive; an old launcher never requests them.
-pub const CATALOG_BUILDER_PROTOCOL_VERSION: u32 = 1;
+pub const CATALOG_BUILDER_PROTOCOL_VERSION: u32 = 2;
 pub const DEFAULT_CATALOG_BUILDER_LOCK_PATH: &str = "/tmp/mister-magik/catalog-builder.lock";
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -89,6 +89,23 @@ pub enum CatalogBuilderEvent {
         protocol: u32,
         system_id: String,
     },
+    SystemPrepared {
+        protocol: u32,
+        system_id: String,
+        generation: u64,
+    },
+    SystemFailed {
+        protocol: u32,
+        system_id: String,
+        stage: String,
+        error: String,
+    },
+    ManifestPublished {
+        protocol: u32,
+        generation: u64,
+        rebuilt: Vec<String>,
+        removed: Vec<String>,
+    },
     Timing {
         protocol: u32,
         name: String,
@@ -141,6 +158,9 @@ impl CatalogBuilderEvent {
             | Self::PlanReady { protocol, .. }
             | Self::SystemDiscovered { protocol, .. }
             | Self::SystemScanning { protocol, .. }
+            | Self::SystemPrepared { protocol, .. }
+            | Self::SystemFailed { protocol, .. }
+            | Self::ManifestPublished { protocol, .. }
             | Self::Timing { protocol, .. }
             | Self::FreshCleanupStarted { protocol }
             | Self::FreshCleanupCompleted { protocol, .. }

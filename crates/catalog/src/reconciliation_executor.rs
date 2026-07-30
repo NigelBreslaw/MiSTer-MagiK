@@ -113,11 +113,42 @@ pub enum ReconciliationOutcome {
     },
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ReconciliationEvent {
+    SystemScanning {
+        system_id: SystemId,
+    },
+    SystemPrepared {
+        system_id: SystemId,
+        generation: u64,
+    },
+    SystemFailed {
+        system_id: SystemId,
+        stage: String,
+        error: String,
+    },
+    ManifestPublished {
+        generation: u64,
+        rebuilt: Vec<SystemId>,
+        removed: Vec<SystemId>,
+    },
+}
+
 pub fn execute_reconciliation(
     storage_root: &Path,
     plan: &ReconcilePlan,
     limits: RegistryLimits,
     materializer: &mut impl ReconciliationMaterializer,
+) -> Result<ReconciliationOutcome, ReconciliationError> {
+    execute_reconciliation_with_events(storage_root, plan, limits, materializer, &mut |_| {})
+}
+
+pub fn execute_reconciliation_with_events(
+    storage_root: &Path,
+    plan: &ReconcilePlan,
+    limits: RegistryLimits,
+    materializer: &mut impl ReconciliationMaterializer,
+    emit: &mut dyn FnMut(ReconciliationEvent),
 ) -> Result<ReconciliationOutcome, ReconciliationError> {
     fs::create_dir_all(storage_root)
         .map_err(|error| ReconciliationError::with("storage", error))?;
@@ -257,12 +288,20 @@ pub fn execute_reconciliation(
     } else {
         let mut sequential = Vec::with_capacity(rebuilds.len());
         for planned in &rebuilds {
+            emit(ReconciliationEvent::SystemScanning {
+                system_id: planned.system_id.clone(),
+            });
             crate::cooperative_work::checkpoint();
             let phase_started = Instant::now();
             let materialized =
                 match materializer.materialize(&planned.system_id, expected_generation) {
                     Ok(materialized) => materialized,
                     Err(error) => {
+                        emit(ReconciliationEvent::SystemFailed {
+                            system_id: planned.system_id.clone(),
+                            stage: error.stage().to_string(),
+                            error: error.to_string(),
+                        });
                         if resume_journal.is_none() {
                             remove_planned_generation(storage_root, &rebuilds, expected_generation);
                         }
@@ -271,6 +310,11 @@ pub fn execute_reconciliation(
                 };
             materialize_time += phase_started.elapsed();
             if let Err(error) = validate_materialized(&planned.system_id, &materialized) {
+                emit(ReconciliationEvent::SystemFailed {
+                    system_id: planned.system_id.clone(),
+                    stage: error.stage().to_string(),
+                    error: error.to_string(),
+                });
                 if resume_journal.is_none() {
                     remove_planned_generation(storage_root, &rebuilds, expected_generation);
                 }
@@ -291,6 +335,10 @@ pub fn execute_reconciliation(
                             elapsed: Duration::ZERO,
                             artifact_bytes: 0,
                             copy_hash_time: Duration::ZERO,
+                        });
+                        emit(ReconciliationEvent::SystemPrepared {
+                            system_id: planned.system_id.clone(),
+                            generation: expected_generation,
                         });
                         continue;
                     }
@@ -366,9 +414,18 @@ pub fn execute_reconciliation(
                     }
                     shard_build_wall_time += shard.elapsed.saturating_sub(shard.publish_time);
                     shard_publication_wall_time += shard.publish_time;
+                    emit(ReconciliationEvent::SystemPrepared {
+                        system_id: planned.system_id.clone(),
+                        generation: expected_generation,
+                    });
                     sequential.push(shard);
                 }
                 Err(error) => {
+                    emit(ReconciliationEvent::SystemFailed {
+                        system_id: planned.system_id.clone(),
+                        stage: error.stage().to_string(),
+                        error: error.to_string(),
+                    });
                     if resume_journal.is_none() {
                         remove_planned_generation(storage_root, &rebuilds, expected_generation);
                     }
@@ -421,6 +478,11 @@ pub fn execute_reconciliation(
         }
     };
     materializer.commit_facts()?;
+    emit(ReconciliationEvent::ManifestPublished {
+        generation: expected_generation,
+        rebuilt: rebuilt.clone(),
+        removed: removed.clone(),
+    });
     crate::catalog_logln!(
         "catalog_v3_reconciliation_tsv\tgeneration={}\trebuilt={}\tmaterialize_us={}\tshard_workers={}\tshard_batch_us={}\tshard_build_wall_us={}\tshard_publication_wall_us={}\tshard_write_us={}\tartifact_publish_us={}\tartifact_copy_hash_us={}\tartifact_publish_bytes={}\tpipeline_overlap_us={}\tpipeline_queue_wait_us={}\tpipeline_peak_in_flight={}\tpipeline_fallbacks={}\tbarrier_us={}\tmanifest_us={}\tslowest_system={}\tslowest_us={}",
         expected_generation,

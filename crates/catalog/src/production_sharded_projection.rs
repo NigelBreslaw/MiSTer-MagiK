@@ -7,8 +7,8 @@ use crate::arcade_catalog::ArcadeCatalog;
 use crate::catalog_classify::{LauncherSection, SystemId, system_definition};
 use crate::catalog_domain::ScanUnitId;
 use crate::reconciliation_executor::{
-    MaterializedSystem, ReconciliationError, ReconciliationMaterializer, ReconciliationOutcome,
-    execute_reconciliation,
+    MaterializedSystem, ReconciliationError, ReconciliationEvent, ReconciliationMaterializer,
+    ReconciliationOutcome, execute_reconciliation, execute_reconciliation_with_events,
 };
 use crate::shard_registry::{
     ManifestSystem, RegistryLimits, manifest_slots_present, read_latest_manifest,
@@ -56,6 +56,8 @@ pub struct ProductionProjectionOutcome {
     pub games: usize,
     pub rebuilt_systems: usize,
     pub removed_systems: usize,
+    pub rebuilt: Vec<SystemId>,
+    pub removed: Vec<SystemId>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -208,6 +210,15 @@ pub fn publish_production_projection(
     catalog: &ArcadeCatalog,
     limits: RegistryLimits,
 ) -> Result<ProductionProjectionOutcome, ReconciliationError> {
+    publish_production_projection_with_events(storage_root, catalog, limits, &mut |_| {})
+}
+
+pub fn publish_production_projection_with_events(
+    storage_root: &Path,
+    catalog: &ArcadeCatalog,
+    limits: RegistryLimits,
+    emit: &mut dyn FnMut(ReconciliationEvent),
+) -> Result<ProductionProjectionOutcome, ReconciliationError> {
     let projection_started = Instant::now();
     let current_manifest = match read_latest_manifest_lazy(storage_root, limits) {
         Ok(manifest) => Some(manifest),
@@ -301,7 +312,8 @@ pub fn publish_production_projection(
         manifest_only: false,
     };
     let reconciliation_started = Instant::now();
-    let result = execute_reconciliation(storage_root, &plan, limits, &mut materializer)?;
+    let result =
+        execute_reconciliation_with_events(storage_root, &plan, limits, &mut materializer, emit)?;
     crate::catalog_logln!(
         "catalog_v3_projection_phases_tsv\tplanning_us={}\treconciliation_us={}\ttotal_us={}",
         planning_us,
@@ -319,6 +331,8 @@ pub fn publish_production_projection(
             games: catalog.len(),
             rebuilt_systems: rebuilt.len(),
             removed_systems: removed.len(),
+            rebuilt,
+            removed,
         }),
         ReconciliationOutcome::Unchanged { generation } => Ok(ProductionProjectionOutcome {
             generation: generation.unwrap_or(0),
@@ -326,6 +340,8 @@ pub fn publish_production_projection(
             games: catalog.len(),
             rebuilt_systems: 0,
             removed_systems: 0,
+            rebuilt: Vec::new(),
+            removed: Vec::new(),
         }),
     }
 }
@@ -380,7 +396,23 @@ pub fn publish_bound_production_projection(
     catalog_fingerprint: &str,
     limits: RegistryLimits,
 ) -> Result<ProductionProjectionOutcome, ReconciliationError> {
-    let outcome = publish_production_projection(storage_root, catalog, limits)?;
+    publish_bound_production_projection_with_events(
+        storage_root,
+        catalog,
+        catalog_fingerprint,
+        limits,
+        &mut |_| {},
+    )
+}
+
+pub fn publish_bound_production_projection_with_events(
+    storage_root: &Path,
+    catalog: &ArcadeCatalog,
+    catalog_fingerprint: &str,
+    limits: RegistryLimits,
+    emit: &mut dyn FnMut(ReconciliationEvent),
+) -> Result<ProductionProjectionOutcome, ReconciliationError> {
+    let outcome = publish_production_projection_with_events(storage_root, catalog, limits, emit)?;
     write_binding(
         storage_root,
         &CatalogBinding {

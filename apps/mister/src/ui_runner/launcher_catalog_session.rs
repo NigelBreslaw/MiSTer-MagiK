@@ -62,6 +62,15 @@ pub(super) enum CatalogSessionEffect {
     CatalogSystemScanning {
         system_id: String,
     },
+    CatalogSystemPrepared {
+        system_id: String,
+        generation: u64,
+    },
+    CatalogManifestPublished {
+        generation: u64,
+        rebuilt: Vec<String>,
+        removed: Vec<String>,
+    },
     CatalogSystemReady {
         system_id: String,
     },
@@ -321,6 +330,35 @@ impl LauncherCatalogSession {
             }
             CatalogWorkerMessage::SystemScanning { system_id } => {
                 effects.push(CatalogSessionEffect::CatalogSystemScanning { system_id });
+            }
+            CatalogWorkerMessage::SystemPrepared {
+                system_id,
+                generation,
+            } => {
+                effects.push(CatalogSessionEffect::CatalogSystemPrepared {
+                    system_id,
+                    generation,
+                });
+            }
+            CatalogWorkerMessage::SystemUpdateFailed { system_id, error } => {
+                effects.push(CatalogSessionEffect::CatalogSystemFailed {
+                    system_id: system_id.clone(),
+                });
+                effects.event(
+                    "catalog_system_update_failed",
+                    format!("system={system_id} error={error}"),
+                );
+            }
+            CatalogWorkerMessage::ManifestPublished {
+                generation,
+                rebuilt,
+                removed,
+            } => {
+                effects.push(CatalogSessionEffect::CatalogManifestPublished {
+                    generation,
+                    rebuilt,
+                    removed,
+                });
             }
             CatalogWorkerMessage::SystemShardReady { system_id, games } => {
                 effects.push(CatalogSessionEffect::CatalogSystemReady {
@@ -860,6 +898,8 @@ mod tests {
                         | CatalogSessionEffect::CatalogPlanReady { .. }
                         | CatalogSessionEffect::CatalogSystemDiscovered { .. }
                         | CatalogSessionEffect::CatalogSystemScanning { .. }
+                        | CatalogSessionEffect::CatalogSystemPrepared { .. }
+                        | CatalogSessionEffect::CatalogManifestPublished { .. }
                         | CatalogSessionEffect::CatalogSystemReady { .. }
                         | CatalogSessionEffect::CatalogSystemFailed { .. }
                         | CatalogSessionEffect::PersistCatalogFailure { .. }
@@ -880,6 +920,8 @@ mod tests {
                 | CatalogSessionEffect::CatalogPlanReady { .. }
                 | CatalogSessionEffect::CatalogSystemDiscovered { .. }
                 | CatalogSessionEffect::CatalogSystemScanning { .. }
+                | CatalogSessionEffect::CatalogSystemPrepared { .. }
+                | CatalogSessionEffect::CatalogManifestPublished { .. }
                 | CatalogSessionEffect::CatalogSystemReady { .. }
                 | CatalogSessionEffect::CatalogSystemFailed { .. }
                 | CatalogSessionEffect::PersistCatalogFailure { .. }
@@ -915,6 +957,8 @@ mod tests {
                     | CatalogSessionEffect::CatalogPlanReady { .. }
                     | CatalogSessionEffect::CatalogSystemDiscovered { .. }
                     | CatalogSessionEffect::CatalogSystemScanning { .. }
+                    | CatalogSessionEffect::CatalogSystemPrepared { .. }
+                    | CatalogSessionEffect::CatalogManifestPublished { .. }
                     | CatalogSessionEffect::CatalogSystemReady { .. }
                     | CatalogSessionEffect::CatalogSystemFailed { .. }
                     | CatalogSessionEffect::PersistCatalogFailure { .. }
@@ -942,6 +986,8 @@ mod tests {
                 | CatalogSessionEffect::CatalogPlanReady { .. }
                 | CatalogSessionEffect::CatalogSystemDiscovered { .. }
                 | CatalogSessionEffect::CatalogSystemScanning { .. }
+                | CatalogSessionEffect::CatalogSystemPrepared { .. }
+                | CatalogSessionEffect::CatalogManifestPublished { .. }
                 | CatalogSessionEffect::CatalogSystemReady { .. }
                 | CatalogSessionEffect::CatalogSystemFailed { .. }
                 | CatalogSessionEffect::PersistCatalogFailure { .. }

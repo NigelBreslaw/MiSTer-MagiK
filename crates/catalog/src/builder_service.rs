@@ -176,6 +176,7 @@ trait BuilderBackend {
         &mut self,
         prepared: Self::Prepared,
         progress: &mut dyn FnMut(&str, &str),
+        lifecycle: &mut dyn FnMut(crate::reconciliation_executor::ReconciliationEvent),
     ) -> Result<BuilderSummary, String>;
     fn write_build_duration(
         &mut self,
@@ -442,7 +443,9 @@ fn run_with_backend<B: BuilderBackend>(
     };
     wait_for_background_heavy_work_enabled(background_build);
     let summary = backend
-        .persist(prepared.value, &mut progress)
+        .persist(prepared.value, &mut progress, &mut |event| {
+            emit_reconciliation_event(protocol, event, emit);
+        })
         .map_err(|error| fail(protocol, "persist", error, emit))?;
     let completed_build_seconds = backend
         .write_build_duration(&config.sqlite_path, run_started.elapsed())
@@ -565,6 +568,56 @@ fn emit_scan_event(
                 }),
             });
         }
+    }
+}
+
+fn emit_reconciliation_event(
+    protocol: u32,
+    event: crate::reconciliation_executor::ReconciliationEvent,
+    emit: &mut dyn FnMut(CatalogBuilderEvent),
+) {
+    use crate::reconciliation_executor::ReconciliationEvent;
+    match event {
+        ReconciliationEvent::SystemScanning { system_id } => {
+            emit(CatalogBuilderEvent::SystemScanning {
+                protocol,
+                system_id: system_id.as_str().to_string(),
+            });
+        }
+        ReconciliationEvent::SystemPrepared {
+            system_id,
+            generation,
+        } => emit(CatalogBuilderEvent::SystemPrepared {
+            protocol,
+            system_id: system_id.as_str().to_string(),
+            generation,
+        }),
+        ReconciliationEvent::SystemFailed {
+            system_id,
+            stage,
+            error,
+        } => emit(CatalogBuilderEvent::SystemFailed {
+            protocol,
+            system_id: system_id.as_str().to_string(),
+            stage,
+            error,
+        }),
+        ReconciliationEvent::ManifestPublished {
+            generation,
+            rebuilt,
+            removed,
+        } => emit(CatalogBuilderEvent::ManifestPublished {
+            protocol,
+            generation,
+            rebuilt: rebuilt
+                .into_iter()
+                .map(|system_id| system_id.as_str().to_string())
+                .collect(),
+            removed: removed
+                .into_iter()
+                .map(|system_id| system_id.as_str().to_string())
+                .collect(),
+        }),
     }
 }
 
@@ -1113,6 +1166,7 @@ impl BuilderBackend for SystemBuilderBackend {
         &mut self,
         prepared: Self::Prepared,
         progress: &mut dyn FnMut(&str, &str),
+        lifecycle: &mut dyn FnMut(crate::reconciliation_executor::ReconciliationEvent),
     ) -> Result<BuilderSummary, String> {
         let PreparedBuild {
             persistence,
@@ -1130,13 +1184,15 @@ impl BuilderBackend for SystemBuilderBackend {
         progress("Indexing library", "Publishing system catalogs…");
         let v3_started = Instant::now();
         let projection_started = Instant::now();
-        let outcome = crate::production_sharded_projection::publish_bound_production_projection(
-            &crate::catalog_config::default_sharded_catalog_path(),
-            &catalog,
-            &catalog_fingerprint,
-            crate::production_sharded_projection::production_registry_limits(),
-        )
-        .map_err(|error| format!("publish V3 system catalogs: {error}"))?;
+        let outcome =
+            crate::production_sharded_projection::publish_bound_production_projection_with_events(
+                &crate::catalog_config::default_sharded_catalog_path(),
+                &catalog,
+                &catalog_fingerprint,
+                crate::production_sharded_projection::production_registry_limits(),
+                lifecycle,
+            )
+            .map_err(|error| format!("publish V3 system catalogs: {error}"))?;
         let projection_us = projection_started.elapsed().as_micros();
         drop(catalog);
         trim_catalog_allocator("shards-complete");
@@ -1630,6 +1686,7 @@ mod tests {
             &mut self,
             _prepared: Self::Prepared,
             progress: &mut dyn FnMut(&str, &str),
+            _lifecycle: &mut dyn FnMut(crate::reconciliation_executor::ReconciliationEvent),
         ) -> Result<BuilderSummary, String> {
             self.calls.push("persist");
             self.persist_background_scopes
@@ -1674,6 +1731,9 @@ mod tests {
             CatalogBuilderEvent::PlanReady { .. } => "plan-ready",
             CatalogBuilderEvent::SystemDiscovered { .. } => "system-discovered",
             CatalogBuilderEvent::SystemScanning { .. } => "system-scanning",
+            CatalogBuilderEvent::SystemPrepared { .. } => "system-prepared",
+            CatalogBuilderEvent::SystemFailed { .. } => "system-failed",
+            CatalogBuilderEvent::ManifestPublished { .. } => "manifest-published",
             CatalogBuilderEvent::Timing { .. } => "timing",
             CatalogBuilderEvent::FreshCleanupStarted { .. } => "fresh-cleanup-started",
             CatalogBuilderEvent::FreshCleanupCompleted { .. } => "fresh-cleanup-completed",

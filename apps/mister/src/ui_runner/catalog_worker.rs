@@ -1001,6 +1001,39 @@ fn handle_embedded_builder_event(
         CatalogBuilderEvent::SystemScanning { system_id, .. } => {
             let _ = tx.send(CatalogWorkerMessage::SystemScanning { system_id });
         }
+        CatalogBuilderEvent::SystemPrepared {
+            system_id,
+            generation,
+            ..
+        } => {
+            let _ = tx.send(CatalogWorkerMessage::SystemPrepared {
+                system_id,
+                generation,
+            });
+        }
+        CatalogBuilderEvent::SystemFailed {
+            system_id,
+            stage,
+            error,
+            ..
+        } => {
+            let _ = tx.send(CatalogWorkerMessage::SystemUpdateFailed {
+                system_id,
+                error: format!("{stage}: {error}"),
+            });
+        }
+        CatalogBuilderEvent::ManifestPublished {
+            generation,
+            rebuilt,
+            removed,
+            ..
+        } => {
+            let _ = tx.send(CatalogWorkerMessage::ManifestPublished {
+                generation,
+                rebuilt,
+                removed,
+            });
+        }
         CatalogBuilderEvent::Timing { name, detail, .. } => {
             let _ = tx.send(CatalogWorkerMessage::Timing { name, detail });
         }
@@ -1262,6 +1295,19 @@ pub(super) enum CatalogWorkerMessage {
     },
     SystemScanning {
         system_id: String,
+    },
+    SystemPrepared {
+        system_id: String,
+        generation: u64,
+    },
+    SystemUpdateFailed {
+        system_id: String,
+        error: String,
+    },
+    ManifestPublished {
+        generation: u64,
+        rebuilt: Vec<String>,
+        removed: Vec<String>,
     },
     SystemShardReady {
         system_id: String,

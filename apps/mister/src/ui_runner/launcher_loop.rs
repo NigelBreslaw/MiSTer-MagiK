@@ -5903,6 +5903,31 @@ fn apply_catalog_session_effects(
                 nav.sync_launcher_taxonomy(catalog);
                 *full_bridge_dirty = true;
             }
+            CatalogSessionEffect::CatalogSystemPrepared {
+                system_id,
+                generation,
+            } => {
+                print_startup_event(
+                    start,
+                    "catalog_system_prepared",
+                    format!("system={system_id} generation={generation}"),
+                );
+            }
+            CatalogSessionEffect::CatalogManifestPublished {
+                generation,
+                rebuilt,
+                removed,
+            } => {
+                print_startup_event(
+                    start,
+                    "catalog_manifest_published",
+                    format!(
+                        "generation={generation} rebuilt={} removed={}",
+                        rebuilt.join(","),
+                        removed.join(",")
+                    ),
+                );
+            }
             CatalogSessionEffect::CatalogSystemReady { system_id } => {
                 nav.catalog_system_hydration_finished(&system_id);
                 nav.catalog_system_ready(&system_id);
