@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 // Keep this compatible with the previous builder during an in-place deploy. The
 // new operation and events are additive; an old launcher never requests them.
-pub const CATALOG_BUILDER_PROTOCOL_VERSION: u32 = 2;
+pub const CATALOG_BUILDER_PROTOCOL_VERSION: u32 = 3;
 pub const DEFAULT_CATALOG_BUILDER_LOCK_PATH: &str = "/tmp/mister-magik/catalog-builder.lock";
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -61,6 +61,30 @@ pub struct CatalogProgressMetadata {
     pub scan_target: Option<CatalogScanTargetProgress>,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CatalogPlannedAction {
+    Rebuild,
+    Remove,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CatalogPlanReason {
+    ChangedInput,
+    ConservativeFallback,
+    RemovedInput,
+    ProjectionUpgrade,
+    ExplicitRebuild,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct CatalogPlannedSystem {
+    pub system_id: String,
+    pub action: CatalogPlannedAction,
+    pub reasons: Vec<CatalogPlanReason>,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum CatalogBuilderEvent {
@@ -80,6 +104,8 @@ pub enum CatalogBuilderEvent {
         protocol: u32,
         system_ids: Vec<String>,
         all_published_systems: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        systems: Vec<CatalogPlannedSystem>,
     },
     SystemDiscovered {
         protocol: u32,
@@ -263,6 +289,34 @@ mod tests {
             serde_json::from_str::<CatalogBuilderEvent>(&encoded).unwrap(),
             event
         );
+    }
+
+    #[test]
+    fn affected_system_plan_round_trips_actions_and_reasons() {
+        let event = CatalogBuilderEvent::PlanReady {
+            protocol: CATALOG_BUILDER_PROTOCOL_VERSION,
+            system_ids: vec!["snes".into()],
+            all_published_systems: false,
+            systems: vec![CatalogPlannedSystem {
+                system_id: "snes".into(),
+                action: CatalogPlannedAction::Rebuild,
+                reasons: vec![CatalogPlanReason::ChangedInput],
+            }],
+        };
+        let encoded = serde_json::to_string(&event).unwrap();
+        assert_eq!(
+            serde_json::from_str::<CatalogBuilderEvent>(&encoded).unwrap(),
+            event
+        );
+
+        let previous: CatalogBuilderEvent = serde_json::from_str(
+            r#"{"event":"plan_ready","protocol":2,"system_ids":["snes"],"all_published_systems":false}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            previous,
+            CatalogBuilderEvent::PlanReady { systems, .. } if systems.is_empty()
+        ));
     }
 
     #[test]

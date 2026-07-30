@@ -4,7 +4,8 @@
 use crate::arcade_catalog::ArcadeCatalog;
 use crate::builder_protocol::{
     BuilderSummary, CATALOG_BUILDER_PROTOCOL_VERSION, CatalogBuilderEvent, CatalogChangeReason,
-    CatalogFailureCode, CatalogFailureDiagnostic,
+    CatalogFailureCode, CatalogFailureDiagnostic, CatalogPlanReason, CatalogPlannedAction,
+    CatalogPlannedSystem,
 };
 use crate::catalog_build_record;
 use crate::catalog_navigation::write_catalog_navigation_snapshot_with_timing;
@@ -260,7 +261,12 @@ fn run_with_backend<B: BuilderBackend>(
             });
         };
         backend.bootstrap_first_visible(&mut progress, &mut |event| {
-            emit_scan_event(protocol, event, &mut *protocol_output.borrow_mut());
+            emit_scan_event(
+                protocol,
+                operation,
+                event,
+                &mut *protocol_output.borrow_mut(),
+            );
         })
     }
     .map_err(|error| fail(protocol, "bootstrap", error, emit))?;
@@ -338,7 +344,12 @@ fn run_with_backend<B: BuilderBackend>(
             });
         };
         backend.scan(&mut scan_progress, &mut |event| {
-            emit_scan_event(protocol, event, &mut *protocol_output.borrow_mut());
+            emit_scan_event(
+                protocol,
+                operation,
+                event,
+                &mut *protocol_output.borrow_mut(),
+            );
         })
     }
     .map_err(|error| fail(protocol, "scan", error, emit))?;
@@ -521,6 +532,7 @@ fn emit_timings(
 
 fn emit_scan_event(
     protocol: u32,
+    operation: BuilderOperation,
     event: crate::library_db::LibraryScanEvent,
     emit: &mut dyn FnMut(CatalogBuilderEvent),
 ) {
@@ -529,10 +541,41 @@ fn emit_scan_event(
             system_ids,
             all_published_systems,
         } => {
+            let explicit_all = operation == BuilderOperation::RebuildAll;
+            let all_published_systems = all_published_systems || explicit_all;
+            let mut system_ids = system_ids;
+            if all_published_systems
+                && let Ok(manifest) = crate::shard_registry::read_latest_manifest_lazy(
+                    &crate::catalog_config::default_sharded_catalog_path(),
+                    crate::shard_registry::production_registry_limits(),
+                )
+            {
+                system_ids = manifest
+                    .systems
+                    .into_iter()
+                    .map(|system| system.system_id.as_str().to_string())
+                    .collect();
+            }
+            let reason = if explicit_all {
+                CatalogPlanReason::ExplicitRebuild
+            } else if all_published_systems {
+                CatalogPlanReason::ConservativeFallback
+            } else {
+                CatalogPlanReason::ChangedInput
+            };
+            let systems = system_ids
+                .iter()
+                .map(|system_id| CatalogPlannedSystem {
+                    system_id: system_id.clone(),
+                    action: CatalogPlannedAction::Rebuild,
+                    reasons: vec![reason],
+                })
+                .collect();
             emit(CatalogBuilderEvent::PlanReady {
                 protocol,
                 system_ids,
                 all_published_systems,
+                systems,
             });
         }
         crate::library_db::LibraryScanEvent::SystemDiscovered { system_id } => {

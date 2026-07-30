@@ -996,6 +996,7 @@ fn handle_embedded_builder_event(
         CatalogBuilderEvent::PlanReady {
             system_ids,
             all_published_systems,
+            systems: _,
             ..
         } => {
             let all_published_systems =
@@ -2351,6 +2352,7 @@ mod tests {
                 protocol,
                 system_ids: vec!["amiga".into()],
                 all_published_systems: false,
+                systems: Vec::new(),
             },
             &tx,
             &mut CatalogProgressCoalescer::default(),
