@@ -962,10 +962,18 @@ pub(super) fn slint_menu_items(nav: &LauncherNav) -> Rc<VecModel<slint_ui::launc
                             )
                             .into()
                         }
-                        crate::launcher_taxonomy::LauncherMenuItemKind::Collection => "".into(),
+                        crate::launcher_taxonomy::LauncherMenuItemKind::Collection => {
+                            if available {
+                                format!("{} games available", item.count).into()
+                            } else {
+                                "".into()
+                            }
+                        }
                     }
                 } else if partial {
                     "Some items failed".into()
+                } else if failed && available {
+                    format!("Update failed • {} games", item.count).into()
                 } else if failed {
                     "Load failed — A to retry".into()
                 } else {
@@ -985,6 +993,8 @@ pub(super) fn slint_menu_items(nav: &LauncherNav) -> Rc<VecModel<slint_ui::launc
                     slint_ui::launcher::MenuItemStatus::Scanning
                 } else if partial {
                     slint_ui::launcher::MenuItemStatus::Partial
+                } else if failed && available {
+                    slint_ui::launcher::MenuItemStatus::UpdateFailed
                 } else if failed {
                     slint_ui::launcher::MenuItemStatus::Failed
                 } else {

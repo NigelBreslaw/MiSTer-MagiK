@@ -2186,41 +2186,58 @@ mod macos {
 
     fn home_menu_items(selected: usize) -> ModelRc<MenuItem> {
         let definitions = [
-            ("arcade", "Arcade", "2,184 games", MenuItemStatus::Ready),
-            ("console", "Consoles", "6,420 games", MenuItemStatus::Ready),
+            ("ready", "Ready", "2,184 games", MenuItemStatus::Ready, true),
             (
-                "computer",
-                "Computers",
+                "published-scanning",
+                "Published",
+                "842 games available",
+                MenuItemStatus::Scanning,
+                true,
+            ),
+            (
+                "new-scanning",
+                "New System",
                 "Scanning…",
                 MenuItemStatus::Scanning,
+                false,
             ),
             (
-                "handheld",
-                "Handhelds",
+                "update-failed",
+                "Update Failed",
+                "Update failed • 68 games",
+                MenuItemStatus::UpdateFailed,
+                true,
+            ),
+            (
+                "computer",
+                "Partial",
                 "1,126 games",
                 MenuItemStatus::Partial,
+                true,
             ),
-            ("favorites", "Favourites", "42 games", MenuItemStatus::Ready),
             (
-                "recent",
-                "Recently Added",
+                "new-failed",
+                "Unavailable",
                 "Scan failed",
                 MenuItemStatus::Failed,
+                false,
             ),
         ];
         ModelRc::new(VecModel::from(
             definitions
                 .into_iter()
                 .enumerate()
-                .map(|(index, (id, label, subtitle, status))| MenuItem {
-                    id: id.into(),
-                    label: label.into(),
-                    subtitle: subtitle.into(),
-                    focused: index == selected,
-                    available: status != MenuItemStatus::Failed,
-                    node_kind: MenuItemKind::Collection,
-                    status,
-                })
+                .map(
+                    |(index, (id, label, subtitle, status, available))| MenuItem {
+                        id: id.into(),
+                        label: label.into(),
+                        subtitle: subtitle.into(),
+                        focused: index == selected,
+                        available,
+                        node_kind: MenuItemKind::Collection,
+                        status,
+                    },
+                )
                 .collect::<Vec<_>>(),
         ))
     }

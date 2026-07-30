@@ -320,10 +320,18 @@ fn build_menu_items(nav: &LauncherNav) -> Rc<VecModel<MenuItem>> {
                             )
                             .into()
                         }
-                        LauncherMenuItemKind::Collection => "".into(),
+                        LauncherMenuItemKind::Collection => {
+                            if available {
+                                format!("{} games available", item.count).into()
+                            } else {
+                                "".into()
+                            }
+                        }
                     }
                 } else if partial {
                     "Some items failed".into()
+                } else if failed && available {
+                    format!("Update failed • {} games", item.count).into()
                 } else if failed {
                     "Load failed — A to retry".into()
                 } else {
@@ -339,6 +347,8 @@ fn build_menu_items(nav: &LauncherNav) -> Rc<VecModel<MenuItem>> {
                     MenuItemStatus::Scanning
                 } else if partial {
                     MenuItemStatus::Partial
+                } else if failed && available {
+                    MenuItemStatus::UpdateFailed
                 } else if failed {
                     MenuItemStatus::Failed
                 } else {

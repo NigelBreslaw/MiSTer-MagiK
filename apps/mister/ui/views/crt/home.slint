@@ -4,6 +4,7 @@
 import { MisterUi } from "../../mister_window.slint";
 import { MisterBridge } from "../../api.slint";
 import { CrtTheme, CrtHeader, CrtFooter, CrtCard } from "../../components/crt_ui.slint";
+import { MenuItemStatus } from "../../launcher_menu.slint";
 
 export component HomeGrid inherits Rectangle {
     property <bool> root-menu: MisterBridge.menu-breadcrumb == "";
@@ -47,8 +48,9 @@ export component HomeGrid inherits Rectangle {
                 width: parent.width;
                 height: root.card-height;
                 label: item.label;
-                detail: root.root-menu ? "" : item.subtitle;
+                detail: root.root-menu && item.status == MenuItemStatus.ready ? "" : item.subtitle;
                 focused: item.focused;
+                status: item.status;
             }
         }
 

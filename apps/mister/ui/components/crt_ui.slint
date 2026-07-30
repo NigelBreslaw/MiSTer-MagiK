@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { MisterUi } from "../mister_window.slint";
+import { MenuItemStatus } from "../launcher_menu.slint";
 
 export global CrtTheme {
     in-out property <color> background: #020817;
@@ -140,10 +141,19 @@ export component CrtCard inherits Rectangle {
     in property <string> detail;
     in property <bool> focused;
     in property <bool> show-marker: true;
+    in property <MenuItemStatus> status: MenuItemStatus.ready;
 
-    background: root.focused ? CrtTheme.accent : CrtTheme.panel-alt;
+    background: root.focused ? CrtTheme.accent
+        : root.status == MenuItemStatus.failed ? #250918
+        : root.status == MenuItemStatus.update-failed ? #211807
+        : root.status == MenuItemStatus.scanning ? #071b2f
+        : CrtTheme.panel-alt;
     border-width: MisterUi.border;
-    border-color: root.focused ? CrtTheme.accent : CrtTheme.border;
+    border-color: root.focused ? CrtTheme.accent
+        : root.status == MenuItemStatus.failed ? CrtTheme.danger
+        : root.status == MenuItemStatus.update-failed ? CrtTheme.warning
+        : root.status == MenuItemStatus.scanning ? CrtTheme.accent
+        : CrtTheme.border;
 
     HorizontalLayout {
         padding-left: MisterUi.grid-x * 2;
@@ -168,7 +178,11 @@ export component CrtCard inherits Rectangle {
             Text {
                 text: root.label;
                 font-family: MisterUi.crt-font-family;
-                color: root.focused ? CrtTheme.accent-text : CrtTheme.text;
+                color: root.focused ? CrtTheme.accent-text
+                    : root.status == MenuItemStatus.failed ? CrtTheme.danger
+                    : root.status == MenuItemStatus.update-failed ? CrtTheme.warning
+                    : root.status == MenuItemStatus.scanning ? CrtTheme.accent
+                    : CrtTheme.text;
                 font-size: MisterUi.card-title-font;
                 overflow: elide;
                 vertical-alignment: center;
@@ -177,7 +191,11 @@ export component CrtCard inherits Rectangle {
             if root.detail != "" : Text {
                 text: root.detail;
                 font-family: MisterUi.crt-font-family;
-                color: root.focused ? #17304a : CrtTheme.muted;
+                color: root.focused ? #17304a
+                    : root.status == MenuItemStatus.failed ? CrtTheme.danger
+                    : root.status == MenuItemStatus.update-failed ? CrtTheme.warning
+                    : root.status == MenuItemStatus.scanning ? CrtTheme.accent
+                    : CrtTheme.muted;
                 font-size: MisterUi.card-detail-font;
                 overflow: elide;
                 vertical-alignment: center;

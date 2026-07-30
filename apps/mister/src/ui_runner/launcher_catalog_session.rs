@@ -3,7 +3,8 @@
 
 use super::launcher_worker_intents::{
     CatalogCounterPhase, CatalogProgressUiIntent, CatalogWorkerUiContext, LauncherWorkerUiIntent,
-    cached_catalog_validation_intent, catalog_rebuild_started_intent, parse_games_found_detail,
+    cached_catalog_validation_intent, catalog_plan_ready_intent, catalog_rebuild_started_intent,
+    parse_games_found_detail,
 };
 use super::*;
 
@@ -314,6 +315,10 @@ impl LauncherCatalogSession {
                 system_ids,
                 all_published_systems,
             } => {
+                effects.ui(catalog_plan_ready_intent(
+                    system_ids.len(),
+                    all_published_systems,
+                ));
                 effects.push(CatalogSessionEffect::CatalogPlanReady {
                     system_ids,
                     all_published_systems,

@@ -57,12 +57,14 @@ export component LauncherTile inherits Rectangle {
     border-width: 2px;
     border-color: status == MenuItemStatus.failed
         ? #a9445b
+        : status == MenuItemStatus.update-failed ? #c58b3a
         : status == MenuItemStatus.partial ? #c58b3a
         : status == MenuItemStatus.scanning
             ? #7b91ad
             : #5a4973;
     background: status == MenuItemStatus.failed
         ? #291820
+        : status == MenuItemStatus.update-failed ? #292318
         : status == MenuItemStatus.partial ? #292318
         : status == MenuItemStatus.scanning ? #172131 : #181829;
 
@@ -81,6 +83,7 @@ export component LauncherTile inherits Rectangle {
                 ? #06d6a0
                 : status == MenuItemStatus.failed
                     ? #ef8da2
+                    : status == MenuItemStatus.update-failed ? #f0c36e
                     : status == MenuItemStatus.partial ? #f0c36e
                     : status == MenuItemStatus.scanning ? #d7eef8 : #9080a8;
             font-size: 16px;
@@ -102,6 +105,7 @@ export component LauncherTile inherits Rectangle {
                 ? #d8d4dd
                 : status == MenuItemStatus.failed
                     ? #ef8da2
+                    : status == MenuItemStatus.update-failed ? #f0c36e
                     : status == MenuItemStatus.partial ? #f0c36e
                     : status == MenuItemStatus.scanning ? #8ca4b5 : #9080a800;
             font-size: 8px;
