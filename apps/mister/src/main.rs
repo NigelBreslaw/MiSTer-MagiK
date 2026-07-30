@@ -12,6 +12,8 @@
 //!                        write rebuild-on-next-boot marker for fault tests
 //!     toggle-simple-joystick-setting
 //!                        toggle settings.json simple joystick flag for fault tests
+//!     purge-library-data --confirm
+//!                        delete catalog and screenshot artifacts without rebooting
 //!     reset-delete-screenshot-packs
 //!                        delete screenshot media artifacts for fault tests
 //!   Diagnostics:
@@ -338,6 +340,7 @@ fn dispatch_pre_fpga(cmd: &str, args: &[String]) {
         "request-library-rebuild" => run_request_library_rebuild(),
         "toggle-simple-joystick-setting" => run_toggle_simple_joystick_setting(),
         "display-persist" => run_display_persist(args),
+        "purge-library-data" => run_purge_library_data(args),
         "reset-delete-screenshot-packs" => run_reset_delete_screenshot_packs(args),
         "benchmark-capabilities" => print_benchmark_capabilities(),
         "search-bench" => search_bench::run(),
@@ -514,6 +517,51 @@ fn run_display_persist(args: &[String]) {
             crate::ui_errln!("display_persist\tfailed\tmode={mode}\terror={error}");
             std::process::exit(1);
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PurgeLibraryDataInvocation {
+    Confirmed,
+    Help,
+    Invalid,
+}
+
+fn purge_library_data_invocation(args: &[String]) -> PurgeLibraryDataInvocation {
+    match args.get(2..) {
+        Some([argument]) if argument == "--confirm" => PurgeLibraryDataInvocation::Confirmed,
+        Some([argument]) if argument == "--help" || argument == "-h" => {
+            PurgeLibraryDataInvocation::Help
+        }
+        _ => PurgeLibraryDataInvocation::Invalid,
+    }
+}
+
+fn print_purge_library_data_usage() {
+    crate::ui_logln!("usage: mister-magik-fb purge-library-data --confirm");
+}
+
+fn run_purge_library_data(args: &[String]) {
+    match purge_library_data_invocation(args) {
+        PurgeLibraryDataInvocation::Help => {
+            print_purge_library_data_usage();
+        }
+        PurgeLibraryDataInvocation::Invalid => {
+            print_purge_library_data_usage();
+            crate::ui_errln!("purge-library-data requires the exact --confirm argument");
+            std::process::exit(2);
+        }
+        PurgeLibraryDataInvocation::Confirmed => match launcher::purge_library_data() {
+            Ok(outcome) => crate::ui_logln!(
+                "purge_library_data\tdone\tcatalog_removed={}\tscreenshot_removed={}",
+                outcome.catalog_artifacts_removed,
+                outcome.screenshot_artifacts_removed
+            ),
+            Err(error) => {
+                crate::ui_errln!("purge_library_data\tfailed\t{error}");
+                std::process::exit(1);
+            }
+        },
     }
 }
 
@@ -2605,6 +2653,37 @@ mod tests {
             false, false, false
         ));
         assert!(!should_defer_parent_boot_library_refresh(true, false, true));
+    }
+
+    #[test]
+    fn destructive_library_purge_requires_exact_confirmation() {
+        let args = |tail: &[&str]| {
+            ["mister-magik-fb", "purge-library-data"]
+                .into_iter()
+                .chain(tail.iter().copied())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            purge_library_data_invocation(&args(&["--confirm"])),
+            PurgeLibraryDataInvocation::Confirmed
+        );
+        assert_eq!(
+            purge_library_data_invocation(&args(&["--help"])),
+            PurgeLibraryDataInvocation::Help
+        );
+        for invalid in [
+            args(&[]),
+            args(&["confirm"]),
+            args(&["--confirm", "extra"]),
+            args(&["--force"]),
+        ] {
+            assert_eq!(
+                purge_library_data_invocation(&invalid),
+                PurgeLibraryDataInvocation::Invalid
+            );
+        }
     }
 
     #[test]

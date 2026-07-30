@@ -68,6 +68,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("request-library-rebuild", CommandKind::PreFpga),
     CommandSpec::new("toggle-simple-joystick-setting", CommandKind::PreFpga),
     CommandSpec::new("display-persist", CommandKind::PreFpga),
+    CommandSpec::new("purge-library-data", CommandKind::PreFpga),
     CommandSpec::new("reset-delete-screenshot-packs", CommandKind::PreFpga),
     CommandSpec::new("benchmark-capabilities", CommandKind::PreFpga),
     CommandSpec::new("search-bench", CommandKind::PreFpga),
@@ -154,6 +155,7 @@ pub fn requires_process_exclusive(command: &str) -> bool {
             | "library-refresh"
             | "request-library-rebuild"
             | "toggle-simple-joystick-setting"
+            | "purge-library-data"
             | "reset-delete-screenshot-packs"
             | "media-bench-download"
             | "media-bench-save"
@@ -192,6 +194,7 @@ mod tests {
     #[test]
     fn recognizes_explicit_commands() {
         assert_command_kind("library-refresh", CommandKind::PreFpga);
+        assert_command_kind("purge-library-data", CommandKind::PreFpga);
         assert_command_kind("reset-delete-screenshot-packs", CommandKind::PreFpga);
         assert_command_kind("ui", CommandKind::Fpga);
         for command in command_names() {
@@ -229,6 +232,7 @@ mod tests {
         assert!(requires_process_exclusive("ui"));
         assert!(requires_process_exclusive("early-black"));
         assert!(requires_process_exclusive("library-refresh"));
+        assert!(requires_process_exclusive("purge-library-data"));
         assert!(!requires_process_exclusive("catalog-v3-inspect"));
         assert!(!requires_process_exclusive("read"));
         assert!(!requires_process_exclusive("vsync-probe"));

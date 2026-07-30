@@ -4626,10 +4626,31 @@ pub fn reset_launch() {
     LAUNCH_STATE.store(LAUNCH_IDLE, Ordering::Release);
 }
 
-pub fn reset_catalog_and_reboot() -> Result<(), String> {
-    mister_magik_catalog::builder_service::remove_default_production_catalog_artifacts()?;
-    delete_screenshot_packs()?;
-    reboot_mister()
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PurgeLibraryDataOutcome {
+    pub catalog_artifacts_removed: usize,
+    pub screenshot_artifacts_removed: usize,
+}
+
+pub fn purge_library_data() -> Result<PurgeLibraryDataOutcome, String> {
+    let asset_dir = std::env::var("MISTER_MEDIA_ASSET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| mister_magik_catalog::device_layout::current_app_path("assets"));
+    purge_library_data_with(&asset_dir, || {
+        mister_magik_catalog::builder_service::remove_default_production_catalog_artifacts()
+    })
+}
+
+fn purge_library_data_with(
+    asset_dir: &Path,
+    remove_catalog: impl FnOnce() -> Result<usize, String>,
+) -> Result<PurgeLibraryDataOutcome, String> {
+    let catalog_artifacts_removed = remove_catalog()?;
+    let screenshot_artifacts_removed = delete_screenshot_packs_at(asset_dir)?;
+    Ok(PurgeLibraryDataOutcome {
+        catalog_artifacts_removed,
+        screenshot_artifacts_removed,
+    })
 }
 
 pub fn delete_screenshot_packs() -> Result<usize, String> {
@@ -7526,6 +7547,29 @@ mod tests {
         assert!(root.join("manual.pdf").exists());
         assert!(root.join("arcade-screenshots-320x320.mmlz4b.dir").exists());
 
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn library_purge_reports_catalog_and_screenshot_counts_and_is_idempotent() {
+        let root = unique_temp_dir("library-purge");
+        std::fs::write(root.join("arcade-screenshots-320x320.mmlz4b"), b"pack")
+            .expect("write screenshot pack");
+        std::fs::write(root.join("manual.pdf"), b"keep").expect("write unrelated asset");
+
+        let outcome =
+            purge_library_data_with(&root, || Ok(7)).expect("purge catalog and screenshots");
+        assert_eq!(
+            outcome,
+            PurgeLibraryDataOutcome {
+                catalog_artifacts_removed: 7,
+                screenshot_artifacts_removed: 1,
+            }
+        );
+        assert!(root.join("manual.pdf").exists());
+
+        let repeated = purge_library_data_with(&root, || Ok(0)).expect("repeat purge");
+        assert_eq!(repeated, PurgeLibraryDataOutcome::default());
         let _ = std::fs::remove_dir_all(root);
     }
 
