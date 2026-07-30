@@ -19,6 +19,10 @@ catalog storage.
 - Start warm launches from a small registry and one eager Arcade mini-nav.
 - Load other systems only when selected.
 - Rebuild and publish only changed system projections.
+- Keep the published generation launchable while warm reconciliation prepares
+  its replacement.
+- Report queued, scanning, prepared, and failed activity per system rather than
+  treating the whole catalog as one binary scan.
 - Keep every post-reveal scan and rebuild phase continuously on CPU0 at
   background priority so UI work on the display core remains responsive.
 - Keep catalog construction testable and benchmarkable without Slint, the
@@ -43,6 +47,8 @@ catalog-v3/
   state/
     catalog-state.sqlite3
     scanner-cache.sqlite3
+    builder-state.sqlite3
+    build-progress.sqlite3
   catalog.binding.json
 ```
 
@@ -88,6 +94,22 @@ Rust heap retention.
 
 `state/scanner-cache.sqlite3` separately owns discovery timestamps and software
 hashes. It is scanner state, not a game catalog or UI projection.
+
+`state/builder-state.sqlite3` owns the last successfully committed scan-unit
+fingerprints and their produced-system dependencies. Stable scan-unit IDs are
+derived from target kind and normalized path. The planner expands changed
+inputs through those dependencies to select exact systems; missing, corrupt,
+ambiguous, schema-incompatible, or manifest-mismatched state conservatively
+selects all published systems. Planner state is committed only after the new
+manifest, binding, scanner cache, and catalog state are durable.
+
+`state/build-progress.sqlite3` is an interruption journal for an in-progress
+initial or warm build. It is bound to the active and intended generations,
+semantic contract, and target fingerprints. Matching completed targets and
+prepared shards can be resumed after launching a game terminates the launcher;
+changed targets invalidate only their dependent checkpoints. A manifest or
+semantic-contract change discards the journal. Both builder state databases are
+disposable internal state and are never publication authority.
 
 The retired files `library.sqlite3`, `library.summary.json`, and
 `library.nav.lz4b` are not production inputs or outputs. Acceptance fails if a
@@ -185,7 +207,7 @@ snapshot is published and retained. If no first-visible projection can be
 published, initial creation stays foreground rather than waiting on a
 post-reveal policy transition that never happened.
 
-A first build also keeps disposable durable progress in
+Initial and warm builds keep disposable durable progress in
 `catalog-v3/state/build-progress.sqlite3`. Completed scan
 targets are committed atomically with their eligible-input fingerprints. After
 a launcher handoff terminates MagiK, the next launcher re-enumerates target
@@ -197,7 +219,8 @@ paying an exFAT durability barrier for every small directory. Completed,
 unpublished system shards are likewise hash- and schema-checked before reuse.
 Resumable first-build shard publication is deliberately sequential: each shard
 is synced, validated, and journaled before the next begins. Warm replacement
-rebuilds retain the bounded producer/publisher pipeline.
+rebuilds remain background work and retain published authority while candidate
+shards are prepared.
 
 Neither the latch nor the progress journal is catalog authority. Readers accept
 only the normal publication chain: all immutable shards, artifact barrier,
@@ -211,11 +234,19 @@ adapts the latch into that signal.
 
 ## Incremental Rebuild And Publication
 
-The scanner computes the canonical catalog stamp and uses its scanner cache to
-avoid unnecessary source work. Projection reconciliation compares each
-candidate system with its currently published shard. Unchanged systems retain
-their immutable artifact paths and generations; changed systems receive new
-SQLite/navigation pairs; removed systems disappear from the next registry.
+The worker vocabulary is `LoadOnly`, `CheckStamp`, `InitialBuild`,
+`Reconcile { scope: ChangedInputs | AllSystems }`, and `FreshBuild`. A missing
+catalog always becomes an initial build. `ChangedInputs` uses committed
+scan-unit dependencies to select exact systems. `AllSystems`, used by Settings
+→ **Rebuild Database**, deliberately rebuilds every published/current system
+without deleting the active generation.
+
+The scanner computes the canonical catalog stamp and uses its scanner cache and
+builder state to avoid unnecessary source work. Projection reconciliation
+compares each candidate system with its currently published shard. Unchanged
+systems retain their immutable artifact paths and generations; changed systems
+receive new SQLite/navigation pairs; removed systems disappear only from the
+next published registry.
 
 If no system changes, no new registry generation is published. If one system
 changes, only that system projection is rebuilt even though the registry still
@@ -225,6 +256,25 @@ not a release blocker; selection correctness and UI responsiveness are gates.
 
 Publication is manifest-last and failure-atomic. Garbage collection may remove
 only artifacts not referenced by the active or retained previous generation.
+
+## Published Availability And Update Activity
+
+Published availability and update activity are independent. The launcher
+projects each system as:
+
+- published plus queued/scanning/prepared: selectable with its published game
+  count and old games;
+- new plus queued/scanning/prepared: a disabled scanning placeholder;
+- published plus failed: selectable with an update warning;
+- new plus failed: disabled with a hard failure;
+- unaffected: unchanged.
+
+Parent groups aggregate only updating descendants. Prepared shards remain
+non-authoritative and continue to display as scanning. `ManifestPublished` is
+the final builder event; only then does the launcher refresh the registry,
+replace an active changed collection, remove deleted systems, or return Home
+when the active collection was removed. A warm failure keeps the old generation
+and screenshot media available.
 
 ## Compatibility And Recovery
 
@@ -238,10 +288,20 @@ the new manifest, binding, scanner cache, and catalog state validate and publish
 successfully.
 
 An atomic rebuild retains the usable catalog while replacements are built and
-switches authority with the normal manifest-last publication. A full rebuild is
-an explicit recovery action that removes only generated catalog artifacts and
-then constructs them again. Neither action removes ROMs, MRA files, screenshots,
-preview media, or media packs.
+switches authority with the normal manifest-last publication. Settings →
+**Rebuild Database** is a full warm `AllSystems` reconciliation: it does not
+delete the active catalog or screenshot packs, stop media work, reboot, or show
+the blocking first-build overlay.
+
+Fresh recovery may remove generated catalog artifacts before constructing a
+new cold generation. The attended production command
+`mister-magik-fb purge-library-data --confirm` is broader: it deletes legacy
+database artifacts, Catalog V3, the Arcade bootstrap index, supported
+screenshot packs and temporary variants, sidecar/media state covered by the
+reset matcher, reports separate catalog and screenshot counts, and does not
+reboot. It preserves ROMs, configuration, saves, unrelated assets, and
+unsupported files. Without the exact `--confirm` argument it prints usage and
+performs no mutation.
 
 Catalog decisions use one lifecycle-owned dialog after the scan overlay has
 been cleared:

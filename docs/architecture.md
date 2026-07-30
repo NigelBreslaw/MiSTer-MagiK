@@ -380,6 +380,11 @@ stateDiagram-v2
     BootSplash --> CatalogReady: catalog loaded
     BootSplash --> CatalogLoadFailed: existing catalog unreadable
 
+    CatalogReady --> WarmUpdating: exact or all-system reconciliation
+    WarmUpdating --> WarmUpdating: queued / scanning / prepared per system
+    WarmUpdating --> CatalogReady: manifest published atomically
+    WarmUpdating --> CatalogReady: update failed; retain published generation
+
     CatalogReady --> CatalogLoadFailed: hydration/load fails
     CatalogLoadFailed --> CatalogRetrying: Retry
     CatalogRetrying --> CatalogReady: load succeeds
@@ -550,6 +555,11 @@ batches, archive inspection, prepared-payload indexing, and projection work all
 obey the launcher idle latch through UI-independent cooperative checkpoints.
 Changed systems receive new immutable artifacts and unchanged systems retain
 their existing generations. The manifest is the atomic publication boundary.
+Published availability is independent of update activity: an existing system
+remains selectable with its old count and games while queued, scanning, or
+prepared; a genuinely new system is a disabled placeholder until publication.
+Per-system failure leaves an existing system selectable with an update warning.
+Removed systems remain visible until the replacement manifest is published.
 
 The catalog-state fingerprint, registry generation, and binding must agree.
 The separate scanner cache owns discovery timestamps and software hashes. The
@@ -653,7 +663,8 @@ query completes without delaying reveal or input.
 Current rules:
 
 - Production `mister-magik-fb` exposes the minimal command surface, including
-  `ui`, `early-black`, `library-refresh`, and read-only `catalog-v3-inspect`.
+  `ui`, `early-black`, `library-refresh`, read-only `catalog-v3-inspect`, and
+  attended `purge-library-data --confirm`.
   Low-level probes are diagnostic/experiment builds, not release commands.
 - Build/update the catalog outside the UI hot path through the typed benchmark
   or delivery workflows; humans may inspect it with `mister catalog`.
@@ -663,13 +674,20 @@ Current rules:
   per-system reconciler as explicit refresh, while `Continue` writes a one-shot
   next-boot marker. Use `startup_timing` logs to separate registry load, Arcade
   mini-nav hydration, bridge sync, stamp check, user choice, and build costs.
+- Settings → **Rebuild Database** requests `AllSystems` warm reconciliation.
+  It keeps Settings responsive, every published tile launchable, and screenshot
+  packs intact; it neither shuts down media work nor reboots.
+- `purge-library-data --confirm` is the explicit destructive maintenance
+  boundary for catalog artifacts and supported screenshot packs. It is
+  process-exclusive, runs before FPGA/display ownership, reports removal
+  counts, and never reboots.
 - Rust launcher owns normal boot-time catalog validation. Main_MiSTer may invoke
   `library-refresh` only for the missing/empty DB first-boot deferral path and
   must not schedule delayed background refreshes when a database already exists.
 - When the V3 registry is missing or invalid, boot must start the Slint
   launcher immediately and let the launcher worker perform the first scan behind
   a visible full-screen scan state. Do not run foreground `library-refresh`
-  before UI on first boot or after Reset Catalog; that regresses to a black
+  before UI on first boot or after an attended purge; that regresses to a black
   HDMI screen while the index is built.
 - The launcher presents a minimal `MiSTer MagiK` Slint splash immediately after
   `app.show()` and before catalog loading. Keep that path free of catalog,
