@@ -1,5 +1,6 @@
 {
   "schema": "mister-magik-form-concepts-v1",
+  "archived": true,
   "seed": 827141709451,
   "framebuffer": {
     "width": 960,

@@ -1,4 +1,4 @@
-# Particle Form commercial acceptance
+# Archived Particle Form commercial acceptance
 
 The Form scenes are complete only when two independent reviewers return
 `SHIP` for every final FPGA-latched capture.
