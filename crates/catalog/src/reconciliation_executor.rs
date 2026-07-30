@@ -1592,6 +1592,58 @@ mod tests {
     }
 
     #[test]
+    fn lifecycle_prepares_each_system_before_publishing_the_manifest_last() {
+        let root = temporary_root("lifecycle-order");
+        let mut materializer = FixtureMaterializer::new();
+        let mut events = Vec::new();
+
+        execute_reconciliation_with_events(
+            &root,
+            &plan(None, 1, &["c64", "snes"]),
+            limits(),
+            &mut materializer,
+            &mut |event| events.push(event),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            events.last(),
+            Some(ReconciliationEvent::ManifestPublished {
+                generation: 1,
+                rebuilt,
+                removed,
+            }) if rebuilt == &vec![system("c64"), system("snes")] && removed.is_empty()
+        ));
+        for expected in ["c64", "snes"] {
+            let scanning = events
+                .iter()
+                .position(|event| {
+                    matches!(
+                        event,
+                        ReconciliationEvent::SystemScanning { system_id }
+                            if system_id.as_str() == expected
+                    )
+                })
+                .expect("system scanning event");
+            let prepared = events
+                .iter()
+                .position(|event| {
+                    matches!(
+                        event,
+                        ReconciliationEvent::SystemPrepared {
+                            system_id,
+                            generation: 1,
+                        } if system_id.as_str() == expected
+                    )
+                })
+                .expect("system prepared event");
+            assert!(scanning < prepared);
+            assert!(prepared < events.len() - 1);
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn staged_shard_owns_cleanup_until_publication() {
         let root = temporary_root("staged-cleanup");
         let staged = build_and_validate_shard(

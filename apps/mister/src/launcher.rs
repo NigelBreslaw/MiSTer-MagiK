@@ -8301,4 +8301,93 @@ mod tests {
             "a new build must not inherit failures or mark systems before its plan"
         );
     }
+
+    #[test]
+    fn progressive_warm_rebuild_keeps_published_systems_live_until_atomic_refresh() {
+        let published = multi_system_catalog();
+        let mut nav = LauncherNav::new();
+        nav.sync_launcher_taxonomy(&published);
+        nav.go_root();
+        let arcade = nav
+            .current_menu_items()
+            .iter()
+            .find(|item| item.id == "arcade")
+            .expect("published Arcade tile")
+            .clone();
+        let computers = nav
+            .current_menu_items()
+            .iter()
+            .find(|item| item.id == crate::launcher_taxonomy::COMPUTERS_MENU_ID)
+            .expect("published computer group")
+            .clone();
+
+        nav.catalog_reconciliation_plan(&published, &["amiga".to_string()], false);
+        assert_eq!(
+            nav.menu_item_catalog_presentation(&arcade),
+            (false, false, true),
+            "unaffected published systems remain unchanged"
+        );
+        assert_eq!(
+            nav.menu_item_catalog_presentation(&computers),
+            (true, false, true)
+        );
+        assert!(nav.open_menu(crate::launcher_taxonomy::COMPUTERS_MENU_ID));
+        assert!(nav.open_menu("menu:computers:commodore"));
+        let amiga = nav
+            .current_menu_items()
+            .iter()
+            .find(|item| item.id == "amiga")
+            .expect("published Amiga tile")
+            .clone();
+
+        nav.catalog_system_scanning("amiga");
+        assert_eq!(
+            nav.menu_item_catalog_presentation(&amiga),
+            (true, false, true),
+            "published games remain available while scanning"
+        );
+        nav.catalog_system_prepared("amiga");
+        assert_eq!(
+            nav.menu_item_catalog_presentation(&amiga),
+            (true, false, true),
+            "prepared candidates stay non-authoritative"
+        );
+        nav.catalog_system_failed("amiga");
+        assert_eq!(
+            nav.menu_item_catalog_presentation(&amiga),
+            (false, true, true),
+            "failed updates retain the published generation"
+        );
+
+        nav.go_root();
+        nav.catalog_reconciliation_plan(&published, &[], true);
+        assert_eq!(
+            nav.menu_item_catalog_presentation(&arcade),
+            (true, false, true)
+        );
+        assert_eq!(
+            nav.menu_item_catalog_presentation(&computers),
+            (true, false, true),
+            "a Settings rebuild marks every published branch without disabling it"
+        );
+
+        assert!(nav.open_system(&published, "amiga"));
+        nav.catalog_system_prepared("amiga");
+        assert_eq!(nav.screen, Screen::Arcade);
+        assert_eq!(nav.active_collection_id.as_deref(), Some("amiga"));
+
+        let published_without_amiga = arcade_catalog(
+            vec![
+                arcade_game("1942")
+                    .path("/media/fat/_Arcade/1942.mra")
+                    .preview("1942")
+                    .build(),
+            ],
+            vec![arcade_system("arcade", 1)],
+        );
+        nav.catalog_build_finished(&published_without_amiga);
+        nav.sync_launcher_taxonomy(&published_without_amiga);
+        assert_eq!(nav.screen, Screen::Home);
+        assert_eq!(nav.active_collection_id, None);
+    }
 }
