@@ -6,6 +6,7 @@
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::time::Instant;
 
+mod character_rom;
 mod crt_cabinet;
 mod neon_cabinet;
 mod sprite_foundry;
@@ -724,6 +725,9 @@ pub struct NavigationTransitionRenderStats {
     pub quads: u64,
     pub spans: u64,
     pub sparks: u64,
+    pub cell_flips: u64,
+    pub new_cell_flips: u64,
+    pub verified_rows: u64,
 }
 
 #[derive(Debug)]
@@ -736,6 +740,7 @@ pub struct NavigationTransitionPoc {
     last_render_stats: NavigationTransitionRenderStats,
     last_frame_work_us: u64,
     hud_scratch: Vec<Rgb565Pixel>,
+    character_rom: character_rom::CharacterRomRenderer,
     crt_cabinet: crt_cabinet::CrtCabinetRenderer,
     neon_cabinet: neon_cabinet::NeonCabinetRenderer,
     sprite_foundry: sprite_foundry::SpriteFoundryRenderer,
@@ -792,11 +797,14 @@ impl NavigationTransitionPoc {
             crt_cabinet: crt_cabinet::CrtCabinetRenderer::new(
                 enabled && crt_cabinet::configured_reduced_effects(),
             ),
+            character_rom: character_rom::CharacterRomRenderer::new(
+                enabled && character_rom::configured_fallback(),
+            ),
         }
     }
 
     pub const fn implemented_style_count() -> usize {
-        4
+        5
     }
 
     pub const fn enabled(&self) -> bool {
@@ -876,6 +884,18 @@ impl NavigationTransitionPoc {
     ) -> Result<(), NavigationTransitionFailure> {
         let prepare_started = Instant::now();
         self.buffers.capture_destination(destination)?;
+        if self.style() == NavigationTransitionStyle::CharacterRomRecompile {
+            self.character_rom.prepare(
+                self.buffers
+                    .source()
+                    .ok_or(NavigationTransitionFailure::SnapshotSizeMismatch)?,
+                self.buffers
+                    .destination()
+                    .ok_or(NavigationTransitionFailure::SnapshotSizeMismatch)?,
+                self.buffers.width,
+                self.buffers.height,
+            );
+        }
         self.controller.note_destination_prepared(
             prepare_started.elapsed().as_micros().min(u64::MAX as u128) as u64,
         );
@@ -916,7 +936,14 @@ impl NavigationTransitionPoc {
                 request,
                 frame,
             )?,
-            _ => return Err(NavigationTransitionFailure::SnapshotSizeMismatch),
+            NavigationTransitionStyle::CharacterRomRecompile => {
+                character_rom::render_character_rom(
+                    &mut self.character_rom,
+                    &mut self.buffers,
+                    request,
+                    frame,
+                )?
+            }
         };
         stats.render_us = started.elapsed().as_micros().min(u64::MAX as u128) as u64;
         self.controller
@@ -2089,6 +2116,90 @@ mod tests {
         reduced.tick(320_000);
         reduced.render().unwrap();
         assert_eq!(reduced.last_render_stats().sparks, 0);
+    }
+
+    #[test]
+    fn character_rom_recompiles_with_bounded_flips_and_exact_verification() {
+        let width = 160;
+        let height = 90;
+        let source = (0..width * height)
+            .map(|value| Rgb565Pixel(value as u16))
+            .collect::<Vec<_>>();
+        let destination = (0..width * height)
+            .map(|value| Rgb565Pixel((value as u16).rotate_left(5)))
+            .collect::<Vec<_>>();
+        let geometry = NavigationTransitionGeometry {
+            source_card: NavigationTransitionRect {
+                x: 32,
+                y: 14,
+                width: 40,
+                height: 68,
+            },
+            source_label: NavigationTransitionRect {
+                x: 38,
+                y: 42,
+                width: 28,
+                height: 8,
+            },
+            destination_title: NavigationTransitionRect {
+                x: 8,
+                y: 6,
+                width: 64,
+                height: 10,
+            },
+        };
+        let mut poc = NavigationTransitionPoc::new_with_style(width, height, true, 4);
+        poc.begin(
+            NavigationTransitionEdge::HomeToConsoles,
+            NavigationTransitionDirection::Forward,
+            geometry,
+            &source,
+            0,
+        )
+        .unwrap();
+        poc.capture_destination(&destination).unwrap();
+        assert_eq!(poc.character_rom.cell_count(), 30 * 17);
+        poc.tick(300_000);
+        let first = poc.render().unwrap().to_vec();
+        assert!(poc.last_render_stats().new_cell_flips <= 96);
+        assert_eq!(poc.render().unwrap(), first);
+        let flips_before_reverse = poc.last_render_stats().cell_flips;
+        assert!(poc.request_reverse(300_000));
+        assert_eq!(poc.render().unwrap(), first);
+        poc.tick(350_000);
+        poc.render().unwrap();
+        assert!(poc.last_render_stats().cell_flips <= flips_before_reverse);
+
+        let mut verified = NavigationTransitionPoc::new_with_style(width, height, true, 4);
+        verified
+            .begin(
+                NavigationTransitionEdge::HomeToConsoles,
+                NavigationTransitionDirection::Forward,
+                geometry,
+                &source,
+                0,
+            )
+            .unwrap();
+        verified.capture_destination(&destination).unwrap();
+        verified.tick(432_999);
+        assert_ne!(verified.render().unwrap(), destination);
+        assert!(verified.last_render_stats().verified_rows < height as u64);
+        verified.tick(433_000);
+        assert_eq!(verified.render().unwrap(), destination);
+
+        let mut reverse = NavigationTransitionPoc::new_with_style(width, height, true, 4);
+        reverse
+            .begin(
+                NavigationTransitionEdge::HomeToConsoles,
+                NavigationTransitionDirection::Reverse,
+                geometry,
+                &destination,
+                0,
+            )
+            .unwrap();
+        reverse.capture_destination(&source).unwrap();
+        reverse.tick(433_000);
+        assert_eq!(reverse.render().unwrap(), source);
     }
 
     #[test]
