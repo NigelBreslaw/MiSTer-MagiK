@@ -235,14 +235,23 @@ fn wait_qualification_state(session: &Session, timeout: Duration) -> Result<Valu
     while started.elapsed() < timeout {
         if let Some(text) = remote_read(session, STATE_REMOTE)
             && let Ok(state) = serde_json::from_str::<Value>(&text)
-            && state.get("schema").and_then(Value::as_str)
-                == Some("mister-magik-latch-v4-qualification-state-v1")
+            && qualification_state_ready(&state)
         {
             return Ok(state);
         }
         thread::sleep(Duration::from_millis(250));
     }
     Err("latch v4 qualification state did not become ready".into())
+}
+
+fn qualification_state_ready(state: &Value) -> bool {
+    state.get("schema").and_then(Value::as_str)
+        == Some("mister-magik-latch-v4-qualification-state-v1")
+        && state.get("control_error").is_some_and(Value::is_null)
+        && state
+            .get("catalog_requested")
+            .and_then(Value::as_u64)
+            .is_some_and(|generation| generation >= 1)
 }
 
 fn collect_sample(
@@ -558,6 +567,20 @@ mod tests {
         {
             assert!(value.starts_with(CATALOG_STATE_REMOTE));
         }
+    }
+
+    #[test]
+    fn initial_state_waits_for_control_acknowledgement() {
+        let mut state = json!({
+            "schema": "mister-magik-latch-v4-qualification-state-v1",
+            "control_error": "No such file or directory",
+            "catalog_requested": 0,
+        });
+        assert!(!qualification_state_ready(&state));
+        state["control_error"] = Value::Null;
+        assert!(!qualification_state_ready(&state));
+        state["catalog_requested"] = json!(1);
+        assert!(qualification_state_ready(&state));
     }
 
     #[test]
