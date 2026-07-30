@@ -134,6 +134,10 @@ conversion:
   games renderer. Native PAL routes select renamed OFL-derived families whose
   glyph outlines and vertical metrics are scaled 3:5 for 288p and 6:5 for
   576p while horizontal advances remain unchanged.
+- The checked-in `MagiK Pixel` font family is generated from the pristine
+  Press Start 2P source without using its reserved family name. Its normal,
+  PAL 288, and PAL 576 variants declare ascent and descent from their actual
+  glyph bounds so wrapped lines cannot overlap.
 - Rust sends the FPGA `SET_FBUF` route so buffer 0 is scanned to HDMI. For CRT,
   the FPGA receives a framebuffer already matching the full active raster; its
   OSD path is a direct overlay and is not relied on for UI scaling.
