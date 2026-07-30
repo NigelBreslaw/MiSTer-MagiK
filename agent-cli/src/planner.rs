@@ -668,6 +668,57 @@ fn add_path_operations(
             ],
         ));
     }
+    if path.starts_with("apps/mister/ui")
+        || matches!(
+            path.to_str(),
+            Some(
+                "scripts/checks/check-pixel-text-contract.py"
+                    | "scripts/checks/pre-commit.py"
+                    | "scripts/tests/test-pixel-text-contract.py"
+            )
+        )
+    {
+        add(with_inputs(
+            op(
+                "scripts.pixel-text-contract",
+                "Check PixelText8 contract",
+                "python3",
+                &[
+                    "scripts/checks/check-pixel-text-contract.py",
+                    "--repository",
+                    ".",
+                    "--all",
+                ],
+                "first-party Slint text changed",
+            ),
+            &[
+                "apps/mister/ui",
+                "scripts/checks/check-pixel-text-contract.py",
+                "scripts/tests/test-pixel-text-contract.py",
+            ],
+        ));
+    }
+    if matches!(
+        path.to_str(),
+        Some(
+            "scripts/checks/check-pixel-text-contract.py"
+                | "scripts/tests/test-pixel-text-contract.py"
+        )
+    ) {
+        add(with_inputs(
+            op(
+                "scripts.pixel-text-contract-tests",
+                "Test PixelText8 contract",
+                "python3",
+                &["scripts/tests/test-pixel-text-contract.py"],
+                "PixelText8 contract tooling changed",
+            ),
+            &[
+                "scripts/checks/check-pixel-text-contract.py",
+                "scripts/tests/test-pixel-text-contract.py",
+            ],
+        ));
+    }
     if path.starts_with(".github") || path.starts_with(".githooks") {
         add(builtin(
             "repo.workflow-contract",
@@ -1065,6 +1116,46 @@ mod tests {
             .collect();
         assert_eq!(operations.len(), 1);
         assert_eq!(operations[0].args, ["scripts/tests/test-pre-commit.py"]);
+    }
+
+    #[test]
+    fn slint_changes_select_the_full_pixel_text_contract_once() {
+        let plan = affected_plan(
+            Intent::Verify {
+                scope: Scope::Paths(vec![]),
+            },
+            vec![
+                "apps/mister/ui/launcher.slint".into(),
+                "apps/mister/ui/components/pixel_text_8.slint".into(),
+                "scripts/checks/check-pixel-text-contract.py".into(),
+            ],
+        )
+        .unwrap();
+        let operations: Vec<_> = plan
+            .operations
+            .iter()
+            .filter(|operation| operation.id == "scripts.pixel-text-contract")
+            .collect();
+        assert_eq!(operations.len(), 1);
+        assert_eq!(
+            operations[0].args,
+            [
+                "scripts/checks/check-pixel-text-contract.py",
+                "--repository",
+                ".",
+                "--all"
+            ]
+        );
+        let test_operations: Vec<_> = plan
+            .operations
+            .iter()
+            .filter(|operation| operation.id == "scripts.pixel-text-contract-tests")
+            .collect();
+        assert_eq!(test_operations.len(), 1);
+        assert_eq!(
+            test_operations[0].args,
+            ["scripts/tests/test-pixel-text-contract.py"]
+        );
     }
 
     #[test]

@@ -283,6 +283,21 @@ class PreCommitTests(unittest.TestCase):
             ],
         )
 
+    def test_pixel_text_contract_selection_is_narrow(self) -> None:
+        self.assertTrue(
+            PRE_COMMIT.needs_pixel_text_contract(
+                ["apps/mister/ui/views/hdmi/home.slint"]
+            )
+        )
+        self.assertTrue(
+            PRE_COMMIT.needs_pixel_text_contract(
+                ["scripts/checks/check-pixel-text-contract.py"]
+            )
+        )
+        self.assertFalse(
+            PRE_COMMIT.needs_pixel_text_contract(["apps/mister/src/ui_display.rs"])
+        )
+
     def test_mixed_gate_deduplicates_formatters_under_budget(self) -> None:
         for path in [
             "agent-cli/src/main.rs",

@@ -112,6 +112,11 @@ APP_FORMAT_FILES = {
     "apps/mister/build.rs",
     "apps/mister/rust-toolchain.toml",
 }
+PIXEL_TEXT_CONTRACT_PATHS = {
+    "scripts/checks/check-pixel-text-contract.py",
+    "scripts/checks/pre-commit.py",
+    "scripts/tests/test-pixel-text-contract.py",
+}
 
 
 class GateError(Exception):
@@ -347,12 +352,24 @@ def shell_paths(repository: Path, paths: Sequence[str]) -> list[str]:
     return selected
 
 
+def needs_pixel_text_contract(paths: Sequence[str]) -> bool:
+    return any(
+        path in PIXEL_TEXT_CONTRACT_PATHS
+        or (
+            path.startswith("apps/mister/ui/")
+            and PurePosixPath(path).suffix == ".slint"
+        )
+        for path in paths
+    )
+
+
 def execute(repository: Path) -> None:
     paths = staged_paths(repository)
     check_classification(paths)
     shells = shell_paths(repository, paths)
     cargo_formatters = formatters(paths)
-    planned = 3 + len(shells) + len(cargo_formatters)
+    pixel_text_contract = needs_pixel_text_contract(paths)
+    planned = 3 + len(shells) + len(cargo_formatters) + int(pixel_text_contract)
     print(f"pre-commit: {planned} fast checks planned (0%)")
 
     check_identity(repository)
@@ -361,6 +378,17 @@ def execute(repository: Path) -> None:
     git(repository, ["diff", "--cached", "--check"])
     for path in shells:
         run(repository, ["bash", "-n", path])
+    if pixel_text_contract:
+        run(
+            repository,
+            [
+                sys.executable,
+                "scripts/checks/check-pixel-text-contract.py",
+                "--repository",
+                str(repository),
+                "--staged",
+            ],
+        )
     for _, manifest in cargo_formatters:
         run(repository, ["cargo", "fmt", "--manifest-path", manifest, "--check"])
 

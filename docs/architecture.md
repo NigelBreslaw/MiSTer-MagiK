@@ -138,6 +138,10 @@ conversion:
   Press Start 2P source without using its reserved family name. Its normal,
   PAL 288, and PAL 576 variants declare ascent and descent from their actual
   glyph bounds so wrapped lines cannot overlap.
+- First-party MiSTer Slint uses `PixelText8` as its sole raw text primitive.
+  `PixelTextSize` limits font sizes to 8, 16, 24, or 32 pixels, and wrapped
+  content declares a bounded line capacity so it clips instead of painting
+  into adjacent layout.
 - Rust sends the FPGA `SET_FBUF` route so buffer 0 is scanned to HDMI. For CRT,
   the FPGA receives a framebuffer already matching the full active raster; its
   OSD path is a direct overlay and is not relied on for UI scaling.
