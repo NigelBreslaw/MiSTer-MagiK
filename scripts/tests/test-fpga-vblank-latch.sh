@@ -28,3 +28,9 @@ iverilog -g2012 -Wall -Wimplicit \
 	"$rtl_dir/tb_mister_magik_bootstrap_black.sv"
 
 vvp "$build_dir/tb_mister_magik_bootstrap_black.vvp"
+
+grep -Fq '(* keep = "true" *) wire [23:0] native_rgb_keep;' \
+	"$rtl_dir/mister_magik_bootstrap_black.sv"
+grep -Fq "assign rgb_out = native_rgb_keep & 24'd0;" \
+	"$rtl_dir/mister_magik_bootstrap_black.sv"
+! grep -Fq "_unused" "$rtl_dir/mister_magik_bootstrap_black.sv"
