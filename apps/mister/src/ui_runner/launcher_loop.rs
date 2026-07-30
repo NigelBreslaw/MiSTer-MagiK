@@ -1338,6 +1338,18 @@ impl CatalogGenerationState {
     }
 }
 
+fn initialize_catalog_generation(
+    scheduler: &mut LauncherScheduler,
+    fingerprint: Option<String>,
+) -> CatalogGenerationState {
+    let generation = CatalogGenerationState {
+        current: fingerprint.clone(),
+        durable: fingerprint,
+    };
+    let _ = scheduler.set_system_shard_generation(generation.current.as_deref());
+    generation
+}
+
 fn catalog_hydration_execution_mode(_request: CatalogWorkerRequest) -> CatalogExecutionMode {
     CatalogExecutionMode::BackgroundInteractive
 }
@@ -1972,10 +1984,8 @@ pub(super) fn run_launcher_loop(
         catalog_ready = true;
     }
     let initial_catalog_fingerprint = sharded_catalog_fingerprint;
-    let mut catalog_generation = CatalogGenerationState {
-        current: initial_catalog_fingerprint.clone(),
-        durable: initial_catalog_fingerprint,
-    };
+    let mut catalog_generation =
+        initialize_catalog_generation(&mut scheduler, initial_catalog_fingerprint);
     let mut startup_ready_catalog_source = CatalogSource::FreshBuild;
     if capsule_seed_ready {
         startup_ready_catalog_source = CatalogSource::ReturnCapsule;
@@ -6724,6 +6734,22 @@ mod tests {
             systems.push(arcade_system(*system_id, 1));
         }
         arcade_catalog(games, systems)
+    }
+
+    #[test]
+    fn startup_registry_fingerprint_enables_system_shard_requests() {
+        let mut scheduler = LauncherScheduler::new(false);
+        let generation =
+            initialize_catalog_generation(&mut scheduler, Some("generation-a".to_string()));
+
+        assert_eq!(generation.current.as_deref(), Some("generation-a"));
+        assert_eq!(generation.durable.as_deref(), Some("generation-a"));
+        assert!(scheduler.request_system_shard(
+            "c64".to_string(),
+            SystemShardPriority::Urgent,
+            "startup-regression-test",
+            Instant::now()
+        ));
     }
 
     #[test]
