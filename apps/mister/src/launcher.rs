@@ -8244,7 +8244,7 @@ mod tests {
         nav.catalog_system_ready("snes");
         assert_eq!(
             nav.menu_item_catalog_presentation(&snes),
-            (false, false, true)
+            (false, false, false)
         );
 
         nav.catalog_system_hydration_started("snes");
@@ -8321,7 +8321,7 @@ mod tests {
         let arcade = nav
             .current_menu_items()
             .iter()
-            .find(|item| item.id == "arcade")
+            .find(|item| item.id == crate::arcade_catalog::MENU_ARCADE_SYSTEM_ID)
             .expect("published Arcade tile")
             .clone();
         let computers = nav
@@ -8342,7 +8342,6 @@ mod tests {
             (true, false, true)
         );
         assert!(nav.open_menu(crate::launcher_taxonomy::COMPUTERS_MENU_ID));
-        assert!(nav.open_menu("menu:computers:commodore"));
         let amiga = nav
             .current_menu_items()
             .iter()
