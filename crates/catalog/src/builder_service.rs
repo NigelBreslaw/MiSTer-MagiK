@@ -58,10 +58,7 @@ pub fn run(
             operation,
             BuilderOperation::Build | BuilderOperation::FreshBuild
         ),
-        durable_resume: matches!(
-            operation,
-            BuilderOperation::Build | BuilderOperation::FreshBuild
-        ),
+        durable_resume: operation_uses_durable_resume(operation),
         post_reveal_background: false,
         arcade_bootstrap_scan: None,
     };
@@ -469,6 +466,13 @@ fn run_with_backend<B: BuilderBackend>(
     crate::catalog_logln!("catalog_builder_event_tsv\tevent=Done");
     emit(CatalogBuilderEvent::Done { protocol });
     Ok(())
+}
+
+fn operation_uses_durable_resume(operation: BuilderOperation) -> bool {
+    matches!(
+        operation,
+        BuilderOperation::Build | BuilderOperation::Rebuild | BuilderOperation::FreshBuild
+    )
 }
 
 fn initial_build_role(operation: BuilderOperation) -> RuntimeThreadRole {
@@ -1463,6 +1467,9 @@ mod tests {
         assert!(full_build_runs_in_background(BuilderOperation::Rebuild));
         assert!(!full_build_runs_in_background(BuilderOperation::Build));
         assert!(!full_build_runs_in_background(BuilderOperation::FreshBuild));
+        assert!(operation_uses_durable_resume(BuilderOperation::Build));
+        assert!(operation_uses_durable_resume(BuilderOperation::Rebuild));
+        assert!(operation_uses_durable_resume(BuilderOperation::FreshBuild));
     }
 
     #[derive(Default)]
