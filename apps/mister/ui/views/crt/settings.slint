@@ -23,7 +23,7 @@ export component SettingsScreen inherits Rectangle {
             CrtMenuRow { vertical-stretch: 1; label: "Resolution"; detail: MisterBridge.display-active-label; focused: MisterBridge.settings-selected == 0; }
             CrtMenuRow { vertical-stretch: 1; label: "Screensaver"; detail: "Configure"; focused: MisterBridge.settings-selected == 1; }
             CrtMenuRow { vertical-stretch: 1; label: "Exit to MiSTer"; detail: "Until reboot"; focused: MisterBridge.settings-selected == 2; }
-            CrtMenuRow { vertical-stretch: 1; label: "Reset Database"; detail: "Delete and reboot"; focused: MisterBridge.settings-selected == 3; }
+            CrtMenuRow { vertical-stretch: 1; label: "Rebuild DB"; detail: "Rebuild library only"; focused: MisterBridge.settings-selected == 3; }
             CrtMenuRow { vertical-stretch: 1; label: "About"; detail: "MiSTer MagiK"; focused: MisterBridge.settings-selected == 4; }
         }
 

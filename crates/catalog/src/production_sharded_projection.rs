@@ -219,6 +219,16 @@ pub fn publish_production_projection_with_events(
     limits: RegistryLimits,
     emit: &mut dyn FnMut(ReconciliationEvent),
 ) -> Result<ProductionProjectionOutcome, ReconciliationError> {
+    publish_production_projection_with_options(storage_root, catalog, limits, false, emit)
+}
+
+fn publish_production_projection_with_options(
+    storage_root: &Path,
+    catalog: &ArcadeCatalog,
+    limits: RegistryLimits,
+    force_all_systems: bool,
+    emit: &mut dyn FnMut(ReconciliationEvent),
+) -> Result<ProductionProjectionOutcome, ReconciliationError> {
     let projection_started = Instant::now();
     let current_manifest = match read_latest_manifest_lazy(storage_root, limits) {
         Ok(manifest) => Some(manifest),
@@ -272,13 +282,14 @@ pub fn publish_production_projection_with_events(
                 .iter()
                 .find(|system| system.system_id == *system_id)
         });
-        let unchanged = match published {
-            Some(published) => {
-                let candidate = materializer.project(system_id)?;
-                published_system_matches(storage_root, published, &candidate, limits)?
-            }
-            None => false,
-        };
+        let unchanged = !force_all_systems
+            && match published {
+                Some(published) => {
+                    let candidate = materializer.project(system_id)?;
+                    published_system_matches(storage_root, published, &candidate, limits)?
+                }
+                None => false,
+            };
         if unchanged {
             continue;
         }
@@ -308,7 +319,7 @@ pub fn publish_production_projection_with_events(
         intended_generation,
         scan_units: Vec::new(),
         systems: planned_systems,
-        global_rebuild: false,
+        global_rebuild: force_all_systems,
         manifest_only: false,
     };
     let reconciliation_started = Instant::now();
@@ -401,6 +412,7 @@ pub fn publish_bound_production_projection(
         catalog,
         catalog_fingerprint,
         limits,
+        false,
         &mut |_| {},
     )
 }
@@ -410,9 +422,16 @@ pub fn publish_bound_production_projection_with_events(
     catalog: &ArcadeCatalog,
     catalog_fingerprint: &str,
     limits: RegistryLimits,
+    force_all_systems: bool,
     emit: &mut dyn FnMut(ReconciliationEvent),
 ) -> Result<ProductionProjectionOutcome, ReconciliationError> {
-    let outcome = publish_production_projection_with_events(storage_root, catalog, limits, emit)?;
+    let outcome = publish_production_projection_with_options(
+        storage_root,
+        catalog,
+        limits,
+        force_all_systems,
+        emit,
+    )?;
     write_binding(
         storage_root,
         &CatalogBinding {
@@ -693,6 +712,32 @@ mod tests {
         assert_eq!(outcome.rebuilt_systems, 0);
         assert_eq!(outcome.removed_systems, 0);
         assert_eq!(after, before);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn explicit_full_rebuild_republishes_every_system() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-production-projection-full-rebuild-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let catalog = two_system_catalog("Super Game");
+        publish_production_projection(&root, &catalog, limits()).unwrap();
+
+        let outcome = publish_production_projection_with_options(
+            &root,
+            &catalog,
+            limits(),
+            true,
+            &mut |_| {},
+        )
+        .unwrap();
+
+        assert_eq!(outcome.generation, 2);
+        assert_eq!(outcome.rebuilt_systems, 2);
+        assert_eq!(outcome.removed_systems, 0);
+        assert_eq!(outcome.rebuilt, vec!["snes", "c64"]);
         let _ = fs::remove_dir_all(root);
     }
 

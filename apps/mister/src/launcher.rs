@@ -259,7 +259,7 @@ pub enum Screen {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConfirmAction {
     ExitToMister,
-    ResetDatabase,
+    RebuildDatabase,
     Restart,
     LibraryChanged,
     LibraryUpdateFailed,
@@ -272,7 +272,7 @@ pub enum LauncherAction {
     OpenCollection,
     LaunchGame,
     ExitToMister,
-    ResetDatabase,
+    RebuildDatabase,
     Restart,
     ContinueWithStaleLibrary,
     RebuildLibrary,
@@ -2298,7 +2298,7 @@ impl LauncherNav {
             self.confirm_selected = 0;
             self.confirm_action = Some(match self.settings_selected {
                 2 => ConfirmAction::ExitToMister,
-                _ => ConfirmAction::ResetDatabase,
+                _ => ConfirmAction::RebuildDatabase,
             });
         }
         None
@@ -2524,8 +2524,8 @@ impl LauncherNav {
                         path: None,
                         settings: None,
                     }),
-                    Some(ConfirmAction::ResetDatabase) => Some(LauncherEvent {
-                        action: LauncherAction::ResetDatabase,
+                    Some(ConfirmAction::RebuildDatabase) => Some(LauncherEvent {
+                        action: LauncherAction::RebuildDatabase,
                         path: None,
                         settings: None,
                     }),
@@ -7149,7 +7149,7 @@ mod tests {
 
         let press_a = pad_with(|pad| pad.btn_a = true);
         assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
-        assert_eq!(nav.confirm_action, Some(ConfirmAction::ResetDatabase));
+        assert_eq!(nav.confirm_action, Some(ConfirmAction::RebuildDatabase));
         assert_eq!(nav.confirm_selected, 0);
         assert!(
             nav.handle_input(
@@ -7178,7 +7178,7 @@ mod tests {
         let event = nav
             .handle_input(&press_a, t0 + Duration::from_millis(64), &catalog)
             .expect("confirmed reset should emit event");
-        assert_eq!(event.action, LauncherAction::ResetDatabase);
+        assert_eq!(event.action, LauncherAction::RebuildDatabase);
         assert_eq!(event.path, None);
         assert_eq!(nav.confirm_action, None);
         assert_eq!(nav.confirm_selected, 0);
@@ -7369,7 +7369,7 @@ mod tests {
         nav.sync_launcher_taxonomy(&catalog);
         assert!(nav.open_menu("menu:consoles:nintendo"));
         nav.screen = Screen::Settings;
-        nav.confirm_action = Some(ConfirmAction::ResetDatabase);
+        nav.confirm_action = Some(ConfirmAction::RebuildDatabase);
 
         assert!(
             nav.handle_input(

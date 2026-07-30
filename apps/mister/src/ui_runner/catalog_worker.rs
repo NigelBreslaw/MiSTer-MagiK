@@ -548,6 +548,7 @@ pub(super) fn start_library_catalog_worker(
                     plan,
                     CatalogWorkerPlan::InitialBuild
                         | CatalogWorkerPlan::ForceBuild
+                        | CatalogWorkerPlan::RebuildAll
                         | CatalogWorkerPlan::FreshBuild
                 )
                     && execution_mode == CatalogExecutionMode::ForegroundExclusive;
@@ -583,7 +584,9 @@ pub(super) fn start_library_catalog_worker(
                     return;
                 }
                 CatalogWorkerPlan::CheckStamp => {}
-                CatalogWorkerPlan::InitialBuild | CatalogWorkerPlan::ForceBuild => {
+                CatalogWorkerPlan::InitialBuild
+                | CatalogWorkerPlan::ForceBuild
+                | CatalogWorkerPlan::RebuildAll => {
                     send_catalog_progress(
                         &tx,
                         library_db::CatalogProgress::indexing_building_catalog(),
@@ -596,6 +599,7 @@ pub(super) fn start_library_catalog_worker(
                 CatalogWorkerPlan::CheckStamp
                     | CatalogWorkerPlan::InitialBuild
                     | CatalogWorkerPlan::ForceBuild
+                    | CatalogWorkerPlan::RebuildAll
                     | CatalogWorkerPlan::FreshBuild
             ) {
                 drop(progress);
@@ -608,7 +612,10 @@ pub(super) fn start_library_catalog_worker(
                 );
                 return;
             }
-            if plan == CatalogWorkerPlan::ForceBuild {
+            if matches!(
+                plan,
+                CatalogWorkerPlan::ForceBuild | CatalogWorkerPlan::RebuildAll
+            ) {
                 if foreground_exclusive {
                     let ram_artifact_result = library_db::scan_default_library_ram_foreground_with_events(
                         Some(&mut progress),
@@ -1048,7 +1055,10 @@ fn handle_embedded_builder_event(
             load_us,
             ..
         } => {
-            if plan == CatalogWorkerPlan::ForceBuild {
+            if matches!(
+                plan,
+                CatalogWorkerPlan::ForceBuild | CatalogWorkerPlan::RebuildAll
+            ) {
                 let _ = tx.send(CatalogWorkerMessage::Timing {
                     name: "catalog_warm_bootstrap_ignored".to_string(),
                     detail: "reason=published_catalog_remains_authoritative".to_string(),
@@ -1114,6 +1124,7 @@ fn catalog_builder_operation(
         CatalogWorkerPlan::CheckStamp => (BuilderOperation::Check, "check"),
         CatalogWorkerPlan::InitialBuild => (BuilderOperation::Build, "build"),
         CatalogWorkerPlan::ForceBuild => (BuilderOperation::Rebuild, "rebuild"),
+        CatalogWorkerPlan::RebuildAll => (BuilderOperation::RebuildAll, "rebuild-all"),
         CatalogWorkerPlan::FreshBuild => (BuilderOperation::FreshBuild, "fresh-build"),
         CatalogWorkerPlan::LoadOnly => return None,
     })
@@ -1155,6 +1166,7 @@ pub(super) enum CatalogWorkerRequest {
     StrictLoad,
     CheckStamp,
     ForceBuild,
+    RebuildAll,
     FreshBuild,
 }
 
@@ -1199,6 +1211,7 @@ impl CatalogWorkerRequest {
             Self::StrictLoad => "strict_load",
             Self::CheckStamp => "check_stamp",
             Self::ForceBuild => "force_build",
+            Self::RebuildAll => "rebuild_all",
             Self::FreshBuild => "fresh_build",
         }
     }
@@ -1231,6 +1244,7 @@ enum CatalogWorkerPlan {
     CheckStamp,
     InitialBuild,
     ForceBuild,
+    RebuildAll,
     FreshBuild,
 }
 
@@ -1241,6 +1255,7 @@ impl CatalogWorkerPlan {
             Self::CheckStamp => "check_stamp",
             Self::InitialBuild => "initial_build",
             Self::ForceBuild => "force_build",
+            Self::RebuildAll => "rebuild_all",
             Self::FreshBuild => "fresh_build",
         }
     }
@@ -1262,6 +1277,7 @@ fn catalog_worker_plan(
             CatalogWorkerRequest::StrictLoad => CatalogWorkerPlan::LoadOnly,
             CatalogWorkerRequest::CheckStamp => CatalogWorkerPlan::CheckStamp,
             CatalogWorkerRequest::ForceBuild => CatalogWorkerPlan::ForceBuild,
+            CatalogWorkerRequest::RebuildAll => CatalogWorkerPlan::RebuildAll,
             CatalogWorkerRequest::FreshBuild => CatalogWorkerPlan::FreshBuild,
         },
         CatalogCacheState::Empty | CatalogCacheState::Missing => CatalogWorkerPlan::InitialBuild,
@@ -2079,6 +2095,13 @@ mod tests {
         );
         assert_eq!(
             catalog_builder_operation(
+                CatalogWorkerPlan::RebuildAll,
+                CatalogExecutionMode::BackgroundInteractive
+            ),
+            Some((BuilderOperation::RebuildAll, "rebuild-all"))
+        );
+        assert_eq!(
+            catalog_builder_operation(
                 CatalogWorkerPlan::FreshBuild,
                 CatalogExecutionMode::ForegroundExclusive
             ),
@@ -2416,6 +2439,20 @@ mod tests {
             catalog_worker_plan(CatalogCacheState::Ready, CatalogWorkerRequest::FreshBuild),
             CatalogWorkerPlan::FreshBuild
         );
+    }
+
+    #[test]
+    fn full_warm_rebuild_requires_a_published_catalog() {
+        assert_eq!(
+            catalog_worker_plan(CatalogCacheState::Ready, CatalogWorkerRequest::RebuildAll),
+            CatalogWorkerPlan::RebuildAll
+        );
+        for state in [CatalogCacheState::Empty, CatalogCacheState::Missing] {
+            assert_eq!(
+                catalog_worker_plan(state, CatalogWorkerRequest::RebuildAll),
+                CatalogWorkerPlan::InitialBuild
+            );
+        }
     }
 
     #[test]

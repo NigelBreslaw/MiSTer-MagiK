@@ -578,6 +578,34 @@ impl LauncherCatalogSession {
         effects
     }
 
+    pub(super) fn rebuild_database(&mut self, root: String) -> CatalogSessionEffects {
+        let mut effects = CatalogSessionEffects::default();
+        effects.event(
+            "database_rebuild_requested",
+            "source=settings scope=all-systems",
+        );
+        self.refresh_done = false;
+        self.foreground_update = false;
+        self.deferred_worker = None;
+        self.refresh_failed = false;
+        self.reset_counter_metrics();
+        self.games_found_counter.reset();
+        effects.push(CatalogSessionEffect::CatalogPlanReady {
+            system_ids: Vec::new(),
+            all_published_systems: true,
+        });
+        effects.ui(catalog_plan_ready_intent(0, true));
+        effects.push(CatalogSessionEffect::StartCatalogWorker(
+            CatalogWorkerStart {
+                root,
+                request: CatalogWorkerRequest::RebuildAll,
+                initial_cache: CatalogWorkerInitialCache::AlreadyLoadedReady,
+                execution_mode: CatalogExecutionMode::BackgroundInteractive,
+            },
+        ));
+        effects
+    }
+
     pub(super) fn qualification_fresh_rebuild(&mut self, root: String) -> CatalogSessionEffects {
         let mut effects = CatalogSessionEffects::default();
         effects.event(
@@ -1801,6 +1829,40 @@ mod tests {
             worker.execution_mode,
             CatalogExecutionMode::BackgroundInteractive
         );
+    }
+
+    #[test]
+    fn settings_database_rebuild_marks_all_systems_and_stays_background() {
+        let mut session = LauncherCatalogSession::new(false);
+        let effects = session.rebuild_database("/media/fat/_Arcade".to_string());
+
+        assert!(!session.refresh_done());
+        assert!(!session.foreground_update());
+        assert!(effects.effects.iter().any(|effect| matches!(
+            effect,
+            CatalogSessionEffect::CatalogPlanReady {
+                system_ids,
+                all_published_systems: true,
+            } if system_ids.is_empty()
+        )));
+        let worker = effects
+            .effects
+            .iter()
+            .find_map(|effect| match effect {
+                CatalogSessionEffect::StartCatalogWorker(worker) => Some(worker),
+                _ => None,
+            })
+            .expect("catalog worker");
+        assert_eq!(worker.request, CatalogWorkerRequest::RebuildAll);
+        assert_eq!(
+            worker.initial_cache,
+            CatalogWorkerInitialCache::AlreadyLoadedReady
+        );
+        assert_eq!(
+            worker.execution_mode,
+            CatalogExecutionMode::BackgroundInteractive
+        );
+        assert_eq!(effect_names(effects), vec!["event", "ui", "start-worker"]);
     }
 
     #[test]

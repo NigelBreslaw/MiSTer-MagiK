@@ -2110,9 +2110,10 @@ mod macos {
             Scenario::Startup => bridge.set_startup_visible(true),
             Scenario::Confirm => {
                 bridge.set_confirm_visible(true);
-                bridge.set_confirm_title("Rebuild game database?".into());
+                bridge.set_confirm_title("Rebuild Database?".into());
                 bridge.set_confirm_message(
-                    "Existing catalog data will be replaced after the next launcher start.".into(),
+                    "Rebuild all library systems in the background? Games and screenshots remain available."
+                        .into(),
                 );
                 bridge.set_confirm_left_label("Cancel".into());
                 bridge.set_confirm_right_label("Rebuild".into());

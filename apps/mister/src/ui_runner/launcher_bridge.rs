@@ -579,11 +579,11 @@ fn confirm_bridge_text(action: Option<launcher::ConfirmAction>) -> ConfirmBridge
             left_label: "Cancel",
             right_label: "Exit to MiSTer",
         },
-        Some(launcher::ConfirmAction::ResetDatabase) => ConfirmBridgeText {
-            title: "Reset Database?",
-            message: "Delete the library database, screenshot packs, and reboot the MiSTer?",
+        Some(launcher::ConfirmAction::RebuildDatabase) => ConfirmBridgeText {
+            title: "Rebuild Database?",
+            message: "Rebuild all library systems in the background? Games and screenshots remain available.",
             left_label: "Cancel",
-            right_label: "Confirm",
+            right_label: "Rebuild",
         },
         Some(launcher::ConfirmAction::Restart) => ConfirmBridgeText {
             title: "Restart MiSTer?",

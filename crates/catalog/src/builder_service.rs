@@ -21,6 +21,7 @@ pub enum BuilderOperation {
     Check,
     Build,
     Rebuild,
+    RebuildAll,
     FreshBuild,
 }
 
@@ -44,6 +45,7 @@ impl BuilderOperation {
             Self::Check => "check",
             Self::Build => "build",
             Self::Rebuild => "rebuild",
+            Self::RebuildAll => "rebuild-all",
             Self::FreshBuild => "fresh-build",
         }
     }
@@ -60,6 +62,7 @@ pub fn run(
         ),
         durable_resume: operation_uses_durable_resume(operation),
         post_reveal_background: false,
+        force_all_systems: operation == BuilderOperation::RebuildAll,
         arcade_bootstrap_scan: None,
     };
     run_with_backend(
@@ -477,12 +480,18 @@ fn run_with_backend<B: BuilderBackend>(
 fn operation_uses_durable_resume(operation: BuilderOperation) -> bool {
     matches!(
         operation,
-        BuilderOperation::Build | BuilderOperation::Rebuild | BuilderOperation::FreshBuild
+        BuilderOperation::Build
+            | BuilderOperation::Rebuild
+            | BuilderOperation::RebuildAll
+            | BuilderOperation::FreshBuild
     )
 }
 
 fn initial_build_role(operation: BuilderOperation) -> RuntimeThreadRole {
-    if operation == BuilderOperation::Rebuild {
+    if matches!(
+        operation,
+        BuilderOperation::Rebuild | BuilderOperation::RebuildAll
+    ) {
         RuntimeThreadRole::CatalogWorker
     } else {
         RuntimeThreadRole::CatalogForeground
@@ -490,7 +499,10 @@ fn initial_build_role(operation: BuilderOperation) -> RuntimeThreadRole {
 }
 
 fn full_build_runs_in_background(operation: BuilderOperation) -> bool {
-    operation == BuilderOperation::Rebuild
+    matches!(
+        operation,
+        BuilderOperation::Rebuild | BuilderOperation::RebuildAll
+    )
 }
 
 fn emit_timings(
@@ -659,6 +671,7 @@ struct SystemBuilderBackend {
     bootstrap_first_visible: bool,
     durable_resume: bool,
     post_reveal_background: bool,
+    force_all_systems: bool,
     arcade_bootstrap_scan: Option<library_db::LibraryRamScanArtifact>,
 }
 
@@ -1193,6 +1206,7 @@ impl BuilderBackend for SystemBuilderBackend {
                 &catalog,
                 &catalog_fingerprint,
                 crate::production_sharded_projection::production_registry_limits(),
+                self.force_all_systems,
                 lifecycle,
             )
             .map_err(|error| format!("publish V3 system catalogs: {error}"))?;
@@ -1516,6 +1530,10 @@ mod tests {
             RuntimeThreadRole::CatalogWorker
         );
         assert_eq!(
+            initial_build_role(BuilderOperation::RebuildAll),
+            RuntimeThreadRole::CatalogWorker
+        );
+        assert_eq!(
             initial_build_role(BuilderOperation::Build),
             RuntimeThreadRole::CatalogForeground
         );
@@ -1524,10 +1542,12 @@ mod tests {
             RuntimeThreadRole::CatalogForeground
         );
         assert!(full_build_runs_in_background(BuilderOperation::Rebuild));
+        assert!(full_build_runs_in_background(BuilderOperation::RebuildAll));
         assert!(!full_build_runs_in_background(BuilderOperation::Build));
         assert!(!full_build_runs_in_background(BuilderOperation::FreshBuild));
         assert!(operation_uses_durable_resume(BuilderOperation::Build));
         assert!(operation_uses_durable_resume(BuilderOperation::Rebuild));
+        assert!(operation_uses_durable_resume(BuilderOperation::RebuildAll));
         assert!(operation_uses_durable_resume(BuilderOperation::FreshBuild));
     }
 

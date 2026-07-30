@@ -3395,53 +3395,29 @@ pub(super) fn run_launcher_loop(
                                     }
                                 }
                             }
-                            LauncherAction::ResetDatabase => {
-                                loading_title = "Shutting down…".to_string();
-                                apply_screenshot_media_update_effects(
-                                    media_session.shutdown_for_reset(),
+                            LauncherAction::RebuildDatabase => {
+                                let effects = catalog_session.rebuild_database(arcade_root.clone());
+                                apply_catalog_session_effects(
+                                    effects,
                                     &app,
+                                    &mut nav,
                                     &mut catalog,
+                                    &mut catalog_ready,
+                                    &mut catalog_version,
+                                    &mut return_capsule_active,
+                                    &mut catalog_generation,
+                                    &mut pending_launch_return_state,
+                                    &mut preview,
+                                    &mut media_session,
                                     &mut scheduler,
-                                    Some(&mut preview),
+                                    &mut lifecycle,
+                                    &mut lifecycle_effects,
                                     &mut full_bridge_dirty,
+                                    loop_start,
                                     start,
                                 );
-                                sync_bridge_launcher(
-                                    &app,
-                                    &pad,
-                                    &nav,
-                                    &lifecycle,
-                                    &setup,
-                                    scheduler.visible_loading_title(&loading_title),
-                                    "Restarting MiSTer",
-                                    Some(&catalog),
-                                    &mut preview,
-                                    &mut bridge_models,
-                                    catalog_version,
-                                    false,
-                                    ui,
-                                );
-                                window.request_redraw();
-                                update_slint_animations(animation_clock);
-                                window.draw_if_needed(|renderer| {
-                                    let region = target.render(renderer, frame_target_geometry(ui));
-                                    let _ = region;
-                                });
-                                let _pace = pacer.wait();
-                                copy_cached_rows_565(
-                                    disp,
-                                    target.cached_frame_view(),
-                                    0,
-                                    ui.render_h(),
-                                );
-                                std::thread::sleep(Duration::from_millis(250));
-                                match launcher::reset_catalog_and_reboot() {
-                                    Ok(()) => continue,
-                                    Err(e) => {
-                                        crate::ui_errln!("reset database failed: {e}");
-                                        loading_title.clear();
-                                    }
-                                }
+                                request_launcher_redraw!();
+                                continue;
                             }
                             LauncherAction::Restart => {
                                 loading_title = "Shutting down…".to_string();

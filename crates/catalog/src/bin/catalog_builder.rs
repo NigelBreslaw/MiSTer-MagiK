@@ -15,18 +15,19 @@ fn main() {
         Some("check") => BuilderOperation::Check,
         Some("build") => BuilderOperation::Build,
         Some("rebuild") => BuilderOperation::Rebuild,
+        Some("rebuild-all") => BuilderOperation::RebuildAll,
         Some("fresh-build") => BuilderOperation::FreshBuild,
         Some("-h" | "--help") => {
             let _ = writeln!(
                 io::stdout().lock(),
-                "usage: mister-magik-catalog-builder check|build|rebuild|fresh-build"
+                "usage: mister-magik-catalog-builder check|build|rebuild|rebuild-all|fresh-build"
             );
             return;
         }
         _ => {
             let _ = writeln!(
                 io::stderr().lock(),
-                "usage: mister-magik-catalog-builder check|build|rebuild|fresh-build"
+                "usage: mister-magik-catalog-builder check|build|rebuild|rebuild-all|fresh-build"
             );
             std::process::exit(2);
         }
