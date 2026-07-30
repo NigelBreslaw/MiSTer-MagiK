@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { MisterBridge } from "../api.slint";
+import { PixelText8, PixelTextSize } from "../components/pixel_text_8.slint";
 import { ControllerPanel } from "../controller_panel.slint";
 import { SetupOverlay } from "hdmi_setup.slint";
 import { ArcadeListScreen } from "../views/hdmi/arcade_list.slint";
@@ -32,6 +33,41 @@ export component HdmiLauncherUi inherits Rectangle {
     if MisterBridge.screen-mode == 5 : LicensesScreen { }
     if MisterBridge.screen-mode == 6 : InfoScreen { }
     if MisterBridge.screen-mode == 7 : ScreensaverSettingsScreen { }
+
+    if MisterBridge.nav-transition-picker-visible : Rectangle {
+        x: parent.width - self.width - 8px;
+        y: 8px;
+        width: 286px;
+        height: 28px;
+        background: #101420e8;
+        border-width: 1px;
+        border-color: #06d6a0;
+
+        HorizontalLayout {
+            padding-left: 8px;
+            padding-right: 8px;
+            spacing: 8px;
+            alignment: center;
+
+            PixelText8 {
+                horizontal-stretch: 1;
+                text: (MisterBridge.nav-transition-style + 1) + "/5 "
+                    + MisterBridge.nav-transition-label
+                    + " p" + MisterBridge.nav-transition-phase
+                    + " e" + MisterBridge.nav-transition-edge;
+                color: #d7eef8;
+                size: PixelTextSize.px8;
+                overflow: elide;
+            }
+
+            PixelText8 {
+                text: MisterBridge.nav-transition-frame-us + "us";
+                color: #06d6a0;
+                size: PixelTextSize.px8;
+                horizontal-alignment: right;
+            }
+        }
+    }
 
     if MisterBridge.catalog-background-scan-visible : BackgroundScanBadge { }
     if MisterBridge.setup-visible : SetupOverlay {

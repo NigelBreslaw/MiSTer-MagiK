@@ -269,7 +269,9 @@ pub enum ConfirmAction {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LauncherAction {
+    OpenMenu,
     OpenCollection,
+    NavigateBack,
     LaunchGame,
     ExitToMister,
     RebuildDatabase,
@@ -291,6 +293,7 @@ enum CatalogSystemUpdateState {
     Failed,
 }
 
+#[derive(Clone)]
 pub struct LauncherEvent {
     pub action: LauncherAction,
     pub path: Option<String>,
@@ -1768,7 +1771,7 @@ impl LauncherNav {
         frame_now: Instant,
         catalog: &ArcadeCatalog,
     ) -> Option<LauncherEvent> {
-        self.handle_input_internal(now, frame_now, catalog, false)
+        self.handle_input_internal(now, frame_now, catalog, false, false)
     }
 
     pub fn handle_input_with_collection_intents(
@@ -1777,7 +1780,41 @@ impl LauncherNav {
         frame_now: Instant,
         catalog: &ArcadeCatalog,
     ) -> Option<LauncherEvent> {
-        self.handle_input_internal(now, frame_now, catalog, true)
+        self.handle_input_internal(now, frame_now, catalog, true, false)
+    }
+
+    pub fn handle_input_with_navigation_intents(
+        &mut self,
+        now: &PadState,
+        frame_now: Instant,
+        catalog: &ArcadeCatalog,
+    ) -> Option<LauncherEvent> {
+        self.handle_input_internal(now, frame_now, catalog, true, true)
+    }
+
+    pub fn commit_navigation_intent(
+        &mut self,
+        event: &LauncherEvent,
+        catalog: &ArcadeCatalog,
+    ) -> bool {
+        match event.action {
+            LauncherAction::OpenMenu => event
+                .path
+                .as_deref()
+                .is_some_and(|menu_id| self.open_menu(menu_id)),
+            LauncherAction::OpenCollection => event
+                .path
+                .as_deref()
+                .is_some_and(|collection_id| self.activate_collection(catalog, collection_id)),
+            LauncherAction::NavigateBack if self.screen == Screen::Home => self.pop_menu(),
+            LauncherAction::NavigateBack if self.screen == Screen::Arcade => {
+                let collection_id = self.active_collection_scope_id(catalog).to_string();
+                let before = self.screen;
+                self.leave_arcade(false, &collection_id);
+                self.screen != before
+            }
+            _ => false,
+        }
     }
 
     fn handle_input_internal(
@@ -1786,13 +1823,20 @@ impl LauncherNav {
         frame_now: Instant,
         catalog: &ArcadeCatalog,
         emit_collection_intents: bool,
+        emit_navigation_intents: bool,
     ) -> Option<LauncherEvent> {
         self.sync_launcher_taxonomy(catalog);
         let result = if self.confirm_action.is_some() {
             self.handle_confirm(now, frame_now)
         } else {
             match self.screen {
-                Screen::Home => self.handle_home(now, frame_now, catalog, emit_collection_intents),
+                Screen::Home => self.handle_home(
+                    now,
+                    frame_now,
+                    catalog,
+                    emit_collection_intents,
+                    emit_navigation_intents,
+                ),
                 Screen::Controller => {
                     if rising(now.btn_home, self.prev.btn_home) {
                         self.go_root();
@@ -1802,7 +1846,9 @@ impl LauncherNav {
                     }
                     None
                 }
-                Screen::Arcade => self.handle_arcade(now, frame_now, catalog),
+                Screen::Arcade => {
+                    self.handle_arcade(now, frame_now, catalog, emit_navigation_intents)
+                }
                 Screen::Settings => self.handle_settings(now, frame_now),
                 Screen::Screensaver => self.handle_screensaver_settings(now, frame_now),
                 Screen::About => self.handle_about(now, frame_now),
@@ -1823,6 +1869,7 @@ impl LauncherNav {
         frame_now: Instant,
         catalog: &ArcadeCatalog,
         emit_collection_intents: bool,
+        emit_navigation_intents: bool,
     ) -> Option<LauncherEvent> {
         if rising(now.btn_home, self.prev.btn_home) {
             if self.crt_layout && self.current_menu_id() == ROOT_MENU_ID {
@@ -1836,6 +1883,13 @@ impl LauncherNav {
             return None;
         }
         if rising(now.btn_b, self.prev.btn_b) {
+            if emit_navigation_intents && self.menu_path.len() > 1 {
+                return Some(LauncherEvent {
+                    action: LauncherAction::NavigateBack,
+                    path: None,
+                    settings: None,
+                });
+            }
             self.pop_menu();
             return None;
         }
@@ -1879,6 +1933,13 @@ impl LauncherNav {
             if let Some(item) = item {
                 match item.kind {
                     LauncherMenuItemKind::Menu => {
+                        if emit_navigation_intents {
+                            return Some(LauncherEvent {
+                                action: LauncherAction::OpenMenu,
+                                path: Some(item.id),
+                                settings: None,
+                            });
+                        }
                         self.open_menu(&item.id);
                     }
                     LauncherMenuItemKind::Collection => {
@@ -2038,6 +2099,7 @@ impl LauncherNav {
         now: &PadState,
         frame_now: Instant,
         catalog: &ArcadeCatalog,
+        emit_navigation_intents: bool,
     ) -> Option<LauncherEvent> {
         let collection_id = self.active_collection_scope_id(catalog).to_string();
         let count = self.active_arcade_game_count(catalog, &collection_id);
@@ -2055,6 +2117,13 @@ impl LauncherNav {
             return None;
         }
         if rising(now.btn_b, self.prev.btn_b) {
+            if emit_navigation_intents {
+                return Some(LauncherEvent {
+                    action: LauncherAction::NavigateBack,
+                    path: None,
+                    settings: None,
+                });
+            }
             self.leave_arcade(false, &collection_id);
             return None;
         }
@@ -6464,7 +6533,7 @@ mod tests {
             .expect("N64 item");
 
         let event = nav
-            .handle_input_with_collection_intents(
+            .handle_input_with_navigation_intents(
                 &pad_with(|pad| pad.btn_a = true),
                 Instant::now(),
                 &catalog,
@@ -6475,6 +6544,61 @@ mod tests {
         assert_eq!(event.path.as_deref(), Some("n64"));
         assert_eq!(nav.screen, Screen::Home);
         assert_eq!(nav.current_menu_id(), "menu:consoles:nintendo");
+        assert!(nav.commit_navigation_intent(&event, &catalog));
+        assert_eq!(nav.screen, Screen::Arcade);
+    }
+
+    #[test]
+    fn menu_and_back_intents_defer_hierarchy_mutation() {
+        let catalog = hierarchy_catalog();
+        let mut nav = LauncherNav::new();
+        let t0 = Instant::now();
+        nav.sync_launcher_taxonomy(&catalog);
+        nav.selected = nav
+            .current_menu_items()
+            .iter()
+            .position(|item| item.id == "menu:consoles")
+            .expect("Consoles root item");
+
+        let open = nav
+            .handle_input_with_navigation_intents(&pad_with(|pad| pad.btn_a = true), t0, &catalog)
+            .expect("open-menu intent");
+        assert_eq!(open.action, LauncherAction::OpenMenu);
+        assert_eq!(nav.current_menu_id(), ROOT_MENU_ID);
+        assert!(nav.commit_navigation_intent(&open, &catalog));
+        assert_eq!(nav.current_menu_id(), "menu:consoles");
+
+        release(&mut nav, &catalog, t0, 16);
+        let back = nav
+            .handle_input_with_navigation_intents(
+                &pad_with(|pad| pad.btn_b = true),
+                t0 + Duration::from_millis(32),
+                &catalog,
+            )
+            .expect("back intent");
+        assert_eq!(back.action, LauncherAction::NavigateBack);
+        assert_eq!(nav.current_menu_id(), "menu:consoles");
+        assert!(nav.commit_navigation_intent(&back, &catalog));
+        assert_eq!(nav.current_menu_id(), ROOT_MENU_ID);
+    }
+
+    #[test]
+    fn absorbed_back_press_does_not_fire_after_transition_settlement() {
+        let catalog = hierarchy_catalog();
+        let mut nav = LauncherNav::new();
+        nav.sync_launcher_taxonomy(&catalog);
+        assert!(nav.open_menu(crate::launcher_taxonomy::CONSOLES_MENU_ID));
+        let held_back = pad_with(|pad| pad.btn_b = true);
+
+        nav.absorb_input(&held_back);
+        assert!(
+            nav.handle_input_with_navigation_intents(&held_back, Instant::now(), &catalog,)
+                .is_none()
+        );
+        assert_eq!(
+            nav.current_menu_id(),
+            crate::launcher_taxonomy::CONSOLES_MENU_ID
+        );
     }
 
     #[test]
