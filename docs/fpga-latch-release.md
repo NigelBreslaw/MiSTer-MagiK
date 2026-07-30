@@ -89,10 +89,12 @@ directory. The host rotates the six stress classes every five minutes,
 requests serial cold catalog generations every seven minutes and thirty
 seconds, and reads the CRC-protected receipt/status interfaces every five
 seconds through the same FPGA transaction lock used by production.
-The stress phase begins with one supervised clean boot; the immutable boot and
-launcher session identities are captured only afterward. Main ownership,
-crash, and invariant counters must therefore remain zero from that boot rather
-than being compared with or offset by an earlier baseline.
+The stress phase arms a self-deleting one-shot qualification environment and
+then performs one supervised clean boot. The qualification launcher is the
+first and only launcher session on that boot; the immutable boot and launcher
+session identities are captured afterward. Main ownership, crash, and
+invariant counters must therefore remain zero from that boot rather than being
+compared with or offset by an earlier baseline.
 The attended host process verifies its volatile release token before a
 supervised reboot and recreates only that token after reconnecting. The
 configuration snapshot is retained on the FAT volume until restoration so a

@@ -41,6 +41,28 @@ pub(super) fn run(config: &NativeDeviceConfig) -> Result<String> {
         "latch v4 qualification preflight",
         &format!("set -eu; test -s {RELEASE_TOKEN}"),
     )?;
+    let development = exec(
+        &preflight_session,
+        "pidof MiSTer_MagiKDev >/dev/null 2>&1",
+        false,
+    )?
+    .rc == 0;
+    let root = if development {
+        "/media/fat/mister-magik-dev"
+    } else {
+        "/media/fat/mister-magik"
+    };
+    let remote_env = if development {
+        DEVELOPMENT_LAUNCHER_ENV_REMOTE
+    } else {
+        DEFAULT_LAUNCHER_ENV_REMOTE
+    };
+    let qualification_env = qualification_launcher_env();
+    put_bytes(
+        &preflight_session,
+        remote_env,
+        one_shot_launcher_env_text(&qualification_env, remote_env).as_bytes(),
+    )?;
     issue_reboot(&preflight_session, RebootMode::Supervised)?;
     drop(preflight_session);
     if !wait_down_with(&config.connection, 40.0) || wait_up_with(&config.connection, 120.0)? != 0 {
@@ -53,63 +75,19 @@ pub(super) fn run(config: &NativeDeviceConfig) -> Result<String> {
         "latch v4 qualification rearm token",
         &release_rearm_token_command(),
     )?;
-    let development = exec(&session, "pidof MiSTer_MagiKDev >/dev/null 2>&1", false)?.rc == 0;
-    let root = if development {
-        "/media/fat/mister-magik-dev"
-    } else {
-        "/media/fat/mister-magik"
-    };
-    let remote_env = if development {
-        DEVELOPMENT_LAUNCHER_ENV_REMOTE
-    } else {
-        DEFAULT_LAUNCHER_ENV_REMOTE
-    };
+    let current_development =
+        exec(&session, "pidof MiSTer_MagiKDev >/dev/null 2>&1", false)?.rc == 0;
+    if current_development != development {
+        return Err("Main layout changed across the qualification clean boot".into());
+    }
     exec_checked(
         &session,
         "latch v4 qualification prepare",
         &format!(
-            "set -eu; test -s {RELEASE_TOKEN}; mkdir -p /tmp/mister-magik; rm -f {STATE_REMOTE} {CONTROL_TEMP_REMOTE}; rm -rf {CATALOG_STATE_REMOTE}; mkdir -p {CATALOG_STATE_REMOTE}"
+            "set -eu; test -s {RELEASE_TOKEN}; rm -f {remote_env}; mkdir -p /tmp/mister-magik; rm -f {CONTROL_TEMP_REMOTE}; mkdir -p {CATALOG_STATE_REMOTE}"
         ),
     )?;
     write_control(&session, STRESS_CLASSES[0], 1)?;
-    restart_launcher_with_one_shot_env(
-        &session,
-        LauncherRestartOptions {
-            env_vars: vec![
-                ("MISTER_LATCH_V4_QUALIFICATION".into(), "1".into()),
-                ("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()),
-                (
-                    "MISTER_SCREENSAVER_RENDERER".into(),
-                    "magik-particles".into(),
-                ),
-                ("MISTER_PARTICLE_COUNT".into(), "40000".into()),
-                ("MISTER_PARTICLE_PRESET".into(), "visual".into()),
-                (
-                    "MISTER_LIBRARY_SQLITE".into(),
-                    format!("{CATALOG_STATE_REMOTE}/library.sqlite3"),
-                ),
-                (
-                    "MISTER_LIBRARY_SQLITE_BUILD_DIR".into(),
-                    format!("{CATALOG_STATE_REMOTE}/sqlite-build"),
-                ),
-                (
-                    "MISTER_SHARDED_CATALOG_DIR".into(),
-                    format!("{CATALOG_STATE_REMOTE}/catalog-v3"),
-                ),
-                (
-                    "MISTER_CATALOG_READY_SNAPSHOT".into(),
-                    format!("{CATALOG_STATE_REMOTE}/catalog-ready.nav.lz4b"),
-                ),
-                (
-                    "MISTER_CATALOG_BUILDER_LOCK".into(),
-                    format!("{CATALOG_STATE_REMOTE}/catalog-builder.lock"),
-                ),
-            ],
-            timeout_secs: 60,
-            remote_env: remote_env.into(),
-            ..LauncherRestartOptions::default()
-        },
-    )?;
 
     let initial_state = wait_qualification_state(&session, Duration::from_secs(45))?;
     let baseline_identity = required_pointer(&initial_state, "/identity")?.clone();
@@ -205,6 +183,39 @@ pub(super) fn run(config: &NativeDeviceConfig) -> Result<String> {
         "latch-v4-qualified evidence={}",
         output_dir.display()
     ))
+}
+
+fn qualification_launcher_env() -> Vec<(String, String)> {
+    vec![
+        ("MISTER_LATCH_V4_QUALIFICATION".into(), "1".into()),
+        ("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()),
+        (
+            "MISTER_SCREENSAVER_RENDERER".into(),
+            "magik-particles".into(),
+        ),
+        ("MISTER_PARTICLE_COUNT".into(), "40000".into()),
+        ("MISTER_PARTICLE_PRESET".into(), "visual".into()),
+        (
+            "MISTER_LIBRARY_SQLITE".into(),
+            format!("{CATALOG_STATE_REMOTE}/library.sqlite3"),
+        ),
+        (
+            "MISTER_LIBRARY_SQLITE_BUILD_DIR".into(),
+            format!("{CATALOG_STATE_REMOTE}/sqlite-build"),
+        ),
+        (
+            "MISTER_SHARDED_CATALOG_DIR".into(),
+            format!("{CATALOG_STATE_REMOTE}/catalog-v3"),
+        ),
+        (
+            "MISTER_CATALOG_READY_SNAPSHOT".into(),
+            format!("{CATALOG_STATE_REMOTE}/catalog-ready.nav.lz4b"),
+        ),
+        (
+            "MISTER_CATALOG_BUILDER_LOCK".into(),
+            format!("{CATALOG_STATE_REMOTE}/catalog-builder.lock"),
+        ),
+    ]
 }
 
 fn write_control(session: &Session, stress_class: &str, catalog_request: u64) -> Result<()> {
@@ -526,6 +537,27 @@ mod tests {
         assert_eq!(DURATION.as_secs(), 21_600);
         assert_eq!(SAMPLE_INTERVAL.as_secs(), 5);
         assert!(DURATION.as_secs() / SAMPLE_INTERVAL.as_secs() >= MIN_RECEIPT_STATUS_SAMPLES);
+    }
+
+    #[test]
+    fn clean_boot_environment_is_isolated_and_self_contained() {
+        let environment = qualification_launcher_env();
+        for key in [
+            "MISTER_LATCH_V4_QUALIFICATION",
+            "MISTER_LIBRARY_SQLITE",
+            "MISTER_LIBRARY_SQLITE_BUILD_DIR",
+            "MISTER_SHARDED_CATALOG_DIR",
+            "MISTER_CATALOG_READY_SNAPSHOT",
+            "MISTER_CATALOG_BUILDER_LOCK",
+        ] {
+            assert!(environment.iter().any(|(candidate, _)| candidate == key));
+        }
+        for (_, value) in environment
+            .iter()
+            .filter(|(key, _)| key.starts_with("MISTER_CATALOG") || key.contains("SQLITE"))
+        {
+            assert!(value.starts_with(CATALOG_STATE_REMOTE));
+        }
     }
 
     #[test]
