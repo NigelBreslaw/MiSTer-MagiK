@@ -1,17 +1,17 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Shared data model for the interactive ARM particle showcase.
+//! Archived data model for the interactive ARM particle showcase.
 
-use crate::bitmap_text::{ConsoleFont, ConsoleTypeface};
-use crate::fireworks::{FireworkRenderer, embedded_firework_json};
-use crate::fireworks_v2::{FireworkV2Renderer, embedded_firework_v2_json};
-use crate::framebuffer::mapped::Pixel;
-use crate::particle_form::{FormSceneKind, FormSceneRenderer};
-use crate::particle_material::{
+use super::fireworks::{FireworkRenderer, embedded_firework_json};
+use super::fireworks_v2::{FireworkV2Renderer, embedded_firework_v2_json};
+use super::form::{FormSceneKind, FormSceneRenderer};
+use super::material::{
     MaterialRasterStats, MaterialShape, MaterialStamp, MaterialStroke, raster_stamp,
     raster_tapered_segment,
 };
+use crate::bitmap_text::{ConsoleFont, ConsoleTypeface};
+use crate::framebuffer::mapped::Pixel;
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, Instant};
@@ -295,7 +295,7 @@ const FLOCK_CELL_PX: f32 = 16.0;
 const DENSITY_W: usize = 240;
 const DENSITY_H: usize = 135;
 const DENSITY_SCALE: usize = 4;
-const ARCADE_CLOUD: &[u8] = include_bytes!("../assets/particles/arcade-cabinet.pcloud");
+const ARCADE_CLOUD: &[u8] = include_bytes!("../../../assets/particles/arcade-cabinet.pcloud");
 const PARTICLE_CLOUD_MAGIC: &[u8; 8] = b"PCLOUD1\0";
 const PARTICLE_CLOUD_HEADER_BYTES: usize = 28;
 const PARTICLE_CLOUD_RECORD_BYTES: usize = 8;

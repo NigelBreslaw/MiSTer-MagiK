@@ -389,7 +389,6 @@ fn print_benchmark_capabilities() {
             "screensaver-pprof-v1": cfg!(feature = "profile"),
             "screensaver-frame-evidence-v4": cfg!(feature = "profile"),
             "particle-capacity-v1": true,
-            "particle-showcase-v1": true,
             "persisted-search-v1": true,
         })
     );

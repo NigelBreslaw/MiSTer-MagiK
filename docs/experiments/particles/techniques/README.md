@@ -1,8 +1,10 @@
-# Particle technique visual targets
+# Archived particle technique visual targets
 
-These ten images define attainable visual targets for the proposed MiSTer MagiK
-particle techniques. They are concept frames, not captures of the current
-renderer.
+These notes describe ten historical particle-technique concept frames, not
+captures of the current renderer. The large PNGs are no longer
+version-controlled. Their metadata remains in `manifest.json`; existing local
+copies live under the ignored `build/particle-experiments/techniques/`
+directory.
 
 Every final PNG is exactly 960×540 with no alpha channel. Its decoded red and
 blue channels contain only the 32 values representable by five bits, and its
@@ -29,8 +31,8 @@ would be unrealistic for MagiK's software RGB565 renderer.
 See `manifest.json` for hashes and validation metadata and `prompts.md` for the
 generation briefs.
 
-Deterministic local renderer captures use the checked-in seed and advance the
-showcase at 60 Hz so stateful techniques reproduce their device cadence:
+The archived deterministic renderer used the checked-in seed and advanced the
+showcase at 60 Hz so stateful techniques reproduced their device cadence:
 
 ```text
 mister-magik-particle-preview --demo grid-flocking --time-ms 15000 \

@@ -526,6 +526,7 @@ size_t mister_magik_particle_neon_project_commands(
     return (size_t)lanes[0] + lanes[1] + lanes[2] + lanes[3];
 }
 
+#ifdef MISTER_MAGIK_EXPERIMENTS
 static inline uint32x4_t widen_four_u8(const uint8_t *values) {
     uint32_t packed;
     memcpy(&packed, values, sizeof(packed));
@@ -774,3 +775,4 @@ size_t mister_magik_showcase_neon_project_warp(
     vst1q_u32(lanes, visible_count);
     return (size_t)lanes[0] + lanes[1] + lanes[2] + lanes[3];
 }
+#endif

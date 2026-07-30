@@ -1,8 +1,9 @@
-# Particle Form scenes
+# Archived Particle Form scenes
 
-These five 960x540 references define the commercial visual targets for the
-MagiK Particle Form renderer. They were normalized from the approved concept
-art and posterized independently to 5 red, 6 green, and 5 blue bits.
+These notes describe five historical 960x540 visual targets for the retired
+MagiK Particle Form renderer. The large reference PNGs are no longer
+version-controlled. Existing local copies live under the ignored
+`build/particle-experiments/form-scenes/` directory.
 
 The references define composition, silhouette, hierarchy, depth, palette,
 negative space, and motion intent. They are not pixel-matching targets.

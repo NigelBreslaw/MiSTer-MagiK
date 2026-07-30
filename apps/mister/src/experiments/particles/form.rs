@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Allocation-free runtime for Trapcode Form-style particle compositions.
+//! Archived runtime for Trapcode Form-style particle compositions.
 //!
 //! Form owns its sources and modifier semantics, while the showcase owns the
 //! RGB565 command buffers, rasterizer, dirty slots, and presentation contract.

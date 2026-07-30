@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Bounded RGB565 material primitives shared by the particle showcase.
+//! Archived RGB565 material primitives used by the particle showcase.
 
 use slint::platform::software_renderer::Rgb565Pixel;
 
