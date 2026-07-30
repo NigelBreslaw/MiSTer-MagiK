@@ -228,6 +228,7 @@ pub struct NavigationTransitionRequest {
     pub edge: NavigationTransitionEdge,
     pub direction: NavigationTransitionDirection,
     pub geometry: NavigationTransitionGeometry,
+    pub duration_us: u64,
     pub preparation_timeout_us: u64,
 }
 
@@ -243,6 +244,7 @@ impl NavigationTransitionRequest {
             edge,
             direction,
             geometry,
+            duration_us: style.duration_us(edge),
             preparation_timeout_us: DEFAULT_PREPARATION_TIMEOUT_US,
         }
     }
@@ -390,7 +392,7 @@ impl NavigationTransitionController {
         let Some(request) = self.request else {
             return NavigationTransitionFrame::default();
         };
-        let total_us = request.style.duration_us(request.edge).max(1);
+        let total_us = request.duration_us.max(1);
         let cover_us = total_us.saturating_mul(COVER_PROGRESS as u64) / PROGRESS_MAX as u64;
 
         if self.phase == NavigationTransitionPhase::Expand {
@@ -734,6 +736,7 @@ pub struct NavigationTransitionRenderStats {
 pub struct NavigationTransitionPoc {
     enabled: bool,
     style_index: usize,
+    duration_override_us: Option<u64>,
     controller: NavigationTransitionController,
     buffers: NavigationTransitionBuffers,
     geometry_history: [Option<NavigationTransitionGeometry>; 3],
@@ -758,12 +761,17 @@ impl NavigationTransitionPoc {
             })
             .unwrap_or(0)
             .min(Self::implemented_style_count().saturating_sub(1));
-        Self::new_with_style(
+        let mut poc = Self::new_with_style(
             width,
             height,
             env_flag("MISTER_NAV_TRANSITION_POC"),
             style_index,
-        )
+        );
+        poc.duration_override_us = std::env::var("MISTER_NAV_TRANSITION_DEBUG_DURATION_MS")
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .map(|milliseconds| milliseconds.clamp(100, 10_000).saturating_mul(1_000));
+        poc
     }
 
     pub fn new(width: usize, height: usize, enabled: bool) -> Self {
@@ -775,6 +783,7 @@ impl NavigationTransitionPoc {
         Self {
             enabled,
             style_index,
+            duration_override_us: None,
             controller: NavigationTransitionController::default(),
             buffers: NavigationTransitionBuffers::new(buffer_width, buffer_height),
             geometry_history: [None; 3],
@@ -863,7 +872,10 @@ impl NavigationTransitionPoc {
         let capture_started = Instant::now();
         self.buffers.capture_source(source)?;
         let capture_us = capture_started.elapsed().as_micros().min(u64::MAX as u128) as u64;
-        let request = NavigationTransitionRequest::new(self.style(), edge, direction, geometry);
+        let mut request = NavigationTransitionRequest::new(self.style(), edge, direction, geometry);
+        if let Some(duration_us) = self.duration_override_us {
+            request.duration_us = duration_us;
+        }
         if !self.controller.begin(request, now_us) {
             return Ok(false);
         }
@@ -1543,6 +1555,26 @@ mod tests {
             NavigationTransitionStyle::SuperScalerShell
                 .duration_us(NavigationTransitionEdge::HomeToArcade),
             480_000
+        );
+    }
+
+    #[test]
+    fn request_duration_override_stretches_the_same_transition_phases() {
+        let mut stretched = request();
+        stretched.duration_us = 4_000_000;
+        let mut controller = NavigationTransitionController::default();
+        assert!(controller.begin(stretched, 0));
+        assert!(controller.captured(0, 0));
+
+        let expanding = controller.tick(500_000, true);
+        assert_eq!(expanding.phase, NavigationTransitionPhase::Expand);
+        assert!(expanding.progress_q16 < COVER_PROGRESS);
+
+        let settled = controller.tick(4_000_000, true);
+        assert_eq!(settled.phase, NavigationTransitionPhase::Settled);
+        assert_eq!(
+            settled.endpoint,
+            Some(NavigationTransitionEndpoint::Destination)
         );
     }
 
