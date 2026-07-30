@@ -1,6 +1,8 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { PixelText8, PixelTextSize } from "../../components/pixel_text_8.slint";
+
 import { MisterBridge } from "../../api.slint";
 
 component InfoRow inherits Rectangle {
@@ -13,8 +15,8 @@ component InfoRow inherits Rectangle {
     VerticalLayout {
         padding: 10px;
         spacing: 5px;
-        Text { text: label; color: #06d6a0; font-size: 12px; }
-        Text { text: value; color: #e8e0f0; font-size: 8px; overflow: elide; }
+        PixelText8 { text: label; color: #06d6a0; size: PixelTextSize.px8; }
+        PixelText8 { text: value; color: #e8e0f0; size: PixelTextSize.px8; overflow: elide; }
     }
 }
 
@@ -23,13 +25,13 @@ export component InfoScreen inherits Rectangle {
     VerticalLayout {
         padding: 32px;
         spacing: 12px;
-        Text { text: "Info"; color: #06d6a0; font-size: 24px; horizontal-alignment: center; }
+        PixelText8 { text: "Info"; color: #06d6a0; size: PixelTextSize.px24; horizontal-alignment: center; }
         InfoRow { label: "Build"; value: MisterBridge.build-label; }
         InfoRow { label: "Display mode"; value: MisterBridge.present-mode-label; }
         InfoRow { label: "Database build"; value: MisterBridge.info-database-build; }
         InfoRow { label: "MiSTer kernel"; value: MisterBridge.info-kernel-version; }
         Rectangle { vertical-stretch: 1; background: transparent; }
-        Text { text: "B: back"; color: #6f8198; font-size: 8px; horizontal-alignment: center; }
+        PixelText8 { text: "B: back"; color: #6f8198; size: PixelTextSize.px8; horizontal-alignment: center; }
     }
 }
 

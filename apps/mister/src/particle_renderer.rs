@@ -818,10 +818,10 @@ fn hidden_slot_offset(hidden_slot: u8) -> Result<usize, String> {
 }
 
 fn magik_target_mask() -> Result<TargetMask, String> {
-    let mut font = ConsoleFont::new_with_typeface(MAGIK_FONT_PX, ConsoleTypeface::PressStart2P);
+    let mut font = ConsoleFont::new_with_typeface(MAGIK_FONT_PX, ConsoleTypeface::MagikPixel);
     let alpha = font
         .rasterize_alpha_mask(MAGIK_TEXT)
-        .ok_or("Press Start 2P produced no MagiK alpha mask")?;
+        .ok_or("MagiK Pixel produced no MagiK alpha mask")?;
     TargetMask::from_alpha(
         alpha.width,
         alpha.height,

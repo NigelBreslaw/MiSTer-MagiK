@@ -1,6 +1,8 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { PixelText8, PixelTextSize } from "../../components/pixel_text_8.slint";
+
 import { MisterBridge } from "../../api.slint";
 
 component SaverRow inherits Rectangle {
@@ -15,8 +17,8 @@ component SaverRow inherits Rectangle {
     VerticalLayout {
         padding: 12px;
         spacing: 8px;
-        Text { text: label; color: !enabled ? #686070 : (focused ? #06d6a0 : #e8e0f0); font-size: 16px; }
-        Text { text: detail; color: enabled ? #a898b8 : #585060; font-size: 8px; }
+        PixelText8 { text: label; color: !enabled ? #686070 : (focused ? #06d6a0 : #e8e0f0); size: PixelTextSize.px16; }
+        PixelText8 { text: detail; color: enabled ? #a898b8 : #585060; size: PixelTextSize.px8; }
     }
 }
 
@@ -25,7 +27,7 @@ export component ScreensaverSettingsScreen inherits Rectangle {
     VerticalLayout {
         padding: 20px;
         spacing: 12px;
-        Text { text: "Screensaver"; color: #e8e0f0; font-size: 24px; horizontal-alignment: center; }
+        PixelText8 { text: "Screensaver"; color: #e8e0f0; size: PixelTextSize.px24; horizontal-alignment: center; }
         SaverRow {
             label: "Screensaver enabled";
             detail: MisterBridge.screensaver-enabled ? "Yes" : "No";

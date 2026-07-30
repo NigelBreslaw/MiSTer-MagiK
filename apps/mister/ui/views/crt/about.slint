@@ -1,6 +1,8 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { PixelText8, PixelTextSize } from "../../components/pixel_text_8.slint";
+
 import { MisterUi } from "../../mister_window.slint";
 import { MisterBridge } from "../../api.slint";
 import { CrtTheme, CrtHeader, CrtFooter, CrtMenuRow } from "../../components/crt_ui.slint";
@@ -17,20 +19,22 @@ export component AboutScreen inherits Rectangle {
 
         CrtHeader { title: "About"; subtitle: "MiSTer MagiK"; status: ""; }
 
-        Text {
+        PixelText8 {
             font-family: MisterUi.crt-font-family;
             text: "An Unintuitive.com production, crafted in Finland by Nigel Breslaw.";
             color: CrtTheme.text;
-            font-size: MisterUi.body-font;
+            size: MisterUi.crt-body-font;
             wrap: word-wrap;
+            line-capacity: 3;
             horizontal-alignment: center;
         }
-        Text {
+        PixelText8 {
             font-family: MisterUi.crt-font-family;
             text: "Thanks to the MiSTer project. Made with Slint.";
             color: CrtTheme.muted;
-            font-size: MisterUi.body-font;
+            size: MisterUi.crt-body-font;
             wrap: word-wrap;
+            line-capacity: 3;
             horizontal-alignment: center;
         }
 

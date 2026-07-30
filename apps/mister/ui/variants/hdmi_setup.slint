@@ -1,6 +1,8 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { PixelText8, PixelTextSize } from "../components/pixel_text_8.slint";
+
 // Controller setup overlay — new pad detection and USB port change rebinding.
 component ConfigRow inherits HorizontalLayout {
     in property <string> label;
@@ -8,20 +10,21 @@ component ConfigRow inherits HorizontalLayout {
     spacing: 12px;
     padding: 3px;
 
-    Text {
+    PixelText8 {
         text: label;
         color: #9080a8;
-        font-size: 16px;
+        size: PixelTextSize.px16;
         min-width: 130px;
         horizontal-alignment: left;
     }
 
-    Text {
+    PixelText8 {
         text: value;
         color: #e8e0f0;
-        font-size: 16px;
+        size: PixelTextSize.px16;
         horizontal-alignment: left;
         wrap: word-wrap;
+        line-capacity: 2;
     }
 }
 
@@ -44,19 +47,20 @@ export component SetupOverlay inherits Rectangle {
         spacing: 12px;
         alignment: center;
 
-        Text {
+        PixelText8 {
             text: title;
             color: #e8e0f0;
-            font-size: 24px;
+            size: PixelTextSize.px24;
             horizontal-alignment: center;
         }
 
-        if phase != 4 && phase != 5 : Text {
+        if phase != 4 && phase != 5 : PixelText8 {
             text: subtitle;
             color: #9080a8;
-            font-size: 16px;
+            size: PixelTextSize.px16;
             horizontal-alignment: center;
             wrap: word-wrap;
+            line-capacity: 2;
         }
 
         if phase == 2 : HorizontalLayout {
@@ -71,10 +75,10 @@ export component SetupOverlay inherits Rectangle {
                 border-color: list-selected == 0 ? #06d6a0 : #5c4a72;
                 background: list-selected == 0 ? #2a2236 : #1e1828;
 
-                Text {
+                PixelText8 {
                     text: "New controller";
                     color: list-selected == 0 ? #06d6a0 : #e8e0f0;
-                    font-size: 16px;
+                    size: PixelTextSize.px16;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -88,10 +92,10 @@ export component SetupOverlay inherits Rectangle {
                 border-color: list-selected == 1 ? #06d6a0 : #5c4a72;
                 background: list-selected == 1 ? #2a2236 : #1e1828;
 
-                Text {
+                PixelText8 {
                     text: "Existing controller";
                     color: list-selected == 1 ? #06d6a0 : #e8e0f0;
-                    font-size: 16px;
+                    size: PixelTextSize.px16;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -110,10 +114,10 @@ export component SetupOverlay inherits Rectangle {
                 border-color: list-selected == i ? #06d6a0 : #5c4a72;
                 background: list-selected == i ? #2a2236 : #1e1828;
 
-                Text {
+                PixelText8 {
                     text: item;
                     color: list-selected == i ? #06d6a0 : #e8e0f0;
-                    font-size: 16px;
+                    size: PixelTextSize.px16;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -124,12 +128,13 @@ export component SetupOverlay inherits Rectangle {
             spacing: 8px;
             vertical-stretch: 1;
 
-            Text {
+            PixelText8 {
                 text: subtitle;
                 color: #06d6a0;
-                font-size: 16px;
+                size: PixelTextSize.px16;
                 horizontal-alignment: center;
                 wrap: word-wrap;
+                line-capacity: 2;
             }
 
             Rectangle {
@@ -161,22 +166,23 @@ export component SetupOverlay inherits Rectangle {
             spacing: 12px;
             alignment: center;
 
-            Text {
+            PixelText8 {
                 text: subtitle;
                 color: #9080a8;
-                font-size: 16px;
+                size: PixelTextSize.px16;
                 horizontal-alignment: center;
                 wrap: word-wrap;
+                line-capacity: 2;
             }
 
             VerticalLayout {
                 spacing: 4px;
                 alignment: center;
 
-                Text {
+                PixelText8 {
                     text: "Name";
                     color: #9080a8;
-                    font-size: 8px;
+                    size: PixelTextSize.px8;
                     horizontal-alignment: left;
                 }
 
@@ -188,13 +194,13 @@ export component SetupOverlay inherits Rectangle {
                     border-color: #5c4a72;
                     background: #1e1828;
 
-                    Text {
+                    PixelText8 {
                         text: setup-name;
                         color: #e8e0f0;
-                        font-size: 16px;
+                        size: PixelTextSize.px16;
                         horizontal-alignment: center;
                         vertical-alignment: center;
-                        wrap: word-wrap;
+                        overflow: elide;
                     }
                 }
             }
@@ -203,10 +209,10 @@ export component SetupOverlay inherits Rectangle {
                 spacing: 4px;
                 alignment: center;
 
-                Text {
+                PixelText8 {
                     text: "Type";
                     color: #9080a8;
-                    font-size: 8px;
+                    size: PixelTextSize.px8;
                     horizontal-alignment: left;
                 }
 
@@ -218,10 +224,10 @@ export component SetupOverlay inherits Rectangle {
                     border-color: #06d6a0;
                     background: #2a2236;
 
-                    Text {
+                    PixelText8 {
                         text: setup-kind-label;
                         color: #06d6a0;
-                        font-size: 16px;
+                        size: PixelTextSize.px16;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
@@ -229,7 +235,7 @@ export component SetupOverlay inherits Rectangle {
             }
         }
 
-        Text {
+        PixelText8 {
             text: phase == 1 ? "Press any button to continue"
                 : phase == 2 ? "D-pad: choose  ·  A: confirm"
                 : phase == 3 ? "D-pad: choose  ·  A: confirm"
@@ -237,9 +243,8 @@ export component SetupOverlay inherits Rectangle {
                 : phase == 5 ? "D-pad: change type  ·  A: save"
                 : "";
             color: #706080;
-            font-size: 8px;
+            size: PixelTextSize.px8;
             horizontal-alignment: center;
         }
     }
 }
-

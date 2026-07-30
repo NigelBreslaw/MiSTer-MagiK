@@ -1,6 +1,8 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { PixelText8, PixelTextSize } from "pixel_text_8.slint";
+
 import { MenuItemStatus } from "../launcher_menu.slint";
 
 component ScanningSubtitle inherits VerticalLayout {
@@ -13,17 +15,17 @@ component ScanningSubtitle inherits VerticalLayout {
     HorizontalLayout {
         alignment: center;
 
-        Text {
+        PixelText8 {
             text: "Scanning";
             color: #8ca4b5;
-            font-size: 8px;
+            size: PixelTextSize.px8;
             horizontal-alignment: center;
         }
 
-        Text {
+        PixelText8 {
             text: ".";
             color: root.detail == "" && root.dot-visible ? #8ca4b5 : transparent;
-            font-size: 8px;
+            size: PixelTextSize.px8;
             horizontal-alignment: center;
         }
     }
@@ -31,17 +33,17 @@ component ScanningSubtitle inherits VerticalLayout {
     if detail != "" : HorizontalLayout {
         alignment: center;
 
-        Text {
+        PixelText8 {
             text: root.detail;
             color: #8ca4b5;
-            font-size: 8px;
+            size: PixelTextSize.px8;
             horizontal-alignment: center;
         }
 
-        Text {
+        PixelText8 {
             text: ".";
             color: root.dot-visible ? #8ca4b5 : transparent;
-            font-size: 8px;
+            size: PixelTextSize.px8;
             horizontal-alignment: center;
         }
     }
@@ -77,7 +79,7 @@ export component LauncherTile inherits Rectangle {
         spacing: 6px;
         alignment: center;
 
-        Text {
+        PixelText8 {
             text: label;
             color: focused
                 ? #06d6a0
@@ -86,11 +88,12 @@ export component LauncherTile inherits Rectangle {
                     : status == MenuItemStatus.update-failed ? #f0c36e
                     : status == MenuItemStatus.partial ? #f0c36e
                     : status == MenuItemStatus.scanning ? #d7eef8 : #9080a8;
-            font-size: 16px;
+            size: PixelTextSize.px16;
             width: 100%;
             horizontal-alignment: center;
             vertical-alignment: center;
             wrap: word-wrap;
+            line-capacity: 2;
 
             animate color { duration: 100ms; easing: Easing.ease-in-out; }
         }
@@ -99,7 +102,7 @@ export component LauncherTile inherits Rectangle {
             detail: subtitle;
         }
 
-        if subtitle != "" && status != MenuItemStatus.scanning : Text {
+        if subtitle != "" && status != MenuItemStatus.scanning : PixelText8 {
             text: subtitle;
             color: focused
                 ? #d8d4dd
@@ -108,7 +111,7 @@ export component LauncherTile inherits Rectangle {
                     : status == MenuItemStatus.update-failed ? #f0c36e
                     : status == MenuItemStatus.partial ? #f0c36e
                     : status == MenuItemStatus.scanning ? #8ca4b5 : #9080a800;
-            font-size: 8px;
+            size: PixelTextSize.px8;
             horizontal-alignment: center;
 
             // In the RGB565 software-renderer launcher mock, animating color alpha
@@ -156,11 +159,11 @@ export component OsdSideLabel inherits Rectangle {
         spacing: 10px;
         alignment: center;
 
-        Text { text: "M"; color: #d7eef8; font-size: 16px; horizontal-alignment: center; }
-        Text { text: "I"; color: #d7eef8; font-size: 16px; horizontal-alignment: center; }
-        Text { text: "S"; color: #d7eef8; font-size: 16px; horizontal-alignment: center; }
-        Text { text: "T"; color: #d7eef8; font-size: 16px; horizontal-alignment: center; }
-        Text { text: "E"; color: #d7eef8; font-size: 16px; horizontal-alignment: center; }
-        Text { text: "R"; color: #d7eef8; font-size: 16px; horizontal-alignment: center; }
+        PixelText8 { text: "M"; color: #d7eef8; size: PixelTextSize.px16; horizontal-alignment: center; }
+        PixelText8 { text: "I"; color: #d7eef8; size: PixelTextSize.px16; horizontal-alignment: center; }
+        PixelText8 { text: "S"; color: #d7eef8; size: PixelTextSize.px16; horizontal-alignment: center; }
+        PixelText8 { text: "T"; color: #d7eef8; size: PixelTextSize.px16; horizontal-alignment: center; }
+        PixelText8 { text: "E"; color: #d7eef8; size: PixelTextSize.px16; horizontal-alignment: center; }
+        PixelText8 { text: "R"; color: #d7eef8; size: PixelTextSize.px16; horizontal-alignment: center; }
     }
 }

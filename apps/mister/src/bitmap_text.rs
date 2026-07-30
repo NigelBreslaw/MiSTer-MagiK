@@ -74,29 +74,29 @@ pub(crate) struct ConsoleFont {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ConsoleTypeface {
-    PressStart2P,
-    PressStart2PPal288,
-    PressStart2PPal576,
+    MagikPixel,
+    MagikPixelPal288,
+    MagikPixelPal576,
 }
 
 impl ConsoleFont {
     pub(crate) fn new(pixel_size: f32) -> Self {
-        Self::new_with_typeface(pixel_size, ConsoleTypeface::PressStart2P)
+        Self::new_with_typeface(pixel_size, ConsoleTypeface::MagikPixel)
     }
 
     pub(crate) fn new_with_typeface(pixel_size: f32, typeface: ConsoleTypeface) -> Self {
         let (data, name): (&'static [u8], &str) = match typeface {
-            ConsoleTypeface::PressStart2P => (
-                include_bytes!("../ui/fonts/PressStart2P-Regular.ttf"),
-                "PressStart2P-Regular.ttf",
+            ConsoleTypeface::MagikPixel => (
+                include_bytes!("../ui/fonts/MagikPixel-Regular.ttf"),
+                "MagikPixel-Regular.ttf",
             ),
-            ConsoleTypeface::PressStart2PPal576 => (
-                include_bytes!("../ui/fonts/PressStart2P-PAL576-Regular.ttf"),
-                "PressStart2P-PAL576-Regular.ttf",
+            ConsoleTypeface::MagikPixelPal576 => (
+                include_bytes!("../ui/fonts/MagikPixel-PAL576-Regular.ttf"),
+                "MagikPixel-PAL576-Regular.ttf",
             ),
-            ConsoleTypeface::PressStart2PPal288 => (
-                include_bytes!("../ui/fonts/PressStart2P-PAL288-Regular.ttf"),
-                "PressStart2P-PAL288-Regular.ttf",
+            ConsoleTypeface::MagikPixelPal288 => (
+                include_bytes!("../ui/fonts/MagikPixel-PAL288-Regular.ttf"),
+                "MagikPixel-PAL288-Regular.ttf",
             ),
         };
         let font = swash::FontRef::from_index(data, 0).unwrap_or_else(|| panic!("{name}"));
@@ -404,7 +404,7 @@ mod tests {
 
     #[test]
     fn clipping_uses_measured_advances_and_fits_the_requested_width() {
-        let mut font = ConsoleFont::new_with_typeface(16.0, ConsoleTypeface::PressStart2P);
+        let mut font = ConsoleFont::new_with_typeface(16.0, ConsoleTypeface::MagikPixel);
         let clipped = font
             .clipped_text("Cadillacs and Dinosaurs", 80)
             .into_owned();
@@ -415,7 +415,7 @@ mod tests {
 
     #[test]
     fn clipping_never_returns_an_ellipsis_wider_than_the_requested_width() {
-        let mut font = ConsoleFont::new_with_typeface(16.0, ConsoleTypeface::PressStart2P);
+        let mut font = ConsoleFont::new_with_typeface(16.0, ConsoleTypeface::MagikPixel);
 
         for max_width in 0..font.text_width("...") {
             let clipped = font.clipped_text("Arcade", max_width).into_owned();
@@ -449,7 +449,7 @@ mod tests {
 
     #[test]
     fn alpha_mask_tightly_contains_press_start_text() {
-        let mut font = ConsoleFont::new_with_typeface(128.0, ConsoleTypeface::PressStart2P);
+        let mut font = ConsoleFont::new_with_typeface(128.0, ConsoleTypeface::MagikPixel);
         let mask = font.rasterize_alpha_mask("MagiK").unwrap();
         assert!(mask.width > 400);
         assert!(mask.width < 900);

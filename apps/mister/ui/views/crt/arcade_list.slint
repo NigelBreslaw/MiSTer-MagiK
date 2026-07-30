@@ -1,6 +1,8 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { PixelText8, PixelTextSize } from "../../components/pixel_text_8.slint";
+
 import { MisterUi } from "../../mister_window.slint";
 import { MisterBridge } from "../../api.slint";
 import { CrtTheme, CrtHeader, CrtFooter } from "../../components/crt_ui.slint";
@@ -15,11 +17,11 @@ component SearchKey inherits Rectangle {
     border-width: MisterUi.border;
     border-color: selected ? CrtTheme.accent : CrtTheme.border;
 
-    Text {
+    PixelText8 {
             font-family: MisterUi.crt-font-family;
         text: root.label;
         color: root.selected && root.keyboard-focused ? CrtTheme.accent-text : CrtTheme.text;
-        font-size: MisterUi.body-font;
+        size: MisterUi.crt-body-font;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -55,14 +57,14 @@ component SearchKeyboard inherits Rectangle {
             border-width: MisterUi.border;
             border-color: MisterBridge.arcade-search-pane == 0 ? CrtTheme.accent : CrtTheme.border;
 
-            Text {
+            PixelText8 {
             font-family: MisterUi.crt-font-family;
                 x: MisterUi.grid-x;
                 width: parent.width - 16px;
                 height: parent.height;
                 text: MisterBridge.arcade-search-query == "" ? "_" : MisterBridge.arcade-search-query;
                 color: CrtTheme.text;
-                font-size: MisterUi.body-font;
+                size: MisterUi.crt-body-font;
                 vertical-alignment: center;
                 overflow: elide;
             }
@@ -123,7 +125,7 @@ export component ArcadeListScreen inherits Rectangle {
         border-color: MisterBridge.arcade-search-pane == 1 ? CrtTheme.accent : CrtTheme.border;
         clip: true;
 
-        Text {
+        PixelText8 {
             width: parent.width;
             height: parent.height;
             visible: MisterBridge.arcade-search-active
@@ -133,7 +135,7 @@ export component ArcadeListScreen inherits Rectangle {
                 (MisterBridge.arcade-search-status == 3 ? "Search unavailable" :
                 (root.count == 0 ? "No matches" : ""));
             color: CrtTheme.muted;
-            font-size: MisterUi.body-font;
+            size: MisterUi.crt-body-font;
             horizontal-alignment: center;
             vertical-alignment: center;
         }
@@ -165,11 +167,11 @@ export component ArcadeListScreen inherits Rectangle {
         height: MisterBridge.arcade-list-height * 1px;
         background: CrtTheme.panel-alt;
 
-        Text {
+        PixelText8 {
             font-family: MisterUi.crt-font-family;
             text: "Loading list...";
             color: CrtTheme.muted;
-            font-size: MisterUi.body-font;
+            size: MisterUi.crt-body-font;
             horizontal-alignment: center;
             vertical-alignment: center;
         }

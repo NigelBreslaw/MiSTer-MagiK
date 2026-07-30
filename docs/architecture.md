@@ -130,8 +130,8 @@ conversion:
   and 576p use identity presentation and damage mapping. Both hidden latch
   slots and diagnostic `/dev/fb0` use the same route plan. Native scanout
   geometry is the authoritative framebuffer capture geometry.
-- CRT and HDMI routes use Press Start 2P for Slint text and the custom Rust
-  games renderer. Native PAL routes select renamed OFL-derived families whose
+- CRT and HDMI routes use MagiK Pixel for Slint text and the custom Rust games
+  renderer. Native PAL routes select the matching OFL-derived families whose
   glyph outlines and vertical metrics are scaled 3:5 for 288p and 6:5 for
   576p while horizontal advances remain unchanged.
 - The checked-in `MagiK Pixel` font family is generated from the pristine

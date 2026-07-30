@@ -1,6 +1,8 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { PixelText8, PixelTextSize } from "../../components/pixel_text_8.slint";
+
 import { MisterBridge } from "../../api.slint";
 
 component AboutRow inherits Rectangle {
@@ -16,8 +18,8 @@ component AboutRow inherits Rectangle {
     VerticalLayout {
         padding: 10px;
         spacing: 4px;
-        Text { text: label; color: focused ? #06d6a0 : #e8e0f0; font-size: 16px; }
-        Text { text: detail; color: #9080a8; font-size: 8px; }
+        PixelText8 { text: label; color: focused ? #06d6a0 : #e8e0f0; size: PixelTextSize.px16; }
+        PixelText8 { text: detail; color: #9080a8; size: PixelTextSize.px8; }
     }
 }
 
@@ -26,31 +28,34 @@ export component AboutScreen inherits Rectangle {
     VerticalLayout {
         padding: 48px;
         spacing: 24px;
-        Text {
+        PixelText8 {
             text: "About";
             color: #06d6a0;
-            font-size: 24px;
+            size: PixelTextSize.px24;
             horizontal-alignment: center;
         }
-        Text {
+        PixelText8 {
             text: "MiSTer MagiK is an Unintuitive.com software production. Crafted with love in Finland by Nigel Breslaw.";
             color: #e8e0f0;
-            font-size: 16px;
+            size: PixelTextSize.px16;
             wrap: word-wrap;
+            line-capacity: 3;
             horizontal-alignment: center;
         }
-        Text {
+        PixelText8 {
             text: "Thanks to the MiSTer project for making all of this possible";
             color: #b8acc8;
-            font-size: 16px;
+            size: PixelTextSize.px16;
             wrap: word-wrap;
+            line-capacity: 3;
             horizontal-alignment: center;
         }
-        Text {
+        PixelText8 {
             text: "Made with Slint. Delivering beautiful UI's on the most challenging of hardware www.slint.dev";
             color: #70e1f5;
-            font-size: 16px;
+            size: PixelTextSize.px16;
             wrap: word-wrap;
+            line-capacity: 3;
             horizontal-alignment: center;
         }
         Rectangle { vertical-stretch: 1; background: transparent; }
@@ -66,8 +71,7 @@ export component AboutScreen inherits Rectangle {
             focused: MisterBridge.about-selected == 1;
         }
 
-        Text { text: "B: back"; color: #6f8198; font-size: 8px; horizontal-alignment: center; }
+        PixelText8 { text: "B: back"; color: #6f8198; size: PixelTextSize.px8; horizontal-alignment: center; }
     }
 
 }
-

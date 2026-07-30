@@ -1,6 +1,8 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { PixelText8, PixelTextSize } from "pixel_text_8.slint";
+
 import { ScreenshotPackProgress } from "../api.slint";
 
 export component ScreenshotPackProgressRow inherits Rectangle {
@@ -8,7 +10,7 @@ export component ScreenshotPackProgressRow inherits Rectangle {
     property <int> clamped-percent: Math.max(0, Math.min(100, pack.percent));
     property <bool> determinate: pack.percent >= 0;
 
-    height: 18px;
+    height: 24px;
     background: transparent;
 
     VerticalLayout {
@@ -17,25 +19,25 @@ export component ScreenshotPackProgressRow inherits Rectangle {
         HorizontalLayout {
             spacing: 6px;
 
-            Text {
+            PixelText8 {
                 width: 160px;
                 text: root.pack.system;
                 color: #d7eef8;
-                font-size: 6px;
+                size: PixelTextSize.px8;
             }
 
-            Text {
+            PixelText8 {
                 width: 86px;
                 text: root.pack.phase;
                 color: #06d6a0;
-                font-size: 6px;
+                size: PixelTextSize.px8;
             }
 
-            Text {
+            PixelText8 {
                 horizontal-stretch: 1;
                 text: root.pack.pack-position;
                 color: #9080a8;
-                font-size: 6px;
+                size: PixelTextSize.px8;
                 horizontal-alignment: right;
             }
         }

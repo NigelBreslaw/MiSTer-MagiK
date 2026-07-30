@@ -87,10 +87,6 @@ fn main() {
         "../ui/fonts/MagikPixel-PAL288-Regular.ttf.license",
         "../ui/fonts/MagikPixel-PAL576-Regular.ttf",
         "../ui/fonts/MagikPixel-PAL576-Regular.ttf.license",
-        "../ui/fonts/PressStart2P-PAL288-Regular.ttf",
-        "../ui/fonts/PressStart2P-PAL288-Regular.ttf.license",
-        "../ui/fonts/PressStart2P-PAL576-Regular.ttf",
-        "../ui/fonts/PressStart2P-PAL576-Regular.ttf.license",
         "../ui/icons/settings.svg",
     ];
     if bench_scenes {

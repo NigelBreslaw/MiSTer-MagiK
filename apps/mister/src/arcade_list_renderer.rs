@@ -88,7 +88,7 @@ impl ArcadeListStyle {
             badge_fill: ARCADE_NEW_BADGE_FILL,
             badge_fill_565: ARCADE_NEW_BADGE_FILL_565,
             badge_text: ARCADE_NEW_BADGE_TEXT,
-            typeface: ConsoleTypeface::PressStart2P,
+            typeface: ConsoleTypeface::MagikPixel,
             crt_palette: false,
         }
     }
@@ -113,9 +113,9 @@ impl ArcadeListStyle {
             // PAL routes keep horizontal advances while selecting vertically
             // derived glyph outlines that match their native scanline density.
             typeface: match metrics.font_family {
-                CrtFontFamily::PressStart2PPal288 => ConsoleTypeface::PressStart2PPal288,
-                CrtFontFamily::PressStart2PPal576 => ConsoleTypeface::PressStart2PPal576,
-                CrtFontFamily::PressStart2P => ConsoleTypeface::PressStart2P,
+                CrtFontFamily::MagikPixelPal288 => ConsoleTypeface::MagikPixelPal288,
+                CrtFontFamily::MagikPixelPal576 => ConsoleTypeface::MagikPixelPal576,
+                CrtFontFamily::MagikPixel => ConsoleTypeface::MagikPixel,
             },
             crt_palette: true,
         }
@@ -2372,7 +2372,7 @@ mod tests {
         let hdmi = ArcadeListRenderer::new();
 
         assert_eq!(crt.style.row_height, 24);
-        assert_eq!(crt.style.typeface, ConsoleTypeface::PressStart2P);
+        assert_eq!(crt.style.typeface, ConsoleTypeface::MagikPixel);
         assert!(crt.style.crt_palette);
         assert_eq!(crt.style.background.0, 0x00020817);
         assert_eq!(
@@ -2382,7 +2382,7 @@ mod tests {
         assert_eq!(crt.style.badge_fill.0, 0x0040e5e7);
         assert_eq!(crt.style.badge_text.0, 0x0003132d);
         assert_eq!(hdmi.style.row_height, ARCADE_ROW_HEIGHT);
-        assert_eq!(hdmi.style.typeface, ConsoleTypeface::PressStart2P);
+        assert_eq!(hdmi.style.typeface, ConsoleTypeface::MagikPixel);
         assert!(!hdmi.style.crt_palette);
         assert_eq!(hdmi.style.background.0, ARCADE_LIST_BG_COLOR.0);
         assert_eq!(hdmi.style.badge_fill.0, ARCADE_NEW_BADGE_FILL.0);

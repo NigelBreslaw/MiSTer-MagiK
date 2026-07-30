@@ -1,6 +1,8 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { PixelText8, PixelTextSize } from "../components/pixel_text_8.slint";
+
 import { MisterUi } from "../mister_window.slint";
 import { MisterBridge, ScreenshotPackProgress } from "../api.slint";
 import { CrtTheme } from "../components/crt_ui.slint";
@@ -17,19 +19,19 @@ component CrtProgressRow inherits Rectangle {
         padding-right: MisterUi.grid-x;
         spacing: MisterUi.grid-x;
         cross-axis-alignment: center;
-        Text {
+        PixelText8 {
             font-family: MisterUi.crt-font-family;
             text: root.pack.system + "  " + root.pack.phase;
             color: CrtTheme.text;
-            font-size: MisterUi.body-font;
+            size: MisterUi.crt-body-font;
             overflow: elide;
             horizontal-stretch: 1;
         }
-        Text {
+        PixelText8 {
             font-family: MisterUi.crt-font-family;
             text: root.pack.percent < 0 ? "..." : root.pack.percent + "%";
             color: CrtTheme.muted;
-            font-size: MisterUi.body-font;
+            size: MisterUi.crt-body-font;
         }
     }
 }
@@ -62,53 +64,55 @@ export component CatalogScanPopup inherits Rectangle {
 
             Rectangle { vertical-stretch: 1; background: transparent; }
 
-            Text {
+            PixelText8 {
             font-family: MisterUi.crt-font-family;
                 width: root.scan-content-width;
                 text: "MiSTer MagiK";
                 color: CrtTheme.accent;
-                font-size: MisterUi.heading-font;
+                size: MisterUi.crt-heading-font;
                 horizontal-alignment: center;
             }
 
-            Text {
+            PixelText8 {
             font-family: MisterUi.crt-font-family;
                 width: root.scan-content-width;
                 text: MisterBridge.catalog-scan-message;
                 color: CrtTheme.text;
-                font-size: MisterUi.body-font;
+                size: MisterUi.crt-body-font;
                 horizontal-alignment: center;
                 wrap: word-wrap;
+                line-capacity: 3;
             }
 
-            Text {
+            PixelText8 {
             font-family: MisterUi.crt-font-family;
                 width: root.scan-content-width;
                 text: MisterBridge.catalog-scan-title;
                 color: #d7eef8;
-                font-size: MisterUi.body-font;
+                size: MisterUi.crt-body-font;
                 horizontal-alignment: center;
             }
 
-            Text {
+            PixelText8 {
             font-family: MisterUi.crt-font-family;
                 width: root.scan-content-width;
                 text: MisterBridge.catalog-scan-detail;
                 color: CrtTheme.muted;
-                font-size: MisterUi.body-font;
+                size: MisterUi.crt-body-font;
                 horizontal-alignment: center;
                 wrap: word-wrap;
+                line-capacity: 3;
             }
 
             if MisterBridge.media-pack-progresses.length > 0 : VerticalLayout {
                 width: root.scan-progress-width;
                 spacing: 5px;
 
-                Text {
+                PixelText8 {
             font-family: MisterUi.crt-font-family;
                     text: MisterBridge.media-pack-summary;
                     color: #d7eef8;
-                    font-size: MisterUi.body-font;
+                    size: MisterUi.crt-body-font;
                     horizontal-alignment: center;
                 }
 
@@ -140,11 +144,11 @@ export component MediaProgressPopup inherits Rectangle {
         padding-bottom: 8px;
         spacing: 5px;
 
-        Text {
+        PixelText8 {
             font-family: MisterUi.crt-font-family;
             text: MisterBridge.media-pack-summary;
             color: #d7eef8;
-            font-size: MisterUi.body-font;
+            size: MisterUi.crt-body-font;
             horizontal-alignment: center;
         }
 
@@ -162,11 +166,11 @@ export component StartupSplash inherits Rectangle {
         alignment: center;
         spacing: 12px;
 
-        Text {
+        PixelText8 {
             font-family: MisterUi.crt-font-family;
             text: "MiSTer MagiK";
             color: CrtTheme.text;
-            font-size: MisterUi.heading-font;
+            size: MisterUi.crt-heading-font;
             horizontal-alignment: center;
         }
     }
@@ -187,19 +191,19 @@ export component BackgroundScanBadge inherits Rectangle {
     t := HorizontalLayout {
         alignment: start;
         width: self.preferred-width;
-        Text {
+        PixelText8 {
             font-family: MisterUi.crt-font-family;
             text: "Building library";
             color: #d7eef8;
-            font-size: MisterUi.body-font;
+            size: MisterUi.crt-body-font;
             horizontal-alignment: center;
             vertical-alignment: center;
         }
-        Text {
+        PixelText8 {
             font-family: MisterUi.crt-font-family;
             text: ".";
             color: root.dot-visible ? #d7eef8 : transparent;
-            font-size: MisterUi.body-font;
+            size: MisterUi.crt-body-font;
             horizontal-alignment: center;
             vertical-alignment: center;
         }
@@ -216,14 +220,15 @@ component CompactDialogButton inherits Rectangle {
     border-width: 1px;
     border-color: focused ? CrtTheme.accent : CrtTheme.border;
 
-    Text {
+    PixelText8 {
             font-family: MisterUi.crt-font-family;
         text: root.label;
         color: root.focused ? CrtTheme.accent-text : CrtTheme.text;
-        font-size: MisterUi.body-font;
+        size: MisterUi.crt-body-font;
         horizontal-alignment: center;
         vertical-alignment: center;
         wrap: word-wrap;
+        line-capacity: 2;
     }
 }
 
@@ -246,23 +251,25 @@ export component ConfirmDialog inherits Rectangle {
             padding-bottom: MisterUi.grid-y;
             spacing: MisterUi.grid-y;
 
-            Text {
+            PixelText8 {
             font-family: MisterUi.crt-font-family;
                 text: MisterBridge.confirm-title;
                 color: CrtTheme.accent;
-                font-size: MisterUi.heading-font;
+                size: MisterUi.crt-heading-font;
                 horizontal-alignment: center;
                 wrap: word-wrap;
+                line-capacity: 2;
             }
 
-            Text {
+            PixelText8 {
             font-family: MisterUi.crt-font-family;
                 text: MisterBridge.confirm-message;
                 color: CrtTheme.text;
-                font-size: MisterUi.body-font;
+                size: MisterUi.crt-body-font;
                 horizontal-alignment: center;
                 vertical-alignment: center;
                 wrap: word-wrap;
+                line-capacity: 3;
                 vertical-stretch: 1;
             }
 
@@ -291,19 +298,19 @@ export component LoadingOverlay inherits Rectangle {
         alignment: center;
         spacing: 12px;
 
-        Text {
+        PixelText8 {
             font-family: MisterUi.crt-font-family;
             text: MisterBridge.loading-message;
             color: CrtTheme.text;
-            font-size: MisterUi.heading-font;
+            size: MisterUi.crt-heading-font;
             horizontal-alignment: center;
         }
 
-        Text {
+        PixelText8 {
             font-family: MisterUi.crt-font-family;
             text: MisterBridge.loading-detail != "" ? MisterBridge.loading-detail : "Please wait...";
             color: CrtTheme.muted;
-            font-size: MisterUi.body-font;
+            size: MisterUi.crt-body-font;
             horizontal-alignment: center;
         }
     }

@@ -33,18 +33,18 @@ pub enum ResolvedOutputRoute {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CrtFontFamily {
-    PressStart2P,
-    PressStart2PPal576,
-    PressStart2PPal288,
+    MagikPixel,
+    MagikPixelPal576,
+    MagikPixelPal288,
 }
 
 impl CrtFontFamily {
     /// Slint family name embedded in the route's selected font asset.
     pub const fn label(self) -> &'static str {
         match self {
-            Self::PressStart2P => "Press Start 2P",
-            Self::PressStart2PPal576 => "Press Start 2P PAL 576",
-            Self::PressStart2PPal288 => "Press Start 2P PAL 288",
+            Self::MagikPixel => "MagiK Pixel",
+            Self::MagikPixelPal576 => "MagiK Pixel PAL 576",
+            Self::MagikPixelPal288 => "MagiK Pixel PAL 288",
         }
     }
 }
@@ -98,7 +98,7 @@ impl CrtUiMetrics {
             game_row_height: 24,
             header_height: 32,
             footer_height: 24,
-            font_family: CrtFontFamily::PressStart2P,
+            font_family: CrtFontFamily::MagikPixel,
         }
     }
 
@@ -116,7 +116,7 @@ impl CrtUiMetrics {
                 game_row_height: 24,
                 header_height: 48,
                 footer_height: 40,
-                font_family: CrtFontFamily::PressStart2P,
+                font_family: CrtFontFamily::MagikPixel,
             },
             ResolvedOutputRoute::Crt288p50 => Self {
                 grid_x: 8,
@@ -130,7 +130,7 @@ impl CrtUiMetrics {
                 game_row_height: 14,
                 header_height: 29,
                 footer_height: 24,
-                font_family: CrtFontFamily::PressStart2PPal288,
+                font_family: CrtFontFamily::MagikPixelPal288,
             },
             ResolvedOutputRoute::Crt576p50 => Self {
                 grid_x: 4,
@@ -144,7 +144,7 @@ impl CrtUiMetrics {
                 game_row_height: 29,
                 header_height: 38,
                 footer_height: 29,
-                font_family: CrtFontFamily::PressStart2PPal576,
+                font_family: CrtFontFamily::MagikPixelPal576,
             },
             _ => Self::for_framebuffer(display.render_w, display.render_h),
         }
@@ -1442,9 +1442,9 @@ mod tests {
                 expected_metrics
             );
             let expected_font = match route {
-                ResolvedOutputRoute::Crt288p50 => CrtFontFamily::PressStart2PPal288,
-                ResolvedOutputRoute::Crt576p50 => CrtFontFamily::PressStart2PPal576,
-                _ => CrtFontFamily::PressStart2P,
+                ResolvedOutputRoute::Crt288p50 => CrtFontFamily::MagikPixelPal288,
+                ResolvedOutputRoute::Crt576p50 => CrtFontFamily::MagikPixelPal576,
+                _ => CrtFontFamily::MagikPixel,
             };
             assert_eq!(metrics.font_family, expected_font);
         }

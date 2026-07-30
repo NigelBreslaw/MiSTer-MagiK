@@ -1,6 +1,8 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { PixelText8, PixelTextSize } from "../components/pixel_text_8.slint";
+
 import { MisterUi } from "../mister_window.slint";
 import { CrtTheme, CrtHeader, CrtFooter, CrtMenuRow } from "../components/crt_ui.slint";
 
@@ -31,13 +33,14 @@ export component SetupOverlay inherits Rectangle {
 
         CrtHeader { title: root.title; subtitle: "Controller setup"; status: ""; }
 
-        if root.phase != 4 : Text {
+        if root.phase != 4 : PixelText8 {
             font-family: MisterUi.crt-font-family;
             text: root.subtitle;
             color: CrtTheme.muted;
-            font-size: MisterUi.body-font;
+            size: MisterUi.crt-body-font;
             horizontal-alignment: center;
             wrap: word-wrap;
+            line-capacity: 2;
         }
 
         if root.phase == 2 : CrtMenuRow {
@@ -66,13 +69,14 @@ export component SetupOverlay inherits Rectangle {
             }
         }
 
-        if root.phase == 4 : Text {
+        if root.phase == 4 : PixelText8 {
             font-family: MisterUi.crt-font-family;
             text: root.subtitle;
             color: CrtTheme.accent;
-            font-size: MisterUi.body-font;
+            size: MisterUi.crt-body-font;
             horizontal-alignment: center;
             wrap: word-wrap;
+            line-capacity: 2;
         }
         if root.phase == 4 : Rectangle {
             vertical-stretch: 1;

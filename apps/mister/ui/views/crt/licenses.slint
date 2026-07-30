@@ -1,6 +1,8 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { PixelText8, PixelTextSize } from "../../components/pixel_text_8.slint";
+
 import { MisterBridge } from "../../api.slint";
 import { MisterUi } from "../../mister_window.slint";
 import { CrtTheme, CrtHeader, CrtFooter, CrtMenuRow } from "../../components/crt_ui.slint";
@@ -29,13 +31,13 @@ export component LicensesScreen inherits Rectangle {
         padding-top: MisterUi.grid-y * 2;
         padding-bottom: MisterUi.grid-y * 2;
         spacing: MisterUi.grid-y;
-        Text {
+        PixelText8 {
             font-family: MisterUi.crt-font-family;
             text: MisterBridge.licenses-selected == 0 ? "MiSTer MagiK  v" :
                   MisterBridge.licenses-selected == 1 ? "FFmpeg  v" :
                   MisterBridge.licenses-selected == 2 ? "Press Start 2P  v" : "Slint  v";
             color: CrtTheme.accent;
-            font-size: MisterUi.heading-font;
+            size: MisterUi.crt-heading-font;
             horizontal-alignment: center;
         }
         Rectangle {
@@ -49,11 +51,11 @@ export component LicensesScreen inherits Rectangle {
                 width: parent.width - 24px;
                 height: parent.height - 24px;
                 viewport-y: -MisterBridge.licenses-scroll-y * 1px;
-                for line in MisterBridge.license-lines : Text {
+                for line in MisterBridge.license-lines : PixelText8 {
                     font-family: MisterUi.crt-font-family;
                     text: line;
                     color: CrtTheme.text;
-                    font-size: MisterUi.body-font;
+                    size: MisterUi.crt-body-font;
                     height: MisterUi.body-font;
                     overflow: clip;
                     vertical-alignment: top;

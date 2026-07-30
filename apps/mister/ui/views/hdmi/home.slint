@@ -1,6 +1,8 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { PixelText8, PixelTextSize } from "../../components/pixel_text_8.slint";
+
 import { MisterBridge } from "../../api.slint";
 import { LauncherTile, SettingsButton } from "../../components/launcher_chrome.slint";
 
@@ -46,40 +48,40 @@ export component HomeGrid inherits Rectangle {
                             spacing: 2px;
                             alignment: center;
 
-                            Text {
+                            PixelText8 {
                                 width: 100%;
                                 text: MisterBridge.menu-title;
                                 color: #d7eef8;
-                                font-size: 16px;
+                                size: PixelTextSize.px16;
                                 vertical-alignment: center;
                                 overflow: elide;
                             }
 
                             if (MisterBridge.dev-mode || MisterBridge.update-available)
-                                && MisterBridge.menu-breadcrumb == "" : Text {
+                                && MisterBridge.menu-breadcrumb == "" : PixelText8 {
                                 width: 100%;
                                 text: MisterBridge.dev-mode ? "DEV MODE" : "Update Available";
                                 color: MisterBridge.dev-mode ? #ffb347 : #06d6a0;
-                                font-size: 8px;
+                                size: PixelTextSize.px8;
                                 vertical-alignment: center;
                                 overflow: elide;
                             }
 
-                            if MisterBridge.menu-breadcrumb != "" : Text {
+                            if MisterBridge.menu-breadcrumb != "" : PixelText8 {
                                 width: 100%;
                                 text: MisterBridge.menu-breadcrumb;
                                 color: #8ca4b5;
-                                font-size: 8px;
+                                size: PixelTextSize.px8;
                                 vertical-alignment: center;
                                 overflow: elide;
                             }
                         }
                     }
 
-                    Text {
+                    PixelText8 {
                         text: MisterBridge.clock-text;
                         color: #d7eef8;
-                        font-size: 16px;
+                        size: PixelTextSize.px16;
                         horizontal-alignment: right;
                         vertical-alignment: center;
                     }

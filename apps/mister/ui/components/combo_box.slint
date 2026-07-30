@@ -1,6 +1,8 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { PixelText8, PixelTextSize } from "pixel_text_8.slint";
+
 import { MisterBridge } from "../api.slint";
 
 export component ComboBoxOverlay inherits Rectangle {
@@ -14,16 +16,16 @@ export component ComboBoxOverlay inherits Rectangle {
         VerticalLayout {
             padding: 16px;
             spacing: 4px;
-            Text { text: "Display resolution"; color: #06d6a0; font-size: 16px; horizontal-alignment: center; }
+            PixelText8 { text: "Display resolution"; color: #06d6a0; size: PixelTextSize.px16; horizontal-alignment: center; }
             for option[index] in MisterBridge.display-options : Rectangle {
                 height: 34px;
                 background: index == MisterBridge.display-highlighted ? #2a2236 : transparent;
                 border-width: index == MisterBridge.display-highlighted ? 2px : 0px;
                 border-color: #06d6a0;
-                Text {
+                PixelText8 {
                     text: (index == MisterBridge.display-selected ? "✓ " : "  ") + option;
                     color: index == MisterBridge.display-highlighted ? #06d6a0 : #e8e0f0;
-                    font-size: 8px;
+                    size: PixelTextSize.px8;
                     vertical-alignment: center;
                 }
             }

@@ -6,9 +6,9 @@ export { PixelTextSize } from "components/pixel_text_8.slint";
 import { MisterBridge, PreviewStatus, ScreenshotPackProgress } from "api.slint";
 import { CrtLauncherUi } from "variants/crt_ui.slint";
 import { HdmiLauncherUi } from "variants/hdmi_ui.slint";
-import "fonts/PressStart2P-Regular.ttf";
-import "fonts/PressStart2P-PAL288-Regular.ttf";
-import "fonts/PressStart2P-PAL576-Regular.ttf";
+import "fonts/MagikPixel-Regular.ttf";
+import "fonts/MagikPixel-PAL288-Regular.ttf";
+import "fonts/MagikPixel-PAL576-Regular.ttf";
 
 export { MisterUi }
 export { MisterBridge, PreviewStatus, ScreenshotPackProgress }
@@ -16,7 +16,7 @@ export { ArcadeGame } from "arcade_game.slint";
 export { MenuItem, MenuItemKind } from "launcher_menu.slint";
 
 export component Launcher inherits MisterWindow {
-    default-font-family: "Press Start 2P";
+    default-font-family: "MagiK Pixel";
     title: "MiSTer MagiK Launcher";
     background: MisterBridge.screen-mode == 0 ? #0b0d14 : #1a1424;
 
