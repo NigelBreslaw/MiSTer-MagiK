@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use mister_magik_fb::particle_showcase::{
+use mister_magik_fb::experiments::particles::showcase::{
     ParticleDemoKind, ParticleShowcaseConfig, ParticleShowcaseRenderer,
 };
 use slint::platform::software_renderer::Rgb565Pixel;

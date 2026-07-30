@@ -28,10 +28,6 @@ pub mod controller_db;
 pub mod crash_report;
 pub mod diagnostic_identity;
 mod fallible_log;
-#[cfg(any(feature = "ui", feature = "ui-preview"))]
-pub mod fireworks;
-#[cfg(any(feature = "ui", feature = "ui-preview"))]
-pub mod fireworks_v2;
 pub use mister_magik_core::{input_info, input_repeat, input_state};
 pub use mister_magik_mister_runtime::framebuffer;
 pub use mister_magik_mister_runtime::latch_readiness;
@@ -53,13 +49,7 @@ mod media_pack_save;
 pub mod media_update;
 pub mod particle_engine;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
-pub mod particle_form;
-#[cfg(any(feature = "ui", feature = "ui-preview"))]
-mod particle_material;
-#[cfg(any(feature = "ui", feature = "ui-preview"))]
 pub mod particle_renderer;
-#[cfg(any(feature = "ui", feature = "ui-preview"))]
-pub mod particle_showcase;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 pub mod preview_transition;
 #[cfg(all(feature = "ui-preview", target_os = "macos"))]
@@ -71,6 +61,8 @@ pub use mister_magik_mister_runtime::runtime_status;
 pub use mister_magik_mister_runtime::settings;
 pub mod setup_nav;
 pub mod spring_animation;
+#[cfg(any(feature = "ui", feature = "ui-preview"))]
+pub mod startup_particles;
 #[cfg(test)]
 mod test_support;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
@@ -85,6 +77,8 @@ pub mod visual_platform;
 #[cfg(mister_experiments)]
 pub mod experiments {
     pub mod effects;
+    #[cfg(any(feature = "ui", feature = "ui-preview"))]
+    pub mod particles;
 }
 #[cfg(test)]
 mod video_i420;

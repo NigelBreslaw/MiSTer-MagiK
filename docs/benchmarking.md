@@ -16,13 +16,6 @@ Supported scenarios:
 - `particle-capacity`
 - `particle-step`
 - `particle-profile`
-- `particle-techniques`
-- `particle-techniques-profile`
-- `particle-technique-images`
-- `particle-demo-32` through `particle-demo-36`
-- `particle-demo-profile-32` through `particle-demo-profile-36`
-- `particle-form-scenes`
-- `particle-form-scenes-profile`
 - `catalog-lifecycle`
 - `search`
 
@@ -30,30 +23,9 @@ New benchmarks must add a named registry entry and a fixed typed device
 request. They may not expose arbitrary commands, duration knobs, remote paths,
 or generic environment overrides.
 
-## Commercial particle techniques
-
-`particle-techniques` runs showcase demos 22-31 for 30 seconds each at their
-fixed visual budgets. It records strict latch qualification, per-stage timing,
-CPU use, and one FPGA-latched capture per technique without re-running the
-legacy showcase. `particle-techniques-profile` samples the same closed set at
-99 Hz and retains the ordinary restoration and platform-identity checks.
-`particle-technique-images` captures authoritative hero-beat RGB565 frames for
-techniques 24-31 without making their availability depend on earlier
-performance qualification.
-
-The fixed budgets and visual acceptance gates live in
-`docs/design/particle-techniques/acceptance.md`. A performance result is not
-accepted if either independent reviewer finds that tuning removed a defining
-visual read.
-
-## Particle Form scenes
-
-`particle-form-scenes` qualifies showcase demos 32-36 individually for 30
-seconds at their declared budgets. `particle-form-scenes-profile` samples the
-same fixed set only when qualification identifies a bottleneck. The fixed
-individual scenarios address one Form scene without exposing an arbitrary
-demo selector. Visual targets and the two-reviewer acceptance contract live in
-`docs/design/form-scenes/`.
+The former showcase, firework, commercial-technique and Form-scene scenarios
+are archived with their code and visual contracts under
+`docs/experiments/particles/`. They are not valid production benchmarks.
 
 ## Fixed particle optimisation trial
 

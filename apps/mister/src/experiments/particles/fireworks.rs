@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Declarative, deterministic fireworks rendered directly into RGB565.
+//! Archived declarative, deterministic fireworks renderer.
 
 use serde::Deserialize;
 use slint::platform::software_renderer::Rgb565Pixel;
@@ -12,13 +12,17 @@ const MAX_PARTICLES: usize = 98_304;
 const MAX_TRAIL_SAMPLES: u8 = 32;
 pub const FIREWORK_VISUAL_SEED: u64 = 827_141_709_451;
 const COPPER_WILLOW_RAIN: &str =
-    include_str!("../assets/particles/fireworks/copper-willow-rain.json");
-const MAGNETIC_FLOWER: &str = include_str!("../assets/particles/fireworks/magnetic-flower.json");
-const OLED_PEONY: &str = include_str!("../assets/particles/fireworks/oled-peony.json");
-const PHOENIX_COMET: &str = include_str!("../assets/particles/fireworks/phoenix-comet.json");
-const RECURSIVE_HALO: &str = include_str!("../assets/particles/fireworks/recursive-halo.json");
+    include_str!("../../../assets/experiments/particles/fireworks/copper-willow-rain.json");
+const MAGNETIC_FLOWER: &str =
+    include_str!("../../../assets/experiments/particles/fireworks/magnetic-flower.json");
+const OLED_PEONY: &str =
+    include_str!("../../../assets/experiments/particles/fireworks/oled-peony.json");
+const PHOENIX_COMET: &str =
+    include_str!("../../../assets/experiments/particles/fireworks/phoenix-comet.json");
+const RECURSIVE_HALO: &str =
+    include_str!("../../../assets/experiments/particles/fireworks/recursive-halo.json");
 const SOLAR_CHRYSANTHEMUM: &str =
-    include_str!("../assets/particles/fireworks/solar-chrysanthemum.json");
+    include_str!("../../../assets/experiments/particles/fireworks/solar-chrysanthemum.json");
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct FireworkRenderStats {

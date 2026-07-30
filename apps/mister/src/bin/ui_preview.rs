@@ -13,10 +13,6 @@ mod macos {
     use mister_magik_fb::arcade_catalog::{
         ArcadeCatalog, ArcadeFilter, ArcadeGameEntry, MENU_ARCADE_SYSTEM_ID,
     };
-    use mister_magik_fb::fireworks::{
-        FIREWORK_VISUAL_SEED, FireworkRenderer, embedded_firework_json,
-    };
-    use mister_magik_fb::fireworks_v2::{FireworkV2Renderer, embedded_firework_v2_json};
     use mister_magik_fb::framebuffer::target::{FramebufferTargetGeometry, UiFrameTarget};
     use mister_magik_fb::input_state::PadState;
     use mister_magik_fb::launcher::{
@@ -82,29 +78,6 @@ mod macos {
     const ARCADE_MEDIA_SYSTEM_ID: &str = "arcade";
     const SCREENSHOT_TILE_SEED: u64 = 0x4d61_6769_4b54_696c;
 
-    enum PreviewFireworkRenderer {
-        V1(FireworkRenderer),
-        V2(FireworkV2Renderer),
-    }
-
-    impl PreviewFireworkRenderer {
-        fn from_json(json: &str, width: usize, height: usize) -> Result<Self, String> {
-            if json.contains("\"mister-magik-firework-v2\"") {
-                FireworkV2Renderer::from_json(json, width, height, FIREWORK_VISUAL_SEED)
-                    .map(Self::V2)
-            } else {
-                FireworkRenderer::from_json(json, width, height, FIREWORK_VISUAL_SEED).map(Self::V1)
-            }
-        }
-
-        fn render(&self, destination: &mut [Rgb565Pixel], elapsed: Duration) -> Result<(), String> {
-            match self {
-                Self::V1(renderer) => renderer.render(destination, elapsed).map(|_| ()),
-                Self::V2(renderer) => renderer.render(destination, elapsed).map(|_| ()),
-            }
-        }
-    }
-
     pub fn run() -> Result<(), Box<dyn Error>> {
         let options = PreviewOptions::parse(std::env::args().skip(1))?;
         let headless = options.output.is_some();
@@ -131,24 +104,6 @@ mod macos {
         launcher.show()?;
         slint_window.request_redraw();
 
-        let firework_renderer = if options.scenario == Scenario::Fireworks {
-            let json = if let Some(path) = options.firework_spec.as_ref() {
-                read_to_string(path)
-                    .map_err(|error| format!("read firework spec {}: {error}", path.display()))?
-            } else {
-                embedded_firework_json(&options.firework)
-                    .or_else(|| embedded_firework_v2_json(&options.firework))
-                    .ok_or_else(|| format!("unknown firework {:?}", options.firework))?
-                    .to_owned()
-            };
-            Some(PreviewFireworkRenderer::from_json(
-                &json,
-                frame_width,
-                frame_height,
-            )?)
-        } else {
-            None
-        };
         let mut application = PreviewApplication::new(
             launcher,
             slint_window,
@@ -156,7 +111,6 @@ mod macos {
             Scenario::Home,
             options.refresh_rate,
             headless,
-            firework_renderer,
             content,
             !options.no_scan,
             !options.no_download,
@@ -167,13 +121,8 @@ mod macos {
             application.load_headless_screenshot_tiles()?;
         }
         if let Some(output) = options.output {
-            if let Some(time_ms) = options.time_ms {
-                application.screensaver_elapsed = Duration::from_millis(time_ms);
+            for _ in 0..=options.frame {
                 application.compose_frame();
-            } else {
-                for _ in 0..=options.frame {
-                    application.compose_frame();
-                }
             }
             if options.scenario == Scenario::ScreenshotTiles {
                 application.settle_headless_production_screensaver()?;
@@ -185,13 +134,11 @@ mod macos {
                 frame_height,
             )?;
             println!(
-                "capture={} scenario={} frame={} time_ms={} refresh_hz={} hud={} hash={:016x}",
+                "capture={} scenario={} frame={} refresh_hz={} hash={:016x}",
                 output.display(),
                 options.scenario.label(),
                 options.frame,
-                options.time_ms.unwrap_or(0),
                 application.refresh_hz,
-                options.hud,
                 frame_hash(application.frame_target.cached_565())
             );
             return Ok(());
@@ -306,7 +253,6 @@ mod macos {
         preview_transition_id: u64,
         preview_transition_duration: Duration,
         particle_renderer: Option<ParticleRenderer>,
-        firework_renderer: Option<PreviewFireworkRenderer>,
         production_screensaver: Option<LauncherScreensaver>,
         tile_pack_loader: Option<TilePackLoader>,
         tile_pack_fingerprint: Option<TilePackFingerprint>,
@@ -336,7 +282,6 @@ mod macos {
             scenario: Scenario,
             refresh_rate: RefreshRate,
             headless: bool,
-            firework_renderer: Option<PreviewFireworkRenderer>,
             content: PreviewContent,
             scan_card: bool,
             download_media: bool,
@@ -420,7 +365,6 @@ mod macos {
                 preview_transition_id: 0,
                 preview_transition_duration: PREVIEW_TRANSITION_DURATION,
                 particle_renderer: None,
-                firework_renderer,
                 production_screensaver: None,
                 tile_pack_loader: None,
                 tile_pack_fingerprint: None,
@@ -509,9 +453,6 @@ mod macos {
             }
             if matches!(scenario, Scenario::ParticleScreensaver) {
                 self.magik_particle_renderer().invalidate_hidden_slot(1);
-                self.screensaver_elapsed = Duration::ZERO;
-            }
-            if matches!(scenario, Scenario::Fireworks) {
                 self.screensaver_elapsed = Duration::ZERO;
             }
             if matches!(scenario, Scenario::ScreenshotTiles) {
@@ -892,16 +833,10 @@ mod macos {
                 } else {
                     self.frame_target.cached_565_mut().fill(Rgb565Pixel(0));
                 }
-            } else if self.scenario == Scenario::Fireworks {
-                self.firework_renderer
-                    .as_ref()
-                    .expect("firework renderer initialized for fireworks scenario")
-                    .render(self.frame_target.cached_565_mut(), self.screensaver_elapsed)
-                    .expect("render declarative firework");
             }
             if matches!(
                 self.scenario,
-                Scenario::ParticleScreensaver | Scenario::ScreenshotTiles | Scenario::Fireworks
+                Scenario::ParticleScreensaver | Scenario::ScreenshotTiles
             ) && !self.screensaver_paused
             {
                 self.screensaver_elapsed += frame_delta;
@@ -1605,7 +1540,6 @@ mod macos {
         Loading,
         MediaProgress,
         ParticleScreensaver,
-        Fireworks,
         ScreenshotTiles,
     }
 
@@ -1659,7 +1593,6 @@ mod macos {
                 "loading" => Some(Self::Loading),
                 "media-progress" => Some(Self::MediaProgress),
                 "particle" | "particle-screensaver" => Some(Self::ParticleScreensaver),
-                "firework" | "fireworks" => Some(Self::Fireworks),
                 "screenshot-screensaver" | "screenshot-tiles" | "tiles" => {
                     Some(Self::ScreenshotTiles)
                 }
@@ -1687,7 +1620,6 @@ mod macos {
                 Self::Loading => "Loading",
                 Self::MediaProgress => "Media Progress",
                 Self::ParticleScreensaver => "Particle Screensaver",
-                Self::Fireworks => "Fireworks",
                 Self::ScreenshotTiles => "Production Screenshot Screensaver",
             }
         }
@@ -1711,7 +1643,6 @@ mod macos {
                 Self::Loading => "L",
                 Self::MediaProgress => "M",
                 Self::ParticleScreensaver => "P",
-                Self::Fireworks => "headless",
                 Self::ScreenshotTiles => "T",
                 Self::ControllerSetup => "S",
             }
@@ -1771,10 +1702,6 @@ mod macos {
         frame: u64,
         output: Option<PathBuf>,
         refresh_rate: RefreshRate,
-        firework: String,
-        firework_spec: Option<PathBuf>,
-        time_ms: Option<u64>,
-        hud: bool,
         content_mode: ContentMode,
         sd_root: Option<PathBuf>,
         cache_root: Option<PathBuf>,
@@ -1789,10 +1716,6 @@ mod macos {
             let mut frame = 0;
             let mut output = None;
             let mut refresh_rate = RefreshRate::Auto;
-            let mut firework = "oled-peony".to_owned();
-            let mut firework_spec = None;
-            let mut time_ms = None;
-            let mut hud = true;
             let mut content_mode = ContentMode::Auto;
             let mut sd_root = None;
             let mut cache_root = None;
@@ -1825,32 +1748,6 @@ mod macos {
                             .ok_or("--refresh-rate requires auto, 60, or 120")?;
                         refresh_rate = RefreshRate::parse(&value)?;
                     }
-                    "--firework" => {
-                        firework = arguments.next().ok_or("--firework requires a preset id")?;
-                    }
-                    "--firework-spec" => {
-                        firework_spec = Some(PathBuf::from(
-                            arguments
-                                .next()
-                                .ok_or("--firework-spec requires a file path")?,
-                        ));
-                    }
-                    "--time-ms" => {
-                        let value = arguments.next().ok_or("--time-ms requires milliseconds")?;
-                        time_ms = Some(
-                            value
-                                .parse::<u64>()
-                                .map_err(|_| format!("invalid time in milliseconds {value:?}"))?,
-                        );
-                    }
-                    "--hud" => {
-                        let value = arguments.next().ok_or("--hud requires on or off")?;
-                        hud = match value.as_str() {
-                            "on" => true,
-                            "off" => false,
-                            _ => return Err("--hud requires on or off".into()),
-                        };
-                    }
                     "--content" => {
                         let value = arguments
                             .next()
@@ -1879,7 +1776,7 @@ mod macos {
                     }
                     "--help" | "-h" => {
                         return Err(
-                            "usage: mister-magik-ui-preview [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--display-profile hdmi|crt-240p|crt-288p|crt-480p|crt-576p] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N | --time-ms N] [--firework ID] [--firework-spec FILE.json] [--hud on|off] [--output FILE.ppm]"
+                            "usage: mister-magik-ui-preview [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--display-profile hdmi|crt-240p|crt-288p|crt-480p|crt-576p] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N] [--output FILE.ppm]"
                                 .into(),
                         );
                     }
@@ -1889,21 +1786,11 @@ mod macos {
             if frame > 0 && output.is_none() {
                 return Err("--frame requires --output".into());
             }
-            if time_ms.is_some() && output.is_none() {
-                return Err("--time-ms requires --output".into());
-            }
-            if time_ms.is_some() && scenario != Scenario::Fireworks {
-                return Err("--time-ms is only available for the fireworks scenario".into());
-            }
             Ok(Self {
                 scenario,
                 frame,
                 output,
                 refresh_rate,
-                firework,
-                firework_spec,
-                time_ms,
-                hud,
                 content_mode,
                 sd_root,
                 cache_root,
@@ -2211,9 +2098,7 @@ mod macos {
                 Scenario::Licenses => "licenses",
                 Scenario::Info => "info",
                 Scenario::ScreensaverSettings => "screensaver-settings",
-                Scenario::ParticleScreensaver | Scenario::Fireworks | Scenario::ScreenshotTiles => {
-                    "screensaver"
-                }
+                Scenario::ParticleScreensaver | Scenario::ScreenshotTiles => "screensaver",
                 _ => "home",
             }
             .into(),
@@ -2744,30 +2629,6 @@ mod macos {
                 options.cache_root,
                 Some(PathBuf::from("/tmp/mister-preview-cache"))
             );
-        }
-
-        #[test]
-        fn preview_options_parse_exact_firework_capture() {
-            let options = PreviewOptions::parse(
-                [
-                    "--scenario",
-                    "fireworks",
-                    "--firework",
-                    "oled-peony",
-                    "--time-ms",
-                    "2000",
-                    "--hud",
-                    "off",
-                    "--output",
-                    "oled.ppm",
-                ]
-                .map(String::from),
-            )
-            .unwrap();
-            assert_eq!(options.scenario, Scenario::Fireworks);
-            assert_eq!(options.firework, "oled-peony");
-            assert_eq!(options.time_ms, Some(2000));
-            assert!(!options.hud);
         }
 
         #[test]

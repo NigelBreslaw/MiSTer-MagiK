@@ -46,15 +46,19 @@ fn main() {
         println!("cargo:rustc-cfg=mister_experiments");
     }
     if std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("arm") {
-        cc::Build::new()
+        let mut particle_neon = cc::Build::new();
+        particle_neon
             .file("src/particle_neon.c")
             .flag("-std=c11")
             .flag("-O3")
             .flag("-mtune=cortex-a9")
             .flag("-mfpu=neon-vfpv3")
             .flag("-mfloat-abi=hard")
-            .flag("-ffp-contract=off")
-            .compile("mister_magik_particle_neon");
+            .flag("-ffp-contract=off");
+        if experiments {
+            particle_neon.define("MISTER_MAGIK_EXPERIMENTS", None);
+        }
+        particle_neon.compile("mister_magik_particle_neon");
     }
 }
 

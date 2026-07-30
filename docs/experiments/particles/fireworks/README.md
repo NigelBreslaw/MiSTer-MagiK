@@ -1,9 +1,9 @@
-# Firework visual contract
+# Archived firework visual contract
 
-The six concept images and `manifest.json` in this directory are the visual
-authority for the first MiSTer MagiK firework set. The initial acceptance target
-is an excellent still and convincing motion at native 960×540 RGB565. Performance
-work starts only after the visuals are accepted.
+This is the historical visual contract for the retired firework experiment.
+The six large concept PNGs are no longer version-controlled. Their metadata
+remains in `manifest.json`; existing local copies live under the ignored
+`build/particle-experiments/fireworks/` directory.
 
 ## Canonical hero frames
 
@@ -48,7 +48,10 @@ strips][unity-strips] for continuous luminous trails, plus Houdini's
 trails][houdini-sparks] for gravity-dominated and coherent branches. It is not a
 general node graph.
 
-## Fast iteration
+## Historical iteration notes
+
+The commands below are retained as evidence of the former workflow. Their
+production and standard-preview entry points have been removed.
 
 After building the macOS UI preview through the repository workflow, capture an
 exact local frame with:
