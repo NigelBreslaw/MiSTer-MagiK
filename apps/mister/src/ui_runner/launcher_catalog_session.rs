@@ -1813,7 +1813,6 @@ mod tests {
         let mut session = LauncherCatalogSession::new(false);
         let effects = session.rebuild_library("/media/fat/_Arcade".to_string());
 
-        assert_eq!(effect_names(effects), vec!["event", "start-worker", "ui"]);
         assert!(!session.refresh_done());
         assert!(!session.foreground_update());
         let worker = effects
@@ -1832,6 +1831,7 @@ mod tests {
             worker.execution_mode,
             CatalogExecutionMode::BackgroundInteractive
         );
+        assert_eq!(effect_names(effects), vec!["event", "start-worker", "ui"]);
     }
 
     #[test]
