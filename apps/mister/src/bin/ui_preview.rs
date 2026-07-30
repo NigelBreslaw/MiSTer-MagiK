@@ -55,7 +55,7 @@ mod macos {
     use std::cell::Cell;
     use std::collections::HashMap;
     use std::error::Error;
-    use std::fs::{OpenOptions, read_to_string};
+    use std::fs::OpenOptions;
     use std::io::Write;
     use std::num::NonZeroU32;
     use std::path::{Path, PathBuf};
