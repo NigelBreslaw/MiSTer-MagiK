@@ -97,9 +97,16 @@ nonblank 1920x1080 frame from the fixed `USB Video` input. The native
 AVFoundation path writes JPEG, refuses to overwrite an explicit output, and
 otherwise saves a unique file under the same temporary capture directory before
 printing a Markdown link. `--seconds N` selects a bounded 1–60 second native
-AVFoundation movie capture at the same 1920x1080 format; its output is a `.mov`
-file and is intended for attended motion diagnosis. Both are sink evidence, not
-a replacement for the authoritative framebuffer capture.
+AVFoundation movie capture at the same 1920x1080 format and the `USB Video`
+device's 30 fps ceiling; its output is a `.mov` file and is intended for
+attended motion diagnosis. Both are sink evidence, not a replacement for the
+authoritative framebuffer capture.
+
+Qualified-black platform candidates also require the attended evidence set in
+`docs/bootstrap-black-qualification.md`. It covers cold reboot, active launcher
+restart without RBF reload, game return, and injected preflight failure. Each
+movie is retained beside Main events/status and latch status; none of these
+physical checks may be replaced by `/dev/fb0` inspection.
 
 `mister display-matrix --attended --out DIRECTORY [--usb-video]
 [--screensaver-wait SECONDS]` performs the bounded runtime display

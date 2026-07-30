@@ -8,6 +8,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PATCH="$ROOT/mister/platform/fpga/menu-vblank-latch/Menu_MiSTer-vblank-latched-fbuf.patch"
 LATCH_RTL="$ROOT/mister/platform/fpga/menu-vblank-latch/mister_magik_vblank_latch.sv"
 LATCH_BRIDGE="$ROOT/mister/platform/fpga/menu-vblank-latch/mister_magik_latch_sys_top_bridge.sv"
+BOOTSTRAP_BLACK_RTL="$ROOT/mister/platform/fpga/menu-vblank-latch/mister_magik_bootstrap_black.sv"
 LATCH_PROTOCOL="$ROOT/mister/platform/fpga/menu-vblank-latch/mister_magik_latch_protocol.svh"
 TIMING_REPORT_TCL="$ROOT/mister/platform/fpga/menu-vblank-latch/report_top_timing.tcl"
 OUT_DIR="${MISTER_FPGA_OUT_DIR:-$ROOT/build/fpga-vblank-latch}"
@@ -46,10 +47,8 @@ Builds the production Menu_MiSTer RBF with the MiSTer MagiK vblank-latched
 framebuffer patch. Set MISTER_MENU_DIR to override the source checkout. The
 source checkout is copied to a disposable build workdir before patching.
 
-If quartus_sh is not on PATH, the script will try the Docker runtime image
-named by QUARTUS_DOCKER_IMAGE, defaulting to
-mister-magik-quartus-runtime:ubuntu20-amd64. Create that runtime plus the
-mounted Quartus install with scripts/install-quartus-lite-docker.sh.
+RBF synthesis is supported only inside the repository's GitHub Actions
+workflow. Local invocation is rejected before any output directory is created.
 EOF
 }
 
@@ -66,6 +65,11 @@ case "${1:-}" in
     exit 2
     ;;
 esac
+
+if [[ "${GITHUB_ACTIONS:-}" != "true" ]]; then
+  echo "RBF builds are GitHub Actions only; run the Build MiSTer MagiK Platform workflow" >&2
+  exit 1
+fi
 
 abs_path() {
   (cd "$1" && pwd -P)
@@ -86,6 +90,10 @@ if [[ ! -f "$LATCH_PROTOCOL" ]]; then
 fi
 if [[ ! -f "$LATCH_BRIDGE" ]]; then
   echo "missing latch sys_top bridge: $LATCH_BRIDGE" >&2
+  exit 1
+fi
+if [[ ! -f "$BOOTSTRAP_BLACK_RTL" ]]; then
+  echo "missing bootstrap black RTL: $BOOTSTRAP_BLACK_RTL" >&2
   exit 1
 fi
 if [[ ! -f "$TIMING_REPORT_TCL" ]]; then
@@ -144,8 +152,9 @@ case "$APPLY_PATCH" in
     fi
     cp "$LATCH_RTL" "$WORK_DIR/sys/mister_magik_vblank_latch.sv"
     cp "$LATCH_BRIDGE" "$WORK_DIR/sys/mister_magik_latch_sys_top_bridge.sv"
+    cp "$BOOTSTRAP_BLACK_RTL" "$WORK_DIR/sys/mister_magik_bootstrap_black.sv"
     cp "$LATCH_PROTOCOL" "$WORK_DIR/sys/mister_magik_latch_protocol.svh"
-    printf '\nset_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_vblank_latch.sv\nset_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_latch_sys_top_bridge.sv\n' >> "$WORK_DIR/menu.qsf"
+    printf '\nset_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_vblank_latch.sv\nset_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_latch_sys_top_bridge.sv\nset_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_bootstrap_black.sv\n' >> "$WORK_DIR/menu.qsf"
     ;;
 esac
 if [[ ! "$BUILD_DATE" =~ ^[0-9]{6}$ ]]; then

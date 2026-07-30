@@ -133,6 +133,7 @@ def main() -> None:
     patch = source_dir / "Menu_MiSTer-vblank-latched-fbuf.patch"
     rtl = source_dir / "mister_magik_vblank_latch.sv"
     bridge = source_dir / "mister_magik_latch_sys_top_bridge.sv"
+    bootstrap_black = source_dir / "mister_magik_bootstrap_black.sv"
     protocol = source_dir / "mister_magik_latch_protocol.svh"
     integration_tb = source_dir / "tb_mister_magik_sys_top_integration.sv"
     with tempfile.TemporaryDirectory(prefix="mister-magik-fpga-integration-") as temporary:
@@ -140,7 +141,7 @@ def main() -> None:
         shutil.copytree(menu, work, ignore=shutil.ignore_patterns(".git", "db", "output_files"))
         subprocess.run(["git", "apply", "--check", str(patch)], cwd=work, check=True)
         subprocess.run(["git", "apply", str(patch)], cwd=work, check=True)
-        for source in (rtl, bridge, protocol):
+        for source in (rtl, bridge, bootstrap_black, protocol):
             shutil.copy2(source, work / "sys" / source.name)
         with (work / "menu.qsf").open("a") as output:
             output.write(
@@ -148,6 +149,8 @@ def main() -> None:
                 "sys/mister_magik_vblank_latch.sv\n"
                 "set_global_assignment -name SYSTEMVERILOG_FILE "
                 "sys/mister_magik_latch_sys_top_bridge.sv\n"
+                "set_global_assignment -name SYSTEMVERILOG_FILE "
+                "sys/mister_magik_bootstrap_black.sv\n"
             )
 
         patched = (work / "sys/sys_top.v").read_text()
@@ -164,10 +167,64 @@ def main() -> None:
         if mismatches:
             fail("patched production bridge binding mismatch: " + "; ".join(mismatches))
 
+        video_paths = {
+            "native black to shared scanline stage": re.compile(
+                r"mister_magik_bootstrap_black\s+magik_bootstrap_black\s*"
+                r"\(.*?\.rgb_out\(magik_native_data\).*?"
+                r"\.de_out\(magik_native_de\).*?"
+                r"\.hs_out\(magik_native_hs\).*?"
+                r"\.vs_out\(magik_native_vs\).*?\);\s*"
+                r"scanlines\s*#\(0\)\s+VGA_scanlines\s*\(.*?"
+                r"\.din\(magik_native_data\).*?"
+                r"\.hs_in\(magik_native_hs\).*?"
+                r"\.vs_in\(magik_native_vs\).*?"
+                r"\.de_in\(magik_native_de\).*?"
+                r"\.dout\(vga_data_sl\)",
+                re.S,
+            ),
+            "shared black stage to HDMI scaler": re.compile(
+                r"\.i_r\s*\(hr_out\).*?\.i_g\s*\(hg_out\).*?"
+                r"\.i_b\s*\(hb_out\)",
+                re.S,
+            ),
+            "shared black stage HDMI assignments": re.compile(
+                r"assign\s+hr_out\s*=\s*vga_data_sl\[23:16\];\s*"
+                r"assign\s+hg_out\s*=\s*vga_data_sl\[15:8\];\s*"
+                r"assign\s+hb_out\s*=\s*vga_data_sl\[7:0\];"
+            ),
+            "HDMI downstream OSD composition": re.compile(
+                r"shadowmask\s+HDMI_shadowmask\s*\(.*?"
+                r"\.din\(dis_output\s*\?\s*24'd0\s*:\s*hdmi_data\).*?"
+                r"\.dout\(hdmi_data_mask\).*?\);\s*"
+                r".*?osd\s+hdmi_osd\s*\(.*?"
+                r"\.din\(hdmi_data_mask\).*?"
+                r"\.dout\(hdmi_data_osd\)",
+                re.S,
+            ),
+            "analog downstream OSD composition": re.compile(
+                r"osd\s+vga_osd\s*\(.*?"
+                r"\.din\(vga_data_sl\).*?"
+                r"\.hs_in\(vga_hs_sl\).*?"
+                r"\.vs_in\(vga_vs_sl\).*?"
+                r"\.de_in\(vga_de_sl\).*?"
+                r"\.dout\(vga_data_osd\)",
+                re.S,
+            ),
+        }
+        missing_video_paths = [
+            label for label, pattern in video_paths.items() if not pattern.search(patched)
+        ]
+        if missing_video_paths:
+            fail(
+                "MagiK native-black video path mismatch: "
+                + ", ".join(missing_video_paths)
+            )
+
         qsf_text = (work / "menu.qsf").read_text()
         assignments = (
             "SYSTEMVERILOG_FILE sys/mister_magik_vblank_latch.sv",
             "SYSTEMVERILOG_FILE sys/mister_magik_latch_sys_top_bridge.sv",
+            "SYSTEMVERILOG_FILE sys/mister_magik_bootstrap_black.sv",
         )
         bad_assignments = [
             assignment for assignment in assignments if qsf_text.count(assignment) != 1

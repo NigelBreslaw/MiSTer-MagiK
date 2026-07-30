@@ -57,19 +57,24 @@ fork.
 The fork selects its application root from its executable name, then:
 
 1. Initializes video/menu-core prerequisites.
-2. Clears and routes the initial RGB565 launcher framebuffer after
-   `video_init()`, preserving Main's complete FPGA framework configuration.
-3. Starts the matching public or development `mister-magik-fb ui launcher 0`
+2. Enters bootstrap black after `video_init()` by disabling LFB routing while
+   the MagiK Menu RBF supplies native black pixels with intact timing.
+3. Re-enters the same idempotent state before every supervised spawn, runs the
+   runtime latch preflight, and transfers FPGA ownership only after it passes.
+4. Starts the matching public or development `mister-magik-fb ui launcher 0`
    on `tty2`.
-4. Enters dormant launcher mode.
-5. Polls only launcher lifecycle and explicit handoff commands while Slint owns
+5. Enters dormant launcher mode.
+6. Polls only launcher lifecycle and explicit handoff commands while Slint owns
    the launcher UI.
 
 Main is the only writer of `UIO_BUT_SW` and the `CONF_VGA_FB` mux bit. Rust
 publishes framebuffer geometry and pixels but does not rebuild the framework
-configuration word. A route or spawn failure before the launcher child exists
-restores stock Menu input and OSD; those paths remain suppressed for the entire
-lifetime of a supervised launcher child.
+configuration word. Bootstrap black uses only the canonical `UIO_SET_FBUF`
+disable word and never writes a framebuffer mode or clears `/dev/fb0`. A
+bootstrap, preflight, ownership, or spawn failure before the launcher child
+exists restores stock Menu input and OSD over the native black background;
+those paths remain suppressed for the entire lifetime of a supervised launcher
+child.
 
 When the supervised launcher child exits unexpectedly, the fork records a local
 crash report under `/media/fat/mister-magik/crashes/`, updates

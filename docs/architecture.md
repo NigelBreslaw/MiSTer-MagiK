@@ -35,22 +35,48 @@ Production boot stays compatible with stock MiSTer:
    executable name, requires that layout's exact `platform-v3.manifest`, and
    redirects an empty/default Menu boot to the manifest-owned production RBF
    at `fpga/menu-magik-vblank-latch.rbf`.
-5. The fork initializes HDMI/video through the normal Main path.
-6. Before transferring FPGA ownership, the fork validates the exact Main,
+5. The fork initializes HDMI/video through the normal Main path. The
+   MagiK-specific Menu RBF supplies black native pixels with normal HDMI/analog
+   timing and downstream OSD composition.
+6. Immediately after `video_init()`, and again before every supervised child
+   start, Main enters bootstrap black: it disables LFB routing, stock OSD,
+   OSD keys, and launcher input without changing framebuffer mode or touching
+   `/dev/fb0`.
+7. While the display remains black, the fork validates the exact Main,
    runtime, scanout-module, and latch-RBF tuple. A failed preflight leaves Main
-   in control and does not start the launcher.
-7. The fork starts the selected layout's `mister-magik-fb ui launcher 0` on
-   `tty2`, transfers exclusive FPGA ownership for the supervised child, and
-   enters dormant launcher mode. Rust independently derives the same
-   application root from its executable location.
+   in control, starts no child, and restores stock OSD/input over the native
+   black Menu background.
+8. Only after preflight completes does Main transfer exclusive FPGA ownership
+   and start the selected layout's `mister-magik-fb ui launcher 0` on `tty2`.
+   Rust independently derives the same application root from its executable
+   location.
 
 Main exclusively owns `UIO_BUT_SW`, including `CONF_VGA_FB`, composite sync,
 SoG, Direct Video, and the other framework flags. Rust may publish RGB565
 geometry and pixels through the framebuffer commands, but it must never
 reconstruct or replace that complete configuration word. Main must not draw the
 stock menu OSD or release launcher input while a supervised MagiK child exists.
-If the initial route or child spawn fails before a child exists, Main restores
-the stock Menu instead of starting MagiK with an unqualified route.
+If bootstrap black, preflight, ownership transfer, or child spawn fails before
+a child exists, Main restores stock Menu OSD/input over the black native Menu
+background instead of starting MagiK with an unqualified route.
+
+Every cold boot, game return, resume, active restart, and crash respawn follows
+the same launch boundary:
+
+```text
+native Menu black
+→ canonical LFB disable
+→ latch/platform preflight
+→ FPGA ownership transfer
+→ child spawn
+→ first verified latch-presented MagiK frame
+```
+
+`main-status.json` retains schema `mister-magik-main-status-v2` and adds
+`bootstrap_phase`, `bootstrap_source`, `bootstrap_phase_ms`, and
+`bootstrap_black_count`. Events named `bootstrap_black_entered`,
+`bootstrap_preflight_completed`, `bootstrap_ownership_transferred`, and
+`bootstrap_spawned` bind qualification evidence to the exact ordering.
 
 Display resolution changes are Main-owned provisional transactions. Main
 suspends Slint, applies the selected HDMI or CRT/VGA timing, exports the

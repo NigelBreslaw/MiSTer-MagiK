@@ -87,6 +87,7 @@ jobs:
           -Imister/platform/fpga/menu-vblank-latch
           mister/platform/fpga/menu-vblank-latch/mister_magik_vblank_latch.sv
           mister/platform/fpga/menu-vblank-latch/mister_magik_latch_sys_top_bridge.sv
+          mister/platform/fpga/menu-vblank-latch/mister_magik_bootstrap_black.sv
       - name: Verify pinned patch integration and opcode ownership
         run: scripts/checks/check-fpga-latch-integration.py --simulate build/Menu_MiSTer
       - name: Measure reachable custom RTL coverage

@@ -125,6 +125,12 @@ runtime binary, Main, module, RBF, boot, or launcher session identity differs.
 Any unknown or mixed report created during the run fails qualification. Any
 source or artifact change requires a complete rerun.
 
+Main/RBF changes to the launcher bootstrap additionally require the complete
+qualified-black evidence set in `docs/bootstrap-black-qualification.md` before
+this six-hour gate. The exact Main/RBF/runtime tuple used for those four
+1920x1080 at 30 fps movies must match the six-hour candidate identity; evidence
+from a previous latch qualification cannot be carried forward.
+
 After qualification, the identical candidate tuple runs a seven-day canary
 with daily concurrent cold-catalog/UI stress. Promotion never rebuilds or
 relabels the tuple or its evidence.

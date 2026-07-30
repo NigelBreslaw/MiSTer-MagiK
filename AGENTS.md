@@ -87,6 +87,8 @@ those trees are part of the task.
   install/restore scripts.
 - Apple Silicon ARM builds use Apple `container` by default. Do not switch to
   Docker/OrbStack unless explicitly comparing `MISTER_ARM_BUILD_BACKEND=cross`.
+- RBF synthesis runs only in the `Build MiSTer MagiK Platform` GitHub Actions
+  workflow. Never attempt a local Quartus/RBF build or retain local RBF output.
 - Enable `.githooks/pre-commit` with
   `git config core.hooksPath .githooks`.
 - Treat `private/magik-cloud` as its own repository: commit and push it first,

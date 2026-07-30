@@ -17,6 +17,11 @@ display evidence, recovery capability, and restoration. It refuses non-terminal
 execution and requires the operator to confirm continuous attendance plus a
 non-network recovery path before creating its volatile session token.
 
+When Main or the MagiK Menu RBF changes, the same candidate must first satisfy
+`docs/bootstrap-black-qualification.md`; then the full latch/platform release
+gate is rerun. The bootstrap evidence set is additive and never substitutes for
+the six-hour latch stress or display matrix.
+
 Automated fake-device qualification and real-device attended evidence are
 recorded separately. A skipped physical capability is not a pass. Destructive
 recovery never runs unattended, and no release command pushes Git state.
