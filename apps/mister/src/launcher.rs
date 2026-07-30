@@ -1395,7 +1395,12 @@ impl LauncherNav {
                 )
             }
             LauncherMenuItemKind::Collection => {
-                let update = self.catalog_update_states.get(&item.id);
+                let system_id = self
+                    .taxonomy
+                    .collection(&item.id)
+                    .map(|collection| collection.legacy_system_id.as_str())
+                    .unwrap_or(item.id.as_str());
+                let update = self.catalog_update_states.get(system_id);
                 let failed = update == Some(&CatalogSystemUpdateState::Failed);
                 let scanning = (self.catalog_build_active
                     && matches!(
@@ -1406,7 +1411,7 @@ impl LauncherNav {
                                 | CatalogSystemUpdateState::Prepared
                         )
                     ))
-                    || self.catalog_hydration_active.contains(&item.id);
+                    || self.catalog_hydration_active.contains(system_id);
                 let available = item.count > 0;
                 (scanning, failed, available)
             }
