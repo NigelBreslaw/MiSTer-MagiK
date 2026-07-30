@@ -6,6 +6,7 @@
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::time::Instant;
 
+mod neon_cabinet;
 mod sprite_foundry;
 
 const PROGRESS_MAX: u16 = u16::MAX;
@@ -717,6 +718,10 @@ pub struct NavigationTransitionRenderStats {
     pub outline_pixels: u64,
     pub particle_pixels: u64,
     pub glyph_packets: u64,
+    pub projected_rows: u64,
+    pub vector_segments: u64,
+    pub quads: u64,
+    pub spans: u64,
 }
 
 #[derive(Debug)]
@@ -729,6 +734,7 @@ pub struct NavigationTransitionPoc {
     last_render_stats: NavigationTransitionRenderStats,
     last_frame_work_us: u64,
     hud_scratch: Vec<Rgb565Pixel>,
+    neon_cabinet: neon_cabinet::NeonCabinetRenderer,
     sprite_foundry: sprite_foundry::SpriteFoundryRenderer,
 }
 
@@ -779,11 +785,12 @@ impl NavigationTransitionPoc {
             } else {
                 512
             }),
+            neon_cabinet: neon_cabinet::NeonCabinetRenderer::default(),
         }
     }
 
     pub const fn implemented_style_count() -> usize {
-        2
+        3
     }
 
     pub const fn enabled(&self) -> bool {
@@ -810,6 +817,9 @@ impl NavigationTransitionPoc {
         if self.style() == NavigationTransitionStyle::SpriteFoundry {
             self.sprite_foundry
                 .prepare(self.buffers.width, self.buffers.height);
+        } else if self.style() == NavigationTransitionStyle::NeonCabinetDive {
+            self.neon_cabinet
+                .prepare(self.buffers.width, self.buffers.height);
         }
         true
     }
@@ -830,6 +840,9 @@ impl NavigationTransitionPoc {
         }
         if self.style() == NavigationTransitionStyle::SpriteFoundry {
             self.sprite_foundry
+                .prepare(self.buffers.width, self.buffers.height);
+        } else if self.style() == NavigationTransitionStyle::NeonCabinetDive {
+            self.neon_cabinet
                 .prepare(self.buffers.width, self.buffers.height);
         }
         self.buffers.begin_capture();
@@ -881,6 +894,12 @@ impl NavigationTransitionPoc {
             }
             NavigationTransitionStyle::SpriteFoundry => sprite_foundry::render_sprite_foundry(
                 &mut self.sprite_foundry,
+                &mut self.buffers,
+                request,
+                frame,
+            )?,
+            NavigationTransitionStyle::NeonCabinetDive => neon_cabinet::render_neon_cabinet(
+                &mut self.neon_cabinet,
                 &mut self.buffers,
                 request,
                 frame,
@@ -1070,7 +1089,7 @@ fn render_super_scaler_shell(
 
     match request.direction {
         NavigationTransitionDirection::Forward => {
-            if frame.phase == NavigationTransitionPhase::Reveal {
+            if frame.reveal_progress_q16 > 0 {
                 fill_rect_565(working, width, height, full, shell, &mut stats);
                 if let Some(destination) = destination {
                     reveal_destination_bands(
@@ -1086,7 +1105,7 @@ fn render_super_scaler_shell(
             }
             let cover = ease_out_cubic_q16(frame.cover_progress_q16);
             let rect = lerp_rect(request.geometry.source_card, full, cover);
-            if frame.phase != NavigationTransitionPhase::Reveal {
+            if frame.reveal_progress_q16 == 0 {
                 fill_rect_565(working, width, height, rect, shell, &mut stats);
                 for echo in 1..=3 {
                     let delayed = cover.saturating_sub((echo * 4_000) as u16);
@@ -1127,7 +1146,7 @@ fn render_super_scaler_shell(
         }
         NavigationTransitionDirection::Reverse => {
             let cover = ease_out_cubic_q16(frame.cover_progress_q16);
-            if frame.phase != NavigationTransitionPhase::Reveal {
+            if frame.reveal_progress_q16 == 0 {
                 let covered_rows = height.saturating_mul(cover as usize) / PROGRESS_MAX as usize;
                 let y0 = height.saturating_sub(covered_rows) / 2;
                 fill_rect_565(
@@ -1879,6 +1898,108 @@ mod tests {
 
         poc.tick(500_000);
         assert_eq!(poc.render().unwrap(), destination);
+
+        let mut reverse = NavigationTransitionPoc::new_with_style(width, height, true, 1);
+        reverse
+            .begin(
+                NavigationTransitionEdge::HomeToConsoles,
+                NavigationTransitionDirection::Reverse,
+                geometry,
+                &destination,
+                0,
+            )
+            .unwrap();
+        reverse.capture_destination(&source).unwrap();
+        reverse.tick(350_000);
+        let before_cancel = reverse.render().unwrap().to_vec();
+        assert!(reverse.request_reverse(350_000));
+        assert_eq!(reverse.render().unwrap(), before_cancel);
+    }
+
+    #[test]
+    fn neon_cabinet_handles_card_positions_budgets_and_reverse_endpoint() {
+        let width = 160;
+        let height = 90;
+        let source = vec![Rgb565Pixel(0x0841); width * height];
+        let destination = vec![Rgb565Pixel(0x18c8); width * height];
+        for card_x in [2, 60, 118] {
+            let geometry = NavigationTransitionGeometry {
+                source_card: NavigationTransitionRect {
+                    x: card_x,
+                    y: 14,
+                    width: 40,
+                    height: 68,
+                },
+                source_label: NavigationTransitionRect {
+                    x: card_x + 4,
+                    y: 42,
+                    width: 30,
+                    height: 8,
+                },
+                destination_title: NavigationTransitionRect {
+                    x: 8,
+                    y: 6,
+                    width: 64,
+                    height: 10,
+                },
+            };
+            let mut poc = NavigationTransitionPoc::new_with_style(width, height, true, 2);
+            poc.begin(
+                NavigationTransitionEdge::HomeToConsoles,
+                NavigationTransitionDirection::Forward,
+                geometry,
+                &source,
+                0,
+            )
+            .unwrap();
+            poc.capture_destination(&destination).unwrap();
+            poc.tick(20_000);
+            poc.render().unwrap();
+            let stats = poc.last_render_stats();
+            assert!(stats.spans > 0);
+            assert!(stats.projected_rows <= 110);
+            assert!(stats.quads <= 12);
+            assert!(stats.vector_segments <= 96);
+            assert!(stats.spans <= 1_500);
+        }
+
+        let geometry = geometry();
+        let mut reverse = NavigationTransitionPoc::new_with_style(width, height, true, 2);
+        reverse
+            .begin(
+                NavigationTransitionEdge::HomeToConsoles,
+                NavigationTransitionDirection::Reverse,
+                geometry,
+                &destination,
+                0,
+            )
+            .unwrap();
+        reverse.capture_destination(&source).unwrap();
+        reverse.tick(320_000);
+        let before_cancel = reverse.render().unwrap().to_vec();
+        assert!(reverse.request_reverse(320_000));
+        let after_cancel = reverse.render().unwrap().to_vec();
+        assert_eq!(before_cancel, after_cancel);
+        reverse.tick(700_000);
+        assert_eq!(reverse.render().unwrap(), source);
+
+        let mut penultimate = NavigationTransitionPoc::new_with_style(width, height, true, 2);
+        penultimate
+            .begin(
+                NavigationTransitionEdge::HomeToConsoles,
+                NavigationTransitionDirection::Forward,
+                geometry,
+                &source,
+                0,
+            )
+            .unwrap();
+        penultimate.capture_destination(&destination).unwrap();
+        penultimate.tick(416_999);
+        penultimate.render().unwrap();
+        let stats = penultimate.last_render_stats();
+        assert_eq!(stats.spans, 0);
+        assert_eq!(stats.vector_segments, 0);
+        assert_eq!(stats.quads, 0);
     }
 
     #[test]

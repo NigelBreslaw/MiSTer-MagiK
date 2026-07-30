@@ -132,8 +132,8 @@ pub(super) fn render_sprite_foundry(
     renderer.prepare(width, height);
     let working = buffers.working.as_mut_slice();
     let reveal = frame.reveal_progress_q16;
-    let motion = match (request.direction, frame.phase) {
-        (NavigationTransitionDirection::Reverse, NavigationTransitionPhase::Reveal) => {
+    let motion = match request.direction {
+        NavigationTransitionDirection::Reverse if frame.reveal_progress_q16 > 0 => {
             PROGRESS_MAX.saturating_sub(reveal)
         }
         _ => frame.cover_progress_q16,
@@ -144,7 +144,7 @@ pub(super) fn render_sprite_foundry(
     };
     let collapse = rect_center(request.geometry.source_card);
     let anchor = if request.direction == NavigationTransitionDirection::Reverse
-        && frame.phase == NavigationTransitionPhase::Reveal
+        && frame.reveal_progress_q16 > 0
     {
         collapse
     } else {
@@ -240,18 +240,14 @@ fn active_overlay_rect(
         height: height.min(u16::MAX as usize) as u16,
     };
     match request.direction {
-        NavigationTransitionDirection::Forward
-            if frame.phase != NavigationTransitionPhase::Reveal =>
-        {
+        NavigationTransitionDirection::Forward if frame.reveal_progress_q16 == 0 => {
             super::lerp_rect(
                 request.geometry.source_card,
                 full,
                 super::ease_out_cubic_q16(frame.cover_progress_q16),
             )
         }
-        NavigationTransitionDirection::Reverse
-            if frame.phase == NavigationTransitionPhase::Reveal =>
-        {
+        NavigationTransitionDirection::Reverse if frame.reveal_progress_q16 > 0 => {
             super::lerp_rect(
                 full,
                 request.geometry.source_card,
