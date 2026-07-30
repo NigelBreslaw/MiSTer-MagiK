@@ -1163,7 +1163,7 @@ fn prepare_container_image(repository: &Path) -> AgentResult<()> {
     let dockerfile = repository.join("apps/mister/Dockerfile.cross-armv7");
     let stamp_path = Path::new(IMAGE_STAMP);
     let dockerfile_sha256 = sha256(&dockerfile)?;
-    let current = std::fs::read_to_string(&stamp_path).unwrap_or_default();
+    let current = std::fs::read_to_string(stamp_path).unwrap_or_default();
     if let Some(image_id) = inspect_container_image().unwrap_or_default() {
         let expected = image_stamp(&dockerfile_sha256, &image_id);
         if current.trim() == expected {
