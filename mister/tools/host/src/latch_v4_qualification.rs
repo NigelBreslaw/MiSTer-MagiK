@@ -93,6 +93,8 @@ pub(super) fn run(config: &NativeDeviceConfig) -> Result<String> {
     let baseline_identity = required_pointer(&initial_state, "/identity")?.clone();
     validate_identity(&baseline_identity)?;
     let baseline_status = read_launcher_status(&session)?;
+    let baseline_main_status = read_main_status(&session)?;
+    let baseline_main_ownership = main_qualification_baseline(&baseline_main_status)?;
     let baseline_rss_kb = u64_at(&baseline_status, "/rss_kb")?;
     let output_dir = qualification_output_dir(&baseline_identity)?;
     fs::create_dir_all(&output_dir)?;
@@ -132,7 +134,13 @@ pub(super) fn run(config: &NativeDeviceConfig) -> Result<String> {
             raw.write_all(b"\n")?;
             raw.flush()?;
             samples = samples.saturating_add(1);
-            validate_sample(&sample, &baseline_identity, root, &session)?;
+            validate_sample(
+                &sample,
+                &baseline_identity,
+                &baseline_main_ownership,
+                root,
+                &session,
+            )?;
             if Instant::now() >= next_progress {
                 println!(
                     "latch-v4 qualification elapsed={}m samples={} accepted={} overlap={} catalogs={}",
@@ -165,6 +173,7 @@ pub(super) fn run(config: &NativeDeviceConfig) -> Result<String> {
         "sample_interval_secs": SAMPLE_INTERVAL.as_secs(),
         "samples": samples,
         "identity": baseline_identity,
+        "main_ownership_baseline": baseline_main_ownership,
         "final_state": last_state,
         "baseline_rss_kb": baseline_rss_kb,
         "peak_rss_hwm_kb": peak_rss_hwm_kb,
@@ -265,9 +274,7 @@ fn collect_sample(
         remote_read(session, STATE_REMOTE).ok_or("latch v4 qualification state disappeared")?;
     let qualification_state = serde_json::from_str::<Value>(&qualification_state_text)?;
     let status = read_launcher_status(session)?;
-    let main_status_text =
-        remote_read(session, MAIN_STATUS_REMOTE).ok_or("Main status disappeared")?;
-    let main_status = serde_json::from_str::<Value>(&main_status_text)?;
+    let main_status = read_main_status(session)?;
     let readiness_output = exec(
         session,
         &format!("{root}/mister-magik-fb latch-readiness-report --json"),
@@ -306,6 +313,7 @@ fn collect_sample(
 fn validate_sample(
     sample: &Value,
     baseline_identity: &Value,
+    baseline_main_ownership: &Value,
     root: &str,
     session: &Session,
 ) -> Result<()> {
@@ -332,26 +340,7 @@ fn validate_sample(
         .into());
     }
     let main = required_pointer(sample, "/main_status")?;
-    require_text(main, "/launcher_state", "LauncherActive")?;
-    require_text(main, "/fpga_owner", "magik")?;
-    for pointer in [
-        "/blocked_spi_writes",
-        "/blocked_gpo_writes",
-        "/crash_count",
-        "/invariant_count",
-    ] {
-        let value = u64_at(main, pointer)?;
-        if value != 0 {
-            return Err(format!(
-                "Main qualification counter is nonzero: {pointer}={value} owner_epoch={} last_blocked_site={}",
-                u64_at(main, "/fpga_owner_epoch")?,
-                main.get("last_blocked_fpga_site")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown")
-            )
-            .into());
-        }
-    }
+    validate_main_qualification_sample(main, baseline_main_ownership)?;
     require_text(required_pointer(sample, "/readiness")?, "/state", "ready")?;
     let latch = sample
         .get("latch_report")
@@ -390,6 +379,74 @@ fn validate_sample(
     }
     if u64_at(frame_budget, "/max_vsync_miss_streak")? > MAX_VSYNC_MISS_STREAK {
         return Err("vblank miss streak exceeded the qualification bound".into());
+    }
+    Ok(())
+}
+
+fn read_main_status(session: &Session) -> Result<Value> {
+    let text = remote_read(session, MAIN_STATUS_REMOTE).ok_or("Main status disappeared")?;
+    Ok(serde_json::from_str(&text)?)
+}
+
+fn main_qualification_baseline(main: &Value) -> Result<Value> {
+    require_text(main, "/launcher_state", "LauncherActive")?;
+    require_text(main, "/fpga_owner", "magik")?;
+    for pointer in ["/crash_count", "/invariant_count"] {
+        let value = u64_at(main, pointer)?;
+        if value != 0 {
+            return Err(
+                format!("Main qualification baseline is not clean: {pointer}={value}").into(),
+            );
+        }
+    }
+
+    Ok(json!({
+        "main_generation": u64_at(main, "/main_generation")?,
+        "pid": u64_at(main, "/pid")?,
+        "fpga_owner_epoch": u64_at(main, "/fpga_owner_epoch")?,
+        "blocked_spi_writes": u64_at(main, "/blocked_spi_writes")?,
+        "blocked_gpo_writes": u64_at(main, "/blocked_gpo_writes")?,
+        "last_blocked_fpga_site": main
+            .get("last_blocked_fpga_site")
+            .and_then(Value::as_str)
+            .unwrap_or(""),
+    }))
+}
+
+fn validate_main_qualification_sample(main: &Value, baseline: &Value) -> Result<()> {
+    require_text(main, "/launcher_state", "LauncherActive")?;
+    require_text(main, "/fpga_owner", "magik")?;
+    for pointer in ["/main_generation", "/pid", "/fpga_owner_epoch"] {
+        let expected = u64_at(baseline, pointer)?;
+        let observed = u64_at(main, pointer)?;
+        if observed != expected {
+            return Err(format!(
+                "Main changed during latch qualification: {pointer} baseline={expected} observed={observed}"
+            )
+            .into());
+        }
+    }
+    for pointer in ["/blocked_spi_writes", "/blocked_gpo_writes"] {
+        let initial = u64_at(baseline, pointer)?;
+        let observed = u64_at(main, pointer)?;
+        if observed != initial {
+            return Err(format!(
+                "Main blocked-write counter changed during latch qualification: {pointer} baseline={initial} observed={observed} owner_epoch={} last_blocked_site={}",
+                u64_at(main, "/fpga_owner_epoch")?,
+                main.get("last_blocked_fpga_site")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown")
+            )
+            .into());
+        }
+    }
+    for pointer in ["/crash_count", "/invariant_count"] {
+        let observed = u64_at(main, pointer)?;
+        if observed != 0 {
+            return Err(
+                format!("Main qualification counter is nonzero: {pointer}={observed}").into(),
+            );
+        }
     }
     Ok(())
 }
@@ -611,5 +668,29 @@ mod tests {
             assert!(validate_final(&invalid, 4_000, 16_000, 64_000, &status).is_err());
         }
         assert!(validate_final(&state, 3_999, 16_000, 64_000, &status).is_err());
+    }
+
+    #[test]
+    fn blocked_main_writes_are_gated_from_the_acknowledged_session_baseline() {
+        let mut main = json!({
+            "launcher_state": "LauncherActive",
+            "fpga_owner": "magik",
+            "main_generation": 9478,
+            "pid": 722,
+            "fpga_owner_epoch": 1,
+            "blocked_spi_writes": 0,
+            "blocked_gpo_writes": 3434,
+            "last_blocked_fpga_site": "fpga_gpo_write",
+            "crash_count": 0,
+            "invariant_count": 0,
+        });
+        let baseline = main_qualification_baseline(&main).unwrap();
+        validate_main_qualification_sample(&main, &baseline).unwrap();
+
+        main["blocked_gpo_writes"] = json!(3435);
+        assert!(validate_main_qualification_sample(&main, &baseline).is_err());
+        main["blocked_gpo_writes"] = json!(3434);
+        main["fpga_owner_epoch"] = json!(2);
+        assert!(validate_main_qualification_sample(&main, &baseline).is_err());
     }
 }
