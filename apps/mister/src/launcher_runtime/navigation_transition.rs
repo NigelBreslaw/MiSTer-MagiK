@@ -6,6 +6,7 @@
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::time::Instant;
 
+mod crt_cabinet;
 mod neon_cabinet;
 mod sprite_foundry;
 
@@ -722,6 +723,7 @@ pub struct NavigationTransitionRenderStats {
     pub vector_segments: u64,
     pub quads: u64,
     pub spans: u64,
+    pub sparks: u64,
 }
 
 #[derive(Debug)]
@@ -734,6 +736,7 @@ pub struct NavigationTransitionPoc {
     last_render_stats: NavigationTransitionRenderStats,
     last_frame_work_us: u64,
     hud_scratch: Vec<Rgb565Pixel>,
+    crt_cabinet: crt_cabinet::CrtCabinetRenderer,
     neon_cabinet: neon_cabinet::NeonCabinetRenderer,
     sprite_foundry: sprite_foundry::SpriteFoundryRenderer,
 }
@@ -786,11 +789,14 @@ impl NavigationTransitionPoc {
                 512
             }),
             neon_cabinet: neon_cabinet::NeonCabinetRenderer::default(),
+            crt_cabinet: crt_cabinet::CrtCabinetRenderer::new(
+                enabled && crt_cabinet::configured_reduced_effects(),
+            ),
         }
     }
 
     pub const fn implemented_style_count() -> usize {
-        3
+        4
     }
 
     pub const fn enabled(&self) -> bool {
@@ -900,6 +906,12 @@ impl NavigationTransitionPoc {
             )?,
             NavigationTransitionStyle::NeonCabinetDive => neon_cabinet::render_neon_cabinet(
                 &mut self.neon_cabinet,
+                &mut self.buffers,
+                request,
+                frame,
+            )?,
+            NavigationTransitionStyle::CrtCabinetBoot => crt_cabinet::render_crt_cabinet(
+                &self.crt_cabinet,
                 &mut self.buffers,
                 request,
                 frame,
@@ -2000,6 +2012,83 @@ mod tests {
         assert_eq!(stats.spans, 0);
         assert_eq!(stats.vector_segments, 0);
         assert_eq!(stats.quads, 0);
+    }
+
+    #[test]
+    fn crt_cabinet_reconstructs_deterministically_and_closes_exactly() {
+        let width = 160;
+        let height = 90;
+        let source = vec![Rgb565Pixel(0x0841); width * height];
+        let destination = vec![Rgb565Pixel(0x39e7); width * height];
+        let geometry = NavigationTransitionGeometry {
+            source_card: NavigationTransitionRect {
+                x: 32,
+                y: 14,
+                width: 40,
+                height: 68,
+            },
+            source_label: NavigationTransitionRect {
+                x: 38,
+                y: 42,
+                width: 28,
+                height: 8,
+            },
+            destination_title: NavigationTransitionRect {
+                x: 8,
+                y: 6,
+                width: 64,
+                height: 10,
+            },
+        };
+        let mut poc = NavigationTransitionPoc::new_with_style(width, height, true, 3);
+        poc.begin(
+            NavigationTransitionEdge::HomeToConsoles,
+            NavigationTransitionDirection::Forward,
+            geometry,
+            &source,
+            0,
+        )
+        .unwrap();
+        poc.capture_destination(&destination).unwrap();
+        poc.tick(320_000);
+        let first = poc.render().unwrap().to_vec();
+        assert!(poc.last_render_stats().sparks > 0);
+        assert!(poc.last_render_stats().sparks <= 192);
+        assert_eq!(poc.render().unwrap(), first);
+        assert!(poc.request_reverse(320_000));
+        assert_eq!(poc.render().unwrap(), first);
+        poc.tick(700_000);
+        assert_eq!(poc.render().unwrap(), source);
+
+        let mut resolved = NavigationTransitionPoc::new_with_style(width, height, true, 3);
+        resolved
+            .begin(
+                NavigationTransitionEdge::HomeToConsoles,
+                NavigationTransitionDirection::Forward,
+                geometry,
+                &source,
+                0,
+            )
+            .unwrap();
+        resolved.capture_destination(&destination).unwrap();
+        resolved.tick(480_000);
+        assert_eq!(resolved.render().unwrap(), destination);
+
+        let mut reduced = NavigationTransitionPoc::new_with_style(width, height, true, 3);
+        reduced.crt_cabinet = crt_cabinet::CrtCabinetRenderer::new(true);
+        reduced
+            .begin(
+                NavigationTransitionEdge::HomeToConsoles,
+                NavigationTransitionDirection::Forward,
+                geometry,
+                &source,
+                0,
+            )
+            .unwrap();
+        reduced.capture_destination(&destination).unwrap();
+        reduced.tick(320_000);
+        reduced.render().unwrap();
+        assert_eq!(reduced.last_render_stats().sparks, 0);
     }
 
     #[test]
