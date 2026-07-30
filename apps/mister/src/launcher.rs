@@ -7501,6 +7501,12 @@ mod tests {
         assert!(screenshot_reset_deletes_file(
             ".screenshot-media-state.json.tmp-123"
         ));
+        assert!(screenshot_reset_deletes_file(
+            "arcade-screenshots-320x320.mmlz4b.idx"
+        ));
+        assert!(screenshot_reset_deletes_file(
+            ".arcade-screenshots-320x320.mmlz4b.tmp-123"
+        ));
 
         assert!(!screenshot_reset_deletes_file(
             "pcengine-screenshots.mmlz4b"
@@ -7521,6 +7527,8 @@ mod tests {
             "arcade-screenshots-320x320.mmlz4b",
             "neogeo-screenshots.mmlz4b",
             "saturn-screenshots-240x240.mmlz4b.tmp",
+            "arcade-screenshots-320x320.mmlz4b.idx",
+            ".neogeo-screenshots.mmlz4b.tmp-123",
             STATE_FILENAME,
         ] {
             std::fs::write(root.join(name), b"pack").expect("write removable asset");
@@ -7537,10 +7545,12 @@ mod tests {
 
         let removed = delete_screenshot_packs_at(&root).expect("delete screenshot packs");
 
-        assert_eq!(removed, 4);
+        assert_eq!(removed, 6);
         assert!(!root.join("arcade-screenshots-320x320.mmlz4b").exists());
         assert!(!root.join("neogeo-screenshots.mmlz4b").exists());
         assert!(!root.join("saturn-screenshots-240x240.mmlz4b.tmp").exists());
+        assert!(!root.join("arcade-screenshots-320x320.mmlz4b.idx").exists());
+        assert!(!root.join(".neogeo-screenshots.mmlz4b.tmp-123").exists());
         assert!(!root.join(STATE_FILENAME).exists());
         assert!(root.join("pcengine-screenshots.mmlz4b").exists());
         assert!(root.join("arcade-screenshots-large.mmlz4b").exists());

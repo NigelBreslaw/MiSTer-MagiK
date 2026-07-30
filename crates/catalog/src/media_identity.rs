@@ -256,27 +256,37 @@ pub fn screenshot_reset_deletes_filename(name: &str) -> bool {
     {
         return true;
     }
-    let Some((system, rest)) = name.split_once("-screenshots") else {
+    let (hidden, candidate) = name
+        .strip_prefix('.')
+        .map_or((false, name), |candidate| (true, candidate));
+    let Some((system, rest)) = candidate.split_once("-screenshots") else {
         return false;
     };
     if ScreenshotPackId::parse(system).is_none() {
         return false;
     }
-    if matches!(
-        rest,
-        ".mmlz4b" | ".mmlz4b.tmp" | ".mmlz4b.gz" | ".mmlz4b.br"
-    ) || rest.starts_with(".mmlz4b.tmp-")
-    {
-        return true;
+    let suffix = if let Some(suffix) = rest.strip_prefix(".mmlz4b") {
+        suffix
+    } else {
+        let Some(rest) = rest.strip_prefix('-') else {
+            return false;
+        };
+        let Some((image_size, suffix)) = rest.split_once(".mmlz4b") else {
+            return false;
+        };
+        if !valid_screenshot_image_size(image_size) {
+            return false;
+        }
+        suffix
+    };
+    let temporary = matches!(suffix, ".tmp" | ".idx.tmp")
+        || suffix.starts_with(".tmp-")
+        || suffix.starts_with(".idx.tmp-")
+        || (suffix.starts_with(".bench-") && suffix.ends_with(".tmp"));
+    if hidden && !temporary {
+        return false;
     }
-    let Some(rest) = rest.strip_prefix('-') else {
-        return false;
-    };
-    let Some((image_size, suffix)) = rest.split_once(".mmlz4b") else {
-        return false;
-    };
-    valid_screenshot_image_size(image_size)
-        && (matches!(suffix, "" | ".tmp" | ".gz" | ".br") || suffix.starts_with(".tmp-"))
+    matches!(suffix, "" | ".gz" | ".br" | ".idx") || temporary
 }
 
 #[cfg(test)]
@@ -349,6 +359,15 @@ mod tests {
         assert!(screenshot_reset_deletes_filename(
             ".screenshot-media-state.json.tmp-123"
         ));
+        assert!(screenshot_reset_deletes_filename(
+            "arcade-screenshots-320x320.mmlz4b.idx"
+        ));
+        assert!(screenshot_reset_deletes_filename(
+            "arcade-screenshots-320x320.mmlz4b.idx.tmp-123"
+        ));
+        assert!(screenshot_reset_deletes_filename(
+            ".arcade-screenshots-320x320.mmlz4b.tmp-123"
+        ));
         assert!(!screenshot_reset_deletes_filename(
             "pcengine-screenshots.mmlz4b"
         ));
@@ -357,6 +376,9 @@ mod tests {
         ));
         assert!(!screenshot_reset_deletes_filename(
             "arcade-preview-cache.raw565"
+        ));
+        assert!(!screenshot_reset_deletes_filename(
+            ".arcade-screenshots-320x320.mmlz4b"
         ));
     }
 
