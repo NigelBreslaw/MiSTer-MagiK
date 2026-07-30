@@ -1,0 +1,57 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+export enum PixelTextSize {
+    px8,
+    px16,
+    px24,
+    px32,
+}
+
+export global PixelText8Metrics {
+    pure function resolve(size: PixelTextSize) -> length {
+        return size == PixelTextSize.px8 ? 8px
+            : size == PixelTextSize.px16 ? 16px
+            : size == PixelTextSize.px24 ? 24px
+            : 32px;
+    }
+}
+
+export component PixelText8 {
+    in property <string> text;
+    in property <brush> color: white;
+    in property <string> font-family;
+    in property <PixelTextSize> size: PixelTextSize.px8;
+    in property <TextHorizontalAlignment> horizontal-alignment: start;
+    in property <TextVerticalAlignment> vertical-alignment: top;
+    in property <TextOverflow> overflow: clip;
+    in property <TextWrap> wrap: no-wrap;
+    in property <int> line-capacity: 1;
+
+    private property <length> resolved-font-size: PixelText8Metrics.resolve(root.size);
+    private property <length> font-metric-height:
+        label.font-metrics.ascent - label.font-metrics.descent;
+    out property <length> line-pitch:
+        ceil(max(root.resolved-font-size, root.font-metric-height) / 8px) * 8px;
+
+    min-width: label.min-width;
+    preferred-width: label.preferred-width;
+    min-height: root.line-pitch * max(1, root.line-capacity);
+    preferred-height: root.min-height;
+    clip: true;
+
+    label := Text {
+        x: 0px;
+        y: 0px;
+        width: 100%;
+        height: 100%;
+        text: root.text;
+        color: root.color;
+        font-family: root.font-family;
+        font-size: root.resolved-font-size;
+        horizontal-alignment: root.horizontal-alignment;
+        vertical-alignment: root.vertical-alignment;
+        overflow: root.overflow;
+        wrap: root.wrap;
+    }
+}

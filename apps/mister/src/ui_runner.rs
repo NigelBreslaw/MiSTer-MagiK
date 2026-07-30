@@ -47,7 +47,9 @@ use crate::screenshot_transitions::{
     PreviewTransitionTrace,
 };
 use crate::setup_nav::{SetupAction, SetupNav, SetupPhase};
-use crate::ui_display::{CrtUiMetrics, RuntimeDisplayGeometry, UiDisplay, UiDisplayPlan};
+use crate::ui_display::{
+    CrtUiMetrics, RuntimeDisplayGeometry, UiDisplay, UiDisplayPlan, UiPixelSize,
+};
 #[cfg(mister_experiments)]
 use mister_magik_fb::experiments::effects::framebuffer_effects::{
     EFFECT_SIZES, EffectKind, EffectSize,
@@ -285,10 +287,16 @@ macro_rules! with_scene_app {
             mister_ui.set_crt_border_x(crt_metrics.border_x);
             mister_ui.set_crt_border_y(crt_metrics.border_y);
             mister_ui.set_crt_font_family(crt_metrics.font_family.label().into());
-            mister_ui.set_crt_body_font(crt_metrics.body_font);
-            mister_ui.set_crt_heading_font(crt_metrics.heading_font);
-            mister_ui.set_crt_card_title_font(crt_metrics.card_title_font);
-            mister_ui.set_crt_card_detail_font(crt_metrics.card_detail_font);
+            let pixel_text_size = |size| match size {
+                UiPixelSize::Px8 => slint_ui::$module::PixelTextSize::Px8,
+                UiPixelSize::Px16 => slint_ui::$module::PixelTextSize::Px16,
+                UiPixelSize::Px24 => slint_ui::$module::PixelTextSize::Px24,
+                UiPixelSize::Px32 => slint_ui::$module::PixelTextSize::Px32,
+            };
+            mister_ui.set_crt_body_font(pixel_text_size(crt_metrics.body_font));
+            mister_ui.set_crt_heading_font(pixel_text_size(crt_metrics.heading_font));
+            mister_ui.set_crt_card_title_font(pixel_text_size(crt_metrics.card_title_font));
+            mister_ui.set_crt_card_detail_font(pixel_text_size(crt_metrics.card_detail_font));
             mister_ui.set_crt_header_height(crt_metrics.header_height);
             mister_ui.set_crt_footer_height(crt_metrics.footer_height);
             mister_ui.set_crt_game_row_height(crt_metrics.game_row_height);
