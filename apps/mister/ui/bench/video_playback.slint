@@ -1,14 +1,15 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { PixelText8, PixelTextSize } from "../components/pixel_text_8.slint";
 import { MisterWindow, MisterUi } from "../mister_window.slint";
 export { MisterUi }
-export { PixelTextSize } from "../components/pixel_text_8.slint";
-import "../fonts/PressStart2P-Regular.ttf";
+export { PixelTextSize }
+import "../fonts/MagikPixel-Regular.ttf";
 
 export component VideoPlayback inherits MisterWindow {
     background: #090b10;
-    default-font-family: "Press Start 2P";
+    default-font-family: "MagiK Pixel";
 
     in-out property <image> frame;
 
@@ -39,31 +40,33 @@ export component VideoPlayback inherits MisterWindow {
         border-radius: 6px;
     }
 
-    Text {
+    PixelText8 {
         x: 724px;
         y: 104px;
         text: "bench:";
-        font-size: 12px;
+        size: PixelTextSize.px8;
         color: #8fb6ff;
     }
 
-    Text {
+    PixelText8 {
         x: 724px;
         y: 136px;
         width: 176px;
         text: "video_playback";
-        font-size: 16px;
+        size: PixelTextSize.px16;
         color: #f2f6ff;
         wrap: word-wrap;
+        line-capacity: 2;
     }
 
-    Text {
+    PixelText8 {
         x: 724px;
         y: 210px;
         width: 172px;
         text: "H.264/AAC MP4 snaps";
-        font-size: 12px;
+        size: PixelTextSize.px8;
         color: #b7c1d6;
         wrap: word-wrap;
+        line-capacity: 2;
     }
 }

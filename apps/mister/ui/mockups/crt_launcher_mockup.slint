@@ -1,7 +1,8 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import "../fonts/PressStart2P-Regular.ttf";
+import { PixelText8, PixelTextSize } from "../components/pixel_text_8.slint";
+import "../fonts/MagikPixel-Regular.ttf";
 
 component LauncherRow inherits Rectangle {
     in property <string> label;
@@ -18,18 +19,18 @@ component LauncherRow inherits Rectangle {
         spacing: 16px;
         cross-axis-alignment: center;
 
-        Text {
+        PixelText8 {
             width: 32px;
             text: selected ? ">" : "";
             color: #40e5e7;
-            font-size: 32px;
+            size: PixelTextSize.px32;
             vertical-alignment: center;
         }
 
-        Text {
+        PixelText8 {
             text: label;
             color: selected ? #40e5e7 : #aab0ff;
-            font-size: 32px;
+            size: PixelTextSize.px32;
             vertical-alignment: center;
         }
     }
@@ -40,7 +41,7 @@ export component CrtLauncherMockup inherits Window {
     height: 480px;
     title: "MiSTer MagiK CRT Launcher Mockup";
     background: #020817;
-    default-font-family: "Press Start 2P";
+    default-font-family: "MagiK Pixel";
 
     Rectangle {
         x: 16px;
@@ -60,23 +61,23 @@ export component CrtLauncherMockup inherits Window {
             border-width: 2px;
             border-color: #8b94f8;
 
-            Text {
+            PixelText8 {
                 x: 16px;
                 width: parent.width - 32px;
                 height: parent.height;
                 text: "MiSTer MagiK";
                 color: #aab0ff;
-                font-size: 32px;
+                size: PixelTextSize.px32;
                 vertical-alignment: center;
             }
 
-            Text {
+            PixelText8 {
                 x: parent.width - 112px;
                 width: 96px;
                 height: parent.height;
                 text: "21:14";
                 color: #aab0ff;
-                font-size: 24px;
+                size: PixelTextSize.px24;
                 horizontal-alignment: right;
                 vertical-alignment: center;
             }

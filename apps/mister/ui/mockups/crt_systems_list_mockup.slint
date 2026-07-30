@@ -1,7 +1,8 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import "../fonts/PressStart2P-Regular.ttf";
+import { PixelText8, PixelTextSize } from "../components/pixel_text_8.slint";
+import "../fonts/MagikPixel-Regular.ttf";
 
 component NavHint inherits HorizontalLayout {
     in property <string> button;
@@ -15,21 +16,21 @@ component NavHint inherits HorizontalLayout {
         height: 24px;
         background: #aaa5ff;
 
-        Text {
+        PixelText8 {
             width: parent.width;
             height: parent.height;
             text: root.button;
             color: #03132d;
-            font-size: 16px;
+            size: PixelTextSize.px16;
             horizontal-alignment: center;
             vertical-alignment: center;
         }
     }
 
-    Text {
+    PixelText8 {
         text: root.label;
         color: #aaa5ff;
-        font-size: 16px;
+        size: PixelTextSize.px16;
         vertical-alignment: center;
     }
 }
@@ -39,7 +40,7 @@ export component CrtSystemsListMockup inherits Window {
     height: 480px;
     title: "MiSTer MagiK CRT Systems List Mockup";
     background: #020817;
-    default-font-family: "Press Start 2P";
+    default-font-family: "MagiK Pixel";
     forward-focus: focus-scope;
 
     in-out property <[{ name: string, detail: string }]> systems: [
@@ -105,19 +106,19 @@ export component CrtSystemsListMockup inherits Window {
 
                         Rectangle { width: 136px; background: transparent; }
 
-                        Text {
+                        PixelText8 {
                             text: "Consoles";
                             color: #aaa5ff;
-                            font-size: 32px;
+                            size: PixelTextSize.px32;
                             horizontal-alignment: center;
                             vertical-alignment: center;
                         }
 
-                        Text {
+                        PixelText8 {
                             width: 136px;
                             text: "9 systems";
                             color: #aaa5ff;
-                            font-size: 16px;
+                            size: PixelTextSize.px16;
                             horizontal-alignment: right;
                             vertical-alignment: center;
                         }
@@ -154,11 +155,11 @@ export component CrtSystemsListMockup inherits Window {
                                     spacing: 16px;
                                     cross-axis-alignment: center;
 
-                                    Text {
+                                    PixelText8 {
                                         width: 24px;
                                         text: index == root.highlighted-index ? ">" : "";
                                         color: #03132d;
-                                        font-size: 24px;
+                                        size: PixelTextSize.px24;
                                         vertical-alignment: center;
                                     }
 
@@ -167,20 +168,20 @@ export component CrtSystemsListMockup inherits Window {
                                         alignment: center;
                                         horizontal-stretch: 1;
 
-                                        Text {
+                                        PixelText8 {
                                             text: system.name;
                                             color: index == root.highlighted-index
                                                 ? #03132d : #aaa5ff;
-                                            font-size: 24px;
+                                            size: PixelTextSize.px24;
                                             overflow: elide;
                                             vertical-alignment: center;
                                         }
 
-                                        Text {
+                                        PixelText8 {
                                             text: system.detail;
                                             color: index == root.highlighted-index
                                                 ? #17304a : #8b94f8;
-                                            font-size: 16px;
+                                            size: PixelTextSize.px16;
                                             overflow: elide;
                                             vertical-alignment: center;
                                         }

@@ -34,6 +34,15 @@ fn main() {
         "../ui/bench/tear_pattern.slint",
         "../ui/bench/video_playback.slint",
     ];
+    if !launcher_only {
+        sources.extend([
+            "../ui/mockups/crt_arcade_list_mockup.slint",
+            "../ui/mockups/crt_launcher_mockup.slint",
+            "../ui/mockups/crt_resolution_combo_mockup.slint",
+            "../ui/mockups/crt_settings_mockup.slint",
+            "../ui/mockups/crt_systems_list_mockup.slint",
+        ]);
+    }
     if bench_scenes {
         println!("cargo:rustc-cfg=mister_bench_scenes");
         sources.push("../ui/experiments/effect_hud.slint");
@@ -58,6 +67,11 @@ fn main() {
         "../ui/launcher.slint",
         "../ui/mister_bridge.slint",
         "../ui/mister_window.slint",
+        "../ui/mockups/crt_arcade_list_mockup.slint",
+        "../ui/mockups/crt_launcher_mockup.slint",
+        "../ui/mockups/crt_resolution_combo_mockup.slint",
+        "../ui/mockups/crt_settings_mockup.slint",
+        "../ui/mockups/crt_systems_list_mockup.slint",
         "../ui/variants/crt_overlays.slint",
         "../ui/variants/crt_setup.slint",
         "../ui/variants/crt_ui.slint",

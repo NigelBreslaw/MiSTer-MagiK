@@ -1,13 +1,14 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { PixelText8, PixelTextSize } from "../components/pixel_text_8.slint";
 import { MisterWindow, MisterUi } from "../mister_window.slint";
 export { MisterUi }
-export { PixelTextSize } from "../components/pixel_text_8.slint";
-import "../fonts/PressStart2P-Regular.ttf";
+export { PixelTextSize }
+import "../fonts/MagikPixel-Regular.ttf";
 
 export component EffectHud inherits MisterWindow {
-    default-font-family: "Press Start 2P";
+    default-font-family: "MagiK Pixel";
 
     in property <string> effect-name: "effect";
     in property <string> mode-label: "raw";
@@ -26,27 +27,27 @@ export component EffectHud inherits MisterWindow {
         border-width: 2px;
     }
 
-    Text {
+    PixelText8 {
         x: 44px;
         y: 40px;
         text: "MiSTer MagiK FX";
-        font-size: 24px;
+        size: PixelTextSize.px24;
         color: #fff2a8;
     }
 
-    Text {
+    PixelText8 {
         x: 44px;
         y: 76px;
         text: root.effect-name + " / " + root.mode-label;
-        font-size: 16px;
+        size: PixelTextSize.px16;
         color: #e8ecff;
     }
 
-    Text {
+    PixelText8 {
         x: 44px;
         y: 104px;
         text: root.fps-label + "  " + root.timing-label;
-        font-size: 16px;
+        size: PixelTextSize.px16;
         color: #8fffd2;
     }
 

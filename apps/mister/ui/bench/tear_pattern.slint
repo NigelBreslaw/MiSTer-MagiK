@@ -1,14 +1,15 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { PixelText8, PixelTextSize } from "../components/pixel_text_8.slint";
 import { MisterWindow, MisterUi } from "../mister_window.slint";
 export { MisterUi }
-export { PixelTextSize } from "../components/pixel_text_8.slint";
-import "../fonts/PressStart2P-Regular.ttf";
+export { PixelTextSize }
+import "../fonts/MagikPixel-Regular.ttf";
 
 export component TearPattern inherits MisterWindow {
     background: #05070b;
-    default-font-family: "Press Start 2P";
+    default-font-family: "MagiK Pixel";
 
     property <duration> tick: animation-tick();
     property <float> phase: Math.mod(tick / 1ms, 1200) / 1200;
@@ -94,27 +95,27 @@ export component TearPattern inherits MisterWindow {
         opacity: 0.82;
     }
 
-    Text {
+    PixelText8 {
         x: 12px;
         y: 9px;
         text: "tear_pattern phase " + root.phase-ms;
         color: #ffffff;
-        font-size: 8px;
+        size: PixelTextSize.px8;
     }
 
-    Text {
+    PixelText8 {
         x: 376px;
         y: 9px;
         text: "watch for horizontal step/kink";
         color: #fff06a;
-        font-size: 8px;
+        size: PixelTextSize.px8;
     }
 
-    Text {
+    PixelText8 {
         x: 12px;
         y: 498px;
         text: "rulers: 16 logical px";
         color: #ffffff;
-        font-size: 8px;
+        size: PixelTextSize.px8;
     }
 }
