@@ -142,6 +142,10 @@ conversion:
   `PixelTextSize` limits font sizes to 8, 16, 24, or 32 pixels, and wrapped
   content declares a bounded line capacity so it clips instead of painting
   into adjacent layout.
+- The macOS headless UI preview exposes `hdmi`, `crt-240p`, `crt-288p`,
+  `crt-480p`, and `crt-576p` display profiles. CRT captures use the production
+  route geometry, content insets, typed text sizes, and matching MagiK Pixel
+  font family.
 - Rust sends the FPGA `SET_FBUF` route so buffer 0 is scanned to HDMI. For CRT,
   the FPGA receives a framebuffer already matching the full active raster; its
   OSD path is a direct overlay and is not relied on for UI scaling.

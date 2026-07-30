@@ -96,7 +96,7 @@ impl CrtUiMetrics {
             card_title_font: UiPixelSize::Px16,
             card_detail_font: UiPixelSize::Px8,
             game_row_height: 24,
-            header_height: 32,
+            header_height: 48,
             footer_height: 24,
             font_family: CrtFontFamily::MagikPixel,
         }
@@ -114,7 +114,7 @@ impl CrtUiMetrics {
                 card_title_font: UiPixelSize::Px24,
                 card_detail_font: UiPixelSize::Px16,
                 game_row_height: 24,
-                header_height: 48,
+                header_height: 80,
                 footer_height: 40,
                 font_family: CrtFontFamily::MagikPixel,
             },
@@ -128,7 +128,7 @@ impl CrtUiMetrics {
                 card_title_font: UiPixelSize::Px24,
                 card_detail_font: UiPixelSize::Px16,
                 game_row_height: 14,
-                header_height: 29,
+                header_height: 56,
                 footer_height: 24,
                 font_family: CrtFontFamily::MagikPixelPal288,
             },
@@ -142,7 +142,7 @@ impl CrtUiMetrics {
                 card_title_font: UiPixelSize::Px16,
                 card_detail_font: UiPixelSize::Px8,
                 game_row_height: 29,
-                header_height: 38,
+                header_height: 56,
                 footer_height: 29,
                 font_family: CrtFontFamily::MagikPixelPal576,
             },
@@ -940,6 +940,21 @@ mod tests {
             Some(19_829)
         );
     }
+
+    #[test]
+    fn ui_pixel_size_mapping_is_exhaustive_and_eight_aligned() {
+        assert_eq!(
+            [
+                UiPixelSize::Px8,
+                UiPixelSize::Px16,
+                UiPixelSize::Px24,
+                UiPixelSize::Px32,
+            ]
+            .map(UiPixelSize::pixels),
+            [8, 16, 24, 32]
+        );
+    }
+
     use mister_magik_fb::framebuffer::format::rgb565_stride_bytes;
 
     #[derive(Clone, Copy)]
@@ -1365,7 +1380,7 @@ mod tests {
                 compact.header_height,
                 compact.footer_height,
             ),
-            (4, 4, 1, 1, 8, 16, 16, 8, 24, 32, 24)
+            (4, 4, 1, 1, 8, 16, 16, 8, 24, 48, 24)
         );
         assert_eq!(CrtUiMetrics::for_framebuffer(384, 288), compact);
         assert_eq!(CrtUiMetrics::for_framebuffer(640, 480), compact);
@@ -1382,7 +1397,7 @@ mod tests {
                     width: 640,
                     height: 480,
                 },
-                (8, 8, 2, 2, 16, 32, 24, 16, 24, 48, 40),
+                (8, 8, 2, 2, 16, 32, 24, 16, 24, 80, 40),
             ),
             (
                 ResolvedOutputRoute::Crt288p50,
@@ -1392,7 +1407,7 @@ mod tests {
                     width: 640,
                     height: 255,
                 },
-                (8, 5, 2, 1, 16, 32, 24, 16, 14, 29, 24),
+                (8, 5, 2, 1, 16, 32, 24, 16, 14, 56, 24),
             ),
             (
                 ResolvedOutputRoute::Crt480p60,
@@ -1402,7 +1417,7 @@ mod tests {
                     width: 640,
                     height: 480,
                 },
-                (4, 4, 1, 1, 8, 16, 16, 8, 24, 32, 24),
+                (4, 4, 1, 1, 8, 16, 16, 8, 24, 48, 24),
             ),
             (
                 ResolvedOutputRoute::Crt576p50,
@@ -1412,7 +1427,7 @@ mod tests {
                     width: 576,
                     height: 576,
                 },
-                (4, 5, 1, 1, 8, 16, 16, 8, 29, 38, 29),
+                (4, 5, 1, 1, 8, 16, 16, 8, 29, 56, 29),
             ),
         ] {
             let plan = UiDisplayPlan::from_geometry_with_route(

@@ -10,14 +10,18 @@ mod macos {
         PreviewPixels as CatalogPreviewPixels, PreviewWorker, load_preview_asset_pixels,
         preview_archive_path_for_system, preview_asset_cache_key, resolved_preview_archive_path,
     };
-    use mister_magik_fb::arcade_catalog::{ArcadeCatalog, ArcadeGameEntry, MENU_ARCADE_SYSTEM_ID};
+    use mister_magik_fb::arcade_catalog::{
+        ArcadeCatalog, ArcadeFilter, ArcadeGameEntry, MENU_ARCADE_SYSTEM_ID,
+    };
     use mister_magik_fb::fireworks::{
         FIREWORK_VISUAL_SEED, FireworkRenderer, embedded_firework_json,
     };
     use mister_magik_fb::fireworks_v2::{FireworkV2Renderer, embedded_firework_v2_json};
     use mister_magik_fb::framebuffer::target::{FramebufferTargetGeometry, UiFrameTarget};
     use mister_magik_fb::input_state::PadState;
-    use mister_magik_fb::launcher::{LauncherAction, LauncherNav, Screen};
+    use mister_magik_fb::launcher::{
+        ArcadeSearchPane, ArcadeSearchStatus, LauncherAction, LauncherNav, Screen,
+    };
     use mister_magik_fb::launcher_presentation::LauncherBridgePresenter;
     use mister_magik_fb::launcher_runtime::catalog::{
         ShardedCatalogSeed, load_sharded_registry_seed_at,
@@ -36,7 +40,10 @@ mod macos {
         PreviewTransitionController, Rgb565PreviewTransitionCompositor, transition_duration,
     };
     use mister_magik_fb::production_launcher_screensaver::LauncherScreensaver;
-    use mister_magik_fb::ui_display::CrtUiMetrics;
+    use mister_magik_fb::ui_display::{
+        CrtUiMetrics, ResolvedOutputRoute, UiDisplay, UiDisplayPlan, UiFramebufferSizePolicy,
+        UiPixelSize,
+    };
     use mister_magik_fb::ui_preview_fixtures::{FixtureScreenshot, UiPreviewFixtures};
     use mister_magik_fb::visual_composition::{
         ArcadeVisualLayer, PreviewFrame, PreviewPixels, PreviewSurface, hdmi_preview_rect,
@@ -67,8 +74,8 @@ mod macos {
     use winit::keyboard::{KeyCode, PhysicalKey};
     use winit::window::{Window, WindowId};
 
-    const FRAME_WIDTH: usize = 960;
-    const FRAME_HEIGHT: usize = 540;
+    const HDMI_FRAME_WIDTH: usize = 960;
+    const HDMI_FRAME_HEIGHT: usize = 540;
     const DEFAULT_REFRESH_HZ: u32 = 60;
     const MAX_AUTO_REFRESH_HZ: u32 = 120;
     const PREVIEW_TRANSITION_DURATION: Duration = Duration::from_millis(200);
@@ -81,13 +88,12 @@ mod macos {
     }
 
     impl PreviewFireworkRenderer {
-        fn from_json(json: &str) -> Result<Self, String> {
+        fn from_json(json: &str, width: usize, height: usize) -> Result<Self, String> {
             if json.contains("\"mister-magik-firework-v2\"") {
-                FireworkV2Renderer::from_json(json, FRAME_WIDTH, FRAME_HEIGHT, FIREWORK_VISUAL_SEED)
+                FireworkV2Renderer::from_json(json, width, height, FIREWORK_VISUAL_SEED)
                     .map(Self::V2)
             } else {
-                FireworkRenderer::from_json(json, FRAME_WIDTH, FRAME_HEIGHT, FIREWORK_VISUAL_SEED)
-                    .map(Self::V1)
+                FireworkRenderer::from_json(json, width, height, FIREWORK_VISUAL_SEED).map(Self::V1)
             }
         }
 
@@ -102,6 +108,7 @@ mod macos {
     pub fn run() -> Result<(), Box<dyn Error>> {
         let options = PreviewOptions::parse(std::env::args().skip(1))?;
         let headless = options.output.is_some();
+        let (frame_width, frame_height) = options.display_profile.render_size();
         let content = resolve_preview_content(
             options.content_mode,
             options.sd_root.as_deref(),
@@ -114,13 +121,11 @@ mod macos {
             Rc::clone(&slint_window),
             Some(Rc::clone(&fixed_time)),
         )))?;
-        slint_window.set_size(PhysicalSize::new(FRAME_WIDTH as u32, FRAME_HEIGHT as u32));
+        slint_window.set_size(PhysicalSize::new(frame_width as u32, frame_height as u32));
 
         let launcher = Launcher::new()?;
         let ui = launcher.global::<MisterUi>();
-        ui.set_window_width(FRAME_WIDTH as i32);
-        ui.set_window_height(FRAME_HEIGHT as i32);
-        ui.set_crt_layout(options.display_profile.is_crt());
+        configure_display_profile(&ui, options.display_profile);
         let bridge = launcher.global::<MisterBridge>();
         initialize_bridge(&bridge);
         launcher.show()?;
@@ -136,7 +141,11 @@ mod macos {
                     .ok_or_else(|| format!("unknown firework {:?}", options.firework))?
                     .to_owned()
             };
-            Some(PreviewFireworkRenderer::from_json(&json)?)
+            Some(PreviewFireworkRenderer::from_json(
+                &json,
+                frame_width,
+                frame_height,
+            )?)
         } else {
             None
         };
@@ -172,8 +181,8 @@ mod macos {
             write_ppm(
                 &output,
                 application.frame_target.cached_565(),
-                FRAME_WIDTH,
-                FRAME_HEIGHT,
+                frame_width,
+                frame_height,
             )?;
             println!(
                 "capture={} scenario={} frame={} time_ms={} refresh_hz={} hud={} hash={:016x}",
@@ -266,6 +275,8 @@ mod macos {
         native_window: Option<Arc<Window>>,
         surface: Option<Surface<Arc<Window>, Arc<Window>>>,
         frame_target: UiFrameTarget,
+        frame_width: usize,
+        frame_height: usize,
         xrgb8888: Vec<u32>,
         scenario: Scenario,
         selection: usize,
@@ -334,9 +345,12 @@ mod macos {
             let fixtures = UiPreviewFixtures::new()?;
             let (catalog, catalog_generation, catalog_source) =
                 preview_catalog(&content, fixtures.catalog)?;
+            let display = display_profile.display();
+            let frame_width = display.render_w();
+            let frame_height = display.render_h();
             let mut launcher_nav = LauncherNav::for_crt_layout_with_row_height(
                 display_profile.is_crt(),
-                CrtUiMetrics::for_framebuffer(FRAME_WIDTH, FRAME_HEIGHT).game_row_height,
+                CrtUiMetrics::for_display(&display).game_row_height,
             );
             let settings_store = FileSettingsStore::new(default_settings_path());
             launcher_nav.settings = settings_store.load();
@@ -369,9 +383,11 @@ mod macos {
                 native_window: None,
                 surface: None,
                 frame_target: UiFrameTarget::cached(FramebufferTargetGeometry::new(
-                    FRAME_WIDTH,
-                    FRAME_HEIGHT,
+                    frame_width,
+                    frame_height,
                 )),
+                frame_width,
+                frame_height,
                 xrgb8888: Vec::new(),
                 scenario,
                 selection: 0,
@@ -393,11 +409,11 @@ mod macos {
                 media_worker: None,
                 download_media_configured: download_media && !headless,
                 download_media: download_media && !headless,
-                arcade_layer: ArcadeVisualLayer::new(FRAME_WIDTH, FRAME_HEIGHT),
+                arcade_layer: ArcadeVisualLayer::new(frame_width, frame_height),
                 preview_transition: PreviewTransitionController::default(),
                 preview_compositor: Rgb565PreviewTransitionCompositor::new(
-                    FRAME_WIDTH,
-                    FRAME_HEIGHT,
+                    frame_width,
+                    frame_height,
                 ),
                 preview_previous_index: None,
                 preview_current_index: None,
@@ -435,10 +451,13 @@ mod macos {
         fn create_window(&mut self, event_loop: &ActiveEventLoop) {
             let attributes = Window::default_attributes()
                 .with_title(self.window_title())
-                .with_inner_size(LogicalSize::new(FRAME_WIDTH as f64, FRAME_HEIGHT as f64))
+                .with_inner_size(LogicalSize::new(
+                    self.frame_width as f64,
+                    self.frame_height as f64,
+                ))
                 .with_min_inner_size(LogicalSize::new(
-                    (FRAME_WIDTH / 2) as f64,
-                    (FRAME_HEIGHT / 2) as f64,
+                    (self.frame_width / 2) as f64,
+                    (self.frame_height / 2) as f64,
                 ));
             let window = Arc::new(
                 event_loop
@@ -635,11 +654,22 @@ mod macos {
         fn configure_launcher_screen(&mut self, scenario: Scenario) {
             match scenario {
                 Scenario::Home => self.launcher_nav.go_root(),
-                Scenario::Arcade | Scenario::ArcadeCrossfade => {
+                Scenario::Arcade | Scenario::ArcadeSearch | Scenario::ArcadeCrossfade => {
                     self.launcher_nav.open_default_arcade(&self.catalog);
-                    if scenario == Scenario::ArcadeCrossfade {
-                        self.launcher_nav.arcade.selected = 1;
-                        self.launcher_nav.arcade.snap_to_selected();
+                    match scenario {
+                        Scenario::ArcadeSearch => {
+                            self.launcher_nav.arcade_filter.active = ArcadeFilter::Search;
+                            self.launcher_nav.arcade_search.query = "PAC".into();
+                            self.launcher_nav.arcade_search.suggestion = "PAC-MAN".into();
+                            self.launcher_nav.arcade_search.status = ArcadeSearchStatus::Ready;
+                            self.launcher_nav.arcade_search.selected_key = 15;
+                            self.launcher_nav.arcade_search.pane = ArcadeSearchPane::Keyboard;
+                        }
+                        Scenario::ArcadeCrossfade => {
+                            self.launcher_nav.arcade.selected = 1;
+                            self.launcher_nav.arcade.snap_to_selected();
+                        }
+                        _ => {}
                     }
                 }
                 Scenario::Settings => self.launcher_nav.screen = Screen::Settings,
@@ -771,7 +801,7 @@ mod macos {
             self.slint_window.draw_if_needed(|renderer| {
                 self.frame_target.render(
                     renderer,
-                    FramebufferTargetGeometry::new(FRAME_WIDTH, FRAME_HEIGHT),
+                    FramebufferTargetGeometry::new(self.frame_width, self.frame_height),
                 );
             });
             if self.scenario == Scenario::Arcade {
@@ -829,13 +859,13 @@ mod macos {
                     );
                     self.preview_compositor.compose(
                         self.frame_target.cached_565_mut(),
-                        FRAME_WIDTH,
-                        FRAME_HEIGHT,
-                        hdmi_preview_rect(FRAME_WIDTH, FRAME_HEIGHT),
+                        self.frame_width,
+                        self.frame_height,
+                        hdmi_preview_rect(self.frame_width, self.frame_height),
                         previous.map(fixture_preview_frame),
                         fixture_preview_frame(current),
                         transition.progress,
-                        PreviewSurface::full(FRAME_WIDTH),
+                        PreviewSurface::full(self.frame_width),
                     );
                 }
             } else if self.scenario == Scenario::ParticleScreensaver {
@@ -855,8 +885,8 @@ mod macos {
                 if let Some(screensaver) = self.production_screensaver.as_mut() {
                     screensaver.render_at(
                         self.frame_target.cached_565_mut(),
-                        FRAME_WIDTH,
-                        FRAME_HEIGHT,
+                        self.frame_width,
+                        self.frame_height,
                         self.screensaver_elapsed,
                     );
                 } else {
@@ -1035,14 +1065,16 @@ mod macos {
             let worker_cancelled = Arc::clone(&cancelled);
             let worker_path = path.clone();
             let crt_output = self.display_profile.is_crt();
+            let frame_width = self.frame_width;
+            let frame_height = self.frame_height;
             let (sender, receiver) = mpsc::channel();
             let spawn = std::thread::Builder::new()
                 .name("mac-screenshot-tiles".into())
                 .spawn(move || {
                     let result = LauncherScreensaver::from_archive_path(
                         &worker_path,
-                        FRAME_WIDTH,
-                        FRAME_HEIGHT,
+                        frame_width,
+                        frame_height,
                         SCREENSHOT_TILE_SEED,
                         crt_output,
                     );
@@ -1114,8 +1146,8 @@ mod macos {
             let fingerprint = tile_pack_fingerprint(&path)?;
             let screensaver = LauncherScreensaver::from_archive_path(
                 &path,
-                FRAME_WIDTH,
-                FRAME_HEIGHT,
+                self.frame_width,
+                self.frame_height,
                 SCREENSHOT_TILE_SEED,
                 self.display_profile.is_crt(),
             )?;
@@ -1136,8 +1168,8 @@ mod macos {
             {
                 screensaver.render_at(
                     self.frame_target.cached_565_mut(),
-                    FRAME_WIDTH,
-                    FRAME_HEIGHT,
+                    self.frame_width,
+                    self.frame_height,
                     self.screensaver_elapsed,
                 );
                 std::thread::sleep(Duration::from_millis(1));
@@ -1371,8 +1403,8 @@ mod macos {
             self.particle_renderer.get_or_insert_with(|| {
                 ParticleRenderer::new_magik(ParticleConfig {
                     count: 16_384,
-                    width: FRAME_WIDTH,
-                    height: FRAME_HEIGHT,
+                    width: self.frame_width,
+                    height: self.frame_height,
                     seed: 0x4d61_6769_4b,
                     preset: ParticlePreset::Visual,
                 })
@@ -1471,8 +1503,8 @@ mod macos {
             self.xrgb8888.resize(output_len, 0);
             scale_rgb565_nearest(
                 self.frame_target.cached_565(),
-                FRAME_WIDTH,
-                FRAME_HEIGHT,
+                self.frame_width,
+                self.frame_height,
                 &mut self.xrgb8888,
                 size.width as usize,
                 size.height as usize,
@@ -1557,6 +1589,7 @@ mod macos {
     enum Scenario {
         Home,
         Arcade,
+        ArcadeSearch,
         ArcadeCrossfade,
         Settings,
         Controller,
@@ -1582,6 +1615,7 @@ mod macos {
                 self,
                 Self::Home
                     | Self::Arcade
+                    | Self::ArcadeSearch
                     | Self::ArcadeCrossfade
                     | Self::Settings
                     | Self::Controller
@@ -1609,6 +1643,7 @@ mod macos {
             match value.trim().to_ascii_lowercase().replace('_', "-").as_str() {
                 "home" => Some(Self::Home),
                 "arcade" => Some(Self::Arcade),
+                "arcade-search" | "search" => Some(Self::ArcadeSearch),
                 "arcade-crossfade" | "crossfade" => Some(Self::ArcadeCrossfade),
                 "settings" => Some(Self::Settings),
                 "controller" => Some(Self::Controller),
@@ -1636,6 +1671,7 @@ mod macos {
             match self {
                 Self::Home => "Home",
                 Self::Arcade => "Arcade",
+                Self::ArcadeSearch => "Arcade Search",
                 Self::ArcadeCrossfade => "Arcade Crossfade",
                 Self::Settings => "Settings",
                 Self::Controller => "Controller",
@@ -1669,6 +1705,7 @@ mod macos {
                 Self::Confirm => "9",
                 Self::CatalogScan => "0",
                 Self::Arcade => "A",
+                Self::ArcadeSearch => "headless",
                 Self::ArcadeCrossfade => "headless",
                 Self::BackgroundScan => "B",
                 Self::Loading => "L",
@@ -1835,12 +1872,14 @@ mod macos {
                     "--display-profile" => {
                         let value = arguments
                             .next()
-                            .ok_or("--display-profile requires hdmi or crt")?;
+                            .ok_or(
+                                "--display-profile requires hdmi, crt-240p, crt-288p, crt-480p, or crt-576p",
+                            )?;
                         display_profile = DisplayProfile::parse(&value)?;
                     }
                     "--help" | "-h" => {
                         return Err(
-                            "usage: mister-magik-ui-preview [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--display-profile hdmi|crt] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N | --time-ms N] [--firework ID] [--firework-spec FILE.json] [--hud on|off] [--output FILE.ppm]"
+                            "usage: mister-magik-ui-preview [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--display-profile hdmi|crt-240p|crt-288p|crt-480p|crt-576p] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N | --time-ms N] [--firework ID] [--firework-spec FILE.json] [--hud on|off] [--output FILE.ppm]"
                                 .into(),
                         );
                     }
@@ -1879,30 +1918,120 @@ mod macos {
     enum DisplayProfile {
         #[default]
         Hdmi,
-        Crt,
+        Crt240p,
+        Crt288p,
+        Crt480p,
+        Crt576p,
     }
 
     impl DisplayProfile {
         fn parse(value: &str) -> Result<Self, String> {
             match value.trim().to_ascii_lowercase().as_str() {
                 "hdmi" => Ok(Self::Hdmi),
-                "crt" | "crt-480p" => Ok(Self::Crt),
+                "crt-240p" | "crt-240p60" => Ok(Self::Crt240p),
+                "crt-288p" | "crt-288p50" => Ok(Self::Crt288p),
+                "crt" | "crt-480p" | "crt-480p60" => Ok(Self::Crt480p),
+                "crt-576p" | "crt-576p50" => Ok(Self::Crt576p),
                 _ => Err(format!(
-                    "invalid display profile {value:?}; expected hdmi or crt"
+                    "invalid display profile {value:?}; expected hdmi, crt-240p, crt-288p, crt-480p, or crt-576p"
                 )),
             }
         }
 
         const fn is_crt(self) -> bool {
-            matches!(self, Self::Crt)
+            !matches!(self, Self::Hdmi)
+        }
+
+        const fn route(self) -> ResolvedOutputRoute {
+            match self {
+                Self::Hdmi => ResolvedOutputRoute::Hdmi,
+                Self::Crt240p => ResolvedOutputRoute::Crt240p60,
+                Self::Crt288p => ResolvedOutputRoute::Crt288p50,
+                Self::Crt480p => ResolvedOutputRoute::Crt480p60,
+                Self::Crt576p => ResolvedOutputRoute::Crt576p50,
+            }
+        }
+
+        const fn framebuffer_size(self) -> (usize, usize) {
+            match self {
+                Self::Hdmi => (HDMI_FRAME_WIDTH, HDMI_FRAME_HEIGHT),
+                Self::Crt240p => (640, 240),
+                Self::Crt288p => (640, 288),
+                Self::Crt480p => (640, 480),
+                Self::Crt576p => (640, 576),
+            }
+        }
+
+        const fn render_size(self) -> (usize, usize) {
+            match self {
+                Self::Crt240p => (640, 480),
+                _ => self.framebuffer_size(),
+            }
+        }
+
+        fn display(self) -> UiDisplay {
+            let (fb_w, fb_h) = self.framebuffer_size();
+            let (render_w, render_h) = self.render_size();
+            UiDisplay::for_plan(UiDisplayPlan {
+                fb_w,
+                fb_h,
+                render_w,
+                render_h,
+                output_w: fb_w as u16,
+                output_h: fb_h as u16,
+                scan_w: fb_w as u16,
+                scan_h: fb_h as u16,
+                direct_video: self.is_crt(),
+                output_route: self.route(),
+                fb_policy: UiFramebufferSizePolicy::Auto,
+                source: "ui-preview-display-profile",
+                fallback: false,
+            })
         }
 
         const fn label(self) -> &'static str {
             match self {
                 Self::Hdmi => "display:hdmi",
-                Self::Crt => "display:crt-layout",
+                Self::Crt240p => "display:crt-240p",
+                Self::Crt288p => "display:crt-288p",
+                Self::Crt480p => "display:crt-480p",
+                Self::Crt576p => "display:crt-576p",
             }
         }
+    }
+
+    fn configure_display_profile(ui: &MisterUi, profile: DisplayProfile) {
+        let display = profile.display();
+        ui.set_window_width(display.render_w() as i32);
+        ui.set_window_height(display.render_h() as i32);
+        ui.set_crt_layout(profile.is_crt());
+        if !profile.is_crt() {
+            return;
+        }
+        let metrics = CrtUiMetrics::for_display(&display);
+        let content = display.content_rect();
+        ui.set_crt_grid_x(metrics.grid_x);
+        ui.set_crt_grid_y(metrics.grid_y);
+        ui.set_crt_border_x(metrics.border_x);
+        ui.set_crt_border_y(metrics.border_y);
+        ui.set_crt_font_family(metrics.font_family.label().into());
+        let pixel_text_size = |size| match size {
+            UiPixelSize::Px8 => mister_magik_ui::launcher::PixelTextSize::Px8,
+            UiPixelSize::Px16 => mister_magik_ui::launcher::PixelTextSize::Px16,
+            UiPixelSize::Px24 => mister_magik_ui::launcher::PixelTextSize::Px24,
+            UiPixelSize::Px32 => mister_magik_ui::launcher::PixelTextSize::Px32,
+        };
+        ui.set_crt_body_font(pixel_text_size(metrics.body_font));
+        ui.set_crt_heading_font(pixel_text_size(metrics.heading_font));
+        ui.set_crt_card_title_font(pixel_text_size(metrics.card_title_font));
+        ui.set_crt_card_detail_font(pixel_text_size(metrics.card_detail_font));
+        ui.set_crt_header_height(metrics.header_height);
+        ui.set_crt_footer_height(metrics.footer_height);
+        ui.set_crt_game_row_height(metrics.game_row_height);
+        ui.set_crt_content_x(content.x as i32);
+        ui.set_crt_content_y(content.y as i32);
+        ui.set_crt_content_width(content.width as i32);
+        ui.set_crt_content_height(content.height as i32);
     }
 
     enum CatalogWorkerEvent {
@@ -2065,7 +2194,7 @@ mod macos {
         reset_transient_bridge(&bridge);
         bridge.set_screen_mode(match scenario {
             Scenario::Controller | Scenario::ControllerSetup => 1,
-            Scenario::Arcade => 2,
+            Scenario::Arcade | Scenario::ArcadeSearch => 2,
             Scenario::Settings => 3,
             Scenario::About => 4,
             Scenario::Licenses => 5,
@@ -2075,7 +2204,7 @@ mod macos {
         });
         bridge.set_effective_view(
             match scenario {
-                Scenario::Arcade => "arcade",
+                Scenario::Arcade | Scenario::ArcadeSearch => "arcade",
                 Scenario::Settings => "settings",
                 Scenario::Controller | Scenario::ControllerSetup => "controller",
                 Scenario::About => "about",
@@ -2511,9 +2640,87 @@ mod macos {
             )
             .unwrap();
 
-            assert_eq!(options.display_profile, DisplayProfile::Crt);
+            assert_eq!(options.display_profile, DisplayProfile::Crt480p);
             assert!(options.no_scan);
             assert!(options.no_download);
+        }
+
+        #[test]
+        fn display_profiles_use_route_geometry_fonts_and_metrics() {
+            for (name, profile, route, render_size, font_family) in [
+                (
+                    "hdmi",
+                    DisplayProfile::Hdmi,
+                    ResolvedOutputRoute::Hdmi,
+                    (960, 540),
+                    "MagiK Pixel",
+                ),
+                (
+                    "crt-240p",
+                    DisplayProfile::Crt240p,
+                    ResolvedOutputRoute::Crt240p60,
+                    (640, 480),
+                    "MagiK Pixel",
+                ),
+                (
+                    "crt-288p",
+                    DisplayProfile::Crt288p,
+                    ResolvedOutputRoute::Crt288p50,
+                    (640, 288),
+                    "MagiK Pixel PAL 288",
+                ),
+                (
+                    "crt-480p",
+                    DisplayProfile::Crt480p,
+                    ResolvedOutputRoute::Crt480p60,
+                    (640, 480),
+                    "MagiK Pixel",
+                ),
+                (
+                    "crt-576p",
+                    DisplayProfile::Crt576p,
+                    ResolvedOutputRoute::Crt576p50,
+                    (640, 576),
+                    "MagiK Pixel PAL 576",
+                ),
+            ] {
+                assert_eq!(DisplayProfile::parse(name).unwrap(), profile);
+                assert_eq!(profile.route(), route);
+                assert_eq!(profile.render_size(), render_size);
+                let display = profile.display();
+                assert_eq!(
+                    (display.render_w(), display.render_h()),
+                    profile.render_size()
+                );
+                assert_eq!(
+                    CrtUiMetrics::for_display(&display).font_family.label(),
+                    font_family
+                );
+            }
+        }
+
+        #[test]
+        fn pixel_text_visual_scenarios_are_headless_selectable() {
+            for scenario in [
+                "home",
+                "arcade",
+                "arcade-search",
+                "settings",
+                "controller",
+                "controller-setup",
+                "about",
+                "info",
+                "licenses",
+                "screensaver-settings",
+                "startup",
+                "confirm",
+                "catalog-scan",
+                "background-scan",
+                "loading",
+                "media-progress",
+            ] {
+                assert!(Scenario::parse(scenario).is_some(), "{scenario}");
+            }
         }
 
         #[test]

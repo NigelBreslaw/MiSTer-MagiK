@@ -461,6 +461,30 @@ mod tests {
     }
 
     #[test]
+    fn magik_pixel_fonts_report_generated_bounds_and_preserve_advances() {
+        let cases = [
+            (ConsoleTypeface::MagikPixel, 8.0, 1000, -374, 16),
+            (ConsoleTypeface::MagikPixelPal288, 16.0, 600, -224, 16),
+            (ConsoleTypeface::MagikPixelPal576, 8.0, 1200, -449, 16),
+        ];
+        let mut widths = Vec::new();
+        for (typeface, pixel_size, expected_ascent, expected_descent, expected_pitch) in cases {
+            let mut font = ConsoleFont::new_with_typeface(pixel_size, typeface);
+            let metrics = font.font.metrics(&[]);
+            assert_eq!(metrics.ascent.round() as i32, expected_ascent);
+            assert_eq!(metrics.descent.round() as i32, expected_descent);
+            assert_eq!(metrics.leading, 0.0);
+            let metric_height =
+                (metrics.ascent - metrics.descent) * pixel_size / f32::from(metrics.units_per_em);
+            let line_pitch = (pixel_size.max(metric_height) / 8.0).ceil() as i32 * 8;
+            assert_eq!(line_pitch, expected_pitch);
+            widths.push(ConsoleFont::new_with_typeface(16.0, typeface).text_width("MiSTer MagiK"));
+            assert!(font.rasterize_alpha_mask("MagiK").is_some());
+        }
+        assert!(widths.windows(2).all(|pair| pair[0] == pair[1]));
+    }
+
+    #[test]
     fn gradient_text_preserves_solid_text_footprint() {
         let mut solid_font = ConsoleFont::new(16.0);
         let mut gradient_font = ConsoleFont::new(16.0);

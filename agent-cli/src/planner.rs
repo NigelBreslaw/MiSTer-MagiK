@@ -486,6 +486,50 @@ fn add_path_operations(
             ));
         }
     }
+    if path == Path::new("apps/mister/Cargo.toml")
+        || path == Path::new("apps/mister/src/bin/ui_preview.rs")
+        || path.starts_with("apps/mister/ui")
+        || path.starts_with("apps/mister/ui-generated")
+    {
+        add(with_inputs(
+            cargo(
+                "app.ui-preview-tests",
+                "Test macOS UI preview",
+                &[
+                    "test",
+                    "--manifest-path",
+                    "apps/mister/Cargo.toml",
+                    "--bin",
+                    "mister-magik-ui-preview",
+                    "--no-default-features",
+                    "--features",
+                    "ui-preview",
+                ],
+                "preview or Slint source → display-profile and scenario tests",
+            ),
+            MISTER_APP_COMPILED_INPUTS,
+        ));
+        if depth == Depth::Verify {
+            add(with_inputs(
+                cargo(
+                    "app.ui-preview-binary",
+                    "Build macOS UI preview",
+                    &[
+                        "build",
+                        "--manifest-path",
+                        "apps/mister/Cargo.toml",
+                        "--bin",
+                        "mister-magik-ui-preview",
+                        "--no-default-features",
+                        "--features",
+                        "ui-preview",
+                    ],
+                    "preview or Slint source → headless visual capture binary",
+                ),
+                MISTER_APP_COMPILED_INPUTS,
+            ));
+        }
+    }
     if path.file_name().and_then(|name| name.to_str()) != Some("AGENTS.md")
         && (path.starts_with("apps/mister/src")
             || path.starts_with("apps/mister/ui")
@@ -1185,6 +1229,26 @@ mod tests {
                 .args
                 .contains(&"launcher_catalog_session::tests".into())
         );
+    }
+
+    #[test]
+    fn ui_preview_changes_select_profile_tests_and_capture_binary() {
+        let plan = affected_plan(
+            Intent::Verify {
+                scope: Scope::Paths(vec![]),
+            },
+            vec!["apps/mister/src/bin/ui_preview.rs".into()],
+        )
+        .unwrap();
+        for id in ["app.ui-preview-tests", "app.ui-preview-binary"] {
+            let operation = plan
+                .operations
+                .iter()
+                .find(|operation| operation.id == id)
+                .unwrap_or_else(|| panic!("missing {id}"));
+            assert!(operation.args.contains(&"ui-preview".into()));
+            assert_eq!(operation.inputs, MISTER_APP_COMPILED_INPUTS);
+        }
     }
 
     #[test]
