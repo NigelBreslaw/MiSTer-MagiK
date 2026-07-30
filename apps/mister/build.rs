@@ -12,7 +12,6 @@ fn main() {
     println!("cargo:rerun-if-changed=Cargo.toml");
     println!("cargo:rerun-if-changed=src/particle_neon.c");
     println!("cargo:rerun-if-changed=../../.git/HEAD");
-    println!("cargo:rerun-if-changed=../../.git/refs/heads");
     println!("cargo:rustc-check-cfg=cfg(mister_ui_scope_launcher)");
     println!("cargo:rustc-check-cfg=cfg(mister_bench_scenes)");
     println!("cargo:rustc-check-cfg=cfg(mister_experiments)");

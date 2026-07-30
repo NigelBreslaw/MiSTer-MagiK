@@ -29,8 +29,7 @@ scripts/agent ci host-assurance --paths \
   mister/tools/agent/src/main.rs \
   apps/mister/src/lib.rs
 
-scripts/agent build runtime-device
-scripts/agent build manager-device
+scripts/agent build release-binaries
 apps/mister/scripts/check-arm-shared-libs.sh \
   "$BIN"
 apps/mister/scripts/check-arm-shared-libs.sh \

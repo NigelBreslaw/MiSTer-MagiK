@@ -787,6 +787,7 @@ mod tests {
             "validate-runtime",
             "device-agent",
             "manager-device",
+            "release-binaries",
         ] {
             assert!(Cli::try_parse_from(["agent-cli", "build", intent]).is_ok());
         }

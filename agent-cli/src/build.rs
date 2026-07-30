@@ -6,6 +6,8 @@ use crate::error::AgentResult;
 use crate::progress::{EventKind, Reporter};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -14,6 +16,7 @@ use std::time::Duration;
 
 const TARGET: &str = "armv7-unknown-linux-gnueabihf";
 const IMAGE: &str = "mister-magik-cross-armv7:ubuntu20-arm64";
+const IMAGE_STAMP: &str = "/private/tmp/mister-magik-apple-container-image.tsv";
 const BUILD_DEADLINE: Duration = Duration::from_secs(30 * 60);
 const FFMPEG_APPLE_CONTAINER_ENV: [(&str, &str); 5] = [
     (
@@ -46,6 +49,7 @@ pub enum BuildCommand {
     ValidateRuntime,
     DeviceAgent,
     ManagerDevice,
+    ReleaseBinaries,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -59,17 +63,20 @@ pub enum BuildRecipe {
     ManagerDevice,
 }
 
-impl From<BuildCommand> for BuildRecipe {
-    fn from(command: BuildCommand) -> Self {
+impl BuildRecipe {
+    #[must_use]
+    pub fn for_command(command: BuildCommand) -> Option<Self> {
         match command {
-            BuildCommand::RuntimeDevice => Self::RuntimeDevice(UiScope::All),
-            BuildCommand::RuntimeFast => Self::RuntimeFast,
-            BuildCommand::RuntimeProfile => Self::RuntimeProfile,
-            BuildCommand::ValidateLauncher => Self::ValidateLauncher,
-            BuildCommand::ValidateLibrary => Self::ValidateLibrary,
-            BuildCommand::ValidateRuntime => Self::ValidateLauncher,
-            BuildCommand::DeviceAgent => Self::DeviceAgent,
-            BuildCommand::ManagerDevice => Self::ManagerDevice,
+            BuildCommand::RuntimeDevice => Some(Self::RuntimeDevice(UiScope::All)),
+            BuildCommand::RuntimeFast => Some(Self::RuntimeFast),
+            BuildCommand::RuntimeProfile => Some(Self::RuntimeProfile),
+            BuildCommand::ValidateLauncher | BuildCommand::ValidateRuntime => {
+                Some(Self::ValidateLauncher)
+            }
+            BuildCommand::ValidateLibrary => Some(Self::ValidateLibrary),
+            BuildCommand::DeviceAgent => Some(Self::DeviceAgent),
+            BuildCommand::ManagerDevice => Some(Self::ManagerDevice),
+            BuildCommand::ReleaseBinaries => None,
         }
     }
 }
@@ -222,6 +229,15 @@ impl BuildSpec {
     }
 
     pub fn verify(&self, repository: &Path) -> AgentResult<BuildReceipt> {
+        let metadata = build_metadata(repository)?;
+        self.verify_with_metadata(repository, &metadata)
+    }
+
+    fn verify_with_metadata(
+        &self,
+        repository: &Path,
+        metadata: &BuildMetadata,
+    ) -> AgentResult<BuildReceipt> {
         if self.mode != BuildMode::Build {
             return Ok(BuildReceipt::empty(self));
         }
@@ -235,7 +251,6 @@ impl BuildSpec {
         let receipt_text = std::fs::read_to_string(repository.join(&self.receipt))
             .map_err(|error| format!("cannot read build receipt: {error}"))?;
         let receipt = BuildReceipt::parse(&receipt_text)?;
-        let metadata = build_metadata(repository)?;
         if receipt.profile != self.profile
             || receipt.features != self.features.join(",")
             || receipt.ui_scope != self.ui_scope.label()
@@ -379,7 +394,16 @@ pub fn execute(
     spec: &BuildSpec,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<()> {
-    let mut actions = ProcessBuildActions::new(repository, spec)?;
+    let mut session = BuildSession::new(repository)?;
+    execute_with_session(&mut session, spec, reporter)
+}
+
+fn execute_with_session(
+    session: &mut BuildSession<'_>,
+    spec: &BuildSpec,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<()> {
+    let mut actions = ProcessBuildActions::new(session, spec);
     run_state_machine(&mut actions, &mut |phase, percent| {
         Ok(reporter.emit(
             EventKind::Progress,
@@ -391,8 +415,43 @@ pub fn execute(
 }
 
 pub fn execute_quiet(repository: &Path, spec: &BuildSpec) -> AgentResult<()> {
-    let mut actions = ProcessBuildActions::new(repository, spec)?;
+    let mut session = BuildSession::new(repository)?;
+    let mut actions = ProcessBuildActions::new(&mut session, spec);
     run_state_machine(&mut actions, &mut |_, _| Ok(()))
+}
+
+pub fn execute_command(
+    repository: &Path,
+    command: BuildCommand,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<()> {
+    match command {
+        BuildCommand::ValidateRuntime => execute_runtime_validation(repository, reporter),
+        BuildCommand::ReleaseBinaries => execute_release_binaries(repository, reporter),
+        other => {
+            let recipe = BuildRecipe::for_command(other)
+                .ok_or("combined build command cannot be converted to one recipe")?;
+            execute(repository, &BuildSpec::for_recipe(recipe), reporter)
+        }
+    }
+}
+
+fn execute_release_binaries(repository: &Path, reporter: &mut Reporter<'_>) -> AgentResult<()> {
+    let runtime = BuildSpec::for_recipe(BuildRecipe::RuntimeDevice(UiScope::All));
+    let manager = BuildSpec::for_recipe(BuildRecipe::ManagerDevice);
+    let mut session = BuildSession::new(repository)?;
+    let manager_receipt = session.reusable_clean_receipt(&manager).ok();
+    execute_with_session(&mut session, &runtime, reporter)?;
+    if manager_receipt.is_some() {
+        reporter.emit(
+            EventKind::Completed,
+            "manager-cache-hit",
+            "reused exact clean manager build receipt",
+            Some(100),
+        )?;
+        return Ok(());
+    }
+    execute_with_session(&mut session, &manager, reporter)
 }
 
 pub fn execute_runtime_validation(
@@ -405,34 +464,43 @@ pub fn execute_runtime_validation(
         "preparing shared runtime validation",
         Some(10),
     )?;
-    let backend = infer_backend()?;
-    if backend == BuildBackend::Cross {
-        execute(
-            repository,
+    let mut session = BuildSession::new(repository)?;
+    session.ensure_preflight()?;
+    if session.backend == BuildBackend::Cross {
+        build_minimal_ffmpeg(repository, session.backend, FfmpegVerification::Full)?;
+        execute_with_session(
+            &mut session,
             &BuildSpec::for_recipe(BuildRecipe::ValidateLauncher),
             reporter,
         )?;
-        return execute(
-            repository,
+        return execute_with_session(
+            &mut session,
             &BuildSpec::for_recipe(BuildRecipe::ValidateLibrary),
             reporter,
         );
     }
-    preflight(backend)?;
-    build_minimal_ffmpeg(repository, backend)?;
     let target_dir = PathBuf::from("/private/tmp/mister-magik-apple-container-target");
-    prepare_container(repository, &target_dir)?;
+    create_target_dir(&target_dir)?;
+    session.ensure_container_ready()?;
+    build_minimal_ffmpeg(repository, session.backend, FfmpegVerification::Full)?;
     let cpus = std::thread::available_parallelism()
         .map_err(|error| format!("cannot detect online CPUs: {error}"))?
         .get()
         .to_string();
     let cargo_home = home_dir()?.join(".cargo");
     let rust_toolchain = home_dir()?.join(".rustup/toolchains/stable-aarch64-unknown-linux-gnu");
-    let metadata = build_metadata(repository)?;
     let mut command = Command::new("container");
     command
         .current_dir(repository)
-        .args(["run", "--arch", "arm64", "--rm", "--cpus"])
+        .args([
+            "run",
+            "--progress",
+            "none",
+            "--arch",
+            "arm64",
+            "--rm",
+            "--cpus",
+        ])
         .arg(&cpus)
         .args([
             "--memory",
@@ -450,7 +518,7 @@ pub fn execute_runtime_validation(
         ])
         .arg("--env")
         .arg(format!("CARGO_BUILD_JOBS={cpus}"));
-    for value in metadata.environment() {
+    for value in session.metadata.environment() {
         command.arg("--env").arg(value);
     }
     for (name, value) in FFMPEG_APPLE_CONTAINER_ENV {
@@ -489,16 +557,90 @@ pub fn execute_runtime_validation(
     Ok(())
 }
 
-struct ProcessBuildActions<'a> {
+struct BuildSession<'a> {
     repository: &'a Path,
-    spec: &'a BuildSpec,
     backend: BuildBackend,
+    metadata: BuildMetadata,
+    cargo_timings: bool,
+    preflight_complete: bool,
+    container_ready: bool,
+}
+
+impl<'a> BuildSession<'a> {
+    fn new(repository: &'a Path) -> AgentResult<Self> {
+        Ok(Self {
+            repository,
+            backend: infer_backend()?,
+            metadata: build_metadata(repository)?,
+            cargo_timings: requested_cargo_timings()?,
+            preflight_complete: false,
+            container_ready: false,
+        })
+    }
+
+    fn ensure_preflight(&mut self) -> AgentResult<()> {
+        ensure_once(&mut self.preflight_complete, || preflight(self.backend))
+    }
+
+    fn ensure_container_ready(&mut self) -> AgentResult<()> {
+        if self.backend != BuildBackend::AppleContainer {
+            return Ok(());
+        }
+        ensure_once(&mut self.container_ready, || {
+            prepare_container_image(self.repository)
+        })
+    }
+
+    fn ensure_source_identity(&self) -> AgentResult<()> {
+        let source_revision = git_output(self.repository, &["rev-parse", "HEAD"])?;
+        let source_dirty = !git_output(
+            self.repository,
+            &["status", "--porcelain", "--untracked-files=all"],
+        )?
+        .is_empty();
+        validate_source_identity(&self.metadata, &source_revision, source_dirty)
+    }
+
+    fn reusable_clean_receipt(&self, spec: &BuildSpec) -> AgentResult<BuildReceipt> {
+        if self.metadata.source_dirty {
+            return Err("dirty builds cannot reuse a strict receipt".into());
+        }
+        let receipt = spec.verify_with_metadata(self.repository, &self.metadata)?;
+        if receipt.source_dirty {
+            return Err("dirty build receipt cannot be reused".into());
+        }
+        Ok(receipt)
+    }
+}
+
+fn validate_source_identity(
+    metadata: &BuildMetadata,
+    source_revision: &str,
+    source_dirty: bool,
+) -> AgentResult<()> {
+    if source_revision != metadata.source_revision || source_dirty != metadata.source_dirty {
+        return Err("source identity changed during the build".into());
+    }
+    Ok(())
+}
+
+fn ensure_once(completed: &mut bool, action: impl FnOnce() -> AgentResult<()>) -> AgentResult<()> {
+    if *completed {
+        return Ok(());
+    }
+    action()?;
+    *completed = true;
+    Ok(())
+}
+
+struct ProcessBuildActions<'session, 'repository, 'spec> {
+    session: &'session mut BuildSession<'repository>,
+    spec: &'spec BuildSpec,
     target_dir: PathBuf,
 }
 
-impl<'a> ProcessBuildActions<'a> {
-    fn new(repository: &'a Path, spec: &'a BuildSpec) -> AgentResult<Self> {
-        let backend = infer_backend()?;
+impl<'session, 'repository, 'spec> ProcessBuildActions<'session, 'repository, 'spec> {
+    fn new(session: &'session mut BuildSession<'repository>, spec: &'spec BuildSpec) -> Self {
         let target_dir = match spec.target {
             BuildTarget::DeviceAgent => {
                 PathBuf::from("/private/tmp/mister-magik-agent-apple-container-target")
@@ -508,93 +650,40 @@ impl<'a> ProcessBuildActions<'a> {
             }
             _ => PathBuf::from("/private/tmp/mister-magik-apple-container-target"),
         };
-        Ok(Self {
-            repository,
+        Self {
+            session,
             spec,
-            backend,
             target_dir,
-        })
+        }
     }
 
     fn compile(&self) -> AgentResult<()> {
         if self.spec.target == BuildTarget::Runtime && self.spec.mode != BuildMode::CheckLibrary {
-            build_minimal_ffmpeg(self.repository, self.backend)?;
+            build_minimal_ffmpeg(
+                self.session.repository,
+                self.session.backend,
+                FfmpegVerification::Stamp,
+            )?;
         }
-        match self.backend {
+        match self.session.backend {
             BuildBackend::AppleContainer => self.compile_in_apple_container(),
             BuildBackend::Cross => self.compile_with_cross(),
         }
     }
 
     fn compile_in_apple_container(&self) -> AgentResult<()> {
-        let cpus = std::thread::available_parallelism()
-            .map_err(|error| format!("cannot detect online CPUs: {error}"))?
-            .get()
-            .to_string();
-        let cargo_home = home_dir()?.join(".cargo");
-        let rust_toolchain =
-            home_dir()?.join(".rustup/toolchains/stable-aarch64-unknown-linux-gnu");
-        let metadata = build_metadata(self.repository)?;
-        let rustflags = if self.spec.features.contains(&"profile") {
-            "-D warnings -C target-cpu=cortex-a9 -C force-frame-pointers=yes"
-        } else {
-            "-D warnings -C target-cpu=cortex-a9"
-        };
-        let mut command = Command::new("container");
-        command
-            .current_dir(self.repository)
-            .args(["run", "--arch", "arm64", "--rm", "--cpus"])
-            .arg(&cpus)
-            .args([
-                "--memory",
-                "8g",
-                "--env",
-                "CARGO_HOME=/cargo",
-                "--env",
-                "CARGO_TARGET_DIR=/target",
-            ])
-            .arg("--env")
-            .arg(format!("CARGO_BUILD_JOBS={cpus}"))
-            .arg("--env")
-            .arg(format!(
-                "MISTER_UI_BUILD_SCOPE={}",
-                self.spec.ui_scope.label()
-            ))
-            .args(["--env", "RUSTC_WRAPPER=", "--env"])
-            .arg(format!("RUSTFLAGS={rustflags}"))
-            .args(["--env", "SLINT_FONT_SIZES=8,16,24,32"]);
-        for value in metadata.environment() {
-            command.arg("--env").arg(value);
-        }
-        if self.spec.target == BuildTarget::Runtime && self.spec.mode != BuildMode::CheckLibrary {
-            for (name, value) in FFMPEG_APPLE_CONTAINER_ENV {
-                command.arg("--env").arg(format!("{name}={value}"));
-            }
-        }
-        command
-            .arg("--volume")
-            .arg(format!("{}:/cargo", cargo_home.display()))
-            .arg("--volume")
-            .arg(format!("{}:/rust:ro", rust_toolchain.display()))
-            .arg("--volume")
-            .arg(format!("{}:/project", self.repository.display()))
-            .arg("--volume")
-            .arg(format!("{}:/target", self.target_dir.display()))
-            .args([
-                "--workdir",
-                container_workdir(self.spec.target),
-                IMAGE,
-                "sh",
-                "-lc",
-                "PATH=/rust/bin:$PATH cargo \"$@\"",
-                "sh",
-            ])
-            .args(cargo_args(self.spec, requested_cargo_timings()));
+        let mut command = apple_container_cargo_command(
+            self.session.repository,
+            self.spec,
+            &self.target_dir,
+            &self.session.metadata,
+            self.session.cargo_timings,
+        )?;
         run_bounded(&mut command, BUILD_DEADLINE)
     }
 
     fn compile_with_cross(&self) -> AgentResult<()> {
-        let metadata = build_metadata(self.repository)?;
+        let metadata = &self.session.metadata;
         let rustflags = if self.spec.features.contains(&"profile") {
             "-D warnings -C target-cpu=cortex-a9 -C force-frame-pointers=yes"
         } else {
@@ -602,7 +691,7 @@ impl<'a> ProcessBuildActions<'a> {
         };
         let mut command = Command::new("cross");
         command
-            .current_dir(self.repository.join(host_workdir(self.spec.target)))
+            .current_dir(self.session.repository.join(host_workdir(self.spec.target)))
             .env("RUSTC_WRAPPER", "")
             .env("RUSTFLAGS", rustflags)
             .env("MISTER_UI_BUILD_SCOPE", self.spec.ui_scope.label())
@@ -614,16 +703,16 @@ impl<'a> ProcessBuildActions<'a> {
                 "MISTER_MAGIK_SOURCE_DIRTY",
                 u8::from(metadata.source_dirty).to_string(),
             )
-            .args(cargo_args(self.spec, requested_cargo_timings()));
-        configure_cross_environment(&mut command, self.repository)?;
+            .args(cargo_args(self.spec, self.session.cargo_timings));
+        configure_cross_environment(&mut command, self.session.repository)?;
         if self.spec.target == BuildTarget::Runtime && self.spec.mode != BuildMode::CheckLibrary {
-            command.envs(ffmpeg_cross_env(self.repository));
+            command.envs(ffmpeg_cross_env(self.session.repository));
         }
         run_bounded(&mut command, BUILD_DEADLINE)
     }
 
     fn mirror_artifact(&self) -> AgentResult<()> {
-        if self.spec.mode != BuildMode::Build || self.backend == BuildBackend::Cross {
+        if self.spec.mode != BuildMode::Build || self.session.backend == BuildBackend::Cross {
             return Ok(());
         }
         let source = self.target_dir.join(TARGET).join(self.spec.profile).join(
@@ -637,7 +726,7 @@ impl<'a> ProcessBuildActions<'a> {
                 format!("expected container output is missing: {}", source.display()).into(),
             );
         }
-        let destination = self.repository.join(&self.spec.artifact);
+        let destination = self.session.repository.join(&self.spec.artifact);
         if let Some(parent) = destination.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|error| format!("cannot create artifact directory: {error}"))?;
@@ -651,8 +740,9 @@ impl<'a> ProcessBuildActions<'a> {
         if self.spec.mode != BuildMode::Build || !self.spec.strict_receipt {
             return Ok(());
         }
-        let artifact = self.repository.join(&self.spec.artifact);
-        let metadata = build_metadata(self.repository)?;
+        self.session.ensure_source_identity()?;
+        let artifact = self.session.repository.join(&self.spec.artifact);
+        let metadata = &self.session.metadata;
         let receipt = format!(
             "build_receipt_tsv\tbinary_sha256={}\tprofile={}\tfeatures={}\tui_scope={}\tbuild_number={}\tversion={}\tsource_commit={}\tsource_dirty={}\tcache_identity={}\tlock_sha256={}\ttoolchain_sha256={}\n",
             sha256(&artifact)?,
@@ -664,10 +754,15 @@ impl<'a> ProcessBuildActions<'a> {
             metadata.source_revision,
             u8::from(metadata.source_dirty),
             self.spec.cache_identity,
-            sha256(&self.repository.join(lockfile(self.spec.target)))?,
-            sha256(&self.repository.join("apps/mister/rust-toolchain.toml"))?,
+            sha256(&self.session.repository.join(lockfile(self.spec.target)))?,
+            sha256(
+                &self
+                    .session
+                    .repository
+                    .join("apps/mister/rust-toolchain.toml"),
+            )?,
         );
-        let receipt_path = self.repository.join(&self.spec.receipt);
+        let receipt_path = self.session.repository.join(&self.spec.receipt);
         let receipt_tmp = receipt_path.with_extension("tsv.tmp");
         std::fs::write(&receipt_tmp, receipt)
             .map_err(|error| format!("cannot write build receipt: {error}"))?;
@@ -680,6 +775,76 @@ impl<'a> ProcessBuildActions<'a> {
         .map_err(|error| format!("cannot write build feature identity: {error}"))?;
         Ok(())
     }
+}
+
+fn apple_container_cargo_command(
+    repository: &Path,
+    spec: &BuildSpec,
+    target_dir: &Path,
+    metadata: &BuildMetadata,
+    cargo_timings: bool,
+) -> AgentResult<Command> {
+    let cpus = std::thread::available_parallelism()
+        .map_err(|error| format!("cannot detect online CPUs: {error}"))?
+        .get()
+        .to_string();
+    let cargo_home = home_dir()?.join(".cargo");
+    let rust_toolchain = home_dir()?.join(".rustup/toolchains/stable-aarch64-unknown-linux-gnu");
+    let rustflags = if spec.features.contains(&"profile") {
+        "-D warnings -C target-cpu=cortex-a9 -C force-frame-pointers=yes"
+    } else {
+        "-D warnings -C target-cpu=cortex-a9"
+    };
+    let mut command = Command::new("container");
+    command
+        .current_dir(repository)
+        .args([
+            "run",
+            "--progress",
+            "none",
+            "--arch",
+            "arm64",
+            "--rm",
+            "--cpus",
+        ])
+        .arg(&cpus)
+        .args([
+            "--memory",
+            "8g",
+            "--env",
+            "CARGO_HOME=/cargo",
+            "--env",
+            "CARGO_TARGET_DIR=/target",
+            "--env",
+            "PATH=/rust/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        ])
+        .arg("--env")
+        .arg(format!("CARGO_BUILD_JOBS={cpus}"))
+        .arg("--env")
+        .arg(format!("MISTER_UI_BUILD_SCOPE={}", spec.ui_scope.label()))
+        .args(["--env", "RUSTC_WRAPPER=", "--env"])
+        .arg(format!("RUSTFLAGS={rustflags}"))
+        .args(["--env", "SLINT_FONT_SIZES=8,16,24,32"]);
+    for value in metadata.environment() {
+        command.arg("--env").arg(value);
+    }
+    if spec.target == BuildTarget::Runtime && spec.mode != BuildMode::CheckLibrary {
+        for (name, value) in FFMPEG_APPLE_CONTAINER_ENV {
+            command.arg("--env").arg(format!("{name}={value}"));
+        }
+    }
+    command
+        .arg("--volume")
+        .arg(format!("{}:/cargo", cargo_home.display()))
+        .arg("--volume")
+        .arg(format!("{}:/rust:ro", rust_toolchain.display()))
+        .arg("--volume")
+        .arg(format!("{}:/project", repository.display()))
+        .arg("--volume")
+        .arg(format!("{}:/target", target_dir.display()))
+        .args(["--workdir", container_workdir(spec.target), IMAGE, "cargo"])
+        .args(cargo_args(spec, cargo_timings));
+    Ok(command)
 }
 
 fn configure_cross_environment(command: &mut Command, repository: &Path) -> AgentResult<()> {
@@ -712,29 +877,49 @@ fn rust_toolchain_channel(repository: &Path) -> AgentResult<String> {
         .ok_or_else(|| format!("{} has no toolchain channel", path.display()).into())
 }
 
-fn build_minimal_ffmpeg(repository: &Path, backend: BuildBackend) -> AgentResult<()> {
-    const VERSION: &str = "8.1.2";
-    const MODE: &str = "video-fast-noswscale";
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FfmpegVerification {
+    Stamp,
+    Full,
+}
+
+const FFMPEG_VERSION: &str = "8.1.2";
+const FFMPEG_MODE: &str = "video-fast-noswscale";
+const FFMPEG_CONFIGURE: &str = r#"rm -rf ../dist
+./configure --prefix=/project/apps/mister/target/ffmpeg-minimal/armv7/dist --cross-prefix=arm-linux-gnueabihf- --arch=arm --cpu=cortex-a9 --target-os=linux --enable-cross-compile --extra-cflags='-O3 -mcpu=cortex-a9 -mfpu=neon-vfpv3 -mfloat-abi=hard' --extra-cxxflags='-O3 -mcpu=cortex-a9 -mfpu=neon-vfpv3 -mfloat-abi=hard' --enable-static --disable-shared --enable-pic --disable-autodetect --disable-programs --disable-doc --disable-debug --enable-stripping --disable-everything --disable-avdevice --disable-avfilter --enable-swresample --enable-avcodec --enable-avformat --enable-avutil --disable-swscale --enable-decoder=h264 --enable-decoder=aac --enable-decoder=pcm_s16le --enable-parser=aac --enable-parser=h264 --enable-demuxer=mov --enable-protocol=file
+grep -q '^#define CONFIG_GPL 0$' config.h && grep -q '^#define CONFIG_VERSION3 0$' config.h && grep -q '^#define CONFIG_NONFREE 0$' config.h
+make install"#;
+
+fn build_minimal_ffmpeg(
+    repository: &Path,
+    backend: BuildBackend,
+    verification: FfmpegVerification,
+) -> AgentResult<()> {
     let app = repository.join("apps/mister");
     let work = app.join("target/ffmpeg-minimal/armv7");
-    let source = work.join(format!("ffmpeg-{VERSION}"));
+    let source = work.join(format!("ffmpeg-{FFMPEG_VERSION}"));
     let dist = work.join("dist");
+    let stamp = dist.join(".mister-minimal-ffmpeg-cache-v2");
+    let expected_stamp = ffmpeg_recipe_stamp(repository, backend)?;
     let required = [
-        format!(".mister-minimal-ffmpeg-{VERSION}-h264-aac-s16le-swresample-{MODE}-cortex-a9-o3"),
-        "include/libavcodec/avcodec.h".into(),
-        "include/libavcodec/version_major.h".into(),
-        "include/libavformat/avformat.h".into(),
-        "include/libavutil/avutil.h".into(),
-        "include/libswresample/swresample.h".into(),
-        "lib/libavcodec.a".into(),
-        "lib/libavformat.a".into(),
-        "lib/libavutil.a".into(),
-        "lib/libswresample.a".into(),
-        "lib/pkgconfig/libavcodec.pc".into(),
-        "lib/pkgconfig/libswresample.pc".into(),
+        "include/libavcodec/avcodec.h",
+        "include/libavcodec/version_major.h",
+        "include/libavformat/avformat.h",
+        "include/libavutil/avutil.h",
+        "include/libswresample/swresample.h",
+        "lib/libavcodec.a",
+        "lib/libavformat.a",
+        "lib/libavutil.a",
+        "lib/libswresample.a",
+        "lib/pkgconfig/libavcodec.pc",
+        "lib/pkgconfig/libswresample.pc",
     ];
-    if required.iter().all(|name| dist.join(name).is_file()) {
-        return verify_minimal_ffmpeg(&source, &dist);
+    let cache_matches = ffmpeg_cache_matches(&dist, &stamp, &expected_stamp, &required);
+    if cache_matches {
+        return match verification {
+            FfmpegVerification::Stamp => Ok(()),
+            FfmpegVerification::Full => verify_cached_ffmpeg(&source, &dist, &stamp),
+        };
     }
     if dist.exists() {
         std::fs::remove_dir_all(&dist)
@@ -753,7 +938,7 @@ fn build_minimal_ffmpeg(repository: &Path, backend: BuildBackend) -> AgentResult
                 "clone",
                 "--depth=1",
                 "-b",
-                &format!("n{VERSION}"),
+                &format!("n{FFMPEG_VERSION}"),
                 "https://github.com/FFmpeg/FFmpeg",
             ])
             .arg(&source);
@@ -763,32 +948,36 @@ fn build_minimal_ffmpeg(repository: &Path, backend: BuildBackend) -> AgentResult
         .map_err(|error| format!("cannot detect online CPUs: {error}"))?
         .get()
         .to_string();
-    let configure = r#"rm -rf ../dist
-./configure --prefix=/project/apps/mister/target/ffmpeg-minimal/armv7/dist --cross-prefix=arm-linux-gnueabihf- --arch=arm --cpu=cortex-a9 --target-os=linux --enable-cross-compile --extra-cflags='-O3 -mcpu=cortex-a9 -mfpu=neon-vfpv3 -mfloat-abi=hard' --extra-cxxflags='-O3 -mcpu=cortex-a9 -mfpu=neon-vfpv3 -mfloat-abi=hard' --enable-static --disable-shared --enable-pic --disable-autodetect --disable-programs --disable-doc --disable-debug --enable-stripping --disable-everything --disable-avdevice --disable-avfilter --enable-swresample --enable-avcodec --enable-avformat --enable-avutil --disable-swscale --enable-decoder=h264 --enable-decoder=aac --enable-decoder=pcm_s16le --enable-parser=aac --enable-parser=h264 --enable-demuxer=mov --enable-protocol=file
-grep -q '^#define CONFIG_GPL 0$' config.h && grep -q '^#define CONFIG_VERSION3 0$' config.h && grep -q '^#define CONFIG_NONFREE 0$' config.h
-make install"#;
     let mut runner = match backend {
         BuildBackend::AppleContainer => {
-            prepare_container(
-                repository,
-                &PathBuf::from("/private/tmp/mister-magik-apple-container-target"),
-            )?;
             let mut command = Command::new("container");
             command
                 .current_dir(repository)
                 .args([
-                    "run", "--arch", "arm64", "--rm", "--cpus", &cpus, "--memory", "8g", "--env",
+                    "run",
+                    "--progress",
+                    "none",
+                    "--arch",
+                    "arm64",
+                    "--rm",
+                    "--cpus",
+                    &cpus,
+                    "--memory",
+                    "8g",
+                    "--env",
                 ])
                 .arg(format!("MAKEFLAGS=-j{cpus}"))
                 .arg("--volume")
                 .arg(format!("{}:/project", repository.display()))
                 .args([
                     "--workdir",
-                    &format!("/project/apps/mister/target/ffmpeg-minimal/armv7/ffmpeg-{VERSION}"),
+                    &format!(
+                        "/project/apps/mister/target/ffmpeg-minimal/armv7/ffmpeg-{FFMPEG_VERSION}"
+                    ),
                     IMAGE,
                     "sh",
                     "-ec",
-                    configure,
+                    FFMPEG_CONFIGURE,
                 ]);
             command
         }
@@ -816,19 +1005,53 @@ make install"#;
                 .arg(format!("{}:/project", repository.display()))
                 .args([
                     "-w",
-                    &format!("/project/apps/mister/target/ffmpeg-minimal/armv7/ffmpeg-{VERSION}"),
+                    &format!(
+                        "/project/apps/mister/target/ffmpeg-minimal/armv7/ffmpeg-{FFMPEG_VERSION}"
+                    ),
                     image,
                     "sh",
                     "-ec",
-                    configure,
+                    FFMPEG_CONFIGURE,
                 ]);
             command
         }
     };
     run_bounded(&mut runner, BUILD_DEADLINE)?;
-    std::fs::write(dist.join(&required[0]), b"")
-        .map_err(|error| format!("cannot stamp FFmpeg cache: {error}"))?;
-    verify_minimal_ffmpeg(&source, &dist)
+    if !required.iter().all(|name| dist.join(name).is_file()) {
+        return Err("minimal FFmpeg build did not produce every required output".into());
+    }
+    verify_minimal_ffmpeg(&source, &dist)?;
+    write_atomic(&stamp, format!("{expected_stamp}\n").as_bytes())
+}
+
+fn verify_cached_ffmpeg(source: &Path, dist: &Path, stamp: &Path) -> AgentResult<()> {
+    if let Err(error) = verify_minimal_ffmpeg(source, dist) {
+        let _ = std::fs::remove_file(stamp);
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn ffmpeg_cache_matches(
+    dist: &Path,
+    stamp: &Path,
+    expected_stamp: &str,
+    required: &[&str],
+) -> bool {
+    required.iter().all(|name| dist.join(name).is_file())
+        && std::fs::read_to_string(stamp).is_ok_and(|current| current.trim() == expected_stamp)
+}
+
+fn ffmpeg_recipe_stamp(repository: &Path, backend: BuildBackend) -> AgentResult<String> {
+    let backend_recipe = match backend {
+        BuildBackend::AppleContainer => {
+            sha256(&repository.join("apps/mister/Dockerfile.cross-armv7"))?
+        }
+        BuildBackend::Cross => sha256(&repository.join("apps/mister/Cross.toml"))?,
+    };
+    Ok(sha256_text(&format!(
+        "v2\nversion={FFMPEG_VERSION}\nmode={FFMPEG_MODE}\ntarget={TARGET}\nbackend={backend:?}\nbackend_recipe={backend_recipe}\nconfigure={FFMPEG_CONFIGURE}\n"
+    )))
 }
 
 fn numeric_identity(flag: &str) -> AgentResult<String> {
@@ -869,23 +1092,23 @@ fn verify_minimal_ffmpeg(source: &Path, dist: &Path) -> AgentResult<()> {
     Ok(())
 }
 
-impl BuildActions for ProcessBuildActions<'_> {
+impl BuildActions for ProcessBuildActions<'_, '_, '_> {
     fn run(&mut self, phase: Phase) -> AgentResult<()> {
         match phase {
             Phase::Infer | Phase::Complete => Ok(()),
-            Phase::Preflight => preflight(self.backend),
+            Phase::Preflight => self.session.ensure_preflight(),
             Phase::PrepareContainer => {
-                if self.backend == BuildBackend::AppleContainer {
-                    prepare_container(self.repository, &self.target_dir)
-                } else {
-                    Ok(())
+                if self.session.backend == BuildBackend::AppleContainer {
+                    create_target_dir(&self.target_dir)?;
+                    self.session.ensure_container_ready()?;
                 }
+                Ok(())
             }
             Phase::Compile => self.compile(),
             Phase::Verify => {
                 self.mirror_artifact()?;
                 if self.spec.mode == BuildMode::Build
-                    && !self.repository.join(&self.spec.artifact).is_file()
+                    && !self.session.repository.join(&self.spec.artifact).is_file()
                 {
                     return Err("build completed without its expected output".into());
                 }
@@ -931,26 +1154,27 @@ fn preflight(backend: BuildBackend) -> AgentResult<()> {
     }
 }
 
-fn prepare_container(repository: &Path, target_dir: &Path) -> AgentResult<()> {
+fn create_target_dir(target_dir: &Path) -> AgentResult<()> {
     std::fs::create_dir_all(target_dir)
-        .map_err(|error| format!("cannot create target cache: {error}"))?;
+        .map_err(|error| format!("cannot create target cache: {error}").into())
+}
+
+fn prepare_container_image(repository: &Path) -> AgentResult<()> {
     let dockerfile = repository.join("apps/mister/Dockerfile.cross-armv7");
-    let stamp_path = PathBuf::from(format!("{}.image.sha256", target_dir.display()));
-    let expected = format!("{IMAGE}  {}", sha256(&dockerfile)?);
+    let stamp_path = Path::new(IMAGE_STAMP);
+    let dockerfile_sha256 = sha256(&dockerfile)?;
     let current = std::fs::read_to_string(&stamp_path).unwrap_or_default();
-    let image_ok = Command::new("container")
-        .args(["run", "--arch", "arm64", "--rm", IMAGE, "uname", "-m"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success());
-    if current.trim() == expected && image_ok {
-        return Ok(());
+    if let Some(image_id) = inspect_container_image().unwrap_or_default() {
+        let expected = image_stamp(&dockerfile_sha256, &image_id);
+        if current.trim() == expected {
+            return Ok(());
+        }
     }
     let mut build = Command::new("container");
     build.current_dir(repository.join("apps/mister")).args([
         "build",
+        "--progress",
+        "plain",
         "--arch",
         "arm64",
         "--file",
@@ -960,18 +1184,75 @@ fn prepare_container(repository: &Path, target_dir: &Path) -> AgentResult<()> {
         ".",
     ]);
     run_bounded(&mut build, BUILD_DEADLINE)?;
-    std::fs::write(stamp_path, format!("{expected}\n"))
-        .map_err(|error| format!("cannot update image stamp: {error}"))?;
-    Ok(())
+    let image_id = inspect_container_image()?
+        .ok_or("container image build completed without a Linux/arm64 image")?;
+    write_atomic(
+        stamp_path,
+        format!("{}\n", image_stamp(&dockerfile_sha256, &image_id)).as_bytes(),
+    )
 }
 
-fn requested_cargo_timings() -> bool {
+fn image_stamp(dockerfile_sha256: &str, image_id: &str) -> String {
+    format!("image\t{IMAGE}\tdockerfile_sha256\t{dockerfile_sha256}\timage_id\t{image_id}")
+}
+
+fn inspect_container_image() -> AgentResult<Option<String>> {
+    let output = Command::new("container")
+        .args(["image", "inspect", IMAGE])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| format!("cannot inspect Apple container image: {error}"))?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    parse_container_image_id(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn parse_container_image_id(text: &str) -> AgentResult<Option<String>> {
+    let value: Value = serde_json::from_str(text)
+        .map_err(|error| format!("invalid container image JSON: {error}"))?;
+    let images = value
+        .as_array()
+        .ok_or("container image inspection did not return an array")?;
+    for image in images {
+        if image.pointer("/configuration/name").and_then(Value::as_str) != Some(IMAGE) {
+            continue;
+        }
+        let arm64 = image
+            .get("variants")
+            .and_then(Value::as_array)
+            .is_some_and(|variants| {
+                variants.iter().any(|variant| {
+                    variant.pointer("/platform/os").and_then(Value::as_str) == Some("linux")
+                        && variant
+                            .pointer("/platform/architecture")
+                            .and_then(Value::as_str)
+                            == Some("arm64")
+                })
+            });
+        if arm64 {
+            let id = image
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+                .ok_or("container image inspection has no image ID")?;
+            return Ok(Some(id.to_owned()));
+        }
+    }
+    Ok(None)
+}
+
+fn requested_cargo_timings() -> AgentResult<bool> {
     let value = std::env::var("MISTER_CARGO_TIMINGS").ok();
     cargo_timings_enabled(value.as_deref())
 }
 
-fn cargo_timings_enabled(value: Option<&str>) -> bool {
-    value != Some("0")
+fn cargo_timings_enabled(value: Option<&str>) -> AgentResult<bool> {
+    match value {
+        None | Some("0") => Ok(false),
+        Some("1") => Ok(true),
+        Some(other) => Err(format!("invalid MISTER_CARGO_TIMINGS={other:?}; use 0 or 1").into()),
+    }
 }
 
 fn cargo_args(spec: &BuildSpec, timings: bool) -> Vec<OsString> {
@@ -1045,6 +1326,24 @@ fn sha256(path: &Path) -> AgentResult<String> {
         }
     }
     Err(format!("cannot hash {}", path.display()).into())
+}
+
+fn sha256_text(text: &str) -> String {
+    let mut digest = Sha256::new();
+    digest.update(text.as_bytes());
+    digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn write_atomic(path: &Path, contents: &[u8]) -> AgentResult<()> {
+    let temporary = path.with_extension(format!("tmp.{}", std::process::id()));
+    std::fs::write(&temporary, contents)
+        .map_err(|error| format!("cannot write {}: {error}", temporary.display()))?;
+    std::fs::rename(&temporary, path)
+        .map_err(|error| format!("cannot publish {}: {error}", path.display()).into())
 }
 
 fn git_output(repository: &Path, args: &[&str]) -> AgentResult<String> {
@@ -1156,6 +1455,62 @@ fn run_bounded(command: &mut Command, deadline: Duration) -> AgentResult<()> {
 mod tests {
     use super::*;
     use std::ffi::OsStr;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temporary_directory(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-build-{label}-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    fn fixed_metadata(source_dirty: bool) -> BuildMetadata {
+        BuildMetadata {
+            build_number: "2429".into(),
+            version: "0.2.2429".into(),
+            build_time: "28.7.2026 12:00".into(),
+            source_revision: "deadbeef".into(),
+            source_dirty,
+        }
+    }
+
+    fn manager_receipt_fixture() -> (PathBuf, BuildSpec, BuildMetadata) {
+        let repository = temporary_directory("manager-receipt");
+        let spec = BuildSpec::for_recipe(BuildRecipe::ManagerDevice);
+        let metadata = fixed_metadata(false);
+        let artifact = repository.join(&spec.artifact);
+        let lock = repository.join(lockfile(spec.target));
+        let toolchain = repository.join("apps/mister/rust-toolchain.toml");
+        for path in [&artifact, &lock, &toolchain] {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        }
+        std::fs::write(&artifact, b"manager").unwrap();
+        std::fs::write(&lock, b"lock").unwrap();
+        std::fs::write(&toolchain, b"toolchain").unwrap();
+        let receipt = format!(
+            "build_receipt_tsv\tbinary_sha256={}\tprofile={}\tfeatures={}\tui_scope={}\tbuild_number={}\tversion={}\tsource_commit={}\tsource_dirty=0\tcache_identity={}\tlock_sha256={}\ttoolchain_sha256={}\n",
+            sha256(&artifact).unwrap(),
+            spec.profile,
+            spec.features.join(","),
+            spec.ui_scope.label(),
+            metadata.build_number,
+            metadata.version,
+            metadata.source_revision,
+            spec.cache_identity,
+            sha256(&lock).unwrap(),
+            sha256(&toolchain).unwrap(),
+        );
+        let receipt_path = repository.join(&spec.receipt);
+        std::fs::create_dir_all(receipt_path.parent().unwrap()).unwrap();
+        std::fs::write(receipt_path, receipt).unwrap();
+        (repository, spec, metadata)
+    }
 
     #[derive(Default)]
     struct FakeActions {
@@ -1185,6 +1540,7 @@ mod tests {
         assert_eq!(launcher.ui_scope, UiScope::Launcher);
         let library = BuildSpec::for_recipe(BuildRecipe::ValidateLibrary);
         assert_eq!(library.mode, BuildMode::CheckLibrary);
+        assert!(BuildRecipe::for_command(BuildCommand::ReleaseBinaries).is_none());
     }
 
     #[test]
@@ -1231,10 +1587,11 @@ mod tests {
     }
 
     #[test]
-    fn cargo_timings_default_on_and_follow_the_explicit_switch() {
-        assert!(cargo_timings_enabled(None));
-        assert!(cargo_timings_enabled(Some("1")));
-        assert!(!cargo_timings_enabled(Some("0")));
+    fn cargo_timings_default_off_and_follow_the_explicit_switch() {
+        assert!(!cargo_timings_enabled(None).unwrap());
+        assert!(cargo_timings_enabled(Some("1")).unwrap());
+        assert!(!cargo_timings_enabled(Some("0")).unwrap());
+        assert!(cargo_timings_enabled(Some("true")).is_err());
 
         let spec = BuildSpec::for_recipe(BuildRecipe::RuntimeFast);
         assert!(
@@ -1334,5 +1691,165 @@ mod tests {
         assert!(!parse_source_dirty("0").unwrap());
         assert!(parse_source_dirty("true").unwrap());
         assert!(parse_source_dirty("unknown").is_err());
+    }
+
+    #[test]
+    fn image_inspection_requires_the_exact_linux_arm64_image() {
+        let valid = format!(
+            r#"[{{"configuration":{{"name":"{IMAGE}"}},"id":"sha256:abc","variants":[{{"platform":{{"os":"linux","architecture":"arm64"}}}}]}}]"#
+        );
+        assert_eq!(
+            parse_container_image_id(&valid).unwrap(),
+            Some("sha256:abc".into())
+        );
+        assert_eq!(
+            parse_container_image_id(&valid.replace("arm64", "amd64")).unwrap(),
+            None
+        );
+        assert_eq!(
+            parse_container_image_id(&valid.replace(IMAGE, "another:image")).unwrap(),
+            None
+        );
+        assert_eq!(parse_container_image_id("[]").unwrap(), None);
+        assert!(parse_container_image_id("{").is_err());
+    }
+
+    #[test]
+    fn ensure_once_retries_failures_and_runs_one_success() {
+        let mut completed = false;
+        let mut attempts = 0;
+        assert!(
+            ensure_once(&mut completed, || {
+                attempts += 1;
+                Err("failure".into())
+            })
+            .is_err()
+        );
+        assert!(!completed);
+        ensure_once(&mut completed, || {
+            attempts += 1;
+            Ok(())
+        })
+        .unwrap();
+        ensure_once(&mut completed, || {
+            attempts += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(attempts, 2);
+    }
+
+    #[test]
+    fn apple_container_build_executes_cargo_directly_without_a_shell() {
+        let spec = BuildSpec::for_recipe(BuildRecipe::RuntimeDevice(UiScope::All));
+        let command = apple_container_cargo_command(
+            Path::new("/checkout"),
+            &spec,
+            Path::new("/target-cache"),
+            &fixed_metadata(false),
+            false,
+        )
+        .unwrap();
+        let arguments: Vec<_> = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            arguments
+                .windows(2)
+                .any(|pair| pair == ["--progress", "none"])
+        );
+        assert!(arguments.windows(2).any(|pair| pair == [IMAGE, "cargo"]));
+        assert!(!arguments.iter().any(|argument| argument == "sh"));
+        assert!(!arguments.iter().any(|argument| argument == "-lc"));
+        assert!(arguments.iter().any(|argument| {
+            argument
+                == "PATH=/rust/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        }));
+        assert!(!arguments.iter().any(|argument| argument == "--timings"));
+    }
+
+    #[test]
+    fn ffmpeg_stamp_requires_every_output_and_failed_full_verification_removes_it() {
+        let root = temporary_directory("ffmpeg-stamp");
+        let dist = root.join("dist");
+        let source = root.join("source");
+        let stamp = dist.join(".mister-minimal-ffmpeg-cache-v2");
+        std::fs::create_dir_all(&dist).unwrap();
+        std::fs::create_dir_all(&source).unwrap();
+        for required in ["one", "two"] {
+            std::fs::write(dist.join(required), b"required").unwrap();
+        }
+        std::fs::write(&stamp, b"expected\n").unwrap();
+        assert!(ffmpeg_cache_matches(
+            &dist,
+            &stamp,
+            "expected",
+            &["one", "two"]
+        ));
+        std::fs::remove_file(dist.join("two")).unwrap();
+        assert!(!ffmpeg_cache_matches(
+            &dist,
+            &stamp,
+            "expected",
+            &["one", "two"]
+        ));
+        std::fs::write(dist.join("two"), b"required").unwrap();
+        assert!(verify_cached_ffmpeg(&source, &dist, &stamp).is_err());
+        assert!(!stamp.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn ffmpeg_stamp_changes_with_the_backend_recipe() {
+        let repository = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        assert_ne!(
+            ffmpeg_recipe_stamp(repository, BuildBackend::AppleContainer).unwrap(),
+            ffmpeg_recipe_stamp(repository, BuildBackend::Cross).unwrap()
+        );
+    }
+
+    #[test]
+    fn clean_manager_receipts_are_reusable_and_all_unsafe_variants_miss() {
+        let (repository, spec, metadata) = manager_receipt_fixture();
+        let clean = BuildSession {
+            repository: &repository,
+            backend: BuildBackend::Cross,
+            metadata: metadata.clone(),
+            cargo_timings: false,
+            preflight_complete: false,
+            container_ready: false,
+        };
+        assert!(clean.reusable_clean_receipt(&spec).is_ok());
+
+        let dirty = BuildSession {
+            metadata: fixed_metadata(true),
+            ..clean
+        };
+        assert!(dirty.reusable_clean_receipt(&spec).is_err());
+
+        let stale = BuildSession {
+            metadata: BuildMetadata {
+                source_revision: "stale".into(),
+                ..metadata.clone()
+            },
+            ..dirty
+        };
+        assert!(stale.reusable_clean_receipt(&spec).is_err());
+
+        std::fs::write(repository.join(&spec.artifact), b"corrupted").unwrap();
+        let corrupted = BuildSession { metadata, ..stale };
+        assert!(corrupted.reusable_clean_receipt(&spec).is_err());
+        std::fs::write(repository.join(&spec.receipt), b"malformed").unwrap();
+        assert!(corrupted.reusable_clean_receipt(&spec).is_err());
+        std::fs::remove_dir_all(repository).unwrap();
+    }
+
+    #[test]
+    fn source_identity_guard_rejects_head_and_dirty_state_changes() {
+        let metadata = fixed_metadata(false);
+        assert!(validate_source_identity(&metadata, "deadbeef", false).is_ok());
+        assert!(validate_source_identity(&metadata, "changed", false).is_err());
+        assert!(validate_source_identity(&metadata, "deadbeef", true).is_err());
     }
 }
