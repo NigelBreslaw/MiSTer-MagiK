@@ -737,7 +737,14 @@ mod tests {
         assert_eq!(outcome.generation, 2);
         assert_eq!(outcome.rebuilt_systems, 2);
         assert_eq!(outcome.removed_systems, 0);
-        assert_eq!(outcome.rebuilt, vec!["snes", "c64"]);
+        assert_eq!(
+            outcome
+                .rebuilt
+                .iter()
+                .map(|system_id| system_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["c64", "snes"]
+        );
         let _ = fs::remove_dir_all(root);
     }
 
