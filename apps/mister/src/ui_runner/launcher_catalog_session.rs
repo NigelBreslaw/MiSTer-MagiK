@@ -499,7 +499,7 @@ impl LauncherCatalogSession {
         let mut effects = CatalogSessionEffects::default();
         effects.event("library_rebuild_requested", "source=dialog");
         self.refresh_done = false;
-        self.foreground_update = true;
+        self.foreground_update = false;
         self.deferred_worker = None;
         self.refresh_failed = false;
         self.reset_counter_metrics();
@@ -509,7 +509,7 @@ impl LauncherCatalogSession {
                 root,
                 request: CatalogWorkerRequest::ForceBuild,
                 initial_cache: CatalogWorkerInitialCache::AlreadyLoadedReady,
-                execution_mode: CatalogExecutionMode::ForegroundExclusive,
+                execution_mode: CatalogExecutionMode::BackgroundInteractive,
             },
         ));
         effects.ui(catalog_rebuild_started_intent(self.foreground_update));
@@ -1703,13 +1703,26 @@ mod tests {
     }
 
     #[test]
-    fn rebuild_library_starts_foreground_force_build() {
+    fn rebuild_library_starts_background_warm_rebuild() {
         let mut session = LauncherCatalogSession::new(false);
         let effects = session.rebuild_library("/media/fat/_Arcade".to_string());
 
         assert_eq!(effect_names(effects), vec!["event", "start-worker", "ui"]);
         assert!(!session.refresh_done());
-        assert!(session.foreground_update());
+        assert!(!session.foreground_update());
+        let worker = effects
+            .effects
+            .iter()
+            .find_map(|effect| match effect {
+                CatalogSessionEffect::StartCatalogWorker(worker) => Some(worker),
+                _ => None,
+            })
+            .expect("catalog worker");
+        assert_eq!(worker.request, CatalogWorkerRequest::ForceBuild);
+        assert_eq!(
+            worker.execution_mode,
+            CatalogExecutionMode::BackgroundInteractive
+        );
     }
 
     #[test]

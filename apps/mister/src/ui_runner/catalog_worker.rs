@@ -531,7 +531,12 @@ pub(super) fn start_library_catalog_worker(
             }
             let plan = catalog_worker_plan(cache_state, request);
             let foreground_exclusive =
-                matches!(plan, CatalogWorkerPlan::ForceBuild | CatalogWorkerPlan::FreshBuild)
+                matches!(
+                    plan,
+                    CatalogWorkerPlan::InitialBuild
+                        | CatalogWorkerPlan::ForceBuild
+                        | CatalogWorkerPlan::FreshBuild
+                )
                     && execution_mode == CatalogExecutionMode::ForegroundExclusive;
             let _ = tx.send(CatalogWorkerMessage::Timing {
                 name: "catalog_refresh_decision".to_string(),
@@ -565,7 +570,7 @@ pub(super) fn start_library_catalog_worker(
                     return;
                 }
                 CatalogWorkerPlan::CheckStamp => {}
-                CatalogWorkerPlan::ForceBuild => {
+                CatalogWorkerPlan::InitialBuild | CatalogWorkerPlan::ForceBuild => {
                     send_catalog_progress(
                         &tx,
                         library_db::CatalogProgress::indexing_building_catalog(),
@@ -576,6 +581,7 @@ pub(super) fn start_library_catalog_worker(
             if matches!(
                 plan,
                 CatalogWorkerPlan::CheckStamp
+                    | CatalogWorkerPlan::InitialBuild
                     | CatalogWorkerPlan::ForceBuild
                     | CatalogWorkerPlan::FreshBuild
             ) {
@@ -982,26 +988,35 @@ fn handle_embedded_builder_event(
             snapshot_path,
             load_us,
             ..
-        } => match library_db::load_arcade_catalog_from_snapshot(
-            root,
-            std::path::Path::new(&snapshot_path),
-        ) {
-            Ok(loaded) => {
-                state.catalog_ready_seen = true;
-                send_ready_catalog(
-                    tx,
-                    loaded.catalog,
-                    None,
-                    load_us,
-                    CatalogSource::FreshBuild,
-                    true,
-                    None,
-                );
+        } => {
+            if plan == CatalogWorkerPlan::ForceBuild {
+                let _ = tx.send(CatalogWorkerMessage::Timing {
+                    name: "catalog_warm_bootstrap_ignored".to_string(),
+                    detail: "reason=published_catalog_remains_authoritative".to_string(),
+                });
+                return;
             }
-            Err(error) => {
-                let _ = tx.send(CatalogWorkerMessage::LoadFailed { error });
+            match library_db::load_arcade_catalog_from_snapshot(
+                root,
+                std::path::Path::new(&snapshot_path),
+            ) {
+                Ok(loaded) => {
+                    state.catalog_ready_seen = true;
+                    send_ready_catalog(
+                        tx,
+                        loaded.catalog,
+                        None,
+                        load_us,
+                        CatalogSource::FreshBuild,
+                        true,
+                        None,
+                    );
+                }
+                Err(error) => {
+                    let _ = tx.send(CatalogWorkerMessage::LoadFailed { error });
+                }
             }
-        },
+        }
         CatalogBuilderEvent::Persisted { summary, .. } => {
             send_persisted_catalog(tx, root, summary);
         }
@@ -1034,15 +1049,11 @@ fn handle_embedded_builder_event(
 
 fn catalog_builder_operation(
     plan: CatalogWorkerPlan,
-    execution_mode: CatalogExecutionMode,
+    _execution_mode: CatalogExecutionMode,
 ) -> Option<(BuilderOperation, &'static str)> {
     Some(match plan {
         CatalogWorkerPlan::CheckStamp => (BuilderOperation::Check, "check"),
-        CatalogWorkerPlan::ForceBuild
-            if execution_mode == CatalogExecutionMode::ForegroundExclusive =>
-        {
-            (BuilderOperation::Build, "build")
-        }
+        CatalogWorkerPlan::InitialBuild => (BuilderOperation::Build, "build"),
         CatalogWorkerPlan::ForceBuild => (BuilderOperation::Rebuild, "rebuild"),
         CatalogWorkerPlan::FreshBuild => (BuilderOperation::FreshBuild, "fresh-build"),
         CatalogWorkerPlan::LoadOnly => return None,
@@ -1159,6 +1170,7 @@ impl CatalogCacheState {
 enum CatalogWorkerPlan {
     LoadOnly,
     CheckStamp,
+    InitialBuild,
     ForceBuild,
     FreshBuild,
 }
@@ -1168,6 +1180,7 @@ impl CatalogWorkerPlan {
         match self {
             Self::LoadOnly => "load_only",
             Self::CheckStamp => "check_stamp",
+            Self::InitialBuild => "initial_build",
             Self::ForceBuild => "force_build",
             Self::FreshBuild => "fresh_build",
         }
@@ -1192,7 +1205,7 @@ fn catalog_worker_plan(
             CatalogWorkerRequest::ForceBuild => CatalogWorkerPlan::ForceBuild,
             CatalogWorkerRequest::FreshBuild => CatalogWorkerPlan::FreshBuild,
         },
-        CatalogCacheState::Empty | CatalogCacheState::Missing => CatalogWorkerPlan::ForceBuild,
+        CatalogCacheState::Empty | CatalogCacheState::Missing => CatalogWorkerPlan::InitialBuild,
     }
 }
 
@@ -1966,10 +1979,17 @@ mod tests {
         );
         assert_eq!(
             catalog_builder_operation(
-                CatalogWorkerPlan::ForceBuild,
+                CatalogWorkerPlan::InitialBuild,
                 CatalogExecutionMode::ForegroundExclusive
             ),
             Some((BuilderOperation::Build, "build"))
+        );
+        assert_eq!(
+            catalog_builder_operation(
+                CatalogWorkerPlan::ForceBuild,
+                CatalogExecutionMode::ForegroundExclusive
+            ),
+            Some((BuilderOperation::Rebuild, "rebuild"))
         );
         assert_eq!(
             catalog_builder_operation(
@@ -2003,7 +2023,7 @@ mod tests {
         let mut emit = |event| {
             handle_embedded_builder_event(
                 "/tmp",
-                CatalogWorkerPlan::ForceBuild,
+                CatalogWorkerPlan::InitialBuild,
                 "build",
                 event,
                 &tx,
@@ -2139,6 +2159,38 @@ mod tests {
     }
 
     #[test]
+    fn warm_rebuild_never_publishes_a_bootstrap_catalog() {
+        let protocol = mister_magik_catalog::builder_protocol::CATALOG_BUILDER_PROTOCOL_VERSION;
+        let (tx, rx) = mpsc::channel();
+        let mut state = EmbeddedBuilderEventState {
+            handshake_seen: true,
+            ..EmbeddedBuilderEventState::default()
+        };
+        handle_embedded_builder_event(
+            "/media/fat",
+            CatalogWorkerPlan::ForceBuild,
+            "rebuild",
+            CatalogBuilderEvent::CatalogReady {
+                protocol,
+                snapshot_path: "/tmp/ignored.nav.lz4b".into(),
+                games: 1,
+                load_us: 7,
+            },
+            &tx,
+            &mut CatalogProgressCoalescer::default(),
+            &mut state,
+        );
+
+        assert!(matches!(
+            rx.recv().expect("warm bootstrap diagnostic"),
+            CatalogWorkerMessage::Timing { name, .. }
+                if name == "catalog_warm_bootstrap_ignored"
+        ));
+        assert!(!state.catalog_ready_seen);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
     fn embedded_catalog_ready_publishes_before_post_ready_failure() {
         let protocol = mister_magik_catalog::builder_protocol::CATALOG_BUILDER_PROTOCOL_VERSION;
         let snapshot_path = std::env::temp_dir().join(format!(
@@ -2240,11 +2292,11 @@ mod tests {
     fn catalog_worker_rebuilds_missing_or_empty_cache_without_refresh() {
         assert_eq!(
             catalog_worker_plan(CatalogCacheState::Missing, CatalogWorkerRequest::CheckStamp,),
-            CatalogWorkerPlan::ForceBuild
+            CatalogWorkerPlan::InitialBuild
         );
         assert_eq!(
             catalog_worker_plan(CatalogCacheState::Empty, CatalogWorkerRequest::CheckStamp),
-            CatalogWorkerPlan::ForceBuild
+            CatalogWorkerPlan::InitialBuild
         );
     }
 
@@ -2261,7 +2313,7 @@ mod tests {
         ));
         assert_eq!(
             catalog_worker_plan(CatalogCacheState::Missing, CatalogWorkerRequest::LoadOnly),
-            CatalogWorkerPlan::ForceBuild
+            CatalogWorkerPlan::InitialBuild
         );
     }
 
@@ -2289,14 +2341,15 @@ mod tests {
 
     #[test]
     fn catalog_worker_refreshes_only_when_requested() {
-        for state in [
-            CatalogCacheState::Ready,
-            CatalogCacheState::Empty,
-            CatalogCacheState::Missing,
-        ] {
+        assert_eq!(
+            catalog_worker_plan(CatalogCacheState::Ready, CatalogWorkerRequest::ForceBuild),
+            CatalogWorkerPlan::ForceBuild
+        );
+        for state in [CatalogCacheState::Empty, CatalogCacheState::Missing] {
             assert_eq!(
                 catalog_worker_plan(state, CatalogWorkerRequest::ForceBuild),
-                CatalogWorkerPlan::ForceBuild
+                CatalogWorkerPlan::ForceBuild,
+                "an explicit rebuild remains a rebuild request"
             );
         }
     }

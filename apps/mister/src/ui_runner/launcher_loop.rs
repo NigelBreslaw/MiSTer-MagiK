@@ -5686,7 +5686,7 @@ fn apply_lifecycle_effects(
                     root,
                     CatalogWorkerRequest::ForceBuild,
                     CatalogWorkerInitialCache::AlreadyLoadedReady,
-                    CatalogExecutionMode::ForegroundExclusive,
+                    CatalogExecutionMode::BackgroundInteractive,
                 );
             }
             LauncherEffect::StartFreshCatalogBuild { root } => {
