@@ -542,6 +542,69 @@ impl LauncherScheduler {
                     now,
                 );
             }
+            CatalogWorkerMessage::ReconciliationPlanReady {
+                system_ids,
+                all_published_systems,
+            } => {
+                self.note_catalog_progress(
+                    "plan-ready",
+                    "reconciling-systems",
+                    &format!(
+                        "systems={} all_published_systems={}",
+                        system_ids.len(),
+                        u8::from(*all_published_systems)
+                    ),
+                    -1,
+                    now,
+                );
+            }
+            CatalogWorkerMessage::SystemScanning { system_id } => {
+                self.note_catalog_progress(
+                    "system-scanning",
+                    "reconciling-systems",
+                    system_id,
+                    -1,
+                    now,
+                );
+            }
+            CatalogWorkerMessage::SystemPrepared {
+                system_id,
+                generation,
+            } => {
+                self.note_catalog_progress(
+                    "system-prepared",
+                    "publishing-systems",
+                    &format!("system={system_id} generation={generation}"),
+                    -1,
+                    now,
+                );
+            }
+            CatalogWorkerMessage::SystemUpdateFailed { system_id, error } => {
+                self.note_catalog_progress(
+                    "system-update-failed",
+                    "reconciling-systems",
+                    &format!("system={system_id} error={error}"),
+                    -1,
+                    now,
+                );
+            }
+            CatalogWorkerMessage::ManifestPublished {
+                generation,
+                rebuilt,
+                removed,
+            } => {
+                self.note_catalog_progress(
+                    "manifest-published",
+                    "publishing-systems",
+                    &format!(
+                        "generation={generation} rebuilt={} removed={}",
+                        rebuilt.len(),
+                        removed.len()
+                    ),
+                    -1,
+                    now,
+                );
+            }
             CatalogWorkerMessage::SystemShardReady { system_id, games } => {
                 self.note_catalog_progress(
                     "system-ready",
