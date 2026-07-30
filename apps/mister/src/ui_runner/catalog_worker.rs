@@ -169,10 +169,23 @@ pub(super) fn start_library_catalog_worker(
             };
             let scan_event_tx = tx.clone();
             let mut scan_events = move |event: library_db::LibraryScanEvent| match event {
+                library_db::LibraryScanEvent::ReconciliationPlanReady {
+                    system_ids,
+                    all_published_systems,
+                } => {
+                    let _ =
+                        scan_event_tx.send(CatalogWorkerMessage::ReconciliationPlanReady {
+                            system_ids,
+                            all_published_systems,
+                        });
+                }
                 library_db::LibraryScanEvent::SystemDiscovered { system_id } => {
                     let _ = scan_event_tx.send(CatalogWorkerMessage::SystemDiscovered {
                         system_id,
                     });
+                }
+                library_db::LibraryScanEvent::SystemScanning { system_id } => {
+                    let _ = scan_event_tx.send(CatalogWorkerMessage::SystemScanning { system_id });
                 }
                 library_db::LibraryScanEvent::TargetProgress {
                     ordinal,
@@ -972,8 +985,21 @@ fn handle_embedded_builder_event(
                 send_catalog_progress_text(tx, progress_coalescer, &title, &detail);
             }
         }
+        CatalogBuilderEvent::PlanReady {
+            system_ids,
+            all_published_systems,
+            ..
+        } => {
+            let _ = tx.send(CatalogWorkerMessage::ReconciliationPlanReady {
+                system_ids,
+                all_published_systems,
+            });
+        }
         CatalogBuilderEvent::SystemDiscovered { system_id, .. } => {
             let _ = tx.send(CatalogWorkerMessage::SystemDiscovered { system_id });
+        }
+        CatalogBuilderEvent::SystemScanning { system_id, .. } => {
+            let _ = tx.send(CatalogWorkerMessage::SystemScanning { system_id });
         }
         CatalogBuilderEvent::Timing { name, detail, .. } => {
             let _ = tx.send(CatalogWorkerMessage::Timing { name, detail });
@@ -1227,7 +1253,14 @@ pub(super) enum CatalogWorkerMessage {
     FreshCleanupCompleted {
         removed: usize,
     },
+    ReconciliationPlanReady {
+        system_ids: Vec<String>,
+        all_published_systems: bool,
+    },
     SystemDiscovered {
+        system_id: String,
+    },
+    SystemScanning {
         system_id: String,
     },
     SystemShardReady {

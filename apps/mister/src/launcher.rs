@@ -1295,6 +1295,33 @@ impl LauncherNav {
         self.catalog_build_systems.insert(system_id.to_string());
     }
 
+    pub fn catalog_reconciliation_plan(
+        &mut self,
+        catalog: &ArcadeCatalog,
+        system_ids: &[String],
+        all_published_systems: bool,
+    ) {
+        self.catalog_build_active = true;
+        self.catalog_build_ready.clear();
+        self.catalog_build_failures.clear();
+        self.catalog_build_systems = if all_published_systems {
+            catalog
+                .systems
+                .iter()
+                .map(|system| system.id.clone())
+                .collect()
+        } else {
+            system_ids.iter().cloned().collect()
+        };
+    }
+
+    pub fn catalog_system_scanning(&mut self, system_id: &str) {
+        self.catalog_build_active = true;
+        self.catalog_build_systems.insert(system_id.to_string());
+        self.catalog_build_ready.remove(system_id);
+        self.catalog_build_failures.remove(system_id);
+    }
+
     pub fn catalog_system_ready(&mut self, system_id: &str) {
         self.catalog_build_systems.insert(system_id.to_string());
         self.catalog_build_ready.insert(system_id.to_string());
@@ -1356,7 +1383,11 @@ impl LauncherNav {
         match item.kind {
             LauncherMenuItemKind::Menu => {
                 let partial = self.menu_contains_failed_descendant(&item.id);
-                (self.catalog_build_active, partial, true)
+                (
+                    self.catalog_build_active && self.menu_contains_scanning_descendant(&item.id),
+                    partial,
+                    true,
+                )
             }
             LauncherMenuItemKind::Collection => {
                 let failed = self.catalog_build_failures.contains(&item.id);
@@ -1391,6 +1422,19 @@ impl LauncherNav {
             menu.items.iter().any(|item| match item.kind {
                 LauncherMenuItemKind::Menu => self.menu_contains_failed_descendant(&item.id),
                 LauncherMenuItemKind::Collection => self.catalog_build_failures.contains(&item.id),
+            })
+        })
+    }
+
+    fn menu_contains_scanning_descendant(&self, menu_id: &str) -> bool {
+        self.taxonomy.menu(menu_id).is_some_and(|menu| {
+            menu.items.iter().any(|item| match item.kind {
+                LauncherMenuItemKind::Menu => self.menu_contains_scanning_descendant(&item.id),
+                LauncherMenuItemKind::Collection => {
+                    self.catalog_build_systems.contains(&item.id)
+                        && !self.catalog_build_ready.contains(&item.id)
+                        && !self.catalog_build_failures.contains(&item.id)
+                }
             })
         })
     }

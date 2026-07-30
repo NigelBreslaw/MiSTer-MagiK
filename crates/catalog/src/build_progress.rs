@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Disposable durable progress for an interrupted first catalog build.
+//! Disposable durable progress for an interrupted catalog build.
 //!
 //! This database is never catalog authority. A caller must still publish the
 //! normal shard manifest, binding, scanner cache, and catalog state in order.
@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const FILE_NAME: &str = "build-progress.sqlite3";
+const COMMITTED_FILE_NAME: &str = "builder-state.sqlite3";
 const SCHEMA_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -86,6 +87,95 @@ pub struct BuildProgressJournal {
 
 pub fn path_for_root(storage_root: &Path) -> PathBuf {
     storage_root.join("state").join(FILE_NAME)
+}
+
+pub fn committed_path_for_root(storage_root: &Path) -> PathBuf {
+    storage_root.join("state").join(COMMITTED_FILE_NAME)
+}
+
+/// Seed a new resumable run from the last successfully published scan facts.
+///
+/// The committed copy is immutable for the duration of a run. All checkpoints
+/// go to `progress_path`, so an interrupted or failed run cannot advance the
+/// facts used by the next reconciliation.
+pub fn seed_from_committed(committed_path: &Path, progress_path: &Path) -> Result<bool, String> {
+    if progress_path.exists() || !committed_path.exists() {
+        return Ok(false);
+    }
+    if let Some(parent) = progress_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("create build progress dir {}: {error}", parent.display()))?;
+    }
+    std::fs::copy(committed_path, progress_path).map_err(|error| {
+        format!(
+            "seed build progress {} from {}: {error}",
+            progress_path.display(),
+            committed_path.display()
+        )
+    })?;
+    crate::sqlite_catalog::sync_parent_dir(progress_path);
+    Ok(true)
+}
+
+/// Atomically retain the completed target facts from a successful run.
+///
+/// Completed shards belong to one intended generation and are deliberately
+/// omitted from committed planner state. They remain available in the mutable
+/// progress journal until the authoritative publication has completed.
+pub fn commit_successful_state(
+    progress_path: &Path,
+    committed_path: &Path,
+) -> Result<bool, String> {
+    if !progress_path.exists() {
+        return Ok(false);
+    }
+    if let Some(parent) = committed_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "create committed builder state dir {}: {error}",
+                parent.display()
+            )
+        })?;
+    }
+    let conn = Connection::open(progress_path)
+        .map_err(|error| format!("open successful build progress: {error}"))?;
+    configure(&conn)?;
+    conn.execute("DELETE FROM completed_shards", [])
+        .map_err(|error| format!("clear generation-specific shard checkpoints: {error}"))?;
+    drop(conn);
+
+    let temp_path = committed_path.with_extension("sqlite3.tmp");
+    match std::fs::remove_file(&temp_path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(format!(
+                "remove stale committed builder state {}: {error}",
+                temp_path.display()
+            ));
+        }
+    }
+    std::fs::copy(progress_path, &temp_path).map_err(|error| {
+        format!(
+            "stage committed builder state {}: {error}",
+            temp_path.display()
+        )
+    })?;
+    let staged = std::fs::OpenOptions::new()
+        .read(true)
+        .open(&temp_path)
+        .map_err(|error| format!("open staged builder state {}: {error}", temp_path.display()))?;
+    staged
+        .sync_all()
+        .map_err(|error| format!("sync staged builder state {}: {error}", temp_path.display()))?;
+    std::fs::rename(&temp_path, committed_path).map_err(|error| {
+        format!(
+            "publish committed builder state {}: {error}",
+            committed_path.display()
+        )
+    })?;
+    crate::sqlite_catalog::sync_parent_dir(committed_path);
+    Ok(true)
 }
 
 pub fn remove(path: &Path) -> Result<(), String> {
@@ -780,5 +870,37 @@ mod tests {
         assert_eq!(journal.build_id(), build_id);
         assert_eq!(journal.completed_targets().unwrap().len(), 3);
         remove(&path).unwrap();
+    }
+
+    #[test]
+    fn successful_state_seeds_targets_without_generation_specific_shards() {
+        let progress = temp_path("build-progress-success");
+        let committed = temp_path("builder-state-success");
+        let resumed = temp_path("build-progress-seeded");
+        let (mut journal, _) =
+            BuildProgressJournal::open_or_create(&progress, &contract(), &targets()).unwrap();
+        journal.checkpoint_target(&completed()).unwrap();
+        journal
+            .record_shard(&CompletedShard {
+                system_id: "arcade".into(),
+                generation: 3,
+                sqlite_path: "systems/arcade/3.sqlite3".into(),
+                navigation_path: "systems/arcade/3.nav.lz4b".into(),
+                content_hash: "abc".into(),
+                manifest_system_json: "{}".into(),
+            })
+            .unwrap();
+        drop(journal);
+
+        assert!(commit_successful_state(&progress, &committed).unwrap());
+        assert!(seed_from_committed(&committed, &resumed).unwrap());
+        let journal = BuildProgressJournal::open_for_projection(&resumed).unwrap();
+        assert_eq!(journal.completed_targets(), Ok(vec![completed()]));
+        assert!(journal.completed_shards().unwrap().is_empty());
+
+        drop(journal);
+        for path in [&progress, &committed, &resumed] {
+            remove(path).unwrap();
+        }
     }
 }

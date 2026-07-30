@@ -55,6 +55,11 @@ pub fn default_build_progress_path() -> PathBuf {
     crate::build_progress::path_for_root(&default_sharded_catalog_path())
 }
 
+/// Last successfully published scan-target facts used for warm planning.
+pub fn default_builder_state_path() -> PathBuf {
+    crate::build_progress::committed_path_for_root(&default_sharded_catalog_path())
+}
+
 pub fn library_roots_from_env() -> Vec<String> {
     library_roots_from_value(std::env::var("MISTER_LIBRARY_ROOTS").ok().as_deref())
 }

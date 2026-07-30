@@ -63,7 +63,14 @@ pub type ScanEventCallback<'a> = Option<&'a mut dyn FnMut(LibraryScanEvent)>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LibraryScanEvent {
+    ReconciliationPlanReady {
+        system_ids: Vec<String>,
+        all_published_systems: bool,
+    },
     SystemDiscovered {
+        system_id: String,
+    },
+    SystemScanning {
         system_id: String,
     },
     TargetProgress {
@@ -3429,7 +3436,9 @@ mod tests {
         let mut systems = Vec::new();
         let mut scan_events = |event: LibraryScanEvent| match event {
             LibraryScanEvent::SystemDiscovered { system_id } => systems.push(system_id),
-            LibraryScanEvent::TargetProgress { .. } => {}
+            LibraryScanEvent::ReconciliationPlanReady { .. }
+            | LibraryScanEvent::SystemScanning { .. }
+            | LibraryScanEvent::TargetProgress { .. } => {}
         };
 
         let scan = scan_library_with_progress_and_events(&cfg, None, Some(&mut scan_events));
@@ -3459,7 +3468,9 @@ mod tests {
         let mut systems = Vec::new();
         let mut scan_events = |event: LibraryScanEvent| match event {
             LibraryScanEvent::SystemDiscovered { system_id } => systems.push(system_id),
-            LibraryScanEvent::TargetProgress { .. } => {}
+            LibraryScanEvent::ReconciliationPlanReady { .. }
+            | LibraryScanEvent::SystemScanning { .. }
+            | LibraryScanEvent::TargetProgress { .. } => {}
         };
 
         let scan = scan_library_with_progress_and_events(&cfg, None, Some(&mut scan_events));

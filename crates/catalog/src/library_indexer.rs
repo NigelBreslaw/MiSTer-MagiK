@@ -186,6 +186,8 @@ struct ResumeScan {
     journal: crate::build_progress::BuildProgressJournal,
     reusable: HashMap<u32, crate::build_progress::CompletedTarget>,
     invalidated_targets: BTreeSet<u32>,
+    affected_systems: Vec<String>,
+    all_published_systems: bool,
     target_count: usize,
     reused: usize,
     invalidated: usize,
@@ -328,6 +330,14 @@ fn prepare_resume_scan(
         projection_contract: crate::sharded_catalog::PRODUCTION_PROJECTION_CONTRACT.to_string(),
     };
     let path = crate::catalog_config::default_build_progress_path();
+    let committed_path = crate::catalog_config::default_builder_state_path();
+    let had_committed_state = committed_path.exists();
+    if let Err(error) = crate::build_progress::seed_from_committed(&committed_path, &path) {
+        crate::catalog_logln!(
+            "catalog_resume_tsv\tphase=committed-state-disabled\treason={}",
+            error.replace(['\t', '\n'], " ")
+        );
+    }
     let (journal, status) = match crate::build_progress::BuildProgressJournal::open_or_create(
         &path, &contract, &targets,
     ) {
@@ -361,11 +371,26 @@ fn prepare_resume_scan(
         .keys()
         .filter(|ordinal| !reusable.contains_key(ordinal))
         .copied()
+        .collect::<BTreeSet<_>>();
+    let affected_systems = completed
+        .iter()
+        .filter(|(ordinal, _)| invalidated_targets.contains(ordinal))
+        .flat_map(|(_, completed)| target_output_systems(&completed.output_json))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
         .collect();
+    let all_published_systems = !had_committed_state
+        || matches!(
+            &status,
+            crate::build_progress::OpenStatus::Created
+                | crate::build_progress::OpenStatus::Recreated { .. }
+        );
     let state = ResumeScan {
         journal,
         reusable,
         invalidated_targets,
+        affected_systems,
+        all_published_systems,
         target_count: targets.len(),
         reused: 0,
         invalidated: 0,
@@ -375,6 +400,19 @@ fn prepare_resume_scan(
     };
     report_resume(&state, "journal-open", 0, &format!("{status:?}"));
     Some(state)
+}
+
+fn target_output_systems(output_json: &str) -> BTreeSet<String> {
+    serde_json::from_str::<TargetOutput>(output_json)
+        .map(|output| {
+            output
+                .discoveries
+                .iter()
+                .map(catalog_system_id_for_discovery)
+                .filter(|system_id| is_reportable_catalog_system_id(system_id))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn validate_target_fingerprints(
@@ -564,6 +602,12 @@ fn scan_library_with_progress_and_events(
         ),
     );
     let mut resume = prepare_resume_scan(cfg, &plan, &excluded_targets, priority, durable_resume);
+    if let (Some(state), Some(report)) = (resume.as_ref(), scan_events.as_mut()) {
+        report(LibraryScanEvent::ReconciliationPlanReady {
+            system_ids: state.affected_systems.clone(),
+            all_published_systems: state.all_published_systems,
+        });
+    }
     let target_count =
         catalog_scan::planned_scan_target_descriptors(&cfg.roots, &plan, &excluded_targets).len();
     let prepared_payload_t = Instant::now();
@@ -607,6 +651,7 @@ fn scan_library_with_progress_and_events(
     let mut idx = 0usize;
     let mut first_discovery_reported = false;
     let mut discovered_systems = BTreeSet::new();
+    let mut scanning_systems = BTreeSet::new();
     let mut target_descriptor = None;
     let mut target_offsets = None;
     let mut target_fingerprint = Fingerprint::new();
@@ -956,6 +1001,11 @@ fn scan_library_with_progress_and_events(
                 &mut discovered_systems,
                 &mut scan_events,
             );
+            report_new_scanning_systems(
+                &discoveries[discoveries_before..],
+                &mut scanning_systems,
+                &mut scan_events,
+            );
             if discoveries.len() > discoveries_before && !first_discovery_reported {
                 first_discovery_reported = true;
                 library_db::report_library_scan_timing(
@@ -1132,6 +1182,23 @@ fn report_new_discovered_systems(
     }
 }
 
+fn report_new_scanning_systems(
+    discoveries: &[GameDiscovery],
+    scanning_systems: &mut BTreeSet<String>,
+    scan_events: &mut ScanEventCallback<'_>,
+) {
+    let Some(report) = scan_events.as_mut() else {
+        return;
+    };
+    for discovery in discoveries {
+        let system_id = catalog_system_id_for_discovery(discovery);
+        if is_reportable_catalog_system_id(&system_id) && scanning_systems.insert(system_id.clone())
+        {
+            report(LibraryScanEvent::SystemScanning { system_id });
+        }
+    }
+}
+
 fn is_reportable_catalog_system_id(system_id: &str) -> bool {
     system_id != "unknown"
 }
@@ -1148,6 +1215,33 @@ fn bootstrap_library_progress(
     LibraryBootstrapSummary {
         launchers,
         scan_us: started.elapsed().as_micros() as u64,
+    }
+}
+
+#[cfg(test)]
+mod incremental_planning_tests {
+    use super::*;
+
+    #[test]
+    fn completed_target_dependencies_preserve_exact_system_ids() {
+        let output = TargetOutput {
+            game_dir_facts: Vec::new(),
+            normal_files: Vec::new(),
+            containers: Vec::new(),
+            entries: Vec::new(),
+            ignored_files: 0,
+            discoveries: vec![crate::test_support::mra_discovery(1, "Robotron")],
+        };
+
+        assert_eq!(
+            target_output_systems(&serde_json::to_string(&output).unwrap()),
+            BTreeSet::from(["arcade".to_string()])
+        );
+    }
+
+    #[test]
+    fn corrupt_target_dependencies_force_no_false_exact_match() {
+        assert!(target_output_systems("{not-json").is_empty());
     }
 }
 

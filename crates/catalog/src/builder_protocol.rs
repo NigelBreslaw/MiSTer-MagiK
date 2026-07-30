@@ -76,7 +76,16 @@ pub enum CatalogBuilderEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         metadata: Option<CatalogProgressMetadata>,
     },
+    PlanReady {
+        protocol: u32,
+        system_ids: Vec<String>,
+        all_published_systems: bool,
+    },
     SystemDiscovered {
+        protocol: u32,
+        system_id: String,
+    },
+    SystemScanning {
         protocol: u32,
         system_id: String,
     },
@@ -129,7 +138,9 @@ impl CatalogBuilderEvent {
         match self {
             Self::Handshake { protocol, .. }
             | Self::Progress { protocol, .. }
+            | Self::PlanReady { protocol, .. }
             | Self::SystemDiscovered { protocol, .. }
+            | Self::SystemScanning { protocol, .. }
             | Self::Timing { protocol, .. }
             | Self::FreshCleanupStarted { protocol }
             | Self::FreshCleanupCompleted { protocol, .. }

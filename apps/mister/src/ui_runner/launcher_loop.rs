@@ -5885,8 +5885,19 @@ fn apply_catalog_session_effects(
                 nav.sync_launcher_taxonomy(catalog);
                 *full_bridge_dirty = true;
             }
-            CatalogSessionEffect::CatalogSystemDiscovered { system_id } => {
-                nav.catalog_system_discovered(&system_id);
+            CatalogSessionEffect::CatalogPlanReady {
+                system_ids,
+                all_published_systems,
+            } => {
+                nav.catalog_reconciliation_plan(catalog, &system_ids, all_published_systems);
+                *catalog = nav.catalog_with_build_shells(catalog.clone());
+                *catalog_version = (*catalog_version).wrapping_add(1);
+                nav.sync_launcher_taxonomy(catalog);
+                *full_bridge_dirty = true;
+            }
+            CatalogSessionEffect::CatalogSystemDiscovered { .. } => {}
+            CatalogSessionEffect::CatalogSystemScanning { system_id } => {
+                nav.catalog_system_scanning(&system_id);
                 *catalog = catalog.with_system_placeholder(&system_id);
                 *catalog_version = (*catalog_version).wrapping_add(1);
                 nav.sync_launcher_taxonomy(catalog);

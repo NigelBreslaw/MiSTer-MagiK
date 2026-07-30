@@ -503,8 +503,24 @@ fn emit_scan_event(
     emit: &mut dyn FnMut(CatalogBuilderEvent),
 ) {
     match event {
+        crate::library_db::LibraryScanEvent::ReconciliationPlanReady {
+            system_ids,
+            all_published_systems,
+        } => {
+            emit(CatalogBuilderEvent::PlanReady {
+                protocol,
+                system_ids,
+                all_published_systems,
+            });
+        }
         crate::library_db::LibraryScanEvent::SystemDiscovered { system_id } => {
             emit(CatalogBuilderEvent::SystemDiscovered {
+                protocol,
+                system_id,
+            });
+        }
+        crate::library_db::LibraryScanEvent::SystemScanning { system_id } => {
+            emit(CatalogBuilderEvent::SystemScanning {
                 protocol,
                 system_id,
             });
@@ -1138,7 +1154,12 @@ impl BuilderBackend for SystemBuilderBackend {
         crate::catalog_state::write(&crate::catalog_state::default_path(), &catalog_state)?;
         let catalog_state_us = catalog_state_started.elapsed().as_micros();
         report_catalog_memory("catalog-state-complete");
-        crate::build_progress::remove(&crate::catalog_config::default_build_progress_path())?;
+        let build_progress_path = crate::catalog_config::default_build_progress_path();
+        crate::build_progress::commit_successful_state(
+            &build_progress_path,
+            &crate::catalog_config::default_builder_state_path(),
+        )?;
+        crate::build_progress::remove(&build_progress_path)?;
         let import_us = v3_started.elapsed().as_micros() as u64;
         crate::catalog_logln!(
             "catalog_v3_projection_tsv\tstatus=published\tgeneration={}\tsystems={}\tgames={}\trebuilt_systems={}\tremoved_systems={}\telapsed_us={}",
@@ -1643,7 +1664,9 @@ mod tests {
         match event {
             CatalogBuilderEvent::Handshake { .. } => "handshake",
             CatalogBuilderEvent::Progress { .. } => "progress",
+            CatalogBuilderEvent::PlanReady { .. } => "plan-ready",
             CatalogBuilderEvent::SystemDiscovered { .. } => "system-discovered",
+            CatalogBuilderEvent::SystemScanning { .. } => "system-scanning",
             CatalogBuilderEvent::Timing { .. } => "timing",
             CatalogBuilderEvent::FreshCleanupStarted { .. } => "fresh-cleanup-started",
             CatalogBuilderEvent::FreshCleanupCompleted { .. } => "fresh-cleanup-completed",

@@ -52,7 +52,14 @@ pub(super) enum CatalogSessionEffect {
     },
     SyncCatalogBridge,
     CatalogBuildStarted,
+    CatalogPlanReady {
+        system_ids: Vec<String>,
+        all_published_systems: bool,
+    },
     CatalogSystemDiscovered {
+        system_id: String,
+    },
+    CatalogSystemScanning {
         system_id: String,
     },
     CatalogSystemReady {
@@ -294,6 +301,15 @@ impl LauncherCatalogSession {
                 ));
                 effects.ui(catalog_rebuild_started_intent(true));
             }
+            CatalogWorkerMessage::ReconciliationPlanReady {
+                system_ids,
+                all_published_systems,
+            } => {
+                effects.push(CatalogSessionEffect::CatalogPlanReady {
+                    system_ids,
+                    all_published_systems,
+                });
+            }
             CatalogWorkerMessage::SystemDiscovered { system_id } => {
                 effects.push(CatalogSessionEffect::CatalogSystemDiscovered {
                     system_id: system_id.clone(),
@@ -302,6 +318,9 @@ impl LauncherCatalogSession {
                     system_id,
                     media_gate: context.media_gate,
                 });
+            }
+            CatalogWorkerMessage::SystemScanning { system_id } => {
+                effects.push(CatalogSessionEffect::CatalogSystemScanning { system_id });
             }
             CatalogWorkerMessage::SystemShardReady { system_id, games } => {
                 effects.push(CatalogSessionEffect::CatalogSystemReady {
@@ -838,7 +857,9 @@ mod tests {
                 !matches!(
                     effect,
                     CatalogSessionEffect::CatalogBuildStarted
+                        | CatalogSessionEffect::CatalogPlanReady { .. }
                         | CatalogSessionEffect::CatalogSystemDiscovered { .. }
+                        | CatalogSessionEffect::CatalogSystemScanning { .. }
                         | CatalogSessionEffect::CatalogSystemReady { .. }
                         | CatalogSessionEffect::CatalogSystemFailed { .. }
                         | CatalogSessionEffect::PersistCatalogFailure { .. }
@@ -856,7 +877,9 @@ mod tests {
                 CatalogSessionEffect::FailSearchRequest { .. } => "search-failed",
                 CatalogSessionEffect::SyncCatalogBridge => "sync",
                 CatalogSessionEffect::CatalogBuildStarted
+                | CatalogSessionEffect::CatalogPlanReady { .. }
                 | CatalogSessionEffect::CatalogSystemDiscovered { .. }
+                | CatalogSessionEffect::CatalogSystemScanning { .. }
                 | CatalogSessionEffect::CatalogSystemReady { .. }
                 | CatalogSessionEffect::CatalogSystemFailed { .. }
                 | CatalogSessionEffect::PersistCatalogFailure { .. }
@@ -889,7 +912,9 @@ mod tests {
             if matches!(
                 effect,
                 CatalogSessionEffect::CatalogBuildStarted
+                    | CatalogSessionEffect::CatalogPlanReady { .. }
                     | CatalogSessionEffect::CatalogSystemDiscovered { .. }
+                    | CatalogSessionEffect::CatalogSystemScanning { .. }
                     | CatalogSessionEffect::CatalogSystemReady { .. }
                     | CatalogSessionEffect::CatalogSystemFailed { .. }
                     | CatalogSessionEffect::PersistCatalogFailure { .. }
@@ -914,7 +939,9 @@ mod tests {
                 }
                 CatalogSessionEffect::SyncCatalogBridge => effect_names.push("sync"),
                 CatalogSessionEffect::CatalogBuildStarted
+                | CatalogSessionEffect::CatalogPlanReady { .. }
                 | CatalogSessionEffect::CatalogSystemDiscovered { .. }
+                | CatalogSessionEffect::CatalogSystemScanning { .. }
                 | CatalogSessionEffect::CatalogSystemReady { .. }
                 | CatalogSessionEffect::CatalogSystemFailed { .. }
                 | CatalogSessionEffect::PersistCatalogFailure { .. }
