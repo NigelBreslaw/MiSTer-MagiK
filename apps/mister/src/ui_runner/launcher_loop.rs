@@ -321,7 +321,7 @@ fn sync_navigation_transition_poc_bridge(
     app: &slint_ui::launcher::Launcher,
     transition: &NavigationTransitionPoc,
 ) {
-    if !transition.enabled() {
+    if !transition.enabled() || transition.snapshot_locked() {
         return;
     }
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();

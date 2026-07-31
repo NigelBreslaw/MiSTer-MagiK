@@ -784,9 +784,9 @@ pub struct NavigationTransitionBuffers {
     destination: Vec<Rgb565Pixel>,
     working: Vec<Rgb565Pixel>,
     scale_source_x: Vec<usize>,
+    scale_target_end: Vec<usize>,
     scale_source_y: Vec<usize>,
     scale_excluded_x: Vec<bool>,
-    scale_dither_x: Vec<bool>,
     source_ready: bool,
     destination_ready: bool,
 }
@@ -807,9 +807,9 @@ impl NavigationTransitionBuffers {
         self.destination.resize(len, Rgb565Pixel(0));
         self.working.resize(len, Rgb565Pixel(0));
         self.scale_source_x.resize(width, 0);
+        self.scale_target_end.resize(width, 0);
         self.scale_source_y.resize(height, 0);
         self.scale_excluded_x.resize(width, false);
-        self.scale_dither_x.resize(width.saturating_mul(4), false);
         self.width = width;
         self.height = height;
         self.clear_ready();
@@ -1434,9 +1434,9 @@ fn render_super_scaler_shell(
         .filter(|_| buffers.destination_ready);
     let working = buffers.working.as_mut_slice();
     let scale_source_x = buffers.scale_source_x.as_mut_slice();
+    let scale_target_end = buffers.scale_target_end.as_mut_slice();
     let scale_source_y = buffers.scale_source_y.as_mut_slice();
     let scale_excluded_x = buffers.scale_excluded_x.as_mut_slice();
-    let scale_dither_x = buffers.scale_dither_x.as_mut_slice();
     let width = buffers.width;
     let height = buffers.height;
     if working.len() != source.len() || working.len() != width.saturating_mul(height) {
@@ -1548,9 +1548,9 @@ fn render_super_scaler_shell(
                     mint,
                     violet,
                     scale_source_x,
+                    scale_target_end,
                     scale_source_y,
                     scale_excluded_x,
-                    scale_dither_x,
                     &mut stats,
                 );
             }
@@ -1582,9 +1582,9 @@ fn render_super_scaler_shell(
                     mint,
                     violet,
                     scale_source_x,
+                    scale_target_end,
                     scale_source_y,
                     scale_excluded_x,
-                    scale_dither_x,
                     &mut stats,
                 );
             }
@@ -1606,9 +1606,9 @@ fn render_super_scaler_card_cover(
     mint: Rgb565Pixel,
     violet: Rgb565Pixel,
     scale_source_x: &mut [usize],
+    scale_target_end: &mut [usize],
     scale_source_y: &mut [usize],
     scale_excluded_x: &mut [bool],
-    scale_dither_x: &mut [bool],
     stats: &mut NavigationTransitionRenderStats,
 ) {
     let rect = super_scaler_card_rect(request.geometry.source_card, full, forward_cover_q16);
@@ -1639,9 +1639,9 @@ fn render_super_scaler_card_cover(
             26_000,
         ))),
         scale_source_x,
+        scale_target_end,
         scale_source_y,
         scale_excluded_x,
-        scale_dither_x,
         stats,
     );
     draw_super_scaler_impact_envelope(working, width, height, rect, forward_cover_q16, stats);
@@ -2425,9 +2425,9 @@ fn blit_scaled_card_565(
     excluded_source_rect: NavigationTransitionRect,
     texture_q16: u16,
     scale_source_x: &mut [usize],
+    scale_target_end: &mut [usize],
     scale_source_y: &mut [usize],
     scale_excluded_x: &mut [bool],
-    scale_dither_x: &mut [bool],
     stats: &mut NavigationTransitionRenderStats,
 ) {
     if source.len() != width.saturating_mul(height)
@@ -2438,9 +2438,9 @@ fn blit_scaled_card_565(
         || !target_rect.fits(width, height)
         || texture_q16 == 0
         || scale_source_x.len() < target_rect.width as usize
+        || scale_target_end.len() < target_rect.width as usize
         || scale_source_y.len() < target_rect.height as usize
         || scale_excluded_x.len() < target_rect.width as usize
-        || scale_dither_x.len() < target_rect.width as usize * 4
     {
         return;
     }
@@ -2456,17 +2456,21 @@ fn blit_scaled_card_565(
     ];
     let x_step_q16 = ((source_width as u64) << 16) / target_width as u64;
     let mut source_x_q16 = 0u64;
+    let mut span_count = 0usize;
     for target_x in 0..target_width {
         let source_x = source_rect.x as usize + (source_x_q16 >> 16) as usize;
         source_x_q16 = source_x_q16.saturating_add(x_step_q16);
-        scale_source_x[target_x] = source_x;
-        scale_excluded_x[target_x] = source_x >= excluded_source_rect.x as usize
+        let excluded = source_x >= excluded_source_rect.x as usize
             && source_x < excluded_source_rect.right() as usize;
-        let x = target_rect.x as usize + target_x;
-        for y_phase in 0..4 {
-            scale_dither_x[y_phase * target_width + target_x] =
-                DITHER[y_phase][x & 3] < texture_q16;
+        if span_count == 0
+            || scale_source_x[span_count - 1] != source_x
+            || scale_excluded_x[span_count - 1] != excluded
+        {
+            scale_source_x[span_count] = source_x;
+            scale_excluded_x[span_count] = excluded;
+            span_count += 1;
         }
+        scale_target_end[span_count - 1] = target_x + 1;
     }
     let y_step_q16 = ((source_height as u64) << 16) / target_height as u64;
     let mut source_y_q16 = 0u64;
@@ -2481,12 +2485,29 @@ fn blit_scaled_card_565(
         let source_row = source_y * width;
         let excluded_y = source_y >= excluded_source_rect.y as usize
             && source_y < excluded_source_rect.bottom() as usize;
-        let dither = &scale_dither_x[(y & 3) * target_width..][..target_width];
-        for target_x in 0..target_width {
-            if dither[target_x] && !(excluded_y && scale_excluded_x[target_x]) {
-                destination[destination_row + target_x] =
-                    source[source_row + scale_source_x[target_x]];
+        let mut target_start = 0usize;
+        for span in 0..span_count {
+            let target_end = scale_target_end[span];
+            if !(excluded_y && scale_excluded_x[span]) {
+                let pixel = source[source_row + scale_source_x[span]];
+                if texture_q16 == PROGRESS_MAX {
+                    destination[destination_row + target_start..destination_row + target_end]
+                        .fill(pixel);
+                } else {
+                    let absolute_start = target_rect.x as usize + target_start;
+                    for x_phase in 0..4 {
+                        if DITHER[y & 3][x_phase] >= texture_q16 {
+                            continue;
+                        }
+                        let phase_offset = (x_phase + 4 - (absolute_start & 3)) & 3;
+                        let first = target_start + phase_offset;
+                        for target_x in (first..target_end).step_by(4) {
+                            destination[destination_row + target_x] = pixel;
+                        }
+                    }
+                }
             }
+            target_start = target_end;
         }
     }
     stats.copied_pixels = stats
@@ -4329,9 +4350,9 @@ mod tests {
         }
         let mut destination = vec![Rgb565Pixel(0x2222); width * height];
         let mut scale_source_x = vec![0; width];
+        let mut scale_target_end = vec![0; width];
         let mut scale_source_y = vec![0; height];
         let mut scale_excluded_x = vec![false; width];
-        let mut scale_dither_x = vec![false; width * 4];
         let mut stats = NavigationTransitionRenderStats::default();
         blit_scaled_card_565(
             &mut destination,
@@ -4343,14 +4364,91 @@ mod tests {
             label,
             PROGRESS_MAX,
             &mut scale_source_x,
+            &mut scale_target_end,
             &mut scale_source_y,
             &mut scale_excluded_x,
-            &mut scale_dither_x,
             &mut stats,
         );
 
         assert_eq!(destination[3 * width + 3], Rgb565Pixel(0x2222));
         assert_eq!(destination[1 * width + 1], Rgb565Pixel(0x1111));
+    }
+
+    #[test]
+    fn scaled_card_row_spans_match_per_pixel_reference() {
+        const DITHER: [[u16; 4]; 4] = [
+            [0, 32_768, 8_192, 40_960],
+            [49_152, 16_384, 57_344, 24_576],
+            [12_288, 45_056, 4_096, 36_864],
+            [61_440, 28_672, 53_248, 20_480],
+        ];
+        let width = 13usize;
+        let height = 11usize;
+        let source = (0..width * height)
+            .map(|index| Rgb565Pixel(index as u16))
+            .collect::<Vec<_>>();
+        let source_rect = NavigationTransitionRect {
+            x: 1,
+            y: 1,
+            width: 5,
+            height: 4,
+        };
+        let target_rect = NavigationTransitionRect {
+            x: 2,
+            y: 2,
+            width: 9,
+            height: 7,
+        };
+        let excluded = NavigationTransitionRect {
+            x: 3,
+            y: 2,
+            width: 2,
+            height: 1,
+        };
+        for texture_q16 in [1, 8_192, 30_000, PROGRESS_MAX] {
+            let mut expected = vec![Rgb565Pixel(0xeeee); width * height];
+            let x_step_q16 = ((source_rect.width as u64) << 16) / target_rect.width as u64;
+            let y_step_q16 = ((source_rect.height as u64) << 16) / target_rect.height as u64;
+            for target_y in 0..target_rect.height as usize {
+                let source_y =
+                    source_rect.y as usize + ((target_y as u64 * y_step_q16) >> 16) as usize;
+                for target_x in 0..target_rect.width as usize {
+                    let x = target_rect.x as usize + target_x;
+                    let y = target_rect.y as usize + target_y;
+                    let source_x =
+                        source_rect.x as usize + ((target_x as u64 * x_step_q16) >> 16) as usize;
+                    let source_is_excluded = source_x >= excluded.x as usize
+                        && source_x < excluded.right() as usize
+                        && source_y >= excluded.y as usize
+                        && source_y < excluded.bottom() as usize;
+                    if DITHER[y & 3][x & 3] < texture_q16 && !source_is_excluded {
+                        expected[y * width + x] = source[source_y * width + source_x];
+                    }
+                }
+            }
+
+            let mut actual = vec![Rgb565Pixel(0xeeee); width * height];
+            let mut scale_source_x = vec![0; width];
+            let mut scale_target_end = vec![0; width];
+            let mut scale_source_y = vec![0; height];
+            let mut scale_excluded_x = vec![false; width];
+            blit_scaled_card_565(
+                &mut actual,
+                &source,
+                width,
+                height,
+                source_rect,
+                target_rect,
+                excluded,
+                texture_q16,
+                &mut scale_source_x,
+                &mut scale_target_end,
+                &mut scale_source_y,
+                &mut scale_excluded_x,
+                &mut NavigationTransitionRenderStats::default(),
+            );
+            assert_eq!(actual, expected, "texture={texture_q16}");
+        }
     }
 
     #[test]
@@ -5718,9 +5816,9 @@ mod tests {
         assert!(poc.buffers.destination.is_empty());
         assert!(poc.buffers.working.is_empty());
         assert!(poc.buffers.scale_source_x.is_empty());
+        assert!(poc.buffers.scale_target_end.is_empty());
         assert!(poc.buffers.scale_source_y.is_empty());
         assert!(poc.buffers.scale_excluded_x.is_empty());
-        assert!(poc.buffers.scale_dither_x.is_empty());
         assert!(poc.hud_scratch.is_empty());
     }
 }
