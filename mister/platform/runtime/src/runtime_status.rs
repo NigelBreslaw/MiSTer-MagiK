@@ -2143,7 +2143,7 @@ mod tests {
         let mut bytes = Vec::new();
         let owned = OwnedLauncherStatus::from(publisher_status(1, "arcade", "disabled"));
         write_launcher_status_json(&mut bytes, &owned, 123, 99, &counters).unwrap();
-        let streamed: Value = serde_json::from_slice(&bytes).unwrap();
+        let mut streamed: Value = serde_json::from_slice(&bytes).unwrap();
         let mut expected =
             launcher_status_value(publisher_status(1, "arcade", "disabled"), 123, 99);
         let map = expected.as_object_mut().unwrap();
@@ -2154,6 +2154,12 @@ mod tests {
         map.insert("status_worker_write_us".into(), json!(0));
         map.insert("status_worker_errors".into(), json!(0));
         map.insert("status_worker_active".into(), json!(true));
+        for field in ["rss_kb", "rss_hwm_kb"] {
+            assert!(streamed.get(field).is_some_and(Value::is_u64));
+            assert!(expected.get(field).is_some_and(Value::is_u64));
+            streamed.as_object_mut().unwrap().remove(field);
+            expected.as_object_mut().unwrap().remove(field);
+        }
         assert_eq!(streamed, expected);
     }
 

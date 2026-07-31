@@ -3349,9 +3349,8 @@ pub(super) fn run_launcher_loop(
             .take()
             .unwrap_or_else(|| pad.poll_with_debug_labels(setup_active));
         let frame_now = Instant::now();
-        let input_session = ControllerSetupInputSession::new(&pad, &setup);
         let launcher_state = launcher_automation.poll_input(
-            input_session.launcher_state(),
+            ControllerSetupInputSession::new(&pad, &setup).launcher_state(),
             effective_view.accepts_application_input() && lifecycle.startup_input_enabled(),
             setup.is_active(),
             frame_now,
@@ -3382,7 +3381,7 @@ pub(super) fn run_launcher_loop(
             let setup_state = if launcher_automation.active() {
                 launcher_state.clone()
             } else {
-                input_session.setup_state()
+                ControllerSetupInputSession::new(&pad, &setup).setup_state()
             };
             let active_idx = pad.active_idx();
             let info = pad.info();
