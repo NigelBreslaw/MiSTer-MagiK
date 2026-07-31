@@ -28,7 +28,7 @@ mod macos {
     };
     use mister_magik_fb::launcher_runtime::navigation_transition::{
         NavigationTransitionDirection, NavigationTransitionEdge, NavigationTransitionPhase,
-        NavigationTransitionPoc, NavigationTransitionStyle, hdmi_navigation_geometry,
+        NavigationTransitionPoc, hdmi_navigation_geometry,
     };
     use mister_magik_fb::launcher_runtime::settings::{FileSettingsStore, SettingsStore};
     use mister_magik_fb::launcher_taxonomy::{
@@ -124,10 +124,9 @@ mod macos {
             options.display_profile,
             options.navigation_transition_poc,
         )?;
-        application.navigation_transition.configure_preview(
-            options.navigation_transition_style,
-            options.navigation_transition_duration_ms,
-        );
+        application
+            .navigation_transition
+            .configure_preview(options.navigation_transition_duration_ms);
         application.select_scenario(options.scenario);
         if let Some(edge) = options.navigation_transition_demo {
             application.configure_navigation_transition_demo(edge)?;
@@ -379,7 +378,7 @@ mod macos {
         navigation_transition: NavigationTransitionPoc,
         pending_navigation_event: Option<LauncherEvent>,
         pending_navigation_committed: bool,
-        navigation_picker_prev: PadState,
+        navigation_previous_pad: PadState,
     }
 
     impl PreviewApplication {
@@ -500,7 +499,7 @@ mod macos {
                 ),
                 pending_navigation_event: None,
                 pending_navigation_committed: false,
-                navigation_picker_prev: PadState::default(),
+                navigation_previous_pad: PadState::default(),
             };
             application.select_scenario(scenario);
             if headless {
@@ -780,14 +779,6 @@ mod macos {
 
         fn handle_launcher_key(&mut self, code: KeyCode, state: ElementState) -> bool {
             let pressed = state == ElementState::Pressed;
-            if let Some(shoulder) = style_picker_shoulder(code) {
-                match shoulder {
-                    StylePickerShoulder::Previous => self.launcher_pad.btn_l = pressed,
-                    StylePickerShoulder::Next => self.launcher_pad.btn_r = pressed,
-                }
-                self.launcher_pad.rebuild_pressed_now();
-                return true;
-            }
             let field = match code {
                 KeyCode::ArrowUp => Some(&mut self.launcher_pad.dpad_up),
                 KeyCode::ArrowDown => Some(&mut self.launcher_pad.dpad_down),
@@ -816,15 +807,8 @@ mod macos {
             }
             let frame_now = self.launcher_epoch + self.fixed_time.get();
             let now_us = self.fixed_time.get().as_micros().min(u64::MAX as u128) as u64;
-            let previous_pad = self.navigation_picker_prev.clone();
-            let picker_left = self.launcher_pad.btn_l && !previous_pad.btn_l;
-            let picker_right = self.launcher_pad.btn_r && !previous_pad.btn_r;
-            if picker_left {
-                self.navigation_transition.cycle_style(-1);
-            } else if picker_right {
-                self.navigation_transition.cycle_style(1);
-            }
-            self.navigation_picker_prev = self.launcher_pad.clone();
+            let previous_pad = self.navigation_previous_pad.clone();
+            self.navigation_previous_pad = self.launcher_pad.clone();
 
             if self.navigation_transition.is_active() {
                 if !self.pending_navigation_committed
@@ -956,9 +940,8 @@ mod macos {
             }
             let bridge = self.launcher.global::<MisterBridge>();
             let frame = self.navigation_transition.frame();
-            bridge.set_nav_transition_picker_visible(self.navigation_transition.enabled());
+            bridge.set_nav_transition_hud_visible(self.navigation_transition.enabled());
             bridge.set_nav_transition_phase(frame.phase as i32);
-            bridge.set_nav_transition_style(self.navigation_transition.style_index() as i32);
             bridge.set_nav_transition_edge(
                 self.navigation_transition
                     .request()
@@ -970,7 +953,6 @@ mod macos {
             bridge.set_nav_transition_reveal_progress(
                 frame.reveal_progress_q16 as f32 / u16::MAX as f32,
             );
-            bridge.set_nav_transition_label(self.navigation_transition.style().label().into());
             bridge.set_nav_transition_frame_us(
                 self.navigation_transition.last_frame_work_us() as i32,
             );
@@ -1874,20 +1856,6 @@ mod macos {
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    enum StylePickerShoulder {
-        Previous,
-        Next,
-    }
-
-    fn style_picker_shoulder(code: KeyCode) -> Option<StylePickerShoulder> {
-        match code {
-            KeyCode::BracketLeft | KeyCode::PageUp => Some(StylePickerShoulder::Previous),
-            KeyCode::BracketRight | KeyCode::PageDown => Some(StylePickerShoulder::Next),
-            _ => None,
-        }
-    }
-
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum Scenario {
         Home,
         Arcade,
@@ -2133,7 +2101,6 @@ mod macos {
         navigation_transition_poc: bool,
         navigation_transition_demo: Option<NavigationTransitionEdge>,
         navigation_transition_demo_reverse: bool,
-        navigation_transition_style: Option<NavigationTransitionStyle>,
         navigation_transition_duration_ms: Option<u64>,
     }
 
@@ -2152,7 +2119,6 @@ mod macos {
             let mut navigation_transition_poc = false;
             let mut navigation_transition_demo = None;
             let mut navigation_transition_demo_reverse = false;
-            let mut navigation_transition_style = None;
             let mut navigation_transition_duration_ms = None;
             let mut arguments = arguments.into_iter();
             while let Some(argument) = arguments.next() {
@@ -2199,16 +2165,6 @@ mod macos {
                     "--no-scan" => no_scan = true,
                     "--no-download" => no_download = true,
                     "--navigation-transition-poc" => navigation_transition_poc = true,
-                    "--navigation-transition-style" => {
-                        let value = arguments
-                            .next()
-                            .ok_or("--navigation-transition-style requires a style name")?;
-                        navigation_transition_style =
-                            Some(NavigationTransitionStyle::parse(&value).ok_or_else(|| {
-                                format!("invalid navigation transition style {value:?}")
-                            })?);
-                        navigation_transition_poc = true;
-                    }
                     "--navigation-transition-duration-ms" => {
                         let value = arguments
                             .next()
@@ -2250,7 +2206,7 @@ mod macos {
                     }
                     "--help" | "-h" => {
                         return Err(
-                            "usage: mister-magik-ui-preview [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--navigation-transition-poc] [--navigation-transition-style STYLE] [--navigation-transition-duration-ms 100..10000] [--navigation-transition-demo home-consoles|home-arcade|consoles-system] [--navigation-transition-demo-reverse] [--display-profile hdmi|crt-240p|crt-288p|crt-480p|crt-576p] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N] [--output FILE.ppm]"
+                            "usage: mister-magik-ui-preview [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--navigation-transition-poc] [--navigation-transition-duration-ms 100..10000] [--navigation-transition-demo home-consoles|home-arcade|consoles-system] [--navigation-transition-demo-reverse] [--display-profile hdmi|crt-240p|crt-288p|crt-480p|crt-576p] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N] [--output FILE.ppm]"
                                 .into(),
                         );
                     }
@@ -2280,7 +2236,6 @@ mod macos {
                 navigation_transition_poc,
                 navigation_transition_demo,
                 navigation_transition_demo_reverse,
-                navigation_transition_style,
                 navigation_transition_duration_ms,
             })
         }
@@ -3055,8 +3010,6 @@ mod macos {
                 [
                     "--navigation-transition-demo",
                     "home-arcade",
-                    "--navigation-transition-style",
-                    "super-scaler-shell",
                     "--navigation-transition-duration-ms",
                     "4000",
                     "--navigation-transition-demo-reverse",
@@ -3070,32 +3023,8 @@ mod macos {
                 options.navigation_transition_demo,
                 Some(NavigationTransitionEdge::HomeToArcade)
             );
-            assert_eq!(
-                options.navigation_transition_style,
-                Some(NavigationTransitionStyle::SuperScalerShell)
-            );
             assert_eq!(options.navigation_transition_duration_ms, Some(4_000));
             assert!(options.navigation_transition_demo_reverse);
-        }
-
-        #[test]
-        fn bracket_keys_and_page_keys_drive_the_transition_style_shoulders() {
-            assert_eq!(
-                style_picker_shoulder(KeyCode::BracketLeft),
-                Some(StylePickerShoulder::Previous)
-            );
-            assert_eq!(
-                style_picker_shoulder(KeyCode::PageUp),
-                Some(StylePickerShoulder::Previous)
-            );
-            assert_eq!(
-                style_picker_shoulder(KeyCode::BracketRight),
-                Some(StylePickerShoulder::Next)
-            );
-            assert_eq!(
-                style_picker_shoulder(KeyCode::PageDown),
-                Some(StylePickerShoulder::Next)
-            );
         }
 
         #[test]

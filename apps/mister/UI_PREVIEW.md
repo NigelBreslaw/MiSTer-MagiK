@@ -26,13 +26,11 @@ Run a navigation transition directly, with an optional slowed debug duration:
 ```bash
 apps/mister/scripts/dev-ui-mac.sh \
   --navigation-transition-demo home-arcade \
-  --navigation-transition-style super-scaler-shell \
   --navigation-transition-duration-ms 4000
 ```
 
-Use `[` and `]` in the interactive preview to cycle all five styles. The
-duration option accepts 100–10000 milliseconds and also applies to deterministic
-frame captures.
+Super-Scaler Shell is the only live navigation transition. The duration option
+accepts 100–10000 milliseconds and also applies to deterministic frame captures.
 
 To smoke-test a mounted MiSTer card, let the preview discover the single valid
 card under `/Volumes`, or select it explicitly:

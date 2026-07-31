@@ -6,79 +6,12 @@
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::time::Instant;
 
-#[path = "../experiments/navigation_transitions/character_rom.rs"]
-mod character_rom;
-#[path = "../experiments/navigation_transitions/crt_cabinet.rs"]
-mod crt_cabinet;
-#[path = "../experiments/navigation_transitions/neon_cabinet.rs"]
-mod neon_cabinet;
-#[path = "../experiments/navigation_transitions/sprite_foundry.rs"]
-mod sprite_foundry;
-
 const PROGRESS_MAX: u16 = u16::MAX;
-const COVER_PROGRESS: u16 = 36_044;
 const SUPER_SCALER_COVER_PROGRESS: u16 = 31_457;
-const CHARACTER_ROM_COVER_PROGRESS: u16 = 21_000;
 const DEFAULT_PREPARATION_TIMEOUT_US: u64 = 5_000_000;
 const HUD_WIDTH: usize = 286;
 const HUD_HEIGHT: usize = 28;
 const HUD_MARGIN: usize = 8;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum NavigationTransitionStyle {
-    SuperScalerShell,
-    SpriteFoundry,
-    NeonCabinetDive,
-    CrtCabinetBoot,
-    CharacterRomRecompile,
-}
-
-impl NavigationTransitionStyle {
-    pub const ALL: [Self; 5] = [
-        Self::SuperScalerShell,
-        Self::SpriteFoundry,
-        Self::NeonCabinetDive,
-        Self::CrtCabinetBoot,
-        Self::CharacterRomRecompile,
-    ];
-
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::SuperScalerShell => "super-scaler-shell",
-            Self::SpriteFoundry => "sprite-foundry",
-            Self::NeonCabinetDive => "neon-cabinet-dive",
-            Self::CrtCabinetBoot => "crt-cabinet-boot",
-            Self::CharacterRomRecompile => "character-rom-recompile",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        let normalized = value.to_ascii_lowercase().replace('_', "-");
-        Self::ALL
-            .iter()
-            .copied()
-            .find(|style| style.label() == normalized)
-    }
-
-    pub const fn duration_us(self, edge: NavigationTransitionEdge) -> u64 {
-        match self {
-            Self::SuperScalerShell if edge.enters_system_browser() => 480_000,
-            Self::SuperScalerShell => 420_000,
-            Self::SpriteFoundry => 500_000,
-            Self::NeonCabinetDive => 417_000,
-            Self::CrtCabinetBoot => 480_000,
-            Self::CharacterRomRecompile => 433_000,
-        }
-    }
-
-    const fn cover_progress_q16(self) -> u16 {
-        match self {
-            Self::SuperScalerShell => SUPER_SCALER_COVER_PROGRESS,
-            Self::CharacterRomRecompile => CHARACTER_ROM_COVER_PROGRESS,
-            _ => COVER_PROGRESS,
-        }
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NavigationTransitionEdge {
@@ -90,6 +23,14 @@ pub enum NavigationTransitionEdge {
 impl NavigationTransitionEdge {
     pub const fn enters_system_browser(self) -> bool {
         matches!(self, Self::HomeToArcade | Self::ConsolesToSystem)
+    }
+
+    pub const fn duration_us(self) -> u64 {
+        if self.enters_system_browser() {
+            480_000
+        } else {
+            420_000
+        }
     }
 
     const fn history_index(self) -> usize {
@@ -343,7 +284,6 @@ fn source_text_group(geometry: NavigationTransitionGeometry) -> NavigationTransi
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NavigationTransitionRequest {
-    pub style: NavigationTransitionStyle,
     pub edge: NavigationTransitionEdge,
     pub direction: NavigationTransitionDirection,
     pub geometry: NavigationTransitionGeometry,
@@ -353,17 +293,15 @@ pub struct NavigationTransitionRequest {
 
 impl NavigationTransitionRequest {
     pub const fn new(
-        style: NavigationTransitionStyle,
         edge: NavigationTransitionEdge,
         direction: NavigationTransitionDirection,
         geometry: NavigationTransitionGeometry,
     ) -> Self {
         Self {
-            style,
             edge,
             direction,
             geometry,
-            duration_us: style.duration_us(edge),
+            duration_us: edge.duration_us(),
             preparation_timeout_us: DEFAULT_PREPARATION_TIMEOUT_US,
         }
     }
@@ -515,8 +453,8 @@ impl NavigationTransitionController {
         };
         let total_us = request.duration_us.max(1);
         let cover_progress = request_cover_progress_q16(request);
-        let forward_cover_us = total_us.saturating_mul(request.style.cover_progress_q16() as u64)
-            / PROGRESS_MAX as u64;
+        let forward_cover_us =
+            total_us.saturating_mul(SUPER_SCALER_COVER_PROGRESS as u64) / PROGRESS_MAX as u64;
         let cover_us = match request.direction {
             NavigationTransitionDirection::Forward => forward_cover_us,
             NavigationTransitionDirection::Reverse => total_us.saturating_sub(forward_cover_us),
@@ -530,7 +468,6 @@ impl NavigationTransitionController {
                 }
                 NavigationTransitionDirection::Reverse => {
                     PROGRESS_MAX.saturating_sub(forward_progress_q16_at_elapsed(
-                        request.style,
                         total_us,
                         total_us.saturating_sub(elapsed.min(cover_us)),
                     ))
@@ -581,7 +518,6 @@ impl NavigationTransitionController {
                 NavigationTransitionDirection::Reverse => {
                     let reverse_elapsed = cover_us.saturating_add(elapsed.min(reveal_us));
                     PROGRESS_MAX.saturating_sub(forward_progress_q16_at_elapsed(
-                        request.style,
                         total_us,
                         total_us.saturating_sub(reverse_elapsed),
                     ))
@@ -638,7 +574,7 @@ impl NavigationTransitionController {
         let cover_progress = self
             .request
             .map(request_cover_progress_q16)
-            .unwrap_or(COVER_PROGRESS);
+            .unwrap_or(SUPER_SCALER_COVER_PROGRESS);
         let endpoint = if self.progress_q16 >= cover_progress && destination_ready {
             NavigationTransitionEndpoint::Destination
         } else {
@@ -704,7 +640,7 @@ impl NavigationTransitionController {
         let cover_progress = self
             .request
             .map(request_cover_progress_q16)
-            .unwrap_or(COVER_PROGRESS);
+            .unwrap_or(SUPER_SCALER_COVER_PROGRESS);
         let cover_progress_q16 = if self.progress_q16 >= cover_progress {
             PROGRESS_MAX
         } else {
@@ -772,20 +708,16 @@ impl NavigationTransitionController {
 }
 
 const fn request_cover_progress_q16(request: NavigationTransitionRequest) -> u16 {
-    let forward_cover = request.style.cover_progress_q16();
+    let forward_cover = SUPER_SCALER_COVER_PROGRESS;
     match request.direction {
         NavigationTransitionDirection::Forward => forward_cover,
         NavigationTransitionDirection::Reverse => PROGRESS_MAX - forward_cover,
     }
 }
 
-fn forward_progress_q16_at_elapsed(
-    style: NavigationTransitionStyle,
-    total_us: u64,
-    elapsed_us: u64,
-) -> u16 {
+fn forward_progress_q16_at_elapsed(total_us: u64, elapsed_us: u64) -> u16 {
     let total_us = total_us.max(1);
-    let cover_progress = style.cover_progress_q16();
+    let cover_progress = SUPER_SCALER_COVER_PROGRESS;
     let cover_us = total_us.saturating_mul(cover_progress as u64) / PROGRESS_MAX as u64;
     let elapsed_us = elapsed_us.min(total_us);
     if elapsed_us <= cover_us {
@@ -917,22 +849,11 @@ pub struct NavigationTransitionRenderStats {
     pub copied_pixels: u64,
     pub filled_pixels: u64,
     pub outline_pixels: u64,
-    pub particle_pixels: u64,
-    pub glyph_packets: u64,
-    pub projected_rows: u64,
-    pub vector_segments: u64,
-    pub quads: u64,
-    pub spans: u64,
-    pub sparks: u64,
-    pub cell_flips: u64,
-    pub new_cell_flips: u64,
-    pub verified_rows: u64,
 }
 
 #[derive(Debug)]
 pub struct NavigationTransitionPoc {
     enabled: bool,
-    style_index: usize,
     duration_override_us: Option<u64>,
     controller: NavigationTransitionController,
     buffers: NavigationTransitionBuffers,
@@ -940,30 +861,11 @@ pub struct NavigationTransitionPoc {
     last_render_stats: NavigationTransitionRenderStats,
     last_frame_work_us: u64,
     hud_scratch: Vec<Rgb565Pixel>,
-    character_rom: character_rom::CharacterRomRenderer,
-    crt_cabinet: crt_cabinet::CrtCabinetRenderer,
-    neon_cabinet: neon_cabinet::NeonCabinetRenderer,
-    sprite_foundry: sprite_foundry::SpriteFoundryRenderer,
 }
 
 impl NavigationTransitionPoc {
     pub fn from_env(width: usize, height: usize) -> Self {
-        let style_index = std::env::var("MISTER_NAV_TRANSITION_STYLE")
-            .ok()
-            .and_then(|value| NavigationTransitionStyle::parse(&value))
-            .and_then(|style| {
-                NavigationTransitionStyle::ALL
-                    .iter()
-                    .position(|item| *item == style)
-            })
-            .unwrap_or(0)
-            .min(Self::implemented_style_count().saturating_sub(1));
-        let mut poc = Self::new_with_style(
-            width,
-            height,
-            env_flag("MISTER_NAV_TRANSITION_POC"),
-            style_index,
-        );
+        let mut poc = Self::new(width, height, env_flag("MISTER_NAV_TRANSITION_POC"));
         poc.duration_override_us = std::env::var("MISTER_NAV_TRANSITION_DEBUG_DURATION_MS")
             .ok()
             .and_then(|value| value.trim().parse::<u64>().ok())
@@ -972,30 +874,9 @@ impl NavigationTransitionPoc {
     }
 
     pub fn new(width: usize, height: usize, enabled: bool) -> Self {
-        Self::new_with_style(width, height, enabled, 0)
-    }
-
-    pub fn configure_preview(
-        &mut self,
-        style: Option<NavigationTransitionStyle>,
-        duration_ms: Option<u64>,
-    ) {
-        if let Some(style) = style
-            && let Some(index) = NavigationTransitionStyle::ALL
-                .iter()
-                .position(|item| *item == style)
-        {
-            self.style_index = index.min(Self::implemented_style_count().saturating_sub(1));
-        }
-        self.duration_override_us =
-            duration_ms.map(|milliseconds| milliseconds.clamp(100, 10_000).saturating_mul(1_000));
-    }
-
-    fn new_with_style(width: usize, height: usize, enabled: bool, style_index: usize) -> Self {
         let (buffer_width, buffer_height) = if enabled { (width, height) } else { (0, 0) };
         Self {
             enabled,
-            style_index,
             duration_override_us: None,
             controller: NavigationTransitionController::default(),
             buffers: NavigationTransitionBuffers::new(buffer_width, buffer_height),
@@ -1010,54 +891,16 @@ impl NavigationTransitionPoc {
                     0
                 }
             ],
-            sprite_foundry: sprite_foundry::SpriteFoundryRenderer::empty(if enabled {
-                sprite_foundry::configured_particle_count()
-            } else {
-                512
-            }),
-            neon_cabinet: neon_cabinet::NeonCabinetRenderer::default(),
-            crt_cabinet: crt_cabinet::CrtCabinetRenderer::new(
-                enabled && crt_cabinet::configured_reduced_effects(),
-            ),
-            character_rom: character_rom::CharacterRomRenderer::new(
-                enabled && character_rom::configured_fallback(),
-            ),
         }
     }
 
-    pub const fn implemented_style_count() -> usize {
-        5
+    pub fn configure_preview(&mut self, duration_ms: Option<u64>) {
+        self.duration_override_us =
+            duration_ms.map(|milliseconds| milliseconds.clamp(100, 10_000).saturating_mul(1_000));
     }
 
     pub const fn enabled(&self) -> bool {
         self.enabled
-    }
-
-    pub fn style(&self) -> NavigationTransitionStyle {
-        NavigationTransitionStyle::ALL[self.style_index]
-    }
-
-    pub const fn style_index(&self) -> usize {
-        self.style_index
-    }
-
-    pub fn cycle_style(&mut self, delta: i32) -> bool {
-        if !self.enabled || self.controller.is_active() {
-            return false;
-        }
-        let count = Self::implemented_style_count();
-        if count <= 1 {
-            return false;
-        }
-        self.style_index = (self.style_index as i32 + delta).rem_euclid(count as i32) as usize;
-        if self.style() == NavigationTransitionStyle::SpriteFoundry {
-            self.sprite_foundry
-                .prepare(self.buffers.width, self.buffers.height);
-        } else if self.style() == NavigationTransitionStyle::NeonCabinetDive {
-            self.neon_cabinet
-                .prepare(self.buffers.width, self.buffers.height);
-        }
-        true
     }
 
     pub fn begin(
@@ -1077,40 +920,8 @@ impl NavigationTransitionPoc {
         self.buffers.begin_capture();
         let capture_started = Instant::now();
         self.buffers.capture_source(source)?;
-        if self.style() == NavigationTransitionStyle::CharacterRomRecompile
-            && direction == NavigationTransitionDirection::Reverse
-        {
-            self.character_rom
-                .prepare(source, source, self.buffers.width, self.buffers.height);
-        } else if self.style() == NavigationTransitionStyle::SpriteFoundry {
-            self.sprite_foundry.prepare_transition(
-                self.buffers.width,
-                self.buffers.height,
-                source,
-                geometry,
-                direction,
-                edge,
-            );
-        } else if self.style() == NavigationTransitionStyle::NeonCabinetDive {
-            self.neon_cabinet.prepare_transition(
-                self.buffers.width,
-                self.buffers.height,
-                source,
-                geometry,
-                direction,
-                edge,
-            );
-        } else if direction == NavigationTransitionDirection::Forward {
-            self.neon_cabinet.cache_forward_source(
-                self.buffers.width,
-                self.buffers.height,
-                source,
-                geometry,
-                edge,
-            );
-        }
         let capture_us = capture_started.elapsed().as_micros().min(u64::MAX as u128) as u64;
-        let mut request = NavigationTransitionRequest::new(self.style(), edge, direction, geometry);
+        let mut request = NavigationTransitionRequest::new(edge, direction, geometry);
         if let Some(duration_us) = self.duration_override_us {
             request.duration_us = duration_us;
         }
@@ -1134,59 +945,6 @@ impl NavigationTransitionPoc {
     ) -> Result<(), NavigationTransitionFailure> {
         let prepare_started = Instant::now();
         self.buffers.capture_destination(destination)?;
-        if self.style() == NavigationTransitionStyle::SpriteFoundry
-            && let Some(request) = self.controller.request()
-            && request.direction == NavigationTransitionDirection::Forward
-        {
-            self.sprite_foundry.prepare_destination_title(
-                self.buffers.width,
-                self.buffers.height,
-                destination,
-                request.geometry.destination_title,
-                request.edge,
-            );
-        }
-        if self.style() == NavigationTransitionStyle::NeonCabinetDive
-            && let Some(request) = self.controller.request()
-        {
-            self.neon_cabinet.prepare_destination(
-                self.buffers.width,
-                self.buffers.height,
-                destination,
-                request.geometry,
-                request.direction,
-                request.edge,
-            );
-        } else if let Some(request) = self.controller.request()
-            && request.direction == NavigationTransitionDirection::Forward
-        {
-            self.neon_cabinet.cache_forward_destination(
-                self.buffers.width,
-                self.buffers.height,
-                destination,
-                request.geometry,
-                request.edge,
-            );
-        }
-        if self.style() == NavigationTransitionStyle::CharacterRomRecompile
-            && let Some(request) = self.controller.request()
-            && request.direction == NavigationTransitionDirection::Forward
-        {
-            let source = self
-                .buffers
-                .source()
-                .ok_or(NavigationTransitionFailure::SnapshotSizeMismatch)?;
-            let destination = self
-                .buffers
-                .destination()
-                .ok_or(NavigationTransitionFailure::SnapshotSizeMismatch)?;
-            self.character_rom.prepare(
-                source,
-                destination,
-                self.buffers.width,
-                self.buffers.height,
-            );
-        }
         self.controller.note_destination_prepared(
             prepare_started.elapsed().as_micros().min(u64::MAX as u128) as u64,
         );
@@ -1205,40 +963,8 @@ impl NavigationTransitionPoc {
             .ok_or(NavigationTransitionFailure::SnapshotSizeMismatch)?;
         let frame = self.controller.frame();
         let started = Instant::now();
-        let mut stats = match request.style {
-            NavigationTransitionStyle::SuperScalerShell => {
-                render_super_scaler_shell(&mut self.buffers, request, frame)?
-            }
-            NavigationTransitionStyle::SpriteFoundry => sprite_foundry::render_sprite_foundry(
-                &mut self.sprite_foundry,
-                &mut self.buffers,
-                request,
-                frame,
-            )?,
-            NavigationTransitionStyle::NeonCabinetDive => neon_cabinet::render_neon_cabinet(
-                &mut self.neon_cabinet,
-                &mut self.buffers,
-                request,
-                frame,
-            )?,
-            NavigationTransitionStyle::CrtCabinetBoot => crt_cabinet::render_crt_cabinet(
-                &self.crt_cabinet,
-                &mut self.buffers,
-                request,
-                frame,
-            )?,
-            NavigationTransitionStyle::CharacterRomRecompile => {
-                character_rom::render_character_rom(
-                    &mut self.character_rom,
-                    &mut self.buffers,
-                    request,
-                    frame,
-                )?
-            }
-        };
-        if request.style == NavigationTransitionStyle::SuperScalerShell {
-            render_hero_label_last(&mut self.buffers, request, frame, &mut stats)?;
-        }
+        let mut stats = render_super_scaler_shell(&mut self.buffers, request, frame)?;
+        render_hero_label_last(&mut self.buffers, request, frame, &mut stats)?;
         stats.render_us = started.elapsed().as_micros().min(u64::MAX as u128) as u64;
         self.controller
             .telemetry_mut()
@@ -1375,9 +1101,6 @@ fn render_super_scaler_shell(
     request: NavigationTransitionRequest,
     frame: NavigationTransitionFrame,
 ) -> Result<NavigationTransitionRenderStats, NavigationTransitionFailure> {
-    if request.style != NavigationTransitionStyle::SuperScalerShell {
-        return render_legacy_decorated_shell(buffers, request, frame);
-    }
     let source = buffers
         .source
         .get(..)
@@ -1611,201 +1334,6 @@ fn render_super_scaler_card_cover(
     }
     if forward_cover_q16 < 62_000 {
         draw_outline_565(working, width, height, rect, mint, stats);
-    }
-}
-
-fn render_legacy_decorated_shell(
-    buffers: &mut NavigationTransitionBuffers,
-    request: NavigationTransitionRequest,
-    frame: NavigationTransitionFrame,
-) -> Result<NavigationTransitionRenderStats, NavigationTransitionFailure> {
-    let source = buffers
-        .source
-        .get(..)
-        .filter(|_| buffers.source_ready)
-        .ok_or(NavigationTransitionFailure::SnapshotSizeMismatch)?;
-    let destination = buffers
-        .destination
-        .get(..)
-        .filter(|_| buffers.destination_ready);
-    let working = buffers.working.as_mut_slice();
-    if working.len() != source.len() {
-        return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
-    }
-    working.copy_from_slice(source);
-    let mut stats = NavigationTransitionRenderStats {
-        copied_pixels: source.len() as u64,
-        ..NavigationTransitionRenderStats::default()
-    };
-    let width = buffers.width;
-    let height = buffers.height;
-    let full = NavigationTransitionRect {
-        x: 0,
-        y: 0,
-        width: width.min(u16::MAX as usize) as u16,
-        height: height.min(u16::MAX as usize) as u16,
-    };
-    let shell = Rgb565Pixel(0x18c8);
-    let mint = Rgb565Pixel(0x06b4);
-    let purple = Rgb565Pixel(0x72ae);
-
-    if frame.phase == NavigationTransitionPhase::Settled {
-        match frame.endpoint {
-            Some(NavigationTransitionEndpoint::Source) => return Ok(stats),
-            Some(NavigationTransitionEndpoint::Destination) => {
-                if let Some(destination) = destination {
-                    working.copy_from_slice(destination);
-                    stats.copied_pixels =
-                        stats.copied_pixels.saturating_add(destination.len() as u64);
-                }
-                return Ok(stats);
-            }
-            None => {}
-        }
-    }
-
-    match request.direction {
-        NavigationTransitionDirection::Forward => {
-            if frame.reveal_progress_q16 > 0 {
-                fill_rect_565(working, width, height, full, shell, &mut stats);
-                if let Some(destination) = destination {
-                    reveal_legacy_destination_bands(
-                        working,
-                        destination,
-                        width,
-                        height,
-                        frame.reveal_progress_q16,
-                        request.edge.enters_system_browser(),
-                        &mut stats,
-                    );
-                }
-            }
-            let cover = ease_out_cubic_q16(frame.cover_progress_q16);
-            let rect = lerp_rect(request.geometry.source_card, full, cover);
-            if frame.reveal_progress_q16 == 0 {
-                fill_rect_565(working, width, height, rect, shell, &mut stats);
-                for echo in 1..=3 {
-                    let delayed = cover.saturating_sub((echo * 4_000) as u16);
-                    let echo_rect = lerp_rect(request.geometry.source_card, full, delayed);
-                    draw_outline_565(
-                        working,
-                        width,
-                        height,
-                        echo_rect,
-                        if echo == 1 { mint } else { purple },
-                        &mut stats,
-                    );
-                }
-                move_label_pixels(
-                    working,
-                    source,
-                    width,
-                    height,
-                    request.geometry.source_label,
-                    request.geometry.destination_title,
-                    cover,
-                    false,
-                    &mut stats,
-                );
-            } else if frame.reveal_progress_q16 < PROGRESS_MAX {
-                move_label_pixels(
-                    working,
-                    source,
-                    width,
-                    height,
-                    request.geometry.source_label,
-                    request.geometry.destination_title,
-                    PROGRESS_MAX,
-                    false,
-                    &mut stats,
-                );
-            }
-        }
-        NavigationTransitionDirection::Reverse => {
-            let cover = ease_out_cubic_q16(frame.cover_progress_q16);
-            if frame.reveal_progress_q16 == 0 {
-                let covered_rows = height.saturating_mul(cover as usize) / PROGRESS_MAX as usize;
-                let y0 = height.saturating_sub(covered_rows) / 2;
-                fill_rect_565(
-                    working,
-                    width,
-                    height,
-                    NavigationTransitionRect {
-                        x: 0,
-                        y: y0 as u16,
-                        width: width as u16,
-                        height: covered_rows as u16,
-                    },
-                    shell,
-                    &mut stats,
-                );
-                draw_outline_565(working, width, height, full, mint, &mut stats);
-            } else if let Some(destination) = destination {
-                working.copy_from_slice(destination);
-                stats.copied_pixels = stats.copied_pixels.saturating_add(destination.len() as u64);
-                let shrink = ease_out_cubic_q16(frame.reveal_progress_q16);
-                let rect = lerp_rect(full, request.geometry.source_card, shrink);
-                fill_rect_565(working, width, height, rect, shell, &mut stats);
-                draw_outline_565(working, width, height, rect, mint, &mut stats);
-                for echo in 1..=3 {
-                    let delayed = shrink.saturating_sub((echo * 3_000) as u16);
-                    let echo_rect = lerp_rect(full, request.geometry.source_card, delayed);
-                    draw_outline_565(working, width, height, echo_rect, purple, &mut stats);
-                }
-                move_label_pixels(
-                    working,
-                    source,
-                    width,
-                    height,
-                    request.geometry.destination_title,
-                    request.geometry.source_label,
-                    shrink,
-                    true,
-                    &mut stats,
-                );
-            }
-        }
-    }
-    Ok(stats)
-}
-
-fn reveal_legacy_destination_bands(
-    working: &mut [Rgb565Pixel],
-    destination: &[Rgb565Pixel],
-    width: usize,
-    height: usize,
-    progress_q16: u16,
-    system_browser: bool,
-    stats: &mut NavigationTransitionRenderStats,
-) {
-    if working.len() != destination.len() || width == 0 {
-        return;
-    }
-    let bands = if system_browser { 12 } else { 8 };
-    for band in 0..bands {
-        let y0 = band * height / bands;
-        let y1 = (band + 1) * height / bands;
-        let delay = band * 2_200;
-        let local = progress_q16.saturating_sub(delay as u16);
-        let local = ((local as u32 * PROGRESS_MAX as u32)
-            / (PROGRESS_MAX as u32).saturating_sub(delay as u32).max(1))
-        .min(PROGRESS_MAX as u32) as u16;
-        let rise = 24usize.saturating_mul((PROGRESS_MAX - local) as usize) / PROGRESS_MAX as usize;
-        let visible_rows = (y1 - y0).saturating_mul(local as usize) / PROGRESS_MAX as usize;
-        for row in 0..visible_rows {
-            let destination_y = y1.saturating_sub(visible_rows).saturating_add(row);
-            let source_y = destination_y
-                .saturating_add(rise)
-                .min(height.saturating_sub(1));
-            let destination_start = destination_y * width;
-            let source_start = source_y * width;
-            working[destination_start..destination_start + width]
-                .copy_from_slice(&destination[source_start..source_start + width]);
-            stats.copied_pixels = stats.copied_pixels.saturating_add(width as u64);
-        }
-    }
-    if progress_q16 == PROGRESS_MAX {
-        working.copy_from_slice(destination);
     }
 }
 
@@ -3768,51 +3296,6 @@ fn label_target_rect(
     }
 }
 
-fn move_label_pixels(
-    working: &mut [Rgb565Pixel],
-    source: &[Rgb565Pixel],
-    width: usize,
-    height: usize,
-    from: NavigationTransitionRect,
-    to: NavigationTransitionRect,
-    progress_q16: u16,
-    reverse: bool,
-    stats: &mut NavigationTransitionRenderStats,
-) {
-    let Some((content, background)) = opaque_content_bounds(source, width, height, from) else {
-        return;
-    };
-    let target_height = if reverse {
-        (content.height as u32 * 2 / 3).max(1) as u16
-    } else {
-        (content.height as u32 * 3 / 2)
-            .min(to.height.max(1) as u32)
-            .max(1) as u16
-    };
-    let target_width = ((content.width as u32 * target_height as u32)
-        / content.height.max(1) as u32)
-        .min(to.width.max(1) as u32)
-        .max(1) as u16;
-    let target = NavigationTransitionRect {
-        x: if reverse {
-            to.x.saturating_add(to.width.saturating_sub(target_width) / 2)
-        } else {
-            to.x
-        },
-        y: if reverse {
-            to.y.saturating_add(to.height.saturating_sub(target_height) / 2)
-        } else {
-            to.y
-        },
-        width: target_width,
-        height: target_height,
-    };
-    let moving = lerp_rect(content, target, progress_q16);
-    blit_scaled_masked_565(
-        working, source, width, height, content, moving, background, stats,
-    );
-}
-
 fn opaque_content_bounds(
     source: &[Rgb565Pixel],
     width: usize,
@@ -4177,7 +3660,6 @@ mod tests {
 
     fn request() -> NavigationTransitionRequest {
         NavigationTransitionRequest::new(
-            NavigationTransitionStyle::SuperScalerShell,
             NavigationTransitionEdge::HomeToConsoles,
             NavigationTransitionDirection::Forward,
             geometry(),
@@ -4186,7 +3668,6 @@ mod tests {
 
     fn system_request(direction: NavigationTransitionDirection) -> NavigationTransitionRequest {
         NavigationTransitionRequest::new(
-            NavigationTransitionStyle::SuperScalerShell,
             NavigationTransitionEdge::ConsolesToSystem,
             direction,
             NavigationTransitionGeometry {
@@ -4249,35 +3730,18 @@ mod tests {
     }
 
     #[test]
-    fn style_labels_parse_and_keep_intended_durations() {
-        for style in NavigationTransitionStyle::ALL {
-            assert_eq!(NavigationTransitionStyle::parse(style.label()), Some(style));
-            assert_eq!(
-                NavigationTransitionStyle::parse(&style.label().replace('-', "_")),
-                Some(style)
-            );
-        }
+    fn super_scaler_edges_keep_intended_durations() {
         assert_eq!(
-            NavigationTransitionStyle::SuperScalerShell
-                .duration_us(NavigationTransitionEdge::HomeToConsoles),
+            NavigationTransitionEdge::HomeToConsoles.duration_us(),
             420_000
         );
         assert_eq!(
-            NavigationTransitionStyle::SuperScalerShell
-                .duration_us(NavigationTransitionEdge::HomeToArcade),
+            NavigationTransitionEdge::HomeToArcade.duration_us(),
             480_000
         );
         assert_eq!(
-            NavigationTransitionStyle::SuperScalerShell.cover_progress_q16(),
-            SUPER_SCALER_COVER_PROGRESS
-        );
-        assert_eq!(
-            NavigationTransitionStyle::SpriteFoundry.cover_progress_q16(),
-            COVER_PROGRESS
-        );
-        assert_eq!(
-            NavigationTransitionStyle::CharacterRomRecompile.cover_progress_q16(),
-            CHARACTER_ROM_COVER_PROGRESS
+            NavigationTransitionEdge::ConsolesToSystem.duration_us(),
+            480_000
         );
     }
 
@@ -4338,7 +3802,6 @@ mod tests {
         buffers.capture_source(&source).unwrap();
         buffers.capture_destination(&destination).unwrap();
         let request = NavigationTransitionRequest::new(
-            NavigationTransitionStyle::SuperScalerShell,
             NavigationTransitionEdge::HomeToArcade,
             NavigationTransitionDirection::Forward,
             NavigationTransitionGeometry {
@@ -4427,7 +3890,6 @@ mod tests {
             ..NavigationTransitionGeometry::default()
         };
         let request = NavigationTransitionRequest::new(
-            NavigationTransitionStyle::SuperScalerShell,
             NavigationTransitionEdge::HomeToConsoles,
             NavigationTransitionDirection::Forward,
             geometry,
@@ -4582,7 +4044,6 @@ mod tests {
         let mut buffers = NavigationTransitionBuffers::new(width, height);
         buffers.capture_source(&source).unwrap();
         let request = NavigationTransitionRequest::new(
-            NavigationTransitionStyle::SuperScalerShell,
             NavigationTransitionEdge::HomeToArcade,
             NavigationTransitionDirection::Forward,
             NavigationTransitionGeometry {
@@ -5318,7 +4779,6 @@ mod tests {
     #[test]
     fn standalone_reverse_uses_the_complementary_covered_boundary() {
         let forward = NavigationTransitionRequest::new(
-            NavigationTransitionStyle::SpriteFoundry,
             NavigationTransitionEdge::HomeToConsoles,
             NavigationTransitionDirection::Forward,
             geometry(),
@@ -5327,19 +4787,26 @@ mod tests {
             direction: NavigationTransitionDirection::Reverse,
             ..forward
         };
-        assert_eq!(request_cover_progress_q16(forward), COVER_PROGRESS);
+        assert_eq!(
+            request_cover_progress_q16(forward),
+            SUPER_SCALER_COVER_PROGRESS
+        );
         assert_eq!(
             request_cover_progress_q16(reverse),
-            PROGRESS_MAX - COVER_PROGRESS
+            PROGRESS_MAX - SUPER_SCALER_COVER_PROGRESS
         );
 
         let mut controller = NavigationTransitionController::default();
         assert!(controller.begin(reverse, 0));
         assert!(controller.captured(0, 0));
-        let forward_covered_us = reverse.duration_us * COVER_PROGRESS as u64 / PROGRESS_MAX as u64;
+        let forward_covered_us =
+            reverse.duration_us * SUPER_SCALER_COVER_PROGRESS as u64 / PROGRESS_MAX as u64;
         let covered_us = reverse.duration_us - forward_covered_us;
         let covered = controller.tick(covered_us, true);
-        assert_eq!(covered.progress_q16, PROGRESS_MAX - COVER_PROGRESS);
+        assert_eq!(
+            covered.progress_q16,
+            PROGRESS_MAX - SUPER_SCALER_COVER_PROGRESS
+        );
         assert_eq!(covered.cover_progress_q16, PROGRESS_MAX);
         assert_eq!(covered.reveal_progress_q16, 0);
     }
@@ -5356,7 +4823,6 @@ mod tests {
             let forward = NavigationTransitionRequest {
                 duration_us,
                 ..NavigationTransitionRequest::new(
-                    NavigationTransitionStyle::SpriteFoundry,
                     NavigationTransitionEdge::HomeToArcade,
                     NavigationTransitionDirection::Forward,
                     geometry(),
@@ -5366,7 +4832,7 @@ mod tests {
                 direction: NavigationTransitionDirection::Reverse,
                 ..forward
             };
-            let covered_us = duration_us * COVER_PROGRESS as u64 / PROGRESS_MAX as u64;
+            let covered_us = duration_us * SUPER_SCALER_COVER_PROGRESS as u64 / PROGRESS_MAX as u64;
             for forward_us in [0, covered_us, duration_us / 2, duration_us] {
                 let forward_frame = frame_at(forward, forward_us);
                 let reverse_frame = frame_at(reverse, duration_us - forward_us);
@@ -5385,7 +4851,6 @@ mod tests {
         let forward = NavigationTransitionRequest {
             duration_us,
             ..NavigationTransitionRequest::new(
-                NavigationTransitionStyle::SpriteFoundry,
                 NavigationTransitionEdge::HomeToArcade,
                 NavigationTransitionDirection::Forward,
                 geometry(),
@@ -5721,15 +5186,9 @@ mod tests {
     }
 
     #[test]
-    fn mac_preview_configuration_selects_style_and_debug_duration() {
+    fn mac_preview_configuration_selects_debug_duration() {
         let mut poc = NavigationTransitionPoc::new(960, 540, true);
-
-        poc.configure_preview(
-            Some(NavigationTransitionStyle::NeonCabinetDive),
-            Some(4_000),
-        );
-
-        assert_eq!(poc.style(), NavigationTransitionStyle::NeonCabinetDive);
+        poc.configure_preview(Some(4_000));
         assert_eq!(poc.duration_override_us, Some(4_000_000));
     }
 
@@ -5808,367 +5267,6 @@ mod tests {
     }
 
     #[test]
-    fn sprite_foundry_is_deterministic_bounded_and_endpoint_exact() {
-        let width = 160;
-        let height = 90;
-        let source = (0..width * height)
-            .map(|value| Rgb565Pixel(value as u16))
-            .collect::<Vec<_>>();
-        let destination = (0..width * height)
-            .map(|value| Rgb565Pixel((value as u16).wrapping_mul(17)))
-            .collect::<Vec<_>>();
-        let geometry = NavigationTransitionGeometry {
-            source_card: NavigationTransitionRect {
-                x: 32,
-                y: 14,
-                width: 40,
-                height: 68,
-            },
-            source_label: NavigationTransitionRect {
-                x: 38,
-                y: 42,
-                width: 28,
-                height: 8,
-            },
-            destination_title: NavigationTransitionRect {
-                x: 8,
-                y: 6,
-                width: 64,
-                height: 10,
-            },
-            ..NavigationTransitionGeometry::default()
-        };
-        let mut poc = NavigationTransitionPoc::new_with_style(width, height, true, 1);
-        poc.begin(
-            NavigationTransitionEdge::HomeToConsoles,
-            NavigationTransitionDirection::Forward,
-            geometry,
-            &source,
-            0,
-        )
-        .unwrap();
-        assert_eq!(poc.render().unwrap(), source);
-        poc.capture_destination(&destination).unwrap();
-        poc.tick(180_000);
-        let first = poc.render().unwrap().to_vec();
-        let first_stats = poc.last_render_stats();
-        let second = poc.render().unwrap().to_vec();
-        assert_eq!(first, second);
-        assert!(first_stats.particle_pixels <= 4_096);
-        assert!(first_stats.glyph_packets <= 6);
-        assert_eq!(poc.sprite_foundry.particle_count(), 2_048);
-
-        poc.tick(500_000);
-        assert_eq!(poc.render().unwrap(), destination);
-
-        let mut reverse = NavigationTransitionPoc::new_with_style(width, height, true, 1);
-        reverse
-            .begin(
-                NavigationTransitionEdge::HomeToConsoles,
-                NavigationTransitionDirection::Reverse,
-                geometry,
-                &destination,
-                0,
-            )
-            .unwrap();
-        reverse.capture_destination(&source).unwrap();
-        reverse.tick(350_000);
-        let before_cancel = reverse.render().unwrap().to_vec();
-        assert!(reverse.request_reverse(350_000));
-        assert_eq!(reverse.render().unwrap(), before_cancel);
-    }
-
-    #[test]
-    fn neon_cabinet_handles_card_positions_budgets_and_reverse_endpoint() {
-        let width = 160;
-        let height = 90;
-        let source = vec![Rgb565Pixel(0x0841); width * height];
-        let destination = vec![Rgb565Pixel(0x18c8); width * height];
-        for card_x in [2, 60, 118] {
-            let geometry = NavigationTransitionGeometry {
-                source_card: NavigationTransitionRect {
-                    x: card_x,
-                    y: 14,
-                    width: 40,
-                    height: 68,
-                },
-                source_label: NavigationTransitionRect {
-                    x: card_x + 4,
-                    y: 42,
-                    width: 30,
-                    height: 8,
-                },
-                destination_title: NavigationTransitionRect {
-                    x: 8,
-                    y: 6,
-                    width: 64,
-                    height: 10,
-                },
-                ..NavigationTransitionGeometry::default()
-            };
-            let mut poc = NavigationTransitionPoc::new_with_style(width, height, true, 2);
-            poc.begin(
-                NavigationTransitionEdge::HomeToConsoles,
-                NavigationTransitionDirection::Forward,
-                geometry,
-                &source,
-                0,
-            )
-            .unwrap();
-            poc.capture_destination(&destination).unwrap();
-            poc.tick(20_000);
-            poc.render().unwrap();
-            let stats = poc.last_render_stats();
-            assert!(stats.spans > 0);
-            assert!(stats.projected_rows <= 110);
-            assert!(stats.quads <= 12);
-            assert!(stats.vector_segments <= 96);
-            assert!(stats.spans <= 1_500);
-        }
-
-        let geometry = geometry();
-        let mut reverse = NavigationTransitionPoc::new_with_style(width, height, true, 2);
-        reverse
-            .begin(
-                NavigationTransitionEdge::HomeToConsoles,
-                NavigationTransitionDirection::Reverse,
-                geometry,
-                &destination,
-                0,
-            )
-            .unwrap();
-        reverse.capture_destination(&source).unwrap();
-        reverse.tick(320_000);
-        let before_cancel = reverse.render().unwrap().to_vec();
-        assert!(reverse.request_reverse(320_000));
-        let after_cancel = reverse.render().unwrap().to_vec();
-        assert_eq!(before_cancel, after_cancel);
-        reverse.tick(700_000);
-        assert_eq!(reverse.render().unwrap(), source);
-
-        let mut penultimate = NavigationTransitionPoc::new_with_style(width, height, true, 2);
-        penultimate
-            .begin(
-                NavigationTransitionEdge::HomeToConsoles,
-                NavigationTransitionDirection::Forward,
-                geometry,
-                &source,
-                0,
-            )
-            .unwrap();
-        penultimate.capture_destination(&destination).unwrap();
-        penultimate.tick(416_999);
-        penultimate.render().unwrap();
-        let stats = penultimate.last_render_stats();
-        assert_eq!(stats.spans, 0);
-        assert_eq!(stats.vector_segments, 0);
-        assert_eq!(stats.quads, 0);
-    }
-
-    #[test]
-    fn crt_cabinet_reconstructs_deterministically_and_closes_exactly() {
-        let width = 160;
-        let height = 90;
-        let source = vec![Rgb565Pixel(0x0841); width * height];
-        let destination = vec![Rgb565Pixel(0x39e7); width * height];
-        let geometry = NavigationTransitionGeometry {
-            source_card: NavigationTransitionRect {
-                x: 32,
-                y: 14,
-                width: 40,
-                height: 68,
-            },
-            source_label: NavigationTransitionRect {
-                x: 38,
-                y: 42,
-                width: 28,
-                height: 8,
-            },
-            destination_title: NavigationTransitionRect {
-                x: 8,
-                y: 6,
-                width: 64,
-                height: 10,
-            },
-            ..NavigationTransitionGeometry::default()
-        };
-        let mut poc = NavigationTransitionPoc::new_with_style(width, height, true, 3);
-        poc.begin(
-            NavigationTransitionEdge::HomeToConsoles,
-            NavigationTransitionDirection::Forward,
-            geometry,
-            &source,
-            0,
-        )
-        .unwrap();
-        poc.capture_destination(&destination).unwrap();
-        poc.tick(320_000);
-        let first = poc.render().unwrap().to_vec();
-        assert!(poc.last_render_stats().sparks > 0);
-        assert!(poc.last_render_stats().sparks <= 192);
-        assert_eq!(poc.render().unwrap(), first);
-        assert!(poc.request_reverse(320_000));
-        assert_eq!(poc.render().unwrap(), first);
-        poc.tick(700_000);
-        assert_eq!(poc.render().unwrap(), source);
-
-        let mut resolved = NavigationTransitionPoc::new_with_style(width, height, true, 3);
-        resolved
-            .begin(
-                NavigationTransitionEdge::HomeToConsoles,
-                NavigationTransitionDirection::Forward,
-                geometry,
-                &source,
-                0,
-            )
-            .unwrap();
-        resolved.capture_destination(&destination).unwrap();
-        resolved.tick(480_000);
-        assert_eq!(resolved.render().unwrap(), destination);
-
-        let mut reduced = NavigationTransitionPoc::new_with_style(width, height, true, 3);
-        reduced.crt_cabinet = crt_cabinet::CrtCabinetRenderer::new(true);
-        reduced
-            .begin(
-                NavigationTransitionEdge::HomeToConsoles,
-                NavigationTransitionDirection::Forward,
-                geometry,
-                &source,
-                0,
-            )
-            .unwrap();
-        reduced.capture_destination(&destination).unwrap();
-        reduced.tick(320_000);
-        reduced.render().unwrap();
-        assert_eq!(reduced.last_render_stats().sparks, 0);
-    }
-
-    #[test]
-    fn character_rom_recompiles_with_bounded_flips_and_exact_verification() {
-        let width = 160;
-        let height = 90;
-        let source = (0..width * height)
-            .map(|value| Rgb565Pixel(value as u16))
-            .collect::<Vec<_>>();
-        let destination = (0..width * height)
-            .map(|value| Rgb565Pixel((value as u16).rotate_left(5)))
-            .collect::<Vec<_>>();
-        let geometry = NavigationTransitionGeometry {
-            source_card: NavigationTransitionRect {
-                x: 32,
-                y: 14,
-                width: 40,
-                height: 68,
-            },
-            source_label: NavigationTransitionRect {
-                x: 38,
-                y: 42,
-                width: 28,
-                height: 8,
-            },
-            destination_title: NavigationTransitionRect {
-                x: 8,
-                y: 6,
-                width: 64,
-                height: 10,
-            },
-            ..NavigationTransitionGeometry::default()
-        };
-        let mut poc = NavigationTransitionPoc::new_with_style(width, height, true, 4);
-        poc.begin(
-            NavigationTransitionEdge::HomeToConsoles,
-            NavigationTransitionDirection::Forward,
-            geometry,
-            &source,
-            0,
-        )
-        .unwrap();
-        poc.capture_destination(&destination).unwrap();
-        assert_eq!(poc.character_rom.cell_count(), 30 * 17);
-        poc.tick(300_000);
-        let first = poc.render().unwrap().to_vec();
-        assert!(poc.last_render_stats().new_cell_flips <= 96);
-        assert_eq!(poc.render().unwrap(), first);
-        let flips_before_reverse = poc.last_render_stats().cell_flips;
-        assert!(poc.request_reverse(300_000));
-        assert_eq!(poc.render().unwrap(), first);
-        poc.tick(350_000);
-        poc.render().unwrap();
-        assert!(poc.last_render_stats().cell_flips <= flips_before_reverse);
-
-        let mut verified = NavigationTransitionPoc::new_with_style(width, height, true, 4);
-        verified
-            .begin(
-                NavigationTransitionEdge::HomeToConsoles,
-                NavigationTransitionDirection::Forward,
-                geometry,
-                &source,
-                0,
-            )
-            .unwrap();
-        verified.capture_destination(&destination).unwrap();
-        verified.tick(432_999);
-        assert_ne!(verified.render().unwrap(), destination);
-        assert!(verified.last_render_stats().verified_rows < height as u64);
-        verified.tick(433_000);
-        assert_eq!(verified.render().unwrap(), destination);
-
-        let mut reverse = NavigationTransitionPoc::new_with_style(width, height, true, 4);
-        let character_duration = NavigationTransitionStyle::CharacterRomRecompile
-            .duration_us(NavigationTransitionEdge::HomeToConsoles);
-        let forward_cover_us = character_duration.saturating_mul(
-            NavigationTransitionStyle::CharacterRomRecompile.cover_progress_q16() as u64,
-        ) / PROGRESS_MAX as u64;
-        let reverse_cover_us = character_duration.saturating_sub(forward_cover_us);
-        reverse
-            .begin(
-                NavigationTransitionEdge::HomeToConsoles,
-                NavigationTransitionDirection::Reverse,
-                geometry,
-                &destination,
-                0,
-            )
-            .unwrap();
-        reverse.tick(100_000);
-        let cold_reverse = reverse.render().unwrap().to_vec();
-        assert_ne!(cold_reverse, destination);
-        reverse.tick(reverse_cover_us);
-        assert_eq!(
-            reverse.frame().progress_q16,
-            PROGRESS_MAX.saturating_sub(CHARACTER_ROM_COVER_PROGRESS)
-        );
-        let covered_before_hydration = reverse.render().unwrap().to_vec();
-        reverse.capture_destination(&source).unwrap();
-        assert_eq!(reverse.render().unwrap(), covered_before_hydration);
-        reverse.tick(433_000);
-        assert_eq!(reverse.render().unwrap(), source);
-
-        let mut bridge = NavigationTransitionPoc::new_with_style(width, height, true, 4);
-        bridge
-            .begin(
-                NavigationTransitionEdge::HomeToConsoles,
-                NavigationTransitionDirection::Forward,
-                geometry,
-                &source,
-                0,
-            )
-            .unwrap();
-        bridge.capture_destination(&destination).unwrap();
-        bridge.tick(forward_cover_us);
-        assert_eq!(bridge.frame().progress_q16, CHARACTER_ROM_COVER_PROGRESS);
-        let covered = bridge.render().unwrap().to_vec();
-        bridge.tick(forward_cover_us.saturating_add(10));
-        assert!(bridge.frame().progress_q16 > CHARACTER_ROM_COVER_PROGRESS);
-        let reveal_start = bridge.render().unwrap();
-        let changed = covered
-            .iter()
-            .zip(reveal_start)
-            .filter(|(before, after)| before != after)
-            .count();
-        assert!(changed < width * height / 20, "{changed} pixels changed");
-    }
-
-    #[test]
     fn disabled_poc_does_not_allocate_frame_buffers() {
         let poc = NavigationTransitionPoc::new(960, 540, false);
         assert!(!poc.enabled());
@@ -6176,6 +5274,5 @@ mod tests {
         assert!(poc.buffers.destination.is_empty());
         assert!(poc.buffers.working.is_empty());
         assert!(poc.hud_scratch.is_empty());
-        assert_eq!(poc.character_rom.metric_count(), 0);
     }
 }

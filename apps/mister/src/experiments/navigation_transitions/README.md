@@ -1,11 +1,8 @@
 # Archived navigation-transition renderers
 
 These files preserve the rejected navigation-transition prototypes outside the
-live runtime source tree. The archival commit temporarily path-wires them so it
-can compile without changing behavior; the immediately following runtime
-reduction removes that wiring and leaves them as source-only experiments. In
-the completed change they are not compiled by production, preview, test, or
-`experiments` builds.
+live runtime source tree. They are source-only experiments and are not compiled
+by production, preview, test, or `experiments` builds.
 
 The archive was taken while `main` was at `3ffbfa60`. Sprite Foundry, Neon
 Cabinet Dive, and Character-ROM Recompile were the committed implementations at

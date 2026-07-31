@@ -97,13 +97,11 @@ export global MisterBridge {
     in-out property <string> menu-title: "MiSTer MagiK";
     in-out property <string> menu-breadcrumb;
     // Development-only navigation-transition comparison HUD.
-    in-out property <bool> nav-transition-picker-visible;
+    in-out property <bool> nav-transition-hud-visible;
     in-out property <int> nav-transition-phase;
-    in-out property <int> nav-transition-style;
     in-out property <int> nav-transition-edge;
     in-out property <float> nav-transition-cover-progress;
     in-out property <float> nav-transition-reveal-progress;
-    in-out property <string> nav-transition-label;
     in-out property <int> nav-transition-frame-us;
     // Set asynchronously after comparing the configured Downloader feed with the installed build.
     in-out property <bool> update-available;

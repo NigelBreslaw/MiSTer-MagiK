@@ -34,7 +34,7 @@ export component HdmiLauncherUi inherits Rectangle {
     if MisterBridge.screen-mode == 6 : InfoScreen { }
     if MisterBridge.screen-mode == 7 : ScreensaverSettingsScreen { }
 
-    if MisterBridge.nav-transition-picker-visible : Rectangle {
+    if MisterBridge.nav-transition-hud-visible : Rectangle {
         x: parent.width - self.width - 8px;
         y: 8px;
         width: 286px;
@@ -51,9 +51,7 @@ export component HdmiLauncherUi inherits Rectangle {
 
             PixelText8 {
                 horizontal-stretch: 1;
-                text: (MisterBridge.nav-transition-style + 1) + "/5 "
-                    + MisterBridge.nav-transition-label
-                    + " p" + MisterBridge.nav-transition-phase
+                text: "super-scaler-shell p" + MisterBridge.nav-transition-phase
                     + " e" + MisterBridge.nav-transition-edge;
                 color: #d7eef8;
                 size: PixelTextSize.px8;

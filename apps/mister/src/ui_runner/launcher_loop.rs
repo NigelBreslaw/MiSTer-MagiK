@@ -323,9 +323,8 @@ fn sync_navigation_transition_poc_bridge(
     }
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     let frame = transition.frame();
-    bridge.set_nav_transition_picker_visible(transition.enabled());
+    bridge.set_nav_transition_hud_visible(transition.enabled());
     bridge.set_nav_transition_phase(frame.phase as i32);
-    bridge.set_nav_transition_style(transition.style_index() as i32);
     bridge.set_nav_transition_edge(
         transition
             .request()
@@ -333,7 +332,6 @@ fn sync_navigation_transition_poc_bridge(
     );
     bridge.set_nav_transition_cover_progress(frame.cover_progress_q16 as f32 / u16::MAX as f32);
     bridge.set_nav_transition_reveal_progress(frame.reveal_progress_q16 as f32 / u16::MAX as f32);
-    bridge.set_nav_transition_label(transition.style().label().into());
     bridge.set_nav_transition_frame_us(transition.last_frame_work_us() as i32);
 }
 
@@ -1767,8 +1765,6 @@ pub(super) fn run_launcher_loop(
     let mut navigation_transition = NavigationTransitionPoc::from_env(ui.render_w(), ui.render_h());
     let mut pending_navigation_transition: Option<PendingNavigationTransition> = None;
     let mut deferred_navigation_hydration_finish: Option<String> = None;
-    let mut navigation_transition_picker_prev_l = false;
-    let mut navigation_transition_picker_prev_r = false;
     let mut catalog_ready_deferred_since: Option<Instant> = None;
     let mut catalog_ready_stationary_edge_since: Option<Instant> = None;
     let mut media_events = MediaJobEventBuf::new();
@@ -3310,17 +3306,6 @@ pub(super) fn run_launcher_loop(
                 if !setup.is_active() {
                     let nav_before = LauncherBridgeKey::from_nav(&nav);
                     let arcade_selected_before_input = nav.arcade.selected;
-                    if navigation_transition.enabled() {
-                        let left = launcher_state.btn_l && !navigation_transition_picker_prev_l;
-                        let right = launcher_state.btn_r && !navigation_transition_picker_prev_r;
-                        if left {
-                            navigation_transition.cycle_style(-1);
-                        } else if right {
-                            navigation_transition.cycle_style(1);
-                        }
-                    }
-                    navigation_transition_picker_prev_l = launcher_state.btn_l;
-                    navigation_transition_picker_prev_r = launcher_state.btn_r;
                     if transition_picker_enabled && nav.screen == Screen::Arcade {
                         let left = launcher_state.dpad_left && !transition_picker_prev_left;
                         let right = launcher_state.dpad_right && !transition_picker_prev_right;
