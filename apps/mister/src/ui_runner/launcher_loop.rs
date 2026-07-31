@@ -1840,6 +1840,7 @@ pub(super) fn run_launcher_loop(
     let mut screensaver_first_present_logged = false;
     let mut screensaver_first_card_present_logged = false;
     let mut launcher_presenter = LauncherPresenter::new(ui);
+    let mut launcher_readiness = super::launcher_readiness::LauncherReadiness::from_env();
     let launcher_bench_scenario = LauncherBenchScenario::from_env();
     let mut latch_v4_qualification = LatchV4Qualification::from_env(start);
     let mut latch_v4_bench_state = LauncherBenchState::default();
@@ -2651,7 +2652,9 @@ pub(super) fn run_launcher_loop(
             &mut full_bridge_dirty,
             start,
         );
-        let route_action = display_session.begin_frame(frames, launching, f);
+        launcher_readiness.poll();
+        let mut route_action = display_session.begin_frame(frames, launching, f);
+        route_action.force_full_present |= launcher_readiness.needs_full_present();
         // The catalog contention harness first proves one exact preview, then
         // freezes further selected-preview work so frame failures can be
         // attributed to the catalog rather than an independent image decode.
@@ -5810,9 +5813,15 @@ pub(super) fn run_launcher_loop(
             presented_frame.vsync_stale_hits = wait_trace.vsync_stale_hits;
             presented_frame.vsync_wait_start_age_us = wait_trace.vsync_wait_start_age_us;
             presented_frame.vsync_accepted_hit_age_us = wait_trace.vsync_accepted_hit_age_us;
+            let mut readiness_post = None;
             match completion {
                 Ok(completion) => {
                     let status = completion.status;
+                    readiness_post = Some(super::launcher_readiness::ConfirmedLatchPost {
+                        sequence: status.active_sequence,
+                        route_epoch: status.active_route_epoch,
+                        slot: presented_frame.main_present_buffer,
+                    });
                     presented_frame.main_present_active_sequence = status.active_sequence;
                     presented_frame.main_present_pending = status.pending();
                     presented_frame.main_present_flip_count = status.flip_count;
@@ -5840,6 +5849,12 @@ pub(super) fn run_launcher_loop(
                     presented_frame.automation,
                     presented_frame.main_present_sequence,
                 );
+                if let Some(post) = readiness_post {
+                    launcher_readiness.observe(post, lifecycle.startup_can_present_frame());
+                    if launcher_readiness.needs_full_present() {
+                        request_launcher_redraw!();
+                    }
+                }
             }
             frame_accounting.record_finished_frame(
                 &presented_frame,

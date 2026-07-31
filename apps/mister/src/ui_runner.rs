@@ -102,6 +102,7 @@ mod launcher_latch_state;
 mod launcher_loop;
 mod launcher_pacing;
 mod launcher_present;
+mod launcher_readiness;
 mod launcher_scheduler;
 mod launcher_screensaver;
 mod launcher_screensaver_pipeline;
