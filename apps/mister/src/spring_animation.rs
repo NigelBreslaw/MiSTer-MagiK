@@ -4,7 +4,11 @@
 //! Frame-driven spring animation with persistent position and velocity.
 
 use std::f64::consts::TAU;
+use std::sync::OnceLock;
 use std::time::Duration;
+
+const SMOOTH_CURVE_INTERVALS: usize = 256;
+static SMOOTH_CURVE_Q16: OnceLock<[u16; SMOOTH_CURVE_INTERVALS + 1]> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SpringConfiguration {
@@ -206,6 +210,54 @@ impl SpringAnimation {
     }
 }
 
+/// Samples the repository's `smooth` spring as a normalized, monotonic Q16 curve.
+///
+/// The table is built only when the transition POC first asks for it. Runtime
+/// interpolation is integer-only, while the endpoints remain exact so snapshot
+/// settlement never depends on floating-point rounding.
+pub(crate) fn smooth_spring_q16(progress_q16: u16) -> u16 {
+    let curve = smooth_spring_curve_q16();
+    if progress_q16 == u16::MAX {
+        return u16::MAX;
+    }
+    let scaled = progress_q16 as u32 * SMOOTH_CURVE_INTERVALS as u32;
+    let index = (scaled / u16::MAX as u32) as usize;
+    let remainder = scaled % u16::MAX as u32;
+    let from = curve[index] as u32;
+    let to = curve[index + 1] as u32;
+    (from + (to - from) * remainder / u16::MAX as u32) as u16
+}
+
+/// Warms the floating-point spring sampling outside the live render path.
+pub(crate) fn warm_smooth_spring_curve() {
+    let _ = smooth_spring_curve_q16();
+}
+
+fn smooth_spring_curve_q16() -> &'static [u16; SMOOTH_CURVE_INTERVALS + 1] {
+    SMOOTH_CURVE_Q16.get_or_init(build_smooth_curve_q16)
+}
+
+fn build_smooth_curve_q16() -> [u16; SMOOTH_CURVE_INTERVALS + 1] {
+    let mut raw = [0.0; SMOOTH_CURVE_INTERVALS + 1];
+    for (index, value) in raw.iter_mut().enumerate() {
+        let mut spring = SpringAnimation::new(0.0, SpringConfiguration::smooth());
+        spring.set_target(1.0);
+        let micros = 500_000_u64 * index as u64 / SMOOTH_CURVE_INTERVALS as u64;
+        *value = spring.advance(Duration::from_micros(micros));
+    }
+
+    let final_value = raw[SMOOTH_CURVE_INTERVALS];
+    let mut curve = [0_u16; SMOOTH_CURVE_INTERVALS + 1];
+    for (index, value) in raw.into_iter().enumerate() {
+        curve[index] = ((value / final_value) * u16::MAX as f64)
+            .round()
+            .clamp(0.0, u16::MAX as f64) as u16;
+    }
+    curve[0] = 0;
+    curve[SMOOTH_CURVE_INTERVALS] = u16::MAX;
+    curve
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,5 +353,29 @@ mod tests {
         split.advance(Duration::from_millis(150));
         assert!((one_step.value() - split.value()).abs() < 1e-9);
         assert!((one_step.velocity() - split.velocity()).abs() < 1e-9);
+    }
+
+    #[test]
+    fn smooth_q16_curve_is_monotonic_with_exact_endpoints() {
+        assert_eq!(smooth_spring_q16(0), 0);
+        assert_eq!(smooth_spring_q16(u16::MAX), u16::MAX);
+        let mut previous = 0;
+        for progress in 0..=u16::MAX {
+            let value = smooth_spring_q16(progress);
+            assert!(value >= previous, "curve reversed at {progress}");
+            previous = value;
+        }
+    }
+
+    #[test]
+    fn smooth_q16_curve_retimes_without_changing_shape() {
+        // Retiming changes only the wall-clock conversion to normalized progress.
+        let at_315_ms_of_1260 = 315_u64 * u16::MAX as u64 / 1_260;
+        let at_360_ms_of_1440 = 360_u64 * u16::MAX as u64 / 1_440;
+        assert_eq!(at_315_ms_of_1260, at_360_ms_of_1440);
+        assert_eq!(
+            smooth_spring_q16(at_315_ms_of_1260 as u16),
+            smooth_spring_q16(at_360_ms_of_1440 as u16)
+        );
     }
 }

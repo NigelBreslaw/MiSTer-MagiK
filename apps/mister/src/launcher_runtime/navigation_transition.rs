@@ -3,6 +3,7 @@
 
 //! Host-neutral navigation-transition state and RGB565 frame ownership.
 
+use crate::spring_animation::{smooth_spring_q16, warm_smooth_spring_curve};
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::time::Instant;
 
@@ -27,9 +28,9 @@ impl NavigationTransitionEdge {
 
     pub const fn duration_us(self) -> u64 {
         if self.enters_system_browser() {
-            480_000
+            1_440_000
         } else {
-            420_000
+            1_260_000
         }
     }
 
@@ -874,6 +875,9 @@ impl NavigationTransitionPoc {
     }
 
     pub fn new(width: usize, height: usize, enabled: bool) -> Self {
+        if enabled {
+            warm_smooth_spring_curve();
+        }
         let (buffer_width, buffer_height) = if enabled { (width, height) } else { (0, 0) };
         Self {
             enabled,
@@ -1184,7 +1188,7 @@ fn render_super_scaler_shell(
                             destination,
                             width,
                             height,
-                            smoothstep_q16(window_q16(frame.reveal_progress_q16, 0, 18_000)),
+                            spring_ease_q16(window_q16(frame.reveal_progress_q16, 0, 18_000)),
                             request.geometry.destination_title.bottom() as usize,
                             shell,
                             &mut stats,
@@ -1295,7 +1299,7 @@ fn render_super_scaler_card_cover(
         request.geometry.source_card,
         rect,
         source_text_group(request.geometry),
-        PROGRESS_MAX.saturating_sub(smoothstep_q16(window_q16(
+        PROGRESS_MAX.saturating_sub(spring_ease_q16(window_q16(
             forward_cover_q16,
             10_000,
             26_000,
@@ -1393,7 +1397,7 @@ fn render_hero_label_last(
                         request.geometry.source_label,
                         request.geometry.destination_title,
                         PROGRESS_MAX,
-                        smoothstep_q16(window_q16(frame.reveal_progress_q16, 2_000, 18_000)),
+                        spring_ease_q16(window_q16(frame.reveal_progress_q16, 2_000, 18_000)),
                         false,
                         stats,
                     );
@@ -1416,7 +1420,7 @@ fn render_hero_label_last(
                     height,
                     request.geometry.source_label,
                     request.geometry.destination_title,
-                    smoothstep_q16(window_q16(frame.cover_progress_q16, 3_500, 60_000)),
+                    spring_ease_q16(window_q16(frame.cover_progress_q16, 3_500, 60_000)),
                     false,
                     stats,
                 );
@@ -1426,7 +1430,7 @@ fn render_hero_label_last(
                     width,
                     height,
                     request.geometry.source_detail,
-                    PROGRESS_MAX.saturating_sub(smoothstep_q16(window_q16(
+                    PROGRESS_MAX.saturating_sub(spring_ease_q16(window_q16(
                         frame.cover_progress_q16,
                         0,
                         10_000,
@@ -1446,7 +1450,7 @@ fn render_hero_label_last(
                     height,
                     request.geometry.source_label,
                     request.geometry.destination_title,
-                    smoothstep_q16(window_q16(forward_cover, 3_500, 60_000)),
+                    spring_ease_q16(window_q16(forward_cover, 3_500, 60_000)),
                     false,
                     stats,
                 );
@@ -1456,7 +1460,7 @@ fn render_hero_label_last(
                     width,
                     height,
                     request.geometry.source_detail,
-                    PROGRESS_MAX.saturating_sub(smoothstep_q16(window_q16(
+                    PROGRESS_MAX.saturating_sub(spring_ease_q16(window_q16(
                         forward_cover,
                         0,
                         10_000,
@@ -1493,7 +1497,7 @@ fn render_hero_label_last(
                         request.geometry.source_label,
                         request.geometry.destination_title,
                         PROGRESS_MAX,
-                        smoothstep_q16(window_q16(forward_reveal, 2_000, 18_000)),
+                        spring_ease_q16(window_q16(forward_reveal, 2_000, 18_000)),
                         false,
                         stats,
                     );
@@ -1540,7 +1544,7 @@ fn reveal_destination_regions(
     } else {
         height.saturating_mul(15) / 100
     };
-    let header_progress = smoothstep_q16(window_q16(progress_q16, 0, 10_000));
+    let header_progress = spring_ease_q16(window_q16(progress_q16, 0, 10_000));
     copy_rect_horizontal_wipe(
         working,
         destination,
@@ -1567,7 +1571,7 @@ fn reveal_destination_regions(
             width,
             height,
             selected,
-            window_q16(progress_q16, 10_000, 28_000),
+            spring_ease_q16(window_q16(progress_q16, 10_000, 28_000)),
             -(selected.right() as isize),
             10,
             stats,
@@ -1598,7 +1602,7 @@ fn reveal_destination_regions(
                             .min(list.bottom() as usize - y)
                             .min(height.saturating_sub(y)) as u16,
                     },
-                    smoothstep_q16(window_q16(progress_q16, start, start.saturating_add(7_500))),
+                    spring_ease_q16(window_q16(progress_q16, start, start.saturating_add(7_500))),
                     -(list.width as isize + distance as isize * 12),
                     stats,
                 );
@@ -1610,7 +1614,7 @@ fn reveal_destination_regions(
             width,
             height,
             request.geometry.destination_footer,
-            smoothstep_q16(window_q16(progress_q16, 28_000, 44_000)),
+            spring_ease_q16(window_q16(progress_q16, 28_000, 44_000)),
             -(request.geometry.destination_footer.right() as isize),
             stats,
         );
@@ -1639,7 +1643,7 @@ fn reveal_destination_regions(
             width,
             height,
             preview,
-            smoothstep_q16(window_q16(progress_q16, 34_000, 60_000)),
+            spring_ease_q16(window_q16(progress_q16, 34_000, 60_000)),
             stats,
         );
         draw_preview_impact_flash(working, width, height, preview, progress_q16, stats);
@@ -1648,7 +1652,7 @@ fn reveal_destination_regions(
             width,
             height,
             preview,
-            smoothstep_q16(window_q16(progress_q16, 34_000, 60_000)),
+            spring_ease_q16(window_q16(progress_q16, 34_000, 60_000)),
             stats,
         );
         draw_progressive_preview_frame(
@@ -1683,7 +1687,7 @@ fn reveal_destination_regions(
                         width: x1.saturating_sub(x0) as u16,
                         height: height.saturating_sub(card_y) as u16,
                     },
-                    smoothstep_q16(window_q16(
+                    spring_ease_q16(window_q16(
                         progress_q16,
                         start,
                         start.saturating_add(31_000),
@@ -1705,9 +1709,9 @@ fn super_scaler_card_rect(
     if progress_q16 < PRESS_END {
         let half = PRESS_END / 2;
         let press = if progress_q16 <= half {
-            smoothstep_q16(window_q16(progress_q16, 0, half))
+            spring_ease_q16(window_q16(progress_q16, 0, half))
         } else {
-            PROGRESS_MAX.saturating_sub(smoothstep_q16(window_q16(progress_q16, half, PRESS_END)))
+            PROGRESS_MAX.saturating_sub(spring_ease_q16(window_q16(progress_q16, half, PRESS_END)))
         };
         let maximum_inset_x = (source.width / 28).clamp(4, 10);
         let maximum_inset_y = (source.height / 18).clamp(7, 28);
@@ -1736,26 +1740,26 @@ fn super_scaler_card_rect(
         settle_end
     };
     let left_motion = if selected_left {
-        smoothstep_q16(window_q16(progress_q16, PRESS_END, left_end))
+        spring_ease_q16(window_q16(progress_q16, PRESS_END, left_end))
     } else {
-        ease_out_cubic_q16(window_q16(progress_q16, PRESS_END, left_end))
+        spring_ease_q16(window_q16(progress_q16, PRESS_END, left_end))
     };
     let right_motion = if selected_left {
-        ease_out_cubic_q16(window_q16(progress_q16, PRESS_END, right_end))
+        spring_ease_q16(window_q16(progress_q16, PRESS_END, right_end))
     } else {
-        smoothstep_q16(window_q16(progress_q16, PRESS_END, right_end))
+        spring_ease_q16(window_q16(progress_q16, PRESS_END, right_end))
     };
     let left = lerp_u16(source.x, full.x, left_motion);
     let right = lerp_u16(source.right(), full.right(), right_motion);
     let top = lerp_u16(
         source.y,
         full.y,
-        smoothstep_q16(window_q16(progress_q16, PRESS_END, PROGRESS_MAX)),
+        spring_ease_q16(window_q16(progress_q16, PRESS_END, PROGRESS_MAX)),
     );
     let bottom = lerp_u16(
         source.bottom(),
         full.bottom(),
-        ease_out_cubic_q16(window_q16(progress_q16, PRESS_END, 54_000)),
+        spring_ease_q16(window_q16(progress_q16, PRESS_END, 54_000)),
     );
     NavigationTransitionRect {
         x: left,
@@ -1800,7 +1804,7 @@ fn draw_super_scaler_speed_bands(
     if progress_q16 < 8_000 {
         return;
     }
-    let local = smoothstep_q16(window_q16(progress_q16, 8_000, PROGRESS_MAX));
+    let local = spring_ease_q16(window_q16(progress_q16, 8_000, PROGRESS_MAX));
     let center_y = rect.y as usize + rect.height as usize / 2;
     let half_height = rect.height as usize / 2;
     for band in 1usize..=3 {
@@ -1853,7 +1857,7 @@ fn draw_super_scaler_impact_horizon(
     if progress_q16 < 42_000 {
         return;
     }
-    let pulse = smoothstep_q16(window_q16(progress_q16, 42_000, 52_000));
+    let pulse = spring_ease_q16(window_q16(progress_q16, 42_000, 52_000));
     if pulse == 0 {
         return;
     }
@@ -1898,11 +1902,11 @@ fn draw_super_scaler_impact_envelope(
     let pulse = if progress_q16 < 50_000 {
         0
     } else if progress_q16 < 54_000 {
-        smoothstep_q16(window_q16(progress_q16, 50_000, 54_000))
+        spring_ease_q16(window_q16(progress_q16, 50_000, 54_000))
     } else if progress_q16 <= 58_000 {
         PROGRESS_MAX
     } else {
-        PROGRESS_MAX.saturating_sub(smoothstep_q16(window_q16(progress_q16, 58_000, 64_000)))
+        PROGRESS_MAX.saturating_sub(spring_ease_q16(window_q16(progress_q16, 58_000, 64_000)))
     };
     if pulse == 0 {
         return;
@@ -1945,9 +1949,9 @@ fn draw_runway_selected_row_bridge(
         return;
     }
     let motion = if reverse {
-        smoothstep_q16(window_q16(progress_q16, 0, 18_000))
+        spring_ease_q16(window_q16(progress_q16, 0, 18_000))
     } else {
-        smoothstep_q16(window_q16(progress_q16, 0, 18_000))
+        spring_ease_q16(window_q16(progress_q16, 0, 18_000))
     };
     let horizon = NavigationTransitionRect {
         x: 0,
@@ -2043,18 +2047,8 @@ fn window_q16(progress_q16: u16, start_q16: u16, end_q16: u16) -> u16 {
         / end_q16.saturating_sub(start_q16).max(1) as u32) as u16
 }
 
-fn smoothstep_q16(progress_q16: u16) -> u16 {
-    let progress = progress_q16 as u64;
-    let maximum = PROGRESS_MAX as u64;
-    let squared = progress.saturating_mul(progress) / maximum;
-    squared
-        .saturating_mul(
-            maximum
-                .saturating_mul(3)
-                .saturating_sub(progress.saturating_mul(2)),
-        )
-        .saturating_div(maximum)
-        .min(maximum) as u16
+fn spring_ease_q16(progress_q16: u16) -> u16 {
+    smooth_spring_q16(progress_q16)
 }
 
 fn background_outside_rect(
@@ -2258,13 +2252,13 @@ fn copy_rect_shifted_x_with_overshoot(
         return;
     }
     let offset = if progress_q16 <= 34_000 {
-        let motion = ease_out_cubic_q16(window_q16(progress_q16, 0, 34_000)) as i64;
+        let motion = spring_ease_q16(window_q16(progress_q16, 0, 34_000)) as i64;
         initial_offset as i64
             + (overshoot as i64 - initial_offset as i64) * motion / PROGRESS_MAX as i64
     } else if progress_q16 <= 50_000 {
         overshoot as i64
     } else {
-        let settle = smoothstep_q16(window_q16(progress_q16, 50_000, PROGRESS_MAX)) as i64;
+        let settle = spring_ease_q16(window_q16(progress_q16, 50_000, PROGRESS_MAX)) as i64;
         overshoot as i64 * (PROGRESS_MAX as i64 - settle) / PROGRESS_MAX as i64
     };
     copy_rect_at_offset(working, source, width, height, rect, offset as isize, stats);
@@ -2331,9 +2325,9 @@ fn preview_aperture_rect(
     if progress_q16 == 0 || rect.width == 0 || rect.height == 0 {
         return None;
     }
-    let horizontal =
-        smoothstep_q16(window_q16(progress_q16, 0, 16_000)).max(progress_q16.min(2_048));
-    let vertical = smoothstep_q16(window_q16(progress_q16, 22_000, PROGRESS_MAX));
+    let horizontal = spring_ease_q16(window_q16(progress_q16, 0, 16_000))
+        .max(spring_ease_q16(progress_q16).min(2_048));
+    let vertical = spring_ease_q16(window_q16(progress_q16, 22_000, PROGRESS_MAX));
     let visible_width = (rect.width as usize)
         .saturating_mul(horizontal as usize)
         .div_ceil(PROGRESS_MAX as usize)
@@ -2385,9 +2379,9 @@ fn draw_preview_impact_flash(
         return;
     }
     let pulse = if progress_q16 <= 39_000 {
-        smoothstep_q16(window_q16(progress_q16, 34_000, 39_000))
+        spring_ease_q16(window_q16(progress_q16, 34_000, 39_000))
     } else {
-        PROGRESS_MAX.saturating_sub(smoothstep_q16(window_q16(progress_q16, 39_000, 47_000)))
+        PROGRESS_MAX.saturating_sub(spring_ease_q16(window_q16(progress_q16, 39_000, 47_000)))
     };
     let flash_width = (rect.width as usize)
         .saturating_mul(pulse as usize)
@@ -2470,11 +2464,11 @@ fn draw_progressive_preview_frame(
 
 fn preview_rail_envelope(progress_q16: u16) -> u16 {
     if progress_q16 <= 42_000 {
-        smoothstep_q16(window_q16(progress_q16, 34_000, 42_000))
+        spring_ease_q16(window_q16(progress_q16, 34_000, 42_000))
     } else if progress_q16 <= 48_000 {
         PROGRESS_MAX
     } else {
-        PROGRESS_MAX.saturating_sub(smoothstep_q16(window_q16(progress_q16, 48_000, 58_000)))
+        PROGRESS_MAX.saturating_sub(spring_ease_q16(window_q16(progress_q16, 48_000, 58_000)))
     }
 }
 
@@ -2501,8 +2495,8 @@ fn draw_preview_transfer_beam(
     if progress_q16 <= 24_000 || progress_q16 >= 49_000 {
         return;
     }
-    let reveal = smoothstep_q16(window_q16(progress_q16, 24_000, 34_000));
-    let retract = smoothstep_q16(window_q16(progress_q16, 39_000, 49_000));
+    let reveal = spring_ease_q16(window_q16(progress_q16, 24_000, 34_000));
+    let retract = spring_ease_q16(window_q16(progress_q16, 39_000, 49_000));
     let start_x = selected.right() as usize;
     let end_x = preview.x as usize;
     if end_x <= start_x {
@@ -2558,7 +2552,7 @@ fn draw_reverse_preview_transfer_beam(
     if progress_q16 >= 22_000 {
         return;
     }
-    let reverse = window_q16(progress_q16, 0, 22_000) as u32;
+    let reverse = spring_ease_q16(window_q16(progress_q16, 0, 22_000)) as u32;
     let forward_progress =
         46_000u32.saturating_sub(reverse.saturating_mul(22_000) / PROGRESS_MAX as u32);
     draw_preview_transfer_beam(
@@ -2756,12 +2750,12 @@ fn slide_rect_out_left_with_recoil(
     }
     fill_rect_565(working, width, height, rect, shell, stats);
     let offset = if progress_q16 <= 10_000 {
-        recoil as i64 * smoothstep_q16(window_q16(progress_q16, 0, 10_000)) as i64
+        recoil as i64 * spring_ease_q16(window_q16(progress_q16, 0, 10_000)) as i64
             / PROGRESS_MAX as i64
     } else if progress_q16 <= 18_000 {
         recoil as i64
     } else {
-        let launch = ease_out_cubic_q16(window_q16(progress_q16, 18_000, PROGRESS_MAX)) as i64;
+        let launch = spring_ease_q16(window_q16(progress_q16, 18_000, PROGRESS_MAX)) as i64;
         recoil as i64 + (-(rect.right() as i64) - recoil as i64) * launch / PROGRESS_MAX as i64
     };
     copy_rect_at_offset(working, source, width, height, rect, offset as isize, stats);
@@ -2878,7 +2872,7 @@ fn conceal_source_regions_inverse(
             source,
             width,
             height,
-            smoothstep_q16(window_q16(forward_progress, 0, 18_000)),
+            spring_ease_q16(window_q16(forward_progress, 0, 18_000)),
             request.geometry.destination_title.bottom() as usize,
             shell,
             stats,
@@ -2940,7 +2934,7 @@ fn conceal_source_regions(
             working,
             width,
             height,
-            smoothstep_q16(window_q16(progress_q16, 38_000, PROGRESS_MAX)),
+            spring_ease_q16(window_q16(progress_q16, 38_000, PROGRESS_MAX)),
             request.geometry.destination_title.bottom() as usize,
             shell,
             stats,
@@ -2951,7 +2945,7 @@ fn conceal_source_regions(
             width,
             height,
             request.geometry.destination_preview,
-            smoothstep_q16(window_q16(progress_q16, 0, 25_000)),
+            spring_ease_q16(window_q16(progress_q16, 0, 25_000)),
             shell,
             stats,
         );
@@ -2978,7 +2972,7 @@ fn conceal_source_regions(
             width,
             height,
             request.geometry.destination_footer,
-            smoothstep_q16(window_q16(progress_q16, 20_000, 34_000)),
+            spring_ease_q16(window_q16(progress_q16, 20_000, 34_000)),
             shell,
             stats,
         );
@@ -3008,7 +3002,7 @@ fn conceal_source_regions(
                             .min(list.bottom() as usize - y)
                             .min(height.saturating_sub(y)) as u16,
                     },
-                    smoothstep_q16(window_q16(
+                    spring_ease_q16(window_q16(
                         progress_q16,
                         start,
                         start.saturating_add(13_000),
@@ -3024,7 +3018,7 @@ fn conceal_source_regions(
             width,
             height,
             selected,
-            window_q16(progress_q16, 34_000, 51_000),
+            spring_ease_q16(window_q16(progress_q16, 34_000, 51_000)),
             6,
             shell,
             stats,
@@ -3034,7 +3028,7 @@ fn conceal_source_regions(
             width,
             height,
             selected,
-            window_q16(progress_q16, 34_000, PROGRESS_MAX),
+            spring_ease_q16(window_q16(progress_q16, 34_000, PROGRESS_MAX)),
             true,
             stats,
         );
@@ -3052,7 +3046,7 @@ fn conceal_source_regions(
                     (height.saturating_mul(15) / 100) as u16
                 },
             },
-            smoothstep_q16(window_q16(progress_q16, 42_000, PROGRESS_MAX)),
+            spring_ease_q16(window_q16(progress_q16, 42_000, PROGRESS_MAX)),
             shell,
             stats,
         );
@@ -3062,7 +3056,7 @@ fn conceal_source_regions(
         let selected_column = (source_center.saturating_mul(4) / width).min(3);
         for column in 0usize..4 {
             let start = (column.abs_diff(selected_column) * 4_000) as u16;
-            let local = smoothstep_q16(window_q16(
+            let local = spring_ease_q16(window_q16(
                 progress_q16,
                 start,
                 48_000u16.saturating_add(start),
@@ -3127,7 +3121,7 @@ fn draw_destination_detail_wake(
         return;
     }
     erase_rect_from_snapshot_background(working, snapshot, width, height, detail_rect, stats);
-    let motion = smoothstep_q16(window_q16(reveal_progress_q16, 18_000, 31_000));
+    let motion = spring_ease_q16(window_q16(reveal_progress_q16, 18_000, 31_000));
     if motion == 0 {
         return;
     }
@@ -3621,15 +3615,6 @@ fn lerp_u16(from: u16, to: u16, progress_q16: u16) -> u16 {
     (from + delta * progress_q16 as i64 / PROGRESS_MAX as i64).clamp(0, u16::MAX as i64) as u16
 }
 
-fn ease_out_cubic_q16(progress_q16: u16) -> u16 {
-    let inverse = PROGRESS_MAX as u64 - progress_q16 as u64;
-    let cubic = inverse.saturating_mul(inverse).saturating_mul(inverse)
-        / (PROGRESS_MAX as u64).saturating_mul(PROGRESS_MAX as u64);
-    (PROGRESS_MAX as u64)
-        .saturating_sub(cubic)
-        .min(PROGRESS_MAX as u64) as u16
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3733,16 +3718,36 @@ mod tests {
     fn super_scaler_edges_keep_intended_durations() {
         assert_eq!(
             NavigationTransitionEdge::HomeToConsoles.duration_us(),
-            420_000
+            1_260_000
         );
         assert_eq!(
             NavigationTransitionEdge::HomeToArcade.duration_us(),
-            480_000
+            1_440_000
         );
         assert_eq!(
             NavigationTransitionEdge::ConsolesToSystem.duration_us(),
-            480_000
+            1_440_000
         );
+    }
+
+    #[test]
+    fn super_scaler_spatial_windows_use_only_the_smooth_spring() {
+        let source = include_str!("navigation_transition.rs");
+        let production = source
+            .rsplit_once("\n#[cfg(test)]\nmod tests {")
+            .expect("test module delimiter")
+            .0;
+        assert!(!production.contains("smoothstep_q16"));
+        assert!(!production.contains("ease_out_cubic_q16"));
+        for (line_number, line) in production.lines().enumerate() {
+            if line.contains("window_q16(") && !line.contains("fn window_q16(") {
+                assert!(
+                    line.contains("spring_ease_q16(window_q16("),
+                    "raw-linear movement window at source line {}: {line}",
+                    line_number + 1
+                );
+            }
+        }
     }
 
     #[test]
@@ -4761,19 +4766,27 @@ mod tests {
     #[test]
     fn transition_waits_covered_until_destination_is_ready() {
         let mut controller = NavigationTransitionController::default();
-        assert!(controller.begin(request(), 1_000));
+        let request = request();
+        let cover_us =
+            request.duration_us * SUPER_SCALER_COVER_PROGRESS as u64 / PROGRESS_MAX as u64;
+        assert!(controller.begin(request, 1_000));
         assert!(controller.captured(2_000, 300));
+        let covered_at = 2_000 + cover_us;
 
-        let covered = controller.tick(300_000, false);
+        let covered = controller.tick(covered_at, false);
         assert_eq!(covered.phase, NavigationTransitionPhase::Covered);
         assert_eq!(covered.progress_q16, SUPER_SCALER_COVER_PROGRESS);
 
-        let still_covered = controller.tick(500_000, false);
+        let still_covered = controller.tick(covered_at + 200_000, false);
         assert_eq!(still_covered.phase, NavigationTransitionPhase::Covered);
 
-        let reveal = controller.tick(510_000, true);
+        let reveal_at = covered_at + 210_000;
+        let reveal = controller.tick(reveal_at, true);
         assert_eq!(reveal.phase, NavigationTransitionPhase::Reveal);
-        assert_eq!(controller.telemetry().covered_hold_us, 510_000 - 300_000);
+        assert_eq!(
+            controller.telemetry().covered_hold_us,
+            reveal_at - covered_at
+        );
     }
 
     #[test]
@@ -4841,6 +4854,11 @@ mod tests {
                     PROGRESS_MAX - reverse_frame.progress_q16,
                     "duration={duration_us} forward_us={forward_us}"
                 );
+                assert_eq!(
+                    spring_ease_q16(forward_frame.progress_q16),
+                    spring_ease_q16(PROGRESS_MAX - reverse_frame.progress_q16),
+                    "spring playback diverged at duration={duration_us} forward_us={forward_us}"
+                );
             }
         }
     }
@@ -4883,11 +4901,13 @@ mod tests {
     #[test]
     fn completed_transition_settles_at_destination() {
         let mut controller = NavigationTransitionController::default();
-        controller.begin(request(), 0);
+        let request = request();
+        let duration_us = request.duration_us;
+        controller.begin(request, 0);
         controller.captured(0, 0);
         controller.tick(300_000, true);
         controller.tick(300_001, true);
-        let settled = controller.tick(700_000, true);
+        let settled = controller.tick(duration_us, true);
 
         assert_eq!(settled.phase, NavigationTransitionPhase::Settled);
         assert_eq!(
@@ -4908,10 +4928,12 @@ mod tests {
     #[test]
     fn ready_destination_preserves_elapsed_overrun_across_boundaries() {
         let mut controller = NavigationTransitionController::default();
-        controller.begin(request(), 0);
+        let request = request();
+        let duration_us = request.duration_us;
+        controller.begin(request, 0);
         controller.captured(0, 0);
 
-        let settled = controller.tick(420_000, true);
+        let settled = controller.tick(duration_us, true);
 
         assert_eq!(settled.phase, NavigationTransitionPhase::Settled);
         assert_eq!(
@@ -4953,18 +4975,20 @@ mod tests {
     fn preparation_timeout_reverses_to_source() {
         let mut timed = request();
         timed.preparation_timeout_us = 50_000;
+        let cover_us = timed.duration_us * SUPER_SCALER_COVER_PROGRESS as u64 / PROGRESS_MAX as u64;
         let mut controller = NavigationTransitionController::default();
         controller.begin(timed, 0);
         controller.captured(0, 0);
-        controller.tick(300_000, false);
-        let reversing = controller.tick(360_000, false);
+        controller.tick(cover_us, false);
+        let reverse_at = cover_us + timed.preparation_timeout_us;
+        let reversing = controller.tick(reverse_at, false);
 
         assert_eq!(reversing.phase, NavigationTransitionPhase::Reversing);
         assert_eq!(
             reversing.failure,
             Some(NavigationTransitionFailure::DestinationTimeout)
         );
-        let settled = controller.tick(800_000, false);
+        let settled = controller.tick(reverse_at + cover_us, false);
         assert_eq!(settled.endpoint, Some(NavigationTransitionEndpoint::Source));
     }
 
@@ -5018,13 +5042,15 @@ mod tests {
     fn timeout_discards_queued_input_atomically() {
         let mut timed = request();
         timed.preparation_timeout_us = 50_000;
+        let cover_us = timed.duration_us * SUPER_SCALER_COVER_PROGRESS as u64 / PROGRESS_MAX as u64;
         let mut controller = NavigationTransitionController::default();
         controller.begin(timed, 0);
         controller.captured(0, 0);
         controller.queue_input(NavigationTransitionInput::Activate);
-        controller.tick(300_000, false);
-        controller.tick(360_000, false);
-        controller.tick(800_000, false);
+        controller.tick(cover_us, false);
+        let reverse_at = cover_us + timed.preparation_timeout_us;
+        controller.tick(reverse_at, false);
+        controller.tick(reverse_at + cover_us, false);
 
         assert_eq!(
             controller.complete(),
@@ -5038,6 +5064,9 @@ mod tests {
 
     #[test]
     fn exclusive_view_cancels_only_to_a_ready_destination() {
+        let cover_us = NavigationTransitionEdge::HomeToConsoles.duration_us()
+            * SUPER_SCALER_COVER_PROGRESS as u64
+            / PROGRESS_MAX as u64;
         let mut before_cover = NavigationTransitionController::default();
         before_cover.begin(request(), 0);
         before_cover.captured(0, 0);
@@ -5050,7 +5079,7 @@ mod tests {
         let mut covered_unready = NavigationTransitionController::default();
         covered_unready.begin(request(), 0);
         covered_unready.captured(0, 0);
-        covered_unready.tick(300_000, false);
+        covered_unready.tick(cover_us, false);
         assert_eq!(
             covered_unready.cancel_for_exclusive_view(false),
             Some(NavigationTransitionEndpoint::Source)
@@ -5065,7 +5094,7 @@ mod tests {
         let mut covered_ready = NavigationTransitionController::default();
         covered_ready.begin(request(), 0);
         covered_ready.captured(0, 0);
-        covered_ready.tick(300_000, true);
+        covered_ready.tick(cover_us, true);
         assert_eq!(
             covered_ready.cancel_for_exclusive_view(true),
             Some(NavigationTransitionEndpoint::Destination)
@@ -5228,7 +5257,7 @@ mod tests {
         .unwrap();
         assert_eq!(poc.render().unwrap(), source);
         poc.capture_destination(&destination).unwrap();
-        poc.tick(420_000);
+        poc.tick(NavigationTransitionEdge::HomeToConsoles.duration_us());
         assert_eq!(poc.render().unwrap(), destination);
 
         let mut reverse = NavigationTransitionPoc::new(16, 12, true);
@@ -5243,7 +5272,7 @@ mod tests {
             .unwrap();
         assert_eq!(reverse.render().unwrap(), destination);
         reverse.capture_destination(&source).unwrap();
-        reverse.tick(420_000);
+        reverse.tick(NavigationTransitionEdge::HomeToConsoles.duration_us());
         assert_eq!(reverse.render().unwrap(), source);
 
         let mut cancelled = NavigationTransitionPoc::new(16, 12, true);
