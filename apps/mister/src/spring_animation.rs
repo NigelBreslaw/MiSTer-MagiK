@@ -4,10 +4,13 @@
 //! Frame-driven spring animation with persistent position and velocity.
 
 use std::f64::consts::TAU;
+#[cfg(any(test, feature = "ui", feature = "ui-preview"))]
 use std::sync::OnceLock;
 use std::time::Duration;
 
+#[cfg(any(test, feature = "ui", feature = "ui-preview"))]
 const SMOOTH_CURVE_INTERVALS: usize = 256;
+#[cfg(any(test, feature = "ui", feature = "ui-preview"))]
 static SMOOTH_CURVE_Q16: OnceLock<[u16; SMOOTH_CURVE_INTERVALS + 1]> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -215,6 +218,7 @@ impl SpringAnimation {
 /// The table is built only when the transition POC first asks for it. Runtime
 /// interpolation is integer-only, while the endpoints remain exact so snapshot
 /// settlement never depends on floating-point rounding.
+#[cfg(any(test, feature = "ui", feature = "ui-preview"))]
 pub(crate) fn smooth_spring_q16(progress_q16: u16) -> u16 {
     let curve = smooth_spring_curve_q16();
     if progress_q16 == u16::MAX {
@@ -229,14 +233,17 @@ pub(crate) fn smooth_spring_q16(progress_q16: u16) -> u16 {
 }
 
 /// Warms the floating-point spring sampling outside the live render path.
+#[cfg(any(test, feature = "ui", feature = "ui-preview"))]
 pub(crate) fn warm_smooth_spring_curve() {
     let _ = smooth_spring_curve_q16();
 }
 
+#[cfg(any(test, feature = "ui", feature = "ui-preview"))]
 fn smooth_spring_curve_q16() -> &'static [u16; SMOOTH_CURVE_INTERVALS + 1] {
     SMOOTH_CURVE_Q16.get_or_init(build_smooth_curve_q16)
 }
 
+#[cfg(any(test, feature = "ui", feature = "ui-preview"))]
 fn build_smooth_curve_q16() -> [u16; SMOOTH_CURVE_INTERVALS + 1] {
     let mut raw = [0.0; SMOOTH_CURVE_INTERVALS + 1];
     for (index, value) in raw.iter_mut().enumerate() {
