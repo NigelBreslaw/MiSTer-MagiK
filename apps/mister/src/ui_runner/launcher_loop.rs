@@ -2513,7 +2513,11 @@ pub(super) fn run_launcher_loop(
         let mut light_bridge_dirty = false;
         let mut pad_changed_for_input =
             if effective_view.accepts_application_input() && lifecycle.startup_input_enabled() {
-                Some(pad.poll_with_debug_labels(setup_active))
+                Some(if navigation_snapshot_locked_at_loop_start {
+                    pad.poll_connected_with_debug_labels(setup_active)
+                } else {
+                    pad.poll_with_debug_labels(setup_active)
+                })
             } else {
                 None
             };
