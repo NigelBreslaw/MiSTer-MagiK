@@ -66,7 +66,13 @@ const MISTER_START_TIMEOUT: Duration = Duration::from_secs(15);
 pub const DISPLAY_CONFIRM_SECONDS: u8 = 20;
 pub const LAUNCH_RETURN_STATE_PATH: &str = "/tmp/mister-magik/launcher-return-state.json";
 const LAUNCH_RETURN_STATE_SCHEMA: u32 = 3;
-const SETTINGS_MAX_SELECTED: usize = 4;
+const SETTINGS_DISPLAY_SELECTED: usize = 0;
+const SETTINGS_SCREENSAVER_SELECTED: usize = 1;
+const SETTINGS_REDUCE_MOTION_SELECTED: usize = 2;
+const SETTINGS_EXIT_SELECTED: usize = 3;
+const SETTINGS_REBUILD_SELECTED: usize = 4;
+const SETTINGS_ABOUT_SELECTED: usize = 5;
+const SETTINGS_MAX_SELECTED: usize = SETTINGS_ABOUT_SELECTED;
 const ABOUT_MAX_SELECTED: usize = 1;
 const SCREENSAVER_SETTINGS_MAX_SELECTED: usize = 2;
 const LICENSES_MAX_SELECTED: usize = crate::licenses::LICENSE_TITLES.len() - 1;
@@ -272,6 +278,7 @@ pub enum LauncherAction {
     OpenMenu,
     OpenCollection,
     NavigateBack,
+    NavigateHome,
     LaunchGame,
     ExitToMister,
     RebuildDatabase,
@@ -820,6 +827,20 @@ pub struct NavigationTransitionState {
     selected: usize,
     scroll_x: i32,
     settings_focused: bool,
+    settings_selected: usize,
+    about_selected: usize,
+    display_combo_open: bool,
+    display_selected: usize,
+    display_highlighted: usize,
+    display_confirm_remaining: u8,
+    display_confirm_busy: bool,
+    display_error: Option<String>,
+    screensaver_selected: usize,
+    licenses_selected: usize,
+    licenses_expanded: bool,
+    licenses_scroll: ArcadeNav,
+    confirm_action: Option<ConfirmAction>,
+    confirm_selected: usize,
     arcade: ArcadeNav,
     arcade_filter: ArcadeFilterState,
     arcade_search: ArcadeSearchState,
@@ -1290,7 +1311,6 @@ impl LauncherNav {
         ordered
     }
 
-    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
     pub fn current_menu_selected_item_id(&self) -> &str {
         self.current_menu_items()
             .get(self.selected)
@@ -1702,6 +1722,20 @@ impl LauncherNav {
             selected: self.selected,
             scroll_x: self.scroll_x,
             settings_focused: self.settings_focused,
+            settings_selected: self.settings_selected,
+            about_selected: self.about_selected,
+            display_combo_open: self.display_combo_open,
+            display_selected: self.display_selected,
+            display_highlighted: self.display_highlighted,
+            display_confirm_remaining: self.display_confirm_remaining,
+            display_confirm_busy: self.display_confirm_busy,
+            display_error: self.display_error.clone(),
+            screensaver_selected: self.screensaver_selected,
+            licenses_selected: self.licenses_selected,
+            licenses_expanded: self.licenses_expanded,
+            licenses_scroll: self.licenses_scroll.clone(),
+            confirm_action: self.confirm_action,
+            confirm_selected: self.confirm_selected,
             arcade: self.arcade.clone(),
             arcade_filter: self.arcade_filter.clone(),
             arcade_search: self.arcade_search.clone(),
@@ -1725,6 +1759,20 @@ impl LauncherNav {
         self.selected = state.selected;
         self.scroll_x = state.scroll_x;
         self.settings_focused = state.settings_focused;
+        self.settings_selected = state.settings_selected;
+        self.about_selected = state.about_selected;
+        self.display_combo_open = state.display_combo_open;
+        self.display_selected = state.display_selected;
+        self.display_highlighted = state.display_highlighted;
+        self.display_confirm_remaining = state.display_confirm_remaining;
+        self.display_confirm_busy = state.display_confirm_busy;
+        self.display_error = state.display_error;
+        self.screensaver_selected = state.screensaver_selected;
+        self.licenses_selected = state.licenses_selected;
+        self.licenses_expanded = state.licenses_expanded;
+        self.licenses_scroll = state.licenses_scroll;
+        self.confirm_action = state.confirm_action;
+        self.confirm_selected = state.confirm_selected;
         self.arcade = state.arcade;
         self.arcade_filter = state.arcade_filter;
         self.arcade_search = state.arcade_search;
@@ -1882,6 +1930,17 @@ impl LauncherNav {
                 self.leave_arcade(false, &collection_id);
                 self.screen != before
             }
+            LauncherAction::NavigateHome if self.screen == Screen::Home => {
+                let before = self.current_menu_id().to_string();
+                self.go_root();
+                self.current_menu_id() != before
+            }
+            LauncherAction::NavigateHome if self.screen == Screen::Arcade => {
+                let collection_id = self.active_collection_scope_id(catalog).to_string();
+                let before = self.screen;
+                self.leave_arcade(true, &collection_id);
+                self.screen != before
+            }
             _ => false,
         }
     }
@@ -1946,6 +2005,12 @@ impl LauncherNav {
                 self.settings_selected = 0;
                 self.settings_focused = false;
                 self.screen = Screen::Settings;
+            } else if emit_navigation_intents && self.menu_path.len() > 1 {
+                return Some(LauncherEvent {
+                    action: LauncherAction::NavigateHome,
+                    path: None,
+                    settings: None,
+                });
             } else {
                 self.go_root();
             }
@@ -2182,6 +2247,13 @@ impl LauncherNav {
         }
 
         if rising(now.btn_home, self.prev.btn_home) {
+            if emit_navigation_intents {
+                return Some(LauncherEvent {
+                    action: LauncherAction::NavigateHome,
+                    path: None,
+                    settings: None,
+                });
+            }
             self.leave_arcade(true, &collection_id);
             return None;
         }
@@ -2417,7 +2489,7 @@ impl LauncherNav {
             self.settings_selected -= 1;
         }
         if rising(now.btn_a, self.prev.btn_a) {
-            if self.settings_selected == 0 {
+            if self.settings_selected == SETTINGS_DISPLAY_SELECTED {
                 self.display_combo_open = true;
                 let count =
                     mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS.len();
@@ -2428,20 +2500,31 @@ impl LauncherNav {
                 };
                 return None;
             }
-            if self.settings_selected == 1 {
+            if self.settings_selected == SETTINGS_SCREENSAVER_SELECTED {
                 self.screensaver_selected = 0;
                 self.screen = Screen::Screensaver;
                 return None;
             }
-            if self.settings_selected == 4 {
+            if self.settings_selected == SETTINGS_REDUCE_MOTION_SELECTED {
+                let mut next = self.settings.clone();
+                next.reduce_motion = !next.reduce_motion;
+                self.settings = next.clone();
+                return Some(LauncherEvent {
+                    action: LauncherAction::PersistSettings,
+                    path: None,
+                    settings: Some(next),
+                });
+            }
+            if self.settings_selected == SETTINGS_ABOUT_SELECTED {
                 self.about_selected = 0;
                 self.screen = Screen::About;
                 return None;
             }
             self.confirm_selected = 0;
             self.confirm_action = Some(match self.settings_selected {
-                2 => ConfirmAction::ExitToMister,
-                _ => ConfirmAction::RebuildDatabase,
+                SETTINGS_EXIT_SELECTED => ConfirmAction::ExitToMister,
+                SETTINGS_REBUILD_SELECTED => ConfirmAction::RebuildDatabase,
+                _ => return None,
             });
         }
         None
@@ -6652,6 +6735,28 @@ mod tests {
     }
 
     #[test]
+    fn home_intent_defers_direct_root_navigation() {
+        let catalog = hierarchy_catalog();
+        let mut nav = LauncherNav::new();
+        let t0 = Instant::now();
+        nav.sync_launcher_taxonomy(&catalog);
+        assert!(nav.open_menu("menu:consoles"));
+        assert!(nav.open_menu("menu:consoles:nintendo"));
+
+        let home = nav
+            .handle_input_with_navigation_intents(
+                &pad_with(|pad| pad.btn_home = true),
+                t0,
+                &catalog,
+            )
+            .expect("home intent");
+        assert_eq!(home.action, LauncherAction::NavigateHome);
+        assert_eq!(nav.current_menu_id(), "menu:consoles:nintendo");
+        assert!(nav.commit_navigation_intent(&home, &catalog));
+        assert_eq!(nav.current_menu_id(), ROOT_MENU_ID);
+    }
+
+    #[test]
     fn absorbed_back_press_does_not_fire_after_transition_settlement() {
         let catalog = hierarchy_catalog();
         let mut nav = LauncherNav::new();
@@ -6959,6 +7064,26 @@ mod tests {
     }
 
     #[test]
+    fn launcher_settings_toggles_and_persists_reduce_motion() {
+        let catalog = multi_system_catalog();
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Settings;
+        nav.settings_selected = SETTINGS_REDUCE_MOTION_SELECTED;
+
+        let event = nav
+            .handle_input(&pad_with(|pad| pad.btn_a = true), Instant::now(), &catalog)
+            .expect("reduce motion should persist");
+
+        assert!(nav.settings.reduce_motion);
+        assert_eq!(event.action, LauncherAction::PersistSettings);
+        assert!(
+            event
+                .settings
+                .is_some_and(|settings| settings.reduce_motion)
+        );
+    }
+
+    #[test]
     fn launcher_settings_opens_about_then_info_and_b_returns_through_hierarchy() {
         let catalog = multi_system_catalog();
         let mut nav = LauncherNav::new();
@@ -6967,7 +7092,7 @@ mod tests {
         let press_b = pad_with(|pad| pad.btn_b = true);
 
         nav.screen = Screen::Settings;
-        nav.settings_selected = 4;
+        nav.settings_selected = SETTINGS_ABOUT_SELECTED;
         assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
         assert_eq!(nav.screen, Screen::About);
         release(&mut nav, &catalog, t0, 16);
@@ -6978,7 +7103,7 @@ mod tests {
         assert_eq!(nav.screen, Screen::Settings);
         release(&mut nav, &catalog, t0, 48);
 
-        nav.settings_selected = 4;
+        nav.settings_selected = SETTINGS_ABOUT_SELECTED;
         assert!(
             nav.handle_input(&press_a, t0 + Duration::from_millis(64), &catalog)
                 .is_none()
@@ -7364,7 +7489,7 @@ mod tests {
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
         nav.screen = Screen::Settings;
-        nav.settings_selected = 3;
+        nav.settings_selected = SETTINGS_REBUILD_SELECTED;
 
         let press_a = pad_with(|pad| pad.btn_a = true);
         assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
@@ -7517,7 +7642,7 @@ mod tests {
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
         nav.screen = Screen::Settings;
-        nav.settings_selected = 2;
+        nav.settings_selected = SETTINGS_EXIT_SELECTED;
 
         let press_a = pad_with(|pad| pad.btn_a = true);
         assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
@@ -7546,7 +7671,7 @@ mod tests {
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
         nav.screen = Screen::Settings;
-        nav.settings_selected = 2;
+        nav.settings_selected = SETTINGS_EXIT_SELECTED;
 
         let press_a = pad_with(|pad| pad.btn_a = true);
         assert!(nav.handle_input(&press_a, t0, &catalog).is_none());

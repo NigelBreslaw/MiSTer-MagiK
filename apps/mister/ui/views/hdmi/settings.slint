@@ -62,21 +62,27 @@ export component SettingsScreen inherits Rectangle {
             }
 
             SettingsRow {
+                label: "Reduce motion";
+                detail: MisterBridge.reduce-motion ? "On" : "Off";
+                focused: MisterBridge.settings-selected == 2;
+            }
+
+            SettingsRow {
                 label: "Exit to MiSTer";
                 detail: "Use the stock MiSTer menu until reboot";
-                focused: MisterBridge.settings-selected == 2;
+                focused: MisterBridge.settings-selected == 3;
             }
 
             SettingsRow {
                 label: "Rebuild Database";
                 detail: "Rebuild all library systems";
-                focused: MisterBridge.settings-selected == 3;
+                focused: MisterBridge.settings-selected == 4;
             }
 
             SettingsRow {
                 label: "About";
                 detail: "MiSTer MagiK and Slint";
-                focused: MisterBridge.settings-selected == 4;
+                focused: MisterBridge.settings-selected == 5;
             }
 
             Rectangle { vertical-stretch: 1; background: transparent; }

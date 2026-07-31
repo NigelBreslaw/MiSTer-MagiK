@@ -136,6 +136,7 @@ pub(crate) fn bootstrap_agent_with(
                 agent_protocol::AGENT_VERSION,
                 agent_protocol::PROTOCOL_VERSION,
                 true,
+                true,
             ))
         {
             cleanup_agent_backup(&session)?;
@@ -161,10 +162,12 @@ fn preferred_token(explicit: Option<&str>, stored: Option<&str>) -> Option<Strin
 }
 
 fn apply_installed_version_policy(endpoint: &AgentEndpoint) -> Result<bool> {
-    let Ok((agent, protocol, has_capture_v2)) = installed_identity(endpoint) else {
+    let Ok((agent, protocol, has_capture_v2, has_launcher_automation)) =
+        installed_identity(endpoint)
+    else {
         return Ok(false);
     };
-    match version_action(agent, protocol, has_capture_v2) {
+    match version_action(agent, protocol, has_capture_v2, has_launcher_automation) {
         VersionAction::Current => Ok(true),
         VersionAction::Upgrade => Ok(false),
         VersionAction::RejectNewer => Err(format!(
@@ -174,10 +177,16 @@ fn apply_installed_version_policy(endpoint: &AgentEndpoint) -> Result<bool> {
     }
 }
 
-fn version_action(agent: u64, protocol: u64, has_capture_v2: bool) -> VersionAction {
+fn version_action(
+    agent: u64,
+    protocol: u64,
+    has_capture_v2: bool,
+    has_launcher_automation: bool,
+) -> VersionAction {
     if agent == agent_protocol::AGENT_VERSION
         && protocol == agent_protocol::PROTOCOL_VERSION
         && has_capture_v2
+        && has_launcher_automation
     {
         VersionAction::Current
     } else if agent > agent_protocol::AGENT_VERSION || protocol > agent_protocol::PROTOCOL_VERSION {
@@ -187,7 +196,9 @@ fn version_action(agent: u64, protocol: u64, has_capture_v2: bool) -> VersionAct
     }
 }
 
-fn installed_identity(endpoint: &AgentEndpoint) -> std::result::Result<(u64, u64, bool), String> {
+fn installed_identity(
+    endpoint: &AgentEndpoint,
+) -> std::result::Result<(u64, u64, bool, bool), String> {
     let reply = agent_request_at(endpoint, "ping", json!({}), Duration::from_millis(500))
         .map_err(|error| error.to_string())?;
     let result = reply.response.get("result").unwrap_or(&Value::Null);
@@ -207,7 +218,15 @@ fn installed_identity(endpoint: &AgentEndpoint) -> std::result::Result<(u64, u64
                 capability.as_str() == Some(agent_protocol::FRAMEBUFFER_CAPTURE_CAPABILITY)
             })
         });
-    Ok((agent, protocol, has_capture_v2))
+    let has_launcher_automation = result
+        .get("capabilities")
+        .and_then(Value::as_array)
+        .is_some_and(|capabilities| {
+            capabilities.iter().any(|capability| {
+                capability.as_str() == Some(agent_protocol::LAUNCHER_AUTOMATION_CAPABILITY)
+            })
+        });
+    Ok((agent, protocol, has_capture_v2, has_launcher_automation))
 }
 
 fn valid_token(token: &str) -> bool {
@@ -1101,24 +1120,26 @@ mod tests {
                 agent_protocol::AGENT_VERSION,
                 agent_protocol::PROTOCOL_VERSION,
                 true,
+                true,
             ),
             VersionAction::Current
         );
-        assert_eq!(version_action(0, 0, false), VersionAction::Upgrade);
+        assert_eq!(version_action(0, 0, false, false), VersionAction::Upgrade);
         assert_eq!(
             version_action(
                 agent_protocol::AGENT_VERSION,
                 agent_protocol::PROTOCOL_VERSION,
                 false,
+                true,
             ),
             VersionAction::Upgrade
         );
         assert_eq!(
-            version_action(agent_protocol::AGENT_VERSION + 1, 0, false),
+            version_action(agent_protocol::AGENT_VERSION + 1, 0, false, false),
             VersionAction::RejectNewer
         );
         assert_eq!(
-            version_action(0, agent_protocol::PROTOCOL_VERSION + 1, false),
+            version_action(0, agent_protocol::PROTOCOL_VERSION + 1, false, false),
             VersionAction::RejectNewer
         );
     }

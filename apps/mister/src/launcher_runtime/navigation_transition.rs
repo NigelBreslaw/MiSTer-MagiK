@@ -22,9 +22,8 @@ const SYSTEM_SELECTED_ROW_START_Q16: u16 = 6_000;
 const SUPER_SCALER_TEXTURE_FADE_START_Q16: u16 = 8_000;
 const SUPER_SCALER_TEXTURE_FADE_END_Q16: u16 = 16_000;
 const DEFAULT_PREPARATION_TIMEOUT_US: u64 = 5_000_000;
-const HUD_WIDTH: usize = 286;
-const HUD_HEIGHT: usize = 28;
-const HUD_MARGIN: usize = 8;
+const SETTINGS_PAGE_DURATION_US: u64 = 320_000;
+const SETTINGS_PAGE_SOURCE_TRAVEL_DIVISOR: isize = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NavigationTransitionEdge {
@@ -40,17 +39,9 @@ impl NavigationTransitionEdge {
 
     pub const fn duration_us(self) -> u64 {
         if self.enters_system_browser() {
-            1_440_000
+            720_000
         } else {
-            1_260_000
-        }
-    }
-
-    const fn history_index(self) -> usize {
-        match self {
-            Self::HomeToConsoles => 0,
-            Self::HomeToArcade => 1,
-            Self::ConsolesToSystem => 2,
+            600_000
         }
     }
 
@@ -78,6 +69,13 @@ impl NavigationTransitionEdge {
 pub enum NavigationTransitionDirection {
     Forward,
     Reverse,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum NavigationTransitionRenderer {
+    #[default]
+    SuperScaler,
+    SettingsPage,
 }
 
 impl NavigationTransitionDirection {
@@ -234,6 +232,223 @@ pub fn hdmi_navigation_geometry(
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CrtNavigationLayout {
+    pub content_x: usize,
+    pub content_y: usize,
+    pub content_width: usize,
+    pub content_height: usize,
+    pub grid_x: usize,
+    pub grid_y: usize,
+    pub header_height: usize,
+    pub footer_height: usize,
+    pub heading_font_height: usize,
+    pub title_font_height: usize,
+    pub detail_font_height: usize,
+    pub game_row_height: usize,
+}
+
+impl CrtNavigationLayout {
+    const fn content_right(self) -> usize {
+        self.content_x.saturating_add(self.content_width)
+    }
+
+    const fn content_bottom(self) -> usize {
+        self.content_y.saturating_add(self.content_height)
+    }
+}
+
+pub fn crt_navigation_geometry(
+    frame_width: usize,
+    frame_height: usize,
+    layout: CrtNavigationLayout,
+    selected_index: usize,
+    item_count: usize,
+    root_menu: bool,
+    edge: NavigationTransitionEdge,
+    selected_label: &str,
+) -> NavigationTransitionGeometry {
+    let grid_x = layout.grid_x.max(1);
+    let grid_y = layout.grid_y.max(1);
+    let header_height = layout.header_height.max(1);
+    let footer_height = layout.footer_height.max(1);
+    let title_height = layout.title_font_height.max(1);
+    let detail_height = layout.detail_font_height.max(1);
+    let card_x = layout.content_x.saturating_add(grid_x * 2);
+    let card_width = layout.content_width.saturating_sub(grid_x * 4).max(1);
+    let viewport_y = layout
+        .content_y
+        .saturating_add(grid_y * 3)
+        .saturating_add(header_height);
+    let viewport_height = layout
+        .content_height
+        .saturating_sub(header_height)
+        .saturating_sub(footer_height)
+        .saturating_sub(grid_y * 6)
+        .max(1);
+    let card_height = if root_menu {
+        viewport_height.saturating_sub(grid_y * 3) / 4
+    } else {
+        viewport_height.saturating_sub(grid_y * 4) * 2 / 9
+    }
+    .max(1);
+    let card_pitch = card_height.saturating_add(grid_y);
+    let bottom_window = !root_menu && item_count > 4 && selected_index >= item_count - 2;
+    let max_first = item_count.saturating_sub(5);
+    let first_visible = if root_menu {
+        0
+    } else if bottom_window {
+        max_first
+    } else {
+        selected_index.saturating_sub(2).min(max_first)
+    };
+    let leading_clip = usize::from(bottom_window) * (card_pitch / 2);
+    let card_y = viewport_y
+        .saturating_add(selected_index.saturating_sub(first_visible) * card_pitch)
+        .saturating_sub(leading_clip);
+    let source_card = clipped_navigation_rect(
+        card_x,
+        card_y,
+        card_width,
+        card_height,
+        frame_width,
+        frame_height,
+    );
+    let label_x = card_x
+        .saturating_add(grid_x * 3)
+        .saturating_add(title_height);
+    let label_width = card_x
+        .saturating_add(card_width)
+        .saturating_sub(label_x)
+        .saturating_sub(grid_x * 2)
+        .max(1);
+    let text_group_height = title_height.saturating_add(detail_height);
+    let label_y = card_y.saturating_add(card_height.saturating_sub(text_group_height) / 2);
+    let source_label = clipped_navigation_rect(
+        label_x,
+        label_y,
+        label_width,
+        title_height,
+        frame_width,
+        frame_height,
+    );
+    let source_detail = clipped_navigation_rect(
+        label_x,
+        label_y.saturating_add(title_height),
+        label_width,
+        detail_height,
+        frame_width,
+        frame_height,
+    );
+    let destination_font_height = if edge.enters_system_browser() {
+        layout.heading_font_height.max(1)
+    } else {
+        title_height
+    };
+    let title_x = layout.content_x.saturating_add(grid_x * 3);
+    let title_y = layout
+        .content_y
+        .saturating_add(grid_y * 2)
+        .saturating_add(header_height.saturating_sub(destination_font_height) / 2);
+    let title_width = selected_label
+        .chars()
+        .count()
+        .max(1)
+        .saturating_mul(destination_font_height)
+        .min(layout.content_right().saturating_sub(title_x).max(1));
+    let destination_title = clipped_navigation_rect(
+        title_x,
+        title_y,
+        title_width,
+        destination_font_height,
+        frame_width,
+        frame_height,
+    );
+    let list_x = layout.content_x.saturating_add(grid_x * 2);
+    let list_y = layout
+        .content_y
+        .saturating_add(header_height)
+        .saturating_add(grid_y * 3);
+    let list_width = layout.content_width.saturating_sub(grid_x * 4).max(1);
+    let list_height = layout
+        .content_bottom()
+        .saturating_sub(footer_height)
+        .saturating_sub(grid_y * 3)
+        .saturating_sub(list_y)
+        .max(1);
+    let row_height = layout.game_row_height.max(1);
+    let selected_row_y = list_y.saturating_add(list_height.saturating_sub(row_height) / 2);
+    let destination_list = clipped_navigation_rect(
+        list_x,
+        list_y,
+        list_width,
+        list_height,
+        frame_width,
+        frame_height,
+    );
+    let (label_ascii, label_len) = navigation_label_ascii(selected_label);
+    NavigationTransitionGeometry {
+        label_signature: navigation_label_signature(selected_label),
+        label_ascii,
+        label_len,
+        source_card,
+        source_label,
+        source_detail,
+        destination_title,
+        destination_detail: clipped_navigation_rect(
+            destination_title.x as usize,
+            destination_title.bottom() as usize,
+            destination_title.width as usize,
+            detail_height,
+            frame_width,
+            frame_height,
+        ),
+        destination_list,
+        destination_selected_row: clipped_navigation_rect(
+            list_x,
+            selected_row_y,
+            list_width,
+            row_height,
+            frame_width,
+            frame_height,
+        ),
+        destination_preview: NavigationTransitionRect::default(),
+        destination_footer: clipped_navigation_rect(
+            list_x,
+            layout
+                .content_bottom()
+                .saturating_sub(grid_y * 2)
+                .saturating_sub(footer_height),
+            list_width,
+            footer_height,
+            frame_width,
+            frame_height,
+        ),
+    }
+}
+
+fn clipped_navigation_rect(
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+    frame_width: usize,
+    frame_height: usize,
+) -> NavigationTransitionRect {
+    let x = x.min(frame_width);
+    let y = y.min(frame_height);
+    NavigationTransitionRect {
+        x: x.min(u16::MAX as usize) as u16,
+        y: y.min(u16::MAX as usize) as u16,
+        width: width
+            .min(frame_width.saturating_sub(x))
+            .min(u16::MAX as usize) as u16,
+        height: height
+            .min(frame_height.saturating_sub(y))
+            .min(u16::MAX as usize) as u16,
+    }
+}
+
 fn scale_hdmi_x(value: usize, frame_width: usize) -> u16 {
     value
         .saturating_mul(frame_width)
@@ -311,6 +526,7 @@ pub struct NavigationTransitionRequest {
     pub geometry: NavigationTransitionGeometry,
     pub duration_us: u64,
     pub preparation_timeout_us: u64,
+    renderer: NavigationTransitionRenderer,
 }
 
 impl NavigationTransitionRequest {
@@ -325,6 +541,18 @@ impl NavigationTransitionRequest {
             geometry,
             duration_us: edge.duration_us(),
             preparation_timeout_us: DEFAULT_PREPARATION_TIMEOUT_US,
+            renderer: NavigationTransitionRenderer::SuperScaler,
+        }
+    }
+
+    fn settings_page(direction: NavigationTransitionDirection) -> Self {
+        Self {
+            edge: NavigationTransitionEdge::HomeToConsoles,
+            direction,
+            geometry: NavigationTransitionGeometry::default(),
+            duration_us: SETTINGS_PAGE_DURATION_US,
+            preparation_timeout_us: DEFAULT_PREPARATION_TIMEOUT_US,
+            renderer: NavigationTransitionRenderer::SettingsPage,
         }
     }
 }
@@ -748,7 +976,10 @@ impl NavigationTransitionController {
 }
 
 const fn request_cover_progress_q16(request: NavigationTransitionRequest) -> u16 {
-    let forward_cover = SUPER_SCALER_COVER_PROGRESS;
+    let forward_cover = match request.renderer {
+        NavigationTransitionRenderer::SuperScaler => SUPER_SCALER_COVER_PROGRESS,
+        NavigationTransitionRenderer::SettingsPage => PROGRESS_MAX / 2,
+    };
     match request.direction {
         NavigationTransitionDirection::Forward => forward_cover,
         NavigationTransitionDirection::Reverse => PROGRESS_MAX - forward_cover,
@@ -903,7 +1134,7 @@ pub struct NavigationTransitionRenderStats {
 }
 
 #[derive(Debug)]
-pub struct NavigationTransitionPoc {
+pub struct NavigationTransitionRuntime {
     enabled: bool,
     duration_override_us: Option<u64>,
     controller: NavigationTransitionController,
@@ -914,22 +1145,12 @@ pub struct NavigationTransitionPoc {
     pending_status_quiesce_us: u64,
     pending_status_quiesce_timeout: bool,
     buffers: NavigationTransitionBuffers,
-    geometry_history: [Option<NavigationTransitionGeometry>; 3],
+    geometry_history: Vec<(NavigationTransitionEdge, NavigationTransitionGeometry)>,
     last_render_stats: NavigationTransitionRenderStats,
     last_frame_work_us: u64,
-    hud_scratch: Vec<Rgb565Pixel>,
 }
 
-impl NavigationTransitionPoc {
-    pub fn from_env(width: usize, height: usize) -> Self {
-        let mut poc = Self::new(width, height, env_flag("MISTER_NAV_TRANSITION_POC"));
-        poc.duration_override_us = std::env::var("MISTER_NAV_TRANSITION_DEBUG_DURATION_MS")
-            .ok()
-            .and_then(|value| value.trim().parse::<u64>().ok())
-            .map(|milliseconds| milliseconds.clamp(100, 10_000).saturating_mul(1_000));
-        poc
-    }
-
+impl NavigationTransitionRuntime {
     pub fn new(width: usize, height: usize, enabled: bool) -> Self {
         if enabled {
             warm_smooth_spring_curve();
@@ -946,17 +1167,9 @@ impl NavigationTransitionPoc {
             pending_status_quiesce_us: 0,
             pending_status_quiesce_timeout: false,
             buffers: NavigationTransitionBuffers::new(buffer_width, buffer_height),
-            geometry_history: [None; 3],
+            geometry_history: Vec::new(),
             last_render_stats: NavigationTransitionRenderStats::default(),
             last_frame_work_us: 0,
-            hud_scratch: vec![
-                Rgb565Pixel(0);
-                if enabled {
-                    HUD_WIDTH.saturating_mul(HUD_HEIGHT)
-                } else {
-                    0
-                }
-            ],
         }
     }
 
@@ -969,6 +1182,22 @@ impl NavigationTransitionPoc {
         self.enabled
     }
 
+    pub fn set_enabled(&mut self, width: usize, height: usize, enabled: bool) {
+        if self.enabled == enabled {
+            return;
+        }
+        self.enabled = enabled;
+        self.pending_request = None;
+        self.controller = NavigationTransitionController::default();
+        self.geometry_history.clear();
+        if enabled {
+            warm_smooth_spring_curve();
+            self.buffers.resize(width, height);
+        } else {
+            self.buffers.resize(0, 0);
+        }
+    }
+
     pub fn begin(
         &mut self,
         edge: NavigationTransitionEdge,
@@ -977,20 +1206,43 @@ impl NavigationTransitionPoc {
         source: &[Rgb565Pixel],
         now_us: u64,
     ) -> Result<bool, NavigationTransitionFailure> {
+        let mut request = NavigationTransitionRequest::new(edge, direction, geometry);
+        if let Some(duration_us) = self.duration_override_us {
+            request.duration_us = duration_us;
+        }
+        let started = self.begin_request(request, source, now_us)?;
+        if started && direction == NavigationTransitionDirection::Forward {
+            self.geometry_history.push((edge, geometry));
+        }
+        Ok(started)
+    }
+
+    pub fn begin_settings_page(
+        &mut self,
+        direction: NavigationTransitionDirection,
+        source: &[Rgb565Pixel],
+        now_us: u64,
+    ) -> Result<bool, NavigationTransitionFailure> {
+        let mut request = NavigationTransitionRequest::settings_page(direction);
+        if let Some(duration_us) = self.duration_override_us {
+            request.duration_us = duration_us;
+        }
+        self.begin_request(request, source, now_us)
+    }
+
+    fn begin_request(
+        &mut self,
+        request: NavigationTransitionRequest,
+        source: &[Rgb565Pixel],
+        now_us: u64,
+    ) -> Result<bool, NavigationTransitionFailure> {
         if !self.enabled || self.is_active() {
             return Ok(false);
-        }
-        if direction == NavigationTransitionDirection::Forward {
-            self.geometry_history[edge.history_index()] = Some(geometry);
         }
         self.buffers.begin_capture();
         let capture_started = Instant::now();
         self.buffers.capture_source(source)?;
         let capture_us = capture_started.elapsed().as_micros().min(u64::MAX as u128) as u64;
-        let mut request = NavigationTransitionRequest::new(edge, direction, geometry);
-        if let Some(duration_us) = self.duration_override_us {
-            request.duration_us = duration_us;
-        }
         self.pending_request = Some(request);
         self.pending_capture_us = capture_us;
         self.pending_started_us = now_us;
@@ -1004,7 +1256,10 @@ impl NavigationTransitionPoc {
         &self,
         edge: NavigationTransitionEdge,
     ) -> Option<NavigationTransitionGeometry> {
-        self.geometry_history[edge.history_index()]
+        self.geometry_history
+            .last()
+            .filter(|(history_edge, _)| *history_edge == edge)
+            .map(|(_, geometry)| *geometry)
     }
 
     pub fn capture_destination(
@@ -1057,19 +1312,27 @@ impl NavigationTransitionPoc {
                 ..NavigationTransitionRenderStats::default()
             }
         } else {
-            let mut stats = render_super_scaler_shell(&mut self.buffers, request, frame)?;
-            render_hero_label_last(&mut self.buffers, request, frame, &mut stats)?;
-            stats
+            match request.renderer {
+                NavigationTransitionRenderer::SuperScaler => {
+                    let mut stats = render_super_scaler_shell(&mut self.buffers, request, frame)?;
+                    render_hero_label_last(&mut self.buffers, request, frame, &mut stats)?;
+                    let overlay_started = Instant::now();
+                    apply_crt_scanline_overlay(
+                        self.buffers.working.as_mut_slice(),
+                        self.buffers.width,
+                        self.buffers.height,
+                        frame,
+                        &mut stats,
+                    );
+                    stats.overlay_us =
+                        overlay_started.elapsed().as_micros().min(u64::MAX as u128) as u64;
+                    stats
+                }
+                NavigationTransitionRenderer::SettingsPage => {
+                    render_settings_page_push(&mut self.buffers, request, frame)?
+                }
+            }
         };
-        let overlay_started = Instant::now();
-        apply_crt_scanline_overlay(
-            self.buffers.working.as_mut_slice(),
-            self.buffers.width,
-            self.buffers.height,
-            frame,
-            &mut stats,
-        );
-        stats.overlay_us = overlay_started.elapsed().as_micros().min(u64::MAX as u128) as u64;
         stats.render_us = started.elapsed().as_micros().min(u64::MAX as u128) as u64;
         self.controller.telemetry.overlay_us = self
             .controller
@@ -1090,12 +1353,6 @@ impl NavigationTransitionPoc {
             .telemetry_mut()
             .note_render(stats.render_us, false);
         self.last_render_stats = stats;
-        restore_hud_pixels(
-            &self.hud_scratch,
-            self.buffers.width,
-            self.buffers.height,
-            self.buffers.working.as_mut_slice(),
-        );
         Ok(self.buffers.working())
     }
 
@@ -1126,7 +1383,28 @@ impl NavigationTransitionPoc {
     }
 
     pub fn complete(&mut self) -> Option<NavigationTransitionCompletion> {
-        self.controller.complete()
+        let request = self.request();
+        let completion = self.controller.complete()?;
+        if request.is_some_and(|request| {
+            request.renderer == NavigationTransitionRenderer::SuperScaler
+                && matches!(
+                    (request.direction, completion.endpoint),
+                    (
+                        NavigationTransitionDirection::Forward,
+                        NavigationTransitionEndpoint::Source
+                    ) | (
+                        NavigationTransitionDirection::Reverse,
+                        NavigationTransitionEndpoint::Destination
+                    )
+                )
+        }) {
+            self.geometry_history.pop();
+        }
+        Some(completion)
+    }
+
+    pub fn clear_geometry_history(&mut self) {
+        self.geometry_history.clear();
     }
 
     pub fn frame(&self) -> NavigationTransitionFrame {
@@ -1176,36 +1454,6 @@ impl NavigationTransitionPoc {
         self.pending_status_quiesce_timeout = timed_out;
     }
 
-    pub fn capture_hud(&mut self, frame: &[Rgb565Pixel]) {
-        let width = self.buffers.width;
-        let height = self.buffers.height;
-        let hud_width = HUD_WIDTH.min(width.saturating_sub(HUD_MARGIN));
-        if !self.enabled
-            || hud_width == 0
-            || height < HUD_MARGIN.saturating_add(HUD_HEIGHT)
-            || frame.len() != width.saturating_mul(height)
-            || self.hud_scratch.len() < hud_width.saturating_mul(HUD_HEIGHT)
-        {
-            return;
-        }
-        let x = width.saturating_sub(HUD_MARGIN).saturating_sub(hud_width);
-        for row in 0..HUD_HEIGHT {
-            let source = (HUD_MARGIN + row) * width + x;
-            let target = row * hud_width;
-            self.hud_scratch[target..target + hud_width]
-                .copy_from_slice(&frame[source..source + hud_width]);
-        }
-    }
-
-    pub fn restore_hud(&self, frame: &mut [Rgb565Pixel]) {
-        restore_hud_pixels(
-            &self.hud_scratch,
-            self.buffers.width,
-            self.buffers.height,
-            frame,
-        );
-    }
-
     pub const fn telemetry(&self) -> NavigationTransitionTelemetry {
         self.controller.telemetry()
     }
@@ -1226,39 +1474,6 @@ impl NavigationTransitionPoc {
         }
         captured
     }
-}
-
-fn restore_hud_pixels(
-    hud_scratch: &[Rgb565Pixel],
-    width: usize,
-    height: usize,
-    frame: &mut [Rgb565Pixel],
-) {
-    let hud_width = HUD_WIDTH.min(width.saturating_sub(HUD_MARGIN));
-    if hud_width == 0
-        || height < HUD_MARGIN.saturating_add(HUD_HEIGHT)
-        || frame.len() != width.saturating_mul(height)
-        || hud_scratch.len() < hud_width.saturating_mul(HUD_HEIGHT)
-    {
-        return;
-    }
-    let x = width.saturating_sub(HUD_MARGIN).saturating_sub(hud_width);
-    for row in 0..HUD_HEIGHT {
-        let source = row * hud_width;
-        let target = (HUD_MARGIN + row) * width + x;
-        frame[target..target + hud_width].copy_from_slice(&hud_scratch[source..source + hud_width]);
-    }
-}
-
-fn env_flag(name: &str) -> bool {
-    std::env::var(name)
-        .map(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-        .unwrap_or(false)
 }
 
 fn apply_crt_scanline_overlay(
@@ -1593,6 +1808,110 @@ fn render_super_scaler_shell(
         }
     }
     Ok(stats)
+}
+
+fn render_settings_page_push(
+    buffers: &mut NavigationTransitionBuffers,
+    request: NavigationTransitionRequest,
+    frame: NavigationTransitionFrame,
+) -> Result<NavigationTransitionRenderStats, NavigationTransitionFailure> {
+    if !buffers.source_ready
+        || buffers.source.len() != buffers.width.saturating_mul(buffers.height)
+        || buffers.working.len() != buffers.source.len()
+    {
+        return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
+    }
+    let source = buffers.source.as_slice();
+    let destination = buffers
+        .destination_ready
+        .then_some(buffers.destination.as_slice());
+    let working = buffers.working.as_mut_slice();
+    let mut stats = NavigationTransitionRenderStats::default();
+
+    if frame.progress_q16 == 0 || destination.is_none() {
+        working.copy_from_slice(source);
+        stats.copied_pixels = source.len() as u64;
+        return Ok(stats);
+    }
+    let destination = destination.expect("checked destination snapshot");
+    if frame.progress_q16 == PROGRESS_MAX {
+        working.copy_from_slice(destination);
+        stats.copied_pixels = destination.len() as u64;
+        return Ok(stats);
+    }
+
+    let travel_q16 = spring_ease_q16(frame.progress_q16) as isize;
+    let width = buffers.width as isize;
+    let source_travel = width / SETTINGS_PAGE_SOURCE_TRAVEL_DIVISOR;
+    working.fill(Rgb565Pixel(0));
+    match request.direction {
+        NavigationTransitionDirection::Forward => {
+            let source_x = -(source_travel * travel_q16 / PROGRESS_MAX as isize);
+            let destination_x = width - width * travel_q16 / PROGRESS_MAX as isize;
+            stats.copied_pixels = stats
+                .copied_pixels
+                .saturating_add(blit_snapshot_x(
+                    working,
+                    source,
+                    buffers.width,
+                    buffers.height,
+                    source_x,
+                ))
+                .saturating_add(blit_snapshot_x(
+                    working,
+                    destination,
+                    buffers.width,
+                    buffers.height,
+                    destination_x,
+                ));
+        }
+        NavigationTransitionDirection::Reverse => {
+            let destination_x = -source_travel + source_travel * travel_q16 / PROGRESS_MAX as isize;
+            let source_x = width * travel_q16 / PROGRESS_MAX as isize;
+            stats.copied_pixels = stats
+                .copied_pixels
+                .saturating_add(blit_snapshot_x(
+                    working,
+                    destination,
+                    buffers.width,
+                    buffers.height,
+                    destination_x,
+                ))
+                .saturating_add(blit_snapshot_x(
+                    working,
+                    source,
+                    buffers.width,
+                    buffers.height,
+                    source_x,
+                ));
+        }
+    }
+    Ok(stats)
+}
+
+fn blit_snapshot_x(
+    output: &mut [Rgb565Pixel],
+    snapshot: &[Rgb565Pixel],
+    width: usize,
+    height: usize,
+    offset_x: isize,
+) -> u64 {
+    if output.len() != width.saturating_mul(height) || snapshot.len() != output.len() {
+        return 0;
+    }
+    let destination_x = offset_x.max(0) as usize;
+    let source_x = offset_x.saturating_neg().max(0) as usize;
+    if destination_x >= width || source_x >= width {
+        return 0;
+    }
+    let copy_width = (width - destination_x).min(width - source_x);
+    for y in 0..height {
+        let destination_start = y * width + destination_x;
+        let source_start = y * width + source_x;
+        output[destination_start..destination_start + copy_width]
+            .copy_from_slice(&snapshot[source_start..source_start + copy_width]);
+    }
+    copy_width.saturating_mul(height) as u64
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1979,41 +2298,43 @@ fn reveal_destination_regions(
             stats,
         );
         let preview = request.geometry.destination_preview;
-        draw_preview_transfer_beam(
-            working,
-            width,
-            height,
-            selected,
-            preview,
-            progress_q16,
-            stats,
-        );
-        copy_rect_preview_aperture(
-            working,
-            destination,
-            width,
-            height,
-            preview,
-            spring_ease_q16(window_q16(progress_q16, 34_000, 60_000)),
-            stats,
-        );
-        draw_preview_impact_flash(working, width, height, preview, progress_q16, stats);
-        draw_preview_aperture_glow(
-            working,
-            width,
-            height,
-            preview,
-            spring_ease_q16(window_q16(progress_q16, 34_000, 60_000)),
-            stats,
-        );
-        draw_progressive_preview_frame(
-            working,
-            width,
-            height,
-            preview,
-            preview_rail_envelope(progress_q16),
-            stats,
-        );
+        if preview.width > 0 && preview.height > 0 {
+            draw_preview_transfer_beam(
+                working,
+                width,
+                height,
+                selected,
+                preview,
+                progress_q16,
+                stats,
+            );
+            copy_rect_preview_aperture(
+                working,
+                destination,
+                width,
+                height,
+                preview,
+                spring_ease_q16(window_q16(progress_q16, 34_000, 60_000)),
+                stats,
+            );
+            draw_preview_impact_flash(working, width, height, preview, progress_q16, stats);
+            draw_preview_aperture_glow(
+                working,
+                width,
+                height,
+                preview,
+                spring_ease_q16(window_q16(progress_q16, 34_000, 60_000)),
+                stats,
+            );
+            draw_progressive_preview_frame(
+                working,
+                width,
+                height,
+                preview,
+                preview_rail_envelope(progress_q16),
+                stats,
+            );
+        }
     } else {
         let card_y = header_height;
         let source_center = request.geometry.source_card.x as usize
@@ -3244,33 +3565,37 @@ fn conceal_source_regions(
             shell,
             stats,
         );
-        close_preview_aperture(
-            working,
-            source,
-            width,
-            height,
-            request.geometry.destination_preview,
-            spring_ease_q16(window_q16(progress_q16, 0, 25_000)),
-            shell,
-            stats,
-        );
-        draw_progressive_preview_frame(
-            working,
-            width,
-            height,
-            request.geometry.destination_preview,
-            preview_rail_envelope(reverse_preview_timeline(progress_q16)),
-            stats,
-        );
-        draw_reverse_preview_transfer_beam(
-            working,
-            width,
-            height,
-            selected,
-            request.geometry.destination_preview,
-            progress_q16,
-            stats,
-        );
+        if request.geometry.destination_preview.width > 0
+            && request.geometry.destination_preview.height > 0
+        {
+            close_preview_aperture(
+                working,
+                source,
+                width,
+                height,
+                request.geometry.destination_preview,
+                spring_ease_q16(window_q16(progress_q16, 0, 25_000)),
+                shell,
+                stats,
+            );
+            draw_progressive_preview_frame(
+                working,
+                width,
+                height,
+                request.geometry.destination_preview,
+                preview_rail_envelope(reverse_preview_timeline(progress_q16)),
+                stats,
+            );
+            draw_reverse_preview_transfer_beam(
+                working,
+                width,
+                height,
+                selected,
+                request.geometry.destination_preview,
+                progress_q16,
+                stats,
+            );
+        }
         slide_rect_out_left(
             working,
             source,
@@ -3923,6 +4248,193 @@ fn lerp_u16(from: u16, to: u16, progress_q16: u16) -> u16 {
 mod tests {
     use super::*;
 
+    #[test]
+    fn settings_page_push_settles_to_exact_snapshots_in_both_directions() {
+        let width = 16;
+        let height = 3;
+        let source = vec![Rgb565Pixel(0xf800); width * height];
+        let destination = vec![Rgb565Pixel(0x07e0); width * height];
+        let mut buffers = NavigationTransitionBuffers::new(width, height);
+        buffers.begin_capture();
+        buffers.capture_source(&source).unwrap();
+        buffers.capture_destination(&destination).unwrap();
+
+        for direction in [
+            NavigationTransitionDirection::Forward,
+            NavigationTransitionDirection::Reverse,
+        ] {
+            let request = NavigationTransitionRequest::settings_page(direction);
+            render_settings_page_push(
+                &mut buffers,
+                request,
+                NavigationTransitionFrame {
+                    progress_q16: 0,
+                    ..NavigationTransitionFrame::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(buffers.working(), source);
+
+            render_settings_page_push(
+                &mut buffers,
+                request,
+                NavigationTransitionFrame {
+                    progress_q16: PROGRESS_MAX,
+                    ..NavigationTransitionFrame::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(buffers.working(), destination);
+        }
+    }
+
+    #[test]
+    fn crt_navigation_geometry_stays_inside_every_supported_frame_shape() {
+        for (frame_width, frame_height, content_x, content_y, content_width, content_height) in [
+            (640, 480, 0, 0, 640, 480),
+            (640, 480, 0, 20, 640, 255),
+            (576, 576, 0, 0, 576, 576),
+        ] {
+            let layout = CrtNavigationLayout {
+                content_x,
+                content_y,
+                content_width,
+                content_height,
+                grid_x: 4,
+                grid_y: 4,
+                header_height: 48,
+                footer_height: 24,
+                heading_font_height: 16,
+                title_font_height: 16,
+                detail_font_height: 8,
+                game_row_height: 24,
+            };
+            for (selected, item_count, root_menu) in
+                [(0, 4, true), (3, 4, true), (4, 9, false), (8, 9, false)]
+            {
+                let geometry = crt_navigation_geometry(
+                    frame_width,
+                    frame_height,
+                    layout,
+                    selected,
+                    item_count,
+                    root_menu,
+                    NavigationTransitionEdge::ConsolesToSystem,
+                    "Arcade",
+                );
+                for rect in [
+                    geometry.source_card,
+                    geometry.source_label,
+                    geometry.source_detail,
+                    geometry.destination_title,
+                    geometry.destination_detail,
+                    geometry.destination_list,
+                    geometry.destination_selected_row,
+                    geometry.destination_footer,
+                ] {
+                    assert!(rect.fits(frame_width, frame_height), "{rect:?}");
+                }
+                assert_eq!(
+                    geometry.destination_preview,
+                    NavigationTransitionRect::default()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn settings_page_push_moves_only_horizontally_with_clipped_row_copies() {
+        let width = 8;
+        let height = 2;
+        let source: Vec<_> = (0..width * height)
+            .map(|index| Rgb565Pixel(index as u16))
+            .collect();
+        let mut output = vec![Rgb565Pixel(0xffff); width * height];
+
+        assert_eq!(
+            blit_snapshot_x(&mut output, &source, width, height, -3),
+            ((width - 3) * height) as u64
+        );
+        assert_eq!(&output[..width - 3], &source[3..width]);
+        assert_eq!(
+            &output[width..width + width - 3],
+            &source[width + 3..width * 2]
+        );
+
+        output.fill(Rgb565Pixel(0xffff));
+        assert_eq!(
+            blit_snapshot_x(&mut output, &source, width, height, 3),
+            ((width - 3) * height) as u64
+        );
+        assert_eq!(&output[3..width], &source[..width - 3]);
+        assert_eq!(&output[width + 3..width * 2], &source[width..width * 2 - 3]);
+    }
+
+    #[test]
+    fn cancelled_settings_push_does_not_consume_super_scaler_geometry_history() {
+        let width = 16;
+        let height = 8;
+        let snapshot = vec![Rgb565Pixel(0); width * height];
+        let geometry = NavigationTransitionGeometry {
+            source_card: NavigationTransitionRect {
+                x: 1,
+                y: 1,
+                width: 4,
+                height: 4,
+            },
+            ..NavigationTransitionGeometry::default()
+        };
+        let mut transition = NavigationTransitionRuntime::new(width, height, true);
+        assert!(
+            transition
+                .begin(
+                    NavigationTransitionEdge::HomeToConsoles,
+                    NavigationTransitionDirection::Forward,
+                    geometry,
+                    &snapshot,
+                    0,
+                )
+                .unwrap()
+        );
+        transition.capture_destination(&snapshot, 0).unwrap();
+        transition.settle_at_destination();
+        transition.complete();
+
+        assert!(
+            transition
+                .begin_settings_page(NavigationTransitionDirection::Forward, &snapshot, 1)
+                .unwrap()
+        );
+        assert_eq!(
+            transition.cancel_for_exclusive_view(),
+            Some(NavigationTransitionEndpoint::Source)
+        );
+        transition.complete();
+        assert_eq!(
+            transition.geometry_for_reverse(NavigationTransitionEdge::HomeToConsoles),
+            Some(geometry)
+        );
+
+        assert!(
+            transition
+                .begin(
+                    NavigationTransitionEdge::HomeToConsoles,
+                    NavigationTransitionDirection::Reverse,
+                    geometry,
+                    &snapshot,
+                    2,
+                )
+                .unwrap()
+        );
+        transition.capture_destination(&snapshot, 2).unwrap();
+        transition.settle_at_destination();
+        transition.complete();
+        assert_eq!(
+            transition.geometry_for_reverse(NavigationTransitionEdge::HomeToConsoles),
+            None
+        );
+    }
+
     fn geometry() -> NavigationTransitionGeometry {
         NavigationTransitionGeometry {
             source_card: NavigationTransitionRect {
@@ -4022,15 +4534,15 @@ mod tests {
     fn super_scaler_edges_keep_intended_durations() {
         assert_eq!(
             NavigationTransitionEdge::HomeToConsoles.duration_us(),
-            1_260_000
+            600_000
         );
         assert_eq!(
             NavigationTransitionEdge::HomeToArcade.duration_us(),
-            1_440_000
+            720_000
         );
         assert_eq!(
             NavigationTransitionEdge::ConsolesToSystem.duration_us(),
-            1_440_000
+            720_000
         );
     }
 
@@ -5513,14 +6025,14 @@ mod tests {
 
     #[test]
     fn mac_preview_configuration_selects_debug_duration() {
-        let mut poc = NavigationTransitionPoc::new(960, 540, true);
+        let mut poc = NavigationTransitionRuntime::new(960, 540, true);
         poc.configure_preview(Some(4_000));
         assert_eq!(poc.duration_override_us, Some(4_000_000));
     }
 
     #[test]
     fn super_scaler_endpoints_are_exact_snapshots() {
-        let mut poc = NavigationTransitionPoc::new(16, 12, true);
+        let mut poc = NavigationTransitionRuntime::new(16, 12, true);
         let source = vec![Rgb565Pixel(0x1111); 16 * 12];
         let destination = vec![Rgb565Pixel(0x2222); 16 * 12];
         let geometry = NavigationTransitionGeometry {
@@ -5557,7 +6069,7 @@ mod tests {
         poc.tick(20_000 + NavigationTransitionEdge::HomeToConsoles.duration_us());
         assert_eq!(poc.render().unwrap(), destination);
 
-        let mut reverse = NavigationTransitionPoc::new(16, 12, true);
+        let mut reverse = NavigationTransitionRuntime::new(16, 12, true);
         reverse
             .begin(
                 NavigationTransitionEdge::HomeToConsoles,
@@ -5572,7 +6084,7 @@ mod tests {
         reverse.tick(20_000 + NavigationTransitionEdge::HomeToConsoles.duration_us());
         assert_eq!(reverse.render().unwrap(), source);
 
-        let mut cancelled = NavigationTransitionPoc::new(16, 12, true);
+        let mut cancelled = NavigationTransitionRuntime::new(16, 12, true);
         cancelled
             .begin(
                 NavigationTransitionEdge::HomeToConsoles,
@@ -5594,7 +6106,7 @@ mod tests {
 
     #[test]
     fn destination_preparation_does_not_advance_the_animation_clock() {
-        let mut poc = NavigationTransitionPoc::new(16, 12, true);
+        let mut poc = NavigationTransitionRuntime::new(16, 12, true);
         let source = vec![Rgb565Pixel(0x1111); 16 * 12];
         let destination = vec![Rgb565Pixel(0x2222); 16 * 12];
         let geometry = NavigationTransitionGeometry {
@@ -5713,8 +6225,8 @@ mod tests {
     }
 
     #[test]
-    fn disabled_poc_does_not_allocate_frame_buffers() {
-        let poc = NavigationTransitionPoc::new(960, 540, false);
+    fn disabled_runtime_does_not_allocate_frame_buffers() {
+        let poc = NavigationTransitionRuntime::new(960, 540, false);
         assert!(!poc.enabled());
         assert!(poc.buffers.source.is_empty());
         assert!(poc.buffers.destination.is_empty());
@@ -5723,6 +6235,5 @@ mod tests {
         assert!(poc.buffers.scale_source_y.is_empty());
         assert!(poc.buffers.scale_excluded_x.is_empty());
         assert!(poc.buffers.scale_dither_x.is_empty());
-        assert!(poc.hud_scratch.is_empty());
     }
 }

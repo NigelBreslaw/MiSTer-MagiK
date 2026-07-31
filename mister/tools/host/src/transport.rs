@@ -10,6 +10,46 @@ pub enum Layout {
     Public,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AutomationButton {
+    Up,
+    Down,
+    Left,
+    Right,
+    A,
+    B,
+    Home,
+    X,
+    Y,
+}
+
+impl AutomationButton {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Up => "up",
+            Self::Down => "down",
+            Self::Left => "left",
+            Self::Right => "right",
+            Self::A => "a",
+            Self::B => "b",
+            Self::Home => "home",
+            Self::X => "x",
+            Self::Y => "y",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AutomationAction {
+    Tap(AutomationButton),
+    Hold {
+        button: AutomationButton,
+        duration_ms: u64,
+    },
+    ReleaseAll,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DeviceRequest {
     Discover,
@@ -104,6 +144,33 @@ pub enum DeviceRequest {
     RunCrtScreensaverMatrix,
     RepairSafeDeviceState,
     CaptureFramebuffer,
+    BeginLauncherAutomation {
+        expected_build_version: String,
+        expected_source_revision: String,
+        expected_main_generation: u64,
+        lifetime_seconds: u64,
+    },
+    SendLauncherAutomationAction {
+        nonce: String,
+        action: AutomationAction,
+    },
+    AwaitLauncherAutomationPresented {
+        nonce: String,
+        action_sequence: u64,
+        timeout_ms: u64,
+    },
+    ReadLauncherAutomationSnapshot {
+        nonce: String,
+    },
+    CaptureLauncherAutomationCheckpoint {
+        nonce: String,
+        action_sequence: u64,
+        label: String,
+        output_dir: PathBuf,
+    },
+    EndLauncherAutomation {
+        nonce: String,
+    },
 }
 
 impl DeviceRequest {
@@ -158,6 +225,14 @@ impl DeviceRequest {
             Self::RunCrtScreensaverMatrix => "run-crt-screensaver-matrix",
             Self::RepairSafeDeviceState => "repair-safe-device-state",
             Self::CaptureFramebuffer => "capture-framebuffer",
+            Self::BeginLauncherAutomation { .. } => "begin-launcher-automation",
+            Self::SendLauncherAutomationAction { .. } => "send-launcher-automation-action",
+            Self::AwaitLauncherAutomationPresented { .. } => "await-launcher-automation-presented",
+            Self::ReadLauncherAutomationSnapshot { .. } => "read-launcher-automation-snapshot",
+            Self::CaptureLauncherAutomationCheckpoint { .. } => {
+                "capture-launcher-automation-checkpoint"
+            }
+            Self::EndLauncherAutomation { .. } => "end-launcher-automation",
         }
     }
 }
@@ -365,9 +440,36 @@ mod tests {
             DeviceRequest::RunCrtScreensaverMatrix,
             DeviceRequest::RepairSafeDeviceState,
             DeviceRequest::CaptureFramebuffer,
+            DeviceRequest::BeginLauncherAutomation {
+                expected_build_version: "0.2.1".into(),
+                expected_source_revision: "deadbeef".into(),
+                expected_main_generation: 1,
+                lifetime_seconds: 120,
+            },
+            DeviceRequest::SendLauncherAutomationAction {
+                nonce: "a".repeat(64),
+                action: AutomationAction::Tap(AutomationButton::A),
+            },
+            DeviceRequest::AwaitLauncherAutomationPresented {
+                nonce: "a".repeat(64),
+                action_sequence: 1,
+                timeout_ms: 1_000,
+            },
+            DeviceRequest::ReadLauncherAutomationSnapshot {
+                nonce: "a".repeat(64),
+            },
+            DeviceRequest::CaptureLauncherAutomationCheckpoint {
+                nonce: "a".repeat(64),
+                action_sequence: 1,
+                label: "home".into(),
+                output_dir: "checkpoints".into(),
+            },
+            DeviceRequest::EndLauncherAutomation {
+                nonce: "a".repeat(64),
+            },
         ];
         let labels: Vec<_> = requests.iter().map(DeviceRequest::label).collect();
-        assert_eq!(labels.len(), 37);
+        assert_eq!(labels.len(), 43);
         assert!(labels.iter().all(|label| !label.is_empty()));
         assert_eq!(
             labels

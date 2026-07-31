@@ -90,6 +90,7 @@ mod crt_trial_loop;
 mod experiments;
 mod latch_v4_qualification;
 mod launch_handoff_session;
+mod launcher_automation;
 mod launcher_bench;
 mod launcher_bridge;
 mod launcher_catalog_publication_test;
@@ -127,6 +128,7 @@ use experiments::effects::{
 };
 use latch_v4_qualification::*;
 use launch_handoff_session::*;
+use launcher_automation::*;
 use launcher_bench::*;
 use launcher_bridge::*;
 use launcher_catalog_publication_test::*;

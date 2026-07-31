@@ -25,6 +25,7 @@ mod arcade_database;
 mod crt_qualification;
 mod discovery;
 mod latch_v4_qualification;
+mod launcher_automation;
 mod media;
 mod platform_deploy;
 mod remote;
@@ -626,6 +627,50 @@ impl DeviceOperations for NativeDevice {
             DeviceRequest::CaptureFramebuffer => {
                 capture_buffer_at(&config.agent, &[]).map_err(device_failure)?;
                 "captured".into()
+            }
+            DeviceRequest::BeginLauncherAutomation {
+                expected_build_version,
+                expected_source_revision,
+                expected_main_generation,
+                lifetime_seconds,
+            } => launcher_automation::begin(
+                &config,
+                expected_build_version,
+                expected_source_revision,
+                *expected_main_generation,
+                *lifetime_seconds,
+            )
+            .map_err(device_failure)?,
+            DeviceRequest::SendLauncherAutomationAction { nonce, action } => {
+                launcher_automation::send_action(&config, nonce, action).map_err(device_failure)?
+            }
+            DeviceRequest::AwaitLauncherAutomationPresented {
+                nonce,
+                action_sequence,
+                timeout_ms,
+            } => {
+                launcher_automation::await_presented(&config, nonce, *action_sequence, *timeout_ms)
+                    .map_err(device_failure)?
+            }
+            DeviceRequest::ReadLauncherAutomationSnapshot { nonce } => serde_json::to_string(
+                &launcher_automation::snapshot(&config, nonce).map_err(device_failure)?,
+            )
+            .map_err(device_failure)?,
+            DeviceRequest::CaptureLauncherAutomationCheckpoint {
+                nonce,
+                action_sequence,
+                label,
+                output_dir,
+            } => launcher_automation::capture_checkpoint(
+                &config,
+                nonce,
+                *action_sequence,
+                label,
+                output_dir,
+            )
+            .map_err(device_failure)?,
+            DeviceRequest::EndLauncherAutomation { nonce } => {
+                launcher_automation::end(&config, nonce).map_err(device_failure)?
             }
         };
         Ok(DeviceResponse {
@@ -4135,7 +4180,6 @@ fn profile_installed_navigation_transition_run(
         LauncherRestartOptions {
             env_vars: vec![
                 ("MISTER_CATALOG_REFRESH".into(), "off".into()),
-                ("MISTER_NAV_TRANSITION_POC".into(), "1".into()),
                 (
                     "MISTER_LAUNCHER_INPUT_SCRIPT".into(),
                     "wait:120,a,wait:120,b,wait:90,right,a,wait:120,a,wait:30,a,wait:120,b,wait:120,b,wait:30,b,wait:120".into(),
@@ -10227,10 +10271,10 @@ fn agent_sd_list(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-struct PngCapture {
-    result: Value,
-    png: Vec<u8>,
-    elapsed_ms: u128,
+pub(super) struct PngCapture {
+    pub(super) result: Value,
+    pub(super) png: Vec<u8>,
+    pub(super) elapsed_ms: u128,
 }
 
 fn capture_buffer(args: &[String]) -> Result<()> {
@@ -10313,7 +10357,7 @@ fn delivery_smoke_capture_detail(capture: &PngCapture) -> Result<String> {
     ))
 }
 
-fn capture_source_label(result: &Value) -> Result<&str> {
+pub(super) fn capture_source_label(result: &Value) -> Result<&str> {
     result
         .get("source")
         .and_then(Value::as_str)
@@ -10386,7 +10430,7 @@ fn validate_capture_contract_schema(result: &Value, expected_schema: &str) -> Re
     Ok(())
 }
 
-fn validate_visible_launcher_capture(capture: &PngCapture) -> Result<()> {
+pub(super) fn validate_visible_launcher_capture(capture: &PngCapture) -> Result<()> {
     let result = &capture.result;
     if capture_source_label(result)? != "fpga-latched-scanout-slots"
         || result.get("authoritative_scanout").and_then(Value::as_bool) != Some(true)
@@ -10462,7 +10506,7 @@ fn request_framebuffer_png_at(agent: &AgentEndpoint) -> Result<PngCapture> {
     })
 }
 
-fn request_framebuffer_png_at_when_latched(
+pub(super) fn request_framebuffer_png_at_when_latched(
     agent: &AgentEndpoint,
     timeout: Duration,
 ) -> Result<PngCapture> {

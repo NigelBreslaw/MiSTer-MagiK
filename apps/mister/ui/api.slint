@@ -67,7 +67,7 @@ export global MisterBridge {
     // Home focus: selected row in the responsive launcher list; Settings is Home-only.
     in-out property <int> selected-index;
     in-out property <bool> settings-focused;
-    // Settings focus: 0=display resolution, 1=screensaver, 2=exit, 3=rebuild database, 4=about.
+    // Settings focus: 0=display, 1=screensaver, 2=reduce motion, 3=exit, 4=rebuild, 5=about.
     in-out property <int> settings-selected;
     // About focus: 0=info, 1=licenses.
     in-out property <int> about-selected;
@@ -78,6 +78,7 @@ export global MisterBridge {
     in-out property <int> display-highlighted;
     in-out property <int> display-confirm-remaining;
     in-out property <bool> simple-joystick-handling;
+    in-out property <bool> reduce-motion;
     in-out property <int> screensaver-settings-selected;
     in-out property <bool> screensaver-enabled;
     in-out property <int> screensaver-delay-minutes;
@@ -96,16 +97,8 @@ export global MisterBridge {
     // Current launcher hierarchy level. Root uses the product name and no breadcrumb.
     in-out property <string> menu-title: "MiSTer MagiK";
     in-out property <string> menu-breadcrumb;
-    // Development-only navigation-transition comparison HUD.
-    in-out property <bool> nav-transition-hud-visible;
-    in-out property <int> nav-transition-phase;
-    in-out property <int> nav-transition-edge;
-    in-out property <float> nav-transition-cover-progress;
-    in-out property <float> nav-transition-reveal-progress;
-    in-out property <int> nav-transition-frame-us;
-    in-out property <int> nav-transition-overlay-us;
-    in-out property <int> nav-transition-phosphor-pixels;
-    in-out property <int> nav-transition-scanline-pixels;
+    // Destination hydration must not start an unrelated chrome tween behind a snapshot transition.
+    in-out property <bool> navigation-transition-active;
     // Set asynchronously after comparing the configured Downloader feed with the installed build.
     in-out property <bool> update-available;
     // Derived from the executable's fixed public/development installation layout.

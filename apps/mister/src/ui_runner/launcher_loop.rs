@@ -266,36 +266,25 @@ fn navigation_transition_for_intent(
     nav: &LauncherNav,
     event: &launcher::LauncherEvent,
 ) -> Option<(NavigationTransitionEdge, NavigationTransitionDirection)> {
-    use crate::launcher_taxonomy::{CONSOLES_MENU_ID, ROOT_MENU_ID};
+    use crate::launcher_taxonomy::ROOT_MENU_ID;
 
     match event.action {
-        LauncherAction::OpenMenu
-            if nav.current_menu_id() == ROOT_MENU_ID
-                && event.path.as_deref() == Some(CONSOLES_MENU_ID) =>
-        {
-            Some((
-                NavigationTransitionEdge::HomeToConsoles,
-                NavigationTransitionDirection::Forward,
-            ))
-        }
+        LauncherAction::OpenMenu => Some((
+            NavigationTransitionEdge::HomeToConsoles,
+            NavigationTransitionDirection::Forward,
+        )),
         LauncherAction::OpenCollection if nav.current_menu_id() == ROOT_MENU_ID => Some((
             NavigationTransitionEdge::HomeToArcade,
             NavigationTransitionDirection::Forward,
         )),
-        LauncherAction::OpenCollection if nav.current_menu_id().starts_with(CONSOLES_MENU_ID) => {
-            Some((
-                NavigationTransitionEdge::ConsolesToSystem,
-                NavigationTransitionDirection::Forward,
-            ))
-        }
-        LauncherAction::NavigateBack
-            if nav.screen == Screen::Home && nav.current_menu_id() == CONSOLES_MENU_ID =>
-        {
-            Some((
-                NavigationTransitionEdge::HomeToConsoles,
-                NavigationTransitionDirection::Reverse,
-            ))
-        }
+        LauncherAction::OpenCollection => Some((
+            NavigationTransitionEdge::ConsolesToSystem,
+            NavigationTransitionDirection::Forward,
+        )),
+        LauncherAction::NavigateBack if nav.screen == Screen::Home => Some((
+            NavigationTransitionEdge::HomeToConsoles,
+            NavigationTransitionDirection::Reverse,
+        )),
         LauncherAction::NavigateBack
             if nav.screen == Screen::Arcade && nav.current_menu_id() == ROOT_MENU_ID =>
         {
@@ -304,42 +293,91 @@ fn navigation_transition_for_intent(
                 NavigationTransitionDirection::Reverse,
             ))
         }
-        LauncherAction::NavigateBack
-            if nav.screen == Screen::Arcade
-                && nav.current_menu_id().starts_with(CONSOLES_MENU_ID) =>
+        LauncherAction::NavigateBack if nav.screen == Screen::Arcade => Some((
+            NavigationTransitionEdge::ConsolesToSystem,
+            NavigationTransitionDirection::Reverse,
+        )),
+        LauncherAction::NavigateHome if nav.screen == Screen::Home => Some((
+            NavigationTransitionEdge::HomeToConsoles,
+            NavigationTransitionDirection::Reverse,
+        )),
+        LauncherAction::NavigateHome
+            if nav.screen == Screen::Arcade && nav.current_menu_id() == ROOT_MENU_ID =>
         {
             Some((
-                NavigationTransitionEdge::ConsolesToSystem,
+                NavigationTransitionEdge::HomeToArcade,
                 NavigationTransitionDirection::Reverse,
             ))
         }
+        LauncherAction::NavigateHome if nav.screen == Screen::Arcade => Some((
+            NavigationTransitionEdge::ConsolesToSystem,
+            NavigationTransitionDirection::Reverse,
+        )),
         _ => None,
     }
 }
 
-fn sync_navigation_transition_poc_bridge(
-    app: &slint_ui::launcher::Launcher,
-    transition: &NavigationTransitionPoc,
-) {
-    if !transition.enabled() || transition.snapshot_locked() {
-        return;
-    }
-    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-    let frame = transition.frame();
-    bridge.set_nav_transition_hud_visible(false);
-    bridge.set_nav_transition_phase(frame.phase as i32);
-    bridge.set_nav_transition_edge(
-        transition
-            .request()
-            .map_or(-1, |request| request.edge as i32),
+fn settings_page_transition_direction(
+    source: Screen,
+    destination: Screen,
+) -> Option<NavigationTransitionDirection> {
+    let source_depth = settings_page_depth(source)?;
+    let destination_depth = settings_page_depth(destination)?;
+    let adjacent = matches!(
+        (source, destination),
+        (Screen::Home, Screen::Settings)
+            | (Screen::Settings, Screen::Home)
+            | (Screen::Settings, Screen::Screensaver | Screen::About)
+            | (Screen::Screensaver | Screen::About, Screen::Settings)
+            | (Screen::About, Screen::Info | Screen::Licenses)
+            | (Screen::Info | Screen::Licenses, Screen::About)
     );
-    bridge.set_nav_transition_cover_progress(frame.cover_progress_q16 as f32 / u16::MAX as f32);
-    bridge.set_nav_transition_reveal_progress(frame.reveal_progress_q16 as f32 / u16::MAX as f32);
-    bridge.set_nav_transition_frame_us(transition.last_frame_work_us() as i32);
-    let stats = transition.last_render_stats();
-    bridge.set_nav_transition_overlay_us(stats.overlay_us.min(i32::MAX as u64) as i32);
-    bridge.set_nav_transition_phosphor_pixels(stats.phosphor_pixels.min(i32::MAX as u64) as i32);
-    bridge.set_nav_transition_scanline_pixels(stats.scanline_pixels.min(i32::MAX as u64) as i32);
+    let direct_home = source != Screen::Home && destination == Screen::Home;
+    (adjacent || direct_home).then_some(if destination_depth > source_depth {
+        NavigationTransitionDirection::Forward
+    } else {
+        NavigationTransitionDirection::Reverse
+    })
+}
+
+const fn settings_page_depth(screen: Screen) -> Option<u8> {
+    match screen {
+        Screen::Home => Some(0),
+        Screen::Settings => Some(1),
+        Screen::Screensaver | Screen::About => Some(2),
+        Screen::Info | Screen::Licenses => Some(3),
+        Screen::Controller | Screen::Arcade => None,
+    }
+}
+
+fn settings_navigation_input_candidate(
+    screen: Screen,
+    now: &PadState,
+    previous: &PadState,
+) -> bool {
+    let activated = now.btn_a && !previous.btn_a;
+    let backed = now.btn_b && !previous.btn_b;
+    let went_home = now.btn_home && !previous.btn_home;
+    match screen {
+        Screen::Home => activated || went_home,
+        Screen::Settings
+        | Screen::Screensaver
+        | Screen::About
+        | Screen::Info
+        | Screen::Licenses => activated || backed || went_home,
+        Screen::Controller | Screen::Arcade => false,
+    }
+}
+
+fn sync_navigation_transition_active(
+    app: &slint_ui::launcher::Launcher,
+    transition: &NavigationTransitionRuntime,
+) {
+    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+    let active = transition.is_active();
+    if bridge.get_navigation_transition_active() != active {
+        bridge.set_navigation_transition_active(active);
+    }
 }
 
 fn collection_has_resident_rows(catalog: &ArcadeCatalog, collection_id: &str) -> bool {
@@ -1805,7 +1843,6 @@ pub(super) fn run_launcher_loop(
     let mut deferred_catalog_events: VecDeque<CatalogWorkerMessage> = VecDeque::new();
     let mut pending_catalog_ready: Option<CatalogWorkerMessage> = None;
     let mut pending_collection_entry: Option<PendingCollectionEntry> = None;
-    let mut navigation_transition = NavigationTransitionPoc::from_env(ui.render_w(), ui.render_h());
     let mut pending_navigation_transition: Option<PendingNavigationTransition> = None;
     let mut deferred_navigation_hydration_finish: Option<String> = None;
     let mut catalog_ready_deferred_since: Option<Instant> = None;
@@ -1865,6 +1902,10 @@ pub(super) fn run_launcher_loop(
         mister_magik_catalog::device_layout::current_app_path("settings.json"),
     );
     nav.settings = settings_store.load();
+    let navigation_motion_enabled =
+        !nav.settings.reduce_motion || cpu_profile::navigation_transition_profile_requested();
+    let mut navigation_transition =
+        NavigationTransitionRuntime::new(ui.render_w(), ui.render_h(), navigation_motion_enabled);
     nav.screen = start_screen;
     let mut display_confirm_deadline = None;
     let (display_confirm_tx, display_confirm_rx) =
@@ -2069,6 +2110,7 @@ pub(super) fn run_launcher_loop(
     let mut media_session = ScreenshotMediaUpdateSession::default();
     let mut library_changed_dialog_test = LibraryChangedDialogTestDriver::from_env(start);
     let mut launcher_input_script = LauncherInputScriptDriver::from_env(start);
+    let mut launcher_automation = LauncherAutomation::new();
     let mut catalog_recovery_prev = PadState::default();
     let sqlite_path = mister_magik_catalog::catalog_state::default_path();
     let capsule_seed_ready = catalog_ready;
@@ -3297,18 +3339,26 @@ pub(super) fn run_launcher_loop(
         effective_view = EffectiveLauncherView::resolve(&lifecycle, screensaver.active, nav.screen);
         launching = effective_view.launch_active();
         frame_accounting.set_effective_view(effective_view.label());
+        frame_accounting.set_catalog_generation(catalog_generation.current.as_deref());
         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
         if bridge.get_effective_view().as_str() != effective_view.label() {
             bridge.set_effective_view(effective_view.label().into());
         }
 
-        if effective_view.accepts_application_input() && lifecycle.startup_input_enabled() {
-            let pad_changed = pad_changed_for_input
-                .take()
-                .unwrap_or_else(|| pad.poll_with_debug_labels(setup_active));
-            let raw_screensaver_input_activity = pad.user_activity();
-            let frame_now = Instant::now();
+        let pad_changed = pad_changed_for_input
+            .take()
+            .unwrap_or_else(|| pad.poll_with_debug_labels(setup_active));
+        let frame_now = Instant::now();
+        let input_session = ControllerSetupInputSession::new(&pad, &setup);
+        let launcher_state = launcher_automation.poll_input(
+            input_session.launcher_state(),
+            effective_view.accepts_application_input() && lifecycle.startup_input_enabled(),
+            setup.is_active(),
+            frame_now,
+        );
+        frame_accounting.set_automation_action_sequence(launcher_automation.action_sequence());
 
+        if effective_view.accepts_application_input() && lifecycle.startup_input_enabled() {
             if setup_active && setup.target_pad_idx >= pad.len() {
                 crate::ui_errln!(
                     "controller setup: pad {} disappeared; closing setup flow",
@@ -3318,8 +3368,8 @@ pub(super) fn run_launcher_loop(
                 full_bridge_dirty = true;
             }
 
-            let input_session = ControllerSetupInputSession::new(&pad, &setup);
-            let launcher_state = input_session.launcher_state().clone();
+            let raw_screensaver_input_activity =
+                pad.user_activity() || launcher_automation.active();
             if screensaver.handle_input(
                 frame_now,
                 pad_state_has_active_input(&launcher_state),
@@ -3329,7 +3379,11 @@ pub(super) fn run_launcher_loop(
                 request_launcher_redraw!();
                 continue;
             }
-            let setup_state = input_session.setup_state();
+            let setup_state = if launcher_automation.active() {
+                launcher_state.clone()
+            } else {
+                input_session.setup_state()
+            };
             let active_idx = pad.active_idx();
             let info = pad.info();
 
@@ -3445,6 +3499,16 @@ pub(super) fn run_launcher_loop(
                             navigation_transition.request_reverse(now_us);
                         }
                     }
+                    let settings_transition_source = (!launch_failure_visible
+                        && !recovery_dialog_visible
+                        && !navigation_transition.is_active()
+                        && navigation_transition.enabled()
+                        && settings_navigation_input_candidate(
+                            nav.screen,
+                            &nav_state,
+                            &recovery_prev,
+                        ))
+                    .then(|| (nav.screen, nav.navigation_transition_state()));
                     let event = if launch_failure_visible {
                         if (nav_state.btn_a && !recovery_prev.btn_a)
                             || (nav_state.btn_b && !recovery_prev.btn_b)
@@ -3518,11 +3582,39 @@ pub(super) fn run_launcher_loop(
                     } else {
                         nav.handle_input_with_collection_intents(&nav_state, frame_now, &catalog)
                     };
+                    if let Some((source_screen, source_state)) = settings_transition_source
+                        && let Some(direction) =
+                            settings_page_transition_direction(source_screen, nav.screen)
+                    {
+                        let now_us = frame_now
+                            .saturating_duration_since(start)
+                            .as_micros()
+                            .min(u64::MAX as u128) as u64;
+                        if navigation_transition
+                            .begin_settings_page(direction, target.cached_565(), now_us)
+                            .unwrap_or(false)
+                        {
+                            pending_navigation_transition = Some(PendingNavigationTransition {
+                                event: launcher::LauncherEvent {
+                                    action: LauncherAction::NavigateBack,
+                                    path: None,
+                                    settings: None,
+                                },
+                                source_state,
+                                source_was_arcade: false,
+                                committed: true,
+                                status_quiesce_started_at: None,
+                            });
+                            full_bridge_dirty = true;
+                            request_launcher_redraw!();
+                        }
+                    }
                     if let Some(event) = event {
                         match event.action {
                             LauncherAction::OpenMenu
                             | LauncherAction::OpenCollection
-                            | LauncherAction::NavigateBack => {
+                            | LauncherAction::NavigateBack
+                            | LauncherAction::NavigateHome => {
                                 let collection_id = (event.action
                                     == LauncherAction::OpenCollection)
                                     .then(|| event.path.clone())
@@ -3575,24 +3667,76 @@ pub(super) fn run_launcher_loop(
                                     let _ =
                                         target.compose_direct_preview_rect(preview_screen_rect(ui));
                                 }
-                                let transition_started = transition_spec
-                                    .filter(|_| !crt_layout)
-                                    .is_some_and(|(edge, direction)| {
+                                let transition_started =
+                                    transition_spec.is_some_and(|(edge, direction)| {
                                         let geometry = match direction {
                                             NavigationTransitionDirection::Forward => {
-                                                Some(hdmi_navigation_geometry(
-                                                    ui.render_w(),
-                                                    ui.render_h(),
-                                                    nav.selected,
-                                                    nav.scroll_x,
-                                                    nav.current_menu_id()
-                                                        == crate::launcher_taxonomy::ROOT_MENU_ID,
-                                                    edge,
-                                                    nav.current_menu_items()
-                                                        .get(nav.selected)
-                                                        .map(|item| item.title.as_str())
-                                                        .unwrap_or(""),
-                                                ))
+                                                let root_menu = nav.current_menu_id()
+                                                    == crate::launcher_taxonomy::ROOT_MENU_ID;
+                                                let selected_label = nav
+                                                    .current_menu_items()
+                                                    .get(nav.selected)
+                                                    .map(|item| item.title.as_str())
+                                                    .unwrap_or("");
+                                                Some(if crt_layout {
+                                                    let content = ui.content_rect();
+                                                    crt_navigation_geometry(
+                                                        ui.render_w(),
+                                                        ui.render_h(),
+                                                        CrtNavigationLayout {
+                                                            content_x: content.x,
+                                                            content_y: content.y,
+                                                            content_width: content.width,
+                                                            content_height: content.height,
+                                                            grid_x: crt_metrics.grid_x.max(1)
+                                                                as usize,
+                                                            grid_y: crt_metrics.grid_y.max(1)
+                                                                as usize,
+                                                            header_height: crt_metrics
+                                                                .header_height
+                                                                .max(1)
+                                                                as usize,
+                                                            footer_height: crt_metrics
+                                                                .footer_height
+                                                                .max(1)
+                                                                as usize,
+                                                            heading_font_height: crt_metrics
+                                                                .heading_font
+                                                                .pixels()
+                                                                .max(1)
+                                                                as usize,
+                                                            title_font_height: crt_metrics
+                                                                .card_title_font
+                                                                .pixels()
+                                                                .max(1)
+                                                                as usize,
+                                                            detail_font_height: crt_metrics
+                                                                .card_detail_font
+                                                                .pixels()
+                                                                .max(1)
+                                                                as usize,
+                                                            game_row_height: crt_metrics
+                                                                .game_row_height
+                                                                .max(1)
+                                                                as usize,
+                                                        },
+                                                        nav.selected,
+                                                        nav.current_menu_items().len(),
+                                                        root_menu,
+                                                        edge,
+                                                        selected_label,
+                                                    )
+                                                } else {
+                                                    hdmi_navigation_geometry(
+                                                        ui.render_w(),
+                                                        ui.render_h(),
+                                                        nav.selected,
+                                                        nav.scroll_x,
+                                                        root_menu,
+                                                        edge,
+                                                        selected_label,
+                                                    )
+                                                })
                                             }
                                             NavigationTransitionDirection::Reverse => {
                                                 navigation_transition.geometry_for_reverse(edge)
@@ -3852,12 +3996,17 @@ pub(super) fn run_launcher_loop(
                                 continue;
                             }
                             LauncherAction::PersistSettings => {
-                                if let Some(settings) = event.settings.as_ref()
-                                    && let Err(error) = settings_store.save(settings)
-                                {
-                                    crate::ui_errln!(
-                                        "settings: failed to save launcher settings: {error}"
+                                if let Some(settings) = event.settings.as_ref() {
+                                    navigation_transition.set_enabled(
+                                        ui.render_w(),
+                                        ui.render_h(),
+                                        !settings.reduce_motion,
                                     );
+                                    if let Err(error) = settings_store.save(settings) {
+                                        crate::ui_errln!(
+                                            "settings: failed to save launcher settings: {error}"
+                                        );
+                                    }
                                 }
                             }
                             LauncherAction::LaunchGame => {}
@@ -3997,7 +4146,6 @@ pub(super) fn run_launcher_loop(
                 nav.screen = screen;
             }
         } else {
-            let _ = pad.poll();
             if let Some(action) = scheduler.launch_runtime_action(Instant::now()) {
                 match action {
                     LaunchHandoffRuntimeAction::ArcadeCoreRunning => {
@@ -4328,6 +4476,7 @@ pub(super) fn run_launcher_loop(
         }
         launching = effective_view.launch_active();
         frame_accounting.set_effective_view(effective_view.label());
+        frame_accounting.set_catalog_generation(catalog_generation.current.as_deref());
         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
         if bridge.get_effective_view().as_str() != effective_view.label() {
             bridge.set_effective_view(effective_view.label().into());
@@ -4391,7 +4540,7 @@ pub(super) fn run_launcher_loop(
         for event in composition_decision.events.iter() {
             runtime_status::event(event.name, event.detail.as_str());
         }
-        sync_navigation_transition_poc_bridge(&app, &navigation_transition);
+        sync_navigation_transition_active(&app, &navigation_transition);
         if composition_decision.force_full_slint_present {
             full_frame_present = true;
         }
@@ -4408,6 +4557,76 @@ pub(super) fn run_launcher_loop(
         }
         let startup_status = lifecycle.startup_status();
         let composition_status = composition_decision.status();
+        let automation_frame_stamp = if launcher_automation.active() {
+            let selected_system_id = nav.active_collection_scope_id(&catalog);
+            let selected_game = (nav.screen == Screen::Arcade)
+                .then(|| {
+                    nav.active_arcade_game_at(&catalog, selected_system_id, nav.arcade.selected)
+                })
+                .flatten();
+            let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+            launcher_automation.observe_state(AutomationSemanticState {
+                effective_view: effective_view.label().to_string(),
+                return_screen: screen_label(nav.screen).to_string(),
+                menu_id: nav.current_menu_id().to_string(),
+                selected_item_id: nav.current_menu_selected_item_id().to_string(),
+                active_collection_id: nav.active_collection_id().unwrap_or("").to_string(),
+                selected_system_id: selected_system_id.to_string(),
+                selected_game_id: selected_game
+                    .map_or("", |game| game.mra_path.as_ref())
+                    .to_string(),
+                selected_game_title: selected_game
+                    .map_or("", |game| game.title.as_ref())
+                    .to_string(),
+                selected_index: if nav.screen == Screen::Arcade {
+                    nav.arcade.selected
+                } else {
+                    nav.selected
+                },
+                selected_count: if nav.screen == Screen::Arcade {
+                    nav.active_arcade_game_count(&catalog, selected_system_id)
+                } else {
+                    nav.current_menu_count()
+                },
+                overlay: if confirm_visible {
+                    "confirm"
+                } else if catalog_scan_visible {
+                    "catalog-scan"
+                } else if setup.is_active() {
+                    "controller-setup"
+                } else {
+                    "none"
+                }
+                .to_string(),
+                dialog_title: bridge.get_confirm_title().to_string(),
+                dialog_message: bridge.get_confirm_message().to_string(),
+                dialog_selected: confirm_selected,
+                drawer_open: nav.arcade_filter.drawer_open,
+                drawer_level: nav.arcade_filter.title().to_string(),
+                drawer_selected: nav.arcade_filter.selected,
+                search_active: nav.arcade_search.is_active(&nav.arcade_filter.active),
+                search_status: match nav.arcade_search.status {
+                    launcher::ArcadeSearchStatus::Idle => "idle",
+                    launcher::ArcadeSearchStatus::Searching => "searching",
+                    launcher::ArcadeSearchStatus::Ready => "ready",
+                    launcher::ArcadeSearchStatus::Failed => "failed",
+                }
+                .to_string(),
+                search_query: nav.arcade_search.query.clone(),
+                search_results: nav.arcade_search_result_count(),
+                preview_state: preview.trace_cache_state().to_string(),
+                launch_state: if launching { "launching" } else { "idle" }.to_string(),
+                loading_title: scheduler.visible_loading_title(&loading_title).to_string(),
+                catalog_generation: catalog_generation.current.clone().unwrap_or_default(),
+                catalog_ready,
+                settings_selected: nav.settings_selected,
+                composition_state: composition_status.state.to_string(),
+                composition_recovery_count: composition_status.recovery_count,
+                input_enabled: startup_status.input_enabled,
+            })
+        } else {
+            AutomationFrameStamp::default()
+        };
         let home_pan_present_active = update_home_pan_present_window(
             nav.screen,
             nav.scroll_x,
@@ -4451,7 +4670,7 @@ pub(super) fn run_launcher_loop(
         wake_reasons.insert_if(LauncherWakeReasons::BENCHMARK_ACTIVE, launcher_bench_active);
         wake_reasons.insert_if(
             LauncherWakeReasons::SCRIPTED_INPUT_ACTIVE,
-            launcher_input_script.active(),
+            launcher_input_script.active() || launcher_automation.active(),
         );
         wake_reasons.insert_if(
             LauncherWakeReasons::ROUTE_FORCES_FULL_PRESENT,
@@ -5061,7 +5280,6 @@ pub(super) fn run_launcher_loop(
         let mut navigation_transition_render_us = 0u128;
         if navigation_transition_composition_active {
             let navigation_transition_compositor_started = Instant::now();
-            navigation_transition.capture_hud(layer_target.cached_frame_view().pixels());
             let now_us = loop_start
                 .saturating_duration_since(start)
                 .as_micros()
@@ -5149,6 +5367,14 @@ pub(super) fn run_launcher_loop(
                 let completion = navigation_transition.complete();
                 let pending = pending_navigation_transition.take();
                 if completion.is_some_and(|completion| {
+                    completion.endpoint == NavigationTransitionEndpoint::Destination
+                }) && pending
+                    .as_ref()
+                    .is_some_and(|pending| pending.event.action == LauncherAction::NavigateHome)
+                {
+                    navigation_transition.clear_geometry_history();
+                }
+                if completion.is_some_and(|completion| {
                     completion.endpoint == NavigationTransitionEndpoint::Source
                 }) {
                     if let Some(entry) = pending_collection_entry.take() {
@@ -5172,7 +5398,7 @@ pub(super) fn run_launcher_loop(
                 .as_micros();
             navigation_transition
                 .note_frame_work_us(navigation_transition_render_us.min(u64::MAX as u128) as u64);
-            sync_navigation_transition_poc_bridge(&app, &navigation_transition);
+            sync_navigation_transition_active(&app, &navigation_transition);
         }
         let effect_label_us = navigation_transition_render_us;
         let navigation_telemetry = navigation_transition.telemetry();
@@ -5441,6 +5667,7 @@ pub(super) fn run_launcher_loop(
         let mut presented_frame = LauncherFrameSnapshotBuilder {
             identity: LauncherFrameIdentity {
                 frames,
+                automation: automation_frame_stamp,
                 selected: nav.arcade.selected,
                 visual_index: nav.arcade.visual_index,
                 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
@@ -5614,6 +5841,12 @@ pub(super) fn run_launcher_loop(
                     == presented_frame.main_present_sequence
                 && !presented_frame.main_present_pending
                 && launcher_presenter.latch_failure().is_none();
+            if accepted_and_active_confirmed {
+                launcher_automation.acknowledge_presented(
+                    presented_frame.automation,
+                    presented_frame.main_present_sequence,
+                );
+            }
             frame_accounting.record_finished_frame(
                 &presented_frame,
                 start,
@@ -6940,6 +7173,38 @@ fn apply_home_selected_from_env(nav: &mut LauncherNav, catalog: &ArcadeCatalog, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_page_routes_use_depth_for_forward_and_reverse_motion() {
+        assert_eq!(
+            settings_page_transition_direction(Screen::Home, Screen::Settings),
+            Some(NavigationTransitionDirection::Forward)
+        );
+        assert_eq!(
+            settings_page_transition_direction(Screen::Settings, Screen::About),
+            Some(NavigationTransitionDirection::Forward)
+        );
+        assert_eq!(
+            settings_page_transition_direction(Screen::About, Screen::Licenses),
+            Some(NavigationTransitionDirection::Forward)
+        );
+        assert_eq!(
+            settings_page_transition_direction(Screen::Licenses, Screen::About),
+            Some(NavigationTransitionDirection::Reverse)
+        );
+        assert_eq!(
+            settings_page_transition_direction(Screen::Screensaver, Screen::Home),
+            Some(NavigationTransitionDirection::Reverse)
+        );
+        assert_eq!(
+            settings_page_transition_direction(Screen::Home, Screen::Arcade),
+            None
+        );
+        assert_eq!(
+            settings_page_transition_direction(Screen::Screensaver, Screen::About),
+            None
+        );
+    }
 
     #[test]
     fn navigation_destination_waits_for_exact_ready_preview_pixels() {

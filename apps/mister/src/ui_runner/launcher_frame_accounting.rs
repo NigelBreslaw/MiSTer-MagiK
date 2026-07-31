@@ -23,6 +23,7 @@ const FRAME_ANALYTICS_SAMPLE_CAP: usize = 75;
 const FRAME_SLOW_SAMPLE_CAP: usize = 32;
 const PARTICLE_STATUS_MIN_SLACK_US: u128 = 2_000;
 const PARTICLE_STATUS_MAX_DEFER: Duration = Duration::from_millis(250);
+const AUTOMATION_STATE_HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
 const PREVIEW_SCROLL_TRACE_FLUSH_ROWS: usize = 60;
 
@@ -84,6 +85,12 @@ pub(super) struct LauncherFrameAccounting {
     last_latch_sequence: u16,
     last_latch_flip_count: u16,
     last_latch_drop_count: u16,
+    automation_state_hash: u64,
+    automation_state_revision: u64,
+    automation_presented_state_revision: u64,
+    automation_action_sequence: u64,
+    automation_presented_action_sequence: u64,
+    catalog_generation: String,
     frame_budget_total: FrameBudgetAccumulator,
     frame_budget_window: FrameBudgetAccumulator,
     last_frame_budget_status: runtime_status::FrameBudgetStatus,
@@ -94,6 +101,7 @@ pub(super) struct LauncherFrameAccounting {
 
 pub(super) struct LauncherPresentedFrame {
     pub(super) frames: u64,
+    pub(super) automation: AutomationFrameStamp,
     pub(super) selected: usize,
     pub(super) visual_index: f32,
     #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
@@ -196,6 +204,7 @@ pub(super) struct LauncherFrameSnapshotBuilder {
 
 pub(super) struct LauncherFrameIdentity {
     pub(super) frames: u64,
+    pub(super) automation: AutomationFrameStamp,
     pub(super) selected: usize,
     pub(super) visual_index: f32,
     #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
@@ -306,6 +315,7 @@ impl LauncherFrameSnapshotBuilder {
     pub(super) fn build(self) -> LauncherPresentedFrame {
         LauncherPresentedFrame {
             frames: self.identity.frames,
+            automation: self.identity.automation,
             selected: self.identity.selected,
             visual_index: self.identity.visual_index,
             #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
@@ -1097,6 +1107,12 @@ impl LauncherFrameAccounting {
             last_latch_sequence: 0,
             last_latch_flip_count: 0,
             last_latch_drop_count: 0,
+            automation_state_hash: 0,
+            automation_state_revision: 0,
+            automation_presented_state_revision: 0,
+            automation_action_sequence: 0,
+            automation_presented_action_sequence: 0,
+            catalog_generation: String::new(),
             frame_budget_total: FrameBudgetAccumulator::default(),
             frame_budget_window: FrameBudgetAccumulator::default(),
             last_frame_budget_status: runtime_status::FrameBudgetStatus {
@@ -1129,6 +1145,76 @@ impl LauncherFrameAccounting {
 
     pub(super) fn set_effective_view(&mut self, effective_view: &'static str) {
         self.effective_view = effective_view;
+    }
+
+    pub(super) fn set_catalog_generation(&mut self, generation: Option<&str>) {
+        self.catalog_generation.clear();
+        if let Some(generation) = generation {
+            self.catalog_generation.push_str(generation);
+        }
+    }
+
+    pub(super) fn set_automation_action_sequence(&mut self, sequence: u64) {
+        self.automation_action_sequence = sequence;
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn observe_automation_state(
+        &mut self,
+        nav: &LauncherNav,
+        catalog: &ArcadeCatalog,
+        confirm_visible: bool,
+        confirm_title: &str,
+        confirm_message: &str,
+        launching: bool,
+        loading_title: &str,
+        preview_cache_state: &str,
+        composition_status: &UiCompositionStatus,
+    ) {
+        let selected_system_id = nav.active_collection_scope_id(catalog);
+        let selected_game = (nav.screen == Screen::Arcade)
+            .then(|| nav.active_arcade_game_at(catalog, selected_system_id, nav.arcade.selected))
+            .flatten();
+        let mut hash = AUTOMATION_STATE_HASH_OFFSET;
+        for value in [
+            self.effective_view,
+            screen_label(nav.screen),
+            nav.current_menu_id(),
+            nav.current_menu_selected_item_id(),
+            nav.active_collection_id().unwrap_or(""),
+            selected_system_id,
+            selected_game.map_or("", |game| game.mra_path.as_ref()),
+            selected_game.map_or("", |game| game.title.as_ref()),
+            selected_game.map_or("", |game| game.preview_asset_key.as_ref()),
+            confirm_title,
+            confirm_message,
+            loading_title,
+            preview_cache_state,
+            composition_status.state,
+            &self.catalog_generation,
+        ] {
+            hash = automation_hash_bytes(hash, value.as_bytes());
+            hash = automation_hash_bytes(hash, &[0xff]);
+        }
+        for value in [
+            nav.selected as u64,
+            nav.arcade.selected as u64,
+            nav.arcade_filter.selected as u64,
+            nav.settings_selected as u64,
+            nav.display_selected as u64,
+            nav.screensaver_selected as u64,
+            u64::from(nav.settings_focused),
+            u64::from(nav.arcade_filter.drawer_open),
+            u64::from(nav.arcade_search.is_active(&nav.arcade_filter.active)),
+            u64::from(confirm_visible),
+            u64::from(launching),
+        ] {
+            hash = automation_hash_bytes(hash, &value.to_le_bytes());
+        }
+        if self.automation_state_revision == 0 || hash != self.automation_state_hash {
+            self.automation_state_hash = hash;
+            self.automation_state_revision = self.automation_state_revision.saturating_add(1);
+        }
     }
 
     pub(super) fn preview_scroll_trace_enabled(&self) -> bool {
@@ -1268,6 +1354,17 @@ impl LauncherFrameAccounting {
         startup_status: StartupRevealStatus,
     ) -> LauncherFrameFinishTraceTiming {
         let frame_finish_start = Instant::now();
+        self.observe_automation_state(
+            nav,
+            catalog,
+            confirm_visible,
+            confirm_title,
+            confirm_message,
+            launching,
+            loading_title,
+            frame.preview_cache_state,
+            &frame.composition_status,
+        );
         let runtime_status_write_deferred =
             should_defer_runtime_status_write(frame, self.last_status_write.elapsed());
         let status_write_now = frame.status_write_due && !runtime_status_write_deferred;
@@ -1333,6 +1430,10 @@ impl LauncherFrameAccounting {
         catalog_ready: bool,
         runtime_status_write_us: u128,
     ) {
+        if launcher_frame_was_presented(frame) {
+            self.automation_presented_state_revision = self.automation_state_revision;
+            self.automation_presented_action_sequence = self.automation_action_sequence;
+        }
         self.record_first_copy(frame, disp);
         self.accumulate_fps(frame);
         self.accumulate_frame_budget(frame, runtime_status_write_us);
@@ -2300,6 +2401,10 @@ impl LauncherFrameAccounting {
         self.status_sequence = self.status_sequence.saturating_add(1);
         let screensaver_profile_state = cpu_profile::screensaver_profile_state();
         let build_identity = crate::build_identity::BuildIdentity::current();
+        let selected_system_id = nav.active_collection_scope_id(catalog);
+        let selected_game = (nav.screen == Screen::Arcade)
+            .then(|| nav.active_arcade_game_at(catalog, selected_system_id, nav.arcade.selected))
+            .flatten();
         let status_submitted = self.runtime_status_publisher.submit(LauncherStatus {
             build_package_version: build_identity.package_version,
             build_version: build_identity.version,
@@ -2312,11 +2417,23 @@ impl LauncherFrameAccounting {
             screen: self.effective_view,
             effective_view: self.effective_view,
             return_screen: screen_label(nav.screen),
+            menu_id: nav.current_menu_id(),
+            selected_item_id: nav.current_menu_selected_item_id(),
+            active_collection_id: nav.active_collection_id().unwrap_or(""),
+            selected_system_id,
+            selected_game_id: selected_game.map_or("", |game| game.mra_path.as_ref()),
+            selected_game_title: selected_game.map_or("", |game| game.title.as_ref()),
+            preview_asset_key: selected_game.map_or("", |game| game.preview_asset_key.as_ref()),
+            catalog_generation: &self.catalog_generation,
             output_route: self.output_route,
             frames,
             idle,
             idle_loops,
             status_sequence: self.status_sequence,
+            state_revision: self.automation_state_revision,
+            presented_state_revision: self.automation_presented_state_revision,
+            action_sequence: self.automation_action_sequence,
+            presented_action_sequence: self.automation_presented_action_sequence,
             fps_estimate,
             rolling_fps,
             rolling_prepare_us,
@@ -2432,6 +2549,24 @@ impl LauncherFrameAccounting {
             self.idle_loops_since_status = 0;
         }
     }
+}
+
+fn automation_hash_bytes(mut hash: u64, bytes: &[u8]) -> u64 {
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+fn launcher_frame_was_presented(frame: &LauncherPresentedFrame) -> bool {
+    if frame.main_present_status != LauncherPresentStatus::Ok {
+        return false;
+    }
+    !frame.main_present_backend.is_latch()
+        || (frame.main_present_sequence != 0
+            && frame.main_present_active_sequence == frame.main_present_sequence
+            && !frame.main_present_pending)
 }
 
 fn launcher_fps_log_enabled() -> bool {
@@ -2654,6 +2789,7 @@ mod tests {
         let frame_t4 = loop_start + Duration::from_micros(wall_us);
         LauncherPresentedFrame {
             frames: frame,
+            automation: AutomationFrameStamp::default(),
             selected: 0,
             visual_index: 0.0,
             #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
@@ -2777,6 +2913,7 @@ mod tests {
         LauncherFrameSnapshotBuilder {
             identity: LauncherFrameIdentity {
                 frames: frame.frames,
+                automation: frame.automation,
                 selected: frame.selected,
                 visual_index: frame.visual_index,
                 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
@@ -2874,6 +3011,24 @@ mod tests {
                 t4: frame.cpu_t4,
             },
         }
+    }
+
+    #[test]
+    fn automation_ack_requires_successful_completed_presentation() {
+        let now = Instant::now();
+        let mut frame = presented_frame(1, now, 16_000);
+        frame.main_present_backend = LauncherPresentBackend::FpgaVblankLatchHidden;
+        frame.main_present_status = LauncherPresentStatus::Ok;
+        frame.main_present_sequence = 17;
+        frame.main_present_active_sequence = 17;
+        frame.main_present_pending = false;
+        assert!(launcher_frame_was_presented(&frame));
+
+        frame.main_present_pending = true;
+        assert!(!launcher_frame_was_presented(&frame));
+        frame.main_present_pending = false;
+        frame.main_present_status = LauncherPresentStatus::Frozen;
+        assert!(!launcher_frame_was_presented(&frame));
     }
 
     #[test]
