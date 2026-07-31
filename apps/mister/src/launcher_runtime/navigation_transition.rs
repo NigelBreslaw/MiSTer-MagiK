@@ -11,6 +11,7 @@ const PROGRESS_MAX: u16 = u16::MAX;
 const SUPER_SCALER_COVER_PROGRESS: u16 = 31_457;
 const CRT_SWEEP_END_Q16: u16 = 13_107;
 const CRT_CLEAR_START_Q16: u16 = 52_428;
+const CRT_SCANLINE_PERIOD_ROWS: usize = 3;
 const DEFAULT_PREPARATION_TIMEOUT_US: u64 = 5_000_000;
 const HUD_WIDTH: usize = 286;
 const HUD_HEIGHT: usize = 28;
@@ -1189,7 +1190,7 @@ fn apply_crt_scanline_overlay(
 
     let mut first_covered_row = None;
     let mut covered_rows = 0usize;
-    for y in (1..height).step_by(2) {
+    for y in (1..height).step_by(CRT_SCANLINE_PERIOD_ROWS) {
         let covered = if reversing {
             overlay_row_covered(frame.reverse_origin_q16, y, height)
                 && clear_y.map_or(true, |line_y| y as isize >= line_y)
@@ -1213,12 +1214,22 @@ fn apply_crt_scanline_overlay(
     let pixels = &mut working[start..];
     #[cfg(target_arch = "arm")]
     // SAFETY: `pixels` starts at the first covered row. The validated framebuffer dimensions,
-    // covered-row count, and two-row stride keep every kernel access inside the slice.
+    // covered-row count, and three-row stride keep every kernel access inside the slice.
     unsafe {
-        scanline_neon::darken_rows(pixels, width, covered_rows, width * 2);
+        scanline_neon::darken_rows(
+            pixels,
+            width,
+            covered_rows,
+            width * CRT_SCANLINE_PERIOD_ROWS,
+        );
     }
     #[cfg(not(target_arch = "arm"))]
-    darken_rgb565_rows_reference(pixels, width, covered_rows, width * 2);
+    darken_rgb565_rows_reference(
+        pixels,
+        width,
+        covered_rows,
+        width * CRT_SCANLINE_PERIOD_ROWS,
+    );
     stats.phosphor_pixels = stats
         .phosphor_pixels
         .saturating_add((width as u64).saturating_mul(covered_rows as u64));
@@ -5503,7 +5514,7 @@ mod tests {
         let width = 12;
         let height = 10;
         let original = vec![Rgb565Pixel(0xffff); width * height];
-        let full_phosphor_pixels = (height / 2 * width) as u64;
+        let full_phosphor_pixels = ((height + 1) / CRT_SCANLINE_PERIOD_ROWS * width) as u64;
         for (progress, expected_full) in [
             (0, false),
             (CRT_SWEEP_END_Q16 / 2, false),
@@ -5538,7 +5549,7 @@ mod tests {
                 assert_eq!(stats.scanline_pixels, 0);
                 let darkened = darken_rgb565_7_8(Rgb565Pixel(0xffff));
                 for y in 0..height {
-                    let expected = if y % 2 == 1 {
+                    let expected = if y >= 1 && (y - 1) % CRT_SCANLINE_PERIOD_ROWS == 0 {
                         darkened
                     } else {
                         Rgb565Pixel(0xffff)
