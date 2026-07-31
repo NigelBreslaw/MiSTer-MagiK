@@ -40,17 +40,9 @@ impl NavigationTransitionEdge {
 
     pub const fn duration_us(self) -> u64 {
         if self.enters_system_browser() {
-            1_440_000
+            720_000
         } else {
-            1_260_000
-        }
-    }
-
-    const fn history_index(self) -> usize {
-        match self {
-            Self::HomeToConsoles => 0,
-            Self::HomeToArcade => 1,
-            Self::ConsolesToSystem => 2,
+            600_000
         }
     }
 
@@ -914,22 +906,13 @@ pub struct NavigationTransitionPoc {
     pending_status_quiesce_us: u64,
     pending_status_quiesce_timeout: bool,
     buffers: NavigationTransitionBuffers,
-    geometry_history: [Option<NavigationTransitionGeometry>; 3],
+    geometry_history: Vec<(NavigationTransitionEdge, NavigationTransitionGeometry)>,
     last_render_stats: NavigationTransitionRenderStats,
     last_frame_work_us: u64,
     hud_scratch: Vec<Rgb565Pixel>,
 }
 
 impl NavigationTransitionPoc {
-    pub fn from_env(width: usize, height: usize) -> Self {
-        let mut poc = Self::new(width, height, env_flag("MISTER_NAV_TRANSITION_POC"));
-        poc.duration_override_us = std::env::var("MISTER_NAV_TRANSITION_DEBUG_DURATION_MS")
-            .ok()
-            .and_then(|value| value.trim().parse::<u64>().ok())
-            .map(|milliseconds| milliseconds.clamp(100, 10_000).saturating_mul(1_000));
-        poc
-    }
-
     pub fn new(width: usize, height: usize, enabled: bool) -> Self {
         if enabled {
             warm_smooth_spring_curve();
@@ -946,7 +929,7 @@ impl NavigationTransitionPoc {
             pending_status_quiesce_us: 0,
             pending_status_quiesce_timeout: false,
             buffers: NavigationTransitionBuffers::new(buffer_width, buffer_height),
-            geometry_history: [None; 3],
+            geometry_history: Vec::new(),
             last_render_stats: NavigationTransitionRenderStats::default(),
             last_frame_work_us: 0,
             hud_scratch: vec![
@@ -969,6 +952,25 @@ impl NavigationTransitionPoc {
         self.enabled
     }
 
+    pub fn set_enabled(&mut self, width: usize, height: usize, enabled: bool) {
+        if self.enabled == enabled {
+            return;
+        }
+        self.enabled = enabled;
+        self.pending_request = None;
+        self.controller = NavigationTransitionController::default();
+        self.geometry_history.clear();
+        if enabled {
+            warm_smooth_spring_curve();
+            self.buffers.resize(width, height);
+            self.hud_scratch
+                .resize(HUD_WIDTH.saturating_mul(HUD_HEIGHT), Rgb565Pixel(0));
+        } else {
+            self.buffers.resize(0, 0);
+            self.hud_scratch.clear();
+        }
+    }
+
     pub fn begin(
         &mut self,
         edge: NavigationTransitionEdge,
@@ -980,12 +982,12 @@ impl NavigationTransitionPoc {
         if !self.enabled || self.is_active() {
             return Ok(false);
         }
-        if direction == NavigationTransitionDirection::Forward {
-            self.geometry_history[edge.history_index()] = Some(geometry);
-        }
         self.buffers.begin_capture();
         let capture_started = Instant::now();
         self.buffers.capture_source(source)?;
+        if direction == NavigationTransitionDirection::Forward {
+            self.geometry_history.push((edge, geometry));
+        }
         let capture_us = capture_started.elapsed().as_micros().min(u64::MAX as u128) as u64;
         let mut request = NavigationTransitionRequest::new(edge, direction, geometry);
         if let Some(duration_us) = self.duration_override_us {
@@ -1004,7 +1006,10 @@ impl NavigationTransitionPoc {
         &self,
         edge: NavigationTransitionEdge,
     ) -> Option<NavigationTransitionGeometry> {
-        self.geometry_history[edge.history_index()]
+        self.geometry_history
+            .last()
+            .filter(|(history_edge, _)| *history_edge == edge)
+            .map(|(_, geometry)| *geometry)
     }
 
     pub fn capture_destination(
@@ -1126,7 +1131,11 @@ impl NavigationTransitionPoc {
     }
 
     pub fn complete(&mut self) -> Option<NavigationTransitionCompletion> {
-        self.controller.complete()
+        let completion = self.controller.complete()?;
+        if completion.endpoint == NavigationTransitionEndpoint::Source {
+            self.geometry_history.pop();
+        }
+        Some(completion)
     }
 
     pub fn frame(&self) -> NavigationTransitionFrame {
@@ -1248,17 +1257,6 @@ fn restore_hud_pixels(
         let target = (HUD_MARGIN + row) * width + x;
         frame[target..target + hud_width].copy_from_slice(&hud_scratch[source..source + hud_width]);
     }
-}
-
-fn env_flag(name: &str) -> bool {
-    std::env::var(name)
-        .map(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-        .unwrap_or(false)
 }
 
 fn apply_crt_scanline_overlay(
@@ -4022,15 +4020,15 @@ mod tests {
     fn super_scaler_edges_keep_intended_durations() {
         assert_eq!(
             NavigationTransitionEdge::HomeToConsoles.duration_us(),
-            1_260_000
+            600_000
         );
         assert_eq!(
             NavigationTransitionEdge::HomeToArcade.duration_us(),
-            1_440_000
+            720_000
         );
         assert_eq!(
             NavigationTransitionEdge::ConsolesToSystem.duration_us(),
-            1_440_000
+            720_000
         );
     }
 

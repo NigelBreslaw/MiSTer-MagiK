@@ -393,7 +393,7 @@ mod macos {
             scan_card: bool,
             download_media: bool,
             display_profile: DisplayProfile,
-            navigation_transition_poc: bool,
+            _navigation_transition_poc: bool,
         ) -> Result<Self, Box<dyn Error>> {
             let fixtures = UiPreviewFixtures::new()?;
             let (catalog, catalog_generation, catalog_source) =
@@ -429,6 +429,7 @@ mod macos {
             launcher
                 .global::<MisterBridge>()
                 .set_build_label(format!("Mac visual preview · {}", content.label()).into());
+            let navigation_motion_enabled = !launcher_nav.settings.reduce_motion;
             let mut application = Self {
                 launcher,
                 slint_window,
@@ -495,7 +496,7 @@ mod macos {
                 navigation_transition: NavigationTransitionPoc::new(
                     frame_width,
                     frame_height,
-                    navigation_transition_poc,
+                    navigation_motion_enabled,
                 ),
                 pending_navigation_event: None,
                 pending_navigation_committed: false,
@@ -865,10 +866,15 @@ mod macos {
                     }
                     LauncherAction::LaunchGame => {}
                     LauncherAction::PersistSettings => {
-                        if let Some(settings) = event.settings.as_ref()
-                            && let Err(error) = self.settings_store.save(settings)
-                        {
-                            eprintln!("settings: failed to save Mac preview settings: {error}");
+                        if let Some(settings) = event.settings.as_ref() {
+                            self.navigation_transition.set_enabled(
+                                self.frame_width,
+                                self.frame_height,
+                                !settings.reduce_motion,
+                            );
+                            if let Err(error) = self.settings_store.save(settings) {
+                                eprintln!("settings: failed to save Mac preview settings: {error}");
+                            }
                         }
                     }
                     _ => {}
@@ -2045,35 +2051,22 @@ mod macos {
         event: &LauncherEvent,
     ) -> Option<(NavigationTransitionEdge, NavigationTransitionDirection)> {
         match event.action {
-            LauncherAction::OpenMenu
-                if nav.current_menu_id() == ROOT_MENU_ID
-                    && event.path.as_deref() == Some(CONSOLES_MENU_ID) =>
-            {
-                Some((
-                    NavigationTransitionEdge::HomeToConsoles,
-                    NavigationTransitionDirection::Forward,
-                ))
-            }
+            LauncherAction::OpenMenu => Some((
+                NavigationTransitionEdge::HomeToConsoles,
+                NavigationTransitionDirection::Forward,
+            )),
             LauncherAction::OpenCollection if nav.current_menu_id() == ROOT_MENU_ID => Some((
                 NavigationTransitionEdge::HomeToArcade,
                 NavigationTransitionDirection::Forward,
             )),
-            LauncherAction::OpenCollection
-                if nav.current_menu_id().starts_with(CONSOLES_MENU_ID) =>
-            {
-                Some((
-                    NavigationTransitionEdge::ConsolesToSystem,
-                    NavigationTransitionDirection::Forward,
-                ))
-            }
-            LauncherAction::NavigateBack
-                if nav.screen == Screen::Home && nav.current_menu_id() == CONSOLES_MENU_ID =>
-            {
-                Some((
-                    NavigationTransitionEdge::HomeToConsoles,
-                    NavigationTransitionDirection::Reverse,
-                ))
-            }
+            LauncherAction::OpenCollection => Some((
+                NavigationTransitionEdge::ConsolesToSystem,
+                NavigationTransitionDirection::Forward,
+            )),
+            LauncherAction::NavigateBack if nav.screen == Screen::Home => Some((
+                NavigationTransitionEdge::HomeToConsoles,
+                NavigationTransitionDirection::Reverse,
+            )),
             LauncherAction::NavigateBack
                 if nav.screen == Screen::Arcade && nav.current_menu_id() == ROOT_MENU_ID =>
             {
@@ -2082,15 +2075,10 @@ mod macos {
                     NavigationTransitionDirection::Reverse,
                 ))
             }
-            LauncherAction::NavigateBack
-                if nav.screen == Screen::Arcade
-                    && nav.current_menu_id().starts_with(CONSOLES_MENU_ID) =>
-            {
-                Some((
-                    NavigationTransitionEdge::ConsolesToSystem,
-                    NavigationTransitionDirection::Reverse,
-                ))
-            }
+            LauncherAction::NavigateBack if nav.screen == Screen::Arcade => Some((
+                NavigationTransitionEdge::ConsolesToSystem,
+                NavigationTransitionDirection::Reverse,
+            )),
             _ => None,
         }
     }

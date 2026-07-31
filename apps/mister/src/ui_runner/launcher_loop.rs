@@ -266,36 +266,25 @@ fn navigation_transition_for_intent(
     nav: &LauncherNav,
     event: &launcher::LauncherEvent,
 ) -> Option<(NavigationTransitionEdge, NavigationTransitionDirection)> {
-    use crate::launcher_taxonomy::{CONSOLES_MENU_ID, ROOT_MENU_ID};
+    use crate::launcher_taxonomy::ROOT_MENU_ID;
 
     match event.action {
-        LauncherAction::OpenMenu
-            if nav.current_menu_id() == ROOT_MENU_ID
-                && event.path.as_deref() == Some(CONSOLES_MENU_ID) =>
-        {
-            Some((
-                NavigationTransitionEdge::HomeToConsoles,
-                NavigationTransitionDirection::Forward,
-            ))
-        }
+        LauncherAction::OpenMenu => Some((
+            NavigationTransitionEdge::HomeToConsoles,
+            NavigationTransitionDirection::Forward,
+        )),
         LauncherAction::OpenCollection if nav.current_menu_id() == ROOT_MENU_ID => Some((
             NavigationTransitionEdge::HomeToArcade,
             NavigationTransitionDirection::Forward,
         )),
-        LauncherAction::OpenCollection if nav.current_menu_id().starts_with(CONSOLES_MENU_ID) => {
-            Some((
-                NavigationTransitionEdge::ConsolesToSystem,
-                NavigationTransitionDirection::Forward,
-            ))
-        }
-        LauncherAction::NavigateBack
-            if nav.screen == Screen::Home && nav.current_menu_id() == CONSOLES_MENU_ID =>
-        {
-            Some((
-                NavigationTransitionEdge::HomeToConsoles,
-                NavigationTransitionDirection::Reverse,
-            ))
-        }
+        LauncherAction::OpenCollection => Some((
+            NavigationTransitionEdge::ConsolesToSystem,
+            NavigationTransitionDirection::Forward,
+        )),
+        LauncherAction::NavigateBack if nav.screen == Screen::Home => Some((
+            NavigationTransitionEdge::HomeToConsoles,
+            NavigationTransitionDirection::Reverse,
+        )),
         LauncherAction::NavigateBack
             if nav.screen == Screen::Arcade && nav.current_menu_id() == ROOT_MENU_ID =>
         {
@@ -304,15 +293,10 @@ fn navigation_transition_for_intent(
                 NavigationTransitionDirection::Reverse,
             ))
         }
-        LauncherAction::NavigateBack
-            if nav.screen == Screen::Arcade
-                && nav.current_menu_id().starts_with(CONSOLES_MENU_ID) =>
-        {
-            Some((
-                NavigationTransitionEdge::ConsolesToSystem,
-                NavigationTransitionDirection::Reverse,
-            ))
-        }
+        LauncherAction::NavigateBack if nav.screen == Screen::Arcade => Some((
+            NavigationTransitionEdge::ConsolesToSystem,
+            NavigationTransitionDirection::Reverse,
+        )),
         _ => None,
     }
 }
@@ -1769,7 +1753,6 @@ pub(super) fn run_launcher_loop(
     let mut deferred_catalog_events: VecDeque<CatalogWorkerMessage> = VecDeque::new();
     let mut pending_catalog_ready: Option<CatalogWorkerMessage> = None;
     let mut pending_collection_entry: Option<PendingCollectionEntry> = None;
-    let mut navigation_transition = NavigationTransitionPoc::from_env(ui.render_w(), ui.render_h());
     let mut pending_navigation_transition: Option<PendingNavigationTransition> = None;
     let mut deferred_navigation_hydration_finish: Option<String> = None;
     let mut catalog_ready_deferred_since: Option<Instant> = None;
@@ -1829,6 +1812,8 @@ pub(super) fn run_launcher_loop(
         mister_magik_catalog::device_layout::current_app_path("settings.json"),
     );
     nav.settings = settings_store.load();
+    let mut navigation_transition =
+        NavigationTransitionPoc::new(ui.render_w(), ui.render_h(), !nav.settings.reduce_motion);
     nav.screen = start_screen;
     let mut display_confirm_deadline = None;
     let (display_confirm_tx, display_confirm_rx) =
@@ -3806,12 +3791,17 @@ pub(super) fn run_launcher_loop(
                                 continue;
                             }
                             LauncherAction::PersistSettings => {
-                                if let Some(settings) = event.settings.as_ref()
-                                    && let Err(error) = settings_store.save(settings)
-                                {
-                                    crate::ui_errln!(
-                                        "settings: failed to save launcher settings: {error}"
+                                if let Some(settings) = event.settings.as_ref() {
+                                    navigation_transition.set_enabled(
+                                        ui.render_w(),
+                                        ui.render_h(),
+                                        !settings.reduce_motion,
                                     );
+                                    if let Err(error) = settings_store.save(settings) {
+                                        crate::ui_errln!(
+                                            "settings: failed to save launcher settings: {error}"
+                                        );
+                                    }
                                 }
                             }
                             LauncherAction::LaunchGame => {}
