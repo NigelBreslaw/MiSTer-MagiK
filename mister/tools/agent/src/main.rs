@@ -29,6 +29,8 @@ fn select_framebuffer_capture<T>(
 #[cfg(any(target_os = "linux", test))]
 use serde_json::{Value, json};
 
+#[cfg(any(target_os = "linux", test))]
+mod launcher_automation;
 #[cfg(target_os = "linux")]
 mod scanout_slots_contract;
 
@@ -2284,7 +2286,10 @@ mod linux {
                     "pong": true,
                     "agent_version": mister_magik_agent_protocol::AGENT_VERSION,
                     "protocol_version": mister_magik_agent_protocol::PROTOCOL_VERSION,
-                    "capabilities": [mister_magik_agent_protocol::FRAMEBUFFER_CAPTURE_CAPABILITY],
+                    "capabilities": [
+                        mister_magik_agent_protocol::FRAMEBUFFER_CAPTURE_CAPABILITY,
+                        mister_magik_agent_protocol::LAUNCHER_AUTOMATION_CAPABILITY,
+                    ],
                 })),
                 None,
             ),
@@ -2326,6 +2331,14 @@ mod linux {
                 Ok(result) => response(id, true, Some(result), None),
                 Err(err) => response(id, false, None, Some(&err)),
             },
+            "launcher_automation_begin" => match crate::launcher_automation::begin(args) {
+                Ok(result) => response(id, true, Some(result), None),
+                Err(err) => response(id, false, None, Some(&err)),
+            },
+            "launcher_automation_request" => match crate::launcher_automation::request(args) {
+                Ok(result) => response(id, true, Some(result), None),
+                Err(err) => response(id, false, None, Some(&err)),
+            },
             "reboot" => match schedule_reboot(args) {
                 Ok(mode) => response(
                     id,
@@ -2360,7 +2373,10 @@ mod linux {
                 "version": env!("CARGO_PKG_VERSION"),
                 "agent_version": mister_magik_agent_protocol::AGENT_VERSION,
                 "protocol_version": mister_magik_agent_protocol::PROTOCOL_VERSION,
-                "capabilities": [mister_magik_agent_protocol::FRAMEBUFFER_CAPTURE_CAPABILITY],
+                "capabilities": [
+                    mister_magik_agent_protocol::FRAMEBUFFER_CAPTURE_CAPABILITY,
+                    mister_magik_agent_protocol::LAUNCHER_AUTOMATION_CAPABILITY,
+                ],
                 "boot_id": boot_id,
                 "uptime_ms": started.elapsed().as_millis() as u64,
                 "port": AGENT_PORT,

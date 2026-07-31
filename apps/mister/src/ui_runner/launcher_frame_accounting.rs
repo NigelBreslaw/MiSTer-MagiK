@@ -101,6 +101,7 @@ pub(super) struct LauncherFrameAccounting {
 
 pub(super) struct LauncherPresentedFrame {
     pub(super) frames: u64,
+    pub(super) automation: AutomationFrameStamp,
     pub(super) selected: usize,
     pub(super) visual_index: f32,
     #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
@@ -203,6 +204,7 @@ pub(super) struct LauncherFrameSnapshotBuilder {
 
 pub(super) struct LauncherFrameIdentity {
     pub(super) frames: u64,
+    pub(super) automation: AutomationFrameStamp,
     pub(super) selected: usize,
     pub(super) visual_index: f32,
     #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
@@ -313,6 +315,7 @@ impl LauncherFrameSnapshotBuilder {
     pub(super) fn build(self) -> LauncherPresentedFrame {
         LauncherPresentedFrame {
             frames: self.identity.frames,
+            automation: self.identity.automation,
             selected: self.identity.selected,
             visual_index: self.identity.visual_index,
             #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
@@ -2786,6 +2789,7 @@ mod tests {
         let frame_t4 = loop_start + Duration::from_micros(wall_us);
         LauncherPresentedFrame {
             frames: frame,
+            automation: AutomationFrameStamp::default(),
             selected: 0,
             visual_index: 0.0,
             #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
@@ -2909,6 +2913,7 @@ mod tests {
         LauncherFrameSnapshotBuilder {
             identity: LauncherFrameIdentity {
                 frames: frame.frames,
+                automation: frame.automation,
                 selected: frame.selected,
                 visual_index: frame.visual_index,
                 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]

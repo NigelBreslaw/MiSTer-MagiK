@@ -2074,6 +2074,7 @@ pub(super) fn run_launcher_loop(
     let mut media_session = ScreenshotMediaUpdateSession::default();
     let mut library_changed_dialog_test = LibraryChangedDialogTestDriver::from_env(start);
     let mut launcher_input_script = LauncherInputScriptDriver::from_env(start);
+    let mut launcher_automation = LauncherAutomation::new();
     let mut catalog_recovery_prev = PadState::default();
     let sqlite_path = mister_magik_catalog::catalog_state::default_path();
     let capsule_seed_ready = catalog_ready;
@@ -3298,13 +3299,20 @@ pub(super) fn run_launcher_loop(
             bridge.set_effective_view(effective_view.label().into());
         }
 
-        if effective_view.accepts_application_input() && lifecycle.startup_input_enabled() {
-            let pad_changed = pad_changed_for_input
-                .take()
-                .unwrap_or_else(|| pad.poll_with_debug_labels(setup_active));
-            let raw_screensaver_input_activity = pad.user_activity();
-            let frame_now = Instant::now();
+        let pad_changed = pad_changed_for_input
+            .take()
+            .unwrap_or_else(|| pad.poll_with_debug_labels(setup_active));
+        let frame_now = Instant::now();
+        let input_session = ControllerSetupInputSession::new(&pad, &setup);
+        let launcher_state = launcher_automation.poll_input(
+            input_session.launcher_state(),
+            effective_view.accepts_application_input() && lifecycle.startup_input_enabled(),
+            setup.is_active(),
+            frame_now,
+        );
+        frame_accounting.set_automation_action_sequence(launcher_automation.action_sequence());
 
+        if effective_view.accepts_application_input() && lifecycle.startup_input_enabled() {
             if setup_active && setup.target_pad_idx >= pad.len() {
                 crate::ui_errln!(
                     "controller setup: pad {} disappeared; closing setup flow",
@@ -3314,8 +3322,8 @@ pub(super) fn run_launcher_loop(
                 full_bridge_dirty = true;
             }
 
-            let input_session = ControllerSetupInputSession::new(&pad, &setup);
-            let launcher_state = input_session.launcher_state().clone();
+            let raw_screensaver_input_activity =
+                pad.user_activity() || launcher_automation.active();
             if screensaver.handle_input(
                 frame_now,
                 pad_state_has_active_input(&launcher_state),
@@ -3325,7 +3333,11 @@ pub(super) fn run_launcher_loop(
                 request_launcher_redraw!();
                 continue;
             }
-            let setup_state = input_session.setup_state();
+            let setup_state = if launcher_automation.active() {
+                launcher_state.clone()
+            } else {
+                input_session.setup_state()
+            };
             let active_idx = pad.active_idx();
             let info = pad.info();
 
@@ -4088,7 +4100,6 @@ pub(super) fn run_launcher_loop(
                 nav.screen = screen;
             }
         } else {
-            let _ = pad.poll();
             if let Some(action) = scheduler.launch_runtime_action(Instant::now()) {
                 match action {
                     LaunchHandoffRuntimeAction::ArcadeCoreRunning => {
@@ -4500,6 +4511,76 @@ pub(super) fn run_launcher_loop(
         }
         let startup_status = lifecycle.startup_status();
         let composition_status = composition_decision.status();
+        let automation_frame_stamp = if launcher_automation.active() {
+            let selected_system_id = nav.active_collection_scope_id(&catalog);
+            let selected_game = (nav.screen == Screen::Arcade)
+                .then(|| {
+                    nav.active_arcade_game_at(&catalog, selected_system_id, nav.arcade.selected)
+                })
+                .flatten();
+            let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+            launcher_automation.observe_state(AutomationSemanticState {
+                effective_view: effective_view.label().to_string(),
+                return_screen: screen_label(nav.screen).to_string(),
+                menu_id: nav.current_menu_id().to_string(),
+                selected_item_id: nav.current_menu_selected_item_id().to_string(),
+                active_collection_id: nav.active_collection_id().unwrap_or("").to_string(),
+                selected_system_id: selected_system_id.to_string(),
+                selected_game_id: selected_game
+                    .map_or("", |game| game.mra_path.as_ref())
+                    .to_string(),
+                selected_game_title: selected_game
+                    .map_or("", |game| game.title.as_ref())
+                    .to_string(),
+                selected_index: if nav.screen == Screen::Arcade {
+                    nav.arcade.selected
+                } else {
+                    nav.selected
+                },
+                selected_count: if nav.screen == Screen::Arcade {
+                    nav.active_arcade_game_count(&catalog, selected_system_id)
+                } else {
+                    nav.current_menu_count()
+                },
+                overlay: if confirm_visible {
+                    "confirm"
+                } else if catalog_scan_visible {
+                    "catalog-scan"
+                } else if setup.is_active() {
+                    "controller-setup"
+                } else {
+                    "none"
+                }
+                .to_string(),
+                dialog_title: bridge.get_confirm_title().to_string(),
+                dialog_message: bridge.get_confirm_message().to_string(),
+                dialog_selected: confirm_selected,
+                drawer_open: nav.arcade_filter.drawer_open,
+                drawer_level: nav.arcade_filter.title().to_string(),
+                drawer_selected: nav.arcade_filter.selected,
+                search_active: nav.arcade_search.is_active(&nav.arcade_filter.active),
+                search_status: match nav.arcade_search.status {
+                    launcher::ArcadeSearchStatus::Idle => "idle",
+                    launcher::ArcadeSearchStatus::Searching => "searching",
+                    launcher::ArcadeSearchStatus::Ready => "ready",
+                    launcher::ArcadeSearchStatus::Failed => "failed",
+                }
+                .to_string(),
+                search_query: nav.arcade_search.query.clone(),
+                search_results: nav.arcade_search_result_count(),
+                preview_state: preview.trace_cache_state().to_string(),
+                launch_state: if launching { "launching" } else { "idle" }.to_string(),
+                loading_title: scheduler.visible_loading_title(&loading_title).to_string(),
+                catalog_generation: catalog_generation.current.clone().unwrap_or_default(),
+                catalog_ready,
+                settings_selected: nav.settings_selected,
+                composition_state: composition_status.state.to_string(),
+                composition_recovery_count: composition_status.recovery_count,
+                input_enabled: startup_status.input_enabled,
+            })
+        } else {
+            AutomationFrameStamp::default()
+        };
         let home_pan_present_active = update_home_pan_present_window(
             nav.screen,
             nav.scroll_x,
@@ -4543,7 +4624,7 @@ pub(super) fn run_launcher_loop(
         wake_reasons.insert_if(LauncherWakeReasons::BENCHMARK_ACTIVE, launcher_bench_active);
         wake_reasons.insert_if(
             LauncherWakeReasons::SCRIPTED_INPUT_ACTIVE,
-            launcher_input_script.active(),
+            launcher_input_script.active() || launcher_automation.active(),
         );
         wake_reasons.insert_if(
             LauncherWakeReasons::ROUTE_FORCES_FULL_PRESENT,
@@ -5540,6 +5621,7 @@ pub(super) fn run_launcher_loop(
         let mut presented_frame = LauncherFrameSnapshotBuilder {
             identity: LauncherFrameIdentity {
                 frames,
+                automation: automation_frame_stamp,
                 selected: nav.arcade.selected,
                 visual_index: nav.arcade.visual_index,
                 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
@@ -5713,6 +5795,12 @@ pub(super) fn run_launcher_loop(
                     == presented_frame.main_present_sequence
                 && !presented_frame.main_present_pending
                 && launcher_presenter.latch_failure().is_none();
+            if accepted_and_active_confirmed {
+                launcher_automation.acknowledge_presented(
+                    presented_frame.automation,
+                    presented_frame.main_present_sequence,
+                );
+            }
             frame_accounting.record_finished_frame(
                 &presented_frame,
                 start,

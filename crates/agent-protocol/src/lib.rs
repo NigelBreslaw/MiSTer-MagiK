@@ -4,11 +4,11 @@
 use serde_json::{Value, json};
 
 pub const PORT: u16 = 7498;
-// Version 6 requires the protocol-v4 latch reader used by authoritative
-// framebuffer capture so bootstrap cannot accept the older v3 reader.
-pub const AGENT_VERSION: u64 = 6;
+// Version 7 adds the closed, authenticated volatile launcher-automation bridge.
+pub const AGENT_VERSION: u64 = 7;
 pub const PROTOCOL_VERSION: u64 = 2;
 pub const FRAMEBUFFER_CAPTURE_CAPABILITY: &str = "framebuffer-capture-v2";
+pub const LAUNCHER_AUTOMATION_CAPABILITY: &str = "launcher-automation-v1";
 pub const MAX_BINARY_PAYLOAD_BYTES: u64 = 512 * 1024 * 1024;
 
 pub fn request(token: &str, id: u64, command: &str, args: Value) -> Value {
