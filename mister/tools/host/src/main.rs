@@ -3978,7 +3978,7 @@ fn request_magik_benchmark_action(action: &str) -> Result<Value> {
         std::process::id(),
         SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
     );
-    let reply = agent_request_with_liveness(
+    let reply = agent_request(
         "magik",
         json!({
             "action": action,
@@ -3986,7 +3986,7 @@ fn request_magik_benchmark_action(action: &str) -> Result<Value> {
             "expected_generation": expected_generation,
             "target": Value::Null,
         }),
-        Duration::from_secs(5),
+        Duration::from_secs(8),
     )?;
     Ok(reply.response.get("result").cloned().unwrap_or(Value::Null))
 }

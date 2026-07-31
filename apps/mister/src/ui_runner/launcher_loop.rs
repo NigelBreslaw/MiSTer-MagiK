@@ -1450,6 +1450,42 @@ fn initialize_catalog_generation(
     generation
 }
 
+fn request_pending_launch_return_shard(
+    pending: Option<&launcher::LaunchReturnState>,
+    catalog: &ArcadeCatalog,
+    nav: &mut LauncherNav,
+    scheduler: &mut LauncherScheduler,
+    now: Instant,
+    start: Instant,
+) -> bool {
+    let Some(collection_id) = pending.and_then(launcher::LaunchReturnState::collection_id) else {
+        return false;
+    };
+    if collection_has_resident_rows(catalog, collection_id)
+        || !catalog
+            .systems
+            .iter()
+            .any(|system| system.id == collection_id)
+    {
+        return false;
+    }
+    if !scheduler.request_system_shard(
+        collection_id.to_string(),
+        SystemShardPriority::Urgent,
+        "launch-return",
+        now,
+    ) {
+        return false;
+    }
+    nav.catalog_system_hydration_started(collection_id);
+    print_startup_event(
+        start,
+        "launch_return_system_shard_requested",
+        format!("system={collection_id} priority=urgent"),
+    );
+    true
+}
+
 fn catalog_hydration_execution_mode(_request: CatalogWorkerRequest) -> CatalogExecutionMode {
     CatalogExecutionMode::BackgroundInteractive
 }
@@ -2190,6 +2226,16 @@ pub(super) fn run_launcher_loop(
         catalog_version = catalog_version.wrapping_add(1);
     }
     nav.sync_launcher_taxonomy(&catalog);
+    if !capsule_seed_ready {
+        let _ = request_pending_launch_return_shard(
+            pending_launch_return_state.as_ref(),
+            &catalog,
+            &mut nav,
+            &mut scheduler,
+            Instant::now(),
+            start,
+        );
+    }
     if capsule_seed_ready {
         launch_return_restored = pending_launch_return_state
             .as_ref()
@@ -6436,6 +6482,19 @@ fn apply_catalog_session_effects(
                 *catalog = catalog.replacing_system_games(&system_id, replacement, launch_plans);
                 *catalog_version = (*catalog_version).wrapping_add(1);
                 nav.sync_launcher_taxonomy(catalog);
+                let return_restored =
+                    apply_pending_launch_return_state(nav, catalog, pending_launch_return_state);
+                if return_restored {
+                    emit_return_context_restored(
+                        lifecycle,
+                        lifecycle_effects,
+                        nav,
+                        catalog,
+                        preview,
+                        now,
+                    );
+                    lifecycle.tick_startup_reveal(now, true, lifecycle_effects);
+                }
                 *full_bridge_dirty = true;
                 print_startup_event(
                     start,
@@ -7283,6 +7342,41 @@ mod tests {
             SystemShardPriority::Urgent,
             "startup-regression-test",
             Instant::now()
+        ));
+    }
+
+    #[test]
+    fn pending_launch_return_requests_its_registry_shard_before_home_prefetch() {
+        let full_catalog = catalog_for_media_systems(&["arcade"]);
+        let mut launched_nav = LauncherNav::new();
+        assert!(launched_nav.open_system(&full_catalog, "arcade"));
+        let state = launcher::capture_launch_return_state(
+            &launched_nav,
+            &full_catalog,
+            "/media/fat/_Arcade/arcade.mra",
+        )
+        .expect("return state");
+        let registry = arcade_catalog(Vec::new(), vec![arcade_system("arcade", 1)]);
+        let mut restored_nav = LauncherNav::new();
+        restored_nav.sync_launcher_taxonomy(&registry);
+        let mut scheduler = LauncherScheduler::new(false);
+        let _ = initialize_catalog_generation(&mut scheduler, Some("generation-a".to_string()));
+        let now = Instant::now();
+
+        assert!(request_pending_launch_return_shard(
+            Some(&state),
+            &registry,
+            &mut restored_nav,
+            &mut scheduler,
+            now,
+            now,
+        ));
+        assert!(scheduler.system_shard_attempted("arcade"));
+        assert!(!scheduler.request_system_shard(
+            "arcade".to_string(),
+            SystemShardPriority::Selected,
+            "home-highlight",
+            now,
         ));
     }
 
