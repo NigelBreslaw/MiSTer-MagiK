@@ -3,11 +3,12 @@
 
 //! Agent-readable runtime status and recent events.
 
+use serde::Serialize;
 use serde_json::{Value, json};
 use std::fs::{OpenOptions, create_dir_all};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, TryLockError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -147,7 +148,7 @@ launcher_status_types! {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct FrameBudgetStatus {
     pub budget_us: u64,
     pub frames_total: u64,
@@ -177,7 +178,7 @@ pub struct FrameBudgetStatus {
     pub slow_frames: Vec<FrameBudgetSlowFrame>,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct FrameBudgetRecentFrame {
     pub frame: u64,
     pub screensaver_active: bool,
@@ -283,7 +284,7 @@ pub struct FrameBudgetRecentFrame {
     pub particle_renderer_scratch_bytes: u64,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct FrameBudgetSlowFrame {
     pub frame: u64,
     pub severity: &'static str,
@@ -341,6 +342,7 @@ pub struct RuntimeStatusPublisherMetrics {
     pub replaced_count: u64,
     pub last_worker_duration_us: u64,
     pub worker_errors: u64,
+    pub worker_active: bool,
 }
 
 #[derive(Default)]
@@ -350,6 +352,7 @@ struct RuntimeStatusPublisherCounters {
     replaced_count: AtomicU64,
     last_worker_duration_us: AtomicU64,
     worker_errors: AtomicU64,
+    worker_active: AtomicBool,
 }
 
 pub struct RuntimeStatusPublisher {
@@ -386,6 +389,7 @@ impl RuntimeStatusPublisher {
                 mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
                     mister_magik_catalog::runtime_thread::RuntimeThreadRole::RuntimeStatus,
                 );
+                let mut json_buffer = Vec::with_capacity(64 * 1024);
                 loop {
                     let status = {
                         let mut state = worker_slot
@@ -407,7 +411,11 @@ impl RuntimeStatusPublisher {
                     if !worker_delay.is_zero() {
                         thread::sleep(worker_delay);
                     }
-                    write_owned_launcher_status(&path, status, &worker_counters);
+                    worker_counters.worker_active.store(true, Ordering::Release);
+                    write_owned_launcher_status(&path, status, &worker_counters, &mut json_buffer);
+                    worker_counters
+                        .worker_active
+                        .store(false, Ordering::Release);
                 }
             })
             .ok();
@@ -453,6 +461,7 @@ impl RuntimeStatusPublisher {
                 .last_worker_duration_us
                 .load(Ordering::Relaxed),
             worker_errors: self.counters.worker_errors.load(Ordering::Relaxed),
+            worker_active: self.counters.worker_active.load(Ordering::Acquire),
         }
     }
 
@@ -507,41 +516,24 @@ fn write_owned_launcher_status(
     path: &Path,
     status: OwnedLauncherStatus,
     counters: &RuntimeStatusPublisherCounters,
+    json_buffer: &mut Vec<u8>,
 ) {
     let started = Instant::now();
     let sequence = status.status_sequence;
-    let mut value = launcher_status_value(status, unix_ms(), std::process::id());
-    if let Some(map) = value.as_object_mut() {
-        map.insert("status_publish_mode".into(), json!("async"));
-        map.insert(
-            "status_submitted_sequence".into(),
-            json!(
-                counters
-                    .submitted_sequence
-                    .load(Ordering::Acquire)
-                    .max(sequence)
-            ),
-        );
-        map.insert("status_written_sequence".into(), json!(sequence));
-        map.insert(
-            "status_replaced_count".into(),
-            json!(counters.replaced_count.load(Ordering::Relaxed)),
-        );
-        map.insert(
-            "status_worker_write_us".into(),
-            json!(counters.last_worker_duration_us.load(Ordering::Relaxed)),
-        );
-        map.insert(
-            "status_worker_errors".into(),
-            json!(counters.worker_errors.load(Ordering::Relaxed)),
-        );
-    }
     let result = (|| -> std::io::Result<()> {
+        write_launcher_status_json(
+            json_buffer,
+            &status,
+            unix_ms(),
+            std::process::id(),
+            counters,
+        )
+        .map_err(std::io::Error::other)?;
         if let Some(parent) = path.parent() {
             create_dir_all(parent)?;
         }
         let tmp = PathBuf::from(format!("{}.tmp", path.display()));
-        std::fs::write(&tmp, format!("{value}\n"))?;
+        std::fs::write(&tmp, json_buffer.as_slice())?;
         std::fs::rename(tmp, path)
     })();
     let duration_us = started.elapsed().as_micros().min(u64::MAX as u128) as u64;
@@ -553,6 +545,270 @@ fn write_owned_launcher_status(
     } else {
         counters.worker_errors.fetch_add(1, Ordering::Relaxed);
     }
+}
+
+#[derive(Serialize)]
+struct RuntimeBuildStatus<'a> {
+    package_version: &'a str,
+    version: &'a str,
+    build_number: &'a str,
+    source_revision: &'a str,
+    source_dirty: Option<bool>,
+    build_time: &'a str,
+    arch: &'a str,
+}
+
+#[derive(Serialize)]
+struct CatalogRecoveryStatus<'a> {
+    left: &'a str,
+    right: &'a str,
+    selected: i32,
+}
+
+#[derive(Serialize)]
+struct CatalogFailureStatus<'a> {
+    code: &'a str,
+    detail: &'a str,
+    usable_catalog: bool,
+    report_path: &'static str,
+    recovery: CatalogRecoveryStatus<'a>,
+}
+
+fn write_launcher_status_json(
+    buffer: &mut Vec<u8>,
+    status: &OwnedLauncherStatus,
+    ts_unix_ms: u128,
+    pid: u32,
+    counters: &RuntimeStatusPublisherCounters,
+) -> Result<(), serde_json::Error> {
+    buffer.clear();
+    buffer.push(b'{');
+    let mut first = true;
+    macro_rules! field {
+        ($name:literal, $value:expr) => {{
+            if !first {
+                buffer.push(b',');
+            }
+            first = false;
+            serde_json::to_writer(&mut *buffer, $name)?;
+            buffer.push(b':');
+            serde_json::to_writer(&mut *buffer, &$value)?;
+        }};
+    }
+
+    field!("schema", "mister-magik-slint-status-v1");
+    field!("ts_unix_ms", ts_unix_ms);
+    field!("pid", pid);
+    field!("mode", "ui");
+    field!(
+        "build",
+        RuntimeBuildStatus {
+            package_version: &status.build_package_version,
+            version: &status.build_version,
+            build_number: &status.build_number,
+            source_revision: &status.build_source_revision,
+            source_dirty: match status.build_source_dirty.as_str() {
+                "0" => Some(false),
+                "1" => Some(true),
+                _ => None,
+            },
+            build_time: &status.build_time,
+            arch: &status.build_arch,
+        }
+    );
+    field!("scene", status.scene);
+    field!("screen", status.screen);
+    field!("effective_view", status.effective_view);
+    field!("return_screen", status.return_screen);
+    field!("output_route", status.output_route);
+    field!("frames", status.frames);
+    field!("idle", status.idle);
+    field!("idle_loops", status.idle_loops);
+    field!("status_sequence", status.status_sequence);
+    field!("fps_estimate", (status.fps_estimate * 10.0).round() / 10.0);
+    field!("rolling_fps", (status.rolling_fps * 10.0).round() / 10.0);
+    field!("rolling_prepare_us", status.rolling_prepare_us);
+    field!("rolling_render_us", status.rolling_render_us);
+    field!("rolling_custom_draw_us", status.rolling_custom_draw_us);
+    field!("rolling_vsync_us", status.rolling_vsync_us);
+    field!("rolling_present_us", status.rolling_present_us);
+    field!("rolling_rows", status.rolling_rows);
+    field!("last_frame_ms_ago", status.last_frame_ms_ago);
+    field!("vsync_source", status.vsync_source);
+    field!("vsync_period_us", status.vsync_period_us);
+    field!("present_backend", status.present_backend);
+    field!("present_status", status.present_status);
+    field!("latch_failure_state", status.latch_failure_state);
+    field!("latch_failure_stage", status.latch_failure_stage);
+    field!("latch_failure_reason", status.latch_failure_reason);
+    field!("latch_failure_detail", status.latch_failure_detail);
+    field!("display_frozen", status.display_frozen);
+    field!("present_buffer", status.present_buffer);
+    field!("latch_publish_us", status.latch_publish_us);
+    field!("latch_sequence", status.latch_sequence);
+    field!("latch_flip_count", status.latch_flip_count);
+    field!("latch_drop_count", status.latch_drop_count);
+    field!("catalog_ready", status.catalog_ready);
+    field!("catalog_games", status.catalog_games);
+    field!("catalog_systems", status.catalog_systems);
+    field!("catalog_refresh_done", status.catalog_refresh_done);
+    field!("catalog_refresh_policy", status.catalog_refresh_policy);
+    field!("catalog_worker_enabled", status.catalog_worker_enabled);
+    field!(
+        "screensaver_profile_state",
+        status.screensaver_profile_state
+    );
+    field!("catalog_scan_visible", status.catalog_scan_visible);
+    field!("catalog_scan_message", status.catalog_scan_message);
+    field!("catalog_scan_title", status.catalog_scan_title);
+    field!("catalog_scan_detail", status.catalog_scan_detail);
+    field!("catalog_scan_percent", status.catalog_scan_percent);
+    field!(
+        "catalog_background_scan_visible",
+        status.catalog_background_scan_visible
+    );
+    field!("confirm_visible", status.confirm_visible);
+    field!("confirm_title", status.confirm_title);
+    field!("confirm_message", status.confirm_message);
+    field!("confirm_selected", status.confirm_selected);
+    field!("confirm_left_label", status.confirm_left_label);
+    field!("confirm_right_label", status.confirm_right_label);
+    let catalog_failure_code = match status.confirm_title.as_str() {
+        "Catalog update required" => Some("projection_upgrade_required"),
+        "Catalog repair required" => Some("catalog_repair_required"),
+        "Catalog unavailable" => Some("catalog_load_failed"),
+        "Catalog rebuild failed" => Some("catalog_persistence_failed"),
+        _ => None,
+    };
+    let catalog_failure = catalog_failure_code.map(|code| CatalogFailureStatus {
+        code,
+        detail: &status.confirm_message,
+        usable_catalog: status.catalog_ready,
+        report_path: "diagnostics/catalog/latest.json",
+        recovery: CatalogRecoveryStatus {
+            left: &status.confirm_left_label,
+            right: &status.confirm_right_label,
+            selected: status.confirm_selected,
+        },
+    });
+    field!("catalog_failure", catalog_failure);
+    write_launcher_status_json_tail(buffer, status, counters, &mut first)?;
+    buffer.extend_from_slice(b"}\n");
+    Ok(())
+}
+
+fn write_launcher_status_json_tail(
+    buffer: &mut Vec<u8>,
+    status: &OwnedLauncherStatus,
+    counters: &RuntimeStatusPublisherCounters,
+    first: &mut bool,
+) -> Result<(), serde_json::Error> {
+    macro_rules! field {
+        ($name:literal, $value:expr) => {{
+            if !*first {
+                buffer.push(b',');
+            }
+            *first = false;
+            serde_json::to_writer(&mut *buffer, $name)?;
+            buffer.push(b':');
+            serde_json::to_writer(&mut *buffer, &$value)?;
+        }};
+    }
+    field!("arcade_selected", status.arcade_selected);
+    field!(
+        "arcade_visual_index",
+        (status.arcade_visual_index * 1000.0).round() / 1000.0
+    );
+    field!("arcade_drawer_open", status.arcade_drawer_open);
+    field!("arcade_drawer_level", status.arcade_drawer_level);
+    field!("arcade_drawer_selected", status.arcade_drawer_selected);
+    field!(
+        "arcade_drawer_requested_hash",
+        status.arcade_drawer_requested_hash
+    );
+    field!(
+        "arcade_drawer_rendered_hash",
+        status.arcade_drawer_rendered_hash
+    );
+    field!("arcade_search_active", status.arcade_search_active);
+    field!("arcade_search_status", status.arcade_search_status);
+    field!("arcade_search_query", status.arcade_search_query);
+    field!("arcade_search_results", status.arcade_search_results);
+    field!("preview_cache_state", status.preview_cache_state);
+    field!(
+        "preview_transition_effect",
+        status.preview_transition_effect
+    );
+    field!(
+        "preview_transition_progress",
+        (status.preview_transition_progress * 1000.0).round() / 1000.0
+    );
+    field!("composition_state", status.composition_state);
+    field!(
+        "composition_recovery_count",
+        status.composition_recovery_count
+    );
+    field!(
+        "last_composition_invariant_kind",
+        status.last_composition_invariant_kind
+    );
+    field!(
+        "last_composition_invariant_detail",
+        status.last_composition_invariant_detail
+    );
+    field!("bench_scenario", status.bench_scenario);
+    field!("start_screen", status.start_screen);
+    field!("lock_screen", status.lock_screen);
+    field!("route_reassert_count", status.route_reassert_count);
+    field!(
+        "last_route_reassert_frame",
+        status.last_route_reassert_frame
+    );
+    field!("last_route_reassert_ok", status.last_route_reassert_ok);
+    field!(
+        "last_route_reassert_error",
+        status.last_route_reassert_error
+    );
+    field!("launch_state", status.launch_state);
+    field!("loading_title", status.loading_title);
+    field!("input_pad_count", status.input_pad_count);
+    field!("active_pad_index", status.active_pad_index);
+    field!("active_pad_name", status.active_pad_name);
+    field!("active_pad_path", status.active_pad_path);
+    field!("last_raw_event", status.last_raw_event);
+    field!("last_input_ms_ago", status.last_input_ms_ago);
+    field!("startup_mode", status.startup_mode);
+    field!("startup_reveal_state", status.startup_reveal_state);
+    field!("revealed", status.revealed);
+    field!("input_enabled", status.input_enabled);
+    field!("reveal_ms", status.reveal_ms);
+    field!("input_enabled_ms", status.input_enabled_ms);
+    field!("frame_budget", status.frame_budget);
+    field!("rss_kb", current_rss_kb());
+    field!("rss_hwm_kb", current_rss_hwm_kb());
+    field!("status_publish_mode", "async");
+    field!(
+        "status_submitted_sequence",
+        counters
+            .submitted_sequence
+            .load(Ordering::Acquire)
+            .max(status.status_sequence)
+    );
+    field!("status_written_sequence", status.status_sequence);
+    field!(
+        "status_replaced_count",
+        counters.replaced_count.load(Ordering::Relaxed)
+    );
+    field!(
+        "status_worker_write_us",
+        counters.last_worker_duration_us.load(Ordering::Relaxed)
+    );
+    field!(
+        "status_worker_errors",
+        counters.worker_errors.load(Ordering::Relaxed)
+    );
+    field!("status_worker_active", true);
+    Ok(())
 }
 
 fn event_value(name: &str, detail: &str, ts_unix_ms: u128, ts_boot_ms: u64, pid: u32) -> Value {
@@ -574,6 +830,7 @@ fn boot_ms() -> u64 {
         .unwrap_or(0)
 }
 
+#[cfg(test)]
 fn launcher_status_value(
     status: impl Into<OwnedLauncherStatus>,
     ts_unix_ms: u128,
@@ -766,6 +1023,7 @@ fn launcher_status_value(
     Value::Object(map)
 }
 
+#[cfg(test)]
 fn frame_budget_status_value(status: &FrameBudgetStatus) -> Value {
     json!({
         "budget_us": status.budget_us,
@@ -797,6 +1055,7 @@ fn frame_budget_status_value(status: &FrameBudgetStatus) -> Value {
     })
 }
 
+#[cfg(test)]
 fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
     let mut object = serde_json::Map::new();
     macro_rules! field {
@@ -1032,6 +1291,7 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
     Value::Object(object)
 }
 
+#[cfg(test)]
 fn frame_budget_slow_frame_value(frame: &FrameBudgetSlowFrame) -> Value {
     let mut object = serde_json::Map::new();
     object.insert("frame".into(), json!(frame.frame));
@@ -1758,6 +2018,26 @@ mod tests {
             input_enabled_ms: 0,
             frame_budget: FrameBudgetStatus::default(),
         }
+    }
+
+    #[test]
+    fn streamed_launcher_status_is_value_equivalent_to_legacy_document() {
+        let counters = RuntimeStatusPublisherCounters::default();
+        let mut bytes = Vec::new();
+        let owned = OwnedLauncherStatus::from(publisher_status(1, "arcade", "disabled"));
+        write_launcher_status_json(&mut bytes, &owned, 123, 99, &counters).unwrap();
+        let streamed: Value = serde_json::from_slice(&bytes).unwrap();
+        let mut expected =
+            launcher_status_value(publisher_status(1, "arcade", "disabled"), 123, 99);
+        let map = expected.as_object_mut().unwrap();
+        map.insert("status_publish_mode".into(), json!("async"));
+        map.insert("status_submitted_sequence".into(), json!(1));
+        map.insert("status_written_sequence".into(), json!(1));
+        map.insert("status_replaced_count".into(), json!(0));
+        map.insert("status_worker_write_us".into(), json!(0));
+        map.insert("status_worker_errors".into(), json!(0));
+        map.insert("status_worker_active".into(), json!(true));
+        assert_eq!(streamed, expected);
     }
 
     #[test]
