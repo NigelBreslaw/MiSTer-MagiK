@@ -235,6 +235,223 @@ pub fn hdmi_navigation_geometry(
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CrtNavigationLayout {
+    pub content_x: usize,
+    pub content_y: usize,
+    pub content_width: usize,
+    pub content_height: usize,
+    pub grid_x: usize,
+    pub grid_y: usize,
+    pub header_height: usize,
+    pub footer_height: usize,
+    pub heading_font_height: usize,
+    pub title_font_height: usize,
+    pub detail_font_height: usize,
+    pub game_row_height: usize,
+}
+
+impl CrtNavigationLayout {
+    const fn content_right(self) -> usize {
+        self.content_x.saturating_add(self.content_width)
+    }
+
+    const fn content_bottom(self) -> usize {
+        self.content_y.saturating_add(self.content_height)
+    }
+}
+
+pub fn crt_navigation_geometry(
+    frame_width: usize,
+    frame_height: usize,
+    layout: CrtNavigationLayout,
+    selected_index: usize,
+    item_count: usize,
+    root_menu: bool,
+    edge: NavigationTransitionEdge,
+    selected_label: &str,
+) -> NavigationTransitionGeometry {
+    let grid_x = layout.grid_x.max(1);
+    let grid_y = layout.grid_y.max(1);
+    let header_height = layout.header_height.max(1);
+    let footer_height = layout.footer_height.max(1);
+    let title_height = layout.title_font_height.max(1);
+    let detail_height = layout.detail_font_height.max(1);
+    let card_x = layout.content_x.saturating_add(grid_x * 2);
+    let card_width = layout.content_width.saturating_sub(grid_x * 4).max(1);
+    let viewport_y = layout
+        .content_y
+        .saturating_add(grid_y * 3)
+        .saturating_add(header_height);
+    let viewport_height = layout
+        .content_height
+        .saturating_sub(header_height)
+        .saturating_sub(footer_height)
+        .saturating_sub(grid_y * 6)
+        .max(1);
+    let card_height = if root_menu {
+        viewport_height.saturating_sub(grid_y * 3) / 4
+    } else {
+        viewport_height.saturating_sub(grid_y * 4) * 2 / 9
+    }
+    .max(1);
+    let card_pitch = card_height.saturating_add(grid_y);
+    let bottom_window = !root_menu && item_count > 4 && selected_index >= item_count - 2;
+    let max_first = item_count.saturating_sub(5);
+    let first_visible = if root_menu {
+        0
+    } else if bottom_window {
+        max_first
+    } else {
+        selected_index.saturating_sub(2).min(max_first)
+    };
+    let leading_clip = usize::from(bottom_window) * (card_pitch / 2);
+    let card_y = viewport_y
+        .saturating_add(selected_index.saturating_sub(first_visible) * card_pitch)
+        .saturating_sub(leading_clip);
+    let source_card = clipped_navigation_rect(
+        card_x,
+        card_y,
+        card_width,
+        card_height,
+        frame_width,
+        frame_height,
+    );
+    let label_x = card_x
+        .saturating_add(grid_x * 3)
+        .saturating_add(title_height);
+    let label_width = card_x
+        .saturating_add(card_width)
+        .saturating_sub(label_x)
+        .saturating_sub(grid_x * 2)
+        .max(1);
+    let text_group_height = title_height.saturating_add(detail_height);
+    let label_y = card_y.saturating_add(card_height.saturating_sub(text_group_height) / 2);
+    let source_label = clipped_navigation_rect(
+        label_x,
+        label_y,
+        label_width,
+        title_height,
+        frame_width,
+        frame_height,
+    );
+    let source_detail = clipped_navigation_rect(
+        label_x,
+        label_y.saturating_add(title_height),
+        label_width,
+        detail_height,
+        frame_width,
+        frame_height,
+    );
+    let destination_font_height = if edge.enters_system_browser() {
+        layout.heading_font_height.max(1)
+    } else {
+        title_height
+    };
+    let title_x = layout.content_x.saturating_add(grid_x * 3);
+    let title_y = layout
+        .content_y
+        .saturating_add(grid_y * 2)
+        .saturating_add(header_height.saturating_sub(destination_font_height) / 2);
+    let title_width = selected_label
+        .chars()
+        .count()
+        .max(1)
+        .saturating_mul(destination_font_height)
+        .min(layout.content_right().saturating_sub(title_x).max(1));
+    let destination_title = clipped_navigation_rect(
+        title_x,
+        title_y,
+        title_width,
+        destination_font_height,
+        frame_width,
+        frame_height,
+    );
+    let list_x = layout.content_x.saturating_add(grid_x * 2);
+    let list_y = layout
+        .content_y
+        .saturating_add(header_height)
+        .saturating_add(grid_y * 3);
+    let list_width = layout.content_width.saturating_sub(grid_x * 4).max(1);
+    let list_height = layout
+        .content_bottom()
+        .saturating_sub(footer_height)
+        .saturating_sub(grid_y * 3)
+        .saturating_sub(list_y)
+        .max(1);
+    let row_height = layout.game_row_height.max(1);
+    let selected_row_y = list_y.saturating_add(list_height.saturating_sub(row_height) / 2);
+    let destination_list = clipped_navigation_rect(
+        list_x,
+        list_y,
+        list_width,
+        list_height,
+        frame_width,
+        frame_height,
+    );
+    let (label_ascii, label_len) = navigation_label_ascii(selected_label);
+    NavigationTransitionGeometry {
+        label_signature: navigation_label_signature(selected_label),
+        label_ascii,
+        label_len,
+        source_card,
+        source_label,
+        source_detail,
+        destination_title,
+        destination_detail: clipped_navigation_rect(
+            destination_title.x as usize,
+            destination_title.bottom() as usize,
+            destination_title.width as usize,
+            detail_height,
+            frame_width,
+            frame_height,
+        ),
+        destination_list,
+        destination_selected_row: clipped_navigation_rect(
+            list_x,
+            selected_row_y,
+            list_width,
+            row_height,
+            frame_width,
+            frame_height,
+        ),
+        destination_preview: NavigationTransitionRect::default(),
+        destination_footer: clipped_navigation_rect(
+            list_x,
+            layout
+                .content_bottom()
+                .saturating_sub(grid_y * 2)
+                .saturating_sub(footer_height),
+            list_width,
+            footer_height,
+            frame_width,
+            frame_height,
+        ),
+    }
+}
+
+fn clipped_navigation_rect(
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+    frame_width: usize,
+    frame_height: usize,
+) -> NavigationTransitionRect {
+    let x = x.min(frame_width);
+    let y = y.min(frame_height);
+    NavigationTransitionRect {
+        x: x.min(u16::MAX as usize) as u16,
+        y: y.min(u16::MAX as usize) as u16,
+        width: width
+            .min(frame_width.saturating_sub(x))
+            .min(u16::MAX as usize) as u16,
+        height: height
+            .min(frame_height.saturating_sub(y))
+            .min(u16::MAX as usize) as u16,
+    }
+}
+
 fn scale_hdmi_x(value: usize, frame_width: usize) -> u16 {
     value
         .saturating_mul(frame_width)
@@ -2140,41 +2357,43 @@ fn reveal_destination_regions(
             stats,
         );
         let preview = request.geometry.destination_preview;
-        draw_preview_transfer_beam(
-            working,
-            width,
-            height,
-            selected,
-            preview,
-            progress_q16,
-            stats,
-        );
-        copy_rect_preview_aperture(
-            working,
-            destination,
-            width,
-            height,
-            preview,
-            spring_ease_q16(window_q16(progress_q16, 34_000, 60_000)),
-            stats,
-        );
-        draw_preview_impact_flash(working, width, height, preview, progress_q16, stats);
-        draw_preview_aperture_glow(
-            working,
-            width,
-            height,
-            preview,
-            spring_ease_q16(window_q16(progress_q16, 34_000, 60_000)),
-            stats,
-        );
-        draw_progressive_preview_frame(
-            working,
-            width,
-            height,
-            preview,
-            preview_rail_envelope(progress_q16),
-            stats,
-        );
+        if preview.width > 0 && preview.height > 0 {
+            draw_preview_transfer_beam(
+                working,
+                width,
+                height,
+                selected,
+                preview,
+                progress_q16,
+                stats,
+            );
+            copy_rect_preview_aperture(
+                working,
+                destination,
+                width,
+                height,
+                preview,
+                spring_ease_q16(window_q16(progress_q16, 34_000, 60_000)),
+                stats,
+            );
+            draw_preview_impact_flash(working, width, height, preview, progress_q16, stats);
+            draw_preview_aperture_glow(
+                working,
+                width,
+                height,
+                preview,
+                spring_ease_q16(window_q16(progress_q16, 34_000, 60_000)),
+                stats,
+            );
+            draw_progressive_preview_frame(
+                working,
+                width,
+                height,
+                preview,
+                preview_rail_envelope(progress_q16),
+                stats,
+            );
+        }
     } else {
         let card_y = header_height;
         let source_center = request.geometry.source_card.x as usize
@@ -3405,33 +3624,37 @@ fn conceal_source_regions(
             shell,
             stats,
         );
-        close_preview_aperture(
-            working,
-            source,
-            width,
-            height,
-            request.geometry.destination_preview,
-            spring_ease_q16(window_q16(progress_q16, 0, 25_000)),
-            shell,
-            stats,
-        );
-        draw_progressive_preview_frame(
-            working,
-            width,
-            height,
-            request.geometry.destination_preview,
-            preview_rail_envelope(reverse_preview_timeline(progress_q16)),
-            stats,
-        );
-        draw_reverse_preview_transfer_beam(
-            working,
-            width,
-            height,
-            selected,
-            request.geometry.destination_preview,
-            progress_q16,
-            stats,
-        );
+        if request.geometry.destination_preview.width > 0
+            && request.geometry.destination_preview.height > 0
+        {
+            close_preview_aperture(
+                working,
+                source,
+                width,
+                height,
+                request.geometry.destination_preview,
+                spring_ease_q16(window_q16(progress_q16, 0, 25_000)),
+                shell,
+                stats,
+            );
+            draw_progressive_preview_frame(
+                working,
+                width,
+                height,
+                request.geometry.destination_preview,
+                preview_rail_envelope(reverse_preview_timeline(progress_q16)),
+                stats,
+            );
+            draw_reverse_preview_transfer_beam(
+                working,
+                width,
+                height,
+                selected,
+                request.geometry.destination_preview,
+                progress_q16,
+                stats,
+            );
+        }
         slide_rect_out_left(
             working,
             source,
@@ -4121,6 +4344,60 @@ mod tests {
             )
             .unwrap();
             assert_eq!(buffers.working(), destination);
+        }
+    }
+
+    #[test]
+    fn crt_navigation_geometry_stays_inside_every_supported_frame_shape() {
+        for (frame_width, frame_height, content_x, content_y, content_width, content_height) in [
+            (640, 480, 0, 0, 640, 480),
+            (640, 480, 0, 20, 640, 255),
+            (576, 576, 0, 0, 576, 576),
+        ] {
+            let layout = CrtNavigationLayout {
+                content_x,
+                content_y,
+                content_width,
+                content_height,
+                grid_x: 4,
+                grid_y: 4,
+                header_height: 48,
+                footer_height: 24,
+                heading_font_height: 16,
+                title_font_height: 16,
+                detail_font_height: 8,
+                game_row_height: 24,
+            };
+            for (selected, item_count, root_menu) in
+                [(0, 4, true), (3, 4, true), (4, 9, false), (8, 9, false)]
+            {
+                let geometry = crt_navigation_geometry(
+                    frame_width,
+                    frame_height,
+                    layout,
+                    selected,
+                    item_count,
+                    root_menu,
+                    NavigationTransitionEdge::ConsolesToSystem,
+                    "Arcade",
+                );
+                for rect in [
+                    geometry.source_card,
+                    geometry.source_label,
+                    geometry.source_detail,
+                    geometry.destination_title,
+                    geometry.destination_detail,
+                    geometry.destination_list,
+                    geometry.destination_selected_row,
+                    geometry.destination_footer,
+                ] {
+                    assert!(rect.fits(frame_width, frame_height), "{rect:?}");
+                }
+                assert_eq!(
+                    geometry.destination_preview,
+                    NavigationTransitionRect::default()
+                );
+            }
         }
     }
 

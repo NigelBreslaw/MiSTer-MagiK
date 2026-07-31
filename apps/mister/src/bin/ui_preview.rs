@@ -28,8 +28,9 @@ mod macos {
         start_screenshot_media_worker_with_config,
     };
     use mister_magik_fb::launcher_runtime::navigation_transition::{
-        NavigationTransitionDirection, NavigationTransitionEdge, NavigationTransitionEndpoint,
-        NavigationTransitionPhase, NavigationTransitionPoc, hdmi_navigation_geometry,
+        CrtNavigationLayout, NavigationTransitionDirection, NavigationTransitionEdge,
+        NavigationTransitionEndpoint, NavigationTransitionPhase, NavigationTransitionPoc,
+        crt_navigation_geometry, hdmi_navigation_geometry,
     };
     use mister_magik_fb::launcher_runtime::settings::{FileSettingsStore, SettingsStore};
     use mister_magik_fb::launcher_taxonomy::{
@@ -914,9 +915,6 @@ mod macos {
         }
 
         fn begin_navigation_transition(&mut self, event: LauncherEvent, now_us: u64) -> bool {
-            if self.display_profile.is_crt() {
-                return false;
-            }
             let Some((edge, direction)) =
                 navigation_transition_for_intent(&self.launcher_nav, &event)
             else {
@@ -930,15 +928,48 @@ mod macos {
                 .unwrap_or("")
                 .to_owned();
             let geometry = match direction {
-                NavigationTransitionDirection::Forward => hdmi_navigation_geometry(
-                    self.frame_width,
-                    self.frame_height,
-                    self.launcher_nav.selected,
-                    self.launcher_nav.scroll_x,
-                    self.launcher_nav.current_menu_id() == ROOT_MENU_ID,
-                    edge,
-                    &selected_label,
-                ),
+                NavigationTransitionDirection::Forward => {
+                    let root_menu = self.launcher_nav.current_menu_id() == ROOT_MENU_ID;
+                    if self.display_profile.is_crt() {
+                        let display = self.display_profile.display();
+                        let content = display.content_rect();
+                        let metrics = CrtUiMetrics::for_display(&display);
+                        crt_navigation_geometry(
+                            self.frame_width,
+                            self.frame_height,
+                            CrtNavigationLayout {
+                                content_x: content.x,
+                                content_y: content.y,
+                                content_width: content.width,
+                                content_height: content.height,
+                                grid_x: metrics.grid_x.max(1) as usize,
+                                grid_y: metrics.grid_y.max(1) as usize,
+                                header_height: metrics.header_height.max(1) as usize,
+                                footer_height: metrics.footer_height.max(1) as usize,
+                                heading_font_height: metrics.heading_font.pixels().max(1) as usize,
+                                title_font_height: metrics.card_title_font.pixels().max(1) as usize,
+                                detail_font_height: metrics.card_detail_font.pixels().max(1)
+                                    as usize,
+                                game_row_height: metrics.game_row_height.max(1) as usize,
+                            },
+                            self.launcher_nav.selected,
+                            self.launcher_nav.current_menu_items().len(),
+                            root_menu,
+                            edge,
+                            &selected_label,
+                        )
+                    } else {
+                        hdmi_navigation_geometry(
+                            self.frame_width,
+                            self.frame_height,
+                            self.launcher_nav.selected,
+                            self.launcher_nav.scroll_x,
+                            root_menu,
+                            edge,
+                            &selected_label,
+                        )
+                    }
+                }
                 NavigationTransitionDirection::Reverse => {
                     let Some(geometry) = self.navigation_transition.geometry_for_reverse(edge)
                     else {

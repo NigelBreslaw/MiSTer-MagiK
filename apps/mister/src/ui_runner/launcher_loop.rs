@@ -3603,24 +3603,76 @@ pub(super) fn run_launcher_loop(
                                     let _ =
                                         target.compose_direct_preview_rect(preview_screen_rect(ui));
                                 }
-                                let transition_started = transition_spec
-                                    .filter(|_| !crt_layout)
-                                    .is_some_and(|(edge, direction)| {
+                                let transition_started =
+                                    transition_spec.is_some_and(|(edge, direction)| {
                                         let geometry = match direction {
                                             NavigationTransitionDirection::Forward => {
-                                                Some(hdmi_navigation_geometry(
-                                                    ui.render_w(),
-                                                    ui.render_h(),
-                                                    nav.selected,
-                                                    nav.scroll_x,
-                                                    nav.current_menu_id()
-                                                        == crate::launcher_taxonomy::ROOT_MENU_ID,
-                                                    edge,
-                                                    nav.current_menu_items()
-                                                        .get(nav.selected)
-                                                        .map(|item| item.title.as_str())
-                                                        .unwrap_or(""),
-                                                ))
+                                                let root_menu = nav.current_menu_id()
+                                                    == crate::launcher_taxonomy::ROOT_MENU_ID;
+                                                let selected_label = nav
+                                                    .current_menu_items()
+                                                    .get(nav.selected)
+                                                    .map(|item| item.title.as_str())
+                                                    .unwrap_or("");
+                                                Some(if crt_layout {
+                                                    let content = ui.content_rect();
+                                                    crt_navigation_geometry(
+                                                        ui.render_w(),
+                                                        ui.render_h(),
+                                                        CrtNavigationLayout {
+                                                            content_x: content.x,
+                                                            content_y: content.y,
+                                                            content_width: content.width,
+                                                            content_height: content.height,
+                                                            grid_x: crt_metrics.grid_x.max(1)
+                                                                as usize,
+                                                            grid_y: crt_metrics.grid_y.max(1)
+                                                                as usize,
+                                                            header_height: crt_metrics
+                                                                .header_height
+                                                                .max(1)
+                                                                as usize,
+                                                            footer_height: crt_metrics
+                                                                .footer_height
+                                                                .max(1)
+                                                                as usize,
+                                                            heading_font_height: crt_metrics
+                                                                .heading_font
+                                                                .pixels()
+                                                                .max(1)
+                                                                as usize,
+                                                            title_font_height: crt_metrics
+                                                                .card_title_font
+                                                                .pixels()
+                                                                .max(1)
+                                                                as usize,
+                                                            detail_font_height: crt_metrics
+                                                                .card_detail_font
+                                                                .pixels()
+                                                                .max(1)
+                                                                as usize,
+                                                            game_row_height: crt_metrics
+                                                                .game_row_height
+                                                                .max(1)
+                                                                as usize,
+                                                        },
+                                                        nav.selected,
+                                                        nav.current_menu_items().len(),
+                                                        root_menu,
+                                                        edge,
+                                                        selected_label,
+                                                    )
+                                                } else {
+                                                    hdmi_navigation_geometry(
+                                                        ui.render_w(),
+                                                        ui.render_h(),
+                                                        nav.selected,
+                                                        nav.scroll_x,
+                                                        root_menu,
+                                                        edge,
+                                                        selected_label,
+                                                    )
+                                                })
                                             }
                                             NavigationTransitionDirection::Reverse => {
                                                 navigation_transition.geometry_for_reverse(edge)
