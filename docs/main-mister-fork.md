@@ -63,8 +63,10 @@ The fork selects its application root from its executable name, then:
    runtime latch preflight, and transfers FPGA ownership only after it passes.
 4. Starts the matching public or development `mister-magik-fb ui launcher 0`
    on `tty2`.
-5. Enters dormant launcher mode.
-6. Polls only launcher lifecycle and explicit handoff commands while Slint owns
+5. Keeps the child in `LauncherStarting` until a token- and PID-bound ready
+   report backed by two completed advancing alternating latch posts arrives.
+6. Enters dormant launcher mode only after that internal readiness boundary.
+7. Polls only launcher lifecycle and explicit handoff commands while Slint owns
    the launcher UI.
 
 Main is the only writer of `UIO_BUT_SW` and the `CONF_VGA_FB` mux bit. Rust
@@ -75,6 +77,22 @@ bootstrap, preflight, ownership, or spawn failure before the launcher child
 exists restores stock Menu input and OSD over the native black background;
 those paths remain suppressed for the entire lifetime of a supervised launcher
 child.
+
+The one-way ready report uses one mode-0600 FIFO under `/tmp/mister-magik`; it
+does not share `/dev/MiSTer_cmd`, whose host operation lock may be held while
+waiting for launcher activation. Each spawn receives a new 32-hex token. Rust
+writes exactly `ready-v1 token=<token> pid=<supervised-pid>` after the two-post
+condition, retrying a temporarily unavailable nonblocking FIFO until Main's
+deadline. Main rejects malformed reports and reports from an old child or
+spawn. There is no acknowledgement channel, framebuffer-content test, or
+route lease.
+
+Main waits eight seconds per attempt. It stops and reaps the first failed child
+and retries the complete supervised start once. A second failure stops the
+child and restores stable stock Menu. If a display change is provisional,
+Main restores the previous timing before enabling stock Menu and does not
+restart MagiK. This is internal readiness only and does not prove physical
+HDMI or CRT visibility; attended USB-video testing owns that claim.
 
 When the supervised launcher child exits unexpectedly, the fork records a local
 crash report under `/media/fat/mister-magik/crashes/`, updates

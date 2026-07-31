@@ -13289,16 +13289,28 @@ fn print_status_summary(status: &Value) {
     }
     if let Some(main) = status["runtime"]["main_status"].as_object() {
         println!(
-            "  main:      visible_owner={} launcher_pid={} osd_suppressed={}",
-            main.get("visible_owner")
+            "  main:      state={} launcher_pid={} ready={} attempt={} remaining_ms={} last_failure={} visible_owner={}",
+            main.get("launcher_state")
                 .and_then(Value::as_str)
                 .unwrap_or("?"),
             main.get("launcher_pid")
                 .map(Value::to_string)
                 .unwrap_or_else(|| "?".into()),
-            main.get("osd_suppressed_count")
+            main.get("launcher_ready_phase")
+                .and_then(Value::as_str)
+                .unwrap_or("?"),
+            main.get("launcher_ready_attempt")
                 .map(Value::to_string)
-                .unwrap_or_else(|| "?".into())
+                .unwrap_or_else(|| "?".into()),
+            main.get("launcher_ready_remaining_ms")
+                .map(Value::to_string)
+                .unwrap_or_else(|| "?".into()),
+            main.get("launcher_ready_last_failure")
+                .and_then(Value::as_str)
+                .unwrap_or("?"),
+            main.get("visible_owner")
+                .and_then(Value::as_str)
+                .unwrap_or("?")
         );
     }
     if let Some(slint) = status["runtime"]["slint_status"].as_object() {
@@ -13447,6 +13459,35 @@ fn doctor_findings(status: &Value) -> Vec<(String, String)> {
         findings.push((
             "warn".into(),
             format!("Main reports visible_owner={owner} rather than fb0"),
+        ));
+    }
+    let main = &status["runtime"]["main_status"];
+    if main["launcher_state"].as_str() == Some("LauncherStarting") {
+        findings.push((
+            "warn".into(),
+            format!(
+                "launcher readiness is still {} (attempt {}, {}ms remaining; last failure {})",
+                main["launcher_ready_phase"].as_str().unwrap_or("unknown"),
+                main["launcher_ready_attempt"].as_u64().unwrap_or(0),
+                main["launcher_ready_remaining_ms"].as_u64().unwrap_or(0),
+                main["launcher_ready_last_failure"]
+                    .as_str()
+                    .unwrap_or("none")
+            ),
+        ));
+    } else if main["launcher_state"].as_str() == Some("Unconfigured")
+        && main["launcher_ready_last_failure"]
+            .as_str()
+            .is_some_and(|failure| failure != "none")
+    {
+        findings.push((
+            "warn".into(),
+            format!(
+                "launcher readiness fallback restored stock Menu after {}",
+                main["launcher_ready_last_failure"]
+                    .as_str()
+                    .unwrap_or("unknown failure")
+            ),
         ));
     }
     let fb_owned = status["owners"]["by_device"]["/dev/fb0"]
@@ -14085,7 +14126,15 @@ mod tests {
                 "fb0_visual": {"class": "slint_like"}
             },
             "runtime": {
-                "main_status": {"visible_owner": "fb0"}
+                "main_status": {
+                    "visible_owner": "fb0",
+                    "launcher_state": "LauncherActive",
+                    "launcher_ready_phase": "ready",
+                    "launcher_ready_attempt": 1,
+                    "launcher_ready_remaining_ms": 0,
+                    "launcher_ready_last_failure": "none"
+                },
+                "slint_status": {}
             },
             "owners": {
                 "by_device": {
@@ -15104,6 +15153,29 @@ H: Handlers=event3 js0"#
         assert!(texts.contains(&"/dev/fb0 samples as mostly_black"));
         assert!(texts.contains(&"Main reports visible_owner=menu_bg rather than fb0"));
         assert!(texts.contains(&"/dev/fb0 is not owned by mister-magik-fb"));
+    }
+
+    #[test]
+    fn doctor_reports_incomplete_launcher_readiness_and_stock_menu_fallback() {
+        let mut status = status_fixture();
+        status["runtime"]["main_status"]["launcher_state"] = json!("LauncherStarting");
+        status["runtime"]["main_status"]["launcher_ready_phase"] = json!("awaiting");
+        status["runtime"]["main_status"]["launcher_ready_attempt"] = json!(2);
+        status["runtime"]["main_status"]["launcher_ready_remaining_ms"] = json!(3210);
+        status["runtime"]["main_status"]["launcher_ready_last_failure"] = json!("ready-timeout");
+
+        let findings = doctor_findings(&status);
+        let texts: Vec<_> = findings.iter().map(|(_, text)| text.as_str()).collect();
+        assert!(texts.contains(
+            &"launcher readiness is still awaiting (attempt 2, 3210ms remaining; last failure ready-timeout)"
+        ));
+
+        status["runtime"]["main_status"]["launcher_state"] = json!("Unconfigured");
+        let findings = doctor_findings(&status);
+        let texts: Vec<_> = findings.iter().map(|(_, text)| text.as_str()).collect();
+        assert!(
+            texts.contains(&"launcher readiness fallback restored stock Menu after ready-timeout")
+        );
     }
 
     #[test]

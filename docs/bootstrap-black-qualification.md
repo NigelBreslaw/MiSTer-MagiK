@@ -18,7 +18,9 @@ MagiK Menu RBF native black
 → runtime latch/platform preflight
 → FPGA ownership transfer
 → supervised child spawn
-→ first verified latch-presented MagiK frame
+→ two advancing alternating latch posts
+→ token-bound internal ready report
+→ LauncherActive
 ```
 
 Main may enter black only while it owns the FPGA and no launcher child exists.
@@ -43,7 +45,14 @@ The platform candidate must retain:
 - Main host results proving black before preflight, preflight before ownership,
   ownership before spawn, and convergence of initial/resume/restart/crash paths;
 - Main failure results covering unsupported framebuffer disable, preflight
-  failure, and fork failure with no child and stock-OSD recovery.
+  failure, and fork failure with no child and stock-OSD recovery;
+- Main protocol results rejecting wrong token/PID and malformed reports;
+- real-FIFO Rust results covering an absent reader, invalid token
+  configuration, duplicate or nonalternating posts, a successful two-post
+  report, retry, and single-message emission;
+- deterministic timeout results proving one complete retry followed by stock
+  Menu recovery, plus child cleanup and resolution-change rollback before
+  stock Menu recovery.
 
 ## Attended device evidence
 
@@ -53,6 +62,16 @@ Record four continuous 60-second 1920x1080 at 30 fps `USB Video` movies:
 2. active launcher restart without reloading the RBF;
 3. game-to-launcher return;
 4. qualification-owned injected preflight failure.
+
+The attended physical-output matrix must exercise every supported HDMI and CRT
+MagiK resolution through apply, confirm, and cancel/rollback, plus stock
+Menu-to-MagiK, game-to-MagiK, and MagiK-to-stock-Menu returns. USB video must
+remain visibly stable at the expected resolution; internal `launcher_ready`
+evidence is recorded only as a prerequisite and is never treated as proof of
+physical visibility. An injected ready timeout must show exactly one retry,
+rollback to the original timing when applicable, and stable stock Menu rather
+than a persistent black screen. A physical HDMI-only failure is tracked and
+investigated separately from this readiness qualification.
 
 Start each movie before triggering the typed, attended operation. Use only
 repository-owned `mister` commands or the attended release workflow for device

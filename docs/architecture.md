@@ -50,6 +50,11 @@ Production boot stays compatible with stock MiSTer:
    and start the selected layout's `mister-magik-fb ui launcher 0` on `tty2`.
    Rust independently derives the same application root from its executable
    location.
+9. Child spawn enters `LauncherStarting`, not `LauncherActive`. Rust reports
+   internal readiness only after two completed latch posts intended for
+   display have advancing sequence and route epochs on alternating slots.
+   Main accepts the token- and PID-bound report before entering
+   `LauncherActive`.
 
 Main exclusively owns `UIO_BUT_SW`, including `CONF_VGA_FB`, composite sync,
 SoG, Direct Video, and the other framework flags. Rust may publish RGB565
@@ -69,14 +74,28 @@ native Menu black
 → latch/platform preflight
 → FPGA ownership transfer
 → child spawn
-→ first verified latch-presented MagiK frame
+→ two completed advancing alternating latch posts
+→ token-bound ready report
+→ LauncherActive
 ```
 
 `main-status.json` retains schema `mister-magik-main-status-v2` and adds
 `bootstrap_phase`, `bootstrap_source`, `bootstrap_phase_ms`, and
 `bootstrap_black_count`. Events named `bootstrap_black_entered`,
 `bootstrap_preflight_completed`, `bootstrap_ownership_transferred`, and
-`bootstrap_spawned` bind qualification evidence to the exact ordering.
+`bootstrap_spawned`, `launcher_ready`, and `launcher_ready_failed` bind
+qualification evidence to the exact ordering. Main status exposes only the
+readiness phase, attempt, remaining deadline, and last failure.
+
+The readiness deadline is eight seconds. Main rejects malformed, stale-token,
+or wrong-PID reports and retries one complete supervised start after the first
+failure. A second failure stops the child and restores stable stock Menu
+OSD/input. During a provisional resolution change it restores the old timing
+before enabling stock Menu and does not restart MagiK. This boundary is
+deliberately internal: it proves completed latch posts and bounded recovery,
+not visibility at a physical HDMI or CRT sink. Attended USB-video capture is
+the sink-level regression test, and the rare physical HDMI fault remains a
+separate investigation. The latch RBF protocol is unchanged.
 
 Display resolution changes are Main-owned provisional transactions. Main
 suspends Slint, applies the selected HDMI or CRT/VGA timing, exports the
