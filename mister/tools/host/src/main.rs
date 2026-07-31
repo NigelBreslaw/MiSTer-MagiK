@@ -4046,8 +4046,13 @@ fn restore_installed_launch_return(session: &Session) -> Result<()> {
             LAUNCH_RETURN_STATE_REMOTE,
         ]),
     );
-    let _ = request_magik_benchmark_action("return-to-launcher");
-    let restart = launcher_restart(
+    remove?;
+    request_magik_benchmark_action("return-to-launcher").map_err(|error| {
+        format!(
+            "launch-return cleanup could not return through Main; launcher restart skipped: {error}"
+        )
+    })?;
+    launcher_restart(
         session,
         &LauncherRestartOptions {
             clear_env: true,
@@ -4055,9 +4060,7 @@ fn restore_installed_launch_return(session: &Session) -> Result<()> {
             timeout_secs: 45,
             ..LauncherRestartOptions::default()
         },
-    );
-    remove?;
-    restart
+    )
 }
 
 fn catalog_lifecycle_prepare_command() -> String {
