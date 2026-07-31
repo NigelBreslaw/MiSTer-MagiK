@@ -488,6 +488,7 @@ mod tests {
                 "profile-installed-particle-showcase-cpu",
                 "profile-installed-search",
                 "profile-installed-catalog-lifecycle",
+                "profile-installed-launch-return",
                 "profile-installed-navigation-transitions"
             ]
         );
