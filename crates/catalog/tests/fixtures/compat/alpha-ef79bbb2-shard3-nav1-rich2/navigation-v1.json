@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "system_id": "arcade",
+  "generation": 7,
+  "games": [
+    {
+      "stable_key": "arcade:alpha-fixture",
+      "title": "Alpha Fixture",
+      "launch_ref": "/media/fat/_Arcade/Alpha Fixture.mra",
+      "preview_archive_path": "",
+      "preview_asset_key": "alpha fixture",
+      "has_preview": false,
+      "year": 1984,
+      "manufacturer": "MiSTer MagiK",
+      "players": 2,
+      "control": "joystick",
+      "is_new": false,
+      "launch_plan": null
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "generation": 7,
+  "systems": [
+    {
+      "system_id": "arcade",
+      "display_title": "Arcade",
+      "section": "arcade",
+      "family": "arcade",
+      "order": 0,
+      "producers": ["fixture:arcade"],
+      "active": {
+        "generation": 7,
+        "sqlite_path": "systems/arcade/7.sqlite3",
+        "navigation_path": "systems/arcade/7.nav.lz4b",
+        "sqlite_bytes": 1,
+        "navigation_bytes": 1,
+        "sqlite_hash": "0000000000000000",
+        "navigation_hash": "0000000000000000",
+        "games": 1
+      },
+      "previous": null
+    }
+  ]
+}

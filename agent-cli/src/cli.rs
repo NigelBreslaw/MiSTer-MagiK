@@ -68,6 +68,10 @@ pub enum Command {
         #[command(subcommand)]
         command: CaptureCommand,
     },
+    Alpha {
+        #[command(subcommand)]
+        command: AlphaCommand,
+    },
     Release {
         #[command(subcommand)]
         command: ReleaseCommand,
@@ -334,6 +338,16 @@ pub enum ReleaseCommand {
 }
 
 #[derive(Debug, Subcommand)]
+pub enum AlphaCommand {
+    Accept {
+        #[arg(long)]
+        candidate: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 pub enum CaptureCommand {
     UsbVideo {
         #[arg(long, value_name = "PATH")]
@@ -412,6 +426,9 @@ impl Cli {
             Some(Command::Capture {
                 command: CaptureCommand::UsbVideo { output, seconds },
             }) => Intent::CaptureUsbVideo { output, seconds },
+            Some(Command::Alpha {
+                command: AlphaCommand::Accept { candidate, output },
+            }) => Intent::AlphaAccept { candidate, output },
             Some(Command::Release {
                 command: ReleaseCommand::Qualify,
             }) => Intent::ReleaseQualify,
@@ -677,6 +694,28 @@ mod tests {
         assert!(
             Cli::try_parse_from(["agent-cli", "release", "qualify", "--skip-display"]).is_err()
         );
+    }
+
+    #[test]
+    fn alpha_accept_has_a_closed_candidate_and_output_interface() {
+        assert_eq!(
+            Cli::try_parse_from([
+                "agent-cli",
+                "alpha",
+                "accept",
+                "--candidate",
+                "/tmp/candidate",
+                "--output",
+                "/tmp/evidence",
+            ])
+            .unwrap()
+            .into_intent(),
+            Intent::AlphaAccept {
+                candidate: "/tmp/candidate".into(),
+                output: "/tmp/evidence".into(),
+            }
+        );
+        assert!(Cli::try_parse_from(["agent-cli", "alpha", "accept"]).is_err());
     }
 
     #[test]

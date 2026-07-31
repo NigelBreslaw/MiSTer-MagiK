@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "projection_contract": "rich-game-v2",
+  "manifest_generation": 7,
+  "catalog_fingerprint": "alpha-fixture-fingerprint"
+}
