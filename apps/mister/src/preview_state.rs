@@ -311,6 +311,7 @@ pub(crate) struct PreviewState {
     trace_start: Instant,
     selected_mra_path: Option<String>,
     selected_preview_key: Option<String>,
+    terminal_empty: bool,
     current_generation: u64,
     cache: PreviewImageCache,
     has_visible_preview: bool,
@@ -490,6 +491,7 @@ impl PreviewState {
             trace_start,
             selected_mra_path: None,
             selected_preview_key: None,
+            terminal_empty: false,
             current_generation: 0,
             cache: PreviewImageCache::default(),
             has_visible_preview: false,
@@ -515,6 +517,7 @@ impl PreviewState {
     }
 
     pub(crate) fn clear(&mut self, bridge: &slint_ui::launcher::MisterBridge) {
+        self.terminal_empty = true;
         if self.selected_mra_path.is_some()
             || self.current_generation != 0
             || self.has_visible_preview
@@ -641,7 +644,12 @@ impl PreviewState {
     fn select_empty_preview(&mut self, pace: PreviewTransitionPace) {
         self.current_generation = 0;
         self.selected_preview_key = None;
+        self.terminal_empty = true;
         self.begin_raw_transition_to_empty(pace);
+    }
+
+    pub(crate) const fn terminal_empty(&self) -> bool {
+        self.terminal_empty
     }
 
     pub(crate) fn finish_raw_empty_transition_if_idle(&mut self) {
@@ -1010,6 +1018,7 @@ pub(crate) fn request_arcade_preview_window(
     let Some(selected_game) = selected_game else {
         preview.selected_mra_path = None;
         preview.selected_preview_key = None;
+        preview.terminal_empty = true;
         preview.current_generation = 0;
         preview.has_visible_preview = false;
         preview.visible_preview_key.clear();
@@ -1136,6 +1145,7 @@ pub(crate) fn request_arcade_preview_window(
         PreviewSelectionTransition::InstantOnEntry
     };
     preview.selected_mra_path = Some(selected_game.mra_path.to_string());
+    preview.terminal_empty = false;
 
     let selected_has_preview = game_preview_key(selected_game).is_some();
     let Some(candidate) = candidate else {
@@ -2365,6 +2375,18 @@ mod tests {
     }
 
     #[test]
+    fn clearing_fresh_preview_marks_terminal_empty() {
+        init_test_slint_platform();
+        let app = slint_ui::launcher::Launcher::new().expect("launcher component");
+        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+        let mut preview = PreviewState::new();
+
+        assert!(!preview.terminal_empty());
+        preview.clear(&bridge);
+        assert!(preview.terminal_empty());
+    }
+
+    #[test]
     fn preview_miss_classification_requires_exact_candidate() {
         assert!(!preview_state_is_miss("exact", true));
         assert!(preview_state_is_miss("blank", true));
@@ -2606,6 +2628,7 @@ mod tests {
         preview.select_empty_preview(PreviewTransitionPace::Normal);
 
         assert_eq!(preview.selected_preview_key, None);
+        assert!(preview.terminal_empty());
         assert!(!preview.has_visible_preview);
         assert!(preview.visible_preview_key.is_empty());
         assert!(preview.raw_dirty);

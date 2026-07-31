@@ -1235,7 +1235,6 @@ fn render_super_scaler_shell(
     let shell = Rgb565Pixel(0x1028);
     let mint = Rgb565Pixel(0x07d6);
     let violet = Rgb565Pixel(0x79b8);
-    let deep_violet = Rgb565Pixel(0x30aa);
 
     if frame.phase == NavigationTransitionPhase::Settled {
         match frame.endpoint {
@@ -1277,9 +1276,7 @@ fn render_super_scaler_shell(
     }
     let needs_source_base = match request.direction {
         NavigationTransitionDirection::Forward => frame.reveal_progress_q16 == 0,
-        NavigationTransitionDirection::Reverse => {
-            frame.reveal_progress_q16 == 0 || destination.is_none()
-        }
+        NavigationTransitionDirection::Reverse => false,
     };
     if needs_source_base {
         working.copy_from_slice(source);
@@ -1321,90 +1318,25 @@ fn render_super_scaler_shell(
                     );
                 }
             }
-            let rect = super_scaler_card_rect(
-                request.geometry.source_card,
-                full,
-                frame.cover_progress_q16,
-            );
             if frame.reveal_progress_q16 == 0 {
-                let source_background =
-                    background_outside_rect(source, width, height, request.geometry.source_card);
-                fill_rect_565(
-                    working,
-                    width,
-                    height,
-                    request.geometry.source_card,
-                    source_background,
-                    &mut stats,
-                );
-                fill_rect_565(working, width, height, rect, shell, &mut stats);
-                draw_super_scaler_speed_bands(
-                    working,
-                    width,
-                    height,
-                    rect,
-                    frame.cover_progress_q16,
-                    &mut stats,
-                );
-                draw_super_scaler_impact_horizon(
-                    working,
-                    width,
-                    height,
-                    rect,
-                    frame.cover_progress_q16,
-                    &mut stats,
-                );
-                blit_scaled_card_565(
+                render_super_scaler_card_cover(
                     working,
                     source,
                     width,
                     height,
-                    request.geometry.source_card,
-                    rect,
-                    source_text_group(request.geometry),
-                    PROGRESS_MAX.saturating_sub(smoothstep_q16(window_q16(
-                        frame.cover_progress_q16,
-                        10_000,
-                        26_000,
-                    ))),
+                    request,
+                    full,
+                    frame.cover_progress_q16,
+                    shell,
+                    mint,
+                    violet,
                     &mut stats,
                 );
-                if frame.cover_progress_q16 < 50_000 {
-                    let far_to_right = request.geometry.source_card.x as usize
-                        + request.geometry.source_card.width as usize / 2
-                        <= width / 2;
-                    for echo in (1..=3).rev() {
-                        let delayed_cover = frame
-                            .cover_progress_q16
-                            .saturating_sub((echo * 5_000) as u16);
-                        let echo_rect = super_scaler_card_rect(
-                            request.geometry.source_card,
-                            full,
-                            delayed_cover,
-                        );
-                        draw_velocity_echo_565(
-                            working,
-                            width,
-                            height,
-                            echo_rect,
-                            match echo {
-                                1 => violet,
-                                2 => deep_violet,
-                                _ => Rgb565Pixel(0x1848),
-                            },
-                            far_to_right,
-                            &mut stats,
-                        );
-                    }
-                }
-                if frame.cover_progress_q16 < 62_000 {
-                    draw_outline_565(working, width, height, rect, mint, &mut stats);
-                }
             }
         }
         NavigationTransitionDirection::Reverse => {
             if frame.reveal_progress_q16 == 0 {
-                conceal_source_regions(
+                conceal_source_regions_inverse(
                     working,
                     source,
                     width,
@@ -1417,74 +1349,101 @@ fn render_super_scaler_shell(
             } else if let Some(destination) = destination {
                 working.copy_from_slice(destination);
                 stats.copied_pixels = stats.copied_pixels.saturating_add(destination.len() as u64);
-                let rect = super_scaler_card_rect(
-                    request.geometry.source_card,
-                    full,
-                    PROGRESS_MAX.saturating_sub(frame.reveal_progress_q16),
-                );
-                if frame.reveal_progress_q16 > 6_000 {
-                    let far_to_right = request.geometry.source_card.x as usize
-                        + request.geometry.source_card.width as usize / 2
-                        <= width / 2;
-                    for echo in (1..=3).rev() {
-                        let delayed = frame
-                            .reveal_progress_q16
-                            .saturating_sub((echo * 5_000) as u16);
-                        let echo_rect = super_scaler_card_rect(
-                            request.geometry.source_card,
-                            full,
-                            PROGRESS_MAX.saturating_sub(delayed),
-                        );
-                        draw_velocity_echo_565(
-                            working,
-                            width,
-                            height,
-                            echo_rect,
-                            match echo {
-                                1 => violet,
-                                2 => deep_violet,
-                                _ => Rgb565Pixel(0x1848),
-                            },
-                            far_to_right,
-                            &mut stats,
-                        );
-                    }
-                }
-                fill_rect_565(working, width, height, rect, shell, &mut stats);
-                draw_super_scaler_speed_bands(
-                    working,
-                    width,
-                    height,
-                    rect,
-                    PROGRESS_MAX.saturating_sub(frame.reveal_progress_q16),
-                    &mut stats,
-                );
-                draw_super_scaler_impact_horizon(
-                    working,
-                    width,
-                    height,
-                    rect,
-                    PROGRESS_MAX.saturating_sub(frame.reveal_progress_q16),
-                    &mut stats,
-                );
-                blit_scaled_card_565(
+                render_super_scaler_card_cover(
                     working,
                     destination,
                     width,
                     height,
-                    request.geometry.source_card,
-                    rect,
-                    source_text_group(request.geometry),
-                    smoothstep_q16(window_q16(frame.reveal_progress_q16, 38_000, 60_000)),
+                    request,
+                    full,
+                    PROGRESS_MAX.saturating_sub(frame.reveal_progress_q16),
+                    shell,
+                    mint,
+                    violet,
                     &mut stats,
                 );
-                if frame.reveal_progress_q16 > 4_000 {
-                    draw_outline_565(working, width, height, rect, mint, &mut stats);
-                }
             }
         }
     }
     Ok(stats)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_super_scaler_card_cover(
+    working: &mut [Rgb565Pixel],
+    snapshot: &[Rgb565Pixel],
+    width: usize,
+    height: usize,
+    request: NavigationTransitionRequest,
+    full: NavigationTransitionRect,
+    forward_cover_q16: u16,
+    shell: Rgb565Pixel,
+    mint: Rgb565Pixel,
+    violet: Rgb565Pixel,
+    stats: &mut NavigationTransitionRenderStats,
+) {
+    let rect = super_scaler_card_rect(request.geometry.source_card, full, forward_cover_q16);
+    let source_background =
+        background_outside_rect(snapshot, width, height, request.geometry.source_card);
+    fill_rect_565(
+        working,
+        width,
+        height,
+        request.geometry.source_card,
+        source_background,
+        stats,
+    );
+    fill_rect_565(working, width, height, rect, shell, stats);
+    draw_super_scaler_speed_bands(working, width, height, rect, forward_cover_q16, stats);
+    draw_super_scaler_impact_horizon(working, width, height, rect, forward_cover_q16, stats);
+    blit_scaled_card_565(
+        working,
+        snapshot,
+        width,
+        height,
+        request.geometry.source_card,
+        rect,
+        source_text_group(request.geometry),
+        PROGRESS_MAX.saturating_sub(smoothstep_q16(window_q16(
+            forward_cover_q16,
+            10_000,
+            26_000,
+        ))),
+        stats,
+    );
+    draw_super_scaler_impact_envelope(working, width, height, rect, forward_cover_q16, stats);
+    let far_to_right = request.geometry.source_card.x as usize
+        + request.geometry.source_card.width as usize / 2
+        <= width / 2;
+    for (echo, lead, cutoff) in [
+        (3usize, 19_500u16, 52_000u16),
+        (2, 11_000, 57_000),
+        (1, 4_500, 62_000),
+    ] {
+        if forward_cover_q16 < cutoff {
+            let echo_rect = super_scaler_card_rect(
+                request.geometry.source_card,
+                full,
+                forward_cover_q16.saturating_add(lead),
+            );
+            draw_velocity_echo_565(
+                working,
+                width,
+                height,
+                echo_rect,
+                match echo {
+                    1 => violet,
+                    2 => Rgb565Pixel(0x40ed),
+                    _ => Rgb565Pixel(0x28aa),
+                },
+                far_to_right,
+                stats,
+            );
+        }
+    }
+    if forward_cover_q16 < 62_000 {
+        draw_outline_565(working, width, height, rect, mint, stats);
+    }
 }
 
 fn render_legacy_decorated_shell(
@@ -1711,7 +1670,7 @@ fn render_hero_label_last(
         NavigationTransitionDirection::Forward => {
             if frame.reveal_progress_q16 > 0 {
                 let destination = destination.unwrap_or(source);
-                if frame.reveal_progress_q16 >= 14_000 {
+                if frame.reveal_progress_q16 >= 18_000 {
                     copy_rect_565(
                         working,
                         destination,
@@ -1738,18 +1697,19 @@ fn render_hero_label_last(
                         request.geometry.source_label,
                         request.geometry.destination_title,
                         PROGRESS_MAX,
-                        smoothstep_q16(window_q16(frame.reveal_progress_q16, 4_000, 14_000)),
+                        smoothstep_q16(window_q16(frame.reveal_progress_q16, 2_000, 18_000)),
                         false,
                         stats,
                     );
                 }
-                redraw_detail_with_opacity(
+                draw_destination_detail_wake(
                     working,
                     destination,
                     width,
                     height,
+                    request.geometry.destination_title,
                     request.geometry.destination_detail,
-                    smoothstep_q16(window_q16(frame.reveal_progress_q16, 18_000, 31_000)),
+                    frame.reveal_progress_q16,
                     stats,
                 );
             } else {
@@ -1782,63 +1742,74 @@ fn render_hero_label_last(
         NavigationTransitionDirection::Reverse => {
             if frame.reveal_progress_q16 > 0 {
                 let destination = destination.unwrap_or(source);
-                if frame.reveal_progress_q16 >= 60_000 {
-                    copy_rect_565(
-                        working,
-                        destination,
-                        width,
-                        height,
-                        request.geometry.source_label,
-                        stats,
-                    );
-                } else {
-                    let motion = smoothstep_q16(frame.reveal_progress_q16);
-                    crossfade_labels(
-                        working,
-                        source,
-                        destination,
-                        width,
-                        height,
-                        request.geometry.destination_title,
-                        request.geometry.source_label,
-                        motion,
-                        smoothstep_q16(window_q16(frame.reveal_progress_q16, 42_000, 60_000)),
-                        true,
-                        stats,
-                    );
-                }
-                redraw_detail_with_opacity(
+                let forward_cover = PROGRESS_MAX.saturating_sub(frame.reveal_progress_q16);
+                move_label_between_rects(
+                    working,
+                    destination,
+                    width,
+                    height,
+                    request.geometry.source_label,
+                    request.geometry.destination_title,
+                    smoothstep_q16(window_q16(forward_cover, 3_500, 60_000)),
+                    false,
+                    stats,
+                );
+                draw_detail_pixels_with_opacity(
                     working,
                     destination,
                     width,
                     height,
                     request.geometry.source_detail,
-                    smoothstep_q16(window_q16(frame.reveal_progress_q16, 48_000, 60_000)),
+                    PROGRESS_MAX.saturating_sub(smoothstep_q16(window_q16(
+                        forward_cover,
+                        0,
+                        10_000,
+                    ))),
                     stats,
                 );
             } else {
-                move_label_between_rects(
+                let destination = destination.unwrap_or(source);
+                let forward_reveal = reverse_destination_reveal_progress(frame.cover_progress_q16);
+                if forward_reveal >= 18_000 {
+                    copy_rect_565(
+                        working,
+                        source,
+                        width,
+                        height,
+                        request.geometry.destination_title,
+                        stats,
+                    );
+                } else {
+                    erase_rect_from_snapshot_background(
+                        working,
+                        source,
+                        width,
+                        height,
+                        request.geometry.destination_title,
+                        stats,
+                    );
+                    crossfade_labels(
+                        working,
+                        destination,
+                        source,
+                        width,
+                        height,
+                        request.geometry.source_label,
+                        request.geometry.destination_title,
+                        PROGRESS_MAX,
+                        smoothstep_q16(window_q16(forward_reveal, 2_000, 18_000)),
+                        false,
+                        stats,
+                    );
+                }
+                draw_destination_detail_wake(
                     working,
                     source,
                     width,
                     height,
                     request.geometry.destination_title,
-                    request.geometry.source_label,
-                    0,
-                    true,
-                    stats,
-                );
-                redraw_detail_with_opacity(
-                    working,
-                    source,
-                    width,
-                    height,
                     request.geometry.destination_detail,
-                    PROGRESS_MAX.saturating_sub(smoothstep_q16(window_q16(
-                        frame.cover_progress_q16,
-                        0,
-                        18_000,
-                    ))),
+                    forward_reveal,
                     stats,
                 );
             }
@@ -1900,13 +1871,13 @@ fn reveal_destination_regions(
             width,
             height,
             selected,
-            window_q16(progress_q16, 10_000, 25_000),
+            window_q16(progress_q16, 10_000, 28_000),
             -(selected.right() as isize),
-            6,
+            10,
             stats,
         );
         for distance in 1usize..9 {
-            let start = 23_000u16.saturating_add(((distance - 1) * 3_500) as u16);
+            let start = 22_000u16.saturating_add(((distance - 1) * 4_500) as u16);
             for below in [true, false] {
                 let Some(y) = (if below {
                     (selected.y as usize).checked_add(distance.saturating_mul(row_height))
@@ -1931,11 +1902,7 @@ fn reveal_destination_regions(
                             .min(list.bottom() as usize - y)
                             .min(height.saturating_sub(y)) as u16,
                     },
-                    smoothstep_q16(window_q16(
-                        progress_q16,
-                        start,
-                        start.saturating_add(10_000),
-                    )),
+                    smoothstep_q16(window_q16(progress_q16, start, start.saturating_add(7_500))),
                     -(list.width as isize + distance as isize * 12),
                     stats,
                 );
@@ -1976,7 +1943,7 @@ fn reveal_destination_regions(
             width,
             height,
             preview,
-            smoothstep_q16(window_q16(progress_q16, 34_000, 55_000)),
+            smoothstep_q16(window_q16(progress_q16, 34_000, 60_000)),
             stats,
         );
         draw_preview_impact_flash(working, width, height, preview, progress_q16, stats);
@@ -1985,7 +1952,7 @@ fn reveal_destination_regions(
             width,
             height,
             preview,
-            smoothstep_q16(window_q16(progress_q16, 34_000, 55_000)),
+            smoothstep_q16(window_q16(progress_q16, 34_000, 60_000)),
             stats,
         );
         draw_progressive_preview_frame(
@@ -2110,12 +2077,12 @@ fn super_scaler_shell_row_color(y: usize, height: usize, shell: Rgb565Pixel) -> 
     for band in 1usize..=3 {
         let target = height.saturating_mul(band) / 8;
         let color = match band {
-            1 => Rgb565Pixel(0x1848),
-            2 => Rgb565Pixel(0x28aa),
-            _ => Rgb565Pixel(0x40ed),
+            1 => Rgb565Pixel(0x28aa),
+            2 => Rgb565Pixel(0x40ed),
+            _ => Rgb565Pixel(0x79b8),
         };
         for band_y in [center.saturating_sub(target), center.saturating_add(target)] {
-            if y >= band_y && y < band_y.saturating_add(band) {
+            if y >= band_y && y < band_y.saturating_add(band + 1) {
                 return color;
             }
         }
@@ -2154,9 +2121,9 @@ fn draw_super_scaler_speed_bands(
         let x = rect.x as usize + inset.min(rect.width as usize / 2);
         let band_width = (rect.width as usize).saturating_sub(inset.saturating_mul(2));
         let color = match band {
-            1 => Rgb565Pixel(0x1848),
-            2 => Rgb565Pixel(0x28aa),
-            _ => Rgb565Pixel(0x40ed),
+            1 => Rgb565Pixel(0x28aa),
+            2 => Rgb565Pixel(0x40ed),
+            _ => Rgb565Pixel(0x79b8),
         };
         for y in [
             center_y.saturating_sub(distance),
@@ -2170,7 +2137,7 @@ fn draw_super_scaler_speed_bands(
                     x: x as u16,
                     y: y.min(height.saturating_sub(1)) as u16,
                     width: band_width.max(1) as u16,
-                    height: band as u16,
+                    height: (band + 1) as u16,
                 },
                 color,
                 stats,
@@ -2190,7 +2157,7 @@ fn draw_super_scaler_impact_horizon(
     if progress_q16 < 42_000 {
         return;
     }
-    let pulse = smoothstep_q16(window_q16(progress_q16, 42_000, 48_000));
+    let pulse = smoothstep_q16(window_q16(progress_q16, 42_000, 52_000));
     if pulse == 0 {
         return;
     }
@@ -2207,7 +2174,13 @@ fn draw_super_scaler_impact_horizon(
             x: x as u16,
             y: rect.y.saturating_add(rect.height / 2).saturating_sub(1),
             width: visible_width as u16,
-            height: if pulse > 45_000 { 3 } else { 1 },
+            height: if pulse > 45_000 {
+                5
+            } else if pulse > 24_000 {
+                3
+            } else {
+                1
+            },
         },
         if pulse > 32_000 {
             Rgb565Pixel(0x07ff)
@@ -2216,6 +2189,51 @@ fn draw_super_scaler_impact_horizon(
         },
         stats,
     );
+}
+
+fn draw_super_scaler_impact_envelope(
+    working: &mut [Rgb565Pixel],
+    width: usize,
+    height: usize,
+    rect: NavigationTransitionRect,
+    progress_q16: u16,
+    stats: &mut NavigationTransitionRenderStats,
+) {
+    let pulse = if progress_q16 < 50_000 {
+        0
+    } else if progress_q16 < 54_000 {
+        smoothstep_q16(window_q16(progress_q16, 50_000, 54_000))
+    } else if progress_q16 <= 58_000 {
+        PROGRESS_MAX
+    } else {
+        PROGRESS_MAX.saturating_sub(smoothstep_q16(window_q16(progress_q16, 58_000, 64_000)))
+    };
+    if pulse == 0 {
+        return;
+    }
+    let cyan_layers =
+        1usize.saturating_add(2usize.saturating_mul(pulse as usize) / PROGRESS_MAX as usize);
+    let violet_layers = 1usize.saturating_add(pulse as usize / 40_000);
+    for inset in 0..cyan_layers {
+        if let Some(outline) = inset_rect(rect, inset as u16) {
+            draw_outline_565(working, width, height, outline, Rgb565Pixel(0x07ff), stats);
+        }
+    }
+    for inset in cyan_layers..cyan_layers.saturating_add(violet_layers) {
+        if let Some(outline) = inset_rect(rect, inset as u16) {
+            draw_outline_565(working, width, height, outline, Rgb565Pixel(0x79b8), stats);
+        }
+    }
+}
+
+fn inset_rect(rect: NavigationTransitionRect, inset: u16) -> Option<NavigationTransitionRect> {
+    let doubled = inset.saturating_mul(2);
+    (rect.width > doubled && rect.height > doubled).then_some(NavigationTransitionRect {
+        x: rect.x.saturating_add(inset),
+        y: rect.y.saturating_add(inset),
+        width: rect.width.saturating_sub(doubled),
+        height: rect.height.saturating_sub(doubled),
+    })
 }
 
 fn draw_runway_selected_row_bridge(
@@ -2227,13 +2245,13 @@ fn draw_runway_selected_row_bridge(
     reverse: bool,
     stats: &mut NavigationTransitionRenderStats,
 ) {
-    if !reverse && progress_q16 > 25_000 {
+    if !reverse && progress_q16 > 30_000 {
         return;
     }
     let motion = if reverse {
-        smoothstep_q16(progress_q16)
+        smoothstep_q16(window_q16(progress_q16, 0, 18_000))
     } else {
-        smoothstep_q16(window_q16(progress_q16, 0, 25_000))
+        smoothstep_q16(window_q16(progress_q16, 0, 18_000))
     };
     let horizon = NavigationTransitionRect {
         x: 0,
@@ -2543,14 +2561,14 @@ fn copy_rect_shifted_x_with_overshoot(
     if progress_q16 == 0 {
         return;
     }
-    let offset = if progress_q16 <= 38_000 {
-        let motion = ease_out_cubic_q16(window_q16(progress_q16, 0, 38_000)) as i64;
+    let offset = if progress_q16 <= 34_000 {
+        let motion = ease_out_cubic_q16(window_q16(progress_q16, 0, 34_000)) as i64;
         initial_offset as i64
             + (overshoot as i64 - initial_offset as i64) * motion / PROGRESS_MAX as i64
-    } else if progress_q16 <= 44_000 {
+    } else if progress_q16 <= 50_000 {
         overshoot as i64
     } else {
-        let settle = smoothstep_q16(window_q16(progress_q16, 44_000, PROGRESS_MAX)) as i64;
+        let settle = smoothstep_q16(window_q16(progress_q16, 50_000, PROGRESS_MAX)) as i64;
         overshoot as i64 * (PROGRESS_MAX as i64 - settle) / PROGRESS_MAX as i64
     };
     copy_rect_at_offset(working, source, width, height, rect, offset as isize, stats);
@@ -2618,8 +2636,8 @@ fn preview_aperture_rect(
         return None;
     }
     let horizontal =
-        smoothstep_q16(window_q16(progress_q16, 0, 18_000)).max(progress_q16.min(2_048));
-    let vertical = smoothstep_q16(window_q16(progress_q16, 6_000, PROGRESS_MAX));
+        smoothstep_q16(window_q16(progress_q16, 0, 16_000)).max(progress_q16.min(2_048));
+    let vertical = smoothstep_q16(window_q16(progress_q16, 22_000, PROGRESS_MAX));
     let visible_width = (rect.width as usize)
         .saturating_mul(horizontal as usize)
         .div_ceil(PROGRESS_MAX as usize)
@@ -2667,13 +2685,13 @@ fn draw_preview_impact_flash(
     progress_q16: u16,
     stats: &mut NavigationTransitionRenderStats,
 ) {
-    if !(34_000..43_000).contains(&progress_q16) {
+    if !(34_000..47_000).contains(&progress_q16) {
         return;
     }
-    let pulse = if progress_q16 <= 36_000 {
-        smoothstep_q16(window_q16(progress_q16, 34_000, 36_000))
+    let pulse = if progress_q16 <= 39_000 {
+        smoothstep_q16(window_q16(progress_q16, 34_000, 39_000))
     } else {
-        PROGRESS_MAX.saturating_sub(smoothstep_q16(window_q16(progress_q16, 36_000, 43_000)))
+        PROGRESS_MAX.saturating_sub(smoothstep_q16(window_q16(progress_q16, 39_000, 47_000)))
     };
     let flash_width = (rect.width as usize)
         .saturating_mul(pulse as usize)
@@ -2689,7 +2707,13 @@ fn draw_preview_impact_flash(
                 .saturating_add((rect.width as usize - flash_width).div_ceil(2) as u16),
             y: rect.y.saturating_add(rect.height / 2).saturating_sub(1),
             width: flash_width as u16,
-            height: if pulse > 32_000 { 3 } else { 2 },
+            height: if pulse > 32_000 {
+                5
+            } else if pulse > 16_000 {
+                3
+            } else {
+                2
+            },
         },
         Rgb565Pixel(0x07ff),
         stats,
@@ -2749,13 +2773,16 @@ fn draw_progressive_preview_frame(
 }
 
 fn preview_rail_envelope(progress_q16: u16) -> u16 {
-    if progress_q16 <= 40_000 {
-        smoothstep_q16(window_q16(progress_q16, 34_000, 40_000))
+    if progress_q16 <= 42_000 {
+        smoothstep_q16(window_q16(progress_q16, 34_000, 42_000))
+    } else if progress_q16 <= 48_000 {
+        PROGRESS_MAX
     } else {
-        PROGRESS_MAX.saturating_sub(smoothstep_q16(window_q16(progress_q16, 44_000, 54_000)))
+        PROGRESS_MAX.saturating_sub(smoothstep_q16(window_q16(progress_q16, 48_000, 58_000)))
     }
 }
 
+#[cfg(test)]
 fn reverse_preview_timeline(progress_q16: u16) -> u16 {
     if progress_q16 >= 25_000 {
         return 34_000;
@@ -2775,11 +2802,11 @@ fn draw_preview_transfer_beam(
     progress_q16: u16,
     stats: &mut NavigationTransitionRenderStats,
 ) {
-    if progress_q16 <= 24_000 || progress_q16 >= 46_000 {
+    if progress_q16 <= 24_000 || progress_q16 >= 49_000 {
         return;
     }
     let reveal = smoothstep_q16(window_q16(progress_q16, 24_000, 34_000));
-    let retract = smoothstep_q16(window_q16(progress_q16, 36_000, 46_000));
+    let retract = smoothstep_q16(window_q16(progress_q16, 39_000, 49_000));
     let start_x = selected.right() as usize;
     let end_x = preview.x as usize;
     if end_x <= start_x {
@@ -2806,9 +2833,9 @@ fn draw_preview_transfer_beam(
                 y: y.min(height.saturating_sub(1)) as u16,
                 width: ((end_x - start_x) / SEGMENTS).saturating_add(2).max(3) as u16,
                 height: if segment + 1 == revealed_segments {
-                    3
+                    5
                 } else {
-                    2
+                    3
                 },
             },
             if segment & 1 == 0 {
@@ -2821,6 +2848,7 @@ fn draw_preview_transfer_beam(
     }
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn draw_reverse_preview_transfer_beam(
     working: &mut [Rgb565Pixel],
@@ -2931,6 +2959,7 @@ fn compose_system_background_horizon(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn conceal_system_background_horizon(
     working: &mut [Rgb565Pixel],
     width: usize,
@@ -2962,6 +2991,7 @@ fn conceal_system_background_horizon(
     }
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn slide_rect_out_left(
     working: &mut [Rgb565Pixel],
@@ -3006,6 +3036,7 @@ fn slide_rect_out_left(
     }
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn slide_rect_out_left_with_recoil(
     working: &mut [Rgb565Pixel],
@@ -3040,6 +3071,7 @@ fn slide_rect_out_left_with_recoil(
     copy_rect_at_offset(working, source, width, height, rect, offset as isize, stats);
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn close_preview_aperture(
     working: &mut [Rgb565Pixel],
@@ -3066,6 +3098,7 @@ fn close_preview_aperture(
     draw_preview_aperture_glow(working, width, height, rect, remaining, stats);
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn fill_rect_edge_close(
     working: &mut [Rgb565Pixel],
@@ -3114,6 +3147,61 @@ fn fill_rect_edge_close(
     }
 }
 
+fn reverse_destination_reveal_progress(reverse_progress_q16: u16) -> u16 {
+    62_000u16.saturating_sub(reverse_progress_q16)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn conceal_source_regions_inverse(
+    working: &mut [Rgb565Pixel],
+    source: &[Rgb565Pixel],
+    width: usize,
+    height: usize,
+    progress_q16: u16,
+    request: NavigationTransitionRequest,
+    shell: Rgb565Pixel,
+    stats: &mut NavigationTransitionRenderStats,
+) {
+    if width == 0
+        || height == 0
+        || working.len() != source.len()
+        || working.len() != width.saturating_mul(height)
+    {
+        return;
+    }
+    let forward_progress = reverse_destination_reveal_progress(progress_q16);
+    let full = NavigationTransitionRect {
+        x: 0,
+        y: 0,
+        width: width as u16,
+        height: height as u16,
+    };
+    if request.edge.enters_system_browser() {
+        compose_system_background_horizon(
+            working,
+            source,
+            width,
+            height,
+            smoothstep_q16(window_q16(forward_progress, 0, 18_000)),
+            request.geometry.destination_title.bottom() as usize,
+            shell,
+            stats,
+        );
+    } else {
+        fill_super_scaler_covered_surface(working, width, height, full, shell, stats);
+    }
+    reveal_destination_regions(
+        working,
+        source,
+        width,
+        height,
+        forward_progress,
+        request,
+        stats,
+    );
+}
+
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn conceal_source_regions(
     working: &mut [Rgb565Pixel],
@@ -3329,38 +3417,52 @@ fn erase_rect_from_snapshot_background(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn redraw_detail_with_opacity(
+fn draw_destination_detail_wake(
     working: &mut [Rgb565Pixel],
     snapshot: &[Rgb565Pixel],
     width: usize,
     height: usize,
-    rect: NavigationTransitionRect,
-    opacity_q16: u16,
+    title_rect: NavigationTransitionRect,
+    detail_rect: NavigationTransitionRect,
+    reveal_progress_q16: u16,
     stats: &mut NavigationTransitionRenderStats,
 ) {
-    if rect.width == 0 || rect.height == 0 {
+    if detail_rect.width == 0 || detail_rect.height == 0 {
         return;
     }
-    if opacity_q16 == PROGRESS_MAX {
-        copy_rect_565(working, snapshot, width, height, rect, stats);
+    erase_rect_from_snapshot_background(working, snapshot, width, height, detail_rect, stats);
+    let motion = smoothstep_q16(window_q16(reveal_progress_q16, 18_000, 31_000));
+    if motion == 0 {
         return;
     }
-    erase_rect_from_snapshot_background(working, snapshot, width, height, rect, stats);
-    if opacity_q16 == 0 {
+    let Some((title_content, _)) = opaque_content_bounds(snapshot, width, height, title_rect)
+    else {
         return;
-    }
-    let Some((content, background)) = opaque_content_bounds(snapshot, width, height, rect) else {
+    };
+    let Some((detail_content, background)) =
+        opaque_content_bounds(snapshot, width, height, detail_rect)
+    else {
         return;
+    };
+    let maximum_x = width.saturating_sub(detail_content.width as usize);
+    let maximum_y = height.saturating_sub(detail_content.height as usize);
+    let wake = NavigationTransitionRect {
+        x: (title_content.right() as usize + 6).min(maximum_x) as u16,
+        y: (title_content.y as usize + title_content.height as usize / 2)
+            .saturating_sub(detail_content.height as usize / 2)
+            .min(maximum_y) as u16,
+        width: detail_content.width,
+        height: detail_content.height,
     };
     blit_scaled_masked_dithered_565(
         working,
         snapshot,
         width,
         height,
-        content,
-        content,
+        detail_content,
+        lerp_rect(wake, detail_content, motion),
         background,
-        opacity_q16,
+        motion,
         stats,
     );
 }
@@ -3443,12 +3545,16 @@ fn crossfade_labels(
     };
     let target_content =
         label_target_rect(source_content, source_rect, destination_rect, center_target);
-    let moving_content = lerp_rect(source_content, target_content, motion_q16);
     let Some((destination_content, destination_background)) =
         opaque_content_bounds(destination, width, height, destination_rect)
     else {
         return;
     };
+    let moving_content = lerp_rect(
+        lerp_rect(source_content, target_content, motion_q16),
+        destination_content,
+        crossfade_q16,
+    );
     blit_crossfaded_masks_565(
         working,
         source,
@@ -3805,7 +3911,7 @@ fn draw_velocity_echo_565(
     let Some(rect) = clip_rect_to_frame(rect, width, height) else {
         return;
     };
-    let vertical_height = (rect.height as usize * 7 / 10).max(1);
+    let vertical_height = (rect.height as usize * 17 / 20).max(1);
     let vertical_y = rect.y as usize + (rect.height as usize - vertical_height) / 2;
     fill_rect_565(
         destination,
@@ -3818,13 +3924,13 @@ fn draw_velocity_echo_565(
                 rect.x
             },
             y: vertical_y as u16,
-            width: 2.min(rect.width),
+            width: 3.min(rect.width),
             height: vertical_height as u16,
         },
         color,
         stats,
     );
-    let horizontal_width = (rect.width as usize / 3).max(1);
+    let horizontal_width = (rect.width as usize * 11 / 20).max(1);
     let horizontal_x = if far_to_right {
         rect.right() as usize - horizontal_width
     } else {
@@ -3838,7 +3944,7 @@ fn draw_velocity_echo_565(
             x: horizontal_x as u16,
             y: rect.bottom().saturating_sub(1),
             width: horizontal_width as u16,
-            height: 2.min(rect.height),
+            height: 3.min(rect.height),
         },
         color,
         stats,
@@ -4497,14 +4603,24 @@ mod tests {
     #[test]
     fn preview_rails_pulse_without_popping_at_forward_or_reverse_endpoints() {
         assert_eq!(preview_rail_envelope(34_000), 0);
-        assert_eq!(preview_rail_envelope(40_000), PROGRESS_MAX);
+        assert!(preview_rail_envelope(40_000) > 0);
+        assert_eq!(preview_rail_envelope(42_000), PROGRESS_MAX);
         assert_eq!(preview_rail_envelope(44_000), PROGRESS_MAX);
-        assert_eq!(preview_rail_envelope(54_000), 0);
+        assert_eq!(preview_rail_envelope(48_000), PROGRESS_MAX);
+        assert_eq!(preview_rail_envelope(58_000), 0);
         assert_eq!(preview_rail_envelope(61_999), 0);
-        assert_eq!(preview_rail_envelope(reverse_preview_timeline(0)), 0);
-        assert_eq!(preview_rail_envelope(reverse_preview_timeline(1)), 0);
-        assert!(preview_rail_envelope(reverse_preview_timeline(10_000)) > 0);
-        assert_eq!(preview_rail_envelope(reverse_preview_timeline(25_000)), 0);
+        assert_eq!(
+            preview_rail_envelope(reverse_destination_reveal_progress(0)),
+            0
+        );
+        assert_eq!(
+            preview_rail_envelope(reverse_destination_reveal_progress(14_000)),
+            PROGRESS_MAX
+        );
+        assert_eq!(
+            preview_rail_envelope(reverse_destination_reveal_progress(28_000)),
+            0
+        );
     }
 
     #[test]
@@ -4522,7 +4638,7 @@ mod tests {
     }
 
     #[test]
-    fn system_reverse_conceals_far_rows_before_selected_row() {
+    fn system_reverse_reconstructs_exact_forward_reveal_endpoints() {
         let width = 100;
         let height = 100;
         let source = vec![Rgb565Pixel(0x1234); width * height];
@@ -4530,21 +4646,20 @@ mod tests {
         let mut working = source.clone();
         let mut stats = NavigationTransitionRenderStats::default();
 
-        conceal_source_regions(
+        conceal_source_regions_inverse(
             &mut working,
             &source,
             width,
             height,
-            20_000,
+            0,
             system_request(NavigationTransitionDirection::Reverse),
             shell,
             &mut stats,
         );
 
-        assert_eq!(working[88 * width + 50], shell);
-        assert_eq!(working[46 * width + 50], Rgb565Pixel(0x1234));
+        assert_eq!(working, source);
 
-        conceal_source_regions(
+        conceal_source_regions_inverse(
             &mut working,
             &source,
             width,

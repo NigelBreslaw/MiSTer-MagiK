@@ -228,7 +228,35 @@ struct PendingCollectionEntry {
 
 struct PendingNavigationTransition {
     event: launcher::LauncherEvent,
+    source_state: launcher::NavigationTransitionState,
+    source_was_arcade: bool,
     committed: bool,
+}
+
+fn navigation_preview_snapshot_ready(
+    preview_expected: bool,
+    terminal_empty: bool,
+    cache_state: &str,
+    frame_status: PreviewRawFrameStatus,
+) -> bool {
+    !preview_expected
+        || terminal_empty
+        || (cache_state == "exact" && frame_status == PreviewRawFrameStatus::Ready)
+}
+
+fn should_clear_suppressed_preview(
+    allow_preview_blit: bool,
+    preserve_navigation_source_preview: bool,
+) -> bool {
+    !allow_preview_blit && !preserve_navigation_source_preview
+}
+
+fn should_defer_or_preserve_selected_preview(
+    defer_selected_preview: bool,
+    navigation_transition_active: bool,
+    source_was_arcade: bool,
+) -> bool {
+    defer_selected_preview || (navigation_transition_active && source_was_arcade)
 }
 
 fn navigation_transition_for_intent(
@@ -2355,6 +2383,7 @@ pub(super) fn run_launcher_loop(
     );
     let mut last_home_pan_scroll_x = nav.scroll_x;
     let mut home_pan_present_until = None;
+    let mut navigation_source_bridge_sync_pending = false;
     while (secs == 0 || run_start.elapsed().as_secs() < secs)
         && preview_scroll_exit_at.is_none_or(|deadline| Instant::now() < deadline)
     {
@@ -2365,7 +2394,7 @@ pub(super) fn run_launcher_loop(
         }
         let loop_start = Instant::now();
         slint::platform::update_timers_and_animations();
-        let mut full_bridge_dirty = false;
+        let mut full_bridge_dirty = std::mem::take(&mut navigation_source_bridge_sync_pending);
         if let Some(collection_id) = deferred_navigation_hydration_finish.take() {
             nav.catalog_system_hydration_finished(&collection_id);
             full_bridge_dirty = true;
@@ -3328,12 +3357,7 @@ pub(super) fn run_launcher_loop(
                         lifecycle_view.catalog_recovery_dialog().is_some();
                     let recovery_prev =
                         std::mem::replace(&mut catalog_recovery_prev, nav_state.clone());
-                    if navigation_transition.is_active()
-                        && pending_navigation_transition
-                            .as_ref()
-                            .is_some_and(|pending| !pending.committed)
-                        && nav_state.btn_b
-                        && !recovery_prev.btn_b
+                    if navigation_transition.is_active() && nav_state.btn_b && !recovery_prev.btn_b
                     {
                         let now_us = frame_now
                             .saturating_duration_since(start)
@@ -3531,9 +3555,12 @@ pub(super) fn run_launcher_loop(
                                         })
                                     });
                                 if transition_started {
+                                    let source_state = nav.navigation_transition_state();
                                     pending_navigation_transition =
                                         Some(PendingNavigationTransition {
                                             event: event.clone(),
+                                            source_state,
+                                            source_was_arcade: nav.screen == Screen::Arcade,
                                             committed: false,
                                         });
                                     full_bridge_dirty = true;
@@ -3955,6 +3982,16 @@ pub(super) fn run_launcher_loop(
         }
 
         sync_settings_bridge(&app, &nav, &lifecycle);
+        let source_was_arcade = pending_navigation_transition
+            .as_ref()
+            .is_some_and(|pending| pending.source_was_arcade);
+        let preserve_navigation_source_preview =
+            navigation_transition.is_active() && source_was_arcade;
+        let defer_or_preserve_selected_preview = should_defer_or_preserve_selected_preview(
+            defer_selected_preview,
+            navigation_transition.is_active(),
+            source_was_arcade,
+        );
         match launcher_bridge_sync_plan(
             launching,
             lifecycle.startup_input_enabled(),
@@ -3974,7 +4011,7 @@ pub(super) fn run_launcher_loop(
                     &mut preview,
                     &mut bridge_models,
                     catalog_version,
-                    defer_selected_preview,
+                    defer_or_preserve_selected_preview,
                     ui,
                 );
                 preview_scheduled_this_loop = nav.screen == Screen::Arcade;
@@ -3998,7 +4035,7 @@ pub(super) fn run_launcher_loop(
                     active_games,
                     &mut preview,
                     should_defer_arcade_overlay_bridge(dirty_opt, launching, &nav, &catalog),
-                    defer_selected_preview,
+                    defer_or_preserve_selected_preview,
                     ui,
                 );
                 preview_scheduled_this_loop = nav.screen == Screen::Arcade;
@@ -4152,7 +4189,7 @@ pub(super) fn run_launcher_loop(
                 active_arcade_games,
                 nav.arcade.selected,
                 &mut preview,
-                defer_selected_preview,
+                defer_or_preserve_selected_preview,
                 nav.arcade.is_scroll_active(),
                 nav.arcade.is_turbo_active(),
             ) {
@@ -4172,7 +4209,7 @@ pub(super) fn run_launcher_loop(
             let dirty = apply_ready_preview(
                 &app,
                 &mut preview,
-                defer_selected_preview,
+                defer_or_preserve_selected_preview,
                 nav.screen == Screen::Arcade && nav.arcade.is_turbo_active(),
             );
             preview_apply_trace = preview.last_apply_trace();
@@ -4290,7 +4327,10 @@ pub(super) fn run_launcher_loop(
         }
         if composition_decision.clear_direct_layers {
             arcade_list_renderer.invalidate_presented_layer();
-            if !composition_decision.allow_preview_blit {
+            if should_clear_suppressed_preview(
+                composition_decision.allow_preview_blit,
+                preserve_navigation_source_preview,
+            ) {
                 let bridge = app.global::<slint_ui::launcher::MisterBridge>();
                 preview.clear(&bridge);
             }
@@ -4945,28 +4985,53 @@ pub(super) fn run_launcher_loop(
                 .is_some_and(|pending| pending.committed);
             let mut render_transition_frame = true;
             if destination_committed && !navigation_transition.destination_ready() {
+                let mut destination_layers_ready = nav.screen != Screen::Arcade;
                 if nav.screen == Screen::Arcade {
-                    arcade_list_renderer
-                        .set_geometry_for_render_h(ArcadeListGeometry::NORMAL, ui.render_h());
-                    if let Some(update) = arcade_list_renderer.draw(
-                        active_system_game_view(&catalog, &nav),
-                        nav.arcade.selected,
-                        nav.arcade.visual_index,
-                        true,
-                    ) {
-                        let _ = layer_target
-                            .compose_arcade_list_update(&mut arcade_list_renderer, update);
+                    let preview_expected = selected_arcade_game_has_preview(&nav, &catalog);
+                    let preview_snapshot_ready = navigation_preview_snapshot_ready(
+                        preview_expected,
+                        preview.terminal_empty(),
+                        preview.trace_cache_state(),
+                        preview.raw_frame_status(),
+                    );
+                    let preview_surface_ready = if !preview_expected || preview.terminal_empty() {
+                        preview_snapshot_ready
+                    } else if preview_snapshot_ready {
+                        match layer_target.compose_exact_preview(&preview) {
+                            Some(RawPreviewPresent::Cached(_)) => true,
+                            Some(RawPreviewPresent::Direct(rect)) => {
+                                layer_target.compose_direct_preview_rect(rect) > 0
+                            }
+                            None => false,
+                        }
+                    } else {
+                        false
+                    };
+                    if preview_surface_ready {
+                        arcade_list_renderer
+                            .set_geometry_for_render_h(ArcadeListGeometry::NORMAL, ui.render_h());
+                        if let Some(update) = arcade_list_renderer.draw(
+                            active_system_game_view(&catalog, &nav),
+                            nav.arcade.selected,
+                            nav.arcade.visual_index,
+                            true,
+                        ) {
+                            let _ = layer_target
+                                .compose_arcade_list_update(&mut arcade_list_renderer, update);
+                        }
+                        destination_layers_ready = true;
                     }
-                    let _ = layer_target.compose_direct_preview_rect(preview_screen_rect(ui));
                 }
-                if navigation_transition
-                    .capture_destination(layer_target.cached_frame_view().pixels())
-                    .is_err()
-                {
-                    navigation_transition.settle_at_destination();
-                    render_transition_frame = false;
+                if destination_layers_ready {
+                    if navigation_transition
+                        .capture_destination(layer_target.cached_frame_view().pixels())
+                        .is_err()
+                    {
+                        navigation_transition.settle_at_destination();
+                        render_transition_frame = false;
+                    }
+                    navigation_transition.tick(now_us);
                 }
-                navigation_transition.tick(now_us);
             }
             if render_transition_frame && let Ok(frame) = navigation_transition.render() {
                 let _ = layer_target.restore_cached(frame);
@@ -4975,6 +5040,7 @@ pub(super) fn run_launcher_loop(
             request_launcher_redraw!();
             if navigation_transition.frame().phase == NavigationTransitionPhase::Settled {
                 let completion = navigation_transition.complete();
+                let pending = pending_navigation_transition.take();
                 if completion.is_some_and(|completion| {
                     completion.endpoint == NavigationTransitionEndpoint::Source
                 }) {
@@ -4982,8 +5048,17 @@ pub(super) fn run_launcher_loop(
                         nav.catalog_system_hydration_finished(&entry.collection_id);
                         arcade_entry_latency.cancel_enter();
                     }
+                    if let Some(pending) = pending {
+                        let before = LauncherBridgeKey::from_nav(&nav);
+                        nav.restore_navigation_transition_state(pending.source_state);
+                        let after = LauncherBridgeKey::from_nav(&nav);
+                        if before != after {
+                            media_session.note_nav_change(&before, &after, Instant::now());
+                        }
+                        navigation_source_bridge_sync_pending = true;
+                        request_launcher_redraw!();
+                    }
                 }
-                pending_navigation_transition = None;
             }
             navigation_transition_render_us = navigation_transition_compositor_started
                 .elapsed()
@@ -6732,6 +6807,103 @@ fn apply_home_selected_from_env(nav: &mut LauncherNav, catalog: &ArcadeCatalog, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn navigation_destination_waits_for_exact_ready_preview_pixels() {
+        assert!(navigation_preview_snapshot_ready(
+            false,
+            false,
+            "empty",
+            PreviewRawFrameStatus::Empty,
+        ));
+        assert!(!navigation_preview_snapshot_ready(
+            true,
+            false,
+            "placeholder",
+            PreviewRawFrameStatus::Empty,
+        ));
+        assert!(!navigation_preview_snapshot_ready(
+            true,
+            false,
+            "exact",
+            PreviewRawFrameStatus::Empty,
+        ));
+        assert!(navigation_preview_snapshot_ready(
+            true,
+            false,
+            "exact",
+            PreviewRawFrameStatus::Ready,
+        ));
+        assert!(navigation_preview_snapshot_ready(
+            true,
+            true,
+            "empty",
+            PreviewRawFrameStatus::Empty,
+        ));
+    }
+
+    #[test]
+    fn arcade_source_preview_survives_suppressed_transition_composition() {
+        assert!(should_clear_suppressed_preview(false, false));
+        assert!(!should_clear_suppressed_preview(false, true));
+        assert!(!should_clear_suppressed_preview(true, false));
+        assert!(!should_clear_suppressed_preview(true, true));
+    }
+
+    #[test]
+    fn in_flight_arcade_preview_result_is_deferred_for_the_whole_transition() {
+        assert!(should_defer_or_preserve_selected_preview(false, true, true,));
+        assert!(!should_defer_or_preserve_selected_preview(
+            false, false, true,
+        ));
+        assert!(!should_defer_or_preserve_selected_preview(
+            false, true, false,
+        ));
+        assert!(should_defer_or_preserve_selected_preview(
+            true, false, false,
+        ));
+    }
+
+    #[test]
+    fn committed_navigation_can_restore_its_exact_source_menu() {
+        let catalog = catalog_for_media_systems(&[]);
+        let mut nav = LauncherNav::new();
+        let enter = launcher::LauncherEvent {
+            action: LauncherAction::OpenMenu,
+            path: Some(crate::launcher_taxonomy::CONSOLES_MENU_ID.to_string()),
+            settings: None,
+        };
+        let root_state = nav.navigation_transition_state();
+
+        assert!(nav.commit_navigation_intent(&enter, &catalog));
+        assert_eq!(
+            nav.current_menu_id(),
+            crate::launcher_taxonomy::CONSOLES_MENU_ID
+        );
+        nav.restore_navigation_transition_state(root_state);
+        assert_eq!(
+            nav.current_menu_id(),
+            crate::launcher_taxonomy::ROOT_MENU_ID
+        );
+
+        assert!(nav.commit_navigation_intent(&enter, &catalog));
+        let consoles_state = nav.navigation_transition_state();
+        let leave = launcher::LauncherEvent {
+            action: LauncherAction::NavigateBack,
+            path: None,
+            settings: None,
+        };
+        assert!(nav.commit_navigation_intent(&leave, &catalog));
+        assert_eq!(
+            nav.current_menu_id(),
+            crate::launcher_taxonomy::ROOT_MENU_ID
+        );
+        nav.restore_navigation_transition_state(consoles_state);
+        assert_eq!(
+            nav.current_menu_id(),
+            crate::launcher_taxonomy::CONSOLES_MENU_ID
+        );
+    }
 
     #[test]
     fn screensaver_retains_launcher_then_defers_recycling_until_after_present() {

@@ -183,6 +183,25 @@ impl<'a> LayerTarget<'a> {
         )
     }
 
+    pub(super) fn compose_exact_preview(
+        &mut self,
+        preview: &PreviewState,
+    ) -> Option<RawPreviewPresent> {
+        let frame = preview.raw_frame()?;
+        if frame.status() != PreviewRawFrameStatus::Ready {
+            return None;
+        }
+        if preview_direct_present_enabled() {
+            self.target
+                .blit_raw_preview_direct(self.ui, &frame, true)
+                .map(RawPreviewPresent::Direct)
+        } else {
+            self.target
+                .blit_raw_preview(self.ui, &frame, true)
+                .map(RawPreviewPresent::Cached)
+        }
+    }
+
     pub(super) fn compose_direct_preview_rect(&mut self, rect: DirtyRect) -> u32 {
         self.target.compose_direct_preview_rect(rect)
     }

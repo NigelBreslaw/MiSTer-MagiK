@@ -814,6 +814,29 @@ pub struct HomeViewState {
     scroll_x: i32,
 }
 
+#[derive(Clone, Debug)]
+pub struct NavigationTransitionState {
+    screen: Screen,
+    selected: usize,
+    scroll_x: i32,
+    settings_focused: bool,
+    arcade: ArcadeNav,
+    arcade_filter: ArcadeFilterState,
+    arcade_search: ArcadeSearchState,
+    game_list_memory: HashMap<String, GameListMemory>,
+    collection_filters: HashMap<String, ArcadeFilter>,
+    collection_search_queries: HashMap<String, String>,
+    menu_path: Vec<String>,
+    menu_memory: HashMap<String, MenuViewportMemory>,
+    taxonomy: LauncherTaxonomy,
+    taxonomy_token: LauncherTaxonomyToken,
+    active_collection_id: Option<String>,
+    active_collection_source: Option<HomeViewState>,
+    arcade_exit_locked: bool,
+    home_scroll: HomeScrollState,
+    home_scroll_animation: SpringAnimation,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ArcadeFilterLevel {
     Alphabet,
@@ -1671,6 +1694,52 @@ impl LauncherNav {
             selected: self.selected,
             scroll_x: self.scroll_x,
         }
+    }
+
+    pub fn navigation_transition_state(&self) -> NavigationTransitionState {
+        NavigationTransitionState {
+            screen: self.screen,
+            selected: self.selected,
+            scroll_x: self.scroll_x,
+            settings_focused: self.settings_focused,
+            arcade: self.arcade.clone(),
+            arcade_filter: self.arcade_filter.clone(),
+            arcade_search: self.arcade_search.clone(),
+            game_list_memory: self.game_list_memory.clone(),
+            collection_filters: self.collection_filters.clone(),
+            collection_search_queries: self.collection_search_queries.clone(),
+            menu_path: self.menu_path.clone(),
+            menu_memory: self.menu_memory.clone(),
+            taxonomy: self.taxonomy.clone(),
+            taxonomy_token: self.taxonomy_token,
+            active_collection_id: self.active_collection_id.clone(),
+            active_collection_source: self.active_collection_source.clone(),
+            arcade_exit_locked: self.arcade_exit_locked,
+            home_scroll: self.home_scroll,
+            home_scroll_animation: self.home_scroll_animation,
+        }
+    }
+
+    pub fn restore_navigation_transition_state(&mut self, state: NavigationTransitionState) {
+        self.screen = state.screen;
+        self.selected = state.selected;
+        self.scroll_x = state.scroll_x;
+        self.settings_focused = state.settings_focused;
+        self.arcade = state.arcade;
+        self.arcade_filter = state.arcade_filter;
+        self.arcade_search = state.arcade_search;
+        self.game_list_memory = state.game_list_memory;
+        self.collection_filters = state.collection_filters;
+        self.collection_search_queries = state.collection_search_queries;
+        self.menu_path = state.menu_path;
+        self.menu_memory = state.menu_memory;
+        self.taxonomy = state.taxonomy;
+        self.taxonomy_token = state.taxonomy_token;
+        self.active_collection_id = state.active_collection_id;
+        self.active_collection_source = state.active_collection_source;
+        self.arcade_exit_locked = state.arcade_exit_locked;
+        self.home_scroll = state.home_scroll;
+        self.home_scroll_animation = state.home_scroll_animation;
     }
 
     fn restore_home_view_state(&mut self, source: HomeViewState) {
