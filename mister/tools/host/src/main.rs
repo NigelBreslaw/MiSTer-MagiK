@@ -1641,12 +1641,12 @@ const DISPLAY_MATRIX_MODES: &[DisplayMatrixMode] = &[
     DisplayMatrixMode {
         id: "crt-240p60",
         output: Some((640, 240)),
-        framebuffer: Some((320, 240)),
+        framebuffer: Some((640, 240)),
     },
     DisplayMatrixMode {
         id: "crt-288p50",
         output: Some((640, 288)),
-        framebuffer: Some((384, 288)),
+        framebuffer: Some((640, 288)),
     },
     DisplayMatrixMode {
         id: "crt-480p60",
@@ -1656,7 +1656,7 @@ const DISPLAY_MATRIX_MODES: &[DisplayMatrixMode] = &[
     DisplayMatrixMode {
         id: "crt-576p50",
         output: Some((640, 576)),
-        framebuffer: Some((640, 480)),
+        framebuffer: Some((640, 576)),
     },
 ];
 
@@ -12991,14 +12991,14 @@ mod tests {
     #[test]
     fn display_matrix_readiness_records_geometry_frames_and_idle_state() {
         let parsed = parse_display_matrix_readiness(
-            "plan\tdisplay-plan: output=640x240 scan=640x240 fb=320x240\nframes\t10\t12\nidle\tfalse\n",
+            "plan\tdisplay-plan: output=640x240 scan=640x240 fb=640x240\nframes\t10\t12\nidle\tfalse\n",
         )
         .unwrap();
         assert_eq!(
             parsed,
             DisplayMatrixReadiness {
                 output: (640, 240),
-                framebuffer: (320, 240),
+                framebuffer: (640, 240),
                 frames_before: 10,
                 frames_after: 12,
                 idle: false,
@@ -13008,14 +13008,24 @@ mod tests {
     }
 
     #[test]
-    fn display_matrix_geometry_rejects_wrong_framebuffer() {
-        let mode = DISPLAY_MATRIX_MODES
-            .iter()
-            .find(|mode| mode.id == "crt-240p60")
-            .copied()
-            .unwrap();
-        assert!(validate_display_matrix_geometry(mode, (640, 240), (320, 240)).is_ok());
-        assert!(validate_display_matrix_geometry(mode, (640, 240), (640, 240)).is_err());
+    fn display_matrix_geometry_requires_native_crt_framebuffers() {
+        for (id, height, retired_framebuffer) in [
+            ("crt-240p60", 240, (320, 240)),
+            ("crt-288p50", 288, (384, 288)),
+            ("crt-480p60", 480, (320, 480)),
+            ("crt-576p50", 576, (640, 480)),
+        ] {
+            let mode = DISPLAY_MATRIX_MODES
+                .iter()
+                .find(|mode| mode.id == id)
+                .copied()
+                .unwrap();
+            assert!(validate_display_matrix_geometry(mode, (640, height), (640, height)).is_ok());
+            assert!(
+                validate_display_matrix_geometry(mode, (640, height), retired_framebuffer).is_err()
+            );
+        }
+
         let hdmi = DISPLAY_MATRIX_MODES
             .iter()
             .find(|mode| mode.id == "hdmi-1366x768p60")
