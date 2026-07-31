@@ -2393,7 +2393,10 @@ pub(super) fn run_launcher_loop(
             continue;
         }
         let loop_start = Instant::now();
-        slint::platform::update_timers_and_animations();
+        let navigation_snapshot_locked_at_loop_start = navigation_transition.snapshot_locked();
+        if !navigation_snapshot_locked_at_loop_start {
+            slint::platform::update_timers_and_animations();
+        }
         let mut full_bridge_dirty = std::mem::take(&mut navigation_source_bridge_sync_pending);
         if let Some(collection_id) = deferred_navigation_hydration_finish.take() {
             nav.catalog_system_hydration_finished(&collection_id);
@@ -4546,7 +4549,10 @@ pub(super) fn run_launcher_loop(
             .as_ref()
             .map(|(_, _, wait_us)| *wait_us)
             .unwrap_or(0);
-        update_slint_animations(animation_clock);
+        let navigation_snapshot_locked_before_render = navigation_transition.snapshot_locked();
+        if !navigation_snapshot_locked_before_render {
+            update_slint_animations(animation_clock);
+        }
         let mut layer_target = LayerTarget::new(target, ui);
         let cpu_t1 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let frame_t1 = Instant::now();
@@ -4873,6 +4879,8 @@ pub(super) fn run_launcher_loop(
                 })
             }
         } else if screensaver.active {
+            None
+        } else if navigation_snapshot_locked_before_render {
             None
         } else {
             expand_home_pan_dirty_rect(

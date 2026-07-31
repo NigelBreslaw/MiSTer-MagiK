@@ -1142,6 +1142,13 @@ impl NavigationTransitionPoc {
         self.buffers.destination_ready()
     }
 
+    /// The cached source and destination now own every visible transition pixel.
+    /// Slint must retain its pending redraw without advancing or rasterizing until
+    /// this playback settles.
+    pub const fn snapshot_locked(&self) -> bool {
+        self.is_active() && self.pending_request.is_none() && self.buffers.destination_ready()
+    }
+
     pub const fn last_render_stats(&self) -> NavigationTransitionRenderStats {
         self.last_render_stats
     }
@@ -5590,9 +5597,11 @@ mod tests {
         let preparing = poc.tick(900_000);
         assert_eq!(preparing.phase, NavigationTransitionPhase::Capture);
         assert_eq!(preparing.progress_q16, 0);
+        assert!(!poc.snapshot_locked());
         assert_eq!(poc.render().unwrap(), source);
 
         poc.capture_destination(&destination, 900_000).unwrap();
+        assert!(poc.snapshot_locked());
         let first_animation_frame = poc.tick(900_000);
         assert_eq!(
             first_animation_frame.phase,
@@ -5600,6 +5609,10 @@ mod tests {
         );
         assert_eq!(first_animation_frame.progress_q16, 0);
         assert_eq!(poc.render().unwrap(), source);
+        poc.tick(900_000 + NavigationTransitionEdge::HomeToConsoles.duration_us());
+        assert!(poc.snapshot_locked());
+        assert!(poc.complete().is_some());
+        assert!(!poc.snapshot_locked());
     }
 
     #[test]
