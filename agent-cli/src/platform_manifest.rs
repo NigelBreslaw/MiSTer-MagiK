@@ -173,6 +173,16 @@ pub struct InstalledManifest {
 
 impl InstalledManifest {
     #[must_use]
+    pub fn qualification_candidate_id(&self) -> &str {
+        &self.values["qualification_candidate_id"]
+    }
+
+    #[must_use]
+    pub fn platform_bundle_id(&self) -> &str {
+        &self.values["platform_bundle_id"]
+    }
+
+    #[must_use]
     pub fn main_sha256(&self) -> &str {
         &self.values["main_sha256"]
     }
@@ -185,6 +195,11 @@ impl InstalledManifest {
     #[must_use]
     pub fn magik_revision(&self) -> &str {
         &self.values["magik_revision"]
+    }
+
+    #[must_use]
+    pub fn gui_sha256(&self) -> &str {
+        &self.values["gui_sha256"]
     }
 
     #[must_use]
