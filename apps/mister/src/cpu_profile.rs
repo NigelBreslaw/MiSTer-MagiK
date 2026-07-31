@@ -11,7 +11,30 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
 
 const SCREENSAVER_TRIGGER: &str = "screensaver";
+const NAVIGATION_TRANSITIONS_TRIGGER: &str = "navigation-transitions";
 const DEFAULT_SCREENSAVER_PROFILE_SECS: u64 = 30;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BoundedProfileTrigger {
+    Screensaver,
+    NavigationTransitions,
+}
+
+impl BoundedProfileTrigger {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Screensaver => SCREENSAVER_TRIGGER,
+            Self::NavigationTransitions => NAVIGATION_TRANSITIONS_TRIGGER,
+        }
+    }
+
+    const fn schema(self) -> &'static str {
+        match self {
+            Self::Screensaver => "mister-magik-screensaver-pprof-v1",
+            Self::NavigationTransitions => "mister-magik-navigation-transitions-pprof-v1",
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -59,9 +82,25 @@ pub fn screensaver_profile_state() -> &'static str {
     }
 }
 
-fn screensaver_profile_requested() -> bool {
-    std::env::var("MISTER_PPROF").ok().as_deref() == Some("1")
-        && std::env::var("MISTER_PPROF_TRIGGER").ok().as_deref() == Some(SCREENSAVER_TRIGGER)
+fn bounded_profile_trigger() -> Option<BoundedProfileTrigger> {
+    bounded_profile_trigger_from_values(
+        std::env::var("MISTER_PPROF").ok().as_deref(),
+        std::env::var("MISTER_PPROF_TRIGGER").ok().as_deref(),
+    )
+}
+
+fn bounded_profile_trigger_from_values(
+    enabled: Option<&str>,
+    trigger: Option<&str>,
+) -> Option<BoundedProfileTrigger> {
+    if enabled != Some("1") {
+        return None;
+    }
+    match trigger {
+        Some(SCREENSAVER_TRIGGER) => Some(BoundedProfileTrigger::Screensaver),
+        Some(NAVIGATION_TRANSITIONS_TRIGGER) => Some(BoundedProfileTrigger::NavigationTransitions),
+        _ => None,
+    }
 }
 
 fn screensaver_profile_duration() -> Duration {
@@ -96,8 +135,8 @@ pub struct CpuProfileSummary {
 #[cfg(feature = "profile")]
 mod imp {
     use super::{
-        CpuProfileSummary, ScreensaverProfileState, screensaver_profile_duration,
-        screensaver_profile_frame_bounds, screensaver_profile_requested,
+        BoundedProfileTrigger, CpuProfileSummary, ScreensaverProfileState, bounded_profile_trigger,
+        screensaver_profile_duration, screensaver_profile_frame_bounds,
         set_screensaver_profile_state,
     };
     use serde_json::json;
@@ -115,7 +154,7 @@ mod imp {
         if std::env::var("MISTER_PPROF").ok().as_deref() != Some("1") {
             return None;
         }
-        if screensaver_profile_requested() {
+        if bounded_profile_trigger().is_some() {
             return None;
         }
         start_enabled()
@@ -246,14 +285,15 @@ mod imp {
 
     pub struct ScreensaverProfiler {
         state: State,
+        trigger: Option<BoundedProfileTrigger>,
         duration: Duration,
         complete_path: Option<String>,
     }
 
     impl ScreensaverProfiler {
         pub fn from_env() -> Self {
-            let requested = screensaver_profile_requested();
-            let state = if requested {
+            let trigger = bounded_profile_trigger();
+            let state = if trigger.is_some() {
                 set_screensaver_profile_state(ScreensaverProfileState::Waiting);
                 State::Waiting
             } else {
@@ -262,13 +302,22 @@ mod imp {
             };
             Self {
                 state,
+                trigger,
                 duration: screensaver_profile_duration(),
                 complete_path: std::env::var("MISTER_PPROF_COMPLETE").ok(),
             }
         }
 
-        pub fn begin(&mut self, first_frame: u64) {
-            if !matches!(self.state, State::Waiting) {
+        pub fn begin_screensaver(&mut self, first_frame: u64) {
+            self.begin(BoundedProfileTrigger::Screensaver, first_frame);
+        }
+
+        pub fn begin_navigation_transition(&mut self, first_frame: u64) {
+            self.begin(BoundedProfileTrigger::NavigationTransitions, first_frame);
+        }
+
+        fn begin(&mut self, trigger: BoundedProfileTrigger, first_frame: u64) {
+            if self.trigger != Some(trigger) || !matches!(self.state, State::Waiting) {
                 return;
             }
             match start_enabled() {
@@ -307,8 +356,12 @@ mod imp {
                 screensaver_profile_frame_bounds(first_frame, next_frame);
             match finish(Some(profiler)) {
                 Ok(Some(summary)) => {
+                    let trigger = self
+                        .trigger
+                        .expect("active bounded profile must retain its trigger");
                     let metadata = json!({
-                        "schema": "mister-magik-screensaver-pprof-v1",
+                        "schema": trigger.schema(),
+                        "trigger": trigger.label(),
                         "state": "complete",
                         "duration_secs": summary.duration_secs,
                         "hz": summary.hz,
@@ -332,8 +385,10 @@ mod imp {
         }
 
         fn fail(&mut self, error: &str) {
+            let trigger = self.trigger.unwrap_or(BoundedProfileTrigger::Screensaver);
             let metadata = json!({
-                "schema": "mister-magik-screensaver-pprof-v1",
+                "schema": trigger.schema(),
+                "trigger": trigger.label(),
                 "state": "failed",
                 "error": error,
             });
@@ -361,7 +416,7 @@ pub use imp::{ScreensaverProfiler, finish, start};
 #[cfg(not(feature = "profile"))]
 mod stub {
     use super::{
-        CpuProfileSummary, ScreensaverProfileState, screensaver_profile_requested,
+        CpuProfileSummary, ScreensaverProfileState, bounded_profile_trigger,
         set_screensaver_profile_state,
     };
 
@@ -385,7 +440,7 @@ mod stub {
 
     impl ScreensaverProfiler {
         pub fn from_env() -> Self {
-            set_screensaver_profile_state(if screensaver_profile_requested() {
+            set_screensaver_profile_state(if bounded_profile_trigger().is_some() {
                 ScreensaverProfileState::Failed
             } else {
                 ScreensaverProfileState::Disabled
@@ -393,7 +448,9 @@ mod stub {
             Self
         }
 
-        pub fn begin(&mut self, _first_frame: u64) {}
+        pub fn begin_screensaver(&mut self, _first_frame: u64) {}
+
+        pub fn begin_navigation_transition(&mut self, _first_frame: u64) {}
 
         pub fn poll(&mut self, _next_frame: u64) {}
     }
@@ -426,5 +483,25 @@ mod tests {
     fn screensaver_profile_frame_bounds_are_inclusive() {
         assert_eq!(screensaver_profile_frame_bounds(475, 2_240), (475, 2_239));
         assert_eq!(screensaver_profile_frame_bounds(475, 475), (475, 475));
+    }
+
+    #[test]
+    fn bounded_profile_trigger_accepts_only_owned_triggers() {
+        assert_eq!(
+            bounded_profile_trigger_from_values(Some("1"), Some("screensaver")),
+            Some(BoundedProfileTrigger::Screensaver)
+        );
+        assert_eq!(
+            bounded_profile_trigger_from_values(Some("1"), Some("navigation-transitions")),
+            Some(BoundedProfileTrigger::NavigationTransitions)
+        );
+        assert_eq!(
+            bounded_profile_trigger_from_values(Some("0"), Some("navigation-transitions")),
+            None
+        );
+        assert_eq!(
+            bounded_profile_trigger_from_values(Some("1"), Some("unowned")),
+            None
+        );
     }
 }

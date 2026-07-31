@@ -3785,6 +3785,8 @@ fn catalog_lifecycle_input_script() -> String {
 }
 
 const NAVIGATION_TRANSITION_PROFILE_SECS: u64 = 14;
+const NAVIGATION_TRANSITION_PROFILE_REMOTE_DIR: &str =
+    "/tmp/mister-magik/navigation-transition-profile";
 
 fn profile_installed_navigation_transitions(
     config: &NativeDeviceConfig,
@@ -3792,7 +3794,21 @@ fn profile_installed_navigation_transitions(
 ) -> Result<String> {
     fs::create_dir_all(output_dir)?;
     let run_result = (|| {
+        let remote_svg = format!("{NAVIGATION_TRANSITION_PROFILE_REMOTE_DIR}/profile.svg");
+        let remote_folded = format!("{NAVIGATION_TRANSITION_PROFILE_REMOTE_DIR}/profile.folded");
+        let remote_complete = format!("{NAVIGATION_TRANSITION_PROFILE_REMOTE_DIR}/profile.json");
         let session = connect_with(&config.connection, 10)?;
+        exec_checked(
+            &session,
+            "reset navigation transition profile artifacts",
+            &format!(
+                "set -eu; mkdir -p {0}; rm -f {1} {2} {3}",
+                sh(NAVIGATION_TRANSITION_PROFILE_REMOTE_DIR),
+                sh(&remote_svg),
+                sh(&remote_folded),
+                sh(&remote_complete)
+            ),
+        )?;
         restart_launcher_with_one_shot_env(
             &session,
             LauncherRestartOptions {
@@ -3807,6 +3823,19 @@ fn profile_installed_navigation_transitions(
                         "MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES".into(),
                         "1".into(),
                     ),
+                    ("MISTER_PPROF".into(), "1".into()),
+                    (
+                        "MISTER_PPROF_TRIGGER".into(),
+                        "navigation-transitions".into(),
+                    ),
+                    (
+                        "MISTER_PPROF_DURATION_SECS".into(),
+                        NAVIGATION_TRANSITION_PROFILE_SECS.to_string(),
+                    ),
+                    ("MISTER_PPROF_HZ".into(), "99".into()),
+                    ("MISTER_PPROF_OUT".into(), remote_svg.clone()),
+                    ("MISTER_PPROF_FOLDED_OUT".into(), remote_folded.clone()),
+                    ("MISTER_PPROF_COMPLETE".into(), remote_complete.clone()),
                 ],
                 timeout_secs: 45,
                 remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
@@ -3814,9 +3843,36 @@ fn profile_installed_navigation_transitions(
             },
         )?;
         drop(session);
-        let telemetry = agent_telemetry_for_duration(
+        let telemetry = agent_telemetry_until_screensaver_profile_complete(
             &config.agent,
-            Duration::from_secs(NAVIGATION_TRANSITION_PROFILE_SECS),
+            Duration::from_secs(NAVIGATION_TRANSITION_PROFILE_SECS + 20),
+        )?;
+        let session = connect_with(&config.connection, 10)?;
+        let metadata = remote_read(&session, &remote_complete)
+            .ok_or("navigation transition profile completion metadata is missing")?;
+        let metadata_value: Value = serde_json::from_str(metadata.trim())?;
+        if metadata_value.get("schema").and_then(Value::as_str)
+            != Some("mister-magik-navigation-transitions-pprof-v1")
+            || metadata_value.get("state").and_then(Value::as_str) != Some("complete")
+            || metadata_value
+                .get("sample_hits")
+                .and_then(Value::as_i64)
+                .unwrap_or(0)
+                <= 0
+        {
+            return Err("navigation transition profile produced no CPU samples".into());
+        }
+        let svg = remote_read(&session, &remote_svg)
+            .filter(|text| !text.is_empty())
+            .ok_or("navigation transition profile SVG is missing")?;
+        let folded = remote_read(&session, &remote_folded)
+            .filter(|text| !text.is_empty())
+            .ok_or("navigation transition folded stacks are missing")?;
+        fs::write(output_dir.join("flamegraph.svg"), svg)?;
+        fs::write(output_dir.join("stacks.folded"), folded)?;
+        fs::write(
+            output_dir.join("profile.json"),
+            format!("{}\n", serde_json::to_string_pretty(&metadata_value)?),
         )?;
         let telemetry_text = telemetry
             .iter()
@@ -3827,7 +3883,7 @@ fn profile_installed_navigation_transitions(
             output_dir.join("telemetry.jsonl"),
             format!("{telemetry_text}\n"),
         )?;
-        summarize_navigation_transition_profile(output_dir, &telemetry)
+        summarize_navigation_transition_profile(output_dir, &telemetry, metadata_value)
     })();
     let restore_result = restore_installed_navigation_transition_profile(config);
     match (run_result, restore_result) {
@@ -3845,8 +3901,9 @@ fn profile_installed_navigation_transitions(
 fn restore_installed_navigation_transition_profile(config: &NativeDeviceConfig) -> Result<()> {
     let session = connect_with(&config.connection, 10)?;
     let cleanup = format!(
-        "rm -f {env} /tmp/mister-magik/realtime-frame-analytics",
+        "rm -f {env} /tmp/mister-magik/realtime-frame-analytics; rm -rf {profiles}",
         env = sh(DEVELOPMENT_LAUNCHER_ENV_REMOTE),
+        profiles = sh(NAVIGATION_TRANSITION_PROFILE_REMOTE_DIR),
     );
     exec_checked(&session, "navigation transition profile cleanup", &cleanup)?;
     launcher_restart(
@@ -3862,8 +3919,9 @@ fn restore_installed_navigation_transition_profile(config: &NativeDeviceConfig) 
         &session,
         "navigation transition profile final cleanup",
         &format!(
-            "{cleanup}; test ! -e {env}",
-            env = sh(DEVELOPMENT_LAUNCHER_ENV_REMOTE)
+            "{cleanup}; test ! -e {env}; test ! -e {profiles}",
+            env = sh(DEVELOPMENT_LAUNCHER_ENV_REMOTE),
+            profiles = sh(NAVIGATION_TRANSITION_PROFILE_REMOTE_DIR),
         ),
     )?;
     Ok(())
@@ -3872,6 +3930,7 @@ fn restore_installed_navigation_transition_profile(config: &NativeDeviceConfig) 
 fn summarize_navigation_transition_profile(
     output_dir: &Path,
     telemetry: &[Value],
+    cpu_profile: Value,
 ) -> Result<String> {
     use std::fmt::Write as _;
 
@@ -4000,8 +4059,11 @@ fn summarize_navigation_transition_profile(
         "all_legs_perfect_60": all_perfect,
         "transition_frames": transition_frames.len(),
         "system_combined_busy_pct_average": system_cpu_average,
+        "cpu_profile": cpu_profile,
         "legs": legs,
         "telemetry_file": "telemetry.jsonl",
+        "flamegraph_file": "flamegraph.svg",
+        "folded_stacks_file": "stacks.folded",
     });
     fs::write(
         output_dir.join("summary.json"),
@@ -4012,6 +4074,19 @@ fn summarize_navigation_transition_profile(
     writeln!(
         report,
         "Average combined CPU busy: **{system_cpu_average:.1}%**\n"
+    )?;
+    writeln!(
+        report,
+        "CPU samples: **{} hits across {} unique stacks at {} Hz**\n",
+        summary["cpu_profile"]["sample_hits"].as_i64().unwrap_or(0),
+        summary["cpu_profile"]["sample_stacks"]
+            .as_u64()
+            .unwrap_or(0),
+        summary["cpu_profile"]["hz"].as_i64().unwrap_or(0),
+    )?;
+    writeln!(
+        report,
+        "[Flamegraph](flamegraph.svg) · [Folded stacks](stacks.folded)\n"
     )?;
     writeln!(
         report,

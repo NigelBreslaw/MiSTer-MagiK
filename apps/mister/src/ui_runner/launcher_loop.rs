@@ -5256,10 +5256,13 @@ pub(super) fn run_launcher_loop(
             presentation.main_present_status,
             presentation.main_present_copy_path,
         );
+        if navigation_transition_frame_active && visible_frame_presented {
+            screensaver_cpu_profile.begin_navigation_transition(frames.saturating_add(1));
+        }
         if screensaver.active && visible_frame_presented {
             // Profile only completed screensaver output. Starting when Preview is pressed
             // includes loader/render-worker startup frames that have no presentation evidence.
-            screensaver_cpu_profile.begin(frames.saturating_add(1));
+            screensaver_cpu_profile.begin_screensaver(frames.saturating_add(1));
             if screensaver_first_render_logged && !screensaver_first_present_logged {
                 screensaver_first_present_logged = true;
                 if let Some(started) = screensaver_show_started {
