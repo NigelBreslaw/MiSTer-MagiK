@@ -25,14 +25,15 @@ void mister_magik_scanline_neon_darken_7_8(
     size_t vector_end = count & ~(size_t)7;
     const uint16x8_t red_blue_mask = vdupq_n_u16(0x001f);
     const uint16x8_t green_mask = vdupq_n_u16(0x003f);
+    const uint16x8_t seven = vdupq_n_u16(7);
     for (size_t index = 0; index < vector_end; index += 8) {
         uint16x8_t packed = vld1q_u16(pixels + index);
         uint16x8_t red = vshrq_n_u16(packed, 11);
         uint16x8_t green = vandq_u16(vshrq_n_u16(packed, 5), green_mask);
         uint16x8_t blue = vandq_u16(packed, red_blue_mask);
-        red = vshrq_n_u16(vmulq_n_u16(red, 7), 3);
-        green = vshrq_n_u16(vmulq_n_u16(green, 7), 3);
-        blue = vshrq_n_u16(vmulq_n_u16(blue, 7), 3);
+        red = vshrq_n_u16(vmulq_u16(red, seven), 3);
+        green = vshrq_n_u16(vmulq_u16(green, seven), 3);
+        blue = vshrq_n_u16(vmulq_u16(blue, seven), 3);
         uint16x8_t darkened = vorrq_u16(
             vshlq_n_u16(red, 11),
             vorrq_u16(vshlq_n_u16(green, 5), blue)
