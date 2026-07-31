@@ -12,6 +12,13 @@ const SUPER_SCALER_COVER_PROGRESS: u16 = 31_457;
 const CRT_SWEEP_END_Q16: u16 = 13_107;
 const CRT_CLEAR_START_Q16: u16 = 52_428;
 const CRT_SCANLINE_PERIOD_ROWS: usize = 3;
+const SYSTEM_ROW_OFFSCREEN_MARGIN: isize = 24;
+const SYSTEM_ROW_DISTANCE_MARGIN: isize = 12;
+// The system-browser reveal owns roughly 755 ms of the 1.44 second transition.
+// These Q16 windows therefore correspond to a 220 ms spring and 36 ms stagger.
+const SYSTEM_ROW_TRAVEL_Q16: u16 = 19_100;
+const SYSTEM_ROW_STAGGER_Q16: u16 = 3_125;
+const SYSTEM_SELECTED_ROW_START_Q16: u16 = 6_000;
 const DEFAULT_PREPARATION_TIMEOUT_US: u64 = 5_000_000;
 const HUD_WIDTH: usize = 286;
 const HUD_HEIGHT: usize = 28;
@@ -1870,19 +1877,23 @@ fn reveal_destination_regions(
         let list = request.geometry.destination_list;
         let selected = request.geometry.destination_selected_row;
         let row_height = selected.height as usize;
-        copy_rect_shifted_x_with_overshoot(
+        copy_rect_shifted_x(
             working,
             destination,
             width,
             height,
             selected,
-            spring_ease_q16(window_q16(progress_q16, 10_000, 28_000)),
-            -(selected.right() as isize),
-            10,
+            spring_ease_q16(window_q16(
+                progress_q16,
+                SYSTEM_SELECTED_ROW_START_Q16,
+                SYSTEM_SELECTED_ROW_START_Q16.saturating_add(SYSTEM_ROW_TRAVEL_Q16),
+            )),
+            -(selected.right() as isize + SYSTEM_ROW_OFFSCREEN_MARGIN),
             stats,
         );
         for distance in 1usize..9 {
-            let start = 22_000u16.saturating_add(((distance - 1) * 4_500) as u16);
+            let start = SYSTEM_SELECTED_ROW_START_Q16
+                .saturating_add((distance as u16).saturating_mul(SYSTEM_ROW_STAGGER_Q16));
             for below in [true, false] {
                 let Some(y) = (if below {
                     (selected.y as usize).checked_add(distance.saturating_mul(row_height))
@@ -1894,21 +1905,28 @@ fn reveal_destination_regions(
                 if y < list.y as usize || y >= list.bottom() as usize {
                     continue;
                 }
+                let row = NavigationTransitionRect {
+                    x: list.x,
+                    y: y as u16,
+                    width: list.width,
+                    height: row_height
+                        .min(list.bottom() as usize - y)
+                        .min(height.saturating_sub(y)) as u16,
+                };
                 copy_rect_shifted_x(
                     working,
                     destination,
                     width,
                     height,
-                    NavigationTransitionRect {
-                        x: list.x,
-                        y: y as u16,
-                        width: list.width,
-                        height: row_height
-                            .min(list.bottom() as usize - y)
-                            .min(height.saturating_sub(y)) as u16,
-                    },
-                    spring_ease_q16(window_q16(progress_q16, start, start.saturating_add(7_500))),
-                    -(list.width as isize + distance as isize * 12),
+                    row,
+                    spring_ease_q16(window_q16(
+                        progress_q16,
+                        start,
+                        start.saturating_add(SYSTEM_ROW_TRAVEL_Q16),
+                    )),
+                    -(row.right() as isize
+                        + SYSTEM_ROW_OFFSCREEN_MARGIN
+                        + distance as isize * SYSTEM_ROW_DISTANCE_MARGIN),
                     stats,
                 );
             }
@@ -2559,34 +2577,6 @@ fn copy_rect_shifted_x(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn copy_rect_shifted_x_with_overshoot(
-    working: &mut [Rgb565Pixel],
-    source: &[Rgb565Pixel],
-    width: usize,
-    height: usize,
-    rect: NavigationTransitionRect,
-    progress_q16: u16,
-    initial_offset: isize,
-    overshoot: isize,
-    stats: &mut NavigationTransitionRenderStats,
-) {
-    if progress_q16 == 0 {
-        return;
-    }
-    let offset = if progress_q16 <= 34_000 {
-        let motion = spring_ease_q16(window_q16(progress_q16, 0, 34_000)) as i64;
-        initial_offset as i64
-            + (overshoot as i64 - initial_offset as i64) * motion / PROGRESS_MAX as i64
-    } else if progress_q16 <= 50_000 {
-        overshoot as i64
-    } else {
-        let settle = spring_ease_q16(window_q16(progress_q16, 50_000, PROGRESS_MAX)) as i64;
-        overshoot as i64 * (PROGRESS_MAX as i64 - settle) / PROGRESS_MAX as i64
-    };
-    copy_rect_at_offset(working, source, width, height, rect, offset as isize, stats);
-}
-
-#[allow(clippy::too_many_arguments)]
 fn copy_rect_at_offset(
     working: &mut [Rgb565Pixel],
     source: &[Rgb565Pixel],
@@ -3050,41 +3040,6 @@ fn slide_rect_out_left(
 
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
-fn slide_rect_out_left_with_recoil(
-    working: &mut [Rgb565Pixel],
-    source: &[Rgb565Pixel],
-    width: usize,
-    height: usize,
-    rect: NavigationTransitionRect,
-    progress_q16: u16,
-    recoil: isize,
-    shell: Rgb565Pixel,
-    stats: &mut NavigationTransitionRenderStats,
-) {
-    let Some(rect) = clip_rect_to_frame(rect, width, height) else {
-        return;
-    };
-    if progress_q16 == 0
-        || working.len() != source.len()
-        || working.len() != width.saturating_mul(height)
-    {
-        return;
-    }
-    fill_rect_565(working, width, height, rect, shell, stats);
-    let offset = if progress_q16 <= 10_000 {
-        recoil as i64 * spring_ease_q16(window_q16(progress_q16, 0, 10_000)) as i64
-            / PROGRESS_MAX as i64
-    } else if progress_q16 <= 18_000 {
-        recoil as i64
-    } else {
-        let launch = spring_ease_q16(window_q16(progress_q16, 18_000, PROGRESS_MAX)) as i64;
-        recoil as i64 + (-(rect.right() as i64) - recoil as i64) * launch / PROGRESS_MAX as i64
-    };
-    copy_rect_at_offset(working, source, width, height, rect, offset as isize, stats);
-}
-
-#[cfg(test)]
-#[allow(clippy::too_many_arguments)]
 fn close_preview_aperture(
     working: &mut [Rgb565Pixel],
     source: &[Rgb565Pixel],
@@ -3334,14 +3289,13 @@ fn conceal_source_regions(
                 );
             }
         }
-        slide_rect_out_left_with_recoil(
+        slide_rect_out_left(
             working,
             source,
             width,
             height,
             selected,
             spring_ease_q16(window_q16(progress_q16, 34_000, 51_000)),
-            6,
             shell,
             stats,
         );
@@ -4053,7 +4007,7 @@ mod tests {
     }
 
     #[test]
-    fn super_scaler_spatial_windows_use_only_the_smooth_spring() {
+    fn super_scaler_visual_windows_use_only_the_smooth_spring() {
         let source = include_str!("navigation_transition.rs");
         let production = source
             .rsplit_once("\n#[cfg(test)]\nmod tests {")
@@ -4061,11 +4015,13 @@ mod tests {
             .0;
         assert!(!production.contains("smoothstep_q16"));
         assert!(!production.contains("ease_out_cubic_q16"));
+        assert!(!production.contains("with_overshoot"));
+        assert!(!production.contains("recoil"));
         for (line_number, line) in production.lines().enumerate() {
             if line.contains("window_q16(") && !line.contains("fn window_q16(") {
                 assert!(
                     line.contains("spring_ease_q16(window_q16("),
-                    "raw-linear movement window at source line {}: {line}",
+                    "raw-linear visual window at source line {}: {line}",
                     line_number + 1
                 );
             }
@@ -4898,7 +4854,7 @@ mod tests {
     }
 
     #[test]
-    fn selected_row_overshoots_then_settles_to_its_exact_destination() {
+    fn selected_row_enters_monotonically_and_settles_exactly() {
         let width = 32;
         let height = 8;
         let rect = NavigationTransitionRect {
@@ -4909,35 +4865,37 @@ mod tests {
         };
         let mut source = vec![Rgb565Pixel(0); width * height];
         source[3 * width + 8..3 * width + 16].fill(Rgb565Pixel(0xaaaa));
-        let mut overshot = vec![Rgb565Pixel(0); width * height];
         let mut stats = NavigationTransitionRenderStats::default();
-
-        copy_rect_shifted_x_with_overshoot(
-            &mut overshot,
-            &source,
-            width,
-            height,
-            rect,
-            40_000,
-            -(rect.right() as isize),
-            6,
-            &mut stats,
-        );
-        assert_eq!(overshot[3 * width + 14], Rgb565Pixel(0xaaaa));
-        assert_eq!(overshot[3 * width + 8], Rgb565Pixel(0));
-
-        let mut settled = vec![Rgb565Pixel(0); width * height];
-        copy_rect_shifted_x_with_overshoot(
-            &mut settled,
-            &source,
-            width,
-            height,
-            rect,
-            PROGRESS_MAX,
-            -(rect.right() as isize),
-            6,
-            &mut stats,
-        );
+        let initial_offset = -(rect.right() as isize + SYSTEM_ROW_OFFSCREEN_MARGIN);
+        let mut previous_right = 0;
+        let mut settled = Vec::new();
+        for phase in [0, 8_000, 16_000, 24_000, 32_000, 48_000, PROGRESS_MAX] {
+            let mut frame = vec![Rgb565Pixel(0); width * height];
+            copy_rect_shifted_x(
+                &mut frame,
+                &source,
+                width,
+                height,
+                rect,
+                spring_ease_q16(phase),
+                initial_offset,
+                &mut stats,
+            );
+            let right = frame[3 * width..4 * width]
+                .iter()
+                .rposition(|pixel| *pixel == Rgb565Pixel(0xaaaa))
+                .map_or(0, |x| x + 1);
+            assert!(
+                right >= previous_right,
+                "row moved backwards at phase {phase}"
+            );
+            assert!(
+                right <= rect.right() as usize,
+                "row overshot its destination"
+            );
+            previous_right = right;
+            settled = frame;
+        }
         assert_eq!(
             &settled[3 * width + 8..3 * width + 16],
             &source[3 * width + 8..3 * width + 16]
@@ -4945,7 +4903,7 @@ mod tests {
     }
 
     #[test]
-    fn reverse_selected_row_recoils_for_a_frame_then_exits_with_clipping() {
+    fn reverse_selected_row_exits_monotonically_without_recoil() {
         let width = 32;
         let height = 8;
         let shell = Rgb565Pixel(0x2222);
@@ -4960,47 +4918,28 @@ mod tests {
             source[3 * width + x] = Rgb565Pixel(x as u16);
         }
         let mut stats = NavigationTransitionRenderStats::default();
-        let mut unchanged = source.clone();
-        slide_rect_out_left_with_recoil(
-            &mut unchanged,
-            &source,
-            width,
-            height,
-            rect,
-            0,
-            6,
-            shell,
-            &mut stats,
-        );
-        assert_eq!(unchanged, source);
-
-        let mut recoiled = source.clone();
-        slide_rect_out_left_with_recoil(
-            &mut recoiled,
-            &source,
-            width,
-            height,
-            rect,
-            14_000,
-            6,
-            shell,
-            &mut stats,
-        );
-        assert_eq!(recoiled[3 * width + 30], Rgb565Pixel(24));
-        assert_eq!(recoiled[3 * width + 31], Rgb565Pixel(25));
-
+        let mut previous_left = rect.x as usize;
         let mut gone = source.clone();
-        slide_rect_out_left_with_recoil(
-            &mut gone,
-            &source,
-            width,
-            height,
-            rect,
-            PROGRESS_MAX,
-            6,
-            shell,
-            &mut stats,
-        );
+        for phase in [0, 8_000, 16_000, 24_000, 32_000, 48_000, PROGRESS_MAX] {
+            let mut frame = source.clone();
+            slide_rect_out_left(
+                &mut frame,
+                &source,
+                width,
+                height,
+                rect,
+                spring_ease_q16(phase),
+                shell,
+                &mut stats,
+            );
+            let left = frame[3 * width..4 * width]
+                .iter()
+                .position(|pixel| *pixel != shell && *pixel != Rgb565Pixel(0))
+                .unwrap_or(0);
+            assert!(left <= previous_left, "row recoiled at phase {phase}");
+            previous_left = left;
+            gone = frame;
+        }
         assert!(
             gone[3 * width + 24..3 * width + 32]
                 .iter()
