@@ -819,7 +819,7 @@ mod macos {
                 }
                 self.launcher_nav.absorb_input(&self.launcher_pad);
                 let transition_frame = self.navigation_transition.tick(now_us);
-                if transition_frame.phase == NavigationTransitionPhase::Covered
+                if transition_frame.phase == NavigationTransitionPhase::Capture
                     && !self.pending_navigation_committed
                 {
                     let committed = self.pending_navigation_event.as_ref().is_some_and(|event| {
@@ -979,7 +979,7 @@ mod macos {
             {
                 if self
                     .navigation_transition
-                    .capture_destination(self.frame_target.cached_565())
+                    .capture_destination(self.frame_target.cached_565(), now_us)
                     .is_err()
                 {
                     self.navigation_transition.settle_at_destination();

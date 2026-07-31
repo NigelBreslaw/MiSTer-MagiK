@@ -2959,7 +2959,7 @@ pub(super) fn run_launcher_loop(
                 .as_micros()
                 .min(u64::MAX as u128) as u64;
             let transition_frame = navigation_transition.tick(now_us);
-            let should_commit = transition_frame.phase == NavigationTransitionPhase::Covered
+            let should_commit = transition_frame.phase == NavigationTransitionPhase::Capture
                 && pending_navigation_transition
                     .as_ref()
                     .is_some_and(|pending| !pending.committed);
@@ -4958,15 +4958,21 @@ pub(super) fn run_launcher_loop(
         if preview_transition_trace.active {
             request_launcher_redraw!();
         }
-        let navigation_transition_frame_active = navigation_transition.is_active();
+        let navigation_transition_composition_active = navigation_transition.is_active();
+        let navigation_transition_frame_active = navigation_transition_composition_active
+            && navigation_transition.frame().phase != NavigationTransitionPhase::Capture;
         let (navigation_transition_edge, navigation_transition_direction) =
-            navigation_transition.request().map_or(("", ""), |request| {
-                (request.edge.label(), request.direction.label())
-            });
+            if navigation_transition_frame_active {
+                navigation_transition.request().map_or(("", ""), |request| {
+                    (request.edge.label(), request.direction.label())
+                })
+            } else {
+                ("", "")
+            };
         let navigation_transition_frame_started =
             navigation_transition_frame_active.then_some(loop_start);
         let mut navigation_transition_render_us = 0u128;
-        if navigation_transition_frame_active {
+        if navigation_transition_composition_active {
             let navigation_transition_compositor_started = Instant::now();
             navigation_transition.capture_hud(layer_target.cached_frame_view().pixels());
             let now_us = loop_start
@@ -5017,7 +5023,7 @@ pub(super) fn run_launcher_loop(
                 }
                 if destination_layers_ready {
                     if navigation_transition
-                        .capture_destination(layer_target.cached_frame_view().pixels())
+                        .capture_destination(layer_target.cached_frame_view().pixels(), now_us)
                         .is_err()
                     {
                         navigation_transition.settle_at_destination();
@@ -5150,7 +5156,7 @@ pub(super) fn run_launcher_loop(
         let startup_can_present = lifecycle.startup_can_present_frame();
         let stream_motion_active = stream_motion_before_render
             || preview_transition_trace.active
-            || navigation_transition_frame_active;
+            || navigation_transition_composition_active;
         let direct_hidden_present_mode =
             screensaver_direct_pipeline.is_some() || direct_hidden_exit_pending;
         let present_cycle = launcher_presenter.present(

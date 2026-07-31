@@ -774,6 +774,10 @@ pub struct NavigationTransitionBuffers {
     source: Vec<Rgb565Pixel>,
     destination: Vec<Rgb565Pixel>,
     working: Vec<Rgb565Pixel>,
+    scale_source_x: Vec<usize>,
+    scale_source_y: Vec<usize>,
+    scale_excluded_x: Vec<bool>,
+    scale_dither_x: Vec<bool>,
     source_ready: bool,
     destination_ready: bool,
 }
@@ -793,6 +797,10 @@ impl NavigationTransitionBuffers {
         self.source.resize(len, Rgb565Pixel(0));
         self.destination.resize(len, Rgb565Pixel(0));
         self.working.resize(len, Rgb565Pixel(0));
+        self.scale_source_x.resize(width, 0);
+        self.scale_source_y.resize(height, 0);
+        self.scale_excluded_x.resize(width, false);
+        self.scale_dither_x.resize(width.saturating_mul(4), false);
         self.width = width;
         self.height = height;
         self.clear_ready();
@@ -888,6 +896,10 @@ pub struct NavigationTransitionPoc {
     enabled: bool,
     duration_override_us: Option<u64>,
     controller: NavigationTransitionController,
+    pending_request: Option<NavigationTransitionRequest>,
+    pending_capture_us: u64,
+    pending_started_us: u64,
+    pending_prepare_started: Option<Instant>,
     buffers: NavigationTransitionBuffers,
     geometry_history: [Option<NavigationTransitionGeometry>; 3],
     last_render_stats: NavigationTransitionRenderStats,
@@ -914,6 +926,10 @@ impl NavigationTransitionPoc {
             enabled,
             duration_override_us: None,
             controller: NavigationTransitionController::default(),
+            pending_request: None,
+            pending_capture_us: 0,
+            pending_started_us: 0,
+            pending_prepare_started: None,
             buffers: NavigationTransitionBuffers::new(buffer_width, buffer_height),
             geometry_history: [None; 3],
             last_render_stats: NavigationTransitionRenderStats::default(),
@@ -946,7 +962,7 @@ impl NavigationTransitionPoc {
         source: &[Rgb565Pixel],
         now_us: u64,
     ) -> Result<bool, NavigationTransitionFailure> {
-        if !self.enabled || self.controller.is_active() {
+        if !self.enabled || self.is_active() {
             return Ok(false);
         }
         if direction == NavigationTransitionDirection::Forward {
@@ -960,10 +976,10 @@ impl NavigationTransitionPoc {
         if let Some(duration_us) = self.duration_override_us {
             request.duration_us = duration_us;
         }
-        if !self.controller.begin(request, now_us) {
-            return Ok(false);
-        }
-        self.controller.captured(now_us, capture_us);
+        self.pending_request = Some(request);
+        self.pending_capture_us = capture_us;
+        self.pending_started_us = now_us;
+        self.pending_prepare_started = Some(Instant::now());
         Ok(true)
     }
 
@@ -977,29 +993,57 @@ impl NavigationTransitionPoc {
     pub fn capture_destination(
         &mut self,
         destination: &[Rgb565Pixel],
+        now_us: u64,
     ) -> Result<(), NavigationTransitionFailure> {
-        let prepare_started = Instant::now();
         self.buffers.capture_destination(destination)?;
-        self.controller.note_destination_prepared(
-            prepare_started.elapsed().as_micros().min(u64::MAX as u128) as u64,
-        );
+        let prepare_us = self
+            .pending_prepare_started
+            .take()
+            .map(|started| started.elapsed().as_micros().min(u64::MAX as u128) as u64)
+            .unwrap_or(0);
+        if self.activate_pending(now_us) {
+            self.controller.note_destination_prepared(prepare_us);
+        }
         Ok(())
     }
 
     pub fn tick(&mut self, now_us: u64) -> NavigationTransitionFrame {
+        if let Some(request) = self.pending_request {
+            if now_us.saturating_sub(self.pending_started_us) >= request.preparation_timeout_us {
+                self.activate_pending(now_us);
+                self.controller
+                    .fail(NavigationTransitionFailure::DestinationTimeout, now_us);
+                return self.controller.frame();
+            }
+            return self.frame();
+        }
         self.controller
             .tick(now_us, self.buffers.destination_ready())
     }
 
     pub fn render(&mut self) -> Result<&[Rgb565Pixel], NavigationTransitionFailure> {
-        let request = self
-            .controller
-            .request()
-            .ok_or(NavigationTransitionFailure::SnapshotSizeMismatch)?;
-        let frame = self.controller.frame();
         let started = Instant::now();
-        let mut stats = render_super_scaler_shell(&mut self.buffers, request, frame)?;
-        render_hero_label_last(&mut self.buffers, request, frame, &mut stats)?;
+        let Some(request) = self.request() else {
+            return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
+        };
+        let frame = self.frame();
+        let mut stats = if self.pending_request.is_some() {
+            if !self.buffers.source_ready || self.buffers.working.len() != self.buffers.source.len()
+            {
+                return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
+            }
+            self.buffers
+                .working
+                .copy_from_slice(self.buffers.source.as_slice());
+            NavigationTransitionRenderStats {
+                copied_pixels: self.buffers.source.len() as u64,
+                ..NavigationTransitionRenderStats::default()
+            }
+        } else {
+            let mut stats = render_super_scaler_shell(&mut self.buffers, request, frame)?;
+            render_hero_label_last(&mut self.buffers, request, frame, &mut stats)?;
+            stats
+        };
         let overlay_started = Instant::now();
         apply_crt_scanline_overlay(
             self.buffers.working.as_mut_slice(),
@@ -1039,10 +1083,16 @@ impl NavigationTransitionPoc {
     }
 
     pub fn request_reverse(&mut self, now_us: u64) -> bool {
+        if self.pending_request.is_some() {
+            self.activate_pending(now_us);
+        }
         self.controller.request_reverse(now_us)
     }
 
     pub fn settle_at_destination(&mut self) -> bool {
+        if self.pending_request.is_some() {
+            self.activate_pending(self.pending_started_us);
+        }
         self.controller.settle_at_destination()
     }
 
@@ -1051,6 +1101,9 @@ impl NavigationTransitionPoc {
     }
 
     pub fn cancel_for_exclusive_view(&mut self) -> Option<NavigationTransitionEndpoint> {
+        if self.pending_request.is_some() {
+            self.activate_pending(self.pending_started_us);
+        }
         self.controller
             .cancel_for_exclusive_view(self.buffers.destination_ready())
     }
@@ -1060,15 +1113,22 @@ impl NavigationTransitionPoc {
     }
 
     pub fn frame(&self) -> NavigationTransitionFrame {
+        if self.pending_request.is_some() {
+            return NavigationTransitionFrame {
+                phase: NavigationTransitionPhase::Capture,
+                owns_full_frame: true,
+                ..NavigationTransitionFrame::default()
+            };
+        }
         self.controller.frame()
     }
 
     pub fn request(&self) -> Option<NavigationTransitionRequest> {
-        self.controller.request()
+        self.pending_request.or_else(|| self.controller.request())
     }
 
     pub const fn is_active(&self) -> bool {
-        self.controller.is_active()
+        self.pending_request.is_some() || self.controller.is_active()
     }
 
     pub const fn destination_ready(&self) -> bool {
@@ -1119,6 +1179,17 @@ impl NavigationTransitionPoc {
 
     pub const fn telemetry(&self) -> NavigationTransitionTelemetry {
         self.controller.telemetry()
+    }
+
+    fn activate_pending(&mut self, now_us: u64) -> bool {
+        let Some(request) = self.pending_request.take() else {
+            return false;
+        };
+        self.pending_prepare_started = None;
+        if !self.controller.begin(request, now_us) {
+            return false;
+        }
+        self.controller.captured(now_us, self.pending_capture_us)
     }
 }
 
@@ -1329,6 +1400,10 @@ fn render_super_scaler_shell(
         .get(..)
         .filter(|_| buffers.destination_ready);
     let working = buffers.working.as_mut_slice();
+    let scale_source_x = buffers.scale_source_x.as_mut_slice();
+    let scale_source_y = buffers.scale_source_y.as_mut_slice();
+    let scale_excluded_x = buffers.scale_excluded_x.as_mut_slice();
+    let scale_dither_x = buffers.scale_dither_x.as_mut_slice();
     let width = buffers.width;
     let height = buffers.height;
     if working.len() != source.len() || working.len() != width.saturating_mul(height) {
@@ -1439,6 +1514,10 @@ fn render_super_scaler_shell(
                     shell,
                     mint,
                     violet,
+                    scale_source_x,
+                    scale_source_y,
+                    scale_excluded_x,
+                    scale_dither_x,
                     &mut stats,
                 );
             }
@@ -1469,6 +1548,10 @@ fn render_super_scaler_shell(
                     shell,
                     mint,
                     violet,
+                    scale_source_x,
+                    scale_source_y,
+                    scale_excluded_x,
+                    scale_dither_x,
                     &mut stats,
                 );
             }
@@ -1489,6 +1572,10 @@ fn render_super_scaler_card_cover(
     shell: Rgb565Pixel,
     mint: Rgb565Pixel,
     violet: Rgb565Pixel,
+    scale_source_x: &mut [usize],
+    scale_source_y: &mut [usize],
+    scale_excluded_x: &mut [bool],
+    scale_dither_x: &mut [bool],
     stats: &mut NavigationTransitionRenderStats,
 ) {
     let rect = super_scaler_card_rect(request.geometry.source_card, full, forward_cover_q16);
@@ -1518,6 +1605,10 @@ fn render_super_scaler_card_cover(
             10_000,
             26_000,
         ))),
+        scale_source_x,
+        scale_source_y,
+        scale_excluded_x,
+        scale_dither_x,
         stats,
     );
     draw_super_scaler_impact_envelope(working, width, height, rect, forward_cover_q16, stats);
@@ -2289,6 +2380,10 @@ fn blit_scaled_card_565(
     target_rect: NavigationTransitionRect,
     excluded_source_rect: NavigationTransitionRect,
     texture_q16: u16,
+    scale_source_x: &mut [usize],
+    scale_source_y: &mut [usize],
+    scale_excluded_x: &mut [bool],
+    scale_dither_x: &mut [bool],
     stats: &mut NavigationTransitionRenderStats,
 ) {
     if source.len() != width.saturating_mul(height)
@@ -2296,9 +2391,12 @@ fn blit_scaled_card_565(
         || !source_rect.fits(width, height)
         || source_rect.width == 0
         || source_rect.height == 0
-        || target_rect.width == 0
-        || target_rect.height == 0
+        || !target_rect.fits(width, height)
         || texture_q16 == 0
+        || scale_source_x.len() < target_rect.width as usize
+        || scale_source_y.len() < target_rect.height as usize
+        || scale_excluded_x.len() < target_rect.width as usize
+        || scale_dither_x.len() < target_rect.width as usize * 4
     {
         return;
     }
@@ -2306,34 +2404,44 @@ fn blit_scaled_card_565(
     let source_height = source_rect.height as usize;
     let target_width = target_rect.width as usize;
     let target_height = target_rect.height as usize;
-    let x_step_q16 = ((source_width as u64) << 16) / target_width as u64;
-    let y_step_q16 = ((source_height as u64) << 16) / target_height as u64;
     const DITHER: [[u16; 4]; 4] = [
         [0, 32_768, 8_192, 40_960],
         [49_152, 16_384, 57_344, 24_576],
         [12_288, 45_056, 4_096, 36_864],
         [61_440, 28_672, 53_248, 20_480],
     ];
-    for target_y in 0..target_height {
-        let y = target_rect.y as usize + target_y;
-        if y >= height {
-            break;
+    let x_step_q16 = ((source_width as u64) << 16) / target_width as u64;
+    let mut source_x_q16 = 0u64;
+    for target_x in 0..target_width {
+        let source_x = source_rect.x as usize + (source_x_q16 >> 16) as usize;
+        source_x_q16 = source_x_q16.saturating_add(x_step_q16);
+        scale_source_x[target_x] = source_x;
+        scale_excluded_x[target_x] = source_x >= excluded_source_rect.x as usize
+            && source_x < excluded_source_rect.right() as usize;
+        let x = target_rect.x as usize + target_x;
+        for y_phase in 0..4 {
+            scale_dither_x[y_phase * target_width + target_x] =
+                DITHER[y_phase][x & 3] < texture_q16;
         }
-        let source_y = source_rect.y as usize + ((target_y as u64 * y_step_q16) >> 16) as usize;
-        let mut source_x_q16 = 0u64;
+    }
+    let y_step_q16 = ((source_height as u64) << 16) / target_height as u64;
+    let mut source_y_q16 = 0u64;
+    for source_y in &mut scale_source_y[..target_height] {
+        *source_y = source_rect.y as usize + (source_y_q16 >> 16) as usize;
+        source_y_q16 = source_y_q16.saturating_add(y_step_q16);
+    }
+
+    for (target_y, &source_y) in scale_source_y[..target_height].iter().enumerate() {
+        let y = target_rect.y as usize + target_y;
+        let destination_row = y * width + target_rect.x as usize;
+        let source_row = source_y * width;
+        let excluded_y = source_y >= excluded_source_rect.y as usize
+            && source_y < excluded_source_rect.bottom() as usize;
+        let dither = &scale_dither_x[(y & 3) * target_width..][..target_width];
         for target_x in 0..target_width {
-            let x = target_rect.x as usize + target_x;
-            if x >= width {
-                break;
-            }
-            let source_x = source_rect.x as usize + (source_x_q16 >> 16) as usize;
-            source_x_q16 = source_x_q16.saturating_add(x_step_q16);
-            let excluded = source_x >= excluded_source_rect.x as usize
-                && source_x < excluded_source_rect.right() as usize
-                && source_y >= excluded_source_rect.y as usize
-                && source_y < excluded_source_rect.bottom() as usize;
-            if !excluded && DITHER[y & 3][x & 3] < texture_q16 {
-                destination[y * width + x] = source[source_y * width + source_x];
+            if dither[target_x] && !(excluded_y && scale_excluded_x[target_x]) {
+                destination[destination_row + target_x] =
+                    source[source_row + scale_source_x[target_x]];
             }
         }
     }
@@ -4238,6 +4346,10 @@ mod tests {
             }
         }
         let mut destination = vec![Rgb565Pixel(0x2222); width * height];
+        let mut scale_source_x = vec![0; width];
+        let mut scale_source_y = vec![0; height];
+        let mut scale_excluded_x = vec![false; width];
+        let mut scale_dither_x = vec![false; width * 4];
         let mut stats = NavigationTransitionRenderStats::default();
         blit_scaled_card_565(
             &mut destination,
@@ -4248,6 +4360,10 @@ mod tests {
             card,
             label,
             PROGRESS_MAX,
+            &mut scale_source_x,
+            &mut scale_source_y,
+            &mut scale_excluded_x,
+            &mut scale_dither_x,
             &mut stats,
         );
 
@@ -5470,8 +5586,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(poc.render().unwrap(), source);
-        poc.capture_destination(&destination).unwrap();
-        poc.tick(NavigationTransitionEdge::HomeToConsoles.duration_us());
+        poc.capture_destination(&destination, 20_000).unwrap();
+        poc.tick(20_000 + NavigationTransitionEdge::HomeToConsoles.duration_us());
         assert_eq!(poc.render().unwrap(), destination);
 
         let mut reverse = NavigationTransitionPoc::new(16, 12, true);
@@ -5485,8 +5601,8 @@ mod tests {
             )
             .unwrap();
         assert_eq!(reverse.render().unwrap(), destination);
-        reverse.capture_destination(&source).unwrap();
-        reverse.tick(NavigationTransitionEdge::HomeToConsoles.duration_us());
+        reverse.capture_destination(&source, 20_000).unwrap();
+        reverse.tick(20_000 + NavigationTransitionEdge::HomeToConsoles.duration_us());
         assert_eq!(reverse.render().unwrap(), source);
 
         let mut cancelled = NavigationTransitionPoc::new(16, 12, true);
@@ -5507,6 +5623,44 @@ mod tests {
             Some(NavigationTransitionEndpoint::Source)
         );
         assert_eq!(cancelled.render().unwrap(), source);
+    }
+
+    #[test]
+    fn destination_preparation_does_not_advance_the_animation_clock() {
+        let mut poc = NavigationTransitionPoc::new(16, 12, true);
+        let source = vec![Rgb565Pixel(0x1111); 16 * 12];
+        let destination = vec![Rgb565Pixel(0x2222); 16 * 12];
+        let geometry = NavigationTransitionGeometry {
+            source_card: NavigationTransitionRect {
+                x: 2,
+                y: 2,
+                width: 4,
+                height: 8,
+            },
+            ..NavigationTransitionGeometry::default()
+        };
+        poc.begin(
+            NavigationTransitionEdge::HomeToConsoles,
+            NavigationTransitionDirection::Forward,
+            geometry,
+            &source,
+            10_000,
+        )
+        .unwrap();
+
+        let preparing = poc.tick(900_000);
+        assert_eq!(preparing.phase, NavigationTransitionPhase::Capture);
+        assert_eq!(preparing.progress_q16, 0);
+        assert_eq!(poc.render().unwrap(), source);
+
+        poc.capture_destination(&destination, 900_000).unwrap();
+        let first_animation_frame = poc.tick(900_000);
+        assert_eq!(
+            first_animation_frame.phase,
+            NavigationTransitionPhase::Expand
+        );
+        assert_eq!(first_animation_frame.progress_q16, 0);
+        assert_eq!(poc.render().unwrap(), source);
     }
 
     #[test]
@@ -5592,6 +5746,10 @@ mod tests {
         assert!(poc.buffers.source.is_empty());
         assert!(poc.buffers.destination.is_empty());
         assert!(poc.buffers.working.is_empty());
+        assert!(poc.buffers.scale_source_x.is_empty());
+        assert!(poc.buffers.scale_source_y.is_empty());
+        assert!(poc.buffers.scale_excluded_x.is_empty());
+        assert!(poc.buffers.scale_dither_x.is_empty());
         assert!(poc.hud_scratch.is_empty());
     }
 }
