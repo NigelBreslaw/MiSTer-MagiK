@@ -212,7 +212,45 @@ pub fn hdmi_navigation_geometry(
         source_card,
         source_label,
         destination_title,
+        destination_list: NavigationTransitionRect {
+            x: scale_hdmi_x(8, frame_width),
+            y: scale_hdmi_y(56, frame_height),
+            width: scale_hdmi_x(510, frame_width),
+            height: scale_hdmi_y(452, frame_height),
+        },
+        destination_selected_row: NavigationTransitionRect {
+            x: scale_hdmi_x(8, frame_width),
+            y: scale_hdmi_y(248, frame_height),
+            width: scale_hdmi_x(510, frame_width),
+            height: scale_hdmi_y(48, frame_height),
+        },
+        destination_preview: NavigationTransitionRect {
+            x: scale_hdmi_x(560, frame_width),
+            y: scale_hdmi_y(102, frame_height),
+            width: scale_hdmi_x(320, frame_width),
+            height: scale_hdmi_y(320, frame_height),
+        },
+        destination_footer: NavigationTransitionRect {
+            x: scale_hdmi_x(8, frame_width),
+            y: scale_hdmi_y(512, frame_height),
+            width: scale_hdmi_x(510, frame_width),
+            height: scale_hdmi_y(20, frame_height),
+        },
     }
+}
+
+fn scale_hdmi_x(value: usize, frame_width: usize) -> u16 {
+    value
+        .saturating_mul(frame_width)
+        .div_ceil(960)
+        .min(u16::MAX as usize) as u16
+}
+
+fn scale_hdmi_y(value: usize, frame_height: usize) -> u16 {
+    value
+        .saturating_mul(frame_height)
+        .div_ceil(540)
+        .min(u16::MAX as usize) as u16
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -220,6 +258,10 @@ pub struct NavigationTransitionGeometry {
     pub source_card: NavigationTransitionRect,
     pub source_label: NavigationTransitionRect,
     pub destination_title: NavigationTransitionRect,
+    pub destination_list: NavigationTransitionRect,
+    pub destination_selected_row: NavigationTransitionRect,
+    pub destination_preview: NavigationTransitionRect,
+    pub destination_footer: NavigationTransitionRect,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1109,16 +1151,12 @@ fn render_super_scaler_shell(
         .get(..)
         .filter(|_| buffers.destination_ready);
     let working = buffers.working.as_mut_slice();
-    if working.len() != source.len() {
-        return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
-    }
-    working.copy_from_slice(source);
-    let mut stats = NavigationTransitionRenderStats {
-        copied_pixels: source.len() as u64,
-        ..NavigationTransitionRenderStats::default()
-    };
     let width = buffers.width;
     let height = buffers.height;
+    if working.len() != source.len() || working.len() != width.saturating_mul(height) {
+        return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
+    }
+    let mut stats = NavigationTransitionRenderStats::default();
     let full = NavigationTransitionRect {
         x: 0,
         y: 0,
@@ -1132,12 +1170,18 @@ fn render_super_scaler_shell(
 
     if frame.phase == NavigationTransitionPhase::Settled {
         match frame.endpoint {
-            Some(NavigationTransitionEndpoint::Source) => return Ok(stats),
+            Some(NavigationTransitionEndpoint::Source) => {
+                working.copy_from_slice(source);
+                stats.copied_pixels = source.len() as u64;
+                return Ok(stats);
+            }
             Some(NavigationTransitionEndpoint::Destination) => {
                 if let Some(destination) = destination {
                     working.copy_from_slice(destination);
-                    stats.copied_pixels =
-                        stats.copied_pixels.saturating_add(destination.len() as u64);
+                    stats.copied_pixels = destination.len() as u64;
+                } else {
+                    working.copy_from_slice(source);
+                    stats.copied_pixels = source.len() as u64;
                 }
                 return Ok(stats);
             }
@@ -1145,14 +1189,48 @@ fn render_super_scaler_shell(
         }
     }
     if frame.progress_q16 == 0 {
+        working.copy_from_slice(source);
+        stats.copied_pixels = source.len() as u64;
         return Ok(stats);
+    }
+    if request.direction == NavigationTransitionDirection::Forward
+        && frame.reveal_progress_q16 >= 62_000
+    {
+        if let Some(destination) = destination {
+            working.copy_from_slice(destination);
+            stats.copied_pixels = destination.len() as u64;
+            return Ok(stats);
+        }
+    }
+    let needs_source_base = match request.direction {
+        NavigationTransitionDirection::Forward => frame.reveal_progress_q16 == 0,
+        NavigationTransitionDirection::Reverse => {
+            frame.reveal_progress_q16 == 0 || destination.is_none()
+        }
+    };
+    if needs_source_base {
+        working.copy_from_slice(source);
+        stats.copied_pixels = source.len() as u64;
     }
 
     match request.direction {
         NavigationTransitionDirection::Forward => {
             if frame.reveal_progress_q16 > 0 {
-                fill_rect_565(working, width, height, full, shell, &mut stats);
                 if let Some(destination) = destination {
+                    if request.edge.enters_system_browser() {
+                        compose_system_background_scanlines(
+                            working,
+                            destination,
+                            width,
+                            height,
+                            smoothstep_q16(window_q16(frame.reveal_progress_q16, 0, 18_000)),
+                            request.geometry.destination_title.bottom() as usize,
+                            shell,
+                            &mut stats,
+                        );
+                    } else {
+                        fill_rect_565(working, width, height, full, shell, &mut stats);
+                    }
                     reveal_destination_regions(
                         working,
                         destination,
@@ -1162,6 +1240,8 @@ fn render_super_scaler_shell(
                         request,
                         &mut stats,
                     );
+                } else {
+                    fill_rect_565(working, width, height, full, shell, &mut stats);
                 }
             }
             let rect = super_scaler_card_rect(
@@ -1226,10 +1306,16 @@ fn render_super_scaler_shell(
             }
         }
         NavigationTransitionDirection::Reverse => {
-            let cover = smoothstep_q16(frame.cover_progress_q16);
             if frame.reveal_progress_q16 == 0 {
                 conceal_source_regions(
-                    working, source, width, height, cover, request, shell, &mut stats,
+                    working,
+                    source,
+                    width,
+                    height,
+                    frame.cover_progress_q16,
+                    request,
+                    shell,
+                    &mut stats,
                 );
             } else if let Some(destination) = destination {
                 working.copy_from_slice(destination);
@@ -1507,48 +1593,94 @@ fn render_hero_label_last(
     match request.direction {
         NavigationTransitionDirection::Forward => {
             if frame.reveal_progress_q16 > 0 {
+                let destination = destination.unwrap_or(source);
+                if frame.reveal_progress_q16 >= 14_000 {
+                    copy_rect_565(
+                        working,
+                        destination,
+                        width,
+                        height,
+                        request.geometry.destination_title,
+                        stats,
+                    );
+                    return Ok(());
+                }
                 erase_rect_from_snapshot_background(
                     working,
-                    destination.unwrap_or(source),
+                    destination,
                     width,
                     height,
                     request.geometry.destination_title,
                     stats,
                 );
+                crossfade_labels(
+                    working,
+                    source,
+                    destination,
+                    width,
+                    height,
+                    request.geometry.source_label,
+                    request.geometry.destination_title,
+                    PROGRESS_MAX,
+                    smoothstep_q16(window_q16(frame.reveal_progress_q16, 4_000, 14_000)),
+                    false,
+                    stats,
+                );
+            } else {
+                move_label_between_rects(
+                    working,
+                    source,
+                    width,
+                    height,
+                    request.geometry.source_label,
+                    request.geometry.destination_title,
+                    smoothstep_q16(window_q16(frame.cover_progress_q16, 3_500, 60_000)),
+                    false,
+                    stats,
+                );
             }
-            move_label_between_rects(
-                working,
-                source,
-                width,
-                height,
-                request.geometry.source_label,
-                request.geometry.destination_title,
-                if frame.reveal_progress_q16 > 0 {
-                    PROGRESS_MAX
-                } else {
-                    smoothstep_q16(window_q16(frame.cover_progress_q16, 3_500, 60_000))
-                },
-                false,
-                stats,
-            );
         }
         NavigationTransitionDirection::Reverse => {
-            let progress = if frame.reveal_progress_q16 > 0 {
-                smoothstep_q16(frame.reveal_progress_q16)
+            if frame.reveal_progress_q16 > 0 {
+                let destination = destination.unwrap_or(source);
+                if frame.reveal_progress_q16 >= 60_000 {
+                    copy_rect_565(
+                        working,
+                        destination,
+                        width,
+                        height,
+                        request.geometry.source_label,
+                        stats,
+                    );
+                    return Ok(());
+                }
+                let motion = smoothstep_q16(frame.reveal_progress_q16);
+                crossfade_labels(
+                    working,
+                    source,
+                    destination,
+                    width,
+                    height,
+                    request.geometry.destination_title,
+                    request.geometry.source_label,
+                    motion,
+                    smoothstep_q16(window_q16(frame.reveal_progress_q16, 42_000, 60_000)),
+                    true,
+                    stats,
+                );
             } else {
-                0
-            };
-            move_label_between_rects(
-                working,
-                source,
-                width,
-                height,
-                request.geometry.destination_title,
-                request.geometry.source_label,
-                progress,
-                true,
-                stats,
-            );
+                move_label_between_rects(
+                    working,
+                    source,
+                    width,
+                    height,
+                    request.geometry.destination_title,
+                    request.geometry.source_label,
+                    0,
+                    true,
+                    stats,
+                );
+            }
         }
     }
     Ok(())
@@ -1563,11 +1695,24 @@ fn reveal_destination_regions(
     request: NavigationTransitionRequest,
     stats: &mut NavigationTransitionRenderStats,
 ) {
-    if working.len() != destination.len() || width == 0 || height == 0 {
+    if working.len() != destination.len()
+        || working.len() != width.saturating_mul(height)
+        || width == 0
+        || height == 0
+    {
         return;
     }
-    let header_height = height.saturating_mul(15) / 100;
-    let header_progress = smoothstep_q16(window_q16(progress_q16, 0, 21_000));
+    if progress_q16 >= 62_000 {
+        working.copy_from_slice(destination);
+        stats.copied_pixels = stats.copied_pixels.saturating_add(destination.len() as u64);
+        return;
+    }
+    let header_height = if request.edge.enters_system_browser() {
+        request.geometry.destination_list.y as usize
+    } else {
+        height.saturating_mul(15) / 100
+    };
+    let header_progress = smoothstep_q16(window_q16(progress_q16, 0, 10_000));
     copy_rect_horizontal_wipe(
         working,
         destination,
@@ -1585,53 +1730,81 @@ fn reveal_destination_regions(
     );
 
     if request.edge.enters_system_browser() {
-        let split_x = width.saturating_mul(55) / 100;
-        let body_y = header_height;
-        let selected_y = height.saturating_mul(46) / 100;
-        let selected_height = height.saturating_mul(10) / 100;
-        copy_rect_horizontal_wipe(
+        let list = request.geometry.destination_list;
+        let selected = request.geometry.destination_selected_row;
+        let row_height = selected.height as usize;
+        copy_rect_shifted_x(
             working,
             destination,
             width,
             height,
-            NavigationTransitionRect {
-                x: 0,
-                y: selected_y as u16,
-                width: split_x as u16,
-                height: selected_height as u16,
-            },
-            smoothstep_q16(window_q16(progress_q16, 8_000, 27_000)),
-            request.geometry.destination_title.x as usize,
+            selected,
+            smoothstep_q16(window_q16(progress_q16, 14_000, 28_000)),
+            -28,
             stats,
         );
-        copy_rect_vertical_wipe(
+        for distance in 1usize..9 {
+            let start = 20_000u16.saturating_add(((distance - 1) * 3_200) as u16);
+            for below in [true, false] {
+                let Some(y) = (if below {
+                    (selected.y as usize).checked_add(distance.saturating_mul(row_height))
+                } else {
+                    (selected.y as usize).checked_sub(distance.saturating_mul(row_height))
+                }) else {
+                    continue;
+                };
+                if y < list.y as usize || y >= list.bottom() as usize {
+                    continue;
+                }
+                copy_rect_shifted_x(
+                    working,
+                    destination,
+                    width,
+                    height,
+                    NavigationTransitionRect {
+                        x: list.x,
+                        y: y as u16,
+                        width: list.width,
+                        height: row_height
+                            .min(list.bottom() as usize - y)
+                            .min(height.saturating_sub(y)) as u16,
+                    },
+                    smoothstep_q16(window_q16(
+                        progress_q16,
+                        start,
+                        start.saturating_add(13_000),
+                    )),
+                    -(28 + distance as isize * 5),
+                    stats,
+                );
+            }
+        }
+        copy_rect_shifted_x(
             working,
             destination,
             width,
             height,
-            NavigationTransitionRect {
-                x: 0,
-                y: body_y as u16,
-                width: split_x as u16,
-                height: height.saturating_sub(body_y) as u16,
-            },
-            smoothstep_q16(window_q16(progress_q16, 15_000, 49_000)),
-            false,
+            request.geometry.destination_footer,
+            smoothstep_q16(window_q16(progress_q16, 32_000, 48_000)),
+            -20,
             stats,
         );
-        copy_rect_horizontal_wipe(
+        let preview = request.geometry.destination_preview;
+        draw_progressive_preview_frame(
+            working,
+            width,
+            height,
+            preview,
+            smoothstep_q16(window_q16(progress_q16, 28_000, 42_000)),
+            stats,
+        );
+        copy_rect_center_aperture(
             working,
             destination,
             width,
             height,
-            NavigationTransitionRect {
-                x: split_x as u16,
-                y: body_y as u16,
-                width: width.saturating_sub(split_x) as u16,
-                height: height.saturating_sub(body_y) as u16,
-            },
-            smoothstep_q16(window_q16(progress_q16, 26_000, 59_000)),
-            split_x,
+            preview,
+            smoothstep_q16(window_q16(progress_q16, 38_000, 60_000)),
             stats,
         );
     } else {
@@ -1668,10 +1841,6 @@ fn reveal_destination_regions(
                 );
             }
         }
-    }
-    if progress_q16 >= 62_000 {
-        working.copy_from_slice(destination);
-        stats.copied_pixels = stats.copied_pixels.saturating_add(destination.len() as u64);
     }
 }
 
@@ -1917,6 +2086,135 @@ fn copy_rect_vertical_wipe(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
+fn copy_rect_shifted_x(
+    working: &mut [Rgb565Pixel],
+    source: &[Rgb565Pixel],
+    width: usize,
+    height: usize,
+    rect: NavigationTransitionRect,
+    progress_q16: u16,
+    initial_offset: isize,
+    stats: &mut NavigationTransitionRenderStats,
+) {
+    let Some(rect) = clip_rect_to_frame(rect, width, height) else {
+        return;
+    };
+    if progress_q16 == 0
+        || working.len() != source.len()
+        || working.len() != width.saturating_mul(height)
+    {
+        return;
+    }
+    let remaining = PROGRESS_MAX.saturating_sub(progress_q16) as i64;
+    let offset = initial_offset as i64 * remaining / PROGRESS_MAX as i64;
+    let destination_x = rect.x as i64 + offset;
+    let visible_q16 = 8_192u32
+        .saturating_add(57_343u32.saturating_mul(progress_q16 as u32) / PROGRESS_MAX as u32);
+    let visible_width = (rect.width as u32).saturating_mul(visible_q16) / PROGRESS_MAX as u32;
+    let unclipped_x0 = destination_x;
+    let unclipped_x1 = destination_x + visible_width.max(1) as i64;
+    let destination_x0 = unclipped_x0.max(0).min(width as i64) as usize;
+    let destination_x1 = unclipped_x1.max(0).min(width as i64) as usize;
+    if destination_x1 <= destination_x0 {
+        return;
+    }
+    let source_x0 = rect.x as usize + (destination_x0 as i64 - unclipped_x0) as usize;
+    let copy_width = destination_x1 - destination_x0;
+    for y in rect.y as usize..rect.bottom() as usize {
+        let destination_start = y * width + destination_x0;
+        let source_start = y * width + source_x0;
+        working[destination_start..destination_start + copy_width]
+            .copy_from_slice(&source[source_start..source_start + copy_width]);
+        stats.copied_pixels = stats.copied_pixels.saturating_add(copy_width as u64);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn copy_rect_center_aperture(
+    working: &mut [Rgb565Pixel],
+    source: &[Rgb565Pixel],
+    width: usize,
+    height: usize,
+    rect: NavigationTransitionRect,
+    progress_q16: u16,
+    stats: &mut NavigationTransitionRenderStats,
+) {
+    let Some(rect) = clip_rect_to_frame(rect, width, height) else {
+        return;
+    };
+    let visible_width = rect.width as usize * progress_q16 as usize / PROGRESS_MAX as usize;
+    if visible_width == 0 {
+        return;
+    }
+    let x = rect.x as usize + (rect.width as usize - visible_width) / 2;
+    copy_rect_565(
+        working,
+        source,
+        width,
+        height,
+        NavigationTransitionRect {
+            x: x as u16,
+            y: rect.y,
+            width: visible_width as u16,
+            height: rect.height,
+        },
+        stats,
+    );
+}
+
+fn draw_progressive_preview_frame(
+    working: &mut [Rgb565Pixel],
+    width: usize,
+    height: usize,
+    rect: NavigationTransitionRect,
+    progress_q16: u16,
+    stats: &mut NavigationTransitionRenderStats,
+) {
+    let Some(rect) = clip_rect_to_frame(rect, width, height) else {
+        return;
+    };
+    let horizontal = rect.width as usize * progress_q16 as usize / PROGRESS_MAX as usize;
+    let vertical = rect.height as usize * progress_q16 as usize / PROGRESS_MAX as usize;
+    if horizontal == 0 && vertical == 0 {
+        return;
+    }
+    let x = rect.x as usize + (rect.width as usize - horizontal) / 2;
+    let y = rect.y as usize + (rect.height as usize - vertical) / 2;
+    let violet = Rgb565Pixel(0x79b8);
+    let mint = Rgb565Pixel(0x07d6);
+    for line_y in [rect.y, rect.bottom().saturating_sub(1)] {
+        fill_rect_565(
+            working,
+            width,
+            height,
+            NavigationTransitionRect {
+                x: x as u16,
+                y: line_y,
+                width: horizontal as u16,
+                height: 1,
+            },
+            violet,
+            stats,
+        );
+    }
+    for line_x in [rect.x, rect.right().saturating_sub(1)] {
+        fill_rect_565(
+            working,
+            width,
+            height,
+            NavigationTransitionRect {
+                x: line_x,
+                y: y as u16,
+                width: 1,
+                height: vertical as u16,
+            },
+            mint,
+            stats,
+        );
+    }
+}
+
 fn clip_rect_to_frame(
     rect: NavigationTransitionRect,
     width: usize,
@@ -1960,9 +2258,254 @@ fn copy_rect_565(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn compose_system_background_scanlines(
+    working: &mut [Rgb565Pixel],
+    destination: &[Rgb565Pixel],
+    width: usize,
+    height: usize,
+    progress_q16: u16,
+    anchor_y: usize,
+    shell: Rgb565Pixel,
+    stats: &mut NavigationTransitionRenderStats,
+) {
+    if working.len() != destination.len()
+        || working.len() != width.saturating_mul(height)
+        || width == 0
+        || height == 0
+    {
+        return;
+    }
+    let anchor_y = anchor_y.min(height - 1);
+    let maximum_distance = anchor_y.max(height - 1 - anchor_y).max(1);
+    let visible_distance = maximum_distance * progress_q16 as usize / PROGRESS_MAX as usize;
+    let split_x = width / 2;
+    for y in 0..height {
+        if progress_q16 == 0 || y.abs_diff(anchor_y) > visible_distance {
+            fill_rect_565(
+                working,
+                width,
+                height,
+                NavigationTransitionRect {
+                    x: 0,
+                    y: y as u16,
+                    width: width as u16,
+                    height: 1,
+                },
+                shell,
+                stats,
+            );
+            continue;
+        }
+        let left_color = destination[y * width];
+        let right_color = destination[y * width + width - 1];
+        fill_rect_565(
+            working,
+            width,
+            height,
+            NavigationTransitionRect {
+                x: 0,
+                y: y as u16,
+                width: split_x as u16,
+                height: 1,
+            },
+            left_color,
+            stats,
+        );
+        fill_rect_565(
+            working,
+            width,
+            height,
+            NavigationTransitionRect {
+                x: split_x as u16,
+                y: y as u16,
+                width: width.saturating_sub(split_x) as u16,
+                height: 1,
+            },
+            right_color,
+            stats,
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn conceal_system_background_scanlines(
+    working: &mut [Rgb565Pixel],
+    width: usize,
+    height: usize,
+    progress_q16: u16,
+    anchor_y: usize,
+    shell: Rgb565Pixel,
+    stats: &mut NavigationTransitionRenderStats,
+) {
+    if working.len() != width.saturating_mul(height)
+        || width == 0
+        || height == 0
+        || progress_q16 == 0
+    {
+        return;
+    }
+    let anchor_y = anchor_y.min(height - 1);
+    let maximum_distance = anchor_y.max(height - 1 - anchor_y).max(1);
+    let covered_distance = maximum_distance * progress_q16 as usize / PROGRESS_MAX as usize;
+    let remaining_distance = maximum_distance.saturating_sub(covered_distance);
+    for y in 0..height {
+        if y.abs_diff(anchor_y) < remaining_distance {
+            continue;
+        }
+        fill_rect_565(
+            working,
+            width,
+            height,
+            NavigationTransitionRect {
+                x: 0,
+                y: y as u16,
+                width: width as u16,
+                height: 1,
+            },
+            shell,
+            stats,
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn slide_rect_out_left(
+    working: &mut [Rgb565Pixel],
+    source: &[Rgb565Pixel],
+    width: usize,
+    height: usize,
+    rect: NavigationTransitionRect,
+    progress_q16: u16,
+    shell: Rgb565Pixel,
+    stats: &mut NavigationTransitionRenderStats,
+) {
+    let Some(rect) = clip_rect_to_frame(rect, width, height) else {
+        return;
+    };
+    if working.len() != source.len() || working.len() != width.saturating_mul(height) {
+        return;
+    }
+    fill_rect_565(working, width, height, rect, shell, stats);
+    let displacement = rect.width as usize * progress_q16 as usize / PROGRESS_MAX as usize;
+    if displacement >= rect.width as usize {
+        return;
+    }
+    let unclipped_destination_x = rect.x as isize - displacement as isize;
+    let destination_x = unclipped_destination_x.max(0) as usize;
+    let clipped_left = destination_x as isize - unclipped_destination_x;
+    let source_x = rect.x as usize + clipped_left as usize;
+    let remaining_width =
+        (rect.width as usize - clipped_left as usize).min(width.saturating_sub(destination_x));
+    if remaining_width == 0 {
+        return;
+    }
+    for y in rect.y as usize..rect.bottom() as usize {
+        let destination_start = y * width + destination_x;
+        let source_start = y * width + source_x;
+        working[destination_start..destination_start + remaining_width]
+            .copy_from_slice(&source[source_start..source_start + remaining_width]);
+        stats.copied_pixels = stats.copied_pixels.saturating_add(remaining_width as u64);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn close_preview_aperture(
+    working: &mut [Rgb565Pixel],
+    source: &[Rgb565Pixel],
+    width: usize,
+    height: usize,
+    rect: NavigationTransitionRect,
+    progress_q16: u16,
+    shell: Rgb565Pixel,
+    stats: &mut NavigationTransitionRenderStats,
+) {
+    let Some(rect) = clip_rect_to_frame(rect, width, height) else {
+        return;
+    };
+    if working.len() != source.len() || working.len() != width.saturating_mul(height) {
+        return;
+    }
+    fill_rect_565(working, width, height, rect, shell, stats);
+    let remaining = PROGRESS_MAX.saturating_sub(progress_q16);
+    copy_rect_center_aperture(working, source, width, height, rect, remaining, stats);
+    if progress_q16 == 0 || progress_q16 == PROGRESS_MAX {
+        return;
+    }
+    let visible_width = rect.width as usize * remaining as usize / PROGRESS_MAX as usize;
+    if visible_width == 0 {
+        return;
+    }
+    let left = rect.x as usize + (rect.width as usize - visible_width) / 2;
+    let right = left.saturating_add(visible_width).saturating_sub(1);
+    for x in [left, right] {
+        fill_rect_565(
+            working,
+            width,
+            height,
+            NavigationTransitionRect {
+                x: x as u16,
+                y: rect.y,
+                width: 1,
+                height: rect.height,
+            },
+            Rgb565Pixel(0x79b8),
+            stats,
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fill_rect_edge_close(
+    working: &mut [Rgb565Pixel],
+    width: usize,
+    height: usize,
+    rect: NavigationTransitionRect,
+    progress_q16: u16,
+    color: Rgb565Pixel,
+    stats: &mut NavigationTransitionRenderStats,
+) {
+    let Some(rect) = clip_rect_to_frame(rect, width, height) else {
+        return;
+    };
+    let covered_width = rect.width as usize * progress_q16 as usize / PROGRESS_MAX as usize;
+    let left_width = covered_width / 2;
+    let right_width = covered_width.saturating_sub(left_width);
+    if left_width > 0 {
+        fill_rect_565(
+            working,
+            width,
+            height,
+            NavigationTransitionRect {
+                x: rect.x,
+                y: rect.y,
+                width: left_width as u16,
+                height: rect.height,
+            },
+            color,
+            stats,
+        );
+    }
+    if right_width > 0 {
+        fill_rect_565(
+            working,
+            width,
+            height,
+            NavigationTransitionRect {
+                x: rect.right().saturating_sub(right_width as u16),
+                y: rect.y,
+                width: right_width as u16,
+                height: rect.height,
+            },
+            color,
+            stats,
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn conceal_source_regions(
     working: &mut [Rgb565Pixel],
-    _source: &[Rgb565Pixel],
+    source: &[Rgb565Pixel],
     width: usize,
     height: usize,
     progress_q16: u16,
@@ -1970,56 +2513,123 @@ fn conceal_source_regions(
     shell: Rgb565Pixel,
     stats: &mut NavigationTransitionRenderStats,
 ) {
-    if width == 0 || height == 0 {
+    if width == 0
+        || height == 0
+        || working.len() != source.len()
+        || working.len() != width.saturating_mul(height)
+    {
         return;
     }
-    if request.edge.enters_system_browser() {
-        let split_x = width.saturating_mul(55) / 100;
-        let body_y = height.saturating_mul(15) / 100;
-        let preview_progress = smoothstep_q16(window_q16(progress_q16, 0, 31_000));
-        let preview_width =
-            width.saturating_sub(split_x) * preview_progress as usize / PROGRESS_MAX as usize;
-        fill_rect_565(
-            working,
-            width,
-            height,
-            NavigationTransitionRect {
-                x: width.saturating_sub(preview_width) as u16,
-                y: body_y as u16,
-                width: preview_width as u16,
-                height: height.saturating_sub(body_y) as u16,
-            },
-            shell,
-            stats,
-        );
-        let list_progress = smoothstep_q16(window_q16(progress_q16, 7_000, 46_000));
-        let list_height =
-            height.saturating_sub(body_y) * list_progress as usize / PROGRESS_MAX as usize;
+    if progress_q16 == PROGRESS_MAX {
         fill_rect_565(
             working,
             width,
             height,
             NavigationTransitionRect {
                 x: 0,
-                y: height.saturating_sub(list_height) as u16,
-                width: split_x as u16,
-                height: list_height as u16,
+                y: 0,
+                width: width as u16,
+                height: height as u16,
             },
             shell,
             stats,
         );
-        let header_progress = smoothstep_q16(window_q16(progress_q16, 36_000, PROGRESS_MAX));
-        let header_width = width * header_progress as usize / PROGRESS_MAX as usize;
-        fill_rect_565(
+        return;
+    }
+    if request.edge.enters_system_browser() {
+        let list = request.geometry.destination_list;
+        let selected = request.geometry.destination_selected_row;
+        let row_height = selected.height as usize;
+        conceal_system_background_scanlines(
+            working,
+            width,
+            height,
+            smoothstep_q16(window_q16(progress_q16, 38_000, PROGRESS_MAX)),
+            request.geometry.destination_title.bottom() as usize,
+            shell,
+            stats,
+        );
+        close_preview_aperture(
+            working,
+            source,
+            width,
+            height,
+            request.geometry.destination_preview,
+            smoothstep_q16(window_q16(progress_q16, 0, 25_000)),
+            shell,
+            stats,
+        );
+        slide_rect_out_left(
+            working,
+            source,
+            width,
+            height,
+            request.geometry.destination_footer,
+            smoothstep_q16(window_q16(progress_q16, 20_000, 34_000)),
+            shell,
+            stats,
+        );
+        for distance in (1usize..9).rev() {
+            let start = 9_000u16.saturating_add(((8usize.saturating_sub(distance)) * 2_600) as u16);
+            for below in [true, false] {
+                let Some(y) = (if below {
+                    (selected.y as usize).checked_add(distance.saturating_mul(row_height))
+                } else {
+                    (selected.y as usize).checked_sub(distance.saturating_mul(row_height))
+                }) else {
+                    continue;
+                };
+                if y < list.y as usize || y >= list.bottom() as usize {
+                    continue;
+                }
+                slide_rect_out_left(
+                    working,
+                    source,
+                    width,
+                    height,
+                    NavigationTransitionRect {
+                        x: list.x,
+                        y: y as u16,
+                        width: list.width,
+                        height: row_height
+                            .min(list.bottom() as usize - y)
+                            .min(height.saturating_sub(y)) as u16,
+                    },
+                    smoothstep_q16(window_q16(
+                        progress_q16,
+                        start,
+                        start.saturating_add(13_000),
+                    )),
+                    shell,
+                    stats,
+                );
+            }
+        }
+        slide_rect_out_left(
+            working,
+            source,
+            width,
+            height,
+            selected,
+            smoothstep_q16(window_q16(progress_q16, 34_000, 51_000)),
+            shell,
+            stats,
+        );
+        fill_rect_edge_close(
             working,
             width,
             height,
             NavigationTransitionRect {
-                x: (width.saturating_sub(header_width) / 2) as u16,
+                x: 0,
                 y: 0,
-                width: header_width as u16,
-                height: body_y as u16,
+                width: width as u16,
+                height: if request.edge.enters_system_browser() {
+                    request.geometry.destination_list.y
+                } else {
+                    (height.saturating_mul(15) / 100) as u16
+                },
             },
+            smoothstep_q16(window_q16(progress_q16, 42_000, PROGRESS_MAX)),
             shell,
             stats,
         );
@@ -2051,21 +2661,6 @@ fn conceal_source_regions(
                 stats,
             );
         }
-    }
-    if progress_q16 == PROGRESS_MAX {
-        fill_rect_565(
-            working,
-            width,
-            height,
-            NavigationTransitionRect {
-                x: 0,
-                y: 0,
-                width: width as u16,
-                height: height as u16,
-            },
-            shell,
-            stats,
-        );
     }
 }
 
@@ -2118,6 +2713,49 @@ fn move_label_between_rects(
         content,
         lerp_rect(content, target_content, progress_q16),
         background,
+        stats,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn crossfade_labels(
+    working: &mut [Rgb565Pixel],
+    source: &[Rgb565Pixel],
+    destination: &[Rgb565Pixel],
+    width: usize,
+    height: usize,
+    source_rect: NavigationTransitionRect,
+    destination_rect: NavigationTransitionRect,
+    motion_q16: u16,
+    crossfade_q16: u16,
+    center_target: bool,
+    stats: &mut NavigationTransitionRenderStats,
+) {
+    let Some((source_content, source_background)) =
+        opaque_content_bounds(source, width, height, source_rect)
+    else {
+        return;
+    };
+    let target_content =
+        label_target_rect(source_content, source_rect, destination_rect, center_target);
+    let moving_content = lerp_rect(source_content, target_content, motion_q16);
+    let Some((destination_content, destination_background)) =
+        opaque_content_bounds(destination, width, height, destination_rect)
+    else {
+        return;
+    };
+    blit_crossfaded_masks_565(
+        working,
+        source,
+        destination,
+        width,
+        height,
+        source_content,
+        destination_content,
+        moving_content,
+        source_background,
+        destination_background,
+        crossfade_q16,
         stats,
     );
 }
@@ -2257,13 +2895,51 @@ fn blit_scaled_masked_565(
     transparent: Rgb565Pixel,
     stats: &mut NavigationTransitionRenderStats,
 ) {
+    blit_scaled_masked_dithered_565(
+        destination,
+        source,
+        width,
+        height,
+        source_rect,
+        target_rect,
+        transparent,
+        PROGRESS_MAX,
+        stats,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn blit_scaled_masked_dithered_565(
+    destination: &mut [Rgb565Pixel],
+    source: &[Rgb565Pixel],
+    width: usize,
+    height: usize,
+    source_rect: NavigationTransitionRect,
+    target_rect: NavigationTransitionRect,
+    transparent: Rgb565Pixel,
+    opacity_q16: u16,
+    stats: &mut NavigationTransitionRenderStats,
+) {
     let source_w = source_rect.width as usize;
     let source_h = source_rect.height as usize;
     let target_w = target_rect.width as usize;
     let target_h = target_rect.height as usize;
-    if source_w == 0 || source_h == 0 || target_w == 0 || target_h == 0 {
+    if source_w == 0
+        || source_h == 0
+        || target_w == 0
+        || target_h == 0
+        || opacity_q16 == 0
+        || source.len() != width.saturating_mul(height)
+        || destination.len() != source.len()
+    {
         return;
     }
+    const DITHER: [[u16; 4]; 4] = [
+        [0, 32_768, 8_192, 40_960],
+        [49_152, 16_384, 57_344, 24_576],
+        [12_288, 45_056, 4_096, 36_864],
+        [61_440, 28_672, 53_248, 20_480],
+    ];
     for ty in 0..target_h {
         let dy = target_rect.y as usize + ty;
         if dy >= height {
@@ -2281,10 +2957,79 @@ fn blit_scaled_masked_565(
             let sx = source_rect.x as usize + tx * source_w / target_w;
             if sx < width {
                 let pixel = source[sy * width + sx];
-                if pixel != transparent {
+                if pixel != transparent && DITHER[dy & 3][dx & 3] < opacity_q16 {
                     destination[dy * width + dx] = pixel;
                     stats.copied_pixels = stats.copied_pixels.saturating_add(1);
                 }
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn blit_crossfaded_masks_565(
+    working: &mut [Rgb565Pixel],
+    source: &[Rgb565Pixel],
+    destination: &[Rgb565Pixel],
+    width: usize,
+    height: usize,
+    source_rect: NavigationTransitionRect,
+    destination_rect: NavigationTransitionRect,
+    target_rect: NavigationTransitionRect,
+    source_transparent: Rgb565Pixel,
+    destination_transparent: Rgb565Pixel,
+    crossfade_q16: u16,
+    stats: &mut NavigationTransitionRenderStats,
+) {
+    if working.len() != source.len()
+        || working.len() != destination.len()
+        || working.len() != width.saturating_mul(height)
+        || source_rect.width == 0
+        || source_rect.height == 0
+        || destination_rect.width == 0
+        || destination_rect.height == 0
+        || target_rect.width == 0
+        || target_rect.height == 0
+    {
+        return;
+    }
+    const DITHER: [[u16; 4]; 4] = [
+        [0, 32_768, 8_192, 40_960],
+        [49_152, 16_384, 57_344, 24_576],
+        [12_288, 45_056, 4_096, 36_864],
+        [61_440, 28_672, 53_248, 20_480],
+    ];
+    for target_y in 0..target_rect.height as usize {
+        let y = target_rect.y as usize + target_y;
+        if y >= height {
+            break;
+        }
+        let source_y = source_rect.y as usize
+            + target_y * source_rect.height as usize / target_rect.height as usize;
+        let destination_y = destination_rect.y as usize
+            + target_y * destination_rect.height as usize / target_rect.height as usize;
+        for target_x in 0..target_rect.width as usize {
+            let x = target_rect.x as usize + target_x;
+            if x >= width {
+                break;
+            }
+            let source_x = source_rect.x as usize
+                + target_x * source_rect.width as usize / target_rect.width as usize;
+            let destination_x = destination_rect.x as usize
+                + target_x * destination_rect.width as usize / target_rect.width as usize;
+            let choose_destination = DITHER[y & 3][x & 3] < crossfade_q16;
+            let source_pixel = source[source_y * width + source_x];
+            let destination_pixel = destination[destination_y * width + destination_x];
+            let source_opaque = source_pixel != source_transparent;
+            let destination_opaque = destination_pixel != destination_transparent;
+            let pixel = match (source_opaque, destination_opaque, choose_destination) {
+                (_, true, true) => Some(destination_pixel),
+                (true, _, false) => Some(source_pixel),
+                _ => None,
+            };
+            if let Some(pixel) = pixel {
+                working[y * width + x] = pixel;
+                stats.copied_pixels = stats.copied_pixels.saturating_add(1);
             }
         }
     }
@@ -2395,6 +3140,7 @@ mod tests {
                 width: 200,
                 height: 24,
             },
+            ..NavigationTransitionGeometry::default()
         }
     }
 
@@ -2404,6 +3150,58 @@ mod tests {
             NavigationTransitionEdge::HomeToConsoles,
             NavigationTransitionDirection::Forward,
             geometry(),
+        )
+    }
+
+    fn system_request(direction: NavigationTransitionDirection) -> NavigationTransitionRequest {
+        NavigationTransitionRequest::new(
+            NavigationTransitionStyle::SuperScalerShell,
+            NavigationTransitionEdge::ConsolesToSystem,
+            direction,
+            NavigationTransitionGeometry {
+                source_card: NavigationTransitionRect {
+                    x: 2,
+                    y: 15,
+                    width: 20,
+                    height: 80,
+                },
+                source_label: NavigationTransitionRect {
+                    x: 4,
+                    y: 46,
+                    width: 16,
+                    height: 6,
+                },
+                destination_title: NavigationTransitionRect {
+                    x: 2,
+                    y: 2,
+                    width: 30,
+                    height: 8,
+                },
+                destination_list: NavigationTransitionRect {
+                    x: 8,
+                    y: 18,
+                    width: 47,
+                    height: 76,
+                },
+                destination_selected_row: NavigationTransitionRect {
+                    x: 8,
+                    y: 46,
+                    width: 47,
+                    height: 6,
+                },
+                destination_preview: NavigationTransitionRect {
+                    x: 58,
+                    y: 18,
+                    width: 38,
+                    height: 76,
+                },
+                destination_footer: NavigationTransitionRect {
+                    x: 8,
+                    y: 95,
+                    width: 47,
+                    height: 5,
+                },
+            },
         )
     }
 
@@ -2503,6 +3301,7 @@ mod tests {
                     width: 10,
                     height: 3,
                 },
+                ..NavigationTransitionGeometry::default()
             },
         );
         let at_source = render_super_scaler_shell(
@@ -2636,6 +3435,300 @@ mod tests {
         );
 
         assert_eq!(working, destination);
+    }
+
+    #[test]
+    fn system_reveal_orders_title_rows_frame_and_preview_content() {
+        let width = 100;
+        let height = 100;
+        let mut destination = vec![Rgb565Pixel(0); width * height];
+        for y in 2..10 {
+            destination[y * width + 2..y * width + 32].fill(Rgb565Pixel(0x1234));
+        }
+        for y in 18..24 {
+            destination[y * width + 8..y * width + 55].fill(Rgb565Pixel(0x4567));
+        }
+        for y in 46..52 {
+            destination[y * width + 8..y * width + 55].fill(Rgb565Pixel(0x1234));
+        }
+        for y in 70..76 {
+            destination[y * width + 8..y * width + 55].fill(Rgb565Pixel(0x1234));
+        }
+        for y in 18..94 {
+            destination[y * width + 58..y * width + 96].fill(Rgb565Pixel(0x1234));
+        }
+        let mut stats = NavigationTransitionRenderStats::default();
+
+        let mut title_only = vec![Rgb565Pixel(0); width * height];
+        reveal_destination_regions(
+            &mut title_only,
+            &destination,
+            width,
+            height,
+            12_000,
+            system_request(NavigationTransitionDirection::Forward),
+            &mut stats,
+        );
+        assert_eq!(title_only[5 * width + 5], Rgb565Pixel(0x1234));
+        assert_eq!(title_only[20 * width + 20], Rgb565Pixel(0));
+        assert_eq!(title_only[46 * width + 20], Rgb565Pixel(0));
+
+        let mut selected_row = vec![Rgb565Pixel(0); width * height];
+        reveal_destination_regions(
+            &mut selected_row,
+            &destination,
+            width,
+            height,
+            28_000,
+            system_request(NavigationTransitionDirection::Forward),
+            &mut stats,
+        );
+        assert_eq!(selected_row[46 * width + 20], Rgb565Pixel(0x1234));
+        assert_eq!(selected_row[70 * width + 20], Rgb565Pixel(0));
+
+        let mut framed = vec![Rgb565Pixel(0); width * height];
+        reveal_destination_regions(
+            &mut framed,
+            &destination,
+            width,
+            height,
+            34_000,
+            system_request(NavigationTransitionDirection::Forward),
+            &mut stats,
+        );
+        assert_eq!(framed[18 * width + 77], Rgb565Pixel(0x79b8));
+        assert_eq!(framed[50 * width + 77], Rgb565Pixel(0));
+    }
+
+    #[test]
+    fn system_reverse_conceals_far_rows_before_selected_row() {
+        let width = 100;
+        let height = 100;
+        let source = vec![Rgb565Pixel(0x1234); width * height];
+        let shell = Rgb565Pixel(0x1028);
+        let mut working = source.clone();
+        let mut stats = NavigationTransitionRenderStats::default();
+
+        conceal_source_regions(
+            &mut working,
+            &source,
+            width,
+            height,
+            20_000,
+            system_request(NavigationTransitionDirection::Reverse),
+            shell,
+            &mut stats,
+        );
+
+        assert_eq!(working[88 * width + 50], shell);
+        assert_eq!(working[46 * width + 50], Rgb565Pixel(0x1234));
+
+        conceal_source_regions(
+            &mut working,
+            &source,
+            width,
+            height,
+            PROGRESS_MAX,
+            system_request(NavigationTransitionDirection::Reverse),
+            shell,
+            &mut stats,
+        );
+        assert!(working.iter().all(|pixel| *pixel == shell));
+    }
+
+    #[test]
+    fn shifted_row_copy_ignores_equal_undersized_buffers() {
+        let source = vec![Rgb565Pixel(0xaaaa); 8];
+        let mut working = vec![Rgb565Pixel(0); 8];
+        let mut stats = NavigationTransitionRenderStats::default();
+
+        copy_rect_shifted_x(
+            &mut working,
+            &source,
+            8,
+            8,
+            NavigationTransitionRect {
+                x: 0,
+                y: 0,
+                width: 8,
+                height: 8,
+            },
+            PROGRESS_MAX,
+            -28,
+            &mut stats,
+        );
+
+        assert!(working.iter().all(|pixel| *pixel == Rgb565Pixel(0)));
+    }
+
+    #[test]
+    fn label_crossfade_uses_one_moving_surface_without_dither_holes() {
+        let width = 16;
+        let height = 8;
+        let mut source = vec![Rgb565Pixel(0); width * height];
+        let mut destination = vec![Rgb565Pixel(0); width * height];
+        let source_rect = NavigationTransitionRect {
+            x: 1,
+            y: 1,
+            width: 4,
+            height: 4,
+        };
+        let destination_rect = NavigationTransitionRect {
+            x: 10,
+            y: 2,
+            width: 4,
+            height: 4,
+        };
+        let target = NavigationTransitionRect {
+            x: 6,
+            y: 2,
+            width: 4,
+            height: 4,
+        };
+        for y in source_rect.y as usize..source_rect.bottom() as usize {
+            source[y * width + source_rect.x as usize..y * width + source_rect.right() as usize]
+                .fill(Rgb565Pixel(0x1111));
+        }
+        for y in destination_rect.y as usize..destination_rect.bottom() as usize {
+            destination[y * width + destination_rect.x as usize
+                ..y * width + destination_rect.right() as usize]
+                .fill(Rgb565Pixel(0xeeee));
+        }
+        let mut working = vec![Rgb565Pixel(0); width * height];
+        let mut stats = NavigationTransitionRenderStats::default();
+
+        blit_crossfaded_masks_565(
+            &mut working,
+            &source,
+            &destination,
+            width,
+            height,
+            source_rect,
+            destination_rect,
+            target,
+            Rgb565Pixel(0),
+            Rgb565Pixel(0),
+            PROGRESS_MAX / 2,
+            &mut stats,
+        );
+
+        for y in target.y as usize..target.bottom() as usize {
+            for x in target.x as usize..target.right() as usize {
+                assert_ne!(working[y * width + x], Rgb565Pixel(0));
+            }
+        }
+        assert_eq!(working[2 * width + 10], Rgb565Pixel(0));
+    }
+
+    #[test]
+    fn label_crossfade_deterministically_erodes_disjoint_glyph_masks() {
+        let width = 12;
+        let height = 6;
+        let rect = NavigationTransitionRect {
+            x: 2,
+            y: 1,
+            width: 8,
+            height: 4,
+        };
+        let mut source = vec![Rgb565Pixel(0); width * height];
+        let mut destination = vec![Rgb565Pixel(0); width * height];
+        for y in rect.y as usize..rect.bottom() as usize {
+            source[y * width + 2..y * width + 6].fill(Rgb565Pixel(0x1111));
+            destination[y * width + 6..y * width + 10].fill(Rgb565Pixel(0xeeee));
+        }
+        let mut first = vec![Rgb565Pixel(0); width * height];
+        let mut second = first.clone();
+        let mut stats = NavigationTransitionRenderStats::default();
+
+        for working in [&mut first, &mut second] {
+            blit_crossfaded_masks_565(
+                working,
+                &source,
+                &destination,
+                width,
+                height,
+                rect,
+                rect,
+                rect,
+                Rgb565Pixel(0),
+                Rgb565Pixel(0),
+                PROGRESS_MAX / 2,
+                &mut stats,
+            );
+        }
+
+        assert_eq!(first, second);
+        assert!(first.iter().any(|pixel| *pixel == Rgb565Pixel(0x1111)));
+        assert!(first.iter().any(|pixel| *pixel == Rgb565Pixel(0xeeee)));
+        assert!(first.iter().any(|pixel| *pixel == Rgb565Pixel(0)));
+    }
+
+    #[test]
+    fn reverse_row_translation_preserves_source_alignment_and_clipping() {
+        let width = 20;
+        let height = 8;
+        let rect = NavigationTransitionRect {
+            x: 8,
+            y: 6,
+            width: 8,
+            height: 2,
+        };
+        let shell = Rgb565Pixel(0x2222);
+        let mut source = vec![Rgb565Pixel(0); width * height];
+        for y in rect.y as usize..rect.bottom() as usize {
+            for x in rect.x as usize..rect.right() as usize {
+                source[y * width + x] = Rgb565Pixel(x as u16);
+            }
+        }
+        let mut stats = NavigationTransitionRenderStats::default();
+
+        let mut at_start = vec![Rgb565Pixel(0); width * height];
+        slide_rect_out_left(
+            &mut at_start,
+            &source,
+            width,
+            height,
+            rect,
+            0,
+            shell,
+            &mut stats,
+        );
+        assert_eq!(
+            &at_start[6 * width + 8..6 * width + 16],
+            &source[6 * width + 8..6 * width + 16]
+        );
+
+        let mut halfway = vec![Rgb565Pixel(0); width * height];
+        slide_rect_out_left(
+            &mut halfway,
+            &source,
+            width,
+            height,
+            rect,
+            PROGRESS_MAX / 2 + 1,
+            shell,
+            &mut stats,
+        );
+        assert_eq!(halfway[6 * width + 4], Rgb565Pixel(8));
+        assert_eq!(halfway[6 * width + 11], Rgb565Pixel(15));
+        assert_eq!(halfway[7 * width + 4], Rgb565Pixel(8));
+
+        let mut at_end = vec![Rgb565Pixel(0); width * height];
+        slide_rect_out_left(
+            &mut at_end,
+            &source,
+            width,
+            height,
+            rect,
+            PROGRESS_MAX,
+            shell,
+            &mut stats,
+        );
+        assert!(
+            at_end[6 * width + 8..6 * width + 16]
+                .iter()
+                .all(|pixel| *pixel == shell)
+        );
     }
 
     #[test]
@@ -2941,6 +4034,61 @@ mod tests {
         assert_eq!(nested.destination_title.x, 16);
         assert_eq!(nested.destination_title.y, 16);
         assert_eq!(nested.destination_title.width, 120);
+        let live_list_height =
+            crate::arcade_list_renderer::ArcadeListGeometry::NORMAL.visible_height(540);
+        let live_row_height = crate::arcade_catalog::ARCADE_ROW_HEIGHT as usize;
+        let live_selected_y = 56 + (live_list_height / live_row_height / 2) * live_row_height;
+        let live_footer_y = 56 + live_list_height + 4;
+        let live_footer_height = 540 - live_footer_y - 8;
+        assert_eq!(live_list_height, 452);
+        assert_eq!(live_selected_y, 248);
+        assert_eq!(
+            nested.destination_list,
+            NavigationTransitionRect {
+                x: 8,
+                y: 56,
+                width: 510,
+                height: 452,
+            }
+        );
+        assert_eq!(
+            nested.destination_selected_row,
+            NavigationTransitionRect {
+                x: 8,
+                y: 248,
+                width: 510,
+                height: 48,
+            }
+        );
+        assert_eq!(
+            nested.destination_preview,
+            NavigationTransitionRect {
+                x: 560,
+                y: 102,
+                width: 320,
+                height: 320,
+            }
+        );
+        assert_eq!(
+            nested.destination_footer,
+            NavigationTransitionRect {
+                x: 8,
+                y: 512,
+                width: 510,
+                height: 20,
+            }
+        );
+        assert_eq!(nested.destination_list.height as usize, live_list_height);
+        assert_eq!(nested.destination_selected_row.y as usize, live_selected_y);
+        assert_eq!(nested.destination_footer.y as usize, live_footer_y);
+        assert_eq!(
+            nested.destination_footer.height as usize,
+            live_footer_height
+        );
+        assert_eq!(
+            nested.destination_list.height % nested.destination_selected_row.height,
+            20
+        );
     }
 
     #[test]
@@ -2967,6 +4115,7 @@ mod tests {
                 width: 8,
                 height: 2,
             },
+            ..NavigationTransitionGeometry::default()
         };
         poc.begin(
             NavigationTransitionEdge::HomeToConsoles,
@@ -3045,6 +4194,7 @@ mod tests {
                 width: 64,
                 height: 10,
             },
+            ..NavigationTransitionGeometry::default()
         };
         let mut poc = NavigationTransitionPoc::new_with_style(width, height, true, 1);
         poc.begin(
@@ -3112,6 +4262,7 @@ mod tests {
                     width: 64,
                     height: 10,
                 },
+                ..NavigationTransitionGeometry::default()
             };
             let mut poc = NavigationTransitionPoc::new_with_style(width, height, true, 2);
             poc.begin(
@@ -3197,6 +4348,7 @@ mod tests {
                 width: 64,
                 height: 10,
             },
+            ..NavigationTransitionGeometry::default()
         };
         let mut poc = NavigationTransitionPoc::new_with_style(width, height, true, 3);
         poc.begin(
@@ -3278,6 +4430,7 @@ mod tests {
                 width: 64,
                 height: 10,
             },
+            ..NavigationTransitionGeometry::default()
         };
         let mut poc = NavigationTransitionPoc::new_with_style(width, height, true, 4);
         poc.begin(
