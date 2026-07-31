@@ -323,7 +323,7 @@ fn sync_navigation_transition_poc_bridge(
     }
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     let frame = transition.frame();
-    bridge.set_nav_transition_hud_visible(transition.enabled());
+    bridge.set_nav_transition_hud_visible(false);
     bridge.set_nav_transition_phase(frame.phase as i32);
     bridge.set_nav_transition_edge(
         transition
@@ -4959,6 +4959,10 @@ pub(super) fn run_launcher_loop(
             request_launcher_redraw!();
         }
         let navigation_transition_frame_active = navigation_transition.is_active();
+        let (navigation_transition_edge, navigation_transition_direction) =
+            navigation_transition.request().map_or(("", ""), |request| {
+                (request.edge.label(), request.direction.label())
+            });
         let navigation_transition_frame_started =
             navigation_transition_frame_active.then_some(loop_start);
         let mut navigation_transition_render_us = 0u128;
@@ -5061,6 +5065,10 @@ pub(super) fn run_launcher_loop(
             arcade_list_update_us,
             preview_blit_us,
             effect_label_us,
+            navigation_transition_overlay_us: navigation_transition.last_render_stats().overlay_us
+                as u128,
+            navigation_transition_edge,
+            navigation_transition_direction,
         };
         let cpu_custom_draw_done = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let custom_draw_done = Instant::now();

@@ -182,6 +182,10 @@ pub struct FrameBudgetRecentFrame {
     pub frame: u64,
     pub screensaver_active: bool,
     pub screensaver_renderer: &'static str,
+    pub navigation_transition_edge: &'static str,
+    pub navigation_transition_direction: &'static str,
+    pub navigation_transition_us: u64,
+    pub navigation_transition_overlay_us: u64,
     pub wall_us: u64,
     pub prepare_us: u64,
     pub render_us: u64,
@@ -803,6 +807,19 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
     field!("frame", frame.frame);
     field!("screensaver_active", frame.screensaver_active);
     field!("screensaver_renderer", frame.screensaver_renderer);
+    field!(
+        "navigation_transition_edge",
+        frame.navigation_transition_edge
+    );
+    field!(
+        "navigation_transition_direction",
+        frame.navigation_transition_direction
+    );
+    field!("navigation_transition_us", frame.navigation_transition_us);
+    field!(
+        "navigation_transition_overlay_us",
+        frame.navigation_transition_overlay_us
+    );
     field!("wall_us", frame.wall_us);
     field!("prepare_us", frame.prepare_us);
     field!("render_us", frame.render_us);

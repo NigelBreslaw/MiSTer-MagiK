@@ -70,6 +70,15 @@ pub enum NavigationTransitionDirection {
     Reverse,
 }
 
+impl NavigationTransitionDirection {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Forward => "forward",
+            Self::Reverse => "reverse",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct NavigationTransitionRect {
     pub x: u16,
@@ -1193,37 +1202,6 @@ fn apply_crt_scanline_overlay(
             *pixel = darken_rgb565_7_8(*pixel);
         }
         stats.phosphor_pixels = stats.phosphor_pixels.saturating_add(width as u64);
-    }
-
-    let line_y = if reversing {
-        clear_y
-    } else if frame.progress_q16 < CRT_SWEEP_END_Q16 {
-        Some(sweep_y(
-            spring_ease_q16(window_q16(frame.progress_q16, 0, CRT_SWEEP_END_Q16)),
-            height,
-        ))
-    } else if frame.progress_q16 > CRT_CLEAR_START_Q16 {
-        Some(sweep_y(
-            spring_ease_q16(window_q16(
-                frame.progress_q16,
-                CRT_CLEAR_START_Q16,
-                PROGRESS_MAX,
-            )),
-            height,
-        ))
-    } else {
-        None
-    };
-    if let Some(line_y) = line_y {
-        const COLORS: [u16; 5] = [0x781f, 0x7bff, 0xffff, 0x7bff, 0x781f];
-        for (offset, color) in (-2_isize..=2).zip(COLORS) {
-            let y = line_y + offset;
-            if !(0..height as isize).contains(&y) {
-                continue;
-            }
-            working[y as usize * width..(y as usize + 1) * width].fill(Rgb565Pixel(color));
-            stats.scanline_pixels = stats.scanline_pixels.saturating_add(width as u64);
-        }
     }
 }
 

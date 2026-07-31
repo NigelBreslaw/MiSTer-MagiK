@@ -589,6 +589,14 @@ mod tests {
             }
         );
         assert_eq!(
+            Cli::try_parse_from(["agent-cli", "benchmark", "navigation-transitions"])
+                .unwrap()
+                .into_intent(),
+            Intent::Benchmark {
+                scenario: BenchmarkScenario::NavigationTransitions
+            }
+        );
+        assert_eq!(
             Cli::try_parse_from(["agent-cli", "benchmark", "search"])
                 .unwrap()
                 .into_intent(),

@@ -76,6 +76,9 @@ pub enum DeviceRequest {
     ProfileInstalledCatalogLifecycle {
         output_dir: PathBuf,
     },
+    ProfileInstalledNavigationTransitions {
+        output_dir: PathBuf,
+    },
     VerifyHealth(Layout),
     BeginReleaseQualification,
     QualifyReleaseRuntime,
@@ -131,6 +134,9 @@ impl DeviceRequest {
             Self::ProfileInstalledSearch { .. } => "profile-installed-search",
             Self::VerifyInstalledSearchUi { .. } => "verify-installed-search-ui",
             Self::ProfileInstalledCatalogLifecycle { .. } => "profile-installed-catalog-lifecycle",
+            Self::ProfileInstalledNavigationTransitions { .. } => {
+                "profile-installed-navigation-transitions"
+            }
             Self::VerifyHealth(_) => "verify-health",
             Self::BeginReleaseQualification => "begin-release-qualification",
             Self::QualifyReleaseRuntime => "qualify-release-runtime",
@@ -330,6 +336,9 @@ mod tests {
             },
             DeviceRequest::ProfileInstalledCatalogLifecycle {
                 output_dir: "catalog-profile".into(),
+            },
+            DeviceRequest::ProfileInstalledNavigationTransitions {
+                output_dir: "navigation-transition-profile".into(),
             },
             DeviceRequest::VerifyHealth(Layout::Public),
             DeviceRequest::BeginReleaseQualification,

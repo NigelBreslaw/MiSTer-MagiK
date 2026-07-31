@@ -10,6 +10,7 @@ use rusqlite::{Connection, params};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use ssh2::Session;
+use std::collections::BTreeMap;
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{self, IsTerminal, Read, Write};
@@ -369,6 +370,11 @@ impl DeviceOperations for NativeDevice {
             DeviceRequest::ProfileInstalledCatalogLifecycle { output_dir } => {
                 let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 profile_installed_catalog_lifecycle(&config, output_dir).map_err(device_failure)?
+            }
+            DeviceRequest::ProfileInstalledNavigationTransitions { output_dir } => {
+                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
+                profile_installed_navigation_transitions(&config, output_dir)
+                    .map_err(device_failure)?
             }
             DeviceRequest::VerifyHealth(layout) => {
                 let label = match layout {
@@ -3776,6 +3782,257 @@ fn catalog_lifecycle_input_script() -> String {
     std::iter::repeat_n("down,up,wait:600", 150)
         .collect::<Vec<_>>()
         .join(",")
+}
+
+const NAVIGATION_TRANSITION_PROFILE_SECS: u64 = 14;
+
+fn profile_installed_navigation_transitions(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    fs::create_dir_all(output_dir)?;
+    let run_result = (|| {
+        let session = connect_with(&config.connection, 10)?;
+        restart_launcher_with_one_shot_env(
+            &session,
+            LauncherRestartOptions {
+                env_vars: vec![
+                    ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+                    ("MISTER_NAV_TRANSITION_POC".into(), "1".into()),
+                    (
+                        "MISTER_LAUNCHER_INPUT_SCRIPT".into(),
+                        "wait:120,a,wait:120,b,wait:90,right,a,wait:120,b,wait:120".into(),
+                    ),
+                    (
+                        "MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES".into(),
+                        "1".into(),
+                    ),
+                ],
+                timeout_secs: 45,
+                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+                ..LauncherRestartOptions::default()
+            },
+        )?;
+        drop(session);
+        let telemetry = agent_telemetry_for_duration(
+            &config.agent,
+            Duration::from_secs(NAVIGATION_TRANSITION_PROFILE_SECS),
+        )?;
+        let telemetry_text = telemetry
+            .iter()
+            .map(serde_json::to_string)
+            .collect::<std::result::Result<Vec<_>, _>>()?
+            .join("\n");
+        fs::write(
+            output_dir.join("telemetry.jsonl"),
+            format!("{telemetry_text}\n"),
+        )?;
+        summarize_navigation_transition_profile(output_dir, &telemetry)
+    })();
+    let restore_result = restore_installed_navigation_transition_profile(config);
+    match (run_result, restore_result) {
+        (Ok(summary), Ok(())) => Ok(summary),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(_), Err(error)) => {
+            Err(format!("navigation transition profile cleanup failed: {error}").into())
+        }
+        (Err(run), Err(cleanup)) => {
+            Err(format!("{run}; navigation transition profile cleanup failed: {cleanup}").into())
+        }
+    }
+}
+
+fn restore_installed_navigation_transition_profile(config: &NativeDeviceConfig) -> Result<()> {
+    let session = connect_with(&config.connection, 10)?;
+    let cleanup = format!(
+        "rm -f {env} /tmp/mister-magik/realtime-frame-analytics",
+        env = sh(DEVELOPMENT_LAUNCHER_ENV_REMOTE),
+    );
+    exec_checked(&session, "navigation transition profile cleanup", &cleanup)?;
+    launcher_restart(
+        &session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            timeout_secs: 45,
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    exec_checked(
+        &session,
+        "navigation transition profile final cleanup",
+        &format!(
+            "{cleanup}; test ! -e {env}",
+            env = sh(DEVELOPMENT_LAUNCHER_ENV_REMOTE)
+        ),
+    )?;
+    Ok(())
+}
+
+fn summarize_navigation_transition_profile(
+    output_dir: &Path,
+    telemetry: &[Value],
+) -> Result<String> {
+    use std::fmt::Write as _;
+
+    let mut frames = BTreeMap::<u64, Value>::new();
+    for sample in telemetry {
+        let Some(recent) = sample
+            .pointer("/launcher/frame_budget/recent_frames")
+            .and_then(Value::as_array)
+        else {
+            continue;
+        };
+        for frame in recent {
+            let frame_id = frame_u64(frame, "frame");
+            if frame_id > 0 {
+                frames.insert(frame_id, frame.clone());
+            }
+        }
+    }
+    let transition_frames = frames
+        .values()
+        .filter(|frame| frame_u64(frame, "navigation_transition_us") > 0)
+        .collect::<Vec<_>>();
+    if transition_frames.is_empty() {
+        return Err("navigation transition profile captured no transition frames".into());
+    }
+
+    let expected_legs = [
+        ("home-arcade", "forward"),
+        ("home-arcade", "reverse"),
+        ("home-consoles", "forward"),
+        ("home-consoles", "reverse"),
+    ];
+    let mut legs = serde_json::Map::new();
+    let mut all_perfect = true;
+    for (edge, direction) in expected_legs {
+        let selected = transition_frames
+            .iter()
+            .copied()
+            .filter(|frame| {
+                frame
+                    .get("navigation_transition_edge")
+                    .and_then(Value::as_str)
+                    == Some(edge)
+                    && frame
+                        .get("navigation_transition_direction")
+                        .and_then(Value::as_str)
+                        == Some(direction)
+            })
+            .collect::<Vec<_>>();
+        if selected.len() < 2 {
+            return Err(format!("navigation transition profile missed {edge} {direction}").into());
+        }
+        let first_us = frame_u64(selected[0], "completion_monotonic_us");
+        let last_us = frame_u64(selected[selected.len() - 1], "completion_monotonic_us");
+        let elapsed_us = last_us.saturating_sub(first_us).max(1);
+        let fps = (selected.len().saturating_sub(1) as f64 * 1_000_000.0) / elapsed_us as f64;
+        let sequence_gaps = selected
+            .windows(2)
+            .filter(|pair| {
+                (frame_u64(pair[0], "main_present_sequence") as u16).wrapping_add(1)
+                    != frame_u64(pair[1], "main_present_sequence") as u16
+            })
+            .count();
+        let latch_drop_delta = (frame_u64(selected[selected.len() - 1], "main_present_drop_count")
+            as u16)
+            .wrapping_sub(frame_u64(selected[0], "main_present_drop_count") as u16);
+        let mut transition_us = selected
+            .iter()
+            .map(|frame| frame_u64(frame, "navigation_transition_us"))
+            .collect::<Vec<_>>();
+        let mut overlay_us = selected
+            .iter()
+            .map(|frame| frame_u64(frame, "navigation_transition_overlay_us"))
+            .collect::<Vec<_>>();
+        let mut work_us = selected
+            .iter()
+            .map(|frame| {
+                frame_u64(frame, "prepare_us")
+                    + frame_u64(frame, "render_us")
+                    + frame_u64(frame, "custom_draw_us")
+                    + frame_u64(frame, "present_us")
+            })
+            .collect::<Vec<_>>();
+        transition_us.sort_unstable();
+        overlay_us.sort_unstable();
+        work_us.sort_unstable();
+        let process_cpu_us = selected
+            .iter()
+            .map(|frame| frame_u64(frame, "process_cpu_us"))
+            .sum::<u64>();
+        let process_cpu_pct_one_core = process_cpu_us as f64 * 100.0 / elapsed_us as f64;
+        let perfect_60 = sequence_gaps == 0 && latch_drop_delta == 0 && fps >= 59.9;
+        all_perfect &= perfect_60;
+        legs.insert(
+            format!("{edge}-{direction}"),
+            json!({
+                "frames": selected.len(),
+                "fps": fps,
+                "perfect_60": perfect_60,
+                "sequence_gaps": sequence_gaps,
+                "latch_drop_delta": latch_drop_delta,
+                "process_cpu_pct_of_one_core": process_cpu_pct_one_core,
+                "transition_p99_us": percentile_99(&transition_us),
+                "transition_max_us": transition_us.last().copied().unwrap_or(0),
+                "overlay_p99_us": percentile_99(&overlay_us),
+                "overlay_max_us": overlay_us.last().copied().unwrap_or(0),
+                "frame_work_p99_us": percentile_99(&work_us),
+                "frame_work_max_us": work_us.last().copied().unwrap_or(0),
+            }),
+        );
+    }
+    let system_cpu_pct = telemetry
+        .iter()
+        .filter_map(|sample| {
+            sample
+                .pointer("/cpu/combined_busy_pct")
+                .and_then(Value::as_f64)
+        })
+        .collect::<Vec<_>>();
+    let system_cpu_average =
+        system_cpu_pct.iter().sum::<f64>() / system_cpu_pct.len().max(1) as f64;
+    let summary = json!({
+        "schema": "mister-magik-navigation-transition-profile-v1",
+        "scenario": "navigation-transitions",
+        "script": "Home -> Arcade -> Home -> Consoles -> Home",
+        "all_legs_perfect_60": all_perfect,
+        "transition_frames": transition_frames.len(),
+        "system_combined_busy_pct_average": system_cpu_average,
+        "legs": legs,
+        "telemetry_file": "telemetry.jsonl",
+    });
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    let mut report = String::from("# Navigation transition profile\n\n");
+    writeln!(report, "Perfect 60 FPS on every leg: **{}**\n", all_perfect)?;
+    writeln!(
+        report,
+        "Average combined CPU busy: **{system_cpu_average:.1}%**\n"
+    )?;
+    writeln!(
+        report,
+        "| Leg | FPS | CPU (one core) | Frame work p99 | Transition p99 | Overlay p99 | Gaps | Drops |"
+    )?;
+    writeln!(report, "|---|---:|---:|---:|---:|---:|---:|---:|")?;
+    for (name, leg) in summary["legs"].as_object().into_iter().flatten() {
+        writeln!(
+            report,
+            "| {name} | {:.2} | {:.1}% | {} us | {} us | {} us | {} | {} |",
+            leg["fps"].as_f64().unwrap_or(0.0),
+            leg["process_cpu_pct_of_one_core"].as_f64().unwrap_or(0.0),
+            leg["frame_work_p99_us"].as_u64().unwrap_or(0),
+            leg["transition_p99_us"].as_u64().unwrap_or(0),
+            leg["overlay_p99_us"].as_u64().unwrap_or(0),
+            leg["sequence_gaps"].as_u64().unwrap_or(0),
+            leg["latch_drop_delta"].as_u64().unwrap_or(0),
+        )?;
+    }
+    fs::write(output_dir.join("report.md"), report)?;
+    serde_json::to_string(&summary).map_err(Into::into)
 }
 
 fn catalog_lifecycle_evidence_command() -> String {

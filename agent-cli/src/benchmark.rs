@@ -77,8 +77,47 @@ fn require_clean_installed_commit(
         BenchmarkScenario::CatalogLifecycle => {
             execute_catalog_lifecycle(&mut device, manifest, output_dir, reporter)
         }
+        BenchmarkScenario::NavigationTransitions => {
+            execute_navigation_transitions(&mut device, manifest, output_dir, reporter)
+        }
         BenchmarkScenario::Search => execute_search(&mut device, manifest, output_dir, reporter),
     }
+}
+
+fn execute_navigation_transitions(
+    device: &mut DeviceClient,
+    manifest: String,
+    output_dir: std::path::PathBuf,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    reporter.emit(
+        EventKind::Progress,
+        "profile",
+        "profiling scripted launcher navigation transitions",
+        Some(20),
+    )?;
+    let detail = device.execute(DeviceRequest::ProfileInstalledNavigationTransitions {
+        output_dir: output_dir.clone(),
+    })?;
+    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+    device.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))?;
+    if summary.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-navigation-transition-profile-v1")
+    {
+        return Err("navigation transition profile summary has the wrong schema".into());
+    }
+    reporter.emit(
+        EventKind::Progress,
+        "benchmark-result",
+        &serde_json::to_string(&json!({
+            "installed_manifest": manifest,
+            "summary": summary,
+            "output_dir": output_dir,
+        }))
+        .map_err(|error| error.to_string())?,
+        Some(100),
+    )?;
+    Ok(Outcome::Passed)
 }
 
 fn execute_particle_profile(

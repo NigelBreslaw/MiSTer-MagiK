@@ -940,7 +940,7 @@ mod macos {
             }
             let bridge = self.launcher.global::<MisterBridge>();
             let frame = self.navigation_transition.frame();
-            bridge.set_nav_transition_hud_visible(self.navigation_transition.enabled());
+            bridge.set_nav_transition_hud_visible(false);
             bridge.set_nav_transition_phase(frame.phase as i32);
             bridge.set_nav_transition_edge(
                 self.navigation_transition
