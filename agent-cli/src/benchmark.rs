@@ -77,11 +77,80 @@ fn require_clean_installed_commit(
         BenchmarkScenario::CatalogLifecycle => {
             execute_catalog_lifecycle(&mut device, manifest, output_dir, reporter)
         }
+        BenchmarkScenario::LaunchReturn => {
+            execute_launch_return(&mut device, manifest, output_dir, reporter)
+        }
         BenchmarkScenario::NavigationTransitions => {
             execute_navigation_transitions(&mut device, manifest, output_dir, reporter)
         }
         BenchmarkScenario::Search => execute_search(&mut device, manifest, output_dir, reporter),
     }
+}
+
+fn execute_launch_return(
+    device: &mut DeviceClient,
+    manifest: String,
+    output_dir: std::path::PathBuf,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    reporter.emit(
+        EventKind::Progress,
+        "profile",
+        "running three installed Arcade launch-return cycles",
+        Some(35),
+    )?;
+    let detail = device.execute(DeviceRequest::ProfileInstalledLaunchReturn {
+        output_dir: output_dir.clone(),
+    })?;
+    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+    evaluate_launch_return_summary(&summary)?;
+    device.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))?;
+    reporter.emit(
+        EventKind::Progress,
+        "benchmark-result",
+        &serde_json::to_string(&json!({
+            "installed_manifest": manifest,
+            "summary": summary,
+            "output_dir": output_dir,
+        }))
+        .map_err(|error| error.to_string())?,
+        Some(100),
+    )?;
+    Ok(Outcome::Passed)
+}
+
+fn evaluate_launch_return_summary(summary: &Value) -> AgentResult<()> {
+    if summary.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-launch-return-benchmark-v1")
+    {
+        return Err("launch-return benchmark summary has the wrong schema".into());
+    }
+    let cycles = summary
+        .get("cycles")
+        .and_then(Value::as_array)
+        .ok_or("launch-return benchmark summary has no cycles")?;
+    if cycles.len() != 3 {
+        return Err(format!(
+            "launch-return benchmark completed {} of 3 cycles",
+            cycles.len()
+        )
+        .into());
+    }
+    for (index, cycle) in cycles.iter().enumerate() {
+        let restored = cycle.get("restored").and_then(Value::as_bool) == Some(true);
+        let elapsed_ms = cycle
+            .get("black_interval_ms")
+            .and_then(Value::as_u64)
+            .unwrap_or(u64::MAX);
+        if !restored || elapsed_ms >= 2_000 {
+            return Err(format!(
+                "launch-return cycle {} failed: restored={restored} black_interval_ms={elapsed_ms}",
+                index + 1
+            )
+            .into());
+        }
+    }
+    Ok(())
 }
 
 fn execute_navigation_transitions(

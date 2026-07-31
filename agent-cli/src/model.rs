@@ -17,6 +17,7 @@ pub enum BenchmarkScenario {
     ParticleStep,
     ParticleProfile,
     CatalogLifecycle,
+    LaunchReturn,
     NavigationTransitions,
     Search,
 }
@@ -32,6 +33,7 @@ impl BenchmarkScenario {
             Self::ParticleStep => "particle-step",
             Self::ParticleProfile => "particle-profile",
             Self::CatalogLifecycle => "catalog-lifecycle",
+            Self::LaunchReturn => "launch-return",
             Self::NavigationTransitions => "navigation-transitions",
             Self::Search => "search",
         }

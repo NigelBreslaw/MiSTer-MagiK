@@ -597,6 +597,14 @@ mod tests {
             }
         );
         assert_eq!(
+            Cli::try_parse_from(["agent-cli", "benchmark", "launch-return"])
+                .unwrap()
+                .into_intent(),
+            Intent::Benchmark {
+                scenario: BenchmarkScenario::LaunchReturn
+            }
+        );
+        assert_eq!(
             Cli::try_parse_from(["agent-cli", "benchmark", "search"])
                 .unwrap()
                 .into_intent(),

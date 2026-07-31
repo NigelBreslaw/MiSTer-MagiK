@@ -371,6 +371,10 @@ impl DeviceOperations for NativeDevice {
                 let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 profile_installed_catalog_lifecycle(&config, output_dir).map_err(device_failure)?
             }
+            DeviceRequest::ProfileInstalledLaunchReturn { output_dir } => {
+                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
+                profile_installed_launch_return(&config, output_dir).map_err(device_failure)?
+            }
             DeviceRequest::ProfileInstalledNavigationTransitions { output_dir } => {
                 let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 profile_installed_navigation_transitions(&config, output_dir)
@@ -3713,6 +3717,298 @@ fn profile_installed_catalog_lifecycle(
         catalog_lifecycle_report(&summary)?,
     )?;
     serde_json::to_string(&summary).map_err(Into::into)
+}
+
+const LAUNCH_RETURN_GATE_REMOTE: &str = "/tmp/mister-magik/launch-return-benchmark-gate";
+const LAUNCH_RETURN_STATE_REMOTE: &str = "/tmp/mister-magik/launcher-return-state.json";
+const LAUNCH_RETURN_CYCLES: usize = 3;
+const LAUNCH_RETURN_BLACK_LIMIT_MS: u64 = 2_000;
+
+fn profile_installed_launch_return(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    let session = connect_with(&config.connection, 10)?;
+    fs::create_dir_all(output_dir)?;
+    let mut cycles = Vec::new();
+    let run_result = (|| -> Result<Value> {
+        exec_checked(
+            &session,
+            "launch-return benchmark preflight cleanup",
+            &remove_files_command(&[
+                DEVELOPMENT_LAUNCHER_ENV_REMOTE,
+                LAUNCH_RETURN_GATE_REMOTE,
+                LAUNCH_RETURN_STATE_REMOTE,
+            ]),
+        )?;
+        restart_launcher_with_one_shot_env(
+            &session,
+            LauncherRestartOptions {
+                env_vars: vec![
+                    ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+                    ("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()),
+                    ("MISTER_LAUNCHER_START_SYSTEM".into(), "arcade".into()),
+                    ("MISTER_ARCADE_SELECTED_INDEX".into(), "0".into()),
+                    ("MISTER_LAUNCHER_AUTO_LAUNCH_SELECTED".into(), "1".into()),
+                    (
+                        "MISTER_MAGIK_TEST_AUTO_LAUNCH_GATE".into(),
+                        LAUNCH_RETURN_GATE_REMOTE.into(),
+                    ),
+                ],
+                timeout_secs: 45,
+                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+                ..LauncherRestartOptions::default()
+            },
+        )?;
+        let initial_status = read_launcher_status(&session)?;
+        let mut previous_launcher_pid = initial_status
+            .get("pid")
+            .and_then(Value::as_i64)
+            .ok_or("initial launcher status has no pid")?;
+        exec_checked(
+            &session,
+            "release launch-return initial launch gate",
+            &format!("set -eu; : > {}", sh(LAUNCH_RETURN_GATE_REMOTE)),
+        )?;
+        let mut expected = wait_launch_return_state(&session, None, Duration::from_secs(20))?;
+
+        for cycle_index in 0..LAUNCH_RETURN_CYCLES {
+            if cycle_index + 1 < LAUNCH_RETURN_CYCLES {
+                put_bytes(
+                    &session,
+                    DEVELOPMENT_LAUNCHER_ENV_REMOTE,
+                    one_shot_launcher_env_text(
+                        &[
+                            (
+                                "MISTER_LAUNCHER_INPUT_SCRIPT".into(),
+                                "wait:120,down,wait:12,a".into(),
+                            ),
+                            (
+                                "MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES".into(),
+                                "1".into(),
+                            ),
+                        ],
+                        DEVELOPMENT_LAUNCHER_ENV_REMOTE,
+                    )
+                    .as_bytes(),
+                )?;
+            }
+
+            let return_started = Instant::now();
+            request_magik_benchmark_action("return-to-launcher")?;
+            let status =
+                wait_launch_return_ready(&session, previous_launcher_pid, Duration::from_secs(8))?;
+            let black_interval_ms = return_started.elapsed().as_millis() as u64;
+            let expected_index = expected
+                .get("game_index")
+                .and_then(Value::as_u64)
+                .ok_or("launch return state has no game_index")?;
+            let expected_path = expected
+                .get("game_path")
+                .and_then(Value::as_str)
+                .ok_or("launch return state has no game_path")?
+                .to_string();
+            let selected = status
+                .get("arcade_selected")
+                .and_then(Value::as_u64)
+                .unwrap_or(u64::MAX);
+            let visual_index = status
+                .get("arcade_visual_index")
+                .and_then(Value::as_f64)
+                .unwrap_or(f64::NAN);
+            let preview_state = status
+                .get("preview_cache_state")
+                .and_then(Value::as_str)
+                .unwrap_or("missing");
+            let restored = status.get("return_screen").and_then(Value::as_str) == Some("arcade")
+                && selected == expected_index
+                && (visual_index - expected_index as f64).abs() < 0.01
+                && preview_state == "exact"
+                && black_interval_ms < LAUNCH_RETURN_BLACK_LIMIT_MS;
+            let cycle = json!({
+                "cycle": cycle_index + 1,
+                "expected_game_path": &expected_path,
+                "expected_game_index": expected_index,
+                "selected_game_index": selected,
+                "visual_index": visual_index,
+                "preview_cache_state": preview_state,
+                "black_interval_ms": black_interval_ms,
+                "return_screen": status.get("return_screen"),
+                "startup_mode": status.get("startup_mode"),
+                "restored": restored,
+            });
+            fs::write(
+                output_dir.join(format!("cycle-{}-status.json", cycle_index + 1)),
+                format!("{}\n", serde_json::to_string_pretty(&status)?),
+            )?;
+            cycles.push(cycle);
+            if !restored {
+                return Err(format!(
+                    "launch-return cycle {} did not restore within budget: status={status}",
+                    cycle_index + 1
+                )
+                .into());
+            }
+            previous_launcher_pid = status
+                .get("pid")
+                .and_then(Value::as_i64)
+                .ok_or("returned launcher status has no pid")?;
+            if cycle_index + 1 < LAUNCH_RETURN_CYCLES {
+                expected = wait_launch_return_state(
+                    &session,
+                    Some(&expected_path),
+                    Duration::from_secs(20),
+                )?;
+            }
+        }
+
+        Ok(json!({
+            "schema": "mister-magik-launch-return-benchmark-v1",
+            "scenario": "launch-return",
+            "cycles": cycles.clone(),
+            "black_interval_limit_ms": LAUNCH_RETURN_BLACK_LIMIT_MS,
+        }))
+    })();
+
+    for (remote, local) in [
+        ("/tmp/mister-magik/events.jsonl", "events.jsonl"),
+        ("/tmp/mister-magik-slint.log", "launcher.log"),
+        ("/tmp/mister-magik/main-status.json", "main-status.json"),
+    ] {
+        if let Some(text) = remote_read(&session, remote) {
+            let _ = fs::write(output_dir.join(local), text);
+        }
+    }
+    let cleanup_result = restore_installed_launch_return(&session);
+    let summary = match (run_result, cleanup_result) {
+        (Ok(summary), Ok(())) => summary,
+        (Err(error), Ok(())) => {
+            let failure = json!({
+                "schema": "mister-magik-launch-return-benchmark-v1",
+                "scenario": "launch-return",
+                "cycles": cycles,
+                "black_interval_limit_ms": LAUNCH_RETURN_BLACK_LIMIT_MS,
+                "error": error.to_string(),
+            });
+            fs::write(
+                output_dir.join("summary.json"),
+                format!("{}\n", serde_json::to_string_pretty(&failure)?),
+            )?;
+            return Err(error);
+        }
+        (Ok(_), Err(error)) => {
+            return Err(format!("launch-return benchmark cleanup failed: {error}").into());
+        }
+        (Err(run_error), Err(cleanup_error)) => {
+            return Err(format!(
+                "{run_error}; launch-return benchmark cleanup failed: {cleanup_error}"
+            )
+            .into());
+        }
+    };
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn wait_launch_return_state(
+    session: &Session,
+    previous_path: Option<&str>,
+    timeout: Duration,
+) -> Result<Value> {
+    let started = Instant::now();
+    while started.elapsed() < timeout {
+        if let Some(text) = remote_read(session, LAUNCH_RETURN_STATE_REMOTE)
+            && let Ok(state) = serde_json::from_str::<Value>(&text)
+            && state.get("game_path").and_then(Value::as_str) != previous_path
+        {
+            return Ok(state);
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    Err(format!(
+        "launcher did not write a new return state within {} ms",
+        timeout.as_millis()
+    )
+    .into())
+}
+
+fn wait_launch_return_ready(
+    session: &Session,
+    previous_pid: i64,
+    timeout: Duration,
+) -> Result<Value> {
+    let started = Instant::now();
+    let mut last_status = Value::Null;
+    while started.elapsed() < timeout {
+        if let Ok(status) = read_launcher_status(session) {
+            let new_process = status.get("pid").and_then(Value::as_i64) != Some(previous_pid);
+            let return_startup =
+                status.get("startup_mode").and_then(Value::as_str) == Some("return_from_game");
+            let input_enabled = status.get("input_enabled").and_then(Value::as_bool) == Some(true);
+            if new_process && return_startup && input_enabled {
+                return Ok(status);
+            }
+            last_status = status;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    Err(format!(
+        "launcher return did not become input-ready within {} ms; last_status={last_status}",
+        timeout.as_millis()
+    )
+    .into())
+}
+
+fn request_magik_benchmark_action(action: &str) -> Result<Value> {
+    let status = agent_request("magik", json!({"action": "status"}), Duration::from_secs(5))?;
+    let expected_generation = status
+        .response
+        .pointer("/result/files/main_status/main_generation")
+        .and_then(Value::as_u64)
+        .ok_or("agent Main status missing generation")?;
+    let operation_id = format!(
+        "launch-return-{}-{}",
+        std::process::id(),
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
+    );
+    let reply = agent_request_with_liveness(
+        "magik",
+        json!({
+            "action": action,
+            "operation_id": operation_id,
+            "expected_generation": expected_generation,
+            "target": Value::Null,
+        }),
+        Duration::from_secs(5),
+    )?;
+    Ok(reply.response.get("result").cloned().unwrap_or(Value::Null))
+}
+
+fn restore_installed_launch_return(session: &Session) -> Result<()> {
+    let remove = exec_checked(
+        session,
+        "launch-return benchmark cleanup",
+        &remove_files_command(&[
+            DEVELOPMENT_LAUNCHER_ENV_REMOTE,
+            LAUNCH_RETURN_GATE_REMOTE,
+            LAUNCH_RETURN_STATE_REMOTE,
+        ]),
+    );
+    let _ = request_magik_benchmark_action("return-to-launcher");
+    let restart = launcher_restart(
+        session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            timeout_secs: 45,
+            ..LauncherRestartOptions::default()
+        },
+    );
+    remove?;
+    restart
 }
 
 fn catalog_lifecycle_prepare_command() -> String {

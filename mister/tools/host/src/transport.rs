@@ -76,6 +76,9 @@ pub enum DeviceRequest {
     ProfileInstalledCatalogLifecycle {
         output_dir: PathBuf,
     },
+    ProfileInstalledLaunchReturn {
+        output_dir: PathBuf,
+    },
     ProfileInstalledNavigationTransitions {
         output_dir: PathBuf,
     },
@@ -134,6 +137,7 @@ impl DeviceRequest {
             Self::ProfileInstalledSearch { .. } => "profile-installed-search",
             Self::VerifyInstalledSearchUi { .. } => "verify-installed-search-ui",
             Self::ProfileInstalledCatalogLifecycle { .. } => "profile-installed-catalog-lifecycle",
+            Self::ProfileInstalledLaunchReturn { .. } => "profile-installed-launch-return",
             Self::ProfileInstalledNavigationTransitions { .. } => {
                 "profile-installed-navigation-transitions"
             }
@@ -336,6 +340,9 @@ mod tests {
             },
             DeviceRequest::ProfileInstalledCatalogLifecycle {
                 output_dir: "catalog-profile".into(),
+            },
+            DeviceRequest::ProfileInstalledLaunchReturn {
+                output_dir: "launch-return-profile".into(),
             },
             DeviceRequest::ProfileInstalledNavigationTransitions {
                 output_dir: "navigation-transition-profile".into(),
