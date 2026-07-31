@@ -138,6 +138,10 @@ pub enum Intent {
         output: Option<PathBuf>,
         seconds: Option<u64>,
     },
+    AlphaAccept {
+        candidate: PathBuf,
+        output: PathBuf,
+    },
     ReleaseQualify,
     Build {
         intent: crate::build::BuildCommand,
@@ -196,7 +200,10 @@ impl Intent {
             Self::ReleaseQualify | Self::DatabaseRotate | Self::ClearLatchDiagnostics => {
                 Risk::Destructive
             }
-            Self::Deliver { .. } | Self::Benchmark { .. } | Self::Diagnose => Risk::DeviceWrite,
+            Self::Deliver { .. }
+            | Self::Benchmark { .. }
+            | Self::Diagnose
+            | Self::AlphaAccept { .. } => Risk::DeviceWrite,
             Self::Build { .. } => Risk::LocalWrite,
             _ => Risk::ReadOnly,
         }

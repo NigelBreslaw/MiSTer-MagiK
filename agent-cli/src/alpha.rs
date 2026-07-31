@@ -2,13 +2,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::archive::read_distribution_zip;
+use crate::device::DeviceClient;
 use crate::error::{AgentError, AgentResult};
 use crate::platform_manifest::{self, Layout};
+use crate::progress::{EventKind, Reporter};
+use mister_tool::transport::{AutomationAction, AutomationButton, DeviceRequest};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const ASSET_FORMAT: &str = "mister-magik-release-assets-v1";
 const RELEASE_FORMAT: &str = "mister-magik-release-v1";
@@ -45,6 +50,390 @@ pub struct CandidateIdentity {
     pub platform_bundle_id: String,
     pub qualification_candidate_id: String,
     pub component_sha256: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Serialize)]
+struct AcceptanceReceipt {
+    format: &'static str,
+    accepted: bool,
+    accepted_at_unix: u64,
+    candidate: CandidateIdentity,
+    installed_runtime: Value,
+    checkpoints: Vec<Value>,
+    usb_video: Vec<UsbEvidence>,
+}
+
+#[derive(Debug, Serialize)]
+struct UsbEvidence {
+    label: String,
+    path: String,
+    bytes: usize,
+    width: u32,
+    height: u32,
+    sha256: String,
+}
+
+pub fn execute(
+    candidate_root: &Path,
+    output: &Path,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<PathBuf> {
+    reporter.emit(
+        EventKind::Progress,
+        "candidate",
+        "Verifying the immutable alpha candidate",
+        Some(5),
+    )?;
+    let candidate = verify_candidate(candidate_root)?;
+    if output.exists() {
+        return classified(
+            "alpha_evidence_exists",
+            format!("output already exists: {}", output.display()),
+        );
+    }
+    fs::create_dir_all(output).map_err(|error| error.to_string())?;
+    let mut device = DeviceClient::default();
+    let status: Value = serde_json::from_str(&device.execute(DeviceRequest::Status)?)
+        .map_err(|error| format!("cannot parse device status: {error}"))?;
+    let runtime = require_installed_candidate(&status, &candidate)?;
+    let main_generation = status
+        .pointer("/runtime/main_status/main_generation")
+        .and_then(Value::as_u64)
+        .ok_or("device status has no Main generation")?;
+
+    reporter.emit(
+        EventKind::Progress,
+        "ui",
+        "Running the deterministic real-UI acceptance journey",
+        Some(20),
+    )?;
+    let begin: Value =
+        serde_json::from_str(&device.execute(DeviceRequest::BeginLauncherAutomation {
+            expected_build_version: candidate.version.clone(),
+            expected_source_revision: candidate.magik_revision.clone(),
+            expected_main_generation: main_generation,
+            lifetime_seconds: 120,
+        })?)
+        .map_err(|error| format!("cannot parse automation session: {error}"))?;
+    let nonce = begin
+        .get("nonce")
+        .and_then(Value::as_str)
+        .ok_or("automation session has no nonce")?
+        .to_owned();
+    let journey = run_ui_journey(&mut device, &nonce, output);
+    let ended = device.execute(DeviceRequest::EndLauncherAutomation {
+        nonce: nonce.clone(),
+    });
+    let (checkpoints, usb_video) = match (journey, ended) {
+        (Ok(evidence), Ok(_)) => evidence,
+        (Err(error), Ok(_)) => return Err(error),
+        (Ok(_), Err(restore)) => {
+            return Err(AgentError::recovery_required(
+                "UI journey passed but the volatile session did not close",
+                restore.to_string(),
+            ));
+        }
+        (Err(error), Err(restore)) => {
+            return Err(AgentError::recovery_required(
+                error.to_string(),
+                format!("automation cleanup failed: {restore}"),
+            ));
+        }
+    };
+
+    let receipt = AcceptanceReceipt {
+        format: "mister-magik-alpha-hil-v1",
+        accepted: true,
+        accepted_at_unix: unix_secs(),
+        candidate,
+        installed_runtime: runtime,
+        checkpoints,
+        usb_video,
+    };
+    let receipt_path = output.join("alpha-acceptance.json");
+    write_receipt_atomically(&receipt_path, &receipt)?;
+    reporter.emit(
+        EventKind::Progress,
+        "accepted",
+        "Alpha candidate passed the real-UI journey",
+        Some(100),
+    )?;
+    Ok(receipt_path)
+}
+
+fn run_ui_journey(
+    device: &mut DeviceClient,
+    nonce: &str,
+    output: &Path,
+) -> AgentResult<(Vec<Value>, Vec<UsbEvidence>)> {
+    let rgb_dir = output.join("rgb565");
+    let usb_dir = output.join("usb-video");
+    fs::create_dir_all(&rgb_dir).map_err(|error| error.to_string())?;
+    fs::create_dir_all(&usb_dir).map_err(|error| error.to_string())?;
+    let mut checkpoints = Vec::new();
+    let mut usb = Vec::new();
+
+    let home = tap(device, nonce, AutomationButton::Home)?;
+    let state = snapshot(device, nonce)?;
+    require_semantic(&state, "effective_view", "home")?;
+    require_bool(&state, "catalog_ready", true)?;
+    checkpoints.push(checkpoint(device, nonce, home, "home", &rgb_dir)?);
+    usb.push(capture_usb("home", &usb_dir)?);
+
+    let arcade = tap(device, nonce, AutomationButton::A)?;
+    let state = snapshot(device, nonce)?;
+    require_semantic(&state, "effective_view", "arcade")?;
+    require_nonzero(&state, "selected_count")?;
+    require_nonempty(&state, "selected_game_id")?;
+    checkpoints.push(checkpoint(device, nonce, arcade, "arcade", &rgb_dir)?);
+    usb.push(capture_usb("arcade", &usb_dir)?);
+
+    let before_index = semantic(&state, "selected_index")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let velocity = action(
+        device,
+        nonce,
+        AutomationAction::Hold {
+            button: AutomationButton::Down,
+            duration_ms: 350,
+        },
+    )?;
+    let state = snapshot(device, nonce)?;
+    if semantic(&state, "selected_count")
+        .and_then(Value::as_u64)
+        .is_some_and(|count| count > 1)
+        && semantic(&state, "selected_index").and_then(Value::as_u64) == Some(before_index)
+    {
+        return classified("alpha_ui_assertion_failed", "arcade velocity did not move");
+    }
+    checkpoints.push(checkpoint(
+        device,
+        nonce,
+        velocity,
+        "arcade-velocity",
+        &rgb_dir,
+    )?);
+
+    tap(device, nonce, AutomationButton::Left)?;
+    require_bool(&snapshot(device, nonce)?, "drawer_open", true)?;
+    tap(device, nonce, AutomationButton::B)?;
+    require_semantic(&snapshot(device, nonce)?, "drawer_level", "Filters")?;
+    tap(device, nonce, AutomationButton::Down)?;
+    let search = tap(device, nonce, AutomationButton::A)?;
+    require_bool(&snapshot(device, nonce)?, "search_active", true)?;
+    let typed = tap(device, nonce, AutomationButton::A)?;
+    let search_state = await_semantic(device, nonce, "search_query", "A")?;
+    require_bool(&search_state, "search_active", true)?;
+    checkpoints.push(checkpoint(
+        device,
+        nonce,
+        typed.max(search),
+        "arcade-search",
+        &rgb_dir,
+    )?);
+
+    let returned = tap(device, nonce, AutomationButton::Home)?;
+    require_semantic(&snapshot(device, nonce)?, "effective_view", "home")?;
+    checkpoints.push(checkpoint(
+        device,
+        nonce,
+        returned,
+        "post-return",
+        &rgb_dir,
+    )?);
+    usb.push(capture_usb("post-return", &usb_dir)?);
+
+    tap(device, nonce, AutomationButton::Right)?;
+    let nested = tap(device, nonce, AutomationButton::A)?;
+    let nested_state = snapshot(device, nonce)?;
+    if semantic(&nested_state, "menu_id").and_then(Value::as_str) == Some("menu:root") {
+        return classified("alpha_ui_assertion_failed", "menu hierarchy did not open");
+    }
+    checkpoints.push(checkpoint(device, nonce, nested, "nested-menu", &rgb_dir)?);
+    tap(device, nonce, AutomationButton::B)?;
+    require_semantic(&snapshot(device, nonce)?, "menu_id", "menu:root")?;
+
+    tap(device, nonce, AutomationButton::Up)?;
+    let settings = tap(device, nonce, AutomationButton::A)?;
+    require_semantic(&snapshot(device, nonce)?, "effective_view", "settings")?;
+    checkpoints.push(checkpoint(device, nonce, settings, "settings", &rgb_dir)?);
+    tap(device, nonce, AutomationButton::Down)?;
+    tap(device, nonce, AutomationButton::B)?;
+    require_semantic(&snapshot(device, nonce)?, "effective_view", "home")?;
+
+    Ok((checkpoints, usb))
+}
+
+fn tap(device: &mut DeviceClient, nonce: &str, button: AutomationButton) -> AgentResult<u64> {
+    action(device, nonce, AutomationAction::Tap(button))
+}
+
+fn action(device: &mut DeviceClient, nonce: &str, action: AutomationAction) -> AgentResult<u64> {
+    let response: Value = serde_json::from_str(&device.execute(
+        DeviceRequest::SendLauncherAutomationAction {
+            nonce: nonce.to_owned(),
+            action,
+        },
+    )?)
+    .map_err(|error| format!("cannot parse automation action: {error}"))?;
+    let sequence = response
+        .get("action_sequence")
+        .and_then(Value::as_u64)
+        .ok_or("automation action has no sequence")?;
+    device.execute(DeviceRequest::AwaitLauncherAutomationPresented {
+        nonce: nonce.to_owned(),
+        action_sequence: sequence,
+        timeout_ms: 3_000,
+    })?;
+    Ok(sequence)
+}
+
+fn snapshot(device: &mut DeviceClient, nonce: &str) -> AgentResult<Value> {
+    serde_json::from_str(
+        &device.execute(DeviceRequest::ReadLauncherAutomationSnapshot {
+            nonce: nonce.to_owned(),
+        })?,
+    )
+    .map_err(|error| format!("cannot parse automation snapshot: {error}").into())
+}
+
+fn checkpoint(
+    device: &mut DeviceClient,
+    nonce: &str,
+    sequence: u64,
+    label: &str,
+    output: &Path,
+) -> AgentResult<Value> {
+    serde_json::from_str(
+        &device.execute(DeviceRequest::CaptureLauncherAutomationCheckpoint {
+            nonce: nonce.to_owned(),
+            action_sequence: sequence,
+            label: label.to_owned(),
+            output_dir: output.to_owned(),
+        })?,
+    )
+    .map_err(|error| format!("cannot parse checkpoint {label}: {error}").into())
+}
+
+fn await_semantic(
+    device: &mut DeviceClient,
+    nonce: &str,
+    field: &str,
+    expected: &str,
+) -> AgentResult<Value> {
+    for _ in 0..100 {
+        let value = snapshot(device, nonce)?;
+        if semantic(&value, field).and_then(Value::as_str) == Some(expected) {
+            return Ok(value);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    classified(
+        "alpha_ui_assertion_failed",
+        format!("{field} did not become {expected}"),
+    )
+}
+
+fn require_installed_candidate(
+    status: &Value,
+    candidate: &CandidateIdentity,
+) -> AgentResult<Value> {
+    let runtime = status
+        .pointer("/runtime/slint_status")
+        .filter(|value| value.is_object())
+        .ok_or("device status has no Slint runtime identity")?;
+    if runtime.get("build_version").and_then(Value::as_str) != Some(&candidate.version)
+        || runtime.get("build_source_revision").and_then(Value::as_str)
+            != Some(&candidate.magik_revision)
+    {
+        return classified(
+            "alpha_candidate_not_installed",
+            "running UI does not match the verified candidate",
+        );
+    }
+    Ok(runtime.clone())
+}
+
+fn semantic<'a>(snapshot: &'a Value, field: &str) -> Option<&'a Value> {
+    snapshot.get("semantic")?.get(field)
+}
+
+fn require_semantic(snapshot: &Value, field: &str, expected: &str) -> AgentResult<()> {
+    if semantic(snapshot, field).and_then(Value::as_str) == Some(expected) {
+        Ok(())
+    } else {
+        classified(
+            "alpha_ui_assertion_failed",
+            format!("{field} is not {expected}"),
+        )
+    }
+}
+
+fn require_bool(snapshot: &Value, field: &str, expected: bool) -> AgentResult<()> {
+    if semantic(snapshot, field).and_then(Value::as_bool) == Some(expected) {
+        Ok(())
+    } else {
+        classified(
+            "alpha_ui_assertion_failed",
+            format!("{field} is not {expected}"),
+        )
+    }
+}
+
+fn require_nonzero(snapshot: &Value, field: &str) -> AgentResult<()> {
+    if semantic(snapshot, field)
+        .and_then(Value::as_u64)
+        .is_some_and(|value| value > 0)
+    {
+        Ok(())
+    } else {
+        classified("alpha_ui_assertion_failed", format!("{field} is empty"))
+    }
+}
+
+fn require_nonempty(snapshot: &Value, field: &str) -> AgentResult<()> {
+    if semantic(snapshot, field)
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.is_empty())
+    {
+        Ok(())
+    } else {
+        classified("alpha_ui_assertion_failed", format!("{field} is empty"))
+    }
+}
+
+fn capture_usb(label: &str, output: &Path) -> AgentResult<UsbEvidence> {
+    let path = output.join(format!("{label}.jpg"));
+    let artifact = crate::capture::execute(Some(&path))?;
+    Ok(UsbEvidence {
+        label: label.to_owned(),
+        path: artifact.path.display().to_string(),
+        bytes: artifact.bytes,
+        width: artifact.width,
+        height: artifact.height,
+        sha256: digest_file(&artifact.path)?,
+    })
+}
+
+fn write_receipt_atomically(path: &Path, receipt: &AcceptanceReceipt) -> AgentResult<()> {
+    if path.exists() {
+        return classified("alpha_evidence_exists", path.display().to_string());
+    }
+    let temporary = path.with_extension(format!("json.partial-{}", std::process::id()));
+    if temporary.exists() {
+        return classified("alpha_evidence_exists", temporary.display().to_string());
+    }
+    let bytes = format!("{}\n", serde_json::to_string_pretty(receipt).unwrap());
+    fs::write(&temporary, bytes).map_err(|error| error.to_string())?;
+    fs::rename(&temporary, path).map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs())
 }
 
 pub fn verify_candidate(root: &Path) -> AgentResult<CandidateIdentity> {

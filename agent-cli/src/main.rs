@@ -181,6 +181,11 @@ fn dispatch(
         Intent::ReleaseQualify => {
             return agent_cli::release::execute(reporter);
         }
+        Intent::AlphaAccept { candidate, output } => {
+            let receipt = agent_cli::alpha::execute(candidate, output, reporter)?;
+            println!("{}", receipt.display());
+            return Ok(Outcome::Passed);
+        }
         Intent::Diagnose => {
             return agent_cli::diagnose::execute(repository, reporter);
         }
