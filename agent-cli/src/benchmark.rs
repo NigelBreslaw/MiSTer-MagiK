@@ -102,7 +102,7 @@ fn execute_navigation_transitions(
     let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
     device.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))?;
     if summary.get("schema").and_then(Value::as_str)
-        != Some("mister-magik-navigation-transition-profile-v1")
+        != Some("mister-magik-navigation-transition-profile-v2")
     {
         return Err("navigation transition profile summary has the wrong schema".into());
     }
