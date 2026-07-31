@@ -148,6 +148,44 @@ impl ConsoleFont {
         Cow::Owned(clipped)
     }
 
+    pub(crate) fn centered_text_baseline(
+        &mut self,
+        text: &str,
+        container_y: usize,
+        container_height: usize,
+    ) -> isize {
+        let mut ink_bounds: Option<(isize, isize)> = None;
+        for ch in text.chars() {
+            let Some(glyph) = self.glyph(ch) else {
+                continue;
+            };
+            if glyph.height == 0 {
+                continue;
+            }
+            let top = -(glyph.top as isize);
+            let bottom = top + glyph.height as isize;
+            ink_bounds = Some(match ink_bounds {
+                Some((min_top, max_bottom)) => (min_top.min(top), max_bottom.max(bottom)),
+                None => (top, bottom),
+            });
+        }
+        if let Some((ink_top, ink_bottom)) = ink_bounds {
+            let ink_height = ink_bottom - ink_top;
+            let centered_top =
+                container_y as isize + (container_height as isize - ink_height).div_euclid(2);
+            return centered_top - ink_top;
+        }
+
+        let metrics = self.font.metrics(&[]);
+        let scale = self.pixel_size / self.units_per_em;
+        let ascent = metrics.ascent * scale;
+        let descent = metrics.descent * scale;
+        let line_height = (ascent - descent).max(1.0);
+        let baseline =
+            container_y as f32 + ((container_height as f32 - line_height) * 0.5).max(0.0) + ascent;
+        baseline.round() as isize
+    }
+
     fn text_width(&mut self, text: &str) -> usize {
         let mut width = 0usize;
         for ch in text.chars() {
@@ -482,6 +520,47 @@ mod tests {
             assert!(font.rasterize_alpha_mask("MagiK").is_some());
         }
         assert!(widths.windows(2).all(|pair| pair[0] == pair[1]));
+    }
+
+    #[test]
+    fn centered_text_baseline_balances_crt_title_and_metadata_ink() {
+        for (typeface, pixel_size, row_height, text) in [
+            (ConsoleTypeface::MagikPixel, 16.0, 32, "MagiK 1984"),
+            (ConsoleTypeface::MagikPixelPal288, 16.0, 19, "MagiK 1984"),
+            (ConsoleTypeface::MagikPixelPal576, 16.0, 39, "MagiK 1984"),
+            (ConsoleTypeface::MagikPixel, 8.0, 32, "128"),
+            (ConsoleTypeface::MagikPixelPal288, 8.0, 19, "128"),
+            (ConsoleTypeface::MagikPixelPal576, 8.0, 39, "128"),
+        ] {
+            let mut font = ConsoleFont::new_with_typeface(pixel_size, typeface);
+            let width = 220;
+            let background = Pixel(0x00112233);
+            let foreground = Pixel(0x00ffffff);
+            let mut pixels = vec![background; width * row_height];
+            let baseline = font.centered_text_baseline(text, 0, row_height);
+            font.draw_text_clipped(
+                &mut pixels,
+                width,
+                width,
+                0,
+                row_height,
+                0,
+                baseline,
+                text,
+                foreground,
+            );
+            let ink_rows = pixels
+                .chunks(width)
+                .enumerate()
+                .filter(|(_, row)| row.iter().any(|pixel| pixel.0 == foreground.0))
+                .map(|(y, _)| y)
+                .collect::<Vec<_>>();
+            let top = *ink_rows.first().expect("text has top ink");
+            let bottom = *ink_rows.last().expect("text has bottom ink");
+            let top_padding = top;
+            let bottom_padding = row_height - bottom - 1;
+            assert!(top_padding.abs_diff(bottom_padding) <= 1);
+        }
     }
 
     #[test]

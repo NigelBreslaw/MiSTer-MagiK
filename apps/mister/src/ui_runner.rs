@@ -24,7 +24,7 @@ use crate::arcade_catalog::{
 };
 use crate::arcade_list_renderer::{
     ARCADE_LIST_H, ARCADE_LIST_W, ARCADE_LIST_X, ARCADE_LIST_Y, ArcadeListGeometry, ArcadeListItem,
-    ArcadeListRenderer, ArcadeListUpdate, arcade_list_present_pixels,
+    ArcadeListRenderer, ArcadeListUpdate,
 };
 use crate::boot_analytics;
 use crate::controller_db::ControllerDb;

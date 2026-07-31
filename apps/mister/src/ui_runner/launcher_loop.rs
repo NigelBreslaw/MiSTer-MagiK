@@ -2059,7 +2059,7 @@ pub(super) fn run_launcher_loop(
     let mut transition_picker_prev_left = false;
     let mut transition_picker_prev_right = false;
     let mut arcade_list_renderer = if crt_layout {
-        ArcadeListRenderer::new_for_crt_metrics(crt_metrics)
+        ArcadeListRenderer::new_for_crt_display(crt_metrics, ui)
     } else {
         ArcadeListRenderer::new()
     };
@@ -7181,7 +7181,7 @@ mod tests {
         let ui = crt_240_display();
         let metrics = CrtUiMetrics::for_display(&ui);
         let nav = LauncherNav::for_crt_layout_with_row_height(true, metrics.game_row_height);
-        let mut renderer = ArcadeListRenderer::new_for_crt_metrics(metrics);
+        let mut renderer = ArcadeListRenderer::new_for_crt_display(metrics, &ui);
 
         configure_arcade_list_renderer_geometry(&mut renderer, &nav, &ui);
 
@@ -7201,7 +7201,7 @@ mod tests {
         let ui = crt_240_display();
         let metrics = CrtUiMetrics::for_display(&ui);
         let nav = LauncherNav::for_crt_layout_with_row_height(true, metrics.game_row_height);
-        let mut renderer = ArcadeListRenderer::new_for_crt_metrics(metrics);
+        let mut renderer = ArcadeListRenderer::new_for_crt_display(metrics, &ui);
         configure_arcade_list_renderer_geometry(&mut renderer, &nav, &ui);
         let games = (0..20)
             .map(|index| arcade_game(format!("Game {index}")).build())
@@ -7245,7 +7245,7 @@ mod tests {
         let mut crt_nav =
             LauncherNav::for_crt_layout_with_row_height(true, metrics.game_row_height);
         crt_nav.arcade_filter.active = arcade_catalog::ArcadeFilter::Search;
-        let mut crt_renderer = ArcadeListRenderer::new_for_crt_metrics(metrics);
+        let mut crt_renderer = ArcadeListRenderer::new_for_crt_display(metrics, &crt);
         configure_arcade_list_renderer_geometry(&mut crt_renderer, &crt_nav, &crt);
         assert_eq!(
             crt_renderer.dirty_rect(),
@@ -7255,6 +7255,44 @@ mod tests {
                 x1: 624,
                 y1: 416,
             }
+        );
+    }
+
+    #[test]
+    fn crt_routes_use_roomier_rows_in_normal_and_search_layouts() {
+        for (pal, scandoubler, expected_row_height, expected_full_rows) in
+            [(0, 0, 32, 9), (1, 0, 19, 7), (0, 1, 32, 12), (1, 1, 39, 11)]
+        {
+            let ini = format!(
+                "[MiSTer]\ndirect_video=1\nmenu_pal={pal}\nforced_scandoubler={scandoubler}\n"
+            );
+            let display = UiDisplay::for_plan(
+                UiDisplayPlan::from_mister_ini_text(&ini).expect("CRT display plan"),
+            );
+            let metrics = CrtUiMetrics::for_display(&display);
+            assert_eq!(metrics.game_row_height, expected_row_height);
+            let mut nav =
+                LauncherNav::for_crt_layout_with_row_height(true, metrics.game_row_height);
+
+            for search in [false, true] {
+                nav.arcade_filter.active = if search {
+                    arcade_catalog::ArcadeFilter::Search
+                } else {
+                    arcade_catalog::ArcadeFilter::All
+                };
+                let (geometry, render_h) = arcade_list_layout(&nav, &display);
+                let visible_height = geometry.visible_height_with_metrics(render_h, Some(metrics));
+                assert_eq!(
+                    visible_height / metrics.game_row_height as usize,
+                    expected_full_rows
+                );
+            }
+        }
+
+        let hdmi = ArcadeListRenderer::new();
+        assert_eq!(
+            hdmi.selection_rect().y1 - hdmi.selection_rect().y0,
+            ARCADE_ROW_HEIGHT as usize
         );
     }
 
