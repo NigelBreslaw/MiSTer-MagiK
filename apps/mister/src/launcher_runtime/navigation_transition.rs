@@ -389,6 +389,8 @@ pub struct NavigationTransitionTelemetry {
     pub overlay_us: u64,
     pub phosphor_pixels: u64,
     pub scanline_pixels: u64,
+    pub status_quiesce_wait_us: u64,
+    pub status_quiesce_timeout: bool,
 }
 
 impl NavigationTransitionTelemetry {
@@ -907,6 +909,8 @@ pub struct NavigationTransitionPoc {
     pending_capture_us: u64,
     pending_started_us: u64,
     pending_prepare_started: Option<Instant>,
+    pending_status_quiesce_us: u64,
+    pending_status_quiesce_timeout: bool,
     buffers: NavigationTransitionBuffers,
     geometry_history: [Option<NavigationTransitionGeometry>; 3],
     last_render_stats: NavigationTransitionRenderStats,
@@ -937,6 +941,8 @@ impl NavigationTransitionPoc {
             pending_capture_us: 0,
             pending_started_us: 0,
             pending_prepare_started: None,
+            pending_status_quiesce_us: 0,
+            pending_status_quiesce_timeout: false,
             buffers: NavigationTransitionBuffers::new(buffer_width, buffer_height),
             geometry_history: [None; 3],
             last_render_stats: NavigationTransitionRenderStats::default(),
@@ -987,6 +993,8 @@ impl NavigationTransitionPoc {
         self.pending_capture_us = capture_us;
         self.pending_started_us = now_us;
         self.pending_prepare_started = Some(Instant::now());
+        self.pending_status_quiesce_us = 0;
+        self.pending_status_quiesce_timeout = false;
         Ok(true)
     }
 
@@ -1161,6 +1169,11 @@ impl NavigationTransitionPoc {
         self.last_frame_work_us = frame_work_us;
     }
 
+    pub fn note_pending_status_quiesce(&mut self, wait_us: u64, timed_out: bool) {
+        self.pending_status_quiesce_us = wait_us;
+        self.pending_status_quiesce_timeout = timed_out;
+    }
+
     pub fn capture_hud(&mut self, frame: &[Rgb565Pixel]) {
         let width = self.buffers.width;
         let height = self.buffers.height;
@@ -1203,7 +1216,13 @@ impl NavigationTransitionPoc {
         if !self.controller.begin(request, now_us) {
             return false;
         }
-        self.controller.captured(now_us, self.pending_capture_us)
+        let captured = self.controller.captured(now_us, self.pending_capture_us);
+        if captured {
+            let telemetry = self.controller.telemetry_mut();
+            telemetry.status_quiesce_wait_us = self.pending_status_quiesce_us;
+            telemetry.status_quiesce_timeout = self.pending_status_quiesce_timeout;
+        }
+        captured
     }
 }
 

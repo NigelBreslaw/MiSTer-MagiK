@@ -1141,6 +1141,10 @@ impl LauncherFrameAccounting {
                 && cpu_profile::screensaver_profile_state() == "complete")
     }
 
+    pub(super) fn runtime_status_worker_active(&self) -> bool {
+        self.runtime_status_publisher.metrics().worker_active
+    }
+
     pub(super) fn frame_analytics_mode(&self) -> FrameAnalyticsMode {
         self.frame_analytics_mode
     }
@@ -1766,6 +1770,7 @@ impl LauncherFrameAccounting {
                 status_submitted_sequence: publisher.submitted_sequence,
                 status_written_sequence: publisher.written_sequence,
                 status_worker_errors: publisher.worker_errors,
+                status_worker_active: publisher.worker_active,
                 clock_update_due: frame.clock_update_due,
                 clock_update_us: u128_to_u64_saturating(frame.clock_update_us),
                 screensaver_sampling_profile: frame.screensaver_frame_trace.sampling_profile,
@@ -2405,6 +2410,9 @@ fn should_defer_runtime_status_write(
     frame: &LauncherPresentedFrame,
     last_status_write_age: Duration,
 ) -> bool {
+    if frame.status_write_due && frame.composition_status.state == "navigation-transition" {
+        return true;
+    }
     let trace = frame.screensaver_frame_trace;
     let preparation_age_limit_us = u128::from(frame.vsync_period_us).saturating_mul(3) / 2;
     frame.status_write_due
@@ -3052,6 +3060,18 @@ mod tests {
         assert!(!should_defer_runtime_status_write(
             &non_latch,
             Duration::from_millis(1_100)
+        ));
+    }
+
+    #[test]
+    fn navigation_transition_defers_status_without_consuming_the_deadline() {
+        let start = Instant::now();
+        let mut frame = presented_frame(49, start, 8_000);
+        frame.status_write_due = true;
+        frame.composition_status.state = "navigation-transition";
+        assert!(should_defer_runtime_status_write(
+            &frame,
+            Duration::from_secs(5)
         ));
     }
 

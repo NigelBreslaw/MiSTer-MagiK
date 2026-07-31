@@ -231,7 +231,10 @@ struct PendingNavigationTransition {
     source_state: launcher::NavigationTransitionState,
     source_was_arcade: bool,
     committed: bool,
+    status_quiesce_started_at: Option<Instant>,
 }
+
+const NAVIGATION_STATUS_QUIESCE_LIMIT: Duration = Duration::from_millis(50);
 
 fn navigation_preview_snapshot_ready(
     preview_expected: bool,
@@ -3554,6 +3557,7 @@ pub(super) fn run_launcher_loop(
                                             source_state,
                                             source_was_arcade: nav.screen == Screen::Arcade,
                                             committed: false,
+                                            status_quiesce_started_at: None,
                                         });
                                     full_bridge_dirty = true;
                                     request_launcher_redraw!();
@@ -4099,11 +4103,12 @@ pub(super) fn run_launcher_loop(
         let confirm_visible = bridge.get_confirm_visible();
         let confirm_selected = bridge.get_confirm_selected();
         let status_write_due = frame_accounting.status_write_due();
-        let status_string_copy_start = (status_write_due
+        let status_snapshot_due = status_write_due && !navigation_transition.is_active();
+        let status_string_copy_start = (status_snapshot_due
             && frame_accounting.preview_scroll_trace_enabled())
         .then(Instant::now);
         let status_text =
-            status_write_due.then(|| LauncherStatusTextSnapshot::from_bridge(&bridge));
+            status_snapshot_due.then(|| LauncherStatusTextSnapshot::from_bridge(&bridge));
         let status_string_copy_us = status_string_copy_start
             .map(|start| start.elapsed().as_micros())
             .unwrap_or(0);
@@ -5029,7 +5034,28 @@ pub(super) fn run_launcher_loop(
                         destination_layers_ready = true;
                     }
                 }
+                let mut status_quiesce = None;
                 if destination_layers_ready {
+                    let worker_active = frame_accounting.runtime_status_worker_active();
+                    if let Some(pending) = pending_navigation_transition.as_mut() {
+                        let started = pending
+                            .status_quiesce_started_at
+                            .get_or_insert_with(Instant::now);
+                        let waited = started.elapsed();
+                        let timed_out = worker_active && waited >= NAVIGATION_STATUS_QUIESCE_LIMIT;
+                        status_quiesce = Some((waited, timed_out));
+                        if worker_active && !timed_out {
+                            destination_layers_ready = false;
+                        }
+                    }
+                }
+                if destination_layers_ready {
+                    if let Some((waited, timed_out)) = status_quiesce {
+                        navigation_transition.note_pending_status_quiesce(
+                            waited.as_micros().min(u64::MAX as u128) as u64,
+                            timed_out,
+                        );
+                    }
                     if navigation_transition
                         .capture_destination(layer_target.cached_frame_view().pixels(), now_us)
                         .is_err()

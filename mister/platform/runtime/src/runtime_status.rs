@@ -225,6 +225,7 @@ pub struct FrameBudgetRecentFrame {
     pub status_submitted_sequence: u64,
     pub status_written_sequence: u64,
     pub status_worker_errors: u64,
+    pub status_worker_active: bool,
     pub clock_update_due: bool,
     pub clock_update_us: u64,
     pub screensaver_sampling_profile: &'static str,
@@ -1129,6 +1130,7 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
     field!("status_submitted_sequence", frame.status_submitted_sequence);
     field!("status_written_sequence", frame.status_written_sequence);
     field!("status_worker_errors", frame.status_worker_errors);
+    field!("status_worker_active", frame.status_worker_active);
     field!("clock_update_due", frame.clock_update_due);
     field!("clock_update_us", frame.clock_update_us);
     field!(
