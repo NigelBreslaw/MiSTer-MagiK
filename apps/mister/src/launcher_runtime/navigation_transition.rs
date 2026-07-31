@@ -886,6 +886,7 @@ pub struct NavigationTransitionRenderStats {
 pub struct NavigationTransitionPoc {
     enabled: bool,
     duration_override_us: Option<u64>,
+    scanline_kernel: ScanlineKernel,
     controller: NavigationTransitionController,
     buffers: NavigationTransitionBuffers,
     geometry_history: [Option<NavigationTransitionGeometry>; 3],
@@ -897,6 +898,7 @@ pub struct NavigationTransitionPoc {
 impl NavigationTransitionPoc {
     pub fn from_env(width: usize, height: usize) -> Self {
         let mut poc = Self::new(width, height, env_flag("MISTER_NAV_TRANSITION_POC"));
+        poc.scanline_kernel = ScanlineKernel::from_env();
         poc.duration_override_us = std::env::var("MISTER_NAV_TRANSITION_DEBUG_DURATION_MS")
             .ok()
             .and_then(|value| value.trim().parse::<u64>().ok())
@@ -912,6 +914,7 @@ impl NavigationTransitionPoc {
         Self {
             enabled,
             duration_override_us: None,
+            scanline_kernel: ScanlineKernel::Scalar,
             controller: NavigationTransitionController::default(),
             buffers: NavigationTransitionBuffers::new(buffer_width, buffer_height),
             geometry_history: [None; 3],
@@ -1005,6 +1008,7 @@ impl NavigationTransitionPoc {
             self.buffers.width,
             self.buffers.height,
             frame,
+            self.scanline_kernel,
             &mut stats,
         );
         stats.overlay_us = overlay_started.elapsed().as_micros().min(u64::MAX as u128) as u64;
@@ -1154,11 +1158,36 @@ fn env_flag(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ScanlineKernel {
+    Scalar,
+    #[cfg(target_arch = "arm")]
+    Neon,
+}
+
+impl ScanlineKernel {
+    fn from_env() -> Self {
+        #[cfg(target_arch = "arm")]
+        if std::env::var("MISTER_NAV_TRANSITION_SCANLINE_KERNEL")
+            .ok()
+            .is_some_and(|value| value.trim().eq_ignore_ascii_case("neon"))
+        {
+            assert!(
+                scanline_neon::matches_scalar_reference(),
+                "navigation transition NEON scanline kernel differs from scalar RGB565 output"
+            );
+            return Self::Neon;
+        }
+        Self::Scalar
+    }
+}
+
 fn apply_crt_scanline_overlay(
     working: &mut [Rgb565Pixel],
     width: usize,
     height: usize,
     frame: NavigationTransitionFrame,
+    kernel: ScanlineKernel,
     stats: &mut NavigationTransitionRenderStats,
 ) {
     if width == 0
@@ -1198,10 +1227,57 @@ fn apply_crt_scanline_overlay(
             continue;
         }
         let start = y * width;
-        for pixel in &mut working[start..start + width] {
-            *pixel = darken_rgb565_7_8(*pixel);
-        }
+        darken_rgb565_row_7_8(&mut working[start..start + width], kernel);
         stats.phosphor_pixels = stats.phosphor_pixels.saturating_add(width as u64);
+    }
+}
+
+fn darken_rgb565_row_7_8(row: &mut [Rgb565Pixel], kernel: ScanlineKernel) {
+    #[cfg(target_arch = "arm")]
+    if kernel == ScanlineKernel::Neon {
+        // SAFETY: the kernel reads and writes exactly `row.len()` initialized RGB565 pixels.
+        unsafe {
+            scanline_neon::darken_row(row);
+        }
+        return;
+    }
+    let _ = kernel;
+    darken_rgb565_row_scalar_7_8(row);
+}
+
+#[inline(always)]
+fn darken_rgb565_row_scalar_7_8(row: &mut [Rgb565Pixel]) {
+    for pixel in row {
+        *pixel = darken_rgb565_7_8(*pixel);
+    }
+}
+
+#[cfg(target_arch = "arm")]
+mod scanline_neon {
+    use super::{Rgb565Pixel, darken_rgb565_7_8 as scalar_darken_rgb565_7_8};
+
+    unsafe extern "C" {
+        fn mister_magik_scanline_neon_darken_7_8(pixels: *mut u16, count: usize);
+    }
+
+    pub(super) unsafe fn darken_row(row: &mut [Rgb565Pixel]) {
+        unsafe {
+            mister_magik_scanline_neon_darken_7_8(row.as_mut_ptr().cast(), row.len());
+        }
+    }
+
+    pub(super) fn matches_scalar_reference() -> bool {
+        let mut actual = (u16::MIN..=u16::MAX).map(Rgb565Pixel).collect::<Vec<_>>();
+        let expected = actual
+            .iter()
+            .copied()
+            .map(scalar_darken_rgb565_7_8)
+            .collect::<Vec<_>>();
+        // SAFETY: `actual` is a fully initialized, exclusively borrowed RGB565 slice.
+        unsafe {
+            self::darken_row(&mut actual);
+        }
+        actual == expected
     }
 }
 
@@ -5461,6 +5537,7 @@ mod tests {
                     progress_q16: progress,
                     ..NavigationTransitionFrame::default()
                 },
+                ScanlineKernel::Scalar,
                 &mut stats,
             );
             if progress == 0 || progress == PROGRESS_MAX {
@@ -5489,6 +5566,7 @@ mod tests {
                 reverse_leg_progress_q16: PROGRESS_MAX / 2,
                 ..NavigationTransitionFrame::default()
             },
+            ScanlineKernel::Scalar,
             &mut stats,
         );
         assert_eq!(stats.phosphor_pixels, full_phosphor_pixels);

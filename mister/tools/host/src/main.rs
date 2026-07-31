@@ -3793,97 +3793,30 @@ fn profile_installed_navigation_transitions(
     output_dir: &Path,
 ) -> Result<String> {
     fs::create_dir_all(output_dir)?;
-    let run_result = (|| {
-        let remote_svg = format!("{NAVIGATION_TRANSITION_PROFILE_REMOTE_DIR}/profile.svg");
-        let remote_folded = format!("{NAVIGATION_TRANSITION_PROFILE_REMOTE_DIR}/profile.folded");
-        let remote_complete = format!("{NAVIGATION_TRANSITION_PROFILE_REMOTE_DIR}/profile.json");
-        let session = connect_with(&config.connection, 10)?;
-        exec_checked(
-            &session,
-            "reset navigation transition profile artifacts",
-            &format!(
-                "set -eu; mkdir -p {0}; rm -f {1} {2} {3}",
-                sh(NAVIGATION_TRANSITION_PROFILE_REMOTE_DIR),
-                sh(&remote_svg),
-                sh(&remote_folded),
-                sh(&remote_complete)
-            ),
-        )?;
-        restart_launcher_with_one_shot_env(
-            &session,
-            LauncherRestartOptions {
-                env_vars: vec![
-                    ("MISTER_CATALOG_REFRESH".into(), "off".into()),
-                    ("MISTER_NAV_TRANSITION_POC".into(), "1".into()),
-                    (
-                        "MISTER_LAUNCHER_INPUT_SCRIPT".into(),
-                        "wait:120,a,wait:120,b,wait:90,right,a,wait:120,b,wait:120".into(),
-                    ),
-                    (
-                        "MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES".into(),
-                        "1".into(),
-                    ),
-                    ("MISTER_PPROF".into(), "1".into()),
-                    (
-                        "MISTER_PPROF_TRIGGER".into(),
-                        "navigation-transitions".into(),
-                    ),
-                    (
-                        "MISTER_PPROF_DURATION_SECS".into(),
-                        NAVIGATION_TRANSITION_PROFILE_SECS.to_string(),
-                    ),
-                    ("MISTER_PPROF_HZ".into(), "99".into()),
-                    ("MISTER_PPROF_OUT".into(), remote_svg.clone()),
-                    ("MISTER_PPROF_FOLDED_OUT".into(), remote_folded.clone()),
-                    ("MISTER_PPROF_COMPLETE".into(), remote_complete.clone()),
-                ],
-                timeout_secs: 45,
-                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
-                ..LauncherRestartOptions::default()
-            },
-        )?;
-        drop(session);
-        let telemetry = agent_telemetry_until_screensaver_profile_complete(
-            &config.agent,
-            Duration::from_secs(NAVIGATION_TRANSITION_PROFILE_SECS + 20),
-        )?;
-        let session = connect_with(&config.connection, 10)?;
-        let metadata = remote_read(&session, &remote_complete)
-            .ok_or("navigation transition profile completion metadata is missing")?;
-        let metadata_value: Value = serde_json::from_str(metadata.trim())?;
-        if metadata_value.get("schema").and_then(Value::as_str)
-            != Some("mister-magik-navigation-transitions-pprof-v1")
-            || metadata_value.get("state").and_then(Value::as_str) != Some("complete")
-            || metadata_value
-                .get("sample_hits")
-                .and_then(Value::as_i64)
-                .unwrap_or(0)
-                <= 0
-        {
-            return Err("navigation transition profile produced no CPU samples".into());
+    let run_result = (|| -> Result<String> {
+        let mut kernels = serde_json::Map::new();
+        for kernel in ["scalar", "neon"] {
+            let kernel_output_dir = output_dir.join(kernel);
+            let summary =
+                profile_installed_navigation_transition_kernel(config, &kernel_output_dir, kernel)?;
+            kernels.insert(kernel.into(), summary);
         }
-        let svg = remote_read(&session, &remote_svg)
-            .filter(|text| !text.is_empty())
-            .ok_or("navigation transition profile SVG is missing")?;
-        let folded = remote_read(&session, &remote_folded)
-            .filter(|text| !text.is_empty())
-            .ok_or("navigation transition folded stacks are missing")?;
-        fs::write(output_dir.join("flamegraph.svg"), svg)?;
-        fs::write(output_dir.join("stacks.folded"), folded)?;
+        let summary = json!({
+            "schema": "mister-magik-navigation-transition-kernel-comparison-v1",
+            "scenario": "navigation-transitions",
+            "script": "Home -> Arcade -> Home -> Consoles -> Home",
+            "catalog_refresh": "off",
+            "kernels": kernels,
+        });
         fs::write(
-            output_dir.join("profile.json"),
-            format!("{}\n", serde_json::to_string_pretty(&metadata_value)?),
+            output_dir.join("summary.json"),
+            format!("{}\n", serde_json::to_string_pretty(&summary)?),
         )?;
-        let telemetry_text = telemetry
-            .iter()
-            .map(serde_json::to_string)
-            .collect::<std::result::Result<Vec<_>, _>>()?
-            .join("\n");
         fs::write(
-            output_dir.join("telemetry.jsonl"),
-            format!("{telemetry_text}\n"),
+            output_dir.join("report.md"),
+            navigation_transition_kernel_comparison_report(&summary)?,
         )?;
-        summarize_navigation_transition_profile(output_dir, &telemetry, metadata_value)
+        serde_json::to_string(&summary).map_err(Into::into)
     })();
     let restore_result = restore_installed_navigation_transition_profile(config);
     match (run_result, restore_result) {
@@ -3896,6 +3829,110 @@ fn profile_installed_navigation_transitions(
             Err(format!("{run}; navigation transition profile cleanup failed: {cleanup}").into())
         }
     }
+}
+
+fn profile_installed_navigation_transition_kernel(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+    kernel: &str,
+) -> Result<Value> {
+    fs::create_dir_all(output_dir)?;
+    let remote_svg = format!("{NAVIGATION_TRANSITION_PROFILE_REMOTE_DIR}/{kernel}.svg");
+    let remote_folded = format!("{NAVIGATION_TRANSITION_PROFILE_REMOTE_DIR}/{kernel}.folded");
+    let remote_complete = format!("{NAVIGATION_TRANSITION_PROFILE_REMOTE_DIR}/{kernel}.json");
+    let session = connect_with(&config.connection, 10)?;
+    exec_checked(
+        &session,
+        "reset navigation transition profile artifacts",
+        &format!(
+            "set -eu; mkdir -p {0}; rm -f {1} {2} {3}",
+            sh(NAVIGATION_TRANSITION_PROFILE_REMOTE_DIR),
+            sh(&remote_svg),
+            sh(&remote_folded),
+            sh(&remote_complete)
+        ),
+    )?;
+    restart_launcher_with_one_shot_env(
+        &session,
+        LauncherRestartOptions {
+            env_vars: vec![
+                ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+                ("MISTER_NAV_TRANSITION_POC".into(), "1".into()),
+                (
+                    "MISTER_NAV_TRANSITION_SCANLINE_KERNEL".into(),
+                    kernel.into(),
+                ),
+                (
+                    "MISTER_LAUNCHER_INPUT_SCRIPT".into(),
+                    "wait:120,a,wait:120,b,wait:90,right,a,wait:120,b,wait:120".into(),
+                ),
+                (
+                    "MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES".into(),
+                    "1".into(),
+                ),
+                ("MISTER_PPROF".into(), "1".into()),
+                (
+                    "MISTER_PPROF_TRIGGER".into(),
+                    "navigation-transitions".into(),
+                ),
+                (
+                    "MISTER_PPROF_DURATION_SECS".into(),
+                    NAVIGATION_TRANSITION_PROFILE_SECS.to_string(),
+                ),
+                ("MISTER_PPROF_HZ".into(), "99".into()),
+                ("MISTER_PPROF_OUT".into(), remote_svg.clone()),
+                ("MISTER_PPROF_FOLDED_OUT".into(), remote_folded.clone()),
+                ("MISTER_PPROF_COMPLETE".into(), remote_complete.clone()),
+            ],
+            timeout_secs: 45,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    drop(session);
+    let telemetry = agent_telemetry_until_screensaver_profile_complete(
+        &config.agent,
+        Duration::from_secs(NAVIGATION_TRANSITION_PROFILE_SECS + 20),
+    )?;
+    let session = connect_with(&config.connection, 10)?;
+    let metadata = remote_read(&session, &remote_complete)
+        .ok_or("navigation transition profile completion metadata is missing")?;
+    let metadata_value: Value = serde_json::from_str(metadata.trim())?;
+    if metadata_value.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-navigation-transitions-pprof-v1")
+        || metadata_value.get("state").and_then(Value::as_str) != Some("complete")
+        || metadata_value
+            .get("sample_hits")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            <= 0
+    {
+        return Err(
+            format!("navigation transition {kernel} profile produced no CPU samples").into(),
+        );
+    }
+    let svg = remote_read(&session, &remote_svg)
+        .filter(|text| !text.is_empty())
+        .ok_or("navigation transition profile SVG is missing")?;
+    let folded = remote_read(&session, &remote_folded)
+        .filter(|text| !text.is_empty())
+        .ok_or("navigation transition folded stacks are missing")?;
+    fs::write(output_dir.join("flamegraph.svg"), svg)?;
+    fs::write(output_dir.join("stacks.folded"), folded)?;
+    fs::write(
+        output_dir.join("profile.json"),
+        format!("{}\n", serde_json::to_string_pretty(&metadata_value)?),
+    )?;
+    let telemetry_text = telemetry
+        .iter()
+        .map(serde_json::to_string)
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .join("\n");
+    fs::write(
+        output_dir.join("telemetry.jsonl"),
+        format!("{telemetry_text}\n"),
+    )?;
+    summarize_navigation_transition_profile(output_dir, kernel, &telemetry, metadata_value)
 }
 
 fn restore_installed_navigation_transition_profile(config: &NativeDeviceConfig) -> Result<()> {
@@ -3929,9 +3966,10 @@ fn restore_installed_navigation_transition_profile(config: &NativeDeviceConfig) 
 
 fn summarize_navigation_transition_profile(
     output_dir: &Path,
+    kernel: &str,
     telemetry: &[Value],
     cpu_profile: Value,
-) -> Result<String> {
+) -> Result<Value> {
     use std::fmt::Write as _;
 
     let mut frames = BTreeMap::<u64, Value>::new();
@@ -4056,6 +4094,7 @@ fn summarize_navigation_transition_profile(
         "schema": "mister-magik-navigation-transition-profile-v1",
         "scenario": "navigation-transitions",
         "script": "Home -> Arcade -> Home -> Consoles -> Home",
+        "scanline_kernel": kernel,
         "all_legs_perfect_60": all_perfect,
         "transition_frames": transition_frames.len(),
         "system_combined_busy_pct_average": system_cpu_average,
@@ -4069,7 +4108,7 @@ fn summarize_navigation_transition_profile(
         output_dir.join("summary.json"),
         format!("{}\n", serde_json::to_string_pretty(&summary)?),
     )?;
-    let mut report = String::from("# Navigation transition profile\n\n");
+    let mut report = format!("# Navigation transition profile: {kernel}\n\n");
     writeln!(report, "Perfect 60 FPS on every leg: **{}**\n", all_perfect)?;
     writeln!(
         report,
@@ -4107,7 +4146,41 @@ fn summarize_navigation_transition_profile(
         )?;
     }
     fs::write(output_dir.join("report.md"), report)?;
-    serde_json::to_string(&summary).map_err(Into::into)
+    Ok(summary)
+}
+
+fn navigation_transition_kernel_comparison_report(summary: &Value) -> Result<String> {
+    use std::fmt::Write as _;
+
+    let mut report = String::from("# Navigation transition scanline-kernel comparison\n\n");
+    writeln!(report, "Catalog refresh: **off**\n")?;
+    writeln!(
+        report,
+        "| Kernel | Leg | FPS | CPU (one core) | Frame work p99 | Transition p99 | Overlay p99 |"
+    )?;
+    writeln!(report, "|---|---|---:|---:|---:|---:|---:|")?;
+    for kernel in ["scalar", "neon"] {
+        let Some(kernel_summary) = summary.pointer(&format!("/kernels/{kernel}")) else {
+            continue;
+        };
+        for (leg_name, leg) in kernel_summary["legs"].as_object().into_iter().flatten() {
+            writeln!(
+                report,
+                "| {kernel} | {leg_name} | {:.2} | {:.1}% | {} us | {} us | {} us |",
+                leg["fps"].as_f64().unwrap_or(0.0),
+                leg["process_cpu_pct_of_one_core"].as_f64().unwrap_or(0.0),
+                leg["frame_work_p99_us"].as_u64().unwrap_or(0),
+                leg["transition_p99_us"].as_u64().unwrap_or(0),
+                leg["overlay_p99_us"].as_u64().unwrap_or(0),
+            )?;
+        }
+    }
+    writeln!(report)?;
+    writeln!(
+        report,
+        "[Scalar flamegraph](scalar/flamegraph.svg) · [NEON flamegraph](neon/flamegraph.svg)"
+    )?;
+    Ok(report)
 }
 
 fn catalog_lifecycle_evidence_command() -> String {

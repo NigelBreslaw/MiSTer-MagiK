@@ -18,6 +18,36 @@ static const uint32_t PARTICLE_NOT_VISIBLE = UINT32_MAX;
 static const uint32_t COMMAND_PALETTE_SHIFT = 20;
 static const uint32_t COMMAND_NEIGHBOR = 1u << 22;
 
+void mister_magik_scanline_neon_darken_7_8(
+    uint16_t *restrict pixels,
+    size_t count
+) {
+    size_t vector_end = count & ~(size_t)7;
+    const uint16x8_t red_blue_mask = vdupq_n_u16(0x001f);
+    const uint16x8_t green_mask = vdupq_n_u16(0x003f);
+    for (size_t index = 0; index < vector_end; index += 8) {
+        uint16x8_t packed = vld1q_u16(pixels + index);
+        uint16x8_t red = vshrq_n_u16(packed, 11);
+        uint16x8_t green = vandq_u16(vshrq_n_u16(packed, 5), green_mask);
+        uint16x8_t blue = vandq_u16(packed, red_blue_mask);
+        red = vshrq_n_u16(vmulq_n_u16(red, 7), 3);
+        green = vshrq_n_u16(vmulq_n_u16(green, 7), 3);
+        blue = vshrq_n_u16(vmulq_n_u16(blue, 7), 3);
+        uint16x8_t darkened = vorrq_u16(
+            vshlq_n_u16(red, 11),
+            vorrq_u16(vshlq_n_u16(green, 5), blue)
+        );
+        vst1q_u16(pixels + index, darkened);
+    }
+    for (size_t index = vector_end; index < count; index++) {
+        uint16_t packed = pixels[index];
+        uint16_t red = (uint16_t)(((packed >> 11) & 0x1f) * 7 / 8);
+        uint16_t green = (uint16_t)(((packed >> 5) & 0x3f) * 7 / 8);
+        uint16_t blue = (uint16_t)((packed & 0x1f) * 7 / 8);
+        pixels[index] = (uint16_t)((red << 11) | (green << 5) | blue);
+    }
+}
+
 static inline uint32x4_t next_random(uint32_t *states) {
     uint32x4_t value = vld1q_u32(states);
     value = veorq_u32(value, vshlq_n_u32(value, 13));
