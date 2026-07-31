@@ -1246,7 +1246,7 @@ mod scanline_neon {
     unsafe extern "C" {
         fn mister_magik_scanline_neon_darken_7_8_rows(
             pixels: *mut u16,
-            width: usize,
+            vector_count: usize,
             rows: usize,
             stride: usize,
         );
@@ -1258,10 +1258,11 @@ mod scanline_neon {
         rows: usize,
         stride: usize,
     ) {
+        debug_assert_eq!(width % 8, 0);
         unsafe {
             mister_magik_scanline_neon_darken_7_8_rows(
                 pixels.as_mut_ptr().cast(),
-                width,
+                width / 8,
                 rows,
                 stride,
             );

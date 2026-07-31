@@ -38,7 +38,7 @@ static inline uint16x8_t darken_rgb565_7_8_vector(
 
 void mister_magik_scanline_neon_darken_7_8_rows(
     uint16_t *restrict pixels,
-    size_t width,
+    size_t vector_count,
     size_t rows,
     size_t stride
 ) {
@@ -47,11 +47,11 @@ void mister_magik_scanline_neon_darken_7_8_rows(
     const uint16x8_t seven = vdupq_n_u16(7);
     for (size_t row = 0; row < rows; row++) {
         uint16_t *row_pixels = pixels + row * stride;
-        size_t index = 0;
-        for (; index + 8 <= width; index += 8) {
-            uint16x8_t packed = vld1q_u16(row_pixels + index);
+        for (size_t vector = 0; vector < vector_count; vector++) {
+            uint16_t *block = row_pixels + vector * 8;
+            uint16x8_t packed = vld1q_u16(block);
             vst1q_u16(
-                row_pixels + index,
+                block,
                 darken_rgb565_7_8_vector(
                     packed,
                     red_blue_mask,
@@ -59,13 +59,6 @@ void mister_magik_scanline_neon_darken_7_8_rows(
                     seven
                 )
             );
-        }
-        for (; index < width; index++) {
-            uint16_t packed = row_pixels[index];
-            uint16_t red = (uint16_t)(((packed >> 11) & 0x1f) * 7 / 8);
-            uint16_t green = (uint16_t)(((packed >> 5) & 0x3f) * 7 / 8);
-            uint16_t blue = (uint16_t)((packed & 0x1f) * 7 / 8);
-            row_pixels[index] = (uint16_t)((red << 11) | (green << 5) | blue);
         }
     }
 }
