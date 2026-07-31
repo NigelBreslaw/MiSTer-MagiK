@@ -15,6 +15,8 @@ pub struct MagikSettings {
     pub version: u32,
     #[serde(default)]
     pub simple_joystick_handling: bool,
+    #[serde(default)]
+    pub reduce_motion: bool,
     #[serde(default = "default_screensaver_enabled")]
     pub screensaver_enabled: bool,
     #[serde(default = "default_screensaver_delay_minutes")]
@@ -34,6 +36,7 @@ impl Default for MagikSettings {
         Self {
             version: SETTINGS_VERSION,
             simple_joystick_handling: false,
+            reduce_motion: false,
             screensaver_enabled: default_screensaver_enabled(),
             screensaver_delay_minutes: default_screensaver_delay_minutes(),
         }
@@ -147,6 +150,7 @@ mod tests {
         let settings = MagikSettings::load_from(path);
 
         assert!(settings.simple_joystick_handling);
+        assert!(!settings.reduce_motion);
         assert!(settings.screensaver_enabled);
         assert_eq!(settings.screensaver_delay_minutes, 5);
     }
@@ -174,6 +178,7 @@ mod tests {
         let path = temp_settings_path("save");
         let settings = MagikSettings {
             simple_joystick_handling: true,
+            reduce_motion: true,
             ..MagikSettings::default()
         };
 

@@ -48,6 +48,7 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
             .collect::<Vec<_>>(),
     )));
     bridge.set_simple_joystick_handling(false);
+    bridge.set_reduce_motion(false);
     bridge.set_licenses_selected(0);
     bridge.set_licenses_expanded(false);
     bridge.set_licenses_scroll_y(0);
@@ -168,6 +169,12 @@ pub(super) fn sync_settings_bridge(
         get_simple_joystick_handling,
         set_simple_joystick_handling,
         nav.settings.simple_joystick_handling
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_reduce_motion,
+        set_reduce_motion,
+        nav.settings.reduce_motion
     );
     set_bridge_if_changed!(
         bridge,
@@ -680,6 +687,7 @@ pub(super) fn sync_bridge_launcher(
     bridge.set_display_highlighted(nav.display_highlighted as i32);
     bridge.set_display_confirm_remaining(nav.display_confirm_remaining as i32);
     bridge.set_simple_joystick_handling(nav.settings.simple_joystick_handling);
+    bridge.set_reduce_motion(nav.settings.reduce_motion);
     bridge.set_screensaver_settings_selected(nav.screensaver_selected as i32);
     bridge.set_screensaver_enabled(nav.settings.screensaver_enabled);
     bridge.set_screensaver_delay_minutes(nav.settings.screensaver_delay_minutes as i32);
@@ -838,6 +846,12 @@ pub(super) fn sync_bridge_launcher_light(
         get_simple_joystick_handling,
         set_simple_joystick_handling,
         nav.settings.simple_joystick_handling
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_reduce_motion,
+        set_reduce_motion,
+        nav.settings.reduce_motion
     );
     set_bridge_if_changed!(
         bridge,
@@ -1362,6 +1376,7 @@ mod tests {
         nav.settings.screensaver_enabled = !nav.settings.screensaver_enabled;
         nav.settings.screensaver_delay_minutes += 1;
         nav.settings.simple_joystick_handling = true;
+        nav.settings.reduce_motion = true;
 
         assert!(before == LauncherBridgeKey::from_nav(&nav));
 
@@ -1389,6 +1404,7 @@ mod tests {
             nav.settings.screensaver_delay_minutes as i32
         );
         assert!(bridge.get_simple_joystick_handling());
+        assert!(bridge.get_reduce_motion());
     }
 
     #[test]

@@ -66,7 +66,13 @@ const MISTER_START_TIMEOUT: Duration = Duration::from_secs(15);
 pub const DISPLAY_CONFIRM_SECONDS: u8 = 20;
 pub const LAUNCH_RETURN_STATE_PATH: &str = "/tmp/mister-magik/launcher-return-state.json";
 const LAUNCH_RETURN_STATE_SCHEMA: u32 = 3;
-const SETTINGS_MAX_SELECTED: usize = 4;
+const SETTINGS_DISPLAY_SELECTED: usize = 0;
+const SETTINGS_SCREENSAVER_SELECTED: usize = 1;
+const SETTINGS_REDUCE_MOTION_SELECTED: usize = 2;
+const SETTINGS_EXIT_SELECTED: usize = 3;
+const SETTINGS_REBUILD_SELECTED: usize = 4;
+const SETTINGS_ABOUT_SELECTED: usize = 5;
+const SETTINGS_MAX_SELECTED: usize = SETTINGS_ABOUT_SELECTED;
 const ABOUT_MAX_SELECTED: usize = 1;
 const SCREENSAVER_SETTINGS_MAX_SELECTED: usize = 2;
 const LICENSES_MAX_SELECTED: usize = crate::licenses::LICENSE_TITLES.len() - 1;
@@ -2417,7 +2423,7 @@ impl LauncherNav {
             self.settings_selected -= 1;
         }
         if rising(now.btn_a, self.prev.btn_a) {
-            if self.settings_selected == 0 {
+            if self.settings_selected == SETTINGS_DISPLAY_SELECTED {
                 self.display_combo_open = true;
                 let count =
                     mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS.len();
@@ -2428,20 +2434,31 @@ impl LauncherNav {
                 };
                 return None;
             }
-            if self.settings_selected == 1 {
+            if self.settings_selected == SETTINGS_SCREENSAVER_SELECTED {
                 self.screensaver_selected = 0;
                 self.screen = Screen::Screensaver;
                 return None;
             }
-            if self.settings_selected == 4 {
+            if self.settings_selected == SETTINGS_REDUCE_MOTION_SELECTED {
+                let mut next = self.settings.clone();
+                next.reduce_motion = !next.reduce_motion;
+                self.settings = next.clone();
+                return Some(LauncherEvent {
+                    action: LauncherAction::PersistSettings,
+                    path: None,
+                    settings: Some(next),
+                });
+            }
+            if self.settings_selected == SETTINGS_ABOUT_SELECTED {
                 self.about_selected = 0;
                 self.screen = Screen::About;
                 return None;
             }
             self.confirm_selected = 0;
             self.confirm_action = Some(match self.settings_selected {
-                2 => ConfirmAction::ExitToMister,
-                _ => ConfirmAction::RebuildDatabase,
+                SETTINGS_EXIT_SELECTED => ConfirmAction::ExitToMister,
+                SETTINGS_REBUILD_SELECTED => ConfirmAction::RebuildDatabase,
+                _ => return None,
             });
         }
         None
@@ -6959,6 +6976,26 @@ mod tests {
     }
 
     #[test]
+    fn launcher_settings_toggles_and_persists_reduce_motion() {
+        let catalog = multi_system_catalog();
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Settings;
+        nav.settings_selected = SETTINGS_REDUCE_MOTION_SELECTED;
+
+        let event = nav
+            .handle_input(&pad_with(|pad| pad.btn_a = true), Instant::now(), &catalog)
+            .expect("reduce motion should persist");
+
+        assert!(nav.settings.reduce_motion);
+        assert_eq!(event.action, LauncherAction::PersistSettings);
+        assert!(
+            event
+                .settings
+                .is_some_and(|settings| settings.reduce_motion)
+        );
+    }
+
+    #[test]
     fn launcher_settings_opens_about_then_info_and_b_returns_through_hierarchy() {
         let catalog = multi_system_catalog();
         let mut nav = LauncherNav::new();
@@ -6967,7 +7004,7 @@ mod tests {
         let press_b = pad_with(|pad| pad.btn_b = true);
 
         nav.screen = Screen::Settings;
-        nav.settings_selected = 4;
+        nav.settings_selected = SETTINGS_ABOUT_SELECTED;
         assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
         assert_eq!(nav.screen, Screen::About);
         release(&mut nav, &catalog, t0, 16);
@@ -6978,7 +7015,7 @@ mod tests {
         assert_eq!(nav.screen, Screen::Settings);
         release(&mut nav, &catalog, t0, 48);
 
-        nav.settings_selected = 4;
+        nav.settings_selected = SETTINGS_ABOUT_SELECTED;
         assert!(
             nav.handle_input(&press_a, t0 + Duration::from_millis(64), &catalog)
                 .is_none()
@@ -7364,7 +7401,7 @@ mod tests {
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
         nav.screen = Screen::Settings;
-        nav.settings_selected = 3;
+        nav.settings_selected = SETTINGS_REBUILD_SELECTED;
 
         let press_a = pad_with(|pad| pad.btn_a = true);
         assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
@@ -7517,7 +7554,7 @@ mod tests {
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
         nav.screen = Screen::Settings;
-        nav.settings_selected = 2;
+        nav.settings_selected = SETTINGS_EXIT_SELECTED;
 
         let press_a = pad_with(|pad| pad.btn_a = true);
         assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
@@ -7546,7 +7583,7 @@ mod tests {
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
         nav.screen = Screen::Settings;
-        nav.settings_selected = 2;
+        nav.settings_selected = SETTINGS_EXIT_SELECTED;
 
         let press_a = pad_with(|pad| pad.btn_a = true);
         assert!(nav.handle_input(&press_a, t0, &catalog).is_none());

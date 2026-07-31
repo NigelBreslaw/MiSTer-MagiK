@@ -589,7 +589,7 @@ mod macos {
         fn move_selection(&mut self, delta: isize) {
             let count = match self.scenario {
                 Scenario::Home | Scenario::BackgroundScan | Scenario::Confirm => 6,
-                Scenario::Settings => 5,
+                Scenario::Settings => 6,
                 Scenario::About => 2,
                 Scenario::Licenses => 2,
                 Scenario::ScreensaverSettings => 3,
@@ -2024,7 +2024,7 @@ mod macos {
             (Scenario::Home, _, true) => Some(Scenario::Settings),
             (Scenario::Home, 0, false) => Some(Scenario::Arcade),
             (Scenario::Settings, 1, _) => Some(Scenario::ScreensaverSettings),
-            (Scenario::Settings, 4, _) => Some(Scenario::About),
+            (Scenario::Settings, 5, _) => Some(Scenario::About),
             (Scenario::About, 0, _) => Some(Scenario::Info),
             (Scenario::About, 1, _) => Some(Scenario::Licenses),
             _ => None,
@@ -2598,6 +2598,7 @@ mod macos {
         bridge.set_screensaver_enabled(true);
         bridge.set_screensaver_delay_minutes(5);
         bridge.set_simple_joystick_handling(true);
+        bridge.set_reduce_motion(false);
         bridge.set_info_kernel_version("Linux 6.6.68-MiSTer".into());
         bridge.set_info_database_build("1,284 ms · 12,846 games".into());
 
@@ -3180,7 +3181,7 @@ mod macos {
                 Some(Scenario::ScreensaverSettings)
             );
             assert_eq!(
-                activated_scenario(Scenario::Settings, 4, false),
+                activated_scenario(Scenario::Settings, 5, false),
                 Some(Scenario::About)
             );
             assert_eq!(

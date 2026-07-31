@@ -137,6 +137,12 @@ impl LauncherBridgePresenter {
         );
         set_if_changed!(
             bridge,
+            get_reduce_motion,
+            set_reduce_motion,
+            nav.settings.reduce_motion
+        );
+        set_if_changed!(
+            bridge,
             get_screensaver_settings_selected,
             set_screensaver_settings_selected,
             nav.screensaver_selected as i32
