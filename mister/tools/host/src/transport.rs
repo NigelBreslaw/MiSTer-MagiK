@@ -469,7 +469,7 @@ mod tests {
             },
         ];
         let labels: Vec<_> = requests.iter().map(DeviceRequest::label).collect();
-        assert_eq!(labels.len(), 43);
+        assert_eq!(labels.len(), 44);
         assert!(labels.iter().all(|label| !label.is_empty()));
         assert_eq!(
             labels
