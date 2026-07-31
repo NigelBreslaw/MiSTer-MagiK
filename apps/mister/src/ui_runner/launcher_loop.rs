@@ -2599,11 +2599,16 @@ pub(super) fn run_launcher_loop(
         // background role. Input, navigation, media, and preview activity must
         // never suspend it or catalog construction can starve indefinitely.
         mister_magik_catalog::builder_service::set_background_heavy_work_allowed(true);
-        scheduler.tick_catalog_progress(true, loop_start);
-        if let Some(request) = nav.take_arcade_search_request(&catalog, catalog_version) {
+        if !navigation_snapshot_locked_at_loop_start {
+            scheduler.tick_catalog_progress(true, loop_start);
+        }
+        if !navigation_snapshot_locked_at_loop_start
+            && let Some(request) = nav.take_arcade_search_request(&catalog, catalog_version)
+        {
             scheduler.request_arcade_search(request);
         }
-        if catalog_ready && nav.screen == Screen::Home {
+        if !navigation_snapshot_locked_at_loop_start && catalog_ready && nav.screen == Screen::Home
+        {
             for (index, system_id) in nav.collection_prefetch_order().into_iter().enumerate() {
                 if collection_has_resident_rows(&catalog, &system_id) {
                     continue;
@@ -2634,14 +2639,16 @@ pub(super) fn run_launcher_loop(
             startup_return_waiting_for_catalog,
             lifecycle.catalog_worker_start_delay(catalog_background_validation_delay()),
         );
-        if let Some(worker) = catalog_session.maybe_start_deferred_worker(
-            scheduler.catalog_worker_running(),
-            frame_accounting.first_visible_copy_done() || startup_return_waiting_for_catalog,
-            deferred_worker_policy.allowed && catalog_publication_test.catalog_worker_allowed(),
-            loop_start,
-            deferred_worker_policy.delay,
-            catalog_builder_lock_available,
-        ) {
+        if !navigation_snapshot_locked_at_loop_start
+            && let Some(worker) = catalog_session.maybe_start_deferred_worker(
+                scheduler.catalog_worker_running(),
+                frame_accounting.first_visible_copy_done() || startup_return_waiting_for_catalog,
+                deferred_worker_policy.allowed && catalog_publication_test.catalog_worker_allowed(),
+                loop_start,
+                deferred_worker_policy.delay,
+                catalog_builder_lock_available,
+            )
+        {
             print_startup_event(start, "catalog_worker_start", &worker.root);
             let lifecycle_input =
                 deferred_catalog_worker_lifecycle_input(worker.execution_mode, worker.request);
@@ -2655,14 +2662,18 @@ pub(super) fn run_launcher_loop(
             );
         }
 
-        if let Some(message) = catalog_publication_test.tick(loop_start, start) {
+        if !navigation_snapshot_locked_at_loop_start
+            && let Some(message) = catalog_publication_test.tick(loop_start, start)
+        {
             deferred_catalog_events.push_back(message);
         }
-        if catalog_messages_need_polling(
-            pending_catalog_ready.is_some(),
-            catalog_session.refresh_done(),
-            scheduler.catalog_messages_running() || !deferred_catalog_events.is_empty(),
-        ) {
+        if !navigation_snapshot_locked_at_loop_start
+            && catalog_messages_need_polling(
+                pending_catalog_ready.is_some(),
+                catalog_session.refresh_done(),
+                scheduler.catalog_messages_running() || !deferred_catalog_events.is_empty(),
+            )
+        {
             let catalog_disconnected = scheduler.poll_catalog(&mut catalog_events);
             deferred_catalog_events.extend(catalog_events.drain());
 
