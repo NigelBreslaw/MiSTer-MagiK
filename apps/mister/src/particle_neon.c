@@ -48,28 +48,6 @@ void mister_magik_scanline_neon_darken_7_8_rows(
     for (size_t row = 0; row < rows; row++) {
         uint16_t *row_pixels = pixels + row * stride;
         size_t index = 0;
-        for (; index + 16 <= width; index += 16) {
-            uint16x8_t first = vld1q_u16(row_pixels + index);
-            uint16x8_t second = vld1q_u16(row_pixels + index + 8);
-            vst1q_u16(
-                row_pixels + index,
-                darken_rgb565_7_8_vector(
-                    first,
-                    red_blue_mask,
-                    green_mask,
-                    seven
-                )
-            );
-            vst1q_u16(
-                row_pixels + index + 8,
-                darken_rgb565_7_8_vector(
-                    second,
-                    red_blue_mask,
-                    green_mask,
-                    seven
-                )
-            );
-        }
         for (; index + 8 <= width; index += 8) {
             uint16x8_t packed = vld1q_u16(row_pixels + index);
             vst1q_u16(
