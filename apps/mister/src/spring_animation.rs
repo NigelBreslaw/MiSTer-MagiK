@@ -233,7 +233,7 @@ pub(crate) fn smooth_spring_q16(progress_q16: u16) -> u16 {
 }
 
 /// Warms the floating-point spring sampling outside the live render path.
-#[cfg(any(test, feature = "ui", feature = "ui-preview"))]
+#[cfg(any(feature = "ui", feature = "ui-preview"))]
 pub(crate) fn warm_smooth_spring_curve() {
     let _ = smooth_spring_curve_q16();
 }
