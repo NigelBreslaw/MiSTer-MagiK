@@ -1,6 +1,10 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+// Bump when generated bridge compatibility changes. Keeping this in the build-script
+// fingerprint also invalidates persistent cross-build caches that predate a new API property.
+const GENERATOR_CACHE_REVISION: &[u8] = b"launcher-bridge-v2";
+
 fn main() {
     println!("cargo:rerun-if-env-changed=MISTER_UI_BUILD_SCOPE");
     println!("cargo:rerun-if-env-changed=SLINT_FONT_SIZES");
@@ -148,6 +152,7 @@ fn fingerprint(
     bench_scenes: bool,
 ) -> String {
     let mut state = 0xcbf29ce484222325u64;
+    hash_bytes(&mut state, GENERATOR_CACHE_REVISION);
     hash_bytes(&mut state, font_sizes.as_bytes());
     hash_bytes(&mut state, &[launcher_only as u8, bench_scenes as u8]);
     for path in inputs {
