@@ -228,8 +228,11 @@ pub fn hdmi_navigation_geometry(
         width: destination_title.width.max(80),
         height: 10,
     };
+    let (label_ascii, label_len) = navigation_label_ascii(selected_label);
     NavigationTransitionGeometry {
         label_signature: navigation_label_signature(selected_label),
+        label_ascii,
+        label_len,
         source_card,
         source_label,
         source_detail,
@@ -279,6 +282,8 @@ fn scale_hdmi_y(value: usize, frame_height: usize) -> u16 {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct NavigationTransitionGeometry {
     pub label_signature: u64,
+    pub label_ascii: [u8; 32],
+    pub label_len: u8,
     pub source_card: NavigationTransitionRect,
     pub source_label: NavigationTransitionRect,
     pub source_detail: NavigationTransitionRect,
@@ -294,6 +299,20 @@ fn navigation_label_signature(label: &str) -> u64 {
     label.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
         (hash ^ byte.to_ascii_lowercase() as u64).wrapping_mul(0x0000_0100_0000_01b3)
     })
+}
+
+fn navigation_label_ascii(label: &str) -> ([u8; 32], u8) {
+    let mut bytes = [0u8; 32];
+    let mut length = 0usize;
+    for byte in label.bytes().take(bytes.len()) {
+        bytes[length] = if byte.is_ascii() {
+            byte.to_ascii_uppercase()
+        } else {
+            b'?'
+        };
+        length += 1;
+    }
+    (bytes, length as u8)
 }
 
 fn source_text_group(geometry: NavigationTransitionGeometry) -> NavigationTransitionRect {
@@ -1049,10 +1068,6 @@ impl NavigationTransitionPoc {
         if direction == NavigationTransitionDirection::Forward {
             self.geometry_history[edge.history_index()] = Some(geometry);
         }
-        if self.style() == NavigationTransitionStyle::NeonCabinetDive {
-            self.neon_cabinet
-                .prepare(self.buffers.width, self.buffers.height);
-        }
         self.buffers.begin_capture();
         let capture_started = Instant::now();
         self.buffers.capture_source(source)?;
@@ -1063,6 +1078,23 @@ impl NavigationTransitionPoc {
                 source,
                 geometry,
                 direction,
+                edge,
+            );
+        } else if self.style() == NavigationTransitionStyle::NeonCabinetDive {
+            self.neon_cabinet.prepare_transition(
+                self.buffers.width,
+                self.buffers.height,
+                source,
+                geometry,
+                direction,
+                edge,
+            );
+        } else if direction == NavigationTransitionDirection::Forward {
+            self.neon_cabinet.cache_forward_source(
+                self.buffers.width,
+                self.buffers.height,
+                source,
+                geometry,
                 edge,
             );
         }
@@ -1100,6 +1132,28 @@ impl NavigationTransitionPoc {
                 self.buffers.height,
                 destination,
                 request.geometry.destination_title,
+                request.edge,
+            );
+        }
+        if self.style() == NavigationTransitionStyle::NeonCabinetDive
+            && let Some(request) = self.controller.request()
+        {
+            self.neon_cabinet.prepare_destination(
+                self.buffers.width,
+                self.buffers.height,
+                destination,
+                request.geometry,
+                request.direction,
+                request.edge,
+            );
+        } else if let Some(request) = self.controller.request()
+            && request.direction == NavigationTransitionDirection::Forward
+        {
+            self.neon_cabinet.cache_forward_destination(
+                self.buffers.width,
+                self.buffers.height,
+                destination,
+                request.geometry,
                 request.edge,
             );
         }
