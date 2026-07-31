@@ -28,7 +28,7 @@ mod macos {
     };
     use mister_magik_fb::launcher_runtime::navigation_transition::{
         NavigationTransitionDirection, NavigationTransitionEdge, NavigationTransitionPhase,
-        NavigationTransitionPoc, hdmi_navigation_geometry,
+        NavigationTransitionPoc, NavigationTransitionStyle, hdmi_navigation_geometry,
     };
     use mister_magik_fb::launcher_runtime::settings::{FileSettingsStore, SettingsStore};
     use mister_magik_fb::launcher_taxonomy::{
@@ -124,6 +124,10 @@ mod macos {
             options.display_profile,
             options.navigation_transition_poc,
         )?;
+        application.navigation_transition.configure_preview(
+            options.navigation_transition_style,
+            options.navigation_transition_duration_ms,
+        );
         application.select_scenario(options.scenario);
         if let Some(edge) = options.navigation_transition_demo {
             application.configure_navigation_transition_demo(edge)?;
@@ -692,6 +696,14 @@ mod macos {
 
         fn handle_launcher_key(&mut self, code: KeyCode, state: ElementState) -> bool {
             let pressed = state == ElementState::Pressed;
+            if let Some(shoulder) = style_picker_shoulder(code) {
+                match shoulder {
+                    StylePickerShoulder::Previous => self.launcher_pad.btn_l = pressed,
+                    StylePickerShoulder::Next => self.launcher_pad.btn_r = pressed,
+                }
+                self.launcher_pad.rebuild_pressed_now();
+                return true;
+            }
             let field = match code {
                 KeyCode::ArrowUp => Some(&mut self.launcher_pad.dpad_up),
                 KeyCode::ArrowDown => Some(&mut self.launcher_pad.dpad_down),
@@ -702,8 +714,6 @@ mod macos {
                 }
                 KeyCode::Escape | KeyCode::Backspace => Some(&mut self.launcher_pad.btn_b),
                 KeyCode::Home => Some(&mut self.launcher_pad.btn_home),
-                KeyCode::PageUp => Some(&mut self.launcher_pad.btn_l),
-                KeyCode::PageDown => Some(&mut self.launcher_pad.btn_r),
                 KeyCode::KeyX => Some(&mut self.launcher_pad.btn_x),
                 _ => None,
             };
@@ -1760,6 +1770,20 @@ mod macos {
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum StylePickerShoulder {
+        Previous,
+        Next,
+    }
+
+    fn style_picker_shoulder(code: KeyCode) -> Option<StylePickerShoulder> {
+        match code {
+            KeyCode::BracketLeft | KeyCode::PageUp => Some(StylePickerShoulder::Previous),
+            KeyCode::BracketRight | KeyCode::PageDown => Some(StylePickerShoulder::Next),
+            _ => None,
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum Scenario {
         Home,
         Arcade,
@@ -2004,6 +2028,8 @@ mod macos {
         display_profile: DisplayProfile,
         navigation_transition_poc: bool,
         navigation_transition_demo: Option<NavigationTransitionEdge>,
+        navigation_transition_style: Option<NavigationTransitionStyle>,
+        navigation_transition_duration_ms: Option<u64>,
     }
 
     impl PreviewOptions {
@@ -2020,6 +2046,8 @@ mod macos {
             let mut display_profile = DisplayProfile::Hdmi;
             let mut navigation_transition_poc = false;
             let mut navigation_transition_demo = None;
+            let mut navigation_transition_style = None;
+            let mut navigation_transition_duration_ms = None;
             let mut arguments = arguments.into_iter();
             while let Some(argument) = arguments.next() {
                 match argument.as_str() {
@@ -2065,6 +2093,31 @@ mod macos {
                     "--no-scan" => no_scan = true,
                     "--no-download" => no_download = true,
                     "--navigation-transition-poc" => navigation_transition_poc = true,
+                    "--navigation-transition-style" => {
+                        let value = arguments
+                            .next()
+                            .ok_or("--navigation-transition-style requires a style name")?;
+                        navigation_transition_style =
+                            Some(NavigationTransitionStyle::parse(&value).ok_or_else(|| {
+                                format!("invalid navigation transition style {value:?}")
+                            })?);
+                        navigation_transition_poc = true;
+                    }
+                    "--navigation-transition-duration-ms" => {
+                        let value = arguments
+                            .next()
+                            .ok_or("--navigation-transition-duration-ms requires milliseconds")?;
+                        let duration = value
+                            .parse::<u64>()
+                            .map_err(|_| format!("invalid transition duration {value:?}"))?;
+                        if !(100..=10_000).contains(&duration) {
+                            return Err(
+                                "--navigation-transition-duration-ms must be 100..=10000".into()
+                            );
+                        }
+                        navigation_transition_duration_ms = Some(duration);
+                        navigation_transition_poc = true;
+                    }
                     "--navigation-transition-demo" => {
                         let value = arguments
                             .next()
@@ -2087,7 +2140,7 @@ mod macos {
                     }
                     "--help" | "-h" => {
                         return Err(
-                            "usage: mister-magik-ui-preview [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--navigation-transition-poc] [--navigation-transition-demo home-consoles|home-arcade|consoles-system] [--display-profile hdmi|crt-240p|crt-288p|crt-480p|crt-576p] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N] [--output FILE.ppm]"
+                            "usage: mister-magik-ui-preview [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--navigation-transition-poc] [--navigation-transition-style STYLE] [--navigation-transition-duration-ms 100..10000] [--navigation-transition-demo home-consoles|home-arcade|consoles-system] [--display-profile hdmi|crt-240p|crt-288p|crt-480p|crt-576p] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N] [--output FILE.ppm]"
                                 .into(),
                         );
                     }
@@ -2110,6 +2163,8 @@ mod macos {
                 display_profile,
                 navigation_transition_poc,
                 navigation_transition_demo,
+                navigation_transition_style,
+                navigation_transition_duration_ms,
             })
         }
     }
@@ -2841,6 +2896,53 @@ mod macos {
             assert_eq!(options.display_profile, DisplayProfile::Crt480p);
             assert!(options.no_scan);
             assert!(options.no_download);
+        }
+
+        #[test]
+        fn preview_options_parse_navigation_transition_debug_controls() {
+            let options = PreviewOptions::parse(
+                [
+                    "--navigation-transition-demo",
+                    "home-arcade",
+                    "--navigation-transition-style",
+                    "super-scaler-shell",
+                    "--navigation-transition-duration-ms",
+                    "4000",
+                ]
+                .map(String::from),
+            )
+            .unwrap();
+
+            assert!(options.navigation_transition_poc);
+            assert_eq!(
+                options.navigation_transition_demo,
+                Some(NavigationTransitionEdge::HomeToArcade)
+            );
+            assert_eq!(
+                options.navigation_transition_style,
+                Some(NavigationTransitionStyle::SuperScalerShell)
+            );
+            assert_eq!(options.navigation_transition_duration_ms, Some(4_000));
+        }
+
+        #[test]
+        fn bracket_keys_and_page_keys_drive_the_transition_style_shoulders() {
+            assert_eq!(
+                style_picker_shoulder(KeyCode::BracketLeft),
+                Some(StylePickerShoulder::Previous)
+            );
+            assert_eq!(
+                style_picker_shoulder(KeyCode::PageUp),
+                Some(StylePickerShoulder::Previous)
+            );
+            assert_eq!(
+                style_picker_shoulder(KeyCode::BracketRight),
+                Some(StylePickerShoulder::Next)
+            );
+            assert_eq!(
+                style_picker_shoulder(KeyCode::PageDown),
+                Some(StylePickerShoulder::Next)
+            );
         }
 
         #[test]

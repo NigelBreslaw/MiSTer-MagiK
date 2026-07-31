@@ -873,6 +873,22 @@ impl NavigationTransitionPoc {
         Self::new_with_style(width, height, enabled, 0)
     }
 
+    pub fn configure_preview(
+        &mut self,
+        style: Option<NavigationTransitionStyle>,
+        duration_ms: Option<u64>,
+    ) {
+        if let Some(style) = style
+            && let Some(index) = NavigationTransitionStyle::ALL
+                .iter()
+                .position(|item| *item == style)
+        {
+            self.style_index = index.min(Self::implemented_style_count().saturating_sub(1));
+        }
+        self.duration_override_us =
+            duration_ms.map(|milliseconds| milliseconds.clamp(100, 10_000).saturating_mul(1_000));
+    }
+
     fn new_with_style(width: usize, height: usize, enabled: bool, style_index: usize) -> Self {
         let (buffer_width, buffer_height) = if enabled { (width, height) } else { (0, 0) };
         Self {
@@ -4747,6 +4763,19 @@ mod tests {
             nested.destination_list.height % nested.destination_selected_row.height,
             20
         );
+    }
+
+    #[test]
+    fn mac_preview_configuration_selects_style_and_debug_duration() {
+        let mut poc = NavigationTransitionPoc::new(960, 540, true);
+
+        poc.configure_preview(
+            Some(NavigationTransitionStyle::NeonCabinetDive),
+            Some(4_000),
+        );
+
+        assert_eq!(poc.style(), NavigationTransitionStyle::NeonCabinetDive);
+        assert_eq!(poc.duration_override_us, Some(4_000_000));
     }
 
     #[test]
