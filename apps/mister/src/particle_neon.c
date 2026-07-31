@@ -18,34 +18,77 @@ static const uint32_t PARTICLE_NOT_VISIBLE = UINT32_MAX;
 static const uint32_t COMMAND_PALETTE_SHIFT = 20;
 static const uint32_t COMMAND_NEIGHBOR = 1u << 22;
 
-void mister_magik_scanline_neon_darken_7_8(
-    uint16_t *restrict pixels,
-    size_t count
+static inline uint16x8_t darken_rgb565_7_8_vector(
+    uint16x8_t packed,
+    uint16x8_t red_blue_mask,
+    uint16x8_t green_mask,
+    uint16x8_t seven
 ) {
-    size_t vector_end = count & ~(size_t)7;
+    uint16x8_t red = vshrq_n_u16(packed, 11);
+    uint16x8_t green = vandq_u16(vshrq_n_u16(packed, 5), green_mask);
+    uint16x8_t blue = vandq_u16(packed, red_blue_mask);
+    red = vshrq_n_u16(vmulq_u16(red, seven), 3);
+    green = vshrq_n_u16(vmulq_u16(green, seven), 3);
+    blue = vshrq_n_u16(vmulq_u16(blue, seven), 3);
+    return vorrq_u16(
+        vshlq_n_u16(red, 11),
+        vorrq_u16(vshlq_n_u16(green, 5), blue)
+    );
+}
+
+void mister_magik_scanline_neon_darken_7_8_rows(
+    uint16_t *restrict pixels,
+    size_t width,
+    size_t rows,
+    size_t stride
+) {
     const uint16x8_t red_blue_mask = vdupq_n_u16(0x001f);
     const uint16x8_t green_mask = vdupq_n_u16(0x003f);
     const uint16x8_t seven = vdupq_n_u16(7);
-    for (size_t index = 0; index < vector_end; index += 8) {
-        uint16x8_t packed = vld1q_u16(pixels + index);
-        uint16x8_t red = vshrq_n_u16(packed, 11);
-        uint16x8_t green = vandq_u16(vshrq_n_u16(packed, 5), green_mask);
-        uint16x8_t blue = vandq_u16(packed, red_blue_mask);
-        red = vshrq_n_u16(vmulq_u16(red, seven), 3);
-        green = vshrq_n_u16(vmulq_u16(green, seven), 3);
-        blue = vshrq_n_u16(vmulq_u16(blue, seven), 3);
-        uint16x8_t darkened = vorrq_u16(
-            vshlq_n_u16(red, 11),
-            vorrq_u16(vshlq_n_u16(green, 5), blue)
-        );
-        vst1q_u16(pixels + index, darkened);
-    }
-    for (size_t index = vector_end; index < count; index++) {
-        uint16_t packed = pixels[index];
-        uint16_t red = (uint16_t)(((packed >> 11) & 0x1f) * 7 / 8);
-        uint16_t green = (uint16_t)(((packed >> 5) & 0x3f) * 7 / 8);
-        uint16_t blue = (uint16_t)((packed & 0x1f) * 7 / 8);
-        pixels[index] = (uint16_t)((red << 11) | (green << 5) | blue);
+    for (size_t row = 0; row < rows; row++) {
+        uint16_t *row_pixels = pixels + row * stride;
+        size_t index = 0;
+        for (; index + 16 <= width; index += 16) {
+            uint16x8_t first = vld1q_u16(row_pixels + index);
+            uint16x8_t second = vld1q_u16(row_pixels + index + 8);
+            vst1q_u16(
+                row_pixels + index,
+                darken_rgb565_7_8_vector(
+                    first,
+                    red_blue_mask,
+                    green_mask,
+                    seven
+                )
+            );
+            vst1q_u16(
+                row_pixels + index + 8,
+                darken_rgb565_7_8_vector(
+                    second,
+                    red_blue_mask,
+                    green_mask,
+                    seven
+                )
+            );
+        }
+        for (; index + 8 <= width; index += 8) {
+            uint16x8_t packed = vld1q_u16(row_pixels + index);
+            vst1q_u16(
+                row_pixels + index,
+                darken_rgb565_7_8_vector(
+                    packed,
+                    red_blue_mask,
+                    green_mask,
+                    seven
+                )
+            );
+        }
+        for (; index < width; index++) {
+            uint16_t packed = row_pixels[index];
+            uint16_t red = (uint16_t)(((packed >> 11) & 0x1f) * 7 / 8);
+            uint16_t green = (uint16_t)(((packed >> 5) & 0x3f) * 7 / 8);
+            uint16_t blue = (uint16_t)((packed & 0x1f) * 7 / 8);
+            row_pixels[index] = (uint16_t)((red << 11) | (green << 5) | blue);
+        }
     }
 }
 

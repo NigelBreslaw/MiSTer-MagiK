@@ -886,7 +886,6 @@ pub struct NavigationTransitionRenderStats {
 pub struct NavigationTransitionPoc {
     enabled: bool,
     duration_override_us: Option<u64>,
-    scanline_kernel: ScanlineKernel,
     controller: NavigationTransitionController,
     buffers: NavigationTransitionBuffers,
     geometry_history: [Option<NavigationTransitionGeometry>; 3],
@@ -898,7 +897,6 @@ pub struct NavigationTransitionPoc {
 impl NavigationTransitionPoc {
     pub fn from_env(width: usize, height: usize) -> Self {
         let mut poc = Self::new(width, height, env_flag("MISTER_NAV_TRANSITION_POC"));
-        poc.scanline_kernel = ScanlineKernel::from_env();
         poc.duration_override_us = std::env::var("MISTER_NAV_TRANSITION_DEBUG_DURATION_MS")
             .ok()
             .and_then(|value| value.trim().parse::<u64>().ok())
@@ -914,7 +912,6 @@ impl NavigationTransitionPoc {
         Self {
             enabled,
             duration_override_us: None,
-            scanline_kernel: ScanlineKernel::Scalar,
             controller: NavigationTransitionController::default(),
             buffers: NavigationTransitionBuffers::new(buffer_width, buffer_height),
             geometry_history: [None; 3],
@@ -1008,7 +1005,6 @@ impl NavigationTransitionPoc {
             self.buffers.width,
             self.buffers.height,
             frame,
-            self.scanline_kernel,
             &mut stats,
         );
         stats.overlay_us = overlay_started.elapsed().as_micros().min(u64::MAX as u128) as u64;
@@ -1158,36 +1154,11 @@ fn env_flag(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ScanlineKernel {
-    Scalar,
-    #[cfg(target_arch = "arm")]
-    Neon,
-}
-
-impl ScanlineKernel {
-    fn from_env() -> Self {
-        #[cfg(target_arch = "arm")]
-        if std::env::var("MISTER_NAV_TRANSITION_SCANLINE_KERNEL")
-            .ok()
-            .is_some_and(|value| value.trim().eq_ignore_ascii_case("neon"))
-        {
-            assert!(
-                scanline_neon::matches_scalar_reference(),
-                "navigation transition NEON scanline kernel differs from scalar RGB565 output"
-            );
-            return Self::Neon;
-        }
-        Self::Scalar
-    }
-}
-
 fn apply_crt_scanline_overlay(
     working: &mut [Rgb565Pixel],
     width: usize,
     height: usize,
     frame: NavigationTransitionFrame,
-    kernel: ScanlineKernel,
     stats: &mut NavigationTransitionRenderStats,
 ) {
     if width == 0
@@ -1216,6 +1187,8 @@ fn apply_crt_scanline_overlay(
         )
     });
 
+    let mut first_covered_row = None;
+    let mut covered_rows = 0usize;
     for y in (1..height).step_by(2) {
         let covered = if reversing {
             overlay_row_covered(frame.reverse_origin_q16, y, height)
@@ -1223,32 +1196,46 @@ fn apply_crt_scanline_overlay(
         } else {
             overlay_row_covered(frame.progress_q16, y, height)
         };
-        if !covered {
+        if covered {
+            first_covered_row.get_or_insert(y);
+            covered_rows += 1;
+        } else if first_covered_row.is_some() {
+            // Covered scanlines always form one contiguous band.
+            break;
+        } else {
             continue;
         }
-        let start = y * width;
-        darken_rgb565_row_7_8(&mut working[start..start + width], kernel);
-        stats.phosphor_pixels = stats.phosphor_pixels.saturating_add(width as u64);
     }
-}
-
-fn darken_rgb565_row_7_8(row: &mut [Rgb565Pixel], kernel: ScanlineKernel) {
-    #[cfg(target_arch = "arm")]
-    if kernel == ScanlineKernel::Neon {
-        // SAFETY: the kernel reads and writes exactly `row.len()` initialized RGB565 pixels.
-        unsafe {
-            scanline_neon::darken_row(row);
-        }
+    let Some(first_covered_row) = first_covered_row else {
         return;
+    };
+    let start = first_covered_row * width;
+    let pixels = &mut working[start..];
+    #[cfg(target_arch = "arm")]
+    // SAFETY: `pixels` starts at the first covered row. The validated framebuffer dimensions,
+    // covered-row count, and two-row stride keep every kernel access inside the slice.
+    unsafe {
+        scanline_neon::darken_rows(pixels, width, covered_rows, width * 2);
     }
-    let _ = kernel;
-    darken_rgb565_row_scalar_7_8(row);
+    #[cfg(not(target_arch = "arm"))]
+    darken_rgb565_rows_reference(pixels, width, covered_rows, width * 2);
+    stats.phosphor_pixels = stats
+        .phosphor_pixels
+        .saturating_add((width as u64).saturating_mul(covered_rows as u64));
 }
 
-#[inline(always)]
-fn darken_rgb565_row_scalar_7_8(row: &mut [Rgb565Pixel]) {
-    for pixel in row {
-        *pixel = darken_rgb565_7_8(*pixel);
+#[cfg(not(target_arch = "arm"))]
+fn darken_rgb565_rows_reference(
+    pixels: &mut [Rgb565Pixel],
+    width: usize,
+    rows: usize,
+    stride: usize,
+) {
+    for row in 0..rows {
+        let start = row * stride;
+        for pixel in &mut pixels[start..start + width] {
+            *pixel = darken_rgb565_7_8(*pixel);
+        }
     }
 }
 
@@ -1257,27 +1244,28 @@ mod scanline_neon {
     use super::{Rgb565Pixel, darken_rgb565_7_8 as scalar_darken_rgb565_7_8};
 
     unsafe extern "C" {
-        fn mister_magik_scanline_neon_darken_7_8(pixels: *mut u16, count: usize);
+        fn mister_magik_scanline_neon_darken_7_8_rows(
+            pixels: *mut u16,
+            width: usize,
+            rows: usize,
+            stride: usize,
+        );
     }
 
-    pub(super) unsafe fn darken_row(row: &mut [Rgb565Pixel]) {
+    pub(super) unsafe fn darken_rows(
+        pixels: &mut [Rgb565Pixel],
+        width: usize,
+        rows: usize,
+        stride: usize,
+    ) {
         unsafe {
-            mister_magik_scanline_neon_darken_7_8(row.as_mut_ptr().cast(), row.len());
+            mister_magik_scanline_neon_darken_7_8_rows(
+                pixels.as_mut_ptr().cast(),
+                width,
+                rows,
+                stride,
+            );
         }
-    }
-
-    pub(super) fn matches_scalar_reference() -> bool {
-        let mut actual = (u16::MIN..=u16::MAX).map(Rgb565Pixel).collect::<Vec<_>>();
-        let expected = actual
-            .iter()
-            .copied()
-            .map(scalar_darken_rgb565_7_8)
-            .collect::<Vec<_>>();
-        // SAFETY: `actual` is a fully initialized, exclusively borrowed RGB565 slice.
-        unsafe {
-            self::darken_row(&mut actual);
-        }
-        actual == expected
     }
 }
 
@@ -1305,6 +1293,7 @@ fn sweep_y(progress_q16: u16, height: usize) -> isize {
     start + distance * progress_q16 as isize / PROGRESS_MAX as isize
 }
 
+#[cfg(not(target_arch = "arm"))]
 fn darken_rgb565_7_8(pixel: Rgb565Pixel) -> Rgb565Pixel {
     let value = pixel.0;
     let red = ((value >> 11) & 0x1f) * 7 / 8;
@@ -5537,7 +5526,6 @@ mod tests {
                     progress_q16: progress,
                     ..NavigationTransitionFrame::default()
                 },
-                ScanlineKernel::Scalar,
                 &mut stats,
             );
             if progress == 0 || progress == PROGRESS_MAX {
@@ -5547,6 +5535,19 @@ mod tests {
             } else if expected_full {
                 assert_eq!(stats.phosphor_pixels, full_phosphor_pixels);
                 assert_eq!(stats.scanline_pixels, 0);
+                let darkened = darken_rgb565_7_8(Rgb565Pixel(0xffff));
+                for y in 0..height {
+                    let expected = if y % 2 == 1 {
+                        darkened
+                    } else {
+                        Rgb565Pixel(0xffff)
+                    };
+                    assert!(
+                        pixels[y * width..(y + 1) * width]
+                            .iter()
+                            .all(|pixel| *pixel == expected)
+                    );
+                }
             } else {
                 assert!(stats.phosphor_pixels < full_phosphor_pixels);
                 assert!(stats.scanline_pixels <= width as u64 * 5);
@@ -5566,7 +5567,6 @@ mod tests {
                 reverse_leg_progress_q16: PROGRESS_MAX / 2,
                 ..NavigationTransitionFrame::default()
             },
-            ScanlineKernel::Scalar,
             &mut stats,
         );
         assert_eq!(stats.phosphor_pixels, full_phosphor_pixels);
