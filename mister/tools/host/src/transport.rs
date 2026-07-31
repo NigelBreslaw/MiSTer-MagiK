@@ -360,7 +360,7 @@ mod tests {
             DeviceRequest::CaptureFramebuffer,
         ];
         let labels: Vec<_> = requests.iter().map(DeviceRequest::label).collect();
-        assert_eq!(labels.len(), 36);
+        assert_eq!(labels.len(), 37);
         assert!(labels.iter().all(|label| !label.is_empty()));
         assert_eq!(
             labels
@@ -378,7 +378,8 @@ mod tests {
                 "profile-installed-particle-showcase",
                 "profile-installed-particle-showcase-cpu",
                 "profile-installed-search",
-                "profile-installed-catalog-lifecycle"
+                "profile-installed-catalog-lifecycle",
+                "profile-installed-navigation-transitions"
             ]
         );
         assert!(!labels.contains(&"run"));
